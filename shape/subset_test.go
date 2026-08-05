@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/mgilbir/forme/font"
-	"github.com/mgilbir/forme/internal/fonttest"
+	"github.com/mgilbir/forme/fonttest"
 )
 
 // The subsetter checked against this module's own font reader: whatever it

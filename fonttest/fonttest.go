@@ -1,7 +1,22 @@
-// Package fonttest builds font-program fixtures for tests in packages that
-// cannot share a _test.go file: the font rules live in pdfa, the determinism
-// harness lives in the root package, and both need the same input. Keeping one
-// builder here stops the two copies from drifting apart.
+// Package fonttest builds font programs for tests to read.
+//
+// A test about fonts needs a font, and a real one is a poor fixture: it is
+// megabytes, it carries every table at once, and it cannot be made to say the
+// one wrong thing a reader is supposed to survive. So these build the smallest
+// sfnt, CFF or Type 1 program that has the feature under test — a kern pair, a
+// ligature, a mark class, a cmap subtable of a chosen format — and nothing else.
+//
+// It is exported rather than internal because more than one module reads font
+// programs. The shaping here is one; pdf0 validating an embedded font is
+// another, and its rules about glyph coverage and declared widths need exactly
+// these fixtures. A second copy is the thing to avoid: both would be edited,
+// neither would be edited the same way, and a difference between them would
+// look like a difference between the readers.
+//
+// A fixture is not an oracle. Everything built here is written and read by the
+// same understanding of the format, so a test using one catches a reader that
+// contradicts itself and not a reader that is consistently wrong. That is what
+// testdata/harfbuzz is for.
 package fonttest
 
 import (
@@ -10,8 +25,11 @@ import (
 )
 
 // Type1Program builds a minimal Type 1 font program defining exactly the named
-// glyphs, in the eexec-encrypted form parseType1 expects. Only the glyph names
-// matter to the /CharSet rule, so the charstrings are filler.
+// glyphs, in the eexec-encrypted form a Type 1 reader expects.
+//
+// The charstrings are filler. What a caller wants from this is the set of glyph
+// names the program declares — which is what a font's outlines are addressed by
+// in Type 1, and what a format carrying the font has to agree with it about.
 func Type1Program(names []string) []byte {
 	var priv strings.Builder
 	// lenIV 0 keeps the filler charstrings from needing a decryption prefix.

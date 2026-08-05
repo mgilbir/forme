@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mgilbir/forme/internal/fonttest"
+	"github.com/mgilbir/forme/fonttest"
 )
 
 // What a ligature does to the glyphs it stepped over.
