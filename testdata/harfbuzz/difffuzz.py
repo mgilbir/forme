@@ -152,17 +152,47 @@ def classify(text, ours, theirs):
     # exactly on the glyphs.
     #
     # So what is recognised here is the shape rather than the strings, and it
-    # keeps holding for strings nobody has generated yet. A difference in *which*
-    # glyphs, or how many, or how wide, is not this and is still reported — and
-    # so is any difference in y, which this has never yet seen.
-    a, b = ours.split(), theirs.split()
+    # keeps holding for strings nobody has generated yet. But it is the *narrow*
+    # shape, not "the offsets differ somewhere": every one of those 129 has all
+    # five of the properties below, so all five are required, and a case missing
+    # any of them is something this has never seen and is reported.
+    #
+    #   one glyph moved      129 of 129 differ in exactly one glyph, never two
+    #   it moved in x only   129 of 129 leave the y identical
+    #   it carries no width  129 of 129 have zero advance, which is to say a mark
+    #   it is not the first  129 of 129 have something in front to attach to
+    #   nothing else changed the glyphs and advances agree throughout
+    #
+    # No bound is put on how far it moved. The measured range is -185 to +675 and
+    # depends on how far the target went, so any threshold would be invented
+    # rather than observed — and a mark that followed its target a long way is
+    # still this and not something else.
+    a, b = _fields(ours), _fields(theirs)
     if len(a) == len(b) and a != b:
-        def gid_adv(f):
-            p = f.split(",")
-            return p[0], p[1]
-        if all(gid_adv(x) == gid_adv(y) for x, y in zip(a, b)):
+        moved = [i for i, (x, y) in enumerate(zip(a, b)) if x != y]
+        if (len(moved) == 1
+                and moved[0] != 0
+                and all(x[:2] == y[:2] for x, y in zip(a, b))
+                and a[moved[0]][1] == 0
+                and a[moved[0]][3] == b[moved[0]][3]):
             return "mark-offset"
     return None
+
+
+def _fields(line):
+    """One shaped line as (glyph, advance, x offset, y offset) per glyph.
+
+    shapetext and shape_harfbuzz both drop the offsets when they are zero, so
+    the short form and the long one have to come back the same shape or the
+    comparison above would call an absent offset different from a zero one.
+    """
+    out = []
+    for f in line.split():
+        p = f.split(",")
+        out.append((int(p[0]), int(p[1]),
+                    int(p[2]) if len(p) > 2 else 0,
+                    int(p[3]) if len(p) > 3 else 0))
+    return out
 
 
 def alphabet(path, ranges, rtl):
