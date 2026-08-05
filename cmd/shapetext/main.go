@@ -23,7 +23,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mgilbir/forme"
+	"github.com/mgilbir/forme/shape"
 )
 
 func main() {
@@ -36,7 +36,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	face, err := forme.Load(data)
+	face, err := shape.Load(data)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

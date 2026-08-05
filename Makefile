@@ -23,7 +23,7 @@ $(BIDI_DIR)/.ok:
 	touch $@
 
 test-bidi: bidi-tests
-	UNICODE_BIDI_TESTS=$(abspath $(BIDI_DIR)) go test -v -run TestBidiConformance -count=1 .
+	UNICODE_BIDI_TESTS=$(abspath $(BIDI_DIR)) go test -v -run TestBidiConformance -count=1 ./shape
 
 clean-bidi-tests:
 	rm -rf $(BIDI_DIR)
@@ -42,7 +42,7 @@ hbshaping:
 	$(PYTHON) $(HARFBUZZ_DIR)/corpus_javanese.py
 	$(PYTHON) $(HARFBUZZ_DIR)/corpus_balinese.py
 	$(PYTHON) $(HARFBUZZ_DIR)/corpus_tibetan.py
-	$(PYTHON) $(HARFBUZZ_DIR)/shape.py notosans/NotoSans-Variable.ttf \
+	$(PYTHON) $(HARFBUZZ_DIR)/shape.py shape/notosans/NotoSans-Variable.ttf \
 		$(HARFBUZZ_DIR)/corpus.txt $(HARFBUZZ_DIR)/expected.txt
 	$(PYTHON) $(HARFBUZZ_DIR)/shape.py $(HARFBUZZ_DIR)/fonts/NotoSansArabic.ttf \
 		$(HARFBUZZ_DIR)/arabic.txt $(HARFBUZZ_DIR)/arabic.expected.txt
@@ -56,7 +56,7 @@ hbshaping:
 		$(HARFBUZZ_DIR)/tibetan.txt $(HARFBUZZ_DIR)/tibetan.expected.txt
 
 test-hbshaping:
-	go test -v -run 'TestShapingAgreesWithHarfBuzz|TestTheHarfBuzzOracleHasTeeth' -count=1 .
+	go test -v -run 'TestShapingAgreesWithHarfBuzz|TestTheHarfBuzzOracleHasTeeth' -count=1 ./shape
 
 # Differential fuzzing against HarfBuzz. Needs the same Python as hbshaping.
 hbfuzz:
@@ -78,8 +78,8 @@ useable:
 		$(UCD)/ArabicShaping.txt \
 		testdata/ms-use/IndicSyllabicCategory-Additional.txt \
 		testdata/ms-use/IndicPositionalCategory-Additional.txt \
-		> usetable.go
-	gofmt -w usetable.go
+		> shape/usetable.go
+	gofmt -w shape/usetable.go
 
 clean-ucd:
 	rm -rf $(UCD)

@@ -7,7 +7,9 @@ A *forme* is the assembled type locked in a chase, ready to print. This is the
 part that decides which glyphs go where.
 
 ```go
-face, err := forme.Load(ttf)
+import "github.com/mgilbir/forme/shape"
+
+face, err := shape.Load(ttf)
 glyphs, missing := face.ShapeGlyphs("नमस्ते")
 for _, g := range glyphs {
     // g.GID, g.XAdvance, g.XOffset, g.YOffset, g.Cluster
@@ -17,6 +19,14 @@ for _, g := range glyphs {
 Glyphs come back in **visual order** — the order a pen draws them, left to
 right — whatever scripts the string mixes, so a caller can draw them as they
 are.
+
+## Packages
+
+	forme/shape   the shaping engine: what glyph goes where
+	forme/font    the font formats underneath it: sfnt, CFF, glyph names
+
+The root is deliberately empty. Shaping is where this starts rather than what it
+is for, and paragraph splitting belongs above it.
 
 ## What it does
 
@@ -42,7 +52,7 @@ so the comparison runs with nothing but a Go toolchain:
 
 Two of those differ on purpose, and both are cases where HarfBuzz is the one out
 of step — each settled by asking CoreText as a third opinion rather than by
-argument. They are listed with their reasons in `harfbuzz_test.go` and pinned in
+argument. They are listed with their reasons in `shape/harfbuzz_test.go` and pinned in
 the corpora, so a difference that stops being deliberate fails the test.
 
 There is also a differential fuzzer (`testdata/harfbuzz/difffuzz.py`) that
@@ -63,7 +73,7 @@ table. `cmd/gen*` are those generators and each says what it derives from.
 
 ## Licence
 
-The code is under the licence in `LICENSE`. The fonts under `notosans/` and
+The code is under the licence in `LICENSE`. The fonts under `shape/notosans/` and
 `testdata/harfbuzz/fonts/` are Google's Noto builds under the SIL Open Font
 License 1.1, with their notices beside them; they are test data and shipping
 this module does not embed them in anything.
