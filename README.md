@@ -22,9 +22,9 @@ are.
 
 ## Packages
 
-	forme/shape      the shaping engine: what glyph goes where
-	forme/font       the font formats underneath it: sfnt, CFF, glyph names
-	forme/notosans   a face to shape with, embedded, under the OFL
+	forme/shape            the shaping engine: what glyph goes where
+	forme/font             the font formats underneath it: sfnt, CFF, glyph names
+	forme/fonts/notosans   a face to shape with, embedded, under the OFL
 
 The root is deliberately empty. Shaping is where this starts rather than what it
 is for, and paragraph splitting belongs above it.
@@ -82,7 +82,7 @@ table. `cmd/gen*` are those generators and each says what it derives from.
 
 ## Licence
 
-The code is under the licence in `LICENSE`. The fonts under `notosans/` and
+The code is under the licence in `LICENSE`. The fonts under `fonts/notosans/` and
 `testdata/harfbuzz/fonts/` are Google's Noto builds under the SIL Open Font
 License 1.1, with their notices beside them; they are test data and shipping
 this module does not embed them in anything.

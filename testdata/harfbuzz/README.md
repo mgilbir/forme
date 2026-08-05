@@ -48,7 +48,7 @@ The Khmer font agreed on all 2441 cases at the first run.
 
 | font | what it covers | why |
 | --- | --- | --- |
-| `fonts/notosans/NotoSans-Variable.ttf` | Latin, Greek, Cyrillic, Devanagari | the bundled face, embedded in this module |
+| `../../fonts/notosans/NotoSans-Variable.ttf` | Latin, Greek, Cyrillic, Devanagari | the bundled face, embedded in this module |
 | `fonts/NotoSansArabic.ttf` | Arabic | cursive joining, which nothing else here exercises |
 | `fonts/NotoSansKhmer.ttf` | Khmer | a syllable model that draws characters out of order |
 | `fonts/NotoSansJavanese.ttf` | Javanese | the Universal Shaping Engine |

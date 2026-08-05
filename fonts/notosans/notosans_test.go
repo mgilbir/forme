@@ -12,7 +12,7 @@ import (
 // The bundled face.
 
 // TestBundledFontIsTheFileWeDocumented pins the bytes against the provenance
-// recorded in notosans/README.md.
+// recorded in fonts/notosans/README.md.
 //
 // A bundled binary is the one thing in a repository that can be swapped without
 // anybody reading the diff. The checksum is what makes an upgrade a deliberate
@@ -23,7 +23,7 @@ func TestBundledFontIsTheFileWeDocumented(t *testing.T) {
 	const want = "bfb7bb691513f12e734dc346c03a03f784912432d7e3fa8e56efcf906fe86b3d"
 	sum := sha256.Sum256(notoSansRegular)
 	if got := hex.EncodeToString(sum[:]); got != want {
-		t.Errorf("the bundled font is %s, and notosans/README.md says %s.\n"+
+		t.Errorf("the bundled font is %s, and fonts/notosans/README.md says %s.\n"+
 			"If this was an intentional upgrade, update the version, the checksums and the\n"+
 			"coverage in that file — and re-check the licence for a Reserved Font Name.", got, want)
 	}
@@ -269,7 +269,7 @@ func TestBundledFontCoversTheScriptsWeClaim(t *testing.T) {
 			}
 		}
 		if have == 0 {
-			t.Errorf("%s: the bundled font covers none of it, and notosans/README.md claims it does", b.name)
+			t.Errorf("%s: the bundled font covers none of it, and fonts/notosans/README.md claims it does", b.name)
 			continue
 		}
 		// Greek is deliberately absent from this list: the face covers most of
