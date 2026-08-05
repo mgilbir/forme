@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mgilbir/forme/internal/fonttest"
+	"github.com/mgilbir/forme/fonttest"
 )
 
 // Devanagari reordering, on a font whose Indic features the test states.

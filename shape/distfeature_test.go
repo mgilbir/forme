@@ -3,7 +3,7 @@ package shape
 import (
 	"testing"
 
-	"github.com/mgilbir/forme/internal/fonttest"
+	"github.com/mgilbir/forme/fonttest"
 )
 
 // Where a font states the space between two glyphs.

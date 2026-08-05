@@ -6,7 +6,7 @@ font, and compares the result against what HarfBuzz answered for it.
 ## Why
 
 Every other test of the shaper tests it against itself: a fixture built by
-`internal/fonttest`, read by `fonts`, asserted by `fonts`. That catches a reader
+`fonttest`, read by `shape`, asserted by `shape`. That catches a reader
 that contradicts itself. It cannot catch a reader that is *consistently* wrong,
 which is what a misread font table looks like — the same misreading writes the
 fixture and the expectation.

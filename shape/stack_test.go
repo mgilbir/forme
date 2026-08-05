@@ -3,7 +3,7 @@ package shape
 import (
 	"testing"
 
-	"github.com/mgilbir/forme/internal/fonttest"
+	"github.com/mgilbir/forme/fonttest"
 )
 
 // Falling back from one face to the next.

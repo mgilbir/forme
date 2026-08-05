@@ -3,7 +3,7 @@ package shape
 import (
 	"testing"
 
-	"github.com/mgilbir/forme/internal/fonttest"
+	"github.com/mgilbir/forme/fonttest"
 )
 
 // The pre-base-reordering Ra: a consonant written after the base and drawn

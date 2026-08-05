@@ -3,7 +3,7 @@ package shape
 import (
 	"testing"
 
-	"github.com/mgilbir/forme/internal/fonttest"
+	"github.com/mgilbir/forme/fonttest"
 )
 
 // The zero-width joiner and non-joiner: obeyed, invisible to the rules that are

@@ -3,7 +3,7 @@ package shape
 import (
 	"testing"
 
-	"github.com/mgilbir/forme/internal/fonttest"
+	"github.com/mgilbir/forme/fonttest"
 )
 
 // A mark class is a number local to the subtable that declares it.

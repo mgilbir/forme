@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mgilbir/forme/internal/fonttest"
+	"github.com/mgilbir/forme/fonttest"
 )
 
 // The font API against input it did not choose.

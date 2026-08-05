@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mgilbir/forme/internal/fonttest"
+	"github.com/mgilbir/forme/fonttest"
 )
 
 // How many lookups a font may declare.
