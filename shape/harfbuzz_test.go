@@ -169,7 +169,7 @@ func TestShapingAgreesWithHarfBuzz(t *testing.T) {
 // about today's glyphs and every one of them would be about the wrong glyph.
 func harfbuzzFace(t *testing.T, path string, header map[string]string) *Face {
 	t.Helper()
-	data := notoSansRegular
+	data := notoSansBytes(t)
 	if path != "" {
 		var err error
 		data, err = os.ReadFile(filepath.Join(harfbuzzDir, path))

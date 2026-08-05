@@ -42,7 +42,7 @@ hbshaping:
 	$(PYTHON) $(HARFBUZZ_DIR)/corpus_javanese.py
 	$(PYTHON) $(HARFBUZZ_DIR)/corpus_balinese.py
 	$(PYTHON) $(HARFBUZZ_DIR)/corpus_tibetan.py
-	$(PYTHON) $(HARFBUZZ_DIR)/shape.py shape/notosans/NotoSans-Variable.ttf \
+	$(PYTHON) $(HARFBUZZ_DIR)/shape.py notosans/NotoSans-Variable.ttf \
 		$(HARFBUZZ_DIR)/corpus.txt $(HARFBUZZ_DIR)/expected.txt
 	$(PYTHON) $(HARFBUZZ_DIR)/shape.py $(HARFBUZZ_DIR)/fonts/NotoSansArabic.ttf \
 		$(HARFBUZZ_DIR)/arabic.txt $(HARFBUZZ_DIR)/arabic.expected.txt

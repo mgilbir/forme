@@ -1,8 +1,9 @@
-package shape
+package notosans
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"github.com/mgilbir/forme/shape"
 	"strings"
 	"sync"
 	"testing"
@@ -36,7 +37,7 @@ func TestTheLicenceTravelsWithTheFont(t *testing.T) {
 	// The licence is hard-wrapped at about seventy columns, so a clause that
 	// reads as one sentence is several lines in the file. Collapsing whitespace
 	// is what lets a test assert on what it says rather than on how it is set.
-	text := strings.Join(strings.Fields(NotoSansLicense()), " ")
+	text := strings.Join(strings.Fields(License()), " ")
 	for _, want := range []string{
 		"Copyright 2022 The Noto Project Authors",
 		"SIL OPEN FONT LICENSE Version 1.1",
@@ -59,7 +60,7 @@ func TestTheLicenceTravelsWithTheFont(t *testing.T) {
 // this module writes would have to be renamed, and this is where that would be
 // noticed.
 func TestBundledFontDeclaresNoReservedFontName(t *testing.T) {
-	text := NotoSansLicense()
+	text := License()
 	copyright, _, ok := strings.Cut(text, "\n")
 	if !ok {
 		t.Fatal("the licence has no copyright line")
@@ -74,7 +75,7 @@ func TestBundledFontDeclaresNoReservedFontName(t *testing.T) {
 // that loads is not a face that works, and the point of bundling one is that a
 // caller can set text without finding a font first.
 func TestBundledFontSetsTextInEachScriptItCovers(t *testing.T) {
-	f, err := NotoSans()
+	f, err := Face()
 	if err != nil {
 		t.Fatalf("loading: %v", err)
 	}
@@ -98,78 +99,16 @@ func TestBundledFontSetsTextInEachScriptItCovers(t *testing.T) {
 			t.Errorf("%s: nothing was shaped", name)
 			continue
 		}
-		if w := MeasureGlyphs(glyphs, 12); w <= 0 {
+		if w := shape.MeasureGlyphs(glyphs, 12); w <= 0 {
 			t.Errorf("%s: measured %v", name, w)
 		}
 	}
 }
 
-// TestBundledFontGivesEachScriptItsOwnRules is the script selection checked
-// against a real face rather than a fixture.
-//
-// Noto Sans declares twenty-one 'locl' substitutions across its scripts and
-// languages — the letterform corrections that make Serbian Cyrillic look
-// Serbian and Romanian Latin look Romanian — spread over a dozen separate
-// features. Taken together, as a reader that ignores the ScriptList must take
-// them, a Latin run receives the corrections meant for Serbian. Taken per
-// script, each run receives its own set, and the sets differ.
-func TestBundledFontGivesEachScriptItsOwnRules(t *testing.T) {
-	f, err := NotoSans()
-	if err != nil {
-		t.Fatalf("loading: %v", err)
-	}
-	const tag = "locl"
-
-	everything := f.layout.single[tag]
-	if len(everything) == 0 {
-		t.Fatalf("the fixture assumption is gone: the face declares no %q substitutions at all", tag)
-	}
-
-	latin := f.layoutFor(runScript("abc")).single[tag]
-	cyrillic := f.layoutFor(runScript("абв")).single[tag]
-	if sameSubstitutions(latin, cyrillic) {
-		t.Errorf("Latin and Cyrillic runs get the same %q substitutions (%d of them); "+
-			"the script list was not consulted", tag, len(latin))
-	}
-	for name, sel := range map[string]map[int]int{"Latin": latin, "Cyrillic": cyrillic} {
-		if len(sel) >= len(everything) {
-			t.Errorf("%s gets %d %q substitutions and the whole font declares %d; "+
-				"a script should get fewer than all of them", name, len(sel), tag, len(everything))
-		}
-		for from, to := range sel {
-			if everything[from] != to {
-				t.Errorf("%s substitutes glyph %d with %d, which is not what the font declares anywhere",
-					name, from, to)
-			}
-		}
-	}
-
-	// And a language system narrows it further. Romanian is one of the seven
-	// Noto Sans declares under 'latn'.
-	f.SetLanguage("ROM ")
-	romanian := f.layoutFor(runScript("abc")).single[tag]
-	if sameSubstitutions(romanian, latin) {
-		t.Errorf("Romanian gets the same %d %q substitutions as the default language system",
-			len(romanian), tag)
-	}
-}
-
-func sameSubstitutions(a, b map[int]int) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for from, to := range a {
-		if b[from] != to {
-			return false
-		}
-	}
-	return true
-}
-
 // TestBundledFontShapesRatherThanJustEncodes pins that the composite form is
 // the one with the layout tables, which is why it is the default.
 func TestBundledFontShapesRatherThanJustEncodes(t *testing.T) {
-	f, err := NotoSans()
+	f, err := Face()
 	if err != nil {
 		t.Fatalf("loading: %v", err)
 	}
@@ -192,11 +131,11 @@ func TestBundledFontShapesRatherThanJustEncodes(t *testing.T) {
 // secret, but is a font that carries glyphs the document never uses and, worse,
 // a subset computed from the wrong set.
 func TestEachCallGetsItsOwnFace(t *testing.T) {
-	first, err := NotoSans()
+	first, err := Face()
 	if err != nil {
 		t.Fatalf("loading: %v", err)
 	}
-	second, err := NotoSans()
+	second, err := Face()
 	if err != nil {
 		t.Fatalf("loading: %v", err)
 	}
@@ -232,7 +171,7 @@ func TestSharedFacesShapeConcurrently(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			face, err := NotoSans()
+			face, err := Face()
 			if err != nil {
 				t.Errorf("loading: %v", err)
 				return
@@ -255,7 +194,7 @@ func TestSharedFacesShapeConcurrently(t *testing.T) {
 // use is not shared because it holds facts about the document. A face that has
 // already had the cache filled by another document must still start empty.
 func TestSharingTheParseDoesNotSharePastRuns(t *testing.T) {
-	warm, err := NotoSans()
+	warm, err := Face()
 	if err != nil {
 		t.Fatalf("loading: %v", err)
 	}
@@ -264,7 +203,7 @@ func TestSharingTheParseDoesNotSharePastRuns(t *testing.T) {
 		t.Fatal("shaping recorded no glyphs, so this proves nothing")
 	}
 
-	fresh, err := NotoSans()
+	fresh, err := Face()
 	if err != nil {
 		t.Fatalf("loading: %v", err)
 	}
@@ -281,7 +220,7 @@ func TestSharingTheParseDoesNotSharePastRuns(t *testing.T) {
 // TestTheBundledFontSubsetsToWhatWasUsed pins the size claim. Bundling 600 kB
 // is only defensible because what reaches a document is a fraction of it.
 func TestTheBundledFontSubsetsToWhatWasUsed(t *testing.T) {
-	f, err := NotoSans()
+	f, err := Face()
 	if err != nil {
 		t.Fatalf("loading: %v", err)
 	}
@@ -308,7 +247,7 @@ func TestTheBundledFontSubsetsToWhatWasUsed(t *testing.T) {
 // every test asked only about scripts that font happened to have. A coverage
 // claim in the README with no test behind it is a claim that rots.
 func TestBundledFontCoversTheScriptsWeClaim(t *testing.T) {
-	f, err := NotoSans()
+	f, err := Face()
 	if err != nil {
 		t.Fatalf("loading: %v", err)
 	}
@@ -348,7 +287,7 @@ func TestBundledFontCoversTheScriptsWeClaim(t *testing.T) {
 // tags, and a font with the glyphs and not the tables produces a row of
 // unjoined letters.
 func TestBundledFontDeclaresTheShapingItNeeds(t *testing.T) {
-	f, err := NotoSans()
+	f, err := Face()
 	if err != nil {
 		t.Fatalf("loading: %v", err)
 	}

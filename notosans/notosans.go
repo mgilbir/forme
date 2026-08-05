@@ -1,8 +1,9 @@
-package shape
+package notosans
 
 import (
 	_ "embed"
 	"fmt"
+	"github.com/mgilbir/forme/shape"
 	"sync"
 )
 
@@ -37,10 +38,10 @@ import (
 // explicit that the requirement to stay under the licence "does not apply to
 // any document created using the Font Software".
 
-//go:embed notosans/NotoSans-Variable.ttf
+//go:embed NotoSans-Variable.ttf
 var notoSansRegular []byte
 
-//go:embed notosans/OFL.txt
+//go:embed OFL.txt
 var notoSansLicense string
 
 // NotoSans returns the bundled face, embedded as a composite font.
@@ -53,12 +54,12 @@ var notoSansLicense string
 // Each call returns a new face. A face records the glyphs it was asked to set,
 // which is what subsetting is computed from, so sharing one between documents
 // would put each document's glyphs into the other's font.
-func NotoSans() (*Face, error) {
-	notoOnce.Do(func() { notoPrototype, notoErr = Load(notoSansRegular) })
+func Face() (*shape.Face, error) {
+	notoOnce.Do(func() { notoPrototype, notoErr = shape.Load(notoSansRegular) })
 	if notoErr != nil {
-		return nil, fmt.Errorf("fonts: the bundled Noto Sans could not be read: %w", notoErr)
+		return nil, fmt.Errorf("notosans: the bundled Noto Sans could not be read: %w", notoErr)
 	}
-	return notoPrototype.forDocument(), nil
+	return notoPrototype.Clone(), nil
 }
 
 // The parsed prototype, read once and never handed out.
@@ -74,7 +75,7 @@ func NotoSans() (*Face, error) {
 // use is not; see Face.forDocument.
 var (
 	notoOnce      sync.Once
-	notoPrototype *Face
+	notoPrototype *shape.Face
 	notoErr       error
 )
 
@@ -86,10 +87,10 @@ var (
 // and any shaping at all, because a one-byte code names nothing in the layout
 // tables. Use it for plain Latin text where size matters; use NotoSans
 // otherwise.
-func NotoSansSimple() (*Face, error) {
-	f, err := LoadSimple(notoSansRegular)
+func Simple() (*shape.Face, error) {
+	f, err := shape.LoadSimple(notoSansRegular)
 	if err != nil {
-		return nil, fmt.Errorf("fonts: the bundled Noto Sans could not be read: %w", err)
+		return nil, fmt.Errorf("notosans: the bundled Noto Sans could not be read: %w", err)
 	}
 	return f, nil
 }
@@ -101,4 +102,8 @@ func NotoSansSimple() (*Face, error) {
 // program that embeds the font in something it ships may need to reproduce it —
 // in an about box, a credits file, a --licenses flag. Reading it off disk is not
 // an option for a single binary, so it is compiled in.
-func NotoSansLicense() string { return notoSansLicense }
+// License is the OFL text the licence requires to travel with the font.
+func License() string { return notoSansLicense }
+
+// Regular is the font's own bytes, for a caller that wants to read it itself.
+func Regular() []byte { return notoSansRegular }

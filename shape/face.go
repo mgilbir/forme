@@ -590,7 +590,14 @@ func (f *Face) GlyphIDForTest(r rune) (int, bool) {
 // sharing them across faces would be a write from two goroutines to one map;
 // the alternative is a lock on a path taken once per script per document, and
 // the reading they save is small beside the reading forDocument already avoids.
-func (f *Face) forDocument() *Face {
+// Clone returns a face that shares this one's reading of the font and records
+// its own glyphs.
+//
+// A face remembers which glyphs it was asked to set, because that is what a
+// subset is computed from — so one face used for two outputs puts each one's
+// glyphs into the other. Reading the font again instead costs milliseconds and
+// megabytes for an answer that cannot differ. Share the parse, not the face.
+func (f *Face) Clone() *Face {
 	out := *f
 	out.used = map[int]bool{}
 	// The cache is deliberately *kept*, not reset: it holds readings of the
