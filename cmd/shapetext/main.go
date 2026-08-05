@@ -23,7 +23,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mgilbir/pdf0/fonts"
+	"github.com/mgilbir/forme"
 )
 
 func main() {
@@ -36,7 +36,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	face, err := fonts.Load(data)
+	face, err := forme.Load(data)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

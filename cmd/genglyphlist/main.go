@@ -17,7 +17,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mgilbir/pdf0/internal/font"
+	"github.com/mgilbir/forme/font"
 )
 
 func main() {

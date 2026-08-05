@@ -1,0 +1,16 @@
+# Unicode's bidirectional conformance suites, fetched by `make bidi-tests`.
+testdata/unicode-bidi/
+
+# Unicode's property files, fetched into place for `make useable`.
+testdata/ucd/
+
+# Built by `make hbfuzz`.
+testdata/harfbuzz/.shapetext
+
+# The Python environment the HarfBuzz oracle needs.
+.hbenv/
+__pycache__/
+
+# The CoreText harness, built on a Mac.
+testdata/coretext/shape
+testdata/coretext/out-*.txt
