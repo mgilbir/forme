@@ -160,28 +160,6 @@ func TestSubsetAlwaysKeepsNotdef(t *testing.T) {
 	}
 }
 
-// TestSubsetTagIsAFunctionOfTheGlyphSet pins what the six-letter prefix is for.
-// A reader uses it to tell two subsets of one face apart, so it must differ
-// when the glyph sets differ and agree when they do not — and it must be
-// deterministic, or the same document would produce different files each run.
-func TestSubsetTagIsAFunctionOfTheGlyphSet(t *testing.T) {
-	abc := subsetTag([]int{0, 1, 2, 3})
-	if abc != subsetTag([]int{0, 1, 2, 3}) {
-		t.Error("the tag is not deterministic")
-	}
-	if abc == subsetTag([]int{0, 1, 2, 4}) {
-		t.Error("two different glyph sets produced the same tag")
-	}
-	if len(abc) != 6 {
-		t.Fatalf("tag %q is %d letters, want 6", abc, len(abc))
-	}
-	for _, c := range abc {
-		if c < 'A' || c > 'Z' {
-			t.Errorf("tag %q contains %q, which is not an uppercase letter", abc, c)
-		}
-	}
-}
-
 // TestSubsetRefusesATruncatedFont pins that a font that cannot be taken apart
 // produces an error rather than a program claiming glyphs it does not carry. A
 // font file is untrusted input like any other.

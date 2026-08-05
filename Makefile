@@ -1,4 +1,4 @@
-.PHONY: test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz useable clean-ucd
+.PHONY: test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz useable clean-ucd stdfonts
 
 test:
 	gofmt -l . | grep -v '^testdata/' && exit 1 || true
@@ -83,3 +83,17 @@ useable:
 
 clean-ucd:
 	rm -rf $(UCD)
+
+# The metrics of the fourteen standard PDF faces, from Adobe's own AFM files.
+#
+# The AFM set is freely redistributable and ships with a good deal of software
+# — Ghostscript, matplotlib, poppler-data — but is not vendored here, because
+# only the numbers are wanted and none of the files are redistributed. Point
+# this at a directory holding them:
+#
+#	make stdfonts AFM=/path/to/afm
+AFM ?= testdata/afm
+
+stdfonts:
+	go run ./cmd/genstdfonts $(AFM) > shape/standard14.go
+	gofmt -w shape/standard14.go
