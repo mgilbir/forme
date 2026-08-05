@@ -277,26 +277,3 @@ func sfntChecksum(b []byte) uint32 {
 	}
 	return sum
 }
-
-// subsetTag is the six uppercase letters ISO 32000-2 9.6.4 requires in front of
-// a subset font's name, as in "ABCDEF+Probe-Regular". A reader uses it to tell
-// two subsets of the same face apart, so it must differ when the glyph sets do
-// and match when they do not — which makes it a function of the kept glyphs
-// rather than a random draw.
-func subsetTag(kept []int) string {
-	// FNV-1a over the kept indices: cheap, and deterministic, so the same
-	// document produces the same file twice.
-	var h uint64 = 14695981039346656037
-	for _, gid := range kept {
-		for shift := 0; shift < 32; shift += 8 {
-			h ^= uint64(byte(gid >> shift))
-			h *= 1099511628211
-		}
-	}
-	tag := make([]byte, 6)
-	for i := range tag {
-		tag[i] = byte('A' + h%26)
-		h /= 26
-	}
-	return string(tag)
-}
