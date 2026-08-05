@@ -198,41 +198,78 @@ func harfbuzzFace(t *testing.T, path string, header map[string]string) *Face {
 //
 // # Two entries, and what each took to earn it
 //
-// Both are cases where HarfBuzz is the one out of step, and neither was called
-// that until CoreText had been asked. The harness is in testdata/coretext, and
-// each question is put to it with controls beside it that all three engines
-// already agree on, so a harness measuring the wrong thing says so before its
-// answer is believed.
+// Neither is a disagreement about shaping, and neither is what it was first
+// written down as. Each was re-opened against the specification rather than
+// against whichever engine agreed with this one, and each came back different.
+// CoreText, through the harness in testdata/coretext, agrees with this package
+// on both — but that is worth less than it looks and is not why either is here.
+// CoreText is a layout engine rather than a shaper, and testdata/coretext says
+// itself that it is the wrong instrument for measuring positions.
 //
 // # An invisible character that the font gave a width
 //
 // Noto Sans Arabic draws nothing for U+061C ARABIC LETTER MARK and gives it a
-// glyph 600 units wide. HarfBuzz carries that glyph through positioning and
-// deletes it at the end, and the mark written after it keeps the 600 units: the
-// hamza lands at 1610 where it would otherwise land at 1010. This package
-// removes the character before shaping, so the gap is never made and the answer
-// for that string is identical to the answer without the character in it.
+// glyph 600 units wide. The hamza written after it comes out at 250 here and at
+// 850 from the oracle, and the 600 is that glyph.
 //
-// CoreText's is identical too. Unicode asks for such a character not to be
-// rendered; leaving a hole the width of a letter where one was written is a
-// reading only HarfBuzz makes.
+// It is not a difference of policy. HarfBuzz answers this string two ways:
 //
-// A Tibetan string whose last mark this package puts five units to the right of
-// where HarfBuzz puts it. Everything structural agrees — the same target, the
-// same lookup, the same anchors, and the same y — and the x is the attachment
-// delta measured against the target's offset at two different moments: this
-// package uses where the target stood when the mark was attached, HarfBuzz the
-// where it ended up. Neither reading gives both of HarfBuzz's numbers, which is
-// what said one of them had to be checked from outside.
+//	default                       hamza at 250, total advance 760
+//	REMOVE_DEFAULT_IGNORABLES     hamza at 850, total advance 760
 //
-// CoreText was asked, through testdata/coretext, and places the mark where this
-// package places it. Converted to the absolute position the reader sees, the
-// three answers are 427, 427 and 422: HarfBuzz is the one out of step, on a
-// string where the other two agree to the unit. The two controls beside it in
-// that file are cases all three agree on, so the harness is measuring what it
-// claims to.
+// The total is 760 either way, so HarfBuzz agrees with itself that the character
+// takes no width — and then, having deleted the glyph rather than hidden it,
+// leaves the mark that was positioned across it 600 units out. Its own default
+// answer is this package's answer, to the unit, and so is the answer for the
+// string with the character taken out.
 //
-// It is listed rather than fixed because there is nothing here to fix.
+// So what the oracle reports here is HarfBuzz not fixing up a dependent offset
+// on one of its two paths. The entry stays because shape.py asks for that path
+// on purpose — this package removes such characters rather than mapping them to
+// an invisible glyph, and REMOVE_DEFAULT_IGNORABLES is the comparable policy —
+// but what it is comparing against is a HarfBuzz inconsistency and not a reading
+// of Unicode. Unicode does not settle it: what the display rule asks is that the
+// character have no glyph of its own, "although they may have an effect on the
+// display of other characters", and it says nothing about advance width.
+//
+// # A mark whose target moved after it was attached
+//
+// Five units of x on the last mark of one Tibetan string, and the mechanism is
+// now known rather than guessed at.
+//
+// Lookup 19 — mark-to-mark, in blwm — attaches U+0F37 (anchor -135,0) to
+// U+0F71 (anchor 163,140), a delta of (298,140). With the target at (129,-294)
+// that puts the mark at (427,-154), and *both engines produce exactly that*.
+// Lookup 21 then re-attaches the target and moves it by (-5,-887). HarfBuzz
+// follows that move in x and not in y; this package follows it in neither.
+//
+// Three controls locate it. Take lookup 19 out of the font and both engines
+// answer (425,40), which is what the mark-to-base anchors in lookup 18 predict on
+// their own. Take lookup 21 out and both answer (427,-154). And move the anchor
+// lookup 21 attaches the target by: +100 in x moves HarfBuzz's mark by exactly
+// +100, +100 in y moves it not at all. So HarfBuzz propagates the x of that move
+// and not the y, and it is the only engine that propagates either.
+//
+// What the specification asks for is a third answer. GPOS says the attachment
+// points coincide, and after lookup 21 the target's anchor is at (287,-1041), so
+// a mark whose anchor coincided with it would sit at (422,-1041). That number is
+// not new: it is the 887 an earlier attempt recorded, which means that attempt
+// implemented the specification correctly and found the specification agreeing
+// with nobody.
+//
+// CoreText settles it, and on the axis nobody had measured. The earlier round
+// compared only the x and reported 427, 427 and 422. Asked for the whole line, it
+// answers (-127,-294) (204,-316) (-70,-835) (124,-1181) for the stack and
+// (427,-154) for the mark — identical to this package on *both* axes and on every
+// glyph. All three engines agree the y does not propagate; only HarfBuzz
+// propagates the x.
+//
+// So this is listed rather than fixed because this package is not the odd one
+// out. It resolves an attachment against the state at the moment it is applied,
+// in both axes, and so does CoreText. Matching HarfBuzz would mean propagating x
+// while not propagating y — an asymmetry no text states and no other engine has —
+// and would trade agreement with CoreText for agreement with neither. Following
+// GPOS literally moves the mark 887 units and matches nobody at all.
 //
 // # The thirty-seven that left
 //
@@ -266,15 +303,19 @@ func harfbuzzFace(t *testing.T, path string, header map[string]string) *Face {
 var deliberateDifferences = map[string]map[string]string{
 	"latin": {},
 	"arabic": {
-		"\u063D\u061C\u0655": "an invisible character the font gave a width to, " +
-			"which HarfBuzz leaves a gap for and CoreText does not",
+		"\u063D\u061C\u0655": "an invisible character the font gave a width to: " +
+			"HarfBuzz deletes the glyph under REMOVE_DEFAULT_IGNORABLES without " +
+			"taking the 600 units back off the mark positioned across it, and " +
+			"answers 250 rather than 850 on its own default path",
 	},
 	"khmer":    {},
 	"javanese": {},
 	"balinese": {},
 	"tibetan": {
-		"\u0F52\u0F8F\u0FAD\u0F91\u0F73\u0F37": "a mark five units right of where HarfBuzz " +
-			"puts it, and where CoreText puts it",
+		"\u0F52\u0F8F\u0FAD\u0F91\u0F73\u0F37": "a mark whose attachment target lookup 21 " +
+			"moves by (-5,-887) after lookup 19 attached it: HarfBuzz follows the x " +
+			"and not the y, this package and CoreText follow neither on either axis, " +
+			"and GPOS as written asks for both and so agrees with nobody",
 	},
 }
 

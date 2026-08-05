@@ -15,6 +15,15 @@
 # HB_BUFFER_FLAG_REMOVE_DEFAULT_IGNORABLES is set because that is the policy
 # this package has: a character nothing is drawn for is removed rather than
 # mapped to an invisible glyph. HarfBuzz offers both; this is the comparable one.
+#
+# It is worth knowing that the two paths do not agree with each other. Deleting
+# the glyph does not take its width back off a mark that was positioned across
+# it, while hiding the glyph does — for U+063D U+061C U+0655 in Noto Sans Arabic
+# the hamza comes out at 850 here and at 250 on the default path, with the same
+# total advance of 760 either way. So an expectation this file records for a
+# string containing such a character is HarfBuzz's remove-path answer and not
+# necessarily HarfBuzz's opinion. The one case it costs is listed in
+# deliberateDifferences in shape/harfbuzz_test.go, which says so.
 import hashlib
 import sys
 

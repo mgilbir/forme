@@ -92,11 +92,15 @@ FONTS = [
 #
 # An empty set is the point of the tool: every difference it reports is a defect.
 KNOWN = {
-    # A decision, and the only one. A Tibetan string whose last mark this
-    # package puts five units right of where HarfBuzz puts it — same target,
-    # same lookup, same anchors, same y. CoreText was asked and places it where
-    # this package does: 427, 427 and 422 in absolute terms. HarfBuzz is the one
-    # out of step. See fonts/harfbuzz_test.go.
+    # A Tibetan string whose last mark this package puts five units right of
+    # where HarfBuzz puts it — same target, same lookup, same anchors, same y.
+    # CoreText was asked and places it where this package does, on both axes and
+    # on every glyph of the line: 427, 427 and 422 in absolute terms.
+    #
+    # It is named separately because it is pinned in the corpus and listed in
+    # deliberateDifferences, but it is not a separate decision: it is one
+    # instance of mark-offset below, which is where the mechanism is written
+    # down. See shape/harfbuzz_test.go.
     "five-units-of-x",
     # The other. A character nothing is drawn for, in a font that gave it a
     # width: HarfBuzz keeps the gap when it removes the glyph, CoreText and this
@@ -122,17 +126,35 @@ def classify(text, ours, theirs):
     # A mark a few units to one side: the same glyphs, in the same order, with
     # the same advances, and only the offsets differing.
     #
-    # Forty-six of these were put to CoreText in one batch and not one of them
-    # went to HarfBuzz — twenty-seven agreed with this package outright and
-    # nineteen were cases where CoreText inserts dotted circles that neither of
-    # the other two does, which is a disagreement about cluster validity and not
-    # about where a mark sits. Three earlier questions of the same shape went
-    # the same way. So the family is decided, and what is recognised here is the
-    # shape rather than the strings, so that it keeps holding for strings nobody
-    # has generated yet.
+    # The mechanism is known, and it is one thing rather than a family of
+    # accidents. A mark is attached by one lookup and a later lookup moves what
+    # it was attached to; HarfBuzz carries the mark along in x, and this package
+    # does not. Neither carries it in y, and nor does CoreText. The Tibetan
+    # string pinned in the corpus as five-units-of-x is an instance of exactly
+    # this, traced down to the lookups in shape/harfbuzz_test.go: lookup 19
+    # attaches, lookup 21 moves the target by (-5,-887), and the -5 is the whole
+    # of the difference.
     #
-    # A difference in *which* glyphs, or how many, or how wide, is not this and
-    # is still reported.
+    # That the x moves and the y does not is HarfBuzz's alone. Following it would
+    # mean propagating one axis and not the other, which no specification states;
+    # following GPOS as literally written — the attachment points coincide, so
+    # carry both — moves the mark 887 units on that string and agrees with no
+    # engine at all.
+    #
+    # Measured rather than assumed. Unmasking this and fuzzing turned up 129
+    # differences over 2,090,800 strings, 124 Tibetan and 5 Devanagari, and every
+    # single one of them differs in x alone. All 129 went to CoreText in two
+    # batches: 86 agreed with this package, 0 with HarfBuzz, and the remaining 43
+    # are CoreText answering a different question — 39 where it inserts a dotted
+    # circle neither shaper does, which is cluster validity, and 4 where it
+    # decomposes a precomposed Tibetan vowel differently and so does not produce
+    # a comparable glyph string. On those 4 this package and HarfBuzz agree
+    # exactly on the glyphs.
+    #
+    # So what is recognised here is the shape rather than the strings, and it
+    # keeps holding for strings nobody has generated yet. A difference in *which*
+    # glyphs, or how many, or how wide, is not this and is still reported — and
+    # so is any difference in y, which this has never yet seen.
     a, b = ours.split(), theirs.split()
     if len(a) == len(b) and a != b:
         def gid_adv(f):
