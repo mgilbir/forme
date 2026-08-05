@@ -54,6 +54,19 @@ for c in [chr(x) for x in range(0x0915, 0x0930)]:
 for v in [chr(x) for x in range(0x0904, 0x0915)]:
     words.append(v + "\u094E\u093C\u093C")
 
+# And after the avagraha, which is a symbol rather than a letter and admits one
+# the way a vowel sign does.
+#
+# The lines above write two nuktas on a consonant and on a vowel sign and never
+# on a symbol, so the symbol cluster took the letter's pair and the second nukta
+# did not break the syllable. Differential fuzzing found it, and CoreText and
+# HarfBuzz both break there. The grid is every count from none to three, so the
+# boundary is pinned from both sides rather than at the one string that failed.
+for n in range(4):
+    words.append("\u093D" + "\u093C" * n)
+    words.append("\u0922\u093D" + "\u093C" * n)
+    words.append("\u0915\u093D" + "\u093C" * n)
+
 # Two vowel signs written before the same consonant.
 #
 # Both U+093F and U+094E are stored after the letter and drawn before it, and
@@ -98,6 +111,39 @@ for b in cons:
     words.append(b + virama + "र")
     words.append(b + virama + "‍" + cons[3])
     words.append(b + virama + "‌" + cons[3])
+
+# A reph over something that is not a consonant.
+#
+# The grammar admits Ra + virama at the front of a vowel syllable, of a dotted
+# circle, and of a broken cluster — REPH = Ra H | Repha — and the lines above
+# only ever wrote one in front of a consonant, where the base rule reaches it
+# instead. So the three productions that need the cut to carry the reph were
+# never exercised, and differential fuzzing reported them for a long time.
+#
+# The boundary is what matters, so both sides of it are written:
+#
+#   Ra H            no reph — the Ra is the only consonant and is the base
+#   Ra H C          reph, by the base rule, in a consonant syllable
+#   Ra H V          reph, by the cut, in a vowel syllable
+#   Ra H NBSP       no reph — the placeholder alternative admits none
+#   Ra H U+25CC     reph, by the cut, in a standalone cluster
+#   Ra H M          reph, by the cut, in a broken cluster
+#   Ra H SM         no reph — the consonant syllable matches as far and wins
+#   Ra H ZWJ ...    no reph — the eyelash Ra
+vowels = [chr(c) for c in range(0x0904, 0x0915)]
+matras = [chr(c) for c in range(0x093E, 0x094D)]
+words += ["र" + virama, "र" + virama + " ", "र" + virama + "◌",
+          "र" + virama + "‍", "र" + virama + "ं", "र" + virama + "ः",
+          "र" + virama + "़"]
+for v in vowels:
+    words.append("र" + virama + v)
+    words.append(cons[0] + "र" + virama + v)
+    words.append("र" + virama + "‍" + v)
+for m in matras:
+    words.append("र" + virama + m)
+    words.append("र" + virama + m + "ं")
+for b in cons[:8]:
+    words.append("र" + virama + b + virama + "आ")
 
 # Ligatures formed across a mark the lookup steps over. The mark is not part of
 # the rule and must survive it; "f + dot below + fi" makes the ffi ligature and

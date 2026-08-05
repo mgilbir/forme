@@ -24,11 +24,14 @@ package shape
 //	syllable_tail= (z? SM SM? ZWNJ?)? VD*
 //	complex_tail = (halant_group cn)* CM? (halant_group | H ZWNJ | matra_group*) syllable_tail
 //
+//	REPH               = Ra H | Repha
+//
 //	consonant_syllable = (Repha|CS)? cn complex_tail
-//	vowel_syllable     = Repha? V n? (ZWJ | complex_tail)
-//	standalone_cluster = (Repha|CS)? (PLACEHOLDER | DOTTEDCIRCLE) n? complex_tail
-//	symbol_cluster     = Symbol n? syllable_tail
-//	broken_cluster     = Repha? n? complex_tail
+//	vowel_syllable     = REPH? V n? (ZWJ | complex_tail)
+//	standalone_cluster = (Repha|CS)? PLACEHOLDER n? complex_tail
+//	                   | REPH? DOTTEDCIRCLE n? complex_tail
+//	symbol_cluster     = Symbol N? syllable_tail
+//	broken_cluster     = REPH? n? complex_tail
 //
 // The alternatives are tried in that order, which is what makes the grammar
 // decidable by a plain left-to-right scan rather than by backtracking: only one
@@ -38,11 +41,28 @@ package shape
 // — is decided by looking one character further, which is noted where it
 // happens.
 //
-// A leading Ra + virama is not written as a separate alternative because it does
-// not need to be: Ra is a consonant, so a syllable opening with one is a
-// consonant syllable, and the virama that follows is the first of its virama
-// groups. Whether that Ra becomes a reph is a question for the reordering and
-// for the font, not for the cut.
+// A leading Ra + virama is a REPH, and three of the alternatives admit one. In a
+// *consonant* syllable it needs no alternative of its own — Ra is a consonant, so
+// the syllable opens with one and the virama that follows is the first of its
+// virama groups, and whether that Ra becomes a reph is settled when the base is
+// found: it is excluded from the candidates when the syllable has another
+// consonant to be the base instead.
+//
+// The other three have no base consonant to run that rule over, so the reph has
+// to be in the cut or it is nowhere. This file said for a long time that the
+// consonant syllable covered every case, and it does not: it stops at the virama
+// and leaves what follows to open a syllable of its own, so
+//
+//	Ra H AA        was cut as [Ra H][AA]  and is one vowel syllable
+//	Ra H <matra>   was cut as [Ra H][M]   and is one broken cluster
+//
+// which is a different reph, a different base and — where the cluster is broken —
+// a different place for the dotted circle. Both are the shape differential
+// fuzzing kept reporting against HarfBuzz.
+//
+// The placeholder takes no REPH and the dotted circle does, which is why the
+// standalone alternative is written as two. Ra + virama + NBSP is a consonant
+// syllable and then a standalone cluster, and both engines agree that it is.
 //
 // # What is not a syllable
 //
@@ -95,18 +115,60 @@ func indicScanSyllable(cats []indicCat, start int) indicSyllable {
 	n := len(cats)
 
 	if cats[start] == catSymbol {
-		i := indicTakeNukta(cats, start+1)
+		// One nukta after a symbol, not two — N? rather than n. The avagraha is
+		// not a letter and does not take the pair a consonant does; a second
+		// nukta belongs to no syllable, so it opens a broken one of its own and
+		// is shown against a dotted circle. Both HarfBuzz and CoreText break
+		// here, and this took the pair until they were asked.
+		i := indicTakeOneNukta(cats, start+1)
 		return indicSyllable{start, indicTakeTail(cats, i), sylSymbol}
 	}
 
-	// consonant_syllable, and with it every syllable that opens with a Ra whose
-	// virama follows.
+	// The consonant syllable's extent, measured before it is taken.
+	//
+	// A leading Ra can open a consonant syllable and a reph-led one both, so the
+	// two have to be compared rather than ordered: the grammar takes the longer
+	// match, and where they are the same length the alternatives' own order
+	// decides, which puts the consonant syllable first. Ra + virama + anusvara is
+	// that tie — the consonant syllable takes the modifier in its tail and the
+	// broken cluster takes it in the same tail, three characters either way — and
+	// it is a consonant syllable with the Ra as its base, not a reph over
+	// nothing.
+	consEnd, consOK := start, false
 	p := start
 	if cats[p] == catRepha || cats[p] == catCS {
 		p++
 	}
 	if j, ok := indicTakeConsonant(cats, p); ok {
-		return indicSyllable{start, indicTakeComplexTail(cats, j), sylConsonant}
+		consEnd, consOK = indicTakeComplexTail(cats, j), true
+	}
+
+	// The three alternatives that admit a leading reph. A vowel and a dotted
+	// circle are each past anything the consonant syllable could reach, since it
+	// can take neither, so those two win outright; the broken cluster has to be
+	// strictly longer.
+	//
+	// An ordinary conjunct — a Ra whose virama is followed by a consonant —
+	// matches none of them and falls through, and its reph is settled when the
+	// base is found instead.
+	if r, ok := indicTakeReph(cats, start); ok {
+		if r < n && cats[r] == catVowel {
+			return indicSyllable{start, indicTakeVowelTail(cats, r), sylVowel}
+		}
+		if r < n && cats[r] == catDottedCircle {
+			i := indicTakeNukta(cats, r+1)
+			return indicSyllable{start, indicTakeComplexTail(cats, i), sylStandalone}
+		}
+		i := indicTakeNukta(cats, r)
+		if j := indicTakeComplexTail(cats, i); j > consEnd {
+			return indicSyllable{start, j, sylBroken}
+		}
+	}
+
+	// consonant_syllable, and with it every syllable that opens with a Ra whose
+	// virama is followed by a consonant.
+	if consOK {
+		return indicSyllable{start, consEnd, sylConsonant}
 	}
 	if p < n && (cats[p] == catPlaceholder || cats[p] == catDottedCircle) {
 		i := indicTakeNukta(cats, p+1)
@@ -118,21 +180,7 @@ func indicScanSyllable(cats []indicCat, start int) indicSyllable {
 		p++
 	}
 	if p < n && cats[p] == catVowel {
-		i := indicTakeNukta(cats, p+1)
-		// A joiner right after the vowel may end the syllable, or may open the
-		// tail and carry it on: a virama group, a matra group and the modifier
-		// tail each admit a leading joiner. The two alternatives are not
-		// disjoint, so this is the one place the cut takes the *longer* of them
-		// rather than the first that matches — which is what the grammar's
-		// scanner does everywhere, and what every other production here gets
-		// without having to say so.
-		if j := indicTakeComplexTail(cats, i); j > i {
-			return indicSyllable{start, j, sylVowel}
-		}
-		if i < n && cats[i] == catZWJ {
-			return indicSyllable{start, i + 1, sylVowel}
-		}
-		return indicSyllable{start, i, sylVowel}
+		return indicSyllable{start, indicTakeVowelTail(cats, p), sylVowel}
 	}
 
 	// broken_cluster: dependents with nothing to depend on. It still gets the
@@ -148,10 +196,58 @@ func indicScanSyllable(cats []indicCat, start int) indicSyllable {
 // n = N N?
 func indicTakeNukta(cats []indicCat, i int) int {
 	if i < len(cats) && cats[i] == catNukta {
+		i = indicTakeOneNukta(cats, i)
+		i = indicTakeOneNukta(cats, i)
+	}
+	return i
+}
+
+// N? — a single nukta, which is what everything but a letter admits. The pair
+// belongs to a consonant or an independent vowel; a vowel sign and a symbol
+// each take one.
+func indicTakeOneNukta(cats []indicCat, i int) int {
+	if i < len(cats) && cats[i] == catNukta {
 		i++
-		if i < len(cats) && cats[i] == catNukta {
-			i++
-		}
+	}
+	return i
+}
+
+// REPH = Ra H | Repha
+//
+// The virama is taken with indicIsHalant, which is the same reading the base
+// rule uses when it decides whether a consonant syllable's Ra becomes a reph, so
+// the two cannot disagree about what opens one.
+//
+// Nothing here excludes Ra + virama + ZWJ, the eyelash Ra that must not become a
+// reph. It does not need to be excluded: the joiner is not a vowel and not a
+// dotted circle, and a complex tail that begins with one takes nothing, so every
+// branch that consults this declines and the sequence falls to the consonant
+// syllable — which is where the eyelash was already handled.
+func indicTakeReph(cats []indicCat, i int) (int, bool) {
+	if i < len(cats) && cats[i] == catRepha {
+		return i + 1, true
+	}
+	if i+1 < len(cats) && cats[i] == catRa && indicIsHalant(cats[i+1]) {
+		return i + 2, true
+	}
+	return i, false
+}
+
+// V n? (ZWJ | complex_tail), taken from the vowel.
+//
+// A joiner right after the vowel may end the syllable, or may open the tail and
+// carry it on: a virama group, a matra group and the modifier tail each admit a
+// leading joiner. The two alternatives are not disjoint, so this is the one
+// place the cut takes the *longer* of them rather than the first that matches —
+// which is what the grammar's scanner does everywhere, and what every other
+// production here gets without having to say so.
+func indicTakeVowelTail(cats []indicCat, v int) int {
+	i := indicTakeNukta(cats, v+1)
+	if j := indicTakeComplexTail(cats, i); j > i {
+		return j
+	}
+	if i < len(cats) && cats[i] == catZWJ {
+		return i + 1
 	}
 	return i
 }
@@ -211,10 +307,7 @@ func indicTakeMatra(cats []indicCat, i int) (int, bool) {
 	// n is N N? there — and a matra admits a single one. A second belongs to no
 	// syllable, so it starts a broken one of its own and is shown against a
 	// dotted circle, which is how a reader is told the text is malformed.
-	j++
-	if j < len(cats) && cats[j] == catNukta {
-		j++
-	}
+	j = indicTakeOneNukta(cats, j+1)
 	if j < len(cats) && indicIsHalant(cats[j]) {
 		j++
 	}
