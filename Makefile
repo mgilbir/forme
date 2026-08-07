@@ -1,4 +1,4 @@
-.PHONY: test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz useable clean-ucd stdfonts
+.PHONY: test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz varinstance test-varinstance useable clean-ucd stdfonts
 
 test:
 	gofmt -l . | grep -v '^testdata/' && exit 1 || true
@@ -57,6 +57,19 @@ hbshaping:
 
 test-hbshaping:
 	go test -v -run 'TestShapingAgreesWithHarfBuzz|TestTheHarfBuzzOracleHasTeeth' -count=1 ./shape
+
+# Instancing checked against fontTools and HarfBuzz, over four faces and eight
+# locations. Needs the same Python as hbshaping.
+#
+# The expectations are checked in, so the Go test runs with nothing but a Go
+# toolchain — an oracle only a machine with the right Python on it can consult is
+# an oracle nobody consults. Regenerating them is what needs the Python, and only
+# a change to what is compared should change what comes out.
+varinstance:
+	$(PYTHON) testdata/varinstance/instance.py
+
+test-varinstance:
+	go test -v -run 'TestInstancingAgreesWithFontToolsAndHarfBuzz|TestTheInstancingOracleHasTeeth' -count=1 ./shape
 
 # Differential fuzzing against HarfBuzz. Needs the same Python as hbshaping.
 hbfuzz:

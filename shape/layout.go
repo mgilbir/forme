@@ -186,18 +186,20 @@ type tableFeatures struct {
 //
 // # Which coordinates are in force
 //
-// The default instance's, on every axis. This module does not instance a
-// variable font and has no way to be asked to: the subsetter drops fvar, gvar
-// and avar, and in such a font the glyf outlines already *are* the default
-// instance, so what reaches a document is a static face at the default weight.
+// The ones the face was loaded at, which for Load is the default instance and
+// for LoadInstance is the location it was asked for. They arrive normalized, and
+// a nil set is the default instance — zero on every axis by construction, since
+// fvar normalizes each axis's default to zero and avar's segment map is required
+// to carry (0, 0) through.
 //
-// In the normalized coordinate space these conditions are written in, the
-// default instance is zero on every axis by construction — fvar normalizes each
-// axis's default value to zero, and avar's segment map is required to carry
-// (0, 0) through. So the coordinates are all zero, there is nothing to read out
-// of fvar, and a condition holds exactly when its range spans zero. A record
-// stated for some other part of the design space is a rule for a weight this
-// module never sets, and applying it would set the text by the wrong rules.
+// That construction is why nil and zero mean the same thing here and may. It is
+// also why the axis index has to be read rather than ignored: at the default
+// instance every coordinate is zero whichever axis a condition names, but at any
+// other location the axes differ, and a condition on the width axis evaluated
+// against the weight coordinate applies a rule for a font nobody asked for.
+//
+// A record stated for a part of the design space this face was not cut at is a
+// rule for another weight, and is not applied.
 //
 // This is not only a variable-font concern. A static instance cut from a
 // variable font may keep the table, and a face may state at the default instance
@@ -207,7 +209,7 @@ type tableFeatures struct {
 // The first record whose conditions hold is the one that applies, and the rest
 // are not consulted: the specification makes the records an ordered search, not
 // a set to merge.
-func readFeatureVariations(t []byte) featureSubst {
+func readFeatureVariations(t []byte, coords []float64) featureSubst {
 	// Version 1.1 of the table header is what carries the offset; a 1.0 header
 	// ends before it.
 	if len(t) < 14 || font.Be16(t, 0) != 1 || font.Be16(t, 2) < 1 {
@@ -230,7 +232,7 @@ func readFeatureVariations(t []byte) featureSubst {
 		if rec+8 > len(fv) {
 			break
 		}
-		if !conditionSetHolds(fv, int(font.Be32(fv, rec))) {
+		if !conditionSetHolds(fv, int(font.Be32(fv, rec)), coords) {
 			continue
 		}
 		return featureTableSubstitution(fv, int(font.Be32(fv, rec+4)))
@@ -239,13 +241,13 @@ func readFeatureVariations(t []byte) featureSubst {
 }
 
 // conditionSetHolds reports whether every condition of a set holds at the
-// default instance.
+// coordinates in force.
 //
 // A null offset is the empty set, which the specification says matches
 // everywhere — a record that applies unconditionally. A set this cannot read
 // whole does not hold: half a condition set is not a weaker condition set, it is
 // no knowledge of what the record was for.
-func conditionSetHolds(fv []byte, off int) bool {
+func conditionSetHolds(fv []byte, off int, coords []float64) bool {
 	if off == 0 {
 		return true
 	}
@@ -265,31 +267,36 @@ func conditionSetHolds(fv []byte, off int) bool {
 		if co <= 0 || co+2 > len(cs) {
 			return false
 		}
-		if !conditionHolds(cs[co:]) {
+		if !conditionHolds(cs[co:], coords) {
 			return false
 		}
 	}
 	return true
 }
 
-// conditionHolds reports whether one condition holds at the default instance.
+// conditionHolds reports whether one condition holds at the coordinates in
+// force.
 //
 // Only format 1, an axis range, is read. The formats OpenType added later state
 // a condition on a variable value, or combine other conditions with and, or and
 // not; a condition this cannot evaluate is treated as not holding, because a
 // record applied on a guess is a record applied at the wrong weight.
 //
-// The axis index is not needed. A condition's range is compared against the
-// coordinate of one axis, and every coordinate in force is zero — including, per
-// the specification, an axis index the font does not have. So the condition
-// holds exactly when its range spans zero, whichever axis it names.
-func conditionHolds(c []byte) bool {
+// An axis index the font does not have reads as zero, which the specification
+// requires: a condition naming it holds exactly when its range spans the default
+// instance.
+func conditionHolds(c []byte, coords []float64) bool {
 	if len(c) < 8 || font.Be16(c, 0) != 1 {
 		return false
 	}
-	lo := signed16(font.Be16(c, 4))
-	hi := signed16(font.Be16(c, 6))
-	return lo <= 0 && hi >= 0
+	axis := font.Be16(c, 2)
+	lo := f2Dot14At(c, 4)
+	hi := f2Dot14At(c, 6)
+	v := 0.0
+	if axis < len(coords) {
+		v = coords[axis]
+	}
+	return lo <= v && v <= hi
 }
 
 // featureTableSubstitution reads the lookup lists a matching record substitutes,
@@ -587,7 +594,7 @@ type ligature struct {
 // It never fails: a table that cannot be understood contributes nothing,
 // because text set without kerning is correct text set plainly, while text set
 // from a misread table is wrong.
-func readPositioning(tables map[string][]byte, sel featureSet) *layout {
+func readPositioning(tables map[string][]byte, sel featureSet, coords []float64) *layout {
 	l := &layout{
 		glyphClass: map[int]int{},
 		singlePos:  map[int]singleAdjust{},
@@ -596,7 +603,7 @@ func readPositioning(tables map[string][]byte, sel featureSet) *layout {
 	}
 	l.readGDEF(tables["GDEF"])
 	if gpos := tables["GPOS"]; len(gpos) >= 10 {
-		feats := tableFeatures{sel: sel, varied: readFeatureVariations(gpos)}
+		feats := tableFeatures{sel: sel, varied: readFeatureVariations(gpos, coords)}
 		l.readGPOSPairs(gpos, feats)
 		l.readGPOSAttachment(gpos, feats)
 		l.readContextualPositioning(gpos, feats)
@@ -619,7 +626,7 @@ func readPositioning(tables map[string][]byte, sel featureSet) *layout {
 // layout later is carried across without this having to be remembered. The maps
 // it copies are shared with every other layout built on the same half, and are
 // never written to once read.
-func readLayout(tables map[string][]byte, gsubSel featureSet, pos *layout) *layout {
+func readLayout(tables map[string][]byte, gsubSel featureSet, pos *layout, coords []float64) *layout {
 	l := new(layout)
 	*l = *pos
 	l.ligatures = map[int][]ligature{}
@@ -628,7 +635,7 @@ func readLayout(tables map[string][]byte, gsubSel featureSet, pos *layout) *layo
 	l.featureLookups = nil
 	l.substFlags = 0
 	if gsub := tables["GSUB"]; len(gsub) >= 10 {
-		feats := tableFeatures{sel: gsubSel, varied: readFeatureVariations(gsub)}
+		feats := tableFeatures{sel: gsubSel, varied: readFeatureVariations(gsub, coords)}
 		l.readGSUBLigatures(gsub, feats)
 		l.readSingleSubstitutions(gsub, feats)
 		l.gsub = gsubLookups(gsub)
