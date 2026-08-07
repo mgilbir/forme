@@ -121,13 +121,37 @@ googlefonts:
 	git -C $(GF_DIR) sparse-checkout set --no-cone '/ofl/**/*.ttf'
 	git -C $(GF_DIR) checkout -f -B main origin/main
 
+# The CJK faces are fetched file by file rather than cloned.
+#
+# noto-cjk is seven gigabytes, and a blobless sparse clone of it failed twice in
+# the same place — the pack for the subset directory is large enough that the
+# connection dropped mid-sideband both times, leaving a .git with no fonts in it.
+# The faces themselves are four megabytes each over plain HTTP and have never
+# failed, so they are taken that way, which is what bidi-tests already does for
+# Unicode's files.
+#
+# One weight per region is enough for what this is for. Every static CJK face is
+# CID-keyed CFF, so any one of them exercises the refusal; the other six weights
+# would be six more copies of the same answer.
+CJK_BASE := https://raw.githubusercontent.com/notofonts/noto-cjk/main
+CJK_FACES := \
+	Sans/SubsetOTF/JP/NotoSansJP-Regular.otf \
+	Sans/SubsetOTF/KR/NotoSansKR-Regular.otf \
+	Sans/SubsetOTF/SC/NotoSansSC-Regular.otf \
+	Sans/SubsetOTF/TC/NotoSansTC-Regular.otf \
+	Sans/SubsetOTF/HK/NotoSansHK-Regular.otf \
+	Serif/SubsetOTF/JP/NotoSerifJP-Regular.otf
+
 notocjk:
-	@test -d $(CJK_DIR)/.git || git clone --filter=blob:none --no-checkout --sparse \
-		https://github.com/notofonts/noto-cjk.git $(CJK_DIR)
-	git -C $(CJK_DIR) fetch origin main
-	git -C $(CJK_DIR) sparse-checkout set --no-cone \
-		'/Sans/SubsetOTF/**' '/Serif/SubsetOTF/**'
-	git -C $(CJK_DIR) checkout -f -B main origin/main
+	@mkdir -p $(CJK_DIR)
+	@for f in $(CJK_FACES); do \
+		out=$(CJK_DIR)/$$(basename $$f); \
+		if [ -s "$$out" ]; then echo "have $$out"; else \
+			echo "fetching $$out"; \
+			curl -fsSL --retry 3 -o "$$out" "$(CJK_BASE)/$$f" || exit 1; \
+		fi; \
+	done
+	@echo "$$(ls $(CJK_DIR)/*.otf | wc -l | tr -d ' ') CJK faces in $(CJK_DIR)"
 
 fontsweep:
 	go run ./cmd/fontsweep $(GF_DIR)/ofl $(CJK_DIR)
