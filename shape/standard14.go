@@ -34,9 +34,10 @@
 //
 // Modification noted, as the licence requires: the AFM files were not modified.
 // This file is a derived work containing the advance width of each glyph by
-// name, together with the ascent, descent, cap height, italic angle, fixed-pitch
-// flag and bounding box of each face. Everything else in an AFM — kerning pairs,
-// composites, character codes, the character-name ordering — was dropped.
+// name, together with the ascent, descent, cap height, x-height, underline
+// position and thickness, italic angle, fixed-pitch flag and bounding box of
+// each face. Everything else in an AFM — kerning pairs, composites, character
+// codes, the character-name ordering — was dropped.
 
 package shape
 
@@ -59,6 +60,11 @@ package shape
 // check it against.
 
 // stdMetrics is one standard face.
+//
+// An AFM states an x-height and an underline only for a face that has them —
+// Symbol and ZapfDingbats have no lowercase, and no x-height with it — so those
+// two carry a flag saying whether the file said anything. Zero is a value a
+// font can state and not a way of saying nothing; see Descriptor.Declared.
 type stdMetrics struct {
 	widths     map[string]int
 	ascent     int
@@ -67,12 +73,23 @@ type stdMetrics struct {
 	italic     float64
 	fixedPitch bool
 	bbox       [4]int
+	xHeight    int
+	hasXHeight bool
+	// underlineCenter is the AFM's own UnderlinePosition: the distance from
+	// the baseline to the *centre* of the stroke, which is what PostScript
+	// means by it and half a stroke away from what the post table means. It is
+	// stored as published and converted where it is read.
+	underlineCenter    int
+	underlineThickness int
+	hasUnderline       bool
 }
 
 var standard14 = map[string]*stdMetrics{
 	"Courier": {
 		ascent: 629, descent: -157, capHeight: 562, italic: 0, fixedPitch: true,
-		bbox: [4]int{-23, -250, 715, 805},
+		bbox:    [4]int{-23, -250, 715, 805},
+		xHeight: 426, hasXHeight: true,
+		underlineCenter: -100, underlineThickness: 50, hasUnderline: true,
 		widths: map[string]int{
 			"A": 600, "AE": 600, "Aacute": 600, "Abreve": 600,
 			"Acircumflex": 600, "Adieresis": 600, "Agrave": 600, "Amacron": 600,
@@ -157,7 +174,9 @@ var standard14 = map[string]*stdMetrics{
 	},
 	"Courier-Bold": {
 		ascent: 629, descent: -157, capHeight: 562, italic: 0, fixedPitch: true,
-		bbox: [4]int{-113, -250, 749, 801},
+		bbox:    [4]int{-113, -250, 749, 801},
+		xHeight: 439, hasXHeight: true,
+		underlineCenter: -100, underlineThickness: 50, hasUnderline: true,
 		widths: map[string]int{
 			"A": 600, "AE": 600, "Aacute": 600, "Abreve": 600,
 			"Acircumflex": 600, "Adieresis": 600, "Agrave": 600, "Amacron": 600,
@@ -242,7 +261,9 @@ var standard14 = map[string]*stdMetrics{
 	},
 	"Courier-BoldOblique": {
 		ascent: 629, descent: -157, capHeight: 562, italic: -12, fixedPitch: true,
-		bbox: [4]int{-57, -250, 869, 801},
+		bbox:    [4]int{-57, -250, 869, 801},
+		xHeight: 439, hasXHeight: true,
+		underlineCenter: -100, underlineThickness: 50, hasUnderline: true,
 		widths: map[string]int{
 			"A": 600, "AE": 600, "Aacute": 600, "Abreve": 600,
 			"Acircumflex": 600, "Adieresis": 600, "Agrave": 600, "Amacron": 600,
@@ -327,7 +348,9 @@ var standard14 = map[string]*stdMetrics{
 	},
 	"Courier-Oblique": {
 		ascent: 629, descent: -157, capHeight: 562, italic: -12, fixedPitch: true,
-		bbox: [4]int{-27, -250, 849, 805},
+		bbox:    [4]int{-27, -250, 849, 805},
+		xHeight: 426, hasXHeight: true,
+		underlineCenter: -100, underlineThickness: 50, hasUnderline: true,
 		widths: map[string]int{
 			"A": 600, "AE": 600, "Aacute": 600, "Abreve": 600,
 			"Acircumflex": 600, "Adieresis": 600, "Agrave": 600, "Amacron": 600,
@@ -412,7 +435,9 @@ var standard14 = map[string]*stdMetrics{
 	},
 	"Helvetica": {
 		ascent: 718, descent: -207, capHeight: 718, italic: 0, fixedPitch: false,
-		bbox: [4]int{-166, -225, 1000, 931},
+		bbox:    [4]int{-166, -225, 1000, 931},
+		xHeight: 523, hasXHeight: true,
+		underlineCenter: -100, underlineThickness: 50, hasUnderline: true,
 		widths: map[string]int{
 			"A": 667, "AE": 1000, "Aacute": 667, "Abreve": 667,
 			"Acircumflex": 667, "Adieresis": 667, "Agrave": 667, "Amacron": 667,
@@ -497,7 +522,9 @@ var standard14 = map[string]*stdMetrics{
 	},
 	"Helvetica-Bold": {
 		ascent: 718, descent: -207, capHeight: 718, italic: 0, fixedPitch: false,
-		bbox: [4]int{-170, -228, 1003, 962},
+		bbox:    [4]int{-170, -228, 1003, 962},
+		xHeight: 532, hasXHeight: true,
+		underlineCenter: -100, underlineThickness: 50, hasUnderline: true,
 		widths: map[string]int{
 			"A": 722, "AE": 1000, "Aacute": 722, "Abreve": 722,
 			"Acircumflex": 722, "Adieresis": 722, "Agrave": 722, "Amacron": 722,
@@ -582,7 +609,9 @@ var standard14 = map[string]*stdMetrics{
 	},
 	"Helvetica-BoldOblique": {
 		ascent: 718, descent: -207, capHeight: 718, italic: -12, fixedPitch: false,
-		bbox: [4]int{-174, -228, 1114, 962},
+		bbox:    [4]int{-174, -228, 1114, 962},
+		xHeight: 532, hasXHeight: true,
+		underlineCenter: -100, underlineThickness: 50, hasUnderline: true,
 		widths: map[string]int{
 			"A": 722, "AE": 1000, "Aacute": 722, "Abreve": 722,
 			"Acircumflex": 722, "Adieresis": 722, "Agrave": 722, "Amacron": 722,
@@ -667,7 +696,9 @@ var standard14 = map[string]*stdMetrics{
 	},
 	"Helvetica-Oblique": {
 		ascent: 718, descent: -207, capHeight: 718, italic: -12, fixedPitch: false,
-		bbox: [4]int{-170, -225, 1116, 931},
+		bbox:    [4]int{-170, -225, 1116, 931},
+		xHeight: 523, hasXHeight: true,
+		underlineCenter: -100, underlineThickness: 50, hasUnderline: true,
 		widths: map[string]int{
 			"A": 667, "AE": 1000, "Aacute": 667, "Abreve": 667,
 			"Acircumflex": 667, "Adieresis": 667, "Agrave": 667, "Amacron": 667,
@@ -752,7 +783,9 @@ var standard14 = map[string]*stdMetrics{
 	},
 	"Symbol": {
 		ascent: 0, descent: 0, capHeight: 0, italic: 0, fixedPitch: false,
-		bbox: [4]int{-180, -293, 1090, 1010},
+		bbox:    [4]int{-180, -293, 1090, 1010},
+		xHeight: 0, hasXHeight: false,
+		underlineCenter: -100, underlineThickness: 50, hasUnderline: true,
 		widths: map[string]int{
 			"Alpha": 722, "Beta": 667, "Chi": 722, "Delta": 612,
 			"Epsilon": 611, "Eta": 722, "Euro": 750, "Gamma": 603,
@@ -806,7 +839,9 @@ var standard14 = map[string]*stdMetrics{
 	},
 	"Times-Bold": {
 		ascent: 683, descent: -217, capHeight: 676, italic: 0, fixedPitch: false,
-		bbox: [4]int{-168, -218, 1000, 935},
+		bbox:    [4]int{-168, -218, 1000, 935},
+		xHeight: 461, hasXHeight: true,
+		underlineCenter: -100, underlineThickness: 50, hasUnderline: true,
 		widths: map[string]int{
 			"A": 722, "AE": 1000, "Aacute": 722, "Abreve": 722,
 			"Acircumflex": 722, "Adieresis": 722, "Agrave": 722, "Amacron": 722,
@@ -891,7 +926,9 @@ var standard14 = map[string]*stdMetrics{
 	},
 	"Times-BoldItalic": {
 		ascent: 683, descent: -217, capHeight: 669, italic: -15, fixedPitch: false,
-		bbox: [4]int{-200, -218, 996, 921},
+		bbox:    [4]int{-200, -218, 996, 921},
+		xHeight: 462, hasXHeight: true,
+		underlineCenter: -100, underlineThickness: 50, hasUnderline: true,
 		widths: map[string]int{
 			"A": 667, "AE": 944, "Aacute": 667, "Abreve": 667,
 			"Acircumflex": 667, "Adieresis": 667, "Agrave": 667, "Amacron": 667,
@@ -976,7 +1013,9 @@ var standard14 = map[string]*stdMetrics{
 	},
 	"Times-Italic": {
 		ascent: 683, descent: -217, capHeight: 653, italic: -15.5, fixedPitch: false,
-		bbox: [4]int{-169, -217, 1010, 883},
+		bbox:    [4]int{-169, -217, 1010, 883},
+		xHeight: 441, hasXHeight: true,
+		underlineCenter: -100, underlineThickness: 50, hasUnderline: true,
 		widths: map[string]int{
 			"A": 611, "AE": 889, "Aacute": 611, "Abreve": 611,
 			"Acircumflex": 611, "Adieresis": 611, "Agrave": 611, "Amacron": 611,
@@ -1061,7 +1100,9 @@ var standard14 = map[string]*stdMetrics{
 	},
 	"Times-Roman": {
 		ascent: 683, descent: -217, capHeight: 662, italic: 0, fixedPitch: false,
-		bbox: [4]int{-168, -218, 1000, 898},
+		bbox:    [4]int{-168, -218, 1000, 898},
+		xHeight: 450, hasXHeight: true,
+		underlineCenter: -100, underlineThickness: 50, hasUnderline: true,
 		widths: map[string]int{
 			"A": 722, "AE": 889, "Aacute": 722, "Abreve": 722,
 			"Acircumflex": 722, "Adieresis": 722, "Agrave": 722, "Amacron": 722,
@@ -1146,7 +1187,9 @@ var standard14 = map[string]*stdMetrics{
 	},
 	"ZapfDingbats": {
 		ascent: 0, descent: 0, capHeight: 0, italic: 0, fixedPitch: false,
-		bbox: [4]int{-1, -143, 981, 820},
+		bbox:    [4]int{-1, -143, 981, 820},
+		xHeight: 0, hasXHeight: false,
+		underlineCenter: -100, underlineThickness: 50, hasUnderline: true,
 		widths: map[string]int{
 			"a1": 974, "a10": 692, "a100": 668, "a101": 732,
 			"a102": 544, "a103": 544, "a104": 910, "a105": 911,
