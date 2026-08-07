@@ -481,9 +481,9 @@ func (f *Face) readLayoutFor(script uint16) *layout {
 	gsubKey, gposKey := selectionKey(gsubSel), selectionKey(gposSel)
 	return f.cache.layoutFor(gsubKey, gposKey, func() *layout {
 		pos := f.cache.positioningFor(gposKey, func() *layout {
-			return readPositioning(f.layoutTables, gposSel)
+			return readPositioning(f.layoutTables, gposSel, f.varCoords)
 		})
-		return readLayout(f.layoutTables, gsubSel, pos)
+		return readLayout(f.layoutTables, gsubSel, pos, f.varCoords)
 	})
 }
 
