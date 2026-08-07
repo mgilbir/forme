@@ -68,6 +68,25 @@ func Standard(name string) (*Face, error) {
 		used:       map[int]bool{},
 		layout:     emptyLayout(),
 	}
+	if m.hasXHeight {
+		f.xHeight = m.xHeight
+		f.declared |= MetricXHeight
+	}
+	if m.hasUnderline {
+		// The AFM states the centre of the stroke, as PostScript does; the post
+		// table states its top, and Descriptor reports the post convention so
+		// that the field means one thing whichever kind of face answered it.
+		// The two are half a stroke apart, which is exactly the sort of
+		// difference that is invisible until it is compared with a browser.
+		f.underlinePos = m.underlineCenter + m.underlineThickness/2
+		f.underlineThick = m.underlineThickness
+		f.declared |= MetricUnderline
+	}
+	// Nothing sets MetricLineGap or MetricStrikeout here, and that is the
+	// answer rather than an omission: an AFM carries neither, so a standard
+	// face has no leading and no strikeout to state. A caller reading the zero
+	// without the bit would space its lines by a number it believed came from
+	// the font.
 	f.stemV = stemV(nil)
 	// Nonsymbolic, because the codes are WinAnsi characters rather than glyph
 	// indices — the opposite of an embedded Identity-H face. Symbol and
