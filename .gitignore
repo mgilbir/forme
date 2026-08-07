@@ -4,6 +4,19 @@ testdata/unicode-bidi/
 # Unicode's property files, fetched into place for `make useable`.
 testdata/ucd/
 
+# Google's OFL font library, fetched for the broad sweeps. Two thousand families
+# and 2.4 GB of faces: far too much to vendor, and the point of it is breadth
+# rather than a fixed set anybody could review. The six faces the checked-in
+# oracle uses stay where they are.
+testdata/googlefonts/
+
+# Noto's CJK faces, fetched for the same sweeps. The OFL library above is
+# TrueType throughout, so it says nothing at all about CFF — and the static CJK
+# faces are the CID-keyed CFF this module cannot yet read. Only the subset OTFs
+# are taken, which is a few hundred megabytes against the repository's seven
+# gigabytes.
+testdata/notocjk/
+
 # Built by `make hbfuzz`.
 testdata/harfbuzz/.shapetext
 

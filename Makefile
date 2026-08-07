@@ -84,6 +84,57 @@ useable:
 clean-ucd:
 	rm -rf $(UCD)
 
+# The broad font sweeps, over two libraries far too large to vendor: every OFL
+# family Google publishes, and Noto's CJK faces.
+#
+# Both are fetched blobless and sparse, because only the faces are wanted.
+# google/fonts is three gigabytes of which a fifth is screenshots and video, and
+# noto-cjk is seven of which the subset OTFs are a few hundred megabytes. Taking
+# the whole of either would cost several times what the fonts do.
+#
+# They are two libraries rather than one because they answer different
+# questions. The OFL set is TrueType throughout — 3,795 faces and not one CFF —
+# so it says a great deal about shaping and nothing whatever about the CFF
+# reader. The CJK faces are CID-keyed CFF, which is the format this module
+# refuses, so they are the ones that size that refusal.
+#
+#	make fonts       # fetch, or bring up to date if already fetched
+#	make fontsweep   # read every face in both and report what happened
+#	make clean-fonts # remove them
+GF_DIR := testdata/googlefonts
+CJK_DIR := testdata/notocjk
+
+.PHONY: fonts googlefonts notocjk fontsweep clean-fonts
+
+fonts: googlefonts notocjk
+
+# Each target is written to be run twice. Fetching a couple of gigabytes over a
+# promisor remote fails in the middle often enough that repairing it has to be
+# ordinary rather than an incident: a clone that dies after the objects arrive
+# but before the checkout leaves a directory with a .git in it and no fonts, and
+# "pull if it exists" cannot mend that. So the clone is conditional and
+# everything after it is not.
+googlefonts:
+	@test -d $(GF_DIR)/.git || git clone --filter=blob:none --no-checkout --sparse \
+		https://github.com/google/fonts.git $(GF_DIR)
+	git -C $(GF_DIR) fetch origin main
+	git -C $(GF_DIR) sparse-checkout set --no-cone '/ofl/**/*.ttf'
+	git -C $(GF_DIR) checkout -f -B main origin/main
+
+notocjk:
+	@test -d $(CJK_DIR)/.git || git clone --filter=blob:none --no-checkout --sparse \
+		https://github.com/notofonts/noto-cjk.git $(CJK_DIR)
+	git -C $(CJK_DIR) fetch origin main
+	git -C $(CJK_DIR) sparse-checkout set --no-cone \
+		'/Sans/SubsetOTF/**' '/Serif/SubsetOTF/**'
+	git -C $(CJK_DIR) checkout -f -B main origin/main
+
+fontsweep:
+	go run ./cmd/fontsweep $(GF_DIR)/ofl $(CJK_DIR)
+
+clean-fonts:
+	rm -rf $(GF_DIR) $(CJK_DIR)
+
 # The metrics of the fourteen standard PDF faces, from Adobe's own AFM files.
 #
 # The AFM set is freely redistributable and ships with a good deal of software
