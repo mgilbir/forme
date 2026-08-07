@@ -85,6 +85,22 @@ type Face struct {
 	stemV      int
 	flags      int
 
+	// The metrics a font states rather than implies, and the record of which of
+	// them it actually stated — see Descriptor.Declared, and Metric.
+	lineGap                      int
+	typoAscent, typoDescent      int
+	typoLineGap                  int
+	useTypoMetrics               bool
+	xHeight                      int
+	underlinePos, underlineThick int
+	strikeoutPos, strikeoutSize  int
+	weight                       int
+	declared                     Metric
+	// axes are the variation axes fvar declares, which is how a caller learns
+	// that a face is variable and where on each axis the outlines it was handed
+	// actually sit. Nothing here instances the font; see Axes.
+	axes []Axis
+
 	// cff reports that the outlines are CFF rather than glyf, which changes
 	// both how the program is embedded and whether it can be subsetted.
 	cff bool
@@ -203,10 +219,16 @@ func Load(data []byte) (*Face, error) {
 	if hhea := tables["hhea"]; len(hhea) >= 36 {
 		f.ascent = signed16(font.Be16(hhea, 4))
 		f.descent = signed16(font.Be16(hhea, 6))
+		f.lineGap = signed16(font.Be16(hhea, 8))
+		f.declared |= MetricLineGap
 	}
 	if os2 := tables["OS/2"]; len(os2) >= 90 {
 		f.capHeight = signed16(font.Be16(os2, 88))
+		f.declared |= MetricCapHeight
 	}
+	f.readOS2(tables["OS/2"])
+	f.readPost(tables["post"])
+	f.axes = readAxes(tables["fvar"])
 	f.stemV = stemV(tables["OS/2"])
 	if f.capHeight == 0 {
 		f.capHeight = f.ascent
@@ -237,7 +259,109 @@ func Load(data []byte) (*Face, error) {
 }
 
 // Name is the font's PostScript name, which becomes /BaseFont.
+//
+// It is the name for embedding and not a description of what was drawn. On a
+// variable face the two can differ: the legacy name records spell only four
+// styles, so a face whose default instance is Thin is commonly still named
+// Regular there, and several published under the OFL are. Descriptor().Weight
+// is what says which.
 func (f *Face) Name() string { return f.name }
+
+// An Axis is one of a variable font's variation axes, in user coordinates.
+type Axis struct {
+	// Tag is the four-character axis tag: wght, wdth, opsz, slnt, ital, or one
+	// of the many a foundry may define for itself.
+	Tag string
+	// Min, Default and Max are the range the axis offers and where it rests.
+	Min, Default, Max float64
+}
+
+// Axes are the variation axes the face declares, empty for a static font.
+//
+// This module does not instance a variable font and cannot be asked to: what it
+// hands back is the outlines as they are stored, which is the default instance,
+// with every axis at its Default below. Axes is therefore not a way to choose a
+// weight — it is the way to find out that a choice was made and what it was, so
+// a caller can say "this face is variable and was taken at wght=100" rather than
+// discovering it from the shape of the letters.
+func (f *Face) Axes() []Axis {
+	if len(f.axes) == 0 {
+		return nil
+	}
+	out := make([]Axis, len(f.axes))
+	copy(out, f.axes)
+	return out
+}
+
+// IsVariable reports whether the face declares variation axes.
+func (f *Face) IsVariable() bool { return len(f.axes) > 0 }
+
+// readOS2 takes the metrics OS/2 states beyond the cap height already read.
+//
+// The offsets are the table's, and the version gates the last of them: sxHeight
+// arrived in version 2, and a version 0 table simply stops before it. Reading
+// it anyway would return whatever followed the table in the file.
+func (f *Face) readOS2(os2 []byte) {
+	if len(os2) < 78 { // through usWinDescent, which every version has
+		return
+	}
+	f.weight = font.Be16(os2, 4)
+	f.declared |= MetricWeight
+	f.strikeoutSize = signed16(font.Be16(os2, 26))
+	f.strikeoutPos = signed16(font.Be16(os2, 28))
+	f.declared |= MetricStrikeout
+	f.useTypoMetrics = font.Be16(os2, 62)&0x80 != 0 // fsSelection USE_TYPO_METRICS
+	f.typoAscent = signed16(font.Be16(os2, 68))
+	f.typoDescent = signed16(font.Be16(os2, 70))
+	f.typoLineGap = signed16(font.Be16(os2, 72))
+	f.declared |= MetricTypoMetrics
+	if font.Be16(os2, 0) >= 2 && len(os2) >= 88 {
+		f.xHeight = signed16(font.Be16(os2, 86))
+		f.declared |= MetricXHeight
+	}
+}
+
+// readPost takes the underline the post table states.
+func (f *Face) readPost(post []byte) {
+	if len(post) < 12 {
+		return
+	}
+	f.underlinePos = signed16(font.Be16(post, 8))
+	f.underlineThick = signed16(font.Be16(post, 10))
+	f.declared |= MetricUnderline
+}
+
+// readAxes reads fvar's axis records, which is all this module wants from it.
+//
+// The instance records after them are deliberately not read. They name points
+// in the design space, and naming a point is only useful to something that can
+// go there — which this cannot.
+func readAxes(fvar []byte) []Axis {
+	if len(fvar) < 16 {
+		return nil
+	}
+	off, count, size := font.Be16(fvar, 4), font.Be16(fvar, 8), font.Be16(fvar, 10)
+	if size < 20 {
+		return nil
+	}
+	var out []Axis
+	for i := 0; i < count; i++ {
+		p := off + i*size
+		if p < 0 || p+20 > len(fvar) {
+			break
+		}
+		out = append(out, Axis{
+			Tag:     string(fvar[p : p+4]),
+			Min:     fixed1616(font.Be32(fvar, p+4)),
+			Default: fixed1616(font.Be32(fvar, p+8)),
+			Max:     fixed1616(font.Be32(fvar, p+12)),
+		})
+	}
+	return out
+}
+
+// fixed1616 reads fvar's 16.16 signed fixed point as the number it stands for.
+func fixed1616(v uint32) float64 { return float64(int32(v)) / 65536 }
 
 // GlyphID maps a rune to the number the content stream will carry for it,
 // reporting whether the font covers it.

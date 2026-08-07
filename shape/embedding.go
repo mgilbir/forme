@@ -37,7 +37,71 @@ type Descriptor struct {
 	// nowhere else, and a caller that wants the bits individually can take them
 	// apart more easily than it can work them out.
 	Flags int
+
+	// LineGap is the leading hhea asks for between one line's descent and the
+	// next line's ascent. Ascent + Descent alone is not the height of a line:
+	// CSS calls the third term line-height: normal and every browser takes it
+	// from the font, so a formula without it is not a stricter reading of the
+	// face but the right formula with a term missing.
+	LineGap int
+
+	// TypoAscent, TypoDescent and TypoLineGap are OS/2's sTypo* trio, which many
+	// fonts disagree with hhea about. UseTypoMetrics carries OS/2 fsSelection
+	// bit 7, which is the font saying which of the two it means. A consumer that
+	// honours it is following the font's own instruction rather than guessing;
+	// one that does not should stay with the hhea three above, which is what
+	// this module's Ascent and Descent are.
+	TypoAscent, TypoDescent, TypoLineGap int
+	UseTypoMetrics                       bool
+
+	// XHeight is OS/2 sxHeight, the height of a lowercase x. CSS's ex unit is
+	// defined against it, and vertical-align: middle against half of it; the
+	// half-em both fall back to is the specified fallback and not the answer.
+	XHeight int
+
+	// UnderlinePosition and UnderlineThickness are post's, in font units, with
+	// the position the distance from the baseline to the *top* of the stroke and
+	// so negative for a rule drawn below it. StrikeoutPosition and StrikeoutSize
+	// are OS/2's equivalent for a line through the middle.
+	UnderlinePosition, UnderlineThickness int
+	StrikeoutPosition, StrikeoutSize      int
+
+	// Weight is OS/2 usWeightClass: 100 for Thin, 400 for Regular, 700 for Bold.
+	//
+	// It is worth more than it looks on a variable font. This module hands back
+	// the outlines as they are stored, which is the face's default instance, and
+	// a quarter of the variable faces published under the OFL default to
+	// something lighter than Regular. The name is no guide: the legacy name
+	// records can spell only four styles, so a face whose default is Thin is
+	// commonly still called Regular there, and several are. This is the number
+	// that says what was actually drawn.
+	Weight int
+
+	// Declared is the set of the above the font actually states.
+	//
+	// Zero and unknown are different answers and a consumer has to tell them
+	// apart: a font may legitimately declare a line gap of nothing, and the
+	// fourteen standard faces declare none of this at all because they have no
+	// hhea, OS/2 or post table to declare it in. Every field above that can be
+	// absent has a bit here, and the bit is the only way to know.
+	Declared Metric
 }
+
+// Metric names a metric a font may or may not state, for Descriptor.Declared.
+type Metric uint32
+
+const (
+	MetricLineGap Metric = 1 << iota
+	MetricTypoMetrics
+	MetricXHeight
+	MetricCapHeight
+	MetricUnderline
+	MetricStrikeout
+	MetricWeight
+)
+
+// Has reports whether the font stated a metric, as against leaving it zero.
+func (d Descriptor) Has(m Metric) bool { return d.Declared&m == m }
 
 // Descriptor returns the face's metrics.
 func (f *Face) Descriptor() Descriptor {
@@ -49,6 +113,19 @@ func (f *Face) Descriptor() Descriptor {
 		ItalicAngle: f.italic,
 		StemV:       f.stemV,
 		Flags:       f.flags,
+
+		LineGap:            f.lineGap,
+		TypoAscent:         f.typoAscent,
+		TypoDescent:        f.typoDescent,
+		TypoLineGap:        f.typoLineGap,
+		UseTypoMetrics:     f.useTypoMetrics,
+		XHeight:            f.xHeight,
+		UnderlinePosition:  f.underlinePos,
+		UnderlineThickness: f.underlineThick,
+		StrikeoutPosition:  f.strikeoutPos,
+		StrikeoutSize:      f.strikeoutSize,
+		Weight:             f.weight,
+		Declared:           f.declared,
 	}
 }
 
