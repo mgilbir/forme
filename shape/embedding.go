@@ -57,12 +57,20 @@ type Descriptor struct {
 	// XHeight is OS/2 sxHeight, the height of a lowercase x. CSS's ex unit is
 	// defined against it, and vertical-align: middle against half of it; the
 	// half-em both fall back to is the specified fallback and not the answer.
+	// For a standard face it is the AFM's XHeight, which twelve of the fourteen
+	// publish — Symbol and ZapfDingbats have no lowercase to measure.
 	XHeight int
 
 	// UnderlinePosition and UnderlineThickness are post's, in font units, with
 	// the position the distance from the baseline to the *top* of the stroke and
 	// so negative for a rule drawn below it. StrikeoutPosition and StrikeoutSize
 	// are OS/2's equivalent for a line through the middle.
+	//
+	// A standard face's underline comes from its AFM, converted: PostScript
+	// measures to the centre of the stroke and post to its top, so the position
+	// reported is half a thickness above the number Adobe published. The field
+	// means one thing whichever kind of face answered it. An AFM carries no
+	// strikeout, so the fourteen state none.
 	UnderlinePosition, UnderlineThickness int
 	StrikeoutPosition, StrikeoutSize      int
 
@@ -81,9 +89,10 @@ type Descriptor struct {
 	//
 	// Zero and unknown are different answers and a consumer has to tell them
 	// apart: a font may legitimately declare a line gap of nothing, and the
-	// fourteen standard faces declare none of this at all because they have no
-	// hhea, OS/2 or post table to declare it in. Every field above that can be
-	// absent has a bit here, and the bit is the only way to know.
+	// fourteen standard faces have no hhea, OS/2 or post table to declare one
+	// in — so they state no line gap, no strikeout and no typographic trio, and
+	// only the x-height and underline their AFM publishes. Every field above
+	// that can be absent has a bit here, and the bit is the only way to know.
 	Declared Metric
 }
 

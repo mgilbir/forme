@@ -45,10 +45,10 @@ func TestDescriptorReadsTheMetricsTheFontStates(t *testing.T) {
 // TestZeroAndUnknownAreDifferentAnswers is the point of Declared.
 //
 // The bundled face states a line gap of nothing, and the fourteen standard faces
-// state nothing at all — they have no hhea, OS/2 or post table to state it in.
-// Both report LineGap as 0, and a consumer that cannot tell them apart will read
-// the second as an instruction. Declared is the only thing that distinguishes
-// them, so it is checked in both directions.
+// state none at all — they have no hhea to state it in. Both report LineGap as
+// 0, and a consumer that cannot tell them apart will read the second as an
+// instruction. Declared is the only thing that distinguishes them, so it is
+// checked in both directions.
 func TestZeroAndUnknownAreDifferentAnswers(t *testing.T) {
 	noto, err := NotoSans()
 	if err != nil {
@@ -77,8 +77,11 @@ func TestZeroAndUnknownAreDifferentAnswers(t *testing.T) {
 		t.Fatalf("loading Helvetica: %v", err)
 	}
 	s := std.Descriptor()
-	if s.Declared != 0 {
-		t.Errorf("a standard face declares %b; it has no table to declare any of it in", s.Declared)
+	// The x-height and the underline come from the AFM; everything else needs a
+	// table the face has not got.
+	if want := MetricXHeight | MetricUnderline; s.Declared != want {
+		t.Errorf("a standard face declares %b, want %b: an AFM publishes an "+
+			"x-height and an underline and nothing else here", s.Declared, want)
 	}
 	if s.LineGap != 0 {
 		t.Errorf("LineGap = %d for a standard face, want 0 with the bit clear", s.LineGap)
@@ -86,6 +89,113 @@ func TestZeroAndUnknownAreDifferentAnswers(t *testing.T) {
 	// The two answers a consumer has to tell apart, spelled out.
 	if d.LineGap == s.LineGap && d.Has(MetricLineGap) == s.Has(MetricLineGap) {
 		t.Error("a stated zero and an absent value are indistinguishable, which is the bug this guards")
+	}
+}
+
+// TestTheStandardFourteenReportWhatTheirAFMSays covers the faces with no tables.
+//
+// They are the commonest case a consumer meets — a PDF may name one and embed
+// nothing — and they are the case where "stated zero" and "stated nothing" is
+// decided per metric rather than per face. An AFM publishes an underline for all
+// fourteen and an x-height for twelve; Symbol and ZapfDingbats have no lowercase
+// to measure one from. Neither an AFM nor anything else here carries a line gap
+// or a strikeout for them, so those bits stay clear and the zero beside them is
+// not an instruction.
+//
+// The numbers are Adobe's own, read out of the AFM files rather than out of this
+// package, and every one of the fourteen is listed because the cost of doing so
+// is a table and the alternative is a sample that happens to miss the face that
+// regenerated wrongly.
+func TestTheStandardFourteenReportWhatTheirAFMSays(t *testing.T) {
+	// The AFM's UnderlinePosition is -100 with a thickness of 50 throughout,
+	// measured to the centre of the stroke; the top of it, which is what
+	// Descriptor reports, is -100 + 50/2 = -75.
+	const underlineTop, underlineThickness = -75, 50
+	xHeights := map[string]int{
+		"Courier": 426, "Courier-Bold": 439, "Courier-BoldOblique": 439,
+		"Courier-Oblique": 426, "Helvetica": 523, "Helvetica-Bold": 532,
+		"Helvetica-BoldOblique": 532, "Helvetica-Oblique": 523,
+		"Times-Roman": 450, "Times-Bold": 461, "Times-Italic": 441,
+		"Times-BoldItalic": 462,
+		// Symbol and ZapfDingbats are absent on purpose: their AFM has no
+		// XHeight line at all, which is a different answer from XHeight 0.
+	}
+	names := StandardNames()
+	if len(names) != 14 {
+		t.Fatalf("%d standard faces, want 14", len(names))
+	}
+	for _, name := range names {
+		f, err := Standard(name)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		d := f.Descriptor()
+
+		want, stated := xHeights[name]
+		if d.Has(MetricXHeight) != stated || d.XHeight != want {
+			t.Errorf("%s x-height %d stated=%v, want %d stated=%v",
+				name, d.XHeight, d.Has(MetricXHeight), want, stated)
+		}
+		if !d.Has(MetricUnderline) ||
+			d.UnderlinePosition != underlineTop || d.UnderlineThickness != underlineThickness {
+			t.Errorf("%s underline %d/%d stated=%v, want %d/%d stated",
+				name, d.UnderlinePosition, d.UnderlineThickness, d.Has(MetricUnderline),
+				underlineTop, underlineThickness)
+		}
+		if d.Has(MetricLineGap) || d.LineGap != 0 {
+			t.Errorf("%s line gap %d stated=%v, and an AFM has none",
+				name, d.LineGap, d.Has(MetricLineGap))
+		}
+		if d.Has(MetricStrikeout) || d.StrikeoutPosition != 0 || d.StrikeoutSize != 0 {
+			t.Errorf("%s strikeout %d/%d stated=%v, and an AFM has none",
+				name, d.StrikeoutPosition, d.StrikeoutSize, d.Has(MetricStrikeout))
+		}
+	}
+
+	// The distinction the bit exists for, on the two faces that make it: Symbol
+	// reports the same x-height as a face that measured one and found zero
+	// would, and only the bit says which happened. Without it a caller sizing an
+	// ex unit gets a zero it cannot recognise as silence.
+	symbol, err := Standard("Symbol")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := symbol.Descriptor(); s.XHeight != 0 || s.Has(MetricXHeight) {
+		t.Errorf("Symbol x-height %d stated=%v, want 0 with the bit clear",
+			s.XHeight, s.Has(MetricXHeight))
+	}
+}
+
+// TestTheAFMUnderlineIsConvertedToPostsConvention pins the half-stroke.
+//
+// An AFM's UnderlinePosition is the centre of the stroke and post's is its top,
+// so the two conventions differ by half a thickness and a reader that carried
+// the AFM number through unchanged would draw every standard face's underline
+// half a stroke low. The error is small, silent, and only visible beside a
+// browser — which is why it is asserted against the published number here rather
+// than against whatever this package computes.
+func TestTheAFMUnderlineIsConvertedToPostsConvention(t *testing.T) {
+	m, ok := standard14["Helvetica"]
+	if !ok {
+		t.Fatal("Helvetica is missing from the generated metrics")
+	}
+	if m.underlineCenter != -100 || m.underlineThickness != 50 {
+		t.Fatalf("the generated AFM values are %d/%d, not the published -100/50; "+
+			"this test no longer checks what it says it does",
+			m.underlineCenter, m.underlineThickness)
+	}
+	f, err := Standard("Helvetica")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := f.Descriptor().UnderlinePosition
+	if got == m.underlineCenter {
+		t.Fatalf("the AFM's centre-of-stroke %d was reported unconverted; post's "+
+			"convention is the top of the stroke", got)
+	}
+	if want := m.underlineCenter + m.underlineThickness/2; got != want {
+		t.Errorf("underline position %d, want %d — the AFM's %d raised by half of "+
+			"a %d-unit stroke", got, want, m.underlineCenter, m.underlineThickness)
 	}
 }
 

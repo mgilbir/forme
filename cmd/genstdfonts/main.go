@@ -41,6 +41,15 @@ type metrics struct {
 	fixedPitch bool
 	bbox       [4]int
 	flags      int
+	// An AFM states these two only if the face has them to state — Symbol and
+	// ZapfDingbats have no lowercase and so no x-height — and a face that says
+	// nothing must not be emitted as one that says zero. Hence the flags: the
+	// absent key and the value 0 are different metrics files.
+	xHeight            int
+	hasXHeight         bool
+	underlineCenter    int
+	underlineThickness int
+	hasUnderline       bool
 }
 
 func main() {
@@ -68,6 +77,9 @@ func parseAFM(path string) (*metrics, error) {
 	defer f.Close()
 
 	m := &metrics{widths: map[string]int{}}
+	// An underline needs both halves: a thickness with no position places
+	// nothing, and a position with no thickness draws nothing.
+	var hasUnderlinePosition, hasUnderlineThickness bool
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
 	for sc.Scan() {
@@ -94,6 +106,15 @@ func parseAFM(path string) (*metrics, error) {
 			m.descent, _ = strconv.Atoi(strings.TrimSpace(line[10:]))
 		case strings.HasPrefix(line, "CapHeight "):
 			m.capHeight, _ = strconv.Atoi(strings.TrimSpace(line[10:]))
+		case strings.HasPrefix(line, "XHeight "):
+			m.xHeight, _ = strconv.Atoi(strings.TrimSpace(line[8:]))
+			m.hasXHeight = true
+		case strings.HasPrefix(line, "UnderlinePosition "):
+			m.underlineCenter, _ = strconv.Atoi(strings.TrimSpace(line[18:]))
+			hasUnderlinePosition = true
+		case strings.HasPrefix(line, "UnderlineThickness "):
+			m.underlineThickness, _ = strconv.Atoi(strings.TrimSpace(line[19:]))
+			hasUnderlineThickness = true
 		case strings.HasPrefix(line, "ItalicAngle "):
 			m.italic, _ = strconv.ParseFloat(strings.TrimSpace(line[12:]), 64)
 		case strings.HasPrefix(line, "IsFixedPitch "):
@@ -108,6 +129,7 @@ func parseAFM(path string) (*metrics, error) {
 	if len(m.widths) == 0 {
 		return nil, fmt.Errorf("no character metrics found")
 	}
+	m.hasUnderline = hasUnderlinePosition && hasUnderlineThickness
 	return m, sc.Err()
 }
 
@@ -151,9 +173,10 @@ func emit(all map[string]*metrics) {
 //
 // Modification noted, as the licence requires: the AFM files were not modified.
 // This file is a derived work containing the advance width of each glyph by
-// name, together with the ascent, descent, cap height, italic angle, fixed-pitch
-// flag and bounding box of each face. Everything else in an AFM — kerning pairs,
-// composites, character codes, the character-name ordering — was dropped.
+// name, together with the ascent, descent, cap height, x-height, underline
+// position and thickness, italic angle, fixed-pitch flag and bounding box of
+// each face. Everything else in an AFM — kerning pairs, composites, character
+// codes, the character-name ordering — was dropped.
 
 package shape
 
@@ -176,6 +199,11 @@ package shape
 // check it against.
 
 // stdMetrics is one standard face.
+//
+// An AFM states an x-height and an underline only for a face that has them —
+// Symbol and ZapfDingbats have no lowercase, and no x-height with it — so those
+// two carry a flag saying whether the file said anything. Zero is a value a
+// font can state and not a way of saying nothing; see Descriptor.Declared.
 type stdMetrics struct {
 	widths     map[string]int
 	ascent     int
@@ -184,6 +212,15 @@ type stdMetrics struct {
 	italic     float64
 	fixedPitch bool
 	bbox       [4]int
+	xHeight    int
+	hasXHeight bool
+	// underlineCenter is the AFM's own UnderlinePosition: the distance from
+	// the baseline to the *centre* of the stroke, which is what PostScript
+	// means by it and half a stroke away from what the post table means. It is
+	// stored as published and converted where it is read.
+	underlineCenter    int
+	underlineThickness int
+	hasUnderline       bool
 }
 
 `)
@@ -200,6 +237,9 @@ type stdMetrics struct {
 		fmt.Fprintf(w, "\t\tascent: %d, descent: %d, capHeight: %d, italic: %v, fixedPitch: %v,\n",
 			m.ascent, m.descent, m.capHeight, m.italic, m.fixedPitch)
 		fmt.Fprintf(w, "\t\tbbox: [4]int{%d, %d, %d, %d},\n", m.bbox[0], m.bbox[1], m.bbox[2], m.bbox[3])
+		fmt.Fprintf(w, "\t\txHeight: %d, hasXHeight: %v,\n", m.xHeight, m.hasXHeight)
+		fmt.Fprintf(w, "\t\tunderlineCenter: %d, underlineThickness: %d, hasUnderline: %v,\n",
+			m.underlineCenter, m.underlineThickness, m.hasUnderline)
 		fmt.Fprintln(w, "\t\twidths: map[string]int{")
 		glyphs := make([]string, 0, len(m.widths))
 		for g := range m.widths {
