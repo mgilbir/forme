@@ -68,13 +68,14 @@ type Descriptor struct {
 
 	// Weight is OS/2 usWeightClass: 100 for Thin, 400 for Regular, 700 for Bold.
 	//
-	// It is worth more than it looks on a variable font. This module hands back
-	// the outlines as they are stored, which is the face's default instance, and
-	// a quarter of the variable faces published under the OFL default to
-	// something lighter than Regular. The name is no guide: the legacy name
-	// records can spell only four styles, so a face whose default is Thin is
-	// commonly still called Regular there, and several are. This is the number
-	// that says what was actually drawn.
+	// It is worth more than it looks on a variable font. Load hands back the
+	// outlines as they are stored, which is the face's default instance, and a
+	// quarter of the variable faces published under the OFL default to something
+	// lighter than Regular. The name is no guide: the legacy name records can
+	// spell only four styles, so a face whose default is Thin is commonly still
+	// called Regular there, and several are. This is the number that says what
+	// was actually drawn — LoadInstance rewrites it from the location it cut the
+	// face at, so it says that for an instance too.
 	Weight int
 
 	// Declared is the set of the above the font actually states.

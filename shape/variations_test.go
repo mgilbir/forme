@@ -64,10 +64,14 @@ func TestFeatureVariationsReplaceAFeaturesLookups(t *testing.T) {
 // TestFeatureVariationsOnlyAtTheDefaultInstance is the half that decides which
 // weight the rules are read for.
 //
-// Nothing here instances a variable font: the subsetter drops fvar and gvar, and
-// what reaches a document is the default instance. So a record stated for the
-// heavy end of the axis is a rule for a weight this module never sets, and
+// A face from Load is the default instance: what it hands back is the outlines
+// glyf stores, and those are the default by construction. So a record stated for
+// the heavy end of the axis is a rule for a weight this face was not cut at, and
 // applying it would set the text by rules meant for a different font.
+//
+// LoadInstance is how a face reaches any other location, and the rules follow it
+// there — see TestFeatureVariationsFollowTheInstancedLocation, which is where
+// the axis index starts to matter.
 func TestFeatureVariationsOnlyAtTheDefaultInstance(t *testing.T) {
 	for _, tc := range []struct {
 		why  string
@@ -185,7 +189,7 @@ func TestFeatureVariationsSurviveTruncation(t *testing.T) {
 	for n := 0; n <= len(gsub); n++ {
 		truncated := append([]byte(nil), gsub[:n]...)
 		if len(truncated) >= 10 {
-			readFeatureVariations(truncated)
+			readFeatureVariations(truncated, nil)
 		}
 	}
 }

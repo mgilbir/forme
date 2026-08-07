@@ -98,7 +98,8 @@ type Face struct {
 	declared                     Metric
 	// axes are the variation axes fvar declares, which is how a caller learns
 	// that a face is variable and where on each axis the outlines it was handed
-	// actually sit. Nothing here instances the font; see Axes.
+	// actually sit. A face from LoadInstance has none: it was cut at one point
+	// of a design space and no longer has one. See Axes.
 	axes []Axis
 
 	// cff reports that the outlines are CFF rather than glyf, which changes
@@ -131,6 +132,12 @@ type Face struct {
 	// reading tens of thousands of kern pairs again per document is pure waste.
 	cache    *layoutCache
 	language string
+	// varCoords is where in a variable font's design space this face was read,
+	// in normalized coordinates, or nil for a font that has no design space.
+	// The rules a font states can differ across it — see FeatureVariations in
+	// layout.go — and the default instance is zero on every axis, which is what
+	// nil stands for.
+	varCoords []float64
 
 	used map[int]bool // glyph indices this face has encoded
 }
@@ -153,7 +160,16 @@ func keepLayoutTables(tables map[string][]byte) map[string][]byte {
 
 // Load parses an sfnt font program — TrueType or OpenType — and prepares it for
 // embedding. The bytes are retained and written into the PDF as they are.
-func Load(data []byte) (*Face, error) {
+//
+// A variable font loads at its default instance, which is what its glyf outlines
+// already are. LoadInstance is the way to ask for any other point in its design
+// space; see instance.go for why the default is rarely the one that was wanted.
+func Load(data []byte) (*Face, error) { return loadFace(data, nil) }
+
+// loadFace is Load, told where in a design space the program was cut. The
+// coordinates are normalized, and nil means the default instance — which is
+// zero on every axis, so it is also what a font with no design space gets.
+func loadFace(data []byte, coords []float64) (*Face, error) {
 	tables := font.SFNTTables(data)
 	if tables == nil {
 		return nil, errors.New("fonts: not an sfnt font program (TrueType or OpenType)")
@@ -201,6 +217,7 @@ func Load(data []byte) (*Face, error) {
 		prog:       prog,
 		cff:        !hasGlyf,
 		unitsPerEm: 1000,
+		varCoords:  coords,
 		used:       map[int]bool{},
 	}
 	head := tables["head"]
@@ -237,9 +254,9 @@ func Load(data []byte) (*Face, error) {
 	// The unfiltered reading, and the positioning half it is built on, are the
 	// ones a font with no ScriptList falls back to, so they are cached under
 	// the key a nil selection gets rather than read a second time for it.
-	pos := readPositioning(f.layoutTables, nil)
+	pos := readPositioning(f.layoutTables, nil, coords)
 	f.cache = &layoutCache{positionings: map[string]*layout{selectionKey(nil): pos}}
-	f.layout = readLayout(f.layoutTables, nil, pos)
+	f.layout = readLayout(f.layoutTables, nil, pos, coords)
 	f.name = postScriptName(tables["name"])
 	if f.name == "" {
 		f.name = "Embedded"
@@ -278,12 +295,16 @@ type Axis struct {
 
 // Axes are the variation axes the face declares, empty for a static font.
 //
-// This module does not instance a variable font and cannot be asked to: what it
-// hands back is the outlines as they are stored, which is the default instance,
-// with every axis at its Default below. Axes is therefore not a way to choose a
-// weight — it is the way to find out that a choice was made and what it was, so
-// a caller can say "this face is variable and was taken at wght=100" rather than
-// discovering it from the shape of the letters.
+// A face from Load carries the outlines as they are stored, which is the
+// default instance, with every axis at its Default below. Axes is how a caller
+// reads which design space it is in and where it was taken, so it can say "this
+// face is variable and was taken at wght=100" rather than discovering it from
+// the shape of the letters — and it is what a caller reads before naming a
+// point to LoadInstance, which is the way to be handed another one.
+//
+// A face from LoadInstance has no axes. It was cut at one location and is a
+// static font, which is what a design point is once it has been chosen; what it
+// was cut at is in Descriptor().Weight and in Name.
 func (f *Face) Axes() []Axis {
 	if len(f.axes) == 0 {
 		return nil
@@ -563,7 +584,13 @@ func isFixedPitch(p *font.Program) bool {
 // postScriptName reads name ID 6 from an sfnt name table, preferring the
 // Windows/Unicode record a modern font carries and falling back to the
 // Macintosh/Roman one.
-func postScriptName(name []byte) string {
+func postScriptName(name []byte) string { return nameByID(name, 6) }
+
+// nameByID reads one name record by its ID. Any name a font states is a name it
+// states several times, once per platform, and the Windows record is the one to
+// believe: the Macintosh record is a single-byte encoding kept for readers that
+// no longer exist.
+func nameByID(name []byte, id int) string {
 	if len(name) < 6 {
 		return ""
 	}
@@ -575,7 +602,7 @@ func postScriptName(name []byte) string {
 		if rec+12 > len(name) {
 			break
 		}
-		if font.Be16(name, rec+6) != 6 { // nameID
+		if font.Be16(name, rec+6) != id { // nameID
 			continue
 		}
 		platform := font.Be16(name, rec)
