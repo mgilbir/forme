@@ -1,7 +1,6 @@
 package paragraph
 
 import (
-	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -70,13 +69,3 @@ func NewBreaker(r OverflowReporter) *Breaker {
 type discardFindings struct{}
 
 func (discardFindings) ReportOverflow(Item, style.Unit) {}
-
-// widthOf is the advance of a run of text as it will be set, in the units the
-// size was given in.
-//
-// It is here rather than on the face because the answer is memoized and because
-// letter-spacing and word-spacing are part of it: a face measures glyphs, and
-// what the breaking needs is the width of the run as this document sets it.
-func (br *Breaker) widthOf(face *shape.Face, text string, size style.Unit, sp TextSpacing) style.Unit {
-	return br.MeasureSpaced(face, text, size, sp)
-}
