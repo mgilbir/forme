@@ -23,7 +23,7 @@ $(BIDI_DIR)/.ok:
 	touch $@
 
 test-bidi: bidi-tests
-	UNICODE_BIDI_TESTS=$(abspath $(BIDI_DIR)) go test -v -run TestBidiConformance -count=1 ./shape
+	UNICODE_BIDI_TESTS=$(abspath $(BIDI_DIR)) go test -v -run TestBidiConformance -count=1 ./bidi
 
 clean-bidi-tests:
 	rm -rf $(BIDI_DIR)

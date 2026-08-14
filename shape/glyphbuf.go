@@ -136,7 +136,7 @@ func (f *Face) shapeGlyphsWith(s string, extra []string) ([]Glyph, int) {
 		// One direction throughout, which is nearly all text. Shaping it whole
 		// keeps a ligature or a kern pair that spans the string, which cutting
 		// it into runs would lose.
-		rtl := len(runs) == 1 && runs[0].rtl()
+		rtl := len(runs) == 1 && runs[0].RTL()
 		return f.shapeGlyphsIn(s, runScript(s), rtl, extra)
 	}
 	var (
@@ -144,11 +144,11 @@ func (f *Face) shapeGlyphsWith(s string, extra []string) ([]Glyph, int) {
 		missing int
 	)
 	for _, r := range runs {
-		piece := s[r.start:r.end]
-		glyphs, gone := f.shapeGlyphsIn(piece, runScript(piece), r.rtl(), extra)
+		piece := s[r.Start:r.End]
+		glyphs, gone := f.shapeGlyphsIn(piece, runScript(piece), r.RTL(), extra)
 		missing += gone
 		for i := range glyphs {
-			glyphs[i].Cluster += r.start
+			glyphs[i].Cluster += r.Start
 		}
 		out = append(out, glyphs...)
 	}
@@ -384,4 +384,17 @@ func (sh shaper) substitute(buf []Glyph) []Glyph {
 	buf = sh.applyNamedFeatures(buf, beforeJoiningFeatures)
 	buf = sh.applyJoiningForms(buf)
 	return sh.applyNamedFeatures(buf, afterJoiningFeatures)
+}
+
+// reverseGlyphs puts a shaped run into visual order.
+//
+// It is the last step of shaping a right-to-left run and cannot be an earlier
+// one. Everything before it — joining, ligatures, contextual rules, kerning,
+// cursive attachment, marks — is stated by the font in terms of the order the
+// text is written in, and applying any of it to a reversed buffer applies it to
+// the wrong neighbours.
+func reverseGlyphs(buf []Glyph) {
+	for i, j := 0, len(buf)-1; i < j; i, j = i+1, j-1 {
+		buf[i], buf[j] = buf[j], buf[i]
+	}
 }

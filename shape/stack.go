@@ -140,14 +140,14 @@ func (s *Stack) ShapeRuns(text string) ([]Run, int) {
 			}
 			end += n
 		}
-		for lr+1 < len(levelRuns) && levelRuns[lr].end <= i {
+		for lr+1 < len(levelRuns) && levelRuns[lr].End <= i {
 			lr++
 		}
 		units = append(units, unit{
 			start: i, end: end,
 			face:   s.faceFor(text[i:end], base),
 			script: runScript(text[i:end]),
-			level:  levelRuns[lr].level,
+			level:  levelRuns[lr].Level,
 		})
 		i = end
 	}

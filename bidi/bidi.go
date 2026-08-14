@@ -1,4 +1,4 @@
-package shape
+package bidi
 
 import (
 	"sort"
@@ -44,84 +44,84 @@ import (
 // right-to-left run, and what it should do is font- and platform-specific.
 // Unicode excludes it from the conformance data for that reason.
 
-// bidiClass is a character's Bidi_Class: what the algorithm knows about it.
+// Class is a character's Bidi_Class: what the algorithm knows about it.
 //
-// The constants are in the order cmd/genbidi writes them, and bidiL is zero
+// The constants are in the order cmd/genbidi writes them, and L is zero
 // because it is the default — a character no range in bidiclass.go names is
 // left-to-right, and there are far more of those than of everything else.
-type bidiClass uint8
+type Class uint8
 
 const (
-	bidiL   bidiClass = iota // left-to-right
-	bidiR                    // right-to-left
-	bidiAL                   // right-to-left Arabic
-	bidiEN                   // European number
-	bidiES                   // European number separator
-	bidiET                   // European number terminator
-	bidiAN                   // Arabic number
-	bidiCS                   // common number separator
-	bidiNSM                  // non-spacing mark
-	bidiBN                   // boundary neutral
-	bidiB                    // paragraph separator
-	bidiS                    // segment separator
-	bidiWS                   // whitespace
-	bidiON                   // other neutral
-	bidiLRE                  // left-to-right embedding
-	bidiRLE                  // right-to-left embedding
-	bidiLRO                  // left-to-right override
-	bidiRLO                  // right-to-left override
-	bidiPDF                  // pop directional format
-	bidiLRI                  // left-to-right isolate
-	bidiRLI                  // right-to-left isolate
-	bidiFSI                  // first strong isolate
-	bidiPDI                  // pop directional isolate
+	L   Class = iota // left-to-right
+	R                // right-to-left
+	AL               // right-to-left Arabic
+	EN               // European number
+	ES               // European number separator
+	ET               // European number terminator
+	AN               // Arabic number
+	CS               // common number separator
+	NSM              // non-spacing mark
+	BN               // boundary neutral
+	B                // paragraph separator
+	S                // segment separator
+	WS               // whitespace
+	ON               // other neutral
+	LRE              // left-to-right embedding
+	RLE              // right-to-left embedding
+	LRO              // left-to-right override
+	RLO              // right-to-left override
+	PDF              // pop directional format
+	LRI              // left-to-right isolate
+	RLI              // right-to-left isolate
+	FSI              // first strong isolate
+	PDI              // pop directional isolate
 )
 
-// bidiMaxDepth is the deepest embedding the algorithm recognises (UAX #9, BD2).
+// MaxDepth is the deepest embedding the algorithm recognises (UAX #9, BD2).
 // It is a cap in the specification rather than one this package chose: an
 // embedding beyond it is an overflow and is ignored, which is what stops a
 // string of a million RLEs from costing a million stack frames.
-const bidiMaxDepth = 125
+const MaxDepth = 125
 
-// bidiMaxBracketPairs is the bracket stack's depth (UAX #9, BD16). Also the
+// maxBracketPairs is the bracket stack's depth (UAX #9, BD16). Also the
 // specification's: past it, rule N0 stops looking for pairs in that sequence
 // rather than growing without bound.
-const bidiMaxBracketPairs = 63
+const maxBracketPairs = 63
 
-// bidiClassOf reports a character's Bidi_Class. A character the table does not
+// ClassOf reports a character's Bidi_Class. A character the table does not
 // name is left-to-right, which is the property's default value and most of the
 // code space.
-func bidiClassOf(r rune) bidiClass {
-	i := sort.Search(len(bidiClassRanges), func(i int) bool { return bidiClassRanges[i].hi >= r })
-	if i < len(bidiClassRanges) && r >= bidiClassRanges[i].lo {
-		return bidiClassRanges[i].class
+func ClassOf(r rune) Class {
+	i := sort.Search(len(classRanges), func(i int) bool { return classRanges[i].hi >= r })
+	if i < len(classRanges) && r >= classRanges[i].lo {
+		return classRanges[i].class
 	}
-	return bidiL
+	return L
 }
 
-// bidiMirrorOf reports the character drawn in place of this one in a
+// MirrorOf reports the character drawn in place of this one in a
 // right-to-left run: rule L4. A parenthesis that opens a left-to-right aside
 // closes a right-to-left one, and drawing the glyph as written points it the
 // wrong way.
-func bidiMirrorOf(r rune) (rune, bool) {
-	i := sort.Search(len(bidiMirrors), func(i int) bool { return bidiMirrors[i].from >= r })
-	if i < len(bidiMirrors) && bidiMirrors[i].from == r {
-		return bidiMirrors[i].to, true
+func MirrorOf(r rune) (rune, bool) {
+	i := sort.Search(len(mirrors), func(i int) bool { return mirrors[i].from >= r })
+	if i < len(mirrors) && mirrors[i].from == r {
+		return mirrors[i].to, true
 	}
 	return r, false
 }
 
-// bidiBracketOf reports whether a character is a paired bracket, which one it
+// BracketOf reports whether a character is a paired bracket, which one it
 // pairs with, and whether this is the opening half.
-func bidiBracketOf(r rune) (paired rune, open, ok bool) {
-	i := sort.Search(len(bidiBrackets), func(i int) bool { return bidiBrackets[i].ch >= r })
-	if i < len(bidiBrackets) && bidiBrackets[i].ch == r {
-		return bidiBrackets[i].paired, bidiBrackets[i].open, true
+func BracketOf(r rune) (paired rune, open, ok bool) {
+	i := sort.Search(len(brackets), func(i int) bool { return brackets[i].ch >= r })
+	if i < len(brackets) && brackets[i].ch == r {
+		return brackets[i].paired, brackets[i].open, true
 	}
 	return r, false, false
 }
 
-// bidiCanonical folds the two angle brackets that Unicode deprecated onto the
+// Canonical folds the two angle brackets that Unicode deprecated onto the
 // ones that replaced them.
 //
 // Rule N0 matches an opening bracket to a closing one by identity, and U+3008
@@ -129,7 +129,7 @@ func bidiBracketOf(r rune) (paired rune, open, ok bool) {
 // twice in the standard. A document that opens with one and closes with the
 // other is a matched pair to every reader, and matching by code point alone
 // would miss it.
-func bidiCanonical(r rune) rune {
+func Canonical(r rune) rune {
 	switch r {
 	case 0x3008:
 		return 0x2329
@@ -139,7 +139,7 @@ func bidiCanonical(r rune) rune {
 	return r
 }
 
-// bidiIsRemoved reports whether rule X9 removes a character from the sequence
+// isRemoved reports whether rule X9 removes a character from the sequence
 // the later rules see: the explicit embedding and override codes, their pop, and
 // the boundary neutrals.
 //
@@ -148,58 +148,58 @@ func bidiCanonical(r rune) rune {
 // them out. What is done with them afterwards is the caller's: this package
 // keeps them in the glyph buffer, because a zero-width joiner is a boundary
 // neutral and Arabic joining needs to see it.
-func bidiIsRemoved(c bidiClass) bool {
+func isRemoved(c Class) bool {
 	switch c {
-	case bidiRLE, bidiLRE, bidiRLO, bidiLRO, bidiPDF, bidiBN:
+	case RLE, LRE, RLO, LRO, PDF, BN:
 		return true
 	}
 	return false
 }
 
-// bidiIsIsolateInitiator reports whether a character opens an isolate.
-func bidiIsIsolateInitiator(c bidiClass) bool {
-	return c == bidiLRI || c == bidiRLI || c == bidiFSI
+// isIsolateInitiator reports whether a character opens an isolate.
+func isIsolateInitiator(c Class) bool {
+	return c == LRI || c == RLI || c == FSI
 }
 
-// bidiIsNeutral reports whether a character is a "neutral or isolate formatting
+// isNeutral reports whether a character is a "neutral or isolate formatting
 // character" — NI in the wording of rules N0 to N2.
-func bidiIsNeutral(c bidiClass) bool {
+func isNeutral(c Class) bool {
 	switch c {
-	case bidiB, bidiS, bidiWS, bidiON, bidiFSI, bidiLRI, bidiRLI, bidiPDI:
+	case B, S, WS, ON, FSI, LRI, RLI, PDI:
 		return true
 	}
 	return false
 }
 
-// bidiStrong reduces a resolved type to the direction it contributes when the
+// strong reduces a resolved type to the direction it contributes when the
 // neutral rules look either side of a gap: numbers count as right-to-left,
 // because they are written left to right *within* right-to-left text and the
-// text around them is what N1 is deciding about. It returns bidiON for a type
+// text around them is what N1 is deciding about. It returns ON for a type
 // that contributes nothing.
-func bidiStrong(c bidiClass) bidiClass {
+func strong(c Class) Class {
 	switch c {
-	case bidiL:
-		return bidiL
-	case bidiR, bidiEN, bidiAN:
-		return bidiR
+	case L:
+		return L
+	case R, EN, AN:
+		return R
 	}
-	return bidiON
+	return ON
 }
 
-// bidiDirOf is the direction a level runs in: even is left-to-right.
-func bidiDirOf(level int) bidiClass {
+// dirOf is the direction a level runs in: even is left-to-right.
+func dirOf(level int) Class {
 	if level&1 == 1 {
-		return bidiR
+		return R
 	}
-	return bidiL
+	return L
 }
 
-// bidiParagraph is a resolved paragraph: an embedding level for every character
+// Paragraph is a resolved paragraph: an embedding level for every character
 // and the paragraph's own level.
-type bidiParagraph struct {
+type Paragraph struct {
 	// classes is each character's original Bidi_Class, which rules L1 and N0
 	// both need after the earlier rules have overwritten the working copy.
-	classes []bidiClass
+	classes []Class
 
 	// levels is the resolved embedding level of each character. A character
 	// rule X9 removed has no level of its own and carries -1; callers that must
@@ -210,7 +210,7 @@ type bidiParagraph struct {
 	para int
 }
 
-// bidiResolve runs the algorithm over one paragraph.
+// resolveClasses runs the algorithm over one paragraph.
 //
 // text may be nil, and then rule N0 is skipped: the paired-bracket rule is the
 // one place the algorithm looks at characters rather than at classes, and
@@ -220,33 +220,33 @@ type bidiParagraph struct {
 // paraLevel is 0 or 1 to impose a direction, or negative to derive one with
 // P2/P3 — which is what a caller who does not know the language wants: the
 // paragraph runs whichever way its first strongly-directional character does.
-func bidiResolve(classes []bidiClass, text []rune, paraLevel int) bidiParagraph {
+func resolveClasses(classes []Class, text []rune, paraLevel int) Paragraph {
 	n := len(classes)
-	p := bidiParagraph{classes: classes, levels: make([]int, n)}
+	p := Paragraph{classes: classes, levels: make([]int, n)}
 
-	pdi, initiator := bidiMatchPDI(classes)
+	pdi, initiator := matchPDI(classes)
 	if paraLevel < 0 {
-		paraLevel = bidiParaLevel(classes, pdi, 0, n)
+		paraLevel = paraLevelOf(classes, pdi, 0, n)
 	}
 	p.para = paraLevel
 
 	// types is the working copy every rule from X6 on rewrites. The originals
 	// stay in p.classes: L1 restores whitespace by what it *was*, and N0 asks
 	// what a character was before W1 touched it.
-	types := make([]bidiClass, n)
+	types := make([]Class, n)
 	copy(types, classes)
 
-	bidiExplicit(classes, types, p.levels, paraLevel, pdi)
+	explicit(classes, types, p.levels, paraLevel, pdi)
 
 	// X9: the explicit codes have done their work and leave the sequence.
 	retained := make([]int, 0, n)
 	for i := 0; i < n; i++ {
-		if !bidiIsRemoved(classes[i]) {
+		if !isRemoved(classes[i]) {
 			retained = append(retained, i)
 		}
 	}
 
-	for _, seq := range bidiSequences(retained, p.levels, classes, pdi, initiator, paraLevel) {
+	for _, seq := range sequences(retained, p.levels, classes, pdi, initiator, paraLevel) {
 		seq.resolveWeak(types)
 		seq.resolveBrackets(types, classes, text)
 		seq.resolveNeutral(types)
@@ -254,7 +254,7 @@ func bidiResolve(classes []bidiClass, text []rune, paraLevel int) bidiParagraph 
 	}
 
 	for i := 0; i < n; i++ {
-		if bidiIsRemoved(classes[i]) {
+		if isRemoved(classes[i]) {
 			p.levels[i] = -1
 		}
 	}
@@ -262,12 +262,12 @@ func bidiResolve(classes []bidiClass, text []rune, paraLevel int) bidiParagraph 
 	return p
 }
 
-// bidiMatchPDI pairs each isolate initiator with the PDI that ends it (BD9).
+// matchPDI pairs each isolate initiator with the PDI that ends it (BD9).
 //
 // An initiator with no PDI is matched to one past the end, which is what the
 // rule says: the isolate runs to the end of the paragraph. A PDI with no
 // initiator matches -1 and is an ordinary neutral.
-func bidiMatchPDI(classes []bidiClass) (pdi, initiator []int) {
+func matchPDI(classes []Class) (pdi, initiator []int) {
 	n := len(classes)
 	pdi = make([]int, n)
 	initiator = make([]int, n)
@@ -278,9 +278,9 @@ func bidiMatchPDI(classes []bidiClass) (pdi, initiator []int) {
 	var stack []int
 	for i := 0; i < n; i++ {
 		switch classes[i] {
-		case bidiLRI, bidiRLI, bidiFSI:
+		case LRI, RLI, FSI:
 			stack = append(stack, i)
-		case bidiPDI:
+		case PDI:
 			if len(stack) > 0 {
 				j := stack[len(stack)-1]
 				stack = stack[:len(stack)-1]
@@ -292,17 +292,17 @@ func bidiMatchPDI(classes []bidiClass) (pdi, initiator []int) {
 	return pdi, initiator
 }
 
-// bidiParaLevel is P2 and P3, and doubles as X5c: the level implied by the first
+// paraLevelOf is P2 and P3, and doubles as X5c: the level implied by the first
 // strongly-directional character in a range, skipping anything inside an
 // isolate. Nothing strong means left-to-right.
-func bidiParaLevel(classes []bidiClass, pdi []int, start, end int) int {
+func paraLevelOf(classes []Class, pdi []int, start, end int) int {
 	for i := start; i < end; i++ {
 		switch classes[i] {
-		case bidiL:
+		case L:
 			return 0
-		case bidiR, bidiAL:
+		case R, AL:
 			return 1
-		case bidiLRI, bidiRLI, bidiFSI:
+		case LRI, RLI, FSI:
 			// The contents of an isolate say nothing about the text around it —
 			// that is what isolating means — so skip to its end.
 			i = pdi[i]
@@ -311,7 +311,7 @@ func bidiParaLevel(classes []bidiClass, pdi []int, start, end int) int {
 	return 0
 }
 
-// bidiExplicit is X1 to X8: it carries out the embedding, override and isolate
+// explicit is X1 to X8: it carries out the embedding, override and isolate
 // codes, giving every character a level and rewriting the ones an override
 // covers.
 //
@@ -321,14 +321,14 @@ func bidiParaLevel(classes []bidiClass, pdi []int, start, end int) int {
 // pops can be matched to them — otherwise a pop that belongs to an ignored
 // embedding would pop a real one, and the rest of the paragraph would come out
 // at the wrong level.
-func bidiExplicit(classes, types []bidiClass, levels []int, paraLevel int, pdi []int) {
+func explicit(classes, types []Class, levels []int, paraLevel int, pdi []int) {
 	type status struct {
 		level    int
-		override bidiClass // bidiON where the text is not overridden
+		override Class // ON where the text is not overridden
 		isolate  bool
 	}
-	stack := make([]status, 1, bidiMaxDepth+2)
-	stack[0] = status{level: paraLevel, override: bidiON}
+	stack := make([]status, 1, MaxDepth+2)
+	stack[0] = status{level: paraLevel, override: ON}
 	top := func() status { return stack[len(stack)-1] }
 
 	overflowIsolate, overflowEmbedding, validIsolate := 0, 0, 0
@@ -344,47 +344,47 @@ func bidiExplicit(classes, types []bidiClass, levels []int, paraLevel int, pdi [
 
 	for i := range classes {
 		switch c := classes[i]; c {
-		case bidiRLE, bidiLRE, bidiRLO, bidiLRO:
+		case RLE, LRE, RLO, LRO:
 			// X2-X5. The code itself takes the level in force before it, and is
 			// then removed by X9 — the level only matters to a caller that keeps
 			// the character in a buffer.
 			levels[i] = top().level
-			rtl := c == bidiRLE || c == bidiRLO
+			rtl := c == RLE || c == RLO
 			level := nextLevel(rtl)
-			if level <= bidiMaxDepth && overflowIsolate == 0 && overflowEmbedding == 0 {
-				override := bidiON
+			if level <= MaxDepth && overflowIsolate == 0 && overflowEmbedding == 0 {
+				override := ON
 				switch c {
-				case bidiRLO:
-					override = bidiR
-				case bidiLRO:
-					override = bidiL
+				case RLO:
+					override = R
+				case LRO:
+					override = L
 				}
 				stack = append(stack, status{level: level, override: override})
 			} else if overflowIsolate == 0 {
 				overflowEmbedding++
 			}
 
-		case bidiRLI, bidiLRI, bidiFSI:
+		case RLI, LRI, FSI:
 			// X5a-X5c. An isolate initiator is a character in its own right: it
 			// keeps the level outside the isolate and takes any override in
 			// force, and only then does the new level begin.
-			rtl := c == bidiRLI
-			if c == bidiFSI {
-				rtl = bidiParaLevel(classes, pdi, i+1, min(pdi[i], len(classes))) == 1
+			rtl := c == RLI
+			if c == FSI {
+				rtl = paraLevelOf(classes, pdi, i+1, min(pdi[i], len(classes))) == 1
 			}
 			levels[i] = top().level
-			if o := top().override; o != bidiON {
+			if o := top().override; o != ON {
 				types[i] = o
 			}
 			level := nextLevel(rtl)
-			if level <= bidiMaxDepth && overflowIsolate == 0 && overflowEmbedding == 0 {
+			if level <= MaxDepth && overflowIsolate == 0 && overflowEmbedding == 0 {
 				validIsolate++
-				stack = append(stack, status{level: level, override: bidiON, isolate: true})
+				stack = append(stack, status{level: level, override: ON, isolate: true})
 			} else {
 				overflowIsolate++
 			}
 
-		case bidiPDI:
+		case PDI:
 			// X6a. A PDI ends the innermost isolate, and with it any embeddings
 			// opened inside that isolate and never popped — which is what makes
 			// an isolate isolating rather than merely nested.
@@ -399,11 +399,11 @@ func bidiExplicit(classes, types []bidiClass, levels []int, paraLevel int, pdi [
 				validIsolate--
 			}
 			levels[i] = top().level
-			if o := top().override; o != bidiON {
+			if o := top().override; o != ON {
 				types[i] = o
 			}
 
-		case bidiPDF:
+		case PDF:
 			// X7. The level is the one still in force: a pop takes effect after
 			// the character that asks for it.
 			levels[i] = top().level
@@ -416,25 +416,25 @@ func bidiExplicit(classes, types []bidiClass, levels []int, paraLevel int, pdi [
 				stack = stack[:len(stack)-1]
 			}
 
-		case bidiB:
+		case B:
 			// X8. A paragraph separator belongs to no embedding: it takes the
 			// paragraph's own level whatever is open around it.
 			levels[i] = paraLevel
 
-		case bidiBN:
+		case BN:
 			levels[i] = top().level
 
 		default:
 			// X6.
 			levels[i] = top().level
-			if o := top().override; o != bidiON {
+			if o := top().override; o != ON {
 				types[i] = o
 			}
 		}
 	}
 }
 
-// bidiSequence is an isolating run sequence (BD13): the level runs that an
+// sequence is an isolating run sequence (BD13): the level runs that an
 // isolate initiator and its matching PDI join into one, together with the
 // directions assumed to lie either side of it.
 //
@@ -442,7 +442,7 @@ func bidiExplicit(classes, types []bidiClass, levels []int, paraLevel int, pdi [
 // surroundings as continuous. "abc <RLI> عربي <PDI> def" is one stretch of
 // left-to-right text with a hole in it, and a rule that stopped at the RLI would
 // resolve what follows the PDI against nothing.
-type bidiSequence struct {
+type sequence struct {
 	// pos are the positions in the original text, in logical order, that this
 	// sequence covers. Characters X9 removed are not among them.
 	pos []int
@@ -451,14 +451,14 @@ type bidiSequence struct {
 	level int
 
 	// sos and eos are the directions to assume before and after the sequence:
-	// bidiL or bidiR. They are what the rules use where they would otherwise
+	// L or R. They are what the rules use where they would otherwise
 	// look past the end.
-	sos, eos bidiClass
+	sos, eos Class
 }
 
-// bidiSequences builds the isolating run sequences of a paragraph, in the order
+// sequences builds the isolating run sequences of a paragraph, in the order
 // their first characters appear.
-func bidiSequences(retained []int, levels []int, classes []bidiClass, pdi, initiator []int, paraLevel int) []bidiSequence {
+func sequences(retained []int, levels []int, classes []Class, pdi, initiator []int, paraLevel int) []sequence {
 	if len(retained) == 0 {
 		return nil
 	}
@@ -483,17 +483,17 @@ func bidiSequences(retained []int, levels []int, classes []bidiClass, pdi, initi
 	}
 
 	used := make([]bool, len(runs))
-	var out []bidiSequence
+	var out []sequence
 	for k, r := range runs {
 		if used[k] {
 			continue
 		}
 		// A run beginning with a PDI that matches an initiator is the tail of
 		// some earlier sequence, and is reached from there.
-		if first := retained[r.from]; classes[first] == bidiPDI && initiator[first] >= 0 {
+		if first := retained[r.from]; classes[first] == PDI && initiator[first] >= 0 {
 			continue
 		}
-		seq := bidiSequence{level: levels[retained[r.from]]}
+		seq := sequence{level: levels[retained[r.from]]}
 		for cur := k; ; {
 			used[cur] = true
 			for i := runs[cur].from; i < runs[cur].to; i++ {
@@ -503,7 +503,7 @@ func bidiSequences(retained []int, levels []int, classes []bidiClass, pdi, initi
 			// closes it, and the text between the two — which is the isolate —
 			// is a sequence of its own.
 			last := seq.pos[len(seq.pos)-1]
-			if !bidiIsIsolateInitiator(classes[last]) {
+			if !isIsolateInitiator(classes[last]) {
 				break
 			}
 			next, ok := startsRun[pdi[last]]
@@ -531,36 +531,36 @@ func bidiSequences(retained []int, levels []int, classes []bidiClass, pdi, initi
 		if i := position[first]; i > 0 {
 			before = levels[retained[i-1]]
 		}
-		seq.sos = bidiDirOf(max(seq.level, before))
+		seq.sos = dirOf(max(seq.level, before))
 
 		// A sequence ending in an isolate initiator that nothing closes runs to
 		// the end of the paragraph, so what follows it in the text is outside it
 		// and the paragraph's own level is what it adjoins.
 		after := paraLevel
-		unclosed := bidiIsIsolateInitiator(classes[last]) && pdi[last] >= len(classes)
+		unclosed := isIsolateInitiator(classes[last]) && pdi[last] >= len(classes)
 		if i := position[last]; !unclosed && i+1 < len(retained) {
 			after = levels[retained[i+1]]
 		}
-		seq.eos = bidiDirOf(max(seq.level, after))
+		seq.eos = dirOf(max(seq.level, after))
 	}
 	return out
 }
 
 // resolveWeak is rules W1 to W7: the types that take their direction from what
 // surrounds them rather than carrying one.
-func (s bidiSequence) resolveWeak(types []bidiClass) {
+func (s sequence) resolveWeak(types []Class) {
 	// W1: a non-spacing mark takes the type of what it is written on. After an
 	// isolate initiator or a PDI it has nothing to take, and becomes neutral —
 	// a mark cannot inherit through a boundary that exists to stop inheritance.
 	prev := s.sos
 	for _, p := range s.pos {
-		if types[p] == bidiNSM {
+		if types[p] == NSM {
 			types[p] = prev
 			continue
 		}
 		switch types[p] {
-		case bidiLRI, bidiRLI, bidiFSI, bidiPDI:
-			prev = bidiON
+		case LRI, RLI, FSI, PDI:
+			prev = ON
 		default:
 			prev = types[p]
 		}
@@ -572,11 +572,11 @@ func (s bidiSequence) resolveWeak(types []bidiClass) {
 	strong := s.sos
 	for _, p := range s.pos {
 		switch types[p] {
-		case bidiL, bidiR, bidiAL:
+		case L, R, AL:
 			strong = types[p]
-		case bidiEN:
-			if strong == bidiAL {
-				types[p] = bidiAN
+		case EN:
+			if strong == AL {
+				types[p] = AN
 			}
 		}
 	}
@@ -584,8 +584,8 @@ func (s bidiSequence) resolveWeak(types []bidiClass) {
 	// W3: Arabic letters have served their purpose above and are now simply
 	// right-to-left.
 	for _, p := range s.pos {
-		if types[p] == bidiAL {
-			types[p] = bidiR
+		if types[p] == AL {
+			types[p] = R
 		}
 	}
 
@@ -594,12 +594,12 @@ func (s bidiSequence) resolveWeak(types []bidiClass) {
 	for i := 1; i+1 < len(s.pos); i++ {
 		prev, cur, next := types[s.pos[i-1]], types[s.pos[i]], types[s.pos[i+1]]
 		switch cur {
-		case bidiES:
-			if prev == bidiEN && next == bidiEN {
-				types[s.pos[i]] = bidiEN
+		case ES:
+			if prev == EN && next == EN {
+				types[s.pos[i]] = EN
 			}
-		case bidiCS:
-			if prev == next && (prev == bidiEN || prev == bidiAN) {
+		case CS:
+			if prev == next && (prev == EN || prev == AN) {
 				types[s.pos[i]] = prev
 			}
 		}
@@ -608,12 +608,12 @@ func (s bidiSequence) resolveWeak(types []bidiClass) {
 	// W5: a run of terminators next to a European number joins it, which is what
 	// makes "$42" and "42%" one thing rather than three.
 	for i := 0; i < len(s.pos); {
-		if types[s.pos[i]] != bidiET {
+		if types[s.pos[i]] != ET {
 			i++
 			continue
 		}
 		j := i
-		for j < len(s.pos) && types[s.pos[j]] == bidiET {
+		for j < len(s.pos) && types[s.pos[j]] == ET {
 			j++
 		}
 		before := s.sos
@@ -624,9 +624,9 @@ func (s bidiSequence) resolveWeak(types []bidiClass) {
 		if j < len(s.pos) {
 			after = types[s.pos[j]]
 		}
-		if before == bidiEN || after == bidiEN {
+		if before == EN || after == EN {
 			for k := i; k < j; k++ {
-				types[s.pos[k]] = bidiEN
+				types[s.pos[k]] = EN
 			}
 		}
 		i = j
@@ -636,8 +636,8 @@ func (s bidiSequence) resolveWeak(types []bidiClass) {
 	// number, so they are ordinary neutrals.
 	for _, p := range s.pos {
 		switch types[p] {
-		case bidiET, bidiES, bidiCS:
-			types[p] = bidiON
+		case ET, ES, CS:
+			types[p] = ON
 		}
 	}
 
@@ -646,11 +646,11 @@ func (s bidiSequence) resolveWeak(types []bidiClass) {
 	strong = s.sos
 	for _, p := range s.pos {
 		switch types[p] {
-		case bidiL, bidiR:
+		case L, R:
 			strong = types[p]
-		case bidiEN:
-			if strong == bidiL {
-				types[p] = bidiL
+		case EN:
+			if strong == L {
+				types[p] = L
 			}
 		}
 	}
@@ -663,7 +663,7 @@ func (s bidiSequence) resolveWeak(types []bidiClass) {
 // not — each resolved against its own neighbour, which is a different neighbour
 // for each. The rule is the one place in the algorithm that looks at characters
 // rather than at classes, and it is skipped when there are none.
-func (s bidiSequence) resolveBrackets(types, original []bidiClass, text []rune) {
+func (s sequence) resolveBrackets(types, original []Class, text []rune) {
 	if text == nil {
 		return
 	}
@@ -671,20 +671,20 @@ func (s bidiSequence) resolveBrackets(types, original []bidiClass, text []rune) 
 	if len(pairs) == 0 {
 		return
 	}
-	e := bidiDirOf(s.level)
-	o := bidiL
-	if e == bidiL {
-		o = bidiR
+	e := dirOf(s.level)
+	o := L
+	if e == L {
+		o = R
 	}
 
 	for _, pair := range pairs {
 		// What direction, if any, the text inside the brackets carries. The
 		// embedding direction wins outright wherever it appears; the opposite
 		// only counts if the embedding direction is absent entirely.
-		found := bidiON
+		found := ON
 		for i := pair.open + 1; i < pair.close; i++ {
-			d := bidiStrong(types[s.pos[i]])
-			if d == bidiON {
+			d := strong(types[s.pos[i]])
+			if d == ON {
 				continue
 			}
 			if d == e {
@@ -693,7 +693,7 @@ func (s bidiSequence) resolveBrackets(types, original []bidiClass, text []rune) 
 			}
 			found = o
 		}
-		if found == bidiON {
+		if found == ON {
 			continue // nothing strong inside: the brackets stay neutral
 		}
 		dir := found
@@ -704,7 +704,7 @@ func (s bidiSequence) resolveBrackets(types, original []bidiClass, text []rune) 
 			// the opposite-direction phrase sits inside them.
 			prior := s.sos
 			for i := pair.open - 1; i >= 0; i-- {
-				if d := bidiStrong(types[s.pos[i]]); d != bidiON {
+				if d := strong(types[s.pos[i]]); d != ON {
 					prior = d
 					break
 				}
@@ -721,7 +721,7 @@ func (s bidiSequence) resolveBrackets(types, original []bidiClass, text []rune) 
 		// mark the type of its neighbour and there is no mark left to find.
 		for _, from := range [2]int{pair.open, pair.close} {
 			for i := from + 1; i < len(s.pos); i++ {
-				if original[s.pos[i]] != bidiNSM {
+				if original[s.pos[i]] != NSM {
 					break
 				}
 				types[s.pos[i]] = dir
@@ -730,8 +730,8 @@ func (s bidiSequence) resolveBrackets(types, original []bidiClass, text []rune) 
 	}
 }
 
-// bidiBracketPair is one matched pair, as offsets into a sequence's positions.
-type bidiBracketPair struct{ open, close int }
+// bracketPair is one matched pair, as offsets into a sequence's positions.
+type bracketPair struct{ open, close int }
 
 // bracketPairs is BD16: the matched bracket pairs of a sequence, sorted by
 // opening position.
@@ -741,38 +741,38 @@ type bidiBracketPair struct{ open, close int }
 // reconsideration — and the stack is bounded at 63, past which the rule stops
 // looking. Both are the specification's, and the bound is what keeps a string of
 // nothing but opening brackets from costing memory in proportion to its length.
-func (s bidiSequence) bracketPairs(types []bidiClass, text []rune) []bidiBracketPair {
+func (s sequence) bracketPairs(types []Class, text []rune) []bracketPair {
 	type opening struct {
 		closer rune
 		at     int
 	}
 	var (
 		stack []opening
-		pairs []bidiBracketPair
+		pairs []bracketPair
 	)
 	for i, p := range s.pos {
-		if types[p] != bidiON || p >= len(text) {
+		if types[p] != ON || p >= len(text) {
 			continue
 		}
-		paired, open, ok := bidiBracketOf(text[p])
+		paired, open, ok := BracketOf(text[p])
 		if !ok {
 			continue
 		}
 		if open {
-			if len(stack) >= bidiMaxBracketPairs {
+			if len(stack) >= maxBracketPairs {
 				// BD16 stops processing this sequence entirely rather than
 				// dropping one bracket, so that the pairs it did find are not a
 				// biased sample of the ones it did not.
 				break
 			}
-			stack = append(stack, opening{closer: bidiCanonical(paired), at: i})
+			stack = append(stack, opening{closer: Canonical(paired), at: i})
 			continue
 		}
 		for k := len(stack) - 1; k >= 0; k-- {
-			if stack[k].closer != bidiCanonical(text[p]) {
+			if stack[k].closer != Canonical(text[p]) {
 				continue
 			}
-			pairs = append(pairs, bidiBracketPair{open: stack[k].at, close: i})
+			pairs = append(pairs, bracketPair{open: stack[k].at, close: i})
 			stack = stack[:k]
 			break
 		}
@@ -783,30 +783,30 @@ func (s bidiSequence) bracketPairs(types []bidiClass, text []rune) []bidiBracket
 
 // resolveNeutral is rules N1 and N2: what a run of neutral characters — spaces,
 // punctuation, an unresolved bracket — does between text on either side.
-func (s bidiSequence) resolveNeutral(types []bidiClass) {
-	e := bidiDirOf(s.level)
+func (s sequence) resolveNeutral(types []Class) {
+	e := dirOf(s.level)
 	for i := 0; i < len(s.pos); {
-		if !bidiIsNeutral(types[s.pos[i]]) {
+		if !isNeutral(types[s.pos[i]]) {
 			i++
 			continue
 		}
 		j := i
-		for j < len(s.pos) && bidiIsNeutral(types[s.pos[j]]) {
+		for j < len(s.pos) && isNeutral(types[s.pos[j]]) {
 			j++
 		}
 		before := s.sos
 		if i > 0 {
-			before = bidiStrong(types[s.pos[i-1]])
+			before = strong(types[s.pos[i-1]])
 		}
 		after := s.eos
 		if j < len(s.pos) {
-			after = bidiStrong(types[s.pos[j]])
+			after = strong(types[s.pos[j]])
 		}
 		// N1 where both sides agree; N2 — the embedding direction — where they
 		// do not, which is the case a space between a Latin and a Hebrew word
 		// falls into.
 		dir := e
-		if before == after && (before == bidiL || before == bidiR) {
+		if before == after && (before == L || before == R) {
 			dir = before
 		}
 		for k := i; k < j; k++ {
@@ -821,19 +821,19 @@ func (s bidiSequence) resolveNeutral(types []bidiClass) {
 // two — a number is written left to right whichever way the text around it runs,
 // so inside right-to-left text it needs its own level, and inside left-to-right
 // text it needs to be a level above right-to-left text that may surround it.
-func (s bidiSequence) resolveImplicit(types []bidiClass, levels []int) {
+func (s sequence) resolveImplicit(types []Class, levels []int) {
 	for _, p := range s.pos {
 		level := s.level
 		if level&1 == 0 {
 			switch types[p] {
-			case bidiR:
+			case R:
 				level++
-			case bidiAN, bidiEN:
+			case AN, EN:
 				level += 2
 			}
 		} else {
 			switch types[p] {
-			case bidiL, bidiEN, bidiAN:
+			case L, EN, AN:
 				level++
 			}
 		}
@@ -849,15 +849,15 @@ func (s bidiSequence) resolveImplicit(types []bidiClass, levels []int) {
 // page. The types it tests are the original ones, because by now every space has
 // been given the direction of its neighbours and there is no whitespace left to
 // find.
-func (p *bidiParagraph) resolveL1(retained []int) {
+func (p *Paragraph) resolveL1(retained []int) {
 	trailing := true
 	for i := len(retained) - 1; i >= 0; i-- {
 		pos := retained[i]
 		switch p.classes[pos] {
-		case bidiB, bidiS:
+		case B, S:
 			p.levels[pos] = p.para
 			trailing = true
-		case bidiWS, bidiLRI, bidiRLI, bidiFSI, bidiPDI:
+		case WS, LRI, RLI, FSI, PDI:
 			if trailing {
 				p.levels[pos] = p.para
 			}
@@ -867,13 +867,13 @@ func (p *bidiParagraph) resolveL1(retained []int) {
 	}
 }
 
-// bidiReorder is rule L2: the visual order of a resolved paragraph, as a list of
+// reorder is rule L2: the visual order of a resolved paragraph, as a list of
 // positions in the original text from left to right.
 //
 // Characters rule X9 removed are not in it. They have no width and no place on
 // the line; a caller that draws them anyway draws them where their neighbours
 // are.
-func (p *bidiParagraph) bidiReorder() []int {
+func (p *Paragraph) reorder() []int {
 	var (
 		order  []int
 		levels []int
@@ -885,11 +885,11 @@ func (p *bidiParagraph) bidiReorder() []int {
 		order = append(order, i)
 		levels = append(levels, l)
 	}
-	bidiReorderLevels(order, levels)
+	reorderLevels(order, levels)
 	return order
 }
 
-// bidiReorderLevels applies L2 in place: from the deepest level down to the
+// reorderLevels applies L2 in place: from the deepest level down to the
 // shallowest odd one, reverse every contiguous stretch at that level or above.
 //
 // The levels are indexed by position on the line and stay put; it is the order
@@ -897,11 +897,11 @@ func (p *bidiParagraph) bidiReorder() []int {
 // inefficiency — a level of 2 inside a level of 1 has to be reversed twice, once
 // on its own account and once with the run that contains it, and that is what
 // puts a Latin phrase inside a Hebrew sentence back the right way round.
-func bidiReorderLevels(order, levels []int) {
+func reorderLevels(order, levels []int) {
 	if len(order) == 0 {
 		return
 	}
-	highest, lowestOdd := 0, bidiMaxDepth+2
+	highest, lowestOdd := 0, MaxDepth+2
 	for _, l := range levels {
 		highest = max(highest, l)
 		if l&1 == 1 {
@@ -926,24 +926,24 @@ func bidiReorderLevels(order, levels []int) {
 	}
 }
 
-// bidiRun is a stretch of a string that runs one way.
-type bidiRun struct {
-	// start and end are byte offsets into the string.
-	start, end int
+// Run is a stretch of a string that runs one way.
+type Run struct {
+	// Start and End are byte offsets into the string.
+	Start, End int
 
-	// level is the resolved embedding level: odd runs right to left.
-	level int
+	// Level is the resolved embedding level: odd runs right to left.
+	Level int
 }
 
 // rtl reports whether the run is written right to left.
-func (r bidiRun) rtl() bool { return r.level&1 == 1 }
+func (r Run) RTL() bool { return r.Level&1 == 1 }
 
-// bidiLogicalRuns splits a string into stretches that each run one way, in the
+// LogicalRuns splits a string into stretches that each run one way, in the
 // order they are written.
 //
-// This and bidiVisualOrder are the whole of what the rest of the package needs
+// This and VisualOrder are the whole of what the rest of the package needs
 // from UAX #9: shape each run — which is still in logical order, as shaping
-// requires — and then draw the runs in the order bidiVisualOrder gives, at a pen
+// requires — and then draw the runs in the order VisualOrder gives, at a pen
 // that only ever moves forward. Nothing outside this file has to know that
 // direction exists.
 //
@@ -951,17 +951,17 @@ func (r bidiRun) rtl() bool { return r.level&1 == 1 }
 // dropping out. It has no width, so where it lands does not show — but a
 // zero-width joiner is one of them, and Arabic joining needs it to still be
 // between the letters it joins.
-func bidiLogicalRuns(text string) []bidiRun {
+func LogicalRuns(text string) []Run {
 	if text == "" {
 		return nil
 	}
-	if !bidiNeedsAlgorithm(text) {
-		return []bidiRun{{start: 0, end: len(text), level: 0}}
+	if !NeedsAlgorithm(text) {
+		return []Run{{Start: 0, End: len(text), Level: 0}}
 	}
-	return bidiResolveRuns(text)
+	return ResolveRuns(text)
 }
 
-// bidiNeedsAlgorithm reports whether a string contains anything that could make
+// NeedsAlgorithm reports whether a string contains anything that could make
 // part of it run other than plain left-to-right.
 //
 // It is a shortcut, and it is worth having because the pipeline asks this
@@ -979,24 +979,24 @@ func bidiLogicalRuns(text string) []bidiRun {
 //
 // bidi_test.go checks the two paths agree, because a shortcut that disagrees
 // with the algorithm it is short-cutting is worse than no shortcut.
-func bidiNeedsAlgorithm(text string) bool {
+func NeedsAlgorithm(text string) bool {
 	i := 0
 	for i < len(text) && text[i] < utf8.RuneSelf {
 		i++
 	}
 	for _, r := range text[i:] {
-		switch bidiClassOf(r) {
-		case bidiR, bidiAL, bidiAN,
-			bidiLRE, bidiRLE, bidiLRO, bidiRLO, bidiPDF,
-			bidiLRI, bidiRLI, bidiFSI, bidiPDI:
+		switch ClassOf(r) {
+		case R, AL, AN,
+			LRE, RLE, LRO, RLO, PDF,
+			LRI, RLI, FSI, PDI:
 			return true
 		}
 	}
 	return false
 }
 
-// bidiResolveRuns is bidiLogicalRuns with the algorithm actually run.
-func bidiResolveRuns(text string) []bidiRun {
+// ResolveRuns is LogicalRuns with the algorithm actually run.
+func ResolveRuns(text string) []Run {
 	runes := make([]rune, 0, len(text))
 	offsets := make([]int, 0, len(text)+1)
 	for i, r := range text {
@@ -1005,11 +1005,11 @@ func bidiResolveRuns(text string) []bidiRun {
 	}
 	offsets = append(offsets, len(text))
 
-	classes := make([]bidiClass, len(runes))
+	classes := make([]Class, len(runes))
 	for i, r := range runes {
-		classes[i] = bidiClassOf(r)
+		classes[i] = ClassOf(r)
 	}
-	p := bidiResolve(classes, runes, -1)
+	p := resolveClasses(classes, runes, -1)
 
 	// A removed character has no level of its own; give it the one before it so
 	// that it stays inside the run it was written in.
@@ -1023,19 +1023,19 @@ func bidiResolveRuns(text string) []bidiRun {
 		carry = l
 	}
 
-	var runs []bidiRun
+	var runs []Run
 	for i := 0; i < len(runes); {
 		j := i + 1
 		for j < len(runes) && levels[j] == levels[i] {
 			j++
 		}
-		runs = append(runs, bidiRun{start: offsets[i], end: offsets[j], level: levels[i]})
+		runs = append(runs, Run{Start: offsets[i], End: offsets[j], Level: levels[i]})
 		i = j
 	}
 	return runs
 }
 
-// bidiVisualOrder is rule L2 applied to whole runs rather than to characters:
+// VisualOrder is rule L2 applied to whole runs rather than to characters:
 // given the levels of a line's runs in the order they are written, it returns
 // the order they are drawn in.
 //
@@ -1047,45 +1047,45 @@ func bidiResolveRuns(text string) []bidiRun {
 // The runs may be cut finer than the level runs, by face or by script, and the
 // result is still right for the same reason: the finer cuts subdivide a level
 // run without crossing it.
-func bidiVisualOrder(levels []int) []int {
+func VisualOrder(levels []int) []int {
 	order := make([]int, len(levels))
 	for i := range order {
 		order[i] = i
 	}
-	bidiReorderLevels(order, levels)
+	reorderLevels(order, levels)
 	return order
 }
 
-// bidiVisualRuns is bidiLogicalRuns and bidiVisualOrder together: the stretches
+// VisualRuns is LogicalRuns and VisualOrder together: the stretches
 // of a string that each run one way, in the order they are drawn. It is what a
 // caller wants when it has nothing of its own to cut the runs by.
-func bidiVisualRuns(text string) []bidiRun {
-	runs := bidiLogicalRuns(text)
+func VisualRuns(text string) []Run {
+	runs := LogicalRuns(text)
 	if len(runs) <= 1 {
 		return runs
 	}
 	levels := make([]int, len(runs))
 	for i, r := range runs {
-		levels[i] = r.level
+		levels[i] = r.Level
 	}
-	out := make([]bidiRun, len(runs))
-	for i, k := range bidiVisualOrder(levels) {
+	out := make([]Run, len(runs))
+	for i, k := range VisualOrder(levels) {
 		out[i] = runs[k]
 	}
 	return out
 }
 
-// bidiMirrorRunes applies rule L4 to a right-to-left run: each character that
+// MirrorRunes applies rule L4 to a right-to-left run: each character that
 // has a mirror is drawn as its mirror.
 //
 // It returns the slice it was given when nothing in it mirrors, which is the
 // common case and saves the copy. It works on runes rather than on the string
 // because a mirrored character need not be the same length in UTF-8 as the one
 // it replaces, and the byte offsets are what map a glyph back to the text.
-func bidiMirrorRunes(runes []rune) []rune {
+func MirrorRunes(runes []rune) []rune {
 	var out []rune
 	for i, r := range runes {
-		m, ok := bidiMirrorOf(r)
+		m, ok := MirrorOf(r)
 		if !ok {
 			continue
 		}
@@ -1101,13 +1101,13 @@ func bidiMirrorRunes(runes []rune) []rune {
 	return out
 }
 
-// bidiRunCharacters decomposes one run into the characters to be set and the
+// RunCharacters decomposes one run into the characters to be set and the
 // byte offset each came from, mirroring where the run is right-to-left.
 //
 // The offsets are of the original characters, not of the mirrored ones: a glyph
 // maps back to what the caller wrote, and rule L4 changes what is drawn without
 // changing what the text says.
-func bidiRunCharacters(s string, rtl bool) (runes []rune, offsets []int) {
+func RunCharacters(s string, rtl bool) (runes []rune, offsets []int) {
 	runes = make([]rune, 0, len(s))
 	offsets = make([]int, 0, len(s))
 	for i, r := range s {
@@ -1115,20 +1115,7 @@ func bidiRunCharacters(s string, rtl bool) (runes []rune, offsets []int) {
 		offsets = append(offsets, i)
 	}
 	if rtl {
-		runes = bidiMirrorRunes(runes)
+		runes = MirrorRunes(runes)
 	}
 	return runes, offsets
-}
-
-// reverseGlyphs puts a shaped run into visual order.
-//
-// It is the last step of shaping a right-to-left run and cannot be an earlier
-// one. Everything before it — joining, ligatures, contextual rules, kerning,
-// cursive attachment, marks — is stated by the font in terms of the order the
-// text is written in, and applying any of it to a reversed buffer applies it to
-// the wrong neighbours.
-func reverseGlyphs(buf []Glyph) {
-	for i, j := 0, len(buf)-1; i < j; i, j = i+1, j-1 {
-		buf[i], buf[j] = buf[j], buf[i]
-	}
 }
