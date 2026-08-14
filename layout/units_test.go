@@ -77,14 +77,19 @@ func TestChFollowsTheFace(t *testing.T) {
 	}
 }
 
-func TestExIsHalfAnEm(t *testing.T) {
-	// The face layer carries no x-height, and CSS Values §5.1.2 specifies half
-	// an em for exactly that case — so this is the specified answer, not a
-	// stand-in for one. If a real x-height ever becomes available this test
-	// should change with it.
+func TestExIsTheFacesOwnXHeight(t *testing.T) {
+	// A real x-height did become available, which is what the note this comment
+	// replaces asked to be told about: the standard fourteen carry no hhea, OS/2
+	// or post, but their AFMs state an XHeight, and the generator now keeps it.
+	// The default face here is Times-Roman, whose published x-height is 450/1000,
+	// so 4ex at 20px is 4 x 0.45 x 20 = 36px and no longer CSS Values §5.1.2's
+	// half-em assumption. That fallback is still specified and still reachable —
+	// by a face that states nothing, which is what TestExFallsBackToHalfAnEm
+	// now uses.
 	root := layoutOf(t, 600, `<div id="probe"></div>`,
 		`#probe { font-size: 20px; width: 4ex; height: 10px }`)
-	if got := find(t, root, "probe").BorderRect.W.Px(); got != 40 {
-		t.Errorf("4ex at 20px resolved to %gpx, want 40", got)
+	if got := find(t, root, "probe").BorderRect.W.Px(); got != 36 {
+		t.Errorf("4ex at 20px resolved to %gpx, want 36 (4 x 0.45 x 20) — "+
+			"40 means the half-em fallback was taken by a face that states an x-height", got)
 	}
 }

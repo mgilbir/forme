@@ -87,10 +87,15 @@ func TestUnderlineIsDrawnUnderTheText(t *testing.T) {
 }
 
 func TestOverlineAndLineThroughSitWhereTheyShould(t *testing.T) {
-	// Courier's ascent is 629/1000 and its cap height 562/1000, so at 20px an
-	// overline's top edge is 20 x 0.629 = 12.58px above the baseline, and a
-	// line-through is centred on half an x-height of 20 x 0.562 x 0.7 = 7.868px,
-	// putting its top edge 7.868/2 + 0.5 = 4.434px above it.
+	// Courier's ascent is 629/1000, so at 20px an overline's top edge is
+	// 20 x 0.629 = 12.58px above the baseline.
+	//
+	// The line-through is centred on the x-height, which Courier's AFM states as
+	// 426/1000 — 8.52px at 20px, putting the stroke's top edge 8.52/2 + 0.5 =
+	// 4.76px above the baseline. It used to be estimated at seven tenths of the
+	// cap height, 20 x 0.562 x 0.7 = 7.868px and an edge at 4.434px, because no
+	// face this engine read stated an x-height. The standard fourteen now do, and
+	// the estimate is only for the faces that still do not.
 	//
 	// The two are asserted together because the whole point is that they are
 	// *different* heights: an implementation that drew all three lines in one
@@ -116,9 +121,10 @@ func TestOverlineAndLineThroughSitWhereTheyShould(t *testing.T) {
 		t.Errorf("the overline's top edge is %gpx above the baseline, want about "+
 			"12.58 — the face's own ascent at 20px", aboveOver)
 	}
-	if aboveStrike < 4.3 || aboveStrike > 4.5 {
+	if aboveStrike < 4.66 || aboveStrike > 4.86 {
 		t.Errorf("the line-through's top edge is %gpx above the baseline, want about "+
-			"4.43 — half the x-height", aboveStrike)
+			"4.76 — half the face's own x-height. About 4.43 means the cap-height "+
+			"estimate was used for a face that states one", aboveStrike)
 	}
 	if aboveOver <= aboveStrike {
 		t.Errorf("the overline is at %gpx and the line-through at %gpx above the "+
