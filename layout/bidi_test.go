@@ -766,11 +766,11 @@ func TestABrokenWordDoesNotDisorderWhatSharesItsLine(t *testing.T) {
 // reordering from happening.
 func TestSplittingAnItemMovesItsBidiRangeByRunes(t *testing.T) {
 	l := &layouter{
-		measured: map[measureKey]style.Unit{},
-		fonts:    map[fontKey]resolvedFont{},
-		fontSet:  StandardFonts(),
-		rec:      NewRecorder(nil),
+		fonts:   map[fontKey]resolvedFont{},
+		fontSet: StandardFonts(),
+		rec:     NewRecorder(nil),
 	}
+	l.br = newBreaker(l)
 	face, ok := l.fontSet.Face("Courier", false, false)
 	if !ok {
 		t.Fatal("no Courier")
@@ -781,7 +781,7 @@ func TestSplittingAnItemMovesItsBidiRangeByRunes(t *testing.T) {
 		text: hebrewAB + hebrewGD, face: face, size: mustPx(20),
 		bidiPara: 1, bidiStart: 7, bidiEnd: 11,
 	}
-	head, tail := l.splitItem(item, len(hebrewAB))
+	head, tail := l.br.splitItem(item, len(hebrewAB))
 
 	for _, half := range []struct {
 		name string

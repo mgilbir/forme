@@ -50,7 +50,7 @@ func (l *layouter) markerFor(b *Box, frag *Fragment) *Marker {
 	}
 
 	size := b.FontSize
-	width := l.measure(face, text, size)
+	width := l.br.measure(face, text, size)
 	lineHeight := l.lineHeight(b)
 
 	// "outside" puts the marker in the margin, clear of the content box, with a
@@ -143,7 +143,7 @@ func (l *layouter) markerItem(b *Box) (inlineItem, bool) {
 		text: text, box: b, face: face, size: size,
 		// The same half-em the outside marker leaves, spent as width rather than
 		// as an offset: here what it separates is the next item on the line.
-		width: l.measure(face, text, size).Add(markerGap(size)),
+		width: l.br.measure(face, text, size).Add(markerGap(size)),
 		leads: true, above: above, below: below,
 	}, true
 }

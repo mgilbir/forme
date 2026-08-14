@@ -478,7 +478,7 @@ func (l *layouter) widestCluster(item inlineItem) style.Unit {
 	var widest style.Unit
 	prev := 0
 	for _, at := range append(segment.Boundaries(nil, item.text), len(item.text)) {
-		w := l.measureSpaced(item.face, item.text[prev:at], item.size, item.spacing)
+		w := l.br.measureSpaced(item.face, item.text[prev:at], item.size, item.spacing)
 		widest = style.Max(widest, w)
 		prev = at
 	}

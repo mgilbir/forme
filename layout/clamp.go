@@ -177,7 +177,7 @@ func (l *layouter) clampedChildren(b *Box, frag *Fragment, width style.Unit,
 	c = &lineClamp{box: b, limit: n, stopAt: n}
 	if face, ok := l.fontFor(b); ok {
 		c.face, c.size = face, b.FontSize
-		c.ellipsis = l.measure(face, blockEllipsis, b.FontSize)
+		c.ellipsis = l.br.measure(face, blockEllipsis, b.FontSize)
 	}
 	l.clamps = append(l.clamps, c)
 	height, top, bottom, placed = l.children(b, frag, width, topOpen, bottomOpen, inner)
