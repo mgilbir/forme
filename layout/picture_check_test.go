@@ -139,7 +139,7 @@ func TestPictureToleratesRounding(t *testing.T) {
 // how this test first failed, which is the cheapest possible way to learn it.
 func picText(s string, x, y float64) Op {
 	return DrawText{
-		Text: s, At: Point{picPx(x), picPx(y)}, Size: picPx(16),
+		Text: s, At: Point{X: picPx(x), Y: picPx(y)}, Size: picPx(16),
 		Color: style.RGBA{A: 1},
 	}
 }
@@ -292,7 +292,7 @@ func TestPictureIgnoresInkTheColourOfThePaper(t *testing.T) {
 	// counting those runs made every one of the pairs differ over letters that
 	// neither document shows.
 	white := DrawText{
-		Text: "hidden", At: Point{picPx(20), picPx(40)}, Size: picPx(16),
+		Text: "hidden", At: Point{X: picPx(20), Y: picPx(40)}, Size: picPx(16),
 		Color: style.RGBA{R: 255, G: 255, B: 255, A: 1},
 	}
 	if !pictureEqual([]Op{white}, nil, picPage) {
@@ -347,7 +347,7 @@ func TestPictureBlendsTranslucency(t *testing.T) {
 // advance is the face's, and a faceless run is deliberately never joined.
 func picFacedText(face *shape.Face, s string, x, y float64, c style.RGBA) DrawText {
 	return DrawText{
-		Text: s, At: Point{picPx(x), picPx(y)}, Size: picPx(16), Face: face, Color: c,
+		Text: s, At: Point{X: picPx(x), Y: picPx(y)}, Size: picPx(16), Face: face, Color: c,
 	}
 }
 
@@ -551,7 +551,7 @@ func picRun(t *testing.T, s string, x, y float64) DrawText {
 		t.Skip("the standard faces are not available")
 	}
 	return DrawText{
-		Text: s, At: Point{picPx(x), picPx(y)}, Size: picPx(16),
+		Text: s, At: Point{X: picPx(x), Y: picPx(y)}, Size: picPx(16),
 		Face: face, Color: picRed,
 	}
 }
