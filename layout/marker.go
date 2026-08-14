@@ -140,11 +140,11 @@ func (l *layouter) markerItem(b *Box) (inlineItem, bool) {
 	size := b.FontSize
 	above, below := l.leading(b)
 	return inlineItem{
-		text: text, box: b, face: face, size: size,
+		Text: text, Box: b, Face: face, Size: size,
 		// The same half-em the outside marker leaves, spent as width rather than
 		// as an offset: here what it separates is the next item on the line.
-		width: l.br.measure(face, text, size).Add(markerGap(size)),
-		leads: true, above: above, below: below,
+		Width: l.br.measure(face, text, size).Add(markerGap(size)),
+		Leads: true, Above: above, Below: below,
 	}, true
 }
 

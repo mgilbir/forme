@@ -147,7 +147,7 @@ func (d *inlineDecor) addLine(index int, items []inlineItem, xs []style.Unit,
 		// items, cut the span into pieces that then drew a border apiece.
 		// bidi-011 is a <span> holding an override with the matching pop after
 		// it, and it came out as three boxes with two seams.
-		if items[k].width == 0 {
+		if items[k].Width == 0 {
 			continue
 		}
 		order = append(order, k)
@@ -167,7 +167,7 @@ func (d *inlineDecor) addLine(index int, items []inlineItem, xs []style.Unit,
 			continue
 		}
 		left := at.Add(xs[k])
-		right := left.Add(item.width)
+		right := left.Add(item.Width)
 		for _, box := range chain {
 			if pi, ok := open[box]; ok && lastAt[box] == pos-1 {
 				if left < d.pieces[pi].left {
@@ -380,11 +380,11 @@ func further(a, b inlinePiece, right bool) bool {
 // inlineChain is the inline boxes an item sits inside that have something to
 // paint, outermost first.
 func (l *layouter) inlineChain(item inlineItem) []*Box {
-	start := item.box
+	start := item.Box
 	if start == nil {
 		return nil
 	}
-	if item.atomicBox != nil {
+	if item.AtomicBox != nil {
 		// A replaced element or an inline-block has a fragment of its own, and
 		// that fragment's background and border are painted by the machinery
 		// every other box uses. What is wanted here is what encloses it.
