@@ -304,8 +304,12 @@ func heldFragment(r itemRef) *Fragment {
 }
 
 type inlineItem struct {
-	Text  string
-	Box   *Box
+	Text string
+	// Box is the box this item's content came from, held opaquely: it carries
+	// the colour and the decorations painting needs, and it is what tells two
+	// items of the same inline box apart. Neither is a question the breaking
+	// asks. See itemRef.
+	Box   itemRef
 	Face  *shape.Face
 	Size  style.Unit
 	Width style.Unit
@@ -865,7 +869,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					}
 					line.Runs = append(line.Runs, TextRun{
 						Text: item.Text, Face: item.Face, Size: item.Size,
-						X: x, Width: item.Width, Box: item.Box, Offset: item.Offset,
+						X: x, Width: item.Width, Box: heldBox(item.Box), Offset: item.Offset,
 						Decorations: decorations, LetterSpacing: item.Spacing.Letter,
 						RTL:   item.Level&1 == 1,
 						Shift: shift,
@@ -3194,7 +3198,7 @@ func (l *layouter) reportOverflow(item inlineItem, width style.Unit) {
 		// images of the same width are two findings rather than one — so the
 		// key is where it is in the document rather than what it says.
 		what = "the image"
-		key = "\x00replaced\x00" + PathOf(item.Box.Element)
+		key = "\x00replaced\x00" + PathOf(heldBox(item.Box).Element)
 	}
 	if l.reportedOverflow[key] {
 		return
@@ -3205,7 +3209,7 @@ func (l *layouter) reportOverflow(item inlineItem, width style.Unit) {
 		Message: what + " is " +
 			fmtPx(item.Width) + " wide and cannot be broken, in a space " +
 			fmtPx(width) + " wide; the part past the edge will not be drawn",
-		Path: PathOf(item.Box.Element),
+		Path: PathOf(heldBox(item.Box).Element),
 	})
 }
 

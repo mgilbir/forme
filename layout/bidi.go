@@ -430,7 +430,7 @@ func insetSides(items []inlineItem) {
 		if items[i].Inset {
 			if items[i].InsetLead {
 				stack = append(stack, open{
-					box: items[i].Box, lead: i,
+					box: heldBox(items[i].Box), lead: i,
 					content: content, odd: odd, min: noLevel,
 				})
 				continue
@@ -458,7 +458,7 @@ func insetSides(items []inlineItem) {
 			// whose direction and content run the same way and on nothing else.
 			// A "direction: rtl" span holding Latin text is the case it got
 			// wrong, and CSS2/box/rtl-basic is that document.
-			if beginsAtRight(items[top.lead].Box) {
+			if beginsAtRight(heldBox(items[top.lead].Box)) {
 				items[top.lead].Width, items[i].Width =
 					items[i].Width, items[top.lead].Width
 			}
@@ -518,9 +518,9 @@ func (l *layouter) placeInsetsBySide(runs []inlineItem, order []int) []int {
 	var boxes []*Box
 	seen := map[*Box]bool{}
 	for _, k := range order {
-		if runs[k].Inset && runs[k].Box != nil && !seen[runs[k].Box] {
-			seen[runs[k].Box] = true
-			boxes = append(boxes, runs[k].Box)
+		if b := heldBox(runs[k].Box); runs[k].Inset && b != nil && !seen[b] {
+			seen[b] = true
+			boxes = append(boxes, b)
 		}
 	}
 	sort.SliceStable(boxes, func(a, c int) bool {
@@ -608,7 +608,7 @@ func boxDepth(b *Box) int {
 // group was two insets with a word between them that belonged to nobody, and
 // the rearrangement below declined to touch it.
 func itemInside(item inlineItem, b *Box) bool {
-	start := item.Box
+	start := heldBox(item.Box)
 	if item.AtomicBox != nil && start != nil {
 		start = start.Parent
 	}

@@ -380,7 +380,7 @@ func further(a, b inlinePiece, right bool) bool {
 // inlineChain is the inline boxes an item sits inside that have something to
 // paint, outermost first.
 func (l *layouter) inlineChain(item inlineItem) []*Box {
-	start := item.Box
+	start := heldBox(item.Box)
 	if start == nil {
 		return nil
 	}
