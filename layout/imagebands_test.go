@@ -1,11 +1,11 @@
-package render
+package layout
 
 import (
 	"image"
 	"image/color"
 	"testing"
 
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/style"
 )
 
 // The check on the decomposition in picture_test.go.

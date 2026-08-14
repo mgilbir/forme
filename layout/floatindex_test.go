@@ -1,11 +1,11 @@
-package render
+package layout
 
 import (
 	"fmt"
 	"math/rand/v2"
 	"testing"
 
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/style"
 )
 
 // The index against the scan it replaced.

@@ -1,6 +1,6 @@
-package render
+package layout
 
-import "github.com/mgilbir/pdf0/style"
+import "github.com/mgilbir/forme/style"
 
 // The summaries floatContext answers its queries from, so that a page with a lot
 // of floats on it is not quadratic.

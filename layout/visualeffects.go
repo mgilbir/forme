@@ -1,10 +1,10 @@
-package render
+package layout
 
 import (
 	"strings"
 
-	"github.com/mgilbir/pdf0/css"
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/style"
 )
 
 // CSS 2.1 §11.1: clipping.

@@ -1,9 +1,9 @@
-package render
+package layout
 
 import (
 	"strings"
 
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/style"
 )
 
 // box-sizing: what a declared width and height are the width and height *of*.

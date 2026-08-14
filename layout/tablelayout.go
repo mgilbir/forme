@@ -1,11 +1,11 @@
-package render
+package layout
 
 import (
 	"strconv"
 	"strings"
 
-	"github.com/mgilbir/pdf0/css"
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/style"
 )
 
 // Table layout: CSS 2.1 §17.5 and §17.6.

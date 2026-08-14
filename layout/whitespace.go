@@ -1,9 +1,9 @@
-package render
+package layout
 
 import (
 	"strings"
 
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/style"
 )
 
 // White space: the white-space property, and CSS Text §4's processing rules.

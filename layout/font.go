@@ -1,10 +1,10 @@
-package render
+package layout
 
 import (
 	"strings"
 	"sync"
 
-	"github.com/mgilbir/pdf0/fonts"
+	"github.com/mgilbir/forme/shape"
 )
 
 // Choosing a face for a box, and saying so when the choice was not the one
@@ -26,7 +26,7 @@ import (
 type FontSet interface {
 	// Face returns the face for a family in a weight and style, and whether the
 	// set has it. The family is matched case-insensitively, as CSS matches one.
-	Face(family string, bold, italic bool) (*fonts.Face, bool)
+	Face(family string, bold, italic bool) (*shape.Face, bool)
 }
 
 // FallbackFontSet is a FontSet that can also be asked for a face by what it
@@ -45,14 +45,14 @@ type FontSet interface {
 //
 // The substitution is per box rather than per character. A box whose text mixes
 // scripts that no single face covers still reports a missing glyph, and the
-// remaining step is to cut a run into per-face pieces the way fonts.Stack does,
+// remaining step is to cut a run into per-face pieces the way shape.Stack does,
 // which reaches into measurement, line breaking and the content stream.
 type FallbackFontSet interface {
 	FontSet
 	// FaceFor returns a face that can set the whole of text, and whether one was
 	// found. The bold and italic flags are the ones the box asked for; a set is
 	// free to ignore them when the alternative is having no glyph at all.
-	FaceFor(text string, bold, italic bool) (*fonts.Face, bool)
+	FaceFor(text string, bold, italic bool) (*shape.Face, bool)
 }
 
 // StandardFonts is a FontSet of the fourteen faces every PDF reader has built
@@ -67,7 +67,7 @@ func StandardFonts() FontSet { return &standardFonts{} }
 
 type standardFonts struct {
 	mu     sync.Mutex
-	loaded map[string]*fonts.Face
+	loaded map[string]*shape.Face
 }
 
 // standardFamilies maps a CSS family to the standard face for it.
@@ -98,7 +98,7 @@ var standardFamilies = map[string]string{
 	"dejavu sans mono": "Courier",
 }
 
-func (s *standardFonts) Face(family string, bold, italic bool) (*fonts.Face, bool) {
+func (s *standardFonts) Face(family string, bold, italic bool) (*shape.Face, bool) {
 	base, ok := standardFamilies[strings.ToLower(strings.TrimSpace(family))]
 	if !ok {
 		return nil, false
@@ -110,12 +110,12 @@ func (s *standardFonts) Face(family string, bold, italic bool) (*fonts.Face, boo
 	if f, ok := s.loaded[name]; ok {
 		return f, true
 	}
-	f, err := fonts.Standard(name)
+	f, err := shape.Standard(name)
 	if err != nil {
 		return nil, false
 	}
 	if s.loaded == nil {
-		s.loaded = map[string]*fonts.Face{}
+		s.loaded = map[string]*shape.Face{}
 	}
 	s.loaded[name] = f
 	return f, true
@@ -168,7 +168,7 @@ func standardName(base string, bold, italic bool) string {
 // *that* is reported: a document set in a face its author did not choose has
 // different metrics and different line breaks, and nothing about the resulting
 // page says so.
-func (l *layouter) fontFor(b *Box) (*fonts.Face, bool) {
+func (l *layouter) fontFor(b *Box) (*shape.Face, bool) {
 	key := fontKey{
 		families: b.Style["font-family"],
 		bold:     isBold(b.Style["font-weight"]),
@@ -209,7 +209,7 @@ type fontKey struct {
 	italic   bool
 }
 
-type resolvedFont struct{ face *fonts.Face }
+type resolvedFont struct{ face *shape.Face }
 
 // parseFamilyList splits a font-family value into the families it names.
 //

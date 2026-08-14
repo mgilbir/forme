@@ -1,7 +1,7 @@
-package render
+package layout
 
 import (
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/style"
 )
 
 // Tables: CSS 2.1 §17.

@@ -1,11 +1,11 @@
-package render
+package layout
 
 import (
 	"strconv"
 	"strings"
 
-	"github.com/mgilbir/pdf0/html"
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/html"
+	"github.com/mgilbir/forme/style"
 )
 
 // Form controls, as the static boxes a printed page has.

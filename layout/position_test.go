@@ -1,11 +1,11 @@
-package render
+package layout
 
 import (
 	"fmt"
 	"strings"
 	"testing"
 
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/style"
 )
 
 // Positioning: §9.3's schemes, §9.4.3's relative offsets, §10.3.7's and

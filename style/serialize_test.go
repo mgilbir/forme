@@ -3,8 +3,8 @@ package style
 import (
 	"testing"
 
-	"github.com/mgilbir/pdf0/css"
-	"github.com/mgilbir/pdf0/html"
+	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/html"
 )
 
 // Serialising a winning value back to text.

@@ -1,10 +1,10 @@
-package render
+package layout
 
 import (
 	"testing"
 	"time"
 
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/style"
 )
 
 // TestFloatPlacementIsLinearInFloatCount guards the shape of bug that float

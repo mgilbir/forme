@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mgilbir/pdf0/css"
+	"github.com/mgilbir/forme/css"
 )
 
 // The shorthands whose parts are told apart by *type* rather than by position.

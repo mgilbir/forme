@@ -1,4 +1,4 @@
-package render
+package layout
 
 // The user-agent stylesheet: what makes a <p> a block and a <b> bold before any
 // author has said anything.

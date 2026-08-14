@@ -29,7 +29,7 @@ import (
 // back.
 
 // sourceDirs are the packages that read computed values.
-var sourceDirs = []string{".", "../render"}
+var sourceDirs = []string{".", "../layout"}
 
 // registryFiles hold the tables themselves, where every property name appears by
 // definition and so proves nothing.

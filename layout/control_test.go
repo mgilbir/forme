@@ -1,12 +1,12 @@
-package render
+package layout
 
 import (
 	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/mgilbir/pdf0/fonts"
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/shape"
+	"github.com/mgilbir/forme/style"
 )
 
 // Form controls as static boxes: what is on the page, what is bounded, and what
@@ -537,7 +537,7 @@ select { font-family: monospace; font-size: 20px; line-height: 30px;
 // for a document in one script can hand this engine.
 type emptyFontSet struct{}
 
-func (emptyFontSet) Face(string, bool, bool) (*fonts.Face, bool) { return nil, false }
+func (emptyFontSet) Face(string, bool, bool) (*shape.Face, bool) { return nil, false }
 
 // TestControlWidthWithoutAFace pins the fallback in controlIntrinsicWidth, which
 // would otherwise be a clause nothing has ever seen decide.

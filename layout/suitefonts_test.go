@@ -1,11 +1,11 @@
-package render
+package layout
 
 import (
 	"os"
 	"path/filepath"
 	"sync"
 
-	"github.com/mgilbir/pdf0/fonts"
+	"github.com/mgilbir/forme/shape"
 )
 
 // The font library the suite harness lends the engine, and the one thing it
@@ -32,7 +32,7 @@ import (
 // suiteFonts is a FontSet that falls back to Noto for the scripts the standard
 // faces do not have, and defers to those for everything else.
 type suiteFonts struct {
-	fallback []*fonts.Face
+	fallback []*shape.Face
 	standard FontSet
 }
 
@@ -43,16 +43,16 @@ type suiteFonts struct {
 // document whose Hebrew is meant to be bold is far better served by upright
 // Hebrew than by the space the standard faces would put there — the substitution
 // is reported either way, so nothing is being hidden.
-func (w suiteFonts) FaceFor(text string, bold, italic bool) (*fonts.Face, bool) {
+func (w suiteFonts) FaceFor(text string, bold, italic bool) (*shape.Face, bool) {
 	for _, f := range w.fallback {
-		if _, missing := f.Shape(text); missing == 0 {
+		if _, missing := f.ShapeGlyphs(text); missing == 0 {
 			return f, true
 		}
 	}
 	return nil, false
 }
 
-func (w suiteFonts) Face(family string, bold, italic bool) (*fonts.Face, bool) {
+func (w suiteFonts) Face(family string, bold, italic bool) (*shape.Face, bool) {
 	return w.standard.Face(family, bold, italic)
 }
 
@@ -86,12 +86,12 @@ const notoEnv = "NOTO_FONTS"
 // has cost anything. The order is coverage-first — the pan-Unicode face, then
 // the two that add a script it does not have — so the common case is answered
 // by the first one asked.
-func notoFaces() []*fonts.Face {
+func notoFaces() []*shape.Face {
 	dir := os.Getenv(notoEnv)
 	if dir == "" {
 		return nil
 	}
-	var out []*fonts.Face
+	var out []*shape.Face
 	for _, name := range []string{
 		// Broadest first, so the common case is answered by the first face
 		// asked. The rest each add a script the one before it does not have.
@@ -108,7 +108,7 @@ func notoFaces() []*fonts.Face {
 		if err != nil {
 			continue
 		}
-		if face, err := fonts.Load(data); err == nil {
+		if face, err := shape.Load(data); err == nil {
 			registerBlockFont(face, data)
 			out = append(out, face)
 		}
@@ -122,7 +122,7 @@ func notoFaces() []*fonts.Face {
 // A face with none — which is every ordinary text face — is not registered, and
 // its runs are compared as text as they always were. The work is done once per
 // face, while the font set is built, because it reads every outline in the font.
-func registerBlockFont(face *fonts.Face, data []byte) {
+func registerBlockFont(face *shape.Face, data []byte) {
 	if bf, err := newBlockFont(data); err == nil {
 		blockFonts[face] = bf
 	}

@@ -1,9 +1,9 @@
-package render
+package layout
 
 import (
 	"strings"
 
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/style"
 )
 
 // Border styles: what a border looks like as well as how wide it is.

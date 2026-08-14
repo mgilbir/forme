@@ -1,10 +1,10 @@
-package render
+package layout
 
 import (
 	"strconv"
 	"strings"
 
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/style"
 )
 
 // Positioning: the schemes of CSS 2.1 §9.3, the relative offsets of §9.4.3, and

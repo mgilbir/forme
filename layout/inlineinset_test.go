@@ -1,11 +1,11 @@
-package render
+package layout
 
 import (
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/style"
 )
 
 // An inline box's own margin, border and padding on the horizontal axis.

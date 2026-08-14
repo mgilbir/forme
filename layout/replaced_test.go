@@ -1,11 +1,11 @@
-package render
+package layout
 
 import (
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/style"
 )
 
 // Sizing replaced elements.

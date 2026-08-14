@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mgilbir/pdf0/css"
+	"github.com/mgilbir/forme/css"
 )
 
 // Colour, against the same external suite the css package uses.

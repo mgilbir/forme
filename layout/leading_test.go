@@ -1,9 +1,9 @@
-package render
+package layout
 
 import (
 	"testing"
 
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/style"
 )
 
 // CSS 2.1 §10.8.1: every inline-level box on a line takes part in its height.

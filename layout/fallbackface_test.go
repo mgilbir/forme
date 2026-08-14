@@ -1,12 +1,12 @@
-package render
+package layout
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/mgilbir/pdf0/fonts"
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/shape"
+	"github.com/mgilbir/forme/style"
 )
 
 // The fallback face, and what it is actually worth.
@@ -35,35 +35,35 @@ func notoDir(t *testing.T) string {
 // oneFaceSet is a FontSet with a single fallback face, which is enough to pin
 // the mechanism without depending on which scripts the fetched set covers.
 type oneFaceSet struct {
-	fallback *fonts.Face
+	fallback *shape.Face
 	standard FontSet
 }
 
-func (s oneFaceSet) Face(family string, bold, italic bool) (*fonts.Face, bool) {
+func (s oneFaceSet) Face(family string, bold, italic bool) (*shape.Face, bool) {
 	return s.standard.Face(family, bold, italic)
 }
 
-func (s oneFaceSet) FaceFor(text string, bold, italic bool) (*fonts.Face, bool) {
-	if _, missing := s.fallback.Shape(text); missing == 0 {
+func (s oneFaceSet) FaceFor(text string, bold, italic bool) (*shape.Face, bool) {
+	if _, missing := s.fallback.ShapeGlyphs(text); missing == 0 {
 		return s.fallback, true
 	}
 	return nil, false
 }
 
-func loadNoto(t *testing.T, name string) *fonts.Face {
+func loadNoto(t *testing.T, name string) *shape.Face {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(notoDir(t), name))
 	if err != nil {
 		t.Skipf("no %s: %v", name, err)
 	}
-	face, err := fonts.Load(data)
+	face, err := shape.Load(data)
 	if err != nil {
 		t.Fatalf("loading %s: %v", name, err)
 	}
 	return face
 }
 
-func loadHebrew(t *testing.T) *fonts.Face {
+func loadHebrew(t *testing.T) *shape.Face {
 	return loadNoto(t, "NotoSansHebrew-Regular.ttf")
 }
 

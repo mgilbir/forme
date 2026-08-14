@@ -1,12 +1,12 @@
-package render
+package layout
 
 import (
 	"encoding/binary"
 	"errors"
 	"math"
 
-	"github.com/mgilbir/pdf0/fonts"
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/shape"
+	"github.com/mgilbir/forme/style"
 )
 
 // Glyphs that are rectangles, and why the reftest comparison has to know.
@@ -99,7 +99,7 @@ type blockRect struct {
 // arrives this way in 1665 of the suite's documents, and leaving each one in
 // would be that many parsed fonts nothing could free. See
 // registerDocumentBlockFonts.
-var blockFonts = map[*fonts.Face]*blockFont{}
+var blockFonts = map[*shape.Face]*blockFont{}
 
 // blockFills converts the rectangle-glyph runs of a display list into fills,
 // leaving every other op alone.

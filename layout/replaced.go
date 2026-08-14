@@ -1,6 +1,6 @@
-package render
+package layout
 
-import "github.com/mgilbir/pdf0/style"
+import "github.com/mgilbir/forme/style"
 
 // Sizing a replaced element: CSS 2.1 §10.3.2, §10.6.2 and the constraint table
 // of §10.4.

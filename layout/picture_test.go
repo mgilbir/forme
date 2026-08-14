@@ -1,4 +1,4 @@
-package render
+package layout
 
 import (
 	"fmt"
@@ -8,8 +8,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/mgilbir/pdf0/fonts"
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/shape"
+	"github.com/mgilbir/forme/style"
 )
 
 // Comparing two renderings as pictures rather than as lists of marks.
@@ -571,7 +571,7 @@ func drawnGlyphs(v DrawText) string {
 	if v.Face == nil {
 		return fmt.Sprintf("%q", v.Text)
 	}
-	glyphs, _ := v.Face.ShapeGlyphs(shapedText(v))
+	glyphs, _ := v.Face.ShapeGlyphs(ShapedText(v))
 	if len(glyphs) == 0 {
 		return fmt.Sprintf("%q", v.Text)
 	}
@@ -801,7 +801,7 @@ func buriedUnder(covers []opaqueCover, at int, ink Rect) bool {
 func joinRuns(runs []DrawText) [][]DrawText {
 	type key struct {
 		y, size, spacing style.Unit
-		face             *fonts.Face
+		face             *shape.Face
 		colour           style.RGBA
 		// Two runs cut by different clips do not put the same ink down even
 		// where they abut, so they are not joined. Clip is comparable, which is

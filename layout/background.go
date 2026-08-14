@@ -1,4 +1,4 @@
-package render
+package layout
 
 import (
 	"fmt"
@@ -6,8 +6,8 @@ import (
 	"math"
 	"strings"
 
-	"github.com/mgilbir/pdf0/css"
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/style"
 )
 
 // Background images: reading the seven properties that place one, and turning

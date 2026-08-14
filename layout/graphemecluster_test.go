@@ -1,10 +1,11 @@
-package render
+package layout
 
 import (
 	"sort"
 	"testing"
 
-	"github.com/mgilbir/pdf0/fonts"
+	"github.com/mgilbir/forme/fonts/notosans"
+	"github.com/mgilbir/forme/shape"
 )
 
 // Why word-break and overflow-wrap are refused, checked rather than asserted.
@@ -57,11 +58,11 @@ import (
 // TestShapingClustersAreNotOrderedInARightToLeftRun.
 func shapedClusterBoundaries(t *testing.T, text string) []int {
 	t.Helper()
-	face, err := fonts.NotoSans()
+	face, err := notosans.Face()
 	if err != nil {
 		t.Fatalf("loading the bundled face: %v", err)
 	}
-	runs, _ := fonts.NewStack(face).ShapeRuns(text)
+	runs, _ := shape.NewStack(face).ShapeRuns(text)
 	seen := map[int]bool{}
 	for _, r := range runs {
 		for _, g := range r.Glyphs {
@@ -163,13 +164,13 @@ func TestShapingClustersAreFinerThanGraphemeClusters(t *testing.T) {
 // plainer still: a base and its marks are reordered among themselves, so two
 // adjacent glyphs can carry clusters that are neither ascending nor descending.
 func TestShapingClustersAreNotOrderedInARightToLeftRun(t *testing.T) {
-	face, err := fonts.NotoSans()
+	face, err := notosans.Face()
 	if err != nil {
 		t.Fatalf("loading the bundled face: %v", err)
 	}
 	// Arabic lam followed by alef, which the font draws as one ligature or as
 	// two joined letters; either way the second character is drawn first.
-	runs, _ := fonts.NewStack(face).ShapeRuns("لا")
+	runs, _ := shape.NewStack(face).ShapeRuns("لا")
 	var clusters []int
 	for _, r := range runs {
 		for _, g := range r.Glyphs {

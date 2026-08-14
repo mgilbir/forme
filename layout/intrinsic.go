@@ -1,8 +1,8 @@
-package render
+package layout
 
 import (
 	"github.com/mgilbir/forme/segment"
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/style"
 )
 
 // Intrinsic widths: how wide a box wants to be when nothing tells it.

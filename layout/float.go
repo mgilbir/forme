@@ -1,6 +1,6 @@
-package render
+package layout
 
-import "github.com/mgilbir/pdf0/style"
+import "github.com/mgilbir/forme/style"
 
 // Floats: CSS 2.1 §9.5, and the clearance of §9.5.2.
 //

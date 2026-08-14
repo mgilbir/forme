@@ -1,4 +1,4 @@
-package render
+package layout
 
 import (
 	"fmt"
@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mgilbir/pdf0/css"
-	"github.com/mgilbir/pdf0/fonts"
+	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/shape"
 )
 
 // The faces a document brings with it.
@@ -29,7 +29,7 @@ import (
 //
 // # Why the caps are tighter than the ones on an image
 //
-// The bytes go to fonts.Load, which parses an sfnt: a table directory, a
+// The bytes go to shape.Load, which parses an sfnt: a table directory, a
 // character map, a set of outlines and — for anything with shaping — a stack of
 // layout tables full of offsets into each other. That is a larger parser
 // reading more attacker-controlled structure than a PNG decoder, and it is
@@ -48,7 +48,7 @@ import (
 //
 // Eight megabytes is past every web font in use — a full-coverage Noto face is
 // around five, a subset Latin one is tens of kilobytes — and small enough that
-// one file cannot be the whole budget. It bounds what reaches fonts.Load, which
+// one file cannot be the whole budget. It bounds what reaches shape.Load, which
 // is the point: the cap exists to bound a parser, not a download.
 //
 // A variable rather than a constant so a test can lower it and watch it fire. A
@@ -160,7 +160,7 @@ func isFontFace(r css.Rule) bool {
 // documentFace is one loaded face together with what the rule said about it.
 type documentFace struct {
 	rule fontFaceRule
-	face *fonts.Face
+	face *shape.Face
 	// ref is the src entry that produced the face — the url for a url() entry,
 	// the name for a local() one. It is kept so that a caller can say which
 	// file a family came from.
@@ -192,7 +192,7 @@ type documentFonts struct {
 // branch.
 type fallbackDocumentFonts struct{ *documentFonts }
 
-func (d fallbackDocumentFonts) FaceFor(text string, bold, italic bool) (*fonts.Face, bool) {
+func (d fallbackDocumentFonts) FaceFor(text string, bold, italic bool) (*shape.Face, bool) {
 	// The document's own faces are deliberately not offered here. FaceFor is
 	// the question "what can set this text at all", and answering it with a
 	// face the document loaded for some *other* family would substitute a
@@ -202,7 +202,7 @@ func (d fallbackDocumentFonts) FaceFor(text string, bold, italic bool) (*fonts.F
 }
 
 // Face answers for a family the document defined, and defers otherwise.
-func (d *documentFonts) Face(family string, bold, italic bool) (*fonts.Face, bool) {
+func (d *documentFonts) Face(family string, bold, italic bool) (*shape.Face, bool) {
 	key := strings.ToLower(strings.TrimSpace(family))
 	key = strings.Trim(key, `"'`)
 	key = strings.TrimSpace(key)
@@ -297,7 +297,7 @@ func loadFontFaces(pending []pendingFontFace, res ResourceResolver, base FontSet
 	}
 	l := &fontFaceLoader{
 		res: res, rec: rec, base: base,
-		loaded: map[string]*fonts.Face{},
+		loaded: map[string]*shape.Face{},
 		failed: map[string]bool{},
 		budget: maxDocumentFontBytes,
 	}
@@ -340,7 +340,7 @@ type fontFaceLoader struct {
 	// @font-face rules reads and parses it once. Sharing a face between two
 	// families within one document is right: a face records the glyphs it was
 	// asked to show, and that record is per document.
-	loaded map[string]*fonts.Face
+	loaded map[string]*shape.Face
 	// failed records the references already reported, so a stylesheet with
 	// twenty rules pointing at one missing file makes one attempt.
 	failed map[string]bool
@@ -600,7 +600,7 @@ func singleString(vals []css.ComponentValue) (string, bool) {
 // none of them worked has the rule contributed nothing, and that is the single
 // finding raised — one per rule rather than one per entry, because an author
 // who wrote four alternatives expects three of them to be unused.
-func (l *fontFaceLoader) face(p pendingFontFace, r fontFaceRule) (*fonts.Face, string, bool) {
+func (l *fontFaceLoader) face(p pendingFontFace, r fontFaceRule) (*shape.Face, string, bool) {
 	var why []string
 	for _, s := range r.srcs {
 		if s.local {
@@ -645,7 +645,7 @@ func joinReasons(why []string) string {
 }
 
 // load fetches and parses one url() entry.
-func (l *fontFaceLoader) load(p pendingFontFace, r fontFaceRule, s fontSource) (*fonts.Face, *loadFailure) {
+func (l *fontFaceLoader) load(p pendingFontFace, r fontFaceRule, s fontSource) (*shape.Face, *loadFailure) {
 	if face, ok := l.loaded[s.ref]; ok {
 		return face, nil
 	}
@@ -708,7 +708,7 @@ func (l *fontFaceLoader) load(p pendingFontFace, r fontFaceRule, s fontSource) (
 	// cost exactly as much as one that did not.
 	l.budget -= len(data)
 
-	face, err := fonts.Load(data)
+	face, err := shape.Load(data)
 	if err != nil {
 		l.failed[s.ref] = true
 		return nil, &loadFailure{
@@ -786,7 +786,7 @@ func (l *fontFaceLoader) overRuleCap(p pendingFontFace, total int) {
 	})
 }
 
-// usableFontFormat says whether a format() hint names something fonts.Load can
+// usableFontFormat says whether a format() hint names something shape.Load can
 // parse.
 //
 // An absent hint is usable: the file is tried and either parses or does not.

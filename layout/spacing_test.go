@@ -1,10 +1,10 @@
-package render
+package layout
 
 import (
 	"strings"
 	"testing"
 
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/style"
 )
 
 // letter-spacing, word-spacing and text-indent.

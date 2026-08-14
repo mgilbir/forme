@@ -1,11 +1,11 @@
-package render
+package layout
 
 import (
 	"fmt"
 	"strings"
 	"testing"
 
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/style"
 )
 
 // Block layout.

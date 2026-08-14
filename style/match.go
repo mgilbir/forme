@@ -13,8 +13,8 @@ package style
 import (
 	"strings"
 
-	"github.com/mgilbir/pdf0/css"
-	"github.com/mgilbir/pdf0/html"
+	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/html"
 )
 
 // maxMatchSteps bounds the work one selector may spend on one element.

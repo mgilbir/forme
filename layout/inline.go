@@ -1,4 +1,4 @@
-package render
+package layout
 
 import (
 	"strconv"
@@ -7,8 +7,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/mgilbir/forme/segment"
-	"github.com/mgilbir/pdf0/fonts"
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/shape"
+	"github.com/mgilbir/forme/style"
 )
 
 // Inline layout: text into lines.
@@ -171,7 +171,7 @@ type LineFragment struct {
 type TextRun struct {
 	Text string
 	// Face is what it is set in, and Size the font size.
-	Face *fonts.Face
+	Face *shape.Face
 	Size style.Unit
 	// X is the offset from the left of the line box, and Width the advance.
 	X, Width style.Unit
@@ -274,7 +274,7 @@ type inlineFrame struct {
 type inlineItem struct {
 	text  string
 	box   *Box
-	face  *fonts.Face
+	face  *shape.Face
 	size  style.Unit
 	width style.Unit
 	// breakBefore marks an item that may begin a line, which is what a break
@@ -2228,7 +2228,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 // A number is a count of space advances in the box's own font, which is why
 // this needs the face; a length is itself. The initial value is 8, the width
 // every terminal and every editor has used for a tab since they had one.
-func (l *layouter) tabStop(b *Box, face *fonts.Face) style.Unit {
+func (l *layouter) tabStop(b *Box, face *shape.Face) style.Unit {
 	raw := strings.TrimSpace(b.Style["tab-size"])
 	if n, ok := parseNumber(raw); ok {
 		return l.measure(face, " ", b.FontSize).Mul(n)
@@ -2286,7 +2286,7 @@ func tabAdvance(x, stop, floor style.Unit) style.Unit {
 // that use it want: a tab stop is a multiple of the space advance, "ch" is the
 // advance of a zero, and a list marker is set without the text's spacing. Text
 // that is laid out on a line goes through measureSpaced instead.
-func (l *layouter) measure(face *fonts.Face, text string, size style.Unit) style.Unit {
+func (l *layouter) measure(face *shape.Face, text string, size style.Unit) style.Unit {
 	return l.measureSpaced(face, text, size, textSpacing{})
 }
 
@@ -2300,7 +2300,7 @@ func (l *layouter) measure(face *fonts.Face, text string, size style.Unit) style
 // different letter-spacing must not share an entry. Leaving it out of the key is
 // the same memoization bug lengthKey.zeroAdvance records for the "ch" unit, and
 // it produces a wrong page only in a document that uses two values.
-func (l *layouter) measureSpaced(face *fonts.Face, text string, size style.Unit,
+func (l *layouter) measureSpaced(face *shape.Face, text string, size style.Unit,
 	sp textSpacing) style.Unit {
 
 	if text == "" {
@@ -2319,7 +2319,7 @@ func (l *layouter) measureSpaced(face *fonts.Face, text string, size style.Unit,
 }
 
 type measureKey struct {
-	face    *fonts.Face
+	face    *shape.Face
 	text    string
 	size    style.Unit
 	spacing textSpacing
@@ -3586,7 +3586,7 @@ func (l *layouter) normalLineHeight(b *Box) style.Unit {
 		return b.FontSize.Mul(normalLineHeightFallbackFactor)
 	}
 	var gap float64
-	if d := face.Descriptor(); d.Has(fonts.MetricLineGap) {
+	if d := face.Descriptor(); d.Has(shape.MetricLineGap) {
 		gap = float64(d.LineGap)
 	}
 	// One multiplication over the summed ratio rather than three over the terms.
@@ -3636,14 +3636,14 @@ func (l *layouter) normalLineHeight(b *Box) style.Unit {
 // 0.900em, made them agree at a line height no browser would produce and lost
 // inline-formatting-context-015, whose reference is a 30px cell that two lines
 // of text have to fill.
-func lineMetrics(face *fonts.Face) (top, bottom, upem float64, ok bool) {
+func lineMetrics(face *shape.Face) (top, bottom, upem float64, ok bool) {
 	upem = float64(face.UnitsPerEm())
 	if upem <= 0 {
 		return 0, 0, 0, false
 	}
 	d := face.Descriptor()
 	top, bottom = float64(d.Ascent), float64(d.Descent)
-	if !d.Has(fonts.MetricLineGap) {
+	if !d.Has(shape.MetricLineGap) {
 		top, bottom = float64(d.BBox[3]), float64(d.BBox[1])
 	}
 	if top-bottom <= 0 {
@@ -3653,7 +3653,7 @@ func lineMetrics(face *fonts.Face) (top, bottom, upem float64, ok bool) {
 }
 
 // lineExtents is lineMetrics at a box's font size.
-func (l *layouter) lineExtents(b *Box, face *fonts.Face) (ascent, descent style.Unit, ok bool) {
+func (l *layouter) lineExtents(b *Box, face *shape.Face) (ascent, descent style.Unit, ok bool) {
 	top, bottom, upem, ok := lineMetrics(face)
 	if !ok {
 		return 0, 0, false
@@ -3801,7 +3801,7 @@ func (l *layouter) checkScript(b *Box) {
 // what an author needs to know is *which* characters their font cannot set —
 // hearing it four hundred times about the same one is not four hundred times as
 // useful.
-func (l *layouter) checkGlyphs(b *Box, face *fonts.Face) {
+func (l *layouter) checkGlyphs(b *Box, face *shape.Face) {
 	// The question has to be the one *drawing* answers, and it was not.
 	//
 	// This asked face.GlyphID, which is whether the face has a glyph mapped to
@@ -3828,7 +3828,7 @@ func (l *layouter) checkGlyphs(b *Box, face *fonts.Face) {
 		if r == '\n' || r == '\t' || marksNoPaper(r) {
 			continue
 		}
-		if _, missing := face.Shape(string(r)); missing == 0 {
+		if _, missing := face.ShapeGlyphs(string(r)); missing == 0 {
 			continue
 		}
 		key := string(r) + "\x00" + face.Name()
@@ -3914,15 +3914,15 @@ func strconvFormat(v float64) string {
 //
 // Shaping the whole run first is what keeps it cheap: the answer is almost
 // always no, and only then is it worth walking the characters.
-func missesVisible(face *fonts.Face, text string) bool {
-	if _, missing := face.Shape(text); missing == 0 {
+func missesVisible(face *shape.Face, text string) bool {
+	if _, missing := face.ShapeGlyphs(text); missing == 0 {
 		return false
 	}
 	for _, r := range text {
 		if r == '\n' || r == '\t' || marksNoPaper(r) {
 			continue
 		}
-		if _, missing := face.Shape(string(r)); missing > 0 {
+		if _, missing := face.ShapeGlyphs(string(r)); missing > 0 {
 			return true
 		}
 	}
@@ -3992,14 +3992,14 @@ func marksNoPaper(r rune) bool {
 // It is per box. A box whose text mixes scripts that no single face covers keeps
 // the family's face and reports the missing glyphs, because choosing one face
 // for the box cannot help it. Cutting a run into per-face pieces is what
-// fonts.Stack does and it reaches into measurement, line breaking and the
+// shape.Stack does and it reaches into measurement, line breaking and the
 // content stream; until that exists, this handles the common shape — a run of
 // text that is all one script.
 //
 // It is cached per box rather than per family, because the answer depends on the
 // text. Shaping a run to find out whether it is covered is not free, and
 // itemsFor is on the hot path.
-func (l *layouter) faceForText(b *Box) (*fonts.Face, bool) {
+func (l *layouter) faceForText(b *Box) (*shape.Face, bool) {
 	face, ok := l.fontFor(b)
 	if !ok || b.Text == "" {
 		return face, ok

@@ -15,7 +15,7 @@
 // engine can quietly produce a document that is not what was asked for is a
 // named rule with an identifier, and a caller can decide for each one whether it
 // is worth failing over.
-package render
+package layout
 
 import (
 	"fmt"

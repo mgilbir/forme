@@ -1,4 +1,4 @@
-package render
+package layout
 
 import (
 	"image"
@@ -6,9 +6,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mgilbir/pdf0/css"
-	"github.com/mgilbir/pdf0/fonts"
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/shape"
+	"github.com/mgilbir/forme/style"
 )
 
 // The display list: the sixth of §3's stages, and the one that has no PDF in it
@@ -78,7 +78,7 @@ type DrawText struct {
 	// words is right-to-left because of its neighbours, and by the time the run
 	// reaches a backend the neighbours are gone.
 	RTL   bool
-	Face  *fonts.Face
+	Face  *shape.Face
 	Size  style.Unit
 	Color style.RGBA
 	// CharSpacing is letter-spacing: an extra advance after every character.
@@ -1106,4 +1106,32 @@ func parseColorValue(raw string) (style.RGBA, bool) {
 	}
 	vals, _ := css.ParseComponentValues(raw)
 	return style.ParseColor(vals)
+}
+
+// ShapedText is the string handed to the shaper for one text run.
+//
+// The run's own text is in logical order and carries no direction of its own: a
+// run of punctuation between two Hebrew words is right-to-left because of
+// characters that are in other runs by now. The shaper applies UAX #9 to the
+// string it is given, so left to itself it would answer for that string rather
+// than for the paragraph the run came out of, and a lone bracket would come out
+// facing the wrong way.
+//
+// So the direction the layout resolved is stated to it, in the one vocabulary a
+// string has for saying so: an explicit right-to-left override in front of the
+// text. That is exactly what the character means; it is a default-ignorable code
+// point, so the shaper drops it before any glyph is chosen; and what comes back
+// is the run's glyphs in the order they are drawn, with rule L4's mirroring
+// applied.
+//
+// The override goes here and not into the run's text, because the run's text is
+// what a reader copies out of the finished page.
+func ShapedText(v DrawText) string {
+	if !v.RTL {
+		// A left-to-right run needs nothing. Every character in it resolved to
+		// an even level, so the shaper's own answer for the string is already
+		// this one.
+		return v.Text
+	}
+	return "‮" + v.Text
 }

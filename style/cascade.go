@@ -4,8 +4,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mgilbir/pdf0/css"
-	"github.com/mgilbir/pdf0/html"
+	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/html"
 )
 
 // The cascade: deciding which declaration wins when several apply, and what an

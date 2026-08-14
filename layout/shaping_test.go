@@ -1,11 +1,11 @@
-package render
+package layout
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/mgilbir/pdf0/fonts"
+	"github.com/mgilbir/forme/shape"
 )
 
 // Complex scripts need more than glyph coverage.
@@ -22,12 +22,12 @@ func TestShapingIsContextual(t *testing.T) {
 	if dir == "" {
 		t.Skip("set NOTO_FONTS")
 	}
-	load := func(name string) *fonts.Face {
+	load := func(name string) *shape.Face {
 		data, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
 			t.Skipf("no %s", name)
 		}
-		f, err := fonts.Load(data)
+		f, err := shape.Load(data)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -44,7 +44,7 @@ func TestShapingIsContextual(t *testing.T) {
 	if missing != 0 {
 		t.Fatalf("the Arabic face is missing %d characters of %q", missing, word)
 	}
-	var isolated []fonts.Glyph
+	var isolated []shape.Glyph
 	for _, r := range word {
 		g, _ := ar.ShapeGlyphs(string(r))
 		isolated = append(isolated, g...)

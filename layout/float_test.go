@@ -1,12 +1,12 @@
-package render
+package layout
 
 import (
 	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/mgilbir/pdf0/fonts"
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/shape"
+	"github.com/mgilbir/forme/style"
 )
 
 // Floats and clear.
@@ -37,9 +37,9 @@ func relX(t *testing.T, child, parent *Fragment) style.Unit {
 }
 
 // helvetica is the face the width arithmetic below is against.
-func helvetica(t *testing.T) *fonts.Face {
+func helvetica(t *testing.T) *shape.Face {
 	t.Helper()
-	face, err := fonts.Standard("Helvetica")
+	face, err := shape.Standard("Helvetica")
 	if err != nil {
 		t.Fatalf("loading Helvetica: %v", err)
 	}

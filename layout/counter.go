@@ -1,12 +1,12 @@
-package render
+package layout
 
 import (
 	"strconv"
 	"strings"
 
-	"github.com/mgilbir/pdf0/css"
-	"github.com/mgilbir/pdf0/html"
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/html"
+	"github.com/mgilbir/forme/style"
 )
 
 // CSS counters, CSS 2.1 §12.4.

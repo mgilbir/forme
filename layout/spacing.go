@@ -1,10 +1,10 @@
-package render
+package layout
 
 import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/style"
 )
 
 // The three properties that change how much room text takes: letter-spacing,

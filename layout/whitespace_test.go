@@ -1,12 +1,12 @@
-package render
+package layout
 
 import (
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/mgilbir/pdf0/fonts"
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/shape"
+	"github.com/mgilbir/forme/style"
 )
 
 // CSS Text §4's white space processing, and the line breaking that finishes it.
@@ -445,7 +445,7 @@ func TestATabTooCloseToItsStopTakesTheNextOne(t *testing.T) {
 // already spent against the tab stops by the time anything paints, so what is
 // left to draw is white space and a space draws it.
 func TestAPreservedTabIsNotDrawnAsTofu(t *testing.T) {
-	face, err := fonts.Standard("Courier")
+	face, err := shape.Standard("Courier")
 	if err != nil {
 		t.Fatalf("loading Courier: %v", err)
 	}
@@ -749,7 +749,7 @@ func TestHangingSpaceHangsOffTheEndOfARightToLeftLine(t *testing.T) {
 // written against, so that a change in the standard metrics fails here and
 // makes every other number in the file readable rather than mysterious.
 func TestSpaceIsMeasuredAgainstTheFace(t *testing.T) {
-	face, err := fonts.Standard("Courier")
+	face, err := shape.Standard("Courier")
 	if err != nil {
 		t.Fatalf("loading Courier: %v", err)
 	}

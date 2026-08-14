@@ -1,8 +1,8 @@
-package render
+package layout
 
 import (
-	"github.com/mgilbir/pdf0/fonts"
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/shape"
+	"github.com/mgilbir/forme/style"
 )
 
 // CSS Overflow 4's clamp, which is a property of a subtree and not of a
@@ -29,7 +29,7 @@ type lineClamp struct {
 	// line happened to fall in. The suite's line-clamp-002 sets its text in a
 	// span a quarter of the block's size and puts the mark at the block's.
 	box  *Box
-	face *fonts.Face
+	face *shape.Face
 	size style.Unit
 
 	// limit is how many descendant in-flow line boxes the property allows and

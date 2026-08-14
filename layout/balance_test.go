@@ -1,9 +1,9 @@
-package render
+package layout
 
 import (
 	"testing"
 
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/style"
 )
 
 // text-wrap-style: balance, CSS Text §5.1.

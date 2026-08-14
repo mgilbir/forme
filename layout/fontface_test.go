@@ -1,4 +1,4 @@
-package render
+package layout
 
 import (
 	"encoding/base64"
@@ -7,9 +7,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/fonts/notosans"
-	"github.com/mgilbir/pdf0/css"
-	"github.com/mgilbir/pdf0/fonts"
+	"github.com/mgilbir/forme/shape"
 )
 
 // The checks on @font-face, which is the one feature in this package that hands
@@ -99,7 +99,7 @@ func TestFontFaceLoadsFromTheDocument(t *testing.T) {
 // loadRealFace parses the reference font a second time, so that the measurement
 // above compares the face the engine loaded against the file rather than
 // against itself.
-func loadRealFace() (*fonts.Face, error) { return fonts.Load(realFont()) }
+func loadRealFace() (*shape.Face, error) { return shape.Load(realFont()) }
 
 // TestFontFaceIsNoLongerAnUnsupportedAtRule is the report half, and it is what
 // the WPT harness's stripped link was standing in for.
@@ -250,7 +250,7 @@ func TestFontFaceReportsWhenNothingLoads(t *testing.T) {
 	fired[RuleResourceBlocked] = true
 }
 
-// TestFontFaceNeedsAResolver is the deny-by-default guarantee for fonts. It is
+// TestFontFaceNeedsAResolver is the deny-by-default guarantee for shape. It is
 // the same promise resource.go makes for images and stylesheets, checked
 // separately because a second loading path is always the one missing a check.
 func TestFontFaceNeedsAResolver(t *testing.T) {
@@ -341,7 +341,7 @@ func TestFontFaceDataURI(t *testing.T) {
 
 // TestFontFileCapFires is the per-file cap. The font is a real one and the cap
 // is lowered under it, so what is being watched is the comparison rather than an
-// allocation — and the refusal happens before fonts.Load, which is the point of
+// allocation — and the refusal happens before shape.Load, which is the point of
 // having it at all.
 func TestFontFileCapFires(t *testing.T) {
 	saved := maxFontBytes
@@ -526,7 +526,7 @@ func TestFontUndecodableIsItsOwnFinding(t *testing.T) {
 	l := &fontFaceLoader{
 		rec: NewRecorder(nil), base: StandardFonts(),
 		res:    &fileResolver{files: map[string][]byte{"junk.ttf": []byte("nope")}},
-		loaded: map[string]*fonts.Face{}, failed: map[string]bool{},
+		loaded: map[string]*shape.Face{}, failed: map[string]bool{},
 		budget: maxDocumentFontBytes,
 	}
 	_, fail := l.load(pendingFontFace{}, fontFaceRule{family: "Trial"},
@@ -949,6 +949,6 @@ func TestFontFaceKeepsTheFallbackInterface(t *testing.T) {
 // wrapping test above.
 type fallbackOnly struct{ FontSet }
 
-func (f fallbackOnly) FaceFor(text string, bold, italic bool) (*fonts.Face, bool) {
+func (f fallbackOnly) FaceFor(text string, bold, italic bool) (*shape.Face, bool) {
 	return f.FontSet.Face("sans-serif", false, false)
 }

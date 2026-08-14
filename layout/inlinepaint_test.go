@@ -1,10 +1,10 @@
-package render
+package layout
 
 import (
 	"strings"
 	"testing"
 
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/style"
 )
 
 // Painting a non-replaced inline box: CSS 2.1 §8.6's slice model, §10.6.1's
@@ -39,12 +39,21 @@ const (
 
 // courierInk sets the text at that size, with a line-height far larger than the
 // content area so that the two cannot be confused in an expected value.
+// courierInk sets the text at that size, with a line-height far larger than the
+// content area so that the two cannot be confused in an expected value.
+// courierInk sets the text at that size, with a line-height far larger than the
+// content area so that the two cannot be confused in an expected value.
+// courierInk sets the text at that size, with a line-height far larger than the
+// content area so that the two cannot be confused in an expected value.
 const courierInk = noDefaults + `
 body, div, p, span { font-family: Courier; font-size: 250px; line-height: 400px }
 `
 
 var blue = style.RGBA{B: 255, A: 1}
 
+// fills returns the filled rectangles of one colour, in painting order.
+// fills returns the filled rectangles of one colour, in painting order.
+// fills returns the filled rectangles of one colour, in painting order.
 // fills returns the filled rectangles of one colour, in painting order.
 func inkOf(ops []Op, want style.RGBA) []Rect {
 	var out []Rect
@@ -60,6 +69,12 @@ func inkOf(ops []Op, want style.RGBA) []Rect {
 
 // oneFill is the single rectangle of a colour, or a failure naming what was
 // painted instead.
+// oneFill is the single rectangle of a colour, or a failure naming what was
+// painted instead.
+// oneFill is the single rectangle of a colour, or a failure naming what was
+// painted instead.
+// oneFill is the single rectangle of a colour, or a failure naming what was
+// painted instead.
 func oneFill(t *testing.T, ops []Op, want style.RGBA) Rect {
 	t.Helper()
 	got := inkOf(ops, want)
@@ -69,6 +84,33 @@ func oneFill(t *testing.T, ops []Op, want style.RGBA) Rect {
 	return got[0]
 }
 
+// TestInlineBackgroundIsTheFontsContentArea is §10.6.1: the height of a
+// non-replaced inline box's content area comes from the font, not from the line
+// box it sits on.
+//
+// It is the rule implementations get wrong in the direction that looks right —
+// filling the line box makes a highlighted span in a loosely leaded paragraph
+// paint a stripe half again as tall as the letters, and nothing about the page
+// says which of the two heights was meant. The line-height here is 400px against
+// a content area of 196.5, so the two cannot be confused.
+// TestInlineBackgroundIsTheFontsContentArea is §10.6.1: the height of a
+// non-replaced inline box's content area comes from the font, not from the line
+// box it sits on.
+//
+// It is the rule implementations get wrong in the direction that looks right —
+// filling the line box makes a highlighted span in a loosely leaded paragraph
+// paint a stripe half again as tall as the letters, and nothing about the page
+// says which of the two heights was meant. The line-height here is 400px against
+// a content area of 196.5, so the two cannot be confused.
+// TestInlineBackgroundIsTheFontsContentArea is §10.6.1: the height of a
+// non-replaced inline box's content area comes from the font, not from the line
+// box it sits on.
+//
+// It is the rule implementations get wrong in the direction that looks right —
+// filling the line box makes a highlighted span in a loosely leaded paragraph
+// paint a stripe half again as tall as the letters, and nothing about the page
+// says which of the two heights was meant. The line-height here is 400px against
+// a content area of 196.5, so the two cannot be confused.
 // TestInlineBackgroundIsTheFontsContentArea is §10.6.1: the height of a
 // non-replaced inline box's content area comes from the font, not from the line
 // box it sits on.
@@ -103,6 +145,15 @@ func TestInlineBackgroundIsTheFontsContentArea(t *testing.T) {
 // TestInlineBackgroundIgnoresLineHeight is the same rule stated as a difference,
 // which is the form a defect cannot satisfy by accident: two paragraphs whose
 // line-height differs by a factor of four paint the same rectangle.
+// TestInlineBackgroundIgnoresLineHeight is the same rule stated as a difference,
+// which is the form a defect cannot satisfy by accident: two paragraphs whose
+// line-height differs by a factor of four paint the same rectangle.
+// TestInlineBackgroundIgnoresLineHeight is the same rule stated as a difference,
+// which is the form a defect cannot satisfy by accident: two paragraphs whose
+// line-height differs by a factor of four paint the same rectangle.
+// TestInlineBackgroundIgnoresLineHeight is the same rule stated as a difference,
+// which is the form a defect cannot satisfy by accident: two paragraphs whose
+// line-height differs by a factor of four paint the same rectangle.
 func TestInlineBackgroundIgnoresLineHeight(t *testing.T) {
 	// The line-height is set on the box that paints, not on the paragraph around
 	// it. Written the other way this test could not fail: the stylesheet gives
@@ -125,6 +176,27 @@ func TestInlineBackgroundIgnoresLineHeight(t *testing.T) {
 	}
 }
 
+// TestInlineVerticalPaddingIsPaintedAndNotLaidOut is §8.4 and §8.5's asymmetry,
+// and it needs both halves asserted together because each alone is satisfiable
+// by a defect that gets the other wrong.
+//
+// The padding is painted: the background grows by it, above and below. The
+// padding is not laid out: the line below does not move, and neither does the
+// paragraph after it.
+// TestInlineVerticalPaddingIsPaintedAndNotLaidOut is §8.4 and §8.5's asymmetry,
+// and it needs both halves asserted together because each alone is satisfiable
+// by a defect that gets the other wrong.
+//
+// The padding is painted: the background grows by it, above and below. The
+// padding is not laid out: the line below does not move, and neither does the
+// paragraph after it.
+// TestInlineVerticalPaddingIsPaintedAndNotLaidOut is §8.4 and §8.5's asymmetry,
+// and it needs both halves asserted together because each alone is satisfiable
+// by a defect that gets the other wrong.
+//
+// The padding is painted: the background grows by it, above and below. The
+// padding is not laid out: the line below does not move, and neither does the
+// paragraph after it.
 // TestInlineVerticalPaddingIsPaintedAndNotLaidOut is §8.4 and §8.5's asymmetry,
 // and it needs both halves asserted together because each alone is satisfiable
 // by a defect that gets the other wrong.
@@ -164,6 +236,21 @@ func TestInlineVerticalPaddingIsPaintedAndNotLaidOut(t *testing.T) {
 // own: insetItems takes the margin, the border and the padding as a single
 // distance, so a fragment that painted the whole of it would paint over the
 // margin — the one part of the box model that is meant to show through.
+// TestInlineBackgroundStopsAtTheMarginEdge is the horizontal half of the box
+// model, and it is the one the room reserved on the line does not answer on its
+// own: insetItems takes the margin, the border and the padding as a single
+// distance, so a fragment that painted the whole of it would paint over the
+// margin — the one part of the box model that is meant to show through.
+// TestInlineBackgroundStopsAtTheMarginEdge is the horizontal half of the box
+// model, and it is the one the room reserved on the line does not answer on its
+// own: insetItems takes the margin, the border and the padding as a single
+// distance, so a fragment that painted the whole of it would paint over the
+// margin — the one part of the box model that is meant to show through.
+// TestInlineBackgroundStopsAtTheMarginEdge is the horizontal half of the box
+// model, and it is the one the room reserved on the line does not answer on its
+// own: insetItems takes the margin, the border and the padding as a single
+// distance, so a fragment that painted the whole of it would paint over the
+// margin — the one part of the box model that is meant to show through.
 func TestInlineBackgroundStopsAtTheMarginEdge(t *testing.T) {
 	root := layoutOf(t, 4000, `<p id="p"><span id="s">ab</span></p>`, courierInk+`
 		#s { background: green; margin: 0 40px; padding: 0 10px;
@@ -183,6 +270,33 @@ func TestInlineBackgroundStopsAtTheMarginEdge(t *testing.T) {
 	}
 }
 
+// TestInlineBackgroundImagePlacesAgainstTheFragment pins that a background
+// *image* on an inline box goes through the same machinery as everything else's
+// — the origin, the position and the clip of css-backgrounds-3 — and that the
+// area it is placed against is the fragment's rather than the block's.
+//
+// The two differ by exactly the half-leading, which is why the y is the
+// assertion that matters here: a layer positioned against the line box would sit
+// at the top of the line, and a layer positioned against the block would sit at
+// the top of the paragraph.
+// TestInlineBackgroundImagePlacesAgainstTheFragment pins that a background
+// *image* on an inline box goes through the same machinery as everything else's
+// — the origin, the position and the clip of css-backgrounds-3 — and that the
+// area it is placed against is the fragment's rather than the block's.
+//
+// The two differ by exactly the half-leading, which is why the y is the
+// assertion that matters here: a layer positioned against the line box would sit
+// at the top of the line, and a layer positioned against the block would sit at
+// the top of the paragraph.
+// TestInlineBackgroundImagePlacesAgainstTheFragment pins that a background
+// *image* on an inline box goes through the same machinery as everything else's
+// — the origin, the position and the clip of css-backgrounds-3 — and that the
+// area it is placed against is the fragment's rather than the block's.
+//
+// The two differ by exactly the half-leading, which is why the y is the
+// assertion that matters here: a layer positioned against the line box would sit
+// at the top of the line, and a layer positioned against the block would sit at
+// the top of the paragraph.
 // TestInlineBackgroundImagePlacesAgainstTheFragment pins that a background
 // *image* on an inline box goes through the same machinery as everything else's
 // — the origin, the position and the clip of css-backgrounds-3 — and that the
@@ -212,6 +326,24 @@ func TestInlineBackgroundImagePlacesAgainstTheFragment(t *testing.T) {
 	}
 }
 
+// TestInlineBorderSlicesAcrossLines is §8.6's slice model, which is the whole
+// reason an inline box's decoration is plural.
+//
+// A box broken over three lines carries its left border on the first fragment,
+// its right on the last and neither on the middle one — while the top and the
+// bottom are on all three, because the break is horizontal.
+// TestInlineBorderSlicesAcrossLines is §8.6's slice model, which is the whole
+// reason an inline box's decoration is plural.
+//
+// A box broken over three lines carries its left border on the first fragment,
+// its right on the last and neither on the middle one — while the top and the
+// bottom are on all three, because the break is horizontal.
+// TestInlineBorderSlicesAcrossLines is §8.6's slice model, which is the whole
+// reason an inline box's decoration is plural.
+//
+// A box broken over three lines carries its left border on the first fragment,
+// its right on the last and neither on the middle one — while the top and the
+// bottom are on all three, because the break is horizontal.
 // TestInlineBorderSlicesAcrossLines is §8.6's slice model, which is the whole
 // reason an inline box's decoration is plural.
 //
@@ -256,6 +388,27 @@ func TestInlineBorderSlicesAcrossLines(t *testing.T) {
 // A solid border of one colour on a box broken over three lines is eight bands
 // rather than twelve: the fragment in the middle has neither a left edge nor a
 // right one.
+// TestInlineBorderIsDrawnOnTheSlicesThatCarryIt is the same rule asserted on the
+// ink rather than on the fragment, because a fragment that carries an edge and
+// does not draw it is exactly as wrong as one that does not carry it.
+//
+// A solid border of one colour on a box broken over three lines is eight bands
+// rather than twelve: the fragment in the middle has neither a left edge nor a
+// right one.
+// TestInlineBorderIsDrawnOnTheSlicesThatCarryIt is the same rule asserted on the
+// ink rather than on the fragment, because a fragment that carries an edge and
+// does not draw it is exactly as wrong as one that does not carry it.
+//
+// A solid border of one colour on a box broken over three lines is eight bands
+// rather than twelve: the fragment in the middle has neither a left edge nor a
+// right one.
+// TestInlineBorderIsDrawnOnTheSlicesThatCarryIt is the same rule asserted on the
+// ink rather than on the fragment, because a fragment that carries an edge and
+// does not draw it is exactly as wrong as one that does not carry it.
+//
+// A solid border of one colour on a box broken over three lines is eight bands
+// rather than twelve: the fragment in the middle has neither a left edge nor a
+// right one.
 func TestInlineBorderIsDrawnOnTheSlicesThatCarryIt(t *testing.T) {
 	root := layoutOf(t, 500, `<p id="p"><span id="s">ab ab ab</span></p>`,
 		courierInk+`#s { border: 50px solid blue }`)
@@ -280,6 +433,36 @@ func TestInlineBorderIsDrawnOnTheSlicesThatCarryIt(t *testing.T) {
 	}
 }
 
+// TestInlineBorderSlicesOverABlock is §8.6's slice model over the other kind of
+// break: a block inside an inline splits the box into pieces, and the piece that
+// begins it carries the left border while the piece that ends it carries the
+// right.
+//
+// It needs a test of its own because the flags are a different mechanism from
+// the line-by-line one. A piece is a box in its own right, so it is both the
+// first and the last fragment of *itself* — which is exactly what would give
+// each piece a border on all four sides. A planted defect that removed the two
+// flags from the reckoning was caught by nothing until this was written.
+// TestInlineBorderSlicesOverABlock is §8.6's slice model over the other kind of
+// break: a block inside an inline splits the box into pieces, and the piece that
+// begins it carries the left border while the piece that ends it carries the
+// right.
+//
+// It needs a test of its own because the flags are a different mechanism from
+// the line-by-line one. A piece is a box in its own right, so it is both the
+// first and the last fragment of *itself* — which is exactly what would give
+// each piece a border on all four sides. A planted defect that removed the two
+// flags from the reckoning was caught by nothing until this was written.
+// TestInlineBorderSlicesOverABlock is §8.6's slice model over the other kind of
+// break: a block inside an inline splits the box into pieces, and the piece that
+// begins it carries the left border while the piece that ends it carries the
+// right.
+//
+// It needs a test of its own because the flags are a different mechanism from
+// the line-by-line one. A piece is a box in its own right, so it is both the
+// first and the last fragment of *itself* — which is exactly what would give
+// each piece a border on all four sides. A planted defect that removed the two
+// flags from the reckoning was caught by nothing until this was written.
 // TestInlineBorderSlicesOverABlock is §8.6's slice model over the other kind of
 // break: a block inside an inline splits the box into pieces, and the piece that
 // begins it carries the left border while the piece that ends it carries the
@@ -320,6 +503,15 @@ func TestInlineBorderSlicesOverABlock(t *testing.T) {
 	}
 }
 
+// TestInlineBackgroundIsPaintedUnderItsOwnText is Appendix E's inline layer: a
+// box's background goes down before the text that sits on it, and a nested box's
+// background goes down over the box it is inside.
+// TestInlineBackgroundIsPaintedUnderItsOwnText is Appendix E's inline layer: a
+// box's background goes down before the text that sits on it, and a nested box's
+// background goes down over the box it is inside.
+// TestInlineBackgroundIsPaintedUnderItsOwnText is Appendix E's inline layer: a
+// box's background goes down before the text that sits on it, and a nested box's
+// background goes down over the box it is inside.
 // TestInlineBackgroundIsPaintedUnderItsOwnText is Appendix E's inline layer: a
 // box's background goes down before the text that sits on it, and a nested box's
 // background goes down over the box it is inside.
@@ -365,6 +557,27 @@ func TestInlineBackgroundIsPaintedUnderItsOwnText(t *testing.T) {
 // border and all — and it is an inline-level box by every test a walk up the
 // tree can make. So a chain that kept it would paint <p>'s background a second
 // time, over its own text and at the height of its font rather than of its box.
+// TestBlockBackgroundIsNotPaintedTwice is the trap this feature walks straight
+// into, and it is a trap about the box tree rather than about painting.
+//
+// A text box carries its parent element's *whole* computed style — background,
+// border and all — and it is an inline-level box by every test a walk up the
+// tree can make. So a chain that kept it would paint <p>'s background a second
+// time, over its own text and at the height of its font rather than of its box.
+// TestBlockBackgroundIsNotPaintedTwice is the trap this feature walks straight
+// into, and it is a trap about the box tree rather than about painting.
+//
+// A text box carries its parent element's *whole* computed style — background,
+// border and all — and it is an inline-level box by every test a walk up the
+// tree can make. So a chain that kept it would paint <p>'s background a second
+// time, over its own text and at the height of its font rather than of its box.
+// TestBlockBackgroundIsNotPaintedTwice is the trap this feature walks straight
+// into, and it is a trap about the box tree rather than about painting.
+//
+// A text box carries its parent element's *whole* computed style — background,
+// border and all — and it is an inline-level box by every test a walk up the
+// tree can make. So a chain that kept it would paint <p>'s background a second
+// time, over its own text and at the height of its font rather than of its box.
 func TestBlockBackgroundIsNotPaintedTwice(t *testing.T) {
 	ops := Paint(layoutOf(t, 4000, `<p id="p" style="background: green">ab</p>`,
 		courierInk))
@@ -382,6 +595,15 @@ func TestBlockBackgroundIsNotPaintedTwice(t *testing.T) {
 // TestInlineWithNothingToDrawMakesNoFragment is the other half of the same
 // question, and it is what keeps this feature from costing every document that
 // does not use it.
+// TestInlineWithNothingToDrawMakesNoFragment is the other half of the same
+// question, and it is what keeps this feature from costing every document that
+// does not use it.
+// TestInlineWithNothingToDrawMakesNoFragment is the other half of the same
+// question, and it is what keeps this feature from costing every document that
+// does not use it.
+// TestInlineWithNothingToDrawMakesNoFragment is the other half of the same
+// question, and it is what keeps this feature from costing every document that
+// does not use it.
 func TestInlineWithNothingToDrawMakesNoFragment(t *testing.T) {
 	root := layoutOf(t, 4000, `<p id="p">a<em>b</em><span>c</span></p>`, courierInk)
 	for i, line := range linesOf(t, root, "p") {
@@ -392,6 +614,15 @@ func TestInlineWithNothingToDrawMakesNoFragment(t *testing.T) {
 	}
 }
 
+// TestInlineBackgroundCoversAnAtomicInline pins where the chain starts. An
+// inline-block has a fragment of its own and paints its own background; what the
+// span around it must do is cover the room the inline-block takes.
+// TestInlineBackgroundCoversAnAtomicInline pins where the chain starts. An
+// inline-block has a fragment of its own and paints its own background; what the
+// span around it must do is cover the room the inline-block takes.
+// TestInlineBackgroundCoversAnAtomicInline pins where the chain starts. An
+// inline-block has a fragment of its own and paints its own background; what the
+// span around it must do is cover the room the inline-block takes.
 // TestInlineBackgroundCoversAnAtomicInline pins where the chain starts. An
 // inline-block has a fragment of its own and paints its own background; what the
 // span around it must do is cover the room the inline-block takes.
@@ -414,6 +645,18 @@ func TestInlineBackgroundCoversAnAtomicInline(t *testing.T) {
 // assertion is on the specific colour rather than on the number of operations,
 // because "nothing was painted" is the assertion this repository has most often
 // found passing for the wrong reason.
+// TestHiddenInlineBoxPaintsNothing is §11.2 reaching the new marks. The
+// assertion is on the specific colour rather than on the number of operations,
+// because "nothing was painted" is the assertion this repository has most often
+// found passing for the wrong reason.
+// TestHiddenInlineBoxPaintsNothing is §11.2 reaching the new marks. The
+// assertion is on the specific colour rather than on the number of operations,
+// because "nothing was painted" is the assertion this repository has most often
+// found passing for the wrong reason.
+// TestHiddenInlineBoxPaintsNothing is §11.2 reaching the new marks. The
+// assertion is on the specific colour rather than on the number of operations,
+// because "nothing was painted" is the assertion this repository has most often
+// found passing for the wrong reason.
 func TestHiddenInlineBoxPaintsNothing(t *testing.T) {
 	root := layoutOf(t, 4000,
 		`<p id="p"><span style="background: green; border: 10px solid blue;
@@ -427,6 +670,15 @@ func TestHiddenInlineBoxPaintsNothing(t *testing.T) {
 	}
 }
 
+// TestInlineBackgroundMovesWithRelativePosition is §9.4.3 on a box that has no
+// fragment in the flow: the offset moves the text, and the background has to go
+// with it or the highlight comes away from the words.
+// TestInlineBackgroundMovesWithRelativePosition is §9.4.3 on a box that has no
+// fragment in the flow: the offset moves the text, and the background has to go
+// with it or the highlight comes away from the words.
+// TestInlineBackgroundMovesWithRelativePosition is §9.4.3 on a box that has no
+// fragment in the flow: the offset moves the text, and the background has to go
+// with it or the highlight comes away from the words.
 // TestInlineBackgroundMovesWithRelativePosition is §9.4.3 on a box that has no
 // fragment in the flow: the offset moves the text, and the background has to go
 // with it or the highlight comes away from the words.
@@ -455,36 +707,19 @@ func TestInlineBackgroundMovesWithRelativePosition(t *testing.T) {
 // An inline box's vertical padding is kept out of layout by §8.4, so the
 // scale-to-fit calculation cannot have accounted for it — which is exactly the
 // argument for the check not reading it.
-func TestInlineBackgroundAboveThePageTopStillProducesADocument(t *testing.T) {
-	res, err := Render(Input{
-		HTML: `<p id="p"><span style="background: green; padding: 60px 0">ab</span></p>`,
-		CSS: []Stylesheet{{Source: `html, body, p { margin: 0; padding: 0 }
-			p { font-size: 40px; line-height: 10px }`}},
-	}, Options{})
-	if err != nil {
-		t.Fatalf("rendering: %v", err)
-	}
-	if res.Document == nil {
-		t.Fatalf("no document was produced: %v", res.Findings)
-	}
-	for _, f := range res.Findings {
-		if f.Rule == RuleOverflowPage {
-			t.Errorf("an inline box's padding was counted as content leaving the "+
-				"page: %s", f.Error())
-		}
-	}
-	// And the guard still sees a box in the same place, which is what says the
-	// exemption is about this mark and not about the check.
-	rec := NewRecorder(nil)
-	checkPageOverflow(rec, []Op{FillRect{
-		Rect:  Rect{Y: mustPx(-10), W: mustPx(10), H: mustPx(5)},
-		Color: green,
-	}}, A4.Content(), 1)
-	if rec.Count(RuleOverflowPage) == 0 {
-		t.Error("a box above the page top was not reported; the guard is now blind")
-	}
-}
-
+// TestInlineDecorationsAreBounded watches the cap fire.
+//
+// The count is a product of the nesting and the number of lines, and neither the
+// box cap nor the parser's nesting cap bounds a product. The document below is
+// small and asks for far more fragments than the lowered bound allows.
+// TestInlineBackgroundAboveThePageTopStillProducesADocument is the guardrail
+// question, and it is the same one an overline raised: the overflow-page check
+// is an Error, so a mark it counts wrongly is not a cosmetic fault but a refusal
+// to produce any document at all.
+//
+// An inline box's vertical padding is kept out of layout by §8.4, so the
+// scale-to-fit calculation cannot have accounted for it — which is exactly the
+// argument for the check not reading it.
 // TestInlineDecorationsAreBounded watches the cap fire.
 //
 // The count is a product of the nesting and the number of lines, and neither the
@@ -528,6 +763,18 @@ func TestInlineDecorationsAreBounded(t *testing.T) {
 	}
 }
 
+// TestInlineDecorationBoundIsNotReachedByAnOrdinaryDocument is the other side of
+// the bound: a cap that fires on real documents is a bug, and one that has only
+// ever been observed not to fire is one nobody knows works. The test above
+// watches it fire; this one pins that the counting is of boxes that *draw*.
+// TestInlineDecorationBoundIsNotReachedByAnOrdinaryDocument is the other side of
+// the bound: a cap that fires on real documents is a bug, and one that has only
+// ever been observed not to fire is one nobody knows works. The test above
+// watches it fire; this one pins that the counting is of boxes that *draw*.
+// TestInlineDecorationBoundIsNotReachedByAnOrdinaryDocument is the other side of
+// the bound: a cap that fires on real documents is a bug, and one that has only
+// ever been observed not to fire is one nobody knows works. The test above
+// watches it fire; this one pins that the counting is of boxes that *draw*.
 // TestInlineDecorationBoundIsNotReachedByAnOrdinaryDocument is the other side of
 // the bound: a cap that fires on real documents is a bug, and one that has only
 // ever been observed not to fire is one nobody knows works. The test above

@@ -1,4 +1,4 @@
-package render
+package layout
 
 import (
 	"os"
@@ -6,8 +6,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/mgilbir/pdf0/fonts"
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/shape"
+	"github.com/mgilbir/forme/style"
 )
 
 // The checks on blockglyph_test.go, which is a piece of the oracle and so has to
@@ -458,7 +458,7 @@ func simpleGlyph(nContours int16, pts [][2]int, onCurve []bool) []byte {
 //
 // The face and its table are built once. Every one of these tests wants the
 // same font, and parsing 278 outlines per test would be paid for a dozen times.
-func ahemFace(t *testing.T) *fonts.Face {
+func ahemFace(t *testing.T) *shape.Face {
 	t.Helper()
 	dir := wptDir(t)
 	ahemOnce.Do(func() {
@@ -466,7 +466,7 @@ func ahemFace(t *testing.T) *fonts.Face {
 		if err != nil {
 			return
 		}
-		face, err := fonts.Load(data)
+		face, err := shape.Load(data)
 		if err != nil {
 			return
 		}
@@ -484,7 +484,7 @@ func ahemFace(t *testing.T) *fonts.Face {
 
 var (
 	ahemOnce       sync.Once
-	ahemTestFace   *fonts.Face
+	ahemTestFace   *shape.Face
 	ahemTestBlocks *blockFont
 )
 

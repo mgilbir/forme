@@ -1,9 +1,9 @@
-package render
+package layout
 
 import (
 	"strings"
 
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/style"
 )
 
 // text-align: where a line box sits in the width it was given.

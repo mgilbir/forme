@@ -1,9 +1,9 @@
-package render
+package layout
 
 import (
 	"testing"
 
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/style"
 )
 
 // The arithmetic of §17.5.2's column widths, tested against the functions

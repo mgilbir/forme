@@ -1,12 +1,12 @@
-package render
+package layout
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/mgilbir/pdf0/fonts"
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/shape"
+	"github.com/mgilbir/forme/style"
 )
 
 // The metrics this engine used to guess at, and now asks the font for.
@@ -23,11 +23,11 @@ import (
 // every glyph an em square, ascent 800, descent -200, x-height 800, all out of
 // 1000 units. A face invented for tests is the right one to assert against.
 type ahemSet struct {
-	ahem     *fonts.Face
+	ahem     *shape.Face
 	standard FontSet
 }
 
-func (a ahemSet) Face(family string, bold, italic bool) (*fonts.Face, bool) {
+func (a ahemSet) Face(family string, bold, italic bool) (*shape.Face, bool) {
 	if family == "Ahem" {
 		return a.ahem, true
 	}
@@ -44,7 +44,7 @@ func loadAhem(t *testing.T) FontSet {
 	if err != nil {
 		t.Skipf("no Ahem: %v", err)
 	}
-	face, err := fonts.Load(data)
+	face, err := shape.Load(data)
 	if err != nil {
 		t.Fatalf("loading Ahem: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestNormalLineHeightIncludesTheLineGap(t *testing.T) {
 	if err != nil {
 		t.Skipf("no CanvasTest.ttf: %v", err)
 	}
-	face, err := fonts.Load(data)
+	face, err := shape.Load(data)
 	if err != nil {
 		t.Fatalf("loading CanvasTest: %v", err)
 	}
@@ -166,12 +166,12 @@ func TestNormalLineHeightPrefersTheFontsOwnMetricsOverItsGlyphBox(t *testing.T) 
 	if err != nil {
 		t.Skipf("no Noto Sans: %v", err)
 	}
-	face, err := fonts.Load(data)
+	face, err := shape.Load(data)
 	if err != nil {
 		t.Fatalf("loading Noto Sans: %v", err)
 	}
 	d := face.Descriptor()
-	if !d.Has(fonts.MetricLineGap) {
+	if !d.Has(shape.MetricLineGap) {
 		t.Skip("this face states no line gap, so it is the fallback case")
 	}
 	upem := float64(face.UnitsPerEm())

@@ -1,11 +1,8 @@
-package render
+package layout
 
 import (
-	"bytes"
 	"strings"
 	"testing"
-
-	pdf0 "github.com/mgilbir/pdf0"
 )
 
 // text-transform, CSS Text §2.1.
@@ -17,6 +14,8 @@ import (
 // page. The width assertions are the other half — a transform that changed the
 // drawing and not the measurement would leave the lines broken for the original
 // text.
+
+// drawn joins the text of every run painted, in painting order.
 
 // drawn joins the text of every run painted, in painting order.
 func drawn(ops []Op) string {
@@ -126,34 +125,5 @@ func TestTextTransformIsInherited(t *testing.T) {
 		noDefaults+`#o { text-transform: uppercase }`)
 	if got := drawn(ops); got != "QUIET" {
 		t.Errorf("an inherited text-transform drew %q, want %q", got, "QUIET")
-	}
-}
-
-func TestTextTransformReachesTheExtractedText(t *testing.T) {
-	// The PDF carries what was drawn, so a transformed heading extracts in the
-	// case it was set in. This pins the consequence rather than leaving it to be
-	// discovered by someone copying text out of a page.
-	res, err := Render(Input{
-		HTML: `<div id="p">quiet</div>`,
-		CSS:  []Stylesheet{{Source: `#p { text-transform: uppercase }`}},
-	}, Options{})
-	if err != nil {
-		t.Fatalf("rendering: %v", err)
-	}
-	if res.Document == nil {
-		t.Fatalf("no document: %v", res.Findings)
-	}
-	var buf bytes.Buffer
-	if err := res.Document.Write(&buf); err != nil {
-		t.Fatalf("writing: %v", err)
-	}
-	doc, err := pdf0.Read(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
-	if err != nil {
-		t.Fatalf("reading back: %v", err)
-	}
-	text := doc.ExtractText()
-	if !strings.Contains(text, "QUIET") {
-		t.Errorf("the page's text is %q; the transformed text is what is drawn "+
-			"and so what is extracted", text)
 	}
 }

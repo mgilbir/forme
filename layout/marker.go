@@ -1,11 +1,11 @@
-package render
+package layout
 
 import (
 	"strconv"
 	"strings"
 
-	"github.com/mgilbir/pdf0/fonts"
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/shape"
+	"github.com/mgilbir/forme/style"
 )
 
 // List markers: the bullet or the number a list item generates.
@@ -19,7 +19,7 @@ import (
 // Marker is the bullet or number drawn beside a list item.
 type Marker struct {
 	Text string
-	Face *fonts.Face
+	Face *shape.Face
 	Size style.Unit
 	// At is the origin of the marker's baseline, relative to the fragment's
 	// border box.
@@ -84,7 +84,7 @@ func markerColour(b *Box) style.RGBA {
 }
 
 // markerRun is the marker's text and the face to set it in, for either position.
-func (l *layouter) markerRun(b *Box) (string, *fonts.Face, bool) {
+func (l *layouter) markerRun(b *Box) (string, *shape.Face, bool) {
 	if !b.ListItem {
 		return "", nil, false
 	}

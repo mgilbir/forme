@@ -1,4 +1,4 @@
-package render
+package layout
 
 import (
 	"fmt"
@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mgilbir/pdf0/fonts"
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/shape"
+	"github.com/mgilbir/forme/style"
 )
 
 // The layout engine against an external oracle: the W3C Web Platform Tests.
@@ -1281,7 +1281,7 @@ func (s *suiteResolver) Resolve(ref string) ([]byte, error) {
 // a function of the font *file* and the file is the same one for every document
 // that links ahem.css. What is not shared is the face: each document parses its
 // own, which is what a face records glyphs for.
-func registerDocumentBlockFonts(built Built, res ResourceResolver) []*fonts.Face {
+func registerDocumentBlockFonts(built Built, res ResourceResolver) []*shape.Face {
 	var set *documentFonts
 	switch f := built.Fonts.(type) {
 	case *documentFonts:
@@ -1291,7 +1291,7 @@ func registerDocumentBlockFonts(built Built, res ResourceResolver) []*fonts.Face
 	default:
 		return nil
 	}
-	var added []*fonts.Face
+	var added []*shape.Face
 	for _, df := range set.faces {
 		if _, have := blockFonts[df.face]; have {
 			continue
@@ -1313,7 +1313,7 @@ func registerDocumentBlockFonts(built Built, res ResourceResolver) []*fonts.Face
 	return added
 }
 
-func unregisterBlockFonts(faces []*fonts.Face) {
+func unregisterBlockFonts(faces []*shape.Face) {
 	for _, f := range faces {
 		delete(blockFonts, f)
 	}

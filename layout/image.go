@@ -1,4 +1,4 @@
-package render
+package layout
 
 import (
 	"bytes"
@@ -19,7 +19,7 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/style"
 )
 
 // Loading the images an <img> names.

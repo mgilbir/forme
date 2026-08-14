@@ -1,11 +1,11 @@
-package render
+package layout
 
 import (
 	"strings"
 	"testing"
 
-	"github.com/mgilbir/pdf0/fonts"
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/shape"
+	"github.com/mgilbir/forme/style"
 )
 
 // Inline layout.
@@ -38,7 +38,7 @@ func lineTexts(lines []LineFragment) []string {
 // TestTextIsMeasuredAgainstTheFace pins that a width comes from the font rather
 // than from a guess. The number is the specification's own metric for the face.
 func TestTextIsMeasuredAgainstTheFace(t *testing.T) {
-	face, err := fonts.Standard("Helvetica")
+	face, err := shape.Standard("Helvetica")
 	if err != nil {
 		t.Fatalf("loading Helvetica: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestBaselineSplitsTheLeading(t *testing.T) {
 		noDefaults+`p { font-size: 100px; font-family: Helvetica; line-height: 200px }`)
 
 	line := linesOf(t, root, "p")[0]
-	face, _ := fonts.Standard("Helvetica")
+	face, _ := shape.Standard("Helvetica")
 	// The same two numbers the line box is measured from — the glyph box for a
 	// face like this one that states no line gap — because the leading is the
 	// difference between the line box and the type, and asking the question two
@@ -538,7 +538,7 @@ func TestFontFamilyListIsTriedInOrder(t *testing.T) {
 }
 
 // TestGenericFamiliesResolve pins the three families CSS guarantees, which is
-// what makes "font-family: sans-serif" work with no caller-supplied fonts.
+// what makes "font-family: sans-serif" work with no caller-supplied shape.
 func TestGenericFamiliesResolve(t *testing.T) {
 	cases := map[string]string{
 		"serif":      "Times",

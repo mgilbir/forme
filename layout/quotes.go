@@ -1,9 +1,9 @@
-package render
+package layout
 
 import (
 	"strings"
 
-	"github.com/mgilbir/pdf0/css"
+	"github.com/mgilbir/forme/css"
 )
 
 // Quotation marks: CSS 2.1 §12.3, the "quotes" property and the four keywords

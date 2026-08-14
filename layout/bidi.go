@@ -1,11 +1,11 @@
-package render
+package layout
 
 import (
 	"sort"
 	"strings"
 
 	"github.com/mgilbir/forme/bidi"
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/style"
 )
 
 // Bidirectional text: the direction and unicode-bidi properties, and the

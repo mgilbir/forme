@@ -1,10 +1,10 @@
-package render
+package layout
 
 import (
 	"strings"
 
-	"github.com/mgilbir/pdf0/fonts"
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/shape"
+	"github.com/mgilbir/forme/style"
 )
 
 // text-decoration: the lines drawn through, under and over a run of text.
@@ -278,7 +278,7 @@ type decorationMetrics struct {
 // See the file comment for where the numbers come from. A face with no usable
 // units-per-em falls back to the same fractions of the font size, which is what
 // the standard faces would have given anyway.
-func decorationMetricsFor(face *fonts.Face, size style.Unit) decorationMetrics {
+func decorationMetricsFor(face *shape.Face, size style.Unit) decorationMetrics {
 	// 0.05em, the thickness every standard face declares. It is floored at one
 	// layout unit so that a decoration on very small text is thin rather than
 	// absent: a band of zero height paints nothing at all, and an underline that
@@ -315,7 +315,7 @@ func decorationMetricsFor(face *fonts.Face, size style.Unit) decorationMetrics {
 	// a thickness that rounds to nothing at a small size, and a decoration that
 	// silently disappears below some font size is worse than one a fraction too
 	// thick.
-	if d.Has(fonts.MetricUnderline) && d.UnderlineThickness > 0 {
+	if d.Has(shape.MetricUnderline) && d.UnderlineThickness > 0 {
 		m.thickness = style.Max(size.Mul(float64(d.UnderlineThickness)/upem), 1)
 		m.underline = style.Unit(0).Sub(size.Mul(float64(d.UnderlinePosition) / upem))
 	}
@@ -334,7 +334,7 @@ func decorationMetricsFor(face *fonts.Face, size style.Unit) decorationMetrics {
 	// heights for the same reason.
 	// The line-through, when the face states one. OS/2 gives the position of the
 	// stroke's top and its size, in the same convention as the underline.
-	if d.Has(fonts.MetricStrikeout) && d.StrikeoutSize > 0 {
+	if d.Has(shape.MetricStrikeout) && d.StrikeoutSize > 0 {
 		strikeThickness := style.Max(size.Mul(float64(d.StrikeoutSize)/upem), 1)
 		m.strike = style.Unit(0).Sub(size.Mul(float64(d.StrikeoutPosition) / upem))
 		// A strikeout has a size of its own and it is not always the underline's.
@@ -353,7 +353,7 @@ func decorationMetricsFor(face *fonts.Face, size style.Unit) decorationMetrics {
 	// middle-aligned box at different heights for the same reason.
 	xHeight := size.Mul(0.5)
 	switch {
-	case d.Has(fonts.MetricXHeight) && d.XHeight > 0:
+	case d.Has(shape.MetricXHeight) && d.XHeight > 0:
 		xHeight = size.Mul(float64(d.XHeight) / upem)
 	case d.CapHeight > 0:
 		xHeight = size.Mul(float64(d.CapHeight) / upem * 0.7)

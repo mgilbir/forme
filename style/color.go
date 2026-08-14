@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mgilbir/pdf0/css"
+	"github.com/mgilbir/forme/css"
 )
 
 // Colour, from CSS Color Module Level 4.

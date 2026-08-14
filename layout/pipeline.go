@@ -1,11 +1,11 @@
-package render
+package layout
 
 import (
 	"strings"
 
-	"github.com/mgilbir/pdf0/css"
-	"github.com/mgilbir/pdf0/html"
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/html"
+	"github.com/mgilbir/forme/style"
 )
 
 // Running the stages that exist, and translating what each of them says into

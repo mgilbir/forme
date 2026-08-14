@@ -3,7 +3,7 @@ package style
 import (
 	"testing"
 
-	"github.com/mgilbir/pdf0/html"
+	"github.com/mgilbir/forme/html"
 )
 
 // Presentational hints, and above all where they sit in the cascade.

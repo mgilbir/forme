@@ -1,10 +1,10 @@
-package render
+package layout
 
 import (
 	"strings"
 	"testing"
 
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/style"
 )
 
 // Tables, CSS 2.1 §17.

@@ -1,10 +1,10 @@
-package render
+package layout
 
 import (
 	"fmt"
 	"strings"
 
-	"github.com/mgilbir/pdf0/html"
+	"github.com/mgilbir/forme/html"
 )
 
 // The CSS a document carries, and the CSS it points at.

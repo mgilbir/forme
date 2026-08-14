@@ -3,7 +3,7 @@ package style
 import (
 	"strings"
 
-	"github.com/mgilbir/pdf0/css"
+	"github.com/mgilbir/forme/css"
 )
 
 // calc(), from CSS Values and Units.

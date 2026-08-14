@@ -1,11 +1,11 @@
-package render
+package layout
 
 import (
 	"strings"
 
-	"github.com/mgilbir/pdf0/css"
-	"github.com/mgilbir/pdf0/fonts"
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/shape"
+	"github.com/mgilbir/forme/style"
 )
 
 // Block layout: the fifth of §3's stages, turning boxes into fragments with a
@@ -164,7 +164,7 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 		rec: rec, avail: avail,
 		lengths:             map[lengthKey]style.Length{},
 		fonts:               map[fontKey]resolvedFont{},
-		textFaces:           map[*Box]*fonts.Face{},
+		textFaces:           map[*Box]*shape.Face{},
 		measured:            map[measureKey]style.Unit{},
 		reportedScripts:     map[string]bool{},
 		reportedGlyphs:      map[string]bool{},
@@ -288,7 +288,7 @@ type layouter struct {
 	lengths map[lengthKey]style.Length
 	// textFaces memoizes the face a text box is actually set in, which is not
 	// the family's face when the family cannot cover the text. See faceForText.
-	textFaces map[*Box]*fonts.Face
+	textFaces map[*Box]*shape.Face
 	// fonts and measured memoize the two things inline layout asks for most: a
 	// face for a style, and the width of a string in one.
 	fonts    map[fontKey]resolvedFont
@@ -412,7 +412,7 @@ type lengthKey struct {
 	// two boxes at the same size in different fonts do not share an answer.
 	// Leaving it out would have made the first font to parse "40ch" decide it
 	// for every other — a memoization bug, which is the kind that produces a
-	// wrong page only when a document uses two fonts.
+	// wrong page only when a document uses two shape.
 	zeroAdvance style.Unit
 }
 
@@ -1804,7 +1804,7 @@ func (l *layouter) xHeightOf(b *Box) (style.Unit, bool) {
 	// works only while "not stated" and "stated as zero" happen to be the same
 	// bytes, and telling those apart is the entire reason Declared exists. Four
 	// bugs in this engine have come from reading a zero as an answer.
-	if upem <= 0 || !d.Has(fonts.MetricXHeight) || d.XHeight <= 0 {
+	if upem <= 0 || !d.Has(shape.MetricXHeight) || d.XHeight <= 0 {
 		return 0, false
 	}
 	return b.FontSize.Mul(float64(d.XHeight) / upem), true

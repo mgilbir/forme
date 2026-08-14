@@ -1,12 +1,12 @@
-package render
+package layout
 
 import (
 	"image"
 	"image/color"
 	"testing"
 
-	"github.com/mgilbir/pdf0/fonts"
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/shape"
+	"github.com/mgilbir/forme/style"
 )
 
 // Tests of the picture comparison itself.
@@ -345,14 +345,14 @@ func TestPictureBlendsTranslucency(t *testing.T) {
 
 // picFacedText is a run in a real face, which is what joinRuns needs: a run's
 // advance is the face's, and a faceless run is deliberately never joined.
-func picFacedText(face *fonts.Face, s string, x, y float64, c style.RGBA) DrawText {
+func picFacedText(face *shape.Face, s string, x, y float64, c style.RGBA) DrawText {
 	return DrawText{
 		Text: s, At: Point{picPx(x), picPx(y)}, Size: picPx(16), Face: face, Color: c,
 	}
 }
 
 // picFace is the standard serif face, and the advance of a string in it at 16px.
-func picFace(t *testing.T) (*fonts.Face, func(string) float64) {
+func picFace(t *testing.T) (*shape.Face, func(string) float64) {
 	t.Helper()
 	face, ok := StandardFonts().Face("serif", false, false)
 	if !ok || face == nil {
@@ -740,7 +740,7 @@ func TestPictureIgnoresSpaceAtTheEndsOfARun(t *testing.T) {
 // have to keep comparing different, or the sharpening would be a hole: the same
 // letters drawn the *other* way round are not the same page.
 func TestPictureComparesTheGlyphsAndNotTheString(t *testing.T) {
-	face, err := fonts.Standard("Helvetica")
+	face, err := shape.Standard("Helvetica")
 	if err != nil {
 		t.Fatalf("loading a standard face: %v", err)
 	}
@@ -790,7 +790,7 @@ func TestPictureComparesTheGlyphsAndNotTheString(t *testing.T) {
 // The direction rather than the script is what the join turns on, so ASCII in a
 // run marked right-to-left tests it exactly and needs no Hebrew face.
 func TestPictureJoinsRightToLeftRunsInLogicalOrder(t *testing.T) {
-	face, err := fonts.Standard("Helvetica")
+	face, err := shape.Standard("Helvetica")
 	if err != nil {
 		t.Skipf("no Helvetica: %v", err)
 	}
@@ -828,7 +828,7 @@ func TestPictureJoinsRightToLeftRunsInLogicalOrder(t *testing.T) {
 // not treat a format character as white space — so the run counted as a mark
 // that the reference had no counterpart for.
 func TestPictureIgnoresRunsThatDrawNothing(t *testing.T) {
-	face, err := fonts.Standard("Helvetica")
+	face, err := shape.Standard("Helvetica")
 	if err != nil {
 		t.Skipf("no Helvetica: %v", err)
 	}
@@ -861,7 +861,7 @@ func TestPictureIgnoresRunsThatDrawNothing(t *testing.T) {
 //
 // The second half is what stops that being a way of agreeing with anything.
 func TestPictureJoinsAcrossDirection(t *testing.T) {
-	face, err := fonts.Standard("Helvetica")
+	face, err := shape.Standard("Helvetica")
 	if err != nil {
 		t.Skipf("no Helvetica: %v", err)
 	}
@@ -909,7 +909,7 @@ func TestPictureJoinsAcrossDirection(t *testing.T) {
 // stopped abutting, and the group they should have formed became two marks that
 // the reference had one of.
 func TestPictureDoesNotChargeSpacingToAControl(t *testing.T) {
-	face, err := fonts.Standard("Helvetica")
+	face, err := shape.Standard("Helvetica")
 	if err != nil {
 		t.Skipf("no Helvetica: %v", err)
 	}

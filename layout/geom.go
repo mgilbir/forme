@@ -1,9 +1,9 @@
-package render
+package layout
 
 import (
 	"fmt"
 
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/style"
 )
 
 // Geometry, in layout units.

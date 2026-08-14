@@ -1,10 +1,10 @@
-package render
+package layout
 
 import (
 	"strings"
 	"testing"
 
-	"github.com/mgilbir/pdf0/style"
+	"github.com/mgilbir/forme/style"
 )
 
 // The collapsing border model, CSS 2.1 §17.6.2.
