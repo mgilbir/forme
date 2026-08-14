@@ -38,9 +38,6 @@ func markersOf(t *testing.T, htmlSrc string, cssSrc ...string) []string {
 }
 
 // TestBulletsAndNumbers pins what each list-style-type generates.
-// TestBulletsAndNumbers pins what each list-style-type generates.
-// TestBulletsAndNumbers pins what each list-style-type generates.
-// TestBulletsAndNumbers pins what each list-style-type generates.
 func TestBulletsAndNumbers(t *testing.T) {
 	cases := map[string][]string{
 		"disc":                 {"•", "•", "•"},
@@ -72,15 +69,6 @@ func TestBulletsAndNumbers(t *testing.T) {
 // TestDefaultListStyles pins that the user-agent stylesheet gives <ul> a bullet
 // and <ol> a number, which is what makes a list look like a list with no author
 // CSS at all.
-// TestDefaultListStyles pins that the user-agent stylesheet gives <ul> a bullet
-// and <ol> a number, which is what makes a list look like a list with no author
-// CSS at all.
-// TestDefaultListStyles pins that the user-agent stylesheet gives <ul> a bullet
-// and <ol> a number, which is what makes a list look like a list with no author
-// CSS at all.
-// TestDefaultListStyles pins that the user-agent stylesheet gives <ul> a bullet
-// and <ol> a number, which is what makes a list look like a list with no author
-// CSS at all.
 func TestDefaultListStyles(t *testing.T) {
 	if got := markersOf(t, "<ul><li>a</li><li>b</li></ul>"); len(got) != 2 || got[0] != "•" {
 		t.Errorf("an unstyled <ul> gave %v, want bullets", got)
@@ -90,12 +78,6 @@ func TestDefaultListStyles(t *testing.T) {
 	}
 }
 
-// TestNumberingCountsOnlyListItems pins that the counter advances for list items
-// and nothing else, so a heading between two items does not skip a number.
-// TestNumberingCountsOnlyListItems pins that the counter advances for list items
-// and nothing else, so a heading between two items does not skip a number.
-// TestNumberingCountsOnlyListItems pins that the counter advances for list items
-// and nothing else, so a heading between two items does not skip a number.
 // TestNumberingCountsOnlyListItems pins that the counter advances for list items
 // and nothing else, so a heading between two items does not skip a number.
 func TestNumberingCountsOnlyListItems(t *testing.T) {
@@ -115,15 +97,6 @@ func TestNumberingCountsOnlyListItems(t *testing.T) {
 // TestNumberingRestartsPerList pins that each list counts from one. A single
 // counter shared across the document would number the second list from where the
 // first left off.
-// TestNumberingRestartsPerList pins that each list counts from one. A single
-// counter shared across the document would number the second list from where the
-// first left off.
-// TestNumberingRestartsPerList pins that each list counts from one. A single
-// counter shared across the document would number the second list from where the
-// first left off.
-// TestNumberingRestartsPerList pins that each list counts from one. A single
-// counter shared across the document would number the second list from where the
-// first left off.
 func TestNumberingRestartsPerList(t *testing.T) {
 	got := markersOf(t,
 		`<ol><li>a</li><li>b</li></ol><ol><li>c</li><li>d</li></ol>`,
@@ -134,21 +107,6 @@ func TestNumberingRestartsPerList(t *testing.T) {
 	}
 }
 
-// TestAlphabeticIsBijective pins the numbering that ordinary base-26 arithmetic
-// gets wrong, and gets wrong at exactly the twenty-sixth item — far enough into
-// a list that nobody notices until a document has one.
-//
-// There is no zero digit, so after "z" comes "aa" rather than "ba".
-// TestAlphabeticIsBijective pins the numbering that ordinary base-26 arithmetic
-// gets wrong, and gets wrong at exactly the twenty-sixth item — far enough into
-// a list that nobody notices until a document has one.
-//
-// There is no zero digit, so after "z" comes "aa" rather than "ba".
-// TestAlphabeticIsBijective pins the numbering that ordinary base-26 arithmetic
-// gets wrong, and gets wrong at exactly the twenty-sixth item — far enough into
-// a list that nobody notices until a document has one.
-//
-// There is no zero digit, so after "z" comes "aa" rather than "ba".
 // TestAlphabeticIsBijective pins the numbering that ordinary base-26 arithmetic
 // gets wrong, and gets wrong at exactly the twenty-sixth item — far enough into
 // a list that nobody notices until a document has one.
@@ -171,12 +129,6 @@ func TestAlphabeticIsBijective(t *testing.T) {
 	}
 }
 
-// TestRomanNumerals pins the other numbering, including the subtractive forms
-// that a naive greedy renderer writes as IIII.
-// TestRomanNumerals pins the other numbering, including the subtractive forms
-// that a naive greedy renderer writes as IIII.
-// TestRomanNumerals pins the other numbering, including the subtractive forms
-// that a naive greedy renderer writes as IIII.
 // TestRomanNumerals pins the other numbering, including the subtractive forms
 // that a naive greedy renderer writes as IIII.
 func TestRomanNumerals(t *testing.T) {
@@ -209,30 +161,6 @@ func TestRomanNumerals(t *testing.T) {
 // implementation that walked the code points from alpha to omega would number
 // the eighteenth item ς and every item after it one letter out, which is far
 // enough into a list that only a document with one would show it.
-// TestLowerGreekSkipsFinalSigma pins the one thing about §12.6.2's Greek
-// alphabet that is not "the letters in order".
-//
-// U+03C2, final sigma, is the same letter as U+03C3 written at the end of a
-// word. It is not a numeral, so the sequence steps over it — and an
-// implementation that walked the code points from alpha to omega would number
-// the eighteenth item ς and every item after it one letter out, which is far
-// enough into a list that only a document with one would show it.
-// TestLowerGreekSkipsFinalSigma pins the one thing about §12.6.2's Greek
-// alphabet that is not "the letters in order".
-//
-// U+03C2, final sigma, is the same letter as U+03C3 written at the end of a
-// word. It is not a numeral, so the sequence steps over it — and an
-// implementation that walked the code points from alpha to omega would number
-// the eighteenth item ς and every item after it one letter out, which is far
-// enough into a list that only a document with one would show it.
-// TestLowerGreekSkipsFinalSigma pins the one thing about §12.6.2's Greek
-// alphabet that is not "the letters in order".
-//
-// U+03C2, final sigma, is the same letter as U+03C3 written at the end of a
-// word. It is not a numeral, so the sequence steps over it — and an
-// implementation that walked the code points from alpha to omega would number
-// the eighteenth item ς and every item after it one letter out, which is far
-// enough into a list that only a document with one would show it.
 func TestLowerGreekSkipsFinalSigma(t *testing.T) {
 	cases := map[int]string{
 		1: "α", 17: "ρ",
@@ -255,42 +183,6 @@ func TestLowerGreekSkipsFinalSigma(t *testing.T) {
 	}
 }
 
-// TestArmenianAndGeorgianAreAdditive pins the two systems §12.6.2 names.
-//
-// Additive, not positional: the number is the sum of the largest numerals that
-// fit, so each figure of a decimal number is a separate mark and 1979 is four of
-// them for a coincidental reason rather than because it has four digits. The
-// cases below are chosen so that a carry crosses each order of magnitude.
-//
-// They go through markerText rather than through additive, which is not a
-// stylistic choice: each system's range is written where the style is dispatched
-// and not in the table, so a test that called additive with the range as an
-// argument was asserting its own arithmetic. Narrowing Armenian to 1..999 in
-// markerText went straight past it.
-// TestArmenianAndGeorgianAreAdditive pins the two systems §12.6.2 names.
-//
-// Additive, not positional: the number is the sum of the largest numerals that
-// fit, so each figure of a decimal number is a separate mark and 1979 is four of
-// them for a coincidental reason rather than because it has four digits. The
-// cases below are chosen so that a carry crosses each order of magnitude.
-//
-// They go through markerText rather than through additive, which is not a
-// stylistic choice: each system's range is written where the style is dispatched
-// and not in the table, so a test that called additive with the range as an
-// argument was asserting its own arithmetic. Narrowing Armenian to 1..999 in
-// markerText went straight past it.
-// TestArmenianAndGeorgianAreAdditive pins the two systems §12.6.2 names.
-//
-// Additive, not positional: the number is the sum of the largest numerals that
-// fit, so each figure of a decimal number is a separate mark and 1979 is four of
-// them for a coincidental reason rather than because it has four digits. The
-// cases below are chosen so that a carry crosses each order of magnitude.
-//
-// They go through markerText rather than through additive, which is not a
-// stylistic choice: each system's range is written where the style is dispatched
-// and not in the table, so a test that called additive with the range as an
-// argument was asserting its own arithmetic. Narrowing Armenian to 1..999 in
-// markerText went straight past it.
 // TestArmenianAndGeorgianAreAdditive pins the two systems §12.6.2 names.
 //
 // Additive, not positional: the number is the sum of the largest numerals that
@@ -345,33 +237,6 @@ func TestArmenianAndGeorgianAreAdditive(t *testing.T) {
 // "ԱԱ" rather than "Բ" — and the tables are long enough that reading them is not
 // a check. Swapping two entries was planted and every value the tests happened to
 // name still came out right.
-// TestAdditiveNumeralsDescend pins the invariant the greedy sum rests on.
-//
-// additive walks the table once and takes each numeral as many times as it fits,
-// which is only the largest-first answer if the table is in strictly descending
-// order. A pair out of order is not a wrong mark in one place: it silently makes
-// every value that needs the smaller one write it repeatedly instead — 2 becomes
-// "ԱԱ" rather than "Բ" — and the tables are long enough that reading them is not
-// a check. Swapping two entries was planted and every value the tests happened to
-// name still came out right.
-// TestAdditiveNumeralsDescend pins the invariant the greedy sum rests on.
-//
-// additive walks the table once and takes each numeral as many times as it fits,
-// which is only the largest-first answer if the table is in strictly descending
-// order. A pair out of order is not a wrong mark in one place: it silently makes
-// every value that needs the smaller one write it repeatedly instead — 2 becomes
-// "ԱԱ" rather than "Բ" — and the tables are long enough that reading them is not
-// a check. Swapping two entries was planted and every value the tests happened to
-// name still came out right.
-// TestAdditiveNumeralsDescend pins the invariant the greedy sum rests on.
-//
-// additive walks the table once and takes each numeral as many times as it fits,
-// which is only the largest-first answer if the table is in strictly descending
-// order. A pair out of order is not a wrong mark in one place: it silently makes
-// every value that needs the smaller one write it repeatedly instead — 2 becomes
-// "ԱԱ" rather than "Բ" — and the tables are long enough that reading them is not
-// a check. Swapping two entries was planted and every value the tests happened to
-// name still came out right.
 func TestAdditiveNumeralsDescend(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -402,30 +267,6 @@ func TestAdditiveNumeralsDescend(t *testing.T) {
 	}
 }
 
-// TestEveryListStyleTypeIsDistinct pins that §12.6.2's list is complete.
-//
-// The fallback for an unrecognised type is a bullet, which is the right answer
-// for a type CSS does not define and the wrong one for a type it does: a
-// document asking for Armenian numerals got a disc, on every item, with nothing
-// reported. Two of the three that were missing needed a whole numbering system,
-// so the gap could not be seen by reading markerText — only by listing what the
-// specification names and checking each answers differently.
-// TestEveryListStyleTypeIsDistinct pins that §12.6.2's list is complete.
-//
-// The fallback for an unrecognised type is a bullet, which is the right answer
-// for a type CSS does not define and the wrong one for a type it does: a
-// document asking for Armenian numerals got a disc, on every item, with nothing
-// reported. Two of the three that were missing needed a whole numbering system,
-// so the gap could not be seen by reading markerText — only by listing what the
-// specification names and checking each answers differently.
-// TestEveryListStyleTypeIsDistinct pins that §12.6.2's list is complete.
-//
-// The fallback for an unrecognised type is a bullet, which is the right answer
-// for a type CSS does not define and the wrong one for a type it does: a
-// document asking for Armenian numerals got a disc, on every item, with nothing
-// reported. Two of the three that were missing needed a whole numbering system,
-// so the gap could not be seen by reading markerText — only by listing what the
-// specification names and checking each answers differently.
 // TestEveryListStyleTypeIsDistinct pins that §12.6.2's list is complete.
 //
 // The fallback for an unrecognised type is a bullet, which is the right answer
@@ -487,45 +328,6 @@ func TestEveryListStyleTypeIsDistinct(t *testing.T) {
 // "1." at 20px Ahem is two em squares, 40px, and the gap is half an em, 10px. So
 // the marker's origin is 50px to the left of the item's border box, which has no
 // border and no padding here.
-// TestOutsideMarkerSitsAWholeMarkerAndAGapToTheLeft pins the outside position's
-// arithmetic, which the sign test below does not.
-//
-// It earns its place the way this repository's tests are supposed to: halving
-// the marker's own width was planted and nothing failed, because every
-// assertion about the outside marker asked only whether its x was negative. With
-// the same gap on both sides of the property, one figure covers both — the
-// inside marker's text begins a marker-and-a-gap in from the content edge and
-// the outside marker's begins a marker-and-a-gap out from it.
-//
-// "1." at 20px Ahem is two em squares, 40px, and the gap is half an em, 10px. So
-// the marker's origin is 50px to the left of the item's border box, which has no
-// border and no padding here.
-// TestOutsideMarkerSitsAWholeMarkerAndAGapToTheLeft pins the outside position's
-// arithmetic, which the sign test below does not.
-//
-// It earns its place the way this repository's tests are supposed to: halving
-// the marker's own width was planted and nothing failed, because every
-// assertion about the outside marker asked only whether its x was negative. With
-// the same gap on both sides of the property, one figure covers both — the
-// inside marker's text begins a marker-and-a-gap in from the content edge and
-// the outside marker's begins a marker-and-a-gap out from it.
-//
-// "1." at 20px Ahem is two em squares, 40px, and the gap is half an em, 10px. So
-// the marker's origin is 50px to the left of the item's border box, which has no
-// border and no padding here.
-// TestOutsideMarkerSitsAWholeMarkerAndAGapToTheLeft pins the outside position's
-// arithmetic, which the sign test below does not.
-//
-// It earns its place the way this repository's tests are supposed to: halving
-// the marker's own width was planted and nothing failed, because every
-// assertion about the outside marker asked only whether its x was negative. With
-// the same gap on both sides of the property, one figure covers both — the
-// inside marker's text begins a marker-and-a-gap in from the content edge and
-// the outside marker's begins a marker-and-a-gap out from it.
-//
-// "1." at 20px Ahem is two em squares, 40px, and the gap is half an em, 10px. So
-// the marker's origin is 50px to the left of the item's border box, which has no
-// border and no padding here.
 func TestOutsideMarkerSitsAWholeMarkerAndAGapToTheLeft(t *testing.T) {
 	set := loadAhem(t)
 	built := Build(Input{HTML: "<ol><li>ab</li></ol>", CSS: []Stylesheet{{Source: `
@@ -569,39 +371,6 @@ func TestOutsideMarkerSitsAWholeMarkerAndAGapToTheLeft(t *testing.T) {
 // measured to fit.
 //
 // 20px Ahem: "1." is 40px, the gap 10px, "ab" 40px, so the float is 90px wide.
-// TestAShrinkToFitItemMakesRoomForItsInsideMarker pins that the marker seeds the
-// intrinsic-width measurement as well as the line building.
-//
-// A floated or inline-block list item is sized by its own content, and the
-// marker is content: an item measured without it is narrower than the marker it
-// then draws, so the first line wraps a word early and the marker hangs over the
-// edge. Seeding only the line builder was planted and every other test here
-// passed, because they all lay out in a page 600px wide where nothing has to be
-// measured to fit.
-//
-// 20px Ahem: "1." is 40px, the gap 10px, "ab" 40px, so the float is 90px wide.
-// TestAShrinkToFitItemMakesRoomForItsInsideMarker pins that the marker seeds the
-// intrinsic-width measurement as well as the line building.
-//
-// A floated or inline-block list item is sized by its own content, and the
-// marker is content: an item measured without it is narrower than the marker it
-// then draws, so the first line wraps a word early and the marker hangs over the
-// edge. Seeding only the line builder was planted and every other test here
-// passed, because they all lay out in a page 600px wide where nothing has to be
-// measured to fit.
-//
-// 20px Ahem: "1." is 40px, the gap 10px, "ab" 40px, so the float is 90px wide.
-// TestAShrinkToFitItemMakesRoomForItsInsideMarker pins that the marker seeds the
-// intrinsic-width measurement as well as the line building.
-//
-// A floated or inline-block list item is sized by its own content, and the
-// marker is content: an item measured without it is narrower than the marker it
-// then draws, so the first line wraps a word early and the marker hangs over the
-// edge. Seeding only the line builder was planted and every other test here
-// passed, because they all lay out in a page 600px wide where nothing has to be
-// measured to fit.
-//
-// 20px Ahem: "1." is 40px, the gap 10px, "ab" 40px, so the float is 90px wide.
 func TestAShrinkToFitItemMakesRoomForItsInsideMarker(t *testing.T) {
 	set := loadAhem(t)
 	built := Build(Input{HTML: `<div id="f">ab</div>`, CSS: []Stylesheet{{Source: noDefaults + `
@@ -631,15 +400,6 @@ func TestAShrinkToFitItemMakesRoomForItsInsideMarker(t *testing.T) {
 	}
 }
 
-// TestMarkerPositionIsOutsideByDefault pins where the marker sits. Outside puts
-// it clear of the content box, which is what a list looks like; inside puts it
-// at the start of the first line, where it pushes the text along.
-// TestMarkerPositionIsOutsideByDefault pins where the marker sits. Outside puts
-// it clear of the content box, which is what a list looks like; inside puts it
-// at the start of the first line, where it pushes the text along.
-// TestMarkerPositionIsOutsideByDefault pins where the marker sits. Outside puts
-// it clear of the content box, which is what a list looks like; inside puts it
-// at the start of the first line, where it pushes the text along.
 // TestMarkerPositionIsOutsideByDefault pins where the marker sits. Outside puts
 // it clear of the content box, which is what a list looks like; inside puts it
 // at the start of the first line, where it pushes the text along.
@@ -696,9 +456,6 @@ func TestMarkerPositionIsOutsideByDefault(t *testing.T) {
 }
 
 // firstItemLine is the first line box of the first list item in a tree.
-// firstItemLine is the first line box of the first list item in a tree.
-// firstItemLine is the first line box of the first list item in a tree.
-// firstItemLine is the first line box of the first list item in a tree.
 func firstItemLine(t *testing.T, root *Fragment) LineFragment {
 	t.Helper()
 	var found *LineFragment
@@ -719,24 +476,6 @@ func firstItemLine(t *testing.T, root *Fragment) LineFragment {
 	return *found
 }
 
-// TestInsideMarkerTakesRoomOnTheLine pins §12.5.1's arithmetic exactly, which
-// needs a face whose advances are known: Ahem's every glyph is an em square.
-//
-// "1." at 20px is two squares, so 40px, and the gap this engine leaves between a
-// marker and its text is half an em, 10px. The item's own text therefore begins
-// at 50px and not at 40 and not at 0.
-// TestInsideMarkerTakesRoomOnTheLine pins §12.5.1's arithmetic exactly, which
-// needs a face whose advances are known: Ahem's every glyph is an em square.
-//
-// "1." at 20px is two squares, so 40px, and the gap this engine leaves between a
-// marker and its text is half an em, 10px. The item's own text therefore begins
-// at 50px and not at 40 and not at 0.
-// TestInsideMarkerTakesRoomOnTheLine pins §12.5.1's arithmetic exactly, which
-// needs a face whose advances are known: Ahem's every glyph is an em square.
-//
-// "1." at 20px is two squares, so 40px, and the gap this engine leaves between a
-// marker and its text is half an em, 10px. The item's own text therefore begins
-// at 50px and not at 40 and not at 0.
 // TestInsideMarkerTakesRoomOnTheLine pins §12.5.1's arithmetic exactly, which
 // needs a face whose advances are known: Ahem's every glyph is an em square.
 //
@@ -773,30 +512,6 @@ func TestInsideMarkerTakesRoomOnTheLine(t *testing.T) {
 // "display: list-item" with a background, asserted to be a coloured strip with a
 // dot in it — and with the marker drawn beside the box the strip had no height
 // and nothing was painted at all.
-// TestEmptyInsideListItemHasALine pins the case a marker drawn beside the box
-// cannot produce: an item with no content of its own is still one line tall,
-// because the marker is content.
-//
-// It is the shape a dozen of the suite's list tests are built on — an empty
-// "display: list-item" with a background, asserted to be a coloured strip with a
-// dot in it — and with the marker drawn beside the box the strip had no height
-// and nothing was painted at all.
-// TestEmptyInsideListItemHasALine pins the case a marker drawn beside the box
-// cannot produce: an item with no content of its own is still one line tall,
-// because the marker is content.
-//
-// It is the shape a dozen of the suite's list tests are built on — an empty
-// "display: list-item" with a background, asserted to be a coloured strip with a
-// dot in it — and with the marker drawn beside the box the strip had no height
-// and nothing was painted at all.
-// TestEmptyInsideListItemHasALine pins the case a marker drawn beside the box
-// cannot produce: an item with no content of its own is still one line tall,
-// because the marker is content.
-//
-// It is the shape a dozen of the suite's list tests are built on — an empty
-// "display: list-item" with a background, asserted to be a coloured strip with a
-// dot in it — and with the marker drawn beside the box the strip had no height
-// and nothing was painted at all.
 func TestEmptyInsideListItemHasALine(t *testing.T) {
 	root := layoutOf(t, 600, `<div id="i"></div>`,
 		"#i { display: list-item; list-style-position: inside }")
@@ -824,12 +539,6 @@ func TestEmptyInsideListItemHasALine(t *testing.T) {
 
 // TestMarkersPaint pins that the marker reaches the display list, which is the
 // whole point — a marker computed and never drawn is a list with no bullets.
-// TestMarkersPaint pins that the marker reaches the display list, which is the
-// whole point — a marker computed and never drawn is a list with no bullets.
-// TestMarkersPaint pins that the marker reaches the display list, which is the
-// whole point — a marker computed and never drawn is a list with no bullets.
-// TestMarkersPaint pins that the marker reaches the display list, which is the
-// whole point — a marker computed and never drawn is a list with no bullets.
 func TestMarkersPaint(t *testing.T) {
 	ops := paintOf(t, "<ol><li>one</li><li>two</li></ol>",
 		"ol { list-style-type: decimal } li { font-family: Helvetica }")
@@ -845,15 +554,6 @@ func TestMarkersPaint(t *testing.T) {
 	}
 }
 
-// TestUnbreakableOverflowIsAnError pins the guardrail §6.2 calls the classic
-// silent clip. The text is there, the box is there, and the part past the edge
-// is simply not drawn — nothing else about the page says so.
-// TestUnbreakableOverflowIsAnError pins the guardrail §6.2 calls the classic
-// silent clip. The text is there, the box is there, and the part past the edge
-// is simply not drawn — nothing else about the page says so.
-// TestUnbreakableOverflowIsAnError pins the guardrail §6.2 calls the classic
-// silent clip. The text is there, the box is there, and the part past the edge
-// is simply not drawn — nothing else about the page says so.
 // TestUnbreakableOverflowIsAnError pins the guardrail §6.2 calls the classic
 // silent clip. The text is there, the box is there, and the part past the edge
 // is simply not drawn — nothing else about the page says so.

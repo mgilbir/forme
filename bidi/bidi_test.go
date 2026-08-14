@@ -30,14 +30,6 @@ const (
 // file, so that a table regenerated from the wrong version of the UCD — or by
 // hand, which the header forbids and nothing enforces — cannot leave a branch of
 // the algorithm silently unreachable.
-// TestBidiClassTableNamesEveryClass guards the generated table against a Unicode
-// release that renames or withdraws a property value.
-//
-// cmd/genbidi fails if the data does not use a value the algorithm names, but
-// the generator is only run by hand. This is the same check on the committed
-// file, so that a table regenerated from the wrong version of the UCD — or by
-// hand, which the header forbids and nothing enforces — cannot leave a branch of
-// the algorithm silently unreachable.
 func TestBidiClassTableNamesEveryClass(t *testing.T) {
 	named := map[Class]string{
 		R: "R", AL: "AL", EN: "EN", ES: "ES", ET: "ET",
@@ -62,8 +54,6 @@ func TestBidiClassTableNamesEveryClass(t *testing.T) {
 	}
 }
 
-// TestBidiClassesAreUnicodes pins the generated table against characters the
-// rest of this rests on, including one that is not a character at all.
 // TestBidiClassesAreUnicodes pins the generated table against characters the
 // rest of this rests on, including one that is not a character at all.
 func TestBidiClassesAreUnicodes(t *testing.T) {
@@ -94,7 +84,6 @@ func TestBidiClassesAreUnicodes(t *testing.T) {
 }
 
 // TestBidiBracketAndMirrorTables pins the two tables rules N0 and L4 read.
-// TestBidiBracketAndMirrorTables pins the two tables rules N0 and L4 read.
 func TestBidiBracketAndMirrorTables(t *testing.T) {
 	paired, open, ok := BracketOf('[')
 	if !ok || !open || paired != ']' {
@@ -115,8 +104,6 @@ func TestBidiBracketAndMirrorTables(t *testing.T) {
 	}
 }
 
-// TestBidiRunsSplitAndReorder is the algorithm's output in the form the shaping
-// pipeline consumes it: stretches of one direction, in the order they are drawn.
 // TestBidiRunsSplitAndReorder is the algorithm's output in the form the shaping
 // pipeline consumes it: stretches of one direction, in the order they are drawn.
 func TestBidiRunsSplitAndReorder(t *testing.T) {
@@ -147,8 +134,6 @@ func TestBidiRunsSplitAndReorder(t *testing.T) {
 
 // TestBidiRunsOfPlainTextAreOne pins the cost of all this for text that needs
 // none of it: one run, level zero, no reordering.
-// TestBidiRunsOfPlainTextAreOne pins the cost of all this for text that needs
-// none of it: one run, level zero, no reordering.
 func TestBidiRunsOfPlainTextAreOne(t *testing.T) {
 	runs := LogicalRuns("Hello, world!")
 	if len(runs) != 1 || runs[0].Level != 0 || runs[0].RTL() {
@@ -159,14 +144,6 @@ func TestBidiRunsOfPlainTextAreOne(t *testing.T) {
 	}
 }
 
-// TestBidiShortcutAgreesWithTheAlgorithm is the only thing that makes the
-// shortcut in LogicalRuns safe to have.
-//
-// Text with nothing right-to-left in it is answered without running the
-// algorithm at all, because the pipeline asks the question of every string it
-// sets and most of them are Latin. A shortcut that disagreed with the algorithm
-// would be a silent wrong answer on exactly the text nobody thinks to check —
-// so every case the shortcut claims is checked against the algorithm itself.
 // TestBidiShortcutAgreesWithTheAlgorithm is the only thing that makes the
 // shortcut in LogicalRuns safe to have.
 //

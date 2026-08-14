@@ -53,8 +53,6 @@ func hebrewFace(t *testing.T) *Face {
 
 // clustersOf is the byte offset each drawn glyph came from, which is the whole
 // visible consequence of reordering.
-// clustersOf is the byte offset each drawn glyph came from, which is the whole
-// visible consequence of reordering.
 func clustersOf(glyphs []Glyph) []int {
 	out := make([]int, len(glyphs))
 	for i, g := range glyphs {
@@ -87,8 +85,6 @@ func TestHebrewIsEmittedInVisualOrder(t *testing.T) {
 
 // TestLatinIsUntouchedByDirection pins that text that runs one way, the way the
 // pen already does, is passed through exactly as it was.
-// TestLatinIsUntouchedByDirection pins that text that runs one way, the way the
-// pen already does, is passed through exactly as it was.
 func TestLatinIsUntouchedByDirection(t *testing.T) {
 	f := hebrewFace(t)
 	glyphs, _ := f.ShapeGlyphs("abc")
@@ -97,10 +93,6 @@ func TestLatinIsUntouchedByDirection(t *testing.T) {
 	}
 }
 
-// TestNumbersInRightToLeftTextKeepTheirOwnDirection is the case that makes this
-// a reordering rather than a reversal. A number written inside Hebrew is still
-// read left to right, so reversing the line has to leave its digits alone —
-// "‏אב 123 גד‏" with the number backwards is a different number.
 // TestNumbersInRightToLeftTextKeepTheirOwnDirection is the case that makes this
 // a reordering rather than a reversal. A number written inside Hebrew is still
 // read left to right, so reversing the line has to leave its digits alone —
@@ -120,15 +112,6 @@ func TestNumbersInRightToLeftTextKeepTheirOwnDirection(t *testing.T) {
 	}
 }
 
-// TestStackCutsARunWhereTheLevelChanges pins that direction cuts a run in its
-// own right, and not only where it happens to coincide with a change of script.
-//
-// A number written inside Hebrew is the case that separates the two: the digits
-// are of no script of their own and take Hebrew from the letters around them, so
-// nothing but the embedding level distinguishes them — and they are at a deeper
-// level, because a number reads left to right inside text that does not. Left in
-// one run with the letters, they would be shaped and reversed as though they
-// were letters, and "123" would be drawn as "321".
 // TestStackCutsARunWhereTheLevelChanges pins that direction cuts a run in its
 // own right, and not only where it happens to coincide with a change of script.
 //
@@ -163,9 +146,6 @@ func TestStackCutsARunWhereTheLevelChanges(t *testing.T) {
 	}
 }
 
-// TestBracketsAreMirroredInRightToLeftText is rule L4. A parenthesis is drawn as
-// the one that mirrors it, and the mirroring is on the character, before the
-// font is asked for a glyph — a font has no way to know which way the text runs.
 // TestBracketsAreMirroredInRightToLeftText is rule L4. A parenthesis is drawn as
 // the one that mirrors it, and the mirroring is on the character, before the
 // font is asked for a glyph — a font has no way to know which way the text runs.
@@ -213,13 +193,6 @@ func TestBracketsAreMirroredInRightToLeftText(t *testing.T) {
 // the text, not about the page. Reversing before shaping gives every letter the
 // wrong neighbours: the word is then joined wrongly *and* drawn backwards, which
 // looks close enough to right that only a reader of the script will say so.
-// TestJoiningSeesTheTextAsWritten is the ordering constraint between the two
-// passes, and it is the one that is easy to get backwards.
-//
-// Joining asks what a letter's neighbours are, and the answer is a fact about
-// the text, not about the page. Reversing before shaping gives every letter the
-// wrong neighbours: the word is then joined wrongly *and* drawn backwards, which
-// looks close enough to right that only a reader of the script will say so.
 func TestJoiningSeesTheTextAsWritten(t *testing.T) {
 	f := arabicFace(t)
 	// beh beh alef: the first beh begins the word and takes the initial shape,
@@ -241,9 +214,6 @@ func TestJoiningSeesTheTextAsWritten(t *testing.T) {
 	}
 }
 
-// TestStackReturnsRunsInVisualOrder is the same guarantee at the level a caller
-// actually draws at: hand back runs in the order the pen meets them, so that
-// drawing them in order at a continuing pen sets the line.
 // TestStackReturnsRunsInVisualOrder is the same guarantee at the level a caller
 // actually draws at: hand back runs in the order the pen meets them, so that
 // drawing them in order at a continuing pen sets the line.
@@ -280,9 +250,6 @@ func TestStackReturnsRunsInVisualOrder(t *testing.T) {
 	}
 }
 
-// drawnAt is where each glyph of a shaped run is actually painted. It is what
-// Face.Draw does: the pen accumulates advances, and an offset displaces the
-// glyph without moving the pen.
 // drawnAt is where each glyph of a shaped run is actually painted. It is what
 // Face.Draw does: the pen accumulates advances, and an offset displaces the
 // glyph without moving the pen.
@@ -378,13 +345,6 @@ func TestCursiveJointsSurviveTheReversal(t *testing.T) {
 // so the offset that was right is now wrong by the base's whole width. The
 // symptom is an accent sitting one letter away from the letter it belongs to,
 // consistently, in every vocalised Arabic or Hebrew word.
-// TestMarkStaysOnItsBaseAfterReversal is the same question for accents.
-//
-// A mark carries no advance, so it is placed by an offset from the pen — and
-// after reversal the pen reaches the mark *before* its base rather than after,
-// so the offset that was right is now wrong by the base's whole width. The
-// symptom is an accent sitting one letter away from the letter it belongs to,
-// consistently, in every vocalised Arabic or Hebrew word.
 func TestMarkStaysOnItsBaseAfterReversal(t *testing.T) {
 	const (
 		gBase     = 1
@@ -454,10 +414,6 @@ func TestMarkStaysOnItsBaseAfterReversal(t *testing.T) {
 	}
 }
 
-// TestKerningUsesThePairAsTheFontStatesIt is the one thing reversal changes
-// about kerning. The pair a font declares is the pair as the text is written; a
-// reversed run meets those two glyphs the other way round, and looking the kern
-// up in the order the pen sees finds either nothing or the wrong pair.
 // TestKerningUsesThePairAsTheFontStatesIt is the one thing reversal changes
 // about kerning. The pair a font declares is the pair as the text is written; a
 // reversed run meets those two glyphs the other way round, and looking the kern
