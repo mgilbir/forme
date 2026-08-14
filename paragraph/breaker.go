@@ -13,6 +13,13 @@ import (
 // Unicode. None of it needs a box tree, a cascade or a document, and the two
 // fields below are the whole of what it needs from outside itself.
 //
+// A Breaker is not safe for concurrent use, and does not need to be. It owns a
+// memo of measured runs, which is a plain map: two goroutines breaking through
+// one would be a data race, and Go's is fatal rather than merely undefined. The
+// shape that is supported is one per run — which is what the layout engine does,
+// making its own in Layout, so two documents laid out at once share nothing. See
+// race_test.go, which holds both halves of that to the race detector.
+//
 // It is a receiver of its own rather than more methods on the layouter because
 // what a type can reach decides what its code can come to depend on. As methods
 // on the layouter these functions could read a computed style, walk to a parent

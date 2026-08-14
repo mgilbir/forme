@@ -5,6 +5,18 @@ test:
 	go vet ./...
 	go test -count=1 ./...
 
+# The same suite under the race detector.
+#
+# Separate from "test" because it is five times slower and the thing it looks for
+# does not change with a line of layout code — what it watches is whether two
+# documents laid out at once share anything, and the answer only moves when
+# something becomes shared on purpose. Worth running when that might have
+# happened: a new memo, a package-level var, a font set that caches.
+.PHONY: race
+
+race:
+	go test -count=1 -race ./...
+
 # Unicode's own bidirectional conformance suites, which bidi_conformance_test.go
 # runs in full. Fetched rather than vendored: 15 MB, versioned by Unicode, and
 # pinned to the release the tables were generated from — a character whose class
