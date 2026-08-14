@@ -1,4 +1,4 @@
-package shape
+package bidi
 
 import (
 	"bufio"
@@ -29,7 +29,7 @@ import (
 //
 // Both are fetched by `make bidi-tests` and are not committed.
 
-// bidiTestDir finds the Unicode test files, and distinguishes "nobody fetched
+// testDir finds the Unicode test files, and distinguishes "nobody fetched
 // them" from "somebody pointed at the wrong place".
 //
 // The difference matters for the same reason it does in arlington_test.go, which
@@ -38,7 +38,7 @@ import (
 // the run still looks green. Unset and absent is a skip, because a developer
 // without the files should still be able to run the suite. Set and wrong is a
 // failure, because somebody meant to run this and did not.
-func bidiTestDir(t *testing.T) string {
+func testDir(t *testing.T) string {
 	t.Helper()
 	const marker = "BidiTest.txt"
 
@@ -64,20 +64,20 @@ func bidiTestDir(t *testing.T) string {
 	return ""
 }
 
-// bidiClassByName maps the short aliases the test files use onto the constants.
-var bidiClassByName = map[string]bidiClass{
-	"L": bidiL, "R": bidiR, "AL": bidiAL, "EN": bidiEN, "ES": bidiES,
-	"ET": bidiET, "AN": bidiAN, "CS": bidiCS, "NSM": bidiNSM, "BN": bidiBN,
-	"B": bidiB, "S": bidiS, "WS": bidiWS, "ON": bidiON,
-	"LRE": bidiLRE, "RLE": bidiRLE, "LRO": bidiLRO, "RLO": bidiRLO, "PDF": bidiPDF,
-	"LRI": bidiLRI, "RLI": bidiRLI, "FSI": bidiFSI, "PDI": bidiPDI,
+// classByName maps the short aliases the test files use onto the constants.
+var classByName = map[string]Class{
+	"L": L, "R": R, "AL": AL, "EN": EN, "ES": ES,
+	"ET": ET, "AN": AN, "CS": CS, "NSM": NSM, "BN": BN,
+	"B": B, "S": S, "WS": WS, "ON": ON,
+	"LRE": LRE, "RLE": RLE, "LRO": LRO, "RLO": RLO, "PDF": PDF,
+	"LRI": LRI, "RLI": RLI, "FSI": FSI, "PDI": PDI,
 }
 
 // TestBidiConformanceClasses runs BidiTest.txt: every combination of
 // bidirectional classes up to length four, against all three paragraph
 // directions the file asks for.
 func TestBidiConformanceClasses(t *testing.T) {
-	path := filepath.Join(bidiTestDir(t), "BidiTest.txt")
+	path := filepath.Join(testDir(t), "BidiTest.txt")
 	f, err := os.Open(path)
 	if err != nil {
 		t.Fatalf("opening %s: %v", path, err)
@@ -137,9 +137,9 @@ func TestBidiConformanceClasses(t *testing.T) {
 			t.Fatalf("%s:%d: data line with no bitset: %q", path, line+1, text)
 		}
 		names := strings.Fields(text[:semi])
-		classes := make([]bidiClass, len(names))
+		classes := make([]Class, len(names))
 		for i, name := range names {
-			c, ok := bidiClassByName[name]
+			c, ok := classByName[name]
 			if !ok {
 				t.Fatalf("%s:%d: unknown bidi class %q", path, line+1, name)
 			}
@@ -160,8 +160,8 @@ func TestBidiConformanceClasses(t *testing.T) {
 				continue
 			}
 			cases++
-			p := bidiResolve(classes, nil, d.level)
-			if why, ok := bidiCaseMatches(&p, wantLevels, wantOrder); !ok {
+			p := resolveClasses(classes, nil, d.level)
+			if why, ok := caseMatches(&p, wantLevels, wantOrder); !ok {
 				fail++
 				if fail <= 20 {
 					t.Errorf("%s:%d [para %d] %s: %s", path, line+1, d.level, text[:semi], why)
@@ -185,7 +185,7 @@ func TestBidiConformanceClasses(t *testing.T) {
 // TestBidiConformanceCharacters runs BidiCharacterTest.txt: real character
 // sequences, which is what brings rule N0 and the paired brackets into scope.
 func TestBidiConformanceCharacters(t *testing.T) {
-	path := filepath.Join(bidiTestDir(t), "BidiCharacterTest.txt")
+	path := filepath.Join(testDir(t), "BidiCharacterTest.txt")
 	f, err := os.Open(path)
 	if err != nil {
 		t.Fatalf("opening %s: %v", path, err)
@@ -254,13 +254,13 @@ func TestBidiConformanceCharacters(t *testing.T) {
 			wantOrder = append(wantOrder, n)
 		}
 
-		classes := make([]bidiClass, len(runes))
+		classes := make([]Class, len(runes))
 		for i, r := range runes {
-			classes[i] = bidiClassOf(r)
+			classes[i] = ClassOf(r)
 		}
 		cases++
-		p := bidiResolve(classes, runes, want)
-		why, ok := bidiCaseMatches(&p, wantLevels, wantOrder)
+		p := resolveClasses(classes, runes, want)
+		why, ok := caseMatches(&p, wantLevels, wantOrder)
 		if ok && p.para != wantPara {
 			why, ok = "paragraph level "+strconv.Itoa(p.para)+", want "+strconv.Itoa(wantPara), false
 		}
@@ -284,9 +284,9 @@ func TestBidiConformanceCharacters(t *testing.T) {
 	}
 }
 
-// bidiCaseMatches compares a resolved paragraph against one expected result,
+// caseMatches compares a resolved paragraph against one expected result,
 // returning a description of the first difference.
-func bidiCaseMatches(p *bidiParagraph, wantLevels, wantOrder []int) (string, bool) {
+func caseMatches(p *Paragraph, wantLevels, wantOrder []int) (string, bool) {
 	if len(p.levels) != len(wantLevels) {
 		return "got " + itoas(p.levels) + " levels, want " + itoas(wantLevels), false
 	}
@@ -297,7 +297,7 @@ func bidiCaseMatches(p *bidiParagraph, wantLevels, wantOrder []int) (string, boo
 			return "levels " + itoas(p.levels) + ", want " + itoas(wantLevels), false
 		}
 	}
-	got := p.bidiReorder()
+	got := p.reorder()
 	if len(got) != len(wantOrder) {
 		return "order " + itoas(got) + ", want " + itoas(wantOrder), false
 	}

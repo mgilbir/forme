@@ -1,3 +1,9 @@
+// The bidirectional algorithm where it meets shaping: a run's glyphs come back
+// in visual order, and every rule the font states was applied to the text as it
+// is written. The algorithm itself is tested in package bidi, which has
+// Unicode's own six hundred thousand conformance cases; what is left here is
+// the wiring.
+
 package shape
 
 import (
@@ -6,197 +12,18 @@ import (
 	"github.com/mgilbir/forme/fonttest"
 )
 
-// The bidirectional algorithm as the shaping pipeline uses it.
-//
-// bidi_conformance_test.go proves the algorithm against Unicode's own six
-// hundred thousand cases; this file proves the wiring — that a shaped run comes
-// back in the order it is drawn, that shaping still saw the text in the order it
-// is written, and that the positioning a font states survives the reversal.
-//
-// Hebrew is used wherever the point is direction alone, because Hebrew does not
-// join and so nothing else is going on; Arabic wherever the point is that
-// joining and direction are separate stages.
-
+// The Hebrew letters these use, and the geometry the cursive-attachment test
+// builds its font from. Hebrew wherever the point is direction alone, since it
+// does not join and so nothing else is going on.
 const (
 	alefHeb = 0x05D0 // HEBREW LETTER ALEF
 	betHeb  = 0x05D1
 	gimel   = 0x05D2
+
+	rtlExitX  = 60
+	rtlEntryX = 440
+	rtlWidth  = 500
 )
-
-// TestBidiClassTableNamesEveryClass guards the generated table against a Unicode
-// release that renames or withdraws a property value.
-//
-// cmd/genbidi fails if the data does not use a value the algorithm names, but
-// the generator is only run by hand. This is the same check on the committed
-// file, so that a table regenerated from the wrong version of the UCD — or by
-// hand, which the header forbids and nothing enforces — cannot leave a branch of
-// the algorithm silently unreachable.
-func TestBidiClassTableNamesEveryClass(t *testing.T) {
-	named := map[bidiClass]string{
-		bidiR: "R", bidiAL: "AL", bidiEN: "EN", bidiES: "ES", bidiET: "ET",
-		bidiAN: "AN", bidiCS: "CS", bidiNSM: "NSM", bidiBN: "BN", bidiB: "B",
-		bidiS: "S", bidiWS: "WS", bidiON: "ON", bidiLRE: "LRE", bidiRLE: "RLE",
-		bidiLRO: "LRO", bidiRLO: "RLO", bidiPDF: "PDF", bidiLRI: "LRI",
-		bidiRLI: "RLI", bidiFSI: "FSI", bidiPDI: "PDI",
-	}
-	// bidiL is not in the list: it is the default, and the table says it by
-	// leaving a character out.
-	for _, r := range bidiClassRanges {
-		delete(named, r.class)
-	}
-	for _, name := range named {
-		t.Errorf("no character in the table has Bidi_Class %s", name)
-	}
-	if len(bidiBrackets) == 0 {
-		t.Error("the bracket table is empty; rule N0 has nothing to work with")
-	}
-	if len(bidiMirrors) == 0 {
-		t.Error("the mirroring table is empty; rule L4 has nothing to work with")
-	}
-}
-
-// TestBidiClassesAreUnicodes pins the generated table against characters the
-// rest of this rests on, including one that is not a character at all.
-func TestBidiClassesAreUnicodes(t *testing.T) {
-	cases := map[rune]bidiClass{
-		'a':     bidiL,
-		alefHeb: bidiR,
-		beh:     bidiAL,
-		'5':     bidiEN,
-		0x0663:  bidiAN, // ARABIC-INDIC DIGIT THREE
-		' ':     bidiWS,
-		'(':     bidiON,
-		0x0301:  bidiNSM, // COMBINING ACUTE ACCENT
-		0x200D:  bidiBN,  // ZERO WIDTH JOINER
-		0x202B:  bidiRLE,
-		0x2067:  bidiRLI,
-		0x2069:  bidiPDI,
-		// U+0590 is unassigned and always has been. It is right-to-left all the
-		// same, because it sits in the Hebrew block — the block defaults are in
-		// the table, and a character Unicode has not defined yet still has to be
-		// laid out the way its neighbours will be.
-		0x0590: bidiR,
-	}
-	for r, want := range cases {
-		if got := bidiClassOf(r); got != want {
-			t.Errorf("bidiClassOf(U+%04X) = %d, want %d", r, got, want)
-		}
-	}
-}
-
-// TestBidiBracketAndMirrorTables pins the two tables rules N0 and L4 read.
-func TestBidiBracketAndMirrorTables(t *testing.T) {
-	paired, open, ok := bidiBracketOf('[')
-	if !ok || !open || paired != ']' {
-		t.Errorf("bidiBracketOf('[') = (%q, open=%v, ok=%v), want (']', true, true)", paired, open, ok)
-	}
-	paired, open, ok = bidiBracketOf('}')
-	if !ok || open || paired != '{' {
-		t.Errorf("bidiBracketOf('}') = (%q, open=%v, ok=%v), want ('{', false, true)", paired, open, ok)
-	}
-	if _, _, ok := bidiBracketOf('a'); ok {
-		t.Error("a letter was reported as a bracket")
-	}
-	if m, ok := bidiMirrorOf('('); !ok || m != ')' {
-		t.Errorf("bidiMirrorOf('(') = (%q, %v), want (')', true)", m, ok)
-	}
-	if _, ok := bidiMirrorOf('a'); ok {
-		t.Error("a letter was reported as mirrored")
-	}
-}
-
-// TestBidiRunsSplitAndReorder is the algorithm's output in the form the shaping
-// pipeline consumes it: stretches of one direction, in the order they are drawn.
-func TestBidiRunsSplitAndReorder(t *testing.T) {
-	// A right-to-left sentence with a left-to-right phrase inside it. The
-	// phrase is one level deeper, and the whole line reverses around it.
-	text := string([]rune{alefHeb, betHeb, gimel}) + " abc " + string([]rune{gimel, betHeb, alefHeb})
-	runs := bidiLogicalRuns(text)
-	if len(runs) != 3 {
-		t.Fatalf("got %d runs, want 3: %v", len(runs), runs)
-	}
-	wantLevels := []int{1, 2, 1}
-	for i, r := range runs {
-		if r.level != wantLevels[i] {
-			t.Errorf("run %d is at level %d, want %d", i, r.level, wantLevels[i])
-		}
-	}
-	levels := []int{runs[0].level, runs[1].level, runs[2].level}
-	order := bidiVisualOrder(levels)
-	// The line is right-to-left, so the last-written run is drawn first; the
-	// Latin phrase inside it keeps its own direction.
-	want := []int{2, 1, 0}
-	for i := range want {
-		if order[i] != want[i] {
-			t.Fatalf("visual order %v, want %v", order, want)
-		}
-	}
-}
-
-// TestBidiRunsOfPlainTextAreOne pins the cost of all this for text that needs
-// none of it: one run, level zero, no reordering.
-func TestBidiRunsOfPlainTextAreOne(t *testing.T) {
-	runs := bidiLogicalRuns("Hello, world!")
-	if len(runs) != 1 || runs[0].level != 0 || runs[0].rtl() {
-		t.Fatalf("plain Latin gave %v, want one left-to-right run", runs)
-	}
-	if runs := bidiLogicalRuns(""); runs != nil {
-		t.Errorf("the empty string gave %v, want nothing", runs)
-	}
-}
-
-// TestBidiShortcutAgreesWithTheAlgorithm is the only thing that makes the
-// shortcut in bidiLogicalRuns safe to have.
-//
-// Text with nothing right-to-left in it is answered without running the
-// algorithm at all, because the pipeline asks the question of every string it
-// sets and most of them are Latin. A shortcut that disagreed with the algorithm
-// would be a silent wrong answer on exactly the text nobody thinks to check —
-// so every case the shortcut claims is checked against the algorithm itself.
-func TestBidiShortcutAgreesWithTheAlgorithm(t *testing.T) {
-	cases := []string{
-		"", "a", "Hello, world!", "café — naïve",
-		"1,234.56", "+42%", "$1.5m", "  leading and trailing  ",
-		"line\nbreak", "tab\tseparated", "áb", // a combining mark
-		"​zero width space", "emoji \U0001F600 too", // neither is directional
-		"日本語のテキスト", "Ελληνικά", "Кириллица",
-		"a‍b", // a zero-width joiner: boundary neutral, still not directional
-	}
-	for _, s := range cases {
-		short := bidiLogicalRuns(s)
-		if s != "" && bidiNeedsAlgorithm(s) {
-			t.Errorf("%q was not taken by the shortcut; the case proves nothing", s)
-			continue
-		}
-		var full []bidiRun
-		if s != "" {
-			full = bidiResolveRuns(s)
-		}
-		if len(short) != len(full) {
-			t.Errorf("%q: the shortcut gives %v and the algorithm %v", s, short, full)
-			continue
-		}
-		for i := range full {
-			if short[i] != full[i] {
-				t.Errorf("%q: the shortcut gives %v and the algorithm %v", s, short, full)
-				break
-			}
-		}
-	}
-
-	// And the other half: text that does need the algorithm must not be taken by
-	// the shortcut.
-	for _, s := range []string{
-		string(rune(alefHeb)), "a" + string(rune(beh)), "‏", // right-to-left mark
-		"a‫b‬", // an explicit embedding
-		"a⁧b⁩", // an isolate
-		"١٢",   // Arabic-Indic digits, which are Arabic numbers
-	} {
-		if !bidiNeedsAlgorithm(s) {
-			t.Errorf("%q was taken by the shortcut, and it must not be", s)
-		}
-	}
-}
 
 // hebrewFace covers three Hebrew letters, the Latin alphabet and the brackets,
 // with no layout tables at all: direction is decided before a font is consulted,
@@ -226,24 +53,14 @@ func hebrewFace(t *testing.T) *Face {
 
 // clustersOf is the byte offset each drawn glyph came from, which is the whole
 // visible consequence of reordering.
+// clustersOf is the byte offset each drawn glyph came from, which is the whole
+// visible consequence of reordering.
 func clustersOf(glyphs []Glyph) []int {
 	out := make([]int, len(glyphs))
 	for i, g := range glyphs {
 		out[i] = g.Cluster
 	}
 	return out
-}
-
-func sameInts(a, b []int) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // TestHebrewIsEmittedInVisualOrder is the defect this all exists to fix. A
@@ -270,6 +87,8 @@ func TestHebrewIsEmittedInVisualOrder(t *testing.T) {
 
 // TestLatinIsUntouchedByDirection pins that text that runs one way, the way the
 // pen already does, is passed through exactly as it was.
+// TestLatinIsUntouchedByDirection pins that text that runs one way, the way the
+// pen already does, is passed through exactly as it was.
 func TestLatinIsUntouchedByDirection(t *testing.T) {
 	f := hebrewFace(t)
 	glyphs, _ := f.ShapeGlyphs("abc")
@@ -278,6 +97,10 @@ func TestLatinIsUntouchedByDirection(t *testing.T) {
 	}
 }
 
+// TestNumbersInRightToLeftTextKeepTheirOwnDirection is the case that makes this
+// a reordering rather than a reversal. A number written inside Hebrew is still
+// read left to right, so reversing the line has to leave its digits alone —
+// "‏אב 123 גד‏" with the number backwards is a different number.
 // TestNumbersInRightToLeftTextKeepTheirOwnDirection is the case that makes this
 // a reordering rather than a reversal. A number written inside Hebrew is still
 // read left to right, so reversing the line has to leave its digits alone —
@@ -297,6 +120,15 @@ func TestNumbersInRightToLeftTextKeepTheirOwnDirection(t *testing.T) {
 	}
 }
 
+// TestStackCutsARunWhereTheLevelChanges pins that direction cuts a run in its
+// own right, and not only where it happens to coincide with a change of script.
+//
+// A number written inside Hebrew is the case that separates the two: the digits
+// are of no script of their own and take Hebrew from the letters around them, so
+// nothing but the embedding level distinguishes them — and they are at a deeper
+// level, because a number reads left to right inside text that does not. Left in
+// one run with the letters, they would be shaped and reversed as though they
+// were letters, and "123" would be drawn as "321".
 // TestStackCutsARunWhereTheLevelChanges pins that direction cuts a run in its
 // own right, and not only where it happens to coincide with a change of script.
 //
@@ -331,6 +163,9 @@ func TestStackCutsARunWhereTheLevelChanges(t *testing.T) {
 	}
 }
 
+// TestBracketsAreMirroredInRightToLeftText is rule L4. A parenthesis is drawn as
+// the one that mirrors it, and the mirroring is on the character, before the
+// font is asked for a glyph — a font has no way to know which way the text runs.
 // TestBracketsAreMirroredInRightToLeftText is rule L4. A parenthesis is drawn as
 // the one that mirrors it, and the mirroring is on the character, before the
 // font is asked for a glyph — a font has no way to know which way the text runs.
@@ -378,6 +213,13 @@ func TestBracketsAreMirroredInRightToLeftText(t *testing.T) {
 // the text, not about the page. Reversing before shaping gives every letter the
 // wrong neighbours: the word is then joined wrongly *and* drawn backwards, which
 // looks close enough to right that only a reader of the script will say so.
+// TestJoiningSeesTheTextAsWritten is the ordering constraint between the two
+// passes, and it is the one that is easy to get backwards.
+//
+// Joining asks what a letter's neighbours are, and the answer is a fact about
+// the text, not about the page. Reversing before shaping gives every letter the
+// wrong neighbours: the word is then joined wrongly *and* drawn backwards, which
+// looks close enough to right that only a reader of the script will say so.
 func TestJoiningSeesTheTextAsWritten(t *testing.T) {
 	f := arabicFace(t)
 	// beh beh alef: the first beh begins the word and takes the initial shape,
@@ -399,6 +241,9 @@ func TestJoiningSeesTheTextAsWritten(t *testing.T) {
 	}
 }
 
+// TestStackReturnsRunsInVisualOrder is the same guarantee at the level a caller
+// actually draws at: hand back runs in the order the pen meets them, so that
+// drawing them in order at a continuing pen sets the line.
 // TestStackReturnsRunsInVisualOrder is the same guarantee at the level a caller
 // actually draws at: hand back runs in the order the pen meets them, so that
 // drawing them in order at a continuing pen sets the line.
@@ -438,6 +283,9 @@ func TestStackReturnsRunsInVisualOrder(t *testing.T) {
 // drawnAt is where each glyph of a shaped run is actually painted. It is what
 // Face.Draw does: the pen accumulates advances, and an offset displaces the
 // glyph without moving the pen.
+// drawnAt is where each glyph of a shaped run is actually painted. It is what
+// Face.Draw does: the pen accumulates advances, and an offset displaces the
+// glyph without moving the pen.
 func drawnAt(glyphs []Glyph) []float64 {
 	out := make([]float64, len(glyphs))
 	pen := 0.0
@@ -452,12 +300,6 @@ func drawnAt(glyphs []Glyph) []float64 {
 // Latin ones in cursive_test.go, and deliberately so: in a script written right
 // to left the stroke *leaves* a letter at its left edge and *arrives* at the
 // next one's right edge, so an exit is at a small x and an entry at a large one.
-const (
-	rtlExitX  = 60
-	rtlEntryX = 440
-	rtlWidth  = 500
-)
-
 // TestCursiveJointsSurviveTheReversal is the positioning half of direction, and
 // the part a reversal quietly breaks.
 //
@@ -529,6 +371,13 @@ func TestCursiveJointsSurviveTheReversal(t *testing.T) {
 	}
 }
 
+// TestMarkStaysOnItsBaseAfterReversal is the same question for accents.
+//
+// A mark carries no advance, so it is placed by an offset from the pen — and
+// after reversal the pen reaches the mark *before* its base rather than after,
+// so the offset that was right is now wrong by the base's whole width. The
+// symptom is an accent sitting one letter away from the letter it belongs to,
+// consistently, in every vocalised Arabic or Hebrew word.
 // TestMarkStaysOnItsBaseAfterReversal is the same question for accents.
 //
 // A mark carries no advance, so it is placed by an offset from the pen — and
@@ -609,6 +458,10 @@ func TestMarkStaysOnItsBaseAfterReversal(t *testing.T) {
 // about kerning. The pair a font declares is the pair as the text is written; a
 // reversed run meets those two glyphs the other way round, and looking the kern
 // up in the order the pen sees finds either nothing or the wrong pair.
+// TestKerningUsesThePairAsTheFontStatesIt is the one thing reversal changes
+// about kerning. The pair a font declares is the pair as the text is written; a
+// reversed run meets those two glyphs the other way round, and looking the kern
+// up in the order the pen sees finds either nothing or the wrong pair.
 func TestKerningUsesThePairAsTheFontStatesIt(t *testing.T) {
 	const kern = -80
 	data := fonttest.SFNT(fonttest.SFNTOptions{
@@ -635,4 +488,19 @@ func TestKerningUsesThePairAsTheFontStatesIt(t *testing.T) {
 	if got, want := f.MeasureShaped(word, 1000), 2*500.0+float64(kern); got != want {
 		t.Errorf("MeasureShaped gives %v, want %v", got, want)
 	}
+}
+
+// sameInts, since a reordering is only ever checked against a whole expected
+// order. Package bidi has its own copy: a two-line helper is not worth a
+// dependency between two packages' tests.
+func sameInts(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

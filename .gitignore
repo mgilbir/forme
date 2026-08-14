@@ -27,3 +27,11 @@ __pycache__/
 # The CoreText harness, built on a Mac.
 testdata/coretext/shape
 testdata/coretext/out-*.txt
+
+# Corpora that came from pdf0 with the layout engine: fetched, never committed.
+testdata/wpt/
+testdata/css-parsing-tests/
+testdata/fonts-noto/
+testdata/html/
+testdata/css-color-4.bs
+testdata/unicode-grapheme/
