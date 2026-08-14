@@ -23,7 +23,7 @@ import (
 // distances from its own baseline. The ref only has to be non-nil — nothing in
 // the stacking looks at it.
 func atomicOfExtents(ascent, descent style.Unit, v vAlignState) inlineItem {
-	return inlineItem{atomic: new(Fragment), ascent: ascent, descent: descent, valign: v}
+	return inlineItem{Atomic: new(Fragment), Ascent: ascent, Descent: descent, Valign: v}
 }
 
 // TestOneAlignedSubtreesBoxesAreStackedTogether is the rule that the boxes in

@@ -304,31 +304,31 @@ func heldFragment(r itemRef) *Fragment {
 }
 
 type inlineItem struct {
-	text  string
-	box   *Box
-	face  *shape.Face
-	size  style.Unit
-	width style.Unit
-	// breakBefore marks an item that may begin a line, which is what a break
+	Text  string
+	Box   *Box
+	Face  *shape.Face
+	Size  style.Unit
+	Width style.Unit
+	// BreakBefore marks an item that may begin a line, which is what a break
 	// opportunity is once the text has been cut into pieces.
-	breakBefore bool
-	// space marks white space of any kind: it ends the word before it and does
+	BreakBefore bool
+	// Space marks white Space of any kind: it ends the word before it and does
 	// not join the word after it.
 	//
-	// "Of any kind" is §4.1.2's sense — white space, other space separators and
+	// "Of any kind" is §4.1.2's sense — white Space, other Space separators and
 	// preserved tabs — rather than Phase I's, which is only U+0020, U+0009 and
-	// the segment breaks. The two differ over the ideographic space and its
+	// the segment breaks. The two differ over the ideographic Space and its
 	// relatives, which hang at the end of a line and are never collapsed.
-	space bool
-	// collapsible marks white space that §4.1.2 removes when it lands at
+	Space bool
+	// Collapsible marks white space that §4.1.2 removes when it lands at
 	// either end of a line.
 	//
 	// It is not the same question as space, and conflating the two is what made
 	// "<pre>   x</pre>" lose its indentation: the leading run is white space,
 	// so it was dropped at the start of the line, but it is *preserved* white
 	// space and dropping it removes something the author wrote.
-	collapsible bool
-	// trimAtEnd marks white space that §4.1.2's third rule removes outright when
+	Collapsible bool
+	// TrimAtEnd marks white space that §4.1.2's third rule removes outright when
 	// it lands at the end of a line, rather than hanging past it.
 	//
 	// It is the collapsible spaces, and one character more: "any trailing U+1680
@@ -338,63 +338,63 @@ type inlineItem struct {
 	// shorten a line of ogham the way collapsing a run of hyphens would shorten a
 	// rule — so it needs the removal without the collapsing, and that is why this
 	// is a second flag rather than a use of the first.
-	trimAtEnd bool
-	// hangs marks preserved white space that sits past the end of the line
+	TrimAtEnd bool
+	// Hangs marks preserved white space that sits past the end of the line
 	// rather than moving to the next one.
 	//
-	// §4.1.2 hangs whatever white space its third rule left at the end of a
+	// §4.1.2 Hangs whatever white space its third rule left at the end of a
 	// line, so it is not counted when the line is measured for alignment and
 	// never causes a break of its own. Two values are named as not doing it:
 	// break-spaces, which is the whole difference between it and pre-wrap, and
 	// pre, which the rule does not list — a line under pre ends only where the
 	// author ended it, and the rule is about what happens at a wrap.
-	hangs bool
-	// hangsHard says the hang is unconditional: the sequence never takes
+	Hangs bool
+	// HangsHard says the hang is unconditional: the sequence never takes
 	// room, whether or not there is room for it. §4.1.2 gives that answer
 	// for normal, nowrap and pre-line, and the conditional one for pre-wrap
 	// before a forced break — where the sequence does take room, and gives
 	// it up only when it would overflow. The two differ nowhere on the page
 	// and differ in both intrinsic widths.
-	hangsHard bool
-	// breakWord is overflow-wrap's last-resort break, carried per item because
+	HangsHard bool
+	// BreakWord is overflow-wrap's last-resort break, carried per item because
 	// the property is the box's and a line holds items from several boxes.
-	breakWord bool
-	// anywhere is the value of overflow-wrap that also lowers the min-content
+	BreakWord bool
+	// Anywhere is the value of overflow-wrap that also lowers the min-content
 	// width, so a shrink-to-fit box narrows to its widest character rather than
 	// to its widest word. §5.5 says break-word's opportunities "are not
-	// considered when calculating min-content intrinsic sizes" and anywhere's
+	// considered when calculating min-content intrinsic sizes" and Anywhere's
 	// are, which is the whole difference between the two values.
-	anywhere bool
-	// tab marks one preserved tab. Its advance is not a property of the text —
-	// it is the distance to the next tab stop, so it is resolved when the tab
+	Anywhere bool
+	// Tab marks one preserved Tab. Its advance is not a property of the text —
+	// it is the distance to the next Tab stop, so it is resolved when the Tab
 	// has a place on a line and not before.
-	tab bool
-	// tabStop is the distance between two tab stops, from tab-size.
-	tabStop style.Unit
-	// tabFloor is §4.1.2's 0.5ch threshold: a tab whose shift would be shorter
+	Tab bool
+	// TabStop is the distance between two tab stops, from tab-size.
+	TabStop style.Unit
+	// TabFloor is §4.1.2's 0.5ch threshold: a tab whose shift would be shorter
 	// than this advances to the tab stop after the nearest one instead.
-	tabFloor style.Unit
-	// forced marks a break the author asked for — a <br>, or a newline in
+	TabFloor style.Unit
+	// Forced marks a break the author asked for — a <br>, or a newline in
 	// preserved white space. It ends the line wherever it falls, which is the
 	// difference between a break opportunity and an instruction.
-	forced bool
-	// noWrap marks text that may not break at its spaces, so a line takes it
+	Forced bool
+	// NoWrap marks text that may not break at its spaces, so a line takes it
 	// whole or overflows.
-	noWrap bool
-	// inset marks an item that is an inline box's own horizontal margin, border
+	NoWrap bool
+	// Inset marks an item that is an inline box's own horizontal margin, border
 	// and padding rather than anything of its content: §8.3, §8.4 and §8.5 make
 	// all three apply to a non-replaced inline box on the horizontal axis, and
 	// what they do there is push the content along. See insetItems.
-	inset bool
-	// insetLead distinguishes the two: the item before the box's content from
+	Inset bool
+	// InsetLead distinguishes the two: the item before the box's content from
 	// the item after it, in *logical* order.
 	//
 	// Which of them carries the box's left inset and which its right is not the
 	// same question, and on a right-to-left line it is the other answer — see
 	// insetSides for §8.6. The flag says where the item sits in the content, and
 	// the width says what it holds.
-	insetLead bool
-	// insetLevel is the embedding level the box's own edges sit at, and
+	InsetLead bool
+	// InsetLevel is the embedding level the box's own edges sit at, and
 	// insetLevelKnown says insetSides worked one out.
 	//
 	// An inset carries no characters, so the algorithm gives it no level of its
@@ -408,30 +408,30 @@ type inlineItem struct {
 	// The flag is separate because zero is a real level, the left-to-right one,
 	// and a box with no content on the line at all has to stay distinguishable
 	// from a box whose content is left-to-right.
-	insetLevel      int
-	insetLevelKnown bool
-	// float is a float met in this run of inline content. It carries no text of
-	// its own: it is a marker saying "a float belongs here", because where a
-	// float appears among the words decides which line box it is placed against,
+	InsetLevel      int
+	InsetLevelKnown bool
+	// Float is a Float met in this run of inline content. It carries no text of
+	// its own: it is a marker saying "a Float belongs here", because where a
+	// Float appears among the words decides which line box it is placed against,
 	// and that position is lost once the items are on lines.
-	float itemRef
-	// offset is the relative displacement of the inline boxes this item is
+	Float itemRef
+	// Offset is the relative displacement of the inline boxes this item is
 	// inside, which travels with the item because the flattening loses the boxes
 	// themselves.
-	offset Point
-	// atomicBox marks an item that is a box on the line rather than a run of
+	Offset Point
+	// AtomicBox marks an item that is a box on the line rather than a run of
 	// text: a replaced element or an inline-block. It is set whether or not the
 	// box was laid out, because an intrinsic-width measurement needs to know
 	// there is one without producing a fragment for it.
-	atomicBox itemRef
-	// atomic is that box's fragment, already laid out. It is nil while
+	AtomicBox itemRef
+	// Atomic is that box's fragment, already laid out. It is nil while
 	// measuring.
 	//
-	// Being laid out already is what makes the item atomic: its size comes from
+	// Being laid out already is what makes the item Atomic: its size comes from
 	// its own content and its own declarations, so nothing about the line can
 	// change it. All the line decides is where it goes.
-	atomic itemRef
-	// leads reports that this item is a run of text whose own inline box takes
+	Atomic itemRef
+	// Leads reports that this item is a run of text whose own inline box takes
 	// part in §10.8.1's stacking, and above and below are how far it reaches from
 	// the baseline.
 	//
@@ -441,52 +441,52 @@ type inlineItem struct {
 	// metrics" would let a taller strut win a line the span was supposed to
 	// collapse. Every other kind of item — a float marker, an absolutely
 	// positioned one, an inline box's own inset — leaves it clear.
-	leads        bool
-	above, below style.Unit
-	// ascent and descent are how far the item reaches above and below the
+	Leads        bool
+	Above, Below style.Unit
+	// Ascent and Descent are how far the item reaches above and below the
 	// baseline, measured over its *margin* box.
 	//
 	// The two differ by which of §10.8.1's rules gave them. A replaced element's
-	// baseline is its bottom margin edge, so it is all ascent — which is why a
+	// baseline is its bottom margin edge, so it is all Ascent — which is why a
 	// picture sits on the line of type rather than in the middle of it, and why
 	// a line holding one is as tall as the image plus whatever descender space
 	// the surrounding text still wants. An inline-block's baseline is the
 	// baseline of its *last line box*, so a box of two paragraphs hangs below
 	// the line by the depth of its second one — unless it has no line boxes at
-	// all or clips its overflow, when it too is all ascent.
-	ascent, descent style.Unit
-	// valign is §10.8.1's vertical-align, as the walk accumulated it over the
+	// all or clips its overflow, when it too is all Ascent.
+	Ascent, Descent style.Unit
+	// Valign is §10.8.1's vertical-align, as the walk accumulated it over the
 	// inline boxes this item sits inside.
-	valign vAlignState
-	// decorations are the lines ruled across this item, and spacing is what
+	Valign vAlignState
+	// Decorations are the lines ruled across this item, and spacing is what
 	// letter-spacing and word-spacing added to its width. Both travel with the
 	// item because the flattening loses the boxes they were read from.
-	decorations []textDecoration
-	spacing     textSpacing
-	// abs is an absolutely positioned box met in this run, and it is a marker for
+	Decorations []textDecoration
+	Spacing     textSpacing
+	// Abs is an absolutely positioned box met in this run, and it is a marker for
 	// the same reason and a different consequence. A float met among the words
 	// changes where the words go; an absolutely positioned one does not change
 	// anything at all, but its *static position* — where it would have been — is
 	// what §10.3.7 falls back on, and that is exactly the information the
 	// flattening destroys.
-	abs itemRef
-	// bidiPara, bidiStart and bidiEnd say where this item's text sits in the
+	Abs itemRef
+	// BidiPara, bidiStart and bidiEnd say where this item's text sits in the
 	// inline formatting context's bidi paragraphs, which is what the algorithm
 	// resolves levels over.
 	//
-	// bidiPara counts from one so that zero means "contributes no characters",
+	// BidiPara counts from one so that zero means "contributes no characters",
 	// which is what a float or an absolutely positioned box is: out of flow, and
 	// taking no part in the ordering. Numbering from zero would have made a
 	// forgotten field on any of the several places that build an item read as a
 	// claim to be the first character of the first paragraph.
-	bidiPara           int
-	bidiStart, bidiEnd int
-	// para is the resolved paragraph, filled in once the algorithm has run, and
+	BidiPara           int
+	BidiStart, BidiEnd int
+	// Para is the resolved paragraph, filled in once the algorithm has run, and
 	// level is this item's embedding level. Both are zero-valued in a document
 	// that needs no reordering, which is what tells the line builder there is
 	// nothing to do.
-	para  *bidiParagraph
-	level int
+	Para  *bidiParagraph
+	Level int
 }
 
 // inlineContent lays a box's inline children into lines and returns the height
@@ -627,9 +627,9 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			// A float that begins a line is placed before the line is measured,
 			// because it is one of the floats the line has to avoid. §9.5.1 rule 4
 			// puts its top at the top of the line box it belongs to.
-			for iByte == 0 && i < len(items) && items[i].float != nil {
+			for iByte == 0 && i < len(items) && items[i].Float != nil {
 				parent.Children = append(parent.Children,
-					l.floatChild(heldBox(items[i].float), width, origin, y, style.MaxUnit, 0, 0))
+					l.floatChild(heldBox(items[i].Float), width, origin, y, style.MaxUnit, 0, 0))
 				i++
 			}
 			if i >= len(items) {
@@ -790,7 +790,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			if lineEllipsis > 0 {
 				var used style.Unit
 				for _, r := range runs {
-					used = used.Add(r.width)
+					used = used.Add(r.Width)
 				}
 				if used > right.Sub(left).Sub(lineIndent).Sub(lineEllipsis) {
 					runs, next, nextByte = nil, len(items), 0
@@ -822,7 +822,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				atomicStart := len(parent.Children)
 				for k, item := range runs {
 					x := xs[k]
-					if item.atomic != nil {
+					if item.Atomic != nil {
 						// Placed as a child of the block rather than as a run,
 						// because it is a box: it has a background, a border, a
 						// padding and possibly a subtree of its own, and every one
@@ -830,13 +830,13 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 						// Its margin box hangs from the line's baseline by its own
 						// ascent, which is what puts a picture on the line of type
 						// and an inline-block's last line of text on it.
-						f := heldFragment(item.atomic)
+						f := heldFragment(item.Atomic)
 						f.BorderRect.X = line.Rect.X.Add(x).Add(f.Margin.Left)
 						f.BorderRect.Y = y.Add(stack.atomicTop(item)).Add(f.Margin.Top)
 						parent.Children = append(parent.Children, f)
 						continue
 					}
-					if item.inset {
+					if item.Inset {
 						// An inline box's own margin, border and padding. It has
 						// taken its room on the line already — lineOffsets counted
 						// its width, so everything after it is where it belongs —
@@ -847,9 +847,9 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 						continue
 					}
 					shift := style.Unit(0)
-					decorations := item.decorations
-					if item.valign.aligned() {
-						shift = stack.shift(item.valign, item.above, item.below)
+					decorations := item.Decorations
+					if item.Valign.aligned() {
+						shift = stack.shift(item.Valign, item.Above, item.Below)
 						// §16.3.1: a decoration declared by an ancestor is drawn at
 						// *that* box's position and is not moved by the alignment of
 						// what it crosses — "text decorations on inline boxes are
@@ -864,10 +864,10 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 						decorations = l.decorationsAt(decorations, &stack)
 					}
 					line.Runs = append(line.Runs, TextRun{
-						Text: item.text, Face: item.face, Size: item.size,
-						X: x, Width: item.width, Box: item.box, Offset: item.offset,
-						Decorations: decorations, LetterSpacing: item.spacing.letter,
-						RTL:   item.level&1 == 1,
+						Text: item.Text, Face: item.Face, Size: item.Size,
+						X: x, Width: item.Width, Box: item.Box, Offset: item.Offset,
+						Decorations: decorations, LetterSpacing: item.Spacing.letter,
+						RTL:   item.Level&1 == 1,
 						Shift: shift,
 					})
 				}
@@ -1334,11 +1334,11 @@ func (v vAlignState) aligned() bool {
 // absolutely positioned box — is not an inline-level box at all and takes no
 // part in §10.8.1's stacking.
 func itemExtents(item inlineItem) (ascent, descent style.Unit, ok bool) {
-	if item.atomic != nil {
-		return item.ascent, item.descent, true
+	if item.Atomic != nil {
+		return item.Ascent, item.Descent, true
 	}
-	if item.leads {
-		return item.above, item.below, true
+	if item.Leads {
+		return item.Above, item.Below, true
 	}
 	return 0, 0, false
 }
@@ -1388,9 +1388,9 @@ func stackLine(runs []inlineItem, s strut) lineStack {
 		if !ok {
 			continue
 		}
-		a, d = alignedExtents(item.valign, a, d, s)
-		if item.valign.lineAlign != vAlignBaseline {
-			ls.gather(item.valign, a, d)
+		a, d = alignedExtents(item.Valign, a, d, s)
+		if item.Valign.lineAlign != vAlignBaseline {
+			ls.gather(item.Valign, a, d)
 			continue
 		}
 		if a > ls.baseline {
@@ -1539,8 +1539,8 @@ func alignedExtents(v vAlignState, ascent, descent style.Unit, s strut) (style.U
 // atomicTop is where an atomic inline's margin box goes within its line box.
 func (ls *lineStack) atomicTop(item inlineItem) style.Unit {
 	return ls.baseline.
-		Add(ls.shift(item.valign, item.ascent, item.descent)).
-		Sub(item.ascent)
+		Add(ls.shift(item.Valign, item.Ascent, item.Descent)).
+		Sub(item.Ascent)
 }
 
 // isAtomicInline reports whether an inline-level box takes part in a line as a
@@ -1572,8 +1572,8 @@ func isAtomicInline(b *Box) bool {
 // see where the state is set.
 func (l *layouter) atomicItem(b *Box, frame inlineFrame) inlineItem {
 	item := inlineItem{
-		box: b, atomicBox: b, size: b.FontSize,
-		breakBefore: true, offset: frame.offset,
+		Box: b, AtomicBox: b, Size: b.FontSize,
+		BreakBefore: true, Offset: frame.offset,
 	}
 	if frame.measuring {
 		// No fragment: the caller wants a width, and the widths of an atomic
@@ -1588,10 +1588,10 @@ func (l *layouter) atomicItem(b *Box, frame inlineFrame) inlineItem {
 		frag = l.inlineBlockFragment(b, frame)
 	}
 	box := frag.MarginRect()
-	item.atomic = frag
-	item.width = box.W
-	item.ascent, item.descent = box.H, 0
-	item.valign = l.vAlignFor(b, frame.valign)
+	item.Atomic = frag
+	item.Width = box.W
+	item.Ascent, item.Descent = box.H, 0
+	item.Valign = l.vAlignFor(b, frame.valign)
 
 	// §10.8.1: an inline-block's baseline is the baseline of its last in-flow
 	// line box. With no line box at all it is the bottom margin edge — which is
@@ -1629,8 +1629,8 @@ func (l *layouter) atomicItem(b *Box, frame inlineFrame) inlineItem {
 				// what "higher" means here.
 				ascent = style.Min(ascent, box.H)
 			}
-			item.ascent = ascent
-			item.descent = box.H.Sub(ascent)
+			item.Ascent = ascent
+			item.Descent = box.H.Sub(ascent)
 		}
 	}
 	return item
@@ -1783,7 +1783,7 @@ func (l *layouter) roomForLine(first inlineItem, origin flow, y, left, right, lo
 	style.Unit, style.Unit, style.Unit) {
 
 	for left != lo || right != hi {
-		if right.Sub(left) > 0 && (first.space || first.width <= right.Sub(left)) {
+		if right.Sub(left) > 0 && (first.Space || first.Width <= right.Sub(left)) {
 			break
 		}
 		next, ok := origin.ctx.nextBottomBelow(origin.y.Add(y))
@@ -1853,7 +1853,7 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			// Out of flow and, unlike a float, out of the way: it takes no width
 			// on the line, breaks nothing and shortens nothing. All that is kept
 			// is where it was written, which is its static position.
-			out = append(out, inlineItem{abs: child})
+			out = append(out, inlineItem{Abs: child})
 			continue
 		}
 		if child.Float != FloatNone {
@@ -1862,7 +1862,7 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			// belongs to is known. The state passes straight through, because
 			// "a <span class=float></span>b" is still one word followed by
 			// another with a space between them.
-			out = append(out, inlineItem{float: child})
+			out = append(out, inlineItem{Float: child})
 			continue
 		}
 		if child.Replaced != nil || isAtomicInline(child) {
@@ -1878,7 +1878,7 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			// box, whose extent is whatever its words turn out to need and
 			// which therefore has to be flattened into the run.
 			item := l.atomicItem(child, frame)
-			item.bidiPara, item.bidiStart, item.bidiEnd = para, start, end
+			item.BidiPara, item.BidiStart, item.BidiEnd = para, start, end
 			out = append(out, item)
 			// LB20's other half: a line may also begin after the picture, so
 			// "<img/><img/>" is two units and the second wraps when it does not
@@ -1905,7 +1905,7 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			// A line break the author wrote. It is not a break *opportunity* —
 			// it ends the line wherever it falls, even mid-word and even on a
 			// line with room to spare.
-			out = append(out, inlineItem{box: child, forced: true})
+			out = append(out, inlineItem{Box: child, Forced: true})
 			// It ends a bidi paragraph too: CSS makes a forced break a paragraph
 			// separator, so the direction of what follows is decided afresh
 			// rather than by the first strong character of the block.
@@ -1957,7 +1957,7 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 				// before it is a different question and is left alone. §4.1.1's
 				// fourth rule collapses across an inline boundary, and a margin
 				// on the boundary does not make two spaces into one space each.
-				lead.breakBefore = state.breakOpportunity
+				lead.BreakBefore = state.breakOpportunity
 				state.breakOpportunity = false
 				out = append(out, lead)
 			}
@@ -2123,10 +2123,10 @@ func (l *layouter) insetItems(b *Box, containing style.Unit) (lead, trail inline
 	if left == 0 && right == 0 {
 		return inlineItem{}, inlineItem{}, false
 	}
-	item := inlineItem{box: b, inset: true}
+	item := inlineItem{Box: b, Inset: true}
 	lead, trail = item, item
-	lead.insetLead = true
-	lead.width, trail.width = left, right
+	lead.InsetLead = true
+	lead.Width, trail.Width = left, right
 	return lead, trail, true
 }
 
@@ -2195,9 +2195,9 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			// A segment break that survived Phase I is a break the author
 			// wrote, and it ends the line as firmly as a <br> does — and ends a
 			// bidi paragraph with it, for the same reason.
-			out = append(out, inlineItem{box: b, face: face, size: size, forced: true,
-				offset: offset, leads: true, above: above, below: below,
-				valign: frame.valign})
+			out = append(out, inlineItem{Box: b, Face: face, Size: size, Forced: true,
+				Offset: offset, Leads: true, Above: above, Below: below,
+				Valign: frame.valign})
 			frame.bidi.breakParagraph()
 			state = startOfContext()
 			continue
@@ -2214,25 +2214,25 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 
 		para, start, end := frame.bidi.add(p.text)
 		item := inlineItem{
-			bidiPara: para, bidiStart: start, bidiEnd: end,
-			text: p.text, box: b, face: face, size: size,
-			leads: true, above: above, below: below,
+			BidiPara: para, BidiStart: start, BidiEnd: end,
+			Text: p.text, Box: b, Face: face, Size: size,
+			Leads: true, Above: above, Below: below,
 			// §10.8.1's vertical-align, which a text box cannot be asked for
 			// itself: the property is not inherited, so the anonymous box holding
 			// a <span>'s words carries the initial value however the span was
 			// aligned. The frame brought the answer down from the boxes the walk
 			// is inside.
-			valign: frame.valign,
+			Valign: frame.valign,
 			// An opportunity carried in from the piece before is offered to
 			// anything but a space. UAX #14's LB7 — "do not break before spaces"
 			// — is an earlier rule than every rule that creates one, so a space
 			// belongs to the unit in front of it and the break falls after it.
 			// The piece's own opportunity still stands, which is what puts the
 			// break after a preserved space rather than losing it.
-			breakBefore: p.breakBefore || (state.breakOpportunity && !p.space),
-			space:       p.space, collapsible: p.collapsible,
-			trimAtEnd: p.trimAtEnd,
-			tab:       p.tab, tabStop: tabStop, tabFloor: tabFloor,
+			BreakBefore: p.breakBefore || (state.breakOpportunity && !p.space),
+			Space:       p.space, Collapsible: p.collapsible,
+			TrimAtEnd: p.trimAtEnd,
+			Tab:       p.tab, TabStop: tabStop, TabFloor: tabFloor,
 			// §4.1.2's fourth rule, which is three answers and not one.
 			//
 			// What reaches it is whatever rule 3 left: under a collapsing value
@@ -2256,19 +2256,19 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			//
 			// The distinction is invisible on the page and decides two intrinsic
 			// widths, which is where hangsHard is read. See widthsOf.
-			hangs:     p.space && !p.collapsible && !ws.breakSpaces && (ws.collapse || ws.wrap),
-			hangsHard: p.space && !p.collapsible && ws.collapse,
-			noWrap:    !ws.wrap, offset: offset,
-			breakWord:   ow.breakWord,
-			anywhere:    ow.anywhere,
-			decorations: decorations, spacing: spacing,
+			Hangs:     p.space && !p.collapsible && !ws.breakSpaces && (ws.collapse || ws.wrap),
+			HangsHard: p.space && !p.collapsible && ws.collapse,
+			NoWrap:    !ws.wrap, Offset: offset,
+			BreakWord:   ow.breakWord,
+			Anywhere:    ow.anywhere,
+			Decorations: decorations, Spacing: spacing,
 		}
 		if !p.tab {
 			// A tab is measured against a tab stop when it lands, so there is
 			// nothing to measure here and the face's own advance for U+0009 —
 			// whatever a face happens to give a character it has no glyph for —
 			// would be the wrong number to carry.
-			item.width = l.br.measureSpaced(face, p.text, size, spacing)
+			item.Width = l.br.measureSpaced(face, p.text, size, spacing)
 		}
 		out = append(out, item)
 		state = inlineState{afterCollapsibleSpace: p.collapsible}
@@ -2791,7 +2791,7 @@ func (l *layouter) balanceCaps(b *Box, items []inlineItem, width, indent style.U
 	}
 	start := 0
 	for i := 0; i <= len(items); i++ {
-		if i < len(items) && !items[i].forced {
+		if i < len(items) && !items[i].Forced {
 			continue
 		}
 		ind := style.Unit(0)
@@ -2863,7 +2863,7 @@ func (br *breaker) clampedReach(items []inlineItem,
 
 	i, iByte := 0, 0
 	for n := 0; n < maxLines; n++ {
-		for iByte == 0 && i < len(items) && items[i].float != nil {
+		for iByte == 0 && i < len(items) && items[i].Float != nil {
 			i++
 		}
 		if i >= len(items) {
@@ -2882,7 +2882,7 @@ func (br *breaker) clampedReach(items []inlineItem,
 		if last {
 			var used style.Unit
 			for _, r := range runs {
-				used = used.Add(r.width)
+				used = used.Add(r.Width)
 			}
 			if used > room {
 				// The breaker only overflows when a single unit left it no
@@ -2939,7 +2939,7 @@ func (br *breaker) countLinesInBands(items []inlineItem, bands []style.Unit,
 	n := 0
 	iByte := 0
 	for i := 0; i < len(items); {
-		for iByte == 0 && i < len(items) && items[i].float != nil {
+		for iByte == 0 && i < len(items) && items[i].Float != nil {
 			i++
 		}
 		if i >= len(items) {
@@ -3108,7 +3108,7 @@ func (br *breaker) balanceScoredCaps(items []inlineItem, bands []style.Unit,
 			}
 			var used style.Unit
 			for _, run := range runs {
-				used = used.Add(run.width)
+				used = used.Add(run.Width)
 			}
 			rest := best(state{next, nextByte, st.n + 1})
 			if rest.ok {
@@ -3168,7 +3168,7 @@ func (br *breaker) countLines(items []inlineItem, width, indent style.Unit, limi
 	n := 0
 	iByte := 0
 	for i := 0; i < len(items); {
-		for iByte == 0 && i < len(items) && items[i].float != nil {
+		for iByte == 0 && i < len(items) && items[i].Float != nil {
 			i++
 		}
 		if i >= len(items) {
@@ -3273,7 +3273,7 @@ func (br *breaker) breakOneLine(items []inlineItem, from, fromByte int, width, l
 	// them breakable again.
 	end := len(items)
 	for k := from; k < len(items); k++ {
-		if items[k].forced {
+		if items[k].Forced {
 			end = k
 			break
 		}
@@ -3294,23 +3294,23 @@ func (br *breaker) breakOneLine(items []inlineItem, from, fromByte int, width, l
 			_, item = br.splitItem(item, fromByte)
 		}
 
-		if item.float != nil {
+		if item.Float != nil {
 			// Recorded with how far along the line it was reached, which is what
 			// decides whether it goes beside this line or below it.
-			outOfFlow = append(outOfFlow, midLineBox{box: item.float, used: used})
+			outOfFlow = append(outOfFlow, midLineBox{box: item.Float, used: used})
 			continue
 		}
 
-		if item.abs != nil {
+		if item.Abs != nil {
 			// Recorded and otherwise ignored. It consumes no width, so the words
 			// on the line are placed exactly as they would have been had the box
 			// not been written at all — which is what "out of flow" means and is
 			// the assertion a test can make that a float cannot.
-			outOfFlow = append(outOfFlow, midLineBox{box: item.abs, used: used, abs: true})
+			outOfFlow = append(outOfFlow, midLineBox{box: item.Abs, used: used, abs: true})
 			continue
 		}
 
-		if item.forced {
+		if item.Forced {
 			// An instruction rather than an opportunity: the line ends here
 			// whatever room is left, and an empty one still occupies its height.
 			return trimLineEdge(line), i + 1, 0, outOfFlow, true
@@ -3338,25 +3338,25 @@ func (br *breaker) breakOneLine(items []inlineItem, from, fromByte int, width, l
 		// 2973 clean passes either way — so this branch is the correct reading
 		// of the rule and has no test, which is a different thing from being
 		// covered.
-		if item.collapsible && !content {
+		if item.Collapsible && !content {
 			continue
 		}
 
-		if item.tab {
+		if item.Tab {
 			// The distance to the next tab stop, plus whatever letter-spacing adds
 			// after the character — a tab is a character like any other for that
 			// purpose, and leaving it out would put the run after a tab a spacing
 			// to the left of where it is drawn.
-			item.width = tabAdvance(lineX.Add(used), item.tabStop, item.tabFloor).
-				Add(item.spacing.letter)
+			item.Width = tabAdvance(lineX.Add(used), item.TabStop, item.TabFloor).
+				Add(item.Spacing.letter)
 		}
 
 		// A hanging space never causes a break: it sits past the line's end
 		// rather than moving to the next one. Without this, "XX    XX" under
 		// pre-wrap would push the second word down a line for spaces that take
 		// no room on the page at all.
-		if !item.noWrap && !item.hangs && i < tailFrom && item.breakBefore &&
-			len(line) > 0 && used.Add(item.width) > width {
+		if !item.NoWrap && !item.Hangs && i < tailFrom && item.BreakBefore &&
+			len(line) > 0 && used.Add(item.Width) > width {
 			return trimLineEdge(line), i, 0, outOfFlow, false
 		}
 
@@ -3364,8 +3364,8 @@ func (br *breaker) breakOneLine(items []inlineItem, from, fromByte int, width, l
 		// but an inline box opened just before it did, and the pair is what does
 		// not fit — so the line ends where the box began and the box's leading
 		// margin goes with it.
-		if !item.noWrap && !item.hangs && i < tailFrom && !item.breakBefore && !item.inset &&
-			insetAt >= 0 && used.Add(item.width) > width {
+		if !item.NoWrap && !item.Hangs && i < tailFrom && !item.BreakBefore && !item.Inset &&
+			insetAt >= 0 && used.Add(item.Width) > width {
 			return trimLineEdge(line[:insetLine]), insetAt, 0, outOfFlow[:insetFlow], false
 		}
 
@@ -3388,9 +3388,9 @@ func (br *breaker) breakOneLine(items []inlineItem, from, fromByte int, width, l
 		// and this is not the change that should alter it; extending the rule to
 		// text alone moves nothing on the suite either way and fixes the case
 		// above, which makes it a strict improvement rather than a trade.
-		if (item.space || item.atomicBox == nil) && !item.collapsible &&
-			!item.hangs && i < tailFrom && !item.noWrap && !item.inset &&
-			!item.breakBefore && oppAt >= 0 && used.Add(item.width) > width {
+		if (item.Space || item.AtomicBox == nil) && !item.Collapsible &&
+			!item.Hangs && i < tailFrom && !item.NoWrap && !item.Inset &&
+			!item.BreakBefore && oppAt >= 0 && used.Add(item.Width) > width {
 			return trimLineEdge(line[:oppLine]), oppAt, 0, outOfFlow[:oppFlow], false
 		}
 
@@ -3425,8 +3425,8 @@ func (br *breaker) breakOneLine(items []inlineItem, from, fromByte int, width, l
 		// document in the suite reaches it: zero hits over all 5177 reftests.
 		// Dropping the conjunct therefore moves nothing, which is why it is
 		// recorded here rather than left as an implied claim.
-		if item.breakWord && !item.noWrap && !item.hangs && i < tailFrom && !item.inset && !item.tab &&
-			insetAt < 0 && oppAt < 0 && used.Add(item.width) > width {
+		if item.BreakWord && !item.NoWrap && !item.Hangs && i < tailFrom && !item.Inset && !item.Tab &&
+			insetAt < 0 && oppAt < 0 && used.Add(item.Width) > width {
 			// The offset is into items[i]. It is only the cursor's offset away
 			// from that when this *is* the item the cursor pointed at: a line
 			// that began at a float and reached its first text later is at
@@ -3458,7 +3458,7 @@ func (br *breaker) breakOneLine(items []inlineItem, from, fromByte int, width, l
 			}
 		}
 
-		if item.width > width && !content && !item.space && !item.noWrap && !item.inset {
+		if item.Width > width && !content && !item.Space && !item.NoWrap && !item.Inset {
 			// An inset is not text and has no text to name in the report. A
 			// margin wider than the line is also not the fault the report is
 			// about — nothing is clipped, the content is simply pushed past the
@@ -3468,15 +3468,15 @@ func (br *breaker) breakOneLine(items []inlineItem, from, fromByte int, width, l
 		// Recorded before the switch below, because that is where content becomes
 		// true: an opportunity at the very start of a line is not one the line can
 		// be sent back to.
-		if item.breakBefore && content {
+		if item.BreakBefore && content {
 			oppAt, oppLine, oppFlow = i, len(line), len(outOfFlow)
 		}
 
 		switch {
-		case item.inset && item.breakBefore && content && insetAt < 0:
+		case item.Inset && item.BreakBefore && content && insetAt < 0:
 			// The line could have ended here. Remember enough to come back.
 			insetAt, insetLine, insetFlow = i, len(line), len(outOfFlow)
-		case !item.inset:
+		case !item.Inset:
 			// Something that is not a margin has been placed, so the break
 			// before the last box is no longer the one to rewind to: there is a
 			// nearer opportunity, or none, and either way this one is spent.
@@ -3484,7 +3484,7 @@ func (br *breaker) breakOneLine(items []inlineItem, from, fromByte int, width, l
 			content = true
 		}
 		line = append(line, item)
-		used = used.Add(item.width)
+		used = used.Add(item.Width)
 	}
 	return trimLineEdge(line), i, 0, outOfFlow, false
 }
@@ -3495,14 +3495,14 @@ func (br *breaker) breakOneLine(items []inlineItem, from, fromByte int, width, l
 // paragraph containing one impossible word would otherwise complain on every
 // line it wraps to.
 func (l *layouter) reportOverflow(item inlineItem, width style.Unit) {
-	what := "the text " + quoteValue(item.text)
-	key := item.text
-	if item.atomic != nil {
+	what := "the text " + quoteValue(item.Text)
+	key := item.Text
+	if item.Atomic != nil {
 		// A replaced element has no text to name it by, and two different
 		// images of the same width are two findings rather than one — so the
 		// key is where it is in the document rather than what it says.
 		what = "the image"
-		key = "\x00replaced\x00" + PathOf(item.box.Element)
+		key = "\x00replaced\x00" + PathOf(item.Box.Element)
 	}
 	if l.reportedOverflow[key] {
 		return
@@ -3511,9 +3511,9 @@ func (l *layouter) reportOverflow(item inlineItem, width style.Unit) {
 	l.rec.ReportDetail(Finding{
 		Rule: RuleUnbreakableOverflow,
 		Message: what + " is " +
-			fmtPx(item.width) + " wide and cannot be broken, in a space " +
+			fmtPx(item.Width) + " wide and cannot be broken, in a space " +
 			fmtPx(width) + " wide; the part past the edge will not be drawn",
-		Path: PathOf(item.box.Element),
+		Path: PathOf(item.Box.Element),
 	})
 }
 
@@ -3549,7 +3549,7 @@ func fmtPx(u style.Unit) string {
 // inset is kept.
 func trimLineEdge(line []inlineItem) []inlineItem {
 	end := len(line)
-	for end > 0 && (line[end-1].trimAtEnd || line[end-1].inset) {
+	for end > 0 && (line[end-1].TrimAtEnd || line[end-1].Inset) {
 		end--
 	}
 	if end == len(line) {
@@ -3559,7 +3559,7 @@ func trimLineEdge(line []inlineItem) []inlineItem {
 	// after end, which are still the caller's.
 	out := line[:end:end]
 	for _, item := range line[end:] {
-		if item.inset {
+		if item.Inset {
 			out = append(out, item)
 		}
 	}
@@ -3575,7 +3575,7 @@ func trimLineEdge(line []inlineItem) []inlineItem {
 // and make the half before it breakable again. Neither is content — §4.1.2's
 // rules are about the text — and neither takes the line anywhere.
 func isLineTailSpace(item inlineItem) bool {
-	if item.inset || item.abs != nil {
+	if item.Inset || item.Abs != nil {
 		return true
 	}
 	// White space that the end of a line does something to: the third rule
@@ -3583,7 +3583,7 @@ func isLineTailSpace(item inlineItem) bool {
 	// neither happens — its spaces are data, they take room, and §3 puts an
 	// opportunity after every one of them — so a line may end inside a run of
 	// them and this must not say otherwise.
-	return item.space && (item.hangs || item.trimAtEnd)
+	return item.Space && (item.Hangs || item.TrimAtEnd)
 }
 
 // lineHeight resolves the line-height property.
@@ -4098,7 +4098,7 @@ func (l *layouter) faceForText(b *Box) (*shape.Face, bool) {
 // text that is actually drawn.
 func (br *breaker) splitItem(item inlineItem, at int) (head, tail inlineItem) {
 	head, tail = item, item
-	head.text, tail.text = item.text[:at], item.text[at:]
+	head.Text, tail.Text = item.Text[:at], item.Text[at:]
 	// at is an offset into the string, and the bidi range counts runes: the
 	// paragraph the levels were resolved over is a []rune, and bidiStart is a
 	// position in it. Adding the byte offset to it is right for Latin and wrong
@@ -4110,11 +4110,11 @@ func (br *breaker) splitItem(item inlineItem, at int) (head, tail inlineItem) {
 	// word: the "12" belongs to the left of the letters and was drawn to the
 	// right of them, on the line the tail begins, while the same text unbroken
 	// orders correctly.
-	runesBefore := utf8.RuneCountInString(item.text[:at])
-	head.bidiEnd = item.bidiStart + runesBefore
-	tail.bidiStart = item.bidiStart + runesBefore
-	head.width = br.measureSpaced(item.face, head.text, item.size, item.spacing)
-	tail.width = br.measureSpaced(item.face, tail.text, item.size, item.spacing)
+	runesBefore := utf8.RuneCountInString(item.Text[:at])
+	head.BidiEnd = item.BidiStart + runesBefore
+	tail.BidiStart = item.BidiStart + runesBefore
+	head.Width = br.measureSpaced(item.Face, head.Text, item.Size, item.Spacing)
+	tail.Width = br.measureSpaced(item.Face, tail.Text, item.Size, item.Spacing)
 	// The tail begins a line, so it takes no opportunity from what was in front
 	// of the head — there is nothing in front of it any more.
 	//
@@ -4123,7 +4123,7 @@ func (br *breaker) splitItem(item inlineItem, at int) (head, tail inlineItem) {
 	// acted on (the break in front of one wants a line with something on it). It
 	// is cleared because leaving it would make the field state something untrue
 	// about where the item now sits, not because a document can tell.
-	tail.breakBefore = false
+	tail.BreakBefore = false
 	return head, tail
 }
 
@@ -4149,10 +4149,10 @@ func (br *breaker) splitItem(item inlineItem, at int) (head, tail inlineItem) {
 // breaking one off to leave the rest overflowing anyway would only lose a
 // character off the end.
 func (br *breaker) breakInsideWord(item inlineItem, width style.Unit) (head inlineItem, at int, ok bool) {
-	if !item.breakWord || item.face == nil || width <= 0 || item.text == "" {
+	if !item.BreakWord || item.Face == nil || width <= 0 || item.Text == "" {
 		return inlineItem{}, 0, false
 	}
-	bounds := segment.Boundaries(nil, item.text)
+	bounds := segment.Boundaries(nil, item.Text)
 	if len(bounds) == 0 {
 		return inlineItem{}, 0, false // one cluster: nothing to cut
 	}
@@ -4168,7 +4168,7 @@ func (br *breaker) breakInsideWord(item inlineItem, width style.Unit) (head inli
 		if mid > len(bounds) {
 			break
 		}
-		w := br.measureSpaced(item.face, item.text[:bounds[mid-1]], item.size, item.spacing)
+		w := br.measureSpaced(item.Face, item.Text[:bounds[mid-1]], item.Size, item.Spacing)
 		if w <= width {
 			lo = mid
 		} else {

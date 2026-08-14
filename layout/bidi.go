@@ -325,11 +325,11 @@ func (l *layouter) resolveBidi(b *Box, items []inlineItem, p *bidiBuilder) []inl
 
 	out := make([]inlineItem, 0, len(items))
 	for _, item := range items {
-		if item.bidiPara < 1 || item.bidiPara > len(resolved) {
+		if item.BidiPara < 1 || item.BidiPara > len(resolved) {
 			out = append(out, item)
 			continue
 		}
-		para := resolved[item.bidiPara-1]
+		para := resolved[item.BidiPara-1]
 		if para == nil {
 			out = append(out, item)
 			continue
@@ -427,15 +427,15 @@ func insetSides(items []inlineItem) {
 	content, odd := 0, 0
 
 	for i := range items {
-		if items[i].inset {
-			if items[i].insetLead {
+		if items[i].Inset {
+			if items[i].InsetLead {
 				stack = append(stack, open{
-					box: items[i].box, lead: i,
+					box: items[i].Box, lead: i,
 					content: content, odd: odd, min: noLevel,
 				})
 				continue
 			}
-			if len(stack) == 0 || stack[len(stack)-1].box != items[i].box {
+			if len(stack) == 0 || stack[len(stack)-1].box != items[i].Box {
 				// The pair is emitted together by insetItems and nested by the
 				// recursion that emits it, so this cannot happen. It is checked
 				// because the alternative to skipping is swapping two unrelated
@@ -458,27 +458,27 @@ func insetSides(items []inlineItem) {
 			// whose direction and content run the same way and on nothing else.
 			// A "direction: rtl" span holding Latin text is the case it got
 			// wrong, and CSS2/box/rtl-basic is that document.
-			if beginsAtRight(items[top.lead].box) {
-				items[top.lead].width, items[i].width =
-					items[i].width, items[top.lead].width
+			if beginsAtRight(items[top.lead].Box) {
+				items[top.lead].Width, items[i].Width =
+					items[i].Width, items[top.lead].Width
 			}
 			if top.min != noLevel {
-				items[top.lead].insetLevel, items[top.lead].insetLevelKnown = top.min, true
-				items[i].insetLevel, items[i].insetLevelKnown = top.min, true
+				items[top.lead].InsetLevel, items[top.lead].InsetLevelKnown = top.min, true
+				items[i].InsetLevel, items[i].InsetLevelKnown = top.min, true
 			}
 			continue
 		}
-		if items[i].para == nil {
+		if items[i].Para == nil {
 			// No characters of its own: a float marker, or a run in a paragraph
 			// the algorithm did not resolve. It says nothing about direction.
 			continue
 		}
 		content++
-		if items[i].level&1 == 1 {
+		if items[i].Level&1 == 1 {
 			odd++
 		}
-		if len(stack) > 0 && items[i].level < stack[len(stack)-1].min {
-			stack[len(stack)-1].min = items[i].level
+		if len(stack) > 0 && items[i].Level < stack[len(stack)-1].min {
+			stack[len(stack)-1].min = items[i].Level
 		}
 	}
 }
@@ -518,9 +518,9 @@ func (l *layouter) placeInsetsBySide(runs []inlineItem, order []int) []int {
 	var boxes []*Box
 	seen := map[*Box]bool{}
 	for _, k := range order {
-		if runs[k].inset && runs[k].box != nil && !seen[runs[k].box] {
-			seen[runs[k].box] = true
-			boxes = append(boxes, runs[k].box)
+		if runs[k].Inset && runs[k].Box != nil && !seen[runs[k].Box] {
+			seen[runs[k].Box] = true
+			boxes = append(boxes, runs[k].Box)
 		}
 	}
 	sort.SliceStable(boxes, func(a, c int) bool {
@@ -533,8 +533,8 @@ func (l *layouter) placeInsetsBySide(runs []inlineItem, order []int) []int {
 		lead, trail := -1, -1
 		rest := make([]int, 0, len(order))
 		for _, k := range order {
-			if runs[k].inset && runs[k].box == b {
-				if runs[k].insetLead {
+			if runs[k].Inset && runs[k].Box == b {
+				if runs[k].InsetLead {
 					lead = k
 				} else {
 					trail = k
@@ -548,7 +548,7 @@ func (l *layouter) placeInsetsBySide(runs []inlineItem, order []int) []int {
 		// right: an outer border encloses an inner margin.
 		lo, hi := -1, -1
 		for i, k := range rest {
-			if !itemInside(runs[k], b) || runs[k].width == 0 {
+			if !itemInside(runs[k], b) || runs[k].Width == 0 {
 				// An item with no width draws nothing, so it is not one of the
 				// boxes §8.6 puts an inset at the end of — and letting one stand
 				// for the box's edge strands the inset away from the words. A
@@ -608,8 +608,8 @@ func boxDepth(b *Box) int {
 // group was two insets with a word between them that belonged to nobody, and
 // the rearrangement below declined to touch it.
 func itemInside(item inlineItem, b *Box) bool {
-	start := item.box
-	if item.atomicBox != nil && start != nil {
+	start := item.Box
+	if item.AtomicBox != nil && start != nil {
 		start = start.Parent
 	}
 	for c := start; c != nil; c = c.Parent {
@@ -623,28 +623,28 @@ func itemInside(item inlineItem, b *Box) bool {
 // splitByLevel cuts one item where its characters change embedding level.
 func (l *layouter) splitByLevel(item inlineItem, para *bidi.Paragraph) []inlineItem {
 	levels := para.Levels()
-	if item.bidiEnd > len(levels) || item.bidiStart >= item.bidiEnd {
-		item.para = para
+	if item.BidiEnd > len(levels) || item.BidiStart >= item.BidiEnd {
+		item.Para = para
 		return []inlineItem{item}
 	}
-	item.para = para
-	item.level = levels[item.bidiStart]
+	item.Para = para
+	item.Level = levels[item.BidiStart]
 
 	// Almost every item is one level throughout — a word is one direction — so
 	// the scan for a boundary is the whole cost in the usual case.
 	uniform := true
-	for i := item.bidiStart + 1; i < item.bidiEnd; i++ {
-		if levels[i] != levels[item.bidiStart] {
+	for i := item.BidiStart + 1; i < item.BidiEnd; i++ {
+		if levels[i] != levels[item.BidiStart] {
 			uniform = false
 			break
 		}
 	}
-	if uniform || item.text == "" {
+	if uniform || item.Text == "" {
 		return []inlineItem{item}
 	}
 
-	runes := []rune(item.text)
-	if len(runes) != item.bidiEnd-item.bidiStart {
+	runes := []rune(item.Text)
+	if len(runes) != item.BidiEnd-item.BidiStart {
 		// The item's text and its place in the paragraph disagree, which can only
 		// mean the two were built from different text. Splitting on the levels
 		// would cut the string at the wrong place, so the item is left whole at
@@ -662,20 +662,20 @@ func (l *layouter) splitByLevel(item inlineItem, para *bidi.Paragraph) []inlineI
 	var out []inlineItem
 	for i := 0; i < len(runes); {
 		j := i + 1
-		for j < len(runes) && levels[item.bidiStart+j] == levels[item.bidiStart+i] {
+		for j < len(runes) && levels[item.BidiStart+j] == levels[item.BidiStart+i] {
 			j++
 		}
 		piece := item
-		piece.text = string(runes[i:j])
-		piece.bidiStart = item.bidiStart + i
-		piece.bidiEnd = item.bidiStart + j
-		piece.level = levels[item.bidiStart+i]
-		piece.width = l.br.measureSpaced(item.face, piece.text, item.size, item.spacing)
+		piece.Text = string(runes[i:j])
+		piece.BidiStart = item.BidiStart + i
+		piece.BidiEnd = item.BidiStart + j
+		piece.Level = levels[item.BidiStart+i]
+		piece.Width = l.br.measureSpaced(item.Face, piece.Text, item.Size, item.Spacing)
 		if i > 0 {
 			// A level boundary is not a break opportunity. "abcHEBREW" is one
 			// word however many directions it is written in, and a line must not
 			// be allowed to end inside it.
-			piece.breakBefore = false
+			piece.BreakBefore = false
 		}
 		out = append(out, piece)
 		i = j
@@ -710,7 +710,7 @@ func (l *layouter) lineOffsets(runs []inlineItem) ([]style.Unit, style.Unit) {
 	var x style.Unit
 	for _, k := range order {
 		xs[k] = x
-		x = x.Add(runs[k].width)
+		x = x.Add(runs[k].Width)
 	}
 	return xs, x
 }
@@ -724,8 +724,8 @@ func (l *layouter) lineOffsets(runs []inlineItem) ([]style.Unit, style.Unit) {
 // resolves against the line's and not the block's.
 func lineBaseIsRTL(b *Box, runs []inlineItem) bool {
 	for _, item := range runs {
-		if item.para != nil {
-			return item.para.Level()&1 == 1
+		if item.Para != nil {
+			return item.Para.Level()&1 == 1
 		}
 	}
 	return isRTL(b)
@@ -739,8 +739,8 @@ func lineBaseIsRTL(b *Box, runs []inlineItem) bool {
 func lineVisualOrder(runs []inlineItem) []int {
 	para := (*bidi.Paragraph)(nil)
 	for _, item := range runs {
-		if item.para != nil {
-			para = item.para
+		if item.Para != nil {
+			para = item.Para
 			break
 		}
 	}
@@ -753,14 +753,14 @@ func lineVisualOrder(runs []inlineItem) []int {
 	// so the two can never be crossed by one line.
 	start, end := -1, -1
 	for _, item := range runs {
-		if item.para != para {
+		if item.Para != para {
 			continue
 		}
-		if start < 0 || item.bidiStart < start {
-			start = item.bidiStart
+		if start < 0 || item.BidiStart < start {
+			start = item.BidiStart
 		}
-		if item.bidiEnd > end {
-			end = item.bidiEnd
+		if item.BidiEnd > end {
+			end = item.BidiEnd
 		}
 	}
 	if start < 0 || end <= start {
@@ -792,12 +792,12 @@ func lineVisualOrder(runs []inlineItem) []int {
 	levels := make([]int, len(runs))
 	for i, item := range runs {
 		switch {
-		case item.para == para && item.bidiStart-start < len(lineLevels):
-			levels[i] = lineLevels[item.bidiStart-start]
-		case item.insetLevelKnown && !item.inset:
+		case item.Para == para && item.BidiStart-start < len(lineLevels):
+			levels[i] = lineLevels[item.BidiStart-start]
+		case item.InsetLevelKnown && !item.Inset:
 			// Kept for a caller that sets the field on something other than an
 			// inset; nothing in this engine does.
-			levels[i] = item.insetLevel
+			levels[i] = item.InsetLevel
 		default:
 			levels[i] = levelUnset
 		}

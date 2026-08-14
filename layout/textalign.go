@@ -172,16 +172,16 @@ func (l *layouter) reportJustify(b *Box) {
 func alignedWidth(runs []inlineItem, total style.Unit) style.Unit {
 	for i := len(runs) - 1; i >= 0; i-- {
 		item := runs[i]
-		if item.inset {
+		if item.Inset {
 			continue
 		}
-		if item.atomicBox != nil || item.atomic != nil {
+		if item.AtomicBox != nil || item.Atomic != nil {
 			break
 		}
-		if strings.TrimSpace(item.text) != "" {
+		if strings.TrimSpace(item.Text) != "" {
 			break
 		}
-		if !item.hangs {
+		if !item.Hangs {
 			// break-spaces. Its trailing space is not hanging past the end of the
 			// line, it *is* the end of the line — the value exists so that the
 			// spaces are content — so it counts towards where the line sits. A
@@ -189,7 +189,7 @@ func alignedWidth(runs []inlineItem, total style.Unit) style.Unit {
 			// edge, and under pre-wrap it does not.
 			break
 		}
-		total = total.Sub(item.width)
+		total = total.Sub(item.Width)
 	}
 	return style.Max(total, 0)
 }

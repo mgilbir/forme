@@ -347,31 +347,31 @@ func (l *layouter) widthsOf(items []inlineItem) intrinsicWidths {
 		// of digits together and U+202F NARROW NO-BREAK SPACE holds a number to
 		// its unit, and a minimum width that broke at either would be the width
 		// of one digit.
-		breaks := k+1 >= len(items) || items[k+1].breakBefore
+		breaks := k+1 >= len(items) || items[k+1].BreakBefore
 		switch {
-		case item.float != nil:
+		case item.Float != nil:
 			// A float beside text is as wide as it is whether or not the text
 			// wraps, so it raises both numbers on its own rather than joining
 			// the run of words.
-			got := l.outerWidths(heldBox(item.float), 0)
+			got := l.outerWidths(heldBox(item.Float), 0)
 			out.min = style.Max(out.min, got.min)
 			out.max = style.Max(out.max, got.max)
 
-		case item.abs != nil:
+		case item.Abs != nil:
 			// Out of flow: it takes no width on the line, so it contributes to
 			// neither number.
 
-		case item.atomicBox != nil:
+		case item.AtomicBox != nil:
 			// An atomic inline cannot be broken, so it joins the unbreakable
 			// run rather than ending it — "an <img> in a sentence" is one word,
 			// a picture and another word, with the picture as unsplittable as
 			// either. It contributes its own two widths, which for a replaced
 			// element are the same number and for an inline-block are its
 			// content's.
-			if item.breakBefore {
+			if item.BreakBefore {
 				endRun()
 			}
-			got := l.outerWidths(heldBox(item.atomicBox), 0)
+			got := l.outerWidths(heldBox(item.AtomicBox), 0)
 			run = run.Add(got.min)
 			line = line.Add(got.max)
 			// Content, so a space before it is no longer trailing. Without this
@@ -379,27 +379,27 @@ func (l *layouter) widthsOf(items []inlineItem) intrinsicWidths {
 			// space's width — the same slip the text case below avoids.
 			edge, runEdge = 0, 0
 
-		case item.forced:
+		case item.Forced:
 			endLine()
 
-		case item.space:
-			w := item.width
-			if item.tab {
+		case item.Space:
+			w := item.Width
+			if item.Tab {
 				// Tab stops are measured from the block's content edge, and on
 				// an unbroken line that edge is where this measurement started.
 				// The letter-spacing after the tab is added the same way line
 				// breaking adds it, so the two cannot disagree about how wide a
 				// tab-separated line is.
-				w = tabAdvance(line, item.tabStop, item.tabFloor).Add(item.spacing.letter)
+				w = tabAdvance(line, item.TabStop, item.TabFloor).Add(item.Spacing.letter)
 			}
-			if item.noWrap || !breaks {
+			if item.NoWrap || !breaks {
 				// Text that may not break has one width, not two. A space in it
 				// is a space and not an opportunity, and an engine that ended
 				// the unbreakable run here would give a nowrap paragraph a
 				// minimum width of its longest word — so a float holding one
 				// would be sized to a fraction of the text it then overflows.
 				run = run.Add(w)
-				if item.trimAtEnd || item.hangs {
+				if item.TrimAtEnd || item.Hangs {
 					runEdge = runEdge.Add(w)
 				} else {
 					runEdge = 0
@@ -420,19 +420,19 @@ func (l *layouter) widthsOf(items []inlineItem) intrinsicWidths {
 				// can be is one space wider. "123    8" in four characters wraps
 				// to "123 " and "   8", and a minimum of three said the four
 				// would not fit.
-				if !item.trimAtEnd && !item.hangs {
+				if !item.TrimAtEnd && !item.Hangs {
 					run = run.Add(w)
 				}
 				endRun()
 			}
 			line = line.Add(w)
-			if item.trimAtEnd || item.hangsHard {
+			if item.TrimAtEnd || item.HangsHard {
 				edge = edge.Add(w)
 			} else {
 				edge = 0
 			}
 
-		case item.anywhere && !item.noWrap:
+		case item.Anywhere && !item.NoWrap:
 			// overflow-wrap: anywhere. §5.5 gives this value opportunities that
 			// *are* counted here, which is the only thing that distinguishes it
 			// from break-word: a shrink-to-fit box holding one long word narrows
@@ -443,15 +443,15 @@ func (l *layouter) widthsOf(items []inlineItem) intrinsicWidths {
 			// two characters is not part of anything unbreakable.
 			endRun()
 			out.min = style.Max(out.min, l.widestCluster(item))
-			line = line.Add(item.width)
+			line = line.Add(item.Width)
 			edge, runEdge = 0, 0
 
 		default:
-			if item.breakBefore && !item.noWrap {
+			if item.BreakBefore && !item.NoWrap {
 				endRun()
 			}
-			run = run.Add(item.width)
-			line = line.Add(item.width)
+			run = run.Add(item.Width)
+			line = line.Add(item.Width)
 			edge, runEdge = 0, 0
 		}
 	}
@@ -472,13 +472,13 @@ func (l *layouter) widthsOf(items []inlineItem) intrinsicWidths {
 // kerning between two clusters, and there is none: they are never adjacent on a
 // line this width.
 func (l *layouter) widestCluster(item inlineItem) style.Unit {
-	if item.face == nil || item.text == "" {
-		return item.width
+	if item.Face == nil || item.Text == "" {
+		return item.Width
 	}
 	var widest style.Unit
 	prev := 0
-	for _, at := range append(segment.Boundaries(nil, item.text), len(item.text)) {
-		w := l.br.measureSpaced(item.face, item.text[prev:at], item.size, item.spacing)
+	for _, at := range append(segment.Boundaries(nil, item.Text), len(item.Text)) {
+		w := l.br.measureSpaced(item.Face, item.Text[prev:at], item.Size, item.Spacing)
 		widest = style.Max(widest, w)
 		prev = at
 	}

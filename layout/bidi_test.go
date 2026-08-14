@@ -778,8 +778,8 @@ func TestSplittingAnItemMovesItsBidiRangeByRunes(t *testing.T) {
 	// Four Hebrew letters — eight bytes — sitting at position seven of their
 	// paragraph, cut after the first two.
 	item := inlineItem{
-		text: hebrewAB + hebrewGD, face: face, size: mustPx(20),
-		bidiPara: 1, bidiStart: 7, bidiEnd: 11,
+		Text: hebrewAB + hebrewGD, Face: face, Size: mustPx(20),
+		BidiPara: 1, BidiStart: 7, BidiEnd: 11,
 	}
 	head, tail := l.br.splitItem(item, len(hebrewAB))
 
@@ -787,23 +787,23 @@ func TestSplittingAnItemMovesItsBidiRangeByRunes(t *testing.T) {
 		name string
 		it   inlineItem
 	}{{"head", head}, {"tail", tail}} {
-		runes := utf8.RuneCountInString(half.it.text)
-		if got := half.it.bidiEnd - half.it.bidiStart; got != runes {
+		runes := utf8.RuneCountInString(half.it.Text)
+		if got := half.it.BidiEnd - half.it.BidiStart; got != runes {
 			t.Errorf("the %s covers %d positions of the paragraph for %d runes of text "+
 				"(%d..%d for %q) — splitByLevel reads a mismatch as text and levels built "+
 				"from different strings and gives up on reordering the item",
-				half.name, got, runes, half.it.bidiStart, half.it.bidiEnd, half.it.text)
+				half.name, got, runes, half.it.BidiStart, half.it.BidiEnd, half.it.Text)
 		}
 	}
-	if head.bidiStart != 7 || head.bidiEnd != 9 {
-		t.Errorf("the head is %d..%d, want 7..9", head.bidiStart, head.bidiEnd)
+	if head.BidiStart != 7 || head.BidiEnd != 9 {
+		t.Errorf("the head is %d..%d, want 7..9", head.BidiStart, head.BidiEnd)
 	}
-	if tail.bidiStart != 9 || tail.bidiEnd != 11 {
-		t.Errorf("the tail is %d..%d, want 9..11", tail.bidiStart, tail.bidiEnd)
+	if tail.BidiStart != 9 || tail.BidiEnd != 11 {
+		t.Errorf("the tail is %d..%d, want 9..11", tail.BidiStart, tail.BidiEnd)
 	}
-	if head.bidiEnd != tail.bidiStart {
+	if head.BidiEnd != tail.BidiStart {
 		t.Errorf("the head ends at %d and the tail begins at %d; the two halves have "+
 			"to meet, or a character belongs to both or to neither",
-			head.bidiEnd, tail.bidiStart)
+			head.BidiEnd, tail.BidiStart)
 	}
 }
