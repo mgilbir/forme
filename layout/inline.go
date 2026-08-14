@@ -271,6 +271,38 @@ type inlineFrame struct {
 }
 
 // inlineItem is one piece of inline content before it has been put on a line.
+// itemRef is something on a line that the line itself does not own: a box out
+// of flow, or the fragment an atomic inline was already laid out into.
+//
+// It is opaque on purpose, and the purpose is a seam. Breaking a paragraph into
+// lines, ordering the runs on one and stacking them to a height are questions
+// about text, measured widths and Unicode — none of which needs a box tree. What
+// that half needs to know about a float is that one was met here and must be
+// handed back; what it needs to know about an atomic inline is how far it
+// reaches. Both are answerable without naming what the thing is, and holding it
+// opaque is what keeps the answering code from quietly growing a dependency on
+// the tree it is supposed to be independent of.
+//
+// Nothing in that half dereferences one. Whatever built the items put it in and
+// is the only thing that takes it out again, in the layer that knows what it is.
+type itemRef any
+
+// heldBox and heldFragment take back what an itemRef holds.
+//
+// This is the layer that knows what one is, and these two are the only place
+// that says so. They return the zero value rather than panicking on a ref of the
+// other kind, because the caller has already decided which kind it is asking for
+// by the field it read it from — a float ref is never a fragment.
+func heldBox(r itemRef) *Box {
+	b, _ := r.(*Box)
+	return b
+}
+
+func heldFragment(r itemRef) *Fragment {
+	f, _ := r.(*Fragment)
+	return f
+}
+
 type inlineItem struct {
 	text  string
 	box   *Box
@@ -378,11 +410,11 @@ type inlineItem struct {
 	// from a box whose content is left-to-right.
 	insetLevel      int
 	insetLevelKnown bool
-	// float is the box of a float met in this run of inline content. It carries
-	// no text of its own: it is a marker saying "a float belongs here", because
-	// where a float appears among the words decides which line box it is placed
-	// against, and that position is lost once the items are on lines.
-	float *Box
+	// float is a float met in this run of inline content. It carries no text of
+	// its own: it is a marker saying "a float belongs here", because where a
+	// float appears among the words decides which line box it is placed against,
+	// and that position is lost once the items are on lines.
+	float itemRef
 	// offset is the relative displacement of the inline boxes this item is
 	// inside, which travels with the item because the flattening loses the boxes
 	// themselves.
@@ -391,14 +423,14 @@ type inlineItem struct {
 	// text: a replaced element or an inline-block. It is set whether or not the
 	// box was laid out, because an intrinsic-width measurement needs to know
 	// there is one without producing a fragment for it.
-	atomicBox *Box
+	atomicBox itemRef
 	// atomic is that box's fragment, already laid out. It is nil while
 	// measuring.
 	//
 	// Being laid out already is what makes the item atomic: its size comes from
 	// its own content and its own declarations, so nothing about the line can
 	// change it. All the line decides is where it goes.
-	atomic *Fragment
+	atomic itemRef
 	// leads reports that this item is a run of text whose own inline box takes
 	// part in §10.8.1's stacking, and above and below are how far it reaches from
 	// the baseline.
@@ -431,13 +463,13 @@ type inlineItem struct {
 	// item because the flattening loses the boxes they were read from.
 	decorations []textDecoration
 	spacing     textSpacing
-	// abs is the box of an absolutely positioned box met in this run, and it is
-	// a marker for the same reason and a different consequence. A float met
-	// among the words changes where the words go; an absolutely positioned one
-	// does not change anything at all, but its *static position* — where it
-	// would have been — is what §10.3.7 falls back on, and that is exactly the
-	// information the flattening destroys.
-	abs *Box
+	// abs is an absolutely positioned box met in this run, and it is a marker for
+	// the same reason and a different consequence. A float met among the words
+	// changes where the words go; an absolutely positioned one does not change
+	// anything at all, but its *static position* — where it would have been — is
+	// what §10.3.7 falls back on, and that is exactly the information the
+	// flattening destroys.
+	abs itemRef
 	// bidiPara, bidiStart and bidiEnd say where this item's text sits in the
 	// inline formatting context's bidi paragraphs, which is what the algorithm
 	// resolves levels over.
@@ -597,7 +629,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			// puts its top at the top of the line box it belongs to.
 			for iByte == 0 && i < len(items) && items[i].float != nil {
 				parent.Children = append(parent.Children,
-					l.floatChild(items[i].float, width, origin, y, style.MaxUnit, 0, 0))
+					l.floatChild(heldBox(items[i].float), width, origin, y, style.MaxUnit, 0, 0))
 				i++
 			}
 			if i >= len(items) {
@@ -719,7 +751,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 						continue
 					}
 					held, heldAbs := origin.ctx.mark(), len(l.deferred)
-					kid := l.floatChild(f.box, width, origin, y, baseRoom.Sub(f.used), lh, 0)
+					kid := l.floatChild(heldBox(f.box), width, origin, y, baseRoom.Sub(f.used), lh, 0)
 					if kid.MarginRect().Y > y {
 						origin.ctx.truncate(held)
 						// The out-of-flow boxes the discarded layout found go with
@@ -798,7 +830,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 						// Its margin box hangs from the line's baseline by its own
 						// ascent, which is what puts a picture on the line of type
 						// and an inline-block's last line of text on it.
-						f := item.atomic
+						f := heldFragment(item.atomic)
 						f.BorderRect.X = line.Rect.X.Add(x).Add(f.Margin.Left)
 						f.BorderRect.Y = y.Add(stack.atomicTop(item)).Add(f.Margin.Top)
 						parent.Children = append(parent.Children, f)
@@ -940,7 +972,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			parent.Children = append(parent.Children, midKids...)
 			for _, f := range after {
 				parent.Children = append(parent.Children,
-					l.floatChild(f.box, width, origin, y, lineWidth.Sub(f.used), lh, 0))
+					l.floatChild(heldBox(f.box), width, origin, y, lineWidth.Sub(f.used), lh, 0))
 			}
 
 			// An absolutely positioned box met along the line is dealt with once the
@@ -962,7 +994,8 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					// the negation of the other: one counts from the line's left edge
 					// and the other from the block's content right edge, and the line
 					// need not reach either.
-					if !f.box.staticInline {
+					abs := heldBox(f.box)
+					if !abs.staticInline {
 						// §10.3.7's hypothetical box for a box that would have been
 						// block-level had it been static: a block box, whose margin
 						// edges are the containing block's content edges. Only the
@@ -975,10 +1008,10 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 						// not: float-in-inline-001 and position-absolute-007 in the
 						// suite each write such a box beside a float and check that
 						// the float did not carry it along.
-						l.deferAbsolute(f.box, parent, 0, y, 0, 0)
+						l.deferAbsolute(abs, parent, 0, y, 0, 0)
 						continue
 					}
-					l.deferAbsolute(f.box, parent, left.Sub(lo).Add(f.used), y,
+					l.deferAbsolute(abs, parent, left.Sub(lo).Add(f.used), y,
 						width.Sub(right.Sub(lo).Sub(f.used)), 0)
 				}
 			}
@@ -1239,8 +1272,16 @@ type vAlignState struct {
 	// subtree is the box that asked for it, which is what groups the items of
 	// one subtree together.
 	lineAlign vAlign
-	subtree   *Box
+	subtree   alignSubtree
 }
+
+// alignSubtree identifies one of §10.8.1's aligned subtrees.
+//
+// The stacking only ever asks whether two items belong to the same subtree, so
+// this is compared for identity and never read. What declared the subtree is the
+// business of whatever resolved the vertical-align — see itemRef for why the
+// stacking is kept from knowing.
+type alignSubtree any
 
 // vAlignFor combines an inline box's own vertical-align with what the boxes
 // around it already asked for.
@@ -1416,7 +1457,7 @@ type lineStack struct {
 
 // alignGroup is one of §10.8.1's aligned subtrees, as it appears on one line.
 type alignGroup struct {
-	box       *Box
+	subtree   alignSubtree
 	lineAlign vAlign
 	// ascent and descent are the subtree's extents: the highest top and the
 	// lowest bottom of the boxes in it, measured from the subtree's own
@@ -1429,7 +1470,7 @@ type alignGroup struct {
 // gather adds one box's extents to its subtree's.
 func (ls *lineStack) gather(v vAlignState, ascent, descent style.Unit) {
 	for i := range ls.groups {
-		if ls.groups[i].box != v.subtree {
+		if ls.groups[i].subtree != v.subtree {
 			continue
 		}
 		if ascent > ls.groups[i].ascent {
@@ -1441,7 +1482,7 @@ func (ls *lineStack) gather(v vAlignState, ascent, descent style.Unit) {
 		return
 	}
 	ls.groups = append(ls.groups, alignGroup{
-		box: v.subtree, lineAlign: v.lineAlign, ascent: ascent, descent: descent,
+		subtree: v.subtree, lineAlign: v.lineAlign, ascent: ascent, descent: descent,
 	})
 }
 
@@ -1452,7 +1493,7 @@ func (ls *lineStack) baselineFor(v vAlignState) style.Unit {
 		return ls.baseline
 	}
 	for i := range ls.groups {
-		if ls.groups[i].box == v.subtree {
+		if ls.groups[i].subtree == v.subtree {
 			return ls.groups[i].baseline
 		}
 	}
@@ -1765,7 +1806,10 @@ func (l *layouter) roomForLine(first inlineItem, origin flow, y, left, right, lo
 // positioned box it *is* the static position, and there is no question of room
 // because the box takes none.
 type midLineBox struct {
-	box *Box
+	// box is the out-of-flow box itself, held opaquely: the breaking records
+	// that one was reached and hands it straight back, and the caller that put
+	// it among the items is the one that knows what to do with it. See itemRef.
+	box itemRef
 	// used is how much of the line's width had been filled when the box was
 	// reached, measured from the line's own left edge.
 	used style.Unit
