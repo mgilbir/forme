@@ -1,4 +1,4 @@
-package layout
+package paragraph
 
 import (
 	"strings"
@@ -55,35 +55,35 @@ import (
 // engine's guardrails exist for, and doing them properly means a case-mapping
 // table this module does not otherwise need.
 
-// textTransform is what the property asks for.
-type textTransform uint8
+// TextTransform is what the property asks for.
+type TextTransform uint8
 
 const (
-	transformNone textTransform = iota
-	transformUppercase
-	transformLowercase
-	transformCapitalize
+	TransformNone TextTransform = iota
+	TransformUppercase
+	TransformLowercase
+	TransformCapitalize
 )
 
-// transformOf reads the property.
+// TransformOf reads the property.
 //
 // An unrecognised value is "none", which is what the cascade would have produced
 // had the declaration been thrown out. "full-width" and "full-size-kana" are
 // among the unrecognised ones: both remap characters rather than changing case,
 // and treating either as a case change would silently do something else.
-func transformOf(value string) textTransform {
+func TransformOf(value string) TextTransform {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "uppercase":
-		return transformUppercase
+		return TransformUppercase
 	case "lowercase":
-		return transformLowercase
+		return TransformLowercase
 	case "capitalize":
-		return transformCapitalize
+		return TransformCapitalize
 	}
-	return transformNone
+	return TransformNone
 }
 
-// transformText applies the property to one text node.
+// TransformText applies the property to one text node.
 //
 // inWord says whether the character before this text — which may be in another
 // element — was part of a word, so that "capitalize" does not capitalise the
@@ -93,19 +93,19 @@ func transformOf(value string) textTransform {
 // It allocates once at most: "none" returns the string it was given, and the
 // case transforms build one buffer of the size of the input. A megabyte of text
 // is a megabyte of work and not a rune of garbage per character.
-func transformText(text string, kind textTransform, inWord bool) (string, bool) {
+func TransformText(text string, kind TextTransform, inWord bool) (string, bool) {
 	if text == "" {
 		return text, inWord
 	}
 	switch kind {
-	case transformUppercase:
+	case TransformUppercase:
 		text = strings.ToUpper(text)
-	case transformLowercase:
+	case TransformLowercase:
 		text = strings.ToLower(text)
-	case transformCapitalize:
+	case TransformCapitalize:
 		text = capitalizeWords(text, inWord)
 	}
-	return text, endsInWord(text)
+	return text, EndsInWord(text)
 }
 
 // capitalizeWords titlecases the first letter of every word.
@@ -147,9 +147,9 @@ func isWordRune(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsNumber(r)
 }
 
-// endsInWord reports whether the last character of a string continues a word,
+// EndsInWord reports whether the last character of a string continues a word,
 // which is what the next text node needs to know.
-func endsInWord(text string) bool {
+func EndsInWord(text string) bool {
 	if text == "" {
 		return false
 	}

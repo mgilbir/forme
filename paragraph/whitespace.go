@@ -1,4 +1,4 @@
-package layout
+package paragraph
 
 import (
 	"strings"
@@ -38,7 +38,7 @@ import (
 // tabs (U+0009), and segment breaks" and nothing else. §4.1.2 is written over a
 // wider set — "white space, other space separators, and/or preserved tabs" — so
 // an ideographic space reaches the line breaker as text that nothing collapsed
-// and hangs at the end of a line like any other space. isOtherSpaceSeparator
+// and hangs at the end of a line like any other space. IsOtherSpaceSeparator
 // below is that set.
 //
 // # What is left out
@@ -57,31 +57,31 @@ import (
 // stray space's width in a document that puts a directional control in the
 // middle of one, and not text in the wrong order.
 
-// whiteSpace is what the property sets, which is three independent bits and one
+// WhiteSpace is what the property sets, which is three independent bits and one
 // variant. Modelling it as the bits rather than as six keywords is what stops
 // "does this wrap" and "does this collapse" being asked as "is the value one of
 // these four strings" at each of the several places that need to know.
-type whiteSpace struct {
-	// collapse says a run of spaces and tabs becomes a single space, and that
+type WhiteSpace struct {
+	// Collapse says a run of spaces and tabs becomes a single space, and that
 	// the space is removed at a line edge.
-	collapse bool
-	// preserveBreaks says a segment break survives as a line break rather than
+	Collapse bool
+	// PreserveBreaks says a segment break survives as a line break rather than
 	// being transformed into a space.
-	preserveBreaks bool
-	// wrap says a line may break at an opportunity. It is independent of the
-	// other two, which is the whole reason nowrap and pre-wrap both exist.
-	wrap bool
-	// breakSpaces is the one value that is not a combination of the three.
+	PreserveBreaks bool
+	// Wrap says a line may break at an opportunity. It is independent of the
+	// other two, which is the whole reason nowrap and pre-Wrap both exist.
+	Wrap bool
+	// BreakSpaces is the one value that is not a combination of the three.
 	//
 	// It differs from pre-wrap in two ways that go together: a preserved space
 	// at the end of a line does not hang — it takes room and can overflow — and
 	// there is a break opportunity after every one of them rather than after
 	// the run. That is what it is for: it is the value for text where the
 	// spaces are data.
-	breakSpaces bool
+	BreakSpaces bool
 }
 
-// whiteSpaceFor reads the two longhands the white-space shorthand sets.
+// WhiteSpaceFor reads the two longhands the white-space shorthand sets.
 //
 // They are two properties rather than one because "text-wrap: nowrap" sets the
 // wrapping half without saying anything about collapsing, and the two spellings
@@ -93,29 +93,29 @@ type whiteSpace struct {
 // it is the answer that cannot lose text: a collapse value read as "preserve" by
 // mistake would leave a document's indentation in the page, but a mode read as
 // "nowrap" by mistake would run a paragraph off the edge.
-func whiteSpaceFor(cs style.ComputedStyle) whiteSpace {
-	ws := whiteSpaceOf(cs["white-space-collapse"])
-	ws.wrap = !strings.EqualFold(strings.TrimSpace(cs["text-wrap-mode"]), "nowrap")
+func WhiteSpaceFor(cs style.ComputedStyle) WhiteSpace {
+	ws := WhiteSpaceOf(cs["white-space-collapse"])
+	ws.Wrap = !strings.EqualFold(strings.TrimSpace(cs["text-wrap-mode"]), "nowrap")
 	return ws
 }
 
-// whiteSpaceOf reads white-space-collapse alone, leaving the wrapping half at
-// its initial value. Every caller that has a style should use whiteSpaceFor;
+// WhiteSpaceOf reads white-space-collapse alone, leaving the wrapping half at
+// its initial value. Every caller that has a style should use WhiteSpaceFor;
 // this is for the places that have only the one value — and for the tests, whose
 // cases are written as the collapse keyword.
-func whiteSpaceOf(value string) whiteSpace {
+func WhiteSpaceOf(value string) WhiteSpace {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "preserve":
-		return whiteSpace{preserveBreaks: true, wrap: true}
+		return WhiteSpace{PreserveBreaks: true, Wrap: true}
 	case "preserve-breaks":
-		return whiteSpace{collapse: true, preserveBreaks: true, wrap: true}
+		return WhiteSpace{Collapse: true, PreserveBreaks: true, Wrap: true}
 	case "break-spaces":
-		return whiteSpace{preserveBreaks: true, wrap: true, breakSpaces: true}
+		return WhiteSpace{PreserveBreaks: true, Wrap: true, BreakSpaces: true}
 	}
-	return whiteSpace{collapse: true, wrap: true}
+	return WhiteSpace{Collapse: true, Wrap: true}
 }
 
-// wordBreak is what the word-break property sets: whether a line may end
+// WordBreak is what the word-break property sets: whether a line may end
 // between two characters of a word rather than only between words.
 //
 // CSS Text §5.2 gives it four values and this is a bool, which is a statement
@@ -124,30 +124,30 @@ func whiteSpaceOf(value string) whiteSpace {
 // CJK and Korean text may break and are read as normal *and reported*, because
 // a value that moves a break and is silently ignored produces a line broken in
 // a place the author asked it not to be.
-type wordBreak struct {
-	// breakAll allows a line to end at any typographic character unit boundary
+type WordBreak struct {
+	// BreakAll allows a line to end at any typographic character unit boundary
 	// inside a word, which is the grapheme cluster — see internal/grapheme for
 	// why that is the unit and why the shaper's clusters are not it.
-	breakAll bool
+	BreakAll bool
 }
 
-// wordBreakOf reads the property. The second result is the value to report as
+// WordBreakOf reads the property. The second result is the value to report as
 // unhandled, or the empty string.
 //
 // As with white-space, an unrecognised value gives the initial one rather than a
 // guess: normal is the value that breaks in the fewest places, so a
 // misinterpretation overflows a line rather than cutting a word open.
-func wordBreakOf(value string) (wordBreak, string) {
+func WordBreakOf(value string) (WordBreak, string) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "break-all":
-		return wordBreak{breakAll: true}, ""
+		return WordBreak{BreakAll: true}, ""
 	case "keep-all", "auto-phrase":
-		return wordBreak{}, strings.ToLower(strings.TrimSpace(value))
+		return WordBreak{}, strings.ToLower(strings.TrimSpace(value))
 	}
-	return wordBreak{}, ""
+	return WordBreak{}, ""
 }
 
-// lineBreak is what the line-break property sets: how strict the rules are about
+// LineBreak is what the line-break property sets: how strict the rules are about
 // where a line may end.
 //
 // Three of its four values are about CJK text — loose, normal and strict move
@@ -165,26 +165,26 @@ func wordBreakOf(value string) (wordBreak, string) {
 //	white spaces, or in the middle of words, disregarding any prohibition
 //	against line breaks, even those introduced by characters with the GL, WJ, or
 //	ZWJ character class or mandated by the word-break property.
-type lineBreak struct {
-	// anywhere is that value: an opportunity at every grapheme cluster boundary,
+type LineBreak struct {
+	// Anywhere is that value: an opportunity at every grapheme cluster boundary,
 	// and no prohibition survives it.
-	anywhere bool
+	Anywhere bool
 }
 
-// lineBreakOf reads the property. The second result is the value to report as
+// LineBreakOf reads the property. The second result is the value to report as
 // unhandled, or the empty string — and reporting it is still conditional on the
 // text, which is the caller's decision rather than this one's.
-func lineBreakOf(value string) (lineBreak, string) {
+func LineBreakOf(value string) (LineBreak, string) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "anywhere":
-		return lineBreak{anywhere: true}, ""
+		return LineBreak{Anywhere: true}, ""
 	case "loose", "normal", "strict":
-		return lineBreak{}, strings.ToLower(strings.TrimSpace(value))
+		return LineBreak{}, strings.ToLower(strings.TrimSpace(value))
 	}
-	return lineBreak{}, ""
+	return LineBreak{}, ""
 }
 
-// overflowWrap is what the overflow-wrap property sets: whether a word with
+// OverflowWrap is what the overflow-wrap property sets: whether a word with
 // nowhere to break may be broken anyway rather than overflowing its line.
 //
 // It is a different shape of rule from word-break and the difference decides
@@ -194,17 +194,17 @@ func lineBreakOf(value string) (lineBreak, string) {
 // "if there are no otherwise-acceptable break points in the line", so it is not
 // a property of the text at all but of what the breaker should do having
 // already failed. It lives in breakOneLine for that reason.
-type overflowWrap struct {
-	// breakWord allows the last-resort break.
-	breakWord bool
-	// anywhere is the value that also shrinks the min-content size, so a
+type OverflowWrap struct {
+	// BreakWord allows the last-resort break.
+	BreakWord bool
+	// Anywhere is the value that also shrinks the min-content size, so a
 	// shrink-to-fit box narrows to its widest *character* rather than to its
 	// widest word. break-word deliberately does not: §5.5 says its opportunities
 	// "are not considered when calculating min-content intrinsic sizes".
-	anywhere bool
+	Anywhere bool
 }
 
-// overflowWrapOf reads the property, taking the winner of overflow-wrap and its
+// OverflowWrapOf reads the property, taking the winner of overflow-wrap and its
 // alias word-wrap.
 //
 // Both names are legal and mean the same thing, so the one to obey is whichever
@@ -213,33 +213,33 @@ type overflowWrap struct {
 // who sets overflow-wrap on a rule and word-wrap on a more specific one gets the
 // wrong answer here. Taking the non-initial value is what makes the common case
 // right: a document sets one of them.
-func overflowWrapOf(style map[string]string) overflowWrap {
+func OverflowWrapOf(style map[string]string) OverflowWrap {
 	value := strings.ToLower(strings.TrimSpace(style["overflow-wrap"]))
 	if value == "" || value == "normal" {
 		value = strings.ToLower(strings.TrimSpace(style["word-wrap"]))
 	}
 	switch value {
 	case "break-word":
-		return overflowWrap{breakWord: true}
+		return OverflowWrap{BreakWord: true}
 	case "anywhere":
-		return overflowWrap{breakWord: true, anywhere: true}
+		return OverflowWrap{BreakWord: true, Anywhere: true}
 	}
-	return overflowWrap{}
+	return OverflowWrap{}
 }
 
-// collapseWhitespace is §4.1.1 Phase I over one text node.
+// CollapseWhitespace is §4.1.1 Phase I over one text node.
 //
 // It is linear in the length of the text and allocates one builder, which is
 // not a micro-optimisation: the input is untrusted, and a megabyte of
 // alternating spaces and newlines is a document somebody will send.
-func collapseWhitespace(text, value string) string {
-	ws := whiteSpaceOf(value)
-	if !ws.collapse {
+func CollapseWhitespace(text, value string) string {
+	ws := WhiteSpaceOf(value)
+	if !ws.Collapse {
 		// pre, pre-wrap and break-spaces keep every space and every tab, so all
 		// that is left of Phase I is the segment break normalisation — which
 		// applies to every value, because CSS Text counts a CRLF as one break
 		// and this engine's HTML parser does not fold it.
-		return normaliseBreaks(text)
+		return NormaliseBreaks(text)
 	}
 
 	// U+200B ZERO WIDTH SPACE is the segment break transformation's one
@@ -268,7 +268,7 @@ func collapseWhitespace(text, value string) string {
 			// becoming a space and the run becoming one of them.
 			out.WriteByte(' ')
 			last = ' '
-		case ws.preserveBreaks:
+		case ws.PreserveBreaks:
 			// pre-line. The first rule removed the spaces and tabs around the
 			// breaks; the breaks themselves are not collapsible, so a blank
 			// line in the source stays a blank line. Emitting one break for a
@@ -312,12 +312,12 @@ func collapseWhitespace(text, value string) string {
 	return out.String()
 }
 
-// normaliseBreaks turns every CRLF and lone CR into a single LF.
+// NormaliseBreaks turns every CRLF and lone CR into a single LF.
 //
 // It is the part of the segment break transformation that applies even where
 // nothing collapses: §4.1.1 counts "\r\n" as one segment break, so a <pre>
 // written on Windows must not gain a blank line between every pair of its own.
-func normaliseBreaks(text string) string {
+func NormaliseBreaks(text string) string {
 	if strings.IndexByte(text, '\r') < 0 {
 		return text
 	}
@@ -347,7 +347,7 @@ func isCollapsibleSpace(c byte) bool {
 	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f'
 }
 
-// isOtherSpaceSeparator is §4.1's term of art, and the definition is exact:
+// IsOtherSpaceSeparator is §4.1's term of art, and the definition is exact:
 // "all characters in the Unicode general category Zs except space (U+0020) and
 // no-break space (U+00A0)".
 //
@@ -362,7 +362,7 @@ func isCollapsibleSpace(c byte) bool {
 // set: it holds the segment breaks and U+0085, and it holds U+00A0, and each of
 // those three would be wrong here. Zs has not gained a member since Unicode 6.3
 // removed U+180E from it, so the table is a table and not a snapshot.
-func isOtherSpaceSeparator(r rune) bool {
+func IsOtherSpaceSeparator(r rune) bool {
 	switch {
 	case r == 0x1680: // OGHAM SPACE MARK
 		return true
@@ -378,7 +378,7 @@ func isOtherSpaceSeparator(r rune) bool {
 	return false
 }
 
-// separatorBreaksAfter reports whether a line may end after one of them.
+// SeparatorBreaksAfter reports whether a line may end after one of them.
 //
 // Hanging and breaking are different questions, and this is the second: §4.1.2
 // says every one of these hangs, and UAX #14 says only some of them offer a
@@ -391,6 +391,6 @@ func isOtherSpaceSeparator(r rune) bool {
 // break-spaces overrides all of it: that value puts an opportunity "after every
 // preserved white space character and after every other space separator", with
 // no exception for the no-break ones, and it is the caller that applies it.
-func separatorBreaksAfter(r rune) bool {
+func SeparatorBreaksAfter(r rune) bool {
 	return r != 0x2007 && r != 0x202F
 }
