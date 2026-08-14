@@ -781,7 +781,7 @@ func TestSplittingAnItemMovesItsBidiRangeByRunes(t *testing.T) {
 		Text: hebrewAB + hebrewGD, Face: face, Size: mustPx(20),
 		BidiPara: 1, BidiStart: 7, BidiEnd: 11,
 	}
-	head, tail := l.br.splitItem(item, len(hebrewAB))
+	head, tail := l.br.SplitItem(item, len(hebrewAB))
 
 	for _, half := range []struct {
 		name string

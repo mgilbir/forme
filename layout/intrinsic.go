@@ -253,7 +253,7 @@ func (l *layouter) inlineWidths(b *Box) intrinsicWidths {
 	// it would have demanded without the declaration. It is marked as a
 	// measurement so that nothing on the way down is laid out — see
 	// inlineFrame.measuring for why that is a correctness rule and not a saving.
-	items, _ := l.collectInline(b, l.markerItems(b), startOfContext(), inlineFrame{measuring: true})
+	items, _ := l.collectInline(b, l.markerItems(b), startOfContext(), inlineFrame{Measuring: true})
 	got := l.widthsOf(items)
 
 	// §16.1's indent widens the first line, so a box asked to hold its content
@@ -478,7 +478,7 @@ func (l *layouter) widestCluster(item inlineItem) style.Unit {
 	var widest style.Unit
 	prev := 0
 	for _, at := range append(segment.Boundaries(nil, item.Text), len(item.Text)) {
-		w := l.br.measureSpaced(item.Face, item.Text[prev:at], item.Size, item.Spacing)
+		w := l.br.MeasureSpaced(item.Face, item.Text[prev:at], item.Size, item.Spacing)
 		widest = style.Max(widest, w)
 		prev = at
 	}

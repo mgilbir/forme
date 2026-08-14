@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"github.com/mgilbir/forme/paragraph"
 	"testing"
 
 	"github.com/mgilbir/forme/style"
@@ -189,16 +190,16 @@ func TestBalanceLeavesTheIndentToTheFirstLine(t *testing.T) {
 // sixteen times over.
 func TestBalanceStopsAtTheLineLimit(t *testing.T) {
 	const src = `<p id="p">The quickest brown fox jumped over the lazy dog</p>`
-	defer func(n int) { maxBalanceLines = n }(maxBalanceLines)
+	defer func(n int) { paragraph.MaxBalanceLines = n }(paragraph.MaxBalanceLines)
 
-	maxBalanceLines = 6
+	paragraph.MaxBalanceLines = 6
 	balanced := lineTexts(linesOf(t, layoutOf(t, 10000, src,
 		widthCSS(35, "text-wrap: balance")), "p"))
 	if balanced[0] != "The quickest brown fox" {
 		t.Fatalf("the fixture does not balance at all: %q", balanced)
 	}
 
-	maxBalanceLines = 1
+	paragraph.MaxBalanceLines = 1
 	got := lineTexts(linesOf(t, layoutOf(t, 10000, src,
 		widthCSS(35, "text-wrap: balance")), "p"))
 	if got[0] != "The quickest brown fox jumped over" {
@@ -277,8 +278,8 @@ func TestBalancingSettlesWhenAFloatMovesWithTheLines(t *testing.T) {
 	// One pass is not enough, which is what makes the loop worth having: the
 	// first answer is measured in the widths the *greedy* layout produced, and
 	// the float is not where that layout put it.
-	defer func(n int) { maxBalancePasses = n }(maxBalancePasses)
-	maxBalancePasses = 1
+	defer func(n int) { paragraph.MaxBalancePasses = n }(paragraph.MaxBalancePasses)
+	paragraph.MaxBalancePasses = 1
 	if once := lineTexts(linesOf(t, layoutOf(t, 10000, src, css), "p")); once[0] == want[0] {
 		t.Errorf("one pass already gave %q; the fixture no longer needs the loop "+
 			"and has stopped testing it", once)

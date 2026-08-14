@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"github.com/mgilbir/forme/paragraph"
 	"testing"
 
 	"github.com/mgilbir/forme/style"
@@ -93,9 +94,9 @@ func TestFloatFitBudgetIsSeenToDecide(t *testing.T) {
 
 // TestLineFitBudgetIsSeenToDecide is the same for the inline half.
 func TestLineFitBudgetIsSeenToDecide(t *testing.T) {
-	saved := maxLineFits
-	maxLineFits = 0
-	defer func() { maxLineFits = saved }()
+	saved := paragraph.MaxLineFits
+	paragraph.MaxLineFits = 0
+	defer func() { paragraph.MaxLineFits = saved }()
 
 	css := noDefaults + `
 	#w { width: 400px; line-height: 0 }
