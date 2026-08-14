@@ -1,0 +1,120 @@
+name: CI
+
+# Every push to main and every pull request. The three jobs are the repository's
+# own gate, split by what they cost: "test" is the one that has to be fast enough
+# to wait for, "conformance" fetches a hundred megabytes of other people's test
+# suites, and "race" is the same tests five times slower.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A second push to a branch cancels the first. Not for main, where every commit
+# wants its own answer.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: gofmt, vet and the unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          # The module has no dependencies and so no go.sum for the cache to key
+          # on. The build cache below is keyed by hand instead.
+          cache: false
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-build-${{ runner.os }}-${{ hashFiles('go.mod') }}-${{ github.sha }}
+          restore-keys: go-build-${{ runner.os }}-${{ hashFiles('go.mod') }}-
+      # make test is gofmt, go vet and go test, which is what the Makefile says
+      # the gate is. Running the target rather than the three commands keeps this
+      # file from becoming a second opinion about it.
+      - run: make test
+
+  conformance:
+    name: the conformance suites
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-build-conformance-${{ runner.os }}-${{ hashFiles('go.mod') }}-${{ github.sha }}
+          restore-keys: go-build-conformance-${{ runner.os }}-${{ hashFiles('go.mod') }}-
+
+      # The corpora are fetched, never committed — the Web Platform Tests alone
+      # are eighty megabytes of somebody else's repository. They are cached
+      # together, keyed on the Makefile because that is where every fetch is
+      # specified: change a URL, a sparse-checkout path or a Unicode version and
+      # the key moves and everything is fetched again.
+      #
+      # CORPUS_GENERATION is the manual half of that key. The suites are fetched
+      # from a moving branch rather than a pinned commit, so a cache hit is what
+      # keeps this job reproducible from one run to the next; bump the number to
+      # take a fresh copy deliberately.
+      - name: Restore the fetched corpora
+        uses: actions/cache@v4
+        with:
+          path: |
+            testdata/wpt
+            testdata/fonts-noto
+            testdata/css-parsing-tests
+            testdata/unicode-bidi
+            testdata/unicode-grapheme
+          key: corpora-1-${{ hashFiles('Makefile') }}
+
+      - name: Fetch whatever the cache did not have
+        run: make wpt noto-fonts css-tests bidi-tests grapheme-tests
+
+      # Unicode's own conformance data, 862,000 bidi cases and 766 grapheme ones.
+      - run: make test-bidi
+      - run: make test-grapheme
+      # The CSS Syntax test suite, which this repository did not write.
+      - run: make test-css
+      # The reftest ratchet: 5,177 documents from the CSS Working Group's suite,
+      # rendered and compared against their references. The number it holds is a
+      # minimum that may rise and must never be lowered to make a red test green,
+      # so a drop here is a layout regression and the failing names are printed.
+      - name: The reftest ratchet
+        run: |
+          WPT_TESTS="$PWD/testdata/wpt" \
+          NOTO_FONTS="$PWD/testdata/fonts-noto" \
+            go test -v -run TestWPT -count=1 ./layout/
+
+  race:
+    name: the race detector
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-race-${{ runner.os }}-${{ hashFiles('go.mod') }}-${{ github.sha }}
+          restore-keys: go-race-${{ runner.os }}-${{ hashFiles('go.mod') }}-
+      # What this watches is whether two documents laid out at once share
+      # anything, which only moves when something becomes shared on purpose. It
+      # is here rather than in "test" because it is five times slower.
+      - run: make race

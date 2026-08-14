@@ -1,0 +1,60 @@
+name: Fuzz
+
+# The fuzz targets, given real time.
+#
+# Every "go test" run already executes each target's seed corpus, so a defect one
+# of the seeds reaches fails the ordinary build. What this adds is the search:
+# ten minutes per package finds inputs nobody wrote down, which is the whole point
+# of a fuzzer and is not something a pull request should wait for.
+on:
+  schedule:
+    # Sundays, early.
+    - cron: '17 4 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: fuzz ${{ matrix.package }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: ./paragraph
+            target: FuzzBreakParagraph
+          - package: ./paragraph
+            target: FuzzSplitAtBreaks
+          - package: ./paragraph
+            target: FuzzBalance
+          - package: ./css
+            target: FuzzTokenize
+          - package: ./css
+            target: FuzzParse
+          - package: ./css
+            target: FuzzSelector
+          - package: ./font
+            target: FuzzCmapSubtable
+          - package: ./font
+            target: FuzzSFNTCmap
+          - package: ./shape
+            target: FuzzLoadAndUse
+          - package: ./layout
+            target: FuzzImageLoading
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - run: go test -run XXX -fuzz ${{ matrix.target }} -fuzztime 10m ${{ matrix.package }}
+      # A crasher is written into testdata/fuzz, which is exactly what wants
+      # keeping: it is the seed that reproduces the failure.
+      - name: Keep whatever it found
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crashers-${{ matrix.target }}
+          path: '**/testdata/fuzz/**'
