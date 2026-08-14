@@ -49,12 +49,6 @@ func fillsOf(ops []Op, want style.RGBA) []Rect {
 
 // soleFill requires exactly one fill of a colour and returns it, naming what
 // was asked for so that a failure says which document it came from.
-// soleFill requires exactly one fill of a colour and returns it, naming what
-// was asked for so that a failure says which document it came from.
-// soleFill requires exactly one fill of a colour and returns it, naming what
-// was asked for so that a failure says which document it came from.
-// soleFill requires exactly one fill of a colour and returns it, naming what
-// was asked for so that a failure says which document it came from.
 func soleFill(t *testing.T, ops []Op, want style.RGBA, what string) Rect {
 	t.Helper()
 	got := fillsOf(ops, want)
@@ -64,12 +58,6 @@ func soleFill(t *testing.T, ops []Op, want style.RGBA, what string) Rect {
 	return got[0]
 }
 
-// sketchClips is sketchOps with the clips shown, which is the whole of what
-// these tests are about.
-// sketchClips is sketchOps with the clips shown, which is the whole of what
-// these tests are about.
-// sketchClips is sketchOps with the clips shown, which is the whole of what
-// these tests are about.
 // sketchClips is sketchOps with the clips shown, which is the whole of what
 // these tests are about.
 func sketchClips(ops []Op) string {
@@ -91,9 +79,6 @@ func sketchClips(ops []Op) string {
 }
 
 // rectPx asserts a rectangle in CSS pixels.
-// rectPx asserts a rectangle in CSS pixels.
-// rectPx asserts a rectangle in CSS pixels.
-// rectPx asserts a rectangle in CSS pixels.
 func rectPx(t *testing.T, what string, got Rect, x, y, w, h float64) {
 	t.Helper()
 	px(t, what+" x", got.X, x)
@@ -104,29 +89,8 @@ func rectPx(t *testing.T, what string, got Rect, x, y, w, h float64) {
 
 // The clipping box's border is a colour of its own, so that a count of the
 // bands cannot be confused with the box's background.
-// The clipping box's border is a colour of its own, so that a count of the
-// bands cannot be confused with the box's background.
-// The clipping box's border is a colour of its own, so that a count of the
-// bands cannot be confused with the box's background.
-// The clipping box's border is a colour of its own, so that a count of the
-// bands cannot be confused with the box's background.
 var borderInk = style.RGBA{B: 255, A: 1}
 
-// TestOverflowHiddenClipsToThePaddingBox is the geometry of §11.1.1, and the
-// padding box is the whole of what is being asserted: the outer box is 100
-// wide with a 10px border and 20px of padding, so its content box is 40 wide
-// and its padding box is 80. A child 200 wide must be cut to 80 and not to 40
-// (the content box) and not to 100 (the border box).
-// TestOverflowHiddenClipsToThePaddingBox is the geometry of §11.1.1, and the
-// padding box is the whole of what is being asserted: the outer box is 100
-// wide with a 10px border and 20px of padding, so its content box is 40 wide
-// and its padding box is 80. A child 200 wide must be cut to 80 and not to 40
-// (the content box) and not to 100 (the border box).
-// TestOverflowHiddenClipsToThePaddingBox is the geometry of §11.1.1, and the
-// padding box is the whole of what is being asserted: the outer box is 100
-// wide with a 10px border and 20px of padding, so its content box is 40 wide
-// and its padding box is 80. A child 200 wide must be cut to 80 and not to 40
-// (the content box) and not to 100 (the border box).
 // TestOverflowHiddenClipsToThePaddingBox is the geometry of §11.1.1, and the
 // padding box is the whole of what is being asserted: the outer box is 100
 // wide with a 10px border and 20px of padding, so its content box is 40 wide
@@ -163,15 +127,6 @@ func TestOverflowHiddenClipsToThePaddingBox(t *testing.T) {
 	rectPx(t, "the top border band", bands[0], 0, 0, 160, 10)
 }
 
-// TestOverflowHiddenClipsText asserts the other half of a box's contents, and
-// asserts it as a clip on a specific run rather than as an absence: a run that
-// straddles the padding edge is cut, and one wholly inside it is not touched.
-// TestOverflowHiddenClipsText asserts the other half of a box's contents, and
-// asserts it as a clip on a specific run rather than as an absence: a run that
-// straddles the padding edge is cut, and one wholly inside it is not touched.
-// TestOverflowHiddenClipsText asserts the other half of a box's contents, and
-// asserts it as a clip on a specific run rather than as an absence: a run that
-// straddles the padding edge is cut, and one wholly inside it is not touched.
 // TestOverflowHiddenClipsText asserts the other half of a box's contents, and
 // asserts it as a clip on a specific run rather than as an absence: a run that
 // straddles the padding edge is cut, and one wholly inside it is not touched.
@@ -212,12 +167,6 @@ func TestOverflowHiddenClipsText(t *testing.T) {
 
 // TestOverflowHiddenDropsTextEntirelyOutside is the exact case, as opposed to
 // the cut one: a run with no ink inside the clip is not emitted at all.
-// TestOverflowHiddenDropsTextEntirelyOutside is the exact case, as opposed to
-// the cut one: a run with no ink inside the clip is not emitted at all.
-// TestOverflowHiddenDropsTextEntirelyOutside is the exact case, as opposed to
-// the cut one: a run with no ink inside the clip is not emitted at all.
-// TestOverflowHiddenDropsTextEntirelyOutside is the exact case, as opposed to
-// the cut one: a run with no ink inside the clip is not emitted at all.
 func TestOverflowHiddenDropsTextEntirelyOutside(t *testing.T) {
 	ops := paintOf(t,
 		`<div id="outer"><div id="a">first</div><div id="b">gone</div></div>`,
@@ -234,27 +183,6 @@ func TestOverflowHiddenDropsTextEntirelyOutside(t *testing.T) {
 	}
 }
 
-// TestOverflowScrollAndAutoClipExactlyAsHiddenDoes.
-//
-// A PDF page does not scroll, so there is nothing about these two values this
-// engine is approximating: the content is clipped and there is no scrolling
-// mechanism to provide. The assertion is equality with "hidden" rather than
-// "something was clipped", so a change that made one of them clip to a
-// different rectangle would be caught.
-// TestOverflowScrollAndAutoClipExactlyAsHiddenDoes.
-//
-// A PDF page does not scroll, so there is nothing about these two values this
-// engine is approximating: the content is clipped and there is no scrolling
-// mechanism to provide. The assertion is equality with "hidden" rather than
-// "something was clipped", so a change that made one of them clip to a
-// different rectangle would be caught.
-// TestOverflowScrollAndAutoClipExactlyAsHiddenDoes.
-//
-// A PDF page does not scroll, so there is nothing about these two values this
-// engine is approximating: the content is clipped and there is no scrolling
-// mechanism to provide. The assertion is equality with "hidden" rather than
-// "something was clipped", so a change that made one of them clip to a
-// different rectangle would be caught.
 // TestOverflowScrollAndAutoClipExactlyAsHiddenDoes.
 //
 // A PDF page does not scroll, so there is nothing about these two values this
@@ -292,36 +220,6 @@ func TestOverflowScrollAndAutoClipExactlyAsHiddenDoes(t *testing.T) {
 // all, and planting a check that would have let it clip changes nothing here or
 // in the suite. What this pins is the outcome; overflowClips says why there is
 // no code behind it.
-// TestOverflowOnAnInlineBoxClipsNothing is what overflow-applies-to-001's third
-// case checks: the property applies to block containers and to boxes that
-// establish a formatting context, and a <span> is neither.
-//
-// This test is weaker than it looks and the reason is recorded rather than left
-// to be rediscovered. An inline box produces no fragment of its own — inline
-// content lives in line boxes — so the clip resolution never sees the span at
-// all, and planting a check that would have let it clip changes nothing here or
-// in the suite. What this pins is the outcome; overflowClips says why there is
-// no code behind it.
-// TestOverflowOnAnInlineBoxClipsNothing is what overflow-applies-to-001's third
-// case checks: the property applies to block containers and to boxes that
-// establish a formatting context, and a <span> is neither.
-//
-// This test is weaker than it looks and the reason is recorded rather than left
-// to be rediscovered. An inline box produces no fragment of its own — inline
-// content lives in line boxes — so the clip resolution never sees the span at
-// all, and planting a check that would have let it clip changes nothing here or
-// in the suite. What this pins is the outcome; overflowClips says why there is
-// no code behind it.
-// TestOverflowOnAnInlineBoxClipsNothing is what overflow-applies-to-001's third
-// case checks: the property applies to block containers and to boxes that
-// establish a formatting context, and a <span> is neither.
-//
-// This test is weaker than it looks and the reason is recorded rather than left
-// to be rediscovered. An inline box produces no fragment of its own — inline
-// content lives in line boxes — so the clip resolution never sees the span at
-// all, and planting a check that would have let it clip changes nothing here or
-// in the suite. What this pins is the outcome; overflowClips says why there is
-// no code behind it.
 func TestOverflowOnAnInlineBoxClipsNothing(t *testing.T) {
 	ops := paintOf(t, `<div id="outer"><span id="s"><span id="i"></span></span></div>`,
 		noDefaults+`
@@ -335,27 +233,6 @@ func TestOverflowOnAnInlineBoxClipsNothing(t *testing.T) {
 	px(t, "the unclipped child's height", got.H, 200)
 }
 
-// TestOverflowOnATableRowClipsNothing is the reachable half of the same
-// "applies to" clause, and the one there is code for. A row and a row group do
-// produce fragments with the cells inside them, so an engine that read the
-// property off any box would cut a cell's content at its row's edge.
-//
-// The cell in the same document is the control: overflow *does* apply to a
-// table cell, which is a block container.
-// TestOverflowOnATableRowClipsNothing is the reachable half of the same
-// "applies to" clause, and the one there is code for. A row and a row group do
-// produce fragments with the cells inside them, so an engine that read the
-// property off any box would cut a cell's content at its row's edge.
-//
-// The cell in the same document is the control: overflow *does* apply to a
-// table cell, which is a block container.
-// TestOverflowOnATableRowClipsNothing is the reachable half of the same
-// "applies to" clause, and the one there is code for. A row and a row group do
-// produce fragments with the cells inside them, so an engine that read the
-// property off any box would cut a cell's content at its row's edge.
-//
-// The cell in the same document is the control: overflow *does* apply to a
-// table cell, which is a block container.
 // TestOverflowOnATableRowClipsNothing is the reachable half of the same
 // "applies to" clause, and the one there is code for. A row and a row group do
 // produce fragments with the cells inside them, so an engine that read the
@@ -380,15 +257,6 @@ func TestOverflowOnATableRowClipsNothing(t *testing.T) {
 	px(t, "the width of content clipped by its cell", got.W, 100)
 }
 
-// TestOverflowOnATableClipsItsContents is the other side of the same rule: a
-// table is not a block container and does establish a formatting context, so
-// the property applies to it.
-// TestOverflowOnATableClipsItsContents is the other side of the same rule: a
-// table is not a block container and does establish a formatting context, so
-// the property applies to it.
-// TestOverflowOnATableClipsItsContents is the other side of the same rule: a
-// table is not a block container and does establish a formatting context, so
-// the property applies to it.
 // TestOverflowOnATableClipsItsContents is the other side of the same rule: a
 // table is not a block container and does establish a formatting context, so
 // the property applies to it.
@@ -421,15 +289,6 @@ func TestOverflowOnATableClipsItsContents(t *testing.T) {
 // TestOverflowClipsAreNested asserts that two clipping ancestors both apply,
 // with the specific rectangle the intersection produces rather than merely
 // "smaller than either".
-// TestOverflowClipsAreNested asserts that two clipping ancestors both apply,
-// with the specific rectangle the intersection produces rather than merely
-// "smaller than either".
-// TestOverflowClipsAreNested asserts that two clipping ancestors both apply,
-// with the specific rectangle the intersection produces rather than merely
-// "smaller than either".
-// TestOverflowClipsAreNested asserts that two clipping ancestors both apply,
-// with the specific rectangle the intersection produces rather than merely
-// "smaller than either".
 func TestOverflowClipsAreNested(t *testing.T) {
 	ops := paintOf(t,
 		`<div id="a"><div id="b"><div id="inner"></div></div></div>`,
@@ -445,30 +304,6 @@ func TestOverflowClipsAreNested(t *testing.T) {
 	rectPx(t, "the doubly clipped child", got, 50, 0, 150, 40)
 }
 
-// TestAbsoluteBoxEscapesAnOverflowNotInItsContainingBlockChain is §11.1.1's
-// exception and the rule implementations get wrong.
-//
-// The clipping box is *static*, so the absolutely positioned box inside it
-// resolves against the initial containing block and is not clipped by it. The
-// same document with "position: relative" on the clipping box is the control,
-// and it must clip — without that half the test would pass on an engine that
-// had simply forgotten to clip absolutely positioned boxes at all.
-// TestAbsoluteBoxEscapesAnOverflowNotInItsContainingBlockChain is §11.1.1's
-// exception and the rule implementations get wrong.
-//
-// The clipping box is *static*, so the absolutely positioned box inside it
-// resolves against the initial containing block and is not clipped by it. The
-// same document with "position: relative" on the clipping box is the control,
-// and it must clip — without that half the test would pass on an engine that
-// had simply forgotten to clip absolutely positioned boxes at all.
-// TestAbsoluteBoxEscapesAnOverflowNotInItsContainingBlockChain is §11.1.1's
-// exception and the rule implementations get wrong.
-//
-// The clipping box is *static*, so the absolutely positioned box inside it
-// resolves against the initial containing block and is not clipped by it. The
-// same document with "position: relative" on the clipping box is the control,
-// and it must clip — without that half the test would pass on an engine that
-// had simply forgotten to clip absolutely positioned boxes at all.
 // TestAbsoluteBoxEscapesAnOverflowNotInItsContainingBlockChain is §11.1.1's
 // exception and the rule implementations get wrong.
 //
@@ -496,15 +331,6 @@ func TestAbsoluteBoxEscapesAnOverflowNotInItsContainingBlockChain(t *testing.T) 
 // TestAbsoluteBoxIsClippedByAnAncestorOfItsContainingBlock completes the rule.
 // The clip need not be *on* the containing block: any ancestor of it clips too,
 // and a static box between the two does not.
-// TestAbsoluteBoxIsClippedByAnAncestorOfItsContainingBlock completes the rule.
-// The clip need not be *on* the containing block: any ancestor of it clips too,
-// and a static box between the two does not.
-// TestAbsoluteBoxIsClippedByAnAncestorOfItsContainingBlock completes the rule.
-// The clip need not be *on* the containing block: any ancestor of it clips too,
-// and a static box between the two does not.
-// TestAbsoluteBoxIsClippedByAnAncestorOfItsContainingBlock completes the rule.
-// The clip need not be *on* the containing block: any ancestor of it clips too,
-// and a static box between the two does not.
 func TestAbsoluteBoxIsClippedByAnAncestorOfItsContainingBlock(t *testing.T) {
 	ops := paintOf(t,
 		`<div id="a"><div id="b"><div id="cb"><div id="pop"></div></div></div></div>`,
@@ -525,12 +351,6 @@ func TestAbsoluteBoxIsClippedByAnAncestorOfItsContainingBlock(t *testing.T) {
 
 // TestFixedBoxIsNotClippedByAnyOverflow: a fixed box's containing block is the
 // page, so nothing in the document is in its containing block chain.
-// TestFixedBoxIsNotClippedByAnyOverflow: a fixed box's containing block is the
-// page, so nothing in the document is in its containing block chain.
-// TestFixedBoxIsNotClippedByAnyOverflow: a fixed box's containing block is the
-// page, so nothing in the document is in its containing block chain.
-// TestFixedBoxIsNotClippedByAnyOverflow: a fixed box's containing block is the
-// page, so nothing in the document is in its containing block chain.
 func TestFixedBoxIsNotClippedByAnyOverflow(t *testing.T) {
 	ops := paintOf(t,
 		`<div id="panel"><div id="pop"></div></div>`,
@@ -543,18 +363,6 @@ func TestFixedBoxIsNotClippedByAnyOverflow(t *testing.T) {
 	rectPx(t, "the unclipped fixed box", got, 0, 0, 300, 300)
 }
 
-// TestClipRectCutsTheElementsOwnBackground is §11.1.2 rather than §11.1.1, and
-// the difference between the two is exactly this: "clip" cuts the element's own
-// rendered content, "overflow" does not. Forty of the suite's clip tests are a
-// positioned <div> whose only content is a background colour.
-// TestClipRectCutsTheElementsOwnBackground is §11.1.2 rather than §11.1.1, and
-// the difference between the two is exactly this: "clip" cuts the element's own
-// rendered content, "overflow" does not. Forty of the suite's clip tests are a
-// positioned <div> whose only content is a background colour.
-// TestClipRectCutsTheElementsOwnBackground is §11.1.2 rather than §11.1.1, and
-// the difference between the two is exactly this: "clip" cuts the element's own
-// rendered content, "overflow" does not. Forty of the suite's clip tests are a
-// positioned <div> whose only content is a background colour.
 // TestClipRectCutsTheElementsOwnBackground is §11.1.2 rather than §11.1.1, and
 // the difference between the two is exactly this: "clip" cuts the element's own
 // rendered content, "overflow" does not. Forty of the suite's clip tests are a
@@ -578,30 +386,6 @@ func TestClipRectCutsTheElementsOwnBackground(t *testing.T) {
 // clip-092 in the suite discriminates: "rect(+7.5ex, +7.5ex, +7.5ex, +7.5ex)"
 // on a three-inch square must show nothing. Measuring right and bottom from
 // their own edges would leave a large square visible.
-// TestClipRectGeometry pins where the four offsets are measured from, which is
-// the one thing about this property that reads like a mistake and is not: all
-// four are distances from the *top left* border edge, so "right" is how far
-// right the clip reaches rather than how far in from the right edge.
-//
-// clip-092 in the suite discriminates: "rect(+7.5ex, +7.5ex, +7.5ex, +7.5ex)"
-// on a three-inch square must show nothing. Measuring right and bottom from
-// their own edges would leave a large square visible.
-// TestClipRectGeometry pins where the four offsets are measured from, which is
-// the one thing about this property that reads like a mistake and is not: all
-// four are distances from the *top left* border edge, so "right" is how far
-// right the clip reaches rather than how far in from the right edge.
-//
-// clip-092 in the suite discriminates: "rect(+7.5ex, +7.5ex, +7.5ex, +7.5ex)"
-// on a three-inch square must show nothing. Measuring right and bottom from
-// their own edges would leave a large square visible.
-// TestClipRectGeometry pins where the four offsets are measured from, which is
-// the one thing about this property that reads like a mistake and is not: all
-// four are distances from the *top left* border edge, so "right" is how far
-// right the clip reaches rather than how far in from the right edge.
-//
-// clip-092 in the suite discriminates: "rect(+7.5ex, +7.5ex, +7.5ex, +7.5ex)"
-// on a three-inch square must show nothing. Measuring right and bottom from
-// their own edges would leave a large square visible.
 func TestClipRectGeometry(t *testing.T) {
 	ops := paintOf(t, `<div id="a"></div>`,
 		noDefaults+`#a { background-color: #ff0000; position: absolute;
@@ -616,12 +400,6 @@ func TestClipRectGeometry(t *testing.T) {
 
 // TestClipRectAutoSidesTakeTheBorderEdge: "auto" means the box's own edge, so a
 // rect() with two autos cuts only two sides.
-// TestClipRectAutoSidesTakeTheBorderEdge: "auto" means the box's own edge, so a
-// rect() with two autos cuts only two sides.
-// TestClipRectAutoSidesTakeTheBorderEdge: "auto" means the box's own edge, so a
-// rect() with two autos cuts only two sides.
-// TestClipRectAutoSidesTakeTheBorderEdge: "auto" means the box's own edge, so a
-// rect() with two autos cuts only two sides.
 func TestClipRectAutoSidesTakeTheBorderEdge(t *testing.T) {
 	ops := paintOf(t, `<div id="a"></div>`,
 		noDefaults+`#a { background-color: #ff0000; position: absolute;
@@ -632,15 +410,6 @@ func TestClipRectAutoSidesTakeTheBorderEdge(t *testing.T) {
 	rectPx(t, "the clipped background", got, 10, 25, 90, 75)
 }
 
-// TestClipAppliesOnlyToPositionedBoxes. clip-102 in the suite is exactly this
-// document: the static parent declares the rect and must not clip, and the
-// positioned child inherits the value by keyword and must.
-// TestClipAppliesOnlyToPositionedBoxes. clip-102 in the suite is exactly this
-// document: the static parent declares the rect and must not clip, and the
-// positioned child inherits the value by keyword and must.
-// TestClipAppliesOnlyToPositionedBoxes. clip-102 in the suite is exactly this
-// document: the static parent declares the rect and must not clip, and the
-// positioned child inherits the value by keyword and must.
 // TestClipAppliesOnlyToPositionedBoxes. clip-102 in the suite is exactly this
 // document: the static parent declares the rect and must not clip, and the
 // positioned child inherits the value by keyword and must.
@@ -661,24 +430,6 @@ func TestClipAppliesOnlyToPositionedBoxes(t *testing.T) {
 	}
 }
 
-// TestClipShapeSyntax covers what the property accepts and what it drops.
-//
-// The whitespace-separated form is legal — CSS 2.1 permits a user agent to
-// support it — and a mixture of commas and white space is not, which is what
-// clip-rect-001 asserts. A shape that is not rect() at all is an invalid
-// declaration, so the initial value stands and nothing is clipped.
-// TestClipShapeSyntax covers what the property accepts and what it drops.
-//
-// The whitespace-separated form is legal — CSS 2.1 permits a user agent to
-// support it — and a mixture of commas and white space is not, which is what
-// clip-rect-001 asserts. A shape that is not rect() at all is an invalid
-// declaration, so the initial value stands and nothing is clipped.
-// TestClipShapeSyntax covers what the property accepts and what it drops.
-//
-// The whitespace-separated form is legal — CSS 2.1 permits a user agent to
-// support it — and a mixture of commas and white space is not, which is what
-// clip-rect-001 asserts. A shape that is not rect() at all is an invalid
-// declaration, so the initial value stands and nothing is clipped.
 // TestClipShapeSyntax covers what the property accepts and what it drops.
 //
 // The whitespace-separated form is legal — CSS 2.1 permits a user agent to
@@ -722,15 +473,6 @@ func TestClipShapeSyntax(t *testing.T) {
 // TestClippingNeverMovesABox. §11.1 is about painting, and a clipped box
 // occupies exactly the space it did — the box after it does not move up, and
 // the clipping box's own height is unchanged.
-// TestClippingNeverMovesABox. §11.1 is about painting, and a clipped box
-// occupies exactly the space it did — the box after it does not move up, and
-// the clipping box's own height is unchanged.
-// TestClippingNeverMovesABox. §11.1 is about painting, and a clipped box
-// occupies exactly the space it did — the box after it does not move up, and
-// the clipping box's own height is unchanged.
-// TestClippingNeverMovesABox. §11.1 is about painting, and a clipped box
-// occupies exactly the space it did — the box after it does not move up, and
-// the clipping box's own height is unchanged.
 func TestClippingNeverMovesABox(t *testing.T) {
 	plain := layoutOf(t, 600,
 		`<div id="a"><div id="i">x</div></div><div id="after">y</div>`,
@@ -752,18 +494,6 @@ func TestClippingNeverMovesABox(t *testing.T) {
 // "overflow: hidden" the idiom for containing a float. It is asserted here
 // beside the clipping because the two arrive together and only one of them is
 // about painting.
-// TestOverflowEstablishesABlockFormattingContext is §9.4.1, which is what makes
-// "overflow: hidden" the idiom for containing a float. It is asserted here
-// beside the clipping because the two arrive together and only one of them is
-// about painting.
-// TestOverflowEstablishesABlockFormattingContext is §9.4.1, which is what makes
-// "overflow: hidden" the idiom for containing a float. It is asserted here
-// beside the clipping because the two arrive together and only one of them is
-// about painting.
-// TestOverflowEstablishesABlockFormattingContext is §9.4.1, which is what makes
-// "overflow: hidden" the idiom for containing a float. It is asserted here
-// beside the clipping because the two arrive together and only one of them is
-// about painting.
 func TestOverflowEstablishesABlockFormattingContext(t *testing.T) {
 	root := layoutOf(t, 600,
 		`<div id="a"><div id="f"></div></div>`,
@@ -773,27 +503,6 @@ func TestOverflowEstablishesABlockFormattingContext(t *testing.T) {
 		find(t, root, "a").BorderRect.H, 80)
 }
 
-// TestClipDepthBoundFires.
-//
-// The bound is lowered rather than reached, because a document with sixty-four
-// nested clipping boxes takes longer to build than the rest of this file takes
-// to run — and a bound that has never been seen to fire is one nobody knows
-// works. Past it the clip becomes empty, so the content is lost rather than
-// leaked, and the finding says so.
-// TestClipDepthBoundFires.
-//
-// The bound is lowered rather than reached, because a document with sixty-four
-// nested clipping boxes takes longer to build than the rest of this file takes
-// to run — and a bound that has never been seen to fire is one nobody knows
-// works. Past it the clip becomes empty, so the content is lost rather than
-// leaked, and the finding says so.
-// TestClipDepthBoundFires.
-//
-// The bound is lowered rather than reached, because a document with sixty-four
-// nested clipping boxes takes longer to build than the rest of this file takes
-// to run — and a bound that has never been seen to fire is one nobody knows
-// works. Past it the clip becomes empty, so the content is lost rather than
-// leaked, and the finding says so.
 // TestClipDepthBoundFires.
 //
 // The bound is lowered rather than reached, because a document with sixty-four
@@ -846,30 +555,6 @@ func TestClipDepthBoundFires(t *testing.T) {
 	}
 }
 
-// TestClipIntersectionCannotWrap.
-//
-// A clip is a rectangle intersection, and an intersection that wrapped would
-// turn a clip into an amplifier: a negative width read as a very large one
-// would let a hostile document paint over a page it was meant to be confined
-// to. Unit arithmetic saturates, so the worst case is a saturated extent — and
-// a disjoint pair produces a negative extent that Empty reports, rather than
-// zero.
-// TestClipIntersectionCannotWrap.
-//
-// A clip is a rectangle intersection, and an intersection that wrapped would
-// turn a clip into an amplifier: a negative width read as a very large one
-// would let a hostile document paint over a page it was meant to be confined
-// to. Unit arithmetic saturates, so the worst case is a saturated extent — and
-// a disjoint pair produces a negative extent that Empty reports, rather than
-// zero.
-// TestClipIntersectionCannotWrap.
-//
-// A clip is a rectangle intersection, and an intersection that wrapped would
-// turn a clip into an amplifier: a negative width read as a very large one
-// would let a hostile document paint over a page it was meant to be confined
-// to. Unit arithmetic saturates, so the worst case is a saturated extent — and
-// a disjoint pair produces a negative extent that Empty reports, rather than
-// zero.
 // TestClipIntersectionCannotWrap.
 //
 // A clip is a rectangle intersection, and an intersection that wrapped would
@@ -982,24 +667,6 @@ func TestClippedPictureCarriesItsClipRatherThanASmallerRectangle(t *testing.T) {
 // rectangle. What must not move is the tile: a background cut in half still has
 // to line up with the same background on the box beside it, which it would not
 // if the clip had shifted the first tile.
-// TestClippedTilingNarrowsTheAreaItPaintsAndNotItsTiles.
-//
-// A tiling already carries the area it may paint, so §11.1 meets that
-// rectangle. What must not move is the tile: a background cut in half still has
-// to line up with the same background on the box beside it, which it would not
-// if the clip had shifted the first tile.
-// TestClippedTilingNarrowsTheAreaItPaintsAndNotItsTiles.
-//
-// A tiling already carries the area it may paint, so §11.1 meets that
-// rectangle. What must not move is the tile: a background cut in half still has
-// to line up with the same background on the box beside it, which it would not
-// if the clip had shifted the first tile.
-// TestClippedTilingNarrowsTheAreaItPaintsAndNotItsTiles.
-//
-// A tiling already carries the area it may paint, so §11.1 meets that
-// rectangle. What must not move is the tile: a background cut in half still has
-// to line up with the same background on the box beside it, which it would not
-// if the clip had shifted the first tile.
 func TestClippedTilingNarrowsTheAreaItPaintsAndNotItsTiles(t *testing.T) {
 	const doc = `<div id="p"><div id="b">x</div></div>`
 	const inner = `#b { width: 200px; height: 100px; background-image: url(wide.png) }`
@@ -1018,30 +685,6 @@ func TestClippedTilingNarrowsTheAreaItPaintsAndNotItsTiles(t *testing.T) {
 	}
 }
 
-// TestTheComparisonSeesAClippedRun.
-//
-// The reftest oracle is what most of this engine's evidence rests on, and a
-// clip is the one thing in a display list it could silently ignore: a fill
-// arrives already cut down, so nothing about occlusion needed to change, and a
-// run of text carrying a Clip would compare equal to the same run drawn whole
-// unless the comparison were told otherwise. This is the check on that, on the
-// model of TestWPTOracleHasTeeth.
-// TestTheComparisonSeesAClippedRun.
-//
-// The reftest oracle is what most of this engine's evidence rests on, and a
-// clip is the one thing in a display list it could silently ignore: a fill
-// arrives already cut down, so nothing about occlusion needed to change, and a
-// run of text carrying a Clip would compare equal to the same run drawn whole
-// unless the comparison were told otherwise. This is the check on that, on the
-// model of TestWPTOracleHasTeeth.
-// TestTheComparisonSeesAClippedRun.
-//
-// The reftest oracle is what most of this engine's evidence rests on, and a
-// clip is the one thing in a display list it could silently ignore: a fill
-// arrives already cut down, so nothing about occlusion needed to change, and a
-// run of text carrying a Clip would compare equal to the same run drawn whole
-// unless the comparison were told otherwise. This is the check on that, on the
-// model of TestWPTOracleHasTeeth.
 // TestTheComparisonSeesAClippedRun.
 //
 // The reftest oracle is what most of this engine's evidence rests on, and a
@@ -1079,12 +722,6 @@ func TestTheComparisonSeesAClippedRun(t *testing.T) {
 
 // TestTheComparisonSeesAClippedPicture is the same check for a picture, whose
 // clip cannot be folded into its rectangle either.
-// TestTheComparisonSeesAClippedPicture is the same check for a picture, whose
-// clip cannot be folded into its rectangle either.
-// TestTheComparisonSeesAClippedPicture is the same check for a picture, whose
-// clip cannot be folded into its rectangle either.
-// TestTheComparisonSeesAClippedPicture is the same check for a picture, whose
-// clip cannot be folded into its rectangle either.
 func TestTheComparisonSeesAClippedPicture(t *testing.T) {
 	u := func(v float64) style.Unit { r, _ := style.FromPx(v); return r }
 	img := image.NewNRGBA(image.Rect(0, 0, 40, 20))
@@ -1116,27 +753,6 @@ func TestTheComparisonSeesAClippedPicture(t *testing.T) {
 // pinning that they are clipped at all. They are, and by the wrapper around
 // painter.content rather than by a clip of their own: resolveClips says why it
 // does not give them one, and planting one there changes nothing.
-// TestInlineBoxBackgroundIsClippedByItsBlock.
-//
-// An inline box's fragments are not children in the fragment tree — there is
-// one per line it was broken across, hanging off the line box — so it is worth
-// pinning that they are clipped at all. They are, and by the wrapper around
-// painter.content rather than by a clip of their own: resolveClips says why it
-// does not give them one, and planting one there changes nothing.
-// TestInlineBoxBackgroundIsClippedByItsBlock.
-//
-// An inline box's fragments are not children in the fragment tree — there is
-// one per line it was broken across, hanging off the line box — so it is worth
-// pinning that they are clipped at all. They are, and by the wrapper around
-// painter.content rather than by a clip of their own: resolveClips says why it
-// does not give them one, and planting one there changes nothing.
-// TestInlineBoxBackgroundIsClippedByItsBlock.
-//
-// An inline box's fragments are not children in the fragment tree — there is
-// one per line it was broken across, hanging off the line box — so it is worth
-// pinning that they are clipped at all. They are, and by the wrapper around
-// painter.content rather than by a clip of their own: resolveClips says why it
-// does not give them one, and planting one there changes nothing.
 func TestInlineBoxBackgroundIsClippedByItsBlock(t *testing.T) {
 	doc := `<div id="p"><span id="s">wwwwwwwwwwwwwwwwwwwwwwww</span></div>`
 	css := noDefaults + `
@@ -1154,33 +770,6 @@ func TestInlineBoxBackgroundIsClippedByItsBlock(t *testing.T) {
 	px(t, "the clipped inline background's width", tight.W, 40)
 }
 
-// TestCollapsedGridLinesAreNotCutByTheTablesOwnOverflow.
-//
-// §17.6.2's grid lines are centred on the boundaries between cells, and the
-// ones at the table's edge are centred on its border box — outside the padding
-// box that "overflow: hidden" clips the table's *contents* to. They are the
-// table's own border by another name, so they take the table's own clip. Cutting
-// them there would erase the frame of every collapsing table that also declared
-// an overflow, and would do it by half a border width, which reads as a
-// rendering artefact rather than as a rule being applied to the wrong box.
-// TestCollapsedGridLinesAreNotCutByTheTablesOwnOverflow.
-//
-// §17.6.2's grid lines are centred on the boundaries between cells, and the
-// ones at the table's edge are centred on its border box — outside the padding
-// box that "overflow: hidden" clips the table's *contents* to. They are the
-// table's own border by another name, so they take the table's own clip. Cutting
-// them there would erase the frame of every collapsing table that also declared
-// an overflow, and would do it by half a border width, which reads as a
-// rendering artefact rather than as a rule being applied to the wrong box.
-// TestCollapsedGridLinesAreNotCutByTheTablesOwnOverflow.
-//
-// §17.6.2's grid lines are centred on the boundaries between cells, and the
-// ones at the table's edge are centred on its border box — outside the padding
-// box that "overflow: hidden" clips the table's *contents* to. They are the
-// table's own border by another name, so they take the table's own clip. Cutting
-// them there would erase the frame of every collapsing table that also declared
-// an overflow, and would do it by half a border width, which reads as a
-// rendering artefact rather than as a rule being applied to the wrong box.
 // TestCollapsedGridLinesAreNotCutByTheTablesOwnOverflow.
 //
 // §17.6.2's grid lines are centred on the boundaries between cells, and the
@@ -1224,30 +813,6 @@ func TestCollapsedGridLinesAreNotCutByTheTablesOwnOverflow(t *testing.T) {
 // never emits a faceless run, but a caller building a display list by hand does
 // and the comparison's own fixtures do, and "no engine reaches this" is how a
 // rule of that shape survives until something does.
-// TestAFacelessRunSurvivesAClip.
-//
-// A run with no face has no measurable ink, so its box is empty — and an empty
-// rectangle meets nothing, which means the "wholly outside the clip" test would
-// answer yes for every clip there is and silently delete the run. The engine
-// never emits a faceless run, but a caller building a display list by hand does
-// and the comparison's own fixtures do, and "no engine reaches this" is how a
-// rule of that shape survives until something does.
-// TestAFacelessRunSurvivesAClip.
-//
-// A run with no face has no measurable ink, so its box is empty — and an empty
-// rectangle meets nothing, which means the "wholly outside the clip" test would
-// answer yes for every clip there is and silently delete the run. The engine
-// never emits a faceless run, but a caller building a display list by hand does
-// and the comparison's own fixtures do, and "no engine reaches this" is how a
-// rule of that shape survives until something does.
-// TestAFacelessRunSurvivesAClip.
-//
-// A run with no face has no measurable ink, so its box is empty — and an empty
-// rectangle meets nothing, which means the "wholly outside the clip" test would
-// answer yes for every clip there is and silently delete the run. The engine
-// never emits a faceless run, but a caller building a display list by hand does
-// and the comparison's own fixtures do, and "no engine reaches this" is how a
-// rule of that shape survives until something does.
 func TestAFacelessRunSurvivesAClip(t *testing.T) {
 	u := func(v float64) style.Unit { r, _ := style.FromPx(v); return r }
 	run := DrawText{At: Point{X: u(500), Y: u(500)}, Text: "x", Size: u(16)}
@@ -1262,51 +827,6 @@ func TestAFacelessRunSurvivesAClip(t *testing.T) {
 	}
 }
 
-// TestATextRunIsKeptWhenOnlyItsReservedBoxReachesTheClip is the seam between
-// the two rectangles §11.1 asks about, and the one a run can fall through.
-//
-// A run is discarded outright when no part of it is inside the clip, so the
-// rectangle that question is asked of decides whether text stays on the page.
-// It has to be the one inline layout reserved — and for a face that declares no
-// line gap that is the box around all its glyphs, which reaches higher than the
-// face's ascent. Asking the ascent instead loses a run whose line box is inside
-// the clip while its letters are not: nothing downstream can put it back, and
-// the page simply comes out missing a word.
-//
-// The second half is what gives the test teeth. It requires the case to still
-// be the discriminating one — the run outside the clip by the ascent and inside
-// it by the reserved box — so a face whose numbers moved until the two agree
-// makes this fail rather than quietly pass on a case that proves nothing.
-// TestATextRunIsKeptWhenOnlyItsReservedBoxReachesTheClip is the seam between
-// the two rectangles §11.1 asks about, and the one a run can fall through.
-//
-// A run is discarded outright when no part of it is inside the clip, so the
-// rectangle that question is asked of decides whether text stays on the page.
-// It has to be the one inline layout reserved — and for a face that declares no
-// line gap that is the box around all its glyphs, which reaches higher than the
-// face's ascent. Asking the ascent instead loses a run whose line box is inside
-// the clip while its letters are not: nothing downstream can put it back, and
-// the page simply comes out missing a word.
-//
-// The second half is what gives the test teeth. It requires the case to still
-// be the discriminating one — the run outside the clip by the ascent and inside
-// it by the reserved box — so a face whose numbers moved until the two agree
-// makes this fail rather than quietly pass on a case that proves nothing.
-// TestATextRunIsKeptWhenOnlyItsReservedBoxReachesTheClip is the seam between
-// the two rectangles §11.1 asks about, and the one a run can fall through.
-//
-// A run is discarded outright when no part of it is inside the clip, so the
-// rectangle that question is asked of decides whether text stays on the page.
-// It has to be the one inline layout reserved — and for a face that declares no
-// line gap that is the box around all its glyphs, which reaches higher than the
-// face's ascent. Asking the ascent instead loses a run whose line box is inside
-// the clip while its letters are not: nothing downstream can put it back, and
-// the page simply comes out missing a word.
-//
-// The second half is what gives the test teeth. It requires the case to still
-// be the discriminating one — the run outside the clip by the ascent and inside
-// it by the reserved box — so a face whose numbers moved until the two agree
-// makes this fail rather than quietly pass on a case that proves nothing.
 // TestATextRunIsKeptWhenOnlyItsReservedBoxReachesTheClip is the seam between
 // the two rectangles §11.1 asks about, and the one a run can fall through.
 //
@@ -1356,45 +876,6 @@ func TestATextRunIsKeptWhenOnlyItsReservedBoxReachesTheClip(t *testing.T) {
 	}
 }
 
-// TestAClipCutsARunByItsLettersAndNotByItsFace is §11.1 asked of the text in
-// hand rather than of the font it is set in.
-//
-// A face's descent is how far below the baseline it reserves room, for the
-// deepest tail it has. Almost no run uses it: a line of capitals ends at the
-// baseline, and a box that stops between the two cuts nothing. Answering from
-// the face marks that run as cut, and a cut run is a different mark from the
-// same run drawn whole — so two documents that put the same letters in the same
-// place are ruled different over a descender neither of them contains.
-//
-// The pair is the assertion. Both documents are the same but for three letters,
-// both are clipped at the same y, and the face's descent puts both runs' ink
-// past it. Only their own glyphs tell them apart.
-// TestAClipCutsARunByItsLettersAndNotByItsFace is §11.1 asked of the text in
-// hand rather than of the font it is set in.
-//
-// A face's descent is how far below the baseline it reserves room, for the
-// deepest tail it has. Almost no run uses it: a line of capitals ends at the
-// baseline, and a box that stops between the two cuts nothing. Answering from
-// the face marks that run as cut, and a cut run is a different mark from the
-// same run drawn whole — so two documents that put the same letters in the same
-// place are ruled different over a descender neither of them contains.
-//
-// The pair is the assertion. Both documents are the same but for three letters,
-// both are clipped at the same y, and the face's descent puts both runs' ink
-// past it. Only their own glyphs tell them apart.
-// TestAClipCutsARunByItsLettersAndNotByItsFace is §11.1 asked of the text in
-// hand rather than of the font it is set in.
-//
-// A face's descent is how far below the baseline it reserves room, for the
-// deepest tail it has. Almost no run uses it: a line of capitals ends at the
-// baseline, and a box that stops between the two cuts nothing. Answering from
-// the face marks that run as cut, and a cut run is a different mark from the
-// same run drawn whole — so two documents that put the same letters in the same
-// place are ruled different over a descender neither of them contains.
-//
-// The pair is the assertion. Both documents are the same but for three letters,
-// both are clipped at the same y, and the face's descent puts both runs' ink
-// past it. Only their own glyphs tell them apart.
 // TestAClipCutsARunByItsLettersAndNotByItsFace is §11.1 asked of the text in
 // hand rather than of the font it is set in.
 //

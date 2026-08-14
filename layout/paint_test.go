@@ -87,12 +87,6 @@ func TestBackgroundCoversTheBorderBoxNotTheMargin(t *testing.T) {
 
 // TestTextPaintsAtItsBaseline pins that a text op carries the baseline rather
 // than the top of the line box, which is what a text backend takes.
-// TestTextPaintsAtItsBaseline pins that a text op carries the baseline rather
-// than the top of the line box, which is what a text backend takes.
-// TestTextPaintsAtItsBaseline pins that a text op carries the baseline rather
-// than the top of the line box, which is what a text backend takes.
-// TestTextPaintsAtItsBaseline pins that a text op carries the baseline rather
-// than the top of the line box, which is what a text backend takes.
 func TestTextPaintsAtItsBaseline(t *testing.T) {
 	ops := paintOf(t, `<p id="p">text</p>`,
 		noDefaults+`p { font-size: 100px; font-family: Helvetica; line-height: 200px }`)
@@ -129,30 +123,6 @@ func TestTextPaintsAtItsBaseline(t *testing.T) {
 // and a reader copying the text gets them run together. This was written the
 // other way round first, and the end-to-end test caught it: "A heading" came
 // back from the finished PDF as "Aheading".
-// TestSpacesArePainted pins that the gap between two words is drawn rather than
-// skipped, and the reason is text extraction rather than ink.
-//
-// A space marks no paper, so skipping it looks free. But the words either side
-// then become separate text operations with only a position jump between them,
-// and a reader copying the text gets them run together. This was written the
-// other way round first, and the end-to-end test caught it: "A heading" came
-// back from the finished PDF as "Aheading".
-// TestSpacesArePainted pins that the gap between two words is drawn rather than
-// skipped, and the reason is text extraction rather than ink.
-//
-// A space marks no paper, so skipping it looks free. But the words either side
-// then become separate text operations with only a position jump between them,
-// and a reader copying the text gets them run together. This was written the
-// other way round first, and the end-to-end test caught it: "A heading" came
-// back from the finished PDF as "Aheading".
-// TestSpacesArePainted pins that the gap between two words is drawn rather than
-// skipped, and the reason is text extraction rather than ink.
-//
-// A space marks no paper, so skipping it looks free. But the words either side
-// then become separate text operations with only a position jump between them,
-// and a reader copying the text gets them run together. This was written the
-// other way round first, and the end-to-end test caught it: "A heading" came
-// back from the finished PDF as "Aheading".
 func TestSpacesArePainted(t *testing.T) {
 	ops := paintOf(t, `<p>one two three</p>`,
 		noDefaults+`p { font-size: 20px; font-family: Helvetica }`)
@@ -171,17 +141,11 @@ func TestSpacesArePainted(t *testing.T) {
 // TestScaleToFit pins §5: one factor, computed from the natural size, applied to
 // everything. It is not re-layout — the line breaks do not move — which is what
 // makes the threshold checks exact.
-// TestScaleToFit pins §5: one factor, computed from the natural size, applied to
-// everything. It is not re-layout — the line breaks do not move — which is what
-// makes the threshold checks exact.
 func ftoa(v float64) string {
 	n := int(v)
 	return itoa(n)
 }
 
-// TestScalingUpIsOffByDefault pins that an underfull page is left alone. Growing
-// it is surprising and it degrades images, so it is opt-in.
-// sketchOps renders a display list as text, so a difference names itself.
 // TestScalingUpIsOffByDefault pins that an underfull page is left alone. Growing
 // it is surprising and it degrades images, so it is opt-in.
 // sketchOps renders a display list as text, so a difference names itself.
@@ -202,21 +166,6 @@ func sketchOps(ops []Op) string {
 	return b.String()
 }
 
-// TestBorderStylesDiffer pins that each border-style paints something different.
-//
-// Layout only ever asks a border how wide it is, and every style is the same
-// width — so a renderer that ignored the style produced a page that was wrong in
-// a way an author sees at once and a test suite sees as a hundred failures.
-// TestBorderStylesDiffer pins that each border-style paints something different.
-//
-// Layout only ever asks a border how wide it is, and every style is the same
-// width — so a renderer that ignored the style produced a page that was wrong in
-// a way an author sees at once and a test suite sees as a hundred failures.
-// TestBorderStylesDiffer pins that each border-style paints something different.
-//
-// Layout only ever asks a border how wide it is, and every style is the same
-// width — so a renderer that ignored the style produced a page that was wrong in
-// a way an author sees at once and a test suite sees as a hundred failures.
 // TestBorderStylesDiffer pins that each border-style paints something different.
 //
 // Layout only ever asks a border how wide it is, and every style is the same
@@ -266,12 +215,6 @@ func TestBorderStylesDiffer(t *testing.T) {
 
 // TestDoubleBorderIsTwoLines pins the style whose whole point is the gap. One
 // band would be a solid border by another name.
-// TestDoubleBorderIsTwoLines pins the style whose whole point is the gap. One
-// band would be a solid border by another name.
-// TestDoubleBorderIsTwoLines pins the style whose whole point is the gap. One
-// band would be a solid border by another name.
-// TestDoubleBorderIsTwoLines pins the style whose whole point is the gap. One
-// band would be a solid border by another name.
 func TestDoubleBorderIsTwoLines(t *testing.T) {
 	ops := paintOf(t, `<div id="a"></div>`,
 		noDefaults+`#a { height: 50px; border-top-width: 9px;
@@ -292,15 +235,6 @@ func TestDoubleBorderIsTwoLines(t *testing.T) {
 	px(t, "the gap", bands[1].Y.Sub(bands[0].Bottom()), 3)
 }
 
-// TestDashedAndDottedAreRuns pins that these paint many marks rather than one,
-// and that a dot is shorter than a dash — the ratio is left open by the
-// specification and the difference is not.
-// TestDashedAndDottedAreRuns pins that these paint many marks rather than one,
-// and that a dot is shorter than a dash — the ratio is left open by the
-// specification and the difference is not.
-// TestDashedAndDottedAreRuns pins that these paint many marks rather than one,
-// and that a dot is shorter than a dash — the ratio is left open by the
-// specification and the difference is not.
 // TestDashedAndDottedAreRuns pins that these paint many marks rather than one,
 // and that a dot is shorter than a dash — the ratio is left open by the
 // specification and the difference is not.
@@ -335,15 +269,6 @@ func TestDashedAndDottedAreRuns(t *testing.T) {
 // TestThreeDBordersUseTwoTones pins that groove, ridge, inset and outset light
 // some edges and shadow others — which is the whole of what makes them look
 // three-dimensional, and what a single-tone renderer loses.
-// TestThreeDBordersUseTwoTones pins that groove, ridge, inset and outset light
-// some edges and shadow others — which is the whole of what makes them look
-// three-dimensional, and what a single-tone renderer loses.
-// TestThreeDBordersUseTwoTones pins that groove, ridge, inset and outset light
-// some edges and shadow others — which is the whole of what makes them look
-// three-dimensional, and what a single-tone renderer loses.
-// TestThreeDBordersUseTwoTones pins that groove, ridge, inset and outset light
-// some edges and shadow others — which is the whole of what makes them look
-// three-dimensional, and what a single-tone renderer loses.
 func TestThreeDBordersUseTwoTones(t *testing.T) {
 	for _, kind := range []string{"groove", "ridge", "inset", "outset"} {
 		ops := paintOf(t, `<div id="a"></div>`,
@@ -367,15 +292,6 @@ func TestThreeDBordersUseTwoTones(t *testing.T) {
 	}
 }
 
-// TestBlackThreeDBorderStaysVisible pins the case a naive darkening loses. Half
-// of black is black, so a groove on the colour authors use most would vanish
-// into one tone; the second tone is a lightening instead.
-// TestBlackThreeDBorderStaysVisible pins the case a naive darkening loses. Half
-// of black is black, so a groove on the colour authors use most would vanish
-// into one tone; the second tone is a lightening instead.
-// TestBlackThreeDBorderStaysVisible pins the case a naive darkening loses. Half
-// of black is black, so a groove on the colour authors use most would vanish
-// into one tone; the second tone is a lightening instead.
 // TestBlackThreeDBorderStaysVisible pins the case a naive darkening loses. Half
 // of black is black, so a groove on the colour authors use most would vanish
 // into one tone; the second tone is a lightening instead.
@@ -455,8 +371,6 @@ func TestScaleToFit(t *testing.T) {
 
 // TestScalingUpIsOffByDefault pins that an underfull page is left alone. Growing
 // it is surprising and it degrades images, so it is opt-in.
-// TestScalingUpIsOffByDefault pins that an underfull page is left alone. Growing
-// it is surprising and it degrades images, so it is opt-in.
 func TestScalingUpIsOffByDefault(t *testing.T) {
 	got := composeOf(t, `<div id="a"></div>`, Options{Page: A4},
 		noDefaults+"#a { height: 10px }")
@@ -475,15 +389,6 @@ func TestScalingUpIsOffByDefault(t *testing.T) {
 	}
 }
 
-// TestMinScaleIsAnError pins the blunt guardrail of §6.1, and that it stops the
-// document being produced: a page that only fitted by being made illegible is
-// one where no document is better than the document.
-// TestMinScaleIsAnError pins the blunt guardrail of §6.1, and that it stops the
-// document being produced: a page that only fitted by being made illegible is
-// one where no document is better than the document.
-// TestMinScaleIsAnError pins the blunt guardrail of §6.1, and that it stops the
-// document being produced: a page that only fitted by being made illegible is
-// one where no document is better than the document.
 // TestMinScaleIsAnError pins the blunt guardrail of §6.1, and that it stops the
 // document being produced: a page that only fitted by being made illegible is
 // one where no document is better than the document.
@@ -529,18 +434,6 @@ func TestMinScaleIsAnError(t *testing.T) {
 // makes it exact: because the scaling is geometric, the effective size is the
 // natural size times one number, so this is a multiplication rather than an
 // iteration.
-// TestMinFontSizeIsAnError pins the other §6.1 threshold, and the property that
-// makes it exact: because the scaling is geometric, the effective size is the
-// natural size times one number, so this is a multiplication rather than an
-// iteration.
-// TestMinFontSizeIsAnError pins the other §6.1 threshold, and the property that
-// makes it exact: because the scaling is geometric, the effective size is the
-// natural size times one number, so this is a multiplication rather than an
-// iteration.
-// TestMinFontSizeIsAnError pins the other §6.1 threshold, and the property that
-// makes it exact: because the scaling is geometric, the effective size is the
-// natural size times one number, so this is a multiplication rather than an
-// iteration.
 func TestMinFontSizeIsAnError(t *testing.T) {
 	fired[RuleMinFontSize] = true
 
@@ -579,18 +472,6 @@ func TestMinFontSizeIsAnError(t *testing.T) {
 // which is the case §6.1 is really about: text that is legible on its own
 // becomes illegible once the page is shrunk to fit, and the check has to be
 // against the *effective* size rather than the declared one.
-// TestScalingMakesTextTooSmall pins the interaction between the two thresholds,
-// which is the case §6.1 is really about: text that is legible on its own
-// becomes illegible once the page is shrunk to fit, and the check has to be
-// against the *effective* size rather than the declared one.
-// TestScalingMakesTextTooSmall pins the interaction between the two thresholds,
-// which is the case §6.1 is really about: text that is legible on its own
-// becomes illegible once the page is shrunk to fit, and the check has to be
-// against the *effective* size rather than the declared one.
-// TestScalingMakesTextTooSmall pins the interaction between the two thresholds,
-// which is the case §6.1 is really about: text that is legible on its own
-// becomes illegible once the page is shrunk to fit, and the check has to be
-// against the *effective* size rather than the declared one.
 func TestScalingMakesTextTooSmall(t *testing.T) {
 	avail := A4.Content()
 	// 10px is 7.5pt, above the floor. Scaled to a fifth it is 1.5pt, well below.
@@ -614,7 +495,6 @@ func TestScalingMakesTextTooSmall(t *testing.T) {
 	}
 }
 
-// TestRenderIsTotal pins that no document and no options panic it.
 // TestRenderIsTotal pins that no document and no options panic it.
 func TestOverflowPageIsASelfCheck(t *testing.T) {
 	fired[RuleOverflowPage] = true

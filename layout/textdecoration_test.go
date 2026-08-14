@@ -28,15 +28,6 @@ const decoCSS = `#p { font-family: Courier; font-size: 20px; color: #000000 }`
 // bands returns the filled rectangles of a given colour, which is how a
 // decoration is told apart from a background: nothing else in these documents
 // paints.
-// bands returns the filled rectangles of a given colour, which is how a
-// decoration is told apart from a background: nothing else in these documents
-// paints.
-// bands returns the filled rectangles of a given colour, which is how a
-// decoration is told apart from a background: nothing else in these documents
-// paints.
-// bands returns the filled rectangles of a given colour, which is how a
-// decoration is told apart from a background: nothing else in these documents
-// paints.
 func bands(ops []Op, want style.RGBA) []Rect {
 	var out []Rect
 	for _, op := range ops {
@@ -49,9 +40,6 @@ func bands(ops []Op, want style.RGBA) []Rect {
 	return out
 }
 
-// baselineOfFirstRun is where the text of an element sits, in page coordinates.
-// baselineOfFirstRun is where the text of an element sits, in page coordinates.
-// baselineOfFirstRun is where the text of an element sits, in page coordinates.
 // baselineOfFirstRun is where the text of an element sits, in page coordinates.
 func baselineOfFirstRun(t *testing.T, root *Fragment, id string) style.Unit {
 	t.Helper()
@@ -293,33 +281,6 @@ func TestLinksAreUnderlinedByTheDefaultStylesheet(t *testing.T) {
 // The cost of the old rule was not theoretical. An empty <a> is the everyday
 // place to hang a ::before on, and every one of them came out blue and
 // underlined against a reference that drew neither.
-// TestAnAnchorWithoutAnHrefIsNotALink pins the other half of that rule, which
-// the stylesheet used to get wrong: it styled every <a>, and HTML styles :link,
-// which is an <a> *that has an href*. An <a> without one is an anchor — a place
-// in the document, not a way out of it — and it takes the colour of its
-// surroundings and no underline.
-//
-// The cost of the old rule was not theoretical. An empty <a> is the everyday
-// place to hang a ::before on, and every one of them came out blue and
-// underlined against a reference that drew neither.
-// TestAnAnchorWithoutAnHrefIsNotALink pins the other half of that rule, which
-// the stylesheet used to get wrong: it styled every <a>, and HTML styles :link,
-// which is an <a> *that has an href*. An <a> without one is an anchor — a place
-// in the document, not a way out of it — and it takes the colour of its
-// surroundings and no underline.
-//
-// The cost of the old rule was not theoretical. An empty <a> is the everyday
-// place to hang a ::before on, and every one of them came out blue and
-// underlined against a reference that drew neither.
-// TestAnAnchorWithoutAnHrefIsNotALink pins the other half of that rule, which
-// the stylesheet used to get wrong: it styled every <a>, and HTML styles :link,
-// which is an <a> *that has an href*. An <a> without one is an anchor — a place
-// in the document, not a way out of it — and it takes the colour of its
-// surroundings and no underline.
-//
-// The cost of the old rule was not theoretical. An empty <a> is the everyday
-// place to hang a ::before on, and every one of them came out blue and
-// underlined against a reference that drew neither.
 func TestAnAnchorWithoutAnHrefIsNotALink(t *testing.T) {
 	root := layoutOf(t, 600, `<p><a id="a">abcdef</a></p>`, decoCSS)
 	ops := Paint(root)
@@ -396,33 +357,6 @@ func decorationFindings(t *testing.T, htmlSrc, cssSrc string) int {
 // *does* state a position and a thickness must be believed instead, and until
 // forme reported the post table there was no way to tell the two situations
 // apart.
-// TestUnderlineComesFromTheFaceThatStatesOne is the other half of the fallback
-// the tests above pin.
-//
-// Those use Courier, a standard PDF face, which has no post table at all — its
-// metrics come from AFM data and forme reports no underline for it, so the
-// 0.05em/0.1em fractions stand and are the specified thing to do. A face that
-// *does* state a position and a thickness must be believed instead, and until
-// forme reported the post table there was no way to tell the two situations
-// apart.
-// TestUnderlineComesFromTheFaceThatStatesOne is the other half of the fallback
-// the tests above pin.
-//
-// Those use Courier, a standard PDF face, which has no post table at all — its
-// metrics come from AFM data and forme reports no underline for it, so the
-// 0.05em/0.1em fractions stand and are the specified thing to do. A face that
-// *does* state a position and a thickness must be believed instead, and until
-// forme reported the post table there was no way to tell the two situations
-// apart.
-// TestUnderlineComesFromTheFaceThatStatesOne is the other half of the fallback
-// the tests above pin.
-//
-// Those use Courier, a standard PDF face, which has no post table at all — its
-// metrics come from AFM data and forme reports no underline for it, so the
-// 0.05em/0.1em fractions stand and are the specified thing to do. A face that
-// *does* state a position and a thickness must be believed instead, and until
-// forme reported the post table there was no way to tell the two situations
-// apart.
 func TestUnderlineComesFromTheFaceThatStatesOne(t *testing.T) {
 	set := loadAhem(t)
 	// Ahem states an underline at -133 with a thickness of 20, out of 1000
@@ -460,9 +394,6 @@ func TestUnderlineComesFromTheFaceThatStatesOne(t *testing.T) {
 }
 
 // faceFrom loads a face from the fetched corpora, or skips.
-// faceFrom loads a face from the fetched corpora, or skips.
-// faceFrom loads a face from the fetched corpora, or skips.
-// faceFrom loads a face from the fetched corpora, or skips.
 func faceFrom(t *testing.T, env, rel string) FontSet {
 	t.Helper()
 	dir := os.Getenv(env)
@@ -480,9 +411,6 @@ func faceFrom(t *testing.T, env, rel string) FontSet {
 	return ahemSet{ahem: face, standard: StandardFonts()}
 }
 
-// decoBand lays out one decorated word against a font set and returns its band.
-// decoBand lays out one decorated word against a font set and returns its band.
-// decoBand lays out one decorated word against a font set and returns its band.
 // decoBand lays out one decorated word against a font set and returns its band.
 func decoBand(t *testing.T, set FontSet, decoration string) (Rect, style.Unit) {
 	t.Helper()
@@ -509,27 +437,6 @@ func decoBand(t *testing.T, set FontSet, decoration string) (Rect, style.Unit) {
 // checkout state both — so a line-through drawn at the underline's thickness is
 // wrong for almost every real font, at exactly the right height, which reads as
 // a choice rather than a mistake.
-// TestLineThroughComesFromTheFaceThatStatesOne pins the strikeout half.
-//
-// It is separate from the underline because OS/2 states a strikeout position and
-// size independently of post's underline, and 86 of the 88 faces in this
-// checkout state both — so a line-through drawn at the underline's thickness is
-// wrong for almost every real font, at exactly the right height, which reads as
-// a choice rather than a mistake.
-// TestLineThroughComesFromTheFaceThatStatesOne pins the strikeout half.
-//
-// It is separate from the underline because OS/2 states a strikeout position and
-// size independently of post's underline, and 86 of the 88 faces in this
-// checkout state both — so a line-through drawn at the underline's thickness is
-// wrong for almost every real font, at exactly the right height, which reads as
-// a choice rather than a mistake.
-// TestLineThroughComesFromTheFaceThatStatesOne pins the strikeout half.
-//
-// It is separate from the underline because OS/2 states a strikeout position and
-// size independently of post's underline, and 86 of the 88 faces in this
-// checkout state both — so a line-through drawn at the underline's thickness is
-// wrong for almost every real font, at exactly the right height, which reads as
-// a choice rather than a mistake.
 func TestLineThroughComesFromTheFaceThatStatesOne(t *testing.T) {
 	set := faceFrom(t, "NOTO_FONTS", "NotoSans-Regular.ttf")
 	band, baseline := decoBand(t, set, "line-through")
@@ -548,12 +455,6 @@ func TestLineThroughComesFromTheFaceThatStatesOne(t *testing.T) {
 
 // TestLineThroughFallsBackToTheXHeight is the other side, and it needs a face
 // that states an x-height and no strikeout. Two of the eighty-eight do.
-// TestLineThroughFallsBackToTheXHeight is the other side, and it needs a face
-// that states an x-height and no strikeout. Two of the eighty-eight do.
-// TestLineThroughFallsBackToTheXHeight is the other side, and it needs a face
-// that states an x-height and no strikeout. Two of the eighty-eight do.
-// TestLineThroughFallsBackToTheXHeight is the other side, and it needs a face
-// that states an x-height and no strikeout. Two of the eighty-eight do.
 func TestLineThroughFallsBackToTheXHeight(t *testing.T) {
 	set := faceFrom(t, "WPT_TESTS", "fonts/baseline-diagnostic/BaselineDiagnostic.ttf")
 	band, baseline := decoBand(t, set, "line-through")
@@ -570,30 +471,6 @@ func TestLineThroughFallsBackToTheXHeight(t *testing.T) {
 	}
 }
 
-// TestLineThroughUsesItsOwnThickness is the clause that says a strikeout is not
-// an underline drawn higher up.
-//
-// It needs a face whose two sizes differ, and Noto Sans is not one — it states
-// 50 for both, so a line-through drawn at the underline's thickness is right by
-// coincidence there and the clause decides nothing. Fifteen faces in this
-// checkout do differ, Ahem among them at 50 against 20, which is why this test
-// uses it rather than the face the tests above use.
-// TestLineThroughUsesItsOwnThickness is the clause that says a strikeout is not
-// an underline drawn higher up.
-//
-// It needs a face whose two sizes differ, and Noto Sans is not one — it states
-// 50 for both, so a line-through drawn at the underline's thickness is right by
-// coincidence there and the clause decides nothing. Fifteen faces in this
-// checkout do differ, Ahem among them at 50 against 20, which is why this test
-// uses it rather than the face the tests above use.
-// TestLineThroughUsesItsOwnThickness is the clause that says a strikeout is not
-// an underline drawn higher up.
-//
-// It needs a face whose two sizes differ, and Noto Sans is not one — it states
-// 50 for both, so a line-through drawn at the underline's thickness is right by
-// coincidence there and the clause decides nothing. Fifteen faces in this
-// checkout do differ, Ahem among them at 50 against 20, which is why this test
-// uses it rather than the face the tests above use.
 // TestLineThroughUsesItsOwnThickness is the clause that says a strikeout is not
 // an underline drawn higher up.
 //
