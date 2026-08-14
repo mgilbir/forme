@@ -1,4 +1,4 @@
-.PHONY: test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz useable clean-ucd stdfonts
+.PHONY: test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests
 
 test:
 	gofmt -l . | grep -v '^testdata/' && exit 1 || true
@@ -11,15 +11,16 @@ test:
 # changed between releases is a stale table rather than a defect.
 BIDI_DIR := testdata/unicode-bidi
 UNICODE_VERSION ?= 17.0.0
+UCD_URL         := https://www.unicode.org/Public/$(UNICODE_VERSION)/ucd
 
 bidi-tests: $(BIDI_DIR)/.ok
 
 $(BIDI_DIR)/.ok:
 	mkdir -p $(BIDI_DIR)
 	curl -fsSL -o $(BIDI_DIR)/BidiTest.txt \
-		https://www.unicode.org/Public/$(UNICODE_VERSION)/ucd/BidiTest.txt
+		$(UCD_URL)/BidiTest.txt
 	curl -fsSL -o $(BIDI_DIR)/BidiCharacterTest.txt \
-		https://www.unicode.org/Public/$(UNICODE_VERSION)/ucd/BidiCharacterTest.txt
+		$(UCD_URL)/BidiCharacterTest.txt
 	touch $@
 
 test-bidi: bidi-tests
@@ -172,3 +173,25 @@ AFM ?= testdata/afm
 stdfonts:
 	go run ./cmd/genstdfonts $(AFM) > shape/standard14.go
 	gofmt -w shape/standard14.go
+
+# UAX #29's grapheme cluster boundaries, which package segment finds.
+#
+# GraphemeBreakTest.txt is Unicode's own statement of where every boundary falls
+# in several hundred crafted strings, and GraphemeBreakProperty.txt with
+# emoji-data.txt and DerivedCoreProperties.txt are what cmd/gensegment turns into
+# the property table. The generated table is committed and the input is not, so a
+# checkout builds with no network.
+GRAPHEME_DIR := testdata/unicode-grapheme
+
+grapheme-tests: $(GRAPHEME_DIR)/.ok
+
+$(GRAPHEME_DIR)/.ok:
+	mkdir -p $(GRAPHEME_DIR)
+	curl -sSf -o $(GRAPHEME_DIR)/GraphemeBreakTest.txt $(UCD_URL)/auxiliary/GraphemeBreakTest.txt
+	touch $@
+
+test-grapheme: grapheme-tests
+	UNICODE_GRAPHEME_TESTS=$(abspath $(GRAPHEME_DIR)) go test -v -run TestGrapheme -count=1 ./segment
+
+clean-grapheme-tests:
+	rm -rf $(GRAPHEME_DIR)

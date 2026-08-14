@@ -1,5 +1,10 @@
-// Package grapheme finds grapheme cluster boundaries, which is UAX #29's
-// definition of where one user-perceived character ends and the next begins.
+// Package segment finds text boundaries: at present grapheme cluster
+// boundaries, which is UAX #29's definition of where one user-perceived
+// character ends and the next begins.
+//
+// It is named for the general question rather than the one boundary it answers
+// today, because the others UAX #29 defines — word and sentence boundaries —
+// belong beside it, and so does UAX #14's line breaking when it arrives.
 //
 // It exists because CSS needs to know where text may be cut. CSS Text §2 defines
 // a soft wrap opportunity as falling between "typographic character units", and
@@ -32,7 +37,7 @@
 // together. The tables are generated from the Unicode Character Database by
 // cmd/gengrapheme and the whole of it is checked against Unicode's own
 // GraphemeBreakTest.txt — see conformance_test.go.
-package grapheme
+package segment
 
 import (
 	"sort"

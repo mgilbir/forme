@@ -1,4 +1,4 @@
-package grapheme
+package segment
 
 import (
 	"bufio"

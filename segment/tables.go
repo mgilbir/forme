@@ -4,7 +4,7 @@
 // The data is the Unicode Character Database, Unicode 17.0.0, used under the
 // Unicode terms of use: https://www.unicode.org/terms_of_use.html
 
-package grapheme
+package segment
 
 // The Unicode version these tables were generated from. The conformance test
 // reads it, so a table regenerated from one release and a GraphemeBreakTest.txt

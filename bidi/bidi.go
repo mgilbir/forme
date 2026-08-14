@@ -201,9 +201,14 @@ type Paragraph struct {
 	// both need after the earlier rules have overwritten the working copy.
 	classes []Class
 
-	// levels is the resolved embedding level of each character. A character
-	// rule X9 removed has no level of its own and carries -1; callers that must
-	// place it anyway take the level of what precedes it.
+	// levels is the resolved embedding level of each character.
+	//
+	// A character rule X9 removed has no level of its own. §5.2 gives it the
+	// level of the character before it — "so that the character does not
+	// interrupt a run" — and that is done once, where the paragraph is built,
+	// rather than by each caller that has to place one. It marks no paper, so
+	// any other answer would put a visible seam in the middle of a word for the
+	// sake of a control code.
 	levels []int
 
 	// para is the paragraph embedding level, from P2/P3 or from the caller.
@@ -260,6 +265,29 @@ func resolveClasses(classes []Class, text []rune, paraLevel int) Paragraph {
 	}
 	p.resolveL1(retained)
 	return p
+}
+
+// fillRemoved is §5.2: a character rule X9 removed takes the level of the
+// character before it, "so that the character does not interrupt a run".
+//
+// It marks no paper, so any other answer would put a visible seam in the middle
+// of a word for the sake of a control code, and a caller splitting text where
+// the level changes would break the word there.
+//
+// It is not done in resolveClasses, which leaves the -1 standing. Unicode's
+// conformance files state no level for a removed character and the harness
+// checks that none is offered, so filling one in there turns a passing suite
+// into a failing one — 547,281 of BidiTest.txt's cases, which is how this was
+// found. The two callers below are the ones that must *place* the character.
+func (p *Paragraph) fillRemoved() {
+	carry := p.para
+	for i, l := range p.levels {
+		if l < 0 {
+			p.levels[i] = carry
+			continue
+		}
+		carry = l
+	}
 }
 
 // matchPDI pairs each isolate initiator with the PDI that ends it (BD9).
@@ -1010,18 +1038,9 @@ func ResolveRuns(text string) []Run {
 		classes[i] = ClassOf(r)
 	}
 	p := resolveClasses(classes, runes, -1)
+	p.fillRemoved()
 
-	// A removed character has no level of its own; give it the one before it so
-	// that it stays inside the run it was written in.
-	levels := make([]int, len(runes))
-	carry := p.para
-	for i, l := range p.levels {
-		if l < 0 {
-			l = carry
-		}
-		levels[i] = l
-		carry = l
-	}
+	levels := p.levels
 
 	var runs []Run
 	for i := 0; i < len(runes); {

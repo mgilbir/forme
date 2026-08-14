@@ -45,6 +45,7 @@ func Resolve(text []rune, dir Direction) *Paragraph {
 		level = paraLevelOf(classes, pdi, 0, len(classes))
 	}
 	p := resolveClasses(classes, text, level)
+	p.fillRemoved()
 	return &p
 }
 
