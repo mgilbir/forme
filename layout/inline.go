@@ -567,7 +567,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		// asks nothing. What must not change is how much of the content is
 		// *shown* — §5.1 evens out the lines, it does not throw more away — so
 		// the search is over the reach instead. See balanceClampedWidth.
-		w := l.balanceClampedWidth(items, width, indent, clampEllipsis, maxLines)
+		w := l.br.balanceClampedWidth(items, width, indent, clampEllipsis, maxLines)
 		for i := range balanceCaps {
 			balanceCaps[i] = w
 		}
@@ -643,7 +643,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			// has room beside.
 			firstItem := items[i]
 			if iByte > 0 {
-				_, firstItem = l.splitItem(firstItem, iByte)
+				_, firstItem = l.br.splitItem(firstItem, iByte)
 			}
 			y, left, right = l.roomForLine(firstItem, origin, y, left, right, lo, hi)
 
@@ -697,7 +697,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				l.deferred = l.deferred[:midAbs]
 				midKids = midKids[:0]
 
-				runs, next, nextByte, mid, forced = l.breakOneLine(items, i, iByte,
+				runs, next, nextByte, mid, forced = l.br.breakOneLine(items, i, iByte,
 					// The cap is a *line* width, so the indent comes off it and not
 					// off the band before it: the search counted the first line's
 					// room as the balanced width less the indent, and taking the
@@ -1086,9 +1086,9 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		// long to search, or one whose lines cannot be made to come out at the
 		// count the first pass found — the width search stands, and its answer
 		// is at least measured in the right bands.
-		lineCaps = l.balanceScoredCaps(items, bands, indent, len(bands))
+		lineCaps = l.br.balanceScoredCaps(items, bands, indent, len(bands))
 		if lineCaps == nil {
-			w := l.balanceWidthInBands(items, bands, width, indent)
+			w := l.br.balanceWidthInBands(items, bands, width, indent)
 			for i := range balanceCaps {
 				balanceCaps[i] = w
 			}
@@ -2183,7 +2183,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			// long enough, which is the behaviour of every engine that does not
 			// implement the rule and is the one that cannot move a tab stop by
 			// mistake.
-			tabFloor = l.measure(face, "0", size).Div(2)
+			tabFloor = l.br.measure(face, "0", size).Div(2)
 			break
 		}
 	}
@@ -2268,7 +2268,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			// nothing to measure here and the face's own advance for U+0009 —
 			// whatever a face happens to give a character it has no glyph for —
 			// would be the wrong number to carry.
-			item.width = l.measureSpaced(face, p.text, size, spacing)
+			item.width = l.br.measureSpaced(face, p.text, size, spacing)
 		}
 		out = append(out, item)
 		state = inlineState{afterCollapsibleSpace: p.collapsible}
@@ -2287,12 +2287,12 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 func (l *layouter) tabStop(b *Box, face *shape.Face) style.Unit {
 	raw := strings.TrimSpace(b.Style["tab-size"])
 	if n, ok := parseNumber(raw); ok {
-		return l.measure(face, " ", b.FontSize).Mul(n)
+		return l.br.measure(face, " ", b.FontSize).Mul(n)
 	}
 	if v, ok := l.lengthOf(b, "tab-size", 0); ok && v >= 0 {
 		return v
 	}
-	return l.measure(face, " ", b.FontSize).Mul(8)
+	return l.br.measure(face, " ", b.FontSize).Mul(8)
 }
 
 // tabAdvance is the distance from x to the next tab stop.
@@ -2342,8 +2342,8 @@ func tabAdvance(x, stop, floor style.Unit) style.Unit {
 // that use it want: a tab stop is a multiple of the space advance, "ch" is the
 // advance of a zero, and a list marker is set without the text's spacing. Text
 // that is laid out on a line goes through measureSpaced instead.
-func (l *layouter) measure(face *shape.Face, text string, size style.Unit) style.Unit {
-	return l.measureSpaced(face, text, size, textSpacing{})
+func (br *breaker) measure(face *shape.Face, text string, size style.Unit) style.Unit {
+	return br.measureSpaced(face, text, size, textSpacing{})
 }
 
 // measureSpaced is the advance of a run as it will be set, with letter-spacing
@@ -2356,21 +2356,21 @@ func (l *layouter) measure(face *shape.Face, text string, size style.Unit) style
 // different letter-spacing must not share an entry. Leaving it out of the key is
 // the same memoization bug lengthKey.zeroAdvance records for the "ch" unit, and
 // it produces a wrong page only in a document that uses two values.
-func (l *layouter) measureSpaced(face *shape.Face, text string, size style.Unit,
+func (br *breaker) measureSpaced(face *shape.Face, text string, size style.Unit,
 	sp textSpacing) style.Unit {
 
 	if text == "" {
 		return 0
 	}
 	key := measureKey{face: face, text: text, size: size, spacing: sp}
-	if got, ok := l.measured[key]; ok {
+	if got, ok := br.measured[key]; ok {
 		return got
 	}
 	// Measure returns the advance in the units the size was given in, so a size
 	// in CSS pixels gives an advance in CSS pixels.
 	w, _ := style.FromPx(face.Measure(text, size.Px()))
 	w = w.Add(spacingAdvance(text, sp))
-	l.measured[key] = w
+	br.measured[key] = w
 	return w
 }
 
@@ -2747,8 +2747,8 @@ var maxBalanceLines = 6
 //
 // Returns MaxUnit — no cap at all — when the box does not balance, when it is
 // one line already, or when it is longer than this engine will balance.
-func (l *layouter) balanceWidth(items []inlineItem, width, indent style.Unit) style.Unit {
-	full := l.countLines(items, width, indent, maxBalanceLines+1)
+func (br *breaker) balanceWidth(items []inlineItem, width, indent style.Unit) style.Unit {
+	full := br.countLines(items, width, indent, maxBalanceLines+1)
 	if full < 2 || full > maxBalanceLines {
 		return style.MaxUnit
 	}
@@ -2758,7 +2758,7 @@ func (l *layouter) balanceWidth(items []inlineItem, width, indent style.Unit) st
 	lo, hi := style.Unit(1), width
 	for hi.Sub(lo) > 1 {
 		mid := lo.Add(hi.Sub(lo).Div(2))
-		if l.countLines(items, mid, indent, full+1) <= full {
+		if br.countLines(items, mid, indent, full+1) <= full {
 			hi = mid
 			continue
 		}
@@ -2798,7 +2798,7 @@ func (l *layouter) balanceCaps(b *Box, items []inlineItem, width, indent style.U
 		if start == 0 {
 			ind = indent
 		}
-		w := l.balanceWidth(items[start:i], width, ind)
+		w := l.br.balanceWidth(items[start:i], width, ind)
 		for j := start; j < i; j++ {
 			caps[j] = w
 		}
@@ -2831,14 +2831,14 @@ func capAt(caps []style.Unit, i int) style.Unit {
 // So the search is over how far into the content the clamped layout reaches,
 // and the answer is the narrowest width that reaches as far as the full width
 // did. Reaching *further* is fine and is what the third line above does.
-func (l *layouter) balanceClampedWidth(items []inlineItem,
+func (br *breaker) balanceClampedWidth(items []inlineItem,
 	width, indent, ellipsis style.Unit, maxLines int) style.Unit {
 
-	wantI, wantByte := l.clampedReach(items, width, indent, ellipsis, maxLines)
+	wantI, wantByte := br.clampedReach(items, width, indent, ellipsis, maxLines)
 	lo, hi := style.Unit(1), width
 	for hi.Sub(lo) > 1 {
 		mid := lo.Add(hi.Sub(lo).Div(2))
-		i, iByte := l.clampedReach(items, mid, indent, ellipsis, maxLines)
+		i, iByte := br.clampedReach(items, mid, indent, ellipsis, maxLines)
 		if i > wantI || (i == wantI && iByte >= wantByte) {
 			hi = mid
 			continue
@@ -2858,7 +2858,7 @@ func (l *layouter) balanceClampedWidth(items []inlineItem,
 // asks for, since what does not fit beside the mark is what the mark stands for.
 // "unbreakable" against nine characters less an ellipsis shows nothing at all,
 // which is what the suite's line-clamp-003 draws.
-func (l *layouter) clampedReach(items []inlineItem,
+func (br *breaker) clampedReach(items []inlineItem,
 	width, indent, ellipsis style.Unit, maxLines int) (int, int) {
 
 	i, iByte := 0, 0
@@ -2878,7 +2878,7 @@ func (l *layouter) clampedReach(items []inlineItem,
 			room = room.Sub(ellipsis)
 		}
 		wasI, wasByte := i, iByte
-		runs, next, nextByte, _, _ := l.breakOneLine(items, i, iByte, room, 0)
+		runs, next, nextByte, _, _ := br.breakOneLine(items, i, iByte, room, 0)
 		if last {
 			var used style.Unit
 			for _, r := range runs {
@@ -2908,17 +2908,17 @@ func (l *layouter) clampedReach(items []inlineItem,
 // layout's bands and the balanced one may differ slightly, since a line that
 // changes height meets a different set of floats; the difference is a line's
 // worth of a float's edge, and browsers make the same approximation.
-func (l *layouter) balanceWidthInBands(items []inlineItem, bands []style.Unit,
+func (br *breaker) balanceWidthInBands(items []inlineItem, bands []style.Unit,
 	width, indent style.Unit) style.Unit {
 
-	full := l.countLinesInBands(items, bands, width, indent, maxBalanceLines+1)
+	full := br.countLinesInBands(items, bands, width, indent, maxBalanceLines+1)
 	if full < 2 || full > maxBalanceLines {
 		return style.MaxUnit
 	}
 	lo, hi := style.Unit(1), width
 	for hi.Sub(lo) > 1 {
 		mid := lo.Add(hi.Sub(lo).Div(2))
-		if l.countLinesInBands(items, bands, mid, indent, full+1) <= full {
+		if br.countLinesInBands(items, bands, mid, indent, full+1) <= full {
 			hi = mid
 			continue
 		}
@@ -2933,7 +2933,7 @@ func (l *layouter) balanceWidthInBands(items []inlineItem, bands []style.Unit,
 // A line's room is the narrower of the band it is in and the width being
 // probed — the cap chooses break points inside the room the floats leave, it
 // does not widen a line past them.
-func (l *layouter) countLinesInBands(items []inlineItem, bands []style.Unit,
+func (br *breaker) countLinesInBands(items []inlineItem, bands []style.Unit,
 	cap, indent style.Unit, limit int) int {
 
 	n := 0
@@ -2950,7 +2950,7 @@ func (l *layouter) countLinesInBands(items []inlineItem, bands []style.Unit,
 			room = room.Sub(indent)
 		}
 		wasI, wasByte := i, iByte
-		runs, next, nextByte, _, forced := l.breakOneLine(items, i, iByte, room, 0)
+		runs, next, nextByte, _, forced := br.breakOneLine(items, i, iByte, room, 0)
 		if len(runs) > 0 || forced {
 			n++
 		}
@@ -3052,7 +3052,7 @@ var maxScoredItems = 400
 //
 // Returns the width to break each line at, or nil where there is nothing to
 // choose or too much to choose between.
-func (l *layouter) balanceScoredCaps(items []inlineItem, bands []style.Unit,
+func (br *breaker) balanceScoredCaps(items []inlineItem, bands []style.Unit,
 	indent style.Unit, lines int) []style.Unit {
 
 	if lines < 2 || lines > maxBalanceLines || len(items) > maxScoredItems {
@@ -3102,7 +3102,7 @@ func (l *layouter) balanceScoredCaps(items []inlineItem, bands []style.Unit,
 		out := answer{}
 		r := room(st.n)
 		for w := r; w >= 0; {
-			runs, next, nextByte, _, _ := l.breakOneLine(items, st.i, st.iByte, w, 0)
+			runs, next, nextByte, _, _ := br.breakOneLine(items, st.i, st.iByte, w, 0)
 			if !cursorAdvanced(st.i, st.iByte, next, nextByte) {
 				break
 			}
@@ -3164,7 +3164,7 @@ func (l *layouter) balanceScoredCaps(items []inlineItem, bands []style.Unit,
 // content has, and what that room is on each line is decided by the real loop
 // against the real bands; a count that placed floats would have to place them
 // once per probe and roll them back once per probe.
-func (l *layouter) countLines(items []inlineItem, width, indent style.Unit, limit int) int {
+func (br *breaker) countLines(items []inlineItem, width, indent style.Unit, limit int) int {
 	n := 0
 	iByte := 0
 	for i := 0; i < len(items); {
@@ -3179,7 +3179,7 @@ func (l *layouter) countLines(items []inlineItem, width, indent style.Unit, limi
 			room = width.Sub(indent)
 		}
 		wasI, wasByte := i, iByte
-		runs, next, nextByte, _, forced := l.breakOneLine(items, i, iByte, room, 0)
+		runs, next, nextByte, _, forced := br.breakOneLine(items, i, iByte, room, 0)
 		if len(runs) > 0 || forced {
 			n++
 		}
@@ -3218,7 +3218,7 @@ func (l *layouter) countLines(items []inlineItem, width, indent style.Unit, limi
 //
 // The returned items carry their resolved widths: a tab's is not known until it
 // has a place, so an item on a line is not always the item that came in.
-func (l *layouter) breakOneLine(items []inlineItem, from, fromByte int, width, lineX style.Unit) (
+func (br *breaker) breakOneLine(items []inlineItem, from, fromByte int, width, lineX style.Unit) (
 	line []inlineItem, next, nextByte int, outOfFlow []midLineBox, forced bool) {
 
 	var used style.Unit
@@ -3291,7 +3291,7 @@ func (l *layouter) breakOneLine(items []inlineItem, from, fromByte int, width, l
 			// rather than a rewritten items slice: the caller re-runs this over
 			// several band widths, so anything written back would be seen by the
 			// next attempt and the split would compound.
-			_, item = l.splitItem(item, fromByte)
+			_, item = br.splitItem(item, fromByte)
 		}
 
 		if item.float != nil {
@@ -3439,7 +3439,7 @@ func (l *layouter) breakOneLine(items []inlineItem, from, fromByte int, width, l
 			// keeps the fill greedy: a line with "ab" on it and "cdefgh" next
 			// takes "cd" as well rather than stopping at the two characters it
 			// already has.
-			if head, at, ok := l.breakInsideWord(item, width.Sub(used)); ok {
+			if head, at, ok := br.breakInsideWord(item, width.Sub(used)); ok {
 				line = append(line, head)
 				return trimLineEdge(line), i, base + at, outOfFlow, false
 			}
@@ -3463,7 +3463,7 @@ func (l *layouter) breakOneLine(items []inlineItem, from, fromByte int, width, l
 			// margin wider than the line is also not the fault the report is
 			// about — nothing is clipped, the content is simply pushed past the
 			// edge, and the box the author wrote is the box that was drawn.
-			l.reportOverflow(item, width)
+			br.report.reportOverflow(item, width)
 		}
 		// Recorded before the switch below, because that is where content becomes
 		// true: an opportunity at the very start of a line is not one the line can
@@ -4096,7 +4096,7 @@ func (l *layouter) faceForText(b *Box) (*shape.Face, bool) {
 // may kern or ligate across the cut, so the two pieces do not in general add up
 // to the whole, and the number that has to be right is the one used to place the
 // text that is actually drawn.
-func (l *layouter) splitItem(item inlineItem, at int) (head, tail inlineItem) {
+func (br *breaker) splitItem(item inlineItem, at int) (head, tail inlineItem) {
 	head, tail = item, item
 	head.text, tail.text = item.text[:at], item.text[at:]
 	// at is an offset into the string, and the bidi range counts runes: the
@@ -4113,8 +4113,8 @@ func (l *layouter) splitItem(item inlineItem, at int) (head, tail inlineItem) {
 	runesBefore := utf8.RuneCountInString(item.text[:at])
 	head.bidiEnd = item.bidiStart + runesBefore
 	tail.bidiStart = item.bidiStart + runesBefore
-	head.width = l.measureSpaced(item.face, head.text, item.size, item.spacing)
-	tail.width = l.measureSpaced(item.face, tail.text, item.size, item.spacing)
+	head.width = br.measureSpaced(item.face, head.text, item.size, item.spacing)
+	tail.width = br.measureSpaced(item.face, tail.text, item.size, item.spacing)
 	// The tail begins a line, so it takes no opportunity from what was in front
 	// of the head — there is nothing in front of it any more.
 	//
@@ -4148,7 +4148,7 @@ func (l *layouter) splitItem(item inlineItem, at int) (head, tail inlineItem) {
 // be reported, which is right — a line cannot hold less than one character, and
 // breaking one off to leave the rest overflowing anyway would only lose a
 // character off the end.
-func (l *layouter) breakInsideWord(item inlineItem, width style.Unit) (head inlineItem, at int, ok bool) {
+func (br *breaker) breakInsideWord(item inlineItem, width style.Unit) (head inlineItem, at int, ok bool) {
 	if !item.breakWord || item.face == nil || width <= 0 || item.text == "" {
 		return inlineItem{}, 0, false
 	}
@@ -4168,7 +4168,7 @@ func (l *layouter) breakInsideWord(item inlineItem, width style.Unit) (head inli
 		if mid > len(bounds) {
 			break
 		}
-		w := l.measureSpaced(item.face, item.text[:bounds[mid-1]], item.size, item.spacing)
+		w := br.measureSpaced(item.face, item.text[:bounds[mid-1]], item.size, item.spacing)
 		if w <= width {
 			lo = mid
 		} else {
@@ -4179,6 +4179,6 @@ func (l *layouter) breakInsideWord(item inlineItem, width style.Unit) (head inli
 		return inlineItem{}, 0, false // not even one cluster fits
 	}
 	at = bounds[lo-1]
-	head, _ = l.splitItem(item, at)
+	head, _ = br.splitItem(item, at)
 	return head, at, true
 }

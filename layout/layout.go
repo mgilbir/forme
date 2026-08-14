@@ -165,7 +165,6 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 		lengths:             map[lengthKey]style.Length{},
 		fonts:               map[fontKey]resolvedFont{},
 		textFaces:           map[*Box]*shape.Face{},
-		measured:            map[measureKey]style.Unit{},
 		reportedScripts:     map[string]bool{},
 		reportedGlyphs:      map[string]bool{},
 		reportedOverflow:    map[string]bool{},
@@ -186,6 +185,9 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 		rootFontSize:        root.FontSize,
 		root:                root,
 	}
+	// The breaker reports through the layouter, so it is made once the layouter
+	// exists rather than in the literal above.
+	l.br = newBreaker(l)
 	if l.rootFontSize == 0 {
 		l.rootFontSize = defaultFontSize
 	}
@@ -289,10 +291,12 @@ type layouter struct {
 	// textFaces memoizes the face a text box is actually set in, which is not
 	// the family's face when the family cannot cover the text. See faceForText.
 	textFaces map[*Box]*shape.Face
-	// fonts and measured memoize the two things inline layout asks for most: a
-	// face for a style, and the width of a string in one.
-	fonts    map[fontKey]resolvedFont
-	measured map[measureKey]style.Unit
+	// br is the half of inline layout that is about text rather than boxes, and
+	// it owns the memo of measured runs. See breaker.
+	br *breaker
+	// fonts memoizes the face a style resolves to, which is the other thing
+	// inline layout asks for most.
+	fonts map[fontKey]resolvedFont
 	// intrinsic memoizes the two content-based widths of a box, which are what
 	// a float with an auto width is sized by.
 	intrinsic map[*Box]intrinsicWidths
@@ -1820,7 +1824,7 @@ func (l *layouter) zeroAdvance(b *Box) (style.Unit, bool) {
 	if !ok {
 		return 0, false
 	}
-	return l.measure(face, "0", b.FontSize), true
+	return l.br.measure(face, "0", b.FontSize), true
 }
 
 func (l *layouter) ensureFontSize(b *Box) {

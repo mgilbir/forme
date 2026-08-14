@@ -3,8 +3,6 @@ package layout
 import (
 	"strings"
 	"testing"
-
-	"github.com/mgilbir/forme/style"
 )
 
 // letter-spacing, word-spacing and text-indent.
@@ -296,19 +294,18 @@ func TestSpacingNormalIsNoSpacingAtAll(t *testing.T) {
 // above, made directly against the cache so that a future refactor that stops
 // going through layout still trips it.
 func TestSpacingKeyIsPartOfTheMeasurementCache(t *testing.T) {
-	l := &layouter{
-		measured: map[measureKey]style.Unit{},
-		fonts:    map[fontKey]resolvedFont{},
-		fontSet:  StandardFonts(),
-		rec:      NewRecorder(nil),
-	}
-	face, ok := l.fontSet.Face("Courier", false, false)
+	// The refactor that comment anticipated has happened: the cache belongs to
+	// the breaker, which measures text and knows nothing about boxes, so this no
+	// longer needs a layouter at all. Reporting is nil because measuring never
+	// reports.
+	br := newBreaker(nil)
+	face, ok := StandardFonts().Face("Courier", false, false)
 	if !ok {
 		t.Fatal("no Courier")
 	}
 	size := mustPx(20)
-	plain := l.measureSpaced(face, "abcde", size, textSpacing{})
-	spaced := l.measureSpaced(face, "abcde", size, textSpacing{letter: mustPx(3)})
+	plain := br.measureSpaced(face, "abcde", size, textSpacing{})
+	spaced := br.measureSpaced(face, "abcde", size, textSpacing{letter: mustPx(3)})
 	if plain.Px() != 60 {
 		t.Errorf("the unspaced measurement is %gpx, want 60", plain.Px())
 	}

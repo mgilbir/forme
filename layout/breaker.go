@@ -1,0 +1,64 @@
+package layout
+
+import (
+	"github.com/mgilbir/forme/shape"
+	"github.com/mgilbir/forme/style"
+)
+
+// breaker is the half of inline layout that is about text rather than about
+// boxes.
+//
+// Everything it does — cutting a run of items into lines, measuring what will
+// fit, scoring a set of breaks for text-wrap: balance — is stated over runs of
+// characters, the widths a face gives them and the rules in CSS Text and
+// Unicode. None of it needs a box tree, a cascade or a document, and the two
+// fields below are the whole of what it needs from outside itself.
+//
+// It is a receiver of its own rather than more methods on the layouter because
+// what a type can reach decides what its code can come to depend on. As methods
+// on the layouter these functions could read a computed style, walk to a parent
+// or lay a child out, and the only thing keeping them from it was that nobody
+// had yet — which is not a property, it is a habit. Here the compiler holds the
+// line.
+type breaker struct {
+	// measured memoizes the width of a run as it will be set.
+	//
+	// Measuring is the inner loop of line breaking and the same words recur
+	// constantly in a document: every "the" on a page measures the same, and the
+	// balancer measures a whole paragraph once per candidate width. The key is
+	// everything that scales or shifts the answer — see measureKey.
+	measured map[measureKey]style.Unit
+	// report is where a run that would not fit is said to have overflowed.
+	//
+	// It is an interface because the finding wants to name the element the run
+	// came from, and an element is exactly what this half has been kept from
+	// knowing about. The breaking says what happened; the layer that built the
+	// items says where.
+	report overflowReporter
+}
+
+// overflowReporter is told that a run of text was wider than the room it had.
+//
+// §11.1.1 leaves what to do about overflowing content to the formatter, and this
+// engine's answer is to lay it out and record a finding rather than to clip it
+// silently or to widen the box. The finding needs the element, which is why this
+// is a call back out rather than something the breaking does itself.
+type overflowReporter interface {
+	reportOverflow(item inlineItem, width style.Unit)
+}
+
+// newBreaker is the breaker a layout run uses, reporting through the layouter
+// that made it.
+func newBreaker(r overflowReporter) *breaker {
+	return &breaker{measured: map[measureKey]style.Unit{}, report: r}
+}
+
+// widthOf is the advance of a run of text as it will be set, in the units the
+// size was given in.
+//
+// It is here rather than on the face because the answer is memoized and because
+// letter-spacing and word-spacing are part of it: a face measures glyphs, and
+// what the breaking needs is the width of the run as this document sets it.
+func (br *breaker) widthOf(face *shape.Face, text string, size style.Unit, sp textSpacing) style.Unit {
+	return br.measureSpaced(face, text, size, sp)
+}
