@@ -132,6 +132,65 @@ func TestOverlineAndLineThroughSitWhereTheyShould(t *testing.T) {
 	}
 }
 
+// TestTheStrikeAndAMiddleAlignedBoxUseOneXHeight pins the agreement that
+// decorationMetrics and strutFor both describe in their comments and that
+// neither can enforce alone.
+//
+// §10.8.1 centres a "vertical-align: middle" box on a point half an x-height
+// above the baseline, and §16.3.1 leaves a line-through's position to the
+// engine, which puts it through the middle of the lower-case letters — the same
+// height, arrived at from the same number. Two functions read that number, and
+// nothing but this test says they read it the same way.
+//
+// It exists because they stopped agreeing. Both estimated the x-height at seven
+// tenths of the cap height for as long as no face stated one; when the standard
+// fourteen began stating it, decorationMetrics used the stated value and
+// strutFor kept estimating, and every document mixing a strike with a
+// middle-aligned box drew them a third of a pixel apart. Nothing failed: the
+// reftest ratchet held at 4438, and each function's own tests passed, because
+// each was right about its own half.
+func TestTheStrikeAndAMiddleAlignedBoxUseOneXHeight(t *testing.T) {
+	const boxCSS = ` #m { display: inline-block; width: 10px; height: 10px;
+	                      vertical-align: middle; background-color: #00ff00 }`
+
+	root := layoutOf(t, 600, `<div id="p">abcdef</div>`,
+		noDefaults+decoCSS+` #p { text-decoration: line-through }`)
+	through := bands(Paint(root), black)
+	if len(through) != 1 {
+		t.Fatalf("a struck word painted %d bands, want 1", len(through))
+	}
+	baseline := baselineOfFirstRun(t, root, "p")
+	// The centre of the stroke, not its top edge: it is the centre that is
+	// placed at half an x-height, and the thickness is not what is under test.
+	strikeCentre := baseline.Sub(through[0].Y.Add(through[0].H.Div(2))).Px()
+
+	root = layoutOf(t, 600, `<div id="p">abcdef<span id="m"></span></div>`,
+		noDefaults+decoCSS+boxCSS)
+	baseline = baselineOfFirstRun(t, root, "p")
+	box := find(t, root, "m").BorderRect
+	boxCentre := baseline.Sub(box.Y.Add(box.H.Div(2))).Px()
+
+	// Courier states an x-height of 426/1000, so both sit 20 x 0.426 / 2 =
+	// 4.26px above the baseline. The absolute value is asserted as well as the
+	// agreement, because two functions that had both kept the old estimate would
+	// agree with each other and be wrong together.
+	const want = 4.26
+	if strikeCentre < want-0.05 || strikeCentre > want+0.05 {
+		t.Errorf("the line-through is centred %gpx above the baseline, want %g — "+
+			"half Courier's stated x-height at 20px", strikeCentre, want)
+	}
+	if boxCentre < want-0.05 || boxCentre > want+0.05 {
+		t.Errorf("a middle-aligned box is centred %gpx above the baseline, want %g — "+
+			"about 3.93 means strutFor is still estimating from the cap height for a "+
+			"face that states an x-height", boxCentre, want)
+	}
+	if strikeCentre != boxCentre {
+		t.Errorf("the line-through is centred %gpx above the baseline and a "+
+			"middle-aligned box %gpx; §10.8.1's half-x-height and §16.3.1's strike "+
+			"are one number and must be read the same way", strikeCentre, boxCentre)
+	}
+}
+
 func TestDecorationReachesADescendantInTheDeclaringBoxesColour(t *testing.T) {
 	// §16.3.1's two rules at once, and the pair is the point. The <em> is
 	// underlined although it declares nothing, and the line is the *paragraph's*

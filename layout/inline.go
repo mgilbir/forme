@@ -1123,13 +1123,25 @@ func (l *layouter) strutFor(b *Box) strut {
 	if ascent, descent, ok := l.lineExtents(b, face); ok {
 		s.ascent, s.descent = ascent, descent
 	}
-	// The x-height, which no face this engine reads reports directly. Half an em
-	// is the figure every implementation falls back to and is within a few per
-	// cent for the Latin faces; a wrong x-height moves a "vertical-align:
-	// middle" box by a pixel or two, where having no answer at all would move it
-	// by half its own height.
+	// The x-height "vertical-align: middle" is measured against.
+	//
+	// The face's own when it states one, and otherwise the same two estimates
+	// decorationMetrics falls back to — seven tenths of the cap height, or half
+	// an em. The three cases and their order are deliberately identical to that
+	// function's, because the two are one question: a document whose strike and
+	// whose middle-aligned box sat at different heights would be answering it
+	// twice, differently, for no reason a reader could see.
+	//
+	// Nothing this engine read stated an x-height when this was written, so the
+	// estimate was the only answer available and the agreement was free. The
+	// standard fourteen state one now, and keeping the two in step costs this
+	// branch. TestTheStrikeAndAMiddleAlignedBoxUseOneXHeight is what says they
+	// are still in step.
 	s.xHeight = b.FontSize.Mul(0.5)
-	if d.CapHeight > 0 {
+	switch {
+	case d.Has(shape.MetricXHeight) && d.XHeight > 0:
+		s.xHeight = b.FontSize.Mul(float64(d.XHeight) / upem)
+	case d.CapHeight > 0:
 		// Cap height is reported, and x-height is about seven tenths of it for
 		// the faces that report either.
 		s.xHeight = b.FontSize.Mul(float64(d.CapHeight) / upem * 0.7)
