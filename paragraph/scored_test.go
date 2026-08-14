@@ -179,7 +179,12 @@ func TestTheScoredCapsNeverChangeTheLineCount(t *testing.T) {
 	for _, text := range balanceTexts {
 		items := itemsOf(t, br, face, text, WhiteSpaceOf("collapse"), OverflowWrap{})
 		for _, bs := range bandSets {
-			for _, want := range []int{2, 3, 4, 5} {
+			// The count is a precondition: layout passes the number of lines the
+			// greedy layout came to, never a number picked out of the air. No width
+			// reaches this search — it works inside the bands — so the count is
+			// taken there too, with nothing capping them.
+			want := br.countLinesInBands(items, bs.bands, style.MaxUnit, 0, MaxBalanceLines+1)
+			{
 				caps := br.BalanceScoredCaps(items, bs.bands, 0, want)
 				if caps == nil {
 					continue

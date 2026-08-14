@@ -209,3 +209,98 @@ func FuzzSplitAtBreaks(f *testing.F) {
 		}
 	})
 }
+
+// FuzzBalance holds the three searches to their contracts over arbitrary text and
+// arbitrary bands.
+//
+// The tests next door run them over a corpus and a handful of band shapes, which
+// is a list of things someone thought of. The searches are the part of this
+// package most likely to be wrong on an input nobody imagined: each is a hunt
+// over a space of arrangements, each has a bound it gives up at, and each returns
+// a sentinel for "nothing to choose" that a caller then has to handle. Those are
+// the edges a corpus misses.
+func FuzzBalance(f *testing.F) {
+	for _, s := range fuzzSeeds() {
+		f.Add(s, uint16(400), uint16(60), uint16(200), uint8(3))
+	}
+	f.Fuzz(func(t *testing.T, text string, rawWidth, rawA, rawB uint16, rawLines uint8) {
+		if len(text) > 2048 || !utf8.ValidString(text) {
+			t.Skip()
+		}
+		br := NewBreaker(nil)
+		face := courier(t)
+		width := u(float64(rawWidth) / 4)
+		bands := []style.Unit{u(float64(rawA) / 4), u(float64(rawB) / 4)}
+
+		items := itemsOf(t, br, face, text, WhiteSpaceOf("collapse"), OverflowWrap{})
+
+		// The width search: a cap that never widens the box, and never costs a
+		// line against the same bands it was searched in.
+		if cap := br.BalanceWidthInBands(items, bands, width, 0); cap != style.MaxUnit {
+			if cap > width {
+				t.Fatalf("%q at %gpx, bands %v: balanced to %gpx, wider than the box",
+					text, width.Px(), bands, cap.Px())
+			}
+			full := br.countLinesInBands(items, bands, width, 0, MaxBalanceLines+1)
+			capped := br.countLinesInBands(items, bands, cap, 0, MaxBalanceLines+2)
+			if capped > full {
+				t.Fatalf("%q at %gpx, bands %v: the box takes %d lines and the balanced "+
+					"%gpx takes %d", text, width.Px(), bands, full, cap.Px(), capped)
+			}
+		}
+
+		// A band narrower than the probe is the line's room, so the banded count
+		// and the plain one are the same paragraph.
+		narrow := style.Min(bands[0], bands[1])
+		if narrow > 0 && narrow < width {
+			banded := br.countLinesInBands(items, []style.Unit{narrow}, width, 0, 99)
+			plain := br.countLines(items, narrow, 0, 99)
+			if banded != plain {
+				t.Fatalf("%q: %d lines in a uniform %gpx band probed at %gpx, and %d at a "+
+					"plain %gpx", text, banded, narrow.Px(), width.Px(), plain, narrow.Px())
+			}
+		}
+
+		// The scored search. Its "lines" argument is a precondition rather than a
+		// request: layout hands it len(bands), which is the number of lines the
+		// greedy layout came to, and asks for a tidier arrangement into that many.
+		//
+		// Note that no width reaches this search at all — it works inside the
+		// bands, which are the rooms the lines really had. So the count has to be
+		// derived the same way, by breaking greedily in those bands with nothing
+		// capping them. Deriving it at some probe width instead asks for an
+		// arrangement into a number of lines the bands cannot make, which is not a
+		// case layout produces and not one the answer is defined for.
+		lines := br.countLinesInBands(items, bands, style.MaxUnit, 0, MaxBalanceLines+1)
+		if caps := br.BalanceScoredCaps(items, bands, 0, lines); caps != nil {
+			if len(caps) != lines {
+				t.Fatalf("%q: asked for %d lines and got %d caps", text, lines, len(caps))
+			}
+			got, _ := linesWithCaps(t, br, items, bands, caps, 0)
+			if len(got) != lines {
+				t.Fatalf("%q, bands %v: the caps for %d lines break to %d",
+					text, bands, lines, len(got))
+			}
+		}
+
+		// The clamped search: never wider than the box, and never showing less of
+		// the text than the box did.
+		ellipsis := u(12)
+		clampLines := int(rawLines%6) + 1
+		clamped := br.BalanceClampedWidth(items, width, 0, ellipsis, clampLines)
+		if clamped > width {
+			t.Fatalf("%q at %gpx: the clamped balance is %gpx, wider than the box",
+				text, width.Px(), clamped.Px())
+		}
+		wantI, wantByte := br.clampedReach(items, width, 0, ellipsis, clampLines)
+		gotI, gotByte := br.clampedReach(items, clamped, 0, ellipsis, clampLines)
+		if gotI < wantI || (gotI == wantI && gotByte < wantByte) {
+			t.Fatalf("%q at %gpx, %d lines: the box reached item %d byte %d and the "+
+				"balanced %gpx reaches only %d/%d",
+				text, width.Px(), clampLines, wantI, wantByte, clamped.Px(), gotI, gotByte)
+		}
+		if gotI < 0 || gotI > len(items) {
+			t.Fatalf("%q: the clamped reach is item %d of %d", text, gotI, len(items))
+		}
+	})
+}
