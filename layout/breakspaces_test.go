@@ -221,11 +221,11 @@ func TestOtherSpaceSeparatorsAreWhiteSpaceForPhaseII(t *testing.T) {
 			t.Errorf("U+%04X cut its text into %d pieces, want 3", r, len(pieces))
 			continue
 		}
-		if !pieces[1].space || pieces[1].collapsible {
+		if !pieces[1].Space || pieces[1].Collapsible {
 			t.Errorf("U+%04X gave a piece {space:%v collapsible:%v}, want a "+
 				"preserved space: Phase I is defined over U+0020, U+0009 and the "+
 				"segment breaks and never touches this character",
-				r, pieces[1].space, pieces[1].collapsible)
+				r, pieces[1].Space, pieces[1].Collapsible)
 		}
 	}
 
@@ -252,14 +252,14 @@ func TestSeparatorBreakOpportunitiesFollowUAX14(t *testing.T) {
 			t.Errorf("a line may end after U+%04X: got %v, want %v", r, got, want)
 		}
 		pieces, _ := splitAtBreaks("ab"+string(r)+"cd", whiteSpaceOf("preserve"), wordBreak{}, lineBreak{})
-		if len(pieces) == 3 && pieces[2].breakBefore != want {
+		if len(pieces) == 3 && pieces[2].BreakBefore != want {
 			t.Errorf("the text after U+%04X may begin a line: got %v, want %v",
-				r, pieces[2].breakBefore, want)
+				r, pieces[2].BreakBefore, want)
 		}
 		// break-spaces overrides both exceptions: it puts an opportunity "after
 		// every other space separator", with no carve-out for the no-break ones.
 		pieces, _ = splitAtBreaks("ab"+string(r)+"cd", whiteSpaceOf("break-spaces"), wordBreak{}, lineBreak{})
-		if len(pieces) == 3 && !pieces[2].breakBefore {
+		if len(pieces) == 3 && !pieces[2].BreakBefore {
 			t.Errorf("break-spaces left no opportunity after U+%04X", r)
 		}
 	}

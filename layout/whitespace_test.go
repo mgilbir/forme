@@ -618,7 +618,7 @@ func TestBreakAfterAHyphenAndNotAfterATrailingOne(t *testing.T) {
 	// changes is the opportunity the run *ends* at, which is the value that
 	// travels to the next box.
 	pieces, endedAtBreak := splitAtBreaks("end-", whiteSpaceOf("collapse"), wordBreak{}, lineBreak{})
-	if len(pieces) != 1 || pieces[0].text != "end-" {
+	if len(pieces) != 1 || pieces[0].Text != "end-" {
 		t.Errorf("a trailing hyphen cut the text into %d pieces", len(pieces))
 	}
 	if endedAtBreak {
@@ -628,11 +628,11 @@ func TestBreakAfterAHyphenAndNotAfterATrailingOne(t *testing.T) {
 	// already the opportunity, and the hyphen must not claim it — a piece that
 	// took it would leave the word after the space unable to begin a line.
 	pieces, _ = splitAtBreaks("end- x", whiteSpaceOf("collapse"), wordBreak{}, lineBreak{})
-	if len(pieces) != 3 || pieces[0].text != "end-" {
+	if len(pieces) != 3 || pieces[0].Text != "end-" {
 		t.Errorf("a hyphen before a space gave %d pieces starting %q",
-			len(pieces), pieces[0].text)
+			len(pieces), pieces[0].Text)
 	}
-	if pieces[1].breakBefore {
+	if pieces[1].BreakBefore {
 		t.Error("the space after a trailing hyphen was marked as beginning a line")
 	}
 	// And a hyphen inside a word does leave one, so the assertions above are
@@ -641,7 +641,7 @@ func TestBreakAfterAHyphenAndNotAfterATrailingOne(t *testing.T) {
 		t.Error("a word ending after a hyphenated compound ended at an opportunity")
 	}
 	if pieces, _ := splitAtBreaks("well-known", whiteSpaceOf("collapse"), wordBreak{}, lineBreak{}); len(pieces) != 2 ||
-		!pieces[1].breakBefore {
+		!pieces[1].BreakBefore {
 		t.Error("a hyphen inside a word left no break opportunity")
 	}
 }
