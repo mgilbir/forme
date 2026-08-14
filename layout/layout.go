@@ -1824,7 +1824,7 @@ func (l *layouter) zeroAdvance(b *Box) (style.Unit, bool) {
 	if !ok {
 		return 0, false
 	}
-	return l.br.measure(face, "0", b.FontSize), true
+	return l.br.Measure(face, "0", b.FontSize), true
 }
 
 func (l *layouter) ensureFontSize(b *Box) {

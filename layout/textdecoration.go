@@ -54,38 +54,6 @@ import (
 // line-through is centred on half the x-height, the same estimate strutFor uses
 // to place a "vertical-align: middle" box.
 
-// decorationKind is one of the three lines §16.3.1 defines.
-type decorationKind uint8
-
-const (
-	decorationUnderline decorationKind = iota
-	decorationOverline
-	decorationLineThrough
-)
-
-// textDecoration is one line to draw, together with the box that asked for it.
-type textDecoration struct {
-	kind decorationKind
-	// by is the box whose declaration produced the line. It is kept rather than a
-	// resolved colour because the colour is not known until painting — and
-	// because "currentcolor", which is text-decoration-color's initial value,
-	// means the declaring box's own colour rather than the colour of whatever
-	// text the line happens to cross.
-	by *Box
-	// shift is how far the declaring box's own baseline sits below the line's,
-	// which is §10.8.1's vertical-align applied to *that* box and not to the run
-	// the decoration is attached to.
-	//
-	// §16.3.1 is the reason the two are different numbers: a decoration is drawn
-	// across the whole of the box that declared it "without paying any attention
-	// to" what it crosses, so a div with an overline over three spans at three
-	// vertical-aligns rules one straight line and not three stepped ones. The
-	// field is filled in when a run is placed on a line, since only then is the
-	// line's own geometry known, and it stays zero for the decorations of every
-	// document that does not use the property.
-	shift style.Unit
-}
-
 // decorationsFor is every decoration drawn across a box's text.
 //
 // It walks upwards rather than being pushed downwards, because the answer is
@@ -158,12 +126,12 @@ func (l *layouter) decorationsAt(in []textDecoration, ls *lineStack) []textDecor
 	out := make([]textDecoration, len(in))
 	copy(out, in)
 	for i := range out {
-		va, ok := l.inlineAligns[out[i].by]
+		va, ok := l.inlineAligns[heldBox(out[i].By)]
 		if !ok {
 			continue
 		}
-		above, below := l.leading(out[i].by)
-		out[i].shift = ls.shift(va, above, below)
+		above, below := l.leading(heldBox(out[i].By))
+		out[i].Shift = ls.Shift(va, above, below)
 	}
 	return out
 }
@@ -204,11 +172,11 @@ func ownDecorations(b *Box) []textDecoration {
 	for _, word := range strings.Fields(raw) {
 		switch strings.ToLower(word) {
 		case "underline":
-			out = append(out, textDecoration{kind: decorationUnderline, by: b})
+			out = append(out, textDecoration{Kind: decorationUnderline, By: b})
 		case "overline":
-			out = append(out, textDecoration{kind: decorationOverline, by: b})
+			out = append(out, textDecoration{Kind: decorationOverline, By: b})
 		case "line-through":
-			out = append(out, textDecoration{kind: decorationLineThrough, by: b})
+			out = append(out, textDecoration{Kind: decorationLineThrough, By: b})
 		}
 		// "none" contributes nothing, and so does anything else — "blink" among
 		// them, which the shorthand already reports as a part it cannot produce.

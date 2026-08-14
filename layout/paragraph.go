@@ -66,3 +66,97 @@ var (
 	spacedUnits        = paragraph.SpacedUnits
 	isDefaultIgnorable = paragraph.IsDefaultIgnorable
 )
+
+// Geometry and the item type itself.
+type (
+	Point       = paragraph.Point
+	breaker     = paragraph.Breaker
+	strut       = paragraph.Strut
+	vAlignState = paragraph.VAlignState
+
+	// textDecoration is one line ruled across a run, together with the box that
+	// asked for it. It travels with the item and the breaking never reads it.
+	textDecoration = paragraph.Decoration
+)
+
+var newBreaker = paragraph.NewBreaker
+
+// The item itself, and the paragraphs the bidirectional algorithm resolves over.
+type (
+	inlineItem  = paragraph.Item
+	bidiBuilder = paragraph.BidiBuilder
+	bidiMode    = paragraph.BidiMode
+)
+
+// What the walk over an inline subtree carries, and what a line is made of.
+type (
+	itemRef     = paragraph.Ref
+	inlineFrame = paragraph.Frame
+	inlineState = paragraph.State
+	vAlign      = paragraph.VAlign
+)
+
+// The rest of what crossed: the stacking, the ordering and the small
+// predicates the two halves share.
+
+type (
+	decorationKind = paragraph.DecorationKind
+	lineStack      = paragraph.LineStack
+	midLineBox     = paragraph.MidLineBox
+)
+
+const (
+	bidiNormal          = paragraph.BidiNormal
+	decorationUnderline = paragraph.DecorationUnderline
+	runeFSI             = paragraph.RuneFSI
+	runeLRE             = paragraph.RuneLRE
+	runeLRI             = paragraph.RuneLRI
+	runeLRO             = paragraph.RuneLRO
+	runePDF             = paragraph.RunePDF
+	runePDI             = paragraph.RunePDI
+	runeRLE             = paragraph.RuneRLE
+	runeRLI             = paragraph.RuneRLI
+	runeRLO             = paragraph.RuneRLO
+	vAlignBaseline      = paragraph.VAlignBaseline
+)
+
+var (
+	cursorAdvanced    = paragraph.CursorAdvanced
+	describeRune      = paragraph.DescribeRune
+	fmtPx             = paragraph.FmtPx
+	lineCap           = paragraph.LineCap
+	lineMetrics       = paragraph.LineMetrics
+	lineVisualOrder   = paragraph.LineVisualOrder
+	marksNoPaper      = paragraph.MarksNoPaper
+	missesVisible     = paragraph.MissesVisible
+	newBidiBuilder    = paragraph.NewBidiBuilder
+	parseNumber       = paragraph.ParseNumber
+	positiveInteger   = paragraph.PositiveInteger
+	sameUnits         = paragraph.SameUnits
+	stackLine         = paragraph.StackLine
+	startOfContext    = paragraph.StartOfContext
+	unsupportedScript = paragraph.UnsupportedScript
+)
+
+const (
+	vAlignTop             = paragraph.VAlignTop
+	vAlignBottom          = paragraph.VAlignBottom
+	vAlignMiddle          = paragraph.VAlignMiddle
+	vAlignTextTop         = paragraph.VAlignTextTop
+	vAlignTextBottom      = paragraph.VAlignTextBottom
+	bidiEmbed             = paragraph.BidiEmbed
+	bidiIsolate           = paragraph.BidiIsolate
+	bidiOverride          = paragraph.BidiOverride
+	bidiIsolateOverride   = paragraph.BidiIsolateOverride
+	bidiPlaintext         = paragraph.BidiPlaintext
+	decorationOverline    = paragraph.DecorationOverline
+	decorationLineThrough = paragraph.DecorationLineThrough
+)
+
+// The bounds and the one string the two halves share. MaxLineFits and
+// MaxBalancePasses are vars rather than consts because tests lower them to reach
+// the truncation they guard, which is a thing this package's tests do.
+const (
+	blockEllipsis                  = paragraph.BlockEllipsis
+	normalLineHeightFallbackFactor = paragraph.NormalLineHeightFallbackFactor
+)

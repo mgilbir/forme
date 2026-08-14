@@ -390,7 +390,7 @@ func TestADecorationIsNotMovedByADescendantsAlignment(t *testing.T) {
 		if len(run.Decorations) != 1 {
 			t.Fatalf("the run %q carries %d decorations, want 1", word, len(run.Decorations))
 		}
-		if got := run.Decorations[0].shift.Px(); got != 0 {
+		if got := run.Decorations[0].Shift.Px(); got != 0 {
 			t.Errorf("the underline across %q is drawn %vpx off the line's baseline, "+
 				"want 0 — the div declared it and the div was not moved", word, got)
 		}
@@ -406,7 +406,7 @@ func TestADecorationIsNotMovedByADescendantsAlignment(t *testing.T) {
 	if len(run.Decorations) != 1 {
 		t.Fatalf("the raised run carries %d decorations, want 1", len(run.Decorations))
 	}
-	if got := run.Decorations[0].shift.Px(); got != -30 {
+	if got := run.Decorations[0].Shift.Px(); got != -30 {
 		t.Errorf("the underline the raised span declared is drawn %vpx off the "+
 			"line's baseline, want -30 — it belongs to the box that moved", got)
 	}

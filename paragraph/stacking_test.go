@@ -1,10 +1,16 @@
-package layout
+package paragraph
 
 import (
 	"testing"
 
 	"github.com/mgilbir/forme/style"
 )
+
+// u is a whole number of pixels as the engine holds it.
+func u(px float64) style.Unit {
+	v, _ := style.FromPx(px)
+	return v
+}
 
 // §10.8.1's aligned subtrees, stacked at the level the stacking happens at.
 //
@@ -22,8 +28,8 @@ import (
 // atomicOfExtents is an item that is a box on the line reaching the given
 // distances from its own baseline. The ref only has to be non-nil — nothing in
 // the stacking looks at it.
-func atomicOfExtents(ascent, descent style.Unit, v vAlignState) inlineItem {
-	return inlineItem{Atomic: new(Fragment), Ascent: ascent, Descent: descent, Valign: v}
+func atomicOfExtents(ascent, descent style.Unit, v VAlignState) Item {
+	return Item{Atomic: new(int), Ascent: ascent, Descent: descent, Valign: v}
 }
 
 // TestOneAlignedSubtreesBoxesAreStackedTogether is the rule that the boxes in
@@ -45,11 +51,11 @@ func atomicOfExtents(ascent, descent style.Unit, v vAlignState) inlineItem {
 func TestOneAlignedSubtreesBoxesAreStackedTogether(t *testing.T) {
 	// A strut of 20px with its baseline 16px down, so the line before any
 	// subtree is considered is 20px tall with 4px below the baseline.
-	s := strut{height: u(20), baseline: u(16)}
+	s := Strut{Height: u(20), Baseline: u(16)}
 
 	// One subtree, named by a token that is not a box and does not have to be.
 	subtree := new(int)
-	top := vAlignState{lineAlign: vAlignTop, subtree: subtree}
+	top := VAlignState{LineAlign: VAlignTop, Subtree: subtree}
 
 	// Three boxes, and both the count and the order are the fixture rather than
 	// arbitrary. The group keeps a running highest and a running deepest, and a
@@ -60,17 +66,17 @@ func TestOneAlignedSubtreesBoxesAreStackedTogether(t *testing.T) {
 	// A small box to open the group, a picture that is all ascent to raise the
 	// highest, and an inline-block hanging below its own baseline to lower the
 	// deepest.
-	items := []inlineItem{
+	items := []Item{
 		atomicOfExtents(u(10), 0, top),
 		atomicOfExtents(u(40), 0, top),
 		atomicOfExtents(u(10), u(30), top),
 	}
 
-	ls := stackLine(items, s)
+	ls := StackLine(items, s)
 
 	// Gathered together: the group reaches 40 above its baseline and 30 below,
 	// so it needs 70px and the line grows to it.
-	if got := ls.height.Px(); got != 70 {
+	if got := ls.Height.Px(); got != 70 {
 		t.Errorf("a line holding one aligned subtree of three boxes is %gpx tall, want 70 "+
 			"— the group's own 40px ascent over its own 30px descent. 40px means the "+
 			"group kept one box's extents rather than the highest and the deepest "+
@@ -80,10 +86,10 @@ func TestOneAlignedSubtreesBoxesAreStackedTogether(t *testing.T) {
 		t.Errorf("the three boxes made %d aligned subtrees, want 1 — they carry the same "+
 			"subtree token, and telling them apart is what §10.8.1 is about", len(ls.groups))
 	}
-	if got := ls.groups[0].ascent.Px(); got != 40 {
+	if got := ls.groups[0].Ascent.Px(); got != 40 {
 		t.Errorf("the subtree's ascent is %gpx, want 40 — the highest of its boxes", got)
 	}
-	if got := ls.groups[0].descent.Px(); got != 30 {
+	if got := ls.groups[0].Descent.Px(); got != 30 {
 		t.Errorf("the subtree's descent is %gpx, want 30 — the deepest of its boxes", got)
 	}
 }
@@ -95,22 +101,22 @@ func TestOneAlignedSubtreesBoxesAreStackedTogether(t *testing.T) {
 // one group and never compares anything, which would size a line holding a
 // top-aligned box and a bottom-aligned one as though they were one subtree.
 func TestTwoAlignedSubtreesAreStackedApart(t *testing.T) {
-	s := strut{height: u(20), baseline: u(16)}
-	first := vAlignState{lineAlign: vAlignTop, subtree: new(int)}
-	second := vAlignState{lineAlign: vAlignTop, subtree: new(int)}
+	s := Strut{Height: u(20), Baseline: u(16)}
+	first := VAlignState{LineAlign: VAlignTop, Subtree: new(int)}
+	second := VAlignState{LineAlign: VAlignTop, Subtree: new(int)}
 
-	items := []inlineItem{
+	items := []Item{
 		atomicOfExtents(u(40), 0, first),
 		atomicOfExtents(u(10), u(30), second),
 	}
 
-	ls := stackLine(items, s)
+	ls := StackLine(items, s)
 
 	if len(ls.groups) != 2 {
 		t.Fatalf("two boxes in different subtrees made %d groups, want 2", len(ls.groups))
 	}
 	// Each is sized alone, and the line takes the larger: 40px against 10+30.
-	if got := ls.height.Px(); got != 40 {
+	if got := ls.Height.Px(); got != 40 {
 		t.Errorf("a line holding two separate aligned subtrees is %gpx tall, want 40 — "+
 			"the taller of the two taken on its own. 70px means they were merged", got)
 	}

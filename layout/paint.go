@@ -1033,14 +1033,14 @@ func (p *painter) decorate(run TextRun, at Point, over bool) {
 	metrics := decorationMetricsFor(run.Face, run.Size)
 	lineY := at.Y.Sub(run.Shift)
 	for _, d := range run.Decorations {
-		if (d.kind == decorationLineThrough) != over {
+		if (d.Kind == decorationLineThrough) != over {
 			continue
 		}
-		colour, ok := p.color(d.by, "text-decoration-color")
+		colour, ok := p.color(heldBox(d.By), "text-decoration-color")
 		if !ok || colour.A == 0 {
 			continue
 		}
-		band := decorationBand(d.kind, at.X, run.Width, lineY.Add(d.shift), metrics)
+		band := decorationBand(d.Kind, at.X, run.Width, lineY.Add(d.Shift), metrics)
 		if band.Empty() {
 			continue
 		}

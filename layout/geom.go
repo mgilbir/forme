@@ -15,9 +15,6 @@ import (
 // units to points happens there: a coordinate system that changes halfway
 // through an engine is one where every sign error is plausible.
 
-// Point is a position.
-type Point struct{ X, Y style.Unit }
-
 // Size is an extent.
 type Size struct{ W, H style.Unit }
 

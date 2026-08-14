@@ -196,7 +196,7 @@ func (d *inlineDecor) addLine(index int, items []inlineItem, xs []style.Unit,
 			base := baseline
 			if va, ok := d.l.inlineAligns[box]; ok {
 				above, below := d.l.leading(box)
-				base = base.Add(stack.shift(va, above, below))
+				base = base.Add(stack.Shift(va, above, below))
 			}
 			d.pieces = append(d.pieces, inlinePiece{
 				box: box, line: index, left: left, right: right,
@@ -298,9 +298,9 @@ func (d *inlineDecor) finish(parent *Fragment) {
 			Box: b, Margin: margin, Border: border, Padding: padding,
 			BorderRect: Rect{
 				X: x,
-				Y: p.baseline.Sub(st.ascent).Sub(padding.Top).Sub(border.Top),
+				Y: p.baseline.Sub(st.Ascent).Sub(padding.Top).Sub(border.Top),
 				W: p.right.Sub(margin.Right).Sub(x),
-				H: st.ascent.Add(st.descent).
+				H: st.Ascent.Add(st.Descent).
 					Add(padding.Vertical()).Add(border.Vertical()),
 			},
 			// §9.4.3's displacement, accumulated over the inline boxes this one
