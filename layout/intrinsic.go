@@ -353,7 +353,7 @@ func (l *layouter) widthsOf(items []inlineItem) intrinsicWidths {
 			// A float beside text is as wide as it is whether or not the text
 			// wraps, so it raises both numbers on its own rather than joining
 			// the run of words.
-			got := l.outerWidths(item.float, 0)
+			got := l.outerWidths(heldBox(item.float), 0)
 			out.min = style.Max(out.min, got.min)
 			out.max = style.Max(out.max, got.max)
 
@@ -371,7 +371,7 @@ func (l *layouter) widthsOf(items []inlineItem) intrinsicWidths {
 			if item.breakBefore {
 				endRun()
 			}
-			got := l.outerWidths(item.atomicBox, 0)
+			got := l.outerWidths(heldBox(item.atomicBox), 0)
 			run = run.Add(got.min)
 			line = line.Add(got.max)
 			// Content, so a space before it is no longer trailing. Without this
