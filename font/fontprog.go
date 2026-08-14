@@ -31,6 +31,24 @@ type Program struct {
 	// of a composite glyph. Such a glyph may carry an outline solely to serve
 	// as a building block (e.g. an accent) without being a directly mapped CID.
 	ComponentGID []bool
+	// GlyphBBox[gid] is the box the glyph's own outline occupies — xMin, yMin,
+	// xMax, yMax in font units — as the glyph header states it.
+	//
+	// The font's word for where the ink of one glyph is, which is a far tighter
+	// answer than the face-wide bounding box for anything that has to know
+	// whether a particular piece of text reaches somewhere: the face box has to
+	// hold an accented capital and a descending bracket, and almost no run
+	// contains either.
+	//
+	// It is what the header says and is not verified against the outline. A
+	// font may state a box larger than its contours and some do; none of the
+	// uses here is harmed by a box that is too big, and reading the contours to
+	// check would mean interpreting them.
+	//
+	// The entry for an empty glyph is the zero box, which is correct — a space
+	// puts no ink anywhere — and GlyphNonEmpty distinguishes it from a glyph
+	// whose header really says zero. nil when the font has no glyf table.
+	GlyphBBox [][4]int
 	// WidthByGID gives advance widths by glyph index, scaled to 1/1000.
 	WidthByGID []float64
 	// Cmap maps Unicode code points to glyph indices ((3,1) subtable), and
@@ -157,6 +175,7 @@ func ParseSFNT(data []byte, maxCmapWork int) *Program {
 		}
 		fp.GlyphNonEmpty = make([]bool, fp.NumGlyphs)
 		fp.ComponentGID = make([]bool, fp.NumGlyphs)
+		fp.GlyphBBox = make([][4]int, fp.NumGlyphs)
 		for gid := 0; gid < fp.NumGlyphs; gid++ {
 			start, end := offAt(gid), offAt(gid+1)
 			// Present when the entry is well-formed and lies within the glyf
@@ -165,6 +184,16 @@ func ParseSFNT(data []byte, maxCmapWork int) *Program {
 			fp.GlyphNonEmpty[gid] = start < end && end <= glyfLen
 			if fp.GlyphNonEmpty[gid] {
 				MarkComposite(glyf[start:end], fp.NumGlyphs, fp.ComponentGID)
+				// The glyph header is numberOfContours and then the four
+				// bounds, all int16, so ten bytes. A composite glyph has the
+				// same header, which is why this needs no case for one.
+				if end-start >= 10 {
+					g := glyf[start:end]
+					fp.GlyphBBox[gid] = [4]int{
+						int(int16(Be16(g, 2))), int(int16(Be16(g, 4))),
+						int(int16(Be16(g, 6))), int(int16(Be16(g, 8))),
+					}
+				}
 			}
 		}
 	}

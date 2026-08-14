@@ -33,7 +33,8 @@ var wanted = []string{
 }
 
 type metrics struct {
-	widths     map[string]int // glyph name -> advance width
+	widths     map[string]int    // glyph name -> advance width
+	ink        map[string][2]int // glyph name -> yMin, yMax of its bounding box
 	ascent     int
 	descent    int
 	capHeight  int
@@ -67,7 +68,7 @@ func parseAFM(path string) (*metrics, error) {
 	}
 	defer f.Close()
 
-	m := &metrics{widths: map[string]int{}}
+	m := &metrics{widths: map[string]int{}, ink: map[string][2]int{}}
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
 	for sc.Scan() {
@@ -76,6 +77,8 @@ func parseAFM(path string) (*metrics, error) {
 		case strings.HasPrefix(line, "C "):
 			var width int
 			var glyph string
+			var box [4]int
+			var haveBox bool
 			for _, field := range strings.Split(line, ";") {
 				field = strings.TrimSpace(field)
 				switch {
@@ -83,10 +86,25 @@ func parseAFM(path string) (*metrics, error) {
 					width, _ = strconv.Atoi(strings.TrimSpace(field[3:]))
 				case strings.HasPrefix(field, "N "):
 					glyph = strings.TrimSpace(field[2:])
+				case strings.HasPrefix(field, "B "):
+					fields := strings.Fields(field[2:])
+					if len(fields) == 4 {
+						haveBox = true
+						for i := range box {
+							box[i], _ = strconv.Atoi(fields[i])
+						}
+					}
 				}
 			}
 			if glyph != "" {
 				m.widths[glyph] = width
+				if haveBox {
+					// Only the vertical extent is kept. The horizontal one a
+					// caller already has a better answer for — the advance,
+					// which is what the text was laid out to — while nothing
+					// but this says how high a particular letter reaches.
+					m.ink[glyph] = [2]int{box[1], box[3]}
+				}
 			}
 		case strings.HasPrefix(line, "Ascender "):
 			m.ascent, _ = strconv.Atoi(strings.TrimSpace(line[9:]))
@@ -150,10 +168,11 @@ func emit(all map[string]*metrics) {
 //	or obligation to support the use of the AFM files.
 //
 // Modification noted, as the licence requires: the AFM files were not modified.
-// This file is a derived work containing the advance width of each glyph by
-// name, together with the ascent, descent, cap height, italic angle, fixed-pitch
-// flag and bounding box of each face. Everything else in an AFM — kerning pairs,
-// composites, character codes, the character-name ordering — was dropped.
+// This file is a derived work containing the advance width and the vertical
+// extent of each glyph by name, together with the ascent, descent, cap height,
+// italic angle, fixed-pitch flag and bounding box of each face. Everything else
+// in an AFM — kerning pairs, composites, character codes, the horizontal extent
+// of a glyph, the character-name ordering — was dropped.
 
 package shape
 
@@ -177,7 +196,11 @@ package shape
 
 // stdMetrics is one standard face.
 type stdMetrics struct {
-	widths     map[string]int
+	widths map[string]int
+	// ink is how far each glyph reaches below and above the baseline, which is
+	// the one thing about a standard face that neither its own metrics nor a
+	// font program can be asked for. See Face.InkExtent.
+	ink        map[string][2]int
 	ascent     int
 	descent    int
 	capHeight  int
@@ -212,6 +235,24 @@ type stdMetrics struct {
 			}
 			fmt.Fprintf(w, "%q: %d,", g, m.widths[g])
 			if i%4 == 3 || i == len(glyphs)-1 {
+				fmt.Fprintln(w)
+			} else {
+				fmt.Fprint(w, " ")
+			}
+		}
+		fmt.Fprintln(w, "\t\t},")
+		fmt.Fprintln(w, "\t\tink: map[string][2]int{")
+		inked := make([]string, 0, len(m.ink))
+		for g := range m.ink {
+			inked = append(inked, g)
+		}
+		sort.Strings(inked)
+		for i, g := range inked {
+			if i%3 == 0 {
+				fmt.Fprint(w, "\t\t\t")
+			}
+			fmt.Fprintf(w, "%q: {%d, %d},", g, m.ink[g][0], m.ink[g][1])
+			if i%3 == 2 || i == len(inked)-1 {
 				fmt.Fprintln(w)
 			} else {
 				fmt.Fprint(w, " ")

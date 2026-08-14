@@ -730,3 +730,112 @@ func (f *Face) Clone() *Face {
 	// the map is filled lazily, not because the layouts are mutable.
 	return &out
 }
+
+// InkExtent is how far the glyphs of s reach above and below the baseline, at
+// the given size, and whether the face can say.
+//
+// A tighter answer than the ascent and descent, and a different kind of answer.
+// Ascent and descent describe the *face* — how much room a line of it needs,
+// including for the tallest accent and the deepest tail it has — and every run
+// set in it is given that much whether or not it uses any. This describes the
+// text in hand: an ellipsis is three dots on the baseline however deep the
+// face's descenders go, and a row of capitals has nothing below the baseline at
+// all.
+//
+// The caller that needs the difference is one deciding whether some rectangle
+// cuts the text: a box that ends just under the baseline does not clip a line
+// of capitals, and answering from the face's descent says it does. For deciding
+// how much room to *give* a line the face's own metrics remain the right
+// numbers, because the next run set in it may be the one with the tail.
+//
+// It is the vertical extent alone. The horizontal one a caller already has a
+// better answer to in Measure, which is the advance the text was laid out to;
+// glyphs may overhang it slightly and none of this is precise enough to matter
+// there.
+//
+// ok is false when the face cannot answer — a CFF-flavoured font, whose glyph
+// extents are in the charstrings and cannot be had without interpreting them —
+// and a caller should fall back to the face's ascent and descent. It is also
+// false for a string with nothing in it that draws.
+//
+// The numbers come from what the font states: the glyph header for a glyf-based
+// face, and Adobe's published per-character boxes for the fourteen standard
+// ones. Neither is verified against the outline, and a font that overstates a
+// glyph's box makes this overstate the run's — which is the safe direction for
+// the question it exists to answer.
+func (f *Face) InkExtent(s string, size float64) (above, below float64, ok bool) {
+	top, bottom, any := f.inkUnits(s)
+	if !any {
+		return 0, 0, false
+	}
+	scale := size / float64(f.unitsPerEm)
+	return float64(top) * scale, float64(-bottom) * scale, true
+}
+
+// inkUnits is InkExtent in the font's own units, before the size is applied.
+func (f *Face) inkUnits(s string) (top, bottom int, ok bool) {
+	for _, r := range s {
+		if hiddenBeforeShaping(r) {
+			// Drawn as nothing, so it puts ink nowhere. The same exclusion
+			// Measure makes, and for the same reason: the two must agree about
+			// which characters are on the page.
+			continue
+		}
+		lo, hi, has := f.glyphInk(r)
+		if !has {
+			return 0, 0, false
+		}
+		if lo == 0 && hi == 0 {
+			// An empty glyph — a space. It marks nothing, so it neither raises
+			// nor lowers the run's reach, and a run of them alone answers no.
+			continue
+		}
+		if !ok || hi > top {
+			top = hi
+		}
+		if !ok || lo < bottom {
+			bottom = lo
+		}
+		ok = true
+	}
+	return top, bottom, ok
+}
+
+// glyphInk is one character's vertical extent in font units.
+//
+// has is false when the face has no such table to read, which is the CFF case
+// and is answered for the run as a whole rather than per character: a run whose
+// extent is known for some of its letters and not for others has no extent this
+// can report.
+func (f *Face) glyphInk(r rune) (lo, hi int, has bool) {
+	if f.std != nil {
+		_, name, ok := stdCode(r)
+		if !ok {
+			// Outside the encoding, so it is set as a space — which marks
+			// nothing. Measure charges it a space's width for the same reason.
+			return 0, 0, true
+		}
+		box, ok := f.std.ink[name]
+		if !ok {
+			return 0, 0, false
+		}
+		return box[0], box[1], true
+	}
+	if f.prog == nil || f.prog.GlyphBBox == nil {
+		return 0, 0, false
+	}
+	// The character map rather than GlyphID, which answers with the WinAnsi
+	// *code* for a simple face because that is what will be written. What is
+	// wanted here is the outline, which is found by index either way.
+	gid, ok := f.prog.Cmap[r]
+	if !ok || gid <= 0 || gid >= len(f.prog.GlyphBBox) {
+		// A character the face does not cover draws the notdef glyph, whose
+		// extent is as much a part of the run's as any other's.
+		gid = 0
+	}
+	if gid >= len(f.prog.GlyphBBox) {
+		return 0, 0, false
+	}
+	b := f.prog.GlyphBBox[gid]
+	return b[1], b[3], true
+}
