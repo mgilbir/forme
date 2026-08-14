@@ -178,8 +178,8 @@ func TestSplitAtBreaksCutsAtClusterBoundariesOnly(t *testing.T) {
 			if !allowed[at] {
 				t.Errorf("%q was cut at byte %d, which is inside a grapheme cluster", text, at)
 			}
-			at += len(p.text)
-			rebuilt.WriteString(p.text)
+			at += len(p.Text)
+			rebuilt.WriteString(p.Text)
 		}
 		if rebuilt.String() != text {
 			t.Errorf("the pieces of %q spell %q", text, rebuilt.String())
@@ -200,16 +200,16 @@ func TestAHangulSyllableIsNotCutFromItsJamo(t *testing.T) {
 	const syllable = "각" // 각, spelled LV + T
 	pieces, _ := splitAtBreaks(syllable, whiteSpaceOf("collapse"), wordBreak{}, lineBreak{})
 	for i, p := range pieces {
-		if i > 0 && p.breakBefore {
+		if i > 0 && p.BreakBefore {
 			t.Fatalf("a line may end inside one Hangul syllable: %q then %q",
-				pieces[i-1].text, p.text)
+				pieces[i-1].Text, p.Text)
 		}
 	}
 
 	// And two whole syllables still break between them, which is the rule this
 	// must not have disabled to pass.
 	pieces, _ = splitAtBreaks("가가", whiteSpaceOf("collapse"), wordBreak{}, lineBreak{})
-	if len(pieces) != 2 || !pieces[1].breakBefore {
+	if len(pieces) != 2 || !pieces[1].BreakBefore {
 		t.Errorf("two Hangul syllables gave %d pieces with no opportunity between "+
 			"them; the ideograph rule has been turned off rather than corrected",
 			len(pieces))

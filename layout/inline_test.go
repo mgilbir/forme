@@ -248,8 +248,8 @@ func TestCJKBreaksBetweenIdeographs(t *testing.T) {
 		t.Fatalf("ideographic text was cut into %d pieces, want one per character", len(pieces))
 	}
 	for _, p := range pieces {
-		if len([]rune(p.text)) != 1 {
-			t.Errorf("a piece holds more than one ideograph: %q", p.text)
+		if len([]rune(p.Text)) != 1 {
+			t.Errorf("a piece holds more than one ideograph: %q", p.Text)
 		}
 	}
 
@@ -257,8 +257,8 @@ func TestCJKBreaksBetweenIdeographs(t *testing.T) {
 	pieces, _ = splitAtBreaks("hello world", whiteSpaceOf("collapse"), wordBreak{}, lineBreak{})
 	var words []string
 	for _, p := range pieces {
-		if !p.space {
-			words = append(words, p.text)
+		if !p.Space {
+			words = append(words, p.Text)
 		}
 	}
 	if len(words) != 2 || words[0] != "hello" || words[1] != "world" {
@@ -273,8 +273,8 @@ func TestBreakOpportunities(t *testing.T) {
 		var out []string
 		pieces, _ := splitAtBreaks(text, whiteSpaceOf("collapse"), wordBreak{}, lineBreak{})
 		for _, p := range pieces {
-			if !p.space {
-				out = append(out, p.text)
+			if !p.Space {
+				out = append(out, p.Text)
 			}
 		}
 		return out

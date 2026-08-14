@@ -62,10 +62,10 @@ func TestLineBreakAnywhereSplitsARunOfPreservedSpaces(t *testing.T) {
 		lineBreak{Anywhere: true})
 	var spaces int
 	for _, p := range pieces {
-		if p.space {
+		if p.Space {
 			spaces++
-			if p.text != " " {
-				t.Errorf("a space piece is %q, want a single space", p.text)
+			if p.Text != " " {
+				t.Errorf("a space piece is %q, want a single space", p.Text)
 			}
 		}
 	}
@@ -77,8 +77,8 @@ func TestLineBreakAnywhereSplitsARunOfPreservedSpaces(t *testing.T) {
 	pieces, _ = splitAtBreaks("a    b", whiteSpaceOf("preserve"), wordBreak{},
 		lineBreak{})
 	for _, p := range pieces {
-		if p.space && p.text != "    " {
-			t.Errorf("pre-wrap gathered the run into %q, want all four", p.text)
+		if p.Space && p.Text != "    " {
+			t.Errorf("pre-wrap gathered the run into %q, want all four", p.Text)
 		}
 	}
 }

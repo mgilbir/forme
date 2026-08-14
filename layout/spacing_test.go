@@ -305,7 +305,7 @@ func TestSpacingKeyIsPartOfTheMeasurementCache(t *testing.T) {
 	}
 	size := mustPx(20)
 	plain := br.measureSpaced(face, "abcde", size, textSpacing{})
-	spaced := br.measureSpaced(face, "abcde", size, textSpacing{letter: mustPx(3)})
+	spaced := br.measureSpaced(face, "abcde", size, textSpacing{Letter: mustPx(3)})
 	if plain.Px() != 60 {
 		t.Errorf("the unspaced measurement is %gpx, want 60", plain.Px())
 	}

@@ -51,3 +51,18 @@ var (
 	transformText = paragraph.TransformText
 	endsInWord    = paragraph.EndsInWord
 )
+
+// Break opportunities and the pieces between them, from CSS Text §5.
+type (
+	piece       = paragraph.Piece
+	textSpacing = paragraph.TextSpacing
+)
+
+var (
+	splitAtBreaks      = paragraph.SplitAtBreaks
+	tabAdvance         = paragraph.TabAdvance
+	isIdeographic      = paragraph.IsIdeographic
+	spacingAdvance     = paragraph.SpacingAdvance
+	spacedUnits        = paragraph.SpacedUnits
+	isDefaultIgnorable = paragraph.IsDefaultIgnorable
+)

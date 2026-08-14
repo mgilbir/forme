@@ -189,7 +189,7 @@ func LineBreakOf(value string) (LineBreak, string) {
 //
 // It is a different shape of rule from word-break and the difference decides
 // where it is implemented. break-all adds opportunities to the text, so it
-// belongs in splitAtBreaks and can be decided by looking at the characters.
+// belongs in SplitAtBreaks and can be decided by looking at the characters.
 // overflow-wrap adds none: CSS Text §5.5 makes its opportunities exist only
 // "if there are no otherwise-acceptable break points in the line", so it is not
 // a property of the text at all but of what the breaker should do having
