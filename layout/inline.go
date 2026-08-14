@@ -2256,11 +2256,11 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			//
 			// The distinction is invisible on the page and decides two intrinsic
 			// widths, which is where hangsHard is read. See widthsOf.
-			Hangs:     p.space && !p.collapsible && !ws.breakSpaces && (ws.collapse || ws.wrap),
-			HangsHard: p.space && !p.collapsible && ws.collapse,
-			NoWrap:    !ws.wrap, Offset: offset,
-			BreakWord:   ow.breakWord,
-			Anywhere:    ow.anywhere,
+			Hangs:     p.space && !p.collapsible && !ws.BreakSpaces && (ws.Collapse || ws.Wrap),
+			HangsHard: p.space && !p.collapsible && ws.Collapse,
+			NoWrap:    !ws.Wrap, Offset: offset,
+			BreakWord:   ow.BreakWord,
+			Anywhere:    ow.Anywhere,
 			Decorations: decorations, Spacing: spacing,
 		}
 		if !p.tab {
@@ -2482,7 +2482,7 @@ func splitAtBreaks(text string, ws whiteSpace, wb wordBreak, lb lineBreak) ([]pi
 		// is what makes "X XX X" in four characters of room break after the
 		// fourth — the answer break-all must not give, and the one the suite's
 		// break-spaces-before-first-char-007 asks for by name.
-		if (deferBreak || (wb.breakAll && !startsSpacePiece(r, ws)) || lb.anywhere) &&
+		if (deferBreak || (wb.BreakAll && !startsSpacePiece(r, ws)) || lb.Anywhere) &&
 			atBoundary && cur.Len() > 0 {
 			flush()
 			breakNext = true
@@ -2503,7 +2503,7 @@ func splitAtBreaks(text string, ws whiteSpace, wb wordBreak, lb lineBreak) ([]pi
 			emit(piece{text: "\n", space: true, segment: true})
 			breakNext = true
 
-		case r == '\t' && !ws.collapse:
+		case r == '\t' && !ws.Collapse:
 			// A preserved tab is its own piece because each one advances to its
 			// own tab stop, so two of them are not one run of a doubled width.
 			flush()
@@ -2532,13 +2532,13 @@ func splitAtBreaks(text string, ws whiteSpace, wb wordBreak, lb lineBreak) ([]pi
 			flush()
 			emit(piece{
 				text: text[start:i], space: true,
-				trimAtEnd: r == 0x1680 && ws.collapse,
+				trimAtEnd: r == 0x1680 && ws.Collapse,
 			})
-			breakNext = ws.breakSpaces || separatorBreaksAfter(r)
+			breakNext = ws.BreakSpaces || separatorBreaksAfter(r)
 
 		case r == ' ' || r == '\t':
 			flush()
-			if ws.collapse {
+			if ws.Collapse {
 				// Phase I already reduced the run to a single space and turned
 				// any tab into one, so there is nothing left to gather.
 				emit(piece{text: " ", space: true, collapsible: true, trimAtEnd: true})
@@ -2551,7 +2551,7 @@ func splitAtBreaks(text string, ws whiteSpace, wb wordBreak, lb lineBreak) ([]pi
 			// Under pre and pre-wrap the run hangs or wraps as a unit, so it is
 			// gathered — unless line-break: anywhere says a line may end between
 			// any two of them, which is a run that is no longer one thing.
-			if !ws.breakSpaces && !lb.anywhere {
+			if !ws.BreakSpaces && !lb.Anywhere {
 				for i < len(text) && text[i] == ' ' {
 					i++
 				}

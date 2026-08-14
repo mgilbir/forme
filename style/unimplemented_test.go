@@ -29,7 +29,15 @@ import (
 // back.
 
 // sourceDirs are the packages that read computed values.
-var sourceDirs = []string{".", "../layout"}
+//
+// paragraph joined the list when the white space processing and the text
+// transforms moved out of layout, and it joined it because this check noticed:
+// "overflow-wrap" and "word-wrap" were still read, by the same code as before,
+// and the scan could no longer see where. A property whose reader moves to a
+// package nobody looks in is indistinguishable here from a property with no
+// reader at all, which is the whole thing this file exists to catch — so the
+// list has to follow the code, and a failure here is the reminder to move it.
+var sourceDirs = []string{".", "../layout", "../paragraph"}
 
 // registryFiles hold the tables themselves, where every property name appears by
 // definition and so proves nothing.

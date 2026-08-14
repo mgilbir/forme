@@ -164,7 +164,7 @@ func TestSplitAtBreaksCutsAtClusterBoundariesOnly(t *testing.T) {
 		"a b́c",                 // a space among them
 	}
 	for _, text := range cases {
-		pieces, _ := splitAtBreaks(text, whiteSpaceOf("collapse"), wordBreak{breakAll: true}, lineBreak{})
+		pieces, _ := splitAtBreaks(text, whiteSpaceOf("collapse"), wordBreak{BreakAll: true}, lineBreak{})
 
 		// Every cut must fall on a boundary the segmenter agrees with, and the
 		// pieces must still spell the text.

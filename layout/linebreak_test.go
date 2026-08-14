@@ -59,7 +59,7 @@ func TestLineBreakAnywhereBreaksBeforeAPreservedSpace(t *testing.T) {
 // whole — and that is the thing "anywhere" takes apart.
 func TestLineBreakAnywhereSplitsARunOfPreservedSpaces(t *testing.T) {
 	pieces, _ := splitAtBreaks("a    b", whiteSpaceOf("preserve"), wordBreak{},
-		lineBreak{anywhere: true})
+		lineBreak{Anywhere: true})
 	var spaces int
 	for _, p := range pieces {
 		if p.space {

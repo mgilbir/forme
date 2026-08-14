@@ -1268,7 +1268,7 @@ func hasInFlowContent(run []*Box) bool {
 		if !c.IsText() {
 			return true
 		}
-		if !whiteSpaceOf(c.Style["white-space-collapse"]).collapse {
+		if !whiteSpaceOf(c.Style["white-space-collapse"]).Collapse {
 			return true
 		}
 		if strings.TrimSpace(c.Text) != "" {

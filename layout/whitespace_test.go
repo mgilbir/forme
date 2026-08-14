@@ -58,21 +58,21 @@ func lineWidth(line LineFragment) style.Unit {
 // half twice and the first half not at all.
 func TestWhiteSpaceIsThreeIndependentBits(t *testing.T) {
 	cases := map[string]whiteSpace{
-		"normal":       {collapse: true, wrap: true},
-		"nowrap":       {collapse: true},
-		"pre":          {preserveBreaks: true},
-		"pre-wrap":     {preserveBreaks: true, wrap: true},
-		"pre-line":     {collapse: true, preserveBreaks: true, wrap: true},
-		"break-spaces": {preserveBreaks: true, wrap: true, breakSpaces: true},
+		"normal":       {Collapse: true, Wrap: true},
+		"nowrap":       {Collapse: true},
+		"pre":          {PreserveBreaks: true},
+		"pre-wrap":     {PreserveBreaks: true, Wrap: true},
+		"pre-line":     {Collapse: true, PreserveBreaks: true, Wrap: true},
+		"break-spaces": {PreserveBreaks: true, Wrap: true, BreakSpaces: true},
 		// Case and surrounding space are the cascade's, and this checks that they
 		// really are: the value goes through it on the way here.
-		"  PRE-Wrap ": {preserveBreaks: true, wrap: true},
+		"  PRE-Wrap ": {PreserveBreaks: true, Wrap: true},
 		// Anything else is the initial value, which is what the cascade uses when
 		// the declaration is thrown out — and it is thrown out by the expander,
 		// which is where an unreadable shorthand now stops.
-		"balance":     {collapse: true, wrap: true},
-		"pre wrap":    {collapse: true, wrap: true},
-		"break-space": {collapse: true, wrap: true},
+		"balance":     {Collapse: true, Wrap: true},
+		"pre wrap":    {Collapse: true, Wrap: true},
+		"break-space": {Collapse: true, Wrap: true},
 	}
 	for value, want := range cases {
 		built := Build(Input{
@@ -145,7 +145,7 @@ func TestTextWrapAndWhiteSpaceCompeteInTheCascade(t *testing.T) {
 		if found == nil {
 			t.Fatalf("%q: no box", tc.css)
 		}
-		if got := whiteSpaceFor(found.Style).wrap; got != tc.want {
+		if got := whiteSpaceFor(found.Style).Wrap; got != tc.want {
 			t.Errorf("{%s} wraps=%v, want %v", tc.css, got, tc.want)
 		}
 	}
