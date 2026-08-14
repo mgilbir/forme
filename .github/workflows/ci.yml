@@ -23,14 +23,14 @@ jobs:
     name: gofmt, vet and the unit tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           # The module has no dependencies and so no go.sum for the cache to key
           # on. The build cache below is keyed by hand instead.
           cache: false
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cache/go-build
@@ -46,12 +46,12 @@ jobs:
     name: the conformance suites
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: false
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cache/go-build
@@ -70,7 +70,7 @@ jobs:
       # keeps this job reproducible from one run to the next; bump the number to
       # take a fresh copy deliberately.
       - name: Restore the fetched corpora
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             testdata/wpt
@@ -102,12 +102,12 @@ jobs:
     name: the race detector
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: false
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cache/go-build
