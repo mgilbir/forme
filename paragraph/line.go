@@ -441,10 +441,10 @@ func StackLine(runs []Item, s Strut) LineStack {
 	// What the strut wants below the baseline. It can be *negative*, which is
 	// the case that makes this a maximum rather than a floor: "line-height: 0"
 	// gives the strut a half-leading of minus half the font's own height, so
-	// its Descent is below the baseline by a negative amount and an image on
-	// the line has to be able to overrule it. Taking the strut's Descent
+	// its descent is below the baseline by a negative amount and an image on
+	// the line has to be able to overrule it. Taking the strut's descent
 	// unconditionally would make such a line shorter than the picture on it.
-	Descent := s.Height.Sub(s.Baseline)
+	descent := s.Height.Sub(s.Baseline)
 
 	// First pass: everything aligned against the baseline, which is what
 	// decides where the baseline is. What belongs to an aligned subtree is
@@ -468,16 +468,16 @@ func StackLine(runs []Item, s Strut) LineStack {
 		if a > ls.Baseline {
 			ls.Baseline = a
 		}
-		if d > Descent {
-			Descent = d
+		if d > descent {
+			descent = d
 		}
 	}
 
 	// Second pass: the subtrees that align against the line box itself. §10.8.1
-	// defines them in terms of a line box whose Height they can change, which
+	// defines them in terms of a line box whose height they can change, which
 	// reads as circular and is not: a subtree taller than the line grows it on
 	// the side away from its own edge, and one that fits changes nothing.
-	Height := ls.Baseline.Add(Descent)
+	height := ls.Baseline.Add(descent)
 	for i := range ls.groups {
 		g := &ls.groups[i]
 		h := g.Ascent.Add(g.Descent)
@@ -485,19 +485,19 @@ func StackLine(runs []Item, s Strut) LineStack {
 		case VAlignTop:
 			// Its top is the line's top, so anything it needs it takes from
 			// below the baseline.
-			if h > Height {
-				Descent = Descent.Add(h.Sub(Height))
-				Height = h
+			if h > height {
+				descent = descent.Add(h.Sub(height))
+				height = h
 			}
 		case VAlignBottom:
 			// Its bottom is the line's bottom, so it takes from above.
-			if h > Height {
-				ls.Baseline = ls.Baseline.Add(h.Sub(Height))
-				Height = h
+			if h > height {
+				ls.Baseline = ls.Baseline.Add(h.Sub(height))
+				height = h
 			}
 		}
 	}
-	ls.Height = ls.Baseline.Add(Descent)
+	ls.Height = ls.Baseline.Add(descent)
 
 	// Where each subtree's own baseline ended up, which is what places the boxes
 	// in it. It is a third pass because the height above is not settled until

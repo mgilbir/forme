@@ -747,7 +747,7 @@ func TestPictureComparesTheGlyphsAndNotTheString(t *testing.T) {
 	run := func(s string, rtl bool) []Op {
 		return []Op{DrawText{
 			Text: s, RTL: rtl, Face: face,
-			At: Point{picPx(8), picPx(29)}, Size: picPx(16),
+			At: Point{X: picPx(8), Y: picPx(29)}, Size: picPx(16),
 			Color: style.RGBA{A: 1},
 		}}
 	}
@@ -797,7 +797,7 @@ func TestPictureJoinsRightToLeftRunsInLogicalOrder(t *testing.T) {
 	const size = 16.0
 	run := func(s string, x float64) Op {
 		return DrawText{
-			Text: s, At: Point{picPx(x), picPx(29)}, Size: picPx(size),
+			Text: s, At: Point{X: picPx(x), Y: picPx(29)}, Size: picPx(size),
 			Color: style.RGBA{A: 1}, Face: face, RTL: true,
 		}
 	}
@@ -834,7 +834,7 @@ func TestPictureIgnoresRunsThatDrawNothing(t *testing.T) {
 	}
 	mk := func(s string, x float64) Op {
 		return DrawText{
-			Text: s, At: Point{picPx(x), picPx(29)}, Size: picPx(16),
+			Text: s, At: Point{X: picPx(x), Y: picPx(29)}, Size: picPx(16),
 			Color: style.RGBA{A: 1}, Face: face,
 		}
 	}
@@ -868,7 +868,7 @@ func TestPictureJoinsAcrossDirection(t *testing.T) {
 	const size = 16.0
 	mk := func(s string, x float64, rtl bool) Op {
 		return DrawText{
-			Text: s, At: Point{picPx(x), picPx(29)}, Size: picPx(size),
+			Text: s, At: Point{X: picPx(x), Y: picPx(29)}, Size: picPx(size),
 			Color: style.RGBA{A: 1}, Face: face, RTL: rtl,
 		}
 	}
@@ -916,7 +916,7 @@ func TestPictureDoesNotChargeSpacingToAControl(t *testing.T) {
 	const size, spacing = 16.0, 5.0
 	mk := func(s string, x float64) Op {
 		return DrawText{
-			Text: s, At: Point{picPx(x), picPx(29)}, Size: picPx(size),
+			Text: s, At: Point{X: picPx(x), Y: picPx(29)}, Size: picPx(size),
 			Color: style.RGBA{A: 1}, Face: face, CharSpacing: picPx(spacing),
 		}
 	}

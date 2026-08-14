@@ -1057,7 +1057,7 @@ func TestTheComparisonSeesAClippedRun(t *testing.T) {
 	}
 	u := func(v float64) style.Unit { r, _ := style.FromPx(v); return r }
 	run := DrawText{
-		At: Point{u(10), u(30)}, Text: "hello", Face: face, Size: u(16),
+		At: Point{X: u(10), Y: u(30)}, Text: "hello", Face: face, Size: u(16),
 		Color: style.RGBA{A: 1},
 	}
 	cut := run
@@ -1250,7 +1250,7 @@ func TestCollapsedGridLinesAreNotCutByTheTablesOwnOverflow(t *testing.T) {
 // rule of that shape survives until something does.
 func TestAFacelessRunSurvivesAClip(t *testing.T) {
 	u := func(v float64) style.Unit { r, _ := style.FromPx(v); return r }
-	run := DrawText{At: Point{u(500), u(500)}, Text: "x", Size: u(16)}
+	run := DrawText{At: Point{X: u(500), Y: u(500)}, Text: "x", Size: u(16)}
 	clip := Clip{Rect: Rect{u(0), u(0), u(10), u(10)}, Active: true}
 
 	got := clipOps([]Op{run}, 0, clip)
