@@ -291,3 +291,28 @@ func TestMeasuringIsMemoizedPerFaceSizeAndSpacing(t *testing.T) {
 			"spacing is not part of the memo's key", spaced.Px())
 	}
 }
+
+// TestABreakerWithNowhereToReportSurvivesAnOverflow is a regression, and the
+// fault it guards was found by the first test ever written against this package
+// from outside the layout engine.
+//
+// §11.1.1's overflow is reported through an interface, because naming the element
+// a run came from is the caller's business. A caller that has no element to name
+// — one measuring a run, or asking where a paragraph would break — passes no
+// reporter, and the breaking dereferenced it: the first word too wide for its
+// line crashed the process. Nothing had met it because the layout engine is
+// always a reporter, and it was the only caller there was.
+func TestABreakerWithNowhereToReportSurvivesAnOverflow(t *testing.T) {
+	br := NewBreaker(nil)
+	face := courier(t)
+	// One word of six characters, 72px, in a line of 10px: an overflow with no
+	// opportunity anywhere, which is exactly what gets reported.
+	items := words(t, br, face, "abcdef")
+	line, next, _, _, _ := br.BreakOneLine(items, 0, 0, u(10), 0)
+	if got := lineText(line); got != "abcdef" {
+		t.Errorf("the overflowing word came back as %q, want %q", got, "abcdef")
+	}
+	if next != len(items) {
+		t.Errorf("the cursor stopped at %d of %d items", next, len(items))
+	}
+}

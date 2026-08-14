@@ -121,3 +121,89 @@ func TestTwoAlignedSubtreesAreStackedApart(t *testing.T) {
 			"the taller of the two taken on its own. 70px means they were merged", got)
 	}
 }
+
+// TestALineBoxContainsTheTextOnIt is §10.8's definition read as a requirement.
+//
+//	The line box height is the distance between the uppermost box top and the
+//	lowermost box bottom.
+//
+// Which means the line box contains them: for every item aligned to the baseline,
+// what it reaches above the baseline is at most the baseline's own depth from the
+// top, and what it reaches below is at most what is left underneath. A line box
+// that does not contain its text is one whose background stops short of the
+// letters and whose neighbours are placed as though the text were shorter than it
+// is — and because the text is still drawn, the page looks merely cramped rather
+// than broken.
+//
+// The strut is included in the same requirement: it is the box of the block's own
+// font, present on every line whether or not any text on the line is set in it.
+func TestALineBoxContainsTheTextOnIt(t *testing.T) {
+	struts := []Strut{
+		{Height: u(20), Baseline: u(16)},
+		{Height: u(0), Baseline: u(0)},
+		{Height: u(40), Baseline: u(10)},
+	}
+	extents := [][2]float64{{0, 0}, {8, 2}, {40, 0}, {10, 30}, {100, 100}}
+
+	for _, s := range struts {
+		for _, e := range extents {
+			for _, other := range extents {
+				items := []Item{
+					atomicOfExtents(u(e[0]), u(e[1]), VAlignState{}),
+					atomicOfExtents(u(other[0]), u(other[1]), VAlignState{}),
+				}
+				ls := StackLine(items, s)
+				for k, it := range items {
+					if it.Ascent > ls.Baseline {
+						t.Errorf("strut %v, items %v/%v: item %d reaches %gpx above the "+
+							"baseline and the baseline is only %gpx from the top of a "+
+							"%gpx line — the text is outside its own line box",
+							s.Height.Px(), e, other, k, it.Ascent.Px(),
+							ls.Baseline.Px(), ls.Height.Px())
+					}
+					if below := ls.Height.Sub(ls.Baseline); it.Descent > below {
+						t.Errorf("strut %v, items %v/%v: item %d reaches %gpx below the "+
+							"baseline and only %gpx of the %gpx line is below it",
+							s.Height.Px(), e, other, k, it.Descent.Px(),
+							below.Px(), ls.Height.Px())
+					}
+				}
+				if ls.Baseline > ls.Height {
+					t.Errorf("strut %v, items %v/%v: the baseline sits %gpx down a %gpx "+
+						"line", s.Height.Px(), e, other, ls.Baseline.Px(), ls.Height.Px())
+				}
+			}
+		}
+	}
+}
+
+// TestATallerItemNeverShortensTheLine is the monotonicity of §10.8's maximum.
+//
+// The line box is the extent of what is on it, so making one item reach further
+// can only leave the line as tall or make it taller. A stacking that took the
+// last item's extents rather than the largest would satisfy every containment
+// check above for the item it happened to keep.
+func TestATallerItemNeverShortensTheLine(t *testing.T) {
+	s := Strut{Height: u(20), Baseline: u(16)}
+	for _, grow := range []float64{0, 1, 10, 100} {
+		base := []Item{
+			atomicOfExtents(u(30), u(5), VAlignState{}),
+			atomicOfExtents(u(10), u(10), VAlignState{}),
+		}
+		taller := []Item{
+			atomicOfExtents(u(30+grow), u(5), VAlignState{}),
+			atomicOfExtents(u(10), u(10), VAlignState{}),
+		}
+		short := StackLine(base, s)
+		tall := StackLine(taller, s)
+		if tall.Height < short.Height {
+			t.Errorf("raising an item by %gpx took the line from %gpx to %gpx — a "+
+				"taller item cannot make a shorter line",
+				grow, short.Height.Px(), tall.Height.Px())
+		}
+		if tall.Baseline < short.Baseline {
+			t.Errorf("raising an item by %gpx moved the baseline from %gpx up to %gpx",
+				grow, short.Baseline.Px(), tall.Baseline.Px())
+		}
+	}
+}
