@@ -3,6 +3,7 @@ package layout
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mgilbir/forme/shape"
@@ -237,15 +238,44 @@ func TestExComesFromTheFont(t *testing.T) {
 	}
 }
 
+// silentSet answers one family with a face that states no x-height.
+//
+// StandardFonts cannot be asked for one: standardFamilies maps only Times,
+// Helvetica and Courier, and all three publish an XHeight in their AFM. Symbol
+// and ZapfDingbats are the two of the fourteen that publish none — neither has a
+// lowercase, so neither has an x-height to state — and reaching them takes a set
+// of this test's own rather than a new entry in the engine's family table, which
+// would be a decision about what "font-family: Symbol" means and is not one this
+// test needs to take.
+type silentSet struct{ face *shape.Face }
+
+func (s silentSet) Face(family string, bold, italic bool) (*shape.Face, bool) {
+	if strings.EqualFold(strings.TrimSpace(family), "Symbol") {
+		return s.face, true
+	}
+	return StandardFonts().Face(family, bold, italic)
+}
+
 func TestExFallsBackToHalfAnEm(t *testing.T) {
 	// CSS Values §5.1.2: half an em must be assumed where the x-height cannot be
-	// determined. A standard face states none, so this is the specified answer
-	// rather than a guess — and it is only reachable *because* the other case
-	// now exists.
-	got := boxHeight(t, StandardFonts(), `<div id="d"></div>`,
-		noDefaults+`#d { font-family: Helvetica; font-size: 20px; height: 3ex }`, "d")
+	// determined. The face asked has to be one that really cannot be determined,
+	// or this measures the wrong thing while passing — which is what Helvetica
+	// became here the moment the standard fourteen started reporting the x-height
+	// their AFMs state. It read 30px for the right reason and would now read
+	// 31.36 for a reason this test is not about.
+	face, err := shape.Standard("Symbol")
+	if err != nil {
+		t.Fatalf("loading Symbol: %v", err)
+	}
+	if d := face.Descriptor(); d.Has(shape.MetricXHeight) {
+		t.Fatalf("Symbol reports an x-height of %d, so it no longer stands for a "+
+			"face that states none and this test is measuring the wrong branch", d.XHeight)
+	}
+	got := boxHeight(t, silentSet{face}, `<div id="d"></div>`,
+		noDefaults+`#d { font-family: Symbol; font-size: 20px; height: 3ex }`, "d")
 	if got != 30 {
-		t.Errorf("3ex of 20px Helvetica is %gpx, want 30 (3 x 0.5 x 20)", got)
+		t.Errorf("3ex of 20px Symbol is %gpx, want 30 (3 x 0.5 x 20) — "+
+			"Symbol states no x-height, so §5.1.2's assumption is the specified answer", got)
 	}
 }
 
@@ -261,8 +291,13 @@ func TestExFollowsTheFace(t *testing.T) {
 	  #b { font-family: Helvetica }`
 	a := boxHeight(t, set, `<div id="a"></div><div id="b"></div>`, css, "a")
 	b := boxHeight(t, set, `<div id="a"></div><div id="b"></div>`, css, "b")
-	if a != 48 || b != 30 {
-		t.Errorf("3ex resolved to %gpx in Ahem and %gpx in Helvetica, want 48 and 30 — "+
-			"equal values mean the cached length is shared across faces", a, b)
+	// Ahem's x-height is 800/1000, so 3ex at 20px is 48px. Helvetica's is
+	// 523/1000 from its AFM — 31.38px, quantised to 31.359375 in 64ths — where
+	// this used to read 30px off the half-em fallback. Two faces that both state
+	// an x-height still separate the cache keys, which is what is under test.
+	const wantB = 31.359375
+	if a != 48 || b != wantB {
+		t.Errorf("3ex resolved to %gpx in Ahem and %gpx in Helvetica, want 48 and %g — "+
+			"equal values mean the cached length is shared across faces", a, b, wantB)
 	}
 }
