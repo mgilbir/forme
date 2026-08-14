@@ -49,9 +49,27 @@ type OverflowReporter interface {
 
 // NewBreaker is the breaker a layout run uses, reporting through the layouter
 // that made it.
+//
+// A nil reporter is allowed and means the findings are dropped. That is not
+// defensiveness: a caller that only wants to measure a run, or to ask where a
+// paragraph would break, has nowhere to put a finding and no document to name in
+// one — and requiring a reporter it would never hear from would make the
+// measuring API about the reporting. The breaking itself is unchanged either
+// way; §11.1.1's overflow is recorded where a caller asked to hear about it and
+// nowhere else.
 func NewBreaker(r OverflowReporter) *Breaker {
+	if r == nil {
+		r = discardFindings{}
+	}
 	return &Breaker{measured: map[measureKey]style.Unit{}, report: r}
 }
+
+// discardFindings is the reporter a breaker made without one uses, so that the
+// breaking has one call to make rather than a nil check at every place it might
+// report.
+type discardFindings struct{}
+
+func (discardFindings) ReportOverflow(Item, style.Unit) {}
 
 // widthOf is the advance of a run of text as it will be set, in the units the
 // size was given in.

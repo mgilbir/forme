@@ -31,7 +31,7 @@ type Rect struct {
 func (r Rect) Right() style.Unit  { return r.X.Add(r.W) }
 func (r Rect) Bottom() style.Unit { return r.Y.Add(r.H) }
 
-func (r Rect) Origin() Point { return Point{r.X, r.Y} }
+func (r Rect) Origin() Point { return Point{X: r.X, Y: r.Y} }
 func (r Rect) Size() Size    { return Size{r.W, r.H} }
 
 // Empty reports whether the rectangle encloses nothing.
