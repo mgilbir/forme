@@ -39,6 +39,8 @@ jobs:
             target: FuzzCmapSubtable
           - package: ./font
             target: FuzzSFNTCmap
+          - package: ./font
+            target: FuzzParseCFF
           - package: ./shape
             target: FuzzLoadAndUse
           - package: ./layout
