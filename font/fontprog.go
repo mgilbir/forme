@@ -64,6 +64,15 @@ type Program struct {
 	// CIDGIDs reports which CIDs have charstrings (CFF CID-keyed fonts);
 	// nil when not CID-keyed.
 	CIDGIDs map[int]bool
+	// GIDToFD gives the index of the Font DICT each glyph belongs to, for a
+	// CID-keyed CFF; nil when not CID-keyed.
+	//
+	// It is here because it is not otherwise observable and it is the thing a
+	// rewritten font is most likely to get wrong: the hinting and the width
+	// defaults a glyph is read against come from its Font DICT, and giving it
+	// another font's changes nothing a shaper reads and everything a renderer
+	// draws.
+	GIDToFD []int
 	// GIDToCID gives the CID of each glyph index, for a CID-keyed CFF; nil when
 	// not CID-keyed.
 	//
@@ -854,6 +863,7 @@ func ParseCFF(data []byte) *Program {
 		fp.CIDGIDs = make(map[int]bool, fp.NumGlyphs)
 		fp.WidthByCID = make(map[int]float64, fp.NumGlyphs)
 		fp.GIDToCID = append([]int(nil), gidToSID...)
+		fp.GIDToFD = append([]int(nil), fdOf...)
 		for g := 0; g < fp.NumGlyphs; g++ {
 			cid := gidToSID[g]
 			fp.CIDGIDs[cid] = true
