@@ -23,13 +23,18 @@ import (
 // character — including the ones it has no glyph for, which are set at the width
 // of a space — is 12px wide.
 
-// hebrew is two Hebrew letters, and hebrew2 two more. They are spelled as
-// escapes so that a reversed expectation cannot be mistaken for a correct one by
-// an editor that renders the script, and so that this file reads the same in
-// every terminal.
+// The Hebrew and Arabic in this file is spelled as escapes, with the letters
+// named beside it.
+//
+// Not for portability: Go source is UTF-8 and the characters would survive. It
+// is so that a *reversed* expectation cannot be mistaken for a correct one. An
+// editor that renders the script draws "\u05d0\u05d1" and "\u05d1\u05d0" as
+// mirror images of each other, and the whole subject of this file is which of
+// the two a line should read — so the one place the text must not be
+// re-ordered by anything on the way to the eye is here.
 const (
-	hebrewAB = "אב" // alef bet
-	hebrewGD = "גד" // gimel dalet
+	hebrewAB = "\u05d0\u05d1" // alef, bet
+	hebrewGD = "\u05d2\u05d3" // gimel, dalet
 )
 
 const bidiCSS = `#p { font-family: Courier; font-size: 20px; width: 300px }`
@@ -319,7 +324,7 @@ func TestPlaintextTakesTheDirectionFromTheText(t *testing.T) {
 func TestEachLineIsReorderedOnItsOwn(t *testing.T) {
 	// Three Hebrew words in a box wide enough for two of them: 2 + 1 + 2 + 1 + 2
 	// characters, so 72px holds "AB CD" and pushes "EF" to the next line.
-	const three = hebrewAB + " " + hebrewGD + " הו"
+	const three = hebrewAB + " " + hebrewGD + " " + hebrewHV
 	root := layoutOf(t, 600, `<div id="p">`+three+`</div>`,
 		`#p { font-family: Courier; font-size: 20px; width: 72px }`)
 	f := find(t, root, "p")
@@ -366,12 +371,17 @@ func TestOverConstrainedMarginsFollowTheContainingBlock(t *testing.T) {
 	}
 }
 
+// arabicMarhaba is "hello" in Arabic, and is here rather than inline for the
+// reason at the top of this file: a cursive script an editor renders is the last
+// place a reader can check what the bytes actually are.
+const arabicMarhaba = "\u0645\u0631\u062d\u0628\u0627" // meem, reh, hah, beh, alef
+
 // TestBidiIsNotReportedUnsupported is the other half of the claim the
 // unsupported-script guardrail used to make. Right-to-left text is laid out now,
 // so reporting it would be telling an author a gap has not been closed while
 // they look at the thing that closed it.
 func TestBidiIsNotReportedUnsupported(t *testing.T) {
-	for _, text := range []string{hebrewAB, "مرحبا"} {
+	for _, text := range []string{hebrewAB, arabicMarhaba} {
 		got := Build(Input{HTML: "<p>" + text + "</p>"})
 		rec := NewRecorder(nil)
 		w, _ := style.FromPx(1000)
@@ -583,7 +593,7 @@ func TestAnOpenIsolateSurvivesAForcedBreak(t *testing.T) {
 
 // hebrewHV is two more Hebrew letters, so that a word of six can be cut into a
 // line of four and leave a tail of two.
-const hebrewHV = "הו" // he vav
+const hebrewHV = "\u05d4\u05d5" // he, vav
 
 // TestABrokenWordDoesNotDisorderWhatSharesItsLine is the bidi range of the
 // halves of a word cut by overflow-wrap.
