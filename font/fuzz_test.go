@@ -192,3 +192,42 @@ func FuzzSFNTCmap(f *testing.F) {
 		}
 	})
 }
+
+// FuzzParseCFF fuzzes the CFF parser, which until now had no target of its own
+// even though shape.Load runs it over whatever font a document names.
+//
+// The seeds are the hand-built fixtures, because a fuzzer starting from noise
+// does not construct a CFF: the header, four INDEXes and a Top DICT of offsets
+// all have to agree before a single charstring is reached, and everything
+// interesting is past that point. Starting from a font that parses means the
+// mutations land on the fields rather than on the frame.
+func FuzzParseCFF(f *testing.F) {
+	f.Add(smallCFF(f, nil))
+	f.Add(smallCFF(f, rosDict(390, 391, 5)))
+	f.Add(smallCFF(f, rosDict(-1, -1, 0)))
+	f.Add(smallCFF(f, rosDict(0, 0)))
+	f.Add([]byte(nil))
+	f.Add([]byte{1, 0, 4, 1})
+	f.Fuzz(func(t *testing.T, data []byte) {
+		fp := ParseCFF(data)
+		if fp == nil {
+			return
+		}
+		// Both are allocated to NumGlyphs, and a consumer indexes them by glyph
+		// index without a bounds check because of it.
+		if fp.WidthByGID != nil && len(fp.WidthByGID) != fp.NumGlyphs {
+			t.Fatalf("%d widths for %d glyphs", len(fp.WidthByGID), fp.NumGlyphs)
+		}
+		if fp.GIDToCID != nil && len(fp.GIDToCID) != fp.NumGlyphs {
+			t.Fatalf("%d CIDs for %d glyphs", len(fp.GIDToCID), fp.NumGlyphs)
+		}
+		// The documented contract: the collection belongs to a CID-keyed font,
+		// and GIDToCID is what says whether this is one. A name arriving on a
+		// font with no ROS would be written into a /CIDSystemInfo describing a
+		// numbering that does not exist.
+		if fp.GIDToCID == nil && (fp.Registry != "" || fp.Ordering != "" || fp.Supplement != 0) {
+			t.Fatalf("a font that is not CID-keyed reports the collection %q-%q-%d",
+				fp.Registry, fp.Ordering, fp.Supplement)
+		}
+	})
+}
