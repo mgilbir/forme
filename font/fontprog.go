@@ -613,6 +613,113 @@ func parseCFFDict(b []byte) map[int][]float64 {
 	return out
 }
 
+// cffPrivate is what a Private DICT says about reading the charstrings it
+// covers: the two width defaults, and the local subroutines they may call.
+type cffPrivate struct {
+	def, nom float64
+	subrs    cffIndex
+}
+
+// parseCFFPrivate reads a Private DICT named by a top or Font DICT's operator
+// 18, whose two operands are its size and its offset in that order.
+//
+// The order is worth stating because no test can catch getting it wrong. Reading
+// them the other way round starts the DICT early and ends it in exactly the same
+// place — size plus offset is offset plus size — so the DICT that was wanted is
+// still inside the range, still last, and CFF takes the last operator. The
+// values come back right from the wrong bytes. What saves this is the
+// specification and not the suite.
+func parseCFFPrivate(data []byte, priv []float64) (def, nom float64, subrs cffIndex) {
+	if len(priv) != 2 {
+		return 0, 0, subrs
+	}
+	pOff, pSize := int(priv[1]), int(priv[0])
+	if pOff <= 0 || pSize < 0 || pOff+pSize > len(data) {
+		return 0, 0, subrs
+	}
+	pd := parseCFFDict(data[pOff : pOff+pSize])
+	if v, ok := pd[20]; ok && len(v) == 1 {
+		def = v[0]
+	}
+	if v, ok := pd[21]; ok && len(v) == 1 {
+		nom = v[0]
+	}
+	if v, ok := pd[19]; ok && len(v) == 1 { // Subrs, relative to the Private DICT
+		if so := pOff + int(v[0]); so > 0 && so < len(data) {
+			subrs, _ = parseCFFIndex(data, so)
+		}
+	}
+	return def, nom, subrs
+}
+
+// parseCFFFDs reads a CID-keyed font's FDArray and FDSelect: the Private DICTs
+// its glyphs are divided between, and which glyph belongs to which.
+//
+// A CID-keyed font is usually several fonts merged — Latin, kana and han in one
+// file, each hinted on its own terms — and the Font DICTs are what is left of
+// that. So the width defaults differ between them, and reading only the first
+// would be as wrong as reading none for every glyph outside it.
+//
+// Returns nil for both when the font is not CID-keyed or says nothing useful,
+// which leaves the caller on the top DICT's own Private DICT.
+func parseCFFFDs(data []byte, top map[int][]float64, numGlyphs int, isCID bool) ([]int, []cffPrivate) {
+	if !isCID || numGlyphs == 0 {
+		return nil, nil
+	}
+	fdaOff := dictInt(top, 1236) // FDArray
+	fdsOff := dictInt(top, 1237) // FDSelect
+	if fdaOff <= 0 || fdaOff >= len(data) {
+		return nil, nil
+	}
+	fontDicts, _ := parseCFFIndex(data, fdaOff)
+	if len(fontDicts.items) == 0 {
+		return nil, nil
+	}
+	privs := make([]cffPrivate, len(fontDicts.items))
+	for i, fd := range fontDicts.items {
+		d := parseCFFDict(fd)
+		if priv, ok := d[18]; ok {
+			privs[i].def, privs[i].nom, privs[i].subrs = parseCFFPrivate(data, priv)
+		}
+	}
+
+	// FDSelect: which Font DICT each glyph belongs to. Absent, or unreadable,
+	// every glyph takes the first — which is what a single-FD font means and is
+	// the least wrong answer for a malformed one.
+	fdOf := make([]int, numGlyphs)
+	if fdsOff <= 0 || fdsOff >= len(data) {
+		return fdOf, privs
+	}
+	b := data[fdsOff:]
+	switch b[0] {
+	case 0:
+		// One byte per glyph, in glyph order.
+		for g := 0; g < numGlyphs && 1+g < len(b); g++ {
+			fdOf[g] = int(b[1+g])
+		}
+	case 3:
+		// Ranges: a first glyph and its FD, repeated, closed by a sentinel that
+		// gives the glyph after the last range rather than a range of its own.
+		if len(b) < 5 {
+			break
+		}
+		nRanges := Be16(b, 1)
+		for r := 0; r < nRanges; r++ {
+			p := 3 + r*3
+			if p+5 > len(b) {
+				break
+			}
+			first, fd, next := Be16(b, p), int(b[p+2]), Be16(b, p+3)
+			for g := first; g < next && g < numGlyphs; g++ {
+				if g >= 0 {
+					fdOf[g] = fd
+				}
+			}
+		}
+	}
+	return fdOf, privs
+}
+
 // ParseCFF parses a bare CFF font (FontFile3 /Type1C or /CIDFontType0C, or
 // the CFF table of an OpenType font).
 func ParseCFF(data []byte) *Program {
@@ -647,23 +754,23 @@ func ParseCFF(data []byte) *Program {
 	defaultWidthX, nominalWidthX := 0.0, 0.0
 	var localSubrs cffIndex
 	if priv, ok := top[18]; ok && len(priv) == 2 {
-		pOff, pSize := int(priv[1]), int(priv[0])
-		if pOff > 0 && pOff+pSize <= len(data) {
-			pd := parseCFFDict(data[pOff : pOff+pSize])
-			if v, ok := pd[20]; ok && len(v) == 1 {
-				defaultWidthX = v[0]
-			}
-			if v, ok := pd[21]; ok && len(v) == 1 {
-				nominalWidthX = v[0]
-			}
-			if v, ok := pd[19]; ok && len(v) == 1 { // Subrs
-				if so := pOff + int(v[0]); so > 0 && so < len(data) {
-					localSubrs, _ = parseCFFIndex(data, so)
-				}
-			}
-		}
+		defaultWidthX, nominalWidthX, localSubrs = parseCFFPrivate(data, priv)
 	}
 	_ = localSubrs
+
+	// A CID-keyed font has no top DICT Private entry at all. Each glyph's
+	// Private DICT is reached through FDSelect, which says which Font DICT the
+	// glyph belongs to, and FDArray, which holds them — so the two width
+	// defaults every charstring is read against are per glyph rather than per
+	// font.
+	//
+	// Looking for one Private DICT and not finding it is not a small error. A
+	// Type 2 charstring carries its width only when that width differs from
+	// defaultWidthX, so the common case is that it carries nothing and the
+	// default *is* the answer. With no Private DICT the default is zero, and a
+	// face comes back with almost every glyph zero units wide: 17,707 of Noto
+	// Sans JP's 17,936 before this read the FDs.
+	fdOf, fdPriv := parseCFFFDs(data, top, fp.NumGlyphs, isCID)
 
 	// charset: GID → SID (names) or CID.
 	charsetOff := dictInt(top, 15)
@@ -718,12 +825,21 @@ func ParseCFF(data []byte) *Program {
 	}
 
 	// Charstring widths (Type 2: optional leading width operand).
-	widthOf := func(cs []byte) float64 {
+	//
+	// The two defaults come from the glyph's own Private DICT, which for a
+	// CID-keyed font is whichever of the FDArray's its FDSelect names.
+	widthOf := func(g int, cs []byte) float64 {
+		def, nom := defaultWidthX, nominalWidthX
+		if fdOf != nil && g < len(fdOf) {
+			if i := fdOf[g]; i >= 0 && i < len(fdPriv) {
+				def, nom = fdPriv[i].def, fdPriv[i].nom
+			}
+		}
 		w, has := type2CharstringWidth(cs)
 		if !has {
-			return defaultWidthX * scale
+			return def * scale
 		}
-		return (nominalWidthX + w) * scale
+		return (nom + w) * scale
 	}
 
 	if isCID {
@@ -732,7 +848,7 @@ func ParseCFF(data []byte) *Program {
 		for g := 0; g < fp.NumGlyphs; g++ {
 			cid := gidToSID[g]
 			fp.CIDGIDs[cid] = true
-			fp.WidthByCID[cid] = widthOf(charStrings.items[g])
+			fp.WidthByCID[cid] = widthOf(g, charStrings.items[g])
 		}
 	} else {
 		fp.GlyphNames = make(map[string]bool, fp.NumGlyphs)
@@ -740,12 +856,12 @@ func ParseCFF(data []byte) *Program {
 		for g := 0; g < fp.NumGlyphs; g++ {
 			name := cffSIDName(gidToSID[g], stringsIdx)
 			fp.GlyphNames[name] = true
-			fp.WidthByName[name] = widthOf(charStrings.items[g])
+			fp.WidthByName[name] = widthOf(g, charStrings.items[g])
 		}
 	}
 	fp.WidthByGID = make([]float64, fp.NumGlyphs)
 	for g := 0; g < fp.NumGlyphs; g++ {
-		fp.WidthByGID[g] = widthOf(charStrings.items[g])
+		fp.WidthByGID[g] = widthOf(g, charStrings.items[g])
 	}
 	return fp
 }
