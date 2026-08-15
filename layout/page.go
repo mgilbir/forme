@@ -97,7 +97,21 @@ type Composed struct {
 	// Refused is a rule having fired at Error severity. A backend that sees it
 	// should produce nothing: the caller was told not to render, rather than
 	// left to decide.
+	//
+	// It is not a summary of Findings and cannot be recomputed from them. A
+	// rule counts the moment it fires, before the list deduplicates and before
+	// the bound below cuts it — so a document refused by its six-hundredth
+	// finding is refused with that finding nowhere in the list. This field is
+	// the authority; the list is the explanation, when there is room for one.
 	Refused bool
+
+	// Truncated is the bound having stopped findings being recorded, so what
+	// Findings holds is some of them rather than all of them.
+	//
+	// A backend that reports findings has to say so. Presenting a cut list as a
+	// complete one is how "three problems" becomes what a reader believes about
+	// a document with four hundred.
+	Truncated bool
 }
 
 // Compose is everything between a document and a backend: build the box tree,
@@ -124,6 +138,12 @@ func Compose(in Input, opts Options) Composed {
 	for _, f := range built.Findings {
 		rec.ReportDetail(f)
 	}
+	// Build kept its own recorder and this one replays its findings, which
+	// carries everything except the two answers that are not findings. A build
+	// whose list overflowed has a verdict its list no longer explains — the
+	// finding that refused it may be one of the ones the bound dropped — so
+	// both are taken across rather than re-derived from what survived.
+	buildRefused, buildTruncated := built.Failed, built.Truncated
 
 	avail := opts.Page.Content()
 	// built.Fonts rather than in.Fonts: the document's own @font-face rules
@@ -153,7 +173,9 @@ func Compose(in Input, opts Options) Composed {
 
 	return Composed{
 		Ops: ops, Root: root, Scale: scale, NaturalSize: natural,
-		Findings: rec.Findings(), Refused: rec.Failed(),
+		Findings:  rec.Findings(),
+		Refused:   rec.Failed() || buildRefused,
+		Truncated: rec.Truncated() || buildTruncated,
 	}
 }
 
