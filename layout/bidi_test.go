@@ -27,11 +27,6 @@ import (
 // escapes so that a reversed expectation cannot be mistaken for a correct one by
 // an editor that renders the script, and so that this file reads the same in
 // every terminal.
-
-// hebrew is two Hebrew letters, and hebrew2 two more. They are spelled as
-// escapes so that a reversed expectation cannot be mistaken for a correct one by
-// an editor that renders the script, and so that this file reads the same in
-// every terminal.
 const (
 	hebrewAB = "אב" // alef bet
 	hebrewGD = "גד" // gimel dalet

@@ -25,18 +25,6 @@ import (
 // matters here: a clip that cuts a fill away entirely leaves nothing rather
 // than a rectangle of no size, and a test that counted both could not tell the
 // two apart.
-
-// fillsOf returns the non-empty rectangles painted in a given colour, in paint
-// order. It differs from inkOf next door by dropping the empty ones, which
-// matters here: a clip that cuts a fill away entirely leaves nothing rather
-// than a rectangle of no size, and a test that counted both could not tell the
-// two apart.
-
-// fillsOf returns the non-empty rectangles painted in a given colour, in paint
-// order. It differs from inkOf next door by dropping the empty ones, which
-// matters here: a clip that cuts a fill away entirely leaves nothing rather
-// than a rectangle of no size, and a test that counted both could not tell the
-// two apart.
 func fillsOf(ops []Op, want style.RGBA) []Rect {
 	var out []Rect
 	for _, op := range ops {

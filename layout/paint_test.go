@@ -13,11 +13,6 @@ import (
 // checks around it. These came over with the layout engine — they were written
 // beside the PDF backend and are about neither PDF nor any other backend.
 
-// firstMatrix returns the operands of the first "cm" in a content stream.
-// paintOf lays a document out on the default sheet and paints it, which is what
-// almost every test about a mark on the page starts with.
-
-// firstMatrix returns the operands of the first "cm" in a content stream.
 // paintOf lays a document out on the default sheet and paints it, which is what
 // almost every test about a mark on the page starts with.
 func paintOf(t *testing.T, htmlSrc, cssSrc string) []Op {
