@@ -439,7 +439,13 @@ func (f Finding) ObjectNum() int { return 0 }
 // maxFindings bounds one render's report. A document that trips a rule on every
 // element would otherwise produce a list nobody can read, and a report nobody
 // reads is not a report.
-const maxFindings = 500
+//
+// A var and not a const so that a test can lower it, which is the only way to
+// reach the bound: the recorder deduplicates hard enough that a document cannot
+// honestly produce five hundred distinct findings, and the code that runs when
+// the list fills is worth a test rather than a reading. It is unexported and
+// nothing outside this package's tests writes it — a bound, not a knob.
+var maxFindings = 500
 
 // Recorder collects findings under a policy.
 //
