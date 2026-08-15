@@ -49,7 +49,7 @@ func TestCFFReportsItsCharacterCollection(t *testing.T) {
 // The string INDEX carries one string, so a SID of 391 resolves and 392 does
 // not: that is the boundary a reader has to get right, and it cannot be tested
 // against a font whose strings are empty.
-func smallCFF(t *testing.T, topPrefix []byte) []byte {
+func smallCFF(t testing.TB, topPrefix []byte) []byte {
 	t.Helper()
 	const endchar = 14
 	big := func(v int) []byte { return []byte{28, byte(v >> 8), byte(v)} }

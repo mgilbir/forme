@@ -1029,6 +1029,20 @@ func ParseFloat(s string, f *float64) {
 			inFrac = true
 		case c == 'E':
 			// exponent: parse remainder as int
+			//
+			// Nothing bounds how many digits a BCD real spends on its
+			// exponent, and the exponent is applied one multiplication at a
+			// time — so `1E99999999` is a font stalling the parser for as long
+			// as it likes, out of nine nibbles. Enough digits and the
+			// accumulation overflows int instead, which turns a huge number
+			// into a small one with no sign that it happened.
+			//
+			// 700 is past every exponent that can change an answer. A float64
+			// spans roughly 1e-324 to 1e308, so whatever the value, 633 steps
+			// have already carried it to infinity or to zero and further steps
+			// leave it there. Clamping here is not an approximation of the
+			// unbounded loop; it is the same result, reached.
+			const maxExp = 700
 			exp := 0
 			eneg := false
 			j := i + 1
@@ -1037,9 +1051,12 @@ func ParseFloat(s string, f *float64) {
 				j++
 			}
 			for ; j < len(s); j++ {
-				if s[j] >= '0' && s[j] <= '9' {
+				if s[j] >= '0' && s[j] <= '9' && exp <= maxExp {
 					exp = exp*10 + int(s[j]-'0')
 				}
+			}
+			if exp > maxExp {
+				exp = maxExp
 			}
 			total := v + frac
 			for k := 0; k < exp; k++ {
