@@ -78,10 +78,17 @@ jobs:
             testdata/css-parsing-tests
             testdata/unicode-bidi
             testdata/unicode-grapheme
-          key: corpora-1-${{ hashFiles('Makefile') }}
+            testdata/notocjk
+          key: corpora-2-${{ hashFiles('Makefile') }}
 
       - name: Fetch whatever the cache did not have
-        run: make wpt noto-fonts css-tests bidi-tests grapheme-tests
+        run: make wpt noto-fonts css-tests bidi-tests grapheme-tests notocjk
+
+      # The CID-keyed CFF tests read a real CJK face, because the thing they are
+      # about — a charset that is not the identity — is not something a synthetic
+      # font carries. They skip without it, which is worse than failing.
+      - name: The faces that are read rather than generated
+        run: go test -count=1 -run 'CIDKeyed|TheCIDs' -v ./shape/
 
       # Unicode's own conformance data, 862,000 bidi cases and 766 grapheme ones.
       - run: make test-bidi
