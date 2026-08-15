@@ -37,25 +37,151 @@ func TestCFFReportsItsCharacterCollection(t *testing.T) {
 	}
 }
 
+// smallCFF lays out a whole CFF whose Top DICT begins with the given bytes, so
+// a test can say what the ROS is — or that there is none — and have everything
+// after it still line up.
+//
+// The DICT is written twice, because the offsets it names are only known once
+// the pieces are placed, and the second pass must not change its length or
+// every one of those offsets moves under it. Each is three bytes whatever its
+// value, and the fixture checks rather than trusts that.
+//
+// The string INDEX carries one string, so a SID of 391 resolves and 392 does
+// not: that is the boundary a reader has to get right, and it cannot be tested
+// against a font whose strings are empty.
+func smallCFF(t *testing.T, topPrefix []byte) []byte {
+	t.Helper()
+	const endchar = 14
+	big := func(v int) []byte { return []byte{28, byte(v >> 8), byte(v)} }
+
+	priv := privateDict(500, 0)
+	top := func(csOff, privOff int) []byte {
+		d := append([]byte(nil), topPrefix...)
+		d = append(d, big(csOff)...)
+		d = append(d, 17) // CharStrings
+		d = append(d, big(len(priv))...)
+		d = append(d, big(privOff)...)
+		d = append(d, 18) // Private: size then offset
+		return d
+	}
+
+	var data []byte
+	data = append(data, 1, 0, 4, 1) // header: version 1.0, hdrSize 4, offSize 1
+	data = append(data, cffIndexOf([]byte("Fixture"))...)
+	topAt := len(data)
+	data = append(data, cffIndexOf(top(0, 0))...)
+	topLen := len(data) - topAt
+	data = append(data, cffIndexOf([]byte("Custom"))...) // String INDEX: SID 391
+	data = append(data, cffIndexOf()...)                 // Global Subr INDEX
+	privOff := len(data)
+	data = append(data, priv...)
+	csOff := len(data)
+	data = append(data, cffIndexOf([]byte{endchar})...)
+
+	final := cffIndexOf(top(csOff, privOff))
+	if len(final) != topLen {
+		t.Fatalf("the top DICT changed length (%d then %d); everything after it "+
+			"has moved and the fixture describes a different font", topLen, len(final))
+	}
+	copy(data[topAt:], final)
+	return data
+}
+
+// rosDict is a Top DICT prefix stating a ROS with the given operands.
+func rosDict(operands ...int) []byte {
+	var d []byte
+	for _, v := range operands {
+		d = append(d, cffOperand(v)...)
+	}
+	return append(d, 12, 30)
+}
+
 // TestAPlainCFFHasNoCharacterCollection: the fields are meaningless for a font
 // whose glyphs are numbered by index, and must stay empty rather than carrying
 // a default a caller might write into a document.
+//
+// The fixture is synthetic rather than a real face, because the assertion is
+// about a font that has no ROS at all, and a test that reads a file which may
+// not be there can pass by never running.
 func TestAPlainCFFHasNoCharacterCollection(t *testing.T) {
-	data, err := os.ReadFile("../testdata/googlefonts/ofl/notosans/NotoSans[wdth,wght].ttf")
-	if err != nil {
-		// Any non-CID CFF will do; the bundled face is a TrueType, so this
-		// falls back to asserting the zero value on a font with no CFF at all.
-		p := ParseCFF(nil)
-		if p != nil && (p.Registry != "" || p.Ordering != "") {
-			t.Errorf("a nil CFF reported the collection %q-%q", p.Registry, p.Ordering)
-		}
-		return
+	p := ParseCFF(smallCFF(t, nil))
+	if p == nil {
+		t.Fatal("ParseCFF refused the fixture")
 	}
-	if cff := SFNTTables(data)["CFF "]; cff != nil {
-		p := ParseCFF(cff)
-		if p != nil && p.GIDToCID == nil && (p.Registry != "" || p.Ordering != "") {
-			t.Errorf("a CFF that is not CID-keyed reported the collection %q-%q-%d",
-				p.Registry, p.Ordering, p.Supplement)
-		}
+	if p.GIDToCID != nil {
+		t.Fatal("the fixture states no ROS and was read as CID-keyed anyway, so " +
+			"it cannot say anything about a font that is not")
+	}
+	if p.Registry != "" || p.Ordering != "" || p.Supplement != 0 {
+		t.Errorf("a CFF that is not CID-keyed reported the collection %q-%q-%d",
+			p.Registry, p.Ordering, p.Supplement)
+	}
+}
+
+// TestTheROSNamesTheStringsTheFontCarries: the two SIDs resolve the way a glyph
+// name does — the standard strings first, then the font's own INDEX — so a
+// collection Adobe never published still comes back by name.
+func TestTheROSNamesTheStringsTheFontCarries(t *testing.T) {
+	// SID 391 is the first string past the standard ones, which is the one the
+	// fixture carries; the supplement is an ordinary number and not a SID.
+	p := ParseCFF(smallCFF(t, rosDict(390, 391, 5)))
+	if p == nil {
+		t.Fatal("ParseCFF refused the fixture")
+	}
+	if p.GIDToCID == nil {
+		t.Fatal("the fixture states a ROS and was not read as CID-keyed")
+	}
+	if want := cffStandardStrings[390]; p.Registry != want {
+		t.Errorf("registry is %q, want the standard string %q", p.Registry, want)
+	}
+	if p.Ordering != "Custom" {
+		t.Errorf("ordering is %q, want %q from the font's own string INDEX",
+			p.Ordering, "Custom")
+	}
+	if p.Supplement != 5 {
+		t.Errorf("supplement is %d, want 5", p.Supplement)
+	}
+}
+
+// TestAHostileROSIsReadWithoutPanicking.
+//
+// ParseCFF reads a font file, which is attacker-controlled binary whenever a
+// document names its own. Every other SID in the format arrives as two unsigned
+// bytes, but a ROS operand is a DICT operand and those are signed: the one-byte
+// form alone covers -107 to 107. A negative one indexes the standard strings
+// below zero.
+//
+// Nothing here asserts what the collection comes back as, because for these
+// inputs there is no right answer — only that the parser survives and does not
+// invent one.
+func TestAHostileROSIsReadWithoutPanicking(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		operands []int
+	}{
+		{"negative registry", []int{-1, 0, 0}},
+		{"negative ordering", []int{0, -107, 0}},
+		{"both negative", []int{-42, -42, -42}},
+		{"past the string INDEX", []int{9999, 9999, 0}},
+		{"one operand short", []int{0, 0}},
+		{"no operands", nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p := ParseCFF(smallCFF(t, rosDict(c.operands...)))
+			if p == nil {
+				return
+			}
+			// A name it could not resolve must come back empty rather than as
+			// whatever was next to it in memory.
+			for _, s := range []string{p.Registry, p.Ordering} {
+				if s == "" {
+					continue
+				}
+				if len(c.operands) != 3 {
+					t.Errorf("a ROS with %d operands named the collection %q",
+						len(c.operands), s)
+				}
+			}
+		})
 	}
 }
