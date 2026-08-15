@@ -229,5 +229,16 @@ func FuzzParseCFF(f *testing.F) {
 			t.Fatalf("a font that is not CID-keyed reports the collection %q-%q-%d",
 				fp.Registry, fp.Ordering, fp.Supplement)
 		}
+		// And the three are read together or not at all, so a caller that
+		// checks one of them has checked all three.
+		if (fp.Registry == "") != (fp.Ordering == "") || (fp.Registry == "" && fp.Supplement != 0) {
+			t.Fatalf("half a collection: %q-%q-%d",
+				fp.Registry, fp.Ordering, fp.Supplement)
+		}
+		// A supplement is a version of the collection and counts from zero; a
+		// negative one would go into a /CIDSystemInfo as invalid PDF.
+		if fp.Supplement < 0 {
+			t.Fatalf("supplement %d", fp.Supplement)
+		}
 	})
 }

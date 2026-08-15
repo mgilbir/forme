@@ -50,6 +50,13 @@ func TestCFFReportsItsCharacterCollection(t *testing.T) {
 // not: that is the boundary a reader has to get right, and it cannot be tested
 // against a font whose strings are empty.
 func smallCFF(t testing.TB, topPrefix []byte) []byte {
+	return smallCFFGlyphs(t, topPrefix, 1)
+}
+
+// smallCFFGlyphs is smallCFF with the glyph count said out loud, because zero
+// is a case: a font can carry a ROS and no charstrings at all, and every slice
+// sized from the glyph count is empty there.
+func smallCFFGlyphs(t testing.TB, topPrefix []byte, glyphs int) []byte {
 	t.Helper()
 	const endchar = 14
 	big := func(v int) []byte { return []byte{28, byte(v >> 8), byte(v)} }
@@ -76,7 +83,11 @@ func smallCFF(t testing.TB, topPrefix []byte) []byte {
 	privOff := len(data)
 	data = append(data, priv...)
 	csOff := len(data)
-	data = append(data, cffIndexOf([]byte{endchar})...)
+	cs := make([][]byte, glyphs)
+	for i := range cs {
+		cs[i] = []byte{endchar}
+	}
+	data = append(data, cffIndexOf(cs...)...)
 
 	final := cffIndexOf(top(csOff, privOff))
 	if len(final) != topLen {
@@ -181,6 +192,59 @@ func TestAHostileROSIsReadWithoutPanicking(t *testing.T) {
 					t.Errorf("a ROS with %d operands named the collection %q",
 						len(c.operands), s)
 				}
+			}
+		})
+	}
+}
+
+// TestACIDKeyedFontWithNoCharstringsStillSaysSo.
+//
+// GIDToCID is the field that answers "is this CID-keyed", and every consumer
+// asks it that way. Built by appending onto a nil slice it comes back nil for a
+// font with no glyphs — so a font carrying a ROS reported a character
+// collection and, in the same breath, that it had no CIDs to number.
+func TestACIDKeyedFontWithNoCharstringsStillSaysSo(t *testing.T) {
+	p := ParseCFF(smallCFFGlyphs(t, rosDict(390, 391, 0), 0))
+	if p == nil {
+		t.Skip("ParseCFF refuses a font with no charstrings, which is also an answer")
+	}
+	if p.NumGlyphs != 0 {
+		t.Fatalf("%d glyphs, want 0 — the fixture is not the one described", p.NumGlyphs)
+	}
+	if p.GIDToCID == nil {
+		t.Error("a font stating a ROS reports GIDToCID nil, which every caller " +
+			"reads as 'not CID-keyed' — and it went on to report a collection")
+	}
+}
+
+// TestAROSItCannotFullyReadIsNotReported: the three fields move together, so a
+// caller can test one and write all three. Reporting the half that parsed is
+// how a document ends up declaring a numbering no font uses.
+func TestAROSItCannotFullyReadIsNotReported(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		operands []int
+	}{
+		// 391 is the one string this fixture carries, so 392 is the first that
+		// resolves to nothing.
+		{"registry names no string", []int{392, 391, 0}},
+		{"ordering names no string", []int{390, 392, 0}},
+		{"registry SID is negative", []int{-1, 391, 0}},
+		// A supplement is a version of the collection and counts up from zero.
+		{"supplement is negative", []int{390, 391, -91}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p := ParseCFF(smallCFF(t, rosDict(c.operands...)))
+			if p == nil {
+				t.Fatal("ParseCFF refused the fixture")
+			}
+			if p.GIDToCID == nil {
+				t.Fatal("the fixture states a ROS and was not read as CID-keyed, " +
+					"so it says nothing about how an unreadable one is reported")
+			}
+			if p.Registry != "" || p.Ordering != "" || p.Supplement != 0 {
+				t.Errorf("a ROS this reader cannot fully make out came back as "+
+					"%q-%q-%d", p.Registry, p.Ordering, p.Supplement)
 			}
 		})
 	}
