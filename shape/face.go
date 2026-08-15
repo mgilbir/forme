@@ -72,8 +72,12 @@ const maxCmapWork = 1 << 22
 // shaping caches the font's layout tables as each script selects them, so two
 // goroutines merely *measuring* shaped text race on that cache.
 type Face struct {
-	data []byte
-	prog *font.Program
+	// gidToCID is the CID of each glyph index, for a face whose outlines are a
+	// CID-keyed CFF. nil otherwise, and nil is the ordinary case: for every
+	// other kind of face a glyph index is the only numbering there is.
+	gidToCID []int
+	data     []byte
+	prog     *font.Program
 
 	name       string
 	unitsPerEm int
@@ -189,6 +193,10 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 	if len(prog.Cmap) == 0 {
 		return nil, errors.New("fonts: the font has no Unicode character map")
 	}
+	// The CID a glyph index stands for, when the outlines are a CID-keyed CFF
+	// and the two numberings differ. nil for every other kind of face, which is
+	// what "the code is the glyph index" means.
+	var gidToCID []int
 	if !hasGlyf {
 		// The CFF table has to be parsed on its own: the sfnt reader answers
 		// questions from cmap, hmtx and maxp and never opens it, so nothing
@@ -198,22 +206,22 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 		if cff == nil {
 			return nil, errors.New("fonts: the CFF table could not be parsed")
 		}
-		if cff.WidthByCID != nil {
-			// A CID-keyed CFF numbers its glyphs by CID and maps CID to glyph
-			// index through its charset — two numberings, not one. Everything
-			// here assumes they are the same: Encode emits glyph indices as
-			// character codes, and /W is written by glyph index. Embedding one
-			// anyway produces widths keyed by one numbering and codes by the
-			// other, which this module's own validator reports.
-			//
-			// Handling it means reading the charset and encoding through it.
-			// Refusing until then is the honest answer; mis-embedding is not.
-			return nil, errors.New("fonts: CID-keyed CFF fonts are not supported; their CIDs are not glyph indices")
-		}
+		// A CID-keyed CFF numbers its glyphs by CID and maps CID to glyph index
+		// through its charset — two numberings, not one. Reading it needs
+		// neither: a charstring is found by glyph index like any other, the cmap
+		// gives glyph indices, and the advances come from hmtx. So shaping and
+		// measuring a CID-keyed face works exactly as it does for any other, and
+		// this used to refuse one anyway.
+		//
+		// Where the two numberings part is embedding, and gidToCID below is what
+		// tells them apart there: a CIDFontType0 is addressed by CID, so Encode
+		// says CIDs for such a face and glyph indices for every other.
+		gidToCID = cff.GIDToCID
 	}
 
 	f := &Face{
 		data:       data,
+		gidToCID:   gidToCID,
 		prog:       prog,
 		cff:        !hasGlyf,
 		unitsPerEm: 1000,
@@ -527,9 +535,28 @@ func (f *Face) Encode(s string) (codes []byte, missing int) {
 			gid = 0
 		}
 		f.used[gid] = true
-		codes = append(codes, byte(gid>>8), byte(gid))
+		code := f.codeForGID(gid)
+		codes = append(codes, byte(code>>8), byte(code))
 	}
 	return codes, missing
+}
+
+// codeForGID is the two-byte code a glyph is addressed by in the embedded font.
+//
+// For everything but a CID-keyed CFF that is the glyph index, which is what
+// Identity-H means and why the two words are used interchangeably about most
+// faces. A CIDFontType0 is addressed by CID instead: the code goes into the
+// font's charset and comes out as a glyph index, so writing the glyph index
+// there would send the reader to whatever glyph happens to carry that CID.
+//
+// The two agree for a font whose charset is the identity, which many are — so a
+// mistake here shows on some CJK faces and not others, which is the worst way
+// for it to show.
+func (f *Face) codeForGID(gid int) int {
+	if f.gidToCID == nil || gid < 0 || gid >= len(f.gidToCID) {
+		return gid
+	}
+	return f.gidToCID[gid]
 }
 
 // Used returns the glyph indices this face has encoded, in order. It is what a
