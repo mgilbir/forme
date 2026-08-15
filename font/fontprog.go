@@ -64,6 +64,14 @@ type Program struct {
 	// CIDGIDs reports which CIDs have charstrings (CFF CID-keyed fonts);
 	// nil when not CID-keyed.
 	CIDGIDs map[int]bool
+	// GIDToCID gives the CID of each glyph index, for a CID-keyed CFF; nil when
+	// not CID-keyed.
+	//
+	// The two numberings are not the same and the difference is the whole
+	// awkwardness of the format: a charstring is found by glyph index, and a
+	// CIDFontType0 is addressed by CID, with the charset mapping between them.
+	// A format that embeds one has to say which it is speaking.
+	GIDToCID []int
 	// WidthByCID gives advance widths by CID for CID-keyed CFF.
 	WidthByCID map[int]float64
 	// CmapPartial reports that a cmap subtable stopped short of its own end
@@ -845,6 +853,7 @@ func ParseCFF(data []byte) *Program {
 	if isCID {
 		fp.CIDGIDs = make(map[int]bool, fp.NumGlyphs)
 		fp.WidthByCID = make(map[int]float64, fp.NumGlyphs)
+		fp.GIDToCID = append([]int(nil), gidToSID...)
 		for g := 0; g < fp.NumGlyphs; g++ {
 			cid := gidToSID[g]
 			fp.CIDGIDs[cid] = true

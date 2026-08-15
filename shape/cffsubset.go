@@ -69,7 +69,22 @@ func subsetCFF(data []byte, keep []bool) ([]byte, error) {
 	for _, e := range top {
 		switch e.op {
 		case opROS:
-			return nil, errors.New("fonts: CID-keyed CFF programs are not subsetted")
+			// A CID-keyed program is embedded whole.
+			//
+			// Subsetting one means rewriting three structures that all name each
+			// other — the charset, which maps CID to glyph; the FDSelect, which
+			// maps glyph to Font DICT; and the FDArray those point into — and
+			// renumbering the glyphs underneath all three. Getting it wrong
+			// produces a font that reads as valid and draws the wrong character,
+			// which is the failure this whole file is careful to avoid.
+			//
+			// So the program is returned untouched and the caller embeds every
+			// glyph. That costs size and nothing else: the charset stays exactly
+			// what the CIDs the encoder writes are looked up in, and there is no
+			// renumbering to get wrong because nothing is renumbered. A CJK face
+			// is some megabytes, which is worth paying to be right, and the
+			// subsetting can come later without changing what a caller sees.
+			return append([]byte(nil), data...), nil
 		case opCharStrings:
 			if len(e.operands) == 1 {
 				charStringsOff = e.operands[0]
