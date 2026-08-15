@@ -1,6 +1,7 @@
 package paragraph
 
 import (
+	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -76,3 +77,48 @@ func NewBreaker(r OverflowReporter) *Breaker {
 type discardFindings struct{}
 
 func (discardFindings) ReportOverflow(Item, style.Unit) {}
+
+// Measure returns the advance width of a string in a face, memoized.
+//
+// It is the face's own advance and nothing else, which is what the three callers
+// that use it want: a tab stop is a multiple of the space advance, "ch" is the
+// advance of a zero, and a list marker is set without the text's spacing. Text
+// that is laid out on a line goes through measureSpaced instead.
+func (br *Breaker) Measure(face *shape.Face, text string, size style.Unit) style.Unit {
+	return br.MeasureSpaced(face, text, size, TextSpacing{})
+}
+
+// MeasureSpaced is the advance of a run as it will be set, with letter-spacing
+// and word-spacing in it.
+//
+// Measuring is the inner loop of line breaking, and the same words recur
+// constantly in a document — every "the" in a page measures the same. The key
+// includes the face and the size because both scale the answer, and the spacing
+// because it changes it: two boxes at the same size in the same face with
+// different letter-spacing must not share an entry. Leaving it out of the key is
+// the same memoization bug lengthKey.zeroAdvance records for the "ch" unit, and
+// it produces a wrong page only in a document that uses two values.
+func (br *Breaker) MeasureSpaced(face *shape.Face, text string, size style.Unit,
+	sp TextSpacing) style.Unit {
+
+	if text == "" {
+		return 0
+	}
+	key := measureKey{face: face, text: text, size: size, spacing: sp}
+	if got, ok := br.measured[key]; ok {
+		return got
+	}
+	// Measure returns the advance in the units the size was given in, so a size
+	// in CSS pixels gives an advance in CSS pixels.
+	w, _ := style.FromPx(face.Measure(text, size.Px()))
+	w = w.Add(SpacingAdvance(text, sp))
+	br.measured[key] = w
+	return w
+}
+
+type measureKey struct {
+	face    *shape.Face
+	text    string
+	size    style.Unit
+	spacing TextSpacing
+}
