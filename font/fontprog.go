@@ -82,6 +82,12 @@ type Program struct {
 	// glyph source, so a document embedding this program and declaring
 	// Adobe-Identity-0 over an Adobe-Japan1 font is making a false statement
 	// about which collection its CIDs belong to.
+	//
+	// Empty is not the same as "not CID-keyed", and GIDToCID is what answers
+	// that. A malformed font can be CID-keyed and still leave these empty, by
+	// naming a string it does not carry; a caller that has to write a
+	// /CIDSystemInfo should treat that as a font it cannot describe rather than
+	// write an empty Registry into a document.
 	Registry, Ordering string
 	Supplement         int
 	// GIDToCID gives the CID of each glyph index, for a CID-keyed CFF; nil when
@@ -975,7 +981,17 @@ func type2CharstringWidth(cs []byte) (float64, bool) {
 }
 
 // cffStandardStrings is the tail-safe accessor for the 391 standard strings.
+//
+// A SID read from a charset is two unsigned bytes, but one read from a DICT is
+// a signed operand — the one-byte form alone covers -107 to 107 — and a real
+// operand converts to whatever int() makes of it, which for a value past the
+// range is platform-defined and on amd64 is large and negative. So the low
+// bound is checked as well as the high one: this is reached with bytes out of a
+// font file, and a font file is not a promise.
 func cffSIDName(sid int, idx cffIndex) string {
+	if sid < 0 {
+		return ""
+	}
 	if sid < len(cffStandardStrings) {
 		return cffStandardStrings[sid]
 	}
