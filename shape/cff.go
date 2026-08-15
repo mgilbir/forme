@@ -143,6 +143,8 @@ const (
 	opPrivate     = 18
 	opSubrs       = 19   // in the Private DICT, relative to it
 	opROS         = 1230 // present only in a CID-keyed font
+	opFDArray     = 1236 // CID-keyed: the Font DICTs
+	opFDSelect    = 1237 // CID-keyed: which Font DICT each glyph belongs to
 )
 
 // parseCFFDict reads a DICT into its entries, in order.

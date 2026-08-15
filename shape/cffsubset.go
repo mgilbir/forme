@@ -66,25 +66,20 @@ func subsetCFF(data []byte, keep []bool) ([]byte, error) {
 	}
 
 	var charStringsOff, charsetOff, encodingOff, privSize, privOff int
+	var fdArrayOff, fdSelectOff int
+	var isCID bool
 	for _, e := range top {
 		switch e.op {
 		case opROS:
-			// A CID-keyed program is embedded whole.
-			//
-			// Subsetting one means rewriting three structures that all name each
-			// other — the charset, which maps CID to glyph; the FDSelect, which
-			// maps glyph to Font DICT; and the FDArray those point into — and
-			// renumbering the glyphs underneath all three. Getting it wrong
-			// produces a font that reads as valid and draws the wrong character,
-			// which is the failure this whole file is careful to avoid.
-			//
-			// So the program is returned untouched and the caller embeds every
-			// glyph. That costs size and nothing else: the charset stays exactly
-			// what the CIDs the encoder writes are looked up in, and there is no
-			// renumbering to get wrong because nothing is renumbered. A CJK face
-			// is some megabytes, which is worth paying to be right, and the
-			// subsetting can come later without changing what a caller sees.
-			return append([]byte(nil), data...), nil
+			isCID = true
+		case opFDArray:
+			if len(e.operands) == 1 {
+				fdArrayOff = e.operands[0]
+			}
+		case opFDSelect:
+			if len(e.operands) == 1 {
+				fdSelectOff = e.operands[0]
+			}
 		case opCharStrings:
 			if len(e.operands) == 1 {
 				charStringsOff = e.operands[0]
@@ -164,10 +159,103 @@ func subsetCFF(data []byte, keep []bool) ([]byte, error) {
 		}
 	}
 
+	// The CID-keyed structures. A CID-keyed font has no Top DICT Private entry:
+	// each glyph's Private DICT is reached through FDSelect, which says which
+	// Font DICT a glyph belongs to, and FDArray, which holds them.
+	//
+	// Neither needs rewriting for content, and for the same reason nothing else
+	// here does: the glyph numbering does not change, so FDSelect still names
+	// the right glyphs and the charset still maps them to the right CIDs. What
+	// does need rewriting is where the Private DICTs *sit*, because each Font
+	// DICT names its own by absolute offset and they are about to move.
+	var fdSelectBlob, fdArrayBlob []byte
+	var fdPrivBlobs [][]byte
+	var fontDicts [][]cffOp
+	var fontDictsRaw [][][]byte
+	var fdPrivSizes []int
+	if isCID {
+		var err error
+		fdSelectBlob, err = sliceFDSelect(data, fdSelectOff, n)
+		if err != nil {
+			return nil, err
+		}
+		fdIndex, err := readCFFIndex(data, fdArrayOff)
+		if err != nil {
+			return nil, err
+		}
+		if len(fdIndex.items) == 0 {
+			return nil, errors.New("fonts: a CID-keyed CFF names an empty FDArray")
+		}
+		for _, fd := range fdIndex.items {
+			ops, raw, err := parseCFFDict(fd)
+			if err != nil {
+				return nil, err
+			}
+			size, off := 0, 0
+			for _, e := range ops {
+				if e.op == opPrivate && len(e.operands) == 2 {
+					size, off = e.operands[0], e.operands[1]
+				}
+			}
+			var blob []byte
+			if size > 0 {
+				if off < 0 || off+size > len(data) {
+					return nil, errors.New("fonts: a CID-keyed CFF Font DICT's Private DICT lies outside the font")
+				}
+				blob = data[off : off+size]
+				// The local subroutines sit after the Private DICT and are named
+				// from inside it, relative to its start, so they travel with it
+				// and that offset stays right.
+				privOps, _, err := parseCFFDict(blob)
+				if err != nil {
+					return nil, err
+				}
+				for _, e := range privOps {
+					if e.op == opSubrs && len(e.operands) == 1 && e.operands[0] > 0 {
+						idx, err := readCFFIndex(data, off+e.operands[0])
+						if err != nil {
+							return nil, err
+						}
+						blob = data[off:idx.end]
+					}
+				}
+			}
+			fontDicts = append(fontDicts, ops)
+			fontDictsRaw = append(fontDictsRaw, raw)
+			fdPrivSizes = append(fdPrivSizes, size)
+			fdPrivBlobs = append(fdPrivBlobs, blob)
+		}
+	}
+
+	// writeFontDicts rebuilds the FDArray with each Font DICT's Private DICT
+	// named at the offset it will really sit at. Every rewritten operand is five
+	// bytes, as in the Top DICT, so the INDEX's size does not depend on the
+	// values and one measuring pass is enough.
+	writeFontDicts := func(at []int) []byte {
+		out := make([][]byte, len(fontDicts))
+		for i, ops := range fontDicts {
+			var d []byte
+			for k, e := range ops {
+				if e.op == opPrivate {
+					d = append(d, cffInt(fdPrivSizes[i])...)
+					d = append(d, cffInt(at[i])...)
+					d = append(d, byte(opPrivate))
+					continue
+				}
+				d = append(d, fontDictsRaw[i][k]...)
+			}
+			out[i] = d
+		}
+		return writeCFFIndex(out)
+	}
+	if isCID {
+		fdArrayBlob = writeFontDicts(make([]int, len(fontDicts)))
+	}
+
 	// Lay the font out, then write the Top DICT with the offsets that layout
 	// produced. Every rewritten operand is five bytes, so the DICT's size does
 	// not depend on the values going into it and one pass is enough.
-	rewrite := func(charset, encoding, charstrings, private int) []byte {
+	rewrite := func(charset, encoding, charstrings, private, fdArray, fdSelect int) []byte {
 		var out []byte
 		for i, e := range top {
 			switch e.op {
@@ -184,6 +272,12 @@ func subsetCFF(data []byte, keep []bool) ([]byte, error) {
 				out = append(out, cffInt(privSize)...)
 				out = append(out, cffInt(private)...)
 				out = append(out, byte(opPrivate))
+			case opFDArray:
+				out = append(out, cffInt(fdArray)...)
+				out = append(out, 12, 36)
+			case opFDSelect:
+				out = append(out, cffInt(fdSelect)...)
+				out = append(out, 12, 37)
 			default:
 				out = append(out, topRaw[i]...) // verbatim, operands and all
 			}
@@ -192,7 +286,7 @@ func subsetCFF(data []byte, keep []bool) ([]byte, error) {
 	}
 
 	// The Top DICT's size is stable, so compute it once against placeholders.
-	topBlob := rewrite(0, 0, 0, 0)
+	topBlob := rewrite(0, 0, 0, 0, 0, 0)
 	prefix := hdrSize
 	prefix += len(writeCFFIndex(nameIndex.items))
 	prefix += len(writeCFFIndex([][]byte{topBlob}))
@@ -203,6 +297,26 @@ func subsetCFF(data []byte, keep []bool) ([]byte, error) {
 	encodingAt := charsetAt + len(charsetBlob)
 	charStringsAt := encodingAt + len(encodingBlob)
 	privateAt := charStringsAt + len(csBlob)
+	// A CID-keyed font puts its FDArray and FDSelect after the charstrings, and
+	// the Private DICTs the Font DICTs name after those. privateAt is unused in
+	// that case: there is no Top DICT Private entry to point anywhere.
+	fdArrayAt := privateAt
+	fdSelectAt := fdArrayAt + len(fdArrayBlob)
+	fdPrivAt := make([]int, len(fdPrivBlobs))
+	if isCID {
+		at := fdSelectAt + len(fdSelectBlob)
+		for i, b := range fdPrivBlobs {
+			fdPrivAt[i] = at
+			at += len(b)
+		}
+		// Now that the Private DICTs have addresses, the Font DICTs can name
+		// them. The INDEX keeps the size it was measured at.
+		if rebuilt := writeFontDicts(fdPrivAt); len(rebuilt) != len(fdArrayBlob) {
+			return nil, errors.New("fonts: internal: the CID FDArray changed size when its offsets were filled in")
+		} else {
+			fdArrayBlob = rebuilt
+		}
+	}
 
 	// A predefined charset or encoding is named by a small number rather than
 	// an offset, and must keep that number.
@@ -212,7 +326,7 @@ func subsetCFF(data []byte, keep []bool) ([]byte, error) {
 	if encodingOff <= 1 {
 		encodingAt = encodingOff
 	}
-	topBlob = rewrite(charsetAt, encodingAt, charStringsAt, privateAt)
+	topBlob = rewrite(charsetAt, encodingAt, charStringsAt, privateAt, fdArrayAt, fdSelectAt)
 
 	out := make([]byte, 0, len(data))
 	out = append(out, data[:hdrSize]...)
@@ -223,12 +337,59 @@ func subsetCFF(data []byte, keep []bool) ([]byte, error) {
 	out = append(out, charsetBlob...)
 	out = append(out, encodingBlob...)
 	out = append(out, csBlob...)
+	if isCID {
+		out = append(out, fdArrayBlob...)
+		out = append(out, fdSelectBlob...)
+		for _, b := range fdPrivBlobs {
+			out = append(out, b...)
+		}
+		want := fdSelectAt + len(fdSelectBlob)
+		for _, b := range fdPrivBlobs {
+			want += len(b)
+		}
+		if len(out) != want {
+			return nil, errors.New("fonts: internal: the CID CFF layout did not match what the DICTs were told")
+		}
+		return out, nil
+	}
 	out = append(out, privBlob...)
 	out = append(out, localSubrs...)
 	if len(out) != privateAt+len(privBlob)+len(localSubrs) {
 		return nil, errors.New("fonts: internal: the CFF layout did not match what the Top DICT was told")
 	}
 	return out, nil
+}
+
+// sliceFDSelect returns the FDSelect's bytes.
+//
+// Like the charset, its length is not stored: it follows from the format and the
+// glyph count, so it has to be measured rather than read.
+func sliceFDSelect(data []byte, off, nGlyphs int) ([]byte, error) {
+	if off <= 0 || off >= len(data) {
+		return nil, errors.New("fonts: a CID-keyed CFF's FDSelect lies outside the font")
+	}
+	b := data[off:]
+	switch b[0] {
+	case 0:
+		// The format byte, then one byte per glyph.
+		size := 1 + nGlyphs
+		if size > len(b) {
+			return nil, errors.New("fonts: truncated CFF FDSelect")
+		}
+		return b[:size], nil
+	case 3:
+		// The format byte, a range count, three bytes per range, and a sentinel
+		// giving the glyph after the last range.
+		if len(b) < 5 {
+			return nil, errors.New("fonts: truncated CFF FDSelect")
+		}
+		size := 3 + int(binary.BigEndian.Uint16(b[1:]))*3 + 2
+		if size > len(b) {
+			return nil, errors.New("fonts: truncated CFF FDSelect")
+		}
+		return b[:size], nil
+	}
+	return nil, fmt.Errorf("fonts: CFF FDSelect format %d is not one this reads", b[0])
 }
 
 // sliceCharset returns the charset's bytes. Its length is not stored anywhere:
