@@ -85,9 +85,12 @@ type Program struct {
 	//
 	// Empty is not the same as "not CID-keyed", and GIDToCID is what answers
 	// that. A malformed font can be CID-keyed and still leave these empty, by
-	// naming a string it does not carry; a caller that has to write a
-	// /CIDSystemInfo should treat that as a font it cannot describe rather than
-	// write an empty Registry into a document.
+	// naming a string it does not carry or a supplement below zero; a caller
+	// that has to write a /CIDSystemInfo should treat that as a font it cannot
+	// describe rather than write an empty Registry into a document.
+	//
+	// The three move together: either all of them are read or none is, so
+	// testing Registry is enough.
 	Registry, Ordering string
 	Supplement         int
 	// GIDToCID gives the CID of each glyph index, for a CID-keyed CFF; nil when
@@ -789,9 +792,17 @@ func ParseCFF(data []byte) *Program {
 		// "Japan1" — and resolve through the same string index glyph names do,
 		// so a custom collection carries its own strings rather than a
 		// predefined SID.
-		fp.Registry = cffSIDName(int(ros[0]), stringsIdx)
-		fp.Ordering = cffSIDName(int(ros[1]), stringsIdx)
-		fp.Supplement = int(ros[2])
+		//
+		// All three or none of them. A supplement is a version and cannot be
+		// negative, and a SID that resolves to nothing names no collection, so
+		// a font that gets any part of this wrong has not said which numbering
+		// its CIDs are in — and half an answer is the shape a caller writes
+		// into a /CIDSystemInfo without noticing.
+		reg := cffSIDName(int(ros[0]), stringsIdx)
+		ord := cffSIDName(int(ros[1]), stringsIdx)
+		if sup := int(ros[2]); reg != "" && ord != "" && sup >= 0 {
+			fp.Registry, fp.Ordering, fp.Supplement = reg, ord, sup
+		}
 	}
 	// Private DICT: nominal/default widths.
 	defaultWidthX, nominalWidthX := 0.0, 0.0
@@ -888,7 +899,11 @@ func ParseCFF(data []byte) *Program {
 	if isCID {
 		fp.CIDGIDs = make(map[int]bool, fp.NumGlyphs)
 		fp.WidthByCID = make(map[int]float64, fp.NumGlyphs)
-		fp.GIDToCID = append([]int(nil), gidToSID...)
+		// Copied into a slice of its own length rather than appended onto nil,
+		// which for a font with no charstrings gives nil back and makes the one
+		// field that says whether this font is CID-keyed say that it is not.
+		fp.GIDToCID = make([]int, fp.NumGlyphs)
+		copy(fp.GIDToCID, gidToSID)
 		fp.GIDToFD = append([]int(nil), fdOf...)
 		for g := 0; g < fp.NumGlyphs; g++ {
 			cid := gidToSID[g]
