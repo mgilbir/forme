@@ -73,6 +73,17 @@ type Program struct {
 	// another font's changes nothing a shaper reads and everything a renderer
 	// draws.
 	GIDToFD []int
+	// Registry, Ordering and Supplement are the CFF's ROS: the character
+	// collection its CIDs are numbered in. Empty and zero when the font is not
+	// CID-keyed.
+	//
+	// A PDF has to state them. ISO 32000-2 9.7.4.2 requires a CIDFont's
+	// /CIDSystemInfo to be compatible with the character collection of its
+	// glyph source, so a document embedding this program and declaring
+	// Adobe-Identity-0 over an Adobe-Japan1 font is making a false statement
+	// about which collection its CIDs belong to.
+	Registry, Ordering string
+	Supplement         int
 	// GIDToCID gives the CID of each glyph index, for a CID-keyed CFF; nil when
 	// not CID-keyed.
 	//
@@ -766,7 +777,16 @@ func ParseCFF(data []byte) *Program {
 	charStrings, _ := parseCFFIndex(data, csOff)
 	fp.NumGlyphs = len(charStrings.items)
 
-	_, isCID := top[1230] // ROS
+	ros, isCID := top[1230] // ROS
+	if isCID && len(ros) == 3 {
+		// Two SIDs and a number. The SIDs name the collection — "Adobe" and
+		// "Japan1" — and resolve through the same string index glyph names do,
+		// so a custom collection carries its own strings rather than a
+		// predefined SID.
+		fp.Registry = cffSIDName(int(ros[0]), stringsIdx)
+		fp.Ordering = cffSIDName(int(ros[1]), stringsIdx)
+		fp.Supplement = int(ros[2])
+	}
 	// Private DICT: nominal/default widths.
 	defaultWidthX, nominalWidthX := 0.0, 0.0
 	var localSubrs cffIndex
