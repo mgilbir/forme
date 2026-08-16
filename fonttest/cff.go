@@ -23,6 +23,12 @@ type CFFOptions struct {
 	// CID-keyed: the charset is then read as glyph index to CID rather than to
 	// a glyph name.
 	CIDKeyed bool
+	// Charset is the charset operator's operand: 0 ISOAdobe, 1 Expert, 2 Expert
+	// Subset, or an offset to a charset the font carries. Zero is both the
+	// default and ISOAdobe, which is what a font omitting the operator means, so
+	// this emits the operator only when it is not zero — a fixture asking for
+	// ISOAdobe gets the same bytes it always did.
+	Charset int
 	// The collection to state. Registry and Ordering go into the font's own
 	// string INDEX and the ROS names them by SID, the way a collection Adobe
 	// never published is carried. "Adobe" and "Identity" if empty.
@@ -93,6 +99,10 @@ func CFF(opts CFFOptions) []byte {
 			d = append(d, cffOperand3(ordSID)...)
 			d = append(d, cffOperand3(supplement)...)
 			d = append(d, 12, 30) // ROS
+		}
+		if opts.Charset != 0 {
+			d = append(d, cffOperand3(opts.Charset)...)
+			d = append(d, 15) // charset
 		}
 		d = append(d, cffOperand3(csOff)...)
 		d = append(d, 17) // CharStrings

@@ -206,6 +206,15 @@ func FuzzParseCFF(f *testing.F) {
 	f.Add(smallCFF(f, rosDict(390, 391, 5)))
 	f.Add(smallCFF(f, rosDict(-1, -1, 0)))
 	f.Add(smallCFF(f, rosDict(0, 0)))
+	// The predefined charsets, with a glyph count on both sides of each table's
+	// end — the mutation worth reaching is a charset id landing on a font whose
+	// glyphs run past the fixed list, which is where a name gets invented.
+	for _, charset := range []int{0, 1, 2, 3} {
+		for _, glyphs := range []int{1, 90, 200} {
+			f.Add(fonttest.CFF(fonttest.CFFOptions{Glyphs: glyphs, Charset: charset}))
+			f.Add(fonttest.CFF(fonttest.CFFOptions{Glyphs: glyphs, Charset: charset, CIDKeyed: true}))
+		}
+	}
 	f.Add([]byte(nil))
 	f.Add([]byte{1, 0, 4, 1})
 	f.Fuzz(func(t *testing.T, data []byte) {
