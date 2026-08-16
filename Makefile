@@ -380,7 +380,21 @@ WPT_DIRS := css/CSS2/normal-flow css/CSS2/box-display css/CSS2/margin-padding-cl
             css/CSS2/generated-content css/CSS2/borders css/CSS2/backgrounds \
             css/CSS2/box css/CSS2/colors css/CSS2/values \
             css/CSS2/support css/CSS2/reference css/css-text/white-space css/reference \
+            css/support \
             fonts
+
+# "css/support" is the suite's *shared* support directory, as against the
+# per-chapter css/CSS2/support beside it. It was missing, and the whole of it is
+# sixty-one small files, and its absence cost twenty-three clean passes: the
+# tests that want it write a root-relative "/css/support/60x60-red.png", every
+# one of them resolved to a file that was not there, and every one of them then
+# passed *vacuously* — a background image that fails to load paints nothing, and
+# the reference beside it painted nothing either.
+#
+# That is the fifth time a large block of this suite has turned out to be about
+# the harness rather than about the engine, and it is the same shape every time:
+# the tests were not failing, so nothing was red, and the cost was paid in the
+# vacuous bucket where nobody looks. See wptCleanPassBaseline.
 
 # "fonts" is there for Ahem.ttf, which a quarter of the suite is written
 # against and which the harness hands to the engine — see render/ahem_test.go
