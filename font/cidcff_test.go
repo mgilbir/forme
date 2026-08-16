@@ -176,7 +176,7 @@ func TestAGlyphTakesItsOwnFDsWidth(t *testing.T) {
 		gid  int
 		want float64
 	}{{0, 500}, {1, 1000}} {
-		if _, has := type2CharstringWidth([]byte{endchar}); has {
+		if _, has := type2CharstringWidth([]byte{endchar}, cffIndex{}, cffIndex{}); has {
 			t.Fatal("the fixture charstring states a width; it must not, or the " +
 				"default is never consulted and this proves nothing")
 		}

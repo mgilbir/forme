@@ -766,7 +766,11 @@ func ParseCFF(data []byte) *Program {
 	hdrSize := int(data[2])
 	_, afterNames := parseCFFIndex(data, hdrSize)
 	topDicts, afterTop := parseCFFIndex(data, afterNames)
-	stringsIdx, _ := parseCFFIndex(data, afterTop)
+	stringsIdx, afterStrings := parseCFFIndex(data, afterTop)
+	// The Global Subr INDEX, which sits after the strings and had been skipped.
+	// A charstring may reach its width through one of these — see
+	// type2CharstringWidth.
+	globalSubrs, _ := parseCFFIndex(data, afterStrings)
 	if len(topDicts.items) == 0 {
 		return nil
 	}
@@ -810,7 +814,6 @@ func ParseCFF(data []byte) *Program {
 	if priv, ok := top[18]; ok && len(priv) == 2 {
 		defaultWidthX, nominalWidthX, localSubrs = parseCFFPrivate(data, priv)
 	}
-	_ = localSubrs
 
 	// A CID-keyed font has no top DICT Private entry at all. Each glyph's
 	// Private DICT is reached through FDSelect, which says which Font DICT the
@@ -904,12 +907,17 @@ func ParseCFF(data []byte) *Program {
 	// CID-keyed font is whichever of the FDArray's its FDSelect names.
 	widthOf := func(g int, cs []byte) float64 {
 		def, nom := defaultWidthX, nominalWidthX
+		local := localSubrs
 		if fdOf != nil && g < len(fdOf) {
 			if i := fdOf[g]; i >= 0 && i < len(fdPriv) {
-				def, nom = fdPriv[i].def, fdPriv[i].nom
+				// The local subroutines come from the same Private DICT the two
+				// width defaults do, which for a CID-keyed font is the one its
+				// FDSelect names — so a glyph reading its width through a subr
+				// must read it through *that* FD's, not the top DICT's.
+				def, nom, local = fdPriv[i].def, fdPriv[i].nom, fdPriv[i].subrs
 			}
 		}
-		w, has := type2CharstringWidth(cs)
+		w, has := type2CharstringWidth(cs, local, globalSubrs)
 		if !has {
 			return def * scale
 		}
@@ -965,41 +973,104 @@ func dictInt(d map[int][]float64, op int) int {
 // type2CharstringWidth reports the optional leading width delta of a Type 2
 // charstring: present when the operand count before the first stack-clearing
 // operator exceeds that operator's expected arguments.
-func type2CharstringWidth(cs []byte) (float64, bool) {
+//
+// # Why it interprets rather than scans
+//
+// The width is whatever is on the stack when the first stack-clearing operator
+// arrives, and a charstring may put it there from inside a subroutine. Both
+// halves of that are common: a font compressed by a subsetter routinely factors
+// the hints and the opening move of every glyph into a shared subr, so the
+// operator that decides the width is not in the charstring at all.
+//
+// Scanning for the first operator therefore answered "no width here" for a
+// callsubr — and "no width" is not a refusal, it is the Private DICT's
+// defaultWidthX. Every glyph in such a font came back the same width. That is
+// the shape the FD Private DICTs had, where 17,707 of Noto Sans JP's 17,936
+// widths read as zero: a number that silently defaults looks like an answer.
+//
+// So this follows callsubr and callgsubr, keeping the operand stack across the
+// call as the charstring does, and stops at the first stack-clearing operator
+// wherever it is reached.
+//
+// # What bounds it
+//
+// A subroutine can call a subroutine, and a hostile font can make that a cycle.
+// The specification bounds the nesting at 10 and this bounds it at the same,
+// which costs nothing legitimate — no real font nests deeply, because each level
+// is a byte of overhead it exists to avoid — and turns a font that would spin
+// into one that reports no width.
+func type2CharstringWidth(cs []byte, local, global cffIndex) (float64, bool) {
 	var operands []float64
-	i := 0
-	for i < len(cs) {
-		v := int(cs[i])
+	// The call stack: what to come back to when a subroutine returns. The
+	// charstring itself is the bottom of it.
+	type frame struct {
+		code []byte
+		at   int
+	}
+	stack := []frame{{code: cs}}
+
+	for len(stack) > 0 {
+		f := &stack[len(stack)-1]
+		if f.at >= len(f.code) {
+			// Ran off the end of a subroutine without a return, which is
+			// malformed; treat it as one rather than as a reason to stop.
+			stack = stack[:len(stack)-1]
+			continue
+		}
+		v := int(f.code[f.at])
 		switch {
 		case v == 28:
-			if i+3 > len(cs) {
+			if f.at+3 > len(f.code) {
 				return 0, false
 			}
-			operands = append(operands, float64(int16(binary.BigEndian.Uint16(cs[i+1:]))))
-			i += 3
+			operands = append(operands, float64(int16(binary.BigEndian.Uint16(f.code[f.at+1:]))))
+			f.at += 3
 		case v == 255:
-			if i+5 > len(cs) {
+			if f.at+5 > len(f.code) {
 				return 0, false
 			}
-			operands = append(operands, float64(int32(binary.BigEndian.Uint32(cs[i+1:])))/65536)
-			i += 5
+			operands = append(operands, float64(int32(binary.BigEndian.Uint32(f.code[f.at+1:])))/65536)
+			f.at += 5
 		case v >= 32 && v <= 246:
 			operands = append(operands, float64(v-139))
-			i++
+			f.at++
 		case v >= 247 && v <= 250:
-			if i+2 > len(cs) {
+			if f.at+2 > len(f.code) {
 				return 0, false
 			}
-			operands = append(operands, float64((v-247)*256+int(cs[i+1])+108))
-			i += 2
+			operands = append(operands, float64((v-247)*256+int(f.code[f.at+1])+108))
+			f.at += 2
 		case v >= 251 && v <= 254:
-			if i+2 > len(cs) {
+			if f.at+2 > len(f.code) {
 				return 0, false
 			}
-			operands = append(operands, float64(-(v-251)*256-int(cs[i+1])-108))
-			i += 2
+			operands = append(operands, float64(-(v-251)*256-int(f.code[f.at+1])-108))
+			f.at += 2
+
+		case v == 10 || v == 29: // callsubr, callgsubr
+			idx := local
+			if v == 29 {
+				idx = global
+			}
+			if len(operands) == 0 {
+				return 0, false
+			}
+			n := int(operands[len(operands)-1]) + subrBias(len(idx.items))
+			operands = operands[:len(operands)-1]
+			f.at++
+			if n < 0 || n >= len(idx.items) {
+				return 0, false
+			}
+			if len(stack) >= maxSubrDepth {
+				return 0, false
+			}
+			stack = append(stack, frame{code: idx.items[n]})
+
+		case v == 11: // return
+			stack = stack[:len(stack)-1]
+
 		default:
-			// First operator reached.
+			// The first stack-clearing operator, wherever it was reached.
 			expected := -1
 			switch v {
 			case 1, 3, 18, 23: // hstem vstem hstemhm vstemhm
@@ -1013,7 +1084,7 @@ func type2CharstringWidth(cs []byte) (float64, bool) {
 			case 14: // endchar
 				expected = 0
 			default:
-				return 0, false // hstem etc. not first: no width info
+				return 0, false // not a stack-clearing operator: no width info
 			}
 			if len(operands) > expected {
 				return operands[0], true
@@ -1022,6 +1093,23 @@ func type2CharstringWidth(cs []byte) (float64, bool) {
 		}
 	}
 	return 0, false
+}
+
+// maxSubrDepth is the nesting the Type 2 specification allows, and the bound a
+// cyclic subroutine meets instead of spinning.
+const maxSubrDepth = 10
+
+// subrBias is the number a Type 2 subroutine index is offset by, which the
+// specification makes depend on how many subroutines there are so that the
+// commonest indices encode in one byte.
+func subrBias(n int) int {
+	switch {
+	case n < 1240:
+		return 107
+	case n < 33900:
+		return 1131
+	}
+	return 32768
 }
 
 // cffStandardStrings is the tail-safe accessor for the 391 standard strings.
