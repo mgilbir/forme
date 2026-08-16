@@ -355,27 +355,9 @@ func (l *layouter) faceForText(b *Box) (*shape.Face, bool) {
 	// that face's line breaks. The finding said so, which was honest, and the
 	// page was still wrong in a way nothing could undo downstream.
 	//
-	// The report stays exactly where it was, and asks exactly what it asked: can
-	// one face set the whole of this text. That question is no longer how the
-	// face is *chosen* — it is only how the caller is told that the family it
-	// asked for could not set the paragraph — so what changes here is the page
-	// and not the reporting.
-	if missesVisible(face, b.Text) {
-		if set, canFall := l.fontSet.(FallbackFontSet); canFall {
-			bold := isBold(b.Style["font-weight"])
-			italic := isItalic(b.Style["font-style"])
-			if alt, found := set.FaceFor(b.Text, bold, italic); found {
-				l.rec.ReportDetail(Finding{
-					Rule: RuleFontFallback,
-					Message: "no face for " + quoteValue(b.Style["font-family"]) +
-						" could set this text, so " + quoteValue(alt.Name()) +
-						" was used for it; the metrics and the line breaks will differ",
-					Path:     PathOf(b.Element),
-					Property: "font-family",
-				})
-			}
-		}
-	}
+	// What the caller is told is decided in itemsFor, once the runs are known —
+	// see reportWhollySubstituted. It cannot be decided here: the question worth
+	// asking is which characters actually moved, and the runs are what that is.
 	l.textFaces[b] = face
 	return face, true
 }

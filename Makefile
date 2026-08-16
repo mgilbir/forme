@@ -338,6 +338,34 @@ clean-css-colors:
 # this fallback is lighter than it should be. It is a fallback for text that
 # would otherwise be invisible, and the weight being wrong is worth saying out
 # loud rather than leaving to be discovered.
+# GNU Unifont is the last resort, and it is here for what it *cannot* be asked
+# to do as much as for what it can.
+#
+# It covers fourteen of the sixteen scripts this suite writes in one file, and
+# the last two in its upper-plane companion — so with it in the library there is
+# no character in the whole corpus that any document sets as a space. That is the
+# whole of the gain, and it is a gain in the picture rather than in the count:
+# the tests that needed it were passing before, drawing nothing where a character
+# belonged.
+#
+# It is a bitmap font grown into outlines, so its glyphs are on an 8- or 16-pixel
+# grid and its advances come in two widths. That is why it is *last*: asked after
+# every face that might set the text properly, and reached only where the answer
+# would otherwise be a blank. A fallback list is an ordering and this is the
+# bottom of it.
+#
+# It was also what found the fault in the per-box fallback. A face that can set
+# almost anything can set almost any *whole paragraph*, so the question "can one
+# face set the whole of this text" started finding an answer every time it was
+# asked, and eighty-eight documents were reported as substituted that had nothing
+# wrong with them. See layout/facerun.go.
+#
+# Licensing: the compiled fonts are SIL Open Font License 1.1 — unifoundry's
+# LICENSE.txt says so in as many words, the GPL covering the build sources rather
+# than the fonts — and it is fetched alongside them.
+UNIFONT_VER  := 17.0.05
+UNIFONT_BASE := https://unifoundry.com/pub/unifont/unifont-$(UNIFONT_VER)/font-builds
+
 NOTO_DIR := testdata/fonts-noto
 NOTO_BASE := https://raw.githubusercontent.com/notofonts
 NOTO_HINTED := NotoSans NotoSansHebrew NotoSansArabic NotoSansDevanagari \
@@ -358,6 +386,11 @@ $(NOTO_DIR)/.ok:
 	  $(NOTO_BASE)/noto-cjk/main/Sans/Variable/TTF/Subset/NotoSansJP-VF.ttf
 	curl -sSf -o $(NOTO_DIR)/OFL.txt \
 	  $(NOTO_BASE)/noto-cjk/main/Sans/LICENSE
+	curl -sSf -o $(NOTO_DIR)/Unifont-Regular.otf \
+	  $(UNIFONT_BASE)/unifont-$(UNIFONT_VER).otf
+	curl -sSf -o $(NOTO_DIR)/UnifontUpper-Regular.otf \
+	  $(UNIFONT_BASE)/unifont_upper-$(UNIFONT_VER).otf
+	curl -sSf -o $(NOTO_DIR)/UNIFONT-LICENSE.txt https://unifoundry.com/LICENSE.txt
 	touch $@
 
 clean-noto-fonts:

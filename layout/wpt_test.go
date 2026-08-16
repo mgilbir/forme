@@ -928,7 +928,12 @@ const wptEnv = "WPT_TESTS"
 // because the div exists rather than because anything was drawn for the
 // character. The glyph-missing finding was the only thing in the engine that
 // knew, which is what kept them out of this count.
-const wptCleanPassBaseline = 4611
+// The last-resort face and the report that had to be narrowed for it took this
+// from 4611 to 4613, and the failures 411 to 408. The small number is the honest
+// one and the rest of the change is not in it: glyph-missing is now reported by
+// *no document in the suite*, because there is no longer a character in the
+// corpus that nothing can set.
+const wptCleanPassBaseline = 4613
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
