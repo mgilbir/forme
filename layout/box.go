@@ -138,6 +138,15 @@ type Box struct {
 	// ListItem marks a box that generates a marker — a bullet or a number.
 	ListItem bool
 
+	// MarkerImage is the picture list-style-image named, once it has loaded.
+	//
+	// nil is not "no image was asked for": it is "no image is being drawn",
+	// which §12.6.2 makes the same thing. The property takes effect only while
+	// the image is *available*, so a url that does not load leaves this nil and
+	// the marker falls back to list-style-type — which is why the type is still
+	// cascaded and still read for a box that names an image.
+	MarkerImage *ReplacedContent
+
 	// ListValue is what a numbered marker counts to, taken from the "list-item"
 	// counter rather than from the item's position among its siblings.
 	//

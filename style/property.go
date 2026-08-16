@@ -111,6 +111,11 @@ var properties = map[string]property{
 	// express without reading back what it has already drawn; it is reported
 	// rather than approximated, because an outline in the wrong colour is worse
 	// than a caller being told it could not be drawn. See checkOutline.
+	// CSS 2.1 §12.6.2. An image marker replaces the one list-style-type would
+	// have drawn — and only while it is *available*, which is why the type is
+	// still cascaded and still read: a url that does not load falls back to it.
+	"list-style-image": {true, "none"},
+
 	"outline-width": {false, "medium"},
 	"outline-style": {false, "none"},
 	"outline-color": {false, "invert"},
@@ -334,7 +339,8 @@ var shorthands = map[string]shorthand{
 		"background-color", "background-image", "background-repeat",
 		"background-attachment", "background-position", "background-size",
 		"background-origin", "background-clip"}},
-	"list-style": {listStyleShorthand, []string{"list-style-type", "list-style-position"}},
+	"list-style": {listStyleShorthand,
+		[]string{"list-style-type", "list-style-position", "list-style-image"}},
 	"font": {fontShorthand, []string{
 		"font-style", "font-weight", "font-size", "font-family", "line-height"}},
 	"text-decoration": {textDecorationShorthand,
