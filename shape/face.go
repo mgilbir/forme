@@ -76,8 +76,14 @@ type Face struct {
 	// CID-keyed CFF. nil otherwise, and nil is the ordinary case: for every
 	// other kind of face a glyph index is the only numbering there is.
 	gidToCID []int
-	data     []byte
-	prog     *font.Program
+	// The character collection those CIDs are numbered in, read at load from
+	// the same parse gidToCID comes from. Empty for every face that has none —
+	// see CharacterCollection, which is the only thing that should read them,
+	// because empty here has two meanings and one branch tells them apart.
+	registry, ordering string
+	supplement         int
+	data               []byte
+	prog               *font.Program
 
 	name       string
 	unitsPerEm int
@@ -197,6 +203,8 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 	// and the two numberings differ. nil for every other kind of face, which is
 	// what "the code is the glyph index" means.
 	var gidToCID []int
+	var registry, ordering string
+	var supplement int
 	if !hasGlyf {
 		// The CFF table has to be parsed on its own: the sfnt reader answers
 		// questions from cmap, hmtx and maxp and never opens it, so nothing
@@ -217,11 +225,21 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 		// tells them apart there: a CIDFontType0 is addressed by CID, so Encode
 		// says CIDs for such a face and glyph indices for every other.
 		gidToCID = cff.GIDToCID
+		// And the collection those CIDs belong to, taken from the same parse.
+		// Reading it here rather than leaving the caller to parse the CFF again
+		// is not only the cost — 8 ms of a 21 ms load, for a face this size —
+		// but which bytes: a caller reaching for the CFF itself has to pick
+		// between the face and the subset, and only one of those is the program
+		// a document ends up carrying.
+		registry, ordering, supplement = cff.Registry, cff.Ordering, cff.Supplement
 	}
 
 	f := &Face{
 		data:       data,
 		gidToCID:   gidToCID,
+		registry:   registry,
+		ordering:   ordering,
+		supplement: supplement,
 		prog:       prog,
 		cff:        !hasGlyf,
 		unitsPerEm: 1000,
