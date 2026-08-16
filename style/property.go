@@ -102,6 +102,19 @@ var properties = map[string]property{
 	"border-right-style":  {false, "none"},
 	"border-bottom-style": {false, "none"},
 	"border-left-style":   {false, "none"},
+	// CSS 2.1 §18.4. An outline is drawn just outside the border edge and takes
+	// no space, so it is three properties and no layout at all — which is what
+	// makes it separable from the border it otherwise resembles.
+	//
+	// The initial colour is "invert", not "currentcolor". CSS 2.1 asks for the
+	// pixels underneath to be inverted, which a display list of fills cannot
+	// express without reading back what it has already drawn; it is reported
+	// rather than approximated, because an outline in the wrong colour is worse
+	// than a caller being told it could not be drawn. See checkOutline.
+	"outline-width": {false, "medium"},
+	"outline-style": {false, "none"},
+	"outline-color": {false, "invert"},
+
 	"border-top-color":    {false, "currentcolor"},
 	"border-right-color":  {false, "currentcolor"},
 	"border-bottom-color": {false, "currentcolor"},
@@ -311,6 +324,7 @@ var shorthands = map[string]shorthand{
 	// The shorthands whose parts are told apart by type rather than position.
 	// They live in shorthand.go, with the reset rule explained there.
 	"border":        borderSides("top", "right", "bottom", "left"),
+	"outline":       {outlineShorthand, []string{"outline-width", "outline-style", "outline-color"}},
 	"border-top":    borderSides("top"),
 	"border-right":  borderSides("right"),
 	"border-bottom": borderSides("bottom"),

@@ -896,7 +896,11 @@ const wptEnv = "WPT_TESTS"
 // exactly against each other: clean +27, vacuous -27, failing unchanged at 416.
 // Two iframe tests still fail and always will; both are about the paint order of
 // a document inside the frame, and there is no document inside the frame.
-const wptCleanPassBaseline = 4488
+// §18.4's outline took it from 4488 to 4497, with vacuous down by the same nine
+// and failing unchanged. Fewer than the sixteen tests the breakdown listed
+// against the property, because several of those name a second unimplemented
+// property under the same rule and are still waiting on it.
+const wptCleanPassBaseline = 4497
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

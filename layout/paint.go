@@ -241,6 +241,7 @@ func Paint(root *Fragment) []Op {
 	p := &painter{colors: map[string]style.RGBA{}}
 	p.canvasBackground(root)
 	p.stackingContext(root)
+	p.outlines(root)
 	return p.ops
 }
 
@@ -924,6 +925,80 @@ func (p *painter) borders(f *Fragment) {
 		}
 		kind := parseBorderStyle(f.Box.Style["border-"+edge.name+"-style"])
 		p.paintEdge(edge.band, kind, colour, edge.side, edge.width)
+	}
+}
+
+// outlines paints CSS 2.1 §18.4's outlines, over everything else.
+//
+// It is a pass of its own because §E.2 makes it one: step 10, after all ten
+// layers of every stacking context, is where "the outlines of all elements" go.
+// That is not a detail of ordering — an outline is drawn *outside* its box, so
+// it lies over whatever is beside the box, and painting it with the box's own
+// border would put a later sibling's background on top of it.
+//
+// The traversal is the fragment tree rather than the stacking contexts, because
+// step 10 is one list in document order and not ten lists per context.
+func (p *painter) outlines(f *Fragment) {
+	if f == nil {
+		return
+	}
+	p.outline(f)
+	for _, c := range f.Children {
+		p.outlines(c)
+	}
+}
+
+// outline paints one box's ring.
+//
+// Four bands, like the border and for the same reason — a stroked path is
+// centred on itself and a CSS outline is not — but the arithmetic is the
+// simpler one: an outline has a single width, so the two horizontal bands run
+// the full width of the ring and the vertical ones fill what is between them.
+//
+// Every band is Overhang. The outline is by definition outside the box, so no
+// layout decision accounted for its position, and the overflow-page guardrail
+// must not read a two-pixel ring as a box leaving the paper.
+func (p *painter) outline(f *Fragment) {
+	w := f.Outline
+	if w <= 0 || f.Box == nil || isHidden(f.Box) {
+		return
+	}
+	colour, ok := p.color(f.Box, "outline-color")
+	if !ok || colour.A == 0 {
+		// "invert", or a colour that did not parse. The finding was raised in
+		// layout, where there was a recorder to raise it with.
+		return
+	}
+	kind := parseBorderStyle(f.Box.Style["outline-style"])
+	r := f.BorderRect
+	outer := Rect{X: r.X.Sub(w), Y: r.Y.Sub(w), W: r.W.Add(w).Add(w), H: r.H.Add(w).Add(w)}
+
+	bands := [4]struct {
+		band Rect
+		side side
+	}{
+		{Rect{outer.X, outer.Y, outer.W, w}, sideTop},
+		{Rect{r.Right(), r.Y, w, r.H}, sideRight},
+		{Rect{outer.X, r.Bottom(), outer.W, w}, sideBottom},
+		{Rect{outer.X, r.Y, w, r.H}, sideLeft},
+	}
+	// paintEdge is the border's, and a border's fills are not Overhang because
+	// layout accounted for every one of them. These are marked afterwards rather
+	// than by threading a flag through paintEdge, paintDashes and paint3D — the
+	// flag would be a property of the caller pretending to be a property of the
+	// edge, and every border call site would have to pass false.
+	first := len(p.ops)
+	for _, b := range bands {
+		if b.band.Empty() {
+			continue
+		}
+		p.paintEdge(b.band, kind, colour, b.side, w)
+	}
+	for i := first; i < len(p.ops); i++ {
+		if r, ok := p.ops[i].(FillRect); ok {
+			r.Overhang = true
+			p.ops[i] = r
+		}
 	}
 }
 
