@@ -1105,10 +1105,35 @@ func wptViewport() Size {
 //
 // The ops are returned rather than a canonical string because the comparison
 // resolves occlusion, and occlusion depends on paint order — see picture_test.go.
+// renderForCompare is renderForCompareDetail reduced to the one bit the ratchet
+// reads: a render is clean when nothing in it was unsupported and it drew
+// something.
 func renderForCompare(root, file string) (ops []Op, clean bool, err error) {
-	data, err := os.ReadFile(file)
+	ops, findings, blank, err := renderForCompareDetail(root, file)
 	if err != nil {
 		return nil, false, err
+	}
+	clean = !blank
+	for _, f := range findings {
+		if f.Unsupported() {
+			clean = false
+		}
+	}
+	return ops, clean, nil
+}
+
+// renderForCompareDetail renders one document of a pair and keeps everything it
+// had to say about it, rather than the single bit the ratchet reads.
+//
+// The findings are what the breakdown sweeps count — which elements went
+// unlaid, which properties went unapplied, which characters had no glyph — and
+// none of that is recoverable once they have been reduced to a bool. blank is
+// separate from them because a document that paints nothing is not clean for a
+// reason no finding states.
+func renderForCompareDetail(root, file string) (ops []Op, findings []Finding, blank bool, err error) {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return nil, nil, false, err
 	}
 	src := cdataRe.ReplaceAllString(string(data), "$1")
 	if ext := strings.ToLower(filepath.Ext(file)); ext == ".xht" || ext == ".xhtml" {
@@ -1143,7 +1168,7 @@ func renderForCompare(root, file string) (ops []Op, clean bool, err error) {
 	// notion of a base URL.
 	res, err := newSuiteResolver(root, filepath.Dir(file))
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	defer res.Close()
 
@@ -1163,31 +1188,20 @@ func renderForCompare(root, file string) (ops []Op, clean bool, err error) {
 	rec := NewRecorder(nil)
 	laid := Layout(built.Root, wptViewport(), built.Fonts, rec)
 
-	clean = true
-	for _, f := range built.Findings {
-		if f.Unsupported() {
-			clean = false
-		}
-	}
-	for _, f := range rec.Findings() {
-		if f.Unsupported() {
-			clean = false
-		}
-	}
+	findings = append(findings, built.Findings...)
+	findings = append(findings, rec.Findings()...)
 
 	ops = Paint(laid)
 	// A document that paints nothing cannot be evidence of anything. Two blank
 	// pages match, which is the purest form of the vacuous pass §7.1 warns
 	// about, and no amount of finding-counting detects it.
-	if normaliseOps(ops) == "" {
-		clean = false
-	}
+	blank = normaliseOps(ops) == ""
 	// A run set in a face whose glyphs are filled rectangles is those
 	// rectangles, and has to reach the comparison as such — a quarter of this
 	// suite draws its expected square with Ahem on one side and a background
 	// colour on the other. See blockglyph_test.go for the rule and for what it
 	// refuses.
-	return blockFills(ops), clean, nil
+	return blockFills(ops), findings, blank, nil
 }
 
 // suiteResolver serves a suite document the files it refers to, from anywhere
