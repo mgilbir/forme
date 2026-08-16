@@ -557,7 +557,12 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				// where the content ends.
 				avail := textWidth.Sub(lineEllipsis)
 				used := alignedWidth(runs, total)
-				if forced || next >= len(items) {
+				// A last line, in the sense §16.2 and §4.1.2 both use: the
+				// author ended it, or the content did. It is where the
+				// conditional hang applies, and it is the line justification
+				// leaves alone.
+				lastLine := forced || next >= len(items)
+				if lastLine {
 					used = style.Max(used, style.Min(total, avail))
 				}
 				// Which *side* it hangs off, which is not a second way of saying how
@@ -586,6 +591,18 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 						parent.Children[k].BorderRect.X =
 							parent.Children[k].BorderRect.X.Add(shift)
 					}
+				}
+				// Justification, after the alignment and not instead of it: the
+				// shift above put the line's start where "start" puts it, which
+				// is where a justified line begins too, and what is left is the
+				// slack between there and the other margin.
+				if !lastLine && alignmentOf(b, rtl) == alignJustify {
+					// A line with nowhere to put the slack is left where it is,
+					// and nothing is reported about it: CSS Text 3 §7.3 says a
+					// line with no expansion opportunity is aligned as start,
+					// so that *is* the conforming rendering.
+					justifyLine(line.Runs, parent.Children[atomicStart:],
+						shift.Add(used), avail.Sub(used))
 				}
 				// The inline boxes on this line, recorded now because the alignment
 				// has moved everything on it for the last time. The index is where
