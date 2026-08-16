@@ -462,10 +462,18 @@ func TestOneSourceIsOneImage(t *testing.T) {
 // cannot be used is represented by its children, and dropping the element threw
 // those away. Its data is still never fetched — see
 // TestObjectReportsItsBlockedData.
+//
+// <iframe> left for a third reason, and the sentence above about a box at the
+// wrong size is exactly why the others stay. An <svg>, a <video> and a <canvas>
+// take their size from content this engine does not have, so any box drawn for
+// one is a guess. An iframe does not: CSS 2.1 §10.3.2 gives a replaced element
+// with no intrinsic dimensions 300 by 150, and it took those numbers from this
+// element. The size is knowable without the browsing context, so the box is not
+// a guess and refusing to draw it was losing something real. See
+// TestAnIframeIsAReplacedBoxOfTheDefaultSize.
 func TestOtherReplacedElementsAreReported(t *testing.T) {
 	cases := map[string]string{
 		"svg":    `<svg width="100" height="100"><rect width="50" height="50"/></svg>`,
-		"iframe": `<iframe src="x.html" width="100"></iframe>`,
 		"video":  `<video src="x.mp4"></video>`,
 		"canvas": `<canvas width="100" height="100"></canvas>`,
 		"embed":  `<embed src="x.swf">`,
@@ -592,4 +600,80 @@ func TestReplacedZeroTentativeSizeUsesTheIntrinsicRatio(t *testing.T) {
 	w, h = contentSize(find(t, root, "i"))
 	px(t, "the used width", w, 100)
 	px(t, "a declared height a degenerate ratio cannot move", h, 50)
+}
+
+// An iframe is a replaced element whose box does not depend on the document
+// inside it. These pin the two halves apart: the box is drawn, and the document
+// is reported missing only when there was one to miss.
+
+// TestAnIframeIsAReplacedBoxOfTheDefaultSize is CSS 2.1 §10.3.2's last row —
+// no intrinsic width, no intrinsic height, no ratio — and the numbers in it are
+// the ones the specification took from this element.
+func TestAnIframeIsAReplacedBoxOfTheDefaultSize(t *testing.T) {
+	root := replacedLayout(t, 500, `<div><iframe id="i"></iframe></div>`, noDefaults)
+	w, h := contentSize(find(t, root, "i"))
+	px(t, "the used width", w, 300)
+	px(t, "the used height", h, 150)
+}
+
+// TestAnIframeTakesItsDeclaredSize: the default is a fallback and not a fixed
+// size, so a declaration replaces it the way it does for any replaced element.
+func TestAnIframeTakesItsDeclaredSize(t *testing.T) {
+	root := replacedLayout(t, 500, `<div><iframe id="i"></iframe></div>`, noDefaults,
+		`#i { width: 120px; height: 45px }`)
+	w, h := contentSize(find(t, root, "i"))
+	px(t, "the used width", w, 120)
+	px(t, "the used height", h, 45)
+}
+
+// TestAnEmptyIframeReportsNothing.
+//
+// A browser handed "<iframe>" with no src shows an empty frame of the default
+// size, which is what this draws, so nothing is missing and there is nothing to
+// say. Saying it anyway is not a harmless extra: a finding means a reader cannot
+// trust the page, and twenty-seven reftests drew exactly the right picture and
+// were counted as tainted for it.
+func TestAnEmptyIframeReportsNothing(t *testing.T) {
+	built := Build(Input{HTML: `<div><iframe></iframe></div>`})
+	for _, f := range built.Findings {
+		t.Errorf("an iframe naming no document reported %s", f.Error())
+	}
+}
+
+// TestAnIframeWithADocumentReportsIt is the half that is a real limitation: a
+// frame that names a document is a frame a reader would have seen something in.
+func TestAnIframeWithADocumentReportsIt(t *testing.T) {
+	for _, markup := range []string{
+		`<iframe src="inner.html"></iframe>`,
+		`<iframe srcdoc="<p>hello</p>"></iframe>`,
+	} {
+		built := Build(Input{HTML: `<div>` + markup + `</div>`})
+		var blocked bool
+		for _, f := range built.Findings {
+			if f.Rule == RuleResourceBlocked {
+				blocked = true
+			}
+		}
+		if !blocked {
+			t.Errorf("%s reported no blocked resource: %v", markup, built.Findings)
+		}
+		// And the box is still there. The document is missing; the frame is not.
+		var found bool
+		var walk func(*Box)
+		walk = func(b *Box) {
+			if b == nil {
+				return
+			}
+			if b.Element != nil && strings.EqualFold(b.Element.Name, "iframe") {
+				found = true
+			}
+			for _, c := range b.Children {
+				walk(c)
+			}
+		}
+		walk(built.Root)
+		if !found {
+			t.Errorf("%s left no box; the frame is on the page even when the document is not", markup)
+		}
+	}
 }

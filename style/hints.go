@@ -54,6 +54,16 @@ const hintOrder = -1
 // to mean anything to.
 var hintedAttributes = map[string]map[string]string{
 	"img": {"width": "width", "height": "height"},
+	// <iframe width> and <iframe height> are the same two dimension properties,
+	// and they arrived the same way <table width> did: the element became one
+	// this engine lays out, so its attributes acquired something to mean.
+	//
+	// They matter more here than on an <img>, because an iframe has no
+	// intrinsic size for them to override — without them the box is CSS 2.1
+	// §10.3.2's 300 by 150 and nothing else can move it. Eighteen of the
+	// suite's reftests write <iframe height="50%"> and check the result against
+	// a div of the height that resolves to.
+	"iframe": {"width": "width", "height": "height"},
 	// The HTML Standard's table rendering section maps the width attribute to
 	// the width property as a "dimension property", which is the same syntax
 	// <img width> takes and so the same reader below: a bare number is pixels
