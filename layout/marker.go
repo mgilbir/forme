@@ -64,7 +64,16 @@ func (l *layouter) markerFor(b *Box, frag *Fragment) *Marker {
 	width := l.br.Measure(face, text, size)
 	lineHeight := l.lineHeight(b)
 	baseline := frag.Border.Top.Add(frag.Padding.Top).Add(l.baselineOf(b, lineHeight))
-	inner := frag.Border.Left.Add(frag.Padding.Left)
+	// Where the item's *first line* starts, which is not where its content box
+	// does when a float is in the way.
+	//
+	// §12.5.1 leaves the marker box's position unspecified and every renderer
+	// puts it before the first line box, which is the only answer that keeps a
+	// bullet next to the words it belongs to. A float shortens that line without
+	// moving the box around it — a block's border box is not displaced by a
+	// float, only the lines inside it are — so a marker placed from the content
+	// edge is left behind under the float, an inch away from its own text.
+	inner := frag.Border.Left.Add(frag.Padding.Left).Add(firstLineStart(frag))
 
 	m := &Marker{
 		Text: text, Face: face, Size: size,
@@ -357,4 +366,20 @@ func roman(index int) string {
 		}
 	}
 	return b.String()
+}
+
+// firstLineStart is how far into the content box the item's first line begins,
+// which is what a float on that side pushes along.
+//
+// Zero when there is no line at all, and that is not the same as "no float": an
+// item with an outside marker and no content of its own has no line box to be
+// shortened, so there is nothing here that knows about the float. See the note
+// on markerNeedsALine — the two are the same missing line box seen from two
+// sides, and this half is the one that can be fixed without deciding how tall an
+// empty list item is.
+func firstLineStart(frag *Fragment) style.Unit {
+	if frag == nil || len(frag.Lines) == 0 {
+		return 0
+	}
+	return frag.Lines[0].Rect.X
 }
