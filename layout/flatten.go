@@ -519,9 +519,11 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	// would be this engine calling its own correct output a failure. The runs
 	// are the same ones the items below are built from, so what is checked is
 	// exactly what is drawn.
-	for _, run := range l.faceRunsFor(b, face, b.Text) {
+	runsOfBox := l.faceRunsFor(b, face, b.Text)
+	for _, run := range runsOfBox {
 		l.checkGlyphs(b, run.Face, run.Text)
 	}
+	l.reportWhollySubstituted(b, face, runsOfBox)
 
 	size := b.FontSize
 	ws := whiteSpaceFor(b.Style)

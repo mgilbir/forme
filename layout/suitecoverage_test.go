@@ -42,6 +42,8 @@ func TestTheFallbackLibraryCoversWhatTheSuiteWrites(t *testing.T) {
 		{"Coptic", "ϢϤϦϨϪϬϮ"},
 		{"Deseret", "𐐀𐐁𐐨𐐩"},
 		{"Number Forms", "ⅬⅭⅮⅯⅼⅽⅾⅿ"},
+		// Only the last resort has these, which is what it is for.
+		{"Regional indicators", "🇮🇱"},
 	} {
 		// Per character, because that is how the fallback is asked: a face that
 		// covers one block covers no other, and asking for the whole string at
@@ -68,6 +70,47 @@ func TestTheStandardFacesStillLackThem(t *testing.T) {
 		if _, missing := face.ShapeGlyphs(string(r)); missing == 0 {
 			t.Errorf("the standard serif face has a glyph for U+%04X, so the "+
 				"fallback library is not what puts it on the page", r)
+		}
+	}
+}
+
+// TestTheLastResortLeavesNothingUnset.
+//
+// The library ends in a face that covers almost everything, so the question it
+// answers is not "which script is this" but "is there anything at all this
+// document would have to set as a space". There should not be, and a character
+// nobody thought to add a face for is exactly the case that used to slip
+// through: it drew nothing, said "no glyph", and the page was missing a letter.
+//
+// The characters below are deliberately obscure and from four different planes.
+// None of them is in the suite; that is the point — the guarantee is meant to
+// hold for a document nobody has seen.
+func TestTheLastResortLeavesNothingUnset(t *testing.T) {
+	if notoDir(t) == "" {
+		return
+	}
+	set, ok := fontSetForWPT().(FallbackFontSet)
+	if !ok {
+		t.Fatal("the suite's font set offers no fallback at all")
+	}
+	for _, c := range []struct {
+		what string
+		r    rune
+	}{
+		{"Runic", 'ᚠ'},
+		{"Cherokee", 'Ꭰ'},
+		{"Thaana", 'ހ'},
+		{"Syriac", 'ܐ'},
+		{"Braille", '⠁'},
+		{"Linear B", '𐀀'},
+		{"Gothic", '𐌰'},
+		{"Old Italic", '𐌀'},
+		{"Musical symbols", '𝄞'},
+		{"Mathematical alphanumerics", '𝔄'},
+	} {
+		if _, found := set.FaceFor(string(c.r), false, false); !found {
+			t.Errorf("%s: nothing in the library can set %q (U+%04X), so a "+
+				"document using it would draw a space", c.what, string(c.r), c.r)
 		}
 	}
 }

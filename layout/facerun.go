@@ -125,3 +125,52 @@ func (l *layouter) faceRunsFor(b *Box, primary *shape.Face, text string) []faceR
 	}
 	return runs
 }
+
+// reportWhollySubstituted names the case the font-fallback finding is for: a box
+// whose own family set *none* of its text.
+//
+// That is a different thing from a fallback, and only one of the two is worth a
+// caller's attention. A word of Hebrew in an English sentence is set in a Hebrew
+// face because that is what fallback *is* — every renderer does it, the page is
+// right, and the English around it keeps the metrics the author asked for. A
+// paragraph the family contributed nothing to is a paragraph set in a font
+// nobody chose, and for a caller who has to embed one that is the thing to know:
+// the family they named cannot do this job.
+//
+// The distinction only became available when the fallback started working per
+// run. Before, the whole box moved whenever one character was missing, so the
+// two cases were the same event and the question — can one face set the whole of
+// this text — could not tell them apart. It fired on the sentence with one alef
+// in it and said the metrics and the line breaks would differ, which was true of
+// the whole paragraph precisely because the whole paragraph had been moved.
+//
+// It is also what makes a broad fallback face safe to have. A face covering most
+// of Unicode can set the whole of almost any text, so the old question found an
+// answer almost every time it was asked: adding GNU Unifont as a last resort
+// reported a substitution on eighty-eight documents that had nothing wrong with
+// them. Asking which characters actually moved reports none of those.
+func (l *layouter) reportWhollySubstituted(b *Box, primary *shape.Face, runs []faceRun) {
+	if len(runs) == 0 || primary == nil {
+		return
+	}
+	var alt *shape.Face
+	for _, r := range runs {
+		if r.Face == primary {
+			return
+		}
+		if alt == nil {
+			alt = r.Face
+		}
+	}
+	if alt == nil || alt == primary {
+		return
+	}
+	l.rec.ReportDetail(Finding{
+		Rule: RuleFontFallback,
+		Message: "no face for " + quoteValue(b.Style["font-family"]) +
+			" could set any of this text, so " + quoteValue(alt.Name()) +
+			" was used for it; the metrics and the line breaks will differ",
+		Path:     PathOf(b.Element),
+		Property: "font-family",
+	})
+}

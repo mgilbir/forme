@@ -272,28 +272,23 @@ func TestOneMissingCharacterDoesNotMoveTheWholeBox(t *testing.T) {
 // TestTheFamilyFaceIsKeptEvenWhenAnotherCouldSetEverything.
 //
 // The sharpest case, and the one the old code got most wrong: a face that can
-// set the *whole* paragraph is exactly the face the whole-box fallback chose,
-// so a document whose family lacked one character was set entirely in it. The
-// report still names that face — a caller wants to know its family could not do
-// the job — but the page keeps the family for every character the family has.
+// set the *whole* paragraph is exactly the face the whole-box fallback chose, so
+// a document whose family lacked one character was set entirely in it.
+//
+// It is also the shape a broad last-resort face makes common rather than rare —
+// a face covering most of Unicode can set almost any whole paragraph, so almost
+// every document with one foreign character in it was this case. What is
+// reported about it is TestAFallbackForOneWordIsNotReported's subject; what is
+// *drawn* is this one's.
 func TestTheFamilyFaceIsKeptEvenWhenAnotherCouldSetEverything(t *testing.T) {
 	latin := loadNoto(t, "NotoSans-Regular.ttf")
 	set := oneFaceSet{fallback: latin, standard: StandardFonts()}
 	// NotoSans can set all of this and Helvetica cannot: U+0250 is Latin
 	// Extended-B, which the standard fourteen do not carry.
-	root, findings := layoutWith(t, set,
+	root, _ := layoutWith(t, set,
 		`<p id="p">the quick ɐ fox</p>`,
 		`#p { font-family: Helvetica; font-size: 20px }`)
 
-	var said bool
-	for _, f := range findings {
-		if f.Rule == RuleFontFallback {
-			said = true
-		}
-	}
-	if !said {
-		t.Errorf("nothing reported that the family could not set the text: %v", findings)
-	}
 	for _, r := range drawnRuns(root) {
 		if r.Text == "ɐ" {
 			continue
@@ -303,5 +298,51 @@ func TestTheFamilyFaceIsKeptEvenWhenAnotherCouldSetEverything(t *testing.T) {
 				"could set the whole paragraph took the whole paragraph",
 				r.Text, r.Face)
 		}
+	}
+}
+
+// TestAFallbackForOneWordIsNotReported.
+//
+// The finding is about a family that could not do the job, not about a fallback
+// happening. A word of another script inside a sentence is set in another face
+// because that is what fallback *is*: the page is right, and the text around it
+// keeps the metrics the author asked for.
+//
+// This matters more than it reads, because the library ends in a face that can
+// set almost any *whole* paragraph. A report keyed on "could one face have set
+// all of this" fires on every document with one foreign character in it — which
+// is what it did, on eighty-eight of the suite's, until it was keyed on which
+// characters actually moved.
+func TestAFallbackForOneWordIsNotReported(t *testing.T) {
+	hebrew := loadHebrew(t)
+	set := oneFaceSet{fallback: hebrew, standard: StandardFonts()}
+	_, findings := layoutWith(t, set,
+		`<p id="p">the quick א fox</p>`,
+		`#p { font-family: Helvetica; font-size: 20px }`)
+	for _, f := range findings {
+		if f.Rule == RuleFontFallback {
+			t.Errorf("one word of Hebrew in an English sentence reported %s", f.Error())
+		}
+	}
+}
+
+// TestAFamilyThatSetsNothingIsReported is the other half, and the case the
+// finding exists for: a caller choosing a font to embed needs to know the family
+// it named cannot set the paragraph at all.
+func TestAFamilyThatSetsNothingIsReported(t *testing.T) {
+	hebrew := loadHebrew(t)
+	set := oneFaceSet{fallback: hebrew, standard: StandardFonts()}
+	_, findings := layoutWith(t, set,
+		`<p id="p">שלום</p>`,
+		`#p { font-family: Helvetica; font-size: 20px }`)
+	var said bool
+	for _, f := range findings {
+		if f.Rule == RuleFontFallback {
+			said = true
+		}
+	}
+	if !said {
+		t.Errorf("a paragraph the family set none of was substituted silently: %v",
+			findings)
 	}
 }

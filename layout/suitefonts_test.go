@@ -112,6 +112,8 @@ func notoFaces() []*shape.Face {
 		"NotoSansCoptic-Regular.ttf",
 		"NotoSansDeseret-Regular.ttf",
 		"NotoSansSymbols-Regular.ttf",
+		"Unifont-Regular.otf",
+		"UnifontUpper-Regular.otf",
 	} {
 		data, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
