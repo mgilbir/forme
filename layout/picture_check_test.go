@@ -428,10 +428,19 @@ func TestPictureJoinsAbuttingRuns(t *testing.T) {
 	}
 	// And with different letter-spacing, which changes where every glyph after
 	// the first one lands.
-	spaced := picFacedText(face, "c", end, 40, black)
+	//
+	// The run has to carry *two* glyphs for that sentence to be true of it. A
+	// one-glyph run's letter-spacing is spent after the only glyph it has, so
+	// nothing on the page moves and the two display lists really are the same
+	// picture — the comparison was calling them different on a property rather
+	// than on a mark, and it happened to be right about the pairs it was shown.
+	// With a second glyph the spacing lands between them and there is something
+	// to see.
+	spaced := picFacedText(face, "cd", end, 40, black)
 	spaced.CharSpacing = picPx(4)
-	if pictureEqual([]Op{two[0], spaced}, one, picPage) {
-		t.Error("two runs with different letter-spacing were joined")
+	if pictureEqual([]Op{two[0], spaced}, []Op{picFacedText(face, "bcd", 20, 40, black)}, picPage) {
+		t.Error("two runs with different letter-spacing compared equal; the " +
+			"second glyph of the spaced run is 4px further on")
 	}
 	// Letter-spacing that both runs share is part of the advance and not a
 	// reason to refuse: "b" with 4px after it ends 4px further on, and the run

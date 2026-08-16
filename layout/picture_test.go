@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
@@ -592,7 +593,10 @@ func texts(ops []Op, under []coloured) []textMark {
 	var marking []DrawText
 	for i, op := range ops {
 		v, ok := op.(DrawText)
-		if !ok || !leavesInk(v.Text) {
+		if !ok {
+			continue
+		}
+		if !leavesInk(v.Text) {
 			// A space marks no paper. It is drawn so that text extraction
 			// works, and two documents may legitimately put a different number
 			// of them between the same visible glyphs.
@@ -605,6 +609,18 @@ func texts(ops []Op, under []coloured) []textMark {
 			// counting one as a mark ruled it different from a reference that
 			// achieved the same picture with markup. TrimSpace does not see them:
 			// they are format characters, not white space.
+			//
+			// It is *kept* rather than dropped, and that is the whole of what
+			// lets two documents batch their runs differently. Dropping it did
+			// not remove its advance from the page, so the run before it stopped
+			// abutting the run after it and joinRuns cut the chain there: a
+			// reference writing "a&nbsp;b" as one run and a test writing "a",
+			// " ", "b" under white-space: pre came out as one mark against two,
+			// over a page that is the same five sixteenths of ink. What keeps it
+			// from being counted as ink is glyphMarks, which skips the glyphs of
+			// a character that marks no paper — and skips them *by position*, so
+			// what is left still says where every visible glyph is.
+			marking = append(marking, v)
 			continue
 		}
 		if invisibleInk(v, under) {
@@ -623,9 +639,9 @@ func texts(ops []Op, under []coloured) []textMark {
 	}
 
 	var out []textMark
-	for _, group := range joinRuns(marking) {
-		v := group[0]
-		what := fmt.Sprintf("text %s size %s", groupGlyphs(group), num(v.Size))
+	for _, v := range marking {
+		what := fmt.Sprintf("text in %s size %s %s",
+			faceKey(v.Face), num(v.Size), colourKey(v.Color))
 		if v.Clip.Active {
 			// A run §11.1 cut is a different mark from the same run drawn
 			// whole, and there is no way to say which glyphs survived without a
@@ -639,7 +655,7 @@ func texts(ops []Op, under []coloured) []textMark {
 			// "overflow: hidden" box. See DrawText.Clip.
 			what += " clipped to " + rectKey(v.Clip.Rect)
 		}
-		out = append(out, textMark{what: what, x: v.At.X, y: v.At.Y})
+		out = append(out, glyphMarks(v, what)...)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].what != out[j].what {
@@ -651,6 +667,78 @@ func texts(ops []Op, under []coloured) []textMark {
 		return out[i].y < out[j].y
 	})
 	return out
+}
+
+// glyphMarks is one mark per visible glyph of a joined group, each carrying its
+// own position.
+//
+// A mark per *group* was the fault this replaces. The group's identity was the
+// concatenation of its glyphs and its position was the first one's, so a glyph
+// moving inside the group was invisible — and any rule that let two documents
+// batch runs differently, or ignored the blanks between them, made "a b" and
+// "ab" the same mark at the same place. They are not the same page: the "b" is a
+// space's width apart. Every glyph carrying its own position is what makes the
+// relaxation safe, and TestPictureSeesAGlyphMovedInsideARun is what holds it.
+//
+// The blanks are skipped here rather than earlier because their advance is
+// needed: the pen moves over a space whether or not the space is ink, and the
+// glyph after it is where it is because of that.
+func glyphMarks(v DrawText, what string) []textMark {
+	if v.Face == nil {
+		// Nothing the engine draws is faceless; the hand-built runs in
+		// picture_check_test.go are. Without a face there are no glyphs and no
+		// advances, so the run is one mark carrying its string, as it was.
+		return []textMark{{what: what + " " + fmt.Sprintf("%q", v.Text),
+			x: v.At.X, y: v.At.Y}}
+	}
+	text := ShapedText(v)
+	glyphs, _ := v.Face.ShapeGlyphs(text)
+	var out []textMark
+	x := v.At.X
+	for _, g := range glyphs {
+		adv, _ := style.FromPx(g.XAdvance * v.Size.Px() / 1000)
+		if !blankCluster(text, g.Cluster) {
+			off, _ := style.FromPx(g.XOffset * v.Size.Px() / 1000)
+			out = append(out, textMark{
+				what: fmt.Sprintf("%s glyph %d", what, g.GID),
+				x:    x.Add(off), y: v.At.Y,
+			})
+		}
+		x = x.Add(adv).Add(v.CharSpacing)
+	}
+	return out
+}
+
+// colourKey is the ink's colour, which is part of what a mark *is*: the same
+// glyph in the same place in red and in black are two different pages, and
+// nothing about a glyph id says which.
+func colourKey(c style.RGBA) string {
+	return fmt.Sprintf("rgba(%g,%g,%g,%g)", c.R, c.G, c.B, c.A)
+}
+
+// faceKey identifies the face a glyph id belongs to, because a glyph id means
+// nothing without one: glyph 42 of one font and glyph 42 of another are two
+// different shapes, and comparing them by number alone would call any two
+// documents that used different fonts identical.
+func faceKey(f *shape.Face) string {
+	if f == nil {
+		return "no face"
+	}
+	return f.Name()
+}
+
+// blankCluster reports whether the characters a glyph came from all mark no
+// paper, so the glyph is a gap rather than ink.
+//
+// The cluster is a byte offset into the *shaped* text, which for a right-to-left
+// run carries an override character in front of it — so the string indexed here
+// has to be the one that was shaped, not the run's own Text.
+func blankCluster(text string, cluster int) bool {
+	if cluster < 0 || cluster >= len(text) {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(text[cluster:])
+	return unicode.IsSpace(r) || marksNoPaper(r) || isDefaultIgnorable(r)
 }
 
 // Text that is buried, which is the other half of resolving occlusion.

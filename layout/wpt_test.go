@@ -933,7 +933,12 @@ const wptEnv = "WPT_TESTS"
 // one and the rest of the change is not in it: glyph-missing is now reported by
 // *no document in the suite*, because there is no longer a character in the
 // corpus that nothing can set.
-const wptCleanPassBaseline = 4613
+// Comparing text per glyph rather than per run of abutting runs took this from
+// 4613 to 4623, and the failures 408 to 397 — thirteen pairs that draw the same
+// page stopped being called different, and two that draw *different* pages
+// started being called different, which is the half worth reading twice. See
+// glyphMarks.
+const wptCleanPassBaseline = 4623
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
