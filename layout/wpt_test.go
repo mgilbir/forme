@@ -938,7 +938,12 @@ const wptEnv = "WPT_TESTS"
 // page stopped being called different, and two that draw *different* pages
 // started being called different, which is the half worth reading twice. See
 // glyphMarks.
-const wptCleanPassBaseline = 4623
+// Dropping an invalid declaration instead of resolving it took this to 4624,
+// which is one test — colors-007, the one the per-glyph comparison had just
+// exposed. The number is small and the fault was not: an invalid declaration
+// stood in front of a valid one and every page it happened on came out in the
+// initial value.
+const wptCleanPassBaseline = 4624
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

@@ -20,6 +20,13 @@ import (
 // their own rule — "wins", "loses" — rather than plausible ones. A test whose
 // expected value is "red" passes just as well when the cascade picked the wrong
 // red.
+//
+// They ride on font-family rather than on color, and that is not cosmetic: a
+// colour property drops a declaration whose value is not a colour, so "color:
+// wins" is thrown away before the cascade ever orders it and every test here
+// would be asking which of two declarations that are not there won. A font
+// family is a free ident, so "wins" is a legitimate value and the sentinel
+// survives. See TestAnInvalidColourDropsTheDeclaration for the rule.
 
 // styleOf applies stylesheets to a document and returns one element's computed
 // value for a property.
@@ -83,13 +90,13 @@ const cascadeDoc = `<div id="outer" class="c"><p id="target" class="c">x</p></di
 func TestCascadeOrderOfAppearance(t *testing.T) {
 	doc := parseDoc(t, cascadeDoc)
 	cases := map[string]string{
-		"p { color: loses } p { color: wins }":             "wins",
-		"p { color: loses; color: wins }":                  "wins",
-		".c { color: loses } .c { color: wins }":           "wins",
-		"#target { color: loses } #target { color: wins }": "wins",
+		"p { font-family: loses } p { font-family: wins }":             "wins",
+		"p { font-family: loses; font-family: wins }":                  "wins",
+		".c { font-family: loses } .c { font-family: wins }":           "wins",
+		"#target { font-family: loses } #target { font-family: wins }": "wins",
 	}
 	for src, want := range cases {
-		if got := styleOf(t, doc, []Sheet{author(t, src)}, "#target", "color"); got != want {
+		if got := styleOf(t, doc, []Sheet{author(t, src)}, "#target", "font-family"); got != want {
 			t.Errorf("%q\n  gave %q, want %q", src, got, want)
 		}
 	}
@@ -97,9 +104,9 @@ func TestCascadeOrderOfAppearance(t *testing.T) {
 	// Across sheets, later still wins — the order is one sequence over the whole
 	// input, not an index within a sheet.
 	got := styleOf(t, doc, []Sheet{
-		author(t, "p { color: loses }"),
-		author(t, "p { color: wins }"),
-	}, "#target", "color")
+		author(t, "p { font-family: loses }"),
+		author(t, "p { font-family: wins }"),
+	}, "#target", "font-family")
 	if got != "wins" {
 		t.Errorf("across two sheets got %q, want wins", got)
 	}
@@ -184,22 +191,22 @@ func TestNegativeValueDropsTheDeclaration(t *testing.T) {
 func TestCascadeSpecificity(t *testing.T) {
 	doc := parseDoc(t, cascadeDoc)
 	cases := map[string]string{
-		"#target { color: wins } p { color: loses }":        "wins",
-		"p { color: loses } #target { color: wins }":        "wins",
-		".c { color: wins } p { color: loses }":             "wins",
-		"p.c { color: wins } .c { color: loses }":           "wins",
-		"div p { color: wins } p { color: loses }":          "wins",
-		"#target { color: wins } .c.c.c.c { color: loses }": "wins",
+		"#target { font-family: wins } p { font-family: loses }":        "wins",
+		"p { font-family: loses } #target { font-family: wins }":        "wins",
+		".c { font-family: wins } p { font-family: loses }":             "wins",
+		"p.c { font-family: wins } .c { font-family: loses }":           "wins",
+		"div p { font-family: wins } p { font-family: loses }":          "wins",
+		"#target { font-family: wins } .c.c.c.c { font-family: loses }": "wins",
 		// The universal selector adds nothing, so a type selector beats it.
-		"p { color: wins } * { color: loses }": "wins",
+		"p { font-family: wins } * { font-family: loses }": "wins",
 		// :where() contributes nothing, so its argument does not raise the
 		// weight — this is the whole point of :where().
-		"p { color: wins } :where(#target) { color: loses }": "wins",
+		"p { font-family: wins } :where(#target) { font-family: loses }": "wins",
 		// :is() does contribute its argument's specificity.
-		":is(#target) { color: wins } p { color: loses }": "wins",
+		":is(#target) { font-family: wins } p { font-family: loses }": "wins",
 	}
 	for src, want := range cases {
-		if got := styleOf(t, doc, []Sheet{author(t, src)}, "#target", "color"); got != want {
+		if got := styleOf(t, doc, []Sheet{author(t, src)}, "#target", "font-family"); got != want {
 			t.Errorf("%q\n  gave %q, want %q", src, got, want)
 		}
 	}
@@ -213,8 +220,8 @@ func TestCascadeSpecificityOfTheMatchingSelector(t *testing.T) {
 	// The first rule matches through "p", which is (0,0,1), so the second rule's
 	// ".c" at (0,1,0) beats it. Taking "#nomatch" from the list would give the
 	// first rule (1,0,0) and the wrong answer.
-	src := "p, #nomatch { color: loses } .c { color: wins }"
-	if got := styleOf(t, doc, []Sheet{author(t, src)}, "#target", "color"); got != "wins" {
+	src := "p, #nomatch { font-family: loses } .c { font-family: wins }"
+	if got := styleOf(t, doc, []Sheet{author(t, src)}, "#target", "font-family"); got != "wins" {
 		t.Errorf("%q gave %q, want wins — the rule applied with a specificity "+
 			"from a selector that did not match", src, got)
 	}
@@ -235,36 +242,36 @@ func TestCascadeOriginAndImportance(t *testing.T) {
 		{
 			"author beats user agent",
 			[]Sheet{
-				sheet(t, OriginUserAgent, "p { color: loses }"),
-				sheet(t, OriginAuthor, "p { color: wins }"),
+				sheet(t, OriginUserAgent, "p { font-family: loses }"),
+				sheet(t, OriginAuthor, "p { font-family: wins }"),
 			}, "wins",
 		},
 		{
 			"author beats user agent even when less specific",
 			[]Sheet{
-				sheet(t, OriginUserAgent, "#target { color: loses }"),
-				sheet(t, OriginAuthor, "p { color: wins }"),
+				sheet(t, OriginUserAgent, "#target { font-family: loses }"),
+				sheet(t, OriginAuthor, "p { font-family: wins }"),
 			}, "wins",
 		},
 		{
 			"user beats user agent",
 			[]Sheet{
-				sheet(t, OriginUserAgent, "p { color: loses }"),
-				sheet(t, OriginUser, "p { color: wins }"),
+				sheet(t, OriginUserAgent, "p { font-family: loses }"),
+				sheet(t, OriginUser, "p { font-family: wins }"),
 			}, "wins",
 		},
 		{
 			"author beats user",
 			[]Sheet{
-				sheet(t, OriginUser, "p { color: loses }"),
-				sheet(t, OriginAuthor, "p { color: wins }"),
+				sheet(t, OriginUser, "p { font-family: loses }"),
+				sheet(t, OriginAuthor, "p { font-family: wins }"),
 			}, "wins",
 		},
 		{
 			"important author beats ordinary author, however specific",
 			[]Sheet{
-				sheet(t, OriginAuthor, "p { color: wins !important }"),
-				sheet(t, OriginAuthor, "#target { color: loses }"),
+				sheet(t, OriginAuthor, "p { font-family: wins !important }"),
+				sheet(t, OriginAuthor, "#target { font-family: loses }"),
 			}, "wins",
 		},
 		{
@@ -272,34 +279,34 @@ func TestCascadeOriginAndImportance(t *testing.T) {
 			// one, which is the reverse of the ordinary order.
 			"important user beats important author",
 			[]Sheet{
-				sheet(t, OriginAuthor, "p { color: loses !important }"),
-				sheet(t, OriginUser, "p { color: wins !important }"),
+				sheet(t, OriginAuthor, "p { font-family: loses !important }"),
+				sheet(t, OriginUser, "p { font-family: wins !important }"),
 			}, "wins",
 		},
 		{
 			"important user agent beats important user",
 			[]Sheet{
-				sheet(t, OriginUser, "p { color: loses !important }"),
-				sheet(t, OriginUserAgent, "p { color: wins !important }"),
+				sheet(t, OriginUser, "p { font-family: loses !important }"),
+				sheet(t, OriginUserAgent, "p { font-family: wins !important }"),
 			}, "wins",
 		},
 		{
 			"important user agent beats important author",
 			[]Sheet{
-				sheet(t, OriginAuthor, "p { color: loses !important }"),
-				sheet(t, OriginUserAgent, "p { color: wins !important }"),
+				sheet(t, OriginAuthor, "p { font-family: loses !important }"),
+				sheet(t, OriginUserAgent, "p { font-family: wins !important }"),
 			}, "wins",
 		},
 		{
 			"any important beats any ordinary",
 			[]Sheet{
-				sheet(t, OriginUserAgent, "p { color: wins !important }"),
-				sheet(t, OriginAuthor, "#target { color: loses }"),
+				sheet(t, OriginUserAgent, "p { font-family: wins !important }"),
+				sheet(t, OriginAuthor, "#target { font-family: loses }"),
 			}, "wins",
 		},
 	}
 	for _, tc := range cases {
-		if got := styleOf(t, doc, tc.sheets, "#target", "color"); got != tc.want {
+		if got := styleOf(t, doc, tc.sheets, "#target", "font-family"); got != tc.want {
 			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
 		}
 	}
@@ -309,14 +316,14 @@ func TestCascadeOriginAndImportance(t *testing.T) {
 // rule whatever its specificity, and below an important one.
 func TestInlineStyle(t *testing.T) {
 	doc := parseDoc(t,
-		`<div id="outer"><p id="target" style="color: inline">x</p></div>`)
+		`<div id="outer"><p id="target" style="font-family: inline">x</p></div>`)
 
-	if got := styleOf(t, doc, []Sheet{author(t, "#target { color: loses }")},
-		"#target", "color"); got != "inline" {
+	if got := styleOf(t, doc, []Sheet{author(t, "#target { font-family: loses }")},
+		"#target", "font-family"); got != "inline" {
 		t.Errorf("an identifier selector beat a style attribute: got %q", got)
 	}
-	if got := styleOf(t, doc, []Sheet{author(t, "p { color: wins !important }")},
-		"#target", "color"); got != "wins" {
+	if got := styleOf(t, doc, []Sheet{author(t, "p { font-family: wins !important }")},
+		"#target", "font-family"); got != "wins" {
 		t.Errorf("a style attribute beat an important rule: got %q", got)
 	}
 }
@@ -326,10 +333,10 @@ func TestInlineStyle(t *testing.T) {
 // declaration, and so is invisible in the stylesheet.
 func TestInheritance(t *testing.T) {
 	doc := parseDoc(t, `<div id="outer"><p id="target">x</p></div>`)
-	sheets := []Sheet{author(t, "#outer { color: passed; margin-top: 5px }")}
+	sheets := []Sheet{author(t, "#outer { font-family: passed; margin-top: 5px }")}
 
-	if got := styleOf(t, doc, sheets, "#target", "color"); got != "passed" {
-		t.Errorf("color did not inherit: got %q", got)
+	if got := styleOf(t, doc, sheets, "#target", "font-family"); got != "passed" {
+		t.Errorf("font-family did not inherit: got %q", got)
 	}
 	// margin-top does not inherit, so the child has the initial value.
 	if got := styleOf(t, doc, sheets, "#target", "margin-top"); got != "0" {
@@ -366,13 +373,13 @@ func TestInitialValues(t *testing.T) {
 func TestWideKeywords(t *testing.T) {
 	doc := parseDoc(t, `<div id="outer"><p id="target">x</p></div>`)
 
-	base := "#outer { color: fromparent; margin-top: 9px } " +
-		"#target { color: own; margin-top: 1px }"
+	base := "#outer { font-family: fromparent; margin-top: 9px } " +
+		"#target { font-family: own; margin-top: 1px }"
 
 	cases := []struct{ decl, property, want string }{
-		{"color: inherit", "color", "fromparent"},
-		{"color: initial", "color", "black"},
-		{"color: unset", "color", "fromparent"}, // color inherits
+		{"font-family: inherit", "font-family", "fromparent"},
+		{"font-family: initial", "font-family", "serif"},
+		{"font-family: unset", "font-family", "fromparent"}, // font-family inherits
 		{"margin-top: inherit", "margin-top", "9px"},
 		{"margin-top: initial", "margin-top", "0"},
 		{"margin-top: unset", "margin-top", "0"}, // margin does not inherit
@@ -457,7 +464,7 @@ func TestShorthandWithAWideKeyword(t *testing.T) {
 // does not act on, and a page where one was dropped is plausible and wrong.
 func TestUnsupportedPropertyIsReported(t *testing.T) {
 	doc := parseDoc(t, "<p id=\"target\">x</p>")
-	got := Apply(doc, []Sheet{author(t, "p { flex-wrap: wrap; color: kept }")})
+	got := Apply(doc, []Sheet{author(t, "p { flex-wrap: wrap; font-family: kept }")})
 
 	var found *Finding
 	for i := range got.Findings {
@@ -473,8 +480,8 @@ func TestUnsupportedPropertyIsReported(t *testing.T) {
 	}
 	// The declaration beside it still applied, so one unknown property does not
 	// cost the rule.
-	if v := got.Styles[elementFor(t, doc, "#target")]["color"]; v != "kept" {
-		t.Errorf("color is %q; an unknown property took the rest of the rule with it", v)
+	if v := got.Styles[elementFor(t, doc, "#target")]["font-family"]; v != "kept" {
+		t.Errorf("font-family is %q; an unknown property took the rest of the rule with it", v)
 	}
 }
 
@@ -614,5 +621,80 @@ func TestApplyIsTotal(t *testing.T) {
 			rules, _ := css.ParseStylesheet(src)
 			Apply(doc, []Sheet{{Origin: OriginAuthor, Rules: rules}})
 		}
+	}
+}
+
+// TestAnInvalidColourDropsTheDeclaration is CSS 2.1 §4.2 applied to the colour
+// properties, and it is the same rule the negative lengths above are held to:
+// the *whole declaration* goes, and what stands is whatever the cascade would
+// have produced without it.
+//
+// The distinction only shows where a *lower-specificity* declaration is waiting
+// behind the invalid one. Keeping the invalid declaration and resolving it later
+// gives the initial value, which looks like a plausible answer and is not the
+// one CSS asks for — colors-007 is four paragraphs that must each be green, and
+// two of them came out black on exactly this.
+func TestAnInvalidColourDropsTheDeclaration(t *testing.T) {
+	doc := parseDoc(t, cascadeDoc)
+	for _, tc := range []struct{ name, src, want string }{
+		{"a string is not a colour",
+			"p { color: green } #target { color: 'red' }", "green"},
+		{"a double-quoted string either",
+			`p { color: green } #target { color: "red" }`, "green"},
+		{"a hash that is not hexadecimal",
+			"p { color: green } #target { color: #red }", "green"},
+		{"nor is a bare word that names no colour",
+			"p { color: green } #target { color: notacolour }", "green"},
+		{"nor a length",
+			"p { color: green } #target { color: 3px }", "green"},
+		// And the declaration that follows an invalid one still applies, which
+		// is the within-one-rule half of the same rule.
+		{"a valid declaration after an invalid one stands",
+			"#target { color: 'red'; color: green }", "green"},
+	} {
+		if got := styleOf(t, doc, []Sheet{author(t, tc.src)}, "#target", "color"); got != tc.want {
+			t.Errorf("%s: %q gave color=%q, want %q", tc.name, tc.src, got, tc.want)
+		}
+	}
+}
+
+// TestTheColoursAPropertyDoesTake is the other half, and it is what stops the
+// rule above from being a rule that throws everything away.
+//
+// The four CSS-wide keywords are not colours and must survive — the cascade acts
+// on them itself, and dropping "color: inherit" as an invalid colour would be a
+// far worse fault than the one this fixes. "currentcolor" is a colour the
+// cascade cannot resolve until it knows the element's own, and "invert" belongs
+// to outline-color alone.
+func TestTheColoursAPropertyDoesTake(t *testing.T) {
+	doc := parseDoc(t, cascadeDoc)
+	for _, tc := range []struct{ name, src, property, want string }{
+		{"a keyword", "#target { color: green }", "color", "green"},
+		{"a hex colour", "#target { color: #0f0 }", "color", "#0f0"},
+		{"a function", "#target { color: rgb(0, 255, 0) }", "color", "rgb(0, 255, 0)"},
+		{"transparent", "#target { color: transparent }", "color", "transparent"},
+		// With a lower-specificity declaration behind it, because the initial
+		// value of border-top-color *is* currentcolor — so without something to
+		// fall back to, dropping it and keeping it give the same answer and the
+		// case would assert nothing.
+		{"currentcolor",
+			"p { border-top-color: green } #target { border-top-color: currentcolor }",
+			"border-top-color", "currentcolor"},
+		{"inherit", "#outer { color: green } #target { color: inherit }", "color", "green"},
+		{"initial", "p { color: green } #target { color: initial }", "color", "black"},
+		{"unset", "#outer { color: green } #target { color: unset }", "color", "green"},
+		{"invert, on the property that takes it",
+			"#target { outline-color: invert }", "outline-color", "invert"},
+	} {
+		got := styleOf(t, doc, []Sheet{author(t, tc.src)}, "#target", tc.property)
+		if got != tc.want {
+			t.Errorf("%s: %q gave %s=%q, want %q", tc.name, tc.src, tc.property, got, tc.want)
+		}
+	}
+	// And invert is *not* a colour anywhere else, so it is dropped there.
+	if got := styleOf(t, doc,
+		[]Sheet{author(t, "p { color: green } #target { color: invert }")},
+		"#target", "color"); got != "green" {
+		t.Errorf("\"color: invert\" gave %q; invert belongs to outline-color alone", got)
 	}
 }
