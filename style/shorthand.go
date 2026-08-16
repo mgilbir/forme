@@ -84,6 +84,56 @@ func borderShorthand(sides ...string) expander {
 	}
 }
 
+// outlineShorthand is CSS 2.1 §18.4's "outline", which is the border shorthand
+// with two differences and is written out rather than parameterised over them.
+//
+// An outline has no sides. It is one width, one style and one colour for the
+// whole ring, so there is nothing to expand into four.
+//
+// "hidden" is not a legal outline style — §18.4 says so in as many words, and it
+// is the one border style that is missing here. The word means "this border
+// loses to its neighbour" in the collapsing table model, and an outline has no
+// neighbours to lose to. And the colour accepts "invert", which no border does.
+func outlineShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, []string, bool) {
+	width, styleVal, colour := ident("medium"), ident("none"), ident("invert")
+	var seenWidth, seenStyle, seenColour bool
+
+	for _, part := range splitOnWhitespace(vals) {
+		switch {
+		case isOutlineStyle(part) && !seenStyle:
+			styleVal, seenStyle = part, true
+		case isBorderWidth(part) && !seenWidth:
+			width, seenWidth = part, true
+		case (isColour(part) || isInvert(part)) && !seenColour:
+			colour, seenColour = part, true
+		default:
+			// As for the border: half an outline is not what was asked for.
+			return nil, nil, false
+		}
+	}
+	if !seenWidth && !seenStyle && !seenColour {
+		return nil, nil, false
+	}
+	return map[string][]css.ComponentValue{
+		"outline-width": width,
+		"outline-style": styleVal,
+		"outline-color": colour,
+	}, nil, true
+}
+
+// isOutlineStyle is isBorderStyle without "hidden", per §18.4.
+func isOutlineStyle(part []css.ComponentValue) bool {
+	if !isBorderStyle(part) {
+		return false
+	}
+	return !strings.EqualFold(part[0].Token.Value, "hidden")
+}
+
+func isInvert(part []css.ComponentValue) bool {
+	return len(part) == 1 && part[0].IsToken() && part[0].Token.Kind == css.Ident &&
+		strings.EqualFold(part[0].Token.Value, "invert")
+}
+
 func isBorderStyle(part []css.ComponentValue) bool {
 	if len(part) != 1 || !part[0].IsToken() || part[0].Token.Kind != css.Ident {
 		return false

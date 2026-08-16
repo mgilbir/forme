@@ -48,6 +48,15 @@ type Fragment struct {
 	// them by name.
 	Margin, Border, Padding Edges
 
+	// Outline is the used width of CSS 2.1 §18.4's outline: the ring drawn just
+	// outside the border edge.
+	//
+	// It is here and not read from the style at paint time because it is a
+	// length, and a length in ems needs the box's font size to become a number.
+	// Zero when there is no outline to draw, which is the ordinary case and is
+	// what keeps the paint pass cheap.
+	Outline style.Unit
+
 	Children []*Fragment
 
 	// Lines is the inline content of a block container, in the same coordinates
@@ -654,6 +663,7 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 		Margin:  margin,
 		Border:  border,
 		Padding: padding,
+		Outline: l.outlineWidth(b),
 		BorderRect: Rect{
 			// Relative to the parent's content box; absolutise fixes it later.
 			X: margin.Left,
@@ -1889,6 +1899,46 @@ func (l *layouter) borderWidths(b *Box) Edges {
 		Bottom: side("bottom"),
 		Left:   side("left"),
 	}
+}
+
+// outlineWidth is the used width of §18.4's outline, and zero when none is drawn.
+//
+// The same three-way answer as a border width — a style of none means nothing is
+// drawn whatever the width says, a length is used as given, and the keywords are
+// what is left — and it is deliberately the same function shape, because the two
+// properties differ in where they are painted rather than in how they are read.
+//
+// The colour is checked here rather than at paint time because this is where a
+// finding can be raised. "invert" is CSS 2.1's initial value and asks for the
+// pixels underneath to be inverted, which a display list of fills cannot express
+// without reading back what it has drawn. Approximating it with a colour would
+// put an outline of the wrong colour on the page and say nothing, which is the
+// failure this engine reports everywhere else rather than commits.
+func (l *layouter) outlineWidth(b *Box) style.Unit {
+	if b == nil || noBorder(b.Style["outline-style"]) {
+		return 0
+	}
+	w, ok := l.lengthOf(b, "outline-width", 0)
+	if !ok {
+		w = keywordBorderWidth(b.Style["outline-width"])
+	}
+	w = maxZero(w)
+	if w == 0 {
+		return 0
+	}
+	if strings.EqualFold(strings.TrimSpace(b.Style["outline-color"]), "invert") {
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleUnsupportedValue,
+			Source: AtHTML(offsetOf(b)),
+			Message: "\"outline-color: invert\" asks for the colours under the outline " +
+				"to be inverted, which this engine cannot do because it draws a list " +
+				"of fills and never reads back what it has drawn; no outline was drawn",
+			Path:     PathOf(b.Element),
+			Property: "outline-color",
+		})
+		return 0
+	}
+	return w
 }
 
 // collapsedBorderWidths is the used border of a table or of one of its cells

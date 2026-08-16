@@ -124,6 +124,7 @@ func (l *layouter) replacedFragment(b *Box, frame inlineFrame) *Fragment {
 
 	frag := &Fragment{
 		Box: b, Margin: margin, Border: border, Padding: padding,
+		Outline: l.outlineWidth(b),
 		BorderRect: Rect{
 			W: size.W.Add(padding.Horizontal()).Add(border.Horizontal()),
 			H: size.H.Add(padding.Vertical()).Add(border.Vertical()),
