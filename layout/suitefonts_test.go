@@ -79,6 +79,19 @@ func fontSetForWPT() FontSet {
 // notoEnv names the directory `make noto-fonts` fetches into.
 const notoEnv = "NOTO_FONTS"
 
+// fallbackFacesInUse returns the faces the harness is actually lending the
+// engine, so a report can say how many there were.
+//
+// None is a legitimate state — everything still runs, see notoFaces — but it is
+// a different measurement from the one the ratchet's baseline was taken at, and
+// a count that does not know which of the two it is cannot be read.
+func fallbackFacesInUse() []*shape.Face {
+	if w, ok := fontSetForWPT().(suiteFonts); ok {
+		return w.fallback
+	}
+	return nil
+}
+
 // notoFaces loads the fallback faces, or none.
 //
 // Absent, everything still runs: the documents that need them report a missing

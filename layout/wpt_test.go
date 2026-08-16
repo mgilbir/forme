@@ -1631,9 +1631,22 @@ func TestWPTReftests(t *testing.T) {
 	}
 
 	if cleanPass < wptCleanPassBaseline {
-		t.Errorf("%d reftests pass cleanly, below the baseline of %d — this is a "+
-			"layout regression, and the baseline is not to be lowered to make it green",
-			cleanPass, wptCleanPassBaseline)
+		// Say what the run was missing before calling it a regression. The
+		// baseline is measured with the fallback faces present, and without
+		// them thirty documents report a missing glyph and drop out of the
+		// clean bucket — a shortfall in the harness, not in the engine, and one
+		// that otherwise reads as an invitation to lower the number.
+		if n := len(fallbackFacesInUse()); n == 0 {
+			t.Errorf("%d reftests pass cleanly, below the baseline of %d — but no "+
+				"fallback faces were loaded, so this is the harness and not the "+
+				"engine: set %s (or run `make test-wpt`) and measure again",
+				cleanPass, wptCleanPassBaseline, notoEnv)
+		} else {
+			t.Errorf("%d reftests pass cleanly, below the baseline of %d — this is a "+
+				"layout regression, and the baseline is not to be lowered to make it "+
+				"green (%d fallback faces loaded)",
+				cleanPass, wptCleanPassBaseline, n)
+		}
 	}
 	if cleanPass > wptCleanPassBaseline {
 		t.Logf("the clean-pass baseline can be raised from %d to %d",
