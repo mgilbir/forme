@@ -881,7 +881,22 @@ const wptEnv = "WPT_TESTS"
 // tainted passes rather than trading anything. It is the fifth entry in this
 // file's list of large blocks that were the harness rather than the engine, and
 // the first to have cost nothing but a missing directory.
-const wptCleanPassBaseline = 4461
+// <iframe> took it from 4461 to 4488, and the shape of that number is worth
+// keeping because the first half of it looked like a regression.
+//
+// Giving the element its box moved 27 tests out of the vacuous bucket, and only
+// 13 of them arrived here: the other 14 started *failing*. They were tests
+// writing <iframe height="50%"> and checking the frame against a div of the
+// height that resolves to, and they had been passing because a frame nobody drew
+// cannot be the wrong height. Drawing it made them fail honestly, which is the
+// same thing the collapsing borders did above.
+//
+// Mapping the two dimension attributes — one line in style/hints.go, which is
+// what that table is shaped for — took all 14 back, and the counts then moved
+// exactly against each other: clean +27, vacuous -27, failing unchanged at 416.
+// Two iframe tests still fail and always will; both are about the paint order of
+// a document inside the frame, and there is no document inside the frame.
+const wptCleanPassBaseline = 4488
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

@@ -153,6 +153,9 @@ func (l *replacedLoader) walk(b *Box) {
 	if b.Element != nil && strings.EqualFold(b.Element.Name, "object") {
 		l.object(b)
 	}
+	if b.Element != nil && strings.EqualFold(b.Element.Name, "iframe") {
+		l.iframe(b)
+	}
 	l.backgrounds(b)
 	for _, c := range b.Children {
 		l.walk(c)
@@ -285,6 +288,55 @@ func (l *replacedLoader) object(b *Box) {
 		Message: "the object at " + quoteValue(strings.TrimSpace(data)) +
 			" was not embedded: this engine embeds no objects, so the element's " +
 			"fallback content was laid out in its place",
+		Path: PathOf(b.Element),
+	})
+}
+
+// iframe makes an iframe the replaced box it is, and reports the document that
+// was not rendered inside it.
+//
+// The two halves are separate and only one of them is a limitation. An iframe is
+// a replaced element, so it has a box on the page whether or not a browsing
+// context was ever created for it — and with no intrinsic dimensions that box is
+// CSS 2.1 §10.3.2's 300 by 150, which is the number the specification took from
+// this element. Nothing about drawing that box requires a network or a renderer
+// for a nested document, and the element was dropped for years on the grounds
+// that it does, which cost the box as well.
+//
+// The nested document is the half that is refused, permanently, by §4.1. An
+// iframe naming one is reporting that something a reader would have seen is not
+// on the page, and that is a blocked resource in exactly the sense an <object>'s
+// data is.
+//
+// An iframe naming nothing has nothing missing. A browser handed "<iframe>" with
+// no src shows an empty frame of the default size, and so does this: the box is
+// right, the content is right because there is none, and there is nothing
+// truthful to report. Reporting it anyway is what made twenty-seven reftests
+// count as tainted while drawing exactly the right picture.
+func (l *replacedLoader) iframe(b *Box) {
+	// No intrinsic width, height or ratio: replacedSize then falls through to
+	// the default dimensions rather than to a box of no size.
+	b.Replaced = &ReplacedContent{}
+
+	src, hasSrc := b.Element.Attr("src")
+	if _, hasDoc := b.Element.Attr("srcdoc"); hasDoc {
+		l.rec.ReportDetail(Finding{
+			Rule:    RuleResourceBlocked,
+			Source:  AtHTML(b.Element.Offset),
+			Message: "this iframe carries a document in its \"srcdoc\"; this engine creates no nested browsing context, so the frame was laid out empty",
+			Path:    PathOf(b.Element),
+		})
+		return
+	}
+	if !hasSrc || strings.TrimSpace(src) == "" {
+		return
+	}
+	l.rec.ReportDetail(Finding{
+		Rule:   RuleResourceBlocked,
+		Source: AtHTML(b.Element.Offset),
+		Message: "the document at " + quoteValue(strings.TrimSpace(src)) +
+			" was not loaded into this iframe: this engine creates no nested " +
+			"browsing context, so the frame was laid out at its own size and left empty",
 		Path: PathOf(b.Element),
 	})
 }

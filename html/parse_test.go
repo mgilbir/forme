@@ -326,10 +326,15 @@ func TestSelfClosingNonVoidIsRefused(t *testing.T) {
 // those children are ordinary markup. Dropping the element threw them away; see
 // TestObjectKeepsItsFallbackContent below and render's resolveReplaced, which is
 // where the blocked resource is reported.
+//
+// <iframe> left for the same reason and a different half. Its content is *not*
+// kept — an iframe's children are what a browser without frame support would
+// show, and one with them shows none of it — but its box is, because an iframe
+// is a replaced element and a replaced element has a size whether or not
+// anything was loaded into it. See TestIframeKeepsItsBoxAndDropsItsContent.
 func TestScriptAndFriendsAreDropped(t *testing.T) {
 	cases := []struct{ src, gone string }{
 		{"<p>a</p><script>var x = 1 < 2;</script><p>b</p>", "script"},
-		{"<p>a</p><iframe src=http://example.com></iframe><p>b</p>", "iframe"},
 		{"<p>a</p><embed src=x><p>b</p>", "embed"},
 	}
 	for _, tc := range cases {
@@ -848,5 +853,62 @@ func TestSelfClosingNonVoidStillMakesTheElement(t *testing.T) {
 	}
 	if ids[0] != "a" || ids[1] != "b" {
 		t.Errorf("the divs are %v, want [a b]", ids)
+	}
+}
+
+// TestIframeKeepsItsBoxAndDropsItsContent.
+//
+// An iframe is a replaced element. Its browsing context is refused and always
+// will be, but the box is on the page either way, and with no intrinsic
+// dimensions it is the 300 by 150 that CSS 2.1 §10.3.2 gives a replaced element
+// with neither — which is where those numbers came from.
+//
+// The content goes. HTML's content model for an iframe is text that a browser
+// supporting frames never renders, and every browser supports frames, so laying
+// it out would put words on the page that no reader of the document was ever
+// meant to see.
+func TestIframeKeepsItsBoxAndDropsItsContent(t *testing.T) {
+	const src = `<p>a</p><iframe src="x.html">fallback <b>words</b></iframe><p>b</p>`
+	doc, _, _ := Parse(src)
+	frame := doc.Element("iframe")
+	if frame == nil {
+		t.Fatal("the <iframe> was dropped; its box is what the element is for")
+	}
+	if got := frame.TextContent(); got != "" {
+		t.Errorf("the iframe carries the text %q, which a browser never renders", got)
+	}
+	if len(frame.Children) != 0 {
+		t.Errorf("the iframe has %d children:\n%s", len(frame.Children), tree(doc))
+	}
+	// Its attributes survive, because the box is sized from them.
+	if v, _ := frame.Attr("src"); v != "x.html" {
+		t.Errorf("the iframe lost its src, which is %q", v)
+	}
+	// And the document either side of it is untouched: the raw-text skip must
+	// stop at the end tag rather than eating the rest of the page.
+	if got := doc.Element("body").TextContent(); got != "ab" {
+		t.Errorf("the body is %q, want \"ab\" — the content skip ran past the end tag", got)
+	}
+}
+
+// TestIframeContentIsNotMarkup: the content of an iframe is text, so a "<" in it
+// is a character and not a tag. A parser that read it as markup would take the
+// rest of the document into the frame.
+func TestIframeContentIsNotMarkup(t *testing.T) {
+	const src = `<iframe><p>not a paragraph</iframe><p>real</p>`
+	doc, _, _ := Parse(src)
+	n := 0
+	doc.Walk(func(x *Node) bool {
+		if x.Name == "p" {
+			n++
+		}
+		return true
+	})
+	if n != 1 {
+		t.Errorf("%d <p> elements, want 1 — the iframe's content was read as markup:\n%s",
+			n, tree(doc))
+	}
+	if got := doc.Element("body").TextContent(); got != "real" {
+		t.Errorf("the body is %q, want \"real\"", got)
 	}
 }

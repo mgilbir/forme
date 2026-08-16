@@ -43,6 +43,13 @@ var knownElements = map[string]bool{
 	// Images.
 	"img": true, "picture": true, "source": true,
 
+	// <iframe>, for its box. The nested browsing context is refused and always
+	// will be — see §4.1 — but the element is a replaced one whose box is on the
+	// page whether or not anything was loaded into it, and that box is what
+	// every reftest using an iframe is actually about. See
+	// contentSkippedElements.
+	"iframe": true,
+
 	// Forms, as static boxes.
 	//
 	// These are here for what they *are* on a page rather than for what they do
@@ -90,6 +97,29 @@ var rcdataElements = map[string]bool{
 	"title": true, "textarea": true,
 }
 
+// contentSkippedElements are laid out as boxes and have their content thrown
+// away, which is not the same thing as being dropped.
+//
+// <iframe> is the one, and it was in droppedElements until the numbers said what
+// that cost. An iframe is a *replaced element*: it has a box, and with no
+// intrinsic dimensions that box is 300 by 150 — which is where those two numbers
+// in layout/replaced.go came from in the first place. Dropping the element threw
+// the box away with the browsing context, and twenty-seven reftests passed
+// because a border nobody drew cannot be the wrong colour.
+//
+// That is the same mistake the form controls were moved out of droppedElements
+// for, recorded below: not being able to do the dynamic half is not a reason to
+// pretend the static half is not there.
+//
+// Its content is skipped rather than laid out, because that is what the content
+// *is*: an iframe's children are what a browser without frame support would show
+// instead, and a browser with them never renders it. Skipping it as raw text is
+// also what the tokenizer must do regardless — the content of an iframe is not
+// markup.
+var contentSkippedElements = map[string]bool{
+	"iframe": true,
+}
+
 // droppedElements are the ones refused for what they *do* rather than for being
 // unknown, and each has its own reason.
 //
@@ -106,7 +136,6 @@ var rcdataElements = map[string]bool{
 // interactivity boundary is stated there rather than deleted.
 var droppedElements = map[string]string{
 	"script":   "scripts are never run, and never will be",
-	"iframe":   "a nested browsing context would need a network and a renderer for it",
 	"embed":    "an embedded plugin would need a plugin",
 	"applet":   "applets would need a virtual machine",
 	"canvas":   "a canvas is drawn by script, which is never run",

@@ -282,6 +282,14 @@ func (p *parser) startTag(tk token) {
 	if voidElements[name] {
 		return
 	}
+	if contentSkippedElements[name] && !tk.selfClosing {
+		// The element stays and its content does not. An iframe's children are
+		// what a browser without frame support would show instead, so a browser
+		// with them renders none of it — and the content is not markup either
+		// way, which is why this consumes to the end tag rather than parsing on.
+		p.skipRaw(name, tk.offset)
+		return
+	}
 	if rawTextElements[name] {
 		p.tok.raw, p.tok.rcdata = name, false
 	} else if rcdataElements[name] {
