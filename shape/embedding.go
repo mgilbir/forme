@@ -161,6 +161,46 @@ func (f *Face) GlyphAdvances() []float64 {
 // how a format has to carry the program and what it may say about it.
 func (f *Face) IsCFF() bool { return f.cff }
 
+// CharacterCollection is the collection this face's CIDs are numbered in — the
+// CFF's ROS — and whether it has one to state.
+//
+// A PDF must say it. ISO 32000-2 9.7.4.2 requires a CIDFont's /CIDSystemInfo to
+// be compatible with the character collection of its glyph source, so a
+// document declaring Adobe-Identity-0 over an Adobe-Japan1 font is making a
+// false statement about its own numbering. The three values go together and are
+// only meaningful together, which is why they are returned that way.
+//
+// # What ok means, and why it is one answer and not three
+//
+// A caller reading this out of the font program itself has three separate ways
+// to end up writing nonsense, and has to remember all of them: the face may have
+// no CFF at all, so there is no collection and none may be written; it may have
+// one that is not CID-keyed, where the glyph index is the only numbering there
+// is; or it may be CID-keyed and have failed to say — a ROS naming strings the
+// font does not carry, or a supplement below zero, which is a version number and
+// counts up. The last is the dangerous one, because half of it parses, and half
+// a collection is the shape that goes into a document unnoticed.
+//
+// ok is false for all three. A caller that has to write a /CIDSystemInfo and
+// gets false should refuse to embed the face rather than reach for a default:
+// Adobe-Identity-0 is not a safe fallback, it is a specific claim, and it is
+// wrong for exactly the fonts this distinguishes.
+//
+// The values come from the parse Load already did, so this costs nothing and
+// cannot disagree with the CIDs Encode writes. It describes the program the
+// face will embed: subsetting carries the ROS and the string INDEX through
+// untouched, so the subset states the same collection.
+func (f *Face) CharacterCollection() (registry, ordering string, supplement int, ok bool) {
+	// gidToCID rather than IsCFF: it is the field that says the outlines are
+	// CID-keyed, which is a narrower thing than being CFF, and it is what Encode
+	// consults to decide whether the codes it writes are CIDs at all. A
+	// collection describing a numbering Encode does not use is worse than none.
+	if f.gidToCID == nil || f.registry == "" || f.ordering == "" {
+		return "", "", 0, false
+	}
+	return f.registry, f.ordering, f.supplement, true
+}
+
 // SubsetGlyphs is Subset, also reporting which glyphs the subset kept.
 //
 // A format that names the subset needs them: PDF writes a tag derived from the
