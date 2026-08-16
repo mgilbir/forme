@@ -93,3 +93,46 @@ func TestPaddingStillMovesTheMarker(t *testing.T) {
 		t.Errorf("20px of padding moved the marker by %v, want %v", got, pad)
 	}
 }
+
+// TestAMarkerSitsOnTheBaselineOfItsLine.
+//
+// The marker's y came from the strut, which is the right answer for a first line
+// that *is* the strut and no answer at all about a line that is not. A line made
+// taller by its own content — a larger span, an image — puts its baseline
+// further down, and the bullet stayed level with a strut nothing was set in,
+// floating above the text it belongs to.
+//
+// line-height is not the case that shows it: baselineOf already reads that, so
+// the two agree there. It takes content the box's own font does not predict.
+func TestAMarkerSitsOnTheBaselineOfItsLine(t *testing.T) {
+	m, f := itemMarker(t,
+		`<div id="i" style="display:list-item; list-style:square">`+
+			`<span style="font-size:40px">W</span>ord</div>`)
+	if len(f.Lines) == 0 {
+		t.Fatal("the item has no line")
+	}
+	want := f.Lines[0].Rect.Y.Add(f.Lines[0].Baseline)
+	if m.At.Y != want {
+		t.Errorf("the marker's baseline is %v and its line's is %v", m.At.Y, want)
+	}
+	// And the line really is taller than the strut, or this asserts nothing.
+	strut, _ := itemMarker(t, squareItem)
+	if want == strut.At.Y {
+		t.Fatalf("the big span did not move the line's baseline off the strut's %v", want)
+	}
+}
+
+// TestAMarkerFollowsLineHeight is the case that already worked, kept so that a
+// fix keyed on the line box cannot lose it: line-height moves the first line's
+// baseline and the marker goes with it.
+func TestAMarkerFollowsLineHeight(t *testing.T) {
+	plain, _ := itemMarker(t, squareItem)
+	tall, f := itemMarker(t,
+		`<div id="i" style="display:list-item; list-style:square; line-height:3">word</div>`)
+	if tall.At.Y == plain.At.Y {
+		t.Errorf("line-height:3 left the marker at %v", tall.At.Y)
+	}
+	if want := f.Lines[0].Rect.Y.Add(f.Lines[0].Baseline); tall.At.Y != want {
+		t.Errorf("the marker's baseline is %v and its line's is %v", tall.At.Y, want)
+	}
+}
