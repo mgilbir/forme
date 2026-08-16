@@ -103,6 +103,15 @@ func notoFaces() []*shape.Face {
 		"NotoSansArmenian-Regular.ttf",
 		"NotoSansGeorgian-Regular.ttf",
 		"NotoSansJP-VF.ttf",
+		// One block apiece, and each is the only face here with a glyph for it:
+		// Ogham, Coptic, Deseret, and the Number Forms the Roman numerals live
+		// in. They are last because they answer nothing else — a face that
+		// covers one script is asked after every face that might cover the
+		// text outright.
+		"NotoSansOgham-Regular.ttf",
+		"NotoSansCoptic-Regular.ttf",
+		"NotoSansDeseret-Regular.ttf",
+		"NotoSansSymbols-Regular.ttf",
 	} {
 		data, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
