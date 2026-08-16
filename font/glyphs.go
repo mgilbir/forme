@@ -6,8 +6,30 @@ import "strings"
 // logic rather than validation logic — it reads only the font program's cmap
 // subtables and the glyph name — so it lives with the parser that produces them.
 
-// trueTypeGID maps a character code to a glyph index using the font's cmap
+// TrueTypeGID maps a character code to a glyph index using the font's cmap
 // subtables, following ISO 32000-1, 9.6.6.4.
+//
+// # The second result, and why glyph 0 is not the same as "no"
+//
+// It says whether the font *answered*, not whether it found a glyph. The three
+// outcomes are distinct and a caller that collapses any two of them will report
+// a fault that is not there or miss one that is:
+//
+//	(g, true)  with g != 0  the code is this glyph
+//	(0, true)               the code is .notdef — the font was asked and its
+//	                        answer is that this code has no glyph of its own
+//	(0, false)              the font could not be asked: it carries no cmap
+//	                        subtable this rule knows how to read
+//
+// The middle one is a real mapping. ISO 32000-1 9.6.6.4 says in as many words
+// that a non-symbolic code with no name renders .notdef, and a named code absent
+// from the (3,1) cmap maps to no glyph — both are the font's own answer, and
+// both come back as glyph 0 because glyph 0 *is* .notdef. Only the third is
+// ignorance, and a rule may not assert against a font it could not ask.
+//
+// Testing `g == 0` therefore merges "this font does not have that character"
+// with "this reader does not understand this font", which are a finding and the
+// absence of one.
 func TrueTypeGID(fp *Program, symbolic bool, code byte, name string) (int, bool) {
 	if symbolic {
 		if fp.SymbolCmap != nil {
