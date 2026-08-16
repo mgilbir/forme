@@ -3,6 +3,7 @@ package layout
 import (
 	"strings"
 
+	"github.com/mgilbir/forme/paragraph"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -513,7 +514,14 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		return nil, in
 	}
 	l.checkScript(b)
-	l.checkGlyphs(b, face)
+	// Per face-run rather than per box: a character the family's face cannot set
+	// is not missing from the page if a fallback face set it, and reporting it
+	// would be this engine calling its own correct output a failure. The runs
+	// are the same ones the items below are built from, so what is checked is
+	// exactly what is drawn.
+	for _, run := range l.faceRunsFor(b, face, b.Text) {
+		l.checkGlyphs(b, run.Face, run.Text)
+	}
 
 	size := b.FontSize
 	ws := whiteSpaceFor(b.Style)
@@ -586,69 +594,126 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			continue
 		}
 
-		para, start, end := frame.Bidi.Add(p.Text)
-		item := inlineItem{
-			BidiPara: para, BidiStart: start, BidiEnd: end,
-			Text: p.Text, Box: b, Face: face, Size: size,
-			Leads: true, Above: above, Below: below,
-			// §10.8.1's vertical-align, which a text box cannot be asked for
-			// itself: the property is not inherited, so the anonymous box holding
-			// a <span>'s words carries the initial value however the span was
-			// aligned. The frame brought the answer down from the boxes the walk
-			// is inside.
-			Valign: frame.Valign,
-			// An opportunity carried in from the piece before is offered to
-			// anything but a space. UAX #14's LB7 — "do not break before spaces"
-			// — is an earlier rule than every rule that creates one, so a space
-			// belongs to the unit in front of it and the break falls after it.
-			// The piece's own opportunity still stands, which is what puts the
-			// break after a preserved space rather than losing it.
-			BreakBefore: p.BreakBefore || (state.BreakOpportunity && !p.Space),
-			Space:       p.Space, Collapsible: p.Collapsible,
-			TrimAtEnd: p.TrimAtEnd,
-			Tab:       p.Tab, TabStop: tabStop, TabFloor: tabFloor,
-			// §4.1.2's fourth rule, which is three answers and not one.
-			//
-			// What reaches it is whatever rule 3 left: under a collapsing value
-			// that is the other space separators and the preserved tabs, and
-			// under a preserving one it is the spaces as well. The rule then
-			// names the values one at a time.
-			//
-			//   - normal, nowrap and pre-line — which is exactly ws.collapse —
-			//     hang the sequence *unconditionally*. It never takes room.
-			//   - pre-wrap hangs it unconditionally too, "unless the sequence is
-			//     followed by a forced line break, in which case it must
-			//     conditionally hang the sequence instead". A conditional hang
-			//     takes room and gives it up only where the room is not there.
-			//   - break-spaces is named to say the sequence does *not* hang: the
-			//     spaces are data and take room even when they overflow.
-			//   - pre is not in the list at all, so nothing hangs under it. That
-			//     is not an omission to be read past: a line under pre ends only
-			//     where the author ended it, so its trailing spaces are before a
-			//     forced break or the end of the block, and the rule's whole
-			//     subject is what to do at a wrap.
-			//
-			// The distinction is invisible on the page and decides two intrinsic
-			// widths, which is where hangsHard is read. See widthsOf.
-			Hangs:     p.Space && !p.Collapsible && !ws.BreakSpaces && (ws.Collapse || ws.Wrap),
-			HangsHard: p.Space && !p.Collapsible && ws.Collapse,
-			NoWrap:    !ws.Wrap, Offset: offset,
-			BreakWord:   ow.BreakWord,
-			Anywhere:    ow.Anywhere,
-			Decorations: decorations, Spacing: spacing,
+		// The faces this piece needs, which for everything that is not mixed
+		// script is the one face the box chose.
+		//
+		// A space and a tab are never split: a space is one character, and a tab
+		// is measured against a tab stop rather than through a face at all, so
+		// splitting either would be arranging for the flags below to be shared
+		// between two items that cannot both own them.
+		runs := []faceRun{{Text: p.Text, Face: face}}
+		if !p.Space && !p.Tab {
+			runs = l.faceRunsFor(b, face, p.Text)
 		}
-		if !p.Tab {
-			// A tab is measured against a tab stop when it lands, so there is
-			// nothing to measure here and the face's own advance for U+0009 —
-			// whatever a face happens to give a character it has no glyph for —
-			// would be the wrong number to carry.
-			item.Width = l.br.MeasureSpaced(face, p.Text, size, spacing)
+		for ri, run := range runs {
+			para, start, end := frame.Bidi.Add(run.Text)
+			item := l.textItem(textItemArgs{
+				b: b, p: p, run: run, size: size, frame: frame, ws: ws,
+				above: above, below: below, offset: offset, spacing: spacing,
+				decorations: decorations, ow: ow, state: state,
+				tabStop: tabStop, tabFloor: tabFloor,
+				para: para, bidiStart: start, bidiEnd: end,
+				// Only the first run of a piece may begin a line. The rest are
+				// the middle of a word that happens to change face, and a break
+				// there would cut a word in two for a reason no reader can see.
+				first: ri == 0, last: ri == len(runs)-1,
+			})
+			out = append(out, item)
 		}
-		out = append(out, item)
 		state = inlineState{AfterCollapsibleSpace: p.Collapsible}
 	}
 	return out, inlineState{
 		BreakOpportunity:      endedAtBreak,
 		AfterCollapsibleSpace: state.AfterCollapsibleSpace,
 	}
+}
+
+// textItemArgs is what one text item is built from. It is a struct because the
+// list is long and every one of them is read, which is the shape that makes a
+// positional call unreadable.
+type textItemArgs struct {
+	b           *Box
+	p           paragraph.Piece
+	run         faceRun
+	size        style.Unit
+	frame       inlineFrame
+	ws          paragraph.WhiteSpace
+	above       style.Unit
+	below       style.Unit
+	offset      paragraph.Point
+	spacing     textSpacing
+	decorations []textDecoration
+	ow          paragraph.OverflowWrap
+	state       inlineState
+	tabStop     style.Unit
+	tabFloor    style.Unit
+	para        int
+	bidiStart   int
+	bidiEnd     int
+	first       bool
+	last        bool
+}
+
+func (l *layouter) textItem(a textItemArgs) inlineItem {
+	b, p, ws := a.b, a.p, a.ws
+	item := inlineItem{
+		BidiPara: a.para, BidiStart: a.bidiStart, BidiEnd: a.bidiEnd,
+		Text: a.run.Text, Box: b, Face: a.run.Face, Size: a.size,
+		Leads: true, Above: a.above, Below: a.below,
+		// §10.8.1's vertical-align, which a text box cannot be asked for
+		// itself: the property is not inherited, so the anonymous box holding
+		// a <span>'s words carries the initial value however the span was
+		// aligned. The frame brought the answer down from the boxes the walk
+		// is inside.
+		Valign: a.frame.Valign,
+		// An opportunity carried in from the piece before is offered to
+		// anything but a space. UAX #14's LB7 — "do not break before spaces"
+		// — is an earlier rule than every rule that creates one, so a space
+		// belongs to the unit in front of it and the break falls after it.
+		// The piece's own opportunity still stands, which is what puts the
+		// break after a preserved space rather than losing it.
+		BreakBefore: a.first && (p.BreakBefore || (a.state.BreakOpportunity && !p.Space)),
+		Space:       p.Space, Collapsible: p.Collapsible,
+		// A trailing space is trimmed off the end of a line, and only the
+		// last run of a piece has an end for one to be at.
+		TrimAtEnd: p.TrimAtEnd && a.last,
+		Tab:       p.Tab, TabStop: a.tabStop, TabFloor: a.tabFloor,
+		// §4.1.2's fourth rule, which is three answers and not one.
+		//
+		// What reaches it is whatever rule 3 left: under a collapsing value
+		// that is the other space separators and the preserved tabs, and
+		// under a preserving one it is the spaces as well. The rule then
+		// names the values one at a time.
+		//
+		//   - normal, nowrap and pre-line — which is exactly ws.collapse —
+		//     hang the sequence *unconditionally*. It never takes room.
+		//   - pre-wrap hangs it unconditionally too, "unless the sequence is
+		//     followed by a forced line break, in which case it must
+		//     conditionally hang the sequence instead". A conditional hang
+		//     takes room and gives it up only where the room is not there.
+		//   - break-spaces is named to say the sequence does *not* hang: the
+		//     spaces are data and take room even when they overflow.
+		//   - pre is not in the list at all, so nothing hangs under it. That
+		//     is not an omission to be read past: a line under pre ends only
+		//     where the author ended it, so its trailing spaces are before a
+		//     forced break or the end of the block, and the rule's whole
+		//     subject is what to do at a wrap.
+		//
+		// The distinction is invisible on the page and decides two intrinsic
+		// widths, which is where hangsHard is read. See widthsOf.
+		Hangs:     p.Space && !p.Collapsible && !ws.BreakSpaces && (ws.Collapse || ws.Wrap),
+		HangsHard: p.Space && !p.Collapsible && ws.Collapse,
+		NoWrap:    !ws.Wrap, Offset: a.offset,
+		BreakWord:   a.ow.BreakWord,
+		Anywhere:    a.ow.Anywhere,
+		Decorations: a.decorations, Spacing: a.spacing,
+	}
+	if !p.Tab {
+		// A tab is measured against a tab stop when it lands, so there is
+		// nothing to measure here and the face's own advance for U+0009 —
+		// whatever a face happens to give a character it has no glyph for —
+		// would be the wrong number to carry.
+		item.Width = l.br.MeasureSpaced(a.run.Face, a.run.Text, a.size, a.spacing)
+	}
+	return item
 }

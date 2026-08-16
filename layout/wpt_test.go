@@ -904,7 +904,18 @@ const wptEnv = "WPT_TESTS"
 // breakdown named, exactly, with vacuous down by the same seventeen and failing
 // unchanged. The references for these tests write list-style-image themselves,
 // so what is being compared is the same feature on both sides.
-const wptCleanPassBaseline = 4514
+// Falling back within a run rather than for the whole box took it from 4514 to
+// 4542, and moved the *failure* count down as well, 416 to 415 — the only change
+// in this file that has done both at once.
+//
+// The first attempt scored 4474 and 417, one failure worse. That one failure is
+// why the number here is 4542: bidi-glyph-mirroring-002 sets the same alef twice,
+// once as a run of its own and once with a bracket in front of it, and only the
+// second was getting the Hebrew face. segment.Boundaries gives the offsets
+// *inside* a string and leaves both ends out, so a loop over it that does not put
+// the leading zero back skips the first cluster of every run — invisible whenever
+// a run starts with text the primary face has, which is almost every run.
+const wptCleanPassBaseline = 4542
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

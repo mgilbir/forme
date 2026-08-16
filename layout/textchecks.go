@@ -140,7 +140,7 @@ func (l *layouter) checkScript(b *Box) {
 // what an author needs to know is *which* characters their font cannot set —
 // hearing it four hundred times about the same one is not four hundred times as
 // useful.
-func (l *layouter) checkGlyphs(b *Box, face *shape.Face) {
+func (l *layouter) checkGlyphs(b *Box, face *shape.Face, text string) {
 	// The question has to be the one *drawing* answers, and it was not.
 	//
 	// This asked face.GlyphID, which is whether the face has a glyph mapped to
@@ -160,10 +160,10 @@ func (l *layouter) checkGlyphs(b *Box, face *shape.Face) {
 	// Shaping the whole run first is also what makes this cheap: the answer is
 	// almost always that nothing is missing, and only then is it worth walking
 	// the characters to find out which.
-	if !missesVisible(face, b.Text) {
+	if !missesVisible(face, text) {
 		return
 	}
-	for _, r := range b.Text {
+	for _, r := range text {
 		if r == '\n' || r == '\t' || marksNoPaper(r) {
 			continue
 		}
