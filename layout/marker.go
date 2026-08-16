@@ -27,6 +27,17 @@ type Marker struct {
 	// Color is the item's own text colour: a marker takes the colour of the
 	// text it belongs to, which is why an author never sets it separately.
 	Color style.RGBA
+
+	// Image is list-style-image's picture, drawn instead of the text above.
+	//
+	// When it is set the text is not drawn at all — §12.6.2 says the image
+	// *replaces* the marker the type would have made — but Text is still filled
+	// in, because it is what the marker falls back to and a caller extracting
+	// the text of the page still wants to know what the item was numbered.
+	Image *ReplacedContent
+	// ImageRect is where the picture goes, relative to the fragment's border
+	// box, at the image's own intrinsic size. §12.6.2 gives no way to scale it.
+	ImageRect Rect
 }
 
 // markerFor works out the marker a list item generates, or nil.
@@ -52,17 +63,32 @@ func (l *layouter) markerFor(b *Box, frag *Fragment) *Marker {
 	size := b.FontSize
 	width := l.br.Measure(face, text, size)
 	lineHeight := l.lineHeight(b)
+	baseline := frag.Border.Top.Add(frag.Padding.Top).Add(l.baselineOf(b, lineHeight))
+	inner := frag.Border.Left.Add(frag.Padding.Left)
 
-	// "outside" puts the marker in the margin, clear of the content box, with a
-	// gap of half an em between it and the text — which is what keeps a bullet
-	// from touching the word after it.
-	x := frag.Border.Left.Add(frag.Padding.Left).Sub(width).Sub(markerGap(size))
-
-	return &Marker{
+	m := &Marker{
 		Text: text, Face: face, Size: size,
-		At:    Point{X: x, Y: frag.Border.Top.Add(frag.Padding.Top).Add(l.baselineOf(b, lineHeight))},
+		// "outside" puts the marker in the margin, clear of the content box,
+		// with a gap of half an em between it and the text — which is what
+		// keeps a bullet from touching the word after it.
+		At:    Point{X: inner.Sub(width).Sub(markerGap(size)), Y: baseline},
 		Color: markerColour(b),
 	}
+	if img := b.MarkerImage; img != nil {
+		// The picture goes where the text would have gone, at its own size,
+		// sitting on the baseline. §12.6.2 says only that the image replaces
+		// the marker; where a browser puts it is convention, and every one of
+		// them rests it on the baseline rather than centring it on the line,
+		// which is what keeps a tall image from lifting off the text it belongs
+		// to.
+		m.Image = img
+		m.ImageRect = Rect{
+			X: inner.Sub(img.Width).Sub(markerGap(size)),
+			Y: baseline.Sub(img.Height),
+			W: img.Width, H: img.Height,
+		}
+	}
+	return m
 }
 
 // markerInside reports "list-style-position: inside".
@@ -136,6 +162,27 @@ func (l *layouter) markerItem(b *Box) (inlineItem, bool) {
 	text, face, ok := l.markerRun(b)
 	if !ok {
 		return inlineItem{}, false
+	}
+	if b.MarkerImage != nil {
+		// An inside marker is a box *on the line*, and a line item in this
+		// engine carries text and not a picture — an inline image reaches a line
+		// by the atomic-inline path, which a marker does not go through because
+		// a marker is not in the document.
+		//
+		// So the image is not drawn here, and the type's marker is used instead.
+		// That is the same fallback §12.6.2 gives for an image that did not
+		// load, which makes the page a legitimate rendering rather than a
+		// broken one — but it is not what was asked for, and the difference is
+		// exactly what a finding is for.
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleUnsupportedValue,
+			Source: AtHTML(offsetOf(b)),
+			Message: "a \"list-style-image\" on an inside marker is not drawn by this " +
+				"engine, because an inside marker is a box on the line and a line " +
+				"carries text; the marker from \"list-style-type\" was used instead",
+			Path:     PathOf(b.Element),
+			Property: "list-style-image",
+		})
 	}
 	size := b.FontSize
 	above, below := l.leading(b)

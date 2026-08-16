@@ -541,18 +541,21 @@ func isNone(part []css.ComponentValue) bool {
 
 // listStyleShorthand expands "list-style": a type, a position, and an image.
 func listStyleShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, []string, bool) {
-	kind, position := ident("disc"), ident("outside")
-	var seenKind, seenPosition bool
+	kind, position, image := ident("disc"), ident("outside"), ident("none")
+	var seenKind, seenPosition, seenImage bool
 	var unsupported []string
 
 	for _, part := range splitOnWhitespace(vals) {
 		switch {
 		case isListPosition(part) && !seenPosition:
 			position, seenPosition = part, true
+		case isURLPart(part) && !seenImage:
+			image, seenImage = part, true
 		case isNone(part):
 			// "none" may be the type or the image. Taking it as the type is
 			// what an author means by "list-style: none", which is the whole
-			// reason the value is written.
+			// reason the value is written — and the image is "none" already, so
+			// a marker is suppressed either way round.
 			if !seenKind {
 				kind, seenKind = part, true
 			}
@@ -565,7 +568,21 @@ func listStyleShorthand(vals []css.ComponentValue) (map[string][]css.ComponentVa
 	return map[string][]css.ComponentValue{
 		"list-style-type":     kind,
 		"list-style-position": position,
+		"list-style-image":    image,
 	}, unsupported, true
+}
+
+// isURLPart is a single url() value, in either of the two shapes the tokenizer
+// produces: a URL token for url(x) and a function for url("x").
+func isURLPart(part []css.ComponentValue) bool {
+	if len(part) != 1 {
+		return false
+	}
+	v := part[0]
+	if v.IsToken() && v.Token.Kind == css.URL {
+		return true
+	}
+	return v.IsFunction() && strings.EqualFold(v.Token.Value, "url")
 }
 
 func isListPosition(part []css.ComponentValue) bool {

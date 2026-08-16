@@ -156,6 +156,7 @@ func (l *replacedLoader) walk(b *Box) {
 	if b.Element != nil && strings.EqualFold(b.Element.Name, "iframe") {
 		l.iframe(b)
 	}
+	l.markerImage(b)
 	l.backgrounds(b)
 	for _, c := range b.Children {
 		l.walk(c)
@@ -290,6 +291,44 @@ func (l *replacedLoader) object(b *Box) {
 			"fallback content was laid out in its place",
 		Path: PathOf(b.Element),
 	})
+}
+
+// markerImage loads the picture list-style-image names, for a box that draws a
+// marker.
+//
+// §12.6.2 makes the property conditional on the image being *available*: a url
+// that does not load is not an error to report and stop at, it is a marker that
+// falls back to list-style-type. So a failure here is silent by design, which is
+// the one place in this file that is true — everywhere else a resource that did
+// not arrive is something the page is missing, and here the page has exactly
+// what the specification says it should.
+//
+// It goes through the same fetch, the same caps and the same document-wide
+// decode budget as an <img>, for the reason backgrounds do: one policy, and a
+// second one would be the one missing a check.
+func (l *replacedLoader) markerImage(b *Box) {
+	if !b.ListItem {
+		return
+	}
+	ref, ok := urlValue(b.Style["list-style-image"])
+	if !ok || strings.TrimSpace(ref) == "" {
+		return
+	}
+	ref = strings.TrimSpace(ref)
+	if got, seen := l.loaded[ref]; seen {
+		b.MarkerImage = got
+		return
+	}
+	if l.failed[ref] {
+		return
+	}
+	content, _ := l.load(ref, "list marker image")
+	if content == nil {
+		l.failed[ref] = true
+		return
+	}
+	l.loaded[ref] = content
+	b.MarkerImage = content
 }
 
 // iframe makes an iframe the replaced box it is, and reports the document that

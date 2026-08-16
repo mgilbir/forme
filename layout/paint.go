@@ -837,7 +837,20 @@ func (p *painter) paintContent(f *Fragment) {
 			p.ops = append(p.ops, DrawImage{Rect: rect, Image: r.Image, Key: r.Key})
 		}
 	}
-	if m := f.Marker; m != nil && m.Face != nil && !hidden {
+	if m := f.Marker; m != nil && m.Image != nil && m.Image.Image != nil && !hidden {
+		// §12.6.2: the image *replaces* the marker the type would have made, so
+		// the text below is not drawn as well. It is still on the Marker, which
+		// is what a caller extracting the page's text reads.
+		rect := Rect{
+			X: f.BorderRect.X.Add(m.ImageRect.X), Y: f.BorderRect.Y.Add(m.ImageRect.Y),
+			W: m.ImageRect.W, H: m.ImageRect.H,
+		}
+		if !rect.Empty() {
+			p.ops = append(p.ops, DrawImage{
+				Rect: rect, Image: m.Image.Image, Key: m.Image.Key,
+			})
+		}
+	} else if m := f.Marker; m != nil && m.Face != nil && !hidden {
 		p.ops = append(p.ops, DrawText{
 			At: Point{
 				X: f.BorderRect.X.Add(m.At.X),

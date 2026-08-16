@@ -900,7 +900,11 @@ const wptEnv = "WPT_TESTS"
 // and failing unchanged. Fewer than the sixteen tests the breakdown listed
 // against the property, because several of those name a second unimplemented
 // property under the same rule and are still waiting on it.
-const wptCleanPassBaseline = 4497
+// §12.6.2's list-style-image took it from 4497 to 4514 — the seventeen the
+// breakdown named, exactly, with vacuous down by the same seventeen and failing
+// unchanged. The references for these tests write list-style-image themselves,
+// so what is being compared is the same feature on both sides.
+const wptCleanPassBaseline = 4514
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
