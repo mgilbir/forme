@@ -92,6 +92,48 @@ func CmapFormat12(groups [][3]uint32) []byte {
 	return b
 }
 
+// CmapFormat13 assembles a many-to-one cmap subtable from {startCharCode,
+// endCharCode, glyphID} groups. Its bytes are a format-12 table with the format
+// number changed, which is exactly what the two formats are: the same header and
+// the same group array, read differently.
+func CmapFormat13(groups [][3]uint32) []byte {
+	b := CmapFormat12(groups)
+	b[1] = 13
+	return b
+}
+
+// CmapFormat8 assembles a mixed 16/32-bit cmap subtable from the same groups,
+// with an all-zero is32 bitmap — the parser does not read it, and a font that
+// declared every code 16-bit is the honest thing for a builder to emit.
+func CmapFormat8(groups [][3]uint32) []byte {
+	const is32Len = 8192
+	b := make([]byte, 16+is32Len+12*len(groups))
+	b[1] = 8                                                        // format
+	binary.BigEndian.PutUint32(b[4:], uint32(len(b)))               // length
+	binary.BigEndian.PutUint32(b[12+is32Len:], uint32(len(groups))) // nGroups
+	for i, g := range groups {
+		p := 16 + is32Len + 12*i
+		binary.BigEndian.PutUint32(b[p:], g[0])
+		binary.BigEndian.PutUint32(b[p+4:], g[1])
+		binary.BigEndian.PutUint32(b[p+8:], g[2])
+	}
+	return b
+}
+
+// CmapFormat10 assembles a trimmed 32-bit array mapping first, first+1, … to the
+// given glyph indices.
+func CmapFormat10(first uint32, gids []uint16) []byte {
+	b := make([]byte, 20+2*len(gids))
+	b[1] = 10                                             // format
+	binary.BigEndian.PutUint32(b[4:], uint32(len(b)))     // length
+	binary.BigEndian.PutUint32(b[12:], first)             // startCharCode
+	binary.BigEndian.PutUint32(b[16:], uint32(len(gids))) // numChars
+	for i, g := range gids {
+		binary.BigEndian.PutUint16(b[20+2*i:], g)
+	}
+	return b
+}
+
 // CmapSub is one cmap subtable of a synthetic font: its platform and encoding
 // IDs and its bytes.
 type CmapSub struct {

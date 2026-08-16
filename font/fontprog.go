@@ -326,11 +326,12 @@ func unicodeCmapRank(plat, enc int) int {
 	return 0
 }
 
-// The two expanding subtable formats, 4 and 12, share one work budget: the
-// caller's maxWork, resolved from limits.cmapWork (WithMaxCmapWork, default
-// defaultMaxCmapWork). One knob rather than two because the two formats are
+// The expanding subtable formats — 4, 8, 12 and 13, the ones whose bytes
+// describe ranges rather than list glyphs — share one work budget: the caller's
+// maxWork, resolved from limits.cmapWork (WithMaxCmapWork, default
+// defaultMaxCmapWork). One knob rather than four because the formats are
 // alternative encodings of the same thing — a font's code→GID coverage — and no
-// caller has a reason to trust one more than the other. Each format charges its
+// caller has a reason to trust one more than another. Each format charges its
 // own counter, so maxWork bounds one subtable, not the whole table.
 //
 // cmapResult returns out, or nil when it holds no mapping. A subtable that maps
@@ -348,11 +349,94 @@ func cmapResult(out map[rune]int) map[rune]int {
 	return out
 }
 
-// ParseCmapSubtable handles cmap formats 0, 4, 6, and 12. It returns nil — not an
+// unicodeMaxRune is the last code point Unicode defines. Every format here that
+// can express a wider code — 8, 10, 12 and 13 all carry 32-bit codes — stops at
+// it, because a key past it is not a character and the callers index by rune.
+const unicodeMaxRune = 0x10FFFF
+
+// cmapCoverageGroups expands the {startCharCode, endCharCode, startGlyphID}
+// group array that formats 8, 12 and 13 share, writing into out and reporting
+// whether maxWork stopped it early. work is the caller's counter, so a format
+// that has already spent some of the budget on its header keeps spending the
+// same one.
+//
+// sequential says how a group's glyphs run. Formats 8 and 12 walk the glyph IDs
+// alongside the codes — code start+n is glyph startGlyphID+n. Format 13 gives
+// every code in the group the same glyph, which is the whole of its purpose: it
+// is how a font says "this entire plane is the one glyph I have for it", as the
+// LastResort face does.
+//
+// That difference is also where format 13's cost is. A sequential group runs out
+// of glyph IDs after 65536 codes and everything past that is dropped by the
+// gid <= 0xFFFF check below; a many-to-one group's glyph stays valid for as long
+// as the group runs, so every one of its codes is recorded. The ceiling is the
+// same either way — Unicode has 0x110000 code points and a code is written at
+// most once — but format 13 is the format that can actually reach it, so the
+// work budget is doing real work here rather than standing by.
+func cmapCoverageGroups(b []byte, nGroups, groupsAt, maxWork int, sequential bool, work *int, out map[rune]int) (spent bool) {
+	for g := 0; g < nGroups; g++ {
+		// Every group is charged at least one unit, so the budget bounds the
+		// group loop as well as the expansion within a group.
+		if *work++; *work > maxWork {
+			return true
+		}
+		p := groupsAt + 12*g
+		start := Be32(b, p)
+		end := Be32(b, p+4)
+		startGID := Be32(b, p+8)
+		// Groups are required to be sorted and non-overlapping; see the note in
+		// case 12 for why neither is enforced. An inverted group is skipped —
+		// read as running upwards from start it would walk over unrelated codes.
+		if start > end || start > unicodeMaxRune {
+			continue
+		}
+		if end > unicodeMaxRune {
+			end = unicodeMaxRune
+		}
+		for c := start; ; c++ {
+			if *work++; *work > maxWork {
+				return true
+			}
+			gid := uint64(startGID)
+			if sequential {
+				gid += uint64(c - start)
+			}
+			// Glyph indices are 16-bit; anything wider is malformed and must
+			// not be recorded as if it named a glyph.
+			if gid != 0 && gid <= 0xFFFF {
+				out[rune(c)] = int(gid)
+			}
+			if c == end { // c is a uint32; end may be the largest value it holds
+				break
+			}
+		}
+	}
+	return false
+}
+
+// ParseCmapSubtable handles cmap formats 0, 4, 6, 8, 10, 12 and 13 — every
+// format whose character codes are Unicode code points. It returns nil — not an
 // empty map — when the subtable cannot be read (an unsupported format, one
 // truncated past use, or one that maps nothing at all): callers treat a non-nil
 // cmap as authoritative, so an empty map would claim the font maps no character
 // at all, which reads as "every code is .notdef" rather than "unknown".
+//
+// # The two formats that are not here
+//
+// Format 2 is the legacy high-byte CJK mapping, and its codes are not Unicode:
+// they are Big5, Shift-JIS, Wansung or Johab, which is why it lives at the
+// (3,3)…(3,6) encodings. ParseSFNT reaches a subtable by exactly three routes —
+// the Unicode ranking, (3,0) symbol and (1,0) Mac Roman — and none of the pairs
+// a format-2 subtable sits at is among them, so parsing it would be code no font
+// can reach, keyed by code points its caller would then read as Unicode. The
+// mapping it wants is the font's Unicode subtable, which every font carrying a
+// format 2 also carries.
+//
+// Format 14 does not map codes to glyphs at all. It maps *pairs* — a base
+// character and a variation selector — onto the glyph that pair should take, and
+// answers "use the default" for most of them. That is a different function with
+// a different signature, not a case in this switch, and returning nil for it is
+// correct: it leaves the font's real cmap to whichever subtable holds one.
 //
 // The second result reports that maxWork stopped the parse before the
 // subtable's own end, so the returned map is a prefix of the font's real
@@ -361,8 +445,8 @@ func cmapResult(out map[rune]int) map[rune]int {
 // it does not resolve is unknown rather than absent, and no rule may assert
 // against it. Without this the budget reproduces audit C46 exactly.
 //
-// maxWork bounds the expansion of formats 4 and 12 (see WithMaxCmapWork);
-// formats 0 and 6 are bounded by the subtable's own fixed size. Because the
+// maxWork bounds the expansion of formats 4, 8, 12 and 13 (see WithMaxCmapWork);
+// formats 0, 6 and 10 are bounded by the subtable's own size. Because the
 // budget is configurable, a caller who lowers it moves where the prefix ends —
 // which is safe precisely because the prefix is self-describing.
 func ParseCmapSubtable(b []byte, maxWork int) (map[rune]int, bool) {
@@ -444,12 +528,77 @@ func ParseCmapSubtable(b []byte, maxWork int) (map[rune]int, bool) {
 				out[rune(first+i)] = gid
 			}
 		}
-	case 12:
-		// Segmented coverage: format(2) reserved(2) length(4) language(4)
-		// nGroups(4), then nGroups groups of startCharCode(4) endCharCode(4)
-		// startGlyphID(4). This is the only format that reaches past the BMP,
-		// so its keys really can exceed 0xFFFF.
-		const unicodeMaxRune = 0x10FFFF
+	case 8:
+		// Mixed 16-bit and 32-bit coverage: format(2) reserved(2) length(4)
+		// language(4) is32[8192] nGroups(4), then the same groups as format 12.
+		//
+		// is32 is a bitmap saying, for each of the 65536 lead values, whether a
+		// code beginning with it is one 16-bit code or the start of a 32-bit
+		// one. That is a rule for decoding a *byte stream* into character
+		// codes; this parser is handed the codes already, in the groups, so the
+		// bitmap says nothing about the mapping and is skipped. The format is
+		// deprecated and a font carrying one should be read exactly as its
+		// groups are written.
+		const is32Len = 8192
+		if len(b) < 16+is32Len+4 {
+			return nil, false
+		}
+		length := Be32(b, 4)
+		if length < uint32(16+is32Len+4) || uint64(length) > uint64(len(b)) {
+			return nil, false
+		}
+		b = b[:length]
+		nGroups := Be32(b, 12+is32Len)
+		if uint64(nGroups)*12 > uint64(len(b)-(16+is32Len)) {
+			return nil, false
+		}
+		work := 0
+		if cmapCoverageGroups(b, int(nGroups), 16+is32Len, maxWork, true, &work, out) {
+			return cmapResult(out), len(out) > 0
+		}
+	case 10:
+		// Trimmed array, the 32-bit twin of format 6: format(2) reserved(2)
+		// length(4) language(4) startCharCode(4) numChars(4), then numChars
+		// glyph indices. No budget: numChars is checked against the bytes that
+		// are actually there, so the run is bounded by the subtable's own size
+		// the way format 6 and format 0 are.
+		if len(b) < 20 {
+			return nil, false
+		}
+		length := Be32(b, 4)
+		if length < 20 || uint64(length) > uint64(len(b)) {
+			return nil, false
+		}
+		b = b[:length]
+		first := Be32(b, 12)
+		count := Be32(b, 16)
+		if uint64(count)*2 > uint64(len(b)-20) {
+			return nil, false
+		}
+		for i := 0; i < int(count); i++ {
+			// first+i in 64 bits: both are uint32 and their sum need not be.
+			c := uint64(first) + uint64(i)
+			if c > unicodeMaxRune {
+				// The rest run past Unicode too, since c only climbs.
+				break
+			}
+			if gid := Be16(b, 20+2*i); gid != 0 {
+				out[rune(c)] = gid
+			}
+		}
+	case 12, 13:
+		// Segmented coverage (12) and many-to-one range mappings (13). The two
+		// share a header — format(2) reserved(2) length(4) language(4)
+		// nGroups(4) — and a group array, and differ only in what a group's
+		// startGlyphID means; see cmapCoverageGroups. These are the formats that
+		// reach past the BMP, so their keys really can exceed 0xFFFF.
+		//
+		// Groups are required to be sorted and non-overlapping. Neither is
+		// enforced: a table that merely lists them out of order is still
+		// unambiguous except where groups overlap, and rejecting it outright
+		// would return nil for a font whose mappings are perfectly readable —
+		// the caller reads nil as "unknown" and stops checking. Overlaps resolve
+		// to the last group written, as elsewhere in this parser.
 		if len(b) < 16 {
 			return nil, false
 		}
@@ -464,54 +613,19 @@ func ParseCmapSubtable(b []byte, maxWork int) (map[rune]int, bool) {
 		if uint64(nGroups)*12 > uint64(len(b)-16) {
 			return nil, false
 		}
-		// Every group is charged at least one unit of work, so this budget
-		// bounds the group loop as well as the expansion. A single group may
-		// span the whole of Unicode (0x110000 codes) and there may be many of
-		// them, so an unbudgeted expansion is an unbounded allocation driven by
-		// the font. The cap is the format-4 one: an sfnt has at most 65535
-		// glyphs, so no honest font needs to map anywhere near 2^18 code
-		// points, and the resulting map stays a few megabytes at worst.
+		// The budget: a single group may span the whole of Unicode (0x110000
+		// codes) and there may be many of them, so an unbudgeted expansion is an
+		// unbounded allocation driven by the font. The cap is the format-4 one:
+		// an sfnt has at most 65535 glyphs, so no honest font needs to map
+		// anywhere near 2^18 code points, and the resulting map stays a few
+		// megabytes at worst.
 		work := 0
-		for g := 0; g < int(nGroups); g++ {
-			if work++; work > maxWork {
-				return cmapResult(out), len(out) > 0
-			}
-			p := 16 + 12*g
-			start := Be32(b, p)
-			end := Be32(b, p+4)
-			startGID := Be32(b, p+8)
-			// Groups are required to be sorted and non-overlapping. Neither is
-			// enforced here: a table that merely lists them out of order is
-			// still unambiguous except where groups overlap, and rejecting it
-			// outright would return nil for a font whose mappings are perfectly
-			// readable — the caller reads nil as "unknown" and stops checking.
-			// Overlaps resolve to the last group written, as elsewhere in this
-			// parser. An inverted group (start > end) is another matter: read
-			// as running upwards from start it would walk over unrelated codes,
-			// so it is skipped, as in format 4.
-			if start > end || start > unicodeMaxRune {
-				continue
-			}
-			if end > unicodeMaxRune {
-				end = unicodeMaxRune
-			}
-			for c := start; ; c++ {
-				if work++; work > maxWork {
-					return cmapResult(out), len(out) > 0
-				}
-				gid := uint64(startGID) + uint64(c-start)
-				// Glyph indices are 16-bit; anything wider is malformed and
-				// must not be recorded as if it named a glyph.
-				if gid != 0 && gid <= 0xFFFF {
-					out[rune(c)] = int(gid)
-				}
-				if c == end { // c is a uint32; end may be the largest value it holds
-					break
-				}
-			}
+		sequential := Be16(b, 0) == 12
+		if cmapCoverageGroups(b, int(nGroups), 16, maxWork, sequential, &work, out) {
+			return cmapResult(out), len(out) > 0
 		}
 	default:
-		// Formats 2, 8, 10, 13 and 14 are not parsed.
+		// Formats 2 and 14 are not parsed; see the note on ParseCmapSubtable.
 		return nil, false
 	}
 	return cmapResult(out), false
