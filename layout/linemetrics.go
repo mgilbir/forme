@@ -346,13 +346,25 @@ func (l *layouter) faceForText(b *Box) (*shape.Face, bool) {
 	if got, cached := l.textFaces[b]; cached {
 		return got, got != nil
 	}
-	chosen := face
+	// The family's face is kept whatever it is missing, and the characters it
+	// cannot set are moved one at a time by faceRunsFor.
+	//
+	// It did not used to be. A single missing character sent the *whole box* to
+	// another face — so a sentence of English with one alef in it was set, every
+	// word of it, in a face the author never named, with that face's metrics and
+	// that face's line breaks. The finding said so, which was honest, and the
+	// page was still wrong in a way nothing could undo downstream.
+	//
+	// The report stays exactly where it was, and asks exactly what it asked: can
+	// one face set the whole of this text. That question is no longer how the
+	// face is *chosen* — it is only how the caller is told that the family it
+	// asked for could not set the paragraph — so what changes here is the page
+	// and not the reporting.
 	if missesVisible(face, b.Text) {
 		if set, canFall := l.fontSet.(FallbackFontSet); canFall {
 			bold := isBold(b.Style["font-weight"])
 			italic := isItalic(b.Style["font-style"])
 			if alt, found := set.FaceFor(b.Text, bold, italic); found {
-				chosen = alt
 				l.rec.ReportDetail(Finding{
 					Rule: RuleFontFallback,
 					Message: "no face for " + quoteValue(b.Style["font-family"]) +
@@ -364,6 +376,6 @@ func (l *layouter) faceForText(b *Box) (*shape.Face, bool) {
 			}
 		}
 	}
-	l.textFaces[b] = chosen
-	return chosen, true
+	l.textFaces[b] = face
+	return face, true
 }
