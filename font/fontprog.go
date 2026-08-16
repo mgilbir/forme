@@ -832,15 +832,35 @@ func ParseCFF(data []byte) *Program {
 	if fp.NumGlyphs > 0 {
 		gidToSID[0] = 0 // .notdef
 	}
-	switch charsetOff {
-	case 0: // ISOAdobe: identity SIDs
+	switch {
+	case charsetOff >= 0 && charsetOff <= 2 && isCID:
+		// A predefined charset on a CID-keyed font. The three are tables of
+		// glyph *names*, and a CID font's charset holds CIDs, so none of them
+		// means anything here; identity is the reading every consumer already
+		// has, and it is what "Identity" ordering asks for.
 		for g := 1; g < fp.NumGlyphs; g++ {
 			gidToSID[g] = g
 		}
-	case 1, 2:
-		// Expert charsets — rare; leave identity.
+	case charsetOff >= 0 && charsetOff <= 2:
+		set, _ := cffPredefinedCharset(charsetOff)
 		for g := 1; g < fp.NumGlyphs; g++ {
-			gidToSID[g] = g
+			switch {
+			case set == nil: // ISOAdobe, the identity
+				if g < isoAdobeCharsetLen {
+					gidToSID[g] = g
+				} else {
+					gidToSID[g] = -1
+				}
+			case g < len(set):
+				gidToSID[g] = set[g]
+			default:
+				// Past the end of the charset. A predefined charset is a fixed
+				// list, so a font with more glyphs than it holds has named none
+				// of them — and the identity would give those glyphs the names
+				// of unrelated standard strings, which is how a width ends up
+				// recorded against a glyph the font does not have.
+				gidToSID[g] = -1
+			}
 		}
 	default:
 		if charsetOff > 0 && charsetOff < len(data) {
@@ -915,6 +935,15 @@ func ParseCFF(data []byte) *Program {
 		fp.WidthByName = make(map[string]float64, fp.NumGlyphs)
 		for g := 0; g < fp.NumGlyphs; g++ {
 			name := cffSIDName(gidToSID[g], stringsIdx)
+			// A glyph the charset does not name is not a glyph named "". It is
+			// left out, as parseType1 leaves its unnamed ones out, so that a
+			// consumer asking "does this font define X" is not answered by an
+			// entry that stands for every unnamed glyph at once — and so that
+			// WidthByName does not hold one glyph's width under a key the next
+			// unnamed glyph overwrites. WidthByGID still has every glyph.
+			if name == "" {
+				continue
+			}
 			fp.GlyphNames[name] = true
 			fp.WidthByName[name] = widthOf(g, charStrings.items[g])
 		}
