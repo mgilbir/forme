@@ -200,6 +200,9 @@ func TestWPTBreakdown(t *testing.T) {
 		switch {
 		case !passed:
 			fail++
+			if os.Getenv("WPT_DUMP_FAILING") != "" {
+				t.Logf("FAILING %s", rt.name)
+			}
 		case !unsupported && !blank:
 			cleanPass++
 		default:
