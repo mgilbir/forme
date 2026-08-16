@@ -464,8 +464,16 @@ $(WPT_DIR)/.ok:
 	git -C $(WPT_DIR) sparse-checkout set $(WPT_DIRS)
 	touch $@
 
-test-wpt: wpt
-	WPT_TESTS=$(abspath $(WPT_DIR)) go test -v -run TestWPT -count=1 ./layout/
+# NOTO_FONTS as well as WPT_TESTS, and noto-fonts as well as wpt. The ratchet
+# counts what the engine renders with the font library a *caller* supplies, and
+# without the Noto faces thirty documents that pass in CI report a missing glyph
+# instead. Running this target without them measured 4,594 against a baseline of
+# 4,624 and printed "this is a layout regression" — which is the one thing a
+# ratchet must never say when it is wrong, because the reading it invites is to
+# lower the number.
+test-wpt: wpt noto-fonts
+	WPT_TESTS=$(abspath $(WPT_DIR)) NOTO_FONTS=$(abspath $(NOTO_DIR)) \
+	  go test -v -run TestWPT -count=1 ./layout/
 
 clean-wpt:
 	rm -rf $(WPT_DIR)
