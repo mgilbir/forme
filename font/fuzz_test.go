@@ -93,8 +93,29 @@ func cmapSubtableSeeds() [][]byte {
 		format12[:12],
 		overstated,
 		longLength,
+		// Format 13: many-to-one. Its group array is format 12's, so the shapes
+		// that matter are the same ones — except that a full-range group here
+		// records every code it covers rather than running out of glyph ids, so
+		// wideOpen is the budget's worst case rather than merely a slow one.
+		fonttest.CmapFormat13([][3]uint32{{0x0041, 0x0045, 700}}),
+		fonttest.CmapFormat13([][3]uint32{{0x1F600, 0x1F602, 42}}),
+		fonttest.CmapFormat13([][3]uint32{{0x50, 0x40, 300}, {0x110000, 0x110002, 400}, {0x60, 0x60, 0x10000}, {0x41, 0x41, 200}}),
+		fonttest.CmapFormat13(wideOpen),
+		fonttest.CmapFormat13(nil),
+		// Format 8: the same groups behind an 8192-byte is32 bitmap the parser
+		// does not read, so the interesting mutations are the ones that move the
+		// group array's start.
+		fonttest.CmapFormat8([][3]uint32{{0x0041, 0x0043, 10}, {0x1F600, 0x1F600, 99}}),
+		fonttest.CmapFormat8(nil),
+		fonttest.CmapFormat8([][3]uint32{{0x41, 0x42, 7}})[:4000], // is32 cut off
+		// Format 10: trimmed 32-bit array, one running past U+10FFFF, and one
+		// starting past it — where a code, unguarded, wraps to a negative rune.
+		fonttest.CmapFormat10(0x1F600, []uint16{5, 0, 7}),
+		fonttest.CmapFormat10(0x10FFFE, []uint16{1, 2, 3, 4}),
+		fonttest.CmapFormat10(0xFFFFFF00, []uint16{1, 2}),
+		fonttest.CmapFormat10(0x41, nil),
 		// Formats the parser does not handle, and degenerate input.
-		{0, 2, 0, 0}, {0, 13, 0, 0}, {0, 14, 0, 0}, {0, 8}, {0},
+		{0, 2, 0, 0}, {0, 14, 0, 0}, {0},
 		{},
 	}
 	return seeds
