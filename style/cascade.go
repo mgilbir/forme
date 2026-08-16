@@ -297,6 +297,32 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 		return nil
 	}
 
+	if colourValued[name] && !legalColour(name, d.Value) {
+		// §4.2 again, and the same reason it cannot wait until the value is
+		// read: "color: 'red'" is a string where a colour belongs, so the
+		// declaration is invalid and is dropped, and what stands is whatever the
+		// cascade would have produced without it.
+		//
+		// Read at use time instead, the invalid declaration is still the winning
+		// one — it has the higher specificity, that is why it is there — and the
+		// colour comes out as the property's initial value. colors-007 is four
+		// paragraphs that must each be green, and two of them came out black:
+		// the lower-specificity "p.incorrect { color: green }" never got to
+		// apply, because the declaration that should have been thrown away was
+		// still standing in front of it.
+		//
+		// Not marked unsupported. Nothing is missing from the engine; a
+		// stylesheet said something CSS forbids and CSS says what to do about
+		// it.
+		s.report(Finding{
+			Offset: d.Offset,
+			Message: "\"" + name + ": " + serialize(d.Value) + "\" is not a colour, " +
+				"so the declaration was dropped",
+			Property: name,
+		})
+		return nil
+	}
+
 	if name == "quotes" && !legalQuotes(d.Value) {
 		// §12.3.2's grammar is "[<string> <string>]+ | none", so an odd number of
 		// strings names a level with an opening mark and no closing one and is not
@@ -482,6 +508,41 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 // catching it needs the shorthand expander rather than a name lookup; what
 // happens today is that the negative reaches two longhands, which is a gap this
 // records rather than hides.
+// colourValued lists the properties whose whole value is a colour.
+//
+// A shorthand is not among them: "border" and "background" tell their parts
+// apart by type, so a part that is not a colour is simply not the colour part,
+// and the shorthand's own expander already refuses the declaration when nothing
+// else will take it.
+var colourValued = map[string]bool{
+	"color": true, "background-color": true,
+	"border-top-color": true, "border-right-color": true,
+	"border-bottom-color": true, "border-left-color": true,
+	"outline-color": true, "text-decoration-color": true,
+}
+
+// legalColour reports whether a value is one a colour property takes.
+//
+// The four CSS-wide keywords are not colours and are not this function's
+// business — the cascade acts on them itself, and dropping "color: inherit" as
+// an invalid colour would be a far worse bug than the one this fixes.
+// "currentcolor" is a colour the cascade cannot resolve until it knows the
+// element's own, and "invert" belongs to outline-color alone.
+func legalColour(name string, vals []css.ComponentValue) bool {
+	if parts := splitOnWhitespace(vals); len(parts) == 1 && len(parts[0]) == 1 {
+		if v := parts[0][0]; v.IsToken() && v.Token.Kind == css.Ident {
+			switch strings.ToLower(v.Token.Value) {
+			case kwInherit, kwInitial, kwUnset, kwRevert, "currentcolor":
+				return true
+			case "invert":
+				return name == "outline-color"
+			}
+		}
+	}
+	_, ok := ParseColor(vals)
+	return ok
+}
+
 var nonNegative = map[string]bool{
 	"width": true, "height": true,
 	"min-width": true, "min-height": true,
