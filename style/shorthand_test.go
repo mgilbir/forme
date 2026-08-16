@@ -418,3 +418,53 @@ func TestShorthandLonghandsMatchWhatTheExpanderProduces(t *testing.T) {
 		}
 	}
 }
+
+// TestFontShorthandTakesTheSlashWhereverTheSpacesAre is CSS Fonts §"font": the
+// line-height is "/ <line-height>" after the size, and white space either side
+// of the slash is white space like any other.
+//
+// The four spellings below are one declaration written four ways, and the last
+// of them was wrong. The tokeniser hands the shorthand a slice of parts split on
+// white space, so where the author put the spaces decides whether the slash
+// arrives inside the size's part, at the head of the height's, or alone between
+// the two — and only the first two shapes were tried. So "12px / 1" matched
+// nothing, the size kept its default line-height, and the family became
+// "/ 1 monospace", which matches no face and sets the whole document in a
+// fallback.
+//
+// The other three are here because they are the shapes that already worked, and
+// a scan wide enough to reach the third is wide enough to run past the height
+// and take a word out of the family. They are the guard on that: two of the
+// planted defects for this change are caught by them and not by the case the
+// change is for.
+//
+// The suite writes it spaced, which is how this was found rather than reasoned
+// about.
+func TestFontShorthandTakesTheSlashWhereverTheSpacesAre(t *testing.T) {
+	for _, decl := range []string{
+		"font: 12px/1 monospace",
+		"font: 12px/ 1 monospace",
+		"font: 12px /1 monospace",
+		"font: 12px / 1 monospace",
+	} {
+		got := computed(t, `<p id="p">x</p>`, sheet(t, OriginAuthor, "p { "+decl+" }"))
+		if fam := got["p"]["font-family"]; fam != "monospace" {
+			t.Errorf("{%s} gave font-family %q, want monospace", decl, fam)
+		}
+		if lh := got["p"]["line-height"]; lh != "1" {
+			t.Errorf("{%s} gave line-height %q, want 1", decl, lh)
+		}
+		if sz := got["p"]["font-size"]; sz != "12px" {
+			t.Errorf("{%s} gave font-size %q, want 12px", decl, sz)
+		}
+	}
+
+	// And the shorthand without a line-height still has none, so the scan for a
+	// slash does not reach into the family and take a word out of it.
+	got := computed(t, `<p id="p">x</p>`,
+		sheet(t, OriginAuthor, `p { font: 12px Ahem, monospace }`))
+	if fam, lh := got["p"]["font-family"], got["p"]["line-height"]; fam != "Ahem, monospace" || lh != "normal" {
+		t.Errorf("a shorthand with no line-height gave family %q and line-height %q, "+
+			"want %q and normal", fam, lh, "Ahem, monospace")
+	}
+}

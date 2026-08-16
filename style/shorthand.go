@@ -652,14 +652,23 @@ func fontShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, 
 	}
 
 	size = parts[i]
-	// A line-height written as "size/height" arrives as one part, because the
-	// slash is a delimiter rather than whitespace.
-	if s, h, ok := splitOnSlash(size); ok {
-		size, lineHeight = s, h
-	} else if i+1 < len(parts) {
-		if s, h, ok := splitOnSlash(joinParts(parts[i], parts[i+1])); ok {
+	// A line-height is "size / height", and CSS allows white space on either
+	// side of the slash — so the three tokens arrive as one part, two or three
+	// depending on where the author put the spaces:
+	//
+	//	font: 12px/1 monospace      one:   [12px/1]
+	//	font: 12px/ 1 monospace     two:   [12px/] [1]
+	//	font: 12px / 1 monospace    three: [12px] [/] [1]
+	//
+	// Only the first two were tried, and splitOnSlash refuses a part whose
+	// slash is last — so the spaced form matched nothing and the whole of
+	// "/ 1 monospace" became the family. The suite writes it that way, and a
+	// font-family of "/ 1 monospace" matches no face at all.
+	for span := 1; span <= 3 && i+span <= len(parts); span++ {
+		if s, h, ok := splitOnSlash(joinParts(parts[i : i+span]...)); ok {
 			size, lineHeight = s, h
-			i++
+			i += span - 1
+			break
 		}
 	}
 	i++
