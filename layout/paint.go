@@ -1081,6 +1081,19 @@ func (p *painter) lines(f *Fragment) {
 			// the order every renderer uses, and it only matters where a
 			// decoration's colour differs from the text's — which is precisely the
 			// case §16.3.1 exists to describe.
+			if _, isControl := controlOf(run.Text); isControl {
+				// CSS Text 3 requires a control character to be visible, and no
+				// face has a glyph for one — so the mark is synthesized here
+				// rather than asked for. The advance was spent by layout and is
+				// not changed: the box goes inside it.
+				//
+				// No DrawText goes with it. Emitting one would put .notdef on
+				// the page beside the box, and would put the control character
+				// itself into the text extracted from the page, where it is
+				// exactly the thing a reader does not want back.
+				p.ops = append(p.ops, controlBox(at, run.Width, run.Size, colour)...)
+				continue
+			}
 			p.decorate(run, at, false)
 			p.ops = append(p.ops, DrawText{
 				At:          at,

@@ -919,7 +919,16 @@ const wptEnv = "WPT_TESTS"
 // 415 to 413. It is the second change in a row to move both the right way, and
 // for the same reason: a property that was reported rather than performed was
 // keeping tests out of the clean count *and* setting some of them wrong.
-const wptCleanPassBaseline = 4551
+// Drawing a box for a control character took it from 4551 to 4611, the largest
+// single move this file records, and the failures down again to 411.
+//
+// Sixty of the suite's documents are titled "Control characters must be
+// visible", and every one of them was *passing* — they are mismatch tests
+// against a reference with no div in it at all, so the two pictures differ
+// because the div exists rather than because anything was drawn for the
+// character. The glyph-missing finding was the only thing in the engine that
+// knew, which is what kept them out of this count.
+const wptCleanPassBaseline = 4611
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

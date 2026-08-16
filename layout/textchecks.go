@@ -167,6 +167,12 @@ func (l *layouter) checkGlyphs(b *Box, face *shape.Face, text string) {
 		if r == '\n' || r == '\t' || marksNoPaper(r) {
 			continue
 		}
+		if isVisibleControl(r) {
+			// Drawn as a synthesized box rather than as a glyph, so no face was
+			// ever asked for one and nothing is missing from the page. See
+			// controlchar.go.
+			continue
+		}
 		if _, missing := face.ShapeGlyphs(string(r)); missing == 0 {
 			continue
 		}

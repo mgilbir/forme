@@ -48,11 +48,20 @@ type faceRun struct {
 // already right.
 func (l *layouter) faceRunsFor(b *Box, primary *shape.Face, text string) []faceRun {
 	one := []faceRun{{Text: text, Face: primary}}
-	if text == "" || primary == nil || !missesVisible(primary, text) {
+	if text == "" || primary == nil {
 		return one
 	}
+	// A control character is cut out of the text around it whatever the faces
+	// say, because what is drawn for it is not a glyph from any face — see
+	// controlchar.go. It reaches painting as a run of its own or not at all.
+	if !missesVisible(primary, text) && !hasVisibleControl(text) {
+		return one
+	}
+	// A missing fallback set is not a reason to stop: the control-character cut
+	// below does not need one, and a caller with no fallback faces still gets a
+	// visible glyph for a character no face has.
 	set, canFall := l.fontSet.(FallbackFontSet)
-	if !canFall {
+	if !canFall && !hasVisibleControl(text) {
 		return one
 	}
 	bold := isBold(b.Style["font-weight"])
@@ -81,7 +90,15 @@ func (l *layouter) faceRunsFor(b *Box, primary *shape.Face, text string) []faceR
 		lo, hi := at[i], at[i+1]
 		cluster := text[lo:hi]
 		want := primary
-		if missesVisible(primary, cluster) {
+		if _, isControl := controlOf(cluster); isControl {
+			// Its own run, always: it is neither the face before it nor the
+			// face after it, and the painter recognises it by being alone.
+			flush(lo)
+			runs = append(runs, faceRun{Text: cluster, Face: primary})
+			start, cur = hi, primary
+			continue
+		}
+		if canFall && missesVisible(primary, cluster) {
 			// This cluster is not one the primary face can set. Ask for a face
 			// that can — for the cluster alone, because asking for the rest of
 			// the text would be the whole-box question again and would have the
