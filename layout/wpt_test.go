@@ -869,7 +869,19 @@ const wptEnv = "WPT_TESTS"
 // of those 989 moved from clean to vacuous with not one test changing from
 // passing to failing: a pure reporting cost, which is exactly what the strip
 // existed to avoid. What replaced it removes the cost by removing its cause.
-const wptCleanPassBaseline = 4438
+// The suite's shared css/support directory was not in the sparse checkout, and
+// adding it took this from 4438 to 4461 without touching the engine at all.
+// Twenty-three tests write a root-relative "/css/support/60x60-red.png" as their
+// background image; the file was absent, so the image painted nothing — and the
+// reference beside it painted nothing either, so all twenty-three *passed*, in
+// the vacuous bucket, reporting a blocked resource nobody read.
+//
+// The three counts moved exactly against each other — clean 4438 to 4461,
+// vacuous 323 to 300, failing 416 unchanged — which is what says this converted
+// tainted passes rather than trading anything. It is the fifth entry in this
+// file's list of large blocks that were the harness rather than the engine, and
+// the first to have cost nothing but a missing directory.
+const wptCleanPassBaseline = 4461
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
