@@ -320,6 +320,18 @@ clean-css-colors:
 # to run the tests, and no font bytes ship in this repository or anything it
 # builds. The licence text is fetched alongside them.
 #
+# The last four are narrow on purpose. Ogham, Coptic, Deseret and the Number
+# Forms are what the suite's remaining glyph-missing reports are *for* — eleven
+# documents between them, and nothing else in this set has a glyph for any of it.
+# They are small because each covers one block and nothing else: Ogham is four
+# kilobytes, which is a whole script.
+#
+# None of them carries Latin, and that only became usable when the fallback
+# started working per run rather than per box. A face with no Latin cannot set
+# "the ogham space mark ᚛" as a whole, so the whole-box question had no answer
+# and the box kept the family's face — which is exactly the shape the Hebrew
+# sentence had. See layout/facerun.go.
+#
 # The Japanese face is the variable TTF and not one of the static OTFs, because
 # those are CID-keyed CFF and forme does not read them. forme instantiates it at
 # the font's default, which its name table reports as Thin — so CJK set through
@@ -329,7 +341,8 @@ clean-css-colors:
 NOTO_DIR := testdata/fonts-noto
 NOTO_BASE := https://raw.githubusercontent.com/notofonts
 NOTO_HINTED := NotoSans NotoSansHebrew NotoSansArabic NotoSansDevanagari \
-               NotoSansArmenian NotoSansGeorgian
+               NotoSansArmenian NotoSansGeorgian \
+               NotoSansOgham NotoSansCoptic NotoSansDeseret NotoSansSymbols
 
 noto-fonts: $(NOTO_DIR)/.ok
 
