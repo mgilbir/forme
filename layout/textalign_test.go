@@ -219,28 +219,30 @@ func TestTextAlignMovesAtomicInlines(t *testing.T) {
 	}
 }
 
-func TestTextAlignJustifyIsReported(t *testing.T) {
-	// Justification is not performed. Setting justified text ragged without
-	// saying so is the kind of wrong page that looks deliberate, so it is
-	// reported — and reported once for the box rather than once per line.
-	rec := NewRecorder(nil)
-	built := Build(Input{
-		HTML: `<div id="p">one two three four five six seven eight nine ten</div>`,
-		CSS:  []Stylesheet{{Source: `#p { width: 80px; text-align: justify }`}},
-	})
-	Layout(built.Root, Size{W: picPx(600), H: picPx(10000)}, nil, rec)
-
-	var found int
-	for _, f := range rec.Findings() {
-		if f.Property == "text-align" && strings.Contains(f.Message, "justify") {
-			found++
+// TestTextAlignJustifyIsNotReported.
+//
+// It was, for as long as it was not implemented. It is implemented now, and a
+// line with nowhere to put the slack — one long word — is left where "start"
+// puts it, which is what CSS Text 3 §7.3 requires of a line with no expansion
+// opportunity. Reporting that would be this engine calling a conforming
+// rendering a limitation, which is the fault the finding vocabulary exists to
+// avoid rather than to commit.
+func TestTextAlignJustifyIsNotReported(t *testing.T) {
+	for _, doc := range []string{
+		`<div id="p">one two three four five six seven eight nine ten</div>`,
+		`<div id="p">aaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbb</div>`,
+	} {
+		rec := NewRecorder(nil)
+		built := Build(Input{
+			HTML: doc,
+			CSS:  []Stylesheet{{Source: `#p { font-family: Courier; font-size: 20px; width: 80px; text-align: justify }`}},
+		})
+		Layout(built.Root, Size{W: picPx(600), H: picPx(10000)}, nil, rec)
+		for _, f := range rec.Findings() {
+			if f.Property == "text-align" {
+				t.Errorf("%s reported %s", doc, f.Error())
+			}
 		}
-	}
-	if found == 0 {
-		t.Error("text-align:justify was applied silently; it is not implemented")
-	}
-	if found > 1 {
-		t.Errorf("the justification gap was reported %d times; once per box is enough", found)
 	}
 }
 
