@@ -63,7 +63,16 @@ func (l *layouter) markerFor(b *Box, frag *Fragment) *Marker {
 	size := b.FontSize
 	width := l.br.Measure(face, text, size)
 	lineHeight := l.lineHeight(b)
-	baseline := frag.Border.Top.Add(frag.Padding.Top).Add(l.baselineOf(b, lineHeight))
+	// The marker sits on the item's *first line*, the same line its x is
+	// measured against — so where there is one, its baseline is the marker's.
+	//
+	// It used to be derived from the strut alone, which is the right answer for
+	// an item whose first line is an ordinary one and gives no answer at all
+	// about which line it is on. The difference shows where the two disagree: a
+	// first line taller than the strut — an image, a larger span, a line-height
+	// of its own — puts its baseline further down, and the bullet stayed level
+	// with a strut nothing was set in.
+	baseline := frag.Border.Top.Add(frag.Padding.Top).Add(firstLineBaseline(frag, l.baselineOf(b, lineHeight)))
 	// Where the item's *first line* starts, which is not where its content box
 	// does when a float is in the way.
 	//
@@ -382,4 +391,20 @@ func firstLineStart(frag *Fragment) style.Unit {
 		return 0
 	}
 	return frag.Lines[0].Rect.X
+}
+
+// firstLineBaseline is where the item's first line puts its baseline, or the
+// given fallback when the item has no line at all.
+//
+// The fallback is the strut's, which is what an item with no line has instead of
+// one — and an item with an outside marker and no content of its own is exactly
+// that. See the note on issue #23: the marker being placed from the strut
+// whether or not a line exists is why a zero-tall item and a one-line item put
+// their bullets in the same place, and why that agreement is not evidence that
+// their boxes agree.
+func firstLineBaseline(frag *Fragment, fallback style.Unit) style.Unit {
+	if frag == nil || len(frag.Lines) == 0 {
+		return fallback
+	}
+	return frag.Lines[0].Rect.Y.Add(frag.Lines[0].Baseline)
 }
