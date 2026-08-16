@@ -157,6 +157,32 @@ func (f *Face) GlyphAdvances() []float64 {
 	return append([]float64(nil), f.prog.WidthByGID...)
 }
 
+// GlyphCode is the number the embedded font addresses a glyph by — the number
+// to key a width table on, to write into a /CIDSet, and to put in a content
+// stream.
+//
+// For everything but a CID-keyed CFF it is the glyph index, which is what
+// Identity-H means and why the two words are used interchangeably about most
+// faces. A CIDFontType0 is addressed by CID instead: the code goes into the
+// font's charset and comes out as a glyph index, so writing the glyph index
+// there sends the reader to whatever glyph happens to carry that number.
+//
+// # Why this and not the mapping
+//
+// The two numberings agree for a font whose charset is the identity, and many
+// are — so a caller that reaches for a CID only when it remembers to gets a
+// document that is right for most faces and wrong for the CJK ones, which is
+// the worst way for this to be wrong. There is no branch here to forget: the
+// answer is already the right number for the face in hand, and a caller that
+// uses it everywhere a glyph is named is correct for every kind of face.
+//
+// It is what Encode writes, so a width table keyed on it agrees with the codes
+// in the content stream by construction rather than by both being derived
+// correctly. Out-of-range and negative glyph ids come back unchanged, because a
+// glyph the face does not have has no code and inventing one would hide the
+// caller's error rather than the font's.
+func (f *Face) GlyphCode(gid int) int { return f.codeForGID(gid) }
+
 // IsCFF reports whether the outlines are CFF rather than glyf, which decides
 // how a format has to carry the program and what it may say about it.
 func (f *Face) IsCFF() bool { return f.cff }
