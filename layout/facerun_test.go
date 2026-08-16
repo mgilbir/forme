@@ -225,3 +225,83 @@ func TestACharacterNoFaceHasIsStillReported(t *testing.T) {
 		t.Errorf("a character no face can set was not reported: %v", findings)
 	}
 }
+
+// TestOneMissingCharacterDoesNotMoveTheWholeBox.
+//
+// The fallback used to be asked per box: one character the family could not set
+// sent *every word* of the paragraph to another face, with that face's metrics
+// and that face's line breaks. The finding said so, which was honest, and the
+// page was still set in a font nobody chose.
+//
+// Now the family keeps everything it can set and only the character that needed
+// moving moves. The way to see it is that the English is laid out identically
+// whether or not the alef is there.
+func TestOneMissingCharacterDoesNotMoveTheWholeBox(t *testing.T) {
+	hebrew := loadHebrew(t)
+	set := oneFaceSet{fallback: hebrew, standard: StandardFonts()}
+	const css = `#p { font-family: Helvetica; font-size: 20px }`
+
+	plain, _ := layoutWith(t, set, `<p id="p">the quick brown fox</p>`, css)
+	mixed, _ := layoutWith(t, set, `<p id="p">the quick brown fox א</p>`, css)
+
+	want := map[string]style.Unit{}
+	for _, line := range find(t, plain, "p").Lines {
+		for _, r := range line.Runs {
+			if strings.TrimSpace(r.Text) != "" {
+				want[r.Text] = r.X
+			}
+		}
+	}
+	if len(want) == 0 {
+		t.Fatal("the plain paragraph drew nothing")
+	}
+	for _, line := range find(t, mixed, "p").Lines {
+		for _, r := range line.Runs {
+			at, ok := want[r.Text]
+			if !ok {
+				continue
+			}
+			if r.X != at {
+				t.Errorf("%q is at %v with an alef in the paragraph and at %v "+
+					"without one; one character moved the whole box", r.Text, r.X, at)
+			}
+		}
+	}
+}
+
+// TestTheFamilyFaceIsKeptEvenWhenAnotherCouldSetEverything.
+//
+// The sharpest case, and the one the old code got most wrong: a face that can
+// set the *whole* paragraph is exactly the face the whole-box fallback chose,
+// so a document whose family lacked one character was set entirely in it. The
+// report still names that face — a caller wants to know its family could not do
+// the job — but the page keeps the family for every character the family has.
+func TestTheFamilyFaceIsKeptEvenWhenAnotherCouldSetEverything(t *testing.T) {
+	latin := loadNoto(t, "NotoSans-Regular.ttf")
+	set := oneFaceSet{fallback: latin, standard: StandardFonts()}
+	// NotoSans can set all of this and Helvetica cannot: U+0250 is Latin
+	// Extended-B, which the standard fourteen do not carry.
+	root, findings := layoutWith(t, set,
+		`<p id="p">the quick ɐ fox</p>`,
+		`#p { font-family: Helvetica; font-size: 20px }`)
+
+	var said bool
+	for _, f := range findings {
+		if f.Rule == RuleFontFallback {
+			said = true
+		}
+	}
+	if !said {
+		t.Errorf("nothing reported that the family could not set the text: %v", findings)
+	}
+	for _, r := range drawnRuns(root) {
+		if r.Text == "ɐ" {
+			continue
+		}
+		if r.Face == latin.Name() {
+			t.Errorf("%q was set in %q although Helvetica has it; a face that "+
+				"could set the whole paragraph took the whole paragraph",
+				r.Text, r.Face)
+		}
+	}
+}
