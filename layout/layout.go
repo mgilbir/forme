@@ -177,7 +177,6 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 		reportedScripts:     map[string]bool{},
 		reportedGlyphs:      map[string]bool{},
 		reportedOverflow:    map[string]bool{},
-		reportedJustify:     map[string]bool{},
 		decorations:         map[*Box][]textDecoration{},
 		backgrounds:         map[*Box][]backgroundLayer{},
 		reportedBackgrounds: map[string]bool{},
@@ -365,8 +364,6 @@ type layouter struct {
 	reportedGlyphs    map[string]bool
 	// reportedOverflow suppresses repeating one run's overflow per line.
 	reportedOverflow map[string]bool
-	// reportedJustify suppresses repeating the justification gap per line.
-	reportedJustify map[string]bool
 	// decorations memoizes the text decorations drawn across each box, which are
 	// built from the box's parent's — see decorationsFor.
 	decorations map[*Box][]textDecoration

@@ -80,24 +80,12 @@ func alignmentOf(b *Box, rtl bool) textAlign {
 func (l *layouter) alignLine(b *Box, rtl bool, lineWidth, used style.Unit) style.Unit {
 	slack := lineWidth.Sub(used)
 	align := alignmentOf(b, rtl)
-	if slack > 0 && align == alignJustify {
-		// Justification stretches the spaces of every line but the last, which
-		// needs the break opportunities inside the line and a decision about
-		// what to do with a line that has none. Neither is here, so the line is
-		// left where "start" would put it and the difference is reported —
-		// silently setting justified text ragged is the kind of wrong page that
-		// looks deliberate.
-		//
-		// A line with nothing left over is a line justification would not have
-		// moved, so there is nothing to report about it either: an engine that
-		// does not justify sets such a line exactly where a conforming one
-		// would. That is why the report is inside the slack test, and it is
-		// worth saying because the ordering has a visible consequence — a
-		// paragraph whose every line comes out full is a paragraph this engine
-		// renders correctly with "text-align: justify" on it, and it counts as a
-		// clean pass in the reftest ratchet on purpose.
-		l.reportJustify(b)
-	}
+	// A justified line starts where "start" would put it, and the slack is then
+	// spread across its spaces by justifyLine, which is the caller's next step
+	// and needs the line's runs rather than a single offset. So there is nothing
+	// to do here for it, and nothing to report either: the report belongs to the
+	// case justifyLine cannot handle, and only that call knows which lines those
+	// are.
 	switch align {
 	case alignRight:
 		// The slack may be negative, and then this is the whole of what the
@@ -136,23 +124,6 @@ func (l *layouter) alignLine(b *Box, rtl bool, lineWidth, used style.Unit) style
 		return slack.Div(2)
 	}
 	return 0
-}
-
-// reportJustify names the gap once per box rather than once per line.
-func (l *layouter) reportJustify(b *Box) {
-	key := PathOf(b.Element)
-	if l.reportedJustify[key] {
-		return
-	}
-	l.reportedJustify[key] = true
-	l.rec.ReportDetail(Finding{
-		Rule:   RuleUnsupportedValue,
-		Source: AtHTML(offsetOf(b)),
-		Message: "\"text-align: justify\" is not implemented; the lines were set " +
-			"ragged from the start edge, so the right edge will not line up",
-		Path:     key,
-		Property: "text-align",
-	})
 }
 
 // alignedWidth is the width a line occupies for the purpose of aligning it.

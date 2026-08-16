@@ -915,7 +915,11 @@ const wptEnv = "WPT_TESTS"
 // *inside* a string and leaves both ends out, so a loop over it that does not put
 // the leading zero back skips the first cluster of every run — invisible whenever
 // a run starts with text the primary face has, which is almost every run.
-const wptCleanPassBaseline = 4542
+// text-align: justify took it from 4542 to 4551, and the failures down again,
+// 415 to 413. It is the second change in a row to move both the right way, and
+// for the same reason: a property that was reported rather than performed was
+// keeping tests out of the clean count *and* setting some of them wrong.
+const wptCleanPassBaseline = 4551
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
