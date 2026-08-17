@@ -299,6 +299,11 @@ type layouter struct {
 	// textFaces memoizes the face a text box is actually set in, which is not
 	// the family's face when the family cannot cover the text. See faceForText.
 	textFaces map[*Box]*shape.Face
+	// restrictedFamilies memoizes whether a font-family list can resolve to a
+	// face carrying a unicode-range, keyed by the list as written. It is what
+	// keeps the per-cluster family walk off every document that has no such
+	// descriptor, which is almost all of them.
+	restrictedFamilies map[string]bool
 	// br is the half of inline layout that is about text rather than boxes, and
 	// it owns the memo of measured runs. See breaker.
 	br *breaker

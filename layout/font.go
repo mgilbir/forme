@@ -29,6 +29,26 @@ type FontSet interface {
 	Face(family string, bold, italic bool) (*shape.Face, bool)
 }
 
+// RangedFontSet is a FontSet whose families may answer differently for different
+// characters, which is what an @font-face unicode-range descriptor asks for.
+//
+// It cannot be asked through FontSet, whose Face takes a family and no text: a
+// document declaring one webfont for Latin and another for Greek has named two
+// families and expects both to be used, one character at a time. So a set that
+// holds such a restriction offers this instead, and layout asks it per grapheme
+// cluster as it walks the document's font-family list.
+//
+// It is a different question from FallbackFontSet's. That one asks "what can set
+// this text at all" and answers with a substitution, which is reported; this one
+// asks "what did the *document* name for this text", and its answer is what the
+// author asked for rather than a stand-in. A family that has nothing for the
+// text comes back false so that the next family the document named is asked —
+// which is the walk that would otherwise have stopped at the first family with a
+// face in it.
+type RangedFontSet interface {
+	FaceForFamily(family, text string, bold, italic bool) (*shape.Face, bool)
+}
+
 // FallbackFontSet is a FontSet that can also be asked for a face by what it
 // needs to set rather than by name.
 //

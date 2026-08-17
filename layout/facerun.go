@@ -1,6 +1,8 @@
 package layout
 
 import (
+	"strings"
+
 	"github.com/mgilbir/forme/segment"
 	"github.com/mgilbir/forme/shape"
 )
@@ -38,6 +40,15 @@ import (
 type faceRun struct {
 	Text string
 	Face *shape.Face
+	// substituted marks a run whose face came from the fallback set rather than
+	// from a family the document named.
+	//
+	// The difference matters to one caller and matters a lot: a run set in a
+	// face the author asked for is the page working, and a run set in a face
+	// nobody chose is worth reporting. A document naming two webfonts with
+	// disjoint unicode-ranges uses its *second* family for half its text, which
+	// looks like a substitution from the outside and is the opposite of one.
+	substituted bool
 }
 
 // faceRunsFor splits text into the stretches each face can set.
@@ -51,17 +62,32 @@ func (l *layouter) faceRunsFor(b *Box, primary *shape.Face, text string) []faceR
 	if text == "" || primary == nil {
 		return one
 	}
-	// A control character is cut out of the text around it whatever the faces
-	// say, because what is drawn for it is not a glyph from any face — see
-	// controlchar.go. It reaches painting as a run of its own or not at all.
-	if !missesVisible(primary, text) && !hasVisibleControl(text) {
-		return one
-	}
 	// A missing fallback set is not a reason to stop: the control-character cut
 	// below does not need one, and a caller with no fallback faces still gets a
 	// visible glyph for a character no face has.
 	set, canFall := l.fontSet.(FallbackFontSet)
-	if !canFall && !hasVisibleControl(text) {
+	ranged, hasRanges := l.fontSet.(RangedFontSet)
+	if hasRanges {
+		// Only worth walking the family list per cluster when some face in it
+		// is actually restricted. A document with no unicode-range anywhere —
+		// which is almost every document — asks the same question for every
+		// cluster and gets the same answer, so it is not asked at all.
+		hasRanges = l.familyListIsRestricted(b)
+	}
+
+	// Nothing to do: the primary face can set everything, no character has to be
+	// drawn as a box, and no family in the list is restricted to part of Unicode.
+	//
+	// The last of those three is not the same question as the first, and putting
+	// it here was where this went wrong once. A unicode-range says which
+	// characters a face is *for*, not which it has glyphs for — a Latin webfont
+	// scoped to U+0-7F usually has a full Latin-1 repertoire — so missesVisible
+	// answers "no, it is fine" for exactly the text the descriptor exists to
+	// move, and the run was returned whole before the walk below ever ran.
+	if !missesVisible(primary, text) && !hasVisibleControl(text) && !hasRanges {
+		return one
+	}
+	if !canFall && !hasRanges && !hasVisibleControl(text) {
 		return one
 	}
 	bold := isBold(b.Style["font-weight"])
@@ -78,11 +104,13 @@ func (l *layouter) faceRunsFor(b *Box, primary *shape.Face, text string) []faceR
 	at := append([]int{0}, append(segment.Boundaries(nil, text), len(text))...)
 
 	var runs []faceRun
-	// The stretch being accumulated, and the face it is going to.
+	// The stretch being accumulated, the face it is going to, and whether that
+	// face came from outside the document's own list.
 	start, cur := 0, primary
+	curSub := false
 	flush := func(end int) {
 		if end > start {
-			runs = append(runs, faceRun{Text: text[start:end], Face: cur})
+			runs = append(runs, faceRun{Text: text[start:end], Face: cur, substituted: curSub})
 		}
 		start = end
 	}
@@ -95,25 +123,35 @@ func (l *layouter) faceRunsFor(b *Box, primary *shape.Face, text string) []faceR
 			// face after it, and the painter recognises it by being alone.
 			flush(lo)
 			runs = append(runs, faceRun{Text: cluster, Face: primary})
-			start, cur = hi, primary
+			start, cur, curSub = hi, primary, false
 			continue
 		}
-		if canFall && missesVisible(primary, cluster) {
+		fromFallback := false
+		if hasRanges {
+			// The document's own list, one cluster at a time. A family whose
+			// faces all exclude this character has nothing for it and the next
+			// one the author named is asked — which is what a unicode-range is
+			// written to make happen.
+			if named, found := l.namedFaceFor(ranged, b, cluster); found {
+				want = named
+			}
+		}
+		if canFall && missesVisible(want, cluster) {
 			// This cluster is not one the primary face can set. Ask for a face
 			// that can — for the cluster alone, because asking for the rest of
 			// the text would be the whole-box question again and would have the
 			// same non-answer.
 			if alt, found := set.FaceFor(cluster, bold, italic); found {
-				want = alt
+				want, fromFallback = alt, true
 			}
 			// Not found: the cluster stays with the primary face and is
 			// reported missing by checkGlyphs, which is what happened before
 			// this file existed and is still the right answer — there is no
 			// face to move it to.
 		}
-		if want != cur {
+		if want != cur || fromFallback != curSub {
 			flush(lo)
-			cur = want
+			cur, curSub = want, fromFallback
 		}
 	}
 	flush(len(text))
@@ -154,15 +192,24 @@ func (l *layouter) reportWhollySubstituted(b *Box, primary *shape.Face, runs []f
 		return
 	}
 	var alt *shape.Face
+	substituted := false
 	for _, r := range runs {
 		if r.Face == primary {
 			return
 		}
-		if alt == nil {
-			alt = r.Face
+		if r.substituted {
+			substituted = true
+			if alt == nil {
+				alt = r.Face
+			}
 		}
 	}
-	if alt == nil || alt == primary {
+	// Every run went to a face the document itself named — a second family in
+	// the font-family list, reached because the first declared a unicode-range
+	// that excluded this text. That is the list working, not a substitution, and
+	// saying "no face for these families could set any of this" of a face one of
+	// those families provided would be untrue as well as alarming.
+	if !substituted || alt == nil || alt == primary {
 		return
 	}
 	l.rec.ReportDetail(Finding{
@@ -173,4 +220,57 @@ func (l *layouter) reportWhollySubstituted(b *Box, primary *shape.Face, runs []f
 		Path:     PathOf(b.Element),
 		Property: "font-family",
 	})
+}
+
+// familyListIsRestricted reports whether any face the box's font-family list
+// could resolve to carries a unicode-range.
+//
+// It is the guard that keeps the per-cluster walk off every other document. The
+// answer depends only on the family list, so it is memoized per list rather than
+// per box — a page of ten thousand paragraphs in one family asks once.
+func (l *layouter) familyListIsRestricted(b *Box) bool {
+	set, ok := l.fontSet.(*documentFonts)
+	if !ok {
+		if f, isFallback := l.fontSet.(fallbackDocumentFonts); isFallback {
+			set = f.documentFonts
+		} else {
+			return false
+		}
+	}
+	families := b.Style["font-family"]
+	if got, cached := l.restrictedFamilies[families]; cached {
+		return got
+	}
+	restricted := false
+	for _, family := range parseFamilyList(families) {
+		key := strings.TrimSpace(strings.Trim(strings.TrimSpace(strings.ToLower(family)), `"'`))
+		for _, c := range set.byFamily[key] {
+			if len(c.rule.ranges) > 0 {
+				restricted = true
+			}
+		}
+	}
+	if l.restrictedFamilies == nil {
+		l.restrictedFamilies = map[string]bool{}
+	}
+	l.restrictedFamilies[families] = restricted
+	return restricted
+}
+
+// namedFaceFor walks the box's font-family list for a face the document named
+// that may set this cluster.
+//
+// It stops at the first family that offers one, which is the cascade's own rule
+// for a font-family list and is what makes "high-a-only, deep-b-only" mean what
+// it says. A cluster no named family covers comes back false and is left to the
+// primary face and the fallback set, exactly as before.
+func (l *layouter) namedFaceFor(ranged RangedFontSet, b *Box, cluster string) (*shape.Face, bool) {
+	bold := isBold(b.Style["font-weight"])
+	italic := isItalic(b.Style["font-style"])
+	for _, family := range parseFamilyList(b.Style["font-family"]) {
+		if face, ok := ranged.FaceForFamily(family, cluster, bold, italic); ok {
+			return face, true
+		}
+	}
+	return nil, false
 }

@@ -111,6 +111,43 @@ type fontFaceRule struct {
 	// "font-weight: 700" and "font-weight: 100 900".
 	weightLow, weightHigh float64
 	italic                bool
+
+	// ranges is the unicode-range descriptor: the characters this face is for.
+	// nil means the descriptor was absent or covered the whole of Unicode,
+	// which are the same thing and are the common case — a face with no
+	// restriction is asked no questions.
+	ranges []unicodeSpan
+}
+
+// covers reports whether this face may be used for a character.
+//
+// A rule with no ranges covers everything, which is what an absent unicode-range
+// means and is why the nil case is not special: the loop over an empty list
+// would answer "no" for every character, and the descriptor's absence must
+// answer "yes".
+func (r fontFaceRule) covers(c rune) bool {
+	if len(r.ranges) == 0 {
+		return true
+	}
+	for _, span := range r.ranges {
+		if c >= span.lo && c <= span.hi {
+			return true
+		}
+	}
+	return false
+}
+
+// coversText reports whether this face may be used for every character of text.
+func (r fontFaceRule) coversText(text string) bool {
+	if len(r.ranges) == 0 {
+		return true
+	}
+	for _, c := range text {
+		if !r.covers(c) {
+			return false
+		}
+	}
+	return true
 }
 
 // pendingFontFace is an @font-face rule and the stylesheet it was written in,
@@ -203,11 +240,40 @@ func (d fallbackDocumentFonts) FaceFor(text string, bold, italic bool) (*shape.F
 
 // Face answers for a family the document defined, and defers otherwise.
 func (d *documentFonts) Face(family string, bold, italic bool) (*shape.Face, bool) {
+	return d.faceFor(family, "", bold, italic)
+}
+
+// FaceForFamily implements RangedFontSet: the face a family offers for a
+// particular piece of text, which is not always the one it offers in general.
+//
+// A family whose faces carry unicode-range descriptors has a different answer
+// per character — that is the whole of what the descriptor is for — so the
+// question cannot be asked through FontSet, which has no text to ask about. See
+// the note on RangedFontSet.
+func (d *documentFonts) FaceForFamily(family, text string, bold, italic bool) (*shape.Face, bool) {
+	return d.faceFor(family, text, bold, italic)
+}
+
+// faceFor is the family lookup, optionally narrowed to the faces that may set a
+// given text.
+//
+// An empty text asks the general question and considers every face, which is
+// what FontSet's Face means and what a caller with no particular text in mind
+// wants. It is deliberately not the same as "text no face covers": that comes
+// back false, because a family whose every face excludes the text has nothing to
+// offer and the next family in the document's list should be asked.
+func (d *documentFonts) faceFor(family, text string, bold, italic bool) (*shape.Face, bool) {
 	key := strings.ToLower(strings.TrimSpace(family))
 	key = strings.Trim(key, `"'`)
 	key = strings.TrimSpace(key)
 	candidates := d.byFamily[key]
 	if len(candidates) == 0 {
+		if text == "" {
+			return d.base.Face(family, bold, italic)
+		}
+		// The base set knows nothing of unicode-range — only an @font-face
+		// carries one — so a family it holds covers whatever it has glyphs for,
+		// which is the question faceRunsFor asks next and not this one.
 		return d.base.Face(family, bold, italic)
 	}
 	desired := 400.0
@@ -217,6 +283,9 @@ func (d *documentFonts) Face(family string, bold, italic bool) (*shape.Face, boo
 	var best *documentFace
 	bestScore := 0.0
 	for _, c := range candidates {
+		if text != "" && !c.rule.coversText(text) {
+			continue
+		}
 		score := faceScore(c.rule, desired, italic)
 		// "<=" rather than "<", so that the last rule declared wins a tie. That
 		// is the cascade's last term, and an @font-face redeclared later in a
@@ -224,6 +293,12 @@ func (d *documentFonts) Face(family string, bold, italic bool) (*shape.Face, boo
 		if best == nil || score <= bestScore {
 			best, bestScore = c, score
 		}
+	}
+	if best == nil {
+		// Every face this family has excludes the text. The family has nothing
+		// for it, which is not the same as the document having nothing — the
+		// caller walks on to the next family it named.
+		return nil, false
 	}
 	return best.face, true
 }
@@ -405,7 +480,7 @@ func (l *fontFaceLoader) parse(p pendingFontFace) (fontFaceRule, bool) {
 				l.badDescriptor(p, d, "font-style")
 			}
 		case "unicode-range":
-			l.unicodeRange(p, d)
+			out.ranges = l.unicodeRange(p, d)
 		case "font-display":
 			// A hint about what to show while a font is downloading. There is
 			// no download here and no moment at which a page is half-drawn, so
@@ -456,35 +531,34 @@ func (l *fontFaceLoader) badDescriptor(p pendingFontFace, d css.Declaration, nam
 	})
 }
 
-// unicodeRange reads the descriptor and says what this engine does with it.
+// unicodeRange reads the descriptor, which says which characters the face is for.
 //
-// What it does is not honour it, and the reason is structural rather than
-// temporary: a unicode-range asks for a face to be used *for some characters
-// and not others*, and this engine picks one face per box — see the note on
-// FallbackFontSet in font.go, which is against the same wall for the same
-// reason. Implementing it would mean cutting a run into per-face pieces through
-// measurement, line breaking and the content stream.
+// It is honoured: a face restricted to a range is used for the characters in it
+// and passed over for the rest, which fall to the next family the document
+// named. That is what makes a document declaring one webfont for Latin and
+// another for Greek get both, and it is the ordinary way a page with a large
+// script is served.
 //
-// So the descriptor is parsed, which is what makes the report worth having: a
-// range covering the whole of Unicode restricts nothing and is silently
-// correct, and only a range that would really have excluded something is
-// reported.
-func (l *fontFaceLoader) unicodeRange(p pendingFontFace, d css.Declaration) {
+// It was not always. The descriptor was parsed and reported, on the reasoning
+// that the engine chose one face per box and cutting a run into per-face pieces
+// was a change through measurement, line breaking and the content stream. That
+// change happened for a different reason — a box of English with one Hebrew
+// letter in it, see facerun.go — and once the runs could be cut, the obstacle
+// this stood behind was gone. The comment outlived it by several months, which
+// is the ordinary fate of a note saying why something cannot be done.
+//
+// A range covering the whole of Unicode restricts nothing and is dropped here,
+// so that the common case carries no list to walk and asks no questions.
+func (l *fontFaceLoader) unicodeRange(p pendingFontFace, d css.Declaration) []unicodeSpan {
 	ranges, ok := parseUnicodeRange(d.Value)
 	if !ok {
 		l.badDescriptor(p, d, "unicode-range")
-		return
+		return nil
 	}
 	if coversAllOfUnicode(ranges) {
-		return
+		return nil
 	}
-	l.rec.ReportDetail(Finding{
-		Rule:   RuleUnsupportedValue,
-		Source: Source{HTMLOffset: -1, CSSOffset: d.Offset, Sheet: p.sheet},
-		Message: "this @font-face restricts its face to " + quoteValue(unicodeRangeText(ranges)) +
-			"; this engine chooses one face for a whole run, so the face was used for all of it",
-		Property: "unicode-range",
-	})
+	return ranges
 }
 
 // parseSrc reads the src descriptor's list of alternatives.

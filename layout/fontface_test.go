@@ -3,6 +3,7 @@ package layout
 import (
 	"encoding/base64"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -710,13 +711,10 @@ func TestFontWeightAndStyleDescriptorGrammar(t *testing.T) {
 	fired[RuleInvalidCSS] = true
 }
 
-// TestFontFaceUnicodeRangeIsReported is the honest half of a descriptor this
-// engine parses and cannot honour.
-//
-// The full range restricts nothing and must be silent, or every well-written
-// stylesheet on the web would carry a finding. A restricted one is reported,
-// because the face is then used for characters the author excluded from it.
-func TestFontFaceUnicodeRangeIsReported(t *testing.T) {
+// TestFontFaceUnicodeRangeIsKept. The descriptor used to be parsed, reported and
+// thrown away; it is kept now and honoured, so what this holds is that it
+// survives the load and that a range restricting nothing leaves no trace.
+func TestFontFaceUnicodeRangeIsKept(t *testing.T) {
 	load := func(rng string) Built {
 		res := &fileResolver{files: map[string][]byte{"trial.ttf": realFont()}}
 		return Build(Input{
@@ -726,20 +724,41 @@ func TestFontFaceUnicodeRangeIsReported(t *testing.T) {
 		})
 	}
 
+	// The full range restricts nothing, and is dropped rather than carried: a
+	// face with no restriction must ask no questions per character, and an
+	// empty list is what says so.
 	built := load("U+0-10FFFF")
 	for _, f := range built.Findings {
 		if f.Property == "unicode-range" {
 			t.Errorf("a unicode-range covering the whole of Unicode was reported: %s", f.Message)
 		}
 	}
-	if _, ok := built.Fonts.Face("Trial", false, false); !ok {
-		t.Error("a face with a full unicode-range was not registered")
+	set, ok := built.Fonts.(*documentFonts)
+	if !ok {
+		t.Fatalf("the document's fonts are %T; findings: %v", built.Fonts, built.Findings)
+	}
+	if got := set.faces[0].rule.ranges; len(got) != 0 {
+		t.Errorf("a full range was kept as %v; it restricts nothing and should be nil", got)
 	}
 
+	// A restricted one is kept, and is not reported: it is honoured now, and a
+	// finding would be telling an author a declaration did not take effect.
 	built = load("U+0025-00FF, U+4??")
-	requireFinding(t, built.Findings, RuleUnsupportedValue, "U+0025-00FF, U+0400-04FF")
+	for _, f := range built.Findings {
+		if f.Property == "unicode-range" {
+			t.Errorf("a restricted unicode-range was reported: %s", f.Message)
+		}
+	}
+	set, ok = built.Fonts.(*documentFonts)
+	if !ok {
+		t.Fatalf("the document's fonts are %T", built.Fonts)
+	}
+	want := []unicodeSpan{{0x25, 0xFF}, {0x400, 0x4FF}}
+	if got := set.faces[0].rule.ranges; !reflect.DeepEqual(got, want) {
+		t.Errorf("the ranges came through as %v, want %v", got, want)
+	}
 	if _, ok := built.Fonts.Face("Trial", false, false); !ok {
-		t.Error("a face with a restricted unicode-range was dropped rather than used whole")
+		t.Error("a face with a restricted unicode-range was dropped")
 	}
 
 	// A range this engine cannot read is a descriptor error, and the default —
@@ -751,7 +770,6 @@ func TestFontFaceUnicodeRangeIsReported(t *testing.T) {
 		t.Error("an unreadable unicode-range took the whole rule down with it")
 	}
 	fired[RuleInvalidCSS] = true
-	fired[RuleUnsupportedValue] = true
 }
 
 // TestUnicodeRangeGrammar exercises the three forms and the refusals, because
