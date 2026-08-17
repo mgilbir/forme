@@ -841,9 +841,17 @@ func (p *painter) paintContent(f *Fragment) {
 	// background of any box painted after it — which for an image overlapping
 	// its next sibling is a real overlap rather than a theoretical one.
 	hidden := isHidden(f.Box)
-	if r := f.Box.Replaced; r != nil && r.Image != nil && !hidden {
+	if r := f.Box.Replaced; r.Paints() && !hidden {
 		if rect := f.ContentRect(); !rect.Empty() {
-			p.ops = append(p.ops, DrawImage{Rect: rect, Image: r.Image, Key: r.Key})
+			// Content that is one colour is a fill, not a picture stretched over
+			// the box. The two paint the same pixels and only one of them says
+			// on the page what the document said in its source — see the note on
+			// ReplacedContent.Solid.
+			if r.Solid != nil {
+				p.ops = append(p.ops, FillRect{Rect: rect, Color: *r.Solid})
+			} else {
+				p.ops = append(p.ops, DrawImage{Rect: rect, Image: r.Image, Key: r.Key})
+			}
 		}
 	}
 	if m := f.Marker; m != nil && m.Image != nil && m.Image.Image != nil && !hidden {
