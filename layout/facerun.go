@@ -212,6 +212,11 @@ func (l *layouter) reportWhollySubstituted(b *Box, primary *shape.Face, runs []f
 	if !substituted || alt == nil || alt == primary {
 		return
 	}
+	// The document named no particular face, only a kind. Choosing one that can
+	// set the text is what a generic family *is* — see namesOnlyGenericFamilies.
+	if namesOnlyGenericFamilies(b.Style["font-family"]) {
+		return
+	}
 	l.rec.ReportDetail(Finding{
 		Rule: RuleFontFallback,
 		Message: "no face for " + quoteValue(b.Style["font-family"]) +
@@ -273,4 +278,53 @@ func (l *layouter) namedFaceFor(ranged RangedFontSet, b *Box, cluster string) (*
 		}
 	}
 	return nil, false
+}
+
+// namesOnlyGenericFamilies reports whether a font-family list asks for a kind of
+// face rather than for any face in particular.
+//
+// CSS Fonts §5.1: a generic family is a keyword the user agent maps to a family
+// of its choosing, and the choice may depend on the script. So a document that
+// says "serif" and gets a face that can set its text has been given what it
+// asked for — the mapping *is* the answer — and reporting a substitution says
+// something went wrong when nothing did.
+//
+// Twenty-eight of the CSS Working Group's reftests were held back by exactly
+// that finding, and they are the strongest case for it there is: they name no
+// font at all. They set "content: counter(test, georgian)", inherit the initial
+// font-family, and are told that no face for "serif" could set text the document
+// itself generated. A browser picks a Georgian face without comment.
+//
+// A list naming even one real family is a different matter and keeps its
+// finding. An author who wrote "Kartuli, serif" asked for Kartuli, and a page set
+// in something else is a page they would want to know about — the generic behind
+// it is a fallback they wrote, not the whole of their request.
+func namesOnlyGenericFamilies(list string) bool {
+	names := parseFamilyList(list)
+	if len(names) == 0 {
+		// Nothing stated at all, which is the initial value: a generic by
+		// another name.
+		return true
+	}
+	for _, name := range names {
+		if !genericFamilies[strings.ToLower(strings.TrimSpace(name))] {
+			return false
+		}
+	}
+	return true
+}
+
+// genericFamilies are CSS Fonts §5.1's keywords: the ones that name a kind of
+// face rather than a face.
+//
+// It is deliberately not "everything in standardFamilies". That map answers a
+// different question — which of the fourteen standard faces to use for a name —
+// and it holds "Arial" and "Georgia", which are families a document really did
+// ask for by name. Reading it as the generic list would treat a document that
+// asked for Georgia as one that asked for nothing in particular.
+var genericFamilies = map[string]bool{
+	"serif": true, "sans-serif": true, "monospace": true,
+	"cursive": true, "fantasy": true, "system-ui": true,
+	"ui-serif": true, "ui-sans-serif": true, "ui-monospace": true,
+	"ui-rounded": true, "math": true, "emoji": true, "fangsong": true,
 }
