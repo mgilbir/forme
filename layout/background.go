@@ -596,55 +596,96 @@ func axisTiling(
 // asked for a size on.
 func (l *layouter) tileSize(layer backgroundLayer, area Rect) (w, h style.Unit, wAuto, hAuto bool) {
 	img := layer.image
-	iw, ih := img.Width, img.Height
-	if iw <= 0 || ih <= 0 {
-		if img.Solid == nil {
-			return 0, 0, false, false
-		}
-		// Content with no intrinsic dimensions: a gradient always, and an SVG
-		// that declares neither a width nor a height. CSS Images §4 gives it the
-		// positioning area as its default object size, so every "auto" resolves
-		// to the area and cover and contain have nothing to scale.
-		w, wAuto := resolveBgLength(layer.sizeW, area.W)
-		h, hAuto := resolveBgLength(layer.sizeH, area.H)
-		if wAuto || layer.sizeKind == bgSizeCover || layer.sizeKind == bgSizeContain {
-			w = area.W
-		}
-		if hAuto || layer.sizeKind == bgSizeCover || layer.sizeKind == bgSizeContain {
-			h = area.H
-		}
-		return w, h, false, false
+	if img == nil {
+		return 0, 0, false, false
 	}
+	iw, ih := img.Width, img.Height
 	ratio := img.Ratio
-	if ratio <= 0 {
+	if ratio <= 0 && iw > 0 && ih > 0 {
 		ratio = iw.Px() / ih.Px()
+	}
+	if iw <= 0 && ih <= 0 && ratio <= 0 && img.Solid == nil {
+		// A picture with no size at all is one that failed to load or decode.
+		// Content that paints a colour legitimately has none, and is sized
+		// below by the default object size like any other image without one.
+		return 0, 0, false, false
 	}
 
 	switch layer.sizeKind {
 	case bgSizeCover, bgSizeContain:
-		// The scale that makes the image just cover, or just fit inside, the
-		// area. The two differ by which of the two factors is taken, and by
-		// nothing else.
-		sx := area.W.Px() / iw.Px()
-		sy := area.H.Px() / ih.Px()
-		s := math.Min(sx, sy)
-		if layer.sizeKind == bgSizeCover {
-			s = math.Max(sx, sy)
+		// §5.1's contain and cover, which need a ratio to scale by. Without one
+		// there is nothing to preserve, and both mean "the area".
+		if ratio <= 0 {
+			return area.W, area.H, false, false
 		}
-		return iw.Mul(s), ih.Mul(s), false, false
+		sx := area.W.Px() / area.H.Px() / ratio
+		fitW, fitH := area.W, area.H
+		if (layer.sizeKind == bgSizeContain) == (sx > 1) {
+			// The area is wider than the ratio wants and the image must fit
+			// inside it, or narrower and it must cover — either way the height
+			// is the constraint and the width follows from the ratio.
+			fitW = area.H.Mul(ratio)
+		} else {
+			fitH = area.W.Div(ratio)
+		}
+		return fitW, fitH, false, false
 	}
 
 	w, wAuto = resolveBgLength(layer.sizeW, area.W)
 	h, hAuto = resolveBgLength(layer.sizeH, area.H)
 	switch {
+	case !wAuto && !hAuto:
+		return w, h, false, false
+
 	case wAuto && hAuto:
-		return iw, ih, true, true
+		// The default sizing algorithm's "auto auto", which is where an image's
+		// own dimensions are used and where the cases actually differ.
+		switch {
+		case iw > 0 && ih > 0:
+			return iw, ih, true, true
+		case iw > 0 && ratio > 0:
+			return iw, iw.Div(ratio), true, true
+		case ih > 0 && ratio > 0:
+			return ih.Mul(ratio), ih, true, true
+		case iw > 0:
+			// One dimension and no ratio: the other is the default object
+			// size's, which for a background is the positioning area. This is
+			// the case that makes an SVG declaring only a width stretch down
+			// the box rather than being squared off.
+			return iw, area.H, true, true
+		case ih > 0:
+			return area.W, ih, true, true
+		case ratio > 0:
+			// A ratio and no dimensions: §3.9 says to render it as though
+			// "contain" had been specified, which is the largest rectangle of
+			// that shape fitting inside the area.
+			if area.W.Px()/area.H.Px() > ratio {
+				return area.H.Mul(ratio), area.H, true, true
+			}
+			return area.W, area.W.Div(ratio), true, true
+		}
+		return area.W, area.H, true, true
+
 	case wAuto:
-		return h.Mul(ratio), h, true, false
-	case hAuto:
-		return w, w.Div(ratio), false, true
+		// One dimension given. The other follows from the ratio, or from the
+		// image's own dimension when there is no ratio, or from the area.
+		switch {
+		case ratio > 0:
+			return h.Mul(ratio), h, true, false
+		case iw > 0:
+			return iw, h, true, false
+		}
+		return area.W, h, true, false
+
+	default: // hAuto
+		switch {
+		case ratio > 0:
+			return w, w.Div(ratio), false, true
+		case ih > 0:
+			return w, ih, false, true
+		}
+		return w, area.H, false, true
 	}
-	return w, h, false, false
 }
 
 // wholeTiles is how many copies of a tile "round" fits into an area.
