@@ -599,13 +599,25 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		// The faces this piece needs, which for everything that is not mixed
 		// script is the one face the box chose.
 		//
-		// A space and a tab are never split: a space is one character, and a tab
-		// is measured against a tab stop rather than through a face at all, so
-		// splitting either would be arranging for the flags below to be shared
-		// between two items that cannot both own them.
+		// A tab is never asked: it is measured against a tab stop rather than
+		// through a face at all, so a face for it would be a number nothing
+		// reads. A space is asked but never *split* — see below.
 		runs := []faceRun{{Text: p.Text, Face: face}}
-		if !p.Space && !p.Tab {
-			runs = l.faceRunsFor(b, face, p.Text)
+		if !p.Tab {
+			got := l.faceRunsFor(b, face, p.Text)
+			// A space piece takes a face and keeps its shape. Splitting one
+			// would share the flags below between two items that cannot both
+			// own them, and there is nothing to split anyway: a space piece is
+			// one character, or a run of the same character, so one face
+			// answers for all of it.
+			//
+			// It is asked at all because the width of a space can be the whole
+			// of its meaning. An ideographic space is one em and the standard
+			// PDF faces give it their ordinary space's quarter em, which left
+			// "ああ　" four pixels short of the "あああ" it has to cover.
+			if !p.Space || len(got) == 1 {
+				runs = got
+			}
 		}
 		for ri, run := range runs {
 			para, start, end := frame.Bidi.Add(run.Text)

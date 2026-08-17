@@ -81,7 +81,7 @@ func MissesVisible(face *shape.Face, text string) bool {
 		return false
 	}
 	for _, r := range text {
-		if r == '\n' || r == '\t' || MarksNoPaper(r) {
+		if r == '\n' || r == '\t' || SubstitutesExactly(r) {
 			continue
 		}
 		if _, missing := face.ShapeGlyphs(string(r)); missing > 0 {
@@ -133,4 +133,29 @@ func MarksNoPaper(r rune) bool {
 		return true
 	}
 	return false
+}
+
+// SubstitutesExactly reports whether a face that cannot encode this character
+// loses nothing by putting a space there instead.
+//
+// This is a narrower question than MarksNoPaper and the difference is the whole
+// point of having both. MarksNoPaper asks whether a character puts ink on the
+// page, and answers the *finding*: a space the reader will never see is not a
+// glyph worth reporting missing. This one asks whether the substitution changes
+// the page at all, and answers whether to look for another *face*.
+//
+// Only the no-break space. It differs from a space in whether a line may break
+// at it, which is settled long before a face is asked, so a space in its place
+// is exactly right and 154 documents in the reftest suite are quiet because of
+// it.
+//
+// Every other space separator has a width of its own and that width is the whole
+// of what it is for. An ideographic space is one em; the standard PDF faces have
+// no glyph for it and give it their ordinary space's quarter em, which is how
+// "ああ　" came out four pixels short of the "あああ" it has to cover in
+// trailing-ideographic-space-001. The em space, the en space, the figure space
+// and the thin space are the same case. A face that *has* them is a face that
+// gets the width right, and it is worth going to find one.
+func SubstitutesExactly(r rune) bool {
+	return r == 0x00A0
 }
