@@ -346,3 +346,79 @@ func TestAFamilyThatSetsNothingIsReported(t *testing.T) {
 			findings)
 	}
 }
+
+// A generic family, whose resolution is not a substitution.
+//
+// CSS Fonts §5.1: a generic family is a keyword the user agent maps to a family
+// of its choosing, and the choice may depend on the script. A document that says
+// "serif" and gets a face that can set its text has been given what it asked
+// for — the mapping is the answer.
+//
+// Twenty-eight of the suite's reftests were held back by the substitution
+// finding on exactly that, and they are the strongest case there is: they name
+// no font at all. They write "content: counter(test, georgian)", inherit the
+// initial font-family, and were told that no face for "serif" could set text the
+// document itself had generated.
+
+// TestAGenericFamilyResolvingIsNotASubstitution.
+func TestAGenericFamilyResolvingIsNotASubstitution(t *testing.T) {
+	hebrew := loadHebrew(t)
+	set := oneFaceSet{fallback: hebrew, standard: StandardFonts()}
+	for _, family := range []string{"serif", "sans-serif", "monospace", "serif, sans-serif"} {
+		_, findings := layoutWith(t, set,
+			`<p id="p">שלום</p>`,
+			`#p { font-family: `+family+`; font-size: 20px }`)
+		for _, f := range findings {
+			if f.Rule == RuleFontFallback {
+				t.Errorf("font-family: %s reported a substitution: %s", family, f.Message)
+			}
+		}
+	}
+}
+
+// TestNamingARealFamilyKeepsTheFinding is the other half, and the line this
+// draws. An author who wrote "Kartuli, serif" asked for Kartuli; a page set in
+// something else is one they would want to know about, and the generic behind it
+// is a fallback they wrote rather than the whole of their request.
+func TestNamingARealFamilyKeepsTheFinding(t *testing.T) {
+	hebrew := loadHebrew(t)
+	set := oneFaceSet{fallback: hebrew, standard: StandardFonts()}
+	for _, family := range []string{
+		"Helvetica",
+		"Kartuli, serif",
+		// Georgia is in the standard-family map, which answers a different
+		// question: which of the fourteen to use for a name. It is a family a
+		// document really asked for by name, and reading that map as the generic
+		// list would treat this document as having asked for nothing.
+		"Georgia",
+	} {
+		_, findings := layoutWith(t, set,
+			`<p id="p">שלום</p>`,
+			`#p { font-family: `+family+`; font-size: 20px }`)
+		var said bool
+		for _, f := range findings {
+			if f.Rule == RuleFontFallback {
+				said = true
+			}
+		}
+		if !said {
+			t.Errorf("font-family: %s was substituted silently: %v", family, findings)
+		}
+	}
+}
+
+// TestTheGenericTestIsNotPassingByAccident. Every case above rests on the
+// fallback face really being used, so a fixture that quietly set nothing would
+// satisfy them all. This is the control.
+func TestTheGenericTestIsNotPassingByAccident(t *testing.T) {
+	hebrew := loadHebrew(t)
+	set := oneFaceSet{fallback: hebrew, standard: StandardFonts()}
+	root, _ := layoutWith(t, set,
+		`<p id="p">שלום</p>`,
+		`#p { font-family: serif; font-size: 20px }`)
+	if got := faceUsedFor(root, "שלום"); got != hebrew.Name() {
+		t.Errorf("the Hebrew was set in %q, not the fallback face %q; the tests "+
+			"above would pass with no substitution happening at all",
+			got, hebrew.Name())
+	}
+}
