@@ -214,3 +214,24 @@ func setOf(names ...string) map[string]bool {
 	}
 	return out
 }
+
+// foreignElements are the roots of subtrees that are not HTML.
+//
+// An unknown HTML element is dropped and its content parsed on, which is right:
+// the content *is* HTML, a browser shows it, and a <fancy-callout> that has lost
+// its box has not lost its words. A foreign element is the opposite case. Its
+// children are SVG or MathML, they mean nothing to an HTML layout, and their
+// text is not text of the document — so parsing on splices it into the flow,
+// which is what "<svg><text>x</text></svg>" did: an x in the surrounding
+// paragraph's font, on the paragraph's baseline, nowhere near the picture.
+//
+// That is worse than the missing picture. A hole is visibly a hole; a stray
+// letter reads as the document's own and is what a reader would have to know the
+// source to catch.
+//
+// The subtree is skipped by name-matched depth, which is what makes a nested
+// <svg> inside an <svg> end the right one.
+var foreignElements = map[string]bool{
+	"svg":  true,
+	"math": true,
+}
