@@ -107,6 +107,27 @@ type ReplacedContent struct {
 	// Pixels is the image's pixel count, which is what the document budget was
 	// charged.
 	Pixels int64
+
+	// Solid is set when the content is exactly one colour, and Image is then
+	// nil: there are no pixels because none are needed.
+	//
+	// Two kinds of content reach this. A gradient whose stops are all one
+	// colour is that colour everywhere, and an SVG whose only drawable content
+	// is a rectangle covering its viewport is that rectangle's fill. Neither is
+	// an approximation — see gradient.go and svg.go for why each is exact and
+	// where the line is drawn against the general case.
+	//
+	// It is a colour rather than a one-pixel picture so that the display list
+	// says what the page says. A page written with background-color and a page
+	// written with linear-gradient(green, green) paint the same thing, and a
+	// stretched picture would make the two compare unequal while looking
+	// identical.
+	Solid *style.RGBA
+}
+
+// Paints reports whether this content puts anything on the page.
+func (r *ReplacedContent) Paints() bool {
+	return r != nil && (r.Image != nil || r.Solid != nil)
 }
 
 // replacedLoader turns the references in a box tree into loaded content.
@@ -435,6 +456,22 @@ func (l *replacedLoader) fetch(src, what string) ([]byte, *loadFailure) {
 
 // decode reads a header, checks it against the caps, and only then decodes.
 func (l *replacedLoader) decode(src, what string, data []byte) (*ReplacedContent, *loadFailure) {
+	// An SVG is not a picture and never becomes one. It is read for its
+	// intrinsic size and, when its content reduces to one, its colour — see
+	// svg.go, which is explicit about how narrow that is and why the rest keeps
+	// its finding. It has to be tried before image.DecodeConfig because no
+	// decoder here reads XML, so an SVG would otherwise be an unknown format.
+	if looksLikeSVG(data) {
+		if c := svgContent(data); c != nil {
+			return c, nil
+		}
+		return nil, &loadFailure{
+			rule: RuleImageUndecodable,
+			message: "the " + what + " at " + quoteValue(src) +
+				" is an SVG this engine cannot reduce to a size and a colour; " +
+				"it draws something there is no operation for, so nothing was drawn",
+		}
+	}
 	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
 		return nil, &loadFailure{
@@ -631,4 +668,18 @@ func (l *replacedLoader) altOnly(b *Box) {
 		Style: b.Style, Text: text, FontSize: b.FontSize, Parent: b,
 	}
 	b.Children = append(b.Children, child)
+}
+
+// looksLikeSVG reports whether the bytes are meant to be an SVG.
+//
+// It reads the start of the file rather than the file name, because the name is
+// what a document says and the bytes are what arrived. A leading XML declaration
+// or doctype may come first, so this looks for the root tag within the opening
+// stretch rather than at offset zero.
+func looksLikeSVG(data []byte) bool {
+	head := data
+	if len(head) > 1024 {
+		head = head[:1024]
+	}
+	return bytes.Contains(head, []byte("<svg")) || bytes.Contains(head, []byte("<SVG"))
 }

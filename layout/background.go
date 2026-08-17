@@ -129,17 +129,6 @@ type backgroundLayer struct {
 	// which is what makes a failed load a hole rather than an error.
 	image *ReplacedContent
 
-	// solid is the colour a layer paints when its image is a gradient of one
-	// colour, and nil otherwise. Such a layer has an image in every sense that
-	// background-size, -position, -repeat and -origin care about — it is sized
-	// and placed exactly as a picture is — and none of the sense that needs
-	// pixels. See gradient.go.
-	//
-	// It has no intrinsic dimensions, which is what a gradient has: CSS Images
-	// §4 gives one the positioning area as its default size, and that falls out
-	// of tileSize's "auto" case rather than being special-cased there.
-	solid *style.RGBA
-
 	repeatX, repeatY bgRepeat
 	posX, posY       bgPos
 
@@ -401,7 +390,7 @@ func (l *layouter) paintsFor(b *Box, f *Fragment, canvas, over Rect) []bgPaint {
 	out := make([]bgPaint, 0, len(layers))
 	for i := len(layers) - 1; i >= 0; i-- {
 		layer := layers[i]
-		if layer.solid == nil && (layer.image == nil || layer.image.Image == nil) {
+		if !layer.image.Paints() {
 			continue
 		}
 		positioning := boxRect(f, layer.origin)
@@ -499,7 +488,7 @@ func (l *layouter) tiling(b *Box, layer backgroundLayer, positioning, painting R
 		StepX: stepX, StepY: stepY,
 		Image: layerImage(layer),
 		Key:   layerKey(layer),
-		Solid: layer.solid,
+		Solid: layer.image.Solid,
 	}, true
 }
 
@@ -606,11 +595,16 @@ func axisTiling(
 // "round" rescaling above needs: it restores the ratio only on an axis nobody
 // asked for a size on.
 func (l *layouter) tileSize(layer backgroundLayer, area Rect) (w, h style.Unit, wAuto, hAuto bool) {
-	if layer.solid != nil {
-		// A gradient has no intrinsic width, height or ratio, so every "auto"
-		// resolves to the positioning area and cover and contain have nothing
-		// to scale — which is CSS Images §4's default object size, arrived at
-		// by having nothing to say rather than by a rule of its own.
+	img := layer.image
+	iw, ih := img.Width, img.Height
+	if iw <= 0 || ih <= 0 {
+		if img.Solid == nil {
+			return 0, 0, false, false
+		}
+		// Content with no intrinsic dimensions: a gradient always, and an SVG
+		// that declares neither a width nor a height. CSS Images §4 gives it the
+		// positioning area as its default object size, so every "auto" resolves
+		// to the area and cover and contain have nothing to scale.
 		w, wAuto := resolveBgLength(layer.sizeW, area.W)
 		h, hAuto := resolveBgLength(layer.sizeH, area.H)
 		if wAuto || layer.sizeKind == bgSizeCover || layer.sizeKind == bgSizeContain {
@@ -620,11 +614,6 @@ func (l *layouter) tileSize(layer backgroundLayer, area Rect) (w, h style.Unit, 
 			h = area.H
 		}
 		return w, h, false, false
-	}
-	img := layer.image
-	iw, ih := img.Width, img.Height
-	if iw <= 0 || ih <= 0 {
-		return 0, 0, false, false
 	}
 	ratio := img.Ratio
 	if ratio <= 0 {
@@ -773,7 +762,7 @@ func (l *layouter) readBackgroundLayers(b *Box, raw string) []backgroundLayer {
 			clip:   clips[at(len(clips), i)],
 			fixed:  fixed[at(len(fixed), i)],
 		}
-		layer.image, layer.solid = l.backgroundImage(b, spec)
+		layer.image = l.backgroundImage(b, spec)
 		out = append(out, layer)
 	}
 	return out
@@ -785,22 +774,22 @@ func (l *layouter) readBackgroundLayers(b *Box, raw string) []backgroundLayer {
 // against the same document-wide decode budget: see image.go. What is left here
 // is the lookup, and the report for a value that is a real CSS image this engine
 // cannot produce.
-func (l *layouter) backgroundImage(b *Box, raw string) (*ReplacedContent, *style.RGBA) {
+func (l *layouter) backgroundImage(b *Box, raw string) *ReplacedContent {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || isNoneValue(raw) {
-		return nil, nil
+		return nil
 	}
 	if ref, ok := urlValue(raw); ok {
 		if b.BackgroundImages != nil {
-			return b.BackgroundImages[ref], nil
+			return b.BackgroundImages[ref]
 		}
-		return nil, nil
+		return nil
 	}
 	// A gradient of one colour is that colour, exactly, and is painted as a
 	// fill of the area it covers. See gradient.go for why that is the shape
 	// this engine paints and why it is not an approximation of the general one.
 	if colour, ok := uniformGradient(raw); ok {
-		return nil, &colour
+		return &ReplacedContent{Solid: &colour}
 	}
 	// A real gradient, an image-set, element(). Each is a value this engine
 	// reads and cannot paint, and each leaves a box that looks as though the
@@ -813,7 +802,7 @@ func (l *layouter) backgroundImage(b *Box, raw string) (*ReplacedContent, *style
 		Path:     PathOf(b.Element),
 		Property: "background-image",
 	})
-	return nil, nil
+	return nil
 }
 
 // reportOnce raises a finding the first time a key is seen, so a stylesheet rule
