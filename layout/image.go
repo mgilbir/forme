@@ -19,6 +19,7 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 
+	"github.com/mgilbir/forme/html"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -108,6 +109,16 @@ type ReplacedContent struct {
 	// charged.
 	Pixels int64
 
+	// SVG is the picture an SVG carries: its rectangles, and the coordinate
+	// system they are stated in. It is nil for everything else.
+	//
+	// It is kept beside Solid rather than instead of it because the two answer
+	// different callers. A replaced element is drawn once, at a known place, so
+	// it can place each rectangle; a background layer is tiled and positioned,
+	// and has nowhere to put geometry — for that, only a picture that is one
+	// colour all over can be drawn at all.
+	SVG *svgPicture
+
 	// Solid is set when the content is exactly one colour, and Image is then
 	// nil: there are no pixels because none are needed.
 	//
@@ -127,7 +138,7 @@ type ReplacedContent struct {
 
 // Paints reports whether this content puts anything on the page.
 func (r *ReplacedContent) Paints() bool {
-	return r != nil && (r.Image != nil || r.Solid != nil)
+	return r != nil && (r.Image != nil || r.Solid != nil || r.SVG != nil)
 }
 
 // replacedLoader turns the references in a box tree into loaded content.
@@ -176,6 +187,9 @@ func (l *replacedLoader) walk(b *Box) {
 	}
 	if b.Element != nil && strings.EqualFold(b.Element.Name, "iframe") {
 		l.iframe(b)
+	}
+	if b.Element != nil && b.Element.Foreign != "" {
+		l.foreign(b)
 	}
 	l.markerImage(b)
 	l.backgrounds(b)
@@ -682,4 +696,71 @@ func looksLikeSVG(data []byte) bool {
 		head = head[:1024]
 	}
 	return bytes.Contains(head, []byte("<svg")) || bytes.Contains(head, []byte("<SVG"))
+}
+
+// foreign reads an inline <svg> as replaced content.
+//
+// It is the same reader an <img src=x.svg> goes through, on the same subset: an
+// intrinsic size from the root element's attributes, and a colour when the whole
+// picture reduces to one rectangle. See svg.go, which is explicit about how
+// narrow that is.
+//
+// Nothing is fetched, so nothing is charged to the decode budget and no resolver
+// is needed: the picture arrived with the document. What it shares with the file
+// case is the *rules*, not the plumbing — one answer to "what may an SVG be" for
+// both, rather than a second one here that would drift.
+func (l *replacedLoader) foreign(b *Box) {
+	name := strings.ToLower(b.Element.Name)
+	if name != "svg" {
+		l.rec.ReportDetail(Finding{
+			Rule:     RuleUnsupportedElement,
+			Source:   AtHTML(offsetOf(b)),
+			Message:  "<" + name + "> is not a picture this engine can draw; the element was laid out and left empty",
+			Path:     PathOf(b.Element),
+			Property: name,
+		})
+		b.Replaced = &ReplacedContent{}
+		return
+	}
+	// The element and its content together are the document, which is what the
+	// reader expects: the intrinsic size is on the root's own attributes.
+	doc := "<svg " + attrSource(b.Element) + ">" + b.Element.Foreign + "</svg>"
+	if c := svgContent([]byte(doc)); c != nil {
+		b.Replaced = c
+		return
+	}
+	// Nothing this can draw. The box is still a box — dropping it was what made
+	// twenty-seven iframes pass by painting nothing — and it is still the box
+	// the element asked for, because the size is on the element and not in the
+	// picture. Only when the root says nothing either does it fall back to the
+	// 300 by 150 of CSS 2.1 §10.3.2.
+	if size := svgIntrinsicSize([]byte(doc)); size != nil {
+		b.Replaced = size
+	} else {
+		b.Replaced = &ReplacedContent{}
+	}
+	l.rec.ReportDetail(Finding{
+		Rule:   RuleUnsupportedElement,
+		Source: AtHTML(offsetOf(b)),
+		Message: "this <svg> draws something there is no operation for, so the " +
+			"element was laid out and left empty",
+		Path:     PathOf(b.Element),
+		Property: "svg",
+	})
+}
+
+// attrSource writes an element's attributes back as source, so that the SVG
+// reader sees the root element it would have seen in a file.
+func attrSource(n *html.Node) string {
+	var b strings.Builder
+	for _, a := range n.Attrs {
+		if a.Name == "" || strings.ContainsAny(a.Name, `"'<>`) {
+			continue
+		}
+		b.WriteString(a.Name)
+		b.WriteString(`="`)
+		b.WriteString(strings.NewReplacer(`"`, "&quot;", "&", "&amp;", "<", "&lt;").Replace(a.Value))
+		b.WriteString(`" `)
+	}
+	return b.String()
 }

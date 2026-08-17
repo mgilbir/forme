@@ -943,7 +943,7 @@ const wptEnv = "WPT_TESTS"
 // exposed. The number is small and the fault was not: an invalid declaration
 // stood in front of a valid one and every page it happened on came out in the
 // initial value.
-const wptCleanPassBaseline = 4698
+const wptCleanPassBaseline = 4736
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
@@ -1097,8 +1097,15 @@ var cdataRe = regexp.MustCompile(`(?s)<!\[CDATA\[(.*?)\]\]>`)
 //
 // The attribute part is spelled out rather than written [^>]* so that a ">"
 // inside a quoted attribute value does not end the match early.
+//
+// The name allows a colon, and that is not decoration. The suite's XHTML writes
+// its inline SVG namespaced — "<svg:rect x='0' .../>" — and a name stopping at
+// the colon made this rewrite the tag as "<svg:rect ...></svg>", closing an
+// element that was never opened and swallowing the rest of the picture. The
+// harness was corrupting the document and every one of those tests then failed
+// on markup no author wrote.
 var emptyElementRe = regexp.MustCompile(
-	`<([a-zA-Z][a-zA-Z0-9]*)((?:[^>"']|"[^"]*"|'[^']*')*?)\s*/>`)
+	`<([a-zA-Z][a-zA-Z0-9:-]*)((?:[^>"']|"[^"]*"|'[^']*')*?)\s*/>`)
 
 // xhtmlVoid is the set an empty-element tag says nothing extra about, because
 // HTML has no end tag for them either.
@@ -2001,5 +2008,33 @@ func TestSuiteResolverServesTheServerRoot(t *testing.T) {
 	if _, err := plain.Resolve("/fonts/ahem.css"); err == nil {
 		t.Error("DirResolver took an absolute path; the harness's join must not " +
 			"have loosened the engine's policy")
+	}
+}
+
+// TestTheEmptyElementRewriteKeepsNamespacedNames guards the harness against
+// itself.
+//
+// The suite's XHTML writes its inline SVG namespaced — "<svg:rect x='0' .../>" —
+// and this rewrite turns an XML empty-element tag into an HTML pair. A name
+// pattern stopping at the colon rewrote that as "<svg:rect ...></svg>", closing
+// an element that was never opened and swallowing the rest of the picture.
+//
+// Every test carrying one then failed on markup no author wrote, and the engine
+// was blamed for it. That is the shape this whole file is most at risk of: the
+// harness adapting the input and getting it wrong is indistinguishable, from the
+// outside, from the engine being wrong.
+func TestTheEmptyElementRewriteKeepsNamespacedNames(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{`<svg:rect x="0" fill="blue"/>`, `<svg:rect x="0" fill="blue"></svg:rect>`},
+		{`<div/>`, `<div></div>`},
+		{`<td class="x"/>`, `<td class="x"></td>`},
+		// A void element has no end tag in HTML either, so it is left alone.
+		{`<br/>`, `<br/>`},
+		// A ">" inside a quoted value does not end the tag.
+		{`<div title="a>b"/>`, `<div title="a>b"></div>`},
+	} {
+		if got := expandEmptyElements(tc.in); got != tc.want {
+			t.Errorf("expandEmptyElements(%q) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }

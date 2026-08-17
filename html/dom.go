@@ -86,6 +86,18 @@ type Node struct {
 	// what §6 of the rendering proposal needs to say *where* a guardrail fired,
 	// and it cannot be recovered later.
 	Offset int
+
+	// Foreign is the unparsed source of a subtree that is not HTML, and is empty
+	// for everything else.
+	//
+	// An <svg> element's children are SVG. They are not laid out as HTML — that
+	// spliced their text into the flow around them, see foreignElements — and
+	// they are not thrown away either, because the element is a replaced element
+	// and this is its content. Keeping the source rather than a parsed tree is
+	// deliberate: the reader that makes anything of it already reads bytes,
+	// because an SVG referenced by <img> arrives as a file, and one reader for
+	// the two is one set of rules about what an SVG may be.
+	Foreign string
 }
 
 // Attr returns the value of an attribute and whether it was present. The name

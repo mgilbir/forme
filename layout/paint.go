@@ -847,7 +847,11 @@ func (p *painter) paintContent(f *Fragment) {
 			// the box. The two paint the same pixels and only one of them says
 			// on the page what the document said in its source — see the note on
 			// ReplacedContent.Solid.
-			if r.Solid != nil {
+			if r.SVG != nil {
+				// A picture with geometry in it: each rectangle placed through
+				// the viewport transform and clipped to the box. See svg.go.
+				p.ops = append(p.ops, r.SVG.paint(rect)...)
+			} else if r.Solid != nil {
 				p.ops = append(p.ops, FillRect{Rect: rect, Color: *r.Solid})
 			} else {
 				p.ops = append(p.ops, DrawImage{Rect: rect, Image: r.Image, Key: r.Key})

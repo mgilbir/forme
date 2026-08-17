@@ -757,6 +757,12 @@ func replacesItsOwnContent(n *html.Node) bool {
 	switch strings.ToLower(n.Name) {
 	case "img", "object":
 		return true
+	case "svg", "math":
+		// A foreign root is a replaced element: it has a box, and its content is
+		// not HTML but a picture the element carries with it. The parser keeps
+		// that content as source rather than parsing it — see html.Node.Foreign
+		// — and layout reads it exactly as it reads an SVG an <img> points at.
+		return true
 	}
 	return false
 }

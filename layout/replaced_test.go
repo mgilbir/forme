@@ -464,16 +464,21 @@ func TestOneSourceIsOneImage(t *testing.T) {
 // TestObjectReportsItsBlockedData.
 //
 // <iframe> left for a third reason, and the sentence above about a box at the
-// wrong size is exactly why the others stay. An <svg>, a <video> and a <canvas>
-// take their size from content this engine does not have, so any box drawn for
-// one is a guess. An iframe does not: CSS 2.1 §10.3.2 gives a replaced element
-// with no intrinsic dimensions 300 by 150, and it took those numbers from this
-// element. The size is knowable without the browsing context, so the box is not
-// a guess and refusing to draw it was losing something real. See
+// wrong size is why the rest stay. A <video> and a <canvas> take their size from
+// content this engine does not have, so any box drawn for one is a guess. An
+// iframe does not: CSS 2.1 §10.3.2 gives a replaced element with no intrinsic
+// dimensions 300 by 150, and it took those numbers from this element. The size
+// is knowable without the browsing context, so the box is not a guess and
+// refusing to draw it was losing something real. See
 // TestAnIframeIsAReplacedBoxOfTheDefaultSize.
+//
+// <svg> left later, for the iframe's reason exactly. Its size is on its own
+// attributes — width, height, viewBox — which the element carries whether or not
+// anything can draw its content, so a box for one is not a guess either. What it
+// draws is a separate question and a narrower one; see svg.go and
+// TestAnInlineSVGIsSizedFromItsOwnAttributes.
 func TestOtherReplacedElementsAreReported(t *testing.T) {
 	cases := map[string]string{
-		"svg":    `<svg width="100" height="100"><rect width="50" height="50"/></svg>`,
 		"video":  `<video src="x.mp4"></video>`,
 		"canvas": `<canvas width="100" height="100"></canvas>`,
 		"embed":  `<embed src="x.swf">`,
