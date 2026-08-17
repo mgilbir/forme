@@ -790,12 +790,18 @@ func (l *fontFaceLoader) overRuleCap(p pendingFontFace, total int) {
 // parse.
 //
 // An absent hint is usable: the file is tried and either parses or does not.
-// The named ones are the two sfnt spellings; woff and woff2 are compressed
-// containers this engine does not unwrap, and svg and embedded-opentype are not
-// sfnt at all.
+// The named ones are the two sfnt spellings and woff, which shape.Load unwraps
+// into one. woff2 re-encodes the outline table rather than compressing it and is
+// a second format behind the same name; svg and embedded-opentype are not sfnt
+// at all.
+//
+// The hint is only a hint. A source with none is still tried, and one that says
+// "woff" is still read by whether the bytes are a WOFF rather than by what the
+// document claimed they are — what this decides is which sources in a src list
+// are worth fetching at all.
 func usableFontFormat(f string) bool {
 	switch f {
-	case "", "truetype", "opentype", "truetype-variations", "opentype-variations":
+	case "", "truetype", "opentype", "truetype-variations", "opentype-variations", "woff":
 		return true
 	}
 	return false
