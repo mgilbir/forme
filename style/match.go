@@ -334,6 +334,13 @@ func (m *Matcher) pseudo(p css.Pseudo, n *html.Node) bool {
 			return false
 		}
 		return n.HasAttr("href")
+
+	case css.PseudoVisited:
+		// Nothing is visited here, and that is an answer rather than a refusal
+		// — see the note on css.PseudoVisited. It is the same "no" the case
+		// above already assumes in order to read :link as :any-link, so a
+		// document cannot get one of the two answers without the other.
+		return false
 	}
 	return false
 }

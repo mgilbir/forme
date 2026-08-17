@@ -11,17 +11,20 @@ import (
 //
 // # The subset, and the line it is drawn on
 //
-// A PDF page is static. It has no pointer, no focus, no history and no form
-// state, so a selector that asks about any of those has no answer here — not a
-// false one, none at all. Those are refused: :hover, :focus, :checked,
-// :visited and their kin.
+// A PDF page is static. It has no pointer, no focus and no form state, so a
+// selector that asks about any of those has no answer here — not a false one,
+// none at all. Those are refused: :hover, :focus, :checked and their kin.
 //
 // The line is *dynamism*, not familiarity. Everything the document itself
 // determines is in, including the whole structural family — :nth-child(),
 // :first-of-type, :empty, :root — and :link, which looks like one of the
 // interactive ones and is not: whether an <a> has an href is a fact about the
-// document. Its partner :visited is refused, because that one is a fact about a
-// person's browsing history.
+// document.
+//
+// :visited is in too, and matches nothing. That looks like the same case as
+// :hover and is not: there is no browsing history here and no way to acquire
+// one, so the answer is "no link is visited" rather than "cannot say". See
+// PseudoVisited, and note that :link is already implemented on that answer.
 //
 // # Refusing rather than ignoring
 //
@@ -144,6 +147,27 @@ const (
 	// PseudoAnyLink is :link and :any-link, both of which mean "an element with
 	// an href" once :visited cannot be true.
 	PseudoAnyLink
+
+	// PseudoVisited is :visited, which matches nothing.
+	//
+	// It is in the subset rather than refused with the interactive ones, and the
+	// difference is that this one has an answer. A document laid out here is
+	// rendered from a resolver with no browsing history and no way to acquire
+	// one, so no link in it has been visited — not "unknown", but no. The
+	// engine already relies on exactly that: :link is implemented as :any-link,
+	// which is only correct because :visited cannot be true.
+	//
+	// Refusing it made the engine contradict itself and cost real rendering. An
+	// unknown pseudo-class invalidates the whole selector, so ":link, :visited
+	// { color: inherit }" — which is how a document neutralises the UA's link
+	// styling, and how sixty of the suite's documents open — was dropped
+	// entirely, taking the :link half with it. The links then kept the UA blue
+	// that the author had written a rule to remove.
+	//
+	// It is also what a browser does. :visited styling is restricted almost to
+	// nothing for privacy, and a renderer that treats every link as unvisited is
+	// the private answer as well as the true one.
+	PseudoVisited
 )
 
 // Pseudo is one pseudo-class in a compound selector.
@@ -262,6 +286,7 @@ var pseudoClasses = map[string]PseudoKind{
 	"lang":             PseudoLang,
 	"link":             PseudoAnyLink,
 	"any-link":         PseudoAnyLink,
+	"visited":          PseudoVisited,
 }
 
 // dynamicPseudoClasses are correct CSS that a static page cannot answer: they
@@ -274,7 +299,7 @@ var pseudoClasses = map[string]PseudoKind{
 // that the rule was understood and deliberately not applied.
 var dynamicPseudoClasses = map[string]bool{
 	"active": true, "hover": true, "focus": true, "focus-visible": true,
-	"focus-within": true, "visited": true, "target": true, "target-within": true,
+	"focus-within": true, "target": true, "target-within": true,
 	"checked": true, "indeterminate": true, "default": true, "disabled": true,
 	"enabled": true, "read-only": true, "read-write": true,
 	"placeholder-shown": true, "valid": true, "invalid": true,

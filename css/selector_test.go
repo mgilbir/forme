@@ -318,7 +318,7 @@ func TestSpecificityOrders(t *testing.T) {
 // and is wrong.
 func TestDynamicSelectorsAreRefusedAndSaidSo(t *testing.T) {
 	dynamic := []string{
-		"a:hover", "a:focus", "a:active", "a:visited", "input:checked",
+		"a:hover", "a:focus", "a:active", "input:checked",
 		"input:disabled", "input:enabled", ":target", "input:valid",
 		"a:focus-within", "input:placeholder-shown", ":fullscreen",
 		"a:hover .c", ".c a:hover", "a:not(:hover)",
