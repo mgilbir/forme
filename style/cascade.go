@@ -389,7 +389,8 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 		// The gap is still real for the default sheet. It belongs in the note on
 		// the property rather than in every document's findings.
 		if reason, missing := unimplementedReason(name); missing &&
-			origin != OriginUserAgent && !s.seen[name] {
+			origin != OriginUserAgent && !s.seen[name] &&
+			!isInertDeclaration(name, d.Value) {
 			s.seen[name] = true
 			s.report(Finding{
 				Offset: d.Offset,
@@ -468,6 +469,15 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 		// bug that appears one run in ten.
 		sort.Slice(out, func(i, j int) bool { return out[i].property < out[j].property })
 		return out
+	}
+
+	// A declaration of an unimplemented property whose value is that property's
+	// own initial value asks for the page that is already there, so there is
+	// nothing to report. See inert.go, which is careful that this is about the
+	// value and not the property: "resize: none" is inert and "resize: both" is
+	// not.
+	if isInertDeclaration(name, d.Value) {
+		return nil
 	}
 
 	// The unsupported-property finding: a declaration parsed and then not
