@@ -17,6 +17,9 @@ package html
 var knownElements = map[string]bool{
 	// Document structure.
 	"html": true, "head": true, "body": true,
+	// Foreign roots. They are replaced elements: a box with content that is
+	// not HTML. See foreignElements.
+	"svg": true, "math": true,
 	"title": true, "meta": true, "link": true, "base": true, "style": true,
 
 	// Sections and grouping.

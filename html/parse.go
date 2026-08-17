@@ -240,20 +240,23 @@ func (p *parser) startTag(tk token) {
 		return
 	}
 
-	if !knownElements[name] {
-		if foreignElements[name] && !tk.selfClosing {
-			// Foreign content: the subtree is not HTML and must not be read as
-			// any. Dropping the element and parsing on spliced its *text* into
-			// the flow around it — "<svg><text>x</text></svg>" put an x in the
-			// paragraph, in the paragraph's font, at the paragraph's baseline,
-			// nowhere near where the picture would have been. That is worse
-			// than the missing picture it accompanied, because a hole is
-			// visibly a hole and a stray letter reads as the document's own.
-			p.tok.unsupported(tk.offset, "<"+name+"> is not an element this engine "+
-				"lays out, and its content is not HTML, so the whole of it was skipped")
-			p.skipElement(name)
-			return
+	if foreignElements[name] {
+		// A foreign element is a replaced element: it has a box, and its content
+		// is not HTML. The element stays, its source is kept for whoever can
+		// read it, and the subtree is not parsed on — which is what used to
+		// splice an SVG's text into the paragraph around it.
+		el := p.insert(tk)
+		if el != nil && !tk.selfClosing {
+			start := p.tok.pos
+			end := p.skipElement(name)
+			if end > start && end <= len(p.tok.src) {
+				el.Foreign = p.tok.src[start:end]
+			}
 		}
+		return
+	}
+
+	if !knownElements[name] {
 		p.tok.unsupported(tk.offset, "<"+name+"> is not an element this engine lays out")
 		return
 	}
@@ -432,13 +435,16 @@ func (p *parser) endTag(tk token) {
 
 // skipElement consumes to the matching end tag of an element being dropped,
 // counting nesting so an inner <iframe> does not end the outer one.
-func (p *parser) skipElement(name string) {
+// It returns the offset at which the matching end tag begins, which is the end
+// of the element's content — or the end of the source when there is no end tag,
+// since an unclosed element runs to the document.
+func (p *parser) skipElement(name string) int {
 	depth := 1
 	for {
 		tk := p.tok.next()
 		switch tk.kind {
 		case tokEOF:
-			return
+			return len(p.tok.src)
 		case tokStartTag:
 			if tk.name == name && !tk.selfClosing && !voidElements[name] {
 				depth++
@@ -446,7 +452,7 @@ func (p *parser) skipElement(name string) {
 		case tokEndTag:
 			if tk.name == name {
 				if depth--; depth == 0 {
-					return
+					return tk.offset
 				}
 			}
 		}

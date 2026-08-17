@@ -85,34 +85,79 @@ func TestAnUnknownHTMLElementKeepsItsContent(t *testing.T) {
 	}
 }
 
-// TestAForeignElementIsReportedAndSaysWhy. The finding has to name the second
-// half — that the content went too — because "not an element this engine lays
-// out" would leave an author looking for their SVG's text somewhere on the page.
-func TestAForeignElementIsReportedAndSaysWhy(t *testing.T) {
-	_, errs, _ := Parse(`<svg><text>x</text></svg>`)
-	var found *Error
-	for i := range errs {
-		if strings.Contains(errs[i].Message, "<svg>") {
-			found = &errs[i]
+// TestAForeignElementKeepsItsSource. The subtree is not parsed as HTML and is
+// not thrown away either: the element is a replaced element and this is its
+// content, so the source is kept for a reader that knows what to do with it.
+//
+// It is the source rather than a parsed tree on purpose. An SVG referenced by
+// <img> arrives as a file, so the reader that makes anything of one already
+// reads bytes, and one reader for the two is one set of rules about what an SVG
+// may be.
+func TestAForeignElementKeepsItsSource(t *testing.T) {
+	doc, errs, _ := Parse(`<p>before</p><svg width="10"><rect fill="blue"/></svg><p>after</p>`)
+	var svg *Node
+	var walk func(*Node)
+	walk = func(n *Node) {
+		if n.Type == ElementNode && n.Name == "svg" {
+			svg = n
+		}
+		for _, c := range n.Children {
+			walk(c)
 		}
 	}
-	if found == nil {
-		t.Fatalf("an svg was skipped with no report: %v", errs)
+	walk(doc)
+	if svg == nil {
+		t.Fatalf("no <svg> element in the tree; findings: %v", errs)
 	}
-	if !found.Unsupported {
-		t.Errorf("the report is %q, marked as malformed markup; it is correct HTML "+
-			"this engine does not lay out", found.Message)
+	if got, _ := svg.Attr("width"); got != "10" {
+		t.Errorf("the element's own attributes did not survive: width=%q", got)
 	}
-	if !strings.Contains(found.Message, "content") {
-		t.Errorf("the report is %q and does not say the content went with it",
-			found.Message)
+	if !strings.Contains(svg.Foreign, `<rect fill="blue"/>`) {
+		t.Errorf("the subtree source is %q, and the rect is what a reader needs", svg.Foreign)
 	}
-	// And the children are not reported one by one: the subtree was skipped, so
-	// nothing in it was ever read as an element.
+	if strings.Contains(svg.Foreign, "<svg") || strings.Contains(svg.Foreign, "</svg>") {
+		t.Errorf("the source is %q; it is the element's *content*, not the element", svg.Foreign)
+	}
+	if len(svg.Children) != 0 {
+		t.Errorf("the subtree was parsed into %d children; it is not HTML",
+			len(svg.Children))
+	}
+	// And nothing inside it is reported as an unknown element, because nothing
+	// inside it was ever read as one.
 	for _, e := range errs {
-		if strings.Contains(e.Message, "<text>") {
-			t.Errorf("a child of the skipped subtree was reported: %q", e.Message)
+		if strings.Contains(e.Message, "<rect>") {
+			t.Errorf("a child of the foreign subtree was reported: %q", e.Message)
 		}
+	}
+}
+
+// TestNestedForeignSourceRunsToTheMatchingEnd: an <svg> inside an <svg> must not
+// end the outer one, or the source stops early and the rest of the picture is
+// read as markup of the document.
+func TestNestedForeignSourceRunsToTheMatchingEnd(t *testing.T) {
+	doc, _, _ := Parse(`<svg><svg><rect id="inner"/></svg><rect id="outer"/></svg><p>after</p>`)
+	var svg *Node
+	var walk func(*Node)
+	walk = func(n *Node) {
+		if svg == nil && n.Type == ElementNode && n.Name == "svg" {
+			svg = n
+		}
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	walk(doc)
+	if svg == nil {
+		t.Fatal("no <svg> element")
+	}
+	for _, want := range []string{`id="inner"`, `id="outer"`} {
+		if !strings.Contains(svg.Foreign, want) {
+			t.Errorf("the source is %q and is missing %s; it stopped at the inner "+
+				"end tag", svg.Foreign, want)
+		}
+	}
+	if !strings.Contains(textOf(doc), "after") {
+		t.Errorf("the document after the svg was swallowed: %q", textOf(doc))
 	}
 }
 
