@@ -180,6 +180,17 @@ func Load(data []byte) (*Face, error) { return loadFace(data, nil) }
 // coordinates are normalized, and nil means the default instance — which is
 // zero on every axis, so it is also what a font with no design space gets.
 func loadFace(data []byte, coords []float64) (*Face, error) {
+	// A WOFF is an sfnt taken apart and deflated table by table, so unwrapping
+	// it here — before anything has looked at a table — is the whole of what
+	// this module needs to know about the format. Everything below reads the
+	// result as the ordinary font program it is.
+	if font.IsWOFF(data) || font.IsWOFF2(data) {
+		sfnt, err := font.DecodeWOFF(data)
+		if err != nil {
+			return nil, err
+		}
+		data = sfnt
+	}
 	tables := font.SFNTTables(data)
 	if tables == nil {
 		return nil, errors.New("fonts: not an sfnt font program (TrueType or OpenType)")
