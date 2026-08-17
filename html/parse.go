@@ -241,6 +241,19 @@ func (p *parser) startTag(tk token) {
 	}
 
 	if !knownElements[name] {
+		if foreignElements[name] && !tk.selfClosing {
+			// Foreign content: the subtree is not HTML and must not be read as
+			// any. Dropping the element and parsing on spliced its *text* into
+			// the flow around it — "<svg><text>x</text></svg>" put an x in the
+			// paragraph, in the paragraph's font, at the paragraph's baseline,
+			// nowhere near where the picture would have been. That is worse
+			// than the missing picture it accompanied, because a hole is
+			// visibly a hole and a stray letter reads as the document's own.
+			p.tok.unsupported(tk.offset, "<"+name+"> is not an element this engine "+
+				"lays out, and its content is not HTML, so the whole of it was skipped")
+			p.skipElement(name)
+			return
+		}
 		p.tok.unsupported(tk.offset, "<"+name+"> is not an element this engine lays out")
 		return
 	}
