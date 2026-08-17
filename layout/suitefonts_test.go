@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"testing"
 
 	"github.com/mgilbir/forme/shape"
 )
@@ -132,10 +133,12 @@ func notoFaces() []*shape.Face {
 		if err != nil {
 			continue
 		}
-		if face, err := shape.Load(data); err == nil {
-			registerBlockFont(face, data)
-			out = append(out, face)
+		face, err := loadSuiteFace(data)
+		if err != nil {
+			continue
 		}
+		registerBlockFont(face, data)
+		out = append(out, face)
 	}
 	return out
 }
@@ -149,5 +152,80 @@ func notoFaces() []*shape.Face {
 func registerBlockFont(face *shape.Face, data []byte) {
 	if bf, err := newBlockFont(data); err == nil {
 		blockFonts[face] = bf
+	}
+}
+
+// loadSuiteFace reads a fallback face at the weight a document that says nothing
+// is asking for.
+//
+// A variable font read as it stands is its *default instance*, and a font's
+// default is whatever its designer put in fvar — which for NotoSansJP-VF is
+// wght 100. Every CJK document in the suite was being set in hairline: not a
+// weight any of them asked for, with a hairline's advances and a hairline's line
+// breaks, in forty-nine of the reftests.
+//
+// So a face with a weight axis is instanced at 400, which is what "font-weight:
+// normal" means and what an unstyled element computes to. A face with no weight
+// axis is read as it stands, because there is nothing to ask it for — and
+// LoadInstance is deliberately an error in that case rather than a value quietly
+// ignored, which is what makes the two paths distinguishable here.
+func loadSuiteFace(data []byte) (*shape.Face, error) {
+	if face, err := shape.LoadInstance(data, map[string]float64{"wght": 400}); err == nil {
+		return face, nil
+	}
+	return shape.Load(data)
+}
+
+// TestTheSuitesVariableFaceIsLoadedAtNormalWeight.
+//
+// A variable font read as it stands is its default instance, and a font's
+// default is whatever its designer put in fvar. NotoSansJP-VF's wght axis
+// defaults to 100, so the suite was setting every CJK document in hairline —
+// with a hairline's advances — and forty-nine reftests named "NotoSansJP-Thin"
+// in their findings while doing it.
+//
+// Nothing in the ratchet moved when this was fixed, and that is worth recording
+// rather than hiding: this font's ascent and descent do not vary with weight, so
+// the line metrics were right all along and only the advances were wrong. What
+// changed is that the face the harness lends the engine is now the one a caller
+// would lend it.
+func TestTheSuitesVariableFaceIsLoadedAtNormalWeight(t *testing.T) {
+	dir := os.Getenv(notoEnv)
+	if dir == "" {
+		t.Skip("set " + notoEnv + " (or run `make test-wpt`) to read the suite's faces")
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "NotoSansJP-VF.ttf"))
+	if err != nil {
+		t.Skipf("no such font in this checkout: %v", err)
+	}
+
+	// As it stands: the font's own default, which is the lightest weight it has.
+	asIs, err := shape.Load(data)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if asIs.Name() != "NotoSansJP-Thin" {
+		t.Logf("the font's default instance is now %q; this test is about the "+
+			"weight the harness asks for, which is below", asIs.Name())
+	}
+
+	got, err := loadSuiteFace(data)
+	if err != nil {
+		t.Fatalf("loadSuiteFace: %v", err)
+	}
+	if got.Name() == asIs.Name() {
+		t.Errorf("the face came back as %q, the same as reading the file as it "+
+			"stands; a document that says nothing about weight is asking for 400",
+			got.Name())
+	}
+
+	// A face with no weight axis is read as it stands rather than refused, which
+	// is the other half of loadSuiteFace and is most of the list it loads.
+	static, err := os.ReadFile(filepath.Join(dir, "NotoSans-Regular.ttf"))
+	if err != nil {
+		t.Skipf("no such font: %v", err)
+	}
+	if _, err := loadSuiteFace(static); err != nil {
+		t.Errorf("a face with no weight axis was refused: %v", err)
 	}
 }
