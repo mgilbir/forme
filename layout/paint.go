@@ -276,7 +276,16 @@ func (p *painter) canvasBackground(root *Fragment) {
 // finding could be raised about it.
 func (p *painter) backgroundImages(layers []bgPaint) {
 	for _, l := range layers {
-		if l.Image == nil || l.Clip.Empty() || l.Tile.Empty() {
+		if l.Clip.Empty() || l.Tile.Empty() {
+			continue
+		}
+		if l.Solid != nil {
+			for _, r := range solidTiles(l) {
+				p.ops = append(p.ops, FillRect{Rect: r, Color: *l.Solid})
+			}
+			continue
+		}
+		if l.Image == nil {
 			continue
 		}
 		p.ops = append(p.ops, TileImage{
@@ -1235,4 +1244,63 @@ func ShapedText(v DrawText) string {
 		return v.Text
 	}
 	return "‮" + v.Text
+}
+
+// solidTiles is the rectangles a one-colour layer paints.
+//
+// A tiling of one colour is still a tiling: "background-repeat: space" leaves
+// gaps between its tiles and the gaps show, so this cannot simply fill the clip.
+// What it can do is merge along an axis whose tiles *abut*, which is every
+// repeat except space — the step equals the tile there, so the tiles meet edge
+// to edge and their union is the whole clip on that axis.
+//
+// That merge is not a tidiness: it is what makes a page written as
+// "linear-gradient(green, green)" produce the same display list as the same page
+// written with background-color, which is what a reftest comparing the two is
+// asking about. Emitting one fill per tile would paint identical pixels and
+// compare unequal.
+//
+// The count is bounded before this runs — see tilesWithinCap, which refuses a
+// layer whose tiles are past what a backend will draw — so the loop below cannot
+// be driven by a stylesheet.
+func solidTiles(l bgPaint) []Rect {
+	xs := solidSpans(l.Clip.X, l.Clip.Right(), l.Tile.X, l.Tile.W, l.StepX)
+	ys := solidSpans(l.Clip.Y, l.Clip.Bottom(), l.Tile.Y, l.Tile.H, l.StepY)
+	out := make([]Rect, 0, len(xs)*len(ys))
+	for _, y := range ys {
+		for _, x := range xs {
+			r := Rect{X: x.lo, Y: y.lo, W: x.hi.Sub(x.lo), H: y.hi.Sub(y.lo)}
+			if r = r.Intersect(l.Clip); !r.Empty() {
+				out = append(out, r)
+			}
+		}
+	}
+	return out
+}
+
+type span struct{ lo, hi style.Unit }
+
+// solidSpans is the intervals one axis of a solid tiling covers within its clip.
+//
+// Abutting tiles — step equal to the tile's own size — cover the clip entirely,
+// so they come back as one interval however many of them there are. Anything
+// else is listed tile by tile.
+func solidSpans(clipLo, clipHi, tileLo, size, step style.Unit) []span {
+	if size <= 0 || step <= 0 || clipHi <= clipLo {
+		return nil
+	}
+	if step == size {
+		return []span{{clipLo, clipHi}}
+	}
+	n := tileSpan(clipLo, clipHi, tileLo, size, step)
+	if n <= 0 {
+		return nil
+	}
+	first := math.Floor(clipLo.Sub(tileLo).Sub(size).Px()/step.Px()) + 1
+	out := make([]span, 0, n)
+	for i := 0; i < n; i++ {
+		lo := tileLo.Add(step.Mul(first + float64(i)))
+		out = append(out, span{lo, lo.Add(size)})
+	}
+	return out
 }

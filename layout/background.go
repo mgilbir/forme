@@ -129,6 +129,17 @@ type backgroundLayer struct {
 	// which is what makes a failed load a hole rather than an error.
 	image *ReplacedContent
 
+	// solid is the colour a layer paints when its image is a gradient of one
+	// colour, and nil otherwise. Such a layer has an image in every sense that
+	// background-size, -position, -repeat and -origin care about — it is sized
+	// and placed exactly as a picture is — and none of the sense that needs
+	// pixels. See gradient.go.
+	//
+	// It has no intrinsic dimensions, which is what a gradient has: CSS Images
+	// §4 gives one the positioning area as its default size, and that falls out
+	// of tileSize's "auto" case rather than being special-cased there.
+	solid *style.RGBA
+
 	repeatX, repeatY bgRepeat
 	posX, posY       bgPos
 
@@ -159,6 +170,11 @@ type bgPaint struct {
 	Image image.Image
 	// Key identifies the source bytes so a backend embeds one picture once.
 	Key string
+
+	// Solid is set instead of Image when the layer paints one colour. The
+	// geometry means the same thing either way — Tile is still where a tile
+	// sits and how big it is — and only what fills it differs.
+	Solid *style.RGBA
 }
 
 // maxBackgroundTiles bounds the tiles one layer may ask for.
@@ -385,7 +401,7 @@ func (l *layouter) paintsFor(b *Box, f *Fragment, canvas, over Rect) []bgPaint {
 	out := make([]bgPaint, 0, len(layers))
 	for i := len(layers) - 1; i >= 0; i-- {
 		layer := layers[i]
-		if layer.image == nil || layer.image.Image == nil {
+		if layer.solid == nil && (layer.image == nil || layer.image.Image == nil) {
 			continue
 		}
 		positioning := boxRect(f, layer.origin)
@@ -481,8 +497,9 @@ func (l *layouter) tiling(b *Box, layer backgroundLayer, positioning, painting R
 		Clip:  clip,
 		Tile:  Rect{X: x, Y: y, W: w, H: h},
 		StepX: stepX, StepY: stepY,
-		Image: layer.image.Image,
-		Key:   layer.image.Key,
+		Image: layerImage(layer),
+		Key:   layerKey(layer),
+		Solid: layer.solid,
 	}, true
 }
 
@@ -589,6 +606,21 @@ func axisTiling(
 // "round" rescaling above needs: it restores the ratio only on an axis nobody
 // asked for a size on.
 func (l *layouter) tileSize(layer backgroundLayer, area Rect) (w, h style.Unit, wAuto, hAuto bool) {
+	if layer.solid != nil {
+		// A gradient has no intrinsic width, height or ratio, so every "auto"
+		// resolves to the positioning area and cover and contain have nothing
+		// to scale — which is CSS Images §4's default object size, arrived at
+		// by having nothing to say rather than by a rule of its own.
+		w, wAuto := resolveBgLength(layer.sizeW, area.W)
+		h, hAuto := resolveBgLength(layer.sizeH, area.H)
+		if wAuto || layer.sizeKind == bgSizeCover || layer.sizeKind == bgSizeContain {
+			w = area.W
+		}
+		if hAuto || layer.sizeKind == bgSizeCover || layer.sizeKind == bgSizeContain {
+			h = area.H
+		}
+		return w, h, false, false
+	}
 	img := layer.image
 	iw, ih := img.Width, img.Height
 	if iw <= 0 || ih <= 0 {
@@ -741,7 +773,7 @@ func (l *layouter) readBackgroundLayers(b *Box, raw string) []backgroundLayer {
 			clip:   clips[at(len(clips), i)],
 			fixed:  fixed[at(len(fixed), i)],
 		}
-		layer.image = l.backgroundImage(b, spec)
+		layer.image, layer.solid = l.backgroundImage(b, spec)
 		out = append(out, layer)
 	}
 	return out
@@ -753,18 +785,24 @@ func (l *layouter) readBackgroundLayers(b *Box, raw string) []backgroundLayer {
 // against the same document-wide decode budget: see image.go. What is left here
 // is the lookup, and the report for a value that is a real CSS image this engine
 // cannot produce.
-func (l *layouter) backgroundImage(b *Box, raw string) *ReplacedContent {
+func (l *layouter) backgroundImage(b *Box, raw string) (*ReplacedContent, *style.RGBA) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || isNoneValue(raw) {
-		return nil
+		return nil, nil
 	}
 	if ref, ok := urlValue(raw); ok {
 		if b.BackgroundImages != nil {
-			return b.BackgroundImages[ref]
+			return b.BackgroundImages[ref], nil
 		}
-		return nil
+		return nil, nil
 	}
-	// A gradient, an image-set, element(). Each is a real value this engine
+	// A gradient of one colour is that colour, exactly, and is painted as a
+	// fill of the area it covers. See gradient.go for why that is the shape
+	// this engine paints and why it is not an approximation of the general one.
+	if colour, ok := uniformGradient(raw); ok {
+		return nil, &colour
+	}
+	// A real gradient, an image-set, element(). Each is a value this engine
 	// reads and cannot paint, and each leaves a box that looks as though the
 	// declaration were absent — which is the silent failure the whole finding
 	// vocabulary exists for.
@@ -775,7 +813,7 @@ func (l *layouter) backgroundImage(b *Box, raw string) *ReplacedContent {
 		Path:     PathOf(b.Element),
 		Property: "background-image",
 	})
-	return nil
+	return nil, nil
 }
 
 // reportOnce raises a finding the first time a key is seen, so a stylesheet rule
@@ -1232,4 +1270,21 @@ func backgroundImageRefs(raw string) []string {
 		}
 	}
 	return out
+}
+
+// layerImage and layerKey read a layer's picture, which a solid-colour layer does not
+// have. They exist so that the one place a bgPaint is built does not have to
+// branch on which kind of layer it is holding.
+func layerImage(layer backgroundLayer) image.Image {
+	if layer.image == nil {
+		return nil
+	}
+	return layer.image.Image
+}
+
+func layerKey(layer backgroundLayer) string {
+	if layer.image == nil {
+		return ""
+	}
+	return layer.image.Key
 }
