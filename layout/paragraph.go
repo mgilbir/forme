@@ -121,21 +121,22 @@ const (
 )
 
 var (
-	cursorAdvanced    = paragraph.CursorAdvanced
-	describeRune      = paragraph.DescribeRune
-	fmtPx             = paragraph.FmtPx
-	lineCap           = paragraph.LineCap
-	lineMetrics       = paragraph.LineMetrics
-	lineVisualOrder   = paragraph.LineVisualOrder
-	marksNoPaper      = paragraph.MarksNoPaper
-	missesVisible     = paragraph.MissesVisible
-	newBidiBuilder    = paragraph.NewBidiBuilder
-	parseNumber       = paragraph.ParseNumber
-	positiveInteger   = paragraph.PositiveInteger
-	sameUnits         = paragraph.SameUnits
-	stackLine         = paragraph.StackLine
-	startOfContext    = paragraph.StartOfContext
-	unsupportedScript = paragraph.UnsupportedScript
+	cursorAdvanced     = paragraph.CursorAdvanced
+	describeRune       = paragraph.DescribeRune
+	fmtPx              = paragraph.FmtPx
+	lineCap            = paragraph.LineCap
+	lineMetrics        = paragraph.LineMetrics
+	lineVisualOrder    = paragraph.LineVisualOrder
+	marksNoPaper       = paragraph.MarksNoPaper
+	substitutesExactly = paragraph.SubstitutesExactly
+	missesVisible      = paragraph.MissesVisible
+	newBidiBuilder     = paragraph.NewBidiBuilder
+	parseNumber        = paragraph.ParseNumber
+	positiveInteger    = paragraph.PositiveInteger
+	sameUnits          = paragraph.SameUnits
+	stackLine          = paragraph.StackLine
+	startOfContext     = paragraph.StartOfContext
+	unsupportedScript  = paragraph.UnsupportedScript
 )
 
 const (
