@@ -180,9 +180,16 @@ type forcedGeometry struct {
 // The rules are stated as four properties and are really two constraints, one
 // per axis, each over-determined by one. Horizontally: left and right are
 // opposite descriptions of the same displacement, so if both are given they
-// contradict each other and one has to lose — in a left-to-right document,
-// "left" wins and "right" is ignored. If only one is given the other is its
+// contradict each other and one has to lose. Which one is a question about the
+// containing block's direction, and the specification answers it in as many
+// words: "if the direction property of the containing block is ltr, the value of
+// left wins and right becomes -left. If direction of the containing block is
+// rtl, right wins and left is ignored." If only one is given the other is its
 // negation, and if neither is given there is no offset.
+//
+// The containing block's direction and not the box's own. They differ only when
+// the box declares one of its own — direction is inherited — and a box that does
+// must not thereby decide which of its own two offsets to obey.
 //
 // A percentage of left or right is a percentage of the containing block's
 // *width*, and of top or bottom a percentage of its *height*. The height is
@@ -193,7 +200,7 @@ type forcedGeometry struct {
 // auto also produces here, and the two stop agreeing the moment the property is
 // paired with its opposite.
 func (l *layouter) relativeOffset(b *Box, containing, cbHeight style.Unit, cbDefinite bool) Point {
-	axis := func(start, end string, basis style.Unit, definite bool) style.Unit {
+	axis := func(start, end string, basis style.Unit, definite, endWins bool) style.Unit {
 		lo, loAuto := l.offsetValue(b, start, basis, definite)
 		hi, hiAuto := l.offsetValue(b, end, basis, definite)
 		switch {
@@ -203,14 +210,42 @@ func (l *layouter) relativeOffset(b *Box, containing, cbHeight style.Unit, cbDef
 			// The box moves away from the edge the property names, so a "right"
 			// of 10px moves it 10px to the left.
 			return style.Unit(0).Sub(hi)
+		case hiAuto:
+			return lo
+		case endWins:
+			// Over-constrained, and the containing block's direction says the
+			// end edge is the one that wins. Only here: with one of the two
+			// auto there is nothing to be over-constrained about, and the rule
+			// that the missing one is the negation of the given one holds
+			// whichever direction the block runs in.
+			return style.Unit(0).Sub(hi)
 		}
-		// Either only the start was given, or both were and the start wins.
+		// Both were given and the start wins.
 		return lo
 	}
 	return Point{
-		X: axis("left", "right", containing, true),
-		Y: axis("top", "bottom", cbHeight, cbDefinite),
+		// Over-constrained horizontally, the winner is the edge the containing
+		// block's inline direction starts from. There is no such rule for the
+		// vertical axis: "top" wins over "bottom" whatever the direction.
+		X: axis("left", "right", containing, true, containingIsRTL(b)),
+		Y: axis("top", "bottom", cbHeight, cbDefinite, false),
 	}
+}
+
+// containingIsRTL reads the direction of the block container a box is laid out
+// in, which is what §9.4.3 asks about.
+//
+// An inline box is passed over because it is not a containing block: a
+// "direction: rtl" on a <span> changes the ordering of what is inside it and
+// does not change which edge a relatively positioned box inside it is offset
+// from.
+func containingIsRTL(b *Box) bool {
+	for p := b.Parent; p != nil; p = p.Parent {
+		if isBlockContainer(p) {
+			return isRTL(p)
+		}
+	}
+	return false
 }
 
 // offsetValue resolves one of the four offset properties, reporting whether it
