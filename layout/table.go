@@ -497,8 +497,17 @@ func (b *boxBuilder) tableWrapper(table *Box) *Box {
 // property that decides where a floated neighbour lets the box start, which is a
 // question about where the whole table goes and is meaningless applied to a grid
 // inside a wrapper that has already been placed. Every browser does the same.
+//
+// "vertical-align" is the second addition and is there for the same reason. It
+// is meaningful only for an inline-table, where the box that sits on the line is
+// the wrapper — the table box inside it is block-level and nothing ever asks it
+// how it aligns. Left on the table it did nothing at all, so an inline-table
+// with "vertical-align: top" was aligned on its baseline: the line box grew by
+// the strut's descent, and the eleven "applies-to" tests that put an
+// inline-table inside a bordered box all measured a container a few pixels too
+// tall.
 var wrapperProperties = []string{
-	"position", "float", "clear", "z-index",
+	"position", "float", "clear", "z-index", "vertical-align",
 	"margin-top", "margin-right", "margin-bottom", "margin-left",
 	"top", "right", "bottom", "left",
 }
