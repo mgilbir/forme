@@ -158,7 +158,8 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak) ([]Pi
 		// is what makes "X XX X" in four characters of room break after the
 		// fourth — the answer break-all must not give, and the one the suite's
 		// break-spaces-before-first-char-007 asks for by name.
-		if (deferBreak || (wb.BreakAll && !startsSpacePiece(r, ws)) || lb.Anywhere) &&
+		if ((deferBreak && !startsSpacePiece(r, ws)) ||
+			(wb.BreakAll && !startsSpacePiece(r, ws)) || lb.Anywhere) &&
 			atBoundary && cur.Len() > 0 {
 			flush()
 			breakNext = true
