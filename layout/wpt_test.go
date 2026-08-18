@@ -943,7 +943,7 @@ const wptEnv = "WPT_TESTS"
 // exposed. The number is small and the fault was not: an invalid declaration
 // stood in front of a valid one and every page it happened on came out in the
 // initial value.
-const wptCleanPassBaseline = 4827
+const wptCleanPassBaseline = 4828
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

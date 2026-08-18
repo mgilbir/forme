@@ -40,7 +40,7 @@ import (
 // page where an author put a page break in their source.
 func isVisibleControl(r rune) bool {
 	switch r {
-	case '\t', '\n', '\r', '\f':
+	case '\t', '\n', '\r':
 		return false
 	}
 	return r < 0x20 || (r >= 0x7F && r <= 0x9F)

@@ -344,7 +344,7 @@ func NormaliseBreaks(text string) string {
 // defines a segment break in terms of the document's newlines, and no HTML
 // parser produces a line from a form feed.
 func isCollapsibleSpace(c byte) bool {
-	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f'
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r'
 }
 
 // IsOtherSpaceSeparator is §4.1's term of art, and the definition is exact:

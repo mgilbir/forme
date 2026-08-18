@@ -106,16 +106,28 @@ func TestAControlCharacterIsNoLongerReportedMissing(t *testing.T) {
 
 // TestTabAndNewlineAreNotDrawnAsBoxes.
 //
-// The specification names them out of the rule, and each is white space whose
-// meaning the white-space processing has already acted on. Form feed goes with
-// them: CSS 2.1 counts it among the white space a document may be written with,
-// so a box for one would be a mark on the page where an author put a page break
-// in their source.
+// The specification names three characters out of the rule and only three —
+// tab, line feed and carriage return — and each is white space whose meaning the
+// white-space processing has already acted on.
+//
+// Form feed used to be here with them, on the reasoning that CSS 2.1 counts it
+// among the white space a document may be written with, so a box for one would
+// be a mark on the page where an author put a page break in their source. That
+// reading is CSS 2.1's and CSS Text 3 supersedes it: its white space is spaces,
+// tabs and segment breaks, a form feed is none of the three, and its list of
+// exceptions to "must be rendered as a visible glyph" does not include one. The
+// suite says so in the title of its own document — "Control characters must be
+// visible: U+000C" — and asserts it by requiring the rendering to *differ* from
+// an empty box.
 func TestTabAndNewlineAreNotDrawnAsBoxes(t *testing.T) {
-	for _, r := range []rune{'\t', '\n', '\r', '\f'} {
+	for _, r := range []rune{'\t', '\n', '\r'} {
 		if isVisibleControl(r) {
 			t.Errorf("U+%04X is treated as a visible control character", r)
 		}
+	}
+	if !isVisibleControl('\f') {
+		t.Errorf("U+000C is not treated as a visible control character; CSS Text 3 " +
+			"names tab, line feed and carriage return out of the rule and nothing else")
 	}
 	// And through the whole engine: a preserved tab draws no box.
 	ops := Paint(layoutOf(t, 600,
