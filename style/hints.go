@@ -64,6 +64,19 @@ var hintedAttributes = map[string]map[string]string{
 	// suite's reftests write <iframe height="50%"> and check the result against
 	// a div of the height that resolves to.
 	"iframe": {"width": "width", "height": "height"},
+	// <svg width> and <svg height> are not HTML's dimension attributes at all:
+	// SVG calls them *presentation attributes*, and its own rendering section
+	// maps each to the CSS property of the same name. The effect here is the
+	// same and the reader below is the same, because the syntax a document
+	// actually writes — "50", "50%" — is the same syntax.
+	//
+	// They matter beyond the sizes they state. An intrinsic dimension is a
+	// number a picture carries; a *percentage* is not one, because it is a
+	// proportion of something the picture cannot see. "height=50%" has no
+	// intrinsic meaning and every reading of it as one is wrong — it is the CSS
+	// height property, resolved against the containing block, which is what
+	// absolute-replaced-height-013 says in as many words.
+	"svg": {"width": "width", "height": "height"},
 	// The HTML Standard's table rendering section maps the width attribute to
 	// the width property as a "dimension property", which is the same syntax
 	// <img width> takes and so the same reader below: a bare number is pixels
