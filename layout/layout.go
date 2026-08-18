@@ -675,6 +675,16 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	if b.Position == PositionRelative {
 		frag.Offset = l.relativeOffset(b, containing, at.cbHeight, at.cbDefinite)
 	}
+	// And the offsets of any inline this block was broken out of, which move it
+	// exactly as they move the rest of what that inline contains. See splitFrom.
+	for _, from := range b.splitFrom {
+		if from.Position != PositionRelative {
+			continue
+		}
+		d := l.relativeOffset(from, containing, at.cbHeight, at.cbDefinite)
+		frag.Offset.X = frag.Offset.X.Add(d.X)
+		frag.Offset.Y = frag.Offset.Y.Add(d.Y)
+	}
 	if b.Position.positioned() {
 		// Recorded even for a box that is only relatively positioned, because
 		// §10.1 makes any positioned ancestor a containing block — that is the

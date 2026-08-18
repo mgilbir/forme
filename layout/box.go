@@ -266,6 +266,19 @@ type Box struct {
 	// without a block inside an inline.
 	noLeadInset, noTrailInset bool
 
+	// splitFrom is the inline boxes a block-level box was lifted out of by
+	// §9.2.1.1, outermost first, and is empty for every other box.
+	//
+	// The inline is broken *around* the block, so the block is not its child in
+	// the box tree and nothing about it is found by walking up. Two things about
+	// it still reach the block, because they are about the elements rather than
+	// the boxes: a relative offset declared on the inline moves everything it
+	// contains, and a text-decoration declared on it is drawn across everything
+	// it contains. Both were lost, and the second one silently — the block came
+	// out at the right place with no underline on it, which reads as a document
+	// that did not ask for one.
+	splitFrom []*Box
+
 	// staticInline records that this box was inline-level before §9.7 blockified
 	// it for being out of flow.
 	//
@@ -1073,6 +1086,13 @@ func splitInline(b *Box) []*Box {
 
 		case child.Outer == OuterBlock:
 			flush()
+			// The block leaves the inline, and what the inline was doing to it
+			// has to leave with it. §9.2.1.1 breaks the inline *around* the
+			// block, which does not stop the inline's own relative offset from
+			// moving it: "left: 2em" on a span moves everything the span
+			// contains, and the block it was broken around is still something
+			// it contains. See splitFrom.
+			child.splitFrom = append([]*Box{b}, child.splitFrom...)
 			out = append(out, child)
 
 		case child.Outer == OuterInline && !laysOutOwnChildren(child) && containsBlock(child):
@@ -1081,6 +1101,9 @@ func splitInline(b *Box) []*Box {
 			for _, inner := range splitInline(child) {
 				if inner.Outer == OuterBlock {
 					flush()
+					// The inner split already named the inline it came out of;
+					// this one is outside that, so it goes in front.
+					inner.splitFrom = append([]*Box{b}, inner.splitFrom...)
 					out = append(out, inner)
 					continue
 				}
