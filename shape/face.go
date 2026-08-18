@@ -510,7 +510,7 @@ func (f *Face) Measure(s string, size float64) float64 {
 			// and draws another — see ignorable.go.
 			continue
 		}
-		w, ok := f.Advance(r)
+		w, ok := f.advanceOrDecomposed(r, 0)
 		if !ok && f.std != nil {
 			// A character outside the encoding is set as a space, so it is a
 			// space that must be measured.
@@ -519,6 +519,46 @@ func (f *Face) Measure(s string, size float64) float64 {
 		total += w
 	}
 	return total * size / 1000
+}
+
+// advanceOrDecomposed is a character's advance, taking it apart when this face
+// has no glyph for it and does have one for what it decomposes into.
+//
+// It is the same rule normalize applies, asked here for the same reason: what is
+// measured has to be what is drawn. The shaper takes a character the face cannot
+// set and emits its canonical decomposition instead, so a measurement that
+// stopped at .notdef reports a width the page will not have.
+//
+// The case is not exotic. U+2000 EN QUAD decomposes to U+2002 EN SPACE and
+// U+2001 EM QUAD to U+2003 EM SPACE — Unicode states both as singletons — and a
+// font carrying the spaces without the quads is ordinary. The suite's Ahem is
+// one: it sets an en quad as a half em, and this measured it as a whole one,
+// which put the words either side of three of them two ems further apart than
+// they are drawn.
+func (f *Face) advanceOrDecomposed(r rune, depth int) (float64, bool) {
+	w, ok := f.Advance(r)
+	if ok || depth >= maxDecompositionDepth {
+		return w, ok
+	}
+	a, b, decomposed := canonicalDecompose(r)
+	if !decomposed {
+		return w, false
+	}
+	// The width of the parts, and only if *every* part is one this face has:
+	// half a decomposition measured and the whole of it drawn as .notdef is the
+	// disagreement this exists to prevent.
+	total, aok := f.advanceOrDecomposed(a, depth+1)
+	if !aok {
+		return w, false
+	}
+	if b != 0 {
+		wb, bok := f.advanceOrDecomposed(b, depth+1)
+		if !bok {
+			return w, false
+		}
+		total += wb
+	}
+	return total, true
 }
 
 // Encode maps a string to the character codes a Type0/Identity-H font expects:
