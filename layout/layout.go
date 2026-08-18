@@ -90,6 +90,17 @@ type Fragment struct {
 	// in the conflict resolution like every other candidate, and losing is not
 	// the same as being absent.
 	inCollapsedGrid bool
+	// contentH is the border-box height this fragment's content came to, before
+	// a declared height was allowed to raise it.
+	//
+	// It is recorded for one caller and one rule. §17.5.3 makes a declared height
+	// on a table cell a *minimum* — the cell box is at least that tall — and then
+	// aligns the cell's *content* within whatever height its row ended up with.
+	// Those are two different heights, and reading the second off the box gave a
+	// cell with "height: 1in" no slack at all: its content already filled it, so
+	// "vertical-align: bottom" had nothing to move and the text stayed at the top
+	// of a box four times its size.
+	contentH style.Unit
 
 	// background is this box's background images, resolved against its geometry
 	// and in painting order — CSS lists layers front to back, so the last one
@@ -724,6 +735,15 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	contentHeight, hoistTop, hoistBottom, placedAnything :=
 		l.clampedChildren(b, frag, width, topOpen, bottomOpen, inner)
 
+	// What the content itself came to, which a declared height may raise the box
+	// above but does not change. The float rule below applies to it either way:
+	// a float inside a box that contains its own is part of what that box holds,
+	// whether or not a height was declared. See Fragment.contentH.
+	natural := contentHeight
+	if own != at.ctx {
+		natural = style.Max(natural, own.bottom())
+	}
+
 	if hasHeight {
 		if b.Inner == InnerTable || b.Inner == InnerTableCell {
 			// §17.5.3: a declared height on a table or a cell is a *minimum*.
@@ -760,6 +780,7 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	}
 
 	frag.BorderRect.H = contentHeight.Add(padding.Vertical()).Add(border.Vertical())
+	frag.contentH = natural.Add(padding.Vertical()).Add(border.Vertical())
 
 	out := collapsed{top: marginOf(margin.Top), bottom: marginOf(margin.Bottom)}
 	if topOpen {

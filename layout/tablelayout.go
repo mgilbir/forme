@@ -1318,7 +1318,17 @@ type placedCell struct {
 	frag *Fragment
 	// natural is the height the cell's content needed, which is what it would
 	// have been given were it not in a row with anything else in it.
+	//
+	// "Needed" includes a declared height, because §17.5.3 makes one a minimum:
+	// a cell asking for an inch makes its row an inch tall even with one word in
+	// it. That is the right number for sizing the row and the wrong one for
+	// aligning inside it, which is what content is for.
 	natural style.Unit
+	// content is the height the cell's content came to on its own, with no
+	// declared height allowed to raise it. It is what §17.5.3's vertical-align
+	// moves within the row's height, and the difference between the two is the
+	// slack there is to move it through.
+	content style.Unit
 	// baseline is where the cell's first line sits, measured from its border-box
 	// top. §17.5.3 makes a cell with no line box baseline-align on its bottom
 	// content edge, so there is always one.
@@ -1501,7 +1511,7 @@ func (l *layouter) layoutCells(table *Box, g *tableGrid, cols []style.Unit,
 		frag.inCollapsedGrid = s.collapsed != nil
 
 		out = append(out, placedCell{
-			cell: c, frag: frag, natural: frag.BorderRect.H,
+			cell: c, frag: frag, natural: frag.BorderRect.H, content: frag.contentH,
 			baseline: baselineOfCell(frag),
 			align:    strings.ToLower(strings.TrimSpace(c.box.Style["vertical-align"])),
 			absFrom:  absFrom,
@@ -1832,7 +1842,7 @@ func cellIsEmpty(f *Fragment) bool { return len(f.Lines) == 0 && len(f.Children)
 // were written *among that content* — a box that stayed behind would be
 // positioned against a place the text has left.
 func (l *layouter) alignCell(p placedCell, height, rowBaseline style.Unit) {
-	slack := maxZero(height.Sub(p.natural))
+	slack := maxZero(height.Sub(p.content))
 	var delta style.Unit
 	switch p.align {
 	case "top":
