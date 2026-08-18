@@ -597,11 +597,17 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 	}
 	box.ListValue, box.ListNumbered = b.listValueOf(n, listItem)
 	box.Control = b.controlFor(n)
-	if outer != OuterInline {
+	if outer != OuterInline || endsAWord(n) {
 		// A block-level box begins its text afresh, so a word cannot run into it
 		// from the paragraph before. Without this, "<p>hi</p><p>there</p>" under
 		// "capitalize" would leave the second paragraph's "t" lower-case, since
 		// the "i" before it is a word character.
+		//
+		// A <br> is inline and does the same thing for the same reason: it is a
+		// line break the author wrote, so what follows it begins a line and
+		// begins a word. "i ask<br/>questions" under "capitalize" is "I Ask" and
+		// "Questions", which is what text-transform-cap-003 asks for by writing
+		// its expectation out in full.
 		b.afterWord = false
 	}
 
@@ -635,6 +641,17 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		b.afterWord = false
 	}
 	return box
+}
+
+// endsAWord reports whether an element ends the word before it, without being
+// block-level.
+//
+// A <br> is the one: it is a line break the author wrote, and a word does not
+// continue across a line the author ended. The <wbr> beside it deliberately is
+// not — it offers a break opportunity and marks no boundary in the text, so
+// "sur<wbr/>name" is one word and "capitalize" gives it one capital.
+func endsAWord(n *html.Node) bool {
+	return n != nil && n.Type == html.ElementNode && strings.EqualFold(n.Name, "br")
 }
 
 // fontSizeOfStyle resolves a font-size from a computed style that belongs to no
