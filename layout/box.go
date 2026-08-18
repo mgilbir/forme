@@ -335,11 +335,20 @@ func BuildBoxes(doc *html.Node, styled style.Styled, rec *Recorder) *Box {
 	}
 	// The root's font-size is resolved against the initial value, since there
 	// is no parent to take one from, and it then becomes what every "rem" in
-	// the document means.
+	// the document means. CSS Values §5.1.1 says it in as many words: an em on
+	// the root element refers to the property's *initial* value.
+	//
+	// The build below is handed that same initial value rather than the answer,
+	// and the distinction is the whole of this. Every element resolves its own
+	// declared font-size against its parent's, and the root is an element like
+	// any other — so handing it 32 as a parent made "font-size: 2em" resolve a
+	// second time, to 64, while every "rem" in the document went on meaning 32.
+	// A document whose root said 2em came out at twice the size of one whose
+	// root said 32px, which is numbers-units-021.
 	b.rootFontSize = defaultFontSize
 	b.rootFontSize = b.fontSizeOf(root, defaultFontSize)
 
-	box := b.build(root, nil, b.rootFontSize)
+	box := b.build(root, nil, defaultFontSize)
 	if box == nil {
 		return nil
 	}
@@ -384,7 +393,11 @@ type boxBuilder struct {
 	pseudo map[style.PseudoKey]style.ComputedStyle
 	// ownFontSize and ownPseudoFontSize say which elements declared a font-size
 	// of their own. See fontSizeOf.
-	ownFontSize       map[*html.Node]bool
+	ownFontSize map[*html.Node]bool
+	// resolvedFontSize remembers what each element's declared font-size came to,
+	// so that the root — the one element asked twice — cannot answer differently
+	// the second time. See fontSizeOf.
+	resolvedFontSize  map[*html.Node]style.Unit
 	ownPseudoFontSize map[style.PseudoKey]bool
 	rec               *Recorder
 	// counters holds what each element and each pseudo-element sees. See
@@ -439,6 +452,18 @@ func (b *boxBuilder) fontSizeOf(n *html.Node, parent style.Unit) style.Unit {
 	if !b.ownFontSize[n] {
 		return parent
 	}
+	// Resolved once per element, and remembered.
+	//
+	// Every element is asked once except the root, which is asked twice: to
+	// establish what "rem" means before the tree is built, and again as an
+	// element of that tree. The two must agree, and they cannot be made to
+	// agree by argument alone — the second call sees a rootFontSize the first
+	// one was computing, so "font-size: 2rem" on the root resolved against 16
+	// the first time and against its own answer the second, and the root came
+	// out twice the size the rest of the document was measuring against.
+	if got, ok := b.resolvedFontSize[n]; ok {
+		return got
+	}
 	cs, ok := b.styles[n]
 	if !ok {
 		return parent
@@ -457,6 +482,10 @@ func (b *boxBuilder) fontSizeOf(n *html.Node, parent style.Unit) style.Unit {
 		}
 		return parent
 	}
+	if b.resolvedFontSize == nil {
+		b.resolvedFontSize = map[*html.Node]style.Unit{}
+	}
+	b.resolvedFontSize[n] = size
 	return size
 }
 
