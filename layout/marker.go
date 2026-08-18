@@ -47,7 +47,7 @@ type Marker struct {
 // which the user-agent sheet increments and every list resets. The two agree for
 // a plain list and disagree the moment a document says <ol start="5"> or
 // <li value="3"> or resets the counter itself.
-func (l *layouter) markerFor(b *Box, frag *Fragment) *Marker {
+func (l *layouter) markerFor(b *Box, frag *Fragment, origin flow) *Marker {
 	if markerInside(b) {
 		// An inside marker is not drawn beside the box: it is the first thing on
 		// the box's first line, and markerItem puts it there. See §12.5.1 and the
@@ -82,7 +82,7 @@ func (l *layouter) markerFor(b *Box, frag *Fragment) *Marker {
 	// moving the box around it — a block's border box is not displaced by a
 	// float, only the lines inside it are — so a marker placed from the content
 	// edge is left behind under the float, an inch away from its own text.
-	inner := frag.Border.Left.Add(frag.Padding.Left).Add(firstLineStart(frag))
+	inner := frag.Border.Left.Add(frag.Padding.Left).Add(l.firstLineStart(frag, origin))
 
 	m := &Marker{
 		Text: text, Face: face, Size: size,
@@ -386,11 +386,33 @@ func roman(index int) string {
 // on markerNeedsALine — the two are the same missing line box seen from two
 // sides, and this half is the one that can be fixed without deciding how tall an
 // empty list item is.
-func firstLineStart(frag *Fragment) style.Unit {
-	if frag == nil || len(frag.Lines) == 0 {
+func (l *layouter) firstLineStart(frag *Fragment, origin flow) style.Unit {
+	if frag == nil {
 		return 0
 	}
-	return frag.Lines[0].Rect.X
+	if len(frag.Lines) > 0 {
+		return frag.Lines[0].Rect.X
+	}
+	// No line, and the marker still has to go where one would have started.
+	//
+	// An item with no content of its own is not a rare shape: it is how the
+	// suite writes "does this property apply to a list item", and a browser puts
+	// its bullet where the first line box would have been. That is not the
+	// content edge whenever a float is in the way — a block's border box is not
+	// displaced by a float, only the lines inside it are — so an empty item
+	// beside a one-inch float had its marker an inch to the left of where every
+	// renderer puts it, out past the page's own margin.
+	if origin.ctx == nil {
+		return 0
+	}
+	// The band at the item's first line, measured between the item's own content
+	// edges: bandAt clamps to them, so what comes back is where a line inside
+	// *this* box would begin.
+	lo := origin.x.Add(frag.BorderRect.X).Add(frag.Border.Left).Add(frag.Padding.Left)
+	hi := lo.Add(frag.ContentRect().W)
+	y := origin.y.Add(frag.BorderRect.Y).Add(frag.Border.Top).Add(frag.Padding.Top)
+	left, _ := origin.ctx.bandAt(y, lo, hi)
+	return style.Max(left.Sub(lo), 0)
 }
 
 // firstLineBaseline is where the item's first line puts its baseline, or the

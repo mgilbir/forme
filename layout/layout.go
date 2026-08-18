@@ -1055,7 +1055,7 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 			cf = l.settle(child, width, origin, cf, est, at, mark, absMark, subtreeRead)
 			cf.BorderRect.Y = at
 			if child.ListItem {
-				cf.Marker = l.markerFor(child, cf)
+				cf.Marker = l.markerFor(child, cf, origin)
 			}
 			parent.Children = append(parent.Children, cf)
 			continue
@@ -1118,7 +1118,7 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 			cf = l.settle(child, width, origin, cf, est, at, mark, absMark, subtreeRead)
 			cf.BorderRect.Y = at
 			if child.ListItem {
-				cf.Marker = l.markerFor(child, cf)
+				cf.Marker = l.markerFor(child, cf, origin)
 			}
 			parent.Children = append(parent.Children, cf)
 			y = at.Sub(cm.topAlone.value())
@@ -1146,13 +1146,17 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		// below the box's top and inside its height, which is the case the band
 		// at a single y cannot see.
 		at, cf = l.fitBesideFloats(child, width, origin, cf, at, atGeom, mark, absMark)
-		if child.ListItem {
-			cf.Marker = l.markerFor(child, cf)
-		}
 		parent.Children = append(parent.Children, cf)
 
 		y = at
 		cf.BorderRect.Y = y
+		if child.ListItem {
+			// After the box has its position, not before. An item with no line
+			// of its own takes its marker's place from where a line *would*
+			// have started, and that question is asked against the floats at
+			// this y — see firstLineStart.
+			cf.Marker = l.markerFor(child, cf, origin)
+		}
 		y = y.Add(cf.BorderRect.H)
 		pending = cm.bottom
 		placed = true
@@ -1266,7 +1270,7 @@ func (l *layouter) floatChild(b *Box, width style.Unit, origin flow,
 		return f
 	})
 	if b.ListItem {
-		cf.Marker = l.markerFor(b, cf)
+		cf.Marker = l.markerFor(b, cf, origin)
 	}
 
 	box := cf.MarginRect()
