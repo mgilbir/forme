@@ -86,9 +86,57 @@ type tokenizer struct {
 	// on which element is open — the one place the two layers are not separable.
 	raw    string
 	rcdata bool
+	// xml says the document is XHTML rather than HTML, which changes exactly one
+	// thing here: <style> and <script> hold ordinary character data, so "&gt;"
+	// in a stylesheet is a ">". See looksLikeXML.
+	xml bool
 }
 
-func newTokenizer(src string) *tokenizer { return &tokenizer{src: src} }
+func newTokenizer(src string) *tokenizer {
+	return &tokenizer{src: src, xml: looksLikeXML(src)}
+}
+
+// looksLikeXML reports whether a document says it is XHTML.
+//
+// It is asked because HTML and XHTML disagree about what is inside a <style>:
+// HTML makes it raw text, where "&" and "<" are literal characters, and XML
+// makes it ordinary character data, where "&gt;" is a ">". A stylesheet written
+// for XHTML therefore spells a child combinator "&gt;", and read as HTML that
+// selector matches nothing at all — so every rule in the block is silently
+// inert and the page comes back unstyled in a way that looks like a layout bug.
+//
+// The three signals are the ones a document can state about itself, and any of
+// them is enough:
+//
+//   - an XML declaration, which only an XML document may begin with;
+//   - an XHTML public identifier in the doctype;
+//   - the XHTML namespace on the root element.
+//
+// A browser does not ask any of this — it is told by the MIME type, which a file
+// on disk does not have. These are what is left, they are what the file itself
+// asserts, and a document carrying none of them is read as HTML, which is the
+// safe direction: HTML is what an unmarked document overwhelmingly is.
+func looksLikeXML(src string) bool {
+	// Only the prologue is examined. The signals all belong to it, and scanning
+	// a whole document for a string that may appear in its text would make the
+	// answer depend on the content.
+	head := src
+	if len(head) > 2048 {
+		head = head[:2048]
+	}
+	if strings.HasPrefix(strings.TrimLeft(head, " \t\r\n\uFEFF"), "<?xml") {
+		return true
+	}
+	if i := indexFold(head, "<!doctype"); i >= 0 {
+		if end := strings.IndexByte(head[i:], '>'); end >= 0 {
+			if indexFold(head[i:i+end], "//dtd xhtml") >= 0 {
+				return true
+			}
+		}
+	}
+	return indexFold(head, `xmlns="http://www.w3.org/1999/xhtml"`) >= 0 ||
+		indexFold(head, `xmlns='http://www.w3.org/1999/xhtml'`) >= 0
+}
 
 func (t *tokenizer) fail(off int, msg string) { t.add(Error{Offset: off, Message: msg}) }
 func (t *tokenizer) unsupported(off int, msg string) {
@@ -151,12 +199,46 @@ func (t *tokenizer) rawText() token {
 }
 
 // rawValue resolves references in RCDATA and leaves raw text alone.
+//
+// In an XHTML document raw text is not raw: <style> and <script> hold ordinary
+// character data there, so their references are resolved too. The one exception
+// is a CDATA section, which is the XML syntax for "the characters between these
+// markers are literal" and is exactly what an author writes round a stylesheet
+// to keep "&" and "<" meaning themselves.
 func (t *tokenizer) rawValue(s string, off int) string {
 	if t.rcdata {
 		return t.decodeRefs(s, off, false)
 	}
-	return s
+	if !t.xml {
+		return s
+	}
+	var b strings.Builder
+	for rest, at := s, off; ; {
+		i := strings.Index(rest, cdataOpen)
+		if i < 0 {
+			b.WriteString(t.decodeRefs(rest, at, false))
+			break
+		}
+		b.WriteString(t.decodeRefs(rest[:i], at, false))
+		body := rest[i+len(cdataOpen):]
+		j := strings.Index(body, cdataClose)
+		if j < 0 {
+			// Unterminated: the rest of the element is literal, which is what
+			// the markers asked for and is the reading that loses nothing.
+			b.WriteString(body)
+			break
+		}
+		b.WriteString(body[:j])
+		rest = body[j+len(cdataClose):]
+		at += i + len(cdataOpen) + j + len(cdataClose)
+	}
+	return b.String()
 }
+
+const (
+	cdataOpen  = "<![CDATA["
+	cdataClose = "]]>"
+)
 
 // hasPrefixFold and indexFold are case-insensitive prefix and substring
 // searches over ASCII, and they exist because the obvious spellings of both are
