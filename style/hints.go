@@ -95,7 +95,21 @@ var hintedAttributes = map[string]map[string]string{
 	// integerAttr below instead of the table's usual dimensionValue.
 	"ol": {"start": "counter-reset"},
 	"li": {"value": "counter-reset"},
+	// The presentational colour attributes of HTML's rendering section. They
+	// are the oldest thing in this table and the only ones that are not a
+	// length, which is why colourHintAttributes exists below.
+	//
+	// bgcolor is on <body> here and not on <table> and its parts, which map it
+	// the same way. The reason is the same one <table width> waited for: the
+	// attribute needs somewhere to mean something, and the cell backgrounds a
+	// table's bgcolor sets are painted by machinery that would have to agree
+	// with it. One element at a time, each when it can be checked.
+	"body": {"bgcolor": "background-color", "text": "color"},
 }
+
+// colourHintAttributes are the entries above whose value is a colour rather than
+// a length or a counter.
+var colourHintAttributes = map[string]bool{"bgcolor": true, "text": true}
 
 // counterHintAttributes are the entries above whose value is a plain integer
 // naming a counter, rather than a length.
@@ -133,7 +147,9 @@ func presentationalHints(n *html.Node) map[string][]css.ComponentValue {
 			continue
 		}
 		var value string
-		if counterHintAttributes[attr] {
+		if colourHintAttributes[attr] {
+			value, ok = colourValue(raw)
+		} else if counterHintAttributes[attr] {
 			// "start" and "value" set the counter to one *below* the number
 			// they name, because the item increments it on the way in. That is
 			// what makes <li value="3"> show a 3 rather than a 4.
@@ -273,4 +289,56 @@ func counterResetValue(raw string) (string, bool) {
 		n = -n
 	}
 	return "list-item " + strconv.Itoa(n-1), true
+}
+
+// colourValue turns a presentational colour attribute into a CSS colour.
+//
+// It reads the two spellings a document actually writes — a hash followed by
+// three or six hexadecimal digits, and a colour keyword — and refuses everything
+// else. HTML's own rule is far wider than that: its "legacy colour value" takes
+// any string at all, strips what it cannot use and pads what is left, so
+// "chucknorris" is a colour and comes out #C00000. That is a real algorithm and
+// it is deliberately not here.
+//
+// The reason is what a wrong answer costs. A hint that refuses leaves the
+// property at its initial value, which is what a document that did not write the
+// attribute would have got; a hint that guesses paints the page a colour nobody
+// asked for and nothing reports it. Legacy parsing can be added the day a
+// document needs it, with the specification open, rather than approximated now.
+func colourValue(raw string) (string, bool) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", false
+	}
+	if s[0] == '#' {
+		digits := s[1:]
+		if len(digits) != 3 && len(digits) != 6 {
+			return "", false
+		}
+		for i := 0; i < len(digits); i++ {
+			if !isHexDigit(digits[i]) {
+				return "", false
+			}
+		}
+		return s, true
+	}
+	// A keyword, and only a keyword. It is checked against the same table the
+	// colour property reads, so the attribute cannot name a colour a
+	// declaration could not — and it must be a bare identifier, because a
+	// function is not something HTML's rule would ever have produced here:
+	// "rgb(1,2,3)" in a bgcolor is a string to be mangled, not a colour.
+	vals := mustValues(strings.ToLower(s))
+	if len(vals) != 1 || !vals[0].IsToken() || vals[0].Token.Kind != css.Ident {
+		return "", false
+	}
+	if _, ok := ParseColor(vals); !ok {
+		return "", false
+	}
+	return s, true
+}
+
+// mustValues parses a value that is a single token, for the keyword check above.
+func mustValues(s string) []css.ComponentValue {
+	vals, _ := css.ParseComponentValues(s)
+	return vals
 }
