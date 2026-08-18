@@ -1366,6 +1366,24 @@ func (l *layouter) tableContent(table *Box, parent *Fragment, width style.Unit,
 		colX[i] = x
 		x = x.Add(w).Add(s.h)
 	}
+	if isRTL(table) {
+		// §17.2: "the direction property on the table element determines the
+		// direction of the columns", so in a right-to-left table the first
+		// column is the rightmost one and the grid is read the other way.
+		//
+		// It is a mirror of the positions and nothing else. The columns keep the
+		// widths they were given — which cell is in which column is a question
+		// about the markup, and the direction says only where that column sits —
+		// and every spacing between them keeps its place, because the mirror of
+		// an evenly spaced row is an evenly spaced row.
+		//
+		// x is the grid's whole width at this point, trailing spacing included,
+		// which is what makes the reflection put the outside spacing back on the
+		// outside.
+		for i, w := range cols {
+			colX[i] = x.Sub(colX[i]).Sub(w)
+		}
+	}
 
 	// §10.7's two limits are limits on the table's own height, and §17.5.3
 	// shares a table's height out over its rows — so a limit that moved the
