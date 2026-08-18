@@ -237,7 +237,11 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			// belongs to is known. The state passes straight through, because
 			// "a <span class=float></span>b" is still one word followed by
 			// another with a space between them.
-			out = append(out, inlineItem{Float: child})
+			// The displacement of the inline boxes it was written inside goes
+			// with it: relative positioning is applied after layout, so an
+			// inline's offset moves a float it contains without changing the
+			// band the text around it flows past. See Item.Offset.
+			out = append(out, inlineItem{Float: child, Offset: frame.Offset})
 			continue
 		}
 		if child.Replaced != nil || isAtomicInline(child) {

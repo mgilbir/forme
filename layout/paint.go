@@ -490,7 +490,7 @@ func (p *painter) gather(f *Fragment, lv *layers, root, collect bool) {
 		if c.Box == nil {
 			continue
 		}
-		if c.Box.Position.positioned() {
+		if c.Box.Position.positioned() || stacksWithASplitInline(c.Box) != nil {
 			if !collect {
 				// Already hoisted; painting it here as well would draw it twice.
 				continue
@@ -553,7 +553,10 @@ func (p *painter) hoist(f *Fragment, lv *layers) {
 		if c.Box == nil {
 			continue
 		}
-		if c.Box.Position.positioned() {
+		// The same two kinds gather sorts out, and for the same reason: a box
+		// gather will skip as "already hoisted" has to actually be hoisted here,
+		// or it is painted nowhere at all.
+		if c.Box.Position.positioned() || stacksWithASplitInline(c.Box) != nil {
 			lv.positioned = append(lv.positioned, stackLevel{
 				frag: c, z: levelOf(c), order: c.Box.Order,
 			})
@@ -569,10 +572,42 @@ func (p *painter) hoist(f *Fragment, lv *layers) {
 // levelOf is a box's stacking level: its z-index, with auto counted as zero for
 // ordering. See stackLevel.z.
 func levelOf(f *Fragment) int {
+	if from := stacksWithASplitInline(f.Box); from != nil {
+		// The block was broken out of a positioned inline, so it is painted
+		// where that inline is painted rather than with the blocks of the
+		// context around it. See stacksWithASplitInline.
+		if from.ZAuto {
+			return 0
+		}
+		return from.ZIndex
+	}
 	if f.Box.ZAuto {
 		return 0
 	}
 	return f.Box.ZIndex
+}
+
+// stacksWithASplitInline returns the positioned inline a block was broken out
+// of, if there is one, and nil otherwise.
+//
+// §9.2.1.1 makes the block a sibling of the inline's two halves, so nothing in
+// the box tree says it is inside a positioned box any more — but it still is,
+// and §E.2 paints it where the inline is painted. Without this a block inside a
+// "position: relative; z-index: 2" span is painted in step 4, behind everything
+// positioned, so the span's z-index moves the words of the span and leaves the
+// block it contains underneath a box it was meant to cover.
+//
+// The innermost is the one that decides, for the same reason the innermost
+// positioned ancestor decides for any other box: an inner span's z-index is
+// resolved against the context its outer span makes, and the outer one is
+// already accounted for by the outer span's own place in the stack.
+func stacksWithASplitInline(b *Box) *Box {
+	for i := len(b.splitFrom) - 1; i >= 0; i-- {
+		if b.splitFrom[i].Position.positioned() {
+			return b.splitFrom[i]
+		}
+	}
+	return nil
 }
 
 // sortLevels orders the positioned boxes by z-index and then by tree order.

@@ -135,7 +135,8 @@ func (br *Breaker) BreakOneLine(items []Item, from, fromByte int, width, lineX s
 		if item.Float != nil {
 			// Recorded with how far along the line it was reached, which is what
 			// decides whether it goes beside this line or below it.
-			outOfFlow = append(outOfFlow, MidLineBox{Box: item.Float, Used: used})
+			outOfFlow = append(outOfFlow, MidLineBox{
+				Box: item.Float, Used: used, Offset: item.Offset})
 			continue
 		}
 

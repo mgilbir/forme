@@ -333,6 +333,11 @@ type MidLineBox struct {
 	// Used is how much of the line's width had been filled when the box was
 	// reached, measured from the line's own left edge.
 	Used style.Unit
+	// Offset is the relative displacement of the inline boxes the box was
+	// written inside, carried for the same reason Item.Offset is: the
+	// flattening loses the boxes themselves, and a float is placed long after
+	// the walk that knew which inlines it was in.
+	Offset Point
 	// Abs distinguishes the two kinds.
 	Abs bool
 }

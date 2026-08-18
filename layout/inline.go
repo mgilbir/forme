@@ -132,6 +132,23 @@ import (
 // that says so. They return the zero value rather than panicking on a ref of the
 // other kind, because the caller has already decided which kind it is asking for
 // by the field it read it from — a float ref is never a fragment.
+// shiftedBy adds the displacement of the inline boxes a float was written
+// inside to the fragment it was laid out into.
+//
+// It is added to the fragment's offset rather than to its position because
+// §9.4.3's offset is applied after layout: the float still occupies the band it
+// was placed in, and the text around it still flows past that band. What moves
+// is only what is drawn — which is exactly what an offset is, and is why an
+// inline with "left: 2em" round a float moves the float and does not move the
+// hole it left.
+func shiftedBy(f *Fragment, d Point) *Fragment {
+	if f != nil {
+		f.Offset.X = f.Offset.X.Add(d.X)
+		f.Offset.Y = f.Offset.Y.Add(d.Y)
+	}
+	return f
+}
+
 func heldBox(r itemRef) *Box {
 	b, _ := r.(*Box)
 	return b
@@ -281,8 +298,9 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			// because it is one of the floats the line has to avoid. §9.5.1 rule 4
 			// puts its top at the top of the line box it belongs to.
 			for iByte == 0 && i < len(items) && items[i].Float != nil {
-				parent.Children = append(parent.Children,
-					l.floatChild(heldBox(items[i].Float), width, origin, y, style.MaxUnit, 0, 0))
+				parent.Children = append(parent.Children, shiftedBy(
+					l.floatChild(heldBox(items[i].Float), width, origin, y, style.MaxUnit, 0, 0),
+					items[i].Offset))
 				i++
 			}
 			if i >= len(items) {
@@ -404,7 +422,9 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 						continue
 					}
 					held, heldAbs := origin.ctx.mark(), len(l.deferred)
-					kid := l.floatChild(heldBox(f.Box), width, origin, y, baseRoom.Sub(f.Used), lh, 0)
+					kid := shiftedBy(
+						l.floatChild(heldBox(f.Box), width, origin, y, baseRoom.Sub(f.Used), lh, 0),
+						f.Offset)
 					if kid.MarginRect().Y > y {
 						origin.ctx.truncate(held)
 						// The out-of-flow boxes the discarded layout found go with
@@ -641,8 +661,9 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			// order the display list has always had.
 			parent.Children = append(parent.Children, midKids...)
 			for _, f := range after {
-				parent.Children = append(parent.Children,
-					l.floatChild(heldBox(f.Box), width, origin, y, lineWidth.Sub(f.Used), lh, 0))
+				parent.Children = append(parent.Children, shiftedBy(
+					l.floatChild(heldBox(f.Box), width, origin, y, lineWidth.Sub(f.Used), lh, 0),
+					f.Offset))
 			}
 
 			// An absolutely positioned box met along the line is dealt with once the
