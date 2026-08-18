@@ -816,6 +816,26 @@ func (p *painter) decorations(f *Fragment) {
 	if f.Box == nil {
 		return
 	}
+	if len(f.bgBands) > 0 {
+		// The background is shown through the bands and nothing else — see
+		// Fragment.bgBands — while the border, if the box has one at all, is one
+		// border round one box and is drawn once.
+		//
+		// The two guards paintDecorations opens with are asked here as well, and
+		// they have to be: a row group with "visibility: hidden" is laid out and
+		// not drawn like any other box, and the banded path would otherwise be
+		// the one place in the painter where that is not true.
+		if isHidden(f.Box) {
+			return
+		}
+		if !f.bgSuppressed {
+			for _, band := range f.bgBands {
+				p.clipping(f.clipSelf.with(band), func() { p.paintBackground(f) })
+			}
+		}
+		p.clipping(f.clipSelf, func() { p.borders(f) })
+		return
+	}
 	p.clipping(f.clipSelf, func() { p.paintDecorations(f) })
 }
 
@@ -836,21 +856,25 @@ func (p *painter) paintDecorations(f *Fragment) {
 		p.borders(f)
 		return
 	}
-	// The background paints over the *border* box by default, under the border
-	// rather than up to it — which is what background-clip's initial value of
-	// border-box means, and is why a dashed border shows the background through
-	// its gaps rather than the page. It stops at the border box and never
-	// reaches the margin, which is the space that is meant to show through.
-	//
-	// The colour goes first and the images over it, in the order §E.2 steps 1 and
-	// 4 give: "the background color of the element, then the background image".
+	p.paintBackground(f)
+	p.borders(f)
+}
+
+// paintBackground is §E.2 steps 1 and 4 for one box: "the background color of
+// the element, then the background image".
+//
+// The background paints over the *border* box by default, under the border
+// rather than up to it — which is what background-clip's initial value of
+// border-box means, and is why a dashed border shows the background through its
+// gaps rather than the page. It stops at the border box and never reaches the
+// margin, which is the space that is meant to show through.
+func (p *painter) paintBackground(f *Fragment) {
 	if bg, ok := p.color(f.Box, "background-color"); ok && bg.A > 0 {
 		if rect := f.bgColorRect; !rect.Empty() {
 			p.ops = append(p.ops, FillRect{Rect: rect, Color: bg})
 		}
 	}
 	p.backgroundImages(f.background)
-	p.borders(f)
 }
 
 // content paints the inline-level marks a fragment carries: its list marker and

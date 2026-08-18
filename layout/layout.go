@@ -110,6 +110,23 @@ type Fragment struct {
 	// area of the bottom layer and so is the border box by default rather than
 	// the padding box. An empty rectangle means no colour is painted.
 	bgColorRect Rect
+	// bgBands are the rectangles this box's background is painted in, instead of
+	// over its whole box. An empty slice means the ordinary single rectangle.
+	//
+	// §17.5.1's separated borders model is the one thing that needs it. A row,
+	// column, row group or column group there is a box drawn *behind the cells
+	// it holds* — and the border-spacing between those cells is not part of it,
+	// because the space between cells is the table's own background showing
+	// through. The suite says so by drawing the expected column as one solid
+	// block and then knocking white stripes out of it at every gap.
+	//
+	// Bands rather than a smaller box, because the area is not a rectangle: a
+	// column crosses every row and the gaps between them, and a row crosses
+	// every column and the gaps between those. And bands that clip rather than
+	// bands that are painted, because a background image is positioned against
+	// the whole box and only *shown* through the cells — an image tiled per band
+	// would start afresh in each one, which is a different picture.
+	bgBands []Rect
 	// bgSuppressed marks the box whose background became the canvas's, so that
 	// it is not also painted over its own smaller box. See §2.11.2: the element
 	// the background was taken from is left with the initial values.
@@ -537,6 +554,12 @@ func absolutise(f *Fragment, x, y style.Unit) {
 	}
 	f.BorderRect.X = f.BorderRect.X.Add(x).Add(f.Offset.X)
 	f.BorderRect.Y = f.BorderRect.Y.Add(y).Add(f.Offset.Y)
+	// The bands are in the same coordinates the border box was, so they take the
+	// same translation. See Fragment.bgBands.
+	for i := range f.bgBands {
+		f.bgBands[i].X = f.bgBands[i].X.Add(x).Add(f.Offset.X)
+		f.bgBands[i].Y = f.bgBands[i].Y.Add(y).Add(f.Offset.Y)
+	}
 
 	content := f.ContentRect()
 	// The inline boxes' own backgrounds and borders, which hang off the line
