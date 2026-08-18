@@ -269,11 +269,15 @@ func TestCJKBreaksBetweenIdeographs(t *testing.T) {
 // TestBreakOpportunities pins the subset of UAX #14 that is implemented, by what
 // each rule does rather than by its class letters.
 func TestBreakOpportunities(t *testing.T) {
+	// The pieces that carry content, which is what a break opportunity divides.
+	// White space is left out because it is the divider rather than the thing
+	// divided, and so is a zero-width space: it is a character that separates
+	// without contributing, and it is marked as such. See Piece.ZeroWidth.
 	texts := func(text string) []string {
 		var out []string
 		pieces, _ := splitAtBreaks(text, whiteSpaceOf("collapse"), wordBreak{}, lineBreak{})
 		for _, p := range pieces {
-			if !p.Space {
+			if !p.Space && !p.ZeroWidth {
 				out = append(out, p.Text)
 			}
 		}
@@ -289,12 +293,24 @@ func TestBreakOpportunities(t *testing.T) {
 		t.Errorf("a trailing hyphen was cut into %v", got)
 	}
 	// A zero-width space is a break and contributes no text, which is the whole
-	// reason an author writes one.
+	// reason an author writes one. It is a piece of its own all the same,
+	// because §4.1.1 needs to know it was there: two collapsible spaces with one
+	// between them are not adjacent and do not collapse.
 	if got := texts("one​two"); len(got) != 2 || got[0] != "one" || got[1] != "two" {
 		t.Errorf("a zero-width space gave %v", got)
 	}
 	if strings.Contains(strings.Join(texts("one​two"), ""), "​") {
-		t.Error("the zero-width space was kept in the text")
+		t.Error("the zero-width space was kept in the content")
+	}
+	pieces, _ := splitAtBreaks("one​two", whiteSpaceOf("collapse"), wordBreak{}, lineBreak{})
+	zero := 0
+	for _, p := range pieces {
+		if p.ZeroWidth {
+			zero++
+		}
+	}
+	if zero != 1 {
+		t.Errorf("%d zero-width pieces for one zero-width space: %v", zero, pieces)
 	}
 	// A run with no opportunities at all is one piece.
 	if got := texts("unbreakable"); len(got) != 1 {

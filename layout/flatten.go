@@ -605,6 +605,14 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			state = startOfContext()
 			continue
 		}
+		if p.ZeroWidth {
+			// A character that separates and nothing else. It produces no item —
+			// there is nothing to draw and nothing to measure — and what it
+			// leaves behind is the fact that it was there: the space after it
+			// does not follow the space before it. See Piece.ZeroWidth.
+			state.AfterCollapsibleSpace = false
+			continue
+		}
 		if p.Collapsible && state.AfterCollapsibleSpace {
 			// §4.1.1's fourth rule: a collapsible space following another
 			// collapses to zero advance width, across an inline boundary as
