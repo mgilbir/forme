@@ -266,6 +266,18 @@ type Box struct {
 	// without a block inside an inline.
 	noLeadInset, noTrailInset bool
 
+	// afterTheFirstLine marks an anonymous block that is not where its parent's
+	// first formatted line falls.
+	//
+	// §16.1 indents "the first line of a block container", and §5.12.1 says the
+	// first formatted line of an element may sit inside a block-level descendant
+	// — so a block container whose inline content is broken up by block children
+	// has exactly one first line, in the first of the boxes it was broken into,
+	// and the anonymous blocks after it are continuations of the same flow. They
+	// inherit text-indent like everything else and must not act on it, or a
+	// paragraph interrupted by a figure comes back indented as though it began
+	// again.
+	afterTheFirstLine bool
 	// splitFrom is the inline boxes a block-level box was lifted out of by
 	// §9.2.1.1, outermost first, and is empty for every other box.
 	//
@@ -1253,6 +1265,7 @@ func (b *boxBuilder) wrapInlines(parent *Box) []*Box {
 
 	var out []*Box
 	var run []*Box
+	seenInFlow := false
 	flush := func() {
 		if len(run) == 0 {
 			return
@@ -1295,7 +1308,12 @@ func (b *boxBuilder) wrapInlines(parent *Box) []*Box {
 			Style: style.Inherited(parent.Style), Parent: parent,
 			FontSize: parent.FontSize,
 			Children: run,
+			// Anything in flow before this one means the parent's first line has
+			// already happened, whether it was another anonymous block or a
+			// block-level child of the parent's own.
+			afterTheFirstLine: seenInFlow,
 		}
+		seenInFlow = true
 		for _, c := range run {
 			c.Parent = anon
 		}
@@ -1307,6 +1325,7 @@ func (b *boxBuilder) wrapInlines(parent *Box) []*Box {
 		if c.Outer == OuterBlock && !c.outOfFlow() {
 			flush()
 			out = append(out, c)
+			seenInFlow = true
 			continue
 		}
 		run = append(run, c)

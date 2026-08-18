@@ -69,6 +69,9 @@ func (l *layouter) spacingValue(b *Box, property string) (style.Unit, bool) {
 // given. A negative value is legal and is how a hanging indent is written, so it
 // is not clamped.
 func (l *layouter) textIndent(b *Box, width style.Unit) style.Unit {
+	if b.afterTheFirstLine {
+		return 0
+	}
 	raw := strings.TrimSpace(b.Style["text-indent"])
 	if raw == "" || raw == "0" {
 		return 0
