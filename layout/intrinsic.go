@@ -254,21 +254,52 @@ func (l *layouter) inlineWidths(b *Box) intrinsicWidths {
 	// measurement so that nothing on the way down is laid out — see
 	// inlineFrame.measuring for why that is a correctness rule and not a saving.
 	items, _ := l.collectInline(b, l.markerItems(b), startOfContext(), inlineFrame{Measuring: true})
-	got := l.widthsOf(items)
+	got, split := l.widthsOf(items)
 
-	// §16.1's indent widens the first line, so a box asked to hold its content
-	// unbroken needs room for it. It is added to the preferred width and not to
-	// the minimum, which follows the approximation this file already documents:
-	// the minimum may come out a little small and must never come out too large,
-	// since a float sized by it has to fit where it should. A negative indent —
-	// a hanging one — is left out of both for the same reason.
+	// §16.1's indent moves the first line and no other, so the box is as wide as
+	// the greater of its indented first line and its widest later one. Those are
+	// different lines, which is why neither "the widest line" nor "the widest
+	// line plus the indent" is the answer and why the measurement above is split
+	// in two.
+	//
+	// A single-line box cannot tell the three apart, which is how the old
+	// arithmetic — the indent added to the widest line — survived so long. A box
+	// with a forced break in it can: "text-indent: 3em" on a two-line div came
+	// out three ems wider than the wider of its lines needed.
+	//
+	// The minimum is the half that matters, and it was not measured at all. A
+	// float in a container narrower than its content is sized to its min-content
+	// width; with the indent left out of that, a float holding an indented
+	// paragraph was sized to the paragraph alone, and its first line started
+	// three ems in and ran three ems past the border.
+	//
+	// A negative indent — a hanging one — belongs here for the same reason and
+	// with the opposite sign: it *narrows* the first line, and a box sized as
+	// though it had not is wider than the content asks for by the whole hang. A
+	// line hung further out than it is long asks for nothing, and needs no clamp
+	// to say so: the other half of each maximum is a width, widths are not
+	// negative, and a negative candidate therefore loses to it.
 	//
 	// The percentage form contributes nothing, because there is no containing
 	// block to take a percentage of while an intrinsic width is being measured.
 	// CSS Sizing says such a percentage behaves as auto here, which is what a
 	// basis of zero produces.
-	if indent := l.textIndent(b, 0); indent > 0 {
-		got.max = got.max.Add(indent)
+	if indent := l.textIndent(b, 0); indent != 0 {
+		got.min = style.Max(split.rest.min, split.first.min.Add(indent))
+		got.max = style.Max(split.rest.max, split.first.max.Add(indent))
+		// A hang can take the preferred width below the minimum, and the two mean
+		// something contradictory in that order: shrink-to-fit is
+		// min(max(minimum, available), preferred), so a preferred width below the
+		// minimum is a ceiling under a floor and the floor loses.
+		//
+		// It happens where the first line is the *only* line and yet not the
+		// widest run — a box broken by an opportunity rather than by a forced
+		// break, whose preferred width is one long line and whose minimum is its
+		// widest piece. Hang that single line by more than its first piece is
+		// wide and the preferred width falls under the minimum, which came out as
+		// a float sized to the hang rather than to the piece that still has to
+		// fit in it.
+		got.max = style.Max(got.max, got.min)
 	}
 	return got
 }
@@ -283,7 +314,8 @@ func (l *layouter) textWidths(b *Box) intrinsicWidths {
 	// No bidi builder: an intrinsic width is a sum over the items and over the
 	// widest of them, and neither depends on the order they are set in.
 	items, _ := l.itemsFor(b, startOfContext(), inlineFrame{})
-	return l.widthsOf(items)
+	got, _ := l.widthsOf(items)
+	return got
 }
 
 // widthsOf is the pair over a flattened run of inline items.
@@ -292,8 +324,13 @@ func (l *layouter) textWidths(b *Box) intrinsicWidths {
 // one line and so adds the pieces up, while the minimum breaks at every
 // opportunity and so takes the widest unbreakable run. A forced break — a <br>,
 // or a newline in preserved white space — ends a line in both.
-func (l *layouter) widthsOf(items []inlineItem) intrinsicWidths {
-	var out intrinsicWidths
+// The second result splits the same measurement in two: what the first line and
+// the first unbreakable run came to, and what the widest of the *rest* came to.
+// Only one caller wants it and only for one reason: §16.1's indent moves the
+// first line and no other, so the box is as wide as the greater of the indented
+// first line and everything after it. See inlineWidths.
+func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split lineSplit) {
+	firstRun, firstLine := false, false
 	// edge is the trailing run of collapsible space, which §4.1.2 removes at the
 	// end of a line: a box sized to include it would be wider than the text it
 	// holds by however many spaces happened to end each line.
@@ -328,14 +365,34 @@ func (l *layouter) widthsOf(items []inlineItem) intrinsicWidths {
 	// of every line. That is not hypothetical: "width: min-content" on a nowrap
 	// box ending in an ogham space mark, which §4.1.2 removes by name, came out
 	// one stemline wider than the same text without it.
+	// runContent says the run being built holds something. It is asked only by
+	// the first-run measurement, and it is asked because a break opportunity at
+	// the very start of the content ends a run that never began — an atomic
+	// inline offers one before itself, so "<div><span/></div>" ends an empty run
+	// before its only box. Taking that as the first run made the first line hold
+	// nothing, and an indent added to nothing is the indent alone.
+	var runContent bool
 	var line, run, edge, runEdge style.Unit
 	endRun := func() {
-		out.min = style.Max(out.min, run.Sub(runEdge))
-		run, runEdge = 0, 0
+		w := run.Sub(runEdge)
+		switch {
+		case runContent && !firstRun:
+			split.first.min, firstRun = w, true
+		default:
+			split.rest.min = style.Max(split.rest.min, w)
+		}
+		out.min = style.Max(out.min, w)
+		run, runEdge, runContent = 0, 0, false
 	}
 	endLine := func() {
 		endRun()
-		out.max = style.Max(out.max, line.Sub(edge))
+		w := line.Sub(edge)
+		if !firstLine {
+			split.first.max, firstLine = w, true
+		} else {
+			split.rest.max = style.Max(split.rest.max, w)
+		}
+		out.max = style.Max(out.max, w)
 		line, edge = 0, 0
 	}
 
@@ -356,6 +413,10 @@ func (l *layouter) widthsOf(items []inlineItem) intrinsicWidths {
 			got := l.outerWidths(heldBox(item.Float), 0)
 			out.min = style.Max(out.min, got.min)
 			out.max = style.Max(out.max, got.max)
+			// Out of flow, so §16.1's indent does not move it and it is not part
+			// of what the indent is added to. See lineSplit.
+			split.rest.min = style.Max(split.rest.min, got.min)
+			split.rest.max = style.Max(split.rest.max, got.max)
 
 		case item.Abs != nil:
 			// Out of flow: it takes no width on the line, so it contributes to
@@ -372,7 +433,7 @@ func (l *layouter) widthsOf(items []inlineItem) intrinsicWidths {
 				endRun()
 			}
 			got := l.outerWidths(heldBox(item.AtomicBox), 0)
-			run = run.Add(got.min)
+			run, runContent = run.Add(got.min), true
 			line = line.Add(got.max)
 			// Content, so a space before it is no longer trailing. Without this
 			// a picture after a space would be measured into a box short by the
@@ -398,7 +459,7 @@ func (l *layouter) widthsOf(items []inlineItem) intrinsicWidths {
 				// the unbreakable run here would give a nowrap paragraph a
 				// minimum width of its longest word — so a float holding one
 				// would be sized to a fraction of the text it then overflows.
-				run = run.Add(w)
+				run, runContent = run.Add(w), true
 				if item.TrimAtEnd || item.Hangs {
 					runEdge = runEdge.Add(w)
 				} else {
@@ -421,7 +482,7 @@ func (l *layouter) widthsOf(items []inlineItem) intrinsicWidths {
 				// to "123 " and "   8", and a minimum of three said the four
 				// would not fit.
 				if !item.TrimAtEnd && !item.Hangs {
-					run = run.Add(w)
+					run, runContent = run.Add(w), true
 				}
 				endRun()
 			}
@@ -442,7 +503,13 @@ func (l *layouter) widthsOf(items []inlineItem) intrinsicWidths {
 			// widest cluster, because a run of text that may break between any
 			// two characters is not part of anything unbreakable.
 			endRun()
-			out.min = style.Max(out.min, l.widestCluster(item))
+			// Counted with the rest rather than with the first line, which is
+			// the conservative reading in both directions: a positive indent
+			// does not widen it and a negative one does not narrow it. See
+			// lineSplit.
+			got := l.widestCluster(item)
+			out.min = style.Max(out.min, got)
+			split.rest.min = style.Max(split.rest.min, got)
 			line = line.Add(item.Width)
 			edge, runEdge = 0, 0
 
@@ -450,13 +517,24 @@ func (l *layouter) widthsOf(items []inlineItem) intrinsicWidths {
 			if item.BreakBefore && !item.NoWrap {
 				endRun()
 			}
-			run = run.Add(item.Width)
+			run, runContent = run.Add(item.Width), true
 			line = line.Add(item.Width)
 			edge, runEdge = 0, 0
 		}
 	}
 	endLine()
-	return out
+	return out, split
+}
+
+// lineSplit is a content's intrinsic widths with its first line held apart from
+// the rest.
+//
+// The two are needed separately because §16.1 moves one line and not the others,
+// so neither "the widest line" nor "the widest line plus the indent" is the
+// answer: a box is as wide as the greater of its indented first line and its
+// widest later one, and those are different lines.
+type lineSplit struct {
+	first, rest intrinsicWidths
 }
 
 // widestCluster is an item's min-content contribution under overflow-wrap:
