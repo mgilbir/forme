@@ -88,7 +88,15 @@ func (l *layouter) decorationsFor(b *Box) []textDecoration {
 
 	own := ownDecorations(b)
 	var above []textDecoration
-	if decorationReaches(b) {
+	switch {
+	case len(b.splitFrom) > 0:
+		// A block §9.2.1.1 broke an inline around. What is above it is that
+		// inline — a decoration declared on it is drawn across everything it
+		// contains, and the block is still something it contains — and the
+		// innermost one answers for the whole chain, because its own walk goes
+		// on up through the boxes this block would otherwise have reached.
+		above = l.decorationsFor(b.splitFrom[len(b.splitFrom)-1])
+	case decorationReaches(b):
 		above = l.decorationsFor(b.Parent)
 	}
 
