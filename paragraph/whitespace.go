@@ -285,7 +285,27 @@ func CollapseWhitespace(text, value string) string {
 		}
 	}
 
+	// pending holds the bidi controls met inside a run of white space. They are
+	// written out after the run collapses rather than where they stood, so that
+	// the space that survives is on the side of the control the markup would
+	// have put it: a boundary written as two elements keeps the space belonging
+	// to the first of them, and a boundary written as a control has to agree.
+	var pending []rune
+
 	for _, r := range text {
+		if IsBidiControl(r) {
+			// Not a character of the text: it is an instruction to the
+			// bidirectional algorithm, and it must not break a run of white
+			// space in two. "ccc RLO lll" has one space in it and not two,
+			// which is what makes it identical to the same boundary written as
+			// markup — the whole of what bidi-003 and its neighbours compare.
+			if inRun {
+				pending = append(pending, r)
+			} else {
+				out.WriteRune(r)
+			}
+			continue
+		}
 		if r < 0x80 && isCollapsibleSpace(byte(r)) {
 			inRun = true
 			switch r {
@@ -305,10 +325,17 @@ func CollapseWhitespace(text, value string) string {
 			continue
 		}
 		flush(r)
+		for _, c := range pending {
+			out.WriteRune(c)
+		}
+		pending = pending[:0]
 		out.WriteRune(r)
 		last = r
 	}
 	flush(0)
+	for _, c := range pending {
+		out.WriteRune(c)
+	}
 	return out.String()
 }
 

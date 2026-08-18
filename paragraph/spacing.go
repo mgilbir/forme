@@ -85,6 +85,29 @@ func IsDefaultIgnorable(r rune) bool {
 	return false
 }
 
+// IsBidiControl reports whether a character is one of Unicode's Bidi_Control
+// characters: a mark whose whole function is to instruct the bidirectional
+// algorithm.
+//
+// It is narrower than IsDefaultIgnorable and the difference matters. Both sets
+// hold characters nothing is drawn for, and only these are *transparent to the
+// text*: a zero-width space is default-ignorable and is a character that stands
+// between its neighbours — §4.1.1 does not collapse two spaces across one — while
+// a bidi control is not there at all as far as the text is concerned, and two
+// spaces with one between them are adjacent and collapse.
+//
+// The suite tests both, in opposite directions and with the same shape of
+// document. See Piece.ZeroWidth for the other half.
+func IsBidiControl(r rune) bool {
+	switch r {
+	case 0x061C, // arabic letter mark
+		0x200E, 0x200F: // left-to-right and right-to-left marks
+		return true
+	}
+	return (r >= 0x202A && r <= 0x202E) || // the embeddings and overrides
+		(r >= 0x2066 && r <= 0x2069) // the isolates
+}
+
 // countWordSeparators counts the characters word-spacing applies to.
 //
 // CSS Text §8.1 names a short list of word-separator characters. The two that
