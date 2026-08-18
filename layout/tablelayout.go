@@ -1542,6 +1542,12 @@ func firstBaseline(f *Fragment) (style.Unit, bool) {
 			return top.Add(c.BorderRect.Y).Add(v), true
 		}
 	}
+	if f.Marker != nil {
+		// A list item with no content of its own still has a marker on a line
+		// box. See lastLineBaseline, which says the same thing for the other
+		// half of §10.8.1 and for the same reason.
+		return top.Add(f.Marker.At.Y), true
+	}
 	return 0, false
 }
 
