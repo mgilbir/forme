@@ -213,6 +213,21 @@ func lastLineBaseline(f *Fragment) (style.Unit, bool) {
 		line := f.Lines[n-1]
 		return inset.Add(line.Rect.Y).Add(line.Baseline), true
 	}
+	if f.Marker != nil {
+		// A list item whose content is empty still has a marker, and the marker
+		// sits on a line box: §12.5.1 puts it in the item's principal box, and
+		// the item is not a box with nothing on any line just because the author
+		// wrote no words in it.
+		//
+		// It matters only for an inline-block, which is the one box whose
+		// baseline this decides — and the wrong answer there is not subtle. With
+		// no line box found, §10.8.1 falls through to "the bottom margin edge",
+		// so an empty item's marker was drawn a whole ascent below where a
+		// browser puts it: the square of "<div style=display:inline-block><span
+		// style=display:list-item></span></div>" hung below the line instead of
+		// sitting on it. Six of the suite's list tests are that document.
+		return inset.Add(f.Marker.At.Y), true
+	}
 	return 0, false
 }
 
