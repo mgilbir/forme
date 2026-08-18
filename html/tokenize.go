@@ -338,7 +338,18 @@ func (t *tokenizer) markup() token {
 	}
 
 	if strings.HasPrefix(t.src[t.pos:], "<?") {
-		t.fail(start, "a processing instruction, which HTML has none of")
+		// A processing instruction. HTML has none — a browser reads "<?x?>" as a
+		// bogus comment — but XML has them, and the first thing in half the
+		// suite's XHTML is "<?xml version='1.0'?>". Reporting the document's own
+		// declaration as malformed markup is a finding an author cannot act on,
+		// and it taints every rendering of every document that carries one.
+		//
+		// Nothing is produced either way: a processing instruction is an
+		// instruction to the application, and this application has none to
+		// follow.
+		if !t.xml {
+			t.fail(start, "a processing instruction, which HTML has none of")
+		}
 		t.skipTo('>')
 		return t.next()
 	}
@@ -504,7 +515,13 @@ func (t *tokenizer) attribute(tag string) (Attribute, bool) {
 
 func (t *tokenizer) readName() string {
 	start := t.pos
-	for t.pos < len(t.src) && isNamePart(t.src[t.pos]) {
+	// A colon is part of a name in XML and not in HTML, which is the whole of
+	// the difference. XML gives a name an optional namespace prefix — the suite
+	// writes its inline SVG as "<svg:svg>" — and a reader that stopped at the
+	// colon read the end tag "</svg:svg>" as "</svg" and then reported the
+	// document as malformed. What the prefix *means* is the parser's question,
+	// not this one's: see parser.resolveName.
+	for t.pos < len(t.src) && (isNamePart(t.src[t.pos]) || (t.xml && t.src[t.pos] == ':')) {
 		t.pos++
 	}
 	return strings.ToLower(t.src[start:t.pos])

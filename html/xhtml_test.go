@@ -207,3 +207,155 @@ func TestTheXMLSignalsAreLookedForOnlyInThePrologue(t *testing.T) {
 			"document's own text, which says nothing about how it is parsed", got)
 	}
 }
+
+// XML syntax that HTML has no equivalent of, in a document that says it is
+// XHTML.
+//
+// None of what follows changes a rendering. What it changes is what this engine
+// says about a document, which is a first-class output here: the parser refuses
+// and reports rather than quietly reinterpreting, and a report an author cannot
+// act on is worse than no report at all. Told that its own XML declaration is
+// malformed markup, an author has nothing to do about it and no reason to trust
+// the next finding either.
+//
+// Three constructs, a hundred and twenty-one false findings across the Web
+// Platform Tests, and the same sentence behind all of them: valid XML is not
+// malformed HTML.
+
+// findingsOf returns the messages a document produced.
+func findingsOf(src string) []string {
+	_, errs, _ := Parse(src)
+	out := make([]string, 0, len(errs))
+	for _, e := range errs {
+		out = append(out, e.Message)
+	}
+	return out
+}
+
+// TestAProcessingInstructionIsNotAFaultInXML. It is the first thing in half the
+// suite's XHTML, and HTML has none — so every one of those documents was told
+// its own declaration was a mistake.
+func TestAProcessingInstructionIsNotAFaultInXML(t *testing.T) {
+	if got := findingsOf(`<?xml version="1.0" encoding="utf-8"?><html><body>x</body></html>`); len(got) != 0 {
+		t.Errorf("an XML declaration reported %v", got)
+	}
+	// A processing instruction anywhere else in an XML document is legal too,
+	// and nothing is produced for one either way.
+	if got := findingsOf(xhtmlDoctype + `<html xmlns="http://www.w3.org/1999/xhtml">` +
+		`<body><?php echo 1 ?>x</body></html>`); len(got) != 0 {
+		t.Errorf("a processing instruction in an XHTML body reported %v", got)
+	}
+	// And in HTML it is still a fault, because HTML still has none.
+	got := findingsOf(`<!DOCTYPE html><body><?xml version="1.0"?>x</body>`)
+	if len(got) != 1 || !strings.Contains(got[0], "processing instruction") {
+		t.Errorf("an HTML document with a processing instruction reported %v, want "+
+			"exactly the one finding", got)
+	}
+}
+
+// TestAnEndTagForAVoidElementIsNotAFaultInXML. XML has no void elements: every
+// element is closed, by an end tag or by an empty-element tag, so "<col></col>"
+// is how XHTML writes what HTML writes as "<col>".
+func TestAnEndTagForAVoidElementIsNotAFaultInXML(t *testing.T) {
+	const markup = `<body><table><colgroup><col></col></colgroup></table><br></br></body>`
+	if got := findingsOf(`<?xml version="1.0"?><html>` + markup + `</html>`); len(got) != 0 {
+		t.Errorf("XHTML end tags for void elements reported %v", got)
+	}
+	got := findingsOf(`<!DOCTYPE html>` + markup)
+	if len(got) != 2 {
+		t.Errorf("HTML end tags for void elements reported %v, want one each", got)
+	}
+	for _, g := range got {
+		if !strings.Contains(g, "void element") {
+			t.Errorf("an unexpected finding: %q", g)
+		}
+	}
+}
+
+// TestANamespacePrefixIsPartOfTheNameInXML is the one that was breaking a parse
+// rather than only reporting one.
+//
+// A name stopping at the colon read the end tag "</svg:svg>" as "</svg", which
+// is not closed with a ">" — so the document was reported malformed, the
+// recovery skipped to the next ">", and what the element contained was anyone's
+// guess. Forty-seven of the suite's documents write their inline SVG that way.
+func TestANamespacePrefixIsPartOfTheNameInXML(t *testing.T) {
+	const svgNS = `xmlns:svg="http://www.w3.org/2000/svg"`
+	src := `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml" ` + svgNS +
+		`><body><svg:svg width="40" height="20">` +
+		`<svg:rect width="40" height="20" fill="blue"/></svg:svg><p>after</p></body></html>`
+	if got := findingsOf(src); len(got) != 0 {
+		t.Errorf("a namespaced inline SVG reported %v", got)
+	}
+
+	doc, _, _ := Parse(src)
+	var svg *Node
+	var walk func(*Node)
+	walk = func(n *Node) {
+		if n.Type == ElementNode && n.Name == "svg" {
+			svg = n
+		}
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	walk(doc)
+	if svg == nil {
+		t.Fatal(`no <svg> element; "svg:svg" in the SVG namespace is the element "svg"`)
+	}
+	if !strings.Contains(svg.Foreign, "svg:rect") {
+		t.Errorf("the subtree source is %q; the end tag has to match the start tag "+
+			"or the skip stops in the wrong place", svg.Foreign)
+	}
+	if !strings.Contains(textOf(doc), "after") {
+		t.Errorf("the document after the picture was swallowed: %q", textOf(doc))
+	}
+}
+
+// TestAPrefixThisEngineCannotResolveIsKept is the containment case, and the
+// reason the prefix is resolved rather than simply dropped.
+//
+// A prefix says which language a name belongs to. Dropping it unread would make
+// "<x:svg>" an SVG whatever x was bound to — including nothing at all. Keeping
+// it makes the name one this engine has never heard of, which is exactly what an
+// unresolvable prefix means and is reported as such.
+func TestAPrefixThisEngineCannotResolveIsKept(t *testing.T) {
+	for _, tc := range []struct{ what, root string }{
+		{"a prefix bound to something else",
+			`<html xmlns:s="http://example.com/not-svg">`},
+		{"a prefix bound to nothing at all", `<html>`},
+	} {
+		got := findingsOf(`<?xml version="1.0"?>` + tc.root + `<body><s:svg/></body></html>`)
+		if len(got) != 1 || !strings.Contains(got[0], "<s:svg>") {
+			t.Errorf("%s: reported %v, want the element named whole", tc.what, got)
+		}
+	}
+	// The XHTML namespace resolves too, so "<html:div>" is a div.
+	if got := findingsOf(`<?xml version="1.0"?>` +
+		`<html xmlns:h="http://www.w3.org/1999/xhtml"><body><h:div>x</h:div></body></html>`); len(got) != 0 {
+		t.Errorf("a prefixed XHTML element reported %v", got)
+	}
+}
+
+// TestANameWithAColonIsNotAPrefixInHTML: the colon is part of a name in XML and
+// is not in HTML, and this is the whole of the difference the tokenizer makes.
+func TestANameWithAColonIsNotAPrefixInHTML(t *testing.T) {
+	doc, _, _ := Parse(`<!DOCTYPE html><body><a:b>x</a:b></body>`)
+	var names []string
+	var walk func(*Node)
+	walk = func(n *Node) {
+		if n.Type == ElementNode {
+			names = append(names, n.Name)
+		}
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	walk(doc)
+	for _, n := range names {
+		if n == "a:b" {
+			t.Errorf("an HTML document produced the element %q; a colon is not part "+
+				"of a name there, and nothing binds a prefix in HTML", n)
+		}
+	}
+}
