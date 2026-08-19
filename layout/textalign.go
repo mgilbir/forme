@@ -250,6 +250,30 @@ func (l *layouter) alignLine(b *Box, align textAlign, lineWidth, used style.Unit
 // fall at the break. So it is stepped over rather than subtracted, which leaves
 // a hanging space *before* a closing margin still discounted.
 func alignedWidth(runs []inlineItem, total style.Unit) style.Unit {
+	for i, hangs := range hangingTail(runs) {
+		if hangs {
+			total = total.Sub(runs[i].Width)
+		}
+	}
+	return style.Max(total, 0)
+}
+
+// hangingTail marks the white space at the logical end of a line that §4.1.2
+// hangs past it.
+//
+// It is a walk from the end of the *logical* order and not a test of where
+// anything sits, and on a left-to-right line the two would agree. On a
+// right-to-left one they do not: rule L1 gives the trailing spaces the
+// paragraph's own level, so they are drawn at the line's left edge — before
+// everything else. Justification asked "is this space past where the content
+// ends", got "no, it is at the very beginning", and stretched the hang. A
+// right-to-left justified line came out a space short of its own margin with
+// the gap between its words too narrow by the same amount.
+//
+// The alignment and the justification have to agree about which items these
+// are, which is why there is one walk and not two.
+func hangingTail(runs []inlineItem) []bool {
+	hangs := make([]bool, len(runs))
 	for i := len(runs) - 1; i >= 0; i-- {
 		item := runs[i]
 		if item.Inset {
@@ -269,7 +293,7 @@ func alignedWidth(runs []inlineItem, total style.Unit) style.Unit {
 			// edge, and under pre-wrap it does not.
 			break
 		}
-		total = total.Sub(item.Width)
+		hangs[i] = true
 	}
-	return style.Max(total, 0)
+	return hangs
 }

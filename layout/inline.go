@@ -487,6 +487,83 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				// sits, which on a line mixing directions is not the order they
 				// were collected in.
 				xs, total := l.lineOffsets(runs)
+				// §4.1.2's hang comes in two strengths and the difference shows
+				// exactly here. Where the line ended at a soft wrap, its trailing
+				// white space hangs *unconditionally* and is never counted, which is
+				// what alignedWidth does. Where it ended at a forced break — a <br>,
+				// a preserved newline, or simply the end of the content — it hangs
+				// *conditionally*: "it hangs only if it does not otherwise fit in the
+				// line", so a space that fits is content and the line is aligned
+				// around it. The specification's own example is a centred pre-wrap
+				// paragraph reading " 0 " in five characters, which centres as three
+				// and not as two.
+				//
+				// The two are not a matter of degree. Counting the space on a
+				// soft-wrapped line pushes a right-aligned line a space clear of the
+				// edge; not counting it on the last line centres " 0 " off-centre.
+				//
+				// "Only if it does not otherwise fit" is a rule about each character
+				// and not about the sequence, which is the second half of the same
+				// paragraph: the UA "may also visually collapse the character advance
+				// widths of any that would otherwise overflow". So a sequence that
+				// fits counts entirely, one that does not counts up to the line's
+				// edge, and the part past the edge hangs. Taking it as all-or-nothing
+				// is the reading that was here, and it centres a line of five
+				// characters and thirty-two spaces as though it were five: the page
+				// shows the letter two characters right of where every browser puts
+				// it, and the same document without the spaces is correct, so the
+				// fault reads as an alignment bug rather than a white-space one.
+				// What the line's own content may occupy. The clamp's mark sits
+				// at the end of it, so on that line it is the line less the mark
+				// — both for the hang below and for the alignment further down,
+				// since the mark is where the line ends and alignment is about
+				// where the content ends.
+				avail := textWidth.Sub(lineEllipsis)
+				used := alignedWidth(runs, total)
+				// A last line, in the sense §16.2 and §4.1.2 both use: the
+				// author ended it, or the content did. It is where the
+				// conditional hang applies, and it is the line justification
+				// leaves alone.
+				lastLine := forced || next >= len(items)
+				if lastLine {
+					used = style.Max(used, style.Min(total, avail))
+				}
+				rtl := lineBaseIsRTL(b, runs)
+				align, spread := lineAlignment(b, rtl, lastLine)
+
+				// Justification, before anything is placed.
+				//
+				// It has to come first because it is the one thing on a line
+				// that moves the items *unequally*: the alignment is a single
+				// offset the whole line takes, and everything downstream — the
+				// runs, the atomic inlines, an inline box's own background and
+				// border — is derived from these positions and that one offset.
+				// Justifying afterwards moved the text and left the ink of the
+				// boxes it was inside where the unjustified line had put it, so
+				// a <span> around a justified line was painted a space short of
+				// its own last word.
+				//
+				// The widths travel separately rather than being written back
+				// into the items, because the items are the paragraph's and this
+				// line is one way of setting them: a re-layout at another width
+				// has to start from the widths the font gave.
+				widths := make([]style.Unit, len(runs))
+				for k := range runs {
+					widths[k] = runs[k].Width
+				}
+				if spread {
+					// The method, which is reported here rather than where the
+					// property is read: this is the only place that knows a
+					// line is being justified at all.
+					if _, unhandled := justificationOf(b); unhandled != "" {
+						l.reportTextJustify(b, unhandled)
+					}
+					// A line with nowhere to put the slack is left where it is,
+					// and nothing is reported about it: CSS Text 3 §7.3 says a
+					// line with no expansion opportunity is aligned as start,
+					// so that *is* the conforming rendering.
+					justifyItems(runs, xs, widths, hangingTail(runs), avail.Sub(used))
+				}
 				// Atomic inlines are placed as children of the block rather than as
 				// runs, so aligning the line has to move them too. The range is
 				// noted here because floats placed before the line are already in
@@ -538,52 +615,11 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					}
 					line.Runs = append(line.Runs, TextRun{
 						Text: item.Text, Face: item.Face, Size: item.Size,
-						X: x, Width: item.Width, Box: heldBox(item.Box), Offset: item.Offset,
+						X: x, Width: widths[k], Box: heldBox(item.Box), Offset: item.Offset,
 						Decorations: decorations, LetterSpacing: item.Spacing.Letter,
 						RTL:   item.Level&1 == 1,
 						Shift: shift,
 					})
-				}
-				// §4.1.2's hang comes in two strengths and the difference shows
-				// exactly here. Where the line ended at a soft wrap, its trailing
-				// white space hangs *unconditionally* and is never counted, which is
-				// what alignedWidth does. Where it ended at a forced break — a <br>,
-				// a preserved newline, or simply the end of the content — it hangs
-				// *conditionally*: "it hangs only if it does not otherwise fit in the
-				// line", so a space that fits is content and the line is aligned
-				// around it. The specification's own example is a centred pre-wrap
-				// paragraph reading " 0 " in five characters, which centres as three
-				// and not as two.
-				//
-				// The two are not a matter of degree. Counting the space on a
-				// soft-wrapped line pushes a right-aligned line a space clear of the
-				// edge; not counting it on the last line centres " 0 " off-centre.
-				//
-				// "Only if it does not otherwise fit" is a rule about each character
-				// and not about the sequence, which is the second half of the same
-				// paragraph: the UA "may also visually collapse the character advance
-				// widths of any that would otherwise overflow". So a sequence that
-				// fits counts entirely, one that does not counts up to the line's
-				// edge, and the part past the edge hangs. Taking it as all-or-nothing
-				// is the reading that was here, and it centres a line of five
-				// characters and thirty-two spaces as though it were five: the page
-				// shows the letter two characters right of where every browser puts
-				// it, and the same document without the spaces is correct, so the
-				// fault reads as an alignment bug rather than a white-space one.
-				// What the line's own content may occupy. The clamp's mark sits
-				// at the end of it, so on that line it is the line less the mark
-				// — both for the hang below and for the alignment further down,
-				// since the mark is where the line ends and alignment is about
-				// where the content ends.
-				avail := textWidth.Sub(lineEllipsis)
-				used := alignedWidth(runs, total)
-				// A last line, in the sense §16.2 and §4.1.2 both use: the
-				// author ended it, or the content did. It is where the
-				// conditional hang applies, and it is the line justification
-				// leaves alone.
-				lastLine := forced || next >= len(items)
-				if lastLine {
-					used = style.Max(used, style.Min(total, avail))
 				}
 				// Which *side* it hangs off, which is not a second way of saying how
 				// much. §4.1.2 hangs the white space past the line's end, and the
@@ -598,8 +634,6 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				// space it was meant to hang, which is what the ten dir=rtl
 				// pre-wrap-align tests measure. It is invisible in a left-to-right
 				// document, where the hang follows the content and moves nothing.
-				rtl := lineBaseIsRTL(b, runs)
-				align, spread := lineAlignment(b, rtl, lastLine)
 				shift := l.alignLine(b, align, avail, used)
 				if !rtl {
 					// §16.1's indent is measured from the line's *start* edge,
@@ -623,29 +657,11 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 							parent.Children[k].BorderRect.X.Add(shift)
 					}
 				}
-				// Justification, after the alignment and not instead of it: the
-				// shift above put the line's start where "start" puts it, which
-				// is where a justified line begins too, and what is left is the
-				// slack between there and the other margin.
-				if spread {
-					// The method, which is reported here rather than where the
-					// property is read: this is the only place that knows a
-					// line is being justified at all.
-					if _, unhandled := justificationOf(b); unhandled != "" {
-						l.reportTextJustify(b, unhandled)
-					}
-					// A line with nowhere to put the slack is left where it is,
-					// and nothing is reported about it: CSS Text 3 §7.3 says a
-					// line with no expansion opportunity is aligned as start,
-					// so that *is* the conforming rendering.
-					justifyLine(line.Runs, parent.Children[atomicStart:],
-						shift.Add(used), avail.Sub(used))
-				}
 				// The inline boxes on this line, recorded now because the alignment
 				// has moved everything on it for the last time. The index is where
 				// the line is about to go, since a fragment cannot be hung on it
 				// until §8.6 knows which piece of its box it is.
-				decor.addLine(len(parent.Lines), runs, xs,
+				decor.addLine(len(parent.Lines), runs, xs, widths,
 					line.Rect.X.Add(shift), line.Rect.Y.Add(line.Baseline), &stack)
 				if lineEllipsis > 0 && ending.face != nil {
 					// The mark goes where the line's own content ends, which is not

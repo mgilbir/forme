@@ -980,7 +980,13 @@ const wptEnv = "WPT_TESTS"
 // them saying why in its own words — and this read the first and reported the
 // rest as failures. Only three moved, because most of those tests disagree with
 // every reference the suite offers; the rule was still wrong.
-const wptCleanPassBaseline = 5349
+// 5349 to 5356 is justification moving the line rather than the text on it. A
+// line carries more than words — the atomic inlines, and an inline box's own
+// margin, border and padding — and all of them move when a space between them
+// grows. Spreading the slack over the drawn runs moved the text and left the
+// ink of the boxes it was inside where the unjustified line had put it. See
+// layout/justify_test.go.
+const wptCleanPassBaseline = 5356
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
