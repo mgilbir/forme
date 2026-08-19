@@ -1106,9 +1106,32 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		if cm.through && clearance == 0 {
 			// Nothing separates this box's own margins, so it contributes no
 			// height and its two margins join the run. It still gets a
-			// position, because it still exists.
-			pending = pending.merge(cm.bottom)
+			// position, because it still exists — and a relatively positioned
+			// one is a containing block, so where it sits is visible even
+			// though nothing of it is drawn.
+			//
+			// The run needs nothing added to it here. A box that collapses
+			// through reports the *same* run as both its top and its bottom —
+			// see the return above, which merges the two and hands back one
+			// value twice — and the top was merged into pending before this
+			// branch was reached. Merging the bottom as well was here, and a
+			// plant that removed it changed no test in the suite and no test in
+			// this package, because it was merging a run into itself.
 			at := y.Add(pending.value())
+			if escapes {
+				// The run leaves through the parent's open edge, so it moves the
+				// parent and this box stays where the flow had reached. Adding
+				// it here as well counts it twice — which is the same rule the
+				// branch below states for a box that does not collapse through,
+				// and it was stated there and not here.
+				//
+				// It is invisible until something asks where the box is. An
+				// empty "position: relative" wrapper round an absolutely
+				// positioned box is exactly that question, and the box came out
+				// one whole collapsed margin below the content it was meant to
+				// cover.
+				at = y
+			}
 			cf = l.settle(child, width, origin, cf, est, at, mark, absMark, subtreeRead)
 			cf.BorderRect.Y = at
 			if child.ListItem {
