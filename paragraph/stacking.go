@@ -119,6 +119,29 @@ func (v VAlignState) Aligned() bool {
 // Anything else on a line — an inset, a float marker, the record of an
 // absolutely positioned box — is not an inline-level box at all and takes no
 // part in §10.8.1's stacking.
+//
+// # What is missing, and what it cost to add
+//
+// An inline box that produces no items at all is not represented here, so its
+// leading does not reach the line. §10.8 says it should: the height of an inline
+// box "encloses all glyphs and their half-leading on each side and is thus
+// exactly line-height", and one enclosing no glyphs still keeps the leading. The
+// suite's empty-inline-003 is a <span> with "line-height: 5" and nothing in it,
+// beside an "X", and the line it sits on should be five times the height it is.
+//
+// It was tried. An item marked Empty, carrying the box's leading and no width,
+// emitted where the recursion produced nothing, together with §9.4.2's rule that
+// a line of nothing but those is no line at all — which is needed, or an empty
+// <span> alone in a <div> grows a line box it must not have. That produced the
+// right answer for all four shapes of the case and cost *nineteen* other tests,
+// most of them about white-space collapsing.
+//
+// The cause is worth recording because it is not about heights. An item in the
+// stream is walked by everything downstream, and a zero-width item at the end of
+// a line is not TrimAtEnd and not Inset — so it stops the trailing-space trimming
+// in breaking.go that tests exactly those two flags. Doing this properly means
+// auditing every walk of the item stream for what an item that stands for
+// nothing should do, which is a larger change than the one test it is worth.
 func itemExtents(item Item) (ascent, descent style.Unit, ok bool) {
 	if item.Atomic != nil {
 		return item.Ascent, item.Descent, true

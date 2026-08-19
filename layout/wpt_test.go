@@ -1188,6 +1188,15 @@ func pageClip() Rect {
 // why it is not done: the number here stands for what a browser shows, not for
 // what this suite scores.
 //
+// numbers-units-015 is a second of the same kind, found the same way. Its prose
+// asks that "any two of the boxes below are the same size" — 1ex, 0.5em and
+// 0.8em — and its reference draws the first two alike, which is the answer a UA
+// gives when it cannot determine the x-height and falls back to half an em. The
+// document is set in Ahem, whose x-height is eight tenths of an em and is stated
+// in the font. This engine reads it, so its 1ex matches the *third* box: the
+// prose passes and the pixels do not. A browser with the same font answers the
+// same way.
+//
 // The height stays A4's rather than becoming 600. The suite's 600 is a *window*
 // height and its references are compared over the whole scrollable page, so the
 // faithful stand-in for it is a page tall enough not to paginate, which is what

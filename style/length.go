@@ -370,6 +370,19 @@ func ResolveFontSize(vals []css.ComponentValue, parent, root Unit) (u Unit, unsu
 
 	// Everything else is an ordinary length, resolved with the parent's size
 	// standing in for "em".
+	//
+	// No x-height is passed, so "font-size: 6ex" falls back to half the parent's
+	// size instead of asking the parent's face — and the suite's
+	// numbers-units-012 sets 6ex against Ahem, whose x-height is eight tenths of
+	// an em, so it comes out at three quarters of the size it should be.
+	//
+	// It is a gap rather than an oversight, and the shape of it is worth
+	// recording. The unit needs the *parent's* face; font-size is resolved by
+	// the box builder, before layout, so that every box carries a computed size
+	// from the moment it exists; and the box builder is handed a document, a
+	// cascade and a recorder, and no font set at all. Closing it means giving
+	// the builder faces, which is a change to when fonts are loaded rather than
+	// a change to this function.
 	l, unsupported, ok := ParseLength(vals, LengthContext{FontSize: parent, RootFontSize: root})
 	if !ok || l.Kind != LengthAbsolute {
 		return 0, unsupported, false
