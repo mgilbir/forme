@@ -361,6 +361,19 @@ type State struct {
 	// It starts true, because the beginning of the context is the beginning of
 	// its first line and §4.1.2 removes the collapsible space there.
 	AfterCollapsibleSpace bool
+	// AfterAtomic says the last thing emitted was an atomic inline — a
+	// picture, an inline-block — so the opportunity after it is the one CSS
+	// Text §5.1 grants around one, and is subject to that section's exception.
+	//
+	// It is distinguished from any other opportunity because the exception is:
+	// a word joiner beside a picture holds it, and a word joiner beside a space
+	// does not, so the two opportunities cannot be told apart by their own flag.
+	AfterAtomic bool
+	// AfterBinding says the last character emitted was one that holds on to an
+	// atomic inline following it — see BindsToAtomicInline. It travels for the
+	// same reason the rest of this does: "a&#8288;<span>b</span>" puts the word
+	// joiner and the box in different text nodes.
+	AfterBinding bool
 }
 
 // StartOfContext is the state an inline formatting context begins in.

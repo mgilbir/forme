@@ -48,3 +48,39 @@ func noBreakBefore(r rune) bool {
 	})
 	return i < len(noBreakBeforeRanges) && noBreakBeforeRanges[i].lo <= r
 }
+
+// BindsToAtomicInline reports whether a line may not break between this
+// character and an atomic inline beside it.
+//
+// CSS Text §5.1, in full because the exception is the interesting part: "For
+// Web-compatibility there is a soft wrap opportunity before and after each
+// replaced element or other atomic inline, even when adjacent to a character
+// that would normally suppress them, including U+00A0 NO-BREAK SPACE. However,
+// with the exception of U+00A0 NO-BREAK SPACE, there must be no soft wrap
+// opportunity between atomic inlines and adjacent characters belonging to the
+// Unicode GL, WJ, or ZWJ line breaking classes."
+//
+// So a picture may be wrapped away from the word next to it — that is the
+// Web-compatibility half, and it is why an atomic inline is not simply glued to
+// whatever precedes it — and may not be wrapped away from a word joiner, a
+// narrow no-break space, or a Tibetan delimiter. A no-break space is class GL
+// and breaks anyway, which is the sentence's own exception and the reason this
+// is a function rather than a table lookup.
+//
+// It is exported because the boundary it is about is not in this package. A
+// piece of text and an atomic inline are two different things in the layout,
+// and only the code that lays a line out sees them next to each other.
+func BindsToAtomicInline(r rune) bool {
+	// The exception, which the table cannot carry: U+00A0 is class GL and this
+	// rule does not apply to it.
+	if r == 0x00A0 {
+		return false
+	}
+	if r < bindingRanges[0].lo {
+		return false
+	}
+	i := sort.Search(len(bindingRanges), func(i int) bool {
+		return bindingRanges[i].hi >= r
+	})
+	return i < len(bindingRanges) && bindingRanges[i].lo <= r
+}

@@ -242,3 +242,41 @@ var noBreakBeforeRanges = [...]struct{ lo, hi rune }{
 	{0x1DA87, 0x1DA8A},
 	{0x1F679, 0x1F67B},
 }
+
+// The characters that hold on to an atomic inline beside them. Unicode 17.0.0.
+//
+// 27 ranges, merged from 27 the file states separately: GL 24, WJ 2, ZWJ 1.
+// CSS Text §5.1 names the three classes: a picture may be wrapped away from the
+// word next to it, and may not be wrapped away from a character of one of
+// these. The one exception the rule makes — U+00A0, which is class GL and
+// breaks anyway, for compatibility with what the web already does — is in
+// linebreak.go, because it is a decision rather than a property.
+var bindingRanges = [...]struct{ lo, hi rune }{
+	{0x00A0, 0x00A0},
+	{0x035C, 0x0362},
+	{0x0F08, 0x0F08},
+	{0x0F0C, 0x0F0C},
+	{0x0F12, 0x0F12},
+	{0x0FD9, 0x0FDA},
+	{0x180E, 0x180E},
+	{0x1AEB, 0x1AEB},
+	{0x1DCD, 0x1DCD},
+	{0x1DFC, 0x1DFC},
+	{0x2007, 0x2007},
+	{0x200D, 0x200D},
+	{0x2011, 0x2011},
+	{0x202F, 0x202F},
+	{0x2060, 0x2060},
+	{0xFE20, 0xFE20},
+	{0xFE22, 0xFE22},
+	{0xFE24, 0xFE24},
+	{0xFE26, 0xFE27},
+	{0xFE29, 0xFE29},
+	{0xFE2B, 0xFE2B},
+	{0xFE2D, 0xFE2E},
+	{0xFEFF, 0xFEFF},
+	{0x1107F, 0x1107F},
+	{0x13430, 0x13436},
+	{0x13439, 0x1343B},
+	{0x16FE4, 0x16FE4},
+}

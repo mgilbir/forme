@@ -957,7 +957,15 @@ const wptEnv = "WPT_TESTS"
 // "々" reads as a mistake to someone who cannot read the language, and the
 // suite tests it a character at a time: one family, one hundred and fifty-eight
 // tests, of which ninety-three failed. See paragraph/linebreak.go.
-const wptCleanPassBaseline = 5283
+// 5283 to 5303 is where a line may break around a picture. CSS Text §5.1 puts
+// an opportunity on either side of an atomic inline "even when adjacent to a
+// character that would normally suppress them" — and then takes it back for the
+// glue classes, which is what a word joiner written next to a picture is for.
+// The engine offered it unconditionally. Fourteen of the twenty came from that;
+// the other six came from the harness, which was refusing to reconstruct a run
+// with a character in it that nothing is drawn for and calling the engine wrong
+// for a picture it had drawn correctly. See layout/atomicbreak_test.go.
+const wptCleanPassBaseline = 5303
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

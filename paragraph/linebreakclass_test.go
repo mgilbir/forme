@@ -223,3 +223,67 @@ func TestTheTableIsUnicodesAndNotAGuess(t *testing.T) {
 		}
 	}
 }
+
+// TestBindsToAtomicInline is CSS Text §5.1's own sentence, read as a set.
+//
+// The rule is unusual in having a named exception, and the exception is the
+// interesting half: a no-break space is class GL and a line breaks beside a
+// picture anyway, "for Web-compatibility". Every other GL, WJ and ZWJ character
+// holds on.
+func TestBindsToAtomicInline(t *testing.T) {
+	for _, tc := range []struct {
+		r    rune
+		want bool
+		what string
+	}{
+		// The exception, named in the specification.
+		{'\u00A0', false, "a no-break space, which is class GL and breaks anyway"},
+		// GL.
+		{'\u202F', true, "a narrow no-break space"},
+		{'\u2007', true, "a figure space"},
+		{'\u2011', true, "a non-breaking hyphen"},
+		{'\u180E', true, "a Mongolian vowel separator"},
+		{'༈', true, "a Tibetan mark sbrul shad"},
+		{'༌', true, "a Tibetan mark delimiter tsheg bstar"},
+		{'༒', true, "a Tibetan mark rgya gram shad"},
+		// WJ.
+		{'\u2060', true, "a word joiner"},
+		{'\uFEFF', true, "a zero width no-break space"},
+		// ZWJ.
+		{'\u200D', true, "a zero width joiner"},
+		// And the ones that hold on to nothing.
+		{'A', false, "a letter"},
+		{' ', false, "a space"},
+		{'\u200B', false, "a zero width space, which is a break and not a bond"},
+		{'-', false, "a hyphen-minus"},
+		{'中', false, "an ideograph"},
+		{0x10FFFF, false, "the last code point there is"},
+		{-1, false, "not a character at all"},
+	} {
+		if got := BindsToAtomicInline(tc.r); got != tc.want {
+			t.Errorf("%s (U+%04X): %v, want %v", tc.what, tc.r, got, tc.want)
+		}
+	}
+	// The table has to be sorted and disjoint, for the same reason the other
+	// one does.
+	for i := 1; i < len(bindingRanges); i++ {
+		prev, this := bindingRanges[i-1], bindingRanges[i]
+		if this.lo <= prev.hi {
+			t.Fatalf("ranges %d and %d overlap: %04X..%04X then %04X..%04X",
+				i-1, i, prev.lo, prev.hi, this.lo, this.hi)
+		}
+	}
+	// U+00A0 is in the table and excluded by the code, which is the split this
+	// file's two halves are about: the table is Unicode's classes and the
+	// exception is CSS's decision. A table that had dropped it would make the
+	// guard above unfalsifiable.
+	found := false
+	for _, r := range bindingRanges {
+		if r.lo <= 0x00A0 && 0x00A0 <= r.hi {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("U+00A0 is not in the generated table, so nothing is excluding it")
+	}
+}
