@@ -1,0 +1,14 @@
+# Every WOFF 2 in the CSS Working Group's suite, as read by google/woff2 --
+# the format's own reference decoder, run on the same bytes.
+#
+# One line per file: <woff2 sha256, 16 hex> <sfnt length> <sfnt sha256, 16 hex>.
+# Keyed by the file's own hash rather than by its path, so that a font the
+# suite replaces upstream drops out of the comparison instead of failing it
+# -- see TestWOFF2RebuildsAsTheReferenceDoes, which requires a floor on how
+# many still match so the coverage cannot quietly fall to nothing.
+#
+# Regenerate with woff2_decompress over testdata/wpt/**/*.woff2.
+cca9a6cadc67fb72 74672 94978191b4b83d13
+a0b1ab8d98084701 253268 a21a87bc2d3234e2
+1f1e6f28e91e104e 152724 767e671ae1cad013
+d3ede808ce743034 23180 1bb87de24ee8864f

@@ -53,7 +53,19 @@ import (
 // word is lowercased. Both are wrong and both are wrong *visibly* — a reader
 // sees the letter that was not mapped — rather than in the silent way this
 // engine's guardrails exist for, and doing them properly means a case-mapping
-// table this module does not otherwise need.
+// table this module does not otherwise need. One of the suite's tests is exactly
+// this: text-transform-uppercase-002 is a sharp s and nothing else.
+//
+// # What is done and looks like a fault
+//
+// Uppercasing Georgian Mkhedruli produces Mtavruli, so "ა" becomes "Ა". The
+// suite's text-transform-unicase-001 asserts that it must not — "verifies that
+// text-transform does not capitalize a unicase script" — and that test is older
+// than its answer. Unicode 11 added the Mtavruli block in 2018 and gave every
+// Mkhedruli letter an uppercase mapping into it, so the mapping applied here is
+// the one Unicode states. The test is left failing rather than special-cased:
+// the alternative is a table of scripts this engine declines to uppercase, which
+// is a rule no specification asks for.
 
 // TextTransform is what the property asks for.
 type TextTransform uint8

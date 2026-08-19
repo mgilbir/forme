@@ -42,6 +42,18 @@ func ParseNumber(s string) (float64, bool) {
 	var v float64
 	var seenDigit, seenDot bool
 	frac := 0.1
+	// CSS's <number> is "[+|-]? [digits] [. digits]?", and the sign is part of
+	// it: "line-height: +5" is five, and the suite writes one exactly that way.
+	// A caller that may not take a negative says so itself — every one of them
+	// has a range of its own, and a parser that enforced the commonest one would
+	// be wrong for the next caller rather than silent about it.
+	sign := 1.0
+	if len(s) > 0 && (s[0] == '+' || s[0] == '-') {
+		if s[0] == '-' {
+			sign = -1
+		}
+		s = s[1:]
+	}
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		switch {
@@ -59,7 +71,7 @@ func ParseNumber(s string) (float64, bool) {
 			return 0, false
 		}
 	}
-	return v, seenDigit
+	return sign * v, seenDigit
 }
 
 // strconvFormat renders a length for a diagnostic, to a tenth of a pixel — more

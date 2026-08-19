@@ -441,6 +441,9 @@ func (l *layout) readGPOSAttachment(gpos []byte, feats tableFeatures) {
 	var order []int
 	byIndex := map[int][]byte{}
 	for _, tag := range featureTags(gpos, feats.sel) {
+		if !defaultPositionFeatures[tag] {
+			continue
+		}
 		lookups, idxs := featureLookupsIndexed(gpos, tag, feats)
 		for i, lookup := range lookups {
 			if _, seen := byIndex[idxs[i]]; seen {
@@ -478,6 +481,35 @@ func (l *layout) readGPOSAttachment(gpos []byte, feats tableFeatures) {
 			l.cursFlags |= mergedFlags(flags)
 		}
 	}
+}
+
+// defaultPositionFeatures are the positioning features that apply without being
+// asked for.
+//
+// A script's LangSys lists every feature *available* for that script, not every
+// feature that is on: the optional ones are there to be requested, by
+// font-feature-settings or by a font-variant property. Reading positioning
+// lookups from all of them turns the optional ones on for every document.
+//
+// It is not a subtle difference. Noto Sans JP declares 'palt', proportional
+// alternate widths, which is a type 1 adjustment narrowing each full-width kana
+// to the width of the ink in it — that is the whole purpose of the feature, and
+// it is opt-in precisely because Japanese is normally set full-width. Applied by
+// default it made U+3042 971 units instead of 1000, so an ideographic space no
+// longer covered the character beside it and a column of kana no longer lined up.
+//
+// The list is the horizontal one HarfBuzz applies: the mark features, the two
+// spacing features, and the two that complex scripts state their positioning
+// under. 'kern' and 'dist' are here as well as in pairFeatures because a font may
+// state either as a single adjustment rather than as a pair.
+var defaultPositionFeatures = map[string]bool{
+	"abvm": true, // above-base marks
+	"blwm": true, // below-base marks
+	"curs": true, // cursive attachment
+	"dist": true, // distances, which the Indic model states its spacing under
+	"kern": true, // kerning
+	"mark": true, // mark to base
+	"mkmk": true, // mark to mark
 }
 
 // featureTags lists every feature tag a layout table declares and the selection

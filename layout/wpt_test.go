@@ -943,7 +943,15 @@ const wptEnv = "WPT_TESTS"
 // exposed. The number is small and the fault was not: an invalid declaration
 // stood in front of a valid one and every page it happened on came out in the
 // initial value.
-const wptCleanPassBaseline = 4842
+// 5188 to 5190 is WOFF 2 — the format the web actually serves fonts in, and
+// which this could not read at all. Fifty-one of the suite's reftests declare
+// an @font-face pointing at one and forty-three of those point at a file this
+// checkout has; every one of them was laid out in a substitute face and now is
+// not. Two of them consequently agree with their reference and the other
+// forty-one still do not, on Arabic and Mongolian shaping the face does not
+// fix. The number is small and what moved is not: those documents are now set
+// in the face their author named.
+const wptCleanPassBaseline = 5190
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
@@ -1187,6 +1195,15 @@ func pageClip() Rect {
 // itself. Widening the viewport would collect the eight, and that is precisely
 // why it is not done: the number here stands for what a browser shows, not for
 // what this suite scores.
+//
+// numbers-units-015 is a second of the same kind, found the same way. Its prose
+// asks that "any two of the boxes below are the same size" — 1ex, 0.5em and
+// 0.8em — and its reference draws the first two alike, which is the answer a UA
+// gives when it cannot determine the x-height and falls back to half an em. The
+// document is set in Ahem, whose x-height is eight tenths of an em and is stated
+// in the font. This engine reads it, so its 1ex matches the *third* box: the
+// prose passes and the pixels do not. A browser with the same font answers the
+// same way.
 //
 // The height stays A4's rather than becoming 600. The suite's 600 is a *window*
 // height and its references are compared over the whole scrollable page, so the
@@ -1605,6 +1622,12 @@ func num(u style.Unit) string {
 	return strconv.FormatFloat(float64(int(u.Px()*100+0.5))/100, 'f', -1, 64)
 }
 
+// The number rose by 327 when css-text stopped being one directory of it, and
+// that rise is not an engine improvement: the suite grew by 1073 tests and 327
+// of them already passed. A reader comparing baselines across that commit is
+// comparing two different suites, which is the one thing this number cannot say
+// for itself. See WPT_DIRS in the Makefile for what the expansion bought and
+// what it did not.
 func TestWPTReftests(t *testing.T) {
 	root := wptDir(t)
 	tests := findReftests(t, root)
