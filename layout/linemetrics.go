@@ -151,7 +151,9 @@ func (l *layouter) vAlignFor(b *Box, in vAlignState) vAlignState {
 // every terminal and every editor has used for a tab since they had one.
 func (l *layouter) tabStop(b *Box, face *shape.Face) style.Unit {
 	raw := strings.TrimSpace(b.Style["tab-size"])
-	if n, ok := parseNumber(raw); ok {
+	if n, ok := parseNumber(raw); ok && n >= 0 {
+		// Non-negative for the same reason line-height is: CSS Text gives
+		// tab-size a range of its own and the parser does not.
 		return l.br.Measure(face, " ", b.FontSize).Mul(n)
 	}
 	if v, ok := l.lengthOf(b, "tab-size", 0); ok && v >= 0 {
@@ -241,7 +243,11 @@ func (l *layouter) lineHeight(b *Box) style.Unit {
 	if value == "" || value == "normal" {
 		return l.normalLineHeight(b)
 	}
-	if n, ok := parseNumber(value); ok {
+	if n, ok := parseNumber(value); ok && n >= 0 {
+		// A negative multiplier is not a line-height: §10.8.1 says the value
+		// "must be non-negative", so it is invalid and the property falls back
+		// as though nothing had been said. The parser takes a sign because CSS's
+		// <number> has one; the range is this property's own.
 		return b.FontSize.Mul(n)
 	}
 	if length, ok := l.parseLength(b, "line-height"); ok {
