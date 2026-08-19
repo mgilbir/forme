@@ -943,7 +943,15 @@ const wptEnv = "WPT_TESTS"
 // exposed. The number is small and the fault was not: an invalid declaration
 // stood in front of a valid one and every page it happened on came out in the
 // initial value.
-const wptCleanPassBaseline = 5188
+// 5188 to 5190 is WOFF 2 — the format the web actually serves fonts in, and
+// which this could not read at all. Fifty-one of the suite's reftests declare
+// an @font-face pointing at one and forty-three of those point at a file this
+// checkout has; every one of them was laid out in a substitute face and now is
+// not. Two of them consequently agree with their reference and the other
+// forty-one still do not, on Arabic and Mongolian shaping the face does not
+// fix. The number is small and what moved is not: those documents are now set
+// in the face their author named.
+const wptCleanPassBaseline = 5190
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
