@@ -986,7 +986,13 @@ const wptEnv = "WPT_TESTS"
 // grows. Spreading the slack over the drawn runs moved the text and left the
 // ink of the boxes it was inside where the unjustified line had put it. See
 // layout/justify_test.go.
-const wptCleanPassBaseline = 5356
+// 5356 to 5365 is word-break: break-word, which is not a word-break value: CSS
+// Text 3 §5.2 keeps it "for web-compatibility" and defines it as
+// "overflow-wrap: anywhere, regardless of the actual value of the overflow-wrap
+// property". The engine looked for it among the word-break values, found
+// nothing, and did nothing — without reporting it either, which is what made it
+// silent. See layout/overflowwrap_test.go.
+const wptCleanPassBaseline = 5365
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

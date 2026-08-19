@@ -143,6 +143,13 @@ func WordBreakOf(value string) (WordBreak, string) {
 		return WordBreak{BreakAll: true}, ""
 	case "keep-all", "auto-phrase":
 		return WordBreak{}, strings.ToLower(strings.TrimSpace(value))
+	case "break-word":
+		// Normal, and deliberately: the value's whole effect is on
+		// overflow-wrap, which OverflowWrapOf reads for itself. It is named here
+		// so that it is visibly handled rather than falling through with the
+		// misspellings — and so that it is not reported as a value this engine
+		// ignores, which it no longer does.
+		return WordBreak{}, ""
 	}
 	return WordBreak{}, ""
 }
@@ -214,6 +221,20 @@ type OverflowWrap struct {
 // wrong answer here. Taking the non-initial value is what makes the common case
 // right: a document sets one of them.
 func OverflowWrapOf(style map[string]string) OverflowWrap {
+	// word-break: break-word is not a word-break value at all. CSS Text 3 §5.2
+	// keeps it "for web-compatibility" and defines it by what it does elsewhere:
+	// it "has the same effect as word-break: normal and overflow-wrap: anywhere,
+	// regardless of the actual value of the overflow-wrap property". So it is
+	// read here rather than there, it wins over whatever overflow-wrap says, and
+	// word-break itself is left at normal.
+	//
+	// The "regardless" is the part worth writing down: this is the one value in
+	// either property that overrides the other, and reading it as a *default*
+	// for overflow-wrap would give the wrong answer for the document that sets
+	// both — which is what word-break-break-word-overflow-wrap-interactions is.
+	if strings.EqualFold(strings.TrimSpace(style["word-break"]), "break-word") {
+		return OverflowWrap{BreakWord: true, Anywhere: true}
+	}
 	value := strings.ToLower(strings.TrimSpace(style["overflow-wrap"]))
 	if value == "" || value == "normal" {
 		value = strings.ToLower(strings.TrimSpace(style["word-wrap"]))
