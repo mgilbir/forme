@@ -579,7 +579,11 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	if unhandledLine != "" {
 		l.reportLineBreak(b, unhandledLine)
 	}
-	pieces, endedAtBreak := splitAtBreaks(b.Text, ws, wb, lb)
+	hy, unhandledHyphens := hyphensOf(b.Style["hyphens"])
+	if unhandledHyphens != "" {
+		l.reportHyphens(b, unhandledHyphens)
+	}
+	pieces, endedAtBreak := splitAtBreaks(b.Text, ws, wb, lb, hy)
 	if len(pieces) == 0 {
 		// A box that produced nothing passes an opportunity through rather than
 		// swallowing it — and it may have created one of its own, which is what
@@ -793,6 +797,15 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		BreakWord:   a.ow.BreakWord,
 		Anywhere:    a.ow.Anywhere,
 		Decorations: a.decorations, Spacing: a.spacing,
+	}
+	if p.Hyphen && a.last {
+		// The hyphen this piece would print, measured now: the line breaking has
+		// no face to ask and needs the width before it can decide whether the
+		// line may break here at all. Only the last run of a piece has an end
+		// for a hyphen to be at — a piece cut in two by a change of face is one
+		// word, and the hyphen belongs after all of it.
+		item.HyphenText = hyphenTextFor(a.run.Face)
+		item.Hyphen = l.br.MeasureSpaced(a.run.Face, item.HyphenText, a.size, a.spacing)
 	}
 	if !p.Tab {
 		// A tab is measured against a tab stop when it lands, so there is

@@ -40,18 +40,21 @@ import (
 // is very nearly true and reads as obviously true, so the table was written as a
 // list of initial values from the specifications.
 //
-// It is wrong for hyphens. The initial value is "manual", which means *do*
-// hyphenate, but only where the text asks with a soft hyphen — and a browser at
-// "manual" breaks a line there. This engine breaks at no soft hyphen at all, so
-// what it produces is "none", and "manual" is the one value of the three that
-// differs from it. Reading the specification alone would have marked the
-// difference inert and the match reportable, exactly backwards.
+// It was wrong for hyphens, and that entry is worth recording even though it is
+// no longer here. The initial value is "manual", which means *do* hyphenate, but
+// only where the text asks with a soft hyphen. This engine used to break at no
+// soft hyphen at all, so what it produced was "none" — and reading the
+// specification alone would have marked "manual" inert and "none" reportable,
+// exactly backwards.
 //
 // So an entry is a claim about *this engine's behaviour*, checked against it.
-// Where that behaviour is a fact a future change could alter — as the hyphens
-// entry is — the fact has a test of its own, named beside the entry, so that
-// implementing the feature fails the test rather than quietly making the table a
-// lie.
+// Where that behaviour is a fact a future change could alter, the fact has a
+// test of its own, named beside the entry, so that implementing the feature
+// fails the test rather than quietly making the table a lie. That is not a
+// hypothetical: breaking at a soft hyphen was implemented, the test the hyphens
+// entry named failed and pointed here, and the property left this file — it is
+// implemented now, and what is left unimplemented is one *value* of it, which is
+// reported where word-break's and line-break's are.
 //
 // # Why this is not the same as going quiet
 //
@@ -93,12 +96,6 @@ var inertValues = map[string]inertValue{
 	// CSS UI 4 §5.1. The property says whether a *user* may resize a box, and
 	// a page laid out once offers no way to.
 	"resize": {produced: "none", because: "nothing here is resizable by anyone"},
-
-	// CSS Text 4 §7.1. The initial value is "manual", which hyphenates at a
-	// soft hyphen; this engine breaks at none, which is "none".
-	// TestNoLineBreaksAtASoftHyphen in the layout package is what holds that.
-	"hyphens": {produced: "none", initial: "manual",
-		because: "no line is broken at a soft hyphen, so nothing is ever hyphenated"},
 
 	// CSS Fonts 4 §6.4 and §6.5. Shaping applies the face's own kerning and its
 	// default features, which is what "auto" and "normal" ask for.

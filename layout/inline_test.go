@@ -243,7 +243,7 @@ func TestBoldAndItalicPickDifferentFaces(t *testing.T) {
 // spaces. Chinese writes none, so a breaker that only knew about spaces would
 // run a whole paragraph together as one unbreakable word.
 func TestCJKBreaksBetweenIdeographs(t *testing.T) {
-	pieces, _ := splitAtBreaks("日本語のテキスト", whiteSpaceOf("collapse"), wordBreak{}, lineBreak{})
+	pieces, _ := splitAtBreaks("日本語のテキスト", whiteSpaceOf("collapse"), wordBreak{}, lineBreak{}, hyphens{})
 	if len(pieces) < 4 {
 		t.Fatalf("ideographic text was cut into %d pieces, want one per character", len(pieces))
 	}
@@ -254,7 +254,7 @@ func TestCJKBreaksBetweenIdeographs(t *testing.T) {
 	}
 
 	// And Latin is not cut up that way: a word stays whole.
-	pieces, _ = splitAtBreaks("hello world", whiteSpaceOf("collapse"), wordBreak{}, lineBreak{})
+	pieces, _ = splitAtBreaks("hello world", whiteSpaceOf("collapse"), wordBreak{}, lineBreak{}, hyphens{})
 	var words []string
 	for _, p := range pieces {
 		if !p.Space {
@@ -275,7 +275,7 @@ func TestBreakOpportunities(t *testing.T) {
 	// without contributing, and it is marked as such. See Piece.ZeroWidth.
 	texts := func(text string) []string {
 		var out []string
-		pieces, _ := splitAtBreaks(text, whiteSpaceOf("collapse"), wordBreak{}, lineBreak{})
+		pieces, _ := splitAtBreaks(text, whiteSpaceOf("collapse"), wordBreak{}, lineBreak{}, hyphens{})
 		for _, p := range pieces {
 			if !p.Space && !p.ZeroWidth {
 				out = append(out, p.Text)
@@ -302,7 +302,7 @@ func TestBreakOpportunities(t *testing.T) {
 	if strings.Contains(strings.Join(texts("one​two"), ""), "​") {
 		t.Error("the zero-width space was kept in the content")
 	}
-	pieces, _ := splitAtBreaks("one​two", whiteSpaceOf("collapse"), wordBreak{}, lineBreak{})
+	pieces, _ := splitAtBreaks("one​two", whiteSpaceOf("collapse"), wordBreak{}, lineBreak{}, hyphens{})
 	zero := 0
 	for _, p := range pieces {
 		if p.ZeroWidth {

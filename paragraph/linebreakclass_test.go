@@ -25,7 +25,7 @@ import (
 // rather than hidden by a helper that trimmed it.
 func marks(t *testing.T, text string, wb WordBreak, lb LineBreak) string {
 	t.Helper()
-	pieces, _ := SplitAtBreaks(text, WhiteSpace{Collapse: true, Wrap: true}, wb, lb)
+	pieces, _ := SplitAtBreaks(text, WhiteSpace{Collapse: true, Wrap: true}, wb, lb, Hyphens{})
 	var b strings.Builder
 	for _, p := range pieces {
 		if p.BreakBefore && b.Len() > 0 {

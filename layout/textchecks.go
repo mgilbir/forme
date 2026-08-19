@@ -225,3 +225,69 @@ func (l *layouter) checkGlyphs(b *Box, face *shape.Face, text string) {
 		})
 	}
 }
+
+// reportHyphens reports a hyphens value this engine reads as manual.
+//
+// There is one: "auto", which asks the engine to hyphenate words that contain
+// no soft hyphen at all. Doing it needs a set of hyphenation patterns for the
+// document's language — Liang's, one table per language, and the tables are
+// large and are not derivable from anything Unicode publishes — so what a
+// document gets is the soft hyphens it wrote and no more.
+//
+// That is a page missing line breaks a browser would make, which shows as
+// looser lines rather than as anything obviously wrong, so it is exactly the
+// kind of difference a reader cannot see and a finding has to say.
+//
+// "manual" and "none" are both implemented and neither is reported.
+//
+// Once per value per document, on the model of reportWordBreak.
+func (l *layouter) reportHyphens(b *Box, value string) {
+	if l.reportedHyphens == nil {
+		l.reportedHyphens = map[string]bool{}
+	}
+	if l.reportedHyphens[value] {
+		return
+	}
+	l.reportedHyphens[value] = true
+	l.rec.ReportDetail(Finding{
+		Rule:     RuleUnsupportedValue,
+		Property: "hyphens",
+		Message: value + " was read as manual, so a word is broken only where a " +
+			"soft hyphen asks and never where a dictionary would",
+		Path: PathOf(b.Element),
+	})
+}
+
+// hyphenTextFor is the character a broken word ends with.
+//
+// CSS Text §6.1 leaves it to the engine, and the note the suite's own
+// hyphens-manual-011 carries says what the choice is: "user agents may use
+// U+2010 HYPHEN when the font has the glyph, or may use U+002D HYPHEN-MINUS
+// otherwise". That test names two references, one for each, because the two are
+// different glyphs in some faces — so either answer is right and neither may be
+// assumed.
+//
+// U+2010 is the typographically correct character and is what this asks for
+// first. A face without it would otherwise draw a missing glyph, which is a box
+// where a hyphen should be, so the fallback is not a nicety.
+func hyphenTextFor(face *shape.Face) string {
+	const hyphen, hyphenMinus = "‐", "-"
+	if face == nil {
+		return hyphenMinus
+	}
+	// missing rather than the glyph count, and the difference is the whole of
+	// this function. A face that cannot set a character still returns a glyph
+	// for it — the standard PDF faces substitute a space, which is what a
+	// reader shows for an undefined code — so a run of "has it drawn anything"
+	// says yes for every character there is. Courier is exactly that case:
+	// U+2010 is outside WinAnsi, and asking the wrong question put a space
+	// where the hyphen belongs and left the word looking unbroken.
+	//
+	// The synthetic item the line breaking appends carries the face of the text
+	// beside it and is not put through the family walk, so there is no fallback
+	// behind this: the character chosen here has to be one this face can set.
+	if _, missing := face.ShapeGlyphs(hyphen); missing == 0 {
+		return hyphen
+	}
+	return hyphenMinus
+}

@@ -52,7 +52,6 @@ func TestADeclarationAtItsInitialValueIsNotReported(t *testing.T) {
 		"resize: none",
 		"resize: NONE",
 		"resize:none",
-		"hyphens: none",
 		"font-kerning: auto",
 		"page-break-inside: auto",
 		"column-gap: normal",
@@ -94,8 +93,6 @@ func TestTheInitialKeywordIsResolvedRatherThanAssumedInert(t *testing.T) {
 		}
 	}
 	for _, decl := range []string{
-		// The initial value is "manual", which is not what this engine produces.
-		"hyphens: initial",
 		// No entry, so nothing is known about what its initial value would mean.
 		"scroll-snap-type: initial",
 		"mix-blend-mode: initial",
@@ -117,12 +114,6 @@ func TestADeclarationThatAsksForSomethingIsStillReported(t *testing.T) {
 	for _, decl := range []string{
 		"resize: both",
 		"resize: horizontal",
-		"hyphens: auto",
-		// "manual" hyphenates at a soft hyphen and a browser breaks the line
-		// there; this engine breaks at none, so the initial value is the one
-		// that differs from what it produces.
-		"hyphens: manual",
-		"hyphens: initial",
 		"font-kerning: none",
 		"page-break-inside: avoid",
 		"column-fill: auto", // the initial value is "balance"
@@ -168,7 +159,6 @@ func TestTheOtherCSSWideKeywordsAreNotAssumedInert(t *testing.T) {
 		"resize: inherit",
 		"resize: unset",
 		"resize: revert",
-		"hyphens: inherit",
 	} {
 		if !reportsUnsupported(t, decl) {
 			t.Errorf("%q was not reported; this engine does not resolve that keyword, "+

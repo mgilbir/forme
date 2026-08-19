@@ -59,6 +59,74 @@ const BlockEllipsis = "\u2026"
 func (br *Breaker) BreakOneLine(items []Item, from, fromByte int, width, lineX style.Unit) (
 	line []Item, next, nextByte int, outOfFlow []MidLineBox, forced bool) {
 
+	line, next, nextByte, outOfFlow, forced = br.fillOneLine(items, from, fromByte, width, lineX)
+	return withHyphen(items, line, from, next, nextByte, forced), next, nextByte, outOfFlow, forced
+}
+
+// withHyphen prints the hyphen a soft hyphen asked for, on the line that broke
+// there.
+//
+// It is here rather than inside the fill because the fill ends a line from nine
+// places and every one of them would need it. What decides is where the *next*
+// line starts: the item before it is the one that offered the opportunity, and
+// it carries the hyphen only if it was the soft hyphen that offered it.
+//
+// Reading the item before the break rather than the last item on the line is the
+// difference between "a<shy>b c" hyphenating and not. In "abc<shy> def" the line
+// may end at the space, and trimming that space off leaves the soft-hyphen item
+// last on the line — so a version that looked at the line would print a hyphen
+// at the end of a word that was not broken.
+//
+// The item is built rather than copied so that a field added to Item later is
+// absent from it by default, which for a synthetic item is the safe answer: it
+// carries no break opportunity, is no kind of white space, and is not out of
+// flow. What it does carry is everything about how the text beside it is drawn,
+// because it is drawn as part of that text.
+func withHyphen(items, line []Item, from, next, nextByte int, forced bool) []Item {
+	// A forced break is the author's own and hyphenates nothing; the end of the
+	// items is the end of the paragraph, where the word was not broken at all;
+	// a non-zero offset means the line ended *inside* an item, which is
+	// overflow-wrap's cut and not a hyphenation point.
+	if forced || nextByte != 0 || next <= from || next >= len(items) {
+		return line
+	}
+	at, ok := hyphenBefore(items, next)
+	if !ok {
+		return line
+	}
+	// Capped so the append cannot write into the caller's items.
+	return append(line[:len(line):len(line)], Item{
+		Text: at.HyphenText, Width: at.Hyphen,
+		Box: at.Box, Face: at.Face, Size: at.Size,
+		Above: at.Above, Below: at.Below, Valign: at.Valign,
+		Decorations: at.Decorations, Spacing: at.Spacing,
+		Offset: at.Offset, Leads: at.Leads,
+	})
+}
+
+// hyphenBefore is the item whose soft hyphen the line ended at, if it did.
+//
+// The scan looks past an inline box's own inset and past the record of a box
+// that is out of flow, which are the two things that can be written between a
+// soft hyphen and the word after it without being anything a reader sees. The
+// suite asks for both by name: hyphens-span-001 puts a </span> there and
+// hyphens-out-of-flow-001 an absolutely positioned box, and both want the same
+// hyphen in the same place as the plain word.
+func hyphenBefore(items []Item, next int) (Item, bool) {
+	for k := next - 1; k >= 0; k-- {
+		it := items[k]
+		if it.Inset || it.Abs != nil || it.Float != nil {
+			continue
+		}
+		return it, it.Hyphen != 0 && it.HyphenText != ""
+	}
+	return Item{}, false
+}
+
+// fillOneLine is BreakOneLine's greedy fill, before the hyphen is printed.
+func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX style.Unit) (
+	line []Item, next, nextByte int, outOfFlow []MidLineBox, forced bool) {
+
 	var used style.Unit
 	// content says the line holds something a reader would see. It is not the
 	// same as the line being non-empty: an inline box's own margin, border and
@@ -196,6 +264,16 @@ func (br *Breaker) BreakOneLine(items []Item, from, fromByte int, width, lineX s
 		// no room on the page at all.
 		if !item.NoWrap && !item.Hangs && i < tailFrom && item.BreakBefore &&
 			len(line) > 0 && used.Add(item.Width) > width {
+			// Ending here costs the hyphen as well, where the opportunity is one
+			// a soft hyphen offered. If that does not fit, this is not a place
+			// the line may end at all and it goes back to one that is — the
+			// hyphen is not optional, so a line that cannot hold it has not
+			// broken here.
+			if h := pendingHyphen(line); h == 0 || used.Add(h) <= width {
+				return trimLineEdge(line), i, 0, outOfFlow, false
+			} else if oppAt >= 0 {
+				return trimLineEdge(line[:oppLine]), oppAt, 0, outOfFlow[:oppFlow], false
+			}
 			return trimLineEdge(line), i, 0, outOfFlow, false
 		}
 
@@ -308,7 +386,11 @@ func (br *Breaker) BreakOneLine(items []Item, from, fromByte int, width, lineX s
 		// true: an opportunity at the very start of a line is not one the line can
 		// be sent back to.
 		if item.BreakBefore && content {
-			oppAt, oppLine, oppFlow = i, len(line), len(outOfFlow)
+			// Not an opportunity the line can be sent back to if the hyphen it
+			// would have to print does not fit in the room the line had.
+			if h := pendingHyphen(line); h == 0 || used.Add(h) <= width {
+				oppAt, oppLine, oppFlow = i, len(line), len(outOfFlow)
+			}
 		}
 
 		switch {
@@ -326,6 +408,26 @@ func (br *Breaker) BreakOneLine(items []Item, from, fromByte int, width, lineX s
 		used = used.Add(item.Width)
 	}
 	return trimLineEdge(line), i, 0, outOfFlow, false
+}
+
+// pendingHyphen is the width of the hyphen a line would have to print if it
+// ended with the items placed so far.
+//
+// It looks past an inline box's own inset, which is the same thing trimLineEdge
+// does and for the same reason: a </span> between the soft hyphen and the end of
+// the line is not content and does not put anything between them.
+//
+// Zero for every line that does not end at a soft hyphen, which is every line of
+// almost every document — so everything this adds to the fill is inert unless
+// the text really asked to be hyphenated.
+func pendingHyphen(line []Item) style.Unit {
+	for k := len(line) - 1; k >= 0; k-- {
+		if line[k].Inset {
+			continue
+		}
+		return line[k].Hyphen
+	}
+	return 0
 }
 
 // trimLineEdge is §4.1.2's third rule: a sequence of collapsible spaces at the

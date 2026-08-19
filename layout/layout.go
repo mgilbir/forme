@@ -392,6 +392,8 @@ type layouter struct {
 	reportedScripts map[string]bool
 	// reportedWordBreak is the same for the word-break values read as normal.
 	reportedWordBreak map[string]bool
+	// reportedHyphens is the same for the hyphens values read as manual.
+	reportedHyphens map[string]bool
 	// reportedLineBreak is the same again for line-break.
 	reportedLineBreak map[string]bool
 	// reportedTextJustify is the same again for text-justify, and is reported

@@ -200,6 +200,13 @@ var properties = map[string]property{
 	// difference could show, since the suite has tests asserting in as many words
 	// that they change nothing about Latin text.
 	"line-break": {true, "auto"},
+	// hyphens inherits, so a rule on an article reaches every word in it —
+	// which is how a document turns hyphenation off, and the only reason
+	// "hyphens: none" on a container means anything. "manual" is implemented
+	// and is the initial value; "auto" is read as manual and reported, because
+	// hyphenating a word that contains no soft hyphen needs a dictionary for
+	// the document's language.
+	"hyphens": {true, "manual"},
 	// tab-size inherits, which is the answer that makes a <pre> inside a
 	// styled <article> keep the tab width the author set on the article. A
 	// number is a count of space advances and a length is itself; the initial

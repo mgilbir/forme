@@ -56,9 +56,11 @@ var (
 type (
 	piece       = paragraph.Piece
 	textSpacing = paragraph.TextSpacing
+	hyphens     = paragraph.Hyphens
 )
 
 var (
+	hyphensOf          = paragraph.HyphensOf
 	splitAtBreaks      = paragraph.SplitAtBreaks
 	tabAdvance         = paragraph.TabAdvance
 	isIdeographic      = paragraph.IsIdeographic

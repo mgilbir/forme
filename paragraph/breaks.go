@@ -84,6 +84,16 @@ type Piece struct {
 	TrimAtEnd   bool
 	Tab         bool
 	Segment     bool
+	// Hyphen marks a piece that ends at a soft hyphen: a line may end after it,
+	// and a hyphen is drawn when one does.
+	//
+	// It is a property of the piece before the opportunity rather than of the
+	// one after it, because what it changes is the *end* of a line. Everything
+	// else here that offers a break says so on the piece that may begin the
+	// next line, and that is the wrong end for this: the hyphen is printed on
+	// the line that broke, and how wide it is decides whether that line could
+	// break at all.
+	Hyphen bool
 }
 
 // SplitAtBreaks cuts text at the break opportunities this engine implements.
@@ -100,7 +110,7 @@ type Piece struct {
 // The text is walked rune by rune rather than through a []rune, which is not a
 // micro-optimisation: a text node is untrusted and arbitrarily large, and a
 // decoded copy of one is four bytes per character of buffering nobody asked for.
-func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak) ([]Piece, bool) {
+func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hyphens) ([]Piece, bool) {
 	var out []Piece
 	var cur strings.Builder
 	breakNext := false
@@ -131,6 +141,18 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak) ([]Pi
 			return
 		}
 		out = append(out, Piece{Text: cur.String(), BreakBefore: breakNext})
+		cur.Reset()
+		breakNext = false
+	}
+	// flushHyphen is flush for a piece that ends at a soft hyphen. It is
+	// separate rather than a parameter because every other caller passes false
+	// and a bare boolean argument at nine call sites says nothing about which
+	// end of the line it is about.
+	flushHyphen := func() {
+		if cur.Len() == 0 {
+			return
+		}
+		out = append(out, Piece{Text: cur.String(), BreakBefore: breakNext, Hyphen: true})
 		cur.Reset()
 		breakNext = false
 	}
@@ -294,6 +316,44 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak) ([]Pi
 			flush()
 			breakNext = true
 
+		case r == 0x00AD && hy.Soft() && !startsSpace(text, i):
+			// A soft hyphen. §6.1: the author has marked a place the word may be
+			// broken, and a hyphen is printed there if it is.
+			//
+			// The character stays in the piece rather than being dropped. It
+			// takes no room and sets no paper — every face here shapes it to
+			// nothing, and shape/ignorable.go is where that is decided — so
+			// keeping it costs nothing on the page, and it keeps the text of the
+			// document the text the author wrote. Dropping characters to make
+			// layout tidier is how a paragraph comes out of a PDF missing pieces
+			// of its words.
+			//
+			// Not endsRunOrSpace, which is what the ordinary hyphen above uses:
+			// the end of *this text* is not the end of the word. The suite's
+			// hyphens-span-001 writes the same word nine ways —
+			// "<span>high&shy;</span>way", "high<span>&shy;</span>way",
+			// "high&shy;<span>way</span>" — and asks for one answer from all of
+			// them, so a soft hyphen that ends a text node has to offer its
+			// opportunity to whatever box comes next. That is what the returned
+			// flag is for and what every other opportunity here already does.
+			//
+			// A space after it is still not one, for the reason the hyphen above
+			// has: there would be nothing to move to the next line, and a hyphen
+			// printed there would be one in the middle of nothing.
+			//
+			// That conjunct is the correct reading of the rule and has no test,
+			// which is a different thing from being covered. Removing it prints
+			// no hyphen anywhere — a line that ends at a space ends *after* the
+			// space, so the item a hyphen would hang off is never the last one —
+			// and what it does leave is an opportunity in front of a space, which
+			// LB7 forbids and which every path that would use one already
+			// declines. Measured: with the conjunct gone, all 6250 of the suite's
+			// reftests give the same answer, 5388 of them cleanly. It is recorded
+			// here rather than left as an implied claim.
+			cur.WriteRune(r)
+			flushHyphen()
+			breakNext = true
+
 		default:
 			cur.WriteRune(r)
 		}
@@ -326,6 +386,17 @@ func startsSpacePiece(r rune, ws WhiteSpace) bool {
 		return true
 	}
 	return IsOtherSpaceSeparator(r)
+}
+
+// startsSpace reports whether white space follows the text at i. The end of the
+// text is not white space: what comes after it is in another box, and whether
+// there is anything there at all is not this function's to say.
+func startsSpace(text string, i int) bool {
+	if i >= len(text) {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(text[i:])
+	return unicode.IsSpace(r)
 }
 
 // endsRunOrSpace reports whether the text at i is the end of the run or white

@@ -98,7 +98,7 @@ func itemsOf(t *testing.T, br *Breaker, face *shape.Face, text string,
 
 	t.Helper()
 	size := u(size20)
-	pieces, _ := SplitAtBreaks(text, ws, WordBreak{}, LineBreak{})
+	pieces, _ := SplitAtBreaks(text, ws, WordBreak{}, LineBreak{}, Hyphens{})
 	out := make([]Item, 0, len(pieces))
 	afterCollapsible := true
 	for _, p := range pieces {
@@ -657,7 +657,7 @@ func TestCollapsingIsIdempotent(t *testing.T) {
 func TestSplittingKeepsTheTextExactly(t *testing.T) {
 	for _, w := range whiteSpaces {
 		for _, tc := range texts {
-			pieces, _ := SplitAtBreaks(tc.text, w.ws, WordBreak{}, LineBreak{})
+			pieces, _ := SplitAtBreaks(tc.text, w.ws, WordBreak{}, LineBreak{}, Hyphens{})
 			var b strings.Builder
 			for _, p := range pieces {
 				if p.Segment {
