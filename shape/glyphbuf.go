@@ -275,7 +275,12 @@ func (f *Face) shapeByCode(s string, rtl bool) ([]Glyph, int) {
 	// anything: WinAnsi gives U+00AD a code of its own, so a soft hyphen without
 	// this reaches the page as a hyphen — and a simple face has no shaping pass
 	// later on that could take it back out.
-	runes, offsets = dropHiddenCharacters(runes, offsets)
+	//
+	// The join controls go too, which is what makes this the drawing predicate
+	// and not the shaping one. There is nothing here for them to instruct, and
+	// left in they take the substitution an unmapped character gets and reach the
+	// page as a space.
+	runes, offsets = dropHiddenBeforeDrawing(runes, offsets)
 	var (
 		buf     []Glyph
 		missing int

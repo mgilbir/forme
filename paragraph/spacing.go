@@ -3,6 +3,7 @@ package paragraph
 import (
 	"unicode/utf8"
 
+	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -68,22 +69,18 @@ func SpacedUnits(text string) int {
 	return n
 }
 
-// IsDefaultIgnorable is the part of Unicode's Default_Ignorable_Code_Point
-// property this engine meets: the bidi controls, the joiners, and the marks that
-// are there to say something to an algorithm rather than to be seen.
-func IsDefaultIgnorable(r rune) bool {
-	switch {
-	case r == 0x00AD, // soft hyphen
-		r == 0x034F,                // combining grapheme joiner
-		r >= 0x200B && r <= 0x200F, // zero width space through RLM
-		r >= 0x202A && r <= 0x202E, // the embedding and override controls
-		r >= 0x2060 && r <= 0x2064, // word joiner and the invisible operators
-		r >= 0x2066 && r <= 0x2069, // the isolates
-		r == 0xFEFF:                // zero width no-break space
-		return true
-	}
-	return false
-}
+// IsDefaultIgnorable reports whether nothing is drawn for a character and it
+// occupies no width, which for §8.2 is the question "is this a typographic
+// character unit letter-spacing goes after".
+//
+// It is Unicode's Default_Ignorable_Code_Point, less the Hangul fillers, which
+// are letters. The answer comes from the shaping package, which holds the
+// property as a generated table, because this used to be a list written here by
+// hand: it had the characters somebody had met — the bidi controls, the joiners,
+// the word joiner and the invisible operators — and stopped at U+2064, so each
+// of the six deprecated format controls above it collected a letter-spacing of
+// its own and a document using one came out wider than it should be.
+func IsDefaultIgnorable(r rune) bool { return shape.DrawsNothing(r) }
 
 // IsBidiControl reports whether a character is one of Unicode's Bidi_Control
 // characters: a mark whose whole function is to instruct the bidirectional

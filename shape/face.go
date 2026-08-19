@@ -505,10 +505,18 @@ func (f *Face) advanceGID(gid int) float64 {
 func (f *Face) Measure(s string, size float64) float64 {
 	var total float64
 	for _, r := range s {
-		if hiddenBeforeShaping(r) {
+		if hiddenAfterShaping(r) {
 			// Nothing is drawn for it, so nothing is measured for it. This has
 			// to agree with what Encode emits or a caller lays out to one width
 			// and draws another — see ignorable.go.
+			//
+			// The *after* predicate, and it is the right one whichever kind of
+			// face this is. A join control survives into shaping so that the
+			// joining and the syllable models can read it, and is taken back out
+			// before anything is positioned — so nothing is ever drawn for one
+			// and nothing may be measured for one. Asking the shaping predicate
+			// here charged a full character for a non-joiner on a simple face,
+			// which then drew it as a space.
 			continue
 		}
 		w, ok := f.advanceOrDecomposed(r, 0)
@@ -582,7 +590,7 @@ func (f *Face) Encode(s string) (codes []byte, missing int) {
 		// says how many there were.
 		codes = make([]byte, 0, len(s))
 		for _, r := range s {
-			if hiddenBeforeShaping(r) {
+			if hiddenAfterShaping(r) {
 				continue // nothing is drawn for it, so it gets no code
 			}
 			code, ok := f.GlyphID(r)
@@ -596,7 +604,7 @@ func (f *Face) Encode(s string) (codes []byte, missing int) {
 	}
 	codes = make([]byte, 0, 2*len(s))
 	for _, r := range s {
-		if hiddenBeforeShaping(r) {
+		if hiddenAfterShaping(r) {
 			continue // nothing is drawn for it, so it gets no code
 		}
 		gid, ok := f.GlyphID(r)
@@ -899,7 +907,7 @@ func (f *Face) InkExtent(s string, size float64) (above, below float64, ok bool)
 // inkUnits is InkExtent in the font's own units, before the size is applied.
 func (f *Face) inkUnits(s string) (top, bottom int, ok bool) {
 	for _, r := range s {
-		if hiddenBeforeShaping(r) {
+		if hiddenAfterShaping(r) {
 			// Drawn as nothing, so it puts ink nowhere. The same exclusion
 			// Measure makes, and for the same reason: the two must agree about
 			// which characters are on the page.
