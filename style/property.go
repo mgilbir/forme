@@ -136,6 +136,17 @@ var properties = map[string]property{
 	"letter-spacing": {true, "normal"},
 	"word-spacing":   {true, "normal"},
 	"text-align":     {true, "start"},
+	// text-align-last is the last line's own alignment — CSS Text 3 §7.2 — and
+	// it inherits, so a block sets it for the paragraphs inside it. "auto"
+	// means "whatever the block is aligned as", except that a justified block's
+	// last line is placed where "start" would put it rather than stretched.
+	"text-align-last": {true, "auto"},
+	// text-justify chooses *how* a justified line is stretched — §7.3. The
+	// engine spreads the word spaces, which is what "auto" and "inter-word"
+	// ask for; "none" turns justification off and is acted on; the rest are
+	// read as auto and reported, because a page justified the wrong way is a
+	// page that looks right and is not.
+	"text-justify":   {true, "auto"},
 	"text-indent":    {true, "0"},
 	"text-transform": {true, "none"},
 	// white-space is a shorthand in CSS Text 4 — see the shorthands table — and

@@ -599,7 +599,8 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				// pre-wrap-align tests measure. It is invisible in a left-to-right
 				// document, where the hang follows the content and moves nothing.
 				rtl := lineBaseIsRTL(b, runs)
-				shift := l.alignLine(b, rtl, avail, used)
+				align, spread := lineAlignment(b, rtl, lastLine)
+				shift := l.alignLine(b, align, avail, used)
 				if !rtl {
 					// §16.1's indent is measured from the line's *start* edge,
 					// and only a left-to-right line starts at the left. The room
@@ -626,7 +627,13 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				// shift above put the line's start where "start" puts it, which
 				// is where a justified line begins too, and what is left is the
 				// slack between there and the other margin.
-				if !lastLine && alignmentOf(b, rtl) == alignJustify {
+				if spread {
+					// The method, which is reported here rather than where the
+					// property is read: this is the only place that knows a
+					// line is being justified at all.
+					if _, unhandled := justificationOf(b); unhandled != "" {
+						l.reportTextJustify(b, unhandled)
+					}
 					// A line with nowhere to put the slack is left where it is,
 					// and nothing is reported about it: CSS Text 3 §7.3 says a
 					// line with no expansion opportunity is aligned as start,

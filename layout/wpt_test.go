@@ -965,7 +965,15 @@ const wptEnv = "WPT_TESTS"
 // the other six came from the harness, which was refusing to reconstruct a run
 // with a character in it that nothing is drawn for and calling the engine wrong
 // for a picture it had drawn correctly. See layout/atomicbreak_test.go.
-const wptCleanPassBaseline = 5303
+// 5303 to 5347 is text-align-last, which was not implemented at all — so every
+// declaration of it did nothing and said nothing, which is the shape of failure
+// the finding vocabulary exists to prevent. The last line of a justified
+// paragraph is the one line that is not justified; the property is how an author
+// asks for something else, and "text-align: justify-all" is how they ask for the
+// stretching everywhere. text-justify: none came with it, because the two
+// together are what four of the suite's tests are about. See
+// layout/textalignlast_test.go.
+const wptCleanPassBaseline = 5347
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

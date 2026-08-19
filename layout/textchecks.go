@@ -110,6 +110,35 @@ func (l *layouter) reportLineBreak(b *Box, value string) {
 	})
 }
 
+// reportTextJustify reports a justification method this engine does not perform.
+//
+// It is called only where a line is actually being justified, which is the
+// condition that makes the value matter: text-justify on a block that is not
+// justified changes nothing, and warning there would be crying wolf on a page
+// that is correct. The same reasoning as reportLineBreak's, and for the same
+// reason — a finding nobody can act on is a finding nobody reads.
+//
+// What the values ask for is real and not a nuance. inter-character puts the
+// slack between letters as well as between words, which is how Thai and
+// Chinese are justified; a page that spread it between the words instead has
+// the right margins and the wrong text.
+func (l *layouter) reportTextJustify(b *Box, value string) {
+	if l.reportedTextJustify == nil {
+		l.reportedTextJustify = map[string]bool{}
+	}
+	if l.reportedTextJustify[value] {
+		return
+	}
+	l.reportedTextJustify[value] = true
+	l.rec.ReportDetail(Finding{
+		Rule:     RuleUnsupportedValue,
+		Property: "text-justify",
+		Message: value + " was read as auto, so the line was stretched between " +
+			"its words rather than in the way the value asked for",
+		Path: PathOf(b.Element),
+	})
+}
+
 // checkScript reports text this engine cannot break or order correctly.
 //
 // It is the unsupported-script guardrail of §6.3, and it is an error by default
