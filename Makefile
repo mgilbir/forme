@@ -111,6 +111,15 @@ casing:
 	go run ./cmd/gencasing $(UCD)/SpecialCasing.txt > paragraph/casingtable.go
 	gofmt -w paragraph/casingtable.go
 
+# What "text-transform: full-width" and "full-size-kana" remap, both derived
+# from UnicodeData.txt. See cmd/genfullwidth and cmd/genfullsizekana.
+#
+#	make widths UCD=/path/to/unpacked/ucd
+widths:
+	go run ./cmd/genfullwidth $(UCD)/UnicodeData.txt > paragraph/widthtable.go
+	go run ./cmd/genfullsizekana $(UCD)/UnicodeData.txt > paragraph/kanatable.go
+	gofmt -w paragraph/widthtable.go paragraph/kanatable.go
+
 useable:
 	go run ./cmd/genuse \
 		$(UCD)/IndicSyllabicCategory.txt \

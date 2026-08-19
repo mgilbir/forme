@@ -92,32 +92,69 @@ import (
 // the alternative is a table of scripts this engine declines to uppercase, which
 // is a rule no specification asks for.
 
-// TextTransform is what the property asks for.
+// TextTransform is what the property asks for, as a set rather than a choice.
+//
+// CSS Text 3 §2.1.1 states the grammar as
+//
+//	none | [ capitalize | uppercase | lowercase ] || full-width || full-size-kana
+//
+// which is one case change *and* either remapping, in any combination and in any
+// order — "text-transform: full-width full-size-kana lowercase" is a declaration
+// the suite writes. So the value is a set of bits and not one of five things.
 type TextTransform uint8
 
 const (
-	TransformNone TextTransform = iota
-	TransformUppercase
+	TransformNone TextTransform = 0
+
+	// The three case changes, which the grammar makes mutually exclusive.
+	TransformUppercase TextTransform = 1 << iota
 	TransformLowercase
 	TransformCapitalize
+
+	// The two remappings, which combine with a case change and with each other.
+	TransformFullWidth
+	TransformFullSizeKana
+
+	// transformCase is the part of a value that changes case, for the places
+	// that need to ask which of the three was given without naming all three.
+	transformCase = TransformUppercase | TransformLowercase | TransformCapitalize
 )
 
 // TransformOf reads the property.
 //
 // An unrecognised value is "none", which is what the cascade would have produced
-// had the declaration been thrown out. "full-width" and "full-size-kana" are
-// among the unrecognised ones: both remap characters rather than changing case,
-// and treating either as a case change would silently do something else.
+// had the declaration been thrown out — and that goes for the whole declaration
+// rather than the keyword that was not recognised, because a declaration with
+// one bad keyword in it is invalid CSS and is dropped entire. Two case changes
+// are refused for the same reason: the grammar allows one.
 func TransformOf(value string) TextTransform {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "uppercase":
-		return TransformUppercase
-	case "lowercase":
-		return TransformLowercase
-	case "capitalize":
-		return TransformCapitalize
+	var out TextTransform
+	for _, word := range strings.Fields(strings.ToLower(value)) {
+		var bit TextTransform
+		switch word {
+		case "none":
+			// Valid on its own, and invalid beside anything else. Both answers
+			// are the same one, so there is nothing to distinguish here.
+			return TransformNone
+		case "uppercase":
+			bit = TransformUppercase
+		case "lowercase":
+			bit = TransformLowercase
+		case "capitalize":
+			bit = TransformCapitalize
+		case "full-width":
+			bit = TransformFullWidth
+		case "full-size-kana":
+			bit = TransformFullSizeKana
+		default:
+			return TransformNone
+		}
+		if out&bit != 0 || (bit&transformCase != 0 && out&transformCase != 0) {
+			return TransformNone
+		}
+		out |= bit
 	}
-	return TransformNone
+	return out
 }
 
 // TransformText applies the property to one text node.
@@ -134,7 +171,17 @@ func TransformText(text string, kind TextTransform, inWord bool) (string, bool) 
 	if text == "" {
 		return text, inWord
 	}
-	switch kind {
+	// The order is the specification's and is not the order the keywords were
+	// written in: case first, then width, then size. §2.1.1's own example is
+	// "full-width full-size-kana lowercase", which lowercases first.
+	//
+	// Only the first of the two orderings is observable, and that was measured
+	// rather than assumed: over every character of Unicode, seventeen tell case
+	// from width apart — ß among them, because "SS" has a fullwidth form and ß
+	// has none — and *none* tells full-width from full-size-kana, or either of
+	// them from a case change. The code follows the specification's order all the
+	// same; texttransform_test.go says which part of it a test can hold.
+	switch kind & transformCase {
 	case TransformUppercase:
 		text = fullCased(text, fullUppercase[:], unicode.ToUpper, strings.ToUpper)
 	case TransformLowercase:
@@ -142,7 +189,71 @@ func TransformText(text string, kind TextTransform, inWord bool) (string, bool) 
 	case TransformCapitalize:
 		text = capitalizeWords(text, inWord)
 	}
+	if kind&TransformFullWidth != 0 {
+		text = remapped(text, fullWidthForms[:])
+	}
+	if kind&TransformFullSizeKana != 0 {
+		text = remapped(text, fullSizeKana[:])
+	}
 	return text, EndsInWord(text)
+}
+
+// remapped replaces every character that one of the width tables names.
+//
+// Unlike a case change this is one character for one character, so the result
+// is the same number of characters as the text — though not the same number of
+// bytes, since "a" is one and "ａ" is three. Text that names none of them is
+// returned as it arrived rather than copied, which is the ordinary case for
+// full-size-kana in particular: a page setting it has kana on some of its lines
+// and not on the rest.
+func remapped(text string, table []widthPair) string {
+	i := firstRemapped(text, table)
+	if i < 0 {
+		return text
+	}
+	var out strings.Builder
+	out.Grow(len(text) + 8)
+	out.WriteString(text[:i])
+	for _, r := range text[i:] {
+		if to, ok := lookupWidth(r, table); ok {
+			out.WriteRune(to)
+		} else {
+			out.WriteRune(r)
+		}
+	}
+	return out.String()
+}
+
+// firstRemapped returns the byte offset of the first character the table names,
+// or -1 if it names none of them.
+//
+// There is no ASCII shortcut here, and that is the difference from
+// firstFullCase: nearly half of the fullwidth table is ASCII, because turning
+// "6" into "６" is what the value is for.
+func firstRemapped(text string, table []widthPair) int {
+	for i, r := range text {
+		if _, ok := lookupWidth(r, table); ok {
+			return i
+		}
+	}
+	return -1
+}
+
+// lookupWidth searches one of the generated width tables, which are sorted.
+func lookupWidth(r rune, table []widthPair) (rune, bool) {
+	i, j := 0, len(table)
+	for i < j {
+		h := int(uint(i+j) >> 1)
+		if table[h].from < r {
+			i = h + 1
+		} else {
+			j = h
+		}
+	}
+	if i < len(table) && table[i].from == r {
+		return table[i].to, true
+	}
+	return 0, false
 }
 
 // fullCased maps every character of a string, preferring the full mapping.
