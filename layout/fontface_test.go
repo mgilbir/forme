@@ -3,6 +3,8 @@ package layout
 import (
 	"encoding/base64"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -507,17 +509,91 @@ func TestFontUndecodable(t *testing.T) {
 	requireFinding(t, built.Findings, RuleResourceBlocked, "is empty")
 
 	// A format hint for a container this engine does not unwrap is refused
-	// before the read, which is why the resolver is never asked for it.
-	res = &fileResolver{files: map[string][]byte{"x.woff2": realFont()}}
+	// before the read, which is why the resolver is never asked for it. SVG
+	// fonts are the case: they are not an sfnt in a wrapper, they are XML, and
+	// there is nothing here that could read one.
+	res = &fileResolver{files: map[string][]byte{"x.svg": realFont()}}
 	built = Build(Input{
+		HTML: docWithFontFace(`@font-face { font-family: Trial;
+			src: url(x.svg) format("svg"); }`),
+		Resources: res,
+	})
+	if len(res.asked) != 0 {
+		t.Errorf("an svg font was fetched before its format hint was read: %v", res.asked)
+	}
+	requireFinding(t, built.Findings, RuleResourceBlocked, "which this engine does not read")
+}
+
+// TestAWoff2HintIsNotARefusal.
+//
+// woff2 was on the refused list until the decoder for it existed, and stayed
+// there after it did. That is the failure mode a format hint has: nothing tries
+// the bytes, so nothing finds out they would have parsed, and the entry goes on
+// being skipped for a reason that stopped being true.
+//
+// It is the format the web serves, so the cost was not a corner: a document
+// declaring one got a blocked-resource finding and a fallback face, and the
+// suite's own tests — which supply a font precisely so that the shaping and the
+// metrics are pinned — were compared against whatever face was lying about.
+func TestAWoff2HintIsNotARefusal(t *testing.T) {
+	res := &fileResolver{files: map[string][]byte{"x.woff2": realFont()}}
+	built := Build(Input{
 		HTML: docWithFontFace(`@font-face { font-family: Trial;
 			src: url(x.woff2) format("woff2"); }`),
 		Resources: res,
 	})
-	if len(res.asked) != 0 {
-		t.Errorf("a woff2 was fetched before its format hint was read: %v", res.asked)
+	if len(res.asked) == 0 {
+		t.Errorf("a woff2 was refused before the resolver was asked for it")
 	}
-	requireFinding(t, built.Findings, RuleResourceBlocked, "which this engine does not read")
+	for _, f := range built.Findings {
+		if strings.Contains(f.Message, "which this engine does not read") {
+			t.Errorf("a woff2 was reported as a format this engine does not read: %s",
+				f.Message)
+		}
+	}
+	// And the family really is available, which is the half a missing finding
+	// does not prove: the bytes here are a plain sfnt, and the hint is a hint —
+	// what is read is what arrived.
+	if set, ok := built.Fonts.(*documentFonts); !ok || len(set.faces) == 0 {
+		t.Errorf("the @font-face loaded no face")
+	}
+}
+
+// TestARealWoff2LoadsThroughFontFace is the end-to-end half, over a file that is
+// actually in the format rather than an sfnt wearing its name.
+//
+// The decoding itself is the font package's, and is tested there against the
+// reference implementation. What this adds is that the two meet: a document that
+// declares a woff2 and serves one gets the face, with the glyphs and the
+// positional forms the file carries.
+func TestARealWoff2LoadsThroughFontFace(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "testdata", "wpt", "fonts", "noto",
+		"NotoNaskhArabic-regular.woff2"))
+	if err != nil {
+		t.Skip("no woff2 in the corpus: ", err)
+	}
+	res := &fileResolver{files: map[string][]byte{"arabic.woff2": data}}
+	built := Build(Input{
+		HTML: docWithFontFace(`@font-face { font-family: Trial;
+			src: url(arabic.woff2) format("woff2"); }`),
+		Resources: res,
+	})
+	set, ok := built.Fonts.(*documentFonts)
+	if !ok || len(set.faces) == 0 {
+		t.Fatalf("the woff2 loaded no face; findings: %v", built.Findings)
+	}
+	face := set.faces[0].face
+	if face == nil {
+		t.Fatal("the face is nil")
+	}
+	if !face.HasJoiningForms() {
+		t.Errorf("the face carries no positional forms; the tables did not survive " +
+			"the transform")
+	}
+	if g, missing := face.ShapeGlyphs("ععع"); len(g) != 3 || missing != 0 {
+		t.Errorf("shaping three Arabic letters gave %d glyphs and %d missing",
+			len(g), missing)
+	}
 }
 
 // TestFontUndecodableIsItsOwnFinding checks the rule reaches the report rather
