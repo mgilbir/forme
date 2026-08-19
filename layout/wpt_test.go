@@ -951,7 +951,13 @@ const wptEnv = "WPT_TESTS"
 // forty-one still do not, on Arabic and Mongolian shaping the face does not
 // fix. The number is small and what moved is not: those documents are now set
 // in the face their author named.
-const wptCleanPassBaseline = 5190
+// 5190 to 5283 is UAX #14's other half. This engine broke CJK on one rule —
+// "between two ideographs" — and offered that break wherever two of them met,
+// including in front of a closing bracket. A line beginning with ")" or "。" or
+// "々" reads as a mistake to someone who cannot read the language, and the
+// suite tests it a character at a time: one family, one hundred and fifty-eight
+// tests, of which ninety-three failed. See paragraph/linebreak.go.
+const wptCleanPassBaseline = 5283
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

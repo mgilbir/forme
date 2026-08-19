@@ -1,4 +1,4 @@
-.PHONY: test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors noto-fonts clean-noto-fonts wpt test-wpt clean-wpt varinstance test-varinstance
+.PHONY: linebreak test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors noto-fonts clean-noto-fonts wpt test-wpt clean-wpt varinstance test-varinstance
 
 test:
 	gofmt -l . | grep -v '^testdata/' && exit 1 || true
@@ -94,6 +94,14 @@ hbfuzz:
 #
 #	make useable UCD=/path/to/unpacked/ucd
 UCD ?= testdata/ucd
+
+# The characters a line may not begin with, from Unicode's line-breaking
+# property. See cmd/genlinebreak for which of UAX #14's rules are in it.
+#
+#	make linebreak UCD=/path/to/unpacked/ucd
+linebreak:
+	go run ./cmd/genlinebreak $(UCD)/LineBreak.txt > paragraph/linebreaktable.go
+	gofmt -w paragraph/linebreaktable.go
 
 useable:
 	go run ./cmd/genuse \

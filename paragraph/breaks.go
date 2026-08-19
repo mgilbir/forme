@@ -171,9 +171,20 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak) ([]Pi
 		// is what makes "X XX X" in four characters of room break after the
 		// fourth — the answer break-all must not give, and the one the suite's
 		// break-spaces-before-first-char-007 asks for by name.
-		if ((deferBreak && !startsSpacePiece(r, ws)) ||
-			(wb.BreakAll && !startsSpacePiece(r, ws)) || lb.Anywhere) &&
-			atBoundary && cur.Len() > 0 {
+		offered := (deferBreak && !startsSpacePiece(r, ws)) ||
+			(wb.BreakAll && !startsSpacePiece(r, ws)) || lb.Anywhere
+		// UAX #14 forbids a line beginning with a closing bracket, a hyphen or
+		// a non-starter, and an opportunity offered in front of one is not one.
+		// See linebreak.go for which rules that is and which it is not.
+		//
+		// line-break: anywhere is exempt, and by name: §5.3 puts an opportunity
+		// around every typographic character unit "including around any
+		// punctuation character or preserved white space", which is a value
+		// whose whole purpose is to overrule this.
+		if offered && !lb.Anywhere && noBreakBefore(r) {
+			offered = false
+		}
+		if offered && atBoundary && cur.Len() > 0 {
 			flush()
 			breakNext = true
 		}
