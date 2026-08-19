@@ -45,18 +45,43 @@ import (
 // each text node afresh would set "EXample". That is what boxBuilder.afterWord
 // is for.
 //
-// # What is not done
+// # Why the case mappings are not Go's alone
 //
-// The case mappings are Go's, which are Unicode's simple one-to-one mappings.
-// The full mappings of SpecialCasing.txt are not applied, so "straße" uppercases
-// to "STRAßE" rather than "STRASSE", and a final sigma does not become ς when a
-// word is lowercased. Both are wrong and both are wrong *visibly* — a reader
-// sees the letter that was not mapped — rather than in the silent way this
-// engine's guardrails exist for, and doing them properly means a case-mapping
-// table this module does not otherwise need. One of the suite's tests is exactly
-// this: text-transform-uppercase-002 is a sharp s and nothing else.
+// strings.ToUpper applies Unicode's *simple* mappings, which are one character
+// to one character by construction. A great deal of ordinary text does not have
+// a one-to-one case: "straße" uppercases to "STRASSE", and a simple mapping
+// cannot say so, so Go leaves the ß alone and produces "STRAßE". CSS Text
+// §2.1.1 asks for the full mappings by name, and casingtable.go holds them —
+// see cmd/gencasing for where they come from and which were left out.
+//
+// The tables are consulted first and Go's mapping is the fallback, so a
+// character with no full mapping — which is all but a hundred of them — costs a
+// binary search over a table of a hundred entries and nothing else. Text that
+// contains no such character is not copied at all: it takes the same
+// strings.ToUpper it always did.
+//
+// # What is still not done
+//
+// The conditional mappings. Three of them are language tailorings — Turkish and
+// Azeri map i and I to their dotted and dotless forms, Lithuanian keeps a dot
+// above a lowercased vowel — and applying one needs the element's language,
+// which the box tree does not carry down to here. The fourth is Final_Sigma: a
+// lowercased Σ is ς at the end of a word and σ inside one, which needs the
+// characters either side rather than a table. Both are visible faults — a
+// reader sees the wrong letter — rather than the silent kind this engine's
+// guardrails exist for.
 //
 // # What is done and looks like a fault
+//
+// Two of the suite's tests assert the *simple* mapping for characters Unicode
+// gives a full one, and both are left failing rather than special-cased.
+// text-transform-upperlower-016 wants "ᾀ" to uppercase to "ᾈ" and
+// text-transform-upperlower-006 wants "İ" to lowercase to "i"; Unicode says
+// "ἈΙ" and "i̇", and so do the two newer tests beside them —
+// text-transform-upperlower-035 spells out the same mappings and
+// text-transform-lowercase-102 is exactly the "İ" case. ᾈ is the *titlecase*
+// of ᾀ, which is a third mapping and is applied where a third mapping belongs.
+// The suite contradicts itself here and the specification does not.
 //
 // Uppercasing Georgian Mkhedruli produces Mtavruli, so "ა" becomes "Ა". The
 // suite's text-transform-unicase-001 asserts that it must not — "verifies that
@@ -111,20 +136,83 @@ func TransformText(text string, kind TextTransform, inWord bool) (string, bool) 
 	}
 	switch kind {
 	case TransformUppercase:
-		text = strings.ToUpper(text)
+		text = fullCased(text, fullUppercase[:], unicode.ToUpper, strings.ToUpper)
 	case TransformLowercase:
-		text = strings.ToLower(text)
+		text = fullCased(text, fullLowercase[:], unicode.ToLower, strings.ToLower)
 	case TransformCapitalize:
 		text = capitalizeWords(text, inWord)
 	}
 	return text, EndsInWord(text)
 }
 
+// fullCased maps every character of a string, preferring the full mapping.
+//
+// The whole-string function is the fast path and does the work whenever no
+// character of the text has a full mapping — which is the ordinary case, and
+// keeps an ASCII heading on the byte-wise loop inside strings.ToUpper rather
+// than on a rune-by-rune one here. Only text that really does contain one of
+// the hundred characters in the table is rebuilt.
+func fullCased(text string, table []fullCase, simple func(rune) rune, whole func(string) string) string {
+	i := firstFullCase(text, table)
+	if i < 0 {
+		return whole(text)
+	}
+	var out strings.Builder
+	// The mappings are longer than what they replace, so this is a floor rather
+	// than a guess; it saves the first growth and not the rest.
+	out.Grow(len(text) + 8)
+	out.WriteString(whole(text[:i]))
+	for _, r := range text[i:] {
+		if s, ok := lookupFullCase(r, table); ok {
+			out.WriteString(s)
+		} else {
+			out.WriteRune(simple(r))
+		}
+	}
+	return out.String()
+}
+
+// firstFullCase returns the byte offset of the first character of the text that
+// has a full mapping, or -1 if none has.
+//
+// Every character in the tables is above U+007F, so ASCII — which is most text
+// this will ever see — is rejected a byte at a time without decoding.
+func firstFullCase(text string, table []fullCase) int {
+	for i, r := range text {
+		if r < utf8.RuneSelf {
+			continue
+		}
+		if _, ok := lookupFullCase(r, table); ok {
+			return i
+		}
+	}
+	return -1
+}
+
+// lookupFullCase searches one of the generated tables, which are sorted.
+func lookupFullCase(r rune, table []fullCase) (string, bool) {
+	i, j := 0, len(table)
+	for i < j {
+		h := int(uint(i+j) >> 1)
+		if table[h].r < r {
+			i = h + 1
+		} else {
+			j = h
+		}
+	}
+	if i < len(table) && table[i].r == r {
+		return table[i].s, true
+	}
+	return "", false
+}
+
 // capitalizeWords titlecases the first letter of every word.
 //
 // Titlecase rather than uppercase, which matters for exactly the digraphs it was
 // invented for: U+01F3 "ǳ" titlecases to "ǲ" and uppercases to "Ǳ", and a name
-// set in the second form is set wrongly.
+// set in the second form is set wrongly. It is also a third mapping rather than
+// a variation on the other two — "ß" titlecases to "Ss" and uppercases to "SS" —
+// so it has a table of its own.
 func capitalizeWords(text string, inWord bool) string {
 	var out strings.Builder
 	out.Grow(len(text))
@@ -136,7 +224,11 @@ func capitalizeWords(text string, inWord bool) string {
 		i += size
 
 		if !inWord && unicode.IsLetter(r) {
-			out.WriteRune(unicode.ToTitle(r))
+			if s, ok := lookupFullCase(r, fullTitlecase[:]); ok {
+				out.WriteString(s)
+			} else {
+				out.WriteRune(unicode.ToTitle(r))
+			}
 		} else {
 			out.WriteRune(r)
 		}

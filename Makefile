@@ -103,6 +103,14 @@ linebreak:
 	go run ./cmd/genlinebreak $(UCD)/LineBreak.txt > paragraph/linebreaktable.go
 	gofmt -w paragraph/linebreaktable.go
 
+# Unicode's full case mappings — the ones that turn one character into more than
+# one, which Go's own case functions cannot express. See cmd/gencasing.
+#
+#	make casing UCD=/path/to/unpacked/ucd
+casing:
+	go run ./cmd/gencasing $(UCD)/SpecialCasing.txt > paragraph/casingtable.go
+	gofmt -w paragraph/casingtable.go
+
 useable:
 	go run ./cmd/genuse \
 		$(UCD)/IndicSyllabicCategory.txt \
