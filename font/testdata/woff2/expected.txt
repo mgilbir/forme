@@ -1,0 +1,9 @@
+# What each WOFF 2 beside this decodes to, according to google/woff2 --
+# the format's own reference decoder, run on these bytes. This module's
+# DecodeWOFF2 must agree with it exactly, byte for byte, checksums and all.
+#
+# <file> <sfnt length in bytes> <sha256 of the sfnt, first 16 hex digits>
+#
+# Regenerate with:  woff2_decompress f.woff2 && sha256sum f.ttf
+HasubiMono-hmtx-dropped.woff2 74672 94978191b4b83d13
+HasubiMono-Regular.woff2 74672 94978191b4b83d13

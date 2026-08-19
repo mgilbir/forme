@@ -724,12 +724,37 @@ func (l *layouter) avoidFloats(b *Box, containing style.Unit, origin flow,
 // source order. That is an invariant of the walk rather than of this type, and
 // it is the reason clear cannot be answered by a query made after layout.
 func (fc *floatContext) clearance(clear ClearSide) style.Unit {
+	return fc.clearanceOver(clear, -1)
+}
+
+// clearanceOver is clearance measured over the first n floats of the context,
+// where a negative n means all of them.
+//
+// The bound exists because the invariant above — every float here is earlier in
+// the document than the box asking — does not hold at one call site. A block's
+// clearance is settled *after* its subtree has been laid out, because until then
+// its own top margin is not known, and by then the floats that subtree added are
+// in the context too. §9.5.2 clears "any floats that need to be cleared", and a
+// float inside the box is not one of them: it is placed relative to the box's own
+// position and cannot be something that position is measured against.
+//
+// Left unbounded it is a feedback loop with a visible answer. An empty block with
+// "clear: left" holding one float came out at twice the clearance it needed: the
+// block cleared the float outside it, its own float went in at that position, and
+// the query then cleared that one too.
+//
+// The index is a prefix summary, so the bound costs a subscript rather than a
+// scan: marks[i] is the state after absorbing i+1 floats.
+func (fc *floatContext) clearanceOver(clear ClearSide, n int) style.Unit {
 	if clear == ClearNone {
 		return 0
 	}
 	fc.sync()
+	if n < 0 || n > fc.idx.n {
+		n = fc.idx.n
+	}
 	var lowest style.Unit
-	if n := fc.idx.n; n > 0 {
+	if n > 0 {
 		a := fc.idx.marks[n-1]
 		switch clear {
 		case ClearLeft:

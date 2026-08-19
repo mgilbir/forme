@@ -1,0 +1,27 @@
+# What every stream in this directory decompresses to, according to the
+# reference Brotli -- google/brotli's own C decoder, run on these bytes.
+# This package's decoder must agree with it exactly.
+#
+# <file> <length in bytes> <sha256 of the output, first 16 hex digits>
+#
+# Regenerate with:  brotli -d -c f.br | wc -c; brotli -d -c f.br | sha256sum
+across-blocks.q11.w16.br 144881 0185d35db144efeb
+across-blocks.q11.w22.br 144881 0185d35db144efeb
+ascii.q11.w10.br 285 e701dcb6d3b7f756
+block-switching.q11.w16.br 26220 0257e9425995fd6e
+css.q11.w10.br 945 1a3b3d70c5afae4d
+empty.q11.w16.br 0 e3b0c44298fc1c14
+english.q11.w10.br 5275 576fa719a6c31fc3
+english-tiny.q11.w24.br 40 f096debdd388b127
+every-byte.q11.w10.br 256 40aff2e9d2d8922e
+every-byte.q11.w22.br 256 40aff2e9d2d8922e
+html.q11.w10.br 196 edcbb1d7efa0d94e
+html.q5.w16.br 196 edcbb1d7efa0d94e
+noise.q0.w16.br 4000 12917cb42d4270c3
+noise.q11.w24.br 4000 12917cb42d4270c3
+one-byte.q11.w16.br 1 2d711642b726b044
+one-run.q11.w10.br 3000 556ac82f23f64d2f
+records.q11.w10.br 20714 5cddbbf029ed88f4
+runs.q11.w12.br 28053 2d5c9889dc4aba89
+two-letters.q11.w10.br 9000 981ce9daef83fb97
+utf8.q11.w16.br 7560 072b5733592b13da

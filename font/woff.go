@@ -29,9 +29,8 @@ import (
 // WOFF 2 is a different format that happens to share a name: Brotli rather than
 // deflate, and — the part that matters — a *transformed* glyf table, which is
 // re-encoded rather than merely compressed and has to be reconstructed point by
-// point. That is a second parser of comparable size to this one, and it is not
-// here. DecodeWOFF refuses a WOFF 2 by signature rather than failing obscurely
-// part-way in.
+// point. It is in woff2.go, and DecodeWOFF hands a file with that signature
+// straight to it, so a caller has one entry point for the two.
 //
 // # Untrusted input
 //
@@ -66,8 +65,9 @@ func IsWOFF(data []byte) bool {
 	return len(data) >= 4 && binary.BigEndian.Uint32(data) == woffSignature
 }
 
-// IsWOFF2 reports whether the data begins with a WOFF 2 signature, which this
-// module reads far enough to refuse by name.
+// IsWOFF2 reports whether the data begins with a WOFF 2 signature. The two
+// formats share nothing but a name and this is how they are told apart; see
+// woff2.go for what the second one is.
 func IsWOFF2(data []byte) bool {
 	return len(data) >= 4 && binary.BigEndian.Uint32(data) == woff2Signature
 }
@@ -94,8 +94,7 @@ type woffEntry struct {
 // are not returned. Neither is read, which is also why neither is validated.
 func DecodeWOFF(data []byte) ([]byte, error) {
 	if IsWOFF2(data) {
-		return nil, errors.New("fonts: this is a WOFF 2 font, which this engine does not read; " +
-			"WOFF 2 re-encodes the outline table rather than compressing it")
+		return DecodeWOFF2(data)
 	}
 	if !IsWOFF(data) {
 		return nil, errors.New("fonts: not a WOFF font")
