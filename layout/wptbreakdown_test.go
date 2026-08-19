@@ -174,12 +174,28 @@ func TestWPTBreakdown(t *testing.T) {
 			broke++
 			continue
 		}
-		want, wantFindings, wantBlank, err := renderForCompareDetail(root, rt.ref)
-		if err != nil {
+		// Any of the references may satisfy the test — see the reftest type —
+		// and the findings that count are the ones of the reference that did.
+		// A test held back by a taint on a reference it never matched would be
+		// counted against a rule that had nothing to do with it.
+		var wantFindings []Finding
+		wantBlank, passed, readable := false, false, false
+		for _, ref := range rt.refs {
+			want, findings, blank, err := renderForCompareDetail(root, ref.path)
+			if err != nil {
+				continue
+			}
+			readable = true
+			wantFindings, wantBlank = findings, blank
+			if pictureEqual(got, want, pageClip()) != ref.mismatch {
+				passed = true
+				break
+			}
+		}
+		if !readable {
 			broke++
 			continue
 		}
-		passed := pictureEqual(got, want, pageClip()) != rt.mismatch
 
 		// The rules that fired anywhere in the pair. A test is held back by a
 		// taint on either document, so the two are counted together.

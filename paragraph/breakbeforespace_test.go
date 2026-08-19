@@ -22,7 +22,7 @@ import "testing"
 // opportunities returns the index of every piece that may begin a line.
 func opportunities(t *testing.T, text string, ws WhiteSpace) []int {
 	t.Helper()
-	pieces, _ := SplitAtBreaks(text, ws, WordBreak{}, LineBreak{})
+	pieces, _ := SplitAtBreaks(text, ws, WordBreak{}, LineBreak{}, Hyphens{})
 	var out []int
 	for i, p := range pieces {
 		if p.BreakBefore {
@@ -37,7 +37,7 @@ func TestNoBreakBeforeASpaceSeparatorAfterAnIdeograph(t *testing.T) {
 	ws := WhiteSpace{PreserveBreaks: true, Wrap: true, BreakSpaces: true}
 	// Two ideographs and an ogham space mark. The break between the ideographs
 	// stands; the one before the stemline does not.
-	pieces, _ := SplitAtBreaks("ああ\u1680", ws, WordBreak{}, LineBreak{})
+	pieces, _ := SplitAtBreaks("ああ\u1680", ws, WordBreak{}, LineBreak{}, Hyphens{})
 	for i, p := range pieces {
 		if p.Space && p.BreakBefore {
 			t.Errorf("piece %d (%q) may begin a line, and it is white space that "+
@@ -59,7 +59,7 @@ func TestTheSameHoldsForAnOrdinarySpace(t *testing.T) {
 		{PreserveBreaks: true, Wrap: true},
 		{PreserveBreaks: true, Wrap: true, BreakSpaces: true},
 	} {
-		pieces, _ := SplitAtBreaks("あ あ", ws, WordBreak{}, LineBreak{})
+		pieces, _ := SplitAtBreaks("あ あ", ws, WordBreak{}, LineBreak{}, Hyphens{})
 		for i, p := range pieces {
 			if p.Space && p.BreakBefore {
 				t.Errorf("%+v: piece %d (%q) may begin a line", ws, i, p.Text)
@@ -73,7 +73,7 @@ func TestTheSameHoldsForAnOrdinarySpace(t *testing.T) {
 // ideograph followed by a space would join the two lines into one.
 func TestABreakIsStillOfferedAfterTheSpace(t *testing.T) {
 	ws := WhiteSpace{PreserveBreaks: true, Wrap: true, BreakSpaces: true}
-	pieces, _ := SplitAtBreaks("あ\u1680あ", ws, WordBreak{}, LineBreak{})
+	pieces, _ := SplitAtBreaks("あ\u1680あ", ws, WordBreak{}, LineBreak{}, Hyphens{})
 	found := false
 	for i, p := range pieces {
 		if i > 0 && p.BreakBefore && !pieces[i-1].BreakBefore && pieces[i-1].Space {
@@ -92,7 +92,7 @@ func TestABreakIsStillOfferedAfterTheSpace(t *testing.T) {
 // is deliberately separate.
 func TestLineBreakAnywhereStillBreaksBeforeSpace(t *testing.T) {
 	ws := WhiteSpace{PreserveBreaks: true, Wrap: true, BreakSpaces: true}
-	pieces, _ := SplitAtBreaks("ああ\u1680", ws, WordBreak{}, LineBreak{Anywhere: true})
+	pieces, _ := SplitAtBreaks("ああ\u1680", ws, WordBreak{}, LineBreak{Anywhere: true}, Hyphens{})
 	if len(pieces) == 0 {
 		t.Fatal("no pieces")
 	}

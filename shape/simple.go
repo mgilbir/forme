@@ -68,10 +68,15 @@ func (f *Face) IsSimple() bool { return f.simple }
 func (f *Face) encodeSimple(s string) (codes []byte, missing int) {
 	codes = make([]byte, 0, len(s))
 	for _, r := range s {
-		if hiddenBeforeShaping(r) {
+		if hiddenAfterShaping(r) {
 			// WinAnsi gives the soft hyphen a code of its own, so without this
 			// a word marked as breakable reaches the page with a hyphen through
 			// it. See ignorable.go.
+			//
+			// The *after* predicate, because nothing here will ever shape: a
+			// joiner has nothing to ask of a one-code-per-character encoding, and
+			// what it would otherwise get is the substitution an unmapped
+			// character gets, which is a space.
 			continue
 		}
 		code, _, ok := stdCode(r)

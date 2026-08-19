@@ -3,6 +3,8 @@ package layout
 import (
 	"strings"
 	"testing"
+
+	"github.com/mgilbir/forme/style"
 )
 
 // text-transform, CSS Text §2.1.
@@ -14,8 +16,6 @@ import (
 // page. The width assertions are the other half — a transform that changed the
 // drawing and not the measurement would leave the lines broken for the original
 // text.
-
-// drawn joins the text of every run painted, in painting order.
 
 // drawn joins the text of every run painted, in painting order.
 func drawn(ops []Op) string {
@@ -125,5 +125,114 @@ func TestTextTransformIsInherited(t *testing.T) {
 		noDefaults+`#o { text-transform: uppercase }`)
 	if got := drawn(ops); got != "QUIET" {
 		t.Errorf("an inherited text-transform drew %q, want %q", got, "QUIET")
+	}
+}
+
+// TestAFullCaseMappingReachesThePageAndIsMeasured.
+//
+// "straße" uppercases to "STRASSE" — one character became two — and CSS Text
+// §2.1.1 asks for that mapping by name. Go's own strings.ToUpper is one to one
+// and cannot say it, so this is the half of the transform that comes from a
+// table; paragraph/texttransform_test.go has the mappings themselves.
+//
+// The measurement is the half worth asserting here, and the reason is the same
+// one that put the transform in the box tree rather than at paint time: a
+// mapping that made the text longer and was applied after the line breaking
+// would overflow the line by exactly the difference, and nothing upstream would
+// know. Comparing the widths against a document that spells the result out is
+// what says the engine measured what it drew.
+func TestAFullCaseMappingReachesThePageAndIsMeasured(t *testing.T) {
+	const css = noDefaults + `#p { font-family: Helvetica; font-size: 100px }`
+	width := func(markup, extra string) style.Unit {
+		t.Helper()
+		root := layoutOf(t, 4000, `<div id="p">`+markup+`</div>`, css+extra)
+		f := find(t, root, "p")
+		if len(f.Lines) != 1 || len(f.Lines[0].Runs) == 0 {
+			t.Fatalf("%q laid out as %d lines", markup, len(f.Lines))
+		}
+		var w style.Unit
+		for _, r := range f.Lines[0].Runs {
+			w = w.Add(r.Width)
+		}
+		return w
+	}
+
+	if got := drawn(paintOf(t, `<div id="p">straße</div>`,
+		css+`#p { text-transform: uppercase }`)); got != "STRASSE" {
+		t.Fatalf("the page says %q; a sharp s uppercases to two letters", got)
+	}
+
+	transformed := width("straße", `#p { text-transform: uppercase }`)
+	spelledOut := width("STRASSE", "")
+	if transformed != spelledOut {
+		t.Errorf("the uppercased text measures %v and the same letters written out "+
+			"measure %v; the line was broken for the text before the mapping",
+			transformed, spelledOut)
+	}
+	// The control, so that this cannot pass by measuring nothing: the untransformed
+	// word is narrower, which is the whole reason the difference matters.
+	if untransformed := width("straße", ""); untransformed >= spelledOut {
+		t.Errorf("%q measures %v and %q measures %v; the fixture would pass with "+
+			"the transform doing nothing", "straße", untransformed, "STRASSE", spelledOut)
+	}
+}
+
+// TestFullWidthIsAppliedAfterTheWhiteSpaceProcessing.
+//
+// "full-width" maps U+0020 to U+3000 IDEOGRAPHIC SPACE, which is not collapsible
+// white space. So the order of the two is not a detail: a run of three spaces
+// collapses to one and then becomes one ideographic space, and transforming
+// first would produce three ideographic spaces that nothing may collapse and
+// that the page would show side by side.
+//
+// This is the only value of the property for which the order is observable at
+// all — a case change neither creates nor destroys white space — and box.go is
+// where the order is chosen.
+func TestFullWidthIsAppliedAfterTheWhiteSpaceProcessing(t *testing.T) {
+	got := drawn(paintOf(t, "<div id=\"p\">a   b</div>",
+		noDefaults+`#p { text-transform: full-width }`))
+	if want := "ａ　ｂ"; got != want {
+		t.Errorf("the page says %q, want %q — three spaces collapse to one before "+
+			"the transform makes it an ideographic space", got, want)
+	}
+}
+
+// TestFullWidthIsMeasuredAndNotOnlyDrawn, which is the same argument as for the
+// case mappings and a larger difference: a fullwidth digit is an ideograph's
+// width and the digit it came from is about half that.
+func TestFullWidthIsMeasuredAndNotOnlyDrawn(t *testing.T) {
+	const css = noDefaults + `#p { font-family: Helvetica; font-size: 100px }`
+	width := func(markup, extra string) style.Unit {
+		t.Helper()
+		root := layoutOf(t, 4000, `<div id="p">`+markup+`</div>`, css+extra)
+		f := find(t, root, "p")
+		var w style.Unit
+		for _, line := range f.Lines {
+			for _, r := range line.Runs {
+				w = w.Add(r.Width)
+			}
+		}
+		return w
+	}
+	transformed := width("123", `#p { text-transform: full-width }`)
+	spelledOut := width("１２３", "")
+	if transformed != spelledOut {
+		t.Errorf("the transformed digits measure %v and the fullwidth digits written "+
+			"out measure %v", transformed, spelledOut)
+	}
+	if narrow := width("123", ""); narrow == spelledOut {
+		t.Errorf("%q and %q both measure %v, so this fixture would pass with the "+
+			"transform doing nothing", "123", "１２３", narrow)
+	}
+}
+
+// TestFullSizeKanaReachesThePage. The mapping is smaller than full-width's and
+// its own tests live beside the table; what this adds is that the value is
+// recognised at all — it was among the ones the property parser threw away.
+func TestFullSizeKanaReachesThePage(t *testing.T) {
+	got := drawn(paintOf(t, `<div id="p">ぁぃぅ</div>`,
+		noDefaults+`#p { text-transform: full-size-kana }`))
+	if want := "あいう"; got != want {
+		t.Errorf("the page says %q, want %q", got, want)
 	}
 }

@@ -45,18 +45,43 @@ import (
 // each text node afresh would set "EXample". That is what boxBuilder.afterWord
 // is for.
 //
-// # What is not done
+// # Why the case mappings are not Go's alone
 //
-// The case mappings are Go's, which are Unicode's simple one-to-one mappings.
-// The full mappings of SpecialCasing.txt are not applied, so "straße" uppercases
-// to "STRAßE" rather than "STRASSE", and a final sigma does not become ς when a
-// word is lowercased. Both are wrong and both are wrong *visibly* — a reader
-// sees the letter that was not mapped — rather than in the silent way this
-// engine's guardrails exist for, and doing them properly means a case-mapping
-// table this module does not otherwise need. One of the suite's tests is exactly
-// this: text-transform-uppercase-002 is a sharp s and nothing else.
+// strings.ToUpper applies Unicode's *simple* mappings, which are one character
+// to one character by construction. A great deal of ordinary text does not have
+// a one-to-one case: "straße" uppercases to "STRASSE", and a simple mapping
+// cannot say so, so Go leaves the ß alone and produces "STRAßE". CSS Text
+// §2.1.1 asks for the full mappings by name, and casingtable.go holds them —
+// see cmd/gencasing for where they come from and which were left out.
+//
+// The tables are consulted first and Go's mapping is the fallback, so a
+// character with no full mapping — which is all but a hundred of them — costs a
+// binary search over a table of a hundred entries and nothing else. Text that
+// contains no such character is not copied at all: it takes the same
+// strings.ToUpper it always did.
+//
+// # What is still not done
+//
+// The conditional mappings. Three of them are language tailorings — Turkish and
+// Azeri map i and I to their dotted and dotless forms, Lithuanian keeps a dot
+// above a lowercased vowel — and applying one needs the element's language,
+// which the box tree does not carry down to here. The fourth is Final_Sigma: a
+// lowercased Σ is ς at the end of a word and σ inside one, which needs the
+// characters either side rather than a table. Both are visible faults — a
+// reader sees the wrong letter — rather than the silent kind this engine's
+// guardrails exist for.
 //
 // # What is done and looks like a fault
+//
+// Two of the suite's tests assert the *simple* mapping for characters Unicode
+// gives a full one, and both are left failing rather than special-cased.
+// text-transform-upperlower-016 wants "ᾀ" to uppercase to "ᾈ" and
+// text-transform-upperlower-006 wants "İ" to lowercase to "i"; Unicode says
+// "ἈΙ" and "i̇", and so do the two newer tests beside them —
+// text-transform-upperlower-035 spells out the same mappings and
+// text-transform-lowercase-102 is exactly the "İ" case. ᾈ is the *titlecase*
+// of ᾀ, which is a third mapping and is applied where a third mapping belongs.
+// The suite contradicts itself here and the specification does not.
 //
 // Uppercasing Georgian Mkhedruli produces Mtavruli, so "ა" becomes "Ა". The
 // suite's text-transform-unicase-001 asserts that it must not — "verifies that
@@ -67,32 +92,69 @@ import (
 // the alternative is a table of scripts this engine declines to uppercase, which
 // is a rule no specification asks for.
 
-// TextTransform is what the property asks for.
+// TextTransform is what the property asks for, as a set rather than a choice.
+//
+// CSS Text 3 §2.1.1 states the grammar as
+//
+//	none | [ capitalize | uppercase | lowercase ] || full-width || full-size-kana
+//
+// which is one case change *and* either remapping, in any combination and in any
+// order — "text-transform: full-width full-size-kana lowercase" is a declaration
+// the suite writes. So the value is a set of bits and not one of five things.
 type TextTransform uint8
 
 const (
-	TransformNone TextTransform = iota
-	TransformUppercase
+	TransformNone TextTransform = 0
+
+	// The three case changes, which the grammar makes mutually exclusive.
+	TransformUppercase TextTransform = 1 << iota
 	TransformLowercase
 	TransformCapitalize
+
+	// The two remappings, which combine with a case change and with each other.
+	TransformFullWidth
+	TransformFullSizeKana
+
+	// transformCase is the part of a value that changes case, for the places
+	// that need to ask which of the three was given without naming all three.
+	transformCase = TransformUppercase | TransformLowercase | TransformCapitalize
 )
 
 // TransformOf reads the property.
 //
 // An unrecognised value is "none", which is what the cascade would have produced
-// had the declaration been thrown out. "full-width" and "full-size-kana" are
-// among the unrecognised ones: both remap characters rather than changing case,
-// and treating either as a case change would silently do something else.
+// had the declaration been thrown out — and that goes for the whole declaration
+// rather than the keyword that was not recognised, because a declaration with
+// one bad keyword in it is invalid CSS and is dropped entire. Two case changes
+// are refused for the same reason: the grammar allows one.
 func TransformOf(value string) TextTransform {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "uppercase":
-		return TransformUppercase
-	case "lowercase":
-		return TransformLowercase
-	case "capitalize":
-		return TransformCapitalize
+	var out TextTransform
+	for _, word := range strings.Fields(strings.ToLower(value)) {
+		var bit TextTransform
+		switch word {
+		case "none":
+			// Valid on its own, and invalid beside anything else. Both answers
+			// are the same one, so there is nothing to distinguish here.
+			return TransformNone
+		case "uppercase":
+			bit = TransformUppercase
+		case "lowercase":
+			bit = TransformLowercase
+		case "capitalize":
+			bit = TransformCapitalize
+		case "full-width":
+			bit = TransformFullWidth
+		case "full-size-kana":
+			bit = TransformFullSizeKana
+		default:
+			return TransformNone
+		}
+		if out&bit != 0 || (bit&transformCase != 0 && out&transformCase != 0) {
+			return TransformNone
+		}
+		out |= bit
 	}
-	return TransformNone
+	return out
 }
 
 // TransformText applies the property to one text node.
@@ -109,22 +171,159 @@ func TransformText(text string, kind TextTransform, inWord bool) (string, bool) 
 	if text == "" {
 		return text, inWord
 	}
-	switch kind {
+	// The order is the specification's and is not the order the keywords were
+	// written in: case first, then width, then size. §2.1.1's own example is
+	// "full-width full-size-kana lowercase", which lowercases first.
+	//
+	// Only the first of the two orderings is observable, and that was measured
+	// rather than assumed: over every character of Unicode, seventeen tell case
+	// from width apart — ß among them, because "SS" has a fullwidth form and ß
+	// has none — and *none* tells full-width from full-size-kana, or either of
+	// them from a case change. The code follows the specification's order all the
+	// same; texttransform_test.go says which part of it a test can hold.
+	switch kind & transformCase {
 	case TransformUppercase:
-		text = strings.ToUpper(text)
+		text = fullCased(text, fullUppercase[:], unicode.ToUpper, strings.ToUpper)
 	case TransformLowercase:
-		text = strings.ToLower(text)
+		text = fullCased(text, fullLowercase[:], unicode.ToLower, strings.ToLower)
 	case TransformCapitalize:
 		text = capitalizeWords(text, inWord)
 	}
+	if kind&TransformFullWidth != 0 {
+		text = remapped(text, fullWidthForms[:])
+	}
+	if kind&TransformFullSizeKana != 0 {
+		text = remapped(text, fullSizeKana[:])
+	}
 	return text, EndsInWord(text)
+}
+
+// remapped replaces every character that one of the width tables names.
+//
+// Unlike a case change this is one character for one character, so the result
+// is the same number of characters as the text — though not the same number of
+// bytes, since "a" is one and "ａ" is three. Text that names none of them is
+// returned as it arrived rather than copied, which is the ordinary case for
+// full-size-kana in particular: a page setting it has kana on some of its lines
+// and not on the rest.
+func remapped(text string, table []widthPair) string {
+	i := firstRemapped(text, table)
+	if i < 0 {
+		return text
+	}
+	var out strings.Builder
+	out.Grow(len(text) + 8)
+	out.WriteString(text[:i])
+	for _, r := range text[i:] {
+		if to, ok := lookupWidth(r, table); ok {
+			out.WriteRune(to)
+		} else {
+			out.WriteRune(r)
+		}
+	}
+	return out.String()
+}
+
+// firstRemapped returns the byte offset of the first character the table names,
+// or -1 if it names none of them.
+//
+// There is no ASCII shortcut here, and that is the difference from
+// firstFullCase: nearly half of the fullwidth table is ASCII, because turning
+// "6" into "６" is what the value is for.
+func firstRemapped(text string, table []widthPair) int {
+	for i, r := range text {
+		if _, ok := lookupWidth(r, table); ok {
+			return i
+		}
+	}
+	return -1
+}
+
+// lookupWidth searches one of the generated width tables, which are sorted.
+func lookupWidth(r rune, table []widthPair) (rune, bool) {
+	i, j := 0, len(table)
+	for i < j {
+		h := int(uint(i+j) >> 1)
+		if table[h].from < r {
+			i = h + 1
+		} else {
+			j = h
+		}
+	}
+	if i < len(table) && table[i].from == r {
+		return table[i].to, true
+	}
+	return 0, false
+}
+
+// fullCased maps every character of a string, preferring the full mapping.
+//
+// The whole-string function is the fast path and does the work whenever no
+// character of the text has a full mapping — which is the ordinary case, and
+// keeps an ASCII heading on the byte-wise loop inside strings.ToUpper rather
+// than on a rune-by-rune one here. Only text that really does contain one of
+// the hundred characters in the table is rebuilt.
+func fullCased(text string, table []fullCase, simple func(rune) rune, whole func(string) string) string {
+	i := firstFullCase(text, table)
+	if i < 0 {
+		return whole(text)
+	}
+	var out strings.Builder
+	// The mappings are longer than what they replace, so this is a floor rather
+	// than a guess; it saves the first growth and not the rest.
+	out.Grow(len(text) + 8)
+	out.WriteString(whole(text[:i]))
+	for _, r := range text[i:] {
+		if s, ok := lookupFullCase(r, table); ok {
+			out.WriteString(s)
+		} else {
+			out.WriteRune(simple(r))
+		}
+	}
+	return out.String()
+}
+
+// firstFullCase returns the byte offset of the first character of the text that
+// has a full mapping, or -1 if none has.
+//
+// Every character in the tables is above U+007F, so ASCII — which is most text
+// this will ever see — is rejected a byte at a time without decoding.
+func firstFullCase(text string, table []fullCase) int {
+	for i, r := range text {
+		if r < utf8.RuneSelf {
+			continue
+		}
+		if _, ok := lookupFullCase(r, table); ok {
+			return i
+		}
+	}
+	return -1
+}
+
+// lookupFullCase searches one of the generated tables, which are sorted.
+func lookupFullCase(r rune, table []fullCase) (string, bool) {
+	i, j := 0, len(table)
+	for i < j {
+		h := int(uint(i+j) >> 1)
+		if table[h].r < r {
+			i = h + 1
+		} else {
+			j = h
+		}
+	}
+	if i < len(table) && table[i].r == r {
+		return table[i].s, true
+	}
+	return "", false
 }
 
 // capitalizeWords titlecases the first letter of every word.
 //
 // Titlecase rather than uppercase, which matters for exactly the digraphs it was
 // invented for: U+01F3 "ǳ" titlecases to "ǲ" and uppercases to "Ǳ", and a name
-// set in the second form is set wrongly.
+// set in the second form is set wrongly. It is also a third mapping rather than
+// a variation on the other two — "ß" titlecases to "Ss" and uppercases to "SS" —
+// so it has a table of its own.
 func capitalizeWords(text string, inWord bool) string {
 	var out strings.Builder
 	out.Grow(len(text))
@@ -136,7 +335,11 @@ func capitalizeWords(text string, inWord bool) string {
 		i += size
 
 		if !inWord && unicode.IsLetter(r) {
-			out.WriteRune(unicode.ToTitle(r))
+			if s, ok := lookupFullCase(r, fullTitlecase[:]); ok {
+				out.WriteString(s)
+			} else {
+				out.WriteRune(unicode.ToTitle(r))
+			}
 		} else {
 			out.WriteRune(r)
 		}

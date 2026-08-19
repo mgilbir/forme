@@ -180,7 +180,7 @@ func FuzzSplitAtBreaks(f *testing.F) {
 			t.Skip()
 		}
 		w := whiteSpaces[int(mode)%len(whiteSpaces)]
-		pieces, _ := SplitAtBreaks(text, w.ws, WordBreak{}, LineBreak{})
+		pieces, _ := SplitAtBreaks(text, w.ws, WordBreak{}, LineBreak{}, Hyphens{})
 
 		var b strings.Builder
 		for _, p := range pieces {

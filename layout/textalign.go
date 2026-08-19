@@ -53,7 +53,11 @@ func alignmentOf(b *Box, rtl bool) textAlign {
 		return alignRight
 	case "center":
 		return alignCenter
-	case "justify":
+	case "justify", "justify-all":
+		// justify-all is CSS Text 3's shorthand value for "justify every line,
+		// the last one included". Every line but the last is justified either
+		// way; which of the two was written is what lineAlignment reads when
+		// the line *is* the last.
 		return alignJustify
 	case "end":
 		if rtl {
@@ -71,15 +75,120 @@ func alignmentOf(b *Box, rtl bool) textAlign {
 	return alignLeft
 }
 
+// startAlignment and endAlignment are the two logical edges, resolved against
+// the inline base direction the line was set in.
+func startAlignment(rtl bool) textAlign {
+	if rtl {
+		return alignRight
+	}
+	return alignLeft
+}
+
+func endAlignment(rtl bool) textAlign {
+	if rtl {
+		return alignLeft
+	}
+	return alignRight
+}
+
+// justificationOf reads text-justify: whether a justified line is stretched at
+// all, and which value to report as unhandled if it asked for a method this
+// engine does not have.
+//
+// §7.3 has five values and this engine performs one of them. "auto" is
+// deliberately left to the user agent — the specification says so — and
+// spreading the word spaces is what every engine does for text that has word
+// spaces, which is what "inter-word" names explicitly. "none" is the one value
+// that changes the answer rather than the method, and it is acted on.
+//
+// "inter-character" and "distribute" put the slack between *letters* as well,
+// which is how Thai and Chinese are justified and is not a variation on this:
+// it needs the slack apportioned inside a run and the run re-drawn glyph by
+// glyph. They are reported rather than approximated, because a page justified
+// between the wrong things looks deliberate.
+func justificationOf(b *Box) (allowed bool, unhandled string) {
+	switch v := strings.ToLower(strings.TrimSpace(b.Style["text-justify"])); v {
+	case "none":
+		return false, ""
+	case "", "auto", "inter-word":
+		return true, ""
+	default:
+		return true, v
+	}
+}
+
+// lineAlignment resolves where one line sits, and whether its slack is spread
+// across it rather than left at one end.
+//
+// The last line of a block is not aligned like the rest of it, and CSS Text 3
+// §7.2 is where that lives: text-align-last. The reason is typographic and old.
+// A justified paragraph looks justified because its lines share two straight
+// edges; the last line has no text to fill with, so stretching it would leave a
+// handful of words spread across the measure with a hand's breadth between
+// them. So the default is to place it where the paragraph starts and leave it
+// short — and text-align-last is how an author asks for something else.
+//
+// "a line right before a forced line break" counts as a last line too, which is
+// the specification's own wording and is why the caller passes a flag rather
+// than an index: a <br> ends a line for this purpose exactly as the end of the
+// block does.
+func lineAlignment(b *Box, rtl, last bool) (align textAlign, spread bool) {
+	a := alignmentOf(b, rtl)
+	if last {
+		a = lastLineAlignment(b, rtl)
+	}
+	if a != alignJustify {
+		return a, false
+	}
+	// A justified line is placed where its start edge is and stretched from
+	// there. text-justify: none asks for the placement without the stretching,
+	// which leaves an ordinary line at its start edge.
+	if allowed, _ := justificationOf(b); !allowed {
+		return startAlignment(rtl), false
+	}
+	return alignJustify, true
+}
+
+// lastLineAlignment is §7.2's own resolution, without the separate question of
+// whether justification is switched on at all.
+func lastLineAlignment(b *Box, rtl bool) textAlign {
+	switch strings.ToLower(strings.TrimSpace(b.Style["text-align-last"])) {
+	case "left":
+		return alignLeft
+	case "right":
+		return alignRight
+	case "center":
+		return alignCenter
+	case "start":
+		return startAlignment(rtl)
+	case "end":
+		return endAlignment(rtl)
+	case "justify":
+		return alignJustify
+	}
+	// auto, and anything unrecognised. §7.2: "content on the affected line is
+	// aligned per text-align-all unless text-align-all is justify, in which
+	// case it is aligned per the start value of text-align".
+	//
+	// justify-all is the exception: it is the spelling that asks for the last
+	// line as well, and is the whole difference between the two.
+	if strings.EqualFold(strings.TrimSpace(b.Style["text-align"]), "justify-all") {
+		return alignJustify
+	}
+	if a := alignmentOf(b, rtl); a != alignJustify {
+		return a
+	}
+	return startAlignment(rtl)
+}
+
 // alignLine returns how far a line's content moves within the width it was given.
 //
 // used is the width the content actually occupies with its hanging white space
 // already discounted. A line at least as wide as the space it has does not move:
 // an overfull line overflows to the right whatever the alignment says, because
 // moving it would push it off the other edge as well.
-func (l *layouter) alignLine(b *Box, rtl bool, lineWidth, used style.Unit) style.Unit {
+func (l *layouter) alignLine(b *Box, align textAlign, lineWidth, used style.Unit) style.Unit {
 	slack := lineWidth.Sub(used)
-	align := alignmentOf(b, rtl)
 	// A justified line starts where "start" would put it, and the slack is then
 	// spread across its spaces by justifyLine, which is the caller's next step
 	// and needs the line's runs rather than a single offset. So there is nothing
@@ -141,6 +250,30 @@ func (l *layouter) alignLine(b *Box, rtl bool, lineWidth, used style.Unit) style
 // fall at the break. So it is stepped over rather than subtracted, which leaves
 // a hanging space *before* a closing margin still discounted.
 func alignedWidth(runs []inlineItem, total style.Unit) style.Unit {
+	for i, hangs := range hangingTail(runs) {
+		if hangs {
+			total = total.Sub(runs[i].Width)
+		}
+	}
+	return style.Max(total, 0)
+}
+
+// hangingTail marks the white space at the logical end of a line that §4.1.2
+// hangs past it.
+//
+// It is a walk from the end of the *logical* order and not a test of where
+// anything sits, and on a left-to-right line the two would agree. On a
+// right-to-left one they do not: rule L1 gives the trailing spaces the
+// paragraph's own level, so they are drawn at the line's left edge — before
+// everything else. Justification asked "is this space past where the content
+// ends", got "no, it is at the very beginning", and stretched the hang. A
+// right-to-left justified line came out a space short of its own margin with
+// the gap between its words too narrow by the same amount.
+//
+// The alignment and the justification have to agree about which items these
+// are, which is why there is one walk and not two.
+func hangingTail(runs []inlineItem) []bool {
+	hangs := make([]bool, len(runs))
 	for i := len(runs) - 1; i >= 0; i-- {
 		item := runs[i]
 		if item.Inset {
@@ -160,7 +293,7 @@ func alignedWidth(runs []inlineItem, total style.Unit) style.Unit {
 			// edge, and under pre-wrap it does not.
 			break
 		}
-		total = total.Sub(item.Width)
+		hangs[i] = true
 	}
-	return style.Max(total, 0)
+	return hangs
 }

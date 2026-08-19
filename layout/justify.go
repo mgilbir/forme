@@ -51,57 +51,63 @@ func justifiableSpace(text string) bool {
 	return strings.Trim(text, " ") == ""
 }
 
-// justifyLine spreads slack across the word spaces of one line, and reports
+// justifyItems spreads slack across the word spaces of one line, and reports
 // whether it found anywhere to put it.
 //
-// runs and atomics are everything positioned on the line: the text and the
-// inline-level boxes — an image, an inline-block — which move with the text
-// around them or the line comes apart.
+// It works on the line's items and their positions rather than on the runs that
+// will be drawn from them, and that is the whole of what makes it correct. A
+// line carries more than text: the atomic inlines, and the margin, border and
+// padding an inline box contributes at each of its edges. All of them move when
+// a space between them grows, and all of them are placed from these positions —
+// so spreading the slack here moves everything by construction, where spreading
+// it over the drawn runs moved the text and left the boxes behind.
 //
-// contentEnd is where the line's own content stops, which is not where the line
-// box does: trailing white space hangs past it under §4.1.2 and must not be
-// stretched, because it is not between two words and because it is not on the
-// page in the first place.
-func justifyLine(runs []TextRun, atomics []*Fragment, contentEnd, slack style.Unit) bool {
-	if slack <= 0 || len(runs) == 0 {
+// xs and widths are updated in place: xs is where each item sits before the
+// line's own alignment offset is added, and widths is what each occupies on
+// this line, which for a stretched space is more than the font gave.
+//
+// hangs marks the white space at the end of the line that §4.1.2 hangs past it
+// — see hangingTail. It must not be stretched: it is not between two words and
+// it is not on the page in the first place.
+func justifyItems(items []inlineItem, xs, widths []style.Unit, hangs []bool, slack style.Unit) bool {
+	if slack <= 0 || len(items) == 0 {
 		return false
 	}
 
-	// The expansion opportunities, in the order they appear across the line.
-	// X order and not slice order: a right-to-left line's runs are stored in
-	// logical order and drawn in visual order, and what is being divided up is
-	// the visual gap between the two margins.
-	type slot struct {
-		x     style.Unit
-		run   int // index into runs, or -1 for an atomic
-		child int // index into atomics
+	// The items in the order they appear across the line. X order and not slice
+	// order: a right-to-left line's items are stored in logical order and drawn
+	// in visual order, and what is being divided up is the visual gap between
+	// the two margins.
+	order := make([]int, len(items))
+	for i := range order {
+		order[i] = i
 	}
-	slots := make([]slot, 0, len(runs)+len(atomics))
-	for i := range runs {
-		slots = append(slots, slot{x: runs[i].X, run: i, child: -1})
-	}
-	for i := range atomics {
-		slots = append(slots, slot{x: atomics[i].BorderRect.X, run: -1, child: i})
-	}
-	sort.SliceStable(slots, func(a, b int) bool { return slots[a].x < slots[b].x })
+	sort.SliceStable(order, func(a, b int) bool { return xs[order[a]] < xs[order[b]] })
 
 	// A space is an opportunity only when something follows it on the line. A
 	// run of spaces at the visual end is the hang, and stretching it would push
 	// the line's last word off the edge to make room for white space nobody can
 	// see.
 	last := -1
-	for i, s := range slots {
-		if s.run < 0 || !justifiableSpace(runs[s.run].Text) {
+	for i, k := range order {
+		if !justifiableSpace(items[k].Text) {
 			last = i
 		}
 	}
-	expands := func(i int, s slot) bool {
-		return i < last && s.run >= 0 && justifiableSpace(runs[s.run].Text) &&
-			s.x < contentEnd
+	// Which items expand. Nothing here reads a position, and that is worth
+	// saying rather than assuming: an earlier version asked whether a space sat
+	// past the end of the line's content, which is a question the loop below
+	// changes the answer to as it moves things along — so every opportunity
+	// after the first looked like a hanging space, and a line with two gaps came
+	// out with one stretched and the other not. Asking hangs instead, which is a
+	// property of the line's order rather than of anything's position, is what
+	// makes one pass and two passes the same answer.
+	expands := func(i, k int) bool {
+		return i < last && justifiableSpace(items[k].Text) && !hangs[k]
 	}
 	n := 0
-	for i, s := range slots {
-		if expands(i, s) {
+	for i, k := range order {
+		if expands(i, k) {
 			n++
 		}
 	}
@@ -119,13 +125,9 @@ func justifyLine(runs []TextRun, atomics []*Fragment, contentEnd, slack style.Un
 
 	var acc style.Unit
 	seen := 0
-	for i, s := range slots {
-		if s.run >= 0 {
-			runs[s.run].X = runs[s.run].X.Add(acc)
-		} else {
-			atomics[s.child].BorderRect.X = atomics[s.child].BorderRect.X.Add(acc)
-		}
-		if !expands(i, s) {
+	for i, k := range order {
+		xs[k] = xs[k].Add(acc)
+		if !expands(i, k) {
 			continue
 		}
 		step := base
@@ -137,7 +139,7 @@ func justifyLine(runs []TextRun, atomics []*Fragment, contentEnd, slack style.Un
 		// without the shift would overlap the next word; shifting without the
 		// widening would leave a decoration ruled under the line stopping short
 		// of the gap it is meant to cross.
-		runs[s.run].Width = runs[s.run].Width.Add(step)
+		widths[k] = widths[k].Add(step)
 		acc = acc.Add(step)
 	}
 	return true

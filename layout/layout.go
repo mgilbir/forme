@@ -392,9 +392,14 @@ type layouter struct {
 	reportedScripts map[string]bool
 	// reportedWordBreak is the same for the word-break values read as normal.
 	reportedWordBreak map[string]bool
+	// reportedHyphens is the same for the hyphens values read as manual.
+	reportedHyphens map[string]bool
 	// reportedLineBreak is the same again for line-break.
 	reportedLineBreak map[string]bool
-	reportedGlyphs    map[string]bool
+	// reportedTextJustify is the same again for text-justify, and is reported
+	// only where a line is being justified — see reportTextJustify.
+	reportedTextJustify map[string]bool
+	reportedGlyphs      map[string]bool
 	// reportedOverflow suppresses repeating one run's overflow per line.
 	reportedOverflow map[string]bool
 	// decorations memoizes the text decorations drawn across each box, which are

@@ -159,9 +159,34 @@ func hiddenAfterShaping(r rune) bool {
 // code point the property covers, and allocating a copy of every run to remove
 // nothing would cost more than the property is worth.
 func dropHiddenCharacters(runes []rune, offsets []int) ([]rune, []int) {
+	return dropHidden(runes, offsets, hiddenBeforeShaping)
+}
+
+// dropHiddenBeforeDrawing is dropHiddenCharacters for a face that will never
+// shape: the join controls go with everything else.
+//
+// A simple face maps one character to one code and positions nothing, so there
+// is no cursive joining for a joiner to ask for and no syllable for it to be
+// read inside — and, crucially, no shaping pass afterwards to take it back out
+// again. Left in, it falls through to the substitution an unmapped character
+// gets and reaches the page as a space, so "let\u200Cter" came out a character
+// wider than "letter" and a document using a non-joiner to spell a word
+// correctly was set with a gap in it.
+func dropHiddenBeforeDrawing(runes []rune, offsets []int) ([]rune, []int) {
+	return dropHidden(runes, offsets, hiddenAfterShaping)
+}
+
+// dropHidden removes the characters a predicate names, keeping the rest of a run
+// and the offsets that map it back to the text.
+//
+// It returns the input unchanged when there is nothing to drop, which is every
+// ordinary string: the scan is one comparison per character against the lowest
+// code point the property covers, and allocating a copy of every run to remove
+// nothing would cost more than the property is worth.
+func dropHidden(runes []rune, offsets []int, hidden func(rune) bool) ([]rune, []int) {
 	first := -1
 	for i, r := range runes {
-		if hiddenBeforeShaping(r) {
+		if hidden(r) {
 			first = i
 			break
 		}
@@ -172,7 +197,7 @@ func dropHiddenCharacters(runes []rune, offsets []int) ([]rune, []int) {
 	outR := append(make([]rune, 0, len(runes)-1), runes[:first]...)
 	outO := append(make([]int, 0, len(offsets)-1), offsets[:first]...)
 	for i := first + 1; i < len(runes); i++ {
-		if hiddenBeforeShaping(runes[i]) {
+		if hidden(runes[i]) {
 			continue
 		}
 		outR = append(outR, runes[i])
@@ -180,6 +205,19 @@ func dropHiddenCharacters(runes []rune, offsets []int) ([]rune, []int) {
 	}
 	return outR, outO
 }
+
+// DrawsNothing reports whether nothing at all is drawn for a character and it
+// occupies no width: Unicode's Default_Ignorable_Code_Point, less the Hangul
+// fillers, which are letters.
+//
+// It is exported for the line breaking, which has the same question to answer
+// for a different reason — CSS Text §8.2 adds letter-spacing after each
+// typographic character unit, and a character nothing is drawn for is not one.
+// Answering it there from a hand-written list is what this replaces: the list
+// had the characters somebody had met and stopped at U+2064, so the six
+// deprecated format controls above it each collected a letter-spacing of their
+// own.
+func DrawsNothing(r rune) bool { return hiddenAfterShaping(r) }
 
 // The Hangul fillers, named for the reason hiddenBeforeShaping gives.
 const (

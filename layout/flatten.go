@@ -2,6 +2,7 @@ package layout
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"github.com/mgilbir/forme/paragraph"
 	"github.com/mgilbir/forme/style"
@@ -272,6 +273,13 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			// box, whose extent is whatever its words turn out to need and
 			// which therefore has to be flattened into the run.
 			item := l.atomicItem(child, frame)
+			// CSS Text §5.1's exception, on the near side: the opportunity in
+			// front of the picture is not there when the character before it
+			// holds on to it. "a&#8288;<img>" is a word joiner and a picture,
+			// and the whole point of writing one is that they stay together.
+			if state.AfterBinding {
+				item.BreakBefore = false
+			}
 			item.BidiPara, item.BidiStart, item.BidiEnd = para, start, end
 			out = append(out, item)
 			// LB20's other half: a line may also begin after the picture, so
@@ -287,6 +295,12 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			// opportunity to the space put it one line further down again.
 			state.BreakOpportunity = true
 			state.AfterCollapsibleSpace = false
+			// The far side of the same exception. Which character follows is
+			// not known here — it may be in another text node — so what is
+			// recorded is that the opportunity came from a picture, and the
+			// code that sees the next character decides.
+			state.AfterAtomic = true
+			state.AfterBinding = false
 			continue
 		}
 		if child.IsText() {
@@ -565,7 +579,11 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	if unhandledLine != "" {
 		l.reportLineBreak(b, unhandledLine)
 	}
-	pieces, endedAtBreak := splitAtBreaks(b.Text, ws, wb, lb)
+	hy, unhandledHyphens := hyphensOf(b.Style["hyphens"])
+	if unhandledHyphens != "" {
+		l.reportHyphens(b, unhandledHyphens)
+	}
+	pieces, endedAtBreak := splitAtBreaks(b.Text, ws, wb, lb, hy)
 	if len(pieces) == 0 {
 		// A box that produced nothing passes an opportunity through rather than
 		// swallowing it — and it may have created one of its own, which is what
@@ -593,7 +611,17 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 
 	out := make([]inlineItem, 0, len(pieces))
 	state := in
-	for _, p := range pieces {
+	for i, p := range pieces {
+		// CSS Text §5.1's exception, on the far side: the opportunity a picture
+		// left behind is not offered to a character that holds on to it.
+		//
+		// Only the first piece can be the one next to the picture — after that
+		// there is text in between — and it is written as the index rather than
+		// as a flag the loop clears, because that is a thing a reader can check
+		// against the loop rather than against every path out of it.
+		if i == 0 && state.AfterAtomic && bindsToAtomicInline(p.Text) {
+			state.BreakOpportunity = false
+		}
 		if p.Segment {
 			// A segment break that survived Phase I is a break the author
 			// wrote, and it ends the line as firmly as a <br> does — and ends a
@@ -661,12 +689,33 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			})
 			out = append(out, item)
 		}
-		state = inlineState{AfterCollapsibleSpace: p.Collapsible}
+		state = inlineState{
+			AfterCollapsibleSpace: p.Collapsible,
+			// Whether the piece ended on a character that would hold on to a
+			// picture after it. A piece is a run between two opportunities, so
+			// its last character is the one next to whatever comes next.
+			AfterBinding: endsBinding(p.Text),
+		}
 	}
 	return out, inlineState{
 		BreakOpportunity:      endedAtBreak,
 		AfterCollapsibleSpace: state.AfterCollapsibleSpace,
+		AfterBinding:          state.AfterBinding,
 	}
+}
+
+// bindsToAtomicInline reports whether text begins with a character that holds
+// on to an atomic inline before it.
+func bindsToAtomicInline(text string) bool {
+	r, _ := utf8.DecodeRuneInString(text)
+	return r != utf8.RuneError && paragraph.BindsToAtomicInline(r)
+}
+
+// endsBinding reports whether text ends with one that holds on to an atomic
+// inline after it.
+func endsBinding(text string) bool {
+	r, _ := utf8.DecodeLastRuneInString(text)
+	return r != utf8.RuneError && paragraph.BindsToAtomicInline(r)
 }
 
 // textItemArgs is what one text item is built from. It is a struct because the
@@ -748,6 +797,15 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		BreakWord:   a.ow.BreakWord,
 		Anywhere:    a.ow.Anywhere,
 		Decorations: a.decorations, Spacing: a.spacing,
+	}
+	if p.Hyphen && a.last {
+		// The hyphen this piece would print, measured now: the line breaking has
+		// no face to ask and needs the width before it can decide whether the
+		// line may break here at all. Only the last run of a piece has an end
+		// for a hyphen to be at — a piece cut in two by a change of face is one
+		// word, and the hyphen belongs after all of it.
+		item.HyphenText = hyphenCharacter(b.Style["hyphenate-character"], a.run.Face)
+		item.Hyphen = l.br.MeasureSpaced(a.run.Face, item.HyphenText, a.size, a.spacing)
 	}
 	if !p.Tab {
 		// A tab is measured against a tab stop when it lands, so there is

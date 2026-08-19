@@ -168,6 +168,20 @@ func (b *blockFont) fills(v DrawText, measure func(s string, size float64) float
 	for i, r := range runes {
 		br, ok := b.rects[r]
 		if !ok {
+			// A character the face draws nothing for is not a glyph this has
+			// to place. It is absent from the table for the same reason it is
+			// absent from the page: the shaper takes the default-ignorables
+			// out before a glyph is chosen, so there is no outline to have
+			// been a rectangle or not.
+			//
+			// Asking the face rather than assuming is the point. A rune with
+			// no advance is not the same as one with no glyph — a combining
+			// mark has the first and not the second — and treating a mark as
+			// blank would drop ink from the picture.
+			if glyphs, _ := v.Face.ShapeGlyphs(string(r)); len(glyphs) == 0 {
+				rects[i] = blockRect{blank: true}
+				continue
+			}
 			return nil, false
 		}
 		rects[i] = br

@@ -130,7 +130,7 @@ type inlineDecor struct {
 // at is where the line box's own left edge sits within the block's content box,
 // with §16.2's alignment shift already in it, so that adding an item's offset
 // within the line gives a coordinate in the same space the line boxes are in.
-func (d *inlineDecor) addLine(index int, items []inlineItem, xs []style.Unit,
+func (d *inlineDecor) addLine(index int, items []inlineItem, xs, widths []style.Unit,
 	at, baseline style.Unit, stack *lineStack) {
 
 	// The items in the order they are *drawn*, because §8.6's pieces are visual:
@@ -167,7 +167,9 @@ func (d *inlineDecor) addLine(index int, items []inlineItem, xs []style.Unit,
 			continue
 		}
 		left := at.Add(xs[k])
-		right := left.Add(item.Width)
+		// The width the item took on *this* line, which for a space a
+		// justified line stretched is more than the font gave it.
+		right := left.Add(widths[k])
 		for _, box := range chain {
 			if pi, ok := open[box]; ok && lastAt[box] == pos-1 {
 				if left < d.pieces[pi].left {

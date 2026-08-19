@@ -706,9 +706,11 @@ func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSi
 	// breaks, draws and writes into the PDF is the text that will appear.
 	// texttransform.go works through why it cannot wait until paint time.
 	//
-	// It runs after the white-space processing rather than before it, which
-	// changes no answer — a case mapping neither creates nor destroys white space
-	// — and means "capitalize" sees the word boundaries the reader will.
+	// It runs after the white-space processing rather than before it, and the
+	// order is load-bearing for "full-width": that value maps U+0020 to U+3000
+	// IDEOGRAPHIC SPACE, which is not collapsible, so transforming first would
+	// turn a run of spaces into a run of spaces nothing may collapse. It is also
+	// what lets "capitalize" see the word boundaries the reader will.
 	text, b.afterWord = transformText(text,
 		transformOf(inherited["text-transform"]), b.afterWord)
 	if text == "" {

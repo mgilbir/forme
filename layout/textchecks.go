@@ -3,6 +3,7 @@ package layout
 import (
 	"strings"
 
+	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -74,16 +75,22 @@ func (l *layouter) reportWordBreak(b *Box, value string) {
 // Unlike its word-break counterpart it is conditional on the text, and the
 // condition is what keeps it honest. loose, normal and strict differ from auto
 // only in how strictly CJK text may break — around small kana, around iteration
-// marks, before centred punctuation — and this engine's whole CJK rule is
-// "between two ideographs", which all three leave alone. Over Latin text the
-// three values provably change nothing, and the suite says so: pre-wrap-004,
-// -005 and -006 exist to assert that "XX    XX" wraps the same under loose,
-// normal and strict as under auto. Warning there would be crying wolf on a page
-// that is correct.
+// marks, before centred punctuation — and over Latin text the three provably
+// change nothing. The suite says so: pre-wrap-004, -005 and -006 exist to assert
+// that "XX    XX" wraps the same under all of them. Warning there would be
+// crying wolf on a page that is correct.
 //
 // So the report is made where the difference could show, which is text with an
 // ideograph in it — the only text this engine breaks by a rule the three values
 // have anything to say about.
+//
+// What they have to say about it grew. This engine used to break CJK on one
+// rule, "between two ideographs", which all three values leave alone; it now
+// also refuses to begin a line with a closing bracket, an exclamation mark or a
+// non-starter, which is what linebreak.go is for. That is UAX #14's default and
+// so CSS's normal, and it is exactly the set loose relaxes and strict extends —
+// so the difference the report warns about is now real in both directions
+// rather than merely possible in one, which is what the message says.
 func (l *layouter) reportLineBreak(b *Box, value string) {
 	if !strings.ContainsFunc(b.Text, isIdeographic) {
 		return
@@ -99,7 +106,36 @@ func (l *layouter) reportLineBreak(b *Box, value string) {
 		Rule:     RuleUnsupportedValue,
 		Property: "line-break",
 		Message: value + " was read as auto, so CJK text may break where the " +
-			"value asked it not to",
+			"value asked it not to, or hold together where it asked it to break",
+		Path: PathOf(b.Element),
+	})
+}
+
+// reportTextJustify reports a justification method this engine does not perform.
+//
+// It is called only where a line is actually being justified, which is the
+// condition that makes the value matter: text-justify on a block that is not
+// justified changes nothing, and warning there would be crying wolf on a page
+// that is correct. The same reasoning as reportLineBreak's, and for the same
+// reason — a finding nobody can act on is a finding nobody reads.
+//
+// What the values ask for is real and not a nuance. inter-character puts the
+// slack between letters as well as between words, which is how Thai and
+// Chinese are justified; a page that spread it between the words instead has
+// the right margins and the wrong text.
+func (l *layouter) reportTextJustify(b *Box, value string) {
+	if l.reportedTextJustify == nil {
+		l.reportedTextJustify = map[string]bool{}
+	}
+	if l.reportedTextJustify[value] {
+		return
+	}
+	l.reportedTextJustify[value] = true
+	l.rec.ReportDetail(Finding{
+		Rule:     RuleUnsupportedValue,
+		Property: "text-justify",
+		Message: value + " was read as auto, so the line was stretched between " +
+			"its words rather than in the way the value asked for",
 		Path: PathOf(b.Element),
 	})
 }
@@ -189,4 +225,114 @@ func (l *layouter) checkGlyphs(b *Box, face *shape.Face, text string) {
 			Path: PathOf(b.Element),
 		})
 	}
+}
+
+// reportHyphens reports a hyphens value this engine reads as manual.
+//
+// There is one: "auto", which asks the engine to hyphenate words that contain
+// no soft hyphen at all. Doing it needs a set of hyphenation patterns for the
+// document's language — Liang's, one table per language, and the tables are
+// large and are not derivable from anything Unicode publishes — so what a
+// document gets is the soft hyphens it wrote and no more.
+//
+// That is a page missing line breaks a browser would make, which shows as
+// looser lines rather than as anything obviously wrong, so it is exactly the
+// kind of difference a reader cannot see and a finding has to say.
+//
+// "manual" and "none" are both implemented and neither is reported.
+//
+// Once per value per document, on the model of reportWordBreak.
+func (l *layouter) reportHyphens(b *Box, value string) {
+	if l.reportedHyphens == nil {
+		l.reportedHyphens = map[string]bool{}
+	}
+	if l.reportedHyphens[value] {
+		return
+	}
+	l.reportedHyphens[value] = true
+	l.rec.ReportDetail(Finding{
+		Rule:     RuleUnsupportedValue,
+		Property: "hyphens",
+		Message: value + " was read as manual, so a word is broken only where a " +
+			"soft hyphen asks and never where a dictionary would",
+		Path: PathOf(b.Element),
+	})
+}
+
+// hyphenCharacter is what a broken word ends with, which the document may say.
+//
+// CSS Text §6.3's hyphenate-character is "auto | <string>". The keyword leaves
+// the choice to the engine, which is hyphenTextFor below; a string is printed
+// as it stands, and the empty string is one of them — "hyphenate-character: \"\""
+// asks for words to be broken with no mark at all, which the suite's
+// hyphenate-character-001 tests by name. So "the author said nothing" and "the
+// author said nothing is to be printed" are two different answers and cannot
+// both be the empty string.
+//
+// Anything that is not a keyword and not a single string is invalid and is
+// treated as the keyword, which is what the cascade does with a declaration it
+// cannot parse.
+func hyphenCharacter(value string, face *shape.Face) string {
+	if strings.TrimSpace(value) == "" || strings.EqualFold(strings.TrimSpace(value), "auto") {
+		return hyphenTextFor(face)
+	}
+	vals, errs := css.ParseComponentValues(value)
+	if len(errs) != 0 {
+		return hyphenTextFor(face)
+	}
+	found, seen := "", false
+	for _, v := range vals {
+		if !v.IsToken() {
+			return hyphenTextFor(face)
+		}
+		switch v.Token.Kind {
+		case css.Whitespace:
+		case css.String:
+			if seen {
+				return hyphenTextFor(face)
+			}
+			found, seen = v.Token.Value, true
+		default:
+			return hyphenTextFor(face)
+		}
+	}
+	if !seen {
+		return hyphenTextFor(face)
+	}
+	return found
+}
+
+// hyphenTextFor is the character a broken word ends with when the document has
+// not said which.
+//
+// CSS Text §6.1 leaves it to the engine, and the note the suite's own
+// hyphens-manual-011 carries says what the choice is: "user agents may use
+// U+2010 HYPHEN when the font has the glyph, or may use U+002D HYPHEN-MINUS
+// otherwise". That test names two references, one for each, because the two are
+// different glyphs in some faces — so either answer is right and neither may be
+// assumed.
+//
+// U+2010 is the typographically correct character and is what this asks for
+// first. A face without it would otherwise draw a missing glyph, which is a box
+// where a hyphen should be, so the fallback is not a nicety.
+func hyphenTextFor(face *shape.Face) string {
+	const hyphen, hyphenMinus = "‐", "-"
+	if face == nil {
+		return hyphenMinus
+	}
+	// missing rather than the glyph count, and the difference is the whole of
+	// this function. A face that cannot set a character still returns a glyph
+	// for it — the standard PDF faces substitute a space, which is what a
+	// reader shows for an undefined code — so a run of "has it drawn anything"
+	// says yes for every character there is. Courier is exactly that case:
+	// U+2010 is outside WinAnsi, and asking the wrong question put a space
+	// where the hyphen belongs and left the word looking unbroken.
+	//
+	// The synthetic item the line breaking appends carries the face of the text
+	// beside it and is not put through the family walk, so there is no fallback
+	// behind this: the character chosen here has to be one this face can set.
+	if _, missing := face.ShapeGlyphs(hyphen); missing == 0 {
+		return hyphen
+	}
+	return hyphenMinus
 }

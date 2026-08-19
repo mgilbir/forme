@@ -136,6 +136,17 @@ var properties = map[string]property{
 	"letter-spacing": {true, "normal"},
 	"word-spacing":   {true, "normal"},
 	"text-align":     {true, "start"},
+	// text-align-last is the last line's own alignment — CSS Text 3 §7.2 — and
+	// it inherits, so a block sets it for the paragraphs inside it. "auto"
+	// means "whatever the block is aligned as", except that a justified block's
+	// last line is placed where "start" would put it rather than stretched.
+	"text-align-last": {true, "auto"},
+	// text-justify chooses *how* a justified line is stretched — §7.3. The
+	// engine spreads the word spaces, which is what "auto" and "inter-word"
+	// ask for; "none" turns justification off and is acted on; the rest are
+	// read as auto and reported, because a page justified the wrong way is a
+	// page that looks right and is not.
+	"text-justify":   {true, "auto"},
 	"text-indent":    {true, "0"},
 	"text-transform": {true, "none"},
 	// white-space is a shorthand in CSS Text 4 — see the shorthands table — and
@@ -189,6 +200,18 @@ var properties = map[string]property{
 	// difference could show, since the suite has tests asserting in as many words
 	// that they change nothing about Latin text.
 	"line-break": {true, "auto"},
+	// hyphens inherits, so a rule on an article reaches every word in it —
+	// which is how a document turns hyphenation off, and the only reason
+	// "hyphens: none" on a container means anything. "manual" is implemented
+	// and is the initial value; "auto" is read as manual and reported, because
+	// hyphenating a word that contains no soft hyphen needs a dictionary for
+	// the document's language.
+	"hyphens": {true, "manual"},
+	// hyphenate-character inherits, and it is a <string> rather than a keyword:
+	// "auto" lets the engine choose and anything else is what to print, an empty
+	// string included — which is how a document asks for a word to be broken with
+	// no mark at all, and is a real value rather than a way of writing nothing.
+	"hyphenate-character": {true, "auto"},
 	// tab-size inherits, which is the answer that makes a <pre> inside a
 	// styled <article> keep the tab width the author set on the article. A
 	// number is a count of space advances and a length is itself; the initial

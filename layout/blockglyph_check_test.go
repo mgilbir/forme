@@ -272,6 +272,60 @@ func TestBlockFillsLeavesTextAlone(t *testing.T) {
 		}
 	}
 
+	// A character the face draws nothing for is stepped over rather than
+	// refused. A default-ignorable is taken out before a glyph is chosen, so it
+	// has no outline to have been a rectangle or not — and a run carrying one
+	// draws exactly what the same run without it draws.
+	//
+	// This is the harness being wrong rather than the engine: the suite writes
+	// "A&#8288;<span>B</span>" to test that a word joiner holds a picture, the
+	// engine drew the green square it should, and the comparison reported a
+	// failure because the run's text had a character in it that the table has
+	// no entry for. Two of the suite's tests said the engine was wrong when it
+	// was not.
+	hidden := ahemRun
+	hidden.Text = "X\u2060"
+	plain := blockFills([]Op{ahemRun})
+	if got := blockFills([]Op{hidden}); len(got) != len(plain) {
+		t.Errorf("a run with a word joiner in it produced %d ops and the same run "+
+			"without produced %d", len(got), len(plain))
+	} else {
+		for i := range got {
+			if got[i] != plain[i] {
+				t.Errorf("op %d differs: %v against %v", i, got[i], plain[i])
+			}
+		}
+	}
+	// And a character that *is* drawn and is not a rectangle still refuses, so
+	// the step-over is about ink rather than about advance. A combining mark
+	// advances nothing and draws something, which is the case that would go
+	// wrong if this were written as "zero width".
+	if noto := notoFaces(); len(noto) > 0 {
+		mark := DrawText{
+			At: Point{X: upx(t, 0), Y: upx(t, 20)}, Text: "l\u0301",
+			Face: noto[0], Size: upx(t, 20), Color: red,
+		}
+		glyphs, _ := noto[0].ShapeGlyphs("\u0301")
+		_, tabled := blockFonts[noto[0]].rects['\u0301']
+		switch {
+		case len(glyphs) == 0 || tabled:
+			t.Log("the Noto face draws nothing for a combining acute, or has it in " +
+				"the table already, so the run below proves nothing")
+		default:
+			got := blockFills([]Op{mark})
+			if len(got) != 1 {
+				t.Fatalf("a bar followed by a combining mark produced %d ops", len(got))
+			}
+			// A DrawText and not a fill. The distinction is the whole point: a
+			// mark advances nothing, so a step-over written as "no advance"
+			// would convert this run and drop the accent off the page.
+			if _, ok := got[0].(DrawText); !ok {
+				t.Errorf("a bar followed by a combining mark became %T; the mark is "+
+					"ink this reconstruction cannot place", got[0])
+			}
+		}
+	}
+
 	got = blockFills([]Op{fill, ahemRun, fill})
 	if len(got) != 3 {
 		t.Fatalf("got %d ops, want 3", len(got))

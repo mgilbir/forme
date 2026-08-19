@@ -73,18 +73,131 @@ func TestASimpleFaceDrawsNothingForThemEither(t *testing.T) {
 		t.Fatalf("loading: %v", err)
 	}
 	plain, _ := f.ShapeGlyphs("xy")
-	got, _ := f.ShapeGlyphs("x\u00ADy")
-	if len(got) != len(plain) {
-		t.Fatalf("a soft hyphen in a simple face shaped to %d glyphs, want %d", len(got), len(plain))
-	}
-	for i := range got {
-		if got[i].GID != plain[i].GID {
-			t.Errorf("glyph %d is %d, want %d", i, got[i].GID, plain[i].GID)
+	for _, tc := range []struct{ s, what string }{
+		{"x\u00ADy", "a soft hyphen"},
+		// The join controls. A simple face is one code per character and
+		// positions nothing, so there is no joining for either to ask for and no
+		// shaping pass afterwards to take it back out — and left in, it falls
+		// through to the substitution an unmapped character gets and reaches the
+		// page as a space. "let\u200Cter" came out a character wider than
+		// "letter" in every document set in one of the standard PDF faces.
+		{"x\u200Cy", "a zero width non-joiner"},
+		{"x\u200Dy", "a zero width joiner"},
+		{"x\u206Ay", "a deprecated format control"},
+	} {
+		got, _ := f.ShapeGlyphs(tc.s)
+		if len(got) != len(plain) {
+			t.Errorf("%s in a simple face shaped to %d glyphs, want %d",
+				tc.what, len(got), len(plain))
+			continue
+		}
+		for i := range got {
+			if got[i].GID != plain[i].GID {
+				t.Errorf("%s: glyph %d is %d, want %d", tc.what, i, got[i].GID, plain[i].GID)
+			}
+		}
+		// And the width a caller lays out with must match.
+		if w, plainW := f.Measure(tc.s, 12), f.Measure("xy", 12); w != plainW {
+			t.Errorf("%s measured %v against %v; it takes no width", tc.what, w, plainW)
+		}
+		// As must the codes written into the page, which is a third path — and
+		// the count of characters the face could not set, which is a fourth.
+		// encodeSimple emits no byte for a character outside the encoding
+		// either way, so the byte count alone cannot tell the two apart: what
+		// differs is that the control is *counted* as missing, and a document
+		// spelling a word with a non-joiner is then reported as one this face
+		// cannot set.
+		codes, missing := f.Encode(tc.s)
+		want, _ := f.Encode("xy")
+		if len(codes) != len(want) {
+			t.Errorf("%s encoded to %d bytes, want %d", tc.what, len(codes), len(want))
+		}
+		if missing != 0 {
+			t.Errorf("%s was counted as %d characters this face cannot set; nothing "+
+				"is drawn for it, so there is nothing for the face to be missing",
+				tc.what, missing)
 		}
 	}
-	// And the width a caller lays out with must match.
-	if w, plainW := f.Measure("x\u00ADy", 12), f.Measure("xy", 12); w != plainW {
-		t.Errorf("a soft hyphen measured %v against %v; it takes no width", w, plainW)
+}
+
+// TestAStandardFaceDrawsNothingForThemEither is the third encoding path and the
+// one where getting it wrong is worst.
+//
+// A standard-14 face — Courier, Helvetica, Times — encodes through WinAnsi, and
+// a character with no code in it becomes a *space*: not dropped, substituted.
+// So a join control left in reaches the page as a space, while Measure — which
+// excludes it — says the run is narrower than that. The line is filled to one
+// width and painted at another, which is the fault the whole property exists to
+// prevent, and it shows on every page set in a face this engine supplies by
+// default.
+func TestAStandardFaceDrawsNothingForThemEither(t *testing.T) {
+	f, err := Standard("Courier")
+	if err != nil {
+		t.Fatalf("loading Courier: %v", err)
+	}
+	plain, _ := f.Encode("xy")
+	for _, tc := range []struct{ s, what string }{
+		{"x\u00ADy", "a soft hyphen"},
+		{"x\u200Cy", "a zero width non-joiner"},
+		{"x\u200Dy", "a zero width joiner"},
+		{"x\u206Ay", "a deprecated format control"},
+		{"x\u061Cy", "the Arabic letter mark"},
+	} {
+		codes, missing := f.Encode(tc.s)
+		if len(codes) != len(plain) {
+			t.Errorf("%s encoded to %d bytes, want %d — WinAnsi substitutes a space "+
+				"for a character it has no code for, so an extra byte here is a "+
+				"space on the page", tc.what, len(codes), len(plain))
+		}
+		if missing != 0 {
+			t.Errorf("%s was counted as %d missing", tc.what, missing)
+		}
+		// And the width the caller laid out to, which must be the same one.
+		if w, plainW := f.Measure(tc.s, 12), f.Measure("xy", 12); w != plainW {
+			t.Errorf("%s measured %v against %v", tc.what, w, plainW)
+		}
+	}
+}
+
+// TestInkExtentIgnoresThemToo. The ink extent is what a line's height comes from
+// where the font's own metrics are not enough, and it walks characters the same
+// way Measure does. A character nothing is drawn for puts ink nowhere, so
+// including one asks the face for the ink of a glyph that will not be there.
+//
+// This states the property and does not pin the exclusion, and the difference is
+// worth saying. Widening the predicate here to include the join controls moves
+// nothing measurable: a standard face substitutes a space for one, which has no
+// ink, and the composite faces to hand map them to empty glyphs. It would show
+// on a font that maps a control to something visible — which is the case the
+// whole property exists for, and which no face in this repository is. So the
+// change is consistency with Measure rather than a fix, and it is recorded here
+// as that rather than left as an implied claim.
+func TestInkExtentIgnoresThemToo(t *testing.T) {
+	for _, load := range []struct {
+		name string
+		fn   func() (*Face, error)
+	}{
+		{"composite", NotoSans},
+		{"simple", NotoSansSimple},
+		{"standard", func() (*Face, error) { return Standard("Courier") }},
+	} {
+		f, err := load.fn()
+		if err != nil {
+			t.Fatalf("loading %s: %v", load.name, err)
+		}
+		wantA, wantB, wantOK := f.InkExtent("xy", 12)
+		for _, tc := range []struct{ s, what string }{
+			{"x\u00ADy", "a soft hyphen"},
+			{"x\u200Cy", "a zero width non-joiner"},
+			{"x\u200Dy", "a zero width joiner"},
+			{"x\u206Ay", "a deprecated format control"},
+		} {
+			a, b, ok := f.InkExtent(tc.s, 12)
+			if a != wantA || b != wantB || ok != wantOK {
+				t.Errorf("%s face, %s: ink extent (%v, %v, %v), want (%v, %v, %v)",
+					load.name, tc.what, a, b, ok, wantA, wantB, wantOK)
+			}
+		}
 	}
 }
 
@@ -278,6 +391,20 @@ func TestMeasuringAndDrawingAgreeAboutIgnorables(t *testing.T) {
 		{"a\u200Bb", "ab", "a zero width space"},
 		{"a\uFEFFb", "ab", "a byte order mark in the middle of the text"},
 		{"\u202Dabc\u202C", "abc", "an override around a word"},
+		// The join controls, which are the case this invariant was extended for.
+		// They are kept through shaping so that the joining and syllable models
+		// can read them, and taken out before anything is positioned — so
+		// nothing is drawn for one and nothing may be measured for one either.
+		// Asking the shaping question instead of the drawing one charged a full
+		// character for each on a simple face, and then drew it as a space.
+		// Latin either side, where neither control changes any shape, so the two
+		// strings really are the same page.
+		{"a\u200Cb", "ab", "a zero width non-joiner"},
+		{"a\u200Db", "ab", "a zero width joiner"},
+		// And the deprecated format controls, which no hand-written list of
+		// these characters ever seems to reach.
+		{"a\u206Ab", "ab", "inhibit symmetric swapping"},
+		{"a\u206Fb", "ab", "nominal digit shapes"},
 	} {
 		for _, f := range []struct {
 			face *Face

@@ -179,6 +179,24 @@ type Item struct {
 	// considered when calculating min-content intrinsic sizes" and Anywhere's
 	// are, which is the whole difference between the two values.
 	Anywhere bool
+	// Hyphen is how much wider the line becomes if it ends after this item: the
+	// width of the hyphen a soft hyphen asks to have printed. Zero means this is
+	// not a hyphenation point, which is every item in almost every document.
+	//
+	// A width rather than a flag because this half of the engine has no faces to
+	// ask. Which character is printed and how wide it is are questions about the
+	// font, answered where the items are built; what the line breaking needs is
+	// the number, and it needs it *before* it decides, since a line that can hold
+	// nine characters and a hyphen cannot hold ten and a hyphen.
+	Hyphen style.Unit
+	// HyphenText is the character to print, carried with the width so that the
+	// item the line breaking appends is one this package can build.
+	//
+	// It is U+2010 HYPHEN where the face has that glyph and U+002D HYPHEN-MINUS
+	// where it does not, which is what CSS Text §6.1 allows and what the suite's
+	// own fixtures expect — hyphens-manual-011 names two references, one for
+	// each, because the two are different glyphs in some faces.
+	HyphenText string
 	// Tab marks one preserved Tab. Its advance is not a property of the text —
 	// it is the distance to the next Tab stop, so it is resolved when the Tab
 	// has a place on a line and not before.
@@ -361,6 +379,19 @@ type State struct {
 	// It starts true, because the beginning of the context is the beginning of
 	// its first line and §4.1.2 removes the collapsible space there.
 	AfterCollapsibleSpace bool
+	// AfterAtomic says the last thing emitted was an atomic inline — a
+	// picture, an inline-block — so the opportunity after it is the one CSS
+	// Text §5.1 grants around one, and is subject to that section's exception.
+	//
+	// It is distinguished from any other opportunity because the exception is:
+	// a word joiner beside a picture holds it, and a word joiner beside a space
+	// does not, so the two opportunities cannot be told apart by their own flag.
+	AfterAtomic bool
+	// AfterBinding says the last character emitted was one that holds on to an
+	// atomic inline following it — see BindsToAtomicInline. It travels for the
+	// same reason the rest of this does: "a&#8288;<span>b</span>" puts the word
+	// joiner and the box in different text nodes.
+	AfterBinding bool
 }
 
 // StartOfContext is the state an inline formatting context begins in.

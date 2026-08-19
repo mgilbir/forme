@@ -299,3 +299,101 @@ func TestOverflowWrapTakesTheLastCutAvailable(t *testing.T) {
 			"longest prefix that fits", got, want)
 	}
 }
+
+// word-break: break-word, which is not a word-break value at all.
+//
+// CSS Text 3 §5.2 keeps it "for web-compatibility" and defines it by what it
+// does elsewhere: it "has the same effect as word-break: normal and
+// overflow-wrap: anywhere, regardless of the actual value of the overflow-wrap
+// property". The engine read it as a word-break value, found nothing it
+// recognised, and did nothing — silently, because the value is not one it
+// reports either. Seven of the suite's tests are about it and every one of them
+// is about the min-content half.
+
+// TestWordBreakBreakWordIsOverflowWrapAnywhere.
+func TestWordBreakBreakWordIsOverflowWrapAnywhere(t *testing.T) {
+	const doc = `<div id="p">abcdefgh</div>`
+	want := lineTextsOf(t, layoutOf(t, 600, doc, owCSS+` #p { overflow-wrap: anywhere }`), "p")
+	got := lineTextsOf(t, layoutOf(t, 600, doc, owCSS+` #p { word-break: break-word }`), "p")
+	if len(want) != 2 {
+		t.Fatalf("the control split the word into %q, want two lines", want)
+	}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("word-break:break-word split the word into %q and "+
+			"overflow-wrap:anywhere into %q", got, want)
+	}
+}
+
+// TestWordBreakBreakWordNarrowsAShrinkToFitBox is the half the suite tests, and
+// the half that distinguishes it from overflow-wrap: break-word: its
+// opportunities count towards the min-content size.
+func TestWordBreakBreakWordNarrowsAShrinkToFitBox(t *testing.T) {
+	const doc = `<div id="outer"><div id="f">abcdefgh</div></div>`
+	css := func(extra string) string {
+		return `#outer { width: 40px }
+		        #f { float: left; font-family: Courier; font-size: 20px; ` + extra + ` }`
+	}
+	if got := find(t, layoutOf(t, 600, doc, css(`word-break: break-word`)), "f").BorderRect.W.Px(); got != 40 {
+		t.Errorf("word-break:break-word shrank the float to %gpx, want 40 — its "+
+			"minimum is one character, so the float takes the room it has", got)
+	}
+	// The control: without it the float is its widest word and overflows.
+	if got := find(t, layoutOf(t, 600, doc, css(``)), "f").BorderRect.W.Px(); got != 96 {
+		t.Errorf("without the property the float is %gpx, want 96 — this test says "+
+			"nothing otherwise", got)
+	}
+}
+
+// TestWordBreakBreakWordOverridesOverflowWrap is the "regardless" in the
+// specification's sentence, and the reason this is read where it is rather than
+// treated as a default for overflow-wrap.
+//
+// A document that sets both is the suite's
+// word-break-break-word-overflow-wrap-interactions, and the two values disagree
+// on exactly one thing: whether the min-content size shrinks.
+func TestWordBreakBreakWordOverridesOverflowWrap(t *testing.T) {
+	const doc = `<div id="outer"><div id="f">abcdefgh</div></div>`
+	css := `#outer { width: 40px }
+	        #f { float: left; font-family: Courier; font-size: 20px;
+	             overflow-wrap: break-word; word-break: break-word }`
+	if got := find(t, layoutOf(t, 600, doc, css), "f").BorderRect.W.Px(); got != 40 {
+		t.Errorf("with both set the float is %gpx, want 40 — word-break:break-word "+
+			"wins whatever overflow-wrap says", got)
+	}
+}
+
+// TestWordBreakBreakWordIsStillOnlyALastResort. It sets word-break to *normal*,
+// so it adds no opportunity of its own: a line with a space in it breaks at the
+// space and leaves both words whole. Reading it as break-all would fill the
+// line more completely and be wrong.
+func TestWordBreakBreakWordIsStillOnlyALastResort(t *testing.T) {
+	got := lineTextsOf(t, layoutOf(t, 600, `<div id="p">ab cd</div>`,
+		owCSS+` #p { width: 48px; word-break: break-word }`), "p")
+	if len(got) != 2 || got[0] != "ab" || got[1] != "cd" {
+		t.Errorf("the line broke as %q, want [ab cd] — break-word is a last resort "+
+			"and there is a space to break at", got)
+	}
+}
+
+// TestWordBreakBreakWordIsNotReported. It was not reported before either, which
+// is what made it silent; now it is not reported because it is done.
+func TestWordBreakBreakWordIsNotReported(t *testing.T) {
+	for _, f := range findingsFrom(t, `<div id="p">abcdefgh</div>`,
+		owCSS+` #p { word-break: break-word }`) {
+		if f.Property == "word-break" {
+			t.Errorf("word-break:break-word was reported as unhandled: %s", f.Message)
+		}
+	}
+	// And a value that really is unhandled still is, so this is not passing
+	// because nothing is ever reported.
+	found := false
+	for _, f := range findingsFrom(t, `<div id="p">abcdefgh</div>`,
+		owCSS+` #p { word-break: keep-all }`) {
+		if f.Property == "word-break" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("word-break:keep-all was not reported, so the check above says nothing")
+	}
+}
