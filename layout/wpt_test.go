@@ -943,7 +943,7 @@ const wptEnv = "WPT_TESTS"
 // exposed. The number is small and the fault was not: an invalid declaration
 // stood in front of a valid one and every page it happened on came out in the
 // initial value.
-const wptCleanPassBaseline = 4861
+const wptCleanPassBaseline = 5188
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
@@ -1614,6 +1614,12 @@ func num(u style.Unit) string {
 	return strconv.FormatFloat(float64(int(u.Px()*100+0.5))/100, 'f', -1, 64)
 }
 
+// The number rose by 327 when css-text stopped being one directory of it, and
+// that rise is not an engine improvement: the suite grew by 1073 tests and 327
+// of them already passed. A reader comparing baselines across that commit is
+// comparing two different suites, which is the one thing this number cannot say
+// for itself. See WPT_DIRS in the Makefile for what the expansion bought and
+// what it did not.
 func TestWPTReftests(t *testing.T) {
 	root := wptDir(t)
 	tests := findReftests(t, root)

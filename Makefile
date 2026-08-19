@@ -425,7 +425,7 @@ WPT_DIRS := css/CSS2/normal-flow css/CSS2/box-display css/CSS2/margin-padding-cl
             css/CSS2/linebox css/CSS2/text css/CSS2/bidi-text css/CSS2/lists \
             css/CSS2/generated-content css/CSS2/borders css/CSS2/backgrounds \
             css/CSS2/box css/CSS2/colors css/CSS2/values \
-            css/CSS2/support css/CSS2/reference css/css-text/white-space css/reference \
+            css/CSS2/support css/CSS2/reference css/css-text css/reference \
             css/support \
             fonts
 
@@ -441,6 +441,25 @@ WPT_DIRS := css/CSS2/normal-flow css/CSS2/box-display css/CSS2/margin-padding-cl
 # the harness rather than about the engine, and it is the same shape every time:
 # the tests were not failing, so nothing was red, and the cost was paid in the
 # vacuous bucket where nobody looks. See wptCleanPassBaseline.
+
+# "css/css-text" was "css/css-text/white-space" until the rest of it was
+# measured. The engine implements most of what the other directories test —
+# line breaking, word-break, text-align, text-transform, letter-spacing,
+# text-indent, tab-size, overflow-wrap, and the bidi and shaping that i18n is
+# written against — and none of it was being run.
+#
+# It added 1073 reftests: 327 pass cleanly, 167 pass with something unsupported
+# and 579 fail. A 30% clean rate on material the engine was never measured
+# against is the number worth recording, because it says the failures are a seam
+# rather than a wall: the largest groups are i18n (93), word-break (71), line
+# breaking (82 across two directories), text-align (45) and text-transform (41),
+# and 382 of the 579 are clean failures — a real difference in the picture rather
+# than a document the engine declined to render.
+#
+# Some of the rest is honestly out of reach and is counted here so that it is not
+# rediscovered: hyphens (41) is a property this engine reports unimplemented, and
+# text-autospace, hanging-punctuation, word-space-transform and text-fit are CSS
+# Text 4 features it has never claimed.
 
 # "fonts" is there for Ahem.ttf, which a quarter of the suite is written
 # against and which the harness hands to the engine — see render/ahem_test.go
