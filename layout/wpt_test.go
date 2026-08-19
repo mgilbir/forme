@@ -973,7 +973,14 @@ const wptEnv = "WPT_TESTS"
 // stretching everywhere. text-justify: none came with it, because the two
 // together are what four of the suite's tests are about. See
 // layout/textalignlast_test.go.
-const wptCleanPassBaseline = 5347
+// 5347 to 5349 is the harness rather than the engine, and it is a small number
+// standing for a rule that was simply missing: a reftest may declare several
+// <link rel=match>, and it passes if it matches any of them. Sixty-six of the
+// suite's documents do — "the trailing space must hang or be removed" is one of
+// them saying why in its own words — and this read the first and reported the
+// rest as failures. Only three moved, because most of those tests disagree with
+// every reference the suite offers; the rule was still wrong.
+const wptCleanPassBaseline = 5349
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
@@ -1023,13 +1030,50 @@ func wptDir(t *testing.T) string {
 	return dir
 }
 
-// reftest is one pair.
+// reftest is one test document and the references it may be satisfied by.
 type reftest struct {
 	name string
 	test string // path to the test document
-	ref  string // path to the reference
+	refs []reference
+}
+
+// reference is one acceptable rendering.
+type reference struct {
+	path string
 	// mismatch reverses the assertion: the two must render *differently*.
 	mismatch bool
+}
+
+// The reftest model, and why "any of them".
+//
+// A document may declare several <link rel=match>, and the suite's own wording
+// for why is in text-justify-and-trailing-spaces-001: "the trailing space must
+// hang or be removed". Two renderings are correct, the specification allows
+// both, and a test naming only one of them would be asserting a choice nobody
+// made. So a test is satisfied by any of its references.
+//
+// Reading only the first cost this harness sixty-six documents, which it
+// reported as engine failures.
+//
+// satisfied is unused by the sweeps — each of them needs the findings of the
+// reference that matched, so each walks the list itself — and is here as the
+// statement of the rule they implement.
+//
+// Any of them, and that is the reftest model rather than a leniency: a document
+// may declare several <link rel=match>, and the suite's own wording for why is
+// in text-justify-and-trailing-spaces-001 — "the trailing space must hang or be
+// removed". Two renderings are correct, the specification allows both, and a
+// test that named only one of them would be asserting a choice nobody made.
+//
+// Reading only the first cost this harness sixty-six documents, which it
+// reported as engine failures.
+func (r reftest) satisfied(match func(refPath string) bool) bool {
+	for _, ref := range r.refs {
+		if match(ref.path) != ref.mismatch {
+			return true
+		}
+	}
+	return false
 }
 
 // findReftests walks the suite for pairs.
@@ -1050,18 +1094,28 @@ func findReftests(t *testing.T, root string) []reftest {
 		}
 		src := string(data)
 
-		link := linkRe.FindStringSubmatch(src)
-		if link == nil {
+		links := linkRe.FindAllStringSubmatch(src, -1)
+		if len(links) == 0 {
 			return nil
 		}
-		href := hrefRe.FindStringSubmatch(link[0])
-		if href == nil {
-			return nil
+		var refs []reference
+		for _, link := range links {
+			href := hrefRe.FindStringSubmatch(link[0])
+			if href == nil {
+				continue
+			}
+			// A reference that lives outside the sparse checkout is not a
+			// failure, it is a file that was not fetched.
+			ref := filepath.Join(filepath.Dir(path), href[1])
+			if _, err := os.Stat(ref); err != nil {
+				continue
+			}
+			refs = append(refs, reference{
+				path:     ref,
+				mismatch: strings.EqualFold(link[1], "mismatch"),
+			})
 		}
-		// A reference that lives outside the sparse checkout is not a failure,
-		// it is a file that was not fetched.
-		ref := filepath.Join(filepath.Dir(path), href[1])
-		if _, err := os.Stat(ref); err != nil {
+		if len(refs) == 0 {
 			return nil
 		}
 
@@ -1096,8 +1150,7 @@ func findReftests(t *testing.T, root string) []reftest {
 
 		name, _ := filepath.Rel(root, path)
 		out = append(out, reftest{
-			name: filepath.ToSlash(name), test: path, ref: ref,
-			mismatch: strings.EqualFold(link[1], "mismatch"),
+			name: filepath.ToSlash(name), test: path, refs: refs,
 		})
 		return nil
 	})
@@ -1218,14 +1271,23 @@ func pageClip() Rect {
 // why it is not done: the number here stands for what a browser shows, not for
 // what this suite scores.
 //
-// numbers-units-015 is a second of the same kind, found the same way. Its prose
-// asks that "any two of the boxes below are the same size" — 1ex, 0.5em and
-// 0.8em — and its reference draws the first two alike, which is the answer a UA
-// gives when it cannot determine the x-height and falls back to half an em. The
-// document is set in Ahem, whose x-height is eight tenths of an em and is stated
-// in the font. This engine reads it, so its 1ex matches the *third* box: the
-// prose passes and the pixels do not. A browser with the same font answers the
-// same way.
+// numbers-units-015 was recorded here as a second of the same kind and was not
+// one, which is worth leaving in rather than deleting. Its prose asks that "any
+// two of the boxes below are the same size" — 1ex, 0.5em and 0.8em — and the
+// reference this harness compared it against draws the first two alike, which
+// is the answer a UA gives when it cannot determine the x-height and falls back
+// to half an em. The document is set in Ahem, whose x-height is eight tenths of
+// an em and is stated in the font; this engine reads it, so its 1ex matches the
+// *third* box.
+//
+// All of that was true. The conclusion drawn from it — that the pixels could
+// not agree — was not: the test declares *two* references, ref-a and ref-b, and
+// ref-b is the one drawn for a UA that knows the x-height. The suite had
+// provided exactly the rendering this engine produces, and the harness was
+// reading only the first link. It passes cleanly now.
+//
+// The lesson is the one this file keeps relearning: a document that looks like
+// the suite being wrong is worth reading to the end first.
 //
 // The height stays A4's rather than becoming 600. The suite's 600 is a *window*
 // height and its references are compared over the whole scrollable page, so the
@@ -1666,14 +1728,27 @@ func TestWPTReftests(t *testing.T) {
 			broke++
 			continue
 		}
-		want, wantClean, err := renderForCompare(root, rt.ref)
-		if err != nil {
+		passed, wantClean, readable := false, false, false
+		for _, ref := range rt.refs {
+			want, clean, err := renderForCompare(root, ref.path)
+			if err != nil {
+				continue
+			}
+			readable = true
+			if pictureEqual(got, want, pageClip()) != ref.mismatch {
+				// The one that was satisfied is the one whose findings decide
+				// whether this was a clean pass: a document may name a second
+				// acceptable rendering that happens to use something this
+				// engine cannot draw, and the pass belongs to the reference
+				// that was actually matched.
+				passed, wantClean = true, clean
+				break
+			}
+		}
+		if !readable {
 			broke++
 			continue
 		}
-
-		same := pictureEqual(got, want, pageClip())
-		passed := same != rt.mismatch
 
 		switch {
 		case !passed:
@@ -1949,12 +2024,29 @@ func TestWPTFindsRealPairs(t *testing.T) {
 		t.Errorf("found %d reftests; the sparse checkout should hold hundreds", len(tests))
 	}
 	for _, rt := range tests[:min(5, len(tests))] {
-		if rt.test == "" || rt.ref == "" {
+		if rt.test == "" || len(rt.refs) == 0 {
 			t.Errorf("%s has an empty side", rt.name)
 		}
-		if rt.test == rt.ref {
-			t.Errorf("%s compares a document with itself", rt.name)
+		for _, ref := range rt.refs {
+			if ref.path == "" {
+				t.Errorf("%s names an empty reference", rt.name)
+			}
+			if rt.test == ref.path {
+				t.Errorf("%s compares a document with itself", rt.name)
+			}
 		}
+	}
+	// And the walker has to find the documents that name more than one
+	// acceptable rendering, or the rule above is being applied to nothing.
+	several := 0
+	for _, rt := range tests {
+		if len(rt.refs) > 1 {
+			several++
+		}
+	}
+	if several == 0 {
+		t.Errorf("no test in the checkout names more than one reference; the " +
+			"suite has dozens, so either the walker or this count is wrong")
 	}
 }
 
