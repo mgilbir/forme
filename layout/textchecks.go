@@ -3,6 +3,7 @@ package layout
 import (
 	"strings"
 
+	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -258,7 +259,51 @@ func (l *layouter) reportHyphens(b *Box, value string) {
 	})
 }
 
-// hyphenTextFor is the character a broken word ends with.
+// hyphenCharacter is what a broken word ends with, which the document may say.
+//
+// CSS Text §6.3's hyphenate-character is "auto | <string>". The keyword leaves
+// the choice to the engine, which is hyphenTextFor below; a string is printed
+// as it stands, and the empty string is one of them — "hyphenate-character: \"\""
+// asks for words to be broken with no mark at all, which the suite's
+// hyphenate-character-001 tests by name. So "the author said nothing" and "the
+// author said nothing is to be printed" are two different answers and cannot
+// both be the empty string.
+//
+// Anything that is not a keyword and not a single string is invalid and is
+// treated as the keyword, which is what the cascade does with a declaration it
+// cannot parse.
+func hyphenCharacter(value string, face *shape.Face) string {
+	if strings.TrimSpace(value) == "" || strings.EqualFold(strings.TrimSpace(value), "auto") {
+		return hyphenTextFor(face)
+	}
+	vals, errs := css.ParseComponentValues(value)
+	if len(errs) != 0 {
+		return hyphenTextFor(face)
+	}
+	found, seen := "", false
+	for _, v := range vals {
+		if !v.IsToken() {
+			return hyphenTextFor(face)
+		}
+		switch v.Token.Kind {
+		case css.Whitespace:
+		case css.String:
+			if seen {
+				return hyphenTextFor(face)
+			}
+			found, seen = v.Token.Value, true
+		default:
+			return hyphenTextFor(face)
+		}
+	}
+	if !seen {
+		return hyphenTextFor(face)
+	}
+	return found
+}
+
+// hyphenTextFor is the character a broken word ends with when the document has
+// not said which.
 //
 // CSS Text §6.1 leaves it to the engine, and the note the suite's own
 // hyphens-manual-011 carries says what the choice is: "user agents may use

@@ -804,7 +804,7 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		// line may break here at all. Only the last run of a piece has an end
 		// for a hyphen to be at — a piece cut in two by a change of face is one
 		// word, and the hyphen belongs after all of it.
-		item.HyphenText = hyphenTextFor(a.run.Face)
+		item.HyphenText = hyphenCharacter(b.Style["hyphenate-character"], a.run.Face)
 		item.Hyphen = l.br.MeasureSpaced(a.run.Face, item.HyphenText, a.size, a.spacing)
 	}
 	if !p.Tab {

@@ -207,6 +207,11 @@ var properties = map[string]property{
 	// hyphenating a word that contains no soft hyphen needs a dictionary for
 	// the document's language.
 	"hyphens": {true, "manual"},
+	// hyphenate-character inherits, and it is a <string> rather than a keyword:
+	// "auto" lets the engine choose and anything else is what to print, an empty
+	// string included — which is how a document asks for a word to be broken with
+	// no mark at all, and is a real value rather than a way of writing nothing.
+	"hyphenate-character": {true, "auto"},
 	// tab-size inherits, which is the answer that makes a <pre> inside a
 	// styled <article> keep the tab width the author set on the article. A
 	// number is a count of space advances and a length is itself; the initial

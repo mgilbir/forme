@@ -306,6 +306,113 @@ func TestTheHyphenIsACharacterTheFaceCanSet(t *testing.T) {
 	}
 }
 
+// hyphenate-character, CSS Text §6.3: "auto | <string>".
+//
+// The keyword leaves the choice to the engine. A string is printed as it stands
+// — and the empty string is one of them, which is the row that makes this more
+// than a substitution: "hyphenate-character: \"\"" asks for words to be broken
+// with no mark at all, so "the author said nothing" and "the author said print
+// nothing" cannot both be the empty string.
+
+// TestTheDocumentChoosesWhatAHyphenatedWordEndsWith.
+func TestTheDocumentChoosesWhatAHyphenatedWordEndsWith(t *testing.T) {
+	const box = `#p { font-family: Courier; font-size: 20px; width: 60px; `
+	for _, tc := range []struct {
+		what, decl, want string
+	}{
+		{"a bullet", `hyphenate-character: "\2022"`, "•"},
+		{"a letter, because any string is allowed", `hyphenate-character: "Z"`, "Z"},
+		{"more than one character", `hyphenate-character: "<>"`, "<>"},
+		// The keyword and the absent declaration are the same answer, and it is
+		// the engine's: Courier cannot set U+2010, so it is the hyphen-minus.
+		{"the keyword", `hyphenate-character: auto`, "-"},
+		{"no declaration at all", ``, "-"},
+		// Invalid, so the declaration is dropped and the keyword stands. Two
+		// strings, a keyword that is not one, and a bare word are each invalid a
+		// different way.
+		{"two strings", `hyphenate-character: "a" "b"`, "-"},
+		{"an unknown keyword", `hyphenate-character: none`, "-"},
+		{"an unquoted word", `hyphenate-character: dash`, "-"},
+	} {
+		got := drawnText(paintOf(t, `<div id="p">aaaa`+shy+`bbbb</div>`, box+tc.decl+` }`))
+		// The soft hyphen itself stays in the text that is drawn — it takes no
+		// room and marks no paper, and keeping it is what leaves the document's
+		// text the text the author wrote. See breaks.go.
+		if want := "aaaa" + shy + tc.want + "bbbb"; got != want {
+			t.Errorf("%s (%s): the page reads %q, want %q", tc.what, tc.decl, got, want)
+		}
+	}
+}
+
+// TestAnEmptyHyphenateCharacterBreaksTheWordAndPrintsNothing, which is the
+// suite's hyphenate-character-001: "the words below are broken at hyphenation
+// positions but no visible hyphens appear".
+func TestAnEmptyHyphenateCharacterBreaksTheWordAndPrintsNothing(t *testing.T) {
+	const css = `#p { font-family: Courier; font-size: 20px; width: 60px;
+		hyphenate-character: "" }`
+	doc := `<div id="p">aaaa` + shy + `bbbb</div>`
+	f := find(t, layoutOf(t, 600, doc, css), "p")
+	if len(f.Lines) != 2 {
+		t.Errorf("%d lines; an empty hyphenate-character turns off the mark and not "+
+			"the break", len(f.Lines))
+	}
+	if want := "aaaa" + shy + "bbbb"; drawnText(paintOf(t, doc, css)) != want {
+		t.Errorf("the page reads %q, want %q", drawnText(paintOf(t, doc, css)), want)
+	}
+}
+
+// TestTheDeclaredCharacterIsPaidForToo.
+//
+// The width charged before the break is chosen has to be the width of what will
+// actually be printed, or a document that asks for a long hyphenate-character
+// gets lines that overflow by the difference — which is the same fault the
+// property itself was written to avoid, one level up.
+//
+// Ten characters of room. "aaaaaaaaa<shy>bbb" breaks with a one-character mark,
+// which is nine and one; with a three-character mark it is nine and three, and
+// there is nowhere else for the line to end, so it hangs past the edge instead.
+// The two are told apart by the width of the line, not by the fact that it broke.
+func TestTheDeclaredCharacterIsPaidForToo(t *testing.T) {
+	const box = `#p { font-family: Courier; font-size: 20px; width: 120px; `
+	width := func(decl string) float64 {
+		t.Helper()
+		f := find(t, layoutOf(t, 600, `<div id="p">aaaaaaaaa`+shy+`bbb</div>`,
+			box+decl+` }`), "p")
+		if len(f.Lines) != 2 {
+			t.Fatalf("%s: %d lines", decl, len(f.Lines))
+		}
+		var w float64
+		for _, r := range f.Lines[0].Runs {
+			w += r.Width.Px()
+		}
+		return w
+	}
+	if got := width(``); got < 119.5 || got > 120.5 {
+		t.Errorf("the default mark gave a line of %gpx, want 120", got)
+	}
+	if got := width(`hyphenate-character: "<->"`); got < 143.5 || got > 144.5 {
+		t.Errorf("a three-character mark gave a line of %gpx, want 144 — nine "+
+			"letters and three more", got)
+	}
+	if got := width(`hyphenate-character: ""`); got < 107.5 || got > 108.5 {
+		t.Errorf("an empty mark gave a line of %gpx, want 108 — nine letters and "+
+			"nothing after them", got)
+	}
+}
+
+// TestHyphenateCharacterInherits, which is what lets a document set the mark
+// once for everything inside it.
+func TestHyphenateCharacterInherits(t *testing.T) {
+	got := drawnText(paintOf(t,
+		`<div id="outer"><div id="p"><span>aaaa`+shy+`bbbb</span></div></div>`,
+		`#outer { hyphenate-character: "Z" }
+		 #p { font-family: Courier; font-size: 20px; width: 60px }`))
+	if want := "aaaa" + shy + "Zbbbb"; got != want {
+		t.Errorf("the page reads %q, want %q: the property was set two boxes up",
+			got, want)
+	}
+}
+
 // fillsOfAny counts the fills in a display list, whatever their colour.
 func fillsOfAny(ops []Op) []FillRect {
 	var out []FillRect
