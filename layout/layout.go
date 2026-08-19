@@ -90,6 +90,17 @@ type Fragment struct {
 	// in the conflict resolution like every other candidate, and losing is not
 	// the same as being absent.
 	inCollapsedGrid bool
+	// contentH is the border-box height this fragment's content came to, before
+	// a declared height was allowed to raise it.
+	//
+	// It is recorded for one caller and one rule. §17.5.3 makes a declared height
+	// on a table cell a *minimum* — the cell box is at least that tall — and then
+	// aligns the cell's *content* within whatever height its row ended up with.
+	// Those are two different heights, and reading the second off the box gave a
+	// cell with "height: 1in" no slack at all: its content already filled it, so
+	// "vertical-align: bottom" had nothing to move and the text stayed at the top
+	// of a box four times its size.
+	contentH style.Unit
 
 	// background is this box's background images, resolved against its geometry
 	// and in painting order — CSS lists layers front to back, so the last one
@@ -99,6 +110,23 @@ type Fragment struct {
 	// area of the bottom layer and so is the border box by default rather than
 	// the padding box. An empty rectangle means no colour is painted.
 	bgColorRect Rect
+	// bgBands are the rectangles this box's background is painted in, instead of
+	// over its whole box. An empty slice means the ordinary single rectangle.
+	//
+	// §17.5.1's separated borders model is the one thing that needs it. A row,
+	// column, row group or column group there is a box drawn *behind the cells
+	// it holds* — and the border-spacing between those cells is not part of it,
+	// because the space between cells is the table's own background showing
+	// through. The suite says so by drawing the expected column as one solid
+	// block and then knocking white stripes out of it at every gap.
+	//
+	// Bands rather than a smaller box, because the area is not a rectangle: a
+	// column crosses every row and the gaps between them, and a row crosses
+	// every column and the gaps between those. And bands that clip rather than
+	// bands that are painted, because a background image is positioned against
+	// the whole box and only *shown* through the cells — an image tiled per band
+	// would start afresh in each one, which is a different picture.
+	bgBands []Rect
 	// bgSuppressed marks the box whose background became the canvas's, so that
 	// it is not also painted over its own smaller box. See §2.11.2: the element
 	// the background was taken from is left with the initial values.
@@ -526,6 +554,12 @@ func absolutise(f *Fragment, x, y style.Unit) {
 	}
 	f.BorderRect.X = f.BorderRect.X.Add(x).Add(f.Offset.X)
 	f.BorderRect.Y = f.BorderRect.Y.Add(y).Add(f.Offset.Y)
+	// The bands are in the same coordinates the border box was, so they take the
+	// same translation. See Fragment.bgBands.
+	for i := range f.bgBands {
+		f.bgBands[i].X = f.bgBands[i].X.Add(x).Add(f.Offset.X)
+		f.bgBands[i].Y = f.bgBands[i].Y.Add(y).Add(f.Offset.Y)
+	}
 
 	content := f.ContentRect()
 	// The inline boxes' own backgrounds and borders, which hang off the line
@@ -724,6 +758,15 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	contentHeight, hoistTop, hoistBottom, placedAnything :=
 		l.clampedChildren(b, frag, width, topOpen, bottomOpen, inner)
 
+	// What the content itself came to, which a declared height may raise the box
+	// above but does not change. The float rule below applies to it either way:
+	// a float inside a box that contains its own is part of what that box holds,
+	// whether or not a height was declared. See Fragment.contentH.
+	natural := contentHeight
+	if own != at.ctx {
+		natural = style.Max(natural, own.bottom())
+	}
+
 	if hasHeight {
 		if b.Inner == InnerTable || b.Inner == InnerTableCell {
 			// §17.5.3: a declared height on a table or a cell is a *minimum*.
@@ -760,6 +803,7 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	}
 
 	frag.BorderRect.H = contentHeight.Add(padding.Vertical()).Add(border.Vertical())
+	frag.contentH = natural.Add(padding.Vertical()).Add(border.Vertical())
 
 	out := collapsed{top: marginOf(margin.Top), bottom: marginOf(margin.Bottom)}
 	if topOpen {

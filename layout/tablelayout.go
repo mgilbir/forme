@@ -1318,7 +1318,17 @@ type placedCell struct {
 	frag *Fragment
 	// natural is the height the cell's content needed, which is what it would
 	// have been given were it not in a row with anything else in it.
+	//
+	// "Needed" includes a declared height, because §17.5.3 makes one a minimum:
+	// a cell asking for an inch makes its row an inch tall even with one word in
+	// it. That is the right number for sizing the row and the wrong one for
+	// aligning inside it, which is what content is for.
 	natural style.Unit
+	// content is the height the cell's content came to on its own, with no
+	// declared height allowed to raise it. It is what §17.5.3's vertical-align
+	// moves within the row's height, and the difference between the two is the
+	// slack there is to move it through.
+	content style.Unit
 	// baseline is where the cell's first line sits, measured from its border-box
 	// top. §17.5.3 makes a cell with no line box baseline-align on its bottom
 	// content edge, so there is always one.
@@ -1404,7 +1414,7 @@ func (l *layouter) tableContent(table *Box, parent *Fragment, width style.Unit,
 	gridHeight := y.Sub(s.v).Sub(s.v)
 	gridWidth := maxZero(width.Sub(s.h).Sub(s.h))
 
-	l.paintableColumns(parent, g, cols, colX, s.v, gridHeight)
+	l.paintableColumns(parent, g, cols, colX, rowY, rowH, s.v, gridHeight, s.collapsed == nil)
 	l.assembleRows(parent, g, placed, cols, colX, rowY, rowH, rowBaseline, s, gridWidth)
 	if s.collapsed != nil && len(s.collapsed.hoff) > 0 {
 		// A table with rows and no columns at all has no grid lines to resolve
@@ -1501,7 +1511,7 @@ func (l *layouter) layoutCells(table *Box, g *tableGrid, cols []style.Unit,
 		frag.inCollapsedGrid = s.collapsed != nil
 
 		out = append(out, placedCell{
-			cell: c, frag: frag, natural: frag.BorderRect.H,
+			cell: c, frag: frag, natural: frag.BorderRect.H, content: frag.contentH,
 			baseline: baselineOfCell(frag),
 			align:    strings.ToLower(strings.TrimSpace(c.box.Style["vertical-align"])),
 			absFrom:  absFrom,
@@ -1674,7 +1684,7 @@ func (l *layouter) absoluteLengthOf(b *Box, property string) (style.Unit, bool) 
 // order. Emitting them here rather than teaching the painter about tables is
 // what keeps table painting from being a second traversal.
 func (l *layouter) paintableColumns(parent *Fragment, g *tableGrid,
-	cols, colX []style.Unit, top, height style.Unit) {
+	cols, colX, rowY, rowH []style.Unit, top, height style.Unit, separated bool) {
 
 	if height <= 0 {
 		return
@@ -1687,7 +1697,7 @@ func (l *layouter) paintableColumns(parent *Fragment, g *tableGrid,
 		if last >= len(cols) {
 			last = len(cols) - 1
 		}
-		return &Fragment{
+		f := &Fragment{
 			Box: box,
 			BorderRect: Rect{
 				X: colX[first], Y: top,
@@ -1695,6 +1705,8 @@ func (l *layouter) paintableColumns(parent *Fragment, g *tableGrid,
 				H: height,
 			},
 		}
+		f.bgBands = cellBands(cols, colX, rowY, rowH, first, last, 0, len(rowH)-1, separated)
+		return f
 	}
 
 	grouped := make([]bool, len(cols))
@@ -1718,13 +1730,19 @@ func (l *layouter) paintableColumns(parent *Fragment, g *tableGrid,
 				last.BorderRect.W = colX[i].Add(cols[i]).Sub(frag.BorderRect.X).Sub(last.BorderRect.X)
 				continue
 			}
-			frag.Children = append(frag.Children, &Fragment{
+			child := &Fragment{
 				Box: g.colBoxes[i],
 				BorderRect: Rect{
 					X: colX[i].Sub(frag.BorderRect.X), Y: 0,
 					W: cols[i], H: height,
 				},
-			})
+			}
+			child.bgBands = cellBands(cols, colX, rowY, rowH, i, i, 0, len(rowH)-1, separated)
+			for k := range child.bgBands {
+				child.bgBands[k].X = child.bgBands[k].X.Sub(frag.BorderRect.X)
+				child.bgBands[k].Y = child.bgBands[k].Y.Sub(frag.BorderRect.Y)
+			}
+			frag.Children = append(frag.Children, child)
 		}
 		parent.Children = append(parent.Children, frag)
 	}
@@ -1737,11 +1755,49 @@ func (l *layouter) paintableColumns(parent *Fragment, g *tableGrid,
 			last.BorderRect.W = colX[i].Add(cols[i]).Sub(last.BorderRect.X)
 			continue
 		}
-		parent.Children = append(parent.Children, &Fragment{
+		lone := &Fragment{
 			Box:        col,
 			BorderRect: Rect{X: colX[i], Y: top, W: cols[i], H: height},
-		})
+		}
+		lone.bgBands = cellBands(cols, colX, rowY, rowH, i, i, 0, len(rowH)-1, separated)
+		parent.Children = append(parent.Children, lone)
 	}
+}
+
+// cellBands is the area a row, column or group background is shown through: the
+// cells it holds, and not the border-spacing between them.
+//
+// §17.5.1 draws these boxes behind the cells, and §17.6.1 fills the space
+// between cells with the *table's* background rather than theirs — so a column's
+// aqua is interrupted by a stripe of whatever is behind the table at every row
+// gap, and a row's is interrupted at every column gap. In the collapsing model
+// there is no spacing to interrupt anything, so there are no bands and the whole
+// box is painted, which is both correct and the case almost every table is.
+//
+// The rectangles are in the coordinate space the caller's fragment rects are in,
+// which is the table's grid.
+func cellBands(cols, colX, rowY, rowH []style.Unit,
+	firstCol, lastCol, firstRow, lastRow int, separated bool) []Rect {
+
+	if !separated || lastCol < firstCol || lastRow < firstRow {
+		return nil
+	}
+	// One band per cell is the exact answer and is also the only one that is
+	// right in both directions at once: a column crossing three rows and a row
+	// crossing three columns are interrupted on different axes, and a band per
+	// row would leave a row's own gaps uncovered.
+	//
+	// A single column crossing a single row is one band covering the whole box,
+	// which is the same picture as no bands at all — it is left in rather than
+	// special-cased, because "the cells, and nothing between them" is the rule
+	// and a table of one cell is not an exception to it.
+	out := make([]Rect, 0, (lastCol-firstCol+1)*(lastRow-firstRow+1))
+	for i := firstCol; i <= lastCol && i < len(cols); i++ {
+		for r := firstRow; r <= lastRow && r < len(rowH); r++ {
+			out = append(out, Rect{X: colX[i], Y: rowY[r], W: cols[i], H: rowH[r]})
+		}
+	}
+	return out
 }
 
 // assembleRows builds the row-group, row and cell fragments and gives each cell
@@ -1767,6 +1823,8 @@ func (l *layouter) assembleRows(parent *Fragment, g *tableGrid, placed []placedC
 				H: rowY[last].Add(rowH[last]).Sub(rowY[rg.first]),
 			},
 		}
+		groupFrags[i].bgBands = cellBands(cols, colX, rowY, rowH,
+			0, len(cols)-1, rg.first, last, s.collapsed == nil)
 		parent.Children = append(parent.Children, groupFrags[i])
 	}
 	for r, info := range g.rows {
@@ -1776,11 +1834,20 @@ func (l *layouter) assembleRows(parent *Fragment, g *tableGrid, placed []placedC
 			Box:        info.box,
 			BorderRect: Rect{X: s.h, Y: rowY[r], W: gridWidth, H: rowH[r]},
 		}
+		frag.bgBands = cellBands(cols, colX, rowY, rowH,
+			0, len(cols)-1, r, r, s.collapsed == nil)
 		if info.group >= 0 && groupFrags[info.group] != nil {
 			group := groupFrags[info.group]
 			frag.BorderRect.X = 0
 			frag.BorderRect.Y = rowY[r].Sub(group.BorderRect.Y)
 			group.Children = append(group.Children, frag)
+			// A row inside a group is placed against the group, and its bands
+			// are in the grid's coordinates like every other rectangle here, so
+			// they move with it.
+			for k := range frag.bgBands {
+				frag.bgBands[k].X = frag.bgBands[k].X.Sub(group.BorderRect.X)
+				frag.bgBands[k].Y = frag.bgBands[k].Y.Sub(group.BorderRect.Y)
+			}
 		} else {
 			parent.Children = append(parent.Children, frag)
 		}
@@ -1832,7 +1899,7 @@ func cellIsEmpty(f *Fragment) bool { return len(f.Lines) == 0 && len(f.Children)
 // were written *among that content* — a box that stayed behind would be
 // positioned against a place the text has left.
 func (l *layouter) alignCell(p placedCell, height, rowBaseline style.Unit) {
-	slack := maxZero(height.Sub(p.natural))
+	slack := maxZero(height.Sub(p.content))
 	var delta style.Unit
 	switch p.align {
 	case "top":

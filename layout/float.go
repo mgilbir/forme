@@ -221,6 +221,71 @@ func (fc *floatContext) bandOver(top, bottom, lo, hi style.Unit) (left, right st
 	return left, right
 }
 
+// bandForFloat is the band §9.5.1 places a *float* in, which is not the band it
+// flows text in, and bound says whether anything constrains it there at all.
+//
+// Text is laid out inside its containing block, so a float beyond that block's
+// edge cannot shorten a line that was never that long — bandOver clamps to lo
+// and hi for exactly that reason. Placing a float is a different question, and
+// §9.5.1 asks it as two rules that do not have the same precondition:
+//
+//   - Rule 3 is about the two floats and nothing else. "The right outer edge of
+//     a left-floating box may not be to the right of the left outer edge of any
+//     right-floating box that is to the right of it" — they need only share a
+//     formatting context, and clamping to the containing block loses the
+//     constraint whenever the other float is outside it. That is the case the
+//     suite tests by name: "float placement around other float in BFC but
+//     outside containing block".
+//
+//   - Rule 7 is the containing block's edge, and it applies only to "a
+//     left-floating box that has another left-floating box to its left". With no
+//     float beside it on its own side, a float wider than its containing block
+//     overflows rather than being pushed down — which is rule 8 — and with one
+//     beside it, it may not.
+//
+// So the near side is the containing block's edge raised by the floats already
+// on that side, and the far side is whichever of the two rules actually applies.
+// bound is false when neither float is there: nothing can be gained by dropping
+// lower, and the caller stops rather than descending for ever.
+func (fc *floatContext) bandForFloat(y, lo, hi style.Unit, side FloatSide) (left, right style.Unit, bound bool) {
+	fc.sync()
+	leftEdge, hasLeft := bandEdge(&fc.idx.left, y, y)
+	rightEdge, hasRight := bandEdge(&fc.idx.right, y, y)
+
+	left, right = lo, hi
+	switch side {
+	case FloatRight:
+		if hasRight && rightEdge < right {
+			right = rightEdge
+		}
+		switch {
+		case hasLeft && hasRight:
+			left = style.Max(lo, leftEdge)
+		case hasLeft:
+			// Rule 3's mirror alone: the containing block does not bind, so a
+			// float too wide for it reaches past its left edge rather than
+			// being pushed below a float that is not in its way.
+			left = leftEdge
+		}
+	default:
+		if hasLeft && leftEdge > left {
+			left = leftEdge
+		}
+		switch {
+		case hasRight && hasLeft:
+			right = style.Min(hi, rightEdge)
+		case hasRight:
+			right = rightEdge
+		}
+	}
+	if right < left {
+		// Floats from both sides that overlap leave no room at all rather than
+		// an inside-out band, which every caller would then have to guard.
+		right = left
+	}
+	return left, right, hasLeft || hasRight
+}
+
 // bandEdge asks a staircase for the winning edge over [top, bottom), where an
 // empty range is the point top.
 //
@@ -319,13 +384,13 @@ func (fc *floatContext) place(size Size, side FloatSide, top, lo, hi style.Unit)
 		y = fc.idx.marks[n-1].topMax
 	}
 	for {
-		left, right := fc.bandAt(y, lo, hi)
+		left, right, bound := fc.bandForFloat(y, lo, hi, side)
 		if right.Sub(left) >= size.W {
 			break
 		}
-		if left == lo && right == hi {
-			// The band is the whole containing block and the float still does
-			// not fit, so it is wider than the block it is in. §9.5.1 rule 8
+		if !bound {
+			// No float is beside it here, so nothing it could drop below is in
+			// its way: it is simply wider than the block it is in. §9.5.1 rule 8
 			// says a float that big overflows rather than being pushed down for
 			// ever, and dropping it a line at a time would never find room.
 			break
@@ -345,7 +410,7 @@ func (fc *floatContext) place(size Size, side FloatSide, top, lo, hi style.Unit)
 		y = next
 	}
 
-	left, right := fc.bandAt(y, lo, hi)
+	left, right, _ := fc.bandForFloat(y, lo, hi, side)
 	x := left
 	if side == FloatRight {
 		// A right float that is wider than the space it has overflows to the

@@ -62,6 +62,19 @@ func TabAdvance(x, stop, floor style.Unit) style.Unit {
 type Piece struct {
 	Text        string
 	BreakBefore bool
+	// ZeroWidth marks a piece that is a character and nothing more: it sets no
+	// paper, takes no room and produces nothing to put on a line.
+	//
+	// It exists because it *separates*. §4.1.1 collapses white space that is
+	// adjacent, and a zero-width space between two spaces is a character
+	// standing between them — so they are not adjacent and do not collapse. The
+	// suite writes it as a comment of its own, "U+00A0 is exactly equivalent to
+	// U+200B U+0020 U+200B", and tests it four times.
+	//
+	// Dropping the character outright is what made it invisible to that rule.
+	// Building an item from it instead would put a draw operation on every page
+	// that has one, for a glyph with no advance and no ink.
+	ZeroWidth bool
 	// Space marks white Space of any kind, collapsible marks the subset of it
 	// Phase I folds together, trimAtEnd the subset a line edge removes, and tab
 	// and segment the two preserved characters that are not simply text of their
@@ -158,7 +171,8 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak) ([]Pi
 		// is what makes "X XX X" in four characters of room break after the
 		// fourth — the answer break-all must not give, and the one the suite's
 		// break-spaces-before-first-char-007 asks for by name.
-		if (deferBreak || (wb.BreakAll && !startsSpacePiece(r, ws)) || lb.Anywhere) &&
+		if ((deferBreak && !startsSpacePiece(r, ws)) ||
+			(wb.BreakAll && !startsSpacePiece(r, ws)) || lb.Anywhere) &&
 			atBoundary && cur.Len() > 0 {
 			flush()
 			breakNext = true
@@ -236,9 +250,19 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak) ([]Pi
 			breakNext = true
 
 		case r == '​':
-			// A zero-width space is a break opportunity and nothing else: it is
-			// how an author marks one inside a word.
+			// A zero-width space is a break opportunity, and it is also a
+			// character. The opportunity is what an author writes one for — it
+			// is how a break is marked inside a word — and the character is
+			// what §4.1.1's collapsing has to see: two spaces with one between
+			// them are not adjacent, so they do not collapse into one. The
+			// suite says it in a comment of its own, "U+00A0 is exactly
+			// equivalent to U+200B U+0020 U+200B", and tests it four times.
+			//
+			// So it is emitted rather than dropped, and marked ZeroWidth: it
+			// sets no paper and takes no room, so nothing is built from it, and
+			// what it does is stand between its neighbours.
 			flush()
+			emit(Piece{Text: text[start:i], ZeroWidth: true})
 			breakNext = true
 
 		case IsIdeographic(r):

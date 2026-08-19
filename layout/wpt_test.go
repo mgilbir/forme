@@ -943,7 +943,7 @@ const wptEnv = "WPT_TESTS"
 // exposed. The number is small and the fault was not: an invalid declaration
 // stood in front of a valid one and every page it happened on came out in the
 // initial value.
-const wptCleanPassBaseline = 4812
+const wptCleanPassBaseline = 4842
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
@@ -1171,6 +1171,22 @@ func pageClip() Rect {
 // regressed, units-002 gained — which says the suite is very largely
 // width-insensitive and that this is a fidelity fix rather than a lever. It is
 // made for the fidelity.
+//
+// Eight documents are width-sensitive in the other direction, and they are
+// recorded here so that the next reader measuring this number does not spend
+// the afternoon twice. The table-anonymous-objects-079 to -086 tests each lay
+// three tables over three plain divs and pass when the two coincide; their
+// widest table's max-content width is 806px, which does not fit in 800. The
+// *test* sets "white-space: nowrap" so its table cannot shrink and overflows;
+// the *reference*, auto-imported from Gecko without it, shrinks to the viewport.
+// The two therefore cannot agree at 800 and agree exactly at 1200 — verified by
+// rendering both at each width, and by adding the missing declaration to a copy
+// of the reference, which makes them identical at 800.
+//
+// So the engine is right about both documents and the reference is wrong about
+// itself. Widening the viewport would collect the eight, and that is precisely
+// why it is not done: the number here stands for what a browser shows, not for
+// what this suite scores.
 //
 // The height stays A4's rather than becoming 600. The suite's 600 is a *window*
 // height and its references are compared over the whole scrollable page, so the

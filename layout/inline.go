@@ -599,7 +599,17 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				// pre-wrap-align tests measure. It is invisible in a left-to-right
 				// document, where the hang follows the content and moves nothing.
 				rtl := lineBaseIsRTL(b, runs)
-				shift := lineIndent.Add(l.alignLine(b, rtl, avail, used))
+				shift := l.alignLine(b, rtl, avail, used)
+				if !rtl {
+					// §16.1's indent is measured from the line's *start* edge,
+					// and only a left-to-right line starts at the left. The room
+					// the line had was already shortened by the indent — see
+					// avail — so on a right-to-left line the alignment has
+					// already put the content an indent short of the right edge,
+					// and adding it again would move it in the wrong direction
+					// by twice the distance the author wrote.
+					shift = shift.Add(lineIndent)
+				}
 				if rtl {
 					shift = shift.Sub(total.Sub(used))
 				}
