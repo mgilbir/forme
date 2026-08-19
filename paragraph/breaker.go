@@ -108,9 +108,23 @@ func (br *Breaker) MeasureSpaced(face *shape.Face, text string, size style.Unit,
 	if got, ok := br.measured[key]; ok {
 		return got
 	}
-	// Measure returns the advance in the units the size was given in, so a size
-	// in CSS pixels gives an advance in CSS pixels.
-	w, _ := style.FromPx(face.Measure(text, size.Px()))
+	// MeasureShaped returns the advance in the units the size was given in, so a
+	// size in CSS pixels gives an advance in CSS pixels.
+	//
+	// Shaped, and not the cheaper per-rune sum beside it. What a line breaker
+	// measures has to be what the page draws: it measures a word to decide
+	// whether it fits and the backend then shapes the same word to draw it, and
+	// if the two disagree the line is filled to one width and painted at
+	// another, with nothing in either call's output to show it. A ligature, a
+	// kern pair and a contextual substitution are all invisible to the sum and
+	// all change the advance.
+	//
+	// It is affordable here and nowhere else because of the memo above: the same
+	// words recur constantly in a document, so the shaping happens once per
+	// distinct word rather than once per measurement. A face whose codes are
+	// characters — the standard PDF fonts — substitutes and kerns nothing, and
+	// MeasureShaped hands those straight back to the sum.
+	w, _ := style.FromPx(face.MeasureShaped(text, size.Px()))
 	w = w.Add(SpacingAdvance(text, sp))
 	br.measured[key] = w
 	return w
