@@ -275,9 +275,21 @@ func CollapseWhitespace(text, value string) string {
 	// A run of collapsible white space is emitted when it *ends*, because what
 	// it becomes depends on what was in it and on what follows it.
 	var last rune // the last rune written, for the zero-width-space rule
+	// The last character written that a reader would see, which is the one the
+	// East Asian rule is about. It is not the same as last: a variation selector
+	// or a soft hyphen written before a segment break is not the character
+	// before the break, and the suite has a test of exactly that —
+	// segment-break-transformation-ignorable-1 writes the Han characters with
+	// their variation selectors and asks for the breaks to go anyway.
+	var lastSeen rune
 	inRun, breaks, afterCR := false, 0, false
 
-	flush := func(next rune) {
+	// flush takes the character that ends the run twice over: as it stands, for
+	// the zero-width-space rule, and as a reader would see it, for the East
+	// Asian one. They are not the same question — U+200B is itself
+	// default-ignorable, so a rule that looked past what is not drawn would look
+	// straight past the character the rule before it is about.
+	flush := func(next, nextSeen rune) {
 		if !inRun {
 			return
 		}
@@ -300,6 +312,16 @@ func CollapseWhitespace(text, value string) string {
 			last = '\n'
 		case last == zwsp || next == zwsp:
 			// The break is removed, leaving the zero-width space behind.
+		case removesSegmentBreak(lastSeen) && removesSegmentBreak(nextSeen):
+			// §4.1.1's East Asian rule. A newline between two ideographs is not
+			// a word boundary — Japanese and Chinese are written without spaces
+			// between words — so the break goes rather than becoming one.
+			//
+			// Without this, a paragraph hard-wrapped in the source gains a space
+			// at the end of every line it was wrapped at, in the middle of
+			// words, all through the text. It is the single most visible thing
+			// this engine got wrong about CJK, and it is wrong in the direction
+			// that looks deliberate.
 		default:
 			out.WriteByte(' ')
 			last = ' '
@@ -313,7 +335,7 @@ func CollapseWhitespace(text, value string) string {
 	// to the first of them, and a boundary written as a control has to agree.
 	var pending []rune
 
-	for _, r := range text {
+	for i, r := range text {
 		if IsBidiControl(r) {
 			// Not a character of the text: it is an instruction to the
 			// bidirectional algorithm, and it must not break a run of white
@@ -345,15 +367,18 @@ func CollapseWhitespace(text, value string) string {
 			}
 			continue
 		}
-		flush(r)
+		flush(r, nextSeen(text[i:]))
 		for _, c := range pending {
 			out.WriteRune(c)
 		}
 		pending = pending[:0]
 		out.WriteRune(r)
 		last = r
+		if !IsDefaultIgnorable(r) {
+			lastSeen = r
+		}
 	}
-	flush(0)
+	flush(0, 0)
 	for _, c := range pending {
 		out.WriteRune(c)
 	}
@@ -441,4 +466,63 @@ func IsOtherSpaceSeparator(r rune) bool {
 // no exception for the no-break ones, and it is the caller that applies it.
 func SeparatorBreaksAfter(r rune) bool {
 	return r != 0x2007 && r != 0x202F
+}
+
+// removesSegmentBreak reports whether a character is one of the pair §4.1.1
+// names: "the East Asian Width property of both the character before and after
+// the segment break is F, W, or H (not A), and neither side is Hangul".
+//
+// The two halves are two of Unicode's own tables, generated together — see
+// cmd/geneastasian for what each is and why A is not among them. The policy is
+// the "and", and it is here rather than folded into the data so that a reader
+// can check either table against the file it came from.
+//
+// Hangul is carved out because Korean is written with spaces between its words.
+// A newline between two Hangul syllables is a word boundary and must stay one,
+// which is exactly what the rule would otherwise destroy: the syllables are wide
+// and would satisfy every other part of it.
+func removesSegmentBreak(r rune) bool {
+	return inRanges(r, eastAsianWideRanges[:]) && !inRanges(r, hangulRanges[:])
+}
+
+// nextSeen is the first character of the text that a reader would see: the one
+// the segment break rule means by "the character after the break".
+//
+// It looks past the characters nothing is drawn for, which is what makes
+// "社︀\n福︀" behave like "社\n福" — the suite's
+// segment-break-transformation-ignorable-1 writes Han characters with their
+// variation selectors and asks for the break to go anyway, and a reader who
+// cannot see the selector would not expect it to change the answer.
+//
+// It is bounded by that run rather than by the text: the scan stops at the first
+// character that is not ignorable, and the loop that called it consumes what was
+// scanned, so no character is looked at twice.
+func nextSeen(text string) rune {
+	for _, r := range text {
+		if IsDefaultIgnorable(r) || IsBidiControl(r) {
+			continue
+		}
+		return r
+	}
+	return 0
+}
+
+// inRanges searches one of the generated tables, which are sorted and disjoint.
+func inRanges(r rune, table []struct{ lo, hi rune }) bool {
+	if len(table) == 0 || r < table[0].lo {
+		return false
+	}
+	lo, hi := 0, len(table)-1
+	for lo <= hi {
+		mid := int(uint(lo+hi) >> 1)
+		switch {
+		case r < table[mid].lo:
+			hi = mid - 1
+		case r > table[mid].hi:
+			lo = mid + 1
+		default:
+			return true
+		}
+	}
+	return false
 }

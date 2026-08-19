@@ -111,6 +111,15 @@ casing:
 	go run ./cmd/gencasing $(UCD)/SpecialCasing.txt > paragraph/casingtable.go
 	gofmt -w paragraph/casingtable.go
 
+# The two properties CSS Text's segment break transformation reads: East Asian
+# Width, and which characters are Hangul. See cmd/geneastasian.
+#
+#	make eastasian UCD=/path/to/unpacked/ucd
+eastasian:
+	go run ./cmd/geneastasian $(UCD)/EastAsianWidth.txt $(UCD)/Scripts.txt \
+	  > paragraph/eastasiantable.go
+	gofmt -w paragraph/eastasiantable.go
+
 # What "text-transform: full-width" and "full-size-kana" remap, both derived
 # from UnicodeData.txt. See cmd/genfullwidth and cmd/genfullsizekana.
 #
