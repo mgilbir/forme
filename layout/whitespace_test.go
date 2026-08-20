@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"github.com/mgilbir/forme/paragraph"
 	"strings"
 	"testing"
 	"time"
@@ -663,7 +664,7 @@ func TestWhitespaceProcessingIsLinear(t *testing.T) {
 
 	for _, value := range []string{"normal", "pre-line", "pre", "break-spaces"} {
 		start := time.Now()
-		got := collapseWhitespace(text, value)
+		got := collapseWhitespace(text, value, paragraph.WordSpaceTransform{})
 		if elapsed := time.Since(start); elapsed > 20*time.Second {
 			t.Fatalf("white-space:%s took %v over a megabyte; that is not linear",
 				value, elapsed)

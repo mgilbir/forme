@@ -46,7 +46,7 @@ func TestASegmentBreakBetweenEastAsianCharactersIsRemoved(t *testing.T) {
 		{"테스트\n테스트", "테스트 테스트", "Hangul and Hangul"},
 		{"a\nb", "a b", "Latin, which is every other document"},
 	} {
-		if got := CollapseWhitespace(tc.in, "normal"); got != tc.want {
+		if got := CollapseWhitespace(tc.in, "normal", WordSpaceTransform{}); got != tc.want {
 			t.Errorf("%s: %q became %q, want %q", tc.what, tc.in, got, tc.want)
 		}
 	}
@@ -100,7 +100,7 @@ func TestTheCharacterEitherSideIsTheOneAReaderSees(t *testing.T) {
 		// even though it is invisible in the sense of having no ink.
 		{"葛\n 葛", "葛葛", "a space, which the earlier phase removes"},
 	} {
-		if got := CollapseWhitespace(tc.in, "normal"); got != tc.want {
+		if got := CollapseWhitespace(tc.in, "normal", WordSpaceTransform{}); got != tc.want {
 			t.Errorf("%s: %q became %q, want %q", tc.what, tc.in, got, tc.want)
 		}
 	}
@@ -115,7 +115,7 @@ func TestTheZeroWidthSpaceStillWins(t *testing.T) {
 		{"abc​\ndef", "abc​def", "before it, Latin either side"},
 		{"abc\n​def", "abc​def", "after it, Latin either side"},
 	} {
-		if got := CollapseWhitespace(tc.in, "normal"); got != tc.want {
+		if got := CollapseWhitespace(tc.in, "normal", WordSpaceTransform{}); got != tc.want {
 			t.Errorf("%s: %q became %q, want %q", tc.what, tc.in, got, tc.want)
 		}
 	}
@@ -135,7 +135,7 @@ func TestTheEarlierPhasesRunFirst(t *testing.T) {
 		{"一些 \n \n \n 中文", "spaces and breaks alternating"},
 		{"一些\t\n\t中文", "tabs either side"},
 	} {
-		if got := CollapseWhitespace(tc.in, "normal"); got != want {
+		if got := CollapseWhitespace(tc.in, "normal", WordSpaceTransform{}); got != want {
 			t.Errorf("%s: %q became %q, want %q", tc.what, tc.in, got, want)
 		}
 	}
@@ -152,7 +152,7 @@ func TestAnOrdinarySpaceBetweenIdeographsSurvives(t *testing.T) {
 		{"一些\t中文", "一些 中文", "a tab, which becomes a space"},
 		{"一些　中文", "一些　中文", "an ideographic space, which never collapses"},
 	} {
-		if got := CollapseWhitespace(tc.in, "normal"); got != tc.want {
+		if got := CollapseWhitespace(tc.in, "normal", WordSpaceTransform{}); got != tc.want {
 			t.Errorf("%s: %q became %q, want %q", tc.what, tc.in, got, tc.want)
 		}
 	}
@@ -164,7 +164,7 @@ func TestAnOrdinarySpaceBetweenIdeographsSurvives(t *testing.T) {
 func TestPreLineKeepsTheBreakItself(t *testing.T) {
 	// The values are white-space-collapse's, which is what this is given.
 	for _, value := range []string{"preserve-breaks", "preserve", "break-spaces"} {
-		if got := CollapseWhitespace("一些\n中文", value); got != "一些\n中文" {
+		if got := CollapseWhitespace("一些\n中文", value, WordSpaceTransform{}); got != "一些\n中文" {
 			t.Errorf("%s: %q; the break is preserved and is not this rule's to remove",
 				value, got)
 		}
