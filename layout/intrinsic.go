@@ -266,6 +266,7 @@ func (l *layouter) inlineWidths(b *Box) intrinsicWidths {
 	// half that decides the page rather than a refinement of it.
 	hp, _ := hangingPunctuationOf(b.Style["hanging-punctuation"])
 	items = l.hangPunctuation(items, hp)
+	items = l.linkLetterSpacing(items)
 	got, split := l.widthsOf(items)
 
 	// §16.1's indent moves the first line and no other, so the box is as wide as
