@@ -187,7 +187,7 @@ func TransformText(text string, kind TextTransform, inWord bool, lang Language) 
 	case TransformLowercase:
 		text = localeCased(text, lang, false)
 	case TransformCapitalize:
-		text = capitalizeWords(text, inWord)
+		text = capitalizeWords(text, inWord, lang)
 	}
 	if kind&TransformFullWidth != 0 {
 		text = remapped(text, fullWidthForms[:])
@@ -263,6 +263,14 @@ func lookupWidth(r rune, table []widthPair) (rune, bool) {
 // unless the text really contains one of the characters they are about. Every
 // other run takes the same path it always did.
 func localeCased(text string, lang Language, upper bool) string {
+	if upper && lang == "el" {
+		// Greek drops its accents in capitals, which is a whole-run rule rather
+		// than a per-character mapping: an accent removed from one vowel puts a
+		// dialytika on the next. See greekcasing.go.
+		if got := greekUppercase(text); got != "" {
+			return got
+		}
+	}
 	if i := firstConditional(text, lang, upper); i >= 0 {
 		return conditionalCased(text, lang, upper, i)
 	}
@@ -407,10 +415,20 @@ func lookupFullCase(r rune, table []fullCase) (string, bool) {
 // set in the second form is set wrongly. It is also a third mapping rather than
 // a variation on the other two — "ß" titlecases to "Ss" and uppercases to "SS" —
 // so it has a table of its own.
-func capitalizeWords(text string, inWord bool) string {
+func capitalizeWords(text string, inWord bool, lang Language) string {
 	var out strings.Builder
 	out.Grow(len(text))
 	for i := 0; i < len(text); {
+		if !inWord && lang == "nl" {
+			// IJ is one letter of the Dutch alphabet written as two, so a word
+			// beginning with it takes two capitals. See dutchCapitalize.
+			if got, ok := dutchCapitalize(text, i); ok {
+				out.WriteString(got)
+				i += 2
+				inWord = true
+				continue
+			}
+		}
 		r, size := rune(text[i]), 1
 		if r >= utf8.RuneSelf {
 			r, size = utf8.DecodeRuneInString(text[i:])
