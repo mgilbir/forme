@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
 )
 
@@ -85,14 +86,14 @@ func documentStylesheets(doc *html.Node, res ResourceResolver, rec *Recorder) []
 		switch strings.ToLower(n.Name) {
 		case "style":
 			if text := n.TextContent(); text != "" {
-				out = append(out, authorSheet{source: text})
+				out = append(out, l.expandImports(authorSheet{source: text})...)
 			}
 			// A <style> element's content is raw text, so there is nothing
 			// below it to walk.
 			return false
 		case "link":
 			if s, ok := l.link(n); ok {
-				out = append(out, s)
+				out = append(out, l.expandImports(s)...)
 			}
 			return false
 		}
@@ -351,4 +352,219 @@ var bareMediaTypes = map[string]bool{
 	"all": true, "print": true, "screen": true, "speech": true,
 	"aural": true, "braille": true, "embossed": true, "handheld": true,
 	"projection": true, "tty": true, "tv": true,
+}
+
+// @import, which is the other way a document names a stylesheet.
+//
+// It is a <link> written inside a sheet rather than inside the markup, and it
+// exists because a sheet has no markup to write a <link> in: a document that
+// keeps its font declarations in one file and its rules in another says so from
+// the CSS, and the suite's letter-spacing tests are nineteen documents that do
+// exactly that with "@import \"/fonts/ahem.css\"".
+//
+// What made it worth doing is not the count. A stylesheet that fails to arrive
+// is a document rendered without its styles, and the engine reported the at-rule
+// and carried on — so a page that had lost its font came out plausible, in the
+// default face, with nothing on the page to say which of the two it was.
+//
+// # Where the imported rules go
+//
+// Before the rules of the sheet that imported them, which is what makes
+// "@import" a way of saying "these are my defaults". The cascade's last
+// tie-break is document order, so a sheet that imports another and then
+// overrides one of its rules must have its own rule arrive later — and the way
+// to make that true is to hand the two over as two sheets in that order rather
+// than to splice text.
+//
+// # Why the at-rules are cut out of the source
+//
+// The importing sheet is handed on with its leading @import and @charset rules
+// removed. Without that the cascade would meet an at-rule it does not apply and
+// report it, which after this is not true: the rule *was* applied, by the loader,
+// and the sheet it named is in the list. An @import written anywhere but at the
+// top of a sheet is invalid CSS and is left where it is, so it is still reported
+// — which is the right answer for a rule a browser also ignores.
+
+// # What bounds a cycle
+//
+// A sheet may import a sheet that imports a sheet, and there is nothing in CSS
+// to stop that being a cycle: "a.css" imports "b.css", which imports "a.css".
+// The walk below is recursive, so something has to stop it.
+//
+// maxDocumentStylesheets is what does. Every level of the recursion spends one
+// of that budget — fetchImport counts a sheet whether it was read or handed back
+// from the cache, which is exactly so that a cycle is charged for going round —
+// so the depth is bounded by the count, and a cycle is twenty steps rather than
+// a stack overflow.
+//
+// A separate depth cap was written here first and could not be made to fail:
+// with the count cap in place, planting its removal changed no output and hung
+// nothing. It is gone, and a chain deeper than it allowed is now a test, because
+// what it would have done to a real document is drop the sheet at the bottom.
+
+// expandImports returns the sheets one author sheet stands for: everything it
+// imports, in the order it imports them, and then what is left of it.
+func (l *sheetLoader) expandImports(s authorSheet) []authorSheet {
+	if !strings.Contains(s.source, "@import") {
+		return []authorSheet{s}
+	}
+	rules, _ := css.ParseStylesheet(s.source)
+	var out []authorSheet
+	cut, found := 0, false
+	for _, r := range rules {
+		// Only the leading run. §4 of CSS Cascade puts @import before every
+		// rule but @charset and @layer, and one written later is ignored.
+		if !r.At || r.HasBlock {
+			cut = r.Offset
+			break
+		}
+		name := strings.ToLower(r.Name)
+		if name == "charset" {
+			cut = len(s.source)
+			continue
+		}
+		if name != "import" {
+			cut = r.Offset
+			break
+		}
+		ref, ok := importReference(r.Prelude)
+		if !ok {
+			// A conditional import — "@import url(x) print" — or a prelude this
+			// cannot read. Nothing is loaded and the rule is left where it is,
+			// so the cascade reports it as the at-rule it did not apply.
+			cut = r.Offset
+			break
+		}
+		// Recognised, so it comes out of the source whether or not the file
+		// behind it arrives: a reference that could not be read has been
+		// reported by fetchImport, and leaving the rule in would have the
+		// cascade report the same fact a second time and differently.
+		cut, found = len(s.source), true
+		if src, ok := l.fetchImport(ref, s.name); ok {
+			out = append(out, l.expandImports(authorSheet{name: ref, source: src})...)
+		}
+	}
+	if !found {
+		return []authorSheet{s}
+	}
+	s.source = s.source[cut:]
+	return append(out, s)
+}
+
+// importReference reads the URL out of an @import prelude, and declines
+// anything with more in it than the URL.
+//
+// "@import url(x) print" is a conditional import, and this engine evaluates no
+// media queries — see the <link media> case above for why guessing either way is
+// worse than declining and saying so.
+func importReference(prelude []css.ComponentValue) (string, bool) {
+	ref, have := "", false
+	for _, v := range prelude {
+		switch {
+		case v.IsToken() && v.Token.Kind == css.Whitespace:
+			continue
+		case v.IsToken() && v.Token.Kind == css.URL:
+			if have {
+				return "", false
+			}
+			ref, have = v.Token.Value, true
+		case v.IsToken() && v.Token.Kind == css.String:
+			if have {
+				return "", false
+			}
+			ref, have = v.Token.Value, true
+		case v.IsFunction() && strings.EqualFold(v.Token.Value, "url"):
+			if have {
+				return "", false
+			}
+			s, ok := singleString(v.Values)
+			if !ok {
+				return "", false
+			}
+			ref, have = s, true
+		default:
+			// A media query, a layer name, a supports() condition: more than a
+			// reference, and more than this reads.
+			return "", false
+		}
+	}
+	return strings.TrimSpace(ref), have && strings.TrimSpace(ref) != ""
+}
+
+// fetchImport reads an imported sheet under the same caps and through the same
+// cache as a linked one.
+//
+// from is the sheet the @import was written in, which is what a relative
+// reference is relative to: "@import \"../base.css\"" inside "css/page.css"
+// names "base.css", and resolving it against the document instead would name a
+// file beside the document that is not there. A <style> element has no name and
+// its imports are relative to the document, which is what an empty from means.
+func (l *sheetLoader) fetchImport(ref, from string) (string, bool) {
+	ref = resolveAgainstSheet(ref, from)
+	if l.failed[ref] {
+		// Already refused, and already reported. As with a <link> to the same
+		// missing file, the Recorder deduplicates the finding on its own and
+		// what this saves is the system calls — so removing it changes no
+		// output, which is why there is no test below that it fails.
+		return "", false
+	}
+	if src, ok := l.cache[ref]; ok {
+		if l.applied >= maxDocumentStylesheets {
+			return "", false
+		}
+		l.applied++
+		return src, true
+	}
+	if l.applied >= maxDocumentStylesheets {
+		l.overCapImport(ref)
+		return "", false
+	}
+	src, fail := l.fetch(ref)
+	if fail != nil {
+		l.failed[ref] = true
+		l.rec.ReportDetail(Finding{
+			Rule:    fail.rule,
+			Message: fail.message,
+		})
+		return "", false
+	}
+	if l.cache == nil {
+		l.cache = map[string]string{}
+	}
+	l.cache[ref] = src
+	l.applied++
+	return src, true
+}
+
+// resolveAgainstSheet makes a reference written in one sheet relative to that
+// sheet rather than to the document.
+//
+// A reference that begins at the root names itself, and a sheet with no name of
+// its own — a <style> element — leaves the reference alone, because the document
+// is what it is already relative to.
+func resolveAgainstSheet(ref, from string) string {
+	if from == "" || strings.HasPrefix(ref, "/") {
+		return ref
+	}
+	i := strings.LastIndexByte(from, '/')
+	if i < 0 {
+		return ref
+	}
+	return from[:i+1] + ref
+}
+
+// overCapImport reports the document-wide count tripping on an @import. It is
+// the same fact overCap reports for a <link> and is said the same way, without
+// an element to point at.
+func (l *sheetLoader) overCapImport(ref string) {
+	if l.capped {
+		return
+	}
+	l.capped = true
+	l.rec.ReportDetail(Finding{
+		Rule: RuleLimit,
+		Message: fmt.Sprintf("this document reached the limit of %d stylesheets; "+
+			"the @import of %s and any after it were not read",
+			maxDocumentStylesheets, quoteValue(ref)),
+	})
 }

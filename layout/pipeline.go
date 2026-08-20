@@ -124,8 +124,13 @@ func Build(in Input) Built {
 	for _, s := range documentStylesheets(doc, in.Resources, rec) {
 		sheets = append(sheets, parseSheet(rec, style.OriginAuthor, s.name, s.source, &faces))
 	}
+	// A caller's own sheets go through the same expansion as the document's, so
+	// that "@import" means the same thing whichever side it was written on.
+	importer := &sheetLoader{res: in.Resources, rec: rec, failed: map[string]bool{}}
 	for _, s := range in.CSS {
-		sheets = append(sheets, parseSheet(rec, style.OriginAuthor, s.Name, s.Source, &faces))
+		for _, e := range importer.expandImports(authorSheet{name: s.Name, source: s.Source}) {
+			sheets = append(sheets, parseSheet(rec, style.OriginAuthor, e.name, e.source, &faces))
+		}
 	}
 
 	base := in.Fonts
