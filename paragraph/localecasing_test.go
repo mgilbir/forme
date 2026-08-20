@@ -140,9 +140,16 @@ func TestALanguageIsAScriptAsWellAsALanguage(t *testing.T) {
 		{"tr-Latn-TR", "tr"}, // and with a region after it
 		{"tr-Cyrl", ""},      // a different alphabet: no tailoring
 		{"az-Cyrl", ""},      //
-		{"lt-Latn", "lt"},    //
-		{"", ""},             //
-		{"  El  ", "el"},     // trimmed and lowercased
+		// Which alphabet counts depends on the language: Greek drops its
+		// accents in the Greek one, so "not Latin" would be the wrong test.
+		{"el-Grek", "el"},
+		{"el-Latn", ""},
+		// A language with no tailoring is not asked about its script at all.
+		{"ru-Cyrl", "ru"},
+		{"en-Latn", "en"},
+		{"lt-Latn", "lt"}, //
+		{"", ""},          //
+		{"  El  ", "el"},  // trimmed and lowercased
 	} {
 		if got := string(LanguageOf(tc.tag)); got != tc.want {
 			t.Errorf("%q read as %q, want %q", tc.tag, got, tc.want)
@@ -161,13 +168,14 @@ func TestALanguageIsAScriptAsWellAsALanguage(t *testing.T) {
 // every document: text with none of these characters in it must come out of the
 // conditional path exactly as it came out of the unconditional one.
 func TestNoLanguageChangesOrdinaryText(t *testing.T) {
-	// None of these holds an i, a j, a sigma or a combining dot, which is what
-	// makes them ordinary: a Turkish page really does uppercase its i's
-	// differently, and a fixture containing one would be testing the tailoring
-	// rather than its absence.
+	// None of these holds an i, a j, a sigma, a combining dot or a Greek letter,
+	// which is what makes them ordinary: a Turkish page really does uppercase
+	// its i's differently and a Greek one really does drop its accents, so a
+	// fixture containing either would be testing the tailoring rather than its
+	// absence.
 	for _, text := range []string{
 		"hello world", "HELLO WORLD", "straße", "日本語", "abcdefgh", "ABCDEFGH",
-		"", " ", "123", "Ölaf", "καλημέρα", "ΚΑΛΗΜΕΡΑ",
+		"", " ", "123", "Ölaf", "Здравствуйте", "ЗДРАВСТВУЙТЕ",
 	} {
 		for _, kind := range []TextTransform{TransformUppercase, TransformLowercase} {
 			want, _ := TransformText(text, kind, false, "")

@@ -54,12 +54,16 @@ type Language string
 
 // LanguageOf reads a lang attribute's value as one of these.
 //
-// A tag that names a script other than Latin gives no language at all, and the
-// suite forces that rather than leaving it to taste:
+// A tag that names a script the language's tailoring is not about gives no
+// language at all, and the suite forces that rather than leaving it to taste:
 // writing-system-text-transform-001 is Turkish written in Cyrillic —
 // lang="tr-Cyrl" — and asks for the I to lowercase to a *dotted* i. The dotless
 // one is a letter of the Turkish Latin alphabet and there is no such letter in
 // Cyrillic, so the tailoring is about the script as much as the language.
+//
+// Which script that is depends on the language, and "not Latin" would be the
+// wrong test: Greek drops its accents in the Greek alphabet, so "el-Grek" is
+// Greek and "el-Latn" — Greek transliterated — is not.
 //
 // A tag with no script subtag is taken at its word: "tr" is Turkish in the
 // alphabet Turkish is written in.
@@ -72,13 +76,22 @@ func LanguageOf(tag string) Language {
 		// A script subtag is four letters, which is what distinguishes it from
 		// a region (two letters or three digits) and from a variant.
 		if len(sub) == 4 && isAlpha(sub) {
-			if sub != "latn" {
+			if want, ok := tailoredScript[primary]; ok && sub != want {
 				return ""
 			}
 			break
 		}
 	}
 	return Language(primary)
+}
+
+// tailoredScript is the alphabet each tailored language is tailored *in*.
+//
+// A language not named here has no tailoring, so what script it is written in
+// decides nothing and is not asked about.
+var tailoredScript = map[string]string{
+	"tr": "latn", "az": "latn", "lt": "latn", "nl": "latn",
+	"el": "grek",
 }
 
 // isAlpha reports whether every byte of a subtag is a letter, which the tag
