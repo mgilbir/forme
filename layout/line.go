@@ -75,6 +75,15 @@ type TextRun struct {
 	// from the neighbours, which are other runs by the time anything paints this
 	// one.
 	RTL bool
+	// PreContext and PostContext are the text either side of this run, where the
+	// boundary between it and its neighbour did not break shaping.
+	//
+	// They are carried into painting for the reason LetterSpacing is: a backend
+	// shapes this run from its text and its face, and a cursive letter's shape
+	// comes from its neighbours. Without them the run is measured joined and
+	// drawn isolated — the two disagree, and the page shows a word broken into
+	// letters standing apart. See shapingcontext.go.
+	PreContext, PostContext string
 	// LetterSpacing is what letter-spacing added after each character of this
 	// run. It is carried into painting as well as into the width because the two
 	// have to agree: the width decided where the next run starts, and glyphs

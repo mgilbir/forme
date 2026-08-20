@@ -531,7 +531,11 @@ func (l *layouter) insetItems(b *Box, containing style.Unit) (lead, trail inline
 	if left == 0 && right == 0 {
 		return inlineItem{}, inlineItem{}, false
 	}
-	item := inlineItem{Box: b, Inset: true}
+	// Both physical values on both items, so that a later stage can ask which
+	// side of the box faces a boundary — see shapingcontext.go. Width is one of
+	// them and is chosen by insetSides, which cannot happen until the levels are
+	// resolved.
+	item := inlineItem{Box: b, Inset: true, InsetLeft: left, InsetRight: right}
 	lead, trail = item, item
 	lead.InsetLead = true
 	lead.Width, trail.Width = left, right

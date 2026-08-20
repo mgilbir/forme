@@ -254,6 +254,10 @@ func (l *layouter) inlineWidths(b *Box) intrinsicWidths {
 	// measurement so that nothing on the way down is laid out — see
 	// inlineFrame.measuring for why that is a correctness rule and not a saving.
 	items, _ := l.collectInline(b, l.markerItems(b), startOfContext(), inlineFrame{Measuring: true})
+	// The same context the lines will be filled with, so that a box sized to its
+	// content is sized to the content it will hold: a joined Arabic word is not
+	// as wide as the same letters set apart.
+	items = l.linkShapingContext(items)
 	got, split := l.widthsOf(items)
 
 	// §16.1's indent moves the first line and no other, so the box is as wide as

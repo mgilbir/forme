@@ -66,7 +66,7 @@ func TestJoinFormsFollowTheNeighbours(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := joinForms(tc.runes)
+			got := joinForms(tc.runes, nil, nil)
 			if len(got) != len(tc.want) {
 				t.Fatalf("got %d forms, want %d", len(got), len(tc.want))
 			}
@@ -84,7 +84,7 @@ func TestJoinFormsFollowTheNeighbours(t *testing.T) {
 // each joins to; treating it as an ordinary character would break every
 // vocalised word into isolated letters.
 func TestTransparentMarksDoNotBreakAJoin(t *testing.T) {
-	forms := joinForms([]rune{beh, fatha, beh})
+	forms := joinForms([]rune{beh, fatha, beh}, nil, nil)
 	if forms[0] != featInitial {
 		t.Errorf("the first letter is %q, want %q: the mark must not break the join", forms[0], featInitial)
 	}

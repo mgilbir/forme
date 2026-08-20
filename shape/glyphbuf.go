@@ -118,7 +118,58 @@ type ligatureRef struct {
 // It is the full result. Shape is the same pipeline with the vertical part
 // dropped, and is enough whenever the text carries no marks.
 func (f *Face) ShapeGlyphs(s string) ([]Glyph, int) {
-	return f.shapeGlyphsWith(s, nil)
+	return f.shapeGlyphsWith(s, nil, shapeContext{})
+}
+
+// ShapeGlyphsInContext is ShapeGlyphs with the text either side of the run.
+//
+// A cursive script chooses each letter's shape from its neighbours, and a run is
+// not always the whole word: CSS Text §8.1 says the boundary between two inline
+// elements does not break shaping, so "\u0639<span>\u0639</span>\u0639" is one
+// joined word set as three runs. Without the context each run is shaped alone
+// and every letter comes out in its isolated form, which for a reader of Arabic
+// is the difference between a word and three letters standing apart.
+//
+// The context decides the *forms*, and nothing else. A ligature that spans the
+// boundary is not formed — a lam-alef written with the lam in one run and the
+// alef in another stays two letters — because the glyph for it would belong to
+// both runs at once and neither could carry it. That is a real limitation and
+// the suite has a test of it, shaping_lig-000.
+//
+// Either side may be empty, which is what the start and end of a paragraph are.
+func (f *Face) ShapeGlyphsInContext(s, before, after string) ([]Glyph, int) {
+	return f.shapeGlyphsWith(s, nil, shapeContext{before: before, after: after})
+}
+
+// shapeContext is the text either side of the run being shaped, in logical
+// order: before is what precedes it and after is what follows.
+type shapeContext struct{ before, after string }
+
+// runes returns the two sides as the shortest slices that still answer the
+// question a joining scan asks of them.
+//
+// That scan walks outward past the transparent characters — the marks, which
+// take no form of their own — until it meets one that is not, and then stops. So
+// the useful context is everything up to and including the first non-transparent
+// character on each side, and carrying more would be decoding characters whose
+// answer is already settled.
+func (c shapeContext) runes() (before, after []rune) {
+	for _, r := range c.before {
+		before = append(before, r)
+	}
+	for i := len(before) - 1; i >= 0; i-- {
+		if joiningTypeOf(before[i]) != joinT {
+			before = before[i:]
+			break
+		}
+	}
+	for _, r := range c.after {
+		after = append(after, r)
+		if joiningTypeOf(r) != joinT {
+			break
+		}
+	}
+	return before, after
 }
 
 // ShapeGlyphsWith is ShapeGlyphs with extra features named by the caller: the
@@ -127,17 +178,17 @@ func (f *Face) ShapeGlyphs(s string) ([]Glyph, int) {
 // refused, because a caller asking for small capitals of a face that has none
 // wants the text, not an error.
 func (f *Face) ShapeGlyphsWith(s string, features ...string) ([]Glyph, int) {
-	return f.shapeGlyphsWith(s, features)
+	return f.shapeGlyphsWith(s, features, shapeContext{})
 }
 
-func (f *Face) shapeGlyphsWith(s string, extra []string) ([]Glyph, int) {
+func (f *Face) shapeGlyphsWith(s string, extra []string, ctx shapeContext) ([]Glyph, int) {
 	runs := bidiVisualRuns(s)
 	if len(runs) <= 1 {
 		// One direction throughout, which is nearly all text. Shaping it whole
 		// keeps a ligature or a kern pair that spans the string, which cutting
 		// it into runs would lose.
 		rtl := len(runs) == 1 && runs[0].RTL()
-		return f.shapeGlyphsIn(s, runScript(s), rtl, extra)
+		return f.shapeGlyphsIn(s, runScript(s), rtl, extra, ctx)
 	}
 	var (
 		out     []Glyph
@@ -145,7 +196,21 @@ func (f *Face) shapeGlyphsWith(s string, extra []string) ([]Glyph, int) {
 	)
 	for _, r := range runs {
 		piece := s[r.Start:r.End]
-		glyphs, gone := f.shapeGlyphsIn(piece, runScript(piece), r.RTL(), extra)
+		// A run inside the string has the rest of the string for context, and
+		// the caller's context outside that. The two are concatenated rather
+		// than one replacing the other: the caller's is what comes before all of
+		// s, so it belongs before the part of s that precedes this run.
+		//
+		// Replacing was the first version and was wrong in the one case that
+		// matters. A right-to-left run reaches a backend as an override
+		// character followed by the text — see ShapedText — so the text is never
+		// the first run of the string, and the override alone stood in for the
+		// word the letters were supposed to join to.
+		inner := shapeContext{
+			before: ctx.before + s[:r.Start],
+			after:  s[r.End:] + ctx.after,
+		}
+		glyphs, gone := f.shapeGlyphsIn(piece, runScript(piece), r.RTL(), extra, inner)
 		missing += gone
 		for i := range glyphs {
 			glyphs[i].Cluster += r.Start
@@ -165,7 +230,7 @@ func (f *Face) shapeGlyphsWith(s string, extra []string) ([]Glyph, int) {
 // decision when it cut the runs, and passes it here rather than having it
 // guessed again from less. The same holds for direction, which is a property of
 // the whole paragraph and cannot be read off one run of it.
-func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string) ([]Glyph, int) {
+func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, ctx shapeContext) ([]Glyph, int) {
 	if !f.composite() {
 		return f.shapeByCode(s, rtl)
 	}
@@ -234,7 +299,8 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string) 
 		// glyphs so that it survives what follows. The join controls have said
 		// all they have to say once that is done, and are taken out before any
 		// substitution can see them — see ignorable.go.
-		markJoiningForms(buf, runes)
+		before, after := ctx.runes()
+		markJoiningForms(buf, runes, before, after)
 		buf = hideJoiners(buf, runes)
 		buf = sh.substitute(buf)
 	}
