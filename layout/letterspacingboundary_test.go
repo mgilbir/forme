@@ -206,3 +206,82 @@ func TestABoxEdgeIsNotACharacter(t *testing.T) {
 
 // px2 is style.FromPx without the second result.
 func px2(v float64) style.Unit { u, _ := style.FromPx(v); return u }
+
+// TestTheTrailingLetterSpacingHangs.
+//
+// §8.2 adds spacing after the last character too, and that last one hangs at
+// the end of the line: the line's measure ends at its last glyph rather than a
+// tracking width past it. Counting it wrapped a paragraph set with wide tracking
+// one word early on every line — the wider the tracking, the earlier — and
+// contradicted what this engine already said about itself in
+// TestLetterSpacingIsStillAddedAfterEveryLetter.
+//
+// No reftest moves either way; see the comment on paragraph's overflows for why
+// the three that are written for this cannot. So the arithmetic is what has to
+// be pinned, and it is pinned exactly: "AAA BBB" is seven characters at 12px
+// and seven gaps of 24px, which is 252 with the trailing gap and 228 without.
+func TestTheTrailingLetterSpacingHangs(t *testing.T) {
+	lines := func(width int) int {
+		t.Helper()
+		css := `#p { font-family: Courier; font-size: 20px; letter-spacing: 24px;
+			width: ` + itoaPx(width) + ` }`
+		return len(find(t, layoutOf(t, 4000, `<div id="p">AAA BBB</div>`, css), "p").Lines)
+	}
+	// The whole thing, trailing gap included, obviously fits.
+	if got := lines(252); got != 1 {
+		t.Errorf("at 252px: %d lines, want 1", got)
+	}
+	// And so does the text without it, which is the claim.
+	if got := lines(228); got != 1 {
+		t.Errorf("at 228px: %d lines, want 1 — the gap after the last character "+
+			"hangs past the end of the line and is not part of what has to fit", got)
+	}
+	// One unit narrower and it does not, so this is a boundary rather than a
+	// fixture that would fit at any width.
+	if got := lines(227); got != 2 {
+		t.Errorf("at 227px: %d lines, want 2 — 228px of glyphs and internal gaps "+
+			"is one pixel more than the room", got)
+	}
+}
+
+// TestARightAlignedLineEndsAtItsLastGlyph is the other half of the hang, and it
+// is what a reader sees rather than what the breaking computes.
+//
+// A line is placed by what it measures. If the trailing tracking is counted, a
+// right-aligned line of tracked text sits a whole tracking width in from the
+// edge and a centred one half of it — visibly, and the wider the tracking the
+// more so.
+func TestARightAlignedLineEndsAtItsLastGlyph(t *testing.T) {
+	// Two characters at 12px is 24px of glyphs, two gaps of 24px is 48. The
+	// second gap hangs, so the line measures 24+24 = 48 and sits 48 from the
+	// right edge of a 400px box.
+	f := find(t, layoutOf(t, 4000, `<div id="p">AB</div>`,
+		`#p { font-family: Courier; font-size: 20px; letter-spacing: 24px;
+		      width: 400px; text-align: right }`), "p")
+	if len(f.Lines) != 1 || len(f.Lines[0].Runs) == 0 {
+		t.Fatalf("%d lines", len(f.Lines))
+	}
+	if got, want := f.Lines[0].Runs[0].X, px2(400-48); got != want {
+		t.Errorf("the line begins at %v, want %v: the gap after the last character "+
+			"hangs past the right edge and is not what the line is placed by",
+			got, want)
+	}
+	// The control: without the property the line is its glyphs alone.
+	plain := find(t, layoutOf(t, 4000, `<div id="p">AB</div>`,
+		`#p { font-family: Courier; font-size: 20px; width: 400px; text-align: right }`), "p")
+	if got, want := plain.Lines[0].Runs[0].X, px2(400-24); got != want {
+		t.Errorf("without letter-spacing the line begins at %v, want %v", got, want)
+	}
+}
+
+// itoaPx renders a whole number of CSS pixels.
+func itoaPx(v int) string {
+	digits := ""
+	for n := v; n > 0; n /= 10 {
+		digits = string(rune('0'+n%10)) + digits
+	}
+	if digits == "" {
+		digits = "0"
+	}
+	return digits + "px"
+}

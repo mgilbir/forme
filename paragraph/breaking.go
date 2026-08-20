@@ -263,7 +263,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// pre-wrap would push the second word down a line for spaces that take
 		// no room on the page at all.
 		if !item.NoWrap && !item.Hangs && i < tailFrom && item.BreakBefore &&
-			len(line) > 0 && used.Add(item.Width) > width {
+			len(line) > 0 && overflows(used, item, width) {
 			// Ending here costs the hyphen as well, where the opportunity is one
 			// a soft hyphen offered. If that does not fit, this is not a place
 			// the line may end at all and it goes back to one that is — the
@@ -282,7 +282,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// not fit — so the line ends where the box began and the box's leading
 		// margin goes with it.
 		if !item.NoWrap && !item.Hangs && i < tailFrom && !item.BreakBefore && !item.Inset &&
-			insetAt >= 0 && used.Add(item.Width) > width {
+			insetAt >= 0 && overflows(used, item, width) {
 			return trimLineEdge(line[:insetLine]), insetAt, 0, outOfFlow[:insetFlow], false
 		}
 
@@ -307,7 +307,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// above, which makes it a strict improvement rather than a trade.
 		if (item.Space || item.AtomicBox == nil) && !item.Collapsible &&
 			!item.Hangs && i < tailFrom && !item.NoWrap && !item.Inset &&
-			!item.BreakBefore && oppAt >= 0 && used.Add(item.Width) > width {
+			!item.BreakBefore && oppAt >= 0 && overflows(used, item, width) {
 			return trimLineEdge(line[:oppLine]), oppAt, 0, outOfFlow[:oppFlow], false
 		}
 
@@ -343,7 +343,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// Dropping the conjunct therefore moves nothing, which is why it is
 		// recorded here rather than left as an implied claim.
 		if item.BreakWord && !item.NoWrap && !item.Hangs && i < tailFrom && !item.Inset && !item.Tab &&
-			insetAt < 0 && oppAt < 0 && used.Add(item.Width) > width {
+			insetAt < 0 && oppAt < 0 && overflows(used, item, width) {
 			// The offset is into items[i]. It is only the cursor's offset away
 			// from that when this *is* the item the cursor pointed at: a line
 			// that began at a float and reached its first text later is at
@@ -408,6 +408,36 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		used = used.Add(item.Width)
 	}
 	return trimLineEdge(line), i, 0, outOfFlow, false
+}
+
+// overflows reports whether placing an item would put the line past its width.
+//
+// It is not "used plus the item's advance". §8.2's letter-spacing is added after
+// the *last* character too, and that last one hangs at the end of the line — so
+// the line's measure ends at the last glyph and not a tracking-width past it.
+// Counting it wrapped a paragraph set with wide tracking one word early on every
+// line, the wider the tracking the earlier, and it contradicted this engine's
+// own statement of the rule: layout's TestLetterSpacingIsStillAddedAfterEveryLetter
+// has said "it is the trailing one that hangs at the end of a line" since
+// letter-spacing was implemented.
+//
+// The item under test is the one whose trailing spacing would be at the end if
+// the line ended here, which is why the subtraction is of its spacing and not of
+// the line's last. Where more text follows on the same line that spacing stops
+// hanging and becomes internal, and the next item's is discounted instead; the
+// invariant that holds throughout is that the measure excludes the trailing
+// spacing of whatever is last.
+//
+// # What the suite says about this, which is nothing
+//
+// No reftest moves either way — not one of 6250, in either direction. The three
+// that are written for it, letter-spacing-200 through -202, cannot: both
+// documents of each pair report a font this harness does not have, so neither
+// reaches a clean pass whatever the arithmetic. So this is the engine made
+// consistent with its own stated model and with §8.2, on a corpus that
+// demonstrates it breaks nothing and confirms nothing.
+func overflows(used style.Unit, item Item, width style.Unit) bool {
+	return used.Add(item.Width).Sub(item.Spacing.Letter) > width
 }
 
 // pendingHyphen is the width of the hyphen a line would have to print if it

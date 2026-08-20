@@ -572,6 +572,12 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				// hanging bracket takes none whatever the room. Discounting it
 				// before the max is discounting it and then putting it back.
 				used = used.Sub(hangEndWidth(runs))
+				// §8.2's trailing letter-spacing, which hangs for the same
+				// reason: the property adds it after the last character too, and
+				// a line's measure ends at its last glyph. Without this a centred
+				// or right-aligned line of tracked text sits half a tracking
+				// width off.
+				used = used.Sub(trailingSpacing(runs))
 				rtl := lineBaseIsRTL(b, runs)
 				align, spread := lineAlignment(b, rtl, lastLine)
 

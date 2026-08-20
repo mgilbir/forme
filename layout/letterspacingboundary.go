@@ -122,3 +122,21 @@ func commonAncestor(a, b *Box) *Box {
 	}
 	return nil
 }
+
+// trailingSpacing is the letter-spacing after the last character of a line,
+// which §8.2 adds and which hangs past the end rather than counting towards it.
+//
+// It is asked of the runs in logical order and looks past an inline box's own
+// edge, which is not a character and carries no spacing of its own.
+func trailingSpacing(runs []inlineItem) style.Unit {
+	for i := len(runs) - 1; i >= 0; i-- {
+		if runs[i].Inset {
+			continue
+		}
+		if !isSpacedRun(runs[i]) {
+			return 0
+		}
+		return runs[i].Spacing.Letter
+	}
+	return 0
+}
