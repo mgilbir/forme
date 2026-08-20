@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Following a <link rel=stylesheet>, and the policy that says what it may reach.
@@ -347,30 +348,241 @@ func TestLinkedStylesheetCascadesInDocumentOrder(t *testing.T) {
 	}
 }
 
-// TestLinkedStylesheetImportIsReported records what this engine does *not* do.
+// @import, which is a <link> written inside a stylesheet.
 //
-// @import is not followed, and the reason is not effort. The engine is handed a
-// reference exactly as the document wrote it and has no notion of a base URL —
-// that join is the caller's resolver's job, and it is the *document's* directory
-// that a resolver knows about. An @import inside "support/theme.css" is relative
-// to support/, which nothing here can express, so following it would resolve
-// half of them against the wrong directory and silently load the wrong file or
-// nothing at all.
+// It was refused, and the reason recorded here was that the engine "has no
+// notion of a base URL — that join is the caller's resolver's job, and it is the
+// *document's* directory that a resolver knows about. An @import inside
+// support/theme.css is relative to support/, which nothing here can express".
 //
-// So it is refused and reported, through the at-rule path every unimplemented
-// at-rule already uses. The test is here rather than left implicit because a
-// dropped @import is exactly as invisible as a dropped <link> was.
-func TestLinkedStylesheetImportIsReported(t *testing.T) {
+// That is the one thing that had to be built, and it is four lines: the sheet an
+// @import was written in is the sheet it is relative to, and a sheet that came
+// from a <link> knows its own href. A <style> element has no href and its
+// imports are relative to the document, which is where they already were.
+//
+// The reason it was worth building is not the count. A stylesheet that fails to
+// arrive is a document rendered without its styles, and a page that had lost its
+// font came out plausible, in the default face, with nothing on it to say which
+// of the two had happened.
+
+// TestAnImportedStylesheetIsApplied.
+func TestAnImportedStylesheetIsApplied(t *testing.T) {
 	dir := cssDir(t)
 	writeCSS(t, filepath.Join(dir, "inner.css"), "p { color: rgb(1, 2, 3) }")
 	writeCSS(t, filepath.Join(dir, "outer.css"), `@import url("inner.css");`)
 
 	built := buildLinking(t, dir, `<link rel=stylesheet href=outer.css><p id=p>x</p>`)
+	if got := colourOf(t, built, "p"); got != wantColour {
+		t.Errorf("the imported rule did not arrive: %q", got)
+	}
+	for _, f := range built.Findings {
+		if f.Rule == RuleUnsupportedAtRule && strings.Contains(f.Message, "@import") {
+			t.Errorf("an @import that was applied was still reported: %s", f.Message)
+		}
+	}
+}
+
+// TestAnImportIsRelativeToTheSheetItWasWrittenIn, which is the join that could
+// not be expressed before and is the whole of why the at-rule was refused.
+func TestAnImportIsRelativeToTheSheetItWasWrittenIn(t *testing.T) {
+	dir := cssDir(t)
+	if err := os.MkdirAll(filepath.Join(dir, "support"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The one beside the document is a decoy: resolving against the document
+	// instead of against the sheet would find it and set the wrong colour.
+	writeCSS(t, filepath.Join(dir, "theme.css"), "p { color: rgb(9, 9, 9) }")
+	writeCSS(t, filepath.Join(dir, "support", "theme.css"), "p { color: rgb(1, 2, 3) }")
+	writeCSS(t, filepath.Join(dir, "support", "outer.css"), `@import "theme.css";`)
+
+	built := buildLinking(t, dir,
+		`<link rel=stylesheet href="support/outer.css"><p id=p>x</p>`)
+	if got := colourOf(t, built, "p"); got != wantColour {
+		t.Errorf("the colour is %q; an import inside support/ names the file in "+
+			"support/, not the one beside the document", got)
+	}
+}
+
+// TestAnImportedSheetComesBeforeTheSheetThatImportedIt. "@import" is how a sheet
+// says "these are my defaults", so the importing sheet's own rules have to win a
+// tie — which in the cascade means arriving later.
+func TestAnImportedSheetComesBeforeTheSheetThatImportedIt(t *testing.T) {
+	dir := cssDir(t)
+	writeCSS(t, filepath.Join(dir, "inner.css"), "p { color: rgb(9, 9, 9) }")
+	writeCSS(t, filepath.Join(dir, "outer.css"),
+		`@import url("inner.css"); p { color: rgb(1, 2, 3) }`)
+
+	built := buildLinking(t, dir, `<link rel=stylesheet href=outer.css><p id=p>x</p>`)
+	if got := colourOf(t, built, "p"); got != wantColour {
+		t.Errorf("the colour is %q; the importing sheet's own rule is written "+
+			"later and wins the tie", got)
+	}
+}
+
+// TestAnImportInAStyleElementIsRelativeToTheDocument. A <style> has no href of
+// its own, so what its imports are relative to is what they were relative to
+// before: the document.
+func TestAnImportInAStyleElementIsRelativeToTheDocument(t *testing.T) {
+	dir := cssDir(t)
+	writeCSS(t, filepath.Join(dir, "inner.css"), "p { color: rgb(1, 2, 3) }")
+
+	built := buildLinking(t, dir,
+		`<style>@import url("inner.css");</style><p id=p>x</p>`)
+	if got := colourOf(t, built, "p"); got != wantColour {
+		t.Errorf("the colour is %q", got)
+	}
+}
+
+// TestAConditionalImportIsStillReported. "@import url(x) print" is a media
+// query, and this engine evaluates none — the same argument the <link media>
+// case makes: applying it is a guess and so is skipping it, and the guess that
+// shows least is the one nobody can see.
+func TestAConditionalImportIsStillReported(t *testing.T) {
+	dir := cssDir(t)
+	writeCSS(t, filepath.Join(dir, "inner.css"), "p { color: rgb(1, 2, 3) }")
+	writeCSS(t, filepath.Join(dir, "outer.css"), `@import url("inner.css") print;`)
+
+	built := buildLinking(t, dir, `<link rel=stylesheet href=outer.css><p id=p>x</p>`)
 	if got := colourOf(t, built, "p"); got == wantColour {
-		t.Error("@import was followed; nothing here resolves one")
+		t.Error("a conditional import was applied")
 	}
 	requireFinding(t, built.Findings, RuleUnsupportedAtRule, "@import")
 	fired[RuleUnsupportedAtRule] = true
+}
+
+// TestAnImportThatIsNotAtTheTopIsIgnored. CSS Cascade puts @import before every
+// rule but @charset and @layer, and one written later is invalid — so it is left
+// where it is and reported, which is what a browser does with it too.
+func TestAnImportThatIsNotAtTheTopIsIgnored(t *testing.T) {
+	dir := cssDir(t)
+	writeCSS(t, filepath.Join(dir, "inner.css"), "p { color: rgb(1, 2, 3) }")
+	writeCSS(t, filepath.Join(dir, "outer.css"),
+		`p { color: rgb(9, 9, 9) } @import url("inner.css");`)
+
+	built := buildLinking(t, dir, `<link rel=stylesheet href=outer.css><p id=p>x</p>`)
+	if got := colourOf(t, built, "p"); got == wantColour {
+		t.Error("an @import written after a rule was followed")
+	}
+}
+
+// TestALongChainOfImportsAllArrives. A sheet may import a sheet that imports a
+// sheet, and the only thing that stops the walk is the document-wide count of
+// stylesheets. Six is deeper than a depth cap written here first allowed, and
+// what that cap would have done to a real document is drop the sheet at the
+// bottom of the chain — silently, which is the failure this whole file is about.
+func TestALongChainOfImportsAllArrives(t *testing.T) {
+	dir := cssDir(t)
+	for i := 0; i < 6; i++ {
+		writeCSS(t, filepath.Join(dir, fmt.Sprintf("c%d.css", i)),
+			fmt.Sprintf("@import url(\"c%d.css\");", i+1))
+	}
+	writeCSS(t, filepath.Join(dir, "c6.css"), "p { color: rgb(1, 2, 3) }")
+
+	built := buildLinking(t, dir, `<link rel=stylesheet href=c0.css><p id=p>x</p>`)
+	if got := colourOf(t, built, "p"); got != wantColour {
+		t.Errorf("the colour is %q; the sheet at the bottom of a chain of six is "+
+			"still one the document asked for", got)
+	}
+}
+
+// TestAChainOfImportsTerminates. A sheet may import a sheet that imports a
+// sheet, and nothing in CSS stops that being a cycle.
+func TestAChainOfImportsTerminates(t *testing.T) {
+	dir := cssDir(t)
+	writeCSS(t, filepath.Join(dir, "a.css"), `@import url("b.css");`)
+	writeCSS(t, filepath.Join(dir, "b.css"), `@import url("a.css"); p { color: rgb(1, 2, 3) }`)
+
+	done := make(chan Built, 1)
+	go func() { done <- buildLinking(t, dir, `<link rel=stylesheet href=a.css><p id=p>x</p>`) }()
+	select {
+	case built := <-done:
+		// The rule at the bottom of the cycle still arrives; what must not
+		// happen is the walk going round for ever.
+		if got := colourOf(t, built, "p"); got != wantColour {
+			t.Errorf("the colour is %q; the sheet in the cycle has a rule in it", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a cycle of imports did not terminate")
+	}
+}
+
+// TestAReferenceIsJoinedToTheSheetItWasWrittenIn is resolveAgainstSheet on its
+// own, and it is a unit test rather than a document because the interesting rows
+// are ones the default resolver refuses on policy: a reference beginning at the
+// root is not a thing it will read, and a test that built a document around one
+// would pass whether the join were right or wrong.
+//
+// The rows still matter, and the root-relative one most of all: eighteen of the
+// suite's nineteen importing documents write "@import \"/fonts/ahem.css\"" from
+// a sheet several directories down, and a resolver that does serve the root —
+// the one the reftest harness supplies — has to be handed the reference the
+// document wrote rather than that reference glued to a directory.
+func TestAReferenceIsJoinedToTheSheetItWasWrittenIn(t *testing.T) {
+	for _, tc := range []struct{ ref, from, want, what string }{
+		{"theme.css", "support/outer.css", "support/theme.css", "beside the sheet"},
+		{"../theme.css", "support/outer.css", "support/../theme.css", "above it"},
+		{"a/b.css", "x/y/outer.css", "x/y/a/b.css", "below it"},
+		// A reference that begins at the root names itself.
+		{"/fonts/ahem.css", "css/deep/outer.css", "/fonts/ahem.css", "root-relative"},
+		{"/a.css", "", "/a.css", "root-relative from a <style>"},
+		// A <style> element has no href, so its references are relative to the
+		// document, which is where they already were.
+		{"theme.css", "", "theme.css", "from a <style>"},
+		// A sheet in the document's own directory adds nothing.
+		{"theme.css", "outer.css", "theme.css", "from a sheet with no directory"},
+	} {
+		if got := resolveAgainstSheet(tc.ref, tc.from); got != tc.want {
+			t.Errorf("%s: %q in %q resolved to %q, want %q",
+				tc.what, tc.ref, tc.from, got, tc.want)
+		}
+	}
+}
+
+// TestImportsAreBoundedByTheDocumentWideCount. The cap is on stylesheets and not
+// on <link> elements, so a document that reaches it through @import reaches it
+// the same way — and is told, because the sheets past it are styles it asked for
+// and did not get.
+func TestImportsAreBoundedByTheDocumentWideCount(t *testing.T) {
+	old := maxDocumentStylesheets
+	defer func() { maxDocumentStylesheets = old }()
+	maxDocumentStylesheets = 3
+
+	dir := cssDir(t)
+	var chain strings.Builder
+	for i := 0; i <= maxDocumentStylesheets+1; i++ {
+		chain.WriteString(fmt.Sprintf("@import url(\"n%d.css\");", i))
+		writeCSS(t, filepath.Join(dir, fmt.Sprintf("n%d.css", i)), "b { font-weight: 700 }")
+	}
+	// The one that would set the colour is past the cap.
+	writeCSS(t, filepath.Join(dir, fmt.Sprintf("n%d.css", maxDocumentStylesheets+1)),
+		"p { color: rgb(1, 2, 3) }")
+	writeCSS(t, filepath.Join(dir, "outer.css"), chain.String())
+
+	built := buildLinking(t, dir, `<link rel=stylesheet href=outer.css><p id=p>x</p>`)
+	if got := colourOf(t, built, "p"); got == wantColour {
+		t.Error("a sheet past the cap was read")
+	}
+	requireFinding(t, built.Findings, RuleLimit, "stylesheets")
+	fired[RuleLimit] = true
+}
+
+// TestAnImportedSheetGoesThroughTheSameResolverPolicy. It is a resource like any
+// other: no scheme, no absolute path, no escape from the directory the resolver
+// was rooted at, and nothing at all when there is no resolver.
+func TestAnImportedSheetGoesThroughTheSameResolverPolicy(t *testing.T) {
+	dir := cssDir(t)
+	writeCSS(t, filepath.Join(dir, "outer.css"), `@import url("../secret.css");`)
+	built := buildLinking(t, dir, `<link rel=stylesheet href=outer.css><p id=p>x</p>`)
+	if got := colourOf(t, built, "p"); got == wantColour {
+		t.Error("an import escaped the resolver's directory")
+	}
+	// And with no resolver at all nothing is read, and the document is told.
+	none := Build(Input{
+		HTML: `<style>@import url("inner.css");</style><p id=p>x</p>`,
+	})
+	if len(none.Findings) == 0 {
+		t.Error("an import with no resolver was not reported")
+	}
 }
 
 // TestLinkedStylesheetRelIsATokenList checks which links are stylesheets at all.
