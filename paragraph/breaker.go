@@ -101,10 +101,25 @@ func (br *Breaker) Measure(face *shape.Face, text string, size style.Unit) style
 func (br *Breaker) MeasureSpaced(face *shape.Face, text string, size style.Unit,
 	sp TextSpacing) style.Unit {
 
+	return br.MeasureSpacedInContext(face, text, size, sp, "", "")
+}
+
+// MeasureSpacedInContext is MeasureSpaced with the text either side of the run,
+// which a cursive script needs: a letter's advance depends on the form it takes
+// and the form depends on its neighbours.
+//
+// The context is part of the memo key for the same reason the spacing is. The
+// same three letters measure differently at the start of a word and in the
+// middle of one, and an entry shared between the two would give a line filled to
+// one width and painted at another.
+func (br *Breaker) MeasureSpacedInContext(face *shape.Face, text string, size style.Unit,
+	sp TextSpacing, before, after string) style.Unit {
+
 	if text == "" {
 		return 0
 	}
-	key := measureKey{face: face, text: text, size: size, spacing: sp}
+	key := measureKey{face: face, text: text, size: size, spacing: sp,
+		before: before, after: after}
 	if got, ok := br.measured[key]; ok {
 		return got
 	}
@@ -124,7 +139,7 @@ func (br *Breaker) MeasureSpaced(face *shape.Face, text string, size style.Unit,
 	// distinct word rather than once per measurement. A face whose codes are
 	// characters — the standard PDF fonts — substitutes and kerns nothing, and
 	// MeasureShaped hands those straight back to the sum.
-	w, _ := style.FromPx(face.MeasureShaped(text, size.Px()))
+	w, _ := style.FromPx(face.MeasureShapedInContext(text, size.Px(), before, after))
 	w = w.Add(SpacingAdvance(text, sp))
 	br.measured[key] = w
 	return w
@@ -135,4 +150,7 @@ type measureKey struct {
 	text    string
 	size    style.Unit
 	spacing TextSpacing
+	// The text either side, which changes a cursive letter's advance. Empty for
+	// every run of every document that is not written in a joining script.
+	before, after string
 }

@@ -81,6 +81,19 @@ type DrawText struct {
 	Face  *shape.Face
 	Size  style.Unit
 	Color style.RGBA
+	// PreContext and PostContext are the text either side of this run, where the
+	// boundary between it and its neighbour did not break shaping.
+	//
+	// A backend shapes this run from its text and its face, and in a cursive
+	// script a letter's shape comes from its neighbours — so a run drawn without
+	// them comes out in isolated forms, and at a different width from the one
+	// layout measured and placed the next run at. CSS Text §8.1 is why a run is
+	// not always a whole word; layout's shapingcontext.go is where the boundary
+	// is decided.
+	//
+	// They are context and not content: nothing of them is drawn, and nothing of
+	// them belongs to the text a reader extracts from the page.
+	PreContext, PostContext string
 	// CharSpacing is letter-spacing: an extra advance after every character.
 	//
 	// It is a property of the drawing rather than of the position because layout
@@ -1178,6 +1191,8 @@ func (p *painter) lines(f *Fragment) {
 			p.ops = append(p.ops, DrawText{
 				At:          at,
 				Text:        drawableText(run.Text),
+				PreContext:  run.PreContext,
+				PostContext: run.PostContext,
 				RTL:         run.RTL,
 				Face:        run.Face,
 				Size:        run.Size,
@@ -1315,6 +1330,23 @@ func ShapedText(v DrawText) string {
 		return v.Text
 	}
 	return "‮" + v.Text
+}
+
+// ShapedGlyphs is the glyphs a backend draws for a run, in the order the pen
+// meets them.
+//
+// It exists so that the three fields a run needs shaping with cannot be used one
+// or two at a time. The text has to go through ShapedText for the direction, and
+// the context either side has to go with it or a cursive run comes out in
+// isolated forms — at a different width from the one layout measured, so the
+// run after it is drawn in the wrong place too. A backend calling ShapeGlyphs
+// directly gets that wrong silently, which is why the pairing is stated here
+// rather than left as something every backend has to remember.
+func ShapedGlyphs(v DrawText) ([]shape.Glyph, int) {
+	if v.Face == nil {
+		return nil, 0
+	}
+	return v.Face.ShapeGlyphsInContext(ShapedText(v), v.PreContext, v.PostContext)
 }
 
 // solidTiles is the rectangles a one-colour layer paints.

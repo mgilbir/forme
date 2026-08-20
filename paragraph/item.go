@@ -179,6 +179,20 @@ type Item struct {
 	// considered when calculating min-content intrinsic sizes" and Anywhere's
 	// are, which is the whole difference between the two values.
 	Anywhere bool
+	// PreContext and PostContext are the text either side of this run, where the
+	// boundary between it and its neighbour does not break shaping.
+	//
+	// CSS Text §8.1: the boundary between two inline elements does not break
+	// shaping, so "\u0639<span>\u0639</span>\u0639" is one joined Arabic word set
+	// as three runs. A cursive letter takes its shape from its neighbours, and
+	// without them each run is shaped alone and every letter comes out isolated —
+	// which for a reader of the script is the difference between a word and three
+	// letters standing apart.
+	//
+	// Empty for every run of every document not written in a joining script, and
+	// the layer that fills them in does not even ask unless the face carries the
+	// positional forms. See layout's linkShapingContext.
+	PreContext, PostContext string
 	// Hyphen is how much wider the line becomes if it ends after this item: the
 	// width of the hyphen a soft hyphen asks to have printed. Zero means this is
 	// not a hyphenation point, which is every item in almost every document.
@@ -226,6 +240,16 @@ type Item struct {
 	// insetSides for §8.6. The flag says where the item sits in the content, and
 	// the width says what it holds.
 	InsetLead bool
+	// InsetLeft and InsetRight are the box's own horizontal margin, border and
+	// padding, as the two *physical* values.
+	//
+	// Width carries one of them — which one is §8.6's question, answered by
+	// insetSides once the levels are known — and that is the right number for
+	// placing the item. It is the wrong number for asking whether there is room
+	// between two runs, because which physical side faces a boundary depends on
+	// which way the text runs and not on which end of the box the edge is. So
+	// both are kept, and shapingcontext.go picks the one that is actually there.
+	InsetLeft, InsetRight style.Unit
 	// InsetLevel is the embedding level the box's own edges sit at, and
 	// insetLevelKnown says insetSides worked one out.
 	//

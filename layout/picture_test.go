@@ -572,7 +572,7 @@ func drawnGlyphs(v DrawText) string {
 	if v.Face == nil {
 		return fmt.Sprintf("%q", v.Text)
 	}
-	glyphs, _ := v.Face.ShapeGlyphs(ShapedText(v))
+	glyphs, _ := ShapedGlyphs(v)
 	if len(glyphs) == 0 {
 		return fmt.Sprintf("%q", v.Text)
 	}
@@ -692,7 +692,7 @@ func glyphMarks(v DrawText, what string) []textMark {
 			x: v.At.X, y: v.At.Y}}
 	}
 	text := ShapedText(v)
-	glyphs, _ := v.Face.ShapeGlyphs(text)
+	glyphs, _ := ShapedGlyphs(v)
 	var out []textMark
 	x := v.At.X
 	for _, g := range glyphs {

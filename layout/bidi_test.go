@@ -494,7 +494,7 @@ func TestRightToLeftRunIsShapedInVisualOrder(t *testing.T) {
 		t.Fatalf("loading a standard face: %v", err)
 	}
 	glyphs := func(run DrawText) []int {
-		g, _ := face.ShapeGlyphs(ShapedText(run))
+		g, _ := ShapedGlyphs(run)
 		out := make([]int, 0, len(g))
 		for _, x := range g {
 			out = append(out, int(x.GID))
@@ -502,8 +502,10 @@ func TestRightToLeftRunIsShapedInVisualOrder(t *testing.T) {
 		return out
 	}
 
-	ltr := glyphs(DrawText{Text: "(ab"})
-	rtl := glyphs(DrawText{Text: "(ab", RTL: true})
+	// The face goes on the run rather than being closed over: ShapedGlyphs takes
+	// everything it needs from the operation, which is what a backend has.
+	ltr := glyphs(DrawText{Text: "(ab", Face: face})
+	rtl := glyphs(DrawText{Text: "(ab", Face: face, RTL: true})
 	if len(ltr) != 3 || len(rtl) != 3 {
 		t.Fatalf("shaping gave %d and %d glyphs, want 3 each", len(ltr), len(rtl))
 	}

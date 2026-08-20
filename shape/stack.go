@@ -191,7 +191,13 @@ func (s *Stack) ShapeRuns(text string) ([]Run, int) {
 		// and joining still see the run they were written for — in the order it
 		// is written, which is what those rules are stated against. The run
 		// comes back in the order it is drawn.
-		glyphs, gone := face.shapeGlyphsIn(text[start:end], units[k].script, level&1 == 1, nil)
+		// No context either side, and that is a decision rather than an
+		// omission. A stretch ends here because the *face* changed, which is a
+		// font change — and CSS Text §8.1 breaks shaping at one. Handing the
+		// neighbouring text over would make the letters join across a change of
+		// font, which is not what the specification asks for and is not what a
+		// reader of the two fonts would expect to see.
+		glyphs, gone := face.shapeGlyphsIn(text[start:end], units[k].script, level&1 == 1, nil, shapeContext{})
 		missing += gone
 		for gi := range glyphs {
 			glyphs[gi].Cluster += start

@@ -82,13 +82,29 @@ const (
 // carries uni0640.init and uni0640.medi for exactly that. Treating it as
 // formless leaves it drawn as the isolated stroke, floating clear of the letters
 // it is supposed to be joining.
-func joinForms(runes []rune) []string {
+func joinForms(runes, before, after []rune) []string {
+	if len(before) == 0 && len(after) == 0 {
+		return joinFormsIn(runes, 0, len(runes))
+	}
+	// The run with its neighbours either side, so the scans below can walk off
+	// the end of it and find what is really there. Only the middle is returned.
+	all := make([]rune, 0, len(before)+len(runes)+len(after))
+	all = append(all, before...)
+	all = append(all, runes...)
+	all = append(all, after...)
+	return joinFormsIn(all, len(before), len(before)+len(runes))
+}
+
+// joinFormsIn is joinForms over all[lo:hi], deciding each form from the whole of
+// all — which is the run and whatever context it was given.
+func joinFormsIn(all []rune, lo, hi int) []string {
+	runes := all
 	types := make([]joiningType, len(runes))
 	for i, r := range runes {
 		types[i] = joiningTypeOf(r)
 	}
-	forms := make([]string, len(runes))
-	for i := range runes {
+	forms := make([]string, hi-lo)
+	for i := lo; i < hi; i++ {
 		if types[i] == joinT {
 			continue // a transparent character takes no form of its own
 		}
@@ -112,25 +128,25 @@ func joinForms(runes []rune) []string {
 		case joinD, joinC:
 			switch {
 			case joinsPrev && joinsNext:
-				forms[i] = featMedial
+				forms[i-lo] = featMedial
 			case joinsPrev:
-				forms[i] = featFinal
+				forms[i-lo] = featFinal
 			case joinsNext:
-				forms[i] = featInitial
+				forms[i-lo] = featInitial
 			default:
-				forms[i] = featIsolated
+				forms[i-lo] = featIsolated
 			}
 		case joinR:
 			if joinsPrev {
-				forms[i] = featFinal
+				forms[i-lo] = featFinal
 			} else {
-				forms[i] = featIsolated
+				forms[i-lo] = featIsolated
 			}
 		case joinL:
 			if joinsNext {
-				forms[i] = featInitial
+				forms[i-lo] = featInitial
 			} else {
-				forms[i] = featIsolated
+				forms[i-lo] = featIsolated
 			}
 		default:
 			// A character that cannot join has no positional form to select. A
@@ -162,14 +178,14 @@ func joinForms(runes []rune) []string {
 // split every letter into a skeleton and its dots, and states the four forms
 // over the skeletons. A shaper that substitutes the forms first finds nothing to
 // substitute, and every letter comes out in its isolated shape.
-func markJoiningForms(buf []Glyph, runes []rune) {
+func markJoiningForms(buf []Glyph, runes, before, after []rune) {
 	if len(runes) != len(buf) {
 		// Nothing has been substituted yet where this is called, so this cannot
 		// happen; the guard is here so that moving the call fails visibly rather
 		// than assigning forms to the wrong glyphs.
 		return
 	}
-	forms := joinForms(runes)
+	forms := joinForms(runes, before, after)
 	for i := range buf {
 		switch forms[i] {
 		case featIsolated:

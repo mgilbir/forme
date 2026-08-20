@@ -202,6 +202,20 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		return 0
 	}
 	items = l.resolveBidi(b, items, para)
+	// After the bidi resolution and before any line is filled.
+	//
+	// After, because §8.6 decides there which of an inline box's two insets
+	// begins it, and whether there is room between two runs is the whole
+	// question this asks about a boundary. Before the resolution a "padding-right"
+	// on a span holding right-to-left text has not yet been given to the item
+	// that stands between the two words, so the boundary looks empty and the
+	// letters join across a gap. The suite's boundary-shaping-009 is exactly
+	// that, and it is what moved this call.
+	//
+	// Before any line is filled, because the context changes what a cursive
+	// letter is and therefore how wide it is, and a line filled from widths
+	// measured without it is filled to the wrong widths.
+	items = l.linkShapingContext(items)
 
 	lo, hi := origin.x, origin.x.Add(width)
 
@@ -617,6 +631,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 						Text: item.Text, Face: item.Face, Size: item.Size,
 						X: x, Width: widths[k], Box: heldBox(item.Box), Offset: item.Offset,
 						Decorations: decorations, LetterSpacing: item.Spacing.Letter,
+						PreContext: item.PreContext, PostContext: item.PostContext,
 						RTL:   item.Level&1 == 1,
 						Shift: shift,
 					})
