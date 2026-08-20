@@ -62,22 +62,24 @@ func TestTheSpacingAtABoundaryIsTheInnermostElementsThatHoldsBoth(t *testing.T) 
 		//
 		// One gap and not two: the gap after the *last* character has no
 		// character after it, so there is no boundary and no common ancestor to
-		// ask. It belongs to the element the character is in, which is the
-		// second span, and that span has none.
+		// ask — and it is not counted anyway, because §8.2 leaves it hanging
+		// past the end of the line.
 		{`<span class=ls0>AAA</span><span class=ls0>BBB</span>`, `24px`, 1,
 			"the spacing on the block and none on the spans"},
 
 		// The spans have it and the paragraph has none. Two gaps inside each
 		// span are theirs; the boundary is the paragraph's and is nothing. The
-		// gap after the last character has no run after it and stays the second
-		// span's.
-		{`<span class=ls1>AAA</span><span class=ls1>BBB</span>`, `0`, 5,
+		// gap after the *last* character is not counted at all — §8.2 leaves it
+		// hanging past the end of the line, so a box shrink-wrapped around the
+		// text is not as wide as it. See the note on that rule below.
+		{`<span class=ls1>AAA</span><span class=ls1>BBB</span>`, `0`, 4,
 			"the spacing on the spans and none on the block"},
 
-		// Both: every gap is 24px, which is the same six as the plain paragraph.
-		{`<span class=ls1>AAA</span><span class=ls1>BBB</span>`, `24px`, 6,
+		// Both: every gap is 24px — five between the six characters, and the
+		// sixth hanging past the end.
+		{`<span class=ls1>AAA</span><span class=ls1>BBB</span>`, `24px`, 5,
 			"the spacing on both"},
-		{`AAABBB`, `24px`, 6, "the spacing on the block, with no spans at all"},
+		{`AAABBB`, `24px`, 5, "the spacing on the block, with no spans at all"},
 	} {
 		got := boxWidth(t, tc.markup, `#p { letter-spacing: `+tc.block+` }`+decls)
 		want := px2(glyphs + tc.gaps*24)
@@ -140,15 +142,32 @@ func TestNestingDoesNotChangeWhoOwnsABoundary(t *testing.T) {
 	}
 }
 
-// TestTheLastCharacterKeepsItsOwnSpacing. There is no run after it to share a
-// boundary with, so the spacing after it is its own — which is the engine's
-// model and is what §4.1.2 leaves hanging at the end of a line.
-func TestTheLastCharacterKeepsItsOwnSpacing(t *testing.T) {
+// TestTheSpacingAfterTheLastCharacterHangsPastTheEnd.
+//
+// §8.2 adds spacing after every character including the last, and the last one
+// falls outside the line rather than inside it. So a box shrink-wrapped around
+// its text is as wide as the characters and the gaps *between* them, and no
+// wider.
+//
+// This file used to assert the other answer — "there is no run after it to share
+// a boundary with, so the spacing after it is its own" — and that reading is
+// what a box one gap too wide came from, with the extra drawn past the edge of
+// the box that was sized for it. The line layout already subtracted it, so the
+// two halves of the engine disagreed about the same text; the suite settled it,
+// and letter-spacing-203, -206 and letter-spacing-end-of-line-001 are what said
+// so.
+func TestTheSpacingAfterTheLastCharacterHangsPastTheEnd(t *testing.T) {
 	const css = `.ls1 { letter-spacing: 24px } #p { letter-spacing: 0 }`
-	// Two characters at 12px, and two spacings of 24: one between them and one
-	// after the last, which no run follows.
-	if got, want := boxWidth(t, `<span class=ls1>AB</span>`, css), px2(24+48); got != want {
-		t.Errorf("%v, want %v — 24px of glyphs and two gaps of 24", got, want)
+	// Two characters at 12px and one gap of 24 between them. The gap after the
+	// second is added and hangs.
+	if got, want := boxWidth(t, `<span class=ls1>AB</span>`, css), px2(24+24); got != want {
+		t.Errorf("%v, want %v — 24px of glyphs and one gap of 24", got, want)
+	}
+	// And the box a line is laid out in agrees with the box it was sized to,
+	// which is the half that was wrong: text at its own preferred width fits on
+	// one line and fills it exactly.
+	if got, want := boxWidth(t, `<span class=ls1>ABC</span>`, css), px2(36+48); got != want {
+		t.Errorf("%v, want %v — 36px of glyphs and two gaps of 24", got, want)
 	}
 }
 
