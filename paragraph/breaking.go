@@ -356,7 +356,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 			// keeps the fill greedy: a line with "ab" on it and "cdefgh" next
 			// takes "cd" as well rather than stopping at the two characters it
 			// already has.
-			if head, at, ok := br.breakInsideWord(item, width.Sub(used)); ok {
+			if head, at, ok := br.breakInsideWord(item, width.Sub(used), content); ok {
 				line = append(line, head)
 				return trimLineEdge(line), i, base + at, outOfFlow, false
 			}
@@ -546,8 +546,13 @@ func isLineTailSpace(item Item) bool {
 // be reported, which is right — a line cannot hold less than one character, and
 // breaking one off to leave the rest overflowing anyway would only lose a
 // character off the end.
-func (br *Breaker) breakInsideWord(item Item, width style.Unit) (head Item, at int, ok bool) {
-	if !item.BreakWord || item.Face == nil || width <= 0 || item.Text == "" {
+func (br *Breaker) breakInsideWord(item Item, width style.Unit, content bool) (head Item, at int, ok bool) {
+	if !item.BreakWord || item.Face == nil || item.Text == "" {
+		return Item{}, 0, false
+	}
+	if width <= 0 && content {
+		// No room at all, and a line with something on it can end and let the
+		// word begin the next one — where there will be a whole line's room.
 		return Item{}, 0, false
 	}
 	bounds := segment.Boundaries(nil, item.Text)
@@ -574,7 +579,22 @@ func (br *Breaker) breakInsideWord(item Item, width style.Unit) (head Item, at i
 		}
 	}
 	if lo == 0 {
-		return Item{}, 0, false // not even one cluster fits
+		// Not even one cluster fits. On a line with something on it that is not
+		// this line's problem: it ends, and the word begins the next one.
+		if content {
+			return Item{}, 0, false
+		}
+		// On an empty line it is. Something has to go on it or the word begins
+		// the same line for ever, and what goes on it is one cluster — which
+		// overflows, and is the least that can.
+		//
+		// This is what "width: 0" means, and the suite writes it that way on
+		// purpose: overflow-wrap-cluster-001 is two Devanagari clusters in no
+		// room at all against a reference of two lines, and the answer is one
+		// cluster on each rather than both on one. A word does not become
+		// unbreakable because the room ran out completely — it is exactly then
+		// that the last resort is for.
+		lo = 1
 	}
 	at = bounds[lo-1]
 	head, _ = br.SplitItem(item, at)
