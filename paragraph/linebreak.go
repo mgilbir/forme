@@ -131,6 +131,66 @@ func BreaksAfterUnderLoose(r rune) bool {
 	return inLineBreakRanges(r, prefixRanges[:])
 }
 
+// Where a line may not end, and the reason it is a pair and not a character.
+//
+// noBreakBefore above answers UAX #14's rules written "× X" — the ones that need
+// nothing on the left. This is the rest of what a break-all document needs, and
+// it is a pair because the rules are: LB11 is "× WJ" *and* "WJ ×", LB12 is
+// "GL ×", and neither can be answered by looking at one side.
+//
+// It matters only where an opportunity was manufactured. Ordinary text offers
+// one at a space and after an ideograph, and the characters here are neither, so
+// nothing asks. word-break: break-all offers one at every character boundary in
+// a word, and then the question is real at every one of them: §5.2 allows
+// breaking "between typographic character units", and UAX #14 still says which
+// of those boundaries are not there.
+//
+// The suite's word-break-break-all-018, -021 and -022 are one shape —
+// "XXXX&nbsp;XXXX X X" in four characters of room — and they are what a break
+// either side of a no-break space costs. The right answer sets three characters
+// on the first line, because the fourth is glued to the two after it and the
+// three of them will not fit; the answer without this rule sets four and hangs
+// the no-break space at a line end, which is the one thing its name forbids.
+func gluedPair(prev, r rune) bool {
+	if prev == 0 {
+		return false
+	}
+	// LB11 "× WJ" and "WJ ×", LB12 "GL ×" and LB12a "× GL", LB8a "ZWJ ×". The
+	// three classes are one table because §5.1 wanted the same three for the
+	// atomic-inline rule beside them — see BindsToAtomicInline, which excludes
+	// U+00A0 where this must not: that exception is about a picture next to a
+	// no-break space, and this is about the space itself.
+	if isBinding(prev) || isBinding(r) {
+		return true
+	}
+	// A currency sign or a number sign belongs to the figure after it, so a line
+	// may not end between them.
+	//
+	// word-break-break-all-023 and -024 name it: "break-all breaks before the
+	// first backslash character because UAX14 rules forbid to break after PR
+	// class". U+005C is class PR, which is a surprise until one remembers the
+	// class is about what a character introduces rather than what it looks like.
+	//
+	// §5.3's loose is the one value that lets a newspaper column break there,
+	// and there is deliberately no test for it here. The exemption belongs to
+	// BreaksAfterUnderLoose, and SplitAtBreaks acts on it in a branch of its own
+	// that flushes the piece and marks the next one — so a loose document never
+	// reaches this function with a prefix behind it and an opportunity to lose.
+	// An "&& !lb.Loose" was written here first and could not be made to fail:
+	// planting its removal changed no output and moved no reftest, which is what
+	// says the guard was decoration rather than a rule.
+	if inLineBreakRanges(prev, prefixRanges[:]) {
+		return true
+	}
+	return false
+}
+
+// isBinding reports membership of the GL, WJ and ZWJ classes, which is what
+// BindsToAtomicInline asks with one character carved out of it.
+func isBinding(r rune) bool {
+	return inLineBreakRanges(r, bindingRanges[:])
+}
+
 // inLineBreakRanges searches one of the generated tables, which are sorted and
 // disjoint.
 func inLineBreakRanges(r rune, table []struct{ lo, hi rune }) bool {

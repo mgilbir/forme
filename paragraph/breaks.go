@@ -142,6 +142,8 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 	// does not get to suppress it a second time on the far side of the character
 	// that displaced it.
 	heldBreak := false
+	// The character before this one, for the pair rules. See gluedPair.
+	var prev rune
 
 	flush := func() {
 		if cur.Len() == 0 {
@@ -243,11 +245,21 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 		if offered && !lb.Anywhere && noBreakBefore(r, lb) {
 			offered, held = false, true
 		}
+		// And the pair rules, which are the other half of the same paragraph of
+		// UAX #14 and are not held: a rule that says a line may not *end* after
+		// this character has nothing to say about the next boundary, so an
+		// opportunity it refuses is gone rather than moved. Holding one forward
+		// would put a break after a no-break space one character further along,
+		// which is the answer the rule exists to prevent.
+		if offered && !lb.Anywhere && gluedPair(prev, r) {
+			offered = false
+		}
 		if offered && atBoundary && cur.Len() > 0 {
 			flush()
 			breakNext = true
 		}
 		deferBreak, heldBreak = false, held
+		prev = r
 
 		switch {
 		case r == '\n' || r == '\r':
