@@ -167,7 +167,7 @@ func TransformOf(value string) TextTransform {
 // It allocates once at most: "none" returns the string it was given, and the
 // case transforms build one buffer of the size of the input. A megabyte of text
 // is a megabyte of work and not a rune of garbage per character.
-func TransformText(text string, kind TextTransform, inWord bool) (string, bool) {
+func TransformText(text string, kind TextTransform, inWord bool, lang Language) (string, bool) {
 	if text == "" {
 		return text, inWord
 	}
@@ -183,9 +183,9 @@ func TransformText(text string, kind TextTransform, inWord bool) (string, bool) 
 	// same; texttransform_test.go says which part of it a test can hold.
 	switch kind & transformCase {
 	case TransformUppercase:
-		text = fullCased(text, fullUppercase[:], unicode.ToUpper, strings.ToUpper)
+		text = localeCased(text, lang, true)
 	case TransformLowercase:
-		text = fullCased(text, fullLowercase[:], unicode.ToLower, strings.ToLower)
+		text = localeCased(text, lang, false)
 	case TransformCapitalize:
 		text = capitalizeWords(text, inWord)
 	}
@@ -254,6 +254,89 @@ func lookupWidth(r rune, table []widthPair) (rune, bool) {
 		return table[i].to, true
 	}
 	return 0, false
+}
+
+// localeCased is the case change with the conditional mappings applied.
+//
+// The conditions are a handful of characters in a handful of languages plus the
+// Greek final sigma — see localecasing.go — so the whole of this is skipped
+// unless the text really contains one of the characters they are about. Every
+// other run takes the same path it always did.
+func localeCased(text string, lang Language, upper bool) string {
+	if i := firstConditional(text, lang, upper); i >= 0 {
+		return conditionalCased(text, lang, upper, i)
+	}
+	if upper {
+		return fullCased(text, fullUppercase[:], unicode.ToUpper, strings.ToUpper)
+	}
+	return fullCased(text, fullLowercase[:], unicode.ToLower, strings.ToLower)
+}
+
+// firstConditional is the byte offset of the first character a conditional
+// mapping could be about, or -1.
+//
+// It asks the mappings themselves rather than carrying a second list of
+// characters that would have to be kept in step with them: for the first
+// character that answers, the answer is the whole test.
+func firstConditional(text string, lang Language, upper bool) int {
+	for i, r := range text {
+		if upper {
+			if _, ok := localeUpper(r, lang); ok {
+				return i
+			}
+			continue
+		}
+		// The backward-looking conditions cannot fire on a character the
+		// forward-looking test would miss, because every one of them names the
+		// character itself: it is I, or the dotted capital, or a combining dot,
+		// or a sigma. So the cheap test is whether this character is one of
+		// those at all, which is what asking with empty context does — except
+		// for the two whose condition is *absence*, which answer true there.
+		if r == 0x0130 || r == 'I' || r == 0x0307 || r == 0x03A3 ||
+			r == 'J' || r == 0x012E || r == 0x00CC || r == 0x00CD || r == 0x0128 {
+			return i
+		}
+	}
+	return -1
+}
+
+// conditionalCased maps the text a character at a time from the first character
+// a condition could be about, which is where the cheap whole-string path stops
+// being available.
+func conditionalCased(text string, lang Language, upper bool, from int) string {
+	var out strings.Builder
+	out.Grow(len(text) + 8)
+	if upper {
+		out.WriteString(fullCased(text[:from], fullUppercase[:], unicode.ToUpper, strings.ToUpper))
+	} else {
+		out.WriteString(fullCased(text[:from], fullLowercase[:], unicode.ToLower, strings.ToLower))
+	}
+	for i, r := range text[from:] {
+		at := from + i
+		var (
+			s  string
+			ok bool
+		)
+		if upper {
+			s, ok = localeUpper(r, lang)
+		} else {
+			s, ok = localeLower(r, text[:at], text[at+len(string(r)):], lang)
+		}
+		if ok {
+			out.WriteString(s)
+			continue
+		}
+		table, simple := fullUppercase[:], unicode.ToUpper
+		if !upper {
+			table, simple = fullLowercase[:], unicode.ToLower
+		}
+		if s, ok := lookupFullCase(r, table); ok {
+			out.WriteString(s)
+		} else {
+			out.WriteRune(simple(r))
+		}
+	}
+	return out.String()
 }
 
 // fullCased maps every character of a string, preferring the full mapping.

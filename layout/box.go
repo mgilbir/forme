@@ -5,6 +5,7 @@ import (
 
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
+	"github.com/mgilbir/forme/paragraph"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -712,7 +713,7 @@ func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSi
 	// turn a run of spaces into a run of spaces nothing may collapse. It is also
 	// what lets "capitalize" see the word boundaries the reader will.
 	text, b.afterWord = transformText(text,
-		transformOf(inherited["text-transform"]), b.afterWord)
+		transformOf(inherited["text-transform"]), b.afterWord, languageAt(n))
 	if text == "" {
 		return nil
 	}
@@ -1396,4 +1397,27 @@ func (b *boxBuilder) listValueOf(n *html.Node, listItem bool) (int, bool) {
 		return vals[len(vals)-1], true
 	}
 	return 0, false
+}
+
+// languageAt is the language in force at a node: the nearest lang attribute at
+// or above it.
+//
+// It is read here rather than resolved through the cascade because it is not a
+// CSS property — it is an HTML attribute, and the cascade carries no entry for
+// it. The walk is the same one :lang() does in style/match.go, and is up the
+// tree rather than down because a document usually declares its language once,
+// on <html>.
+//
+// A text node has no attributes of its own, so the walk starts at its parent by
+// construction: the loop below skips anything that is not an element.
+func languageAt(n *html.Node) paragraph.Language {
+	for cur := n; cur != nil; cur = cur.Parent {
+		if cur.Type != html.ElementNode {
+			continue
+		}
+		if v, ok := cur.Attr("lang"); ok && v != "" {
+			return paragraph.LanguageOf(v)
+		}
+	}
+	return ""
 }
