@@ -207,6 +207,10 @@ var properties = map[string]property{
 	// hyphenating a word that contains no soft hyphen needs a dictionary for
 	// the document's language.
 	"hyphens": {true, "manual"},
+	// hanging-punctuation inherits, which is what lets a document ask for it
+	// once on the body and mean it for every paragraph. "first" and "last" are
+	// implemented; the two end values are read as none and reported.
+	"hanging-punctuation": {true, "none"},
 	// hyphenate-character inherits, and it is a <string> rather than a keyword:
 	// "auto" lets the engine choose and anything else is what to print, an empty
 	// string included — which is how a document asks for a word to be broken with

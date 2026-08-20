@@ -59,6 +59,14 @@ type (
 	hyphens     = paragraph.Hyphens
 )
 
+type hangingPunctuation = paragraph.HangingPunctuation
+
+var (
+	hangingPunctuationOf = paragraph.HangingPunctuationOf
+	leadingHang          = paragraph.LeadingHang
+	trailingHang         = paragraph.TrailingHang
+)
+
 var (
 	hyphensOf          = paragraph.HyphensOf
 	splitAtBreaks      = paragraph.SplitAtBreaks

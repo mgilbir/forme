@@ -394,6 +394,8 @@ type layouter struct {
 	reportedWordBreak map[string]bool
 	// reportedHyphens is the same for the hyphens values read as manual.
 	reportedHyphens map[string]bool
+	// reportedHanging is the same for the hanging-punctuation values not applied.
+	reportedHanging map[string]bool
 	// reportedLineBreak is the same again for line-break.
 	reportedLineBreak map[string]bool
 	// reportedTextJustify is the same again for text-justify, and is reported
