@@ -623,6 +623,29 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 	// element's own children because an <input> is void and has none, and
 	// because a <select>'s children are its options rather than its label.
 	b.controlContent(box, n, cs, fontSize)
+	// <wbr> under word-space-transform, which is the element becoming the
+	// character HTML says it is rendered as.
+	//
+	// The property expands a *virtual word separator*, and there are two of
+	// them: U+200B, which a document writes in its text, and this, which it
+	// writes as an element. Giving the element a zero width space of its own
+	// puts the two on one path — the same collapsing, the same transform, the
+	// same measuring, the same breaking — rather than teaching every stage that
+	// an element can be a space.
+	//
+	// It is done here, before the children, because the element is void and has
+	// none. With the property at its initial value nothing is added and the
+	// element stays what it was: a break opportunity that marks no boundary in
+	// the text, which is what the flattening makes of an empty one.
+	if strings.EqualFold(n.Name, "wbr") {
+		if wst := b.wordSpaceTransformFor(cs); wst.Transforms() {
+			sep := &html.Node{Type: html.TextNode, Text: "\u200b", Offset: n.Offset}
+			if t := b.textBox(sep, cs, fontSize); t != nil {
+				t.Parent = box
+				box.Children = append(box.Children, t)
+			}
+		}
+	}
 	for _, child := range n.Children {
 		if controlSkipsChild(box, child) {
 			continue
@@ -702,7 +725,8 @@ func (b *boxBuilder) roomAt(offset int) bool {
 // block container with inline content, and so generate an anonymous block that
 // occupies a line.
 func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSize style.Unit) *Box {
-	text := collapseWhitespace(n.Text, inherited["white-space-collapse"])
+	text := collapseWhitespace(n.Text, inherited["white-space-collapse"],
+		b.wordSpaceTransformFor(inherited))
 	// text-transform, applied here so that the text every later stage measures,
 	// breaks, draws and writes into the PDF is the text that will appear.
 	// texttransform.go works through why it cannot wait until paint time.
@@ -1420,4 +1444,36 @@ func languageAt(n *html.Node) paragraph.Language {
 		}
 	}
 	return ""
+}
+
+// wordSpaceTransformFor reads word-space-transform off a computed style and
+// reports the half of it this engine cannot do.
+//
+// The reporting is here rather than in the cascade because it is a value the
+// property parser understands and this engine declines: "auto-phrase" asks for
+// word separators to be *invented* at phrase boundaries the author did not mark,
+// which for Japanese means a dictionary and a segmentation model. A document
+// that writes it beside "space" still gets its explicit marks expanded, and is
+// told the inferred ones are missing — which is a page with too few spaces
+// rather than a page with none.
+func (b *boxBuilder) wordSpaceTransformFor(cs style.ComputedStyle) paragraph.WordSpaceTransform {
+	wst, unhandled := wordSpaceTransformOf(cs["word-space-transform"])
+	if unhandled != "" {
+		b.rec.ReportDetail(Finding{
+			Rule: RuleUnsupportedValue,
+			Message: "\"" + unhandled + "\" in word-space-transform was not applied: " +
+				"inventing a word boundary where the document marked none needs a " +
+				"dictionary for the language, so only the marks it did write are expanded",
+			Property: "word-space-transform",
+		})
+	}
+	return wst
+}
+
+// wordSpaceTransformValue is the same read without the report, for a caller that
+// has a Box rather than the style it was built from — the report has already
+// been made for the element the box belongs to.
+func wordSpaceTransformValue(s map[string]string) paragraph.WordSpaceTransform {
+	wst, _ := wordSpaceTransformOf(s["word-space-transform"])
+	return wst
 }

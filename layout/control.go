@@ -461,7 +461,7 @@ func (b *boxBuilder) controlContent(box *Box, n *html.Node, cs style.ComputedSty
 		})
 		label = truncateRunes(label, maxLabelRunes)
 	}
-	text := collapseWhitespace(label, cs["white-space-collapse"])
+	text := collapseWhitespace(label, cs["white-space-collapse"], b.wordSpaceTransformFor(cs))
 	text, b.afterWord = transformText(text, transformOf(cs["text-transform"]), b.afterWord,
 		languageAt(n))
 	if text == "" {

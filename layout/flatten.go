@@ -323,7 +323,8 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			state = startOfContext()
 			continue
 		}
-		if child.Element != nil && strings.EqualFold(child.Element.Name, "wbr") {
+		if child.Element != nil && strings.EqualFold(child.Element.Name, "wbr") &&
+			len(child.Children) == 0 {
 			// A break opportunity the author wrote, and the counterpart of the
 			// <br> above: that one ends a line wherever it falls, this one only
 			// says a line *may* end here.
@@ -344,6 +345,11 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			// begin with this character" is applied to the opportunities an
 			// ideograph defers and not to the one after a space, and an author
 			// who writes <wbr> has said where the line may end.
+			//
+			// An element with a child is one word-space-transform has turned
+			// into a zero width space of its own — see the box builder — and
+			// that space is a break opportunity in its own right, so this case
+			// is for the empty one only.
 			state.BreakOpportunity = true
 			state.AfterAtomic = false
 			state.AfterBinding = false

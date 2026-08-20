@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"github.com/mgilbir/forme/paragraph"
 	"strings"
 	"testing"
 )
@@ -580,7 +581,7 @@ func TestWhitespaceCollapsing(t *testing.T) {
 		{"break-spaces", "a \t b", "a \t b"},
 	}
 	for _, tc := range cases {
-		if got := collapseWhitespace(tc.in, tc.whiteSpace); got != tc.want {
+		if got := collapseWhitespace(tc.in, tc.whiteSpace, paragraph.WordSpaceTransform{}); got != tc.want {
 			t.Errorf("white-space:%s on %q gave %q, want %q",
 				tc.whiteSpace, tc.in, got, tc.want)
 		}
@@ -588,7 +589,7 @@ func TestWhitespaceCollapsing(t *testing.T) {
 
 	// A no-break space is not collapsible white space, which is the entire
 	// reason an author writes one.
-	if got := collapseWhitespace("a  b", "normal"); got != "a  b" {
+	if got := collapseWhitespace("a  b", "normal", paragraph.WordSpaceTransform{}); got != "a  b" {
 		t.Errorf("no-break spaces were collapsed: %q", got)
 	}
 }
