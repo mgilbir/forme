@@ -385,15 +385,16 @@ func TestWordBreakBreakWordIsNotReported(t *testing.T) {
 		}
 	}
 	// And a value that really is unhandled still is, so this is not passing
-	// because nothing is ever reported.
+	// because nothing is ever reported. keep-all used to be that value and is
+	// implemented now; auto-phrase is the one left.
 	found := false
 	for _, f := range findingsFrom(t, `<div id="p">abcdefgh</div>`,
-		owCSS+` #p { word-break: keep-all }`) {
+		owCSS+` #p { word-break: auto-phrase }`) {
 		if f.Property == "word-break" {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("word-break:keep-all was not reported, so the check above says nothing")
+		t.Errorf("word-break:auto-phrase was not reported, so the check above says nothing")
 	}
 }

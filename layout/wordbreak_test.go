@@ -109,28 +109,44 @@ func TestBreakAllIsInherited(t *testing.T) {
 	}
 }
 
-func TestKeepAllIsReported(t *testing.T) {
-	// keep-all is not implemented and is read as normal, which allows a break
-	// the value forbids. Applying it silently is the kind of wrong page that
-	// looks deliberate.
-	rec := NewRecorder(nil)
-	built := Build(Input{
-		HTML: `<div id="p">日本語のテキスト</div>`,
-		CSS:  []Stylesheet{{Source: `#p { width: 40px; word-break: keep-all }`}},
-	})
-	Layout(built.Root, Size{W: picPx(600), H: picPx(10000)}, StandardFonts(), rec)
-
-	var found int
-	for _, f := range rec.Findings() {
-		if f.Property == "word-break" && strings.Contains(f.Message, "keep-all") {
-			found++
+// TestKeepAllIsNotReported. It used to be: the value was read as normal, which
+// allows a break it forbids, and applying it silently is the kind of wrong page
+// that looks deliberate. It is implemented now — see
+// paragraph/wordbreakkeepall_test.go for what it does — so reporting it would
+// be the false warning this file's other half exists to prevent.
+//
+// auto-phrase is the one value of the four still read as normal, and is what
+// the report is for now.
+func TestKeepAllIsNotReported(t *testing.T) {
+	for _, tc := range []struct {
+		value  string
+		report bool
+	}{
+		{"keep-all", false},
+		{"break-all", false},
+		{"normal", false},
+		{"auto-phrase", true},
+	} {
+		rec := NewRecorder(nil)
+		built := Build(Input{
+			HTML: `<div id="p">日本語のテキスト</div>`,
+			CSS:  []Stylesheet{{Source: `#p { width: 40px; word-break: ` + tc.value + ` }`}},
+		})
+		Layout(built.Root, Size{W: picPx(600), H: picPx(10000)}, StandardFonts(), rec)
+		var found int
+		for _, f := range rec.Findings() {
+			if f.Property == "word-break" {
+				found++
+			}
 		}
-	}
-	if found == 0 {
-		t.Error("word-break:keep-all was read as normal silently")
-	}
-	if found > 1 {
-		t.Errorf("it was reported %d times; once is enough", found)
+		if (found > 0) != tc.report {
+			t.Errorf("word-break:%s was reported %d times, want reported=%v",
+				tc.value, found, tc.report)
+		}
+		if found > 1 {
+			t.Errorf("word-break:%s was reported %d times; once is enough",
+				tc.value, found)
+		}
 	}
 }
 

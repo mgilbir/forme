@@ -129,6 +129,18 @@ type WordBreak struct {
 	// inside a word, which is the grapheme cluster — see internal/grapheme for
 	// why that is the unit and why the shaper's clusters are not it.
 	BreakAll bool
+	// KeepAll forbids one, and forbids it in exactly the places this engine
+	// offers one inside a word.
+	//
+	// §5.2: "Breaking is forbidden within 'words': implicit soft wrap
+	// opportunities between typographic letter units (or other typographic
+	// character units belonging to the NU, AL, AI, or ID Line Breaking Classes)
+	// are suppressed." The one this engine offers is between two ideographs and
+	// between an ideograph and the letter after it, which is precisely an
+	// implicit opportunity of that kind — and the suite's own tests for the
+	// value are about what it must *not* suppress: the break after a space, and
+	// the one after an ideographic comma.
+	KeepAll bool
 }
 
 // WordBreakOf reads the property. The second result is the value to report as
@@ -141,8 +153,10 @@ func WordBreakOf(value string) (WordBreak, string) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "break-all":
 		return WordBreak{BreakAll: true}, ""
-	case "keep-all", "auto-phrase":
-		return WordBreak{}, strings.ToLower(strings.TrimSpace(value))
+	case "keep-all":
+		return WordBreak{KeepAll: true}, ""
+	case "auto-phrase":
+		return WordBreak{}, "auto-phrase"
 	case "break-word":
 		// Normal, and deliberately: the value's whole effect is on
 		// overflow-wrap, which OverflowWrapOf reads for itself. It is named here
