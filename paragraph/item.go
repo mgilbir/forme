@@ -179,6 +179,18 @@ type Item struct {
 	// considered when calculating min-content intrinsic sizes" and Anywhere's
 	// are, which is the whole difference between the two values.
 	Anywhere bool
+	// HangStart and HangEnd mark the character CSS Text §8.4 hangs outside the
+	// line: an opening bracket or quote in the margin before the first formatted
+	// line, and a closing one past the end of the last.
+	//
+	// They are two flags rather than one because they are two different things
+	// to do. The end hang is white space's hang — it is on the line, it takes no
+	// room, and the alignment discounts it — and carries Hangs as well so that
+	// every stage which already knows about that does the right thing with no
+	// second rule. The start hang is not a hang at the end of anything: what it
+	// does is move the line's own beginning, which is where a negative
+	// text-indent does its work and is where layout applies it.
+	HangStart, HangEnd bool
 	// PreContext and PostContext are the text either side of this run, where the
 	// boundary between it and its neighbour does not break shaping.
 	//

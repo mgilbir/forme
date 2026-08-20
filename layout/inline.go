@@ -217,12 +217,31 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	// measured without it is filled to the wrong widths.
 	items = l.linkShapingContext(items)
 
+	// §8.4's hanging punctuation, cut out of the runs at the two ends of the
+	// block's content before anything is measured against a line: a hanging
+	// character is one that does not count, and what does not count has to be
+	// something the measuring can leave out.
+	hp, unhandledHang := hangingPunctuationOf(b.Style["hanging-punctuation"])
+	if unhandledHang != "" {
+		l.reportHangingPunctuation(b, unhandledHang)
+	}
+	items = l.hangPunctuation(items, hp)
+
 	lo, hi := origin.x, origin.x.Add(width)
 
 	// §16.1's indent, which applies to the first line box this container
 	// generates and to no other. It is resolved once: a percentage is of this
 	// box's own content width, which is the width being laid out in.
 	indent := l.textIndent(b, width)
+	// §8.4's "first", which is a negative indent and is applied as one: the
+	// first line begins that much further back and has that much more room, and
+	// the suite's own reference for it is written as "text-indent: -1em".
+	//
+	// It is added to the indent rather than replacing it, because the two are
+	// different requests and a document may make both — the last row of
+	// hanging-punctuation-first sets a positive text-indent and asks for the
+	// bracket to hang into it.
+	indent = indent.Sub(hangStartWidth(items))
 	firstLine := true
 	_ = firstLine
 
@@ -542,6 +561,13 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				if lastLine {
 					used = style.Max(used, style.Min(total, avail))
 				}
+				// §8.4's "last", after §4.1.2's rule about the last line rather
+				// than inside it. The two are different hangs and only one of
+				// them is conditional: a trailing space on the last line takes
+				// room unless it would overflow, which is the max above, and a
+				// hanging bracket takes none whatever the room. Discounting it
+				// before the max is discounting it and then putting it back.
+				used = used.Sub(hangEndWidth(runs))
 				rtl := lineBaseIsRTL(b, runs)
 				align, spread := lineAlignment(b, rtl, lastLine)
 

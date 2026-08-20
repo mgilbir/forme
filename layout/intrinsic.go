@@ -258,6 +258,14 @@ func (l *layouter) inlineWidths(b *Box) intrinsicWidths {
 	// content is sized to the content it will hold: a joined Arabic word is not
 	// as wide as the same letters set apart.
 	items = l.linkShapingContext(items)
+	// And the same hanging punctuation, for the same reason and more plainly: a
+	// character that hangs outside the line is not part of what the line has to
+	// hold, so a box shrink-wrapped around it would otherwise reserve room for a
+	// bracket that will be drawn in its margin. Every one of the suite's
+	// fixtures for the property floats its boxes, which is what makes this the
+	// half that decides the page rather than a refinement of it.
+	hp, _ := hangingPunctuationOf(b.Style["hanging-punctuation"])
+	items = l.hangPunctuation(items, hp)
 	got, split := l.widthsOf(items)
 
 	// §16.1's indent moves the first line and no other, so the box is as wide as
@@ -410,6 +418,19 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 		// of one digit.
 		breaks := k+1 >= len(items) || items[k+1].BreakBefore
 		switch {
+		case item.HangStart || item.HangEnd:
+			// §8.4's hanging punctuation. It is drawn outside the line, so it is
+			// not part of what a line has to hold and not part of what a box
+			// shrink-wrapped around one has to be wide enough for. Skipping it
+			// outright is the whole of that: the character is its own item, so
+			// there is no run to take it out of and nothing else to adjust.
+			//
+			// Every one of the suite's fixtures for the property floats its
+			// boxes, so this is the half that decides the page rather than a
+			// refinement of it — a float sized as though the bracket were inside
+			// the line is a box a character too wide with the bracket drawn in
+			// its margin anyway.
+			continue
 		case item.Float != nil:
 			// A float beside text is as wide as it is whether or not the text
 			// wraps, so it raises both numbers on its own rather than joining
