@@ -386,8 +386,30 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 	// nothing, and an indent added to nothing is the indent alone.
 	var runContent bool
 	var line, run, edge, runEdge style.Unit
+	// The letter-spacing after the last character, which §8.2 adds and which
+	// hangs past the end of a line rather than counting towards it. A box
+	// shrink-wrapped around its text was one spacing wider than the text: "abc"
+	// at 12px a character with 12px of spacing is 60 wide and came out 72, with
+	// the extra drawn past the right edge of the box that was sized for it.
+	//
+	// It is the same subtraction the line layout makes with trailingSpacing, and
+	// it is kept beside edge because the two answer the same shape of question:
+	// what is at the end of the line that the line is not as wide as. Where a
+	// trailing space is trimmed the spacing after it goes with it, so the tail
+	// is left where it was rather than moved to the space — the last character
+	// that counts is the one in front.
+	var lineTail, runTail style.Unit
+	// The spacing an item leaves behind it is read straight off the item. The
+	// line's own version of this — trailingSpacing — asks isSpacedRun first,
+	// and here that predicate has nothing to do: every item that reaches one of
+	// the assignments below is text or a space, an inline box's own edge, which
+	// is skipped where it is met, or an atomic inline, which is set to nothing
+	// where it is met. Planting the predicate in changed no width in any fixture
+	// including a tab, whose spacing is carried in its advance rather than on
+	// the item, so it is left out rather than written as a guard that cannot
+	// fail.
 	endRun := func() {
-		w := run.Sub(runEdge)
+		w := run.Sub(runEdge).Sub(runTail)
 		switch {
 		case runContent && !firstRun:
 			split.first.min, firstRun = w, true
@@ -395,18 +417,18 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 			split.rest.min = style.Max(split.rest.min, w)
 		}
 		out.min = style.Max(out.min, w)
-		run, runEdge, runContent = 0, 0, false
+		run, runEdge, runContent, runTail = 0, 0, false, 0
 	}
 	endLine := func() {
 		endRun()
-		w := line.Sub(edge)
+		w := line.Sub(edge).Sub(lineTail)
 		if !firstLine {
 			split.first.max, firstLine = w, true
 		} else {
 			split.rest.max = style.Max(split.rest.max, w)
 		}
 		out.max = style.Max(out.max, w)
-		line, edge = 0, 0
+		line, edge, lineTail = 0, 0, 0
 	}
 
 	for k, item := range items {
@@ -465,6 +487,8 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 			// a picture after a space would be measured into a box short by the
 			// space's width — the same slip the text case below avoids.
 			edge, runEdge = 0, 0
+			// A picture is not a character and no spacing follows it.
+			lineTail, runTail = 0, 0
 
 		case item.Forced:
 			endLine()
@@ -489,7 +513,7 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 				if item.TrimAtEnd || item.Hangs {
 					runEdge = runEdge.Add(w)
 				} else {
-					runEdge = 0
+					runEdge, runTail = 0, item.Spacing.Letter
 				}
 			} else {
 				// The run ends at the space — but on which side of it depends on
@@ -516,7 +540,7 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 			if item.TrimAtEnd || item.HangsHard {
 				edge = edge.Add(w)
 			} else {
-				edge = 0
+				edge, lineTail = 0, item.Spacing.Letter
 			}
 
 		case item.Anywhere && !item.NoWrap:
@@ -538,6 +562,7 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 			split.rest.min = style.Max(split.rest.min, got)
 			line = line.Add(item.Width)
 			edge, runEdge = 0, 0
+			lineTail, runTail = item.Spacing.Letter, item.Spacing.Letter
 
 		default:
 			if item.BreakBefore && !item.NoWrap {
@@ -546,6 +571,11 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 			run, runContent = run.Add(item.Width), true
 			line = line.Add(item.Width)
 			edge, runEdge = 0, 0
+			if !item.Inset {
+				// An inline box's own edge is not a character, so it neither
+				// carries spacing nor clears the spacing of the text before it.
+				lineTail, runTail = item.Spacing.Letter, item.Spacing.Letter
+			}
 		}
 	}
 	endLine()

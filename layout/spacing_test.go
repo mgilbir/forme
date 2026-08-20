@@ -88,11 +88,14 @@ func TestSpacingWidensAnIntrinsicWidth(t *testing.T) {
 	// that reached line breaking but not the intrinsic widths would give a float
 	// exactly the width its text overflows by.
 	//
-	// "abcde" is 60px; with 6px of letter-spacing it is 90px.
+	// "abcde" is 60px; with 6px of letter-spacing it is 84px — five characters
+	// and the four gaps between them. The fifth gap is added after the last
+	// character and hangs past the end of the line, which §8.2 says and which
+	// letterspacingboundary_test.go works through.
 	root := layoutOf(t, 600, `<div><div id="f">abcde</div></div>`,
 		noDefaults+`#f { float: left; font-family: Courier; font-size: 20px;
 			letter-spacing: 6px }`)
-	px(t, "a float around letter-spaced text", find(t, root, "f").BorderRect.W, 90)
+	px(t, "a float around letter-spaced text", find(t, root, "f").BorderRect.W, 84)
 }
 
 func TestSpacingDoesNotShareAMeasurementWithAnUnspacedBox(t *testing.T) {
@@ -392,5 +395,128 @@ func TestLetterSpacingSkipsTheCharactersThatDrawNothing(t *testing.T) {
 			t.Errorf("with %s the line is %gpx, want %g — the character draws "+
 				"nothing and is spaced from nothing", r.name, total, plain[0])
 		}
+	}
+}
+
+// TestTheTrailingSpacingHangsInEveryMeasurement is the property the change to
+// the intrinsic widths was for: the box a line is sized to and the line laid out
+// inside it have to agree about the same text.
+//
+// They did not. The line layout subtracted the spacing after the last character
+// — §8.2 leaves it hanging past the end — and the intrinsic width did not, so a
+// float shrink-wrapped around its text came out one gap too wide with the gap
+// drawn past its own edge. letter-spacing-203, -206 and
+// letter-spacing-end-of-line-001 are three of the suite's tests for it.
+func TestTheTrailingSpacingHangsInEveryMeasurement(t *testing.T) {
+	const face = `font-family: Courier; font-size: 20px; letter-spacing: 12px`
+	for _, tc := range []struct {
+		text string
+		want float64
+	}{
+		// n characters of 12px and n-1 gaps of 12; the gap after the last
+		// character hangs and is not part of the box.
+		{"a", 12},
+		{"ab", 36},
+		{"abc", 60},
+		{"a b", 60},
+		{"ab cd", 108},
+	} {
+		root := layoutOf(t, 600, `<div><div id="f">`+tc.text+`</div></div>`,
+			noDefaults+`#f { float: left; `+face+` }`)
+		px(t, "the float around "+tc.text, find(t, root, "f").BorderRect.W, tc.want)
+	}
+
+	// And the width the box was given is a width the line fits on, which is the
+	// half that says the two agree rather than merely that one of them moved.
+	// "ab cd" is 108 wide and has one place it may break.
+	one := layoutOf(t, 600, `<div id="p">ab cd</div>`,
+		noDefaults+`#p { `+face+`; width: 108px }`)
+	if got := lineTextsOf(t, one, "p"); len(got) != 1 {
+		t.Errorf("at the width it was measured to need, the text took %d lines %q, "+
+			"want 1 — the box would be sized to a width its own text overflows",
+			len(got), got)
+	}
+	// A pixel less and it does not, so the number above is the exact one rather
+	// than merely a large one.
+	two := layoutOf(t, 600, `<div id="p">ab cd</div>`,
+		noDefaults+`#p { `+face+`; width: 107px }`)
+	if got := lineTextsOf(t, two, "p"); len(got) != 2 {
+		t.Errorf("a pixel narrower took %d lines %q, want 2", len(got), got)
+	}
+}
+
+// TestWhatCarriesTheTrailingSpacing is the two cases the subtraction has to get
+// right about *which* item the spacing belongs to, and neither is obvious from
+// the rule.
+//
+// An inline box's own edge — its padding, its border, its margin — is not a
+// character. It carries no spacing of its own and does not clear the spacing of
+// the text in front of it, so a span with padding after its last letter is as
+// wide as the letters, the gaps between them and the padding.
+//
+// A space that survives to the end of a line is a character like any other, and
+// what hangs is *its* spacing rather than the spacing of whatever preceded it.
+// Under white-space: pre a trailing space is preserved, so the two can be told
+// apart by giving the space a letter-spacing of its own.
+func TestWhatCarriesTheTrailingSpacing(t *testing.T) {
+	const face = `font-family: Courier; font-size: 20px; letter-spacing: 12px`
+	for _, tc := range []struct {
+		markup, css string
+		want        float64
+		what        string
+	}{
+		// "ab" is 24px of glyphs and one gap of 12; the gap after the b hangs,
+		// and the 10px of padding is inside the box.
+		{`<span class=pad>ab</span>`, `.pad { padding-right: 10px }`, 46,
+			"padding after the last character"},
+		{`<span class=pad>ab</span>`, `.pad { border-right: 10px solid }`, 46,
+			"a border after it"},
+		// "ab" and a preserved space whose own letter-spacing is nothing: 36px
+		// of glyphs and two gaps of 12, and nothing hangs.
+		{`ab<span class=z> </span>`, `.z { letter-spacing: 0 } #f { white-space: pre }`, 60,
+			"a preserved space with no spacing of its own"},
+	} {
+		root := layoutOf(t, 600, `<div><div id="f">`+tc.markup+`</div></div>`,
+			noDefaults+`#f { float: left; `+face+` } `+tc.css)
+		px(t, tc.what, find(t, root, "f").BorderRect.W, tc.want)
+	}
+}
+
+// TestTheTrailingSpacingHangsFromEveryEdgeItCanReach.
+//
+// The subtraction is made in four places, and each is a different edge: the
+// widest line, the widest unbreakable run, a line that ends at an atomic inline
+// rather than at a character, and the second of two lines. A fixture for the
+// first alone leaves three untested, and each of the three was wrong in a
+// different direction before it was written.
+func TestTheTrailingSpacingHangsFromEveryEdgeItCanReach(t *testing.T) {
+	const face = `font-family: Courier; font-size: 20px; letter-spacing: 12px`
+	for _, tc := range []struct {
+		html, css string
+		want      float64
+		what      string
+	}{
+		// The minimum, which is the widest unbreakable run rather than the
+		// widest line: "ab" is 24px of glyphs and one gap of 12, and the gap
+		// after the b hangs. A float in a container of one pixel is sized to it.
+		{`<div style="width:1px"><div id="f">ab cd</div></div>`, ``, 36,
+			"the widest word, when the box is squeezed to it"},
+		// A line that ends at an atomic inline. The picture is not a character,
+		// so nothing hangs after it — but the spacing after the "b" is inside
+		// the line, because the picture follows it. 24 of glyphs, one gap of 12
+		// between the letters, one gap of 12 before the picture, and the
+		// picture's 20.
+		{`<div><div id="f">ab<span class=box></span></div></div>`,
+			`.box { display: inline-block; width: 20px; height: 5px }`, 68,
+			"a picture at the end of the line"},
+		// Two lines, where the second holds no character at all. The first
+		// line's trailing spacing must not still be sitting there when the
+		// second is measured.
+		{`<div><div id="f">a<br><span class=pad></span></div></div>`,
+			`.pad { padding-right: 30px }`, 30,
+			"a second line of nothing but padding"},
+	} {
+		root := layoutOf(t, 600, tc.html, noDefaults+`#f { float: left; `+face+` } `+tc.css)
+		px(t, tc.what, find(t, root, "f").BorderRect.W, tc.want)
 	}
 }
