@@ -230,6 +230,9 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	// containing both characters rather than either character's own. It changes
 	// the width of a run, so it has to be settled before any line is filled.
 	items = l.linkLetterSpacing(items)
+	// A float written after an absolutely positioned box still begins a line.
+	// See floatsBeforeOutOfFlow.
+	items = floatsBeforeOutOfFlow(items)
 
 	lo, hi := origin.x, origin.x.Add(width)
 
