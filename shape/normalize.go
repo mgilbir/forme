@@ -113,6 +113,20 @@ func charClassOf(r rune) (uint8, bool) {
 	return 0, false
 }
 
+// CombiningClass is a character's canonical combining class, Unicode's ccc.
+//
+// It is exported for the case mapping, which needs it for a reason nothing else
+// in this package does: SpecialCasing.txt's conditional mappings are written in
+// terms of it. "After_I" holds when an uppercase I precedes the character "with
+// no intervening combining character class 230 (Above) or 0", and the Turkish
+// rule that removes a dot above an I turns on exactly that. The table is
+// generated from Unicode's own data (see cmd/gencanonical) and one statement of
+// it is better than two.
+func CombiningClass(r rune) uint8 {
+	ccc, _ := charClassOf(r)
+	return ccc
+}
+
 // isCombiningMark reports whether a character is a combining mark: Unicode's
 // general category Mn, Mc or Me.
 //

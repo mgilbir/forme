@@ -236,3 +236,33 @@ func TestFullSizeKanaReachesThePage(t *testing.T) {
 		t.Errorf("the page says %q, want %q", got, want)
 	}
 }
+
+// TestTheLanguageComesFromTheNearestAncestor.
+//
+// The case mappings that depend on language need one, and it is an HTML
+// attribute rather than a CSS property — the cascade carries no entry for it —
+// so it is read by walking up the tree from the text. A document usually
+// declares its language once, on <html>, and a paragraph deep inside it is in
+// that language.
+func TestTheLanguageComesFromTheNearestAncestor(t *testing.T) {
+	for _, tc := range []struct{ markup, want, what string }{
+		{`<div id="p" lang="tr">i</div>`, "İ", "on the element itself"},
+		{`<div lang="tr"><div id="p">i</div></div>`, "İ", "on an ancestor"},
+		{`<div lang="tr"><div id="p"><span>i</span></div></div>`, "İ",
+			"on an ancestor, with the text deeper still"},
+		// The nearest one wins.
+		{`<div lang="tr"><div id="p" lang="en">i</div></div>`, "I",
+			"the nearer of two"},
+		{`<div lang="en"><div id="p" lang="tr">i</div></div>`, "İ",
+			"and the other way round"},
+		// Nothing anywhere.
+		{`<div id="p">i</div>`, "I", "no language at all"},
+		// A script that is not the language's own turns the tailoring off.
+		{`<div id="p" lang="tr-Cyrl">i</div>`, "I", "Turkish written in Cyrillic"},
+	} {
+		got := drawn(paintOf(t, tc.markup, noDefaults+`#p { text-transform: uppercase }`))
+		if got != tc.want {
+			t.Errorf("%s: the page reads %q, want %q", tc.what, got, tc.want)
+		}
+	}
+}

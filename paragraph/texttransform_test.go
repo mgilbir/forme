@@ -42,7 +42,7 @@ func TestACharacterWhoseCaseIsNotOneCharacter(t *testing.T) {
 		{"ßtraße", TransformCapitalize, "Sstraße", "titlecase is not uppercase"},
 		{"ﬁne wine", TransformCapitalize, "Fine Wine", "a ligature starting a word"},
 	} {
-		got, _ := TransformText(tc.in, tc.kind, false)
+		got, _ := TransformText(tc.in, tc.kind, false, "")
 		if got != tc.want {
 			t.Errorf("%s: %q became %q, want %q", tc.what, tc.in, got, tc.want)
 		}
@@ -64,7 +64,7 @@ func TestTextWithNoFullMappingIsUnchangedByTheTable(t *testing.T) {
 			{TransformUppercase, strings.ToUpper(in)},
 			{TransformLowercase, strings.ToLower(in)},
 		} {
-			if got, _ := TransformText(in, tc.kind, false); got != tc.want {
+			if got, _ := TransformText(in, tc.kind, false, ""); got != tc.want {
 				t.Errorf("%q became %q, want %q — no character of it has a full mapping",
 					in, got, tc.want)
 			}
@@ -287,7 +287,7 @@ func TestTheTransformsAreAppliedInTheSpecifiedOrder(t *testing.T) {
 		// what the code follows and this row is all of it that a test can hold.
 		{"uppercase full-width", "straße", "ＳＴＲＡＳＳＥ"},
 	} {
-		got, _ := TransformText(tc.in, TransformOf(tc.value), false)
+		got, _ := TransformText(tc.in, TransformOf(tc.value), false, "")
 		if got != tc.want {
 			t.Errorf("text-transform:%s on %q gave\n\t%q, want\n\t%q",
 				tc.value, tc.in, got, tc.want)
@@ -311,7 +311,7 @@ func TestARemappingLeavesEverythingElseAlone(t *testing.T) {
 		{TransformFullSizeKana, "6月", "6月", "full-size-kana is not full-width"},
 		{TransformFullWidth, "ぁ", "ぁ", "full-width is not full-size-kana"},
 	} {
-		if got, _ := TransformText(tc.in, tc.kind, false); got != tc.want {
+		if got, _ := TransformText(tc.in, tc.kind, false, ""); got != tc.want {
 			t.Errorf("%s: %q became %q, want %q", tc.why, tc.in, got, tc.want)
 		}
 	}
