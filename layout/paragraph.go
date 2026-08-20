@@ -69,6 +69,7 @@ var (
 
 var (
 	hyphensOf          = paragraph.HyphensOf
+	mayNotBeginLine    = paragraph.MayNotBeginLine
 	splitAtBreaks      = paragraph.SplitAtBreaks
 	tabAdvance         = paragraph.TabAdvance
 	isIdeographic      = paragraph.IsIdeographic

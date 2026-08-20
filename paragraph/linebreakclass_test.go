@@ -63,11 +63,16 @@ func TestALineDoesNotBeginWithOneOfThese(t *testing.T) {
 		{"LB21", "a Thai angkhankhu", '๚'},
 		{"LB21", "a Khmer khan", '។'},
 		{"LB21", "an ideographic iteration mark", '々'},
-		{"LB21", "a wave dash", '〜'},
 		{"LB21", "a katakana voiced sound mark", '゛'},
 		{"LB21", "a double exclamation mark", '‼'},
 		{"LB22", "an ellipsis", '…'},
 	} {
+		// The wave dash used to be a row here and is not one any more. It is
+		// class NS, so UAX #14's own rule forbids a line to begin with it — and
+		// CSS Text §5.3 names it as one of four hyphens that "normal" and
+		// "loose" let a line begin with, which is what this engine now produces
+		// with no value at all. TestTheStrictnessValuesTailorTheDefault holds
+		// all four of them, at all three values.
 		text := "中中" + string(tc.r) + "文"
 		got := marks(t, text, WordBreak{}, LineBreak{})
 		if strings.Contains(got, "|"+string(tc.r)) {
@@ -199,7 +204,7 @@ func TestTheTableIsUnicodesAndNotAGuess(t *testing.T) {
 		{0x10FFFF, false, "the last code point there is"},
 		{-1, false, "not a character at all"},
 	} {
-		if got := noBreakBefore(tc.r); got != tc.want {
+		if got := noBreakBefore(tc.r, LineBreak{}); got != tc.want {
 			t.Errorf("%s (U+%04X): %v, want %v", tc.what, tc.r, got, tc.want)
 		}
 	}

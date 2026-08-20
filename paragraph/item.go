@@ -428,6 +428,17 @@ type State struct {
 	// same reason the rest of this does: "a&#8288;<span>b</span>" puts the word
 	// joiner and the box in different text nodes.
 	AfterBinding bool
+	// AfterDeferred says the opportunity being carried is one an *ideograph*
+	// offered rather than one a space did, and it is the difference between two
+	// prohibitions that read alike.
+	//
+	// UAX #14's "a line may not begin with this character" is applied inside a
+	// run only to the opportunities SplitAtBreaks defers — the ones between two
+	// ideographs — and not to the one after a space: "AA )BB" breaks after the
+	// space and always has. An opportunity crossing a box boundary has to be
+	// held to the same rule as one that did not cross it, or "中中<span>〜</span>文"
+	// and "中中〜文" answer differently about the same text.
+	AfterDeferred bool
 }
 
 // StartOfContext is the state an inline formatting context begins in.
