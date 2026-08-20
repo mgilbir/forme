@@ -176,7 +176,23 @@ type LineBreak struct {
 	// Anywhere is that value: an opportunity at every grapheme cluster boundary,
 	// and no prohibition survives it.
 	Anywhere bool
+	// Strict, Normal and Loose are §5.3's three tailorings of where a line may
+	// break in Chinese and Japanese.
+	//
+	// The zero value is none of them: it is "auto", which §5.3 leaves to the
+	// engine — "the UA determines the set of line-breaking restrictions to use".
+	// This engine's answer for it is UAX #14 untailored, and that is a decision
+	// the suite forces rather than a default nobody thought about: its
+	// css3-text-line-break-opclns tests set no value and assert the report's own
+	// behaviour for the wave dash and the double hyphen, while
+	// line-break-normal-013 sets "normal" and asserts the opposite. The two are
+	// only both satisfiable if auto and normal differ, so they do.
+	Strict, Normal, Loose bool
 }
+
+// Tailored reports whether one of §5.3's three named strictnesses is in force,
+// as against "auto".
+func (lb LineBreak) Tailored() bool { return lb.Strict || lb.Normal || lb.Loose }
 
 // LineBreakOf reads the property. The second result is the value to report as
 // unhandled, or the empty string — and reporting it is still conditional on the
@@ -185,8 +201,12 @@ func LineBreakOf(value string) (LineBreak, string) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "anywhere":
 		return LineBreak{Anywhere: true}, ""
-	case "loose", "normal", "strict":
-		return LineBreak{}, strings.ToLower(strings.TrimSpace(value))
+	case "strict":
+		return LineBreak{Strict: true}, ""
+	case "loose":
+		return LineBreak{Loose: true}, ""
+	case "normal":
+		return LineBreak{Normal: true}, ""
 	}
 	return LineBreak{}, ""
 }

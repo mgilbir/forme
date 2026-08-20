@@ -626,6 +626,36 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		if i == 0 && state.AfterAtomic && bindsToAtomicInline(p.Text) {
 			state.BreakOpportunity = false
 		}
+		// And the general form of the same thing. An opportunity carried in from
+		// the box before is offered to whatever begins this one, and a line may
+		// not begin with a closing bracket, a hyphen or a non-starter whichever
+		// box the character happens to be written in. SplitAtBreaks withholds it
+		// *inside* a run; across a boundary there is no character in the earlier
+		// box to test, so the box receiving the opportunity is what asks.
+		//
+		// The suite writes it as "中中<span>〜</span>文" — the character a line
+		// may not begin with in an element of its own, which is what a test that
+		// wants to colour it does — and its whole line-break strictness family
+		// is that shape.
+		//
+		// Only an opportunity an ideograph deferred, which is the same subset the
+		// rule is applied to inside a run: a break after a space is not one this
+		// withholds, and never has been — "AA )BB" breaks after the space. The
+		// two have to agree, or the answer depends on whether the author wrote a
+		// <span>.
+		//
+		// Not after an atomic inline either, and §5.1 says why in as many words:
+		// there is an opportunity before and after each one "even when adjacent
+		// to a character that would normally suppress them". A picture followed
+		// by a closing bracket may still be wrapped away from it. The exception
+		// to the exception is the three binding classes, which the branch above
+		// is. It falls out of AfterDeferred as well — a picture is not an
+		// ideograph — and is written out because it is a rule rather than a
+		// coincidence.
+		if i == 0 && state.BreakOpportunity && state.AfterDeferred &&
+			!state.AfterAtomic && !lb.Anywhere && mayNotBeginLine(p.Text, lb) {
+			state.BreakOpportunity = false
+		}
 		if p.Segment {
 			// A segment break that survived Phase I is a break the author
 			// wrote, and it ends the line as firmly as a <br> does — and ends a
@@ -699,12 +729,18 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			// picture after it. A piece is a run between two opportunities, so
 			// its last character is the one next to whatever comes next.
 			AfterBinding: endsBinding(p.Text),
+			// Whether the opportunity this piece leaves behind is one an
+			// ideograph deferred. SplitAtBreaks defers those and takes them at
+			// the next character; a piece that ends in one has handed the
+			// decision to whatever comes after it, which may be another box.
+			AfterDeferred: endsIdeographic(p.Text),
 		}
 	}
 	return out, inlineState{
 		BreakOpportunity:      endedAtBreak,
 		AfterCollapsibleSpace: state.AfterCollapsibleSpace,
 		AfterBinding:          state.AfterBinding,
+		AfterDeferred:         state.AfterDeferred,
 	}
 }
 
@@ -720,6 +756,16 @@ func bindsToAtomicInline(text string) bool {
 func endsBinding(text string) bool {
 	r, _ := utf8.DecodeLastRuneInString(text)
 	return r != utf8.RuneError && paragraph.BindsToAtomicInline(r)
+}
+
+// endsIdeographic reports whether a piece ends on the one character that leaves
+// an opportunity *deferred* rather than taken: an ideograph, which offers a
+// break after itself and lets the next character decide whether it is real.
+//
+// It is the question inlineState.AfterDeferred carries across a box boundary.
+func endsIdeographic(text string) bool {
+	r, _ := utf8.DecodeLastRuneInString(text)
+	return r != utf8.RuneError && paragraph.IsIdeographic(r)
 }
 
 // textItemArgs is what one text item is built from. It is a struct because the

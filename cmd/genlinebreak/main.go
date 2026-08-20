@@ -109,6 +109,56 @@ var permitted = map[string]bool{
 	"AK": true, "AP": true, "AS": true, "VF": true, "VI": true,
 }
 
+// The three sets CSS Text §5.3's line-break tailoring needs on top of UAX #14's
+// default, which is what "normal" already is.
+//
+// §5.3 states the tailoring as lists of characters and of Line_Break classes,
+// and both are here for the same reason the rest of this file is: the lists are
+// Unicode's and the *policy* — which value uses which — belongs in linebreak.go.
+//
+//   - strictNoBreak: a line may not begin with one of these under "strict".
+//     Class CJ is UAX #14's Conditional Japanese Starter, which is exactly the
+//     small kana and the prolonged sound mark, and the report's own rule is to
+//     resolve it to NS under a strict tailoring and to ID otherwise. The two
+//     hyphens beside it are named by §5.3 rather than by a class: 〜 and ゠ are
+//     class NS, so the *base* table already forbids them, and what "normal" has
+//     to do is let them through again — see hyphenNoBreak below.
+//   - looseBreak: a line *may* begin with one of these under "loose", which
+//     means taking them back out of the base table. §5.3 names the iteration
+//     marks and the centred punctuation one code point at a time and names two
+//     whole classes, IN and PO.
+//   - prefixBreak: class PR, which is the one rule stated the other way round —
+//     under "loose" a line may end *after* a prefix, which no other value
+//     allows.
+var strictNoBreakClasses = map[string]bool{"CJ": true}
+
+// The hyphens §5.3 names: "normal" and "loose" allow a line to begin with one
+// and "strict" does not. They are class NS, so the base table forbids them and
+// the two looser values are what have to make the exception.
+var hyphenNoBreak = []rune{0x2010, 0x2013, 0x301C, 0x30A0}
+
+// The characters "loose" allows a line to begin with, code point by code point:
+// the iteration marks and the centred punctuation. U+2010 and U+2013 are in
+// hyphenNoBreak instead, because normal allows them too.
+var looseBreakRunes = []rune{
+	0x3005, 0x303B, 0x309D, 0x309E, 0x30FD, 0x30FE, // iteration marks
+	0x30FB, 0xFF1A, 0xFF1B, 0xFF65, 0x203C, 0x2047, 0x2048, 0x2049, 0xFF01, 0xFF1F,
+}
+
+// And the two classes it names whole.
+var looseBreakClasses = map[string]bool{"IN": true, "PO": true}
+
+// prefixClasses is the class a line may end after under "loose" and no other
+// value: a currency sign or a number sign that belongs to the figure following
+// it.
+var prefixClasses = map[string]bool{"PR": true}
+
+// postfixClasses is the class every value but "loose" forbids a line to begin
+// with. It is not in UAX #14's unconditional rules — nothing there says a line
+// may not start with a per-cent sign — so it is the one part of the base table
+// this adds to rather than takes away from.
+var postfixClasses = map[string]bool{"PO": true}
+
 // binding is the classes that hold on to an atomic inline beside them, CSS
 // Text §5.1. It overlaps forbidden and is not a subset of it: WJ is in both, GL
 // is in neither of UAX #14's unconditional rules, and ZWJ is a rule about what
@@ -137,7 +187,7 @@ func main() {
 	defer f.Close()
 
 	version := "unknown"
-	var spans, glue []span
+	var spans, glue, strict, loose, prefix, postfix []span
 	seen := map[string]bool{}
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
@@ -169,6 +219,22 @@ func main() {
 		if binding[class] {
 			glue = append(glue, span{lo, hi, class})
 		}
+		if strictNoBreakClasses[class] {
+			strict = append(strict, span{lo, hi, class})
+		}
+		if looseBreakClasses[class] {
+			loose = append(loose, span{lo, hi, class})
+		}
+		if prefixClasses[class] {
+			prefix = append(prefix, span{lo, hi, class})
+		}
+		if postfixClasses[class] {
+			postfix = append(postfix, span{lo, hi, class})
+		}
+	}
+	// The characters §5.3 names one at a time go in beside the classes.
+	for _, r := range looseBreakRunes {
+		loose = append(loose, span{r, r, "named"})
 	}
 	if err := sc.Err(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -187,6 +253,20 @@ func main() {
 		if !seen[class] {
 			fmt.Fprintf(os.Stderr, "genlinebreak: no character has class %s; has it been renamed?\n", class)
 			os.Exit(1)
+		}
+	}
+	for class := range strictNoBreakClasses {
+		if !seen[class] {
+			fmt.Fprintf(os.Stderr, "genlinebreak: no character has class %s; has it been renamed?\n", class)
+			os.Exit(1)
+		}
+	}
+	for _, set := range []map[string]bool{looseBreakClasses, prefixClasses, postfixClasses} {
+		for class := range set {
+			if !seen[class] {
+				fmt.Fprintf(os.Stderr, "genlinebreak: no character has class %s; has it been renamed?\n", class)
+				os.Exit(1)
+			}
 		}
 	}
 	if len(spans) == 0 || len(glue) == 0 {
@@ -215,6 +295,31 @@ package paragraph
 // these. The one exception the rule makes — U+00A0, which is class GL and
 // breaks anyway, for compatibility with what the web already does — is in
 // linebreak.go, because it is a decision rather than a property.`, version)
+	emit(&w, "strictNoBreakRanges", strict, `// The characters "line-break: strict" adds to the set a line may not begin
+// with. Unicode %s.
+//
+// %d ranges, merged from %d the file states separately: %s.
+// Class CJ, the Conditional Japanese Starter: the small kana and the prolonged
+// sound mark. UAX #14 leaves the class to a tailoring to resolve, and CSS Text
+// §5.3 is that tailoring — NS under strict, ID under everything else.`, version)
+	emit(&w, "looseBreakRanges", loose, `// The characters "line-break: loose" allows a line to begin with, taking them
+// back out of the set above. Unicode %s.
+//
+// %d ranges, merged from %d the file states separately: %s.
+// The iteration marks and the centred punctuation are named by §5.3 one code
+// point at a time and appear here as "named"; IN and PO are classes it names
+// whole.`, version)
+	emit(&w, "prefixRanges", prefix, `// The characters "line-break: loose" allows a line to end *after*, which no
+// other value does. Unicode %s.
+//
+// %d ranges, merged from %d the file states separately: %s.`, version)
+	emit(&w, "postfixRanges", postfix, `// The characters every value but "loose" forbids a line to begin with.
+// Unicode %s.
+//
+// %d ranges, merged from %d the file states separately: %s.
+// UAX #14 has no unconditional rule about them — nothing there says a line may
+// not start with a per-cent sign — so this is the one part of the tailoring
+// that adds to the base table rather than taking away from it.`, version)
 	fmt.Print(w.String())
 }
 

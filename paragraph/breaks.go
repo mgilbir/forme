@@ -203,7 +203,7 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 		// around every typographic character unit "including around any
 		// punctuation character or preserved white space", which is a value
 		// whose whole purpose is to overrule this.
-		if offered && !lb.Anywhere && noBreakBefore(r) {
+		if offered && !lb.Anywhere && noBreakBefore(r, lb) {
 			offered = false
 		}
 		if offered && atBoundary && cur.Len() > 0 {
@@ -308,6 +308,19 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 			flush()
 			cur.WriteRune(r)
 			deferBreak = true
+
+		case lb.Loose && BreaksAfterUnderLoose(r) && !endsRunOrSpace(text, i):
+			// §5.3's one rule the other way round: under "loose" a line may end
+			// after a currency sign or a number sign, which belongs to the
+			// figure following it and which no other value lets go of.
+			//
+			// It is written beside the hyphen below because it is the same
+			// shape of rule — a character that ends a run and lets the next one
+			// begin a line — and it carries the same guard: a prefix with
+			// nothing after it offers an opportunity nothing could take.
+			cur.WriteRune(r)
+			flush()
+			breakNext = true
 
 		case r == '-' && !endsRunOrSpace(text, i):
 			// A hyphen ends a run and the next may begin a line — which is what

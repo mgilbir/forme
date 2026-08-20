@@ -1,6 +1,9 @@
 package paragraph
 
-import "sort"
+import (
+	"sort"
+	"unicode/utf8"
+)
 
 // Where a line may not begin — UAX #14's unconditional prohibitions.
 //
@@ -37,16 +40,105 @@ import "sort"
 // ideograph is deferred until the following character is known, so a break after
 // an opening bracket is one that was never offered rather than one withdrawn.
 // A bracket is not an ideograph, so it defers nothing.
-func noBreakBefore(r rune) bool {
+func noBreakBefore(r rune, lb LineBreak) bool {
 	// Below the first range and the common case for Latin text, which is worth
 	// a comparison to avoid a search.
 	if r < noBreakBeforeRanges[0].lo {
 		return false
 	}
-	i := sort.Search(len(noBreakBeforeRanges), func(i int) bool {
-		return noBreakBeforeRanges[i].hi >= r
-	})
-	return i < len(noBreakBeforeRanges) && noBreakBeforeRanges[i].lo <= r
+	// §5.3's tailoring, which is three answers over the same base.
+	//
+	// normal is the base: UAX #14's unconditional prohibitions and nothing more,
+	// which is what this engine did for every value before the property was
+	// read. The other two move characters in and out of it, and both directions
+	// are needed — strict forbids what normal allows and loose allows what
+	// normal forbids — which is why this is a pair of tables rather than one.
+	//
+	// The hyphens are the exception the base table cannot state. 〜 and ゠ are
+	// class NS, so they are in it; §5.3 says a line may begin with one under
+	// normal and loose, and may not under strict. So the base is right for
+	// strict and the two looser values carve them back out.
+	switch {
+	case lb.Loose && inLineBreakRanges(r, looseBreakRanges[:]):
+		return false
+	case isLatinHyphen(r):
+		// U+2010 and U+2013. Loose lets a line begin with one and the other
+		// three do not — which for auto is a prohibition UAX #14 does not have,
+		// exactly as the postfixes below are. See isLatinHyphen.
+		return !lb.Loose
+	case (lb.Normal || lb.Loose) && isEastAsianHyphen(r):
+		return false
+	case lb.Strict && inLineBreakRanges(r, strictNoBreakRanges[:]):
+		return true
+	case (lb.Normal || lb.Strict) && inLineBreakRanges(r, postfixRanges[:]):
+		return true
+	}
+	return inLineBreakRanges(r, noBreakBeforeRanges[:])
+}
+
+// §5.3 names four characters as hyphens and does not treat them alike, which is
+// why there are two functions here and not one. The suite states the difference
+// in the plainest possible terms: line-break-loose-hyphens-001 says "the second
+// line starts with a hyphen" and line-break-normal-hyphens-001, over the same
+// text, says it "ends with a hyphen".
+
+// isLatinHyphen is U+2010 HYPHEN and U+2013 EN DASH: a line may begin with one
+// under "loose" and under nothing else.
+//
+// Both are class HH as of Unicode 16, which appears in no unconditional rule, so
+// the base table says nothing about them and every value would let a line begin
+// with one. Two of the three have to be told otherwise.
+func isLatinHyphen(r rune) bool { return r == 0x2010 || r == 0x2013 }
+
+// isEastAsianHyphen is U+301C WAVE DASH and U+30A0
+// KATAKANA-HIRAGANA DOUBLE HYPHEN: a line may begin with one under "normal" and
+// "loose", and may not under "strict" — or under "auto", which is this engine's
+// untailored answer and is what the suite's own default-behaviour tests assert.
+//
+// Both are class NS, so the base table already forbids them and these two values
+// are what let them through.
+func isEastAsianHyphen(r rune) bool { return r == 0x301C || r == 0x30A0 }
+
+// MayNotBeginLine reports whether the first character of a run is one a line may
+// not begin with.
+//
+// It exists because a break opportunity can arrive from *outside* the run. Inside
+// one, SplitAtBreaks withholds an opportunity in front of such a character as it
+// meets it; an opportunity carried in from the box before — an ideograph at the
+// end of the previous text node offers one, and the next node may be a <span> —
+// has no character in that box to be tested against. So the box that receives it
+// asks here.
+//
+// "中中<span>〜</span>文" is the shape, and the suite has a page of them: the
+// character a line may not begin with is written in an element of its own, which
+// is exactly what a test that wants to colour it does.
+func MayNotBeginLine(text string, lb LineBreak) bool {
+	if text == "" {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(text)
+	return noBreakBefore(r, lb)
+}
+
+// BreaksAfterUnderLoose reports whether a line may end after this character
+// because "line-break: loose" says so.
+//
+// It is the one rule of §5.3 stated the other way round. A currency sign or a
+// number sign belongs to the figure that follows it — "￥" and "100" are one
+// thing — so no value but loose lets a line end between them, and loose does
+// because a newspaper column is narrow enough to need it.
+func BreaksAfterUnderLoose(r rune) bool {
+	return inLineBreakRanges(r, prefixRanges[:])
+}
+
+// inLineBreakRanges searches one of the generated tables, which are sorted and
+// disjoint.
+func inLineBreakRanges(r rune, table []struct{ lo, hi rune }) bool {
+	if len(table) == 0 || r < table[0].lo {
+		return false
+	}
+	i := sort.Search(len(table), func(i int) bool { return table[i].hi >= r })
+	return i < len(table) && table[i].lo <= r
 }
 
 // BindsToAtomicInline reports whether a line may not break between this
