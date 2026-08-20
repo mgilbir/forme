@@ -135,6 +135,13 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 	// that *follows*: only that one says whether the cluster ended. Taking the
 	// opportunity where it is offered is what cut the syllable open.
 	deferBreak := false
+	// heldBreak is an opportunity that was offered and moved rather than
+	// refused: the character in front of it is one a line may not begin with, so
+	// the break belongs after that character instead. It is kept apart from
+	// deferBreak because it has already been through the rules once — word-break
+	// does not get to suppress it a second time on the far side of the character
+	// that displaced it.
+	heldBreak := false
 
 	flush := func() {
 		if cur.Len() == 0 {
@@ -193,7 +200,24 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 		// is what makes "X XX X" in four characters of room break after the
 		// fourth — the answer break-all must not give, and the one the suite's
 		// break-spaces-before-first-char-007 asks for by name.
-		offered := (deferBreak && !startsSpacePiece(r, ws)) ||
+		// word-break: keep-all withholds the deferred one, and only where the
+		// character it is offered to is a letter.
+		//
+		// §5.2: "implicit soft wrap opportunities between typographic letter
+		// units (or other typographic character units belonging to the NU, AL,
+		// AI, or ID Line Breaking Classes) are suppressed". Both sides have to
+		// be one, which is why this reads the character rather than the value
+		// alone: the opportunity between an ideograph and the comma after it is
+		// not between letter units and is not keep-all's to take. It is not
+		// taken by anyone else either — LB13 moves it past the comma — and what
+		// arrives on the far side is a held one, which is the second term above
+		// and is not offered to keep-all a second time.
+		//
+		// The suite tests each half: word-break-keep-all-005 asks for the break
+		// after U+3000 to survive, -006 for the one after an ideographic comma,
+		// and -011 for every implicit one inside "中文english中文english" to go.
+		offered := (deferBreak && !(wb.KeepAll && isLetterUnit(r)) && !startsSpacePiece(r, ws)) ||
+			(heldBreak && !startsSpacePiece(r, ws)) ||
 			(wb.BreakAll && !startsSpacePiece(r, ws)) || lb.Anywhere
 		// UAX #14 forbids a line beginning with a closing bracket, a hyphen or
 		// a non-starter, and an opportunity offered in front of one is not one.
@@ -203,14 +227,27 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 		// around every typographic character unit "including around any
 		// punctuation character or preserved white space", which is a value
 		// whose whole purpose is to overrule this.
+		//
+		// A prohibition *moves* an opportunity rather than deleting one, which is
+		// the whole shape of a pair rule: "× CL" says a line may not begin with a
+		// closing bracket, and says nothing against a line beginning with what
+		// comes after it. So the deferred opportunity is held rather than
+		// dropped, and the next character is asked in its turn.
+		//
+		// Without that, "字字、字字" had a break between the two ideographs and
+		// none after the comma, so a four-character box set it as three
+		// characters and one. word-break-keep-all-006 asks for the two-by-two
+		// square, and the same text answers it at every value of word-break: the
+		// opportunity the comma stands in front of is the one after it.
+		held := false
 		if offered && !lb.Anywhere && noBreakBefore(r, lb) {
-			offered = false
+			offered, held = false, true
 		}
 		if offered && atBoundary && cur.Len() > 0 {
 			flush()
 			breakNext = true
 		}
-		deferBreak = false
+		deferBreak, heldBreak = false, held
 
 		switch {
 		case r == '\n' || r == '\r':
@@ -378,6 +415,18 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 	// whatever box comes next, and the character that would have confirmed it is
 	// in that box rather than this one.
 	return out, breakNext || deferBreak
+}
+
+// isLetterUnit reports whether a character is a typographic letter unit in
+// §5.2's sense — "the NU, AL, AI, or ID Line Breaking Classes" — which is what
+// word-break: keep-all suppresses an opportunity *between*.
+//
+// A letter or a number, which is those four classes as closely as this engine
+// distinguishes them: an ideograph is a letter in Unicode's own categories, so
+// ID needs no separate test. Punctuation, spaces and symbols are not, which is
+// the half the value's tests are about.
+func isLetterUnit(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsNumber(r)
 }
 
 // startsSpacePiece reports whether a character is one SplitAtBreaks gives a
