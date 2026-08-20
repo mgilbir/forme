@@ -226,6 +226,10 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		l.reportHangingPunctuation(b, unhandledHang)
 	}
 	items = l.hangPunctuation(items, hp)
+	// §8.2's spacing at an element boundary, which is the innermost element
+	// containing both characters rather than either character's own. It changes
+	// the width of a run, so it has to be settled before any line is filled.
+	items = l.linkLetterSpacing(items)
 
 	lo, hi := origin.x, origin.x.Add(width)
 
