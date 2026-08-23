@@ -697,6 +697,53 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			!state.AfterAtomic && !lb.Anywhere && mayNotBeginLine(p.Text, lb) {
 			state.BreakOpportunity = false
 		}
+		// §5.2's break-all treats every alphabetic, numeric and ideographic
+		// character in this box as ID — and that includes the first one. UAX #14
+		// allows a line to end between whatever precedes an ID and the ID itself,
+		// so "aaaaaaa<span style='word-break: break-all'>bbb</span>" may break at
+		// the span even though the run before it may not be broken inside.
+		//
+		// SplitAtBreaks cannot see that boundary: it is given one box's text, and
+		// this boundary has a character on each side of it in two different
+		// boxes. So the box that changed the class is the one that says so, which
+		// is also the right place for it — the value is the *later* character's,
+		// and the later character is this one.
+		//
+		// line-break: anywhere is here for the same reason and a stronger one:
+		// §5.3 puts an opportunity around every typographic character unit, and
+		// the edge of an inline box is not an exception it carves out.
+		//
+		// A line still may not *begin* with a closing bracket or a non-starter,
+		// which is the rule the branch above applies to an opportunity arriving
+		// from another box — so it is applied to this one too, and by the same
+		// exemption line-break: anywhere overrules it.
+		//
+		// The index test is the correct reading of the rule and has no test,
+		// which is a different thing from being covered. The rule is about one
+		// boundary — the box's leading edge, the only one SplitAtBreaks could not
+		// see — and every piece after the first already carries the opportunity
+		// from the split itself, so dropping it moves nothing: 5556 clean passes
+		// either way, and no reftest changes its answer. That is recorded here
+		// rather than left as an implied claim.
+		//
+		// The *far* edge is not done, and the reason is that the suite does not
+		// agree with itself about it. UAX #14 allows a line to end after an ID
+		// whatever follows, so the symmetric rule would offer an opportunity
+		// after the last character of a break-all box, and
+		// word-break-break-all-inline-009 asks for exactly that. But
+		// word-break-break-all-inline-007 asks for the opposite over the same
+		// shape — "<span class=test>bbbbbbb</span>cccccc", whose reference puts
+		// the span's last b on the line with "cccccc" and lets it overflow — and
+		// there is no reading of §5.2 that gives both. Implemented with the
+		// non-starter rule applied on the far side, the two trade one for one:
+		// 009 goes clean, 007 goes red, and 5556 stays 5556. So the question is
+		// left where the working group left it — 004, 007 and 010 are all marked
+		// tentative — rather than settled by picking the fixture that suits this
+		// engine.
+		if i == 0 && (wb.BreakAll || lb.Anywhere) && !p.Space &&
+			(lb.Anywhere || !mayNotBeginLine(p.Text, lb)) {
+			state.BreakOpportunity = true
+		}
 		if p.Segment {
 			// A segment break that survived Phase I is a break the author
 			// wrote, and it ends the line as firmly as a <br> does — and ends a
