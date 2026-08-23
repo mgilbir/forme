@@ -191,6 +191,18 @@ type Item struct {
 	// does is move the line's own beginning, which is where a negative
 	// text-indent does its work and is where layout applies it.
 	HangStart, HangEnd bool
+	// MayHangEnd marks an item that is a single stop or comma which §8.4's
+	// allow-end would hang, if hanging it is what lets the line hold it.
+	//
+	// It is a candidate rather than a decision, and the decision belongs to the
+	// fill: the value hangs the character "only if it does not otherwise fit",
+	// which is a question about a line and cannot be answered before the line is
+	// known. The fill sets HangEnd and Hangs on its own copy when it takes it.
+	//
+	// The character is cut into an item of its own before the fill for the reason
+	// hangingpunctuation.go gives for the other two values: a hang is a width,
+	// and a width is a property of an item.
+	MayHangEnd bool
 	// PreContext and PostContext are the text either side of this run, where the
 	// boundary between it and its neighbour does not break shaping.
 	//

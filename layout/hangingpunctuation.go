@@ -54,7 +54,70 @@ func (l *layouter) hangPunctuation(items []inlineItem, hp hangingPunctuation) []
 	if i, ok := edgeRun(items, -1); ok && hangingFor(items[i], hp).Last {
 		items = l.cutHang(items, i, false)
 	}
-	return items
+	return l.markStopsAndCommas(items, hp)
+}
+
+// markStopsAndCommas cuts every stop or comma that ends a run into an item of
+// its own, so that the fill has something to hang.
+//
+// §8.4's allow-end is about *any* line rather than the first or the last, so
+// there is no one place to cut: a paragraph of prose has a comma at the end of
+// half its runs and any of them may turn out to end a line. The cut is made for
+// all of them and the fill takes at most one per line — see Item.MayHangEnd,
+// which is a candidate and not a decision.
+//
+// Only the *last* character of a run, which is what makes the rule decidable and
+// is the specification's own reading: "a stop or comma", not a run of them. The
+// suite is precise about the difference — "ab c、、" in four characters of room
+// does not hang, because the overflow happened at the first comma and hanging
+// the second is not what would fix it, and cutting only the last is what makes
+// the fill see that.
+//
+// It returns the items untouched for a document that does not ask for the value,
+// which is nearly every document: the walk stops at the first test.
+func (l *layouter) markStopsAndCommas(items []inlineItem, hp hangingPunctuation) []inlineItem {
+	any := false
+	for i := range items {
+		if canHangAsStop(items[i]) && hangingFor(items[i], hp).EndAllow {
+			any = true
+			break
+		}
+	}
+	if !any {
+		return items
+	}
+	out := make([]inlineItem, 0, len(items)+4)
+	for _, item := range items {
+		n := 0
+		if canHangAsStop(item) && hangingFor(item, hp).EndAllow {
+			n = trailingStopOrComma(item.Text)
+		}
+		switch {
+		case n == 0:
+			out = append(out, item)
+		case n == len(item.Text):
+			// The run is the character already.
+			item.MayHangEnd = true
+			out = append(out, item)
+		default:
+			head, tail := l.br.SplitItem(item, len(item.Text)-n)
+			tail.MayHangEnd = true
+			out = append(out, head, tail)
+		}
+	}
+	return out
+}
+
+// canHangAsStop reports whether an item is a run of text a stop or comma could
+// be cut out of.
+//
+// Not one the other two values have already claimed: a character cannot hang at
+// both ends of a line, and the item cut for "last" is already marked and already
+// hanging.
+func canHangAsStop(item inlineItem) bool {
+	return item.Text != "" && item.Face != nil && !item.Tab && !item.Forced &&
+		!item.Inset && item.AtomicBox == nil && item.Float == nil && item.Abs == nil &&
+		!item.HangStart && !item.HangEnd
 }
 
 // hangingFor is the property as it applies to the character that would hang,

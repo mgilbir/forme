@@ -476,11 +476,11 @@ func hyphenTextFor(face *shape.Face) string {
 // reportHangingPunctuation reports a hanging-punctuation value this engine
 // reads as none.
 //
-// "first" and "last" are implemented. "force-end" and "allow-end" are not: both
-// are about a stop or a comma at the end of *any* line rather than at the end of
-// the block, and allow-end hangs one only where the line would otherwise
-// overflow — which is a decision inside the line breaking rather than a
-// character taken out of a run before it.
+// "first", "last" and "allow-end" are implemented. "force-end" is not: it hangs
+// a stop or a comma at the end of *every* line whether or not the line would
+// otherwise hold it, which is a decision about every line rather than about the
+// one that overflowed — and the one that overflowed is the only one the fill has
+// a reason to ask about.
 //
 // What they change is where a line breaks, and that shows as a word moved to
 // the next line with nothing on the page to say why, so it is exactly the kind

@@ -145,6 +145,16 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 	// Rewinding rather than looking ahead is what keeps this linear: each item is
 	// still visited once, and the position is a single index rather than a scan.
 	insetAt, insetLine, insetFlow := -1, 0, 0
+	// Where §8.4's allow-end has hung a character on this line, and -1 when
+	// nothing is hanging.
+	//
+	// It is a position rather than a flag because the hang is provisional. The
+	// value hangs a stop or comma "at the end of a line", and whether the
+	// character is at the end of the line is not known when it is reached — only
+	// when something else lands after it. So it is hung, the fill goes on, and
+	// the hang is taken back at the top of the next turn if what follows takes
+	// room. See the restore below.
+	hungAt := -1
 	// The most recent point at which this line could have ended, kept for
 	// break-spaces. §3's break-spaces value puts the soft wrap opportunity
 	// *after* every preserved space and nowhere else, so a space belongs to the
@@ -198,6 +208,31 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 			// several band widths, so anything written back would be seen by the
 			// next attempt and the split would compound.
 			_, item = br.SplitItem(item, fromByte)
+		}
+
+		// §8.4's hang, taken back.
+		//
+		// A character hung by allow-end is at the end of the line only until
+		// something lands after it, and what lands after it is not known when it
+		// is hung. So the hang is undone before the branches below decide
+		// anything: the character goes back into the line's measure, and the
+		// item that follows meets the width it really has.
+		//
+		// What does *not* take it back is everything that takes no room — a
+		// forced break, an inline box's own edge, a box out of flow. Those
+		// legitimately follow a character at the end of a line, and "ab c、<br>"
+		// is the suite's row for it.
+		//
+		// Without this, a comma inside a "white-space: nowrap" span hung and
+		// pulled the span apart: the atomic inline after it began a new line,
+		// which is the one thing the span was written to prevent. The suite's
+		// hanging-punctuation-allow-end writes that row too, and its assert says
+		// so in as many words — punctuation does not hang "when a nowrap span
+		// prevents breaking before the punctuation".
+		if hungAt >= 0 && !item.Forced && !item.Inset && item.Abs == nil && item.Float == nil {
+			line[hungAt].Hangs, line[hungAt].HangEnd = false, false
+			used = used.Add(line[hungAt].Width)
+			hungAt = -1
 		}
 
 		if item.Float != nil {
@@ -256,6 +291,41 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 			// purpose, and leaving it out would put the run after a tab a spacing
 			// to the left of where it is drawn.
 			item.Width = TabAdvance(lineX.Add(used), item.TabStop, item.TabFloor)
+		}
+
+		// §8.4's allow-end, which is decided here because it is a question about
+		// a line: "a stop or comma at the end of a line hangs ... only if it
+		// does not otherwise fit prior to justification".
+		//
+		// So it is asked exactly where the answer is known — the character does
+		// not fit, the line holds something already, and putting it outside the
+		// line is what lets the line have it. A candidate that fits needs
+		// nothing: it is placed like any other character and the value has
+		// nothing to say about it. That is the whole of the difference from
+		// force-end, which hangs one whether or not it fits.
+		//
+		// used is not advanced, because the character is outside the line —
+		// which is what hanging it means, and is what lets the line hold it.
+		//
+		// The fill goes on rather than ending here, and that is not a nicety.
+		// Whatever follows meets exactly the room the character found, so a
+		// letter still overflows and still breaks the line in the same place;
+		// what is different is everything that takes *no* room. A forced break
+		// after the comma has to end this line rather than begin an empty one
+		// below it, and the suite writes that row: "ab c、<br>", whose reference
+		// is one line and not two.
+		// One character per line falls out of the restore above rather than
+		// needing a rule: a stop or a comma takes room, so the restore fires
+		// before a second candidate is ever tested and the first is back in the
+		// line's measure by then. A guard here was written first and could not
+		// be reached — not by two commas, and not by two with a float between
+		// them, which is the only thing that stands between two characters and
+		// takes no room.
+		if item.MayHangEnd && content && !item.NoWrap && overflows(used, item, width) {
+			item.Hangs, item.HangEnd = true, true
+			hungAt = len(line)
+			line = append(line, item)
+			continue
 		}
 
 		// A hanging space never causes a break: it sits past the line's end
