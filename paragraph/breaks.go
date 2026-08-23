@@ -306,7 +306,14 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 				Text: text[start:i], Space: true,
 				TrimAtEnd: r == 0x1680 && ws.Collapse,
 			})
-			breakNext = ws.BreakSpaces || SeparatorBreaksAfter(r)
+			// §5.3 again, and it is the value's whole purpose: line-break:
+			// anywhere puts an opportunity around every typographic character
+			// unit "including around any punctuation character or preserved
+			// white space", so the classes that would refuse one after this
+			// separator do not get to. U+202F NARROW NO-BREAK SPACE is class GL
+			// and glues what follows it to what precedes it — which is the right
+			// answer everywhere else and is exactly what the value overrules.
+			breakNext = ws.BreakSpaces || lb.Anywhere || SeparatorBreaksAfter(r)
 
 		case r == ' ' || r == '\t':
 			flush()
