@@ -121,6 +121,13 @@ type LengthContext struct {
 	// FontMetricsKnown says which of the two a zero means.
 	ZeroAdvance      Unit
 	FontMetricsKnown bool
+
+	// IcAdvance is the advance of U+6C34 (水) in the element's own font, which
+	// is what "ic" is, and IcAdvanceKnown says whether a face was found that has
+	// the glyph at all. A face without it has no ideographic advance to state,
+	// and §5.1.4 says what to do then.
+	IcAdvance      Unit
+	IcAdvanceKnown bool
 }
 
 // ParseLength reads a length from component values.
@@ -234,6 +241,25 @@ func pxPerUnit(unit string, ctx LengthContext) (px float64, known, supported boo
 		}
 		return ctx.ZeroAdvance.Px(), true, true
 
+	// ic is the advance of "水" — CSS Values §5.1.4's "CJK water ideograph",
+	// U+6C34 — in the element's own font. It is what an author sizes a box in
+	// ideographs with: "width: 4ic" is a box four Han characters wide, and it is
+	// exact where "em" is only nearly right, because a CJK face's ideographs are
+	// its em square and its Latin is not.
+	//
+	// A face with no water ideograph in it has no ideographic advance to state,
+	// and §5.1.4 says what to do: "in the cases where it is impossible or
+	// impractical to determine the ideographic advance measure, it must be
+	// assumed to be 1em". That is the specified answer for a Latin face rather
+	// than a guess at one — and it is the answer the suite's own references are
+	// built on, which write "4ic" beside four ideographs and expect the two to
+	// come out the same width.
+	case "ic":
+		if ctx.IcAdvanceKnown {
+			return ctx.IcAdvance.Px(), true, true
+		}
+		return ctx.FontSize.Px(), true, true
+
 	// ex is the font's x-height, when the font states one.
 	//
 	// It did not used to: the descriptor stopped at cap height, so every "ex"
@@ -298,9 +324,9 @@ func pxPerUnit(unit string, ctx LengthContext) (px float64, known, supported boo
 // chooses. The container ones need a container query, which needs a layout pass
 // before the cascade. The logical ones need a writing mode.
 var unresolvedUnits = map[string]bool{
-	// Font-relative, needing metrics from the chosen face. "ex" and "ch" are
-	// resolved; the rest need a metric the face layer does not carry.
-	"cap": true, "ic": true,
+	// Font-relative, needing metrics from the chosen face. "ex", "ch" and "ic"
+	// are resolved; the rest need a metric the face layer does not carry.
+	"cap": true,
 	"rex": true, "rch": true, "rcap": true, "ric": true,
 	"lh": true, "rlh": true,
 	// Container-relative.

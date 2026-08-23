@@ -160,6 +160,7 @@ func TestTheUnitsThatNeedAFaceAreLeftAlone(t *testing.T) {
 	for _, tc := range []struct{ property, value, want string }{
 		{"width", "3ex", "3ex"},
 		{"width", "3ch", "3ch"},
+		{"width", "3ic", "3ic"},
 		{"width", "3vw", "3vw"},
 		{"margin-left", "2lh", "2lh"},
 	} {
@@ -178,6 +179,7 @@ func TestTheUnitsThatNeedAFaceAreLeftAlone(t *testing.T) {
 	for _, tc := range []struct{ value, want string }{
 		{"1em 3ex", "28px 3ex"},
 		{"1em 3ch", "28px 3ch"},
+		{"1em 3ic", "28px 3ic"},
 		{"1em 3vw", "28px 3vw"},
 	} {
 		got := computedOf(t, `#p { font-size: 28px; background-size: `+tc.value+` }`,
@@ -211,7 +213,8 @@ func TestTheLettersEMInSomethingThatIsNotALength(t *testing.T) {
 // TestAFontSizeThatCannotBeResolvedIsLeftAsWritten, and the element is still
 // marked as having declared one.
 //
-// The cascade has no answer for "3ic" and must not invent one. What it leaves
+// The cascade has no answer for "3cap" — that is the font's cap height, and the
+// face is chosen in layout — and must not invent one. What it leaves
 // behind is the declaration and the mark, which together are exactly what
 // layout needs: an element that declared a font-size it could not resolve, to
 // report against and to fall back to the inherited size for. A descendant that
@@ -219,9 +222,9 @@ func TestTheLettersEMInSomethingThatIsNotALength(t *testing.T) {
 // must not resolve it either.
 func TestAFontSizeThatCannotBeResolvedIsLeftAsWritten(t *testing.T) {
 	doc := parseDoc(t, nested)
-	got := Apply(doc, []Sheet{author(t, `#p { font-size: 3ic }`)})
+	got := Apply(doc, []Sheet{author(t, `#p { font-size: 3cap }`)})
 	p := elementFor(t, doc, "#p")
-	if v := got.Styles[p]["font-size"]; v != "3ic" {
+	if v := got.Styles[p]["font-size"]; v != "3cap" {
 		t.Errorf("an unresolvable font-size computed to %q; the cascade has no answer "+
 			"for it and must not write one", v)
 	}

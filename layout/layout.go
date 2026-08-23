@@ -460,14 +460,53 @@ type layouter struct {
 type lengthKey struct {
 	value    string
 	fontSize style.Unit
-	// xHeight joins it for "ex", for the same reason and after the same lesson.
-	xHeight style.Unit
-	// zeroAdvance is part of the key because "ch" resolves against the face, so
-	// two boxes at the same size in different fonts do not share an answer.
-	// Leaving it out would have made the first font to parse "40ch" decide it
-	// for every other — a memoization bug, which is the kind that produces a
-	// wrong page only when a document uses two shape.
-	zeroAdvance style.Unit
+	// metrics is part of the key because "ex", "ch" and "ic" resolve against the
+	// face, so two boxes at the same size in different fonts do not share an
+	// answer. Leaving it out would have made the first font to parse "40ch"
+	// decide it for every other — a memoization bug, which is the kind that
+	// produces a wrong page only when a document uses two faces.
+	metrics faceMetrics
+}
+
+// faceMetrics are the measurements the font-relative units need from whatever
+// face will set a box: the x-height for "ex", the advance of "0" for "ch" and
+// the advance of "水" for "ic".
+//
+// Each carries a "known" bit beside it because zero is an answer for none of
+// them and a fallback for all three, and the fallbacks differ: half an em, no
+// answer at all, and one em. A face that states no x-height and a face that
+// states zero are different things, and four bugs in this engine have come from
+// reading a zero as an answer.
+//
+// It is a value, and comparable, because it is part of the memoization key.
+type faceMetrics struct {
+	xHeight      style.Unit
+	xHeightKnown bool
+	zeroAdvance  style.Unit
+	zeroKnown    bool
+	icAdvance    style.Unit
+	icKnown      bool
+}
+
+// metricsFor gathers whichever of the three a value asks for, and only those.
+//
+// The face is resolved only for a value that needs it. Asking for one has side
+// effects — fontFor reports a fallback when the requested family is missing — so
+// resolving it for every length would make a box that merely declares an
+// unavailable font report it without ever setting any text. It is also a
+// measurement per property, on the hot path of layout.
+func (l *layouter) metricsFor(b *Box, raw string) faceMetrics {
+	var m faceMetrics
+	if usesUnit(raw, 'c', 'h') {
+		m.zeroAdvance, m.zeroKnown = l.zeroAdvance(b)
+	}
+	if usesUnit(raw, 'e', 'x') {
+		m.xHeight, m.xHeightKnown = l.xHeightOf(b)
+	}
+	if usesUnit(raw, 'i', 'c') {
+		m.icAdvance, m.icKnown = l.icAdvance(b)
+	}
+	return m
 }
 
 // collapsed is what a box contributes to its parent's flow once its own margins
@@ -1804,28 +1843,14 @@ func (l *layouter) parseLength(b *Box, property string) (style.Length, bool) {
 	if raw == "" {
 		return style.Length{}, false
 	}
-	// The face is resolved only for a value that needs it. Asking for one has
-	// side effects — fontFor reports a fallback when the requested family is
-	// missing — so resolving it for every length would make a box that merely
-	// declares an unavailable font report it without ever setting any text. It
-	// is also a measurement per property, on the hot path of layout.
-	var zero style.Unit
-	var haveMetrics bool
-	if usesCh(raw) {
-		zero, haveMetrics = l.zeroAdvance(b)
-	}
-	var xh style.Unit
-	var haveXHeight bool
-	if usesEx(raw) {
-		xh, haveXHeight = l.xHeightOf(b)
-	}
-	key := lengthKey{value: raw, fontSize: b.FontSize, zeroAdvance: zero, xHeight: xh}
+	m := l.metricsFor(b, raw)
+	key := lengthKey{value: raw, fontSize: b.FontSize, metrics: m}
 	if got, ok := l.lengths[key]; ok {
 		return got, true
 	}
 
 	vals, _ := css.ParseComponentValues(raw)
-	length, _, ok := style.ParseLength(vals, l.lengthContext(b, zero, haveMetrics, xh, haveXHeight))
+	length, _, ok := style.ParseLength(vals, l.lengthContext(b, m))
 	if !ok {
 		return style.Length{}, false
 	}
@@ -1834,17 +1859,19 @@ func (l *layouter) parseLength(b *Box, property string) (style.Length, bool) {
 }
 
 // lengthContext is what the font- and viewport-relative units resolve against.
-func (l *layouter) lengthContext(b *Box, zero style.Unit, haveMetrics bool, xh style.Unit, haveXHeight bool) style.LengthContext {
+func (l *layouter) lengthContext(b *Box, m faceMetrics) style.LengthContext {
 	return style.LengthContext{
 		FontSize:         b.FontSize,
 		RootFontSize:     l.rootFontSize,
 		ViewportWidth:    l.avail.W,
 		ViewportHeight:   l.avail.H,
 		ViewportKnown:    true,
-		ZeroAdvance:      zero,
-		FontMetricsKnown: haveMetrics,
-		XHeight:          xh,
-		XHeightKnown:     haveXHeight,
+		ZeroAdvance:      m.zeroAdvance,
+		FontMetricsKnown: m.zeroKnown,
+		XHeight:          m.xHeight,
+		XHeightKnown:     m.xHeightKnown,
+		IcAdvance:        m.icAdvance,
+		IcAdvanceKnown:   m.icKnown,
 	}
 }
 
@@ -1856,45 +1883,41 @@ func (l *layouter) lengthContext(b *Box, zero style.Unit, haveMetrics bool, xh s
 // and the boxes that reach it are the ones with a background image on them.
 func (l *layouter) lengthOfValues(b *Box, vals []css.ComponentValue) (style.Length, bool) {
 	l.ensureFontSize(b)
-	var zero, xh style.Unit
-	var haveMetrics, haveXHeight bool
+	var m faceMetrics
 	for _, v := range vals {
 		if !v.IsToken() || v.Token.Kind != css.Dimension {
 			continue
 		}
 		switch {
 		case strings.EqualFold(v.Token.Unit, "ch"):
-			zero, haveMetrics = l.zeroAdvance(b)
+			m.zeroAdvance, m.zeroKnown = l.zeroAdvance(b)
 		case strings.EqualFold(v.Token.Unit, "ex"):
-			xh, haveXHeight = l.xHeightOf(b)
+			m.xHeight, m.xHeightKnown = l.xHeightOf(b)
+		case strings.EqualFold(v.Token.Unit, "ic"):
+			m.icAdvance, m.icKnown = l.icAdvance(b)
 		}
 	}
-	length, _, ok := style.ParseLength(vals, l.lengthContext(b, zero, haveMetrics, xh, haveXHeight))
+	length, _, ok := style.ParseLength(vals, l.lengthContext(b, m))
 	return length, ok
 }
 
-// usesCh reports whether a value might carry a "ch" length.
+// usesUnit reports whether a value might carry a two-letter unit.
 //
 // It is a cheap over-approximation: a false positive costs one face lookup that
-// the parse then does not use, and a false negative would silently resolve "ch"
-// against no font at all. The unit is always preceded by a digit, which is what
-// keeps "inherit" and a family name containing the letters from matching.
-func usesCh(raw string) bool {
-	for i := 0; i+1 < len(raw); i++ {
-		if (raw[i] == 'c' || raw[i] == 'C') && (raw[i+1] == 'h' || raw[i+1] == 'H') &&
-			i > 0 && raw[i-1] >= '0' && raw[i-1] <= '9' {
-			return true
+// the parse then does not use, and a false negative would silently resolve the
+// unit against no font at all. The unit is always preceded by a digit, which is
+// what keeps "inherit" and a family name containing the letters from matching.
+func usesUnit(raw string, a, b byte) bool {
+	upper := func(c byte) byte {
+		if c >= 'a' && c <= 'z' {
+			return c - 32
 		}
+		return c
 	}
-	return false
-}
-
-// usesEx reports whether a value might carry an "ex" length. Same shape and same
-// reason as usesCh: a false positive costs one face lookup.
-func usesEx(raw string) bool {
-	for i := 0; i+1 < len(raw); i++ {
-		if (raw[i] == 'e' || raw[i] == 'E') && (raw[i+1] == 'x' || raw[i+1] == 'X') &&
-			i > 0 && raw[i-1] >= '0' && raw[i-1] <= '9' {
+	a, b = upper(a), upper(b)
+	for i := 1; i+1 < len(raw); i++ {
+		if upper(raw[i]) == a && upper(raw[i+1]) == b &&
+			raw[i-1] >= '0' && raw[i-1] <= '9' {
 			return true
 		}
 	}
@@ -1938,6 +1961,49 @@ func (l *layouter) zeroAdvance(b *Box) (style.Unit, bool) {
 		return 0, false
 	}
 	return l.br.Measure(face, "0", b.FontSize), true
+}
+
+// waterIdeograph is CSS Values §5.1.4's own choice of character for "ic":
+// U+6C34, which is the same glyph in every CJK script and is full-width in every
+// face that has it.
+const waterIdeograph = "\u6c34"
+
+// icAdvance is the advance of "水" in a box's own font, which is what "ic" means.
+//
+// It reports false when the face has no glyph for it, and that is the ordinary
+// case rather than the exception: a Latin face has no ideographs at all, and
+// measuring the notdef box it would put there instead is measuring nothing the
+// author asked about. §5.1.4 has an answer for it — one em — which the resolver
+// applies, and which is what makes "width: 4ic" on a Latin element mean four
+// ems rather than four boxes of tofu.
+//
+// It asks the box's *own* face and does not fall back to another. A fallback
+// face is chosen per run of text, from the text; there is no text here, and a
+// box that declares a Latin family has said what it wants its ideographic
+// advance measured in even when the answer is "you have not got one".
+//
+// The measurement cannot be told from the fallback by any document, and that is
+// worth writing down rather than leaving to be rediscovered. A water ideograph
+// is a full-width character, so every face that has one makes it exactly one em
+// — Noto Sans JP does — and one em is what §5.1.4 says to assume when there is
+// no face to ask. Made never to be consulted, every test here still passes and
+// the reftest suite does not move: 5567 clean passes either way.
+//
+// It stays measured because the coincidence is a property of the faces that
+// happen to be loadable and not of the unit: a condensed CJK face sets its
+// ideographs narrower than the em, and on the day one is loaded the fallback
+// would size every "ic" box wrong with nothing to say so. What pins the decision
+// meanwhile is TestIcIsTheFacesOwnAdvanceWhenItHasTheIdeograph, which asks this
+// function rather than a page.
+func (l *layouter) icAdvance(b *Box) (style.Unit, bool) {
+	face, ok := l.fontFor(b)
+	if !ok {
+		return 0, false
+	}
+	if missesVisible(face, waterIdeograph) {
+		return 0, false
+	}
+	return l.br.Measure(face, waterIdeograph, b.FontSize), true
 }
 
 func (l *layouter) ensureFontSize(b *Box) {
