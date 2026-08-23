@@ -687,11 +687,49 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	// the span.
 	noWrap := !ws.Wrap
 	boundaryNoWrap := noWrap
+	// And §3's break-spaces at the same boundary, for the same reason and by the
+	// same rule about who decides.
+	//
+	// UAX #14's LB7 is "× SP", so an opportunity carried in from another box is
+	// withheld from a space — a line may not end in front of one. break-spaces
+	// is the value that overrules it, and CSS Text §3 says so in the words that
+	// name this case: "there is a soft wrap opportunity after every preserved
+	// white space character, including between white space characters".
+	//
+	// SplitAtBreaks applies that inside a run, so "ああ␣␣␣␣ああ" in three
+	// ideographs of room sets three, three and two. Putting a <span> — even an
+	// empty one — between the first space and the second split the text into two
+	// boxes, the opportunity between them was withheld as LB7's, and the fill
+	// found nowhere to break the second line: it rewound to the last opportunity
+	// it had, which was between the two ideographs, and set one character on the
+	// first line. trailing-ideographic-space-break-spaces-005 and -006 are that
+	// document.
+	boundaryBreakSpaces := ws.BreakSpaces
 	if prev, ok := in.AfterBox.(*Box); ok {
 		if anc := commonAncestor(prev, b); anc != nil {
 			boundaryNoWrap = !whiteSpaceFor(anc.Style).Wrap
+			boundaryBreakSpaces = whiteSpaceFor(anc.Style).BreakSpaces
 		}
 	}
+	// Read off the ancestor rather than off this box, because it is the same
+	// boundary the line above is about and §5.1 gives that boundary to the
+	// innermost element containing both characters. It is also a distinction no
+	// document makes: white-space inherits, so the two agree everywhere, and the
+	// suite gives 5594 clean passes with the ancestor and 5594 without it. It
+	// costs one expression on a walk that was already being made, and it says
+	// which element the rule belongs to.
+	//
+	// The narrower reading — that only an opportunity left behind by a *space*
+	// may be taken by one, since §3's sentence is about the space that leaves it
+	// — was written first and could not be made to fail. An opportunity reaches
+	// a box boundary only when the text before it ended at one, and no document
+	// tells the two readings apart: the reftest suite gives 5594 clean passes
+	// either way with no test moving, and neither does a fixture built for the
+	// case the wider reading would get wrong — an atomic inline, then a space in
+	// a box of its own, then a float, which is the shape flatten.go already
+	// records a measurement about for LB7. It cost a field on the shared state
+	// and three places that had to keep it up to date, so it is gone and this is
+	// the note that says it was tried.
 	for i, p := range pieces {
 		// CSS Text §5.1's exception, on the far side: the opportunity a picture
 		// left behind is not offered to a character that holds on to it.
@@ -865,6 +903,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 				// the middle of a word that happens to change face, and a break
 				// there would cut a word in two for a reason no reader can see.
 				first: ri == 0, last: ri == len(runs)-1,
+				spaceMayTakeIt: i == 0 && boundaryBreakSpaces,
 				// Only the box's first piece sits at the boundary the state
 				// carried in; everything after it is inside the box.
 				noWrap: pieceNoWrap,
@@ -941,6 +980,18 @@ type textItemArgs struct {
 	bidiEnd     int
 	first       bool
 	last        bool
+	// spaceMayTakeIt says the opportunity carried in from another box is one a
+	// space may begin a line at, which is white-space: break-spaces and nothing
+	// else.
+	//
+	// Only the box's first piece sits at that boundary; every piece after it is
+	// inside the box, where SplitAtBreaks has already decided. That is the
+	// correct reading and has no test, which is a different thing from being
+	// covered: the state carries no opportunity past the first piece — it is
+	// rebuilt from the piece at the end of each turn of the loop — so setting
+	// this on every piece changes nothing. Recorded here rather than left as an
+	// implied claim.
+	spaceMayTakeIt bool
 	// noWrap is whether a line may begin at this item. It is the box's own
 	// white-space for everything inside the box, and the nearest common
 	// ancestor's for the one item that sits at a boundary carried in from
@@ -966,8 +1017,24 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		// belongs to the unit in front of it and the break falls after it.
 		// The piece's own opportunity still stands, which is what puts the
 		// break after a preserved space rather than losing it.
-		BreakBefore: a.first && (p.BreakBefore || (a.state.BreakOpportunity && !p.Space)),
-		Space:       p.Space, Collapsible: p.Collapsible,
+		//
+		// break-spaces is the one value that overrules LB7, and it is the
+		// caller that knows — see spaceMayTakeIt, which is that value asked
+		// of the element the boundary belongs to.
+		//
+		// With that carve-out made, nothing left in the suite depends on the
+		// exclusion: dropping "!p.Space" outright gives the same 5594 clean
+		// passes, and before the carve-out it gave 5594 against 5592 — so the
+		// two reftests this rule is for were the whole of what the exclusion
+		// was costing, and the whole of what it was measurably doing. It stays
+		// because LB7 is a real rule and dropping it would be a wider change
+		// with no specification behind it, and because the note beside the
+		// atomic inline above records a case that was measured when it was
+		// added. What is *not* claimed is that a test here would catch its
+		// removal.
+		BreakBefore: a.first && (p.BreakBefore ||
+			(a.state.BreakOpportunity && (!p.Space || a.spaceMayTakeIt))),
+		Space: p.Space, Collapsible: p.Collapsible,
 		// A trailing space is trimmed off the end of a line, and only the
 		// last run of a piece has an end for one to be at.
 		TrimAtEnd: p.TrimAtEnd && a.last,
