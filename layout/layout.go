@@ -617,7 +617,6 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	// own, because this is the one function every block-level box goes through.
 	l.checkTableBoxSizing(b)
 	l.checkIntrinsicSizing(b)
-	l.checkVisibility(b)
 
 	margin := l.edges(b, "margin", containing)
 	if b.Inner == InnerTable {
