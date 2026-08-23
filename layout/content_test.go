@@ -131,7 +131,6 @@ func TestUnproducibleContentIsReported(t *testing.T) {
 		// style. resolveContent still refuses it, because a computed style can be
 		// built by hand and the initial value travels the same path, but nothing
 		// a stylesheet can write reaches that refusal any more.
-		`p::before { content: url(mark.png) }`: "image",
 		// An identifier that is not one of the keywords the property defines.
 		`p::before { content: elephant }`: "elephant",
 	}
@@ -155,6 +154,132 @@ func TestUnproducibleContentIsReported(t *testing.T) {
 		if !strings.Contains(strings.ToLower(found.Message), want) {
 			t.Errorf("%s reported %q, which does not say it was a %s", sheet, found.Message, want)
 		}
+	}
+}
+
+// An image in generated content, which is a picture in a line and not a word.
+//
+// "content: url(x.png)" was refused and reported — "an image in generated
+// content needs a resolver" — and the resolver it named was there all along: the
+// one that fetches every <img>, every background and every list marker. What was
+// missing was a *box*, because the value was a string and a string cannot hold a
+// picture.
+//
+// The value is a list of pieces now. "content: counter(n) url(x.png) 'Before'"
+// is a number, a picture and a word, in that order, and the picture is a
+// replaced inline box between two runs of text.
+
+// TestAnImageInGeneratedContentIsDrawn.
+func TestAnImageInGeneratedContentIsDrawn(t *testing.T) {
+	res := mapResolver{"mark.png": encodePNG(t, 20, 10)}
+	ops := paintWith(t, res, `<p id=p>x</p>`,
+		`p::before { content: url(mark.png) } p { font-size: 0 }`)
+	var drawn []Rect
+	for _, op := range ops {
+		if d, ok := op.(DrawImage); ok {
+			drawn = append(drawn, d.Rect)
+		}
+	}
+	if len(drawn) != 1 {
+		t.Fatalf("%d images drawn, want 1", len(drawn))
+	}
+	if drawn[0].W != bgpx(20) || drawn[0].H != bgpx(10) {
+		t.Errorf("the picture is %v by %v, want its own 20 by 10",
+			drawn[0].W, drawn[0].H)
+	}
+}
+
+// TestAnImageAndItsWordsKeepTheirOrder is what the list of pieces is for: a
+// declaration naming both puts them on the line in the order it named them.
+func TestAnImageAndItsWordsKeepTheirOrder(t *testing.T) {
+	res := mapResolver{"mark.png": encodePNG(t, 20, 10)}
+	ops := paintWith(t, res, `<p id=p>x</p>`,
+		`p::before { content: "A" url(mark.png) "B" }
+		 p { font-family: Courier; font-size: 20px }`)
+	var xs []float64
+	var kinds []string
+	for _, op := range ops {
+		switch v := op.(type) {
+		case DrawText:
+			if v.Text == "A" || v.Text == "B" {
+				xs, kinds = append(xs, v.At.X.Px()), append(kinds, v.Text)
+			}
+		case DrawImage:
+			xs, kinds = append(xs, v.Rect.X.Px()), append(kinds, "img")
+		}
+	}
+	if len(kinds) != 3 {
+		t.Fatalf("the line holds %v, want the word, the picture and the word", kinds)
+	}
+	// Sorted by where they sit rather than by when they were painted: a picture
+	// is drawn in a later stacking layer than the text around it, so paint order
+	// says nothing about the order on the line.
+	for i := range xs {
+		for j := i + 1; j < len(xs); j++ {
+			if xs[j] < xs[i] {
+				xs[i], xs[j] = xs[j], xs[i]
+				kinds[i], kinds[j] = kinds[j], kinds[i]
+			}
+		}
+	}
+	if kinds[0] != "A" || kinds[1] != "img" || kinds[2] != "B" {
+		t.Errorf("left to right the line holds %v at %v, want [A img B]", kinds, xs)
+	}
+}
+
+// TestAnImageInGeneratedContentThatCannotBeReadIsReported. It is a blocked
+// resource, which is what an <img> naming a missing file is, and not an
+// unsupported value — the value is one this engine produces.
+func TestAnImageInGeneratedContentThatCannotBeReadIsReported(t *testing.T) {
+	got := build(t, `<p>x</p>`, `p::before { content: url(mark.png) }`)
+	var found *Finding
+	for i := range got.Findings {
+		if got.Findings[i].Property == "content" {
+			f := got.Findings[i]
+			found = &f
+		}
+	}
+	if found == nil {
+		t.Fatalf("a picture that could not be read was dropped silently: %v", got.Findings)
+	}
+	if found.Rule != RuleResourceBlocked {
+		t.Errorf("reported as %s, want a blocked resource", found.Rule)
+	}
+}
+
+// TestAnEmptyReferenceNamesNothing. url("") is an <img> with an empty src: it
+// names no file, so there is no reference for a resolver to have refused and
+// nothing to report. Treating it as a file gives a page a broken picture and a
+// finding, both about a document that asked for neither.
+func TestAnEmptyReferenceNamesNothing(t *testing.T) {
+	got := build(t, `<p id=p>x</p>`, `p::before { content: "A" url("") "B" }`)
+	for _, f := range got.Findings {
+		if f.Property == "content" {
+			t.Errorf("url(\"\") was reported: %s", f.Message)
+		}
+	}
+	ops := paintOf(t, `<p id=p>x</p>`,
+		`p::before { content: "A" url("") "B" } p { font-family: Courier; font-size: 20px }`)
+	for _, op := range ops {
+		if _, ok := op.(DrawImage); ok {
+			t.Error("a picture was drawn for a reference that names nothing")
+		}
+	}
+	// And the words either side of it are one run rather than two, which is the
+	// half that says the reference was passed over rather than recorded as a
+	// piece that produces nothing: a piece between them would end the first run
+	// and begin a second, and the page would be the same but the line would not.
+	root := layoutOf(t, 600, `<p id="p">x</p>`,
+		`p::before { content: "A" url("") "B" } p { font-family: Courier; font-size: 20px }`)
+	var runs []string
+	for _, l := range find(t, root, "p").Lines {
+		for _, r := range l.Runs {
+			runs = append(runs, r.Text)
+		}
+	}
+	if len(runs) != 2 || runs[0] != "AB" {
+		t.Errorf("the line holds %q, want the two words as one run and the "+
+			"element's own text", runs)
 	}
 }
 
@@ -262,15 +387,15 @@ func TestResolveContentRefusesAMalformedCounterCall(t *testing.T) {
 	} {
 		got := resolveContent(raw, nil, nil, quoteList{}, 0)
 		if got.unsupported == "" {
-			t.Errorf("%q was read as %q rather than refused", raw, got.text)
+			t.Errorf("%q was read as %q rather than refused", raw, got.text())
 		}
 	}
 
 	// And the calls that are legal still produce, so the refusal is not a
 	// blanket one. The counter that was never created reads as zero, which is
 	// §12.4.3's own answer.
-	if got := resolveContent(`counter(c)`, nil, nil, quoteList{}, 0); got.text != "0" {
-		t.Errorf("counter(c) produced %q, %q", got.text, got.unsupported)
+	if got := resolveContent(`counter(c)`, nil, nil, quoteList{}, 0); got.text() != "0" {
+		t.Errorf("counter(c) produced %q, %q", got.text(), got.unsupported)
 	}
 	if got := resolveContent(`counters(c, ".")`, nil, nil, quoteList{}, 0); got.unsupported != "" {
 		t.Errorf(`counters(c, ".") was refused: %s`, got.unsupported)

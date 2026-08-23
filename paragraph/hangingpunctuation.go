@@ -88,8 +88,17 @@ func HangingPunctuationOf(value string) (HangingPunctuation, string) {
 // specification's own reading rather than an oversight here: a language that
 // quotes with guillemets pointing outward opens with U+00BB, and a set built
 // from Pi alone would leave every German quotation unhung.
+//
+// U+3000 IDEOGRAPHIC SPACE is in the set and is not punctuation, which is the
+// one entry that has to be argued for rather than read off a category. It is
+// what a Japanese paragraph is indented with — the language has no first-line
+// indent of its own, so an author writes a full-width space and the indent is
+// one character — and §8.4's whole subject is the ragged edge that a mark at the
+// start of a line leaves. hanging-punctuation-first-002 is that fixture, and it
+// puts an arrow after the space and asks for it to line up with an arrow that
+// has no space in front of it at all.
 func HangsAtStart(r rune) bool {
-	return r == '\'' || r == '"' ||
+	return r == '\'' || r == '"' || r == 0x3000 ||
 		unicode.Is(unicode.Ps, r) || unicode.Is(unicode.Pi, r) || unicode.Is(unicode.Pf, r)
 }
 

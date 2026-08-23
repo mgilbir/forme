@@ -192,6 +192,7 @@ func (l *replacedLoader) walk(b *Box) {
 		l.foreign(b)
 	}
 	l.markerImage(b)
+	l.contentImage(b)
 	l.backgrounds(b)
 	for _, c := range b.Children {
 		l.walk(c)
@@ -364,6 +365,48 @@ func (l *replacedLoader) markerImage(b *Box) {
 	}
 	l.loaded[ref] = content
 	b.MarkerImage = content
+}
+
+// contentImage loads the picture a "content: url(...)" names.
+//
+// It is markerImage's shape and for the same reason: a box whose picture comes
+// from a stylesheet rather than from an attribute still has to go through this
+// loader, so that a document naming one file in a marker, a background and a
+// pseudo-element reads and decodes it once and is charged for it once.
+//
+// The failure is reported, unlike a marker's. A marker that loses its picture
+// falls back to the list's own bullet and the page still says "this is a list";
+// generated content that loses its picture leaves a gap in a line with nothing
+// to say a picture was meant to be there, which is the quiet kind of wrong the
+// findings exist for.
+func (l *replacedLoader) contentImage(b *Box) {
+	ref := b.ContentImage
+	if ref == "" {
+		return
+	}
+	if got, seen := l.loaded[ref]; seen {
+		b.Replaced = got
+		return
+	}
+	if l.failed[ref] {
+		return
+	}
+	content, why := l.load(ref, "generated content image")
+	if content == nil {
+		l.failed[ref] = true
+		if why != nil {
+			l.rec.ReportDetail(Finding{
+				Rule:     why.rule,
+				Source:   AtHTML(offsetOf(b)),
+				Message:  why.message,
+				Path:     PathOf(b.Element),
+				Property: "content",
+			})
+		}
+		return
+	}
+	l.loaded[ref] = content
+	b.Replaced = content
 }
 
 // iframe makes an iframe the replaced box it is, and reports the document that

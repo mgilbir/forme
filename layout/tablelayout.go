@@ -210,7 +210,6 @@ func (l *layouter) collectColumns(table *Box, g *tableGrid) {
 			// A column box never reaches block layout — it produces no fragment of
 			// its own — so the two value checks blockIn makes for every other box
 			// are asked here.
-			l.checkVisibility(col)
 			l.checkTableBoxSizing(col)
 		}
 		for i := 0; i < n && len(g.colBoxes) < maxTableColumns; i++ {
@@ -556,6 +555,22 @@ func (l *layouter) tableColumnDemands(table *Box, s tableSpacing) []tableColumnD
 			out[i].max = style.Max(out[i].max, v.Value)
 		}
 	}
+	// §17.5.5's collapsed columns, taken out once every other rule has had its
+	// say — the same place and for the same reason as the collapsed rows in
+	// rowHeights: a column that is not rendered is not a column whose width is
+	// being negotiated, and zeroing it earlier would let the next cell put a
+	// width straight back into it.
+	//
+	// Zeroing the *demand* rather than the settled width is what makes the table
+	// close up. A table's own width comes from what its columns ask for, so a
+	// column that asks for nothing is a table that much narrower — where taking
+	// the width away afterwards would leave the table the size it was with a gap
+	// in it.
+	for i := range out {
+		if i < len(g.colBoxes) && isCollapsedTrack(g.colBoxes[i]) {
+			out[i] = tableColumnDemand{}
+		}
+	}
 	for i := range out {
 		if out[i].max < out[i].min {
 			out[i].max = out[i].min
@@ -592,6 +607,30 @@ func (l *layouter) cellDemand(cell *Box) (min, max style.Unit, percent float64) 
 			inner.max = inner.min
 			percent = length.Percent
 		}
+	}
+	// §10.4's two limits, and the same rule the column gets above: they are
+	// limits on what this cell asks for rather than another demand to be
+	// maximised with the rest, so they are applied to what the content and the
+	// declared width came to. The maximum goes first, which is §10.4's own order
+	// and decides an author writing a max-width below the min-width — the
+	// minimum wins, because it is applied to the result of the maximum.
+	//
+	// A cell is on the list the two properties apply to. Only the column was
+	// asked before this, so "width: 3in; max-width: 1in" on a cell came out three
+	// inches wide, and a cell with a minimum and no width came out as wide as the
+	// letter in it: max-width-applies-to-007 and min-width-applies-to-007 are
+	// those two, and both are a square that was not square.
+	//
+	// Percentages are left alone, for the reason the column's case gives: what
+	// they are a percentage of is the table's width, which is the number this is
+	// helping to work out.
+	if v, ok := l.parseLength(cell, "max-width"); ok && v.Kind == style.LengthAbsolute {
+		inner.max = style.Min(inner.max, v.Value)
+		inner.min = style.Min(inner.min, v.Value)
+	}
+	if v, ok := l.parseLength(cell, "min-width"); ok && v.Kind == style.LengthAbsolute && v.Value > 0 {
+		inner.min = style.Max(inner.min, v.Value)
+		inner.max = style.Max(inner.max, v.Value)
 	}
 	edges := l.cellInset(cell)
 	return inner.min.Add(edges), inner.max.Add(edges), percent
@@ -676,6 +715,28 @@ func distribute(total style.Unit, weights []float64, out []style.Unit) {
 
 // tableGridWidths is the pair §17.5.2.2 calls MIN and MAX: the narrowest and
 // widest the whole grid can be, spacing included.
+// columnGaps is how many border-spacing gaps a grid has across it.
+//
+// One more than the number of columns *rendered*, because the spacing shows
+// around the outside of a table as well as between its cells — and none at all
+// for a grid with nothing left to space. §17.5.5's collapsed columns are not
+// rendered, so the gap that would have followed one goes with it: a table whose
+// middle column is collapsed is narrower by that column and by one gap, not by
+// the column alone with a hole where it used to be.
+func columnGaps(g *tableGrid) int {
+	n := 0
+	for i := 0; i < g.cols; i++ {
+		if i < len(g.colBoxes) && isCollapsedTrack(g.colBoxes[i]) {
+			continue
+		}
+		n++
+	}
+	if n == 0 {
+		return 0
+	}
+	return n + 1
+}
+
 func (l *layouter) tableGridWidths(table *Box) (min, max style.Unit) {
 	s := l.spacingOf(table)
 	g := l.tableGridFor(table)
@@ -684,7 +745,7 @@ func (l *layouter) tableGridWidths(table *Box) (min, max style.Unit) {
 		min = min.Add(d.min)
 		max = max.Add(d.max)
 	}
-	gaps := s.h.Mul(float64(g.cols + 1))
+	gaps := s.h.Mul(float64(columnGaps(g)))
 	return min.Add(gaps), max.Add(gaps)
 }
 
@@ -770,7 +831,7 @@ func (l *layouter) fixedGridWidth(table *Box, declared style.Unit) style.Unit {
 		return 0
 	}
 	s := l.spacingOf(table)
-	gaps := s.h.Mul(float64(g.cols + 1))
+	gaps := s.h.Mul(float64(columnGaps(g)))
 	var total style.Unit
 	for _, w := range l.fixedColumnWidths(table, g, maxZero(declared.Sub(gaps)), s) {
 		total = total.Add(w)
@@ -912,7 +973,7 @@ func (l *layouter) columnWidths(table *Box, width style.Unit, s tableSpacing) []
 	if g.cols == 0 {
 		return nil
 	}
-	room := maxZero(width.Sub(s.h.Mul(float64(g.cols + 1))))
+	room := maxZero(width.Sub(s.h.Mul(float64(columnGaps(g)))))
 	if _, ok := l.declaredTableWidth(table, width); ok && tableLayoutIsFixed(table) {
 		return l.fixedColumnWidths(table, g, room, s)
 	}
@@ -1090,7 +1151,13 @@ func (l *layouter) fixedColumnWidths(table *Box, g *tableGrid, room style.Unit,
 		if col == nil {
 			continue
 		}
-		if v, ok := l.columnWidth(col, room); ok {
+		if isCollapsedTrack(col) {
+			// Not rendered, so it asks for nothing and is settled at nothing —
+			// set, so that the free-width share below passes it over.
+			out[i], set[i] = 0, true
+			continue
+		}
+		if v, ok := l.declaredTrackWidth(col, room); ok {
 			out[i], set[i] = v, true
 		}
 	}
@@ -1100,8 +1167,8 @@ func (l *layouter) fixedColumnWidths(table *Box, g *tableGrid, room style.Unit,
 			// algorithm fixed.
 			continue
 		}
-		if v, ok := l.lengthOf(c.box, "width", room); ok && !l.isAuto(c.box, "width") {
-			assign(c.col, c.colSpan, maxZero(v).Add(l.cellInset(c.box)))
+		if v, ok := l.declaredTrackWidth(c.box, room); ok {
+			assign(c.col, c.colSpan, v.Add(l.cellInset(c.box)))
 		}
 	}
 
@@ -1137,13 +1204,22 @@ func (l *layouter) fixedColumnWidths(table *Box, g *tableGrid, room style.Unit,
 	return out
 }
 
-// columnWidth is what a <col> or a <colgroup> asks its column to be.
+// declaredTrackWidth is what a box asks the column it belongs to to be.
+//
+// The box is a <col> or a <colgroup>, or a cell in the first row — which are the
+// two things §17.5.2.1 lets speak under the fixed algorithm, in that order. One
+// function for the two because the rule is one rule: whatever the box asks for,
+// clamped by its own minimum and maximum.
 //
 // The width is the one the author wrote, and it is clamped by the same
 // element's own min-width and max-width. §10.4 applies both to every element
-// but non-replaced inlines, table rows and row groups — columns are on the list
-// that they apply to, and the suite says so by name in the min-width, max-width
-// and width applies-to families.
+// but non-replaced inlines, table rows and row groups — columns and cells are
+// both on the list that they apply to, and the suite says so by name in the
+// min-width, max-width and width applies-to families.
+//
+// The cell used to read its "width" and nothing else, so a cell with
+// "width: 3in; max-width: 1in" came out three inches wide and a cell with a
+// minimum and no width came out as wide as the letter in it.
 //
 // A column with no width of its own but a minimum still has a width: the
 // minimum is a floor under a share it has not been given yet, and a column that
@@ -1156,7 +1232,7 @@ func (l *layouter) fixedColumnWidths(table *Box, g *tableGrid, room style.Unit,
 // clamping a share before it has been worked out would only move the surplus
 // somewhere else without saying where. It is left to the share and recorded
 // here as the boundary of what this reads.
-func (l *layouter) columnWidth(col *Box, room style.Unit) (style.Unit, bool) {
+func (l *layouter) declaredTrackWidth(col *Box, room style.Unit) (style.Unit, bool) {
 	if v, ok := l.lengthOf(col, "width", room); ok && !l.isAuto(col, "width") {
 		return maxZero(l.clampWidth(col, v, room)), true
 	}
@@ -1364,6 +1440,11 @@ func (l *layouter) tableContent(table *Box, parent *Fragment, width style.Unit,
 	x := s.h
 	for i, w := range cols {
 		colX[i] = x
+		if i < len(g.colBoxes) && isCollapsedTrack(g.colBoxes[i]) {
+			// The column is gone and the spacing that would have followed it
+			// goes with it, exactly as a collapsed row's does.
+			continue
+		}
 		x = x.Add(w).Add(s.h)
 	}
 	if isRTL(table) {
@@ -1420,6 +1501,7 @@ func (l *layouter) tableContent(table *Box, parent *Fragment, width style.Unit,
 		origin.cbHeight, origin.cbDefinite = min, true
 	}
 
+	l.reportCollapsedSpans(table, g)
 	placed := l.layoutCells(table, g, cols, s, width)
 	rowH, rowBaseline := l.rowHeights(g, placed, s, origin)
 
@@ -1427,6 +1509,13 @@ func (l *layouter) tableContent(table *Box, parent *Fragment, width style.Unit,
 	y := s.v
 	for i, h := range rowH {
 		rowY[i] = y
+		if i < len(g.rows) && isCollapsedTrack(g.rows[i].box) {
+			// §17.5.5: the table is laid out as if the row did not exist. Its
+			// height is already nothing — see rowHeights — and the spacing that
+			// would have followed it goes with it, or a table of collapsed rows
+			// would keep a gap for every one of them.
+			continue
+		}
 		y = y.Add(h).Add(s.v)
 	}
 	gridHeight := y.Sub(s.v).Sub(s.v)
@@ -1645,6 +1734,23 @@ func (l *layouter) rowHeights(g *tableGrid, placed []placedCell, s tableSpacing,
 		}
 	}
 
+	// §17.5.5's collapsed rows, taken out once every other rule has had its say.
+	//
+	// After the cells and not before, for the reason the column's own limits are
+	// applied after them: a row that is not rendered is not a row whose height
+	// is being negotiated, it is a row that is gone, and zeroing it earlier would
+	// let the next cell put a height straight back into it.
+	//
+	// A cell that spans *into* a collapsed row keeps whatever height it won for
+	// the rows above, which is what "laid out as if the row did not exist"
+	// leaves: the shortfall went to the last row of the span, and if that row is
+	// the collapsed one it goes with it.
+	for r, info := range g.rows {
+		if isCollapsedTrack(info.box) {
+			rowH[r] = 0
+		}
+	}
+
 	if origin.cbDefinite {
 		var total style.Unit
 		for _, h := range rowH {
@@ -1831,7 +1937,6 @@ func (l *layouter) assembleRows(parent *Fragment, g *tableGrid, placed []placedC
 		}
 		// A row group's fragment is made here rather than by block layout, so the
 		// two value checks every other box gets in blockIn are asked here instead.
-		l.checkVisibility(rg.box)
 		l.checkTableBoxSizing(rg.box)
 		last := rg.first + rg.count - 1
 		groupFrags[i] = &Fragment{
@@ -1846,7 +1951,6 @@ func (l *layouter) assembleRows(parent *Fragment, g *tableGrid, placed []placedC
 		parent.Children = append(parent.Children, groupFrags[i])
 	}
 	for r, info := range g.rows {
-		l.checkVisibility(info.box)
 		l.checkTableBoxSizing(info.box)
 		frag := &Fragment{
 			Box:        info.box,
@@ -1874,6 +1978,12 @@ func (l *layouter) assembleRows(parent *Fragment, g *tableGrid, placed []placedC
 
 	for _, p := range placed {
 		c := p.cell
+		if whollyCollapsed(g, c) {
+			// §17.5.5: the track is not rendered, so neither is anything in it.
+			// See whollyCollapsed for why this is not left to the per-box
+			// visibility check at painting time.
+			continue
+		}
 		row := rowFrags[c.row]
 
 		var height style.Unit

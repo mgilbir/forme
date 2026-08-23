@@ -21,14 +21,46 @@ import (
 // though something were there.
 
 // contentValue is what a "content" declaration resolves to.
+//
+// It is a *list* because a declaration is one: "content: counter(n) url(x.png)
+// 'Before'" is a number, a picture and a word, in that order, and the picture is
+// a box of its own with a size of its own between two runs of text. A single
+// string could hold the words and could not hold the picture, which is what the
+// value used to be and why an image in generated content was refused rather than
+// drawn.
 type contentValue struct {
-	text string
+	pieces []contentPiece
 	// none reports that the declaration asks for no box at all, which "none"
 	// and "normal" both do.
 	none bool
 	// unsupported reports a value that is correct CSS this engine cannot
-	// produce — a counter, an image, a quote.
+	// produce.
 	unsupported string
+}
+
+// contentPiece is one run of generated content: some text, or one image.
+type contentPiece struct {
+	// text is the run's characters, for a piece that is text.
+	text string
+	// image is the reference an image piece names. Exactly one of the two is
+	// set, and image is the reference rather than the picture because nothing
+	// here reads files — the loader that fetches every other picture in the
+	// document fetches this one too, under the same caps and the same policy.
+	image string
+}
+
+// text is everything the value sets, with the images left out. It is what a
+// caller asking "does this produce any words" wants, and it is the whole value
+// for the declarations that name no picture — which is nearly all of them.
+func (v contentValue) text() string {
+	if len(v.pieces) == 1 {
+		return v.pieces[0].text
+	}
+	var b strings.Builder
+	for _, p := range v.pieces {
+		b.WriteString(p.text)
+	}
+	return b.String()
 }
 
 // maxContentLength bounds the text one pseudo-element's content may produce.
@@ -65,9 +97,22 @@ func resolveContent(raw string, el *html.Node, counters counterValues,
 	}
 
 	vals, _ := css.ParseComponentValues(trimmed)
+	// pieces are what the value produces, in order. text gathers the characters
+	// of the run being built; an image ends that run and starts a new one, which
+	// is what keeps "a" url(x) "b" three things rather than the two words with
+	// the picture lost between them.
+	var pieces []contentPiece
 	var text strings.Builder
+	flush := func() {
+		if text.Len() == 0 {
+			return
+		}
+		pieces = append(pieces, contentPiece{text: text.String()})
+		text.Reset()
+	}
+	total := 0
 	for _, v := range vals {
-		if text.Len() > maxContentLength {
+		if total+text.Len() > maxContentLength {
 			return contentValue{unsupported: "the content is longer than this engine will generate"}
 		}
 		switch {
@@ -129,7 +174,29 @@ func resolveContent(raw string, el *html.Node, counters counterValues,
 
 		case v.IsToken() && v.Token.Kind == css.URL,
 			v.IsFunction() && strings.EqualFold(v.Token.Value, "url"):
-			return contentValue{unsupported: "an image in generated content needs a resolver"}
+			// A picture, which is a box of its own between whatever runs of
+			// text surround it. What is kept is the reference: the loader that
+			// fetches every other picture in the document fetches this one too,
+			// under the same caps and the same policy, and a second path to a
+			// file would be a second policy — see image.go on backgrounds for
+			// the same argument.
+			ref := v.Token.Value
+			if v.IsFunction() {
+				s, ok := singleString(v.Values)
+				if !ok {
+					return contentValue{unsupported: "url() without a reference"}
+				}
+				ref = s
+			}
+			if ref = strings.TrimSpace(ref); ref == "" {
+				// url("") names nothing, exactly as an <img> with an empty src
+				// does. There is no reference for a resolver to have refused,
+				// and nothing to report.
+				continue
+			}
+			flush()
+			total += len(ref)
+			pieces = append(pieces, contentPiece{image: ref})
 
 		case v.IsToken() && v.Token.Kind == css.Ident:
 			// §12.3.1's four keywords. The depth they move is the document's, not
@@ -148,7 +215,8 @@ func resolveContent(raw string, el *html.Node, counters counterValues,
 			return contentValue{unsupported: "a value this engine cannot produce"}
 		}
 	}
-	return contentValue{text: text.String()}
+	flush()
+	return contentValue{pieces: pieces}
 }
 
 // attrArgument reads the attribute name out of attr(name).
@@ -232,17 +300,32 @@ func (b *boxBuilder) generated(n *html.Node, name string, fontSize style.Unit) *
 	// Only Phase I, as in textBox: the rules that cross a box boundary and the
 	// rules that need a line are applied later, by the same passes that apply
 	// them to everything else.
-	text := collapseWhitespace(value.text, cs["white-space-collapse"],
-		b.wordSpaceTransformFor(cs))
-	if text != "" {
+	wst := b.wordSpaceTransformFor(cs)
+	for _, piece := range value.pieces {
 		if !b.room(n) {
 			return box
 		}
-		text := &Box{
+		if piece.image != "" {
+			// A picture in generated content is a replaced inline box, which is
+			// what it is in a browser: it has an intrinsic size, it sits on the
+			// line like an <img>, and it is styled by the pseudo-element's own
+			// rules. The reference is carried on the box rather than fetched
+			// here — see Box.ContentImage.
+			box.Children = append(box.Children, &Box{
+				Outer: OuterInline, Inner: InnerFlow,
+				Style: cs, FontSize: size, Parent: box,
+				ContentImage: piece.image,
+			})
+			continue
+		}
+		text := collapseWhitespace(piece.text, cs["white-space-collapse"], wst)
+		if text == "" {
+			continue
+		}
+		box.Children = append(box.Children, &Box{
 			Outer: OuterInline, Inner: InnerText,
 			Style: cs, Text: text, FontSize: size, Parent: box,
-		}
-		box.Children = append(box.Children, text)
+		})
 	}
 	return box
 }

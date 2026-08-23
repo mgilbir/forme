@@ -308,6 +308,16 @@ type Box struct {
 
 	Children []*Box
 	Parent   *Box
+	// ContentImage is the reference a picture in generated content names —
+	// "content: url(x.png)" — for a box that stands for that picture and
+	// nothing else.
+	//
+	// It is a reference rather than the picture because nothing in this walk
+	// reads a file. The loader that fetches every other picture in the document
+	// fetches this one too, under the same caps, the same cache and the same
+	// policy; a second path to a file would be a second policy, and the second
+	// one is always the one that is missing a check.
+	ContentImage string
 }
 
 // outOfFlow reports whether a box takes no space among its siblings, which is

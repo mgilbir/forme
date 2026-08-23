@@ -303,3 +303,79 @@ func chars(n float64) style.Unit {
 	u, _ := style.FromPx(n * 12)
 	return u
 }
+
+// TestAnIdeographicSpaceHangs, which is the one entry in the set that has to be
+// argued for rather than read off a Unicode category.
+//
+// U+3000 is not punctuation. It is what a Japanese paragraph is indented with —
+// the language has no first-line indent of its own, so an author writes a
+// full-width space and the indent is one character — and §8.4's whole subject is
+// the ragged edge a mark at the start of a line leaves.
+// hanging-punctuation-first-002 is that fixture: an arrow after the space, asked
+// to line up with an arrow that has no space in front of it at all.
+func TestAnIdeographicSpaceHangs(t *testing.T) {
+	plain := firstRunX(t, "x", "")
+	hung := firstRunX(t, "　x", `#p { hanging-punctuation: first }`)
+	if hung.Add(chars(1)) != plain {
+		t.Errorf("the line begins at %v with the space hanging and the same text "+
+			"without a space begins at %v; the two should be one character apart",
+			hung, plain)
+	}
+	// And without the property it takes its room, so the row above is measuring
+	// the hang rather than a character that never counted.
+	if got := firstRunX(t, "　x", ""); got != plain {
+		t.Errorf("without the property the line begins at %v, want %v — the space "+
+			"is in the line and the run starts where it always did", got, plain)
+	}
+}
+
+// TestTheValueIsReadOffTheBoxTheCharacterIsIn.
+//
+// The property inherits, so a rule on the block reaches the text inside it
+// whatever box that text is in — which is why reading the block's value was
+// right for almost every document and wrong for one shape.
+//
+// hanging-punctuation-inline-001 is that shape: "字字字字<span>」</span>" with the
+// value on the span and nowhere else. The block's value there is "none", and the
+// bracket the author asked to hang sat inside the line pushing the text along.
+func TestTheValueIsReadOffTheBoxTheCharacterIsIn(t *testing.T) {
+	// A float is sized to what its content has to hold, and a character that
+	// hangs is not part of that — which is what makes the hang visible as a
+	// number. Measuring where the run ends would not: the run keeps its advance
+	// and the hang is what sits outside the line, not outside the run.
+	width := func(markup, css string) style.Unit {
+		t.Helper()
+		root := layoutOf(t, 600, `<div><div id="f">`+markup+`</div></div>`,
+			noDefaults+`#f { float: left; font-family: Courier; font-size: 20px } `+css)
+		return find(t, root, "f").BorderRect.W
+	}
+	onSpan := width(`one<span class=h>)</span>`, `.h { hanging-punctuation: last }`)
+	onBlock := width(`one<span>)</span>`, `#f { hanging-punctuation: last }`)
+	if onSpan != onBlock {
+		t.Errorf("with the value on the span the box is %v and with it on the "+
+			"block %v; the character is the same character either way",
+			onSpan, onBlock)
+	}
+	// Three characters rather than four, and the plain box is four, so the two
+	// agree on something rather than on nothing.
+	if onSpan != chars(3) {
+		t.Errorf("the box is %v, want %v — three Courier characters at 20px",
+			onSpan, chars(3))
+	}
+	if plain := width(`one<span>)</span>`, ``); plain != chars(4) {
+		t.Errorf("with nothing set the box is %v, want %v", plain, chars(4))
+	}
+}
+
+// TestAnInnerValueDoesNotReachACharacterOutsideIt is the containment half of the
+// rule above: the value belongs to the box the character is in, so a span that
+// asks for a hang does not make the block's own text hang.
+func TestAnInnerValueDoesNotReachACharacterOutsideIt(t *testing.T) {
+	// The bracket is the block's, and the span holding the value is elsewhere
+	// on the line.
+	got := firstRunX(t, `(one <span class=h>two</span>`, `.h { hanging-punctuation: first }`)
+	if want := firstRunX(t, `(one <span>two</span>`, ``); got != want {
+		t.Errorf("the line begins at %v, want %v — the value is on a span that does "+
+			"not hold the bracket", got, want)
+	}
+}

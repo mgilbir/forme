@@ -48,20 +48,36 @@ import (
 // It returns the items unchanged when the property asks for nothing, which is
 // every document that does not use it.
 func (l *layouter) hangPunctuation(items []inlineItem, hp hangingPunctuation) []inlineItem {
-	if !hp.First && !hp.Last {
-		return items
+	if i, ok := edgeRun(items, +1); ok && hangingFor(items[i], hp).First {
+		items = l.cutHang(items, i, true)
 	}
-	if hp.First {
-		if i, ok := edgeRun(items, +1); ok {
-			items = l.cutHang(items, i, true)
-		}
-	}
-	if hp.Last {
-		if i, ok := edgeRun(items, -1); ok {
-			items = l.cutHang(items, i, false)
-		}
+	if i, ok := edgeRun(items, -1); ok && hangingFor(items[i], hp).Last {
+		items = l.cutHang(items, i, false)
 	}
 	return items
+}
+
+// hangingFor is the property as it applies to the character that would hang,
+// which is the value on the box that character is *in* rather than the value on
+// the block.
+//
+// The two are the same for almost every document, because the property inherits:
+// a rule on the block reaches the text inside it whatever box that text is in.
+// They differ where the rule is written on an inner element and nowhere else,
+// and the suite's hanging-punctuation-inline-001 is that — "字字字字<span>」</span>"
+// with the value on the span. Reading the block's value there answers "none",
+// and the bracket that the author asked to hang sits inside the line pushing the
+// text along.
+//
+// The block's value is the fallback for an item with no box of its own, which
+// there is nothing else to ask about.
+func hangingFor(item inlineItem, block hangingPunctuation) hangingPunctuation {
+	b := heldBox(item.Box)
+	if b == nil {
+		return block
+	}
+	hp, _ := hangingPunctuationOf(b.Style["hanging-punctuation"])
+	return hp
 }
 
 // edgeRun finds the run of text at one end of the item list: the first for
