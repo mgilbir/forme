@@ -1107,3 +1107,76 @@ func TestPictureStillSeesADifferentTiling(t *testing.T) {
 		}
 	}
 }
+
+// A run clipped away entirely, which is not the same question the painter asks.
+//
+// clipOps drops a run only when *every pixel the face could reach* is outside
+// the clip, because being wrong there loses text off the page and nothing
+// downstream can put it back. The comparison asks where the letters actually
+// sit: being wrong here calls two pages different, which costs a test rather
+// than a document.
+//
+// The gap between the two is real and small — a few pixels of reserved ascent —
+// and it is exactly what overflow-wrap-break-word-002 and -anywhere-002 fall
+// into: a box one line tall with "overflow: hidden", a second line that belongs
+// below it, and a reference that never writes the word.
+
+// TestPictureSeesThroughARunClippedAway.
+func TestPictureSeesThroughARunClippedAway(t *testing.T) {
+	run := picRun(t, "FAIL", 0, 100)
+	ink := textInk(run)
+	// A clip well above the letters. The run is kept by the painter and marks
+	// nothing.
+	run.Clip = Clip{Active: true, Rect: picRect(0, 0, 200, 10)}
+	if ink.Y.Px() < 20 {
+		t.Fatalf("the run's ink is at %v; the fixture wants it below the clip", ink.Y)
+	}
+	if !pictureEqual([]Op{run}, nil, picPage) {
+		t.Error("a run whose letters are all outside its clip was counted as a mark")
+	}
+
+	// And the case in the gap between the two questions, which is the whole
+	// reason this is not simply clipOps's own test. The clip reaches into the
+	// box the face *reserves* and stops short of the letters: the painter keeps
+	// the run and the page shows nothing.
+	near := picRun(t, "FAIL", 0, 14)
+	ink, reserved := textInk(near), textInkReserved(near)
+	if reserved.Y >= ink.Y {
+		t.Fatalf("the reserved box starts at %v and the ink at %v; the fixture wants "+
+			"the first above the second", reserved.Y, ink.Y)
+	}
+	near.Clip = Clip{Active: true, Rect: Rect{
+		X: ink.X, Y: reserved.Y, W: ink.W, H: ink.Y.Sub(reserved.Y),
+	}}
+	if !pictureEqual([]Op{near}, nil, picPage) {
+		t.Error("a clip that reaches the reserved box and stops above the letters " +
+			"counted the run as a mark")
+	}
+}
+
+// TestPictureKeepsARunTheClipOnlyCuts is the half that keeps the rule honest: a
+// clip that takes part of a run leaves the rest of it on the page, and two
+// documents that cut the same run differently are two different pages.
+func TestPictureKeepsARunTheClipOnlyCuts(t *testing.T) {
+	run := picRun(t, "FAIL", 0, 14)
+	ink := textInk(run)
+	for _, tc := range []struct {
+		clip Rect
+		what string
+	}{
+		{Rect{ink.X, ink.Y, ink.W.Div(2), ink.H}, "the left half"},
+		{Rect{ink.X, ink.Y, ink.W, ink.H.Div(2)}, "the top half"},
+		{ink, "exactly the ink"},
+	} {
+		cut := run
+		cut.Clip = Clip{Active: true, Rect: tc.clip}
+		if pictureEqual([]Op{cut}, nil, picPage) {
+			t.Errorf("%s: a run the clip only cuts was treated as gone", tc.what)
+		}
+	}
+	// And an unclipped run is a mark, so none of the above passes by the run
+	// marking nothing to begin with.
+	if pictureEqual([]Op{run}, nil, picPage) {
+		t.Error("an unclipped run was treated as marking nothing")
+	}
+}

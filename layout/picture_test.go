@@ -658,6 +658,25 @@ func texts(ops []Op, under []coloured) []textMark {
 		if buriedUnder(covers, i, textInk(v)) {
 			continue
 		}
+		if v.Clip.Active && intersect(textInk(v), v.Clip.Rect).Empty() {
+			// Clipped away entirely. The letters sit outside the clip, so
+			// nothing of this run reaches the page.
+			//
+			// The painter keeps such a run on purpose, and the two are asking
+			// different questions: clipOps drops a run only when *every pixel
+			// the face could reach* is outside, because being wrong there loses
+			// text off the page and nothing downstream can put it back. This is
+			// the mark question, and it is asked of where the letters actually
+			// sit — being wrong here calls two pages different, which is the
+			// direction that costs a test rather than a document.
+			//
+			// overflow-wrap-break-word-002 and -anywhere-002 are the shape: a
+			// box one line tall with "overflow: hidden", a second line that
+			// belongs below it, and a reference that never writes the word. The
+			// second line's ink is under the clip and its reserved box is not,
+			// by about four pixels of ascent.
+			continue
+		}
 		marking = append(marking, trimRunSpace(v))
 	}
 
