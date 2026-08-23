@@ -503,6 +503,16 @@ func (l *layouter) containingBlockFor(b *Box, page Rect) (Rect, *Box) {
 		// candidate up puts the box somewhere plausible and not where the author
 		// asked, which is precisely the kind of quiet wrongness §6 exists to
 		// name, so it is named.
+		//
+		// Named only where it can be seen. A box that gives no offset on either
+		// axis is placed from its *static* position — where it was written, which
+		// travels with the inline boxes it was written inside — and one that
+		// gives no percentage is sized from its own content. Neither reads an
+		// edge of the containing block, so neither is approximated by anything,
+		// and reporting them says a page is wrong that is exactly right.
+		if !l.readsItsContainingBlock(b) {
+			continue
+		}
 		l.rec.ReportDetail(Finding{
 			Rule:   RulePositionApproximated,
 			Source: AtHTML(offsetOf(b)),
@@ -514,6 +524,31 @@ func (l *layouter) containingBlockFor(b *Box, page Rect) (Rect, *Box) {
 		})
 	}
 	return page, nil
+}
+
+// readsItsContainingBlock reports whether anything about a positioned box's
+// placement or size is measured against the rectangle it sits in.
+//
+// An offset on either axis is measured from an edge of it. A percentage width,
+// height, margin or padding is a fraction of it. A box that gives none of those
+// is placed where it was written and sized by what is in it, and the rectangle
+// never enters the answer.
+func (l *layouter) readsItsContainingBlock(b *Box) bool {
+	for _, p := range []string{"left", "right", "top", "bottom"} {
+		if v, ok := l.parseLength(b, p); ok && v.Kind != style.LengthAuto {
+			return true
+		}
+	}
+	for _, p := range []string{
+		"width", "height", "min-width", "max-width", "min-height", "max-height",
+		"margin-left", "margin-right", "margin-top", "margin-bottom",
+		"padding-left", "padding-right", "padding-top", "padding-bottom",
+	} {
+		if v, ok := l.parseLength(b, p); ok && v.Kind == style.LengthPercent {
+			return true
+		}
+	}
+	return false
 }
 
 // absoluteLength resolves a property against a definite basis, which is what an

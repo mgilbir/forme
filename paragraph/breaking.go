@@ -213,7 +213,8 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 			// on the line are placed exactly as they would have been had the box
 			// not been written at all — which is what "out of flow" means and is
 			// the assertion a test can make that a float cannot.
-			outOfFlow = append(outOfFlow, MidLineBox{Box: item.Abs, Used: used, Abs: true})
+			outOfFlow = append(outOfFlow, MidLineBox{
+				Box: item.Abs, Used: used, Abs: true, Offset: item.Offset})
 			continue
 		}
 
