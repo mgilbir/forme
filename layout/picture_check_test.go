@@ -584,6 +584,69 @@ func TestPictureSeesThroughBuriedText(t *testing.T) {
 	}
 }
 
+// Ink over ink: a glyph a later, identical, opaque glyph is painted over.
+//
+// It is the same rule as a run buried under a box, for text rather than for a
+// rectangle, and the suite has a standard idiom that needs it: a red copy of the
+// content and a green copy on top of it, passing when no red shows, against a
+// reference that draws the green alone. vertical-align-sub-001 and -super-001
+// are that shape over two absolutely positioned spans at one static position —
+// the page is right, and the oracle counted six marks against three.
+//
+// The condition is exact rather than approximate, because an oracle may not err
+// towards calling different pages the same. The same glyph id, the same face,
+// the same size, the same place, the same clip, and the covering ink solid:
+// nothing about the glyph beneath can show through any of that.
+
+// TestPictureSeesThroughInkOverInk.
+func TestPictureSeesThroughInkOverInk(t *testing.T) {
+	under := picRun(t, "FAIL", 0, 14)
+	over := under
+	over.Color = picGreen
+	if !pictureEqual([]Op{under, over}, []Op{over}, picPage) {
+		t.Error("a run with an identical opaque run painted over it did not compare " +
+			"equal to that run alone")
+	}
+}
+
+// TestPictureKeepsInkThatIsNotBuried is the half that decides whether the rule
+// is an oracle or a hole in one. Every row here is a covering run that does
+// *not* hide what is under it, and the two documents must still differ.
+func TestPictureKeepsInkThatIsNotBuried(t *testing.T) {
+	under := picRun(t, "FAIL", 0, 14)
+	shifted := picRun(t, "FAIL", 1, 14)
+	bigger := picRun(t, "FAIL", 0, 14)
+	bigger.Size = picPx(17)
+	other := picRun(t, "PASS", 0, 14)
+	translucent := picRun(t, "FAIL", 0, 14)
+	translucent.Color = style.RGBA{G: 128, A: 0.5}
+	opaque := picRun(t, "FAIL", 0, 14)
+	opaque.Color = picGreen
+
+	for _, tc := range []struct {
+		name  string
+		cover DrawText
+		// after says whether the cover is painted after the run. One painted
+		// *before* hides nothing, and getting that backwards is the single way
+		// this rule could silently drop half the text in the suite.
+		after bool
+	}{
+		{"an identical opaque run painted before it", opaque, false},
+		{"the same glyphs a pixel to the right", shifted, true},
+		{"the same glyphs one size larger", bigger, true},
+		{"different glyphs in the same place", other, true},
+		{"a translucent run over it", translucent, true},
+	} {
+		ops := []Op{under, tc.cover}
+		if !tc.after {
+			ops = []Op{tc.cover, under}
+		}
+		if pictureEqual(ops, []Op{tc.cover}, picPage) {
+			t.Errorf("%s: the run under it was treated as hidden", tc.name)
+		}
+	}
+}
+
 func TestPictureKeepsTextThatIsNotBuried(t *testing.T) {
 	run := picRun(t, "FAIL", 0, 14)
 	ink := textInk(run)

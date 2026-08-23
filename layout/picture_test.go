@@ -465,6 +465,12 @@ func intersect(a, b Rect) Rect {
 type textMark struct {
 	what string
 	x, y style.Unit
+	// shape is what the mark is without its colour, and opaque says the ink is
+	// solid. The two together answer whether a *later* mark hides this one: the
+	// same glyph of the same face at the same size in the same place, painted
+	// after it and painted solid, covers it exactly. See buriedUnderInk.
+	shape  string
+	opaque bool
 }
 
 // trimRunSpace takes the white space off the ends of a run, moving its origin by
@@ -640,8 +646,8 @@ func texts(ops []Op, under []coloured) []textMark {
 
 	var out []textMark
 	for _, v := range marking {
-		what := fmt.Sprintf("text in %s size %s %s",
-			faceKey(v.Face), num(v.Size), colourKey(v.Color))
+		shape := fmt.Sprintf("text in %s size %s", faceKey(v.Face), num(v.Size))
+		what := shape + " " + colourKey(v.Color)
 		if v.Clip.Active {
 			// A run §11.1 cut is a different mark from the same run drawn
 			// whole, and there is no way to say which glyphs survived without a
@@ -654,9 +660,11 @@ func texts(ops []Op, under []coloured) []textMark {
 			// not fire merely because a document put its text inside an
 			// "overflow: hidden" box. See DrawText.Clip.
 			what += " clipped to " + rectKey(v.Clip.Rect)
+			shape += " clipped to " + rectKey(v.Clip.Rect)
 		}
-		out = append(out, glyphMarks(v, what)...)
+		out = append(out, glyphMarks(v, what, shape, v.Color.A >= 1)...)
 	}
+	out = buriedUnderInk(out)
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].what != out[j].what {
 			return out[i].what < out[j].what
@@ -683,13 +691,55 @@ func texts(ops []Op, under []coloured) []textMark {
 // The blanks are skipped here rather than earlier because their advance is
 // needed: the pen moves over a space whether or not the space is ink, and the
 // glyph after it is where it is because of that.
-func glyphMarks(v DrawText, what string) []textMark {
+// buriedUnderInk drops a glyph a later, identical, opaque glyph painted over.
+//
+// It is buriedUnder's rule for text rather than for a rectangle, and it is
+// needed for the same reason: a mark nobody can see is not part of the picture,
+// and counting one makes two documents that show the same page differ.
+//
+// The overlay is one of the suite's standard idioms — a red copy of the content
+// and a green copy on top of it, passing when no red shows — and the pair of
+// documents it compares against draws the green alone. vertical-align-sub-001
+// and -super-001 are that, over two absolutely positioned spans at one static
+// position: our page is right, and the oracle counted six marks against three.
+//
+// The condition is exact rather than approximate. The same glyph id, the same
+// face, the same size, the same place, the same clip, and the covering ink
+// solid: nothing about the glyph beneath can show through any of that. An
+// approximation here would be an oracle that calls different pages the same,
+// which is the one direction it must never err in.
+func buriedUnderInk(marks []textMark) []textMark {
+	key := func(m textMark) string {
+		return fmt.Sprintf("%s@%v,%v", m.shape, m.x, m.y)
+	}
+	covered := map[string]bool{}
+	keep := make([]bool, len(marks))
+	// Backwards, so "later" is what has already been seen.
+	for i := len(marks) - 1; i >= 0; i-- {
+		k := key(marks[i])
+		keep[i] = !covered[k]
+		if marks[i].opaque {
+			covered[k] = true
+		}
+	}
+	out := marks[:0]
+	for i, m := range marks {
+		if keep[i] {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func glyphMarks(v DrawText, what, shape string, opaque bool) []textMark {
 	if v.Face == nil {
 		// Nothing the engine draws is faceless; the hand-built runs in
 		// picture_check_test.go are. Without a face there are no glyphs and no
 		// advances, so the run is one mark carrying its string, as it was.
-		return []textMark{{what: what + " " + fmt.Sprintf("%q", v.Text),
-			x: v.At.X, y: v.At.Y}}
+		return []textMark{{
+			what: what + " " + fmt.Sprintf("%q", v.Text), x: v.At.X, y: v.At.Y,
+			shape: shape + " " + fmt.Sprintf("%q", v.Text), opaque: opaque,
+		}}
 	}
 	text := ShapedText(v)
 	glyphs, _ := ShapedGlyphs(v)
@@ -702,6 +752,8 @@ func glyphMarks(v DrawText, what string) []textMark {
 			out = append(out, textMark{
 				what: fmt.Sprintf("%s glyph %d", what, g.GID),
 				x:    x.Add(off), y: v.At.Y,
+				shape:  fmt.Sprintf("%s glyph %d", shape, g.GID),
+				opaque: opaque,
 			})
 		}
 		x = x.Add(adv).Add(v.CharSpacing)
