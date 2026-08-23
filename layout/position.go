@@ -495,14 +495,17 @@ func (l *layouter) containingBlockFor(b *Box, page Rect) (Rect, *Box) {
 		if f, ok := l.positioned[anc]; ok {
 			return f.PaddingRect(), anc
 		}
-		// A positioned ancestor with no fragment is an inline-level one, and
-		// §10.1 forms its containing block from the padding boxes of its first
-		// and last inline fragments — boxes this engine does not produce,
-		// because inline-level content lives in line boxes rather than in
-		// fragments of its own. Skipping it and resolving against the next
-		// candidate up puts the box somewhere plausible and not where the author
-		// asked, which is precisely the kind of quiet wrongness §6 exists to
-		// name, so it is named.
+		if r, ok := l.inlineContainingBlock(anc); ok {
+			return r, anc
+		}
+		// A positioned inline that generated no fragments at all: an inline box
+		// with no content on any line. §10.1 forms its containing block from the
+		// padding boxes of its first and last fragments, and there are none, so
+		// there is nothing to form one from.
+		//
+		// Skipping it and resolving against the next candidate up puts the box
+		// somewhere plausible and not where the author asked, which is precisely
+		// the kind of quiet wrongness §6 exists to name, so it is named.
 		//
 		// Named only where it can be seen. A box that gives no offset on either
 		// axis is placed from its *static* position — where it was written, which
@@ -517,13 +520,37 @@ func (l *layouter) containingBlockFor(b *Box, page Rect) (Rect, *Box) {
 			Rule:   RulePositionApproximated,
 			Source: AtHTML(offsetOf(b)),
 			Message: "the containing block for this absolutely positioned box is an " +
-				"inline box, whose fragments this engine does not produce; it was " +
-				"positioned against the next positioned ancestor instead",
+				"inline box that generated no fragments, so there are no padding " +
+				"boxes to form one from; it was positioned against the next " +
+				"positioned ancestor instead",
 			Path:     PathOf(b.Element),
 			Property: "position",
 		})
 	}
 	return page, nil
+}
+
+// inlineContainingBlock is §10.1's containing block for a positioned *inline*
+// ancestor: "the bounding box around the padding boxes of the first and last
+// inline boxes generated for that element".
+//
+// The first and last, not all of them. A box broken across three lines whose
+// middle line is the widest gives a containing block as wide as the first and
+// last reach between them and no wider, which is what the sentence says and is
+// what a reader sees as "the box" when they look at a broken inline.
+//
+// It is empty when the element generated no fragments — an inline box with no
+// content on any line — and the caller then goes on up as it did before.
+func (l *layouter) inlineContainingBlock(b *Box) (Rect, bool) {
+	frags := l.inlineFragments[b]
+	if len(frags) == 0 {
+		return Rect{}, false
+	}
+	first, last := frags[0].PaddingRect(), frags[len(frags)-1].PaddingRect()
+	x0, y0 := style.Min(first.X, last.X), style.Min(first.Y, last.Y)
+	x1 := style.Max(first.X.Add(first.W), last.X.Add(last.W))
+	y1 := style.Max(first.Y.Add(first.H), last.Y.Add(last.H))
+	return Rect{X: x0, Y: y0, W: x1.Sub(x0), H: y1.Sub(y0)}, true
 }
 
 // readsItsContainingBlock reports whether anything about a positioned box's
