@@ -3,6 +3,8 @@ package layout
 import (
 	"strings"
 
+	"github.com/mgilbir/forme/paragraph"
+
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
@@ -241,8 +243,37 @@ func (l *layouter) checkGlyphs(b *Box, face *shape.Face, text string) {
 //
 // "manual" and "none" are both implemented and neither is reported.
 //
+// # Only where a language was declared
+//
+// §6.1 does not ask a UA to hyphenate everything: "correct automatic
+// hyphenation requires a hyphenation resource appropriate to the language of
+// the text being broken. The UA is therefore only required to automatically
+// hyphenate text for which the author has declared a language ... and for which
+// it has an appropriate hyphenation resource."
+//
+// So a document that never says what language it is in gets no hyphenation from
+// any conforming engine, and this one's page is not missing anything — it is the
+// page the specification asks for. The suite says so in as many words:
+// hyphens-auto-001 is titled "automatic hyphenation must not work without
+// language tagging" and passes by *nothing* being hyphenated.
+//
+// Reporting it anyway was the same mistake inert.go corrects for a declaration
+// at its initial value: the finding was true of the property rather than of what
+// the property was being asked to do. Eight of the suite's reftests were held
+// out of the clean count by a report about a page that was already right.
+//
+// Where a language *is* declared the gap is real and is reported as before. This
+// engine has no hyphenation resource for any language, so the second half of
+// §6.1's sentence would excuse it too — but that reading empties the finding
+// out, and the page really does differ from the one the author asked for and the
+// one every browser produces. A missing resource is a limitation worth naming; a
+// document with no language to look one up by is not.
+//
 // Once per value per document, on the model of reportWordBreak.
 func (l *layouter) reportHyphens(b *Box, value string) {
+	if boxLanguage(b) == "" {
+		return
+	}
 	if l.reportedHyphens == nil {
 		l.reportedHyphens = map[string]bool{}
 	}
@@ -364,4 +395,20 @@ func (l *layouter) reportHangingPunctuation(b *Box, value string) {
 			"line takes room the value asked it to give up",
 		Path: PathOf(b.Element),
 	})
+}
+
+// boxLanguage is the language in force at a box: the nearest lang attribute at
+// or above the nearest element.
+//
+// The walk up the *box* tree is what a text box needs. A text node has no
+// attributes and this engine gives its box no element either, so asking
+// languageAt about one asks about nothing; the answer is on the element that
+// holds the text, which is the first box above it that has one.
+func boxLanguage(b *Box) paragraph.Language {
+	for cur := b; cur != nil; cur = cur.Parent {
+		if cur.Element != nil {
+			return languageAt(cur.Element)
+		}
+	}
+	return ""
 }
