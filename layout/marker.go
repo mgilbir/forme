@@ -128,12 +128,22 @@ func markerColour(b *Box) style.RGBA {
 }
 
 // markerRun is the marker's text and the face to set it in, for either position.
+//
+// The text may be empty and the marker still be there, which is §12.5.1's order
+// of precedence: "list-style-image" replaces the marker "list-style-type" would
+// have drawn, so a picture with "list-style-type: none" beside it is a picture
+// and not nothing. Reading the type first and giving up on an empty one lost
+// every such marker — and list-style-021 is that written out, a shorthand
+// "list-style: none" and then the image set again by a later longhand.
+//
+// The face is still needed for a picture, because the gap between a marker and
+// its text is half an em of the item's own font whichever the marker is.
 func (l *layouter) markerRun(b *Box) (string, *shape.Face, bool) {
 	if !b.ListItem {
 		return "", nil, false
 	}
 	text := markerText(b.Style["list-style-type"], b.ListValue)
-	if text == "" {
+	if text == "" && b.MarkerImage == nil {
 		return "", nil, false
 	}
 	face, ok := l.fontFor(b)
@@ -201,6 +211,14 @@ func (l *layouter) markerItem(b *Box) (inlineItem, bool) {
 			Path:     PathOf(b.Element),
 			Property: "list-style-image",
 		})
+	}
+	if text == "" {
+		// A picture and "list-style-type: none": there is a marker and this
+		// path cannot draw it, so what is left is nothing rather than an item
+		// carrying no text. An empty item would still spend the half-em gap
+		// below and push the item's first line along by it, which is a marker's
+		// room with no marker in it.
+		return inlineItem{}, false
 	}
 	size := b.FontSize
 	above, below := l.leading(b)

@@ -189,3 +189,118 @@ func TestAnInsideImageMarkerSaysItWasNotDrawn(t *testing.T) {
 		t.Errorf("an inside image marker was dropped without a word: %v", findings)
 	}
 }
+
+// The image outranks the type, which is §12.5.1's order and is what "replaces"
+// means in §12.6.2's own sentence.
+//
+// The type was read first and an empty one gave up, so "list-style-type: none"
+// beside a picture drew nothing at all — a marker the author asked for twice,
+// lost because the second half of what they wrote said "no bullet". The suite's
+// list-style-021 is that written as a cascade: "list-style: none", which sets
+// both longhands, and then the image set again by a later rule.
+
+// TestAnImageMarkerSurvivesATypeOfNone.
+func TestAnImageMarkerSurvivesATypeOfNone(t *testing.T) {
+	for _, tc := range []struct{ css, what string }{
+		{`#i { list-style-image: url(blue15x15.png); list-style-type: none }`,
+			"the two longhands"},
+		// The shorthand sets both, and a longhand after it sets one back. The
+		// later declaration wins, which leaves exactly the pair above.
+		{`#i { list-style: none } #i { list-style-image: url(blue15x15.png) }`,
+			"a shorthand and then the image"},
+	} {
+		root, _ := markerLayout(t, `<ul><li id="i">one</li></ul>`, tc.css)
+		m := markerOf(t, root, "i")
+		if m.Image == nil {
+			t.Errorf("%s: the picture was not drawn", tc.what)
+			continue
+		}
+		if m.Text != "" {
+			t.Errorf("%s: the marker also carries the text %q", tc.what, m.Text)
+		}
+		if m.ImageRect.W != bgpx(15) || m.ImageRect.H != bgpx(15) {
+			t.Errorf("%s: the picture is %v by %v, want its own 15 by 15",
+				tc.what, m.ImageRect.W, m.ImageRect.H)
+		}
+	}
+}
+
+// TestATypeOfNoneWithNoImageIsStillNothing is the containment case, and it is
+// the whole reason the type is read at all: "list-style-type: none" alone means
+// a list with no markers, which is most of the lists on the web.
+func TestATypeOfNoneWithNoImageIsStillNothing(t *testing.T) {
+	root, _ := markerLayout(t, `<ul><li id="i">one</li></ul>`,
+		`#i { list-style-type: none }`)
+	if m := markerFor(root, "i"); m != nil {
+		t.Errorf("a list item with no marker at all produced %+v", m)
+	}
+	// And an image that did not load does not resurrect one, because §12.6.2
+	// applies the property only while the picture is available.
+	root, _ = markerLayout(t, `<ul><li id="i">one</li></ul>`,
+		`#i { list-style-type: none; list-style-image: url(nothing-here.png) }`)
+	if m := markerFor(root, "i"); m != nil {
+		t.Errorf("a picture that could not be read produced the marker %+v", m)
+	}
+}
+
+// TestAnInsideMarkerWithOnlyAPictureTakesNoRoom.
+//
+// The inside path cannot draw a picture — a marker there is a box on the line
+// and a line carries text — so with no type to fall back to there is no marker.
+// What must not happen is an item with no text in it: the half-em gap between a
+// marker and its words would still be spent, and the item's first line would
+// begin an indent along from a marker that is not there.
+func TestAnInsideMarkerWithOnlyAPictureTakesNoRoom(t *testing.T) {
+	withImage, findings := markerLayout(t, `<ul><li id="i">one</li></ul>`,
+		`#i { list-style: none; list-style-image: url(blue15x15.png);
+		      list-style-position: inside }`)
+	plain, _ := markerLayout(t, `<ul><li id="i">one</li></ul>`,
+		`#i { list-style: none; list-style-position: inside }`)
+	// The line's first run is the item's own words, not a marker run carrying
+	// nothing. An empty marker item shows in the *runs* rather than in where the
+	// line begins: it sits at x=0 and spends the half-em gap, so the words after
+	// it start along from a marker that was never drawn.
+	first := func(root *Fragment) (string, style.Unit) {
+		t.Helper()
+		r := find(t, root, "i").Lines[0].Runs[0]
+		return r.Text, r.Width
+	}
+	gotText, gotWidth := first(withImage)
+	wantText, wantWidth := first(plain)
+	if gotText != wantText || gotWidth != wantWidth {
+		t.Errorf("the line begins with %q of %v against %q of %v; the marker was not "+
+			"drawn either way and may not take room either way",
+			gotText, gotWidth, wantText, wantWidth)
+	}
+	if gotText != "one" {
+		t.Errorf("the line begins with %q, want the item's own words", gotText)
+	}
+	// It is still reported, because a marker the author asked for is missing.
+	var said bool
+	for _, f := range findings {
+		if f.Property == "list-style-image" {
+			said = true
+		}
+	}
+	if !said {
+		t.Errorf("the picture was dropped without a word: %v", findings)
+	}
+}
+
+// markerFor is markerOf without the fatal, for the cases that expect none.
+func markerFor(root *Fragment, id string) *Marker {
+	var out *Marker
+	var walk func(*Fragment)
+	walk = func(f *Fragment) {
+		if f.Box != nil && f.Box.Element != nil {
+			if got, _ := f.Box.Element.Attr("id"); got == id && f.Marker != nil {
+				out = f.Marker
+			}
+		}
+		for _, c := range f.Children {
+			walk(c)
+		}
+	}
+	walk(root)
+	return out
+}
