@@ -63,7 +63,7 @@ func TestAMarkerWithNoFloatIsWhereItWas(t *testing.T) {
 	}
 	if m.At.X >= 0 {
 		t.Errorf("the marker is at %v; an outside marker is in the margin, left of "+
-			"the content box", m.At.X)
+			"the border box", m.At.X)
 	}
 }
 
@@ -81,16 +81,51 @@ func TestTextIndentDoesNotMoveTheMarker(t *testing.T) {
 	}
 }
 
-// TestPaddingStillMovesTheMarker: the marker is placed from the *content* edge,
-// so padding carries it along — which is the behaviour this change had to leave
-// alone, and the one a fix keyed on the border box would have broken.
-func TestPaddingStillMovesTheMarker(t *testing.T) {
+// TestTheItemsOwnEdgesDoNotMoveTheMarker.
+//
+// §12.5.1 says an outside marker is "outside the principal box", and outside
+// means outside the *border* box: the item's own padding and border are inside
+// it, so neither carries the bullet along.
+//
+// This file used to assert the opposite — "the marker is placed from the content
+// edge, so padding carries it along, which is the behaviour this change had to
+// leave alone, and the one a fix keyed on the border box would have broken". It
+// was preserving what the engine already did rather than answering a test, and
+// the suite has since answered it: padding-left-applies-to-010 puts fifty pixels
+// of padding and ten of border on a list item and asks for the marker "on the
+// left-hand side of the blue line". Keying it on the border box gains that test
+// and text-indent-applies-to-003 and costs nothing.
+func TestTheItemsOwnEdgesDoNotMoveTheMarker(t *testing.T) {
 	plain, _ := itemMarker(t, squareItem)
-	padded, _ := itemMarker(t,
-		`<div id="i" style="display:list-item; list-style:square; padding-left:20px">word</div>`)
-	pad, _ := style.FromPx(20)
-	if got := padded.At.X.Sub(plain.At.X); got != pad {
-		t.Errorf("20px of padding moved the marker by %v, want %v", got, pad)
+	for _, tc := range []struct{ decl, what string }{
+		{`padding-left:20px`, "padding"},
+		{`border-left:10px solid blue`, "a border"},
+		{`border-left:10px solid blue; padding-left:20px`, "both"},
+	} {
+		got, _ := itemMarker(t,
+			`<div id="i" style="display:list-item; list-style:square; `+tc.decl+`">word</div>`)
+		if got.At.X != plain.At.X {
+			t.Errorf("%s moved the marker from %v to %v; it is outside the border "+
+				"box and the item's own edges are inside it",
+				tc.what, plain.At.X, got.At.X)
+		}
+	}
+	// A *margin* does move it, because the margin is outside the border box and
+	// the marker goes with the box rather than staying where the box was.
+	_, flat := itemMarker(t, squareItem)
+	margined, f := itemMarker(t,
+		`<div id="i" style="display:list-item; list-style:square; margin-left:30px">word</div>`)
+	moved, _ := style.FromPx(30)
+	if got := f.BorderRect.X.Sub(flat.BorderRect.X); got != moved {
+		t.Fatalf("the margin moved the item's border box by %v, want %v — the "+
+			"fixture is not the one described", got, moved)
+	}
+	// The marker's x is measured from the box, so it does not move *with the
+	// box*: the box moved and the marker moved with it, and the offset is the
+	// same one it always was.
+	if margined.At.X != plain.At.X {
+		t.Errorf("the marker is at %v against %v; it is measured from the box, and "+
+			"the box is what the margin moved", margined.At.X, plain.At.X)
 	}
 }
 

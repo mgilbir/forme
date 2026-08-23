@@ -73,16 +73,22 @@ func (l *layouter) markerFor(b *Box, frag *Fragment, origin flow) *Marker {
 	// of its own — puts its baseline further down, and the bullet stayed level
 	// with a strut nothing was set in.
 	baseline := frag.Border.Top.Add(frag.Padding.Top).Add(firstLineBaseline(frag, l.baselineOf(b, lineHeight)))
-	// Where the item's *first line* starts, which is not where its content box
-	// does when a float is in the way.
+	// Where the marker sits from: the item's *border* box, moved along by
+	// whatever a float has taken off its first line.
 	//
-	// §12.5.1 leaves the marker box's position unspecified and every renderer
-	// puts it before the first line box, which is the only answer that keeps a
-	// bullet next to the words it belongs to. A float shortens that line without
-	// moving the box around it — a block's border box is not displaced by a
-	// float, only the lines inside it are — so a marker placed from the content
-	// edge is left behind under the float, an inch away from its own text.
-	inner := frag.Border.Left.Add(frag.Padding.Left).Add(l.firstLineStart(frag, origin))
+	// §12.5.1 says only that an outside marker is "outside the principal box",
+	// and outside means outside the border box rather than outside the content
+	// box. The item's own padding and border are inside it, so neither moves the
+	// bullet: padding-left-applies-to-010 puts fifty pixels of padding and ten
+	// of border on a list item and asks for the marker "on the left-hand side of
+	// the blue line", which is the border it named.
+	//
+	// A float is the other half and is why this is not simply the border box. It
+	// shortens the first line without moving the box around it — a block's
+	// border box is not displaced by a float, only the lines inside it are — so
+	// a marker placed from the box alone is left behind under the float, an inch
+	// away from its own text.
+	inner := l.firstLineStart(frag, origin)
 
 	m := &Marker{
 		Text: text, Face: face, Size: size,
