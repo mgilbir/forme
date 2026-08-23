@@ -146,20 +146,78 @@ func (l *layouter) vAlignFor(b *Box, in vAlignState) vAlignState {
 
 // tabStop is the distance between two tab stops, which is what tab-size sets.
 //
-// A number is a count of space advances in the box's own font, which is why
-// this needs the face; a length is itself. The initial value is 8, the width
-// every terminal and every editor has used for a tab since they had one.
+// A length is itself. A number is a count of *space advances*, and §8.1 says
+// which space: "a <number> represents the measure as a multiple of the space
+// character's advance width (U+0020), including its associated letter-spacing
+// and word-spacing", measured "in the block container".
+//
+// Both halves of that were wrong, and each is a suite test by name.
+//
+// The measure is taken in the block container and not in the box the tab is in.
+// A tab inside a <span> set larger than the paragraph took the span's space and
+// came out however much wider the span was, so a run of tabbed lines stopped
+// lining up the moment one of them had a word emphasised in it.
+// tab-size-block-ancestor and tab-size-integer-004 and -005 are that.
+//
+// The *value*, though, is the inline's own: tab-size applies to inline boxes,
+// so a span may set stops of its own. Those are two different questions about
+// two different boxes, and tab-size-inline-001 and -002 are what says so.
+//
+// And the space's advance *including* the two spacings, which is not the same as
+// the advance the shaper returns: an author who tracks a paragraph out by two
+// pixels has widened every character in it, the space among them, so the tab
+// stop is eight of the wider space rather than eight of the narrower one plus
+// two. tab-size-spacing-001, -002 and -003 are that.
 func (l *layouter) tabStop(b *Box, face *shape.Face) style.Unit {
-	raw := strings.TrimSpace(b.Style["tab-size"])
-	if n, ok := parseNumber(raw); ok && n >= 0 {
-		// Non-negative for the same reason line-height is: CSS Text gives
-		// tab-size a range of its own and the parser does not.
-		return l.br.Measure(face, " ", b.FontSize).Mul(n)
-	}
-	if v, ok := l.lengthOf(b, "tab-size", 0); ok && v >= 0 {
+	// The *value* is the one on the box the tab is in. tab-size applies to
+	// inline boxes, so "<span style='tab-size: 5'>" sets the stops for the tabs
+	// inside it whatever the paragraph around it asked for —
+	// tab-size-inline-001 and -002 are that, and are the half a fix keyed on the
+	// block alone gets wrong.
+	if v, ok := l.lengthOf(b, "tab-size", 0); ok && v >= 0 &&
+		!isNumberValue(b.Style["tab-size"]) {
 		return v
 	}
-	return l.br.Measure(face, " ", b.FontSize).Mul(8)
+	n := 8.0
+	if got, ok := parseNumber(strings.TrimSpace(b.Style["tab-size"])); ok && got >= 0 {
+		// Non-negative for the same reason line-height is: CSS Text gives
+		// tab-size a range of its own and the parser does not.
+		n = got
+	}
+	// The *measure* is the block container's. A text box's parent chain reaches
+	// one: the box the tab is in is inline, or is the block itself.
+	block := b
+	for block.Parent != nil && block.Outer != OuterBlock {
+		block = block.Parent
+	}
+	return l.spaceAdvance(block, face).Mul(n)
+}
+
+// spaceAdvance is what one space costs in a box: the glyph's advance and the two
+// spacings that go with it.
+//
+// A tab is measured in these, so the face has to be the one the *block* sets
+// rather than the one the tab happens to sit in. Where the block has no face of
+// its own to ask — a fragment tree built by hand, a family that loaded nothing —
+// the caller's face stands in, which is the answer that was there before any of
+// this and is right for every document whose block and inline agree.
+func (l *layouter) spaceAdvance(block *Box, fallback *shape.Face) style.Unit {
+	face := fallback
+	if f, ok := l.fontFor(block); ok {
+		face = f
+	}
+	if face == nil {
+		return 0
+	}
+	s := l.spacingFor(block)
+	return l.br.Measure(face, " ", block.FontSize).Add(s.Letter).Add(s.Word)
+}
+
+// isNumberValue reports whether a value is a bare number rather than a length,
+// which is what tells tab-size's two forms apart.
+func isNumberValue(raw string) bool {
+	_, ok := parseNumber(strings.TrimSpace(raw))
+	return ok
 }
 
 // lineClamp is how many lines CSS Overflow 4 lets this block show, or zero for

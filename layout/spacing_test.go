@@ -333,27 +333,54 @@ func TestDecorationSpansTheSpacedRun(t *testing.T) {
 	}
 }
 
-// TestTabTakesLetterSpacing pins the one character whose advance is not
-// measured: a tab's width comes from the tab stops, and the spacing after it
-// still has to be counted or the run after a tab is drawn to the right of where
-// layout put it.
-func TestTabTakesLetterSpacing(t *testing.T) {
-	root := layoutOf(t, 600, "<div id=\"p\">a\tb</div>",
-		noDefaults+spaceCSS+` #p { white-space: pre; letter-spacing: 5px; tab-size: 4 }`)
-	f := find(t, root, "p")
-	var tab *TextRun
-	for i := range f.Lines[0].Runs {
-		if strings.Contains(f.Lines[0].Runs[i].Text, "\t") {
-			tab = &f.Lines[0].Runs[i]
+// TestATabReachesItsStopAndStopsThere is the one character whose advance is not
+// measured: a tab's width is whatever it takes to reach the next tab stop, and
+// nothing is added after it.
+//
+// Both halves of that changed together, and each is a suite test. §8.1 counts a
+// tab stop in space advances "including its associated letter-spacing and
+// word-spacing", so the *stop* is further along than it was — and the pen ends
+// exactly on it, so no spacing follows the tab.
+//
+// This file used to say the opposite: "a tab's width comes from the tab stops,
+// and the spacing after it still has to be counted or the run after a tab is
+// drawn to the right of where layout put it". The stop is where the next run
+// goes, and putting a spacing past it puts the run past the stop —
+// tab-size-spacing-001 and -002 measure that directly, with a box positioned at
+// the arithmetic the specification gives.
+func TestATabReachesItsStopAndStopsThere(t *testing.T) {
+	tabRun := func(css string) *TextRun {
+		t.Helper()
+		root := layoutOf(t, 600, "<div id=\"p\">a\tb</div>", noDefaults+spaceCSS+css)
+		f := find(t, root, "p")
+		for i := range f.Lines[0].Runs {
+			if strings.Contains(f.Lines[0].Runs[i].Text, "\t") {
+				return &f.Lines[0].Runs[i]
+			}
 		}
-	}
-	if tab == nil {
 		t.Fatal("the preserved tab produced no run")
+		return nil
 	}
-	// The tab stop is four space advances: 48px. The "a" before it took 12 + 5 =
-	// 17px, so the tab advances to 48 — 31px — and takes 5px of spacing after it.
-	if got := tab.Width.Px(); got != 36 {
-		t.Errorf("the tab is %gpx wide, want 36 (48 - 17 + 5)", got)
+	// A space is 12px and letter-spacing is 5, so a stop is four of 17 — 68px.
+	// The "a" before the tab took 12 + 5 = 17, so the tab is 51 and the "b"
+	// begins at 68, on the stop.
+	tab := tabRun(` #p { white-space: pre; letter-spacing: 5px; tab-size: 4 }`)
+	if got := tab.Width.Px(); got != 51 {
+		t.Errorf("the tab is %gpx wide, want 51 — from 17 to the stop at 68", got)
+	}
+	if got := tab.X.Add(tab.Width).Px(); got != 68 {
+		t.Errorf("the tab ends at %gpx, want the stop at 68", got)
+	}
+	// word-spacing counts towards the stop the same way, and applies to nothing
+	// else in this fixture — there is no space in "a\tb" for it to widen.
+	tab = tabRun(` #p { white-space: pre; word-spacing: 5px; tab-size: 4 }`)
+	if got := tab.X.Add(tab.Width).Px(); got != 68 {
+		t.Errorf("with word-spacing the tab ends at %gpx, want 68", got)
+	}
+	// And with neither, four plain spaces: 48.
+	tab = tabRun(` #p { white-space: pre; tab-size: 4 }`)
+	if got := tab.X.Add(tab.Width).Px(); got != 48 {
+		t.Errorf("with no spacing the tab ends at %gpx, want 48", got)
 	}
 }
 

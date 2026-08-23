@@ -254,8 +254,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 			// after the character — a tab is a character like any other for that
 			// purpose, and leaving it out would put the run after a tab a spacing
 			// to the left of where it is drawn.
-			item.Width = TabAdvance(lineX.Add(used), item.TabStop, item.TabFloor).
-				Add(item.Spacing.Letter)
+			item.Width = TabAdvance(lineX.Add(used), item.TabStop, item.TabFloor)
 		}
 
 		// A hanging space never causes a break: it sits past the line's end
