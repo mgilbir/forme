@@ -120,15 +120,20 @@ type Styled struct {
 	// OwnFontSize and OwnPseudoFontSize mark the elements whose font-size came
 	// from a declaration of their own rather than from their parent.
 	//
-	// Nothing else in the cascade needs this and font-size does, because it is
-	// the one property whose computed value is not the value stored here: CSS
-	// makes it an absolute length, and what is in Styles is what the author
-	// wrote. A consumer resolving "2em" against the parent's size gets the right
-	// answer for the element that declared it and the wrong one for every
-	// descendant that merely inherited it — twice the parent at each level, so a
-	// paragraph four levels down a "font-size: 2em" wrapper is set in 256px.
+	// A font-size in Styles is normally an absolute length — computed here, and
+	// written back, because that is what a computed value is and what a
+	// descendant inherits. The exception is a value this engine cannot resolve,
+	// which is left as the author wrote it rather than replaced by an answer
+	// nobody has; and a consumer resolving *that* against the parent's size
+	// would get the right answer for the element that declared it and the wrong
+	// one for every descendant that merely inherited it — twice the parent at
+	// each level, so a paragraph four levels down a "font-size: 2em" wrapper is
+	// set in 256px.
 	//
-	// That was not hypothetical. It is what this map was added to stop.
+	// That was not hypothetical: it is what this map was added to stop, back
+	// when every font-size was stored as written. What is left of it is the
+	// unresolvable case, which is also the one where the consumer has an element
+	// to report the failure against and the cascade does not.
 	OwnFontSize       map[*html.Node]bool
 	OwnPseudoFontSize map[PseudoKey]bool
 
@@ -156,6 +161,15 @@ func Apply(doc *html.Node, sheets []Sheet) Styled {
 		OwnFontSize:       map[*html.Node]bool{},
 		OwnPseudoFontSize: map[PseudoKey]bool{},
 	}
+	// The font size of every element, which is what an em in its own
+	// declarations is relative to. It is resolved here rather than left to the
+	// consumer because a computed length is an absolute one, and turning the
+	// em into a number is the last thing that needs the element's own size.
+	sizes := map[*html.Node]Unit{}
+	initial, _ := FromPx(DefaultFontSize)
+	rootSize := initial
+	rootSeen := false
+
 	// Document order, so a parent is always computed before its children and
 	// inheritance can read the parent's finished values.
 	doc.Walk(func(n *html.Node) bool {
@@ -163,6 +177,33 @@ func Apply(doc *html.Node, sheets []Sheet) Styled {
 			return true
 		}
 		cs, own := s.computeFor(n, rules, out.Styles, "")
+
+		// The parent's own size, which is what an em means here, and the
+		// initial size for the root — a document that says nothing about
+		// font-size is set at 16px.
+		parentSize := initial
+		if p := parentElement(n); p != nil {
+			if got, ok := sizes[p]; ok {
+				parentSize = got
+			}
+		}
+		// On the root's *own* font-size a rem is the initial value, because the
+		// value it would otherwise mean is the one being computed. Everything
+		// else on the root resolves rem against the answer.
+		size, resolved := fontSizeOf(cs, own, parentSize, rootSize)
+		sizes[n] = size
+		if !rootSeen {
+			rootSize, rootSeen = size, true
+		}
+		if resolved {
+			// Written back, so that what is stored is the computed value: an
+			// absolute length, which is what a descendant inherits. When it
+			// could not be resolved the declaration is left as the author wrote
+			// it, for layout to report against the element.
+			cs["font-size"] = pxValue(size)
+		}
+		absolutiseLengths(cs, size, rootSize)
+
 		out.Styles[n] = cs
 		if own {
 			out.OwnFontSize[n] = true
@@ -175,6 +216,14 @@ func Apply(doc *html.Node, sheets []Sheet) Styled {
 			// why the parent style passed here is that element's own.
 			key := PseudoKey{Node: n, Name: name}
 			pcs, own := s.computeForPseudo(n, rules, out.Styles[n], name)
+			// A pseudo-element's em is relative to its own font-size, and it
+			// inherits from the element it belongs to rather than from that
+			// element's parent.
+			psize, presolved := fontSizeOf(pcs, own, size, rootSize)
+			if presolved {
+				pcs["font-size"] = pxValue(psize)
+			}
+			absolutiseLengths(pcs, psize, rootSize)
 			out.Pseudo[key] = pcs
 			if own {
 				out.OwnPseudoFontSize[key] = true

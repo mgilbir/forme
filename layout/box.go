@@ -475,12 +475,17 @@ func (b *boxBuilder) build(n *html.Node, inherited style.ComputedStyle, fontSize
 //
 // Only an element that *declared* a font-size resolves one. CSS makes the
 // computed value of font-size an absolute length, so inheritance passes a
-// number; what the cascade stores is what the author wrote, so a descendant of
-// "font-size: 2em" inherits the string "2em" and re-resolving it against the
-// parent would double the size at every level. A paragraph four elements inside
-// such a wrapper came out at 256px.
+// number — and the cascade now stores one, so for almost every document this
+// call resolves "28px" to 28px and the guard changes nothing.
 //
-// That was a real bug, found by the table work: the two halves of a reftest
+// It still matters for the one value the cascade could not resolve, which it
+// leaves as the author wrote it. A descendant of an unresolvable
+// "font-size: 2em" inherits that string, and re-resolving it against the parent
+// would double the size at every level: a paragraph four elements inside such a
+// wrapper came out at 256px.
+//
+// That was a real bug, found by the table work, and back then it applied to
+// every relative font-size in every document. The two halves of a reftest
 // nested their content to different depths, so the compounding moved one and not
 // the other and the difference finally showed. It had been invisible until then
 // because it moves every part of a document equally.

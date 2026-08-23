@@ -165,7 +165,10 @@ func TestNegativeValueDropsTheDeclaration(t *testing.T) {
 		// the reference beside it, in a test whose whole assertion is that the
 		// two are the same width.
 		{"p { tab-size: 4; tab-size: -4 }", "tab-size", "4"},
-		{"p { tab-size: 1em; tab-size: -1em }", "tab-size", "1em"},
+		// 16px, because a computed length is an absolute one — the surviving
+		// declaration is what this is about, and what it computes to is
+		// computed.go's business.
+		{"p { tab-size: 1em; tab-size: -1em }", "tab-size", "16px"},
 		{"p { tab-size: -4 }", "tab-size", "8"},
 		{"p { line-height: 2; line-height: -1 }", "line-height", "2"},
 		{"p { line-height: -1px }", "line-height", "normal"},
@@ -174,7 +177,7 @@ func TestNegativeValueDropsTheDeclaration(t *testing.T) {
 		{"p { background-size: 10px; background-size: -10px }", "background-size", "10px"},
 		// And the negatives that are legal are untouched.
 		{"p { margin-top: -10px }", "margin-top", "-10px"},
-		{"p { text-indent: -3em }", "text-indent", "-3em"},
+		{"p { text-indent: -3em }", "text-indent", "-48px"},
 		{"p { letter-spacing: -1px }", "letter-spacing", "-1px"},
 		{"p { word-spacing: -1px }", "word-spacing", "-1px"},
 		// A zero is not negative, which is worth pinning because the test is on
@@ -381,9 +384,18 @@ func TestInitialValues(t *testing.T) {
 			len(cs), len(properties))
 	}
 	for name, prop := range properties {
-		if cs[name] != prop.initial {
+		want := prop.initial
+		if name == "font-size" {
+			// The one property whose stored value is not the initial value as
+			// written. What the registry holds is the *specified* initial —
+			// "medium" — and what is stored is the computed one, because a
+			// computed font-size is an absolute length and every em in the
+			// document is measured against it. See computed.go.
+			want = "16px"
+		}
+		if cs[name] != want {
 			t.Errorf("%s is %q with no stylesheet, want the initial %q",
-				name, cs[name], prop.initial)
+				name, cs[name], want)
 		}
 	}
 }
