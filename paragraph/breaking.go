@@ -262,7 +262,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// rather than moving to the next one. Without this, "XX    XX" under
 		// pre-wrap would push the second word down a line for spaces that take
 		// no room on the page at all.
-		if !item.NoWrap && !item.Hangs && i < tailFrom && item.BreakBefore &&
+		if !item.NoWrap && !item.Hangs && !isTailSpace(item) && i < tailFrom && item.BreakBefore &&
 			len(line) > 0 && overflows(used, item, width) {
 			// Ending here costs the hyphen as well, where the opportunity is one
 			// a soft hyphen offered. If that does not fit, this is not a place
@@ -517,11 +517,37 @@ func isLineTailSpace(item Item) bool {
 	if item.Inset || item.Abs != nil {
 		return true
 	}
-	// White space that the end of a line does something to: the third rule
-	// removes it, or the fourth hangs it. break-spaces is the value where
-	// neither happens — its spaces are data, they take room, and §3 puts an
-	// opportunity after every one of them — so a line may end inside a run of
-	// them and this must not say otherwise.
+	return isTailSpace(item)
+}
+
+// isTailSpace reports whether the end of a line does something to this white
+// space: §4.1.2's third rule removes it, or its fourth hangs it.
+//
+// break-spaces is the value where neither happens — its spaces are data, they
+// take room, and §3 puts an opportunity after every one of them — so a line may
+// end inside a run of them and this must not say otherwise.
+//
+// A line may not end *at* one of these, and the half of that the fill did not
+// already have is the removed half. §4.1.2's two rules are written over a
+// "sequence" of white space, and a sequence is not all one kind: "ああ␣␣ ␣ ␣ああ"
+// under white-space: normal is two ideographic spaces, a collapsible one, and
+// two more ideographic spaces, all in a row. The ideographic ones hang, so no
+// break was taken at them; the collapsible one does not hang, it is merely
+// removed — and U+3000 offers an opportunity after itself, so that collapsible
+// space began one. The line ended there, the rest of the run went to the line
+// below, and a document whose spaces were supposed to hang off one line got a
+// second line made of nothing but spaces and a third holding the words. Three
+// lines where the specification asks for two.
+//
+// So the question the fill has to ask at an opportunity is not only "does this
+// item hang" but "would ending here leave the line inside white space that the
+// end of a line is about" — which is this, and which the paragraph's own
+// trailing run (tailFrom) already answered for the one place it could see.
+//
+// The two questions are asked side by side rather than folded into one, because
+// hanging is not only a property of spaces: hanging-punctuation sets Hangs on a
+// quotation mark, which is not white space and which this must not claim to be.
+func isTailSpace(item Item) bool {
 	return item.Space && (item.Hangs || item.TrimAtEnd)
 }
 

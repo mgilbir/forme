@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/mgilbir/forme/style"
@@ -105,5 +106,67 @@ func TestASpacePieceTakesAFaceWithoutBeingSplit(t *testing.T) {
 	// Three ideographic spaces preserved: three ems, in one run.
 	if got, want := spaceWidth(t, set, "\u3000\u3000\u3000"), bgpx(48); got != want {
 		t.Errorf("three ideographic spaces are %v wide, want %v", got, want)
+	}
+}
+
+// TestARunOfSpacesHangsOffOneLine is trailing-ideographic-space-005, laid out
+// through HTML and CSS rather than through items.
+//
+// The rule it depends on is paragraph's — a line may not end inside the white
+// space that ends it, which linetailspace_test.go states over items — and this
+// is the document that rule was found from. Two ideographs, a run of white space
+// that mixes ideographic spaces with an ordinary one, and two more ideographs,
+// in a box two and a half ems wide. The run hangs off the first line and the
+// words below it make the second; anything else puts a line of nothing but
+// spaces between them.
+func TestARunOfSpacesHangsOffOneLine(t *testing.T) {
+	faces := notoFaces()
+	if len(faces) == 0 {
+		t.Skip("set NOTO_FONTS (or run `make test-wpt`) to read a face with ideographs")
+	}
+	built := Build(Input{
+		HTML: `<div id="d">ああ<span>　　 　 　</span>ああ</div>`,
+		CSS:  []Stylesheet{{Source: `#d { font-size: 16px; width: 2.5em; white-space: normal }`}},
+	})
+	if built.Root == nil {
+		t.Fatal("no boxes")
+	}
+	w, _ := style.FromPx(600)
+	h, _ := style.FromPx(10000)
+	frag := Layout(built.Root, Size{W: w, H: h},
+		suiteFonts{standard: StandardFonts(), fallback: faces}, NewRecorder(nil))
+
+	var d *Fragment
+	var walk func(*Fragment)
+	walk = func(f *Fragment) {
+		if f.Box != nil && f.Box.Element != nil {
+			if got, _ := f.Box.Element.Attr("id"); got == "d" {
+				d = f
+			}
+		}
+		for _, c := range f.Children {
+			walk(c)
+		}
+	}
+	walk(frag)
+	if d == nil {
+		t.Fatal("the div produced no fragment")
+	}
+	if len(d.Lines) != 2 {
+		t.Fatalf("the text took %d lines, want 2 — a third is the run of spaces on "+
+			"a line of its own", len(d.Lines))
+	}
+	// Each line holds two ideographs and nothing else that draws. The run hangs
+	// off the first, so the first line's ideographs are the two before it.
+	for i, want := range []string{"ああ", "ああ"} {
+		var b strings.Builder
+		for _, r := range d.Lines[i].Runs {
+			b.WriteString(r.Text)
+		}
+		if got := strings.TrimFunc(b.String(), func(r rune) bool {
+			return r == ' ' || r == '　'
+		}); got != want {
+			t.Errorf("line %d reads %q, want %q", i, got, want)
+		}
 	}
 }
