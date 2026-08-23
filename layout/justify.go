@@ -94,6 +94,31 @@ func justifyItems(items []inlineItem, xs, widths []style.Unit, hangs []bool, sla
 			last = i
 		}
 	}
+
+	// And nothing at or before a preserved tab, which is CSS Text 4's rule for
+	// justifying a line whose white space is not collapsible: "the UA must
+	// ensure that tab stops continue to line up as required by the white space
+	// processing rules".
+	//
+	// A tab's advance is the distance from where the line has got to to the next
+	// tab stop, so widening a space in front of one does not move what follows
+	// it — the tab simply shrinks by as much and the text after it stays put.
+	// Until the pen crosses a stop, and then the tab jumps a whole stop and every
+	// column on the line after it moves with it. Neither answer is justification:
+	// the first spends slack that never reaches the margin, and the second
+	// destroys the alignment the tabs were written for.
+	//
+	// So the slack goes after the last tab and nowhere else, which is what the
+	// suite's text-align-justify-tabs-002 asks for by drawing its reference with
+	// the spaces after the tab written twice and the ones before it written once.
+	// A line whose last tab is at its end — 001, where the tab hangs — has no
+	// opportunity left at all and is set exactly as an unjustified line is.
+	lastTab := -1
+	for i, k := range order {
+		if items[k].Tab {
+			lastTab = i
+		}
+	}
 	// Which items expand. Nothing here reads a position, and that is worth
 	// saying rather than assuming: an earlier version asked whether a space sat
 	// past the end of the line's content, which is a question the loop below
@@ -103,7 +128,7 @@ func justifyItems(items []inlineItem, xs, widths []style.Unit, hangs []bool, sla
 	// property of the line's order rather than of anything's position, is what
 	// makes one pass and two passes the same answer.
 	expands := func(i, k int) bool {
-		return i < last && justifiableSpace(items[k].Text) && !hangs[k]
+		return i < last && i > lastTab && justifiableSpace(items[k].Text) && !hangs[k]
 	}
 	n := 0
 	for i, k := range order {

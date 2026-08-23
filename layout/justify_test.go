@@ -436,3 +436,159 @@ func TestARightToLeftLineDoesNotStretchItsHang(t *testing.T) {
 			right, f.ContentRect().W)
 	}
 }
+
+// Justification and preserved tabs, CSS Text 4's rule for text-align: "if an
+// element's white space is not collapsible ... the UA must ensure that tab stops
+// continue to line up as required by the white space processing rules".
+//
+// A tab's advance is the distance from where the line has got to to the next tab
+// stop. Widening a space in front of one therefore buys nothing: the tab shrinks
+// by as much and the text after it does not move — until the pen crosses a stop,
+// and then the tab jumps a whole stop and every column after it on the line goes
+// with it. Neither is justification, so the slack goes after the last tab and
+// nowhere else.
+
+// tabbed lays out one preserved, tab-bearing line at a stated alignment.
+//
+// Courier at 20px is 12px a character and tab-size: 8 puts the stops at 96px, so
+// every number below is a count of characters.
+func tabbed(t *testing.T, body, align string) LineFragment {
+	t.Helper()
+	root := layoutOf(t, 600, `<div id="p">`+body+`</div>`,
+		`#p { font-family: Courier; font-size: 20px; width: 240px;
+		      white-space: pre-wrap; tab-size: 8; text-align: `+align+` }`)
+	f := find(t, root, "p")
+	if len(f.Lines) < 2 {
+		t.Fatalf("%q made %d lines; the fixture needs a line that is not the last, "+
+			"because the last line is never justified", body, len(f.Lines))
+	}
+	return f.Lines[0]
+}
+
+// TestJustifySpendsNoSlackBeforeATab is the rule, and the fixture has spaces on
+// both sides of one tab so that the same line answers for both halves.
+func TestJustifySpendsNoSlackBeforeATab(t *testing.T) {
+	const body = "a b\tc d e f g h i j"
+	line := tabbed(t, body, "justify")
+	natural, _ := style.FromPx(12)
+
+	seenTab, before, after := false, 0, 0
+	for _, r := range line.Runs {
+		if r.Text == "\t" {
+			seenTab = true
+			continue
+		}
+		if !justifiableSpace(r.Text) {
+			continue
+		}
+		if !seenTab {
+			before++
+			if r.Width != natural {
+				t.Errorf("a space before the tab is %v wide and its face makes it %v; "+
+					"slack spent there does not reach the margin, it is taken back by "+
+					"the tab", r.Width, natural)
+			}
+			continue
+		}
+		// The hanging space at the end is not an opportunity either, and
+		// TestJustifyDoesNotStretchTheHangingSpace is what holds that.
+		if r.X.Add(r.Width) > line.Rect.W {
+			continue
+		}
+		after++
+		if r.Width <= natural {
+			t.Errorf("a space after the tab is %v wide; the slack belongs to the "+
+				"spaces the tab does not swallow", r.Width)
+		}
+	}
+	if before == 0 || after == 0 {
+		t.Fatalf("the fixture found %d spaces before the tab and %d after it; it is "+
+			"meant to have both", before, after)
+	}
+	// And the line really was justified, so none of this passes because nothing
+	// happened: its last word is further right than the plain line's is.
+	//
+	// Asked this way rather than against the margin, because the margin is not
+	// quite where the last word ends. The slack divides as evenly as the unit
+	// allows and the remainder is spread a unit at a time over the leading gaps,
+	// so the last word lands a fraction of a unit past the edge rather than on
+	// it — see justifyItems, which does that on purpose so that a paragraph's
+	// lines do not each lose a fraction and drift.
+	plain := tabbed(t, body, "left")
+	lastText := func(l LineFragment) style.Unit {
+		var x style.Unit
+		for _, r := range l.Runs {
+			if !justifiableSpace(r.Text) && r.Text != "\t" {
+				x = r.X
+			}
+		}
+		return x
+	}
+	if got, want := lastText(line), lastText(plain); got <= want {
+		t.Errorf("the last word of the justified line begins at %v and of the plain "+
+			"line at %v; the line was not stretched at all", got, want)
+	}
+}
+
+// TestALineEndingAtATabIsSetAsThoughItWereNotJustified is the other end of the
+// same rule, and it is the suite's text-align-justify-tabs-001: every space on
+// the line is in front of a tab, so there is no opportunity left anywhere and
+// the line comes out exactly as an unjustified one does.
+//
+// Its reference is that unjustified line, written as the same markup without the
+// declaration — which is what this compares against rather than a table of
+// numbers, for the same reason the suite does it that way.
+func TestALineEndingAtATabIsSetAsThoughItWereNotJustified(t *testing.T) {
+	const body = "a b c\td e\tf\tghijkl mno"
+	got, want := tabbed(t, body, "justify"), tabbed(t, body, "left")
+	if len(got.Runs) != len(want.Runs) {
+		t.Fatalf("the justified line has %d runs and the plain one %d",
+			len(got.Runs), len(want.Runs))
+	}
+	tabs := 0
+	for i, r := range got.Runs {
+		if r.Text == "\t" {
+			tabs++
+		}
+		if r.X != want.Runs[i].X || r.Width != want.Runs[i].Width {
+			t.Errorf("run %d (%q) is at %v wide %v justified and at %v wide %v plain",
+				i, r.Text, r.X, r.Width, want.Runs[i].X, want.Runs[i].Width)
+		}
+	}
+	if tabs < 2 {
+		t.Fatalf("the fixture holds %d tabs; it is meant to have several, with the "+
+			"last of them at the end of the line", tabs)
+	}
+	if got.Runs[len(got.Runs)-1].Text != "\t" {
+		t.Fatalf("the line ends with %q, not the tab the fixture is about",
+			got.Runs[len(got.Runs)-1].Text)
+	}
+}
+
+// TestALineWithNoTabIsJustifiedAsItAlwaysWas is the containment case. The rule
+// added here reads every item on the line looking for a tab, and almost no line
+// in almost any document has one — so the answer for all of them must be the one
+// they had before.
+func TestALineWithNoTabIsJustifiedAsItAlwaysWas(t *testing.T) {
+	root := justified(t,
+		`<div id="p">one two three four five six seven eight nine ten</div>`,
+		`text-align: justify`)
+	f := find(t, root, "p")
+	if len(f.Lines) < 2 {
+		t.Fatalf("%d lines", len(f.Lines))
+	}
+	natural, _ := style.FromPx(12)
+	stretched := 0
+	for _, r := range f.Lines[0].Runs {
+		if justifiableSpace(r.Text) && r.Width > natural {
+			stretched++
+		}
+	}
+	if stretched == 0 {
+		t.Errorf("no space on the first line was stretched; a line with no tab on it " +
+			"has every one of its spaces to spend the slack on")
+	}
+	if got, want := lineEnd(f.Lines[0]), f.ContentRect().W; got != want {
+		t.Errorf("the line ends at %v and the block is %v wide", got, want)
+	}
+}
