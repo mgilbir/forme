@@ -43,6 +43,22 @@ var knownElements = map[string]bool{
 	"small": true, "span": true, "strong": true, "sub": true, "sup": true,
 	"time": true, "u": true, "var": true, "wbr": true,
 
+	// The obsolete presentational elements, which are not unknown tags.
+	//
+	// The rule above is about an element nobody has defined: rendering a
+	// <fancy-callout> as a generic inline produces a page that looks nearly
+	// right and says nothing. These are the opposite case. HTML's rendering
+	// section still gives each of them a box and a rule — <tt> is monospace,
+	// <nobr> does not wrap, <big> is larger, <center> is a centred block, <font>
+	// carries three presentational attributes — so laying one out is following
+	// the specification rather than guessing at it.
+	//
+	// Refusing them cost the content as well as the presentation: content-063,
+	// -076 and -136 each put a ::before on a <font> and ask for the attribute it
+	// names, and an element that is not laid out has no ::before at all.
+	"font": true, "tt": true, "nobr": true, "big": true, "center": true,
+	"strike": true, "acronym": true,
+
 	// Images.
 	"img": true, "picture": true, "source": true,
 

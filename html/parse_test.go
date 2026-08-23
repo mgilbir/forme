@@ -912,3 +912,35 @@ func TestIframeContentIsNotMarkup(t *testing.T) {
 		t.Errorf("the body is %q, want \"real\"", got)
 	}
 }
+
+// TestObsoletePresentationalElementsAreLaidOut.
+//
+// The rule above is about an element nobody has defined: rendering a
+// <fancy-callout> as a generic inline produces a page that looks nearly right
+// and says nothing. These are the opposite case — HTML's rendering section still
+// gives each of them a box and a rule, so laying one out is following the
+// specification rather than guessing at it.
+//
+// Refusing them cost the content as well as the presentation. The suite's
+// content-063, -076 and -136 each put a ::before on a <font> and ask for the
+// attribute it names, and an element that is not laid out has no ::before at all.
+func TestObsoletePresentationalElementsAreLaidOut(t *testing.T) {
+	for _, src := range []string{
+		"<font>x</font>", "<tt>x</tt>", "<nobr>x</nobr>", "<big>x</big>",
+		"<center>x</center>", "<strike>x</strike>", "<acronym>x</acronym>",
+	} {
+		doc, errs, ok := Parse(src)
+		if !ok {
+			t.Errorf("%q was refused: %v", src, errs)
+			continue
+		}
+		for _, e := range errs {
+			if e.Unsupported {
+				t.Errorf("%q was reported: %v", src, e.Message)
+			}
+		}
+		if got := textOf(doc); got != "x" {
+			t.Errorf("%q kept the text as %q", src, got)
+		}
+	}
+}

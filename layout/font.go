@@ -206,9 +206,20 @@ func (l *layouter) fontFor(b *Box) (*shape.Face, bool) {
 		}
 	}
 
-	// Nothing the author asked for. The generic sans-serif is the last resort,
-	// and taking it silently is what this whole design is against.
-	face, ok := l.fontSet.Face("sans-serif", key.bold, key.italic)
+	// Nothing the author asked for. What is left is the face a box that named
+	// no family at all would have got, which is font-family's initial value —
+	// so a document naming a family nobody has is set in the same type as the
+	// document beside it that named none, rather than in a different one.
+	//
+	// It used to be sans-serif, which made those two documents disagree: the
+	// initial value is "serif", so a plain <div> came out in the serif face and
+	// a <div> asking for a family that had not loaded came out in the sans one.
+	// content-076 is that difference exactly — "<font face='PASS PASS'>", a
+	// family nobody has, against a reference that names none.
+	//
+	// Taking it silently is what this whole design is against, which is what the
+	// finding below is for.
+	face, ok := l.fontSet.Face(initialFamily, key.bold, key.italic)
 	l.fonts[key] = resolvedFont{face: face}
 	if !ok {
 		return nil, false
@@ -222,6 +233,11 @@ func (l *layouter) fontFor(b *Box) (*shape.Face, bool) {
 	}
 	return face, true
 }
+
+// initialFamily is font-family's initial value, and so the family a box that
+// declares none is set in. See property.go, which states it as the initial
+// value the cascade hands out.
+const initialFamily = "serif"
 
 type fontKey struct {
 	families string
