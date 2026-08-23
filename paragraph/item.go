@@ -439,6 +439,22 @@ type State struct {
 	// held to the same rule as one that did not cross it, or "中中<span>〜</span>文"
 	// and "中中〜文" answer differently about the same text.
 	AfterDeferred bool
+	// AfterBox is the box the character before this point came from, held
+	// opaquely, and it is here for a rule about *which element* decides.
+	//
+	// CSS Text §5.1: "for soft wrap opportunities defined by the boundary
+	// between two characters, the white-space property on the nearest common
+	// ancestor of the two characters controls breaking". An opportunity inside
+	// one box is that box's to allow or refuse and needs nothing; one that
+	// crosses a boundary belongs to neither side of it.
+	//
+	// Without this the answer was taken from the box the *later* character is
+	// in, so a zero width space in a wrapping div between two "white-space: pre"
+	// spans offered a break that the second span refused — and the span had
+	// nothing to say about a boundary outside itself.
+	//
+	// The caller resolves it, because the ancestry is the caller's tree.
+	AfterBox Ref
 }
 
 // StartOfContext is the state an inline formatting context begins in.

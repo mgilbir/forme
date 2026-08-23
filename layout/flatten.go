@@ -302,6 +302,7 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			// "<img/> " goes on the line after the picture, and offering the
 			// opportunity to the space put it one line further down again.
 			state.BreakOpportunity = true
+			state.AfterBox = child
 			state.AfterCollapsibleSpace = false
 			// The far side of the same exception. Which character follows is
 			// not known here — it may be in another text node — so what is
@@ -359,6 +360,7 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			// that space is a break opportunity in its own right, so this case
 			// is for the empty one only.
 			state.BreakOpportunity = true
+			state.AfterBox = child
 			state.AfterAtomic = false
 			state.AfterBinding = false
 			state.AfterDeferred = false
@@ -656,6 +658,31 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 
 	out := make([]inlineItem, 0, len(pieces))
 	state := in
+	// §5.1's rule about which element decides, resolved once for the box.
+	//
+	// The boundary in front of this box's first character has a character on
+	// each side of it and they are in different boxes, so it belongs to neither:
+	// what governs it is the white-space of the nearest common ancestor. Inside
+	// the box there is no boundary to cross and the box's own value is the
+	// answer, which is what noWrap holds.
+	//
+	// It is asked whether or not an opportunity has already been established at
+	// that boundary, and that is deliberate. §5.1's sentence is about the
+	// boundary rather than about an opportunity that reached it, and the
+	// opportunities are not all found in one place: word-break: break-all makes
+	// one at this very edge, and it is made further down this function, after
+	// this has been decided. Gating on the incoming state answered "no
+	// opportunity yet" for exactly that case and cost a reftest —
+	// break-boundary-2-chars-001, which writes "abc<span>xyz</span>def" under
+	// break-all with the span set to pre and asks for the break at both edges of
+	// the span.
+	noWrap := !ws.Wrap
+	boundaryNoWrap := noWrap
+	if prev, ok := in.AfterBox.(*Box); ok {
+		if anc := nearestCommonAncestor(prev, b); anc != nil {
+			boundaryNoWrap = !whiteSpaceFor(anc.Style).Wrap
+		}
+	}
 	for i, p := range pieces {
 		// CSS Text §5.1's exception, on the far side: the opportunity a picture
 		// left behind is not offered to a character that holds on to it.
@@ -744,6 +771,10 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			(lb.Anywhere || !mayNotBeginLine(p.Text, lb)) {
 			state.BreakOpportunity = true
 		}
+		pieceNoWrap := noWrap
+		if i == 0 {
+			pieceNoWrap = boundaryNoWrap
+		}
 		if p.Segment {
 			// A segment break that survived Phase I is a break the author
 			// wrote, and it ends the line as firmly as a <br> does — and ends a
@@ -808,6 +839,9 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 				// the middle of a word that happens to change face, and a break
 				// there would cut a word in two for a reason no reader can see.
 				first: ri == 0, last: ri == len(runs)-1,
+				// Only the box's first piece sits at the boundary the state
+				// carried in; everything after it is inside the box.
+				noWrap: pieceNoWrap,
 			})
 			out = append(out, item)
 		}
@@ -829,6 +863,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		AfterCollapsibleSpace: state.AfterCollapsibleSpace,
 		AfterBinding:          state.AfterBinding,
 		AfterDeferred:         state.AfterDeferred,
+		AfterBox:              b,
 	}
 }
 
@@ -880,6 +915,11 @@ type textItemArgs struct {
 	bidiEnd     int
 	first       bool
 	last        bool
+	// noWrap is whether a line may begin at this item. It is the box's own
+	// white-space for everything inside the box, and the nearest common
+	// ancestor's for the one item that sits at a boundary carried in from
+	// another box — see §5.1 and the note beside State.AfterBox.
+	noWrap bool
 }
 
 func (l *layouter) textItem(a textItemArgs) inlineItem {
@@ -931,7 +971,7 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		// widths, which is where hangsHard is read. See widthsOf.
 		Hangs:     p.Space && !p.Collapsible && !ws.BreakSpaces && (ws.Collapse || ws.Wrap),
 		HangsHard: p.Space && !p.Collapsible && ws.Collapse,
-		NoWrap:    !ws.Wrap, Offset: a.offset,
+		NoWrap:    a.noWrap, Offset: a.offset,
 		BreakWord:   a.ow.BreakWord,
 		Anywhere:    a.ow.Anywhere,
 		Decorations: a.decorations, Spacing: a.spacing,
@@ -953,4 +993,30 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		item.Width = l.br.MeasureSpaced(a.run.Face, a.run.Text, a.size, a.spacing)
 	}
 	return item
+}
+
+// nearestCommonAncestor is the lowest box both of two boxes are inside.
+//
+// It is what CSS Text §5.1 asks for at a soft wrap opportunity between two
+// characters in different boxes: the white-space that governs the boundary is
+// the one on the element containing both of them, which is neither character's
+// own and may be neither box's.
+//
+// Nil when the two are in different trees, which is not a document this engine
+// produces and is answered rather than assumed: the caller keeps the box's own
+// value, which is what it did before this rule existed.
+func nearestCommonAncestor(a, b *Box) *Box {
+	if a == nil || b == nil {
+		return nil
+	}
+	seen := map[*Box]bool{}
+	for p := a; p != nil; p = p.Parent {
+		seen[p] = true
+	}
+	for p := b; p != nil; p = p.Parent {
+		if seen[p] {
+			return p
+		}
+	}
+	return nil
 }
