@@ -287,14 +287,14 @@ func OverflowWrapOf(style map[string]string) OverflowWrap {
 // It is linear in the length of the text and allocates one builder, which is
 // not a micro-optimisation: the input is untrusted, and a megabyte of
 // alternating spaces and newlines is a document somebody will send.
-func CollapseWhitespace(text, value string) string {
+func CollapseWhitespace(text, value string, wst WordSpaceTransform) string {
 	ws := WhiteSpaceOf(value)
 	if !ws.Collapse {
 		// pre, pre-wrap and break-spaces keep every space and every tab, so all
 		// that is left of Phase I is the segment break normalisation — which
 		// applies to every value, because CSS Text counts a CRLF as one break
 		// and this engine's HTML parser does not fold it.
-		return NormaliseBreaks(text)
+		return expandSeparators(NormaliseBreaks(text), wst)
 	}
 
 	// U+200B ZERO WIDTH SPACE is the segment break transformation's one
@@ -317,6 +317,12 @@ func CollapseWhitespace(text, value string) string {
 	// their variation selectors and asks for the breaks to go anyway.
 	var lastSeen rune
 	inRun, breaks, afterCR := false, 0, false
+	// sawSeparator says the run being gathered has a virtual word separator in
+	// it, so what it collapses to is a space one can see. It is only ever set
+	// when the property asks for one — with the property at its initial value a
+	// zero width space is not white space and does not join a run at all, which
+	// is what keeps every other document on the path it was on.
+	sawSeparator := false
 
 	// flush takes the character that ends the run twice over: as it stands, for
 	// the zero-width-space rule, and as a reader would see it, for the East
@@ -328,8 +334,25 @@ func CollapseWhitespace(text, value string) string {
 			return
 		}
 		n := breaks
-		inRun, breaks, afterCR = false, 0, false
+		sep := sawSeparator
+		inRun, breaks, afterCR, sawSeparator = false, 0, false, false
 		switch {
+		case sep && n > 0 && ws.PreserveBreaks:
+			// A preserved break with a separator beside it. §4.1.1 keeps the
+			// break, and CSS Text 4 says not to expand a separator immediately
+			// before or after a forced one: what the author asked to be shown
+			// is a place a line *may* end, and this is a place it must.
+			for ; n > 0; n-- {
+				out.WriteByte('\n')
+			}
+			last = '\n'
+		case sep:
+			// The run collapses to the space the property asked for. A run that
+			// also held ordinary spaces is one space either way — collapsing is
+			// what §4.1.1 does to it — and this is which of the two characters
+			// it comes out as.
+			out.WriteString(wst.Separator)
+			last = ' '
 		case n == 0:
 			// Spaces and tabs only: §4.1.1's third and fourth rules, a tab
 			// becoming a space and the run becoming one of them.
@@ -383,6 +406,19 @@ func CollapseWhitespace(text, value string) string {
 			}
 			continue
 		}
+		if wst.Transforms() && IsVirtualWordSeparator(r) {
+			// With the property set, a zero width space is white space: it
+			// collapses with the spaces around it and what survives is one
+			// visible space. Test 007 of the suite's own set is fourteen ways
+			// of writing that in one line, and every one of them comes out as a
+			// single space between two letters.
+			//
+			// Under a value that preserves white space nothing collapses, and
+			// the substitution happens in expandSeparators instead.
+			inRun, sawSeparator = true, true
+			afterCR = false
+			continue
+		}
 		if r < 0x80 && isCollapsibleSpace(byte(r)) {
 			inRun = true
 			switch r {
@@ -415,6 +451,41 @@ func CollapseWhitespace(text, value string) string {
 	flush(0, 0)
 	for _, c := range pending {
 		out.WriteRune(c)
+	}
+	return out.String()
+}
+
+// expandSeparators replaces the virtual word separators in preserved text.
+//
+// Nothing collapses under pre, pre-wrap or break-spaces, so every separator is
+// its own and each becomes a space of its own: "a<wbr> b" under pre is a space
+// the property inserted and a space the author wrote, and both are drawn. The
+// suite's word-space-transform-008 is that exactly, and its reference has the
+// doubled spaces in it.
+//
+// The exception is a separator against a preserved newline. CSS Text 4 says not
+// to expand one immediately before or after a forced break: the mark says a line
+// *may* end there and the break says it must, so making it visible would leave a
+// space hanging at the end of a line or indenting the start of one.
+func expandSeparators(text string, wst WordSpaceTransform) string {
+	if !wst.Transforms() || !strings.ContainsRune(text, 0x200B) {
+		return text
+	}
+	runes := []rune(text)
+	var out strings.Builder
+	out.Grow(len(text))
+	for i, r := range runes {
+		if !IsVirtualWordSeparator(r) {
+			out.WriteRune(r)
+			continue
+		}
+		if (i > 0 && runes[i-1] == '\n') || (i+1 < len(runes) && runes[i+1] == '\n') {
+			// Against a forced break: left as it was, which is a mark that
+			// takes no room.
+			out.WriteRune(r)
+			continue
+		}
+		out.WriteString(wst.Separator)
 	}
 	return out.String()
 }

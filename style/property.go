@@ -193,6 +193,11 @@ var properties = map[string]property{
 	// "keep-all" changes where CJK text may break and getting it wrong silently
 	// is a line broken in the middle of a word.
 	"word-break": {true, "normal"},
+	// word-space-transform inherits, which is how a rule on a container reaches
+	// the marks inside it — the property's own test -003 asks for exactly that.
+	// Its "auto-phrase" half is reported where it is read: inventing word
+	// boundaries a document did not mark needs a dictionary.
+	"word-space-transform": {true, "none"},
 	// line-break inherits too, and only "anywhere" is acted on. The other three
 	// — loose, normal and strict — differ from auto in how strictly CJK text may
 	// break around small kana and punctuation, which this engine does not model

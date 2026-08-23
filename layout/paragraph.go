@@ -25,12 +25,13 @@ type (
 )
 
 var (
-	whiteSpaceFor      = paragraph.WhiteSpaceFor
-	whiteSpaceOf       = paragraph.WhiteSpaceOf
-	wordBreakOf        = paragraph.WordBreakOf
-	lineBreakOf        = paragraph.LineBreakOf
-	overflowWrapOf     = paragraph.OverflowWrapOf
-	collapseWhitespace = paragraph.CollapseWhitespace
+	whiteSpaceFor        = paragraph.WhiteSpaceFor
+	whiteSpaceOf         = paragraph.WhiteSpaceOf
+	wordBreakOf          = paragraph.WordBreakOf
+	lineBreakOf          = paragraph.LineBreakOf
+	overflowWrapOf       = paragraph.OverflowWrapOf
+	collapseWhitespace   = paragraph.CollapseWhitespace
+	wordSpaceTransformOf = paragraph.WordSpaceTransformOf
 	// The two rune predicates the line breaking shares with the collapsing.
 	isOtherSpaceSeparator = paragraph.IsOtherSpaceSeparator
 	separatorBreaksAfter  = paragraph.SeparatorBreaksAfter
@@ -98,6 +99,10 @@ type (
 	bidiBuilder = paragraph.BidiBuilder
 	bidiMode    = paragraph.BidiMode
 )
+
+// wordSpaceTransform is what the property of that name sets: which character a
+// virtual word separator becomes, or nothing at all.
+type wordSpaceTransform = paragraph.WordSpaceTransform
 
 // What the walk over an inline subtree carries, and what a line is made of.
 type (

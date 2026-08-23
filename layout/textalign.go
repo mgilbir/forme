@@ -48,32 +48,76 @@ const (
 // set in or a paragraph of Hebrew would be flush against the left edge of a
 // block the algorithm just set right to left.
 func alignmentOf(b *Box, rtl bool) textAlign {
-	switch strings.ToLower(strings.TrimSpace(b.Style["text-align"])) {
-	case "right":
-		return alignRight
-	case "center":
-		return alignCenter
-	case "justify", "justify-all":
-		// justify-all is CSS Text 3's shorthand value for "justify every line,
-		// the last one included". Every line but the last is justified either
-		// way; which of the two was written is what lineAlignment reads when
-		// the line *is* the last.
-		return alignJustify
-	case "end":
-		if rtl {
+	// The direction a value that never becomes physical is resolved against.
+	// It is the one the line was set in and it does not move as the walk below
+	// climbs, which is the whole of the root case — see matchParent.
+	logical := rtl
+	for {
+		switch strings.ToLower(strings.TrimSpace(b.Style["text-align"])) {
+		case "right":
+			return alignRight
+		case "center":
+			return alignCenter
+		case "justify", "justify-all":
+			// justify-all is CSS Text 3's shorthand value for "justify every
+			// line, the last one included". Every line but the last is
+			// justified either way; which of the two was written is what
+			// lineAlignment reads when the line *is* the last.
+			return alignJustify
+		case "end":
+			return endAlignment(rtl)
+		case "left":
 			return alignLeft
+		case "match-parent":
+			if b.Parent == nil {
+				// Off the top, and the value stays logical. See matchParent.
+				return startAlignment(logical)
+			}
+			// From here on "start" and "end" are the parent's to resolve, which
+			// is the whole of the property.
+			b = b.Parent
+			rtl = isRTL(b)
+			continue
 		}
-		return alignRight
-	case "left":
-		return alignLeft
+		// start and anything unrecognised. §16.2 makes start the initial value,
+		// so this is also the answer for a block that says nothing.
+		return startAlignment(rtl)
 	}
-	// start, match-parent, and anything unrecognised. §16.2 makes start the
-	// initial value, so this is also the answer for a block that says nothing.
-	if rtl {
-		return alignRight
-	}
-	return alignLeft
 }
+
+// matchParent is CSS Text §7.1's one value that has to look outside the box it
+// is written on, and it is a walk in alignmentOf above rather than a function of
+// its own.
+//
+// "This value behaves the same as inherit, except that an inherited value of
+// start or end is calculated against the *parent's* direction value and results
+// in a computed value of either left or right."
+//
+// The first half is nothing: text-align inherits already, so a child with no
+// declaration has the parent's value whatever this does. The second half is the
+// whole property, and it exists for a paragraph of one direction quoted inside a
+// block of another — the quote is aligned with the text around it rather than
+// with itself, which is what a reader of the surrounding language expects.
+//
+// The suite's text-align-match-parent-01 is eight rows of the same shape, and
+// the four that matter are the ones where the two directions disagree: a
+// left-to-right block whose "start" is inherited by a right-to-left child aligns
+// that child *left*, and without this it aligned right.
+//
+// # The root, which is the case that is easy to get backwards
+//
+// A chain of them is legal — "div > div { text-align: match-parent }" makes
+// every div in a nest one — so the walk can run off the top of the tree. What it
+// must produce there is "start" *still logical*: the specification computes
+// match-parent against the parent's value, the root has no parent, and there is
+// nothing to make physical against.
+//
+// text-align-match-parent-root-logical says so in its own assert and is built to
+// catch the mistake: the root is dir=rtl, the body inside it is dir=ltr, and the
+// line must come out flush left. Resolving the root's own direction there
+// answers right, which is the reading this is written to avoid — and it is why
+// the direction the walk started with is carried along beside the one it climbs
+// through.
 
 // startAlignment and endAlignment are the two logical edges, resolved against
 // the inline base direction the line was set in.

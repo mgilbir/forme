@@ -398,3 +398,97 @@ func TestWordBreakBreakWordIsNotReported(t *testing.T) {
 		t.Errorf("word-break:auto-phrase was not reported, so the check above says nothing")
 	}
 }
+
+// A line with no room at all, which is where the last resort stops being one
+// and has to happen anyway.
+//
+// breakInsideWord used to decline whenever nothing fitted — "a line cannot hold
+// less than one character, and breaking one off to leave the rest overflowing
+// anyway would only lose a character off the end". That is true of a word one
+// character long and false of every longer one: "abcd" in no room at all is four
+// lines of one character, not one line of four. A word does not become
+// unbreakable because the room ran out completely; it is exactly then that the
+// value is for.
+//
+// The suite writes "width: 0" on purpose and twice — overflow-wrap-cluster-001
+// and -002 are two Devanagari clusters in no room against a reference of two
+// lines.
+
+// TestNoRoomAtAllStillBreaksTheWord.
+func TestNoRoomAtAllStillBreaksTheWord(t *testing.T) {
+	for _, value := range []string{"break-word", "anywhere"} {
+		got := lineTextsOf(t, layoutOf(t, 600, `<div id="p">abcd</div>`,
+			`#p { font-family: Courier; font-size: 20px; width: 0; overflow-wrap: `+
+				value+` }`), "p")
+		if strings.Join(got, "|") != "a|b|c|d" {
+			t.Errorf("overflow-wrap:%s in no room made %q, want one character a line",
+				value, got)
+		}
+	}
+	// The control: without the value the word stays whole and overflows, so the
+	// rows above are measuring the property rather than the width.
+	got := lineTextsOf(t, layoutOf(t, 600, `<div id="p">abcd</div>`,
+		`#p { font-family: Courier; font-size: 20px; width: 0 }`), "p")
+	if len(got) != 1 {
+		t.Errorf("without the value the word made %d lines %q, want 1", len(got), got)
+	}
+}
+
+// TestNoRoomAtAllCutsBetweenGraphemeClusters, which is what the suite's own
+// fixture is about: a Devanagari consonant and the vowel sign that belongs to it
+// are one thing a reader sees, and a line may not end between them.
+func TestNoRoomAtAllCutsBetweenGraphemeClusters(t *testing.T) {
+	// Two clusters, each a consonant and a dependent vowel: ष + ि, twice.
+	got := lineTextsOf(t, layoutOf(t, 600,
+		`<div id="p" lang="hi">&#x0937;&#x093F;&#x0937;&#x093F;</div>`,
+		`#p { font-size: 20px; width: 0; overflow-wrap: break-word }`), "p")
+	if strings.Join(got, "|") != "षि|षि" {
+		t.Errorf("the word came out %q, want two lines of one cluster — a vowel "+
+			"sign does not begin a line", got)
+	}
+}
+
+// TestALineWithSomethingOnItEndsRatherThanCutting is the other half, and the one
+// that keeps the change from being "break wherever there is no room".
+//
+// A line that already holds something can end, and what would not fit gets a
+// whole line's room to be cut in. Cutting on the crowded line instead puts one
+// character past the edge for nothing: the same characters go on the same number
+// of lines either way, and one of them overflows.
+//
+// The fixture took some finding. The last resort fires only where the line has
+// no other break point at all, so a space anywhere on it sends the line back
+// there instead and this branch is never reached — two inline boxes of different
+// sizes and no space between them are what put a line in that state. "ab" is 24
+// of the 40 available and the characters beside it are 24 each, so not one of
+// them fits in what is left.
+func TestALineWithSomethingOnItEndsRatherThanCutting(t *testing.T) {
+	got := lineTextsOf(t, layoutOf(t, 600,
+		`<div id="p"><span>ab</span><span class="big">XY</span></div>`,
+		`#p { font-family: Courier; font-size: 20px; width: 40px;
+		      overflow-wrap: break-word }
+		 .big { font-size: 40px }`), "p")
+	if strings.Join(got, "|") != "ab|X|Y" {
+		t.Errorf("%q, want [ab X Y]: the line ends where it is rather than taking "+
+			"a character that does not fit on it", got)
+	}
+	// And the same shape where the line does have a space in it breaks at the
+	// space, which is the rule this one sits underneath.
+	got = lineTextsOf(t, layoutOf(t, 600, `<div id="p">ab cdef</div>`,
+		owCSS+` #p { overflow-wrap: break-word }`), "p")
+	if strings.Join(got, "|") != "ab|cdef" {
+		t.Errorf("%q, want [ab cdef]", got)
+	}
+}
+
+// TestASingleClusterTooWideStillOverflows. One cluster is the least a line can
+// hold, so a cluster wider than the line is placed and overflows — which is the
+// case the old refusal was right about, and the one the report exists for.
+func TestASingleClusterTooWideStillOverflows(t *testing.T) {
+	root := layoutOf(t, 600, `<div id="p">a</div>`,
+		`#p { font-family: Courier; font-size: 20px; width: 0; overflow-wrap: break-word }`)
+	got := lineTextsOf(t, root, "p")
+	if strings.Join(got, "|") != "a" {
+		t.Errorf("%q, want one line of a — there is nothing to cut", got)
+	}
+}

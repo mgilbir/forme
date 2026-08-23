@@ -35,7 +35,7 @@ func TestABidiControlDoesNotSeparateTwoSpaces(t *testing.T) {
 		{"a control at the very end", "ccc ‮", "ccc ‮"},
 		{"a control at the end after a run", "ccc   ‮", "ccc ‮"},
 	} {
-		if got := CollapseWhitespace(tc.in, "normal"); got != tc.want {
+		if got := CollapseWhitespace(tc.in, "normal", WordSpaceTransform{}); got != tc.want {
 			t.Errorf("%s: %q collapsed to %q, want %q", tc.what, tc.in, got, tc.want)
 		}
 	}
@@ -50,7 +50,7 @@ func TestABidiControlDoesNotSeparateTwoSpaces(t *testing.T) {
 // side of it, which is why the control is written out after the run rather than
 // where it stood.
 func TestTheSurvivingSpaceIsOnTheSideMarkupWouldPutIt(t *testing.T) {
-	got := CollapseWhitespace("ccc ‮ lll", "normal")
+	got := CollapseWhitespace("ccc ‮ lll", "normal", WordSpaceTransform{})
 	if got != "ccc ‮lll" {
 		t.Errorf("collapsed to %q, want the space before the control", got)
 	}
@@ -60,12 +60,12 @@ func TestTheSurvivingSpaceIsOnTheSideMarkupWouldPutIt(t *testing.T) {
 // predicate is Bidi_Control rather than Default_Ignorable: U+200B is in the same
 // ignorable range as the two directional marks and behaves the opposite way.
 func TestAZeroWidthSpaceStillSeparates(t *testing.T) {
-	if got := CollapseWhitespace("ccc ​ ​ lll", "normal"); got != "ccc ​ ​ lll" {
+	if got := CollapseWhitespace("ccc ​ ​ lll", "normal", WordSpaceTransform{}); got != "ccc ​ ​ lll" {
 		t.Errorf("collapsed to %q; a zero-width space stands between two spaces and "+
 			"they do not collapse", got)
 	}
 	// And a mark that *is* a bidi control, from inside that same range.
-	if got := CollapseWhitespace("ccc ‎ lll", "normal"); got != "ccc ‎lll" {
+	if got := CollapseWhitespace("ccc ‎ lll", "normal", WordSpaceTransform{}); got != "ccc ‎lll" {
 		t.Errorf("a left-to-right mark collapsed to %q", got)
 	}
 }

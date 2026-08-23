@@ -626,8 +626,8 @@ func TestRightToLeftRunsAreActuallyReordered(t *testing.T) {
 func TestCollapsingIsIdempotent(t *testing.T) {
 	for _, value := range []string{"collapse", "preserve", "preserve-breaks", "break-spaces"} {
 		for _, tc := range texts {
-			once := CollapseWhitespace(tc.text, value)
-			twice := CollapseWhitespace(once, value)
+			once := CollapseWhitespace(tc.text, value, WordSpaceTransform{})
+			twice := CollapseWhitespace(once, value, WordSpaceTransform{})
 			if once != twice {
 				t.Errorf("%s under %q collapsed to %q and then to %q — collapsing must "+
 					"reach its answer in one pass", tc.name, value, once, twice)

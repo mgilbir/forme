@@ -323,6 +323,39 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			state = startOfContext()
 			continue
 		}
+		if child.Element != nil && strings.EqualFold(child.Element.Name, "wbr") &&
+			len(child.Children) == 0 {
+			// A break opportunity the author wrote, and the counterpart of the
+			// <br> above: that one ends a line wherever it falls, this one only
+			// says a line *may* end here.
+			//
+			// It was reaching the layout as an inline box with nothing in it,
+			// which produces no items and so no opportunity — "aaaa<wbr>bbbb"
+			// set as one unbreakable word in a box four characters wide, and
+			// nothing said so. Eighteen of the suite's reftests write one.
+			//
+			// The opportunity is recorded on the state rather than emitted as a
+			// zero-width space in the text, and the difference is what the
+			// element means. HTML calls it a line break opportunity and nothing
+			// else: it marks no boundary in the *text*, so "sur<wbr/>name" is
+			// one word and text-transform: capitalize gives it one capital,
+			// which a space in the text — of any width — would not.
+			//
+			// It is unconditional, as a space's is. UAX #14's "a line may not
+			// begin with this character" is applied to the opportunities an
+			// ideograph defers and not to the one after a space, and an author
+			// who writes <wbr> has said where the line may end.
+			//
+			// An element with a child is one word-space-transform has turned
+			// into a zero width space of its own — see the box builder — and
+			// that space is a break opportunity in its own right, so this case
+			// is for the empty one only.
+			state.BreakOpportunity = true
+			state.AfterAtomic = false
+			state.AfterBinding = false
+			state.AfterDeferred = false
+			continue
+		}
 		if child.Outer == OuterInline {
 			inner := frame
 			if child.Position == PositionRelative {
