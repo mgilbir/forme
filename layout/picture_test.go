@@ -382,8 +382,25 @@ func tiledFills(v TileImage) []coloured {
 		}
 	}
 	if bands == nil && cols > maxComparedTiles/rows {
-		key := fmt.Sprintf("tiled:%s %s step %s,%s",
-			v.Key, rectKey(v.Tile), num(v.StepX), num(v.StepY))
+		// Too many to place, so the whole clip is "this tiling" and the key is
+		// what says which tiling it is. The origin in it is the *first tile
+		// drawn* rather than the one the layout named: a tiling repeats in both
+		// directions, so two that differ by a whole number of steps are the same
+		// tiling and put the same ink on the page.
+		//
+		// It is the same alignment the exact path below makes, and it has to be
+		// the same or the two paths disagree about what a tiling is. The
+		// background-root family is where it showed: §14.2 positions the
+		// canvas's background against the *root's* box and paints it over the
+		// whole canvas, so a root with a margin names a first tile well inside
+		// the area — and a reference that writes the equivalent position
+		// directly names one seventeen pixels earlier.
+		key := fmt.Sprintf("tiled:%s at %s,%s size %s step %s,%s",
+			v.Key,
+			num(alignTile(v.Clip.X, v.Tile.X, v.Tile.W, v.StepX)),
+			num(alignTile(v.Clip.Y, v.Tile.Y, v.Tile.H, v.StepY)),
+			num(v.Tile.W)+"x"+num(v.Tile.H),
+			num(v.StepX), num(v.StepY))
 		return []coloured{{r: v.Clip, c: style.RGBA{A: 1}, img: key}}
 	}
 

@@ -1005,3 +1005,105 @@ func TestPictureDoesNotChargeSpacingToAControl(t *testing.T) {
 			"after it; the control was charged for room it does not take")
 	}
 }
+
+// A tiling repeats in both directions, so two that differ by a whole number of
+// steps are the same tiling.
+//
+// It matters only where there are too many tiles to place exactly: below that
+// bound each tile is a rectangle of its own, aligned to the clip's near edge,
+// and the alignment already handles it. Past it the whole clip becomes one mark
+// carrying a *key* that says which tiling it is — and that key named the tile the
+// layout had chosen rather than the first tile drawn, so two documents putting
+// identical ink on the page came out different.
+//
+// §14.2's canvas is where it showed. The background propagated to the canvas is
+// positioned against the *root element's* box and painted over the whole canvas,
+// so a root with a margin names a first tile well inside the area; a reference
+// that writes the equivalent position directly names one a step earlier.
+// background-root-007 and -010 are that pair.
+
+// tiledOver is a tiling of a patterned picture over the whole test page, with
+// enough tiles that the comparison collapses it to a key.
+func tiledOver(t *testing.T, atX, atY, step float64) TileImage {
+	t.Helper()
+	return TileImage{
+		Clip:  picPage,
+		Tile:  picRect(atX, atY, 4, 4),
+		StepX: picPx(step), StepY: picPx(step),
+		Image: checkerImage(t),
+		Key:   "checker",
+	}
+}
+
+// checkerImage is a picture that is not one colour and not made of bands, so the
+// comparison cannot decompose it and has to fall back to the key.
+func checkerImage(t *testing.T) image.Image {
+	t.Helper()
+	img := image.NewNRGBA(image.Rect(0, 0, 4, 4))
+	for y := 0; y < 4; y++ {
+		for x := 0; x < 4; x++ {
+			c := color.NRGBA{A: 255}
+			if (x+y)%2 == 0 {
+				c = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+			}
+			img.Set(x, y, c)
+		}
+	}
+	return img
+}
+
+// TestPictureSeesAWholeStepAsTheSameTiling.
+func TestPictureSeesAWholeStepAsTheSameTiling(t *testing.T) {
+	base := tiledOver(t, 2, 2, 4)
+	for _, tc := range []struct {
+		x, y float64
+		what string
+	}{
+		{6, 2, "one step along x"},
+		{2, 6, "one step along y"},
+		{-2, -2, "one step back on both"},
+		{22, 22, "five steps along both"},
+	} {
+		moved := tiledOver(t, tc.x, tc.y, 4)
+		if !pictureEqual([]Op{base}, []Op{moved}, picPage) {
+			t.Errorf("%s: the same tiling compared different", tc.what)
+		}
+	}
+}
+
+// TestPictureStillSeesADifferentTiling is the half that keeps the rule from
+// being a hole: everything here puts different ink on the page and must still
+// compare different.
+func TestPictureStillSeesADifferentTiling(t *testing.T) {
+	base := tiledOver(t, 2, 2, 4)
+	// The rows that vary one step use a tiling whose first tile is already on
+	// the clip's edge, so that the aligned origin is the same for both and the
+	// step is the only thing left to tell them apart.
+	square := tiledOver(t, 0, 0, 4)
+	for _, tc := range []struct {
+		from, other TileImage
+		what        string
+	}{
+		{base, tiledOver(t, 3, 2, 4), "a phase of one pixel along x"},
+		{base, tiledOver(t, 2, 3, 4), "a phase of one pixel along y"},
+		{base, tiledOver(t, 2, 2, 5), "a step of five rather than four"},
+		// One axis at a time, and from an origin already on the clip's edge:
+		// aligning the first tile reads the step too, so a tiling started
+		// anywhere else differs in its origin as well and would not say whether
+		// the *step* reached the key at all.
+		{square, func() TileImage { v := tiledOver(t, 0, 0, 4); v.StepY = picPx(5); return v }(),
+			"a different step down the page alone"},
+		{square, func() TileImage { v := tiledOver(t, 0, 0, 4); v.StepX = picPx(5); return v }(),
+			"a different step across it alone"},
+		{base, func() TileImage { v := tiledOver(t, 2, 2, 4); v.Tile.H = picPx(3); return v }(),
+			"a shorter tile"},
+		{base, func() TileImage { v := tiledOver(t, 2, 2, 4); v.Tile.W = picPx(3); return v }(),
+			"a narrower tile"},
+		{base, func() TileImage { v := tiledOver(t, 2, 2, 4); v.Key = "other"; return v }(),
+			"a different picture"},
+	} {
+		if pictureEqual([]Op{tc.from}, []Op{tc.other}, picPage) {
+			t.Errorf("%s: two different tilings compared equal", tc.what)
+		}
+	}
+}
