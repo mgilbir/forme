@@ -115,6 +115,12 @@ const (
 	TransformFullWidth
 	TransformFullSizeKana
 
+	// TransformMathAuto is CSS Text 4's math-auto, which is a keyword of its
+	// own: the grammar puts it beside "none" rather than among the three that
+	// combine, so it is valid alone and invalid beside anything else. See
+	// mathauto.go.
+	TransformMathAuto
+
 	// transformCase is the part of a value that changes case, for the places
 	// that need to ask which of the three was given without naming all three.
 	transformCase = TransformUppercase | TransformLowercase | TransformCapitalize
@@ -146,6 +152,15 @@ func TransformOf(value string) TextTransform {
 			bit = TransformFullWidth
 		case "full-size-kana":
 			bit = TransformFullSizeKana
+		case "math-auto":
+			// Alone or not at all. §2.1.1's grammar is
+			// "none | math-auto | [ [capitalize|uppercase|lowercase] ||
+			// full-width || full-size-kana ]", so math-auto is its own branch
+			// and shares the alternation with none rather than the set.
+			if len(strings.Fields(strings.ToLower(value))) != 1 {
+				return TransformNone
+			}
+			return TransformMathAuto
 		default:
 			return TransformNone
 		}
@@ -181,6 +196,12 @@ func TransformText(text string, kind TextTransform, inWord bool, lang Language) 
 	// has none — and *none* tells full-width from full-size-kana, or either of
 	// them from a case change. The code follows the specification's order all the
 	// same; texttransform_test.go says which part of it a test can hold.
+	if kind == TransformMathAuto {
+		// On its own by construction — see TransformOf — so it is answered
+		// first and nothing else runs. A text node of anything but exactly one
+		// character comes back as it went in.
+		return mathAuto(text), EndsInWord(text)
+	}
 	switch kind & transformCase {
 	case TransformUppercase:
 		text = localeCased(text, lang, true)
