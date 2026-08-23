@@ -593,6 +593,30 @@ func (l *layouter) cellDemand(cell *Box) (min, max style.Unit, percent float64) 
 			percent = length.Percent
 		}
 	}
+	// §10.4's two limits, and the same rule the column gets above: they are
+	// limits on what this cell asks for rather than another demand to be
+	// maximised with the rest, so they are applied to what the content and the
+	// declared width came to. The maximum goes first, which is §10.4's own order
+	// and decides an author writing a max-width below the min-width — the
+	// minimum wins, because it is applied to the result of the maximum.
+	//
+	// A cell is on the list the two properties apply to. Only the column was
+	// asked before this, so "width: 3in; max-width: 1in" on a cell came out three
+	// inches wide, and a cell with a minimum and no width came out as wide as the
+	// letter in it: max-width-applies-to-007 and min-width-applies-to-007 are
+	// those two, and both are a square that was not square.
+	//
+	// Percentages are left alone, for the reason the column's case gives: what
+	// they are a percentage of is the table's width, which is the number this is
+	// helping to work out.
+	if v, ok := l.parseLength(cell, "max-width"); ok && v.Kind == style.LengthAbsolute {
+		inner.max = style.Min(inner.max, v.Value)
+		inner.min = style.Min(inner.min, v.Value)
+	}
+	if v, ok := l.parseLength(cell, "min-width"); ok && v.Kind == style.LengthAbsolute && v.Value > 0 {
+		inner.min = style.Max(inner.min, v.Value)
+		inner.max = style.Max(inner.max, v.Value)
+	}
 	edges := l.cellInset(cell)
 	return inner.min.Add(edges), inner.max.Add(edges), percent
 }
@@ -1090,7 +1114,7 @@ func (l *layouter) fixedColumnWidths(table *Box, g *tableGrid, room style.Unit,
 		if col == nil {
 			continue
 		}
-		if v, ok := l.columnWidth(col, room); ok {
+		if v, ok := l.declaredTrackWidth(col, room); ok {
 			out[i], set[i] = v, true
 		}
 	}
@@ -1100,8 +1124,8 @@ func (l *layouter) fixedColumnWidths(table *Box, g *tableGrid, room style.Unit,
 			// algorithm fixed.
 			continue
 		}
-		if v, ok := l.lengthOf(c.box, "width", room); ok && !l.isAuto(c.box, "width") {
-			assign(c.col, c.colSpan, maxZero(v).Add(l.cellInset(c.box)))
+		if v, ok := l.declaredTrackWidth(c.box, room); ok {
+			assign(c.col, c.colSpan, v.Add(l.cellInset(c.box)))
 		}
 	}
 
@@ -1137,13 +1161,22 @@ func (l *layouter) fixedColumnWidths(table *Box, g *tableGrid, room style.Unit,
 	return out
 }
 
-// columnWidth is what a <col> or a <colgroup> asks its column to be.
+// declaredTrackWidth is what a box asks the column it belongs to to be.
+//
+// The box is a <col> or a <colgroup>, or a cell in the first row — which are the
+// two things §17.5.2.1 lets speak under the fixed algorithm, in that order. One
+// function for the two because the rule is one rule: whatever the box asks for,
+// clamped by its own minimum and maximum.
 //
 // The width is the one the author wrote, and it is clamped by the same
 // element's own min-width and max-width. §10.4 applies both to every element
-// but non-replaced inlines, table rows and row groups — columns are on the list
-// that they apply to, and the suite says so by name in the min-width, max-width
-// and width applies-to families.
+// but non-replaced inlines, table rows and row groups — columns and cells are
+// both on the list that they apply to, and the suite says so by name in the
+// min-width, max-width and width applies-to families.
+//
+// The cell used to read its "width" and nothing else, so a cell with
+// "width: 3in; max-width: 1in" came out three inches wide and a cell with a
+// minimum and no width came out as wide as the letter in it.
 //
 // A column with no width of its own but a minimum still has a width: the
 // minimum is a floor under a share it has not been given yet, and a column that
@@ -1156,7 +1189,7 @@ func (l *layouter) fixedColumnWidths(table *Box, g *tableGrid, room style.Unit,
 // clamping a share before it has been worked out would only move the surplus
 // somewhere else without saying where. It is left to the share and recorded
 // here as the boundary of what this reads.
-func (l *layouter) columnWidth(col *Box, room style.Unit) (style.Unit, bool) {
+func (l *layouter) declaredTrackWidth(col *Box, room style.Unit) (style.Unit, bool) {
 	if v, ok := l.lengthOf(col, "width", room); ok && !l.isAuto(col, "width") {
 		return maxZero(l.clampWidth(col, v, room)), true
 	}
