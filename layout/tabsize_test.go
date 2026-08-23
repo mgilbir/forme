@@ -1,6 +1,10 @@
 package layout
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/mgilbir/forme/style"
+)
 
 // tab-size, CSS Text §8.1, and the two different boxes it asks about.
 //
@@ -92,4 +96,78 @@ func TestAnInvalidTabSizeIsIgnored(t *testing.T) {
 			t.Errorf("%s: the tab is at %gpx, want the initial eight at 96", tc.what, got)
 		}
 	}
+}
+
+// TestANegativeTabSizeLeavesTheStopsWhereTheyWere is CSS Text 3's range applied
+// through §4.2's rule about an invalid declaration.
+//
+// tab-size is "<number [0,∞]> | <length [0,∞]>", so a negative one is not a
+// small tab size — it is not a value at all, and the declaration holding it is
+// dropped. What stands is whatever the cascade would have produced without it,
+// which here is the declaration before it.
+//
+// The suite writes it as tab-size-integer-002 and tab-size-length-002, and the
+// shape is the same in both: a <pre> holding one tab beside a <pre> holding the
+// spaces it should measure the same as. Letting the negative through put the
+// stops back at the initial eight, so the tab came out twice as wide as the
+// spaces and the red box showed past the green one.
+func TestANegativeTabSizeLeavesTheStopsWhereTheyWere(t *testing.T) {
+	// Courier at 20px advances 12px a character, so four spaces are 48px and
+	// the initial eight are 96px.
+	width := func(css string) style.Unit {
+		t.Helper()
+		root := layoutOf(t, 600, `<pre id="p" style="`+css+`">&#9;x</pre>`,
+			noDefaults+`pre { font-family: Courier; font-size: 20px }`)
+		return textStart(t, root, "p", "x")
+	}
+	if got, want := width("tab-size: 4; tab-size: -4"), bgpx(48); got != want {
+		t.Errorf("the tab advanced %v, want %v: the negative declaration is invalid "+
+			"and dropped, so \"tab-size: 4\" stands. %v is the initial eight",
+			got, want, bgpx(96))
+	}
+	if got, want := width("tab-size: 4; tab-size: -1em"), bgpx(48); got != want {
+		t.Errorf("a negative length tab-size advanced the tab to %v, want %v", got, want)
+	}
+	// The control: a *positive* second declaration does win, so this is about
+	// the value being illegal and not about the second declaration being
+	// ignored.
+	if got, want := width("tab-size: 4; tab-size: 2"), bgpx(24); got != want {
+		t.Errorf("the tab advanced %v, want %v; the second declaration is legal and "+
+			"wins", got, want)
+	}
+	// And with nothing legal before it, the initial value stands rather than a
+	// clamp to zero.
+	if got, want := width("tab-size: -4"), bgpx(96); got != want {
+		t.Errorf("with only an illegal declaration the tab advanced %v, want the "+
+			"initial eight spaces, %v", got, want)
+	}
+}
+
+// textStart is where a run reading exactly want begins.
+func textStart(t *testing.T, root *Fragment, id, want string) style.Unit {
+	t.Helper()
+	var got style.Unit
+	found := false
+	var walk func(*Fragment)
+	walk = func(f *Fragment) {
+		if f.Box != nil && f.Box.Element != nil {
+			if id2, _ := f.Box.Element.Attr("id"); id2 == id {
+				for _, ln := range f.Lines {
+					for _, r := range ln.Runs {
+						if r.Text == want && !found {
+							got, found = r.X, true
+						}
+					}
+				}
+			}
+		}
+		for _, c := range f.Children {
+			walk(c)
+		}
+	}
+	walk(root)
+	if !found {
+		t.Fatalf("no run reading %q in #%s", want, id)
+	}
+	return got
 }

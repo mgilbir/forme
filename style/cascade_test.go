@@ -129,6 +129,11 @@ func TestCascadeOrderOfAppearance(t *testing.T) {
 // about lengths. A negative margin, text-indent, letter-spacing and word-spacing
 // are all useful and all specified, and dropping one would break a page that is
 // doing nothing wrong.
+//
+// The list is not only CSS 2.1's. The later specifications write the same
+// restriction as a range in the value's own type — tab-size is
+// "<number [0,∞]> | <length [0,∞]>" — and it means what §4.2 means: the
+// declaration is invalid and is dropped.
 func TestNegativeValueDropsTheDeclaration(t *testing.T) {
 	doc := parseDoc(t, cascadeDoc)
 	cases := []struct{ src, property, want string }{
@@ -151,6 +156,22 @@ func TestNegativeValueDropsTheDeclaration(t *testing.T) {
 		{"p { border-top-width: -1pt }", "border-top-width", "medium"},
 		{"p { border-right-width: 5px; border-right-width: -1em }",
 			"border-right-width", "5px"},
+		// The properties CSS 2.1 does not have, each of whose definitions
+		// states its range as a non-negative one.
+		//
+		// tab-size is the one the suite found: "tab-size: 4; tab-size: -4" has
+		// to leave the stops four spaces apart, and letting the negative
+		// through put them back at the initial eight — a tab twice as wide as
+		// the reference beside it, in a test whose whole assertion is that the
+		// two are the same width.
+		{"p { tab-size: 4; tab-size: -4 }", "tab-size", "4"},
+		{"p { tab-size: 1em; tab-size: -1em }", "tab-size", "1em"},
+		{"p { tab-size: -4 }", "tab-size", "8"},
+		{"p { line-height: 2; line-height: -1 }", "line-height", "2"},
+		{"p { line-height: -1px }", "line-height", "normal"},
+		{"p { border-spacing: 2px; border-spacing: -2px }", "border-spacing", "2px"},
+		{"p { outline-width: 4px; outline-width: -4px }", "outline-width", "4px"},
+		{"p { background-size: 10px; background-size: -10px }", "background-size", "10px"},
 		// And the negatives that are legal are untouched.
 		{"p { margin-top: -10px }", "margin-top", "-10px"},
 		{"p { text-indent: -3em }", "text-indent", "-3em"},

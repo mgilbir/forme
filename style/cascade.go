@@ -561,6 +561,14 @@ var nonNegative = map[string]bool{
 	"padding-bottom": true, "padding-left": true,
 	"border-top-width": true, "border-right-width": true,
 	"border-bottom-width": true, "border-left-width": true,
+	// And the ones CSS 2.1 does not have. Each definition states its range as
+	// a non-negative one, in the notation the later specifications use:
+	// line-height is <number [0,∞]> | <length [0,∞]> | <percentage [0,∞]>,
+	// border-spacing is two non-negative lengths, outline-width is a border
+	// width, background-size takes non-negative lengths and percentages, and
+	// tab-size is <number [0,∞]> | <length [0,∞]>.
+	"line-height": true, "border-spacing": true, "outline-width": true,
+	"background-size": true, "tab-size": true,
 }
 
 // legalQuotes reports whether a "quotes" value matches §12.3.2's grammar.
