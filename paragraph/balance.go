@@ -334,8 +334,32 @@ func (br *Breaker) BalanceScoredCaps(items []Item, bands []style.Unit,
 		i, iByte, n int
 	}
 	type answer struct {
-		score      float64
-		used       style.Unit
+		score float64
+		used  style.Unit
+		// at is the width to break this line at to get this line back, which is
+		// the width it was *found* at rather than the width it fills.
+		//
+		// The two are not the same, and the difference is the white space at the
+		// end of a line. §4.1.2 takes it off before the line is measured, so it
+		// does not count towards what the line fills — but whether it is on the
+		// line at all still depends on the room, because a space that will be
+		// trimmed is still a space the breaker had to fit. "0" followed by three
+		// spaces fills one character and consumes four in a wide enough line and
+		// two in a line one character wide, and both of those are the same
+		// "used".
+		//
+		// The old answer was the used width, and the fuzzer found both shapes it
+		// gets wrong: a first line of nothing but spaces, whose used width is
+		// zero and which then breaks after one space instead of after all of
+		// them; and a line whose trailing spaces are dropped when it is re-broken
+		// at what it filled. Each costs a line, and balancing may not cost a
+		// line — that is the one thing the count is a constraint for.
+		//
+		// Nothing wants the tight width. A cap is a *break* width and only that:
+		// the caller takes the narrower of it and the band and breaks there, so
+		// a cap equal to the band means "this line was found greedily", which is
+		// true and is what should happen.
+		at         style.Unit
 		next       state
 		ok, walked bool
 	}
@@ -386,7 +410,10 @@ func (br *Breaker) BalanceScoredCaps(items []Item, bands []style.Unit,
 				slack := float64(r.Sub(used).Px())
 				score := slack*slack + rest.score
 				if !out.ok || score <= out.score {
-					out = answer{score: score, used: used, next: state{next, nextByte, st.n + 1}, ok: true}
+					out = answer{
+						score: score, used: used, at: w,
+						next: state{next, nextByte, st.n + 1}, ok: true,
+					}
 				}
 			}
 			// The next candidate is the widest line strictly shorter than this
@@ -411,7 +438,7 @@ func (br *Breaker) BalanceScoredCaps(items []Item, bands []style.Unit,
 	}
 	caps := make([]style.Unit, 0, lines)
 	for st, cur := (state{0, 0, 0}), first; cur.ok && len(caps) < lines; {
-		caps = append(caps, cur.used)
+		caps = append(caps, cur.at)
 		st = cur.next
 		if st.i >= len(items) {
 			break
