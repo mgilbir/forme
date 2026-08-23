@@ -267,6 +267,12 @@ func (l *layouter) inlineWidths(b *Box) intrinsicWidths {
 	hp, _ := hangingPunctuationOf(b.Style["hanging-punctuation"])
 	items = l.hangPunctuation(items, hp)
 	items = l.linkLetterSpacing(items)
+	// §8.1's ideograph spacing, after the letter-spacing boundary rule and for
+	// the same reason it is a pass over the finished items: both are gaps
+	// *between* two runs, and neither can be decided while one of them is still
+	// being built. They add to the same width and are independent — a document
+	// that sets letter-spacing across an ideograph boundary gets both.
+	items = l.insertAutospace(items)
 	got, split := l.widthsOf(items)
 
 	// §16.1's indent moves the first line and no other, so the box is as wide as

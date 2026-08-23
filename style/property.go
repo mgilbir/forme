@@ -212,6 +212,12 @@ var properties = map[string]property{
 	// hyphenating a word that contains no soft hyphen needs a dictionary for
 	// the document's language.
 	"hyphens": {true, "manual"},
+	// text-autospace inherits, which is what lets a document turn it off once
+	// on the body. Its initial value is "normal", and "normal" asks for the
+	// spacing — a page of Japanese with Latin words in it is set wrong without
+	// it, so the property is on until something says otherwise. See
+	// paragraph/autospace.go.
+	"text-autospace": {true, "normal"},
 	// hanging-punctuation inherits, which is what lets a document ask for it
 	// once on the body and mean it for every paragraph. "first" and "last" are
 	// implemented; the two end values are read as none and reported.

@@ -230,6 +230,12 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	// containing both characters rather than either character's own. It changes
 	// the width of a run, so it has to be settled before any line is filled.
 	items = l.linkLetterSpacing(items)
+	// §8.1's ideograph spacing, after the letter-spacing boundary rule and for
+	// the same reason it is a pass over the finished items: both are gaps
+	// *between* two runs, and neither can be decided while one of them is still
+	// being built. They add to the same width and are independent — a document
+	// that sets letter-spacing across an ideograph boundary gets both.
+	items = l.insertAutospace(items)
 	// A float written after an absolutely positioned box still begins a line.
 	// See floatsBeforeOutOfFlow.
 	items = floatsBeforeOutOfFlow(items)

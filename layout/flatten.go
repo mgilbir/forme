@@ -630,6 +630,14 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	if unhandledHyphens != "" {
 		l.reportHyphens(b, unhandledHyphens)
 	}
+	// text-autospace is applied between two runs rather than inside one — see
+	// autospace.go — so nothing here reads the value. What is read here is
+	// whether the document asked for a part of it this engine does not do, which
+	// is a question about the box and belongs where the other three are asked.
+	autospace, unhandledAutospace := autospaceOf(b.Style["text-autospace"])
+	if unhandledAutospace != "" {
+		l.reportAutospace(b, unhandledAutospace)
+	}
 	pieces, endedAtBreak := splitAtBreaks(b.Text, ws, wb, lb, hy)
 	if len(pieces) == 0 {
 		// A box that produced nothing passes an opportunity through rather than
@@ -827,6 +835,23 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 				runs = got
 			}
 		}
+		// And cut again where §8.1 wants a gap inside one of them.
+		//
+		// The gap itself is opened by insertAutospace, which is a pass over the
+		// finished items and sees every boundary *between* two runs. A boundary
+		// inside a run is invisible to it — a backend is handed one advance per
+		// run and could not express a one-off gap in the middle of one — so the
+		// run is cut here and the boundary becomes one it can see.
+		//
+		// The value read is the box's own, and that is the right one: both
+		// characters are in this box, so the innermost element containing them
+		// both is this box. Where the two are in different boxes the cut is not
+		// needed and the ancestor is found by the pass instead.
+		if !p.Tab && !p.Space {
+			if parts := splitAtAutospace(p.Text, autospace); len(parts) > 1 {
+				runs = cutRunsAt(runs, parts)
+			}
+		}
 		for ri, run := range runs {
 			para, start, end := frame.Bidi.Add(run.Text)
 			item := l.textItem(textItemArgs{
@@ -993,4 +1018,39 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		item.Width = l.br.MeasureSpaced(a.run.Face, a.run.Text, a.size, a.spacing)
 	}
 	return item
+}
+
+// cutRunsAt re-cuts a piece's face runs so that every boundary in parts is also
+// a boundary between two runs.
+//
+// The two cuts are independent — one follows the faces the text needs, the other
+// follows §8.1's character classes — and the result is the finer of the two. It
+// is written as a merge rather than as a second pass over the string because a
+// run already carries which face set it, and that has to travel with each half.
+func cutRunsAt(runs []faceRun, parts []string) []faceRun {
+	// Where each part begins, as an offset into the piece.
+	cuts := make(map[int]bool, len(parts))
+	at := 0
+	for _, part := range parts {
+		at += len(part)
+		cuts[at] = true
+	}
+	out := make([]faceRun, 0, len(runs)+len(parts))
+	at = 0
+	for _, run := range runs {
+		start := 0
+		for i := 1; i < len(run.Text); i++ {
+			if cuts[at+i] {
+				out = append(out, faceRun{
+					Text: run.Text[start:i], Face: run.Face, substituted: run.substituted,
+				})
+				start = i
+			}
+		}
+		out = append(out, faceRun{
+			Text: run.Text[start:], Face: run.Face, substituted: run.substituted,
+		})
+		at += len(run.Text)
+	}
+	return out
 }

@@ -70,6 +70,8 @@ var (
 
 var (
 	hyphensOf          = paragraph.HyphensOf
+	autospaceOf        = paragraph.AutospaceOf
+	splitAtAutospace   = paragraph.SplitAtAutospace
 	mayNotBeginLine    = paragraph.MayNotBeginLine
 	splitAtBreaks      = paragraph.SplitAtBreaks
 	tabAdvance         = paragraph.TabAdvance

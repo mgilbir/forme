@@ -290,6 +290,33 @@ func (l *layouter) reportHyphens(b *Box, value string) {
 	})
 }
 
+// reportAutospace names the part of text-autospace this engine does not do.
+//
+// §8.1's grammar has a third class of boundary — "punctuation", which asks for
+// spacing around full-width punctuation — and a second half that says what to do
+// where the author already wrote a space: "insert" adds spacing where there is
+// none and "replace" exchanges the space for it. The two ideograph classes and
+// "insert" are implemented; the rest is read, dropped and named.
+//
+// Once per value per document, on the model of reportWordBreak.
+func (l *layouter) reportAutospace(b *Box, value string) {
+	if l.reportedAutospace == nil {
+		l.reportedAutospace = map[string]bool{}
+	}
+	if l.reportedAutospace[value] {
+		return
+	}
+	l.reportedAutospace[value] = true
+	l.rec.ReportDetail(Finding{
+		Rule:     RuleUnsupportedValue,
+		Property: "text-autospace",
+		Message: quoteValue(value) + " in text-autospace was not applied; the " +
+			"spacing between an ideograph and a letter or a number is inserted " +
+			"and the rest of the property is not",
+		Path: PathOf(b.Element),
+	})
+}
+
 // hyphenCharacter is what a broken word ends with, which the document may say.
 //
 // CSS Text §6.3's hyphenate-character is "auto | <string>". The keyword leaves
