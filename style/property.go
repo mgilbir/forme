@@ -212,6 +212,13 @@ var properties = map[string]property{
 	// hyphenating a word that contains no soft hyphen needs a dictionary for
 	// the document's language.
 	"hyphens": {true, "manual"},
+	// The two kerning properties inherit, and both are decided in layout rather
+	// than here, because whether either asks for anything depends on the face
+	// that will set the text — which the cascade has not chosen yet. A face with
+	// no kerning in it cannot have its kerning turned off. See
+	// layout/textchecks.go.
+	"font-kerning":          {true, "auto"},
+	"font-feature-settings": {true, "normal"},
 	// text-autospace inherits, which is what lets a document turn it off once
 	// on the body. Its initial value is "normal", and "normal" asks for the
 	// spacing — a page of Japanese with Latin words in it is set wrong without

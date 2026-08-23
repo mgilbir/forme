@@ -199,27 +199,27 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 	}
 	l := &layouter{
 		rec: rec, avail: avail,
-		lengths:             map[lengthKey]style.Length{},
-		fonts:               map[fontKey]resolvedFont{},
-		textFaces:           map[*Box]*shape.Face{},
-		reportedScripts:     map[string]bool{},
-		reportedGlyphs:      map[string]bool{},
-		reportedOverflow:    map[string]bool{},
-		decorations:         map[*Box][]textDecoration{},
-		backgrounds:         map[*Box][]backgroundLayer{},
-		reportedBackgrounds: map[string]bool{},
-		inlineDraws:         map[*Box]bool{},
-		inlineChains:        map[*Box][]*Box{},
-		inlineOffsets:       map[*Box]Point{},
-		inlineAligns:        map[*Box]vAlignState{},
-		intrinsic:           map[*Box]intrinsicWidths{},
-		grids:               map[*Box]*tableGrid{},
-		tableDemands:        map[*Box][]tableColumnDemand{},
-		collapsed:           map[*Box]*collapsedGrid{},
-		positioned:          map[*Box]*Fragment{},
-		fontSet:             set,
-		rootFontSize:        root.FontSize,
-		root:                root,
+		lengths:          map[lengthKey]style.Length{},
+		fonts:            map[fontKey]resolvedFont{},
+		textFaces:        map[*Box]*shape.Face{},
+		reportedScripts:  map[string]bool{},
+		reportedGlyphs:   map[string]bool{},
+		reportedOverflow: map[string]bool{},
+		decorations:      map[*Box][]textDecoration{},
+		backgrounds:      map[*Box][]backgroundLayer{},
+		reportedOnce:     map[string]bool{},
+		inlineDraws:      map[*Box]bool{},
+		inlineChains:     map[*Box][]*Box{},
+		inlineOffsets:    map[*Box]Point{},
+		inlineAligns:     map[*Box]vAlignState{},
+		intrinsic:        map[*Box]intrinsicWidths{},
+		grids:            map[*Box]*tableGrid{},
+		tableDemands:     map[*Box][]tableColumnDemand{},
+		collapsed:        map[*Box]*collapsedGrid{},
+		positioned:       map[*Box]*Fragment{},
+		fontSet:          set,
+		rootFontSize:     root.FontSize,
+		root:             root,
 	}
 	// The breaker reports through the layouter, so it is made once the layouter
 	// exists rather than in the literal above.
@@ -413,9 +413,11 @@ type layouter struct {
 	// which is one tokenizer run per property per box and is asked for twice
 	// when a box's background is propagated to the canvas.
 	backgrounds map[*Box][]backgroundLayer
-	// reportedBackgrounds suppresses repeating a complaint about a background
-	// value, which is about a stylesheet rule rather than about a box.
-	reportedBackgrounds map[string]bool
+	// reportedOnce suppresses repeating a finding about a *value* — a
+	// stylesheet rule rather than a box — so a gradient on four hundred
+	// elements is one thing to be told. Keyed by whatever tells two of them
+	// apart. See reportOnce.
+	reportedOnce map[string]bool
 	// inlineDraws memoizes whether an inline box has a background or a border to
 	// paint, and inlineChains the chain of such boxes above another box. Both are
 	// asked once per item per line, which is the hottest loop in the engine, and

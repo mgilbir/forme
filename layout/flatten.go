@@ -634,6 +634,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	// autospace.go — so nothing here reads the value. What is read here is
 	// whether the document asked for a part of it this engine does not do, which
 	// is a question about the box and belongs where the other three are asked.
+	l.reportKerning(b, face)
 	autospace, unhandledAutospace := autospaceOf(b.Style["text-autospace"])
 	if unhandledAutospace != "" {
 		l.reportAutospace(b, unhandledAutospace)

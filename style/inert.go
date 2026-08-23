@@ -100,8 +100,6 @@ var inertValues = map[string]inertValue{
 	// CSS Fonts 4 §6.4 and §6.5. Shaping applies the face's own kerning and its
 	// default features, which is what "auto" and "normal" ask for.
 	// TestKerningIsApplied in the shape package is what holds the first.
-	"font-kerning":            {produced: "auto", because: "the face's kerning is applied"},
-	"font-feature-settings":   {produced: "normal", because: "the face's default features are applied"},
 	"font-variation-settings": {produced: "normal", because: "no variation is applied beyond the instance"},
 
 	// CSS Fragmentation 3 §3.1. Nothing constrains where a break may fall.

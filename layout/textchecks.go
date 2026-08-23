@@ -3,6 +3,7 @@ package layout
 import (
 	"strings"
 
+	"github.com/mgilbir/forme/html"
 	"github.com/mgilbir/forme/paragraph"
 
 	"github.com/mgilbir/forme/css"
@@ -290,6 +291,83 @@ func (l *layouter) reportHyphens(b *Box, value string) {
 	})
 }
 
+// reportKerning names a request to turn kerning off, where there is kerning to
+// turn off.
+//
+// This engine applies a face's kerning and offers no way to decline it, so
+// "font-kerning: none" and "font-feature-settings: \"kern\" off" both ask for
+// something it cannot do — and both ask for *nothing at all* when the face has
+// no kerning in it. The fourteen standard PDF faces are that case: their metrics
+// carry no kern pairs, so a document set in one of them and asking for kerning
+// to be turned off gets exactly the page it asked for.
+//
+// That is not a corner of the suite. Five of its reftests write both
+// declarations together — the belt-and-braces an author uses to make a layout
+// test robust across UAs — over text in the default serif face, and every one of
+// them was held out of the clean count by a finding about a page that is right.
+//
+// It is the same narrowing inert.go makes for a declaration at its initial
+// value, one step further along: the question is not what the property is but
+// what it is being asked to do, and here the answer depends on the font.
+//
+// Where the face *does* kern, both are reported as before: the page really does
+// differ from the one the author asked for.
+//
+// font-feature-settings is judged only by the tags it names. "kern" is the one
+// this can answer, because a face's kerning is a thing the shaping layer knows
+// about; any other tag is a feature this engine neither applies nor can ask the
+// face for, so a value naming one is reported whatever the face has in it.
+func (l *layouter) reportKerning(b *Box, face *shape.Face) {
+	kerns := face != nil && face.HasKerning()
+	if value := strings.ToLower(strings.TrimSpace(b.Style["font-kerning"])); value == "none" && kerns {
+		l.reportOnce("font-kerning", Finding{
+			Rule:     RuleUnsupportedValue,
+			Property: "font-kerning",
+			Message: "font-kerning: none was not applied; this engine sets a face's " +
+				"kerning and offers no way to decline it, so the pairs this face " +
+				"kerns are still kerned",
+			Path: PathOf(boxElement(b)),
+		})
+	}
+	if value := b.Style["font-feature-settings"]; !inertFontFeatures(value, kerns) {
+		l.reportOnce("font-feature-settings", Finding{
+			Rule:     RuleUnsupportedValue,
+			Property: "font-feature-settings",
+			Message: "font-feature-settings " + quoteValue(value) + " was not applied; " +
+				"this engine applies the features a face declares for the script and " +
+				"takes no direction about which",
+			Path: PathOf(boxElement(b)),
+		})
+	}
+}
+
+// inertFontFeatures reports whether a font-feature-settings value asks for the
+// page that is already there.
+//
+// "normal" asks for nothing by definition. Otherwise the value is a list of tags
+// with a setting each, and it is inert when every tag in it is one the face
+// cannot act on — which this can answer for "kern" and for nothing else.
+func inertFontFeatures(value string, kerns bool) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" || value == "normal" {
+		return true
+	}
+	for _, part := range strings.Split(value, ",") {
+		tag := strings.TrimSpace(part)
+		// The tag is a quoted string and the setting follows it. Only the tag
+		// is read: "kern" is inert on a face with no kerning whether it was
+		// asked for or turned off, because neither can change the page.
+		tag = strings.TrimLeft(tag, "\"'")
+		if i := strings.IndexAny(tag, "\"'"); i >= 0 {
+			tag = tag[:i]
+		}
+		if tag != "kern" || kerns {
+			return false
+		}
+	}
+	return true
+}
+
 // reportAutospace names the part of text-autospace this engine does not do.
 //
 // §8.1's grammar has a third class of boundary — "punctuation", which asks for
@@ -424,6 +502,24 @@ func (l *layouter) reportHangingPunctuation(b *Box, value string) {
 	})
 }
 
+// boxElement is the element a box belongs to: its own, or the nearest one above
+// it.
+//
+// A text box has none. This engine gives the box holding a text node no element
+// of its own, so a finding raised about one and pointed at b.Element points at
+// nothing — and every such finding in a document then has the same empty path,
+// which is enough for the recorder to take them all for one. That is a finding
+// that cannot say where it is about, and it looks exactly like a finding that is
+// correctly raised once.
+func boxElement(b *Box) *html.Node {
+	for cur := b; cur != nil; cur = cur.Parent {
+		if cur.Element != nil {
+			return cur.Element
+		}
+	}
+	return nil
+}
+
 // boxLanguage is the language in force at a box: the nearest lang attribute at
 // or above the nearest element.
 //
@@ -432,10 +528,5 @@ func (l *layouter) reportHangingPunctuation(b *Box, value string) {
 // languageAt about one asks about nothing; the answer is on the element that
 // holds the text, which is the first box above it that has one.
 func boxLanguage(b *Box) paragraph.Language {
-	for cur := b; cur != nil; cur = cur.Parent {
-		if cur.Element != nil {
-			return languageAt(cur.Element)
-		}
-	}
-	return ""
+	return languageAt(boxElement(b))
 }

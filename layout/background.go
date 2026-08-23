@@ -848,11 +848,15 @@ func (l *layouter) backgroundImage(b *Box, raw string) *ReplacedContent {
 
 // reportOnce raises a finding the first time a key is seen, so a stylesheet rule
 // that puts one gradient on four hundred elements is one thing to be told.
+//
+// It began as a background's own and is not one: every finding about a *value*
+// rather than about a box wants it, and the key is whatever tells two of them
+// apart. See reportKerning, which raises one per property.
 func (l *layouter) reportOnce(key string, f Finding) {
-	if l.reportedBackgrounds[key] {
+	if l.reportedOnce[key] {
 		return
 	}
-	l.reportedBackgrounds[key] = true
+	l.reportedOnce[key] = true
 	l.rec.ReportDetail(f)
 }
 

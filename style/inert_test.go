@@ -52,7 +52,6 @@ func TestADeclarationAtItsInitialValueIsNotReported(t *testing.T) {
 		"resize: none",
 		"resize: NONE",
 		"resize:none",
-		"font-kerning: auto",
 		"page-break-inside: auto",
 		"column-gap: normal",
 		"column-fill: balance",
@@ -104,6 +103,12 @@ func TestTheInitialKeywordIsResolvedRatherThanAssumedInert(t *testing.T) {
 	}
 }
 
+// The two kerning properties were in both lists and are in neither now. They are
+// in the registry, so the cascade says nothing about either — and the finding
+// they had is raised by layout instead, which is the only place that can decide
+// it: "font-kerning: none" asks for a face's kerning to be turned off, and a
+// face with no kerning in it has none to turn off. See layout/textchecks.go.
+
 // TestADeclarationThatAsksForSomethingIsStillReported is the containment
 // argument, and the half this change most needs to keep.
 //
@@ -114,7 +119,6 @@ func TestADeclarationThatAsksForSomethingIsStillReported(t *testing.T) {
 	for _, decl := range []string{
 		"resize: both",
 		"resize: horizontal",
-		"font-kerning: none",
 		"page-break-inside: avoid",
 		"column-fill: auto", // the initial value is "balance"
 		"column-gap: 0",     // the initial value is "normal"
