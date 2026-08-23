@@ -679,7 +679,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	noWrap := !ws.Wrap
 	boundaryNoWrap := noWrap
 	if prev, ok := in.AfterBox.(*Box); ok {
-		if anc := nearestCommonAncestor(prev, b); anc != nil {
+		if anc := commonAncestor(prev, b); anc != nil {
 			boundaryNoWrap = !whiteSpaceFor(anc.Style).Wrap
 		}
 	}
@@ -993,30 +993,4 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		item.Width = l.br.MeasureSpaced(a.run.Face, a.run.Text, a.size, a.spacing)
 	}
 	return item
-}
-
-// nearestCommonAncestor is the lowest box both of two boxes are inside.
-//
-// It is what CSS Text §5.1 asks for at a soft wrap opportunity between two
-// characters in different boxes: the white-space that governs the boundary is
-// the one on the element containing both of them, which is neither character's
-// own and may be neither box's.
-//
-// Nil when the two are in different trees, which is not a document this engine
-// produces and is answered rather than assumed: the caller keeps the box's own
-// value, which is what it did before this rule existed.
-func nearestCommonAncestor(a, b *Box) *Box {
-	if a == nil || b == nil {
-		return nil
-	}
-	seen := map[*Box]bool{}
-	for p := a; p != nil; p = p.Parent {
-		seen[p] = true
-	}
-	for p := b; p != nil; p = p.Parent {
-		if seen[p] {
-			return p
-		}
-	}
-	return nil
 }

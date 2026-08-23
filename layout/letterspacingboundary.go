@@ -107,6 +107,17 @@ func (l *layouter) boundarySpacing(a, b inlineItem) (style.Unit, bool) {
 }
 
 // commonAncestor is the innermost box containing both, or nil.
+//
+// It answers two questions that turn out to be the same one. §8.2's is whose
+// letter-spacing applies between two characters in different elements; §5.1's is
+// whose white-space governs a soft wrap opportunity between them. Both are "the
+// innermost element containing both of them", and the walk that finds it belongs
+// in one place — see flatten.go, which asked the second question with a second
+// copy of this until they were put together.
+//
+// Nil where the two are in different trees, which a well-formed document does
+// not produce and which is answered rather than assumed: each caller keeps the
+// answer it had before it asked.
 func commonAncestor(a, b *Box) *Box {
 	if a == nil || b == nil {
 		return nil

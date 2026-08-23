@@ -181,6 +181,9 @@ func TestAPlainDocumentIsUnchanged(t *testing.T) {
 // TestTheCommonAncestorOfTwoBoxes, asked directly, because the walk has a case
 // no document reaches: two boxes in different trees have none, and the answer
 // has to be "none" rather than whichever root the loop stopped at.
+//
+// The walk is letterspacingboundary.go's, which was already answering the same
+// question for §8.2 when this rule needed it for §5.1.
 func TestTheCommonAncestorOfTwoBoxes(t *testing.T) {
 	built := Build(Input{HTML: `<div id="a"><span id="b">x</span><span id="c">y</span></div>`})
 	if built.Root == nil {
@@ -189,15 +192,15 @@ func TestTheCommonAncestorOfTwoBoxes(t *testing.T) {
 	a := findBox(t, built.Root, "a")
 	b := findBox(t, built.Root, "b")
 	c := findBox(t, built.Root, "c")
-	if got := nearestCommonAncestor(b, c); got != a {
+	if got := commonAncestor(b, c); got != a {
 		t.Errorf("the common ancestor of two sibling spans is %v, want the div", got)
 	}
 	// A box is its own ancestor, which is what makes an opportunity inside one
 	// box answer with that box.
-	if got := nearestCommonAncestor(b, b); got != b {
+	if got := commonAncestor(b, b); got != b {
 		t.Errorf("a box's common ancestor with itself is %v, want itself", got)
 	}
-	if got := nearestCommonAncestor(a, b); got != a {
+	if got := commonAncestor(a, b); got != a {
 		t.Errorf("the common ancestor of a box and its child is %v, want the parent", got)
 	}
 
@@ -205,10 +208,10 @@ func TestTheCommonAncestorOfTwoBoxes(t *testing.T) {
 	if other.Root == nil {
 		t.Fatal("no boxes in the second document")
 	}
-	if got := nearestCommonAncestor(b, findBox(t, other.Root, "a")); got != nil {
+	if got := commonAncestor(b, findBox(t, other.Root, "a")); got != nil {
 		t.Errorf("two boxes in different trees have a common ancestor %v", got)
 	}
-	if got := nearestCommonAncestor(nil, b); got != nil {
+	if got := commonAncestor(nil, b); got != nil {
 		t.Errorf("a nil box has a common ancestor %v", got)
 	}
 }
