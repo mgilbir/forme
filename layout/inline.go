@@ -682,7 +682,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					line.Runs = append(line.Runs, TextRun{
 						Text: item.Text, Face: item.Face, Size: item.Size,
 						X: x, Width: widths[k], Box: heldBox(item.Box), Offset: item.Offset,
-						Decorations: decorations, LetterSpacing: item.Spacing.Letter,
+						Decorations: decorations, LetterSpacing: trackingOf(item),
 						PreContext: item.PreContext, PostContext: item.PostContext,
 						RTL:   item.Level&1 == 1,
 						Shift: shift,

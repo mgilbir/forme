@@ -45,6 +45,16 @@ func (l *layouter) linkLetterSpacing(items []inlineItem) []inlineItem {
 		if !isSpacedRun(items[i]) {
 			continue
 		}
+		if cursiveTrackingSuppresses(items[i]) {
+			// §8.2's cursive tracking: this run took no spacing after any of
+			// its characters, so there is none after its last one to exchange
+			// for the boundary's. Reaching the arithmetic below would take a
+			// spacing off a width that never had one — and it is not the same
+			// question as "is the declared spacing zero", which is a run that
+			// still takes the boundary's value. letter-spacing-203 is that
+			// case, twice over.
+			continue
+		}
 		j, ok := nextSpacedRun(items, i)
 		if !ok {
 			// Nothing follows it in this block, so the spacing after its last
@@ -150,4 +160,31 @@ func trailingSpacing(runs []inlineItem) style.Unit {
 		return runs[i].Spacing.Letter
 	}
 	return 0
+}
+
+// cursiveTrackingSuppresses reports whether §8.2 takes the letter-spacing off a
+// run entirely.
+//
+// A run of a cursive script takes none after any of its characters, the last one
+// included — see paragraph.SpacedUnits — and flatten.go cuts a run where the
+// answer changes, so a run is one or the other and never both.
+//
+// It is asked of a *run of text*. An item with no text is not one: an inline
+// box's edge is not a character, and an atomic inline is a character unit
+// letter-spacing goes after like any other. Neither is what this rule is about,
+// and answering for them would take a spacing off a run that has one.
+func cursiveTrackingSuppresses(item inlineItem) bool {
+	return item.Text != "" && spacedUnits(item.Text) == 0
+}
+
+// trackingOf is the letter-spacing a run is drawn with and measured to: the
+// declared value, or nothing where §8.2 forbids it.
+//
+// A display list carries one number per run — an advance added after every
+// glyph — so the run's number has to be the answer rather than the declaration.
+func trackingOf(item inlineItem) style.Unit {
+	if cursiveTrackingSuppresses(item) {
+		return 0
+	}
+	return item.Spacing.Letter
 }

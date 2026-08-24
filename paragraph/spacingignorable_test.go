@@ -65,9 +65,15 @@ func TestTheSpacedUnitsAreTheCharactersThatAreDrawn(t *testing.T) {
 // nobody would think to look for.
 func TestSpacingIsStillCountedForOrdinaryText(t *testing.T) {
 	for _, text := range []string{
-		"hello", "ΚΑΛΗΜΕΡΑ", "日本語", "مرحبا", "a1!", " ", "\t\n",
+		"hello", "ΚΑΛΗΜΕΡΑ", "日本語", "a1!", " ", "\t\n",
 		// A letter and a combining acute: two units, and both are drawn.
 		"e\u0301",
+		// Arabic used to be here and is not, and the reason is not this set.
+		// §8.2's cursive tracking takes the spacing off a cursive script
+		// whatever is drawn for it — see SpacedUnits and
+		// paragraph/cursivetracking_test.go. Leaving it here would have made
+		// this test the place a future change to that rule failed, which is
+		// three files away from the rule.
 	} {
 		if got, want := SpacedUnits(text), len([]rune(text)); got != want {
 			t.Errorf("%q: %d units, want %d — every character of it is drawn",

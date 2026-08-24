@@ -1,6 +1,8 @@
 package paragraph
 
 import (
+	"unicode"
+
 	"unicode/utf8"
 
 	"github.com/mgilbir/forme/shape"
@@ -58,15 +60,65 @@ func SpacingAdvance(text string, sp TextSpacing) style.Unit {
 // and this counts runes, so a base and its combining mark are still spaced
 // apart. That is a separate question with a separate answer, and it is not
 // mixed in here.
+//
+// # Cursive tracking
+//
+// §8.2 again: "spacing must not be inserted between the characters of a cursive
+// script, as it would break the cursive connection". So a character of one is
+// not a unit spacing goes after — not because it joins to what follows, which
+// depends on the pair, but because it is *in* such a script, which does not.
+// The suite states the rule that way and not the other:
+// letter-spacing-cursive-001 asks for Arabic set with and without a
+// letter-spacing to render identically, and "مرحباً" has an unjoined pair in the
+// middle of it.
+//
+// It applies to the character rather than to its neighbours, so an Arabic word
+// followed by a space gets no spacing after its last letter and one after the
+// space. letter-spacing-cursive-002 is exactly that arithmetic — two Arabic
+// words, "letter-spacing: 1em", and a reference that inserts one em and not two.
 func SpacedUnits(text string) int {
 	n := 0
-	for _, r := range text {
-		if IsDefaultIgnorable(r) {
+	scanCursiveTracking(text, func(_ int, suppressed bool) {
+		if !suppressed {
+			n++
+		}
+	})
+	return n
+}
+
+// IsCursiveScript reports whether a character belongs to a script whose letters
+// join. See shape.InCursiveScript for why it is the script and not the pair.
+func IsCursiveScript(r rune) bool { return shape.InCursiveScript(r) }
+
+// scanCursiveTracking walks the characters letter-spacing could go after and
+// says of each whether §8.2 forbids it, so that the count and the cut cannot
+// answer differently.
+//
+// A combining mark is the case neither of them could answer alone: Unicode's
+// joining table names the letters of the cursive scripts and not the marks
+// written on them, so a fathatan reads as an ordinary character and collects a
+// spacing of its own — which is what left "مرحباً" ten pixels wider than the same
+// word without a letter-spacing, in letter-spacing-cursive-001. So a mark takes
+// the answer of the base it sits on.
+//
+// It takes it *only* from a cursive base, which keeps the change to the script
+// this rule is about. A mark on a Latin letter still counts as a unit of its
+// own, as it always has — that is the grapheme-cluster question SpacedUnits
+// records as a separate one, and it is still separate.
+func scanCursiveTracking(text string, fn func(i int, suppressed bool)) {
+	cursive := false
+	for i, r := range text {
+		switch {
+		case IsDefaultIgnorable(r):
+			// Nothing is drawn for it and nothing goes after it.
+			continue
+		case unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r):
+			fn(i, cursive)
 			continue
 		}
-		n++
+		cursive = IsCursiveScript(r)
+		fn(i, cursive)
 	}
-	return n
 }
 
 // IsDefaultIgnorable reports whether nothing is drawn for a character and it
@@ -129,4 +181,36 @@ func countWordSeparators(text string) int {
 		}
 	}
 	return n
+}
+
+// SplitAtCursiveTracking cuts text where §8.2's cursive tracking begins or ends,
+// so that every run either takes letter-spacing after each of its characters or
+// takes none.
+//
+// It exists for the backend and not for the rule. A display list carries one
+// letter-spacing per run — an advance added after every glyph — so a run holding
+// an Arabic letter beside a Latin one cannot say that only one of them is
+// followed by a gap. Cutting at the change makes each run uniform, and the
+// question the drawing has to answer becomes the question this file answers.
+//
+// It is the same argument, and the same shape, as the cut §8.1's ideograph
+// spacing needs. See SplitAtAutospace.
+//
+// Nothing is returned where there is nothing to cut, which is every run of every
+// document that does not mix a cursive script with another — so a caller pays a
+// scan and no allocation.
+func SplitAtCursiveTracking(text string) []string {
+	var out []string
+	start, prev, havePrev := 0, false, false
+	scanCursiveTracking(text, func(i int, suppressed bool) {
+		if havePrev && suppressed != prev {
+			out = append(out, text[start:i])
+			start = i
+		}
+		prev, havePrev = suppressed, true
+	})
+	if out == nil {
+		return nil
+	}
+	return append(out, text[start:])
 }

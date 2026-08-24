@@ -562,7 +562,7 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 				if item.TrimAtEnd || item.Hangs {
 					runEdge = runEdge.Add(w)
 				} else {
-					runEdge, runTail = 0, item.Spacing.Letter
+					runEdge, runTail = 0, trackingOf(item)
 				}
 			} else {
 				// The run ends at the space — but on which side of it depends on
@@ -589,7 +589,7 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 			if item.TrimAtEnd || item.HangsHard {
 				edge = edge.Add(w)
 			} else {
-				edge, lineTail = 0, item.Spacing.Letter
+				edge, lineTail = 0, trackingOf(item)
 			}
 
 		case item.Anywhere && !item.NoWrap:
@@ -611,7 +611,7 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 			split.rest.min = style.Max(split.rest.min, got)
 			line = line.Add(item.Width)
 			edge, runEdge = 0, 0
-			lineTail, runTail = item.Spacing.Letter, item.Spacing.Letter
+			lineTail, runTail = trackingOf(item), trackingOf(item)
 
 		default:
 			if item.BreakBefore && !item.NoWrap {
@@ -623,7 +623,7 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 			if !item.Inset {
 				// An inline box's own edge is not a character, so it neither
 				// carries spacing nor clears the spacing of the text before it.
-				lineTail, runTail = item.Spacing.Letter, item.Spacing.Letter
+				lineTail, runTail = trackingOf(item), trackingOf(item)
 			}
 		}
 	}

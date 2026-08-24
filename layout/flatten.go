@@ -890,6 +890,18 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			if parts := splitAtAutospace(p.Text, autospace); len(parts) > 1 {
 				runs = cutRunsAt(runs, parts)
 			}
+			// And again where §8.2's cursive tracking begins or ends, for the
+			// same reason: a run carries one letter-spacing, so a run holding
+			// an Arabic letter beside a Latin one cannot say that only one of
+			// them is followed by a gap. See SplitAtCursiveTracking.
+			//
+			// Only where there is a spacing to place. A document that declares
+			// none takes the scan and no cut, which is nearly all of them.
+			if spacing.Letter != 0 {
+				if parts := splitAtCursiveTracking(p.Text); len(parts) > 1 {
+					runs = cutRunsAt(runs, parts)
+				}
+			}
 		}
 		for ri, run := range runs {
 			para, start, end := frame.Bidi.Add(run.Text)
