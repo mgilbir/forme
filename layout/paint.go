@@ -443,11 +443,31 @@ func (p *painter) stackingContext(f *Fragment) {
 // painted as a unit and its positioned descendants have already been hoisted
 // into the enclosing context by gather.
 func (p *painter) stackLevel(s stackLevel) {
-	if s.frag.Box.ZAuto {
+	if !sealsItsDescendants(s.frag.Box) {
 		p.unit(s.frag)
 		return
 	}
 	p.stackingContext(s.frag)
+}
+
+// sealsItsDescendants reports whether a positioned box is a stacking context of
+// its own, so that everything inside it is painted within it however extreme a
+// z-index a descendant asks for.
+//
+// §9.9.1: a z-index that is not auto makes one. And CSS 2.2 added the second
+// half, in the changes appendix the suite links from fixed-pos-stacking-001:
+//
+//	If the box has 'position: fixed' or if it is the root, it also establishes
+//	a new stacking context.
+//
+// Without it a "z-index: -1" inside a fixed box was hoisted into the context
+// around it and painted *under* the page's background — which is exactly what
+// that test draws, in red, to be covered.
+//
+// The root is the other half of the sentence and needs nothing here: the paint
+// begins by making a stacking context of it, so it never reaches this.
+func sealsItsDescendants(b *Box) bool {
+	return !b.ZAuto || b.Position == PositionFixed
 }
 
 // unit paints a fragment and its non-positioned content as one indivisible
@@ -511,7 +531,7 @@ func (p *painter) gather(f *Fragment, lv *layers, root, collect bool) {
 			lv.positioned = append(lv.positioned, stackLevel{
 				frag: c, z: levelOf(c), order: c.Box.Order,
 			})
-			if c.Box.ZAuto {
+			if !sealsItsDescendants(c.Box) {
 				// Not a stacking context, so the positioned boxes inside it
 				// belong to this one. Without this hoist a "z-index: 5" inside a
 				// plain "position: relative" wrapper would be trapped under
@@ -573,7 +593,7 @@ func (p *painter) hoist(f *Fragment, lv *layers) {
 			lv.positioned = append(lv.positioned, stackLevel{
 				frag: c, z: levelOf(c), order: c.Box.Order,
 			})
-			if c.Box.ZAuto {
+			if !sealsItsDescendants(c.Box) {
 				p.hoist(c, lv)
 			}
 			continue
