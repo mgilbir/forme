@@ -5,6 +5,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/mgilbir/forme/paragraph"
+	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -940,7 +941,8 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			para, start, end := frame.Bidi.Add(run.Text)
 			item := l.textItem(textItemArgs{
 				b: b, p: p, run: run, size: size, frame: frame, ws: ws,
-				above: above, below: below, offset: offset, spacing: spacing,
+				above: above, below: below, boxFace: face,
+				offset: offset, spacing: spacing,
 				decorations: decorations, ow: ow, state: state,
 				tabStop: tabStop, tabFloor: tabFloor,
 				para: para, bidiStart: start, bidiEnd: end,
@@ -1024,7 +1026,10 @@ func endsIdeographic(text string) bool {
 // list is long and every one of them is read, which is the shape that makes a
 // positional call unreadable.
 type textItemArgs struct {
-	b           *Box
+	b *Box
+	// boxFace is the face the box itself declared, so that a run set in another
+	// can be told apart without asking again.
+	boxFace     *shape.Face
 	p           paragraph.Piece
 	run         faceRun
 	size        style.Unit
@@ -1065,10 +1070,18 @@ type textItemArgs struct {
 
 func (l *layouter) textItem(a textItemArgs) inlineItem {
 	b, p, ws := a.b, a.p, a.ws
+	// The leading the caller measured is the box's declared face's, and this run
+	// may be in another: the fallback stack finds one for text the declared face
+	// cannot set, and §10.8.1 measures against the font the run is *in*. See
+	// leadingInFace.
+	above, below := a.above, a.below
+	if a.run.Face != nil && a.run.Face != a.boxFace && usesNormalLineHeight(b) {
+		above, below = l.leadingInFace(b, a.run.Face)
+	}
 	item := inlineItem{
 		BidiPara: a.para, BidiStart: a.bidiStart, BidiEnd: a.bidiEnd,
 		Text: a.run.Text, Box: b, Face: a.run.Face, Size: a.size,
-		Leads: true, Above: a.above, Below: a.below,
+		Leads: true, Above: above, Below: below,
 		// §10.8.1's vertical-align, which a text box cannot be asked for
 		// itself: the property is not inherited, so the anonymous box holding
 		// a <span>'s words carries the initial value however the span was
