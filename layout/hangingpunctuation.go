@@ -87,9 +87,9 @@ func (l *layouter) markStopsAndCommas(items []inlineItem, hp hangingPunctuation)
 		return items
 	}
 	out := make([]inlineItem, 0, len(items)+4)
-	for _, item := range items {
+	for i, item := range items {
 		n := 0
-		if canHangAsStop(item) && hangingFor(item, hp).EndAllow {
+		if canHangAsStop(item) && hangingFor(item, hp).EndAllow && couldEndALine(items, i) {
 			n = trailingStopOrComma(item.Text)
 		}
 		switch {
@@ -249,4 +249,54 @@ func hangEndWidth(runs []inlineItem) style.Unit {
 		return 0
 	}
 	return 0
+}
+
+// couldEndALine reports whether a line could end after the last character of an
+// item, which is what makes cutting that character out of the run safe.
+//
+// Cutting is not free. The run it comes out of was one thing to the fill — a
+// unit that fits or does not — and two items are two units, so a run that does
+// not fit whole can now be placed in part. That is exactly right where the line
+// may end between them and exactly wrong where it may not: a comma inside a
+// "white-space: nowrap" span, with more of the span after it, was hung and the
+// line ended inside the span, which is the one thing the span was written to
+// prevent. The suite's hanging-punctuation-allow-end asserts it by name.
+//
+// So the cut is made only where the boundary after the character is one a line
+// may end at, and that is the same question §5.1 answers for a soft wrap
+// opportunity: the innermost element containing the characters on both sides of
+// it decides. A box that wraps says yes to every boundary inside it; one that
+// does not says yes only where its own content has run out.
+func couldEndALine(items []inlineItem, i int) bool {
+	box := heldBox(items[i].Box)
+	if box == nil || whiteSpaceFor(box.Style).Wrap {
+		return true
+	}
+	for j := i + 1; j < len(items); j++ {
+		switch {
+		case items[j].Abs != nil || items[j].Float != nil:
+			// Out of flow: drawn somewhere else entirely, so it stands between
+			// nothing and the boundary is with whatever comes after it.
+			continue
+		case items[j].Forced:
+			// A line ends here whatever else is true.
+			return true
+		}
+		next := heldBox(items[j].Box)
+		if next == nil {
+			return true
+		}
+		// The *ancestor's* answer and not the next box's, which is §5.1's rule
+		// for the boundary between two characters in different boxes and is what
+		// the rest of this engine asks at one. The two differ only where a
+		// wrapping element holds two non-wrapping ones, and no fixture tells
+		// them apart on the page: the hang is given back by anything that takes
+		// room, so the second box's own value never gets to decide anything the
+		// restore does not decide again. Recorded here rather than left as an
+		// implied claim.
+		anc := commonAncestor(box, next)
+		return anc == nil || whiteSpaceFor(anc.Style).Wrap
+	}
+	// Nothing follows it in the block, so it is at the end of the last line.
+	return true
 }

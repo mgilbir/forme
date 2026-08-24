@@ -382,3 +382,52 @@ func courierChar(t *testing.T) style.Unit {
 	}
 	return u
 }
+
+// TestACommaInsideANowrapSpanDoesNotHang.
+//
+// A cut is not free: the run the character comes out of was one thing to the
+// fill — a unit that fits or does not — and two items are two units, so a run
+// that does not fit whole can be placed in part. That is right where the line
+// may end between them and wrong where it may not.
+//
+// "white-space: nowrap" on a span is the case where it may not. With the comma
+// cut out, the line ended inside the span and left the box after it stranded on
+// a line of its own, which is the one thing the span was written to prevent. The
+// suite's hanging-punctuation-allow-end asserts it by name: punctuation does not
+// hang "when a nowrap span prevents breaking before the punctuation".
+func TestACommaInsideANowrapSpanDoesNotHang(t *testing.T) {
+	const inner = `12 <span class="nw">34,<span class="ib"></span></span> 1234`
+	const rules = `.nw { white-space: nowrap } ` +
+		`.ib { display: inline-block; width: 19.1875px; height: 1px }`
+	got := allowEndLines(t, 5, inner, "", rules)
+	want := allowEndLines(t, 5, inner, "hanging-punctuation: none", rules)
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("with allow-end %q and without it %q; the comma has more of the "+
+			"nowrap span after it, so no line can end there and nothing hangs",
+			got, want)
+	}
+}
+
+// TestACommaAtTheEndOfANowrapSpanStillHangs is the other side of that rule, and
+// the reason it is asked about the *boundary* rather than about the box.
+//
+// A span that does not wrap says nothing about the edge after its own content.
+// The comma below is the last thing in the span, and the space after it is the
+// div's — so a line may end there, the character may hang, and it does.
+func TestACommaAtTheEndOfANowrapSpanStillHangs(t *testing.T) {
+	const inner = `ab <span class="nw">c,</span>`
+	const rules = `.nw { white-space: nowrap }`
+	// Five characters in a box of four. With the comma hanging the line holds
+	// them all; without, "c," goes below as a unit the span will not divide.
+	got := allowEndLines(t, 4, inner, "", rules)
+	if len(got) != 1 || got[0] != "ab c," {
+		t.Errorf("the content set %q, want one line of %q: the comma ends the span, "+
+			"and nothing follows it for a line to be unable to end before",
+			got, "ab c,")
+	}
+	// And it is the value doing it: without allow-end the same content breaks.
+	if plain := allowEndLines(t, 4, inner, "hanging-punctuation: none", rules); len(plain) == 1 {
+		t.Errorf("the plain document set one line too; the fixture cannot tell the " +
+			"value from nothing")
+	}
+}
