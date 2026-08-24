@@ -323,7 +323,17 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			// A line break the author wrote. It is not a break *opportunity* —
 			// it ends the line wherever it falls, even mid-word and even on a
 			// line with room to spare.
-			out = append(out, inlineItem{Box: child, Forced: true})
+			// It is an inline element, so §10.8.1 puts its leading on the line
+			// it ends like any other box's — and the leading is its own
+			// line-height, which it inherited from whatever it is inside. A
+			// <br> alone in a "line-height: 200px" span made a line the height
+			// of the block's strut instead, and everything after it sat two
+			// hundred pixels too high. The preserved segment break below is the
+			// same character by another spelling and has always done this.
+			brAbove, brBelow := l.leading(child)
+			out = append(out, inlineItem{Box: child, Forced: true,
+				Leads: true, Above: brAbove, Below: brBelow,
+				Valign: frame.Valign})
 			// It ends a bidi paragraph too: CSS makes a forced break a paragraph
 			// separator, so the direction of what follows is decided afresh
 			// rather than by the first strong character of the block.

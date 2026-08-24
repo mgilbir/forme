@@ -430,7 +430,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					style.Min(right.Sub(left), lineCap(balanceCaps, lineCaps, i, len(parent.Lines))).
 						Sub(lineIndent).Sub(lineEllipsis),
 					left.Sub(lo).Add(lineIndent))
-				stack = stackLine(runs, st)
+				stack = stackLine(runs, strutOver(st, items, next, forced))
 				lh, bl = stack.Height, stack.Baseline
 
 				// A float met part-way along the line is placed *now*, before the
@@ -919,4 +919,31 @@ func (l *layouter) roomForLine(first inlineItem, origin flow, y, left, right, lo
 		left, right = origin.ctx.bandAt(origin.y.Add(y), lo, hi)
 	}
 	return y, left, right
+}
+
+// strutOver raises a line's strut to cover the forced break that ended it.
+//
+// A <br> is an inline element, and §10.8.1 puts its leading on the line it ends
+// like any other box's: a <br> alone in a "line-height: 200px" span makes a line
+// two hundred pixels tall, not the height of the block's strut. Ours made the
+// strut's, and everything after it sat two hundred pixels too high.
+//
+// It is done to the *strut* rather than by leaving the item on the line, and the
+// difference is not stylistic. The item stream is walked by everything
+// downstream — the painting, the decorations, the positioning of what is on the
+// line — and a forced break has never been in it: putting it there costs 648 of
+// the suite's clean passes. The strut is the one thing on a line that stands for
+// a box with nothing to draw, which is exactly what this is.
+func strutOver(st strut, items []inlineItem, next int, forced bool) strut {
+	if !forced || next <= 0 || next > len(items) {
+		return st
+	}
+	br := items[next-1]
+	if !br.Forced || !br.Leads {
+		return st
+	}
+	descent := style.Max(st.Height.Sub(st.Baseline), br.Below)
+	st.Baseline = style.Max(st.Baseline, br.Above)
+	st.Height = st.Baseline.Add(descent)
+	return st
 }
