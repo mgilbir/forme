@@ -119,11 +119,21 @@ func TestNoContextIsTheOldAnswer(t *testing.T) {
 	}
 }
 
-// TestContextCannotChangeAScriptThatDoesNotJoin is the containment half. The
-// context is read only where a letter takes a positional form, so text in every
-// other script must be shaped identically whatever is handed over — which is
-// what makes this inert for all but a handful of the documents there are.
-func TestContextCannotChangeAScriptThatDoesNotJoin(t *testing.T) {
+// TestContextCannotChangeWhichGlyphIsChosenInAScriptThatDoesNotJoin is the
+// containment half, and it is narrower than it used to be.
+//
+// It used to say that a script without positional forms was shaped *identically*
+// whatever context was handed over, which was true while the context decided
+// forms and nothing else. It is not true now: a pair the font kerns across the
+// boundary moves the glyph at the boundary, which is the whole of what
+// boundarykern.go adds, and "office" before a "y" really is a hair narrower in
+// Noto Sans than "office" alone.
+//
+// What must still hold is the part that was ever load-bearing — the context
+// chooses no glyph. A letter in a script that does not join is the letter the
+// font maps it to, in the same cluster, whatever stands beside it; only where
+// the pen stops may change.
+func TestContextCannotChangeWhichGlyphIsChosenInAScriptThatDoesNotJoin(t *testing.T) {
 	f, err := NotoSans()
 	if err != nil {
 		t.Fatalf("loading: %v", err)
@@ -139,11 +149,64 @@ func TestContextCannotChangeAScriptThatDoesNotJoin(t *testing.T) {
 					s, ctx.before, ctx.after, len(got), len(want))
 			}
 			for i := range got {
+				if got[i].GID != want[i].GID || got[i].Cluster != want[i].Cluster {
+					t.Errorf("%q with %q/%q: glyph %d is %d in cluster %d, and alone "+
+						"it is %d in cluster %d", s, ctx.before, ctx.after, i,
+						got[i].GID, got[i].Cluster, want[i].GID, want[i].Cluster)
+				}
+			}
+			// And every glyph but the two at the boundary is untouched, position
+			// and all: a pair is two glyphs, so nothing in the middle of a run
+			// can hear about what stands outside it.
+			for i := 1; i < len(got)-1; i++ {
 				if got[i] != want[i] {
-					t.Errorf("%q with %q/%q: glyph %d changed", s, ctx.before, ctx.after, i)
+					t.Errorf("%q with %q/%q: glyph %d moved, and it is not at either "+
+						"boundary", s, ctx.before, ctx.after, i)
 				}
 			}
 		}
+	}
+}
+
+// TestAContextTheFontStatesNoPairForChangesNothingAtAll. The other half of the
+// same containment: a boundary is a lookup, not an adjustment, so a neighbour
+// the font says nothing about leaves the run byte for byte as it was.
+func TestAContextTheFontStatesNoPairForChangesNothingAtAll(t *testing.T) {
+	f, err := NotoSans()
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+	unkerned := func(a, b string) bool {
+		whole, _ := f.ShapeGlyphs(a + b)
+		left, _ := f.ShapeGlyphs(a)
+		right, _ := f.ShapeGlyphs(b)
+		return advanceOf(whole) == advanceOf(left)+advanceOf(right)
+	}
+	tried := 0
+	for _, s := range []string{"abc", "office", "moon"} {
+		want, _ := f.ShapeGlyphs(s)
+		for _, ctx := range []struct{ before, after string }{
+			{"m", "n"}, {"", "m"}, {"n", ""},
+		} {
+			if ctx.before != "" && !unkerned(ctx.before, s) {
+				continue
+			}
+			if ctx.after != "" && !unkerned(s, ctx.after) {
+				continue
+			}
+			tried++
+			got, _ := f.ShapeGlyphsInContext(s, ctx.before, ctx.after)
+			for i := range got {
+				if got[i] != want[i] {
+					t.Errorf("%q with %q/%q: glyph %d changed, and the font kerns "+
+						"neither boundary", s, ctx.before, ctx.after, i)
+				}
+			}
+		}
+	}
+	if tried == 0 {
+		t.Skip("this face kerns every boundary tried, so there is no unkerned one " +
+			"to state the rule on")
 	}
 }
 

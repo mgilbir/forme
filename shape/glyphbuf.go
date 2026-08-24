@@ -310,6 +310,13 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	// or a ligature gets them right.
 	buf = sh.applyNamedFeatures(buf, extra)
 	sh.position(buf)
+	// The pair that spans the boundary to the next run, which the pass above
+	// cannot see because the glyph on the far side of it is not in this buffer.
+	// See boundarykern.go.
+	if len(sh.l.kern) > 0 && (ctx.before != "" || ctx.after != "") {
+		before, after := f.boundaryGlyphs(ctx, script, rtl)
+		sh.kernAcross(buf, before, after)
+	}
 	if rtl {
 		// Last, and only now. Everything above is stated by the font in terms of
 		// the order the text is written in; the pen will meet these glyphs in the

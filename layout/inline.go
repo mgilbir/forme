@@ -215,8 +215,14 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	// Before any line is filled, because the context changes what a cursive
 	// letter is and therefore how wide it is, and a line filled from widths
 	// measured without it is filled to the wrong widths.
-	items = l.linkShapingContext(items)
-
+	//
+	// And after the cutting below, because a cut is the one thing in this whole
+	// sequence that *makes* a boundary. Everything else here reads the items and
+	// leaves their text alone; hangPunctuation takes a character off the end of a
+	// run and stands it up as a run of its own, and the two halves have to be told
+	// about each other or the pair measures wider apart than it did together. In
+	// NotoSansJP "す。" is 4.8em and not 5, because the face kerns the two.
+	//
 	// §8.4's hanging punctuation, cut out of the runs at the two ends of the
 	// block's content before anything is measured against a line: a hanging
 	// character is one that does not count, and what does not count has to be
@@ -226,6 +232,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		l.reportHangingPunctuation(b, unhandledHang)
 	}
 	items = l.hangPunctuation(items, hp)
+	items = l.linkShapingContext(items)
 	// §8.2's spacing at an element boundary, which is the innermost element
 	// containing both characters rather than either character's own. It changes
 	// the width of a run, so it has to be settled before any line is filled.
