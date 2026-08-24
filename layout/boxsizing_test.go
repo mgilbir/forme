@@ -194,8 +194,14 @@ func TestAnIntrinsicSizeIsReportedRatherThanDropped(t *testing.T) {
 	}
 
 	for _, decl := range []string{
-		"width: fit-content", "width: stretch", "width: fit-content(20px)",
-		"min-width: min-content", "max-width: max-content",
+		"width: stretch",
+		// The function form, which is not the keyword: the argument stands where
+		// the available space stands, so answering it with fit-content's own
+		// number would be a wrong width rather than an approximation.
+		"width: fit-content(20px)", "max-width: fit-content(20px)",
+		// fit-content on a limit, which the clamp cannot answer: it runs after
+		// the margins are resolved and no longer knows what space there was.
+		"min-width: fit-content", "max-width: fit-content",
 		"height: min-content", "min-height: min-content",
 		"max-height: max-content",
 	} {
@@ -224,6 +230,9 @@ func TestAnIntrinsicSizeIsReportedRatherThanDropped(t *testing.T) {
 		// Applied, so not reported. The case difference is here because the
 		// keyword arrives from the cascade as the author wrote it.
 		"width: min-content", "width: max-content", "width: MIN-CONTENT",
+		"width: fit-content",
+		"min-width: min-content", "min-width: max-content",
+		"max-width: min-content", "max-width: max-content",
 	} {
 		if got := report(t, decl); len(got) != 0 {
 			t.Errorf("%q was reported as an unsupported value (%q); it is either "+

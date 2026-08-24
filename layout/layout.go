@@ -1656,6 +1656,22 @@ func (l *layouter) resolveWidth(b *Box, margin, border, padding Edges,
 	}
 
 	if !hasWidth {
+		// §3.1's fit-content, which is the one keyword that needs the space
+		// available and so cannot be answered by explicitWidth. Here it can:
+		// the containing block is resolved, the border and padding are off it,
+		// and what is left is what the box has to fit into.
+		//
+		// It is asked after the float branch above rather than before, because a
+		// float already shrinks to fit and the branch has its own idea of what
+		// the space is — the band it landed in, less the margins it just
+		// resolved. Answering here as well would be the same number by a second
+		// route, and the two would drift.
+		if v, ok := l.fitContentWidth(b, maxZero(available.Sub(margin.Horizontal()))); ok {
+			declared, hasWidth = v, true
+		}
+	}
+
+	if !hasWidth {
 		// An auto width fills whatever the margins leave, which is why a plain
 		// <div> is as wide as its parent. An auto margin against an auto width
 		// is zero — there is nothing left over to distribute.
@@ -1720,11 +1736,19 @@ func maxZero(u style.Unit) style.Unit {
 func (l *layouter) clampWidth(b *Box, v, containing style.Unit) style.Unit {
 	inset, _ := l.sizingInset(b, containing)
 	lo := style.Unit(0)
-	if min, ok := l.lengthOf(b, "min-width", containing); ok {
+	// An intrinsic keyword names a content width and box-sizing does not touch
+	// it — css-sizing-3 §3.3 — so it is put into the declared space the clamp
+	// works in by adding the inset back, which is the same arithmetic the
+	// answer below undoes. A declared length is already in that space.
+	if v, ok := l.keywordLimit(b, "min-width"); ok {
+		lo = v.Add(inset)
+	} else if min, ok := l.lengthOf(b, "min-width", containing); ok {
 		lo = min
 	}
 	hi := style.MaxUnit
-	if max, ok := l.lengthOf(b, "max-width", containing); ok {
+	if v, ok := l.keywordLimit(b, "max-width"); ok {
+		hi = v.Add(inset)
+	} else if max, ok := l.lengthOf(b, "max-width", containing); ok {
 		hi = max
 	}
 	return maxZero(style.Clamp(v.Add(inset), lo, hi).Sub(inset))

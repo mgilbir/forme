@@ -85,7 +85,50 @@ func (l *layouter) keywordWidth(b *Box) (style.Unit, bool) {
 	if !acceptsKeywordWidth(b) {
 		return 0, false
 	}
-	switch sizingKeyword(b.Style["width"]) {
+	switch bareSizingKeyword(b.Style["width"]) {
+	case "min-content":
+		return l.contentWidths(b).min, true
+	case "max-content":
+		return l.contentWidths(b).max, true
+	}
+	return 0, false
+}
+
+// fitContentWidth is the keyword the two above leave out, answered where the
+// space available is known.
+//
+// §3.1: fit-content is min(max-content, max(min-content, available)), which is
+// CSS 2.1 §10.3.5's shrink-to-fit over the space the containing block leaves —
+// so what this adds over the two above is not a formula but a caller that has
+// the number. resolveWidth has it: it is the only place a box's width is
+// decided against a containing block that has already been resolved.
+//
+// It is the one keyword whose answer differs from "auto" only for an in-flow
+// block. A float, an inline-block and an absolutely positioned box all shrink to
+// fit when their width is auto, so for those three fit-content asks for the
+// width they already have; a plain block fills its containing block instead, and
+// that is the difference this is for.
+func (l *layouter) fitContentWidth(b *Box, available style.Unit) (style.Unit, bool) {
+	if !acceptsKeywordWidth(b) || bareSizingKeyword(b.Style["width"]) != "fit-content" {
+		return 0, false
+	}
+	return l.shrinkToFit(b, available), true
+}
+
+// keywordLimit resolves an intrinsic keyword on min-width or max-width to a
+// content width.
+//
+// §3.1 again, and the limits are the easier half: a minimum or a maximum is a
+// number compared against a width rather than a width to be laid out to, so
+// there is no formula to interleave with the margins. fit-content is left out
+// for the reason keywordWidth leaves it out and clampWidth cannot fix — the
+// clamp is applied after the margins are resolved and does not know what space
+// was available — and stretch with it.
+func (l *layouter) keywordLimit(b *Box, property string) (style.Unit, bool) {
+	if !acceptsKeywordWidth(b) {
+		return 0, false
+	}
+	switch bareSizingKeyword(b.Style[property]) {
 	case "min-content":
 		return l.contentWidths(b).min, true
 	case "max-content":
