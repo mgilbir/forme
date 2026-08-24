@@ -667,7 +667,14 @@ func (br *Breaker) breakInsideWord(item Item, width style.Unit, content bool) (h
 		if mid > len(bounds) {
 			break
 		}
-		w := br.MeasureSpaced(item.Face, item.Text[:bounds[mid-1]], item.Size, item.Spacing)
+		// Measured in the context the prefix will be shaped in, which is what
+		// SplitItem gives it: the rest of the word follows it whether or not
+		// the line does. Measuring it alone picked a cut against one width and
+		// then drew the head at another — the two disagree by exactly the
+		// difference between a final form and an isolated one.
+		cut := bounds[mid-1]
+		w := br.MeasureSpacedInContext(item.Face, item.Text[:cut], item.Size, item.Spacing,
+			item.PreContext, item.Text[cut:]+item.PostContext)
 		if w <= width {
 			lo = mid
 		} else {

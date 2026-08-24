@@ -500,8 +500,29 @@ func (br *Breaker) SplitItem(item Item, at int) (head, tail Item) {
 	runesBefore := utf8.RuneCountInString(item.Text[:at])
 	head.BidiEnd = item.BidiStart + runesBefore
 	tail.BidiStart = item.BidiStart + runesBefore
-	head.Width = br.MeasureSpaced(item.Face, head.Text, item.Size, item.Spacing)
-	tail.Width = br.MeasureSpaced(item.Face, tail.Text, item.Size, item.Spacing)
+	// CSS Text §5.4, shaping across an intra-word break:
+	//
+	//	When shaping scripts such as Arabic are allowed to break within words
+	//	due to hyphenation or [...] the characters must still be shaped as if
+	//	the word were not broken.
+	//
+	// A cut is the one thing that makes a boundary where the text has none, so
+	// each half is told what the other is. Without it "عائلة" broken by
+	// overflow-wrap comes out as two words: the letter before the cut takes its
+	// final form and the one after it takes its initial, and a reader of Arabic
+	// sees a word that is not there. The suite says so twice, in
+	// overflow-wrap-shaping-001 and -002, and writes the expectation as
+	// presentation forms so that there is nothing to argue about.
+	//
+	// The context either side of the whole item goes on the outside of each
+	// half, because that is where it was: what preceded the item still precedes
+	// the head, and what followed it still follows the tail.
+	head.PostContext = tail.Text + item.PostContext
+	tail.PreContext = item.PreContext + head.Text
+	head.Width = br.MeasureSpacedInContext(item.Face, head.Text, item.Size, item.Spacing,
+		head.PreContext, head.PostContext)
+	tail.Width = br.MeasureSpacedInContext(item.Face, tail.Text, item.Size, item.Spacing,
+		tail.PreContext, tail.PostContext)
 	// The tail begins a line, so it takes no opportunity from what was in front
 	// of the head — there is nothing in front of it any more.
 	//
