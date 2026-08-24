@@ -559,26 +559,45 @@ func beginsAtRight(b *Box) bool {
 }
 
 func (l *layouter) insetItems(b *Box, containing style.Unit) (lead, trail inlineItem, any bool) {
-	edges := l.edges(b, "margin", containing).
-		Add(l.borderWidths(b)).
-		Add(l.paddingOf(b, containing))
+	margin := l.edges(b, "margin", containing)
+	border := l.borderWidths(b)
+	padding := l.paddingOf(b, containing)
+	edges := margin.Add(border).Add(padding)
 
 	left, right := edges.Left, edges.Right
+	// Whether the box *has* a margin, border or padding on each side, which is
+	// not the same question as whether they come to something. §9.4.2 asks the
+	// first — "inline elements with non-zero margins, padding, or borders" — and
+	// the two differ wherever one cancels another: a "border-right: 200px"
+	// against a "margin-right: -200px" sums to nothing and still draws two
+	// hundred pixels of border, so the line it is on is not one of the
+	// zero-height ones. Read as a sum it emitted nothing, the line did not
+	// exist, and the border was not drawn at all — which is
+	// margin-padding-clear/margin-right-114, a green square that came out blank.
+	anyLeft := margin.Left != 0 || border.Left != 0 || padding.Left != 0
+	anyRight := margin.Right != 0 || border.Right != 0 || padding.Right != 0
 	noLeft, noRight := splitInsetSides(b)
 	if noLeft {
-		left = 0
+		left, anyLeft = 0, false
 	}
 	if noRight {
-		right = 0
+		right, anyRight = 0, false
 	}
-	if left == 0 && right == 0 {
+	if !anyLeft && !anyRight {
 		return inlineItem{}, inlineItem{}, false
 	}
 	// Both physical values on both items, so that a later stage can ask which
 	// side of the box faces a boundary — see shapingcontext.go. Width is one of
 	// them and is chosen by insetSides, which cannot happen until the levels are
 	// resolved.
-	item := inlineItem{Box: b, Inset: true, InsetLeft: left, InsetRight: right}
+	// The box's own leading, which §10.8.1 counts on every line the box is on
+	// whether or not there is anything of its own to draw. An empty
+	// "<span style='font-size: 200px; border: 1px solid'></span>" is two hundred
+	// pixels tall and made a twenty-pixel line, because the only items on it
+	// were these two and neither carried a height.
+	above, below := l.leading(b)
+	item := inlineItem{Box: b, Inset: true, InsetLeft: left, InsetRight: right,
+		Above: above, Below: below, Leads: true}
 	lead, trail = item, item
 	lead.InsetLead = true
 	lead.Width, trail.Width = left, right

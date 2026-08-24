@@ -147,7 +147,7 @@ func (d *inlineDecor) addLine(index int, items []inlineItem, xs, widths []style.
 		// items, cut the span into pieces that then drew a border apiece.
 		// bidi-011 is a <span> holding an override with the matching pop after
 		// it, and it came out as three boxes with two seams.
-		if items[k].Width == 0 {
+		if items[k].Width == 0 && !items[k].Inset {
 			continue
 		}
 		order = append(order, k)

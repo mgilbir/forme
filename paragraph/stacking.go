@@ -142,6 +142,14 @@ func (v VAlignState) Aligned() bool {
 // in breaking.go that tests exactly those two flags. Doing this properly means
 // auditing every walk of the item stream for what an item that stands for
 // nothing should do, which is a larger change than the one test it is worth.
+//
+// One case of it *is* done, and it is the case that objection does not cover.
+// An inline box with a margin, a border or padding already emits a pair of
+// items for its own edges, and those are Inset — every walk of the stream
+// already knows what to do with them — so they carry the box's leading and lead
+// the line. It costs nothing and gains margin-padding-clear/margin-right-114.
+// See layout/flatten.go's insetItems. What is still not done is the box with no
+// edges at all, which is the shape this paragraph is about.
 func itemExtents(item Item) (ascent, descent style.Unit, ok bool) {
 	if item.Atomic != nil {
 		return item.Ascent, item.Descent, true
