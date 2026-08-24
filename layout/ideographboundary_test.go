@@ -160,3 +160,60 @@ func TestAGapInsideALineStillCounts(t *testing.T) {
 // what it measured. ftoa beside it truncates to whole pixels, which is a
 // rounding these fixtures are about — an eighth of an em at 20px is 2.5.
 func ftoaPx(u style.Unit) string { return strconv.FormatFloat(u.Px(), 'f', -1, 64) + "px" }
+
+// TestAShrinkWrappedBoxDoesNotHoldTheGapAtItsEdge.
+//
+// The intrinsic pass and the fill are two measurements of the same line, and a
+// line whose measure differs between them is a box shrink-wrapped to a width its
+// own content does not have. The pass already discounts the letter-spacing after
+// a run's last character, for §8.2's reason; §8.1's gap sits at the same edge
+// and goes the same way.
+//
+// The suite's word-break-keep-all-011 is the fixture that found it: a
+// "width: min-content" paragraph of "中文english中文english…", whose narrowest
+// unbreakable run is the "english" — and whose box came out an eighth of an em
+// wider than the letters in it, because the run carried the gap to the ideograph
+// after it.
+func TestAShrinkWrappedBoxDoesNotHoldTheGapAtItsEdge(t *testing.T) {
+	faces := kernFaces(t)
+	if _, ok := faceWithGlyphFor(faces, "永"); !ok {
+		t.Skip("no face here can set the fixture")
+	}
+	const base = `#d { font-family: monospace; font-size: 20px; width: min-content`
+	width := func(html, extra string) style.Unit {
+		built := Build(Input{HTML: html,
+			CSS: []Stylesheet{{Source: noDefaults + base + extra + ` }`}}})
+		w, _ := style.FromPx(1000)
+		h, _ := style.FromPx(10000)
+		frag := Layout(built.Root, Size{W: w, H: h},
+			suiteFonts{standard: StandardFonts(), fallback: faces}, NewRecorder(nil))
+		return find(t, frag, "d").BorderRect.W
+	}
+	// The narrowest unbreakable run of "永abc永" is the "abc", which carries the
+	// gap to the 永 after it. The box is that run and nothing else.
+	got := width(`<div id="d" lang="ja">永abc永</div>`, "")
+	want := width(`<div id="d" lang="ja">abc</div>`, `; text-autospace: no-autospace`)
+	if got != want {
+		t.Errorf("the box is %v wide and the run it shrank to is %v; the gap at the "+
+			"run's far edge is at the line's end, where §8.1 puts none", got, want)
+	}
+	// And the fixture is one where a gap exists at all, or the equality above
+	// holds for a reason that has nothing to do with the discount. It is asked
+	// of max-content, where the gap is *between* two characters of one line and
+	// so is exactly what §8.1 adds — asking min-content would be asking the
+	// same discounted number twice.
+	wide := func(extra string) style.Unit {
+		built := Build(Input{HTML: `<div id="d" lang="ja">abc永</div>`,
+			CSS: []Stylesheet{{Source: noDefaults +
+				`#d { font-family: monospace; font-size: 20px; width: max-content` +
+				extra + ` }`}}})
+		w, _ := style.FromPx(1000)
+		h, _ := style.FromPx(10000)
+		frag := Layout(built.Root, Size{W: w, H: h},
+			suiteFonts{standard: StandardFonts(), fallback: faces}, NewRecorder(nil))
+		return find(t, frag, "d").BorderRect.W
+	}
+	if wide("") == wide(`; text-autospace: no-autospace`) {
+		t.Skip("this font library puts no gap at the fixture's boundary")
+	}
+}

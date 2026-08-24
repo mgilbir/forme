@@ -517,7 +517,11 @@ func overflows(used style.Unit, item Item, width style.Unit) bool {
 // a cursive script, so such a run has none after its last character either —
 // and discounting one it never had makes it a spacing narrower than it is,
 // which is a word kept on a line it does not fit on.
-func trailingSpacing(item Item) style.Unit {
+func trailingSpacing(item Item) style.Unit { return TrailingSpacing(item) }
+
+// TrailingSpacing is trailingSpacing for the layout package, whose intrinsic
+// pass keeps the same account: what a line leaves out when it ends here.
+func TrailingSpacing(item Item) style.Unit {
 	// §8.1's ideograph spacing sits at the far edge of the run it was added to,
 	// and is between two characters that a line break puts on different lines.
 	// Two characters on different lines are not adjacent and get no gap.

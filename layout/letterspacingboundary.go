@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"github.com/mgilbir/forme/paragraph"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -187,4 +188,16 @@ func trackingOf(item inlineItem) style.Unit {
 		return 0
 	}
 	return item.Spacing.Letter
+}
+
+// trailingSpacingOf is everything at a run's far edge that a line ending there
+// leaves out: the letter-spacing after its last character and §8.1's gap to
+// whatever follows.
+//
+// It is the breaker's own answer rather than a second one. The intrinsic pass
+// and the fill are two measurements of the same line, and a line whose measure
+// differs between them is a box shrink-wrapped to a width its own content does
+// not have.
+func trailingSpacingOf(item inlineItem) style.Unit {
+	return paragraph.TrailingSpacing(item)
 }
