@@ -214,12 +214,19 @@ func ruleForStyleFinding(f style.Finding) Rule {
 // reportUnsupportedDisplays names the display and position values the box tree
 // recognised and could not honour.
 //
-// "display: contents" is the one that matters. It asks for an element's own box
-// to be replaced by its children, and the closest available answer — treating it
-// as inline — is wrong in a way that shows: the box takes part in layout when
-// the author asked for it not to. That is precisely a value this engine reads
-// and does not implement, so it is reported rather than quietly approximated.
+// "display: contents" is the one that matters, and what is left of it is the
+// elements it cannot be honoured on. An element whose layout is not decided by
+// CSS box generation — a replaced element, a form control — has no contents to
+// be replaced by, and the root is blockified by §2.7 before the value is
+// reached. Those keep the box they had, and the box they had is an inline one,
+// which takes part in layout when the author asked for it not to.
+//
+// Which elements those are is contentsIsHonoured's answer and not a second copy
+// of it. A guardrail that decided for itself which declarations the engine
+// applies would go stale in the direction that matters: silent about a value
+// that had stopped being honoured.
 func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.ComputedStyle, rec *Recorder) {
+	root := documentElementOf(doc)
 	doc.Walk(func(n *html.Node) bool {
 		if n.Type != html.ElementNode {
 			return true
@@ -228,7 +235,7 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 		if !ok {
 			return true
 		}
-		if cs["display"] == "contents" {
+		if cs["display"] == "contents" && !contentsIsHonoured(n, cs, root) {
 			rec.ReportDetail(Finding{
 				Rule:     RuleUnsupportedValue,
 				Source:   AtHTML(n.Offset),

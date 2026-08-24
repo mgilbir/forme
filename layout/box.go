@@ -369,6 +369,7 @@ func BuildBoxes(doc *html.Node, styled style.Styled, rec *Recorder) *Box {
 	if root == nil {
 		return nil
 	}
+	b.documentElement = root
 	// The root's font-size is resolved against the initial value, since there
 	// is no parent to take one from, and it then becomes what every "rem" in
 	// the document means. CSS Values §5.1.1 says it in as many words: an em on
@@ -442,6 +443,9 @@ type boxBuilder struct {
 	counters     counterSnapshots
 	rootFontSize style.Unit
 	count        int
+	// documentElement is the root, which §2.7 blockifies and so exempts from
+	// "display: contents". See contentsIsHonoured.
+	documentElement *html.Node
 	// afterWord says the last character emitted was part of a word, which is what
 	// "text-transform: capitalize" needs to know and what a text node cannot
 	// answer on its own: in "<b>e</b>xample" the "x" does not begin a word. It is
@@ -661,15 +665,7 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 			}
 		}
 	}
-	for _, child := range n.Children {
-		if controlSkipsChild(box, child) {
-			continue
-		}
-		if c := b.build(child, cs, fontSize); c != nil {
-			c.Parent = box
-			box.Children = append(box.Children, c)
-		}
-	}
+	b.appendChildren(box, n, cs, fontSize)
 	if after := b.generated(n, "after", fontSize); after != nil {
 		after.Parent = box
 		box.Children = append(box.Children, after)
@@ -680,6 +676,100 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		b.afterWord = false
 	}
 	return box
+}
+
+// appendChildren builds an element's children into a box, following the ones
+// that stand for their own contents rather than for a box.
+//
+// It is a function rather than a loop in elementBox because "display: contents"
+// makes it recursive: such an element's children belong to *this* box, and one
+// of them may be another such element.
+func (b *boxBuilder) appendChildren(box *Box, n *html.Node,
+	inherited style.ComputedStyle, fontSize style.Unit) {
+
+	for _, child := range n.Children {
+		if controlSkipsChild(box, child) {
+			continue
+		}
+		if child.Type == html.ElementNode && b.replacedByItsContents(child) {
+			b.appendContents(box, child, fontSize)
+			continue
+		}
+		if c := b.build(child, inherited, fontSize); c != nil {
+			c.Parent = box
+			box.Children = append(box.Children, c)
+		}
+	}
+}
+
+// appendContents is css-display-3 §3.1's "display: contents": the element
+// generates no box of its own, and for the purposes of box generation stands in
+// the tree as the boxes its children and pseudo-elements make.
+//
+// Everything else about the element is unchanged, and that is the half worth
+// saying: its computed style is still what its children inherit, its font-size
+// is still what an em inside it means, and its ::before and ::after still
+// generate boxes — the specification says so in as many words, because "no box"
+// is a statement about this element and not about anything it contains.
+//
+// The children are appended to the enclosing box, so the element leaves no trace
+// in the tree at all. That is the whole visible difference from what this used
+// to do, which was to treat the value as "inline": an inline box takes part in
+// layout, so its own margins, padding, borders and background were drawn and its
+// boundary broke shaping and letter-spacing, all of which the author asked
+// against.
+func (b *boxBuilder) appendContents(box *Box, n *html.Node, parentFontSize style.Unit) {
+	if !b.room(n) {
+		return
+	}
+	cs := b.styles[n]
+	fontSize := b.fontSizeOf(n, parentFontSize)
+	add := func(c *Box) {
+		if c == nil {
+			return
+		}
+		c.Parent = box
+		box.Children = append(box.Children, c)
+	}
+	add(b.generated(n, "before", fontSize))
+	b.appendChildren(box, n, cs, fontSize)
+	add(b.generated(n, "after", fontSize))
+}
+
+// replacedByItsContents reports whether an element is one that "display:
+// contents" removes from box generation.
+//
+// The value does not apply to every element, and css-display-3's appendix on
+// unusual elements is why: an element whose layout is not decided by CSS box
+// generation has no contents to be replaced by. A replaced element's content is
+// a picture or a document and a form control's is a widget the engine draws —
+// neither is a subtree of boxes, so "the boxes its children make" names nothing
+// and the declaration cannot be honoured. Those keep the box they had and the
+// finding that says the value was not applied.
+//
+// The root element is the other exception, and is not one this engine chose:
+// §2.7 blockifies the root, so "display: contents" on <html> computes to
+// "block" and the element has a box like any other. It is left with its old
+// treatment and its finding rather than blockified here, because blockifying
+// the root is a rule about every display value and not about this one.
+func (b *boxBuilder) replacedByItsContents(n *html.Node) bool {
+	return contentsIsHonoured(n, b.styles[n], b.documentElement)
+}
+
+// contentsIsHonoured is the predicate above with the state it needs passed in,
+// so that the guardrail in pipeline.go can ask the same question the box tree
+// asks rather than a second copy of it.
+func contentsIsHonoured(n *html.Node, cs style.ComputedStyle, root *html.Node) bool {
+	if n == nil || cs == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(cs["display"]), "contents") {
+		return false
+	}
+	if n == root {
+		return false
+	}
+	return !replacesItsOwnContent(n) && controlKindOf(n) == controlNone
 }
 
 // endsAWord reports whether an element ends the word before it, without being
