@@ -794,18 +794,42 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	// has no height to take a percentage of while its children are still being
 	// laid out, and CSS 2.1 makes such a percentage compute to auto rather than
 	// to the number the content later happens to produce.
+	// The height a percentage inside this box resolves against, which is this
+	// box's *used* height and not the one it declared. §10.5 resolves a
+	// percentage against "the height of the containing block", and §10.7's
+	// minimum and maximum are applied before there is one: a box at
+	// "height: 200px; max-height: 100px" is a hundred pixels tall, so a child at
+	// "height: 100%" is a hundred and not two.
+	//
+	// Only where the height is definite at all. A maximum on its own does not
+	// make one — the box is still as tall as its content, and CSS 2.1 makes a
+	// percentage against that compute to auto — so the clamp is applied to a
+	// declared height and not to the absence of one.
+	//
+	// No document can tell, and that is worth recording rather than leaving as
+	// an implied claim. cbDefinite travels beside cbHeight and is false here
+	// either way, and Length.Resolve refuses a percentage without it — so a
+	// number put in cbHeight for a box with no height is never read. The guard
+	// is what makes the *value* honest: clamping a height that does not exist
+	// would hand down a number the box is not, and the day a reader takes
+	// cbHeight without asking whether it is definite, this is what stops it
+	// being wrong.
+	childHeight := declaredHeight
+	if hasHeight {
+		childHeight = l.clampHeight(b, declaredHeight, containing, at.cbHeight, at.cbDefinite)
+	}
 	inner := flow{
 		ctx:        at.ctx,
 		x:          at.x.Add(margin.Left).Add(border.Left).Add(padding.Left),
 		y:          at.y.Add(border.Top).Add(padding.Top),
-		cbHeight:   declaredHeight,
+		cbHeight:   childHeight,
 		cbDefinite: hasHeight,
 		carriedTop: at.carriedTop,
 	}
 	own := at.ctx
 	if sealed || b.Parent == nil {
 		own = &floatContext{}
-		inner = flow{ctx: own, cbHeight: declaredHeight, cbDefinite: hasHeight}
+		inner = flow{ctx: own, cbHeight: childHeight, cbDefinite: hasHeight}
 	}
 
 	contentHeight, hoistTop, hoistBottom, placedAnything :=
