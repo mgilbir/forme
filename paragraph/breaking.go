@@ -518,10 +518,14 @@ func overflows(used style.Unit, item Item, width style.Unit) bool {
 // and discounting one it never had makes it a spacing narrower than it is,
 // which is a word kept on a line it does not fit on.
 func trailingSpacing(item Item) style.Unit {
+	// §8.1's ideograph spacing sits at the far edge of the run it was added to,
+	// and is between two characters that a line break puts on different lines.
+	// Two characters on different lines are not adjacent and get no gap.
+	out := item.Autospace
 	if CursiveTrackingSuppresses(item.Text) {
-		return 0
+		return out
 	}
-	return item.Spacing.Letter
+	return out.Add(item.Spacing.Letter)
 }
 
 // pendingHyphen is the width of the hyphen a line would have to print if it

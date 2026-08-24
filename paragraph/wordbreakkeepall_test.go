@@ -60,9 +60,13 @@ func TestKeepAllSuppressesTheOpportunitiesInsideAWord(t *testing.T) {
 		text, normal, keepAll, what string
 	}{
 		{"字字字字", "字|字|字|字", "字字字字", "between ideographs"},
-		{"中文english中文", "中|文|english中|文", "中文english中文",
-			"between an ideograph and the letters after it"},
-		{"字1字", "字|1字", "字1字", "between an ideograph and a digit"},
+		// Both sides of the Latin, and the suite says so: the reference for
+		// word-break-keep-all-011 sets "中文english中文english…" under
+		// "word-break: normal" as 中文 / english / 中文 / english, which needs an
+		// opportunity after the 文 *and* one in front of the 中.
+		{"中文english中文", "中|文|english|中|文", "中文english中文",
+			"either side of the letters between two ideographs"},
+		{"字1字", "字|1|字", "字1字", "either side of a digit between two ideographs"},
 	} {
 		if got := splits(t, tc.text, WordBreak{}); got != tc.normal {
 			t.Errorf("%s, normal: %s, want %s", tc.what, got, tc.normal)

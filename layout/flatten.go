@@ -818,6 +818,20 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			(lb.Anywhere || !mayNotBeginLine(p.Text, lb)) {
 			state.BreakOpportunity = true
 		}
+		// An ideograph that begins a box, which is the ideograph rule's other
+		// half arriving at a boundary. UAX #14 allows a line to end between a
+		// letter or a number and an ideograph, and SplitAtBreaks offers that
+		// opportunity inside a run — but it is given one box's text, and this
+		// boundary has a character on each side of it in two different boxes.
+		//
+		// So the box holding the *later* character says so, which is the same
+		// place and the same argument as break-all's rule above. What travels is
+		// only what the earlier character was, which no amount of looking at
+		// this box could recover.
+		if i == 0 && !state.AfterAtomic && !wb.KeepAll &&
+			state.AfterLetterUnit && startsIdeographic(p.Text) {
+			state.BreakOpportunity = true
+		}
 		pieceNoWrap := noWrap
 		if i == 0 {
 			pieceNoWrap = boundaryNoWrap
@@ -933,6 +947,9 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			// the next character; a piece that ends in one has handed the
 			// decision to whatever comes after it, which may be another box.
 			AfterDeferred: endsIdeographic(p.Text),
+			// Whether the character before the next boundary is one an
+			// ideograph may be broken away from. See the rule above.
+			AfterLetterUnit: endsLetterUnit(p.Text),
 		}
 	}
 	return out, inlineState{
@@ -940,6 +957,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		AfterCollapsibleSpace: state.AfterCollapsibleSpace,
 		AfterBinding:          state.AfterBinding,
 		AfterDeferred:         state.AfterDeferred,
+		AfterLetterUnit:       state.AfterLetterUnit,
 		AfterBox:              b,
 	}
 }
@@ -956,6 +974,21 @@ func bindsToAtomicInline(text string) bool {
 func endsBinding(text string) bool {
 	r, _ := utf8.DecodeLastRuneInString(text)
 	return r != utf8.RuneError && paragraph.BindsToAtomicInline(r)
+}
+
+// startsIdeographic reports whether a piece begins with an ideograph, which is a
+// character a line may begin with and may end in front of.
+func startsIdeographic(text string) bool {
+	r, _ := utf8.DecodeRuneInString(text)
+	return r != utf8.RuneError && paragraph.IsIdeographic(r)
+}
+
+// endsLetterUnit reports whether a piece ends on a typographic letter unit that
+// is not itself an ideograph, which is the far side of the boundary
+// startsIdeographic asks about. See inlineState.AfterLetterUnit.
+func endsLetterUnit(text string) bool {
+	r, _ := utf8.DecodeLastRuneInString(text)
+	return r != utf8.RuneError && paragraph.IsLetterUnit(r) && !paragraph.IsIdeographic(r)
 }
 
 // endsIdeographic reports whether a piece ends on the one character that leaves

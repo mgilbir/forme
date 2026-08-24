@@ -133,6 +133,17 @@ type Item struct {
 	// preserved tabs — rather than Phase I's, which is only U+0020, U+0009 and
 	// the segment breaks. The two differ over the ideographic Space and its
 	// relatives, which hang at the end of a line and are never collapsed.
+	// Autospace is §8.1's ideograph spacing, already inside Width and sitting at
+	// this run's far edge.
+	//
+	// It is kept apart so that a line that ends here can leave it out. The
+	// spacing goes *between* two characters, and two characters on different
+	// lines are not adjacent — so a gap the line break falls on is not a gap at
+	// all, exactly as the letter-spacing after a line's last character is not
+	// applied. Without it a run whose far edge carries an eighth of an em is an
+	// eighth of an em too wide to end a line it fits on.
+	Autospace style.Unit
+
 	Space bool
 	// Collapsible marks white space that §4.1.2 removes when it lands at
 	// either end of a line.
@@ -451,6 +462,12 @@ type State struct {
 	// held to the same rule as one that did not cross it, or "中中<span>〜</span>文"
 	// and "中中〜文" answer differently about the same text.
 	AfterDeferred bool
+	// AfterLetterUnit says the last character emitted was a typographic letter
+	// unit that is not itself an ideograph, which is what decides whether an
+	// ideograph beginning the next box may be broken away from it. It travels
+	// for the reason the rest of this does: the two characters of that boundary
+	// are in different text nodes, and neither box can see both.
+	AfterLetterUnit bool
 	// AfterBox is the box the character before this point came from, held
 	// opaquely, and it is here for a rule about *which element* decides.
 	//
@@ -523,6 +540,12 @@ func (br *Breaker) SplitItem(item Item, at int) (head, tail Item) {
 		head.PreContext, head.PostContext)
 	tail.Width = br.MeasureSpacedInContext(item.Face, tail.Text, item.Size, item.Spacing,
 		tail.PreContext, tail.PostContext)
+	// §8.1's gap sits at the item's far edge, so it goes with the tail — the
+	// head's far edge is the cut, which is a boundary the gap was never at. The
+	// measurements above do not include it, since it is not in the text.
+	head.Autospace = 0
+	tail.Autospace = item.Autospace
+	tail.Width = tail.Width.Add(item.Autospace)
 	// The tail begins a line, so it takes no opportunity from what was in front
 	// of the head — there is nothing in front of it any more.
 	//

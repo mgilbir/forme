@@ -218,9 +218,28 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 		// The suite tests each half: word-break-keep-all-005 asks for the break
 		// after U+3000 to survive, -006 for the one after an ideographic comma,
 		// and -011 for every implicit one inside "中文english中文english" to go.
+		// The fourth source is the ideograph rule's other half. An ideograph
+		// defers an opportunity to the character *after* it, and UAX #14 allows
+		// one before it as well: nothing prohibits a break between a letter or a
+		// number and an ideograph, so "abc永" may break either side of the 永.
+		//
+		// It fires only where the character before is a letter unit and is not
+		// itself an ideograph, which is the boundary the deferred half cannot
+		// reach: between two ideographs the deferred opportunity is already
+		// there, and offering a second one at the same place answers nothing and
+		// — measured — costs 63 clean passes, because every opportunity this
+		// grants that a prohibition then refuses is *held* and reappears one
+		// character further on.
+		//
+		// It is here as well as in layout's boundary rule so that the two agree.
+		// The same text has to break the same way whether or not the author
+		// wrote a <span> between the letter and the ideograph.
+		beforeIdeograph := IsIdeographic(r) && prev != 0 &&
+			!IsIdeographic(prev) && isLetterUnit(prev) && !wb.KeepAll
 		offered := (deferBreak && !(wb.KeepAll && isLetterUnit(r)) && !startsSpacePiece(r, ws)) ||
 			(heldBreak && !startsSpacePiece(r, ws)) ||
-			(wb.BreakAll && !startsSpacePiece(r, ws)) || lb.Anywhere
+			(wb.BreakAll && !startsSpacePiece(r, ws)) || lb.Anywhere ||
+			beforeIdeograph
 		// UAX #14 forbids a line beginning with a closing bracket, a hyphen or
 		// a non-starter, and an opportunity offered in front of one is not one.
 		// See linebreak.go for which rules that is and which it is not.
@@ -447,6 +466,10 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 func isLetterUnit(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsNumber(r)
 }
+
+// IsLetterUnit is isLetterUnit for the layout package, which asks the same
+// question about the character on the far side of a box boundary.
+func IsLetterUnit(r rune) bool { return isLetterUnit(r) }
 
 // startsSpacePiece reports whether a character is one SplitAtBreaks gives a
 // white-space Piece of its own.

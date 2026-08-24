@@ -95,6 +95,9 @@ func (l *layouter) insertAutospace(items []inlineItem) []inlineItem {
 			continue
 		}
 		items[gapAt].Width = items[gapAt].Width.Add(gap)
+		// Recorded as well as added, so that a line ending here can leave it
+		// out again. See Item.Autospace.
+		items[gapAt].Autospace = items[gapAt].Autospace.Add(gap)
 	}
 	return items
 }
