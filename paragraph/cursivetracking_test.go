@@ -140,3 +140,38 @@ func TestTheAdvanceFollowsTheCount(t *testing.T) {
 		t.Errorf("\"abc\" takes %v of letter-spacing, want %v", got, want)
 	}
 }
+
+// TestALineEndDiscountsOnlyTheSpacingTheRunActuallyHas.
+//
+// §8.2 does not apply letter-spacing at the end of a line, so the fill leaves
+// the last item's trailing spacing out of the measure — and a run of a cursive
+// script has none to leave out. Discounting one it never had makes the run a
+// spacing narrower than it is, which keeps a word on a line it does not fit on.
+//
+// It asks overflows directly. The arithmetic is three terms wide and every
+// route to it through a document also goes through shaping, a face and a
+// fallback stack, so a fixture that laid one out would be evidence about all
+// four.
+func TestALineEndDiscountsOnlyTheSpacingTheRunActuallyHas(t *testing.T) {
+	sp := TextSpacing{Letter: em}
+	width := em.Mul(3)
+	// Both runs are exactly the width of the room, so what decides each is the
+	// discount alone.
+	latin := Item{Text: "abc", Width: em.Mul(4), Spacing: sp}
+	arabic := Item{Text: "مرحبا", Width: em.Mul(4), Spacing: sp}
+
+	if overflows(0, latin, width) {
+		t.Errorf("a Latin run of %v overflowed %v; the spacing after its last "+
+			"character is not applied at the end of a line", latin.Width, width)
+	}
+	if !overflows(0, arabic, width) {
+		t.Errorf("a cursive run of %v fitted %v; §8.2 gave it no spacing after its "+
+			"last character, so there is none to leave out", arabic.Width, width)
+	}
+	// And an item that is not a run of text keeps the declared value, since an
+	// atomic inline is a character unit letter-spacing goes after.
+	atomic := Item{Width: em.Mul(4), Spacing: sp}
+	if overflows(0, atomic, width) {
+		t.Errorf("an atomic inline of %v overflowed %v", atomic.Width, width)
+	}
+}

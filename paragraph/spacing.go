@@ -90,6 +90,18 @@ func SpacedUnits(text string) int {
 // join. See shape.InCursiveScript for why it is the script and not the pair.
 func IsCursiveScript(r rune) bool { return shape.InCursiveScript(r) }
 
+// CursiveTrackingSuppresses reports whether §8.2 takes the letter-spacing off a
+// run of text entirely, so that it carries none after any of its characters —
+// the last one included.
+//
+// It is asked of a run of text and answers false for the empty string, which is
+// not one. An inline box's edge is not a character and an atomic inline is a
+// character unit letter-spacing goes after like any other; neither is what this
+// rule is about.
+func CursiveTrackingSuppresses(text string) bool {
+	return text != "" && SpacedUnits(text) == 0
+}
+
 // scanCursiveTracking walks the characters letter-spacing could go after and
 // says of each whether §8.2 forbids it, so that the count and the cut cannot
 // answer differently.

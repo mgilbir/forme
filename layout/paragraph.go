@@ -69,19 +69,20 @@ var (
 )
 
 var (
-	hyphensOf              = paragraph.HyphensOf
-	trailingStopOrComma    = paragraph.TrailingStopOrComma
-	autospaceOf            = paragraph.AutospaceOf
-	splitAtAutospace       = paragraph.SplitAtAutospace
-	splitAtCursiveTracking = paragraph.SplitAtCursiveTracking
-	mayNotBeginLine        = paragraph.MayNotBeginLine
-	splitAtBreaks          = paragraph.SplitAtBreaks
-	tabAdvance             = paragraph.TabAdvance
-	isIdeographic          = paragraph.IsIdeographic
-	spacingAdvance         = paragraph.SpacingAdvance
-	spacedUnits            = paragraph.SpacedUnits
-	isCursiveScript        = paragraph.IsCursiveScript
-	isDefaultIgnorable     = paragraph.IsDefaultIgnorable
+	hyphensOf                     = paragraph.HyphensOf
+	trailingStopOrComma           = paragraph.TrailingStopOrComma
+	autospaceOf                   = paragraph.AutospaceOf
+	splitAtAutospace              = paragraph.SplitAtAutospace
+	splitAtCursiveTracking        = paragraph.SplitAtCursiveTracking
+	mayNotBeginLine               = paragraph.MayNotBeginLine
+	splitAtBreaks                 = paragraph.SplitAtBreaks
+	tabAdvance                    = paragraph.TabAdvance
+	isIdeographic                 = paragraph.IsIdeographic
+	spacingAdvance                = paragraph.SpacingAdvance
+	spacedUnits                   = paragraph.SpacedUnits
+	isCursiveScript               = paragraph.IsCursiveScript
+	cursiveTrackingSuppressesText = paragraph.CursiveTrackingSuppresses
+	isDefaultIgnorable            = paragraph.IsDefaultIgnorable
 )
 
 // Geometry and the item type itself.

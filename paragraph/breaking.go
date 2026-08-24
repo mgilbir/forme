@@ -500,14 +500,28 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 //
 // # What the suite says about this, which is nothing
 //
-// No reftest moves either way — not one of 6250, in either direction. The three
-// that are written for it, letter-spacing-200 through -202, cannot: both
-// documents of each pair report a font this harness does not have, so neither
-// reaches a clean pass whatever the arithmetic. So this is the engine made
-// consistent with its own stated model and with §8.2, on a corpus that
-// demonstrates it breaks nothing and confirms nothing.
+// No reftest moved either way when this was written — not one of 6250, in
+// either direction — and the three written for it, letter-spacing-200 through
+// -202, could not: both documents of each pair reported a font the harness did
+// not have. The harness loads a document's own @font-face now and those three
+// are untainted failures, so they are reachable and this is no longer the whole
+// of what they need. See forme-next-leads.
 func overflows(used style.Unit, item Item, width style.Unit) bool {
-	return used.Add(item.Width).Sub(item.Spacing.Letter) > width
+	return used.Add(item.Width).Sub(trailingSpacing(item)) > width
+}
+
+// trailingSpacing is the letter-spacing after an item's last character, which is
+// the part of its width the measure above leaves out.
+//
+// It is not simply the declared value. §8.2's cursive tracking adds none inside
+// a cursive script, so such a run has none after its last character either —
+// and discounting one it never had makes it a spacing narrower than it is,
+// which is a word kept on a line it does not fit on.
+func trailingSpacing(item Item) style.Unit {
+	if CursiveTrackingSuppresses(item.Text) {
+		return 0
+	}
+	return item.Spacing.Letter
 }
 
 // pendingHyphen is the width of the hyphen a line would have to print if it

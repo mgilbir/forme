@@ -174,7 +174,7 @@ func trailingSpacing(runs []inlineItem) style.Unit {
 // letter-spacing goes after like any other. Neither is what this rule is about,
 // and answering for them would take a spacing off a run that has one.
 func cursiveTrackingSuppresses(item inlineItem) bool {
-	return item.Text != "" && spacedUnits(item.Text) == 0
+	return cursiveTrackingSuppressesText(item.Text)
 }
 
 // trackingOf is the letter-spacing a run is drawn with and measured to: the
