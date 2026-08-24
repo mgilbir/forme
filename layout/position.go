@@ -753,9 +753,32 @@ func solveAxis(a absAxis) axisSolution {
 		case a.marginEndAuto:
 			me = slack.Sub(ms)
 		default:
-			// Over-constrained: the end offset is ignored and the box stays
-			// where its start offset put it. Nothing to compute — every value in
-			// the equation but the one being dropped was given.
+			// Over-constrained, and §10.3.7 says which offset gives way by the
+			// direction of the containing block: "if the 'direction' property
+			// [...] is 'ltr', ignore 'left' [...] if 'rtl', ignore 'right'" —
+			// written the other way round there, because the section names the
+			// *physical* sides and this axis is in the box's own terms.
+			//
+			// Read as "the end always gives way", a right-to-left box pinned by
+			// both offsets sat against the wrong edge: the offset the author
+			// meant to hold it was the one dropped.
+			//
+			// The vertical axis has no such rule and always drops the end,
+			// which is "bottom" — and solveVertical leaves rtl false, so the
+			// "!vertical" here cannot change an answer today. It is kept
+			// because the two sections are two rules and this branch stands for
+			// both: §10.3.7 asks about direction and §10.6.4 does not, and a
+			// reader should not have to know that one caller happens not to
+			// fill a field to see it. TestTheVerticalAxisAlwaysDropsTheBottom
+			// is what holds the vertical half; it fails if the branch is taken
+			// unconditionally and not if the guard alone is dropped.
+			if a.rtl && !a.vertical {
+				return axisSolution{
+					start:       a.available.Sub(a.end).Sub(a.size).Sub(a.fixed).Sub(ms).Sub(me),
+					size:        a.size,
+					marginStart: ms, marginEnd: me,
+				}
+			}
 		}
 		return axisSolution{start: a.start, size: a.size, marginStart: ms, marginEnd: me}
 	}
