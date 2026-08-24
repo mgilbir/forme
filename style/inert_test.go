@@ -58,10 +58,15 @@ func TestADeclarationAtItsInitialValueIsNotReported(t *testing.T) {
 		"filter: none",
 		"opacity: 1",
 		"transform-style: flat",
-		"text-decoration-skip-ink: auto",
 		"border-radius: 0",
 		"border-radius: 0px",
 		"border-radius: 0em",
+		// Both values of this one, and it is the only property here with two.
+		// A decoration is drawn straight through a descender: "auto" permits
+		// that and "none" asks for it, so an engine that always does it
+		// satisfies either. layout/textdecoration_test.go holds the fact.
+		"text-decoration-skip-ink: auto",
+		"text-decoration-skip-ink: none",
 	} {
 		if reportsUnsupported(t, decl) {
 			t.Errorf("%q was reported, and it asks for the page that is already there", decl)
@@ -127,7 +132,6 @@ func TestADeclarationThatAsksForSomethingIsStillReported(t *testing.T) {
 		"opacity: 0.5",
 		"opacity: 0",
 		"border-radius: 20px",
-		"text-decoration-skip-ink: none",
 	} {
 		if !reportsUnsupported(t, decl) {
 			t.Errorf("%q was not reported, and it asks for a page this engine does "+

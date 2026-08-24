@@ -79,6 +79,14 @@ type inertValue struct {
 	// produced is the value whose behaviour this engine already produces. A
 	// declaration of it asks for the page that is already there.
 	produced string
+	// also is a second value the engine's behaviour satisfies, where a property
+	// has one. It is not a convenience: a value that *permits* a behaviour and a
+	// value that *requires* it are both satisfied by an engine that always does
+	// it, and those are two different declarations rather than two spellings of
+	// one. text-decoration-skip-ink is the case — "auto" lets a decoration be
+	// drawn straight through and "none" asks for it — and it is the only entry
+	// here that needs two, which is why this is one field and not a list.
+	also string
 	// initial is the property's initial value, when it differs from produced.
 	// Empty means the two are the same.
 	//
@@ -125,8 +133,11 @@ var inertValues = map[string]inertValue{
 
 	// CSS Text Decoration 4 §2.6. Decorations are drawn straight through, which
 	// is a choice "auto" permits and "none" asks for outright — so both are
-	// inert, and "auto" is the one recorded because it is also the initial.
-	"text-decoration-skip-ink": {produced: "auto",
+	// inert. "auto" is the produced value because it is also the initial;
+	// "none" is the one documents actually write, and writing it is the author
+	// making sure of the very thing this engine has no other way of doing. See
+	// TestADecorationIsDrawnStraightThroughADescender.
+	"text-decoration-skip-ink": {produced: "auto", also: "none",
 		because: "decorations are drawn straight through descenders"},
 
 	// Properties about interaction and animation, none of which a page laid out
@@ -168,7 +179,7 @@ func isInertDeclaration(name string, vals []css.ComponentValue) bool {
 			value = entry.produced
 		}
 	}
-	if value == entry.produced {
+	if value == entry.produced || (entry.also != "" && value == entry.also) {
 		return true
 	}
 	// A length written as a bare zero and one written with a unit are the same
