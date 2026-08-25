@@ -807,7 +807,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 						// precedes it is the line's top the answer, which is the
 						// box written before the first word.
 						top := y
-						if f.Used > 0 {
+						if f.AfterContent {
 							top = top.Add(lh)
 						}
 						l.deferAbsolute(abs, parent,

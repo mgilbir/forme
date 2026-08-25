@@ -126,3 +126,66 @@ func TestAPseudoElementIsInlineLevelToo(t *testing.T) {
 			"box would have split the line", got[0].Y)
 	}
 }
+
+// What counts as being on the line the hypothetical box follows, §9.4.2.
+//
+//	Line boxes that contain no text, no preserved white space, no inline
+//	elements with non-zero margins, padding, or borders [...] must be treated
+//	as zero-height line boxes.
+//
+// So it is not "is anything there" and it is not "is anything wide": an inline
+// box's own edge counts by what it *is*, and a border cancelled by a negative
+// margin is still a border. The suite writes the two halves as a pair —
+// abspos/static-inside-inline-002 puts the border on the leading edge, where the
+// fragment before the box has it, and -003 on the trailing edge, where it does
+// not — and -003's assertion says so in as many words.
+
+// staticInsideInline is the suite's shape: an absolutely positioned box first
+// inside an inline that carries an edge, and the wrapper that clips it.
+func staticInsideInline(t *testing.T, inlineCSS string) float64 {
+	t.Helper()
+	root := layoutOf(t, 600,
+		`<div id="d"><span id="s"><div id="a"></div>X</span></div>`,
+		noDefaults+`#d { width: 100px; height: 100px } `+
+			`#s { line-height: 100px; `+inlineCSS+` } `+
+			`#a { position: absolute; width: 10px; height: 10px }`)
+	return find(t, root, "a").BorderRect.Y.Px()
+}
+
+// TestAnEdgeOnTheLeadingSideMakesTheLineTheBoxFollows.
+func TestAnEdgeOnTheLeadingSideMakesTheLineTheBoxFollows(t *testing.T) {
+	for _, tc := range []struct {
+		what, css string
+		want      float64
+	}{
+		// The fragment before the box has a border, so its line is not one of
+		// §9.4.2's zero-height ones and the box is below it.
+		{"a leading border", "border-left: 100px solid transparent", 100},
+		{"a leading border a margin cancels",
+			"border-left: 100px solid transparent; margin-left: -100px", 100},
+		{"leading padding", "padding-left: 20px", 100},
+		// The trailing edge belongs to the fragment *after* the box, so the one
+		// before it has nothing and its line is zero-height.
+		{"a trailing border", "border-right: 100px solid transparent", 0},
+		{"trailing padding", "padding-right: 20px", 0},
+		// And no edge at all.
+		{"no edge", "", 0},
+	} {
+		if got := staticInsideInline(t, tc.css); got != tc.want {
+			t.Errorf("%s: the box is at %gpx, want %g", tc.what, got, tc.want)
+		}
+	}
+}
+
+// TestTextBeforeTheBoxCountsWhateverTheEdges, which is the ordinary case and the
+// one §9.4.2 names first.
+func TestTextBeforeTheBoxCountsWhateverTheEdges(t *testing.T) {
+	root := layoutOf(t, 600,
+		`<div id="d"><span id="s">X<div id="a"></div></span></div>`,
+		noDefaults+`#d { width: 100px; height: 100px } `+
+			`#s { line-height: 100px } `+
+			`#a { position: absolute; width: 10px; height: 10px }`)
+	if got := find(t, root, "a").BorderRect.Y.Px(); got != 100 {
+		t.Errorf("the box is at %gpx, want 100 — there is text before it", got)
+	}
+}

@@ -267,6 +267,19 @@ type Item struct {
 	// all three apply to a non-replaced inline box on the horizontal axis, and
 	// what they do there is push the content along. See insetItems.
 	Inset bool
+	// Edged says this inset item's own side of the box carries a non-zero
+	// margin, border or padding — which is not the same as its Width being
+	// non-zero, because they can cancel.
+	//
+	// §9.4.2 asks the first question and not the second: a line box is
+	// zero-height only where it holds "no inline elements with non-zero
+	// margins, padding, or borders", so a "border-left: 100px" against a
+	// "margin-left: -100px" measures nothing and keeps its line. The pair
+	// abspos/static-inside-inline-002 and -003 turns on exactly this, and on
+	// which *side* of the box carries it: -002 puts the border on the leading
+	// edge, where the fragment before an absolutely positioned box has it, and
+	// -003 on the trailing edge, where that fragment does not.
+	Edged bool
 	// InsetLead distinguishes the two: the item before the box's content from
 	// the item after it, in *logical* order.
 	//
@@ -417,6 +430,19 @@ type MidLineBox struct {
 	Offset Point
 	// Abs distinguishes the two kinds.
 	Abs bool
+	// AfterContent says something was already on the line when the box was
+	// reached — which is not the same as Used being non-zero, and the
+	// difference is the whole reason it is here.
+	//
+	// §10.6.4's hypothetical box for an absolutely positioned box is
+	// block-level, so it would have split the inline content it was written
+	// among, and its top edge is the bottom of the line holding what precedes
+	// it. What precedes it may take no width at all: an inline box's own edge
+	// is content in §9.4.2's sense — the line it is on is not a zero-height one
+	// — and a border cancelled by a negative margin measures nothing.
+	// abspos/static-inside-inline-002 is exactly that, a "border-left: 100px"
+	// against a "margin-left: -100px".
+	AfterContent bool
 }
 
 // State is what the flattening carries from one inline box to the next.

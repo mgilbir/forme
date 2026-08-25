@@ -249,7 +249,8 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 			// not been written at all — which is what "out of flow" means and is
 			// the assertion a test can make that a float cannot.
 			outOfFlow = append(outOfFlow, MidLineBox{
-				Box: item.Abs, Used: used, Abs: true, Offset: item.Offset})
+				Box: item.Abs, Used: used, Abs: true, Offset: item.Offset,
+				AfterContent: contentOnLine(line)})
 			continue
 		}
 
@@ -724,4 +725,38 @@ func (br *Breaker) breakInsideWord(item Item, width style.Unit, content bool) (h
 	at = bounds[lo-1]
 	head, _ = br.SplitItem(item, at)
 	return head, at, true
+}
+
+// contentOnLine reports whether what is already on a line would keep it from
+// being one of §9.4.2's zero-height line boxes.
+//
+//	Line boxes that contain no text, no preserved white space, no inline
+//	elements with non-zero margins, padding, or borders [...] must be treated
+//	as zero-height line boxes.
+//
+// It is asked for §10.6.4's hypothetical box: an absolutely positioned box would
+// have split the inline content it was written among, and whether its own top
+// edge is that line's bottom or its top is whether the line above it exists at
+// all.
+//
+// An inline box's own edge counts by what it *is* rather than by what it
+// measures — a border cancelled by a negative margin is still a border — and it
+// counts on the side the fragment holds. That is Item.Edged, and the two halves
+// of it are what abspos/static-inside-inline-002 and -003 are written to tell
+// apart.
+func contentOnLine(line []Item) bool {
+	for _, item := range line {
+		switch {
+		case item.Inset:
+			if item.Edged {
+				return true
+			}
+		case item.Abs != nil || item.Float != nil:
+			// Out of flow: written here and drawn somewhere else, so it puts
+			// nothing on this line.
+		case item.Text != "" || item.Atomic != nil || item.Tab || item.Forced:
+			return true
+		}
+	}
+	return false
 }

@@ -612,6 +612,10 @@ func (l *layouter) insetItems(b *Box, containing style.Unit) (lead, trail inline
 	lead, trail = item, item
 	lead.InsetLead = true
 	lead.Width, trail.Width = left, right
+	// Which side each item stands for, so that a later stage can ask whether
+	// *this* edge carries anything rather than whether the box does. See
+	// Item.Edged.
+	lead.Edged, trail.Edged = anyLeft, anyRight
 	return lead, trail, true
 }
 
