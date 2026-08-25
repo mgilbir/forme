@@ -218,6 +218,12 @@ type Box struct {
 	// containing block's, and that is the single question this answers.
 	TableWrapper bool
 
+	// Pseudo is "before" or "after" when this box is a generated one, and empty
+	// otherwise. It is here because a pseudo-element carries its originating
+	// element in Element like any other box of that element, so the tree alone
+	// cannot say which side of the children a generated box was on.
+	Pseudo string
+
 	// Float and Clear are CSS 2.1 §9.5. They live on the box rather than being
 	// read out of Style at layout time for the same reason Outer and Inner do:
 	// whether a box is in the normal flow changes what the box tree itself is

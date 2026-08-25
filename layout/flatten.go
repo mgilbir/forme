@@ -350,6 +350,14 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			// of the block's strut instead, and everything after it sat two
 			// hundred pixels too high. The preserved segment break below is the
 			// same character by another spelling and has always done this.
+			// ::before and ::after on a <br> are boxes like any others. They
+			// were being dropped with the element, because the break replaced
+			// the box rather than standing between its two halves.
+			for _, gen := range child.Children {
+				if gen.Pseudo == "before" {
+					out, state = l.collectInline(gen, out, state, frame)
+				}
+			}
 			brAbove, brBelow := l.leading(child)
 			out = append(out, inlineItem{Box: child, Forced: true,
 				Leads: true, Above: brAbove, Below: brBelow,
@@ -361,6 +369,11 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			// What follows is at the start of a line, so a collapsible space
 			// there is removed rather than indenting it.
 			state = startOfContext()
+			for _, gen := range child.Children {
+				if gen.Pseudo == "after" {
+					out, state = l.collectInline(gen, out, state, frame)
+				}
+			}
 			continue
 		}
 		if child.Element != nil && strings.EqualFold(child.Element.Name, "wbr") &&

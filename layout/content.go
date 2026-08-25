@@ -284,7 +284,7 @@ func (b *boxBuilder) generated(n *html.Node, name string, fontSize style.Unit) *
 	outer, inner = outOfFlowDisplay(outer, inner, float, position)
 	z, zAuto := zIndexOf(cs)
 	box := &Box{
-		Outer: outer, Inner: inner, Element: n, Style: cs,
+		Outer: outer, Inner: inner, Element: n, Style: cs, Pseudo: name,
 		ListItem: listItem, FontSize: size, fontSizeKnown: true,
 		Float: float, Clear: clearOf(cs),
 		Position: position, ZIndex: z, ZAuto: zAuto, Order: order,
