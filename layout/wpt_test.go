@@ -797,9 +797,11 @@ const wptEnv = "WPT_TESTS"
 //     tree builder drops the line feed immediately after a <pre> start tag and
 //     this engine now does too, which is right for HTML and wrong for this file:
 //     it is XHTML, where there is no such rule, and its reference is drawn for a
-//     <pre> seven lines tall. The harness already adapts these documents in one
-//     place (see cdataRe); this is a second place where reading XHTML as HTML
-//     shows, and it is reported rather than worked around. Measured on its own,
+//     <pre> seven lines tall. The harness adapted these documents in one other
+//     place at the time — it stripped their CDATA sections before the parser saw
+//     them, which the parser now reads itself — and this is a second place where
+//     reading XHTML as HTML shows. It is reported rather than worked around.
+//     Measured on its own,
 //     the newline rule is worth exactly this: −1 clean, +1 failure, no other test
 //     either way.
 //   - textarea-always-preserves-spaces-001.tentative was passing because neither
@@ -1173,20 +1175,19 @@ func findReftests(t *testing.T, root string) []reftest {
 	return out
 }
 
-// cdataRe matches the CDATA wrapper an XHTML document puts around its CSS.
+// The harness used to strip the CDATA wrapper an XHTML document puts round its
+// CSS, on the grounds that the engine read HTML and should not learn XML syntax
+// to suit a test suite. It reads XML now — looksLikeXML decides, and a CDATA
+// section inside raw text is literal, which is what the markers ask for — so the
+// documents are handed over as they are written.
 //
-// The suite's older tests are .xht, which a browser parses as XML — and XML
-// strips a CDATA section before the CSS is ever seen. This engine reads HTML,
-// where <style> is raw text and the wrapper would be handed to the CSS parser
-// as though it were a rule.
-//
-// Stripping it here rather than in the engine is deliberate: the engine reads
-// HTML and should not learn XML syntax to suit a test suite. This is the harness
-// adapting the input, and it is the sort of adjustment that has to be visible.
-//
-// It was found by the vacuous-pass check failing to do its job — see the note on
-// clean passes below.
-var cdataRe = regexp.MustCompile(`(?s)<!\[CDATA\[(.*?)\]\]>`)
+// The difference is not only tidiness. Stripping the markers changed what the
+// document *means*: a reference inside a CDATA section is not a reference, and
+// with the markers gone "&#x46;" was resolved to a letter. CSS2/generated-
+// content/content-177 writes exactly that in a "content" string and asks for the
+// characters back. And the suite is now what checks the parser here: breaking
+// the CDATA branch of rawValue costs two and a half thousand clean passes, where
+// before it cost none at all.
 
 // emptyElementRe matches an XML empty-element tag: "<div/>", "<td class='x'/>".
 //
@@ -1345,7 +1346,7 @@ func renderForCompareDetail(root, file string) (ops []Op, findings []Finding, bl
 	if err != nil {
 		return nil, nil, false, err
 	}
-	src := cdataRe.ReplaceAllString(string(data), "$1")
+	src := string(data)
 	if ext := strings.ToLower(filepath.Ext(file)); ext == ".xht" || ext == ".xhtml" {
 		src = expandEmptyElements(src)
 	}
@@ -2125,7 +2126,7 @@ func TestSuiteFontFaceLoadsAhem(t *testing.T) {
 	if err != nil {
 		t.Skipf("no such document in this checkout: %v", err)
 	}
-	src := cdataRe.ReplaceAllString(string(data), "$1")
+	src := string(data)
 	if !strings.Contains(src, "/fonts/ahem.css") {
 		t.Skipf("%s no longer links the Ahem stylesheet", doc)
 	}
