@@ -51,6 +51,27 @@ func justifiableSpace(text string) bool {
 	return strings.Trim(text, " ") == ""
 }
 
+// justifiableHere reports whether §7.3 allows an opportunity at this item.
+//
+// text-justify applies to inline boxes as well as to block containers — "none:
+// justification is disabled: there are no justification opportunities within the
+// text" — so a space inside a "text-justify: none" span is not one, even on a
+// line the block is justifying. The property is inherited, so the item's own
+// computed value is already the answer for wherever it was written; nothing has
+// to walk the tree.
+//
+// The block's own value is read by lineAlignment, which turns a justified line
+// into a start-aligned one and never gets here. This is the other half: a block
+// that justifies with a span inside it that does not.
+func justifiableHere(item inlineItem) bool {
+	b := heldBox(item.Box)
+	if b == nil {
+		return true
+	}
+	allowed, _ := justificationOf(b)
+	return allowed
+}
+
 // justifyItems spreads slack across the word spaces of one line, and reports
 // whether it found anywhere to put it.
 //
@@ -128,7 +149,8 @@ func justifyItems(items []inlineItem, xs, widths []style.Unit, hangs []bool, sla
 	// property of the line's order rather than of anything's position, is what
 	// makes one pass and two passes the same answer.
 	expands := func(i, k int) bool {
-		return i < last && i > lastTab && justifiableSpace(items[k].Text) && !hangs[k]
+		return i < last && i > lastTab && justifiableSpace(items[k].Text) &&
+			!hangs[k] && justifiableHere(items[k])
 	}
 	n := 0
 	for i, k := range order {
