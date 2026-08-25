@@ -814,22 +814,48 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	// would hand down a number the box is not, and the day a reader takes
 	// cbHeight without asking whether it is definite, this is what stops it
 	// being wrong.
-	childHeight := declaredHeight
+	childHeight, childDefinite := declaredHeight, hasHeight
 	if hasHeight {
 		childHeight = l.clampHeight(b, declaredHeight, containing, at.cbHeight, at.cbDefinite)
+	}
+	if b.Anonymous() {
+		// §9.2.1.1's note, which the suite's anonymous-boxes-001a quotes in its
+		// own source: "if the child of the anonymous block box inside the DIV
+		// above needs to know the height of its containing block to resolve a
+		// percentage height, then it will use the height of the containing block
+		// formed by the DIV, not of the anonymous block box".
+		//
+		// An anonymous box has no declarations of its own, and height is not
+		// inherited, so its height is auto and every percentage inside it
+		// computed to auto with it. The test puts "height: 50%" on an image
+		// beside some text — which is what puts the image in an anonymous block
+		// — inside a div two hundred pixels tall, and asks for a hundred-pixel
+		// square. It drew the image at its intrinsic one pixel.
+		//
+		// Every anonymous box, and not only the block that wraps inline content:
+		// that is the scope §9.2.1.1 gives the rule, and narrowing it to a
+		// non-wrapper flow block was measured at the same 5653. The extra
+		// conditions would have been decoration.
+		//
+		// childDefinite and not hasHeight. The two were one variable and the
+		// difference is worth twenty-three clean passes: hasHeight is read again
+		// below, for whether the box's own bottom edge is open and for its own
+		// height, and neither of those becomes true because the box's *parent*
+		// declared a height.
+		childHeight, childDefinite = at.cbHeight, at.cbDefinite
 	}
 	inner := flow{
 		ctx:        at.ctx,
 		x:          at.x.Add(margin.Left).Add(border.Left).Add(padding.Left),
 		y:          at.y.Add(border.Top).Add(padding.Top),
 		cbHeight:   childHeight,
-		cbDefinite: hasHeight,
+		cbDefinite: childDefinite,
 		carriedTop: at.carriedTop,
 	}
 	own := at.ctx
 	if sealed || b.Parent == nil {
 		own = &floatContext{}
-		inner = flow{ctx: own, cbHeight: childHeight, cbDefinite: hasHeight}
+		inner = flow{ctx: own, cbHeight: childHeight, cbDefinite: childDefinite}
 	}
 
 	contentHeight, hoistTop, hoistBottom, placedAnything :=
