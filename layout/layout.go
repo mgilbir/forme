@@ -1712,6 +1712,38 @@ func (l *layouter) resolveWidth(b *Box, margin, border, padding Edges,
 	width := clamp(declared)
 	slack := available.Sub(width).Sub(margin.Horizontal())
 
+	// §10.3.3's first sentence, which is easy to read past because it is about
+	// what the *rules below* see rather than about a result:
+	//
+	//	If 'width' is not 'auto' and [the total] is larger than the width of
+	//	the containing block, then any 'auto' values for 'margin-left' or
+	//	'margin-right' are, for the following rules, treated as zero.
+	//
+	// So a box already too wide for its parent does not get pulled further out
+	// by an auto margin taking a negative share of a slack there is none of. It
+	// starts at the containing block's edge and overflows the other one — which
+	// is what a reader sees in every browser and what
+	// block-non-replaced-width-002 draws.
+	//
+	// Treated as zero rather than solved for: an auto margin is a request for
+	// the leftovers, and there are none.
+	//
+	// Two parts of this cannot be told apart from the alternatives, and both are
+	// arithmetic rather than judgement. "Larger than" is a strict comparison and
+	// an exact fit gives an auto margin nothing by either reading, so "<= 0"
+	// answers identically. And clearing the *right* one changes no number: a
+	// right auto margin has a declared value of zero, so the over-constrained
+	// branch below gives it "margin.Right + slack" where the auto branch gave it
+	// "slack", and those are the same. The left one is the whole of what moves —
+	// clearing only the right leaves it taking the negative share and the box
+	// starts outside its parent.
+	//
+	// Both are written as §10.3.3 writes them, which names the pair and says
+	// "larger than", rather than trimmed to what a test can see.
+	if slack < 0 {
+		marginLeftAuto, marginRightAuto = false, false
+	}
+
 	switch {
 	case marginLeftAuto && marginRightAuto:
 		// Centred. An odd number of units puts the extra on the right, which is
