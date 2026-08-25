@@ -1123,12 +1123,23 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		// in its own parenthesis, "including the case where the element's
 		// margins collapse through, in which case its bottom margin is also
 		// included": such a box is measured with its whole run whether the
-		// parent's edge is open or not. Leaving it out is not academic — it is
-		// the difference between clearing a float and not clearing it at all,
-		// and no-clearance-adjoining-opposite-float and
-		// no-clearance-due-to-large-margin-after-left-right in the suite are
-		// exactly that case, a 150px and a 185px top margin that carry a cleared
-		// empty box past the float so that nothing is drawn at all.
+		// parent's edge is open or not. That is about *which margins* are in the
+		// run, and it used to be read here as an exemption from the adjoining
+		// rule below as well. It is not one: a box that collapses through and a
+		// box that does not are in the same position with respect to a float
+		// their margin would move, because the margin moves both of them and so
+		// buys neither any distance from it.
+		//
+		// The two tests that reading was kept for —
+		// no-clearance-adjoining-opposite-float and
+		// no-clearance-due-to-large-margin-after-left-right, a 150px and a 185px
+		// top margin carrying a cleared empty box past a float — are answered by
+		// "adjoining" instead, and answered for the right reason: their floats
+		// are outside the block whose edge the margin leaves through, so the
+		// margin really does move the box relative to them and the whole run
+		// really does count. negative-clearance-after-adjoining-float is the
+		// case the exemption cost, an empty cleared box with a 200px margin over
+		// a float inside its own parent.
 		// §9.5.2 measures clearance against where the box would have gone had it
 		// not cleared anything — with 'clear' none, so with its top margin
 		// collapsing and leaving through the parent's open edge exactly as any
@@ -1150,7 +1161,7 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		// it and the run counts in full.
 		adjoining := origin.ctx.mark() > outsideFloats
 		hypothetical := y.Add(pending.value())
-		if escapes && adjoining && !cm.through {
+		if escapes && adjoining {
 			hypothetical = y
 		} else if escapes {
 			hypothetical = hypothetical.Sub(origin.carriedTop)
