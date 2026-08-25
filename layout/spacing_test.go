@@ -233,21 +233,26 @@ func TestTextIndentWidensAnIntrinsicWidth(t *testing.T) {
 }
 
 func TestUnresolvableTextIndentIsReported(t *testing.T) {
-	// "hanging" changes *which* lines are indented rather than by how much, so
-	// reading it as a length would indent the wrong ones. It is refused and said
-	// so rather than guessed at.
+	// A value that is not a length and not one of §7.1's two modifiers. It is
+	// refused and said so rather than guessed at, because guessing a length here
+	// indents by a number nobody asked for.
+	//
+	// It used to be "2em hanging" that stood for this, back when the modifiers
+	// were the unreadable part. They are read now, so the fixture has to be
+	// something that really is not a value — an indent in a unit that is not one.
+	//
 	// The pair of documents makes "once" mean the suppression rather than "there
 	// was one element". Two elements naming the same unusable value produce one
 	// finding; two naming different ones produce two, which is what shows both
 	// were visited.
 	if got := indentFindings(t,
 		`<div class="p">abc</div><p class="p">def</p>`,
-		`.p { text-indent: 2em hanging }`); got != 1 {
+		`.p { text-indent: 2quips }`); got != 1 {
 		t.Errorf("one unusable indent on two elements was reported %d times, want once", got)
 	}
 	if got := indentFindings(t,
 		`<div id="a">abc</div><p id="b">def</p>`,
-		`#a { text-indent: 2em hanging } #b { text-indent: 3em hanging }`); got != 2 {
+		`#a { text-indent: 2quips } #b { text-indent: 3quips }`); got != 2 {
 		t.Errorf("two different unusable indents were reported %d times, want twice — "+
 			"without two the document above proves nothing about the suppression", got)
 	}

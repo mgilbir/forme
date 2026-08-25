@@ -346,9 +346,42 @@ func (l *layouter) inlineWidths(b *Box) intrinsicWidths {
 	// block to take a percentage of while an intrinsic width is being measured.
 	// CSS Sizing says such a percentage behaves as auto here, which is what a
 	// basis of zero produces.
-	if indent := l.textIndent(b, 0); indent != 0 {
-		got.min = style.Max(split.rest.min, split.first.min.Add(indent))
-		got.max = style.Max(split.rest.max, split.first.max.Add(indent))
+	// Which half the indent is on is §7.1's two modifiers. "hanging" puts it on
+	// every line but the first, which is the other half of the same split and
+	// exactly as exact. "each-line" puts it on the first line of every forced
+	// segment, and the split does not model those: it knows the first line and
+	// the rest, and the rest holds soft-wrapped lines as well. So both halves
+	// take it, which over-states the width of a box whose widest line is a
+	// soft-wrapped one. That is the safe direction — a box measured too wide
+	// leaves room nothing uses, a box measured too narrow has its indented line
+	// running out of it — and it is the same approximation the property's own
+	// definition invites, since a soft wrap in one width is a forced segment
+	// start in another.
+	if indent, mode := l.textIndent(b, 0); indent != 0 {
+		first, rest := split.first, split.rest
+		// A half with no width is a box that has no such line — the "rest" of a
+		// single-line box, above all. Indenting it would ask for room for a line
+		// that does not exist, and with a wide indent that room is what the box
+		// would be sized to.
+		indentRest := func() {
+			if rest.min > 0 {
+				rest.min = rest.min.Add(indent)
+			}
+			if rest.max > 0 {
+				rest.max = rest.max.Add(indent)
+			}
+		}
+		switch {
+		case mode.eachLine:
+			first.min, first.max = first.min.Add(indent), first.max.Add(indent)
+			indentRest()
+		case mode.hanging:
+			indentRest()
+		default:
+			first.min, first.max = first.min.Add(indent), first.max.Add(indent)
+		}
+		got.min = style.Max(rest.min, first.min)
+		got.max = style.Max(rest.max, first.max)
 		// A hang can take the preferred width below the minimum, and the two mean
 		// something contradictory in that order: shrink-to-fit is
 		// min(max(minimum, available), preferred), so a preferred width below the

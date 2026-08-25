@@ -252,18 +252,30 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	// §16.1's indent, which applies to the first line box this container
 	// generates and to no other. It is resolved once: a percentage is of this
 	// box's own content width, which is the width being laid out in.
-	indent := l.textIndent(b, width)
+	indent, indentMode := l.textIndent(b, width)
 	// §8.4's "first", which is a negative indent and is applied as one: the
 	// first line begins that much further back and has that much more room, and
 	// the suite's own reference for it is written as "text-indent: -1em".
 	//
-	// It is added to the indent rather than replacing it, because the two are
-	// different requests and a document may make both — the last row of
+	// It is on the first line only, whichever lines the indent itself lands on,
+	// because that is what "hanging-punctuation: first" says — the first
+	// character of the first line hangs. So it is kept apart from the indent and
+	// added to whatever that line came to, rather than folded into the indent
+	// the way it was when only the first line could be indented at all. A
+	// document may make both requests: the last row of
 	// hanging-punctuation-first sets a positive text-indent and asks for the
 	// bracket to hang into it.
-	indent = indent.Sub(hangStartWidth(items))
-	firstLine := true
-	_ = firstLine
+	hangStart := hangStartWidth(items)
+	// The first line of *this box*, which is not the first line of the block
+	// when the box is an anonymous continuation — a block child splits its
+	// parent's inline content, and the run after it is not where the parent's
+	// indent goes. §7.1's "hanging" is why that is a flag and no longer an early
+	// return: those lines are not beginnings, and with "hanging" a line that is
+	// not a beginning is exactly the line that moves.
+	firstLine := !b.afterTheFirstLine
+	// Whether the line before this one ended at a forced break, which is the
+	// other kind of beginning "each-line" recognises.
+	afterForced := false
 
 	// CSS Overflow 4's line-clamp: how many more lines the clamps in force
 	// allow this block, and the room the mark will need on the last of them.
@@ -282,7 +294,16 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	// the *breaking* is done in the narrower measure. Narrowing the box itself
 	// would move a centred line and shorten a right-aligned one, which is a
 	// different rendering from the one balancing asks for.
-	balanceCaps := l.balanceCaps(b, items, width, indent)
+	// Balancing measures against the first line's indent, which is the one the
+	// breaker's own model has: it fills a line at a time from the start of the
+	// box. With "hanging" that line is not the indented one, so the number it
+	// wants is what the first line actually gets.
+	firstIndent := style.Unit(0)
+	if indentMode.indentsLine(firstLine, false) {
+		firstIndent = indent
+	}
+	firstIndent = firstIndent.Sub(hangStart)
+	balanceCaps := l.balanceCaps(b, items, width, firstIndent)
 	if balanceCaps != nil && clamped && maxLines > 0 {
 		// Balancing a clamped block is a different question, because the clamp
 		// has already decided how many lines there are: any width at all
@@ -290,7 +311,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		// asks nothing. What must not change is how much of the content is
 		// *shown* — §5.1 evens out the lines, it does not throw more away — so
 		// the search is over the reach instead. See balanceClampedWidth.
-		w := l.br.BalanceClampedWidth(items, width, indent, clampEllipsis, maxLines)
+		w := l.br.BalanceClampedWidth(items, width, firstIndent, clampEllipsis, maxLines)
 		for i := range balanceCaps {
 			balanceCaps[i] = w
 		}
@@ -339,7 +360,8 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	for pass := 0; ; pass++ {
 		y, iByte = 0, 0
 		bands = bands[:0]
-		firstLine = true
+		firstLine = !b.afterTheFirstLine
+		afterForced = false
 		balanceMetFloat = false
 		decor = inlineDecor{l: l, containing: width, strut: st}
 		for i := 0; i < len(items); {
@@ -377,8 +399,11 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			// right" first line end short of the right edge by the indent, which is
 			// the opposite of what §16.1 asks for.
 			lineIndent := style.Unit(0)
-			if firstLine {
+			if indentMode.indentsLine(firstLine, afterForced) {
 				lineIndent = indent
+			}
+			if firstLine {
+				lineIndent = lineIndent.Sub(hangStart)
 			}
 			// The room the ellipsis needs on this line, which is the last one the
 			// clamp allows and nothing before it.
@@ -754,6 +779,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				// of inline content that produced none — the collapsible space between
 				// two block children — has not used it up.
 				firstLine = false
+				afterForced = forced
 			}
 
 			// The floats met along the line were placed while it was being fitted —
@@ -893,9 +919,9 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		// long to search, or one whose lines cannot be made to come out at the
 		// count the first pass found — the width search stands, and its answer
 		// is at least measured in the right bands.
-		lineCaps = l.br.BalanceScoredCaps(items, bands, indent, len(bands))
+		lineCaps = l.br.BalanceScoredCaps(items, bands, firstIndent, len(bands))
 		if lineCaps == nil {
-			w := l.br.BalanceWidthInBands(items, bands, width, indent)
+			w := l.br.BalanceWidthInBands(items, bands, width, firstIndent)
 			for i := range balanceCaps {
 				balanceCaps[i] = w
 			}
