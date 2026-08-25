@@ -372,6 +372,39 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 		return nil
 	}
 
+	if name == "display" && !legalDisplay(d.Value) {
+		// §4.2 once more, and this one has a visible cost in the other
+		// direction. An engine that reads an unrecognised display value as the
+		// property's *initial* value makes the element inline, and the initial
+		// value is what CSS says the property means when nobody has set it —
+		// which is not this case. The declaration is invalid, so it never
+		// happened, and what stands is what the cascade would have produced
+		// without it: the user agent sheet's "div { display: block }".
+		//
+		// The two answers are as far apart as they can be. CSS2/abspos/
+		// static-fixed-inside-abspos writes "display: absolute" — the author
+		// meant "position" — on a div whose background is the green square the
+		// test is about. Read as inline, the div has no in-flow content, so it
+		// has no line box, so nothing of it is painted at all and the page is
+		// the red square underneath.
+		//
+		// It is also what makes the prefixed idiom work. An author who writes
+		// "display: -moz-box; display: flex" is relying on the first
+		// declaration being thrown away by everything that does not know it,
+		// and an engine that instead lets it stand as "inline" gets neither.
+		//
+		// Not marked unsupported, for the reason the checks above are not:
+		// nothing is missing here, a stylesheet said something CSS forbids and
+		// CSS says what to do about it.
+		s.report(Finding{
+			Offset: d.Offset,
+			Message: "\"display: " + serialize(d.Value) + "\" is not a display " +
+				"value, so the declaration was dropped",
+			Property: name,
+		})
+		return nil
+	}
+
 	if name == "quotes" && !legalQuotes(d.Value) {
 		// §12.3.2's grammar is "[<string> <string>]+ | none", so an odd number of
 		// strings names a level with an opening mark and no closing one and is not
@@ -600,6 +633,95 @@ func legalColour(name string, vals []css.ComponentValue) bool {
 	}
 	_, ok := ParseColor(vals)
 	return ok
+}
+
+// legalDisplay reports whether a "display" value is one css-display-3 defines.
+//
+// The list is that specification's, plus the two legacy shapes CSS has always
+// had — "inline-block" and friends — and "-webkit-box", which this engine
+// implements as a block for "-webkit-line-clamp" to be written on. A value not
+// on it is not a strange display, it is not a display at all.
+//
+// The two-value syntax is accepted loosely: any combination of an outside
+// keyword, an inside keyword and "list-item". Being permissive is the safe
+// direction here, because the cost of the two mistakes is not symmetric —
+// keeping a value nobody implements gives the element the fallback it has
+// always had, and dropping one that is really a display silently restores the
+// user agent sheet's answer instead.
+func legalDisplay(vals []css.ComponentValue) bool {
+	for _, v := range vals {
+		if v.IsFunction() || v.IsBlock() {
+			// A value this engine has not finished reading. "var()" is the one
+			// that matters: custom properties are not substituted here, so what
+			// the declaration says is not known yet, and calling it invalid
+			// would be deciding that on no evidence.
+			return true
+		}
+	}
+	parts := splitOnWhitespace(vals)
+	if len(parts) == 0 || len(parts) > 3 {
+		return false
+	}
+	words := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if len(part) != 1 || part[0].Token.Kind != css.Ident {
+			// A string, a number, a punctuation mark. Whatever else it is, it
+			// is not a keyword, and every display value is one.
+			return false
+		}
+		words = append(words, strings.ToLower(part[0].Token.Value))
+	}
+	if len(words) == 1 {
+		switch words[0] {
+		case kwInherit, kwInitial, kwUnset, kwRevert:
+			return true
+		}
+		if singleDisplay[words[0]] {
+			return true
+		}
+		// "flow" and "flow-root" are inside keywords and are also valid alone.
+		return displayInside[words[0]]
+	}
+	var outside, inside, item int
+	for _, w := range words {
+		switch {
+		case displayOutside[w]:
+			outside++
+		case displayInside[w]:
+			inside++
+		case w == "list-item":
+			item++
+		default:
+			return false
+		}
+	}
+	return outside <= 1 && inside <= 1 && item <= 1
+}
+
+var displayOutside = map[string]bool{"block": true, "inline": true, "run-in": true}
+
+var displayInside = map[string]bool{
+	"flow": true, "flow-root": true, "table": true,
+	"flex": true, "grid": true, "ruby": true,
+}
+
+// singleDisplay is every value that stands on its own: the box keywords, the
+// legacy pairs, and the layout-internal ones a table is built from.
+var singleDisplay = map[string]bool{
+	"none": true, "contents": true,
+	"block": true, "inline": true, "run-in": true, "list-item": true,
+	"inline-block": true, "inline-table": true,
+	"inline-flex": true, "inline-grid": true,
+	"table": true, "table-row-group": true, "table-header-group": true,
+	"table-footer-group": true, "table-row": true, "table-cell": true,
+	"table-column-group": true, "table-column": true, "table-caption": true,
+	"flex": true, "grid": true, "ruby": true,
+	"ruby-base": true, "ruby-text": true,
+	"ruby-base-container": true, "ruby-text-container": true,
+	"math": true,
+	// Not a specification value. This engine reads it as a block, because
+	// css-overflow-4's compatibility section is written around it.
+	"-webkit-box": true,
 }
 
 var nonNegative = map[string]bool{
