@@ -274,9 +274,19 @@ func TestWordSpacingCountsTheNoBreakSpace(t *testing.T) {
 	// for the purpose of collapsing, so it stays inside the word's run — which is
 	// exactly why counting it needs its own walk rather than falling out of the
 	// run being a space.
+	//
+	// The width is summed over the line's runs rather than read off the first,
+	// because the no-break space ends one: a run carries a width and no way to
+	// say where inside it the extra room is, so the spacing after a separator is
+	// only drawn if the separator is last. TestWordSpacingMovesWhatFollowsTheNoBreakSpace
+	// below is the half that checks it lands in the right place.
 	root := layoutOf(t, 600, `<div id="p">a&#160;b</div>`,
 		noDefaults+spaceCSS+` #p { word-spacing: 10px }`)
-	if got := runWidths(t, root, "p")[0]; got != 46 {
+	var got float64
+	for _, w := range runWidths(t, root, "p") {
+		got += w
+	}
+	if got != 46 {
 		t.Errorf("\"a\\u00a0b\" with 10px word-spacing is %gpx, want 46 (3 x 12 + 10)", got)
 	}
 }

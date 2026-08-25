@@ -184,11 +184,7 @@ func countWordSeparators(text string) int {
 			r, size = utf8.DecodeRuneInString(text[i:])
 		}
 		i += size
-		switch r {
-		case ' ', '\u00a0', // space, and the no-break space an author writes
-			'\u1361',                   // Ethiopic wordspace
-			'\U00010100', '\U00010101', // Aegean word separators
-			'\U0001039F', '\U0001091F': // Ugaritic and Phoenician
+		if isWordSeparator(r) {
 			n++
 		}
 	}
@@ -221,6 +217,56 @@ func SplitAtCursiveTracking(text string) []string {
 		}
 		prev, havePrev = suppressed, true
 	})
+	if out == nil {
+		return nil
+	}
+	return append(out, text[start:])
+}
+
+// isWordSeparator reports whether §8.3's word-spacing goes after a character.
+func isWordSeparator(r rune) bool {
+	switch r {
+	case ' ', '\u00a0', // space, and the no-break space an author writes
+		'\u1361',                   // Ethiopic wordspace
+		'\U00010100', '\U00010101', // Aegean word separators
+		'\U0001039F', '\U0001091F': // Ugaritic and Phoenician
+		return true
+	}
+	return false
+}
+
+// SplitAtWordSeparators cuts text after each word-separator character, so that
+// the spacing §8.3 puts after one falls at the end of a run.
+//
+// It exists for the backend and not for the rule, exactly as
+// SplitAtCursiveTracking does. A display list carries a run's width and its
+// letter-spacing, and nothing that says "and thirty-two pixels after the third
+// character": the width a run is measured to already holds the word-spacing, and
+// the glyphs inside it are drawn at their own advances, so a separator in the
+// middle of a run is measured wide and drawn narrow. Everything after it on the
+// line then sits where it would have without the spacing.
+//
+// It is not needed for an ordinary space, which SplitAtBreaks already gives a
+// piece of its own — a line may end after one. The characters this is for are
+// the ones that separate words and offer no break: a no-break space above all,
+// which is what an author writes to keep two words together, and the four
+// ancient word separators beside it.
+//
+// Nothing is returned where there is nothing to cut, which is every run of every
+// document with no word-spacing on it — the caller asks only then.
+func SplitAtWordSeparators(text string) []string {
+	var out []string
+	start := 0
+	for i, r := range text {
+		if !isWordSeparator(r) {
+			continue
+		}
+		end := i + utf8.RuneLen(r)
+		if end < len(text) {
+			out = append(out, text[start:end])
+			start = end
+		}
+	}
 	if out == nil {
 		return nil
 	}

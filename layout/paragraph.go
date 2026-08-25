@@ -74,6 +74,7 @@ var (
 	autospaceOf                   = paragraph.AutospaceOf
 	splitAtAutospace              = paragraph.SplitAtAutospace
 	splitAtCursiveTracking        = paragraph.SplitAtCursiveTracking
+	splitAtWordSeparators         = paragraph.SplitAtWordSeparators
 	mayNotBeginLine               = paragraph.MayNotBeginLine
 	splitAtBreaks                 = paragraph.SplitAtBreaks
 	tabAdvance                    = paragraph.TabAdvance

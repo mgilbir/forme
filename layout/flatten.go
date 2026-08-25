@@ -970,6 +970,17 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 					runs = cutRunsAt(runs, parts)
 				}
 			}
+			// And after each word separator, for the same reason again: §8.3's
+			// spacing goes after the character, and a run carries a width and
+			// no way to say where inside it the extra room is. A space is
+			// already a piece of its own — a line may end after one — so what
+			// this is for is the separator that offers no break, the no-break
+			// space above all.
+			if spacing.Word != 0 {
+				if parts := splitAtWordSeparators(p.Text); len(parts) > 1 {
+					runs = cutRunsAt(runs, parts)
+				}
+			}
 		}
 		for ri, run := range runs {
 			para, start, end := frame.Bidi.Add(run.Text)
