@@ -75,3 +75,38 @@ func TestABoxNobodyGaveAFontSizeStillGetsOne(t *testing.T) {
 			"decided its font size, so the em resolves against the default", got)
 	}
 }
+
+// TestABoxThatTakesItsParentsSizeTakesItsParentsAnswer.
+//
+// Four boxes are made with a parent's font size copied onto them, and every one
+// copied the number and not whether it was decided — so a zero the document
+// asked for became sixteen the moment the box was wrapped in anything, and a
+// "font-size: 0" block with a block child among its inline ones got its strut
+// back.
+//
+// This asks the one of the four that a document can see. The other three — the
+// anonymous table box §17.2.1 inserts, §17.4's table wrapper, and the text an
+// <img>'s alt attribute becomes — answer the same either way, because nothing
+// asks ensureFontSize about them; see the note on Box.fontSizeKnown.
+func TestABoxThatTakesItsParentsSizeTakesItsParentsAnswer(t *testing.T) {
+	const ib = `<div style="display: inline-block; width: 50px; height: 100px"></div>`
+	for _, tc := range []struct {
+		what, inner, extra string
+		want               float64
+	}{
+		// An anonymous block: a block child among the inline ones is what makes
+		// CSS Display §2.1 wrap the rest.
+		{"an anonymous block", `<div style="height: 1px"></div>` + ib, ``, 101},
+		// The same, one element deeper, so the wrapping happens around a piece
+		// of a split inline.
+		{"a split inline's pieces",
+			`<span style="font-size: 0"><div style="height: 1px"></div>` + ib + `</span>`, ``, 101},
+	} {
+		root := layoutOf(t, 600, `<div id="w">`+tc.inner+`</div>`,
+			noDefaults+`#w { float: left; font-size: 0 }`+tc.extra)
+		if got := find(t, root, "w").BorderRect.H.Px(); got != tc.want {
+			t.Errorf("%s: the box is %gpx tall, want %g — the font size it took from "+
+				"its parent is a zero the document asked for", tc.what, got, tc.want)
+		}
+	}
+}

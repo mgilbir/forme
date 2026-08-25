@@ -306,6 +306,15 @@ type Box struct {
 	// It is a flag rather than a pointer or a sentinel because the zero value of
 	// a Box has to stay usable: a fragment tree assembled by hand in a test has
 	// no cascade behind it, and that is the case ensureFontSize exists for.
+	//
+	// It travels with FontSize wherever one box takes another's — the anonymous
+	// block CSS Display §2.1 wraps a run of inline children in, the anonymous
+	// table box §17.2.1 inserts, §17.4's table wrapper, and the text an <img>'s
+	// alt attribute becomes — because the two are one fact and copying half of
+	// it is how a zero becomes sixteen. Only the first is observable today:
+	// nothing asks ensureFontSize about the other three, so a dropped flag
+	// answers the same. They carry it because a rule applied in three places out
+	// of four is the drift this field exists to prevent.
 	fontSizeKnown bool
 
 	// staticInline records that this box was inline-level before §9.7 blockified
@@ -1479,7 +1488,7 @@ func (b *boxBuilder) wrapInlines(parent *Box) []*Box {
 		anon := &Box{
 			Outer: OuterBlock, Inner: InnerFlow,
 			Style: style.Inherited(parent.Style), Parent: parent,
-			FontSize: parent.FontSize,
+			FontSize: parent.FontSize, fontSizeKnown: parent.fontSizeKnown,
 			Children: run,
 			// Anything in flow before this one means the parent's first line has
 			// already happened, whether it was another anonymous block or a

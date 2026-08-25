@@ -723,7 +723,8 @@ func (l *replacedLoader) altOnly(b *Box) {
 	}
 	child := &Box{
 		Outer: OuterInline, Inner: InnerText,
-		Style: b.Style, Text: text, FontSize: b.FontSize, Parent: b,
+		Style: b.Style, Text: text, FontSize: b.FontSize,
+		fontSizeKnown: b.fontSizeKnown, Parent: b,
 	}
 	b.Children = append(b.Children, child)
 }
