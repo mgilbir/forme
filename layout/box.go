@@ -648,11 +648,18 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 	}
 	box.ListValue, box.ListNumbered = b.listValueOf(n, listItem)
 	box.Control = b.controlFor(n)
-	if outer != OuterInline || endsAWord(n) {
+	if (outer != OuterInline && !box.outOfFlow()) || endsAWord(n) {
 		// A block-level box begins its text afresh, so a word cannot run into it
 		// from the paragraph before. Without this, "<p>hi</p><p>there</p>" under
 		// "capitalize" would leave the second paragraph's "t" lower-case, since
 		// the "i" before it is a word character.
+		//
+		// An out-of-flow box is not one of them, however §9.7 has blockified it.
+		// It is not in the text at all: nothing of it sits between the letters
+		// either side, and a word does not end because an author hung an overlay
+		// off the middle of it. text-transform-capitalize-033 is exactly that —
+		// "p<span style='position: absolute'></span>ass" — and it came out
+		// "PAss".
 		//
 		// A <br> is inline and does the same thing for the same reason: it is a
 		// line break the author wrote, so what follows it begins a line and
@@ -701,9 +708,10 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		after.Parent = box
 		box.Children = append(box.Children, after)
 	}
-	if outer != OuterInline {
+	if outer != OuterInline && !box.outOfFlow() {
 		// And a block-level box ends its text: the word does not continue into
-		// whatever comes after it.
+		// whatever comes after it. An out-of-flow one still does not, for the
+		// reason above.
 		b.afterWord = false
 	}
 	return box
