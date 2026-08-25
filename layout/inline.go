@@ -430,6 +430,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					style.Min(right.Sub(left), lineCap(balanceCaps, lineCaps, i, len(parent.Lines))).
 						Sub(lineIndent).Sub(lineEllipsis),
 					left.Sub(lo).Add(lineIndent))
+				l.unkernLineEnd(runs)
 				stack = stackLine(runs, strutOver(st, items, next, forced))
 				lh, bl = stack.Height, stack.Baseline
 
@@ -957,4 +958,52 @@ func strutOver(st strut, items []inlineItem, next int, forced bool) strut {
 	st.Baseline = style.Max(st.Baseline, br.Above)
 	st.Height = st.Baseline.Add(descent)
 	return st
+}
+
+// unkernLineEnd takes the pair kerning out of the last run of a line.
+//
+// §8.1's boundary shaping gives every run the text either side of it, and a face
+// that kerns then shrinks the run's last glyph against the first of the run
+// after it — which is right while the two are next to each other and wrong once
+// a line break has come between them. Two characters on different lines are not
+// adjacent, which is the same sentence §8.2 states for letter-spacing and §8.1
+// for its own gap.
+//
+// What changes is the *advance* and not the ink: a pair adjusts the left glyph's
+// advance, and nothing on this line follows it. So the context is left alone —
+// the glyphs are drawn exactly where they were — and only the width the line and
+// the inline boxes on it are measured to is put back.
+//
+// The suite's hanging-punctuation-inline-bound-001 is where it shows: a <span>
+// with a background around three lines of Japanese, whose first line's box came
+// out 241.2px against the reference's 243. The 1.8px is one kern at 60px.
+//
+// Only for a face with no positional forms. For a cursive one the context
+// decides which letter is drawn as well as where the pen stops, and the two
+// cannot be told apart by measuring: taking the context away would report the
+// isolated form's width, which is not a kern and is not what a line break does
+// to a word. A word broken *inside* by overflow-wrap keeps its forms — CSS Text
+// §5.4, and SplitItem is what gives it them.
+func (l *layouter) unkernLineEnd(runs []inlineItem) {
+	for k := len(runs) - 1; k >= 0; k-- {
+		it := &runs[k]
+		if it.Inset || it.Abs != nil || it.Float != nil {
+			// Not a run of text: an inline box's own edge, or a box that is
+			// drawn somewhere else. Neither ends the line's text.
+			continue
+		}
+		if it.Face == nil || it.Text == "" || it.PostContext == "" ||
+			it.Face.HasJoiningForms() {
+			return
+		}
+		alone := l.br.MeasureSpacedInContext(it.Face, it.Text, it.Size, it.Spacing,
+			it.PreContext, "")
+		inContext := l.br.MeasureSpacedInContext(it.Face, it.Text, it.Size, it.Spacing,
+			it.PreContext, it.PostContext)
+		// The difference and not the measurement, so that everything else the
+		// width carries — §8.1's gap, the letter-spacing the boundary rule
+		// exchanged — survives.
+		it.Width = it.Width.Add(alone.Sub(inContext))
+		return
+	}
 }
