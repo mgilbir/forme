@@ -1161,6 +1161,25 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		// it and the run counts in full.
 		adjoining := origin.ctx.mark() > outsideFloats
 		hypothetical := y.Add(pending.value())
+		if cm.through {
+			// §8.3.1's note about where a self-collapsing box *is*: "the
+			// position of the element's top border edge is the same as it would
+			// have been if the element had a non-zero bottom border". With a
+			// bottom border its two margins would not have met, so its top edge
+			// is after its own top margin and not after the run the two
+			// collapsed into.
+			//
+			// The distinction is only visible through clearance, which is
+			// measured against this position — and it is the whole of
+			// margin-collapse-clear-013, whose own source works it out: a 40px
+			// top margin and a 140px bottom one over a 100px float. Measured at
+			// 140 the box is already past the float and clears nothing, and the
+			// run leaves through the parent's bottom edge; measured at 40 it
+			// clears 60, which puts its top edge on the float's bottom and
+			// leaves the rest of the bottom margin inside the parent. The
+			// parent is 200px tall instead of nothing at all.
+			hypothetical = y.Add(before.merge(cm.topAlone).value())
+		}
 		if escapes && adjoining {
 			hypothetical = y
 		} else if escapes {
