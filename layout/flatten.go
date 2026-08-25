@@ -289,6 +289,26 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			if state.AfterBinding {
 				item.BreakBefore = false
 			}
+			// And §5.1's rule about *which element* decides, which applies to
+			// this opportunity as it does to one between two characters: "the
+			// white-space property on the nearest common ancestor of the two
+			// characters controls breaking". A picture is a character unit for
+			// this purpose, so a line may not end in front of one inside a
+			// "white-space: nowrap" span — and two inline-blocks written side by
+			// side under "pre" or "nowrap" wrapped anyway, which is the one
+			// thing those values are for.
+			//
+			// Only the opportunity is refused. Marking the item NoWrap as well
+			// would say something else — that a line may not *begin* here — and
+			// Item.NoWrap conflates the two: the rewind branch in the fill reads
+			// it and would decline to go back to the space before the span,
+			// where a break is perfectly legal.
+			if prev, ok := state.AfterBox.(*Box); ok && item.BreakBefore {
+				if anc := commonAncestor(prev, child); anc != nil &&
+					!whiteSpaceFor(anc.Style).Wrap {
+					item.BreakBefore = false
+				}
+			}
 			item.BidiPara, item.BidiStart, item.BidiEnd = para, start, end
 			out = append(out, item)
 			// LB20's other half: a line may also begin after the picture, so
