@@ -1451,8 +1451,30 @@ func (l *layouter) floatChild(b *Box, width style.Unit, origin flow,
 		// should have pushed earlier words of the same line down with it.
 		at = at.Add(drop)
 	}
-	if c := origin.ctx.clearance(b.Clear); c > at {
-		at = c
+	// And rule 6 only when the float asked for it. floatContext.clearance
+	// answers "the bottom of the lowest float on a cleared side, and zero when
+	// there is none", so a box that clears nothing is told zero — and comparing
+	// that against the position raises any float whose containing block sits
+	// *above* the formatting context root's content top, which a negative
+	// margin puts it. The float then leaves the block it belongs to and lands on
+	// the root's edge, and every box that has to avoid it is measured against a
+	// float that is not where the page draws it.
+	//
+	// l.clearanceOver, which is the same question for a block, has had this
+	// guard as its first line all along. §9.5.2 computes clearance as a
+	// difference and a box that clears nothing has no difference to apply.
+	//
+	// The floor is still there for a float that clears a side with no float on
+	// it — the index's bottoms start at zero, so "nothing to clear" and "a float
+	// ending at zero" are the same answer, and the block path above floors the
+	// same way. Reaching it needs "clear" on a float inside a block a negative
+	// margin has carried above its formatting context root, and telling the two
+	// apart means a bottom that can say it is absent, which is the index's shape
+	// rather than this call.
+	if b.Clear != ClearNone {
+		if c := origin.ctx.clearance(b.Clear); c > at {
+			at = c
+		}
 	}
 
 	rect := origin.ctx.place(size, b.Float, at, origin.x, origin.x.Add(width))
