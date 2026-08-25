@@ -799,8 +799,19 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 						// not: float-in-inline-001 and position-absolute-007 in the
 						// suite each write such a box beside a float and check that
 						// the float did not carry it along.
+						// And *below* that line where anything on it came first.
+						// The hypothetical box is block-level, so it would have
+						// split the inline content it was written among: what
+						// precedes it stays on the line above and the box's own
+						// top edge is that line's bottom. Only where nothing
+						// precedes it is the line's top the answer, which is the
+						// box written before the first word.
+						top := y
+						if f.Used > 0 {
+							top = top.Add(lh)
+						}
 						l.deferAbsolute(abs, parent,
-							f.Offset.X, y.Add(f.Offset.Y), 0, 0)
+							f.Offset.X, top.Add(f.Offset.Y), 0, 0)
 						continue
 					}
 					// The offset of the inline boxes it was written inside, which

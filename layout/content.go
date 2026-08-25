@@ -274,6 +274,13 @@ func (b *boxBuilder) generated(n *html.Node, name string, fontSize style.Unit) *
 	if position.outOfFlow() {
 		float = FloatNone
 	}
+	// Whether it was inline-level *before* §9.7 blockified it for being out of
+	// flow, which is what decides where its static position is. A pseudo-element
+	// is inline by default, so an "::after { position: absolute }" has a
+	// hypothetical static box on the line it was written on rather than a block
+	// below it — see Box.staticInline. The element walk records this and this
+	// walk did not, so every positioned pseudo-element read as block-level.
+	staticInline := outer == OuterInline
 	outer, inner = outOfFlowDisplay(outer, inner, float, position)
 	z, zAuto := zIndexOf(cs)
 	box := &Box{
@@ -281,6 +288,7 @@ func (b *boxBuilder) generated(n *html.Node, name string, fontSize style.Unit) *
 		ListItem: listItem, FontSize: size,
 		Float: float, Clear: clearOf(cs),
 		Position: position, ZIndex: z, ZAuto: zAuto, Order: order,
+		staticInline: staticInline,
 	}
 	// The text is collapsed exactly as document text is, by the pseudo-element's
 	// own "white-space". Generated content is put in an anonymous inline box and
