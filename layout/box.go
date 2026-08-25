@@ -292,6 +292,22 @@ type Box struct {
 	// that did not ask for one.
 	splitFrom []*Box
 
+	// fontSizeKnown says a cascade decided this box's FontSize, so a zero there
+	// is a zero the document asked for rather than a field nobody filled in.
+	//
+	// "font-size: 0" is a real declaration and a common one — it is how a
+	// stylesheet removes the white space between inline-blocks, and the suite's
+	// table-vertical-align-baseline-008 writes it — and ensureFontSize used to
+	// read it as absent and put sixteen pixels back. That is invisible in the
+	// text, which has no glyphs to draw at either size, and visible in the
+	// *strut*: every line in such a box came out the height of a font nobody
+	// asked for.
+	//
+	// It is a flag rather than a pointer or a sentinel because the zero value of
+	// a Box has to stay usable: a fragment tree assembled by hand in a test has
+	// no cascade behind it, and that is the case ensureFontSize exists for.
+	fontSizeKnown bool
+
 	// staticInline records that this box was inline-level before §9.7 blockified
 	// it for being out of flow.
 	//
@@ -610,7 +626,7 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 	z, zAuto := zIndexOf(cs)
 	box := &Box{
 		Outer: outer, Inner: inner, Element: n, Style: cs,
-		ListItem: listItem, FontSize: fontSize,
+		ListItem: listItem, FontSize: fontSize, fontSizeKnown: true,
 		Float: float, Clear: clearOf(cs),
 		Position: position, ZIndex: z, ZAuto: zAuto, Order: order,
 		staticInline: staticInline,
@@ -851,7 +867,7 @@ func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSi
 	}
 	return &Box{
 		Outer: OuterInline, Inner: InnerText,
-		Style: inherited, Text: text, FontSize: fontSize,
+		Style: inherited, Text: text, FontSize: fontSize, fontSizeKnown: true,
 	}
 }
 
@@ -1350,11 +1366,19 @@ func isZeroLength(v string) bool {
 
 // clonePiece makes an empty copy of an inline box, keeping everything that
 // decides how it is styled and measured.
+//
+// fontSizeKnown travels with FontSize because the two are one fact, and no
+// document can tell: nothing asks ensureFontSize about an inline piece, so a
+// clone that lost the flag would answer the same today. It is copied because a
+// clone of a box the cascade sized is a box the cascade sized, and the day a
+// piece reaches ensureFontSize a dropped flag would put sixteen pixels into a
+// box that asked for none.
 func clonePiece(b *Box) *Box {
 	return &Box{
 		Outer: b.Outer, Inner: b.Inner,
 		Element: b.Element, Style: b.Style,
-		FontSize: b.FontSize, ListItem: b.ListItem, Replaced: b.Replaced,
+		FontSize: b.FontSize, fontSizeKnown: b.fontSizeKnown,
+		ListItem: b.ListItem, Replaced: b.Replaced,
 		Float: b.Float, Clear: b.Clear,
 		Position: b.Position, ZIndex: b.ZIndex, ZAuto: b.ZAuto,
 		Order: b.Order,

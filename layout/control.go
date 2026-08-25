@@ -472,7 +472,7 @@ func (b *boxBuilder) controlContent(box *Box, n *html.Node, cs style.ComputedSty
 	}
 	box.Children = append(box.Children, &Box{
 		Outer: OuterInline, Inner: InnerText,
-		Style: cs, Text: text, FontSize: fontSize, Parent: box,
+		Style: cs, Text: text, FontSize: fontSize, fontSizeKnown: true, Parent: box,
 	})
 }
 

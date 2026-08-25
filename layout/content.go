@@ -285,7 +285,7 @@ func (b *boxBuilder) generated(n *html.Node, name string, fontSize style.Unit) *
 	z, zAuto := zIndexOf(cs)
 	box := &Box{
 		Outer: outer, Inner: inner, Element: n, Style: cs,
-		ListItem: listItem, FontSize: size,
+		ListItem: listItem, FontSize: size, fontSizeKnown: true,
 		Float: float, Clear: clearOf(cs),
 		Position: position, ZIndex: z, ZAuto: zAuto, Order: order,
 		staticInline: staticInline,
@@ -321,7 +321,7 @@ func (b *boxBuilder) generated(n *html.Node, name string, fontSize style.Unit) *
 			// here — see Box.ContentImage.
 			box.Children = append(box.Children, &Box{
 				Outer: OuterInline, Inner: InnerFlow,
-				Style: cs, FontSize: size, Parent: box,
+				Style: cs, FontSize: size, fontSizeKnown: true, Parent: box,
 				ContentImage: piece.image,
 			})
 			continue
@@ -332,7 +332,7 @@ func (b *boxBuilder) generated(n *html.Node, name string, fontSize style.Unit) *
 		}
 		box.Children = append(box.Children, &Box{
 			Outer: OuterInline, Inner: InnerText,
-			Style: cs, Text: text, FontSize: size, Parent: box,
+			Style: cs, Text: text, FontSize: size, fontSizeKnown: true, Parent: box,
 		})
 	}
 	return box

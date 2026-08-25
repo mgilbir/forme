@@ -2090,9 +2090,18 @@ func (l *layouter) icAdvance(b *Box) (style.Unit, bool) {
 	return l.br.Measure(face, waterIdeograph, b.FontSize), true
 }
 
+// ensureFontSize gives a box a font size where nothing decided one, so that an
+// "em" in one of its declarations resolves against something.
+//
+// It is for the box tree a caller assembled itself, which has no cascade behind
+// it. A box the builder made always carries a size, and a zero one there is a
+// zero the document asked for: "font-size: 0" is how a stylesheet removes the
+// white space between inline-blocks, and reading it as absent put sixteen pixels
+// of strut on every line of such a box.
 func (l *layouter) ensureFontSize(b *Box) {
-	if b.FontSize == 0 {
+	if !b.fontSizeKnown && b.FontSize == 0 {
 		b.FontSize = defaultFontSize
+		b.fontSizeKnown = true
 	}
 }
 
