@@ -493,7 +493,7 @@ func (p *parser) endTag(tk token) {
 		if !closedByParentEnd[p.open[i].Name] {
 			p.tok.fail(tk.offset, "</"+name+"> would close <"+p.open[i].Name+
 				">, which is still open; tags have to nest")
-			return
+			break
 		}
 	}
 	p.open = p.open[:at]
