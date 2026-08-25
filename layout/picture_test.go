@@ -611,7 +611,7 @@ func drawnGlyphs(v DrawText) string {
 	return b.String()
 }
 
-func texts(ops []Op, under []coloured) []textMark {
+func texts(ops []Op, under []coloured, page Rect) []textMark {
 	covers := opaqueCovers(ops)
 	var marking []DrawText
 	for i, op := range ops {
@@ -656,6 +656,9 @@ func texts(ops []Op, under []coloured) []textMark {
 			continue
 		}
 		if buriedUnder(covers, i, textInk(v)) {
+			continue
+		}
+		if v.Face != nil && !page.Empty() && intersect(textInk(v), page).Empty() {
 			continue
 		}
 		if v.Clip.Active && intersect(textInk(v), v.Clip.Rect).Empty() {
@@ -1199,7 +1202,7 @@ func sameColour(a, b style.RGBA) bool {
 // scrolled off the page is not.
 func pictureEqual(got, want []Op, clip Rect) bool {
 	gf, wf := picFills(got), picFills(want)
-	gt, wt := texts(got, gf), texts(want, wf)
+	gt, wt := texts(got, gf, clip), texts(want, wf, clip)
 	if !sameTextMarks(gt, wt) {
 		return false
 	}

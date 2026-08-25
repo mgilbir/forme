@@ -992,7 +992,7 @@ const wptEnv = "WPT_TESTS"
 // property". The engine looked for it among the word-break values, found
 // nothing, and did nothing — without reporting it either, which is what made it
 // silent. See layout/overflowwrap_test.go.
-const wptCleanPassBaseline = 5631
+const wptCleanPassBaseline = 5633
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
@@ -1942,6 +1942,42 @@ func TestWPTOracleHasTeeth(t *testing.T) {
 	if !pictureEqual(a, b, clip) {
 		t.Error("the same marks in a different order compared unequal")
 	}
+
+	// A run of text outside the page is not a mark, and one that reaches it is.
+	//
+	// A reftest compares what the page shows, and a document may lay text out
+	// far beyond the page's edges — "text-indent: -100000em" is five lines of
+	// the suite's text-indent-010 doing exactly that against a reference that
+	// simply does not write them. Counting such a run as a mark called two
+	// identical pages different.
+	//
+	// The half that matters more is the second: the filter is on the *ink*, so
+	// a run with one letter on the page is a mark and a difference in it is
+	// still a difference. Erring the other way would lose text off the edge of
+	// every page and call it agreement.
+	face, err := shape.Standard("Helvetica")
+	if err != nil {
+		t.Fatalf("loading Helvetica: %v", err)
+	}
+	text := func(x float64) []Op {
+		return []Op{DrawText{At: Point{X: u(x), Y: u(40)}, Text: "hello",
+			Face: face, Size: u(16), Color: red}}
+	}
+	if !pictureEqual(text(-100000), nil, clip) {
+		t.Error("a run a hundred thousand pixels to the left of the page was " +
+			"counted as a mark; nothing of it reaches the page")
+	}
+	if !pictureEqual(text(-100000), text(-200000), clip) {
+		t.Error("two runs, both far off the page, were called different pages")
+	}
+	if pictureEqual(text(-10), nil, clip) {
+		t.Error("a run overlapping the page's left edge was dropped; part of it " +
+			"is on the page and a page that shows it differs from one that does not")
+	}
+	if pictureEqual(text(20), text(21), clip) {
+		t.Error("two runs a pixel apart on the page were called the same page")
+	}
+
 }
 
 // TestSuiteResolverReachesTheSupportDirectory pins what the harness's resolver
