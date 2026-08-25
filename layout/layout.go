@@ -2045,11 +2045,26 @@ func usesUnit(raw string, a, b byte) bool {
 //
 // It reports false when the face does not state one, so that "ex" falls back to
 // half an em rather than to zero — a zero would collapse the box the author was
-// sizing, and a face stating no x-height is the common case for the fourteen
-// standard faces this engine uses by default.
+// sizing. The fourteen standard faces all state one (Courier 426, Times 450,
+// Helvetica 523, out of 1000), so the fallback is for a face that has no OS/2
+// table and for a family the set does not have at all.
 func (l *layouter) xHeightOf(b *Box) (style.Unit, bool) {
 	face, ok := l.fontFor(b)
 	if !ok {
+		return 0, false
+	}
+	return xHeightIn(face, b.FontSize)
+}
+
+// xHeightIn is the height of a lowercase x in a face at a size, and whether the
+// face states one at all.
+//
+// It is separate from xHeightOf because the box builder needs the same answer
+// about a *parent's* face, before any layouter exists: "font-size: 6ex" is
+// relative to the parent's font, and the size it produces is what every other
+// length on the element is measured against. See boxBuilder.fontMetricsFor.
+func xHeightIn(face *shape.Face, size style.Unit) (style.Unit, bool) {
+	if face == nil {
 		return 0, false
 	}
 	d := face.Descriptor()
@@ -2064,7 +2079,7 @@ func (l *layouter) xHeightOf(b *Box) (style.Unit, bool) {
 	if upem <= 0 || !d.Has(shape.MetricXHeight) || d.XHeight <= 0 {
 		return 0, false
 	}
-	return b.FontSize.Mul(float64(d.XHeight) / upem), true
+	return size.Mul(float64(d.XHeight) / upem), true
 }
 
 // zeroAdvance is the width of "0" in a box's own font, which is what "ch" means.

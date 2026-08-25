@@ -140,7 +140,13 @@ const DefaultFontSize = 16
 // The second result says the value could not be resolved, so the caller leaves
 // the declaration alone rather than writing an answer it does not have. Layout
 // reports it, where there is an element to report it against.
-func fontSizeOf(cs ComputedStyle, own bool, parent, root Unit) (Unit, bool) {
+// m and fontStyle are how §5.1.1's font-relative units get a face. fontStyle is
+// the computed style whose font the units belong to, which for an element's own
+// font-size is its *parent's*; m may be nil, and then the units that need a face
+// get the fallback CSS names or are declined. See Metrics.
+func fontSizeOf(cs ComputedStyle, own bool, parent, root Unit, m Metrics,
+	fontStyle ComputedStyle) (Unit, bool) {
+
 	if !own {
 		return parent, true
 	}
@@ -148,7 +154,13 @@ func fontSizeOf(cs ComputedStyle, own bool, parent, root Unit) (Unit, bool) {
 	if len(errs) != 0 {
 		return parent, false
 	}
-	size, _, ok := ResolveFontSize(vals, parent, root)
+	ctx := LengthContext{FontSize: parent, RootFontSize: root}
+	if m != nil {
+		if xh, ok := m.XHeight(fontStyle, parent); ok {
+			ctx.XHeight, ctx.XHeightKnown = xh, true
+		}
+	}
+	size, _, ok := ResolveFontSizeIn(vals, ctx)
 	if !ok {
 		return parent, false
 	}

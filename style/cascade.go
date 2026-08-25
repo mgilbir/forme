@@ -145,8 +145,41 @@ type Styled struct {
 	Incomplete bool
 }
 
+// Metrics answers the one font question the cascade cannot answer for itself.
+//
+// font-size is computed here, because a computed length is an absolute one and
+// the em in every other declaration is relative to the answer. CSS Values
+// §5.1.1 makes the font-relative units in a *font-size* refer to the parent
+// element's font — "font-size: 6ex" is six times the parent's x-height — and the
+// cascade has no faces: which face sets an element is chosen from the
+// font-family this stage computes, by a stage that runs after it.
+//
+// So a caller that has already loaded its fonts can offer them here. Without one
+// the fallback CSS names is used, which is half an em, and that was the only
+// answer available before this existed. It is an interface rather than a font
+// set because this package must not know what a face is: the question asked is
+// about a computed style and a size, and both are already this package's own.
+//
+// Only ex is asked. ch and ic need a glyph measured through a shaper, and they
+// are not silently wrong without one — a length in a unit with no metric is
+// declined, so the declaration is left as written and reported by whoever has an
+// element to report it against.
+type Metrics interface {
+	// XHeight is the x-height of the face a computed style selects, at a size,
+	// and whether that face states one at all. A face that states none is not
+	// an error: §5.1.1 says to assume half an em, which is what a false here
+	// produces.
+	XHeight(cs ComputedStyle, size Unit) (Unit, bool)
+}
+
 // Apply computes a style for every element in a document.
 func Apply(doc *html.Node, sheets []Sheet) Styled {
+	return ApplyWith(doc, sheets, nil)
+}
+
+// ApplyWith is Apply with a source for the font metrics a font-size may need.
+// See Metrics. A nil source is the same as Apply.
+func ApplyWith(doc *html.Node, sheets []Sheet, m Metrics) Styled {
 	s := &Styler{matcher: NewMatcher(doc), seen: map[string]bool{}}
 
 	// Expand shorthands and drop what the engine does not implement, once for
@@ -190,7 +223,19 @@ func Apply(doc *html.Node, sheets []Sheet) Styled {
 		// On the root's *own* font-size a rem is the initial value, because the
 		// value it would otherwise mean is the one being computed. Everything
 		// else on the root resolves rem against the answer.
-		size, resolved := fontSizeOf(cs, own, parentSize, rootSize)
+		// The face an "ex" here belongs to is the *parent's*, since this
+		// element's own font-size is the thing being computed — and so is the
+		// parent's whole computed style, because an element may declare a
+		// font-family of its own beside the size and the two are not resolved
+		// together. At the root there is no parent element and the element's own
+		// style is the nearest thing there is.
+		fontStyle := cs
+		if p := parentElement(n); p != nil {
+			if got, ok := out.Styles[p]; ok {
+				fontStyle = got
+			}
+		}
+		size, resolved := fontSizeOf(cs, own, parentSize, rootSize, m, fontStyle)
 		sizes[n] = size
 		if !rootSeen {
 			rootSize, rootSeen = size, true
@@ -219,7 +264,10 @@ func Apply(doc *html.Node, sheets []Sheet) Styled {
 			// A pseudo-element's em is relative to its own font-size, and it
 			// inherits from the element it belongs to rather than from that
 			// element's parent.
-			psize, presolved := fontSizeOf(pcs, own, size, rootSize)
+			// A pseudo-element's ex is its originating element's, for the same
+			// reason its em is: it inherits from that element and not from that
+			// element's parent.
+			psize, presolved := fontSizeOf(pcs, own, size, rootSize, m, cs)
 			if presolved {
 				pcs["font-size"] = pxValue(psize)
 			}

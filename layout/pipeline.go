@@ -139,7 +139,7 @@ func Build(in Input) Built {
 	}
 	fontSet := loadFontFaces(faces, in.Resources, base, rec)
 
-	styled := style.Apply(doc, sheets)
+	styled := style.ApplyWith(doc, sheets, fontMetrics{fontSet})
 	for _, f := range styled.Findings {
 		rec.ReportDetail(Finding{
 			Rule:     ruleForStyleFinding(f),

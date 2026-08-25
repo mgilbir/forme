@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/mgilbir/forme/shape"
+	"github.com/mgilbir/forme/style"
 )
 
 // Choosing a face for a box, and saying so when the choice was not the one
@@ -188,6 +189,27 @@ func standardName(base string, bold, italic bool) string {
 // *that* is reported: a document set in a face its author did not choose has
 // different metrics and different line breaks, and nothing about the resulting
 // page says so.
+// faceForStyle is fontFor without a layouter: the first family in a computed
+// style that a set has, and nil when it has none of them.
+//
+// It exists for the cascade, which resolves font-size and so needs the parent's
+// face to answer "font-size: 6ex" — see style.Apply's Metrics. It deliberately
+// does not fall back the way fontFor does: a size resolved against a substituted
+// face is a size the author never asked for, and CSS Values §5.1.1 already says
+// what to do when no x-height can be determined, which is to assume half an em.
+func faceForStyle(fonts FontSet, cs style.ComputedStyle) *shape.Face {
+	if fonts == nil || cs == nil {
+		return nil
+	}
+	bold, italic := isBold(cs["font-weight"]), isItalic(cs["font-style"])
+	for _, family := range parseFamilyList(cs["font-family"]) {
+		if f, ok := fonts.Face(family, bold, italic); ok {
+			return f
+		}
+	}
+	return nil
+}
+
 func (l *layouter) fontFor(b *Box) (*shape.Face, bool) {
 	key := fontKey{
 		families: b.Style["font-family"],
@@ -291,4 +313,17 @@ func isItalic(value string) bool {
 		return true
 	}
 	return false
+}
+
+// fontMetrics answers style.Metrics from a font set: the cascade's one font
+// question, asked of the faces this package has already loaded.
+//
+// It exists so that "font-size: 6ex" is six times the parent face's real
+// x-height rather than six times the half-em CSS Values §5.1.1 says to assume
+// when none can be determined. The suite's numbers-units-012 sets 6ex against
+// Ahem, whose x-height is eight tenths of an em, and asks for an inch.
+type fontMetrics struct{ fonts FontSet }
+
+func (m fontMetrics) XHeight(cs style.ComputedStyle, size style.Unit) (style.Unit, bool) {
+	return xHeightIn(faceForStyle(m.fonts, cs), size)
 }

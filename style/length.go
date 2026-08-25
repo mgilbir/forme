@@ -370,6 +370,15 @@ var relativeFontSizes = map[string]float64{
 // A percentage is also relative to the parent, which is why it can be resolved
 // here when ParseLength would have to decline it.
 func ResolveFontSize(vals []css.ComponentValue, parent, root Unit) (u Unit, unsupported bool, ok bool) {
+	return ResolveFontSizeIn(vals, LengthContext{FontSize: parent, RootFontSize: root})
+}
+
+// ResolveFontSizeIn is ResolveFontSize given the whole context to resolve in,
+// which is what a caller with the parent's face in hand can offer: the font
+// metrics of §5.1.1's font-relative units belong to the parent element, since
+// the element's own font is the thing being computed.
+func ResolveFontSizeIn(vals []css.ComponentValue, ctx LengthContext) (u Unit, unsupported bool, ok bool) {
+	parent := ctx.FontSize
 	parts := splitOnWhitespace(vals)
 	if len(parts) == 1 && len(parts[0]) == 1 && parts[0][0].IsToken() {
 		t := parts[0][0].Token
@@ -394,22 +403,16 @@ func ResolveFontSize(vals []css.ComponentValue, parent, root Unit) (u Unit, unsu
 		}
 	}
 
-	// Everything else is an ordinary length, resolved with the parent's size
-	// standing in for "em".
+	// Everything else is an ordinary length, resolved in the context the caller
+	// gave, whose FontSize is the *parent's* size — an em in a font-size is
+	// relative to the size being replaced rather than to the one being computed.
 	//
-	// No x-height is passed, so "font-size: 6ex" falls back to half the parent's
-	// size instead of asking the parent's face — and the suite's
-	// numbers-units-012 sets 6ex against Ahem, whose x-height is eight tenths of
-	// an em, so it comes out at three quarters of the size it should be.
-	//
-	// It is a gap rather than an oversight, and the shape of it is worth
-	// recording. The unit needs the *parent's* face; font-size is resolved by
-	// the box builder, before layout, so that every box carries a computed size
-	// from the moment it exists; and the box builder is handed a document, a
-	// cascade and a recorder, and no font set at all. Closing it means giving
-	// the builder faces, which is a change to when fonts are loaded rather than
-	// a change to this function.
-	l, unsupported, ok := ParseLength(vals, LengthContext{FontSize: parent, RootFontSize: root})
+	// The metrics in it are the parent's face's, for the same reason and with
+	// the same care: "font-size: 6ex" against Ahem, whose x-height is eight
+	// tenths of an em, is eight tenths and not the half CSS Values §5.1.1 says
+	// to assume "in the cases where it is impossible or impractical to determine
+	// the x-height". The suite's numbers-units-012 is that document.
+	l, unsupported, ok := ParseLength(vals, ctx)
 	if !ok || l.Kind != LengthAbsolute {
 		return 0, unsupported, false
 	}
