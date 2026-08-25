@@ -300,7 +300,8 @@ func TestAPercentageColumnIsNotRaidedForAnother(t *testing.T) {
 // makes a row of cells with different font sizes read as one line of text.
 func TestACellSitsOnItsRowsBaseline(t *testing.T) {
 	cell := func(align string, natural, baseline float64) placedCell {
-		return placedCell{align: align, natural: u(natural), baseline: u(baseline)}
+		return placedCell{align: align, natural: u(natural),
+			baseline: u(baseline), hasBaseline: true}
 	}
 	// A cell whose own baseline is above the row's is pushed down to meet it,
 	// and is that much taller for it.
@@ -319,6 +320,16 @@ func TestACellSitsOnItsRowsBaseline(t *testing.T) {
 			t.Errorf("a %s-aligned cell is %g tall, want its natural 20 — it was "+
 				"stretched to a baseline it does not sit on", align, got.Px())
 		}
+	}
+	// A cell with no baseline at all — nothing in it makes a line box — does not
+	// take part, whatever its vertical-align says. Read literally §17.5.3 gives
+	// it one at its bottom content edge, and taken literally that makes an empty
+	// cell the tallest thing in its row: it is pushed down until its own bottom
+	// sits on the row's baseline, so the row comes out its declared height plus
+	// an ascent. css-tables-3 states the rule the browsers follow.
+	if got := (placedCell{align: "baseline", natural: u(20)}).stretchedHeight(u(30)); got != u(20) {
+		t.Errorf("a cell with no baseline is %g tall in a row whose baseline is 30, "+
+			"want its natural 20", got.Px())
 	}
 	// §17.5.3 names four alignments and everything else is the baseline, so
 	// "super" on a cell is not a small lift, it is nothing at all.
