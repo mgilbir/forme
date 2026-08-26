@@ -194,7 +194,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	if unhandledFit != "" {
 		l.reportTextFit(b, unhandledFit)
 	}
-	fitScale, fitPending := 1.0, fit.scales()
+	fitScale, fitPending := 1.0, fit.consistent()
 	fitWant := 0.0
 
 	st := l.strutFor(b)
@@ -571,6 +571,27 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				}
 			}
 
+			// css-text-5's per-line granularities, which need no second pass: the
+			// line is broken, and what it asks for is known as soon as it is.
+			// The strut goes with it — the block's own font is type on this line
+			// like any other, and a line shrunk to fit is not held open by type
+			// nobody set.
+			// The factor this line's own type is set at, which is the block's
+			// under "consistent" and the line's under the two per-line
+			// granularities. It travels as far as the inline boxes' ink: §10.6.1
+			// gives a box a content area the height of its font, and the font is
+			// being used at this size.
+			lineScale := fitScale
+			if f := l.perLineScale(fit, runs, right.Sub(left).Sub(lineIndent).Sub(lineEllipsis),
+				forced || next >= len(items)); f != 1 {
+				lineScale = f
+				runs = l.fitRuns(runs, f)
+				l.unkernLineEnd(runs)
+				stack = stackLine(runs, l.fitStrut(l.strutAt(b, b.FontSize.Mul(f)),
+					items, next, forced, f))
+				lh, bl = stack.Height, stack.Baseline
+			}
+
 			lineWidth := right.Sub(left)
 			if balanceCaps != nil && lineWidth < width {
 				balanceMetFloat = true
@@ -644,7 +665,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					// css-text-5's "(A + B) / A": A is the type on the line and
 					// B what is left of the line's room once everything that is
 					// not type has taken its share.
-					if a := l.fitScalable(runs); a > 0 {
+					if a := l.fitScalable(runs, hangingTail(runs)); a > 0 {
 						room := avail.Sub(used.Sub(a))
 						if want := room.Px() / a.Px(); fitWant == 0 || want < fitWant {
 							fitWant = want
@@ -786,7 +807,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				// the line is about to go, since a fragment cannot be hung on it
 				// until §8.6 knows which piece of its box it is.
 				decor.addLine(len(parent.Lines), runs, xs, widths,
-					line.Rect.X.Add(shift), line.Rect.Y.Add(line.Baseline), &stack)
+					line.Rect.X.Add(shift), line.Rect.Y.Add(line.Baseline), &stack, lineScale)
 				if lineEllipsis > 0 && ending.face != nil {
 					// The mark goes where the line's own content ends, which is not
 					// where the line box does: an aligned line may have been moved,

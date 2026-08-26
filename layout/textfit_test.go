@@ -170,41 +170,80 @@ func TestNoTextFitChangesNothing(t *testing.T) {
 	}
 }
 
-// TestTheGranularitiesThisEngineDoesNotDoAreReported. "per-line" and
-// "per-line-all" ask for a factor a line at a time, and answering them with the
-// block's own factor would be a page the author did not ask for. So nothing is
-// scaled and the finding says which value was left.
-func TestTheGranularitiesThisEngineDoesNotDoAreReported(t *testing.T) {
-	for _, tc := range []struct{ decl, want string }{
-		{"grow per-line", "per-line"},
-		{"grow per-line-all", "per-line-all"},
-		{"shrink per-line-all 75%", "per-line-all"},
-	} {
-		rec := NewRecorder(nil)
+// TestPerLineScalesEachLineOnItsOwn, and leaves the two css-text-5 excepts:
+// "the last line of the block and lines that end in a forced break are not
+// scaled". It is the same exception §16.2 makes for justification and for the
+// same reason — a line the author ended is short because they said so.
+func TestPerLineScalesEachLineOnItsOwn(t *testing.T) {
+	// A soft wrap: "ABCD" is 80 of the 120 available and grows by half; the
+	// second line is the block's last and is left alone.
+	got := fitted(t, `#d { font-family: Ahem; line-height: normal; width: 120px;
+		font-size: 20px; text-fit: grow per-line }`,
+		`<div id="d">ABCD EFGHIJ</div>`)
+	want := []string{"30 120x30", "20 120x20"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("the lines are %q, want %q", got, want)
+	}
+	// Forced breaks: under "per-line" neither line is scaled, because the first
+	// ends at one and the second is the last.
+	got = fitted(t, fitCSS+` #d { width: 120px; font-size: 10px; text-fit: grow per-line }`,
+		"<div id=\"d\">GHIJ\nKLM</div>")
+	want = []string{"10 40x10", "10 30x10"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("with forced breaks the lines are %q, want %q — \"per-line\" "+
+			"leaves both alone", got, want)
+	}
+}
+
+// TestPerLineAllScalesThemToo, which is the whole of the difference between the
+// two granularities. This is the suite's grow-per-line-all, whose reference
+// writes each line's answer out as a span with a font-size on it.
+func TestPerLineAllScalesThemToo(t *testing.T) {
+	got := fitted(t, fitCSS+` #d { width: 120px; font-size: 10px; text-fit: grow per-line-all }`,
+		"<div id=\"d\">GHIJ\nKLM</div>")
+	want := []string{"30 120x30", "40 120x40"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("the lines are %q, want %q", got, want)
+	}
+}
+
+// TestAnInlineBoxsOwnInkScalesWithTheLine. §10.6.1 gives an inline box a content
+// area the height of its font, and text-fit is the size that font is being used
+// at — so the border round two letters on a line scaled by two is twice as tall.
+// The suite's grow-per-line-all-line-height is a one-pixel lime border and
+// nothing else.
+func TestAnInlineBoxsOwnInkScalesWithTheLine(t *testing.T) {
+	height := func(fit string) float64 {
+		set := loadAhem(t)
 		built := Build(Input{
-			HTML: `<div id="d">ABCDEF</div>`,
-			CSS:  []Stylesheet{{Source: `#d { width: 120px; text-fit: ` + tc.decl + ` }`}},
+			HTML: `<div id="d">AB<span id="s">CD</span>E</div>`,
+			CSS: []Stylesheet{{Source: `#d { white-space: pre; font-family: Ahem;
+				font-size: 10px; line-height: normal; width: 100px; ` + fit + ` }
+				#s { background: lime }`}},
+			Fonts: set,
 		})
+		rec := NewRecorder(nil)
 		w, _ := style.FromPx(600)
 		h, _ := style.FromPx(10000)
-		Layout(built.Root, Size{W: w, H: h}, nil, rec)
-		found := false
-		for _, f := range rec.Findings() {
-			if f.Property != "text-fit" {
-				continue
-			}
-			found = true
-			if !strings.Contains(f.Message, tc.want) {
-				t.Errorf("%q was reported as %q, and the part not applied is %q",
-					tc.decl, f.Message, tc.want)
-			}
-			if !f.Unsupported() {
-				t.Errorf("%q was reported without being marked unsupported", tc.decl)
+		root := Layout(built.Root, Size{W: w, H: h}, set, rec)
+		for _, ln := range find(t, root, "d").Lines {
+			for _, bx := range ln.Boxes {
+				if id, _ := bx.Box.Element.Attr("id"); id == "s" {
+					return bx.BorderRect.H.Px()
+				}
 			}
 		}
-		if !found {
-			t.Errorf("%q was not reported at all", tc.decl)
-		}
+		t.Fatalf("no fragment for the span")
+		return 0
+	}
+	// Five characters of 10px Ahem in a 100px box grow by two, and Ahem's
+	// content area is exactly one em.
+	if got := height("text-fit: grow per-line-all"); got != 20 {
+		t.Errorf("the span's border box is %gpx tall, want 20 — the type on its "+
+			"line is set at twice the declared size", got)
+	}
+	if got := height(""); got != 10 {
+		t.Errorf("with no text-fit the span's border box is %gpx tall, want 10", got)
 	}
 }
 
@@ -215,6 +254,7 @@ func TestAGranularityThisEngineDoesIsNotReported(t *testing.T) {
 	for _, decl := range []string{
 		"none", "grow", "shrink", "grow consistent", "shrink consistent",
 		"grow consistent 150%", "consistent grow",
+		"grow per-line", "grow per-line-all", "shrink per-line-all 75%",
 	} {
 		rec := NewRecorder(nil)
 		built := Build(Input{
@@ -255,8 +295,33 @@ func TestTextFitParses(t *testing.T) {
 	if f, _ := fitOf("consistent"); f.mode != fitNone {
 		t.Errorf("\"consistent\" alone read as %+v, want none", f)
 	}
+	if f, _ := fitOf("grow per-line"); !f.perLine || f.consistent() {
+		t.Errorf("\"grow per-line\" read as %+v", f)
+	}
+	if f, _ := fitOf("grow per-line-all"); !f.perLineAll || f.consistent() {
+		t.Errorf("\"grow per-line-all\" read as %+v", f)
+	}
 	if f, un := fitOf("grow sideways"); f.mode != fitNone || un != "sideways" {
 		t.Errorf("\"grow sideways\" read as %+v, unhandled %q; a word outside the "+
 			"grammar refuses the declaration", f, un)
+	}
+}
+
+// TestAHangingSpaceIsNotTypeToFit. §4.1.2's white space at the end of a line is
+// not on the page, so it is neither part of what has to fit nor part of what
+// scales. The two have to agree: counting it in one and not the other makes the
+// factor come out of an arithmetic where the line's width and the type on it are
+// measured over different runs.
+//
+// "ABCD EFGH" under pre-wrap in a 60px box breaks after the space, which then
+// hangs. Four characters of 10px Ahem are 40 of the 60 available, so the line
+// grows by half; counting the hanging space as type gives 1.4 instead.
+func TestAHangingSpaceIsNotTypeToFit(t *testing.T) {
+	got := fitted(t, `#d { white-space: pre-wrap; font-family: Ahem; line-height: normal;
+		width: 60px; font-size: 10px; text-fit: grow per-line-all }`,
+		`<div id="d">ABCD EFGH</div>`)
+	if !strings.HasPrefix(got[0], "15 ") {
+		t.Errorf("the first line is %q, want its type at 15px — the space past the "+
+			"end of it is neither type to fit nor type to scale", got[0])
 	}
 }
