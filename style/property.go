@@ -238,7 +238,11 @@ var properties = map[string]property{
 	// styled <article> keep the tab width the author set on the article. A
 	// number is a count of space advances and a length is itself; the initial
 	// value is 8, which is what a tab has meant since terminals had one.
-	"tab-size":              {true, "8"},
+	"tab-size": {true, "8"},
+	// css-text-5's text-fit scales the size a block's text is set in so that
+	// its lines fill the box. Inherited, because a block container inside one
+	// that fits its text fits its own — see layout/textfit.go.
+	"text-fit":              {true, "none"},
 	"text-decoration-line":  {false, "none"},
 	"text-decoration-color": {false, "currentcolor"},
 	"vertical-align":        {false, "baseline"},

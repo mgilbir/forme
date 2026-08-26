@@ -186,6 +186,17 @@ func heldFragment(r itemRef) *Fragment {
 // fit, alignment, or justification", and the fit has already happened. textalign.go
 // has the rest of that argument.
 func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, origin flow) style.Unit {
+	// css-text-5's text-fit, read before anything is measured because the size
+	// the text is set in is what every measurement below is of. The factor is
+	// not known yet: it comes from the lines, so the first pass is made at the
+	// declared size and the loop is run again once there is an answer.
+	fit, unhandledFit := textFitOf(b)
+	if unhandledFit != "" {
+		l.reportTextFit(b, unhandledFit)
+	}
+	fitScale, fitPending := 1.0, fit.scales()
+	fitWant := 0.0
+
 	st := l.strutFor(b)
 	// The block container is one bidi paragraph — or several, where it holds a
 	// forced break — and its own unicode-bidi may wrap the whole of it in an
@@ -363,6 +374,14 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		firstLine = !b.afterTheFirstLine
 		afterForced = false
 		balanceMetFloat = false
+		// The block's own strut is type like any other and is scaled with it.
+		// Under "line-height: normal" that is the whole of what makes a fitted
+		// line taller; under a declared one the height does not move and the
+		// half-leading inside it does, which is strutAt's business.
+		st = l.strutAt(b, b.FontSize.Mul(fitScale))
+		// What the widest line asked for, in this pass. Smallest wins: one
+		// factor over the whole block has to leave every line inside the box.
+		fitWant = 0
 		decor = inlineDecor{l: l, containing: width, strut: st}
 		for i := 0; i < len(items); {
 			// Where this pass started, so that the foot of the loop can tell whether
@@ -455,8 +474,9 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					style.Min(right.Sub(left), lineCap(balanceCaps, lineCaps, i, len(parent.Lines))).
 						Sub(lineIndent).Sub(lineEllipsis),
 					left.Sub(lo).Add(lineIndent))
+				runs = l.fitRuns(runs, fitScale)
 				l.unkernLineEnd(runs)
-				stack = stackLine(runs, strutOver(st, items, next, forced))
+				stack = stackLine(runs, l.fitStrut(st, items, next, forced, fitScale))
 				lh, bl = stack.Height, stack.Baseline
 
 				// A float met part-way along the line is placed *now*, before the
@@ -620,6 +640,17 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				// or right-aligned line of tracked text sits half a tracking
 				// width off.
 				used = used.Sub(trailingSpacing(runs))
+				if fitPending {
+					// css-text-5's "(A + B) / A": A is the type on the line and
+					// B what is left of the line's room once everything that is
+					// not type has taken its share.
+					if a := l.fitScalable(runs); a > 0 {
+						room := avail.Sub(used.Sub(a))
+						if want := room.Px() / a.Px(); fitWant == 0 || want < fitWant {
+							fitWant = want
+						}
+					}
+				}
 				rtl := lineBaseIsRTL(b, runs)
 				align, spread := lineAlignment(b, rtl, lastLine)
 
@@ -888,6 +919,23 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				// the line that used the last of the budget may have been made by
 				// a block laid out before this one.
 				break
+			}
+		}
+		if fitPending {
+			// The lines have all been measured at the size they were set in, so
+			// the factor is settled — and it is settled once, whatever the
+			// balancing below goes on to do. A clamped box is left alone for the
+			// reason the balancing is: the clamp has already decided how much of
+			// the content there is, and the two searches have not been put
+			// together.
+			fitPending = false
+			if got := fit.clamp(fitWant); got != fitScale && !clamped && fitWant > 0 {
+				fitScale = got
+				parent.Lines = parent.Lines[:linesAt]
+				parent.Children = parent.Children[:kidsAt]
+				origin.ctx.truncate(ctxAt)
+				l.deferred = l.deferred[:absAt]
+				continue
 			}
 		}
 		if pass > 0 && sameUnits(bands, wasBands) {
