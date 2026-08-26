@@ -265,7 +265,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	// at every index — which is what lets the line after the first continue from
 	// the ordinary items with nothing to map.
 	var firstItems []inlineItem
-	if b.FirstLine != nil {
+	if b.FirstLine != nil && !b.afterTheFirstLine {
 		l.reportFirstLine(b)
 		if declared := l.firstLineDeclared(b); declared != nil {
 			firstItems = l.firstLineItems(items, b, declared)
@@ -1017,6 +1017,16 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		}
 	}
 	decor.finish(parent)
+	// §5.12.1's pseudo-element behaves like an inline box wrapping the first
+	// line's content, so what it paints goes behind that content — under the
+	// inline boxes on the line, which are inside it.
+	if len(parent.Lines) > 0 && !b.afterTheFirstLine {
+		if box := l.firstLinePaint(b); box != nil {
+			if f := l.firstLineFragment(box, &parent.Lines[0]); f != nil {
+				parent.Lines[0].Boxes = append([]*Fragment{f}, parent.Lines[0].Boxes...)
+			}
+		}
+	}
 	return y
 }
 

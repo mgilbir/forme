@@ -41,11 +41,16 @@ var firstLineApplies = []string{
 	"line-height", "letter-spacing", "word-spacing", "color",
 }
 
+// firstLinePaints are the ones that are drawn behind the line rather than
+// changing how it is set. They belong to the pseudo-element's own box — which
+// is the one box §5.12.1 says it behaves like — and not to the runs on the line.
+var firstLinePaints = []string{"background-color", "background-image"}
+
 // firstLineReports are the ones §5.12.1 says apply and this engine does not act
 // on, in the order an author is likely to have written them.
 var firstLineReports = []string{
-	"background-color", "background-image", "text-transform",
-	"text-decoration-line", "text-decoration-color", "vertical-align",
+	"text-transform", "text-decoration-line", "text-decoration-color",
+	"vertical-align",
 }
 
 // firstLineDeclared is what a ::first-line rule actually said, reduced to the
@@ -216,4 +221,90 @@ func (l *layouter) firstLineItems(items []inlineItem, block *Box,
 		}
 	}
 	return out
+}
+
+// firstLinePaint is the box §5.12.1's pseudo-element paints, or nil where the
+// rule asks for nothing to be painted.
+//
+// It is a box of the *block's* rather than a restyled run, because that is what
+// the specification says the pseudo-element behaves like: one inline-level
+// element wrapping the line's content, whose background covers the content area
+// of its own font over the extent of what is on the line.
+func (l *layouter) firstLinePaint(b *Box) *Box {
+	fl := b.FirstLine
+	if fl == nil {
+		return nil
+	}
+	var cs style.ComputedStyle
+	for _, name := range firstLinePaints {
+		v, ok := fl[name]
+		if !ok || v == style.Undeclared(name, b.Style[name]) {
+			continue
+		}
+		if cs == nil {
+			cs = style.ComputedStyle{}
+			for k, old := range b.Style {
+				cs[k] = old
+			}
+			// The block's own edges are not the pseudo-element's: §5.12.1 does
+			// not let it have a border or a padding, and taking the block's
+			// would draw the block's border a second time round one line of it.
+			for _, edge := range []string{"top", "right", "bottom", "left"} {
+				cs["border-"+edge+"-width"] = "0"
+				cs["border-"+edge+"-style"] = "none"
+				cs["padding-"+edge] = "0"
+				cs["margin-"+edge] = "0"
+			}
+		}
+		cs[name] = v
+	}
+	if cs == nil {
+		return nil
+	}
+	// The font properties too, since the height of what is painted is the
+	// pseudo-element's own content area and its font is what decides that.
+	for name, v := range l.firstLineDeclared(b) {
+		cs[name] = v
+	}
+	out := *b
+	out.Style = cs
+	out.Outer, out.Inner = OuterInline, InnerFlow
+	if length, ok := l.parseLength(&out, "font-size"); ok {
+		if u, ok := length.Resolve(b.FontSize, true); ok && u > 0 {
+			out.FontSize = u
+		}
+	}
+	return &out
+}
+
+// firstLineFragment is the piece that box occupies on the line it is on.
+//
+// The extent is the line's own content — where the runs actually are, after the
+// alignment has moved them — because that is what the pseudo-element wraps. A
+// line with nothing drawn on it gets nothing.
+func (l *layouter) firstLineFragment(box *Box, line *LineFragment) *Fragment {
+	if box == nil || len(line.Runs) == 0 {
+		return nil
+	}
+	lo, hi := line.Runs[0].X, line.Runs[0].X.Add(line.Runs[0].Width)
+	for _, r := range line.Runs[1:] {
+		if r.X < lo {
+			lo = r.X
+		}
+		if end := r.X.Add(r.Width); end > hi {
+			hi = end
+		}
+	}
+	if hi <= lo {
+		return nil
+	}
+	st := l.strutAt(box, box.FontSize)
+	base := line.Rect.Y.Add(line.Baseline)
+	return &Fragment{
+		Box: box,
+		BorderRect: Rect{
+			X: line.Rect.X.Add(lo), Y: base.Sub(st.Ascent),
+			W: hi.Sub(lo), H: st.Ascent.Add(st.Descent),
+		},
+	}
 }

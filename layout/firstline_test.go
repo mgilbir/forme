@@ -149,20 +149,22 @@ func TestAPropertyCSSExcludesIsSilent(t *testing.T) {
 }
 
 // TestAPropertyCSSIncludesAndThisEngineDropsIsReported, which is the other half:
-// an author who writes a ::first-line background will not see it, and has no
-// other way to find out.
+// an author who writes a ::first-line text-transform will not see it, and has no
+// other way to find out. The transform is applied when a box's text is built,
+// long before any line exists, so applying it here would mean building the text
+// twice and deciding which of the two the second line continues from.
 func TestAPropertyCSSIncludesAndThisEngineDropsIsReported(t *testing.T) {
 	rec := NewRecorder(nil)
 	built := Build(Input{
 		HTML: `<div id="d">hello there</div>`,
-		CSS:  []Stylesheet{{Source: flCSS + ` #d::first-line { background: orange }`}},
+		CSS:  []Stylesheet{{Source: flCSS + ` #d::first-line { text-transform: uppercase }`}},
 	})
 	w, _ := style.FromPx(600)
 	h, _ := style.FromPx(1000)
 	Layout(built.Root, Size{W: w, H: h}, nil, rec)
 	found := false
 	for _, f := range rec.Findings() {
-		if f.Property == "background-color" {
+		if f.Property == "text-transform" {
 			found = true
 			if !f.Unsupported() {
 				t.Errorf("the finding is not marked unsupported: %q", f.Message)
@@ -170,7 +172,79 @@ func TestAPropertyCSSIncludesAndThisEngineDropsIsReported(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("the ::first-line background was dropped without a word")
+		t.Errorf("the ::first-line text-transform was dropped without a word")
+	}
+}
+
+// TestTheFirstLineBackgroundIsPaintedBehindItsContent. §5.12.1's pseudo-element
+// behaves like an inline box wrapping the line, so what it paints covers the
+// content area of its own font over the extent of what is on the line — not the
+// whole line box and not the whole block.
+func TestTheFirstLineBackgroundIsPaintedBehindItsContent(t *testing.T) {
+	root := layoutOf(t, 600, `<div id="d">aaaa bbbb cccc dddd</div>`,
+		`#d { font-family: Courier; font-size: 20px; width: 150px }
+		#d::first-line { background: orange }`)
+	f := find(t, root, "d")
+	if len(f.Lines) < 2 {
+		t.Fatalf("%d lines, want at least two", len(f.Lines))
+	}
+	if n := len(f.Lines[0].Boxes); n != 1 {
+		t.Fatalf("the first line has %d painting boxes, want the one the "+
+			"pseudo-element makes", n)
+	}
+	if n := len(f.Lines[1].Boxes); n != 0 {
+		t.Errorf("the second line has %d painting boxes, want none", n)
+	}
+	// "aaaa bbbb" is nine characters of Courier at 20px, and the trailing space
+	// of a soft-wrapped line hangs — so the box is over the two words and the
+	// space between them.
+	got := f.Lines[0].Boxes[0].BorderRect
+	if got.W.Px() != 108 {
+		t.Errorf("the box is %gpx wide, want 108 (9 x 12)", got.W.Px())
+	}
+	// The block has no border or padding, so its content starts where its box
+	// does and the line's content starts there too.
+	if got.X != f.BorderRect.X {
+		t.Errorf("the box starts at %v and the block's content at %v",
+			got.X, f.BorderRect.X)
+	}
+}
+
+// TestTheFirstLineBackgroundIsTheFontsHeight. §10.6.1 gives an inline box a
+// content area the height of its font, and §5.12.1 makes the pseudo-element one
+// — so what it paints is the type's height and not the line box's. A declared
+// line-height is what tells the two apart: under "normal" they are the same
+// number and a fixture written there says nothing.
+func TestTheFirstLineBackgroundIsTheFontsHeight(t *testing.T) {
+	root := layoutOf(t, 600, `<div id="d">aaaa</div>`,
+		`#d { font-family: Courier; font-size: 20px; width: 150px; line-height: 60px }
+		#d::first-line { background: orange }`)
+	f := find(t, root, "d")
+	line := f.Lines[0]
+	if line.Rect.H.Px() != 60 {
+		t.Fatalf("the line box is %gpx tall, want the declared 60", line.Rect.H.Px())
+	}
+	got := line.Boxes[0].BorderRect.H
+	if got >= line.Rect.H {
+		t.Errorf("the box is %v tall and the line box %v; what is painted is the "+
+			"content area of the font", got, line.Rect.H)
+	}
+	// And it really is the font's: the same face at the same size gives the same
+	// height on a line the document left alone.
+	plain := layoutOf(t, 600, `<div id="p">aaaa</div>`,
+		`#p { font-family: Courier; font-size: 20px; width: 150px }`)
+	if want := find(t, plain, "p").Lines[0].Rect.H; got != want {
+		t.Errorf("the box is %v tall and the face's own line is %v", got, want)
+	}
+}
+
+// TestNoBackgroundIsPaintedWhereNoneWasAsked, which is every ::first-line rule
+// that sets only the type.
+func TestNoBackgroundIsPaintedWhereNoneWasAsked(t *testing.T) {
+	root := layoutOf(t, 600, `<div id="d">aaaa bbbb</div>`,
+		flCSS+` #d::first-line { color: lime }`)
+	if n := len(find(t, root, "d").Lines[0].Boxes); n != 0 {
+		t.Errorf("the first line has %d painting boxes, want none", n)
 	}
 }
 
@@ -193,5 +267,39 @@ func TestNoFirstLineRuleIsUnchanged(t *testing.T) {
 	got := firstLines(t, flCSS, `<div id="d">hello there world again</div>`)
 	if len(got) != 1 || !strings.HasSuffix(got[0], "@20") {
 		t.Errorf("the lines are %q, want one at 20px", got)
+	}
+}
+
+// TestTheFirstLineOfABlockSplitByAnotherBlock. §5.12.1 styles the first
+// *formatted* line, and a block child splits the parent's inline content into
+// anonymous blocks — so the line the pseudo-element reaches is the first line of
+// the first of them, and the run of text after the block child is not it.
+//
+// CSS2/normal-flow/block-in-inline-first-line-001 is the fixture, and it draws
+// the answer as three orange bands.
+func TestTheFirstLineOfABlockSplitByAnotherBlock(t *testing.T) {
+	root := layoutOf(t, 600,
+		`<div id="d"><span>first line<div id="k">inside</div>after the block</span></div>`,
+		`#d { font-family: Courier; font-size: 20px; width: 600px }
+		#d::first-line { background: orange }`)
+	d := find(t, root, "d")
+	painted := 0
+	for _, c := range d.Children {
+		for _, ln := range c.Lines {
+			painted += len(ln.Boxes)
+		}
+	}
+	for _, ln := range d.Lines {
+		painted += len(ln.Boxes)
+	}
+	if painted != 1 {
+		t.Errorf("%d lines were painted, want the one the first anonymous block "+
+			"holds", painted)
+	}
+	// And it is the first of them, not the run after the block child.
+	first := d.Children[0]
+	if len(first.Lines) == 0 || len(first.Lines[0].Boxes) != 1 {
+		t.Errorf("the painted line is not the first anonymous block's:\n%s",
+			sketchFragments(d))
 	}
 }

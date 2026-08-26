@@ -1511,6 +1511,12 @@ func (b *boxBuilder) wrapInlines(parent *Box) []*Box {
 			Style: style.Inherited(parent.Style), Parent: parent,
 			FontSize: parent.FontSize, fontSizeKnown: parent.fontSizeKnown,
 			Children: run,
+			// §5.12.1's first *formatted* line is the parent's, wherever it
+			// ends up: a block child splits the parent's inline content into
+			// anonymous blocks, and the line the pseudo-element styles is the
+			// first line of the first of them. afterTheFirstLine below is what
+			// keeps it to that one.
+			FirstLine: parent.FirstLine,
 			// Anything in flow before this one means the parent's first line has
 			// already happened, whether it was another anonymous block or a
 			// block-level child of the parent's own.
