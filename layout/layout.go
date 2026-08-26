@@ -369,6 +369,10 @@ type layouter struct {
 	// know its parent — layout builds downwards — and giving it one would add a
 	// pointer to every fragment to answer a question a handful of boxes ask.
 	positioned map[*Box]*Fragment
+	// firstLineBoxes memoizes the text boxes ::first-line restyles. See
+	// firstline.go.
+	firstLineBoxes map[*Box]*Box
+
 	// fontSet is where faces come from.
 	fontSet FontSet
 	// rootFontSize is the font-size of the root element, which is what "rem"

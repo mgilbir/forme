@@ -195,6 +195,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		l.reportTextFit(b, unhandledFit)
 	}
 	fitScale, fitPending := 1.0, fit.consistent()
+
 	fitWant := 0.0
 
 	st := l.strutFor(b)
@@ -257,6 +258,19 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	// A float written after an absolutely positioned box still begins a line.
 	// See floatsBeforeOutOfFlow.
 	items = floatsBeforeOutOfFlow(items)
+
+	// §5.12.1's ::first-line, which is not a box and cannot be one: it changes
+	// the type the first line is *set* in, so it has to reach the breaking. The
+	// second list is parallel to the first — same length, same order, same item
+	// at every index — which is what lets the line after the first continue from
+	// the ordinary items with nothing to map.
+	var firstItems []inlineItem
+	if b.FirstLine != nil {
+		l.reportFirstLine(b)
+		if declared := l.firstLineDeclared(b); declared != nil {
+			firstItems = l.firstLineItems(items, b, declared)
+		}
+	}
 
 	lo, hi := origin.x, origin.x.Add(width)
 
@@ -388,6 +402,12 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			// it moved. Nothing in the body increments the cursor on its own: it is
 			// carried entirely by what breakOneLine hands back.
 			wasI, wasByte := i, iByte
+			// The items this line is broken from, which are the restyled ones
+			// only while the first line is still being made.
+			items := items
+			if firstLine && firstItems != nil {
+				items = firstItems
+			}
 			// A float that begins a line is placed before the line is measured,
 			// because it is one of the floats the line has to avoid. §9.5.1 rule 4
 			// puts its top at the top of the line box it belongs to.

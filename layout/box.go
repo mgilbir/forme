@@ -218,6 +218,12 @@ type Box struct {
 	// containing block's, and that is the single question this answers.
 	TableWrapper bool
 
+	// FirstLine is the ::first-line style of the element this box came from, or
+	// nil where no rule selects one. It is carried here rather than looked up in
+	// layout because the pseudo styles belong to the cascade's result, which the
+	// box builder holds and the layouter does not.
+	FirstLine style.ComputedStyle
+
 	// Pseudo is "before" or "after" when this box is a generated one, and empty
 	// otherwise. It is here because a pseudo-element carries its originating
 	// element in Element like any other box of that element, so the tree alone
@@ -646,6 +652,7 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		Position: position, ZIndex: z, ZAuto: zAuto, Order: order,
 		staticInline: staticInline,
 	}
+	box.FirstLine = b.pseudo[style.PseudoKey{Node: n, Name: "first-line"}]
 	box.ListValue, box.ListNumbered = b.listValueOf(n, listItem)
 	box.Control = b.controlFor(n)
 	if (outer != OuterInline && !box.outOfFlow()) || endsAWord(n) {

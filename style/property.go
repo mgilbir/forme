@@ -322,6 +322,27 @@ var properties = map[string]property{
 // of text inside <body> would take body's 8px margin, indent the text by it, and
 // separate it from the block after it by a gap the author never wrote. Every
 // number in that document is then plausible and wrong.
+// Undeclared is the value a property has on a box whose style declares nothing
+// about it, given the parent's computed value: the parent's where the property
+// inherits and the property's initial value where it does not.
+//
+// It exists so that a caller can tell a value the author *wrote* from one that
+// merely arrived. A pseudo-element's computed style holds every property in the
+// registry, and comparing it against the originating element's says the wrong
+// thing for the properties that do not inherit — a "::first-line" of an element
+// with a red background reads as declaring "background-color: transparent",
+// which nobody wrote. layout/firstline.go is the caller.
+func Undeclared(name, parent string) string {
+	p, ok := properties[name]
+	if !ok {
+		return ""
+	}
+	if p.inherits {
+		return parent
+	}
+	return p.initial
+}
+
 func Inherited(cs ComputedStyle) ComputedStyle {
 	out := make(ComputedStyle, len(properties))
 	for name, prop := range properties {

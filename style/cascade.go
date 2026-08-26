@@ -959,12 +959,17 @@ func (s *Styler) report(f Finding) {
 	}
 }
 
-// pseudoElementNames are the ones that generate a box of their own.
+// pseudoElementNames are the ones this stage computes a style for.
 //
-// ::first-line and ::first-letter are deliberately absent: they style part of
-// something that already exists rather than generating anything, and they need
-// the line breaking to have happened before there is a first line to style.
-var pseudoElementNames = []string{"before", "after", "marker"}
+// Three of them generate a box. ::first-line does not — it styles part of
+// something that already exists, and there is no first line until the breaking
+// has happened — so nothing downstream asks this stage to make one. What it does
+// need is the style, resolved here like any other: its font-size is relative to
+// the element's own, and every em in it is absolutised against the answer, which
+// is work only the cascade can do.
+//
+// ::first-letter is still absent, because nothing reads it yet.
+var pseudoElementNames = []string{"before", "after", "marker", "first-line"}
 
 // anyRuleTargets reports whether any rule selects a pseudo-element of an
 // element.
