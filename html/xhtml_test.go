@@ -317,17 +317,37 @@ func TestANamespacePrefixIsPartOfTheNameInXML(t *testing.T) {
 //
 // A prefix says which language a name belongs to. Dropping it unread would make
 // "<x:svg>" an SVG whatever x was bound to — including nothing at all. Keeping
-// it makes the name one this engine has never heard of, which is exactly what an
-// unresolvable prefix means and is reported as such.
+// it makes the name one this engine has never heard of, which is an ordinary
+// element with an unusual name: laid out as an inline box, styled by whatever
+// selects it, and emphatically not a picture.
 func TestAPrefixThisEngineCannotResolveIsKept(t *testing.T) {
 	for _, tc := range []struct{ what, root string }{
 		{"a prefix bound to something else",
 			`<html xmlns:s="http://example.com/not-svg">`},
 		{"a prefix bound to nothing at all", `<html>`},
 	} {
-		got := findingsOf(`<?xml version="1.0"?>` + tc.root + `<body><s:svg/></body></html>`)
-		if len(got) != 1 || !strings.Contains(got[0], "<s:svg>") {
-			t.Errorf("%s: reported %v, want the element named whole", tc.what, got)
+		src := `<?xml version="1.0"?>` + tc.root + `<body><s:svg/></body></html>`
+		if got := findingsOf(src); len(got) != 0 {
+			t.Errorf("%s: reported %v; an element with an unresolvable prefix is "+
+				"an element with a long name", tc.what, got)
+		}
+		doc, _, _ := Parse(src)
+		var found *Node
+		doc.Walk(func(n *Node) bool {
+			if n.Type == ElementNode && n.Name == "s:svg" {
+				found = n
+			}
+			return true
+		})
+		if found == nil {
+			t.Errorf("%s: no <s:svg> in the tree", tc.what)
+			continue
+		}
+		// The whole point: it is not an SVG, so its content is not kept as
+		// foreign source and nothing will try to draw it.
+		if found.Foreign != "" {
+			t.Errorf("%s: the element was read as foreign content (%q)",
+				tc.what, found.Foreign)
 		}
 	}
 	// The XHTML namespace resolves too, so "<html:div>" is a div.

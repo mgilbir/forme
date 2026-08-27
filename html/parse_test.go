@@ -376,15 +376,77 @@ func TestScriptContentIsNotMarkup(t *testing.T) {
 	}
 }
 
-// TestUnknownElementsAreRefused pins that an element this engine cannot lay out
-// is reported rather than treated as a generic box. Rendering <fancy-callout> as
-// a span produces a page that looks nearly right, so nothing signals that the
-// thing the author cared about was ignored.
-func TestUnknownElementsAreRefused(t *testing.T) {
+// TestAnElementNobodyHasHeardOfIsStillAnElement.
+//
+// HTML gives a name it does not define no special behaviour and no user agent
+// style, which leaves it an ordinary inline box that inherits everything and
+// that a stylesheet may select. "<my-widget>" is laid out by a browser exactly
+// as a <span> with the same rules on it would be, and a modern document is full
+// of them.
+//
+// It used to be dropped and reported, on the reading that an element this engine
+// does not know is one it cannot lay out. That is true of <canvas> and <video>,
+// which need something this engine does not have, and those are still refused by
+// name. It was never true of a custom element: the box is not a special one, and
+// dropping it lost every rule an author had written for it —
+// CSS2/linebox/line-breaking-font-size-zero-001 styles <inline-block> and <sep>
+// and could not pass while they were gone.
+func TestAnElementNobodyHasHeardOfIsStillAnElement(t *testing.T) {
 	for _, src := range []string{
 		"<fancy-callout>x</fancy-callout>",
 		"<blink>x</blink>",
-		"<my-widget/>",
+		"<my-widget><b>x</b></my-widget>",
+	} {
+		_, errs, ok := Parse(src)
+		if !ok || len(errs) != 0 {
+			t.Errorf("%q was refused: %v", src, errs)
+		}
+	}
+	// It is in the tree, in its place, with its attributes and its children.
+	got := body(t, `<p>a<fancy-callout id="c" class="k">x<b>y</b></fancy-callout>b</p>`)
+	want := `<p>
+  "a"
+  <fancy-callout> id="c" class="k"
+    "x"
+    <b>
+      "y"
+  "b"
+`
+	if got != want {
+		t.Errorf("the body is\n%s\nwant\n%s", got, want)
+	}
+}
+
+// TestAnUnknownElementIsClosedLikeAnyOther. Its end tag has to be acted on now
+// that its start tag opens something: an end tag nobody pops leaves the element
+// open, and the next block's end tag reports the mis-nesting it caused.
+func TestAnUnknownElementIsClosedLikeAnyOther(t *testing.T) {
+	_, errs, ok := Parse(`<div><my-widget>x</my-widget></div><div>y</div>`)
+	if !ok || len(errs) != 0 {
+		t.Errorf("the document was refused: %v", errs)
+	}
+	got := body(t, `<div><my-widget>x</my-widget></div><div>y</div>`)
+	want := `<div>
+  <my-widget>
+    "x"
+<div>
+  "y"
+`
+	if got != want {
+		t.Errorf("the body is\n%s\nwant\n%s", got, want)
+	}
+}
+
+// TestTheElementsThatReallyCannotBeLaidOutAreStillRefused is the containment
+// argument. <canvas> is drawn by a script, <video> plays, <iframe> loads another
+// document: each needs something a page laid out once does not have, and
+// rendering an empty box where one belongs is the silent wrongness the finding
+// vocabulary exists for.
+func TestTheElementsThatReallyCannotBeLaidOutAreStillRefused(t *testing.T) {
+	for _, src := range []string{
+		"<canvas>x</canvas>",
+		"<video>x</video>",
+		"<script>x</script>",
 	} {
 		_, errs, ok := Parse(src)
 		if ok {
@@ -394,6 +456,26 @@ func TestUnknownElementsAreRefused(t *testing.T) {
 		if len(errs) == 0 || !errs[0].Unsupported {
 			t.Errorf("%q was not reported as unsupported: %v", src, errs)
 		}
+	}
+}
+
+// TestASelfClosingUnknownElementIsReadAsHTMLReadsIt: outside the void elements
+// the slash is a parse error and the element opens anyway, which is what the
+// tree construction stage says and what every browser does.
+func TestASelfClosingUnknownElementIsReadAsHTMLReadsIt(t *testing.T) {
+	_, errs, ok := Parse(`<my-widget/>x`)
+	if ok {
+		t.Errorf("\"<my-widget/>\" was accepted; HTML has no self-closing syntax " +
+			"outside void elements")
+	}
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Message, "self-closing") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("nothing said the slash was not a self-closing tag: %v", errs)
 	}
 }
 

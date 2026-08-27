@@ -315,7 +315,21 @@ func (p *parser) startTag(tk token) {
 	}
 
 	if !knownElements[name] {
-		p.tok.unsupported(tk.offset, "<"+name+"> is not an element this engine lays out")
+		// An element nobody has heard of is an element all the same. HTML gives
+		// it no special behaviour and no user agent style, which leaves it an
+		// ordinary inline box that inherits everything and that a stylesheet may
+		// select — "<my-widget>" is laid out by a browser exactly as a <span>
+		// with the same rules on it would be.
+		//
+		// It used to be dropped and reported, on the reading that an element
+		// this engine does not know is one it cannot lay out. That is true of
+		// <canvas> and <video>, which need something this engine does not have,
+		// and they are refused above by name. It was never true of a custom
+		// element: the box is not a special one, and dropping it lost every rule
+		// an author had written for it. CSS2/linebox/line-breaking-font-size-
+		// zero-001 styles <inline-block> and <sep> and is the shape a modern
+		// document is full of.
+		p.insertUnknown(tk)
 		return
 	}
 
@@ -372,6 +386,46 @@ func (p *parser) startTag(tk token) {
 	p.stripNewline = dropFirstNewline[name]
 	p.open = append(p.open, el)
 
+	if len(p.open) > maxDepth {
+		p.tok.fail(tk.offset, "elements are nested more deeply than this engine will read ("+
+			strconv.Itoa(maxDepth)+")")
+		p.truncated = true
+	}
+}
+
+// insertUnknown opens an element HTML gives no behaviour to.
+//
+// It is the ordinary path with everything that is keyed on a name left out:
+// there is no optional end tag to close, no head to belong to, no raw text, no
+// void form and no newline to strip, because every one of those is a rule about
+// a *particular* element and this is not one of them. What is left is an element
+// that opens, holds its children and closes — which is the whole of what HTML
+// says about a name nobody has defined.
+//
+// A self-closing "<my-widget/>" is the one thing to say about it, and HTML says
+// it too: outside the void elements the slash is a parse error and the element
+// is opened anyway. The document is refused either way; this is about what a
+// caller that renders it regardless is handed.
+func (p *parser) insertUnknown(tk token) {
+	if !p.bodyStarted {
+		p.enterBody()
+	}
+	if tk.selfClosing && p.tok.xml {
+		// XML *does* have self-closing syntax, and it means an empty element.
+		// The element is inserted and never opened, which is the whole of what
+		// "<my-widget/>" says there.
+		p.insert(tk)
+		return
+	}
+	if tk.selfClosing {
+		p.tok.fail(tk.offset, "<"+tk.name+"/> is not an empty element; HTML has no "+
+			"self-closing syntax outside void elements, so it is read as <"+tk.name+">")
+	}
+	el := p.insert(tk)
+	if el == nil {
+		return
+	}
+	p.open = append(p.open, el)
 	if len(p.open) > maxDepth {
 		p.tok.fail(tk.offset, "elements are nested more deeply than this engine will read ("+
 			strconv.Itoa(maxDepth)+")")
@@ -471,10 +525,11 @@ func (p *parser) endTag(tk token) {
 		}
 		return
 	}
-	if !knownElements[name] {
-		// Its start tag was already reported; saying so twice is noise.
-		return
-	}
+	// An element HTML gives no behaviour to is closed like any other. It used to
+	// be ignored here, which was right while its start tag was dropped as well
+	// and is wrong now that the element is opened: an end tag nobody acts on
+	// leaves the element open, and the next block's end tag reports the
+	// mis-nesting it caused.
 
 	// Find it on the stack. Anything above it may only be there if HTML lets it
 	// end without a tag of its own.
