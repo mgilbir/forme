@@ -490,6 +490,17 @@ type boxBuilder struct {
 	// it is reset around a block-level box because a block starts a new line of
 	// text whatever preceded it.
 	afterWord bool
+	// boundary is the text built so far, as much of it as §4.1.1's segment
+	// break rules need: the last rune written and the last one a reader would
+	// see. It is carried for the reason afterWord is — the walk visits text in
+	// document order and a text node cannot see the one before it — and it is
+	// what makes "aa&#x200b;<span></span>\nbb" transform like
+	// "aa&#x200b;\nbb", which css-text-4 requires in as many words:
+	// "intervening inline box boundaries must be ignored".
+	//
+	// It is reset where afterWord is, and for the same reason: a block begins
+	// its text afresh, and so does the text after a <br>.
+	boundary textBoundary
 	// stopped records that the box cap was reached, so it is reported once
 	// rather than per box.
 	stopped bool
@@ -674,6 +685,29 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		// "Questions", which is what text-transform-cap-003 asks for by writing
 		// its expectation out in full.
 		b.afterWord = false
+		// And the boundary with it, for the reason above rather than for an
+		// observable one: a segment break at the start or the end of a block is
+		// at the edge of a line, and §4.1.2 removes the space it would become
+		// whether or not the exceptions here got to it first. A planted defect
+		// dropping this leaves every test passing and the suite unmoved. It
+		// stays because the alternative is a boundary that is wrong and
+		// invisible, which is the pair this whole vocabulary exists to avoid.
+		b.boundary = textBoundary{}
+	}
+	if box.outOfFlow() {
+		// And an out-of-flow box's *content* is not in the text either side of
+		// it. That is the same reasoning as the exception just above, applied
+		// one level in: the paragraph above keeps its boundary across the box,
+		// so the text inside must not be allowed to overwrite it — and must not
+		// read it either, because what an overlay begins with does not follow
+		// the paragraph it was hung off.
+		//
+		// seg-break-transformation-019 is exactly that shape, four times over:
+		// an absolutely positioned, a fixed and two floated <aside>s written
+		// between a zero-width space and the segment break it suppresses.
+		saved := b.boundary
+		b.boundary = textBoundary{}
+		defer func() { b.boundary = saved }()
 	}
 
 	// ::before and ::after bracket the element's own children rather than
@@ -720,6 +754,14 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		// whatever comes after it. An out-of-flow one still does not, for the
 		// reason above.
 		b.afterWord = false
+		// And the boundary with it, for the reason above rather than for an
+		// observable one: a segment break at the start or the end of a block is
+		// at the edge of a line, and §4.1.2 removes the space it would become
+		// whether or not the exceptions here got to it first. A planted defect
+		// dropping this leaves every test passing and the suite unmoved. It
+		// stays because the alternative is a boundary that is wrong and
+		// invisible, which is the pair this whole vocabulary exists to avoid.
+		b.boundary = textBoundary{}
 	}
 	return box
 }
@@ -876,8 +918,8 @@ func (b *boxBuilder) roomAt(offset int) bool {
 // block container with inline content, and so generate an anonymous block that
 // occupies a line.
 func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSize style.Unit) *Box {
-	text := collapseWhitespace(n.Text, inherited["white-space-collapse"],
-		b.wordSpaceTransformFor(inherited))
+	text := collapseWhitespaceAfter(n.Text, inherited["white-space-collapse"],
+		b.wordSpaceTransformFor(inherited), b.boundary)
 	// text-transform, applied here so that the text every later stage measures,
 	// breaks, draws and writes into the PDF is the text that will appear.
 	// texttransform.go works through why it cannot wait until paint time.
@@ -889,6 +931,11 @@ func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSi
 	// what lets "capitalize" see the word boundaries the reader will.
 	text, b.afterWord = transformText(text,
 		transformOf(inherited["text-transform"]), b.afterWord, languageAt(n))
+	// After the transform rather than before it, because what the next node
+	// follows is the text that will be on the page: "full-width" turns a space
+	// into U+3000, which nothing collapses, and the rules below are about the
+	// character a reader sees.
+	b.boundary = boundaryAfter(b.boundary, text)
 	if text == "" {
 		return nil
 	}

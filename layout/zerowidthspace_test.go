@@ -114,3 +114,107 @@ func TestAZeroWidthSpaceInABoxOfItsOwnStillSeparates(t *testing.T) {
 			"spaces the zero-width space kept apart", got)
 	}
 }
+
+// A zero-width space that suppresses a segment break from the node before.
+//
+// §4.1.1 removes a segment break whose neighbouring character is a zero-width
+// space: an author who hard-wrapped their source and marked the wrap meant the
+// break opportunity and not a space as well. The rule is written over
+// *characters*, and css-text-4 says what that means where markup gets in the
+// way — "intervening inline box boundaries must be ignored".
+//
+// So "aa&#x200b;<span></span>\nbb" is the same text as "aa&#x200b;\nbb" and must
+// come out the same way. It did not: Phase I ran per text node and each node
+// began with no idea what preceded it, so the mark in one node did nothing about
+// the break in the next and a space appeared in the middle of a word.
+
+// lineTextOf is the one line a wide block puts its text on.
+func lineTextOf(t *testing.T, htmlSrc string) string {
+	t.Helper()
+	got := lineTextsOf(t, layoutOf(t, 600, `<div id="d">`+htmlSrc+`</div>`,
+		`#d { font-family: Courier; font-size: 20px; width: 400px }`), "d")
+	if len(got) != 1 {
+		t.Fatalf("%q made %d lines %q, want 1", htmlSrc, len(got), got)
+	}
+	return got[0]
+}
+
+// TestABoxBoundaryDoesNotHideTheMarkFromTheBreak is the rule, and the table is
+// the boundaries css-text-4 names: a box that opens around the mark, a box that
+// closes before it, and an empty one between the two.
+func TestABoxBoundaryDoesNotHideTheMarkFromTheBreak(t *testing.T) {
+	for _, src := range []string{
+		"aa&#8203;\nbb",                     // one node: this always worked
+		"aa<span>&#8203;</span>\nbb",        // the mark in a box of its own
+		"aa<span></span>&#8203;\nbb",        // an empty box before the mark
+		"aa&#8203;<span></span>\nbb",        // an empty box between mark and break
+		"aa<span><b>&#8203;</b></span>\nbb", // two boxes deep
+	} {
+		if got := lineTextOf(t, src); got != "aabb" {
+			t.Errorf("%q came out %q, want \"aabb\": the zero-width space is the "+
+				"character before the break however many boxes are written around it", src, got)
+		}
+	}
+}
+
+// TestAnOutOfFlowBoxIsNotBetweenThem. An overlay hung off the middle of a
+// paragraph is not in the paragraph's text: nothing of it sits between the
+// characters either side, so it is neither the character before the break nor
+// the character after the mark.
+//
+// seg-break-transformation-019 writes it four ways, and this is those four.
+func TestAnOutOfFlowBoxIsNotBetweenThem(t *testing.T) {
+	for _, css := range []string{
+		"position:absolute", "position:fixed", "float:right", "float:left",
+	} {
+		src := `aa&#8203;<span style="` + css + `">foo</span>` + "\nbb"
+		if got := lineTextOf(t, src); got != "aabb" {
+			t.Errorf("with %q between them the text is %q, want \"aabb\": the "+
+				"box is not in the text either side of it", css, got)
+		}
+	}
+}
+
+// TestTextInAnOrdinaryBoxIsStillTextBetweenThem is the containment. A box that
+// is *in* the flow and holds a character puts that character between the mark
+// and the break, and then there is no mark before the break at all.
+func TestTextInAnOrdinaryBoxIsStillTextBetweenThem(t *testing.T) {
+	for _, src := range []string{
+		"aa<span>x</span>\nbb",
+		"aa&#8203;<span>x</span>\nbb",
+	} {
+		if got := lineTextOf(t, src); got != "aax bb" {
+			t.Errorf("%q came out %q, want \"aax bb\": the character before the "+
+				"break is the \"x\", so the break becomes a space", src, got)
+		}
+	}
+}
+
+// TestTheEastAsianRuleCrossesABoundaryToo. §4.1.1's other exception is about the
+// last character a *reader* would see rather than the last one written, and it
+// travels across a box boundary for the same reason and by the same route.
+//
+// A paragraph of Japanese hard-wrapped in the source gains a space at the end of
+// every line it was wrapped at, in the middle of words, all through the text —
+// which is the most visible thing an engine can get wrong about CJK, and wrong
+// in the direction that looks deliberate.
+func TestTheEastAsianRuleCrossesABoundaryToo(t *testing.T) {
+	if got := lineTextOf(t, "漢<span></span>\n字"); got != "漢字" {
+		t.Errorf("a break between two ideographs written either side of a box came "+
+			"out %q, want \"漢字\"", got)
+	}
+	// And the containment: a Latin letter before the break is not an ideograph,
+	// so the break is a space however the boxes fall.
+	if got := lineTextOf(t, "漢x<span></span>\n字"); got != "漢x 字" {
+		t.Errorf("a break after a Latin letter came out %q, want \"漢x 字\"", got)
+	}
+	// A variation selector written after the ideograph is not the character
+	// before the break: it is default-ignorable, nothing is drawn for it, and
+	// the rule is about what a reader would see. The suite tests that within one
+	// node — segment-break-transformation-ignorable-1 — and it has to hold
+	// across a boundary for the same reason everything else here does.
+	if got := lineTextOf(t, "漢\ufe00<span></span>\n字"); got != "漢\ufe00字" {
+		t.Errorf("a break after an ideograph and its variation selector came out "+
+			"%q, want the two ideographs with no space", got)
+	}
+}
