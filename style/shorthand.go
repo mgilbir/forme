@@ -540,30 +540,86 @@ func isNone(part []css.ComponentValue) bool {
 }
 
 // listStyleShorthand expands "list-style": a type, a position, and an image.
+//
+// # The two slots "none" can fill
+//
+// "none" is a legal value of both list-style-type and list-style-image, and the
+// shorthand's grammar gives no way to say which is meant — so the answer comes
+// from the rest of the declaration. "list-style: none square" is a square marker
+// with no image; "list-style: none url(dot.png)" is that image with no marker;
+// "list-style: none" on its own is neither, since the slot it does not take is
+// reset to its initial value and that value is none too.
+//
+// Where there is nothing left for a "none" to be, the declaration is not a
+// list-style and §4.2 drops it whole. That is the case the suite's
+// list-style-020 is written about: it declares nine of them in a row — two nones
+// beside a type, two beside an image, one beside both — and asks for the
+// inherited marker to survive every one.
 func listStyleShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, []string, bool) {
-	kind, position, image := ident("disc"), ident("outside"), ident("none")
-	var seenKind, seenPosition, seenImage bool
+	var kind, position, image []css.ComponentValue
+	nones := 0
 	var unsupported []string
 
 	for _, part := range splitOnWhitespace(vals) {
 		switch {
-		case isListPosition(part) && !seenPosition:
-			position, seenPosition = part, true
-		case isURLPart(part) && !seenImage:
-			image, seenImage = part, true
-		case isNone(part):
-			// "none" may be the type or the image. Taking it as the type is
-			// what an author means by "list-style: none", which is the whole
-			// reason the value is written — and the image is "none" already, so
-			// a marker is suppressed either way round.
-			if !seenKind {
-				kind, seenKind = part, true
+		case isListPosition(part):
+			if position != nil {
+				return nil, nil, false
 			}
-		case isIdentPart(part) && !seenKind:
-			kind, seenKind = part, true
+			position = part
+		case isURLPart(part):
+			if image != nil {
+				return nil, nil, false
+			}
+			image = part
+		case isNone(part):
+			nones++
+		case isIdentPart(part):
+			if kind != nil {
+				return nil, nil, false
+			}
+			kind = part
 		default:
 			unsupported = append(unsupported, serialize(part))
 		}
+	}
+
+	// How many of the two slots a "none" could fill, and whether the
+	// declaration wrote more of them than there is room for.
+	free := 0
+	if kind == nil {
+		free++
+	}
+	if image == nil {
+		free++
+	}
+	if nones > free {
+		return nil, nil, false
+	}
+	// "list-style: none" on its own is the value an author actually writes, and
+	// it takes both slots: the one none becomes the type, and the image is reset
+	// to its initial value, which is none as well. There is no second assignment
+	// to make — writing one was tried, and planting its removal changed no
+	// answer, because the reset below already says it.
+	if nones > 0 && kind == nil {
+		kind = ident("none")
+		nones--
+	}
+	if nones > 0 && image == nil {
+		image = ident("none")
+		nones--
+	}
+
+	// The shorthand resets what it does not mention, so an omitted longhand
+	// takes its initial value rather than keeping what the cascade had.
+	if kind == nil {
+		kind = ident("disc")
+	}
+	if position == nil {
+		position = ident("outside")
+	}
+	if image == nil {
+		image = ident("none")
 	}
 	return map[string][]css.ComponentValue{
 		"list-style-type":     kind,
