@@ -248,10 +248,11 @@ func lastLineAlignment(b *Box, rtl bool) textAlign {
 // alignLine returns how far a line's content moves within the width it was given.
 //
 // used is the width the content actually occupies with its hanging white space
-// already discounted. A line at least as wide as the space it has does not move:
-// an overfull line overflows to the right whatever the alignment says, because
-// moving it would push it off the other edge as well.
-func (l *layouter) alignLine(b *Box, align textAlign, lineWidth, used style.Unit) style.Unit {
+// already discounted. A line wider than the space it has overflows past the
+// block's *end* edge whatever the alignment says, because moving it would push
+// it off the start edge as well — and which edge is which is the direction's
+// answer, not the property's.
+func (l *layouter) alignLine(b *Box, align textAlign, rtl bool, lineWidth, used style.Unit) style.Unit {
 	slack := lineWidth.Sub(used)
 	// A justified line starts where "start" would put it, and the slack is then
 	// spread across its spaces by justifyLine, which is the caller's next step
@@ -259,6 +260,25 @@ func (l *layouter) alignLine(b *Box, align textAlign, lineWidth, used style.Unit
 	// to do here for it, and nothing to report either: the report belongs to the
 	// case justifyLine cannot handle, and only that call knows which lines those
 	// are.
+	// Where the overflow can be scrolled to, an overfull line is pinned to the
+	// block's *start* edge whatever the alignment says: what goes off that edge
+	// is unreachable, because scrolling only ever reaches the other way. The
+	// suite says so in the assert of trailing-space-and-text-alignment-002 —
+	// preserved spaces under "pre" do not hang, so they "may cause overflow and
+	// activate the scrollbars" — and a textarea that pushed its own text off
+	// its start edge would be a box whose content no reader could get to.
+	//
+	// Which edge that is comes from the direction and not from the alignment,
+	// and that is the half this had missing. In a right-to-left block the start
+	// edge is the *right*, so all five of the suite's alignments put an
+	// overfull line's right edge against the block's own and let it run off to
+	// the left — which is what the rtl-002 and rtl-004 references draw, five
+	// boxes with their text in the same place and five different text-aligns
+	// above them.
+	if slack < 0 && overflowIsScrollable(b.Style) {
+		return startEdge(rtl, slack)
+	}
+
 	switch align {
 	case alignRight:
 		// The slack may be negative, and then this is the whole of what the
@@ -269,28 +289,17 @@ func (l *layouter) alignLine(b *Box, align textAlign, lineWidth, used style.Unit
 		// like — sets such a line flush *left* instead, so it overflows the way
 		// a left-aligned one would and the two alignments become the same
 		// declaration for exactly the text that most needs them apart.
-		if slack < 0 && overflowIsScrollable(b.Style) {
-			// Except where the overflow can be scrolled to, and then it cannot:
-			// what goes off the *start* edge of a scrollable box is unreachable,
-			// because scrolling only ever reaches the other way. The suite says
-			// so in the assert of trailing-space-and-text-alignment-002 —
-			// preserved spaces under "pre" do not hang, so they "may cause
-			// overflow and activate the scrollbars" — and a right-aligned
-			// textarea that pushed its own text off the left would be a box
-			// whose content no reader could get to.
-			return 0
-		}
 		return slack
 	case alignCenter:
 		if slack <= 0 {
-			// Centring a line that does not fit would push it off the *start*
+			// Centring a line that does not fit would push it off the start
 			// edge as well, and what goes off that edge is unreachable rather
 			// than merely outside — there is no scrolling back to it on a page.
 			// So an overfull centred line is left where it starts and overflows
 			// one way, which is what TestTextAlignDoesNotMoveAnOverfullLine
 			// pins and what the suite's trailing-space-and-text-alignment pairs
 			// agree with.
-			return 0
+			return startEdge(rtl, slack)
 		}
 		// Half the slack, in layout units rather than pixels, so a line with an
 		// odd number of units left over is not rounded twice.
@@ -360,4 +369,14 @@ func hangingTail(runs []inlineItem) []bool {
 		hangs[i] = true
 	}
 	return hangs
+}
+
+// startEdge is the offset that puts an overfull line against the block's start
+// edge: none at all where the line starts on the left, and the whole of the
+// negative slack where it starts on the right.
+func startEdge(rtl bool, slack style.Unit) style.Unit {
+	if rtl {
+		return slack
+	}
+	return 0
 }

@@ -811,7 +811,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				// space it was meant to hang, which is what the ten dir=rtl
 				// pre-wrap-align tests measure. It is invisible in a left-to-right
 				// document, where the hang follows the content and moves nothing.
-				shift := l.alignLine(b, align, avail, used)
+				shift := l.alignLine(b, align, rtl, avail, used)
 				if !rtl {
 					// §16.1's indent is measured from the line's *start* edge,
 					// and only a left-to-right line starts at the left. The room

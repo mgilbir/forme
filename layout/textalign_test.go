@@ -295,3 +295,93 @@ func TestARightAlignedLineTooLongHangsOffTheStart(t *testing.T) {
 			"want 0 — what goes off the start edge could never be scrolled to", got)
 	}
 }
+
+// Which edge an overfull line overflows past, and why the property does not
+// decide it.
+//
+// A line wider than the room it has cannot be aligned: wherever it is put, it
+// runs off one side. What settles which side is the *direction*, not the
+// alignment — the line is pinned to the block's start edge and runs off the
+// end, because what goes past the start edge of a scrollable box is unreachable
+// (scrolling only ever goes the other way) and on a page it is simply lost.
+//
+// In a right-to-left block the start edge is the right, and that half was
+// missing: every alignment sent an overfull line off to the right, which is the
+// left-to-right answer. The suite's trailing-space-and-text-alignment-rtl-002
+// draws five textareas with five different text-aligns and the same rendering
+// in each, which is the whole assertion.
+
+// overfullRTL lays out one overfull line in a scrollable right-to-left block
+// and returns where its run begins, measured from the block's content edge.
+func overfullRTL(t *testing.T, align string) float64 {
+	t.Helper()
+	root := layoutOf(t, 600, `<div id="p" dir="rtl">abcdefghij</div>`,
+		`#p { font-family: Courier; font-size: 20px; width: 60px;
+		      white-space: nowrap; overflow-x: auto; text-align: `+align+` }`)
+	return lineX(t, root, "p")
+}
+
+// TestAnOverfullLineInARightToLeftBlockRunsOffTheLeft. Ten Courier characters
+// at 20px are 120px in a 60px block, so the line is 60px too wide: its right
+// edge belongs against the block's right edge and the rest hangs off the left,
+// which puts the run 60px *before* the content edge.
+func TestAnOverfullLineInARightToLeftBlockRunsOffTheLeft(t *testing.T) {
+	for _, align := range []string{"left", "right", "center", "start", "end"} {
+		if got := overfullRTL(t, align); got != -60 {
+			t.Errorf("text-align:%s put an overfull right-to-left line at %gpx, "+
+				"want -60 — its right edge is the block's, whatever the alignment "+
+				"says, because the right is the edge it starts at", align, got)
+		}
+	}
+}
+
+// TestAnOverfullLineInALeftToRightBlockStillRunsOffTheRight is the half that
+// already worked and must not move: the same document read the other way round.
+func TestAnOverfullLineInALeftToRightBlockStillRunsOffTheRight(t *testing.T) {
+	for _, align := range []string{"left", "right", "center", "start", "end"} {
+		root := layoutOf(t, 600, `<div id="p">abcdefghij</div>`,
+			`#p { font-family: Courier; font-size: 20px; width: 60px;
+			      white-space: nowrap; overflow-x: auto; text-align: `+align+` }`)
+		if got := lineX(t, root, "p"); got != 0 {
+			t.Errorf("text-align:%s put an overfull left-to-right line at %gpx, want 0",
+				align, got)
+		}
+	}
+}
+
+// TestAPageKeepsAnOverfullRightAlignedLineAgainstItsRightEdge. Where there is
+// no scrolling the reasoning above does not apply, and §16.2's literal reading
+// stands: a right-aligned line keeps its right edge at the block's, and what
+// does not fit hangs off the left. This is the case the scrollable rule is an
+// exception to, and it must stay an exception.
+func TestAPageKeepsAnOverfullRightAlignedLineAgainstItsRightEdge(t *testing.T) {
+	root := layoutOf(t, 600, `<div id="p">abcdefghij</div>`,
+		`#p { font-family: Courier; font-size: 20px; width: 60px;
+		      white-space: nowrap; text-align: right }`)
+	if got := lineX(t, root, "p"); got != -60 {
+		t.Errorf("an overfull right-aligned line on a page is at %gpx, want -60", got)
+	}
+}
+
+// TestAnOverfullCentredLineStartsWhereItsDirectionStarts. Centring is refused
+// for a line that does not fit — it would push the line off the start edge as
+// well as the end — and what is left is "where it starts", which on a page is
+// the same question as above and has the same answer: the left in a
+// left-to-right block and the right in a right-to-left one.
+//
+// No scrolling here, so this is the rule in its own right rather than the
+// scrollable exception.
+func TestAnOverfullCentredLineStartsWhereItsDirectionStarts(t *testing.T) {
+	for _, tc := range []struct {
+		dir  string
+		want float64
+	}{{"", 0}, {` dir="rtl"`, -60}} {
+		root := layoutOf(t, 600, `<div id="p"`+tc.dir+`>abcdefghij</div>`,
+			`#p { font-family: Courier; font-size: 20px; width: 60px;
+			      white-space: nowrap; text-align: center }`)
+		if got := lineX(t, root, "p"); got != tc.want {
+			t.Errorf("an overfull centred line in a%q block is at %gpx, want %g",
+				tc.dir, got, tc.want)
+		}
+	}
+}
