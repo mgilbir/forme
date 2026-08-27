@@ -295,37 +295,68 @@ func (l *replacedLoader) image(b *Box) {
 	b.Replaced = content
 }
 
-// object reports an <object> whose data was not embedded.
+// object gives an <object> the picture its data names, or reports that it could
+// not and lays out the fallback content instead.
 //
-// Nothing here embeds one, and nothing is going to: an <object> names a
-// resource to be handed to a plugin, a nested browsing context or an image
-// decoder chosen by a media type, and the first two are what §4.1 refuses
-// outright. What HTML then says is exactly what this engine does — an object
-// whose data cannot be used is represented by its *fallback content*, which is
-// the element's children and is ordinary markup — so the element is laid out
-// like any other box and its children are on the page.
+// HTML §4.8.7 hands the resource to a plugin, a nested browsing context or an
+// image decoder, and which of the three depends on what arrived. The first two
+// are what §4.1 of the proposal refuses outright — a plugin is arbitrary code
+// and a browsing context is a document of its own — but the third is the same
+// decoder <img> already uses, so an <object> naming a picture is a picture. The
+// suite's replaced-intrinsic-001 to -005 are five of them, and every one is an
+// SVG or a PNG.
 //
-// The finding is the half that matters. The children of an <object> are what an
-// author wrote for the case where the object could not be shown, so a page that
-// draws them is a page that is deliberately showing its second choice, and a
-// caller has to be able to know that rather than to infer it from a paragraph
-// reading "your browser cannot show this".
+// Where the data cannot be decoded, HTML says the element is represented by its
+// *fallback content*, which is its children and is ordinary markup — so the box
+// is laid out like any other and the children are on the page. The finding is
+// the half that matters there: the children of an <object> are what an author
+// wrote for the case where the object could not be shown, so a page that draws
+// them is deliberately showing its second choice, and a caller has to be able to
+// know that rather than infer it from a paragraph reading "your browser cannot
+// show this".
 //
 // An <object> with no data names nothing, so there is nothing to have failed and
 // nothing to report: it is a box holding its children, and that is all it ever
 // was.
 func (l *replacedLoader) object(b *Box) {
 	data, ok := b.Element.Attr("data")
-	if !ok || strings.TrimSpace(data) == "" {
+	data = strings.TrimSpace(data)
+	if !ok || data == "" {
 		return
 	}
+	if got, ok := l.loaded[data]; ok {
+		b.Replaced = got
+		return
+	}
+	if l.failed[data] {
+		l.fallbackTo(b, nil, data)
+		return
+	}
+	content, why := l.load(data, "object")
+	if content == nil {
+		l.failed[data] = true
+		l.fallbackTo(b, why, data)
+		return
+	}
+	l.loaded[data] = content
+	b.Replaced = content
+}
+
+// fallbackTo says an object's data could not be used, so what is on the page is
+// the markup the author wrote for that case.
+func (l *replacedLoader) fallbackTo(b *Box, fail *loadFailure, data string) {
+	msg := "the object at " + quoteValue(data) + " was not embedded, so the " +
+		"element's fallback content was laid out in its place"
+	rule := RuleResourceBlocked
+	if fail != nil {
+		msg = fail.message + "; the element's fallback content was laid out in its place"
+		rule = fail.rule
+	}
 	l.rec.ReportDetail(Finding{
-		Rule:   RuleResourceBlocked,
-		Source: AtHTML(b.Element.Offset),
-		Message: "the object at " + quoteValue(strings.TrimSpace(data)) +
-			" was not embedded: this engine embeds no objects, so the element's " +
-			"fallback content was laid out in its place",
-		Path: PathOf(b.Element),
+		Rule:    rule,
+		Source:  AtHTML(b.Element.Offset),
+		Message: msg,
+		Path:    PathOf(b.Element),
 	})
 }
 
