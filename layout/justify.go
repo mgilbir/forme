@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mgilbir/forme/paragraph"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -68,8 +69,8 @@ func justifiableHere(item inlineItem) bool {
 	if b == nil {
 		return true
 	}
-	allowed, _ := justificationOf(b)
-	return allowed
+	m, _ := justificationOf(b)
+	return m != justifyNone
 }
 
 // justifyItems spreads slack across the word spaces of one line, and reports
@@ -190,4 +191,85 @@ func justifyItems(items []inlineItem, xs, widths []style.Unit, hangs []bool, sla
 		acc = acc.Add(step)
 	}
 	return true
+}
+
+// justifyBetweenCharacters is §7.3's other method: the slack goes between every
+// pair of typographic character units rather than at the word spaces.
+//
+// It is what "inter-character" asks for, and what "distribute" — the older name
+// for the same thing — asks for too. Thai and Chinese are justified this way,
+// and so is a line with no space in it at all: "XX" in a box twice its width is
+// one X at each edge, which is what the suite's inter-character-001 draws with a
+// float and asks this to match.
+//
+// The extra is returned rather than folded into the items, because it has to
+// reach the *drawing* as well as the measure. A backend advances the pen by each
+// glyph's own width plus the run's letter-spacing, so putting the slack there is
+// what makes the glyphs land where the widths say they will — the same reason
+// TextRun.LetterSpacing exists at all.
+//
+// The count is one short of the units on the line, because the opportunity is
+// *between* a pair: n units offer n-1 of them. The trailing extra that
+// letter-spacing adds after the last unit falls past the end of the line, where
+// nothing follows it and nobody sees it.
+func (l *layouter) justifyBetweenCharacters(items []inlineItem, xs, widths []style.Unit,
+	hangs []bool, slack style.Unit) (style.Unit, bool) {
+
+	if slack <= 0 || len(items) == 0 {
+		return 0, false
+	}
+	order := make([]int, len(items))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(a, b int) bool { return xs[order[a]] < xs[order[b]] })
+
+	// The same two exclusions the word method makes: white space hanging past
+	// the end of the line is not on the page, and nothing at or before a
+	// preserved tab may move or the tab stops stop lining up.
+	lastTab := -1
+	for i, k := range order {
+		if items[k].Tab {
+			lastTab = i
+		}
+	}
+	units := func(i, k int) int {
+		if i <= lastTab || hangs[k] {
+			return 0
+		}
+		if items[k].Atomic != nil || items[k].AtomicBox != nil {
+			// A picture is a character unit: the slack goes round it as it goes
+			// round a letter.
+			return 1
+		}
+		if items[k].Face == nil || items[k].Text == "" {
+			return 0
+		}
+		return paragraph.SpacedUnits(items[k].Text)
+	}
+	total := 0
+	for i, k := range order {
+		total += units(i, k)
+	}
+	if total < 2 {
+		// One unit offers no opportunity, and none offers none.
+		return 0, false
+	}
+	extra := slack.Div(float64(total - 1))
+	if extra <= 0 {
+		return 0, false
+	}
+
+	var acc style.Unit
+	for i, k := range order {
+		xs[k] = xs[k].Add(acc)
+		n := units(i, k)
+		if n == 0 {
+			continue
+		}
+		grew := extra.Mul(float64(n))
+		widths[k] = widths[k].Add(grew)
+		acc = acc.Add(grew)
+	}
+	return extra, true
 }

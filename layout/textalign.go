@@ -139,25 +139,45 @@ func endAlignment(rtl bool) textAlign {
 // all, and which value to report as unhandled if it asked for a method this
 // engine does not have.
 //
-// §7.3 has five values and this engine performs one of them. "auto" is
+// §7.3 has five values and this engine performs three of them. "auto" is
 // deliberately left to the user agent — the specification says so — and
 // spreading the word spaces is what every engine does for text that has word
 // spaces, which is what "inter-word" names explicitly. "none" is the one value
-// that changes the answer rather than the method, and it is acted on.
+// that changes the answer rather than the method.
 //
 // "inter-character" and "distribute" put the slack between *letters* as well,
-// which is how Thai and Chinese are justified and is not a variation on this:
-// it needs the slack apportioned inside a run and the run re-drawn glyph by
-// glyph. They are reported rather than approximated, because a page justified
-// between the wrong things looks deliberate.
-func justificationOf(b *Box) (allowed bool, unhandled string) {
+// which is how Thai and Chinese are justified. "distribute" is the older name
+// for the same method and §7.3 says so, so the two are one answer here.
+//
+// The remaining value, "inter-word" aside, is "auto"'s tailoring per script,
+// which this does not attempt: a document that says nothing gets the word
+// spaces, and one that names a method gets that method.
+
+// justifyMethod is which things a justified line is stretched between.
+type justifyMethod int
+
+const (
+	// justifyNone is "text-justify: none": the line is placed at its start edge
+	// and not stretched at all.
+	justifyNone justifyMethod = iota
+	// justifyWords spreads the slack over the word spaces, which is what "auto"
+	// and "inter-word" ask for.
+	justifyWords
+	// justifyCharacters spreads it between every pair of typographic character
+	// units, which is "inter-character" and its older name "distribute".
+	justifyCharacters
+)
+
+func justificationOf(b *Box) (method justifyMethod, unhandled string) {
 	switch v := strings.ToLower(strings.TrimSpace(b.Style["text-justify"])); v {
 	case "none":
-		return false, ""
+		return justifyNone, ""
 	case "", "auto", "inter-word":
-		return true, ""
+		return justifyWords, ""
+	case "inter-character", "distribute":
+		return justifyCharacters, ""
 	default:
-		return true, v
+		return justifyWords, v
 	}
 }
 
@@ -187,7 +207,7 @@ func lineAlignment(b *Box, rtl, last bool) (align textAlign, spread bool) {
 	// A justified line is placed where its start edge is and stretched from
 	// there. text-justify: none asks for the placement without the stretching,
 	// which leaves an ordinary line at its start edge.
-	if allowed, _ := justificationOf(b); !allowed {
+	if m, _ := justificationOf(b); m == justifyNone {
 		return startAlignment(rtl), false
 	}
 	return alignJustify, true

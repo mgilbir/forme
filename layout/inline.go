@@ -715,18 +715,29 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				for k := range runs {
 					widths[k] = runs[k].Width
 				}
+				// §7.3's extra advance after every character, when the line is
+				// being justified between characters rather than between words.
+				// It reaches the drawing as well as the widths — see
+				// justifyBetweenCharacters.
+				var interChar style.Unit
 				if spread {
-					// The method, which is reported here rather than where the
-					// property is read: this is the only place that knows a
-					// line is being justified at all.
-					if _, unhandled := justificationOf(b); unhandled != "" {
+					// The method, which is read here rather than where the
+					// property is: this is the only place that knows a line is
+					// being justified at all.
+					method, unhandled := justificationOf(b)
+					if unhandled != "" {
 						l.reportTextJustify(b, unhandled)
 					}
 					// A line with nowhere to put the slack is left where it is,
 					// and nothing is reported about it: CSS Text 3 §7.3 says a
 					// line with no expansion opportunity is aligned as start,
 					// so that *is* the conforming rendering.
-					justifyItems(runs, xs, widths, hangingTail(runs), avail.Sub(used))
+					if method == justifyCharacters {
+						interChar, _ = l.justifyBetweenCharacters(runs, xs, widths,
+							hangingTail(runs), avail.Sub(used))
+					} else {
+						justifyItems(runs, xs, widths, hangingTail(runs), avail.Sub(used))
+					}
 				}
 				// Atomic inlines are placed as children of the block rather than as
 				// runs, so aligning the line has to move them too. The range is
@@ -780,8 +791,9 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					line.Runs = append(line.Runs, TextRun{
 						Text: item.Text, Face: item.Face, Size: item.Size,
 						X: x, Width: widths[k], Box: heldBox(item.Box), Offset: item.Offset,
-						Decorations: decorations, LetterSpacing: trackingOf(item),
-						PreContext: item.PreContext, PostContext: item.PostContext,
+						Decorations:   decorations,
+						LetterSpacing: trackingOf(item).Add(interChar),
+						PreContext:    item.PreContext, PostContext: item.PostContext,
 						RTL:   item.Level&1 == 1,
 						Shift: shift,
 					})
