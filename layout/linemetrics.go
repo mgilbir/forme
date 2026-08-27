@@ -261,6 +261,15 @@ func (l *layouter) spaceAdvance(block *Box, fallback *shape.Face) style.Unit {
 	if face == nil {
 		return 0
 	}
+	// And the face that would *set* the space, which is not always the block's
+	// first family. §8.1 names a character, and a character is set in the first
+	// available font that has a glyph for it — a family with no U+0020 in it
+	// answers with .notdef, whose advance has nothing to do with a space.
+	// tab-size-integer-005 declares such a font first and says so in a comment
+	// of its own.
+	if f, ok := l.faceWithGlyph(block, ' '); ok {
+		face = f
+	}
 	s := l.spacingFor(block)
 	return l.br.Measure(face, " ", block.FontSize).Add(s.Letter).Add(s.Word)
 }

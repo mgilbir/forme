@@ -327,3 +327,30 @@ type fontMetrics struct{ fonts FontSet }
 func (m fontMetrics) XHeight(cs style.ComputedStyle, size style.Unit) (style.Unit, bool) {
 	return xHeightIn(faceForStyle(m.fonts, cs), size)
 }
+
+// faceWithGlyph is the first of a box's families whose face has a glyph for a
+// character, which is the face that character is set in.
+//
+// fontFor answers a different question — the first family that *loaded* — and
+// that is the right one for a box, which is set in one face and falls back per
+// cluster only where it has to. This is for a rule written about a single
+// character: css-text's tab-size names the advance of U+0020, and a family
+// without one does not supply it.
+//
+// It reports false where no named family has the character, which leaves the
+// caller with fontFor's answer. That is the honest default: this does not reach
+// past the families the document named into the fallback set, because the
+// question is which of *those* sets the character.
+func (l *layouter) faceWithGlyph(b *Box, r rune) (*shape.Face, bool) {
+	bold, italic := isBold(b.Style["font-weight"]), isItalic(b.Style["font-style"])
+	for _, family := range parseFamilyList(b.Style["font-family"]) {
+		face, ok := l.fontSet.Face(family, bold, italic)
+		if !ok {
+			continue
+		}
+		if _, covered := face.GlyphID(r); covered {
+			return face, true
+		}
+	}
+	return nil, false
+}
