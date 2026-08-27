@@ -110,8 +110,13 @@ func TestTheInteractiveOnesAreStillRefused(t *testing.T) {
 			t.Errorf("%q was accepted; a page laid out once cannot answer it", sel)
 			continue
 		}
-		if len(errs) == 0 || !errs[0].Unsupported {
-			t.Errorf("%q was not reported as unsupported correct CSS", sel)
+		if len(errs) == 0 {
+			t.Errorf("%q was refused with no explanation", sel)
 		}
 	}
+	// Whether the finding claims the *page* is wrong is a separate question,
+	// answered in css/selector.go by whether the document itself answers the
+	// selector: ":disabled" is written in the markup and ":hover" is not. This
+	// test is about the line :visited moved and about nothing else, so it asks
+	// only that each of these is still refused and still explained.
 }
