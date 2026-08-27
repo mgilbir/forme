@@ -492,3 +492,100 @@ func TestASingleClusterTooWideStillOverflows(t *testing.T) {
 		t.Errorf("%q, want one line of a — there is nothing to cut", got)
 	}
 }
+
+// The break that belongs to the end of a run, CSS Text §5.5 read as the
+// property it is: overflow-wrap is written over the text it is set on, and the
+// opportunity a character carries is the one *after* it. So a run that allows
+// the last-resort break offers one at its own last character, and the run
+// following it — which does not allow the break — offers none at its first.
+//
+// overflow-wrap-anywhere-inline-004 says exactly that in its own assertion, and
+// it is the difference between two lines and three.
+
+const owSpanCSS = `#p { font-family: Courier; font-size: 20px; width: 24px }`
+
+// TestABreakMayFallAfterTheLastCharacterOfABreakingRun is the reftest's shape,
+// two characters wide: "a", a span that may break anywhere holding "bc", then
+// "de".
+//
+// The line takes "a" and the span's "b", cuts the span — that much already
+// worked — and then has "c" on a line with "de" to follow. Nothing in "de" may
+// be cut, so without an opportunity at the span's own end the line runs on and
+// overflows.
+func TestABreakMayFallAfterTheLastCharacterOfABreakingRun(t *testing.T) {
+	for _, value := range []string{"anywhere", "break-word"} {
+		got := lineTextsOf(t, layoutOf(t, 600,
+			`<div id="p">a<span class="ow">bc</span>de</div>`,
+			owSpanCSS+` .ow { overflow-wrap: `+value+` }`), "p")
+		want := []string{"ab", "c", "de"}
+		if len(got) != len(want) {
+			t.Fatalf("overflow-wrap:%s made %d lines %q, want %q", value, len(got), got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("overflow-wrap:%s line %d is %q, want %q (all %q)",
+					value, i, got[i], want[i], got)
+			}
+		}
+	}
+}
+
+// TestARunThatMayNotBreakOffersNothingAtItsEnd is the containment, and the half
+// that would be silently wrong: an opportunity at the end of every run is an
+// opportunity between every pair of inline boxes, which is break-all with extra
+// steps.
+//
+// The same document with the property taken off is one overflowing line,
+// because "abcde" is one word however many spans it is written in.
+func TestARunThatMayNotBreakOffersNothingAtItsEnd(t *testing.T) {
+	got := lineTextsOf(t, layoutOf(t, 600,
+		`<div id="p">a<span>bc</span>de</div>`, owSpanCSS), "p")
+	if len(got) != 1 || got[0] != "abcde" {
+		t.Errorf("a word written in three runs broke into %q; no run of it allows "+
+			"overflow-wrap's break, so there is no opportunity anywhere in it", got)
+	}
+}
+
+// TestTheBreakAtARunsEndIsStillALastResort. §5.5's opportunities exist only "if
+// there are no otherwise-acceptable break points in the line", and a space is
+// one — so a line holding a space breaks at the space, and the run's end is not
+// reached.
+func TestTheBreakAtARunsEndIsStillALastResort(t *testing.T) {
+	// Four characters of room. "abc" and a space fill the line exactly, and the
+	// span that follows does not fit: the line goes back to the space rather
+	// than keeping "de" and ending after it.
+	got := lineTextsOf(t, layoutOf(t, 600,
+		`<div id="p">abc <span class="ow">de</span>fgh</div>`,
+		`#p { font-family: Courier; font-size: 20px; width: 48px }
+		 .ow { overflow-wrap: anywhere }`), "p")
+	want := []string{"abc", "de", "fgh"}
+	if len(got) != len(want) {
+		t.Fatalf("got %d lines %q, want %q", len(got), got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("line %d is %q, want %q (all %q)", i, got[i], want[i], got)
+		}
+	}
+}
+
+// TestTheRunsOwnLastCharacterIsWhatOffersTheBreak, and not the box edge after
+// it. A span with padding ends in a closing edge, and asking overflow-wrap of
+// that edge asks it of a box side, which never allows the break — so a single
+// pixel of padding-right would silently put the two lines back.
+func TestTheRunsOwnLastCharacterIsWhatOffersTheBreak(t *testing.T) {
+	for _, edge := range []string{"padding-right: 6px", "border-right: 6px solid red"} {
+		got := lineTextsOf(t, layoutOf(t, 600,
+			`<div id="p">a<span class="ow">bc</span>de</div>`,
+			owSpanCSS+` .ow { overflow-wrap: anywhere; `+edge+` }`), "p")
+		want := []string{"ab", "c", "de"}
+		if len(got) != len(want) {
+			t.Fatalf("with %q the lines are %q, want %q", edge, got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("with %q line %d is %q, want %q (all %q)", edge, i, got[i], want[i], got)
+			}
+		}
+	}
+}

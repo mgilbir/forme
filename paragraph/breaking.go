@@ -446,6 +446,45 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 			}
 		}
 
+		// The other end of the same rule: the opportunity a character carries
+		// is the one *after* it.
+		//
+		// overflow-wrap is written over the text it is set on, and a run that
+		// allows the last-resort break therefore offers one at its own end —
+		// where the run following it, which does not allow one, offers none at
+		// its start. overflow-wrap-anywhere-inline-004 is that shape and says
+		// so in its own assertion: "should break after the last character of
+		// the inline-block it applies to". Written
+		// "X<span style='overflow-wrap:anywhere'>XX</span>XX" in two
+		// characters, it is three lines, and without this it is two — the
+		// branch above cuts inside the span and then nothing lets the line end
+		// at the span's edge.
+		//
+		// Every condition of the branch above holds here and for the same
+		// reasons. There is no separate test that the line holds something:
+		// breaksAfterLast asks for a run on it, which is the stronger
+		// requirement and implies it.
+		//
+		// Three of the conjuncts cannot be reached and are recorded rather
+		// than dropped, which is the same accounting the branch above keeps
+		// for its own. Planted defects removing "!item.BreakWord", "insetAt <
+		// 0" and "oppAt < 0" each leave every test passing and the suite at
+		// the same count. The first is unreachable because the branch above
+		// takes an item that allows the break itself and returns; the other
+		// two because the rewinds that set them are tried before either branch
+		// is reached. They stay because the two branches are one rule, and a
+		// reader given one without the other's conditions would be told they
+		// are two.
+		if !item.BreakWord && !item.NoWrap && !item.Hangs && i < tailFrom &&
+			!item.Inset && !item.Tab && insetAt < 0 && oppAt < 0 &&
+			breaksAfterLast(line) && overflows(used, item, width) {
+			base := 0
+			if i == from {
+				base = fromByte
+			}
+			return trimLineEdge(line), i, base, outOfFlow, false
+		}
+
 		if item.Width > width && !content && !item.Space && !item.NoWrap && !item.Inset {
 			// An inset is not text and has no text to name in the report. A
 			// margin wider than the line is also not the fault the report is
@@ -757,6 +796,32 @@ func contentOnLine(line []Item) bool {
 		case item.Text != "" || item.Atomic != nil || item.Tab || item.Forced:
 			return true
 		}
+	}
+	return false
+}
+
+// breaksAfterLast reports whether the last thing on the line is a run that
+// allows overflow-wrap's last-resort break, and so offers an opportunity after
+// its final character.
+//
+// Insets and hanging characters are stepped over, and that is not tidiness: a
+// span with padding on it ends in a *closing edge*, not in its last character,
+// and reading the edge instead of the character asks overflow-wrap of the wrong
+// thing — of a box side, which never allows the break. A single pixel of
+// padding-right would otherwise turn three lines back into two. A hung
+// character is skipped for the neighbouring reason: it sits past the line's end
+// and is not what a break here would follow.
+//
+// An empty line answers false, which is what makes the caller's "the line holds
+// something" test unnecessary: a break at the end of the previous run is not a
+// break at all when there is no previous run.
+func breaksAfterLast(line []Item) bool {
+	for i := len(line) - 1; i >= 0; i-- {
+		it := line[i]
+		if it.Inset || it.Hangs {
+			continue
+		}
+		return it.BreakWord
 	}
 	return false
 }
