@@ -420,6 +420,29 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 		return nil
 	}
 
+	if name == "background-image" && !legalBackgroundImage(d.Value) {
+		// §4.2 a third time. "background-image: url(x.png) repeat" is a
+		// background-repeat value written where only an <image> belongs, so
+		// there is no declaration here at all and nothing paints — which is
+		// what every browser shows, and is why this is not a gap in the engine.
+		//
+		// It matters that this is not the unsupported report the painter would
+		// otherwise raise. That report says "a browser draws something here and
+		// this does not", and the whole reftest ratchet is built on the
+		// difference: CSS2/backgrounds/background-image-005 asks for green text
+		// and gets it, and was counted as a vacuous pass for years because the
+		// engine claimed to be missing an image no engine draws.
+		//
+		// Not marked unsupported, for the reason the checks above are not.
+		s.report(Finding{
+			Offset: d.Offset,
+			Message: "\"background-image: " + serialize(d.Value) + "\" is not an " +
+				"image, so the declaration was dropped",
+			Property: name,
+		})
+		return nil
+	}
+
 	if name == "display" && !legalDisplay(d.Value) {
 		// §4.2 once more, and this one has a visible cost in the other
 		// direction. An engine that reads an unrecognised display value as the
@@ -693,6 +716,55 @@ func legalColour(name string, vals []css.ComponentValue) bool {
 	}
 	_, ok := ParseColor(vals)
 	return ok
+}
+
+// legalBackgroundImage reports whether a value is one background-image takes: a
+// comma-separated list, each entry an <image> or "none".
+//
+// It says nothing about which images this engine can *paint*. An image it
+// cannot paint is a gap in the engine and is reported as one; a value that is
+// not an image is a stylesheet mistake, and CSS says what becomes of it. Both
+// leave the box bare and only one of them is worth telling an author about as a
+// missing feature.
+//
+// Every <image> is a single token — a url(), or a function: the gradients,
+// image-set(), cross-fade(), element(), and whatever comes next. So the shape
+// is checkable without a list of function names, which is what keeps this from
+// rejecting an image nobody has written yet.
+func legalBackgroundImage(vals []css.ComponentValue) bool {
+	layers := splitOnComma(vals)
+	for _, layer := range layers {
+		parts := splitOnWhitespace(layer)
+		if len(parts) != 1 || len(parts[0]) != 1 {
+			return false
+		}
+		v := parts[0][0]
+		if v.IsFunction() {
+			continue
+		}
+		if !v.IsToken() {
+			return false
+		}
+		switch v.Token.Kind {
+		case css.URL:
+			continue
+		case css.Ident:
+		default:
+			return false
+		}
+		switch strings.ToLower(v.Token.Value) {
+		case "none":
+		case kwInherit, kwInitial, kwUnset, kwRevert:
+			// A CSS-wide keyword is the whole value or it is nothing:
+			// "none, inherit" is not a layer list with a keyword in it.
+			if len(layers) != 1 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return len(layers) > 0
 }
 
 // legalDisplay reports whether a "display" value is one css-display-3 defines.
