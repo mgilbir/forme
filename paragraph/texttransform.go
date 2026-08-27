@@ -465,22 +465,62 @@ func capitalizeWords(text string, inWord bool, lang Language) string {
 		} else {
 			out.WriteRune(r)
 		}
-		inWord = isWordRune(r)
+		switch {
+		case isWordRune(r):
+			inWord = true
+		case inWord && isMidWord(r) && beginsWithWordRune(text[i:]):
+			// UAX #29's WB6 and WB7: a MidLetter or MidNumLet between two
+			// letters does not end the word. "Between" is the whole of the rule,
+			// which is why this looks at what follows — "cancel·lar" is one
+			// Catalan word and "Cancel· lar" is two.
+		default:
+			inWord = false
+		}
 	}
 	return out.String()
 }
 
-// isWordRune reports whether a character continues a word rather than ending it.
+// beginsWithWordRune reports whether the next character continues a word, which
+// is what WB6's "between" needs to know.
+func beginsWithWordRune(text string) bool {
+	if text == "" {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(text)
+	return isWordRune(r)
+}
+
+// isMidWord is UAX #29's MidLetter and MidNumLet: the characters that join two
+// halves of one word rather than separating two words.
 //
-// The apostrophes are here for the reason the file comment gives: without them
-// "don't" comes out "Don'T", which is a real word set wrongly rather than a
-// theoretical one. Both spellings are included because a document may carry
-// either.
-func isWordRune(r rune) bool {
+// The list is Unicode's and is short enough to write out. The two apostrophes
+// are on it — without them "don't" comes out "Don'T", which is a real word set
+// wrongly rather than a theoretical one — and so is the middle dot, which is a
+// letter of Catalan: "cancel·lar" is one word and came out "Cancel·Lar". The
+// suite's text-transform-capitalize-035 is six of those, in four languages.
+//
+// The full stop is MidNumLet and is here for the same reason: "e.g." is one
+// word, and "E.G." is not what capitalising it gives.
+func isMidWord(r rune) bool {
 	switch r {
-	case '\'', '’':
+	// MidLetter.
+	case ':', '\u00b7', '\u0387', '\u055f', '\u05f4', '\u2027',
+		'\ufe13', '\ufe55', '\uff1a':
+		return true
+	// MidNumLet.
+	case '\'', '.', '\u2018', '\u2019', '\u2024', '\ufe52', '\uff07', '\uff0e':
 		return true
 	}
+	return false
+}
+
+// isWordRune reports whether a character is one a word is made of.
+//
+// The characters that *join* two halves of a word without being letters
+// themselves — the apostrophe of "don't", the middle dot of "cancel·lar" — are
+// not here: they continue a word only when a letter follows, which is a question
+// about the next character and belongs to the caller. See isMidWord.
+func isWordRune(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsNumber(r)
 }
 
@@ -491,5 +531,9 @@ func EndsInWord(text string) bool {
 		return false
 	}
 	r, _ := utf8.DecodeLastRuneInString(text)
-	return isWordRune(r)
+	// A joining character at the very end of a text node has nothing after it
+	// here to be between, and the letter that would settle it is in the *next*
+	// node. Reading it as continuing the word is the answer that keeps "don" and
+	// "'t" in two nodes one word, which is the shape this is asked about.
+	return isWordRune(r) || isMidWord(r)
 }
