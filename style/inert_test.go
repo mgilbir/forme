@@ -191,3 +191,56 @@ func TestAnInertDeclarationStillCascades(t *testing.T) {
 			"finding must not drop the rule it was about")
 	}
 }
+
+// TestTheDecorationStyleThisEngineDrawsIsInert. A decoration is drawn as a solid
+// line, which is what text-decoration-style's initial value asks for — so
+// "solid" asks for the page that is already there, whether it is written on its
+// own or as a component of the text-decoration shorthand.
+//
+// The four it is not: each asks for a line this engine does not draw, and an
+// author who wrote one would see a solid line instead and have no other way to
+// find out.
+func TestTheDecorationStyleThisEngineDrawsIsInert(t *testing.T) {
+	for _, decl := range []string{
+		"text-decoration-style: solid",
+		"text-decoration-style: initial",
+		"text-decoration: underline solid",
+		"text-decoration: solid underline blue",
+	} {
+		if reportsUnsupported(t, decl) {
+			t.Errorf("%q was reported, and it asks for the line that is already "+
+				"drawn", decl)
+		}
+	}
+	for _, decl := range []string{
+		"text-decoration-style: double",
+		"text-decoration-style: wavy",
+		"text-decoration: underline dotted",
+		"text-decoration: underline dashed blue",
+		// Not a style at all: it asks for something this engine does not do.
+		"text-decoration: underline blink",
+	} {
+		if !reportsUnsupported(t, decl) {
+			t.Errorf("%q was not reported, and it asks for a line this engine does "+
+				"not draw", decl)
+		}
+	}
+}
+
+// TestTheShorthandStillSetsTheLine, so that swallowing the style component
+// cannot quietly swallow the declaration around it.
+func TestTheShorthandStillSetsTheLine(t *testing.T) {
+	doc := parseDoc(t, `<div id="target">x</div>`)
+	rules, errs := css.ParseStylesheet(`#target { text-decoration: underline solid blue }`)
+	if len(errs) != 0 {
+		t.Fatalf("the stylesheet reported %v", errs)
+	}
+	got := Apply(doc, []Sheet{{Origin: OriginAuthor, Rules: rules}})
+	cs := got.Styles[elementFor(t, doc, "#target")]
+	if cs["text-decoration-line"] != "underline" {
+		t.Errorf("the line came out %q, want underline", cs["text-decoration-line"])
+	}
+	if cs["text-decoration-color"] != "blue" {
+		t.Errorf("the colour came out %q, want blue", cs["text-decoration-color"])
+	}
+}

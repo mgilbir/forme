@@ -140,6 +140,13 @@ var inertValues = map[string]inertValue{
 	"text-decoration-skip-ink": {produced: "auto", also: "none",
 		because: "decorations are drawn straight through descenders"},
 
+	// CSS Text Decoration 3 §2.2. A decoration is drawn as a solid line, which
+	// is what the property's initial value asks for. The other four — double,
+	// dotted, dashed, wavy — are not here: each asks for a line this engine does
+	// not draw, and an author who wrote one would see a solid one instead.
+	"text-decoration-style": {produced: "solid",
+		because: "every decoration is drawn as a solid line"},
+
 	// Properties about interaction and animation, none of which a page laid out
 	// once has any of.
 	"will-change":         {produced: "auto", because: "nothing is optimised for change"},

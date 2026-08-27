@@ -776,6 +776,18 @@ func textDecorationShorthand(vals []css.ComponentValue) (map[string][]css.Compon
 		case isColour(part) && !seenColour:
 			colour, seenColour = part, true
 		case isIdentPart(part):
+			if isInertDeclaration("text-decoration-style", part) {
+				// The style component at its own initial value, which is the
+				// line this engine draws. It is the same rule inert.go applies
+				// to a whole declaration and for the same reason: an engine that
+				// does not implement a property renders as though nobody had
+				// said anything about it, and "solid" is what nobody saying
+				// anything means. Reporting it told an author their underline
+				// was dropped when it is on the page and is the line they asked
+				// for — text-transform-capitalize-035 writes "text-decoration:
+				// underline solid" and is a document about capitalisation.
+				continue
+			}
 			// A keyword this engine understood as belonging to the shorthand and
 			// cannot produce: "blink", or one of the CSS Text Decoration 3 styles
 			// such as "wavy".
