@@ -278,3 +278,46 @@ func TestNothingIsFragmented(t *testing.T) {
 		t.Errorf("break-inside is in the registry now, so something reads it")
 	}
 }
+
+// TestAPropertyWithNoEffectInThisMediumIsInertWhateverItSays.
+//
+// CSS Writing Modes 4 §4.1's own note is the argument: text-orientation "has no
+// effect in horizontal writing modes". This engine has no other kind, so every
+// value of it asks for the page that is already there and there is no value to
+// compare against — which is what the "always" entry means and why it is the
+// only one.
+//
+// The gap it might look like this is hiding belongs to writing-mode, and that is
+// still reported: a document that asks for vertical text is told so there.
+func TestAPropertyWithNoEffectInThisMediumIsInertWhateverItSays(t *testing.T) {
+	for _, decl := range []string{
+		"text-orientation: mixed",
+		"text-orientation: upright",
+		"text-orientation: sideways",
+		"text-orientation: initial",
+		"text-orientation: UPRIGHT",
+	} {
+		if reportsUnsupported(t, decl) {
+			t.Errorf("%q was reported, and no value of it changes a horizontal page",
+				decl)
+		}
+	}
+	// The property that would make it matter is not inert, and must not become
+	// so: a document asking for vertical text gets a page laid out horizontally,
+	// which is as different as a page can be.
+	for _, decl := range []string{
+		"writing-mode: vertical-rl",
+		"writing-mode: vertical-lr",
+		"writing-mode: sideways-rl",
+	} {
+		if !reportsUnsupported(t, decl) {
+			t.Errorf("%q was not reported, and this engine lays every page out "+
+				"horizontally", decl)
+		}
+	}
+	// And "horizontal-tb" is the initial value, so it asks for what is there.
+	if reportsUnsupported(t, "writing-mode: horizontal-tb") {
+		t.Errorf("\"writing-mode: horizontal-tb\" was reported, and it is the mode " +
+			"every page here is laid out in")
+	}
+}

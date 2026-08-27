@@ -87,6 +87,11 @@ type inertValue struct {
 	// drawn straight through and "none" asks for it — and it is the only entry
 	// here that needs two, which is why this is one field and not a list.
 	also string
+	// always marks a property whose *every* value asks for the page that is
+	// already there, so that there is nothing to compare. It is a different
+	// claim from produced and a rarer one — see text-orientation, which is the
+	// only entry that makes it.
+	always bool
 	// initial is the property's initial value, when it differs from produced.
 	// Empty means the two are the same.
 	//
@@ -133,6 +138,24 @@ var inertValues = map[string]inertValue{
 	"column-width": {produced: "auto", because: "content is laid out in one column"},
 	"column-gap":   {produced: "normal", because: "there is no second column to leave a gap before"},
 	"column-fill":  {produced: "balance", because: "there is one column to fill"},
+
+	// CSS Writing Modes 4 §4.1, whose own note is the entry: "this property has
+	// no effect in horizontal writing modes". This engine has no other kind — a
+	// document that asks for one is told so by the writing-mode finding, which
+	// is where that gap belongs — so every value of this one asks for the page
+	// that is already there, and there is no value to compare against.
+	//
+	// The suite writes it to say exactly that. text-autospace-elements-005b
+	// declares "text-orientation: upright" with the comment "should NOT affect
+	// auto-spacing in horizontal mode".
+	"text-orientation": {always: true,
+		because: "there are no vertical writing modes here for it to have an effect in"},
+
+	// And the property that decides the mode, at the value every page here is
+	// laid out in. The other four ask for a page turned on its side, which is as
+	// different as a page can be, and are reported.
+	"writing-mode": {produced: "horizontal-tb",
+		because: "every page here is laid out in horizontal-tb"},
 
 	// CSS Backgrounds 3 §5.1: corners are square.
 	"border-radius": {produced: "0", because: "every corner is square"},
@@ -189,6 +212,9 @@ func isInertDeclaration(name string, vals []css.ComponentValue) bool {
 	value := strings.ToLower(strings.TrimSpace(serialize(vals)))
 	if value == "" {
 		return false
+	}
+	if entry.always {
+		return true
 	}
 	// The CSS-wide keyword stands for the property's initial value, which is
 	// not always what this engine produces — so it is resolved rather than
