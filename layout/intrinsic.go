@@ -481,6 +481,25 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 	// is left where it was rather than moved to the space — the last character
 	// that counts is the one in front.
 	var lineTail, runTail style.Unit
+	// floats is how much of the line's width is taken by the floats standing
+	// beside it.
+	//
+	// At the maximum width nothing wraps, so the whole of the inline content is
+	// one line and every float in it is beside that line rather than above or
+	// below it: "<div float:left><div float:right width:100px></div><span
+	// inline-block width:100px></span></div>" shrinks to 200 and not to 100,
+	// which is what intrinsic-size-float-and-line asserts by painting the
+	// container red and covering it exactly.
+	//
+	// The *minimum* is the other question and is answered where it always was.
+	// There the text wraps under the float, so the two stand one above the
+	// other and the widest of them is what the box must hold.
+	//
+	// A float that clears begins a new row of them, and what was beside the
+	// last row is not beside this one — letter-spacing-206 is eight floated
+	// paragraphs, every one of them "clear: left", and summing them makes the
+	// box that holds them eight paragraphs wide.
+	var floats style.Unit
 	// The spacing an item leaves behind it is read straight off the item. The
 	// line's own version of this — trailingSpacing — asks isSpacedRun first,
 	// and here that predicate has nothing to do: every item that reaches one of
@@ -503,7 +522,7 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 	}
 	endLine := func() {
 		endRun()
-		w := line.Sub(edge).Sub(lineTail)
+		w := line.Sub(edge).Sub(lineTail).Add(floats)
 		if !firstLine {
 			split.first.max, firstLine = w, true
 		} else {
@@ -511,6 +530,12 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 		}
 		out.max = style.Max(out.max, w)
 		line, edge, lineTail = 0, 0, 0
+		// floats is not reset with them, and that is the point of keeping it
+		// apart from the line at all. A forced break ends a line and does not
+		// clear anything: two right floats written either side of a <br> stand
+		// beside each other, so the box has to be wide enough for both of them
+		// and for the widest line beside them. Only "clear" ends a row of
+		// floats, and it does it where it is met.
 	}
 
 	for k, item := range items {
@@ -543,6 +568,22 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 			got := l.outerWidths(heldBox(item.Float), 0)
 			out.min = style.Max(out.min, got.min)
 			out.max = style.Max(out.max, got.max)
+			if f := heldBox(item.Float); f != nil && f.Clear != ClearNone {
+				// The row of floats this one goes below is finished, and the
+				// width that row needed has to be kept now: nothing after the
+				// clear will ask for it again, because this float is not beside
+				// it. What it needed is the floats in it and the content that
+				// was standing beside them.
+				//
+				// The content is counted again in the row below, which is the
+				// approximation this makes and the safe direction to make it
+				// in: at the maximum width there is one line and it is beside
+				// every row, so a box measured this way is wide enough for the
+				// row it built and never narrower than one.
+				out.max = style.Max(out.max, line.Sub(edge).Sub(lineTail).Add(floats))
+				floats = 0
+			}
+			floats = floats.Add(got.max)
 			// Out of flow, so §16.1's indent does not move it and it is not part
 			// of what the indent is added to. See lineSplit.
 			split.rest.min = style.Max(split.rest.min, got.min)
