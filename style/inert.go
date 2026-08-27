@@ -151,6 +151,14 @@ var inertValues = map[string]inertValue{
 	"text-orientation": {always: true,
 		because: "there are no vertical writing modes here for it to have an effect in"},
 
+	// §9.1, and the same argument: "this property has no effect in horizontal
+	// typographic modes". The suite's text-autospace-003 writes it beside
+	// text-orientation under one comment — "these properties have no effect on
+	// horizontal text, so should not disable the auto-space insertion" — which
+	// is the entry stated by the people who wrote the property.
+	"text-combine-upright": {always: true,
+		because: "there are no vertical typographic modes here for it to combine in"},
+
 	// And the property that decides the mode, at the value every page here is
 	// laid out in. The other four ask for a page turned on its side, which is as
 	// different as a page can be, and are reported.

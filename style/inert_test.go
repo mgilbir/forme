@@ -296,6 +296,11 @@ func TestAPropertyWithNoEffectInThisMediumIsInertWhateverItSays(t *testing.T) {
 		"text-orientation: sideways",
 		"text-orientation: initial",
 		"text-orientation: UPRIGHT",
+		// §9.1 says the same of this one: "no effect in horizontal typographic
+		// modes". text-autospace-003 writes the two together under one comment.
+		"text-combine-upright: none",
+		"text-combine-upright: all",
+		"text-combine-upright: digits 3",
 	} {
 		if reportsUnsupported(t, decl) {
 			t.Errorf("%q was reported, and no value of it changes a horizontal page",
