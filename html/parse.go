@@ -508,6 +508,39 @@ func (p *parser) closeImplied(incoming string) {
 func (p *parser) endTag(tk token) {
 	name := tk.name
 
+	if name == "br" && !p.tok.xml {
+		// "</br>" is a line break. HTML's tree construction says so in as many
+		// words — "act as if this was a br start tag token with no attributes,
+		// rather than the end tag token that it actually is" — and it says it
+		// because authors write "<br></br>" and "<br/></br>" and have done
+		// since XHTML was a thing people aimed at.
+		//
+		// It is not the void-element report below, which is the right answer
+		// for every other void element and the wrong one for this: reporting
+		// "</br> is an end tag for a void element" and stopping loses a break
+		// the document asked for, and a lost break is a line of text joined to
+		// the next one. Three of the working group's own fixtures write it,
+		// and the two that show it draw their reference with "<br>X</br>Y" and
+		// expect three lines.
+		//
+		// Only outside XML, where "<br></br>" is one element properly closed
+		// and the end tag really is an end tag.
+		//
+		// It is still reported, because what it does is a surprise worth
+		// telling an author about: "<br></br>" is two breaks and not one, and
+		// nothing about the page says which of the two blank lines the author
+		// asked for.
+		p.tok.fail(tk.offset,
+			"</br> is a line break, not an end tag: HTML reads it as another <br>")
+		// The rule also says to drop the token's attributes, and there are
+		// none to drop: this tokenizer refuses an end tag with attributes
+		// where it reads them, so "</br class=x>" never arrives here as a
+		// break carrying a class. Assigning nil to them was written first and
+		// a planted defect showed it changed nothing.
+		p.startTag(tk)
+		return
+	}
+
 	if _, dropped := droppedElements[name]; dropped {
 		// Its start tag was reported and its content skipped, so a matching end
 		// tag here is the tail of something already dealt with.

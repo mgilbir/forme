@@ -294,8 +294,41 @@ func TestVoidElements(t *testing.T) {
 	mustParseHTML(t, "<p>a<br/>b</p>")
 
 	// An end tag for one is not.
-	if _, _, ok := Parse("<p>a</br>b</p>"); ok {
-		t.Error("</br> was accepted, and a void element has no end tag")
+	if _, _, ok := Parse("<p>a<img src=x alt=y></img>b</p>"); ok {
+		t.Error("</img> was accepted, and a void element has no end tag")
+	}
+}
+
+// TestAnEndTagForBRIsAnotherLineBreak is the one void element whose end tag
+// HTML gives a meaning to, and it gives it one because authors write it.
+//
+// The tree construction says so in as many words: "act as if this was a br
+// start tag token with no attributes, rather than the end tag token that it
+// actually is". Reading it as the fault the other void elements' end tags are
+// loses a break the document asked for, and a lost break is one line of text
+// joined to the next.
+func TestAnEndTagForBRIsAnotherLineBreak(t *testing.T) {
+	// Parse reports it, so this cannot go through mustParseHTML.
+	doc, _, _ := Parse("<p>a<br>b</br>c</p>")
+	p := doc.Element("p")
+	brs := 0
+	for _, c := range p.Children {
+		if c.Name == "br" {
+			brs++
+		}
+	}
+	if brs != 2 {
+		t.Errorf("\"<br>b</br>\" made %d breaks, want 2 — the end tag is one of "+
+			"them\n%s", brs, tree(doc))
+	}
+	if got := p.TextContent(); got != "abc" {
+		t.Errorf("the text around the breaks is %q, want \"abc\"", got)
+	}
+	// And it is still worth saying, because two breaks where an author wrote
+	// what looks like one is a surprise the page does not explain.
+	_, errs, _ := Parse("<p>a</br>b</p>")
+	if len(errs) != 1 || !strings.Contains(errs[0].Message, "line break") {
+		t.Errorf("</br> reported %v, want the one finding that says what it did", errs)
 	}
 }
 

@@ -261,14 +261,19 @@ func TestAnEndTagForAVoidElementIsNotAFaultInXML(t *testing.T) {
 	if got := findingsOf(`<?xml version="1.0"?><html>` + markup + `</html>`); len(got) != 0 {
 		t.Errorf("XHTML end tags for void elements reported %v", got)
 	}
+	// In HTML both are reported and they are not the same report. "</col>" is
+	// an end tag for something that has none; "</br>" is a line break, which is
+	// the one meaning HTML gives to a void element's end tag, and saying "void
+	// element" about it would describe neither what it is nor what it did.
 	got := findingsOf(`<!DOCTYPE html>` + markup)
 	if len(got) != 2 {
-		t.Errorf("HTML end tags for void elements reported %v, want one each", got)
+		t.Fatalf("HTML end tags for void elements reported %v, want one each", got)
 	}
-	for _, g := range got {
-		if !strings.Contains(g, "void element") {
-			t.Errorf("an unexpected finding: %q", g)
-		}
+	if !strings.Contains(got[0], "void element") || !strings.Contains(got[0], "col") {
+		t.Errorf("</col> reported %q", got[0])
+	}
+	if !strings.Contains(got[1], "line break") {
+		t.Errorf("</br> reported %q, want the finding that says it is a break", got[1])
 	}
 }
 
