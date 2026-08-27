@@ -83,6 +83,22 @@ func (l *layouter) checkTableBoxSizing(b *Box) {
 	default:
 		return
 	}
+	// Nothing to take off, so the two models give the same number and the table
+	// is the one the author asked for. A percentage padding is not resolvable
+	// here — the containing block is what the table is being laid out in and
+	// this runs before that is settled — so it counts as an inset and is
+	// reported, which is the safe direction: a declaration that may have changed
+	// the page is named.
+	//
+	// §17.6.2 is why this is not a rare shape. The collapsing border model
+	// ignores the table's own padding, so "border-collapse: collapse;
+	// box-sizing: border-box; padding: 100px" on a table with no border has no
+	// inset at all — and the suite's collapsing-border-model-012 and -014 are
+	// exactly that, with the finding the only thing standing between them and a
+	// clean pass.
+	if h, v := l.sizingInset(b, 0); h == 0 && v == 0 && !hasPercentagePadding(b) {
+		return
+	}
 	// No suppression of its own: this one is per *element*, since which table was
 	// laid out to the wrong model is exactly what the author needs, and the
 	// Recorder already drops a repeat of an identical finding about the same
@@ -235,6 +251,17 @@ func (l *layouter) appliesSizingKeyword(b *Box, property string) bool {
 	case "min-width", "max-width":
 		_, ok := l.keywordLimit(b, property)
 		return ok
+	}
+	return false
+}
+
+// hasPercentagePadding reports whether any padding on a box is a percentage,
+// which is a length this check has no containing block to resolve.
+func hasPercentagePadding(b *Box) bool {
+	for _, side := range []string{"top", "right", "bottom", "left"} {
+		if strings.Contains(b.Style["padding-"+side], "%") {
+			return true
+		}
 	}
 	return false
 }
