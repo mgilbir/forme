@@ -613,12 +613,24 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 	// The unsupported-property finding: a declaration parsed and then not
 	// applied. It is on by default and it is the cheapest guardrail in the
 	// design — a page where a property was dropped is plausible and wrong.
+	//
+	// A vendor-prefixed name is the one case where dropping it is not a gap.
+	// "-moz-tab-size" is Gecko's property, not CSS's, and every engine that is
+	// not Gecko drops it — which is precisely what the prefix is for and why an
+	// author writes the standard property beside it. Saying the page differs
+	// from the one the stylesheet describes would be wrong: the stylesheet
+	// describes this page to every engine but one.
+	//
+	// It is still reported, because an author who wrote *only* the prefixed
+	// spelling has a page missing what they asked for and no other way to learn
+	// it. What changes is the claim, not the message. See css/selector.go's
+	// inapplicable for the same distinction drawn about a selector.
 	if !s.seen[name] {
 		s.seen[name] = true
 		s.report(Finding{
 			Offset:      d.Offset,
 			Message:     "the property \"" + name + "\" is not implemented, so it was not applied",
-			Unsupported: true,
+			Unsupported: !vendorPrefixed(name),
 			Property:    name,
 		})
 	}
@@ -1266,4 +1278,29 @@ func (s *Styler) inlineDeclarations(n *html.Node) map[string]preparedDecl {
 		}
 	}
 	return out
+}
+
+// vendorPrefixed reports whether a property name is one engine's rather than
+// CSS's.
+//
+// The four prefixes are the ones CSS 2.1 §4.1.2.1 describes and the ones in use:
+// a name beginning with "-" and a vendor identifier is reserved for that vendor,
+// and no other engine is expected to know it.
+//
+// "-webkit-line-clamp" is prefixed and *is* implemented here, which is not a
+// contradiction: this is only reached for a name nothing acts on, and a prefixed
+// property the engine implements never gets that far.
+func vendorPrefixed(name string) bool {
+	for _, prefix := range []string{"-webkit-", "-moz-", "-ms-", "-o-"} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	// The general form: a leading "-" followed by an identifier and another "-".
+	// It catches the prefixes nobody has heard of, which is what the syntax
+	// reserves the shape for.
+	if len(name) > 1 && name[0] == '-' {
+		return strings.Contains(name[1:], "-")
+	}
+	return false
 }
