@@ -134,11 +134,18 @@ type ReplacedContent struct {
 	// stretched picture would make the two compare unequal while looking
 	// identical.
 	Solid *style.RGBA
+
+	// Bands is set when the content is a linear gradient whose colour never
+	// interpolates, and is then the stripes it paints. Like Solid it carries no
+	// pixels, and unlike Solid it needs a size before it is a picture: where a
+	// band's edges fall depends on how long the gradient line is. See
+	// gradient.go.
+	Bands *bandedGradient
 }
 
 // Paints reports whether this content puts anything on the page.
 func (r *ReplacedContent) Paints() bool {
-	return r != nil && (r.Image != nil || r.Solid != nil || r.SVG != nil)
+	return r != nil && (r.Image != nil || r.Solid != nil || r.SVG != nil || r.Bands != nil)
 }
 
 // replacedLoader turns the references in a box tree into loaded content.

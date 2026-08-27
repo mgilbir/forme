@@ -298,6 +298,21 @@ func (p *painter) backgroundImages(layers []bgPaint) {
 			}
 			continue
 		}
+		if len(l.Bands) > 0 {
+			for _, tile := range bandTiles(l) {
+				for _, band := range l.Bands {
+					r := Rect{
+						X: tile.X.Add(band.Rect.X), Y: tile.Y.Add(band.Rect.Y),
+						W: band.Rect.W, H: band.Rect.H,
+					}
+					if r = r.Intersect(l.Clip); r.Empty() {
+						continue
+					}
+					p.ops = append(p.ops, FillRect{Rect: r, Color: band.Color})
+				}
+			}
+			continue
+		}
 		if l.Image == nil {
 			continue
 		}
@@ -1387,8 +1402,22 @@ func ShapedGlyphs(v DrawText) ([]shape.Glyph, int) {
 // layer whose tiles are past what a backend will draw — so the loop below cannot
 // be driven by a stylesheet.
 func solidTiles(l bgPaint) []Rect {
-	xs := solidSpans(l.Clip.X, l.Clip.Right(), l.Tile.X, l.Tile.W, l.StepX)
-	ys := solidSpans(l.Clip.Y, l.Clip.Bottom(), l.Tile.Y, l.Tile.H, l.StepY)
+	return tilesOf(l, solidSpans)
+}
+
+// bandTiles is where a banded gradient's tiles sit.
+//
+// It cannot take solidTiles' merge: a solid tiling covers its clip in one
+// rectangle however many tiles it is, because every tile paints the same colour
+// everywhere, and a banded tile does not. So this lists them one by one, which
+// the tile cap has already bounded.
+func bandTiles(l bgPaint) []Rect {
+	return tilesOf(l, everySpan)
+}
+
+func tilesOf(l bgPaint, spans func(clipLo, clipHi, tileLo, size, step style.Unit) []span) []Rect {
+	xs := spans(l.Clip.X, l.Clip.Right(), l.Tile.X, l.Tile.W, l.StepX)
+	ys := spans(l.Clip.Y, l.Clip.Bottom(), l.Tile.Y, l.Tile.H, l.StepY)
 	out := make([]Rect, 0, len(xs)*len(ys))
 	for _, y := range ys {
 		for _, x := range xs {
@@ -1414,6 +1443,15 @@ func solidSpans(clipLo, clipHi, tileLo, size, step style.Unit) []span {
 	}
 	if step == size {
 		return []span{{clipLo, clipHi}}
+	}
+	return everySpan(clipLo, clipHi, tileLo, size, step)
+}
+
+// everySpan is the intervals one axis of a tiling covers, listed tile by tile
+// with no merging of the abutting case.
+func everySpan(clipLo, clipHi, tileLo, size, step style.Unit) []span {
+	if size <= 0 || step <= 0 || clipHi <= clipLo {
+		return nil
 	}
 	n := tileSpan(clipLo, clipHi, tileLo, size, step)
 	if n <= 0 {
