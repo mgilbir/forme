@@ -53,6 +53,17 @@ func TestADeclarationAtItsInitialValueIsNotReported(t *testing.T) {
 		"resize: NONE",
 		"resize:none",
 		"page-break-inside: auto",
+		// "avoid" asks for no break inside the box, and this engine puts none
+		// inside any box: it does not fragment at all, so a document that does
+		// not fit is scaled to the page rather than broken across two of them.
+		// The box the author did not want split is not split.
+		//
+		// This was in the list below, on the reading that "avoid" asks for
+		// something. It asks for the *absence* of something, which is the case
+		// an engine that never does it satisfies — the same shape as
+		// "text-decoration-skip-ink: none".
+		"page-break-inside: avoid",
+		"break-inside: avoid",
 		"column-gap: normal",
 		"column-fill: balance",
 		"filter: none",
@@ -124,7 +135,10 @@ func TestADeclarationThatAsksForSomethingIsStillReported(t *testing.T) {
 	for _, decl := range []string{
 		"resize: both",
 		"resize: horizontal",
-		"page-break-inside: avoid",
+		// The other break properties, which ask for a break rather than for the
+		// absence of one. An author who wrote either gets a page that runs on.
+		"page-break-before: always",
+		"page-break-after: always",
 		"column-fill: auto", // the initial value is "balance"
 		"column-gap: 0",     // the initial value is "normal"
 		"column-width: 100px",
@@ -242,5 +256,25 @@ func TestTheShorthandStillSetsTheLine(t *testing.T) {
 	}
 	if cs["text-decoration-color"] != "blue" {
 		t.Errorf("the colour came out %q, want blue", cs["text-decoration-color"])
+	}
+}
+
+// TestNothingIsFragmented is what the "avoid" entries above claim, checked
+// against the engine rather than asserted about it.
+//
+// A page-break-inside entry that is wrong is wrong invisibly: the finding it
+// suppresses is the only thing that would have said so. So the claim is pinned
+// where it can fail — the day this engine fragments, a box with "avoid" on it
+// may be broken and the entry has to come out.
+func TestNothingIsFragmented(t *testing.T) {
+	// The property is registered nowhere and read nowhere: it is in
+	// unimplementedProperties' spirit rather than its map, since being inert is
+	// what keeps it quiet. If either of those changes, the entry needs revisiting.
+	if _, ok := properties["page-break-inside"]; ok {
+		t.Errorf("page-break-inside is in the registry now, so something reads it; " +
+			"the inert entry claims nothing does")
+	}
+	if _, ok := properties["break-inside"]; ok {
+		t.Errorf("break-inside is in the registry now, so something reads it")
 	}
 }

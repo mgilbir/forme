@@ -110,9 +110,22 @@ var inertValues = map[string]inertValue{
 	// TestKerningIsApplied in the shape package is what holds the first.
 	"font-variation-settings": {produced: "normal", because: "no variation is applied beyond the instance"},
 
-	// CSS Fragmentation 3 §3.1. Nothing constrains where a break may fall.
-	"page-break-inside": {produced: "auto", because: "no break is avoided"},
-	"break-inside":      {produced: "auto", because: "no break is avoided"},
+	// CSS Fragmentation 3 §3.1, and the two values are inert for opposite
+	// reasons that meet in the same page.
+	//
+	// "auto" permits a break inside the box. "avoid" asks for none — and this
+	// engine puts none inside any box, because it does not fragment at all: a
+	// document that does not fit is *scaled* to the page rather than broken
+	// across two of them (see page.go). So the box the author did not want split
+	// is not split, which is what the declaration asked for.
+	//
+	// The other break properties are not here and must not join them.
+	// "page-break-before: always" asks for a break this engine cannot make, and
+	// an author who wrote one would get a page that runs on.
+	"page-break-inside": {produced: "auto", also: "avoid",
+		because: "nothing is fragmented, so no box is broken inside"},
+	"break-inside": {produced: "auto", also: "avoid",
+		because: "nothing is fragmented, so no box is broken inside"},
 
 	// CSS Multi-column 1. Content is laid out in one column, which is what a
 	// column-count and column-width of "auto" produce.
