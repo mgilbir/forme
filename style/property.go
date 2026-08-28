@@ -135,7 +135,17 @@ var properties = map[string]property{
 	"line-height":    {true, "normal"},
 	"letter-spacing": {true, "normal"},
 	"word-spacing":   {true, "normal"},
-	"text-align":     {true, "start"},
+	// text-align-all is where every line but the last is aligned — CSS Text 4
+	// §7.1. The property an author writes is "text-align", which is the
+	// shorthand for this and text-align-last; see the shorthands table.
+	//
+	// Splitting them is not a reshuffle for its own sake, and the argument is
+	// white-space's exactly. "text-align: center" and "text-align-all: center"
+	// set the same thing, and unless they set the same *longhand* the cascade
+	// cannot decide between them: the answer would come down to which of the
+	// two layout happened to read second, and an author who wrote one after the
+	// other would get whichever this engine preferred rather than the later one.
+	"text-align-all": {true, "start"},
 	// text-align-last is the last line's own alignment — CSS Text 3 §7.2 — and
 	// it inherits, so a block sets it for the paragraphs inside it. "auto"
 	// means "whatever the block is aligned as", except that a justified block's
@@ -429,7 +439,8 @@ var shorthands = map[string]shorthand{
 	// second.
 	"white-space": {whiteSpaceShorthand,
 		[]string{"white-space-collapse", "text-wrap-mode"}},
-	"text-wrap": {textWrapShorthand, []string{"text-wrap-mode", "text-wrap-style"}},
+	"text-wrap":  {textWrapShorthand, []string{"text-wrap-mode", "text-wrap-style"}},
+	"text-align": {textAlignShorthand, []string{"text-align-all", "text-align-last"}},
 }
 
 func init() {

@@ -975,3 +975,50 @@ func singleIdent(vals []css.ComponentValue) (string, bool) {
 	}
 	return name, name != ""
 }
+
+// textAlignShorthand is CSS Text 4 §7.1's table for the property that used to be
+// one keyword.
+//
+//	                text-align-all | text-align-last
+//	start etc.      the value        auto
+//	justify-all     justify          justify
+//	match-parent    match-parent     match-parent
+//
+// The first row is the ordinary case and the reason the split is worth having at
+// all: "text-align: center" says nothing about the last line, so the last line
+// goes back to following the rest.
+//
+// The second is where "justify-all" comes from. "text-align: justify" leaves the
+// last line short, which is what a justified paragraph looks like; an author who
+// wants the last line stretched too has to say so, and this is the spelling. It
+// used to be a keyword layout looked for in a second place, and expanding it
+// here is the same tidying the note at the top of this file is about — the value
+// stops being something two readers have to agree about.
+//
+// The third is the one the suite tests and the one a table alone would get
+// wrong. "match-parent" resolves against the parent, and setting the last line
+// to "auto" would make it follow text-align-all instead — so an author who wrote
+// "text-align: match-parent" and then overrode text-align-all would lose the
+// match on the last line, which is exactly what text-align-match-parent-05 is
+// built to catch: it sets the two on the same element and asks for the last line
+// to stay matched.
+func textAlignShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, []string, bool) {
+	name, ok := singleIdent(vals)
+	if !ok {
+		return nil, nil, false
+	}
+	all, last := name, "auto"
+	switch name {
+	case "start", "end", "left", "right", "center", "justify":
+	case "justify-all":
+		all, last = "justify", "justify"
+	case "match-parent":
+		last = "match-parent"
+	default:
+		return nil, nil, false
+	}
+	return map[string][]css.ComponentValue{
+		"text-align-all":  ident(all),
+		"text-align-last": ident(last),
+	}, nil, true
+}

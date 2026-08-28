@@ -376,6 +376,7 @@ func TestShorthandLonghandsMatchWhatTheExpanderProduces(t *testing.T) {
 		"text-decoration": "underline red",
 		"white-space":     "pre-line",
 		"text-wrap":       "balance",
+		"text-align":      "match-parent",
 		"outline":         "2px solid green",
 
 		// css-logical's, which expand into logical longhands and are renamed to

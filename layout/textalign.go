@@ -47,22 +47,35 @@ const (
 // paragraph decides its own, and each has to be aligned against the one it was
 // set in or a paragraph of Hebrew would be flush against the left edge of a
 // block the algorithm just set right to left.
+// It reads text-align-all and not text-align. The two are the same declaration
+// as far as an author is concerned — "text-align" is the shorthand — and the
+// longhand is what the cascade leaves behind. See style/property.go, where the
+// split is argued.
 func alignmentOf(b *Box, rtl bool) textAlign {
 	// The direction a value that never becomes physical is resolved against.
 	// It is the one the line was set in and it does not move as the walk below
 	// climbs, which is the whole of the root case — see matchParent.
-	logical := rtl
+	return alignmentFrom(b, rtl, rtl)
+}
+
+// alignmentFrom is that walk with the two directions given separately, for the
+// one caller that cannot derive the second from the first.
+//
+// rtl is the direction the *value* is resolved against and moves as the walk
+// climbs. logical is the direction the *line* was set in and does not, which is
+// what a walk that runs off the top of the tree has to fall back to.
+//
+// They are the same for text-align, whose walk starts at the box the line is in.
+// text-align-last: match-parent starts one box up — the parent is what it
+// matches — and the line is still the child's, so the two part company there.
+func alignmentFrom(b *Box, rtl, logical bool) textAlign {
 	for {
-		switch strings.ToLower(strings.TrimSpace(b.Style["text-align"])) {
+		switch strings.ToLower(strings.TrimSpace(b.Style["text-align-all"])) {
 		case "right":
 			return alignRight
 		case "center":
 			return alignCenter
-		case "justify", "justify-all":
-			// justify-all is CSS Text 3's shorthand value for "justify every
-			// line, the last one included". Every line but the last is
-			// justified either way; which of the two was written is what
-			// lineAlignment reads when the line *is* the last.
+		case "justify":
 			return alignJustify
 		case "end":
 			return endAlignment(rtl)
@@ -229,16 +242,25 @@ func lastLineAlignment(b *Box, rtl bool) textAlign {
 		return endAlignment(rtl)
 	case "justify":
 		return alignJustify
+	case "match-parent":
+		// The same value §7.1 gives text-align, and it means the same thing
+		// here: the *parent's* alignment, with start and end made physical
+		// against the parent's direction. So the walk alignmentOf already does
+		// is the answer, started one box up.
+		//
+		// It is how "text-align: justify-all" and "text-align: match-parent"
+		// differ from every other value of the shorthand — both set this
+		// longhand too — and it is why the last line of
+		// text-align-match-parent-05 stays matched to its parent after
+		// text-align-all is overridden on the same element.
+		if b.Parent == nil {
+			return startAlignment(rtl)
+		}
+		return alignmentFrom(b.Parent, isRTL(b.Parent), rtl)
 	}
 	// auto, and anything unrecognised. §7.2: "content on the affected line is
 	// aligned per text-align-all unless text-align-all is justify, in which
 	// case it is aligned per the start value of text-align".
-	//
-	// justify-all is the exception: it is the spelling that asks for the last
-	// line as well, and is the whole difference between the two.
-	if strings.EqualFold(strings.TrimSpace(b.Style["text-align"]), "justify-all") {
-		return alignJustify
-	}
 	if a := alignmentOf(b, rtl); a != alignJustify {
 		return a
 	}
