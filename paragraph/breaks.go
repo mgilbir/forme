@@ -409,9 +409,25 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 			flush()
 			breakNext = true
 
-		case r == '-' && !endsRunOrSpace(text, i):
+		case (r == '-' || isLatinHyphen(r)) && !endsRunOrSpace(text, i):
 			// A hyphen ends a run and the next may begin a line — which is what
 			// lets a hyphenated compound break where it is written.
+			//
+			// All three of them. U+002D HYPHEN-MINUS is class HY and U+2010
+			// HYPHEN and U+2013 EN DASH are class HH, and what the classes differ
+			// about is the *start* of a line: see isLatinHyphen, which is the
+			// other half of the same pair and was written first. A line may end
+			// after any of the three, and only U+002D was ending one — so a
+			// document that spells its hyphen with the character meant for it,
+			// which is what "&#x2010;" is for, had its compounds overflow
+			// instead of break.
+			//
+			// It is not the hyphens property's business. §6.1 is about where a
+			// word may be broken *without* a hyphen written in it; a hyphen that
+			// is there is an ordinary break opportunity whatever the value.
+			// hyphens-none-013's assert is that "hyphens: none does not suppress
+			// line wrapping after encountering an actual hyphen character
+			// (U+2010)".
 			cur.WriteRune(r)
 			flush()
 			breakNext = true
