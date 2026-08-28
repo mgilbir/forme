@@ -239,7 +239,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 			// Recorded with how far along the line it was reached, which is what
 			// decides whether it goes beside this line or below it.
 			outOfFlow = append(outOfFlow, MidLineBox{
-				Box: item.Float, Used: used, Offset: item.Offset})
+				Box: item.Float, Used: floatClears(line, used), Offset: item.Offset})
 			continue
 		}
 
@@ -618,6 +618,51 @@ func pendingHyphen(line []Item) style.Unit {
 // a space whether or not the span has a margin, and the span's margin is still
 // its margin once the space has gone. So the scan looks past an inset and the
 // inset is kept.
+// floatClears is how much of the line a float written at this point has to get
+// past, which is not how much of it has been filled.
+//
+// The difference is the white space at the end. §4.1.2 removes a collapsible
+// space that lands at the end of a line, so the space an author left between a
+// box and the float after it is not in the finished line and is not something
+// the float has to clear. Counting it put "<div></div> <div
+// style=float:left></div>" in a container exactly two boxes wide on the next
+// line, four pixels short — and deleting the space from the markup placed it
+// correctly, which is not a difference any specification draws.
+//
+// floats-001 is the suite's version: an inline-block and a float of an inch
+// each, in two inches of room, written on separate lines of the source. Its
+// assert is that "a left floated box shifts left until its outer edge touches
+// the containing block edge", and it came out an inch and a half below.
+//
+// An inset is skipped for the reason isLineTailSpace gives — an inline box's own
+// edge is not content and does not interrupt the run of spaces before it. The
+// scan stops at the first thing that is neither, because only the space at the
+// *end* of the line is removed: "a b " has two collapsible spaces on it and the
+// line keeps the one between the words.
+//
+// A hanging item needs no clause of its own, and a first version had one on the
+// reasoning that its width was never added to the total so subtracting it would
+// double-count. The two cannot meet: §4.1.2's third rule removes a collapsible
+// space and its fourth hangs a preserved one, and TrimAtEnd marks only the
+// first. See isTailSpace, which asks for either and not both. A planted defect
+// that deleted the clause moved no test and no reftest.
+func floatClears(line []Item, used style.Unit) style.Unit {
+	for i := len(line) - 1; i >= 0; i-- {
+		it := line[i]
+		if it.Inset {
+			continue
+		}
+		if !it.TrimAtEnd {
+			break
+		}
+		used = used.Sub(it.Width)
+	}
+	if used < 0 {
+		return 0
+	}
+	return used
+}
+
 func trimLineEdge(line []Item) []Item {
 	end := len(line)
 	for end > 0 && (line[end-1].TrimAtEnd || line[end-1].Inset) {
