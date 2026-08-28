@@ -320,9 +320,10 @@ func BoundaryAfter(before Boundary, text string) Boundary {
 	return out
 }
 
-// CollapseWhitespace is §4.1.1 Phase I over one text node that follows nothing.
+// CollapseWhitespace is §4.1.1 Phase I over one text node that follows nothing,
+// in a writing system the rule's second sentence is not about.
 func CollapseWhitespace(text, value string, wst WordSpaceTransform) string {
-	return CollapseWhitespaceAfter(text, value, wst, Boundary{})
+	return CollapseWhitespaceAfter(text, value, wst, Boundary{}, WritingSystemOther)
 }
 
 // CollapseWhitespaceAfter is §4.1.1 Phase I over one text node, given the text
@@ -331,7 +332,8 @@ func CollapseWhitespace(text, value string, wst WordSpaceTransform) string {
 // It is linear in the length of the text and allocates one builder, which is
 // not a micro-optimisation: the input is untrusted, and a megabyte of
 // alternating spaces and newlines is a document somebody will send.
-func CollapseWhitespaceAfter(text, value string, wst WordSpaceTransform, before Boundary) string {
+func CollapseWhitespaceAfter(text, value string, wst WordSpaceTransform,
+	before Boundary, system WritingSystem) string {
 	ws := WhiteSpaceOf(value)
 	if !ws.Collapse {
 		// pre, pre-wrap and break-spaces keep every space and every tab, so all
@@ -427,6 +429,36 @@ func CollapseWhitespaceAfter(text, value string, wst WordSpaceTransform, before 
 			// words, all through the text. It is the single most visible thing
 			// this engine got wrong about CJK, and it is wrong in the direction
 			// that looks deliberate.
+		case system.SpacesNoWords() &&
+			(punctuationAtSegmentBreak(lastSeen) && wideAtSegmentBreak(nextSeen) ||
+				punctuationAtSegmentBreak(nextSeen) && wideAtSegmentBreak(lastSeen)):
+			// §4.1.1's second sentence, which is the same rule about the
+			// punctuation East Asian text is written with:
+			//
+			//	If the writing system of the segment break is Chinese,
+			//	Japanese, or Yi, and the character before or after the segment
+			//	break is punctuation or a symbol (Unicode general category P*
+			//	or S*) and has an East Asian Width property of A or is Emoji,
+			//	and the character on the other side of the segment break is F,
+			//	W, or H, and not Hangul or Emoji, then the segment break is
+			//	removed.
+			//
+			// A quotation mark is the everyday case. “ and ” are punctuation
+			// whose East Asian Width is *Ambiguous*, so the sentence above says
+			// nothing about them, and a Japanese paragraph wrapped after an
+			// opening quote gains a space between the quote and the word it
+			// opens — which is not a space anyone wrote and not one a reader of
+			// the script would expect.
+			//
+			// "before or after ... the other side" is symmetric and is written
+			// out here as the two ways round, because the two halves are
+			// different tests and a reader should be able to see that neither
+			// is the negation of the other.
+			//
+			// The writing system is the outer condition rather than a fifth
+			// term, because it is the only one that is not about the two
+			// characters: the same quote beside the same katakana in an English
+			// document keeps its break.
 		default:
 			out.WriteByte(' ')
 			last = ' '
@@ -636,6 +668,31 @@ func SeparatorBreaksAfter(r rune) bool {
 // and would satisfy every other part of it.
 func removesSegmentBreak(r rune) bool {
 	return inRanges(r, eastAsianWideRanges[:]) && !inRanges(r, hangulRanges[:])
+}
+
+// punctuationAtSegmentBreak reports whether a character is the near side of
+// §4.1.1's second sentence: "punctuation or a symbol (Unicode general category
+// P* or S*) and has an East Asian Width property of A or is Emoji".
+//
+// Three of Unicode's own sets and the sentence's own "and" and "or" between
+// them. Written that way rather than as one derived table so that this reads as
+// the sentence reads and each table can be checked against the file it came
+// from — see cmd/geneastasian.
+func punctuationAtSegmentBreak(r rune) bool {
+	return inRanges(r, punctuationOrSymbolRanges[:]) &&
+		(inRanges(r, eastAsianAmbiguousRanges[:]) || inRanges(r, emojiRanges[:]))
+}
+
+// wideAtSegmentBreak reports whether a character is the far side: "F, W, or H,
+// and not Hangul or Emoji".
+//
+// The first two are what the sentence above it asks for as well, so this is
+// removesSegmentBreak with one more carve-out. Emoji is taken out because an
+// emoji is wide and is not text the rule is about: a newline between a quotation
+// mark and a picture of a cat is a break between two things, not the middle of a
+// word.
+func wideAtSegmentBreak(r rune) bool {
+	return removesSegmentBreak(r) && !inRanges(r, emojiRanges[:])
 }
 
 // nextSeen is the first character of the text that a reader would see: the one

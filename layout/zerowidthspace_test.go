@@ -218,3 +218,33 @@ func TestTheEastAsianRuleCrossesABoundaryToo(t *testing.T) {
 			"%q, want the two ideographs with no space", got)
 	}
 }
+
+// TestTheLangAttributeReachesTheSegmentBreakRule. §4.1.1's second sentence asks
+// what writing system the break is in, and the answer is an HTML attribute
+// rather than a CSS property — read off the nearest element at or above the
+// text, the same walk :lang() does.
+//
+// writing-system-segment-break-001 writes lang="ain-Kana": Ainu, which is not
+// Japanese, in katakana, which is.
+func TestTheLangAttributeReachesTheSegmentBreakRule(t *testing.T) {
+	for _, tc := range []struct{ what, html, want string }{
+		{"katakana named by a script subtag",
+			"<div id=\"d\" lang=\"ain-Kana\">“\nア</div>", "“ア"},
+		{"the language on its own",
+			"<div id=\"d\" lang=\"ja\">“\nア</div>", "“ア"},
+		{"the attribute on an ancestor",
+			"<section lang=\"ja\"><div id=\"d\">“\nア</div></section>", "“ア"},
+		{"a document that says nothing about its language",
+			"<div id=\"d\">“\nア</div>", "“ ア"},
+		{"a writing system the sentence does not name",
+			"<div id=\"d\" lang=\"en\">“\nア</div>", "“ ア"},
+		{"Japanese romanised, which is written with spaces",
+			"<div id=\"d\" lang=\"ja-Latn\">“\nア</div>", "“ ア"},
+	} {
+		got := lineTextsOf(t, layoutOf(t, 600, tc.html,
+			`#d { font-family: Courier; font-size: 20px; width: 400px }`), "d")
+		if len(got) != 1 || got[0] != tc.want {
+			t.Errorf("%s: set %q, want [%q]", tc.what, got, tc.want)
+		}
+	}
+}

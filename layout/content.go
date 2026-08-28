@@ -326,7 +326,8 @@ func (b *boxBuilder) generated(n *html.Node, name string, fontSize style.Unit) *
 			})
 			continue
 		}
-		text := collapseWhitespace(piece.text, cs["white-space-collapse"], wst)
+		text := collapseWhitespaceAfter(piece.text, cs["white-space-collapse"], wst,
+			textBoundary{}, writingSystemAt(n))
 		if text == "" {
 			continue
 		}

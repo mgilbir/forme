@@ -919,7 +919,7 @@ func (b *boxBuilder) roomAt(offset int) bool {
 // occupies a line.
 func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSize style.Unit) *Box {
 	text := collapseWhitespaceAfter(n.Text, inherited["white-space-collapse"],
-		b.wordSpaceTransformFor(inherited), b.boundary)
+		b.wordSpaceTransformFor(inherited), b.boundary, writingSystemAt(n))
 	// text-transform, applied here so that the text every later stage measures,
 	// breaks, draws and writes into the PDF is the text that will appear.
 	// texttransform.go works through why it cannot wait until paint time.
@@ -1656,6 +1656,26 @@ func languageAt(n *html.Node) paragraph.Language {
 		}
 	}
 	return ""
+}
+
+// writingSystemAt is the writing system in force at a node, which is a
+// different question from the language and is asked of the same attribute.
+//
+// languageAt cuts a tag down to its primary subtag, because that is what a
+// casing tailoring is keyed on. The writing system is keyed on the *script*, so
+// this reads the tag whole: "ain-Kana" is Ainu written in katakana and is
+// typeset as Japanese, and "ja-Latn" is Japanese romanised and is not. See
+// paragraph.WritingSystemOf.
+func writingSystemAt(n *html.Node) paragraph.WritingSystem {
+	for cur := n; cur != nil; cur = cur.Parent {
+		if cur.Type != html.ElementNode {
+			continue
+		}
+		if v, ok := cur.Attr("lang"); ok && v != "" {
+			return paragraph.WritingSystemOf(v)
+		}
+	}
+	return paragraph.WritingSystemOther
 }
 
 // wordSpaceTransformFor reads word-space-transform off a computed style and
