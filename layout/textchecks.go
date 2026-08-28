@@ -530,3 +530,10 @@ func boxElement(b *Box) *html.Node {
 func boxLanguage(b *Box) paragraph.Language {
 	return languageAt(boxElement(b))
 }
+
+// boxWritingSystem is boxLanguage's neighbour for the rules that ask what a text
+// is *typeset* as rather than what language it is in. See
+// paragraph.WritingSystemOf, and writingSystemAt for the walk.
+func boxWritingSystem(b *Box) paragraph.WritingSystem {
+	return writingSystemAt(boxElement(b))
+}

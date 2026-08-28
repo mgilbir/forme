@@ -44,6 +44,18 @@ const (
 // falls in the middle of a sentence rather than between two words.
 func (w WritingSystem) SpacesNoWords() bool { return w != WritingSystemOther }
 
+// ChineseOrJapanese reports whether the writing system is one of the two
+// css-text's line-break tailoring names.
+//
+// Two and not the three above, and the difference is the specification's rather
+// than a simplification: §4.1.1's segment break rule says "Chinese, Japanese, or
+// Yi" and §5.3's loose tailoring says "in Chinese and Japanese". Yi is written
+// without spaces between words, which is what the first rule is about, and is
+// not typeset with the punctuation the second is about.
+func (w WritingSystem) ChineseOrJapanese() bool {
+	return w == WritingSystemChinese || w == WritingSystemJapanese
+}
+
 // WritingSystemOf reads a language tag as the writing system its text is in.
 //
 // The script subtag wins where there is one, because that is what a script

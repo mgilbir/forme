@@ -67,7 +67,18 @@ func noBreakBefore(r rune, lb LineBreak) bool {
 		// three do not — which for auto is a prohibition UAX #14 does not have,
 		// exactly as the postfixes below are. See isLatinHyphen.
 		return !lb.Loose
-	case (lb.Normal || lb.Loose) && isEastAsianHyphen(r):
+	case (lb.Normal || lb.Loose) && lb.ChineseOrJapanese && isEastAsianHyphen(r):
+		// And only where the text is Chinese or Japanese. §5.3 puts this
+		// tailoring under "in Chinese and Japanese", and the suite tests the
+		// boundary rather than leaving it a reading:
+		// writing-system-line-break-001 sets "line-break: loose" on the same
+		// wave dash twice, once in lang=ja and once in lang=ja-Hang — Japanese
+		// written in Hangul — and asks for a line to begin with it in the first
+		// and not in the second.
+		//
+		// The writing system and not the language, for the reason
+		// writingsystem.go gives: a script subtag says what the text is typeset
+		// as, and "ja-Hang" is not typeset as Japanese however it is tagged.
 		return false
 	case lb.Strict && inLineBreakRanges(r, strictNoBreakRanges[:]):
 		return true

@@ -190,6 +190,16 @@ func WordBreakOf(value string) (WordBreak, string) {
 //	against line breaks, even those introduced by characters with the GL, WJ, or
 //	ZWJ character class or mandated by the word-break property.
 type LineBreak struct {
+	// ChineseOrJapanese is not the property. It is the one fact about the *text*
+	// that §5.3's tailoring depends on, carried here because it is asked in the
+	// same breath and in the same function: "in Chinese and Japanese" qualifies
+	// the loose value's list, so a wave dash may begin a line in a Japanese
+	// paragraph and not in the same markup tagged ja-Hang.
+	//
+	// A field rather than a parameter through the breaker because the breaker
+	// has one question to ask about it and forty callers who do not. See
+	// paragraph.WritingSystem, which is what a caller reads it from.
+	ChineseOrJapanese bool
 	// Anywhere is that value: an opportunity at every grapheme cluster boundary,
 	// and no prohibition survives it.
 	Anywhere bool

@@ -704,6 +704,10 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		l.reportWordBreak(b, unhandled)
 	}
 	lb, unhandledLine := lineBreakOf(b.Style["line-break"])
+	// §5.3's loose tailoring is qualified "in Chinese and Japanese", and which
+	// of those the text is comes from the language tag's *script* rather than
+	// from the property. See paragraph.WritingSystemOf.
+	lb.ChineseOrJapanese = boxWritingSystem(b).ChineseOrJapanese()
 	if unhandledLine != "" {
 		l.reportLineBreak(b, unhandledLine)
 	}

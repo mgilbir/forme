@@ -136,3 +136,31 @@ func TestTheFirstSentenceIsUnchanged(t *testing.T) {
 		}
 	}
 }
+
+// TestChineseOrJapaneseIsNotTheSameCarveOutAsSpacesNoWords, which is the reason
+// there are two predicates and not one.
+//
+// §4.1.1's segment break rule says "Chinese, Japanese, or Yi" and §5.3's line
+// break tailoring says "in Chinese and Japanese". Yi is the difference, and it
+// is a difference the specification states rather than one this engine chose,
+// so reusing either predicate for the other rule would quietly widen or narrow
+// a carve-out that two working groups wrote deliberately.
+func TestChineseOrJapaneseIsNotTheSameCarveOutAsSpacesNoWords(t *testing.T) {
+	for _, tc := range []struct {
+		system             WritingSystem
+		spacesNoWords, cjk bool
+		what               string
+	}{
+		{WritingSystemChinese, true, true, "Chinese"},
+		{WritingSystemJapanese, true, true, "Japanese"},
+		{WritingSystemYi, true, false, "Yi, which §4.1.1 names and §5.3 does not"},
+		{WritingSystemOther, false, false, "anything else"},
+	} {
+		if got := tc.system.SpacesNoWords(); got != tc.spacesNoWords {
+			t.Errorf("%s: SpacesNoWords is %v, want %v", tc.what, got, tc.spacesNoWords)
+		}
+		if got := tc.system.ChineseOrJapanese(); got != tc.cjk {
+			t.Errorf("%s: ChineseOrJapanese is %v, want %v", tc.what, got, tc.cjk)
+		}
+	}
+}
