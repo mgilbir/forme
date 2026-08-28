@@ -221,6 +221,11 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 		rootFontSize:     root.FontSize,
 		root:             root,
 	}
+	// The words of every inline formatting context, gathered before anything is
+	// laid out. A word is not a box — "high<span>way</span>" is one word written
+	// in two — so a dictionary cannot be asked about one where the pieces are
+	// built, which happens a box at a time. See hyphenwords.go.
+	l.hyphenPoints = l.hyphenPointsIn(root)
 	// The breaker reports through the layouter, so it is made once the layouter
 	// exists rather than in the literal above.
 	l.br = newBreaker(l)
@@ -315,6 +320,11 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 type layouter struct {
 	rec   *Recorder
 	avail Size
+
+	// hyphenPoints is where automatic hyphenation may divide the text of each
+	// text box, as rune offsets into that box's own text. It is empty for a
+	// document that asked for none. See hyphenwords.go.
+	hyphenPoints map[*Box][]int
 
 	// lengths memoizes parsing a computed value into a Length.
 	//

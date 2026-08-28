@@ -694,6 +694,14 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		l.reportLineBreak(b, unhandledLine)
 	}
 	hy, unhandledHyphens := hyphensOf(b.Style["hyphens"])
+	lang := boxLanguage(b)
+	if hy.Auto && !hyphenatesLanguage(lang) {
+		// "auto" asks for the language's own dictionary, and there is one
+		// language here. A document in another gets the manual behaviour and
+		// is told so — which is the report that used to be raised for every
+		// "auto" whatever the language.
+		unhandledHyphens = "auto"
+	}
 	if unhandledHyphens != "" {
 		l.reportHyphens(b, unhandledHyphens)
 	}
@@ -707,6 +715,15 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		l.reportAutospace(b, unhandledAutospace)
 	}
 	pieces, endedAtBreak := splitAtBreaks(b.Text, ws, wb, lb, hy)
+	if points := l.hyphenPoints[b]; len(points) > 0 {
+		var endsAtHyphen bool
+		pieces, endsAtHyphen = hyphenatePieces(pieces, points)
+		// A point at the very end of this box is an opportunity for whatever
+		// box comes next, which is what a soft hyphen ending a node already
+		// does. "high<span>way</span>" is the shape: the point falls between
+		// the two text boxes, so neither of them holds it on its own.
+		endedAtBreak = endedAtBreak || endsAtHyphen
+	}
 	if len(pieces) == 0 {
 		// A box that produced nothing passes an opportunity through rather than
 		// swallowing it — and it may have created one of its own, which is what

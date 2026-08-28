@@ -72,6 +72,8 @@ var (
 
 var (
 	hyphensOf                     = paragraph.HyphensOf
+	hyphenatePieces               = paragraph.HyphenatePieces
+	hyphenatesLanguage            = paragraph.HyphenatesLanguage
 	trailingStopOrComma           = paragraph.TrailingStopOrComma
 	autospaceOf                   = paragraph.AutospaceOf
 	splitAtAutospace              = paragraph.SplitAtAutospace

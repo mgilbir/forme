@@ -10,10 +10,11 @@ import (
 // "hyphens: auto" and the half of §6.1 that is about what a UA is *required* to
 // do.
 //
-// This engine has no hyphenation resource for any language, so it breaks a word
-// only where a soft hyphen asks — which is "manual" — and it says so. That is a
-// page with looser lines than a browser would set, which a reader cannot see and
-// a finding has to name.
+// This engine has a hyphenation resource for one language, so a word in English
+// is broken where the dictionary allows and a word in anything else only where a
+// soft hyphen asks — which is "manual" — and it says so. That is a page with
+// looser lines than a browser would set, which a reader cannot see and a finding
+// has to name.
 //
 // But §6.1 does not ask a UA to hyphenate everything:
 //
@@ -70,25 +71,22 @@ func TestHyphensAutoIsNotReportedWithoutALanguage(t *testing.T) {
 	}
 }
 
-// TestHyphensAutoIsStillReportedWithALanguage is the half the change had to
-// keep, and it is the reason the narrowing stops where it does.
+// TestHyphensAutoIsStillReportedWithALanguageThisHasNoPatternsFor is the half
+// the finding keeps, and it is the reason §6.1's second condition matters.
 //
-// §6.1's sentence has a second condition — "and for which it has an appropriate
-// hyphenation resource" — which this engine never satisfies, so a wider reading
-// would empty the finding out altogether. It is not taken: with a language
-// declared, the page really does differ from the one the author asked for and
-// from the one every browser produces, and a missing resource is a limitation
-// worth naming.
-func TestHyphensAutoIsStillReportedWithALanguage(t *testing.T) {
+// The sentence has two: a language the author declared, *and* "an appropriate
+// hyphenation resource". This engine ships one language's patterns, so a
+// document in German asks for something it will not get — the page really does
+// differ from the one the author asked for and from the one every browser
+// produces, and that is a limitation worth naming.
+func TestHyphensAutoIsStillReportedWithALanguageThisHasNoPatternsFor(t *testing.T) {
 	for _, tc := range []struct{ what, html string }{
-		{"on the element itself",
-			`<div lang="en" style="hyphens:auto">implementation</div>`},
-		{"on an ancestor, which is where a document usually says it",
-			`<div lang="en"><p style="hyphens:auto">implementation</p></div>`},
-		{"a region subtag, which is a language all the same",
-			`<div lang="en-US" style="hyphens:auto">implementation</div>`},
-		{"xml:lang, for a document written as XHTML",
+		{"a language with no patterns here",
 			`<div lang="de" style="hyphens:auto">Wiedervereinigung</div>`},
+		{"on an ancestor, which is where a document usually says it",
+			`<div lang="fr"><p style="hyphens:auto">implementation</p></div>`},
+		{"a region subtag, which is a language all the same",
+			`<div lang="de-AT" style="hyphens:auto">Wiedervereinigung</div>`},
 	} {
 		got := hyphensFindings(t, tc.html)
 		if len(got) == 0 {
@@ -101,6 +99,26 @@ func TestHyphensAutoIsStillReportedWithALanguage(t *testing.T) {
 		}
 		if !got[0].Unsupported() {
 			t.Errorf("%s: the finding was not marked unsupported", tc.what)
+		}
+	}
+}
+
+// TestHyphensAutoInEnglishIsNotReported is the other side of the same sentence.
+// The resource is there, the words are broken where it says, and there is
+// nothing missing from the page to tell an author about.
+func TestHyphensAutoInEnglishIsNotReported(t *testing.T) {
+	for _, tc := range []struct{ what, html string }{
+		{"on the element itself",
+			`<div lang="en" style="hyphens:auto">implementation</div>`},
+		{"on an ancestor",
+			`<div lang="en"><p style="hyphens:auto">implementation</p></div>`},
+		{"a region subtag",
+			`<div lang="en-US" style="hyphens:auto">implementation</div>`},
+		{"a region and a variant",
+			`<div lang="en-GB-oxendict" style="hyphens:auto">implementation</div>`},
+	} {
+		if got := hyphensFindings(t, tc.html); len(got) != 0 {
+			t.Errorf("%s: reported %q — English is hyphenated here", tc.what, got[0].Message)
 		}
 	}
 }
@@ -119,14 +137,21 @@ func TestTheOtherHyphensValuesAreNeverReported(t *testing.T) {
 	}
 }
 
-// TestTheLanguageDoesNotChangeThePage is what makes the change above a change to
-// a *finding* and nothing else.
+// TestTheLanguageDecidesWhetherTheWordIsBroken is §6.1's first condition,
+// measured on the page rather than in the report.
 //
-// Whether or not a language is declared, no word is broken except where a soft
-// hyphen asks — because that is all this engine can do either way. If the page
-// moved with the language, the narrowing would be hiding a difference rather
-// than declining to report a sameness.
-func TestTheLanguageDoesNotChangeThePage(t *testing.T) {
+// "The UA is therefore only required to automatically hyphenate text for which
+// the author has declared a language". A document that says nothing about its
+// language is not hyphenated by any conforming engine, so the same word is one
+// line untagged and several tagged — and hyphens-auto-001, "automatic
+// hyphenation must not work without language tagging", passes by the first of
+// those.
+//
+// This test asserted the opposite while there was no dictionary here to apply:
+// the language then changed the finding and nothing else, and a page that moved
+// with it would have meant the finding was hiding a difference. Now there is
+// one, and the page moving is the feature.
+func TestTheLanguageDecidesWhetherTheWordIsBroken(t *testing.T) {
 	lines := func(htmlSrc string) []string {
 		t.Helper()
 		root := layoutOf(t, 600, htmlSrc,
@@ -155,15 +180,24 @@ func TestTheLanguageDoesNotChangeThePage(t *testing.T) {
 		walk(root)
 		return out
 	}
+	// Untagged: one line, overflowing, which is what hyphens-auto-001 asserts.
 	plain := lines(`<div id="d" style="hyphens:auto">implementation</div>`)
-	tagged := lines(`<div id="d" lang="en" style="hyphens:auto">implementation</div>`)
-	if strings.Join(plain, "|") != strings.Join(tagged, "|") {
-		t.Errorf("the untagged document set %q and the tagged one %q; the language "+
-			"changes what is *reported* and must not change the page", plain, tagged)
+	if len(plain) != 1 || plain[0] != "implementation" {
+		t.Errorf("the untagged document set %q; with no declared language there is "+
+			"nothing to break the word with", plain)
 	}
-	// And neither is hyphenated, which is the outcome hyphens-auto-001 asserts.
-	if len(plain) != 1 {
-		t.Errorf("the word was broken into %q; there is no resource to break it with "+
-			"and no soft hyphen asking", plain)
+	// Tagged English: broken where the dictionary allows. "implementation" is
+	// im-ple-men-ta-tion, and 60px of Courier at 20px is five characters, so
+	// every part but the last takes a line of its own with its hyphen.
+	tagged := lines(`<div id="d" lang="en" style="hyphens:auto">implementation</div>`)
+	want := []string{"im-", "ple-", "men-", "ta-", "tion"}
+	if strings.Join(tagged, "|") != strings.Join(want, "|") {
+		t.Errorf("the tagged document set %q, want %q", tagged, want)
+	}
+	// And a language with no patterns here is the untagged case again.
+	german := lines(`<div id="d" lang="de" style="hyphens:auto">implementation</div>`)
+	if strings.Join(german, "|") != strings.Join(plain, "|") {
+		t.Errorf("a document tagged de set %q and an untagged one %q; there are no "+
+			"German patterns here, so neither is hyphenated", german, plain)
 	}
 }
