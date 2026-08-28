@@ -861,10 +861,34 @@ type collapsedBand struct {
 // Each band is extended over the lines that cross it, so that the square where
 // two lines meet is covered twice rather than left blank. Which of the two
 // covers it is decided by the order they are drawn in — see paintCollapsed.
+//
+// # Which border owns a crossing
+//
+// A line's runs are emitted back to front, and that is not an accident of the
+// loop. Two runs on the same line meet at a crossing and both cover it: the one
+// that *ends* there is the border above it or to its left, and the one that
+// *begins* there is the border below or to its right. §17.6.2.1's last rule is
+// "when two elements of the same type conflict, then the one further to the left
+// and further to the top wins", and a crossing is where two of them conflict —
+// so the run that ends there has to be drawn over the run that begins there,
+// which means emitting it second.
+//
+// The width rule still comes first, because paintCollapsed sorts the bands by
+// it: a wider border owns a crossing whichever side of it that border is on,
+// which is §17.6.2.1's order and not this one.
+//
+// border-conflict-element-001d is the suite's statement of it, and is built so
+// that only this rule can decide it: sixteen cells whose borders are all solid
+// and all one em, with the colours arranged so that every crossing has a
+// different answer above it and below it. Every one of its fifteen inner
+// crossings came out the colour of the cell *below* before the runs were
+// reversed.
 func (cg *collapsedGrid) bands(lineX, lineY []style.Unit) []collapsedBand {
 	out := make([]collapsedBand, 0, len(cg.hruns)+len(cg.vruns))
 	for r := 0; r <= cg.rows; r++ {
-		for _, run := range cg.hruns[cg.hoff[r]:cg.hoff[r+1]] {
+		line := cg.hruns[cg.hoff[r]:cg.hoff[r+1]]
+		for k := len(line) - 1; k >= 0; k-- {
+			run := line[k]
 			y := lineY[r].Add(leadingHalf(cg.hgutter[r].Sub(run.win.width)))
 			x0 := lineX[run.from]
 			x1 := lineX[run.to].Add(cg.vgutter[run.to])
@@ -876,7 +900,9 @@ func (cg *collapsedGrid) bands(lineX, lineY []style.Unit) []collapsedBand {
 		}
 	}
 	for c := 0; c <= cg.cols; c++ {
-		for _, run := range cg.vruns[cg.voff[c]:cg.voff[c+1]] {
+		line := cg.vruns[cg.voff[c]:cg.voff[c+1]]
+		for k := len(line) - 1; k >= 0; k-- {
+			run := line[k]
 			x := lineX[c].Add(leadingHalf(cg.vgutter[c].Sub(run.win.width)))
 			y0 := lineY[run.from]
 			y1 := lineY[run.to].Add(cg.hgutter[run.to])
