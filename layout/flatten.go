@@ -769,6 +769,9 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 
 	out := make([]inlineItem, 0, len(pieces))
 	state := in
+	// An opportunity this box's first character refused, waiting on whatever
+	// follows the box. See the branch that sets it.
+	heldAtEdge := false
 	// §5.1's rule about which element decides, resolved once for the box.
 	//
 	// The boundary in front of this box's first character has a character on
@@ -872,6 +875,36 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		if i == 0 && state.BreakOpportunity && state.AfterDeferred &&
 			!state.AfterAtomic && !lb.Anywhere && mayNotBeginLine(p.Text, lb) {
 			state.BreakOpportunity = false
+			// Refused, not deleted. A prohibition moves an opportunity rather
+			// than dropping one — "× CL" says a line may not begin with a
+			// closing bracket and says nothing against one beginning with what
+			// comes after it — and SplitAtBreaks holds it forward for exactly
+			// that reason inside a run. Across a boundary the character that
+			// would take it is in a third box, so the hold has to travel.
+			//
+			heldAtEdge = true
+		}
+		// And the hold taken up, one piece later. The piece after the one that
+		// refused it is the next boundary the opportunity could fall on.
+		//
+		// Where the box runs out first the hold leaves with it, which is the
+		// single-character span the suite writes: "字字<span>、</span>字字" has
+		// the character that takes the opportunity in a third box.
+		//
+		// The mayNotBeginLine test is the correct reading of the rule — a line
+		// may not begin with a closing bracket however many are written in a row,
+		// so a second refusal should keep holding — and it has no test, which is
+		// a different thing from being covered. It cannot fire as the pieces come
+		// out today: SplitAtBreaks does not cut in front of a character a line
+		// may not begin with, so two of them are one piece ("、）中" splits as
+		// "、）" and "中"), and every piece after the first begins where a flush
+		// happened. A planted defect that deleted it moved no test and no
+		// reftest. It stays because the rule is real and the day the split cuts
+		// differently is not a day anyone will remember this.
+		if i > 0 && heldAtEdge {
+			if lb.Anywhere || !mayNotBeginLine(p.Text, lb) {
+				state.BreakOpportunity, heldAtEdge = true, false
+			}
 		}
 		// §5.2's break-all treats every alphabetic, numeric and ideographic
 		// character in this box as ID — and that includes the first one. UAX #14
@@ -1067,7 +1100,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		}
 	}
 	return out, inlineState{
-		BreakOpportunity:      endedAtBreak,
+		BreakOpportunity:      endedAtBreak || heldAtEdge,
 		AfterCollapsibleSpace: state.AfterCollapsibleSpace,
 		AfterBinding:          state.AfterBinding,
 		AfterDeferred:         state.AfterDeferred,
