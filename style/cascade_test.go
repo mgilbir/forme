@@ -175,8 +175,36 @@ func TestNegativeValueDropsTheDeclaration(t *testing.T) {
 		{"p { border-spacing: 2px; border-spacing: -2px }", "border-spacing", "2px"},
 		{"p { outline-width: 4px; outline-width: -4px }", "outline-width", "4px"},
 		{"p { background-size: 10px; background-size: -10px }", "background-size", "10px"},
+		// The shorthands, where §4.2's "whole declaration" is the whole
+		// shorthand: a negative in one component takes the other three with it,
+		// and what stands is whatever the cascade would have produced without
+		// the declaration at all.
+		//
+		// The border pair is the case that shows why this is not the same as
+		// dropping the component. "border: red solid -1px" written after
+		// "border-color: green" has to leave the border green, because the
+		// declaration that would have made it red does not exist —
+		// border-width-010 is that document exactly, and it came out with no
+		// border at all.
+		{"p { padding: 8px; padding: -8px }", "padding-top", "8px"},
+		{"p { padding: 1px -2px }", "padding-top", "0"},
+		{"p { border-width: 8px; border-width: -1px }", "border-top-width", "8px"},
+		{"p { border-color: green; border-width: 8px; border-style: solid;" +
+			" border: red solid -1px }", "border-top-width", "8px"},
+		{"p { border-color: green; border-width: 8px; border-style: solid;" +
+			" border: red solid -1px }", "border-top-color", "green"},
+		{"p { border-left: 4px solid red; border-left: -4px solid blue }",
+			"border-left-color", "red"},
+		{"p { outline: 4px solid red; outline: -1px solid blue }", "outline-width", "4px"},
+		{"p { font: 12px/2 serif; font: -1px/2 serif }", "font-size", "12px"},
+		{"p { font: 12px/2 serif; font: 12px/-2 serif }", "line-height", "2"},
 		// And the negatives that are legal are untouched.
 		{"p { margin-top: -10px }", "margin-top", "-10px"},
+		// Including the two shorthands deliberately left out of the list. A
+		// negative margin is useful and specified; so is a negative background
+		// position, which is how an author shows one sprite out of a sheet.
+		{"p { margin: -10px }", "margin-top", "-10px"},
+		{"p { background: url(x) -10px 0 }", "background-position", "-10px 0"},
 		{"p { text-indent: -3em }", "text-indent", "-48px"},
 		{"p { letter-spacing: -1px }", "letter-spacing", "-1px"},
 		{"p { word-spacing: -1px }", "word-spacing", "-1px"},

@@ -691,10 +691,10 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 // side, and every one of them invisible until inline boxes started painting
 // their borders, because the reference draws its two rules on a <span>.
 //
-// The shorthands are not here. "padding: 1px -2px" is invalid as a whole, and
-// catching it needs the shorthand expander rather than a name lookup; what
-// happens today is that the negative reaches two longhands, which is a gap this
-// records rather than hides.
+// The shorthands are here too, and the table below says which and why. They were
+// not, and the gap was the shape §4.2 warns about: "padding: 8px; padding: -8px"
+// dropped the eight pixels and clamped the second declaration to zero, so a
+// declaration CSS says does not exist overrode one that does.
 // colourValued lists the properties whose whole value is a colour.
 //
 // A shorthand is not among them: "border" and "background" tell their parts
@@ -884,6 +884,30 @@ var nonNegative = map[string]bool{
 	// tab-size is <number [0,∞]> | <length [0,∞]>.
 	"line-height": true, "border-spacing": true, "outline-width": true,
 	"background-size": true, "tab-size": true,
+
+	// And the shorthands every one of whose numeric components is one of the
+	// above. §4.2 drops an invalid declaration whole, so "padding: 1px -2px" is
+	// no more a declaration than "padding-top: -2px" is — and the negative used
+	// to reach two of the four longhands and be clamped there, which is the
+	// worst of the three answers: the author's earlier "padding: 8px" was
+	// overridden by a declaration CSS says does not exist.
+	//
+	// A shorthand is listed only where a negative number cannot be anything but
+	// an illegal component. In the border family the only length is the width;
+	// a style is a keyword and a colour is a keyword, a hash or a function, and
+	// hasNegativeNumber does not look inside a function. In "font" the numbers
+	// are the weight, the size and the line-height, and none of the three may be
+	// negative.
+	//
+	// "margin" and "background" are deliberately absent and are the reason this
+	// is a list rather than a rule about shorthands. A negative margin is legal
+	// and useful, and so is a negative background-position — "background: url(x)
+	// -10px 0" places an image off its own left edge, which is how a sprite
+	// sheet works. Dropping either would break a page doing nothing wrong.
+	"padding": true, "border-width": true,
+	"border": true, "border-top": true, "border-right": true,
+	"border-bottom": true, "border-left": true,
+	"outline": true, "font": true,
 }
 
 // legalQuotes reports whether a "quotes" value matches §12.3.2's grammar.
