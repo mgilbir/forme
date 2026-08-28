@@ -101,7 +101,7 @@ type parser struct {
 var dropFirstNewline = map[string]bool{"pre": true, "textarea": true}
 
 func (p *parser) run() {
-	p.doc = &Node{Type: DocumentNode}
+	p.doc = &Node{Type: DocumentNode, XML: p.tok.xml}
 	p.html = p.element("html", 0)
 	p.doc.appendChild(p.html)
 	p.head = p.element("head", 0)

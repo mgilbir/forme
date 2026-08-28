@@ -118,6 +118,44 @@ func TestContentAttr(t *testing.T) {
 	}
 }
 
+// TestAttrMatchesTheCaseTheDocumentLanguageDoes is §12.2's one question about
+// attr() that has two answers.
+//
+// HTML lowercases an attribute name as it is parsed, so "attr(Title)" and
+// "attr(title)" are the same request and both find the attribute. XML does not,
+// so the two are different requests and only one of them finds anything. The
+// suite writes the same document in both languages to say so:
+// content-attr-case-001's assert is "the attr(x) function selects the attribute
+// even when case does not match" and content-attr-case-002's is "in XHTML that
+// attr(x) does not select the attribute when the case does not match".
+//
+// The XHTML fixture is recognised the way this engine recognises one at all —
+// the xmlns declaration, which is what looksLikeXML reads — because no content
+// type reaches it.
+func TestAttrMatchesTheCaseTheDocumentLanguageDoes(t *testing.T) {
+	const sheet = `p::before { content: "[" attr(Title) "]" }`
+	got := bodyBoxes(t, `<p title="yes">x</p>`, sheet)
+	if !strings.Contains(got, `text "[yes]"`) {
+		t.Errorf("in HTML, attr(Title) did not select the title attribute:\n%s", got)
+	}
+	got = bodyBoxes(t, `<html xmlns="http://www.w3.org/1999/xhtml">`+
+		`<body><p title="yes">x</p></body></html>`, sheet)
+	if !strings.Contains(got, `text "[]"`) {
+		t.Errorf("in XHTML, attr(Title) selected something; the name is "+
+			"case-sensitive there:\n%s", got)
+	}
+	// And the name written as the document writes it still selects it, in both.
+	for _, doc := range []string{
+		`<p title="yes">x</p>`,
+		`<html xmlns="http://www.w3.org/1999/xhtml"><body><p title="yes">x</p></body></html>`,
+	} {
+		got := bodyBoxes(t, doc, `p::before { content: "[" attr(title) "]" }`)
+		if !strings.Contains(got, `text "[yes]"`) {
+			t.Errorf("attr(title) did not select it:\n%s", got)
+		}
+	}
+}
+
 // TestUnproducibleContentIsReported pins that content this engine cannot make is
 // named rather than dropped. A marker that silently failed to appear leaves a
 // page that still looks finished.

@@ -384,3 +384,86 @@ func TestANameWithAColonIsNotAPrefixInHTML(t *testing.T) {
 		}
 	}
 }
+
+// TestTheDocumentRecordsWhichLanguageItWasReadAs is the flag itself, and the
+// only thing outside this package that reads it.
+//
+// The tokenizer decides XHTML from the prologue and used it for one thing here:
+// a <style> element's content. An attribute name is the second, and it belongs
+// to the caller rather than to the parse — XML makes the name case-sensitive and
+// HTML lowercases it, so "attr(Title)" in a content property selects the title
+// attribute of an HTML element and selects nothing at all in XHTML. See
+// AttrExact, and layout's TestAttrMatchesTheCaseTheDocumentLanguageDoes.
+func TestTheDocumentRecordsWhichLanguageItWasReadAs(t *testing.T) {
+	for _, tc := range []struct {
+		src string
+		xml bool
+	}{
+		{`<p title="yes">x</p>`, false},
+		{`<html xmlns="http://www.w3.org/1999/xhtml"><p title="yes">x</p></html>`, true},
+		{`<?xml version="1.0"?><html><p title="yes">x</p></html>`, true},
+	} {
+		doc, _, _ := Parse(tc.src)
+		if doc.XML != tc.xml {
+			t.Errorf("%q read as XML = %v, want %v", tc.src, doc.XML, tc.xml)
+		}
+		// And every element in it answers the same, which is what the walk is
+		// for: the flag is on the document node and nothing else.
+		p := findElement(doc, "p")
+		if p == nil {
+			t.Fatalf("%q has no <p>", tc.src)
+		}
+		if p.XML {
+			t.Errorf("%q: the flag was set on an element as well as the document",
+				tc.src)
+		}
+		if got := p.XMLDocument(); got != tc.xml {
+			t.Errorf("%q: the <p> says XMLDocument = %v, want %v", tc.src, got, tc.xml)
+		}
+	}
+}
+
+// TestAttrExactRefusesAQueryTheParseWouldHaveLowered is the lookup, held to what
+// it claims: the names in Attrs are lowercase whichever language the document is
+// in, because the tokenizer lowercases them, so what AttrExact does in practice
+// is refuse a query that is not already lowercase.
+//
+// That is the answer that never invents a match. An XHTML document that really
+// wrote "Title" has an attribute this engine has stored as "title" and cannot
+// tell from one written that way, and refusing both is the only reading that is
+// never wrong about which of the two it found.
+func TestAttrExactRefusesAQueryTheParseWouldHaveLowered(t *testing.T) {
+	doc, _, _ := Parse(`<html xmlns="http://www.w3.org/1999/xhtml">` +
+		`<p Title="yes">x</p></html>`)
+	p := findElement(doc, "p")
+	if p == nil {
+		t.Fatal("no <p>")
+	}
+	if got, ok := p.AttrExact("title"); !ok || got != "yes" {
+		t.Errorf("AttrExact(\"title\") gave %q, %v; the parse stores the name "+
+			"lowercased whichever language it read", got, ok)
+	}
+	if _, ok := p.AttrExact("Title"); ok {
+		t.Error("AttrExact(\"Title\") found something; nothing in Attrs is spelled that way")
+	}
+	// Attr is the other reading and is unchanged.
+	if got, ok := p.Attr("Title"); !ok || got != "yes" {
+		t.Errorf("Attr(\"Title\") gave %q, %v, want the attribute", got, ok)
+	}
+}
+
+// findElement is the first element of a name anywhere in a tree.
+func findElement(n *Node, name string) *Node {
+	if n == nil {
+		return nil
+	}
+	if n.Type == ElementNode && n.Name == name {
+		return n
+	}
+	for _, c := range n.Children {
+		if got := findElement(c, name); got != nil {
+			return got
+		}
+	}
+	return nil
+}

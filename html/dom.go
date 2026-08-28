@@ -81,6 +81,18 @@ type Node struct {
 	// Children is in source order.
 	Children []*Node
 
+	// XML says the source was XHTML rather than HTML. It is set on the document
+	// node and nowhere else — see XMLDocument, which is how anything else asks.
+	//
+	// One thing in this package depends on it and one thing outside does. Here
+	// it is that a <style> element holds ordinary character data, so "&gt;" in a
+	// stylesheet is a ">"; outside, it is that an attribute name is
+	// case-sensitive in XML and is not in HTML, which is what attr() in a
+	// content property has to know. See looksLikeXML for how it is decided,
+	// which is a guess about the source rather than a content type nobody gave
+	// this engine.
+	XML bool
+
 	// Offset is the byte offset in the source at which the node begins, so a
 	// finding from layout can point back at the markup that caused it. That is
 	// what §6 of the rendering proposal needs to say *where* a guardrail fired,
@@ -113,6 +125,46 @@ func (n *Node) Attr(name string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// AttrExact is Attr with the name matched as written.
+//
+// HTML lowercases an attribute name as it is parsed and XML does not, so a
+// lookup that lowercases what it is given is right for one and wrong for the
+// other: "attr(Title)" selects the title attribute of an HTML element and
+// selects nothing at all in XHTML. content-attr-case-001 and -002 are the same
+// document in the two languages and assert exactly that pair.
+//
+// The names in Attrs are lowercase either way — the tokenizer lowercases them —
+// so what this does in practice is refuse a query that is not already lowercase.
+// That is the right answer for the same reason: an XHTML document that really
+// wrote "Title" has an attribute this engine has stored as "title" and cannot
+// tell from one written that way, and refusing both is the answer that never
+// invents a match.
+func (n *Node) AttrExact(name string) (string, bool) {
+	if n == nil {
+		return "", false
+	}
+	for _, a := range n.Attrs {
+		if a.Name == name {
+			return a.Value, true
+		}
+	}
+	return "", false
+}
+
+// XMLDocument reports whether the node is in a document parsed as XHTML.
+//
+// It walks to the document node, which is the only one the flag is set on. The
+// walk is over the depth of the tree and is asked once per attr() in a content
+// property, which is a place no document has many of.
+func (n *Node) XMLDocument() bool {
+	for ; n != nil; n = n.Parent {
+		if n.Type == DocumentNode {
+			return n.XML
+		}
+	}
+	return false
 }
 
 // HasAttr reports whether an attribute is present, whatever its value. It is
