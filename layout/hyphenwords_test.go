@@ -162,3 +162,83 @@ func TestASoftHyphenIsStillAnOpportunity(t *testing.T) {
 			"an opportunity", got)
 	}
 }
+
+// hyphenate-limit-chars, css-text §6.2: the author overriding the dictionary
+// about how much of a word has to stay on each side of the break.
+//
+// Three numbers — how long a word must be before it may be divided, how many of
+// its letters stay on the line, how many go to the next — and "auto" for any of
+// them leaves that one to the engine. "auto" is not a number chosen here: it is
+// the hyphenmins the language's own pattern file states, which for American
+// English is two and three.
+
+// limitLines sets "example" — which the patterns divide as ex-am-ple — one
+// character wide, so that every point it keeps shows as a line of its own.
+func limitLines(t *testing.T, value string) string {
+	t.Helper()
+	return strings.Join(lineTextsOf(t, layoutOf(t, 600,
+		`<div id="d" lang="en">example</div>`,
+		`#d { font-family: Courier; font-size: 20px; width: 12px; hyphens: auto;
+		      hyphenate-limit-chars: `+value+` }`), "d"), "|")
+}
+
+// TestHyphenateLimitCharsDecidesWhichPointsSurvive is the reftest's own table,
+// row for row: nine declarations over the same word, and the reference writes
+// out what each must produce.
+func TestHyphenateLimitCharsDecidesWhichPointsSurvive(t *testing.T) {
+	for _, tc := range []struct{ value, want string }{
+		{"auto", "ex-|am-|ple"},
+		// The word is seven letters and may not be divided under eight.
+		{"8", "example"},
+		{"auto 2 2", "ex-|am-|ple"},
+		// Three letters before: the point after "ex" goes.
+		{"auto 3 2", "exam-|ple"},
+		{"auto 4 2", "exam-|ple"},
+		// Five before: neither point has that many in front of it.
+		{"auto 5 2", "example"},
+		{"auto 2 3", "ex-|am-|ple"},
+		// Four after: "ple" is three, so the point in front of it goes.
+		{"auto 2 4", "ex-|ample"},
+		// Both at once, and nothing is left.
+		{"auto 3 4", "example"},
+	} {
+		if got := limitLines(t, tc.value); got != tc.want {
+			t.Errorf("hyphenate-limit-chars: %s set %q, want %q", tc.value, got, tc.want)
+		}
+	}
+}
+
+// TestTwoValuesLimitBothEnds. The property's second value is the letters before
+// the break *and* the letters after it — the third takes the second's value when
+// it is not written — and reading it as the first end alone is a mistake with no
+// symptom until a word is short enough to notice.
+func TestTwoValuesLimitBothEnds(t *testing.T) {
+	// Four before and four after: the point after "exam" leaves "ple", which is
+	// three. Taken as four-before-and-auto-after it would survive, because the
+	// language wants three.
+	if got := limitLines(t, "auto 4"); got != "example" {
+		t.Errorf("\"auto 4\" set %q, want \"example\": the second value limits both ends", got)
+	}
+	// And with the third written out, the same declaration keeps the point.
+	if got := limitLines(t, "auto 4 3"); got != "exam-|ple" {
+		t.Errorf("\"auto 4 3\" set %q, want \"exam-|ple\"", got)
+	}
+}
+
+// TestAValueThisCannotReadLeavesEveryLimitAtAuto. An invalid declaration is
+// dropped, and what stands is the property's initial value — which is what a
+// browser does with one and what the engine does with every other property.
+func TestAValueThisCannotReadLeavesEveryLimitAtAuto(t *testing.T) {
+	for _, value := range []string{
+		"quips", "auto auto auto auto", "-1", "2 3 4 5", "1.5",
+		// The whole declaration goes, not the part that parsed: read as far as
+		// it went, this would be "three letters before" and would change the
+		// page.
+		"auto 3 quips",
+	} {
+		if got := limitLines(t, value); got != "ex-|am-|ple" {
+			t.Errorf("hyphenate-limit-chars: %s set %q, want the auto answer "+
+				"\"ex-|am-|ple\"", value, got)
+		}
+	}
+}

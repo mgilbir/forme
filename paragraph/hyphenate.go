@@ -72,12 +72,20 @@ func HyphenPoints(word string, lang Language, left, right int) []int {
 	if len(runes) > maxHyphenWord {
 		return nil
 	}
-	if left < enUSHyphenLeft {
+	// Zero means "whatever the language says", which is the hyphenmins its own
+	// pattern file states. A number is the number: hyphenate-limit-chars is the
+	// author overriding the dictionary, and an author who asks to keep two
+	// letters back where the language wants three has asked for two.
+	if left <= 0 {
 		left = enUSHyphenLeft
 	}
-	if right < enUSHyphenRight {
+	if right <= 0 {
 		right = enUSHyphenRight
 	}
+	// A word with no room for a point inside the two mins has none, whatever
+	// else is asked. That is also hyphenate-limit-chars' *first* value under
+	// "auto": the shortest word this will divide is one that can hold both
+	// halves, and the property's own minimum is applied by the caller on top.
 	if len(runes) < left+right {
 		return nil
 	}

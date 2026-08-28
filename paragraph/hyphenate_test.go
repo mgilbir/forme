@@ -93,6 +93,21 @@ func TestTheHyphenminsKeepLettersOffTheEdges(t *testing.T) {
 	if len(wide) >= len(narrow) {
 		t.Errorf("wider limits kept %v and the language's own kept %v", wide, narrow)
 	}
+	// And a *narrower* one than the language wants is honoured too, which is
+	// what hyphenate-limit-chars is for: the author is overriding the
+	// dictionary, and an author who asks to carry two letters to the next line
+	// where American English wants three has asked for two.
+	//
+	// "university" is un-i-ver-si-ty to the patterns. The point before "ty"
+	// leaves two letters, so the language's own three drops it and an explicit
+	// two keeps it.
+	if got := HyphenPoints("university", "en", 0, 0); !reflect.DeepEqual(got, []int{3, 6}) {
+		t.Fatalf("\"university\" gave %v under the language's own mins, want [3 6]", got)
+	}
+	if got := HyphenPoints("university", "en", 2, 2); !reflect.DeepEqual(got, []int{3, 6, 8}) {
+		t.Errorf("\"university\" gave %v with two and two, want [3 6 8] — an explicit "+
+			"limit is the limit and not a floor under the language's", got)
+	}
 	// A word with no room for a point inside the mins gives none.
 	if got := HyphenPoints("at", "en", 0, 0); got != nil {
 		t.Errorf("\"at\" gave %v", got)

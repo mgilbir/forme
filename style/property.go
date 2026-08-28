@@ -234,6 +234,12 @@ var properties = map[string]property{
 	// string included — which is how a document asks for a word to be broken with
 	// no mark at all, and is a real value rather than a way of writing nothing.
 	"hyphenate-character": {true, "auto"},
+	// hyphenate-limit-chars inherits, and it is three numbers: how long a word
+	// must be before it may be broken at all, how many of its letters must stay
+	// on the first line, and how many must go to the next. "auto" for any of
+	// them leaves that one to the engine, which takes the hyphenmins the
+	// language's own pattern file states — see paragraph/hyphenate.go.
+	"hyphenate-limit-chars": {true, "auto"},
 	// tab-size inherits, which is the answer that makes a <pre> inside a
 	// styled <article> keep the tab width the author set on the article. A
 	// number is a count of space advances and a length is itself; the initial

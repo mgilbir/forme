@@ -1,6 +1,8 @@
 package layout
 
 import (
+	"strconv"
+	"strings"
 	"unicode"
 
 	"github.com/mgilbir/forme/paragraph"
@@ -36,6 +38,46 @@ func (l *layouter) hyphenPointsIn(root *Box) map[*Box][]int {
 	return g.out
 }
 
+// hyphenLimits is hyphenate-limit-chars: how long a word must be before it may
+// be divided, how many letters must stay on the line and how many must go to the
+// next.
+//
+// Zero is "auto" in all three, and auto is the dictionary's own answer rather
+// than a number chosen here — the hyphenmins a pattern file states are the ones
+// its author decided the language wants.
+type hyphenLimits struct{ word, before, after int }
+
+// limitsOf reads hyphenate-limit-chars, which is "auto | <integer>{1,3}".
+//
+// One value is the word length; two are the word length and the letters before,
+// with the letters after taking the same number; three are all of them. A value
+// this cannot read leaves every limit at auto, which is the property's initial
+// value and the answer a browser gives an unreadable declaration.
+func limitsOf(value string) hyphenLimits {
+	fields := strings.Fields(strings.ToLower(strings.TrimSpace(value)))
+	if len(fields) == 0 || len(fields) > 3 {
+		return hyphenLimits{}
+	}
+	var got [3]int
+	for i, f := range fields {
+		if f == "auto" {
+			continue
+		}
+		n, err := strconv.Atoi(f)
+		if err != nil || n < 0 {
+			return hyphenLimits{}
+		}
+		got[i] = n
+	}
+	out := hyphenLimits{word: got[0], before: got[1], after: got[2]}
+	if len(fields) == 2 {
+		// "The third value takes the second's" — two numbers are the word and
+		// the letters at *both* ends, not the word and the letters before.
+		out.after = out.before
+	}
+	return out
+}
+
 // hyphenGather is one word being collected across boxes.
 type hyphenGather struct {
 	// word is the letters gathered so far.
@@ -43,7 +85,11 @@ type hyphenGather struct {
 	// from is where each of those letters came from: the box and the rune
 	// offset within its text.
 	from []hyphenSource
-	out  map[*Box][]int
+	// limits are the ones in force where the word began. hyphenate-limit-chars
+	// is about a word and a word has one beginning, so the box that started it
+	// is the one asked — the same box the language is taken from.
+	limits hyphenLimits
+	out    map[*Box][]int
 }
 
 type hyphenSource struct {
@@ -116,6 +162,9 @@ func (g *hyphenGather) text(b *Box) {
 			g.flush()
 			continue
 		}
+		if len(g.word) == 0 {
+			g.limits = limitsOf(b.Style["hyphenate-limit-chars"])
+		}
 		g.word = append(g.word, r)
 		g.from = append(g.from, hyphenSource{box: b, at: i})
 	}
@@ -129,9 +178,16 @@ func (g *hyphenGather) flush() {
 	if len(word) == 0 {
 		return
 	}
+	limits := g.limits
+	if limits.word > len(word) {
+		// Too short to be divided at all, which is the property's first value.
+		return
+	}
 	// The language is the one the word's letters are in, and every box that
 	// contributed to it agreed — text() refuses a box that did not.
-	for _, p := range paragraph.HyphenPoints(string(word), boxLanguage(from[0].box), 0, 0) {
+	points := paragraph.HyphenPoints(string(word), boxLanguage(from[0].box),
+		limits.before, limits.after)
+	for _, p := range points {
 		// A point after the p-th letter of the word is a point after the letter
 		// from[p-1] came from, which is an offset in *that* box.
 		src := from[p-1]
