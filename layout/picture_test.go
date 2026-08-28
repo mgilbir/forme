@@ -742,23 +742,57 @@ func texts(ops []Op, under []coloured, page Rect) []textMark {
 // and -super-001 are that, over two absolutely positioned spans at one static
 // position: our page is right, and the oracle counted six marks against three.
 //
-// The condition is exact rather than approximate. The same glyph id, the same
-// face, the same size, the same place, the same clip, and the covering ink
-// solid: nothing about the glyph beneath can show through any of that. An
-// approximation here would be an oracle that calls different pages the same,
-// which is the one direction it must never err in.
+// The condition is the same glyph id, the same face, the same size, the same
+// clip, the covering ink solid — and the same place to within a quarter pixel,
+// which is the tolerance everything else in this comparison already uses.
+//
+// It was an exact position and that was a standard nothing else here is held to.
+// A fill is compared through the sliver rule, which discards a disagreement
+// narrower than a quarter pixel; nearlyAt forgives the same when it pairs two
+// marks, and for the same reason — the two documents of a reftest compute their
+// geometry by different routes and a run measured in two pieces lands a fraction
+// of a unit from the same run measured once. content-177 is that document: an
+// overlay whose red copy is a ::before box and a text node and whose green copy
+// is one text node, so the last two letters of the two come out a fiftieth of a
+// pixel apart and the green stopped covering the red.
+//
+// A fiftieth of a pixel is not ink anybody can see, and no rasterisation puts it
+// on a page. What the tolerance must not become is an oracle that calls
+// different pages the same — so it is the *same* quarter pixel and not a wider
+// one, and it is applied exactly rather than by rounding to a grid: two marks a
+// hundredth of a pixel apart may still fall either side of a grid line, and a
+// rule that depended on which is not a rule.
 func buriedUnderInk(marks []textMark) []textMark {
-	key := func(m textMark) string {
-		return fmt.Sprintf("%s@%v,%v", m.shape, m.x, m.y)
+	// The opaque marks seen so far, in buckets a quarter of a pixel across, so
+	// that the tolerance below is a lookup of nine cells rather than a scan of
+	// the page. Two positions within one sliver are within one cell of each
+	// other, which is what makes the neighbourhood enough.
+	type cell struct {
+		shape string
+		x, y  int64
 	}
-	covered := map[string]bool{}
+	at := func(v style.Unit) int64 { return int64(v) / int64(sliver) }
+	covered := map[cell][]textMark{}
+	buried := func(m textMark) bool {
+		cx, cy := at(m.x), at(m.y)
+		for dx := int64(-1); dx <= 1; dx++ {
+			for dy := int64(-1); dy <= 1; dy++ {
+				for _, o := range covered[cell{m.shape, cx + dx, cy + dy}] {
+					if nearlyAt(m, o) {
+						return true
+					}
+				}
+			}
+		}
+		return false
+	}
 	keep := make([]bool, len(marks))
 	// Backwards, so "later" is what has already been seen.
 	for i := len(marks) - 1; i >= 0; i-- {
-		k := key(marks[i])
-		keep[i] = !covered[k]
+		keep[i] = !buried(marks[i])
 		if marks[i].opaque {
-			covered[k] = true
+			c := cell{marks[i].shape, at(marks[i].x), at(marks[i].y)}
+			covered[c] = append(covered[c], marks[i])
 		}
 	}
 	out := marks[:0]
