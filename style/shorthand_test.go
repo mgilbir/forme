@@ -377,6 +377,28 @@ func TestShorthandLonghandsMatchWhatTheExpanderProduces(t *testing.T) {
 		"white-space":     "pre-line",
 		"text-wrap":       "balance",
 		"outline":         "2px solid green",
+
+		// css-logical's, which expand into logical longhands and are renamed to
+		// physical ones per element. See logical.go.
+		"margin-block":        "1px 2px",
+		"margin-inline":       "1px 2px",
+		"padding-block":       "1px 2px",
+		"padding-inline":      "1px 2px",
+		"inset-block":         "1px 2px",
+		"inset-inline":        "1px 2px",
+		"inset":               "1px 2px 3px 4px",
+		"border-block-width":  "1px 2px",
+		"border-block-style":  "solid dashed",
+		"border-block-color":  "red blue",
+		"border-inline-width": "1px 2px",
+		"border-inline-style": "solid dashed",
+		"border-inline-color": "red blue",
+		"border-block-start":  "1px solid red",
+		"border-block-end":    "1px solid red",
+		"border-inline-start": "1px solid red",
+		"border-inline-end":   "1px solid red",
+		"border-block":        "1px solid red",
+		"border-inline":       "1px solid red",
 	}
 	if len(samples) != len(shorthands) {
 		t.Errorf("%d shorthands are declared and %d have a sample here; every one "+
@@ -409,12 +431,21 @@ func TestShorthandLonghandsMatchWhatTheExpanderProduces(t *testing.T) {
 					name, l, sample)
 			}
 		}
-		// Every longhand a shorthand controls must be a property the engine has.
+		// Every longhand a shorthand controls must be a property the engine has
+		// — or a logical one, which is a property it has by another route.
+		//
+		// A logical longhand is deliberately not in the registry. It never
+		// survives into a computed style: the cascade renames it to the
+		// physical property it sets, once the element's direction is known, and
+		// what is cascaded and inherited from then on is that physical one. An
+		// entry in the registry would claim otherwise, and would put thirty
+		// values nothing reads into every element's style. See logical.go.
 		for _, l := range sh.longhands {
-			if _, ok := properties[l]; !ok {
-				t.Errorf("%s controls %q, which is not in the property registry",
-					name, l)
+			if _, ok := properties[l]; ok || isLogicalLonghand(l) {
+				continue
 			}
+			t.Errorf("%s controls %q, which is neither in the property registry "+
+				"nor a logical longhand", name, l)
 		}
 	}
 }

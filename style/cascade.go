@@ -558,6 +558,18 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 		}}
 	}
 
+	if isLogicalLonghand(name) {
+		// A logical property is implemented by being renamed to the physical
+		// one it sets, which happens per element once the direction is known.
+		// It is not in the registry — a logical name never survives into a
+		// computed style, so it has no initial value and nothing would read one
+		// — so it has to be let through here rather than falling to the
+		// unimplemented report below.
+		return []preparedDecl{{
+			property: name, value: d.Value, important: d.Important, offset: d.Offset,
+		}}
+	}
+
 	if sh, ok := shorthands[name]; ok {
 		// A CSS-wide keyword on a shorthand sets every longhand to it, which
 		// the expander below cannot express — it splits on whitespace and would
@@ -1135,14 +1147,6 @@ func (s *Styler) computeFor(n *html.Node, rules []preparedRule,
 		inline = s.inlineDeclarations(n)
 	}
 
-	winners := map[string]candidate{}
-	for _, c := range cands {
-		if best, ok := winners[c.property]; ok && !beats(c, best) {
-			continue
-		}
-		winners[c.property] = c
-	}
-
 	var parent ComputedStyle
 	if pseudo != "" {
 		// A pseudo-element inherits from its own element, which the caller put
@@ -1150,6 +1154,36 @@ func (s *Styler) computeFor(n *html.Node, rules []preparedRule,
 		parent = done[n]
 	} else if p := parentElement(n); p != nil {
 		parent = done[p]
+	}
+
+	winners := map[string]candidate{}
+	pick := func() {
+		clear(winners)
+		for _, c := range cands {
+			if best, ok := winners[c.property]; ok && !beats(c, best) {
+				continue
+			}
+			winners[c.property] = c
+		}
+	}
+	pick()
+
+	// CSS Logical Properties. "margin-inline-start" is the margin before the
+	// first character of a line, which is the left one in English and the right
+	// one in Arabic — so which physical property it sets is this element's own
+	// answer, and cannot be settled where the shorthands were expanded.
+	//
+	// The rename happens before the winner is chosen and the winners are then
+	// picked again, because a logical declaration and a physical one compete:
+	// css-logical says they set the same thing, so "margin-left: 1px;
+	// margin-inline-start: 2px" is 2px in English and swapping the lines makes
+	// it 1px. Renaming first is what lets the ordinary cascade decide that.
+	//
+	// Direction is resolved with the same three lines the main loop uses below,
+	// because it is the same question — a winner, an inline style over it, and
+	// inheritance under both.
+	if renameLogical(cands, inline, s.isRTL(winners, inline, parent)) {
+		pick()
 	}
 
 	out := make(ComputedStyle, len(properties))
@@ -1338,8 +1372,15 @@ func (s *Styler) inlineDeclarations(n *html.Node) map[string]preparedDecl {
 	}
 
 	out := map[string]preparedDecl{}
-	for _, d := range decls {
+	for i, d := range decls {
 		for _, e := range s.expand(d, OriginAuthor) {
+			// Where it was written in the attribute. Nothing here needs it to
+			// choose between two declarations of the same property — the loop
+			// order does that — but renaming a logical property to a physical
+			// one can put two of them in the same slot after the fact, and then
+			// the order is the only thing that separates them. See
+			// renameLogical.
+			e.order = i
 			// A later declaration in the same attribute wins, and importance
 			// wins over its absence — the same rules as any other block, with
 			// no specificity to separate them.
@@ -1375,4 +1416,27 @@ func vendorPrefixed(name string) bool {
 		return strings.Contains(name[1:], "-")
 	}
 	return false
+}
+
+// isRTL is whether this element's inline axis runs right to left, which is what
+// turns a logical property into a physical one.
+//
+// It resolves "direction" exactly as computeFor's main loop resolves any
+// property — the cascade's winner, an inline style above it unless the winner is
+// important, and inheritance under both — because it is that same question asked
+// early.
+func (s *Styler) isRTL(winners map[string]candidate,
+	inline map[string]preparedDecl, parent ComputedStyle) bool {
+
+	value, have := "", false
+	if c, ok := winners["direction"]; ok {
+		value, have = serialize(c.value), true
+	}
+	if d, ok := inline["direction"]; ok {
+		if c, ok := winners["direction"]; !ok || !c.important {
+			value, have = serialize(d.value), true
+		}
+	}
+	got := s.resolve("direction", properties["direction"], value, have, parent)
+	return strings.EqualFold(strings.TrimSpace(got), "rtl")
 }

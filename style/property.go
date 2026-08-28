@@ -432,6 +432,16 @@ var shorthands = map[string]shorthand{
 	"text-wrap": {textWrapShorthand, []string{"text-wrap-mode", "text-wrap-style"}},
 }
 
+func init() {
+	// The logical shorthands, declared in logical.go beside the longhands they
+	// expand into. They are added here rather than written into the table above
+	// so that the whole of css-logical is in one file: the table above is what
+	// CSS 2.1 has, and this is the level on top of it.
+	for name, sh := range logicalShorthands {
+		shorthands[name] = sh
+	}
+}
+
 // boxShorthand builds the expander for a property written as one to four values
 // in the order top, right, bottom, left — where one value sets all four, two set
 // the vertical and horizontal pairs, and three leave the left to mirror the
