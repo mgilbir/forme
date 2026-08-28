@@ -156,6 +156,38 @@ func TestATailBeginsALineAndSoTakesNoOpportunityFromWhatWasBeforeIt(t *testing.T
 	}
 }
 
+// TestAnOutdentedLineTabsToTheSameColumns is the case the arithmetic used to
+// answer by clamping.
+//
+// A negative text-indent starts the line outside the block's content edge, so
+// the pen reaches a tab at a negative position. The stops are at multiples of
+// the tab size from that edge in *both* directions, so the tab moves the pen to
+// the next multiple — which may still be negative or may be the edge itself.
+// Clamping the position to zero instead advances a whole stop from wherever the
+// line began, and the outdented line's first tab lands a column past every other
+// line in the block. text-indent-tab-positions-001 is three paragraphs of the
+// same tabbed text and asks for exactly that alignment.
+func TestAnOutdentedLineTabsToTheSameColumns(t *testing.T) {
+	const stop = 80.0
+	for _, tc := range []struct{ x, want float64 }{
+		// Two characters outside the edge: the next stop is the edge, two away.
+		{-20, 20},
+		{-79, 79},
+		// A whole stop outside, and one unit past it.
+		{-80, 80},
+		{-81, 1},
+		{-159, 79},
+		// The edge itself is unchanged: a tab standing on a stop takes a whole
+		// one, which is the rule for every other position too.
+		{0, 80},
+	} {
+		if got := TabAdvance(u(tc.x), u(stop), 0); got != u(tc.want) {
+			t.Errorf("a tab at %gpx with %gpx stops advanced %gpx, want %g",
+				tc.x, stop, got.Px(), tc.want)
+		}
+	}
+}
+
 // TestATabAlwaysLandsOnAStop is what tab stops are for.
 //
 // §4.1.2 puts them at multiples of the tab size from the content edge, and the
@@ -164,10 +196,14 @@ func TestATailBeginsALineAndSoTakesNoOpportunityFromWhatWasBeforeIt(t *testing.T
 // nearly. The arithmetic is fixed-point for this reason: a stop computed in
 // floating point drifts along a line of tabs until two columns that should align
 // do not, by a fraction of a pixel that no test of one tab would see.
+//
+// The pen starts *below* the content edge and not at it, because it can be
+// there: "text-indent: -3ch" begins the line three characters outside the block,
+// and the stops run in both directions from the edge whatever the line does.
 func TestATabAlwaysLandsOnAStop(t *testing.T) {
 	for _, stop := range []float64{8, 12, 32, 0.5, 100} {
 		for _, floor := range []float64{0, 1, 4} {
-			for x := 0.0; x < 200; x += 0.25 {
+			for x := -200.0; x < 200; x += 0.25 {
 				d := TabAdvance(u(x), u(stop), u(floor))
 				if d <= 0 {
 					t.Fatalf("a tab at %gpx with %gpx stops advanced %gpx — it must move "+

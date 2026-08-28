@@ -942,3 +942,60 @@ func TestTextWrapNowrapStopsWrapping(t *testing.T) {
 			len(got), got)
 	}
 }
+
+// TestATabLandsOnTheBlocksOwnStopsWhateverTheIndent is §4.1.2's tab stops seen
+// from the page: they are at multiples of the tab size from the *block's*
+// content edge, so a line that text-indent has moved still puts its text in the
+// block's columns rather than in columns of its own.
+//
+// An outdented line is the case that says which edge is meant. Its pen reaches
+// the first tab at a *negative* position, and the stop it moves to may be the
+// content edge itself or another negative multiple — never a whole stop from
+// wherever the line happened to begin. text-indent-tab-positions-001 is three
+// paragraphs of the same tabbed text, one plain, one indented and one
+// outdented, and asks for the columns to be the same in all three.
+func TestATabLandsOnTheBlocksOwnStopsWhateverTheIndent(t *testing.T) {
+	// Courier at 20px is 12px a character, so a tab size of 4 is 48px.
+	const css = `#p { font-family: Courier; font-size: 20px; white-space: pre;
+	              tab-size: 4; width: 400px }`
+	const stop = 48.0
+	for _, indent := range []string{"0", "24px", "-24px", "-60px", "-96px"} {
+		root := layoutOf(t, 600, "<div id=\"p\">a\tb\tc</div>",
+			css+` #p { text-indent: `+indent+` }`)
+		var seen int
+		for _, r := range runsOf(t, root, "p") {
+			if r.Text != "b" && r.Text != "c" {
+				continue
+			}
+			seen++
+			if x := r.X.Px(); x != stop*float64(int(x/stop)) {
+				t.Errorf("with text-indent: %s the %q after a tab is at %gpx, which "+
+					"is not a multiple of the %gpx stop", indent, r.Text, x, stop)
+			}
+		}
+		if seen != 2 {
+			t.Errorf("with text-indent: %s the fixture drew %d tabbed runs, want 2",
+				indent, seen)
+		}
+	}
+	// And the outdented line really does reach a tab from outside the edge,
+	// which is what makes the rows above more than a restatement of the plain
+	// case: its first column is *earlier* than the plain line's.
+	first := func(indent string) float64 {
+		t.Helper()
+		root := layoutOf(t, 600, "<div id=\"p\">a\tb\tc</div>",
+			css+` #p { text-indent: `+indent+` }`)
+		for _, r := range runsOf(t, root, "p") {
+			if r.Text == "b" {
+				return r.X.Px()
+			}
+		}
+		t.Fatal("no \"b\" was drawn")
+		return 0
+	}
+	if out, plain := first("-24px"), first("0"); out >= plain {
+		t.Errorf("the outdented line's first column is at %gpx and the plain line's "+
+			"at %gpx; the outdented pen starts outside the edge and should reach an "+
+			"earlier stop", out, plain)
+	}
+}

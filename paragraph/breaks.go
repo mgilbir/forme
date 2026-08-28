@@ -47,10 +47,22 @@ func TabAdvance(x, stop, floor style.Unit) style.Unit {
 	if stop <= 0 {
 		return 0
 	}
-	if x < 0 {
-		x = 0
+	// The stops run in both directions from the block's content edge, and a pen
+	// position may be on the other side of it: "text-indent: -3ch" starts the
+	// line three characters outside. So the distance is measured from the stop
+	// *below* x, and below a negative x that is a negative multiple.
+	//
+	// Go's remainder takes the sign of the dividend, so this is the floored
+	// modulus written out. Clamping x to zero instead — which is what was here —
+	// answers a full stop from wherever the line began, so an outdented line's
+	// first tab landed a whole stop past the column every other line in the
+	// block put it in. text-indent-tab-positions-001 is three paragraphs of the
+	// same tabbed text asking for exactly that alignment.
+	r := x % stop
+	if r < 0 {
+		r = r.Add(stop)
 	}
-	d := stop.Sub(x % stop)
+	d := stop.Sub(r)
 	if d < floor {
 		d = d.Add(stop)
 	}
