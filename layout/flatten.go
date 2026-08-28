@@ -207,6 +207,20 @@ func lastLineBaseline(f *Fragment) (style.Unit, bool) {
 		if c.Box == nil || c.Box.outOfFlow() {
 			continue
 		}
+		if c.Box != nil && overflowIsScrollable(c.Box.Style) {
+			// A box whose overflow is not visible has no baseline to give: what
+			// is inside it may be scrolled away, so a line of it is not a line
+			// anything outside can be aligned to. §10.8.1 says so about an
+			// inline-block and the same sentence is what a block container
+			// passes up — its own baseline is its bottom margin edge, and that
+			// is what it contributes here.
+			//
+			// Without this the search walked straight through such a box and
+			// took a line from inside it: baseline-block-with-overflow-001 is a
+			// 30px "overflow: hidden" div inside an inline-block, and its own
+			// bottom edge is where the text beside it belongs.
+			return inset.Add(c.BorderRect.Y).Add(c.BorderRect.H).Add(c.Margin.Bottom), true
+		}
 		if bl, ok := lastLineBaseline(c); ok {
 			return inset.Add(c.BorderRect.Y).Add(bl), true
 		}
