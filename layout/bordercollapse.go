@@ -280,9 +280,20 @@ type collapsedGrid struct {
 	hruns []collapsedRun
 	hoff  []int32
 
-	// cells is the used border of each cell: half of each of the four grid lines
-	// it touches.
+	// cells is the used border of each cell: half of the border that won on each
+	// of its own four edges.
+	//
+	// Its own, and not half of the grid line it sits on. A line is as wide as
+	// the widest border anywhere along it, and a cell whose own border lost to a
+	// wider one two rows down does not thereby acquire that width: §17.6.2 makes
+	// a cell's border "half of the collapsed border at its edge", and the edge
+	// is the cell's. The difference is the space between the two, which belongs
+	// to the cell's content — see cellEdges.
 	cells map[*Box]Edges
+	// cellEdges is the width of the border that won on each cell edge, gathered
+	// as the lines are resolved because that is the only walk that knows which
+	// cell each stretch of line belongs to.
+	cellEdges map[*Box]Edges
 	// table is the table's own used border: the outer half of the outermost
 	// lines, which is the half that is not in its content box.
 	table Edges
@@ -333,6 +344,50 @@ type runSink struct {
 	// merged into the last run of the previous line.
 	start int
 	full  bool
+}
+
+// edgeWon records the width that won on one cell's one edge, keeping the widest
+// where a cell's edge is resolved in more than one stretch.
+//
+// An edge with more than one answer is a spanning cell: #s in
+// TestACellSpanningTwoDifferentBordersKeepsHalfOfTheWider reaches down two rows
+// whose neighbours declare different borders, and the table's own outer lines
+// are resolved a row at a time for the same reason. §17.6.2 says "half of the
+// collapsed border at its edge" and does not say which half when the edge has
+// two; the widest is the only answer that cannot be wrong, because the content
+// box has to clear every border drawn along that edge.
+//
+// There is no guard against a zero width, and a first version had one. It could
+// never decide anything: the comparisons below keep a maximum, an Edges starts
+// at zero, and a zero never raises a maximum. A planted defect that removed it
+// changed no rendering and broke no test, which is what dead code looks like
+// from the outside.
+func (cg *collapsedGrid) edgeWon(b *Box, s side, w style.Unit) {
+	// Nil for the same reason edgeWinner.add takes one: the walks below ask
+	// about a neighbour that may not be there.
+	if b == nil {
+		return
+	}
+	e := cg.cellEdges[b]
+	switch s {
+	case sideTop:
+		if w > e.Top {
+			e.Top = w
+		}
+	case sideRight:
+		if w > e.Right {
+			e.Right = w
+		}
+	case sideBottom:
+		if w > e.Bottom {
+			e.Bottom = w
+		}
+	case sideLeft:
+		if w > e.Left {
+			e.Left = w
+		}
+	}
+	cg.cellEdges[b] = e
 }
 
 func (s *runSink) add(from, to int, w collapsedWin) {
@@ -391,7 +446,8 @@ func (l *layouter) collapsedGridFor(table *Box) *collapsedGrid {
 
 func (l *layouter) buildCollapsedGrid(table *Box) *collapsedGrid {
 	g := l.tableGridFor(table)
-	cg := &collapsedGrid{cols: g.cols, rows: len(g.rows)}
+	cg := &collapsedGrid{cols: g.cols, rows: len(g.rows),
+		cellEdges: make(map[*Box]Edges, len(g.cells))}
 
 	if cg.cols == 0 || cg.rows == 0 {
 		// No grid to collapse against. The table still has a border and still
@@ -615,6 +671,12 @@ func (l *layouter) resolveHorizontal(table *Box, g *tableGrid, cg *collapsedGrid
 				if won.width > cg.hgutter[r] {
 					cg.hgutter[r] = won.width
 				}
+				if ac != nil {
+					cg.edgeWon(ac.box, sideBottom, won.width)
+				}
+				if bc != nil {
+					cg.edgeWon(bc.box, sideTop, won.width)
+				}
 				sink.add(k, stop, won)
 				k = stop
 			}
@@ -729,6 +791,12 @@ func (l *layouter) resolveVertical(table *Box, g *tableGrid, cg *collapsedGrid,
 				if won.width > cg.vgutter[c] {
 					cg.vgutter[c] = won.width
 				}
+				if lc != nil {
+					cg.edgeWon(lc.box, sideRight, won.width)
+				}
+				if rc != nil {
+					cg.edgeWon(rc.box, sideLeft, won.width)
+				}
 				sink.add(k, stop, won)
 				k = stop
 			}
@@ -827,11 +895,17 @@ func (cg *collapsedGrid) finish(g *tableGrid) {
 
 	cg.cells = make(map[*Box]Edges, len(g.cells))
 	for _, c := range g.cells {
+		// The border that won on this cell's own edges, not the width of the
+		// lines it sits on. Where a cell's border is the widest on its line the
+		// two are the same number, which is every table whose cells agree; where
+		// they differ the space between them is content box, and
+		// border-collapse-006 is a table built out of nothing else.
+		e := cg.cellEdges[c.box]
 		cg.cells[c.box] = Edges{
-			Top:    trailingHalf(cg.hgutter[min(c.row, cg.rows)]),
-			Right:  leadingHalf(cg.vgutter[min(c.col+c.colSpan, cg.cols)]),
-			Bottom: leadingHalf(cg.hgutter[min(c.row+c.rowSpan, cg.rows)]),
-			Left:   trailingHalf(cg.vgutter[min(c.col, cg.cols)]),
+			Top:    trailingHalf(e.Top),
+			Right:  leadingHalf(e.Right),
+			Bottom: leadingHalf(e.Bottom),
+			Left:   trailingHalf(e.Left),
 		}
 	}
 }
