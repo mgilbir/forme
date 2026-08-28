@@ -130,10 +130,17 @@ func TestAPairSplitByAnElementBoundaryIsStillKerned(t *testing.T) {
 // half that keeps the test above from being satisfied by never splitting a run
 // at all.
 //
-// §8.1 breaks shaping where the two sides differ in what shaping depends on, and
-// a different size is one of the four the suite states in shaping-008 through
-// -011. Two runs at different sizes are not one pair and must not be kerned as
+// A kern is a distance measured in one font at one size, so a pair positioned
+// across a boundary where the sizes differ is a number that belongs to neither
+// side. Two runs at different sizes are not one pair and must not be kerned as
 // one.
+//
+// The size is the one thing sameShaping answers differently for the two halves
+// of what a context does, and this is the half it still breaks. It does *not*
+// break the other: an Arabic letter is medial because of the letters beside it
+// and not because of how large it is, which shaping-007 and shaping-008 state
+// side by side — 100% and 120% on the middle letter, and both asking for the
+// three to join. See TestAWordSplitByAnInlineElementStillJoins.
 func TestABoundaryThatDoesBreakShapingLosesThePair(t *testing.T) {
 	faces := kernFaces(t)
 	const size = 60

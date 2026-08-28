@@ -91,6 +91,13 @@ func TestAWordSplitByAnInlineElementStillJoins(t *testing.T) {
 			".x { margin: 0; padding: 0; border: 0 }", "margin, padding and border at zero"},
 		{ain + "<span class=x>" + ain + "</span>" + ain,
 			".x { font-size: 100% }", "a font-size that changes nothing"},
+		// And one that changes something. A letter is medial because of the
+		// letters beside it and not because of how large it is, and the suite
+		// puts the two rows side by side: shaping-007 sets 100% and shaping-008
+		// sets 120%, and *both* read "Test passes if the three Arabic
+		// characters in each box join".
+		{ain + "<span class=x>" + ain + "</span>" + ain,
+			".x { font-size: 120% }", "a larger font size"},
 		{ain + "<span class=x>" + ain + "</span>" + ain,
 			".x { text-decoration: underline }", "a decoration"},
 		{ain + "<span class=x>" + ain + "</span>" + ain,
@@ -118,11 +125,14 @@ func TestAWordSplitByRoomDoesNotJoin(t *testing.T) {
 		t.Fatalf("an isolate drew the joined word; this fixture cannot tell the two "+
 			"apart and the rows below prove nothing: %v", apart)
 	}
+	// Room, and only room. A font-size is not on this list — it changes what a
+	// *pair* between two letters would measure and not which form either takes,
+	// which is why sameShaping asks the two questions apart. See
+	// TestABoundaryThatDoesBreakShapingLosesThePair for the other half.
 	for _, tc := range []struct{ css, what string }{
 		{".x { margin: 0 10px }", "a margin"},
 		{".x { padding: 0 10px }", "padding"},
 		{".x { border: 10px solid blue }", "a border"},
-		{".x { font-size: 120% }", "a larger font size"},
 	} {
 		got := arabicDoc(t, ain+"<span class=x>"+ain+"</span>"+ain, tc.css)
 		if sameGlyphs(got, whole) {

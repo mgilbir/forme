@@ -205,8 +205,36 @@ func facingInset(item inlineItem, rtl bool) style.Unit {
 // same three Arabic letters with a <bdi> and a dir="auto" in the middle, and
 // both read "Test passes if the three Arabic characters DON'T join".
 func sameShaping(a, b inlineItem) bool {
-	return a.Face == b.Face && a.Size == b.Size && a.Spacing == b.Spacing &&
-		a.Level == b.Level
+	if a.Face != b.Face || a.Spacing != b.Spacing || a.Level != b.Level {
+		return false
+	}
+	// Of those three, the face has no test: a planted defect dropping it leaves
+	// every one passing, because the only Arabic face in the checkout is one and
+	// two runs cannot be set in different ones. It is kept because a face is
+	// what a form *is* — a glyph index means nothing outside the font it came
+	// from — and recorded here rather than left as an implied claim. The other
+	// two are pinned: shaping-012 and -013 for the level, and the letter- and
+	// word-spacing families for the spacing.
+	// The size is the one that answers differently for the two things a context
+	// does.
+	//
+	// It does not change which *form* a letter takes: an Arabic letter is
+	// medial because of the letters beside it and not because of how large it
+	// is, and the suite says so directly — shaping-007 sets "font-size: 100%"
+	// on the middle letter and shaping-008 sets "120%", and *both* read "Test
+	// passes if the three Arabic characters in each box join". What breaks the
+	// join is room between the letters, which is -009 through -011: a margin, a
+	// padding and a border.
+	//
+	// It does change what a pair between them would be. A kern is a distance
+	// measured in one font at one size, and a pair positioned across a boundary
+	// where the sizes differ is a number that belongs to neither of them.
+	//
+	// So the size breaks the boundary for a face that kerns and not for one
+	// that joins. A face that does both is read as joining, because that is the
+	// difference a reader sees: a letter in the wrong form is a different
+	// letter, and a pair off by a fraction of an em is a gap.
+	return a.Size == b.Size || a.Face.HasJoiningForms()
 }
 
 // contextCanChange reports whether the text either side of a run can change what
