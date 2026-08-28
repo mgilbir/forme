@@ -546,6 +546,31 @@ func (l *layouter) tableColumnDemands(table *Box, s tableSpacing) []tableColumnD
 		if col == nil || i >= len(out) {
 			continue
 		}
+		if v, ok := l.parseLength(col, "width"); ok && v.Kind == style.LengthAbsolute {
+			// A width written on a <col> is what the column is, and the cells
+			// wrap inside it.
+			//
+			// §17.5.2.2 reads it as one more demand to be maximised with the
+			// cells' — "the maximum is that required by the cell with the
+			// largest maximum cell width, or the column width, whichever is
+			// larger" — which makes a narrow column with a long sentence in it
+			// as wide as the sentence, so the declaration does nothing at all.
+			// No browser does that, and the suite's own references are drawn
+			// against the browsers: vertical-align-baseline-003's reference is
+			// a table with "col#middle { width: 80px }" and six lines of text
+			// wrapped inside it.
+			//
+			// It caps rather than fixes: a column cannot be narrower than the
+			// smallest thing in it, so the minimum still wins where the two
+			// disagree. That is the same floor a cell's own width has, and it
+			// is what stops "width: 1px" clipping a word.
+			//
+			// "auto" needs no test of its own here, unlike in
+			// declaredTrackWidth: parseLength answers it as LengthAuto, which
+			// the kind above already excludes. A planted defect adding the
+			// check changed nothing.
+			out[i].max = style.Max(out[i].min, v.Value)
+		}
 		if v, ok := l.parseLength(col, "max-width"); ok && v.Kind == style.LengthAbsolute {
 			out[i].max = style.Min(out[i].max, v.Value)
 			out[i].min = style.Min(out[i].min, v.Value)
