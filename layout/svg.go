@@ -119,6 +119,8 @@ func svgContentOf(root xml.StartElement, rects []svgRect) *ReplacedContent {
 	pic.width, _ = svgLength(attrOf(root, "width"))
 	pic.height, _ = svgLength(attrOf(root, "height"))
 	hasW, hasH := pic.width > 0, pic.height > 0
+	wPct, _ := svgPercent(attrOf(root, "width"))
+	hPct, _ := svgPercent(attrOf(root, "height"))
 	pic.viewBox, pic.hasViewBox = svgViewBoxAll(attrOf(root, "viewBox"))
 	// preserveAspectRatio. Only "none" is read, because it is the only value
 	// that changes the mapping in a way this can express: the rest differ in
@@ -128,7 +130,7 @@ func svgContentOf(root xml.StartElement, rects []svgRect) *ReplacedContent {
 		pic.uniform = false
 	}
 
-	out := &ReplacedContent{SVG: pic}
+	out := &ReplacedContent{SVG: pic, WidthPercent: wPct, HeightPercent: hPct}
 	if hasW {
 		out.Width = pic.width
 	}
@@ -514,6 +516,31 @@ func svgLength(raw string) (style.Unit, bool) {
 		return 0, false
 	}
 	return u, true
+}
+
+// svgPercent reads a dimension stated as a percentage, as a fraction.
+//
+// It is a separate reader from svgLength rather than a case inside it, because
+// the two answer different questions and only one of them is an intrinsic
+// dimension. §5.4 is explicit that a percentage is *not* one — an image with a
+// percentage width has "no intrinsic width" for every rule that asks — so
+// svgLength refusing it is right and stays right. What a percentage is, is a
+// dimension waiting for something to be a percentage of, and the caller that has
+// one reads this.
+//
+// Zero and negative are refused with it. A zero-width SVG has nothing to draw
+// and a negative one is not a length, and both would otherwise arrive as a
+// fraction the sizing would multiply an area by.
+func svgPercent(raw string) (float64, bool) {
+	s := strings.TrimSpace(raw)
+	if !strings.HasSuffix(s, "%") {
+		return 0, false
+	}
+	v, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(s, "%")), 64)
+	if err != nil || v <= 0 {
+		return 0, false
+	}
+	return v / 100, true
 }
 
 // svgViewBox reads the width and height out of a viewBox, which is four numbers

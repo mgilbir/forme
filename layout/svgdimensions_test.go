@@ -84,4 +84,13 @@ func TestAPercentageIsStillNotAnIntrinsicDimension(t *testing.T) {
 		t.Errorf("the picture claims %v by %v ratio %v; a percentage is a "+
 			"proportion of something it cannot see", c.Width, c.Height, c.Ratio)
 	}
+	// What it does claim is the percentage itself, kept apart from the three
+	// above so that only a caller with something to be a percentage *of* can
+	// turn it into a number. background-size is such a caller — the positioning
+	// area is §5.4's default object size — and backgroundintrinsic_test.go is
+	// where that half is held.
+	if c.WidthPercent != 0.5 || c.HeightPercent != 0.5 {
+		t.Errorf("the percentages read as %v and %v, want 0.5 and 0.5",
+			c.WidthPercent, c.HeightPercent)
+	}
 }

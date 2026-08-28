@@ -71,8 +71,22 @@ func TestBackgroundSizeAutoAuto(t *testing.T) {
 
 		// Nothing at all: the whole positioning area.
 		{"no size at all", ``, 100, 50},
-		// A percentage is not an intrinsic dimension, so this is the same row.
-		{"percentages only", `width="100%" height="100%"`, 100, 50},
+
+		// A percentage is not an intrinsic dimension — every rule that asks
+		// whether the image has one gets "no" — and it is still a dimension once
+		// there is something to be a percentage *of*. §5.4 says what: the
+		// default object size, which for a background layer is the positioning
+		// area. So these rows are not the row above with different numbers; the
+		// image is sized and not defaulted, and forty per cent of a hundred is
+		// forty rather than the whole of it.
+		{"percentages of the area", `width="40%" height="60%"`, 40, 30},
+		{"a percentage width alone", `width="40%"`, 40, 50},
+		{"a percentage height alone", `height="60%"`, 100, 30},
+		// A hundred per cent of the area is the area, which is what no size at
+		// all gives as well. It is here to say the two agree rather than to
+		// test either, and it is the row that made the distinction invisible
+		// for as long as it was the only percentage written down.
+		{"percentages of the whole area", `width="100%" height="100%"`, 100, 50},
 	} {
 		got := backgroundRect(t, tc.attrs, "")
 		if got.W != bgpx(tc.w) || got.H != bgpx(tc.h) {
@@ -249,5 +263,55 @@ func TestABackgroundThatFailedToLoadPaintsNothing(t *testing.T) {
 	if len(fillsOf(ok, green)) == 0 {
 		t.Errorf("the control painted nothing; the test above would pass with the " +
 			"gate removed")
+	}
+}
+
+// TestAPercentageDimensionGivesNoRatioToPreserve is where the two halves of §5.4
+// part company, and the reason the percentages are resolved *after* the ratio
+// rather than before it.
+//
+// An image whose dimensions are percentages has no intrinsic ratio — the numbers
+// are proportions of something it does not know, and two proportions of two
+// different things are not a shape. So "contain" and "cover" have nothing to
+// preserve and both mean the area, exactly as they do for an image with no size
+// at all.
+//
+// Resolving the percentages first would give the pair a ratio the image does not
+// have: forty per cent of a hundred by sixty per cent of fifty is 40 by 30,
+// which is 4:3, and "contain" would then paint a 66-by-50 rectangle in a
+// hundred-by-fifty area. The suite has no test for it and the specification is
+// unambiguous, which is why this is here.
+func TestAPercentageDimensionGivesNoRatioToPreserve(t *testing.T) {
+	area := Rect{W: bgpx(100), H: bgpx(50)}
+	for _, kind := range []bgSizeKind{bgSizeContain, bgSizeCover} {
+		colour := green
+		layer := backgroundLayer{
+			sizeKind: kind,
+			image: &ReplacedContent{
+				WidthPercent: 0.4, HeightPercent: 0.6, Solid: &colour,
+			},
+		}
+		w, h, _, _ := (&layouter{}).tileSize(layer, area)
+		if w != area.W || h != area.H {
+			t.Errorf("%v gave %v by %v, want the area, %v by %v — a percentage "+
+				"pair is not a ratio", kind, w, h, area.W, area.H)
+		}
+	}
+}
+
+// TestAPercentageThatIsNotALengthIsNotOne, because the reader is a string test
+// and a string test is where a wrong number comes from.
+func TestAPercentageThatIsNotALengthIsNotOne(t *testing.T) {
+	for _, attrs := range []string{
+		`width="0%"`, `width="-40%"`, `width="%"`, `width="4 0%"`, `width="40"`,
+	} {
+		got := svgContent(bgSVG(attrs))
+		if got == nil {
+			t.Fatalf("%s: the SVG was refused", attrs)
+		}
+		if got.WidthPercent != 0 {
+			t.Errorf("%s: read as %v of the area, want no percentage at all",
+				attrs, got.WidthPercent)
+		}
 	}
 }

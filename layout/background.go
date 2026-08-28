@@ -617,6 +617,22 @@ func (l *layouter) tileSize(layer backgroundLayer, area Rect) (w, h style.Unit, 
 	if ratio <= 0 && iw > 0 && ih > 0 {
 		ratio = iw.Px() / ih.Px()
 	}
+	// §5.4's percentage dimensions, resolved now that there is an area to
+	// resolve them against. An SVG stating "width: 40%" has no intrinsic width
+	// — every rule that asks gets "none" — and a concrete one here, which is
+	// what the default object size is for. See ReplacedContent.WidthPercent.
+	//
+	// After the ratio and not before it, which is the difference between a
+	// dimension and an intrinsic one. §5.4 gives such an image no intrinsic
+	// ratio either, so "background-size: contain" on it means the area — and
+	// deriving a ratio from the two resolved numbers would make contain fit a
+	// shape the image does not have.
+	if img.WidthPercent > 0 {
+		iw = area.W.Mul(img.WidthPercent)
+	}
+	if img.HeightPercent > 0 {
+		ih = area.H.Mul(img.HeightPercent)
+	}
 	if iw <= 0 && ih <= 0 && ratio <= 0 && img.Solid == nil && img.Bands == nil {
 		// A picture with no size at all is one that failed to load or decode.
 		// Content that paints a colour legitimately has none, and is sized

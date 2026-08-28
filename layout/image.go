@@ -93,6 +93,23 @@ type ReplacedContent struct {
 	// size, one image pixel to one CSS pixel.
 	Width, Height style.Unit
 
+	// WidthPercent and HeightPercent are the dimensions an SVG states as a
+	// percentage, as a fraction, and are zero when it states none.
+	//
+	// They are not intrinsic dimensions and are kept apart from Width and
+	// Height for that reason: CSS Images §5.4 makes a percentage "no intrinsic
+	// dimension" for everything that asks whether the image has one, and then
+	// resolves it against the *default object size* when there is a concrete
+	// one to resolve against. For a background layer that is the positioning
+	// area, which is where they are read — see tileSize. Nothing else reads
+	// them, so an <img> holding such a file is sized as it always was.
+	//
+	// background-intrinsic-006 is what needs them: an SVG of "width: 40%;
+	// height: 60%" in an eighty-by-a-hundred positioning area is thirty-two by
+	// sixty, and the test covers exactly that rectangle with a green box and
+	// asks for no red anywhere.
+	WidthPercent, HeightPercent float64
+
 	// Ratio is the intrinsic ratio, width divided by height, and is zero when
 	// there is none. It is kept as a number rather than recomputed from the two
 	// dimensions because CSS 2.1 §10.3.2 distinguishes an element that has a
