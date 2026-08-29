@@ -490,3 +490,43 @@ func TestLineThroughUsesItsOwnThickness(t *testing.T) {
 			"strikeout's own was ignored", h)
 	}
 }
+
+// TestADecorationIsDrawnStraightThroughADescender holds the fact
+// style/inert.go's text-decoration-skip-ink entry claims.
+//
+// CSS Text Decoration 4 §2.6: "auto" lets a decoration be interrupted where a
+// glyph's descender crosses it, and "none" asks for it not to be. This engine
+// draws one continuous band across the whole run and has no way of doing
+// anything else, so it satisfies "none" outright — which is what makes both
+// values of the property inert rather than only the initial one.
+//
+// It is here rather than there because it is a fact about painting. If a
+// decoration ever did skip ink, "none" would become a declaration this engine
+// does not honour, and the entry would go on saying otherwise; this test fails
+// first and says where to look.
+func TestADecorationIsDrawnStraightThroughADescender(t *testing.T) {
+	// Six characters, four of them descenders, so a skipping implementation
+	// could not paint this as one band.
+	root := layoutOf(t, 600, `<div id="p">gjpqyg</div>`,
+		noDefaults+decoCSS+` #p { text-decoration: underline }`)
+	got := bands(Paint(root), black)
+	if len(got) != 1 {
+		t.Fatalf("an underlined word of descenders painted %d bands, want 1 — the "+
+			"decoration is drawn straight through, which is what style/inert.go's "+
+			"text-decoration-skip-ink entry claims", len(got))
+	}
+	// And it is the whole run: six Courier characters at 20px.
+	if w := got[0].W.Px(); w != 72 {
+		t.Errorf("the underline is %gpx wide and the text is 72; a band cut short "+
+			"at a descender is the behaviour \"none\" asks against", w)
+	}
+	// The same word without descenders paints the same band, which is the
+	// comparison that makes the two above about skipping rather than about
+	// Courier.
+	plain := bands(Paint(layoutOf(t, 600, `<div id="p">abcdef</div>`,
+		noDefaults+decoCSS+` #p { text-decoration: underline }`)), black)
+	if len(plain) != 1 || plain[0] != got[0] {
+		t.Errorf("the band under \"gjpqyg\" is %v and under \"abcdef\" is %v; the "+
+			"descenders are the only difference between the two documents", got, plain)
+	}
+}

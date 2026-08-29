@@ -218,6 +218,18 @@ type Box struct {
 	// containing block's, and that is the single question this answers.
 	TableWrapper bool
 
+	// FirstLine is the ::first-line style of the element this box came from, or
+	// nil where no rule selects one. It is carried here rather than looked up in
+	// layout because the pseudo styles belong to the cascade's result, which the
+	// box builder holds and the layouter does not.
+	FirstLine style.ComputedStyle
+
+	// Pseudo is "before" or "after" when this box is a generated one, and empty
+	// otherwise. It is here because a pseudo-element carries its originating
+	// element in Element like any other box of that element, so the tree alone
+	// cannot say which side of the children a generated box was on.
+	Pseudo string
+
 	// Float and Clear are CSS 2.1 §9.5. They live on the box rather than being
 	// read out of Style at layout time for the same reason Outer and Inner do:
 	// whether a box is in the normal flow changes what the box tree itself is
@@ -291,6 +303,31 @@ type Box struct {
 	// out at the right place with no underline on it, which reads as a document
 	// that did not ask for one.
 	splitFrom []*Box
+
+	// fontSizeKnown says a cascade decided this box's FontSize, so a zero there
+	// is a zero the document asked for rather than a field nobody filled in.
+	//
+	// "font-size: 0" is a real declaration and a common one — it is how a
+	// stylesheet removes the white space between inline-blocks, and the suite's
+	// table-vertical-align-baseline-008 writes it — and ensureFontSize used to
+	// read it as absent and put sixteen pixels back. That is invisible in the
+	// text, which has no glyphs to draw at either size, and visible in the
+	// *strut*: every line in such a box came out the height of a font nobody
+	// asked for.
+	//
+	// It is a flag rather than a pointer or a sentinel because the zero value of
+	// a Box has to stay usable: a fragment tree assembled by hand in a test has
+	// no cascade behind it, and that is the case ensureFontSize exists for.
+	//
+	// It travels with FontSize wherever one box takes another's — the anonymous
+	// block CSS Display §2.1 wraps a run of inline children in, the anonymous
+	// table box §17.2.1 inserts, §17.4's table wrapper, and the text an <img>'s
+	// alt attribute becomes — because the two are one fact and copying half of
+	// it is how a zero becomes sixteen. Only the first is observable today:
+	// nothing asks ensureFontSize about the other three, so a dropped flag
+	// answers the same. They carry it because a rule applied in three places out
+	// of four is the drift this field exists to prevent.
+	fontSizeKnown bool
 
 	// staticInline records that this box was inline-level before §9.7 blockified
 	// it for being out of flow.
@@ -369,6 +406,7 @@ func BuildBoxes(doc *html.Node, styled style.Styled, rec *Recorder) *Box {
 	if root == nil {
 		return nil
 	}
+	b.documentElement = root
 	// The root's font-size is resolved against the initial value, since there
 	// is no parent to take one from, and it then becomes what every "rem" in
 	// the document means. CSS Values §5.1.1 says it in as many words: an em on
@@ -442,6 +480,9 @@ type boxBuilder struct {
 	counters     counterSnapshots
 	rootFontSize style.Unit
 	count        int
+	// documentElement is the root, which §2.7 blockifies and so exempts from
+	// "display: contents". See contentsIsHonoured.
+	documentElement *html.Node
 	// afterWord says the last character emitted was part of a word, which is what
 	// "text-transform: capitalize" needs to know and what a text node cannot
 	// answer on its own: in "<b>e</b>xample" the "x" does not begin a word. It is
@@ -449,6 +490,17 @@ type boxBuilder struct {
 	// it is reset around a block-level box because a block starts a new line of
 	// text whatever preceded it.
 	afterWord bool
+	// boundary is the text built so far, as much of it as §4.1.1's segment
+	// break rules need: the last rune written and the last one a reader would
+	// see. It is carried for the reason afterWord is — the walk visits text in
+	// document order and a text node cannot see the one before it — and it is
+	// what makes "aa&#x200b;<span></span>\nbb" transform like
+	// "aa&#x200b;\nbb", which css-text-4 requires in as many words:
+	// "intervening inline box boundaries must be ignored".
+	//
+	// It is reset where afterWord is, and for the same reason: a block begins
+	// its text afresh, and so does the text after a <br>.
+	boundary textBoundary
 	// stopped records that the box cap was reached, so it is reported once
 	// rather than per box.
 	stopped bool
@@ -475,12 +527,17 @@ func (b *boxBuilder) build(n *html.Node, inherited style.ComputedStyle, fontSize
 //
 // Only an element that *declared* a font-size resolves one. CSS makes the
 // computed value of font-size an absolute length, so inheritance passes a
-// number; what the cascade stores is what the author wrote, so a descendant of
-// "font-size: 2em" inherits the string "2em" and re-resolving it against the
-// parent would double the size at every level. A paragraph four elements inside
-// such a wrapper came out at 256px.
+// number — and the cascade now stores one, so for almost every document this
+// call resolves "28px" to 28px and the guard changes nothing.
 //
-// That was a real bug, found by the table work: the two halves of a reftest
+// It still matters for the one value the cascade could not resolve, which it
+// leaves as the author wrote it. A descendant of an unresolvable
+// "font-size: 2em" inherits that string, and re-resolving it against the parent
+// would double the size at every level: a paragraph four elements inside such a
+// wrapper came out at 256px.
+//
+// That was a real bug, found by the table work, and back then it applied to
+// every relative font-size in every document. The two halves of a reftest
 // nested their content to different depths, so the compounding moved one and not
 // the other and the difference finally showed. It had been invisible until then
 // because it moves every part of a document equally.
@@ -601,18 +658,26 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 	z, zAuto := zIndexOf(cs)
 	box := &Box{
 		Outer: outer, Inner: inner, Element: n, Style: cs,
-		ListItem: listItem, FontSize: fontSize,
+		ListItem: listItem, FontSize: fontSize, fontSizeKnown: true,
 		Float: float, Clear: clearOf(cs),
 		Position: position, ZIndex: z, ZAuto: zAuto, Order: order,
 		staticInline: staticInline,
 	}
+	box.FirstLine = b.pseudo[style.PseudoKey{Node: n, Name: "first-line"}]
 	box.ListValue, box.ListNumbered = b.listValueOf(n, listItem)
 	box.Control = b.controlFor(n)
-	if outer != OuterInline || endsAWord(n) {
+	if (outer != OuterInline && !box.outOfFlow()) || endsAWord(n) {
 		// A block-level box begins its text afresh, so a word cannot run into it
 		// from the paragraph before. Without this, "<p>hi</p><p>there</p>" under
 		// "capitalize" would leave the second paragraph's "t" lower-case, since
 		// the "i" before it is a word character.
+		//
+		// An out-of-flow box is not one of them, however §9.7 has blockified it.
+		// It is not in the text at all: nothing of it sits between the letters
+		// either side, and a word does not end because an author hung an overlay
+		// off the middle of it. text-transform-capitalize-033 is exactly that —
+		// "p<span style='position: absolute'></span>ass" — and it came out
+		// "PAss".
 		//
 		// A <br> is inline and does the same thing for the same reason: it is a
 		// line break the author wrote, so what follows it begins a line and
@@ -620,6 +685,29 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		// "Questions", which is what text-transform-cap-003 asks for by writing
 		// its expectation out in full.
 		b.afterWord = false
+		// And the boundary with it, for the reason above rather than for an
+		// observable one: a segment break at the start or the end of a block is
+		// at the edge of a line, and §4.1.2 removes the space it would become
+		// whether or not the exceptions here got to it first. A planted defect
+		// dropping this leaves every test passing and the suite unmoved. It
+		// stays because the alternative is a boundary that is wrong and
+		// invisible, which is the pair this whole vocabulary exists to avoid.
+		b.boundary = textBoundary{}
+	}
+	if box.outOfFlow() {
+		// And an out-of-flow box's *content* is not in the text either side of
+		// it. That is the same reasoning as the exception just above, applied
+		// one level in: the paragraph above keeps its boundary across the box,
+		// so the text inside must not be allowed to overwrite it — and must not
+		// read it either, because what an overlay begins with does not follow
+		// the paragraph it was hung off.
+		//
+		// seg-break-transformation-019 is exactly that shape, four times over:
+		// an absolutely positioned, a fixed and two floated <aside>s written
+		// between a zero-width space and the segment break it suppresses.
+		saved := b.boundary
+		b.boundary = textBoundary{}
+		defer func() { b.boundary = saved }()
 	}
 
 	// ::before and ::after bracket the element's own children rather than
@@ -656,25 +744,120 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 			}
 		}
 	}
-	for _, child := range n.Children {
-		if controlSkipsChild(box, child) {
-			continue
-		}
-		if c := b.build(child, cs, fontSize); c != nil {
-			c.Parent = box
-			box.Children = append(box.Children, c)
-		}
-	}
+	b.appendChildren(box, n, cs, fontSize)
 	if after := b.generated(n, "after", fontSize); after != nil {
 		after.Parent = box
 		box.Children = append(box.Children, after)
 	}
-	if outer != OuterInline {
+	if outer != OuterInline && !box.outOfFlow() {
 		// And a block-level box ends its text: the word does not continue into
-		// whatever comes after it.
+		// whatever comes after it. An out-of-flow one still does not, for the
+		// reason above.
 		b.afterWord = false
+		// And the boundary with it, for the reason above rather than for an
+		// observable one: a segment break at the start or the end of a block is
+		// at the edge of a line, and §4.1.2 removes the space it would become
+		// whether or not the exceptions here got to it first. A planted defect
+		// dropping this leaves every test passing and the suite unmoved. It
+		// stays because the alternative is a boundary that is wrong and
+		// invisible, which is the pair this whole vocabulary exists to avoid.
+		b.boundary = textBoundary{}
 	}
 	return box
+}
+
+// appendChildren builds an element's children into a box, following the ones
+// that stand for their own contents rather than for a box.
+//
+// It is a function rather than a loop in elementBox because "display: contents"
+// makes it recursive: such an element's children belong to *this* box, and one
+// of them may be another such element.
+func (b *boxBuilder) appendChildren(box *Box, n *html.Node,
+	inherited style.ComputedStyle, fontSize style.Unit) {
+
+	for _, child := range n.Children {
+		if controlSkipsChild(box, child) {
+			continue
+		}
+		if child.Type == html.ElementNode && b.replacedByItsContents(child) {
+			b.appendContents(box, child, fontSize)
+			continue
+		}
+		if c := b.build(child, inherited, fontSize); c != nil {
+			c.Parent = box
+			box.Children = append(box.Children, c)
+		}
+	}
+}
+
+// appendContents is css-display-3 §3.1's "display: contents": the element
+// generates no box of its own, and for the purposes of box generation stands in
+// the tree as the boxes its children and pseudo-elements make.
+//
+// Everything else about the element is unchanged, and that is the half worth
+// saying: its computed style is still what its children inherit, its font-size
+// is still what an em inside it means, and its ::before and ::after still
+// generate boxes — the specification says so in as many words, because "no box"
+// is a statement about this element and not about anything it contains.
+//
+// The children are appended to the enclosing box, so the element leaves no trace
+// in the tree at all. That is the whole visible difference from what this used
+// to do, which was to treat the value as "inline": an inline box takes part in
+// layout, so its own margins, padding, borders and background were drawn and its
+// boundary broke shaping and letter-spacing, all of which the author asked
+// against.
+func (b *boxBuilder) appendContents(box *Box, n *html.Node, parentFontSize style.Unit) {
+	if !b.room(n) {
+		return
+	}
+	cs := b.styles[n]
+	fontSize := b.fontSizeOf(n, parentFontSize)
+	add := func(c *Box) {
+		if c == nil {
+			return
+		}
+		c.Parent = box
+		box.Children = append(box.Children, c)
+	}
+	add(b.generated(n, "before", fontSize))
+	b.appendChildren(box, n, cs, fontSize)
+	add(b.generated(n, "after", fontSize))
+}
+
+// replacedByItsContents reports whether an element is one that "display:
+// contents" removes from box generation.
+//
+// The value does not apply to every element, and css-display-3's appendix on
+// unusual elements is why: an element whose layout is not decided by CSS box
+// generation has no contents to be replaced by. A replaced element's content is
+// a picture or a document and a form control's is a widget the engine draws —
+// neither is a subtree of boxes, so "the boxes its children make" names nothing
+// and the declaration cannot be honoured. Those keep the box they had and the
+// finding that says the value was not applied.
+//
+// The root element is the other exception, and is not one this engine chose:
+// §2.7 blockifies the root, so "display: contents" on <html> computes to
+// "block" and the element has a box like any other. It is left with its old
+// treatment and its finding rather than blockified here, because blockifying
+// the root is a rule about every display value and not about this one.
+func (b *boxBuilder) replacedByItsContents(n *html.Node) bool {
+	return contentsIsHonoured(n, b.styles[n], b.documentElement)
+}
+
+// contentsIsHonoured is the predicate above with the state it needs passed in,
+// so that the guardrail in pipeline.go can ask the same question the box tree
+// asks rather than a second copy of it.
+func contentsIsHonoured(n *html.Node, cs style.ComputedStyle, root *html.Node) bool {
+	if n == nil || cs == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(cs["display"]), "contents") {
+		return false
+	}
+	if n == root {
+		return false
+	}
+	return !replacesItsOwnContent(n) && controlKindOf(n) == controlNone
 }
 
 // endsAWord reports whether an element ends the word before it, without being
@@ -735,8 +918,8 @@ func (b *boxBuilder) roomAt(offset int) bool {
 // block container with inline content, and so generate an anonymous block that
 // occupies a line.
 func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSize style.Unit) *Box {
-	text := collapseWhitespace(n.Text, inherited["white-space-collapse"],
-		b.wordSpaceTransformFor(inherited))
+	text := collapseWhitespaceAfter(n.Text, inherited["white-space-collapse"],
+		b.wordSpaceTransformFor(inherited), b.boundary, writingSystemAt(n))
 	// text-transform, applied here so that the text every later stage measures,
 	// breaks, draws and writes into the PDF is the text that will appear.
 	// texttransform.go works through why it cannot wait until paint time.
@@ -748,6 +931,11 @@ func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSi
 	// what lets "capitalize" see the word boundaries the reader will.
 	text, b.afterWord = transformText(text,
 		transformOf(inherited["text-transform"]), b.afterWord, languageAt(n))
+	// After the transform rather than before it, because what the next node
+	// follows is the text that will be on the page: "full-width" turns a space
+	// into U+3000, which nothing collapses, and the rules below are about the
+	// character a reader sees.
+	b.boundary = boundaryAfter(b.boundary, text)
 	if text == "" {
 		return nil
 	}
@@ -756,7 +944,7 @@ func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSi
 	}
 	return &Box{
 		Outer: OuterInline, Inner: InnerText,
-		Style: inherited, Text: text, FontSize: fontSize,
+		Style: inherited, Text: text, FontSize: fontSize, fontSizeKnown: true,
 	}
 }
 
@@ -1255,11 +1443,19 @@ func isZeroLength(v string) bool {
 
 // clonePiece makes an empty copy of an inline box, keeping everything that
 // decides how it is styled and measured.
+//
+// fontSizeKnown travels with FontSize because the two are one fact, and no
+// document can tell: nothing asks ensureFontSize about an inline piece, so a
+// clone that lost the flag would answer the same today. It is copied because a
+// clone of a box the cascade sized is a box the cascade sized, and the day a
+// piece reaches ensureFontSize a dropped flag would put sixteen pixels into a
+// box that asked for none.
 func clonePiece(b *Box) *Box {
 	return &Box{
 		Outer: b.Outer, Inner: b.Inner,
 		Element: b.Element, Style: b.Style,
-		FontSize: b.FontSize, ListItem: b.ListItem, Replaced: b.Replaced,
+		FontSize: b.FontSize, fontSizeKnown: b.fontSizeKnown,
+		ListItem: b.ListItem, Replaced: b.Replaced,
 		Float: b.Float, Clear: b.Clear,
 		Position: b.Position, ZIndex: b.ZIndex, ZAuto: b.ZAuto,
 		Order: b.Order,
@@ -1360,8 +1556,14 @@ func (b *boxBuilder) wrapInlines(parent *Box) []*Box {
 		anon := &Box{
 			Outer: OuterBlock, Inner: InnerFlow,
 			Style: style.Inherited(parent.Style), Parent: parent,
-			FontSize: parent.FontSize,
+			FontSize: parent.FontSize, fontSizeKnown: parent.fontSizeKnown,
 			Children: run,
+			// §5.12.1's first *formatted* line is the parent's, wherever it
+			// ends up: a block child splits the parent's inline content into
+			// anonymous blocks, and the line the pseudo-element styles is the
+			// first line of the first of them. afterTheFirstLine below is what
+			// keeps it to that one.
+			FirstLine: parent.FirstLine,
 			// Anything in flow before this one means the parent's first line has
 			// already happened, whether it was another anonymous block or a
 			// block-level child of the parent's own.
@@ -1454,6 +1656,26 @@ func languageAt(n *html.Node) paragraph.Language {
 		}
 	}
 	return ""
+}
+
+// writingSystemAt is the writing system in force at a node, which is a
+// different question from the language and is asked of the same attribute.
+//
+// languageAt cuts a tag down to its primary subtag, because that is what a
+// casing tailoring is keyed on. The writing system is keyed on the *script*, so
+// this reads the tag whole: "ain-Kana" is Ainu written in katakana and is
+// typeset as Japanese, and "ja-Latn" is Japanese romanised and is not. See
+// paragraph.WritingSystemOf.
+func writingSystemAt(n *html.Node) paragraph.WritingSystem {
+	for cur := n; cur != nil; cur = cur.Parent {
+		if cur.Type != html.ElementNode {
+			continue
+		}
+		if v, ok := cur.Attr("lang"); ok && v != "" {
+			return paragraph.WritingSystemOf(v)
+		}
+	}
+	return paragraph.WritingSystemOther
 }
 
 // wordSpaceTransformFor reads word-space-transform off a computed style and

@@ -28,6 +28,15 @@ import (
 //     of the collapsible spaces around a segment break. What comes out still
 //     has a space at each end of a node whose text had one: whether it survives
 //     is not this stage's question.
+//
+//     Per node, but not blind to the node before it. The segment break
+//     transformation's two exceptions — the zero-width space and the East
+//     Asian rule — are about the characters immediately around the break, and
+//     css-text-4 says the box boundaries between them "must be ignored". So
+//     Phase I takes a Boundary: what the text it is given follows. Box
+//     construction carries it, the way it already carries the word state
+//     text-transform: capitalize needs, and for the same reason — that walk is
+//     the one that visits text in document order.
 //   - **The flattening, in inline.go.** The cross-boundary half of §4.1.1's
 //     fourth rule, carried on inlineState because the flattening is the one
 //     pass that walks an inline formatting context in document order.
@@ -42,12 +51,6 @@ import (
 // below is that set.
 //
 // # What is left out
-//
-// The segment break transformation's zero-width-space exception is applied
-// within a text node and not across two: "a<span>​</span>\nb" gets the
-// space that "a​\nb" would not. Closing it would mean carrying the last
-// rune of the previous node through box construction, which is a channel that
-// exists for nothing else.
 //
 // Bidi formatting characters are not "ignored as if they were not there" while
 // white space is collapsed, as §4.1.1 requires: a formatting character between
@@ -187,6 +190,16 @@ func WordBreakOf(value string) (WordBreak, string) {
 //	against line breaks, even those introduced by characters with the GL, WJ, or
 //	ZWJ character class or mandated by the word-break property.
 type LineBreak struct {
+	// ChineseOrJapanese is not the property. It is the one fact about the *text*
+	// that §5.3's tailoring depends on, carried here because it is asked in the
+	// same breath and in the same function: "in Chinese and Japanese" qualifies
+	// the loose value's list, so a wave dash may begin a line in a Japanese
+	// paragraph and not in the same markup tagged ja-Hang.
+	//
+	// A field rather than a parameter through the breaker because the breaker
+	// has one question to ask about it and forty callers who do not. See
+	// paragraph.WritingSystem, which is what a caller reads it from.
+	ChineseOrJapanese bool
 	// Anywhere is that value: an opportunity at every grapheme cluster boundary,
 	// and no prohibition survives it.
 	Anywhere bool
@@ -282,12 +295,55 @@ func OverflowWrapOf(style map[string]string) OverflowWrap {
 	return OverflowWrap{}
 }
 
-// CollapseWhitespace is §4.1.1 Phase I over one text node.
+// Boundary is the text a node follows, as much of it as §4.1.1's rules about
+// the characters *around* a segment break need.
+//
+// The rules are written over characters and not over nodes, and css-text-4 says
+// so where it would otherwise be ambiguous: "intervening inline box boundaries
+// must be ignored". So "aa&#x200b;<span></span>\nbb" and "aa&#x200b;\nbb" are
+// the same text and must transform the same way, and a node cannot answer that
+// from its own contents.
+//
+// Two runes rather than one, for the same reason Phase I keeps two: the
+// zero-width-space rule is about the last character *written*, and U+200B is
+// itself default-ignorable, so the East Asian rule's "last character a reader
+// would see" looks straight past the character the first rule is about.
+type Boundary struct {
+	// Last is the last rune written.
+	Last rune
+	// Seen is the last rune written that is not default-ignorable.
+	Seen rune
+}
+
+// BoundaryAfter is the boundary that text leaves behind, given what it followed.
+//
+// Text that is empty leaves the boundary it found: a node that collapsed to
+// nothing is not between the characters either side of it.
+func BoundaryAfter(before Boundary, text string) Boundary {
+	out := before
+	for _, r := range text {
+		out.Last = r
+		if !IsDefaultIgnorable(r) {
+			out.Seen = r
+		}
+	}
+	return out
+}
+
+// CollapseWhitespace is §4.1.1 Phase I over one text node that follows nothing,
+// in a writing system the rule's second sentence is not about.
+func CollapseWhitespace(text, value string, wst WordSpaceTransform) string {
+	return CollapseWhitespaceAfter(text, value, wst, Boundary{}, WritingSystemOther)
+}
+
+// CollapseWhitespaceAfter is §4.1.1 Phase I over one text node, given the text
+// it follows.
 //
 // It is linear in the length of the text and allocates one builder, which is
 // not a micro-optimisation: the input is untrusted, and a megabyte of
 // alternating spaces and newlines is a document somebody will send.
-func CollapseWhitespace(text, value string, wst WordSpaceTransform) string {
+func CollapseWhitespaceAfter(text, value string, wst WordSpaceTransform,
+	before Boundary, system WritingSystem) string {
 	ws := WhiteSpaceOf(value)
 	if !ws.Collapse {
 		// pre, pre-wrap and break-spaces keep every space and every tab, so all
@@ -308,14 +364,18 @@ func CollapseWhitespace(text, value string, wst WordSpaceTransform) string {
 
 	// A run of collapsible white space is emitted when it *ends*, because what
 	// it becomes depends on what was in it and on what follows it.
-	var last rune // the last rune written, for the zero-width-space rule
-	// The last character written that a reader would see, which is the one the
-	// East Asian rule is about. It is not the same as last: a variation selector
-	// or a soft hyphen written before a segment break is not the character
-	// before the break, and the suite has a test of exactly that —
-	// segment-break-transformation-ignorable-1 writes the Han characters with
+	// The last rune written, for the zero-width-space rule, and the last one a
+	// reader would see, for the East Asian rule. They are not the same: a
+	// variation selector or a soft hyphen written before a segment break is not
+	// the character before the break, and the suite has a test of exactly that
+	// — segment-break-transformation-ignorable-1 writes the Han characters with
 	// their variation selectors and asks for the breaks to go anyway.
-	var lastSeen rune
+	//
+	// Both begin at what this node follows, which is what makes the rules about
+	// the character before a break work when that character is in the node
+	// before. Nothing else reads them until something is written, so a node that
+	// does not begin with white space is untouched by what it follows.
+	last, lastSeen := before.Last, before.Seen
 	inRun, breaks, afterCR := false, 0, false
 	// sawSeparator says the run being gathered has a virtual word separator in
 	// it, so what it collapses to is a space one can see. It is only ever set
@@ -379,6 +439,36 @@ func CollapseWhitespace(text, value string, wst WordSpaceTransform) string {
 			// words, all through the text. It is the single most visible thing
 			// this engine got wrong about CJK, and it is wrong in the direction
 			// that looks deliberate.
+		case system.SpacesNoWords() &&
+			(punctuationAtSegmentBreak(lastSeen) && wideAtSegmentBreak(nextSeen) ||
+				punctuationAtSegmentBreak(nextSeen) && wideAtSegmentBreak(lastSeen)):
+			// §4.1.1's second sentence, which is the same rule about the
+			// punctuation East Asian text is written with:
+			//
+			//	If the writing system of the segment break is Chinese,
+			//	Japanese, or Yi, and the character before or after the segment
+			//	break is punctuation or a symbol (Unicode general category P*
+			//	or S*) and has an East Asian Width property of A or is Emoji,
+			//	and the character on the other side of the segment break is F,
+			//	W, or H, and not Hangul or Emoji, then the segment break is
+			//	removed.
+			//
+			// A quotation mark is the everyday case. “ and ” are punctuation
+			// whose East Asian Width is *Ambiguous*, so the sentence above says
+			// nothing about them, and a Japanese paragraph wrapped after an
+			// opening quote gains a space between the quote and the word it
+			// opens — which is not a space anyone wrote and not one a reader of
+			// the script would expect.
+			//
+			// "before or after ... the other side" is symmetric and is written
+			// out here as the two ways round, because the two halves are
+			// different tests and a reader should be able to see that neither
+			// is the negation of the other.
+			//
+			// The writing system is the outer condition rather than a fifth
+			// term, because it is the only one that is not about the two
+			// characters: the same quote beside the same katakana in an English
+			// document keeps its break.
 		default:
 			out.WriteByte(' ')
 			last = ' '
@@ -588,6 +678,31 @@ func SeparatorBreaksAfter(r rune) bool {
 // and would satisfy every other part of it.
 func removesSegmentBreak(r rune) bool {
 	return inRanges(r, eastAsianWideRanges[:]) && !inRanges(r, hangulRanges[:])
+}
+
+// punctuationAtSegmentBreak reports whether a character is the near side of
+// §4.1.1's second sentence: "punctuation or a symbol (Unicode general category
+// P* or S*) and has an East Asian Width property of A or is Emoji".
+//
+// Three of Unicode's own sets and the sentence's own "and" and "or" between
+// them. Written that way rather than as one derived table so that this reads as
+// the sentence reads and each table can be checked against the file it came
+// from — see cmd/geneastasian.
+func punctuationAtSegmentBreak(r rune) bool {
+	return inRanges(r, punctuationOrSymbolRanges[:]) &&
+		(inRanges(r, eastAsianAmbiguousRanges[:]) || inRanges(r, emojiRanges[:]))
+}
+
+// wideAtSegmentBreak reports whether a character is the far side: "F, W, or H,
+// and not Hangul or Emoji".
+//
+// The first two are what the sentence above it asks for as well, so this is
+// removesSegmentBreak with one more carve-out. Emoji is taken out because an
+// emoji is wide and is not text the rule is about: a newline between a quotation
+// mark and a picture of a cat is a break between two things, not the middle of a
+// word.
+func wideAtSegmentBreak(r rune) bool {
+	return removesSegmentBreak(r) && !inRanges(r, emojiRanges[:])
 }
 
 // nextSeen is the first character of the text that a reader would see: the one

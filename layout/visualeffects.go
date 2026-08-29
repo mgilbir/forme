@@ -457,17 +457,7 @@ func (l *layouter) parseClipShape(b *Box, raw string) (clipSides, bool) {
 // clipLengthContext is what a font-relative offset in a rect() resolves
 // against. It is the box's own font, exactly as for every other length on it.
 func (l *layouter) clipLengthContext(b *Box, raw string) style.LengthContext {
-	var zero style.Unit
-	var haveMetrics bool
-	if usesCh(raw) {
-		zero, haveMetrics = l.zeroAdvance(b)
-	}
-	var xh style.Unit
-	var haveXHeight bool
-	if usesEx(raw) {
-		xh, haveXHeight = l.xHeightOf(b)
-	}
-	return l.lengthContext(b, zero, haveMetrics, xh, haveXHeight)
+	return l.lengthContext(b, l.metricsFor(b, raw))
 }
 
 // splitClipArgs divides a rect()'s arguments, insisting that one separator is

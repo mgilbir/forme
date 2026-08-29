@@ -365,7 +365,7 @@ func (b *boxBuilder) anonymousTableBox(parent *Box, kind Inner, children []*Box)
 	box := &Box{
 		Outer: outer, Inner: kind,
 		Style:    style.Inherited(parent.Style),
-		FontSize: parent.FontSize,
+		FontSize: parent.FontSize, fontSizeKnown: parent.fontSizeKnown,
 		Parent:   parent,
 		Children: append([]*Box(nil), children...),
 	}
@@ -450,7 +450,7 @@ func (b *boxBuilder) tableWrapper(table *Box) *Box {
 
 	wrapper := &Box{
 		Outer: table.Outer, Inner: InnerFlowRoot,
-		Style: cs, FontSize: table.FontSize,
+		Style: cs, FontSize: table.FontSize, fontSizeKnown: table.fontSizeKnown,
 		Float: table.Float, Clear: table.Clear,
 		Position: table.Position, ZIndex: table.ZIndex, ZAuto: table.ZAuto,
 		Order:  table.Order,

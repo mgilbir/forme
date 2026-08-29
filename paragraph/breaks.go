@@ -47,10 +47,22 @@ func TabAdvance(x, stop, floor style.Unit) style.Unit {
 	if stop <= 0 {
 		return 0
 	}
-	if x < 0 {
-		x = 0
+	// The stops run in both directions from the block's content edge, and a pen
+	// position may be on the other side of it: "text-indent: -3ch" starts the
+	// line three characters outside. So the distance is measured from the stop
+	// *below* x, and below a negative x that is a negative multiple.
+	//
+	// Go's remainder takes the sign of the dividend, so this is the floored
+	// modulus written out. Clamping x to zero instead — which is what was here —
+	// answers a full stop from wherever the line began, so an outdented line's
+	// first tab landed a whole stop past the column every other line in the
+	// block put it in. text-indent-tab-positions-001 is three paragraphs of the
+	// same tabbed text asking for exactly that alignment.
+	r := x % stop
+	if r < 0 {
+		r = r.Add(stop)
 	}
-	d := stop.Sub(x % stop)
+	d := stop.Sub(r)
 	if d < floor {
 		d = d.Add(stop)
 	}
@@ -218,9 +230,28 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 		// The suite tests each half: word-break-keep-all-005 asks for the break
 		// after U+3000 to survive, -006 for the one after an ideographic comma,
 		// and -011 for every implicit one inside "中文english中文english" to go.
+		// The fourth source is the ideograph rule's other half. An ideograph
+		// defers an opportunity to the character *after* it, and UAX #14 allows
+		// one before it as well: nothing prohibits a break between a letter or a
+		// number and an ideograph, so "abc永" may break either side of the 永.
+		//
+		// It fires only where the character before is a letter unit and is not
+		// itself an ideograph, which is the boundary the deferred half cannot
+		// reach: between two ideographs the deferred opportunity is already
+		// there, and offering a second one at the same place answers nothing and
+		// — measured — costs 63 clean passes, because every opportunity this
+		// grants that a prohibition then refuses is *held* and reappears one
+		// character further on.
+		//
+		// It is here as well as in layout's boundary rule so that the two agree.
+		// The same text has to break the same way whether or not the author
+		// wrote a <span> between the letter and the ideograph.
+		beforeIdeograph := IsIdeographic(r) && prev != 0 &&
+			!IsIdeographic(prev) && isLetterUnit(prev) && !wb.KeepAll
 		offered := (deferBreak && !(wb.KeepAll && isLetterUnit(r)) && !startsSpacePiece(r, ws)) ||
 			(heldBreak && !startsSpacePiece(r, ws)) ||
-			(wb.BreakAll && !startsSpacePiece(r, ws)) || lb.Anywhere
+			(wb.BreakAll && !startsSpacePiece(r, ws)) || lb.Anywhere ||
+			beforeIdeograph
 		// UAX #14 forbids a line beginning with a closing bracket, a hyphen or
 		// a non-starter, and an opportunity offered in front of one is not one.
 		// See linebreak.go for which rules that is and which it is not.
@@ -306,7 +337,14 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 				Text: text[start:i], Space: true,
 				TrimAtEnd: r == 0x1680 && ws.Collapse,
 			})
-			breakNext = ws.BreakSpaces || SeparatorBreaksAfter(r)
+			// §5.3 again, and it is the value's whole purpose: line-break:
+			// anywhere puts an opportunity around every typographic character
+			// unit "including around any punctuation character or preserved
+			// white space", so the classes that would refuse one after this
+			// separator do not get to. U+202F NARROW NO-BREAK SPACE is class GL
+			// and glues what follows it to what precedes it — which is the right
+			// answer everywhere else and is exactly what the value overrules.
+			breakNext = ws.BreakSpaces || lb.Anywhere || SeparatorBreaksAfter(r)
 
 		case r == ' ' || r == '\t':
 			flush()
@@ -371,9 +409,25 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 			flush()
 			breakNext = true
 
-		case r == '-' && !endsRunOrSpace(text, i):
+		case (r == '-' || isLatinHyphen(r)) && !endsRunOrSpace(text, i):
 			// A hyphen ends a run and the next may begin a line — which is what
 			// lets a hyphenated compound break where it is written.
+			//
+			// All three of them. U+002D HYPHEN-MINUS is class HY and U+2010
+			// HYPHEN and U+2013 EN DASH are class HH, and what the classes differ
+			// about is the *start* of a line: see isLatinHyphen, which is the
+			// other half of the same pair and was written first. A line may end
+			// after any of the three, and only U+002D was ending one — so a
+			// document that spells its hyphen with the character meant for it,
+			// which is what "&#x2010;" is for, had its compounds overflow
+			// instead of break.
+			//
+			// It is not the hyphens property's business. §6.1 is about where a
+			// word may be broken *without* a hyphen written in it; a hyphen that
+			// is there is an ordinary break opportunity whatever the value.
+			// hyphens-none-013's assert is that "hyphens: none does not suppress
+			// line wrapping after encountering an actual hyphen character
+			// (U+2010)".
 			cur.WriteRune(r)
 			flush()
 			breakNext = true
@@ -440,6 +494,10 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 func isLetterUnit(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsNumber(r)
 }
+
+// IsLetterUnit is isLetterUnit for the layout package, which asks the same
+// question about the character on the far side of a box boundary.
+func IsLetterUnit(r rune) bool { return isLetterUnit(r) }
 
 // startsSpacePiece reports whether a character is one SplitAtBreaks gives a
 // white-space Piece of its own.

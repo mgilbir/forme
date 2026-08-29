@@ -5,6 +5,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/mgilbir/forme/paragraph"
+	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -206,6 +207,20 @@ func lastLineBaseline(f *Fragment) (style.Unit, bool) {
 		if c.Box == nil || c.Box.outOfFlow() {
 			continue
 		}
+		if c.Box != nil && overflowIsScrollable(c.Box.Style) {
+			// A box whose overflow is not visible has no baseline to give: what
+			// is inside it may be scrolled away, so a line of it is not a line
+			// anything outside can be aligned to. §10.8.1 says so about an
+			// inline-block and the same sentence is what a block container
+			// passes up — its own baseline is its bottom margin edge, and that
+			// is what it contributes here.
+			//
+			// Without this the search walked straight through such a box and
+			// took a line from inside it: baseline-block-with-overflow-001 is a
+			// 30px "overflow: hidden" div inside an inline-block, and its own
+			// bottom edge is where the text beside it belongs.
+			return inset.Add(c.BorderRect.Y).Add(c.BorderRect.H).Add(c.Margin.Bottom), true
+		}
 		if bl, ok := lastLineBaseline(c); ok {
 			return inset.Add(c.BorderRect.Y).Add(bl), true
 		}
@@ -288,6 +303,26 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			if state.AfterBinding {
 				item.BreakBefore = false
 			}
+			// And §5.1's rule about *which element* decides, which applies to
+			// this opportunity as it does to one between two characters: "the
+			// white-space property on the nearest common ancestor of the two
+			// characters controls breaking". A picture is a character unit for
+			// this purpose, so a line may not end in front of one inside a
+			// "white-space: nowrap" span — and two inline-blocks written side by
+			// side under "pre" or "nowrap" wrapped anyway, which is the one
+			// thing those values are for.
+			//
+			// Only the opportunity is refused. Marking the item NoWrap as well
+			// would say something else — that a line may not *begin* here — and
+			// Item.NoWrap conflates the two: the rewind branch in the fill reads
+			// it and would decline to go back to the space before the span,
+			// where a break is perfectly legal.
+			if prev, ok := state.AfterBox.(*Box); ok && item.BreakBefore {
+				if anc := commonAncestor(prev, child); anc != nil &&
+					!whiteSpaceFor(anc.Style).Wrap {
+					item.BreakBefore = false
+				}
+			}
 			item.BidiPara, item.BidiStart, item.BidiEnd = para, start, end
 			out = append(out, item)
 			// LB20's other half: a line may also begin after the picture, so
@@ -302,6 +337,7 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			// "<img/> " goes on the line after the picture, and offering the
 			// opportunity to the space put it one line further down again.
 			state.BreakOpportunity = true
+			state.AfterBox = child
 			state.AfterCollapsibleSpace = false
 			// The far side of the same exception. Which character follows is
 			// not known here — it may be in another text node — so what is
@@ -321,7 +357,25 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			// A line break the author wrote. It is not a break *opportunity* —
 			// it ends the line wherever it falls, even mid-word and even on a
 			// line with room to spare.
-			out = append(out, inlineItem{Box: child, Forced: true})
+			// It is an inline element, so §10.8.1 puts its leading on the line
+			// it ends like any other box's — and the leading is its own
+			// line-height, which it inherited from whatever it is inside. A
+			// <br> alone in a "line-height: 200px" span made a line the height
+			// of the block's strut instead, and everything after it sat two
+			// hundred pixels too high. The preserved segment break below is the
+			// same character by another spelling and has always done this.
+			// ::before and ::after on a <br> are boxes like any others. They
+			// were being dropped with the element, because the break replaced
+			// the box rather than standing between its two halves.
+			for _, gen := range child.Children {
+				if gen.Pseudo == "before" {
+					out, state = l.collectInline(gen, out, state, frame)
+				}
+			}
+			brAbove, brBelow := l.leading(child)
+			out = append(out, inlineItem{Box: child, Forced: true,
+				Leads: true, Above: brAbove, Below: brBelow,
+				Valign: frame.Valign})
 			// It ends a bidi paragraph too: CSS makes a forced break a paragraph
 			// separator, so the direction of what follows is decided afresh
 			// rather than by the first strong character of the block.
@@ -329,6 +383,11 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			// What follows is at the start of a line, so a collapsible space
 			// there is removed rather than indenting it.
 			state = startOfContext()
+			for _, gen := range child.Children {
+				if gen.Pseudo == "after" {
+					out, state = l.collectInline(gen, out, state, frame)
+				}
+			}
 			continue
 		}
 		if child.Element != nil && strings.EqualFold(child.Element.Name, "wbr") &&
@@ -359,6 +418,7 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			// that space is a break opportunity in its own right, so this case
 			// is for the empty one only.
 			state.BreakOpportunity = true
+			state.AfterBox = child
 			state.AfterAtomic = false
 			state.AfterBinding = false
 			state.AfterDeferred = false
@@ -557,29 +617,52 @@ func beginsAtRight(b *Box) bool {
 }
 
 func (l *layouter) insetItems(b *Box, containing style.Unit) (lead, trail inlineItem, any bool) {
-	edges := l.edges(b, "margin", containing).
-		Add(l.borderWidths(b)).
-		Add(l.paddingOf(b, containing))
+	margin := l.edges(b, "margin", containing)
+	border := l.borderWidths(b)
+	padding := l.paddingOf(b, containing)
+	edges := margin.Add(border).Add(padding)
 
 	left, right := edges.Left, edges.Right
+	// Whether the box *has* a margin, border or padding on each side, which is
+	// not the same question as whether they come to something. §9.4.2 asks the
+	// first — "inline elements with non-zero margins, padding, or borders" — and
+	// the two differ wherever one cancels another: a "border-right: 200px"
+	// against a "margin-right: -200px" sums to nothing and still draws two
+	// hundred pixels of border, so the line it is on is not one of the
+	// zero-height ones. Read as a sum it emitted nothing, the line did not
+	// exist, and the border was not drawn at all — which is
+	// margin-padding-clear/margin-right-114, a green square that came out blank.
+	anyLeft := margin.Left != 0 || border.Left != 0 || padding.Left != 0
+	anyRight := margin.Right != 0 || border.Right != 0 || padding.Right != 0
 	noLeft, noRight := splitInsetSides(b)
 	if noLeft {
-		left = 0
+		left, anyLeft = 0, false
 	}
 	if noRight {
-		right = 0
+		right, anyRight = 0, false
 	}
-	if left == 0 && right == 0 {
+	if !anyLeft && !anyRight {
 		return inlineItem{}, inlineItem{}, false
 	}
 	// Both physical values on both items, so that a later stage can ask which
 	// side of the box faces a boundary — see shapingcontext.go. Width is one of
 	// them and is chosen by insetSides, which cannot happen until the levels are
 	// resolved.
-	item := inlineItem{Box: b, Inset: true, InsetLeft: left, InsetRight: right}
+	// The box's own leading, which §10.8.1 counts on every line the box is on
+	// whether or not there is anything of its own to draw. An empty
+	// "<span style='font-size: 200px; border: 1px solid'></span>" is two hundred
+	// pixels tall and made a twenty-pixel line, because the only items on it
+	// were these two and neither carried a height.
+	above, below := l.leading(b)
+	item := inlineItem{Box: b, Inset: true, InsetLeft: left, InsetRight: right,
+		Above: above, Below: below, Leads: true}
 	lead, trail = item, item
 	lead.InsetLead = true
 	lead.Width, trail.Width = left, right
+	// Which side each item stands for, so that a later stage can ask whether
+	// *this* edge carries anything rather than whether the box does. See
+	// Item.Edged.
+	lead.Edged, trail.Edged = anyLeft, anyRight
 	return lead, trail, true
 }
 
@@ -621,14 +704,44 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		l.reportWordBreak(b, unhandled)
 	}
 	lb, unhandledLine := lineBreakOf(b.Style["line-break"])
+	// §5.3's loose tailoring is qualified "in Chinese and Japanese", and which
+	// of those the text is comes from the language tag's *script* rather than
+	// from the property. See paragraph.WritingSystemOf.
+	lb.ChineseOrJapanese = boxWritingSystem(b).ChineseOrJapanese()
 	if unhandledLine != "" {
 		l.reportLineBreak(b, unhandledLine)
 	}
 	hy, unhandledHyphens := hyphensOf(b.Style["hyphens"])
+	lang := boxLanguage(b)
+	if hy.Auto && !hyphenatesLanguage(lang) {
+		// "auto" asks for the language's own dictionary, and there is one
+		// language here. A document in another gets the manual behaviour and
+		// is told so — which is the report that used to be raised for every
+		// "auto" whatever the language.
+		unhandledHyphens = "auto"
+	}
 	if unhandledHyphens != "" {
 		l.reportHyphens(b, unhandledHyphens)
 	}
+	// text-autospace is applied between two runs rather than inside one — see
+	// autospace.go — so nothing here reads the value. What is read here is
+	// whether the document asked for a part of it this engine does not do, which
+	// is a question about the box and belongs where the other three are asked.
+	l.reportKerning(b, face)
+	autospace, unhandledAutospace := autospaceOf(b.Style["text-autospace"])
+	if unhandledAutospace != "" {
+		l.reportAutospace(b, unhandledAutospace)
+	}
 	pieces, endedAtBreak := splitAtBreaks(b.Text, ws, wb, lb, hy)
+	if points := l.hyphenPoints[b]; len(points) > 0 {
+		var endsAtHyphen bool
+		pieces, endsAtHyphen = hyphenatePieces(pieces, points)
+		// A point at the very end of this box is an opportunity for whatever
+		// box comes next, which is what a soft hyphen ending a node already
+		// does. "high<span>way</span>" is the shape: the point falls between
+		// the two text boxes, so neither of them holds it on its own.
+		endedAtBreak = endedAtBreak || endsAtHyphen
+	}
 	if len(pieces) == 0 {
 		// A box that produced nothing passes an opportunity through rather than
 		// swallowing it — and it may have created one of its own, which is what
@@ -656,6 +769,72 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 
 	out := make([]inlineItem, 0, len(pieces))
 	state := in
+	// An opportunity this box's first character refused, waiting on whatever
+	// follows the box. See the branch that sets it.
+	heldAtEdge := false
+	// §5.1's rule about which element decides, resolved once for the box.
+	//
+	// The boundary in front of this box's first character has a character on
+	// each side of it and they are in different boxes, so it belongs to neither:
+	// what governs it is the white-space of the nearest common ancestor. Inside
+	// the box there is no boundary to cross and the box's own value is the
+	// answer, which is what noWrap holds.
+	//
+	// It is asked whether or not an opportunity has already been established at
+	// that boundary, and that is deliberate. §5.1's sentence is about the
+	// boundary rather than about an opportunity that reached it, and the
+	// opportunities are not all found in one place: word-break: break-all makes
+	// one at this very edge, and it is made further down this function, after
+	// this has been decided. Gating on the incoming state answered "no
+	// opportunity yet" for exactly that case and cost a reftest —
+	// break-boundary-2-chars-001, which writes "abc<span>xyz</span>def" under
+	// break-all with the span set to pre and asks for the break at both edges of
+	// the span.
+	noWrap := !ws.Wrap
+	boundaryNoWrap := noWrap
+	// And §3's break-spaces at the same boundary, for the same reason and by the
+	// same rule about who decides.
+	//
+	// UAX #14's LB7 is "× SP", so an opportunity carried in from another box is
+	// withheld from a space — a line may not end in front of one. break-spaces
+	// is the value that overrules it, and CSS Text §3 says so in the words that
+	// name this case: "there is a soft wrap opportunity after every preserved
+	// white space character, including between white space characters".
+	//
+	// SplitAtBreaks applies that inside a run, so "ああ␣␣␣␣ああ" in three
+	// ideographs of room sets three, three and two. Putting a <span> — even an
+	// empty one — between the first space and the second split the text into two
+	// boxes, the opportunity between them was withheld as LB7's, and the fill
+	// found nowhere to break the second line: it rewound to the last opportunity
+	// it had, which was between the two ideographs, and set one character on the
+	// first line. trailing-ideographic-space-break-spaces-005 and -006 are that
+	// document.
+	boundaryBreakSpaces := ws.BreakSpaces
+	if prev, ok := in.AfterBox.(*Box); ok {
+		if anc := commonAncestor(prev, b); anc != nil {
+			boundaryNoWrap = !whiteSpaceFor(anc.Style).Wrap
+			boundaryBreakSpaces = whiteSpaceFor(anc.Style).BreakSpaces
+		}
+	}
+	// Read off the ancestor rather than off this box, because it is the same
+	// boundary the line above is about and §5.1 gives that boundary to the
+	// innermost element containing both characters. It is also a distinction no
+	// document makes: white-space inherits, so the two agree everywhere, and the
+	// suite gives 5594 clean passes with the ancestor and 5594 without it. It
+	// costs one expression on a walk that was already being made, and it says
+	// which element the rule belongs to.
+	//
+	// The narrower reading — that only an opportunity left behind by a *space*
+	// may be taken by one, since §3's sentence is about the space that leaves it
+	// — was written first and could not be made to fail. An opportunity reaches
+	// a box boundary only when the text before it ended at one, and no document
+	// tells the two readings apart: the reftest suite gives 5594 clean passes
+	// either way with no test moving, and neither does a fixture built for the
+	// case the wider reading would get wrong — an atomic inline, then a space in
+	// a box of its own, then a float, which is the shape flatten.go already
+	// records a measurement about for LB7. It cost a field on the shared state
+	// and three places that had to keep it up to date, so it is gone and this is
+	// the note that says it was tried.
 	for i, p := range pieces {
 		// CSS Text §5.1's exception, on the far side: the opportunity a picture
 		// left behind is not offered to a character that holds on to it.
@@ -696,6 +875,101 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		if i == 0 && state.BreakOpportunity && state.AfterDeferred &&
 			!state.AfterAtomic && !lb.Anywhere && mayNotBeginLine(p.Text, lb) {
 			state.BreakOpportunity = false
+			// Refused, not deleted. A prohibition moves an opportunity rather
+			// than dropping one — "× CL" says a line may not begin with a
+			// closing bracket and says nothing against one beginning with what
+			// comes after it — and SplitAtBreaks holds it forward for exactly
+			// that reason inside a run. Across a boundary the character that
+			// would take it is in a third box, so the hold has to travel.
+			//
+			heldAtEdge = true
+		}
+		// And the hold taken up, one piece later. The piece after the one that
+		// refused it is the next boundary the opportunity could fall on.
+		//
+		// Where the box runs out first the hold leaves with it, which is the
+		// single-character span the suite writes: "字字<span>、</span>字字" has
+		// the character that takes the opportunity in a third box.
+		//
+		// The mayNotBeginLine test is the correct reading of the rule — a line
+		// may not begin with a closing bracket however many are written in a row,
+		// so a second refusal should keep holding — and it has no test, which is
+		// a different thing from being covered. It cannot fire as the pieces come
+		// out today: SplitAtBreaks does not cut in front of a character a line
+		// may not begin with, so two of them are one piece ("、）中" splits as
+		// "、）" and "中"), and every piece after the first begins where a flush
+		// happened. A planted defect that deleted it moved no test and no
+		// reftest. It stays because the rule is real and the day the split cuts
+		// differently is not a day anyone will remember this.
+		if i > 0 && heldAtEdge {
+			if lb.Anywhere || !mayNotBeginLine(p.Text, lb) {
+				state.BreakOpportunity, heldAtEdge = true, false
+			}
+		}
+		// §5.2's break-all treats every alphabetic, numeric and ideographic
+		// character in this box as ID — and that includes the first one. UAX #14
+		// allows a line to end between whatever precedes an ID and the ID itself,
+		// so "aaaaaaa<span style='word-break: break-all'>bbb</span>" may break at
+		// the span even though the run before it may not be broken inside.
+		//
+		// SplitAtBreaks cannot see that boundary: it is given one box's text, and
+		// this boundary has a character on each side of it in two different
+		// boxes. So the box that changed the class is the one that says so, which
+		// is also the right place for it — the value is the *later* character's,
+		// and the later character is this one.
+		//
+		// line-break: anywhere is here for the same reason and a stronger one:
+		// §5.3 puts an opportunity around every typographic character unit, and
+		// the edge of an inline box is not an exception it carves out.
+		//
+		// A line still may not *begin* with a closing bracket or a non-starter,
+		// which is the rule the branch above applies to an opportunity arriving
+		// from another box — so it is applied to this one too, and by the same
+		// exemption line-break: anywhere overrules it.
+		//
+		// The index test is the correct reading of the rule and has no test,
+		// which is a different thing from being covered. The rule is about one
+		// boundary — the box's leading edge, the only one SplitAtBreaks could not
+		// see — and every piece after the first already carries the opportunity
+		// from the split itself, so dropping it moves nothing: 5556 clean passes
+		// either way, and no reftest changes its answer. That is recorded here
+		// rather than left as an implied claim.
+		//
+		// The *far* edge is not done, and the reason is that the suite does not
+		// agree with itself about it. UAX #14 allows a line to end after an ID
+		// whatever follows, so the symmetric rule would offer an opportunity
+		// after the last character of a break-all box, and
+		// word-break-break-all-inline-009 asks for exactly that. But
+		// word-break-break-all-inline-007 asks for the opposite over the same
+		// shape — "<span class=test>bbbbbbb</span>cccccc", whose reference puts
+		// the span's last b on the line with "cccccc" and lets it overflow — and
+		// there is no reading of §5.2 that gives both. Implemented with the
+		// non-starter rule applied on the far side, the two trade one for one:
+		// 009 goes clean, 007 goes red, and 5556 stays 5556. So the question is
+		// left where the working group left it — 004, 007 and 010 are all marked
+		// tentative — rather than settled by picking the fixture that suits this
+		// engine.
+		if i == 0 && (wb.BreakAll || lb.Anywhere) && !p.Space &&
+			(lb.Anywhere || !mayNotBeginLine(p.Text, lb)) {
+			state.BreakOpportunity = true
+		}
+		// An ideograph that begins a box, which is the ideograph rule's other
+		// half arriving at a boundary. UAX #14 allows a line to end between a
+		// letter or a number and an ideograph, and SplitAtBreaks offers that
+		// opportunity inside a run — but it is given one box's text, and this
+		// boundary has a character on each side of it in two different boxes.
+		//
+		// So the box holding the *later* character says so, which is the same
+		// place and the same argument as break-all's rule above. What travels is
+		// only what the earlier character was, which no amount of looking at
+		// this box could recover.
+		if i == 0 && !state.AfterAtomic && !wb.KeepAll &&
+			state.AfterLetterUnit && startsIdeographic(p.Text) {
+			state.BreakOpportunity = true
+		}
+		pieceNoWrap := noWrap
+		if i == 0 {
+			pieceNoWrap = boundaryNoWrap
 		}
 		if p.Segment {
 			// A segment break that survived Phase I is a break the author
@@ -749,11 +1023,52 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 				runs = got
 			}
 		}
+		// And cut again where §8.1 wants a gap inside one of them.
+		//
+		// The gap itself is opened by insertAutospace, which is a pass over the
+		// finished items and sees every boundary *between* two runs. A boundary
+		// inside a run is invisible to it — a backend is handed one advance per
+		// run and could not express a one-off gap in the middle of one — so the
+		// run is cut here and the boundary becomes one it can see.
+		//
+		// The value read is the box's own, and that is the right one: both
+		// characters are in this box, so the innermost element containing them
+		// both is this box. Where the two are in different boxes the cut is not
+		// needed and the ancestor is found by the pass instead.
+		if !p.Tab && !p.Space {
+			if parts := splitAtAutospace(p.Text, autospace); len(parts) > 1 {
+				runs = cutRunsAt(runs, parts)
+			}
+			// And again where §8.2's cursive tracking begins or ends, for the
+			// same reason: a run carries one letter-spacing, so a run holding
+			// an Arabic letter beside a Latin one cannot say that only one of
+			// them is followed by a gap. See SplitAtCursiveTracking.
+			//
+			// Only where there is a spacing to place. A document that declares
+			// none takes the scan and no cut, which is nearly all of them.
+			if spacing.Letter != 0 {
+				if parts := splitAtCursiveTracking(p.Text); len(parts) > 1 {
+					runs = cutRunsAt(runs, parts)
+				}
+			}
+			// And after each word separator, for the same reason again: §8.3's
+			// spacing goes after the character, and a run carries a width and
+			// no way to say where inside it the extra room is. A space is
+			// already a piece of its own — a line may end after one — so what
+			// this is for is the separator that offers no break, the no-break
+			// space above all.
+			if spacing.Word != 0 {
+				if parts := splitAtWordSeparators(p.Text); len(parts) > 1 {
+					runs = cutRunsAt(runs, parts)
+				}
+			}
+		}
 		for ri, run := range runs {
 			para, start, end := frame.Bidi.Add(run.Text)
 			item := l.textItem(textItemArgs{
 				b: b, p: p, run: run, size: size, frame: frame, ws: ws,
-				above: above, below: below, offset: offset, spacing: spacing,
+				above: above, below: below, boxFace: face,
+				offset: offset, spacing: spacing,
 				decorations: decorations, ow: ow, state: state,
 				tabStop: tabStop, tabFloor: tabFloor,
 				para: para, bidiStart: start, bidiEnd: end,
@@ -761,6 +1076,10 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 				// the middle of a word that happens to change face, and a break
 				// there would cut a word in two for a reason no reader can see.
 				first: ri == 0, last: ri == len(runs)-1,
+				spaceMayTakeIt: i == 0 && boundaryBreakSpaces,
+				// Only the box's first piece sits at the boundary the state
+				// carried in; everything after it is inside the box.
+				noWrap: pieceNoWrap,
 			})
 			out = append(out, item)
 		}
@@ -775,13 +1094,18 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			// the next character; a piece that ends in one has handed the
 			// decision to whatever comes after it, which may be another box.
 			AfterDeferred: endsIdeographic(p.Text),
+			// Whether the character before the next boundary is one an
+			// ideograph may be broken away from. See the rule above.
+			AfterLetterUnit: endsLetterUnit(p.Text),
 		}
 	}
 	return out, inlineState{
-		BreakOpportunity:      endedAtBreak,
+		BreakOpportunity:      endedAtBreak || heldAtEdge,
 		AfterCollapsibleSpace: state.AfterCollapsibleSpace,
 		AfterBinding:          state.AfterBinding,
 		AfterDeferred:         state.AfterDeferred,
+		AfterLetterUnit:       state.AfterLetterUnit,
+		AfterBox:              b,
 	}
 }
 
@@ -799,6 +1123,21 @@ func endsBinding(text string) bool {
 	return r != utf8.RuneError && paragraph.BindsToAtomicInline(r)
 }
 
+// startsIdeographic reports whether a piece begins with an ideograph, which is a
+// character a line may begin with and may end in front of.
+func startsIdeographic(text string) bool {
+	r, _ := utf8.DecodeRuneInString(text)
+	return r != utf8.RuneError && paragraph.IsIdeographic(r)
+}
+
+// endsLetterUnit reports whether a piece ends on a typographic letter unit that
+// is not itself an ideograph, which is the far side of the boundary
+// startsIdeographic asks about. See inlineState.AfterLetterUnit.
+func endsLetterUnit(text string) bool {
+	r, _ := utf8.DecodeLastRuneInString(text)
+	return r != utf8.RuneError && paragraph.IsLetterUnit(r) && !paragraph.IsIdeographic(r)
+}
+
 // endsIdeographic reports whether a piece ends on the one character that leaves
 // an opportunity *deferred* rather than taken: an ideograph, which offers a
 // break after itself and lets the next character decide whether it is real.
@@ -813,7 +1152,10 @@ func endsIdeographic(text string) bool {
 // list is long and every one of them is read, which is the shape that makes a
 // positional call unreadable.
 type textItemArgs struct {
-	b           *Box
+	b *Box
+	// boxFace is the face the box itself declared, so that a run set in another
+	// can be told apart without asking again.
+	boxFace     *shape.Face
 	p           paragraph.Piece
 	run         faceRun
 	size        style.Unit
@@ -833,14 +1175,39 @@ type textItemArgs struct {
 	bidiEnd     int
 	first       bool
 	last        bool
+	// spaceMayTakeIt says the opportunity carried in from another box is one a
+	// space may begin a line at, which is white-space: break-spaces and nothing
+	// else.
+	//
+	// Only the box's first piece sits at that boundary; every piece after it is
+	// inside the box, where SplitAtBreaks has already decided. That is the
+	// correct reading and has no test, which is a different thing from being
+	// covered: the state carries no opportunity past the first piece — it is
+	// rebuilt from the piece at the end of each turn of the loop — so setting
+	// this on every piece changes nothing. Recorded here rather than left as an
+	// implied claim.
+	spaceMayTakeIt bool
+	// noWrap is whether a line may begin at this item. It is the box's own
+	// white-space for everything inside the box, and the nearest common
+	// ancestor's for the one item that sits at a boundary carried in from
+	// another box — see §5.1 and the note beside State.AfterBox.
+	noWrap bool
 }
 
 func (l *layouter) textItem(a textItemArgs) inlineItem {
 	b, p, ws := a.b, a.p, a.ws
+	// The leading the caller measured is the box's declared face's, and this run
+	// may be in another: the fallback stack finds one for text the declared face
+	// cannot set, and §10.8.1 measures against the font the run is *in*. See
+	// leadingInFace.
+	above, below := a.above, a.below
+	if a.run.Face != nil && a.run.Face != a.boxFace && usesNormalLineHeight(b) {
+		above, below = l.leadingInFace(b, a.run.Face)
+	}
 	item := inlineItem{
 		BidiPara: a.para, BidiStart: a.bidiStart, BidiEnd: a.bidiEnd,
 		Text: a.run.Text, Box: b, Face: a.run.Face, Size: a.size,
-		Leads: true, Above: a.above, Below: a.below,
+		Leads: true, Above: above, Below: below,
 		// §10.8.1's vertical-align, which a text box cannot be asked for
 		// itself: the property is not inherited, so the anonymous box holding
 		// a <span>'s words carries the initial value however the span was
@@ -853,8 +1220,24 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		// belongs to the unit in front of it and the break falls after it.
 		// The piece's own opportunity still stands, which is what puts the
 		// break after a preserved space rather than losing it.
-		BreakBefore: a.first && (p.BreakBefore || (a.state.BreakOpportunity && !p.Space)),
-		Space:       p.Space, Collapsible: p.Collapsible,
+		//
+		// break-spaces is the one value that overrules LB7, and it is the
+		// caller that knows — see spaceMayTakeIt, which is that value asked
+		// of the element the boundary belongs to.
+		//
+		// With that carve-out made, nothing left in the suite depends on the
+		// exclusion: dropping "!p.Space" outright gives the same 5594 clean
+		// passes, and before the carve-out it gave 5594 against 5592 — so the
+		// two reftests this rule is for were the whole of what the exclusion
+		// was costing, and the whole of what it was measurably doing. It stays
+		// because LB7 is a real rule and dropping it would be a wider change
+		// with no specification behind it, and because the note beside the
+		// atomic inline above records a case that was measured when it was
+		// added. What is *not* claimed is that a test here would catch its
+		// removal.
+		BreakBefore: a.first && (p.BreakBefore ||
+			(a.state.BreakOpportunity && (!p.Space || a.spaceMayTakeIt))),
+		Space: p.Space, Collapsible: p.Collapsible,
 		// A trailing space is trimmed off the end of a line, and only the
 		// last run of a piece has an end for one to be at.
 		TrimAtEnd: p.TrimAtEnd && a.last,
@@ -884,7 +1267,7 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		// widths, which is where hangsHard is read. See widthsOf.
 		Hangs:     p.Space && !p.Collapsible && !ws.BreakSpaces && (ws.Collapse || ws.Wrap),
 		HangsHard: p.Space && !p.Collapsible && ws.Collapse,
-		NoWrap:    !ws.Wrap, Offset: a.offset,
+		NoWrap:    a.noWrap, Offset: a.offset,
 		BreakWord:   a.ow.BreakWord,
 		Anywhere:    a.ow.Anywhere,
 		Decorations: a.decorations, Spacing: a.spacing,
@@ -906,4 +1289,39 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		item.Width = l.br.MeasureSpaced(a.run.Face, a.run.Text, a.size, a.spacing)
 	}
 	return item
+}
+
+// cutRunsAt re-cuts a piece's face runs so that every boundary in parts is also
+// a boundary between two runs.
+//
+// The two cuts are independent — one follows the faces the text needs, the other
+// follows §8.1's character classes — and the result is the finer of the two. It
+// is written as a merge rather than as a second pass over the string because a
+// run already carries which face set it, and that has to travel with each half.
+func cutRunsAt(runs []faceRun, parts []string) []faceRun {
+	// Where each part begins, as an offset into the piece.
+	cuts := make(map[int]bool, len(parts))
+	at := 0
+	for _, part := range parts {
+		at += len(part)
+		cuts[at] = true
+	}
+	out := make([]faceRun, 0, len(runs)+len(parts))
+	at = 0
+	for _, run := range runs {
+		start := 0
+		for i := 1; i < len(run.Text); i++ {
+			if cuts[at+i] {
+				out = append(out, faceRun{
+					Text: run.Text[start:i], Face: run.Face, substituted: run.substituted,
+				})
+				start = i
+			}
+		}
+		out = append(out, faceRun{
+			Text: run.Text[start:], Face: run.Face, substituted: run.substituted,
+		})
+		at += len(run.Text)
+	}
+	return out
 }

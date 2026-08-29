@@ -129,6 +129,11 @@ func TestCascadeOrderOfAppearance(t *testing.T) {
 // about lengths. A negative margin, text-indent, letter-spacing and word-spacing
 // are all useful and all specified, and dropping one would break a page that is
 // doing nothing wrong.
+//
+// The list is not only CSS 2.1's. The later specifications write the same
+// restriction as a range in the value's own type — tab-size is
+// "<number [0,∞]> | <length [0,∞]>" — and it means what §4.2 means: the
+// declaration is invalid and is dropped.
 func TestNegativeValueDropsTheDeclaration(t *testing.T) {
 	doc := parseDoc(t, cascadeDoc)
 	cases := []struct{ src, property, want string }{
@@ -151,9 +156,56 @@ func TestNegativeValueDropsTheDeclaration(t *testing.T) {
 		{"p { border-top-width: -1pt }", "border-top-width", "medium"},
 		{"p { border-right-width: 5px; border-right-width: -1em }",
 			"border-right-width", "5px"},
+		// The properties CSS 2.1 does not have, each of whose definitions
+		// states its range as a non-negative one.
+		//
+		// tab-size is the one the suite found: "tab-size: 4; tab-size: -4" has
+		// to leave the stops four spaces apart, and letting the negative
+		// through put them back at the initial eight — a tab twice as wide as
+		// the reference beside it, in a test whose whole assertion is that the
+		// two are the same width.
+		{"p { tab-size: 4; tab-size: -4 }", "tab-size", "4"},
+		// 16px, because a computed length is an absolute one — the surviving
+		// declaration is what this is about, and what it computes to is
+		// computed.go's business.
+		{"p { tab-size: 1em; tab-size: -1em }", "tab-size", "16px"},
+		{"p { tab-size: -4 }", "tab-size", "8"},
+		{"p { line-height: 2; line-height: -1 }", "line-height", "2"},
+		{"p { line-height: -1px }", "line-height", "normal"},
+		{"p { border-spacing: 2px; border-spacing: -2px }", "border-spacing", "2px"},
+		{"p { outline-width: 4px; outline-width: -4px }", "outline-width", "4px"},
+		{"p { background-size: 10px; background-size: -10px }", "background-size", "10px"},
+		// The shorthands, where §4.2's "whole declaration" is the whole
+		// shorthand: a negative in one component takes the other three with it,
+		// and what stands is whatever the cascade would have produced without
+		// the declaration at all.
+		//
+		// The border pair is the case that shows why this is not the same as
+		// dropping the component. "border: red solid -1px" written after
+		// "border-color: green" has to leave the border green, because the
+		// declaration that would have made it red does not exist —
+		// border-width-010 is that document exactly, and it came out with no
+		// border at all.
+		{"p { padding: 8px; padding: -8px }", "padding-top", "8px"},
+		{"p { padding: 1px -2px }", "padding-top", "0"},
+		{"p { border-width: 8px; border-width: -1px }", "border-top-width", "8px"},
+		{"p { border-color: green; border-width: 8px; border-style: solid;" +
+			" border: red solid -1px }", "border-top-width", "8px"},
+		{"p { border-color: green; border-width: 8px; border-style: solid;" +
+			" border: red solid -1px }", "border-top-color", "green"},
+		{"p { border-left: 4px solid red; border-left: -4px solid blue }",
+			"border-left-color", "red"},
+		{"p { outline: 4px solid red; outline: -1px solid blue }", "outline-width", "4px"},
+		{"p { font: 12px/2 serif; font: -1px/2 serif }", "font-size", "12px"},
+		{"p { font: 12px/2 serif; font: 12px/-2 serif }", "line-height", "2"},
 		// And the negatives that are legal are untouched.
 		{"p { margin-top: -10px }", "margin-top", "-10px"},
-		{"p { text-indent: -3em }", "text-indent", "-3em"},
+		// Including the two shorthands deliberately left out of the list. A
+		// negative margin is useful and specified; so is a negative background
+		// position, which is how an author shows one sprite out of a sheet.
+		{"p { margin: -10px }", "margin-top", "-10px"},
+		{"p { background: url(x) -10px 0 }", "background-position", "-10px 0"},
+		{"p { text-indent: -3em }", "text-indent", "-48px"},
 		{"p { letter-spacing: -1px }", "letter-spacing", "-1px"},
 		{"p { word-spacing: -1px }", "word-spacing", "-1px"},
 		// A zero is not negative, which is worth pinning because the test is on
@@ -360,9 +412,18 @@ func TestInitialValues(t *testing.T) {
 			len(cs), len(properties))
 	}
 	for name, prop := range properties {
-		if cs[name] != prop.initial {
+		want := prop.initial
+		if name == "font-size" {
+			// The one property whose stored value is not the initial value as
+			// written. What the registry holds is the *specified* initial —
+			// "medium" — and what is stored is the computed one, because a
+			// computed font-size is an absolute length and every em in the
+			// document is measured against it. See computed.go.
+			want = "16px"
+		}
+		if cs[name] != want {
 			t.Errorf("%s is %q with no stylesheet, want the initial %q",
-				name, cs[name], prop.initial)
+				name, cs[name], want)
 		}
 	}
 }

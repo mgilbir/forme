@@ -164,6 +164,18 @@ type bgPaint struct {
 	// geometry means the same thing either way — Tile is still where a tile
 	// sits and how big it is — and only what fills it differs.
 	Solid *style.RGBA
+
+	// Bands is set instead of either when the layer paints a gradient of solid
+	// stripes. Each band is placed relative to a tile's own top left, because a
+	// tile is what the gradient's line spans, and the tiling repeats the whole
+	// stack of them. It is empty for every other layer.
+	Bands []bgBand
+}
+
+// bgBand is one stripe of a banded gradient, positioned within a tile.
+type bgBand struct {
+	Rect  Rect
+	Color style.RGBA
 }
 
 // maxBackgroundTiles bounds the tiles one layer may ask for.
@@ -489,6 +501,7 @@ func (l *layouter) tiling(b *Box, layer backgroundLayer, positioning, painting R
 		Image: layerImage(layer),
 		Key:   layerKey(layer),
 		Solid: layer.image.Solid,
+		Bands: tileBands(layer.image.Bands, w, h),
 	}, true
 }
 
@@ -604,7 +617,23 @@ func (l *layouter) tileSize(layer backgroundLayer, area Rect) (w, h style.Unit, 
 	if ratio <= 0 && iw > 0 && ih > 0 {
 		ratio = iw.Px() / ih.Px()
 	}
-	if iw <= 0 && ih <= 0 && ratio <= 0 && img.Solid == nil {
+	// §5.4's percentage dimensions, resolved now that there is an area to
+	// resolve them against. An SVG stating "width: 40%" has no intrinsic width
+	// — every rule that asks gets "none" — and a concrete one here, which is
+	// what the default object size is for. See ReplacedContent.WidthPercent.
+	//
+	// After the ratio and not before it, which is the difference between a
+	// dimension and an intrinsic one. §5.4 gives such an image no intrinsic
+	// ratio either, so "background-size: contain" on it means the area — and
+	// deriving a ratio from the two resolved numbers would make contain fit a
+	// shape the image does not have.
+	if img.WidthPercent > 0 {
+		iw = area.W.Mul(img.WidthPercent)
+	}
+	if img.HeightPercent > 0 {
+		ih = area.H.Mul(img.HeightPercent)
+	}
+	if iw <= 0 && ih <= 0 && ratio <= 0 && img.Solid == nil && img.Bands == nil {
 		// A picture with no size at all is one that failed to load or decode.
 		// Content that paints a colour legitimately has none, and is sized
 		// below by the default object size like any other image without one.
@@ -832,6 +861,11 @@ func (l *layouter) backgroundImage(b *Box, raw string) *ReplacedContent {
 	if colour, ok := uniformGradient(raw); ok {
 		return &ReplacedContent{Solid: &colour}
 	}
+	// A gradient whose colour never interpolates is a stack of solid bands, and
+	// is painted as those bands. Same argument as above, one dimension out.
+	if bands, ok := l.bandsOf(b, raw); ok {
+		return &ReplacedContent{Bands: bands}
+	}
 	// A real gradient, an image-set, element(). Each is a value this engine
 	// reads and cannot paint, and each leaves a box that looks as though the
 	// declaration were absent — which is the silent failure the whole finding
@@ -848,11 +882,15 @@ func (l *layouter) backgroundImage(b *Box, raw string) *ReplacedContent {
 
 // reportOnce raises a finding the first time a key is seen, so a stylesheet rule
 // that puts one gradient on four hundred elements is one thing to be told.
+//
+// It began as a background's own and is not one: every finding about a *value*
+// rather than about a box wants it, and the key is whatever tells two of them
+// apart. See reportKerning, which raises one per property.
 func (l *layouter) reportOnce(key string, f Finding) {
-	if l.reportedBackgrounds[key] {
+	if l.reportedOnce[key] {
 		return
 	}
-	l.reportedBackgrounds[key] = true
+	l.reportedOnce[key] = true
 	l.rec.ReportDetail(f)
 }
 
@@ -1317,4 +1355,31 @@ func layerKey(layer backgroundLayer) string {
 		return ""
 	}
 	return layer.image.Key
+}
+
+// tileBands turns a banded gradient into the stripes of one tile, which is what
+// a backend is handed: rectangles in the tile's own coordinates, so that a
+// repeating background repeats the whole stack.
+func tileBands(g *bandedGradient, w, h style.Unit) []bgBand {
+	if g == nil {
+		return nil
+	}
+	bands := g.bandsIn(w, h)
+	out := make([]bgBand, 0, len(bands))
+	for _, band := range bands {
+		if band.colour.A == 0 {
+			// A transparent band paints nothing, and an operation that fills
+			// with nothing is one a backend has to decide to skip.
+			continue
+		}
+		r := Rect{X: 0, Y: band.from, W: w, H: band.to.Sub(band.from)}
+		if !g.vertical {
+			r = Rect{X: band.from, Y: 0, W: band.to.Sub(band.from), H: h}
+		}
+		if r.Empty() {
+			continue
+		}
+		out = append(out, bgBand{Rect: r, Color: band.colour})
+	}
+	return out
 }

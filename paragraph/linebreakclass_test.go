@@ -256,10 +256,21 @@ func TestBindsToAtomicInline(t *testing.T) {
 		{'\uFEFF', true, "a zero width no-break space"},
 		// ZWJ.
 		{'\u200D', true, "a zero width joiner"},
+		// The combining marks, which the sentence does not name and the suite
+		// asks for anyway: UAX #14's LB9 says not to break a combining
+		// character sequence, and §5.1 makes an atomic inline equivalent to a
+		// character for line breaking, so the sequence rule reaches it.
+		{'\u034F', true, "a combining grapheme joiner, whose whole purpose is this"},
+		{'\u0301', true, "a combining acute accent"},
+		{'\u20DD', true, "a combining enclosing circle"},
 		// And the ones that hold on to nothing.
 		{'A', false, "a letter"},
 		{' ', false, "a space"},
 		{'\u200B', false, "a zero width space, which is a break and not a bond"},
+		// A *spacing* combining mark is not one of these. It is a character with
+		// an advance of its own — the Devanagari vowel signs are the everyday
+		// case — and LB9's sequence rule is about the marks that have none.
+		{'\u093E', false, "a Devanagari vowel sign aa, which is a spacing mark"},
 		{'-', false, "a hyphen-minus"},
 		{'中', false, "an ideograph"},
 		{0x10FFFF, false, "the last code point there is"},

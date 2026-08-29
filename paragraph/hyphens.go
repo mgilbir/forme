@@ -18,10 +18,13 @@ import "strings"
 //	auto      the same, and the engine may hyphenate words that ask for nothing
 //
 // "auto" needs a hyphenation dictionary for the document's language — Liang's
-// patterns, one set per language, which is a table this engine does not carry
-// and cannot derive. So it is read as "manual" and reported: what it produces
-// is right as far as it goes and stops short of what was asked for, which is
-// exactly the case the unimplemented-property finding exists for.
+// patterns, one set per language, which cannot be derived from anything and has
+// to be carried. One is: American English, in hyphentable.go, read by the
+// algorithm in hyphenate.go. A document in any other language is read as
+// "manual" and reported, which is §6.1's own condition — the UA is required to
+// hyphenate only text "for which the author has declared a language ... and for
+// which it has an appropriate hyphenation resource" — and is exactly the case
+// the unimplemented-property finding exists for.
 
 // Hyphens is the part of the property that changes what this engine does.
 type Hyphens struct {
@@ -33,6 +36,14 @@ type Hyphens struct {
 	// and is the difference between a caller that says nothing getting what the
 	// specification says and getting the opposite of it.
 	None bool
+	// Auto is the "auto" value: a word may be broken where a hyphenation
+	// dictionary says it may, whether or not the author marked the place.
+	//
+	// It is a field of its own rather than the absence of None because the
+	// three values are three answers and not two: "none" breaks nowhere,
+	// "manual" breaks where the author asked, and "auto" breaks there and
+	// wherever the language allows.
+	Auto bool
 }
 
 // Soft reports whether a soft hyphen offers a break opportunity.
@@ -48,9 +59,12 @@ func HyphensOf(value string) (Hyphens, string) {
 	case "none":
 		return Hyphens{None: true}, ""
 	case "auto":
-		// Honoured as far as the soft hyphens go, and named, because the rest of
-		// it — breaking a word that asked for nothing — is not done.
-		return Hyphens{}, "auto"
+		// Whether it can be honoured depends on the language, which this does
+		// not know: the patterns are for one language and a document in another
+		// gets manual hyphens and a finding. So the value is returned as asked
+		// for and the caller, which knows the language, decides whether there
+		// was anything to report. See HyphenatesLanguage.
+		return Hyphens{Auto: true}, ""
 	}
 	return Hyphens{}, ""
 }

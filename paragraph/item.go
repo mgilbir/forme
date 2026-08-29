@@ -133,6 +133,17 @@ type Item struct {
 	// preserved tabs — rather than Phase I's, which is only U+0020, U+0009 and
 	// the segment breaks. The two differ over the ideographic Space and its
 	// relatives, which hang at the end of a line and are never collapsed.
+	// Autospace is §8.1's ideograph spacing, already inside Width and sitting at
+	// this run's far edge.
+	//
+	// It is kept apart so that a line that ends here can leave it out. The
+	// spacing goes *between* two characters, and two characters on different
+	// lines are not adjacent — so a gap the line break falls on is not a gap at
+	// all, exactly as the letter-spacing after a line's last character is not
+	// applied. Without it a run whose far edge carries an eighth of an em is an
+	// eighth of an em too wide to end a line it fits on.
+	Autospace style.Unit
+
 	Space bool
 	// Collapsible marks white space that §4.1.2 removes when it lands at
 	// either end of a line.
@@ -191,6 +202,18 @@ type Item struct {
 	// does is move the line's own beginning, which is where a negative
 	// text-indent does its work and is where layout applies it.
 	HangStart, HangEnd bool
+	// MayHangEnd marks an item that is a single stop or comma which §8.4's
+	// allow-end would hang, if hanging it is what lets the line hold it.
+	//
+	// It is a candidate rather than a decision, and the decision belongs to the
+	// fill: the value hangs the character "only if it does not otherwise fit",
+	// which is a question about a line and cannot be answered before the line is
+	// known. The fill sets HangEnd and Hangs on its own copy when it takes it.
+	//
+	// The character is cut into an item of its own before the fill for the reason
+	// hangingpunctuation.go gives for the other two values: a hang is a width,
+	// and a width is a property of an item.
+	MayHangEnd bool
 	// PreContext and PostContext are the text either side of this run, where the
 	// boundary between it and its neighbour does not break shaping.
 	//
@@ -244,6 +267,19 @@ type Item struct {
 	// all three apply to a non-replaced inline box on the horizontal axis, and
 	// what they do there is push the content along. See insetItems.
 	Inset bool
+	// Edged says this inset item's own side of the box carries a non-zero
+	// margin, border or padding — which is not the same as its Width being
+	// non-zero, because they can cancel.
+	//
+	// §9.4.2 asks the first question and not the second: a line box is
+	// zero-height only where it holds "no inline elements with non-zero
+	// margins, padding, or borders", so a "border-left: 100px" against a
+	// "margin-left: -100px" measures nothing and keeps its line. The pair
+	// abspos/static-inside-inline-002 and -003 turns on exactly this, and on
+	// which *side* of the box carries it: -002 puts the border on the leading
+	// edge, where the fragment before an absolutely positioned box has it, and
+	// -003 on the trailing edge, where that fragment does not.
+	Edged bool
 	// InsetLead distinguishes the two: the item before the box's content from
 	// the item after it, in *logical* order.
 	//
@@ -394,6 +430,19 @@ type MidLineBox struct {
 	Offset Point
 	// Abs distinguishes the two kinds.
 	Abs bool
+	// AfterContent says something was already on the line when the box was
+	// reached — which is not the same as Used being non-zero, and the
+	// difference is the whole reason it is here.
+	//
+	// §10.6.4's hypothetical box for an absolutely positioned box is
+	// block-level, so it would have split the inline content it was written
+	// among, and its top edge is the bottom of the line holding what precedes
+	// it. What precedes it may take no width at all: an inline box's own edge
+	// is content in §9.4.2's sense — the line it is on is not a zero-height one
+	// — and a border cancelled by a negative margin measures nothing.
+	// abspos/static-inside-inline-002 is exactly that, a "border-left: 100px"
+	// against a "margin-left: -100px".
+	AfterContent bool
 }
 
 // State is what the flattening carries from one inline box to the next.
@@ -439,6 +488,28 @@ type State struct {
 	// held to the same rule as one that did not cross it, or "中中<span>〜</span>文"
 	// and "中中〜文" answer differently about the same text.
 	AfterDeferred bool
+	// AfterLetterUnit says the last character emitted was a typographic letter
+	// unit that is not itself an ideograph, which is what decides whether an
+	// ideograph beginning the next box may be broken away from it. It travels
+	// for the reason the rest of this does: the two characters of that boundary
+	// are in different text nodes, and neither box can see both.
+	AfterLetterUnit bool
+	// AfterBox is the box the character before this point came from, held
+	// opaquely, and it is here for a rule about *which element* decides.
+	//
+	// CSS Text §5.1: "for soft wrap opportunities defined by the boundary
+	// between two characters, the white-space property on the nearest common
+	// ancestor of the two characters controls breaking". An opportunity inside
+	// one box is that box's to allow or refuse and needs nothing; one that
+	// crosses a boundary belongs to neither side of it.
+	//
+	// Without this the answer was taken from the box the *later* character is
+	// in, so a zero width space in a wrapping div between two "white-space: pre"
+	// spans offered a break that the second span refused — and the span had
+	// nothing to say about a boundary outside itself.
+	//
+	// The caller resolves it, because the ancestry is the caller's tree.
+	AfterBox Ref
 }
 
 // StartOfContext is the state an inline formatting context begins in.
@@ -472,8 +543,35 @@ func (br *Breaker) SplitItem(item Item, at int) (head, tail Item) {
 	runesBefore := utf8.RuneCountInString(item.Text[:at])
 	head.BidiEnd = item.BidiStart + runesBefore
 	tail.BidiStart = item.BidiStart + runesBefore
-	head.Width = br.MeasureSpaced(item.Face, head.Text, item.Size, item.Spacing)
-	tail.Width = br.MeasureSpaced(item.Face, tail.Text, item.Size, item.Spacing)
+	// CSS Text §5.4, shaping across an intra-word break:
+	//
+	//	When shaping scripts such as Arabic are allowed to break within words
+	//	due to hyphenation or [...] the characters must still be shaped as if
+	//	the word were not broken.
+	//
+	// A cut is the one thing that makes a boundary where the text has none, so
+	// each half is told what the other is. Without it "عائلة" broken by
+	// overflow-wrap comes out as two words: the letter before the cut takes its
+	// final form and the one after it takes its initial, and a reader of Arabic
+	// sees a word that is not there. The suite says so twice, in
+	// overflow-wrap-shaping-001 and -002, and writes the expectation as
+	// presentation forms so that there is nothing to argue about.
+	//
+	// The context either side of the whole item goes on the outside of each
+	// half, because that is where it was: what preceded the item still precedes
+	// the head, and what followed it still follows the tail.
+	head.PostContext = tail.Text + item.PostContext
+	tail.PreContext = item.PreContext + head.Text
+	head.Width = br.MeasureSpacedInContext(item.Face, head.Text, item.Size, item.Spacing,
+		head.PreContext, head.PostContext)
+	tail.Width = br.MeasureSpacedInContext(item.Face, tail.Text, item.Size, item.Spacing,
+		tail.PreContext, tail.PostContext)
+	// §8.1's gap sits at the item's far edge, so it goes with the tail — the
+	// head's far edge is the cut, which is a boundary the gap was never at. The
+	// measurements above do not include it, since it is not in the text.
+	head.Autospace = 0
+	tail.Autospace = item.Autospace
+	tail.Width = tail.Width.Add(item.Autospace)
 	// The tail begins a line, so it takes no opportunity from what was in front
 	// of the head — there is nothing in front of it any more.
 	//

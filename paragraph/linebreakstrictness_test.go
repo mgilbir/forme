@@ -21,8 +21,15 @@ import (
 // breaksBefore reports whether the splitter offers a line break in front of a
 // character, with ideographs either side of it so that there is somewhere else
 // to break.
+//
+// The text is Chinese, so the value says so. §5.3's tailoring is stated "in
+// Chinese and Japanese" and one of its rules is gated on it, so a LineBreak
+// value alone does not settle what a line may begin with — see the
+// ChineseOrJapanese field. Setting it here rather than in each row keeps the
+// table below about the property, which is what it is a reading of.
 func breaksBefore(t *testing.T, r rune, lb LineBreak) bool {
 	t.Helper()
+	lb.ChineseOrJapanese = true
 	text := "中中" + string(r) + "文"
 	pieces, _ := SplitAtBreaks(text, WhiteSpace{Collapse: true, Wrap: true},
 		WordBreak{}, lb, Hyphens{})
@@ -242,6 +249,41 @@ func TestTheTailoringTablesAreSortedAndDisjoint(t *testing.T) {
 			for _, r := range []rune{s.lo, s.hi, s.lo + (s.hi-s.lo)/2} {
 				if !inLineBreakRanges(r, tc.table) {
 					t.Errorf("%s: %#04X is in range %d and was not found", tc.name, r, i)
+				}
+			}
+		}
+	}
+}
+
+// TestTheLooseHyphensNeedTheWritingSystem is the gate seen from this side: the
+// two class NS hyphens are the only characters in the table above whose answer
+// the LineBreak value does not settle by itself.
+//
+// §5.3 states the whole tailoring "in Chinese and Japanese". For every other
+// row that is a description of the text rather than a condition on it — nothing
+// but Chinese or Japanese contains an iteration mark or a halfwidth katakana
+// middle dot — so the tailoring can be applied blind and the containment case
+// below is what makes that safe. U+301C and U+30A0 are the exception, because
+// Japanese written in another script still has them: see
+// layout/linebreak_test.go, where a document supplies the answer.
+func TestTheLooseHyphensNeedTheWritingSystem(t *testing.T) {
+	for _, r := range []rune{0x301C, 0x30A0} {
+		for _, v := range []struct {
+			name string
+			lb   LineBreak
+		}{{"normal", LineBreak{Normal: true}}, {"loose", LineBreak{Loose: true}}} {
+			// breaksBefore sets the field, so this is the row the table asserts.
+			if !breaksBefore(t, r, v.lb) {
+				t.Errorf("%#04X: %s did not let Chinese begin a line with it", r, v.name)
+			}
+			// And the same value over text that is neither.
+			text := "中中" + string(r) + "文"
+			pieces, _ := SplitAtBreaks(text, WhiteSpace{Collapse: true, Wrap: true},
+				WordBreak{}, v.lb, Hyphens{})
+			for _, p := range pieces {
+				if strings.HasPrefix(p.Text, string(r)) && p.BreakBefore {
+					t.Errorf("%#04X: %s let a line begin with it where the writing "+
+						"system is neither Chinese nor Japanese", r, v.name)
 				}
 			}
 		}

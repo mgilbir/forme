@@ -609,6 +609,60 @@ func TestPictureSeesThroughInkOverInk(t *testing.T) {
 	}
 }
 
+// TestPictureBuriesTextAQuarterPixelAway is the tolerance, and the reason it is
+// the quarter pixel rather than a number of its own.
+//
+// The two documents of a reftest compute their geometry by different routes, so
+// a run measured in two pieces lands a fraction of a unit from the same run
+// measured once — content-177 is an overlay whose red copy is a ::before box and
+// a text node and whose green copy is one text node, and its last two letters
+// came out a fiftieth of a pixel apart. A fiftieth of a pixel is not ink anybody
+// can see and no rasterisation puts it on a page.
+//
+// It is the same quarter pixel the sliver rule discards a fill disagreement at
+// and the same one nearlyAt pairs two marks with, which is the whole argument
+// for it: text was being held to a standard nothing else here is held to.
+func TestPictureBuriesTextAQuarterPixelAway(t *testing.T) {
+	under := picRun(t, "FAIL", 0, 14)
+	for _, off := range []float64{0.01, 0.1, 0.25} {
+		over := picRun(t, "FAIL", off, 14)
+		over.Color = picGreen
+		if !pictureEqual([]Op{under, over}, []Op{over}, picPage) {
+			t.Errorf("an opaque run %gpx to the right did not bury the one "+
+				"under it; a quarter pixel is the tolerance everything else "+
+				"in this comparison already uses", off)
+		}
+	}
+}
+
+// TestPictureDoesNotBuryTextBeyondTheTolerance is the other side of the same
+// number, and the one that keeps the rule from becoming an oracle that calls
+// different pages the same.
+//
+// Half a pixel is twice the tolerance and must not bury. The row a pixel to the
+// right in TestPictureKeepsInkThatIsNotBuried is the same claim further out;
+// this one is at the boundary, which is where a rule written with the wrong
+// comparison fails and a rule written with the right one does not.
+func TestPictureDoesNotBuryTextBeyondTheTolerance(t *testing.T) {
+	under := picRun(t, "FAIL", 0, 14)
+	for _, off := range []float64{0.5, 1, 2} {
+		over := picRun(t, "FAIL", off, 14)
+		over.Color = picGreen
+		if pictureEqual([]Op{under, over}, []Op{over}, picPage) {
+			t.Errorf("an opaque run %gpx to the right buried the one under it; "+
+				"that is further than the quarter pixel this forgives", off)
+		}
+	}
+	// And on the other axis, which the cell lookup has to reach as readily.
+	for _, off := range []float64{0.5, 1} {
+		over := picRun(t, "FAIL", 0, 14+off)
+		over.Color = picGreen
+		if pictureEqual([]Op{under, over}, []Op{over}, picPage) {
+			t.Errorf("an opaque run %gpx below buried the one under it", off)
+		}
+	}
+}
+
 // TestPictureKeepsInkThatIsNotBuried is the half that decides whether the rule
 // is an oracle or a hole in one. Every row here is a covering run that does
 // *not* hide what is under it, and the two documents must still differ.

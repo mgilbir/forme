@@ -92,8 +92,34 @@ type tokenizer struct {
 	xml bool
 }
 
+// bom is the byte order mark, U+FEFF, whose encoded form is the three bytes
+// EF BB BF that a Windows editor writes at the front of a UTF-8 file.
+const bom = "\ufeff"
+
 func newTokenizer(src string) *tokenizer {
-	return &tokenizer{src: src, xml: looksLikeXML(src)}
+	t := &tokenizer{src: src, xml: looksLikeXML(src)}
+	if strings.HasPrefix(src, bom) {
+		// A leading byte order mark is not content. HTML's encoding sniffing
+		// takes those three bytes as the statement "this file is UTF-8" and
+		// removes them, and its input preprocessing says the same thing again
+		// for a document that arrived decoded: "one leading U+FEFF byte order
+		// mark character must be ignored".
+		//
+		// Ignored where the reading starts rather than by cutting the string,
+		// so that every offset in a finding is still an offset into the bytes
+		// the author has in front of them.
+		//
+		// Only the first one, and only at the very front. Anywhere else U+FEFF
+		// is ZERO WIDTH NO-BREAK SPACE, a character of the text that sets no
+		// paper and holds two words together, and dropping one of those would
+		// be dropping content.
+		//
+		// A mark that survives is not a subtle failure: it is a character in an
+		// otherwise empty inline formatting context before the document's first
+		// element, so the whole page moves down by a line.
+		t.pos = len(bom)
+	}
+	return t
 }
 
 // looksLikeXML reports whether a document says it is XHTML.

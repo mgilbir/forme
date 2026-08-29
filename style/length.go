@@ -121,6 +121,13 @@ type LengthContext struct {
 	// FontMetricsKnown says which of the two a zero means.
 	ZeroAdvance      Unit
 	FontMetricsKnown bool
+
+	// IcAdvance is the advance of U+6C34 (水) in the element's own font, which
+	// is what "ic" is, and IcAdvanceKnown says whether a face was found that has
+	// the glyph at all. A face without it has no ideographic advance to state,
+	// and §5.1.4 says what to do then.
+	IcAdvance      Unit
+	IcAdvanceKnown bool
 }
 
 // ParseLength reads a length from component values.
@@ -234,6 +241,25 @@ func pxPerUnit(unit string, ctx LengthContext) (px float64, known, supported boo
 		}
 		return ctx.ZeroAdvance.Px(), true, true
 
+	// ic is the advance of "水" — CSS Values §5.1.4's "CJK water ideograph",
+	// U+6C34 — in the element's own font. It is what an author sizes a box in
+	// ideographs with: "width: 4ic" is a box four Han characters wide, and it is
+	// exact where "em" is only nearly right, because a CJK face's ideographs are
+	// its em square and its Latin is not.
+	//
+	// A face with no water ideograph in it has no ideographic advance to state,
+	// and §5.1.4 says what to do: "in the cases where it is impossible or
+	// impractical to determine the ideographic advance measure, it must be
+	// assumed to be 1em". That is the specified answer for a Latin face rather
+	// than a guess at one — and it is the answer the suite's own references are
+	// built on, which write "4ic" beside four ideographs and expect the two to
+	// come out the same width.
+	case "ic":
+		if ctx.IcAdvanceKnown {
+			return ctx.IcAdvance.Px(), true, true
+		}
+		return ctx.FontSize.Px(), true, true
+
 	// ex is the font's x-height, when the font states one.
 	//
 	// It did not used to: the descriptor stopped at cap height, so every "ex"
@@ -298,9 +324,9 @@ func pxPerUnit(unit string, ctx LengthContext) (px float64, known, supported boo
 // chooses. The container ones need a container query, which needs a layout pass
 // before the cascade. The logical ones need a writing mode.
 var unresolvedUnits = map[string]bool{
-	// Font-relative, needing metrics from the chosen face. "ex" and "ch" are
-	// resolved; the rest need a metric the face layer does not carry.
-	"cap": true, "ic": true,
+	// Font-relative, needing metrics from the chosen face. "ex", "ch" and "ic"
+	// are resolved; the rest need a metric the face layer does not carry.
+	"cap": true,
 	"rex": true, "rch": true, "rcap": true, "ric": true,
 	"lh": true, "rlh": true,
 	// Container-relative.
@@ -344,6 +370,15 @@ var relativeFontSizes = map[string]float64{
 // A percentage is also relative to the parent, which is why it can be resolved
 // here when ParseLength would have to decline it.
 func ResolveFontSize(vals []css.ComponentValue, parent, root Unit) (u Unit, unsupported bool, ok bool) {
+	return ResolveFontSizeIn(vals, LengthContext{FontSize: parent, RootFontSize: root})
+}
+
+// ResolveFontSizeIn is ResolveFontSize given the whole context to resolve in,
+// which is what a caller with the parent's face in hand can offer: the font
+// metrics of §5.1.1's font-relative units belong to the parent element, since
+// the element's own font is the thing being computed.
+func ResolveFontSizeIn(vals []css.ComponentValue, ctx LengthContext) (u Unit, unsupported bool, ok bool) {
+	parent := ctx.FontSize
 	parts := splitOnWhitespace(vals)
 	if len(parts) == 1 && len(parts[0]) == 1 && parts[0][0].IsToken() {
 		t := parts[0][0].Token
@@ -368,22 +403,16 @@ func ResolveFontSize(vals []css.ComponentValue, parent, root Unit) (u Unit, unsu
 		}
 	}
 
-	// Everything else is an ordinary length, resolved with the parent's size
-	// standing in for "em".
+	// Everything else is an ordinary length, resolved in the context the caller
+	// gave, whose FontSize is the *parent's* size — an em in a font-size is
+	// relative to the size being replaced rather than to the one being computed.
 	//
-	// No x-height is passed, so "font-size: 6ex" falls back to half the parent's
-	// size instead of asking the parent's face — and the suite's
-	// numbers-units-012 sets 6ex against Ahem, whose x-height is eight tenths of
-	// an em, so it comes out at three quarters of the size it should be.
-	//
-	// It is a gap rather than an oversight, and the shape of it is worth
-	// recording. The unit needs the *parent's* face; font-size is resolved by
-	// the box builder, before layout, so that every box carries a computed size
-	// from the moment it exists; and the box builder is handed a document, a
-	// cascade and a recorder, and no font set at all. Closing it means giving
-	// the builder faces, which is a change to when fonts are loaded rather than
-	// a change to this function.
-	l, unsupported, ok := ParseLength(vals, LengthContext{FontSize: parent, RootFontSize: root})
+	// The metrics in it are the parent's face's, for the same reason and with
+	// the same care: "font-size: 6ex" against Ahem, whose x-height is eight
+	// tenths of an em, is eight tenths and not the half CSS Values §5.1.1 says
+	// to assume "in the cases where it is impossible or impractical to determine
+	// the x-height". The suite's numbers-units-012 is that document.
+	l, unsupported, ok := ParseLength(vals, ctx)
 	if !ok || l.Kind != LengthAbsolute {
 		return 0, unsupported, false
 	}

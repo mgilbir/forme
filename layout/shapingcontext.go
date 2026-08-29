@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -76,14 +77,20 @@ import (
 // where the boundary between them does not break shaping, and re-measures the
 // ones whose width the context changes.
 //
-// Nothing happens at all unless the face carries positional forms, which is the
-// question "can the context change anything here". Every Latin, Greek, Cyrillic
-// and CJK document takes the first branch of the loop and is left exactly as it
-// was — no second measurement, no memo entries, no allocation.
+// Nothing happens at all unless the face can be changed by its context, and
+// there are two ways it can: positional forms, and pair kerning across the
+// boundary. A face with neither takes the first branch of the loop and is left
+// exactly as it was — no second measurement, no memo entries, no allocation.
+//
+// Kerning was the later of the two and the reading was narrower before it: the
+// gate asked only about positional forms, so every Latin and CJK document was
+// waved through and "A<span>V" lost its pair. It is the same rule of §8.1 in
+// both cases — the boundary between two inline elements does not break shaping
+// — and pair positioning is as much a part of shaping as a form is.
 func (l *layouter) linkShapingContext(items []inlineItem) []inlineItem {
 	joins := false
 	for i := range items {
-		if isShapedRun(items[i]) && items[i].Face.HasJoiningForms() {
+		if isShapedRun(items[i]) && contextCanChange(items[i].Face) {
 			joins = true
 			break
 		}
@@ -92,7 +99,7 @@ func (l *layouter) linkShapingContext(items []inlineItem) []inlineItem {
 		return items
 	}
 	for i := range items {
-		if !isShapedRun(items[i]) || !items[i].Face.HasJoiningForms() {
+		if !isShapedRun(items[i]) || !contextCanChange(items[i].Face) {
 			continue
 		}
 		before, after := "", ""
@@ -198,6 +205,40 @@ func facingInset(item inlineItem, rtl bool) style.Unit {
 // same three Arabic letters with a <bdi> and a dir="auto" in the middle, and
 // both read "Test passes if the three Arabic characters DON'T join".
 func sameShaping(a, b inlineItem) bool {
-	return a.Face == b.Face && a.Size == b.Size && a.Spacing == b.Spacing &&
-		a.Level == b.Level
+	if a.Face != b.Face || a.Spacing != b.Spacing || a.Level != b.Level {
+		return false
+	}
+	// Of those three, the face has no test: a planted defect dropping it leaves
+	// every one passing, because the only Arabic face in the checkout is one and
+	// two runs cannot be set in different ones. It is kept because a face is
+	// what a form *is* — a glyph index means nothing outside the font it came
+	// from — and recorded here rather than left as an implied claim. The other
+	// two are pinned: shaping-012 and -013 for the level, and the letter- and
+	// word-spacing families for the spacing.
+	// The size is the one that answers differently for the two things a context
+	// does.
+	//
+	// It does not change which *form* a letter takes: an Arabic letter is
+	// medial because of the letters beside it and not because of how large it
+	// is, and the suite says so directly — shaping-007 sets "font-size: 100%"
+	// on the middle letter and shaping-008 sets "120%", and *both* read "Test
+	// passes if the three Arabic characters in each box join". What breaks the
+	// join is room between the letters, which is -009 through -011: a margin, a
+	// padding and a border.
+	//
+	// It does change what a pair between them would be. A kern is a distance
+	// measured in one font at one size, and a pair positioned across a boundary
+	// where the sizes differ is a number that belongs to neither of them.
+	//
+	// So the size breaks the boundary for a face that kerns and not for one
+	// that joins. A face that does both is read as joining, because that is the
+	// difference a reader sees: a letter in the wrong form is a different
+	// letter, and a pair off by a fraction of an em is a gap.
+	return a.Size == b.Size || a.Face.HasJoiningForms()
+}
+
+// contextCanChange reports whether the text either side of a run can change what
+// the run is: which glyphs it is set in, or where they sit.
+func contextCanChange(f *shape.Face) bool {
+	return f.HasJoiningForms() || f.HasKerning()
 }

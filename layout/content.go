@@ -131,7 +131,17 @@ func resolveContent(raw string, el *html.Node, counters counterValues,
 			// A missing attribute contributes the empty string, which is what
 			// the specification says and is why attr() is safe to use for
 			// optional data.
+			//
+			// And "missing" is a different question in the two languages. HTML
+			// lowercases an attribute name, so "attr(Title)" selects the title
+			// attribute; XML does not, so it selects nothing. §12.2 leaves it to
+			// the document language and the suite writes the same document twice
+			// to say so — content-attr-case-001 in HTML asks for the match and
+			// -002 in XHTML asks for its absence.
 			value, _ := el.Attr(name)
+			if el.XMLDocument() {
+				value, _ = el.AttrExact(name)
+			}
 			text.WriteString(value)
 
 		// The two refusals below no longer answer anything a stylesheet can
@@ -274,13 +284,21 @@ func (b *boxBuilder) generated(n *html.Node, name string, fontSize style.Unit) *
 	if position.outOfFlow() {
 		float = FloatNone
 	}
+	// Whether it was inline-level *before* §9.7 blockified it for being out of
+	// flow, which is what decides where its static position is. A pseudo-element
+	// is inline by default, so an "::after { position: absolute }" has a
+	// hypothetical static box on the line it was written on rather than a block
+	// below it — see Box.staticInline. The element walk records this and this
+	// walk did not, so every positioned pseudo-element read as block-level.
+	staticInline := outer == OuterInline
 	outer, inner = outOfFlowDisplay(outer, inner, float, position)
 	z, zAuto := zIndexOf(cs)
 	box := &Box{
-		Outer: outer, Inner: inner, Element: n, Style: cs,
-		ListItem: listItem, FontSize: size,
+		Outer: outer, Inner: inner, Element: n, Style: cs, Pseudo: name,
+		ListItem: listItem, FontSize: size, fontSizeKnown: true,
 		Float: float, Clear: clearOf(cs),
 		Position: position, ZIndex: z, ZAuto: zAuto, Order: order,
+		staticInline: staticInline,
 	}
 	// The text is collapsed exactly as document text is, by the pseudo-element's
 	// own "white-space". Generated content is put in an anonymous inline box and
@@ -313,18 +331,19 @@ func (b *boxBuilder) generated(n *html.Node, name string, fontSize style.Unit) *
 			// here — see Box.ContentImage.
 			box.Children = append(box.Children, &Box{
 				Outer: OuterInline, Inner: InnerFlow,
-				Style: cs, FontSize: size, Parent: box,
+				Style: cs, FontSize: size, fontSizeKnown: true, Parent: box,
 				ContentImage: piece.image,
 			})
 			continue
 		}
-		text := collapseWhitespace(piece.text, cs["white-space-collapse"], wst)
+		text := collapseWhitespaceAfter(piece.text, cs["white-space-collapse"], wst,
+			textBoundary{}, writingSystemAt(n))
 		if text == "" {
 			continue
 		}
 		box.Children = append(box.Children, &Box{
 			Outer: OuterInline, Inner: InnerText,
-			Style: cs, Text: text, FontSize: size, Parent: box,
+			Style: cs, Text: text, FontSize: size, fontSizeKnown: true, Parent: box,
 		})
 	}
 	return box

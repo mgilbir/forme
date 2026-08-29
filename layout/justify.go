@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mgilbir/forme/paragraph"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -51,6 +52,27 @@ func justifiableSpace(text string) bool {
 	return strings.Trim(text, " ") == ""
 }
 
+// justifiableHere reports whether §7.3 allows an opportunity at this item.
+//
+// text-justify applies to inline boxes as well as to block containers — "none:
+// justification is disabled: there are no justification opportunities within the
+// text" — so a space inside a "text-justify: none" span is not one, even on a
+// line the block is justifying. The property is inherited, so the item's own
+// computed value is already the answer for wherever it was written; nothing has
+// to walk the tree.
+//
+// The block's own value is read by lineAlignment, which turns a justified line
+// into a start-aligned one and never gets here. This is the other half: a block
+// that justifies with a span inside it that does not.
+func justifiableHere(item inlineItem) bool {
+	b := heldBox(item.Box)
+	if b == nil {
+		return true
+	}
+	m, _ := justificationOf(b)
+	return m != justifyNone
+}
+
 // justifyItems spreads slack across the word spaces of one line, and reports
 // whether it found anywhere to put it.
 //
@@ -94,6 +116,31 @@ func justifyItems(items []inlineItem, xs, widths []style.Unit, hangs []bool, sla
 			last = i
 		}
 	}
+
+	// And nothing at or before a preserved tab, which is CSS Text 4's rule for
+	// justifying a line whose white space is not collapsible: "the UA must
+	// ensure that tab stops continue to line up as required by the white space
+	// processing rules".
+	//
+	// A tab's advance is the distance from where the line has got to to the next
+	// tab stop, so widening a space in front of one does not move what follows
+	// it — the tab simply shrinks by as much and the text after it stays put.
+	// Until the pen crosses a stop, and then the tab jumps a whole stop and every
+	// column on the line after it moves with it. Neither answer is justification:
+	// the first spends slack that never reaches the margin, and the second
+	// destroys the alignment the tabs were written for.
+	//
+	// So the slack goes after the last tab and nowhere else, which is what the
+	// suite's text-align-justify-tabs-002 asks for by drawing its reference with
+	// the spaces after the tab written twice and the ones before it written once.
+	// A line whose last tab is at its end — 001, where the tab hangs — has no
+	// opportunity left at all and is set exactly as an unjustified line is.
+	lastTab := -1
+	for i, k := range order {
+		if items[k].Tab {
+			lastTab = i
+		}
+	}
 	// Which items expand. Nothing here reads a position, and that is worth
 	// saying rather than assuming: an earlier version asked whether a space sat
 	// past the end of the line's content, which is a question the loop below
@@ -103,7 +150,8 @@ func justifyItems(items []inlineItem, xs, widths []style.Unit, hangs []bool, sla
 	// property of the line's order rather than of anything's position, is what
 	// makes one pass and two passes the same answer.
 	expands := func(i, k int) bool {
-		return i < last && justifiableSpace(items[k].Text) && !hangs[k]
+		return i < last && i > lastTab && justifiableSpace(items[k].Text) &&
+			!hangs[k] && justifiableHere(items[k])
 	}
 	n := 0
 	for i, k := range order {
@@ -143,4 +191,85 @@ func justifyItems(items []inlineItem, xs, widths []style.Unit, hangs []bool, sla
 		acc = acc.Add(step)
 	}
 	return true
+}
+
+// justifyBetweenCharacters is §7.3's other method: the slack goes between every
+// pair of typographic character units rather than at the word spaces.
+//
+// It is what "inter-character" asks for, and what "distribute" — the older name
+// for the same thing — asks for too. Thai and Chinese are justified this way,
+// and so is a line with no space in it at all: "XX" in a box twice its width is
+// one X at each edge, which is what the suite's inter-character-001 draws with a
+// float and asks this to match.
+//
+// The extra is returned rather than folded into the items, because it has to
+// reach the *drawing* as well as the measure. A backend advances the pen by each
+// glyph's own width plus the run's letter-spacing, so putting the slack there is
+// what makes the glyphs land where the widths say they will — the same reason
+// TextRun.LetterSpacing exists at all.
+//
+// The count is one short of the units on the line, because the opportunity is
+// *between* a pair: n units offer n-1 of them. The trailing extra that
+// letter-spacing adds after the last unit falls past the end of the line, where
+// nothing follows it and nobody sees it.
+func (l *layouter) justifyBetweenCharacters(items []inlineItem, xs, widths []style.Unit,
+	hangs []bool, slack style.Unit) (style.Unit, bool) {
+
+	if slack <= 0 || len(items) == 0 {
+		return 0, false
+	}
+	order := make([]int, len(items))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(a, b int) bool { return xs[order[a]] < xs[order[b]] })
+
+	// The same two exclusions the word method makes: white space hanging past
+	// the end of the line is not on the page, and nothing at or before a
+	// preserved tab may move or the tab stops stop lining up.
+	lastTab := -1
+	for i, k := range order {
+		if items[k].Tab {
+			lastTab = i
+		}
+	}
+	units := func(i, k int) int {
+		if i <= lastTab || hangs[k] {
+			return 0
+		}
+		if items[k].Atomic != nil || items[k].AtomicBox != nil {
+			// A picture is a character unit: the slack goes round it as it goes
+			// round a letter.
+			return 1
+		}
+		if items[k].Face == nil || items[k].Text == "" {
+			return 0
+		}
+		return paragraph.SpacedUnits(items[k].Text)
+	}
+	total := 0
+	for i, k := range order {
+		total += units(i, k)
+	}
+	if total < 2 {
+		// One unit offers no opportunity, and none offers none.
+		return 0, false
+	}
+	extra := slack.Div(float64(total - 1))
+	if extra <= 0 {
+		return 0, false
+	}
+
+	var acc style.Unit
+	for i, k := range order {
+		xs[k] = xs[k].Add(acc)
+		n := units(i, k)
+		if n == 0 {
+			continue
+		}
+		grew := extra.Mul(float64(n))
+		widths[k] = widths[k].Add(grew)
+		acc = acc.Add(grew)
+	}
+	return extra, true
 }

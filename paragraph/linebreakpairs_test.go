@@ -199,6 +199,72 @@ func TestAnywhereOverrulesThePairRules(t *testing.T) {
 	}
 }
 
+// TestAnywhereOverrulesTheNoBreakSpaceSeparators is the same exemption, one
+// character class over, and it is a different code path.
+//
+// U+2007 FIGURE SPACE and U+202F NARROW NO-BREAK SPACE are *other space
+// separators* — §4.1.2 hangs them at the end of a line like any other space —
+// and they are class GL, so UAX #14 offers no opportunity after them. That
+// combination is read where the separators are split off, and it was read
+// without asking whether §5.3 had overruled it: "XX\u202FX" under
+// line-break: anywhere offered no break at all after the separator, so a box
+// three characters wide set all four on one line and let the fourth overflow.
+//
+// The suite writes it as line-break-anywhere-overrides-uax-behavior-008, whose
+// title is the rule in as many words: "line-break: anywhere overrides behavior
+// defined for the WJ, ZW, GL, and ZWJ classes".
+func TestAnywhereOverrulesTheNoBreakSpaceSeparators(t *testing.T) {
+	anywhere, unhandled := LineBreakOf("anywhere")
+	if unhandled != "" {
+		t.Fatalf("anywhere was reported as unhandled: %q", unhandled)
+	}
+	for _, tc := range []struct {
+		what string
+		r    rune
+	}{
+		{"a narrow no-break space", 0x202F},
+		{"a figure space", 0x2007},
+	} {
+		text := "XX" + string(tc.r) + "X"
+		got := splitsWith(t, text, WordBreak{}, anywhere)
+		want := "X|X|" + string(tc.r) + "|X"
+		if got != want {
+			t.Errorf("%s: %q, want %q — §5.3 puts an opportunity around every "+
+				"typographic character unit, and the glue classes are named as "+
+				"among what it overrules", tc.what, got, want)
+		}
+	}
+}
+
+// TestTheGlueSeparatorsStillHoldWithoutAnywhere is the containment case, and it
+// is the whole reason the two are read apart rather than together.
+//
+// A figure space is what keeps a column of digits from being split across two
+// lines and a narrow no-break space is a no-break space by name. Offering a
+// break after either of them by default would undo the one thing each is for.
+func TestTheGlueSeparatorsStillHoldWithoutAnywhere(t *testing.T) {
+	for _, tc := range []struct {
+		what string
+		r    rune
+		want string
+	}{
+		{"a narrow no-break space", 0x202F, "XX X"},
+		{"a figure space", 0x2007, "XX X"},
+		// An en space is class BA and does offer one, so this is about the two
+		// no-break separators and not about separators in general.
+		{"an en space", 0x2002, "XX |X"},
+		// And an ideographic space is class ID. The break before it is the one
+		// UAX #14's LB7 withholds — a line may not end in front of white space —
+		// so what is left is the one after it, which is the half this is about.
+		{"an ideographic space", 0x3000, "XX　|X"},
+	} {
+		got := splitsWith(t, "XX"+string(tc.r)+"X", WordBreak{}, LineBreak{})
+		if got != tc.want {
+			t.Errorf("%s: %q, want %q", tc.what, got, tc.want)
+		}
+	}
+}
+
 // splitsWith is splits with a line-break value as well.
 func splitsWith(t *testing.T, text string, wb WordBreak, lb LineBreak) string {
 	t.Helper()

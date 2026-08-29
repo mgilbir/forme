@@ -140,3 +140,51 @@ func TestNoBreakBeforeASpaceAfterAnAtomicInline(t *testing.T) {
 			got.Px(), want.Px())
 	}
 }
+
+// TestACombiningMarkHoldsOnToAnAtomicInline is §5.1's exception, extended to a
+// class its sentence does not name.
+//
+// The sentence names GL, WJ and ZWJ, and a combining mark is none of them. What
+// reaches it is UAX #14's LB9 — "do not break a combining character sequence;
+// treat it as if it were the base character" — and §5.1's other sentence, which
+// makes an atomic inline "equivalent to" U+FFFC for line breaking: a mark beside
+// one is a mark beside a character, and a line may not begin at it or end before
+// it.
+//
+// The suite writes it as line-breaking-atomic-016 and -017, one for each side,
+// with U+034F COMBINING GRAPHEME JOINER — the character an author writes for
+// precisely this, to say that what it stands between is one thing.
+func TestACombiningMarkHoldsOnToAnAtomicInline(t *testing.T) {
+	const css = noDefaults + `
+	div { font-family: Courier; font-size: 20px; width: 100px }
+	span { display: inline-block; width: 90px; height: 10px }`
+
+	// A 90px box after one 12px character in a 100px line: the two do not fit
+	// together. With a joiner between them they may not be parted, so the line
+	// overflows rather than breaking.
+	for _, tc := range []struct{ what, html string }{
+		{"the mark before the box", `<div id="d">A&#x034F;<span id="a"></span></div>`},
+		{"the mark after the box", `<div id="d"><span id="a"></span>&#x034F;A</div>`},
+	} {
+		root := layoutOf(t, 300, tc.html, css)
+		if d := find(t, root, "d"); len(d.Lines) != 1 {
+			t.Errorf("%s: the block has %d lines, want 1 — a combining grapheme "+
+				"joiner may not be parted from what it joins:\n%s",
+				tc.what, len(d.Lines), sketchFragments(root))
+		}
+	}
+
+	// And without the joiner the same content does break, so this is about the
+	// mark and not about a box that never wraps.
+	for _, tc := range []struct{ what, html string }{
+		{"no mark, box after the letter", `<div id="d">A<span id="a"></span></div>`},
+		{"no mark, letter after the box", `<div id="d"><span id="a"></span>A</div>`},
+	} {
+		root := layoutOf(t, 300, tc.html, css)
+		if d := find(t, root, "d"); len(d.Lines) != 2 {
+			t.Errorf("%s: the block has %d lines, want 2 — §5.1 puts an opportunity "+
+				"on each side of an atomic inline:\n%s",
+				tc.what, len(d.Lines), sketchFragments(root))
+		}
+	}
+}

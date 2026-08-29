@@ -47,22 +47,35 @@ const (
 // paragraph decides its own, and each has to be aligned against the one it was
 // set in or a paragraph of Hebrew would be flush against the left edge of a
 // block the algorithm just set right to left.
+// It reads text-align-all and not text-align. The two are the same declaration
+// as far as an author is concerned — "text-align" is the shorthand — and the
+// longhand is what the cascade leaves behind. See style/property.go, where the
+// split is argued.
 func alignmentOf(b *Box, rtl bool) textAlign {
 	// The direction a value that never becomes physical is resolved against.
 	// It is the one the line was set in and it does not move as the walk below
 	// climbs, which is the whole of the root case — see matchParent.
-	logical := rtl
+	return alignmentFrom(b, rtl, rtl)
+}
+
+// alignmentFrom is that walk with the two directions given separately, for the
+// one caller that cannot derive the second from the first.
+//
+// rtl is the direction the *value* is resolved against and moves as the walk
+// climbs. logical is the direction the *line* was set in and does not, which is
+// what a walk that runs off the top of the tree has to fall back to.
+//
+// They are the same for text-align, whose walk starts at the box the line is in.
+// text-align-last: match-parent starts one box up — the parent is what it
+// matches — and the line is still the child's, so the two part company there.
+func alignmentFrom(b *Box, rtl, logical bool) textAlign {
 	for {
-		switch strings.ToLower(strings.TrimSpace(b.Style["text-align"])) {
+		switch strings.ToLower(strings.TrimSpace(b.Style["text-align-all"])) {
 		case "right":
 			return alignRight
 		case "center":
 			return alignCenter
-		case "justify", "justify-all":
-			// justify-all is CSS Text 3's shorthand value for "justify every
-			// line, the last one included". Every line but the last is
-			// justified either way; which of the two was written is what
-			// lineAlignment reads when the line *is* the last.
+		case "justify":
 			return alignJustify
 		case "end":
 			return endAlignment(rtl)
@@ -139,25 +152,45 @@ func endAlignment(rtl bool) textAlign {
 // all, and which value to report as unhandled if it asked for a method this
 // engine does not have.
 //
-// §7.3 has five values and this engine performs one of them. "auto" is
+// §7.3 has five values and this engine performs three of them. "auto" is
 // deliberately left to the user agent — the specification says so — and
 // spreading the word spaces is what every engine does for text that has word
 // spaces, which is what "inter-word" names explicitly. "none" is the one value
-// that changes the answer rather than the method, and it is acted on.
+// that changes the answer rather than the method.
 //
 // "inter-character" and "distribute" put the slack between *letters* as well,
-// which is how Thai and Chinese are justified and is not a variation on this:
-// it needs the slack apportioned inside a run and the run re-drawn glyph by
-// glyph. They are reported rather than approximated, because a page justified
-// between the wrong things looks deliberate.
-func justificationOf(b *Box) (allowed bool, unhandled string) {
+// which is how Thai and Chinese are justified. "distribute" is the older name
+// for the same method and §7.3 says so, so the two are one answer here.
+//
+// The remaining value, "inter-word" aside, is "auto"'s tailoring per script,
+// which this does not attempt: a document that says nothing gets the word
+// spaces, and one that names a method gets that method.
+
+// justifyMethod is which things a justified line is stretched between.
+type justifyMethod int
+
+const (
+	// justifyNone is "text-justify: none": the line is placed at its start edge
+	// and not stretched at all.
+	justifyNone justifyMethod = iota
+	// justifyWords spreads the slack over the word spaces, which is what "auto"
+	// and "inter-word" ask for.
+	justifyWords
+	// justifyCharacters spreads it between every pair of typographic character
+	// units, which is "inter-character" and its older name "distribute".
+	justifyCharacters
+)
+
+func justificationOf(b *Box) (method justifyMethod, unhandled string) {
 	switch v := strings.ToLower(strings.TrimSpace(b.Style["text-justify"])); v {
 	case "none":
-		return false, ""
+		return justifyNone, ""
 	case "", "auto", "inter-word":
-		return true, ""
+		return justifyWords, ""
+	case "inter-character", "distribute":
+		return justifyCharacters, ""
 	default:
-		return true, v
+		return justifyWords, v
 	}
 }
 
@@ -187,7 +220,7 @@ func lineAlignment(b *Box, rtl, last bool) (align textAlign, spread bool) {
 	// A justified line is placed where its start edge is and stretched from
 	// there. text-justify: none asks for the placement without the stretching,
 	// which leaves an ordinary line at its start edge.
-	if allowed, _ := justificationOf(b); !allowed {
+	if m, _ := justificationOf(b); m == justifyNone {
 		return startAlignment(rtl), false
 	}
 	return alignJustify, true
@@ -209,16 +242,25 @@ func lastLineAlignment(b *Box, rtl bool) textAlign {
 		return endAlignment(rtl)
 	case "justify":
 		return alignJustify
+	case "match-parent":
+		// The same value §7.1 gives text-align, and it means the same thing
+		// here: the *parent's* alignment, with start and end made physical
+		// against the parent's direction. So the walk alignmentOf already does
+		// is the answer, started one box up.
+		//
+		// It is how "text-align: justify-all" and "text-align: match-parent"
+		// differ from every other value of the shorthand — both set this
+		// longhand too — and it is why the last line of
+		// text-align-match-parent-05 stays matched to its parent after
+		// text-align-all is overridden on the same element.
+		if b.Parent == nil {
+			return startAlignment(rtl)
+		}
+		return alignmentFrom(b.Parent, isRTL(b.Parent), rtl)
 	}
 	// auto, and anything unrecognised. §7.2: "content on the affected line is
 	// aligned per text-align-all unless text-align-all is justify, in which
 	// case it is aligned per the start value of text-align".
-	//
-	// justify-all is the exception: it is the spelling that asks for the last
-	// line as well, and is the whole difference between the two.
-	if strings.EqualFold(strings.TrimSpace(b.Style["text-align"]), "justify-all") {
-		return alignJustify
-	}
 	if a := alignmentOf(b, rtl); a != alignJustify {
 		return a
 	}
@@ -228,10 +270,11 @@ func lastLineAlignment(b *Box, rtl bool) textAlign {
 // alignLine returns how far a line's content moves within the width it was given.
 //
 // used is the width the content actually occupies with its hanging white space
-// already discounted. A line at least as wide as the space it has does not move:
-// an overfull line overflows to the right whatever the alignment says, because
-// moving it would push it off the other edge as well.
-func (l *layouter) alignLine(b *Box, align textAlign, lineWidth, used style.Unit) style.Unit {
+// already discounted. A line wider than the space it has overflows past the
+// block's *end* edge whatever the alignment says, because moving it would push
+// it off the start edge as well — and which edge is which is the direction's
+// answer, not the property's.
+func (l *layouter) alignLine(b *Box, align textAlign, rtl bool, lineWidth, used style.Unit) style.Unit {
 	slack := lineWidth.Sub(used)
 	// A justified line starts where "start" would put it, and the slack is then
 	// spread across its spaces by justifyLine, which is the caller's next step
@@ -239,6 +282,25 @@ func (l *layouter) alignLine(b *Box, align textAlign, lineWidth, used style.Unit
 	// to do here for it, and nothing to report either: the report belongs to the
 	// case justifyLine cannot handle, and only that call knows which lines those
 	// are.
+	// Where the overflow can be scrolled to, an overfull line is pinned to the
+	// block's *start* edge whatever the alignment says: what goes off that edge
+	// is unreachable, because scrolling only ever reaches the other way. The
+	// suite says so in the assert of trailing-space-and-text-alignment-002 —
+	// preserved spaces under "pre" do not hang, so they "may cause overflow and
+	// activate the scrollbars" — and a textarea that pushed its own text off
+	// its start edge would be a box whose content no reader could get to.
+	//
+	// Which edge that is comes from the direction and not from the alignment,
+	// and that is the half this had missing. In a right-to-left block the start
+	// edge is the *right*, so all five of the suite's alignments put an
+	// overfull line's right edge against the block's own and let it run off to
+	// the left — which is what the rtl-002 and rtl-004 references draw, five
+	// boxes with their text in the same place and five different text-aligns
+	// above them.
+	if slack < 0 && overflowIsScrollable(b.Style) {
+		return startEdge(rtl, slack)
+	}
+
 	switch align {
 	case alignRight:
 		// The slack may be negative, and then this is the whole of what the
@@ -249,28 +311,17 @@ func (l *layouter) alignLine(b *Box, align textAlign, lineWidth, used style.Unit
 		// like — sets such a line flush *left* instead, so it overflows the way
 		// a left-aligned one would and the two alignments become the same
 		// declaration for exactly the text that most needs them apart.
-		if slack < 0 && overflowIsScrollable(b.Style) {
-			// Except where the overflow can be scrolled to, and then it cannot:
-			// what goes off the *start* edge of a scrollable box is unreachable,
-			// because scrolling only ever reaches the other way. The suite says
-			// so in the assert of trailing-space-and-text-alignment-002 —
-			// preserved spaces under "pre" do not hang, so they "may cause
-			// overflow and activate the scrollbars" — and a right-aligned
-			// textarea that pushed its own text off the left would be a box
-			// whose content no reader could get to.
-			return 0
-		}
 		return slack
 	case alignCenter:
 		if slack <= 0 {
-			// Centring a line that does not fit would push it off the *start*
+			// Centring a line that does not fit would push it off the start
 			// edge as well, and what goes off that edge is unreachable rather
 			// than merely outside — there is no scrolling back to it on a page.
 			// So an overfull centred line is left where it starts and overflows
 			// one way, which is what TestTextAlignDoesNotMoveAnOverfullLine
 			// pins and what the suite's trailing-space-and-text-alignment pairs
 			// agree with.
-			return 0
+			return startEdge(rtl, slack)
 		}
 		// Half the slack, in layout units rather than pixels, so a line with an
 		// odd number of units left over is not rounded twice.
@@ -340,4 +391,14 @@ func hangingTail(runs []inlineItem) []bool {
 		hangs[i] = true
 	}
 	return hangs
+}
+
+// startEdge is the offset that puts an overfull line against the block's start
+// edge: none at all where the line starts on the left, and the whole of the
+// negative slack where it starts on the right.
+func startEdge(rtl bool, slack style.Unit) style.Unit {
+	if rtl {
+		return slack
+	}
+	return 0
 }

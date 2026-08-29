@@ -93,6 +93,23 @@ type ReplacedContent struct {
 	// size, one image pixel to one CSS pixel.
 	Width, Height style.Unit
 
+	// WidthPercent and HeightPercent are the dimensions an SVG states as a
+	// percentage, as a fraction, and are zero when it states none.
+	//
+	// They are not intrinsic dimensions and are kept apart from Width and
+	// Height for that reason: CSS Images §5.4 makes a percentage "no intrinsic
+	// dimension" for everything that asks whether the image has one, and then
+	// resolves it against the *default object size* when there is a concrete
+	// one to resolve against. For a background layer that is the positioning
+	// area, which is where they are read — see tileSize. Nothing else reads
+	// them, so an <img> holding such a file is sized as it always was.
+	//
+	// background-intrinsic-006 is what needs them: an SVG of "width: 40%;
+	// height: 60%" in an eighty-by-a-hundred positioning area is thirty-two by
+	// sixty, and the test covers exactly that rectangle with a green box and
+	// asks for no red anywhere.
+	WidthPercent, HeightPercent float64
+
 	// Ratio is the intrinsic ratio, width divided by height, and is zero when
 	// there is none. It is kept as a number rather than recomputed from the two
 	// dimensions because CSS 2.1 §10.3.2 distinguishes an element that has a
@@ -134,11 +151,18 @@ type ReplacedContent struct {
 	// stretched picture would make the two compare unequal while looking
 	// identical.
 	Solid *style.RGBA
+
+	// Bands is set when the content is a linear gradient whose colour never
+	// interpolates, and is then the stripes it paints. Like Solid it carries no
+	// pixels, and unlike Solid it needs a size before it is a picture: where a
+	// band's edges fall depends on how long the gradient line is. See
+	// gradient.go.
+	Bands *bandedGradient
 }
 
 // Paints reports whether this content puts anything on the page.
 func (r *ReplacedContent) Paints() bool {
-	return r != nil && (r.Image != nil || r.Solid != nil || r.SVG != nil)
+	return r != nil && (r.Image != nil || r.Solid != nil || r.SVG != nil || r.Bands != nil)
 }
 
 // replacedLoader turns the references in a box tree into loaded content.
@@ -295,37 +319,68 @@ func (l *replacedLoader) image(b *Box) {
 	b.Replaced = content
 }
 
-// object reports an <object> whose data was not embedded.
+// object gives an <object> the picture its data names, or reports that it could
+// not and lays out the fallback content instead.
 //
-// Nothing here embeds one, and nothing is going to: an <object> names a
-// resource to be handed to a plugin, a nested browsing context or an image
-// decoder chosen by a media type, and the first two are what §4.1 refuses
-// outright. What HTML then says is exactly what this engine does — an object
-// whose data cannot be used is represented by its *fallback content*, which is
-// the element's children and is ordinary markup — so the element is laid out
-// like any other box and its children are on the page.
+// HTML §4.8.7 hands the resource to a plugin, a nested browsing context or an
+// image decoder, and which of the three depends on what arrived. The first two
+// are what §4.1 of the proposal refuses outright — a plugin is arbitrary code
+// and a browsing context is a document of its own — but the third is the same
+// decoder <img> already uses, so an <object> naming a picture is a picture. The
+// suite's replaced-intrinsic-001 to -005 are five of them, and every one is an
+// SVG or a PNG.
 //
-// The finding is the half that matters. The children of an <object> are what an
-// author wrote for the case where the object could not be shown, so a page that
-// draws them is a page that is deliberately showing its second choice, and a
-// caller has to be able to know that rather than to infer it from a paragraph
-// reading "your browser cannot show this".
+// Where the data cannot be decoded, HTML says the element is represented by its
+// *fallback content*, which is its children and is ordinary markup — so the box
+// is laid out like any other and the children are on the page. The finding is
+// the half that matters there: the children of an <object> are what an author
+// wrote for the case where the object could not be shown, so a page that draws
+// them is deliberately showing its second choice, and a caller has to be able to
+// know that rather than infer it from a paragraph reading "your browser cannot
+// show this".
 //
 // An <object> with no data names nothing, so there is nothing to have failed and
 // nothing to report: it is a box holding its children, and that is all it ever
 // was.
 func (l *replacedLoader) object(b *Box) {
 	data, ok := b.Element.Attr("data")
-	if !ok || strings.TrimSpace(data) == "" {
+	data = strings.TrimSpace(data)
+	if !ok || data == "" {
 		return
 	}
+	if got, ok := l.loaded[data]; ok {
+		b.Replaced = got
+		return
+	}
+	if l.failed[data] {
+		l.fallbackTo(b, nil, data)
+		return
+	}
+	content, why := l.load(data, "object")
+	if content == nil {
+		l.failed[data] = true
+		l.fallbackTo(b, why, data)
+		return
+	}
+	l.loaded[data] = content
+	b.Replaced = content
+}
+
+// fallbackTo says an object's data could not be used, so what is on the page is
+// the markup the author wrote for that case.
+func (l *replacedLoader) fallbackTo(b *Box, fail *loadFailure, data string) {
+	msg := "the object at " + quoteValue(data) + " was not embedded, so the " +
+		"element's fallback content was laid out in its place"
+	rule := RuleResourceBlocked
+	if fail != nil {
+		msg = fail.message + "; the element's fallback content was laid out in its place"
+		rule = fail.rule
+	}
 	l.rec.ReportDetail(Finding{
-		Rule:   RuleResourceBlocked,
-		Source: AtHTML(b.Element.Offset),
-		Message: "the object at " + quoteValue(strings.TrimSpace(data)) +
-			" was not embedded: this engine embeds no objects, so the element's " +
-			"fallback content was laid out in its place",
-		Path: PathOf(b.Element),
+		Rule:    rule,
+		Source:  AtHTML(b.Element.Offset),
+		Message: msg,
+		Path:    PathOf(b.Element),
 	})
 }
 
@@ -713,8 +768,8 @@ func (l *replacedLoader) altOnly(b *Box) {
 	if !ok {
 		return
 	}
-	text := collapseWhitespace(alt, b.Style["white-space-collapse"],
-		wordSpaceTransformValue(b.Style))
+	text := collapseWhitespaceAfter(alt, b.Style["white-space-collapse"],
+		wordSpaceTransformValue(b.Style), textBoundary{}, writingSystemAt(b.Element))
 	if strings.TrimSpace(text) == "" {
 		// alt="" is a deliberate statement that the image carries no
 		// information, and generating a box for it would put a space on the
@@ -723,7 +778,8 @@ func (l *replacedLoader) altOnly(b *Box) {
 	}
 	child := &Box{
 		Outer: OuterInline, Inner: InnerText,
-		Style: b.Style, Text: text, FontSize: b.FontSize, Parent: b,
+		Style: b.Style, Text: text, FontSize: b.FontSize,
+		fontSizeKnown: b.fontSizeKnown, Parent: b,
 	}
 	b.Children = append(b.Children, child)
 }

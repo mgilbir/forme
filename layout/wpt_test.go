@@ -797,9 +797,11 @@ const wptEnv = "WPT_TESTS"
 //     tree builder drops the line feed immediately after a <pre> start tag and
 //     this engine now does too, which is right for HTML and wrong for this file:
 //     it is XHTML, where there is no such rule, and its reference is drawn for a
-//     <pre> seven lines tall. The harness already adapts these documents in one
-//     place (see cdataRe); this is a second place where reading XHTML as HTML
-//     shows, and it is reported rather than worked around. Measured on its own,
+//     <pre> seven lines tall. The harness adapted these documents in one other
+//     place at the time — it stripped their CDATA sections before the parser saw
+//     them, which the parser now reads itself — and this is a second place where
+//     reading XHTML as HTML shows. It is reported rather than worked around.
+//     Measured on its own,
 //     the newline rule is worth exactly this: −1 clean, +1 failure, no other test
 //     either way.
 //   - textarea-always-preserves-spaces-001.tentative was passing because neither
@@ -992,7 +994,7 @@ const wptEnv = "WPT_TESTS"
 // property". The engine looked for it among the word-break values, found
 // nothing, and did nothing — without reporting it either, which is what made it
 // silent. See layout/overflowwrap_test.go.
-const wptCleanPassBaseline = 5550
+const wptCleanPassBaseline = 5723
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
@@ -1173,20 +1175,19 @@ func findReftests(t *testing.T, root string) []reftest {
 	return out
 }
 
-// cdataRe matches the CDATA wrapper an XHTML document puts around its CSS.
+// The harness used to strip the CDATA wrapper an XHTML document puts round its
+// CSS, on the grounds that the engine read HTML and should not learn XML syntax
+// to suit a test suite. It reads XML now — looksLikeXML decides, and a CDATA
+// section inside raw text is literal, which is what the markers ask for — so the
+// documents are handed over as they are written.
 //
-// The suite's older tests are .xht, which a browser parses as XML — and XML
-// strips a CDATA section before the CSS is ever seen. This engine reads HTML,
-// where <style> is raw text and the wrapper would be handed to the CSS parser
-// as though it were a rule.
-//
-// Stripping it here rather than in the engine is deliberate: the engine reads
-// HTML and should not learn XML syntax to suit a test suite. This is the harness
-// adapting the input, and it is the sort of adjustment that has to be visible.
-//
-// It was found by the vacuous-pass check failing to do its job — see the note on
-// clean passes below.
-var cdataRe = regexp.MustCompile(`(?s)<!\[CDATA\[(.*?)\]\]>`)
+// The difference is not only tidiness. Stripping the markers changed what the
+// document *means*: a reference inside a CDATA section is not a reference, and
+// with the markers gone "&#x46;" was resolved to a letter. CSS2/generated-
+// content/content-177 writes exactly that in a "content" string and asks for the
+// characters back. And the suite is now what checks the parser here: breaking
+// the CDATA branch of rawValue costs two and a half thousand clean passes, where
+// before it cost none at all.
 
 // emptyElementRe matches an XML empty-element tag: "<div/>", "<td class='x'/>".
 //
@@ -1345,7 +1346,7 @@ func renderForCompareDetail(root, file string) (ops []Op, findings []Finding, bl
 	if err != nil {
 		return nil, nil, false, err
 	}
-	src := cdataRe.ReplaceAllString(string(data), "$1")
+	src := string(data)
 	if ext := strings.ToLower(filepath.Ext(file)); ext == ".xht" || ext == ".xhtml" {
 		src = expandEmptyElements(src)
 	}
@@ -1942,6 +1943,42 @@ func TestWPTOracleHasTeeth(t *testing.T) {
 	if !pictureEqual(a, b, clip) {
 		t.Error("the same marks in a different order compared unequal")
 	}
+
+	// A run of text outside the page is not a mark, and one that reaches it is.
+	//
+	// A reftest compares what the page shows, and a document may lay text out
+	// far beyond the page's edges — "text-indent: -100000em" is five lines of
+	// the suite's text-indent-010 doing exactly that against a reference that
+	// simply does not write them. Counting such a run as a mark called two
+	// identical pages different.
+	//
+	// The half that matters more is the second: the filter is on the *ink*, so
+	// a run with one letter on the page is a mark and a difference in it is
+	// still a difference. Erring the other way would lose text off the edge of
+	// every page and call it agreement.
+	face, err := shape.Standard("Helvetica")
+	if err != nil {
+		t.Fatalf("loading Helvetica: %v", err)
+	}
+	text := func(x float64) []Op {
+		return []Op{DrawText{At: Point{X: u(x), Y: u(40)}, Text: "hello",
+			Face: face, Size: u(16), Color: red}}
+	}
+	if !pictureEqual(text(-100000), nil, clip) {
+		t.Error("a run a hundred thousand pixels to the left of the page was " +
+			"counted as a mark; nothing of it reaches the page")
+	}
+	if !pictureEqual(text(-100000), text(-200000), clip) {
+		t.Error("two runs, both far off the page, were called different pages")
+	}
+	if pictureEqual(text(-10), nil, clip) {
+		t.Error("a run overlapping the page's left edge was dropped; part of it " +
+			"is on the page and a page that shows it differs from one that does not")
+	}
+	if pictureEqual(text(20), text(21), clip) {
+		t.Error("two runs a pixel apart on the page were called the same page")
+	}
+
 }
 
 // TestSuiteResolverReachesTheSupportDirectory pins what the harness's resolver
@@ -2089,7 +2126,7 @@ func TestSuiteFontFaceLoadsAhem(t *testing.T) {
 	if err != nil {
 		t.Skipf("no such document in this checkout: %v", err)
 	}
-	src := cdataRe.ReplaceAllString(string(data), "$1")
+	src := string(data)
 	if !strings.Contains(src, "/fonts/ahem.css") {
 		t.Skipf("%s no longer links the Ahem stylesheet", doc)
 	}

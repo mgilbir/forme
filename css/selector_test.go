@@ -158,15 +158,22 @@ func TestPseudoNamesAreCaseInsensitive(t *testing.T) {
 	}
 
 	// The refusals fold too, or ":HOVER" slips through as an unknown name
-	// rather than being named as the interactive selector it is.
+	// rather than being named as the interactive selector it is. What the
+	// finding *claims* is checked in TestDynamicSelectorsAreRefusedAndSaidSo;
+	// what matters here is that the name was recognised, which is the difference
+	// between the message naming the medium and the message naming a typo.
 	for _, input := range []string{"a:HOVER", "a:Hover", "a::SELECTION"} {
 		_, errs, ok := parseSel(t, input)
 		if ok {
 			t.Errorf("%q was accepted", input)
 			continue
 		}
-		if len(errs) == 0 || !errs[0].Unsupported {
-			t.Errorf("%q was not reported as unsupported: %v", input, errs)
+		if len(errs) == 0 {
+			t.Errorf("%q was refused with no explanation", input)
+			continue
+		}
+		if strings.Contains(errs[0].Message, "no such") {
+			t.Errorf("%q was reported as an unknown name: %q", input, errs[0].Message)
 		}
 	}
 
@@ -333,12 +340,47 @@ func TestDynamicSelectorsAreRefusedAndSaidSo(t *testing.T) {
 			t.Errorf("%q was refused with no explanation", input)
 			continue
 		}
-		// It has to be reported as unsupported rather than as malformed: the
-		// author wrote correct CSS, and telling them it is a syntax error sends
-		// them looking for a typo that is not there.
-		if !errs[0].Unsupported {
-			t.Errorf("%q was reported as malformed (%q), and it is correct CSS "+
-				"this engine chooses not to apply", input, errs[0].Message)
+		// The name has to be recognised rather than read as a typo: the author
+		// wrote correct CSS, and telling them it is a syntax error sends them
+		// looking for something that is not there.
+		if strings.Contains(errs[0].Message, "no such") {
+			t.Errorf("%q was reported as an unknown name (%q), and it is correct "+
+				"CSS this engine chooses not to apply", input, errs[0].Message)
+		}
+	}
+
+	// Whether the finding *claims the page is wrong* is a second question, and
+	// the answer is not the same for all of them.
+	//
+	// Nobody hovers a printed page, so ":hover" selects nothing there and a
+	// browser printing the same page applies it exactly as little: the page is
+	// the one CSS describes, and saying otherwise makes a document with a
+	// perfectly ordinary stylesheet look defective.
+	for _, input := range []string{
+		"a:hover", "a:focus", "a:active", "a:focus-within", ":target",
+		":fullscreen", "a::selection", "p::backdrop",
+	} {
+		_, errs, _ := parseSel(t, input)
+		if len(errs) > 0 && errs[0].Unsupported {
+			t.Errorf("%q was reported as unsupported (%q); nothing is missing from "+
+				"the page, the rule simply selects nothing here",
+				input, errs[0].Message)
+		}
+	}
+
+	// But "<input disabled>" is disabled on paper as much as on screen, so
+	// ":disabled { color: grey }" asks for grey text that is not there. That is
+	// a gap in this engine and is claimed as one.
+	for _, input := range []string{
+		"input:checked", "input:disabled", "input:enabled", "input:valid",
+		"input:placeholder-shown", "input:required", ":defined",
+		"input::placeholder",
+	} {
+		_, errs, _ := parseSel(t, input)
+		if len(errs) == 0 || !errs[0].Unsupported {
+			t.Errorf("%q was not reported as unsupported; the markup answers it "+
+				"and this engine does not, so the page is missing what it asked "+
+				"for: %v", input, errs)
 		}
 	}
 

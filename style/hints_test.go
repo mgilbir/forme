@@ -226,9 +226,26 @@ func TestFontSizeAttributeIsTheSevenStepScale(t *testing.T) {
 		// Leading and trailing space, as every other hint allows.
 		{"  5  ", "x-large"},
 	} {
-		got := computed(t, `<font id="f" size="`+tc.attr+`">x</font>`)
-		if s := got["f"]["font-size"]; s != tc.want {
-			t.Errorf("size=%q gave font-size %q, want %q", tc.attr, s, tc.want)
+		got, ok := fontSizeValue(tc.attr)
+		if !ok {
+			t.Errorf("size=%q was refused; it is a step of the scale", tc.attr)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("size=%q gave font-size %q, want %q", tc.attr, got, tc.want)
+		}
+	}
+
+	// And the keyword reaches the computed style as the length it means. It is
+	// asked here rather than above because a computed font-size is an absolute
+	// length — see computed.go — so the seven keywords arrive as seven numbers,
+	// and asserting the scale on those would be asserting two things at once.
+	for _, tc := range []struct{ attr, want string }{
+		{"1", "10px"}, {"3", "16px"}, {"7", "48px"},
+	} {
+		cs := computed(t, `<font id="f" size="`+tc.attr+`">x</font>`)
+		if s := cs["f"]["font-size"]; s != tc.want {
+			t.Errorf("size=%q computed to %q, want %q", tc.attr, s, tc.want)
 		}
 	}
 }
@@ -237,10 +254,17 @@ func TestFontSizeAttributeIsTheSevenStepScale(t *testing.T) {
 // follows: a value this cannot read must not become one it guessed at.
 func TestAnUnreadableFontSizeIsIgnored(t *testing.T) {
 	for _, attr := range []string{"", " ", "large", "5px", "5.5", "3em", "+", "-", "1x", "x1"} {
-		got := computed(t, `<font id="f" size="`+attr+`">x</font>`)
-		if s := got["f"]["font-size"]; s == "" {
+		if got, ok := fontSizeValue(attr); ok {
+			t.Errorf("size=%q was read as %q; it is not a size", attr, got)
+		}
+		// And nothing reached the element, so the initial value stands. It is
+		// 16px rather than "medium" because a computed font-size is an absolute
+		// length; the two are the same value written two ways, and the
+		// assertion above is what tells "ignored" from "read as medium".
+		cs := computed(t, `<font id="f" size="`+attr+`">x</font>`)
+		if s := cs["f"]["font-size"]; s == "" {
 			t.Errorf("size=%q left no font-size at all", attr)
-		} else if s != "medium" {
+		} else if s != "16px" {
 			t.Errorf("size=%q gave font-size %q; it is not a size and the initial "+
 				"value should stand", attr, s)
 		}

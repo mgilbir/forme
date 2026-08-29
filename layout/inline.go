@@ -186,6 +186,18 @@ func heldFragment(r itemRef) *Fragment {
 // fit, alignment, or justification", and the fit has already happened. textalign.go
 // has the rest of that argument.
 func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, origin flow) style.Unit {
+	// css-text-5's text-fit, read before anything is measured because the size
+	// the text is set in is what every measurement below is of. The factor is
+	// not known yet: it comes from the lines, so the first pass is made at the
+	// declared size and the loop is run again once there is an answer.
+	fit, unhandledFit := textFitOf(b)
+	if unhandledFit != "" {
+		l.reportTextFit(b, unhandledFit)
+	}
+	fitScale, fitPending := 1.0, fit.consistent()
+
+	fitWant := 0.0
+
 	st := l.strutFor(b)
 	// The block container is one bidi paragraph — or several, where it holds a
 	// forced break — and its own unicode-bidi may wrap the whole of it in an
@@ -215,8 +227,14 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	// Before any line is filled, because the context changes what a cursive
 	// letter is and therefore how wide it is, and a line filled from widths
 	// measured without it is filled to the wrong widths.
-	items = l.linkShapingContext(items)
-
+	//
+	// And after the cutting below, because a cut is the one thing in this whole
+	// sequence that *makes* a boundary. Everything else here reads the items and
+	// leaves their text alone; hangPunctuation takes a character off the end of a
+	// run and stands it up as a run of its own, and the two halves have to be told
+	// about each other or the pair measures wider apart than it did together. In
+	// NotoSansJP "す。" is 4.8em and not 5, because the face kerns the two.
+	//
 	// §8.4's hanging punctuation, cut out of the runs at the two ends of the
 	// block's content before anything is measured against a line: a hanging
 	// character is one that does not count, and what does not count has to be
@@ -226,31 +244,63 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		l.reportHangingPunctuation(b, unhandledHang)
 	}
 	items = l.hangPunctuation(items, hp)
+	items = l.linkShapingContext(items)
 	// §8.2's spacing at an element boundary, which is the innermost element
 	// containing both characters rather than either character's own. It changes
 	// the width of a run, so it has to be settled before any line is filled.
 	items = l.linkLetterSpacing(items)
+	// §8.1's ideograph spacing, after the letter-spacing boundary rule and for
+	// the same reason it is a pass over the finished items: both are gaps
+	// *between* two runs, and neither can be decided while one of them is still
+	// being built. They add to the same width and are independent — a document
+	// that sets letter-spacing across an ideograph boundary gets both.
+	items = l.insertAutospace(items)
 	// A float written after an absolutely positioned box still begins a line.
 	// See floatsBeforeOutOfFlow.
 	items = floatsBeforeOutOfFlow(items)
+
+	// §5.12.1's ::first-line, which is not a box and cannot be one: it changes
+	// the type the first line is *set* in, so it has to reach the breaking. The
+	// second list is parallel to the first — same length, same order, same item
+	// at every index — which is what lets the line after the first continue from
+	// the ordinary items with nothing to map.
+	var firstItems []inlineItem
+	if b.FirstLine != nil && !b.afterTheFirstLine {
+		l.reportFirstLine(b)
+		if declared := l.firstLineDeclared(b); declared != nil {
+			firstItems = l.firstLineItems(items, b, declared)
+		}
+	}
 
 	lo, hi := origin.x, origin.x.Add(width)
 
 	// §16.1's indent, which applies to the first line box this container
 	// generates and to no other. It is resolved once: a percentage is of this
 	// box's own content width, which is the width being laid out in.
-	indent := l.textIndent(b, width)
+	indent, indentMode := l.textIndent(b, width)
 	// §8.4's "first", which is a negative indent and is applied as one: the
 	// first line begins that much further back and has that much more room, and
 	// the suite's own reference for it is written as "text-indent: -1em".
 	//
-	// It is added to the indent rather than replacing it, because the two are
-	// different requests and a document may make both — the last row of
+	// It is on the first line only, whichever lines the indent itself lands on,
+	// because that is what "hanging-punctuation: first" says — the first
+	// character of the first line hangs. So it is kept apart from the indent and
+	// added to whatever that line came to, rather than folded into the indent
+	// the way it was when only the first line could be indented at all. A
+	// document may make both requests: the last row of
 	// hanging-punctuation-first sets a positive text-indent and asks for the
 	// bracket to hang into it.
-	indent = indent.Sub(hangStartWidth(items))
-	firstLine := true
-	_ = firstLine
+	hangStart := hangStartWidth(items)
+	// The first line of *this box*, which is not the first line of the block
+	// when the box is an anonymous continuation — a block child splits its
+	// parent's inline content, and the run after it is not where the parent's
+	// indent goes. §7.1's "hanging" is why that is a flag and no longer an early
+	// return: those lines are not beginnings, and with "hanging" a line that is
+	// not a beginning is exactly the line that moves.
+	firstLine := !b.afterTheFirstLine
+	// Whether the line before this one ended at a forced break, which is the
+	// other kind of beginning "each-line" recognises.
+	afterForced := false
 
 	// CSS Overflow 4's line-clamp: how many more lines the clamps in force
 	// allow this block, and the room the mark will need on the last of them.
@@ -269,7 +319,16 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	// the *breaking* is done in the narrower measure. Narrowing the box itself
 	// would move a centred line and shorten a right-aligned one, which is a
 	// different rendering from the one balancing asks for.
-	balanceCaps := l.balanceCaps(b, items, width, indent)
+	// Balancing measures against the first line's indent, which is the one the
+	// breaker's own model has: it fills a line at a time from the start of the
+	// box. With "hanging" that line is not the indented one, so the number it
+	// wants is what the first line actually gets.
+	firstIndent := style.Unit(0)
+	if indentMode.indentsLine(firstLine, false) {
+		firstIndent = indent
+	}
+	firstIndent = firstIndent.Sub(hangStart)
+	balanceCaps := l.balanceCaps(b, items, width, firstIndent)
 	if balanceCaps != nil && clamped && maxLines > 0 {
 		// Balancing a clamped block is a different question, because the clamp
 		// has already decided how many lines there are: any width at all
@@ -277,7 +336,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		// asks nothing. What must not change is how much of the content is
 		// *shown* — §5.1 evens out the lines, it does not throw more away — so
 		// the search is over the reach instead. See balanceClampedWidth.
-		w := l.br.BalanceClampedWidth(items, width, indent, clampEllipsis, maxLines)
+		w := l.br.BalanceClampedWidth(items, width, firstIndent, clampEllipsis, maxLines)
 		for i := range balanceCaps {
 			balanceCaps[i] = w
 		}
@@ -326,14 +385,29 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	for pass := 0; ; pass++ {
 		y, iByte = 0, 0
 		bands = bands[:0]
-		firstLine = true
+		firstLine = !b.afterTheFirstLine
+		afterForced = false
 		balanceMetFloat = false
+		// The block's own strut is type like any other and is scaled with it.
+		// Under "line-height: normal" that is the whole of what makes a fitted
+		// line taller; under a declared one the height does not move and the
+		// half-leading inside it does, which is strutAt's business.
+		st = l.strutAt(b, b.FontSize.Mul(fitScale))
+		// What the widest line asked for, in this pass. Smallest wins: one
+		// factor over the whole block has to leave every line inside the box.
+		fitWant = 0
 		decor = inlineDecor{l: l, containing: width, strut: st}
 		for i := 0; i < len(items); {
 			// Where this pass started, so that the foot of the loop can tell whether
 			// it moved. Nothing in the body increments the cursor on its own: it is
 			// carried entirely by what breakOneLine hands back.
 			wasI, wasByte := i, iByte
+			// The items this line is broken from, which are the restyled ones
+			// only while the first line is still being made.
+			items := items
+			if firstLine && firstItems != nil {
+				items = firstItems
+			}
 			// A float that begins a line is placed before the line is measured,
 			// because it is one of the floats the line has to avoid. §9.5.1 rule 4
 			// puts its top at the top of the line box it belongs to.
@@ -364,8 +438,11 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			// right" first line end short of the right edge by the indent, which is
 			// the opposite of what §16.1 asks for.
 			lineIndent := style.Unit(0)
-			if firstLine {
+			if indentMode.indentsLine(firstLine, afterForced) {
 				lineIndent = indent
+			}
+			if firstLine {
+				lineIndent = lineIndent.Sub(hangStart)
 			}
 			// The room the ellipsis needs on this line, which is the last one the
 			// clamp allows and nothing before it.
@@ -417,7 +494,9 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					style.Min(right.Sub(left), lineCap(balanceCaps, lineCaps, i, len(parent.Lines))).
 						Sub(lineIndent).Sub(lineEllipsis),
 					left.Sub(lo).Add(lineIndent))
-				stack = stackLine(runs, st)
+				runs = l.fitRuns(runs, fitScale)
+				l.unkernLineEnd(runs)
+				stack = stackLine(runs, l.fitStrut(st, items, next, forced, fitScale))
 				lh, bl = stack.Height, stack.Baseline
 
 				// A float met part-way along the line is placed *now*, before the
@@ -512,6 +591,27 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				}
 			}
 
+			// css-text-5's per-line granularities, which need no second pass: the
+			// line is broken, and what it asks for is known as soon as it is.
+			// The strut goes with it — the block's own font is type on this line
+			// like any other, and a line shrunk to fit is not held open by type
+			// nobody set.
+			// The factor this line's own type is set at, which is the block's
+			// under "consistent" and the line's under the two per-line
+			// granularities. It travels as far as the inline boxes' ink: §10.6.1
+			// gives a box a content area the height of its font, and the font is
+			// being used at this size.
+			lineScale := fitScale
+			if f := l.perLineScale(fit, runs, right.Sub(left).Sub(lineIndent).Sub(lineEllipsis),
+				forced || next >= len(items)); f != 1 {
+				lineScale = f
+				runs = l.fitRuns(runs, f)
+				l.unkernLineEnd(runs)
+				stack = stackLine(runs, l.fitStrut(l.strutAt(b, b.FontSize.Mul(f)),
+					items, next, forced, f))
+				lh, bl = stack.Height, stack.Baseline
+			}
+
 			lineWidth := right.Sub(left)
 			if balanceCaps != nil && lineWidth < width {
 				balanceMetFloat = true
@@ -581,6 +681,17 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				// or right-aligned line of tracked text sits half a tracking
 				// width off.
 				used = used.Sub(trailingSpacing(runs))
+				if fitPending {
+					// css-text-5's "(A + B) / A": A is the type on the line and
+					// B what is left of the line's room once everything that is
+					// not type has taken its share.
+					if a := l.fitScalable(runs, hangingTail(runs)); a > 0 {
+						room := avail.Sub(used.Sub(a))
+						if want := room.Px() / a.Px(); fitWant == 0 || want < fitWant {
+							fitWant = want
+						}
+					}
+				}
 				rtl := lineBaseIsRTL(b, runs)
 				align, spread := lineAlignment(b, rtl, lastLine)
 
@@ -604,18 +715,29 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				for k := range runs {
 					widths[k] = runs[k].Width
 				}
+				// §7.3's extra advance after every character, when the line is
+				// being justified between characters rather than between words.
+				// It reaches the drawing as well as the widths — see
+				// justifyBetweenCharacters.
+				var interChar style.Unit
 				if spread {
-					// The method, which is reported here rather than where the
-					// property is read: this is the only place that knows a
-					// line is being justified at all.
-					if _, unhandled := justificationOf(b); unhandled != "" {
+					// The method, which is read here rather than where the
+					// property is: this is the only place that knows a line is
+					// being justified at all.
+					method, unhandled := justificationOf(b)
+					if unhandled != "" {
 						l.reportTextJustify(b, unhandled)
 					}
 					// A line with nowhere to put the slack is left where it is,
 					// and nothing is reported about it: CSS Text 3 §7.3 says a
 					// line with no expansion opportunity is aligned as start,
 					// so that *is* the conforming rendering.
-					justifyItems(runs, xs, widths, hangingTail(runs), avail.Sub(used))
+					if method == justifyCharacters {
+						interChar, _ = l.justifyBetweenCharacters(runs, xs, widths,
+							hangingTail(runs), avail.Sub(used))
+					} else {
+						justifyItems(runs, xs, widths, hangingTail(runs), avail.Sub(used))
+					}
 				}
 				// Atomic inlines are placed as children of the block rather than as
 				// runs, so aligning the line has to move them too. The range is
@@ -669,8 +791,9 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					line.Runs = append(line.Runs, TextRun{
 						Text: item.Text, Face: item.Face, Size: item.Size,
 						X: x, Width: widths[k], Box: heldBox(item.Box), Offset: item.Offset,
-						Decorations: decorations, LetterSpacing: item.Spacing.Letter,
-						PreContext: item.PreContext, PostContext: item.PostContext,
+						Decorations:   decorations,
+						LetterSpacing: trackingOf(item).Add(interChar),
+						PreContext:    item.PreContext, PostContext: item.PostContext,
 						RTL:   item.Level&1 == 1,
 						Shift: shift,
 					})
@@ -688,7 +811,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				// space it was meant to hang, which is what the ten dir=rtl
 				// pre-wrap-align tests measure. It is invisible in a left-to-right
 				// document, where the hang follows the content and moves nothing.
-				shift := l.alignLine(b, align, avail, used)
+				shift := l.alignLine(b, align, rtl, avail, used)
 				if !rtl {
 					// §16.1's indent is measured from the line's *start* edge,
 					// and only a left-to-right line starts at the left. The room
@@ -716,7 +839,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				// the line is about to go, since a fragment cannot be hung on it
 				// until §8.6 knows which piece of its box it is.
 				decor.addLine(len(parent.Lines), runs, xs, widths,
-					line.Rect.X.Add(shift), line.Rect.Y.Add(line.Baseline), &stack)
+					line.Rect.X.Add(shift), line.Rect.Y.Add(line.Baseline), &stack, lineScale)
 				if lineEllipsis > 0 && ending.face != nil {
 					// The mark goes where the line's own content ends, which is not
 					// where the line box does: an aligned line may have been moved,
@@ -740,6 +863,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				// of inline content that produced none — the collapsible space between
 				// two block children — has not used it up.
 				firstLine = false
+				afterForced = forced
 			}
 
 			// The floats met along the line were placed while it was being fitted —
@@ -786,8 +910,19 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 						// not: float-in-inline-001 and position-absolute-007 in the
 						// suite each write such a box beside a float and check that
 						// the float did not carry it along.
+						// And *below* that line where anything on it came first.
+						// The hypothetical box is block-level, so it would have
+						// split the inline content it was written among: what
+						// precedes it stays on the line above and the box's own
+						// top edge is that line's bottom. Only where nothing
+						// precedes it is the line's top the answer, which is the
+						// box written before the first word.
+						top := y
+						if f.AfterContent {
+							top = top.Add(lh)
+						}
 						l.deferAbsolute(abs, parent,
-							f.Offset.X, y.Add(f.Offset.Y), 0, 0)
+							f.Offset.X, top.Add(f.Offset.Y), 0, 0)
 						continue
 					}
 					// The offset of the inline boxes it was written inside, which
@@ -839,6 +974,23 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				break
 			}
 		}
+		if fitPending {
+			// The lines have all been measured at the size they were set in, so
+			// the factor is settled — and it is settled once, whatever the
+			// balancing below goes on to do. A clamped box is left alone for the
+			// reason the balancing is: the clamp has already decided how much of
+			// the content there is, and the two searches have not been put
+			// together.
+			fitPending = false
+			if got := fit.clamp(fitWant); got != fitScale && !clamped && fitWant > 0 {
+				fitScale = got
+				parent.Lines = parent.Lines[:linesAt]
+				parent.Children = parent.Children[:kidsAt]
+				origin.ctx.truncate(ctxAt)
+				l.deferred = l.deferred[:absAt]
+				continue
+			}
+		}
 		if pass > 0 && sameUnits(bands, wasBands) {
 			// The lines came out in the widths the search was given, so the
 			// answer is consistent with itself and there is nothing to redo.
@@ -868,15 +1020,25 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		// long to search, or one whose lines cannot be made to come out at the
 		// count the first pass found — the width search stands, and its answer
 		// is at least measured in the right bands.
-		lineCaps = l.br.BalanceScoredCaps(items, bands, indent, len(bands))
+		lineCaps = l.br.BalanceScoredCaps(items, bands, firstIndent, len(bands))
 		if lineCaps == nil {
-			w := l.br.BalanceWidthInBands(items, bands, width, indent)
+			w := l.br.BalanceWidthInBands(items, bands, width, firstIndent)
 			for i := range balanceCaps {
 				balanceCaps[i] = w
 			}
 		}
 	}
 	decor.finish(parent)
+	// §5.12.1's pseudo-element behaves like an inline box wrapping the first
+	// line's content, so what it paints goes behind that content — under the
+	// inline boxes on the line, which are inside it.
+	if len(parent.Lines) > 0 && !b.afterTheFirstLine {
+		if box := l.firstLinePaint(b); box != nil {
+			if f := l.firstLineFragment(box, &parent.Lines[0]); f != nil {
+				parent.Lines[0].Boxes = append([]*Fragment{f}, parent.Lines[0].Boxes...)
+			}
+		}
+	}
 	return y
 }
 
@@ -906,4 +1068,79 @@ func (l *layouter) roomForLine(first inlineItem, origin flow, y, left, right, lo
 		left, right = origin.ctx.bandAt(origin.y.Add(y), lo, hi)
 	}
 	return y, left, right
+}
+
+// strutOver raises a line's strut to cover the forced break that ended it.
+//
+// A <br> is an inline element, and §10.8.1 puts its leading on the line it ends
+// like any other box's: a <br> alone in a "line-height: 200px" span makes a line
+// two hundred pixels tall, not the height of the block's strut. Ours made the
+// strut's, and everything after it sat two hundred pixels too high.
+//
+// It is done to the *strut* rather than by leaving the item on the line, and the
+// difference is not stylistic. The item stream is walked by everything
+// downstream — the painting, the decorations, the positioning of what is on the
+// line — and a forced break has never been in it: putting it there costs 648 of
+// the suite's clean passes. The strut is the one thing on a line that stands for
+// a box with nothing to draw, which is exactly what this is.
+func strutOver(st strut, items []inlineItem, next int, forced bool) strut {
+	if !forced || next <= 0 || next > len(items) {
+		return st
+	}
+	br := items[next-1]
+	if !br.Forced || !br.Leads {
+		return st
+	}
+	descent := style.Max(st.Height.Sub(st.Baseline), br.Below)
+	st.Baseline = style.Max(st.Baseline, br.Above)
+	st.Height = st.Baseline.Add(descent)
+	return st
+}
+
+// unkernLineEnd takes the pair kerning out of the last run of a line.
+//
+// §8.1's boundary shaping gives every run the text either side of it, and a face
+// that kerns then shrinks the run's last glyph against the first of the run
+// after it — which is right while the two are next to each other and wrong once
+// a line break has come between them. Two characters on different lines are not
+// adjacent, which is the same sentence §8.2 states for letter-spacing and §8.1
+// for its own gap.
+//
+// What changes is the *advance* and not the ink: a pair adjusts the left glyph's
+// advance, and nothing on this line follows it. So the context is left alone —
+// the glyphs are drawn exactly where they were — and only the width the line and
+// the inline boxes on it are measured to is put back.
+//
+// The suite's hanging-punctuation-inline-bound-001 is where it shows: a <span>
+// with a background around three lines of Japanese, whose first line's box came
+// out 241.2px against the reference's 243. The 1.8px is one kern at 60px.
+//
+// Only for a face with no positional forms. For a cursive one the context
+// decides which letter is drawn as well as where the pen stops, and the two
+// cannot be told apart by measuring: taking the context away would report the
+// isolated form's width, which is not a kern and is not what a line break does
+// to a word. A word broken *inside* by overflow-wrap keeps its forms — CSS Text
+// §5.4, and SplitItem is what gives it them.
+func (l *layouter) unkernLineEnd(runs []inlineItem) {
+	for k := len(runs) - 1; k >= 0; k-- {
+		it := &runs[k]
+		if it.Inset || it.Abs != nil || it.Float != nil {
+			// Not a run of text: an inline box's own edge, or a box that is
+			// drawn somewhere else. Neither ends the line's text.
+			continue
+		}
+		if it.Face == nil || it.Text == "" || it.PostContext == "" ||
+			it.Face.HasJoiningForms() {
+			return
+		}
+		alone := l.br.MeasureSpacedInContext(it.Face, it.Text, it.Size, it.Spacing,
+			it.PreContext, "")
+		inContext := l.br.MeasureSpacedInContext(it.Face, it.Text, it.Size, it.Spacing,
+			it.PreContext, it.PostContext)
+		// The difference and not the measurement, so that everything else the
+		// width carries — §8.1's gap, the letter-spacing the boundary rule
+		// exchanged — survives.
+		it.Width = it.Width.Add(alone.Sub(inContext))
+		return
+	}
 }

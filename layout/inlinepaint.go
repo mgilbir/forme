@@ -100,6 +100,9 @@ type inlinePiece struct {
 	baseline style.Unit
 	// first says no earlier line held this box, so this piece begins it.
 	first bool
+	// scale is text-fit's factor for the line this piece is on, which is what
+	// the box's own content area is measured at. One where nothing fits.
+	scale float64
 }
 
 // inlineDecor collects the pieces over one inline formatting context.
@@ -131,7 +134,7 @@ type inlineDecor struct {
 // with §16.2's alignment shift already in it, so that adding an item's offset
 // within the line gives a coordinate in the same space the line boxes are in.
 func (d *inlineDecor) addLine(index int, items []inlineItem, xs, widths []style.Unit,
-	at, baseline style.Unit, stack *lineStack) {
+	at, baseline style.Unit, stack *lineStack, scale float64) {
 
 	// The items in the order they are *drawn*, because §8.6's pieces are visual:
 	// a box whose content the reordering cut in two generates two boxes, and the
@@ -147,7 +150,7 @@ func (d *inlineDecor) addLine(index int, items []inlineItem, xs, widths []style.
 		// items, cut the span into pieces that then drew a border apiece.
 		// bidi-011 is a <span> holding an override with the matching pop after
 		// it, and it came out as three boxes with two seams.
-		if items[k].Width == 0 {
+		if items[k].Width == 0 && !items[k].Inset {
 			continue
 		}
 		order = append(order, k)
@@ -197,12 +200,12 @@ func (d *inlineDecor) addLine(index int, items []inlineItem, xs, widths []style.
 			// question.
 			base := baseline
 			if va, ok := d.l.inlineAligns[box]; ok {
-				above, below := d.l.leading(box)
+				above, below := d.l.leadingAt(box, box.FontSize.Mul(scale))
 				base = base.Add(stack.Shift(va, above, below))
 			}
 			d.pieces = append(d.pieces, inlinePiece{
 				box: box, line: index, left: left, right: right,
-				baseline: base, first: !seen,
+				baseline: base, first: !seen, scale: scale,
 			})
 			if d.last == nil {
 				d.last = make(map[*Box]int)
@@ -293,8 +296,12 @@ func (d *inlineDecor) finish(parent *Fragment) {
 		// anything depends on, and it is written down as one.
 		margin.Top, margin.Bottom = 0, 0
 
-		// §10.6.1: the content area is the font's, not the line's.
-		st := d.l.strutFor(b)
+		// §10.6.1: the content area is the font's, not the line's — and text-fit
+		// scales the size the font is used at, so the box's own ink grows and
+		// shrinks with the type inside it. The suite's
+		// text-fit/grow-per-line-all-line-height is a one-pixel lime border round
+		// two letters on a line scaled by two, and asks for a box twice as tall.
+		st := d.l.strutAt(b, b.FontSize.Mul(p.scale))
 		x := p.left.Add(margin.Left)
 		frag := &Fragment{
 			Box: b, Margin: margin, Border: border, Padding: padding,

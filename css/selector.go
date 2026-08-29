@@ -297,6 +297,10 @@ var pseudoClasses = map[string]PseudoKind{
 // can say which it is. "no such pseudo-class" sends an author looking for a
 // typo; ":hover cannot apply to a printed page" tells them the truth, which is
 // that the rule was understood and deliberately not applied.
+//
+// Being on this list says what the *message* is. Whether the finding also claims
+// the page differs from the one CSS describes is a second question, and
+// stateOnAPage is what answers it: see inapplicable.
 var dynamicPseudoClasses = map[string]bool{
 	"active": true, "hover": true, "focus": true, "focus-visible": true,
 	"focus-within": true, "target": true, "target-within": true,
@@ -310,6 +314,27 @@ var dynamicPseudoClasses = map[string]bool{
 	"popover-open": true, "picture-in-picture": true, "current": true,
 	"past": true, "future": true, "local-link": true, "defined": true,
 	"host": true, "host-context": true,
+}
+
+// stateOnAPage is the half of dynamicPseudoClasses whose answer is written in
+// the document rather than made by a reader.
+//
+// The split is the difference between a rule that *matched nothing* and a rule
+// that *was dropped*. Nobody hovers a printed page, so ":hover" selects nothing
+// there and a browser printing the same page applies it exactly as little — the
+// page is the one CSS describes. But "<input disabled>" is disabled on paper as
+// much as on screen, so ":disabled { color: grey }" asks for grey text that is
+// not there, and an author has no way to find that out except by being told.
+//
+// ":defined" is on it for the same reason from the other end: with no custom
+// elements every element is defined, so the rule matches *everything* and
+// dropping it drops style from every box it named.
+var stateOnAPage = map[string]bool{
+	"checked": true, "indeterminate": true, "default": true,
+	"disabled": true, "enabled": true, "read-only": true, "read-write": true,
+	"placeholder-shown": true, "valid": true, "invalid": true,
+	"in-range": true, "out-of-range": true, "required": true, "optional": true,
+	"defined": true,
 }
 
 // pseudoElements is the implemented subset. The rest are refused: ::selection
@@ -339,6 +364,31 @@ func reasonForPseudoElement(lower string) string {
 		return ": form fields are not interactive here"
 	}
 	return ""
+}
+
+// matchesNothingOnAPage reports whether a pseudo-element selects a state a page
+// laid out once never enters, so that a rule naming it is one whose condition is
+// false rather than one this engine dropped.
+//
+// ::placeholder is the one on reasonForPseudoElement's list that is not here,
+// and the distinction is the whole reason this is a second function. A browser
+// *does* draw an empty field's placeholder on a page nobody has touched, so a
+// rule styling it asks for ink that is missing — which is a finding about this
+// engine and not about the medium.
+func matchesNothingOnAPage(lower string) bool {
+	switch lower {
+	case "selection", "target-text", "highlight", "spelling-error", "grammar-error":
+		// Nothing is selected, targeted or spell-checked.
+		return true
+	case "backdrop":
+		// There is no top layer.
+		return true
+	case "part", "slotted":
+		// A shadow tree needs scripting, which never runs here, so there is no
+		// shadow tree to have a part of.
+		return true
+	}
+	return false
 }
 
 // legacyPseudoElements may be written with one colon, because they predate the
@@ -392,6 +442,24 @@ func (p *selParser) fail(off int, msg string) {
 
 func (p *selParser) unsupported(off int, msg string) {
 	p.add(Error{Offset: off, Message: msg, Unsupported: true})
+}
+
+// inapplicable reports a selector that is correct CSS and matches nothing here,
+// which is a different thing from one this engine has not implemented.
+//
+// ":hover" on a page laid out once is not a rule that was dropped. It is a rule
+// whose condition is false — there is no pointer, so nothing is hovered, and a
+// browser showing the same page unhovered applies it exactly as little. The same
+// goes for "::selection" over a page with no selection. The author is still told,
+// because a rule that did nothing is worth knowing about; what is not claimed is
+// that the page differs from the one CSS describes.
+//
+// Unsupported is what that claim is made with, and it is what the reftest
+// ratchet reads: a document whose only finding is one of these is rendered
+// exactly as it should be, and counting it as vacuous hid four of the suite's
+// tests behind a rule that changed nothing.
+func (p *selParser) inapplicable(off int, msg string) {
+	p.add(Error{Offset: off, Message: msg})
 }
 
 func (p *selParser) add(e Error) {
@@ -693,6 +761,13 @@ func (p *selParser) pseudo(vals []ComponentValue, i int, out *Compound, depth in
 
 	if element {
 		if !pseudoElements[lower] {
+			if matchesNothingOnAPage(lower) {
+				// A pseudo-element whose state a page laid out once never
+				// enters. See inapplicable.
+				p.inapplicable(colon.Offset, "the pseudo-element ::"+name+
+					" is not implemented"+reasonForPseudoElement(lower))
+				return i, "", false
+			}
 			p.unsupported(colon.Offset, "the pseudo-element ::"+name+
 				" is not implemented"+reasonForPseudoElement(lower))
 			return i, "", false
@@ -713,9 +788,17 @@ func (p *selParser) pseudo(vals []ComponentValue, i int, out *Compound, depth in
 	kind, known := pseudoClasses[lower]
 	if !known {
 		if dynamicPseudoClasses[lower] {
-			p.unsupported(colon.Offset, "\":"+name+
-				"\" depends on how a document is being interacted with, "+
-				"which a page laid out once cannot know")
+			msg := "\":" + name +
+				"\" depends on how a document is being interacted with, " +
+				"which a page laid out once cannot know"
+			if stateOnAPage[lower] {
+				// The markup answers this one, and this engine does not: the
+				// rule is one an author will not see and should be told about
+				// as a gap rather than as a property of the medium.
+				p.unsupported(colon.Offset, msg)
+				return i, "", false
+			}
+			p.inapplicable(colon.Offset, msg)
 			return i, "", false
 		}
 		p.unsupported(colon.Offset, "the pseudo-class \":"+name+"\" is not implemented")

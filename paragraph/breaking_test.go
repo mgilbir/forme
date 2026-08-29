@@ -277,6 +277,119 @@ func TestAFloatMarkerIsHandedBackWithHowFarAlongItWasReached(t *testing.T) {
 	}
 }
 
+// TestAFloatDoesNotHaveToClearTheSpaceBeforeIt is the same seam with §4.1.2
+// applied to it.
+//
+// What the float has to get past is what is *on* the finished line, and the
+// collapsible space an author left before it is not: §4.1.2's third rule removes
+// a space that lands at the end of a line, so the line ends at "aaa" and the
+// float is reached there. Counting the space made a float that fits beside the
+// line miss by the width of one, which is how "<div></div> <div
+// style=float:left></div>" in exactly two boxes' width came out on the next
+// line and the same markup without the space did not.
+//
+// The space is marked TrimAtEnd here and the helper above does not mark one,
+// which is why the test before this reports 48 and this one reports 36. A
+// document's spaces are marked — see flatten.go, which sets it from the piece —
+// so 36 is the number a page is laid out with and 48 is the number a hand-built
+// item list asks for.
+func TestAFloatDoesNotHaveToClearTheSpaceBeforeIt(t *testing.T) {
+	br := NewBreaker(nil)
+	face := courier(t)
+	items := words(t, br, face, "aaa bbb")
+	items[1].TrimAtEnd = true
+	marker := Item{Float: "a float"}
+	items = append([]Item{items[0], items[1], marker}, items[2:]...)
+
+	_, _, _, outOfFlow, _ := br.BreakOneLine(items, 0, 0, u(500), 0)
+	if len(outOfFlow) != 1 {
+		t.Fatalf("the line reported %d out-of-flow boxes, want 1", len(outOfFlow))
+	}
+	if got := outOfFlow[0].Used.Px(); got != 36 {
+		t.Errorf("the float has to clear %gpx, want 36 — \"aaa\" and not the "+
+			"space after it, which §4.1.2 takes off the end of the line", got)
+	}
+}
+
+// TestOnlyTheSpaceAtTheEndOfTheLineIsDiscounted is the other half of the rule,
+// and the half a scan over the whole line would get wrong.
+//
+// §4.1.2 removes the space that lands at the *end* of a line, not every space on
+// it. Every collapsible space in a document is marked, so "aaa bbb " before a
+// float has two of them and only the last one is not there: the float is reached
+// at 84px — "aaa", its space and "bbb" — and an implementation that kept
+// subtracting to the front of the line answers 72.
+func TestOnlyTheSpaceAtTheEndOfTheLineIsDiscounted(t *testing.T) {
+	br := NewBreaker(nil)
+	face := courier(t)
+	items := words(t, br, face, "aaa bbb")
+	items[1].TrimAtEnd = true
+	space := items[1]
+	marker := Item{Float: "a float"}
+	items = append(items, space, marker)
+
+	_, _, _, outOfFlow, _ := br.BreakOneLine(items, 0, 0, u(500), 0)
+	if len(outOfFlow) != 1 {
+		t.Fatalf("the line reported %d out-of-flow boxes, want 1", len(outOfFlow))
+	}
+	if got := outOfFlow[0].Used.Px(); got != 84 {
+		t.Errorf("the float has to clear %gpx, want 84 — \"aaa bbb\" without the "+
+			"space after it, and the space between the words stays", got)
+	}
+}
+
+// TestAnInlineBoxEdgeDoesNotHideTheSpaceBeforeAFloat is the third clause, and
+// the one a scan that stopped at the first non-space would get wrong.
+//
+// "<span>" between the space and the float puts an inset on the line — the
+// span's own margin, border and padding — and an inset is not content. §4.1.2
+// reaches the space behind it for the same reason trimLineEdge does: the space
+// is still the last thing on the line, and the span's border is still the span's
+// border once the space has gone.
+//
+// The inset keeps its own width. What the float has to clear is "aaa" and the
+// ten pixels of border, and not the twelve of space between them.
+func TestAnInlineBoxEdgeDoesNotHideTheSpaceBeforeAFloat(t *testing.T) {
+	br := NewBreaker(nil)
+	face := courier(t)
+	items := words(t, br, face, "aaa bbb")
+	items[1].TrimAtEnd = true
+	inset := Item{Inset: true, Width: u(10)}
+	marker := Item{Float: "a float"}
+	items = []Item{items[0], items[1], inset, marker, items[2]}
+
+	_, _, _, outOfFlow, _ := br.BreakOneLine(items, 0, 0, u(500), 0)
+	if len(outOfFlow) != 1 {
+		t.Fatalf("the line reported %d out-of-flow boxes, want 1", len(outOfFlow))
+	}
+	if got := outOfFlow[0].Used.Px(); got != 46 {
+		t.Errorf("the float has to clear %gpx, want 46 — \"aaa\" and the span's "+
+			"ten pixels, and not the space the end of the line removes", got)
+	}
+}
+
+// TestAFloatStillClearsAPreservedSpace is the containment case: only a space the
+// end of a line *removes* is discounted.
+//
+// Under "white-space: pre" a space is content. It is not marked TrimAtEnd, it
+// stays on the line, and a float written after it is that much further along —
+// which is the whole difference between the two values and the reason this is a
+// flag on the item rather than a test for a space.
+func TestAFloatStillClearsAPreservedSpace(t *testing.T) {
+	br := NewBreaker(nil)
+	face := courier(t)
+	items := words(t, br, face, "aaa bbb")
+	items[1].Collapsible = false
+	marker := Item{Float: "a float"}
+	items = append([]Item{items[0], items[1], marker}, items[2:]...)
+
+	_, _, _, outOfFlow, _ := br.BreakOneLine(items, 0, 0, u(500), 0)
+	if got := outOfFlow[0].Used.Px(); got != 48 {
+		t.Errorf("the float has to clear %gpx, want 48 — a preserved space is "+
+			"content and the line keeps it", got)
+	}
+}
+
 func TestMeasuringIsMemoizedPerFaceSizeAndSpacing(t *testing.T) {
 	br := NewBreaker(nil)
 	face := courier(t)

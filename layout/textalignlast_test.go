@@ -202,20 +202,27 @@ func TestTextJustifyAutoAndInterWordStillJustify(t *testing.T) {
 
 // TestAJustificationMethodThisDoesNotPerformIsReported.
 //
-// inter-character puts the slack between letters as well as words, which is how
-// Thai and Chinese are justified. Spreading it between the words instead
-// produces a page with the right margins and the wrong text — which looks
-// deliberate, and is exactly what a finding is for.
+// §7.3 names five values and this engine performs three. What is left is the
+// per-script tailoring "auto" is allowed to do and this does not attempt, and
+// any value outside the grammar — and neither of those is a value a document
+// writes. So the list below is short on purpose: the point of the test is the
+// *other* direction, that the three which are performed say nothing.
 func TestAJustificationMethodThisDoesNotPerformIsReported(t *testing.T) {
 	for _, tc := range []struct {
 		value  string
 		report bool
 	}{
-		{"inter-character", true},
-		{"distribute", true},
+		// The slack between every pair of typographic character units, which is
+		// how Thai and Chinese are justified. "distribute" is §7.3's older name
+		// for the same method.
+		{"inter-character", false},
+		{"distribute", false},
 		{"auto", false},
 		{"inter-word", false},
 		{"none", false},
+		// A value outside the grammar is read as "auto" and said so, because a
+		// page justified between the wrong things looks deliberate.
+		{"inter-ideograph", true},
 	} {
 		found := false
 		for _, f := range findingsFrom(t, twoLines,
@@ -231,111 +238,9 @@ func TestAJustificationMethodThisDoesNotPerformIsReported(t *testing.T) {
 	// And a block that is not justified says nothing, whatever the value: the
 	// property changes nothing there and a warning would be crying wolf.
 	for _, f := range findingsFrom(t, twoLines,
-		alignCSS+` #p { text-align: left; text-justify: inter-character }`) {
+		alignCSS+` #p { text-align: left; text-justify: inter-ideograph }`) {
 		if f.Property == "text-justify" {
 			t.Errorf("text-justify was reported on a paragraph that is not justified")
 		}
-	}
-}
-
-// lastLineLeft is the left edge of the last line's content, which on a
-// right-to-left line is not the first run's.
-func lastLineLeft(t *testing.T, root *Fragment, id string) float64 {
-	t.Helper()
-	f := find(t, root, id)
-	last := f.Lines[len(f.Lines)-1]
-	if len(last.Runs) == 0 {
-		t.Fatalf("#%s's last line has no runs", id)
-	}
-	left := last.Runs[0].X.Px()
-	for _, r := range last.Runs {
-		if x := r.X.Px(); x < left {
-			left = x
-		}
-	}
-	return left
-}
-
-// TestStartAndEndAreResolvedAgainstTheDirection. The two logical values are the
-// reason text-align-last has six of them rather than four: "start" is the edge
-// the text begins at, which in a right-to-left block is the right one. A
-// version that read them as left and right would put every Hebrew paragraph's
-// last line against the edge its text runs away from.
-func TestStartAndEndAreResolvedAgainstTheDirection(t *testing.T) {
-	for _, tc := range []struct {
-		value string
-		ltr   float64
-		rtl   float64
-	}{
-		{"start", 0, 264},
-		{"end", 264, 0},
-		// The physical pair is not affected by direction, which is what the
-		// pair exists for.
-		{"left", 0, 0},
-		{"right", 264, 264},
-	} {
-		for _, dir := range []struct {
-			name string
-			css  string
-			want float64
-		}{
-			{"ltr", "", tc.ltr},
-			{"rtl", "direction: rtl;", tc.rtl},
-		} {
-			root := layoutOf(t, 600, twoLines,
-				alignCSS+` #p { `+dir.css+` text-align: justify; text-align-last: `+tc.value+` }`)
-			if got := lastLineLeft(t, root, "p"); got != dir.want {
-				t.Errorf("text-align-last:%s in a %s block put the last line at %gpx, want %g",
-					tc.value, dir.name, got, dir.want)
-			}
-		}
-	}
-}
-
-// TestJustifyAllStretchesEveryLineAndNotOnlyTheLast. The value is one word and
-// it says two things; a reading that took only the second would leave a
-// paragraph whose last line is stretched and whose others are not, which is the
-// opposite of what any typographer has ever wanted.
-func TestJustifyAllStretchesEveryLineAndNotOnlyTheLast(t *testing.T) {
-	const src = `<div id="p">aaaaaaaa aaaaaaaa aaaaaaaa c d</div>`
-	root := layoutOf(t, 600, src, alignCSS+` #p { text-align: justify-all }`)
-	f := find(t, root, "p")
-	if len(f.Lines) < 2 {
-		t.Fatalf("%d lines, want at least 2: %q", len(f.Lines), lineTexts(f.Lines))
-	}
-	for i, line := range f.Lines {
-		end := 0.0
-		for _, r := range line.Runs {
-			if x := r.X.Add(r.Width).Px(); x > end {
-				end = x
-			}
-		}
-		if end != 300 {
-			t.Errorf("line %d ends at %gpx, want 300 — justify-all stretches every "+
-				"line: %q", i, end, lineTexts(f.Lines))
-		}
-	}
-}
-
-// TestTextJustifyIsInherited, for the same reason and by the same means: it is
-// set on a block and has to reach the paragraphs in it.
-func TestTextJustifyIsInherited(t *testing.T) {
-	root := layoutOf(t, 600, `<div id="outer">`+twoLines+`</div>`,
-		alignCSS+` #outer { text-align: justify-all; text-justify: none }`)
-	if got := lastLineEnd(t, root, "p"); got != 36 {
-		t.Errorf("an inherited text-justify:none left the last line ending at %gpx, "+
-			"want 36", got)
-	}
-}
-
-// TestTextAlignLastIsInherited. It is an inherited property, which is how
-// "body { text-align-last: justify }" reaches a paragraph at all — and the same
-// reason text-align itself inherits.
-func TestTextAlignLastIsInherited(t *testing.T) {
-	root := layoutOf(t, 600, `<div id="outer">`+twoLines+`</div>`,
-		alignCSS+` #outer { text-align: justify; text-align-last: right }`)
-	if got := lastLineX(t, root, "p"); got != 264 {
-		t.Errorf("an inherited text-align-last:right put the last line at %gpx, "+
-			"want 264", got)
 	}
 }

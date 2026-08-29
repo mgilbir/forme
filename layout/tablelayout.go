@@ -546,6 +546,31 @@ func (l *layouter) tableColumnDemands(table *Box, s tableSpacing) []tableColumnD
 		if col == nil || i >= len(out) {
 			continue
 		}
+		if v, ok := l.parseLength(col, "width"); ok && v.Kind == style.LengthAbsolute {
+			// A width written on a <col> is what the column is, and the cells
+			// wrap inside it.
+			//
+			// §17.5.2.2 reads it as one more demand to be maximised with the
+			// cells' — "the maximum is that required by the cell with the
+			// largest maximum cell width, or the column width, whichever is
+			// larger" — which makes a narrow column with a long sentence in it
+			// as wide as the sentence, so the declaration does nothing at all.
+			// No browser does that, and the suite's own references are drawn
+			// against the browsers: vertical-align-baseline-003's reference is
+			// a table with "col#middle { width: 80px }" and six lines of text
+			// wrapped inside it.
+			//
+			// It caps rather than fixes: a column cannot be narrower than the
+			// smallest thing in it, so the minimum still wins where the two
+			// disagree. That is the same floor a cell's own width has, and it
+			// is what stops "width: 1px" clipping a word.
+			//
+			// "auto" needs no test of its own here, unlike in
+			// declaredTrackWidth: parseLength answers it as LengthAuto, which
+			// the kind above already excludes. A planted defect adding the
+			// check changed nothing.
+			out[i].max = style.Max(out[i].min, v.Value)
+		}
 		if v, ok := l.parseLength(col, "max-width"); ok && v.Kind == style.LengthAbsolute {
 			out[i].max = style.Min(out[i].max, v.Value)
 			out[i].min = style.Min(out[i].min, v.Value)
@@ -1406,10 +1431,22 @@ type placedCell struct {
 	// slack there is to move it through.
 	content style.Unit
 	// baseline is where the cell's first line sits, measured from its border-box
-	// top. §17.5.3 makes a cell with no line box baseline-align on its bottom
-	// content edge, so there is always one.
-	baseline style.Unit
-	align    string
+	// top, and hasBaseline says whether it has one at all.
+	//
+	// A cell with no line box in it has none, and does not take part in the
+	// row's baseline alignment: it is laid out at the top of the row instead.
+	// §17.5.3 reads otherwise — "the baseline is the bottom of content edge of
+	// the cell box" — and that reading is what every browser departs from,
+	// because taken literally it makes an empty cell the tallest thing in its
+	// row. A cell with "height: 0.5in" beside a lettered one of the same height
+	// is pushed down to put its own bottom edge on the row's baseline, so the
+	// row comes out the declared height *plus* an ascent, and the declaration is
+	// counted twice. CSS2/normal-flow/width-applies-to-006 is two such rows
+	// against a square, and css-tables-3 states the browsers' rule outright: a
+	// cell with no baseline is aligned to the start edge.
+	baseline    style.Unit
+	hasBaseline bool
+	align       string
 	// absFrom is where in the deferred queue this cell's out-of-flow boxes
 	// begin, so that vertical alignment can move their static positions with the
 	// content they were written in.
@@ -1617,29 +1654,15 @@ func (l *layouter) layoutCells(table *Box, g *tableGrid, cols []style.Unit,
 		// other half, which belongs to the neighbour: neither of them may draw it.
 		frag.inCollapsedGrid = s.collapsed != nil
 
+		baseline, hasBaseline := firstBaseline(frag)
 		out = append(out, placedCell{
 			cell: c, frag: frag, natural: frag.BorderRect.H, content: frag.contentH,
-			baseline: baselineOfCell(frag),
-			align:    strings.ToLower(strings.TrimSpace(c.box.Style["vertical-align"])),
-			absFrom:  absFrom,
+			baseline: baseline, hasBaseline: hasBaseline,
+			align:   strings.ToLower(strings.TrimSpace(c.box.Style["vertical-align"])),
+			absFrom: absFrom,
 		})
 	}
 	return out
-}
-
-// baselineOfCell is §17.5.3's baseline of a cell: the baseline of its first line
-// box, or its bottom content edge when it has none.
-//
-// The fallback is not a detail. Without it an empty cell in a row of text would
-// have no opinion, and the first cell that did would decide the row's baseline
-// on its own — which is right; but a cell holding only a block with no text
-// would then align on nothing and sit at the top of a row it should have been
-// pushed down in.
-func baselineOfCell(f *Fragment) style.Unit {
-	if v, ok := firstBaseline(f); ok {
-		return v
-	}
-	return maxZero(f.BorderRect.H.Sub(f.Border.Bottom).Sub(f.Padding.Bottom))
 }
 
 // firstBaseline finds the baseline of the first line box in a subtree, measured
@@ -1692,7 +1715,7 @@ func (l *layouter) rowHeights(g *tableGrid, placed []placedCell, s tableSpacing,
 	// and it has to be known before any height is, since a cell pushed down to
 	// meet it is that much taller.
 	for _, p := range placed {
-		if !isBaselineAligned(p.align) {
+		if !p.alignsOnBaseline() {
 			continue
 		}
 		rowBaseline[p.cell.row] = style.Max(rowBaseline[p.cell.row], p.baseline)
@@ -1771,10 +1794,16 @@ func (l *layouter) rowHeights(g *tableGrid, placed []placedCell, s tableSpacing,
 // stretchedHeight is how tall a cell is once it has been moved to sit on its
 // row's baseline.
 func (p placedCell) stretchedHeight(rowBaseline style.Unit) style.Unit {
-	if !isBaselineAligned(p.align) {
+	if !p.alignsOnBaseline() {
 		return p.natural
 	}
 	return p.natural.Add(maxZero(rowBaseline.Sub(p.baseline)))
+}
+
+// alignsOnBaseline reports whether a cell takes part in its row's baseline
+// alignment, which needs both that it asked to and that it has a baseline.
+func (p placedCell) alignsOnBaseline() bool {
+	return p.hasBaseline && isBaselineAligned(p.align)
 }
 
 // isBaselineAligned reports whether a cell aligns on the row's baseline.
@@ -2036,7 +2065,9 @@ func (l *layouter) alignCell(p placedCell, height, rowBaseline style.Unit) {
 	case "middle":
 		delta = slack.Div(2)
 	default:
-		delta = style.Min(maxZero(rowBaseline.Sub(p.baseline)), slack)
+		if p.hasBaseline {
+			delta = style.Min(maxZero(rowBaseline.Sub(p.baseline)), slack)
+		}
 	}
 	if delta == 0 {
 		return

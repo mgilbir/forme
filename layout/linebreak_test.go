@@ -230,3 +230,63 @@ func TestAnOpportunityFromASpaceIsNotWithheld(t *testing.T) {
 		}
 	}
 }
+
+// TestTheLooseHyphensAreJapaneseOnly is §5.3's one rule that a value alone does
+// not settle, and the only line-break rule in this engine that reads the
+// document's language.
+//
+// The tailoring is stated "in Chinese and Japanese", and among the four hyphens
+// §5.3 lets a line begin with, two — U+301C and U+30A0 — are the ones the phrase
+// bites on: they are class NS, so nothing else would allow it. The suite tests
+// the boundary rather than leaving it a reading. writing-system-line-break-001
+// puts the same wave dash in the same "line-break: loose" twice, once in lang=ja
+// and once in lang=ja-Hang, and its assertion is that the first line "starts
+// with" it and the second "ends with" it.
+//
+// ja-Hang is the case a language test would get wrong: it is Japanese, tagged
+// as Japanese, written in Hangul. What decides is the script — see
+// paragraph.WritingSystemOf — so this belongs here, where a box has a document
+// to read it from, and not in the tailoring tables.
+func TestTheLooseHyphensAreJapaneseOnly(t *testing.T) {
+	for _, mark := range []string{"〜", "゠"} {
+		for _, tc := range []struct {
+			lang string
+			want []string
+			why  string
+		}{
+			{"ja", []string{"東京", mark + "大", "阪"},
+				"Japanese, so a line may begin with it"},
+			{"ja-Hang", []string{"東", "京" + mark, "大阪"},
+				"Japanese written in Hangul, which is neither of the two writing systems"},
+			{"ko", []string{"東", "京" + mark, "大阪"},
+				"Korean"},
+			{"", []string{"東", "京" + mark, "大阪"},
+				"no language at all, so nothing says the text is Chinese or Japanese"},
+		} {
+			src := `<p id="p" lang="` + tc.lang + `">東京` + mark + `大阪</p>`
+			if tc.lang == "" {
+				src = `<p id="p">東京` + mark + `大阪</p>`
+			}
+			root := layoutOf(t, 10000, src, widthCSS(2, "line-break: loose"))
+			got := lineTexts(linesOf(t, root, "p"))
+			if !sameStrings(got, tc.want) {
+				t.Errorf("%q in %q (%s) broke as %q, want %q",
+					mark, tc.lang, tc.why, got, tc.want)
+			}
+		}
+	}
+}
+
+// sameStrings, because the test above compares two line lists and neither is a
+// prefix question.
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

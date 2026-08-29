@@ -52,17 +52,32 @@ func TestADeclarationAtItsInitialValueIsNotReported(t *testing.T) {
 		"resize: none",
 		"resize: NONE",
 		"resize:none",
-		"font-kerning: auto",
 		"page-break-inside: auto",
+		// "avoid" asks for no break inside the box, and this engine puts none
+		// inside any box: it does not fragment at all, so a document that does
+		// not fit is scaled to the page rather than broken across two of them.
+		// The box the author did not want split is not split.
+		//
+		// This was in the list below, on the reading that "avoid" asks for
+		// something. It asks for the *absence* of something, which is the case
+		// an engine that never does it satisfies — the same shape as
+		// "text-decoration-skip-ink: none".
+		"page-break-inside: avoid",
+		"break-inside: avoid",
 		"column-gap: normal",
 		"column-fill: balance",
 		"filter: none",
 		"opacity: 1",
 		"transform-style: flat",
-		"text-decoration-skip-ink: auto",
 		"border-radius: 0",
 		"border-radius: 0px",
 		"border-radius: 0em",
+		// Both values of this one, and it is the only property here with two.
+		// A decoration is drawn straight through a descender: "auto" permits
+		// that and "none" asks for it, so an engine that always does it
+		// satisfies either. layout/textdecoration_test.go holds the fact.
+		"text-decoration-skip-ink: auto",
+		"text-decoration-skip-ink: none",
 	} {
 		if reportsUnsupported(t, decl) {
 			t.Errorf("%q was reported, and it asks for the page that is already there", decl)
@@ -104,6 +119,12 @@ func TestTheInitialKeywordIsResolvedRatherThanAssumedInert(t *testing.T) {
 	}
 }
 
+// The two kerning properties were in both lists and are in neither now. They are
+// in the registry, so the cascade says nothing about either — and the finding
+// they had is raised by layout instead, which is the only place that can decide
+// it: "font-kerning: none" asks for a face's kerning to be turned off, and a
+// face with no kerning in it has none to turn off. See layout/textchecks.go.
+
 // TestADeclarationThatAsksForSomethingIsStillReported is the containment
 // argument, and the half this change most needs to keep.
 //
@@ -114,8 +135,10 @@ func TestADeclarationThatAsksForSomethingIsStillReported(t *testing.T) {
 	for _, decl := range []string{
 		"resize: both",
 		"resize: horizontal",
-		"font-kerning: none",
-		"page-break-inside: avoid",
+		// The other break properties, which ask for a break rather than for the
+		// absence of one. An author who wrote either gets a page that runs on.
+		"page-break-before: always",
+		"page-break-after: always",
 		"column-fill: auto", // the initial value is "balance"
 		"column-gap: 0",     // the initial value is "normal"
 		"column-width: 100px",
@@ -123,7 +146,6 @@ func TestADeclarationThatAsksForSomethingIsStillReported(t *testing.T) {
 		"opacity: 0.5",
 		"opacity: 0",
 		"border-radius: 20px",
-		"text-decoration-skip-ink: none",
 	} {
 		if !reportsUnsupported(t, decl) {
 			t.Errorf("%q was not reported, and it asks for a page this engine does "+
@@ -181,5 +203,126 @@ func TestAnInertDeclarationStillCascades(t *testing.T) {
 	if got.Styles[n]["color"] == "" {
 		t.Errorf("the declaration beside the inert one did not survive; suppressing a " +
 			"finding must not drop the rule it was about")
+	}
+}
+
+// TestTheDecorationStyleThisEngineDrawsIsInert. A decoration is drawn as a solid
+// line, which is what text-decoration-style's initial value asks for — so
+// "solid" asks for the page that is already there, whether it is written on its
+// own or as a component of the text-decoration shorthand.
+//
+// The four it is not: each asks for a line this engine does not draw, and an
+// author who wrote one would see a solid line instead and have no other way to
+// find out.
+func TestTheDecorationStyleThisEngineDrawsIsInert(t *testing.T) {
+	for _, decl := range []string{
+		"text-decoration-style: solid",
+		"text-decoration-style: initial",
+		"text-decoration: underline solid",
+		"text-decoration: solid underline blue",
+	} {
+		if reportsUnsupported(t, decl) {
+			t.Errorf("%q was reported, and it asks for the line that is already "+
+				"drawn", decl)
+		}
+	}
+	for _, decl := range []string{
+		"text-decoration-style: double",
+		"text-decoration-style: wavy",
+		"text-decoration: underline dotted",
+		"text-decoration: underline dashed blue",
+		// Not a style at all: it asks for something this engine does not do.
+		"text-decoration: underline blink",
+	} {
+		if !reportsUnsupported(t, decl) {
+			t.Errorf("%q was not reported, and it asks for a line this engine does "+
+				"not draw", decl)
+		}
+	}
+}
+
+// TestTheShorthandStillSetsTheLine, so that swallowing the style component
+// cannot quietly swallow the declaration around it.
+func TestTheShorthandStillSetsTheLine(t *testing.T) {
+	doc := parseDoc(t, `<div id="target">x</div>`)
+	rules, errs := css.ParseStylesheet(`#target { text-decoration: underline solid blue }`)
+	if len(errs) != 0 {
+		t.Fatalf("the stylesheet reported %v", errs)
+	}
+	got := Apply(doc, []Sheet{{Origin: OriginAuthor, Rules: rules}})
+	cs := got.Styles[elementFor(t, doc, "#target")]
+	if cs["text-decoration-line"] != "underline" {
+		t.Errorf("the line came out %q, want underline", cs["text-decoration-line"])
+	}
+	if cs["text-decoration-color"] != "blue" {
+		t.Errorf("the colour came out %q, want blue", cs["text-decoration-color"])
+	}
+}
+
+// TestNothingIsFragmented is what the "avoid" entries above claim, checked
+// against the engine rather than asserted about it.
+//
+// A page-break-inside entry that is wrong is wrong invisibly: the finding it
+// suppresses is the only thing that would have said so. So the claim is pinned
+// where it can fail — the day this engine fragments, a box with "avoid" on it
+// may be broken and the entry has to come out.
+func TestNothingIsFragmented(t *testing.T) {
+	// The property is registered nowhere and read nowhere: it is in
+	// unimplementedProperties' spirit rather than its map, since being inert is
+	// what keeps it quiet. If either of those changes, the entry needs revisiting.
+	if _, ok := properties["page-break-inside"]; ok {
+		t.Errorf("page-break-inside is in the registry now, so something reads it; " +
+			"the inert entry claims nothing does")
+	}
+	if _, ok := properties["break-inside"]; ok {
+		t.Errorf("break-inside is in the registry now, so something reads it")
+	}
+}
+
+// TestAPropertyWithNoEffectInThisMediumIsInertWhateverItSays.
+//
+// CSS Writing Modes 4 §4.1's own note is the argument: text-orientation "has no
+// effect in horizontal writing modes". This engine has no other kind, so every
+// value of it asks for the page that is already there and there is no value to
+// compare against — which is what the "always" entry means and why it is the
+// only one.
+//
+// The gap it might look like this is hiding belongs to writing-mode, and that is
+// still reported: a document that asks for vertical text is told so there.
+func TestAPropertyWithNoEffectInThisMediumIsInertWhateverItSays(t *testing.T) {
+	for _, decl := range []string{
+		"text-orientation: mixed",
+		"text-orientation: upright",
+		"text-orientation: sideways",
+		"text-orientation: initial",
+		"text-orientation: UPRIGHT",
+		// §9.1 says the same of this one: "no effect in horizontal typographic
+		// modes". text-autospace-003 writes the two together under one comment.
+		"text-combine-upright: none",
+		"text-combine-upright: all",
+		"text-combine-upright: digits 3",
+	} {
+		if reportsUnsupported(t, decl) {
+			t.Errorf("%q was reported, and no value of it changes a horizontal page",
+				decl)
+		}
+	}
+	// The property that would make it matter is not inert, and must not become
+	// so: a document asking for vertical text gets a page laid out horizontally,
+	// which is as different as a page can be.
+	for _, decl := range []string{
+		"writing-mode: vertical-rl",
+		"writing-mode: vertical-lr",
+		"writing-mode: sideways-rl",
+	} {
+		if !reportsUnsupported(t, decl) {
+			t.Errorf("%q was not reported, and this engine lays every page out "+
+				"horizontally", decl)
+		}
+	}
+	// And "horizontal-tb" is the initial value, so it asks for what is there.
+	if reportsUnsupported(t, "writing-mode: horizontal-tb") {
+		t.Errorf("\"writing-mode: horizontal-tb\" was reported, and it is the mode " +
+			"every page here is laid out in")
 	}
 }

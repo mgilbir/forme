@@ -79,6 +79,19 @@ type inertValue struct {
 	// produced is the value whose behaviour this engine already produces. A
 	// declaration of it asks for the page that is already there.
 	produced string
+	// also is a second value the engine's behaviour satisfies, where a property
+	// has one. It is not a convenience: a value that *permits* a behaviour and a
+	// value that *requires* it are both satisfied by an engine that always does
+	// it, and those are two different declarations rather than two spellings of
+	// one. text-decoration-skip-ink is the case — "auto" lets a decoration be
+	// drawn straight through and "none" asks for it — and it is the only entry
+	// here that needs two, which is why this is one field and not a list.
+	also string
+	// always marks a property whose *every* value asks for the page that is
+	// already there, so that there is nothing to compare. It is a different
+	// claim from produced and a rarer one — see text-orientation, which is the
+	// only entry that makes it.
+	always bool
 	// initial is the property's initial value, when it differs from produced.
 	// Empty means the two are the same.
 	//
@@ -100,13 +113,24 @@ var inertValues = map[string]inertValue{
 	// CSS Fonts 4 §6.4 and §6.5. Shaping applies the face's own kerning and its
 	// default features, which is what "auto" and "normal" ask for.
 	// TestKerningIsApplied in the shape package is what holds the first.
-	"font-kerning":            {produced: "auto", because: "the face's kerning is applied"},
-	"font-feature-settings":   {produced: "normal", because: "the face's default features are applied"},
 	"font-variation-settings": {produced: "normal", because: "no variation is applied beyond the instance"},
 
-	// CSS Fragmentation 3 §3.1. Nothing constrains where a break may fall.
-	"page-break-inside": {produced: "auto", because: "no break is avoided"},
-	"break-inside":      {produced: "auto", because: "no break is avoided"},
+	// CSS Fragmentation 3 §3.1, and the two values are inert for opposite
+	// reasons that meet in the same page.
+	//
+	// "auto" permits a break inside the box. "avoid" asks for none — and this
+	// engine puts none inside any box, because it does not fragment at all: a
+	// document that does not fit is *scaled* to the page rather than broken
+	// across two of them (see page.go). So the box the author did not want split
+	// is not split, which is what the declaration asked for.
+	//
+	// The other break properties are not here and must not join them.
+	// "page-break-before: always" asks for a break this engine cannot make, and
+	// an author who wrote one would get a page that runs on.
+	"page-break-inside": {produced: "auto", also: "avoid",
+		because: "nothing is fragmented, so no box is broken inside"},
+	"break-inside": {produced: "auto", also: "avoid",
+		because: "nothing is fragmented, so no box is broken inside"},
 
 	// CSS Multi-column 1. Content is laid out in one column, which is what a
 	// column-count and column-width of "auto" produce.
@@ -114,6 +138,32 @@ var inertValues = map[string]inertValue{
 	"column-width": {produced: "auto", because: "content is laid out in one column"},
 	"column-gap":   {produced: "normal", because: "there is no second column to leave a gap before"},
 	"column-fill":  {produced: "balance", because: "there is one column to fill"},
+
+	// CSS Writing Modes 4 §4.1, whose own note is the entry: "this property has
+	// no effect in horizontal writing modes". This engine has no other kind — a
+	// document that asks for one is told so by the writing-mode finding, which
+	// is where that gap belongs — so every value of this one asks for the page
+	// that is already there, and there is no value to compare against.
+	//
+	// The suite writes it to say exactly that. text-autospace-elements-005b
+	// declares "text-orientation: upright" with the comment "should NOT affect
+	// auto-spacing in horizontal mode".
+	"text-orientation": {always: true,
+		because: "there are no vertical writing modes here for it to have an effect in"},
+
+	// §9.1, and the same argument: "this property has no effect in horizontal
+	// typographic modes". The suite's text-autospace-003 writes it beside
+	// text-orientation under one comment — "these properties have no effect on
+	// horizontal text, so should not disable the auto-space insertion" — which
+	// is the entry stated by the people who wrote the property.
+	"text-combine-upright": {always: true,
+		because: "there are no vertical typographic modes here for it to combine in"},
+
+	// And the property that decides the mode, at the value every page here is
+	// laid out in. The other four ask for a page turned on its side, which is as
+	// different as a page can be, and are reported.
+	"writing-mode": {produced: "horizontal-tb",
+		because: "every page here is laid out in horizontal-tb"},
 
 	// CSS Backgrounds 3 §5.1: corners are square.
 	"border-radius": {produced: "0", because: "every corner is square"},
@@ -127,9 +177,19 @@ var inertValues = map[string]inertValue{
 
 	// CSS Text Decoration 4 §2.6. Decorations are drawn straight through, which
 	// is a choice "auto" permits and "none" asks for outright — so both are
-	// inert, and "auto" is the one recorded because it is also the initial.
-	"text-decoration-skip-ink": {produced: "auto",
+	// inert. "auto" is the produced value because it is also the initial;
+	// "none" is the one documents actually write, and writing it is the author
+	// making sure of the very thing this engine has no other way of doing. See
+	// TestADecorationIsDrawnStraightThroughADescender.
+	"text-decoration-skip-ink": {produced: "auto", also: "none",
 		because: "decorations are drawn straight through descenders"},
+
+	// CSS Text Decoration 3 §2.2. A decoration is drawn as a solid line, which
+	// is what the property's initial value asks for. The other four — double,
+	// dotted, dashed, wavy — are not here: each asks for a line this engine does
+	// not draw, and an author who wrote one would see a solid one instead.
+	"text-decoration-style": {produced: "solid",
+		because: "every decoration is drawn as a solid line"},
 
 	// Properties about interaction and animation, none of which a page laid out
 	// once has any of.
@@ -161,6 +221,9 @@ func isInertDeclaration(name string, vals []css.ComponentValue) bool {
 	if value == "" {
 		return false
 	}
+	if entry.always {
+		return true
+	}
 	// The CSS-wide keyword stands for the property's initial value, which is
 	// not always what this engine produces — so it is resolved rather than
 	// accepted, and then compared like any other value.
@@ -170,7 +233,7 @@ func isInertDeclaration(name string, vals []css.ComponentValue) bool {
 			value = entry.produced
 		}
 	}
-	if value == entry.produced {
+	if value == entry.produced || (entry.also != "" && value == entry.also) {
 		return true
 	}
 	// A length written as a bare zero and one written with a unit are the same

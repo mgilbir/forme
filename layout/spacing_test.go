@@ -233,21 +233,26 @@ func TestTextIndentWidensAnIntrinsicWidth(t *testing.T) {
 }
 
 func TestUnresolvableTextIndentIsReported(t *testing.T) {
-	// "hanging" changes *which* lines are indented rather than by how much, so
-	// reading it as a length would indent the wrong ones. It is refused and said
-	// so rather than guessed at.
+	// A value that is not a length and not one of §7.1's two modifiers. It is
+	// refused and said so rather than guessed at, because guessing a length here
+	// indents by a number nobody asked for.
+	//
+	// It used to be "2em hanging" that stood for this, back when the modifiers
+	// were the unreadable part. They are read now, so the fixture has to be
+	// something that really is not a value — an indent in a unit that is not one.
+	//
 	// The pair of documents makes "once" mean the suppression rather than "there
 	// was one element". Two elements naming the same unusable value produce one
 	// finding; two naming different ones produce two, which is what shows both
 	// were visited.
 	if got := indentFindings(t,
 		`<div class="p">abc</div><p class="p">def</p>`,
-		`.p { text-indent: 2em hanging }`); got != 1 {
+		`.p { text-indent: 2quips }`); got != 1 {
 		t.Errorf("one unusable indent on two elements was reported %d times, want once", got)
 	}
 	if got := indentFindings(t,
 		`<div id="a">abc</div><p id="b">def</p>`,
-		`#a { text-indent: 2em hanging } #b { text-indent: 3em hanging }`); got != 2 {
+		`#a { text-indent: 2quips } #b { text-indent: 3quips }`); got != 2 {
 		t.Errorf("two different unusable indents were reported %d times, want twice — "+
 			"without two the document above proves nothing about the suppression", got)
 	}
@@ -274,9 +279,19 @@ func TestWordSpacingCountsTheNoBreakSpace(t *testing.T) {
 	// for the purpose of collapsing, so it stays inside the word's run — which is
 	// exactly why counting it needs its own walk rather than falling out of the
 	// run being a space.
+	//
+	// The width is summed over the line's runs rather than read off the first,
+	// because the no-break space ends one: a run carries a width and no way to
+	// say where inside it the extra room is, so the spacing after a separator is
+	// only drawn if the separator is last. TestWordSpacingMovesWhatFollowsTheNoBreakSpace
+	// below is the half that checks it lands in the right place.
 	root := layoutOf(t, 600, `<div id="p">a&#160;b</div>`,
 		noDefaults+spaceCSS+` #p { word-spacing: 10px }`)
-	if got := runWidths(t, root, "p")[0]; got != 46 {
+	var got float64
+	for _, w := range runWidths(t, root, "p") {
+		got += w
+	}
+	if got != 46 {
 		t.Errorf("\"a\\u00a0b\" with 10px word-spacing is %gpx, want 46 (3 x 12 + 10)", got)
 	}
 }

@@ -120,15 +120,20 @@ type Styled struct {
 	// OwnFontSize and OwnPseudoFontSize mark the elements whose font-size came
 	// from a declaration of their own rather than from their parent.
 	//
-	// Nothing else in the cascade needs this and font-size does, because it is
-	// the one property whose computed value is not the value stored here: CSS
-	// makes it an absolute length, and what is in Styles is what the author
-	// wrote. A consumer resolving "2em" against the parent's size gets the right
-	// answer for the element that declared it and the wrong one for every
-	// descendant that merely inherited it — twice the parent at each level, so a
-	// paragraph four levels down a "font-size: 2em" wrapper is set in 256px.
+	// A font-size in Styles is normally an absolute length — computed here, and
+	// written back, because that is what a computed value is and what a
+	// descendant inherits. The exception is a value this engine cannot resolve,
+	// which is left as the author wrote it rather than replaced by an answer
+	// nobody has; and a consumer resolving *that* against the parent's size
+	// would get the right answer for the element that declared it and the wrong
+	// one for every descendant that merely inherited it — twice the parent at
+	// each level, so a paragraph four levels down a "font-size: 2em" wrapper is
+	// set in 256px.
 	//
-	// That was not hypothetical. It is what this map was added to stop.
+	// That was not hypothetical: it is what this map was added to stop, back
+	// when every font-size was stored as written. What is left of it is the
+	// unresolvable case, which is also the one where the consumer has an element
+	// to report the failure against and the cascade does not.
 	OwnFontSize       map[*html.Node]bool
 	OwnPseudoFontSize map[PseudoKey]bool
 
@@ -140,8 +145,41 @@ type Styled struct {
 	Incomplete bool
 }
 
+// Metrics answers the one font question the cascade cannot answer for itself.
+//
+// font-size is computed here, because a computed length is an absolute one and
+// the em in every other declaration is relative to the answer. CSS Values
+// §5.1.1 makes the font-relative units in a *font-size* refer to the parent
+// element's font — "font-size: 6ex" is six times the parent's x-height — and the
+// cascade has no faces: which face sets an element is chosen from the
+// font-family this stage computes, by a stage that runs after it.
+//
+// So a caller that has already loaded its fonts can offer them here. Without one
+// the fallback CSS names is used, which is half an em, and that was the only
+// answer available before this existed. It is an interface rather than a font
+// set because this package must not know what a face is: the question asked is
+// about a computed style and a size, and both are already this package's own.
+//
+// Only ex is asked. ch and ic need a glyph measured through a shaper, and they
+// are not silently wrong without one — a length in a unit with no metric is
+// declined, so the declaration is left as written and reported by whoever has an
+// element to report it against.
+type Metrics interface {
+	// XHeight is the x-height of the face a computed style selects, at a size,
+	// and whether that face states one at all. A face that states none is not
+	// an error: §5.1.1 says to assume half an em, which is what a false here
+	// produces.
+	XHeight(cs ComputedStyle, size Unit) (Unit, bool)
+}
+
 // Apply computes a style for every element in a document.
 func Apply(doc *html.Node, sheets []Sheet) Styled {
+	return ApplyWith(doc, sheets, nil)
+}
+
+// ApplyWith is Apply with a source for the font metrics a font-size may need.
+// See Metrics. A nil source is the same as Apply.
+func ApplyWith(doc *html.Node, sheets []Sheet, m Metrics) Styled {
 	s := &Styler{matcher: NewMatcher(doc), seen: map[string]bool{}}
 
 	// Expand shorthands and drop what the engine does not implement, once for
@@ -156,6 +194,15 @@ func Apply(doc *html.Node, sheets []Sheet) Styled {
 		OwnFontSize:       map[*html.Node]bool{},
 		OwnPseudoFontSize: map[PseudoKey]bool{},
 	}
+	// The font size of every element, which is what an em in its own
+	// declarations is relative to. It is resolved here rather than left to the
+	// consumer because a computed length is an absolute one, and turning the
+	// em into a number is the last thing that needs the element's own size.
+	sizes := map[*html.Node]Unit{}
+	initial, _ := FromPx(DefaultFontSize)
+	rootSize := initial
+	rootSeen := false
+
 	// Document order, so a parent is always computed before its children and
 	// inheritance can read the parent's finished values.
 	doc.Walk(func(n *html.Node) bool {
@@ -163,6 +210,45 @@ func Apply(doc *html.Node, sheets []Sheet) Styled {
 			return true
 		}
 		cs, own := s.computeFor(n, rules, out.Styles, "")
+
+		// The parent's own size, which is what an em means here, and the
+		// initial size for the root — a document that says nothing about
+		// font-size is set at 16px.
+		parentSize := initial
+		if p := parentElement(n); p != nil {
+			if got, ok := sizes[p]; ok {
+				parentSize = got
+			}
+		}
+		// On the root's *own* font-size a rem is the initial value, because the
+		// value it would otherwise mean is the one being computed. Everything
+		// else on the root resolves rem against the answer.
+		// The face an "ex" here belongs to is the *parent's*, since this
+		// element's own font-size is the thing being computed — and so is the
+		// parent's whole computed style, because an element may declare a
+		// font-family of its own beside the size and the two are not resolved
+		// together. At the root there is no parent element and the element's own
+		// style is the nearest thing there is.
+		fontStyle := cs
+		if p := parentElement(n); p != nil {
+			if got, ok := out.Styles[p]; ok {
+				fontStyle = got
+			}
+		}
+		size, resolved := fontSizeOf(cs, own, parentSize, rootSize, m, fontStyle)
+		sizes[n] = size
+		if !rootSeen {
+			rootSize, rootSeen = size, true
+		}
+		if resolved {
+			// Written back, so that what is stored is the computed value: an
+			// absolute length, which is what a descendant inherits. When it
+			// could not be resolved the declaration is left as the author wrote
+			// it, for layout to report against the element.
+			cs["font-size"] = pxValue(size)
+		}
+		absolutiseLengths(cs, size, rootSize)
+
 		out.Styles[n] = cs
 		if own {
 			out.OwnFontSize[n] = true
@@ -175,6 +261,17 @@ func Apply(doc *html.Node, sheets []Sheet) Styled {
 			// why the parent style passed here is that element's own.
 			key := PseudoKey{Node: n, Name: name}
 			pcs, own := s.computeForPseudo(n, rules, out.Styles[n], name)
+			// A pseudo-element's em is relative to its own font-size, and it
+			// inherits from the element it belongs to rather than from that
+			// element's parent.
+			// A pseudo-element's ex is its originating element's, for the same
+			// reason its em is: it inherits from that element and not from that
+			// element's parent.
+			psize, presolved := fontSizeOf(pcs, own, size, rootSize, m, cs)
+			if presolved {
+				pcs["font-size"] = pxValue(psize)
+			}
+			absolutiseLengths(pcs, psize, rootSize)
 			out.Pseudo[key] = pcs
 			if own {
 				out.OwnPseudoFontSize[key] = true
@@ -323,6 +420,62 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 		return nil
 	}
 
+	if name == "background-image" && !legalBackgroundImage(d.Value) {
+		// §4.2 a third time. "background-image: url(x.png) repeat" is a
+		// background-repeat value written where only an <image> belongs, so
+		// there is no declaration here at all and nothing paints — which is
+		// what every browser shows, and is why this is not a gap in the engine.
+		//
+		// It matters that this is not the unsupported report the painter would
+		// otherwise raise. That report says "a browser draws something here and
+		// this does not", and the whole reftest ratchet is built on the
+		// difference: CSS2/backgrounds/background-image-005 asks for green text
+		// and gets it, and was counted as a vacuous pass for years because the
+		// engine claimed to be missing an image no engine draws.
+		//
+		// Not marked unsupported, for the reason the checks above are not.
+		s.report(Finding{
+			Offset: d.Offset,
+			Message: "\"background-image: " + serialize(d.Value) + "\" is not an " +
+				"image, so the declaration was dropped",
+			Property: name,
+		})
+		return nil
+	}
+
+	if name == "display" && !legalDisplay(d.Value) {
+		// §4.2 once more, and this one has a visible cost in the other
+		// direction. An engine that reads an unrecognised display value as the
+		// property's *initial* value makes the element inline, and the initial
+		// value is what CSS says the property means when nobody has set it —
+		// which is not this case. The declaration is invalid, so it never
+		// happened, and what stands is what the cascade would have produced
+		// without it: the user agent sheet's "div { display: block }".
+		//
+		// The two answers are as far apart as they can be. CSS2/abspos/
+		// static-fixed-inside-abspos writes "display: absolute" — the author
+		// meant "position" — on a div whose background is the green square the
+		// test is about. Read as inline, the div has no in-flow content, so it
+		// has no line box, so nothing of it is painted at all and the page is
+		// the red square underneath.
+		//
+		// It is also what makes the prefixed idiom work. An author who writes
+		// "display: -moz-box; display: flex" is relying on the first
+		// declaration being thrown away by everything that does not know it,
+		// and an engine that instead lets it stand as "inline" gets neither.
+		//
+		// Not marked unsupported, for the reason the checks above are not:
+		// nothing is missing here, a stylesheet said something CSS forbids and
+		// CSS says what to do about it.
+		s.report(Finding{
+			Offset: d.Offset,
+			Message: "\"display: " + serialize(d.Value) + "\" is not a display " +
+				"value, so the declaration was dropped",
+			Property: name,
+		})
+		return nil
+	}
+
 	if name == "quotes" && !legalQuotes(d.Value) {
 		// §12.3.2's grammar is "[<string> <string>]+ | none", so an odd number of
 		// strings names a level with an opening mark and no closing one and is not
@@ -400,6 +553,18 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 				Property:    name,
 			})
 		}
+		return []preparedDecl{{
+			property: name, value: d.Value, important: d.Important, offset: d.Offset,
+		}}
+	}
+
+	if isLogicalLonghand(name) {
+		// A logical property is implemented by being renamed to the physical
+		// one it sets, which happens per element once the direction is known.
+		// It is not in the registry — a logical name never survives into a
+		// computed style, so it has no initial value and nothing would read one
+		// — so it has to be let through here rather than falling to the
+		// unimplemented report below.
 		return []preparedDecl{{
 			property: name, value: d.Value, important: d.Important, offset: d.Offset,
 		}}
@@ -483,12 +648,24 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 	// The unsupported-property finding: a declaration parsed and then not
 	// applied. It is on by default and it is the cheapest guardrail in the
 	// design — a page where a property was dropped is plausible and wrong.
+	//
+	// A vendor-prefixed name is the one case where dropping it is not a gap.
+	// "-moz-tab-size" is Gecko's property, not CSS's, and every engine that is
+	// not Gecko drops it — which is precisely what the prefix is for and why an
+	// author writes the standard property beside it. Saying the page differs
+	// from the one the stylesheet describes would be wrong: the stylesheet
+	// describes this page to every engine but one.
+	//
+	// It is still reported, because an author who wrote *only* the prefixed
+	// spelling has a page missing what they asked for and no other way to learn
+	// it. What changes is the claim, not the message. See css/selector.go's
+	// inapplicable for the same distinction drawn about a selector.
 	if !s.seen[name] {
 		s.seen[name] = true
 		s.report(Finding{
 			Offset:      d.Offset,
 			Message:     "the property \"" + name + "\" is not implemented, so it was not applied",
-			Unsupported: true,
+			Unsupported: !vendorPrefixed(name),
 			Property:    name,
 		})
 	}
@@ -514,10 +691,10 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 // side, and every one of them invisible until inline boxes started painting
 // their borders, because the reference draws its two rules on a <span>.
 //
-// The shorthands are not here. "padding: 1px -2px" is invalid as a whole, and
-// catching it needs the shorthand expander rather than a name lookup; what
-// happens today is that the negative reaches two longhands, which is a gap this
-// records rather than hides.
+// The shorthands are here too, and the table below says which and why. They were
+// not, and the gap was the shape §4.2 warns about: "padding: 8px; padding: -8px"
+// dropped the eight pixels and clamped the second declaration to zero, so a
+// declaration CSS says does not exist overrode one that does.
 // colourValued lists the properties whose whole value is a colour.
 //
 // A shorthand is not among them: "border" and "background" tell their parts
@@ -553,6 +730,144 @@ func legalColour(name string, vals []css.ComponentValue) bool {
 	return ok
 }
 
+// legalBackgroundImage reports whether a value is one background-image takes: a
+// comma-separated list, each entry an <image> or "none".
+//
+// It says nothing about which images this engine can *paint*. An image it
+// cannot paint is a gap in the engine and is reported as one; a value that is
+// not an image is a stylesheet mistake, and CSS says what becomes of it. Both
+// leave the box bare and only one of them is worth telling an author about as a
+// missing feature.
+//
+// Every <image> is a single token — a url(), or a function: the gradients,
+// image-set(), cross-fade(), element(), and whatever comes next. So the shape
+// is checkable without a list of function names, which is what keeps this from
+// rejecting an image nobody has written yet.
+func legalBackgroundImage(vals []css.ComponentValue) bool {
+	layers := splitOnComma(vals)
+	for _, layer := range layers {
+		parts := splitOnWhitespace(layer)
+		if len(parts) != 1 || len(parts[0]) != 1 {
+			return false
+		}
+		v := parts[0][0]
+		if v.IsFunction() {
+			continue
+		}
+		if !v.IsToken() {
+			return false
+		}
+		switch v.Token.Kind {
+		case css.URL:
+			continue
+		case css.Ident:
+		default:
+			return false
+		}
+		switch strings.ToLower(v.Token.Value) {
+		case "none":
+		case kwInherit, kwInitial, kwUnset, kwRevert:
+			// A CSS-wide keyword is the whole value or it is nothing:
+			// "none, inherit" is not a layer list with a keyword in it.
+			if len(layers) != 1 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return len(layers) > 0
+}
+
+// legalDisplay reports whether a "display" value is one css-display-3 defines.
+//
+// The list is that specification's, plus the two legacy shapes CSS has always
+// had — "inline-block" and friends — and "-webkit-box", which this engine
+// implements as a block for "-webkit-line-clamp" to be written on. A value not
+// on it is not a strange display, it is not a display at all.
+//
+// The two-value syntax is accepted loosely: any combination of an outside
+// keyword, an inside keyword and "list-item". Being permissive is the safe
+// direction here, because the cost of the two mistakes is not symmetric —
+// keeping a value nobody implements gives the element the fallback it has
+// always had, and dropping one that is really a display silently restores the
+// user agent sheet's answer instead.
+func legalDisplay(vals []css.ComponentValue) bool {
+	for _, v := range vals {
+		if v.IsFunction() || v.IsBlock() {
+			// A value this engine has not finished reading. "var()" is the one
+			// that matters: custom properties are not substituted here, so what
+			// the declaration says is not known yet, and calling it invalid
+			// would be deciding that on no evidence.
+			return true
+		}
+	}
+	parts := splitOnWhitespace(vals)
+	if len(parts) == 0 || len(parts) > 3 {
+		return false
+	}
+	words := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if len(part) != 1 || part[0].Token.Kind != css.Ident {
+			// A string, a number, a punctuation mark. Whatever else it is, it
+			// is not a keyword, and every display value is one.
+			return false
+		}
+		words = append(words, strings.ToLower(part[0].Token.Value))
+	}
+	if len(words) == 1 {
+		switch words[0] {
+		case kwInherit, kwInitial, kwUnset, kwRevert:
+			return true
+		}
+		if singleDisplay[words[0]] {
+			return true
+		}
+		// "flow" and "flow-root" are inside keywords and are also valid alone.
+		return displayInside[words[0]]
+	}
+	var outside, inside, item int
+	for _, w := range words {
+		switch {
+		case displayOutside[w]:
+			outside++
+		case displayInside[w]:
+			inside++
+		case w == "list-item":
+			item++
+		default:
+			return false
+		}
+	}
+	return outside <= 1 && inside <= 1 && item <= 1
+}
+
+var displayOutside = map[string]bool{"block": true, "inline": true, "run-in": true}
+
+var displayInside = map[string]bool{
+	"flow": true, "flow-root": true, "table": true,
+	"flex": true, "grid": true, "ruby": true,
+}
+
+// singleDisplay is every value that stands on its own: the box keywords, the
+// legacy pairs, and the layout-internal ones a table is built from.
+var singleDisplay = map[string]bool{
+	"none": true, "contents": true,
+	"block": true, "inline": true, "run-in": true, "list-item": true,
+	"inline-block": true, "inline-table": true,
+	"inline-flex": true, "inline-grid": true,
+	"table": true, "table-row-group": true, "table-header-group": true,
+	"table-footer-group": true, "table-row": true, "table-cell": true,
+	"table-column-group": true, "table-column": true, "table-caption": true,
+	"flex": true, "grid": true, "ruby": true,
+	"ruby-base": true, "ruby-text": true,
+	"ruby-base-container": true, "ruby-text-container": true,
+	"math": true,
+	// Not a specification value. This engine reads it as a block, because
+	// css-overflow-4's compatibility section is written around it.
+	"-webkit-box": true,
+}
+
 var nonNegative = map[string]bool{
 	"width": true, "height": true,
 	"min-width": true, "min-height": true,
@@ -561,6 +876,38 @@ var nonNegative = map[string]bool{
 	"padding-bottom": true, "padding-left": true,
 	"border-top-width": true, "border-right-width": true,
 	"border-bottom-width": true, "border-left-width": true,
+	// And the ones CSS 2.1 does not have. Each definition states its range as
+	// a non-negative one, in the notation the later specifications use:
+	// line-height is <number [0,∞]> | <length [0,∞]> | <percentage [0,∞]>,
+	// border-spacing is two non-negative lengths, outline-width is a border
+	// width, background-size takes non-negative lengths and percentages, and
+	// tab-size is <number [0,∞]> | <length [0,∞]>.
+	"line-height": true, "border-spacing": true, "outline-width": true,
+	"background-size": true, "tab-size": true,
+
+	// And the shorthands every one of whose numeric components is one of the
+	// above. §4.2 drops an invalid declaration whole, so "padding: 1px -2px" is
+	// no more a declaration than "padding-top: -2px" is — and the negative used
+	// to reach two of the four longhands and be clamped there, which is the
+	// worst of the three answers: the author's earlier "padding: 8px" was
+	// overridden by a declaration CSS says does not exist.
+	//
+	// A shorthand is listed only where a negative number cannot be anything but
+	// an illegal component. In the border family the only length is the width;
+	// a style is a keyword and a colour is a keyword, a hash or a function, and
+	// hasNegativeNumber does not look inside a function. In "font" the numbers
+	// are the weight, the size and the line-height, and none of the three may be
+	// negative.
+	//
+	// "margin" and "background" are deliberately absent and are the reason this
+	// is a list rather than a rule about shorthands. A negative margin is legal
+	// and useful, and so is a negative background-position — "background: url(x)
+	// -10px 0" places an image off its own left edge, which is how a sprite
+	// sheet works. Dropping either would break a page doing nothing wrong.
+	"padding": true, "border-width": true,
+	"border": true, "border-top": true, "border-right": true,
+	"border-bottom": true, "border-left": true,
+	"outline": true, "font": true,
 }
 
 // legalQuotes reports whether a "quotes" value matches §12.3.2's grammar.
@@ -732,12 +1079,17 @@ func (s *Styler) report(f Finding) {
 	}
 }
 
-// pseudoElementNames are the ones that generate a box of their own.
+// pseudoElementNames are the ones this stage computes a style for.
 //
-// ::first-line and ::first-letter are deliberately absent: they style part of
-// something that already exists rather than generating anything, and they need
-// the line breaking to have happened before there is a first line to style.
-var pseudoElementNames = []string{"before", "after", "marker"}
+// Three of them generate a box. ::first-line does not — it styles part of
+// something that already exists, and there is no first line until the breaking
+// has happened — so nothing downstream asks this stage to make one. What it does
+// need is the style, resolved here like any other: its font-size is relative to
+// the element's own, and every em in it is absolutised against the answer, which
+// is work only the cascade can do.
+//
+// ::first-letter is still absent, because nothing reads it yet.
+var pseudoElementNames = []string{"before", "after", "marker", "first-line"}
 
 // anyRuleTargets reports whether any rule selects a pseudo-element of an
 // element.
@@ -819,14 +1171,6 @@ func (s *Styler) computeFor(n *html.Node, rules []preparedRule,
 		inline = s.inlineDeclarations(n)
 	}
 
-	winners := map[string]candidate{}
-	for _, c := range cands {
-		if best, ok := winners[c.property]; ok && !beats(c, best) {
-			continue
-		}
-		winners[c.property] = c
-	}
-
 	var parent ComputedStyle
 	if pseudo != "" {
 		// A pseudo-element inherits from its own element, which the caller put
@@ -834,6 +1178,36 @@ func (s *Styler) computeFor(n *html.Node, rules []preparedRule,
 		parent = done[n]
 	} else if p := parentElement(n); p != nil {
 		parent = done[p]
+	}
+
+	winners := map[string]candidate{}
+	pick := func() {
+		clear(winners)
+		for _, c := range cands {
+			if best, ok := winners[c.property]; ok && !beats(c, best) {
+				continue
+			}
+			winners[c.property] = c
+		}
+	}
+	pick()
+
+	// CSS Logical Properties. "margin-inline-start" is the margin before the
+	// first character of a line, which is the left one in English and the right
+	// one in Arabic — so which physical property it sets is this element's own
+	// answer, and cannot be settled where the shorthands were expanded.
+	//
+	// The rename happens before the winner is chosen and the winners are then
+	// picked again, because a logical declaration and a physical one compete:
+	// css-logical says they set the same thing, so "margin-left: 1px;
+	// margin-inline-start: 2px" is 2px in English and swapping the lines makes
+	// it 1px. Renaming first is what lets the ordinary cascade decide that.
+	//
+	// Direction is resolved with the same three lines the main loop uses below,
+	// because it is the same question — a winner, an inline style over it, and
+	// inheritance under both.
+	if renameLogical(cands, inline, s.isRTL(winners, inline, parent)) {
+		pick()
 	}
 
 	out := make(ComputedStyle, len(properties))
@@ -1022,8 +1396,15 @@ func (s *Styler) inlineDeclarations(n *html.Node) map[string]preparedDecl {
 	}
 
 	out := map[string]preparedDecl{}
-	for _, d := range decls {
+	for i, d := range decls {
 		for _, e := range s.expand(d, OriginAuthor) {
+			// Where it was written in the attribute. Nothing here needs it to
+			// choose between two declarations of the same property — the loop
+			// order does that — but renaming a logical property to a physical
+			// one can put two of them in the same slot after the fact, and then
+			// the order is the only thing that separates them. See
+			// renameLogical.
+			e.order = i
 			// A later declaration in the same attribute wins, and importance
 			// wins over its absence — the same rules as any other block, with
 			// no specificity to separate them.
@@ -1034,4 +1415,52 @@ func (s *Styler) inlineDeclarations(n *html.Node) map[string]preparedDecl {
 		}
 	}
 	return out
+}
+
+// vendorPrefixed reports whether a property name is one engine's rather than
+// CSS's.
+//
+// The four prefixes are the ones CSS 2.1 §4.1.2.1 describes and the ones in use:
+// a name beginning with "-" and a vendor identifier is reserved for that vendor,
+// and no other engine is expected to know it.
+//
+// "-webkit-line-clamp" is prefixed and *is* implemented here, which is not a
+// contradiction: this is only reached for a name nothing acts on, and a prefixed
+// property the engine implements never gets that far.
+func vendorPrefixed(name string) bool {
+	for _, prefix := range []string{"-webkit-", "-moz-", "-ms-", "-o-"} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	// The general form: a leading "-" followed by an identifier and another "-".
+	// It catches the prefixes nobody has heard of, which is what the syntax
+	// reserves the shape for.
+	if len(name) > 1 && name[0] == '-' {
+		return strings.Contains(name[1:], "-")
+	}
+	return false
+}
+
+// isRTL is whether this element's inline axis runs right to left, which is what
+// turns a logical property into a physical one.
+//
+// It resolves "direction" exactly as computeFor's main loop resolves any
+// property — the cascade's winner, an inline style above it unless the winner is
+// important, and inheritance under both — because it is that same question asked
+// early.
+func (s *Styler) isRTL(winners map[string]candidate,
+	inline map[string]preparedDecl, parent ComputedStyle) bool {
+
+	value, have := "", false
+	if c, ok := winners["direction"]; ok {
+		value, have = serialize(c.value), true
+	}
+	if d, ok := inline["direction"]; ok {
+		if c, ok := winners["direction"]; !ok || !c.important {
+			value, have = serialize(d.value), true
+		}
+	}
+	got := s.resolve("direction", properties["direction"], value, have, parent)
+	return strings.EqualFold(strings.TrimSpace(got), "rtl")
 }

@@ -25,13 +25,15 @@ type (
 )
 
 var (
-	whiteSpaceFor        = paragraph.WhiteSpaceFor
-	whiteSpaceOf         = paragraph.WhiteSpaceOf
-	wordBreakOf          = paragraph.WordBreakOf
-	lineBreakOf          = paragraph.LineBreakOf
-	overflowWrapOf       = paragraph.OverflowWrapOf
-	collapseWhitespace   = paragraph.CollapseWhitespace
-	wordSpaceTransformOf = paragraph.WordSpaceTransformOf
+	whiteSpaceFor           = paragraph.WhiteSpaceFor
+	whiteSpaceOf            = paragraph.WhiteSpaceOf
+	wordBreakOf             = paragraph.WordBreakOf
+	lineBreakOf             = paragraph.LineBreakOf
+	overflowWrapOf          = paragraph.OverflowWrapOf
+	collapseWhitespace      = paragraph.CollapseWhitespace
+	collapseWhitespaceAfter = paragraph.CollapseWhitespaceAfter
+	boundaryAfter           = paragraph.BoundaryAfter
+	wordSpaceTransformOf    = paragraph.WordSpaceTransformOf
 	// The two rune predicates the line breaking shares with the collapsing.
 	isOtherSpaceSeparator = paragraph.IsOtherSpaceSeparator
 	separatorBreaksAfter  = paragraph.SeparatorBreaksAfter
@@ -69,14 +71,23 @@ var (
 )
 
 var (
-	hyphensOf          = paragraph.HyphensOf
-	mayNotBeginLine    = paragraph.MayNotBeginLine
-	splitAtBreaks      = paragraph.SplitAtBreaks
-	tabAdvance         = paragraph.TabAdvance
-	isIdeographic      = paragraph.IsIdeographic
-	spacingAdvance     = paragraph.SpacingAdvance
-	spacedUnits        = paragraph.SpacedUnits
-	isDefaultIgnorable = paragraph.IsDefaultIgnorable
+	hyphensOf                     = paragraph.HyphensOf
+	hyphenatePieces               = paragraph.HyphenatePieces
+	hyphenatesLanguage            = paragraph.HyphenatesLanguage
+	trailingStopOrComma           = paragraph.TrailingStopOrComma
+	autospaceOf                   = paragraph.AutospaceOf
+	splitAtAutospace              = paragraph.SplitAtAutospace
+	splitAtCursiveTracking        = paragraph.SplitAtCursiveTracking
+	splitAtWordSeparators         = paragraph.SplitAtWordSeparators
+	mayNotBeginLine               = paragraph.MayNotBeginLine
+	splitAtBreaks                 = paragraph.SplitAtBreaks
+	tabAdvance                    = paragraph.TabAdvance
+	isIdeographic                 = paragraph.IsIdeographic
+	spacingAdvance                = paragraph.SpacingAdvance
+	spacedUnits                   = paragraph.SpacedUnits
+	isCursiveScript               = paragraph.IsCursiveScript
+	cursiveTrackingSuppressesText = paragraph.CursiveTrackingSuppresses
+	isDefaultIgnorable            = paragraph.IsDefaultIgnorable
 )
 
 // Geometry and the item type itself.
@@ -103,6 +114,10 @@ type (
 // wordSpaceTransform is what the property of that name sets: which character a
 // virtual word separator becomes, or nothing at all.
 type wordSpaceTransform = paragraph.WordSpaceTransform
+
+// textBoundary is what §4.1.1's segment break rules need to know about the text
+// a node follows. See paragraph.Boundary.
+type textBoundary = paragraph.Boundary
 
 // What the walk over an inline subtree carries, and what a line is made of.
 type (

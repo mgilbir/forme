@@ -16,8 +16,16 @@ import (
 // this decides what numbers go into it.
 
 // strutFor measures the block's own font at its own size.
-func (l *layouter) strutFor(b *Box) strut {
-	s := strut{Height: l.lineHeight(b), Baseline: l.baselineOf(b, l.lineHeight(b))}
+func (l *layouter) strutFor(b *Box) strut { return l.strutAt(b, b.FontSize) }
+
+// strutAt is strutFor at a size other than the box's own, which is what
+// text-fit's scaling produces: css-text-5 scales the size the text is *set* in
+// without changing the computed font-size, so the strut is measured at the one
+// and every font-relative length the document wrote is still resolved against
+// the other.
+func (l *layouter) strutAt(b *Box, size style.Unit) strut {
+	h := l.lineHeightAt(b, size)
+	s := strut{Height: h, Baseline: l.baselineAt(b, h, size)}
 	face, ok := l.fontFor(b)
 	if !ok {
 		return s
@@ -27,7 +35,7 @@ func (l *layouter) strutFor(b *Box) strut {
 	if upem == 0 {
 		return s
 	}
-	if ascent, descent, ok := l.lineExtents(b, face); ok {
+	if ascent, descent, ok := l.lineExtentsAt(b, face, size); ok {
 		s.Ascent, s.Descent = ascent, descent
 	}
 	// The x-height "vertical-align: middle" is measured against.
@@ -44,14 +52,14 @@ func (l *layouter) strutFor(b *Box) strut {
 	// standard fourteen state one now, and keeping the two in step costs this
 	// branch. TestTheStrikeAndAMiddleAlignedBoxUseOneXHeight is what says they
 	// are still in step.
-	s.XHeight = b.FontSize.Mul(0.5)
+	s.XHeight = size.Mul(0.5)
 	switch {
 	case d.Has(shape.MetricXHeight) && d.XHeight > 0:
-		s.XHeight = b.FontSize.Mul(float64(d.XHeight) / upem)
+		s.XHeight = size.Mul(float64(d.XHeight) / upem)
 	case d.CapHeight > 0:
 		// Cap height is reported, and x-height is about seven tenths of it for
 		// the faces that report either.
-		s.XHeight = b.FontSize.Mul(float64(d.CapHeight) / upem * 0.7)
+		s.XHeight = size.Mul(float64(d.CapHeight) / upem * 0.7)
 	}
 	return s
 }
@@ -71,8 +79,52 @@ func (l *layouter) strutFor(b *Box) strut {
 // than its own type — and it is passed on rather than clamped, because that is
 // precisely how a stylesheet packs lines closer than the font wants.
 func (l *layouter) leading(b *Box) (above, below style.Unit) {
-	h := l.lineHeight(b)
-	above = l.baselineOf(b, h)
+	face, _ := l.fontFor(b)
+	return l.leadingInFace(b, face)
+}
+
+// leadingAt is leading at a size other than the box's own. See strutAt.
+func (l *layouter) leadingAt(b *Box, size style.Unit) (above, below style.Unit) {
+	face, _ := l.fontFor(b)
+	return l.leadingInFaceAt(b, face, size)
+}
+
+// leadingInFace is leading for a run set in a face the box did not declare.
+//
+// §10.8.1 measures an inline box's leading against "the font", and a run the
+// first available font could not set is not in that font: the fallback stack
+// found another, and it is the other one's ascent and descent that decide how
+// far the run reaches. A Japanese word in a paragraph declared in a Latin serif
+// was laid out to the serif's metrics — the same 111.6px at 100px whatever set
+// it — and the line was as much too short as the two faces differ.
+//
+// It changes nothing for the run the declared face *can* set, which is every run
+// of almost every document: the face passed in is then the face fontFor returns
+// and the two answers are one.
+//
+// It is asked only where the line-height is "normal", and the boundary is not
+// where it first looks. A declared line-height fixes the *height* whatever the
+// font — but the half-leading inside it is what is left once the face's own
+// ascent and descent are taken out, so asking this for a run in another face
+// gives that run a different baseline offset from the rest of its box, and the
+// line grows past the height the document declared.
+//
+// §10.8.1 puts the half-leading on the inline *box*, and a run the fallback
+// stack found is not a box of its own. Under "normal" the question does not
+// arise: the height is the ascent and the descent, so there is no leading to
+// halve and every run sits on the one baseline with its own extents above and
+// below it — which is the union the specification asks for.
+//
+// Measured: asked for a declared line-height as well, it costs 18 clean passes
+// and takes line-height-201 — its own family's fixture for exactly that — with
+// it.
+func (l *layouter) leadingInFace(b *Box, face *shape.Face) (above, below style.Unit) {
+	return l.leadingInFaceAt(b, face, b.FontSize)
+}
+
+func (l *layouter) leadingInFaceAt(b *Box, face *shape.Face, size style.Unit) (above, below style.Unit) {
+	h := l.lineHeightInFaceAt(b, face, size)
+	above = l.baselineInFaceAt(b, face, h, size)
 	return above, h.Sub(above)
 }
 
@@ -209,6 +261,15 @@ func (l *layouter) spaceAdvance(block *Box, fallback *shape.Face) style.Unit {
 	if face == nil {
 		return 0
 	}
+	// And the face that would *set* the space, which is not always the block's
+	// first family. §8.1 names a character, and a character is set in the first
+	// available font that has a glyph for it — a family with no U+0020 in it
+	// answers with .notdef, whose advance has nothing to do with a space.
+	// tab-size-integer-005 declares such a font first and says so in a comment
+	// of its own.
+	if f, ok := l.faceWithGlyph(block, ' '); ok {
+		face = f
+	}
 	s := l.spacingFor(block)
 	return l.br.Measure(face, " ", block.FontSize).Add(s.Letter).Add(s.Word)
 }
@@ -297,9 +358,43 @@ func (l *layouter) balanceCaps(b *Box, items []inlineItem, width, indent style.U
 // line-height is usually written that way: a multiplier inherits as a ratio and
 // a length inherits as a fixed distance.
 func (l *layouter) lineHeight(b *Box) style.Unit {
+	face, _ := l.fontFor(b)
+	return l.lineHeightInFace(b, face)
+}
+
+// lineHeightAt is lineHeight at a size other than the box's own. See strutAt.
+func (l *layouter) lineHeightAt(b *Box, size style.Unit) style.Unit {
+	face, _ := l.fontFor(b)
+	return l.lineHeightInFaceAt(b, face, size)
+}
+
+// usesNormalLineHeight reports whether a box's line-height comes from its font
+// rather than from a value the document wrote, which is the only case where the
+// face a run is set in can change how tall the run is.
+func usesNormalLineHeight(b *Box) bool {
+	value := strings.ToLower(strings.TrimSpace(b.Style["line-height"]))
+	return value == "" || value == "normal"
+}
+
+// lineHeightInFace is lineHeight for a run set in a face the box did not
+// declare. See leadingInFace.
+func (l *layouter) lineHeightInFace(b *Box, face *shape.Face) style.Unit {
+	return l.lineHeightInFaceAt(b, face, b.FontSize)
+}
+
+// lineHeightInFaceAt is lineHeightInFace at a size other than the box's own.
+//
+// Only "normal" reads that size. A declared line-height is a value of the
+// document's, and css-text-5 is explicit that text-fit "does not affect the
+// font-size computed value, and thus does not affect font-size-relative length
+// values of other properties. For example, 'line-height: 1.5em' ... [is] not
+// affected". So the two branches below resolve against the box's own size and
+// not the scaled one, and the suite's grow-per-line-all writes both cases side
+// by side to say so.
+func (l *layouter) lineHeightInFaceAt(b *Box, face *shape.Face, size style.Unit) style.Unit {
 	value := strings.ToLower(strings.TrimSpace(b.Style["line-height"]))
 	if value == "" || value == "normal" {
-		return l.normalLineHeight(b)
+		return l.normalLineHeightInFaceAt(b, face, size)
 	}
 	if n, ok := parseNumber(value); ok && n >= 0 {
 		// A negative multiplier is not a line-height: §10.8.1 says the value
@@ -313,7 +408,7 @@ func (l *layouter) lineHeight(b *Box) style.Unit {
 			return v
 		}
 	}
-	return l.normalLineHeight(b)
+	return l.normalLineHeightInFaceAt(b, face, size)
 }
 
 // normalLineHeight is "line-height: normal".
@@ -324,13 +419,21 @@ func (l *layouter) lineHeight(b *Box) style.Unit {
 // constant would have produced. Noto Sans comes to more than 1.2. Neither is
 // something an engine can guess, which is the whole argument for asking.
 func (l *layouter) normalLineHeight(b *Box) style.Unit {
-	face, ok := l.fontFor(b)
-	if !ok {
-		return b.FontSize.Mul(normalLineHeightFallbackFactor)
+	face, _ := l.fontFor(b)
+	return l.normalLineHeightInFace(b, face)
+}
+
+func (l *layouter) normalLineHeightInFace(b *Box, face *shape.Face) style.Unit {
+	return l.normalLineHeightInFaceAt(b, face, b.FontSize)
+}
+
+func (l *layouter) normalLineHeightInFaceAt(b *Box, face *shape.Face, size style.Unit) style.Unit {
+	if face == nil {
+		return size.Mul(normalLineHeightFallbackFactor)
 	}
 	top, bottom, upem, ok := lineMetrics(face)
 	if !ok {
-		return b.FontSize.Mul(normalLineHeightFallbackFactor)
+		return size.Mul(normalLineHeightFallbackFactor)
 	}
 	var gap float64
 	if d := face.Descriptor(); d.Has(shape.MetricLineGap) {
@@ -340,22 +443,26 @@ func (l *layouter) normalLineHeight(b *Box) style.Unit {
 	// A layout unit is a 64th of a pixel and each product is rounded to one, so
 	// adding three rounded products is not the same number as rounding the sum —
 	// it is out by up to a unit and a half, which is enough to move a line.
-	h := b.FontSize.Mul((top - bottom + gap) / upem)
+	h := size.Mul((top - bottom + gap) / upem)
 	if h <= 0 {
 		// A face stating metrics that sum to nothing would collapse every line
 		// on the page. It is not a value to pass on.
-		return b.FontSize.Mul(normalLineHeightFallbackFactor)
+		return size.Mul(normalLineHeightFallbackFactor)
 	}
 	return h
 }
 
 // lineExtents is lineMetrics at a box's font size.
 func (l *layouter) lineExtents(b *Box, face *shape.Face) (ascent, descent style.Unit, ok bool) {
+	return l.lineExtentsAt(b, face, b.FontSize)
+}
+
+func (l *layouter) lineExtentsAt(b *Box, face *shape.Face, size style.Unit) (ascent, descent style.Unit, ok bool) {
 	top, bottom, upem, ok := lineMetrics(face)
 	if !ok {
 		return 0, 0, false
 	}
-	return b.FontSize.Mul(top / upem), b.FontSize.Mul(-bottom / upem), true
+	return size.Mul(top / upem), size.Mul(-bottom / upem), true
 }
 
 // baselineOf is where the text sits within a line box.
@@ -364,11 +471,25 @@ func (l *layouter) lineExtents(b *Box, face *shape.Face) (ascent, descent style.
 // — is split equally above and below it. That is what makes a paragraph's lines
 // evenly spaced rather than crowded against their tops.
 func (l *layouter) baselineOf(b *Box, lineHeight style.Unit) style.Unit {
-	face, ok := l.fontFor(b)
-	if !ok {
+	face, _ := l.fontFor(b)
+	return l.baselineInFace(b, face, lineHeight)
+}
+
+// baselineAt is baselineOf at a size other than the box's own. See strutAt.
+func (l *layouter) baselineAt(b *Box, lineHeight, size style.Unit) style.Unit {
+	face, _ := l.fontFor(b)
+	return l.baselineInFaceAt(b, face, lineHeight, size)
+}
+
+func (l *layouter) baselineInFace(b *Box, face *shape.Face, lineHeight style.Unit) style.Unit {
+	return l.baselineInFaceAt(b, face, lineHeight, b.FontSize)
+}
+
+func (l *layouter) baselineInFaceAt(b *Box, face *shape.Face, lineHeight, size style.Unit) style.Unit {
+	if face == nil {
 		return lineHeight.Mul(0.8)
 	}
-	ascent, descent, ok := l.lineExtents(b, face)
+	ascent, descent, ok := l.lineExtentsAt(b, face, size)
 	if !ok {
 		return lineHeight.Mul(0.8)
 	}

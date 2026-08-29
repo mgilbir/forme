@@ -3,6 +3,7 @@ package layout
 import (
 	"strings"
 
+	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -62,29 +63,72 @@ func (l *layouter) spacingValue(b *Box, property string) (style.Unit, bool) {
 	return l.lengthOf(b, property, 0)
 }
 
-// textIndent is how far the first line of a block container is pushed in.
+// indentMode is which line boxes §7.1's indent applies to.
 //
-// CSS 2.1 §16.1. A percentage is of the containing block's width, which for a
-// block container's own first line is its content width — the number this is
-// given. A negative value is legal and is how a hanging indent is written, so it
-// is not clamped.
-func (l *layouter) textIndent(b *Box, width style.Unit) style.Unit {
-	if b.afterTheFirstLine {
-		return 0
-	}
+// The length says how far; these two say where. "each-line" adds the line after
+// every forced break to the one a plain indent moves — the block's first — and
+// "hanging" inverts the whole set, so that every line the indent would have
+// moved stays where it is and every other line moves instead.
+//
+// Both are modifiers rather than values, and either may be written on its own or
+// with the other, in any order and on either side of the length. That is why
+// they are pulled out of the value before the length is read: "4em each-line
+// hanging" is a length with two words round it, not a length this engine cannot
+// parse.
+type indentMode struct{ hanging, eachLine bool }
+
+// indentsLine reports whether a line takes the indent.
+//
+// first says the line is the block's first, afterForced that the line before it
+// ended at a forced break. The two questions become one as soon as "each-line"
+// has said whether the second kind counts as a beginning, and "hanging" then
+// answers the opposite of whatever that came to.
+func (m indentMode) indentsLine(first, afterForced bool) bool {
+	begins := first || (m.eachLine && afterForced)
+	return begins != m.hanging
+}
+
+// textIndent is how far a block container's indented lines are pushed in, and
+// which lines those are.
+//
+// CSS 2.1 §16.1 and css-text-3 §7.1. A percentage is of the containing block's
+// width, which for a block container's own lines is its content width — the
+// number this is given. A negative value is legal and is one way to write a
+// hanging indent by hand, so it is not clamped; "hanging" is the other way, and
+// the two are not the same thing — a negative indent moves the first line out,
+// the keyword moves every other line in.
+func (l *layouter) textIndent(b *Box, width style.Unit) (style.Unit, indentMode) {
 	raw := strings.TrimSpace(b.Style["text-indent"])
 	if raw == "" || raw == "0" {
-		return 0
+		return 0, indentMode{}
 	}
-	if v, ok := l.lengthOf(b, "text-indent", width); ok {
-		return v
+	vals, _ := css.ParseComponentValues(raw)
+	var mode indentMode
+	var length []css.ComponentValue
+	for _, v := range vals {
+		if v.IsToken() && v.Token.Kind == css.Ident {
+			switch strings.ToLower(v.Token.Value) {
+			case "hanging":
+				mode.hanging = true
+				continue
+			case "each-line":
+				mode.eachLine = true
+				continue
+			}
+		}
+		length = append(length, v)
 	}
-	// A value that did not resolve. The keyword forms — "each-line" and
-	// "hanging" — are the likely ones, and both change which lines are indented
-	// rather than by how much, so treating them as a plain length would indent
-	// the wrong lines. Reported rather than guessed at.
-	l.reportIndent(b, raw)
-	return 0
+	parsed, ok := l.lengthOfValues(b, length)
+	if !ok {
+		l.reportIndent(b, raw)
+		return 0, indentMode{}
+	}
+	v, ok := parsed.Resolve(width, true)
+	if !ok {
+		l.reportIndent(b, raw)
+		return 0, indentMode{}
+	}
+	return v, mode
 }
 
 // reportIndent names an indent that did not resolve, once per value for the

@@ -255,12 +255,18 @@ func TestHangingPunctuationInherits(t *testing.T) {
 	}
 }
 
-// TestTheEndValuesAreReported. force-end and allow-end are about a stop or a
-// comma at the end of *any* line and neither is implemented — and what they
-// change is where a line breaks, which shows as a word moved with nothing on the
-// page to say why.
+// TestTheEndValuesAreReported, which is now one value rather than two.
+//
+// force-end hangs a stop or a comma at the end of *every* line whether or not
+// the line would otherwise hold it, and is not implemented. What it changes is
+// where a line breaks, which shows as a word moved with nothing on the page to
+// say why.
+//
+// allow-end hangs one only where hanging it is what lets the line have it, and
+// is implemented — see allowend_test.go. It moved out of the list below when it
+// stopped being a promise.
 func TestTheEndValuesAreReported(t *testing.T) {
-	for _, value := range []string{"force-end", "allow-end", "first allow-end"} {
+	for _, value := range []string{"force-end", "first force-end"} {
 		built := Build(Input{
 			HTML: `<div id="p">one, two, three</div>`,
 			CSS:  []Stylesheet{{Source: hangCSS + `#p { hanging-punctuation: ` + value + ` }`}},
@@ -280,7 +286,8 @@ func TestTheEndValuesAreReported(t *testing.T) {
 		}
 	}
 	// And the two that are implemented are not reported.
-	for _, value := range []string{"first", "last", "first last", "none"} {
+	for _, value := range []string{"first", "last", "first last", "none",
+		"allow-end", "first allow-end", "allow-end last"} {
 		built := Build(Input{
 			HTML: `<div id="p">(one)</div>`,
 			CSS:  []Stylesheet{{Source: hangCSS + `#p { hanging-punctuation: ` + value + ` }`}},

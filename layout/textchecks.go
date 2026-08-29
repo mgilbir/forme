@@ -3,6 +3,9 @@ package layout
 import (
 	"strings"
 
+	"github.com/mgilbir/forme/html"
+	"github.com/mgilbir/forme/paragraph"
+
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
@@ -241,8 +244,37 @@ func (l *layouter) checkGlyphs(b *Box, face *shape.Face, text string) {
 //
 // "manual" and "none" are both implemented and neither is reported.
 //
+// # Only where a language was declared
+//
+// §6.1 does not ask a UA to hyphenate everything: "correct automatic
+// hyphenation requires a hyphenation resource appropriate to the language of
+// the text being broken. The UA is therefore only required to automatically
+// hyphenate text for which the author has declared a language ... and for which
+// it has an appropriate hyphenation resource."
+//
+// So a document that never says what language it is in gets no hyphenation from
+// any conforming engine, and this one's page is not missing anything — it is the
+// page the specification asks for. The suite says so in as many words:
+// hyphens-auto-001 is titled "automatic hyphenation must not work without
+// language tagging" and passes by *nothing* being hyphenated.
+//
+// Reporting it anyway was the same mistake inert.go corrects for a declaration
+// at its initial value: the finding was true of the property rather than of what
+// the property was being asked to do. Eight of the suite's reftests were held
+// out of the clean count by a report about a page that was already right.
+//
+// Where a language *is* declared the gap is real and is reported as before. This
+// engine has no hyphenation resource for any language, so the second half of
+// §6.1's sentence would excuse it too — but that reading empties the finding
+// out, and the page really does differ from the one the author asked for and the
+// one every browser produces. A missing resource is a limitation worth naming; a
+// document with no language to look one up by is not.
+//
 // Once per value per document, on the model of reportWordBreak.
 func (l *layouter) reportHyphens(b *Box, value string) {
+	if boxLanguage(b) == "" {
+		return
+	}
 	if l.reportedHyphens == nil {
 		l.reportedHyphens = map[string]bool{}
 	}
@@ -255,6 +287,110 @@ func (l *layouter) reportHyphens(b *Box, value string) {
 		Property: "hyphens",
 		Message: value + " was read as manual, so a word is broken only where a " +
 			"soft hyphen asks and never where a dictionary would",
+		Path: PathOf(b.Element),
+	})
+}
+
+// reportKerning names a request to turn kerning off, where there is kerning to
+// turn off.
+//
+// This engine applies a face's kerning and offers no way to decline it, so
+// "font-kerning: none" and "font-feature-settings: \"kern\" off" both ask for
+// something it cannot do — and both ask for *nothing at all* when the face has
+// no kerning in it. The fourteen standard PDF faces are that case: their metrics
+// carry no kern pairs, so a document set in one of them and asking for kerning
+// to be turned off gets exactly the page it asked for.
+//
+// That is not a corner of the suite. Five of its reftests write both
+// declarations together — the belt-and-braces an author uses to make a layout
+// test robust across UAs — over text in the default serif face, and every one of
+// them was held out of the clean count by a finding about a page that is right.
+//
+// It is the same narrowing inert.go makes for a declaration at its initial
+// value, one step further along: the question is not what the property is but
+// what it is being asked to do, and here the answer depends on the font.
+//
+// Where the face *does* kern, both are reported as before: the page really does
+// differ from the one the author asked for.
+//
+// font-feature-settings is judged only by the tags it names. "kern" is the one
+// this can answer, because a face's kerning is a thing the shaping layer knows
+// about; any other tag is a feature this engine neither applies nor can ask the
+// face for, so a value naming one is reported whatever the face has in it.
+func (l *layouter) reportKerning(b *Box, face *shape.Face) {
+	kerns := face != nil && face.HasKerning()
+	if value := strings.ToLower(strings.TrimSpace(b.Style["font-kerning"])); value == "none" && kerns {
+		l.reportOnce("font-kerning", Finding{
+			Rule:     RuleUnsupportedValue,
+			Property: "font-kerning",
+			Message: "font-kerning: none was not applied; this engine sets a face's " +
+				"kerning and offers no way to decline it, so the pairs this face " +
+				"kerns are still kerned",
+			Path: PathOf(boxElement(b)),
+		})
+	}
+	if value := b.Style["font-feature-settings"]; !inertFontFeatures(value, kerns) {
+		l.reportOnce("font-feature-settings", Finding{
+			Rule:     RuleUnsupportedValue,
+			Property: "font-feature-settings",
+			Message: "font-feature-settings " + quoteValue(value) + " was not applied; " +
+				"this engine applies the features a face declares for the script and " +
+				"takes no direction about which",
+			Path: PathOf(boxElement(b)),
+		})
+	}
+}
+
+// inertFontFeatures reports whether a font-feature-settings value asks for the
+// page that is already there.
+//
+// "normal" asks for nothing by definition. Otherwise the value is a list of tags
+// with a setting each, and it is inert when every tag in it is one the face
+// cannot act on — which this can answer for "kern" and for nothing else.
+func inertFontFeatures(value string, kerns bool) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" || value == "normal" {
+		return true
+	}
+	for _, part := range strings.Split(value, ",") {
+		tag := strings.TrimSpace(part)
+		// The tag is a quoted string and the setting follows it. Only the tag
+		// is read: "kern" is inert on a face with no kerning whether it was
+		// asked for or turned off, because neither can change the page.
+		tag = strings.TrimLeft(tag, "\"'")
+		if i := strings.IndexAny(tag, "\"'"); i >= 0 {
+			tag = tag[:i]
+		}
+		if tag != "kern" || kerns {
+			return false
+		}
+	}
+	return true
+}
+
+// reportAutospace names the part of text-autospace this engine does not do.
+//
+// §8.1's grammar has a third class of boundary — "punctuation", which asks for
+// spacing around full-width punctuation — and a second half that says what to do
+// where the author already wrote a space: "insert" adds spacing where there is
+// none and "replace" exchanges the space for it. The two ideograph classes and
+// "insert" are implemented; the rest is read, dropped and named.
+//
+// Once per value per document, on the model of reportWordBreak.
+func (l *layouter) reportAutospace(b *Box, value string) {
+	if l.reportedAutospace == nil {
+		l.reportedAutospace = map[string]bool{}
+	}
+	if l.reportedAutospace[value] {
+		return
+	}
+	l.reportedAutospace[value] = true
+	l.rec.ReportDetail(Finding{
+		Rule:     RuleUnsupportedValue,
+		Property: "text-autospace",
+		Message: quoteValue(value) + " in text-autospace was not applied; the " +
+			"spacing between an ideograph and a letter or a number is inserted " +
+			"and the rest of the property is not",
 		Path: PathOf(b.Element),
 	})
 }
@@ -340,11 +476,11 @@ func hyphenTextFor(face *shape.Face) string {
 // reportHangingPunctuation reports a hanging-punctuation value this engine
 // reads as none.
 //
-// "first" and "last" are implemented. "force-end" and "allow-end" are not: both
-// are about a stop or a comma at the end of *any* line rather than at the end of
-// the block, and allow-end hangs one only where the line would otherwise
-// overflow — which is a decision inside the line breaking rather than a
-// character taken out of a run before it.
+// "first", "last" and "allow-end" are implemented. "force-end" is not: it hangs
+// a stop or a comma at the end of *every* line whether or not the line would
+// otherwise hold it, which is a decision about every line rather than about the
+// one that overflowed — and the one that overflowed is the only one the fill has
+// a reason to ask about.
 //
 // What they change is where a line breaks, and that shows as a word moved to
 // the next line with nothing on the page to say why, so it is exactly the kind
@@ -364,4 +500,40 @@ func (l *layouter) reportHangingPunctuation(b *Box, value string) {
 			"line takes room the value asked it to give up",
 		Path: PathOf(b.Element),
 	})
+}
+
+// boxElement is the element a box belongs to: its own, or the nearest one above
+// it.
+//
+// A text box has none. This engine gives the box holding a text node no element
+// of its own, so a finding raised about one and pointed at b.Element points at
+// nothing — and every such finding in a document then has the same empty path,
+// which is enough for the recorder to take them all for one. That is a finding
+// that cannot say where it is about, and it looks exactly like a finding that is
+// correctly raised once.
+func boxElement(b *Box) *html.Node {
+	for cur := b; cur != nil; cur = cur.Parent {
+		if cur.Element != nil {
+			return cur.Element
+		}
+	}
+	return nil
+}
+
+// boxLanguage is the language in force at a box: the nearest lang attribute at
+// or above the nearest element.
+//
+// The walk up the *box* tree is what a text box needs. A text node has no
+// attributes and this engine gives its box no element either, so asking
+// languageAt about one asks about nothing; the answer is on the element that
+// holds the text, which is the first box above it that has one.
+func boxLanguage(b *Box) paragraph.Language {
+	return languageAt(boxElement(b))
+}
+
+// boxWritingSystem is boxLanguage's neighbour for the rules that ask what a text
+// is *typeset* as rather than what language it is in. See
+// paragraph.WritingSystemOf, and writingSystemAt for the walk.
+func boxWritingSystem(b *Box) paragraph.WritingSystem {
+	return writingSystemAt(boxElement(b))
 }

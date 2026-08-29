@@ -83,6 +83,22 @@ func (l *layouter) checkTableBoxSizing(b *Box) {
 	default:
 		return
 	}
+	// Nothing to take off, so the two models give the same number and the table
+	// is the one the author asked for. A percentage padding is not resolvable
+	// here — the containing block is what the table is being laid out in and
+	// this runs before that is settled — so it counts as an inset and is
+	// reported, which is the safe direction: a declaration that may have changed
+	// the page is named.
+	//
+	// §17.6.2 is why this is not a rare shape. The collapsing border model
+	// ignores the table's own padding, so "border-collapse: collapse;
+	// box-sizing: border-box; padding: 100px" on a table with no border has no
+	// inset at all — and the suite's collapsing-border-model-012 and -014 are
+	// exactly that, with the finding the only thing standing between them and a
+	// clean pass.
+	if h, v := l.sizingInset(b, 0); h == 0 && v == 0 && !hasPercentagePadding(b) {
+		return
+	}
 	// No suppression of its own: this one is per *element*, since which table was
 	// laid out to the wrong model is exactly what the author needs, and the
 	// Recorder already drops a repeat of an identical finding about the same
@@ -129,10 +145,13 @@ var intrinsicSizeKeywords = map[string]bool{
 // sizingKeyword is the keyword a sizing declaration names, lower-cased and with
 // a function's arguments dropped, or "" for a value that names none.
 //
-// The arguments are dropped because "fit-content(20px)" is the fit-content
-// keyword's function form and is neither applied nor reported differently from
-// the bare keyword. Everything here is a comparison against a fixed set, so a
-// value that is a length or a percentage falls out as "".
+// The arguments are dropped because this answers "which keyword is this", which
+// "fit-content(20px)" and "fit-content" answer the same way, and because the
+// finding reports the declaration verbatim either way. Everything here is a
+// comparison against a fixed set, so a value that is a length or a percentage
+// falls out as "".
+//
+// It is not the question "may this be applied" — see bareSizingKeyword.
 func sizingKeyword(raw string) string {
 	name := strings.ToLower(strings.TrimSpace(raw))
 	if i := strings.IndexByte(name, '('); i > 0 {
@@ -142,6 +161,21 @@ func sizingKeyword(raw string) string {
 		return ""
 	}
 	return name
+}
+
+// bareSizingKeyword is sizingKeyword for the values that are the keyword itself
+// and not a function of it, which is the question the sizing path has to ask.
+//
+// "fit-content(20px)" is not "fit-content": css-sizing-3 §5.1 makes the argument
+// stand where the available space stands, so the two are the same formula over
+// different numbers and answering one with the other is a wrong width rather
+// than a rounding. The function form is reported, which is what this engine did
+// with both before either was applied.
+func bareSizingKeyword(raw string) string {
+	if strings.IndexByte(raw, '(') >= 0 {
+		return ""
+	}
+	return sizingKeyword(raw)
 }
 
 // sizingProperties are the ones an intrinsic keyword is valid on, and so the
@@ -164,10 +198,10 @@ var sizingProperties = [...]string{
 // found, so which one was dropped is in it.
 //
 // A declaration that *was* applied is skipped rather than reported, and it is
-// skipped by asking the same function the sizing path asks — not by repeating
-// its conditions here. A guardrail whose idea of what the engine does is a copy
-// of what the engine does is a guardrail that goes stale silently, and this one
-// would go stale in the direction that matters: it would stop reporting a
+// skipped by asking the same functions the sizing path asks — not by repeating
+// their conditions here. A guardrail whose idea of what the engine does is a
+// copy of what the engine does is a guardrail that goes stale silently, and this
+// one would go stale in the direction that matters: it would stop reporting a
 // dropped declaration.
 func (l *layouter) checkIntrinsicSizing(b *Box) {
 	for _, prop := range sizingProperties {
@@ -178,10 +212,8 @@ func (l *layouter) checkIntrinsicSizing(b *Box) {
 		if sizingKeyword(raw) == "" {
 			continue
 		}
-		if prop == "width" {
-			if _, applied := l.keywordWidth(b); applied {
-				continue
-			}
+		if l.appliesSizingKeyword(b, prop) {
+			continue
 		}
 		l.rec.ReportDetail(Finding{
 			Rule:   RuleUnsupportedValue,
@@ -194,4 +226,42 @@ func (l *layouter) checkIntrinsicSizing(b *Box) {
 		})
 		return
 	}
+}
+
+// appliesSizingKeyword reports whether the sizing path decides this property
+// from the keyword it names.
+//
+// It is one function rather than a condition at each caller because it is the
+// statement of what this engine covers, and there is exactly one thing worse
+// than a coverage claim in two places: a coverage claim in two places that have
+// stopped agreeing. TestEverySizingKeywordThisEngineClaimsIsReallyApplied lays
+// out a box for each answer it gives and measures it, so a keyword added here
+// and nowhere else fails rather than going quiet.
+func (l *layouter) appliesSizingKeyword(b *Box, property string) bool {
+	switch property {
+	case "width":
+		if _, ok := l.keywordWidth(b); ok {
+			return true
+		}
+		// The space available is not known here, so this asks whether the
+		// keyword would be answered rather than what the answer is. The number
+		// is resolveWidth's.
+		_, ok := l.fitContentWidth(b, 0)
+		return ok
+	case "min-width", "max-width":
+		_, ok := l.keywordLimit(b, property)
+		return ok
+	}
+	return false
+}
+
+// hasPercentagePadding reports whether any padding on a box is a percentage,
+// which is a length this check has no containing block to resolve.
+func hasPercentagePadding(b *Box) bool {
+	for _, side := range []string{"top", "right", "bottom", "left"} {
+		if strings.Contains(b.Style["padding-"+side], "%") {
+			return true
+		}
+	}
+	return false
 }

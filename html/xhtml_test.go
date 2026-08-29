@@ -261,14 +261,19 @@ func TestAnEndTagForAVoidElementIsNotAFaultInXML(t *testing.T) {
 	if got := findingsOf(`<?xml version="1.0"?><html>` + markup + `</html>`); len(got) != 0 {
 		t.Errorf("XHTML end tags for void elements reported %v", got)
 	}
+	// In HTML both are reported and they are not the same report. "</col>" is
+	// an end tag for something that has none; "</br>" is a line break, which is
+	// the one meaning HTML gives to a void element's end tag, and saying "void
+	// element" about it would describe neither what it is nor what it did.
 	got := findingsOf(`<!DOCTYPE html>` + markup)
 	if len(got) != 2 {
-		t.Errorf("HTML end tags for void elements reported %v, want one each", got)
+		t.Fatalf("HTML end tags for void elements reported %v, want one each", got)
 	}
-	for _, g := range got {
-		if !strings.Contains(g, "void element") {
-			t.Errorf("an unexpected finding: %q", g)
-		}
+	if !strings.Contains(got[0], "void element") || !strings.Contains(got[0], "col") {
+		t.Errorf("</col> reported %q", got[0])
+	}
+	if !strings.Contains(got[1], "line break") {
+		t.Errorf("</br> reported %q, want the finding that says it is a break", got[1])
 	}
 }
 
@@ -317,17 +322,37 @@ func TestANamespacePrefixIsPartOfTheNameInXML(t *testing.T) {
 //
 // A prefix says which language a name belongs to. Dropping it unread would make
 // "<x:svg>" an SVG whatever x was bound to — including nothing at all. Keeping
-// it makes the name one this engine has never heard of, which is exactly what an
-// unresolvable prefix means and is reported as such.
+// it makes the name one this engine has never heard of, which is an ordinary
+// element with an unusual name: laid out as an inline box, styled by whatever
+// selects it, and emphatically not a picture.
 func TestAPrefixThisEngineCannotResolveIsKept(t *testing.T) {
 	for _, tc := range []struct{ what, root string }{
 		{"a prefix bound to something else",
 			`<html xmlns:s="http://example.com/not-svg">`},
 		{"a prefix bound to nothing at all", `<html>`},
 	} {
-		got := findingsOf(`<?xml version="1.0"?>` + tc.root + `<body><s:svg/></body></html>`)
-		if len(got) != 1 || !strings.Contains(got[0], "<s:svg>") {
-			t.Errorf("%s: reported %v, want the element named whole", tc.what, got)
+		src := `<?xml version="1.0"?>` + tc.root + `<body><s:svg/></body></html>`
+		if got := findingsOf(src); len(got) != 0 {
+			t.Errorf("%s: reported %v; an element with an unresolvable prefix is "+
+				"an element with a long name", tc.what, got)
+		}
+		doc, _, _ := Parse(src)
+		var found *Node
+		doc.Walk(func(n *Node) bool {
+			if n.Type == ElementNode && n.Name == "s:svg" {
+				found = n
+			}
+			return true
+		})
+		if found == nil {
+			t.Errorf("%s: no <s:svg> in the tree", tc.what)
+			continue
+		}
+		// The whole point: it is not an SVG, so its content is not kept as
+		// foreign source and nothing will try to draw it.
+		if found.Foreign != "" {
+			t.Errorf("%s: the element was read as foreign content (%q)",
+				tc.what, found.Foreign)
 		}
 	}
 	// The XHTML namespace resolves too, so "<html:div>" is a div.
@@ -358,4 +383,87 @@ func TestANameWithAColonIsNotAPrefixInHTML(t *testing.T) {
 				"of a name there, and nothing binds a prefix in HTML", n)
 		}
 	}
+}
+
+// TestTheDocumentRecordsWhichLanguageItWasReadAs is the flag itself, and the
+// only thing outside this package that reads it.
+//
+// The tokenizer decides XHTML from the prologue and used it for one thing here:
+// a <style> element's content. An attribute name is the second, and it belongs
+// to the caller rather than to the parse — XML makes the name case-sensitive and
+// HTML lowercases it, so "attr(Title)" in a content property selects the title
+// attribute of an HTML element and selects nothing at all in XHTML. See
+// AttrExact, and layout's TestAttrMatchesTheCaseTheDocumentLanguageDoes.
+func TestTheDocumentRecordsWhichLanguageItWasReadAs(t *testing.T) {
+	for _, tc := range []struct {
+		src string
+		xml bool
+	}{
+		{`<p title="yes">x</p>`, false},
+		{`<html xmlns="http://www.w3.org/1999/xhtml"><p title="yes">x</p></html>`, true},
+		{`<?xml version="1.0"?><html><p title="yes">x</p></html>`, true},
+	} {
+		doc, _, _ := Parse(tc.src)
+		if doc.XML != tc.xml {
+			t.Errorf("%q read as XML = %v, want %v", tc.src, doc.XML, tc.xml)
+		}
+		// And every element in it answers the same, which is what the walk is
+		// for: the flag is on the document node and nothing else.
+		p := findElement(doc, "p")
+		if p == nil {
+			t.Fatalf("%q has no <p>", tc.src)
+		}
+		if p.XML {
+			t.Errorf("%q: the flag was set on an element as well as the document",
+				tc.src)
+		}
+		if got := p.XMLDocument(); got != tc.xml {
+			t.Errorf("%q: the <p> says XMLDocument = %v, want %v", tc.src, got, tc.xml)
+		}
+	}
+}
+
+// TestAttrExactRefusesAQueryTheParseWouldHaveLowered is the lookup, held to what
+// it claims: the names in Attrs are lowercase whichever language the document is
+// in, because the tokenizer lowercases them, so what AttrExact does in practice
+// is refuse a query that is not already lowercase.
+//
+// That is the answer that never invents a match. An XHTML document that really
+// wrote "Title" has an attribute this engine has stored as "title" and cannot
+// tell from one written that way, and refusing both is the only reading that is
+// never wrong about which of the two it found.
+func TestAttrExactRefusesAQueryTheParseWouldHaveLowered(t *testing.T) {
+	doc, _, _ := Parse(`<html xmlns="http://www.w3.org/1999/xhtml">` +
+		`<p Title="yes">x</p></html>`)
+	p := findElement(doc, "p")
+	if p == nil {
+		t.Fatal("no <p>")
+	}
+	if got, ok := p.AttrExact("title"); !ok || got != "yes" {
+		t.Errorf("AttrExact(\"title\") gave %q, %v; the parse stores the name "+
+			"lowercased whichever language it read", got, ok)
+	}
+	if _, ok := p.AttrExact("Title"); ok {
+		t.Error("AttrExact(\"Title\") found something; nothing in Attrs is spelled that way")
+	}
+	// Attr is the other reading and is unchanged.
+	if got, ok := p.Attr("Title"); !ok || got != "yes" {
+		t.Errorf("Attr(\"Title\") gave %q, %v, want the attribute", got, ok)
+	}
+}
+
+// findElement is the first element of a name anywhere in a tree.
+func findElement(n *Node, name string) *Node {
+	if n == nil {
+		return nil
+	}
+	if n.Type == ElementNode && n.Name == name {
+		return n
+	}
+	for _, c := range n.Children {
+		if got := findElement(c, name); got != nil {
+			return got
+		}
+	}
+	return nil
 }

@@ -1,6 +1,8 @@
 package paragraph
 
 import (
+	"unicode"
+
 	"unicode/utf8"
 
 	"github.com/mgilbir/forme/shape"
@@ -58,15 +60,77 @@ func SpacingAdvance(text string, sp TextSpacing) style.Unit {
 // and this counts runes, so a base and its combining mark are still spaced
 // apart. That is a separate question with a separate answer, and it is not
 // mixed in here.
+//
+// # Cursive tracking
+//
+// §8.2 again: "spacing must not be inserted between the characters of a cursive
+// script, as it would break the cursive connection". So a character of one is
+// not a unit spacing goes after — not because it joins to what follows, which
+// depends on the pair, but because it is *in* such a script, which does not.
+// The suite states the rule that way and not the other:
+// letter-spacing-cursive-001 asks for Arabic set with and without a
+// letter-spacing to render identically, and "مرحباً" has an unjoined pair in the
+// middle of it.
+//
+// It applies to the character rather than to its neighbours, so an Arabic word
+// followed by a space gets no spacing after its last letter and one after the
+// space. letter-spacing-cursive-002 is exactly that arithmetic — two Arabic
+// words, "letter-spacing: 1em", and a reference that inserts one em and not two.
 func SpacedUnits(text string) int {
 	n := 0
-	for _, r := range text {
-		if IsDefaultIgnorable(r) {
+	scanCursiveTracking(text, func(_ int, suppressed bool) {
+		if !suppressed {
+			n++
+		}
+	})
+	return n
+}
+
+// IsCursiveScript reports whether a character belongs to a script whose letters
+// join. See shape.InCursiveScript for why it is the script and not the pair.
+func IsCursiveScript(r rune) bool { return shape.InCursiveScript(r) }
+
+// CursiveTrackingSuppresses reports whether §8.2 takes the letter-spacing off a
+// run of text entirely, so that it carries none after any of its characters —
+// the last one included.
+//
+// It is asked of a run of text and answers false for the empty string, which is
+// not one. An inline box's edge is not a character and an atomic inline is a
+// character unit letter-spacing goes after like any other; neither is what this
+// rule is about.
+func CursiveTrackingSuppresses(text string) bool {
+	return text != "" && SpacedUnits(text) == 0
+}
+
+// scanCursiveTracking walks the characters letter-spacing could go after and
+// says of each whether §8.2 forbids it, so that the count and the cut cannot
+// answer differently.
+//
+// A combining mark is the case neither of them could answer alone: Unicode's
+// joining table names the letters of the cursive scripts and not the marks
+// written on them, so a fathatan reads as an ordinary character and collects a
+// spacing of its own — which is what left "مرحباً" ten pixels wider than the same
+// word without a letter-spacing, in letter-spacing-cursive-001. So a mark takes
+// the answer of the base it sits on.
+//
+// It takes it *only* from a cursive base, which keeps the change to the script
+// this rule is about. A mark on a Latin letter still counts as a unit of its
+// own, as it always has — that is the grapheme-cluster question SpacedUnits
+// records as a separate one, and it is still separate.
+func scanCursiveTracking(text string, fn func(i int, suppressed bool)) {
+	cursive := false
+	for i, r := range text {
+		switch {
+		case IsDefaultIgnorable(r):
+			// Nothing is drawn for it and nothing goes after it.
+			continue
+		case unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r):
+			fn(i, cursive)
 			continue
 		}
-		n++
+		cursive = IsCursiveScript(r)
+		fn(i, cursive)
 	}
-	return n
 }
 
 // IsDefaultIgnorable reports whether nothing is drawn for a character and it
@@ -120,13 +184,91 @@ func countWordSeparators(text string) int {
 			r, size = utf8.DecodeRuneInString(text[i:])
 		}
 		i += size
-		switch r {
-		case ' ', '\u00a0', // space, and the no-break space an author writes
-			'\u1361',                   // Ethiopic wordspace
-			'\U00010100', '\U00010101', // Aegean word separators
-			'\U0001039F', '\U0001091F': // Ugaritic and Phoenician
+		if isWordSeparator(r) {
 			n++
 		}
 	}
 	return n
+}
+
+// SplitAtCursiveTracking cuts text where §8.2's cursive tracking begins or ends,
+// so that every run either takes letter-spacing after each of its characters or
+// takes none.
+//
+// It exists for the backend and not for the rule. A display list carries one
+// letter-spacing per run — an advance added after every glyph — so a run holding
+// an Arabic letter beside a Latin one cannot say that only one of them is
+// followed by a gap. Cutting at the change makes each run uniform, and the
+// question the drawing has to answer becomes the question this file answers.
+//
+// It is the same argument, and the same shape, as the cut §8.1's ideograph
+// spacing needs. See SplitAtAutospace.
+//
+// Nothing is returned where there is nothing to cut, which is every run of every
+// document that does not mix a cursive script with another — so a caller pays a
+// scan and no allocation.
+func SplitAtCursiveTracking(text string) []string {
+	var out []string
+	start, prev, havePrev := 0, false, false
+	scanCursiveTracking(text, func(i int, suppressed bool) {
+		if havePrev && suppressed != prev {
+			out = append(out, text[start:i])
+			start = i
+		}
+		prev, havePrev = suppressed, true
+	})
+	if out == nil {
+		return nil
+	}
+	return append(out, text[start:])
+}
+
+// isWordSeparator reports whether §8.3's word-spacing goes after a character.
+func isWordSeparator(r rune) bool {
+	switch r {
+	case ' ', '\u00a0', // space, and the no-break space an author writes
+		'\u1361',                   // Ethiopic wordspace
+		'\U00010100', '\U00010101', // Aegean word separators
+		'\U0001039F', '\U0001091F': // Ugaritic and Phoenician
+		return true
+	}
+	return false
+}
+
+// SplitAtWordSeparators cuts text after each word-separator character, so that
+// the spacing §8.3 puts after one falls at the end of a run.
+//
+// It exists for the backend and not for the rule, exactly as
+// SplitAtCursiveTracking does. A display list carries a run's width and its
+// letter-spacing, and nothing that says "and thirty-two pixels after the third
+// character": the width a run is measured to already holds the word-spacing, and
+// the glyphs inside it are drawn at their own advances, so a separator in the
+// middle of a run is measured wide and drawn narrow. Everything after it on the
+// line then sits where it would have without the spacing.
+//
+// It is not needed for an ordinary space, which SplitAtBreaks already gives a
+// piece of its own — a line may end after one. The characters this is for are
+// the ones that separate words and offer no break: a no-break space above all,
+// which is what an author writes to keep two words together, and the four
+// ancient word separators beside it.
+//
+// Nothing is returned where there is nothing to cut, which is every run of every
+// document with no word-spacing on it — the caller asks only then.
+func SplitAtWordSeparators(text string) []string {
+	var out []string
+	start := 0
+	for i, r := range text {
+		if !isWordSeparator(r) {
+			continue
+		}
+		end := i + utf8.RuneLen(r)
+		if end < len(text) {
+			out = append(out, text[start:end])
+			start = end
+		}
+	}
+	if out == nil {
+		return nil
+	}
+	return append(out, text[start:])
 }

@@ -21,12 +21,16 @@ import (
 // last   a closing bracket or quote at the end of the last formatted line hangs
 //        past the end of it
 //
-// The two "end" values are about a stop or a comma at the end of *any* line —
-// force-end hangs it always and allow-end only where it would otherwise
-// overflow — and neither is implemented. They are recognised so that a document
-// using one is not read as using none, and reported so that the difference is
-// not silent: what they change is where a line breaks, which shows as a word
-// moved to the next line and nothing on the page says why.
+// The two "end" values are about a stop or a comma at the end of *any* line, and
+// they hang a different set of characters from the other two: not a bracket or a
+// quote but a full stop or a comma, which is why HangsAsStopOrComma is a list of
+// its own rather than a category.
+//
+// allow-end hangs one "only if it does not otherwise fit prior to justification"
+// — which is to say, only where hanging it is what lets the line hold it.
+// force-end hangs it always, and is not implemented: it is recognised so that a
+// document using it is not read as using none, and reported so that the
+// difference is not silent.
 
 // HangingPunctuation is what the property asks for.
 type HangingPunctuation struct {
@@ -35,6 +39,11 @@ type HangingPunctuation struct {
 	First bool
 	// Last hangs a closing bracket or quote past the end of the last one.
 	Last bool
+	// EndAllow hangs a stop or a comma past the end of *any* line, but only
+	// where the line would not otherwise hold it. It is the one of §8.4's two
+	// end values this engine does: the other hangs one always, which is a
+	// decision about every line rather than about the line that overflowed.
+	EndAllow bool
 }
 
 // HangingPunctuationOf reads the property, and names the value it could not
@@ -46,7 +55,7 @@ type HangingPunctuation struct {
 // cascade does with one.
 func HangingPunctuationOf(value string) (HangingPunctuation, string) {
 	var out HangingPunctuation
-	var end string
+	var end, unhandled string
 	seenFirst, seenLast := false, false
 	for _, word := range strings.Fields(strings.ToLower(value)) {
 		switch word {
@@ -64,16 +73,21 @@ func HangingPunctuationOf(value string) (HangingPunctuation, string) {
 				return HangingPunctuation{}, ""
 			}
 			seenLast, out.Last = true, true
-		case "force-end", "allow-end":
+		case "allow-end":
 			if end != "" {
 				return HangingPunctuation{}, ""
 			}
-			end = word
+			end, out.EndAllow = word, true
+		case "force-end":
+			if end != "" {
+				return HangingPunctuation{}, ""
+			}
+			end, unhandled = word, word
 		default:
 			return HangingPunctuation{}, ""
 		}
 	}
-	return out, end
+	return out, unhandled
 }
 
 // HangsAtStart reports whether a character is one §8.4 hangs into the margin
@@ -134,6 +148,52 @@ func TrailingHang(text string) int {
 		last, size = r, len(text)-i
 	}
 	if size > 0 && HangsAtEnd(last) {
+		return size
+	}
+	return 0
+}
+
+// HangsAsStopOrComma reports whether a character is one of §8.4's "stops or
+// commas", which is what its two end values hang.
+//
+// It is a list rather than a Unicode category, and the specification gives it as
+// one: a full stop is Po and so are a hundred characters that are not stops.
+// These are the thirteen §8.4 names, and the set is closed — a document using
+// some other mark gets no hang, which is the answer a browser gives.
+func HangsAsStopOrComma(r rune) bool {
+	switch r {
+	case ',', '.', // U+002C COMMA, U+002E FULL STOP
+		0x060C, // ARABIC COMMA
+		0x06D4, // ARABIC FULL STOP
+		0x3001, // IDEOGRAPHIC COMMA
+		0x3002, // IDEOGRAPHIC FULL STOP
+		0xFF0C, // FULLWIDTH COMMA
+		0xFF0E, // FULLWIDTH FULL STOP
+		0xFE50, // SMALL COMMA
+		0xFE51, // SMALL IDEOGRAPHIC COMMA
+		0xFE52, // SMALL FULL STOP
+		0xFF61, // HALFWIDTH IDEOGRAPHIC FULL STOP
+		0xFF64: // HALFWIDTH IDEOGRAPHIC COMMA
+		return true
+	}
+	return false
+}
+
+// TrailingStopOrComma is how many bytes at the end of a run §8.4's end values
+// would hang, which is one character or none.
+//
+// One character, for the reason LeadingHang gives: the specification hangs "a
+// stop or comma" and not a run of them. It is also what makes the rule decidable
+// — a line that would still not fit with one character outside it is a line the
+// value does not rescue, and the suite says so in as many words: "ab c、、" in
+// four characters of room does not hang, because the overflow happened at the
+// first comma and hanging the second is not what would fix it.
+func TrailingStopOrComma(text string) int {
+	last, size := rune(0), 0
+	for i, r := range text {
+		last, size = r, len(text)-i
+	}
+	if size > 0 && HangsAsStopOrComma(last) {
 		return size
 	}
 	return 0

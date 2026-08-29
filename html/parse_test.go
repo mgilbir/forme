@@ -294,8 +294,41 @@ func TestVoidElements(t *testing.T) {
 	mustParseHTML(t, "<p>a<br/>b</p>")
 
 	// An end tag for one is not.
-	if _, _, ok := Parse("<p>a</br>b</p>"); ok {
-		t.Error("</br> was accepted, and a void element has no end tag")
+	if _, _, ok := Parse("<p>a<img src=x alt=y></img>b</p>"); ok {
+		t.Error("</img> was accepted, and a void element has no end tag")
+	}
+}
+
+// TestAnEndTagForBRIsAnotherLineBreak is the one void element whose end tag
+// HTML gives a meaning to, and it gives it one because authors write it.
+//
+// The tree construction says so in as many words: "act as if this was a br
+// start tag token with no attributes, rather than the end tag token that it
+// actually is". Reading it as the fault the other void elements' end tags are
+// loses a break the document asked for, and a lost break is one line of text
+// joined to the next.
+func TestAnEndTagForBRIsAnotherLineBreak(t *testing.T) {
+	// Parse reports it, so this cannot go through mustParseHTML.
+	doc, _, _ := Parse("<p>a<br>b</br>c</p>")
+	p := doc.Element("p")
+	brs := 0
+	for _, c := range p.Children {
+		if c.Name == "br" {
+			brs++
+		}
+	}
+	if brs != 2 {
+		t.Errorf("\"<br>b</br>\" made %d breaks, want 2 — the end tag is one of "+
+			"them\n%s", brs, tree(doc))
+	}
+	if got := p.TextContent(); got != "abc" {
+		t.Errorf("the text around the breaks is %q, want \"abc\"", got)
+	}
+	// And it is still worth saying, because two breaks where an author wrote
+	// what looks like one is a surprise the page does not explain.
+	_, errs, _ := Parse("<p>a</br>b</p>")
+	if len(errs) != 1 || !strings.Contains(errs[0].Message, "line break") {
+		t.Errorf("</br> reported %v, want the one finding that says what it did", errs)
 	}
 }
 
@@ -376,15 +409,77 @@ func TestScriptContentIsNotMarkup(t *testing.T) {
 	}
 }
 
-// TestUnknownElementsAreRefused pins that an element this engine cannot lay out
-// is reported rather than treated as a generic box. Rendering <fancy-callout> as
-// a span produces a page that looks nearly right, so nothing signals that the
-// thing the author cared about was ignored.
-func TestUnknownElementsAreRefused(t *testing.T) {
+// TestAnElementNobodyHasHeardOfIsStillAnElement.
+//
+// HTML gives a name it does not define no special behaviour and no user agent
+// style, which leaves it an ordinary inline box that inherits everything and
+// that a stylesheet may select. "<my-widget>" is laid out by a browser exactly
+// as a <span> with the same rules on it would be, and a modern document is full
+// of them.
+//
+// It used to be dropped and reported, on the reading that an element this engine
+// does not know is one it cannot lay out. That is true of <canvas> and <video>,
+// which need something this engine does not have, and those are still refused by
+// name. It was never true of a custom element: the box is not a special one, and
+// dropping it lost every rule an author had written for it —
+// CSS2/linebox/line-breaking-font-size-zero-001 styles <inline-block> and <sep>
+// and could not pass while they were gone.
+func TestAnElementNobodyHasHeardOfIsStillAnElement(t *testing.T) {
 	for _, src := range []string{
 		"<fancy-callout>x</fancy-callout>",
 		"<blink>x</blink>",
-		"<my-widget/>",
+		"<my-widget><b>x</b></my-widget>",
+	} {
+		_, errs, ok := Parse(src)
+		if !ok || len(errs) != 0 {
+			t.Errorf("%q was refused: %v", src, errs)
+		}
+	}
+	// It is in the tree, in its place, with its attributes and its children.
+	got := body(t, `<p>a<fancy-callout id="c" class="k">x<b>y</b></fancy-callout>b</p>`)
+	want := `<p>
+  "a"
+  <fancy-callout> id="c" class="k"
+    "x"
+    <b>
+      "y"
+  "b"
+`
+	if got != want {
+		t.Errorf("the body is\n%s\nwant\n%s", got, want)
+	}
+}
+
+// TestAnUnknownElementIsClosedLikeAnyOther. Its end tag has to be acted on now
+// that its start tag opens something: an end tag nobody pops leaves the element
+// open, and the next block's end tag reports the mis-nesting it caused.
+func TestAnUnknownElementIsClosedLikeAnyOther(t *testing.T) {
+	_, errs, ok := Parse(`<div><my-widget>x</my-widget></div><div>y</div>`)
+	if !ok || len(errs) != 0 {
+		t.Errorf("the document was refused: %v", errs)
+	}
+	got := body(t, `<div><my-widget>x</my-widget></div><div>y</div>`)
+	want := `<div>
+  <my-widget>
+    "x"
+<div>
+  "y"
+`
+	if got != want {
+		t.Errorf("the body is\n%s\nwant\n%s", got, want)
+	}
+}
+
+// TestTheElementsThatReallyCannotBeLaidOutAreStillRefused is the containment
+// argument. <canvas> is drawn by a script, <video> plays, <iframe> loads another
+// document: each needs something a page laid out once does not have, and
+// rendering an empty box where one belongs is the silent wrongness the finding
+// vocabulary exists for.
+func TestTheElementsThatReallyCannotBeLaidOutAreStillRefused(t *testing.T) {
+	for _, src := range []string{
+		"<canvas>x</canvas>",
+		"<video>x</video>",
+		"<script>x</script>",
 	} {
 		_, errs, ok := Parse(src)
 		if ok {
@@ -394,6 +489,26 @@ func TestUnknownElementsAreRefused(t *testing.T) {
 		if len(errs) == 0 || !errs[0].Unsupported {
 			t.Errorf("%q was not reported as unsupported: %v", src, errs)
 		}
+	}
+}
+
+// TestASelfClosingUnknownElementIsReadAsHTMLReadsIt: outside the void elements
+// the slash is a parse error and the element opens anyway, which is what the
+// tree construction stage says and what every browser does.
+func TestASelfClosingUnknownElementIsReadAsHTMLReadsIt(t *testing.T) {
+	_, errs, ok := Parse(`<my-widget/>x`)
+	if ok {
+		t.Errorf("\"<my-widget/>\" was accepted; HTML has no self-closing syntax " +
+			"outside void elements")
+	}
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Message, "self-closing") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("nothing said the slash was not a self-closing tag: %v", errs)
 	}
 }
 

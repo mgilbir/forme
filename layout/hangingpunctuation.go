@@ -54,7 +54,70 @@ func (l *layouter) hangPunctuation(items []inlineItem, hp hangingPunctuation) []
 	if i, ok := edgeRun(items, -1); ok && hangingFor(items[i], hp).Last {
 		items = l.cutHang(items, i, false)
 	}
-	return items
+	return l.markStopsAndCommas(items, hp)
+}
+
+// markStopsAndCommas cuts every stop or comma that ends a run into an item of
+// its own, so that the fill has something to hang.
+//
+// §8.4's allow-end is about *any* line rather than the first or the last, so
+// there is no one place to cut: a paragraph of prose has a comma at the end of
+// half its runs and any of them may turn out to end a line. The cut is made for
+// all of them and the fill takes at most one per line — see Item.MayHangEnd,
+// which is a candidate and not a decision.
+//
+// Only the *last* character of a run, which is what makes the rule decidable and
+// is the specification's own reading: "a stop or comma", not a run of them. The
+// suite is precise about the difference — "ab c、、" in four characters of room
+// does not hang, because the overflow happened at the first comma and hanging
+// the second is not what would fix it, and cutting only the last is what makes
+// the fill see that.
+//
+// It returns the items untouched for a document that does not ask for the value,
+// which is nearly every document: the walk stops at the first test.
+func (l *layouter) markStopsAndCommas(items []inlineItem, hp hangingPunctuation) []inlineItem {
+	any := false
+	for i := range items {
+		if canHangAsStop(items[i]) && hangingFor(items[i], hp).EndAllow {
+			any = true
+			break
+		}
+	}
+	if !any {
+		return items
+	}
+	out := make([]inlineItem, 0, len(items)+4)
+	for i, item := range items {
+		n := 0
+		if canHangAsStop(item) && hangingFor(item, hp).EndAllow && couldEndALine(items, i) {
+			n = trailingStopOrComma(item.Text)
+		}
+		switch {
+		case n == 0:
+			out = append(out, item)
+		case n == len(item.Text):
+			// The run is the character already.
+			item.MayHangEnd = true
+			out = append(out, item)
+		default:
+			head, tail := l.br.SplitItem(item, len(item.Text)-n)
+			tail.MayHangEnd = true
+			out = append(out, head, tail)
+		}
+	}
+	return out
+}
+
+// canHangAsStop reports whether an item is a run of text a stop or comma could
+// be cut out of.
+//
+// Not one the other two values have already claimed: a character cannot hang at
+// both ends of a line, and the item cut for "last" is already marked and already
+// hanging.
+func canHangAsStop(item inlineItem) bool {
+	return item.Text != "" && item.Face != nil && !item.Tab && !item.Forced &&
+		!item.Inset && item.AtomicBox == nil && item.Float == nil && item.Abs == nil &&
+		!item.HangStart && !item.HangEnd
 }
 
 // hangingFor is the property as it applies to the character that would hang,
@@ -186,4 +249,54 @@ func hangEndWidth(runs []inlineItem) style.Unit {
 		return 0
 	}
 	return 0
+}
+
+// couldEndALine reports whether a line could end after the last character of an
+// item, which is what makes cutting that character out of the run safe.
+//
+// Cutting is not free. The run it comes out of was one thing to the fill — a
+// unit that fits or does not — and two items are two units, so a run that does
+// not fit whole can now be placed in part. That is exactly right where the line
+// may end between them and exactly wrong where it may not: a comma inside a
+// "white-space: nowrap" span, with more of the span after it, was hung and the
+// line ended inside the span, which is the one thing the span was written to
+// prevent. The suite's hanging-punctuation-allow-end asserts it by name.
+//
+// So the cut is made only where the boundary after the character is one a line
+// may end at, and that is the same question §5.1 answers for a soft wrap
+// opportunity: the innermost element containing the characters on both sides of
+// it decides. A box that wraps says yes to every boundary inside it; one that
+// does not says yes only where its own content has run out.
+func couldEndALine(items []inlineItem, i int) bool {
+	box := heldBox(items[i].Box)
+	if box == nil || whiteSpaceFor(box.Style).Wrap {
+		return true
+	}
+	for j := i + 1; j < len(items); j++ {
+		switch {
+		case items[j].Abs != nil || items[j].Float != nil:
+			// Out of flow: drawn somewhere else entirely, so it stands between
+			// nothing and the boundary is with whatever comes after it.
+			continue
+		case items[j].Forced:
+			// A line ends here whatever else is true.
+			return true
+		}
+		next := heldBox(items[j].Box)
+		if next == nil {
+			return true
+		}
+		// The *ancestor's* answer and not the next box's, which is §5.1's rule
+		// for the boundary between two characters in different boxes and is what
+		// the rest of this engine asks at one. The two differ only where a
+		// wrapping element holds two non-wrapping ones, and no fixture tells
+		// them apart on the page: the hang is given back by anything that takes
+		// room, so the second box's own value never gets to decide anything the
+		// restore does not decide again. Recorded here rather than left as an
+		// implied claim.
+		anc := commonAncestor(box, next)
+		return anc == nil || whiteSpaceFor(anc.Style).Wrap
+	}
+	// Nothing follows it in the block, so it is at the end of the last line.
+	return true
 }

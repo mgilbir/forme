@@ -3,6 +3,8 @@ package layout
 import (
 	"strings"
 	"testing"
+
+	"github.com/mgilbir/forme/style"
 )
 
 // What a box contributes to the width its parent shrinks to fit.
@@ -123,10 +125,10 @@ func TestAnIntrinsicKeywordSizesTheBox(t *testing.T) {
 	cases := map[string]float64{
 		"min-content": 4 * ch,
 		"max-content": 8 * ch,
-		// Not implemented, so the box keeps its automatic width. It is here so
-		// that the two lists cannot drift apart silently: a fit-content that
-		// started being applied without its own evidence would fail here.
-		"fit-content": 1000,
+		// fit-content is min(max-content, max(min-content, available)), and the
+		// available 1000 is wider than the text, so it is max-content — the
+		// number a shrink-to-fit box gets and the number a block does not.
+		"fit-content": 8 * ch,
 		"auto":        1000,
 	}
 	for value, want := range cases {
@@ -304,4 +306,142 @@ func TestAnIntrinsicKeywordSizesAnAbsoluteBox(t *testing.T) {
 	// The auto width beside it, which is the number the mistake produces.
 	root = layoutOf(t, 1000, `<div id="a">aaa bbbb</div>`, css)
 	px(t, "an absolute box at width: auto", find(t, root, "a").BorderRect.W, 8*ch)
+}
+
+// The two keywords that were added after the two above, and the reason each
+// needed its own place to be answered.
+//
+// The text throughout is "aaa bbbb" in Courier at 100px, whose min-content is
+// four characters and whose max-content is eight. See TestAnIntrinsicKeywordSizesTheBox.
+
+const intrinsicText = `<div id="b">aaa bbbb</div>`
+const intrinsicCSS = `#b { font-size: 100px; font-family: Courier; `
+
+// TestFitContentIsShrinkToFitAgainstTheSpaceAvailable is §3.1's formula,
+// min(max-content, max(min-content, available)), which is CSS 2.1 §10.3.5.
+//
+// Both ends are here because either alone is satisfied by a wrong answer: a box
+// that always took max-content passes the first, and one that always filled its
+// containing block passes the second.
+func TestFitContentIsShrinkToFitAgainstTheSpaceAvailable(t *testing.T) {
+	// Room to spare: the text does not have to break, so the box is as wide as
+	// the whole of it.
+	root := layoutOf(t, 1000, intrinsicText, noDefaults+intrinsicCSS+`width: fit-content }`)
+	px(t, "fit-content with room to spare", find(t, root, "b").BorderRect.W, 8*ch)
+
+	// Less room than the text wants: the box takes what there is and the text
+	// breaks, which is what makes this "fit" rather than "max".
+	root = layoutOf(t, 300, intrinsicText, noDefaults+intrinsicCSS+`width: fit-content }`)
+	px(t, "fit-content in 300px", find(t, root, "b").BorderRect.W, 300)
+
+	// Less room than even the longest word: min-content is the floor, so the box
+	// overflows rather than breaking a word that cannot break.
+	root = layoutOf(t, 100, intrinsicText, noDefaults+intrinsicCSS+`width: fit-content }`)
+	px(t, "fit-content in 100px", find(t, root, "b").BorderRect.W, 4*ch)
+}
+
+// TestFitContentResolvesTheMarginsLikeADeclaredWidth. The keyword decides a
+// used width, and everything §10.3.3 does with a used width then happens — which
+// is what separates it from "auto", where the width absorbs the slack instead.
+func TestFitContentResolvesTheMarginsLikeADeclaredWidth(t *testing.T) {
+	root := layoutOf(t, 1000, intrinsicText,
+		noDefaults+intrinsicCSS+`width: fit-content; margin-left: auto; margin-right: auto }`)
+	f := find(t, root, "b")
+	px(t, "a centred fit-content box", f.BorderRect.W, 8*ch)
+	// 1000 less 480, shared between the two margins.
+	px(t, "its left edge", f.BorderRect.X, (1000-8*ch)/2)
+}
+
+// TestAnIntrinsicKeywordAsALimit is §3.1 on min-width and max-width, where the
+// keyword is a number compared against a width rather than a width to lay out
+// to — which is why the limits can take one and this engine's clamp can answer
+// it without knowing what space there was.
+func TestAnIntrinsicKeywordAsALimit(t *testing.T) {
+	for _, tc := range []struct {
+		decl string
+		want float64
+	}{
+		// A block fills 1000 and the maximum brings it down to the text.
+		{"max-width: max-content", 8 * ch},
+		{"max-width: min-content", 4 * ch},
+		// A minimum against a width that would otherwise be narrower.
+		{"width: 10px; min-width: min-content", 4 * ch},
+		{"width: 10px; min-width: max-content", 8 * ch},
+		// And a limit that does not bind changes nothing.
+		{"width: 700px; max-width: max-content", 480},
+		{"width: 700px; min-width: min-content", 700},
+	} {
+		root := layoutOf(t, 1000, intrinsicText, noDefaults+intrinsicCSS+tc.decl+` }`)
+		px(t, tc.decl, find(t, root, "b").BorderRect.W, tc.want)
+	}
+}
+
+// TestAnIntrinsicLimitIgnoresBoxSizing, which is the same §3.3 exception the
+// declared width has and is easier to get wrong: the clamp works in the space
+// the *declaration* named, so a content-box number handed to it straight is
+// short by the padding and the border under "border-box".
+func TestAnIntrinsicLimitIgnoresBoxSizing(t *testing.T) {
+	for _, sizing := range []string{"content-box", "border-box"} {
+		root := layoutOf(t, 1000, intrinsicText,
+			noDefaults+intrinsicCSS+`max-width: max-content; padding: 0 25px; `+
+				`border: 0 solid; box-sizing: `+sizing+` }`)
+		f := find(t, root, "b")
+		px(t, "max-width: max-content under "+sizing, f.ContentRect().W, 8*ch)
+	}
+}
+
+// TestEverySizingKeywordThisEngineClaimsIsReallyApplied is the guard
+// appliesSizingKeyword's doc names.
+//
+// That function is the one statement of what this engine covers, and the
+// guardrail in boxsizing.go goes quiet about whatever it accepts. So a keyword
+// added to it and to nothing else would silence a finding about a declaration
+// still being dropped — the exact failure the finding exists to prevent, arrived
+// at from the other side.
+//
+// It asks the pair the way a caller sees them: lay the document out, and if
+// nothing was reported then the declaration must have changed the box. A block's
+// automatic width is the whole containing block, so any keyword really applied
+// moves it off that number.
+func TestEverySizingKeywordThisEngineClaimsIsReallyApplied(t *testing.T) {
+	silent := 0
+	for _, prop := range []string{"width", "min-width", "max-width"} {
+		for _, kw := range []string{"min-content", "max-content", "fit-content", "stretch",
+			"fit-content(20px)"} {
+			decl := prop + ": " + kw
+			// A minimum has to be asked against a width it can raise, or it
+			// binds nothing and the box is 1000 whether or not it was read.
+			css, automatic := intrinsicCSS+decl+` }`, 1000.0
+			if prop == "min-width" {
+				css, automatic = intrinsicCSS+`width: 10px; `+decl+` }`, 10
+			}
+			built := Build(Input{HTML: intrinsicText,
+				CSS: []Stylesheet{{Source: noDefaults + css}}})
+			if built.Root == nil {
+				t.Fatalf("%q produced no boxes", decl)
+			}
+			rec := NewRecorder(nil)
+			w, _ := style.FromPx(1000)
+			h, _ := style.FromPx(10000)
+			frag := Layout(built.Root, Size{W: w, H: h}, nil, rec)
+			reported := false
+			for _, f := range rec.Findings() {
+				if f.Rule == RuleUnsupportedValue && f.Property == prop {
+					reported = true
+				}
+			}
+			if reported {
+				continue
+			}
+			silent++
+			if got := find(t, frag, "b").BorderRect.W.Px(); got == automatic {
+				t.Errorf("%q raised no finding and the box is %gpx — its automatic "+
+					"width, so the declaration was dropped and the guardrail about "+
+					"it was silenced", decl, got)
+			}
+		}
+	}
+	if silent == 0 {
+		t.Error("every keyword was reported, so this asserts nothing")
+	}
 }

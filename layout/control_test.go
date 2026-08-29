@@ -588,10 +588,41 @@ func TestObjectKeepsItsFallbackContent(t *testing.T) {
 	}
 }
 
-// TestObjectReportsItsBlockedData pins the other half: the page is showing an
-// author's second choice, and a caller has to be able to know that rather than
-// infer it from a paragraph reading "your browser cannot show this".
-func TestObjectReportsItsBlockedData(t *testing.T) {
+// TestAnObjectNamingAPictureIsAPicture.
+//
+// HTML §4.8.7 hands an <object>'s resource to a plugin, a nested browsing
+// context or an image decoder, and which of the three depends on what arrived.
+// The first two are refused outright — a plugin is arbitrary code and a browsing
+// context is a document of its own — but the third is the decoder <img> already
+// uses, so an object naming a picture is a picture and its fallback content is
+// not what belongs on the page.
+//
+// CSS2/normal-flow/replaced-intrinsic-001 to -005 are five of them, and every
+// one is an SVG.
+func TestAnObjectNamingAPictureIsAPicture(t *testing.T) {
+	res := mapResolver{"chart.svg": []byte(
+		`<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"></svg>`)}
+	built := Build(Input{
+		HTML:      `<object data="chart.svg">fallback</object>`,
+		Resources: res,
+	})
+	box := boxFor(built.Root, "object")
+	if box == nil {
+		t.Fatalf("the object generated no box: %v", built.Findings)
+	}
+	if box.Replaced == nil {
+		t.Fatalf("the object was not replaced by its picture: %v", built.Findings)
+	}
+	for _, f := range findingsWith(built.Findings, RuleResourceBlocked) {
+		t.Errorf("a picture that loaded was reported: %s", f.Error())
+	}
+}
+
+// TestObjectReportsWhatItFellBackTo pins the other half: where the data cannot
+// be used the page is showing an author's second choice, and a caller has to be
+// able to know that rather than infer it from a paragraph reading "your browser
+// cannot show this".
+func TestObjectReportsWhatItFellBackTo(t *testing.T) {
 	built := controlBuild(t, `<object data="chart.svg">fallback</object>`)
 	blocked := findingsWith(built.Findings, RuleResourceBlocked)
 	if len(blocked) == 0 {
@@ -600,17 +631,39 @@ func TestObjectReportsItsBlockedData(t *testing.T) {
 	if !strings.Contains(blocked[0].Message, "chart.svg") {
 		t.Errorf("the report does not name the resource: %s", blocked[0].Message)
 	}
-	// And nothing is fetched for it. The resolver here would answer, and must
-	// not be asked: an <object> is not a second loading path.
-	if !strings.Contains(blocked[0].Message, "embeds no objects") {
-		t.Errorf("the report does not say that nothing was embedded: %s", blocked[0].Message)
+	if !strings.Contains(blocked[0].Message, "fallback content") {
+		t.Errorf("the report does not say what is on the page instead: %s",
+			blocked[0].Message)
 	}
 
 	// An object naming nothing has nothing to have failed, so it says nothing:
-	// it is a box holding its children and always was.
-	built = controlBuild(t, `<object>just markup</object>`)
-	if got := findingsWith(built.Findings, RuleResourceBlocked); len(got) != 0 {
-		t.Errorf("an object with no data reported %s", got[0].Error())
+	// it is a box holding its children and always was. An empty attribute names
+	// nothing as surely as an absent one.
+	for _, src := range []string{
+		`<object>just markup</object>`,
+		`<object data="">just markup</object>`,
+		`<object data="   ">just markup</object>`,
+	} {
+		built = controlBuild(t, src)
+		if got := findingsWith(built.Findings, RuleResourceBlocked); len(got) != 0 {
+			t.Errorf("%s reported %s", src, got[0].Error())
+		}
+	}
+
+	// And one whose data is not a picture at all falls back too, rather than
+	// leaving a hole where the plugin would have been.
+	built = Build(Input{
+		HTML:      `<object data="app.wasm">fallback</object>`,
+		Resources: mapResolver{"app.wasm": []byte("\x00asm not a picture")},
+	})
+	if box := boxFor(built.Root, "object"); box == nil || box.Replaced != nil {
+		t.Errorf("bytes that decode as no picture were taken for one")
+	}
+	if got := findingsWith(built.Findings, RuleResourceBlocked); len(got) == 0 {
+		if got := findingsWith(built.Findings, RuleImageUndecodable); len(got) == 0 {
+			t.Errorf("an object whose data is not a picture said nothing: %v",
+				built.Findings)
+		}
 	}
 }
 

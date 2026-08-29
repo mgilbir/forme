@@ -715,27 +715,32 @@ func TestStyleElementIsCollected(t *testing.T) {
 	}
 }
 
-// TestDisplayContentsIsReported pins that a value the engine reads and cannot
-// honour is named. Treating it as inline is the closest available answer and is
-// wrong in a way that shows — the box takes part in layout when the author asked
-// for it not to — so it must not be silent.
-func TestDisplayContentsIsReported(t *testing.T) {
-	got := build(t, `<div id="wrap" style="display: contents"><p>x</p></div>`)
+// TestDisplayContentsIsReportedWhereItCannotBeHonoured pins that a value the
+// engine reads and cannot honour is named.
+//
+// It used to be every element, because the value was not implemented at all.
+// What is left is the elements css-display-3's appendix on unusual elements
+// exempts — an element whose layout is not decided by CSS box generation has no
+// contents to be replaced by — and the root, which §2.7 blockifies. Each keeps
+// the inline box it had, which takes part in layout when the author asked for it
+// not to, so none of them may be silent. See displaycontents_test.go for the
+// elements where it is honoured, and where a finding would be the fault.
+func TestDisplayContentsIsReportedWhereItCannotBeHonoured(t *testing.T) {
+	got := build(t, `<img id="wrap" src="x.png" style="display: contents">`)
 
 	var found *Finding
 	for i := range got.Findings {
-		if got.Findings[i].Rule == RuleUnsupportedValue {
+		if got.Findings[i].Rule == RuleUnsupportedValue &&
+			got.Findings[i].Property == "display" {
 			found = &got.Findings[i]
 		}
 	}
 	if found == nil {
-		t.Fatalf("display:contents was not reported; findings were %v", got.Findings)
-	}
-	if found.Property != "display" {
-		t.Errorf("the finding names property %q", found.Property)
+		t.Fatalf("display:contents on a replaced element was not reported; findings "+
+			"were %v", got.Findings)
 	}
 	// It names which element, since a stylesheet may set it on many.
-	if !strings.Contains(found.Path, "div#wrap") {
+	if !strings.Contains(found.Path, "img#wrap") {
 		t.Errorf("the finding's path is %q, which does not name the element", found.Path)
 	}
 }

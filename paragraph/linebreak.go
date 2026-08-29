@@ -2,6 +2,7 @@ package paragraph
 
 import (
 	"sort"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -66,7 +67,18 @@ func noBreakBefore(r rune, lb LineBreak) bool {
 		// three do not — which for auto is a prohibition UAX #14 does not have,
 		// exactly as the postfixes below are. See isLatinHyphen.
 		return !lb.Loose
-	case (lb.Normal || lb.Loose) && isEastAsianHyphen(r):
+	case (lb.Normal || lb.Loose) && lb.ChineseOrJapanese && isEastAsianHyphen(r):
+		// And only where the text is Chinese or Japanese. §5.3 puts this
+		// tailoring under "in Chinese and Japanese", and the suite tests the
+		// boundary rather than leaving it a reading:
+		// writing-system-line-break-001 sets "line-break: loose" on the same
+		// wave dash twice, once in lang=ja and once in lang=ja-Hang — Japanese
+		// written in Hangul — and asks for a line to begin with it in the first
+		// and not in the second.
+		//
+		// The writing system and not the language, for the reason
+		// writingsystem.go gives: a script subtag says what the text is typeset
+		// as, and "ja-Hang" is not typeset as Japanese however it is tagged.
 		return false
 	case lb.Strict && inLineBreakRanges(r, strictNoBreakRanges[:]):
 		return true
@@ -227,6 +239,24 @@ func BindsToAtomicInline(r rune) bool {
 	// rule does not apply to it.
 	if r == 0x00A0 {
 		return false
+	}
+	// And a combining mark, which the sentence does not name and the suite asks
+	// for anyway.
+	//
+	// UAX #14's LB9 is why: "do not break a combining character sequence; treat
+	// it as if it were the base character". A mark is not a character a line may
+	// begin with and not one a line may end before, whatever stands on the other
+	// side of it — and §5.1 makes an atomic inline "equivalent to" a character
+	// for line breaking, so the sequence rule reaches it like any other.
+	//
+	// line-breaking-atomic-016 and -017 are the two directions, written by the
+	// specification's own editor: "A<CGJ><span>B</span>" and
+	// "<span>A</span><CGJ>B", each asserting there is no opportunity at the
+	// joiner. A combining grapheme joiner is precisely the character an author
+	// writes to say "these two are one thing", so the answer is the one its name
+	// asks for.
+	if unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r) {
+		return true
 	}
 	if r < bindingRanges[0].lo {
 		return false

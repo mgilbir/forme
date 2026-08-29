@@ -135,7 +135,17 @@ var properties = map[string]property{
 	"line-height":    {true, "normal"},
 	"letter-spacing": {true, "normal"},
 	"word-spacing":   {true, "normal"},
-	"text-align":     {true, "start"},
+	// text-align-all is where every line but the last is aligned — CSS Text 4
+	// §7.1. The property an author writes is "text-align", which is the
+	// shorthand for this and text-align-last; see the shorthands table.
+	//
+	// Splitting them is not a reshuffle for its own sake, and the argument is
+	// white-space's exactly. "text-align: center" and "text-align-all: center"
+	// set the same thing, and unless they set the same *longhand* the cascade
+	// cannot decide between them: the answer would come down to which of the
+	// two layout happened to read second, and an author who wrote one after the
+	// other would get whichever this engine preferred rather than the later one.
+	"text-align-all": {true, "start"},
 	// text-align-last is the last line's own alignment — CSS Text 3 §7.2 — and
 	// it inherits, so a block sets it for the paragraphs inside it. "auto"
 	// means "whatever the block is aligned as", except that a justified block's
@@ -212,6 +222,19 @@ var properties = map[string]property{
 	// hyphenating a word that contains no soft hyphen needs a dictionary for
 	// the document's language.
 	"hyphens": {true, "manual"},
+	// The two kerning properties inherit, and both are decided in layout rather
+	// than here, because whether either asks for anything depends on the face
+	// that will set the text — which the cascade has not chosen yet. A face with
+	// no kerning in it cannot have its kerning turned off. See
+	// layout/textchecks.go.
+	"font-kerning":          {true, "auto"},
+	"font-feature-settings": {true, "normal"},
+	// text-autospace inherits, which is what lets a document turn it off once
+	// on the body. Its initial value is "normal", and "normal" asks for the
+	// spacing — a page of Japanese with Latin words in it is set wrong without
+	// it, so the property is on until something says otherwise. See
+	// paragraph/autospace.go.
+	"text-autospace": {true, "normal"},
 	// hanging-punctuation inherits, which is what lets a document ask for it
 	// once on the body and mean it for every paragraph. "first" and "last" are
 	// implemented; the two end values are read as none and reported.
@@ -221,11 +244,21 @@ var properties = map[string]property{
 	// string included — which is how a document asks for a word to be broken with
 	// no mark at all, and is a real value rather than a way of writing nothing.
 	"hyphenate-character": {true, "auto"},
+	// hyphenate-limit-chars inherits, and it is three numbers: how long a word
+	// must be before it may be broken at all, how many of its letters must stay
+	// on the first line, and how many must go to the next. "auto" for any of
+	// them leaves that one to the engine, which takes the hyphenmins the
+	// language's own pattern file states — see paragraph/hyphenate.go.
+	"hyphenate-limit-chars": {true, "auto"},
 	// tab-size inherits, which is the answer that makes a <pre> inside a
 	// styled <article> keep the tab width the author set on the article. A
 	// number is a count of space advances and a length is itself; the initial
 	// value is 8, which is what a tab has meant since terminals had one.
-	"tab-size":              {true, "8"},
+	"tab-size": {true, "8"},
+	// css-text-5's text-fit scales the size a block's text is set in so that
+	// its lines fill the box. Inherited, because a block container inside one
+	// that fits its text fits its own — see layout/textfit.go.
+	"text-fit":              {true, "none"},
 	"text-decoration-line":  {false, "none"},
 	"text-decoration-color": {false, "currentcolor"},
 	"vertical-align":        {false, "baseline"},
@@ -305,6 +338,27 @@ var properties = map[string]property{
 // of text inside <body> would take body's 8px margin, indent the text by it, and
 // separate it from the block after it by a gap the author never wrote. Every
 // number in that document is then plausible and wrong.
+// Undeclared is the value a property has on a box whose style declares nothing
+// about it, given the parent's computed value: the parent's where the property
+// inherits and the property's initial value where it does not.
+//
+// It exists so that a caller can tell a value the author *wrote* from one that
+// merely arrived. A pseudo-element's computed style holds every property in the
+// registry, and comparing it against the originating element's says the wrong
+// thing for the properties that do not inherit — a "::first-line" of an element
+// with a red background reads as declaring "background-color: transparent",
+// which nobody wrote. layout/firstline.go is the caller.
+func Undeclared(name, parent string) string {
+	p, ok := properties[name]
+	if !ok {
+		return ""
+	}
+	if p.inherits {
+		return parent
+	}
+	return p.initial
+}
+
 func Inherited(cs ComputedStyle) ComputedStyle {
 	out := make(ComputedStyle, len(properties))
 	for name, prop := range properties {
@@ -385,7 +439,18 @@ var shorthands = map[string]shorthand{
 	// second.
 	"white-space": {whiteSpaceShorthand,
 		[]string{"white-space-collapse", "text-wrap-mode"}},
-	"text-wrap": {textWrapShorthand, []string{"text-wrap-mode", "text-wrap-style"}},
+	"text-wrap":  {textWrapShorthand, []string{"text-wrap-mode", "text-wrap-style"}},
+	"text-align": {textAlignShorthand, []string{"text-align-all", "text-align-last"}},
+}
+
+func init() {
+	// The logical shorthands, declared in logical.go beside the longhands they
+	// expand into. They are added here rather than written into the table above
+	// so that the whole of css-logical is in one file: the table above is what
+	// CSS 2.1 has, and this is the level on top of it.
+	for name, sh := range logicalShorthands {
+		shorthands[name] = sh
+	}
 }
 
 // boxShorthand builds the expander for a property written as one to four values

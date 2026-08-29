@@ -438,7 +438,7 @@ const maxLabelRunes = 4096
 // controlContent gives a control the text it shows, as an ordinary inline text
 // box.
 //
-// It goes through collapseWhitespace and transformText exactly as a text node
+// It goes through the white space collapsing and transformText exactly as a text node
 // does, because it is text in the document and inherits every rule about text.
 // A second path would be a second set of answers.
 func (b *boxBuilder) controlContent(box *Box, n *html.Node, cs style.ComputedStyle,
@@ -461,7 +461,8 @@ func (b *boxBuilder) controlContent(box *Box, n *html.Node, cs style.ComputedSty
 		})
 		label = truncateRunes(label, maxLabelRunes)
 	}
-	text := collapseWhitespace(label, cs["white-space-collapse"], b.wordSpaceTransformFor(cs))
+	text := collapseWhitespaceAfter(label, cs["white-space-collapse"],
+		b.wordSpaceTransformFor(cs), textBoundary{}, writingSystemAt(n))
 	text, b.afterWord = transformText(text, transformOf(cs["text-transform"]), b.afterWord,
 		languageAt(n))
 	if text == "" {
@@ -472,7 +473,7 @@ func (b *boxBuilder) controlContent(box *Box, n *html.Node, cs style.ComputedSty
 	}
 	box.Children = append(box.Children, &Box{
 		Outer: OuterInline, Inner: InnerText,
-		Style: cs, Text: text, FontSize: fontSize, Parent: box,
+		Style: cs, Text: text, FontSize: fontSize, fontSizeKnown: true, Parent: box,
 	})
 }
 

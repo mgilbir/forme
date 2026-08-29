@@ -194,8 +194,14 @@ func TestAnIntrinsicSizeIsReportedRatherThanDropped(t *testing.T) {
 	}
 
 	for _, decl := range []string{
-		"width: fit-content", "width: stretch", "width: fit-content(20px)",
-		"min-width: min-content", "max-width: max-content",
+		"width: stretch",
+		// The function form, which is not the keyword: the argument stands where
+		// the available space stands, so answering it with fit-content's own
+		// number would be a wrong width rather than an approximation.
+		"width: fit-content(20px)", "max-width: fit-content(20px)",
+		// fit-content on a limit, which the clamp cannot answer: it runs after
+		// the margins are resolved and no longer knows what space there was.
+		"min-width: fit-content", "max-width: fit-content",
 		"height: min-content", "min-height: min-content",
 		"max-height: max-content",
 	} {
@@ -224,6 +230,9 @@ func TestAnIntrinsicSizeIsReportedRatherThanDropped(t *testing.T) {
 		// Applied, so not reported. The case difference is here because the
 		// keyword arrives from the cascade as the author wrote it.
 		"width: min-content", "width: max-content", "width: MIN-CONTENT",
+		"width: fit-content",
+		"min-width: min-content", "min-width: max-content",
+		"max-width: min-content", "max-width: max-content",
 	} {
 		if got := report(t, decl); len(got) != 0 {
 			t.Errorf("%q was reported as an unsupported value (%q); it is either "+
@@ -234,5 +243,94 @@ func TestAnIntrinsicSizeIsReportedRatherThanDropped(t *testing.T) {
 	// Once per element, however many of its sizes name one.
 	if got := report(t, "width: min-content; height: max-content"); len(got) != 1 {
 		t.Errorf("a box with two intrinsic sizes was reported %d times, want once", len(got))
+	}
+}
+
+// boxSizingFindings counts what a document said about box-sizing.
+func boxSizingFindings(t *testing.T, htmlSrc, cssSrc string) int {
+	t.Helper()
+	rec := NewRecorder(nil)
+	built := Build(Input{HTML: htmlSrc, CSS: []Stylesheet{{Source: cssSrc}}})
+	Layout(built.Root, Size{W: picPx(600), H: picPx(10000)}, nil, rec)
+	n := 0
+	for _, f := range rec.Findings() {
+		if f.Property == "box-sizing" {
+			n++
+		}
+	}
+	return n
+}
+
+// TestBorderBoxOnATableWithNothingToTakeOffIsNotReported.
+//
+// The finding is about a table laid out to the wrong model, and a table with no
+// padding and no border is the same table under either: the declared number is
+// the border box and the content box at once. Reporting it names a declaration
+// that changed nothing, which is the noise the vocabulary is careful about.
+//
+// §17.6.2 is why this is not a rare shape. The collapsing border model ignores
+// the table's own padding, so a "padding: 100px" on one has nothing to take off
+// — and the suite's collapsing-border-model-012 and -014 are exactly that, with
+// the finding the only thing between them and a clean pass.
+func TestBorderBoxOnATableWithNothingToTakeOffIsNotReported(t *testing.T) {
+	for _, tc := range []struct{ what, html, css string }{
+		{"a cell with no edges",
+			`<table><tr><td id="c">a</td></tr></table>`,
+			`#c { box-sizing: border-box; width: 100px; padding: 0; border: 0 }`},
+		{"a collapsing table, whose padding §17.6.2 ignores",
+			`<table id="t"></table>`,
+			`#t { border-collapse: collapse; box-sizing: border-box;
+				width: 100px; height: 100px; padding: 100px }`},
+	} {
+		if n := boxSizingFindings(t, tc.html, tc.css); n != 0 {
+			t.Errorf("%s was reported %d times; the two models give it the same box",
+				tc.what, n)
+		}
+	}
+}
+
+// TestBorderBoxOnATableWithEdgesIsStillReported is the containment argument, and
+// it is the whole point of the finding: a table whose declared width really does
+// hold its padding comes out wider than the author asked for.
+func TestBorderBoxOnATableWithEdgesIsStillReported(t *testing.T) {
+	for _, tc := range []struct{ what, html, css string }{
+		{"a cell with padding",
+			`<table><tr><td id="c">a</td></tr></table>`,
+			`#c { box-sizing: border-box; width: 100px; padding: 10px }`},
+		{"a cell with a border",
+			`<table><tr><td id="c">a</td></tr></table>`,
+			`#c { box-sizing: border-box; width: 100px; padding: 0; border: 5px solid }`},
+		{"a separate-borders table with padding",
+			`<table id="t"></table>`,
+			`#t { border-collapse: separate; box-sizing: border-box;
+				width: 100px; padding: 10px }`},
+		// A percentage is not resolvable where the check runs — the containing
+		// block is what the table is being laid out in — so it counts as an
+		// inset. Naming a declaration that may have changed the page is the safe
+		// direction.
+		{"a percentage padding",
+			`<table><tr><td id="c">a</td></tr></table>`,
+			`#c { box-sizing: border-box; width: 100px; padding: 10% }`},
+	} {
+		if n := boxSizingFindings(t, tc.html, tc.css); n == 0 {
+			t.Errorf("%s was not reported, and its declared width holds edges the "+
+				"table algorithm will add again", tc.what)
+		}
+	}
+}
+
+// TestTheGeometryIsTheSameEitherWay, which is what makes the silence honest: the
+// table with nothing to take off is laid out identically whichever model is
+// declared.
+func TestTheGeometryIsTheSameEitherWay(t *testing.T) {
+	width := func(sizing string) float64 {
+		root := layoutOf(t, 600, `<table id="t"></table>`,
+			`#t { border-collapse: collapse; width: 100px; height: 100px;
+				padding: 100px; box-sizing: `+sizing+` }`)
+		return find(t, root, "t").BorderRect.W.Px()
+	}
+	if got, want := width("border-box"), width("content-box"); got != want {
+		t.Errorf("the table is %gpx wide under border-box and %gpx under "+
+			"content-box", got, want)
 	}
 }

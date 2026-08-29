@@ -540,30 +540,86 @@ func isNone(part []css.ComponentValue) bool {
 }
 
 // listStyleShorthand expands "list-style": a type, a position, and an image.
+//
+// # The two slots "none" can fill
+//
+// "none" is a legal value of both list-style-type and list-style-image, and the
+// shorthand's grammar gives no way to say which is meant — so the answer comes
+// from the rest of the declaration. "list-style: none square" is a square marker
+// with no image; "list-style: none url(dot.png)" is that image with no marker;
+// "list-style: none" on its own is neither, since the slot it does not take is
+// reset to its initial value and that value is none too.
+//
+// Where there is nothing left for a "none" to be, the declaration is not a
+// list-style and §4.2 drops it whole. That is the case the suite's
+// list-style-020 is written about: it declares nine of them in a row — two nones
+// beside a type, two beside an image, one beside both — and asks for the
+// inherited marker to survive every one.
 func listStyleShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, []string, bool) {
-	kind, position, image := ident("disc"), ident("outside"), ident("none")
-	var seenKind, seenPosition, seenImage bool
+	var kind, position, image []css.ComponentValue
+	nones := 0
 	var unsupported []string
 
 	for _, part := range splitOnWhitespace(vals) {
 		switch {
-		case isListPosition(part) && !seenPosition:
-			position, seenPosition = part, true
-		case isURLPart(part) && !seenImage:
-			image, seenImage = part, true
-		case isNone(part):
-			// "none" may be the type or the image. Taking it as the type is
-			// what an author means by "list-style: none", which is the whole
-			// reason the value is written — and the image is "none" already, so
-			// a marker is suppressed either way round.
-			if !seenKind {
-				kind, seenKind = part, true
+		case isListPosition(part):
+			if position != nil {
+				return nil, nil, false
 			}
-		case isIdentPart(part) && !seenKind:
-			kind, seenKind = part, true
+			position = part
+		case isURLPart(part):
+			if image != nil {
+				return nil, nil, false
+			}
+			image = part
+		case isNone(part):
+			nones++
+		case isIdentPart(part):
+			if kind != nil {
+				return nil, nil, false
+			}
+			kind = part
 		default:
 			unsupported = append(unsupported, serialize(part))
 		}
+	}
+
+	// How many of the two slots a "none" could fill, and whether the
+	// declaration wrote more of them than there is room for.
+	free := 0
+	if kind == nil {
+		free++
+	}
+	if image == nil {
+		free++
+	}
+	if nones > free {
+		return nil, nil, false
+	}
+	// "list-style: none" on its own is the value an author actually writes, and
+	// it takes both slots: the one none becomes the type, and the image is reset
+	// to its initial value, which is none as well. There is no second assignment
+	// to make — writing one was tried, and planting its removal changed no
+	// answer, because the reset below already says it.
+	if nones > 0 && kind == nil {
+		kind = ident("none")
+		nones--
+	}
+	if nones > 0 && image == nil {
+		image = ident("none")
+		nones--
+	}
+
+	// The shorthand resets what it does not mention, so an omitted longhand
+	// takes its initial value rather than keeping what the cascade had.
+	if kind == nil {
+		kind = ident("disc")
+	}
+	if position == nil {
+		position = ident("outside")
+	}
+	if image == nil {
+		image = ident("none")
 	}
 	return map[string][]css.ComponentValue{
 		"list-style-type":     kind,
@@ -776,6 +832,18 @@ func textDecorationShorthand(vals []css.ComponentValue) (map[string][]css.Compon
 		case isColour(part) && !seenColour:
 			colour, seenColour = part, true
 		case isIdentPart(part):
+			if isInertDeclaration("text-decoration-style", part) {
+				// The style component at its own initial value, which is the
+				// line this engine draws. It is the same rule inert.go applies
+				// to a whole declaration and for the same reason: an engine that
+				// does not implement a property renders as though nobody had
+				// said anything about it, and "solid" is what nobody saying
+				// anything means. Reporting it told an author their underline
+				// was dropped when it is on the page and is the line they asked
+				// for — text-transform-capitalize-035 writes "text-decoration:
+				// underline solid" and is a document about capitalisation.
+				continue
+			}
 			// A keyword this engine understood as belonging to the shorthand and
 			// cannot produce: "blink", or one of the CSS Text Decoration 3 styles
 			// such as "wavy".
@@ -906,4 +974,51 @@ func singleIdent(vals []css.ComponentValue) (string, bool) {
 		name = strings.ToLower(v.Token.Value)
 	}
 	return name, name != ""
+}
+
+// textAlignShorthand is CSS Text 4 §7.1's table for the property that used to be
+// one keyword.
+//
+//	                text-align-all | text-align-last
+//	start etc.      the value        auto
+//	justify-all     justify          justify
+//	match-parent    match-parent     match-parent
+//
+// The first row is the ordinary case and the reason the split is worth having at
+// all: "text-align: center" says nothing about the last line, so the last line
+// goes back to following the rest.
+//
+// The second is where "justify-all" comes from. "text-align: justify" leaves the
+// last line short, which is what a justified paragraph looks like; an author who
+// wants the last line stretched too has to say so, and this is the spelling. It
+// used to be a keyword layout looked for in a second place, and expanding it
+// here is the same tidying the note at the top of this file is about — the value
+// stops being something two readers have to agree about.
+//
+// The third is the one the suite tests and the one a table alone would get
+// wrong. "match-parent" resolves against the parent, and setting the last line
+// to "auto" would make it follow text-align-all instead — so an author who wrote
+// "text-align: match-parent" and then overrode text-align-all would lose the
+// match on the last line, which is exactly what text-align-match-parent-05 is
+// built to catch: it sets the two on the same element and asks for the last line
+// to stay matched.
+func textAlignShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, []string, bool) {
+	name, ok := singleIdent(vals)
+	if !ok {
+		return nil, nil, false
+	}
+	all, last := name, "auto"
+	switch name {
+	case "start", "end", "left", "right", "center", "justify":
+	case "justify-all":
+		all, last = "justify", "justify"
+	case "match-parent":
+		last = "match-parent"
+	default:
+		return nil, nil, false
+	}
+	return map[string][]css.ComponentValue{
+		"text-align-all":  ident(all),
+		"text-align-last": ident(last),
+	}, nil, true
 }

@@ -259,3 +259,25 @@ func (f *Face) HasJoiningForms() bool {
 	}
 	return false
 }
+
+// InCursiveScript reports whether a character belongs to a script whose letters
+// join, which is the question CSS Text §8.2's cursive tracking asks.
+//
+// It is membership of the table above rather than a joining type, and the
+// difference is the whole of why this is here. A hamza is non-joining and an
+// Arabic vowel sign is transparent, and both are Arabic: letter-spacing may not
+// be inserted beside either, because what §8.2 forbids is spacing *within
+// cursive text* and not spacing between two letters that happen to touch.
+// joiningTypeOf answers joinU for a hamza and for a "b" alike, and joinT for an
+// Arabic fatha and for a Latin acute alike, so neither answer separates the two
+// scripts.
+//
+// The table is Unicode's ArabicShaping.txt, which names every character of every
+// cursive-joining script and nothing else — Arabic, Syriac, Mongolian, N'Ko,
+// Phags-pa, Manichaean, Psalter Pahlavi, Hanifi Rohingya, Sogdian, Adlam,
+// Chorasmian, Old Uyghur and Yezidi. So membership is exactly the property, and
+// a script that gains cursive joining arrives with the next generated table.
+func InCursiveScript(r rune) bool {
+	i := sort.Search(len(joiningRanges), func(i int) bool { return joiningRanges[i].hi >= r })
+	return i < len(joiningRanges) && r >= joiningRanges[i].lo
+}

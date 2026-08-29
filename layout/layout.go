@@ -199,28 +199,33 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 	}
 	l := &layouter{
 		rec: rec, avail: avail,
-		lengths:             map[lengthKey]style.Length{},
-		fonts:               map[fontKey]resolvedFont{},
-		textFaces:           map[*Box]*shape.Face{},
-		reportedScripts:     map[string]bool{},
-		reportedGlyphs:      map[string]bool{},
-		reportedOverflow:    map[string]bool{},
-		decorations:         map[*Box][]textDecoration{},
-		backgrounds:         map[*Box][]backgroundLayer{},
-		reportedBackgrounds: map[string]bool{},
-		inlineDraws:         map[*Box]bool{},
-		inlineChains:        map[*Box][]*Box{},
-		inlineOffsets:       map[*Box]Point{},
-		inlineAligns:        map[*Box]vAlignState{},
-		intrinsic:           map[*Box]intrinsicWidths{},
-		grids:               map[*Box]*tableGrid{},
-		tableDemands:        map[*Box][]tableColumnDemand{},
-		collapsed:           map[*Box]*collapsedGrid{},
-		positioned:          map[*Box]*Fragment{},
-		fontSet:             set,
-		rootFontSize:        root.FontSize,
-		root:                root,
+		lengths:          map[lengthKey]style.Length{},
+		fonts:            map[fontKey]resolvedFont{},
+		textFaces:        map[*Box]*shape.Face{},
+		reportedScripts:  map[string]bool{},
+		reportedGlyphs:   map[string]bool{},
+		reportedOverflow: map[string]bool{},
+		decorations:      map[*Box][]textDecoration{},
+		backgrounds:      map[*Box][]backgroundLayer{},
+		reportedOnce:     map[string]bool{},
+		inlineDraws:      map[*Box]bool{},
+		inlineChains:     map[*Box][]*Box{},
+		inlineOffsets:    map[*Box]Point{},
+		inlineAligns:     map[*Box]vAlignState{},
+		intrinsic:        map[*Box]intrinsicWidths{},
+		grids:            map[*Box]*tableGrid{},
+		tableDemands:     map[*Box][]tableColumnDemand{},
+		collapsed:        map[*Box]*collapsedGrid{},
+		positioned:       map[*Box]*Fragment{},
+		fontSet:          set,
+		rootFontSize:     root.FontSize,
+		root:             root,
 	}
+	// The words of every inline formatting context, gathered before anything is
+	// laid out. A word is not a box — "high<span>way</span>" is one word written
+	// in two — so a dictionary cannot be asked about one where the pieces are
+	// built, which happens a box at a time. See hyphenwords.go.
+	l.hyphenPoints = l.hyphenPointsIn(root)
 	// The breaker reports through the layouter, so it is made once the layouter
 	// exists rather than in the literal above.
 	l.br = newBreaker(l)
@@ -316,6 +321,11 @@ type layouter struct {
 	rec   *Recorder
 	avail Size
 
+	// hyphenPoints is where automatic hyphenation may divide the text of each
+	// text box, as rune offsets into that box's own text. It is empty for a
+	// document that asked for none. See hyphenwords.go.
+	hyphenPoints map[*Box][]int
+
 	// lengths memoizes parsing a computed value into a Length.
 	//
 	// The cascade stores computed values as text, so laying out a document
@@ -369,6 +379,10 @@ type layouter struct {
 	// know its parent — layout builds downwards — and giving it one would add a
 	// pointer to every fragment to answer a question a handful of boxes ask.
 	positioned map[*Box]*Fragment
+	// firstLineBoxes memoizes the text boxes ::first-line restyles. See
+	// firstline.go.
+	firstLineBoxes map[*Box]*Box
+
 	// fontSet is where faces come from.
 	fontSet FontSet
 	// rootFontSize is the font-size of the root element, which is what "rem"
@@ -392,6 +406,8 @@ type layouter struct {
 	reportedScripts map[string]bool
 	// reportedWordBreak is the same for the word-break values read as normal.
 	reportedWordBreak map[string]bool
+	// reportedAutospace is the same for the text-autospace values not applied.
+	reportedAutospace map[string]bool
 	// reportedHyphens is the same for the hyphens values read as manual.
 	reportedHyphens map[string]bool
 	// reportedHanging is the same for the hanging-punctuation values not applied.
@@ -411,9 +427,11 @@ type layouter struct {
 	// which is one tokenizer run per property per box and is asked for twice
 	// when a box's background is propagated to the canvas.
 	backgrounds map[*Box][]backgroundLayer
-	// reportedBackgrounds suppresses repeating a complaint about a background
-	// value, which is about a stylesheet rule rather than about a box.
-	reportedBackgrounds map[string]bool
+	// reportedOnce suppresses repeating a finding about a *value* — a
+	// stylesheet rule rather than a box — so a gradient on four hundred
+	// elements is one thing to be told. Keyed by whatever tells two of them
+	// apart. See reportOnce.
+	reportedOnce map[string]bool
 	// inlineDraws memoizes whether an inline box has a background or a border to
 	// paint, and inlineChains the chain of such boxes above another box. Both are
 	// asked once per item per line, which is the hottest loop in the engine, and
@@ -460,14 +478,53 @@ type layouter struct {
 type lengthKey struct {
 	value    string
 	fontSize style.Unit
-	// xHeight joins it for "ex", for the same reason and after the same lesson.
-	xHeight style.Unit
-	// zeroAdvance is part of the key because "ch" resolves against the face, so
-	// two boxes at the same size in different fonts do not share an answer.
-	// Leaving it out would have made the first font to parse "40ch" decide it
-	// for every other — a memoization bug, which is the kind that produces a
-	// wrong page only when a document uses two shape.
-	zeroAdvance style.Unit
+	// metrics is part of the key because "ex", "ch" and "ic" resolve against the
+	// face, so two boxes at the same size in different fonts do not share an
+	// answer. Leaving it out would have made the first font to parse "40ch"
+	// decide it for every other — a memoization bug, which is the kind that
+	// produces a wrong page only when a document uses two faces.
+	metrics faceMetrics
+}
+
+// faceMetrics are the measurements the font-relative units need from whatever
+// face will set a box: the x-height for "ex", the advance of "0" for "ch" and
+// the advance of "水" for "ic".
+//
+// Each carries a "known" bit beside it because zero is an answer for none of
+// them and a fallback for all three, and the fallbacks differ: half an em, no
+// answer at all, and one em. A face that states no x-height and a face that
+// states zero are different things, and four bugs in this engine have come from
+// reading a zero as an answer.
+//
+// It is a value, and comparable, because it is part of the memoization key.
+type faceMetrics struct {
+	xHeight      style.Unit
+	xHeightKnown bool
+	zeroAdvance  style.Unit
+	zeroKnown    bool
+	icAdvance    style.Unit
+	icKnown      bool
+}
+
+// metricsFor gathers whichever of the three a value asks for, and only those.
+//
+// The face is resolved only for a value that needs it. Asking for one has side
+// effects — fontFor reports a fallback when the requested family is missing — so
+// resolving it for every length would make a box that merely declares an
+// unavailable font report it without ever setting any text. It is also a
+// measurement per property, on the hot path of layout.
+func (l *layouter) metricsFor(b *Box, raw string) faceMetrics {
+	var m faceMetrics
+	if usesUnit(raw, 'c', 'h') {
+		m.zeroAdvance, m.zeroKnown = l.zeroAdvance(b)
+	}
+	if usesUnit(raw, 'e', 'x') {
+		m.xHeight, m.xHeightKnown = l.xHeightOf(b)
+	}
+	if usesUnit(raw, 'i', 'c') {
+		m.icAdvance, m.icKnown = l.icAdvance(b)
+	}
+	return m
 }
 
 // collapsed is what a box contributes to its parent's flow once its own margins
@@ -751,18 +808,68 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	// has no height to take a percentage of while its children are still being
 	// laid out, and CSS 2.1 makes such a percentage compute to auto rather than
 	// to the number the content later happens to produce.
+	// The height a percentage inside this box resolves against, which is this
+	// box's *used* height and not the one it declared. §10.5 resolves a
+	// percentage against "the height of the containing block", and §10.7's
+	// minimum and maximum are applied before there is one: a box at
+	// "height: 200px; max-height: 100px" is a hundred pixels tall, so a child at
+	// "height: 100%" is a hundred and not two.
+	//
+	// Only where the height is definite at all. A maximum on its own does not
+	// make one — the box is still as tall as its content, and CSS 2.1 makes a
+	// percentage against that compute to auto — so the clamp is applied to a
+	// declared height and not to the absence of one.
+	//
+	// No document can tell, and that is worth recording rather than leaving as
+	// an implied claim. cbDefinite travels beside cbHeight and is false here
+	// either way, and Length.Resolve refuses a percentage without it — so a
+	// number put in cbHeight for a box with no height is never read. The guard
+	// is what makes the *value* honest: clamping a height that does not exist
+	// would hand down a number the box is not, and the day a reader takes
+	// cbHeight without asking whether it is definite, this is what stops it
+	// being wrong.
+	childHeight, childDefinite := declaredHeight, hasHeight
+	if hasHeight {
+		childHeight = l.clampHeight(b, declaredHeight, containing, at.cbHeight, at.cbDefinite)
+	}
+	if b.Anonymous() {
+		// §9.2.1.1's note, which the suite's anonymous-boxes-001a quotes in its
+		// own source: "if the child of the anonymous block box inside the DIV
+		// above needs to know the height of its containing block to resolve a
+		// percentage height, then it will use the height of the containing block
+		// formed by the DIV, not of the anonymous block box".
+		//
+		// An anonymous box has no declarations of its own, and height is not
+		// inherited, so its height is auto and every percentage inside it
+		// computed to auto with it. The test puts "height: 50%" on an image
+		// beside some text — which is what puts the image in an anonymous block
+		// — inside a div two hundred pixels tall, and asks for a hundred-pixel
+		// square. It drew the image at its intrinsic one pixel.
+		//
+		// Every anonymous box, and not only the block that wraps inline content:
+		// that is the scope §9.2.1.1 gives the rule, and narrowing it to a
+		// non-wrapper flow block was measured at the same 5653. The extra
+		// conditions would have been decoration.
+		//
+		// childDefinite and not hasHeight. The two were one variable and the
+		// difference is worth twenty-three clean passes: hasHeight is read again
+		// below, for whether the box's own bottom edge is open and for its own
+		// height, and neither of those becomes true because the box's *parent*
+		// declared a height.
+		childHeight, childDefinite = at.cbHeight, at.cbDefinite
+	}
 	inner := flow{
 		ctx:        at.ctx,
 		x:          at.x.Add(margin.Left).Add(border.Left).Add(padding.Left),
 		y:          at.y.Add(border.Top).Add(padding.Top),
-		cbHeight:   declaredHeight,
-		cbDefinite: hasHeight,
+		cbHeight:   childHeight,
+		cbDefinite: childDefinite,
 		carriedTop: at.carriedTop,
 	}
 	own := at.ctx
 	if sealed || b.Parent == nil {
 		own = &floatContext{}
-		inner = flow{ctx: own, cbHeight: declaredHeight, cbDefinite: hasHeight}
+		inner = flow{ctx: own, cbHeight: childHeight, cbDefinite: childDefinite}
 	}
 
 	contentHeight, hoistTop, hoistBottom, placedAnything :=
@@ -1056,12 +1163,23 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		// in its own parenthesis, "including the case where the element's
 		// margins collapse through, in which case its bottom margin is also
 		// included": such a box is measured with its whole run whether the
-		// parent's edge is open or not. Leaving it out is not academic — it is
-		// the difference between clearing a float and not clearing it at all,
-		// and no-clearance-adjoining-opposite-float and
-		// no-clearance-due-to-large-margin-after-left-right in the suite are
-		// exactly that case, a 150px and a 185px top margin that carry a cleared
-		// empty box past the float so that nothing is drawn at all.
+		// parent's edge is open or not. That is about *which margins* are in the
+		// run, and it used to be read here as an exemption from the adjoining
+		// rule below as well. It is not one: a box that collapses through and a
+		// box that does not are in the same position with respect to a float
+		// their margin would move, because the margin moves both of them and so
+		// buys neither any distance from it.
+		//
+		// The two tests that reading was kept for —
+		// no-clearance-adjoining-opposite-float and
+		// no-clearance-due-to-large-margin-after-left-right, a 150px and a 185px
+		// top margin carrying a cleared empty box past a float — are answered by
+		// "adjoining" instead, and answered for the right reason: their floats
+		// are outside the block whose edge the margin leaves through, so the
+		// margin really does move the box relative to them and the whole run
+		// really does count. negative-clearance-after-adjoining-float is the
+		// case the exemption cost, an empty cleared box with a 200px margin over
+		// a float inside its own parent.
 		// §9.5.2 measures clearance against where the box would have gone had it
 		// not cleared anything — with 'clear' none, so with its top margin
 		// collapsing and leaving through the parent's open edge exactly as any
@@ -1083,7 +1201,26 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		// it and the run counts in full.
 		adjoining := origin.ctx.mark() > outsideFloats
 		hypothetical := y.Add(pending.value())
-		if escapes && adjoining && !cm.through {
+		if cm.through {
+			// §8.3.1's note about where a self-collapsing box *is*: "the
+			// position of the element's top border edge is the same as it would
+			// have been if the element had a non-zero bottom border". With a
+			// bottom border its two margins would not have met, so its top edge
+			// is after its own top margin and not after the run the two
+			// collapsed into.
+			//
+			// The distinction is only visible through clearance, which is
+			// measured against this position — and it is the whole of
+			// margin-collapse-clear-013, whose own source works it out: a 40px
+			// top margin and a 140px bottom one over a 100px float. Measured at
+			// 140 the box is already past the float and clears nothing, and the
+			// run leaves through the parent's bottom edge; measured at 40 it
+			// clears 60, which puts its top edge on the float's bottom and
+			// leaves the rest of the bottom margin inside the parent. The
+			// parent is 200px tall instead of nothing at all.
+			hypothetical = y.Add(before.merge(cm.topAlone).value())
+		}
+		if escapes && adjoining {
 			hypothetical = y
 		} else if escapes {
 			hypothetical = hypothetical.Sub(origin.carriedTop)
@@ -1384,8 +1521,30 @@ func (l *layouter) floatChild(b *Box, width style.Unit, origin flow,
 		// should have pushed earlier words of the same line down with it.
 		at = at.Add(drop)
 	}
-	if c := origin.ctx.clearance(b.Clear); c > at {
-		at = c
+	// And rule 6 only when the float asked for it. floatContext.clearance
+	// answers "the bottom of the lowest float on a cleared side, and zero when
+	// there is none", so a box that clears nothing is told zero — and comparing
+	// that against the position raises any float whose containing block sits
+	// *above* the formatting context root's content top, which a negative
+	// margin puts it. The float then leaves the block it belongs to and lands on
+	// the root's edge, and every box that has to avoid it is measured against a
+	// float that is not where the page draws it.
+	//
+	// l.clearanceOver, which is the same question for a block, has had this
+	// guard as its first line all along. §9.5.2 computes clearance as a
+	// difference and a box that clears nothing has no difference to apply.
+	//
+	// The floor is still there for a float that clears a side with no float on
+	// it — the index's bottoms start at zero, so "nothing to clear" and "a float
+	// ending at zero" are the same answer, and the block path above floors the
+	// same way. Reaching it needs "clear" on a float inside a block a negative
+	// margin has carried above its formatting context root, and telling the two
+	// apart means a bottom that can say it is absent, which is the index's shape
+	// rather than this call.
+	if b.Clear != ClearNone {
+		if c := origin.ctx.clearance(b.Clear); c > at {
+			at = c
+		}
 	}
 
 	rect := origin.ctx.place(size, b.Float, at, origin.x, origin.x.Add(width))
@@ -1613,6 +1772,22 @@ func (l *layouter) resolveWidth(b *Box, margin, border, padding Edges,
 	}
 
 	if !hasWidth {
+		// §3.1's fit-content, which is the one keyword that needs the space
+		// available and so cannot be answered by explicitWidth. Here it can:
+		// the containing block is resolved, the border and padding are off it,
+		// and what is left is what the box has to fit into.
+		//
+		// It is asked after the float branch above rather than before, because a
+		// float already shrinks to fit and the branch has its own idea of what
+		// the space is — the band it landed in, less the margins it just
+		// resolved. Answering here as well would be the same number by a second
+		// route, and the two would drift.
+		if v, ok := l.fitContentWidth(b, maxZero(available.Sub(margin.Horizontal()))); ok {
+			declared, hasWidth = v, true
+		}
+	}
+
+	if !hasWidth {
 		// An auto width fills whatever the margins leave, which is why a plain
 		// <div> is as wide as its parent. An auto margin against an auto width
 		// is zero — there is nothing left over to distribute.
@@ -1628,6 +1803,38 @@ func (l *layouter) resolveWidth(b *Box, margin, border, padding Edges,
 
 	width := clamp(declared)
 	slack := available.Sub(width).Sub(margin.Horizontal())
+
+	// §10.3.3's first sentence, which is easy to read past because it is about
+	// what the *rules below* see rather than about a result:
+	//
+	//	If 'width' is not 'auto' and [the total] is larger than the width of
+	//	the containing block, then any 'auto' values for 'margin-left' or
+	//	'margin-right' are, for the following rules, treated as zero.
+	//
+	// So a box already too wide for its parent does not get pulled further out
+	// by an auto margin taking a negative share of a slack there is none of. It
+	// starts at the containing block's edge and overflows the other one — which
+	// is what a reader sees in every browser and what
+	// block-non-replaced-width-002 draws.
+	//
+	// Treated as zero rather than solved for: an auto margin is a request for
+	// the leftovers, and there are none.
+	//
+	// Two parts of this cannot be told apart from the alternatives, and both are
+	// arithmetic rather than judgement. "Larger than" is a strict comparison and
+	// an exact fit gives an auto margin nothing by either reading, so "<= 0"
+	// answers identically. And clearing the *right* one changes no number: a
+	// right auto margin has a declared value of zero, so the over-constrained
+	// branch below gives it "margin.Right + slack" where the auto branch gave it
+	// "slack", and those are the same. The left one is the whole of what moves —
+	// clearing only the right leaves it taking the negative share and the box
+	// starts outside its parent.
+	//
+	// Both are written as §10.3.3 writes them, which names the pair and says
+	// "larger than", rather than trimmed to what a test can see.
+	if slack < 0 {
+		marginLeftAuto, marginRightAuto = false, false
+	}
 
 	switch {
 	case marginLeftAuto && marginRightAuto:
@@ -1677,11 +1884,19 @@ func maxZero(u style.Unit) style.Unit {
 func (l *layouter) clampWidth(b *Box, v, containing style.Unit) style.Unit {
 	inset, _ := l.sizingInset(b, containing)
 	lo := style.Unit(0)
-	if min, ok := l.lengthOf(b, "min-width", containing); ok {
+	// An intrinsic keyword names a content width and box-sizing does not touch
+	// it — css-sizing-3 §3.3 — so it is put into the declared space the clamp
+	// works in by adding the inset back, which is the same arithmetic the
+	// answer below undoes. A declared length is already in that space.
+	if v, ok := l.keywordLimit(b, "min-width"); ok {
+		lo = v.Add(inset)
+	} else if min, ok := l.lengthOf(b, "min-width", containing); ok {
 		lo = min
 	}
 	hi := style.MaxUnit
-	if max, ok := l.lengthOf(b, "max-width", containing); ok {
+	if v, ok := l.keywordLimit(b, "max-width"); ok {
+		hi = v.Add(inset)
+	} else if max, ok := l.lengthOf(b, "max-width", containing); ok {
 		hi = max
 	}
 	return maxZero(style.Clamp(v.Add(inset), lo, hi).Sub(inset))
@@ -1804,28 +2019,14 @@ func (l *layouter) parseLength(b *Box, property string) (style.Length, bool) {
 	if raw == "" {
 		return style.Length{}, false
 	}
-	// The face is resolved only for a value that needs it. Asking for one has
-	// side effects — fontFor reports a fallback when the requested family is
-	// missing — so resolving it for every length would make a box that merely
-	// declares an unavailable font report it without ever setting any text. It
-	// is also a measurement per property, on the hot path of layout.
-	var zero style.Unit
-	var haveMetrics bool
-	if usesCh(raw) {
-		zero, haveMetrics = l.zeroAdvance(b)
-	}
-	var xh style.Unit
-	var haveXHeight bool
-	if usesEx(raw) {
-		xh, haveXHeight = l.xHeightOf(b)
-	}
-	key := lengthKey{value: raw, fontSize: b.FontSize, zeroAdvance: zero, xHeight: xh}
+	m := l.metricsFor(b, raw)
+	key := lengthKey{value: raw, fontSize: b.FontSize, metrics: m}
 	if got, ok := l.lengths[key]; ok {
 		return got, true
 	}
 
 	vals, _ := css.ParseComponentValues(raw)
-	length, _, ok := style.ParseLength(vals, l.lengthContext(b, zero, haveMetrics, xh, haveXHeight))
+	length, _, ok := style.ParseLength(vals, l.lengthContext(b, m))
 	if !ok {
 		return style.Length{}, false
 	}
@@ -1834,17 +2035,19 @@ func (l *layouter) parseLength(b *Box, property string) (style.Length, bool) {
 }
 
 // lengthContext is what the font- and viewport-relative units resolve against.
-func (l *layouter) lengthContext(b *Box, zero style.Unit, haveMetrics bool, xh style.Unit, haveXHeight bool) style.LengthContext {
+func (l *layouter) lengthContext(b *Box, m faceMetrics) style.LengthContext {
 	return style.LengthContext{
 		FontSize:         b.FontSize,
 		RootFontSize:     l.rootFontSize,
 		ViewportWidth:    l.avail.W,
 		ViewportHeight:   l.avail.H,
 		ViewportKnown:    true,
-		ZeroAdvance:      zero,
-		FontMetricsKnown: haveMetrics,
-		XHeight:          xh,
-		XHeightKnown:     haveXHeight,
+		ZeroAdvance:      m.zeroAdvance,
+		FontMetricsKnown: m.zeroKnown,
+		XHeight:          m.xHeight,
+		XHeightKnown:     m.xHeightKnown,
+		IcAdvance:        m.icAdvance,
+		IcAdvanceKnown:   m.icKnown,
 	}
 }
 
@@ -1856,45 +2059,41 @@ func (l *layouter) lengthContext(b *Box, zero style.Unit, haveMetrics bool, xh s
 // and the boxes that reach it are the ones with a background image on them.
 func (l *layouter) lengthOfValues(b *Box, vals []css.ComponentValue) (style.Length, bool) {
 	l.ensureFontSize(b)
-	var zero, xh style.Unit
-	var haveMetrics, haveXHeight bool
+	var m faceMetrics
 	for _, v := range vals {
 		if !v.IsToken() || v.Token.Kind != css.Dimension {
 			continue
 		}
 		switch {
 		case strings.EqualFold(v.Token.Unit, "ch"):
-			zero, haveMetrics = l.zeroAdvance(b)
+			m.zeroAdvance, m.zeroKnown = l.zeroAdvance(b)
 		case strings.EqualFold(v.Token.Unit, "ex"):
-			xh, haveXHeight = l.xHeightOf(b)
+			m.xHeight, m.xHeightKnown = l.xHeightOf(b)
+		case strings.EqualFold(v.Token.Unit, "ic"):
+			m.icAdvance, m.icKnown = l.icAdvance(b)
 		}
 	}
-	length, _, ok := style.ParseLength(vals, l.lengthContext(b, zero, haveMetrics, xh, haveXHeight))
+	length, _, ok := style.ParseLength(vals, l.lengthContext(b, m))
 	return length, ok
 }
 
-// usesCh reports whether a value might carry a "ch" length.
+// usesUnit reports whether a value might carry a two-letter unit.
 //
 // It is a cheap over-approximation: a false positive costs one face lookup that
-// the parse then does not use, and a false negative would silently resolve "ch"
-// against no font at all. The unit is always preceded by a digit, which is what
-// keeps "inherit" and a family name containing the letters from matching.
-func usesCh(raw string) bool {
-	for i := 0; i+1 < len(raw); i++ {
-		if (raw[i] == 'c' || raw[i] == 'C') && (raw[i+1] == 'h' || raw[i+1] == 'H') &&
-			i > 0 && raw[i-1] >= '0' && raw[i-1] <= '9' {
-			return true
+// the parse then does not use, and a false negative would silently resolve the
+// unit against no font at all. The unit is always preceded by a digit, which is
+// what keeps "inherit" and a family name containing the letters from matching.
+func usesUnit(raw string, a, b byte) bool {
+	upper := func(c byte) byte {
+		if c >= 'a' && c <= 'z' {
+			return c - 32
 		}
+		return c
 	}
-	return false
-}
-
-// usesEx reports whether a value might carry an "ex" length. Same shape and same
-// reason as usesCh: a false positive costs one face lookup.
-func usesEx(raw string) bool {
-	for i := 0; i+1 < len(raw); i++ {
-		if (raw[i] == 'e' || raw[i] == 'E') && (raw[i+1] == 'x' || raw[i+1] == 'X') &&
-			i > 0 && raw[i-1] >= '0' && raw[i-1] <= '9' {
+	a, b = upper(a), upper(b)
+	for i := 1; i+1 < len(raw); i++ {
+		if upper(raw[i]) == a && upper(raw[i+1]) == b &&
+			raw[i-1] >= '0' && raw[i-1] <= '9' {
 			return true
 		}
 	}
@@ -1905,11 +2104,26 @@ func usesEx(raw string) bool {
 //
 // It reports false when the face does not state one, so that "ex" falls back to
 // half an em rather than to zero — a zero would collapse the box the author was
-// sizing, and a face stating no x-height is the common case for the fourteen
-// standard faces this engine uses by default.
+// sizing. The fourteen standard faces all state one (Courier 426, Times 450,
+// Helvetica 523, out of 1000), so the fallback is for a face that has no OS/2
+// table and for a family the set does not have at all.
 func (l *layouter) xHeightOf(b *Box) (style.Unit, bool) {
 	face, ok := l.fontFor(b)
 	if !ok {
+		return 0, false
+	}
+	return xHeightIn(face, b.FontSize)
+}
+
+// xHeightIn is the height of a lowercase x in a face at a size, and whether the
+// face states one at all.
+//
+// It is separate from xHeightOf because the box builder needs the same answer
+// about a *parent's* face, before any layouter exists: "font-size: 6ex" is
+// relative to the parent's font, and the size it produces is what every other
+// length on the element is measured against. See boxBuilder.fontMetricsFor.
+func xHeightIn(face *shape.Face, size style.Unit) (style.Unit, bool) {
+	if face == nil {
 		return 0, false
 	}
 	d := face.Descriptor()
@@ -1924,7 +2138,7 @@ func (l *layouter) xHeightOf(b *Box) (style.Unit, bool) {
 	if upem <= 0 || !d.Has(shape.MetricXHeight) || d.XHeight <= 0 {
 		return 0, false
 	}
-	return b.FontSize.Mul(float64(d.XHeight) / upem), true
+	return size.Mul(float64(d.XHeight) / upem), true
 }
 
 // zeroAdvance is the width of "0" in a box's own font, which is what "ch" means.
@@ -1940,9 +2154,61 @@ func (l *layouter) zeroAdvance(b *Box) (style.Unit, bool) {
 	return l.br.Measure(face, "0", b.FontSize), true
 }
 
+// waterIdeograph is CSS Values §5.1.4's own choice of character for "ic":
+// U+6C34, which is the same glyph in every CJK script and is full-width in every
+// face that has it.
+const waterIdeograph = "\u6c34"
+
+// icAdvance is the advance of "水" in a box's own font, which is what "ic" means.
+//
+// It reports false when the face has no glyph for it, and that is the ordinary
+// case rather than the exception: a Latin face has no ideographs at all, and
+// measuring the notdef box it would put there instead is measuring nothing the
+// author asked about. §5.1.4 has an answer for it — one em — which the resolver
+// applies, and which is what makes "width: 4ic" on a Latin element mean four
+// ems rather than four boxes of tofu.
+//
+// It asks the box's *own* face and does not fall back to another. A fallback
+// face is chosen per run of text, from the text; there is no text here, and a
+// box that declares a Latin family has said what it wants its ideographic
+// advance measured in even when the answer is "you have not got one".
+//
+// The measurement cannot be told from the fallback by any document, and that is
+// worth writing down rather than leaving to be rediscovered. A water ideograph
+// is a full-width character, so every face that has one makes it exactly one em
+// — Noto Sans JP does — and one em is what §5.1.4 says to assume when there is
+// no face to ask. Made never to be consulted, every test here still passes and
+// the reftest suite does not move: 5567 clean passes either way.
+//
+// It stays measured because the coincidence is a property of the faces that
+// happen to be loadable and not of the unit: a condensed CJK face sets its
+// ideographs narrower than the em, and on the day one is loaded the fallback
+// would size every "ic" box wrong with nothing to say so. What pins the decision
+// meanwhile is TestIcIsTheFacesOwnAdvanceWhenItHasTheIdeograph, which asks this
+// function rather than a page.
+func (l *layouter) icAdvance(b *Box) (style.Unit, bool) {
+	face, ok := l.fontFor(b)
+	if !ok {
+		return 0, false
+	}
+	if missesVisible(face, waterIdeograph) {
+		return 0, false
+	}
+	return l.br.Measure(face, waterIdeograph, b.FontSize), true
+}
+
+// ensureFontSize gives a box a font size where nothing decided one, so that an
+// "em" in one of its declarations resolves against something.
+//
+// It is for the box tree a caller assembled itself, which has no cascade behind
+// it. A box the builder made always carries a size, and a zero one there is a
+// zero the document asked for: "font-size: 0" is how a stylesheet removes the
+// white space between inline-blocks, and reading it as absent put sixteen pixels
+// of strut on every line of such a box.
 func (l *layouter) ensureFontSize(b *Box) {
-	if b.FontSize == 0 {
+	if !b.fontSizeKnown && b.FontSize == 0 {
 		b.FontSize = defaultFontSize
+		b.fontSizeKnown = true
 	}
 }
 

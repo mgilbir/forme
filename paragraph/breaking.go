@@ -145,6 +145,16 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 	// Rewinding rather than looking ahead is what keeps this linear: each item is
 	// still visited once, and the position is a single index rather than a scan.
 	insetAt, insetLine, insetFlow := -1, 0, 0
+	// Where §8.4's allow-end has hung a character on this line, and -1 when
+	// nothing is hanging.
+	//
+	// It is a position rather than a flag because the hang is provisional. The
+	// value hangs a stop or comma "at the end of a line", and whether the
+	// character is at the end of the line is not known when it is reached — only
+	// when something else lands after it. So it is hung, the fill goes on, and
+	// the hang is taken back at the top of the next turn if what follows takes
+	// room. See the restore below.
+	hungAt := -1
 	// The most recent point at which this line could have ended, kept for
 	// break-spaces. §3's break-spaces value puts the soft wrap opportunity
 	// *after* every preserved space and nowhere else, so a space belongs to the
@@ -200,11 +210,36 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 			_, item = br.SplitItem(item, fromByte)
 		}
 
+		// §8.4's hang, taken back.
+		//
+		// A character hung by allow-end is at the end of the line only until
+		// something lands after it, and what lands after it is not known when it
+		// is hung. So the hang is undone before the branches below decide
+		// anything: the character goes back into the line's measure, and the
+		// item that follows meets the width it really has.
+		//
+		// What does *not* take it back is everything that takes no room — a
+		// forced break, an inline box's own edge, a box out of flow. Those
+		// legitimately follow a character at the end of a line, and "ab c、<br>"
+		// is the suite's row for it.
+		//
+		// Without this, a comma inside a "white-space: nowrap" span hung and
+		// pulled the span apart: the atomic inline after it began a new line,
+		// which is the one thing the span was written to prevent. The suite's
+		// hanging-punctuation-allow-end writes that row too, and its assert says
+		// so in as many words — punctuation does not hang "when a nowrap span
+		// prevents breaking before the punctuation".
+		if hungAt >= 0 && !item.Forced && !item.Inset && item.Abs == nil && item.Float == nil {
+			line[hungAt].Hangs, line[hungAt].HangEnd = false, false
+			used = used.Add(line[hungAt].Width)
+			hungAt = -1
+		}
+
 		if item.Float != nil {
 			// Recorded with how far along the line it was reached, which is what
 			// decides whether it goes beside this line or below it.
 			outOfFlow = append(outOfFlow, MidLineBox{
-				Box: item.Float, Used: used, Offset: item.Offset})
+				Box: item.Float, Used: floatClears(line, used), Offset: item.Offset})
 			continue
 		}
 
@@ -214,7 +249,8 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 			// not been written at all — which is what "out of flow" means and is
 			// the assertion a test can make that a float cannot.
 			outOfFlow = append(outOfFlow, MidLineBox{
-				Box: item.Abs, Used: used, Abs: true, Offset: item.Offset})
+				Box: item.Abs, Used: used, Abs: true, Offset: item.Offset,
+				AfterContent: contentOnLine(line)})
 			continue
 		}
 
@@ -258,11 +294,46 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 			item.Width = TabAdvance(lineX.Add(used), item.TabStop, item.TabFloor)
 		}
 
+		// §8.4's allow-end, which is decided here because it is a question about
+		// a line: "a stop or comma at the end of a line hangs ... only if it
+		// does not otherwise fit prior to justification".
+		//
+		// So it is asked exactly where the answer is known — the character does
+		// not fit, the line holds something already, and putting it outside the
+		// line is what lets the line have it. A candidate that fits needs
+		// nothing: it is placed like any other character and the value has
+		// nothing to say about it. That is the whole of the difference from
+		// force-end, which hangs one whether or not it fits.
+		//
+		// used is not advanced, because the character is outside the line —
+		// which is what hanging it means, and is what lets the line hold it.
+		//
+		// The fill goes on rather than ending here, and that is not a nicety.
+		// Whatever follows meets exactly the room the character found, so a
+		// letter still overflows and still breaks the line in the same place;
+		// what is different is everything that takes *no* room. A forced break
+		// after the comma has to end this line rather than begin an empty one
+		// below it, and the suite writes that row: "ab c、<br>", whose reference
+		// is one line and not two.
+		// One character per line falls out of the restore above rather than
+		// needing a rule: a stop or a comma takes room, so the restore fires
+		// before a second candidate is ever tested and the first is back in the
+		// line's measure by then. A guard here was written first and could not
+		// be reached — not by two commas, and not by two with a float between
+		// them, which is the only thing that stands between two characters and
+		// takes no room.
+		if item.MayHangEnd && content && !item.NoWrap && overflows(used, item, width) {
+			item.Hangs, item.HangEnd = true, true
+			hungAt = len(line)
+			line = append(line, item)
+			continue
+		}
+
 		// A hanging space never causes a break: it sits past the line's end
 		// rather than moving to the next one. Without this, "XX    XX" under
 		// pre-wrap would push the second word down a line for spaces that take
 		// no room on the page at all.
-		if !item.NoWrap && !item.Hangs && i < tailFrom && item.BreakBefore &&
+		if !item.NoWrap && !item.Hangs && !isTailSpace(item) && i < tailFrom && item.BreakBefore &&
 			len(line) > 0 && overflows(used, item, width) {
 			// Ending here costs the hyphen as well, where the opportunity is one
 			// a soft hyphen offered. If that does not fit, this is not a place
@@ -375,6 +446,45 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 			}
 		}
 
+		// The other end of the same rule: the opportunity a character carries
+		// is the one *after* it.
+		//
+		// overflow-wrap is written over the text it is set on, and a run that
+		// allows the last-resort break therefore offers one at its own end —
+		// where the run following it, which does not allow one, offers none at
+		// its start. overflow-wrap-anywhere-inline-004 is that shape and says
+		// so in its own assertion: "should break after the last character of
+		// the inline-block it applies to". Written
+		// "X<span style='overflow-wrap:anywhere'>XX</span>XX" in two
+		// characters, it is three lines, and without this it is two — the
+		// branch above cuts inside the span and then nothing lets the line end
+		// at the span's edge.
+		//
+		// Every condition of the branch above holds here and for the same
+		// reasons. There is no separate test that the line holds something:
+		// breaksAfterLast asks for a run on it, which is the stronger
+		// requirement and implies it.
+		//
+		// Three of the conjuncts cannot be reached and are recorded rather
+		// than dropped, which is the same accounting the branch above keeps
+		// for its own. Planted defects removing "!item.BreakWord", "insetAt <
+		// 0" and "oppAt < 0" each leave every test passing and the suite at
+		// the same count. The first is unreachable because the branch above
+		// takes an item that allows the break itself and returns; the other
+		// two because the rewinds that set them are tried before either branch
+		// is reached. They stay because the two branches are one rule, and a
+		// reader given one without the other's conditions would be told they
+		// are two.
+		if !item.BreakWord && !item.NoWrap && !item.Hangs && i < tailFrom &&
+			!item.Inset && !item.Tab && insetAt < 0 && oppAt < 0 &&
+			breaksAfterLast(line) && overflows(used, item, width) {
+			base := 0
+			if i == from {
+				base = fromByte
+			}
+			return trimLineEdge(line), i, base, outOfFlow, false
+		}
+
 		if item.Width > width && !content && !item.Space && !item.NoWrap && !item.Inset {
 			// An inset is not text and has no text to name in the report. A
 			// margin wider than the line is also not the fault the report is
@@ -430,14 +540,36 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 //
 // # What the suite says about this, which is nothing
 //
-// No reftest moves either way — not one of 6250, in either direction. The three
-// that are written for it, letter-spacing-200 through -202, cannot: both
-// documents of each pair report a font this harness does not have, so neither
-// reaches a clean pass whatever the arithmetic. So this is the engine made
-// consistent with its own stated model and with §8.2, on a corpus that
-// demonstrates it breaks nothing and confirms nothing.
+// No reftest moved either way when this was written — not one of 6250, in
+// either direction — and the three written for it, letter-spacing-200 through
+// -202, could not: both documents of each pair reported a font the harness did
+// not have. The harness loads a document's own @font-face now and those three
+// are untainted failures, so they are reachable and this is no longer the whole
+// of what they need. See forme-next-leads.
 func overflows(used style.Unit, item Item, width style.Unit) bool {
-	return used.Add(item.Width).Sub(item.Spacing.Letter) > width
+	return used.Add(item.Width).Sub(trailingSpacing(item)) > width
+}
+
+// trailingSpacing is the letter-spacing after an item's last character, which is
+// the part of its width the measure above leaves out.
+//
+// It is not simply the declared value. §8.2's cursive tracking adds none inside
+// a cursive script, so such a run has none after its last character either —
+// and discounting one it never had makes it a spacing narrower than it is,
+// which is a word kept on a line it does not fit on.
+func trailingSpacing(item Item) style.Unit { return TrailingSpacing(item) }
+
+// TrailingSpacing is trailingSpacing for the layout package, whose intrinsic
+// pass keeps the same account: what a line leaves out when it ends here.
+func TrailingSpacing(item Item) style.Unit {
+	// §8.1's ideograph spacing sits at the far edge of the run it was added to,
+	// and is between two characters that a line break puts on different lines.
+	// Two characters on different lines are not adjacent and get no gap.
+	out := item.Autospace
+	if CursiveTrackingSuppresses(item.Text) {
+		return out
+	}
+	return out.Add(item.Spacing.Letter)
 }
 
 // pendingHyphen is the width of the hyphen a line would have to print if it
@@ -486,6 +618,51 @@ func pendingHyphen(line []Item) style.Unit {
 // a space whether or not the span has a margin, and the span's margin is still
 // its margin once the space has gone. So the scan looks past an inset and the
 // inset is kept.
+// floatClears is how much of the line a float written at this point has to get
+// past, which is not how much of it has been filled.
+//
+// The difference is the white space at the end. §4.1.2 removes a collapsible
+// space that lands at the end of a line, so the space an author left between a
+// box and the float after it is not in the finished line and is not something
+// the float has to clear. Counting it put "<div></div> <div
+// style=float:left></div>" in a container exactly two boxes wide on the next
+// line, four pixels short — and deleting the space from the markup placed it
+// correctly, which is not a difference any specification draws.
+//
+// floats-001 is the suite's version: an inline-block and a float of an inch
+// each, in two inches of room, written on separate lines of the source. Its
+// assert is that "a left floated box shifts left until its outer edge touches
+// the containing block edge", and it came out an inch and a half below.
+//
+// An inset is skipped for the reason isLineTailSpace gives — an inline box's own
+// edge is not content and does not interrupt the run of spaces before it. The
+// scan stops at the first thing that is neither, because only the space at the
+// *end* of the line is removed: "a b " has two collapsible spaces on it and the
+// line keeps the one between the words.
+//
+// A hanging item needs no clause of its own, and a first version had one on the
+// reasoning that its width was never added to the total so subtracting it would
+// double-count. The two cannot meet: §4.1.2's third rule removes a collapsible
+// space and its fourth hangs a preserved one, and TrimAtEnd marks only the
+// first. See isTailSpace, which asks for either and not both. A planted defect
+// that deleted the clause moved no test and no reftest.
+func floatClears(line []Item, used style.Unit) style.Unit {
+	for i := len(line) - 1; i >= 0; i-- {
+		it := line[i]
+		if it.Inset {
+			continue
+		}
+		if !it.TrimAtEnd {
+			break
+		}
+		used = used.Sub(it.Width)
+	}
+	if used < 0 {
+		return 0
+	}
+	return used
+}
+
 func trimLineEdge(line []Item) []Item {
 	end := len(line)
 	for end > 0 && (line[end-1].TrimAtEnd || line[end-1].Inset) {
@@ -517,11 +694,37 @@ func isLineTailSpace(item Item) bool {
 	if item.Inset || item.Abs != nil {
 		return true
 	}
-	// White space that the end of a line does something to: the third rule
-	// removes it, or the fourth hangs it. break-spaces is the value where
-	// neither happens — its spaces are data, they take room, and §3 puts an
-	// opportunity after every one of them — so a line may end inside a run of
-	// them and this must not say otherwise.
+	return isTailSpace(item)
+}
+
+// isTailSpace reports whether the end of a line does something to this white
+// space: §4.1.2's third rule removes it, or its fourth hangs it.
+//
+// break-spaces is the value where neither happens — its spaces are data, they
+// take room, and §3 puts an opportunity after every one of them — so a line may
+// end inside a run of them and this must not say otherwise.
+//
+// A line may not end *at* one of these, and the half of that the fill did not
+// already have is the removed half. §4.1.2's two rules are written over a
+// "sequence" of white space, and a sequence is not all one kind: "ああ␣␣ ␣ ␣ああ"
+// under white-space: normal is two ideographic spaces, a collapsible one, and
+// two more ideographic spaces, all in a row. The ideographic ones hang, so no
+// break was taken at them; the collapsible one does not hang, it is merely
+// removed — and U+3000 offers an opportunity after itself, so that collapsible
+// space began one. The line ended there, the rest of the run went to the line
+// below, and a document whose spaces were supposed to hang off one line got a
+// second line made of nothing but spaces and a third holding the words. Three
+// lines where the specification asks for two.
+//
+// So the question the fill has to ask at an opportunity is not only "does this
+// item hang" but "would ending here leave the line inside white space that the
+// end of a line is about" — which is this, and which the paragraph's own
+// trailing run (tailFrom) already answered for the one place it could see.
+//
+// The two questions are asked side by side rather than folded into one, because
+// hanging is not only a property of spaces: hanging-punctuation sets Hangs on a
+// quotation mark, which is not white space and which this must not claim to be.
+func isTailSpace(item Item) bool {
 	return item.Space && (item.Hangs || item.TrimAtEnd)
 }
 
@@ -571,7 +774,14 @@ func (br *Breaker) breakInsideWord(item Item, width style.Unit, content bool) (h
 		if mid > len(bounds) {
 			break
 		}
-		w := br.MeasureSpaced(item.Face, item.Text[:bounds[mid-1]], item.Size, item.Spacing)
+		// Measured in the context the prefix will be shaped in, which is what
+		// SplitItem gives it: the rest of the word follows it whether or not
+		// the line does. Measuring it alone picked a cut against one width and
+		// then drew the head at another — the two disagree by exactly the
+		// difference between a final form and an isolated one.
+		cut := bounds[mid-1]
+		w := br.MeasureSpacedInContext(item.Face, item.Text[:cut], item.Size, item.Spacing,
+			item.PreContext, item.Text[cut:]+item.PostContext)
 		if w <= width {
 			lo = mid
 		} else {
@@ -599,4 +809,64 @@ func (br *Breaker) breakInsideWord(item Item, width style.Unit, content bool) (h
 	at = bounds[lo-1]
 	head, _ = br.SplitItem(item, at)
 	return head, at, true
+}
+
+// contentOnLine reports whether what is already on a line would keep it from
+// being one of §9.4.2's zero-height line boxes.
+//
+//	Line boxes that contain no text, no preserved white space, no inline
+//	elements with non-zero margins, padding, or borders [...] must be treated
+//	as zero-height line boxes.
+//
+// It is asked for §10.6.4's hypothetical box: an absolutely positioned box would
+// have split the inline content it was written among, and whether its own top
+// edge is that line's bottom or its top is whether the line above it exists at
+// all.
+//
+// An inline box's own edge counts by what it *is* rather than by what it
+// measures — a border cancelled by a negative margin is still a border — and it
+// counts on the side the fragment holds. That is Item.Edged, and the two halves
+// of it are what abspos/static-inside-inline-002 and -003 are written to tell
+// apart.
+func contentOnLine(line []Item) bool {
+	for _, item := range line {
+		switch {
+		case item.Inset:
+			if item.Edged {
+				return true
+			}
+		case item.Abs != nil || item.Float != nil:
+			// Out of flow: written here and drawn somewhere else, so it puts
+			// nothing on this line.
+		case item.Text != "" || item.Atomic != nil || item.Tab || item.Forced:
+			return true
+		}
+	}
+	return false
+}
+
+// breaksAfterLast reports whether the last thing on the line is a run that
+// allows overflow-wrap's last-resort break, and so offers an opportunity after
+// its final character.
+//
+// Insets and hanging characters are stepped over, and that is not tidiness: a
+// span with padding on it ends in a *closing edge*, not in its last character,
+// and reading the edge instead of the character asks overflow-wrap of the wrong
+// thing — of a box side, which never allows the break. A single pixel of
+// padding-right would otherwise turn three lines back into two. A hung
+// character is skipped for the neighbouring reason: it sits past the line's end
+// and is not what a break here would follow.
+//
+// An empty line answers false, which is what makes the caller's "the line holds
+// something" test unnecessary: a break at the end of the previous run is not a
+// break at all when there is no previous run.
+func breaksAfterLast(line []Item) bool {
+	for i := len(line) - 1; i >= 0; i-- {
+		it := line[i]
+		if it.Inset || it.Hangs {
+			continue
+		}
+		return it.BreakWord
+	}
+	return false
 }
