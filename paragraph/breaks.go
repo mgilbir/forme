@@ -248,10 +248,33 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 		// wrote a <span> between the letter and the ideograph.
 		beforeIdeograph := IsIdeographic(r) && prev != 0 &&
 			!IsIdeographic(prev) && isLetterUnit(prev) && !wb.KeepAll
+		// §5.3's "breaks are allowed ... between inseparable characters (such as
+		// U+2025 and U+2026)", which is an opportunity nothing else here makes.
+		//
+		// It is the other half of a sentence whose first half was already
+		// implemented, and the two are easy to mistake for one. A line may
+		// *begin* with an ellipsis under loose, which is UAX #14's LB22 relaxed
+		// and lives in looseBreakRanges — but a relaxed prohibition still needs
+		// an opportunity to relax, and between two ellipses there is none: the
+		// ideograph rule makes one beside 中 and nothing makes one between "‥"
+		// and "‥". So "中中‥‥中" broke in front of the pair and never inside it.
+		//
+		// line-break-loose-015 is the suite's statement of it, and its assert
+		// names the two characters.
+		//
+		// The "loose" test is the rule §5.3 states and no document can see it,
+		// which is worth saying rather than leaving to be rediscovered. Class IN
+		// is in looseBreakRanges, so noBreakBefore forbids a line to begin with
+		// an ellipsis at every other value — an opportunity offered here would be
+		// refused there, and held to the same place it was already held. A
+		// planted defect that dropped the conjunct moved no test and no reftest.
+		// It stays because the two facts come from one table and a rule that
+		// depends on that coincidence is a rule nobody can check.
+		betweenInseparable := lb.Loose && isInseparable(prev) && isInseparable(r)
 		offered := (deferBreak && !(wb.KeepAll && isLetterUnit(r)) && !startsSpacePiece(r, ws)) ||
 			(heldBreak && !startsSpacePiece(r, ws)) ||
 			(wb.BreakAll && !startsSpacePiece(r, ws)) || lb.Anywhere ||
-			beforeIdeograph
+			beforeIdeograph || betweenInseparable
 		// UAX #14 forbids a line beginning with a closing bracket, a hyphen or
 		// a non-starter, and an opportunity offered in front of one is not one.
 		// See linebreak.go for which rules that is and which it is not.

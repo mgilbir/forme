@@ -234,6 +234,7 @@ func TestTheTailoringTablesAreSortedAndDisjoint(t *testing.T) {
 		{"looseBreakRanges", looseBreakRanges[:]},
 		{"prefixRanges", prefixRanges[:]},
 		{"postfixRanges", postfixRanges[:]},
+		{"inseparableRanges", inseparableRanges[:]},
 	} {
 		if len(tc.table) == 0 {
 			t.Fatalf("%s is empty", tc.name)

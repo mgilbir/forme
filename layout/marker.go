@@ -156,7 +156,44 @@ func (l *layouter) markerRun(b *Box) (string, *shape.Face, bool) {
 	if !ok {
 		return "", nil, false
 	}
+	// And in a face that has the character, which the box's own is not always.
+	//
+	// A marker is text and is chosen the way every other character is: §5.2 of
+	// CSS Fonts picks the first available font that can set it, and a family
+	// that cannot is passed over. The box's font was used whatever it held, so
+	// "list-style-type: square" in a serif face drew that face's notdef — U+25AA
+	// is not in the standard PDF fourteen — where every browser draws a small
+	// black square from somewhere else.
+	//
+	// It is the same question a tab stop asks — see tabStop, which wants the face
+	// that has U+0020 rather than the one the box named — and a different call,
+	// because a marker's fallback has to reach past the declared families into
+	// the rest of the library: a bullet is exactly the character a text face is
+	// most likely not to have. faceRunsFor is what an ordinary run is set
+	// through, so a marker is now set through it too.
+	//
+	// The coverage test is a short-circuit and not part of the rule.
+	// faceRunsFor hands back the primary face when the primary can set the text,
+	// so dropping the test changes no rendering — a planted defect that did so
+	// moved no test and no reftest. It is here because it is one lookup against
+	// a walk, on a path every list item goes through.
+	if _, covered := face.GlyphID(firstRune(text)); !covered {
+		if runs := l.faceRunsFor(b, face, text); len(runs) > 0 && runs[0].Face != nil {
+			face = runs[0].Face
+		}
+	}
 	return text, face, true
+}
+
+// firstRune is the character a marker's face is chosen for. A marker is one
+// character for every list style that is a bullet and several for every one that
+// is a number, and the numbers are digits and letters that any text face has —
+// so the first is the one that decides.
+func firstRune(s string) rune {
+	for _, r := range s {
+		return r
+	}
+	return 0
 }
 
 // markerItems is what a block container's inline content starts with, which for
@@ -167,7 +204,15 @@ func (l *layouter) markerRun(b *Box) (string, *shape.Face, bool) {
 // has to seed both: a shrink-to-fit list item whose width was measured without
 // its marker is narrower than the marker it then draws.
 func (l *layouter) markerItems(b *Box) []inlineItem {
-	item, ok := l.markerItem(b)
+	// The marker belongs to the list item and is drawn by whichever box §12.5.1
+	// makes its first inline box — which for an item whose content is
+	// block-level is an anonymous block rather than the item. See
+	// Box.InsideMarker.
+	owner := b
+	if b.InsideMarker != nil {
+		owner = b.InsideMarker
+	}
+	item, ok := l.markerItem(owner)
 	if !ok {
 		return nil
 	}
@@ -227,7 +272,14 @@ func (l *layouter) markerItem(b *Box) (inlineItem, bool) {
 		return inlineItem{}, false
 	}
 	size := b.FontSize
-	above, below := l.leading(b)
+	// The metrics of the face the marker is *set* in, which is not always the
+	// box's own — see markerRun, which passes over a family that has no glyph
+	// for the bullet. §10.8.1 measures leading against "the font", and a run the
+	// declared face could not set is not in that font; leadingInFace is the same
+	// call an ordinary fallback run is measured by. Without it a square bullet
+	// borrowed from another face sat on a line the size of the face that could
+	// not draw it.
+	above, below := l.leadingInFace(b, face)
 	return inlineItem{
 		Text: text, Box: b, Face: face, Size: size,
 		// The same half-em the outside marker leaves, spent as width rather than

@@ -148,6 +148,18 @@ var looseBreakRunes = []rune{
 // And the two classes it names whole.
 var looseBreakClasses = map[string]bool{"IN": true, "PO": true}
 
+// inseparableClasses is UAX #14's class for the ellipses, and "line-break:
+// loose" is the one value that lets a line break inside a run of them.
+//
+// It is the same class looseBreakClasses already asks for, and it is asked for
+// twice because the two rules are different: that one is about a line *beginning*
+// with an ellipsis, which is LB22 relaxed, and this one is about a break between
+// two of them, which is an opportunity nothing else creates. §5.3 states them as
+// one sentence — "breaks are allowed ... between inseparable characters (such as
+// U+2025 and U+2026)" — and an engine that reads only the first half offers a
+// line beginning with an ellipsis it can never break in front of.
+var inseparableClasses = map[string]bool{"IN": true}
+
 // prefixClasses is the class a line may end after under "loose" and no other
 // value: a currency sign or a number sign that belongs to the figure following
 // it.
@@ -187,7 +199,7 @@ func main() {
 	defer f.Close()
 
 	version := "unknown"
-	var spans, glue, strict, loose, prefix, postfix []span
+	var spans, glue, strict, loose, prefix, postfix, inseparable []span
 	seen := map[string]bool{}
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
@@ -231,6 +243,9 @@ func main() {
 		if postfixClasses[class] {
 			postfix = append(postfix, span{lo, hi, class})
 		}
+		if inseparableClasses[class] {
+			inseparable = append(inseparable, span{lo, hi, class})
+		}
 	}
 	// The characters §5.3 names one at a time go in beside the classes.
 	for _, r := range looseBreakRunes {
@@ -261,7 +276,7 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	for _, set := range []map[string]bool{looseBreakClasses, prefixClasses, postfixClasses} {
+	for _, set := range []map[string]bool{looseBreakClasses, prefixClasses, postfixClasses, inseparableClasses} {
 		for class := range set {
 			if !seen[class] {
 				fmt.Fprintf(os.Stderr, "genlinebreak: no character has class %s; has it been renamed?\n", class)
@@ -320,6 +335,15 @@ package paragraph
 // UAX #14 has no unconditional rule about them — nothing there says a line may
 // not start with a per-cent sign — so this is the one part of the tailoring
 // that adds to the base table rather than taking away from it.`, version)
+	emit(&w, "inseparableRanges", inseparable, `// The ellipses, UAX #14's class IN. Unicode %s.
+//
+// %d ranges, merged from %d the file states separately: %s.
+// "line-break: loose" is the one value that lets a line break inside a run of
+// them — §5.3's "breaks are allowed ... between inseparable characters" — and
+// nothing else in this file creates that opportunity, because LB22 is a
+// prohibition and a relaxed prohibition still needs something to relax. The
+// same characters are in looseBreakRanges for the other half of the sentence,
+// which is a line *beginning* with one.`, version)
 	fmt.Print(w.String())
 }
 

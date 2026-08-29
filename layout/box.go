@@ -208,6 +208,18 @@ type Box struct {
 	// gets and for the same reason: the picture is missing, not the box.
 	BackgroundImages map[string]*ReplacedContent
 
+	// InsideMarker is the list item whose "list-style-position: inside" marker
+	// this box draws, where that is not the item itself.
+	//
+	// §12.5.1 puts an inside marker "as the first inline box in the principal
+	// block box, before the element's content", and an item whose content is
+	// block-level has no inline box for it to be the first of. The anonymous
+	// box rule is what settles it: the marker is inline content of the item's
+	// own, so it belongs in the anonymous block that holds the item's leading
+	// inline content — and where the item has none, in an anonymous block of
+	// its own before the first block child. See wrapInlines.
+	InsideMarker *Box
+
 	// TableWrapper marks the anonymous box §17.4 puts around a table to hold it
 	// and its captions.
 	//
@@ -918,8 +930,33 @@ func (b *boxBuilder) roomAt(offset int) bool {
 // block container with inline content, and so generate an anonymous block that
 // occupies a line.
 func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSize style.Unit) *Box {
-	text := collapseWhitespaceAfter(n.Text, inherited["white-space-collapse"],
-		b.wordSpaceTransformFor(inherited), b.boundary, writingSystemAt(n))
+	wst := b.wordSpaceTransformFor(inherited)
+	kind := transformOf(inherited["text-transform"])
+	before := b.boundary
+	// Whether a run of white space open at the end of the node before continues
+	// into this one is a question only "full-width" has to ask here. See
+	// Boundary.Collapsed: the flattening collapses such a run across the
+	// boundary and keeps the break opportunity the rule's parenthesis asks for,
+	// which is the better answer and is the one every other document gets. What
+	// it cannot do is collapse a space that is no longer white space — and
+	// "full-width" maps U+0020 to U+3000 IDEOGRAPHIC SPACE, which is not
+	// collapsible at all, before the flattening ever sees it.
+	//
+	// So the run is closed here only where leaving it open would freeze it, and
+	// asking any wider costs fifty-seven documents: a space removed rather than
+	// collapsed takes its break opportunity with it, and the sixteen
+	// border-top-width pairs and the seventeen content-counter ones wrap
+	// somewhere else without it.
+	if !transformFreezesSpace(kind) {
+		before.Collapsed = false
+	}
+	text := collapseWhitespaceAfter(n.Text, inherited["white-space-collapse"], wst,
+		before, writingSystemAt(n))
+	// Whether the run of white space this node ends with is still open, asked
+	// of the collapsed text and *before* the transform below rewrites it. See
+	// Boundary.Collapsed: "full-width" turns the space into a U+3000, and by
+	// then there is nothing left for the question to be about.
+	endsCollapsed := endsCollapsedSpace(text, inherited["white-space-collapse"], wst)
 	// text-transform, applied here so that the text every later stage measures,
 	// breaks, draws and writes into the PDF is the text that will appear.
 	// texttransform.go works through why it cannot wait until paint time.
@@ -929,13 +966,18 @@ func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSi
 	// IDEOGRAPHIC SPACE, which is not collapsible, so transforming first would
 	// turn a run of spaces into a run of spaces nothing may collapse. It is also
 	// what lets "capitalize" see the word boundaries the reader will.
-	text, b.afterWord = transformText(text,
-		transformOf(inherited["text-transform"]), b.afterWord, languageAt(n))
+	text, b.afterWord = transformText(text, kind, b.afterWord, languageAt(n))
 	// After the transform rather than before it, because what the next node
 	// follows is the text that will be on the page: "full-width" turns a space
 	// into U+3000, which nothing collapses, and the rules below are about the
 	// character a reader sees.
 	b.boundary = boundaryAfter(b.boundary, text)
+	if text != "" {
+		// Guarded for the reason BoundaryAfter is: a node that collapsed to
+		// nothing is not between the characters either side of it, so it leaves
+		// the run it found exactly as open as it was.
+		b.boundary.Collapsed = endsCollapsed
+	}
 	if text == "" {
 		return nil
 	}
@@ -1587,7 +1629,63 @@ func (b *boxBuilder) wrapInlines(parent *Box) []*Box {
 		run = append(run, c)
 	}
 	flush()
-	return out
+	return b.houseInsideMarker(parent, out)
+}
+
+// houseInsideMarker gives an inside marker a line to be the first thing on,
+// where the item's own content is block-level and offers none.
+//
+// §12.5.1 makes the marker "the first inline box in the principal block box,
+// before the element's content", and the anonymous box rule has just cut that
+// content into blocks. So the marker goes where the item's *first* inline
+// content went: into the anonymous block holding it, or — where the item begins
+// with a block, as "<li><ol>...</ol></li>" does — into an anonymous block of its
+// own in front of it. list-style-position-023 and -024 are that second case, and
+// their reference writes it out as "<div>1. <div>1. ...".
+//
+// Without this the item drew its marker and nothing else. The layout took the
+// inline path on the strength of the marker alone, and every block child of the
+// item — the whole of a nested list — was never laid out at all.
+func (b *boxBuilder) houseInsideMarker(parent *Box, children []*Box) []*Box {
+	if !markerInside(parent) {
+		return children
+	}
+	for _, c := range children {
+		// An out-of-flow box is not the item's content and does not get to
+		// decide where the marker goes. No document can tell: wrapInlines only
+		// ever emits an out-of-flow box straight into the parent's children,
+		// never wrapped, so one met here is never the anonymous block the test
+		// below is looking for and stopping at it would give the same answer.
+		// It is the correct reading rather than a live branch, and a planted
+		// defect that drops it moves nothing.
+		if c.Outer != OuterBlock || c.outOfFlow() {
+			continue
+		}
+		if c.Anonymous() && c.Inner == InnerFlow {
+			// The item's own leading inline content, already wrapped. The
+			// marker is the first inline box of it.
+			c.InsideMarker = parent
+			return children
+		}
+		break
+	}
+	// A block first, so the marker needs a block of its own. It is empty and it
+	// is still a line: an inside marker makes a line box wherever it is, which
+	// is what gives an item with no content at all its height.
+	offset := 0
+	if parent.Element != nil {
+		offset = parent.Element.Offset
+	}
+	if !b.roomAt(offset) {
+		return children
+	}
+	anon := &Box{
+		Outer: OuterBlock, Inner: InnerFlow,
+		Style: style.Inherited(parent.Style), Parent: parent,
+		FontSize: parent.FontSize, fontSizeKnown: parent.fontSizeKnown,
+		FirstLine: parent.FirstLine, InsideMarker: parent,
+	}
+	return append([]*Box{anon}, children...)
 }
 
 // hasInFlowContent reports whether a run of inline-level boxes holds anything

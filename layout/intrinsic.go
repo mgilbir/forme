@@ -712,10 +712,20 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 			}
 			run, runContent = run.Add(item.Width), true
 			line = line.Add(item.Width)
-			edge, runEdge = 0, 0
 			if !item.Inset {
 				// An inline box's own edge is not a character, so it neither
-				// carries spacing nor clears the spacing of the text before it.
+				// carries spacing nor clears the spacing of the text before it
+				// — and for the same reason it does not end the run of white
+				// space that ends the line. trimLineEdge says so in as many
+				// words, skipping an inset to reach the space in front of it,
+				// and a measurement that stopped at the inset instead was wider
+				// than the line it was measuring by that space.
+				//
+				// "<span style='padding: 0 1em'>あ　</span>" in a float is the
+				// shape: the trailing space is trimmed at the end of the line
+				// and the padding after it is not, so the box is as wide as the
+				// text and the two paddings and no wider.
+				edge, runEdge = 0, 0
 				lineTail, runTail = trailingSpacingOf(item), trailingSpacingOf(item)
 			}
 		}

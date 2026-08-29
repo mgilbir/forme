@@ -313,6 +313,43 @@ type Boundary struct {
 	Last rune
 	// Seen is the last rune written that is not default-ignorable.
 	Seen rune
+	// Collapsed says the text ended with a space that a collapsible run
+	// collapsed to, so a collapsible run starting the next node is part of the
+	// same run and produces nothing of its own.
+	//
+	// §4.1.1 is written over the text of an inline formatting context and
+	// css-text-4 says "intervening inline box boundaries must be ignored", so a
+	// run of white space that a node boundary falls inside is one run. The
+	// flattening already knows that and skips the second space, which is enough
+	// for everything that only has to be measured — but not for text-transform,
+	// which runs per node and runs *after* this. "full-width" maps U+0020 to
+	// U+3000 IDEOGRAPHIC SPACE, which is not collapsible white space at all, so
+	// a space that had not yet been collapsed when the transform reached it can
+	// never be collapsed afterwards, and two nodes came out with two visible
+	// spaces between them where the page should have one.
+	//
+	// It is a separate bit from Last because Last is the character a reader
+	// sees, taken after the transform, and by then the space may be a U+3000
+	// that no rule here is about.
+	Collapsed bool
+}
+
+// EndsCollapsedSpace reports whether Phase I output ends with a space that a
+// collapsible run collapsed to, which is what Boundary.Collapsed records.
+//
+// It asks about the *output* rather than the source, because a run of source
+// white space may collapse to nothing at all — and the character it collapses to
+// is the property's when there was a virtual word separator in the run, which is
+// U+3000 under "ideographic-space" and is a space this rule is about even though
+// no other rule here is.
+func EndsCollapsedSpace(collapsed, value string, wst WordSpaceTransform) bool {
+	if !WhiteSpaceOf(value).Collapse || collapsed == "" {
+		return false
+	}
+	if strings.HasSuffix(collapsed, " ") {
+		return true
+	}
+	return wst.Transforms() && strings.HasSuffix(collapsed, wst.Separator)
 }
 
 // BoundaryAfter is the boundary that text leaves behind, given what it followed.
@@ -376,6 +413,9 @@ func CollapseWhitespaceAfter(text, value string, wst WordSpaceTransform,
 	// before. Nothing else reads them until something is written, so a node that
 	// does not begin with white space is untouched by what it follows.
 	last, lastSeen := before.Last, before.Seen
+	// continuing says the run being gathered began in the node before this one,
+	// which had already emitted the space it collapses to. See Boundary.Collapsed.
+	continuing := before.Collapsed
 	inRun, breaks, afterCR := false, 0, false
 	// sawSeparator says the run being gathered has a virtual word separator in
 	// it, so what it collapses to is a space one can see. It is only ever set
@@ -391,11 +431,26 @@ func CollapseWhitespaceAfter(text, value string, wst WordSpaceTransform,
 	// straight past the character the rule before it is about.
 	flush := func(next, nextSeen rune) {
 		if !inRun {
+			// Nothing gathered, so whatever follows is this node's own text and
+			// the run that crossed the boundary — if there was one — has ended.
+			continuing = false
 			return
 		}
 		n := breaks
 		sep := sawSeparator
 		inRun, breaks, afterCR, sawSeparator = false, 0, false, false
+		// joined says this run continues one the node before already emitted a
+		// space for, so the space is written and this run adds nothing to it: a
+		// run collapses to one space however many nodes it is written across.
+		// A preserved segment break is not a space and is unaffected, which is
+		// why this is read at the arms that write one rather than here.
+		joined := continuing
+		continuing = false
+		space := func(s string) {
+			if !joined {
+				out.WriteString(s)
+			}
+		}
 		switch {
 		case sep && n > 0 && ws.PreserveBreaks:
 			// A preserved break with a separator beside it. §4.1.1 keeps the
@@ -411,12 +466,12 @@ func CollapseWhitespaceAfter(text, value string, wst WordSpaceTransform,
 			// also held ordinary spaces is one space either way — collapsing is
 			// what §4.1.1 does to it — and this is which of the two characters
 			// it comes out as.
-			out.WriteString(wst.Separator)
+			space(wst.Separator)
 			last = ' '
 		case n == 0:
 			// Spaces and tabs only: §4.1.1's third and fourth rules, a tab
 			// becoming a space and the run becoming one of them.
-			out.WriteByte(' ')
+			space(" ")
 			last = ' '
 		case ws.PreserveBreaks:
 			// pre-line. The first rule removed the spaces and tabs around the
@@ -470,7 +525,7 @@ func CollapseWhitespaceAfter(text, value string, wst WordSpaceTransform,
 			// characters: the same quote beside the same katakana in an English
 			// document keeps its break.
 		default:
-			out.WriteByte(' ')
+			space(" ")
 			last = ' '
 		}
 	}

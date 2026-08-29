@@ -94,6 +94,11 @@ func noBreakBefore(r rune, lb LineBreak) bool {
 // line starts with a hyphen" and line-break-normal-hyphens-001, over the same
 // text, says it "ends with a hyphen".
 
+// isInseparable reports whether a character is one of UAX #14's class IN, the
+// ellipses. "line-break: loose" is the one value that lets a line break between
+// two of them; see inseparableRanges and the rule in breaks.go.
+func isInseparable(r rune) bool { return inLineBreakRanges(r, inseparableRanges[:]) }
+
 // isLatinHyphen is U+2010 HYPHEN and U+2013 EN DASH: a line may begin with one
 // under "loose" and under nothing else.
 //

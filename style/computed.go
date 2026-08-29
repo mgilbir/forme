@@ -129,6 +129,51 @@ func absolutiseValues(vals []css.ComponentValue, size, root Unit) bool {
 // being computed.
 const DefaultFontSize = 16
 
+// DefaultMonospaceFontSize is where a document with no font-size at all is set
+// when it asks for a monospaced face, and it is not DefaultFontSize.
+//
+// CSS 2.1 §15.7 says the absolute size keywords are a user agent's own scale and
+// says outright that the scale need not be one scale: "the table of scaling
+// factors" may differ between fonts, because "the x-height of a monospace font
+// is usually smaller". Every browser reads it the same way, keeps a second
+// preference for it, and sets that preference to thirteen pixels against
+// sixteen. The suite's references are written against what browsers draw.
+//
+// It is a default and not a rule, so it applies exactly where a default does —
+// to a size nobody has stated. Once anything states one, this element and
+// everything under it are measured from what was stated, and a family further
+// down changes the face and not the size. See monospaceDefault.
+const DefaultMonospaceFontSize = 13
+
+// monospaceDefault reports whether an element with no stated font-size should be
+// measured on the monospaced scale rather than the proportional one.
+//
+// Which of the two scales an element is on is decided by the element's own
+// family, so it is decided again at every element rather than inherited:
+// "font-family: monospace" on the body puts the whole document on the monospaced
+// scale, and a span inside it that asks for a serif comes back off it.
+//
+// The *first* family and not any of them, because the list is a preference in
+// order. "monospace, serif" is a document that wants a monospaced face and will
+// take a serif if there is none; "Georgia, monospace" is the other way about.
+// Only the first says what the element is meant to look like, and the scale
+// follows what it is meant to look like.
+//
+// A generic and not a named face, because this is the user agent's own
+// preference and a user agent knows what its own generics are. A document naming
+// Courier has named a face, and how large that face should be by default is not
+// a question a preference for "monospace" was ever the answer to.
+func monospaceDefault(cs ComputedStyle) bool {
+	first, _, _ := strings.Cut(cs["font-family"], ",")
+	first = strings.TrimSpace(first)
+	first = strings.Trim(first, `"'`)
+	switch strings.ToLower(strings.TrimSpace(first)) {
+	case "monospace", "ui-monospace":
+		return true
+	}
+	return false
+}
+
 // fontSizeOf resolves one element's font-size against its parent's.
 //
 // own says whether a rule set this element's font-size. An element that merely
@@ -170,4 +215,10 @@ func fontSizeOf(cs ComputedStyle, own bool, parent, root Unit, m Metrics,
 // pxValue renders an absolute length the way a stylesheet would have written it.
 func pxValue(u Unit) string {
 	return strconv.FormatFloat(u.Px(), 'f', -1, 64) + "px"
+}
+
+// mustUnit is a length this package wrote itself, which cannot be out of range.
+func mustUnit(px float64) Unit {
+	u, _ := FromPx(px)
+	return u
 }
