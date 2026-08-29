@@ -542,7 +542,8 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					}
 					held, heldAbs := origin.ctx.mark(), len(l.deferred)
 					kid := shiftedBy(
-						l.floatChild(heldBox(f.Box), width, origin, y, baseRoom.Sub(f.Used), lh, 0),
+						l.floatChild(heldBox(f.Box), width, origin, y,
+							roomBeside(runs, baseRoom, f.Used), lh, 0),
 						f.Offset)
 					if kid.MarginRect().Y > y {
 						origin.ctx.truncate(held)
@@ -873,7 +874,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			parent.Children = append(parent.Children, midKids...)
 			for _, f := range after {
 				parent.Children = append(parent.Children, shiftedBy(
-					l.floatChild(heldBox(f.Box), width, origin, y, lineWidth.Sub(f.Used), lh, 0),
+					l.floatChild(heldBox(f.Box), width, origin, y, roomBeside(runs, lineWidth, f.Used), lh, 0),
 					f.Offset))
 			}
 
@@ -1143,4 +1144,103 @@ func (l *layouter) unkernLineEnd(runs []inlineItem) {
 		it.Width = it.Width.Add(alone.Sub(inContext))
 		return
 	}
+}
+
+// roomBeside is how much of a line's band is left for a float met along it.
+//
+// Ordinarily it is the band less what the line had taken when the float was
+// reached, because everything after that point can go on the next line and
+// leave the float where it is. A line that does not fit its own band is the
+// case that is not ordinary: nothing on it can go anywhere else, so it takes
+// the whole band and more, and what is left is the shortfall.
+//
+// §9.5.1 shifts a float down "if there is not enough horizontal room", and the
+// room has to be the real, negative number rather than zero — a float offered no
+// room at all still *fits* a band with nothing else in it, since the rule shifts
+// it "until either it fits or there are no more floats present" and with none
+// present the first attempt is the last.
+//
+// float-nowrap-8 and float-nowrap-7 are the pair this decides, and both name
+// float-nowrap-1 as their reference: the same nowrap line and the same float,
+// written once in the middle of the text and once after it. The three have to
+// draw the same page, and they did not — the float written in the middle sat at
+// the top of a line it could not fit beside.
+//
+// A float with nothing in front of it on the line is the case the overflow test
+// must not reach, and float-nowrap-4 is why: its float opens a nowrap span that
+// overflows, and it stays at the top of the line. §9.5.1 shifts a float down
+// "until either it fits or there are no more floats present" — with nothing
+// beside it there is nothing to shift past, so shifting would never help and the
+// first position is the last. float-nowrap-3-ref asserts the difference from the
+// other side, declaring rel=mismatch against float-nowrap-4: the same nowrap
+// span and the same float, once opening it and once following it.
+//
+// The band is the one the line *started* from, which is what the note in the
+// fitting loop requires: against a band already narrowed by this float, a float
+// that fits stops fitting on the next attempt and the loop never settles. The
+// overflow test is safe there for the same reason read the other way — it only
+// becomes truer as the band shrinks, so an answer of "no room" is never undone.
+func roomBeside(runs []inlineItem, band, used style.Unit) style.Unit {
+	if !breakableBefore(runs, used) {
+		if taken := lineAdvance(runs); taken > band {
+			return band.Sub(taken)
+		}
+	}
+	return band.Sub(used)
+}
+
+// breakableBefore reports whether the line could have ended somewhere before a
+// float reached at "used", so that the float would begin a line of its own.
+//
+// Where it could, the float needs no help from the rule above: the line breaks
+// at that opportunity and the float is retried in a band that is empty in front
+// of it. Where it could not — every value of white-space that says nowrap, and a
+// single unbreakable word — the content in front of the float is stuck to the
+// content behind it, and a float placed between them would be drawn over one or
+// the other.
+//
+// float-nowrap-4 and float-nowrap-8 are the pair that tells the two apart, and
+// they are otherwise the same document: the same float after the same "Some " in
+// the same ten-character band, overflowing by the same amount. The only
+// difference is that -4 puts "white-space: nowrap" on the span and -8 puts it on
+// the block, so -4 has an opportunity in front of the float and -8 has none.
+func breakableBefore(runs []inlineItem, used style.Unit) bool {
+	var at style.Unit
+	for _, r := range runs {
+		// The opportunity is read off the space itself rather than off the item
+		// after it, because the item after it may be the float — which is not a
+		// run and carries no opportunity of its own.
+		if r.Space && !r.NoWrap {
+			return true
+		}
+		// Only the part of the line in front of the float. An opportunity
+		// behind it would let the *text* begin a line, not the float, so it
+		// says nothing about whether the float has room where it stands.
+		//
+		// No document can tell, and the reason is worth writing down rather
+		// than leaving as a claim: where an opportunity behind the float
+		// exists, the breaker takes it and the line does not overflow — so the
+		// branch above never asks. "<span nowrap>abcd</span><float/> efgh…" in
+		// a ten-character band puts "abcd" on a line of its own with the float
+		// beside it, and the words after the float on the next. A planted
+		// defect that drops this bound moves nothing.
+		if at >= used {
+			return false
+		}
+		at = at.Add(r.Width)
+	}
+	return false
+}
+
+// lineAdvance is how far the pen moves across a finished line: the sum of what
+// its runs advance, which is the width the line's content asks for.
+//
+// It is not the band and it is not the line box: a line that overflows asks for
+// more than either, and that is exactly the case it is here to report.
+func lineAdvance(runs []inlineItem) style.Unit {
+	var total style.Unit
+	for _, r := range runs {
+		total = total.Add(r.Width)
+	}
+	return total
 }
