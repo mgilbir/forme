@@ -109,8 +109,14 @@ func TestTheInitialKeywordIsResolvedRatherThanAssumedInert(t *testing.T) {
 	}
 	for _, decl := range []string{
 		// No entry, so nothing is known about what its initial value would mean.
-		"scroll-snap-type: initial",
+		//
+		// "scroll-snap-type" used to be one of these and is not any more: it
+		// joined nomedium.go, so it is reported without the unsupported claim
+		// and reportsUnsupported answers false for the reason this test is not
+		// about. The two rules are independent and both examples below are
+		// properties whose absence really does change a page.
 		"mix-blend-mode: initial",
+		"text-emphasis: initial",
 	} {
 		if !reportsUnsupported(t, decl) {
 			t.Errorf("%q was not reported; this engine does not know that its initial "+
