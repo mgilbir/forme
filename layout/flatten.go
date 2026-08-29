@@ -733,6 +733,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		l.reportAutospace(b, unhandledAutospace)
 	}
 	pieces, endedAtBreak := splitAtBreaks(b.Text, ws, wb, lb, hy)
+	pieces = collapsibleSeparators(pieces, wordSpaceTransformValue(b.Style))
 	if points := l.hyphenPoints[b]; len(points) > 0 {
 		var endsAtHyphen bool
 		pieces, endsAtHyphen = hyphenatePieces(pieces, points)
@@ -1324,4 +1325,38 @@ func cutRunsAt(runs []faceRun, parts []string) []faceRun {
 		at += len(run.Text)
 	}
 	return out
+}
+
+// collapsibleSeparators marks the pieces an expanded virtual word separator
+// became as white space that a line edge may take away.
+//
+// A separator is a place a line may end that the property asks to be shown, and
+// showing it must not put a space where a line begins: the suite's
+// word-space-transform-010 writes "<wbr>あ<wbr>い<wbr>" fifteen ways and every
+// one of them has to draw "あ　い", flush against the padding at both ends.
+// §4.1.2's first rule is the one that says so, and it is about *collapsible*
+// white space — which under "ideographic-space" the character no longer is,
+// because U+3000 is one of §4.1's other space separators and nothing collapses
+// one of those.
+//
+// So the piece is marked rather than the character, and it is marked here
+// because this is the last stage that still knows the property. The test is
+// that the piece is exactly the separator, which cannot tell one the property
+// made from one the author wrote in a document that asks for the same
+// character — a document that sets "ideographic-space" and also types U+3000
+// where a line begins. That is the whole of the confusion, no test in the suite
+// is about it, and the alternative is carrying a bit through the text itself,
+// which every stage between here and Phase I would have to preserve.
+func collapsibleSeparators(pieces []piece, wst wordSpaceTransform) []piece {
+	if !wst.Transforms() || wst.Separator == " " {
+		// An ordinary space is already collapsible and already trimmed; there
+		// is nothing here it does not have.
+		return pieces
+	}
+	for i := range pieces {
+		if pieces[i].Space && pieces[i].Text == wst.Separator {
+			pieces[i].Collapsible, pieces[i].TrimAtEnd = true, true
+		}
+	}
+	return pieces
 }
