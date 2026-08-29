@@ -436,3 +436,19 @@ var postfixRanges = [...]struct{ lo, hi rune }{
 	{0x1ECAC, 0x1ECAC},
 	{0x1ECB0, 0x1ECB0},
 }
+
+// The ellipses, UAX #14's class IN. Unicode 17.0.0.
+//
+// 4 ranges, merged from 4 the file states separately: IN 4.
+// "line-break: loose" is the one value that lets a line break inside a run of
+// them — §5.3's "breaks are allowed ... between inseparable characters" — and
+// nothing else in this file creates that opportunity, because LB22 is a
+// prohibition and a relaxed prohibition still needs something to relax. The
+// same characters are in looseBreakRanges for the other half of the sentence,
+// which is a line *beginning* with one.
+var inseparableRanges = [...]struct{ lo, hi rune }{
+	{0x2024, 0x2026},
+	{0x22EF, 0x22EF},
+	{0xFE19, 0xFE19},
+	{0x10AF6, 0x10AF6},
+}
