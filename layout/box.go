@@ -918,8 +918,33 @@ func (b *boxBuilder) roomAt(offset int) bool {
 // block container with inline content, and so generate an anonymous block that
 // occupies a line.
 func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSize style.Unit) *Box {
-	text := collapseWhitespaceAfter(n.Text, inherited["white-space-collapse"],
-		b.wordSpaceTransformFor(inherited), b.boundary, writingSystemAt(n))
+	wst := b.wordSpaceTransformFor(inherited)
+	kind := transformOf(inherited["text-transform"])
+	before := b.boundary
+	// Whether a run of white space open at the end of the node before continues
+	// into this one is a question only "full-width" has to ask here. See
+	// Boundary.Collapsed: the flattening collapses such a run across the
+	// boundary and keeps the break opportunity the rule's parenthesis asks for,
+	// which is the better answer and is the one every other document gets. What
+	// it cannot do is collapse a space that is no longer white space — and
+	// "full-width" maps U+0020 to U+3000 IDEOGRAPHIC SPACE, which is not
+	// collapsible at all, before the flattening ever sees it.
+	//
+	// So the run is closed here only where leaving it open would freeze it, and
+	// asking any wider costs fifty-seven documents: a space removed rather than
+	// collapsed takes its break opportunity with it, and the sixteen
+	// border-top-width pairs and the seventeen content-counter ones wrap
+	// somewhere else without it.
+	if !transformFreezesSpace(kind) {
+		before.Collapsed = false
+	}
+	text := collapseWhitespaceAfter(n.Text, inherited["white-space-collapse"], wst,
+		before, writingSystemAt(n))
+	// Whether the run of white space this node ends with is still open, asked
+	// of the collapsed text and *before* the transform below rewrites it. See
+	// Boundary.Collapsed: "full-width" turns the space into a U+3000, and by
+	// then there is nothing left for the question to be about.
+	endsCollapsed := endsCollapsedSpace(text, inherited["white-space-collapse"], wst)
 	// text-transform, applied here so that the text every later stage measures,
 	// breaks, draws and writes into the PDF is the text that will appear.
 	// texttransform.go works through why it cannot wait until paint time.
@@ -929,13 +954,18 @@ func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSi
 	// IDEOGRAPHIC SPACE, which is not collapsible, so transforming first would
 	// turn a run of spaces into a run of spaces nothing may collapse. It is also
 	// what lets "capitalize" see the word boundaries the reader will.
-	text, b.afterWord = transformText(text,
-		transformOf(inherited["text-transform"]), b.afterWord, languageAt(n))
+	text, b.afterWord = transformText(text, kind, b.afterWord, languageAt(n))
 	// After the transform rather than before it, because what the next node
 	// follows is the text that will be on the page: "full-width" turns a space
 	// into U+3000, which nothing collapses, and the rules below are about the
 	// character a reader sees.
 	b.boundary = boundaryAfter(b.boundary, text)
+	if text != "" {
+		// Guarded for the reason BoundaryAfter is: a node that collapsed to
+		// nothing is not between the characters either side of it, so it leaves
+		// the run it found exactly as open as it was.
+		b.boundary.Collapsed = endsCollapsed
+	}
 	if text == "" {
 		return nil
 	}

@@ -537,3 +537,15 @@ func EndsInWord(text string) bool {
 	// "'t" in two nodes one word, which is the shape this is asked about.
 	return isWordRune(r) || isMidWord(r)
 }
+
+// FreezesSpace reports whether a text-transform turns an ordinary space into a
+// character white space processing is not about.
+//
+// "full-width" does, and it is the only one that does: its remapping includes
+// U+0020 to U+3000 IDEOGRAPHIC SPACE, which §4.1 counts among the "other space
+// separators" rather than among the collapsible white space, so nothing after
+// the transform may collapse it. See Boundary.Collapsed for what has to happen
+// before it because of that.
+func FreezesSpace(kind TextTransform) bool {
+	return kind&TransformFullWidth != 0
+}

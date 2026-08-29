@@ -33,6 +33,8 @@ var (
 	collapseWhitespace      = paragraph.CollapseWhitespace
 	collapseWhitespaceAfter = paragraph.CollapseWhitespaceAfter
 	boundaryAfter           = paragraph.BoundaryAfter
+	endsCollapsedSpace      = paragraph.EndsCollapsedSpace
+	transformFreezesSpace   = paragraph.FreezesSpace
 	wordSpaceTransformOf    = paragraph.WordSpaceTransformOf
 	// The two rune predicates the line breaking shares with the collapsing.
 	isOtherSpaceSeparator = paragraph.IsOtherSpaceSeparator
