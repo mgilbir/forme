@@ -200,6 +200,10 @@ func ApplyWith(doc *html.Node, sheets []Sheet, m Metrics) Styled {
 	// em into a number is the last thing that needs the element's own size.
 	sizes := map[*html.Node]Unit{}
 	initial, _ := FromPx(DefaultFontSize)
+	// stated records the elements whose font-size came from somewhere — this
+	// element or an ancestor — rather than from the default. It is filled in
+	// document order beside sizes, which the walk below guarantees.
+	stated := map[*html.Node]bool{}
 	rootSize := initial
 	rootSeen := false
 
@@ -236,6 +240,23 @@ func ApplyWith(doc *html.Node, sheets []Sheet, m Metrics) Styled {
 			}
 		}
 		size, resolved := fontSizeOf(cs, own, parentSize, rootSize, m, fontStyle)
+		// The scale a stated size is on is the one it was stated in, so this
+		// asks only where nothing has been stated: by this element, and by
+		// none of its ancestors either. See DefaultMonospaceFontSize.
+		//
+		// Where nothing has been stated the size is a *default*, and which of
+		// the two defaults it is the element's own family answers — so this
+		// picks one of them rather than adjusting what it inherited. A serif
+		// element inside a monospaced document is back on the proportional
+		// scale, and taking its parent's thirteen pixels would have left it on
+		// the other one for no reason it ever gave.
+		stated[n] = own || (parentElement(n) != nil && stated[parentElement(n)])
+		if !stated[n] {
+			size, resolved = initial, true
+			if monospaceDefault(cs) {
+				size = mustUnit(DefaultMonospaceFontSize)
+			}
+		}
 		sizes[n] = size
 		if !rootSeen {
 			rootSize, rootSeen = size, true
