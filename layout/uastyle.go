@@ -93,14 +93,18 @@ ol { list-style-type: decimal }
 /* Text-level semantics. */
 b, strong { font-weight: bold }
 i, em, cite, var, dfn, address { font-style: italic }
-code, kbd, samp, pre { font-family: monospace }
+code, kbd, samp, pre, tt { font-family: monospace }
 pre { white-space: pre }
 small { font-size: 0.83em }
 sub, sup { font-size: 0.83em }
 sub { vertical-align: sub }
 sup { vertical-align: super }
 u, ins { text-decoration-line: underline }
-s, del { text-decoration-line: line-through }
+s, del, strike { text-decoration-line: line-through }
+/* The obsolete presentational elements, from HTML's own rendering section. */
+big { font-size: larger }
+nobr { white-space: nowrap }
+center { display: block; text-align: center }
 mark { background-color: yellow; color: black }
 /* Links, and only links. HTML's rendering section writes this as ":link,
    :visited", and :link matches an <a> *that has an href* — an <a> without one

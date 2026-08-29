@@ -105,11 +105,24 @@ var hintedAttributes = map[string]map[string]string{
 	// table's bgcolor sets are painted by machinery that would have to agree
 	// with it. One element at a time, each when it can be checked.
 	"body": {"bgcolor": "background-color", "text": "color"},
+	// <font> is three presentational attributes and nothing else. HTML's
+	// rendering section maps them by name: colour, family and — through a table
+	// of seven steps — size. They are the reason the element is worth laying out
+	// at all, since without them a <font> is a <span>.
+	"font": {"color": "color", "face": "font-family", "size": "font-size"},
 }
 
 // colourHintAttributes are the entries above whose value is a colour rather than
 // a length or a counter.
-var colourHintAttributes = map[string]bool{"bgcolor": true, "text": true}
+var colourHintAttributes = map[string]bool{"bgcolor": true, "text": true, "color": true}
+
+// familyHintAttributes are the entries whose value is a font family list, which
+// is neither a length nor a colour: <font face="Courier, monospace"> is the
+// font-family property written as an attribute, commas and all.
+var familyHintAttributes = map[string]bool{"face": true}
+
+// sizeHintAttributes are the entries whose value is HTML's font size number.
+var sizeHintAttributes = map[string]bool{"size": true}
 
 // counterHintAttributes are the entries above whose value is a plain integer
 // naming a counter, rather than a length.
@@ -149,6 +162,10 @@ func presentationalHints(n *html.Node) map[string][]css.ComponentValue {
 		var value string
 		if colourHintAttributes[attr] {
 			value, ok = colourValue(raw)
+		} else if familyHintAttributes[attr] {
+			value, ok = familyValue(raw)
+		} else if sizeHintAttributes[attr] {
+			value, ok = fontSizeValue(raw)
 		} else if counterHintAttributes[attr] {
 			// "start" and "value" set the counter to one *below* the number
 			// they name, because the item increments it on the way in. That is
@@ -167,6 +184,91 @@ func presentationalHints(n *html.Node) map[string][]css.ComponentValue {
 		out[property] = vals
 	}
 	return out
+}
+
+// familyValue turns a <font face> into a font-family list.
+//
+// The attribute's syntax is the property's: a comma-separated list of family
+// names. It is quoted here rather than passed through, because an unquoted
+// family name in CSS is a sequence of identifiers and an attribute may hold
+// anything at all — "PASS PASS" is a family name in an attribute and two
+// identifiers in a stylesheet, and content-076 writes exactly that.
+func familyValue(raw string) (string, bool) {
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		name := strings.TrimSpace(part)
+		if name == "" || strings.ContainsAny(name, "\"\\") {
+			// A quote or a backslash in an attribute cannot be quoted here
+			// without an escaping pass, and a family by that name is not one
+			// anybody has. The whole list is refused rather than half of it.
+			return "", false
+		}
+		out = append(out, "\""+name+"\"")
+	}
+	if len(out) == 0 {
+		return "", false
+	}
+	return strings.Join(out, ", "), true
+}
+
+// maxFontSizeSteps is how far HTML's font size scale runs.
+const maxFontSizeSteps = 7
+
+// fontSizeSteps is HTML's rendering section's table, from step 1 to step 7.
+//
+// The scale is the one <font> has had since it was invented, and the keywords
+// are what the section maps it to. There is no eighth: a size above seven is
+// clamped to seven and one below one to one, which is what "the seventh entry"
+// and "the first entry" mean in the prose.
+var fontSizeSteps = [maxFontSizeSteps]string{
+	"x-small", "small", "medium", "large", "x-large", "xx-large", "xxx-large",
+}
+
+// fontSizeValue turns a <font size> into a font-size keyword.
+//
+// A bare number is a step on the scale. A signed one is relative to step 3,
+// which is the default and is what "medium" means — so "+1" is large and "-1" is
+// small, and a document that nests them does not compound, because each element
+// reads the attribute afresh rather than the size it inherited.
+func fontSizeValue(raw string) (string, bool) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", false
+	}
+	relative := 0
+	switch s[0] {
+	case '+':
+		relative, s = +1, s[1:]
+	case '-':
+		relative, s = -1, s[1:]
+	}
+	digits := 0
+	for digits < len(s) && s[digits] >= '0' && s[digits] <= '9' {
+		digits++
+	}
+	if digits == 0 || digits > maxHintDigits || digits != len(s) {
+		return "", false
+	}
+	n := 0
+	for _, c := range []byte(s) {
+		n = n*10 + int(c-'0')
+		if n > 1000 {
+			// Past anything the scale can say. It is clamped below either way,
+			// and stopping here keeps the arithmetic away from an overflow.
+			n = 1000
+			break
+		}
+	}
+	if relative != 0 {
+		n = 3 + relative*n
+	}
+	if n < 1 {
+		n = 1
+	}
+	if n > maxFontSizeSteps {
+		n = maxFontSizeSteps
+	}
+	return fontSizeSteps[n-1], true
 }
 
 // maxHintDigits bounds the number a dimension attribute may state.

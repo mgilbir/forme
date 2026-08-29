@@ -73,16 +73,22 @@ func (l *layouter) markerFor(b *Box, frag *Fragment, origin flow) *Marker {
 	// of its own — puts its baseline further down, and the bullet stayed level
 	// with a strut nothing was set in.
 	baseline := frag.Border.Top.Add(frag.Padding.Top).Add(firstLineBaseline(frag, l.baselineOf(b, lineHeight)))
-	// Where the item's *first line* starts, which is not where its content box
-	// does when a float is in the way.
+	// Where the marker sits from: the item's *border* box, moved along by
+	// whatever a float has taken off its first line.
 	//
-	// §12.5.1 leaves the marker box's position unspecified and every renderer
-	// puts it before the first line box, which is the only answer that keeps a
-	// bullet next to the words it belongs to. A float shortens that line without
-	// moving the box around it — a block's border box is not displaced by a
-	// float, only the lines inside it are — so a marker placed from the content
-	// edge is left behind under the float, an inch away from its own text.
-	inner := frag.Border.Left.Add(frag.Padding.Left).Add(l.firstLineStart(frag, origin))
+	// §12.5.1 says only that an outside marker is "outside the principal box",
+	// and outside means outside the border box rather than outside the content
+	// box. The item's own padding and border are inside it, so neither moves the
+	// bullet: padding-left-applies-to-010 puts fifty pixels of padding and ten
+	// of border on a list item and asks for the marker "on the left-hand side of
+	// the blue line", which is the border it named.
+	//
+	// A float is the other half and is why this is not simply the border box. It
+	// shortens the first line without moving the box around it — a block's
+	// border box is not displaced by a float, only the lines inside it are — so
+	// a marker placed from the box alone is left behind under the float, an inch
+	// away from its own text.
+	inner := l.firstLineStart(frag, origin)
 
 	m := &Marker{
 		Text: text, Face: face, Size: size,
@@ -128,12 +134,22 @@ func markerColour(b *Box) style.RGBA {
 }
 
 // markerRun is the marker's text and the face to set it in, for either position.
+//
+// The text may be empty and the marker still be there, which is §12.5.1's order
+// of precedence: "list-style-image" replaces the marker "list-style-type" would
+// have drawn, so a picture with "list-style-type: none" beside it is a picture
+// and not nothing. Reading the type first and giving up on an empty one lost
+// every such marker — and list-style-021 is that written out, a shorthand
+// "list-style: none" and then the image set again by a later longhand.
+//
+// The face is still needed for a picture, because the gap between a marker and
+// its text is half an em of the item's own font whichever the marker is.
 func (l *layouter) markerRun(b *Box) (string, *shape.Face, bool) {
 	if !b.ListItem {
 		return "", nil, false
 	}
 	text := markerText(b.Style["list-style-type"], b.ListValue)
-	if text == "" {
+	if text == "" && b.MarkerImage == nil {
 		return "", nil, false
 	}
 	face, ok := l.fontFor(b)
@@ -201,6 +217,14 @@ func (l *layouter) markerItem(b *Box) (inlineItem, bool) {
 			Path:     PathOf(b.Element),
 			Property: "list-style-image",
 		})
+	}
+	if text == "" {
+		// A picture and "list-style-type: none": there is a marker and this
+		// path cannot draw it, so what is left is nothing rather than an item
+		// carrying no text. An empty item would still spend the half-em gap
+		// below and push the item's first line along by it, which is a marker's
+		// room with no marker in it.
+		return inlineItem{}, false
 	}
 	size := b.FontSize
 	above, below := l.leading(b)

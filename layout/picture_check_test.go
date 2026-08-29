@@ -584,6 +584,69 @@ func TestPictureSeesThroughBuriedText(t *testing.T) {
 	}
 }
 
+// Ink over ink: a glyph a later, identical, opaque glyph is painted over.
+//
+// It is the same rule as a run buried under a box, for text rather than for a
+// rectangle, and the suite has a standard idiom that needs it: a red copy of the
+// content and a green copy on top of it, passing when no red shows, against a
+// reference that draws the green alone. vertical-align-sub-001 and -super-001
+// are that shape over two absolutely positioned spans at one static position —
+// the page is right, and the oracle counted six marks against three.
+//
+// The condition is exact rather than approximate, because an oracle may not err
+// towards calling different pages the same. The same glyph id, the same face,
+// the same size, the same place, the same clip, and the covering ink solid:
+// nothing about the glyph beneath can show through any of that.
+
+// TestPictureSeesThroughInkOverInk.
+func TestPictureSeesThroughInkOverInk(t *testing.T) {
+	under := picRun(t, "FAIL", 0, 14)
+	over := under
+	over.Color = picGreen
+	if !pictureEqual([]Op{under, over}, []Op{over}, picPage) {
+		t.Error("a run with an identical opaque run painted over it did not compare " +
+			"equal to that run alone")
+	}
+}
+
+// TestPictureKeepsInkThatIsNotBuried is the half that decides whether the rule
+// is an oracle or a hole in one. Every row here is a covering run that does
+// *not* hide what is under it, and the two documents must still differ.
+func TestPictureKeepsInkThatIsNotBuried(t *testing.T) {
+	under := picRun(t, "FAIL", 0, 14)
+	shifted := picRun(t, "FAIL", 1, 14)
+	bigger := picRun(t, "FAIL", 0, 14)
+	bigger.Size = picPx(17)
+	other := picRun(t, "PASS", 0, 14)
+	translucent := picRun(t, "FAIL", 0, 14)
+	translucent.Color = style.RGBA{G: 128, A: 0.5}
+	opaque := picRun(t, "FAIL", 0, 14)
+	opaque.Color = picGreen
+
+	for _, tc := range []struct {
+		name  string
+		cover DrawText
+		// after says whether the cover is painted after the run. One painted
+		// *before* hides nothing, and getting that backwards is the single way
+		// this rule could silently drop half the text in the suite.
+		after bool
+	}{
+		{"an identical opaque run painted before it", opaque, false},
+		{"the same glyphs a pixel to the right", shifted, true},
+		{"the same glyphs one size larger", bigger, true},
+		{"different glyphs in the same place", other, true},
+		{"a translucent run over it", translucent, true},
+	} {
+		ops := []Op{under, tc.cover}
+		if !tc.after {
+			ops = []Op{tc.cover, under}
+		}
+		if pictureEqual(ops, []Op{tc.cover}, picPage) {
+			t.Errorf("%s: the run under it was treated as hidden", tc.name)
+		}
+	}
+}
+
 func TestPictureKeepsTextThatIsNotBuried(t *testing.T) {
 	run := picRun(t, "FAIL", 0, 14)
 	ink := textInk(run)
@@ -940,5 +1003,180 @@ func TestPictureDoesNotChargeSpacingToAControl(t *testing.T) {
 	if !pictureEqual(plain, withControl, picPage) {
 		t.Error("a run carrying a format character stopped abutting the run " +
 			"after it; the control was charged for room it does not take")
+	}
+}
+
+// A tiling repeats in both directions, so two that differ by a whole number of
+// steps are the same tiling.
+//
+// It matters only where there are too many tiles to place exactly: below that
+// bound each tile is a rectangle of its own, aligned to the clip's near edge,
+// and the alignment already handles it. Past it the whole clip becomes one mark
+// carrying a *key* that says which tiling it is — and that key named the tile the
+// layout had chosen rather than the first tile drawn, so two documents putting
+// identical ink on the page came out different.
+//
+// §14.2's canvas is where it showed. The background propagated to the canvas is
+// positioned against the *root element's* box and painted over the whole canvas,
+// so a root with a margin names a first tile well inside the area; a reference
+// that writes the equivalent position directly names one a step earlier.
+// background-root-007 and -010 are that pair.
+
+// tiledOver is a tiling of a patterned picture over the whole test page, with
+// enough tiles that the comparison collapses it to a key.
+func tiledOver(t *testing.T, atX, atY, step float64) TileImage {
+	t.Helper()
+	return TileImage{
+		Clip:  picPage,
+		Tile:  picRect(atX, atY, 4, 4),
+		StepX: picPx(step), StepY: picPx(step),
+		Image: checkerImage(t),
+		Key:   "checker",
+	}
+}
+
+// checkerImage is a picture that is not one colour and not made of bands, so the
+// comparison cannot decompose it and has to fall back to the key.
+func checkerImage(t *testing.T) image.Image {
+	t.Helper()
+	img := image.NewNRGBA(image.Rect(0, 0, 4, 4))
+	for y := 0; y < 4; y++ {
+		for x := 0; x < 4; x++ {
+			c := color.NRGBA{A: 255}
+			if (x+y)%2 == 0 {
+				c = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+			}
+			img.Set(x, y, c)
+		}
+	}
+	return img
+}
+
+// TestPictureSeesAWholeStepAsTheSameTiling.
+func TestPictureSeesAWholeStepAsTheSameTiling(t *testing.T) {
+	base := tiledOver(t, 2, 2, 4)
+	for _, tc := range []struct {
+		x, y float64
+		what string
+	}{
+		{6, 2, "one step along x"},
+		{2, 6, "one step along y"},
+		{-2, -2, "one step back on both"},
+		{22, 22, "five steps along both"},
+	} {
+		moved := tiledOver(t, tc.x, tc.y, 4)
+		if !pictureEqual([]Op{base}, []Op{moved}, picPage) {
+			t.Errorf("%s: the same tiling compared different", tc.what)
+		}
+	}
+}
+
+// TestPictureStillSeesADifferentTiling is the half that keeps the rule from
+// being a hole: everything here puts different ink on the page and must still
+// compare different.
+func TestPictureStillSeesADifferentTiling(t *testing.T) {
+	base := tiledOver(t, 2, 2, 4)
+	// The rows that vary one step use a tiling whose first tile is already on
+	// the clip's edge, so that the aligned origin is the same for both and the
+	// step is the only thing left to tell them apart.
+	square := tiledOver(t, 0, 0, 4)
+	for _, tc := range []struct {
+		from, other TileImage
+		what        string
+	}{
+		{base, tiledOver(t, 3, 2, 4), "a phase of one pixel along x"},
+		{base, tiledOver(t, 2, 3, 4), "a phase of one pixel along y"},
+		{base, tiledOver(t, 2, 2, 5), "a step of five rather than four"},
+		// One axis at a time, and from an origin already on the clip's edge:
+		// aligning the first tile reads the step too, so a tiling started
+		// anywhere else differs in its origin as well and would not say whether
+		// the *step* reached the key at all.
+		{square, func() TileImage { v := tiledOver(t, 0, 0, 4); v.StepY = picPx(5); return v }(),
+			"a different step down the page alone"},
+		{square, func() TileImage { v := tiledOver(t, 0, 0, 4); v.StepX = picPx(5); return v }(),
+			"a different step across it alone"},
+		{base, func() TileImage { v := tiledOver(t, 2, 2, 4); v.Tile.H = picPx(3); return v }(),
+			"a shorter tile"},
+		{base, func() TileImage { v := tiledOver(t, 2, 2, 4); v.Tile.W = picPx(3); return v }(),
+			"a narrower tile"},
+		{base, func() TileImage { v := tiledOver(t, 2, 2, 4); v.Key = "other"; return v }(),
+			"a different picture"},
+	} {
+		if pictureEqual([]Op{tc.from}, []Op{tc.other}, picPage) {
+			t.Errorf("%s: two different tilings compared equal", tc.what)
+		}
+	}
+}
+
+// A run clipped away entirely, which is not the same question the painter asks.
+//
+// clipOps drops a run only when *every pixel the face could reach* is outside
+// the clip, because being wrong there loses text off the page and nothing
+// downstream can put it back. The comparison asks where the letters actually
+// sit: being wrong here calls two pages different, which costs a test rather
+// than a document.
+//
+// The gap between the two is real and small — a few pixels of reserved ascent —
+// and it is exactly what overflow-wrap-break-word-002 and -anywhere-002 fall
+// into: a box one line tall with "overflow: hidden", a second line that belongs
+// below it, and a reference that never writes the word.
+
+// TestPictureSeesThroughARunClippedAway.
+func TestPictureSeesThroughARunClippedAway(t *testing.T) {
+	run := picRun(t, "FAIL", 0, 100)
+	ink := textInk(run)
+	// A clip well above the letters. The run is kept by the painter and marks
+	// nothing.
+	run.Clip = Clip{Active: true, Rect: picRect(0, 0, 200, 10)}
+	if ink.Y.Px() < 20 {
+		t.Fatalf("the run's ink is at %v; the fixture wants it below the clip", ink.Y)
+	}
+	if !pictureEqual([]Op{run}, nil, picPage) {
+		t.Error("a run whose letters are all outside its clip was counted as a mark")
+	}
+
+	// And the case in the gap between the two questions, which is the whole
+	// reason this is not simply clipOps's own test. The clip reaches into the
+	// box the face *reserves* and stops short of the letters: the painter keeps
+	// the run and the page shows nothing.
+	near := picRun(t, "FAIL", 0, 14)
+	ink, reserved := textInk(near), textInkReserved(near)
+	if reserved.Y >= ink.Y {
+		t.Fatalf("the reserved box starts at %v and the ink at %v; the fixture wants "+
+			"the first above the second", reserved.Y, ink.Y)
+	}
+	near.Clip = Clip{Active: true, Rect: Rect{
+		X: ink.X, Y: reserved.Y, W: ink.W, H: ink.Y.Sub(reserved.Y),
+	}}
+	if !pictureEqual([]Op{near}, nil, picPage) {
+		t.Error("a clip that reaches the reserved box and stops above the letters " +
+			"counted the run as a mark")
+	}
+}
+
+// TestPictureKeepsARunTheClipOnlyCuts is the half that keeps the rule honest: a
+// clip that takes part of a run leaves the rest of it on the page, and two
+// documents that cut the same run differently are two different pages.
+func TestPictureKeepsARunTheClipOnlyCuts(t *testing.T) {
+	run := picRun(t, "FAIL", 0, 14)
+	ink := textInk(run)
+	for _, tc := range []struct {
+		clip Rect
+		what string
+	}{
+		{Rect{ink.X, ink.Y, ink.W.Div(2), ink.H}, "the left half"},
+		{Rect{ink.X, ink.Y, ink.W, ink.H.Div(2)}, "the top half"},
+		{ink, "exactly the ink"},
+	} {
+		cut := run
+		cut.Clip = Clip{Active: true, Rect: tc.clip}
+		if pictureEqual([]Op{cut}, nil, picPage) {
+			t.Errorf("%s: a run the clip only cuts was treated as gone", tc.what)
+		}
+	}
+	// And an unclipped run is a mark, so none of the above passes by the run
+	// marking nothing to begin with.
+	if pictureEqual([]Op{run}, nil, picPage) {
+		t.Error("an unclipped run was treated as marking nothing")
 	}
 }

@@ -849,6 +849,46 @@ func TestInlineContainingBlockIsReported(t *testing.T) {
 		t.Errorf("an absolute box inside a positioned inline said nothing: %v", got)
 	}
 
+	// A box that reads none of the rectangle is not approximated by anything.
+	// With no offset on either axis it is placed from its *static* position —
+	// where it was written, which travels with the inline boxes it was written
+	// inside — and with no percentage it is sized by what is in it. Reporting
+	// those says a page is wrong that is exactly right, and abspos-inline-008 is
+	// one: it gives no offsets at all and its square lands where it belongs.
+	for _, decl := range []string{
+		`position: absolute`,
+		`position: absolute; width: 50px; height: 50px`,
+		`position: absolute; left: auto; top: auto`,
+		`position: absolute; margin-left: 10px`,
+	} {
+		got = findingsOf(t, `<div><span id="s"><em id="a">x</em></span></div>`,
+			`#s { position: relative } #a { `+decl+` }`)
+		if hasRule(got, RulePositionApproximated) {
+			t.Errorf("%q was reported, and it reads no edge of its containing block: %v",
+				decl, got)
+		}
+	}
+	// Every way of reading it is still reported: an offset on either axis, and a
+	// percentage of any of the lengths that resolve against it.
+	for _, decl := range []string{
+		`position: absolute; left: 10px`,
+		`position: absolute; right: 10px`,
+		`position: absolute; top: 10px`,
+		`position: absolute; bottom: 10px`,
+		`position: absolute; width: 50%`,
+		`position: absolute; height: 50%`,
+		`position: absolute; max-width: 50%`,
+		`position: absolute; margin-left: 10%`,
+		`position: absolute; padding-left: 10%`,
+	} {
+		got = findingsOf(t, `<div><span id="s"><em id="a">x</em></span></div>`,
+			`#s { position: relative } #a { `+decl+` }`)
+		if !hasRule(got, RulePositionApproximated) {
+			t.Errorf("%q was not reported, and it is measured against a rectangle "+
+				"this engine does not form: %v", decl, got)
+		}
+	}
+
 	// With the wrapper made a block, the containing block is one this engine
 	// forms exactly and there is nothing to report.
 	got = findingsOf(t,

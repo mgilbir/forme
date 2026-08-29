@@ -786,11 +786,15 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 						// not: float-in-inline-001 and position-absolute-007 in the
 						// suite each write such a box beside a float and check that
 						// the float did not carry it along.
-						l.deferAbsolute(abs, parent, 0, y, 0, 0)
+						l.deferAbsolute(abs, parent,
+							f.Offset.X, y.Add(f.Offset.Y), 0, 0)
 						continue
 					}
-					l.deferAbsolute(abs, parent, left.Sub(lo).Add(f.Used), y,
-						width.Sub(right.Sub(lo).Sub(f.Used)), 0)
+					// The offset of the inline boxes it was written inside, which
+					// travels with the item — see collectInline.
+					l.deferAbsolute(abs, parent,
+						left.Sub(lo).Add(f.Used).Add(f.Offset.X), y.Add(f.Offset.Y),
+						width.Sub(right.Sub(lo).Sub(f.Used)).Sub(f.Offset.X), 0)
 				}
 			}
 

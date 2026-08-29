@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/mgilbir/forme/style"
@@ -283,5 +284,87 @@ func TestASplitOutBlockIsPaintedExactlyOnce(t *testing.T) {
 			t.Errorf("%s: the block was painted %d times, want once: %v",
 				tc.what, len(got), got)
 		}
+	}
+}
+
+// An absolutely positioned box inside a relatively positioned inline, which is
+// the same rule as the float above and was the other half of it.
+//
+// §9.4.3 moves a relatively positioned box and everything written inside it. A
+// static position is where a box *would have been*, which is after that move —
+// so a box written inside a displaced inline records the displaced position,
+// exactly as the float beside it does. The engine carried the displacement to
+// the float and dropped it for the out-of-flow box.
+//
+// abspos-inline-008 is the shape, and it is built so that the answer is
+// unmistakable: a "left: 100px" block holding a "left: -100px" inline holding
+// the box, so the two cancel and the square belongs at the page's own edge.
+
+// TestAnAbsoluteInsideARelativelyPositionedInlineMovesWithIt.
+func TestAnAbsoluteInsideARelativelyPositionedInlineMovesWithIt(t *testing.T) {
+	const doc = `<div id="c" style="position:relative; left:100px; width:100px">` +
+		`<span id="s">%s<div id="a" style="position:absolute; width:50px; height:50px">` +
+		`</div></span></div>`
+	at := func(spanCSS, before string) style.Unit {
+		t.Helper()
+		root := layoutOf(t, 600, fmt.Sprintf(doc, before),
+			noDefaults+`#c, #s { font-family: Courier; font-size: 20px } #s { `+spanCSS+` }`)
+		return find(t, root, "a").BorderRect.X
+	}
+	plain := at(`display:inline`, ``)
+	moved := at(`display:inline; position:relative; left:-40px`, ``)
+	if got := plain.Sub(moved); got != bgpx(40) {
+		t.Errorf("the inline's 40px offset moved the box by %v, want 40", got)
+	}
+	// And with a word in front of it, so the offset is added to a pen position
+	// rather than to nothing.
+	plain = at(`display:inline`, `xx`)
+	moved = at(`display:inline; position:relative; left:-40px`, `xx`)
+	if got := plain.Sub(moved); got != bgpx(40) {
+		t.Errorf("after a word, the offset moved the box by %v, want 40", got)
+	}
+
+	// An *inline-level* box takes a different path: §10.3.7 gives a box that
+	// would have been inline the pen position it was written at, and one that
+	// would have been block-level the containing block's own edge. Both are
+	// displaced by the inline boxes around them, and only one of them is the
+	// <div> above.
+	inlineAt := func(spanCSS, before string) style.Unit {
+		t.Helper()
+		root := layoutOf(t, 600,
+			`<div id="c" style="position:relative; left:100px; width:100px"><span id="s">`+
+				before+`<span id="a" style="position:absolute">y</span></span></div>`,
+			noDefaults+`#c, #s, #a { font-family: Courier; font-size: 20px } #s { `+spanCSS+` }`)
+		return find(t, root, "a").BorderRect.X
+	}
+	plain = inlineAt(`display:inline`, ``)
+	moved = inlineAt(`display:inline; position:relative; left:-40px`, ``)
+	if got := plain.Sub(moved); got != bgpx(40) {
+		t.Errorf("an inline box's offset moved an inline-level absolute by %v, want 40", got)
+	}
+	plain = inlineAt(`display:inline`, `xx`)
+	moved = inlineAt(`display:inline; position:relative; left:-40px`, `xx`)
+	if got := plain.Sub(moved); got != bgpx(40) {
+		t.Errorf("after a word, it moved by %v, want 40", got)
+	}
+}
+
+// TestAnAbsoluteWithAnOffsetOfItsOwnDoesNotTakeTheInlinesToo is the containment
+// half: the displacement belongs to the *static* position, so a box that names
+// its own edge is placed from the containing block and the inline's offset has
+// nothing to move.
+func TestAnAbsoluteWithAnOffsetOfItsOwnDoesNotTakeTheInlinesToo(t *testing.T) {
+	at := func(spanCSS string) style.Unit {
+		t.Helper()
+		root := layoutOf(t, 600,
+			`<div id="c" style="position:relative; width:200px"><span id="s">`+
+				`<div id="a" style="position:absolute; left:10px; width:50px; height:50px">`+
+				`</div></span></div>`,
+			noDefaults+`#c, #s { font-family: Courier; font-size: 20px } #s { `+spanCSS+` }`)
+		return find(t, root, "a").BorderRect.X
+	}
+	if at(`display:inline`) != at(`display:inline; position:relative; left:-40px`) {
+		t.Errorf("a box with its own left moved with the inline: %v against %v",
+			at(`display:inline; position:relative; left:-40px`), at(`display:inline`))
 	}
 }

@@ -213,7 +213,8 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 			// on the line are placed exactly as they would have been had the box
 			// not been written at all — which is what "out of flow" means and is
 			// the assertion a test can make that a float cannot.
-			outOfFlow = append(outOfFlow, MidLineBox{Box: item.Abs, Used: used, Abs: true})
+			outOfFlow = append(outOfFlow, MidLineBox{
+				Box: item.Abs, Used: used, Abs: true, Offset: item.Offset})
 			continue
 		}
 
@@ -254,8 +255,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 			// after the character — a tab is a character like any other for that
 			// purpose, and leaving it out would put the run after a tab a spacing
 			// to the left of where it is drawn.
-			item.Width = TabAdvance(lineX.Add(used), item.TabStop, item.TabFloor).
-				Add(item.Spacing.Letter)
+			item.Width = TabAdvance(lineX.Add(used), item.TabStop, item.TabFloor)
 		}
 
 		// A hanging space never causes a break: it sits past the line's end

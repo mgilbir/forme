@@ -244,7 +244,15 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			// Out of flow and, unlike a float, out of the way: it takes no width
 			// on the line, breaks nothing and shortens nothing. All that is kept
 			// is where it was written, which is its static position.
-			out = append(out, inlineItem{Abs: child})
+			//
+			// The displacement of the inline boxes it was written inside goes
+			// with it, for the same reason a float's does — §9.4.3's relative
+			// positioning moves a box and everything written in it, and a
+			// static position is where the box *would have been*, which is
+			// after that move. abspos-inline-008 is a relative span inside a
+			// relative div, offset the one against the other, and the box in it
+			// belongs where the two cancel.
+			out = append(out, inlineItem{Abs: child, Offset: frame.Offset})
 			continue
 		}
 		if child.Float != FloatNone {

@@ -34,6 +34,11 @@ func fuzzSeeds() []string {
 		"\x00", "\ufeff", "\u00ad", "\u200b", "\u00a0", "\u3000",
 		"a\u0302\u0303b", strings.Repeat("\t", 40),
 		strings.Repeat("a ", 500), "\U0001f600\u200d\U0001f600",
+		// A paragraph beginning with more white space than a narrow line holds,
+		// which is how the first line comes to have no runs in it at all. See
+		// balanceTexts for what that cost.
+		"\u1680 \u16800\u16800", "\u1680\u1680\u1680\u1680 a",
+		"\u16800\u1680 \u16800\u16800", "a\u1680\u1680\u1680 b",
 	)
 }
 

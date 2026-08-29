@@ -203,3 +203,90 @@ func TestNowrapAttributeOnACellIsAHint(t *testing.T) {
 		t.Errorf("an author rule lost to the hint: text-wrap-mode is %q", v)
 	}
 }
+
+// <font>, which is three presentational attributes and nothing else.
+//
+// HTML's rendering section maps them by name: colour, family, and — through a
+// table of seven steps — size. They are the reason the element is worth laying
+// out at all, since without them a <font> is a <span>.
+
+// TestFontSizeAttributeIsTheSevenStepScale.
+func TestFontSizeAttributeIsTheSevenStepScale(t *testing.T) {
+	for _, tc := range []struct{ attr, want string }{
+		// The scale itself, from the first entry to the seventh.
+		{"1", "x-small"}, {"2", "small"}, {"3", "medium"}, {"4", "large"},
+		{"5", "x-large"}, {"6", "xx-large"}, {"7", "xxx-large"},
+		// Past either end, clamped to the entry there. "the seventh entry" and
+		// "the first entry" are what the prose says.
+		{"0", "x-small"}, {"8", "xxx-large"}, {"99", "xxx-large"},
+		// Signed values are relative to step three, which is the default and is
+		// what "medium" means.
+		{"+1", "large"}, {"+4", "xxx-large"}, {"-1", "small"}, {"-2", "x-small"},
+		{"-9", "x-small"}, {"+0", "medium"}, {"-0", "medium"},
+		// Leading and trailing space, as every other hint allows.
+		{"  5  ", "x-large"},
+	} {
+		got := computed(t, `<font id="f" size="`+tc.attr+`">x</font>`)
+		if s := got["f"]["font-size"]; s != tc.want {
+			t.Errorf("size=%q gave font-size %q, want %q", tc.attr, s, tc.want)
+		}
+	}
+}
+
+// TestAnUnreadableFontSizeIsIgnored, which is the same rule every other hint
+// follows: a value this cannot read must not become one it guessed at.
+func TestAnUnreadableFontSizeIsIgnored(t *testing.T) {
+	for _, attr := range []string{"", " ", "large", "5px", "5.5", "3em", "+", "-", "1x", "x1"} {
+		got := computed(t, `<font id="f" size="`+attr+`">x</font>`)
+		if s := got["f"]["font-size"]; s == "" {
+			t.Errorf("size=%q left no font-size at all", attr)
+		} else if s != "medium" {
+			t.Errorf("size=%q gave font-size %q; it is not a size and the initial "+
+				"value should stand", attr, s)
+		}
+	}
+}
+
+// TestFontColourAndFaceAttributes. The colour takes HTML's legacy colour value,
+// which the other colour hints already read; the face is the font-family
+// property written as an attribute.
+func TestFontColourAndFaceAttributes(t *testing.T) {
+	got := computed(t, `<font id="f" color="green" face="Courier">x</font>`)
+	if c := got["f"]["color"]; c != "green" {
+		t.Errorf("color is %q, want green", c)
+	}
+	if f := got["f"]["font-family"]; f != `"Courier"` {
+		t.Errorf("font-family is %q, want the family quoted", f)
+	}
+}
+
+// TestAFaceIsQuotedBecauseAnAttributeIsNotAStylesheet.
+//
+// An unquoted family name in CSS is a sequence of identifiers; an attribute may
+// hold anything at all. "PASS PASS" is one family name in an attribute and two
+// identifiers in a stylesheet, and content-076 writes exactly that.
+func TestAFaceIsQuotedBecauseAnAttributeIsNotAStylesheet(t *testing.T) {
+	for _, tc := range []struct{ attr, want string }{
+		{"PASS PASS", `"PASS PASS"`},
+		{"Courier, monospace", `"Courier", "monospace"`},
+		{"  Courier  ,  serif  ", `"Courier", "serif"`},
+	} {
+		got := computed(t, `<font id="f" face="`+tc.attr+`">x</font>`)
+		if f := got["f"]["font-family"]; f != tc.want {
+			t.Errorf("face=%q gave %q, want %q", tc.attr, f, tc.want)
+		}
+	}
+	// A quote or a backslash cannot be quoted here without an escaping pass, and
+	// a family by that name is not one anybody has. The whole list is refused
+	// rather than half of it.
+	// Single-quoted in the markup, because a double quote in the value would
+	// end a double-quoted attribute and the fixture would not be the one
+	// described.
+	for _, attr := range []string{`a"b`, `a\b`, `ok, a"b`, ``, `,`} {
+		got := computed(t, `<font id="f" face='`+attr+`'>x</font>`)
+		if f := got["f"]["font-family"]; f != "serif" {
+			t.Errorf("face=%q gave %q; it is not a family list and the initial "+
+				"value should stand", attr, f)
+		}
+	}
+}

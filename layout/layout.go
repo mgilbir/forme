@@ -420,6 +420,10 @@ type layouter struct {
 	// both answer "nothing" for almost every box in an ordinary document.
 	inlineDraws  map[*Box]bool
 	inlineChains map[*Box][]*Box
+	// inlineFragments are the fragments a *positioned* inline box produced, in
+	// line order. §10.1 forms the containing block of an absolutely positioned
+	// descendant from the first and last of them — see inlineContainingBlock.
+	inlineFragments map[*Box][]*Fragment
 	// inlineOffsets is §9.4.3's accumulated displacement at each inline box that
 	// has one, which is what its background and border are drawn at. It is
 	// recorded by the walk that computes it because nothing downstream can:

@@ -34,6 +34,13 @@ var bandSets = []struct {
 	{"a float beside every line", []style.Unit{u(80)}},
 	{"bands that run out before the lines do", []style.Unit{u(200), u(60)}},
 	{"a band narrower than one word", []style.Unit{u(6), u(200), u(200)}},
+	// Two shapes the fuzzer found, and the reason for balance.go's answer.at.
+	// The first band is narrower than the white space the paragraph begins with,
+	// so the first line holds nothing at all; the second is wide enough to hold
+	// a word and the spaces after it, which a narrower re-break would drop. See
+	// the texts below.
+	{"a first band the leading white space overruns", []style.Unit{u(24.25), u(55)}},
+	{"a band that holds a word and its trailing spaces", []style.Unit{u(15), u(39.75)}},
 }
 
 // balanceTexts are the paragraphs worth balancing: between two and six lines at
@@ -44,6 +51,20 @@ var balanceTexts = []string{
 	"one two three four five six seven eight",
 	"supercalifragilisticexpialidocious and a few short words after it",
 	"日本語のテキストです and some English too",
+	// A paragraph that begins with more white space than the first line's room.
+	// §4.1.2 takes every space off the end of a line, so the first line holds
+	// nothing and *fills* nothing — and a cap taken from what a line fills is
+	// zero, which is not a width that gives the same line back. The fuzzer found
+	// it; balance.go's answer.at is what it is for.
+	//
+	// The spaces are ogham space marks rather than ordinary ones because those
+	// hang unconditionally, which is what leaves the line with no runs at all
+	// rather than with a run that was trimmed.
+	"\u1680 \u16800\u16800",
+	// The same fault in its other shape: a line that holds a word *and* the
+	// spaces after it. What it fills is the word, and re-breaking at the word's
+	// width leaves the spaces for the next line — one line more.
+	"\u16800\u1680 \u16800\u16800",
 }
 
 // TestBandedCountingAgreesWithPlainCountingWhenTheBandsAreUniform is the
