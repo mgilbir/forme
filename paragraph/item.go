@@ -143,6 +143,25 @@ type Item struct {
 	// applied. Without it a run whose far edge carries an eighth of an em is an
 	// eighth of an em too wide to end a line it fits on.
 	Autospace style.Unit
+	// EdgeLetterSpacing is the letter-spacing at this run's far edge — the
+	// *logical* far edge, so the right of a left-to-right run and the left of a
+	// right-to-left one. It is already inside Width.
+	//
+	// It is not Spacing.Letter. §8.2's gap between two characters in different
+	// elements is the innermost element containing both of them, so the spacing
+	// after a run's last character can be a value neither the run nor its box
+	// declared: see layout/letterspacingboundary.go, which resolves it and folds
+	// it into Width.
+	//
+	// It is recorded because the width alone cannot be taken apart afterwards,
+	// and the gap has to be found again: it goes *between* two characters, so it
+	// belongs to neither of the boxes they are in, and both where an inline
+	// box's own edge is drawn and how far its background reaches depend on
+	// knowing which part of a run's advance is the gap.
+	//
+	// Zero for anything that is not a run of spaced text, which includes a run
+	// §8.2's cursive tracking took the spacing off entirely.
+	EdgeLetterSpacing style.Unit
 
 	Space bool
 	// Collapsible marks white space that §4.1.2 removes when it lands at

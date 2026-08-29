@@ -50,7 +50,13 @@ func (l *layouter) linkLetterSpacing(items []inlineItem) []inlineItem {
 		if !isSpacedRun(items[i]) {
 			continue
 		}
+		// What is at the far edge before the rule is asked: the run's own
+		// declared value, which is the answer wherever the boundary does not
+		// move it. Recording it here rather than in each branch below keeps the
+		// field and the width in step through every one of them.
+		items[i].EdgeLetterSpacing = items[i].Spacing.Letter
 		if cursiveTrackingSuppresses(items[i]) {
+			items[i].EdgeLetterSpacing = 0
 			// §8.2's cursive tracking: this run took no spacing after any of
 			// its characters, so there is none after its last one to exchange
 			// for the boundary's. Reaching the arithmetic below would take a
@@ -73,6 +79,7 @@ func (l *layouter) linkLetterSpacing(items []inlineItem) []inlineItem {
 		// The run's advance holds one spacing per character, the last of them
 		// included. Exchange that one for the boundary's.
 		items[i].Width = items[i].Width.Sub(items[i].Spacing.Letter).Add(want)
+		items[i].EdgeLetterSpacing = want
 	}
 	return items
 }

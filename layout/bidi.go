@@ -556,13 +556,58 @@ func (l *layouter) lineOffsets(runs []inlineItem) ([]style.Unit, style.Unit) {
 	// is measured out. See placeInsetsBySide.
 	order = l.placeInsetsBySide(runs, order)
 
+	shift := insetsBesideTheGlyphs(runs, order)
+
 	xs := make([]style.Unit, len(runs))
 	var x style.Unit
 	for _, k := range order {
-		xs[k] = x
+		xs[k] = x.Add(shift[k])
 		x = x.Add(runs[k].Width)
 	}
 	return xs, x
+}
+
+// insetsBesideTheGlyphs moves an inline box's own edge off the far side of the
+// letter-spacing gap and up against the glyphs it belongs to.
+//
+// §8.2's gap goes *between* two typographic character units, so it belongs to
+// neither of the boxes they are in: a box's border and padding are part of the
+// box and the gap is not, and the order along the line is
+//
+//	glyphs · the box's ending edge · the gap · the next box's beginning edge
+//
+// A run's advance holds the gap after its last character, at its right edge
+// whichever way the run reads — see gapNeighbour, which is where that is
+// established — so the edge that follows it was being placed a gap's width too
+// far along, outside its own box's ink with the gap between the border and the
+// letter it is drawn against. letter-spacing-nesting-003 asks for the other
+// order in as many words: "the green rectangle does not extend beyond B to C".
+//
+// The pen is not moved, only the edge: an inset shifted back by the gap leaves a
+// hole of exactly that width after it, which is where the gap now is. So nothing
+// downstream of the box changes position and the line is the width it was.
+//
+// Whether a given edge is the one to move is the *box*: an edge whose box the
+// run before it is inside is that run's own ending edge and belongs against its
+// glyphs, and one whose box it is not is the next box beginning and belongs on
+// the far side of the gap.
+func insetsBesideTheGlyphs(runs []inlineItem, order []int) []style.Unit {
+	shift := make([]style.Unit, len(runs))
+	prev := -1
+	for _, k := range order {
+		if !runs[k].Inset {
+			if isSpacedRun(runs[k]) {
+				prev = k
+			} else {
+				prev = -1
+			}
+			continue
+		}
+		if prev >= 0 && itemInside(runs[prev], heldBox(runs[k].Box)) {
+			shift[k] = shift[k].Sub(runs[prev].EdgeLetterSpacing)
+		}
+	}
+	return shift
 }
 
 // lineBaseIsRTL is the inline base direction a line was set in.

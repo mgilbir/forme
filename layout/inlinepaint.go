@@ -173,6 +173,18 @@ func (d *inlineDecor) addLine(index int, items []inlineItem, xs, widths []style.
 		// The width the item took on *this* line, which for a space a
 		// justified line stretched is more than the font gave it.
 		right := left.Add(widths[k])
+		// Less the letter-spacing gap at its far edge, which is not part of any
+		// box: §8.2 puts the gap *between* two typographic character units, so a
+		// box's ink stops at its last glyph and the space after it belongs to
+		// the paragraph. letter-spacing-nesting-003 asks for it in as many
+		// words — "the green rectangle does not extend beyond B to C".
+		//
+		// At the right edge whichever way the run reads, which is where the
+		// drawing puts it — see gapNeighbour. The same gap is what lineOffsets
+		// moves the box's own ending edge across.
+		if sp := item.EdgeLetterSpacing; sp != 0 && !item.Inset {
+			right = right.Sub(sp)
+		}
 		for _, box := range chain {
 			if pi, ok := open[box]; ok && lastAt[box] == pos-1 {
 				if left < d.pieces[pi].left {
