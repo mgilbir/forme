@@ -296,7 +296,26 @@ func (l *layouter) inlineWidths(b *Box) intrinsicWidths {
 	// it would have demanded without the declaration. It is marked as a
 	// measurement so that nothing on the way down is laid out — see
 	// inlineFrame.measuring for why that is a correctness rule and not a saving.
-	items, _ := l.collectInline(b, l.markerItems(b), startOfContext(), inlineFrame{Measuring: true})
+	// The bidi paragraph the lines will be resolved in, built here too.
+	//
+	// It is not a refinement. §8.2's boundary rule asks which run is beside
+	// which, and "beside" is a question about the *visual* order — see
+	// letterspacingboundary.go's gapNeighbour. Measuring without the resolution
+	// answers it from the logical order and gives a different number from the
+	// line, which is the one thing an intrinsic measurement may not do: a box
+	// shrink-wrapped to a width its own content does not have is a box with a
+	// gap down one side.
+	//
+	// The resolution also cuts a run where the level changes, so the two passes
+	// see the same runs as well as the same order. Without that "bא" is one run
+	// while measuring and two while filling, and no boundary rule can make those
+	// agree.
+	_, open, closing := paragraphDirection(b)
+	para := newBidiBuilder(open)
+	items, _ := l.collectInline(b, l.markerItems(b), startOfContext(),
+		inlineFrame{Measuring: true, Bidi: para})
+	para.Leave(open, closing)
+	items = l.resolveBidi(b, items, para)
 	// The same context the lines will be filled with, so that a box sized to its
 	// content is sized to the content it will hold: a joined Arabic word is not
 	// as wide as the same letters set apart.

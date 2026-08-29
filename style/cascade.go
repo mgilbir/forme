@@ -660,12 +660,17 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 	// spelling has a page missing what they asked for and no other way to learn
 	// it. What changes is the claim, not the message. See css/selector.go's
 	// inapplicable for the same distinction drawn about a selector.
+	//
+	// A property with nothing to apply to on a page is the second case of the
+	// same kind, and nomedium.go is the list: nobody puts a caret in a printed
+	// paragraph, so "caret-color" colours nothing there and a browser printing
+	// the document applies it exactly as little.
 	if !s.seen[name] {
 		s.seen[name] = true
 		s.report(Finding{
 			Offset:      d.Offset,
 			Message:     "the property \"" + name + "\" is not implemented, so it was not applied",
-			Unsupported: !vendorPrefixed(name),
+			Unsupported: !vendorPrefixed(name) && !hasNothingToApplyTo(name),
 			Property:    name,
 		})
 	}

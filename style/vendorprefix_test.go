@@ -60,7 +60,10 @@ func TestAPrefixedPropertyIsReportedWithoutClaimingThePageIsWrong(t *testing.T) 
 // missing it is a page this engine got wrong.
 func TestAnUnprefixedPropertyNobodyImplementsIsStillUnsupported(t *testing.T) {
 	for _, decl := range []string{
-		"scroll-snap-type: x mandatory",
+		// "scroll-snap-type" was here and moved to nomedium.go: nothing on a
+		// page snaps, so its absence changes no rendering. What is left are
+		// properties whose absence really does change one.
+		"text-emphasis: filled dot",
 		"mix-blend-mode: multiply",
 		"not-a-property-xyzzy: 1px",
 		// A leading dash with no vendor identifier after it is not the reserved
