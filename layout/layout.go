@@ -988,13 +988,18 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		// whether or not any cell has content in it.
 		return l.tableContent(b, parent, width, origin), marginRun{}, marginRun{}, true
 	}
-	if len(b.Children) == 0 && !markerInside(b) {
+	if len(b.Children) == 0 && !markerInside(b) && b.InsideMarker == nil {
 		// An inside marker is content the box did not have to be given: §12.5.1
 		// makes it the first inline box in the principal block box, so a list item
 		// with nothing in it still has a line to put it on. Without the exception
 		// the empty item is zero-tall and paints no background, which is what a
 		// dozen of the suite's "does this property apply to a list item" tests are
 		// built to show.
+		//
+		// The anonymous block that holds the marker of an item whose content is
+		// block-level is the same case at one remove: it has no children of its
+		// own and the marker is the whole of what it is for. See
+		// Box.InsideMarker.
 		return 0, marginRun{}, marginRun{}, false
 	}
 	// A block container's in-flow children are either all block-level or all
@@ -1004,7 +1009,7 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 	// "<div><span class=float></span>text</div>" has a block-level child *and*
 	// an inline formatting context, and deciding from the first child would lose
 	// the text entirely.
-	if hasInlineChild(b) || markerInside(b) {
+	if hasInlineChild(b) || drawsItsOwnInsideMarker(b) || b.InsideMarker != nil {
 		// Inline content: lines of text, which have a height of their own. An
 		// inside marker is inline content of the item's own, which is why it can
 		// answer here for a box that has no inline child — or no child at all.
@@ -2387,4 +2392,28 @@ func keywordBorderWidth(value string) style.Unit {
 		return mustPx(3)
 	}
 	return 0
+}
+
+// drawsItsOwnInsideMarker reports whether a list item's inside marker is the
+// item's own inline content rather than an anonymous block's.
+//
+// An item with no block-level content in flow has no anonymous block, so the
+// marker is the first inline box of the item itself — and it is inline content
+// even where there is no other, which is what gives an empty list item a line
+// box, a height and a visible background. A dozen of the suite's "does this
+// property apply to a list item" tests are built on exactly that.
+//
+// Where the item's content *is* block-level the marker lives in one of those
+// blocks instead, and answering yes here would take the item down the inline
+// path and leave every one of its children unlaid. See Box.InsideMarker.
+func drawsItsOwnInsideMarker(b *Box) bool {
+	if !markerInside(b) {
+		return false
+	}
+	for _, c := range b.Children {
+		if c.Outer == OuterBlock && !c.outOfFlow() {
+			return false
+		}
+	}
+	return true
 }

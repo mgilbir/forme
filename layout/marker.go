@@ -204,7 +204,15 @@ func firstRune(s string) rune {
 // has to seed both: a shrink-to-fit list item whose width was measured without
 // its marker is narrower than the marker it then draws.
 func (l *layouter) markerItems(b *Box) []inlineItem {
-	item, ok := l.markerItem(b)
+	// The marker belongs to the list item and is drawn by whichever box §12.5.1
+	// makes its first inline box — which for an item whose content is
+	// block-level is an anonymous block rather than the item. See
+	// Box.InsideMarker.
+	owner := b
+	if b.InsideMarker != nil {
+		owner = b.InsideMarker
+	}
+	item, ok := l.markerItem(owner)
 	if !ok {
 		return nil
 	}

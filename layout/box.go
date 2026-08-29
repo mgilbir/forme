@@ -208,6 +208,18 @@ type Box struct {
 	// gets and for the same reason: the picture is missing, not the box.
 	BackgroundImages map[string]*ReplacedContent
 
+	// InsideMarker is the list item whose "list-style-position: inside" marker
+	// this box draws, where that is not the item itself.
+	//
+	// §12.5.1 puts an inside marker "as the first inline box in the principal
+	// block box, before the element's content", and an item whose content is
+	// block-level has no inline box for it to be the first of. The anonymous
+	// box rule is what settles it: the marker is inline content of the item's
+	// own, so it belongs in the anonymous block that holds the item's leading
+	// inline content — and where the item has none, in an anonymous block of
+	// its own before the first block child. See wrapInlines.
+	InsideMarker *Box
+
 	// TableWrapper marks the anonymous box §17.4 puts around a table to hold it
 	// and its captions.
 	//
@@ -1617,7 +1629,63 @@ func (b *boxBuilder) wrapInlines(parent *Box) []*Box {
 		run = append(run, c)
 	}
 	flush()
-	return out
+	return b.houseInsideMarker(parent, out)
+}
+
+// houseInsideMarker gives an inside marker a line to be the first thing on,
+// where the item's own content is block-level and offers none.
+//
+// §12.5.1 makes the marker "the first inline box in the principal block box,
+// before the element's content", and the anonymous box rule has just cut that
+// content into blocks. So the marker goes where the item's *first* inline
+// content went: into the anonymous block holding it, or — where the item begins
+// with a block, as "<li><ol>...</ol></li>" does — into an anonymous block of its
+// own in front of it. list-style-position-023 and -024 are that second case, and
+// their reference writes it out as "<div>1. <div>1. ...".
+//
+// Without this the item drew its marker and nothing else. The layout took the
+// inline path on the strength of the marker alone, and every block child of the
+// item — the whole of a nested list — was never laid out at all.
+func (b *boxBuilder) houseInsideMarker(parent *Box, children []*Box) []*Box {
+	if !markerInside(parent) {
+		return children
+	}
+	for _, c := range children {
+		// An out-of-flow box is not the item's content and does not get to
+		// decide where the marker goes. No document can tell: wrapInlines only
+		// ever emits an out-of-flow box straight into the parent's children,
+		// never wrapped, so one met here is never the anonymous block the test
+		// below is looking for and stopping at it would give the same answer.
+		// It is the correct reading rather than a live branch, and a planted
+		// defect that drops it moves nothing.
+		if c.Outer != OuterBlock || c.outOfFlow() {
+			continue
+		}
+		if c.Anonymous() && c.Inner == InnerFlow {
+			// The item's own leading inline content, already wrapped. The
+			// marker is the first inline box of it.
+			c.InsideMarker = parent
+			return children
+		}
+		break
+	}
+	// A block first, so the marker needs a block of its own. It is empty and it
+	// is still a line: an inside marker makes a line box wherever it is, which
+	// is what gives an item with no content at all its height.
+	offset := 0
+	if parent.Element != nil {
+		offset = parent.Element.Offset
+	}
+	if !b.roomAt(offset) {
+		return children
+	}
+	anon := &Box{
+		Outer: OuterBlock, Inner: InnerFlow,
+		Style: style.Inherited(parent.Style), Parent: parent,
+		FontSize: parent.FontSize, fontSizeKnown: parent.fontSizeKnown,
+		FirstLine: parent.FirstLine, InsideMarker: parent,
+	}
+	return append([]*Box{anon}, children...)
 }
 
 // hasInFlowContent reports whether a run of inline-level boxes holds anything
