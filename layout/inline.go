@@ -725,7 +725,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					// The method, which is read here rather than where the
 					// property is: this is the only place that knows a line is
 					// being justified at all.
-					method, unhandled := justificationOf(b)
+					method, auto, unhandled := justificationOf(b)
 					if unhandled != "" {
 						l.reportTextJustify(b, unhandled)
 					}
@@ -733,6 +733,16 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					// and nothing is reported about it: CSS Text 3 §7.3 says a
 					// line with no expansion opportunity is aligned as start,
 					// so that *is* the conforming rendering.
+					// "auto" is the specification asking for a script-
+					// appropriate algorithm rather than for a particular one,
+					// and word spaces are the wrong one for a script that has
+					// none. §7.3 expects "inter-character for CJK", and without
+					// it a justified line of Japanese is set flush to its start
+					// edge with all of its slack at the far end.
+					if method == justifyWords && auto &&
+						writtenWithoutWordSeparators(runs) {
+						method = justifyCharacters
+					}
 					if method == justifyCharacters {
 						interChar, _ = l.justifyBetweenCharacters(runs, xs, widths,
 							hangingTail(runs), avail.Sub(used))

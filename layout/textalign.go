@@ -181,16 +181,24 @@ const (
 	justifyCharacters
 )
 
-func justificationOf(b *Box) (method justifyMethod, unhandled string) {
+// auto says the value was left at "auto" — the one that asks for a
+// script-appropriate algorithm rather than naming one. It is reported here
+// rather than read again by the caller so that there is one place the property
+// is parsed, and so that the caller cannot ask it of a value that never reaches
+// the question: "none" is not justification at all and an unreadable value is
+// already being reported.
+func justificationOf(b *Box) (method justifyMethod, auto bool, unhandled string) {
 	switch v := strings.ToLower(strings.TrimSpace(b.Style["text-justify"])); v {
 	case "none":
-		return justifyNone, ""
-	case "", "auto", "inter-word":
-		return justifyWords, ""
+		return justifyNone, false, ""
+	case "", "auto":
+		return justifyWords, true, ""
+	case "inter-word":
+		return justifyWords, false, ""
 	case "inter-character", "distribute":
-		return justifyCharacters, ""
+		return justifyCharacters, false, ""
 	default:
-		return justifyWords, v
+		return justifyWords, false, v
 	}
 }
 
@@ -220,7 +228,7 @@ func lineAlignment(b *Box, rtl, last bool) (align textAlign, spread bool) {
 	// A justified line is placed where its start edge is and stretched from
 	// there. text-justify: none asks for the placement without the stretching,
 	// which leaves an ordinary line at its start edge.
-	if m, _ := justificationOf(b); m == justifyNone {
+	if m, _, _ := justificationOf(b); m == justifyNone {
 		return startAlignment(rtl), false
 	}
 	return alignJustify, true

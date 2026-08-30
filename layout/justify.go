@@ -3,6 +3,7 @@ package layout
 import (
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/mgilbir/forme/paragraph"
 	"github.com/mgilbir/forme/style"
@@ -69,7 +70,7 @@ func justifiableHere(item inlineItem) bool {
 	if b == nil {
 		return true
 	}
-	m, _ := justificationOf(b)
+	m, _, _ := justificationOf(b)
 	return m != justifyNone
 }
 
@@ -272,4 +273,41 @@ func (l *layouter) justifyBetweenCharacters(items []inlineItem, xs, widths []sty
 		acc = acc.Add(grew)
 	}
 	return extra, true
+}
+
+// writtenWithoutWordSeparators reports whether a line's own text is written in a
+// script that does not separate its words with spaces.
+//
+// It is asked of the *line* rather than of the element, because the element is
+// where a language would be declared and a document need not declare one:
+// text-align-last-justify-br is a bare "<p>東京<br>京城</p>" with no lang at all,
+// and the script is the only evidence there is.
+//
+// Every letter, and not merely one of them. A line holding a Latin word has word
+// spaces to stretch even if it also holds an ideograph, and stretching such a
+// line between its characters would pull the Latin word apart — which is what
+// inter-character justification does and what no script using spaces wants. So
+// the test is that nothing on the line is a letter of a script that has spaces,
+// which leaves punctuation and marks to go either way.
+//
+// A line with no letters at all answers false. There is nothing to be
+// script-appropriate about, and the word method's own "no opportunity" answer —
+// place it at the start edge, which §7.3 names as the conforming rendering — is
+// the right one.
+func writtenWithoutWordSeparators(items []inlineItem) bool {
+	seen := false
+	for _, item := range items {
+		if item.Face == nil || item.Text == "" || item.Tab {
+			continue
+		}
+		for _, r := range item.Text {
+			switch {
+			case isIdeographic(r):
+				seen = true
+			case unicode.IsLetter(r), unicode.IsDigit(r):
+				return false
+			}
+		}
+	}
+	return seen
 }
