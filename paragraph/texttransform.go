@@ -296,9 +296,9 @@ func localeCased(text string, lang Language, upper bool) string {
 		return conditionalCased(text, lang, upper, i)
 	}
 	if upper {
-		return fullCased(text, fullUppercase[:], unicode.ToUpper, strings.ToUpper)
+		return fullCased(text, fullUppercase[:], unicode.ToUpper, strings.ToUpper, isMkhedruli)
 	}
-	return fullCased(text, fullLowercase[:], unicode.ToLower, strings.ToLower)
+	return fullCased(text, fullLowercase[:], unicode.ToLower, strings.ToLower, nil)
 }
 
 // firstConditional is the byte offset of the first character a conditional
@@ -336,9 +336,9 @@ func conditionalCased(text string, lang Language, upper bool, from int) string {
 	var out strings.Builder
 	out.Grow(len(text) + 8)
 	if upper {
-		out.WriteString(fullCased(text[:from], fullUppercase[:], unicode.ToUpper, strings.ToUpper))
+		out.WriteString(fullCased(text[:from], fullUppercase[:], unicode.ToUpper, strings.ToUpper, isMkhedruli))
 	} else {
-		out.WriteString(fullCased(text[:from], fullLowercase[:], unicode.ToLower, strings.ToLower))
+		out.WriteString(fullCased(text[:from], fullLowercase[:], unicode.ToLower, strings.ToLower, nil))
 	}
 	for i, r := range text[from:] {
 		at := from + i
@@ -375,8 +375,10 @@ func conditionalCased(text string, lang Language, upper bool, from int) string {
 // keeps an ASCII heading on the byte-wise loop inside strings.ToUpper rather
 // than on a rune-by-rune one here. Only text that really does contain one of
 // the hundred characters in the table is rebuilt.
-func fullCased(text string, table []fullCase, simple func(rune) rune, whole func(string) string) string {
-	i := firstFullCase(text, table)
+func fullCased(text string, table []fullCase, simple func(rune) rune, whole func(string) string,
+	keep func(rune) bool) string {
+
+	i := firstFullCase(text, table, keep)
 	if i < 0 {
 		return whole(text)
 	}
@@ -386,9 +388,12 @@ func fullCased(text string, table []fullCase, simple func(rune) rune, whole func
 	out.Grow(len(text) + 8)
 	out.WriteString(whole(text[:i]))
 	for _, r := range text[i:] {
-		if s, ok := lookupFullCase(r, table); ok {
+		switch s, ok := lookupFullCase(r, table); {
+		case keep != nil && keep(r):
+			out.WriteRune(r)
+		case ok:
 			out.WriteString(s)
-		} else {
+		default:
 			out.WriteRune(simple(r))
 		}
 	}
@@ -400,10 +405,15 @@ func fullCased(text string, table []fullCase, simple func(rune) rune, whole func
 //
 // Every character in the tables is above U+007F, so ASCII — which is most text
 // this will ever see — is rejected a byte at a time without decoding.
-func firstFullCase(text string, table []fullCase) int {
+func firstFullCase(text string, table []fullCase, keep func(rune) bool) int {
 	for i, r := range text {
 		if r < utf8.RuneSelf {
 			continue
+		}
+		if keep != nil && keep(r) {
+			// Not a full mapping but a character the whole-string path would
+			// get wrong just the same, so the walk has to start here too.
+			return i
 		}
 		if _, ok := lookupFullCase(r, table); ok {
 			return i
@@ -548,4 +558,33 @@ func EndsInWord(text string) bool {
 // before it because of that.
 func FreezesSpace(kind TextTransform) bool {
 	return kind&TransformFullWidth != 0
+}
+
+// isMkhedruli reports whether a character is a Georgian Mkhedruli letter, which
+// "text-transform: uppercase" must leave exactly as it is.
+//
+// Unicode 11 added the Mtavruli capitals at U+1C90 and gave each Mkhedruli
+// letter a simple uppercase mapping to one — so unicode.ToUpper turns ა into Ა,
+// and every uppercased word of Georgian comes out in a case the script does not
+// use in running text. Georgian is *unicase*: Mtavruli is a display style, set
+// deliberately for a heading or a sign, and never something a case conversion
+// should produce. The suite says so in one line — text-transform-unicase-001
+// writes the letter twice, uppercases one of them, and asks for the two to look
+// exactly alike.
+//
+// Uppercase only. The Asomtavruli capitals at U+10A0 keep their traditional
+// mapping to Nuskhuri, and lowercasing a Mtavruli capital that a document really
+// does contain is the mapping Unicode added the characters for.
+//
+// Passing it to the lowercase call as well would change no text — a Mkhedruli
+// letter is already lower case and unicode.ToLower leaves it exactly where this
+// would — so a planted defect that does so moves nothing. It is still wrong to
+// write: it says the carve-out is about Georgian rather than about the mapping
+// that is not wanted, and it would take every Georgian document off the
+// whole-string fast path for no reading of any rule.
+//
+// The two runs rather than one are Unicode's own: U+10FB and U+10FC are a
+// paragraph separator and a modifier letter, and neither has a Mtavruli form.
+func isMkhedruli(r rune) bool {
+	return r >= 0x10D0 && r <= 0x10FA || r >= 0x10FD && r <= 0x10FF
 }
