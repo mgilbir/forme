@@ -495,6 +495,28 @@ func CollapseWhitespaceAfter(text, value string, wst WordSpaceTransform,
 			// this engine got wrong about CJK, and it is wrong in the direction
 			// that looks deliberate.
 		case system.SpacesNoWords() &&
+			(widePunctuationAtSegmentBreak(lastSeen) || widePunctuationAtSegmentBreak(nextSeen)):
+			// The same rule about the punctuation East Asian text is written
+			// with, read at the width the punctuation actually has.
+			//
+			// The sentence below is about a mark whose East Asian Width is
+			// *Ambiguous* — a quotation mark shared with the Latin script — and
+			// it asks for a wide character on the other side because that is
+			// what tells a Japanese quotation mark from an English one. A mark
+			// that is itself Fullwidth, Wide or Halfwidth needs no such
+			// evidence: "。" and "・" and "｣" belong to no other script, and a
+			// paragraph hard-wrapped after one of them is one sentence however
+			// the next line begins.
+			//
+			// The suite's three segment-break-transformation-punctuation tests
+			// are this and nothing else. Each writes a Japanese paragraph broken
+			// at its punctuation — after "。" and before "Internet", around
+			// "・" between two Latin product names, between "ID" and "｢smith｣" —
+			// and each has a reference with the lines run together. They are
+			// "should" tests and cite Gecko bugs rather than a section, which is
+			// what the specification's own sentence not covering them looks like
+			// from here.
+		case system.SpacesNoWords() &&
 			(punctuationAtSegmentBreak(lastSeen) && wideAtSegmentBreak(nextSeen) ||
 				punctuationAtSegmentBreak(nextSeen) && wideAtSegmentBreak(lastSeen)):
 			// §4.1.1's second sentence, which is the same rule about the
@@ -747,6 +769,41 @@ func punctuationAtSegmentBreak(r rune) bool {
 	return inRanges(r, punctuationOrSymbolRanges[:]) &&
 		(inRanges(r, eastAsianAmbiguousRanges[:]) || inRanges(r, emojiRanges[:]))
 }
+
+// widePunctuationAtSegmentBreak reports whether a character is punctuation that
+// is itself East Asian: "punctuation or a symbol (Unicode general category P* or
+// S*)" whose width is Fullwidth, Wide or Halfwidth.
+//
+// It is punctuationAtSegmentBreak with the other width table: that one asks for
+// Ambiguous, which is the width of a mark the Latin script shares, and this asks
+// for the widths only East Asian text has. The two are different questions about
+// the same sentence and neither implies the other.
+//
+// Hangul is left in and Emoji is left out, which is the pairing the sentence
+// itself uses everywhere else: a Hangul mark is punctuation of a writing system
+// this rule is about, and an emoji is a picture rather than the punctuation of
+// anything.
+func widePunctuationAtSegmentBreak(r rune) bool {
+	return (inRanges(r, punctuationOrSymbolRanges[:]) || r == ideographicSpaceRune) &&
+		wideAtSegmentBreak(r)
+}
+
+// ideographicSpaceRune is U+3000, and it is here because it is the only space
+// that is East Asian.
+//
+// Unicode's space separators are the ordinary space, the no-break space, the
+// ogham space mark, the ems and ens of U+2000 to U+200A, the narrow and medium
+// mathematical spaces, and this — and every one of the others has an East Asian
+// Width of Neutral, Narrow or Ambiguous. So naming it is not a special case
+// standing in for a table: it *is* the table, and TestTheIdeographicSpaceIsTheOnly
+// WideSpace checks that against the width data rather than against this comment.
+//
+// It belongs with the punctuation for the same reason the punctuation belongs
+// here at all. What the sentence is about is the characters of East Asian text
+// that are not letters, and a paragraph hard-wrapped after one of them is one
+// sentence: the suite's segment-break-transformation-punctuation-003 breaks its
+// line after "！　" and its reference runs the two together.
+const ideographicSpaceRune = '\u3000'
 
 // wideAtSegmentBreak reports whether a character is the far side: "F, W, or H,
 // and not Hangul or Emoji".
