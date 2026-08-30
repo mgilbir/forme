@@ -160,6 +160,17 @@ var looseBreakClasses = map[string]bool{"IN": true, "PO": true}
 // line beginning with an ellipsis it can never break in front of.
 var inseparableClasses = map[string]bool{"IN": true}
 
+// openClasses is UAX #14's class for an opening bracket, which LB14 forbids a
+// line to end after: "OP SP* ×".
+//
+// It is here for the same reason prefixClasses is. Ordinary text offers no
+// opportunity after a bracket, so nothing asks; "word-break: break-all" offers
+// one at every character boundary in a word, and then the question is real. §5.2
+// allows breaking "between typographic character units" and word-break-break-all-020
+// says in its own assertion what that does not reach: "break-all does not affect
+// rules governing the soft wrap opportunities created by punctuation".
+var openClasses = map[string]bool{"OP": true}
+
 // prefixClasses is the class a line may end after under "loose" and no other
 // value: a currency sign or a number sign that belongs to the figure following
 // it.
@@ -199,7 +210,7 @@ func main() {
 	defer f.Close()
 
 	version := "unknown"
-	var spans, glue, strict, loose, prefix, postfix, inseparable []span
+	var spans, glue, strict, loose, prefix, postfix, inseparable, open []span
 	seen := map[string]bool{}
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
@@ -243,6 +254,9 @@ func main() {
 		if postfixClasses[class] {
 			postfix = append(postfix, span{lo, hi, class})
 		}
+		if openClasses[class] {
+			open = append(open, span{lo, hi, class})
+		}
 		if inseparableClasses[class] {
 			inseparable = append(inseparable, span{lo, hi, class})
 		}
@@ -276,7 +290,8 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	for _, set := range []map[string]bool{looseBreakClasses, prefixClasses, postfixClasses, inseparableClasses} {
+	for _, set := range []map[string]bool{looseBreakClasses, prefixClasses, postfixClasses,
+		inseparableClasses, openClasses} {
 		for class := range set {
 			if !seen[class] {
 				fmt.Fprintf(os.Stderr, "genlinebreak: no character has class %s; has it been renamed?\n", class)
@@ -335,6 +350,13 @@ package paragraph
 // UAX #14 has no unconditional rule about them — nothing there says a line may
 // not start with a per-cent sign — so this is the one part of the tailoring
 // that adds to the base table rather than taking away from it.`, version)
+	emit(&w, "openRanges", open, `// The opening brackets, UAX #14's class OP. Unicode %s.
+//
+// %d ranges, merged from %d the file states separately: %s.
+// LB14 forbids a line to end after one — "OP SP* ×" — and nothing in ordinary
+// text asks, because ordinary text offers no opportunity there to forbid.
+// "word-break: break-all" offers one at every character boundary in a word, and
+// §5.2 does not reach past the punctuation rules to take it: see gluedPair.`, version)
 	emit(&w, "inseparableRanges", inseparable, `// The ellipses, UAX #14's class IN. Unicode %s.
 //
 // %d ranges, merged from %d the file states separately: %s.

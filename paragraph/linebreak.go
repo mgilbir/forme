@@ -199,6 +199,22 @@ func gluedPair(prev, r rune) bool {
 	if inLineBreakRanges(prev, prefixRanges[:]) {
 		return true
 	}
+	// LB14, "OP SP* ×": a line may not end after an opening bracket. The bracket
+	// belongs to what it opens, and a line ending at one leaves it hanging in
+	// the margin with nothing behind it.
+	//
+	// word-break-break-all-020 is the suite's case and says in its own assertion
+	// what it is about: "break-all does not affect rules governing the soft wrap
+	// opportunities created by punctuation". It writes "あい）あ（い" in two ems
+	// three times over — once plain, once with the breaks written out as markup,
+	// and once with break-all — and asks for all three to break at the same
+	// points. Ordinary text never asks this function anything, because it offers
+	// no opportunity after a bracket to forbid; break-all offers one at every
+	// character boundary, and the closing bracket was already refused by the
+	// base table while the opening one was not.
+	if inLineBreakRanges(prev, openRanges[:]) {
+		return true
+	}
 	return false
 }
 
