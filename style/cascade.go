@@ -256,6 +256,27 @@ func ApplyWith(doc *html.Node, sheets []Sheet, m Metrics) Styled {
 			if monospaceDefault(cs) {
 				size = mustUnit(DefaultMonospaceFontSize)
 			}
+			if size != parentSize {
+				// The element's size is its own now, and layout has to be told
+				// so. It resolves a font-size from the *parent's* unless the
+				// element owns one — the guard that stops a relative size
+				// compounding at every level — and an element that merely
+				// inherited would be measured at its parent's number however
+				// this branch had written it back.
+				//
+				// Without this the two disagreed and neither knew: the cascade
+				// absolutised the element's own "em" against thirteen pixels
+				// while layout set its text at sixteen, so
+				// "font-family: monospace; height: 19em" came out nineteen lines
+				// tall and held sixteen of them.
+				//
+				// Only where the number changed. A proportional element's
+				// default *is* its parent's own, so saying it owns one would
+				// spend a parse per element to arrive back where inheritance
+				// already was — which is why a planted defect that says it
+				// unconditionally moves nothing and is still worth not writing.
+				own = true
+			}
 		}
 		sizes[n] = size
 		if !rootSeen {
