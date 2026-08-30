@@ -366,6 +366,20 @@ type Item struct {
 	// positioned one, an inline box's own inset — leaves it clear.
 	Leads        bool
 	Above, Below style.Unit
+	// LeadingOnly marks an item that is nothing but an inline box's own leading:
+	// a box that put nothing else on the line, with no text, no picture and no
+	// margin, border or padding.
+	//
+	// §10.8.1 counts such a box — "empty inline elements generate empty inline
+	// boxes, but these boxes still have margins, padding, borders and a line
+	// height, and thus influence these calculations just like elements with
+	// content" — and §9.4.2 does not: a line box holding nothing *but* boxes
+	// like this "must be treated as a zero-height line box". The two are the
+	// same sentence read from either side, and the flag is what lets StackLine
+	// tell them apart, because by the time it runs the only difference left
+	// between "an empty span beside a word" and "an empty span alone" is what
+	// else is on the line.
+	LeadingOnly bool
 	// Ascent and Descent are how far the item reaches above and below the
 	// baseline, measured over its *margin* box.
 	//

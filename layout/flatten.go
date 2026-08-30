@@ -470,6 +470,7 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 				state.BreakOpportunity = false
 				out = append(out, lead)
 			}
+			before := len(out)
 			out, state = l.collectInline(child, out, state, inner)
 			if any {
 				// The trailing edge takes no opportunity of its own: a line
@@ -477,6 +478,25 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 				// margin, so whatever was carried in passes through to whatever
 				// comes after the box.
 				out = append(out, trail)
+			} else if len(out) == before {
+				// An inline box that put nothing on the line — no text, no
+				// picture, and no margin, border or padding of its own — is
+				// still on it. §10.8.1 says so by name: "empty inline elements
+				// generate empty inline boxes, but these boxes still have
+				// margins, padding, borders and a line height, and thus
+				// influence these calculations just like elements with content".
+				//
+				// So it contributes its leading and nothing else. The suite's
+				// empty-inline-003 is the shape — a "line-height: 5" span with
+				// no content, in a "line-height: 1" block — and its reference
+				// draws the line five times the height this engine gave it.
+				//
+				// Only where the box emitted nothing at all. Where it has an
+				// inset the two items above already carry the same leading, and
+				// where it has content the content does; a third copy would
+				// change no height and would put an item on the line that
+				// nothing else knows about.
+				out = append(out, l.leadingItem(child))
 			}
 			frame.Bidi.Leave(open, closing)
 		}
@@ -1359,4 +1379,24 @@ func collapsibleSeparators(pieces []piece, wst wordSpaceTransform) []piece {
 		}
 	}
 	return pieces
+}
+
+// leadingItem is what an inline box that puts nothing on a line contributes to
+// it: its own leading, at no width.
+//
+// It is marked Inset because that is what every stage below already understands
+// an item to be when it is a box's own edge rather than something drawn — it
+// takes no room, it ends no word, it offers no break opportunity, and a line
+// made of nothing else is still §9.4.2's zero-height line, because
+// contentOnLine asks Edged and this is not edged.
+func (l *layouter) leadingItem(b *Box) inlineItem {
+	// The box's own strut rather than its leading, so that an empty inline box
+	// whose font and line-height are its parent's reaches exactly as far as the
+	// block's strut does and ties with it. The two are the same measurement by
+	// two routes and they round differently: taking the leading here moved the
+	// baseline of "un<span></span>broken" by two hundredths of a pixel, which is
+	// line-breaking-015.
+	st := l.strutFor(b)
+	return inlineItem{Box: b, Inset: true, Above: st.Baseline,
+		Below: st.Height.Sub(st.Baseline), Leads: true, LeadingOnly: true}
 }

@@ -200,7 +200,25 @@ func StackLine(runs []Item, s Strut) LineStack {
 	// rather than a simplification kept: a <span> set larger than the paragraph
 	// around it grew nothing, so its line box stayed the strut's height and its
 	// baseline sat where the smaller type wanted it.
+	// §9.4.2's zero-height line: one holding nothing but the leading of inline
+	// boxes that put nothing on it. Their leading is counted where there is
+	// something to count it beside — §10.8.1's "just like elements with
+	// content" — and not where there is not. empty-inline-001 and -003 are the
+	// two halves and they disagree on purpose.
+	content := false
 	for _, item := range runs {
+		if item.LeadingOnly {
+			continue
+		}
+		if _, _, ok := itemExtents(item); ok {
+			content = true
+			break
+		}
+	}
+	for _, item := range runs {
+		if item.LeadingOnly && !content {
+			continue
+		}
 		a, d, ok := itemExtents(item)
 		if !ok {
 			continue

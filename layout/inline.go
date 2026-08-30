@@ -210,7 +210,13 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		Strut: st, Bidi: para,
 	})
 	para.Leave(open, closing)
-	if len(items) == 0 {
+	if len(items) == 0 || onlyLeading(items) {
+		// §9.4.2's zero-height line, and the half of the sentence that is not
+		// about height: such a line "must be treated as not existing for any
+		// other purpose". A block whose whole inline content is inline boxes
+		// that put nothing on a line has no line, and so no height and no
+		// background — which is what an empty "<span></span>" inside a div has
+		// always produced here and must go on producing.
 		return 0
 	}
 	items = l.resolveBidi(b, items, para)
@@ -1253,4 +1259,20 @@ func lineAdvance(runs []inlineItem) style.Unit {
 		total = total.Add(r.Width)
 	}
 	return total
+}
+
+// onlyLeading reports whether a block's inline content is nothing but the
+// leading of inline boxes that put nothing on a line.
+//
+// See Item.LeadingOnly. It is asked of the whole block rather than of one line
+// because that is where the question is: a block with any real content has a
+// line for it, and a block with none has no line at all rather than an empty
+// one.
+func onlyLeading(items []inlineItem) bool {
+	for _, item := range items {
+		if !item.LeadingOnly {
+			return false
+		}
+	}
+	return true
 }
