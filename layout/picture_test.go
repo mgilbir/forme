@@ -134,6 +134,23 @@ func picFills(ops []Op) []coloured {
 				out = append(out, cut(fills)...)
 				continue
 			}
+			// A stencil drawn over its own colour puts nothing new on the
+			// page. Every pixel of it is either that colour or fully
+			// transparent, so every point it covers ends up that colour
+			// whichever kind of pixel is there — provided what it covers is
+			// already that colour, which is what this checks.
+			//
+			// It is the same argument invisibleInk makes for a run of text and
+			// it is checked harder, because an image is large: the colour under
+			// all four corners and the centre must agree, and none of them may
+			// itself be a picture. background-image-transparency-001 is a green
+			// pattern on transparency tiled over "background-color: #008000",
+			// and its reference simply draws a green image — two pages that are
+			// the same green rectangle and were called different because one of
+			// them had an alpha channel.
+			if c, ok := stencilColor(v.Image); ok && coversNothingNew(out, v.Rect, c) {
+				continue
+			}
 			// Anything else is opaque for the purpose of what lies under it.
 			// That is an approximation for a picture with an alpha channel, and
 			// it errs towards calling two documents different, which is the
@@ -141,6 +158,15 @@ func picFills(ops []Op) []coloured {
 			out = append(out, cut([]coloured{{r: v.Rect, c: style.RGBA{A: 1}, img: v.Key}})...)
 
 		case TileImage:
+			// A tiling of a stencil over its own colour, by the same argument
+			// as the single picture above: every pixel of every tile is either
+			// that colour or fully transparent, and so is every gap between the
+			// tiles, so the whole clip ends up that colour. Gaplessness is not
+			// needed here and is for the uniform case — a gap shows the
+			// background, which is the colour in question.
+			if c, ok := stencilColor(v.Image); ok && coversNothingNew(out, v.Clip, c) {
+				continue
+			}
 			out = append(out, tiledFills(v)...)
 		}
 	}
@@ -1407,6 +1433,36 @@ func matchGroup(got, want []textMark) bool {
 			break
 		}
 		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+// coversNothingNew reports whether a rectangle is already the given colour
+// everywhere the sampling below can see.
+//
+// Five points rather than one: the four corners and the centre, all of which
+// must be that colour and none of which may be a picture. invisibleInk asks the
+// same question of a text run at a single point, and gets away with it because a
+// run is a few pixels wide; an image is as large as its box and a background
+// that changes underneath it is exactly the case that would be missed.
+//
+// The corners are taken a sliver inside the rectangle, because a fill's edge is
+// where one colour stops and the next begins and a sample exactly on it is a
+// question about which of the two the comparison rounds to.
+func coversNothingNew(under []coloured, r Rect, c style.RGBA) bool {
+	if r.W <= 2*sliver || r.H <= 2*sliver {
+		return false
+	}
+	x0, y0 := r.X.Add(sliver), r.Y.Add(sliver)
+	x1, y1 := r.Right().Sub(sliver), r.Bottom().Sub(sliver)
+	for _, p := range [][2]style.Unit{
+		{x0, y0}, {x1, y0}, {x0, y1}, {x1, y1},
+		{r.X.Add(r.W.Div(2)), r.Y.Add(r.H.Div(2))},
+	} {
+		got := colourAt(under, p[0], p[1])
+		if got.img != "" || !sameColour(got.c, c) {
 			return false
 		}
 	}
