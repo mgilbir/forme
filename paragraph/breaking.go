@@ -333,8 +333,15 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// rather than moving to the next one. Without this, "XX    XX" under
 		// pre-wrap would push the second word down a line for spaces that take
 		// no room on the page at all.
+		// content and not len(line), because an inline box's own leading margin
+		// is not something a line may end after. §16 draws it where it is and
+		// the box it opens is what it pushes along, so a line that holds
+		// nothing else has nothing to end: the pair overflows together, which is
+		// what text-indent-overflow's reference writes as
+		// "<span style='margin-left: 200px'><div class=content>" in a container
+		// exactly 200px wide.
 		if !item.NoWrap && !item.Hangs && !isTailSpace(item) && i < tailFrom && item.BreakBefore &&
-			len(line) > 0 && overflows(used, item, width) {
+			content && overflows(used, item, width) {
 			// Ending here costs the hyphen as well, where the opportunity is one
 			// a soft hyphen offered. If that does not fit, this is not a place
 			// the line may end at all and it goes back to one that is — the
