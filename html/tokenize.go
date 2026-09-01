@@ -595,13 +595,35 @@ func isNamePart(c byte) bool {
 //
 // inAttr changes only the diagnostics, since the resolution itself is the same.
 func (t *tokenizer) decodeRefs(s string, off int, inAttr bool) string {
-	if !strings.ContainsRune(s, '&') {
+	if !strings.ContainsRune(s, '&') && !strings.ContainsRune(s, '\r') {
 		return s
 	}
 	var b strings.Builder
 	b.Grow(len(s))
 
 	for i := 0; i < len(s); {
+		if s[i] == '\r' {
+			// HTML's input preprocessing: "any LF character that immediately
+			// follows a CR character must be ignored, and all CR characters
+			// must then be converted to LF characters".
+			//
+			// Here rather than over the whole source, because it is a rule
+			// about the *input stream* — the bytes the author wrote — and a
+			// character reference is resolved afterwards. "&#x0D;" therefore
+			// puts a real U+000D in the tree, which is what the suite's
+			// control-chars-00D is made of, and CSS Text makes that one white
+			// space rather than a segment break.
+			//
+			// Doing it over the whole source instead would be the same rule and
+			// the wrong offsets: every finding after a CRLF would point one
+			// byte earlier in the file than the markup it names.
+			b.WriteByte('\n')
+			i++
+			if i < len(s) && s[i] == '\n' {
+				i++
+			}
+			continue
+		}
 		if s[i] != '&' {
 			b.WriteByte(s[i])
 			i++

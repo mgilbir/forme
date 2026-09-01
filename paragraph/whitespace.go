@@ -382,12 +382,15 @@ func CollapseWhitespace(text, value string, wst WordSpaceTransform) string {
 func CollapseWhitespaceAfter(text, value string, wst WordSpaceTransform,
 	before Boundary, system WritingSystem) string {
 	ws := WhiteSpaceOf(value)
+	// A carriage return is a space and not a segment break — see
+	// SpacesForReturns. Substituting it once, here, is what makes the two the
+	// same under all six of the values rather than under the ones a test
+	// happened to reach.
+	text = SpacesForReturns(text)
 	if !ws.Collapse {
-		// pre, pre-wrap and break-spaces keep every space and every tab, so all
-		// that is left of Phase I is the segment break normalisation — which
-		// applies to every value, because CSS Text counts a CRLF as one break
-		// and this engine's HTML parser does not fold it.
-		return expandSeparators(NormaliseBreaks(text), wst)
+		// pre, pre-wrap and break-spaces keep every space and every tab, so
+		// that substitution is all of Phase I that is left.
+		return expandSeparators(text, wst)
 	}
 
 	// U+200B ZERO WIDTH SPACE is the segment break transformation's one
@@ -416,7 +419,7 @@ func CollapseWhitespaceAfter(text, value string, wst WordSpaceTransform,
 	// continuing says the run being gathered began in the node before this one,
 	// which had already emitted the space it collapses to. See Boundary.Collapsed.
 	continuing := before.Collapsed
-	inRun, breaks, afterCR := false, 0, false
+	inRun, breaks := false, 0
 	// sawSeparator says the run being gathered has a virtual word separator in
 	// it, so what it collapses to is a space one can see. It is only ever set
 	// when the property asks for one — with the property at its initial value a
@@ -438,7 +441,7 @@ func CollapseWhitespaceAfter(text, value string, wst WordSpaceTransform,
 		}
 		n := breaks
 		sep := sawSeparator
-		inRun, breaks, afterCR, sawSeparator = false, 0, false, false
+		inRun, breaks, sawSeparator = false, 0, false
 		// joined says this run continues one the node before already emitted a
 		// space for, so the space is written and this run adds nothing to it: a
 		// run collapses to one space however many nodes it is written across.
@@ -583,24 +586,14 @@ func CollapseWhitespaceAfter(text, value string, wst WordSpaceTransform,
 			// Under a value that preserves white space nothing collapses, and
 			// the substitution happens in expandSeparators instead.
 			inRun, sawSeparator = true, true
-			afterCR = false
 			continue
 		}
 		if r < 0x80 && isCollapsibleSpace(byte(r)) {
 			inRun = true
-			switch r {
-			case '\r':
+			if r == '\n' {
+				// The one segment break there is. A carriage return is not one
+				// and cannot reach here — it was a space before the loop began.
 				breaks++
-				afterCR = true
-			case '\n':
-				// A CRLF is one segment break. Counting two would put a blank
-				// line into every pre-line document written on Windows.
-				if !afterCR {
-					breaks++
-				}
-				afterCR = false
-			default:
-				afterCR = false
 			}
 			continue
 		}
@@ -657,28 +650,25 @@ func expandSeparators(text string, wst WordSpaceTransform) string {
 	return out.String()
 }
 
-// NormaliseBreaks turns every CRLF and lone CR into a single LF.
+// SpacesForReturns turns every U+000D into a space.
 //
-// It is the part of the segment break transformation that applies even where
-// nothing collapses: §4.1.1 counts "\r\n" as one segment break, so a <pre>
-// written on Windows must not gain a blank line between every pair of its own.
-func NormaliseBreaks(text string) string {
+// A carriage return is not a segment break. §4.1.1 defines one as "a newline in
+// the source", and which characters those are is the document language's
+// business: HTML's input preprocessing folds every CR and CRLF in the source
+// into a line feed before the tree is built, so a CR that reaches this engine
+// came from a character reference and is a character of the text.
+//
+// What it is, then, is white space — "U+000D must be treated as U+0020", which
+// is the whole of the suite's control-chars-00D and is what its reference says
+// by writing spaces where the test writes "&#x0D;". Substituting it here rather
+// than testing for it everywhere afterwards is what keeps the two the same in
+// every one of the six white-space values: preserved by pre, collapsed by
+// normal, hung at the end of a line by pre-wrap.
+func SpacesForReturns(text string) string {
 	if strings.IndexByte(text, '\r') < 0 {
 		return text
 	}
-	var out strings.Builder
-	out.Grow(len(text))
-	for i := 0; i < len(text); i++ {
-		if text[i] != '\r' {
-			out.WriteByte(text[i])
-			continue
-		}
-		out.WriteByte('\n')
-		if i+1 < len(text) && text[i+1] == '\n' {
-			i++
-		}
-	}
-	return out.String()
+	return strings.ReplaceAll(text, "\r", " ")
 }
 
 // isCollapsibleSpace is the set CSS 2.1 §16.6.1 calls white space in the source.
