@@ -119,6 +119,24 @@ func breaksAfter(r rune) bool {
 	return r != 0x00AD && inLineBreakRanges(r, breakAfterRanges[:])
 }
 
+// isAksara reports whether a character may begin a Brahmic cluster: UAX #14's
+// classes AK and AS.
+//
+// LB28a is four prohibitions *inside* a cluster and says nothing against a
+// break between two of them, where LB31's "ALL ÷ ALL" allows one. The scripts
+// these classes cover — Balinese, Batak, Brahmi, Cham, Dives Akuru, Grantha,
+// Javanese, Kawi, Tulu-Tigalari — write without spaces, so that boundary is the
+// only opportunity their text has. Without it a paragraph of any of them is one
+// unbreakable run and overflows its box, which CSS Text §5.1 forbids outright:
+// "some form of fallback line breaking must occur... overflowing is not
+// allowed". The suite's line-breaking-023 is a Javanese paragraph in six ems
+// beside a reference it must *not* match.
+//
+// The prohibitions inside a cluster need nothing here. SplitAtBreaks takes an
+// opportunity only at a grapheme cluster boundary, and Unicode 15.1's GB9c
+// keeps a conjunct together — which is the virama half of LB28a.
+func isAksara(r rune) bool { return inLineBreakRanges(r, aksaraRanges[:]) }
+
 // isInseparable reports whether a character is one of UAX #14's class IN, the
 // ellipses. "line-break: loose" is the one value that lets a line break between
 // two of them; see inseparableRanges and the rule in breaks.go.

@@ -556,6 +556,53 @@ var breakAfterRanges = [...]struct{ lo, hi rune }{
 	{0x1DA87, 0x1DA8A},
 }
 
+// The characters an aksara cluster may begin with, UAX #14's classes AK and
+// AS. Unicode 17.0.0.
+//
+// 36 ranges, merged from 38 the file states separately: AK 21, AS 17.
+// Balinese, Batak, Brahmi, Cham, Dives Akuru, Grantha, Javanese, Kawi and
+// Tulu-Tigalari — scripts that write without spaces, whose only soft wrap
+// opportunity is the boundary between two clusters. See aksaraClasses in
+// cmd/genlinebreak for why the prohibitions inside a cluster need no table.
+var aksaraRanges = [...]struct{ lo, hi rune }{
+	{0x1B05, 0x1B33},
+	{0x1B45, 0x1B4C},
+	{0x1B50, 0x1B59},
+	{0x1BC0, 0x1BE5},
+	{0xA984, 0xA9B2},
+	{0xA9D0, 0xA9D9},
+	{0xAA00, 0xAA28},
+	{0xAA50, 0xAA59},
+	{0x11005, 0x11037},
+	{0x11066, 0x1106F},
+	{0x11071, 0x11072},
+	{0x11075, 0x11075},
+	{0x11305, 0x1130C},
+	{0x1130F, 0x11310},
+	{0x11313, 0x11328},
+	{0x1132A, 0x11330},
+	{0x11332, 0x11333},
+	{0x11335, 0x11339},
+	{0x11350, 0x11350},
+	{0x1135E, 0x11361},
+	{0x11380, 0x11389},
+	{0x1138B, 0x1138B},
+	{0x1138E, 0x1138E},
+	{0x11390, 0x113B5},
+	{0x11900, 0x11906},
+	{0x11909, 0x11909},
+	{0x1190C, 0x11913},
+	{0x11915, 0x11916},
+	{0x11918, 0x1192F},
+	{0x11950, 0x11959},
+	{0x11EE0, 0x11EF1},
+	{0x11F04, 0x11F10},
+	{0x11F12, 0x11F33},
+	{0x11F50, 0x11F59},
+	{0x16100, 0x1611D},
+	{0x16130, 0x16139},
+}
+
 // The opening brackets, UAX #14's class OP. Unicode 17.0.0.
 //
 // 92 ranges, merged from 92 the file states separately: OP 92.

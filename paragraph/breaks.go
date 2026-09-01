@@ -248,6 +248,18 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 		// wrote a <span> between the letter and the ideograph.
 		beforeIdeograph := IsIdeographic(r) && prev != 0 &&
 			!IsIdeographic(prev) && isLetterUnit(prev) && !wb.KeepAll
+		// And the same shape for the Brahmic scripts, which write without
+		// spaces and whose only opportunity is the boundary between two aksara
+		// clusters. See isAksara: LB28a is a set of prohibitions inside a
+		// cluster and LB31 allows the break between them.
+		//
+		// Offered before rather than deferred after, because a cluster is
+		// several characters and a deferred opportunity survives one: the
+		// boundary wanted is the one in front of the next cluster, and asking
+		// there is asking for it directly. "keep-all" suppresses it for the
+		// reason it suppresses the ideograph's — §5.2 forbids the implicit
+		// opportunities between typographic letter units.
+		beforeAksara := isAksara(r) && prev != 0 && !wb.KeepAll
 		// §5.3's "breaks are allowed ... between inseparable characters (such as
 		// U+2025 and U+2026)", which is an opportunity nothing else here makes.
 		//
@@ -274,7 +286,7 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 		offered := (deferBreak && !(wb.KeepAll && isLetterUnit(r)) && !startsSpacePiece(r, ws)) ||
 			(heldBreak && !startsSpacePiece(r, ws)) ||
 			(wb.BreakAll && !startsSpacePiece(r, ws)) || lb.Anywhere ||
-			beforeIdeograph || betweenInseparable
+			beforeIdeograph || beforeAksara || betweenInseparable
 		// UAX #14 forbids a line beginning with a closing bracket, a hyphen or
 		// a non-starter, and an opportunity offered in front of one is not one.
 		// See linebreak.go for which rules that is and which it is not.

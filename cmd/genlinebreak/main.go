@@ -187,6 +187,21 @@ var openClasses = map[string]bool{"OP": true}
 // either.
 var breakAfterClasses = map[string]bool{"BA": true}
 
+// aksaraClasses are the two Brahmic classes a cluster may begin with.
+//
+// UAX #14's LB28a is written as four prohibitions *inside* an aksara cluster —
+// between a pre-base repha and the letter it belongs to, between a letter and
+// its final vowel, and across a virama — and it says nothing against a break
+// between two clusters, where LB31's "ALL ÷ ALL" allows one. The scripts these
+// classes cover write without spaces, so that boundary is the only opportunity
+// their text has: without it a paragraph of Javanese or Balinese is one
+// unbreakable run and overflows its box, which CSS Text §5.1 forbids outright.
+//
+// The prohibitions themselves need no table here. A cluster is a grapheme
+// cluster — Unicode 15.1's GB9c keeps a conjunct together, which is what the
+// virama rule is about — and SplitAtBreaks already refuses to cut inside one.
+var aksaraClasses = map[string]bool{"AK": true, "AS": true}
+
 // prefixClasses is the class a line may end after under "loose" and no other
 // value: a currency sign or a number sign that belongs to the figure following
 // it.
@@ -226,7 +241,7 @@ func main() {
 	defer f.Close()
 
 	version := "unknown"
-	var spans, glue, strict, loose, prefix, postfix, inseparable, open, after []span
+	var spans, glue, strict, loose, prefix, postfix, inseparable, open, after, aksara []span
 	seen := map[string]bool{}
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
@@ -273,6 +288,9 @@ func main() {
 		if breakAfterClasses[class] {
 			after = append(after, span{lo, hi, class})
 		}
+		if aksaraClasses[class] {
+			aksara = append(aksara, span{lo, hi, class})
+		}
 		if openClasses[class] {
 			open = append(open, span{lo, hi, class})
 		}
@@ -310,7 +328,7 @@ func main() {
 		}
 	}
 	for _, set := range []map[string]bool{looseBreakClasses, prefixClasses, postfixClasses,
-		inseparableClasses, openClasses, breakAfterClasses} {
+		inseparableClasses, openClasses, breakAfterClasses, aksaraClasses} {
 		for class := range set {
 			if !seen[class] {
 				fmt.Fprintf(os.Stderr, "genlinebreak: no character has class %s; has it been renamed?\n", class)
@@ -381,6 +399,14 @@ package paragraph
 // spaces are U+0020 and the other space separators, which have their own arms
 // in SplitAtBreaks, and the hyphens are classes HY and HH, which have theirs
 // because a line may not begin with one either.`, version)
+	emit(&w, "aksaraRanges", aksara, `// The characters an aksara cluster may begin with, UAX #14's classes AK and
+// AS. Unicode %s.
+//
+// %d ranges, merged from %d the file states separately: %s.
+// Balinese, Batak, Brahmi, Cham, Dives Akuru, Grantha, Javanese, Kawi and
+// Tulu-Tigalari — scripts that write without spaces, whose only soft wrap
+// opportunity is the boundary between two clusters. See aksaraClasses in
+// cmd/genlinebreak for why the prohibitions inside a cluster need no table.`, version)
 	emit(&w, "openRanges", open, `// The opening brackets, UAX #14's class OP. Unicode %s.
 //
 // %d ranges, merged from %d the file states separately: %s.
