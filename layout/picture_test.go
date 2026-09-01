@@ -543,7 +543,14 @@ func trimRunSpace(v DrawText) DrawText {
 	}
 	if lead := v.Text[:strings.Index(v.Text, trimmed)]; lead != "" {
 		w, _ := style.FromPx(v.Face.Measure(lead, v.Size.Px()))
-		v.At.X = v.At.X.Add(w).Add(v.CharSpacing.Mul(float64(len([]rune(lead)))))
+		w = w.Add(v.CharSpacing.Mul(float64(len([]rune(lead)))))
+		// Past the space the run starts with, in whichever direction the run
+		// runs: down the page for a sideways one. See runAlong.
+		if v.Sideways {
+			v.At.Y = v.At.Y.Add(w)
+		} else {
+			v.At.X = v.At.X.Add(w)
+		}
 	}
 	v.Text = trimmed
 	return v
@@ -843,19 +850,26 @@ func glyphMarks(v DrawText, what, shape string, opaque bool) []textMark {
 	text := ShapedText(v)
 	glyphs, _ := ShapedGlyphs(v)
 	var out []textMark
-	x := v.At.X
+	// How far along the run each glyph is. Along, and not "x": a sideways run
+	// advances down the page, so the pen moves in y and the baseline's x is
+	// what every glyph on it shares. See runAlong.
+	along := runAlong(v)
 	for _, g := range glyphs {
 		adv, _ := style.FromPx(g.XAdvance * v.Size.Px() / 1000)
 		if !blankCluster(text, g.Cluster) {
 			off, _ := style.FromPx(g.XOffset * v.Size.Px() / 1000)
+			at := Point{X: along.Add(off), Y: v.At.Y}
+			if v.Sideways {
+				at = Point{X: v.At.X, Y: along.Add(off)}
+			}
 			out = append(out, textMark{
 				what: fmt.Sprintf("%s glyph %d", what, g.GID),
-				x:    x.Add(off), y: v.At.Y,
+				x:    at.X, y: at.Y,
 				shape:  fmt.Sprintf("%s glyph %d", shape, g.GID),
 				opaque: opaque,
 			})
 		}
-		x = x.Add(adv).Add(v.CharSpacing)
+		along = along.Add(adv).Add(v.CharSpacing)
 	}
 	return out
 }
@@ -1042,6 +1056,10 @@ func joinRuns(runs []DrawText) [][]DrawText {
 		y, size, spacing style.Unit
 		face             *shape.Face
 		colour           style.RGBA
+		// Which way the runs go. A run set down the page and one set across it
+		// do not abut even where their two coordinates happen to agree, and
+		// joining them would splice a word out of two that are at right angles.
+		sideways bool
 		// Two runs cut by different clips do not put the same ink down even
 		// where they abut, so they are not joined. Clip is comparable, which is
 		// what lets it sit in a map key at all.
@@ -1073,7 +1091,7 @@ func joinRuns(runs []DrawText) [][]DrawText {
 			out = append(out, []DrawText{v})
 			continue
 		}
-		k := key{v.At.Y, v.Size, v.CharSpacing, v.Face, v.Color, v.Clip}
+		k := key{runAcross(v), v.Size, v.CharSpacing, v.Face, v.Color, v.Sideways, v.Clip}
 		if _, seen := groups[k]; !seen {
 			order = append(order, k)
 		}
@@ -1085,21 +1103,43 @@ func joinRuns(runs []DrawText) [][]DrawText {
 		for _, one := range g {
 			flat = append(flat, one...)
 		}
-		sort.SliceStable(flat, func(i, j int) bool { return flat[i].At.X < flat[j].At.X })
+		sort.SliceStable(flat, func(i, j int) bool { return runAlong(flat[i]) < runAlong(flat[j]) })
 		cur := []DrawText{flat[0]}
-		end := flat[0].At.X.Add(runAdvance(flat[0]))
+		end := runAlong(flat[0]).Add(runAdvance(flat[0]))
 		for _, next := range flat[1:] {
-			if abs(end.Sub(next.At.X)) <= joinSlack {
+			if abs(end.Sub(runAlong(next))) <= joinSlack {
 				cur = append(cur, next)
 				end = end.Add(runAdvance(next))
 				continue
 			}
 			out = append(out, cur)
-			cur, end = []DrawText{next}, next.At.X.Add(runAdvance(next))
+			cur, end = []DrawText{next}, runAlong(next).Add(runAdvance(next))
 		}
 		out = append(out, cur)
 	}
 	return out
+}
+
+// runAlong is the coordinate a run advances in, and runAcross the one it shares
+// with every other run on its line.
+//
+// For a horizontal run those are x and y, which is what every reader of a
+// display list assumed until a page could be turned. Naming them is how this
+// file's arithmetic stops caring which: a sideways run advances down the page
+// and shares its baseline's x, and everything that chains runs together or
+// walks their glyphs is the same reasoning in the other pair of axes.
+func runAlong(v DrawText) style.Unit {
+	if v.Sideways {
+		return v.At.Y
+	}
+	return v.At.X
+}
+
+func runAcross(v DrawText) style.Unit {
+	if v.Sideways {
+		return v.At.X
+	}
+	return v.At.Y
 }
 
 // joinSlack is how far apart two runs may be and still count as touching.

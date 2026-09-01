@@ -90,6 +90,8 @@ var (
 	isCursiveScript               = paragraph.IsCursiveScript
 	cursiveTrackingSuppressesText = paragraph.CursiveTrackingSuppresses
 	isDefaultIgnorable            = paragraph.IsDefaultIgnorable
+	// UAX #50, which the writing-mode gate reads: see layout/writingmode.go.
+	hasUprightText = paragraph.HasUprightText
 )
 
 // Geometry and the item type itself.

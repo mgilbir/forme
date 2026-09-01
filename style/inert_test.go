@@ -288,13 +288,17 @@ func TestNothingIsFragmented(t *testing.T) {
 // TestAPropertyWithNoEffectInThisMediumIsInertWhateverItSays.
 //
 // CSS Writing Modes 4 §4.1's own note is the argument: text-orientation "has no
-// effect in horizontal writing modes". This engine has no other kind, so every
-// value of it asks for the page that is already there and there is no value to
-// compare against — which is what the "always" entry means and why it is the
-// only one.
+// effect in horizontal writing modes". A horizontal page is what almost every
+// document is, so every value of it asks there for the page that is already
+// there and there is no value to compare against.
 //
-// The gap it might look like this is hiding belongs to writing-mode, and that is
-// still reported: a document that asks for vertical text is told so there.
+// The three properties are registered now rather than inert, because layout
+// reads them — see layout/writingmode.go — and what this asks is that
+// registering them did not turn a silence into noise. A stylesheet that writes
+// any of them still says nothing by itself. What says something is a *box* that
+// declares a vertical mode this engine cannot lay out, and the claim that it
+// does is carried by TestABoxThisEngineCannotTurnIsReported, which is in the
+// package that can see a box.
 func TestAPropertyWithNoEffectInThisMediumIsInertWhateverItSays(t *testing.T) {
 	for _, decl := range []string{
 		"text-orientation: mixed",
@@ -313,22 +317,35 @@ func TestAPropertyWithNoEffectInThisMediumIsInertWhateverItSays(t *testing.T) {
 				decl)
 		}
 	}
-	// The property that would make it matter is not inert, and must not become
-	// so: a document asking for vertical text gets a page laid out horizontally,
-	// which is as different as a page can be.
+	// And the property that decides the mode, which used to be reported here and
+	// is not any more. The declaration alone no longer says whether the page is
+	// wrong: the same "writing-mode: vertical-rl" is laid out on a box with a
+	// height and refused on the box beside it with an automatic one, and only
+	// something that can see the box can tell those apart.
 	for _, decl := range []string{
+		"writing-mode: horizontal-tb",
 		"writing-mode: vertical-rl",
 		"writing-mode: vertical-lr",
 		"writing-mode: sideways-rl",
+		"writing-mode: sideways-lr",
 	} {
-		if !reportsUnsupported(t, decl) {
-			t.Errorf("%q was not reported, and this engine lays every page out "+
-				"horizontally", decl)
+		if reportsUnsupported(t, decl) {
+			t.Errorf("%q was reported by the cascade; whether a vertical box is "+
+				"laid out is a question about the box, and layout answers it", decl)
 		}
 	}
-	// And "horizontal-tb" is the initial value, so it asks for what is there.
-	if reportsUnsupported(t, "writing-mode: horizontal-tb") {
-		t.Errorf("\"writing-mode: horizontal-tb\" was reported, and it is the mode " +
-			"every page here is laid out in")
+	// All three cascade, which is what makes the layout-time answer possible at
+	// all: a property the cascade dropped would never reach a box.
+	for _, name := range []string{"writing-mode", "text-orientation", "text-combine-upright"} {
+		if _, ok := properties[name]; !ok {
+			t.Errorf("%q is not a registered property, so no computed style carries "+
+				"it and layout cannot read it", name)
+		}
+	}
+	// And it inherits, which is what makes one declaration on a container turn
+	// everything inside it — the way every document that uses it is written.
+	if !properties["writing-mode"].inherits {
+		t.Error("writing-mode does not inherit, so a rule on a container leaves " +
+			"its paragraphs horizontal")
 	}
 }

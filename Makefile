@@ -1,4 +1,4 @@
-.PHONY: linebreak test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors noto-fonts clean-noto-fonts wpt test-wpt clean-wpt varinstance test-varinstance
+.PHONY: linebreak vertical test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors noto-fonts clean-noto-fonts wpt test-wpt clean-wpt varinstance test-varinstance
 
 test:
 	gofmt -l . | grep -v '^testdata/' && exit 1 || true
@@ -119,6 +119,15 @@ eastasian:
 	go run ./cmd/geneastasian $(UCD)/EastAsianWidth.txt $(UCD)/Scripts.txt \
 	  > paragraph/eastasiantable.go
 	gofmt -w paragraph/eastasiantable.go
+
+# Which characters stand upright on a line of vertical text, UAX #50. It is
+# what tells a block of English from a block of Japanese, and so which blocks
+# this engine can turn on their side. See cmd/genvertical.
+#
+#	make vertical UCD=/path/to/unpacked/ucd
+vertical:
+	go run ./cmd/genvertical $(UCD)/VerticalOrientation.txt > paragraph/verticaltable.go
+	gofmt -w paragraph/verticaltable.go
 
 # What "text-transform: full-width" and "full-size-kana" remap, both derived
 # from UnicodeData.txt. See cmd/genfullwidth and cmd/genfullsizekana.

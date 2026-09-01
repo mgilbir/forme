@@ -728,7 +728,13 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	// child also has one draws a single em rather than two, which is
 	// margin-collapse-020 exactly: the green bar lands an em high and the red
 	// the reference covers is left showing.
-	sealed := establishesBFC(b) || b == l.root
+	// Whether this box's content is laid out sideways. It is asked here because
+	// the answer changes what the rest of this function means: the length its
+	// lines are broken against becomes its height, and it seals its edges. See
+	// layout/writingmode.go.
+	turn := l.turns(b, containing, hasHeight)
+
+	sealed := establishesBFC(b) || b == l.root || turn
 
 	// A margin collapses through an edge only when nothing sits on that edge to
 	// stop it. A border or a padding of even one unit is something.
@@ -872,8 +878,28 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 		inner = flow{ctx: own, cbHeight: childHeight, cbDefinite: childDefinite}
 	}
 
+	// A turned box breaks its lines against its *height*: that is the length of
+	// a line when lines run down the page. What comes back is how far the lines
+	// stacked, which on the page is a width — see below, where it is turned.
+	lineLength := width
+	if turn {
+		lineLength = childHeight
+	}
 	contentHeight, hoistTop, hoistBottom, placedAnything :=
-		l.clampedChildren(b, frag, width, topOpen, bottomOpen, inner)
+		l.clampedChildren(b, frag, lineLength, topOpen, bottomOpen, inner)
+	if turn {
+		// Everything inside is in the coordinates of a horizontal page. This is
+		// the quarter turn that puts it on this one, and it is the whole of what
+		// a vertical writing mode costs the rest of the engine.
+		turnContent(frag)
+		// What the content came to along the block axis, which is a distance
+		// across the page and not down it. The box is as tall as its declared
+		// height and its content can only overflow it sideways, which is a
+		// thing contentH has no way to say — so the honest value is the box's
+		// own, and stating it here is what keeps the §10.6.7 arithmetic below
+		// from reading a width as a height.
+		contentHeight = childHeight
+	}
 
 	// What the content itself came to, which a declared height may raise the box
 	// above but does not change. The float rule below applies to it either way:

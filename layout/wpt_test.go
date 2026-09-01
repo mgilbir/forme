@@ -994,7 +994,7 @@ const wptEnv = "WPT_TESTS"
 // property". The engine looked for it among the word-break values, found
 // nothing, and did nothing — without reporting it either, which is what made it
 // silent. See layout/overflowwrap_test.go.
-const wptCleanPassBaseline = 5813
+const wptCleanPassBaseline = 5815
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
@@ -1583,8 +1583,14 @@ func normaliseOps(ops []Op) string {
 				// numbers of them between the same visible glyphs.
 				continue
 			}
-			lines = append(lines, fmt.Sprintf("text %q at %s,%s size %s",
-				v.Text, num(v.At.X), num(v.At.Y), num(v.Size)))
+			// The orientation is part of the key: the same word at the same
+			// point, once across the page and once down it, is two pictures.
+			set := ""
+			if v.Sideways {
+				set = " sideways"
+			}
+			lines = append(lines, fmt.Sprintf("text %q at %s,%s size %s%s",
+				v.Text, num(v.At.X), num(v.At.Y), num(v.Size), set))
 		case DrawImage:
 			if v.Rect.Empty() {
 				continue

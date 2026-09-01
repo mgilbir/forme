@@ -46,6 +46,15 @@ type LineFragment struct {
 	// border, and a rectangle for each of them on each line would be work in
 	// proportion to the document that nothing would ever read.
 	Boxes []*Fragment
+	// Sideways says this line runs down the page rather than across it: its
+	// Baseline is measured leftwards from the line box's right edge, and each
+	// run's X is a distance downwards from its top.
+	//
+	// It is on the line rather than on the block because it is what the painter
+	// needs at the moment it turns a run's offsets into a point, and the line is
+	// what it has in its hand there. See layout/writingmode.go for why a quarter
+	// turn is expressible as one flag at all.
+	Sideways bool
 }
 
 // TextRun is a piece of text on a line, set in one face at one size.
