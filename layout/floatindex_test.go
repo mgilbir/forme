@@ -39,8 +39,21 @@ func scanSpans(a0, a1, b0, b1 style.Unit) bool {
 func scanBand(boxes []placedFloat, top, bottom, lo, hi style.Unit) (left, right style.Unit) {
 	left, right = lo, hi
 	for _, f := range boxes {
-		if f.rect.H <= 0 || !scanSpans(f.rect.Y, f.rect.Bottom(), top, bottom) {
+		switch {
+		case f.rect.H < 0:
 			continue
+		case f.rect.H == 0:
+			// A float with no height does not span a band, it lies inside one:
+			// strictly inside, and a band with no height of its own has no
+			// inside for it to lie in.
+			if f.rect.W <= 0 || bottom <= top ||
+				f.rect.Y <= top || f.rect.Y >= bottom {
+				continue
+			}
+		default:
+			if !scanSpans(f.rect.Y, f.rect.Bottom(), top, bottom) {
+				continue
+			}
 		}
 		if f.side == FloatLeft {
 			if edge := f.rect.Right(); edge > left {

@@ -278,6 +278,113 @@ func spliceSteps(dst []stairStep, from, to int, with []stairStep) []stairStep {
 	return dst
 }
 
+// A float with no height is still an obstacle, and this is where that is kept.
+//
+// §9.5 shortens a line box beside a float, and the float that shortens it is the
+// one whose vertical span meets the line's. A span of zero meets a line's span
+// when it lies *strictly* inside it: a line running from 20 to 40 is shortened
+// by a float at 30, and a line that begins at 30 or ends there is not. The three
+// cases are the suite's floats-zero-height-wrap-002, which puts a 100px float of
+// no height at the bottom of a 30px one and asks for three lines — the first
+// indented by ten, the second by a hundred, the third by nothing.
+//
+// It is a separate structure rather than a third case in stair because stair's
+// spans are half-open. A zero-height float covers [y, y), which cover() reads as
+// nothing at all, and every way of widening it to a half-open span that a point
+// query can find puts the float in one of the two bands that must not have it.
+//
+// The entries are merged by y for the reason the staircase merges steps: a
+// thousand empty floats at one y are one entry, so a range query scans the
+// distinct positions inside it rather than the floats. Without that a document
+// could make every band query linear by writing empty floats, which is the cost
+// this file exists to keep off the page.
+type flatEdge struct {
+	y, edge style.Unit
+}
+
+// flatStair is the greatest (or least) edge among the zero-height floats at each
+// distinct y. least has stair's meaning.
+type flatStair struct {
+	at    []flatEdge
+	least bool
+}
+
+// flatEdit is what one call to add changed, so that it can be undone.
+type flatEdit struct {
+	at    int
+	added bool
+	was   flatEdge
+}
+
+func (f *flatStair) beats(a, b style.Unit) bool {
+	if f.least {
+		return a < b
+	}
+	return a > b
+}
+
+// lowerBound is the first entry at or below... the first index whose y is not
+// less than the given one.
+func (f *flatStair) lowerBound(y style.Unit) int {
+	lo, hi := 0, len(f.at)
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if f.at[mid].y < y {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return lo
+}
+
+// add records a float with no height at y, returning what it changed.
+func (f *flatStair) add(y, edge style.Unit) flatEdit {
+	k := f.lowerBound(y)
+	if k < len(f.at) && f.at[k].y == y {
+		e := flatEdit{at: k, was: f.at[k]}
+		if f.beats(edge, f.at[k].edge) {
+			f.at[k].edge = edge
+		}
+		return e
+	}
+	f.at = append(f.at, flatEdge{})
+	copy(f.at[k+1:], f.at[k:])
+	f.at[k] = flatEdge{y: y, edge: edge}
+	return flatEdit{at: k, added: true}
+}
+
+// undo puts back exactly what add took out.
+func (f *flatStair) undo(e flatEdit) {
+	if e.added {
+		copy(f.at[e.at:], f.at[e.at+1:])
+		f.at = f.at[:len(f.at)-1]
+		return
+	}
+	f.at[e.at] = e.was
+}
+
+// over is the winning edge among the floats lying strictly inside (y0, y1).
+//
+// Strictly, and on both sides. A zero-height float at the very top of a line is
+// above it — §9.5's rule is about spans that meet, and [30, 30) does not meet
+// [30, 50) — and one at the very bottom is below it. Widening either end is what
+// makes an empty floated div, the oldest clearance hack there is, move the text
+// that was written to sit beside it.
+func (f *flatStair) over(y0, y1 style.Unit) (style.Unit, bool) {
+	var best style.Unit
+	found := false
+	for k := f.lowerBound(y0); k < len(f.at) && f.at[k].y < y1; k++ {
+		if f.at[k].y <= y0 {
+			continue
+		}
+		if !found || f.beats(f.at[k].edge, best) {
+			best, found = f.at[k].edge, true
+		}
+	}
+	return best, found
+}
+
 // absorbed is everything one float did to the index, kept so that it can be
 // taken back out again.
 //
@@ -296,6 +403,11 @@ type absorbed struct {
 	// it contributed none.
 	bottomAt int
 
+	// flatOn and flat are the same pair as on and edit, for the float with no
+	// height that goes on neither staircase and is an obstacle all the same.
+	flatOn FloatSide
+	flat   flatEdit
+
 	topMax      style.Unit
 	bottomAll   style.Unit
 	bottomLeft  style.Unit
@@ -309,10 +421,11 @@ type absorbed struct {
 // up with. The index is never the source of truth: floatContext.boxes is, and
 // this is rebuilt from it incrementally.
 type floatIndex struct {
-	n           int
-	left, right stair
-	bottoms     []style.Unit
-	marks       []absorbed
+	n                   int
+	left, right         stair
+	flatLeft, flatRight flatStair
+	bottoms             []style.Unit
+	marks               []absorbed
 }
 
 // absorb folds one float into the summaries.
@@ -325,8 +438,9 @@ func (ix *floatIndex) absorb(f placedFloat) {
 	// once, because a flag that is only right after some particular call is the
 	// kind of state this would rather not have.
 	ix.right.least = true
+	ix.flatRight.least = true
 
-	a := absorbed{on: FloatNone, bottomAt: -1}
+	a := absorbed{on: FloatNone, flatOn: FloatNone, bottomAt: -1}
 	if ix.n > 0 {
 		prev := ix.marks[ix.n-1]
 		a.topMax = prev.topMax
@@ -349,12 +463,34 @@ func (ix *floatIndex) absorb(f placedFloat) {
 		a.bottomRight = style.Max(a.bottomRight, bottom)
 	}
 
-	// A float of zero height obstructs nothing — an empty floated div is a
-	// common clearance hack — so it reaches neither staircase nor the list of
-	// bottoms the placement search steps through. It still counts for clearance
-	// and for the height of what contains it, which is why those are above this.
+	// A float of zero height reaches neither staircase nor the list of bottoms
+	// the placement search steps through — it spans no half-open range, so
+	// there is nothing for either to hold. It goes on the flat staircase
+	// instead, where the span it does have is a point. It still counts for
+	// clearance and for the height of what contains it, which is why those are
+	// above this.
+	//
+	// Not the list of bottoms either, and that is a claim about documents
+	// rather than about this function: a float is placed at the top of the line
+	// the block has reached or at the bottom of a float it could not fit beside,
+	// so a flat float's y is either a line's own top — where no line straddles
+	// it — or a bottom the list already holds. There is no page whose placement
+	// search needs the step, so it is not offered one.
 	if f.rect.H > 0 {
 		a.bottomAt = insertUnit(&ix.bottoms, bottom)
+	} else if f.rect.H == 0 && f.rect.W > 0 {
+		// Width, because a float with neither dimension is not an obstacle in
+		// any direction and putting it on the list would be one more entry for
+		// every clearance hack on the page to scan past. And a height of
+		// exactly zero rather than one that is merely not positive: a negative
+		// height is a rectangle turned inside out, which spans nothing in either
+		// reading, and reading it as a point would put an obstacle where
+		// nothing is drawn.
+		if f.side == FloatLeft {
+			a.flatOn, a.flat = FloatLeft, ix.flatLeft.add(top, f.rect.Right())
+		} else {
+			a.flatOn, a.flat = FloatRight, ix.flatRight.add(top, f.rect.X)
+		}
 	}
 	// bottom can fail to be below top even with a positive height, because
 	// style.Unit saturates: a float at the end of the range has nowhere to
@@ -391,6 +527,12 @@ func (ix *floatIndex) rewind(k int) {
 			ix.left.undo(a.edit)
 		case FloatRight:
 			ix.right.undo(a.edit)
+		}
+		switch a.flatOn {
+		case FloatLeft:
+			ix.flatLeft.undo(a.flat)
+		case FloatRight:
+			ix.flatRight.undo(a.flat)
 		}
 		if a.bottomAt >= 0 {
 			copy(ix.bottoms[a.bottomAt:], ix.bottoms[a.bottomAt+1:])

@@ -178,9 +178,10 @@ func (fc *floatContext) shift(from int, dy style.Unit) {
 // bandAt returns the left and right edges available at one y, between the two
 // edges of a containing block.
 //
-// A float of zero height obstructs nothing. That is not an optimisation — an
-// empty floated <div> is a common way to write a clearance hack, and treating it
-// as an obstacle would move the text beside it.
+// A float of zero height obstructs nothing here. That is not an optimisation —
+// an empty floated <div> is a common way to write a clearance hack, and a band
+// of no height is not a band such a float can be inside of. See flatStair for
+// the band that does have room for one.
 func (fc *floatContext) bandAt(y, lo, hi style.Unit) (left, right style.Unit) {
 	return fc.bandOver(y, y, lo, hi)
 }
@@ -208,6 +209,15 @@ func (fc *floatContext) bandOver(top, bottom, lo, hi style.Unit) (left, right st
 		left = edge
 	}
 	if edge, ok := bandEdge(&fc.idx.right, top, bottom); ok && edge < right {
+		right = edge
+	}
+	// The floats with no height, which span a point rather than a range and so
+	// are on neither staircase. See flatStair: they shorten a band that holds
+	// their y strictly inside it, and a degenerate band holds nothing.
+	if edge, ok := fc.idx.flatLeft.over(top, bottom); ok && edge > left {
+		left = edge
+	}
+	if edge, ok := fc.idx.flatRight.over(top, bottom); ok && edge < right {
 		right = edge
 	}
 	if right < left {
