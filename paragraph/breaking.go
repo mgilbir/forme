@@ -261,7 +261,27 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		if item.Forced {
 			// An instruction rather than an opportunity: the line ends here
 			// whatever room is left, and an empty one still occupies its height.
-			return trimLineEdge(line), i + 1, 0, outOfFlow, true
+			//
+			// What comes with it is every inline box that ends at the break.
+			// §8.4 puts a box's padding-right at the end of its *last*
+			// fragment, and a box whose content ends at a forced break has no
+			// fragment after it — there is nothing left of the box to put on
+			// the line below. The suite's content-175 is an inline box whose
+			// ":after" is a preserved newline: its one em of padding-right came
+			// out as a second navy stripe under the first, where the reference
+			// draws one straight stripe an em longer.
+			//
+			// Only the items *immediately* after the break, and only the ones
+			// that close a box. Anything of the box's own content after the
+			// break comes before its closing edge, so a box that continues is a
+			// box whose next item is not one of these.
+			next := i + 1
+			for next < len(items) &&
+				items[next].Inset && !items[next].InsetLead {
+				line = append(line, items[next])
+				next++
+			}
+			return trimLineEdge(line), next, 0, outOfFlow, true
 		}
 
 		// §4.1.2's first rule: a sequence of collapsible spaces at the
