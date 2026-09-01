@@ -94,6 +94,13 @@ type DrawText struct {
 	// They are context and not content: nothing of them is drawn, and nothing of
 	// them belongs to the text a reader extracts from the page.
 	PreContext, PostContext string
+	// ContextKerns says the neighbours above are set in this run's own face, so
+	// a pair that spans the boundary is this font's pair. It is false where font
+	// fallback put the neighbour in another face: a character is the same
+	// character whichever font sets it and still decides this run's joined
+	// shapes, but a kerning pair is one font's statement about two of its own
+	// glyphs and does not cross a font change.
+	ContextKerns bool
 	// CharSpacing is letter-spacing: an extra advance after every character.
 	//
 	// It is a property of the drawing rather than of the position because layout
@@ -1224,15 +1231,16 @@ func (p *painter) lines(f *Fragment) {
 			}
 			p.decorate(run, at, false)
 			p.ops = append(p.ops, DrawText{
-				At:          at,
-				Text:        drawableText(run.Text),
-				PreContext:  run.PreContext,
-				PostContext: run.PostContext,
-				RTL:         run.RTL,
-				Face:        run.Face,
-				Size:        run.Size,
-				Color:       colour,
-				CharSpacing: run.LetterSpacing,
+				At:           at,
+				Text:         drawableText(run.Text),
+				PreContext:   run.PreContext,
+				PostContext:  run.PostContext,
+				ContextKerns: run.ContextKerns,
+				RTL:          run.RTL,
+				Face:         run.Face,
+				Size:         run.Size,
+				Color:        colour,
+				CharSpacing:  run.LetterSpacing,
 			})
 			p.decorate(run, at, true)
 		}
@@ -1380,6 +1388,12 @@ func ShapedText(v DrawText) string {
 func ShapedGlyphs(v DrawText) ([]shape.Glyph, int) {
 	if v.Face == nil {
 		return nil, 0
+	}
+	if !v.ContextKerns {
+		// The neighbour is set in another face, so its characters decide this
+		// run's joined shapes and its glyphs decide nothing. See
+		// shape.ShapeGlyphsAcrossFaces.
+		return v.Face.ShapeGlyphsAcrossFaces(ShapedText(v), v.PreContext, v.PostContext)
 	}
 	return v.Face.ShapeGlyphsInContext(ShapedText(v), v.PreContext, v.PostContext)
 }

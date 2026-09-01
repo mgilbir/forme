@@ -144,7 +144,7 @@ func TestACutHalfIsAsWideAsItIsDrawn(t *testing.T) {
 				continue
 			}
 			want, _ := style.FromPx(r.Face.MeasureShapedInContext(r.Text, r.Size.Px(),
-				r.PreContext, r.PostContext))
+				r.PreContext, r.PostContext, r.ContextKerns))
 			if r.Width != want {
 				t.Errorf("line %d's run %q is %v wide and is drawn %v wide",
 					i, r.Text, r.Width, want)
@@ -180,7 +180,7 @@ func TestTheCutIsChosenAgainstTheWidthTheHeadWillHave(t *testing.T) {
 	best := 0
 	for n := 1; n < len(runes); n++ {
 		prefix, rest := string(runes[:n]), string(runes[n:])
-		if face.MeasureShapedInContext(prefix, size, "", rest) <= box {
+		if face.MeasureShapedInContext(prefix, size, "", rest, true) <= box {
 			best = n
 		}
 	}

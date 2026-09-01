@@ -84,6 +84,12 @@ type TextRun struct {
 	// drawn isolated — the two disagree, and the page shows a word broken into
 	// letters standing apart. See shapingcontext.go.
 	PreContext, PostContext string
+	// ContextKerns says the neighbours above are set in this run's own face, so
+	// a pair that spans the boundary is this font's pair. A font change is a
+	// change in formatting and its pairs do not cross one; a letter's joined
+	// shape does, because a character is the same character whichever font sets
+	// it. See paragraph.Item.ContextKerns.
+	ContextKerns bool
 	// LetterSpacing is what letter-spacing added after each character of this
 	// run. It is carried into painting as well as into the width because the two
 	// have to agree: the width decided where the next run starts, and glyphs

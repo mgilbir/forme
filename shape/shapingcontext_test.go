@@ -230,7 +230,7 @@ func TestMeasuringAgreesWithTheFormChosen(t *testing.T) {
 		{b, b, 250},
 		{b, "", 400},
 	} {
-		got := f.MeasureShapedInContext(b, size, tc.before, tc.after)
+		got := f.MeasureShapedInContext(b, size, tc.before, tc.after, true)
 		if got != tc.want {
 			t.Errorf("before=%q after=%q: measured %v, want %v", tc.before, tc.after, got, tc.want)
 		}

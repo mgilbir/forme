@@ -138,12 +138,38 @@ func (f *Face) ShapeGlyphs(s string) ([]Glyph, int) {
 //
 // Either side may be empty, which is what the start and end of a paragraph are.
 func (f *Face) ShapeGlyphsInContext(s, before, after string) ([]Glyph, int) {
+	return f.shapeGlyphsWith(s, nil,
+		shapeContext{before: before, after: after, kerns: true})
+}
+
+// ShapeGlyphsAcrossFaces is ShapeGlyphsInContext for a neighbour that is set in
+// a *different* face.
+//
+// Which of its four shapes a letter takes is decided by the characters beside
+// it, and a character is the same character whichever font sets it: Unicode's
+// joining enforcement, and the suite's shaping-join-002 and
+// shaping-tatweel-002 and -003, where a zero width joiner or a tatweel is
+// pulled from another font by unicode-range and the Arabic letters either side
+// must still take their joined forms.
+//
+// A kerning pair is not. It is stated by one font over two of its own glyphs,
+// and a font change is a change in formatting: the pair across such a boundary
+// is not this font's to apply. So the context reaches the joining scan and not
+// the boundary kern.
+func (f *Face) ShapeGlyphsAcrossFaces(s, before, after string) ([]Glyph, int) {
 	return f.shapeGlyphsWith(s, nil, shapeContext{before: before, after: after})
 }
 
 // shapeContext is the text either side of the run being shaped, in logical
 // order: before is what precedes it and after is what follows.
-type shapeContext struct{ before, after string }
+//
+// kerns says the neighbours are set in this run's own face, so a pair that
+// spans the boundary is this font's pair. See ShapeGlyphsAcrossFaces for the
+// case where they are not.
+type shapeContext struct {
+	before, after string
+	kerns         bool
+}
 
 // runes returns the two sides as the shortest slices that still answer the
 // question a joining scan asks of them.
@@ -209,6 +235,7 @@ func (f *Face) shapeGlyphsWith(s string, extra []string, ctx shapeContext) ([]Gl
 		inner := shapeContext{
 			before: ctx.before + s[:r.Start],
 			after:  s[r.End:] + ctx.after,
+			kerns:  ctx.kerns,
 		}
 		glyphs, gone := f.shapeGlyphsIn(piece, runScript(piece), r.RTL(), extra, inner)
 		missing += gone
@@ -313,7 +340,7 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	// The pair that spans the boundary to the next run, which the pass above
 	// cannot see because the glyph on the far side of it is not in this buffer.
 	// See boundarykern.go.
-	if len(sh.l.kern) > 0 && (ctx.before != "" || ctx.after != "") {
+	if len(sh.l.kern) > 0 && ctx.kerns && (ctx.before != "" || ctx.after != "") {
 		before, after := f.boundaryGlyphs(ctx, script, rtl)
 		sh.kernAcross(buf, before, after)
 	}

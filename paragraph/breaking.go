@@ -811,8 +811,10 @@ func (br *Breaker) breakInsideWord(item Item, width style.Unit, content bool) (h
 		// then drew the head at another — the two disagree by exactly the
 		// difference between a final form and an isolated one.
 		cut := bounds[mid-1]
+		// The far side of the cut is this run's own text, so a pair across it is
+		// this font's whatever the outer context is.
 		w := br.MeasureSpacedInContext(item.Face, item.Text[:cut], item.Size, item.Spacing,
-			item.PreContext, item.Text[cut:]+item.PostContext)
+			item.PreContext, item.Text[cut:]+item.PostContext, true)
 		if w <= width {
 			lo = mid
 		} else {

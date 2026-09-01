@@ -247,6 +247,15 @@ type Item struct {
 	// the layer that fills them in does not even ask unless the face carries the
 	// positional forms. See layout's linkShapingContext.
 	PreContext, PostContext string
+	// ContextKerns says the neighbours above are set in this run's own face.
+	//
+	// Which of its four shapes a letter takes is decided by the characters
+	// beside it, and a character is the same character whichever font sets it —
+	// so the context above crosses a font change. A kerning pair does not: it is
+	// stated by one font over two of its own glyphs, and a font change is a
+	// change in formatting, so the pair across that boundary is not this font's
+	// to apply. The flag is what keeps the two apart. See linkShapingContext.
+	ContextKerns bool
 	// Hyphen is how much wider the line becomes if it ends after this item: the
 	// width of the hyphen a soft hyphen asks to have printed. Zero means this is
 	// not a hyphenation point, which is every item in almost every document.
@@ -613,10 +622,13 @@ func (br *Breaker) SplitItem(item Item, at int) (head, tail Item) {
 	// the head, and what followed it still follows the tail.
 	head.PostContext = tail.Text + item.PostContext
 	tail.PreContext = item.PreContext + head.Text
+	// The two halves are the same run cut in two, so the boundary between them
+	// is one this font states its pairs over whatever the outer context is.
+	head.ContextKerns, tail.ContextKerns = true, true
 	head.Width = br.MeasureSpacedInContext(item.Face, head.Text, item.Size, item.Spacing,
-		head.PreContext, head.PostContext)
+		head.PreContext, head.PostContext, head.ContextKerns)
 	tail.Width = br.MeasureSpacedInContext(item.Face, tail.Text, item.Size, item.Spacing,
-		tail.PreContext, tail.PostContext)
+		tail.PreContext, tail.PostContext, tail.ContextKerns)
 	// §8.1's gap sits at the item's far edge, so it goes with the tail — the
 	// head's far edge is the cut, which is a boundary the gap was never at. The
 	// measurements above do not include it, since it is not in the text.
