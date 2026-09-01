@@ -166,11 +166,41 @@ func (l *layouter) resolveBidi(b *Box, items []inlineItem, p *bidiBuilder) []inl
 		return items
 	}
 
+	// "unicode-bidi: plaintext" hands the direction to the text, and a paragraph
+	// with no strong character in it has nothing to hand over. css-writing-modes
+	// says where it comes from instead — the paragraph before it, and the
+	// containing block where there is none — which is what a plain text editor
+	// does and is what the value is named after.
+	//
+	// P3's own answer is "otherwise, set it to zero", and that is the right one
+	// for text nobody has any other information about. Here there is other
+	// information, so P2 is asked without P3 and the answer is carried forward.
+	// bidi-lines-002 writes it out: five lines of a right-to-left block, three of
+	// them nothing but "!", and the reference puts each of those three on the
+	// side the line before it was on.
+	carry := dir
+	if dir == bidi.Auto {
+		carry = bidi.LeftToRight
+		if isRTL(b) {
+			carry = bidi.RightToLeft
+		}
+	}
 	resolved := make([]*bidi.Paragraph, len(p.Paras))
 	for i, text := range p.Paras {
-		if len(text) > 0 {
-			resolved[i] = bidi.Resolve(text, dir)
+		if len(text) == 0 {
+			// Nothing to resolve and nothing to carry: a paragraph with no
+			// characters has no strong one either, so it neither takes the
+			// direction nor changes it.
+			continue
 		}
+		use := dir
+		if dir == bidi.Auto {
+			if d, found := bidi.FirstStrong(text); found {
+				carry = d
+			}
+			use = carry
+		}
+		resolved[i] = bidi.Resolve(text, use)
 	}
 
 	out := make([]inlineItem, 0, len(items))

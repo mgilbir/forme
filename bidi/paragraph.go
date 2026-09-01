@@ -114,3 +114,35 @@ func (p *Paragraph) LineLevels(start, end int) []int {
 	}
 	return out
 }
+
+// FirstStrong is rules P2 and P3 on their own: the direction the first strong
+// character of a paragraph asks for, and whether there was one.
+//
+// Resolve answers P3's "otherwise, set it to zero" itself, which is the right
+// answer for a paragraph nobody has any other information about. A caller that
+// *does* have other information needs the question without the answer, and
+// "unicode-bidi: plaintext" is the case: css-writing-modes hands the direction
+// of a paragraph with no strong character to the paragraph before it, and to the
+// containing block where there is none — which is what a plain text editor does,
+// and is what the value is named after.
+//
+// Isolated runs are skipped exactly as P2 says: the contents of an isolate say
+// nothing about the text around it.
+func FirstStrong(text []rune) (Direction, bool) {
+	classes := make([]Class, len(text))
+	for i, r := range text {
+		classes[i] = ClassOf(r)
+	}
+	pdi, _ := matchPDI(classes)
+	for i := 0; i < len(classes); i++ {
+		switch classes[i] {
+		case L:
+			return LeftToRight, true
+		case R, AL:
+			return RightToLeft, true
+		case LRI, RLI, FSI:
+			i = pdi[i]
+		}
+	}
+	return LeftToRight, false
+}
