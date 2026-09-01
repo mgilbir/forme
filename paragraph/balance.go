@@ -59,7 +59,7 @@ var MaxBalanceLines = 6
 // Returns MaxUnit — no cap at all — when the box does not balance, when it is
 // one line already, or when it is longer than this engine will balance.
 func (br *Breaker) BalanceWidth(items []Item, width, indent style.Unit) style.Unit {
-	full := br.countLines(items, width, indent, MaxBalanceLines+1)
+	full, splitFull := br.countLines(items, width, indent, MaxBalanceLines+1)
 	if full < 2 || full > MaxBalanceLines {
 		return style.MaxUnit
 	}
@@ -69,7 +69,8 @@ func (br *Breaker) BalanceWidth(items []Item, width, indent style.Unit) style.Un
 	lo, hi := style.Unit(1), width
 	for hi.Sub(lo) > 1 {
 		mid := lo.Add(hi.Sub(lo).Div(2))
-		if br.countLines(items, mid, indent, full+1) <= full {
+		n, split := br.countLines(items, mid, indent, full+1)
+		if n <= full && (splitFull || !split) {
 			hi = mid
 			continue
 		}
@@ -77,6 +78,24 @@ func (br *Breaker) BalanceWidth(items []Item, width, indent style.Unit) style.Un
 	}
 	return hi
 }
+
+// A balanced measure may not be one that breaks a word open.
+//
+// §5.5 gives "overflow-wrap: break-word" its opportunities as a last resort —
+// "if there are no otherwise-acceptable break points in the line" — so they are
+// not something a balancer may reach for to even two lines out. The suite's
+// text-wrap-balance-overflow-001 is "CONTROLLING YOUR BU" in fifteen characters
+// with break-word set: the narrowest measure that still makes two lines is ten,
+// where it reads "CONTROLLIN" and "G YOUR BU", and the reference is
+// "CONTROLLING" and "YOUR BU".
+//
+// Unless the full width broke one too, in which case the word is wider than the
+// room and there is nothing to be done about it — refusing then would leave the
+// search with nothing to return.
+//
+// "overflow-wrap: anywhere" is the value that does not have this rule: §5.5
+// gives its opportunities to the intrinsic sizes as well, so they are real ones
+// and a balancer may use them like any other.
 
 // capAt is the balanced width for a line beginning at an item.
 func capAt(caps []style.Unit, i int) style.Unit {
@@ -182,14 +201,15 @@ func (br *Breaker) clampedReach(items []Item,
 func (br *Breaker) BalanceWidthInBands(items []Item, bands []style.Unit,
 	width, indent style.Unit) style.Unit {
 
-	full := br.countLinesInBands(items, bands, width, indent, MaxBalanceLines+1)
+	full, splitFull := br.countLinesInBands(items, bands, width, indent, MaxBalanceLines+1)
 	if full < 2 || full > MaxBalanceLines {
 		return style.MaxUnit
 	}
 	lo, hi := style.Unit(1), width
 	for hi.Sub(lo) > 1 {
 		mid := lo.Add(hi.Sub(lo).Div(2))
-		if br.countLinesInBands(items, bands, mid, indent, full+1) <= full {
+		n, split := br.countLinesInBands(items, bands, mid, indent, full+1)
+		if n <= full && (splitFull || !split) {
 			hi = mid
 			continue
 		}
@@ -205,10 +225,11 @@ func (br *Breaker) BalanceWidthInBands(items []Item, bands []style.Unit,
 // probed — the cap chooses break points inside the room the floats leave, it
 // does not widen a line past them.
 func (br *Breaker) countLinesInBands(items []Item, bands []style.Unit,
-	cap, indent style.Unit, limit int) int {
+	cap, indent style.Unit, limit int) (int, bool) {
 
 	n := 0
 	iByte := 0
+	split := false
 	for i := 0; i < len(items); {
 		for iByte == 0 && i < len(items) && items[i].Float != nil {
 			i++
@@ -225,15 +246,18 @@ func (br *Breaker) countLinesInBands(items []Item, bands []style.Unit,
 		if len(runs) > 0 || forced {
 			n++
 		}
+		if nextByte != 0 && next < len(items) && !items[next].Anywhere {
+			split = true
+		}
 		if n >= limit {
-			return n
+			return n, split
 		}
 		i, iByte = next, nextByte
 		if !CursorAdvanced(wasI, wasByte, i, iByte) {
 			break
 		}
 	}
-	return n
+	return n, split
 }
 
 // MaxBalancePasses bounds how many times a balanced box beside a float is laid
@@ -396,6 +420,11 @@ func (br *Breaker) BalanceScoredCaps(items []Item, bands []style.Unit,
 
 		out := answer{}
 		r := room(st.n)
+		// The same rule the width search has — see the note on BalanceWidth —
+		// asked once for this line: whether the greedy break here had to open a
+		// word, which is the only reason a narrower one may.
+		_, _, greedyByte, _, _ := br.BreakOneLine(items, st.i, st.iByte, r, 0)
+		mustSplit := greedyByte != 0
 		for w := r; w >= 0; {
 			runs, next, nextByte, _, _ := br.BreakOneLine(items, st.i, st.iByte, w, 0)
 			if !CursorAdvanced(st.i, st.iByte, next, nextByte) {
@@ -405,8 +434,10 @@ func (br *Breaker) BalanceScoredCaps(items []Item, bands []style.Unit,
 			for _, run := range runs {
 				used = used.Add(run.Width)
 			}
+			split := nextByte != 0 && !mustSplit &&
+				next < len(items) && !items[next].Anywhere
 			rest := best(state{next, nextByte, st.n + 1})
-			if rest.ok {
+			if rest.ok && !split {
 				slack := float64(r.Sub(used).Px())
 				score := slack*slack + rest.score
 				if !out.ok || score <= out.score {
@@ -462,9 +493,10 @@ func (br *Breaker) BalanceScoredCaps(items []Item, bands []style.Unit,
 // content has, and what that room is on each line is decided by the real loop
 // against the real bands; a count that placed floats would have to place them
 // once per probe and roll them back once per probe.
-func (br *Breaker) countLines(items []Item, width, indent style.Unit, limit int) int {
+func (br *Breaker) countLines(items []Item, width, indent style.Unit, limit int) (int, bool) {
 	n := 0
 	iByte := 0
+	split := false
 	for i := 0; i < len(items); {
 		for iByte == 0 && i < len(items) && items[i].Float != nil {
 			i++
@@ -481,8 +513,13 @@ func (br *Breaker) countLines(items []Item, width, indent style.Unit, limit int)
 		if len(runs) > 0 || forced {
 			n++
 		}
+		// A cursor left inside an item is a word broken open. See the note on
+		// BalanceWidth for which values may do that and which may not.
+		if nextByte != 0 && next < len(items) && !items[next].Anywhere {
+			split = true
+		}
 		if n >= limit {
-			return n
+			return n, split
 		}
 		i, iByte = next, nextByte
 		if !CursorAdvanced(wasI, wasByte, i, iByte) {
@@ -492,5 +529,5 @@ func (br *Breaker) countLines(items []Item, width, indent style.Unit, limit int)
 			break
 		}
 	}
-	return n
+	return n, split
 }

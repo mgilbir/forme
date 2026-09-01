@@ -83,8 +83,8 @@ func TestBandedCountingAgreesWithPlainCountingWhenTheBandsAreUniform(t *testing.
 		items := itemsOf(t, br, face, text, WhiteSpaceOf("collapse"), OverflowWrap{})
 		for _, width := range []float64{30, 60, 100, 200, 400} {
 			for _, indent := range []float64{0, 24} {
-				plain := br.countLines(items, u(width), u(indent), 99)
-				banded := br.countLinesInBands(items, []style.Unit{u(width)}, u(width), u(indent), 99)
+				plain, _ := br.countLines(items, u(width), u(indent), 99)
+				banded, _ := br.countLinesInBands(items, []style.Unit{u(width)}, u(width), u(indent), 99)
 				if plain != banded {
 					t.Errorf("%q at %gpx with a %gpx indent: counted %d lines plainly and "+
 						"%d in one uniform band — the two must agree where there is no "+
@@ -136,8 +136,8 @@ func TestABalancedWidthNeverWidensTheBoxAndNeverAddsALine(t *testing.T) {
 					t.Errorf("%q, %s, %gpx: balanced to %gpx, which is wider than the box",
 						text, bs.name, width, cap.Px())
 				}
-				full := br.countLinesInBands(items, bs.bands, u(width), 0, MaxBalanceLines+1)
-				capped := br.countLinesInBands(items, bs.bands, cap, 0, MaxBalanceLines+2)
+				full, _ := br.countLinesInBands(items, bs.bands, u(width), 0, MaxBalanceLines+1)
+				capped, _ := br.countLinesInBands(items, bs.bands, cap, 0, MaxBalanceLines+2)
 				if capped > full {
 					t.Errorf("%q, %s, %gpx: the box takes %d lines and the balanced "+
 						"width %gpx takes %d — balancing may even the lines and may not "+
@@ -164,8 +164,8 @@ func TestABalancedWidthIsTheNarrowestThatHolds(t *testing.T) {
 				if cap == style.MaxUnit || cap <= 2 {
 					continue
 				}
-				full := br.countLinesInBands(items, bs.bands, u(width), 0, MaxBalanceLines+1)
-				narrower := br.countLinesInBands(items, bs.bands, cap.Sub(1), 0, MaxBalanceLines+2)
+				full, _ := br.countLinesInBands(items, bs.bands, u(width), 0, MaxBalanceLines+1)
+				narrower, _ := br.countLinesInBands(items, bs.bands, cap.Sub(1), 0, MaxBalanceLines+2)
 				if narrower <= full {
 					t.Errorf("%q, %s, %gpx: balanced to %gpx, and one unit narrower still "+
 						"takes %d lines against the box's %d — the search stopped before "+
@@ -241,8 +241,8 @@ func TestANarrowerBandNeverNeedsFewerLines(t *testing.T) {
 		for _, width := range []float64{100, 200, 400} {
 			wide := []style.Unit{u(200), u(200), u(200), u(200)}
 			narrow := []style.Unit{u(120), u(120), u(120), u(120)}
-			nWide := br.countLinesInBands(items, wide, u(width), 0, 99)
-			nNarrow := br.countLinesInBands(items, narrow, u(width), 0, 99)
+			nWide, _ := br.countLinesInBands(items, wide, u(width), 0, 99)
+			nNarrow, _ := br.countLinesInBands(items, narrow, u(width), 0, 99)
 			if nNarrow < nWide {
 				t.Errorf("%q at %gpx: %d lines in 200px bands and %d in 120px ones — "+
 					"less room cannot need fewer lines", text, width, nWide, nNarrow)
@@ -269,8 +269,8 @@ func TestANarrowUniformBandActsExactlyLikeANarrowWidth(t *testing.T) {
 		for _, band := range []float64{30, 60, 100} {
 			for _, width := range []float64{200, 400} {
 				// The band is the narrower of the two, so it is what every line gets.
-				banded := br.countLinesInBands(items, []style.Unit{u(band)}, u(width), 0, 99)
-				plain := br.countLines(items, u(band), 0, 99)
+				banded, _ := br.countLinesInBands(items, []style.Unit{u(band)}, u(width), 0, 99)
+				plain, _ := br.countLines(items, u(band), 0, 99)
 				if banded != plain {
 					t.Errorf("%q: %d lines in a %gpx band probed at %gpx, and %d lines "+
 						"at a plain %gpx — a band narrower than the probe is the line's "+
@@ -297,8 +297,8 @@ func TestBandsRunningOutRepeatTheLastOne(t *testing.T) {
 		short := []style.Unit{u(200), u(60)}
 		long := []style.Unit{u(200), u(60), u(60), u(60), u(60), u(60), u(60), u(60)}
 		for _, width := range []float64{100, 200, 400} {
-			a := br.countLinesInBands(items, short, u(width), 0, 99)
-			b := br.countLinesInBands(items, long, u(width), 0, 99)
+			a, _ := br.countLinesInBands(items, short, u(width), 0, 99)
+			b, _ := br.countLinesInBands(items, long, u(width), 0, 99)
 			if a != b {
 				t.Errorf("%q at %gpx: %d lines with bands %v and %d with the last one "+
 					"written out — a band list that runs out repeats its last entry",
@@ -335,9 +335,10 @@ func TestTheNthLineGetsTheNthBand(t *testing.T) {
 			want = 1
 		}
 		// And everything after it, in the second.
-		want += br.countLines(items[next:], u(200), 0, 99)
+		more, _ := br.countLines(items[next:], u(200), 0, 99)
+		want += more
 
-		got := br.countLinesInBands(items, bands, u(400), 0, 99)
+		got, _ := br.countLinesInBands(items, bands, u(400), 0, 99)
 		if got != want {
 			t.Errorf("%q with bands %v: the banded count says %d lines, and breaking "+
 				"the first line at 60px and the rest at 200px gives %d — the nth line "+
@@ -364,15 +365,15 @@ func TestTheIndentIsTakenOffTheFirstLineInBandsToo(t *testing.T) {
 		WhiteSpaceOf("collapse"), OverflowWrap{})
 	const width, indent = 120.0, 24.0
 
-	plainNoIndent := br.countLines(items, u(width), 0, 99)
-	plainIndented := br.countLines(items, u(width), u(indent), 99)
+	plainNoIndent, _ := br.countLines(items, u(width), 0, 99)
+	plainIndented, _ := br.countLines(items, u(width), u(indent), 99)
 	if plainIndented <= plainNoIndent {
 		t.Fatalf("the fixture is dead: %gpx of text takes %d lines with no indent and "+
 			"%d with a %gpx one, so the indent decides nothing here and the comparison "+
 			"below would hold however the indent were handled",
 			width, plainNoIndent, plainIndented, indent)
 	}
-	banded := br.countLinesInBands(items, []style.Unit{u(width)}, u(width), u(indent), 99)
+	banded, _ := br.countLinesInBands(items, []style.Unit{u(width)}, u(width), u(indent), 99)
 	if banded != plainIndented {
 		t.Errorf("with a %gpx indent: %d lines plainly and %d in one uniform band — "+
 			"§16.1's indent comes off the first line either way",
