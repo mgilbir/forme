@@ -254,7 +254,74 @@ func LineVisualOrder(runs []Item) []int {
 		// reordering is the identity.
 		return nil
 	}
-	return bidi.VisualOrder(levels)
+	return visualOrderAcrossGaps(runs, levels, lineLevels, start, para.Level())
+}
+
+// visualOrderAcrossGaps is rule L2 over the items, with the characters that lie
+// *between* them kept in the reckoning.
+//
+// L2 reverses "any contiguous sequence of characters" at or above each level,
+// and contiguous is a fact about the text rather than about the items. An
+// explicit formatting code is a character with a level of its own and no item to
+// carry it: "לום<span style='unicode-bidi: isolate'>x</span>" resolves to levels
+// 1 1 1 0 2 0, where the level-0 isolate initiator stands between the Hebrew at
+// level 1 and the "x" at level 2 and keeps them in two separate runs. Ordering
+// the two items alone sees 1 2, reverses them together as one run at level one
+// or higher, and puts the isolated "x" in front of the Hebrew.
+//
+// So each gap gets a slot of its own, carrying the *lowest* level in it —
+// the level that decides which reversals the gap survives — and the slots are
+// dropped again once the order is known.
+func visualOrderAcrossGaps(runs []Item, levels, lineLevels []int, start, paraLevel int) []int {
+	const gap = -1
+	slots := make([]int, 0, len(levels)+4)
+	owner := make([]int, 0, len(levels)+4)
+	prevEnd := -1
+	for i, item := range runs {
+		if item.Para != nil && item.BidiEnd > item.BidiStart {
+			if prevEnd >= 0 && item.BidiStart > prevEnd {
+				if lo, ok := lowestLevel(lineLevels, prevEnd-start, item.BidiStart-start); ok {
+					slots = append(slots, lo)
+					owner = append(owner, gap)
+				}
+			}
+			prevEnd = item.BidiEnd
+		}
+		slots = append(slots, levels[i])
+		owner = append(owner, i)
+	}
+	if len(slots) == len(levels) {
+		// No gap anywhere, which is every ordinary line: the slots are the
+		// items and the order is the one the items alone give.
+		return bidi.VisualOrder(levels)
+	}
+	order := bidi.VisualOrder(slots)
+	out := make([]int, 0, len(levels))
+	for _, k := range order {
+		if owner[k] != gap {
+			out = append(out, owner[k])
+		}
+	}
+	return out
+}
+
+// lowestLevel is the smallest level over a range of a line's characters, and
+// whether the range held any.
+//
+// The smallest because that is the one that decides: L2 reverses a run of
+// characters at or above a level, so a gap breaks such a run exactly when
+// something in it is below that level, and the lowest is the first to do so.
+func lowestLevel(lineLevels []int, from, to int) (int, bool) {
+	lo, found := 0, false
+	for i := from; i < to && i < len(lineLevels); i++ {
+		if i < 0 {
+			continue
+		}
+		if !found || lineLevels[i] < lo {
+			lo, found = lineLevels[i], true
+		}
+	}
+	return lo, found
 }
 
 // The explicit formatting codes, by name rather than by number: this is the one
