@@ -871,7 +871,11 @@ func textInkAt(v DrawText, above, below style.Unit) Rect {
 	var width style.Unit
 	if v.Face != nil {
 		w, _ := style.FromPx(v.Face.Measure(v.Text, v.Size.Px()))
-		width = w.Add(v.CharSpacing.Mul(float64(len([]rune(v.Text)))))
+		// The characters letter-spacing goes after, and not every rune: a run
+		// of zero-width formatting characters is not a run of typographic
+		// character units, and counting them makes a word's ink reach a
+		// tracking-width past the page for each one. See paragraph.SpacedUnits.
+		width = w.Add(v.CharSpacing.Mul(float64(spacedUnits(v.Text))))
 	}
 	return placeRun(Rect{
 		Y: style.Unit(0).Sub(above),

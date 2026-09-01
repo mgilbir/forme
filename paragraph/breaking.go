@@ -597,6 +597,22 @@ func TrailingSpacing(item Item) style.Unit {
 	// and is between two characters that a line break puts on different lines.
 	// Two characters on different lines are not adjacent and get no gap.
 	out := item.Autospace
+	if AllIgnorable(item.Text) {
+		// A run of nothing but zero-width formatting characters. It has no
+		// character of its own for a spacing to follow, and the spacing that
+		// hangs past a line ending here is the one after the letter in front of
+		// it — which is this same number, because a run is cut wherever the
+		// letter-spacing changes, so the letter in front carries what this run
+		// declares.
+		//
+		// Reading it as suppressed instead is the reading the cursive clause
+		// below gives it, and it is wrong in the expensive direction: the line
+		// counts a spacing it does not draw, so a float shrink-wrapped around
+		// "\u200B" and two letters comes out one tracking wider than the text
+		// and then wraps the second letter to a line of its own. The suite
+		// writes it as letter-spacing-202.
+		return out.Add(item.Spacing.Letter)
+	}
 	if CursiveTrackingSuppresses(item.Text) {
 		return out
 	}

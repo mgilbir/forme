@@ -87,6 +87,7 @@ var (
 	isIdeographic                 = paragraph.IsIdeographic
 	spacingAdvance                = paragraph.SpacingAdvance
 	spacedUnits                   = paragraph.SpacedUnits
+	spacingAfter                  = paragraph.SpacingAfter
 	isCursiveScript               = paragraph.IsCursiveScript
 	cursiveTrackingSuppressesText = paragraph.CursiveTrackingSuppresses
 	isDefaultIgnorable            = paragraph.IsDefaultIgnorable
