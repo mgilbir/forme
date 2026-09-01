@@ -1074,7 +1074,8 @@ func (l *layouter) roomForLine(first inlineItem, origin flow, y, left, right, lo
 	style.Unit, style.Unit, style.Unit) {
 
 	for left != lo || right != hi {
-		if right.Sub(left) > 0 && (first.Space || first.Width <= right.Sub(left)) {
+		if room := right.Sub(left); room > 0 &&
+			(first.Space || first.NoWrap || first.Width <= room) {
 			break
 		}
 		next, ok := origin.ctx.nextBottomBelow(origin.y.Add(y))
