@@ -18,8 +18,10 @@ import (
 // "word-spacing: 100%" was silently no spacing at all — the worst kind of wrong,
 // because nothing was reported and the page merely came out narrow.
 //
-// letter-spacing is deliberately not the same: css-text-4 gives it no percentage
-// at all, so its basis stays zero.
+// letter-spacing is the same property in this respect and was read as though it
+// were not. css-text-4 gives it "normal | <length-percentage>" as well, and
+// letter-spacing-percent-001 states the same basis in the same words:
+// "percentage values of letter-spacing are relative to the current font-size".
 
 // wordGap is the distance from the start of one word to the start of the next,
 // which is the space's advance plus whatever word-spacing added to it.
@@ -90,23 +92,54 @@ func TestTheBasisIsTheElementsOwnSize(t *testing.T) {
 	}
 }
 
-func TestLetterSpacingTakesNoPercentage(t *testing.T) {
-	// css-text-4 gives letter-spacing no percentage, so one resolves to nothing
-	// and the text is set as though the declaration were not there.
-	const src = `<div>ab</div>`
-	var pct, none style.Unit
-	for _, op := range paintOf(t, src, `div { font-size: 20px; letter-spacing: 100% }`) {
+// charSpacing is what a run was set with, which is where letter-spacing shows.
+func charSpacing(t *testing.T, cssSrc string) style.Unit {
+	t.Helper()
+	for _, op := range paintOf(t, `<div>ab</div>`, cssSrc) {
 		if v, ok := op.(DrawText); ok {
-			pct = v.CharSpacing
+			return v.CharSpacing
 		}
 	}
-	for _, op := range paintOf(t, src, `div { font-size: 20px }`) {
+	t.Fatalf("nothing was drawn for %q", cssSrc)
+	return 0
+}
+
+// TestLetterSpacingTakesAPercentageOfTheFontSize.
+func TestLetterSpacingTakesAPercentageOfTheFontSize(t *testing.T) {
+	pct := charSpacing(t, `div { font-size: 20px; letter-spacing: 100% }`)
+	em := charSpacing(t, `div { font-size: 20px; letter-spacing: 1em }`)
+	none := charSpacing(t, `div { font-size: 20px }`)
+	if none != 0 {
+		t.Fatalf("a box with no letter-spacing was set with %v of it", none)
+	}
+	if pct != em {
+		t.Errorf("\"letter-spacing: 100%%\" gives %v and \"1em\" gives %v; the "+
+			"percentage is of the font size", pct, em)
+	}
+	// Half of it, to say that the number is read rather than the keyword.
+	if half := charSpacing(t, `div { font-size: 20px; letter-spacing: 50% }`); half.Mul(2) != em {
+		t.Errorf("\"50%%\" gives %v where \"1em\" gives %v", half, em)
+	}
+}
+
+// TestAnInheritedLetterSpacingPercentageIsResolvedByItsUser, which is the
+// fourth line of letter-spacing-percent-001: a "10%" on a div at
+// "font-size: 0.1em" holding a div at 20px gives the inner div two pixels of
+// spacing if the percentage was resolved where it was written, and two tenths
+// of that if it travels as a percentage and is resolved where it is used.
+func TestAnInheritedLetterSpacingPercentageIsResolvedByItsUser(t *testing.T) {
+	var inner, direct style.Unit
+	for _, op := range paintOf(t,
+		`<div id="outer"><div id="inner">ab</div></div>`,
+		`#outer { font-size: 2px; letter-spacing: 100% } #inner { font-size: 20px }`) {
 		if v, ok := op.(DrawText); ok {
-			none = v.CharSpacing
+			inner = v.CharSpacing
 		}
 	}
-	if pct != none {
-		t.Errorf("\"letter-spacing: 100%%\" gives %v of spacing against %v with "+
-			"none declared; the property takes no percentage", pct, none)
+	direct = charSpacing(t, `div { font-size: 20px; letter-spacing: 100% }`)
+	if inner != direct {
+		t.Errorf("an inherited \"100%%\" gives the inner element %v of spacing "+
+			"and the same declaration on it directly gives %v; the percentage "+
+			"is resolved by whoever uses it", inner, direct)
 	}
 }
