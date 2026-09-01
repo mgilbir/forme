@@ -95,6 +95,18 @@ b, strong { font-weight: bold }
 i, em, cite, var, dfn, address { font-style: italic }
 code, kbd, samp, pre, tt { font-family: monospace }
 pre { white-space: pre }
+
+/* CSS Text 4's own default sheet turns the ideograph spacing off inside the
+   elements whose content is preformatted. The spacing is a typesetter's, and
+   what these elements hold is text quoted exactly: a fragment of program source
+   is not prose, and putting an eighth of an em between a letter and an
+   ideograph in it changes what the reader is being shown.
+
+   text-autospace-preformatted-001 is the five below beside two paragraphs that
+   do take the spacing. A <textarea> and an <input> are the same case for the
+   same reason — what a control shows is the user's own text — and no test in
+   the suite reaches them. */
+pre, code, kbd, samp, tt, textarea, input { text-autospace: no-autospace }
 small { font-size: 0.83em }
 sub, sup { font-size: 0.83em }
 sub { vertical-align: sub }
