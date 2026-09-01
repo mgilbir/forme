@@ -383,7 +383,7 @@ func (p *parser) startTag(tk token) {
 	} else if rcdataElements[name] {
 		p.tok.raw, p.tok.rcdata = name, true
 	}
-	p.stripNewline = dropFirstNewline[name]
+	p.stripNewline = !p.tok.xml && dropFirstNewline[name]
 	p.open = append(p.open, el)
 
 	if len(p.open) > maxDepth {
