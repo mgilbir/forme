@@ -982,6 +982,13 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				// lines whose third holds only the mark is three lines tall.
 				y = y.Add(lh)
 			}
+			if forced {
+				// §9.5.2's clearance, asked of the break that ended the line.
+				// See breakClearance.
+				if c := breakClearance(items, next, origin); c.Sub(origin.y) > y {
+					y = c.Sub(origin.y)
+				}
+			}
 			if l.clampReached() {
 				// The clamp: everything after this line is discarded, which is what
 				// "continue: discard" means and what the ellipsis just said. It is
@@ -1086,6 +1093,43 @@ func (l *layouter) roomForLine(first inlineItem, origin flow, y, left, right, lo
 		left, right = origin.ctx.bandAt(origin.y.Add(y), lo, hi)
 	}
 	return y, left, right
+}
+
+// breakClearance is where a <br> that ended a line says the next one may begin.
+//
+// §9.5.2 applies "clear" to block-level elements and a <br> is not one, so on
+// the face of it "clear: both" on one does nothing. It does something in every
+// browser, and it does it because HTML says so rather than because CSS does:
+// the element's clear *attribute* maps to the property, and <br clear=all> is
+// older than the property is. The suite turns on it in
+// border-conflict-style-107, which lays sixteen floated tables out in four rows
+// with "br { clear: both }" between them — without it they come out in one row
+// sixteen tables long, each a line lower than the last.
+//
+// The answer is in the float context's own coordinates, which is what clearance
+// returns and what the caller compares against; a break that clears nothing
+// answers zero, which is below every y a line can be at.
+//
+// The property alone decides it, with no test that the break came from a <br>,
+// and that is a claim about the two places a forced break is made rather than a
+// looser rule. One is the <br> itself, whose item carries the element's own box;
+// the other is a preserved segment break, whose item carries the *text's* box —
+// which is anonymous, and "clear" does not inherit, so it is never anything but
+// none. A planted defect that drops the test moves nothing: not the suite, and
+// not a fixture with "clear: both" on the block or on a span around the text.
+func breakClearance(items []inlineItem, next int, origin flow) style.Unit {
+	if next <= 0 || next > len(items) {
+		return 0
+	}
+	br := items[next-1]
+	if !br.Forced {
+		return 0
+	}
+	box := heldBox(br.Box)
+	if box == nil || box.Clear == ClearNone {
+		return 0
+	}
+	return origin.ctx.clearance(box.Clear)
 }
 
 // strutOver raises a line's strut to cover the forced break that ended it.
