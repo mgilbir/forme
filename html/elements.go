@@ -203,8 +203,36 @@ var closedByStartTag = map[string]map[string]bool{
 	"tr":       setOf("tr", "tbody", "tfoot", "thead"),
 	"td":       setOf("td", "th", "tr", "tbody", "tfoot", "thead"),
 	"th":       setOf("td", "th", "tr", "tbody", "tfoot", "thead"),
-	"caption":  setOf("colgroup", "thead", "tbody", "tfoot", "tr"),
-	"colgroup": setOf("thead", "tbody", "tfoot", "tr"),
+	// HTML's "in caption" insertion mode ends a caption on any of these, by
+	// acting as though "</caption>" had been seen and reprocessing the tag —
+	// so a cell written straight after a caption is a cell of the table and
+	// not something inside the caption.
+	"caption": setOf("caption", "col", "colgroup", "tbody", "td", "tfoot",
+		"th", "thead", "tr"),
+	// colgroup is not in this table at all: what closes it is everything, and
+	// closedByStart says so. The entry would be a list of every element name
+	// there is.
+}
+
+// closedByStart reports whether an incoming start tag ends the element on top
+// of the stack.
+//
+// It is closedByStartTag with the one rule that a set cannot hold. HTML's "in
+// column group" insertion mode has a single positive case — a <col> — and sends
+// everything else to "anything else", which pops the colgroup and reprocesses
+// the tag in "in table". A <td> straight after a <colgroup> is therefore a cell
+// of the table, and the suite's border-conflict-style-107 writes exactly that
+// and loses the whole table when the cell goes inside the column group instead.
+//
+// What is still missing is the rest of "anything else": text and an end tag
+// also close a colgroup, and here they do not. Those need the insertion modes
+// this parser does not have, and the shapes that reach them —
+// "<colgroup>text<td>" — are markup nothing generates.
+func closedByStart(open, incoming string) bool {
+	if open == "colgroup" {
+		return incoming != "col"
+	}
+	return closedByStartTag[open][incoming]
 }
 
 // closedByParentEnd is the other half of optional end tags: these close when

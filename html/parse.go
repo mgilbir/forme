@@ -497,8 +497,7 @@ func (p *parser) enterBody() {
 func (p *parser) closeImplied(incoming string) {
 	for len(p.open) > 0 {
 		top := p.open[len(p.open)-1]
-		closers, ok := closedByStartTag[top.Name]
-		if !ok || !closers[incoming] {
+		if !closedByStart(top.Name, incoming) {
 			return
 		}
 		p.open = p.open[:len(p.open)-1]
