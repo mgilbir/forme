@@ -40,7 +40,8 @@ func usesSyllabicShaper(script uint16) bool {
 // It is the whole of the substitution pass for a run it handles: the reordering
 // decides which of the font's rules apply where, so it cannot be a step before
 // the general substitutions and has to be them.
-func (sh shaper) shapeSyllabic(buf []Glyph, runes []rune, script uint16) ([]Glyph, bool) {
+func (sh shaper) shapeSyllabic(buf []Glyph, runes []rune, script uint16,
+	before, after []rune) ([]Glyph, bool) {
 	if !usesSyllabicShaper(script) {
 		return buf, false
 	}
@@ -54,7 +55,7 @@ func (sh shaper) shapeSyllabic(buf []Glyph, runes []rune, script uint16) ([]Glyp
 		return sh.shapeMyanmar(buf, runes), true
 	}
 	if usesUniversalShaper(script) {
-		return sh.shapeUniversal(buf, runes), true
+		return sh.shapeUniversal(buf, runes, before, after), true
 	}
 	return buf, false
 }

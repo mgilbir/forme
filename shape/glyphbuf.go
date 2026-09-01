@@ -291,7 +291,8 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	// apply where, so it cannot be a step before the general substitutions and
 	// has to be the substitutions. No script both joins cursively and reorders,
 	// which is why these are alternatives rather than stages.
-	if out, ok := sh.shapeSyllabic(buf, runes, script); ok {
+	before, after := ctx.runes()
+	if out, ok := sh.shapeSyllabic(buf, runes, script, before, after); ok {
 		buf = out
 	} else {
 		// Which form each letter takes is decided now, while the glyphs still
@@ -299,7 +300,6 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 		// glyphs so that it survives what follows. The join controls have said
 		// all they have to say once that is done, and are taken out before any
 		// substitution can see them — see ignorable.go.
-		before, after := ctx.runes()
 		markJoiningForms(buf, runes, before, after)
 		buf = hideJoiners(buf, runes)
 		buf = sh.substitute(buf)
