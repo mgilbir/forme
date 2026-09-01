@@ -137,6 +137,26 @@ func breaksAfter(r rune) bool {
 // keeps a conjunct together — which is the virama half of LB28a.
 func isAksara(r rune) bool { return inLineBreakRanges(r, aksaraRanges[:]) }
 
+// NeedsDictionaryBreaking reports whether a character belongs to a script whose
+// words are found by lexical analysis: UAX #14's class SA.
+//
+// Thai, Lao, Khmer, Myanmar, Tai Le, New Tai Lue, Tai Tham and their
+// neighbours. They are written without spaces and without a mark between words
+// either, so the only way to know where a line may break is to know the
+// language. LB1 resolves the class to AL — "no opportunity anywhere" — and CSS
+// Text §5.1 does not accept that: "some form of fallback line breaking must
+// occur even if the UA doesn't know how to perform it correctly. Overflowing is
+// not allowed."
+//
+// So a line may end between two typographic character units of such a script,
+// which is a place the words are not and is the whole of what this engine can
+// offer. It is reported as well as done — see UnsupportedScript — because a
+// paragraph broken in the wrong places is a paragraph an author should be told
+// about rather than left to find.
+func NeedsDictionaryBreaking(r rune) bool {
+	return inLineBreakRanges(r, dictionaryRanges[:])
+}
+
 // isInseparable reports whether a character is one of UAX #14's class IN, the
 // ellipses. "line-break: loose" is the one value that lets a line break between
 // two of them; see inseparableRanges and the rule in breaks.go.

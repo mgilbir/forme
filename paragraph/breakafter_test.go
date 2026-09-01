@@ -19,7 +19,11 @@ func TestALineMayEndAfterOneOfThese(t *testing.T) {
 		{"an Ethiopic wordspace", "ተወልዱ፡ኵሉ", "ተወልዱ፡|ኵሉ"},
 		{"a Tibetan tsheg", "བོད་ཡིག", "བོད་|ཡིག"},
 		{"a Devanagari danda", "एक।दो", "एक।|दो"},
-		{"a Myanmar little section", "မြန်၊မာ", "မြန်၊|မာ"},
+		// Myanmar is also a dictionary script — see NeedsDictionaryBreaking —
+		// so the fallback offers a boundary between its clusters as well. The
+		// break after the little section is the one this row is about, and it
+		// is there among them.
+		{"a Myanmar little section", "မြန်၊မာ", "မြ|န်၊|မ|ာ"},
 		{"a Mongolian colon", "\u182E\u1804\u182F", "\u182E\u1804|\u182F"},
 		{"a hyphenation point", "co‧op", "co‧|op"},
 	} {

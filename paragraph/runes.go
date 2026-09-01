@@ -49,16 +49,14 @@ func hex(v uint32) string {
 // see bidi.go — so Hebrew, Arabic, Syriac and Thaana are set in the order they
 // are read. Shaping them was already forme's, and still is.
 func UnsupportedScript(r rune) (string, bool) {
-	switch {
-	// Scripts with no spaces between words, which need a dictionary to know
-	// where a line may break.
-	case r >= 0x0E00 && r <= 0x0E7F, // Thai
-		r >= 0x0E80 && r <= 0x0EFF, // Lao
-		r >= 0x1780 && r <= 0x17FF, // Khmer
-		r >= 0x1000 && r <= 0x109F: // Myanmar
+	if NeedsDictionaryBreaking(r) {
+		// The ranges are UAX #14's class SA rather than a list of blocks, which
+		// is the same set said by the standard that defines it — see
+		// NeedsDictionaryBreaking, which is also what breaks the text.
 		return "this script writes no spaces between words, so finding a line " +
-			"break needs a dictionary, which is not implemented; the text would " +
-			"run on as one unbreakable word", true
+			"break needs a dictionary, which is not implemented; the line is " +
+			"broken between typographic character units instead, which is not " +
+			"where the words are", true
 	}
 	return "", false
 }

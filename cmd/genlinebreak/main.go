@@ -202,6 +202,17 @@ var breakAfterClasses = map[string]bool{"BA": true}
 // virama rule is about — and SplitAtBreaks already refuses to cut inside one.
 var aksaraClasses = map[string]bool{"AK": true, "AS": true}
 
+// dictionaryClasses is UAX #14's SA: the South East Asian scripts whose words
+// are found by lexical analysis rather than by looking for a space.
+//
+// LB1 resolves SA to AL, which is "no opportunity anywhere", and notes that an
+// implementation with a dictionary does better. This engine has no dictionary
+// and CSS Text §5.1 does not accept the resolution either way: "some form of
+// fallback line breaking must occur even if the UA doesn't know how to perform
+// it correctly. Overflowing is not allowed." So the fallback is the boundary
+// between two typographic character units, which is where the words are not.
+var dictionaryClasses = map[string]bool{"SA": true}
+
 // prefixClasses is the class a line may end after under "loose" and no other
 // value: a currency sign or a number sign that belongs to the figure following
 // it.
@@ -241,7 +252,7 @@ func main() {
 	defer f.Close()
 
 	version := "unknown"
-	var spans, glue, strict, loose, prefix, postfix, inseparable, open, after, aksara []span
+	var spans, glue, strict, loose, prefix, postfix, inseparable, open, after, aksara, dict []span
 	seen := map[string]bool{}
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
@@ -291,6 +302,9 @@ func main() {
 		if aksaraClasses[class] {
 			aksara = append(aksara, span{lo, hi, class})
 		}
+		if dictionaryClasses[class] {
+			dict = append(dict, span{lo, hi, class})
+		}
 		if openClasses[class] {
 			open = append(open, span{lo, hi, class})
 		}
@@ -328,7 +342,8 @@ func main() {
 		}
 	}
 	for _, set := range []map[string]bool{looseBreakClasses, prefixClasses, postfixClasses,
-		inseparableClasses, openClasses, breakAfterClasses, aksaraClasses} {
+		inseparableClasses, openClasses, breakAfterClasses, aksaraClasses,
+		dictionaryClasses} {
 		for class := range set {
 			if !seen[class] {
 				fmt.Fprintf(os.Stderr, "genlinebreak: no character has class %s; has it been renamed?\n", class)
@@ -407,6 +422,14 @@ package paragraph
 // Tulu-Tigalari — scripts that write without spaces, whose only soft wrap
 // opportunity is the boundary between two clusters. See aksaraClasses in
 // cmd/genlinebreak for why the prohibitions inside a cluster need no table.`, version)
+	emit(&w, "dictionaryRanges", dict, `// The scripts whose words are found with a dictionary, UAX #14's class SA.
+// Unicode %s.
+//
+// %d ranges, merged from %d the file states separately: %s.
+// Thai, Lao, Khmer, Myanmar, Tai Le, New Tai Lue, Tai Tham and their
+// neighbours: written without spaces and without a mark between words either,
+// so the only way to know where a line may break is to know the language. See
+// dictionaryClasses in cmd/genlinebreak for what is done instead.`, version)
 	emit(&w, "openRanges", open, `// The opening brackets, UAX #14's class OP. Unicode %s.
 //
 // %d ranges, merged from %d the file states separately: %s.

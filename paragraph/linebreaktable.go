@@ -603,6 +603,51 @@ var aksaraRanges = [...]struct{ lo, hi rune }{
 	{0x16130, 0x16139},
 }
 
+// The scripts whose words are found with a dictionary, UAX #14's class SA.
+// Unicode 17.0.0.
+//
+// 34 ranges, merged from 123 the file states separately: SA 123.
+// Thai, Lao, Khmer, Myanmar, Tai Le, New Tai Lue, Tai Tham and their
+// neighbours: written without spaces and without a mark between words either,
+// so the only way to know where a line may break is to know the language. See
+// dictionaryClasses in cmd/genlinebreak for what is done instead.
+var dictionaryRanges = [...]struct{ lo, hi rune }{
+	{0x0E01, 0x0E3A},
+	{0x0E40, 0x0E4E},
+	{0x0E81, 0x0E82},
+	{0x0E84, 0x0E84},
+	{0x0E86, 0x0E8A},
+	{0x0E8C, 0x0EA3},
+	{0x0EA5, 0x0EA5},
+	{0x0EA7, 0x0EBD},
+	{0x0EC0, 0x0EC4},
+	{0x0EC6, 0x0EC6},
+	{0x0EC8, 0x0ECE},
+	{0x0EDC, 0x0EDF},
+	{0x1000, 0x103F},
+	{0x1050, 0x108F},
+	{0x109A, 0x109F},
+	{0x1780, 0x17D3},
+	{0x17D7, 0x17D7},
+	{0x17DC, 0x17DD},
+	{0x1950, 0x196D},
+	{0x1970, 0x1974},
+	{0x1980, 0x19AB},
+	{0x19B0, 0x19C9},
+	{0x19DE, 0x19DF},
+	{0x1A20, 0x1A5E},
+	{0x1A60, 0x1A7C},
+	{0x1AA0, 0x1AAD},
+	{0xA9E0, 0xA9EF},
+	{0xA9FA, 0xA9FE},
+	{0xAA60, 0xAAC2},
+	{0xAADB, 0xAADF},
+	{0x11700, 0x1171A},
+	{0x1171D, 0x1172B},
+	{0x1173A, 0x1173B},
+	{0x1173F, 0x11746},
+}
+
 // The opening brackets, UAX #14's class OP. Unicode 17.0.0.
 //
 // 92 ranges, merged from 92 the file states separately: OP 92.

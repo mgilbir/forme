@@ -260,6 +260,10 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 		// reason it suppresses the ideograph's — §5.2 forbids the implicit
 		// opportunities between typographic letter units.
 		beforeAksara := isAksara(r) && prev != 0 && !wb.KeepAll
+		// And §5.1's fallback for the scripts a dictionary would break: the
+		// same boundary, for the same reason, and known to be in the wrong
+		// place. See NeedsDictionaryBreaking.
+		beforeDictionary := NeedsDictionaryBreaking(r) && prev != 0 && !wb.KeepAll
 		// §5.3's "breaks are allowed ... between inseparable characters (such as
 		// U+2025 and U+2026)", which is an opportunity nothing else here makes.
 		//
@@ -286,7 +290,8 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 		offered := (deferBreak && !(wb.KeepAll && isLetterUnit(r)) && !startsSpacePiece(r, ws)) ||
 			(heldBreak && !startsSpacePiece(r, ws)) ||
 			(wb.BreakAll && !startsSpacePiece(r, ws)) || lb.Anywhere ||
-			beforeIdeograph || beforeAksara || betweenInseparable
+			beforeIdeograph || beforeAksara || beforeDictionary ||
+			betweenInseparable
 		// UAX #14 forbids a line beginning with a closing bracket, a hyphen or
 		// a non-starter, and an opportunity offered in front of one is not one.
 		// See linebreak.go for which rules that is and which it is not.
