@@ -832,18 +832,34 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	// document.
 	boundaryBreakSpaces := ws.BreakSpaces
 	if prev, ok := in.AfterBox.(*Box); ok {
-		if anc := commonAncestor(prev, b); anc != nil {
-			boundaryNoWrap = !whiteSpaceFor(anc.Style).Wrap
-			boundaryBreakSpaces = whiteSpaceFor(anc.Style).BreakSpaces
+		gov := commonAncestor(prev, b)
+		if in.AfterCollapsibleSpace {
+			// Except where a space left the opportunity, which is its own and
+			// not the boundary's. §3 gives it to the space — "there is a soft
+			// wrap opportunity after every white space character" — so what
+			// decides whether it may be taken is the element the space is in.
+			//
+			// The ancestor's answer is the same one everywhere the two elements
+			// agree, which is everywhere white-space is inherited rather than
+			// declared. Where they do not, the suite's
+			// white-space-wrap-after-nowrap-001 is the document: a nowrap block
+			// holding a wrapping span whose last character is a space, and then
+			// more of the block's own text. The common ancestor is the block and
+			// says no; the space is in the span and says yes, and the reference
+			// breaks the line.
+			gov = prev
+		}
+		if gov != nil {
+			boundaryNoWrap = !whiteSpaceFor(gov.Style).Wrap
+			boundaryBreakSpaces = whiteSpaceFor(gov.Style).BreakSpaces
 		}
 	}
-	// Read off the ancestor rather than off this box, because it is the same
-	// boundary the line above is about and §5.1 gives that boundary to the
-	// innermost element containing both characters. It is also a distinction no
-	// document makes: white-space inherits, so the two agree everywhere, and the
-	// suite gives 5594 clean passes with the ancestor and 5594 without it. It
-	// costs one expression on a walk that was already being made, and it says
-	// which element the rule belongs to.
+	// Read off the ancestor rather than off this box, because §5.1 gives the
+	// boundary to the innermost element containing both characters. When that
+	// note was written it was a distinction no document made — white-space
+	// inherits, so the two agree everywhere it is not declared, and the suite
+	// gave the same 5594 clean passes either way. The exception above is a
+	// document that does declare it on both, and there the two part.
 	//
 	// The narrower reading — that only an opportunity left behind by a *space*
 	// may be taken by one, since §3's sentence is about the space that leaves it
