@@ -171,6 +171,22 @@ var inseparableClasses = map[string]bool{"IN": true}
 // rules governing the soft wrap opportunities created by punctuation".
 var openClasses = map[string]bool{"OP": true}
 
+// breakAfterClasses is UAX #14's "break after" class: the characters a line may
+// end after, whatever follows them.
+//
+// It is where the Ethiopic wordspace, the Tibetan tsheg, the Devanagari danda,
+// the Khmer and Mongolian and Myanmar punctuation, the runic and Aegean marks
+// and a dozen other scripts' word separators live — every writing system whose
+// words are divided by a mark rather than by a space. Without it none of them
+// wraps at all: the whole paragraph is one unbreakable run.
+//
+// The classes this engine handles character by character are not here and do
+// not need to be. The spaces of BA are U+0020 and the other space separators,
+// which SplitAtBreaks reaches before this; the hyphens are HY and HH, which
+// have a case of their own because a line may not *begin* with one of them
+// either.
+var breakAfterClasses = map[string]bool{"BA": true}
+
 // prefixClasses is the class a line may end after under "loose" and no other
 // value: a currency sign or a number sign that belongs to the figure following
 // it.
@@ -210,7 +226,7 @@ func main() {
 	defer f.Close()
 
 	version := "unknown"
-	var spans, glue, strict, loose, prefix, postfix, inseparable, open []span
+	var spans, glue, strict, loose, prefix, postfix, inseparable, open, after []span
 	seen := map[string]bool{}
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
@@ -254,6 +270,9 @@ func main() {
 		if postfixClasses[class] {
 			postfix = append(postfix, span{lo, hi, class})
 		}
+		if breakAfterClasses[class] {
+			after = append(after, span{lo, hi, class})
+		}
 		if openClasses[class] {
 			open = append(open, span{lo, hi, class})
 		}
@@ -291,7 +310,7 @@ func main() {
 		}
 	}
 	for _, set := range []map[string]bool{looseBreakClasses, prefixClasses, postfixClasses,
-		inseparableClasses, openClasses} {
+		inseparableClasses, openClasses, breakAfterClasses} {
 		for class := range set {
 			if !seen[class] {
 				fmt.Fprintf(os.Stderr, "genlinebreak: no character has class %s; has it been renamed?\n", class)
@@ -350,6 +369,18 @@ package paragraph
 // UAX #14 has no unconditional rule about them — nothing there says a line may
 // not start with a per-cent sign — so this is the one part of the tailoring
 // that adds to the base table rather than taking away from it.`, version)
+	emit(&w, "breakAfterRanges", after, `// The characters a line may end after, UAX #14's class BA. Unicode %s.
+//
+// %d ranges, merged from %d the file states separately: %s.
+// Every writing system whose words are divided by a mark rather than by a space
+// is in here: the Ethiopic wordspace, the Tibetan tsheg, the Devanagari danda,
+// the Khmer, Mongolian and Myanmar punctuation, the runic and Aegean word
+// separators. Without them none of those scripts wraps at all.
+//
+// The BA characters this package reaches before this table are not a gap: the
+// spaces are U+0020 and the other space separators, which have their own arms
+// in SplitAtBreaks, and the hyphens are classes HY and HH, which have theirs
+// because a line may not begin with one either.`, version)
 	emit(&w, "openRanges", open, `// The opening brackets, UAX #14's class OP. Unicode %s.
 //
 // %d ranges, merged from %d the file states separately: %s.

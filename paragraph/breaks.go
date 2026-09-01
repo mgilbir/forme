@@ -455,6 +455,20 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 			flush()
 			breakNext = true
 
+		case breaksAfter(r):
+			// UAX #14's class BA: a line may end after this character whatever
+			// follows it. See breaksAfter for which characters those are and
+			// which of the class are handled above instead.
+			//
+			// Deferred rather than taken, for the reason the ideograph arm
+			// gives: the opportunity is at the *next* boundary, and only the
+			// character after this one can say whether a cluster ended there or
+			// whether a rule forbids a line to begin with it. A danda followed
+			// by a closing bracket offers nothing, which is LB13, and the
+			// deferral is what runs that rule.
+			cur.WriteRune(r)
+			deferBreak = true
+
 		case r == 0x00AD && hy.Soft() && !startsSpace(text, i):
 			// A soft hyphen. §6.1: the author has marked a place the word may be
 			// broken, and a hyphen is printed there if it is.

@@ -94,6 +94,31 @@ func noBreakBefore(r rune, lb LineBreak) bool {
 // line starts with a hyphen" and line-break-normal-hyphens-001, over the same
 // text, says it "ends with a hyphen".
 
+// breaksAfter reports whether a line may end after a character, whatever
+// follows it: UAX #14's class BA.
+//
+// It is where every writing system that divides its words with a mark rather
+// than with a space keeps that mark — the Ethiopic wordspace, the Tibetan
+// tsheg, the Devanagari danda, the Khmer, Mongolian and Myanmar punctuation.
+// Without it a paragraph of any of them is one unbreakable run: the engine
+// offers an opportunity at a space, at an ideograph and at a hyphen, and a
+// script that uses none of the three has nowhere to wrap.
+//
+// The spaces and the hyphens of the class do not reach it: SplitAtBreaks has an
+// arm for each of them earlier, because both need something this cannot say —
+// a space is trimmed or hangs at the end of a line, and a hyphen decides what a
+// line may *begin* with as well.
+//
+// The soft hyphen is class BA and is taken out here, which is the one exception
+// and is a CSS rule rather than a Unicode one. §6.1 makes the opportunity a
+// soft hyphen offers conditional on the hyphens property — "hyphens: none"
+// suppresses it — and SplitAtBreaks has an arm that asks. Left in, this table
+// answered first and broke fourteen of the suite's hyphens tests, every one of
+// them a document that said not to break there.
+func breaksAfter(r rune) bool {
+	return r != 0x00AD && inLineBreakRanges(r, breakAfterRanges[:])
+}
+
 // isInseparable reports whether a character is one of UAX #14's class IN, the
 // ellipses. "line-break: loose" is the one value that lets a line break between
 // two of them; see inseparableRanges and the rule in breaks.go.
