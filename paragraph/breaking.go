@@ -95,10 +95,14 @@ func withHyphen(items, line []Item, from, next, nextByte int, forced bool) []Ite
 		return line
 	}
 	// Capped so the append cannot write into the caller's items.
+	face, above, below := at.Face, at.Above, at.Below
+	if at.HyphenFace != nil {
+		face, above, below = at.HyphenFace, at.HyphenAbove, at.HyphenBelow
+	}
 	return append(line[:len(line):len(line)], Item{
 		Text: at.HyphenText, Width: at.Hyphen,
-		Box: at.Box, Face: at.Face, Size: at.Size,
-		Above: at.Above, Below: at.Below, Valign: at.Valign,
+		Box: at.Box, Face: face, Size: at.Size,
+		Above: above, Below: below, Valign: at.Valign,
 		Decorations: at.Decorations, Spacing: at.Spacing,
 		Offset: at.Offset, Leads: at.Leads,
 	})

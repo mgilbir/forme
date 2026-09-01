@@ -1299,8 +1299,18 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		// line may break here at all. Only the last run of a piece has an end
 		// for a hyphen to be at — a piece cut in two by a change of face is one
 		// word, and the hyphen belongs after all of it.
-		item.HyphenText = hyphenCharacter(b.Style["hyphenate-character"], a.run.Face)
-		item.Hyphen = l.br.MeasureSpaced(a.run.Face, item.HyphenText, a.size, a.spacing)
+		var face *shape.Face
+		item.HyphenText, face = l.hyphenRun(b, a.run.Face, b.Style["hyphenate-character"])
+		item.Hyphen = l.br.MeasureSpaced(face, item.HyphenText, a.size, a.spacing)
+		if face != a.run.Face {
+			// Set in another face, so measured against it: §10.8.1's rule for
+			// the run itself, four lines up, and for the same reason.
+			item.HyphenFace = face
+			item.HyphenAbove, item.HyphenBelow = above, below
+			if usesNormalLineHeight(b) {
+				item.HyphenAbove, item.HyphenBelow = l.leadingInFace(b, face)
+			}
+		}
 	}
 	if !p.Tab {
 		// A tab is measured against a tab stop when it lands, so there is
@@ -1399,4 +1409,55 @@ func (l *layouter) leadingItem(b *Box) inlineItem {
 	st := l.strutFor(b)
 	return inlineItem{Box: b, Inset: true, Above: st.Baseline,
 		Below: st.Height.Sub(st.Baseline), Leads: true, LeadingOnly: true}
+}
+
+// hyphenRun is the character a broken word ends with and the face to set it in.
+//
+// The face is asked because the character is chosen for its typography and not
+// for the font in hand: U+2010 HYPHEN is the right one and a great many faces do
+// not have it. Courier is one of them, so every monospaced document here was
+// hyphenated with U+002D HYPHEN-MINUS — permitted by §6.1, and not what a
+// reference that writes U+2010 draws.
+//
+// §8.1's fallback is what an ordinary run gets when its declared families cannot
+// set a character, and a hyphen is text like any other. The same call the marker
+// goes through finds a face that has it; where nothing does, hyphenCharacter's
+// own choice of U+002D stands, because a hyphen nobody can draw is worse than
+// the wrong hyphen.
+//
+// hyphens-vs-float-clearance-001 and -002 are the suite's case, and they are
+// exact to the pixel once the character matches: four floated monospace boxes,
+// each hyphenating one long word around a float.
+func (l *layouter) hyphenRun(b *Box, face *shape.Face, value string) (string, *shape.Face) {
+	// The face U+2010 would be set in, found the way any other character's is.
+	// hyphenCharacter chooses between the two hyphens by asking whether the face
+	// has the better one, and the face it should ask is the one the character
+	// would be drawn in rather than the one the box declared.
+	auto := l.faceThatHas(b, face, autoHyphen)
+	text := hyphenCharacter(value, auto)
+	if text == autoHyphen {
+		return text, auto
+	}
+	// A string the author wrote, or U+002D where no face had U+2010. Both are
+	// set in whatever can set them, for the same reason.
+	return text, l.faceThatHas(b, face, text)
+}
+
+// autoHyphen is U+2010 HYPHEN: the character "hyphenate-character: auto" asks
+// for where anything can draw it.
+const autoHyphen = "\u2010"
+
+// faceThatHas is the face a run of text would be set in: the box's own where it
+// can set the text, and §8.1's fallback where it cannot.
+func (l *layouter) faceThatHas(b *Box, face *shape.Face, text string) *shape.Face {
+	if face == nil || text == "" {
+		return face
+	}
+	if _, covered := face.GlyphID(firstRune(text)); covered {
+		return face
+	}
+	if runs := l.faceRunsFor(b, face, text); len(runs) > 0 && runs[0].Face != nil {
+		return runs[0].Face
+	}
+	return face
 }

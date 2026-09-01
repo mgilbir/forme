@@ -265,6 +265,24 @@ type Item struct {
 	// own fixtures expect — hyphens-manual-011 names two references, one for
 	// each, because the two are different glyphs in some faces.
 	HyphenText string
+	// HyphenFace is the face the hyphen is set in, which is not always the face
+	// of the word it ends.
+	//
+	// U+2010 is the typographically right character and a great many faces do
+	// not have it — Courier is one, and every monospaced document is set in it
+	// here. §8.1's fallback finds a face that does, exactly as it does for any
+	// other character the declared families cannot set, and the hyphen is text
+	// like any other. Nil where the word's own face will do.
+	HyphenFace *shape.Face
+	// HyphenAbove and HyphenBelow are how far the hyphen reaches above and below
+	// the baseline, which is not always as far as the word it ends.
+	//
+	// §10.8.1 measures a run against the font it is *in*, and a hyphen the
+	// word's own face could not set is in another one. Leaving the word's
+	// numbers on it made a line holding a fallback hyphen shorter than the same
+	// hyphen written into the text by hand, which is how every one of the
+	// suite's hyphens-manual references writes it.
+	HyphenAbove, HyphenBelow style.Unit
 	// Tab marks one preserved Tab. Its advance is not a property of the text —
 	// it is the distance to the next Tab stop, so it is resolved when the Tab
 	// has a place on a line and not before.
