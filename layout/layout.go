@@ -732,7 +732,8 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	// the answer changes what the rest of this function means: the length its
 	// lines are broken against becomes its height, and it seals its edges. See
 	// layout/writingmode.go.
-	turn := l.turns(b, containing, hasHeight)
+	turnTo := l.turns(b, containing, hasHeight)
+	turn := turnTo.vertical()
 
 	sealed := establishesBFC(b) || b == l.root || turn
 
@@ -884,6 +885,20 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	lineLength := width
 	if turn {
 		lineLength = childHeight
+		if !hasHeight {
+			// CSS Writing Modes §7.3 and §7.4. A vertical box with an automatic
+			// height has no length to break its lines against, and the length
+			// it uses is not the containing block's: the containing block runs
+			// the other way, and its block size is the one thing a box being
+			// laid out inside it cannot know. So the box falls back to the size
+			// of what it is being laid out on — the page here, a viewport in a
+			// browser — and shrinks to fit inside that.
+			//
+			// It is the same shrink-to-fit a float does, asked of the same
+			// measurement, because it is the same question: the horizontal
+			// engine's widths *are* this box's inline extents.
+			lineLength = l.shrinkToFit(b, l.avail.H)
+		}
 	}
 	contentHeight, hoistTop, hoistBottom, placedAnything :=
 		l.clampedChildren(b, frag, lineLength, topOpen, bottomOpen, inner)
@@ -891,14 +906,14 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 		// Everything inside is in the coordinates of a horizontal page. This is
 		// the quarter turn that puts it on this one, and it is the whole of what
 		// a vertical writing mode costs the rest of the engine.
-		turnContent(frag)
+		turnContent(frag, turnTo)
 		// What the content came to along the block axis, which is a distance
 		// across the page and not down it. The box is as tall as its declared
 		// height and its content can only overflow it sideways, which is a
 		// thing contentH has no way to say — so the honest value is the box's
 		// own, and stating it here is what keeps the §10.6.7 arithmetic below
 		// from reading a width as a height.
-		contentHeight = childHeight
+		contentHeight = lineLength
 	}
 
 	// What the content itself came to, which a declared height may raise the box

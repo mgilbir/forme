@@ -157,8 +157,6 @@ func TestABoxThisEngineCannotTurnIsReported(t *testing.T) {
 	for _, c := range []struct {
 		what, css, html, names string
 	}{
-		{"an automatic height", `#d { writing-mode: vertical-rl; width: 60px }`,
-			`<div id="d">ab</div>`, "height is automatic"},
 		{"an automatic width", `#d { writing-mode: vertical-rl; height: 100px }`,
 			`<div id="d">ab</div>`, "width is automatic"},
 		{"upright text", turnedCSS, `<div id="d">日本</div>`, "stand upright"},
@@ -169,6 +167,9 @@ func TestABoxThisEngineCannotTurnIsReported(t *testing.T) {
 			"text-combine-upright: all"},
 		{"a floated child", turnedCSS, `<div id="d"><p style="float: left">ab</p></div>`,
 			"floated or positioned"},
+		{"a positioned box", `#d { writing-mode: vertical-rl; width: 60px; height: 100px;
+		                          position: relative }`,
+			`<div id="d">ab</div>`, "positioned or replaced"},
 		{"a child with a width", turnedCSS, `<div id="d"><p style="width: 10px">ab</p></div>`,
 			`"width" is declared inside it`},
 		{"a child with a margin", turnedCSS, `<div id="d"><p style="margin-top: 1px">ab</p></div>`,
@@ -178,8 +179,8 @@ func TestABoxThisEngineCannotTurnIsReported(t *testing.T) {
 		{"another writing mode", turnedCSS,
 			`<div id="d"><p style="writing-mode: horizontal-tb">ab</p></div>`,
 			"changes the writing mode again"},
-		{"a mode that is not laid out", `#d { writing-mode: vertical-lr; width: 60px; height: 100px }`,
-			`<div id="d">ab</div>`, `only "vertical-rl" is laid out`},
+		{"a mode that is not laid out", `#d { writing-mode: sideways-lr; width: 60px; height: 100px }`,
+			`<div id="d">ab</div>`, `only "vertical-rl" and "vertical-lr" are laid out`},
 	} {
 		t.Run(c.what, func(t *testing.T) {
 			// The first, which is the outermost box's: turns() is asked in
@@ -213,7 +214,7 @@ func TestABoxThisEngineCannotTurnIsReported(t *testing.T) {
 func TestABoxThisEngineCannotTurnIsLaidOutHorizontally(t *testing.T) {
 	refused := turnedRuns(t, `<div id="d">ab</div>`,
 		`#d { font-family: Courier; font-size: 20px; line-height: 20px;
-		      writing-mode: vertical-lr; width: 60px; height: 100px }`)
+		      writing-mode: sideways-lr; width: 60px; height: 100px }`)
 	plain := turnedRuns(t, `<div id="d">ab</div>`,
 		`#d { font-family: Courier; font-size: 20px; line-height: 20px;
 		      width: 60px; height: 100px }`)
@@ -312,5 +313,101 @@ func TestAVerticalBlockIsNotCutIntoByAFloatBesideIt(t *testing.T) {
 		t.Errorf("with a float beside it the block drew its text at %v and without "+
 			"it at %v; a float outside a vertical block reaches neither along its "+
 			"lines nor across them", beside[0].At, alone[0].At)
+	}
+}
+
+// TestVerticalLRStacksItsLinesFromTheOtherEdge.
+//
+// The two vertical modes differ by one thing and this is it. Both run their
+// text down the page and turn their glyphs the same quarter turn clockwise;
+// vertical-rl stacks its lines back from the right edge and vertical-lr stacks
+// them forwards from the left. So the *first* line of one is where the last
+// line of the other is, and everything inside a line is identical.
+func TestVerticalLRStacksItsLinesFromTheOtherEdge(t *testing.T) {
+	const lrCSS = `body { margin: 0 }
+	#d { font-family: Courier; font-size: 20px; line-height: 20px;
+	     writing-mode: vertical-lr; width: 60px; height: 100px }`
+	rl := turnedRuns(t, `<div id="d">abcd<br>ef</div>`, turnedCSS)
+	lr := turnedRuns(t, `<div id="d">abcd<br>ef</div>`, lrCSS)
+	if len(rl) != 2 || len(lr) != 2 {
+		t.Fatalf("the fixtures drew %d and %d runs, want 2 each", len(rl), len(lr))
+	}
+	for _, r := range lr {
+		if !r.Sideways {
+			t.Errorf("the vertical-lr run %q was not marked sideways", r.Text)
+		}
+	}
+	// The box is 60 wide and a line is 20, so vertical-rl puts its first line in
+	// the column [40,60] and vertical-lr puts it in [0,20]. Both measure the
+	// baseline back from the same edge of their own line box, so the two
+	// baselines are two whole line columns apart.
+	if got := rl[0].At.X.Sub(lr[0].At.X).Px(); got != 40 {
+		t.Errorf("the first line of vertical-rl is %gpx to the right of the first "+
+			"line of vertical-lr, want 40 — one is at the right of a 60px box and "+
+			"the other at its left, and a line is 20 wide", got)
+	}
+	if got := lr[1].At.X.Sub(lr[0].At.X).Px(); got != 20 {
+		t.Errorf("the second vertical-lr line is %gpx to the right of the first, "+
+			"want 20 — lines stack from the left edge rightwards", got)
+	}
+	// And within a line nothing changed: the same offset from the baseline, the
+	// same start at the top.
+	if lr[0].At.Y != rl[0].At.Y || lr[1].At.Y != rl[1].At.Y {
+		t.Errorf("the vertical-lr lines begin at y=%v and %v and the vertical-rl "+
+			"lines at y=%v and %v; both run their text from the top downwards",
+			lr[0].At.Y, lr[1].At.Y, rl[0].At.Y, rl[1].At.Y)
+	}
+}
+
+// TestAVerticalBlockWithNoHeightFitsItsLinesToThePage.
+//
+// CSS Writing Modes §7.3. A vertical box with an automatic height has no length
+// to break its lines against, and the length it uses is not its containing
+// block's: the containing block runs the other way, and its block size is the
+// one thing a box laid out inside it cannot know. So the box falls back to the
+// size of what it is being laid out *on* — the page here — and shrinks to fit
+// inside that.
+func TestAVerticalBlockWithNoHeightFitsItsLinesToThePage(t *testing.T) {
+	const autoCSS = `body { margin: 0 }
+	#d { font-family: Courier; font-size: 20px; line-height: 20px;
+	     writing-mode: vertical-rl; width: 60px }`
+	root := layoutOf(t, 400, `<div id="d">abcd</div>`, autoCSS)
+	d := find(t, root, "d")
+	if got := d.ContentRect().H.Px(); got != 48 {
+		t.Errorf("a vertical box with no height came out %gpx tall, want 48 — four "+
+			"Courier characters at 20px are 12px each, and the box shrinks to fit "+
+			"them rather than filling the page", got)
+	}
+	if got := d.ContentRect().W.Px(); got != 60 {
+		t.Errorf("its width is %gpx, want 60 — the block axis is still declared", got)
+	}
+	// And the fallback really is a ceiling: text longer than the page is cut to
+	// the page's height and wraps into a second column rather than running off
+	// the bottom. The page here is 10000px, so this asks the other way round —
+	// that a short paragraph is *not* stretched to it.
+	if got := d.ContentRect().H.Px(); got >= 10000 {
+		t.Errorf("the box is %gpx tall; the fallback is an available size to shrink "+
+			"inside, not a size to fill", got)
+	}
+}
+
+// TestAFloatedVerticalBlockIsTurnedLikeAnyOther.
+//
+// A float already seals its own formatting context, which is the one thing a
+// turned box needs from the box it is; the rest of the float rules are about
+// where the box goes and are answered before its content is laid out at all.
+func TestAFloatedVerticalBlockIsTurnedLikeAnyOther(t *testing.T) {
+	runs := turnedRuns(t, `<div id="d" style="float: left">abcd</div>`, turnedCSS)
+	if len(runs) != 1 {
+		t.Fatalf("the fixture drew %d runs, want 1", len(runs))
+	}
+	if !runs[0].Sideways {
+		t.Error("a floated vertical block was not turned")
+	}
+	plain := turnedRuns(t, `<div id="d">abcd</div>`, turnedCSS)
+	if runs[0].At != plain[0].At {
+		t.Errorf("floated, the text is at %v; in flow at %v. The float is at the "+
+			"same place on this page and its content is turned the same way",
+			runs[0].At, plain[0].At)
 	}
 }

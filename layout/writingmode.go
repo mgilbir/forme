@@ -134,16 +134,33 @@ func turnEdges(e Edges) Edges {
 // turnRect maps one rectangle of the horizontal frame onto the page.
 //
 // mirror is the physical width of the content box the rectangle is positioned
-// inside — the block axis of a vertical-rl box runs leftwards from its
-// block-start edge, which is its right one, so the block coordinate is measured
-// back from there.
+// inside, and it is what the two vertical modes differ by. Both run their text
+// from the top downwards and turn their glyphs the same quarter turn clockwise;
+// what one does and the other does not is stack its lines *back* from the right
+// edge. So vertical-rl measures the block coordinate from the mirror and
+// vertical-lr takes it as it stands.
 //
-// The inline coordinate needs no mirror: text runs from the top downwards in
-// both vertical modes, which is the same direction a horizontal line's own
-// coordinate already runs in.
-func turnRect(r Rect, mirror style.Unit) Rect {
+// That is the whole of the difference, and it is worth saying why it is so
+// small. The block-start side of a vertical-lr box is its left, so a reading of
+// CSS Writing Modes §4.3 that follows "line-over is the block-start side"
+// through to the glyphs would have this mode set its text the other way up.
+// It does not: §5.1's "mixed" turns a rotatable character ninety degrees
+// *clockwise* in both vertical modes, which is exactly why sideways-lr had to
+// be added for the authors who want the other one. So the glyphs' own up is to
+// the right in vertical-lr as it is in vertical-rl, and everything measured
+// from a baseline — half-leading, ascent, §10.8.1's raise — is measured the
+// same way in both. Only the lines stack the other way.
+//
+// The inline coordinate never takes a mirror. Text runs from the top downwards
+// in both, which is the direction a horizontal line's own coordinate already
+// runs in.
+func turnRect(r Rect, mode writingMode, mirror style.Unit) Rect {
+	x := r.Y
+	if mode == verticalRL {
+		x = mirror.Sub(r.Y).Sub(r.H)
+	}
 	return Rect{
-		X: mirror.Sub(r.Y).Sub(r.H),
+		X: x,
 		Y: r.X,
 		W: r.H,
 		H: r.W,
@@ -162,23 +179,23 @@ func turnRect(r Rect, mirror style.Unit) Rect {
 // nested block starts at *that* block's right edge. Composing the turn level by
 // level like this is what makes it a rigid motion of the whole subtree rather
 // than of its first generation.
-func turnContent(f *Fragment) {
+func turnContent(f *Fragment, mode writingMode) {
 	mirror := f.ContentRect().W
 	for i := range f.Lines {
-		turnLine(&f.Lines[i], mirror)
+		turnLine(&f.Lines[i], mode, mirror)
 	}
 	for _, c := range f.Children {
-		turnFragment(c, mirror)
+		turnFragment(c, mode, mirror)
 	}
 }
 
-func turnFragment(f *Fragment, mirror style.Unit) {
+func turnFragment(f *Fragment, mode writingMode, mirror style.Unit) {
 	if f == nil {
 		return
 	}
-	f.BorderRect = turnRect(f.BorderRect, mirror)
+	f.BorderRect = turnRect(f.BorderRect, mode, mirror)
 	for i := range f.bgBands {
-		f.bgBands[i] = turnRect(f.bgBands[i], mirror)
+		f.bgBands[i] = turnRect(f.bgBands[i], mode, mirror)
 	}
 	f.Margin = turnEdges(f.Margin)
 	f.Border = turnEdges(f.Border)
@@ -187,7 +204,7 @@ func turnFragment(f *Fragment, mirror style.Unit) {
 	// only by the overflow arithmetic, which asks it of the box it belongs to
 	// and never compares it across a turn, so it keeps its name and changes its
 	// meaning here along with everything else.
-	turnContent(f)
+	turnContent(f, mode)
 }
 
 // turnLine turns one line box and the inline boxes hanging off it.
@@ -198,17 +215,17 @@ func turnFragment(f *Fragment, mirror style.Unit) {
 // — see painter.lines. Doing it here instead would mean turning a position that
 // is not a rectangle and has no extent, which is exactly the arithmetic that
 // belongs beside the baseline it is measured from.
-func turnLine(l *LineFragment, mirror style.Unit) {
-	l.Rect = turnRect(l.Rect, mirror)
+func turnLine(l *LineFragment, mode writingMode, mirror style.Unit) {
+	l.Rect = turnRect(l.Rect, mode, mirror)
 	l.Sideways = true
 	for _, ib := range l.Boxes {
 		// An inline box's fragment is positioned in the block's content
 		// coordinates, the same ones the line is, so it takes the same mirror.
 		// Its own children are the boxes further in, which turnFragment reaches
 		// through turnContent.
-		ib.BorderRect = turnRect(ib.BorderRect, mirror)
+		ib.BorderRect = turnRect(ib.BorderRect, mode, mirror)
 		for i := range ib.bgBands {
-			ib.bgBands[i] = turnRect(ib.bgBands[i], mirror)
+			ib.bgBands[i] = turnRect(ib.bgBands[i], mode, mirror)
 		}
 		ib.Margin = turnEdges(ib.Margin)
 		ib.Border = turnEdges(ib.Border)
@@ -226,10 +243,10 @@ func turnLine(l *LineFragment, mirror style.Unit) {
 // whose parent already answered, and a box inside an untuned vertical parent is
 // laid out horizontally because its parent was — the finding belongs on the
 // parent, and repeating it on every descendant would bury it.
-func (l *layouter) turns(b *Box, containing style.Unit, hasHeight bool) bool {
+func (l *layouter) turns(b *Box, containing style.Unit, hasHeight bool) writingMode {
 	mode := writingModeOf(b)
 	if mode == writingModeOf(b.Parent) {
-		return false
+		return horizontalTB
 	}
 	if mode == horizontalTB {
 		// A box that turns *back*, inside a vertical ancestor. There is nothing
@@ -237,18 +254,23 @@ func (l *layouter) turns(b *Box, containing style.Unit, hasHeight bool) bool {
 		// nothing to do either: the ancestor it sits in was refused, because
 		// refusesToTurn will not turn a box holding one of these, so the whole
 		// subtree is already being laid out horizontally.
-		return false
+		return horizontalTB
 	}
-	if mode == verticalRL {
-		why := l.refusesToTurn(b, containing, hasHeight)
+	if mode == verticalRL || mode == verticalLR {
+		why := l.refusesToTurn(b, mode, containing, hasHeight)
 		if why == "" {
-			return true
+			return mode
 		}
 		l.reportWritingMode(b, mode, why)
-		return false
+		return horizontalTB
 	}
-	l.reportWritingMode(b, mode, "only \"vertical-rl\" is laid out")
-	return false
+	// The two sideways modes. They are the same quarter turn as these with the
+	// upright characters taken out — "sideways-rl" is exactly what this file
+	// does, for every character rather than only the rotatable ones — and
+	// "sideways-lr" is the other quarter turn, which nothing here expresses.
+	// Neither is laid out yet.
+	l.reportWritingMode(b, mode, "only \"vertical-rl\" and \"vertical-lr\" are laid out")
+	return horizontalTB
 }
 
 func (l *layouter) reportWritingMode(b *Box, mode writingMode, why string) {
@@ -274,30 +296,28 @@ func (l *layouter) reportWritingMode(b *Box, mode writingMode, why string) {
 // refused here is laid out exactly as it was before this file existed and is
 // reported, which is the honest answer; a box turned that should not have been
 // is a page that is quietly wrong.
-func (l *layouter) refusesToTurn(b *Box, containing style.Unit, hasHeight bool) string {
-	if b.Outer != OuterBlock || b.Inner != InnerFlow {
-		// A table, a flow root, an inline-block. Each has sizing rules of its
+func (l *layouter) refusesToTurn(b *Box, mode writingMode, containing style.Unit, hasHeight bool) string {
+	if b.Outer != OuterBlock || (b.Inner != InnerFlow && b.Inner != InnerFlowRoot) {
+		// A table, an inline-block, a table part. Each has sizing rules of its
 		// own that resolve the two axes together, and turning the result would
 		// mean turning arithmetic this has not been through.
+		//
+		// A flow root is not one of those. It is ordinary block layout that
+		// seals its own formatting context, which is the one thing a turned box
+		// needs from the box it is — and it is what a float is, so refusing it
+		// would refuse every floated vertical box in the suite.
 		return "it is not an ordinary block box"
 	}
-	if b.Float != FloatNone || b.Position != PositionStatic || b.Replaced != nil {
-		return "it is floated, positioned or replaced"
+	if b.Position != PositionStatic || b.Replaced != nil {
+		return "it is positioned or replaced"
 	}
-	if !hasHeight {
-		// The height of a vertical box is the length of its lines, and lines
-		// have to be broken against a length that is known before they are
-		// broken. CSS Writing Modes §7.3 has an answer for the automatic case —
-		// the orthogonal flow rules, which fall back to the size of the viewport
-		// — and it is a different feature from this one.
-		return "its height is automatic, so there is no length to break its lines against"
-	}
+	_ = hasHeight
 	if _, ok := l.explicitWidth(b, containing); !ok {
 		// And the width is the block axis, which an automatic value would fill
 		// the containing block with rather than fit to the lines inside.
 		return "its width is automatic, so there is no room for its lines to stack in"
 	}
-	return l.subtreeRefusesToTurn(b, b)
+	return l.subtreeRefusesToTurn(b, mode, b)
 }
 
 // The properties whose meaning is a side of the page rather than a side of the
@@ -339,7 +359,7 @@ var physicalGeometry = [...]struct{ name, initial string }{
 //
 // The walk is over boxes and not over fragments because it runs before layout:
 // what it decides is how the box is laid out, so nothing has been laid out yet.
-func (l *layouter) subtreeRefusesToTurn(root, b *Box) string {
+func (l *layouter) subtreeRefusesToTurn(root *Box, mode writingMode, b *Box) string {
 	if b != root {
 		if b.Float != FloatNone || b.Position != PositionStatic {
 			return "it holds a floated or positioned box, whose sides are the page's"
@@ -352,7 +372,7 @@ func (l *layouter) subtreeRefusesToTurn(root, b *Box) string {
 		default:
 			return "it holds a table or another box with sizing rules of its own"
 		}
-		if writingModeOf(b) != verticalRL {
+		if writingModeOf(b) != mode {
 			return "it holds a box that changes the writing mode again"
 		}
 		// Only for a box an author wrote. An anonymous box and a text box have
@@ -383,7 +403,7 @@ func (l *layouter) subtreeRefusesToTurn(root, b *Box) string {
 		return "\"text-combine-upright: " + combine + "\" asks for a run set across the line, which this engine does not do"
 	}
 	for _, c := range b.Children {
-		if why := l.subtreeRefusesToTurn(root, c); why != "" {
+		if why := l.subtreeRefusesToTurn(root, mode, c); why != "" {
 			return why
 		}
 	}
