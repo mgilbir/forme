@@ -543,6 +543,11 @@ func trimRunSpace(v DrawText) DrawText {
 	}
 	if lead := v.Text[:strings.Index(v.Text, trimmed)]; lead != "" {
 		w, _ := style.FromPx(v.Face.Measure(lead, v.Size.Px()))
+		if v.Upright {
+			// One em per character, which is what the run was placed with. See
+			// DrawText.Upright.
+			w = v.Size.Mul(float64(uprightUnits(lead)))
+		}
 		w = w.Add(v.CharSpacing.Mul(float64(len([]rune(lead)))))
 		// Past the space the run starts with, in whichever direction the run
 		// runs: down the page for a sideways one. See runAlong.

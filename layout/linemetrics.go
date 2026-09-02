@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"github.com/mgilbir/forme/paragraph"
 	"strings"
 
 	"github.com/mgilbir/forme/shape"
@@ -271,7 +272,14 @@ func (l *layouter) spaceAdvance(block *Box, fallback *shape.Face) style.Unit {
 		face = f
 	}
 	s := l.spacingFor(block)
-	return l.br.Measure(face, " ", block.FontSize).Add(s.Letter).Add(s.Word)
+	// Measured the way the block's own lines are measured. A tab stop is a
+	// multiple of the space's advance, and on an upright vertical line a space
+	// advances one em like every other character — so a stop counted in the
+	// face's horizontal advance is a stop in the wrong unit, and a tab in such a
+	// block landed at three fifths of the column it belongs in.
+	return l.br.MeasureSpacedInContext(face, " ", block.FontSize,
+		paragraph.TextSpacing{}, "", "", true, l.uprightText(block)).
+		Add(s.Letter).Add(s.Word)
 }
 
 // isNumberValue reports whether a value is a bare number rather than a length,

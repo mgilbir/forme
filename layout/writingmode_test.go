@@ -956,3 +956,75 @@ func TestAVerticalBoxIsNotTurnedWhereItsWidthWouldBeMeasured(t *testing.T) {
 			"nothing is measured")
 	}
 }
+
+// TestATabStopInAnUprightBlockIsCountedInEms.
+//
+// A tab stop is a multiple of the space's advance, and on an upright vertical
+// line a space advances one em like every other character. Counted in the face's
+// horizontal advance instead, a tab in such a block landed at three fifths of
+// the column it belongs in — Courier's twelve pixels where the line is set in
+// twenties.
+func TestATabStopInAnUprightBlockIsCountedInEms(t *testing.T) {
+	const css = `body { margin: 0 }
+	#d { font-family: Courier; font-size: 20px; line-height: 20px;
+	     white-space: pre; width: 200px; height: 400px;
+	     writing-mode: vertical-rl; text-orientation: upright }`
+	runs := turnedRuns(t, "<div id=\"d\">a\tb</div>", css)
+	var after *DrawText
+	for i := range runs {
+		if runs[i].Text == "b" {
+			after = &runs[i]
+		}
+	}
+	if after == nil {
+		t.Fatal("the fixture drew no run after the tab")
+	}
+	// tab-size is eight and the upright advance is an em, so the stop is 160px
+	// down the line. The default eight Courier advances would be 96.
+	if got := after.At.Y.Px(); got != 160 {
+		t.Errorf("the text after a tab is %gpx down the line, want 160 — eight "+
+			"stops of one em, and not eight of Courier's twelve pixels", got)
+	}
+}
+
+// TestTrimmingASpaceOffAnUprightRunMovesItAnEm.
+//
+// The comparison trims the white space a run begins with and moves the run's
+// origin past it, so that two documents that space their words differently are
+// still compared by the words. How far to move is the space's advance, and on
+// an upright vertical line that is one em rather than whatever the face makes a
+// space.
+//
+// It is checked against the helper rather than through a document because the
+// case needs a preserved leading space inside a turned box, and what would be
+// wrong is a mark placed one advance out — which is the kind of difference this
+// comparison exists to find and would then invent.
+func TestTrimmingASpaceOffAnUprightRunMovesItAnEm(t *testing.T) {
+	// A face whose space is *not* an em, so that the two answers are different
+	// numbers: Ahem's is exactly one and would agree by accident.
+	plain := turnedRuns(t, `<div id="d">x</div>`, turnedCSS)
+	if len(plain) != 1 || plain[0].Face == nil {
+		t.Fatal("the fixture drew no run to take a face from")
+	}
+	face, size := plain[0].Face, plain[0].Size
+	if w := face.Measure(" ", size.Px()); w == size.Px() {
+		t.Fatalf("this face's space is one em (%gpx), so the fixture cannot tell "+
+			"an em from an advance", w)
+	}
+	run := DrawText{
+		At: Point{}, Text: " x", Face: face, Size: size,
+		Sideways: true, Upright: true, Color: style.RGBA{A: 1},
+	}
+	got := trimRunSpace(run)
+	if got.Text != "x" {
+		t.Fatalf("the run was trimmed to %q, want \"x\"", got.Text)
+	}
+	if got.At.Y.Px() != 20 {
+		t.Errorf("trimming the space moved the run %gpx down the line, want 20 — "+
+			"one em, which is what an upright space advances", got.At.Y.Px())
+	}
+	if got.At.X != run.At.X {
+		t.Errorf("trimming the space moved the run across the line to %v; it "+
+			"advances along it", got.At.X)
+	}
+}
