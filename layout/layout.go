@@ -910,6 +910,19 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	contentHeight, hoistTop, hoistBottom, placedAnything :=
 		l.clampedChildren(b, frag, lineLength, topOpen, bottomOpen, inner)
 	if turn {
+		if _, declared := l.explicitWidth(b, containing); !declared {
+			// The block axis of a turned box is its *width*, so a width of auto
+			// is the same question an automatic height asks of an ordinary
+			// block: how far did the content get. It is not the question
+			// resolveWidth answered, which was how much room the containing
+			// block has — that is the answer for a box whose lines run across
+			// the page, and this box's stack down it.
+			//
+			// Set before the turn and not after, because the turn measures the
+			// block axis back from this box's own content edge. See turnRect.
+			frag.BorderRect.W = contentHeight.
+				Add(padding.Horizontal()).Add(border.Horizontal())
+		}
 		// Everything inside is in the coordinates of a horizontal page. This is
 		// the quarter turn that puts it on this one, and it is the whole of what
 		// a vertical writing mode costs the rest of the engine.

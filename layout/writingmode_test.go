@@ -157,9 +157,11 @@ func TestABoxThisEngineCannotTurnIsReported(t *testing.T) {
 	for _, c := range []struct {
 		what, css, html, names string
 	}{
-		{"an automatic width", `#d { writing-mode: vertical-rl; height: 100px }`,
-			`<div id="d">ab</div>`, "width is automatic"},
-		{"upright text", turnedCSS, `<div id="d">日本</div>`, "stand upright"},
+		{"a float with an automatic width",
+			`#d { writing-mode: vertical-rl; height: 100px; float: left }`,
+			`<div id="d">ab</div>`, "float with an automatic width"},
+		{"text that needs both orientations", turnedCSS, `<div id="d">ab日本</div>`,
+			"standing upright and characters lying along the line at once"},
 		{"text-combine-upright", turnedCSS,
 			`<div id="d"><span style="text-combine-upright: all">12</span></div>`,
 			"text-combine-upright: all"},
@@ -573,17 +575,97 @@ func TestSidewaysTurnsEveryCharacterIncludingTheUprightOnes(t *testing.T) {
 			}
 		}
 	}
-	// And under "mixed" the same box is refused, because one line cannot hold
-	// both orientations here.
+	// And under "mixed" the same box is turned too — upright, because that is
+	// what mixed says when every character in the box is one. What mixed cannot
+	// have is both at once, and that is the case that is refused.
+	runs := turnedRuns(t, `<div id="d">日本</div>`, turnedCSS)
+	for _, r := range runs {
+		if !r.Upright {
+			t.Errorf("under the initial orientation the run %q was not set upright, "+
+				"and every character in it stands upright", r.Text)
+		}
+	}
 	var said string
-	for _, f := range findingsOf(t, `<div id="d">日本</div>`,
+	for _, f := range findingsOf(t, `<div id="d">ab日本</div>`,
 		`#d { writing-mode: vertical-rl; width: 60px; height: 100px }`) {
 		if f.Property == "writing-mode" && said == "" {
 			said = f.Message
 		}
 	}
-	if !strings.Contains(said, "stand upright on a vertical line") {
-		t.Errorf("a box of ideographs in the initial orientation was reported as "+
-			"%q, which does not name the characters that stand upright", said)
+	if !strings.Contains(said, "at once") {
+		t.Errorf("a box of Latin and ideographs in the initial orientation was "+
+			"reported as %q, which does not name the mixture", said)
+	}
+}
+
+// TestMixedIsWhicheverOrientationTheTextNeeds.
+//
+// "text-orientation: mixed" is the initial value, so it is what almost every
+// vertical box is set in, and it does not name an orientation — it says to use
+// the one each character needs. Where a box's characters all need the same one,
+// that is the orientation the box is set in, and this engine can set it.
+//
+// The case that matters is the one the suite writes:
+// text-transform-fullwidth-002 puts "Text sample" in a vertical box with no
+// orientation and asks for it upright, which is what mixed says once the
+// transform has made every letter a fullwidth form. The box tree carries the
+// transformed text, so the question is asked of what will be drawn.
+func TestMixedIsWhicheverOrientationTheTextNeeds(t *testing.T) {
+	plain := turnedRuns(t, `<div id="d">ab</div>`, turnedCSS)
+	if len(plain) != 1 || plain[0].Upright {
+		t.Fatalf("Latin in the initial orientation drew %d runs, upright=%v; it "+
+			"lies along the line", len(plain), plain[0].Upright)
+	}
+	wide := turnedRuns(t, `<div id="d" style="text-transform: full-width">ab</div>`,
+		turnedCSS)
+	if len(wide) == 0 {
+		t.Fatal("the full-width box drew nothing")
+	}
+	for _, r := range wide {
+		if !r.Upright {
+			t.Errorf("the run %q is not upright; full-width forms stand upright and "+
+				"mixed asks for the orientation each character needs", r.Text)
+		}
+	}
+	// The advance follows: an upright run is an em a character whatever the
+	// face's advance is, so the two runs are not the same length down the line.
+	// Two Courier characters are 24px lying along it and 40px standing up.
+	if got := textInk(plain[0]).H.Px(); got != 24 {
+		t.Errorf("two characters lying along the line reach %gpx, want 24", got)
+	}
+	if got := textInk(wide[0]).H.Px(); got != 40 {
+		t.Errorf("two characters standing upright reach %gpx, want 40 — an em each", got)
+	}
+}
+
+// TestAVerticalBlockWithNoWidthIsAsWideAsItsLinesStack.
+//
+// The block axis of a turned box is its *width*, so a width of auto asks the
+// question an automatic height asks of an ordinary block: how far did the
+// content get. It is not the question the width rules answer, which is how much
+// room the containing block has — that is the answer for a box whose lines run
+// across the page, and this box's stack down it.
+func TestAVerticalBlockWithNoWidthIsAsWideAsItsLinesStack(t *testing.T) {
+	const autoCSS = `body { margin: 0 }
+	#d { font-family: Courier; font-size: 20px; line-height: 20px;
+	     writing-mode: vertical-rl; height: 40px }`
+	// 40px of line holds three Courier characters and breaks before the fourth,
+	// so the content stacks two lines and the box is two line heights wide.
+	d := find(t, layoutOf(t, 400, `<div id="d">ab cd</div>`, autoCSS), "d")
+	if got := d.ContentRect().W.Px(); got != 40 {
+		t.Errorf("a vertical box with no width came out %gpx wide, want 40 — two "+
+			"lines at a 20px line height, and not the 400px the page has", got)
+	}
+	if got := d.ContentRect().H.Px(); got != 40 {
+		t.Errorf("its height is %gpx, want 40 — the inline axis is still declared", got)
+	}
+	// And the second line is where the box's own edge is, which is what says the
+	// width was taken from the content rather than left at the page's.
+	runs := turnedRuns(t, `<div id="d">ab cd</div>`, autoCSS)
+	if len(runs) != 2 {
+		t.Fatalf("the fixture drew %d runs, want 2", len(runs))
+	}
+	if got := runs[0].At.X.Sub(runs[1].At.X).Px(); got != 20 {
+		t.Errorf("the second line is %gpx to the left of the first, want 20", got)
 	}
 }

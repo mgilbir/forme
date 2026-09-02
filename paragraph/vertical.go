@@ -37,6 +37,34 @@ func HasUprightText(s string) bool {
 	return false
 }
 
+// OrientationMix reports which of the two orientations the characters of a run
+// need under "text-orientation: mixed": whether any of them stands upright, and
+// whether any of them lies along the line.
+//
+// Both, and not one, because the answer that matters is whether the run needs
+// *both* — that is the one a quarter turn cannot draw, and it is the only one
+// worth refusing. A run that is entirely upright is a run this engine can set,
+// by setting it the way "text-orientation: upright" asks for; a run with
+// nothing upright in it is the turn itself.
+//
+// A character that marks no paper is skipped, which is what makes the answer
+// about the picture rather than about the string. The orientation of a space is
+// unobservable — it is blank whichever way up it is — and counting one would
+// make "日本 と" a mixture and refuse a page that has only one orientation on it.
+func OrientationMix(text string) (upright, rotated bool) {
+	for _, r := range text {
+		if unicode.IsSpace(r) || MarksNoPaper(r) || IsDefaultIgnorable(r) {
+			continue
+		}
+		if IsUpright(r) {
+			upright = true
+			continue
+		}
+		rotated = true
+	}
+	return upright, rotated
+}
+
 // UprightUnits counts the characters of a run that take an advance when the run
 // is set upright.
 //

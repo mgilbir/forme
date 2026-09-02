@@ -257,9 +257,9 @@ func (l *layouter) turns(b *Box, containing style.Unit, hasHeight bool) writingM
 		return horizontalTB
 	}
 	if mode == verticalRL || mode == verticalLR {
-		why := l.refusesToTurn(b, mode, containing, hasHeight)
+		facing, why := l.refusesToTurn(b, mode, containing, hasHeight)
 		if why == "" {
-			l.turnedUpright[b] = orientationOf(b) == orientationUpright
+			l.turnedUpright[b] = facing == orientationUpright
 			return mode
 		}
 		l.reportWritingMode(b, mode, why)
@@ -297,7 +297,7 @@ func (l *layouter) reportWritingMode(b *Box, mode writingMode, why string) {
 // refused here is laid out exactly as it was before this file existed and is
 // reported, which is the honest answer; a box turned that should not have been
 // is a page that is quietly wrong.
-func (l *layouter) refusesToTurn(b *Box, mode writingMode, containing style.Unit, hasHeight bool) string {
+func (l *layouter) refusesToTurn(b *Box, mode writingMode, containing style.Unit, hasHeight bool) (textOrientation, string) {
 	if b.Outer != OuterBlock || (b.Inner != InnerFlow && b.Inner != InnerFlowRoot) {
 		// A table, an inline-block, a table part. Each has sizing rules of its
 		// own that resolve the two axes together, and turning the result would
@@ -307,18 +307,59 @@ func (l *layouter) refusesToTurn(b *Box, mode writingMode, containing style.Unit
 		// seals its own formatting context, which is the one thing a turned box
 		// needs from the box it is — and it is what a float is, so refusing it
 		// would refuse every floated vertical box in the suite.
-		return "it is not an ordinary block box"
+		return orientationMixed, "it is not an ordinary block box"
 	}
 	if b.Position != PositionStatic || b.Replaced != nil {
-		return "it is positioned or replaced"
+		return orientationMixed, "it is positioned or replaced"
 	}
 	_ = hasHeight
-	if _, ok := l.explicitWidth(b, containing); !ok {
-		// And the width is the block axis, which an automatic value would fill
-		// the containing block with rather than fit to the lines inside.
-		return "its width is automatic, so there is no room for its lines to stack in"
+	if _, declared := l.explicitWidth(b, containing); !declared && b.Float != FloatNone {
+		// A float with an automatic width is shrink-to-fit, and shrink-to-fit
+		// measures the *horizontal* widths of the content — which for a turned
+		// box are its inline extents and not the block axis its width is. An
+		// in-flow box asks the question the other way round and is answered
+		// after its content is laid out, which is where the block extent is
+		// known; a float has to be sized before it is placed.
+		return orientationMixed, "it is a float with an automatic width, which is measured along the wrong axis"
 	}
-	return l.subtreeRefusesToTurn(b, mode, orientationOf(b), b)
+	// Which of the two orientations the text actually needs, where the property
+	// leaves it to the text. "mixed" is the initial value and the only one that
+	// can ask for both on one line — and a page with both is the one thing a
+	// quarter turn cannot draw. Where the text needs only one, it is the one
+	// this engine sets.
+	//
+	// It matters because of what "text-transform: full-width" does. The suite's
+	// text-transform-fullwidth-002 writes "Text sample" in a vertical box with
+	// no orientation at all and asks for it upright, which is what mixed says
+	// once the transform has turned every letter into a fullwidth form — and
+	// the box tree carries the transformed text, so this is asked of what will
+	// be drawn rather than of what was written.
+	facing := orientationOf(b)
+	if facing == orientationMixed {
+		upright, rotated := l.subtreeOrientationMix(b)
+		switch {
+		case upright && rotated:
+			return orientationMixed, "its text needs characters standing upright and " +
+				"characters lying along the line at once"
+		case upright:
+			facing = orientationUpright
+		default:
+			facing = orientationSideways
+		}
+	}
+	return facing, l.subtreeRefusesToTurn(b, mode, b)
+}
+
+// subtreeOrientationMix asks paragraph.OrientationMix of everything a box holds.
+func (l *layouter) subtreeOrientationMix(b *Box) (upright, rotated bool) {
+	if b.IsText() {
+		return orientationMix(b.Text)
+	}
+	for _, c := range b.Children {
+		u, r := l.subtreeOrientationMix(c)
+		upright, rotated = upright || u, rotated || r
+	}
+	return upright, rotated
 }
 
 // The properties whose meaning is a side of the page rather than a side of the
@@ -360,7 +401,7 @@ var physicalGeometry = [...]struct{ name, initial string }{
 //
 // The walk is over boxes and not over fragments because it runs before layout:
 // what it decides is how the box is laid out, so nothing has been laid out yet.
-func (l *layouter) subtreeRefusesToTurn(root *Box, mode writingMode, facing textOrientation, b *Box) string {
+func (l *layouter) subtreeRefusesToTurn(root *Box, mode writingMode, b *Box) string {
 	if b != root {
 		if b.Float != FloatNone || b.Position != PositionStatic {
 			return "it holds a floated or positioned box, whose sides are the page's"
@@ -387,18 +428,8 @@ func (l *layouter) subtreeRefusesToTurn(root *Box, mode writingMode, facing text
 			}
 		}
 	}
-	if facing == orientationMixed && b.IsText() && hasUprightText(b.Text) {
-		// UAX #50, and only under "mixed". An ideograph stands upright on a
-		// vertical line there while the Latin beside it lies along one, and a
-		// turned page has one orientation for the whole of itself — see
-		// paragraph/vertical.go. The other two values ask for one orientation
-		// too: "sideways" is the turn this file performs, and "upright" is the
-		// mode Item.Upright expresses, so neither has anything for the table to
-		// disagree with.
-		return "its text has characters in it that stand upright on a vertical line"
-	}
 	if orientation := trimmedLower(b.Style["text-orientation"]); orientation != "" &&
-		orientationOf(b) != facing {
+		orientationOf(b) != orientationOf(root) {
 		// The subtree has to agree with the box the turn started at, because the
 		// turn is one decision for the whole of it: one run set upright inside a
 		// box whose lines are turned is a second typesetting mode on the same
@@ -413,7 +444,7 @@ func (l *layouter) subtreeRefusesToTurn(root *Box, mode writingMode, facing text
 		return "\"text-combine-upright: " + combine + "\" asks for a run set across the line, which this engine does not do"
 	}
 	for _, c := range b.Children {
-		if why := l.subtreeRefusesToTurn(root, mode, facing, c); why != "" {
+		if why := l.subtreeRefusesToTurn(root, mode, c); why != "" {
 			return why
 		}
 	}
