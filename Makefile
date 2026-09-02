@@ -517,7 +517,9 @@ WPT_DIRS := css/CSS2/normal-flow css/CSS2/box-display css/CSS2/margin-padding-cl
 # builds. The exposure is therefore the same as depending on the suite at all,
 # which the ratchet already does.
 
-wpt: $(WPT_DIR)/.ok $(WPT_DIR)/fonts/DoulosSIL-R.woff
+wpt: $(WPT_DIR)/.ok $(WPT_DIR)/fonts/DoulosSIL-R.woff \
+     $(WPT_DIR)/fonts/NotoSansArmenian-Regular \
+     $(WPT_DIR)/fonts/NotoSansGeorgian-Regular.ttf
 
 $(WPT_DIR)/.ok:
 	rm -rf $(WPT_DIR)
@@ -563,6 +565,32 @@ $(WPT_DIR)/fonts/DoulosSIL-R.woff: $(WPT_DIR)/.ok
 	  'DoulosSIL-5.000-web/OFL.txt'
 	mv $(WPT_DIR)/fonts/OFL.txt $(WPT_DIR)/fonts/DoulosSIL-OFL.txt
 	rm -f $(WPT_DIR)/doulos-web.zip
+
+# Two more the suite asks for and does not ship, and which this checkout already
+# has: "git ls-tree HEAD fonts/" has neither NotoSansArmenian-Regular nor
+# NotoSansGeorgian-Regular.ttf, and fourteen of the text-transform documents
+# write an @font-face for one of them.
+#
+# The same story as Doulos and a shorter fix, because nothing has to be
+# fetched. The faces are already in $(NOTO_DIR) — they are in NOTO_HINTED above,
+# where they were put for the fallback library — and what was missing was a copy
+# of each under the name the suite's @font-face asks for. So this is two "cp"s
+# and not a download.
+#
+# It is worth seven clean passes, 5,815 to 5,822, with the failures unmoved and
+# the vacuous bucket shrinking by exactly the difference: seven documents that
+# agreed while neither half could set Armenian or Georgian now agree on the
+# picture the test is about.
+#
+# The Armenian one has no extension. That is the suite's spelling — its
+# @font-face writes "url('/fonts/NotoSansArmenian-Regular') format('truetype')"
+# — and it is copied to the name that is asked for rather than to the name it
+# had, because a font is found here by its URL and not by its suffix.
+$(WPT_DIR)/fonts/NotoSansArmenian-Regular: $(WPT_DIR)/.ok $(NOTO_DIR)/.ok
+	cp $(NOTO_DIR)/NotoSansArmenian-Regular.ttf $@
+
+$(WPT_DIR)/fonts/NotoSansGeorgian-Regular.ttf: $(WPT_DIR)/.ok $(NOTO_DIR)/.ok
+	cp $(NOTO_DIR)/NotoSansGeorgian-Regular.ttf $@
 
 # NOTO_FONTS as well as WPT_TESTS, and noto-fonts as well as wpt. The ratchet
 # counts what the engine renders with the font library a *caller* supplies, and
