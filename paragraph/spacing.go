@@ -133,6 +133,63 @@ func scanCursiveTracking(text string, fn func(i int, suppressed bool)) {
 	}
 }
 
+// AllIgnorable reports whether a run is nothing but characters nothing is drawn
+// for — the bidi controls, the joiners, the invisible operators.
+//
+// Such a run is not a run of text, and the question §8.2 asks of the last item
+// on a line is what spacing hangs past the end of it. For this one the answer is
+// not "none": there is no character here for a spacing to follow, so what hangs
+// is the spacing after the letter in *front* of it — and that is the same
+// number, because a run is cut wherever the letter-spacing changes, so the
+// letter in front carries what this run declares.
+//
+// Reading it as suppressed instead is what the cursive clause of TrailingSpacing
+// gives it, and it is wrong in the expensive direction: the line counts a
+// spacing it does not draw. A float shrink-wrapped around two letters with a
+// formatting character behind them came out one tracking wider than its text,
+// and then broke the second letter onto a line of its own to fit the width it
+// had just been given. The suite writes it as letter-spacing-202.
+//
+// The empty string is not one of these. An item with no text at all is an
+// inline box's edge or an atomic inline, and both are answered elsewhere and
+// differently; saying yes here would take a spacing off a run that has one.
+func AllIgnorable(text string) bool {
+	if text == "" {
+		return false
+	}
+	for _, r := range text {
+		if !IsDefaultIgnorable(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// SpacingAfter reports, rune by rune, whether §8.2's letter-spacing is added
+// after that rune — the same question SpacedUnits answers in the aggregate, for
+// a caller that has to place each character and not only measure the run.
+//
+// It exists because there is such a caller and it got it wrong by counting
+// runes: the reconstruction that turns a run of rectangle glyphs back into the
+// rectangles it draws, which the reftest comparison uses to compare a run of
+// Ahem against a fill of the same square. Adding a tracking after a character
+// that has none put those rectangles a tracking further along for every
+// formatting character in front of them — twenty-six of them in the suite's
+// letter-spacing-202, which is thirteen ems, and a picture the engine never
+// drew. See layout/blockglyph_test.go.
+//
+// The answer is per rune and the slice is indexed by rune, not by byte: the
+// caller is already walking runes to place glyphs.
+func SpacingAfter(text string) []bool {
+	spaced := map[int]bool{}
+	scanCursiveTracking(text, func(i int, suppressed bool) { spaced[i] = !suppressed })
+	out := make([]bool, 0, len(text))
+	for i := range text {
+		out = append(out, spaced[i])
+	}
+	return out
+}
+
 // IsDefaultIgnorable reports whether nothing is drawn for a character and it
 // occupies no width, which for §8.2 is the question "is this a typographic
 // character unit letter-spacing goes after".

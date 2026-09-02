@@ -1,4 +1,4 @@
-.PHONY: linebreak test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors noto-fonts clean-noto-fonts wpt test-wpt clean-wpt varinstance test-varinstance
+.PHONY: linebreak vertical test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors noto-fonts clean-noto-fonts wpt test-wpt clean-wpt varinstance test-varinstance
 
 test:
 	gofmt -l . | grep -v '^testdata/' && exit 1 || true
@@ -119,6 +119,15 @@ eastasian:
 	go run ./cmd/geneastasian $(UCD)/EastAsianWidth.txt $(UCD)/Scripts.txt \
 	  > paragraph/eastasiantable.go
 	gofmt -w paragraph/eastasiantable.go
+
+# Which characters stand upright on a line of vertical text, UAX #50. It is
+# what tells a block of English from a block of Japanese, and so which blocks
+# this engine can turn on their side. See cmd/genvertical.
+#
+#	make vertical UCD=/path/to/unpacked/ucd
+vertical:
+	go run ./cmd/genvertical $(UCD)/VerticalOrientation.txt > paragraph/verticaltable.go
+	gofmt -w paragraph/verticaltable.go
 
 # What "text-transform: full-width" and "full-size-kana" remap, both derived
 # from UnicodeData.txt. See cmd/genfullwidth and cmd/genfullsizekana.
@@ -508,7 +517,9 @@ WPT_DIRS := css/CSS2/normal-flow css/CSS2/box-display css/CSS2/margin-padding-cl
 # builds. The exposure is therefore the same as depending on the suite at all,
 # which the ratchet already does.
 
-wpt: $(WPT_DIR)/.ok
+wpt: $(WPT_DIR)/.ok $(WPT_DIR)/fonts/DoulosSIL-R.woff \
+     $(WPT_DIR)/fonts/NotoSansArmenian-Regular \
+     $(WPT_DIR)/fonts/NotoSansGeorgian-Regular.ttf
 
 $(WPT_DIR)/.ok:
 	rm -rf $(WPT_DIR)
@@ -516,6 +527,70 @@ $(WPT_DIR)/.ok:
 		https://github.com/web-platform-tests/wpt.git $(WPT_DIR)
 	git -C $(WPT_DIR) sparse-checkout set $(WPT_DIRS)
 	touch $@
+
+# Doulos SIL, which the suite asks for and does not ship.
+#
+# Sixty-eight of its documents write
+# "@font-face { src: url('/fonts/DoulosSIL-R.woff') }", and that file is not in
+# the web-platform-tests repository: "git ls-tree HEAD fonts/" has its two
+# siblings from the same foundry, GentiumPlus-R.woff and
+# Scheherazade-Regular.woff, and not this one. So the tests are written against
+# a font the suite lost, and every browser running them falls back exactly as
+# this engine does.
+#
+# It is fetched because the alternative is measuring nothing. The documents are
+# text-transform tests — the uppercase of the Greek Extended block, of the
+# Latin Extended additions, the case pairs a general-purpose face has no glyphs
+# for — and their references write the expected text out in the same font. With
+# the font missing, both halves fall back to whatever the library has and
+# twenty-nine of them agreed while neither drew what it was asked to. With it,
+# the same twenty-nine agree on the picture the test is about. Nothing about the
+# engine changed: 5784 clean passes became 5813, the failures did not move, and
+# the vacuous bucket shrank by exactly the difference.
+#
+# Version 5.000's *web* package is fetched rather than the current release
+# because that is the file the tests name: SIL ships only a TTF now, and
+# "DoulosSIL-R.woff" is the name the 5.000 webfont package gives it.
+#
+# Licensing: Doulos SIL is under the SIL Open Font License 1.1, and the
+# licence travels with it into this gitignored directory. No font bytes are
+# vendored in this repository or shipped in anything it builds — the same
+# arrangement as Ahem and the Noto faces above.
+DOULOS_URL := https://software.sil.org/downloads/r/doulos/DoulosSIL-5.000-web.zip
+
+$(WPT_DIR)/fonts/DoulosSIL-R.woff: $(WPT_DIR)/.ok
+	curl -sSf -o $(WPT_DIR)/doulos-web.zip $(DOULOS_URL)
+	unzip -o -j -d $(WPT_DIR)/fonts $(WPT_DIR)/doulos-web.zip \
+	  'DoulosSIL-5.000-web/web/DoulosSIL-R.woff' \
+	  'DoulosSIL-5.000-web/OFL.txt'
+	mv $(WPT_DIR)/fonts/OFL.txt $(WPT_DIR)/fonts/DoulosSIL-OFL.txt
+	rm -f $(WPT_DIR)/doulos-web.zip
+
+# Two more the suite asks for and does not ship, and which this checkout already
+# has: "git ls-tree HEAD fonts/" has neither NotoSansArmenian-Regular nor
+# NotoSansGeorgian-Regular.ttf, and fourteen of the text-transform documents
+# write an @font-face for one of them.
+#
+# The same story as Doulos and a shorter fix, because nothing has to be
+# fetched. The faces are already in $(NOTO_DIR) — they are in NOTO_HINTED above,
+# where they were put for the fallback library — and what was missing was a copy
+# of each under the name the suite's @font-face asks for. So this is two "cp"s
+# and not a download.
+#
+# It is worth seven clean passes, 5,815 to 5,822, with the failures unmoved and
+# the vacuous bucket shrinking by exactly the difference: seven documents that
+# agreed while neither half could set Armenian or Georgian now agree on the
+# picture the test is about.
+#
+# The Armenian one has no extension. That is the suite's spelling — its
+# @font-face writes "url('/fonts/NotoSansArmenian-Regular') format('truetype')"
+# — and it is copied to the name that is asked for rather than to the name it
+# had, because a font is found here by its URL and not by its suffix.
+$(WPT_DIR)/fonts/NotoSansArmenian-Regular: $(WPT_DIR)/.ok $(NOTO_DIR)/.ok
+	cp $(NOTO_DIR)/NotoSansArmenian-Regular.ttf $@
+
+$(WPT_DIR)/fonts/NotoSansGeorgian-Regular.ttf: $(WPT_DIR)/.ok $(NOTO_DIR)/.ok
+	cp $(NOTO_DIR)/NotoSansGeorgian-Regular.ttf $@
 
 # NOTO_FONTS as well as WPT_TESTS, and noto-fonts as well as wpt. The ratchet
 # counts what the engine renders with the font library a *caller* supplies, and

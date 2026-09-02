@@ -248,6 +248,22 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 		// wrote a <span> between the letter and the ideograph.
 		beforeIdeograph := IsIdeographic(r) && prev != 0 &&
 			!IsIdeographic(prev) && isLetterUnit(prev) && !wb.KeepAll
+		// And the same shape for the Brahmic scripts, which write without
+		// spaces and whose only opportunity is the boundary between two aksara
+		// clusters. See isAksara: LB28a is a set of prohibitions inside a
+		// cluster and LB31 allows the break between them.
+		//
+		// Offered before rather than deferred after, because a cluster is
+		// several characters and a deferred opportunity survives one: the
+		// boundary wanted is the one in front of the next cluster, and asking
+		// there is asking for it directly. "keep-all" suppresses it for the
+		// reason it suppresses the ideograph's — §5.2 forbids the implicit
+		// opportunities between typographic letter units.
+		beforeAksara := isAksara(r) && prev != 0 && !wb.KeepAll
+		// And §5.1's fallback for the scripts a dictionary would break: the
+		// same boundary, for the same reason, and known to be in the wrong
+		// place. See NeedsDictionaryBreaking.
+		beforeDictionary := NeedsDictionaryBreaking(r) && prev != 0 && !wb.KeepAll
 		// §5.3's "breaks are allowed ... between inseparable characters (such as
 		// U+2025 and U+2026)", which is an opportunity nothing else here makes.
 		//
@@ -274,7 +290,8 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 		offered := (deferBreak && !(wb.KeepAll && isLetterUnit(r)) && !startsSpacePiece(r, ws)) ||
 			(heldBreak && !startsSpacePiece(r, ws)) ||
 			(wb.BreakAll && !startsSpacePiece(r, ws)) || lb.Anywhere ||
-			beforeIdeograph || betweenInseparable
+			beforeIdeograph || beforeAksara || beforeDictionary ||
+			betweenInseparable
 		// UAX #14 forbids a line beginning with a closing bracket, a hyphen or
 		// a non-starter, and an opportunity offered in front of one is not one.
 		// See linebreak.go for which rules that is and which it is not.
@@ -454,6 +471,20 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 			cur.WriteRune(r)
 			flush()
 			breakNext = true
+
+		case breaksAfter(r):
+			// UAX #14's class BA: a line may end after this character whatever
+			// follows it. See breaksAfter for which characters those are and
+			// which of the class are handled above instead.
+			//
+			// Deferred rather than taken, for the reason the ideograph arm
+			// gives: the opportunity is at the *next* boundary, and only the
+			// character after this one can say whether a cluster ended there or
+			// whether a rule forbids a line to begin with it. A danda followed
+			// by a closing bracket offers nothing, which is LB13, and the
+			// deferral is what runs that rule.
+			cur.WriteRune(r)
+			deferBreak = true
 
 		case r == 0x00AD && hy.Soft() && !startsSpace(text, i):
 			// A soft hyphen. §6.1: the author has marked a place the word may be

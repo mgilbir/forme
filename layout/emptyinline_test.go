@@ -2,133 +2,87 @@ package layout
 
 import (
 	"testing"
+
+	"github.com/mgilbir/forme/style"
 )
 
-// An inline box with nothing in it but its own edges, CSS 2.1 §9.4.2.
+// An empty inline box is still on the line.
 //
-//	Line boxes that contain no text, no preserved white space, no inline
-//	elements with non-zero margins, padding, or borders [...] must be treated
-//	as zero-height line boxes.
+// §10.8.1 says it by name: "empty inline elements generate empty inline boxes,
+// but these boxes still have margins, padding, borders and a line height, and
+// thus influence these calculations just like elements with content". This
+// engine did it for a box with an inset — insetItems has the two-hundred-pixel
+// span in its own note — and not for one with nothing at all, so a
+// "line-height: 5" span with no content and no border made no difference to the
+// line it was on.
 //
-// So a line holding an inline box that *has* one of the three is a line, and the
-// box is on it: its border is drawn and its leading counts towards the line's
-// height. Each of those three sentences was a separate fault, and the suite's
-// margin-padding-clear/margin-right-114 needed all three — a green square that
-// came out blank.
+// §9.4.2 is the other half of the same sentence and it is where the limit is: a
+// line box holding nothing *but* boxes like this "must be treated as a
+// zero-height line box", and "as not existing for any other purpose". So the
+// leading counts where there is something to count it beside, and a block whose
+// whole content is empty inline boxes has no line at all.
+//
+// empty-inline-001 and -003 are the suite's two halves and they disagree on
+// purpose.
 
-// emptyInline lays out one empty inline box and reports what reached the page.
-func emptyInline(t *testing.T, span string) (height float64, lines int, fills int) {
+// redBlockHeight is the height of the one red background a fixture paints.
+func redBlockHeight(t *testing.T, htmlSrc, cssSrc string) style.Unit {
 	t.Helper()
-	root := layoutOf(t, 600, `<div id="d"><span style="`+span+`"></span></div>`,
-		noDefaults+`#d { font-size: 20px; line-height: 1 }`)
-	f := find(t, root, "d")
-	return f.BorderRect.H.Px(), len(f.Lines), len(fillsOfAny(Paint(root)))
-}
-
-// TestAnInlineBoxWithNothingButItsOwnEdgesIsOnTheLine.
-func TestAnInlineBoxWithNothingButItsOwnEdgesIsOnTheLine(t *testing.T) {
-	for _, tc := range []struct{ what, span string }{
-		{"a border", "border: 10px solid rgb(0,0,255)"},
-		{"a border on one side", "border-right: 10px solid rgb(0,0,255)"},
-		{"padding", "padding: 10px"},
-		{"a margin", "margin-left: 10px"},
-		// The case that has to be asked about each of the three separately: they
-		// cancel, so the box takes up no room, and it still has a border to draw.
-		{"a border a negative margin cancels",
-			"border-right: 10px solid rgb(0,0,255); margin-right: -10px"},
-	} {
-		h, lines, _ := emptyInline(t, tc.span)
-		if lines != 1 {
-			t.Errorf("%s: %d line(s), want 1 — a line holding an inline box with one "+
-				"of the three is not a zero-height line box", tc.what, lines)
-		}
-		if h != 20 {
-			t.Errorf("%s: the block is %gpx tall, want 20 — the line takes the "+
-				"strut's height", tc.what, h)
+	for _, op := range paintOf(t, htmlSrc, cssSrc) {
+		if f, ok := op.(FillRect); ok && f.Color.R > 0.5 {
+			return f.Rect.H
 		}
 	}
+	return 0
 }
 
-// TestAnInlineBoxWithNoEdgesStillMakesNoLine is the containment half, and the
-// half that keeps an empty <span> from putting a blank line into every document.
-func TestAnInlineBoxWithNoEdgesStillMakesNoLine(t *testing.T) {
-	for _, span := range []string{"", "color: red", "border: 0 solid rgb(0,0,255)",
-		"padding: 0", "margin: 0"} {
-		h, lines, _ := emptyInline(t, span)
-		if lines != 0 || h != 0 {
-			t.Errorf("<span style=%q> made %d line(s) and %gpx of height; it has none "+
-				"of the three, so its line is one of §9.4.2's zero-height ones",
-				span, lines, h)
-		}
-	}
-}
+const emptyInlineCSS = `div { line-height: 1; background: red } span { line-height: 5 }`
 
-// TestABorderANegativeMarginCancelsIsStillDrawn.
-//
-// The margin moves what comes after the box; it does not reach back into the
-// border. Read as a sum the box had no edges at all, so no item was emitted, the
-// line did not exist, and two hundred pixels of green were not drawn — which is
-// what margin-right-114 saw.
-func TestABorderANegativeMarginCancelsIsStillDrawn(t *testing.T) {
-	_, _, plain := emptyInline(t, "border-right: 10px solid rgb(0,0,255)")
-	_, _, cancelled := emptyInline(t,
-		"border-right: 10px solid rgb(0,0,255); margin-right: -10px")
-	if plain == 0 {
-		t.Fatal("a border on its own painted nothing, so this test says nothing")
+func TestAnEmptyInlineBoxRaisesTheLine(t *testing.T) {
+	got := redBlockHeight(t, `<div><span></span>X</div>`, emptyInlineCSS)
+	want := redBlockHeight(t, `<div><span>Y</span>X</div>`, emptyInlineCSS)
+	if want == 0 {
+		t.Fatal("the fixture with content painted nothing")
 	}
-	if cancelled != plain {
-		t.Errorf("the border painted %d rectangle(s) with a negative margin against "+
-			"it and %d without one", cancelled, plain)
+	if got != want {
+		t.Errorf("an empty span makes a %v line and one holding a letter makes "+
+			"a %v line; §10.8.1 counts the empty box \"just like elements with "+
+			"content\"", got, want)
 	}
 }
 
-// TestAnEmptyInlineBoxLeadsTheLineItIsOn is §10.8.1: the line box is as tall as
-// the boxes on it, and an inline box is on it whether or not it has content of
-// its own.
-//
-// paragraph/stacking.go records an attempt at this for *every* empty inline box,
-// which cost nineteen tests: an item that stands for nothing is walked by
-// everything downstream, and one that is neither TrimAtEnd nor Inset stops the
-// trailing-space trimming. These are the box's own edges, which are Inset and
-// which every walk already knows about — so the case that note could not have
-// is the one this reaches.
-func TestAnEmptyInlineBoxLeadsTheLineItIsOn(t *testing.T) {
-	root := layoutOf(t, 600,
-		`<div id="d"><span style="font-size: 200px; line-height: 1; `+
-			`border-right: 10px solid rgb(0,0,255)"></span></div>`,
-		noDefaults+`#d { font-size: 20px; line-height: 1 }`)
-	if h := find(t, root, "d").BorderRect.H.Px(); h != 200 {
-		t.Errorf("the block is %gpx tall and the inline box on its line is 200; the "+
-			"line box is as tall as what is on it", h)
+func TestALineOfNothingButEmptyInlineBoxesDoesNotExist(t *testing.T) {
+	// §9.4.2. The block has no line, so no height and no background — which is
+	// what empty-inline-001 draws.
+	if got := redBlockHeight(t, `<div><span></span></div>`, emptyInlineCSS); got != 0 {
+		t.Errorf("a block holding nothing but an empty span is %v tall, want 0: "+
+			"§9.4.2 treats such a line as not existing", got)
+	}
+	if got := redBlockHeight(t, `<div><span></span><span></span></div>`, emptyInlineCSS); got != 0 {
+		t.Errorf("two of them make a %v line, want 0", got)
 	}
 }
 
-// TestABlockThatSplitsAnInlineKeepsItsFarEdge is the shape margin-right-114 is
-// written in: §9.2.1.1 cuts the inline in two around the block, and the border
-// on the right belongs to the second half — which has nothing else in it at all.
-func TestABlockThatSplitsAnInlineKeepsItsFarEdge(t *testing.T) {
-	const span = `<span style="font-size: 200px; line-height: 1; ` +
-		`border-right: 200px solid rgb(0,0,255); margin-right: -200px">`
-	border := func(html string) Rect {
-		t.Helper()
-		got := fillsOf(paintOf(t, html, noDefaults+`#d { font-size: 20px }`), blue)
-		if len(got) != 1 {
-			t.Fatalf("%d blue rectangles, want the one border: %v", len(got), got)
-		}
-		return got[0]
+func TestAnEmptyBoxWithAnInsetWasAlreadyCounted(t *testing.T) {
+	// The case insetItems has always handled, kept here so that the rule reads
+	// as one rule: a border is content for §9.4.2 and the line exists.
+	got := redBlockHeight(t, `<div><span style="border-left:1px solid"></span></div>`,
+		emptyInlineCSS)
+	if got == 0 {
+		t.Errorf("a span with a border makes no line at all; §9.4.2 counts " +
+			"\"inline elements with non-zero margins, padding, or borders\"")
 	}
-	split := border(`<div id="d" style="width: 200px">` + span + `<div></div></span></div>`)
-	whole := border(`<div id="d" style="width: 200px">` + span + `</span></div>`)
-	if split.W != bgpx(200) {
-		t.Errorf("the border is %v wide, want 200", split.W)
-	}
-	// The same border the box would have drawn had nothing split it. Its height
-	// is the face's content area rather than the line-height, which is CSS 2.1
-	// §10.6.1 and is not what this is about — so it is compared and not written
-	// down.
-	if split.H != whole.H {
-		t.Errorf("the border of the split box is %v tall and of the whole box %v; "+
-			"the block between them does not change how tall the inline is",
-			split.H, whole.H)
+}
+
+func TestAnEmptyBoxAgreesWithANonEmptyOne(t *testing.T) {
+	// The change is that the two answer the same. A <b> is set in a bold face
+	// whose ascent and descent differ from the block's, so its half-leading puts
+	// its box a fraction off the block's own — and it does that whether or not
+	// there is a letter inside it.
+	empty := redBlockHeight(t, `<div>un<b></b>ken</div>`, `div { line-height: 2; background: red }`)
+	full := redBlockHeight(t, `<div>un<b>x</b>ken</div>`, `div { line-height: 2; background: red }`)
+	if empty != full {
+		t.Errorf("an empty <b> makes a %v line and one holding a letter makes a "+
+			"%v line; the box is the same box either way", empty, full)
 	}
 }

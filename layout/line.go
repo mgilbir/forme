@@ -46,6 +46,15 @@ type LineFragment struct {
 	// border, and a rectangle for each of them on each line would be work in
 	// proportion to the document that nothing would ever read.
 	Boxes []*Fragment
+	// Sideways says this line runs down the page rather than across it: its
+	// Baseline is measured leftwards from the line box's right edge, and each
+	// run's X is a distance downwards from its top.
+	//
+	// It is on the line rather than on the block because it is what the painter
+	// needs at the moment it turns a run's offsets into a point, and the line is
+	// what it has in its hand there. See layout/writingmode.go for why a quarter
+	// turn is expressible as one flag at all.
+	Sideways bool
 }
 
 // TextRun is a piece of text on a line, set in one face at one size.
@@ -66,6 +75,12 @@ type TextRun struct {
 	// textdecoration.go, where the difference between propagating and inheriting
 	// is worked through.
 	Decorations []textDecoration
+	// Upright says each of the run's characters stands the way it does in the
+	// code charts and the pen moves one em to the next one, rather than the run
+	// being turned with the page. It is what "text-orientation: upright" asks
+	// for, and it is a fact about the measurement as much as about the drawing.
+	// See paragraph.Item.Upright.
+	Upright bool
 	// RTL says the run reads right to left, so its glyphs are drawn from the
 	// right edge of its box towards the left and its brackets are mirrored.
 	//
@@ -84,6 +99,12 @@ type TextRun struct {
 	// drawn isolated — the two disagree, and the page shows a word broken into
 	// letters standing apart. See shapingcontext.go.
 	PreContext, PostContext string
+	// ContextKerns says the neighbours above are set in this run's own face, so
+	// a pair that spans the boundary is this font's pair. A font change is a
+	// change in formatting and its pairs do not cross one; a letter's joined
+	// shape does, because a character is the same character whichever font sets
+	// it. See paragraph.Item.ContextKerns.
+	ContextKerns bool
 	// LetterSpacing is what letter-spacing added after each character of this
 	// run. It is carried into painting as well as into the width because the two
 	// have to agree: the width decided where the next run starts, and glyphs

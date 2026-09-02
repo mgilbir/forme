@@ -549,6 +549,10 @@ var (
 	useFinalFeatures = []string{
 		"isol", "init", "medi", "fina", "abvs", "blws", "haln", "pres", "psts",
 	}
+	// The same list without the four positional forms, for a run that joins:
+	// there the forms are not a feature every glyph gets but a choice made per
+	// letter, and applyJoiningForms has already made it. See shapeUniversal.
+	usePresentationFeatures = []string{"abvs", "blws", "haln", "pres", "psts"}
 	// And the substitutions that are not about this model at all: the required
 	// ligatures and the contextual alternates every script gets, whatever
 	// shaper set it. They are the same list the Khmer pass applies for the same
@@ -563,11 +567,48 @@ var (
 )
 
 // shapeUniversal is the whole substitution pass for a run the engine handles.
-func (sh shaper) shapeUniversal(buf []Glyph, runes []rune) []Glyph {
+//
+// # The cursive scripts among them
+//
+// A dozen of the scripts this shaper is chosen for join their letters up:
+// N'Ko, Adlam, Mongolian, Hanifi Rohingya, Sogdian, Old Uyghur, Phags-pa,
+// Manichaean, Psalter Pahlavi, Chorasmian, Yezidi. The universal model has
+// nothing to say about which of the four shapes a letter takes — that is the
+// Arabic model's question — and the four features that answer it are in
+// useFinalFeatures, applied to every glyph of the run.
+//
+// Applied to every glyph they are wrong for every glyph. The font states them
+// as three single-substitution lookups, and the lookup list is walked in index
+// order: 'fina' is the first of them in Noto Sans N'Ko, so every letter of a
+// N'Ko word came out in its final shape and nothing else could match afterwards.
+// Three of the suite's shaping tests are that, and the page it produces is not
+// merely unjoined — it is the wrong glyph in every position.
+//
+// So a run whose characters join is marked as the Arabic model marks one, and
+// the four features are applied per glyph to the form each letter is in. It is
+// what HarfBuzz does with the same two shapers, and the decision is the same
+// one: membership of ArabicShaping.txt, which is InCursiveScript.
+func (sh shaper) shapeUniversal(buf []Glyph, runes []rune, before, after []rune) []Glyph {
 	info := make([]useInfo, len(runes))
 	for i, r := range runes {
 		info[i].cat, info[i].pos = useCategoryOf(r)
 		info[i].ignorable = hiddenAfterShaping(r)
+	}
+	// Decided while the glyphs still correspond to the characters it is decided
+	// from, which is only true here — the cluster pass below substitutes. The
+	// form is recorded on the glyph and survives that.
+	//
+	// The test is the run's own characters, and no document in this repository
+	// tells it from "every run": the three universal corpora here are Javanese,
+	// Balinese and Khmer, and none of those fonts declares the four features at
+	// all, so marking their runs as well moves nothing. It is written because
+	// HarfBuzz gates the same way and because the day a font for a non-joining
+	// script does declare them, applying all four to every glyph substitutes
+	// each letter three times over. The predicate itself is pinned in
+	// TestOnlyACursiveRunIsMarked.
+	cursive := anyCursive(runes)
+	if cursive {
+		markJoiningForms(buf, runes, before, after)
 	}
 
 	// Each cluster is shaped where it lies, and what it does to the buffer's
@@ -599,9 +640,17 @@ func (sh shaper) shapeUniversal(buf []Glyph, runes []rune) []Glyph {
 	// applies features in the order it names them, which is right wherever a
 	// font's lookups do not overlap — and every other corpus here says they do
 	// not.
+	// The forms first, and only for a run that has them: they are what the
+	// presentation features below are written against, exactly as they are in
+	// the Arabic model.
+	final := useFinalFeatures
+	if cursive {
+		buf = sh.applyJoiningForms(buf)
+		final = usePresentationFeatures
+	}
 	var lookups []int
 	seen := map[int]bool{}
-	for _, tag := range append(append([]string{}, useFinalFeatures...), useRunFeatures...) {
+	for _, tag := range append(append([]string{}, final...), useRunFeatures...) {
 		for _, idx := range sh.l.featureLookups[tag] {
 			if !seen[idx] {
 				seen[idx] = true
@@ -955,6 +1004,19 @@ var universalScripts = map[string]bool{
 	"talu": true, "tavt": true, "tfng": true, "tglg": true, "tibt": true,
 	"tirh": true, "tnsa": true, "toto": true, "vith": true, "wcho": true,
 	"yezi": true, "zanb": true,
+}
+
+// anyCursive reports whether a run holds a letter of a script whose letters
+// join. It is the question HarfBuzz asks by script and this asks by character,
+// which is the same answer: ArabicShaping.txt names every character of every
+// cursive-joining script and nothing else. See InCursiveScript.
+func anyCursive(runes []rune) bool {
+	for _, r := range runes {
+		if InCursiveScript(r) {
+			return true
+		}
+	}
+	return false
 }
 
 // usesUniversalShaper reports whether a run's script is set by the engine.

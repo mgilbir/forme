@@ -246,8 +246,8 @@ func FuzzBalance(f *testing.F) {
 				t.Fatalf("%q at %gpx, bands %v: balanced to %gpx, wider than the box",
 					text, width.Px(), bands, cap.Px())
 			}
-			full := br.countLinesInBands(items, bands, width, 0, MaxBalanceLines+1)
-			capped := br.countLinesInBands(items, bands, cap, 0, MaxBalanceLines+2)
+			full, _ := br.countLinesInBands(items, bands, width, 0, MaxBalanceLines+1)
+			capped, _ := br.countLinesInBands(items, bands, cap, 0, MaxBalanceLines+2)
 			if capped > full {
 				t.Fatalf("%q at %gpx, bands %v: the box takes %d lines and the balanced "+
 					"%gpx takes %d", text, width.Px(), bands, full, cap.Px(), capped)
@@ -258,8 +258,8 @@ func FuzzBalance(f *testing.F) {
 		// and the plain one are the same paragraph.
 		narrow := style.Min(bands[0], bands[1])
 		if narrow > 0 && narrow < width {
-			banded := br.countLinesInBands(items, []style.Unit{narrow}, width, 0, 99)
-			plain := br.countLines(items, narrow, 0, 99)
+			banded, _ := br.countLinesInBands(items, []style.Unit{narrow}, width, 0, 99)
+			plain, _ := br.countLines(items, narrow, 0, 99)
 			if banded != plain {
 				t.Fatalf("%q: %d lines in a uniform %gpx band probed at %gpx, and %d at a "+
 					"plain %gpx", text, banded, narrow.Px(), width.Px(), plain, narrow.Px())
@@ -276,7 +276,7 @@ func FuzzBalance(f *testing.F) {
 		// capping them. Deriving it at some probe width instead asks for an
 		// arrangement into a number of lines the bands cannot make, which is not a
 		// case layout produces and not one the answer is defined for.
-		lines := br.countLinesInBands(items, bands, style.MaxUnit, 0, MaxBalanceLines+1)
+		lines, _ := br.countLinesInBands(items, bands, style.MaxUnit, 0, MaxBalanceLines+1)
 		if caps := br.BalanceScoredCaps(items, bands, 0, lines); caps != nil {
 			if len(caps) != lines {
 				t.Fatalf("%q: asked for %d lines and got %d caps", text, lines, len(caps))

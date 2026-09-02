@@ -1,6 +1,8 @@
 package layout
 
 import (
+	"strings"
+
 	"github.com/mgilbir/forme/style"
 )
 
@@ -317,11 +319,18 @@ func (b *boxBuilder) generateMissingParents(parent *Box, kids []*Box) []*Box {
 		}
 		return false
 	}
-	// The run that gets swept in with the first misparented box is the internal
-	// table boxes after it — not every proper table child. A caption may *start*
-	// a run and may not extend one, which is what stops two tables written side
-	// by side, each with a caption, from being merged into one.
-	return b.wrapRuns(parent, kids, InnerTable, misparented, isInternalTableBox)
+	// §17.2.1's run is "all consecutive siblings of C that are proper table
+	// children", and a table-caption is one of them: the list is row, row group,
+	// header group, footer group, column, column group and caption. So a caption
+	// after the cells joins the table the cells make, exactly as one before them
+	// does.
+	//
+	// caption-position-001 is what says so. Its first rectangle is a
+	// "display: table-cell" holding a picture followed by a
+	// "display: table-caption" holding the word ABOVE, and it asks for ABOVE
+	// above the picture — which it can only be if the caption is inside the
+	// wrapper for caption-side to move it to the top of.
+	return b.wrapRuns(parent, kids, InnerTable, misparented, properTableChild)
 }
 
 // wrapRuns gathers each maximal run that starts at a box satisfying start and
@@ -516,6 +525,28 @@ var wrapperProperties = []string{
 //
 // Only "bottom" moves it; "top" is the initial value and anything else is a
 // value the cascade should already have rejected.
+//
+// Folded and trimmed like every other keyword this engine reads, because CSS
+// keywords are case-insensitive and a stylesheet is free to write "BOTTOM".
+// Compared as written, such a declaration was silently the initial value.
 func captionAtBottom(b *Box) bool {
-	return b.Style["caption-side"] == "bottom"
+	return strings.EqualFold(strings.TrimSpace(b.Style["caption-side"]), "bottom")
+}
+
+// properTableChild is §17.2.1's own list: the boxes a table may hold directly.
+//
+// It is isInternalTableBox plus the caption and minus the cell, and both
+// differences are the specification's. A caption is a proper table child — it is
+// named in the list — and a cell is not, because a cell's legal parent is a row
+// and the pass above has already given it one.
+//
+// Including the cell would change nothing today, since no cell survives that
+// pass; it is left out so that this reads as the list it is.
+func properTableChild(b *Box) bool {
+	switch b.Inner {
+	case InnerTableRow, InnerTableRowGroup, InnerTableColumn,
+		InnerTableColumnGroup, InnerTableCaption:
+		return true
+	}
+	return false
 }

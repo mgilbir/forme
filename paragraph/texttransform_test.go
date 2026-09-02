@@ -113,7 +113,7 @@ func TestTheFastPathAgreesWithTheSlowOne(t *testing.T) {
 				strings.Repeat(c, 3), "  " + c + "  ",
 			} {
 				want := reference(in, m.table, m.simple)
-				if got := fullCased(in, m.table, m.simple, m.whole); got != want {
+				if got := fullCased(in, m.table, m.simple, m.whole, nil); got != want {
 					t.Fatalf("%s %q: got %q, want %q", m.name, in, got, want)
 				}
 			}

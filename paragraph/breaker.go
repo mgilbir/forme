@@ -101,7 +101,7 @@ func (br *Breaker) Measure(face *shape.Face, text string, size style.Unit) style
 func (br *Breaker) MeasureSpaced(face *shape.Face, text string, size style.Unit,
 	sp TextSpacing) style.Unit {
 
-	return br.MeasureSpacedInContext(face, text, size, sp, "", "")
+	return br.MeasureSpacedInContext(face, text, size, sp, "", "", true, false)
 }
 
 // MeasureSpacedInContext is MeasureSpaced with the text either side of the run,
@@ -113,13 +113,13 @@ func (br *Breaker) MeasureSpaced(face *shape.Face, text string, size style.Unit,
 // middle of one, and an entry shared between the two would give a line filled to
 // one width and painted at another.
 func (br *Breaker) MeasureSpacedInContext(face *shape.Face, text string, size style.Unit,
-	sp TextSpacing, before, after string) style.Unit {
+	sp TextSpacing, before, after string, kerns, upright bool) style.Unit {
 
 	if text == "" {
 		return 0
 	}
 	key := measureKey{face: face, text: text, size: size, spacing: sp,
-		before: before, after: after}
+		before: before, after: after, kerns: kerns, upright: upright}
 	if got, ok := br.measured[key]; ok {
 		return got
 	}
@@ -139,7 +139,17 @@ func (br *Breaker) MeasureSpacedInContext(face *shape.Face, text string, size st
 	// distinct word rather than once per measurement. A face whose codes are
 	// characters — the standard PDF fonts — substitutes and kerns nothing, and
 	// MeasureShaped hands those straight back to the sum.
-	w, _ := style.FromPx(face.MeasureShapedInContext(text, size.Px(), before, after))
+	var w style.Unit
+	if upright {
+		// A run set upright on a line of vertical text advances one em per
+		// character, and the face's horizontal advances say nothing about it.
+		// CSS Writing Modes §4.4: where a face states no vertical metrics the
+		// UA synthesizes them, and the em box is the synthesis. See UprightUnits
+		// for what counts as a character here.
+		w = size.Mul(float64(UprightUnits(text)))
+	} else {
+		w, _ = style.FromPx(face.MeasureShapedInContext(text, size.Px(), before, after, kerns))
+	}
 	w = w.Add(SpacingAdvance(text, sp))
 	br.measured[key] = w
 	return w
@@ -153,4 +163,10 @@ type measureKey struct {
 	// The text either side, which changes a cursive letter's advance. Empty for
 	// every run of every document that is not written in a joining script.
 	before, after string
+	// Whether a pair across the boundary is this font's to apply. See
+	// Item.ContextKerns.
+	kerns bool
+	// Whether the run is set upright, which replaces the face's advances with
+	// the em box. See Item.Upright.
+	upright bool
 }

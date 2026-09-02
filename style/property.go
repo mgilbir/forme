@@ -263,7 +263,24 @@ var properties = map[string]property{
 	"text-decoration-color": {false, "currentcolor"},
 	"vertical-align":        {false, "baseline"},
 	"direction":             {true, "ltr"},
-	"unicode-bidi":          {false, "normal"},
+
+	// CSS Writing Modes 4 §3.1, §4.1 and §9.1. All three are registered rather
+	// than dropped because layout/writingmode.go reads them: which way a box's
+	// lines stack, which way each character faces on one, and whether a short run
+	// is set across the line. Two of them inherit — a rule on the root turns the
+	// whole document, which is how every document that uses them is written — and
+	// text-combine-upright does not, because it is about one run and not about a
+	// paragraph.
+	//
+	// Registering them is not a claim that all their values are laid out. Only
+	// "vertical-rl" is, and only for boxes turnable() accepts; everything else is
+	// reported per box rather than per stylesheet, because whether the page is
+	// wrong is a question about the box and not about the declaration. See
+	// layout/writingmode.go for the whole of that argument.
+	"writing-mode":         {true, "horizontal-tb"},
+	"text-orientation":     {true, "mixed"},
+	"text-combine-upright": {false, "none"},
+	"unicode-bidi":         {false, "normal"},
 
 	// Generated content. It does not inherit — a ::before on a parent must not
 	// give every descendant the same marker.

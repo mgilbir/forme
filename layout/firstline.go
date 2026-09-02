@@ -214,7 +214,7 @@ func (l *layouter) firstLineItems(items []inlineItem, block *Box,
 			it.Size = box.FontSize
 			it.Spacing = l.spacingFor(box)
 			it.Width = l.br.MeasureSpacedInContext(it.Face, it.Text, it.Size,
-				it.Spacing, it.PreContext, it.PostContext)
+				it.Spacing, it.PreContext, it.PostContext, it.ContextKerns, it.Upright)
 		}
 		if it.Leads {
 			it.Above, it.Below = l.leading(box)

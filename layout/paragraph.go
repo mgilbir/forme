@@ -87,9 +87,13 @@ var (
 	isIdeographic                 = paragraph.IsIdeographic
 	spacingAdvance                = paragraph.SpacingAdvance
 	spacedUnits                   = paragraph.SpacedUnits
+	spacingAfter                  = paragraph.SpacingAfter
+	uprightUnits                  = paragraph.UprightUnits
+	orientationMix                = paragraph.OrientationMix
 	isCursiveScript               = paragraph.IsCursiveScript
 	cursiveTrackingSuppressesText = paragraph.CursiveTrackingSuppresses
 	isDefaultIgnorable            = paragraph.IsDefaultIgnorable
+	needsPhraseBreaking           = paragraph.NeedsPhraseBreaking
 )
 
 // Geometry and the item type itself.

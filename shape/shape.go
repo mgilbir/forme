@@ -35,13 +35,20 @@ func (f *Face) MeasureShaped(s string, size float64) float64 {
 // the form it takes, and the form depends on its neighbours — a medial ain is
 // not as wide as an isolated one — so a run measured alone and drawn in context
 // is measured to one width and painted at another. See ShapeGlyphsInContext.
-func (f *Face) MeasureShapedInContext(s string, size float64, before, after string) float64 {
+func (f *Face) MeasureShapedInContext(s string, size float64, before, after string,
+	kerns bool) float64 {
+
 	if !f.composite() {
 		// A face whose codes are characters substitutes nothing and has no
 		// positional forms, so its context cannot change an advance.
 		return f.Measure(s, size)
 	}
-	glyphs, _ := f.ShapeGlyphsInContext(s, before, after)
+	var glyphs []Glyph
+	if kerns {
+		glyphs, _ = f.ShapeGlyphsInContext(s, before, after)
+	} else {
+		glyphs, _ = f.ShapeGlyphsAcrossFaces(s, before, after)
+	}
 	return MeasureGlyphs(glyphs, size)
 }
 

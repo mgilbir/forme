@@ -95,12 +95,20 @@ func withHyphen(items, line []Item, from, next, nextByte int, forced bool) []Ite
 		return line
 	}
 	// Capped so the append cannot write into the caller's items.
+	face, above, below := at.Face, at.Above, at.Below
+	if at.HyphenFace != nil {
+		face, above, below = at.HyphenFace, at.HyphenAbove, at.HyphenBelow
+	}
 	return append(line[:len(line):len(line)], Item{
 		Text: at.HyphenText, Width: at.Hyphen,
-		Box: at.Box, Face: at.Face, Size: at.Size,
-		Above: at.Above, Below: at.Below, Valign: at.Valign,
+		Box: at.Box, Face: face, Size: at.Size,
+		Above: above, Below: below, Valign: at.Valign,
 		Decorations: at.Decorations, Spacing: at.Spacing,
 		Offset: at.Offset, Leads: at.Leads,
+		// The hyphen is set the way the word it divides is set. It is drawn on
+		// the same line, in the same face, and an upright line does not turn one
+		// character of itself on its side.
+		Upright: at.Upright,
 	})
 }
 
@@ -171,6 +179,12 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 	// Progress is guaranteed because the marker is only set once the line holds
 	// content, so it is always past the item the line started at.
 	oppAt, oppLine, oppFlow := -1, 0, 0
+	// And the same three for an opportunity a hyphen made, where the box asked
+	// for hyphens to be given up rather than taken. It is a second marker rather
+	// than a flag on the first because the two are not ordered by position: an
+	// ordinary opportunity earlier in the line beats a hyphen later in it, which
+	// is the whole of what suppressing hyphenation means. See Item.HyphenLastResort.
+	hypAt, hypLine, hypFlow := -1, 0, 0
 	// Where the white space that ends this line begins.
 	//
 	// §4.1.2's third and fourth rules are both about white space "at the end of a
@@ -201,6 +215,15 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 	i := from
 	for ; i < len(items); i++ {
 		item := items[i]
+		// Where the line goes back to when what comes next will not fit. An
+		// opportunity a hyphen made is the last one reached for, so it stands
+		// in only where the line has no other — which is §5.2's "auto-phrase"
+		// suppressing hyphenation, and giving up on the suppression rather than
+		// overflowing. See Item.HyphenLastResort.
+		backAt, backLine, backFlow := oppAt, oppLine, oppFlow
+		if backAt < 0 {
+			backAt, backLine, backFlow = hypAt, hypLine, hypFlow
+		}
 		if i == from && fromByte > 0 {
 			// The line begins part-way through an item, because the line before
 			// it ended inside this word. The cursor is an index *and* an offset
@@ -257,7 +280,27 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		if item.Forced {
 			// An instruction rather than an opportunity: the line ends here
 			// whatever room is left, and an empty one still occupies its height.
-			return trimLineEdge(line), i + 1, 0, outOfFlow, true
+			//
+			// What comes with it is every inline box that ends at the break.
+			// §8.4 puts a box's padding-right at the end of its *last*
+			// fragment, and a box whose content ends at a forced break has no
+			// fragment after it — there is nothing left of the box to put on
+			// the line below. The suite's content-175 is an inline box whose
+			// ":after" is a preserved newline: its one em of padding-right came
+			// out as a second navy stripe under the first, where the reference
+			// draws one straight stripe an em longer.
+			//
+			// Only the items *immediately* after the break, and only the ones
+			// that close a box. Anything of the box's own content after the
+			// break comes before its closing edge, so a box that continues is a
+			// box whose next item is not one of these.
+			next := i + 1
+			for next < len(items) &&
+				items[next].Inset && !items[next].InsetLead {
+				line = append(line, items[next])
+				next++
+			}
+			return trimLineEdge(line), next, 0, outOfFlow, true
 		}
 
 		// §4.1.2's first rule: a sequence of collapsible spaces at the
@@ -333,17 +376,29 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// rather than moving to the next one. Without this, "XX    XX" under
 		// pre-wrap would push the second word down a line for spaces that take
 		// no room on the page at all.
+		// content and not len(line), because an inline box's own leading margin
+		// is not something a line may end after. §16 draws it where it is and
+		// the box it opens is what it pushes along, so a line that holds
+		// nothing else has nothing to end: the pair overflows together, which is
+		// what text-indent-overflow's reference writes as
+		// "<span style='margin-left: 200px'><div class=content>" in a container
+		// exactly 200px wide.
 		if !item.NoWrap && !item.Hangs && !isTailSpace(item) && i < tailFrom && item.BreakBefore &&
-			len(line) > 0 && overflows(used, item, width) {
+			content && overflows(used, item, width) {
 			// Ending here costs the hyphen as well, where the opportunity is one
 			// a soft hyphen offered. If that does not fit, this is not a place
 			// the line may end at all and it goes back to one that is — the
 			// hyphen is not optional, so a line that cannot hold it has not
 			// broken here.
+			if item.HyphenLastResort && pendingHyphen(line) != 0 && oppAt >= 0 {
+				// Ending here would divide a word, and the box asked for that to
+				// be given up while the line has anywhere else to end. It has.
+				return trimLineEdge(line[:oppLine]), oppAt, 0, outOfFlow[:oppFlow], false
+			}
 			if h := pendingHyphen(line); h == 0 || used.Add(h) <= width {
 				return trimLineEdge(line), i, 0, outOfFlow, false
-			} else if oppAt >= 0 {
-				return trimLineEdge(line[:oppLine]), oppAt, 0, outOfFlow[:oppFlow], false
+			} else if backAt >= 0 {
+				return trimLineEdge(line[:backLine]), backAt, 0, outOfFlow[:backFlow], false
 			}
 			return trimLineEdge(line), i, 0, outOfFlow, false
 		}
@@ -378,8 +433,8 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// above, which makes it a strict improvement rather than a trade.
 		if (item.Space || item.AtomicBox == nil) && !item.Collapsible &&
 			!item.Hangs && i < tailFrom && !item.NoWrap && !item.Inset &&
-			!item.BreakBefore && oppAt >= 0 && overflows(used, item, width) {
-			return trimLineEdge(line[:oppLine]), oppAt, 0, outOfFlow[:oppFlow], false
+			!item.BreakBefore && backAt >= 0 && overflows(used, item, width) {
+			return trimLineEdge(line[:backLine]), backAt, 0, outOfFlow[:backFlow], false
 		}
 
 		// A single item wider than the line has nowhere to go. It is placed and
@@ -414,7 +469,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// Dropping the conjunct therefore moves nothing, which is why it is
 		// recorded here rather than left as an implied claim.
 		if item.BreakWord && !item.NoWrap && !item.Hangs && i < tailFrom && !item.Inset && !item.Tab &&
-			insetAt < 0 && oppAt < 0 && overflows(used, item, width) {
+			insetAt < 0 && backAt < 0 && overflows(used, item, width) {
 			// The offset is into items[i]. It is only the cursor's offset away
 			// from that when this *is* the item the cursor pointed at: a line
 			// that began at a float and reached its first text later is at
@@ -476,7 +531,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// reader given one without the other's conditions would be told they
 		// are two.
 		if !item.BreakWord && !item.NoWrap && !item.Hangs && i < tailFrom &&
-			!item.Inset && !item.Tab && insetAt < 0 && oppAt < 0 &&
+			!item.Inset && !item.Tab && insetAt < 0 && backAt < 0 &&
 			breaksAfterLast(line) && overflows(used, item, width) {
 			base := 0
 			if i == from {
@@ -499,7 +554,21 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 			// Not an opportunity the line can be sent back to if the hyphen it
 			// would have to print does not fit in the room the line had.
 			if h := pendingHyphen(line); h == 0 || used.Add(h) <= width {
-				oppAt, oppLine, oppFlow = i, len(line), len(outOfFlow)
+				switch {
+				case h != 0 && item.HyphenLastResort:
+					// A hyphen the box asked to be given up. Remembered, and
+					// kept apart from the rest so that any other opportunity on
+					// the line is preferred to it however early it was.
+					hypAt, hypLine, hypFlow = i, len(line), len(outOfFlow)
+				default:
+					oppAt, oppLine, oppFlow = i, len(line), len(outOfFlow)
+					// hypAt is not cleared here, and does not need to be: the
+					// fall-back above reads it only where oppAt is unset, and
+					// once oppAt is set on a line it stays set. Clearing it was
+					// written and dropped — a planted defect that removed the
+					// clearing moved no test and no reftest, which is what a
+					// line of code that cannot be wrong looks like.
+				}
 			}
 		}
 
@@ -566,6 +635,22 @@ func TrailingSpacing(item Item) style.Unit {
 	// and is between two characters that a line break puts on different lines.
 	// Two characters on different lines are not adjacent and get no gap.
 	out := item.Autospace
+	if AllIgnorable(item.Text) {
+		// A run of nothing but zero-width formatting characters. It has no
+		// character of its own for a spacing to follow, and the spacing that
+		// hangs past a line ending here is the one after the letter in front of
+		// it — which is this same number, because a run is cut wherever the
+		// letter-spacing changes, so the letter in front carries what this run
+		// declares.
+		//
+		// Reading it as suppressed instead is the reading the cursive clause
+		// below gives it, and it is wrong in the expensive direction: the line
+		// counts a spacing it does not draw, so a float shrink-wrapped around
+		// "\u200B" and two letters comes out one tracking wider than the text
+		// and then wraps the second letter to a line of its own. The suite
+		// writes it as letter-spacing-202.
+		return out.Add(item.Spacing.Letter)
+	}
 	if CursiveTrackingSuppresses(item.Text) {
 		return out
 	}
@@ -780,8 +865,10 @@ func (br *Breaker) breakInsideWord(item Item, width style.Unit, content bool) (h
 		// then drew the head at another — the two disagree by exactly the
 		// difference between a final form and an isolated one.
 		cut := bounds[mid-1]
+		// The far side of the cut is this run's own text, so a pair across it is
+		// this font's whatever the outer context is.
 		w := br.MeasureSpacedInContext(item.Face, item.Text[:cut], item.Size, item.Spacing,
-			item.PreContext, item.Text[cut:]+item.PostContext)
+			item.PreContext, item.Text[cut:]+item.PostContext, true, item.Upright)
 		if w <= width {
 			lo = mid
 		} else {

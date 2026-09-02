@@ -94,6 +94,69 @@ func noBreakBefore(r rune, lb LineBreak) bool {
 // line starts with a hyphen" and line-break-normal-hyphens-001, over the same
 // text, says it "ends with a hyphen".
 
+// breaksAfter reports whether a line may end after a character, whatever
+// follows it: UAX #14's class BA.
+//
+// It is where every writing system that divides its words with a mark rather
+// than with a space keeps that mark — the Ethiopic wordspace, the Tibetan
+// tsheg, the Devanagari danda, the Khmer, Mongolian and Myanmar punctuation.
+// Without it a paragraph of any of them is one unbreakable run: the engine
+// offers an opportunity at a space, at an ideograph and at a hyphen, and a
+// script that uses none of the three has nowhere to wrap.
+//
+// The spaces and the hyphens of the class do not reach it: SplitAtBreaks has an
+// arm for each of them earlier, because both need something this cannot say —
+// a space is trimmed or hangs at the end of a line, and a hyphen decides what a
+// line may *begin* with as well.
+//
+// The soft hyphen is class BA and is taken out here, which is the one exception
+// and is a CSS rule rather than a Unicode one. §6.1 makes the opportunity a
+// soft hyphen offers conditional on the hyphens property — "hyphens: none"
+// suppresses it — and SplitAtBreaks has an arm that asks. Left in, this table
+// answered first and broke fourteen of the suite's hyphens tests, every one of
+// them a document that said not to break there.
+func breaksAfter(r rune) bool {
+	return r != 0x00AD && inLineBreakRanges(r, breakAfterRanges[:])
+}
+
+// isAksara reports whether a character may begin a Brahmic cluster: UAX #14's
+// classes AK and AS.
+//
+// LB28a is four prohibitions *inside* a cluster and says nothing against a
+// break between two of them, where LB31's "ALL ÷ ALL" allows one. The scripts
+// these classes cover — Balinese, Batak, Brahmi, Cham, Dives Akuru, Grantha,
+// Javanese, Kawi, Tulu-Tigalari — write without spaces, so that boundary is the
+// only opportunity their text has. Without it a paragraph of any of them is one
+// unbreakable run and overflows its box, which CSS Text §5.1 forbids outright:
+// "some form of fallback line breaking must occur... overflowing is not
+// allowed". The suite's line-breaking-023 is a Javanese paragraph in six ems
+// beside a reference it must *not* match.
+//
+// The prohibitions inside a cluster need nothing here. SplitAtBreaks takes an
+// opportunity only at a grapheme cluster boundary, and Unicode 15.1's GB9c
+// keeps a conjunct together — which is the virama half of LB28a.
+func isAksara(r rune) bool { return inLineBreakRanges(r, aksaraRanges[:]) }
+
+// NeedsDictionaryBreaking reports whether a character belongs to a script whose
+// words are found by lexical analysis: UAX #14's class SA.
+//
+// Thai, Lao, Khmer, Myanmar, Tai Le, New Tai Lue, Tai Tham and their
+// neighbours. They are written without spaces and without a mark between words
+// either, so the only way to know where a line may break is to know the
+// language. LB1 resolves the class to AL — "no opportunity anywhere" — and CSS
+// Text §5.1 does not accept that: "some form of fallback line breaking must
+// occur even if the UA doesn't know how to perform it correctly. Overflowing is
+// not allowed."
+//
+// So a line may end between two typographic character units of such a script,
+// which is a place the words are not and is the whole of what this engine can
+// offer. It is reported as well as done — see UnsupportedScript — because a
+// paragraph broken in the wrong places is a paragraph an author should be told
+// about rather than left to find.
+func NeedsDictionaryBreaking(r rune) bool {
+	return inLineBreakRanges(r, dictionaryRanges[:])
+}
+
 // isInseparable reports whether a character is one of UAX #14's class IN, the
 // ellipses. "line-break: loose" is the one value that lets a line break between
 // two of them; see inseparableRanges and the rule in breaks.go.
@@ -199,6 +262,22 @@ func gluedPair(prev, r rune) bool {
 	if inLineBreakRanges(prev, prefixRanges[:]) {
 		return true
 	}
+	// LB14, "OP SP* ×": a line may not end after an opening bracket. The bracket
+	// belongs to what it opens, and a line ending at one leaves it hanging in
+	// the margin with nothing behind it.
+	//
+	// word-break-break-all-020 is the suite's case and says in its own assertion
+	// what it is about: "break-all does not affect rules governing the soft wrap
+	// opportunities created by punctuation". It writes "あい）あ（い" in two ems
+	// three times over — once plain, once with the breaks written out as markup,
+	// and once with break-all — and asks for all three to break at the same
+	// points. Ordinary text never asks this function anything, because it offers
+	// no opportunity after a bracket to forbid; break-all offers one at every
+	// character boundary, and the closing bracket was already refused by the
+	// base table while the opening one was not.
+	if inLineBreakRanges(prev, openRanges[:]) {
+		return true
+	}
 	return false
 }
 
@@ -270,4 +349,30 @@ func BindsToAtomicInline(r rune) bool {
 		return bindingRanges[i].hi >= r
 	})
 	return i < len(bindingRanges) && bindingRanges[i].lo <= r
+}
+
+// NeedsPhraseBreaking reports whether a run has text in it that "word-break:
+// auto-phrase" would break differently from "normal".
+//
+// §5.2 allows a line to end only at a phrase boundary, and a phrase is a thing
+// Japanese has: finding one means a morphological analysis of the text, which
+// is the same class of problem as the dictionary NeedsDictionaryBreaking names
+// and is not implemented either. What is asked here is whether a document would
+// see the difference — and for a paragraph with no Japanese in it, it would not,
+// because there are no phrases in it to keep whole.
+//
+// So this is the predicate that turns one finding into two answers: the value's
+// other half — suppressing hyphenation — is done for every document, and only a
+// document whose text has phrases in it is told that the first half is missing.
+//
+// Ideographic is the test, which is Han, hiragana and katakana together. That is
+// the writing the rule is about; it is a wider net than "Japanese" and errs
+// towards reporting, which is the safe direction for a finding.
+func NeedsPhraseBreaking(text string) bool {
+	for _, r := range text {
+		if IsIdeographic(r) {
+			return true
+		}
+	}
+	return false
 }

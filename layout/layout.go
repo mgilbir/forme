@@ -213,6 +213,8 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 		inlineOffsets:    map[*Box]Point{},
 		inlineAligns:     map[*Box]vAlignState{},
 		intrinsic:        map[*Box]intrinsicWidths{},
+		turnedUpright:    map[*Box]bool{},
+		turnedMode:       map[*Box]writingMode{},
 		grids:            map[*Box]*tableGrid{},
 		tableDemands:     map[*Box][]tableColumnDemand{},
 		collapsed:        map[*Box]*collapsedGrid{},
@@ -351,6 +353,17 @@ type layouter struct {
 	// intrinsic memoizes the two content-based widths of a box, which are what
 	// a float with an auto width is sized by.
 	intrinsic map[*Box]intrinsicWidths
+	// turnedUpright records, for each box whose content is laid out sideways,
+	// whether its characters stand upright on the line rather than lying along
+	// it. Only the box that *starts* the turn is in here, because only it can:
+	// the turn is refused outright for a subtree that changes the writing mode
+	// again. See uprightText, which is what reads it, and writingmode.go.
+	turnedUpright map[*Box]bool
+	// turnedMode is the same set keyed to the mode each box was turned in, which
+	// is what the boxes inside it need: their own declarations are physical and
+	// have to be read in the frame the turn will put them back through. See
+	// insideTurn and untuneEdges.
+	turnedMode map[*Box]writingMode
 	// grids and tableDemands memoize the two expensive answers about a table:
 	// where its cells sit in the grid, and what each column asks for. Both are
 	// wanted once while the table's width is being resolved and again while it
@@ -728,7 +741,14 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	// child also has one draws a single em rather than two, which is
 	// margin-collapse-020 exactly: the green bar lands an em high and the red
 	// the reference covers is left showing.
-	sealed := establishesBFC(b) || b == l.root
+	// Whether this box's content is laid out sideways. It is asked here because
+	// the answer changes what the rest of this function means: the length its
+	// lines are broken against becomes its height, and it seals its edges. See
+	// layout/writingmode.go.
+	turnTo := l.turns(b, containing, hasHeight)
+	turn := turnTo.vertical()
+
+	sealed := establishesBFC(b) || b == l.root || turn
 
 	// A margin collapses through an edge only when nothing sits on that edge to
 	// stop it. A border or a padding of even one unit is something.
@@ -872,8 +892,55 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 		inner = flow{ctx: own, cbHeight: childHeight, cbDefinite: childDefinite}
 	}
 
+	// A turned box breaks its lines against its *height*: that is the length of
+	// a line when lines run down the page. What comes back is how far the lines
+	// stacked, which on the page is a width — see below, where it is turned.
+	lineLength := width
+	if turn {
+		lineLength = childHeight
+		if !hasHeight {
+			// CSS Writing Modes §7.3 and §7.4. A vertical box with an automatic
+			// height has no length to break its lines against, and the length
+			// it uses is not the containing block's: the containing block runs
+			// the other way, and its block size is the one thing a box being
+			// laid out inside it cannot know. So the box falls back to the size
+			// of what it is being laid out on — the page here, a viewport in a
+			// browser — and shrinks to fit inside that.
+			//
+			// It is the same shrink-to-fit a float does, asked of the same
+			// measurement, because it is the same question: the horizontal
+			// engine's widths *are* this box's inline extents.
+			lineLength = l.shrinkToFit(b, l.avail.H)
+		}
+	}
 	contentHeight, hoistTop, hoistBottom, placedAnything :=
-		l.clampedChildren(b, frag, width, topOpen, bottomOpen, inner)
+		l.clampedChildren(b, frag, lineLength, topOpen, bottomOpen, inner)
+	if turn {
+		if _, declared := l.explicitWidth(b, containing); !declared {
+			// The block axis of a turned box is its *width*, so a width of auto
+			// is the same question an automatic height asks of an ordinary
+			// block: how far did the content get. It is not the question
+			// resolveWidth answered, which was how much room the containing
+			// block has — that is the answer for a box whose lines run across
+			// the page, and this box's stack down it.
+			//
+			// Set before the turn and not after, because the turn measures the
+			// block axis back from this box's own content edge. See turnRect.
+			frag.BorderRect.W = contentHeight.
+				Add(padding.Horizontal()).Add(border.Horizontal())
+		}
+		// Everything inside is in the coordinates of a horizontal page. This is
+		// the quarter turn that puts it on this one, and it is the whole of what
+		// a vertical writing mode costs the rest of the engine.
+		turnContent(frag, turnTo)
+		// What the content came to along the block axis, which is a distance
+		// across the page and not down it. The box is as tall as its declared
+		// height and its content can only overflow it sideways, which is a
+		// thing contentH has no way to say — so the honest value is the box's
+		// own, and stating it here is what keeps the §10.6.7 arithmetic below
+		// from reading a width as a height.
+		contentHeight = lineLength
+	}
 
 	// What the content itself came to, which a declared height may raise the box
 	// above but does not change. The float rule below applies to it either way:
@@ -2236,18 +2303,34 @@ func (l *layouter) edges(b *Box, prefix string, containing style.Unit) Edges {
 		}
 		return v
 	}
-	return Edges{
+	return l.asLaidOut(b, Edges{
 		Top:    side("top"),
 		Right:  side("right"),
 		Bottom: side("bottom"),
 		Left:   side("left"),
-	}
+	})
 }
 
 // borderWidths resolves the four border widths, which are zero unless a style is
 // set — "border-width: 5px" with no "border-style" draws nothing and occupies
 // nothing, which is a rule that surprises people and is in the specification for
 // a reason: it lets a width be declared once and switched on per side.
+// asLaidOut turns a box's declared edges into the ones the engine laying it out
+// should read.
+//
+// For every box on a horizontal page that is the same thing. For a box inside a
+// turned one it is not: its declarations name sides of the *page*, and it is
+// being laid out in a frame that will be turned a quarter turn before it
+// reaches one. So the sides are permuted backwards here and the turn permutes
+// them forwards again, which is why "margin-top" inside a vertical box ends up
+// where the author asked for it. See untuneEdges.
+func (l *layouter) asLaidOut(b *Box, e Edges) Edges {
+	if mode, turned := l.insideTurn(b); turned {
+		return untuneEdges(e, mode)
+	}
+	return e
+}
+
 func (l *layouter) borderWidths(b *Box) Edges {
 	if e, ok := l.collapsedBorderWidths(b); ok {
 		// A table or a cell in §17.6.2's model does not have the border it
@@ -2267,12 +2350,12 @@ func (l *layouter) borderWidths(b *Box) Edges {
 		}
 		return maxZero(v)
 	}
-	return Edges{
+	return l.asLaidOut(b, Edges{
 		Top:    side("top"),
 		Right:  side("right"),
 		Bottom: side("bottom"),
 		Left:   side("left"),
-	}
+	})
 }
 
 // outlineWidth is the used width of §18.4's outline, and zero when none is drawn.

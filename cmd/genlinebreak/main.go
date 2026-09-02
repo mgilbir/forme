@@ -160,6 +160,59 @@ var looseBreakClasses = map[string]bool{"IN": true, "PO": true}
 // line beginning with an ellipsis it can never break in front of.
 var inseparableClasses = map[string]bool{"IN": true}
 
+// openClasses is UAX #14's class for an opening bracket, which LB14 forbids a
+// line to end after: "OP SP* ×".
+//
+// It is here for the same reason prefixClasses is. Ordinary text offers no
+// opportunity after a bracket, so nothing asks; "word-break: break-all" offers
+// one at every character boundary in a word, and then the question is real. §5.2
+// allows breaking "between typographic character units" and word-break-break-all-020
+// says in its own assertion what that does not reach: "break-all does not affect
+// rules governing the soft wrap opportunities created by punctuation".
+var openClasses = map[string]bool{"OP": true}
+
+// breakAfterClasses is UAX #14's "break after" class: the characters a line may
+// end after, whatever follows them.
+//
+// It is where the Ethiopic wordspace, the Tibetan tsheg, the Devanagari danda,
+// the Khmer and Mongolian and Myanmar punctuation, the runic and Aegean marks
+// and a dozen other scripts' word separators live — every writing system whose
+// words are divided by a mark rather than by a space. Without it none of them
+// wraps at all: the whole paragraph is one unbreakable run.
+//
+// The classes this engine handles character by character are not here and do
+// not need to be. The spaces of BA are U+0020 and the other space separators,
+// which SplitAtBreaks reaches before this; the hyphens are HY and HH, which
+// have a case of their own because a line may not *begin* with one of them
+// either.
+var breakAfterClasses = map[string]bool{"BA": true}
+
+// aksaraClasses are the two Brahmic classes a cluster may begin with.
+//
+// UAX #14's LB28a is written as four prohibitions *inside* an aksara cluster —
+// between a pre-base repha and the letter it belongs to, between a letter and
+// its final vowel, and across a virama — and it says nothing against a break
+// between two clusters, where LB31's "ALL ÷ ALL" allows one. The scripts these
+// classes cover write without spaces, so that boundary is the only opportunity
+// their text has: without it a paragraph of Javanese or Balinese is one
+// unbreakable run and overflows its box, which CSS Text §5.1 forbids outright.
+//
+// The prohibitions themselves need no table here. A cluster is a grapheme
+// cluster — Unicode 15.1's GB9c keeps a conjunct together, which is what the
+// virama rule is about — and SplitAtBreaks already refuses to cut inside one.
+var aksaraClasses = map[string]bool{"AK": true, "AS": true}
+
+// dictionaryClasses is UAX #14's SA: the South East Asian scripts whose words
+// are found by lexical analysis rather than by looking for a space.
+//
+// LB1 resolves SA to AL, which is "no opportunity anywhere", and notes that an
+// implementation with a dictionary does better. This engine has no dictionary
+// and CSS Text §5.1 does not accept the resolution either way: "some form of
+// fallback line breaking must occur even if the UA doesn't know how to perform
+// it correctly. Overflowing is not allowed." So the fallback is the boundary
+// between two typographic character units, which is where the words are not.
+var dictionaryClasses = map[string]bool{"SA": true}
+
 // prefixClasses is the class a line may end after under "loose" and no other
 // value: a currency sign or a number sign that belongs to the figure following
 // it.
@@ -199,7 +252,7 @@ func main() {
 	defer f.Close()
 
 	version := "unknown"
-	var spans, glue, strict, loose, prefix, postfix, inseparable []span
+	var spans, glue, strict, loose, prefix, postfix, inseparable, open, after, aksara, dict []span
 	seen := map[string]bool{}
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
@@ -243,6 +296,18 @@ func main() {
 		if postfixClasses[class] {
 			postfix = append(postfix, span{lo, hi, class})
 		}
+		if breakAfterClasses[class] {
+			after = append(after, span{lo, hi, class})
+		}
+		if aksaraClasses[class] {
+			aksara = append(aksara, span{lo, hi, class})
+		}
+		if dictionaryClasses[class] {
+			dict = append(dict, span{lo, hi, class})
+		}
+		if openClasses[class] {
+			open = append(open, span{lo, hi, class})
+		}
 		if inseparableClasses[class] {
 			inseparable = append(inseparable, span{lo, hi, class})
 		}
@@ -276,7 +341,9 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	for _, set := range []map[string]bool{looseBreakClasses, prefixClasses, postfixClasses, inseparableClasses} {
+	for _, set := range []map[string]bool{looseBreakClasses, prefixClasses, postfixClasses,
+		inseparableClasses, openClasses, breakAfterClasses, aksaraClasses,
+		dictionaryClasses} {
 		for class := range set {
 			if !seen[class] {
 				fmt.Fprintf(os.Stderr, "genlinebreak: no character has class %s; has it been renamed?\n", class)
@@ -335,6 +402,41 @@ package paragraph
 // UAX #14 has no unconditional rule about them — nothing there says a line may
 // not start with a per-cent sign — so this is the one part of the tailoring
 // that adds to the base table rather than taking away from it.`, version)
+	emit(&w, "breakAfterRanges", after, `// The characters a line may end after, UAX #14's class BA. Unicode %s.
+//
+// %d ranges, merged from %d the file states separately: %s.
+// Every writing system whose words are divided by a mark rather than by a space
+// is in here: the Ethiopic wordspace, the Tibetan tsheg, the Devanagari danda,
+// the Khmer, Mongolian and Myanmar punctuation, the runic and Aegean word
+// separators. Without them none of those scripts wraps at all.
+//
+// The BA characters this package reaches before this table are not a gap: the
+// spaces are U+0020 and the other space separators, which have their own arms
+// in SplitAtBreaks, and the hyphens are classes HY and HH, which have theirs
+// because a line may not begin with one either.`, version)
+	emit(&w, "aksaraRanges", aksara, `// The characters an aksara cluster may begin with, UAX #14's classes AK and
+// AS. Unicode %s.
+//
+// %d ranges, merged from %d the file states separately: %s.
+// Balinese, Batak, Brahmi, Cham, Dives Akuru, Grantha, Javanese, Kawi and
+// Tulu-Tigalari — scripts that write without spaces, whose only soft wrap
+// opportunity is the boundary between two clusters. See aksaraClasses in
+// cmd/genlinebreak for why the prohibitions inside a cluster need no table.`, version)
+	emit(&w, "dictionaryRanges", dict, `// The scripts whose words are found with a dictionary, UAX #14's class SA.
+// Unicode %s.
+//
+// %d ranges, merged from %d the file states separately: %s.
+// Thai, Lao, Khmer, Myanmar, Tai Le, New Tai Lue, Tai Tham and their
+// neighbours: written without spaces and without a mark between words either,
+// so the only way to know where a line may break is to know the language. See
+// dictionaryClasses in cmd/genlinebreak for what is done instead.`, version)
+	emit(&w, "openRanges", open, `// The opening brackets, UAX #14's class OP. Unicode %s.
+//
+// %d ranges, merged from %d the file states separately: %s.
+// LB14 forbids a line to end after one — "OP SP* ×" — and nothing in ordinary
+// text asks, because ordinary text offers no opportunity there to forbid.
+// "word-break: break-all" offers one at every character boundary in a word, and
+// §5.2 does not reach past the punctuation rules to take it: see gluedPair.`, version)
 	emit(&w, "inseparableRanges", inseparable, `// The ellipses, UAX #14's class IN. Unicode %s.
 //
 // %d ranges, merged from %d the file states separately: %s.

@@ -138,10 +138,10 @@ func TestSpreadDemandOnlyWidensWhatIsTooNarrow(t *testing.T) {
 	// orderings disagree here on purpose, since a column with the larger minimum
 	// and the smaller maximum is the only fixture that can tell them apart.
 	cols := []tableColumnDemand{
-		{min: u(40), max: u(50)},
-		{min: u(10), max: u(450)},
+		{floor: u(40), min: u(40), max: u(50)},
+		{floor: u(10), min: u(10), max: u(450)},
 	}
-	spreadDemand(cols, u(100), u(500))
+	spreadDemand(cols, u(100), u(100), u(500))
 	var min style.Unit
 	for _, c := range cols {
 		min = min.Add(c.min)
@@ -157,9 +157,12 @@ func TestSpreadDemandOnlyWidensWhatIsTooNarrow(t *testing.T) {
 	}
 
 	// A demand the columns already meet changes nothing at all.
-	same := []tableColumnDemand{{min: u(50), max: u(60)}, {min: u(50), max: u(60)}}
+	same := []tableColumnDemand{
+		{floor: u(50), min: u(50), max: u(60)},
+		{floor: u(50), min: u(50), max: u(60)},
+	}
 	before := append([]tableColumnDemand(nil), same...)
-	spreadDemand(same, u(100), u(120))
+	spreadDemand(same, u(100), u(100), u(120))
 	for i := range same {
 		if same[i] != before[i] {
 			t.Errorf("column %d moved from %v to %v for a demand it already met",

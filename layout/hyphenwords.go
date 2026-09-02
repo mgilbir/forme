@@ -102,11 +102,20 @@ func (g *hyphenGather) walk(b *Box) {
 	for _, child := range b.Children {
 		switch {
 		case child.Position.outOfFlow() || child.Float != FloatNone:
-			// Not in the text either side of it. An overlay hung off the middle
-			// of a word does not divide the word, which is what
-			// hyphens-out-of-flow-002 asserts by writing one between every pair
-			// of letters in turn.
-			continue
+			// Not in the text either side of it, and not a break in it either.
+			// An overlay hung off the middle of a word does not divide the word,
+			// which is what hyphens-out-of-flow-002 asserts by writing one
+			// between every pair of letters in turn — so the word being
+			// gathered is set aside rather than flushed, and picked up again
+			// where it left off.
+			//
+			// It still holds text of its own. A float establishes a formatting
+			// context and the words in it are words like any other; skipping the
+			// subtree meant a floated box never got a hyphenation point at all,
+			// however loudly it asked. hyphens-vs-float-clearance-001 is four
+			// floated divs each holding one long word, and every one of them
+			// came out unhyphenated and overflowing.
+			g.inside(child)
 		case child.Replaced != nil || isAtomicInline(child):
 			// A picture is not a letter, so the word ends at it.
 			g.flush()
@@ -193,4 +202,21 @@ func (g *hyphenGather) flush() {
 		src := from[p-1]
 		g.out[src.box] = append(g.out[src.box], src.at+1)
 	}
+}
+
+// inside gathers an out-of-flow box's own text without disturbing the word being
+// gathered around it.
+//
+// The two are different formatting contexts and neither is part of the other's
+// words: the box's first letter does not continue the word outside it, and the
+// letter after the box does not continue a word inside it. So the state is set
+// aside and put back, which is the difference between this and the flush-walk-
+// flush a block-level child gets — a block *ends* the word around it and an
+// out-of-flow box does not.
+func (g *hyphenGather) inside(b *Box) {
+	word, from, limits := g.word, g.from, g.limits
+	g.word, g.from, g.limits = nil, nil, hyphenLimits{}
+	g.walk(b)
+	g.flush()
+	g.word, g.from, g.limits = word, from, limits
 }

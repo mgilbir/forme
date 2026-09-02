@@ -77,10 +77,34 @@ type DrawText struct {
 	// rather than one it can work out: a run of punctuation between two Hebrew
 	// words is right-to-left because of its neighbours, and by the time the run
 	// reaches a backend the neighbours are gone.
-	RTL   bool
-	Face  *shape.Face
-	Size  style.Unit
-	Color style.RGBA
+	RTL bool
+	// Sideways says the run is set down the page rather than across it: each
+	// glyph is turned ninety degrees clockwise from the way it stands in the
+	// font, and the advance from one to the next goes downwards from At.
+	//
+	// It is the one thing a quarter turn does not do to a display list for
+	// free. Every rectangle in the list — a background, a border, a clip —
+	// comes out of a ninety degree rotation as another rectangle, so the turn
+	// is already expressed in the coordinates by the time a backend sees them;
+	// glyphs are the exception, because a glyph is a shape and not a rectangle
+	// and the only thing that can turn one is whatever draws it.
+	//
+	// See layout/writingmode.go, which is where the rest of the argument is.
+	Sideways bool
+	// Upright says the glyphs are *not* turned: each stands the way it does in
+	// the font and the pen moves one em down to the next one, whatever the
+	// face's horizontal advance for it is. It is what "text-orientation:
+	// upright" asks for, and it goes with Sideways rather than instead of it —
+	// the run still runs down the page, and only the glyphs on it are different.
+	//
+	// The em is the advance because CSS Writing Modes §4.4 says to synthesize
+	// the vertical metrics a face does not state, and the em box is the
+	// synthesis. It is not an approximation of a number the font has: for the
+	// faces this engine reads, there is no such number.
+	Upright bool
+	Face    *shape.Face
+	Size    style.Unit
+	Color   style.RGBA
 	// PreContext and PostContext are the text either side of this run, where the
 	// boundary between it and its neighbour did not break shaping.
 	//
@@ -94,6 +118,13 @@ type DrawText struct {
 	// They are context and not content: nothing of them is drawn, and nothing of
 	// them belongs to the text a reader extracts from the page.
 	PreContext, PostContext string
+	// ContextKerns says the neighbours above are set in this run's own face, so
+	// a pair that spans the boundary is this font's pair. It is false where font
+	// fallback put the neighbour in another face: a character is the same
+	// character whichever font sets it and still decides this run's joined
+	// shapes, but a kerning pair is one font's statement about two of its own
+	// glyphs and does not cross a font change.
+	ContextKerns bool
 	// CharSpacing is letter-spacing: an extra advance after every character.
 	//
 	// It is a property of the drawing rather than of the position because layout
@@ -842,16 +873,35 @@ func textInkReserved(v DrawText) Rect {
 
 // textInkAt is the rectangle both of them return, given how far the run's ink
 // reaches above and below its baseline.
+//
+// It is built in the run's own axes and then placed, which is what makes a
+// sideways run's ink a rectangle standing on the page rather than lying across
+// it: "above the baseline" is towards the right once the page has been turned
+// clockwise, and the run's advance goes down it. See placeRun.
 func textInkAt(v DrawText, above, below style.Unit) Rect {
 	var width style.Unit
 	if v.Face != nil {
 		w, _ := style.FromPx(v.Face.Measure(v.Text, v.Size.Px()))
-		width = w.Add(v.CharSpacing.Mul(float64(len([]rune(v.Text)))))
+		// The characters letter-spacing goes after, and not every rune: a run
+		// of zero-width formatting characters is not a run of typographic
+		// character units, and counting them makes a word's ink reach a
+		// tracking-width past the page for each one. See paragraph.SpacedUnits.
+		width = w.Add(v.CharSpacing.Mul(float64(spacedUnits(v.Text))))
 	}
-	return Rect{
-		X: v.At.X, Y: v.At.Y.Sub(above),
+	if v.Upright {
+		// An upright run is not the face's advances at all: it is one em per
+		// character along the line, and one em across it centred on the
+		// baseline. Both are the metrics CSS Writing Modes §4.4 has the UA
+		// synthesize where a face states none, so this is the run's real extent
+		// and not an estimate of it. See DrawText.Upright.
+		width = v.Size.Mul(float64(uprightUnits(v.Text))).
+			Add(v.CharSpacing.Mul(float64(spacedUnits(v.Text))))
+		above, below = v.Size.Div(2), v.Size.Div(2)
+	}
+	return placeRun(Rect{
+		Y: style.Unit(0).Sub(above),
 		W: width, H: above.Add(below),
-	}
+	}, v.At, v.Sideways)
 }
 
 // decorations paints a box's own background and border, which is what §E.2 steps
@@ -1150,7 +1200,16 @@ func (p *painter) lines(f *Fragment) {
 	}
 	content := f.ContentRect()
 	for _, line := range f.Lines {
+		// Where the baseline is, in whichever direction the line stacks its
+		// text across. On a horizontal line it is a distance down from the top
+		// of the line box; on a sideways one the line box has been turned with
+		// the rest of the block, and its block-start edge — the edge the
+		// baseline is measured from, and the edge half-leading is split above —
+		// is its right one.
 		baseline := content.Y.Add(line.Rect.Y).Add(line.Baseline)
+		if line.Sideways {
+			baseline = content.X.Add(line.Rect.X).Add(line.Rect.W).Sub(line.Baseline)
+		}
 		// §E.2's inline layer, in the order it gives: for each line box, the
 		// background and border of the inline boxes on it, then the text. They
 		// are in tree order among themselves, so an inner box's background is
@@ -1194,14 +1253,29 @@ func (p *painter) lines(f *Fragment) {
 			if !ok {
 				colour = style.RGBA{A: 1}
 			}
+			// Where the run starts, from two offsets: how far along the line
+			// it is, and how far off the line's baseline it sits.
+			//
+			// The second is the run's own baseline: the line's, displaced by
+			// §10.8.1's vertical-align, and then by §9.4.3's relative
+			// positioning. The two are added rather than chosen between, and in
+			// that order — a raised <sup> that is also relatively positioned
+			// moves twice.
+			along := run.X.Add(run.Offset.X)
+			across := run.Shift.Add(run.Offset.Y)
 			at := Point{
-				X: content.X.Add(line.Rect.X).Add(run.X).Add(run.Offset.X),
-				// The run's own baseline: the line's, displaced by §10.8.1's
-				// vertical-align, and then by §9.4.3's relative positioning.
-				// The two are added rather than chosen between, and in that
-				// order — a raised <sup> that is also relatively positioned
-				// moves twice.
-				Y: baseline.Add(run.Shift).Add(run.Offset.Y),
+				X: content.X.Add(line.Rect.X).Add(along),
+				Y: baseline.Add(across),
+			}
+			if line.Sideways {
+				// The same two offsets, a quarter turn round: along the line is
+				// down the page, and off the baseline is back towards the left,
+				// because that is the way "up" points once a page has been
+				// turned clockwise. See layout/writingmode.go.
+				at = Point{
+					X: baseline.Sub(across),
+					Y: content.Y.Add(line.Rect.Y).Add(along),
+				}
 			}
 			// The two lines that sit clear of the letters are drawn first, so the
 			// text is over them where they touch; the line-through is drawn after,
@@ -1219,22 +1293,25 @@ func (p *painter) lines(f *Fragment) {
 				// the page beside the box, and would put the control character
 				// itself into the text extracted from the page, where it is
 				// exactly the thing a reader does not want back.
-				p.ops = append(p.ops, controlBox(at, run.Width, run.Size, colour)...)
+				p.ops = append(p.ops, controlBox(at, run.Width, run.Size, colour, line.Sideways)...)
 				continue
 			}
-			p.decorate(run, at, false)
+			p.decorate(run, at, line.Sideways, false)
 			p.ops = append(p.ops, DrawText{
-				At:          at,
-				Text:        drawableText(run.Text),
-				PreContext:  run.PreContext,
-				PostContext: run.PostContext,
-				RTL:         run.RTL,
-				Face:        run.Face,
-				Size:        run.Size,
-				Color:       colour,
-				CharSpacing: run.LetterSpacing,
+				At:           at,
+				Sideways:     line.Sideways,
+				Upright:      run.Upright,
+				Text:         drawableText(run.Text),
+				PreContext:   run.PreContext,
+				PostContext:  run.PostContext,
+				ContextKerns: run.ContextKerns,
+				RTL:          run.RTL,
+				Face:         run.Face,
+				Size:         run.Size,
+				Color:        colour,
+				CharSpacing:  run.LetterSpacing,
 			})
-			p.decorate(run, at, true)
+			p.decorate(run, at, line.Sideways, true)
 		}
 	}
 }
@@ -1257,12 +1334,11 @@ func (p *painter) lines(f *Fragment) {
 // overlining div are ruled by one straight line. at.Y is the run's own baseline
 // and carries the run's own shift, which is undone here and the declaring box's
 // put in its place.
-func (p *painter) decorate(run TextRun, at Point, over bool) {
+func (p *painter) decorate(run TextRun, at Point, sideways, over bool) {
 	if len(run.Decorations) == 0 || run.Width <= 0 {
 		return
 	}
 	metrics := decorationMetricsFor(run.Face, run.Size)
-	lineY := at.Y.Sub(run.Shift)
 	for _, d := range run.Decorations {
 		if (d.Kind == decorationLineThrough) != over {
 			continue
@@ -1271,12 +1347,38 @@ func (p *painter) decorate(run TextRun, at Point, over bool) {
 		if !ok || colour.A == 0 {
 			continue
 		}
-		band := decorationBand(d.Kind, at.X, run.Width, lineY.Add(d.Shift), metrics)
+		// The band in the run's own axes, from an origin at the start of its
+		// baseline: along the line for its length, off the baseline for where
+		// the rule sits. Both are the same numbers a horizontal run has always
+		// used — a decoration is measured from the baseline it crosses, which
+		// is a fact about the text and not about the page — so placeRun is all
+		// that separates one that runs across the page from one that runs down.
+		band := decorationBand(d.Kind, 0, run.Width, d.Shift.Sub(run.Shift), metrics)
 		if band.Empty() {
 			continue
 		}
-		p.ops = append(p.ops, FillRect{Rect: band, Color: colour, Overhang: true})
+		p.ops = append(p.ops, FillRect{
+			Rect: placeRun(band, at, sideways), Color: colour, Overhang: true,
+		})
 	}
+}
+
+// placeRun puts a rectangle measured in a run's own axes onto the page.
+//
+// The rectangle's X is a distance along the line from the run's start and its Y
+// a distance off the baseline, positive downwards — the axes a horizontal run
+// is already in, which is why the horizontal case is a translation and nothing
+// else.
+//
+// The sideways case is the quarter turn: along the line becomes down the page,
+// and off the baseline becomes back towards the left. A rectangle's far edge in
+// the second axis is its near edge afterwards, which is where the extra
+// subtraction of the height comes from.
+func placeRun(r Rect, at Point, sideways bool) Rect {
+	if !sideways {
+		return Rect{X: at.X.Add(r.X), Y: at.Y.Add(r.Y), W: r.W, H: r.H}
+	}
+	return Rect{X: at.X.Sub(r.Y).Sub(r.H), Y: at.Y.Add(r.X), W: r.H, H: r.W}
 }
 
 // drawableText replaces the characters a face cannot set with the white space
@@ -1380,6 +1482,12 @@ func ShapedText(v DrawText) string {
 func ShapedGlyphs(v DrawText) ([]shape.Glyph, int) {
 	if v.Face == nil {
 		return nil, 0
+	}
+	if !v.ContextKerns {
+		// The neighbour is set in another face, so its characters decide this
+		// run's joined shapes and its glyphs decide nothing. See
+		// shape.ShapeGlyphsAcrossFaces.
+		return v.Face.ShapeGlyphsAcrossFaces(ShapedText(v), v.PreContext, v.PostContext)
 	}
 	return v.Face.ShapeGlyphsInContext(ShapedText(v), v.PreContext, v.PostContext)
 }

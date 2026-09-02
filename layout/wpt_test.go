@@ -994,7 +994,7 @@ const wptEnv = "WPT_TESTS"
 // property". The engine looked for it among the word-break values, found
 // nothing, and did nothing — without reporting it either, which is what made it
 // silent. See layout/overflowwrap_test.go.
-const wptCleanPassBaseline = 5748
+const wptCleanPassBaseline = 5835
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
@@ -1583,8 +1583,17 @@ func normaliseOps(ops []Op) string {
 				// numbers of them between the same visible glyphs.
 				continue
 			}
-			lines = append(lines, fmt.Sprintf("text %q at %s,%s size %s",
-				v.Text, num(v.At.X), num(v.At.Y), num(v.Size)))
+			// The orientation is part of the key: the same word at the same
+			// point, once across the page and once down it, is two pictures.
+			set := ""
+			if v.Sideways {
+				set = " sideways"
+			}
+			if v.Upright {
+				set = " upright"
+			}
+			lines = append(lines, fmt.Sprintf("text %q at %s,%s size %s%s",
+				v.Text, num(v.At.X), num(v.At.Y), num(v.Size), set))
 		case DrawImage:
 			if v.Rect.Empty() {
 				continue
@@ -1680,6 +1689,77 @@ func scanUniform(img image.Image) (style.RGBA, bool) {
 	}
 	// The same 0-255 scale style.ParseColor produces, so a fill written by a
 	// stylesheet and a fill derived from a pixel are the same string.
+	return style.RGBA{
+		R: float64(r0 >> 8), G: float64(g0 >> 8), B: float64(b0 >> 8), A: 1,
+	}, true
+}
+
+// stencilColours memoizes the scan below, for the same reason uniformColours
+// does.
+var stencilColours = map[image.Image]struct {
+	colour style.RGBA
+	ok     bool
+}{}
+
+// stencilColor reports whether a picture is a *stencil*: every pixel of it is
+// either fully transparent or one single fully opaque colour, and it says which
+// colour.
+//
+// It is uniformColor with the transparent pixels allowed, and it is a different
+// question rather than a weaker one. A uniform picture is a fill: it covers what
+// is under it everywhere. A stencil covers what is under it *in places* and
+// shows it through in the rest — so the only thing that can be said about the
+// page it makes is "this colour, or whatever was underneath". That is enough
+// where what was underneath is the same colour, and it is enough for nothing
+// else, which is why the only caller is invisibleImage.
+//
+// Fully transparent is required of the see-through pixels, not merely partial:
+// a half-transparent pixel composites with what is under it and makes a third
+// colour that neither this nor the fill beneath it names.
+func stencilColor(img image.Image) (style.RGBA, bool) {
+	if img == nil {
+		return style.RGBA{}, false
+	}
+	if got, ok := stencilColours[img]; ok {
+		return got.colour, got.ok
+	}
+	colour, ok := scanStencil(img)
+	stencilColours[img] = struct {
+		colour style.RGBA
+		ok     bool
+	}{colour, ok}
+	return colour, ok
+}
+
+func scanStencil(img image.Image) (style.RGBA, bool) {
+	b := img.Bounds()
+	if b.Empty() {
+		return style.RGBA{}, false
+	}
+	var r0, g0, b0 uint32
+	seen := false
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			r, g, bl, a := img.At(x, y).RGBA()
+			switch {
+			case a == 0:
+				// Puts nothing down, whatever the other three channels say: a
+				// PNG may carry any colour under a zero alpha.
+			case a != 0xFFFF:
+				return style.RGBA{}, false
+			case !seen:
+				r0, g0, b0, seen = r, g, bl, true
+			case r != r0 || g != g0 || bl != b0:
+				return style.RGBA{}, false
+			}
+		}
+	}
+	if !seen {
+		// Nothing opaque anywhere. Such a picture is invisible over any
+		// background, and saying so would need a colour to compare against that
+		// it does not have — so it is left to the caller's own zero-alpha path.
+		return style.RGBA{}, false
+	}
 	return style.RGBA{
 		R: float64(r0 >> 8), G: float64(g0 >> 8), B: float64(b0 >> 8), A: 1,
 	}, true

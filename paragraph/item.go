@@ -247,6 +247,38 @@ type Item struct {
 	// the layer that fills them in does not even ask unless the face carries the
 	// positional forms. See layout's linkShapingContext.
 	PreContext, PostContext string
+	// ContextKerns says the neighbours above are set in this run's own face.
+	//
+	// Which of its four shapes a letter takes is decided by the characters
+	// beside it, and a character is the same character whichever font sets it —
+	// so the context above crosses a font change. A kerning pair does not: it is
+	// stated by one font over two of its own glyphs, and a font change is a
+	// change in formatting, so the pair across that boundary is not this font's
+	// to apply. The flag is what keeps the two apart. See linkShapingContext.
+	ContextKerns bool
+	// Upright says the run is set upright on a line of vertical text: each of
+	// its characters stands the way it does in the code charts, and the pen
+	// moves one em to the next one whatever the face's horizontal advance for
+	// it happens to be.
+	//
+	// It is a fact about the *measurement* as much as about the drawing, which
+	// is why it travels on the item. CSS Writing Modes §4.4 has the UA
+	// synthesize vertical metrics where a face states none, and the synthesis is
+	// the em box — so the width of an upright run is a count of its characters
+	// and not a sum of its advances, and a line filled with the second and drawn
+	// with the first would be filled to a width the page does not have.
+	Upright bool
+	// HyphenLastResort says a line may be sent back to the opportunity in front
+	// of this item only when there is no other — because the opportunity is one
+	// a soft hyphen or a hyphenation dictionary made, and "word-break:
+	// auto-phrase" asks for those to be given up rather than taken.
+	//
+	// Given up, and not removed: §5.2's suppression is not a prohibition. A word
+	// that fits nowhere else is still divided, because the alternative is a line
+	// that overflows — which is what the suite's word-break-auto-phrase-008 asks
+	// for by name, "must give up on suppressing hyphenation when that would lead
+	// to overflow". So the opportunity is kept and reached for last.
+	HyphenLastResort bool
 	// Hyphen is how much wider the line becomes if it ends after this item: the
 	// width of the hyphen a soft hyphen asks to have printed. Zero means this is
 	// not a hyphenation point, which is every item in almost every document.
@@ -265,6 +297,24 @@ type Item struct {
 	// own fixtures expect — hyphens-manual-011 names two references, one for
 	// each, because the two are different glyphs in some faces.
 	HyphenText string
+	// HyphenFace is the face the hyphen is set in, which is not always the face
+	// of the word it ends.
+	//
+	// U+2010 is the typographically right character and a great many faces do
+	// not have it — Courier is one, and every monospaced document is set in it
+	// here. §8.1's fallback finds a face that does, exactly as it does for any
+	// other character the declared families cannot set, and the hyphen is text
+	// like any other. Nil where the word's own face will do.
+	HyphenFace *shape.Face
+	// HyphenAbove and HyphenBelow are how far the hyphen reaches above and below
+	// the baseline, which is not always as far as the word it ends.
+	//
+	// §10.8.1 measures a run against the font it is *in*, and a hyphen the
+	// word's own face could not set is in another one. Leaving the word's
+	// numbers on it made a line holding a fallback hyphen shorter than the same
+	// hyphen written into the text by hand, which is how every one of the
+	// suite's hyphens-manual references writes it.
+	HyphenAbove, HyphenBelow style.Unit
 	// Tab marks one preserved Tab. Its advance is not a property of the text —
 	// it is the distance to the next Tab stop, so it is resolved when the Tab
 	// has a place on a line and not before.
@@ -366,6 +416,20 @@ type Item struct {
 	// positioned one, an inline box's own inset — leaves it clear.
 	Leads        bool
 	Above, Below style.Unit
+	// LeadingOnly marks an item that is nothing but an inline box's own leading:
+	// a box that put nothing else on the line, with no text, no picture and no
+	// margin, border or padding.
+	//
+	// §10.8.1 counts such a box — "empty inline elements generate empty inline
+	// boxes, but these boxes still have margins, padding, borders and a line
+	// height, and thus influence these calculations just like elements with
+	// content" — and §9.4.2 does not: a line box holding nothing *but* boxes
+	// like this "must be treated as a zero-height line box". The two are the
+	// same sentence read from either side, and the flag is what lets StackLine
+	// tell them apart, because by the time it runs the only difference left
+	// between "an empty span beside a word" and "an empty span alone" is what
+	// else is on the line.
+	LeadingOnly bool
 	// Ascent and Descent are how far the item reaches above and below the
 	// baseline, measured over its *margin* box.
 	//
@@ -581,10 +645,13 @@ func (br *Breaker) SplitItem(item Item, at int) (head, tail Item) {
 	// the head, and what followed it still follows the tail.
 	head.PostContext = tail.Text + item.PostContext
 	tail.PreContext = item.PreContext + head.Text
+	// The two halves are the same run cut in two, so the boundary between them
+	// is one this font states its pairs over whatever the outer context is.
+	head.ContextKerns, tail.ContextKerns = true, true
 	head.Width = br.MeasureSpacedInContext(item.Face, head.Text, item.Size, item.Spacing,
-		head.PreContext, head.PostContext)
+		head.PreContext, head.PostContext, head.ContextKerns, head.Upright)
 	tail.Width = br.MeasureSpacedInContext(item.Face, tail.Text, item.Size, item.Spacing,
-		tail.PreContext, tail.PostContext)
+		tail.PreContext, tail.PostContext, tail.ContextKerns, tail.Upright)
 	// §8.1's gap sits at the item's far edge, so it goes with the tail — the
 	// head's far edge is the cut, which is a boundary the gap was never at. The
 	// measurements above do not include it, since it is not in the text.

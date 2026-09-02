@@ -103,22 +103,29 @@ func (l *layouter) linkShapingContext(items []inlineItem) []inlineItem {
 			continue
 		}
 		before, after := "", ""
+		// Whether a pair that spans the boundary is this font's to apply, which
+		// is a different question from whether the context reaches the run at
+		// all. See Item.ContextKerns.
+		kerns := true
 		if j, ok := shapingNeighbour(items, i, -1); ok {
 			before = items[j].Text
+			kerns = kerns && items[j].Face == items[i].Face
 		}
 		if j, ok := shapingNeighbour(items, i, +1); ok {
 			after = items[j].Text
+			kerns = kerns && items[j].Face == items[i].Face
 		}
 		if before == "" && after == "" {
 			continue
 		}
 		items[i].PreContext, items[i].PostContext = before, after
+		items[i].ContextKerns = kerns
 		// The advance changes with the form, so what was measured without the
 		// context is not what will be drawn with it. Measuring again is the
 		// whole reason the context has to be settled before the lines are
 		// filled rather than at paint time.
 		items[i].Width = l.br.MeasureSpacedInContext(items[i].Face, items[i].Text,
-			items[i].Size, items[i].Spacing, before, after)
+			items[i].Size, items[i].Spacing, before, after, kerns, items[i].Upright)
 	}
 	return items
 }
@@ -191,10 +198,19 @@ func facingInset(item inlineItem, rtl bool) style.Unit {
 // sameShaping reports whether two runs are shaped by the same rules, which is
 // what decides whether the boundary between them breaks shaping.
 //
-// The face rather than the declared font: a bold <b> in a document that supplied
-// only a regular face is set in that face, so nothing about the shaping changed
-// and the letters join. The suite asks for exactly that in shaping-002 and
-// shaping-018, which are font-weight and <b> over a single-face webfont.
+// The face is deliberately not among them, and that is the correction the
+// suite's cross-font tests forced. Which of its four shapes a letter takes is
+// decided by the characters beside it, and a character is the same character
+// whichever font sets it — Unicode's joining enforcement, and
+// shaping-join-002 and shaping-tatweel-002 and -003, where a zero width joiner
+// or a tatweel is pulled from another font by unicode-range and the Arabic
+// letters either side must still take their joined forms. A declared font is
+// not the question either: a bold <b> in a document that supplied only a
+// regular face is set in that face, which is what shaping-002 and shaping-018
+// are.
+//
+// What the face *does* decide is whether a pair across the boundary is this
+// font's to apply, which is Item.ContextKerns and is answered by the caller.
 //
 // The embedding level is the one that is not about styling at all. A bidi
 // isolate — <bdi>, dir="auto", unicode-bidi: isolate — raises the level of what
@@ -205,7 +221,7 @@ func facingInset(item inlineItem, rtl bool) style.Unit {
 // same three Arabic letters with a <bdi> and a dir="auto" in the middle, and
 // both read "Test passes if the three Arabic characters DON'T join".
 func sameShaping(a, b inlineItem) bool {
-	if a.Face != b.Face || a.Spacing != b.Spacing || a.Level != b.Level {
+	if a.Spacing != b.Spacing || a.Level != b.Level {
 		return false
 	}
 	// Of those three, the face has no test: a planted defect dropping it leaves

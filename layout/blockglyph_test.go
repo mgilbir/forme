@@ -163,6 +163,16 @@ func (b *blockFont) fills(v DrawText, measure func(s string, size float64) float
 	if v.Face == nil || v.Text == "" {
 		return nil, false
 	}
+	if v.Sideways {
+		// A run that goes down the page. This reconstruction walks a run along
+		// x and knows nothing about the quarter turn, so the rectangles it
+		// produced for one were in a row across the page where the engine drew
+		// a column down it. Declining leaves the run as text, which the
+		// comparison handles by its glyphs and which is the answer that is
+		// right rather than the one that is convenient. See
+		// layout/writingmode.go.
+		return nil, false
+	}
 	runes := []rune(v.Text)
 	rects := make([]blockRect, len(runes))
 	for i, r := range runes {
@@ -212,6 +222,12 @@ func (b *blockFont) fills(v DrawText, measure func(s string, size float64) float
 		}
 	}
 
+	// Which characters carry a letter-spacing after them. Not all of them: a
+	// zero-width formatting character is not a typographic character unit, and
+	// §8.2 puts no spacing after one — which is what layout measured the run
+	// with, so it is what this has to place the run with. See SpacingAfter.
+	after := spacingAfter(v.Text)
+
 	scale := v.Size.Px() / float64(b.unitsPerEm)
 	pen := v.At.X
 	var out []Op
@@ -246,15 +262,23 @@ func (b *blockFont) fills(v DrawText, measure func(s string, size float64) float
 			if v.Clip.Active {
 				rect = rect.Intersect(v.Clip.Rect)
 				if rect.Empty() {
-					pen = pen.Add(step).Add(v.CharSpacing)
+					pen = pen.Add(step).Add(spacingFor(v, after, i))
 					continue
 				}
 			}
 			out = append(out, FillRect{Rect: rect, Color: v.Color})
 		}
-		pen = pen.Add(step).Add(v.CharSpacing)
+		pen = pen.Add(step).Add(spacingFor(v, after, i))
 	}
 	return out, true
+}
+
+// spacingFor is the letter-spacing that follows one character of a run.
+func spacingFor(v DrawText, after []bool, i int) style.Unit {
+	if i < len(after) && !after[i] {
+		return 0
+	}
+	return v.CharSpacing
 }
 
 // newBlockFont reads a TrueType font program and classifies every character it

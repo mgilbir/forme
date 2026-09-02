@@ -139,31 +139,27 @@ var inertValues = map[string]inertValue{
 	"column-gap":   {produced: "normal", because: "there is no second column to leave a gap before"},
 	"column-fill":  {produced: "balance", because: "there is one column to fill"},
 
-	// CSS Writing Modes 4 §4.1, whose own note is the entry: "this property has
-	// no effect in horizontal writing modes". This engine has no other kind — a
-	// document that asks for one is told so by the writing-mode finding, which
-	// is where that gap belongs — so every value of this one asks for the page
-	// that is already there, and there is no value to compare against.
+	// CSS Writing Modes 4's three properties are not here, and where they went is
+	// worth recording. All three were inert for one reason — this engine laid out
+	// horizontal-tb and nothing else, so a property that "has no effect in
+	// horizontal writing modes" had no effect here at all — and that reason has
+	// stopped being true. They are registered properties now, they cascade, and
+	// layout reads them.
 	//
-	// The suite writes it to say exactly that. text-autospace-elements-005b
-	// declares "text-orientation: upright" with the comment "should NOT affect
-	// auto-spacing in horizontal mode".
-	"text-orientation": {always: true,
-		because: "there are no vertical writing modes here for it to have an effect in"},
-
-	// §9.1, and the same argument: "this property has no effect in horizontal
-	// typographic modes". The suite's text-autospace-003 writes it beside
-	// text-orientation under one comment — "these properties have no effect on
-	// horizontal text, so should not disable the auto-space insertion" — which
-	// is the entry stated by the people who wrote the property.
-	"text-combine-upright": {always: true,
-		because: "there are no vertical typographic modes here for it to combine in"},
-
-	// And the property that decides the mode, at the value every page here is
-	// laid out in. The other four ask for a page turned on its side, which is as
-	// different as a page can be, and are reported.
-	"writing-mode": {produced: "horizontal-tb",
-		because: "every page here is laid out in horizontal-tb"},
+	// The report moved with them, from the stylesheet to the box. Whether a page
+	// came out wrong is a question about the box that declared a vertical mode and
+	// not about the declaration: the same "writing-mode: vertical-rl" is laid out
+	// on one box and reported on the next, and a table keyed by property has no
+	// way to say that. See layout/writingmode.go.
+	//
+	// The two suite documents this table was built around are still silent, and
+	// for the reason they always were rather than by luck.
+	// text-autospace-elements-005b declares "text-orientation: upright" with the
+	// comment "should NOT affect auto-spacing in horizontal mode", and
+	// text-autospace-003 writes it beside text-combine-upright under "these
+	// properties have no effect on horizontal text": both are horizontal, so
+	// neither box is turned and neither property changes anything, which is what
+	// the layout-time check asks before it says a word.
 
 	// CSS Backgrounds 3 §5.1: corners are square.
 	"border-radius": {produced: "0", because: "every corner is square"},

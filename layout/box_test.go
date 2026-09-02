@@ -560,13 +560,20 @@ func TestWhitespaceCollapsing(t *testing.T) {
 		{"preserve-breaks", "a  \n  b", "a\nb"},
 		{"preserve-breaks", "a \t \n \t b", "a\nb"},
 
-		// A CRLF is one segment break and not two. This engine's HTML parser
-		// does not fold it, so a <pre> written on Windows would otherwise gain
-		// a blank line between every pair of its own.
-		{"preserve", "a\r\nb", "a\nb"},
-		{"preserve", "a\rb", "a\nb"},
+		// A carriage return is a space and not a segment break. HTML's input
+		// preprocessing folds every CR and CRLF in the *source* into a line
+		// feed before the tree is built, so one that reaches here came from a
+		// character reference and is a character of the text — and CSS Text
+		// says which one: "U+000D must be treated as U+0020".
+		// TestASourceNewlineIsFoldedByTheParser is the other half of this,
+		// and control-chars-00D is the suite's.
+		{"preserve", "a\r\nb", "a \nb"},
+		{"preserve", "a\rb", "a b"},
+		// pre-line collapses the spaces the returns became, and §4.1.1's first
+		// rule then removes them for being beside a segment break.
 		{"preserve-breaks", "a\r\n\r\nb", "a\n\nb"},
 		{"collapse", "a\r\nb", "a b"},
+		{"collapse", "a\rb", "a b"},
 
 		// The segment break transformation's one exception: a break against a
 		// zero-width space is removed rather than becoming a space, so an

@@ -210,7 +210,13 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		Strut: st, Bidi: para,
 	})
 	para.Leave(open, closing)
-	if len(items) == 0 {
+	if len(items) == 0 || onlyLeading(items) {
+		// §9.4.2's zero-height line, and the half of the sentence that is not
+		// about height: such a line "must be treated as not existing for any
+		// other purpose". A block whose whole inline content is inline boxes
+		// that put nothing on a line has no line, and so no height and no
+		// background — which is what an empty "<span></span>" inside a div has
+		// always produced here and must go on producing.
 		return 0
 	}
 	items = l.resolveBidi(b, items, para)
@@ -725,7 +731,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					// The method, which is read here rather than where the
 					// property is: this is the only place that knows a line is
 					// being justified at all.
-					method, unhandled := justificationOf(b)
+					method, auto, unhandled := justificationOf(b)
 					if unhandled != "" {
 						l.reportTextJustify(b, unhandled)
 					}
@@ -733,6 +739,16 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					// and nothing is reported about it: CSS Text 3 §7.3 says a
 					// line with no expansion opportunity is aligned as start,
 					// so that *is* the conforming rendering.
+					// "auto" is the specification asking for a script-
+					// appropriate algorithm rather than for a particular one,
+					// and word spaces are the wrong one for a script that has
+					// none. §7.3 expects "inter-character for CJK", and without
+					// it a justified line of Japanese is set flush to its start
+					// edge with all of its slack at the far end.
+					if method == justifyWords && auto &&
+						writtenWithoutWordSeparators(runs) {
+						method = justifyCharacters
+					}
 					if method == justifyCharacters {
 						interChar, _ = l.justifyBetweenCharacters(runs, xs, widths,
 							hangingTail(runs), avail.Sub(used))
@@ -795,8 +811,10 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 						Decorations:   decorations,
 						LetterSpacing: trackingOf(item).Add(interChar),
 						PreContext:    item.PreContext, PostContext: item.PostContext,
-						RTL:   item.Level&1 == 1,
-						Shift: shift,
+						ContextKerns: item.ContextKerns,
+						Upright:      item.Upright,
+						RTL:          item.Level&1 == 1,
+						Shift:        shift,
 					})
 				}
 				// Which *side* it hangs off, which is not a second way of saying how
@@ -856,6 +874,10 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					line.Runs = append(line.Runs, TextRun{
 						Text: blockEllipsis, Face: ending.face, Size: ending.size,
 						X: at, Width: lineEllipsis, Box: ending.box,
+						// The ellipsis is set the way the line it ends is set.
+						// See clampRoom, which reserves the room for it with the
+						// same question asked.
+						Upright: l.uprightText(ending.box),
 					})
 				}
 				parent.Lines = append(parent.Lines, line)
@@ -966,6 +988,13 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				// lines whose third holds only the mark is three lines tall.
 				y = y.Add(lh)
 			}
+			if forced {
+				// §9.5.2's clearance, asked of the break that ended the line.
+				// See breakClearance.
+				if c := breakClearance(items, next, origin); c.Sub(origin.y) > y {
+					y = c.Sub(origin.y)
+				}
+			}
 			if l.clampReached() {
 				// The clamp: everything after this line is discarded, which is what
 				// "continue: discard" means and what the ellipsis just said. It is
@@ -1058,7 +1087,8 @@ func (l *layouter) roomForLine(first inlineItem, origin flow, y, left, right, lo
 	style.Unit, style.Unit, style.Unit) {
 
 	for left != lo || right != hi {
-		if right.Sub(left) > 0 && (first.Space || first.Width <= right.Sub(left)) {
+		if room := right.Sub(left); room > 0 &&
+			(first.Space || first.NoWrap || first.Width <= room) {
 			break
 		}
 		next, ok := origin.ctx.nextBottomBelow(origin.y.Add(y))
@@ -1069,6 +1099,43 @@ func (l *layouter) roomForLine(first inlineItem, origin flow, y, left, right, lo
 		left, right = origin.ctx.bandAt(origin.y.Add(y), lo, hi)
 	}
 	return y, left, right
+}
+
+// breakClearance is where a <br> that ended a line says the next one may begin.
+//
+// §9.5.2 applies "clear" to block-level elements and a <br> is not one, so on
+// the face of it "clear: both" on one does nothing. It does something in every
+// browser, and it does it because HTML says so rather than because CSS does:
+// the element's clear *attribute* maps to the property, and <br clear=all> is
+// older than the property is. The suite turns on it in
+// border-conflict-style-107, which lays sixteen floated tables out in four rows
+// with "br { clear: both }" between them — without it they come out in one row
+// sixteen tables long, each a line lower than the last.
+//
+// The answer is in the float context's own coordinates, which is what clearance
+// returns and what the caller compares against; a break that clears nothing
+// answers zero, which is below every y a line can be at.
+//
+// The property alone decides it, with no test that the break came from a <br>,
+// and that is a claim about the two places a forced break is made rather than a
+// looser rule. One is the <br> itself, whose item carries the element's own box;
+// the other is a preserved segment break, whose item carries the *text's* box —
+// which is anonymous, and "clear" does not inherit, so it is never anything but
+// none. A planted defect that drops the test moves nothing: not the suite, and
+// not a fixture with "clear: both" on the block or on a span around the text.
+func breakClearance(items []inlineItem, next int, origin flow) style.Unit {
+	if next <= 0 || next > len(items) {
+		return 0
+	}
+	br := items[next-1]
+	if !br.Forced {
+		return 0
+	}
+	box := heldBox(br.Box)
+	if box == nil || box.Clear == ClearNone {
+		return 0
+	}
+	return origin.ctx.clearance(box.Clear)
 }
 
 // strutOver raises a line's strut to cover the forced break that ended it.
@@ -1135,9 +1202,9 @@ func (l *layouter) unkernLineEnd(runs []inlineItem) {
 			return
 		}
 		alone := l.br.MeasureSpacedInContext(it.Face, it.Text, it.Size, it.Spacing,
-			it.PreContext, "")
+			it.PreContext, "", it.ContextKerns, it.Upright)
 		inContext := l.br.MeasureSpacedInContext(it.Face, it.Text, it.Size, it.Spacing,
-			it.PreContext, it.PostContext)
+			it.PreContext, it.PostContext, it.ContextKerns, it.Upright)
 		// The difference and not the measurement, so that everything else the
 		// width carries — §8.1's gap, the letter-spacing the boundary rule
 		// exchanged — survives.
@@ -1243,4 +1310,20 @@ func lineAdvance(runs []inlineItem) style.Unit {
 		total = total.Add(r.Width)
 	}
 	return total
+}
+
+// onlyLeading reports whether a block's inline content is nothing but the
+// leading of inline boxes that put nothing on a line.
+//
+// See Item.LeadingOnly. It is asked of the whole block rather than of one line
+// because that is where the question is: a block with any real content has a
+// line for it, and a block with none has no line at all rather than an empty
+// one.
+func onlyLeading(items []inlineItem) bool {
+	for _, item := range items {
+		if !item.LeadingOnly {
+			return false
+		}
+	}
+	return true
 }

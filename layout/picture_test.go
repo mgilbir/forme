@@ -134,6 +134,23 @@ func picFills(ops []Op) []coloured {
 				out = append(out, cut(fills)...)
 				continue
 			}
+			// A stencil drawn over its own colour puts nothing new on the
+			// page. Every pixel of it is either that colour or fully
+			// transparent, so every point it covers ends up that colour
+			// whichever kind of pixel is there — provided what it covers is
+			// already that colour, which is what this checks.
+			//
+			// It is the same argument invisibleInk makes for a run of text and
+			// it is checked harder, because an image is large: the colour under
+			// all four corners and the centre must agree, and none of them may
+			// itself be a picture. background-image-transparency-001 is a green
+			// pattern on transparency tiled over "background-color: #008000",
+			// and its reference simply draws a green image — two pages that are
+			// the same green rectangle and were called different because one of
+			// them had an alpha channel.
+			if c, ok := stencilColor(v.Image); ok && coversNothingNew(out, v.Rect, c) {
+				continue
+			}
 			// Anything else is opaque for the purpose of what lies under it.
 			// That is an approximation for a picture with an alpha channel, and
 			// it errs towards calling two documents different, which is the
@@ -141,6 +158,15 @@ func picFills(ops []Op) []coloured {
 			out = append(out, cut([]coloured{{r: v.Rect, c: style.RGBA{A: 1}, img: v.Key}})...)
 
 		case TileImage:
+			// A tiling of a stencil over its own colour, by the same argument
+			// as the single picture above: every pixel of every tile is either
+			// that colour or fully transparent, and so is every gap between the
+			// tiles, so the whole clip ends up that colour. Gaplessness is not
+			// needed here and is for the uniform case — a gap shows the
+			// background, which is the colour in question.
+			if c, ok := stencilColor(v.Image); ok && coversNothingNew(out, v.Clip, c) {
+				continue
+			}
 			out = append(out, tiledFills(v)...)
 		}
 	}
@@ -517,7 +543,19 @@ func trimRunSpace(v DrawText) DrawText {
 	}
 	if lead := v.Text[:strings.Index(v.Text, trimmed)]; lead != "" {
 		w, _ := style.FromPx(v.Face.Measure(lead, v.Size.Px()))
-		v.At.X = v.At.X.Add(w).Add(v.CharSpacing.Mul(float64(len([]rune(lead)))))
+		if v.Upright {
+			// One em per character, which is what the run was placed with. See
+			// DrawText.Upright.
+			w = v.Size.Mul(float64(uprightUnits(lead)))
+		}
+		w = w.Add(v.CharSpacing.Mul(float64(len([]rune(lead)))))
+		// Past the space the run starts with, in whichever direction the run
+		// runs: down the page for a sideways one. See runAlong.
+		if v.Sideways {
+			v.At.Y = v.At.Y.Add(w)
+		} else {
+			v.At.X = v.At.X.Add(w)
+		}
 	}
 	v.Text = trimmed
 	return v
@@ -817,19 +855,36 @@ func glyphMarks(v DrawText, what, shape string, opaque bool) []textMark {
 	text := ShapedText(v)
 	glyphs, _ := ShapedGlyphs(v)
 	var out []textMark
-	x := v.At.X
+	// How far along the run each glyph is. Along, and not "x": a sideways run
+	// advances down the page, so the pen moves in y and the baseline's x is
+	// what every glyph on it shares. See runAlong.
+	along := runAlong(v)
 	for _, g := range glyphs {
 		adv, _ := style.FromPx(g.XAdvance * v.Size.Px() / 1000)
+		if v.Upright {
+			// One em per character, whatever the face's horizontal advance
+			// for it is, and nothing for a mark that is drawn on the character
+			// in front of it. See DrawText.Upright and paragraph.UprightUnits,
+			// which is the same count in the aggregate.
+			adv = 0
+			if uprightUnits(clusterText(text, g.Cluster)) > 0 {
+				adv = v.Size
+			}
+		}
 		if !blankCluster(text, g.Cluster) {
 			off, _ := style.FromPx(g.XOffset * v.Size.Px() / 1000)
+			at := Point{X: along.Add(off), Y: v.At.Y}
+			if v.Sideways {
+				at = Point{X: v.At.X, Y: along.Add(off)}
+			}
 			out = append(out, textMark{
 				what: fmt.Sprintf("%s glyph %d", what, g.GID),
-				x:    x.Add(off), y: v.At.Y,
+				x:    at.X, y: at.Y,
 				shape:  fmt.Sprintf("%s glyph %d", shape, g.GID),
 				opaque: opaque,
 			})
 		}
-		x = x.Add(adv).Add(v.CharSpacing)
+		along = along.Add(adv).Add(v.CharSpacing)
 	}
 	return out
 }
@@ -850,6 +905,23 @@ func faceKey(f *shape.Face) string {
 		return "no face"
 	}
 	return f.Name()
+}
+
+// clusterText is the character a glyph came from, for the questions that are
+// about the character rather than about the glyph.
+//
+// One character and not the whole cluster: what asks is the upright advance,
+// which is one em for a base and nothing for a mark, and the cluster offset
+// points at whichever of the two this glyph is.
+func clusterText(text string, cluster int) string {
+	if cluster < 0 || cluster >= len(text) {
+		return ""
+	}
+	r, n := utf8.DecodeRuneInString(text[cluster:])
+	if r == utf8.RuneError && n <= 1 {
+		return ""
+	}
+	return text[cluster : cluster+n]
 }
 
 // blankCluster reports whether the characters a glyph came from all mark no
@@ -1016,6 +1088,13 @@ func joinRuns(runs []DrawText) [][]DrawText {
 		y, size, spacing style.Unit
 		face             *shape.Face
 		colour           style.RGBA
+		// Which way the runs go. A run set down the page and one set across it
+		// do not abut even where their two coordinates happen to agree, and
+		// joining them would splice a word out of two that are at right angles.
+		//
+		// Upright goes with it: two runs at the same point, one set upright and
+		// one turned, draw two different pictures out of the same letters.
+		sideways, upright bool
 		// Two runs cut by different clips do not put the same ink down even
 		// where they abut, so they are not joined. Clip is comparable, which is
 		// what lets it sit in a map key at all.
@@ -1047,7 +1126,7 @@ func joinRuns(runs []DrawText) [][]DrawText {
 			out = append(out, []DrawText{v})
 			continue
 		}
-		k := key{v.At.Y, v.Size, v.CharSpacing, v.Face, v.Color, v.Clip}
+		k := key{runAcross(v), v.Size, v.CharSpacing, v.Face, v.Color, v.Sideways, v.Upright, v.Clip}
 		if _, seen := groups[k]; !seen {
 			order = append(order, k)
 		}
@@ -1059,21 +1138,43 @@ func joinRuns(runs []DrawText) [][]DrawText {
 		for _, one := range g {
 			flat = append(flat, one...)
 		}
-		sort.SliceStable(flat, func(i, j int) bool { return flat[i].At.X < flat[j].At.X })
+		sort.SliceStable(flat, func(i, j int) bool { return runAlong(flat[i]) < runAlong(flat[j]) })
 		cur := []DrawText{flat[0]}
-		end := flat[0].At.X.Add(runAdvance(flat[0]))
+		end := runAlong(flat[0]).Add(runAdvance(flat[0]))
 		for _, next := range flat[1:] {
-			if abs(end.Sub(next.At.X)) <= joinSlack {
+			if abs(end.Sub(runAlong(next))) <= joinSlack {
 				cur = append(cur, next)
 				end = end.Add(runAdvance(next))
 				continue
 			}
 			out = append(out, cur)
-			cur, end = []DrawText{next}, next.At.X.Add(runAdvance(next))
+			cur, end = []DrawText{next}, runAlong(next).Add(runAdvance(next))
 		}
 		out = append(out, cur)
 	}
 	return out
+}
+
+// runAlong is the coordinate a run advances in, and runAcross the one it shares
+// with every other run on its line.
+//
+// For a horizontal run those are x and y, which is what every reader of a
+// display list assumed until a page could be turned. Naming them is how this
+// file's arithmetic stops caring which: a sideways run advances down the page
+// and shares its baseline's x, and everything that chains runs together or
+// walks their glyphs is the same reasoning in the other pair of axes.
+func runAlong(v DrawText) style.Unit {
+	if v.Sideways {
+		return v.At.Y
+	}
+	return v.At.X
+}
+
+func runAcross(v DrawText) style.Unit {
+	if v.Sideways {
+		return v.At.X
+	}
+	return v.At.Y
 }
 
 // joinSlack is how far apart two runs may be and still count as touching.
@@ -1098,6 +1199,12 @@ func runAdvance(v DrawText) style.Unit {
 	// its overrides as characters was ruled different from a reference that drew
 	// the same picture from markup.
 	text := inkOnly(v.Text)
+	if v.Upright {
+		// One em per character rather than the face's advances, which is what
+		// the run was measured and placed with. See DrawText.Upright.
+		return v.Size.Mul(float64(uprightUnits(text))).
+			Add(v.CharSpacing.Mul(float64(spacedUnits(text))))
+	}
 	w, _ := style.FromPx(v.Face.Measure(text, v.Size.Px()))
 	return w.Add(v.CharSpacing.Mul(float64(len([]rune(text)))))
 }
@@ -1407,6 +1514,36 @@ func matchGroup(got, want []textMark) bool {
 			break
 		}
 		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+// coversNothingNew reports whether a rectangle is already the given colour
+// everywhere the sampling below can see.
+//
+// Five points rather than one: the four corners and the centre, all of which
+// must be that colour and none of which may be a picture. invisibleInk asks the
+// same question of a text run at a single point, and gets away with it because a
+// run is a few pixels wide; an image is as large as its box and a background
+// that changes underneath it is exactly the case that would be missed.
+//
+// The corners are taken a sliver inside the rectangle, because a fill's edge is
+// where one colour stops and the next begins and a sample exactly on it is a
+// question about which of the two the comparison rounds to.
+func coversNothingNew(under []coloured, r Rect, c style.RGBA) bool {
+	if r.W <= 2*sliver || r.H <= 2*sliver {
+		return false
+	}
+	x0, y0 := r.X.Add(sliver), r.Y.Add(sliver)
+	x1, y1 := r.Right().Sub(sliver), r.Bottom().Sub(sliver)
+	for _, p := range [][2]style.Unit{
+		{x0, y0}, {x1, y0}, {x0, y1}, {x1, y1},
+		{r.X.Add(r.W.Div(2)), r.Y.Add(r.H.Div(2))},
+	} {
+		got := colourAt(under, p[0], p[1])
+		if got.img != "" || !sameColour(got.c, c) {
 			return false
 		}
 	}

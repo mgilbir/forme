@@ -53,14 +53,29 @@ func (l *layouter) spacingFor(b *Box) textSpacing {
 
 // spacingValue resolves one of the two, or reports that it is "normal".
 //
-// A percentage is not accepted by either property; the basis of zero means one
-// resolves to nothing rather than to a fraction of something arbitrary.
+// Both take a percentage, and for both it is a percentage of the element's font
+// size. css-text-4 gives each of them "normal | <length-percentage>", and the
+// suite states the basis twice in the same words — "percentage values of
+// word-spacing are relative to the current font-size" in
+// word-spacing-percent-001 and the same sentence about letter-spacing in
+// letter-spacing-percent-001 — each writing "1em" and "100%" on two lines it
+// asks to be identical.
+//
+// The font size is read at *use* rather than at computed-value time, which is
+// what the same test's fourth line is for: a "word-spacing: 100%" on a div at
+// "font-size: 0.1em" holding a div at 20px has to give the inner div twenty
+// pixels of spacing and not two. So the percentage inherits as a percentage and
+// every element resolves it against its own size.
+//
+// A space's own advance is the other reading of word-spacing and it is wrong,
+// though nothing in word-spacing-001 can tell: that test is set in Ahem, whose
+// space is exactly one em, so the two answers agree everywhere in it.
 func (l *layouter) spacingValue(b *Box, property string) (style.Unit, bool) {
 	raw := strings.ToLower(strings.TrimSpace(b.Style[property]))
 	if raw == "" || raw == "normal" {
 		return 0, false
 	}
-	return l.lengthOf(b, property, 0)
+	return l.lengthOf(b, property, b.FontSize)
 }
 
 // indentMode is which line boxes §7.1's indent applies to.

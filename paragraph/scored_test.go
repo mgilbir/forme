@@ -183,7 +183,7 @@ func TestTheScoredCapsNeverChangeTheLineCount(t *testing.T) {
 			// greedy layout came to, never a number picked out of the air. No width
 			// reaches this search — it works inside the bands — so the count is
 			// taken there too, with nothing capping them.
-			want := br.countLinesInBands(items, bs.bands, style.MaxUnit, 0, MaxBalanceLines+1)
+			want, _ := br.countLinesInBands(items, bs.bands, style.MaxUnit, 0, MaxBalanceLines+1)
 			{
 				caps := br.BalanceScoredCaps(items, bs.bands, 0, want)
 				if caps == nil {

@@ -470,6 +470,7 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 				state.BreakOpportunity = false
 				out = append(out, lead)
 			}
+			before := len(out)
 			out, state = l.collectInline(child, out, state, inner)
 			if any {
 				// The trailing edge takes no opportunity of its own: a line
@@ -477,6 +478,25 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 				// margin, so whatever was carried in passes through to whatever
 				// comes after the box.
 				out = append(out, trail)
+			} else if len(out) == before {
+				// An inline box that put nothing on the line — no text, no
+				// picture, and no margin, border or padding of its own — is
+				// still on it. §10.8.1 says so by name: "empty inline elements
+				// generate empty inline boxes, but these boxes still have
+				// margins, padding, borders and a line height, and thus
+				// influence these calculations just like elements with content".
+				//
+				// So it contributes its leading and nothing else. The suite's
+				// empty-inline-003 is the shape — a "line-height: 5" span with
+				// no content, in a "line-height: 1" block — and its reference
+				// draws the line five times the height this engine gave it.
+				//
+				// Only where the box emitted nothing at all. Where it has an
+				// inset the two items above already carry the same leading, and
+				// where it has content the content does; a third copy would
+				// change no height and would put an item on the line that
+				// nothing else knows about.
+				out = append(out, l.leadingItem(child))
 			}
 			frame.Bidi.Leave(open, closing)
 		}
@@ -703,6 +723,15 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	if unhandled != "" {
 		l.reportWordBreak(b, unhandled)
 	}
+	if wb.AutoPhrase && needsPhraseBreaking(b.Text) {
+		// Half of "auto-phrase" is done and half is not, so which of the two a
+		// document gets depends on its text. Suppressing hyphenation needs
+		// nothing and is done for every box; ending a line only at a phrase
+		// boundary needs a morphological analysis of Japanese and is not done,
+		// and a box with no Japanese in it has no phrases for that to be about.
+		// See paragraph.NeedsPhraseBreaking.
+		l.reportWordBreak(b, "auto-phrase")
+	}
 	lb, unhandledLine := lineBreakOf(b.Style["line-break"])
 	// §5.3's loose tailoring is qualified "in Chinese and Japanese", and which
 	// of those the text is comes from the language tag's *script* rather than
@@ -812,18 +841,34 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	// document.
 	boundaryBreakSpaces := ws.BreakSpaces
 	if prev, ok := in.AfterBox.(*Box); ok {
-		if anc := commonAncestor(prev, b); anc != nil {
-			boundaryNoWrap = !whiteSpaceFor(anc.Style).Wrap
-			boundaryBreakSpaces = whiteSpaceFor(anc.Style).BreakSpaces
+		gov := commonAncestor(prev, b)
+		if in.AfterCollapsibleSpace {
+			// Except where a space left the opportunity, which is its own and
+			// not the boundary's. §3 gives it to the space — "there is a soft
+			// wrap opportunity after every white space character" — so what
+			// decides whether it may be taken is the element the space is in.
+			//
+			// The ancestor's answer is the same one everywhere the two elements
+			// agree, which is everywhere white-space is inherited rather than
+			// declared. Where they do not, the suite's
+			// white-space-wrap-after-nowrap-001 is the document: a nowrap block
+			// holding a wrapping span whose last character is a space, and then
+			// more of the block's own text. The common ancestor is the block and
+			// says no; the space is in the span and says yes, and the reference
+			// breaks the line.
+			gov = prev
+		}
+		if gov != nil {
+			boundaryNoWrap = !whiteSpaceFor(gov.Style).Wrap
+			boundaryBreakSpaces = whiteSpaceFor(gov.Style).BreakSpaces
 		}
 	}
-	// Read off the ancestor rather than off this box, because it is the same
-	// boundary the line above is about and §5.1 gives that boundary to the
-	// innermost element containing both characters. It is also a distinction no
-	// document makes: white-space inherits, so the two agree everywhere, and the
-	// suite gives 5594 clean passes with the ancestor and 5594 without it. It
-	// costs one expression on a walk that was already being made, and it says
-	// which element the rule belongs to.
+	// Read off the ancestor rather than off this box, because §5.1 gives the
+	// boundary to the innermost element containing both characters. When that
+	// note was written it was a distinction no document made — white-space
+	// inherits, so the two agree everywhere it is not declared, and the suite
+	// gave the same 5594 clean passes either way. The exception above is a
+	// document that does declare it on both, and there the two part.
 	//
 	// The narrower reading — that only an opportunity left behind by a *space*
 	// may be taken by one, since §3's sentence is about the space that leaves it
@@ -1070,7 +1115,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 				b: b, p: p, run: run, size: size, frame: frame, ws: ws,
 				above: above, below: below, boxFace: face,
 				offset: offset, spacing: spacing,
-				decorations: decorations, ow: ow, state: state,
+				decorations: decorations, ow: ow, wb: wb, state: state,
 				tabStop: tabStop, tabFloor: tabFloor,
 				para: para, bidiStart: start, bidiEnd: end,
 				// Only the first run of a piece may begin a line. The rest are
@@ -1168,14 +1213,17 @@ type textItemArgs struct {
 	spacing     textSpacing
 	decorations []textDecoration
 	ow          paragraph.OverflowWrap
-	state       inlineState
-	tabStop     style.Unit
-	tabFloor    style.Unit
-	para        int
-	bidiStart   int
-	bidiEnd     int
-	first       bool
-	last        bool
+	// wb is the box's word-break, of which the item needs one fact: whether a
+	// hyphen's opportunity is one to be given up. See Item.HyphenLastResort.
+	wb        paragraph.WordBreak
+	state     inlineState
+	tabStop   style.Unit
+	tabFloor  style.Unit
+	para      int
+	bidiStart int
+	bidiEnd   int
+	first     bool
+	last      bool
 	// spaceMayTakeIt says the opportunity carried in from another box is one a
 	// space may begin a line at, which is white-space: break-spaces and nothing
 	// else.
@@ -1209,6 +1257,13 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		BidiPara: a.para, BidiStart: a.bidiStart, BidiEnd: a.bidiEnd,
 		Text: a.run.Text, Box: b, Face: a.run.Face, Size: a.size,
 		Leads: true, Above: above, Below: below,
+		// Whether this run stands upright on a vertical line, which changes
+		// what it measures to and not only how it is drawn. See
+		// layouter.uprightText.
+		Upright: l.uprightText(b),
+		// §5.2's "auto-phrase" suppresses hyphenation, so an opportunity a
+		// hyphen made is one the line falls back to rather than one it takes.
+		HyphenLastResort: a.wb.AutoPhrase,
 		// §10.8.1's vertical-align, which a text box cannot be asked for
 		// itself: the property is not inherited, so the anonymous box holding
 		// a <span>'s words carries the initial value however the span was
@@ -1279,15 +1334,30 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		// line may break here at all. Only the last run of a piece has an end
 		// for a hyphen to be at — a piece cut in two by a change of face is one
 		// word, and the hyphen belongs after all of it.
-		item.HyphenText = hyphenCharacter(b.Style["hyphenate-character"], a.run.Face)
-		item.Hyphen = l.br.MeasureSpaced(a.run.Face, item.HyphenText, a.size, a.spacing)
+		var face *shape.Face
+		item.HyphenText, face = l.hyphenRun(b, a.run.Face, b.Style["hyphenate-character"])
+		// Measured the way the run it belongs to is measured: a hyphen printed
+		// at the end of an upright line stands upright with the letters, and it
+		// is an em per character there like any other.
+		item.Hyphen = l.br.MeasureSpacedInContext(face, item.HyphenText, a.size,
+			a.spacing, "", "", true, item.Upright)
+		if face != a.run.Face {
+			// Set in another face, so measured against it: §10.8.1's rule for
+			// the run itself, four lines up, and for the same reason.
+			item.HyphenFace = face
+			item.HyphenAbove, item.HyphenBelow = above, below
+			if usesNormalLineHeight(b) {
+				item.HyphenAbove, item.HyphenBelow = l.leadingInFace(b, face)
+			}
+		}
 	}
 	if !p.Tab {
 		// A tab is measured against a tab stop when it lands, so there is
 		// nothing to measure here and the face's own advance for U+0009 —
 		// whatever a face happens to give a character it has no glyph for —
 		// would be the wrong number to carry.
-		item.Width = l.br.MeasureSpaced(a.run.Face, a.run.Text, a.size, a.spacing)
+		item.Width = l.br.MeasureSpacedInContext(a.run.Face, a.run.Text, a.size,
+			a.spacing, "", "", true, item.Upright)
 	}
 	return item
 }
@@ -1359,4 +1429,75 @@ func collapsibleSeparators(pieces []piece, wst wordSpaceTransform) []piece {
 		}
 	}
 	return pieces
+}
+
+// leadingItem is what an inline box that puts nothing on a line contributes to
+// it: its own leading, at no width.
+//
+// It is marked Inset because that is what every stage below already understands
+// an item to be when it is a box's own edge rather than something drawn — it
+// takes no room, it ends no word, it offers no break opportunity, and a line
+// made of nothing else is still §9.4.2's zero-height line, because
+// contentOnLine asks Edged and this is not edged.
+func (l *layouter) leadingItem(b *Box) inlineItem {
+	// The box's own strut rather than its leading, so that an empty inline box
+	// whose font and line-height are its parent's reaches exactly as far as the
+	// block's strut does and ties with it. The two are the same measurement by
+	// two routes and they round differently: taking the leading here moved the
+	// baseline of "un<span></span>broken" by two hundredths of a pixel, which is
+	// line-breaking-015.
+	st := l.strutFor(b)
+	return inlineItem{Box: b, Inset: true, Above: st.Baseline,
+		Below: st.Height.Sub(st.Baseline), Leads: true, LeadingOnly: true}
+}
+
+// hyphenRun is the character a broken word ends with and the face to set it in.
+//
+// The face is asked because the character is chosen for its typography and not
+// for the font in hand: U+2010 HYPHEN is the right one and a great many faces do
+// not have it. Courier is one of them, so every monospaced document here was
+// hyphenated with U+002D HYPHEN-MINUS — permitted by §6.1, and not what a
+// reference that writes U+2010 draws.
+//
+// §8.1's fallback is what an ordinary run gets when its declared families cannot
+// set a character, and a hyphen is text like any other. The same call the marker
+// goes through finds a face that has it; where nothing does, hyphenCharacter's
+// own choice of U+002D stands, because a hyphen nobody can draw is worse than
+// the wrong hyphen.
+//
+// hyphens-vs-float-clearance-001 and -002 are the suite's case, and they are
+// exact to the pixel once the character matches: four floated monospace boxes,
+// each hyphenating one long word around a float.
+func (l *layouter) hyphenRun(b *Box, face *shape.Face, value string) (string, *shape.Face) {
+	// The face U+2010 would be set in, found the way any other character's is.
+	// hyphenCharacter chooses between the two hyphens by asking whether the face
+	// has the better one, and the face it should ask is the one the character
+	// would be drawn in rather than the one the box declared.
+	auto := l.faceThatHas(b, face, autoHyphen)
+	text := hyphenCharacter(value, auto)
+	if text == autoHyphen {
+		return text, auto
+	}
+	// A string the author wrote, or U+002D where no face had U+2010. Both are
+	// set in whatever can set them, for the same reason.
+	return text, l.faceThatHas(b, face, text)
+}
+
+// autoHyphen is U+2010 HYPHEN: the character "hyphenate-character: auto" asks
+// for where anything can draw it.
+const autoHyphen = "\u2010"
+
+// faceThatHas is the face a run of text would be set in: the box's own where it
+// can set the text, and §8.1's fallback where it cannot.
+func (l *layouter) faceThatHas(b *Box, face *shape.Face, text string) *shape.Face {
+	if face == nil || text == "" {
+		return face
+	}
+	if _, covered := face.GlyphID(firstRune(text)); covered {
+		return face
+	}
+	if runs := l.faceRunsFor(b, face, text); len(runs) > 0 && runs[0].Face != nil {
+		return runs[0].Face
+	}
+	return face
 }

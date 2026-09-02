@@ -436,6 +436,12 @@ func (l *layouter) lengthOfValue(b *Box, raw string) (style.Unit, bool) {
 // content overflows, and the width at which nothing in it would wrap.
 type tableColumnDemand struct {
 	min, max style.Unit
+	// floor is the narrowest the column can be made: what its content needs and
+	// nothing else. min is floor raised by whatever width the author declared on
+	// the column or on a cell in it, and the two part company exactly where a
+	// table has less room than those declarations ask for — see the note on
+	// tableColumnDemands. floor <= min <= max always holds.
+	floor style.Unit
 	// percent is a percentage width asked for by a column or by a cell in it,
 	// or zero. It is kept apart from the two lengths because it is not a demand
 	// on the content at all — it is a claim on the table's final width, which is
@@ -457,12 +463,26 @@ type tableColumnDemand struct {
 //     200 wide, which is what an author who wrote it expects, and treating it as
 //     a preference that content could shrink below made the declaration look
 //     ignored.
+//
+//     It is a demand and not a floor, though, and floor is where the difference
+//     is kept. §17.5.2.2 says "if the specified width of the cell is greater
+//     than MCW, W is the minimum cell width", which read literally makes a table
+//     of one empty "width: 100px" cell a hundred pixels wide in fifty pixels of
+//     room. No browser does that, and the suite says so twice over:
+//     table-sizing-with-adjacent-floats puts such a table in a fifty-pixel band
+//     beside two floats and its reference is fifty pixels wide, while
+//     inline-formatting-context-015's own reference declares a 110px cell in a
+//     200px table and expects the 110. So the declared width settles the column
+//     wherever the table has room for it, and gives way — down to the content's
+//     own minimum and no further — where it has not.
+//
 //   - A percentage is *not* a demand on the content. CSS Sizing says a
 //     percentage that cannot be resolved behaves as auto for intrinsic sizing,
 //     so it contributes nothing here and is applied as a claim once the table
 //     has a width. What is given up is a table whose width should have grown to
 //     satisfy a percentage column; the percentage is honoured against the width
 //     the table gets instead.
+//
 //   - A cell spanning several columns distributes its excess demand over them in
 //     proportion to their maxima, and equally when every maximum is zero. The
 //     specification says only that the excess "should be distributed"; in
@@ -510,7 +530,8 @@ func (l *layouter) tableColumnDemands(table *Box, s tableSpacing) []tableColumnD
 		if c.colSpan != 1 {
 			continue
 		}
-		lo, hi, pct := l.cellDemand(c.box)
+		bottom, lo, hi, pct := l.cellDemand(c.box)
+		out[c.col].floor = style.Max(out[c.col].floor, bottom)
 		out[c.col].min = style.Max(out[c.col].min, lo)
 		out[c.col].max = style.Max(out[c.col].max, hi)
 		out[c.col].percent = max(out[c.col].percent, pct)
@@ -519,11 +540,12 @@ func (l *layouter) tableColumnDemands(table *Box, s tableSpacing) []tableColumnD
 		if c.colSpan == 1 {
 			continue
 		}
-		lo, hi, _ := l.cellDemand(c.box)
+		bottom, lo, hi, _ := l.cellDemand(c.box)
 		// The spacing between the columns a cell spans is width the cell gets
 		// for free: a cell two columns wide sits across the gap between them.
 		gaps := s.h.Mul(float64(c.colSpan - 1))
-		spreadDemand(out[c.col:c.col+c.colSpan], lo.Sub(gaps), hi.Sub(gaps))
+		spreadDemand(out[c.col:c.col+c.colSpan],
+			bottom.Sub(gaps), lo.Sub(gaps), hi.Sub(gaps))
 	}
 	// §10.4's two limits, applied once the cells have spoken. A column is on the
 	// list the two properties apply to — everything but non-replaced inlines,
@@ -574,10 +596,14 @@ func (l *layouter) tableColumnDemands(table *Box, s tableSpacing) []tableColumnD
 		if v, ok := l.parseLength(col, "max-width"); ok && v.Kind == style.LengthAbsolute {
 			out[i].max = style.Min(out[i].max, v.Value)
 			out[i].min = style.Min(out[i].min, v.Value)
+			out[i].floor = style.Min(out[i].floor, v.Value)
 		}
 		if v, ok := l.parseLength(col, "min-width"); ok && v.Kind == style.LengthAbsolute && v.Value > 0 {
+			// A minimum is a floor and not a preference, so it raises the one
+			// width that never gives way as well as the other two.
 			out[i].min = style.Max(out[i].min, v.Value)
 			out[i].max = style.Max(out[i].max, v.Value)
+			out[i].floor = style.Max(out[i].floor, v.Value)
 		}
 	}
 	// §17.5.5's collapsed columns, taken out once every other rule has had its
@@ -597,6 +623,9 @@ func (l *layouter) tableColumnDemands(table *Box, s tableSpacing) []tableColumnD
 		}
 	}
 	for i := range out {
+		if out[i].min < out[i].floor {
+			out[i].min = out[i].floor
+		}
 		if out[i].max < out[i].min {
 			out[i].max = out[i].min
 		}
@@ -610,8 +639,13 @@ func (l *layouter) tableColumnDemands(table *Box, s tableSpacing) []tableColumnD
 // Margins are deliberately not added: "margin" does not apply to a table-cell,
 // and adding a declared one would make a stylesheet that sets a margin on every
 // element quietly widen every column.
-func (l *layouter) cellDemand(cell *Box) (min, max style.Unit, percent float64) {
+func (l *layouter) cellDemand(cell *Box) (floor, min, max style.Unit, percent float64) {
 	inner := l.contentWidths(cell)
+	// What the content needs, before the declared width has its say. It is
+	// carried alongside rather than recovered afterwards because the two limits
+	// below apply to it as well, and applying them twice to two numbers is the
+	// only way to keep floor <= min through a max-width that cuts across both.
+	bottom := inner.min
 	if length, ok := l.parseLength(cell, "width"); ok {
 		switch length.Kind {
 		case style.LengthAbsolute:
@@ -652,13 +686,15 @@ func (l *layouter) cellDemand(cell *Box) (min, max style.Unit, percent float64) 
 	if v, ok := l.parseLength(cell, "max-width"); ok && v.Kind == style.LengthAbsolute {
 		inner.max = style.Min(inner.max, v.Value)
 		inner.min = style.Min(inner.min, v.Value)
+		bottom = style.Min(bottom, v.Value)
 	}
 	if v, ok := l.parseLength(cell, "min-width"); ok && v.Kind == style.LengthAbsolute && v.Value > 0 {
 		inner.min = style.Max(inner.min, v.Value)
 		inner.max = style.Max(inner.max, v.Value)
+		bottom = style.Max(bottom, v.Value)
 	}
 	edges := l.cellInset(cell)
-	return inner.min.Add(edges), inner.max.Add(edges), percent
+	return bottom.Add(edges), inner.min.Add(edges), inner.max.Add(edges), percent
 }
 
 // cellInset is what a cell's border box holds besides its content: the
@@ -678,7 +714,7 @@ func (l *layouter) cellInset(cell *Box) style.Unit {
 
 // spreadDemand raises a run of columns so that they can hold a cell that spans
 // them, distributing the shortfall in proportion to what each already asks for.
-func spreadDemand(cols []tableColumnDemand, min, max style.Unit) {
+func spreadDemand(cols []tableColumnDemand, floor, min, max style.Unit) {
 	spread := func(want style.Unit, get func(*tableColumnDemand) *style.Unit) {
 		var have style.Unit
 		weights := make([]float64, len(cols))
@@ -697,6 +733,7 @@ func spreadDemand(cols []tableColumnDemand, min, max style.Unit) {
 			*p = p.Add(add[i])
 		}
 	}
+	spread(floor, func(d *tableColumnDemand) *style.Unit { return &d.floor })
 	spread(min, func(d *tableColumnDemand) *style.Unit { return &d.min })
 	spread(max, func(d *tableColumnDemand) *style.Unit { return &d.max })
 }
@@ -738,8 +775,16 @@ func distribute(total style.Unit, weights []float64, out []style.Unit) {
 	}
 }
 
-// tableGridWidths is the pair §17.5.2.2 calls MIN and MAX: the narrowest and
-// widest the whole grid can be, spacing included.
+// tableGridWidths is §17.5.2.2's MIN and MAX, and the floor under them: the
+// narrowest the grid can be *made*, the narrowest it asks to be, and the widest
+// it wants, spacing included.
+//
+// MIN and floor differ only where the author declared a width the content does
+// not need — see tableColumnDemands. Which of the two a caller wants is the
+// question of whether the room it has is negotiable: a table being fitted into
+// a band beside a float has no more room to give it, so the declarations give
+// way instead and floor is the answer; a table being asked how wide it would
+// like to be is asking about MIN.
 // columnGaps is how many border-spacing gaps a grid has across it.
 //
 // One more than the number of columns *rendered*, because the spacing shows
@@ -762,16 +807,17 @@ func columnGaps(g *tableGrid) int {
 	return n + 1
 }
 
-func (l *layouter) tableGridWidths(table *Box) (min, max style.Unit) {
+func (l *layouter) tableGridWidths(table *Box) (floor, min, max style.Unit) {
 	s := l.spacingOf(table)
 	g := l.tableGridFor(table)
 	demands := l.tableColumnDemands(table, s)
 	for _, d := range demands {
+		floor = floor.Add(d.floor)
 		min = min.Add(d.min)
 		max = max.Add(d.max)
 	}
 	gaps := s.h.Mul(float64(columnGaps(g)))
-	return min.Add(gaps), max.Add(gaps)
+	return floor.Add(gaps), min.Add(gaps), max.Add(gaps)
 }
 
 // tableUsedWidth is §17.5.2's choice of table width.
@@ -823,18 +869,31 @@ func (l *layouter) tableUsedWidth(table *Box, available style.Unit) style.Unit {
 		return style.Max(declared, l.fixedGridWidth(table, declared))
 	}
 
-	min, max := l.tableGridWidths(table)
-	min = style.Max(min, l.captionMinWidth(table))
+	floor, min, max := l.tableGridWidths(table)
+	caption := l.captionMinWidth(table)
+	floor, min = style.Max(floor, caption), style.Max(min, caption)
 	if hasDeclared {
 		// A declared width is a floor of the minimum, not a licence to squeeze
 		// the content out of the table: §17.5.2 makes the used width the greater
 		// of the two.
-		return style.Max(declared, min)
+		//
+		// Which minimum, though, is the question tableGridWidths answers: a
+		// table told to be seventy pixels wide has been given its room, and a
+		// column that asked for a hundred asked and did not get. So it is the
+		// floor here — what the content cannot go below — and not MIN, which
+		// would let one declaration overrule the other by being on the narrower
+		// box.
+		return style.Max(declared, floor)
 	}
 	if max < available {
 		return style.Max(max, min)
 	}
-	return style.Max(min, available)
+	// Less room than the widest the table wants. It takes the room, down to the
+	// width its content cannot go below — the declarations that asked for more
+	// than there is are what gives way, which is what puts a table of one
+	// "width: 100px" cell in a fifty-pixel band rather than across the float
+	// beside it.
+	return style.Max(floor, available)
 }
 
 // fixedGridWidth is what §17.5.2.1's columns come to: the sum of the column
@@ -1007,30 +1066,46 @@ func (l *layouter) columnWidths(table *Box, width style.Unit, s tableSpacing) []
 
 // autoColumnWidths is §17.5.2.2's distribution.
 //
-// Three regimes, and the middle one is the interesting one: between the grid's
-// minimum and its maximum the surplus goes where it does the most good, which is
-// in proportion to how much each column would still like. A column already at
-// its maximum gets none of it, so a table of one long paragraph and one short
-// word does not give them half each.
+// Four regimes, and the two in the middle are the interesting ones. Above the
+// grid's minimum the surplus goes where it does the most good, which is in
+// proportion to how much each column would still like; a column already at its
+// maximum gets none of it, so a table of one long paragraph and one short word
+// does not give them half each. Below it the same rule runs backwards: what a
+// column asked for above its content's own needs is what it gives back, in
+// proportion to how much of that it has — see tableColumnDemands for why a
+// declared width is something a column can be made to give back at all.
 func (l *layouter) autoColumnWidths(table *Box, room style.Unit, s tableSpacing) []style.Unit {
 	demands := l.tableColumnDemands(table, s)
 	out := make([]style.Unit, len(demands))
 
-	var min, max style.Unit
+	var floor, min, max style.Unit
 	for _, d := range demands {
+		floor = floor.Add(d.floor)
 		min = min.Add(d.min)
 		max = max.Add(d.max)
 	}
 	for i, d := range demands {
-		out[i] = d.min
+		out[i] = d.floor
 	}
 
 	switch {
+	case room <= floor:
+		// Narrower than the content can be. The columns keep the widths their
+		// content needs and the table overflows, which is what §17.5.2.2 asks
+		// for: a table is never squeezed below that.
 	case room <= min:
-		// Narrower than the content can be. The columns keep their minima and
-		// the table overflows, which is what §17.5.2.2 asks for: a table is
-		// never squeezed below the width its content needs.
+		// Room for the content but not for everything declared. Each column
+		// keeps what its content needs and gets back a share of what it asked
+		// for beyond that.
+		weights := make([]float64, len(demands))
+		for i, d := range demands {
+			weights[i] = float64(d.min.Sub(d.floor))
+		}
+		distribute(room.Sub(floor), weights, out)
 	case room <= max:
+		for i, d := range demands {
+			out[i] = d.min
+		}
 		weights := make([]float64, len(demands))
 		for i, d := range demands {
 			weights[i] = float64(d.max.Sub(d.min))
@@ -1276,7 +1351,7 @@ func (l *layouter) declaredTrackWidth(col *Box, room style.Unit) (style.Unit, bo
 func (l *layouter) reportColumnUnderflow(table *Box, widths []style.Unit, s tableSpacing) {
 	demands := l.tableColumnDemands(table, s)
 	for i, w := range widths {
-		if i >= len(demands) || w >= demands[i].min {
+		if i >= len(demands) || w >= demands[i].floor {
 			continue
 		}
 		l.rec.ReportDetail(Finding{
@@ -1284,7 +1359,7 @@ func (l *layouter) reportColumnUnderflow(table *Box, widths []style.Unit, s tabl
 			Source: AtHTML(offsetOf(table)),
 			Message: "column " + strconv.Itoa(i+1) + " is " + fmtPx(w) +
 				" wide under the fixed table layout and its content needs " +
-				fmtPx(demands[i].min) + "; the overflow is not drawn",
+				fmtPx(demands[i].floor) + "; the overflow is not drawn",
 			Path:     PathOf(table.Element),
 			Property: "table-layout",
 		})
@@ -1298,7 +1373,8 @@ func (l *layouter) reportColumnUnderflow(table *Box, widths []style.Unit, s tabl
 // tableContentWidths is a table box's intrinsic pair: the grid's own MIN and
 // MAX, which is what a float or a shrink-to-fit ancestor asks for.
 func (l *layouter) tableContentWidths(table *Box) intrinsicWidths {
-	min, max := l.tableGridWidths(table)
+	floor, _, max := l.tableGridWidths(table)
+	min := floor
 	if length, ok := l.parseLength(table, "width"); ok && length.Kind == style.LengthAbsolute {
 		// A declared width is what the table will be, floored by its minimum —
 		// except under the fixed algorithm, which is a promise that the content
