@@ -259,6 +259,7 @@ func (l *layouter) turns(b *Box, containing style.Unit, hasHeight bool) writingM
 	if mode == verticalRL || mode == verticalLR {
 		why := l.refusesToTurn(b, mode, containing, hasHeight)
 		if why == "" {
+			l.turnedUpright[b] = orientationOf(b) == orientationUpright
 			return mode
 		}
 		l.reportWritingMode(b, mode, why)
@@ -317,7 +318,7 @@ func (l *layouter) refusesToTurn(b *Box, mode writingMode, containing style.Unit
 		// the containing block with rather than fit to the lines inside.
 		return "its width is automatic, so there is no room for its lines to stack in"
 	}
-	return l.subtreeRefusesToTurn(b, mode, b)
+	return l.subtreeRefusesToTurn(b, mode, orientationOf(b), b)
 }
 
 // The properties whose meaning is a side of the page rather than a side of the
@@ -359,7 +360,7 @@ var physicalGeometry = [...]struct{ name, initial string }{
 //
 // The walk is over boxes and not over fragments because it runs before layout:
 // what it decides is how the box is laid out, so nothing has been laid out yet.
-func (l *layouter) subtreeRefusesToTurn(root *Box, mode writingMode, b *Box) string {
+func (l *layouter) subtreeRefusesToTurn(root *Box, mode writingMode, facing textOrientation, b *Box) string {
 	if b != root {
 		if b.Float != FloatNone || b.Position != PositionStatic {
 			return "it holds a floated or positioned box, whose sides are the page's"
@@ -386,24 +387,33 @@ func (l *layouter) subtreeRefusesToTurn(root *Box, mode writingMode, b *Box) str
 			}
 		}
 	}
-	if b.IsText() && hasUprightText(b.Text) {
-		// UAX #50. An ideograph stands upright on a vertical line and a rotated
-		// page cannot produce one — see paragraph/vertical.go, and see
-		// text-orientation below for the property that says the same thing.
+	if facing == orientationMixed && b.IsText() && hasUprightText(b.Text) {
+		// UAX #50, and only under "mixed". An ideograph stands upright on a
+		// vertical line there while the Latin beside it lies along one, and a
+		// turned page has one orientation for the whole of itself — see
+		// paragraph/vertical.go. The other two values ask for one orientation
+		// too: "sideways" is the turn this file performs, and "upright" is the
+		// mode Item.Upright expresses, so neither has anything for the table to
+		// disagree with.
 		return "its text has characters in it that stand upright on a vertical line"
 	}
 	if orientation := trimmedLower(b.Style["text-orientation"]); orientation != "" &&
-		orientation != "mixed" && orientation != "sideways" {
-		// "mixed" and "sideways" agree wherever no character is upright, and
-		// the clause above is what makes sure none is. "upright" and the rest
-		// disagree with both.
-		return "\"text-orientation: " + orientation + "\" asks for characters this engine cannot set on a vertical line"
+		orientationOf(b) != facing {
+		// The subtree has to agree with the box the turn started at, because the
+		// turn is one decision for the whole of it: one run set upright inside a
+		// box whose lines are turned is a second typesetting mode on the same
+		// line, and this file has one.
+		//
+		// "mixed" and "sideways" are the same answer here and are not told
+		// apart. They differ only over the characters UAX #50 calls upright, and
+		// the clause above has already refused a box that has one.
+		return "\"text-orientation: " + orientation + "\" inside it is not the orientation the box is set in"
 	}
 	if combine := trimmedLower(b.Style["text-combine-upright"]); combine != "" && combine != "none" {
 		return "\"text-combine-upright: " + combine + "\" asks for a run set across the line, which this engine does not do"
 	}
 	for _, c := range b.Children {
-		if why := l.subtreeRefusesToTurn(root, mode, c); why != "" {
+		if why := l.subtreeRefusesToTurn(root, mode, facing, c); why != "" {
 			return why
 		}
 	}
@@ -447,3 +457,61 @@ func (l *layouter) refusesPhysicalGeometry(b *Box) string {
 }
 
 func trimmedLower(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
+
+// uprightText reports whether the text of a box is set upright, standing the
+// way it does in the code charts, rather than turned with the page.
+//
+// It is asked of the box the text is *in* and answered by the box the turn
+// started at, which is somewhere above it — so the walk goes up until it meets a
+// box that was turned. A box with no turned ancestor is on a horizontal page and
+// its text is set the way it always was.
+//
+// Reading the style instead would be the obvious thing and would be wrong. A box
+// may declare "text-orientation: upright" and not be turned at all, because the
+// turn was refused for a reason that has nothing to do with orientation — an
+// automatic width, a floated child — and the text of such a box is laid out
+// across the page like any other. Measuring it a character to the em would make
+// a horizontal line out of numbers that only mean anything on a vertical one.
+func (l *layouter) uprightText(b *Box) bool {
+	for at := b; at != nil; at = at.Parent {
+		if upright, turned := l.turnedUpright[at]; turned {
+			return upright
+		}
+	}
+	return false
+}
+
+// textOrientation is which way the characters of a vertical line face.
+type textOrientation uint8
+
+const (
+	// orientationMixed is the initial value: a character is turned with the
+	// page where UAX #50 calls it rotatable and stands upright where it does
+	// not. It is the only one of the three that can ask for both on one line,
+	// which is why it is the only one the upright-character check applies to.
+	orientationMixed textOrientation = iota
+	// orientationSideways turns every character with the page, upright ones
+	// included. That is exactly what this file's quarter turn does, so a box
+	// asking for it needs no check at all.
+	orientationSideways
+	// orientationUpright stands every character the way it does in the code
+	// charts and moves the pen one em to the next. It is not a rotation of
+	// anything, and it is the reason paragraph.Item carries Upright.
+	orientationUpright
+)
+
+// orientationOf reads CSS Writing Modes §5.1's property.
+//
+// "sideways-right" is the same value as "sideways" — it is the name the
+// property had in css-writing-modes-3, kept as a legacy alias — and is read as
+// one rather than reported, because a document writing it is asking for
+// something this engine does.
+func orientationOf(b *Box) textOrientation {
+	switch trimmedLower(b.Style["text-orientation"]) {
+	case "upright":
+		return orientationUpright
+	case "sideways", "sideways-right":
+		return orientationSideways
+	}
+	return orientationMixed
+}

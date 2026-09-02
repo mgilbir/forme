@@ -213,6 +213,7 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 		inlineOffsets:    map[*Box]Point{},
 		inlineAligns:     map[*Box]vAlignState{},
 		intrinsic:        map[*Box]intrinsicWidths{},
+		turnedUpright:    map[*Box]bool{},
 		grids:            map[*Box]*tableGrid{},
 		tableDemands:     map[*Box][]tableColumnDemand{},
 		collapsed:        map[*Box]*collapsedGrid{},
@@ -351,6 +352,12 @@ type layouter struct {
 	// intrinsic memoizes the two content-based widths of a box, which are what
 	// a float with an auto width is sized by.
 	intrinsic map[*Box]intrinsicWidths
+	// turnedUpright records, for each box whose content is laid out sideways,
+	// whether its characters stand upright on the line rather than lying along
+	// it. Only the box that *starts* the turn is in here, because only it can:
+	// the turn is refused outright for a subtree that changes the writing mode
+	// again. See uprightText, which is what reads it, and writingmode.go.
+	turnedUpright map[*Box]bool
 	// grids and tableDemands memoize the two expensive answers about a table:
 	// where its cells sit in the grid, and what each column asks for. Both are
 	// wanted once while the table's width is being resolved and again while it

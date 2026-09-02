@@ -856,6 +856,16 @@ func glyphMarks(v DrawText, what, shape string, opaque bool) []textMark {
 	along := runAlong(v)
 	for _, g := range glyphs {
 		adv, _ := style.FromPx(g.XAdvance * v.Size.Px() / 1000)
+		if v.Upright {
+			// One em per character, whatever the face's horizontal advance
+			// for it is, and nothing for a mark that is drawn on the character
+			// in front of it. See DrawText.Upright and paragraph.UprightUnits,
+			// which is the same count in the aggregate.
+			adv = 0
+			if uprightUnits(clusterText(text, g.Cluster)) > 0 {
+				adv = v.Size
+			}
+		}
 		if !blankCluster(text, g.Cluster) {
 			off, _ := style.FromPx(g.XOffset * v.Size.Px() / 1000)
 			at := Point{X: along.Add(off), Y: v.At.Y}
@@ -890,6 +900,23 @@ func faceKey(f *shape.Face) string {
 		return "no face"
 	}
 	return f.Name()
+}
+
+// clusterText is the character a glyph came from, for the questions that are
+// about the character rather than about the glyph.
+//
+// One character and not the whole cluster: what asks is the upright advance,
+// which is one em for a base and nothing for a mark, and the cluster offset
+// points at whichever of the two this glyph is.
+func clusterText(text string, cluster int) string {
+	if cluster < 0 || cluster >= len(text) {
+		return ""
+	}
+	r, n := utf8.DecodeRuneInString(text[cluster:])
+	if r == utf8.RuneError && n <= 1 {
+		return ""
+	}
+	return text[cluster : cluster+n]
 }
 
 // blankCluster reports whether the characters a glyph came from all mark no
@@ -1059,7 +1086,10 @@ func joinRuns(runs []DrawText) [][]DrawText {
 		// Which way the runs go. A run set down the page and one set across it
 		// do not abut even where their two coordinates happen to agree, and
 		// joining them would splice a word out of two that are at right angles.
-		sideways bool
+		//
+		// Upright goes with it: two runs at the same point, one set upright and
+		// one turned, draw two different pictures out of the same letters.
+		sideways, upright bool
 		// Two runs cut by different clips do not put the same ink down even
 		// where they abut, so they are not joined. Clip is comparable, which is
 		// what lets it sit in a map key at all.
@@ -1091,7 +1121,7 @@ func joinRuns(runs []DrawText) [][]DrawText {
 			out = append(out, []DrawText{v})
 			continue
 		}
-		k := key{runAcross(v), v.Size, v.CharSpacing, v.Face, v.Color, v.Sideways, v.Clip}
+		k := key{runAcross(v), v.Size, v.CharSpacing, v.Face, v.Color, v.Sideways, v.Upright, v.Clip}
 		if _, seen := groups[k]; !seen {
 			order = append(order, k)
 		}
@@ -1164,6 +1194,12 @@ func runAdvance(v DrawText) style.Unit {
 	// its overrides as characters was ruled different from a reference that drew
 	// the same picture from markup.
 	text := inkOnly(v.Text)
+	if v.Upright {
+		// One em per character rather than the face's advances, which is what
+		// the run was measured and placed with. See DrawText.Upright.
+		return v.Size.Mul(float64(uprightUnits(text))).
+			Add(v.CharSpacing.Mul(float64(spacedUnits(text))))
+	}
 	w, _ := style.FromPx(v.Face.Measure(text, v.Size.Px()))
 	return w.Add(v.CharSpacing.Mul(float64(len([]rune(text)))))
 }

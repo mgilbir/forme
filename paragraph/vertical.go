@@ -1,5 +1,7 @@
 package paragraph
 
+import "unicode"
+
 // UAX #50, Unicode Vertical Text Layout: which way a character faces on a line
 // of vertical text.
 //
@@ -33,4 +35,28 @@ func HasUprightText(s string) bool {
 		}
 	}
 	return false
+}
+
+// UprightUnits counts the characters of a run that take an advance when the run
+// is set upright.
+//
+// One em each, and the count is what the width is made of — see
+// Breaker.MeasureSpacedInContext. What is left out is what takes no room in any
+// mode: a character nothing is drawn for, and a combining mark, which is drawn
+// on the character in front of it rather than after it.
+//
+// A grapheme cluster would be the exact unit and this counts runes, so a base
+// and a mark it does not know about are one em apart rather than one em wide.
+// That is the same approximation SpacedUnits makes for letter-spacing and it is
+// recorded there too; the scripts that need the exact answer are the ones this
+// engine cannot set upright for other reasons.
+func UprightUnits(text string) int {
+	n := 0
+	for _, r := range text {
+		if IsDefaultIgnorable(r) || unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r) {
+			continue
+		}
+		n++
+	}
+	return n
 }

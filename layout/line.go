@@ -75,6 +75,12 @@ type TextRun struct {
 	// textdecoration.go, where the difference between propagating and inheriting
 	// is worked through.
 	Decorations []textDecoration
+	// Upright says each of the run's characters stands the way it does in the
+	// code charts and the pen moves one em to the next one, rather than the run
+	// being turned with the page. It is what "text-orientation: upright" asks
+	// for, and it is a fact about the measurement as much as about the drawing.
+	// See paragraph.Item.Upright.
+	Upright bool
 	// RTL says the run reads right to left, so its glyphs are drawn from the
 	// right edge of its box towards the left and its brackets are mirrored.
 	//

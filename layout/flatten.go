@@ -1245,6 +1245,10 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		BidiPara: a.para, BidiStart: a.bidiStart, BidiEnd: a.bidiEnd,
 		Text: a.run.Text, Box: b, Face: a.run.Face, Size: a.size,
 		Leads: true, Above: above, Below: below,
+		// Whether this run stands upright on a vertical line, which changes
+		// what it measures to and not only how it is drawn. See
+		// layouter.uprightText.
+		Upright: l.uprightText(b),
 		// §10.8.1's vertical-align, which a text box cannot be asked for
 		// itself: the property is not inherited, so the anonymous box holding
 		// a <span>'s words carries the initial value however the span was
@@ -1317,7 +1321,11 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		// word, and the hyphen belongs after all of it.
 		var face *shape.Face
 		item.HyphenText, face = l.hyphenRun(b, a.run.Face, b.Style["hyphenate-character"])
-		item.Hyphen = l.br.MeasureSpaced(face, item.HyphenText, a.size, a.spacing)
+		// Measured the way the run it belongs to is measured: a hyphen printed
+		// at the end of an upright line stands upright with the letters, and it
+		// is an em per character there like any other.
+		item.Hyphen = l.br.MeasureSpacedInContext(face, item.HyphenText, a.size,
+			a.spacing, "", "", true, item.Upright)
 		if face != a.run.Face {
 			// Set in another face, so measured against it: §10.8.1's rule for
 			// the run itself, four lines up, and for the same reason.
@@ -1333,7 +1341,8 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		// nothing to measure here and the face's own advance for U+0009 —
 		// whatever a face happens to give a character it has no glyph for —
 		// would be the wrong number to carry.
-		item.Width = l.br.MeasureSpaced(a.run.Face, a.run.Text, a.size, a.spacing)
+		item.Width = l.br.MeasureSpacedInContext(a.run.Face, a.run.Text, a.size,
+			a.spacing, "", "", true, item.Upright)
 	}
 	return item
 }

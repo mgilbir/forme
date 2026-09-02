@@ -812,6 +812,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 						LetterSpacing: trackingOf(item).Add(interChar),
 						PreContext:    item.PreContext, PostContext: item.PostContext,
 						ContextKerns: item.ContextKerns,
+						Upright:      item.Upright,
 						RTL:          item.Level&1 == 1,
 						Shift:        shift,
 					})
@@ -1197,9 +1198,9 @@ func (l *layouter) unkernLineEnd(runs []inlineItem) {
 			return
 		}
 		alone := l.br.MeasureSpacedInContext(it.Face, it.Text, it.Size, it.Spacing,
-			it.PreContext, "", it.ContextKerns)
+			it.PreContext, "", it.ContextKerns, it.Upright)
 		inContext := l.br.MeasureSpacedInContext(it.Face, it.Text, it.Size, it.Spacing,
-			it.PreContext, it.PostContext, it.ContextKerns)
+			it.PreContext, it.PostContext, it.ContextKerns, it.Upright)
 		// The difference and not the measurement, so that everything else the
 		// width carries — §8.1's gap, the letter-spacing the boundary rule
 		// exchanged — survives.

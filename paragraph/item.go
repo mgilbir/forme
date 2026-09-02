@@ -256,6 +256,18 @@ type Item struct {
 	// change in formatting, so the pair across that boundary is not this font's
 	// to apply. The flag is what keeps the two apart. See linkShapingContext.
 	ContextKerns bool
+	// Upright says the run is set upright on a line of vertical text: each of
+	// its characters stands the way it does in the code charts, and the pen
+	// moves one em to the next one whatever the face's horizontal advance for
+	// it happens to be.
+	//
+	// It is a fact about the *measurement* as much as about the drawing, which
+	// is why it travels on the item. CSS Writing Modes §4.4 has the UA
+	// synthesize vertical metrics where a face states none, and the synthesis is
+	// the em box — so the width of an upright run is a count of its characters
+	// and not a sum of its advances, and a line filled with the second and drawn
+	// with the first would be filled to a width the page does not have.
+	Upright bool
 	// Hyphen is how much wider the line becomes if it ends after this item: the
 	// width of the hyphen a soft hyphen asks to have printed. Zero means this is
 	// not a hyphenation point, which is every item in almost every document.
@@ -626,9 +638,9 @@ func (br *Breaker) SplitItem(item Item, at int) (head, tail Item) {
 	// is one this font states its pairs over whatever the outer context is.
 	head.ContextKerns, tail.ContextKerns = true, true
 	head.Width = br.MeasureSpacedInContext(item.Face, head.Text, item.Size, item.Spacing,
-		head.PreContext, head.PostContext, head.ContextKerns)
+		head.PreContext, head.PostContext, head.ContextKerns, head.Upright)
 	tail.Width = br.MeasureSpacedInContext(item.Face, tail.Text, item.Size, item.Spacing,
-		tail.PreContext, tail.PostContext, tail.ContextKerns)
+		tail.PreContext, tail.PostContext, tail.ContextKerns, tail.Upright)
 	// §8.1's gap sits at the item's far edge, so it goes with the tail — the
 	// head's far edge is the cut, which is a boundary the gap was never at. The
 	// measurements above do not include it, since it is not in the text.

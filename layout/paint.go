@@ -91,9 +91,20 @@ type DrawText struct {
 	//
 	// See layout/writingmode.go, which is where the rest of the argument is.
 	Sideways bool
-	Face     *shape.Face
-	Size     style.Unit
-	Color    style.RGBA
+	// Upright says the glyphs are *not* turned: each stands the way it does in
+	// the font and the pen moves one em down to the next one, whatever the
+	// face's horizontal advance for it is. It is what "text-orientation:
+	// upright" asks for, and it goes with Sideways rather than instead of it —
+	// the run still runs down the page, and only the glyphs on it are different.
+	//
+	// The em is the advance because CSS Writing Modes §4.4 says to synthesize
+	// the vertical metrics a face does not state, and the em box is the
+	// synthesis. It is not an approximation of a number the font has: for the
+	// faces this engine reads, there is no such number.
+	Upright bool
+	Face    *shape.Face
+	Size    style.Unit
+	Color   style.RGBA
 	// PreContext and PostContext are the text either side of this run, where the
 	// boundary between it and its neighbour did not break shaping.
 	//
@@ -877,6 +888,16 @@ func textInkAt(v DrawText, above, below style.Unit) Rect {
 		// tracking-width past the page for each one. See paragraph.SpacedUnits.
 		width = w.Add(v.CharSpacing.Mul(float64(spacedUnits(v.Text))))
 	}
+	if v.Upright {
+		// An upright run is not the face's advances at all: it is one em per
+		// character along the line, and one em across it centred on the
+		// baseline. Both are the metrics CSS Writing Modes §4.4 has the UA
+		// synthesize where a face states none, so this is the run's real extent
+		// and not an estimate of it. See DrawText.Upright.
+		width = v.Size.Mul(float64(uprightUnits(v.Text))).
+			Add(v.CharSpacing.Mul(float64(spacedUnits(v.Text))))
+		above, below = v.Size.Div(2), v.Size.Div(2)
+	}
 	return placeRun(Rect{
 		Y: style.Unit(0).Sub(above),
 		W: width, H: above.Add(below),
@@ -1279,6 +1300,7 @@ func (p *painter) lines(f *Fragment) {
 			p.ops = append(p.ops, DrawText{
 				At:           at,
 				Sideways:     line.Sideways,
+				Upright:      run.Upright,
 				Text:         drawableText(run.Text),
 				PreContext:   run.PreContext,
 				PostContext:  run.PostContext,

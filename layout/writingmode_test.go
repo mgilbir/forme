@@ -160,8 +160,6 @@ func TestABoxThisEngineCannotTurnIsReported(t *testing.T) {
 		{"an automatic width", `#d { writing-mode: vertical-rl; height: 100px }`,
 			`<div id="d">ab</div>`, "width is automatic"},
 		{"upright text", turnedCSS, `<div id="d">日本</div>`, "stand upright"},
-		{"text-orientation", turnedCSS + `
-	#d { text-orientation: upright }`, `<div id="d">ab</div>`, "text-orientation: upright"},
 		{"text-combine-upright", turnedCSS,
 			`<div id="d"><span style="text-combine-upright: all">12</span></div>`,
 			"text-combine-upright: all"},
@@ -409,5 +407,183 @@ func TestAFloatedVerticalBlockIsTurnedLikeAnyOther(t *testing.T) {
 		t.Errorf("floated, the text is at %v; in flow at %v. The float is at the "+
 			"same place on this page and its content is turned the same way",
 			runs[0].At, plain[0].At)
+	}
+}
+
+// The other typesetting mode a vertical line has: "text-orientation: upright".
+//
+// It is not a rotation, which is why it needs anything at all. Every character
+// stands the way it does in the code charts and the pen moves one em to the
+// next one — CSS Writing Modes §4.4's synthesized vertical metrics, since no
+// face this engine reads states any — so an upright run's *width* is a count of
+// its characters and not a sum of its advances.
+
+const uprightCSS = `body { margin: 0 }
+	#d { font-family: Courier; font-size: 20px; line-height: 20px;
+	     writing-mode: vertical-rl; text-orientation: upright;
+	     width: 60px; height: 100px }`
+
+// TestAnUprightRunAdvancesOneEmPerCharacter.
+//
+// Courier's advance is 12px at 20px, so a run measured the ordinary way is
+// 48px long and an upright one is 80. The difference is what decides where the
+// line breaks and how wide the box that shrinks to fit it is, so it is a
+// measurement question before it is a drawing one.
+func TestAnUprightRunAdvancesOneEmPerCharacter(t *testing.T) {
+	runs := turnedRuns(t, `<div id="d">abcd</div>`, uprightCSS)
+	if len(runs) != 1 {
+		t.Fatalf("the fixture drew %d runs, want 1", len(runs))
+	}
+	if !runs[0].Upright {
+		t.Fatal("the run was not marked upright, so a backend would turn its glyphs on their side")
+	}
+	if !runs[0].Sideways {
+		t.Error("the run was not marked sideways; an upright run still goes down the page")
+	}
+	marks := glyphMarks(runs[0], "run", "run", false)
+	if len(marks) != 4 {
+		t.Fatalf("the run put %d marks on the page, want 4", len(marks))
+	}
+	for i, m := range marks {
+		if got := m.y.Sub(marks[0].y).Px(); got != float64(i)*20 {
+			t.Errorf("letter %d is %gpx below the first, want %g — one em each, and "+
+				"not Courier's 12px advance", i, got, float64(i)*20)
+		}
+	}
+	// And the box shrinks to the same number. Four ems is 80px, which is more
+	// than the 100px line this box has room for, so the run stays on one line.
+	turned := turnedRuns(t, `<div id="d">abcd</div>`, turnedCSS)
+	if turned[0].Upright {
+		t.Error("a run with no text-orientation was marked upright")
+	}
+}
+
+// TestAnUprightBoxIsTurnedEvenWhereItsCharactersStandUpright.
+//
+// The UAX #50 gate is about "text-orientation: mixed", which turns the
+// characters the table calls rotatable and leaves the rest upright — and this
+// engine cannot leave one character upright on a turned line. Under
+// "text-orientation: upright" the question does not arise: every character
+// stands upright, which is a thing the engine can now do, so a box of Japanese
+// is turned where a box of Japanese in mixed is refused.
+func TestAnUprightBoxIsTurnedEvenWhereItsCharactersStandUpright(t *testing.T) {
+	runs := turnedRuns(t, `<div id="d">日本</div>`, uprightCSS)
+	if len(runs) == 0 {
+		t.Fatal("a box of ideographs set upright drew nothing")
+	}
+	// One run per face, and the fallback library may set the two characters in
+	// two: what is asked here is that each of them is turned and upright, not
+	// how many pieces the font stack cut them into.
+	for _, r := range runs {
+		if !r.Upright || !r.Sideways {
+			t.Errorf("the run %q is sideways=%v upright=%v; a box of ideographs set "+
+				"upright is both", r.Text, r.Sideways, r.Upright)
+		}
+	}
+	var said string
+	for _, f := range findingsOf(t, `<div id="d">日本</div>`,
+		`#d { writing-mode: vertical-rl; text-orientation: upright;
+		      width: 60px; height: 100px }`) {
+		if f.Property == "writing-mode" {
+			said = f.Message
+		}
+	}
+	if said != "" {
+		t.Errorf("a box of ideographs set upright was reported: %q", said)
+	}
+}
+
+// TestOneOrientationPerTurnedBox.
+//
+// The turn is one decision for a whole subtree, so a box inside it that asks
+// for the other typesetting mode is a second mode on the same line — and the
+// engine has one. Refusing is the honest answer, and it is the same refusal
+// whichever way round the two are.
+func TestOneOrientationPerTurnedBox(t *testing.T) {
+	for _, c := range []struct{ what, outer, inner string }{
+		{"upright inside mixed", "mixed", "upright"},
+		{"mixed inside upright", "upright", "mixed"},
+	} {
+		var said string
+		for _, f := range findingsOf(t,
+			`<div id="d"><p style="text-orientation: `+c.inner+`">ab</p></div>`,
+			`#d { writing-mode: vertical-rl; text-orientation: `+c.outer+`;
+			      width: 60px; height: 100px }`) {
+			if f.Property == "writing-mode" && said == "" {
+				said = f.Message
+			}
+		}
+		if !strings.Contains(said, "not the orientation the box is set in") {
+			t.Errorf("%s was reported as %q, which does not name the orientation",
+				c.what, said)
+		}
+	}
+}
+
+// TestTheInkOfAnUprightRunIsAnEmWideOnTheBaseline.
+//
+// The other synthesized metric. An upright character sits centred on the
+// vertical baseline in a box one em across, so a run of them inks a column an
+// em wide — and not the face's ascent and descent, which describe a line of
+// text lying the other way.
+func TestTheInkOfAnUprightRunIsAnEmWideOnTheBaseline(t *testing.T) {
+	runs := turnedRuns(t, `<div id="d">abcd</div>`, uprightCSS)
+	if len(runs) != 1 {
+		t.Fatalf("the fixture drew %d runs, want 1", len(runs))
+	}
+	ink := textInk(runs[0])
+	if ink.W.Px() != 20 {
+		t.Errorf("the run inks %gpx across the line, want 20 — one em, centred on "+
+			"the baseline", ink.W.Px())
+	}
+	if ink.H.Px() != 80 {
+		t.Errorf("the run inks %gpx along the line, want 80 — four characters at "+
+			"one em each", ink.H.Px())
+	}
+	if got := runs[0].At.X.Sub(ink.X).Px(); got != 10 {
+		t.Errorf("the baseline is %gpx from the left of the ink, want 10 — half an "+
+			"em either side of it", got)
+	}
+}
+
+// TestSidewaysTurnsEveryCharacterIncludingTheUprightOnes.
+//
+// "text-orientation: sideways" is the quarter turn this file performs, applied
+// to every character rather than only the ones UAX #50 calls rotatable. So a
+// box of ideographs is turnable under it and is not under "mixed" — which is
+// the whole of what the table is for, and is why the check is asked of the
+// orientation rather than of the text alone.
+func TestSidewaysTurnsEveryCharacterIncludingTheUprightOnes(t *testing.T) {
+	for _, orientation := range []string{"sideways", "sideways-right"} {
+		css := `body { margin: 0 }
+	#d { font-family: Courier; font-size: 20px; line-height: 20px;
+	     writing-mode: vertical-rl; text-orientation: ` + orientation + `;
+	     width: 60px; height: 100px }`
+		runs := turnedRuns(t, `<div id="d">日本</div>`, css)
+		if len(runs) == 0 {
+			t.Fatalf("%s: a box of ideographs drew nothing", orientation)
+		}
+		for _, r := range runs {
+			if !r.Sideways {
+				t.Errorf("%s: the run %q was not turned", orientation, r.Text)
+			}
+			if r.Upright {
+				t.Errorf("%s: the run %q was set upright; sideways turns every "+
+					"character with the page", orientation, r.Text)
+			}
+		}
+	}
+	// And under "mixed" the same box is refused, because one line cannot hold
+	// both orientations here.
+	var said string
+	for _, f := range findingsOf(t, `<div id="d">日本</div>`,
+		`#d { writing-mode: vertical-rl; width: 60px; height: 100px }`) {
+		if f.Property == "writing-mode" && said == "" {
+			said = f.Message
+		}
+	}
+	if !strings.Contains(said, "stand upright on a vertical line") {
+		t.Errorf("a box of ideographs in the initial orientation was reported as "+
+			"%q, which does not name the characters that stand upright", said)
 	}
 }

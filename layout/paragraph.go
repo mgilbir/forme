@@ -88,6 +88,7 @@ var (
 	spacingAdvance                = paragraph.SpacingAdvance
 	spacedUnits                   = paragraph.SpacedUnits
 	spacingAfter                  = paragraph.SpacingAfter
+	uprightUnits                  = paragraph.UprightUnits
 	isCursiveScript               = paragraph.IsCursiveScript
 	cursiveTrackingSuppressesText = paragraph.CursiveTrackingSuppresses
 	isDefaultIgnorable            = paragraph.IsDefaultIgnorable

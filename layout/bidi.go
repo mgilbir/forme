@@ -550,7 +550,8 @@ func (l *layouter) splitByLevel(item inlineItem, para *bidi.Paragraph) []inlineI
 		piece.BidiStart = item.BidiStart + i
 		piece.BidiEnd = item.BidiStart + j
 		piece.Level = levels[item.BidiStart+i]
-		piece.Width = l.br.MeasureSpaced(item.Face, piece.Text, item.Size, item.Spacing)
+		piece.Width = l.br.MeasureSpacedInContext(item.Face, piece.Text, item.Size,
+			item.Spacing, "", "", true, item.Upright)
 		if i > 0 {
 			// A level boundary is not a break opportunity. "abcHEBREW" is one
 			// word however many directions it is written in, and a line must not

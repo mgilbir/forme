@@ -105,6 +105,10 @@ func withHyphen(items, line []Item, from, next, nextByte int, forced bool) []Ite
 		Above: above, Below: below, Valign: at.Valign,
 		Decorations: at.Decorations, Spacing: at.Spacing,
 		Offset: at.Offset, Leads: at.Leads,
+		// The hyphen is set the way the word it divides is set. It is drawn on
+		// the same line, in the same face, and an upright line does not turn one
+		// character of itself on its side.
+		Upright: at.Upright,
 	})
 }
 
@@ -830,7 +834,7 @@ func (br *Breaker) breakInsideWord(item Item, width style.Unit, content bool) (h
 		// The far side of the cut is this run's own text, so a pair across it is
 		// this font's whatever the outer context is.
 		w := br.MeasureSpacedInContext(item.Face, item.Text[:cut], item.Size, item.Spacing,
-			item.PreContext, item.Text[cut:]+item.PostContext, true)
+			item.PreContext, item.Text[cut:]+item.PostContext, true, item.Upright)
 		if w <= width {
 			lo = mid
 		} else {

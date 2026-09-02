@@ -163,6 +163,16 @@ func (b *blockFont) fills(v DrawText, measure func(s string, size float64) float
 	if v.Face == nil || v.Text == "" {
 		return nil, false
 	}
+	if v.Sideways {
+		// A run that goes down the page. This reconstruction walks a run along
+		// x and knows nothing about the quarter turn, so the rectangles it
+		// produced for one were in a row across the page where the engine drew
+		// a column down it. Declining leaves the run as text, which the
+		// comparison handles by its glyphs and which is the answer that is
+		// right rather than the one that is convenient. See
+		// layout/writingmode.go.
+		return nil, false
+	}
 	runes := []rune(v.Text)
 	rects := make([]blockRect, len(runes))
 	for i, r := range runes {

@@ -125,7 +125,7 @@ func (l *layouter) linkShapingContext(items []inlineItem) []inlineItem {
 		// whole reason the context has to be settled before the lines are
 		// filled rather than at paint time.
 		items[i].Width = l.br.MeasureSpacedInContext(items[i].Face, items[i].Text,
-			items[i].Size, items[i].Spacing, before, after, kerns)
+			items[i].Size, items[i].Spacing, before, after, kerns, items[i].Upright)
 	}
 	return items
 }
