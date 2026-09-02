@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"github.com/mgilbir/forme/paragraph"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -177,7 +178,21 @@ func (l *layouter) clampedChildren(b *Box, frag *Fragment, width style.Unit,
 	c = &lineClamp{box: b, limit: n, stopAt: n}
 	if face, ok := l.fontFor(b); ok {
 		c.face, c.size = face, b.FontSize
-		c.ellipsis = l.br.Measure(face, blockEllipsis, b.FontSize)
+		// Measured the way the lines it will sit on are measured. On an upright
+		// vertical line the ellipsis stands upright with the text and takes an
+		// em per character like everything else there, and a clamp that
+		// reserved the face's horizontal advance for it would keep back the
+		// wrong amount of room.
+		//
+		// No document in the suite can tell the two apart, and that is worth
+		// recording rather than leaving as an implied claim: the room reserved
+		// and the run drawn are two measurements of the same ellipsis, and a
+		// line filled to one width and painted at another is the failure this
+		// package has a comment about in every other place it could happen. The
+		// pair is kept in step because they are one fact, not because a fixture
+		// caught them apart.
+		c.ellipsis = l.br.MeasureSpacedInContext(face, blockEllipsis, b.FontSize,
+			paragraph.TextSpacing{}, "", "", true, l.uprightText(b))
 	}
 	l.clamps = append(l.clamps, c)
 	height, top, bottom, placed = l.children(b, frag, width, topOpen, bottomOpen, inner)

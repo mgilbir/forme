@@ -1293,7 +1293,7 @@ func (p *painter) lines(f *Fragment) {
 				// the page beside the box, and would put the control character
 				// itself into the text extracted from the page, where it is
 				// exactly the thing a reader does not want back.
-				p.ops = append(p.ops, controlBox(at, run.Width, run.Size, colour)...)
+				p.ops = append(p.ops, controlBox(at, run.Width, run.Size, colour, line.Sideways)...)
 				continue
 			}
 			p.decorate(run, at, line.Sideways, false)

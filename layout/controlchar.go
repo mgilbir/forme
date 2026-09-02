@@ -82,7 +82,7 @@ func controlOf(text string) (rune, bool) {
 // and size the font size — which is what the box is proportioned from rather
 // than the advance, so that a face with a wide .notdef does not get a box of a
 // different shape from one with a narrow one.
-func controlBox(at Point, advance, size style.Unit, colour style.RGBA) []Op {
+func controlBox(at Point, advance, size style.Unit, colour style.RGBA, sideways bool) []Op {
 	// Two thirds of the em tall, which sits between the baseline and about the
 	// cap height, and inset from the advance so two of them in a row do not
 	// touch.
@@ -96,19 +96,27 @@ func controlBox(at Point, advance, size style.Unit, colour style.RGBA) []Op {
 	if w <= 0 || h <= 0 {
 		return nil
 	}
-	x := at.X.Add(inset)
-	y := at.Y.Sub(h)
+	// The ring is built in the run's own axes — along the line for its advance,
+	// off the baseline for its height — and placed afterwards. On a line that
+	// runs down the page that is the whole of the difference: built in page
+	// coordinates it came out lying across the page between two letters set one
+	// above the other, and hanging off the top of the box as well. See placeRun.
+	x := inset
+	y := style.Unit(0).Sub(h)
+	ring := func(r Rect) Op {
+		return FillRect{Rect: placeRun(r, at, sideways), Color: colour, Overhang: true}
+	}
 	if w <= thick.Mul(2) || h <= thick.Mul(2) {
 		// Too small for a ring to have a hole. A solid mark is still a visible
 		// glyph, which is the requirement; an empty one would be the fault this
 		// exists to fix, and it is what a ring drawn without this check becomes
 		// when its two edges meet in the middle.
-		return []Op{FillRect{Rect: Rect{x, y, w, h}, Color: colour, Overhang: true}}
+		return []Op{ring(Rect{x, y, w, h})}
 	}
 	return []Op{
-		FillRect{Rect: Rect{x, y, w, thick}, Color: colour, Overhang: true},
-		FillRect{Rect: Rect{x, y.Add(h).Sub(thick), w, thick}, Color: colour, Overhang: true},
-		FillRect{Rect: Rect{x, y.Add(thick), thick, h.Sub(thick).Sub(thick)}, Color: colour, Overhang: true},
-		FillRect{Rect: Rect{x.Add(w).Sub(thick), y.Add(thick), thick, h.Sub(thick).Sub(thick)}, Color: colour, Overhang: true},
+		ring(Rect{x, y, w, thick}),
+		ring(Rect{x, y.Add(h).Sub(thick), w, thick}),
+		ring(Rect{x, y.Add(thick), thick, h.Sub(thick).Sub(thick)}),
+		ring(Rect{x.Add(w).Sub(thick), y.Add(thick), thick, h.Sub(thick).Sub(thick)}),
 	}
 }

@@ -3,6 +3,8 @@ package layout
 import (
 	"strings"
 	"testing"
+
+	"github.com/mgilbir/forme/style"
 )
 
 // A block turned on its side, and the boxes that are reported instead.
@@ -805,5 +807,81 @@ func TestATurnedBoxIsNotInsideItself(t *testing.T) {
 	}
 	if _, turned := (&layouter{turnedMode: map[*Box]writingMode{}}).insideTurn(child); turned {
 		t.Error("a box on a horizontal page was reported as inside a turn")
+	}
+}
+
+// TestAControlCharacterInAVerticalBlockIsBoxedDownTheLine.
+//
+// CSS Text requires a control character to be visible, and no face has a glyph
+// for one, so the mark is a ring the painter synthesizes out of four
+// rectangles. A rectangle built in page coordinates on a line that runs down
+// the page comes out lying across it — between two letters set one above the
+// other, and reaching off the top of the box as well. Built in the run's own
+// axes and placed afterwards, it is a ring either way.
+func TestAControlCharacterInAVerticalBlockIsBoxedDownTheLine(t *testing.T) {
+	var ring []Rect
+	for _, op := range Paint(layoutOf(t, 400, "<div id=\"d\">a\u0001b</div>", turnedCSS)) {
+		if v, ok := op.(FillRect); ok && !v.Rect.Empty() {
+			ring = append(ring, v.Rect)
+		}
+	}
+	if len(ring) != 4 {
+		t.Fatalf("the control character drew %d rectangles, want 4 — a ring", len(ring))
+	}
+	// The two letters are one Courier advance apart down the same column, so the
+	// ring belongs between them: longer across the line than along it is the
+	// wrong way round, and anything above the box's top edge is off the page.
+	lo, hi := ring[0].Y, ring[0].Bottom()
+	left, right := ring[0].X, ring[0].Right()
+	for _, r := range ring[1:] {
+		lo, hi = style.Min(lo, r.Y), style.Max(hi, r.Bottom())
+		left, right = style.Min(left, r.X), style.Max(right, r.Right())
+	}
+	if lo.Px() < 0 {
+		t.Errorf("the ring reaches %gpx above the page, want nothing above 0", lo.Px())
+	}
+	if hi.Sub(lo) >= right.Sub(left) {
+		t.Errorf("the ring is %gpx along the line and %gpx across it; a control "+
+			"character takes one advance along the line and about two thirds of "+
+			"an em across it", hi.Sub(lo).Px(), right.Sub(left).Px())
+	}
+	if lo.Px() <= 0 || hi.Px() >= 24 {
+		t.Errorf("the ring spans y=%g..%g; it sits between the letter at y=0 and "+
+			"the one an advance below it", lo.Px(), hi.Px())
+	}
+}
+
+// TestTheEllipsisOfAClampedVerticalBlockIsSetTheWayItsLinesAre.
+//
+// A clamp keeps room on its last line for the ellipsis it will print there, and
+// the room it keeps has to be measured the way that line is set: on an upright
+// vertical line the ellipsis stands upright with the text and takes an em per
+// character, not the face's horizontal advance for it.
+//
+// Two questions have to agree — the room reserved and the run drawn — which is
+// why this checks the run and the line's fit together.
+func TestTheEllipsisOfAClampedVerticalBlockIsSetTheWayItsLinesAre(t *testing.T) {
+	const css = `body { margin: 0 }
+	#d { font-family: Courier; font-size: 20px; line-height: 20px;
+	     writing-mode: vertical-rl; text-orientation: upright;
+	     width: 100px; height: 200px;
+	     -webkit-line-clamp: 1; display: -webkit-box; -webkit-box-orient: vertical }`
+	var ellipsis *DrawText
+	for _, op := range Paint(layoutOf(t, 400, `<div id="d">aaaaaaaaaa bbbbbbbbbb</div>`, css)) {
+		if v, ok := op.(DrawText); ok && v.Text == "\u2026" {
+			run := v
+			ellipsis = &run
+		}
+	}
+	if ellipsis == nil {
+		t.Skip("this build does not clamp the fixture, so there is no ellipsis to ask about")
+	}
+	if !ellipsis.Upright {
+		t.Error("the ellipsis was not set upright on a line whose text is; it is " +
+			"drawn on that line and in that face")
+	}
+	if !ellipsis.Sideways {
+		t.Error("the ellipsis was not marked sideways; it is on a line that runs " +
+			"down the page")
 	}
 }

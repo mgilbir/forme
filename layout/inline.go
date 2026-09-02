@@ -874,6 +874,10 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					line.Runs = append(line.Runs, TextRun{
 						Text: blockEllipsis, Face: ending.face, Size: ending.size,
 						X: at, Width: lineEllipsis, Box: ending.box,
+						// The ellipsis is set the way the line it ends is set.
+						// See clampRoom, which reserves the room for it with the
+						// same question asked.
+						Upright: l.uprightText(ending.box),
 					})
 				}
 				parent.Lines = append(parent.Lines, line)
