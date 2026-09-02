@@ -361,14 +361,20 @@ func (l *layouter) refusesToTurn(b *Box, mode writingMode, containing style.Unit
 		return orientationMixed, "it is positioned or replaced"
 	}
 	_ = hasHeight
-	if _, declared := l.explicitWidth(b, containing); !declared && b.Float != FloatNone {
-		// A float with an automatic width is shrink-to-fit, and shrink-to-fit
-		// measures the *horizontal* widths of the content — which for a turned
-		// box are its inline extents and not the block axis its width is. An
-		// in-flow box asks the question the other way round and is answered
-		// after its content is laid out, which is where the block extent is
-		// known; a float has to be sized before it is placed.
-		return orientationMixed, "it is a float with an automatic width, which is measured along the wrong axis"
+	if _, declared := l.explicitWidth(b, containing); !declared && l.widthAskedOfTheContent(b) {
+		// Shrink-to-fit measures the *horizontal* widths of the content, which
+		// for a turned box are its inline extents and not the block axis its
+		// width is. A box whose width is answered after its content is laid out
+		// is fine — the block extent is known by then, and that is what an
+		// automatic width is set from — but a box that has to be *measured*
+		// before it is laid out is not.
+		//
+		// The box itself is one case, when it is a float. The other is a box
+		// above it: a float wrapped round a vertical div came out as wide as
+		// that div's text laid end to end, which is the length of its lines and
+		// not the room its lines stack in.
+		return orientationMixed, "its width would be measured along the wrong axis, " +
+			"by shrinking a box around its content"
 	}
 	// Which of the two orientations the text actually needs, where the property
 	// leaves it to the text. "mixed" is the initial value and the only one that
@@ -597,4 +603,46 @@ func orientationOf(b *Box) textOrientation {
 		return orientationSideways
 	}
 	return orientationMixed
+}
+
+// widthAskedOfTheContent reports whether this box's intrinsic width will be
+// asked for — by the box itself if it shrinks to fit, or by an ancestor that
+// does.
+//
+// It is asked only of a turned box with an automatic width, and it is asked
+// because the answer would be wrong. The intrinsic pass measures a box's
+// content the way a horizontal engine measures it, so for a turned box it
+// returns the length of its lines; the width such a box wants is the room those
+// lines stack in, which is known only once they have been broken. Nothing can
+// answer it before the box is laid out, so a box that has to be measured before
+// it is laid out is refused and reported.
+//
+// The walk stops at the first ancestor whose width does not come from its
+// content, because from there down every width is already decided. An ancestor
+// this cannot classify is treated as one that shrinks: refusing turns a page
+// that would have been right into a page that says so, and the other way round
+// is a page that is quietly wrong.
+func (l *layouter) widthAskedOfTheContent(b *Box) bool {
+	if shrinksToFit(b) {
+		return true
+	}
+	for at := b.Parent; at != nil; at = at.Parent {
+		if _, declared := l.explicitWidth(at, 0); declared {
+			return false
+		}
+		if shrinksToFit(at) {
+			return true
+		}
+		if at.Outer != OuterBlock || (at.Inner != InnerFlow && at.Inner != InnerFlowRoot) {
+			return true
+		}
+	}
+	return false
+}
+
+// shrinksToFit reports whether a box's own width is CSS 2.1 §10.3.5's
+// shrink-to-fit: the narrower of what its content needs and what it is offered.
+func shrinksToFit(b *Box) bool {
+	return b.Float != FloatNone || b.Position.outOfFlow() ||
+		b.Outer == OuterInline || b.Inner == InnerTableCell
 }

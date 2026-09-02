@@ -161,7 +161,7 @@ func TestABoxThisEngineCannotTurnIsReported(t *testing.T) {
 	}{
 		{"a float with an automatic width",
 			`#d { writing-mode: vertical-rl; height: 100px; float: left }`,
-			`<div id="d">ab</div>`, "float with an automatic width"},
+			`<div id="d">ab</div>`, "shrinking a box around its content"},
 		{"text that needs both orientations", turnedCSS, `<div id="d">ab日本</div>`,
 			"standing upright and characters lying along the line at once"},
 		{"text-combine-upright", turnedCSS,
@@ -883,5 +883,76 @@ func TestTheEllipsisOfAClampedVerticalBlockIsSetTheWayItsLinesAre(t *testing.T) 
 	if !ellipsis.Sideways {
 		t.Error("the ellipsis was not marked sideways; it is on a line that runs " +
 			"down the page")
+	}
+}
+
+// TestAVerticalBoxIsNotTurnedWhereItsWidthWouldBeMeasured.
+//
+// The intrinsic pass measures a box's content the way a horizontal engine
+// measures it, so for a turned box it returns the length of its lines. The
+// width such a box wants is the room those lines *stack* in, and nothing can
+// answer that before the box is laid out.
+//
+// So a box that has to be measured before it is laid out is refused. A float
+// wrapped round a vertical div came out as wide as that div's text laid end to
+// end — 168px of Courier around a box 60px wide, with the float's own
+// background showing for the other hundred.
+func TestAVerticalBoxIsNotTurnedWhereItsWidthWouldBeMeasured(t *testing.T) {
+	const css = `body { margin: 0 }
+	.v { font-family: Courier; font-size: 20px; line-height: 20px;
+	     writing-mode: vertical-rl; height: 100px }
+	#f { float: left }`
+	// Refused, so laid out horizontally, so the float is as wide as its content
+	// on one line — and, whatever that number is, the two agree.
+	root := layoutOf(t, 400, `<div id="f"><div class="v" id="v">abcd efgh ijkl</div></div>`, css)
+	f, v := find(t, root, "f"), find(t, root, "v")
+	if f.BorderRect.W != v.BorderRect.W {
+		t.Errorf("the float is %gpx wide and the box inside it %gpx; a box shrunk "+
+			"to fit its content is as wide as the content",
+			f.BorderRect.W.Px(), v.BorderRect.W.Px())
+	}
+	var said string
+	for _, fi := range findingsOf(t, `<div id="f"><div class="v">abcd</div></div>`, css) {
+		if fi.Property == "writing-mode" && said == "" {
+			said = fi.Message
+		}
+	}
+	if !strings.Contains(said, "shrinking a box around its content") {
+		t.Errorf("the refusal was reported as %q, which does not name the box that "+
+			"would be shrunk", said)
+	}
+	// And a declared width on the way up is enough, even where the turned box
+	// itself has none: from that ancestor down every width is already decided,
+	// so nothing has to measure this box at all.
+	inside := turnedRuns(t, `<div style="width: 200px"><div class="v">abcd</div></div>`, css)
+	if len(inside) != 1 || !inside[0].Sideways {
+		t.Fatalf("a vertical box with no width, under a box with a declared one, "+
+			"drew %d runs and was not turned; nothing above it has to be measured",
+			len(inside))
+	}
+	// The same box under a float is refused, which is the pair that says the
+	// ancestor's width is what decides it and not the box's own.
+	beside := turnedRuns(t, `<div style="float: left"><div class="v">abcd</div></div>`, css)
+	if len(beside) != 1 {
+		t.Fatalf("the float fixture drew %d runs, want 1", len(beside))
+	}
+	if beside[0].Sideways {
+		t.Error("a vertical box with no width under a float was turned; the float " +
+			"has to measure it before it is laid out")
+	}
+	// And the walk stops at the first width that is already decided, rather than
+	// running to the root: a float *above* a box with a declared width shrinks
+	// around that box and never asks this one. Without the stop the same
+	// document is refused for a measurement nothing takes.
+	sheltered := turnedRuns(t,
+		`<div style="float: left"><div style="width: 200px"><div class="v">abcd</div></div></div>`,
+		css)
+	if len(sheltered) != 1 {
+		t.Fatalf("the sheltered fixture drew %d runs, want 1", len(sheltered))
+	}
+	if !sheltered[0].Sideways {
+		t.Error("a vertical box under a box with a declared width was refused " +
+			"because a float stood above that box; from a decided width downwards " +
+			"nothing is measured")
 	}
 }
