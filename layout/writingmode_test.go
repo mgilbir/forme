@@ -172,8 +172,9 @@ func TestABoxThisEngineCannotTurnIsReported(t *testing.T) {
 			`<div id="d">ab</div>`, "positioned or replaced"},
 		{"a child with a width", turnedCSS, `<div id="d"><p style="width: 10px">ab</p></div>`,
 			`"width" is declared inside it`},
-		{"a child with a margin", turnedCSS, `<div id="d"><p style="margin-top: 1px">ab</p></div>`,
-			"margin, border or padding is declared inside it"},
+		{"a child with a percentage margin", turnedCSS,
+			`<div id="d"><p style="margin-top: 10%">ab</p></div>`,
+			"percentage margin or padding"},
 		{"a form control", turnedCSS, `<div id="d"><input></div>`,
 			"form control"},
 		{"another writing mode", turnedCSS,
@@ -667,5 +668,142 @@ func TestAVerticalBlockWithNoWidthIsAsWideAsItsLinesStack(t *testing.T) {
 	}
 	if got := runs[0].At.X.Sub(runs[1].At.X).Px(); got != 20 {
 		t.Errorf("the second line is %gpx to the left of the first, want 20", got)
+	}
+}
+
+// TestTurningTheEdgesBackAndForthChangesNothing.
+//
+// The two permutations that let a box inside a turned one declare a margin at
+// all: one to read the declaration in the frame the box is laid out in, one to
+// put it back on the page. They have to be exact inverses, because between them
+// sits the whole of block layout — a margin read as a block-axis one and
+// returned as an inline-axis one is a box that moved.
+func TestTurningTheEdgesBackAndForthChangesNothing(t *testing.T) {
+	e := Edges{Top: 1, Right: 2, Bottom: 4, Left: 8}
+	for _, mode := range []writingMode{verticalRL, verticalLR} {
+		if got := turnEdges(untuneEdges(e, mode), mode); got != e {
+			t.Errorf("%v: turning %v back and forth gave %v", mode, e, got)
+		}
+		if got := untuneEdges(turnEdges(e, mode), mode); got != e {
+			t.Errorf("%v: turning %v forth and back gave %v", mode, e, got)
+		}
+	}
+	// And the two modes are not the same permutation, which is the thing that
+	// was wrong before there were two of them: both run their text from the top
+	// downwards, so both send the horizontal left to the page's top, and they
+	// stack their lines from opposite edges.
+	rl, lr := turnEdges(e, verticalRL), turnEdges(e, verticalLR)
+	if rl.Top != lr.Top {
+		t.Errorf("the two modes put the horizontal left at %v and %v; both run "+
+			"their text downwards", rl.Top, lr.Top)
+	}
+	if rl == lr {
+		t.Error("the two modes permute the edges the same way; they stack their " +
+			"lines from opposite edges")
+	}
+}
+
+// TestAMarginInsideAVerticalBlockIsOnTheSideItNames.
+//
+// "margin-top" is the top of the page whichever way the text inside a box runs,
+// so a margin on a box inside a turned one has to come out where the author
+// wrote it — even though the engine that laid it out read it as a margin along
+// the line.
+//
+// It is not a corner: the user agent sheet gives every heading and every
+// paragraph a margin, so before this a vertical box holding an <h1> was a
+// vertical box this engine would not lay out at all. The suite's
+// text-transform-fullwidth-004 and -005 are exactly that document.
+func TestAMarginInsideAVerticalBlockIsOnTheSideItNames(t *testing.T) {
+	const css = `body { margin: 0 }
+	#d { font-family: Courier; font-size: 20px; line-height: 20px;
+	     writing-mode: vertical-rl; width: 100px; height: 100px }
+	p { margin: 0 }`
+	plain := turnedRuns(t, `<div id="d"><p>ab</p></div>`, css)
+	if len(plain) != 1 {
+		t.Fatalf("the fixture drew %d runs, want 1", len(plain))
+	}
+	for _, c := range []struct {
+		side   string
+		dx, dy float64
+		what   string
+	}{
+		{"top", 0, 10, "the top of the page is where a vertical line begins"},
+		{"right", -10, 0, "the right of the page is where the first line of a " +
+			"vertical-rl box stands"},
+	} {
+		got := turnedRuns(t, `<div id="d"><p style="margin-`+c.side+`: 10px">ab</p></div>`, css)
+		if len(got) != 1 {
+			t.Fatalf("margin-%s: the fixture drew %d runs, want 1", c.side, len(got))
+		}
+		dx := got[0].At.X.Sub(plain[0].At.X).Px()
+		dy := got[0].At.Y.Sub(plain[0].At.Y).Px()
+		if dx != c.dx || dy != c.dy {
+			t.Errorf("margin-%s: 10px moved the text by (%g,%g), want (%g,%g) — %s",
+				c.side, dx, dy, c.dx, c.dy, c.what)
+		}
+	}
+}
+
+// TestTheTurnedBoxKeepsItsOwnEdgesWhereTheyWere.
+//
+// The permutation is for what a turned box *holds* and not for the box. Its own
+// margin, border and padding are in its parent's frame, its parent is not
+// turned, and "margin-top" on it is the top of the page in the plainest sense:
+// it is what separates it from whatever is above it in an ordinary horizontal
+// flow.
+func TestTheTurnedBoxKeepsItsOwnEdgesWhereTheyWere(t *testing.T) {
+	const css = `body { margin: 0 }
+	#d { font-family: Courier; font-size: 20px; line-height: 20px;
+	     writing-mode: vertical-rl; width: 100px; height: 100px }`
+	plain := turnedRuns(t, `<div id="d">ab</div>`, css)
+	pushed := turnedRuns(t, `<div id="d" style="margin-top: 10px">ab</div>`, css)
+	if len(plain) != 1 || len(pushed) != 1 {
+		t.Fatalf("the fixtures drew %d and %d runs, want 1 each", len(plain), len(pushed))
+	}
+	dx := pushed[0].At.X.Sub(plain[0].At.X).Px()
+	dy := pushed[0].At.Y.Sub(plain[0].At.Y).Px()
+	if dx != 0 || dy != 10 {
+		t.Errorf("a 10px top margin on the turned box moved its text by (%g,%g), "+
+			"want (0,10) — the box's own margins are in its parent's frame and "+
+			"its parent is not turned", dx, dy)
+	}
+}
+
+// TestATurnedBoxIsNotInsideItself.
+//
+// insideTurn is asked "which frame are this box's declarations in", and for the
+// box that starts a turn the answer is its parent's. Asking it of the box
+// itself would read its own margins in the frame it establishes rather than the
+// one it sits in.
+//
+// It is tested here rather than through a document because the order of blockIn
+// hides it: a box's edges are resolved before turns() records anything about it,
+// so a walk that included the box would find nothing and give the right answer
+// by accident. What this asserts is the definition, not the accident.
+func TestATurnedBoxIsNotInsideItself(t *testing.T) {
+	root := &Box{}
+	child := &Box{Parent: root}
+	grandchild := &Box{Parent: child}
+	l := &layouter{turnedMode: map[*Box]writingMode{root: verticalRL}}
+	if _, turned := l.insideTurn(root); turned {
+		t.Error("the box that starts a turn was reported as inside one; its own " +
+			"declarations are in its parent's frame")
+	}
+	for _, c := range []struct {
+		b    *Box
+		what string
+	}{{child, "a child"}, {grandchild, "a grandchild"}} {
+		mode, turned := l.insideTurn(c.b)
+		if !turned || mode != verticalRL {
+			t.Errorf("%s of a turned box was reported as turned=%v mode=%v",
+				c.what, turned, mode)
+		}
+	}
+	if _, turned := l.insideTurn(nil); turned {
+		t.Error("no box at all was reported as inside a turn")
+	}
+	if _, turned := (&layouter{turnedMode: map[*Box]writingMode{}}).insideTurn(child); turned {
+		t.Error("a box on a horizontal page was reported as inside a turn")
 	}
 }

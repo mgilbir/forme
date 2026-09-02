@@ -123,12 +123,59 @@ func (m writingMode) String() string {
 
 // turnEdges maps the four sides of a box through the quarter turn.
 //
-// Clockwise: what was the left side of the horizontal frame is the top of the
-// page, what was the top is the right, and so round. The margins, borders and
-// padding of a box inside a turned one are physical by the time anything paints
-// them, and this is where they become physical.
-func turnEdges(e Edges) Edges {
+// What was the left side of the horizontal frame is the top of the page in both
+// modes, because both run their text from the top downwards. Where they differ
+// is the block axis, exactly as turnRect differs: vertical-rl stacks back from
+// the right, so the horizontal top becomes the page's right, and vertical-lr
+// stacks forwards from the left.
+//
+// The margins, borders and padding of a box inside a turned one are physical by
+// the time anything paints them, and this is where they become physical.
+func turnEdges(e Edges, mode writingMode) Edges {
+	if mode == verticalLR {
+		return Edges{Top: e.Left, Left: e.Top, Bottom: e.Right, Right: e.Bottom}
+	}
 	return Edges{Top: e.Left, Right: e.Top, Bottom: e.Right, Left: e.Bottom}
+}
+
+// untuneEdges is turnEdges backwards: the horizontal frame's sides that come
+// out of the turn as the physical ones an author declared.
+//
+// It is what lets a box *inside* a turned one declare a margin at all. "margin-
+// top" on such a box is the top of the page, which after the turn is the side
+// the text starts at — so the horizontal engine has to be given it as a
+// margin-*left*, and the turn puts it back where the author asked for it. The
+// composition is exact because a quarter turn is a permutation of the four
+// sides and this is its inverse: untuneEdges then turnEdges is the identity,
+// which is what TestTurningTheEdgesBackAndForthChangesNothing asserts.
+//
+// Without it a margin inside a turned box was a refusal, and the refusal was
+// wider than it looked: the user agent sheet gives every heading and every
+// paragraph one, so a vertical box holding an <h1> was a vertical box this
+// engine would not lay out.
+func untuneEdges(e Edges, mode writingMode) Edges {
+	if mode == verticalLR {
+		return Edges{Left: e.Top, Top: e.Left, Right: e.Bottom, Bottom: e.Right}
+	}
+	return Edges{Left: e.Top, Top: e.Right, Right: e.Bottom, Bottom: e.Left}
+}
+
+// insideTurn is the writing mode of the nearest turned box strictly above this
+// one, for the boxes whose declarations have to be read in that box's frame.
+//
+// Strictly above: the box that starts a turn keeps its own edges physical,
+// because they are in its parent's frame and its parent is not turned. It is
+// what it *holds* that is laid out sideways.
+func (l *layouter) insideTurn(b *Box) (writingMode, bool) {
+	if b == nil {
+		return horizontalTB, false
+	}
+	for at := b.Parent; at != nil; at = at.Parent {
+		if mode, turned := l.turnedMode[at]; turned {
+			return mode, true
+		}
+	}
+	return horizontalTB, false
 }
 
 // turnRect maps one rectangle of the horizontal frame onto the page.
@@ -197,9 +244,9 @@ func turnFragment(f *Fragment, mode writingMode, mirror style.Unit) {
 	for i := range f.bgBands {
 		f.bgBands[i] = turnRect(f.bgBands[i], mode, mirror)
 	}
-	f.Margin = turnEdges(f.Margin)
-	f.Border = turnEdges(f.Border)
-	f.Padding = turnEdges(f.Padding)
+	f.Margin = turnEdges(f.Margin, mode)
+	f.Border = turnEdges(f.Border, mode)
+	f.Padding = turnEdges(f.Padding, mode)
 	// contentH is a block-axis extent, which is a width on the page. It is read
 	// only by the overflow arithmetic, which asks it of the box it belongs to
 	// and never compares it across a turn, so it keeps its name and changes its
@@ -227,9 +274,9 @@ func turnLine(l *LineFragment, mode writingMode, mirror style.Unit) {
 		for i := range ib.bgBands {
 			ib.bgBands[i] = turnRect(ib.bgBands[i], mode, mirror)
 		}
-		ib.Margin = turnEdges(ib.Margin)
-		ib.Border = turnEdges(ib.Border)
-		ib.Padding = turnEdges(ib.Padding)
+		ib.Margin = turnEdges(ib.Margin, mode)
+		ib.Border = turnEdges(ib.Border, mode)
+		ib.Padding = turnEdges(ib.Padding, mode)
 	}
 }
 
@@ -260,6 +307,7 @@ func (l *layouter) turns(b *Box, containing style.Unit, hasHeight bool) writingM
 		facing, why := l.refusesToTurn(b, mode, containing, hasHeight)
 		if why == "" {
 			l.turnedUpright[b] = facing == orientationUpright
+			l.turnedMode[b] = mode
 			return mode
 		}
 		l.reportWritingMode(b, mode, why)
@@ -453,11 +501,18 @@ func (l *layouter) subtreeRefusesToTurn(root *Box, mode writingMode, b *Box) str
 
 // refusesPhysicalGeometry is the box-model half of the walk.
 //
-// The edges are asked of the resolvers rather than read out of the style, so
-// that "border: 1px none" — a width with no border to draw — is the zero it
-// really is. A percentage is the one thing they cannot answer here, because the
-// containing block it would resolve against is the box being laid out, so a
-// declaration with one in it is refused on sight.
+// The sizes are refused and the edges are not, and the difference is which of
+// them the turn can carry. A margin is four numbers on four sides, and a
+// permutation of the sides puts each of them back where the author asked for it
+// — see untuneEdges, which is the permutation. A width is one number on one
+// axis, and the axis the author named is the one the turn swaps: "width" inside
+// a vertical box is the block axis, and the engine laying it out reads it as
+// the length of a line.
+//
+// A percentage margin or padding is refused with the sizes rather than carried
+// with the edges, and for the same reason: it resolves against the containing
+// block's width, and which of the two axes that is depends on which way the
+// containing block runs.
 func (l *layouter) refusesPhysicalGeometry(b *Box) string {
 	for _, p := range physicalGeometry {
 		switch v := trimmedLower(b.Style[p.name]); v {
@@ -473,10 +528,7 @@ func (l *layouter) refusesPhysicalGeometry(b *Box) string {
 			return "\"" + p.name + "\" is declared inside it, and a side of the page is not a side of the text"
 		}
 	}
-	if l.edges(b, "margin", 0) != (Edges{}) || l.paddingOf(b, 0) != (Edges{}) ||
-		l.borderWidths(b) != (Edges{}) {
-		return "a margin, border or padding is declared inside it, and a side of the page is not a side of the text"
-	}
+
 	for _, prefix := range [...]string{"margin", "padding"} {
 		for _, side := range [...]string{"-top", "-right", "-bottom", "-left"} {
 			if strings.ContainsRune(b.Style[prefix+side], '%') {

@@ -214,6 +214,7 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 		inlineAligns:     map[*Box]vAlignState{},
 		intrinsic:        map[*Box]intrinsicWidths{},
 		turnedUpright:    map[*Box]bool{},
+		turnedMode:       map[*Box]writingMode{},
 		grids:            map[*Box]*tableGrid{},
 		tableDemands:     map[*Box][]tableColumnDemand{},
 		collapsed:        map[*Box]*collapsedGrid{},
@@ -358,6 +359,11 @@ type layouter struct {
 	// the turn is refused outright for a subtree that changes the writing mode
 	// again. See uprightText, which is what reads it, and writingmode.go.
 	turnedUpright map[*Box]bool
+	// turnedMode is the same set keyed to the mode each box was turned in, which
+	// is what the boxes inside it need: their own declarations are physical and
+	// have to be read in the frame the turn will put them back through. See
+	// insideTurn and untuneEdges.
+	turnedMode map[*Box]writingMode
 	// grids and tableDemands memoize the two expensive answers about a table:
 	// where its cells sit in the grid, and what each column asks for. Both are
 	// wanted once while the table's width is being resolved and again while it
@@ -2297,18 +2303,34 @@ func (l *layouter) edges(b *Box, prefix string, containing style.Unit) Edges {
 		}
 		return v
 	}
-	return Edges{
+	return l.asLaidOut(b, Edges{
 		Top:    side("top"),
 		Right:  side("right"),
 		Bottom: side("bottom"),
 		Left:   side("left"),
-	}
+	})
 }
 
 // borderWidths resolves the four border widths, which are zero unless a style is
 // set — "border-width: 5px" with no "border-style" draws nothing and occupies
 // nothing, which is a rule that surprises people and is in the specification for
 // a reason: it lets a width be declared once and switched on per side.
+// asLaidOut turns a box's declared edges into the ones the engine laying it out
+// should read.
+//
+// For every box on a horizontal page that is the same thing. For a box inside a
+// turned one it is not: its declarations name sides of the *page*, and it is
+// being laid out in a frame that will be turned a quarter turn before it
+// reaches one. So the sides are permuted backwards here and the turn permutes
+// them forwards again, which is why "margin-top" inside a vertical box ends up
+// where the author asked for it. See untuneEdges.
+func (l *layouter) asLaidOut(b *Box, e Edges) Edges {
+	if mode, turned := l.insideTurn(b); turned {
+		return untuneEdges(e, mode)
+	}
+	return e
+}
+
 func (l *layouter) borderWidths(b *Box) Edges {
 	if e, ok := l.collapsedBorderWidths(b); ok {
 		// A table or a cell in §17.6.2's model does not have the border it
@@ -2328,12 +2350,12 @@ func (l *layouter) borderWidths(b *Box) Edges {
 		}
 		return maxZero(v)
 	}
-	return Edges{
+	return l.asLaidOut(b, Edges{
 		Top:    side("top"),
 		Right:  side("right"),
 		Bottom: side("bottom"),
 		Left:   side("left"),
-	}
+	})
 }
 
 // outlineWidth is the used width of §18.4's outline, and zero when none is drawn.
