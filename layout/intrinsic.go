@@ -443,6 +443,23 @@ func (l *layouter) textWidths(b *Box) intrinsicWidths {
 // Only one caller wants it and only for one reason: §16.1's indent moves the
 // first line and no other, so the box is as wide as the greater of the indented
 // first line and everything after it. See inlineWidths.
+// afterHyphen reports whether the item before this one ends at a hyphen, so
+// that the opportunity in front of it is one hyphenation made rather than one
+// the text has of its own.
+//
+// It looks past an inline box's own edge, which is not a character and is not
+// where a hyphen can be — the same walk pendingHyphen makes over a line, for
+// the same reason.
+func afterHyphen(items []inlineItem, k int) bool {
+	for j := k - 1; j >= 0; j-- {
+		if items[j].Inset {
+			continue
+		}
+		return items[j].Hyphen != 0
+	}
+	return false
+}
+
 func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split lineSplit) {
 	firstRun, firstLine := false, false
 	// edge is the trailing run of collapsible space, which §4.1.2 removes at the
@@ -707,7 +724,23 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 			lineTail, runTail = trailingSpacingOf(item), trailingSpacingOf(item)
 
 		default:
-			if item.BreakBefore && !item.NoWrap {
+			if item.BreakBefore && !item.NoWrap &&
+				!(item.HyphenLastResort && afterHyphen(items, k)) {
+				// A hyphen's opportunity is one the line gives up rather than
+				// takes, so a word divided only by hyphens is one unbreakable
+				// run and the box that shrinks to fit it is as wide as the whole
+				// word. That is what the suite's word-break-auto-phrase-006 asks
+				// for: three boxes at "width: min-content", one with soft
+				// hyphens, one hyphenated automatically and one with hyphens off,
+				// and all three the same size.
+				//
+				// A *hyphen's*, and the second half of that is not decoration:
+				// "auto-phrase" is on the box and every item in it carries the
+				// flag, so without asking what the opportunity is this suppresses
+				// every one of them. An ideograph boundary, a <wbr> and a
+				// U+200B ZERO WIDTH SPACE are all opportunities the author or
+				// the script put there, and a minimum that ran past them is a
+				// box wider than the narrowest thing it can hold.
 				endRun()
 			}
 			run, runContent = run.Add(item.Width), true

@@ -268,6 +268,17 @@ type Item struct {
 	// and not a sum of its advances, and a line filled with the second and drawn
 	// with the first would be filled to a width the page does not have.
 	Upright bool
+	// HyphenLastResort says a line may be sent back to the opportunity in front
+	// of this item only when there is no other — because the opportunity is one
+	// a soft hyphen or a hyphenation dictionary made, and "word-break:
+	// auto-phrase" asks for those to be given up rather than taken.
+	//
+	// Given up, and not removed: §5.2's suppression is not a prohibition. A word
+	// that fits nowhere else is still divided, because the alternative is a line
+	// that overflows — which is what the suite's word-break-auto-phrase-008 asks
+	// for by name, "must give up on suppressing hyphenation when that would lead
+	// to overflow". So the opportunity is kept and reached for last.
+	HyphenLastResort bool
 	// Hyphen is how much wider the line becomes if it ends after this item: the
 	// width of the hyphen a soft hyphen asks to have printed. Zero means this is
 	// not a hyphenation point, which is every item in almost every document.

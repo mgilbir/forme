@@ -144,6 +144,20 @@ type WordBreak struct {
 	// value are about what it must *not* suppress: the break after a space, and
 	// the one after an ideographic comma.
 	KeepAll bool
+	// AutoPhrase is §5.2's "auto-phrase", of which this engine does one half.
+	//
+	// The value has two effects and they are separable. It allows a line to end
+	// only at a phrase boundary, which needs a morphological analysis of
+	// Japanese and is not implemented — NeedsPhraseBreaking is what says so, per
+	// box, of the text that would need it. And it *suppresses hyphenation*,
+	// which needs nothing and is implemented: a word divided at a phrase
+	// boundary should not also be divided inside itself, so a hyphen becomes a
+	// break of last resort rather than an opportunity like any other.
+	//
+	// The second half is the whole of the value for text with no Japanese in it,
+	// which is why a document can now ask for it and be right. See
+	// Item.HyphenLastResort.
+	AutoPhrase bool
 }
 
 // WordBreakOf reads the property. The second result is the value to report as
@@ -159,7 +173,10 @@ func WordBreakOf(value string) (WordBreak, string) {
 	case "keep-all":
 		return WordBreak{KeepAll: true}, ""
 	case "auto-phrase":
-		return WordBreak{}, "auto-phrase"
+		// Not reported here. Half of what it asks for is done, and whether the
+		// other half is missing is a question about the *text* — see
+		// NeedsPhraseBreaking, and layout's flatten.go, which asks it.
+		return WordBreak{AutoPhrase: true}, ""
 	case "break-word":
 		// Normal, and deliberately: the value's whole effect is on
 		// overflow-wrap, which OverflowWrapOf reads for itself. It is named here

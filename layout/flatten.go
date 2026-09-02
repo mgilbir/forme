@@ -723,6 +723,15 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	if unhandled != "" {
 		l.reportWordBreak(b, unhandled)
 	}
+	if wb.AutoPhrase && needsPhraseBreaking(b.Text) {
+		// Half of "auto-phrase" is done and half is not, so which of the two a
+		// document gets depends on its text. Suppressing hyphenation needs
+		// nothing and is done for every box; ending a line only at a phrase
+		// boundary needs a morphological analysis of Japanese and is not done,
+		// and a box with no Japanese in it has no phrases for that to be about.
+		// See paragraph.NeedsPhraseBreaking.
+		l.reportWordBreak(b, "auto-phrase")
+	}
 	lb, unhandledLine := lineBreakOf(b.Style["line-break"])
 	// §5.3's loose tailoring is qualified "in Chinese and Japanese", and which
 	// of those the text is comes from the language tag's *script* rather than
@@ -1106,7 +1115,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 				b: b, p: p, run: run, size: size, frame: frame, ws: ws,
 				above: above, below: below, boxFace: face,
 				offset: offset, spacing: spacing,
-				decorations: decorations, ow: ow, state: state,
+				decorations: decorations, ow: ow, wb: wb, state: state,
 				tabStop: tabStop, tabFloor: tabFloor,
 				para: para, bidiStart: start, bidiEnd: end,
 				// Only the first run of a piece may begin a line. The rest are
@@ -1204,14 +1213,17 @@ type textItemArgs struct {
 	spacing     textSpacing
 	decorations []textDecoration
 	ow          paragraph.OverflowWrap
-	state       inlineState
-	tabStop     style.Unit
-	tabFloor    style.Unit
-	para        int
-	bidiStart   int
-	bidiEnd     int
-	first       bool
-	last        bool
+	// wb is the box's word-break, of which the item needs one fact: whether a
+	// hyphen's opportunity is one to be given up. See Item.HyphenLastResort.
+	wb        paragraph.WordBreak
+	state     inlineState
+	tabStop   style.Unit
+	tabFloor  style.Unit
+	para      int
+	bidiStart int
+	bidiEnd   int
+	first     bool
+	last      bool
 	// spaceMayTakeIt says the opportunity carried in from another box is one a
 	// space may begin a line at, which is white-space: break-spaces and nothing
 	// else.
@@ -1249,6 +1261,9 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		// what it measures to and not only how it is drawn. See
 		// layouter.uprightText.
 		Upright: l.uprightText(b),
+		// §5.2's "auto-phrase" suppresses hyphenation, so an opportunity a
+		// hyphen made is one the line falls back to rather than one it takes.
+		HyphenLastResort: a.wb.AutoPhrase,
 		// §10.8.1's vertical-align, which a text box cannot be asked for
 		// itself: the property is not inherited, so the anonymous box holding
 		// a <span>'s words carries the initial value however the span was

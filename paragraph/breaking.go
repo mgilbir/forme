@@ -179,6 +179,12 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 	// Progress is guaranteed because the marker is only set once the line holds
 	// content, so it is always past the item the line started at.
 	oppAt, oppLine, oppFlow := -1, 0, 0
+	// And the same three for an opportunity a hyphen made, where the box asked
+	// for hyphens to be given up rather than taken. It is a second marker rather
+	// than a flag on the first because the two are not ordered by position: an
+	// ordinary opportunity earlier in the line beats a hyphen later in it, which
+	// is the whole of what suppressing hyphenation means. See Item.HyphenLastResort.
+	hypAt, hypLine, hypFlow := -1, 0, 0
 	// Where the white space that ends this line begins.
 	//
 	// §4.1.2's third and fourth rules are both about white space "at the end of a
@@ -209,6 +215,15 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 	i := from
 	for ; i < len(items); i++ {
 		item := items[i]
+		// Where the line goes back to when what comes next will not fit. An
+		// opportunity a hyphen made is the last one reached for, so it stands
+		// in only where the line has no other — which is §5.2's "auto-phrase"
+		// suppressing hyphenation, and giving up on the suppression rather than
+		// overflowing. See Item.HyphenLastResort.
+		backAt, backLine, backFlow := oppAt, oppLine, oppFlow
+		if backAt < 0 {
+			backAt, backLine, backFlow = hypAt, hypLine, hypFlow
+		}
 		if i == from && fromByte > 0 {
 			// The line begins part-way through an item, because the line before
 			// it ended inside this word. The cursor is an index *and* an offset
@@ -375,10 +390,15 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 			// the line may end at all and it goes back to one that is — the
 			// hyphen is not optional, so a line that cannot hold it has not
 			// broken here.
+			if item.HyphenLastResort && pendingHyphen(line) != 0 && oppAt >= 0 {
+				// Ending here would divide a word, and the box asked for that to
+				// be given up while the line has anywhere else to end. It has.
+				return trimLineEdge(line[:oppLine]), oppAt, 0, outOfFlow[:oppFlow], false
+			}
 			if h := pendingHyphen(line); h == 0 || used.Add(h) <= width {
 				return trimLineEdge(line), i, 0, outOfFlow, false
-			} else if oppAt >= 0 {
-				return trimLineEdge(line[:oppLine]), oppAt, 0, outOfFlow[:oppFlow], false
+			} else if backAt >= 0 {
+				return trimLineEdge(line[:backLine]), backAt, 0, outOfFlow[:backFlow], false
 			}
 			return trimLineEdge(line), i, 0, outOfFlow, false
 		}
@@ -413,8 +433,8 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// above, which makes it a strict improvement rather than a trade.
 		if (item.Space || item.AtomicBox == nil) && !item.Collapsible &&
 			!item.Hangs && i < tailFrom && !item.NoWrap && !item.Inset &&
-			!item.BreakBefore && oppAt >= 0 && overflows(used, item, width) {
-			return trimLineEdge(line[:oppLine]), oppAt, 0, outOfFlow[:oppFlow], false
+			!item.BreakBefore && backAt >= 0 && overflows(used, item, width) {
+			return trimLineEdge(line[:backLine]), backAt, 0, outOfFlow[:backFlow], false
 		}
 
 		// A single item wider than the line has nowhere to go. It is placed and
@@ -449,7 +469,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// Dropping the conjunct therefore moves nothing, which is why it is
 		// recorded here rather than left as an implied claim.
 		if item.BreakWord && !item.NoWrap && !item.Hangs && i < tailFrom && !item.Inset && !item.Tab &&
-			insetAt < 0 && oppAt < 0 && overflows(used, item, width) {
+			insetAt < 0 && backAt < 0 && overflows(used, item, width) {
 			// The offset is into items[i]. It is only the cursor's offset away
 			// from that when this *is* the item the cursor pointed at: a line
 			// that began at a float and reached its first text later is at
@@ -511,7 +531,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// reader given one without the other's conditions would be told they
 		// are two.
 		if !item.BreakWord && !item.NoWrap && !item.Hangs && i < tailFrom &&
-			!item.Inset && !item.Tab && insetAt < 0 && oppAt < 0 &&
+			!item.Inset && !item.Tab && insetAt < 0 && backAt < 0 &&
 			breaksAfterLast(line) && overflows(used, item, width) {
 			base := 0
 			if i == from {
@@ -534,7 +554,21 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 			// Not an opportunity the line can be sent back to if the hyphen it
 			// would have to print does not fit in the room the line had.
 			if h := pendingHyphen(line); h == 0 || used.Add(h) <= width {
-				oppAt, oppLine, oppFlow = i, len(line), len(outOfFlow)
+				switch {
+				case h != 0 && item.HyphenLastResort:
+					// A hyphen the box asked to be given up. Remembered, and
+					// kept apart from the rest so that any other opportunity on
+					// the line is preferred to it however early it was.
+					hypAt, hypLine, hypFlow = i, len(line), len(outOfFlow)
+				default:
+					oppAt, oppLine, oppFlow = i, len(line), len(outOfFlow)
+					// hypAt is not cleared here, and does not need to be: the
+					// fall-back above reads it only where oppAt is unset, and
+					// once oppAt is set on a line it stays set. Clearing it was
+					// written and dropped — a planted defect that removed the
+					// clearing moved no test and no reftest, which is what a
+					// line of code that cannot be wrong looks like.
+				}
 			}
 		}
 

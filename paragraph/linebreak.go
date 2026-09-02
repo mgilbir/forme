@@ -350,3 +350,29 @@ func BindsToAtomicInline(r rune) bool {
 	})
 	return i < len(bindingRanges) && bindingRanges[i].lo <= r
 }
+
+// NeedsPhraseBreaking reports whether a run has text in it that "word-break:
+// auto-phrase" would break differently from "normal".
+//
+// §5.2 allows a line to end only at a phrase boundary, and a phrase is a thing
+// Japanese has: finding one means a morphological analysis of the text, which
+// is the same class of problem as the dictionary NeedsDictionaryBreaking names
+// and is not implemented either. What is asked here is whether a document would
+// see the difference — and for a paragraph with no Japanese in it, it would not,
+// because there are no phrases in it to keep whole.
+//
+// So this is the predicate that turns one finding into two answers: the value's
+// other half — suppressing hyphenation — is done for every document, and only a
+// document whose text has phrases in it is told that the first half is missing.
+//
+// Ideographic is the test, which is Han, hiragana and katakana together. That is
+// the writing the rule is about; it is a wider net than "Japanese" and errs
+// towards reporting, which is the safe direction for a finding.
+func NeedsPhraseBreaking(text string) bool {
+	for _, r := range text {
+		if IsIdeographic(r) {
+			return true
+		}
+	}
+	return false
+}

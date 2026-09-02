@@ -386,9 +386,12 @@ func TestWordBreakBreakWordIsNotReported(t *testing.T) {
 	}
 	// And a value that really is unhandled still is, so this is not passing
 	// because nothing is ever reported. keep-all used to be that value and is
-	// implemented now; auto-phrase is the one left.
+	// implemented now; auto-phrase is the one left, and it is only half left —
+	// it suppresses hyphenation, which is done, and it ends a line only at a
+	// phrase boundary, which needs Japanese in the text to be about. So the
+	// control has Japanese in it. See paragraph.NeedsPhraseBreaking.
 	found := false
-	for _, f := range findingsFrom(t, `<div id="p">abcdefgh</div>`,
+	for _, f := range findingsFrom(t, `<div id="p">日本語</div>`,
 		owCSS+` #p { word-break: auto-phrase }`) {
 		if f.Property == "word-break" {
 			found = true
