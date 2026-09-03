@@ -1877,10 +1877,21 @@ func TestWPTReftests(t *testing.T) {
 				"fallback faces were loaded, so this is the harness and not the "+
 				"engine: set %s (or run `make test-wpt`) and measure again",
 				cleanPass, wptCleanPassBaseline, notoEnv)
+		} else if gone := missingFallbackFaces.list(); len(gone) > 0 {
+			// Some of the library loaded and some did not, which is the harness
+			// again and not the engine — a face that is missing changes what
+			// every document holding text it covers is set in. It is named
+			// rather than counted, because "two faces are missing" is a
+			// question and "Unifont-Regular.otf could not be read" is an
+			// answer.
+			t.Errorf("%d reftests pass cleanly, below the baseline of %d — but %d of "+
+				"the fallback faces did not load, so this is the harness and not the "+
+				"engine: %s",
+				cleanPass, wptCleanPassBaseline, len(gone), strings.Join(gone, "; "))
 		} else {
 			t.Errorf("%d reftests pass cleanly, below the baseline of %d — this is a "+
 				"layout regression, and the baseline is not to be lowered to make it "+
-				"green (%d fallback faces loaded)",
+				"green (%d fallback faces loaded, none missing)",
 				cleanPass, wptCleanPassBaseline, n)
 		}
 	}
