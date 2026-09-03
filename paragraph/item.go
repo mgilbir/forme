@@ -279,6 +279,16 @@ type Item struct {
 	// for by name, "must give up on suppressing hyphenation when that would lead
 	// to overflow". So the opportunity is kept and reached for last.
 	HyphenLastResort bool
+	// LastResort says the opportunity in front of this item is one the line
+	// reaches for only when it has no other, whatever else is on the line.
+	//
+	// It is HyphenLastResort's neighbour and not its duplicate. That one is a
+	// property of the *value* — "auto-phrase" is on the box, so every item in it
+	// carries the flag, and whether it means anything depends on whether a
+	// hyphen is pending. This is a property of the opportunity itself: only the
+	// items whose break "auto-phrase" withheld carry it, and it means what it
+	// says wherever it is set. See Piece.LastResort.
+	LastResort bool
 	// Off is what the document turned off for this run: a font's own rules a
 	// CSS property or a CSS Text rule has overruled. See shape.Features.
 	Off shape.Features

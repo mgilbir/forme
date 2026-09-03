@@ -49,11 +49,14 @@ func (l *layouter) ReportOverflow(item inlineItem, width style.Unit) {
 
 // reportWordBreak reports a word-break value this engine reads as normal.
 //
-// "break-all" is implemented; "keep-all" and "auto-phrase" are not, and both
-// *remove* or *move* opportunities rather than adding them — keep-all stops CJK
-// text breaking between two ideographs, and auto-phrase moves a Korean break to
-// a phrase boundary. Ignoring either breaks a line somewhere the author said not
-// to, which no amount of looking at the page reveals as a missing feature.
+// All four values are implemented, and this fires for the one that is
+// implemented only in part: "auto-phrase" ends a line at a phrase boundary, and
+// finding one takes a model of the language, of which there is one here. A
+// document in another language that has phrases gets "normal" — which is what
+// §5.2 asks of a UA with no model — and is told, because a line that ends in
+// the middle of a phrase is not something looking at the page reveals as a
+// missing feature. See paragraph.PhrasesUnfound for the three things that have
+// to be true at once.
 //
 // Once per value per box, for the same reason checkScript is once per script.
 func (l *layouter) reportWordBreak(b *Box, value string) {

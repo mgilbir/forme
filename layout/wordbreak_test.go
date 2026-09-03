@@ -115,8 +115,10 @@ func TestBreakAllIsInherited(t *testing.T) {
 // paragraph/wordbreakkeepall_test.go for what it does — so reporting it would
 // be the false warning this file's other half exists to prevent.
 //
-// auto-phrase is the one value of the four still read as normal, and is what
-// the report is for now.
+// auto-phrase is implemented too, for the one language there is a model for, so
+// the report is what is left of it: a writing system with phrases and no model
+// here, which is Chinese. The fixture below is tagged as one, since the value's
+// whole effect depends on what the content language is declared to be.
 func TestKeepAllIsNotReported(t *testing.T) {
 	for _, tc := range []struct {
 		value  string
@@ -129,7 +131,7 @@ func TestKeepAllIsNotReported(t *testing.T) {
 	} {
 		rec := NewRecorder(nil)
 		built := Build(Input{
-			HTML: `<div id="p">日本語のテキスト</div>`,
+			HTML: `<div id="p" lang="zh">中文的文本內容</div>`,
 			CSS:  []Stylesheet{{Source: `#p { width: 40px; word-break: ` + tc.value + ` }`}},
 		})
 		Layout(built.Root, Size{W: picPx(600), H: picPx(10000)}, StandardFonts(), rec)
@@ -180,7 +182,7 @@ func TestSplitAtBreaksCutsAtClusterBoundariesOnly(t *testing.T) {
 		"a b́c",                 // a space among them
 	}
 	for _, text := range cases {
-		pieces, _ := splitAtBreaks(text, whiteSpaceOf("collapse"), wordBreak{BreakAll: true}, lineBreak{}, hyphens{})
+		pieces, _ := splitAtBreaks(text, whiteSpaceOf("collapse"), wordBreak{BreakAll: true}, lineBreak{}, hyphens{}, writingSystemOther)
 
 		// Every cut must fall on a boundary the segmenter agrees with, and the
 		// pieces must still spell the text.
@@ -214,7 +216,7 @@ func TestSplitAtBreaksCutsAtClusterBoundariesOnly(t *testing.T) {
 // every cut through the segmenter fixes it.
 func TestAHangulSyllableIsNotCutFromItsJamo(t *testing.T) {
 	const syllable = "각" // 각, spelled LV + T
-	pieces, _ := splitAtBreaks(syllable, whiteSpaceOf("collapse"), wordBreak{}, lineBreak{}, hyphens{})
+	pieces, _ := splitAtBreaks(syllable, whiteSpaceOf("collapse"), wordBreak{}, lineBreak{}, hyphens{}, writingSystemOther)
 	for i, p := range pieces {
 		if i > 0 && p.BreakBefore {
 			t.Fatalf("a line may end inside one Hangul syllable: %q then %q",
@@ -224,7 +226,7 @@ func TestAHangulSyllableIsNotCutFromItsJamo(t *testing.T) {
 
 	// And two whole syllables still break between them, which is the rule this
 	// must not have disabled to pass.
-	pieces, _ = splitAtBreaks("가가", whiteSpaceOf("collapse"), wordBreak{}, lineBreak{}, hyphens{})
+	pieces, _ = splitAtBreaks("가가", whiteSpaceOf("collapse"), wordBreak{}, lineBreak{}, hyphens{}, writingSystemOther)
 	if len(pieces) != 2 || !pieces[1].BreakBefore {
 		t.Errorf("two Hangul syllables gave %d pieces with no opportunity between "+
 			"them; the ideograph rule has been turned off rather than corrected",

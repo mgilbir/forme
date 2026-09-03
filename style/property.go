@@ -198,10 +198,10 @@ var properties = map[string]property{
 	"overflow-wrap": {true, "normal"},
 	"word-wrap":     {true, "normal"},
 	// word-break inherits, which is what makes a rule on a container reach the
-	// text in it. Only "normal" and "break-all" are acted on; the two values
-	// this engine does not distinguish are read as normal and reported, because
-	// "keep-all" changes where CJK text may break and getting it wrong silently
-	// is a line broken in the middle of a word.
+	// text in it. All four values are acted on; "auto-phrase" is reported over a
+	// language whose phrases this engine has no model for, because the value
+	// changes where CJK text may break and getting it wrong silently is a line
+	// broken in the middle of a phrase.
 	"word-break": {true, "normal"},
 	// word-space-transform inherits, which is how a rule on a container reaches
 	// the marks inside it — the property's own test -003 asks for exactly that.

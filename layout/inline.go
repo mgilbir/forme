@@ -82,9 +82,11 @@ import (
 // syllable spelled as a precomposed LV plus its own trailing jamo was cut in
 // two, so a line could end in the middle of one letter.
 //
-// keep-all and auto-phrase are still not implemented, and both *remove* or
-// *move* an opportunity rather than adding one — so ignoring either breaks a
-// line where the author said not to, and both are reported.
+// keep-all and auto-phrase *remove* or *move* an opportunity rather than adding
+// one, so ignoring either breaks a line where the author said not to. Both are
+// implemented now — see paragraph/wordbreakkeepall_test.go and
+// paragraph/wordbreakautophrase_test.go — and what is left of the report is
+// auto-phrase over a language there is no phrase model for.
 //
 // overflow-wrap is not implemented and is reported. It is a different shape of
 // problem from break-all rather than a smaller one: its opportunities exist

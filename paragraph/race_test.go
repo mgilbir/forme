@@ -133,7 +133,7 @@ func itemsOfNoT(br *Breaker, face *shape.Face, text string,
 	ws WhiteSpace, ow OverflowWrap) []Item {
 
 	size := u(size20)
-	pieces, _ := SplitAtBreaks(text, ws, WordBreak{}, LineBreak{}, Hyphens{})
+	pieces, _ := SplitAtBreaks(text, ws, WordBreak{}, LineBreak{}, Hyphens{}, WritingSystemOther)
 	out := make([]Item, 0, len(pieces))
 	afterCollapsible := true
 	for _, p := range pieces {

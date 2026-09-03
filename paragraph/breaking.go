@@ -395,6 +395,12 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 				// be given up while the line has anywhere else to end. It has.
 				return trimLineEdge(line[:oppLine]), oppAt, 0, outOfFlow[:oppFlow], false
 			}
+			// And the same for an opportunity "auto-phrase" withheld: ending
+			// here would divide a phrase, and the line has somewhere else to
+			// end. See Item.LastResort.
+			if item.LastResort && oppAt >= 0 {
+				return trimLineEdge(line[:oppLine]), oppAt, 0, outOfFlow[:oppFlow], false
+			}
 			if h := pendingHyphen(line); h == 0 || used.Add(h) <= width {
 				return trimLineEdge(line), i, 0, outOfFlow, false
 			} else if backAt >= 0 {
@@ -555,10 +561,11 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 			// would have to print does not fit in the room the line had.
 			if h := pendingHyphen(line); h == 0 || used.Add(h) <= width {
 				switch {
-				case h != 0 && item.HyphenLastResort:
-					// A hyphen the box asked to be given up. Remembered, and
-					// kept apart from the rest so that any other opportunity on
-					// the line is preferred to it however early it was.
+				case item.LastResort || (h != 0 && item.HyphenLastResort):
+					// A hyphen the box asked to be given up, or a break inside a
+					// phrase it asked to be kept whole. Remembered, and kept
+					// apart from the rest so that any other opportunity on the
+					// line is preferred to it however early it was.
 					hypAt, hypLine, hypFlow = i, len(line), len(outOfFlow)
 				default:
 					oppAt, oppLine, oppFlow = i, len(line), len(outOfFlow)

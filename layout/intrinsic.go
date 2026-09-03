@@ -724,7 +724,7 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 			lineTail, runTail = trailingSpacingOf(item), trailingSpacingOf(item)
 
 		default:
-			if item.BreakBefore && !item.NoWrap &&
+			if item.BreakBefore && !item.NoWrap && !item.LastResort &&
 				!(item.HyphenLastResort && afterHyphen(items, k)) {
 				// A hyphen's opportunity is one the line gives up rather than
 				// takes, so a word divided only by hyphens is one unbreakable

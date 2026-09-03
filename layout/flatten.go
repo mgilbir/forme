@@ -726,13 +726,12 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	// What the box's declarations turn off in the face, which changes what it
 	// substitutes and so changes every advance below. See fontfeatures.go.
 	off := l.featuresFor(b)
-	if wb.AutoPhrase && needsPhraseBreaking(b.Text) {
-		// Half of "auto-phrase" is done and half is not, so which of the two a
-		// document gets depends on its text. Suppressing hyphenation needs
-		// nothing and is done for every box; ending a line only at a phrase
-		// boundary needs a morphological analysis of Japanese and is not done,
-		// and a box with no Japanese in it has no phrases for that to be about.
-		// See paragraph.NeedsPhraseBreaking.
+	if wb.AutoPhrase && phrasesUnfound(b.Text, boxWritingSystem(b)) {
+		// The value is implemented for the one language there is a model for.
+		// A document in another that has phrases in it gets "normal", which is
+		// what §5.2 prescribes for a UA with no model — and is told, because a
+		// line that ends in the middle of a phrase is not something looking at
+		// the page reveals as a missing feature. See paragraph.PhrasesUnfound.
 		l.reportWordBreak(b, "auto-phrase")
 	}
 	lb, unhandledLine := lineBreakOf(b.Style["line-break"])
@@ -764,7 +763,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	if unhandledAutospace != "" {
 		l.reportAutospace(b, unhandledAutospace)
 	}
-	pieces, endedAtBreak := splitAtBreaks(b.Text, ws, wb, lb, hy)
+	pieces, endedAtBreak := splitAtBreaks(b.Text, ws, wb, lb, hy, boxWritingSystem(b))
 	pieces = collapsibleSeparators(pieces, wordSpaceTransformValue(b.Style))
 	if points := l.hyphenPoints[b]; len(points) > 0 {
 		var endsAtHyphen bool
@@ -1302,6 +1301,12 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		// removal.
 		BreakBefore: a.first && (p.BreakBefore ||
 			(a.state.BreakOpportunity && (!p.Space || a.spaceMayTakeIt))),
+		// And its rank, where the piece's own withheld opportunity is the whole
+		// of what puts it there. An opportunity carried in from another box is
+		// one this box's word-break never saw and is not this box's to give up.
+		// See Piece.LastResort.
+		LastResort: a.first && p.LastResort &&
+			!(a.state.BreakOpportunity && (!p.Space || a.spaceMayTakeIt)),
 		Space: p.Space, Collapsible: p.Collapsible,
 		// A trailing space is trimmed off the end of a line, and only the
 		// last run of a piece has an end for one to be at.

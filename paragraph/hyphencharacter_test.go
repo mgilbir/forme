@@ -47,7 +47,7 @@ func TestTheHyphensPropertyDoesNotReachAWrittenHyphen(t *testing.T) {
 	for _, value := range []string{"none", "manual", "auto", ""} {
 		hy, _ := HyphensOf(value)
 		pieces, _ := SplitAtBreaks("regu‐lation",
-			WhiteSpace{Collapse: true, Wrap: true}, WordBreak{}, LineBreak{}, hy)
+			WhiteSpace{Collapse: true, Wrap: true}, WordBreak{}, LineBreak{}, hy, WritingSystemOther)
 		out := ""
 		for _, p := range pieces {
 			if p.BreakBefore {

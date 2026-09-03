@@ -95,6 +95,7 @@ var (
 	cursiveTrackingSuppressesText = paragraph.CursiveTrackingSuppresses
 	isDefaultIgnorable            = paragraph.IsDefaultIgnorable
 	needsPhraseBreaking           = paragraph.NeedsPhraseBreaking
+	phrasesUnfound                = paragraph.PhrasesUnfound
 )
 
 // Geometry and the item type itself.
@@ -125,6 +126,15 @@ type (
 // wordSpaceTransform is what the property of that name sets: which character a
 // virtual word separator becomes, or nothing at all.
 type wordSpaceTransform = paragraph.WordSpaceTransform
+
+// writingSystem is what a language tag says the text is typeset as, which is a
+// different question from what language it is in. See paragraph.WritingSystemOf.
+type writingSystem = paragraph.WritingSystem
+
+const (
+	writingSystemOther    = paragraph.WritingSystemOther
+	writingSystemJapanese = paragraph.WritingSystemJapanese
+)
 
 // textBoundary is what §4.1.1's segment break rules need to know about the text
 // a node follows. See paragraph.Boundary.

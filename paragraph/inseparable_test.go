@@ -27,7 +27,7 @@ func splitLoose(t *testing.T, text, value string) string {
 	}
 	lb.ChineseOrJapanese = true
 	pieces, _ := SplitAtBreaks(text, WhiteSpace{Collapse: true, Wrap: true},
-		WordBreak{}, lb, Hyphens{})
+		WordBreak{}, lb, Hyphens{}, WritingSystemOther)
 	out := ""
 	for _, p := range pieces {
 		if p.BreakBefore {

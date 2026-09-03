@@ -150,6 +150,23 @@ func phraseModelFor(w WritingSystem) *phraseModel {
 // document — untagged content, which is no language at all.
 func HasPhraseModel(w WritingSystem) bool { return phraseModelFor(w) != nil }
 
+// PhrasesUnfound reports whether a run has phrases in it that "auto-phrase"
+// would keep whole and this engine cannot find.
+//
+// Three things have to be true at once, and the three are why the finding fires
+// where it does. The text has to have the writing the rule is about in it, or
+// there are no phrases to keep. The *language* has to be one whose phrases the
+// value is about, which is a declaration and not a guess — §5.2 gives the value
+// effect only "if the UA supports phrase-based line breaking for the content
+// language", so untagged text gets "normal" and gets it correctly, and a
+// document that declares nothing is not told a feature is missing. And this
+// engine has to have no model for that language, which today means Chinese: one
+// model is here, BudouX publishes two more, and a page of Chinese under this
+// value is set the way "normal" sets it.
+func PhrasesUnfound(text string, w WritingSystem) bool {
+	return w.ChineseOrJapanese() && !HasPhraseModel(w) && NeedsPhraseBreaking(text)
+}
+
 // PhraseBreaks says, for each place inside a run where a phrase could be found,
 // whether one begins there.
 //

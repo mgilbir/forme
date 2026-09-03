@@ -70,7 +70,7 @@ func TestASoftHyphenIsNotOneOfThem(t *testing.T) {
 	const text = "man­ual"
 	breaks := func(h Hyphens) bool {
 		pieces, _ := SplitAtBreaks(text, WhiteSpace{Collapse: true, Wrap: true},
-			WordBreak{}, LineBreak{}, h)
+			WordBreak{}, LineBreak{}, h, WritingSystemOther)
 		for i, p := range pieces {
 			if i > 0 && p.BreakBefore {
 				return true

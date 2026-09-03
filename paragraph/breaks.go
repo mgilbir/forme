@@ -96,6 +96,22 @@ type Piece struct {
 	TrimAtEnd   bool
 	Tab         bool
 	Segment     bool
+	// LastResort marks an opportunity a line reaches for only when it has no
+	// other: it is offered, and everything else on the line is preferred to it.
+	//
+	// CSS Text §5.2's "auto-phrase" is what makes one. The value withholds the
+	// implicit opportunities inside a phrase, and withholding is not deleting:
+	// a phrase wider than the line it is on still has to break somewhere, and
+	// the suite says so by name — word-break-auto-phrase-009's assert is
+	// "auto-phrase's must give up on suppressing wrapping opportunities when
+	// that would lead to overflow", and the reference for its narrowest box
+	// divides the phrase between two characters no phrase boundary falls
+	// between.
+	//
+	// It is BreakBefore's rank rather than its replacement: a piece with this
+	// set has BreakBefore set too, and a reader of BreakBefore alone sees an
+	// opportunity, which is what it is.
+	LastResort bool
 	// Hyphen marks a piece that ends at a soft hyphen: a line may end after it,
 	// and a hyphen is drawn when one does.
 	//
@@ -122,10 +138,14 @@ type Piece struct {
 // The text is walked rune by rune rather than through a []rune, which is not a
 // micro-optimisation: a text node is untrusted and arbitrarily large, and a
 // decoded copy of one is four bytes per character of buffering nobody asked for.
-func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hyphens) ([]Piece, bool) {
+func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hyphens,
+	w WritingSystem) ([]Piece, bool) {
 	var out []Piece
 	var cur strings.Builder
 	breakNext := false
+	// giveUpNext is breakNext's rank: the opportunity is there and it is the
+	// last one the line will reach for. See Piece.LastResort.
+	giveUpNext := false
 
 	// Where the words are, for the scripts whose words a rule cannot find. It
 	// is computed once for the whole run rather than asked per character,
@@ -135,6 +155,15 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 	// that character can know. Nil for the overwhelming majority of documents,
 	// which have no such script in them at all. See DictionaryBreaks.
 	dictBreaks := DictionaryBreaks(text)
+
+	// And where the phrases are, for the value that ends a line only at one.
+	// Computed once for the same reason and nil for the same documents — see
+	// PhraseBreaks, whose three answers are what tells a place inside a phrase
+	// from a place the model was never about.
+	var phrases map[int]bool
+	if wb.AutoPhrase {
+		phrases = PhraseBreaks(text, w)
+	}
 
 	// Grapheme cluster boundaries, walked in lockstep with the scan.
 	//
@@ -170,9 +199,9 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 		if cur.Len() == 0 {
 			return
 		}
-		out = append(out, Piece{Text: cur.String(), BreakBefore: breakNext})
+		out = append(out, Piece{Text: cur.String(), BreakBefore: breakNext, LastResort: giveUpNext})
 		cur.Reset()
-		breakNext = false
+		breakNext, giveUpNext = false, false
 	}
 	// flushHyphen is flush for a piece that ends at a soft hyphen. It is
 	// separate rather than a parameter because every other caller passes false
@@ -182,16 +211,17 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 		if cur.Len() == 0 {
 			return
 		}
-		out = append(out, Piece{Text: cur.String(), BreakBefore: breakNext, Hyphen: true})
+		out = append(out, Piece{Text: cur.String(), BreakBefore: breakNext,
+			LastResort: giveUpNext, Hyphen: true})
 		cur.Reset()
-		breakNext = false
+		breakNext, giveUpNext = false, false
 	}
 	// A white-space Piece takes the pending opportunity but does not consume
 	// it: what follows a space may begin a line whatever came before it, and an
 	// earlier version that cleared the flag here lost the opportunity after
 	// "a- b" entirely.
 	emit := func(p Piece) {
-		p.BreakBefore = breakNext
+		p.BreakBefore, p.LastResort = breakNext, giveUpNext
 		out = append(out, p)
 	}
 
@@ -342,9 +372,41 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 		if offered && !lb.Anywhere && gluedPair(prev, r) {
 			offered = false
 		}
-		if offered && atBoundary && cur.Len() > 0 {
+		// §5.2's "auto-phrase", which is keep-all with the phrase boundaries let
+		// back in: the implicit opportunities inside a phrase are withheld and
+		// the one at its edge is not.
+		//
+		// Withheld and not removed, which is the difference between this and
+		// keep-all. A phrase wider than its line still has to break, so what
+		// happens here is a demotion: the opportunity stands and every other
+		// opportunity on the line is preferred to it. See Piece.LastResort.
+		//
+		// After the prohibitions, and that is not tidiness. A prohibition moves
+		// an opportunity rather than deleting one, so the place a break may fall
+		// is not always the place it was offered — and it is the place it falls
+		// that a phrase boundary is or is not at. "ドライブ、楽しい" is the shape:
+		// the opportunity after "ブ" is inside a phrase and would be withheld,
+		// UAX #14 will not let a line begin with the comma so it moves past it,
+		// and where it lands is exactly where the model says the next phrase
+		// starts. Ranking it before the move suppressed it, and the line then
+		// broke three characters early.
+		//
+		// line-break: anywhere is exempt, as it is from every other rule here:
+		// §5.3 puts an opportunity around every typographic character unit and
+		// says so in a sentence written to overrule the rest of §5.
+		//
+		// A space, a zero width space and a <wbr> never reach this at all —
+		// they set the opportunity in the switch below rather than offering one
+		// here, which is what word-break-auto-phrase-007 asks for: "UAs must not
+		// suppress wrapping opportunities introduced by wbr or ZWSP".
+		giveUp := false
+		if boundary, scored := phrases[start]; scored && !boundary &&
+			offered && !lb.Anywhere {
+			offered, giveUp = false, true
+		}
+		if (offered || giveUp) && atBoundary && cur.Len() > 0 {
 			flush()
-			breakNext = true
+			breakNext, giveUpNext = true, giveUp
 		}
 		deferBreak, heldBreak = false, held
 		prev = r
