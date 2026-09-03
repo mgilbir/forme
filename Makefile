@@ -505,8 +505,19 @@ WPT_DIRS := css/CSS2/normal-flow css/CSS2/box-display css/CSS2/margin-padding-cl
             css/CSS2/box css/CSS2/colors css/CSS2/values \
             css/CSS2/support css/CSS2/reference css/css-text css/reference \
             css/support \
-            fonts
+            fonts images
 
+# "images" is the suite's shared image directory, at the repository root rather
+# than under css/. Two documents reach into it — "/images/blue.png" and
+# "/images/background.png" — and without it they were laid out with the picture
+# missing and reported for it. It is a third of a megabyte for ninety-one files,
+# which is the cheapest entry in this list.
+#
+# It is also what found the corpus pin above. Adding a line here moved the CI
+# cache key, which was the only thing holding the suite at a fixed revision, and
+# a one-document change came back as a hundred-document regression. The pin is
+# what makes this line safe to write.
+#
 # "css/support" is the suite's *shared* support directory, as against the
 # per-chapter css/CSS2/support beside it. It was missing, and the whole of it is
 # sixty-one small files, and its absence cost twenty-three clean passes: the
@@ -556,11 +567,31 @@ wpt: $(WPT_DIR)/.ok $(WPT_DIR)/fonts/DoulosSIL-R.woff \
      $(WPT_DIR)/fonts/NotoSansArmenian-Regular \
      $(WPT_DIR)/fonts/NotoSansGeorgian-Regular.ttf
 
+# The revision the corpus is taken at.
+#
+# It is pinned because a ratchet has to be measured against a fixed thing. The
+# clone was "--depth 1" of a moving branch, so what the suite *was* depended on
+# when it happened to be fetched — and the only thing holding it still was a CI
+# cache keyed on this file, so any edit here silently swapped the corpus
+# underneath the number. That is not a hypothetical: adding one directory to
+# WPT_DIRS moved the key, re-cloned six weeks of upstream, and turned a hundred
+# clean passes into "a layout regression" that was nothing of the kind.
+#
+# So the cache is a speed-up now and nothing rests on it: a cold run and a warm
+# one check out the same commit and count the same tests.
+#
+# Moving it is a deliberate act with its own commit, which says what the new
+# revision changed and moves the baseline to what it measures. It is not
+# something another change gets to do as a side effect.
+WPT_COMMIT := a1e944e7a879854494e1a041a8ad1e4a8ae28ab1
+
 $(WPT_DIR)/.ok:
 	rm -rf $(WPT_DIR)
 	git clone --filter=blob:none --sparse --depth 1 \
 		https://github.com/web-platform-tests/wpt.git $(WPT_DIR)
 	git -C $(WPT_DIR) sparse-checkout set $(WPT_DIRS)
+	git -C $(WPT_DIR) fetch --depth 1 --filter=blob:none origin $(WPT_COMMIT)
+	git -C $(WPT_DIR) checkout --detach $(WPT_COMMIT)
 	touch $@
 
 # Doulos SIL, which the suite asks for and does not ship.

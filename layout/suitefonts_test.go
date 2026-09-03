@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -131,16 +132,58 @@ func notoFaces() []*shape.Face {
 	} {
 		data, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
+			missingFallbackFaces.add(name, err)
 			continue
 		}
 		face, err := loadSuiteFace(data)
 		if err != nil {
+			missingFallbackFaces.add(name, err)
 			continue
 		}
 		registerBlockFont(face, data)
 		out = append(out, face)
 	}
 	return out
+}
+
+// The faces this list names and could not load, and why.
+//
+// A face that is skipped changes what every document in the corpus is set in,
+// and this list used to skip them silently: a "continue" with nothing recorded.
+// Two of the fourteen went missing in a CI run and a hundred documents stopped
+// passing cleanly, and what the ratchet said about it was "this is a layout
+// regression" — which was false, and is the one thing it must not say wrongly,
+// because the reading it invites is to lower the number.
+//
+// So the skip is remembered and the ratchet names it. The library is fetched
+// from upstreams that move, and a fetch that half works is the failure this
+// exists to make legible.
+var missingFallbackFaces missingFaces
+
+type missingFaces struct {
+	mu    sync.Mutex
+	seen  map[string]bool
+	names []string
+}
+
+func (m *missingFaces) add(name string, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.seen[name] {
+		return
+	}
+	if m.seen == nil {
+		m.seen = map[string]bool{}
+	}
+	m.seen[name] = true
+	m.names = append(m.names, fmt.Sprintf("%s (%v)", name, err))
+}
+
+// list is what could not be loaded, in the order the loader met it.
+func (m *missingFaces) list() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.names...)
 }
 
 // registerBlockFont records which of a face's glyphs are filled rectangles, for

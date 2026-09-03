@@ -65,10 +65,16 @@ jobs:
       # specified: change a URL, a sparse-checkout path or a Unicode version and
       # the key moves and everything is fetched again.
       #
-      # CORPUS_GENERATION is the manual half of that key. The suites are fetched
-      # from a moving branch rather than a pinned commit, so a cache hit is what
-      # keeps this job reproducible from one run to the next; bump the number to
-      # take a fresh copy deliberately.
+      # Nothing rests on a hit any more. The Web Platform Tests are checked out
+      # at the commit WPT_COMMIT names, so a cold run and a warm one count the
+      # same tests — the cache is a speed-up and not the thing holding the
+      # corpus still. It used to be the latter, and the failure mode was exactly
+      # what a ratchet must never do: an edit to this file moved the key,
+      # re-cloned six weeks of upstream, and reported a hundred fewer clean
+      # passes as "a layout regression".
+      #
+      # The number in the key is the manual half, for the other corpora here
+      # that are still fetched from a branch: bump it to take fresh copies.
       - name: Restore the fetched corpora
         uses: actions/cache@v6
         with:
