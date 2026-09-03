@@ -110,7 +110,22 @@ var hintedAttributes = map[string]map[string]string{
 	// of seven steps — size. They are the reason the element is worth laying out
 	// at all, since without them a <font> is a <span>.
 	"font": {"color": "color", "face": "font-family", "size": "font-size"},
+	// <br clear>, which is older than the property it sets and is the only
+	// place the property applies to something that is not a block-level box.
+	// HTML's rendering section maps it by name — "left", "right", "all" or
+	// "both", and "none" — and every engine follows, because "<br clear=all>"
+	// is how a page cleared a float before CSS existed.
+	//
+	// It is on this table rather than in layout because it is a *presentational
+	// hint*, which is a place in the cascade: an author rule beats it and a
+	// user-agent rule does not. A layout that read the attribute directly would
+	// have "br { clear: none }" in a stylesheet lose to the markup.
+	"br": {"clear": "clear"},
 }
+
+// clearHintAttributes are the entries whose value is one of a handful of
+// keywords rather than a length, a colour or a number.
+var clearHintAttributes = map[string]bool{"clear": true}
 
 // colourHintAttributes are the entries above whose value is a colour rather than
 // a length or a counter.
@@ -166,6 +181,8 @@ func presentationalHints(n *html.Node) map[string][]css.ComponentValue {
 			value, ok = familyValue(raw)
 		} else if sizeHintAttributes[attr] {
 			value, ok = fontSizeValue(raw)
+		} else if clearHintAttributes[attr] {
+			value, ok = clearValue(raw)
 		} else if counterHintAttributes[attr] {
 			// "start" and "value" set the counter to one *below* the number
 			// they name, because the item increments it on the way in. That is
@@ -443,4 +460,36 @@ func colourValue(raw string) (string, bool) {
 func mustValues(s string) []css.ComponentValue {
 	vals, _ := css.ParseComponentValues(s)
 	return vals
+}
+
+// clearValue turns a <br clear> into the property's keyword.
+//
+// HTML's rendering section names four: "left", "right", "all" and "none", with
+// "all" mapping to the property's "both". "both" is accepted as well because
+// the attribute is old enough that documents write the property's own spelling
+// into it, and reading it costs nothing.
+//
+// Anything else is not a value, and the attribute is ignored rather than
+// guessed at — which is what every other hint here does with a value it cannot
+// read, and is the safe direction: a <br> that clears nothing is the <br> the
+// document would have had without the attribute at all.
+func clearValue(raw string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "left":
+		return "left", true
+	case "right":
+		return "right", true
+	case "all", "both":
+		return "both", true
+	case "none":
+		// Mapped rather than dropped, and no document can tell the two apart.
+		// "none" is the property's initial value, so a hint carrying it and no
+		// hint at all produce the same computed value — a planted defect that
+		// removed this case moved no test and no reftest. It is here because
+		// HTML's rendering section names it, and because the day a user-agent
+		// rule sets "clear" on a <br> the difference becomes real: a hint beats
+		// a user-agent rule and an absent one does not.
+		return "none", true
+	}
+	return "", false
 }

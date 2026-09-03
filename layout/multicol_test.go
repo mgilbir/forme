@@ -193,8 +193,6 @@ func TestAColumnWidthIsAMinimumAndACountIsAMaximum(t *testing.T) {
 // wrong declaration.
 func TestABoxTheEngineCannotDivideIsReported(t *testing.T) {
 	for _, c := range []struct{ what, html, names string }{
-		{"a float inside", `<div id="d"><p style="float: left">ab</p>c</div>`,
-			"holds a float"},
 		{"a positioned box inside", `<div id="d"><p style="position: relative">ab</p>c</div>`,
 			"positioned box"},
 		{"a form control inside", `<div id="d"><input>c</div>`, "form control"},
@@ -252,7 +250,11 @@ func TestARefusedBoxIsLaidOutAtItsOwnWidth(t *testing.T) {
 	// would end — and that box *has* been laid out at the column width and has
 	// to be laid out again. A child with a background is the case: a box with a
 	// background cut in half is a picture whose edges CSS assigns.
-	const drawn = `<div id="d"><div style="background: red">` +
+	// A background *image*, which is what slicing cannot draw: its position is
+	// stated relative to the box that was never divided, so each fragment would
+	// have to be painted with the image placed for the whole. A background
+	// colour is sliceable and is not this case.
+	const drawn = `<div id="d"><div style="background-image: url(x.png)">` +
 		`aaaaaaaaaaaaaaaa<br>b<br>c</div></div>`
 	lineWidth := func(cssSrc string) float64 {
 		t.Helper()
@@ -293,5 +295,140 @@ func TestNothingHappensWithoutADeclaration(t *testing.T) {
 	if len(got) != 2 || got[1].X != 0 {
 		t.Errorf("with column-count: 1 the second line is at %v, want the first "+
 			"column", got[1].X)
+	}
+}
+
+// A box that draws, cut across a column boundary.
+//
+// CSS Fragmentation §4.4's "box-decoration-break: slice", which is the initial
+// value: the box is rendered as though it were never divided and then cut, so
+// no border appears at the cut on either side. The top border goes to the first
+// fragment, the bottom to the last, and the two sides to both — which draws a
+// bordered box as one shape running down several columns rather than as several
+// boxed-off pieces.
+
+// TestABorderedBoxIsSlicedAndNotBoxedOff.
+func TestABorderedBoxIsSlicedAndNotBoxedOff(t *testing.T) {
+	// Four lines in a box with a border all round, in two columns of two lines.
+	var bands []Rect
+	for _, op := range Paint(layoutOf(t, 400,
+		`<div id="d"><div class="b">a<br>b<br>c<br>d</div></div>`,
+		colCSS+`
+	#d { column-count: 2 }
+	.b { border: 5px solid black }`)) {
+		if v, ok := op.(FillRect); ok && !v.Rect.Empty() {
+			bands = append(bands, v.Rect)
+		}
+	}
+	// Each fragment draws its own left and right edges; the top edge is drawn
+	// once and the bottom once. Six rectangles, not eight.
+	if len(bands) != 6 {
+		t.Fatalf("the border drew %d rectangles, want 6 — two sides on each of "+
+			"two fragments, one top and one bottom", len(bands))
+	}
+	tops, bottoms := 0, 0
+	for _, r := range bands {
+		if r.W.Px() <= 5 {
+			continue
+		}
+		if r.Y.Px() == 0 {
+			tops++
+			continue
+		}
+		bottoms++
+	}
+	if tops != 1 || bottoms != 1 {
+		t.Errorf("the border drew %d top edges and %d bottom ones, want one of "+
+			"each — a sliced box has no border at the cut", tops, bottoms)
+	}
+}
+
+// TestTheHalvesOfASlicedBoxAreOneBox.
+//
+// A fragmented box is one box in two pieces, so the two share a Box and
+// everything that asks what generated them gets one answer.
+func TestTheHalvesOfASlicedBoxAreOneBox(t *testing.T) {
+	d := find(t, layoutOf(t, 400,
+		`<div id="d"><div class="b">a<br>b<br>c<br>d</div></div>`,
+		colCSS+`
+	#d { column-count: 2 }
+	.b { border: 5px solid black }`), "d")
+	if len(d.Children) != 2 {
+		t.Fatalf("the box came out as %d fragments, want 2", len(d.Children))
+	}
+	if d.Children[0].Box != d.Children[1].Box {
+		t.Error("the two fragments came from different boxes; a fragmented box " +
+			"is one box in two pieces")
+	}
+}
+
+// TestAFloatIsFragmentedWithEverythingElse.
+//
+// A float taller than a column is cut into the columns like anything else. It
+// is the case that says the fragmentation is of the *content* and not of the
+// boxes the content happens to be in: the float overflows its own parent, whose
+// rectangle says nothing about where the float ends.
+func TestAFloatIsFragmentedWithEverythingElse(t *testing.T) {
+	var slices []Rect
+	for _, op := range Paint(layoutOf(t, 400,
+		`<div id="d"><div><div class="f"></div></div></div>`,
+		colCSS+`
+	#d { column-count: 3; width: 300px; height: 100px }
+	.f { float: left; width: 10px; height: 250px; background: black }`)) {
+		if v, ok := op.(FillRect); ok && !v.Rect.Empty() {
+			slices = append(slices, v.Rect)
+		}
+	}
+	if len(slices) != 3 {
+		t.Fatalf("a 250px float in three 100px columns drew %d pieces, want 3",
+			len(slices))
+	}
+	want := []struct{ x, h float64 }{{0, 100}, {100, 100}, {200, 50}}
+	for i, w := range want {
+		var found bool
+		for _, r := range slices {
+			if r.X.Px() == w.x && r.H.Px() == w.h && r.Y.Px() == 0 {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("no float piece at x=%g %gpx tall; the pieces are %v",
+				w.x, w.h, slices)
+			break
+		}
+		_ = i
+	}
+}
+
+// TestAPictureThatSlicingCannotDrawIsStillRefused.
+//
+// What is refused is what slicing cannot draw, rather than everything that
+// draws at all. A border and a background colour are sliceable — §4.4 says how.
+// A background image is not: its position is stated relative to the box that
+// was never divided, so each fragment would have to be painted with the image
+// placed for the whole.
+func TestAPictureThatSlicingCannotDrawIsStillRefused(t *testing.T) {
+	for _, c := range []struct {
+		what, style string
+		refused     bool
+	}{
+		{"a border", "border: 5px solid black", false},
+		{"a background colour", "background: red", false},
+		{"a background image", "background-image: url(x.png)", true},
+		{"an outline", "outline: 5px solid black", true},
+		{"box-decoration-break: clone", "box-decoration-break: clone", true},
+	} {
+		var said string
+		for _, f := range findingsOf(t,
+			`<div id="d"><div style="`+c.style+`">a<br>b<br>c<br>d</div></div>`,
+			`#d { width: 200px; column-count: 2; font: 20px/20px Courier }`) {
+			if f.Property == "column-count" && said == "" {
+				said = f.Message
+			}
+		}
+		if refused := said != ""; refused != c.refused {
+			t.Errorf("with %s the box was refused=%v, want %v (%q)",
+				c.what, refused, c.refused, said)
+		}
 	}
 }
