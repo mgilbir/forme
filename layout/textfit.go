@@ -204,7 +204,7 @@ func (l *layouter) fitRuns(runs []inlineItem, scale float64) []inlineItem {
 		if it.Face != nil && it.Text != "" {
 			it.Size = it.Size.Mul(scale)
 			it.Width = l.br.MeasureSpacedInContext(it.Face, it.Text, it.Size,
-				it.Spacing, it.PreContext, it.PostContext, it.ContextKerns, it.Upright)
+				it.Spacing, itemShaping(it))
 		}
 		// How far the item reaches above and below the baseline, which is the
 		// same question on the vertical axis and has the same answer: the type
@@ -256,8 +256,7 @@ func (l *layouter) fitScalable(runs []inlineItem, hangs []bool) style.Unit {
 			continue
 		}
 		out = out.Add(l.br.MeasureSpacedInContext(it.Face, it.Text, it.Size,
-			paragraph.TextSpacing{}, it.PreContext, it.PostContext, it.ContextKerns,
-			it.Upright))
+			paragraph.TextSpacing{}, itemShaping(&it)))
 	}
 	return out
 }

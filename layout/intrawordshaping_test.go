@@ -30,7 +30,7 @@ func glyphsOfLines(lines []LineFragment) []int {
 			if r.Face == nil {
 				continue
 			}
-			gs, _ := r.Face.ShapeGlyphsInContext(r.Text, r.PreContext, r.PostContext)
+			gs, _ := r.Face.ShapeGlyphsInContext(r.Text, r.PreContext, r.PostContext, shape.Features{})
 			ids := make([]int, 0, len(gs))
 			for _, g := range gs {
 				ids = append(ids, g.GID)
@@ -144,7 +144,7 @@ func TestACutHalfIsAsWideAsItIsDrawn(t *testing.T) {
 				continue
 			}
 			want, _ := style.FromPx(r.Face.MeasureShapedInContext(r.Text, r.Size.Px(),
-				r.PreContext, r.PostContext, r.ContextKerns))
+				r.PreContext, r.PostContext, r.ContextKerns, r.Features))
 			if r.Width != want {
 				t.Errorf("line %d's run %q is %v wide and is drawn %v wide",
 					i, r.Text, r.Width, want)
@@ -180,7 +180,7 @@ func TestTheCutIsChosenAgainstTheWidthTheHeadWillHave(t *testing.T) {
 	best := 0
 	for n := 1; n < len(runes); n++ {
 		prefix, rest := string(runes[:n]), string(runes[n:])
-		if face.MeasureShapedInContext(prefix, size, "", rest, true) <= box {
+		if face.MeasureShapedInContext(prefix, size, "", rest, true, shape.Features{}) <= box {
 			best = n
 		}
 	}

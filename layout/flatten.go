@@ -723,6 +723,9 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	if unhandled != "" {
 		l.reportWordBreak(b, unhandled)
 	}
+	// What the box's declarations turn off in the face, which changes what it
+	// substitutes and so changes every advance below. See fontfeatures.go.
+	off := l.featuresFor(b)
 	if wb.AutoPhrase && needsPhraseBreaking(b.Text) {
 		// Half of "auto-phrase" is done and half is not, so which of the two a
 		// document gets depends on its text. Suppressing hyphenation needs
@@ -1115,7 +1118,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 				b: b, p: p, run: run, size: size, frame: frame, ws: ws,
 				above: above, below: below, boxFace: face,
 				offset: offset, spacing: spacing,
-				decorations: decorations, ow: ow, wb: wb, state: state,
+				decorations: decorations, ow: ow, wb: wb, off: off, state: state,
 				tabStop: tabStop, tabFloor: tabFloor,
 				para: para, bidiStart: start, bidiEnd: end,
 				// Only the first run of a piece may begin a line. The rest are
@@ -1215,7 +1218,10 @@ type textItemArgs struct {
 	ow          paragraph.OverflowWrap
 	// wb is the box's word-break, of which the item needs one fact: whether a
 	// hyphen's opportunity is one to be given up. See Item.HyphenLastResort.
-	wb        paragraph.WordBreak
+	wb paragraph.WordBreak
+	// off is what the box's declarations turn off in the face. See
+	// layouter.featuresFor.
+	off       shape.Features
 	state     inlineState
 	tabStop   style.Unit
 	tabFloor  style.Unit
@@ -1264,6 +1270,9 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		// §5.2's "auto-phrase" suppresses hyphenation, so an opportunity a
 		// hyphen made is one the line falls back to rather than one it takes.
 		HyphenLastResort: a.wb.AutoPhrase,
+		// What the document turned off for this run, which changes what the
+		// face substitutes and so changes the advance. See fontfeatures.go.
+		Off: a.off,
 		// §10.8.1's vertical-align, which a text box cannot be asked for
 		// itself: the property is not inherited, so the anonymous box holding
 		// a <span>'s words carries the initial value however the span was
@@ -1340,7 +1349,7 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		// at the end of an upright line stands upright with the letters, and it
 		// is an em per character there like any other.
 		item.Hyphen = l.br.MeasureSpacedInContext(face, item.HyphenText, a.size,
-			a.spacing, "", "", true, item.Upright)
+			a.spacing, shaping{ContextKerns: true, Upright: item.Upright, Off: item.Off})
 		if face != a.run.Face {
 			// Set in another face, so measured against it: §10.8.1's rule for
 			// the run itself, four lines up, and for the same reason.
@@ -1357,7 +1366,7 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		// whatever a face happens to give a character it has no glyph for —
 		// would be the wrong number to carry.
 		item.Width = l.br.MeasureSpacedInContext(a.run.Face, a.run.Text, a.size,
-			a.spacing, "", "", true, item.Upright)
+			a.spacing, shaping{ContextKerns: true, Upright: item.Upright, Off: item.Off})
 	}
 	return item
 }

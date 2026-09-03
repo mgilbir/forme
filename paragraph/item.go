@@ -279,6 +279,9 @@ type Item struct {
 	// for by name, "must give up on suppressing hyphenation when that would lead
 	// to overflow". So the opportunity is kept and reached for last.
 	HyphenLastResort bool
+	// Off is what the document turned off for this run: a font's own rules a
+	// CSS property or a CSS Text rule has overruled. See shape.Features.
+	Off shape.Features
 	// Hyphen is how much wider the line becomes if it ends after this item: the
 	// width of the hyphen a soft hyphen asks to have printed. Zero means this is
 	// not a hyphenation point, which is every item in almost every document.
@@ -649,9 +652,9 @@ func (br *Breaker) SplitItem(item Item, at int) (head, tail Item) {
 	// is one this font states its pairs over whatever the outer context is.
 	head.ContextKerns, tail.ContextKerns = true, true
 	head.Width = br.MeasureSpacedInContext(item.Face, head.Text, item.Size, item.Spacing,
-		head.PreContext, head.PostContext, head.ContextKerns, head.Upright)
+		head.shaping())
 	tail.Width = br.MeasureSpacedInContext(item.Face, tail.Text, item.Size, item.Spacing,
-		tail.PreContext, tail.PostContext, tail.ContextKerns, tail.Upright)
+		tail.shaping())
 	// §8.1's gap sits at the item's far edge, so it goes with the tail — the
 	// head's far edge is the cut, which is a boundary the gap was never at. The
 	// measurements above do not include it, since it is not in the text.
@@ -668,4 +671,13 @@ func (br *Breaker) SplitItem(item Item, at int) (head, tail Item) {
 	// about where the item now sits, not because a document can tell.
 	tail.BreakBefore = false
 	return head, tail
+}
+
+// shaping is everything about how this item is set that its text does not say,
+// gathered for the measure. See Shaping.
+func (it Item) shaping() Shaping {
+	return Shaping{
+		Before: it.PreContext, After: it.PostContext,
+		ContextKerns: it.ContextKerns, Upright: it.Upright, Off: it.Off,
+	}
 }

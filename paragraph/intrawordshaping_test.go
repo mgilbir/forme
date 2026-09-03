@@ -75,7 +75,8 @@ func TestASplitHalfIsMeasuredInTheContextItIsDrawnIn(t *testing.T) {
 	head, tail := br.SplitItem(item, len("بب"))
 
 	want := func(s, before, after string) style.Unit {
-		return br.MeasureSpacedInContext(f, s, sz, TextSpacing{}, before, after, true, false)
+		return br.MeasureSpacedInContext(f, s, sz, TextSpacing{},
+			Shaping{Before: before, After: after, ContextKerns: true})
 	}
 	if head.Width != want(head.Text, "", head.PostContext) {
 		t.Errorf("the head is %v wide and in its context it is %v",

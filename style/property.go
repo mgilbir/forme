@@ -227,8 +227,12 @@ var properties = map[string]property{
 	// that will set the text — which the cascade has not chosen yet. A face with
 	// no kerning in it cannot have its kerning turned off. See
 	// layout/textchecks.go.
-	"font-kerning":          {true, "auto"},
-	"font-feature-settings": {true, "normal"},
+	"font-kerning": {true, "auto"},
+	// CSS Fonts 4 §6.4. It inherits, which is what makes a rule on a container
+	// reach the words inside it, and its initial value is "normal" — the
+	// font's own rules, applied as the font states them.
+	"font-variant-ligatures": {true, "normal"},
+	"font-feature-settings":  {true, "normal"},
 	// text-autospace inherits, which is what lets a document turn it off once
 	// on the body. Its initial value is "normal", and "normal" asks for the
 	// spacing — a page of Japanese with Latin words in it is set wrong without

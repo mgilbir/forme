@@ -278,7 +278,8 @@ func (l *layouter) spaceAdvance(block *Box, fallback *shape.Face) style.Unit {
 	// face's horizontal advance is a stop in the wrong unit, and a tab in such a
 	// block landed at three fifths of the column it belongs in.
 	return l.br.MeasureSpacedInContext(face, " ", block.FontSize,
-		paragraph.TextSpacing{}, "", "", true, l.uprightText(block)).
+		paragraph.TextSpacing{},
+		shaping{ContextKerns: true, Upright: l.uprightText(block), Off: l.featuresFor(block)}).
 		Add(s.Letter).Add(s.Word)
 }
 

@@ -75,6 +75,10 @@ type TextRun struct {
 	// textdecoration.go, where the difference between propagating and inheriting
 	// is worked through.
 	Decorations []textDecoration
+	// Features is what the document turned off: a font's own rules that a CSS
+	// property or a CSS Text rule has overruled. It travels to the display list
+	// because a backend shapes the run for itself. See shape.Features.
+	Features shape.Features
 	// Upright says each of the run's characters stands the way it does in the
 	// code charts and the pen moves one em to the next one, rather than the run
 	// being turned with the page. It is what "text-orientation: upright" asks

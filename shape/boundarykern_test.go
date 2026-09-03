@@ -51,7 +51,7 @@ func wholeAdvance(f *Face, s string) float64 {
 }
 
 func contextAdvance(f *Face, s, before, after string) float64 {
-	gs, _ := f.ShapeGlyphsInContext(s, before, after)
+	gs, _ := f.ShapeGlyphsInContext(s, before, after, Features{})
 	return advanceOf(gs)
 }
 

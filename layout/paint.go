@@ -142,6 +142,16 @@ type DrawText struct {
 	// bunched at the left of a gap the right size.
 	CharSpacing style.Unit
 
+	// Features is what the document turned off: a font's own rules that a CSS
+	// property or a CSS Text rule has overruled.
+	//
+	// It is on the run because a backend shapes the run for itself, and a
+	// backend that shaped it with the font's rules intact would draw a ligature
+	// the engine measured as two letters — a run measured to one width and
+	// painted at another, which is the failure this package has a comment about
+	// wherever it could happen. See shape.Features.
+	Features shape.Features
+
 	// Clip is §11.1's clipping, when something cuts this run.
 	//
 	// It is set only when the clip really does cut the run: a run wholly inside
@@ -1310,6 +1320,7 @@ func (p *painter) lines(f *Fragment) {
 				At:           at,
 				Sideways:     line.Sideways,
 				Upright:      run.Upright,
+				Features:     run.Features,
 				Text:         drawableText(run.Text),
 				PreContext:   run.PreContext,
 				PostContext:  run.PostContext,
@@ -1496,9 +1507,11 @@ func ShapedGlyphs(v DrawText) ([]shape.Glyph, int) {
 		// The neighbour is set in another face, so its characters decide this
 		// run's joined shapes and its glyphs decide nothing. See
 		// shape.ShapeGlyphsAcrossFaces.
-		return v.Face.ShapeGlyphsAcrossFaces(ShapedText(v), v.PreContext, v.PostContext)
+		return v.Face.ShapeGlyphsAcrossFaces(ShapedText(v), v.PreContext, v.PostContext,
+			v.Features)
 	}
-	return v.Face.ShapeGlyphsInContext(ShapedText(v), v.PreContext, v.PostContext)
+	return v.Face.ShapeGlyphsInContext(ShapedText(v), v.PreContext, v.PostContext,
+		v.Features)
 }
 
 // solidTiles is the rectangles a one-colour layer paints.

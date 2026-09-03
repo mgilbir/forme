@@ -291,44 +291,30 @@ func (l *layouter) reportHyphens(b *Box, value string) {
 	})
 }
 
-// reportKerning names a request to turn kerning off, where there is kerning to
-// turn off.
+// reportKerning names a request about a font's own rules that this engine cannot
+// carry out.
 //
-// This engine applies a face's kerning and offers no way to decline it, so
-// "font-kerning: none" and "font-feature-settings: \"kern\" off" both ask for
-// something it cannot do — and both ask for *nothing at all* when the face has
-// no kerning in it. The fourteen standard PDF faces are that case: their metrics
-// carry no kern pairs, so a document set in one of them and asking for kerning
-// to be turned off gets exactly the page it asked for.
+// "font-kerning: none" is not one of them any more — it is applied, see
+// layout/fontfeatures.go — and what is left is font-feature-settings, which asks
+// for a named feature by tag.
 //
-// That is not a corner of the suite. Five of its reftests write both
-// declarations together — the belt-and-braces an author uses to make a layout
-// test robust across UAs — over text in the default serif face, and every one of
-// them was held out of the clean count by a finding about a page that is right.
+// The narrowing it keeps is worth stating, because it is the same one inert.go
+// makes for a declaration at its initial value, one step further along: the
+// question is not what the property is but what it is being asked to *do*, and
+// here the answer depends on the font. "font-feature-settings: \"kern\" off"
+// asks for nothing at all when the face has no kerning in it, and the fourteen
+// standard PDF faces are that case — their metrics carry no kern pairs.
 //
-// It is the same narrowing inert.go makes for a declaration at its initial
-// value, one step further along: the question is not what the property is but
-// what it is being asked to do, and here the answer depends on the font.
+// That is not a corner of the suite. Five of its reftests write the declaration
+// over text in the default serif face, and every one of them was held out of the
+// clean count by a finding about a page that is right.
 //
-// Where the face *does* kern, both are reported as before: the page really does
-// differ from the one the author asked for.
-//
-// font-feature-settings is judged only by the tags it names. "kern" is the one
-// this can answer, because a face's kerning is a thing the shaping layer knows
-// about; any other tag is a feature this engine neither applies nor can ask the
-// face for, so a value naming one is reported whatever the face has in it.
+// The property is judged only by the tags it names. "kern" is the one this can
+// answer, because a face's kerning is a thing the shaping layer knows about; any
+// other tag is a feature this engine neither applies nor can ask the face for,
+// so a value naming one is reported whatever the face has in it.
 func (l *layouter) reportKerning(b *Box, face *shape.Face) {
 	kerns := face != nil && face.HasKerning()
-	if value := strings.ToLower(strings.TrimSpace(b.Style["font-kerning"])); value == "none" && kerns {
-		l.reportOnce("font-kerning", Finding{
-			Rule:     RuleUnsupportedValue,
-			Property: "font-kerning",
-			Message: "font-kerning: none was not applied; this engine sets a face's " +
-				"kerning and offers no way to decline it, so the pairs this face " +
-				"kerns are still kerned",
-			Path: PathOf(boxElement(b)),
-		})
-	}
 	if value := b.Style["font-feature-settings"]; !inertFontFeatures(value, kerns) {
 		l.reportOnce("font-feature-settings", Finding{
 			Rule:     RuleUnsupportedValue,

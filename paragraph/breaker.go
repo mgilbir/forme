@@ -101,7 +101,7 @@ func (br *Breaker) Measure(face *shape.Face, text string, size style.Unit) style
 func (br *Breaker) MeasureSpaced(face *shape.Face, text string, size style.Unit,
 	sp TextSpacing) style.Unit {
 
-	return br.MeasureSpacedInContext(face, text, size, sp, "", "", true, false)
+	return br.MeasureSpacedInContext(face, text, size, sp, Shaping{ContextKerns: true})
 }
 
 // MeasureSpacedInContext is MeasureSpaced with the text either side of the run,
@@ -113,13 +113,12 @@ func (br *Breaker) MeasureSpaced(face *shape.Face, text string, size style.Unit,
 // middle of one, and an entry shared between the two would give a line filled to
 // one width and painted at another.
 func (br *Breaker) MeasureSpacedInContext(face *shape.Face, text string, size style.Unit,
-	sp TextSpacing, before, after string, kerns, upright bool) style.Unit {
+	sp TextSpacing, how Shaping) style.Unit {
 
 	if text == "" {
 		return 0
 	}
-	key := measureKey{face: face, text: text, size: size, spacing: sp,
-		before: before, after: after, kerns: kerns, upright: upright}
+	key := measureKey{face: face, text: text, size: size, spacing: sp, how: how}
 	if got, ok := br.measured[key]; ok {
 		return got
 	}
@@ -140,7 +139,7 @@ func (br *Breaker) MeasureSpacedInContext(face *shape.Face, text string, size st
 	// characters — the standard PDF fonts — substitutes and kerns nothing, and
 	// MeasureShaped hands those straight back to the sum.
 	var w style.Unit
-	if upright {
+	if how.Upright {
 		// A run set upright on a line of vertical text advances one em per
 		// character, and the face's horizontal advances say nothing about it.
 		// CSS Writing Modes §4.4: where a face states no vertical metrics the
@@ -148,7 +147,8 @@ func (br *Breaker) MeasureSpacedInContext(face *shape.Face, text string, size st
 		// for what counts as a character here.
 		w = size.Mul(float64(UprightUnits(text)))
 	} else {
-		w, _ = style.FromPx(face.MeasureShapedInContext(text, size.Px(), before, after, kerns))
+		w, _ = style.FromPx(face.MeasureShapedInContext(text, size.Px(),
+			how.Before, how.After, how.ContextKerns, how.Off))
 	}
 	w = w.Add(SpacingAdvance(text, sp))
 	br.measured[key] = w
@@ -160,13 +160,32 @@ type measureKey struct {
 	text    string
 	size    style.Unit
 	spacing TextSpacing
-	// The text either side, which changes a cursive letter's advance. Empty for
-	// every run of every document that is not written in a joining script.
-	before, after string
-	// Whether a pair across the boundary is this font's to apply. See
-	// Item.ContextKerns.
-	kerns bool
-	// Whether the run is set upright, which replaces the face's advances with
-	// the em box. See Item.Upright.
-	upright bool
+	// Everything else about how the run is set, all of which changes the
+	// answer and so belongs in the key. It is one field rather than five
+	// because a fact added to Shaping and forgotten here would give two runs
+	// one entry — the memoization bug this key already has two comments about.
+	how Shaping
+}
+
+// Shaping is everything about how a run of text is set that its own text does
+// not say.
+//
+// It travels together because it is asked together: the measure needs all of it
+// to give an answer, the memo needs all of it to tell two runs apart, and a
+// caller that has one of these facts almost always has the rest. Five loose
+// parameters is what it was, and the fifth was one too many.
+type Shaping struct {
+	// Before and After are the text either side of the run, where the boundary
+	// between it and its neighbour did not break shaping. See Item.PreContext.
+	Before, After string
+	// ContextKerns says the neighbours above are set in this run's own face, so
+	// a pair that spans the boundary is this font's pair. See Item.ContextKerns.
+	ContextKerns bool
+	// Upright says the run stands upright on a line of vertical text, so its
+	// advance is one em per typographic character unit rather than the face's.
+	// See Item.Upright.
+	Upright bool
+	// Off is what a document turned off: a font's own rules that a CSS property
+	// or a CSS Text rule has overruled. See shape.Features.
+	Off shape.Features
 }

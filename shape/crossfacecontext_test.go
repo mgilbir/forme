@@ -21,8 +21,8 @@ func TestAJoinedShapeCrossesAFaceChange(t *testing.T) {
 	f := nkoFace(t)
 	alone := gidsOf(t, f, "ߞ")
 	// The neighbour is a joiner, whichever font holds it.
-	across, _ := f.ShapeGlyphsAcrossFaces("ߞ", "", "‍")
-	within, _ := f.ShapeGlyphsInContext("ߞ", "", "‍")
+	across, _ := f.ShapeGlyphsAcrossFaces("ߞ", "", "‍", Features{})
+	within, _ := f.ShapeGlyphsInContext("ߞ", "", "‍", Features{})
 	if len(across) != 1 || len(within) != 1 {
 		t.Fatalf("one letter shaped to %v and %v", across, within)
 	}
@@ -56,7 +56,7 @@ func TestAKernPairDoesNotCrossAFaceChange(t *testing.T) {
 		t.Errorf("within one face %q measures %g across the boundary and %g "+
 			"whole", pair, within, whole)
 	}
-	gs, _ := f.ShapeGlyphsAcrossFaces(first, "", second)
+	gs, _ := f.ShapeGlyphsAcrossFaces(first, "", second, Features{})
 	if got := advanceOf(gs); got != alone {
 		t.Errorf("across a face change %q measures %g, want the unkerned %g — "+
 			"the pair belongs to whichever font holds both glyphs, and here "+
