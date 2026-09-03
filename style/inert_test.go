@@ -130,6 +130,11 @@ func TestTheInitialKeywordIsResolvedRatherThanAssumedInert(t *testing.T) {
 // they had is raised by layout instead, which is the only place that can decide
 // it: "font-kerning: none" asks for a face's kerning to be turned off, and a
 // face with no kerning in it has none to turn off. See layout/textchecks.go.
+//
+// The four column properties went the same way for the same reason. A
+// "column-count: 2" is laid out on a box this engine can divide and refused on
+// the box beside it that holds a float, and only something that can see the box
+// can tell those apart. See layout/multicol.go.
 
 // TestADeclarationThatAsksForSomethingIsStillReported is the containment
 // argument, and the half this change most needs to keep.
@@ -145,9 +150,6 @@ func TestADeclarationThatAsksForSomethingIsStillReported(t *testing.T) {
 		// absence of one. An author who wrote either gets a page that runs on.
 		"page-break-before: always",
 		"page-break-after: always",
-		"column-fill: auto", // the initial value is "balance"
-		"column-gap: 0",     // the initial value is "normal"
-		"column-width: 100px",
 		"filter: blur(1px)",
 		"opacity: 0.5",
 		"opacity: 0",

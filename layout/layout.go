@@ -895,7 +895,24 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	// A turned box breaks its lines against its *height*: that is the length of
 	// a line when lines run down the page. What comes back is how far the lines
 	// stacked, which on the page is a width — see below, where it is turned.
+	// Whether this box's content is poured into columns, and how wide one is.
+	// Asked here because the answer changes the length its lines are broken
+	// against, which is the column's width and not the box's. See
+	// layout/multicol.go.
+	cols, wantsColumns := l.columnsFor(b, width)
+	inColumns := false
+	if wantsColumns && cols.n > 1 {
+		if why := l.canColumn(b); why == "" {
+			inColumns = true
+		} else {
+			l.reportColumns(b, cols.n, why)
+		}
+	}
+
 	lineLength := width
+	if inColumns {
+		lineLength = cols.width
+	}
 	if turn {
 		lineLength = childHeight
 		if !hasHeight {
@@ -915,6 +932,21 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	}
 	contentHeight, hoistTop, hoistBottom, placedAnything :=
 		l.clampedChildren(b, frag, lineLength, topOpen, bottomOpen, inner)
+	if inColumns {
+		if height, ok := l.pourIntoColumns(b, frag, cols, contentHeight,
+			declaredHeight, hasHeight); ok {
+			contentHeight = height
+		} else {
+			// The content could not be divided where the columns needed it.
+			// What was laid out is at the column's width, which is not this
+			// box's, so it is laid out again — the box is reported, and a
+			// reported box is the page it would have been before columns were
+			// asked for.
+			frag.Children, frag.Lines = nil, nil
+			contentHeight, hoistTop, hoistBottom, placedAnything =
+				l.clampedChildren(b, frag, width, topOpen, bottomOpen, inner)
+		}
+	}
 	if turn {
 		if _, declared := l.explicitWidth(b, containing); !declared {
 			// The block axis of a turned box is its *width*, so a width of auto

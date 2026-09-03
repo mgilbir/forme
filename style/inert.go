@@ -132,12 +132,10 @@ var inertValues = map[string]inertValue{
 	"break-inside": {produced: "auto", also: "avoid",
 		because: "nothing is fragmented, so no box is broken inside"},
 
-	// CSS Multi-column 1. Content is laid out in one column, which is what a
-	// column-count and column-width of "auto" produce.
-	"column-count": {produced: "auto", because: "content is laid out in one column"},
-	"column-width": {produced: "auto", because: "content is laid out in one column"},
-	"column-gap":   {produced: "normal", because: "there is no second column to leave a gap before"},
-	"column-fill":  {produced: "balance", because: "there is one column to fill"},
+	// CSS Multi-column 1's four are not here any more. They are registered
+	// properties now and layout reads them — see layout/multicol.go — so the
+	// question "is this page missing something" is about the box that asked for
+	// columns and not about the declaration, exactly as it is for writing-mode.
 
 	// CSS Writing Modes 4's three properties are not here, and where they went is
 	// worth recording. All three were inert for one reason — this engine laid out
