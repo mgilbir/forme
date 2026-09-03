@@ -1,6 +1,9 @@
 package paragraph
 
-import "strings"
+import (
+	"strings"
+	"unicode/utf8"
+)
 
 // word-space-transform, CSS Text 4: making a break opportunity visible.
 //
@@ -21,11 +24,26 @@ type WordSpaceTransform struct {
 	// or an ideographic space. It is the character rather than a keyword because
 	// the character is what every later stage needs and there are exactly two.
 	Separator string
+	// AutoPhrase is the value's other half: as well as expanding the separators
+	// the document wrote, find the ones it did not.
+	//
+	// §2.2 gives it the whole of §6.1's phrase detection to work from — "the
+	// user agent must detect phrase boundaries", and where one is found with no
+	// separator already at it, a *virtual* expandable separator goes there. So
+	// the two auto-phrases are one analysis read twice: word-break's decides
+	// where a line may end, and this one decides where a space is drawn.
+	AutoPhrase bool
 }
 
 // Transforms reports whether anything is to be done, which is the question every
 // caller actually asks.
 func (w WordSpaceTransform) Transforms() bool { return w.Separator != "" }
+
+// Invents reports whether the value asks for separators the document did not
+// write. The grammar is "[ space | ideographic-space ] && auto-phrase?", so
+// auto-phrase never stands alone — there would be nothing for the separators it
+// finds to become.
+func (w WordSpaceTransform) Invents() bool { return w.AutoPhrase && w.Separator != "" }
 
 // The two characters, named.
 const (
@@ -38,16 +56,16 @@ const (
 // The grammar is "none | [ space | ideographic-space ] || auto-phrase", so the
 // value is up to two words and auto-phrase may come on either side of the other.
 //
-// auto-phrase is the half this engine cannot do. It asks for word separators to
-// be *invented* at phrase boundaries the author did not mark, which for Japanese
-// means a dictionary and a segmentation model — the same thing word-break's own
-// auto-phrase asks for and is reported for. What is done here is the rest: a
-// document that writes "auto-phrase" beside "space" gets its explicit marks
-// expanded and is told the inferred ones are missing, which is a page with too
-// few spaces rather than a page with none.
+// auto-phrase asks for separators to be *invented* at phrase boundaries the
+// author did not mark, which takes the same model word-break's own auto-phrase
+// takes. It is not reported here: whether the analysis can be done is a question
+// about the content language and the text, not about the declaration, and §2.2
+// answers it for the UA — "if the content language is unknown, or if the user
+// agent does not support detecting phrase boundaries for that language, there
+// are no virtual expandable separators". See PhrasesUnfound for what is left to
+// report, which is a language that has phrases and no model here.
 func WordSpaceTransformOf(value string) (WordSpaceTransform, string) {
 	var out WordSpaceTransform
-	unhandled := ""
 	seen := false
 	for _, word := range strings.Fields(strings.ToLower(strings.TrimSpace(value))) {
 		switch word {
@@ -59,7 +77,7 @@ func WordSpaceTransformOf(value string) (WordSpaceTransform, string) {
 		case "ideographic-space":
 			out.Separator, seen = ideographicSpace, true
 		case "auto-phrase":
-			unhandled = "auto-phrase"
+			out.AutoPhrase, seen = true, true
 		default:
 			// Not a value of this property. Nothing is done, and nothing is
 			// reported either: an unreadable declaration is the cascade's to
@@ -67,10 +85,10 @@ func WordSpaceTransformOf(value string) (WordSpaceTransform, string) {
 			return WordSpaceTransform{}, ""
 		}
 	}
-	if !seen && unhandled == "" {
+	if !seen {
 		return WordSpaceTransform{}, ""
 	}
-	return out, unhandled
+	return out, ""
 }
 
 // IsVirtualWordSeparator reports whether a character is one of the marks this
@@ -82,3 +100,67 @@ func WordSpaceTransformOf(value string) (WordSpaceTransform, string) {
 // HTML specification says it is rendered as and is what puts the two on the same
 // path through everything below.
 func IsVirtualWordSeparator(r rune) bool { return r == 0x200B }
+
+// InsertPhraseSeparators writes the property's separator into the text at every
+// phrase boundary that has none already.
+//
+// §2.2: "If the content language is known and the user agent supports
+// linguistic analysis for this language, the user agent must detect phrase
+// boundaries. If a word-separator character, other space separator, or U+200B
+// ZERO WIDTH SPACE character does not already occur at that boundary, then the
+// UA must insert a virtual expandable separator." A virtual separator has no
+// existence beyond this — it is not in the document and it is not a break
+// opportunity of its own — so it is written into the text here rather than
+// carried alongside it, and everything downstream measures, breaks and draws
+// what the reader will see. The suite's word-space-transform-030 is the
+// statement that this is the right shape: "Transform effects, notably
+// transforming virtual word separators into spaces, affect line breaking."
+//
+// The three documents that say where one may *not* go are the same three
+// word-break's auto-phrase has, and for the same reason: a virtual word
+// boundary between a letter and an adjacent character of UAX #14's GL, WJ or
+// ZWJ classes is a boundary in a place a line may not be divided, so it is not
+// a boundary. See isBinding, which is those three classes and is one table.
+//
+// The text has already had the separators the document *did* write expanded, so
+// "already occurs at that boundary" covers them too: a U+200B that became a
+// U+3000 is an other space separator by the time this reads it.
+func InsertPhraseSeparators(text string, wst WordSpaceTransform, w WritingSystem) string {
+	if !wst.Invents() {
+		return text
+	}
+	breaks := PhraseBreaks(text, w)
+	if len(breaks) == 0 {
+		return text
+	}
+	var out strings.Builder
+	out.Grow(len(text) + len(wst.Separator)*len(breaks))
+	last := 0
+	for at := 1; at < len(text); at++ {
+		if boundary, scored := breaks[at]; !scored || !boundary {
+			continue
+		}
+		prev, _ := utf8.DecodeLastRuneInString(text[:at])
+		next, _ := utf8.DecodeRuneInString(text[at:])
+		if separatorAlready(prev) || separatorAlready(next) {
+			continue
+		}
+		if isBinding(prev) || isBinding(next) {
+			continue
+		}
+		out.WriteString(text[last:at])
+		out.WriteString(wst.Separator)
+		last = at
+	}
+	if last == 0 {
+		return text
+	}
+	return out.String() + text[last:]
+}
+
+// separatorAlready reports whether a character is one §2.2 counts as a
+// separator already occurring at a boundary: a word-separator character, an
+// other space separator, or a zero width space.
+func separatorAlready(r rune) bool {
+	return isWordSeparator(r) || IsOtherSpaceSeparator(r) || IsVirtualWordSeparator(r)
+}
