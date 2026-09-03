@@ -1,4 +1,4 @@
-.PHONY: linebreak vertical test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors noto-fonts clean-noto-fonts wpt test-wpt clean-wpt varinstance test-varinstance
+.PHONY: linebreak vertical dictionaries test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors noto-fonts clean-noto-fonts wpt test-wpt clean-wpt varinstance test-varinstance
 
 test:
 	gofmt -l . | grep -v '^testdata/' && exit 1 || true
@@ -119,6 +119,31 @@ eastasian:
 	go run ./cmd/geneastasian $(UCD)/EastAsianWidth.txt $(UCD)/Scripts.txt \
 	  > paragraph/eastasiantable.go
 	gofmt -w paragraph/eastasiantable.go
+
+# The word lists CSS Text §5.1's lexical line breaking needs, for the scripts
+# that write no spaces between their words.
+#
+# ICU's break-iterator dictionaries, which are what every browser segments these
+# scripts with — so a page laid out from them breaks where a reader of the
+# suite's references expects. They are fetched rather than kept in this
+# repository, and the *generated* table is what is committed: the licence
+# travels into it, which is the Unicode terms' own requirement and is why
+# cmd/gendict copies the header rather than summarising it.
+#
+# Thai is 26,383 words and half a megabyte of Go. That is the largest generated
+# table here by a wide margin, and it is what the feature costs: where one word
+# ends and the next begins in Thai is a fact about the vocabulary, so an engine
+# without the vocabulary cannot know it.
+#
+#	make dictionaries
+ICU_DICTS := https://raw.githubusercontent.com/unicode-org/icu/main/icu4c/source/data/brkitr/dictionaries
+DICT_DIR  := testdata/icu-dictionaries
+
+dictionaries:
+	mkdir -p $(DICT_DIR)
+	curl -sSf -o $(DICT_DIR)/thaidict.txt $(ICU_DICTS)/thaidict.txt
+	go run ./cmd/gendict thai $(DICT_DIR)/thaidict.txt > paragraph/thaidict.go
+	gofmt -w paragraph/thaidict.go
 
 # Which characters stand upright on a line of vertical text, UAX #50. It is
 # what tells a block of English from a block of Japanese, and so which blocks

@@ -127,6 +127,15 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 	var cur strings.Builder
 	breakNext := false
 
+	// Where the words are, for the scripts whose words a rule cannot find. It
+	// is computed once for the whole run rather than asked per character,
+	// because a segmentation is a statement about a stretch of text and not
+	// about the character in front of it: the word "กรุงเทพ" is one word because
+	// of what follows its first character, and no walk that has only reached
+	// that character can know. Nil for the overwhelming majority of documents,
+	// which have no such script in them at all. See DictionaryBreaks.
+	dictBreaks := DictionaryBreaks(text)
+
 	// Grapheme cluster boundaries, walked in lockstep with the scan.
 	//
 	// It runs for every value of word-break and not only for break-all, because
@@ -260,10 +269,18 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 		// reason it suppresses the ideograph's — §5.2 forbids the implicit
 		// opportunities between typographic letter units.
 		beforeAksara := isAksara(r) && prev != 0 && !wb.KeepAll
-		// And §5.1's fallback for the scripts a dictionary would break: the
-		// same boundary, for the same reason, and known to be in the wrong
-		// place. See NeedsDictionaryBreaking.
-		beforeDictionary := NeedsDictionaryBreaking(r) && prev != 0 && !wb.KeepAll
+		// §5.1's lexical breaking, for the scripts that write no spaces between
+		// their words. Where this engine has the language's vocabulary the
+		// opportunity is at a word boundary and nowhere else — see
+		// DictionaryBreaks — and where it has not, the fallback the section
+		// allows is every typographic character unit, which is the same
+		// boundary for a different reason and is known to be in the wrong
+		// place. UnsupportedScript is what says which of the two a document got.
+		beforeDictionary := NeedsDictionaryBreaking(r) && prev != 0 &&
+			!wb.KeepAll && !wb.Manual
+		if beforeDictionary && HasDictionary(r) {
+			beforeDictionary = dictBreaks[start]
+		}
 		// §5.3's "breaks are allowed ... between inseparable characters (such as
 		// U+2025 and U+2026)", which is an opportunity nothing else here makes.
 		//
