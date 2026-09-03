@@ -1,6 +1,7 @@
 package paragraph
 
 import (
+	"github.com/mgilbir/forme/segment"
 	"unicode"
 
 	"unicode/utf8"
@@ -56,10 +57,13 @@ func SpacingAdvance(text string, sp TextSpacing) style.Unit {
 // writes that document eight times over, as the second half of each
 // bidi-text/bidi-00N pair.
 //
-// Grapheme clusters would be the exact reading of "typographic character unit"
-// and this counts runes, so a base and its combining mark are still spaced
-// apart. That is a separate question with a separate answer, and it is not
-// mixed in here.
+// The unit is the grapheme cluster, which is what CSS Text §2 means by
+// "typographic character unit" and is not what this counted for a long time. It
+// counted runes, and a rune is not a unit: a Thai letter carries its vowel sign
+// and its tone mark, a Khmer consonant carries the vowel that follows it, and a
+// spacing inserted between a base and a mark that belongs to it moves the mark
+// off the letter it is drawn on. The suite's letter-spacing-bengali-yaphala-001
+// is a syllable of three code points asking to stay one.
 //
 // # Cursive tracking
 //
@@ -78,7 +82,7 @@ func SpacingAdvance(text string, sp TextSpacing) style.Unit {
 // words, "letter-spacing: 1em", and a reference that inserts one em and not two.
 func SpacedUnits(text string) int {
 	n := 0
-	scanCursiveTracking(text, func(_ int, suppressed bool) {
+	scanCursiveTracking(text, func(_, _ int, suppressed bool) {
 		if !suppressed {
 			n++
 		}
@@ -117,19 +121,37 @@ func CursiveTrackingSuppresses(text string) bool {
 // this rule is about. A mark on a Latin letter still counts as a unit of its
 // own, as it always has — that is the grapheme-cluster question SpacedUnits
 // records as a separate one, and it is still separate.
-func scanCursiveTracking(text string, fn func(i int, suppressed bool)) {
+func scanCursiveTracking(text string, fn func(start, last int, suppressed bool)) {
 	cursive := false
-	for i, r := range text {
-		switch {
-		case IsDefaultIgnorable(r):
-			// Nothing is drawn for it and nothing goes after it.
-			continue
-		case unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r):
-			fn(i, cursive)
-			continue
+	bounds := segment.Boundaries(nil, text)
+	for k, start := 0, 0; start < len(text); k++ {
+		end := len(text)
+		if k < len(bounds) {
+			end = bounds[k]
 		}
-		cursive = IsCursiveScript(r)
-		fn(i, cursive)
+		// The cluster's own last character, which is where the spacing goes,
+		// and its base, which is what decides whether the spacing goes there at
+		// all. A cluster of nothing but characters that draw nothing is not a
+		// unit and is passed over entirely.
+		last := -1
+		for i, r := range text[start:end] {
+			switch {
+			case IsDefaultIgnorable(r):
+				continue
+			case unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r):
+				// A mark does not decide the script — it inherits the base's,
+				// which the base has already set — but it can be the last thing
+				// in the cluster, and the spacing goes after the whole of it.
+				last = start + i
+				continue
+			}
+			cursive = IsCursiveScript(r)
+			last = start + i
+		}
+		if last >= 0 {
+			fn(start, last, cursive)
+		}
+		start = end
 	}
 }
 
@@ -165,6 +187,24 @@ func AllIgnorable(text string) bool {
 	return true
 }
 
+// SpacingAfterOffsets is the byte offsets of the characters after which §8.2's
+// letter-spacing is added — the last character of each typographic character
+// unit that carries one.
+//
+// It is the same answer SpacingAfter gives, indexed the way a caller that has
+// byte offsets rather than rune positions needs it: the reftest comparison,
+// which walks shaped glyphs and has each one's offset into the text it came
+// from. See layout's spacingAfterGlyph.
+func SpacingAfterOffsets(text string) map[int]bool {
+	out := map[int]bool{}
+	scanCursiveTracking(text, func(_, last int, suppressed bool) {
+		if !suppressed {
+			out[last] = true
+		}
+	})
+	return out
+}
+
 // SpacingAfter reports, rune by rune, whether §8.2's letter-spacing is added
 // after that rune — the same question SpacedUnits answers in the aggregate, for
 // a caller that has to place each character and not only measure the run.
@@ -182,7 +222,7 @@ func AllIgnorable(text string) bool {
 // caller is already walking runes to place glyphs.
 func SpacingAfter(text string) []bool {
 	spaced := map[int]bool{}
-	scanCursiveTracking(text, func(i int, suppressed bool) { spaced[i] = !suppressed })
+	scanCursiveTracking(text, func(_, last int, suppressed bool) { spaced[last] = !suppressed })
 	out := make([]bool, 0, len(text))
 	for i := range text {
 		out = append(out, spaced[i])
@@ -267,10 +307,14 @@ func countWordSeparators(text string) int {
 func SplitAtCursiveTracking(text string) []string {
 	var out []string
 	start, prev, havePrev := 0, false, false
-	scanCursiveTracking(text, func(i int, suppressed bool) {
+	scanCursiveTracking(text, func(at, _ int, suppressed bool) {
+		// The unit's *start*, because that is where the run is cut: a piece
+		// ends before the first character of the unit whose answer differs. The
+		// spacing goes after a unit's last character and the cut goes before
+		// its first, which is why the scan reports both.
 		if havePrev && suppressed != prev {
-			out = append(out, text[start:i])
-			start = i
+			out = append(out, text[start:at])
+			start = at
 		}
 		prev, havePrev = suppressed, true
 	})

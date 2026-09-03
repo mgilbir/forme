@@ -3,6 +3,7 @@ package paragraph
 import (
 	"testing"
 
+	"github.com/mgilbir/forme/segment"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -64,17 +65,19 @@ func TestSpacingIsStillAddedBesideACursiveScript(t *testing.T) {
 // collect a spacing of its own — which is exactly what left "مرحباً" ten pixels
 // wider than the same word without a letter-spacing.
 //
-// It takes it only from a *cursive* base, so a Latin letter and its accent are
-// still two units. That is a different question with a different answer, and
-// SpacedUnits records it as one.
+// It takes it only from a *cursive* base, and the Latin row below is what says
+// so: a letter and its accent are one unit there because a cluster is one unit,
+// not because the mark was suppressed. The two rules meet on the same text and
+// give it the same count for different reasons, so each is asserted with a
+// number the other cannot produce — zero for the cursive pair, one for the
+// Latin one.
 func TestAMarkTakesTheTrackingOfWhatItSitsOn(t *testing.T) {
 	if got := SpacedUnits("مً"); got != 0 {
 		t.Errorf("an Arabic letter and a fathatan count %d units, want 0", got)
 	}
-	if got := SpacedUnits("é"); got != 2 {
-		t.Errorf("a Latin letter and a combining acute count %d units, want 2 — "+
-			"whether a cluster is one unit is a separate question, and this rule "+
-			"does not answer it", got)
+	if got := SpacedUnits("e\u0301"); got != 1 {
+		t.Errorf("a Latin letter and a combining acute count %d units, want 1 — "+
+			"one grapheme cluster is one typographic character unit", got)
 	}
 	// A mark with nothing before it has no base to take an answer from, and is
 	// counted as it always was.
@@ -119,12 +122,28 @@ func TestTheCutMatchesTheCount(t *testing.T) {
 // countSpacedRunes is how many characters SpacedUnits would count if nothing
 // suppressed any of them, which is what "all spaced" means.
 func countSpacedRunes(text string) int {
+	// Units and not runes, which is what SpacedUnits counts: the invariant
+	// above is about whether a piece is all-spaced or all-suppressed, and
+	// comparing a count of clusters with a count of code points would fail on
+	// every accented letter for a reason that has nothing to do with cursive
+	// tracking. What is wanted is the same count with the cursive rule taken
+	// out, which is the cluster count of the characters that are drawn.
 	n := 0
-	for _, r := range text {
-		if IsDefaultIgnorable(r) {
-			continue
+	for i, start := 0, 0; start < len(text); i++ {
+		end := len(text)
+		if bounds := segment.Boundaries(nil, text); i < len(bounds) {
+			end = bounds[i]
 		}
-		n++
+		drawn := false
+		for _, r := range text[start:end] {
+			if !IsDefaultIgnorable(r) {
+				drawn = true
+			}
+		}
+		if drawn {
+			n++
+		}
+		start = end
 	}
 	return n
 }

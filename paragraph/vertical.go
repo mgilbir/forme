@@ -1,6 +1,10 @@
 package paragraph
 
-import "unicode"
+import (
+	"unicode"
+
+	"github.com/mgilbir/forme/segment"
+)
 
 // UAX #50, Unicode Vertical Text Layout: which way a character faces on a line
 // of vertical text.
@@ -73,18 +77,26 @@ func OrientationMix(text string) (upright, rotated bool) {
 // mode: a character nothing is drawn for, and a combining mark, which is drawn
 // on the character in front of it rather than after it.
 //
-// A grapheme cluster would be the exact unit and this counts runes, so a base
-// and a mark it does not know about are one em apart rather than one em wide.
-// That is the same approximation SpacedUnits makes for letter-spacing and it is
-// recorded there too; the scripts that need the exact answer are the ones this
-// engine cannot set upright for other reasons.
+// The unit is the grapheme cluster, which is what §4.4 and CSS Text §2 both
+// mean: a Thai letter with a vowel sign on it stands upright as one character
+// and takes one em, not two. It is the same unit SpacedUnits counts for
+// letter-spacing, asked of the same text and answered the same way — the two
+// rules are one definition and would be a bug apart.
 func UprightUnits(text string) int {
 	n := 0
-	for _, r := range text {
-		if IsDefaultIgnorable(r) || unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r) {
-			continue
+	for i, start := 0, 0; start < len(text); i++ {
+		end := len(text)
+		if bounds := segment.Boundaries(nil, text); i < len(bounds) {
+			end = bounds[i]
 		}
-		n++
+		for _, r := range text[start:end] {
+			if IsDefaultIgnorable(r) || unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r) {
+				continue
+			}
+			n++
+			break
+		}
+		start = end
 	}
 	return n
 }

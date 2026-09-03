@@ -88,6 +88,7 @@ var (
 	spacingAdvance                = paragraph.SpacingAdvance
 	spacedUnits                   = paragraph.SpacedUnits
 	spacingAfter                  = paragraph.SpacingAfter
+	spacingAfterOffsets           = paragraph.SpacingAfterOffsets
 	uprightUnits                  = paragraph.UprightUnits
 	orientationMix                = paragraph.OrientationMix
 	isCursiveScript               = paragraph.IsCursiveScript

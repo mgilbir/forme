@@ -125,7 +125,16 @@ type DrawText struct {
 	// shapes, but a kerning pair is one font's statement about two of its own
 	// glyphs and does not cross a font change.
 	ContextKerns bool
-	// CharSpacing is letter-spacing: an extra advance after every character.
+	// CharSpacing is letter-spacing: an extra advance after every typographic
+	// character unit.
+	//
+	// A unit and not a character, which is a distinction the backend has to
+	// make. CSS Text §2's typographic character unit is a grapheme cluster: a
+	// Thai letter carries its vowel sign and its tone mark, a Khmer consonant
+	// carries the vowel that follows it, and a pen that added this after every
+	// glyph would move a mark off the letter it is drawn on. The rule is that
+	// it falls after the last glyph of each cluster — see the comparison's
+	// spacingAfterGlyph, which is the reference reading of it.
 	//
 	// It is a property of the drawing rather than of the position because layout
 	// already spent it — the run's width includes it, and the run after this one
