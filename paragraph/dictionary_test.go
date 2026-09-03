@@ -29,6 +29,10 @@ func TestADictionaryScriptBreaksBetweenItsCharacters(t *testing.T) {
 		{"Lao", "ກຂຄ", "ກ|ຂ|ຄ"},
 		{"Khmer", "កខគ", "ក|ខ|គ"},
 		{"Myanmar", "ကခဂ", "က|ခ|ဂ"},
+		// Tai Tham, which has no vocabulary here and none to have: the four
+		// scripts above fall back this way only where their own vocabulary has
+		// nothing, and this one falls back everywhere.
+		{"Tai Tham", "ᨠᨡᨢ", "ᨠ|ᨡ|ᨢ"},
 	} {
 		if got := marks(t, tc.text, WordBreak{}, LineBreak{}); got != tc.want {
 			t.Errorf("%s: %q breaks as %q, want %q — without a dictionary the "+
@@ -78,11 +82,12 @@ func TestKeepAllSuppressesTheFallbackToo(t *testing.T) {
 // wrong places should be told, and the message has to describe what happened
 // rather than what used to.
 func TestTheReportSaysWhatWasDone(t *testing.T) {
-	// Khmer, which has no word list here. Thai has one and is not reported —
-	// that is the other half and is asserted where the dictionary is.
-	msg, ok := UnsupportedScript('ក')
+	// Tai Tham, which has no word list here and none published anywhere. The
+	// four scripts that do have one are not reported — that is the other half,
+	// and it is asserted where the dictionary is.
+	msg, ok := UnsupportedScript('ᨠ')
 	if !ok {
-		t.Fatal("a Khmer letter is reported as needing nothing")
+		t.Fatal("a Tai Tham letter is reported as needing nothing")
 	}
 	if !contains(msg, "between typographic character units") {
 		t.Errorf("the report reads %q; it has to say where the line is broken "+

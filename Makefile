@@ -130,20 +130,30 @@ eastasian:
 # travels into it, which is the Unicode terms' own requirement and is why
 # cmd/gendict copies the header rather than summarising it.
 #
-# Thai is 26,383 words and half a megabyte of Go. That is the largest generated
-# table here by a wide margin, and it is what the feature costs: where one word
-# ends and the next begins in Thai is a fact about the vocabulary, so an engine
-# without the vocabulary cannot know it.
+# The four together are 179,000 words and four megabytes of Go, which is by a
+# wide margin the largest thing in this repository. That is what the feature
+# costs: where one word ends and the next begins in Thai is a fact about the
+# vocabulary, so an engine without the vocabulary cannot know it, and there is
+# no smaller form the knowledge comes in.
+#
+# They are the four class SA scripts ICU publishes a list for. The rest of the
+# class — Tai Tham, Tai Le, Tai Viet and their neighbours — has none to publish,
+# and UnsupportedScript is what says so about them.
 #
 #	make dictionaries
 ICU_DICTS := https://raw.githubusercontent.com/unicode-org/icu/main/icu4c/source/data/brkitr/dictionaries
 DICT_DIR  := testdata/icu-dictionaries
 
+ICU_DICT_NAMES := thai:thaidict lao:laodict khmer:khmerdict burmese:burmesedict
+
 dictionaries:
 	mkdir -p $(DICT_DIR)
-	curl -sSf -o $(DICT_DIR)/thaidict.txt $(ICU_DICTS)/thaidict.txt
-	go run ./cmd/gendict thai $(DICT_DIR)/thaidict.txt > paragraph/thaidict.go
-	gofmt -w paragraph/thaidict.go
+	for pair in $(ICU_DICT_NAMES); do \
+	  name=$${pair%%:*}; file=$${pair##*:}; \
+	  curl -sSf -o $(DICT_DIR)/$$file.txt $(ICU_DICTS)/$$file.txt; \
+	  go run ./cmd/gendict $$name $(DICT_DIR)/$$file.txt > paragraph/$$name'dict.go'; \
+	  gofmt -w paragraph/$$name'dict.go'; \
+	done
 
 # Which characters stand upright on a line of vertical text, UAX #50. It is
 # what tells a block of English from a block of Japanese, and so which blocks

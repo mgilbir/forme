@@ -417,17 +417,19 @@ func TestUnsupportedScriptIsAnError(t *testing.T) {
 
 	// The right-to-left scripts were here and are not any more: the
 	// bidirectional algorithm is implemented, so they are laid out rather than
-	// refused. Thai has gone the same way and for the same kind of reason —
-	// this engine has its vocabulary now, so its words are found and there is
-	// nothing to report. See TestBidiIsNotReportedUnsupported for the other
-	// half of that claim, and paragraph/dictionarybreak_test.go for this one.
+	// refused. Thai, Lao, Khmer and Burmese have gone the same way and for the
+	// same kind of reason — this engine carries their vocabularies now, so
+	// their words are found and there is nothing to report. See
+	// TestBidiIsNotReportedUnsupported for the other half of that claim, and
+	// paragraph/dictionarybreak_test.go for this one.
 	//
 	// What is left is the rest of class SA: the scripts that write no spaces
-	// between their words and whose words this engine cannot find.
+	// between their words and for which nobody publishes a word list this
+	// engine could carry.
 	cases := map[string]string{
-		"ជំរាបសួរ":  "Khmer, no spaces and no word list here",
-		"ສະບາຍດີ":   "Lao, the same",
-		"မင်္ဂလာပါ": "Burmese, the same",
+		"ᨠᩅᨮ": "Tai Tham, no spaces and no word list anywhere",
+		"ᥐᥑᥒ": "Tai Le, the same",
+		"ꪀꪁꪂ": "Tai Viet, the same",
 	}
 	for text, why := range cases {
 		got := Build(Input{HTML: "<p>" + text + "</p>"})

@@ -23,7 +23,10 @@ func TestALineMayEndAfterOneOfThese(t *testing.T) {
 		// so the fallback offers a boundary between its clusters as well. The
 		// break after the little section is the one this row is about, and it
 		// is there among them.
-		{"a Myanmar little section", "မြန်၊မာ", "မြ|န်၊|မ|ာ"},
+		// Burmese has a word list here, so what is either side of the section
+		// mark is one word rather than four characters. The rule the row is
+		// about is still the one it shows: the line may end *after* the mark.
+		{"a Myanmar little section", "မြန်၊မာ", "မြန်၊|မာ"},
 		{"a Mongolian colon", "\u182E\u1804\u182F", "\u182E\u1804|\u182F"},
 		{"a hyphenation point", "co‧op", "co‧|op"},
 	} {

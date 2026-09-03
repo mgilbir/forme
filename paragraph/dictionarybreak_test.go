@@ -102,15 +102,21 @@ func TestManualTurnsWordDetectionOff(t *testing.T) {
 // are is not one. The other half — a script with no vocabulary here — is
 // asserted in dictionary_test.go.
 func TestAScriptWithAVocabularyIsNotReported(t *testing.T) {
-	if !HasDictionary('\u0e01') {
-		t.Fatal("there is no Thai dictionary")
+	// Thai, Lao, Khmer and Burmese: the four class SA scripts ICU publishes a
+	// word list for, and the four this engine carries.
+	for _, r := range []rune{'\u0e01', '\u0e81', '\u1780', '\u1000'} {
+		if !HasDictionary(r) {
+			t.Errorf("%U has no word list here", r)
+		}
+		if _, ok := UnsupportedScript(r); ok {
+			t.Errorf("%U is reported, and this engine can find its words", r)
+		}
 	}
-	if _, ok := UnsupportedScript('\u0e01'); ok {
-		t.Error("a Thai letter is reported as needing a dictionary this engine has")
-	}
-	for _, r := range []rune{'\u1780', '\u0e81', '\u1000'} {
+	// And the rest of class SA, which has no word list to have: Tai Tham,
+	// Tai Le, Tai Viet, Myanmar Extended-B. The finding is theirs now.
+	for _, r := range []rune{'\u1a20', '\u1950', '\uaa80', '\ua9e0'} {
 		if HasDictionary(r) {
-			t.Errorf("%U has a dictionary here; the finding below would be wrong", r)
+			t.Errorf("%U has a word list here; the finding below would be wrong", r)
 		}
 		if _, ok := UnsupportedScript(r); !ok {
 			t.Errorf("%U is not reported, and this engine cannot find its words", r)

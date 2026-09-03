@@ -103,9 +103,31 @@ func buildDictionary(words string, longest int) *dictionary {
 	return d
 }
 
+// The four word lists, and the block each is for.
+//
+// One entry per script rather than a range table, because a dictionary is a
+// language and the blocks are how a language is found: Thai in U+0E00, Lao in
+// U+0E80 — the two share a block boundary and nothing else — Khmer in U+1780,
+// Burmese in the Myanmar block. Class SA has more scripts in it than these four
+// and they have no list here; UnsupportedScript is what says so.
+var dictionaries = [...]struct {
+	lo, hi  rune
+	words   string
+	longest int
+	once    *sync.Once
+	built   **dictionary
+}{
+	{0x0E00, 0x0E7F, thaiWords, thaiLongestWord, new(sync.Once), &thaiBuilt},
+	{0x0E80, 0x0EFF, laoWords, laoLongestWord, new(sync.Once), &laoBuilt},
+	{0x1780, 0x17FF, khmerWords, khmerLongestWord, new(sync.Once), &khmerBuilt},
+	{0x1000, 0x109F, burmeseWords, burmeseLongestWord, new(sync.Once), &burmeseBuilt},
+}
+
 var (
-	thaiOnce  sync.Once
-	thaiBuilt *dictionary
+	thaiBuilt    *dictionary
+	laoBuilt     *dictionary
+	khmerBuilt   *dictionary
+	burmeseBuilt *dictionary
 )
 
 // dictionaryFor is the word list for the script a character belongs to, or nil
@@ -114,11 +136,17 @@ var (
 // Built on first use, and once. A document with no Thai in it should not pay
 // for twenty-six thousand words, and a document with one Thai paragraph pays
 // for them once rather than once per run — which is the same trade the
-// hyphenation patterns make.
+// hyphenation patterns make. It matters more here than there: the four lists
+// together are a hundred and seventy thousand words, and almost every document
+// needs none of them.
 func dictionaryFor(r rune) *dictionary {
-	if r >= 0x0E00 && r <= 0x0E7F {
-		thaiOnce.Do(func() { thaiBuilt = buildDictionary(thaiWords, thaiLongestWord) })
-		return thaiBuilt
+	for i := range dictionaries {
+		d := &dictionaries[i]
+		if r < d.lo || r > d.hi {
+			continue
+		}
+		d.once.Do(func() { *d.built = buildDictionary(d.words, d.longest) })
+		return *d.built
 	}
 	return nil
 }
