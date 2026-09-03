@@ -68,3 +68,119 @@ func TestABreakWithNoClearIsAPlainBreak(t *testing.T) {
 			"is beside the float like any other line", x)
 	}
 }
+
+// HTML's <br clear> attribute, which is older than the property it sets.
+//
+// "<br clear=all>" is how a page cleared a float before CSS existed, and HTML's
+// rendering section still maps it: "left", "right", "all" and "both" to the
+// property's values, "none" to none. It is a presentational hint rather than a
+// thing layout reads, which is a place in the cascade — an author rule beats it
+// and a user-agent rule does not.
+
+// clearedBy is where the border under a <br> lands, given the markup for it.
+//
+// Two floats of different heights, because one would not tell the four values
+// apart: with a single left float, "left", "all" and "both" all clear to the
+// same place and a mapping that sent "all" to "left" would look right. The
+// right float is the taller, so clearing it is a different number from clearing
+// the left one.
+func clearedBy(t *testing.T, br string) float64 {
+	t.Helper()
+	root := layoutOf(t, 300,
+		`<div id="d"><div class="l"></div><div class="r"></div>`+
+			`<div class="c">`+br+`</div></div>`,
+		`body{margin:0}
+	.l { float: left; width: 15px; height: 60px }
+	.r { float: right; width: 15px; height: 100px }
+	.c { border-bottom: 5px solid black }`)
+	for _, op := range Paint(root) {
+		if v, ok := op.(FillRect); ok && !v.Rect.Empty() && v.Rect.W.Px() == 300 {
+			return v.Rect.Y.Px()
+		}
+	}
+	t.Fatal("the fixture drew no border")
+	return 0
+}
+
+// TestTheBreakClearAttributeIsTheProperty.
+func TestTheBreakClearAttributeIsTheProperty(t *testing.T) {
+	// Without it the line sits at the top, beside the float; with it the line
+	// is pushed past the float's 60px.
+	plain := clearedBy(t, `<br>`)
+	if plain >= 60 {
+		t.Fatalf("with no clear at all the border is at %g, want above the shorter "+
+			"float's 60px — the fixture cannot say what it means to say", plain)
+	}
+	for _, c := range []struct {
+		attr string
+		at   float64
+	}{
+		// The left float is 60 tall and the right one 100, so each value lands
+		// at a number the others do not.
+		{`clear="left"`, 60},
+		{`clear="right"`, 100},
+		{`clear="all"`, 100},
+		{`clear="both"`, 100},
+		{`clear="ALL"`, 100},
+		// Not values, so no hint at all and the line stays where it was.
+		{`clear="none"`, plain},
+		{`clear="nonsense"`, plain},
+		{`clear=""`, plain},
+	} {
+		if got := clearedBy(t, `<br `+c.attr+`>`); got != c.at {
+			t.Errorf("<br %s> put the border at %g, want %g", c.attr, got, c.at)
+		}
+	}
+}
+
+// TestTheAttributeIsAHintAndNotAnInlineStyle.
+//
+// Where it sits in the cascade is the half that is easy to get wrong. A hint is
+// in the author origin at zero specificity, so any author rule at all beats it —
+// including "* { clear: none }" — and no user-agent rule ever does. A layout
+// that read the attribute directly would have neither.
+func TestTheAttributeIsAHintAndNotAnInlineStyle(t *testing.T) {
+	at := func(css string) float64 {
+		t.Helper()
+		root := layoutOf(t, 300,
+			`<div id="d"><div class="l"></div><div class="r"></div>`+
+				`<div class="c"><br clear="all"></div></div>`,
+			`body{margin:0}
+	.l { float: left; width: 15px; height: 60px }
+	.r { float: right; width: 15px; height: 100px }
+	.c { border-bottom: 5px solid black }
+	`+css)
+		for _, op := range Paint(root) {
+			if v, ok := op.(FillRect); ok && !v.Rect.Empty() && v.Rect.W.Px() == 300 {
+				return v.Rect.Y.Px()
+			}
+		}
+		t.Fatal("the fixture drew no border")
+		return 0
+	}
+	if at("") < 100 {
+		t.Fatal("the attribute did not clear at all, so the checks below say nothing")
+	}
+	// An author rule of the lowest specificity there is still beats it.
+	if got := at(`* { clear: none }`); got >= 100 {
+		t.Errorf("with \"* { clear: none }\" the border is at %g; a hint is in the "+
+			"author origin at zero specificity and any author rule beats it", got)
+	}
+	// And an inline style beats it, which is the same statement from the other
+	// end: a hint that were an inline style would tie with one and win on order.
+	root := layoutOf(t, 300,
+		`<div id="d"><div class="l"></div><div class="r"></div><div class="c">`+
+			`<br clear="all" style="clear: none"></div></div>`,
+		`body{margin:0}
+	.l { float: left; width: 15px; height: 60px }
+	.r { float: right; width: 15px; height: 100px }
+	.c { border-bottom: 5px solid black }`)
+	for _, op := range Paint(root) {
+		if v, ok := op.(FillRect); ok && !v.Rect.Empty() && v.Rect.W.Px() == 300 {
+			if v.Rect.Y.Px() >= 100 {
+				t.Errorf("an inline \"clear: none\" lost to the attribute; the " +
+					"attribute is a hint and sits below every declaration")
+			}
+		}
+	}
+}
