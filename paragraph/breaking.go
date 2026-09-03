@@ -437,9 +437,27 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// and this is not the change that should alter it; extending the rule to
 		// text alone moves nothing on the suite either way and fixes the case
 		// above, which makes it a strict improvement rather than a trade.
+		//
+		// "cannot begin a line of its own" is two things and used to be one. An
+		// item with no opportunity in front of it is the obvious half; the other
+		// is an item that has one and may not take it, which is what
+		// "white-space: nowrap" makes of every item inside a span but the first.
+		// That combination reached no branch here at all — the branch above ends
+		// a line at an item and refuses one a line may not begin at, and this one
+		// took only items with nothing in front of them — so a nowrap span wider
+		// than the room left stayed where it was and overflowed.
+		//
+		// The disjunct is the rule written down rather than a live filter, and
+		// that is worth saying: the branch above returns for any item that has an
+		// opportunity and may take it, so nothing with "item.BreakBefore &&
+		// !item.NoWrap" ever arrives here. Dropping it outright leaves the suite
+		// at the same 5875. It stays because the sentence at the top of this
+		// comment is a claim about both halves, and a reader given the code
+		// without it would have to rediscover which items the branch above lets
+		// through.
 		if (item.Space || item.AtomicBox == nil) && !item.Collapsible &&
-			!item.Hangs && i < tailFrom && !item.NoWrap && !item.Inset &&
-			!item.BreakBefore && backAt >= 0 && overflows(used, item, width) {
+			!item.Hangs && i < tailFrom && !item.Inset &&
+			(!item.BreakBefore || item.NoWrap) && backAt >= 0 && overflows(used, item, width) {
 			return trimLineEdge(line[:backLine]), backAt, 0, outOfFlow[:backFlow], false
 		}
 
@@ -556,7 +574,15 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// Recorded before the switch below, because that is where content becomes
 		// true: an opportunity at the very start of a line is not one the line can
 		// be sent back to.
-		if item.BreakBefore && content {
+		//
+		// And neither is one a line may not begin at. §3's "white-space: nowrap"
+		// suppresses the opportunities inside a span, and SplitAtBreaks does not
+		// know it: the value is on the box and that function is given one box's
+		// text, so the cuts are made as usual and NoWrap travels beside them.
+		// Recording one let the fill rewind into the middle of a span whose whole
+		// purpose is that no line begins in the middle of it — "a <span
+		// class=nowrap>bb cc</span>dddddd" came out as "a bb" and "ccdddddd".
+		if item.BreakBefore && content && !item.NoWrap {
 			// Not an opportunity the line can be sent back to if the hyphen it
 			// would have to print does not fit in the room the line had.
 			if h := pendingHyphen(line); h == 0 || used.Add(h) <= width {
