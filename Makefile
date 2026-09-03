@@ -572,7 +572,7 @@ wpt: $(WPT_DIR)/.ok $(WPT_DIR)/fonts/DoulosSIL-R.woff \
 # Moving it is a deliberate act with its own commit, which says what the new
 # revision changed and moves the baseline to what it measures. It is not
 # something another change gets to do as a side effect.
-WPT_COMMIT := a5ef704cb276b3ba49a047aadaea2c55aaa36733
+WPT_COMMIT := a1e944e7a879854494e1a041a8ad1e4a8ae28ab1
 
 $(WPT_DIR)/.ok:
 	rm -rf $(WPT_DIR)
