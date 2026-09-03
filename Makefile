@@ -556,11 +556,31 @@ wpt: $(WPT_DIR)/.ok $(WPT_DIR)/fonts/DoulosSIL-R.woff \
      $(WPT_DIR)/fonts/NotoSansArmenian-Regular \
      $(WPT_DIR)/fonts/NotoSansGeorgian-Regular.ttf
 
+# The revision the corpus is taken at.
+#
+# It is pinned because a ratchet has to be measured against a fixed thing. The
+# clone was "--depth 1" of a moving branch, so what the suite *was* depended on
+# when it happened to be fetched — and the only thing holding it still was a CI
+# cache keyed on this file, so any edit here silently swapped the corpus
+# underneath the number. That is not a hypothetical: adding one directory to
+# WPT_DIRS moved the key, re-cloned six weeks of upstream, and turned a hundred
+# clean passes into "a layout regression" that was nothing of the kind.
+#
+# So the cache is a speed-up now and nothing rests on it: a cold run and a warm
+# one check out the same commit and count the same tests.
+#
+# Moving it is a deliberate act with its own commit, which says what the new
+# revision changed and moves the baseline to what it measures. It is not
+# something another change gets to do as a side effect.
+WPT_COMMIT := a5ef704cb276b3ba49a047aadaea2c55aaa36733
+
 $(WPT_DIR)/.ok:
 	rm -rf $(WPT_DIR)
 	git clone --filter=blob:none --sparse --depth 1 \
 		https://github.com/web-platform-tests/wpt.git $(WPT_DIR)
 	git -C $(WPT_DIR) sparse-checkout set $(WPT_DIRS)
+	git -C $(WPT_DIR) fetch --depth 1 --filter=blob:none origin $(WPT_COMMIT)
+	git -C $(WPT_DIR) checkout --detach $(WPT_COMMIT)
 	touch $@
 
 # Doulos SIL, which the suite asks for and does not ship.
