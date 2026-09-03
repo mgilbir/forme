@@ -227,8 +227,12 @@ var properties = map[string]property{
 	// that will set the text — which the cascade has not chosen yet. A face with
 	// no kerning in it cannot have its kerning turned off. See
 	// layout/textchecks.go.
-	"font-kerning":          {true, "auto"},
-	"font-feature-settings": {true, "normal"},
+	"font-kerning": {true, "auto"},
+	// CSS Fonts 4 §6.4. It inherits, which is what makes a rule on a container
+	// reach the words inside it, and its initial value is "normal" — the
+	// font's own rules, applied as the font states them.
+	"font-variant-ligatures": {true, "normal"},
+	"font-feature-settings":  {true, "normal"},
 	// text-autospace inherits, which is what lets a document turn it off once
 	// on the body. Its initial value is "normal", and "normal" asks for the
 	// spacing — a page of Japanese with Latin words in it is set wrong without
@@ -277,6 +281,27 @@ var properties = map[string]property{
 	// reported per box rather than per stylesheet, because whether the page is
 	// wrong is a question about the box and not about the declaration. See
 	// layout/writingmode.go for the whole of that argument.
+	// CSS Multi-column Layout 1 §3 and §4. None of them inherits: a multicol
+	// container's columns are its own, and a block inside one is not itself
+	// divided into columns because its parent was.
+	//
+	// column-gap's initial value is "normal", which §6.1 defines as 1em for
+	// multicol. It is kept as the keyword here and resolved where the em is
+	// known, which is the box, because a computed value of "1em" would resolve
+	// against the wrong font the moment the container and its text disagree.
+	"column-count": {false, "auto"},
+	"column-width": {false, "auto"},
+	"column-gap":   {false, "normal"},
+	"column-fill":  {false, "balance"},
+	// §6.3's column-span, which is read to be refused: an element spanning the
+	// columns divides the container into two of them with the element between,
+	// and that is a second container rather than a column. It has to be
+	// registered to be read at all — an unregistered property is dropped by the
+	// cascade before layout sees it — and registering it is what lets the box
+	// that declares it be reported rather than silently laid out across one
+	// column.
+	"column-span": {false, "none"},
+
 	"writing-mode":         {true, "horizontal-tb"},
 	"text-orientation":     {true, "mixed"},
 	"text-combine-upright": {false, "none"},

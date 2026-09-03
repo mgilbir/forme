@@ -36,7 +36,7 @@ func TestARunInContextTakesTheFormItsNeighboursCallFor(t *testing.T) {
 		{"x", "x", 1, "isolated between two characters that do not join"},
 		{"", "x", 1, "isolated before one"},
 	} {
-		got, _ := f.ShapeGlyphsInContext(b, tc.before, tc.after)
+		got, _ := f.ShapeGlyphsInContext(b, tc.before, tc.after, Features{})
 		if len(got) != 1 {
 			t.Fatalf("before=%q after=%q: %d glyphs", tc.before, tc.after, len(got))
 		}
@@ -75,7 +75,7 @@ func TestThreeRunsInContextAreTheWholeWord(t *testing.T) {
 
 func first(t *testing.T, f *Face, s, before, after string) int {
 	t.Helper()
-	g, _ := f.ShapeGlyphsInContext(s, before, after)
+	g, _ := f.ShapeGlyphsInContext(s, before, after, Features{})
 	if len(g) != 1 {
 		t.Fatalf("%q in %q/%q shaped to %d glyphs", s, before, after, len(g))
 	}
@@ -106,7 +106,7 @@ func TestNoContextIsTheOldAnswer(t *testing.T) {
 	const b = string(rune(beh))
 	for _, s := range []string{b, b + b, b + b + b, "x", "", " "} {
 		want, wm := f.ShapeGlyphs(s)
-		got, gm := f.ShapeGlyphsInContext(s, "", "")
+		got, gm := f.ShapeGlyphsInContext(s, "", "", Features{})
 		if len(got) != len(want) || gm != wm {
 			t.Fatalf("%q: %d glyphs and %d missing against %d and %d",
 				s, len(got), gm, len(want), wm)
@@ -143,7 +143,7 @@ func TestContextCannotChangeWhichGlyphIsChosenInAScriptThatDoesNotJoin(t *testin
 		for _, ctx := range []struct{ before, after string }{
 			{"x", "y"}, {string(rune(beh)), string(rune(beh))}, {"", "z"}, {"z", ""},
 		} {
-			got, _ := f.ShapeGlyphsInContext(s, ctx.before, ctx.after)
+			got, _ := f.ShapeGlyphsInContext(s, ctx.before, ctx.after, Features{})
 			if len(got) != len(want) {
 				t.Fatalf("%q with %q/%q: %d glyphs, want %d",
 					s, ctx.before, ctx.after, len(got), len(want))
@@ -195,7 +195,7 @@ func TestAContextTheFontStatesNoPairForChangesNothingAtAll(t *testing.T) {
 				continue
 			}
 			tried++
-			got, _ := f.ShapeGlyphsInContext(s, ctx.before, ctx.after)
+			got, _ := f.ShapeGlyphsInContext(s, ctx.before, ctx.after, Features{})
 			for i := range got {
 				if got[i] != want[i] {
 					t.Errorf("%q with %q/%q: glyph %d changed, and the font kerns "+
@@ -230,7 +230,7 @@ func TestMeasuringAgreesWithTheFormChosen(t *testing.T) {
 		{b, b, 250},
 		{b, "", 400},
 	} {
-		got := f.MeasureShapedInContext(b, size, tc.before, tc.after, true)
+		got := f.MeasureShapedInContext(b, size, tc.before, tc.after, true, Features{})
 		if got != tc.want {
 			t.Errorf("before=%q after=%q: measured %v, want %v", tc.before, tc.after, got, tc.want)
 		}
@@ -244,7 +244,7 @@ func TestMeasuringAgreesWithTheFormChosen(t *testing.T) {
 
 func mustShape(t *testing.T, f *Face, s, before, after string) []Glyph {
 	t.Helper()
-	g, _ := f.ShapeGlyphsInContext(s, before, after)
+	g, _ := f.ShapeGlyphsInContext(s, before, after, Features{})
 	return g
 }
 

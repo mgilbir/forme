@@ -341,6 +341,10 @@ type shaper struct {
 	// model decides for itself — see position.go.
 	zeroMarks zeroMarkWidths
 
+	// features is what the document turned off: the font's own rules a CSS
+	// property or a CSS Text rule has overruled. See Features.
+	features Features
+
 	// floor and limit bound the glyphs a lookup may look at: it may not match,
 	// or backtrack, outside [floor, limit). They exist for the Indic pass,
 	// which applies a font's features one syllable at a time — a ligature

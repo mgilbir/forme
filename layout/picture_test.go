@@ -859,7 +859,15 @@ func glyphMarks(v DrawText, what, shape string, opaque bool) []textMark {
 	// advances down the page, so the pen moves in y and the baseline's x is
 	// what every glyph on it shares. See runAlong.
 	along := runAlong(v)
-	for _, g := range glyphs {
+	// How many letter-spacings fall after each glyph: one per typographic
+	// character unit that ends in the glyph's cluster, and not one per glyph.
+	//
+	// A unit is a grapheme cluster and a cluster is not a glyph — a Thai letter
+	// with a vowel sign and a tone mark on it is one unit and three glyphs — so
+	// a pen that added the spacing after each glyph would move the marks off
+	// the letter they are drawn on. See spacingAfterGlyph.
+	spaceAfter := spacingAfterGlyph(v, text, glyphs)
+	for i, g := range glyphs {
 		adv, _ := style.FromPx(g.XAdvance * v.Size.Px() / 1000)
 		if v.Upright {
 			// One em per character, whatever the face's horizontal advance
@@ -884,7 +892,74 @@ func glyphMarks(v DrawText, what, shape string, opaque bool) []textMark {
 				opaque: opaque,
 			})
 		}
-		along = along.Add(adv).Add(v.CharSpacing)
+		along = along.Add(adv)
+		if n := spaceAfter[i]; n > 0 {
+			along = along.Add(v.CharSpacing.Mul(float64(n)))
+		}
+	}
+	return out
+}
+
+// spacingAfterGlyph reports, for each glyph of a run, whether §8.2's
+// letter-spacing falls after it.
+//
+// It falls after the last glyph of each typographic character unit. A glyph is
+// the last of its shaping cluster when the next glyph's cluster differs — they
+// are contiguous in the buffer — and the cluster owns a unit if any unit ends
+// inside the text it covers.
+//
+// The two are not the same division. A shaping cluster is what the font
+// substituted together and a unit is what a reader sees as one character, so a
+// ligature is one cluster and two units while a Thai letter with two marks on it
+// is one unit and three clusters. Asking which units end inside a cluster
+// answers both ways round.
+func spacingAfterGlyph(v DrawText, text string, glyphs []shape.Glyph) []int {
+	out := make([]int, len(glyphs))
+	if len(glyphs) == 0 || v.CharSpacing == 0 {
+		return out
+	}
+	ends := spacingAfterOffsets(text)
+	if len(ends) == 0 {
+		return out
+	}
+	// The text each cluster covers, which needs the cluster offsets in *text*
+	// order — a right-to-left run's glyphs are in visual order and its clusters
+	// descend.
+	starts := make([]int, 0, len(glyphs))
+	seen := map[int]bool{}
+	for _, g := range glyphs {
+		if !seen[g.Cluster] {
+			seen[g.Cluster] = true
+			starts = append(starts, g.Cluster)
+		}
+	}
+	sort.Ints(starts)
+	end := map[int]int{}
+	for i, c := range starts {
+		if i+1 < len(starts) {
+			end[c] = starts[i+1]
+			continue
+		}
+		end[c] = len(text)
+	}
+	// How many units end inside a cluster, and not merely whether one does. A
+	// ligature is one cluster and as many units as it has letters — "ffi" is
+	// one glyph and three — so a spacing per unit is three spacings after that
+	// one glyph. §8.2 asks a face not to ligate under a non-zero spacing at
+	// all, which is a separate rule and not this one's to assume.
+	owns := func(c int) int {
+		n := 0
+		for at := range ends {
+			if at >= c && at < end[c] {
+				n++
+			}
+		}
+		return n
+	}
+	for i := range glyphs {
+		if i == len(glyphs)-1 || glyphs[i+1].Cluster != glyphs[i].Cluster {
+			out[i] = owns(glyphs[i].Cluster)
+		}
 	}
 	return out
 }
@@ -1206,7 +1281,9 @@ func runAdvance(v DrawText) style.Unit {
 			Add(v.CharSpacing.Mul(float64(spacedUnits(text))))
 	}
 	w, _ := style.FromPx(v.Face.Measure(text, v.Size.Px()))
-	return w.Add(v.CharSpacing.Mul(float64(len([]rune(text)))))
+	// Units and not runes: §8.2's spacing goes after each typographic character
+	// unit, which is a grapheme cluster. See paragraph.SpacedUnits.
+	return w.Add(v.CharSpacing.Mul(float64(spacedUnits(text))))
 }
 
 // inkOnly is a run's text without the code points the shaper drops.

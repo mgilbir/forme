@@ -2,7 +2,8 @@ package paragraph
 
 import "testing"
 
-// The scripts whose words a dictionary would find, and what is done without one.
+// The scripts whose words a dictionary finds, and what is done for the ones
+// this engine has no dictionary for.
 //
 // UAX #14 gives them class SA and LB1 resolves it to AL — "no opportunity
 // anywhere" — with a note that an implementation holding a dictionary does
@@ -10,9 +11,16 @@ import "testing"
 // of fallback line breaking must occur even if the UA doesn't know how to
 // perform it correctly. Overflowing is not allowed."
 //
-// So a line may end between two typographic character units of such a script.
-// That is a place the words are not, which is why the engine reports it as well
-// as does it — see UnsupportedScript.
+// So a script with no vocabulary here breaks between typographic character
+// units, which is a place the words are not — and the engine reports it as well
+// as does it, see UnsupportedScript. A script with one breaks where its words
+// are, and there is nothing to report; see dictionarybreak_test.go, which is
+// about that half.
+//
+// The fallback is not only for the scripts with no list at all. A stretch of
+// Thai the vocabulary does not have falls back the same way and for the same
+// reason, which is what the first test below is: three Thai letters that are
+// not a word.
 
 // TestADictionaryScriptBreaksBetweenItsCharacters.
 func TestADictionaryScriptBreaksBetweenItsCharacters(t *testing.T) {
@@ -21,6 +29,10 @@ func TestADictionaryScriptBreaksBetweenItsCharacters(t *testing.T) {
 		{"Lao", "ກຂຄ", "ກ|ຂ|ຄ"},
 		{"Khmer", "កខគ", "ក|ខ|គ"},
 		{"Myanmar", "ကခဂ", "က|ခ|ဂ"},
+		// Tai Tham, which has no vocabulary here and none to have: the four
+		// scripts above fall back this way only where their own vocabulary has
+		// nothing, and this one falls back everywhere.
+		{"Tai Tham", "ᨠᨡᨢ", "ᨠ|ᨡ|ᨢ"},
 	} {
 		if got := marks(t, tc.text, WordBreak{}, LineBreak{}); got != tc.want {
 			t.Errorf("%s: %q breaks as %q, want %q — without a dictionary the "+
@@ -66,13 +78,16 @@ func TestKeepAllSuppressesTheFallbackToo(t *testing.T) {
 	}
 }
 
-// TestTheReportSaysWhatWasDone. An author whose Thai paragraph is broken in the
+// TestTheReportSaysWhatWasDone. An author whose paragraph is broken in the
 // wrong places should be told, and the message has to describe what happened
 // rather than what used to.
 func TestTheReportSaysWhatWasDone(t *testing.T) {
-	msg, ok := UnsupportedScript('ก')
+	// Tai Tham, which has no word list here and none published anywhere. The
+	// four scripts that do have one are not reported — that is the other half,
+	// and it is asserted where the dictionary is.
+	msg, ok := UnsupportedScript('ᨠ')
 	if !ok {
-		t.Fatal("a Thai letter is reported as needing nothing")
+		t.Fatal("a Tai Tham letter is reported as needing nothing")
 	}
 	if !contains(msg, "between typographic character units") {
 		t.Errorf("the report reads %q; it has to say where the line is broken "+

@@ -125,7 +125,7 @@ func (l *layouter) linkShapingContext(items []inlineItem) []inlineItem {
 		// whole reason the context has to be settled before the lines are
 		// filled rather than at paint time.
 		items[i].Width = l.br.MeasureSpacedInContext(items[i].Face, items[i].Text,
-			items[i].Size, items[i].Spacing, before, after, kerns, items[i].Upright)
+			items[i].Size, items[i].Spacing, itemShaping(&items[i]))
 	}
 	return items
 }
@@ -257,4 +257,13 @@ func sameShaping(a, b inlineItem) bool {
 // the run is: which glyphs it is set in, or where they sit.
 func contextCanChange(f *shape.Face) bool {
 	return f.HasJoiningForms() || f.HasKerning()
+}
+
+// itemShaping is everything about how an item is set that its own text does not
+// say, gathered for the measure. See paragraph.Shaping.
+func itemShaping(it *inlineItem) shaping {
+	return shaping{
+		Before: it.PreContext, After: it.PostContext,
+		ContextKerns: it.ContextKerns, Upright: it.Upright, Off: it.Off,
+	}
 }

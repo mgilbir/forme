@@ -86,7 +86,15 @@ func (sh shaper) position(buf []Glyph) {
 	// up. A font that kerns letters in a lookup that ignores marks and kerns a
 	// mark against its base in one that does not — Noto Serif Tibetan does — has
 	// the second silenced by the first if the two are run as one.
+	//
+	// None of them where the document turned kerning off. It is skipped here
+	// rather than filtered out of the font's lookups because a lookup list is
+	// what the face parsed and this is what one caller asked; the face is shared
+	// between every run of the document and most of them kern.
 	for _, kl := range l.kern {
+		if sh.features.NoKerning {
+			break
+		}
 		prev := -1
 		for i := range buf {
 			if l.ignores(kl.flags, buf[i]) {

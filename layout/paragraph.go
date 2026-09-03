@@ -88,6 +88,7 @@ var (
 	spacingAdvance                = paragraph.SpacingAdvance
 	spacedUnits                   = paragraph.SpacedUnits
 	spacingAfter                  = paragraph.SpacingAfter
+	spacingAfterOffsets           = paragraph.SpacingAfterOffsets
 	uprightUnits                  = paragraph.UprightUnits
 	orientationMix                = paragraph.OrientationMix
 	isCursiveScript               = paragraph.IsCursiveScript
@@ -112,7 +113,11 @@ var newBreaker = paragraph.NewBreaker
 
 // The item itself, and the paragraphs the bidirectional algorithm resolves over.
 type (
-	inlineItem  = paragraph.Item
+	inlineItem = paragraph.Item
+	// shaping is everything about how a run is set that its own text does not
+	// say: the context either side, whether it kerns across a boundary, whether
+	// it stands upright, and what the document turned off.
+	shaping     = paragraph.Shaping
 	bidiBuilder = paragraph.BidiBuilder
 	bidiMode    = paragraph.BidiMode
 )

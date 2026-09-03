@@ -3,6 +3,8 @@ package paragraph
 import (
 	"strings"
 	"testing"
+
+	"github.com/mgilbir/forme/segment"
 )
 
 // Which characters letter-spacing goes after.
@@ -75,7 +77,11 @@ func TestSpacingIsStillCountedForOrdinaryText(t *testing.T) {
 		// this test the place a future change to that rule failed, which is
 		// three files away from the rule.
 	} {
-		if got, want := SpacedUnits(text), len([]rune(text)); got != want {
+		// Clusters and not code points: "e" with a combining acute on it is one
+		// unit, because one grapheme cluster is one typographic character unit.
+		// What this test is about is that a character which *is* drawn counts,
+		// and segment.Count is the count with nothing taken out.
+		if got, want := SpacedUnits(text), segment.Count(text); got != want {
 			t.Errorf("%q: %d units, want %d — every character of it is drawn",
 				text, got, want)
 		}

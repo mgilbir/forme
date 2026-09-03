@@ -3,6 +3,9 @@ testdata/unicode-bidi/
 
 # Unicode's property files, fetched into place for `make useable`.
 testdata/ucd/
+# The ICU word lists cmd/gendict reads. The generated table is committed; the
+# source is fetched, like every other upstream data file here.
+testdata/icu-dictionaries/
 
 # Google's OFL font library, fetched for the broad sweeps. Two thousand families
 # and 2.4 GB of faces: far too much to vendor, and the point of it is breadth

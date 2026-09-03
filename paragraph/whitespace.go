@@ -144,6 +144,17 @@ type WordBreak struct {
 	// value are about what it must *not* suppress: the break after a space, and
 	// the one after an ideographic comma.
 	KeepAll bool
+	// Manual is §5.2's "manual": word boundary detection is not performed at
+	// all, so the only places a line may end inside a word are the ones the
+	// document marked — a space, a zero width space, a soft hyphen.
+	//
+	// It is the other side of the dictionary. Where "normal" asks this engine to
+	// find the words of a script that writes none between them, this asks it not
+	// to look; and a document that writes it is asking for the text to overflow
+	// rather than be divided somewhere the author did not sanction. The suite's
+	// word-break-manual-001 puts Thai in a box no characters wide and asks for
+	// it to come out exactly as it does in a box with room.
+	Manual bool
 	// AutoPhrase is §5.2's "auto-phrase", of which this engine does one half.
 	//
 	// The value has two effects and they are separable. It allows a line to end
@@ -172,6 +183,8 @@ func WordBreakOf(value string) (WordBreak, string) {
 		return WordBreak{BreakAll: true}, ""
 	case "keep-all":
 		return WordBreak{KeepAll: true}, ""
+	case "manual":
+		return WordBreak{Manual: true}, ""
 	case "auto-phrase":
 		// Not reported here. Half of what it asks for is done, and whether the
 		// other half is missing is a question about the *text* — see

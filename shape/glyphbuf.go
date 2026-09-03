@@ -137,9 +137,9 @@ func (f *Face) ShapeGlyphs(s string) ([]Glyph, int) {
 // the suite has a test of it, shaping_lig-000.
 //
 // Either side may be empty, which is what the start and end of a paragraph are.
-func (f *Face) ShapeGlyphsInContext(s, before, after string) ([]Glyph, int) {
+func (f *Face) ShapeGlyphsInContext(s, before, after string, off Features) ([]Glyph, int) {
 	return f.shapeGlyphsWith(s, nil,
-		shapeContext{before: before, after: after, kerns: true})
+		shapeContext{before: before, after: after, kerns: true, features: off})
 }
 
 // ShapeGlyphsAcrossFaces is ShapeGlyphsInContext for a neighbour that is set in
@@ -156,8 +156,9 @@ func (f *Face) ShapeGlyphsInContext(s, before, after string) ([]Glyph, int) {
 // and a font change is a change in formatting: the pair across such a boundary
 // is not this font's to apply. So the context reaches the joining scan and not
 // the boundary kern.
-func (f *Face) ShapeGlyphsAcrossFaces(s, before, after string) ([]Glyph, int) {
-	return f.shapeGlyphsWith(s, nil, shapeContext{before: before, after: after})
+func (f *Face) ShapeGlyphsAcrossFaces(s, before, after string, off Features) ([]Glyph, int) {
+	return f.shapeGlyphsWith(s, nil,
+		shapeContext{before: before, after: after, features: off})
 }
 
 // shapeContext is the text either side of the run being shaped, in logical
@@ -169,6 +170,10 @@ func (f *Face) ShapeGlyphsAcrossFaces(s, before, after string) ([]Glyph, int) {
 type shapeContext struct {
 	before, after string
 	kerns         bool
+	// features is what the document turned off. See Features, and note that it
+	// travels with the context rather than beside it because it is the same
+	// kind of fact: something about the run that its own text does not say.
+	features Features
 }
 
 // runes returns the two sides as the shortest slices that still answer the
@@ -312,7 +317,7 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	// The run's script decides which of the font's rules apply, and everything
 	// below reads the tables through it.
 	sh := shaper{f: f, l: f.layoutFor(script), rtl: rtl, ligIDs: new(int),
-		zeroMarks: zeroMarkWidthsFor(script)}
+		zeroMarks: zeroMarkWidthsFor(script), features: ctx.features}
 	// A script whose characters are not in the order they are drawn is shaped
 	// whole by its own pass: the reordering decides which of the font's rules
 	// apply where, so it cannot be a step before the general substitutions and
@@ -340,7 +345,8 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	// The pair that spans the boundary to the next run, which the pass above
 	// cannot see because the glyph on the far side of it is not in this buffer.
 	// See boundarykern.go.
-	if len(sh.l.kern) > 0 && ctx.kerns && (ctx.before != "" || ctx.after != "") {
+	if len(sh.l.kern) > 0 && ctx.kerns && !ctx.features.NoKerning &&
+		(ctx.before != "" || ctx.after != "") {
 		before, after := f.boundaryGlyphs(ctx, script, rtl)
 		sh.kernAcross(buf, before, after)
 	}
@@ -488,7 +494,10 @@ func (sh shaper) applyNamedFeatures(buf []Glyph, tags []string) []Glyph {
 func (sh shaper) substitute(buf []Glyph) []Glyph {
 	buf = sh.applyNamedFeatures(buf, beforeJoiningFeatures)
 	buf = sh.applyJoiningForms(buf)
-	return sh.applyNamedFeatures(buf, afterJoiningFeatures)
+	// The features a document turned off are dropped from the list rather than
+	// skipped inside the loop, so that what is left keeps the order the
+	// specification requires. See Features.keeps.
+	return sh.applyNamedFeatures(buf, sh.features.keeps(afterJoiningFeatures))
 }
 
 // reverseGlyphs puts a shaped run into visual order.

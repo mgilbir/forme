@@ -125,13 +125,32 @@ type DrawText struct {
 	// shapes, but a kerning pair is one font's statement about two of its own
 	// glyphs and does not cross a font change.
 	ContextKerns bool
-	// CharSpacing is letter-spacing: an extra advance after every character.
+	// CharSpacing is letter-spacing: an extra advance after every typographic
+	// character unit.
+	//
+	// A unit and not a character, which is a distinction the backend has to
+	// make. CSS Text §2's typographic character unit is a grapheme cluster: a
+	// Thai letter carries its vowel sign and its tone mark, a Khmer consonant
+	// carries the vowel that follows it, and a pen that added this after every
+	// glyph would move a mark off the letter it is drawn on. The rule is that
+	// it falls after the last glyph of each cluster — see the comparison's
+	// spacingAfterGlyph, which is the reference reading of it.
 	//
 	// It is a property of the drawing rather than of the position because layout
 	// already spent it — the run's width includes it, and the run after this one
 	// is placed accordingly — so a backend that ignored it would draw the glyphs
 	// bunched at the left of a gap the right size.
 	CharSpacing style.Unit
+
+	// Features is what the document turned off: a font's own rules that a CSS
+	// property or a CSS Text rule has overruled.
+	//
+	// It is on the run because a backend shapes the run for itself, and a
+	// backend that shaped it with the font's rules intact would draw a ligature
+	// the engine measured as two letters — a run measured to one width and
+	// painted at another, which is the failure this package has a comment about
+	// wherever it could happen. See shape.Features.
+	Features shape.Features
 
 	// Clip is §11.1's clipping, when something cuts this run.
 	//
@@ -1301,6 +1320,7 @@ func (p *painter) lines(f *Fragment) {
 				At:           at,
 				Sideways:     line.Sideways,
 				Upright:      run.Upright,
+				Features:     run.Features,
 				Text:         drawableText(run.Text),
 				PreContext:   run.PreContext,
 				PostContext:  run.PostContext,
@@ -1487,9 +1507,11 @@ func ShapedGlyphs(v DrawText) ([]shape.Glyph, int) {
 		// The neighbour is set in another face, so its characters decide this
 		// run's joined shapes and its glyphs decide nothing. See
 		// shape.ShapeGlyphsAcrossFaces.
-		return v.Face.ShapeGlyphsAcrossFaces(ShapedText(v), v.PreContext, v.PostContext)
+		return v.Face.ShapeGlyphsAcrossFaces(ShapedText(v), v.PreContext, v.PostContext,
+			v.Features)
 	}
-	return v.Face.ShapeGlyphsInContext(ShapedText(v), v.PreContext, v.PostContext)
+	return v.Face.ShapeGlyphsInContext(ShapedText(v), v.PreContext, v.PostContext,
+		v.Features)
 }
 
 // solidTiles is the rectangles a one-colour layer paints.

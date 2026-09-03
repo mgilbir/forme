@@ -8,19 +8,22 @@ import (
 	"github.com/mgilbir/forme/style"
 )
 
-// Turning kerning off, where there is kerning to turn off.
+// Turning kerning off.
 //
-// This engine applies a face's kerning and offers no way to decline it, so
-// "font-kerning: none" and "font-feature-settings: \"kern\" off" both ask for
-// something it cannot do — and both ask for *nothing at all* when the face has
-// no kerning in it. The fourteen standard PDF faces are that case: their metrics
-// carry no kern pairs, so a document set in one of them and asking for kerning
-// to be turned off gets exactly the page it asked for.
+// "font-kerning: none" is applied now — see layout/fontfeatures.go — so nothing
+// is reported about it whatever the face has in it. What is left of this file is
+// font-feature-settings, which asks for a feature by tag and is a thing this
+// engine still cannot do.
 //
-// That is not a corner of the suite. Five of its reftests write both
-// declarations together — the belt-and-braces an author uses to make a layout
-// test robust across UAs — over text in the default serif face, and every one of
-// them was held out of the clean count by a finding about a page that is right.
+// The narrowing it keeps is the one worth having: "font-feature-settings:
+// \"kern\" off" asks for *nothing at all* when the face has no kerning in it, and
+// the fourteen standard PDF faces are that case — their metrics carry no kern
+// pairs, so a document set in one of them and asking for kerning to be turned
+// off gets exactly the page it asked for.
+//
+// That is not a corner of the suite. Five of its reftests write the declaration
+// over text in the default serif face, and every one of them was held out of the
+// clean count by a finding about a page that is right.
 
 // kerningFindings lays a document out in a face and returns what was said about
 // the two properties.
@@ -63,9 +66,9 @@ func TestTurningOffKerningAFaceHasNotGotIsNotReported(t *testing.T) {
 	}
 }
 
-// TestTurningOffKerningAFaceHasIsStillReported is the half the change had to
-// keep, and it is where the narrowing stops: with a face that kerns, the page
-// really does differ from the one the author asked for.
+// TestTurningOffKerningAFaceHasIsStillReported is where the narrowing stops:
+// with a face that kerns, a font-feature-settings that turns kerning off asks
+// for a page this engine does not produce.
 func TestTurningOffKerningAFaceHasIsStillReported(t *testing.T) {
 	faces := notoFaces()
 	var kerning *shape.Face
@@ -80,7 +83,6 @@ func TestTurningOffKerningAFaceHasIsStillReported(t *testing.T) {
 	}
 	set := oneFace{kerning}
 	for _, css := range []string{
-		`font-kerning: none`,
 		`font-feature-settings: "kern" off`,
 	} {
 		got := kerningFindings(t, css, set)
@@ -91,6 +93,12 @@ func TestTurningOffKerningAFaceHasIsStillReported(t *testing.T) {
 		if !got[0].Unsupported() {
 			t.Errorf("%q: the finding was not marked unsupported", css)
 		}
+	}
+	// And the property that is implemented says nothing, whatever the face
+	// has in it. It is the half this file used to be about and is now asserted
+	// the other way round: see TestKerningIsTurnedOff for the page it makes.
+	if got := kerningFindings(t, `font-kerning: none`, set); len(got) != 0 {
+		t.Errorf("font-kerning: none reported %q; it is applied", got[0].Message)
 	}
 	// And asking for the kerning this engine already does says nothing, with a
 	// kerning face as with any other.
@@ -145,7 +153,8 @@ func TestTheFindingIsRaisedOncePerDocument(t *testing.T) {
 	}
 	built := Build(Input{
 		HTML: `<p id="a">AV</p><p id="b">AV</p><p id="c">AV</p>`,
-		CSS:  []Stylesheet{{Source: noDefaults + `p { font-size: 20px; font-kerning: none }`}},
+		CSS: []Stylesheet{{Source: noDefaults +
+			"p { font-size: 20px; font-feature-settings: \"kern\" off }"}},
 	})
 	if built.Root == nil {
 		t.Fatal("no boxes")
@@ -156,7 +165,7 @@ func TestTheFindingIsRaisedOncePerDocument(t *testing.T) {
 	Layout(built.Root, Size{W: w, H: h}, oneFace{kerning}, rec)
 	n := 0
 	for _, f := range rec.Findings() {
-		if f.Property == "font-kerning" {
+		if f.Property == "font-feature-settings" {
 			n++
 		}
 	}
