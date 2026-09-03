@@ -20,6 +20,10 @@ testdata/googlefonts/
 # gigabytes.
 testdata/notocjk/
 
+# BudouX's phrase models, which cmd/genphrase reads. As with the ICU word lists
+# above, the generated table is committed and the source is fetched.
+testdata/budoux/
+
 # Built by `make hbfuzz`.
 testdata/harfbuzz/.shapetext
 

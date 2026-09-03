@@ -155,6 +155,43 @@ dictionaries:
 	  gofmt -w paragraph/$$name'dict.go'; \
 	done
 
+# The phrase model CSS Text §5.2's "auto-phrase" needs, for the language whose
+# words run together and whose phrases do not.
+#
+# BudouX, which is what Chromium segments Japanese phrases with — so a page laid
+# out from it breaks where a reader of the suite's references expects. As with
+# the word lists above the model is fetched and the *generated* table is what is
+# committed, and the licence travels into it: BudouX is Apache-2.0, whose terms
+# require that recipients get them, so cmd/genphrase copies the file rather than
+# naming it.
+#
+# It is twenty kilobytes against the word lists' four megabytes, and the
+# difference is what a model is. A phrase is a content word with its particles
+# stuck to it, so no list of words can say where one ends; sixteen hundred
+# weights over the characters around a boundary can, and are wrong often enough
+# that the suite's own tests allow more than one answer.
+#
+# One language. BudouX publishes Chinese and Thai as well, no document in the
+# suite asks for either, and Thai already breaks at the words its ICU dictionary
+# knows. Adding one is adding a pair to PHRASE_MODELS.
+#
+#	make phrases
+BUDOUX      := https://raw.githubusercontent.com/google/budoux/main
+BUDOUX_DIR  := testdata/budoux
+
+PHRASE_MODELS := japanese:ja
+
+phrases:
+	mkdir -p $(BUDOUX_DIR)
+	curl -sSf -o $(BUDOUX_DIR)/LICENSE $(BUDOUX)/LICENSE
+	for pair in $(PHRASE_MODELS); do \
+	  name=$${pair%%:*}; file=$${pair##*:}; \
+	  curl -sSf -o $(BUDOUX_DIR)/$$file.json $(BUDOUX)/budoux/models/$$file.json; \
+	  go run ./cmd/genphrase $$name $(BUDOUX_DIR)/$$file.json $(BUDOUX_DIR)/LICENSE \
+	    > paragraph/$$name'phrases.go'; \
+	  gofmt -w paragraph/$$name'phrases.go'; \
+	done
+
 # Which characters stand upright on a line of vertical text, UAX #50. It is
 # what tells a block of English from a block of Japanese, and so which blocks
 # this engine can turn on their side. See cmd/genvertical.
