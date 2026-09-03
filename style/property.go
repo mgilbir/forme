@@ -301,6 +301,12 @@ var properties = map[string]property{
 	// that declares it be reported rather than silently laid out across one
 	// column.
 	"column-span": {false, "none"},
+	// CSS Fragmentation 3 §4.4, read for the same reason and to the same end:
+	// "slice" is what this engine draws when it cuts a box across a column
+	// boundary, and a box asking for "clone" — a whole border round every
+	// fragment, and a background repeated in each — is asking for a different
+	// picture and is reported. Registering it is what lets it be read at all.
+	"box-decoration-break": {false, "slice"},
 
 	"writing-mode":         {true, "horizontal-tb"},
 	"text-orientation":     {true, "mixed"},

@@ -201,7 +201,7 @@ func splitAt(f *Fragment, y style.Unit) (top, bottom *Fragment, ok bool) {
 	}
 	for _, c := range f.Children {
 		switch {
-		case c.BorderRect.Bottom() <= y:
+		case subtreeBottom(c) <= y:
 			kept := *c
 			above.Children = append(above.Children, &kept)
 		case c.BorderRect.Y >= y:
@@ -213,25 +213,14 @@ func splitAt(f *Fragment, y style.Unit) (top, bottom *Fragment, ok bool) {
 			// rule, one level down, and the two halves keep the box between
 			// them: a fragmented box is one box in two pieces, so they share a
 			// Box and everything that asks what generated them gets one answer.
-			//
-			// The cut is in the parent's content coordinates and the child's
-			// content is in the child's, so it is moved by the distance between
-			// the two. With no border and no padding — which is all this
-			// accepts — that distance is the child's own top edge.
-			if drawsAnything(c) || c.Padding != (Edges{}) {
-				return nil, nil, false
-			}
-			t, b, fine := splitAt(c, y.Sub(c.BorderRect.Y))
+			t, b, fine := sliceBox(c, y)
 			if !fine {
 				return nil, nil, false
 			}
 			if t != nil {
-				t.BorderRect.H = y.Sub(t.BorderRect.Y)
 				above.Children = append(above.Children, t)
 			}
 			if b != nil {
-				b.BorderRect.H = c.BorderRect.Bottom().Sub(y)
-				b.BorderRect.Y = 0
 				below.Children = append(below.Children, b)
 			}
 		}
@@ -264,7 +253,11 @@ func columnBreaks(f *Fragment, at style.Unit, out []style.Unit) []style.Unit {
 			out = append(out, at.Add(c.BorderRect.Bottom()))
 			continue
 		}
-		out = columnBreaks(c, at.Add(c.BorderRect.Y), out)
+		// The child's own content origin and not its border box: its lines are
+		// measured from the first, and a border of five pixels would otherwise
+		// put every breakpoint inside it five pixels out — which is a cut
+		// through a line, and is refused rather than drawn wrong.
+		out = columnBreaks(c, at.Add(c.ContentRect().Y), out)
 		out = append(out, at.Add(c.BorderRect.Bottom()))
 	}
 	return out
@@ -367,25 +360,127 @@ func previousBreak(breaks []style.Unit, at style.Unit) style.Unit {
 	return prev
 }
 
-// drawsAnything reports whether a fragment puts ink on the page of its own —
-// a background, a border, an outline or a banded background.
+// sliceBox divides one box at a height in its parent's content coordinates, and
+// gives each half the edges CSS Fragmentation assigns it.
 //
-// It is the question splitAt asks before it cuts a box in half, and it errs
-// towards yes: a box that draws nothing can be divided without anybody seeing
-// where, and a box that draws is a picture whose edges CSS assigns.
-func drawsAnything(f *Fragment) bool {
+// §4.4's "box-decoration-break: slice", which is the initial value and the only
+// one this engine does: the box is rendered as though it were never divided and
+// then cut, so no border appears at the cut on either side. The top border and
+// padding go to the first fragment, the bottom to the last, and the two sides go
+// to both — which is what draws a bordered box as one shape running down several
+// columns rather than as several boxed-off pieces.
+//
+// The other value, "clone", gives every fragment the whole border and its own
+// background. It is a different picture and this does not produce it; a box
+// declaring it is refused by canColumn.
+func sliceBox(c *Fragment, y style.Unit) (top, bottom *Fragment, ok bool) {
+	// The cut in the child's own content coordinates, which is where its lines
+	// and children are measured from. It may fall outside them at either end: a
+	// box whose own border box is entirely above the cut can still hold content
+	// that reaches past it, which is what a float overflowing its parent is.
+	inner := y.Sub(c.ContentRect().Y)
+	t, b, fine := splitAt(c, inner)
+	if !fine {
+		return nil, nil, false
+	}
+	// How much of the box's own border box falls on each side. A box whose
+	// content overflows it has one of these at its full height and the other at
+	// nothing, which is the fragment that carries the overflow onward.
+	topH := style.Max(0, style.Min(c.BorderRect.Bottom(), y).Sub(c.BorderRect.Y))
+	bottomH := style.Max(0, c.BorderRect.Bottom().Sub(style.Max(c.BorderRect.Y, y)))
+	// A box with nothing in it is divided by its own extent and not by its
+	// content, which is what splitAt above reports on: a fragment holding no
+	// lines and no children is nothing on both sides as far as that walk can
+	// see, and a float is exactly such a box. So each side is made here where
+	// the box reaches into it and the walk found nothing to put there.
+	if t == nil && topH > 0 {
+		empty := *c
+		empty.Lines, empty.Children = nil, nil
+		t = &empty
+	}
+	if b == nil && bottomH > 0 {
+		empty := *c
+		empty.Lines, empty.Children = nil, nil
+		b = &empty
+	}
+	if topH > 0 && bottomH > 0 && refusesToSlice(c) {
+		// The box itself is being cut, and it is one whose picture slicing
+		// cannot draw. A box merely *holding* content that crosses the cut is
+		// not cut at all and is not refused: it is in one column with a
+		// zero-height fragment of itself in the next.
+		return nil, nil, false
+	}
+	if t != nil {
+		// The first fragment: its top edge is the box's own, its bottom edge is
+		// the cut and has nothing on it.
+		t.BorderRect.H = topH
+		if bottomH > 0 {
+			t.Border.Bottom, t.Padding.Bottom, t.Margin.Bottom = 0, 0, 0
+		}
+		t.contentH = t.BorderRect.H
+	}
+	if b != nil {
+		// And the last: it begins at the cut with nothing on that edge, and
+		// keeps the box's own bottom.
+		b.BorderRect.Y = style.Max(0, c.BorderRect.Y.Sub(y))
+		b.BorderRect.H = bottomH
+		if topH > 0 {
+			b.Border.Top, b.Padding.Top, b.Margin.Top = 0, 0, 0
+		}
+		b.contentH = b.BorderRect.H
+	}
+	return t, b, true
+}
+
+// subtreeBottom is how far a fragment's own box and everything it holds reach
+// below its parent's content edge.
+//
+// It is not the border box, and the difference is what a float is: a float
+// inside a container taller than the container overflows it, and the container's
+// own rectangle says nothing about where the float ends. A cut chosen from the
+// container's box alone would put the whole float in one column.
+func subtreeBottom(f *Fragment) style.Unit {
+	if f == nil {
+		return 0
+	}
+	out := f.BorderRect.Bottom()
+	inner := f.ContentRect()
+	for _, line := range f.Lines {
+		out = style.Max(out, inner.Y.Add(line.Rect.Bottom()))
+	}
+	for _, c := range f.Children {
+		out = style.Max(out, inner.Y.Add(subtreeBottom(c)))
+	}
+	return out
+}
+
+// refusesToSlice reports whether a box is one this engine will not cut through.
+//
+// What it refuses is what slicing cannot draw rather than everything that draws
+// at all. A border and a background colour are sliceable — §4.4 says how, and
+// sliceBox does it — and these are not:
+//
+//   - A background image, whose position is stated relative to the box that was
+//     never divided. Slicing it means painting each fragment with the image
+//     placed for the whole, which the painter has no way to express.
+//   - An outline, which §4.4 leaves to the UA and which this engine draws as one
+//     ring round one border box.
+//   - A banded background, which is a table's row or column showing through and
+//     is not a rectangle to begin with.
+//   - "box-decoration-break: clone", which asks for the other picture.
+func refusesToSlice(f *Fragment) bool {
 	if f == nil || f.Box == nil {
-		return false
-	}
-	if len(f.bgBands) > 0 || f.Outline > 0 || f.Border != (Edges{}) {
 		return true
 	}
-	if v := strings.TrimSpace(f.Box.Style["background-color"]); v != "" &&
-		!strings.EqualFold(v, "transparent") {
+	if len(f.bgBands) > 0 || f.Outline > 0 {
 		return true
 	}
-	return strings.TrimSpace(f.Box.Style["background-image"]) != "" &&
-		!strings.EqualFold(strings.TrimSpace(f.Box.Style["background-image"]), "none")
+	if v := strings.TrimSpace(f.Box.Style["background-image"]); v != "" &&
+		!strings.EqualFold(v, "none") {
+		return true
+	}
+	return strings.EqualFold(
+		strings.TrimSpace(f.Box.Style["box-decoration-break"]), "clone")
 }
 
 // canColumn is whether a box's content is of a kind this engine can pour into
@@ -413,13 +508,6 @@ func (l *layouter) canColumn(b *Box) string {
 
 func (l *layouter) subtreeCanColumn(root, b *Box) string {
 	if b != root {
-		if b.Float != FloatNone {
-			// A float is placed against a formatting context, and a formatting
-			// context has no notion of which column it is in. §5.2 says what
-			// should happen and it is a fragmentation of the float itself.
-			return "it holds a float, which is placed against a formatting " +
-				"context that does not know about columns"
-		}
 		if b.Position != PositionStatic {
 			return "it holds a positioned box"
 		}
@@ -427,7 +515,10 @@ func (l *layouter) subtreeCanColumn(root, b *Box) string {
 			return "it holds a replaced element, a form control or a list marker"
 		}
 		switch b.Inner {
-		case InnerFlow, InnerText:
+		case InnerFlow, InnerText, InnerFlowRoot:
+			// A flow root is ordinary block layout that seals its own floats,
+			// which is what a float is and what "overflow: hidden" makes. It
+			// divides like any other block.
 		default:
 			return "it holds a table or another box with sizing rules of its own"
 		}
@@ -488,8 +579,20 @@ func (l *layouter) pourIntoColumns(b *Box, frag *Fragment, cols columns,
 		// an empty container is either way.
 		return contentHeight, true
 	}
+	// §3.5, and the two cases are which of the heights is *given*.
+	//
+	// A container told how tall to be has its column height decided for it: the
+	// columns are that tall and the content is cut at multiples of it, whichever
+	// value column-fill has. "balance" is consulted, as §3.5 puts it, "only if
+	// the length of columns has been constrained" — and where it has, the
+	// constraint is the length, so there is nothing left for balancing to
+	// choose.
+	//
+	// A container with an automatic height has no such number, and the answer is
+	// the shortest its content fits in. That is the case balancing exists for and
+	// is what the initial value asks for.
 	height := declared
-	if !hasHeight || cols.fill != columnAuto {
+	if !hasHeight {
 		got, ok := balancedHeight(breaks, cols.n)
 		if !ok {
 			l.reportColumns(b, cols.n, "its content does not divide into that "+
