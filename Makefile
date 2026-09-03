@@ -505,8 +505,14 @@ WPT_DIRS := css/CSS2/normal-flow css/CSS2/box-display css/CSS2/margin-padding-cl
             css/CSS2/box css/CSS2/colors css/CSS2/values \
             css/CSS2/support css/CSS2/reference css/css-text css/reference \
             css/support \
-            fonts
+            fonts images
 
+# "images" is the suite's shared image directory, at the repository root rather
+# than under css/. Two documents reach into it — "/images/blue.png" and
+# "/images/background.png" — and without it they were laid out with the picture
+# missing and reported for it. It is a third of a megabyte for ninety-one files,
+# which is the cheapest checkout entry here.
+#
 # "css/support" is the suite's *shared* support directory, as against the
 # per-chapter css/CSS2/support beside it. It was missing, and the whole of it is
 # sixty-one small files, and its absence cost twenty-three clean passes: the
