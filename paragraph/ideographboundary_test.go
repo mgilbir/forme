@@ -27,7 +27,13 @@ func barred(t *testing.T, text string, wb WordBreak) string {
 		wb, LineBreak{}, Hyphens{}, WritingSystemOther)
 	var b strings.Builder
 	for _, p := range pieces {
-		if p.BreakBefore {
+		switch {
+		case p.BreakBefore && p.LastResort:
+			// An opportunity a line reaches for only when it has no other, which
+			// is a different answer from both "here" and "nowhere" and has to
+			// read as one. See Piece.LastResort.
+			b.WriteString("\u00a6")
+		case p.BreakBefore:
 			b.WriteString("|")
 		}
 		b.WriteString(p.Text)
@@ -81,8 +87,11 @@ func TestTheOpportunityBeforeAnIdeographIsStillSubjectToTheRules(t *testing.T) {
 	if unhandled != "" {
 		t.Fatalf("keep-all was reported as unhandled: %q", unhandled)
 	}
-	if got := barred(t, "abc永def", wb); got != "abc永def" {
-		t.Errorf("keep-all: %s, want no opportunity at all", got)
+	// Offered, then demoted: §5.2's note lets the value be relaxed where there
+	// is nothing else on the line, so what it takes away is a rank rather than
+	// an opportunity. See TestKeepAllDemotesTheOpportunitiesInsideAWord.
+	if got := barred(t, "abc永def", wb); got != "abc¦永¦def" {
+		t.Errorf("keep-all: %s, want the two opportunities demoted and not deleted", got)
 	}
 	// A character that is not a letter unit before it offers nothing new, which
 	// errs towards fewer opportunities — the direction this file takes wherever

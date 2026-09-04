@@ -93,16 +93,32 @@ func TestAPhraseWiderThanItsLineIsDividedAnyway(t *testing.T) {
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("the lines are %q, want %q", got, want)
 	}
-	// The control is keep-all, whose suppression is a prohibition: the same
-	// text in the same box has nowhere to break and overflows on one line.
+	// The control is keep-all, and it has to be measured in a *wider* box than
+	// the one above.
+	//
+	// Both values give up their suppression where a line has nothing else — see
+	// TestKeepAllGivesWayWhenTheLineHasNothingElse — so in a box one phrase wide
+	// the two answer alike, and a control there would say nothing. What tells
+	// them apart is where they end a line that has somewhere to end: auto-phrase
+	// keeps the phrase boundaries, so a box four characters wide still ends its
+	// first line after the third; keep-all keeps nothing, so it fills the line
+	// and ends after the fourth.
+	wider := cjkNaturalWidth(t, faces, `<div id="d" lang="ja">楽しいド</div>`, autoPhraseCSS)
+	widerCSS := ` #d { width: ` + fmtPx(wider) + ` }`
+	phrase := cjkFaceLines(t, faces, autoPhraseText, autoPhraseCSS+widerCSS)
 	keepAll := cjkFaceLines(t, faces, autoPhraseText,
-		strings.Replace(autoPhraseCSS, "auto-phrase", "keep-all", 1)+
-			` #d { width: `+fmtPx(width)+` }`)
-	if len(keepAll) != 1 {
-		t.Errorf("under keep-all the lines are %q, want one — the value forbids "+
-			"every opportunity in the text, so it overflows rather than dividing "+
-			"anything, and if it divides the phrase too then the test above says "+
-			"nothing about auto-phrase", keepAll)
+		strings.Replace(autoPhraseCSS, "auto-phrase", "keep-all", 1)+widerCSS)
+	if strings.Join(phrase, "|") == strings.Join(keepAll, "|") {
+		t.Errorf("in a box four characters wide auto-phrase and keep-all both "+
+			"set %q, so the test above says nothing about auto-phrase", phrase)
+	}
+	if want := "楽しい"; len(phrase) == 0 || phrase[0] != want {
+		t.Errorf("auto-phrase began %q, want a first line of %q — the phrase "+
+			"boundary is an opportunity it keeps", phrase, want)
+	}
+	if want := "楽しいド"; len(keepAll) == 0 || keepAll[0] != want {
+		t.Errorf("keep-all began %q, want a first line of %q — it keeps no "+
+			"boundary, so the line fills", keepAll, want)
 	}
 }
 
