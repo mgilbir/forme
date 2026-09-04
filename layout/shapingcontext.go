@@ -1,6 +1,8 @@
 package layout
 
 import (
+	"strings"
+
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -108,11 +110,11 @@ func (l *layouter) linkShapingContext(items []inlineItem) []inlineItem {
 		// all. See Item.ContextKerns.
 		kerns := true
 		if j, ok := shapingNeighbour(items, i, -1); ok {
-			before = items[j].Text
+			before = textBetween(items, j, i)
 			kerns = kerns && items[j].Face == items[i].Face
 		}
 		if j, ok := shapingNeighbour(items, i, +1); ok {
-			after = items[j].Text
+			after = textBetween(items, i+1, j+1)
 			kerns = kerns && items[j].Face == items[i].Face
 		}
 		if before == "" && after == "" {
@@ -146,11 +148,33 @@ func isShapedRun(item inlineItem) bool {
 // width, and the record of a box that is out of flow — and stops at anything
 // else, because anything else is either room between the two runs or is not text.
 func shapingNeighbour(items []inlineItem, i, step int) (int, bool) {
+	// The last item that draws nothing, which is the answer where there is no
+	// run beyond it: a zero width joiner written at the edge of a box is the
+	// whole of the context, and its characters are what says which form the
+	// letter beside it takes. The suite's shaping-join-002 is a table cell
+	// holding "&zwj;&#x0627;&zwj;" and nothing else.
+	last, blank := 0, false
 	for j := i + step; j >= 0 && j < len(items); j += step {
 		switch {
 		case items[j].Abs != nil || items[j].Float != nil:
 			// Out of flow: written between the two runs and drawn somewhere
 			// else entirely, so it stands between nothing.
+			continue
+		case drawsNothing(items[j]):
+			last, blank = j, true
+			// A character that sets no paper and takes no room, which between
+			// two runs is the same nothing an out-of-flow box is. The soft
+			// hyphen is the one a document writes inside a word: SplitAtBreaks
+			// keeps it, so it is an item of its own, and treating it as a run
+			// gave the run on each side a context consisting of one invisible
+			// character and nothing else. Arabic either side of a "&shy;" came
+			// out in isolated forms — a joined word broken into letters by a
+			// mark that is not drawn at all.
+			//
+			// The text is *kept* rather than skipped over: textBetween gathers
+			// it back, because a shaper reads the ignorable characters as
+			// transparent and a context with a hole in it is a different
+			// context.
 			continue
 		case items[j].Inset:
 			// An inline box's own margin, border and padding. A zero one is a
@@ -160,16 +184,54 @@ func shapingNeighbour(items []inlineItem, i, step int) (int, bool) {
 			if facingInset(items[j], items[i].Level&1 == 1) == 0 {
 				continue
 			}
-			return 0, false
+			return last, blank
 		case !isShapedRun(items[j]):
-			return 0, false
+			return last, blank
 		}
 		if !sameShaping(items[i], items[j]) {
-			return 0, false
+			return last, blank
 		}
 		return j, true
 	}
-	return 0, false
+	return last, blank
+}
+
+// textBetween is the text of the items in [from, to), which is what a run on one
+// side of them reads as its context.
+//
+// It is a range and not one item because shapingNeighbour looks through what
+// draws nothing: a soft hyphen between two words is an item, and the word on the
+// far side of it needs the word *and* the hyphen, in that order, or the shaper
+// is given a context the document does not have.
+func textBetween(items []inlineItem, from, to int) string {
+	if to-from == 1 {
+		return items[from].Text
+	}
+	var b strings.Builder
+	for k := from; k < to; k++ {
+		b.WriteString(items[k].Text)
+	}
+	return b.String()
+}
+
+// drawsNothing reports whether an item is text that sets no paper and takes no
+// room: every character of it default-ignorable, and no width to stand in.
+//
+// The width is asked as well as the characters because the two can disagree —
+// a face may give an ignorable character an advance, and a character that moves
+// the pen is room between the letters however invisible it is. §8.1 breaks
+// shaping where there is room between them, which is the rule the insets above
+// are read by.
+func drawsNothing(item inlineItem) bool {
+	if item.Text == "" || item.Width != 0 {
+		return false
+	}
+	for _, r := range item.Text {
+		if !isDefaultIgnorable(r) {
+			return false
+		}
+	}
+	return true
 }
 
 // facingInset is how much of an inline box's own horizontal margin, border and

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -241,4 +242,142 @@ func TestAJoinedWordIsNarrowerThanLettersApart(t *testing.T) {
 		t.Errorf("letters set apart measure %gpx against the joined word's %gpx",
 			apart, whole)
 	}
+}
+
+// A character that draws nothing does not break shaping, and the soft hyphen is
+// the one a document writes inside a word.
+//
+// SplitAtBreaks keeps it — the mark is what says a line may end there, and
+// "hyphens: none" has to be able to see it again — and the fallback puts it in
+// whatever face has it, so it arrives here as an item of its own. An item is
+// what the context is read from, so the run either side was given a context
+// consisting of one invisible character and nothing else, and a joined Arabic
+// word written with a "&shy;" in the middle came out as isolated letters.
+//
+// Asked of the three functions rather than of a document, because what a
+// document produces depends on which face has the soft hyphen — and the rule is
+// about an item that draws nothing, however it came to be one.
+func TestTheShapingContextLooksThroughWhatDrawsNothing(t *testing.T) {
+	face := joiningFace(t)
+	items := []inlineItem{
+		{Text: "\u062f\u0627\u0645\u064a", Face: face, Width: 100},
+		{Text: "\u00ad", Face: face},
+		{Text: "\u062f\u0649", Face: face, Width: 100},
+	}
+	if !drawsNothing(items[1]) {
+		t.Fatal("a soft hyphen with no width was read as something that draws")
+	}
+	j, ok := shapingNeighbour(items, 2, -1)
+	if !ok || j != 0 {
+		t.Fatalf("the run before \u062f\u0649 is item %d (found=%v), want 0 — the "+
+			"soft hyphen between them is not a run", j, ok)
+	}
+	// The characters it looked through are kept: a shaper reads them as
+	// transparent, and a context with a hole in it is a different context.
+	if got, want := textBetween(items, j, 2), "\u062f\u0627\u0645\u064a\u00ad"; got != want {
+		t.Errorf("the context is %q, want %q", got, want)
+	}
+	j, ok = shapingNeighbour(items, 0, +1)
+	if !ok || j != 2 {
+		t.Fatalf("the run after the word is item %d (found=%v), want 2", j, ok)
+	}
+	if got, want := textBetween(items, 1, 3), "\u00ad\u062f\u0649"; got != want {
+		t.Errorf("the context after is %q, want %q", got, want)
+	}
+}
+
+// And a joiner with nothing beyond it is still the context.
+//
+// It is the other half of the same rule and the two pull opposite ways: looking
+// *through* what draws nothing is what joins the word above, and a box holding
+// nothing but a joiner and a letter has nothing on the far side to look through
+// to. The suite's shaping-join-002 is that box — "&zwj;&#x0627;&zwj;" in a table
+// cell, with the joiners in a different font — and dropping the context there
+// puts the alef in its isolated form where the test asks for its final one.
+func TestAJoinerWithNothingBeyondItIsStillTheContext(t *testing.T) {
+	face := joiningFace(t)
+	items := []inlineItem{
+		{Text: "\u200d", Face: face},
+		{Text: "\u0627", Face: face, Width: 100},
+		{Text: "\u200d", Face: face},
+	}
+	for _, c := range []struct {
+		step, want int
+		what       string
+	}{
+		{-1, 0, "before"},
+		{+1, 2, "after"},
+	} {
+		j, ok := shapingNeighbour(items, 1, c.step)
+		if !ok || j != c.want {
+			t.Errorf("the context %s the letter is item %d (found=%v), want %d — "+
+				"the joiner was looked through and then thrown away",
+				c.what, j, ok, c.want)
+		}
+	}
+	// And the same where what stops the walk is not the end of the items but
+	// something between them: a forced break, and an inline box's own padding.
+	// Both end the context and neither takes the joiner with it.
+	for _, stop := range []struct {
+		item inlineItem
+		what string
+	}{
+		{inlineItem{Forced: true}, "a forced break"},
+		{inlineItem{Inset: true, InsetRight: 100, Width: 100}, "an inline box's padding"},
+	} {
+		with := []inlineItem{items[0], items[1], items[2], stop.item}
+		if j, ok := shapingNeighbour(with, 1, +1); !ok || j != 2 {
+			t.Errorf("with %s beyond it, the context after the letter is item %d "+
+				"(found=%v), want 2 — the joiner is what is left", stop.what, j, ok)
+		}
+	}
+}
+
+// An invisible character that takes room is room between the letters, which is
+// what §8.1 breaks shaping for. It is the same reading the insets above are
+// given — a zero margin is a boundary and one with width is a gap — and it is
+// why the width is asked as well as the characters.
+func TestSomethingInvisibleThatTakesRoomStillBreaksShaping(t *testing.T) {
+	face := joiningFace(t)
+	items := []inlineItem{
+		{Text: "\u062f\u0627\u0645\u064a", Face: face, Width: 100},
+		{Text: "\u00ad", Face: face, Width: 5},
+		{Text: "\u062f\u0649", Face: face, Width: 100},
+	}
+	if drawsNothing(items[1]) {
+		t.Error("a character with an advance was read as drawing nothing")
+	}
+	// And a character that draws, whatever it measures. A run of no width is
+	// not the same thing as a run of nothing — "font-size: 0" makes one out of
+	// ordinary letters — and looking through it would give the letter beyond a
+	// context it does not have.
+	if drawsNothing(inlineItem{Text: "\u062f", Face: face}) {
+		t.Error("a letter with no width was read as drawing nothing")
+	}
+	if j, ok := shapingNeighbour(items, 2, -1); j != 1 || !ok {
+		t.Errorf("the context before is item %d (found=%v), want 1 — a run that "+
+			"takes room is the neighbour, whatever it draws", j, ok)
+	}
+}
+
+// joiningFace is a face whose letters change shape with their neighbours, which
+// is what makes any of this observable.
+func joiningFace(t *testing.T) *shape.Face {
+	t.Helper()
+	dir := os.Getenv("NOTO_FONTS")
+	if dir == "" {
+		t.Skip("set NOTO_FONTS (or run `make test-wpt`) for a face that joins")
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "NotoSansArabic-Regular.ttf"))
+	if err != nil {
+		t.Skip("no Arabic face: ", err)
+	}
+	face, err := shape.Load(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !face.HasJoiningForms() {
+		t.Skip("the face here does not join")
+	}
+	return face
 }
