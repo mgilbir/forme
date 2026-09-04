@@ -1,9 +1,29 @@
-.PHONY: linebreak vertical dictionaries test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors noto-fonts clean-noto-fonts wpt test-wpt clean-wpt varinstance test-varinstance
+.PHONY: test-corpora linebreak vertical dictionaries test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors noto-fonts clean-noto-fonts wpt test-wpt clean-wpt varinstance test-varinstance
 
 test:
 	gofmt -l . | grep -v '^testdata/' && exit 1 || true
 	go vet ./...
 	go test -count=1 ./...
+
+# The same suite with every corpus in the environment, which is the only way most
+# of it runs at all.
+#
+# "test" above hands `go test` an empty environment, and a test that needs a Noto
+# face or the reftest checkout answers that by skipping. A hundred and fifty-six
+# of them do — every test that loads a fallback face, every reftest, the two
+# colour oracles, and the grapheme suite's own teeth — and only two were reached
+# by anything else the gate ran. They passed; nothing was checking that they
+# still did, which is the same as not having them.
+#
+# So this is where they run. It fetches what each corpus needs first, because a
+# target that quietly skips is the thing it was written to stop.
+test-corpora: wpt noto-fonts css-tests bidi-tests grapheme-tests $(HTML_ENTITIES)
+	WPT_TESTS="$(abspath $(WPT_DIR))" \
+	NOTO_FONTS="$(abspath $(NOTO_DIR))" \
+	CSS_PARSING_TESTS="$(abspath $(CSS_TESTS_DIR))" \
+	UNICODE_BIDI_TESTS="$(abspath $(BIDI_DIR))" \
+	UNICODE_GRAPHEME_TESTS="$(abspath $(GRAPHEME_DIR))" \
+	  go test -count=1 ./...
 
 # The same suite under the race detector.
 #
@@ -388,8 +408,13 @@ $(GRAPHEME_DIR)/.ok:
 	$(FETCH) -o $(GRAPHEME_DIR)/GraphemeBreakTest.txt $(UCD_URL)/auxiliary/GraphemeBreakTest.txt
 	touch $@
 
+# TestTheConformanceSuiteHasTeeth is named as well as matched, because it is the
+# test that plants a defect and checks the conformance sweep above catches it —
+# and "TestGrapheme" does not match its name, so for as long as that was the
+# whole pattern the check on the check never ran.
 test-grapheme: grapheme-tests
-	UNICODE_GRAPHEME_TESTS=$(abspath $(GRAPHEME_DIR)) go test -v -run TestGrapheme -count=1 ./segment
+	UNICODE_GRAPHEME_TESTS=$(abspath $(GRAPHEME_DIR)) \
+	  go test -v -run 'TestGrapheme|TestTheConformanceSuiteHasTeeth' -count=1 ./segment
 
 clean-grapheme-tests:
 	rm -rf $(GRAPHEME_DIR)
@@ -427,8 +452,13 @@ $(CSS_TESTS_DIR)/.ok:
 
 # The path is absolute because `go test ./css` runs with the package directory
 # as its working directory, not the repository root.
+# ./style as well as ./css: the colour oracle reads the same corpus, checking
+# every colour the CSS Syntax tests name against what this engine parses it to,
+# and no target set the variable for it — so it skipped, everywhere, always.
 test-css: css-tests
-	CSS_PARSING_TESTS=$(abspath $(CSS_TESTS_DIR)) go test -v -run TestCSSOracle -count=1 ./css
+	CSS_PARSING_TESTS=$(abspath $(CSS_TESTS_DIR)) go test -v -count=1 \
+	  -run 'TestCSSOracle|TestColorOracle|TestUnsupportedColorFilesAreAccountedFor' \
+	  ./css ./style
 
 clean-css-tests:
 	rm -rf $(CSS_TESTS_DIR)
@@ -443,9 +473,17 @@ clean-css-tests:
 # this is a rare errand rather than part of a build.
 HTML_ENTITIES := testdata/html/entities.json
 
-html-entities:
-	mkdir -p $(dir $(HTML_ENTITIES))
-	$(FETCH) -o $(HTML_ENTITIES) https://html.spec.whatwg.org/entities.json
+# The fetch is a target of its own so that a caller can have the standard's file
+# without having the table rebuilt from it. That is the difference between
+# checking the table and asserting it equals itself: TestEntityTableMatchesTheStandard
+# reads this file and compares it with the committed html/entities.go, and if
+# fetching it also regenerated that file the test would compare the generator's
+# output with the generator's output and pass whatever either said.
+$(HTML_ENTITIES):
+	mkdir -p $(dir $@)
+	$(FETCH) -o $@ https://html.spec.whatwg.org/entities.json
+
+html-entities: $(HTML_ENTITIES)
 	go run ./cmd/genhtmlentities -in $(HTML_ENTITIES) -out html/entities.go
 	gofmt -w html/entities.go
 

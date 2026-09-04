@@ -85,7 +85,8 @@ jobs:
             testdata/unicode-bidi
             testdata/unicode-grapheme
             testdata/notocjk
-          key: corpora-2-${{ hashFiles('Makefile') }}
+            testdata/html
+          key: corpora-3-${{ hashFiles('Makefile') }}
 
       - name: Fetch whatever the cache did not have
         run: make wpt noto-fonts css-tests bidi-tests grapheme-tests notocjk
@@ -110,6 +111,19 @@ jobs:
           WPT_TESTS="$PWD/testdata/wpt" \
           NOTO_FONTS="$PWD/testdata/fonts-noto" \
             go test -v -run TestWPT -count=1 ./layout/
+
+      # And everything else that needs a corpus, which is most of this
+      # repository's tests. The "make test" job above runs them with an empty
+      # environment, so a hundred and fifty-four of them skip there and were
+      # reached by nothing here either: the steps above name what they run, and
+      # what they name is the reftest ratchet and four conformance sweeps.
+      #
+      # This is the step that runs the rest. It re-runs the ratchet as well,
+      # which is half a minute and is left alone deliberately — the step above
+      # exists for its -v output, which prints the count and the failing names,
+      # and folding the two would trade a legible log for that half minute.
+      - name: Every other test that needs a corpus
+        run: make test-corpora
 
   race:
     name: the race detector
