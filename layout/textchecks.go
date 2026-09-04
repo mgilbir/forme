@@ -215,6 +215,22 @@ func (l *layouter) checkGlyphs(b *Box, face *shape.Face, text string) {
 			// controlchar.go.
 			continue
 		}
+		if isDefaultIgnorable(r) {
+			// A character that draws nothing cannot be missing from the page:
+			// there is nothing of it to be missing. This finding says "the
+			// character is missing from the page and from the text extracted
+			// out of it", and neither half is true of a joiner or a variation
+			// selector or a soft hyphen.
+			//
+			// The comment above says shaping answers "not missing" for all of
+			// them, and it is nearly right — that was measured on Ahem, and
+			// Ahem does report one: U+180E MONGOLIAN VOWEL SEPARATOR, which
+			// Unicode reclassified from a space to a format character in 6.3
+			// and which the suite's line-breaking-atomic-015 writes. So the
+			// rule is asked directly rather than left to a coincidence about
+			// how faces happen to shape.
+			continue
+		}
 		if _, missing := face.ShapeGlyphs(string(r)); missing == 0 {
 			continue
 		}
