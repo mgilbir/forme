@@ -119,3 +119,54 @@ func TestAMergedRunReportsOnlyItsOwnMissingCharacters(t *testing.T) {
 		t.Errorf("a run with one unset character reported %d missing, want 1", missing)
 	}
 }
+
+// TestAGroupsRunsAddUpToTheWholeWord.
+//
+// A run of a merge group is measured from the two ends of the span it covers
+// within the group rather than as a width of its own, so that a caller rounding
+// to a layout unit can round the *ends*. Every run then begins where the one
+// before it ended, and the rounded widths sum to the group's own rounded width.
+//
+// Rounding the differences instead leaves a word written in three runs a
+// sixty-fourth of a pixel from the same word written in one, which is what the
+// suite's shaping_lig-000 came out as: a lam-alef ligature in the right glyphs
+// at the wrong pen.
+func TestAGroupsRunsAddUpToTheWholeWord(t *testing.T) {
+	f := mergeFace(t)
+	const size = 36
+	_, whole := f.MeasureShapedMergedSpan("aab", size, "", "", "", "", true, Features{})
+	for _, parts := range [][]string{
+		{"a", "ab"},
+		{"aa", "b"},
+		{"a", "a", "b"},
+	} {
+		var head, through []float64
+		for i := range parts {
+			pre, post := "", ""
+			for k := 0; k < i; k++ {
+				pre += parts[k]
+			}
+			for k := i + 1; k < len(parts); k++ {
+				post += parts[k]
+			}
+			h, t2 := f.MeasureShapedMergedSpan(parts[i], size, pre, post, pre, post,
+				true, Features{})
+			head = append(head, h)
+			through = append(through, t2)
+		}
+		if head[0] != 0 {
+			t.Errorf("%v: the first run begins at %v, want 0", parts, head[0])
+		}
+		for i := 1; i < len(parts); i++ {
+			if head[i] != through[i-1] {
+				t.Errorf("%v: run %d begins at %v where run %d ended at %v; the "+
+					"spans have to meet or the rounded widths do not telescope",
+					parts, i, head[i], i-1, through[i-1])
+			}
+		}
+		if got := through[len(through)-1]; got != whole {
+			t.Errorf("%v: the divided word ends at %v and the whole one at %v",
+				parts, got, whole)
+		}
+	}
+}

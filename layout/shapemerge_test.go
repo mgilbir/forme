@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -156,11 +157,60 @@ func textEndOf(t *testing.T, set FontSet, htmlSrc string) style.Unit {
 		if !ok || v.Face == nil {
 			continue
 		}
-		w, _ := style.FromPx(v.Face.MeasureShapedMerged(v.Text, 36, v.PreContext,
-			v.PostContext, v.MergePre, v.MergePost, v.ContextKerns, v.Features))
+		// The glyphs the run actually draws, which is the width a reader sees.
+		// Measuring the run's text instead would ask a second question — what
+		// the characters would come to — and a run whose characters were
+		// swallowed by its neighbour's ligature answers it differently.
+		glyphs, _ := ShapedGlyphs(v)
+		w, _ := style.FromPx(shape.MeasureGlyphs(glyphs, 36))
 		if e := v.At.X.Add(w); e > end {
 			end = e
 		}
 	}
 	return end
+}
+
+// TestWhatFollowsADividedWordStartsWhereItWould.
+//
+// A run of a merge group is measured from the two ends of its span within the
+// group, each rounded to a layout unit, rather than as a width of its own.
+// Every run then begins where the one before it ended, and the group takes the
+// same room as the undivided word — so whatever follows it on the line starts in
+// the same place.
+//
+// Rounding each run's own width instead leaves the group a sixty-fourth of a
+// pixel out, and everything after it on the line inherits the error. It is what
+// the suite's shaping_lig-000 came out as: a lam-alef ligature drawn in the
+// right glyphs at a pen one unit from the reference's.
+func TestWhatFollowsADividedWordStartsWhereItWould(t *testing.T) {
+	set := ligatureFaceSet(t)
+	// Where the *second* word begins, which is the first word's width made
+	// visible: a pen position rather than a measurement of our own.
+	secondWordAt := func(markup string) style.Unit {
+		t.Helper()
+		root := layoutWithFonts(t, set, `<div id="p">`+markup+` x</div>`,
+			`#p { font-size: 36px; white-space: pre }`)
+		var last style.Unit
+		for _, op := range Paint(root) {
+			if v, ok := op.(DrawText); ok && v.Text == "x" {
+				last = v.At.X
+			}
+		}
+		return last
+	}
+	whole := secondWordAt("office")
+	if whole == 0 {
+		t.Fatal("the second word was not drawn")
+	}
+	for _, markup := range []string{
+		`of<span>f</span>ice`,
+		`o<span>f</span>f<span>i</span>ce`,
+		`<span>o</span><span>f</span><span>f</span><span>i</span><span>c</span><span>e</span>`,
+	} {
+		if got := secondWordAt(markup); got != whole {
+			t.Errorf("after %q the next word begins at %v, and after the whole "+
+				"word at %v; a divided word takes the same room as an undivided one",
+				markup, got.Px(), whole.Px())
+		}
+	}
 }

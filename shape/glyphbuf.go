@@ -609,3 +609,21 @@ func (f *Face) missingIn(s string) int {
 	}
 	return n
 }
+
+// shapeWholeGroup shapes a run together with the neighbours that merge with it
+// and reports the glyphs of the whole, with the byte range the run itself
+// covers. It is what MeasureShapedMergedSpan cuts its two distances from.
+func (f *Face) shapeWholeGroup(s, before, after, mergeBefore, mergeAfter string,
+	kerns bool, off Features) (glyphs []Glyph, lo, hi int) {
+
+	outer := shapeContext{kerns: kerns, features: off}
+	if mergeBefore == "" {
+		outer.before = before
+	}
+	if mergeAfter == "" {
+		outer.after = after
+	}
+	whole := mergeBefore + s + mergeAfter
+	glyphs, _ = f.shapeGlyphsWith(whole, nil, outer)
+	return glyphs, len(mergeBefore), len(mergeBefore) + len(s)
+}
