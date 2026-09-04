@@ -818,6 +818,8 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 						Decorations:   decorations,
 						LetterSpacing: trackingOf(item).Add(interChar),
 						PreContext:    item.PreContext, PostContext: item.PostContext,
+						MergePre:     item.MergePre,
+						MergePost:    item.MergePost,
 						ContextKerns: item.ContextKerns,
 						Upright:      item.Upright,
 						Features:     item.Off,

@@ -118,6 +118,9 @@ type DrawText struct {
 	// They are context and not content: nothing of them is drawn, and nothing of
 	// them belongs to the text a reader extracts from the page.
 	PreContext, PostContext string
+	// MergePre and MergePost say that side may contribute glyphs and not only
+	// forms. See paragraph.Item.MergePre.
+	MergePre, MergePost string
 	// ContextKerns says the neighbours above are set in this run's own face, so
 	// a pair that spans the boundary is this font's pair. It is false where font
 	// fallback put the neighbour in another face: a character is the same
@@ -1324,6 +1327,8 @@ func (p *painter) lines(f *Fragment) {
 				Text:         drawableText(run.Text),
 				PreContext:   run.PreContext,
 				PostContext:  run.PostContext,
+				MergePre:     run.MergePre,
+				MergePost:    run.MergePost,
 				ContextKerns: run.ContextKerns,
 				RTL:          run.RTL,
 				Face:         run.Face,
@@ -1507,10 +1512,12 @@ func ShapedGlyphs(v DrawText) ([]shape.Glyph, int) {
 		// The neighbour is set in another face, so its characters decide this
 		// run's joined shapes and its glyphs decide nothing. See
 		// shape.ShapeGlyphsAcrossFaces.
-		return v.Face.ShapeGlyphsAcrossFaces(ShapedText(v), v.PreContext, v.PostContext,
+		return v.Face.ShapeGlyphsMerged(ShapedText(v), v.PreContext, v.PostContext,
+			v.MergePre, v.MergePost, false,
 			v.Features)
 	}
-	return v.Face.ShapeGlyphsInContext(ShapedText(v), v.PreContext, v.PostContext,
+	return v.Face.ShapeGlyphsMerged(ShapedText(v), v.PreContext, v.PostContext,
+		v.MergePre, v.MergePost, true,
 		v.Features)
 }
 

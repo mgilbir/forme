@@ -161,6 +161,33 @@ func (f *Face) ShapeGlyphsAcrossFaces(s, before, after string, off Features) ([]
 		shapeContext{before: before, after: after, features: off})
 }
 
+// ShapeGlyphsMerged is ShapeGlyphsInContext where a neighbour may contribute
+// glyphs to this run and not only forms.
+//
+// §8.1's boundary "does not break shaping", and a ligature is shaping: "of<span
+// >f</span>ice" is one word and the face's ffi is what a reader of it expects.
+// The two named sides are shaped together with this run and the glyphs divided
+// afterwards, by the cluster each came from — so the ligature belongs to
+// whichever run holds its first character, and the other draws nothing for the
+// characters it swallowed and takes none of its width.
+//
+// The sides are named separately from the context because the two questions have
+// different answers. A form crosses a change of colour and a raised baseline —
+// the suite's shaping-023 sets the middle Mongolian letter blue and asks for the
+// three to join — and a *glyph* cannot: one glyph is drawn once, in one colour,
+// on one baseline, so a ligature across such a boundary would paint half a word
+// in the wrong colour. kerns is the same distinction drawn a third time and is
+// left where it was.
+func (f *Face) ShapeGlyphsMerged(s, before, after, mergeBefore, mergeAfter string,
+	kerns bool, off Features) ([]Glyph, int) {
+
+	return f.shapeGlyphsWith(s, nil, shapeContext{
+		before: before, after: after,
+		mergeBefore: mergeBefore, mergeAfter: mergeAfter,
+		kerns: kerns, features: off,
+	})
+}
+
 // shapeContext is the text either side of the run being shaped, in logical
 // order: before is what precedes it and after is what follows.
 //
@@ -169,7 +196,15 @@ func (f *Face) ShapeGlyphsAcrossFaces(s, before, after string, off Features) ([]
 // case where they are not.
 type shapeContext struct {
 	before, after string
-	kerns         bool
+	// mergeBefore and mergeAfter are the text either side that may contribute
+	// *glyphs* and not only forms: the run and they are shaped as one string
+	// and the glyphs divided afterwards, so a ligature that spans the boundary
+	// is formed. Each is the whole of its side of the group rather than the
+	// neighbour alone — every run of a group has to shape the same string, or
+	// two of them disagree about where a ligature begins and a character
+	// belongs to neither. See shapeMerged.
+	mergeBefore, mergeAfter string
+	kerns                   bool
 	// features is what the document turned off. See Features, and note that it
 	// travels with the context rather than beside it because it is the same
 	// kind of fact: something about the run that its own text does not say.
@@ -265,6 +300,9 @@ func (f *Face) shapeGlyphsWith(s string, extra []string, ctx shapeContext) ([]Gl
 func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, ctx shapeContext) ([]Glyph, int) {
 	if !f.composite() {
 		return f.shapeByCode(s, rtl)
+	}
+	if out, missing, ok := f.shapeMerged(s, script, rtl, extra, ctx); ok {
+		return out, missing
 	}
 	// Rule L4: a bracket in a right-to-left run is drawn as the bracket that
 	// mirrors it, and the substitution is on the character, before the font is
@@ -511,4 +549,63 @@ func reverseGlyphs(buf []Glyph) {
 	for i, j := 0, len(buf)-1; i < j; i, j = i+1, j-1 {
 		buf[i], buf[j] = buf[j], buf[i]
 	}
+}
+
+// shapeMerged shapes a run together with the neighbours that may contribute
+// glyphs to it, and keeps the glyphs that belong to the run.
+//
+// The whole is shaped once and cut by cluster: a glyph's Cluster is the byte
+// offset of the first character it came from, so a ligature that swallows the
+// start of this run has a cluster in the run before it and is left there. The
+// run then draws nothing for those characters and takes none of their width,
+// which is the arithmetic that makes the two halves add up to what one run
+// would have measured.
+//
+// The sides that may *not* merge stay outside as ordinary context, so a run
+// with a mergeable neighbour on one side and a plain one on the other still
+// takes its forms from both.
+//
+// It reports false where nothing may merge, which is every run of almost every
+// document: the caller then takes the ordinary path and pays nothing for this.
+func (f *Face) shapeMerged(s string, script uint16, rtl bool, extra []string,
+	ctx shapeContext) ([]Glyph, int, bool) {
+
+	if ctx.mergeBefore == "" && ctx.mergeAfter == "" {
+		return nil, 0, false
+	}
+	pre, post := ctx.mergeBefore, ctx.mergeAfter
+	// What is merged already carries the forms of that side, so the context
+	// left outside is the other one's — and only where nothing merged there.
+	outer := shapeContext{kerns: ctx.kerns, features: ctx.features}
+	if pre == "" {
+		outer.before = ctx.before
+	}
+	if post == "" {
+		outer.after = ctx.after
+	}
+	glyphs, _ := f.shapeGlyphsIn(pre+s+post, script, rtl, extra, outer)
+	lo, hi := len(pre), len(pre)+len(s)
+	out := glyphs[:0:0]
+	for _, g := range glyphs {
+		if g.Cluster < lo || g.Cluster >= hi {
+			continue
+		}
+		g.Cluster -= lo
+		out = append(out, g)
+	}
+	// The count of characters no glyph was found for is the whole string's, and
+	// this run is a part of it. Reporting the whole would have a run named for
+	// its neighbour's missing characters as well as its own.
+	return out, f.missingIn(s), true
+}
+
+// missingIn counts the characters of a string this face has no glyph for.
+func (f *Face) missingIn(s string) int {
+	n := 0
+	for _, r := range s {
+		if _, ok := f.GlyphID(r); !ok {
+			n++
+		}
+	}
+	return n
 }

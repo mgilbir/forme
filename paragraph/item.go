@@ -252,6 +252,13 @@ type Item struct {
 	// the layer that fills them in does not even ask unless the face carries the
 	// positional forms. See layout's linkShapingContext.
 	PreContext, PostContext string
+	// MergePre and MergePost say that the neighbour on that side may contribute
+	// *glyphs* to this run and not only forms, so a ligature spanning the
+	// boundary is formed. See shape.ShapeGlyphsMerged, and linkShapingContext
+	// for the stricter question they are the answer to: a form crosses a change
+	// of colour and a raised baseline, and a glyph — drawn once, in one colour,
+	// on one baseline — cannot.
+	MergePre, MergePost string
 	// ContextKerns says the neighbours above are set in this run's own face.
 	//
 	// Which of its four shapes a letter takes is decided by the characters
@@ -706,6 +713,7 @@ func (br *Breaker) SplitItem(item Item, at int) (head, tail Item) {
 func (it Item) shaping() Shaping {
 	return Shaping{
 		Before: it.PreContext, After: it.PostContext,
+		MergeBefore: it.MergePre, MergeAfter: it.MergePost,
 		ContextKerns: it.ContextKerns, Upright: it.Upright, Off: it.Off,
 	}
 }

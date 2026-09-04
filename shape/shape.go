@@ -54,6 +54,23 @@ func (f *Face) MeasureShapedInContext(s string, size float64, before, after stri
 	return MeasureGlyphs(glyphs, size)
 }
 
+// MeasureShapedMerged is MeasureShapedInContext where a neighbour may
+// contribute glyphs to the run. See ShapeGlyphsMerged.
+//
+// It is the same call the painting goes through, which is the whole of why it
+// exists: a run whose first characters were swallowed by its neighbour's
+// ligature draws narrower than its text says, and a measure that did not agree
+// would fill a line to one width and paint it at another.
+func (f *Face) MeasureShapedMerged(s string, size float64,
+	before, after, mergeBefore, mergeAfter string, kerns bool, off Features) float64 {
+
+	if !f.composite() {
+		return f.Measure(s, size)
+	}
+	glyphs, _ := f.ShapeGlyphsMerged(s, before, after, mergeBefore, mergeAfter, kerns, off)
+	return MeasureGlyphs(glyphs, size)
+}
+
 // HasKerning reports whether the font carries pair kerning this package could
 // read. A caller laying out text can use it to decide whether shaping is worth
 // the extra spans, and a test can use it to notice a font whose kerning went

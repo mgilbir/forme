@@ -26,12 +26,20 @@ import (
 // as though the whole were one run. The run is still shaped, measured and drawn
 // on its own — the context decides which shapes, and nothing else.
 //
-// So a ligature that *spans* the boundary is not formed: a lam-alef written with
-// the lam in one run and the alef in another stays two letters. The suite has a
-// test of exactly that, shaping_lig-000, and it is the one of the twenty-three
-// that this does not fix. It cannot be fixed this way and probably not any way
-// that keeps a run measurable on its own: the glyph would belong to two runs at
-// once, and either both draw it or one of them draws nothing.
+// A ligature that *spans* the boundary is formed as well, and that is the
+// second half of this file rather than something it declines. The runs of a
+// group are shaped as one string and the glyphs divided between them by the
+// cluster each came from, so the glyph belongs to whichever run holds its first
+// character and the other draws nothing for the characters it swallowed. See
+// mergeGroupAround, and shape.ShapeGlyphsMerged for the division.
+//
+// This used to say the case could not be fixed "any way that keeps a run
+// measurable on its own", and the answer to that is that a run stays measurable:
+// it measures the glyphs it kept. What it took to make true was that the measure
+// and the painting go through the same call, and that the group and not the
+// neighbour is what is shaped — two runs of one word that shape different
+// strings disagree about where a ligature begins, and a character between them
+// is drawn by neither.
 //
 // # Where the boundary does break shaping
 //
@@ -117,10 +125,16 @@ func (l *layouter) linkShapingContext(items []inlineItem) []inlineItem {
 			after = textBetween(items, i+1, j+1)
 			kerns = kerns && items[j].Face == items[i].Face
 		}
+		// And the text either side that may contribute *glyphs* and not only
+		// forms, which is a third question and the strictest of them. It is the
+		// whole of the group rather than the neighbour alone: every run of one
+		// has to shape the same string. See mergeGroupAround.
+		mergePre, mergePost := l.mergeGroupAround(items, i)
 		if before == "" && after == "" {
 			continue
 		}
 		items[i].PreContext, items[i].PostContext = before, after
+		items[i].MergePre, items[i].MergePost = mergePre, mergePost
 		items[i].ContextKerns = kerns
 		// The advance changes with the form, so what was measured without the
 		// context is not what will be drawn with it. Measuring again is the
@@ -318,7 +332,7 @@ func sameShaping(a, b inlineItem) bool {
 // contextCanChange reports whether the text either side of a run can change what
 // the run is: which glyphs it is set in, or where they sit.
 func contextCanChange(f *shape.Face) bool {
-	return f.HasJoiningForms() || f.HasKerning()
+	return f.HasJoiningForms() || f.HasKerning() || f.HasLigatures()
 }
 
 // itemShaping is everything about how an item is set that its own text does not
@@ -326,6 +340,140 @@ func contextCanChange(f *shape.Face) bool {
 func itemShaping(it *inlineItem) shaping {
 	return shaping{
 		Before: it.PreContext, After: it.PostContext,
+		MergeBefore: it.MergePre, MergeAfter: it.MergePost,
 		ContextKerns: it.ContextKerns, Upright: it.Upright, Off: it.Off,
 	}
+}
+
+// mergeGroupAround is the text before and after the run at i that may be shaped
+// *with* it, which is every run of the group its boundaries do not break.
+//
+// The whole group and not the neighbour alone, and that is the correction that
+// made this work at all. Shaped a neighbour at a time the runs of one word
+// disagree: given "of|f|ice", the first shapes "off" and forms an ff, the last
+// shapes "fice" and forms an fi, and the "i" between them belongs to a ligature
+// in one reading and to a glyph in the other — so it is drawn by neither and
+// falls off the page. One string for the group and each run keeping its own
+// slice of the glyphs is the only division that adds up.
+func (l *layouter) mergeGroupAround(items []inlineItem, i int) (before, after string) {
+	for j := i; ; {
+		k, ok := shapingNeighbour(items, j, -1)
+		if !ok || !sharesGlyphsWith(items, k, j) {
+			break
+		}
+		before = textBetween(items, k, j) + before
+		j = k
+	}
+	for j := i; ; {
+		k, ok := shapingNeighbour(items, j, +1)
+		if !ok || !sharesGlyphsWith(items, j, k) {
+			break
+		}
+		after += textBetween(items, j+1, k+1)
+		j = k
+	}
+	return before, after
+}
+
+// sharesGlyphsWith reports whether the runs at from and to — which are
+// neighbours, with nothing but invisible items between them — may be shaped as
+// one string, so that a ligature spanning the boundary is formed.
+//
+// It is the strictest of the three questions this file asks about a boundary,
+// and the other two are why it is asked separately.
+//
+//   - A *form* crosses almost everything. §8.1's boundary does not break
+//     shaping, and the suite's shaping-023 sets the middle Mongolian letter blue
+//     and still asks for the three to join.
+//   - A *kern pair* crosses a colour but not a font or a size, because a kern is
+//     a distance one font states at one size. That is ContextKerns.
+//   - A *glyph* crosses neither. One glyph is drawn once, in one colour, on one
+//     baseline: a ligature across a change of either would paint half a word in
+//     the wrong colour or leave half of it unraised, and the suite writes both —
+//     shaping-023 to -025 for the colour and boundary-shaping-002 and -006 for
+//     "vertical-align: 1em" and "super".
+//
+// So this asks for everything sameShaping asks, and then the face and the size —
+// which that one leaves open on purpose, because neither decides a form — and
+// then that nothing about how the two runs are *painted or placed* differs.
+//
+// The face is the one of those three with a test of its own already:
+// TestAFaceChangeIsNotKernedAcross. A pair positioned across a font change is
+// not that font's pair, and a *glyph* across one is not that font's glyph at
+// all — a glyph index means nothing outside the font it came from.
+func sharesGlyphsWith(items []inlineItem, from, to int) bool {
+	a, b := items[from], items[to]
+	if !sameShaping(a, b) || a.Size != b.Size || a.Face != b.Face {
+		return false
+	}
+	// Neither side moved by vertical-align, which is the question rather than
+	// "both moved alike": VAlignState carries the subtree the box belongs to and
+	// compares it by identity, so two runs in different spans differ there even
+	// when both sit on the paragraph's own baseline. What a glyph needs is that
+	// there is one baseline under it, and an unmoved pair has exactly that.
+	if a.Valign.Aligned() || b.Valign.Aligned() {
+		return false
+	}
+	if !samePaint(heldBox(a.Box), heldBox(b.Box)) {
+		return false
+	}
+	// The lines ruled across them, which are drawn from the run and not from the
+	// glyph: a run whose characters were swallowed by its neighbour's ligature
+	// has no advance left to rule a line over, so an underline that began at the
+	// boundary would stop short. shaping-025 is the suite's, and its reference
+	// underlines the same three letters set as three runs.
+	if !sameDecorations(a.Decorations, b.Decorations) {
+		return false
+	}
+	// A break opportunity between them, which a ligature may not span: the two
+	// halves would end up on different lines with the glyph on one of them.
+	// Nothing in the suite reaches this — a ligature is inside a word and a word
+	// has no opportunity in it — and it is here because the alternative is a
+	// rule that holds by coincidence.
+	for k := from + 1; k <= to; k++ {
+		if items[k].BreakBefore {
+			return false
+		}
+	}
+	return true
+}
+
+// samePaint reports whether two boxes draw their text the same way.
+//
+// The computed values as the cascade wrote them, compared as strings: two boxes
+// with the same computed value paint alike, and comparing the strings avoids
+// resolving a colour and a face for every boundary in the document.
+//
+// The three are what a glyph carries and cannot carry twice. The colour is the
+// obvious one. The style and the weight are here because a face is chosen from
+// them, and where the family has no italic or no bold the *same* face is chosen
+// and the difference is one a renderer may yet synthesize — so two runs that ask
+// for different ones are not one glyph's worth of text however alike their faces
+// are today. shaping-024 is that document, with "font-style: italic" on the
+// middle letter of three.
+func samePaint(a, b *Box) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	for _, name := range [...]string{"color", "font-style", "font-weight"} {
+		if a.Style[name] != b.Style[name] {
+			return false
+		}
+	}
+	return true
+}
+
+// sameDecorations reports whether two runs carry the same lines, declared by the
+// same boxes. A Decoration is compared field for field because Ref is an
+// interface and a slice of them is not comparable with ==.
+func sameDecorations(a, b []textDecoration) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Kind != b[i].Kind || a[i].By != b[i].By {
+			return false
+		}
+	}
+	return true
 }

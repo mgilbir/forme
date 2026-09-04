@@ -103,6 +103,10 @@ type TextRun struct {
 	// drawn isolated — the two disagree, and the page shows a word broken into
 	// letters standing apart. See shapingcontext.go.
 	PreContext, PostContext string
+	// MergePre and MergePost say that side may contribute glyphs and not only
+	// forms, so a ligature that spans the boundary is formed and drawn by
+	// whichever run holds its first character. See paragraph.Item.MergePre.
+	MergePre, MergePost string
 	// ContextKerns says the neighbours above are set in this run's own face, so
 	// a pair that spans the boundary is this font's pair. A font change is a
 	// change in formatting and its pairs do not cross one; a letter's joined
