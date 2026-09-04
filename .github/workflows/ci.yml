@@ -85,10 +85,23 @@ jobs:
             testdata/unicode-bidi
             testdata/unicode-grapheme
             testdata/notocjk
-          key: corpora-2-${{ hashFiles('Makefile') }}
+            testdata/html
+          key: corpora-3-${{ hashFiles('Makefile') }}
 
       - name: Fetch whatever the cache did not have
         run: make wpt noto-fonts css-tests bidi-tests grapheme-tests notocjk
+
+      # Before anything is measured, because a corpus that did not arrive is not
+      # a result about the engine. unifoundry.com has answered 200 with an error
+      # page where a font should have been, and the run that got it reported a
+      # hundred and four reftests below the baseline — a layout regression, to
+      # anyone who stopped reading before the last line.
+      #
+      # Whether or not the step above fetched anything: a cache hit restores the
+      # sentinel with the fonts, so a bad file that once reached the cache would
+      # be served to every run afterwards and never looked at again.
+      - name: The fonts are fonts
+        run: make verify-fonts
 
       # The CID-keyed CFF tests read a real CJK face, because the thing they are
       # about — a charset that is not the identity — is not something a synthetic
@@ -110,6 +123,19 @@ jobs:
           WPT_TESTS="$PWD/testdata/wpt" \
           NOTO_FONTS="$PWD/testdata/fonts-noto" \
             go test -v -run TestWPT -count=1 ./layout/
+
+      # And everything else that needs a corpus, which is most of this
+      # repository's tests. The "make test" job above runs them with an empty
+      # environment, so a hundred and fifty-four of them skip there and were
+      # reached by nothing here either: the steps above name what they run, and
+      # what they name is the reftest ratchet and four conformance sweeps.
+      #
+      # This is the step that runs the rest. It re-runs the ratchet as well,
+      # which is half a minute and is left alone deliberately — the step above
+      # exists for its -v output, which prints the count and the failing names,
+      # and folding the two would trade a legible log for that half minute.
+      - name: Every other test that needs a corpus
+        run: make test-corpora
 
   race:
     name: the race detector

@@ -1,9 +1,29 @@
-.PHONY: linebreak vertical dictionaries test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors noto-fonts clean-noto-fonts wpt test-wpt clean-wpt varinstance test-varinstance
+.PHONY: verify-fonts test-corpora linebreak vertical dictionaries test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors noto-fonts clean-noto-fonts wpt test-wpt clean-wpt varinstance test-varinstance
 
 test:
 	gofmt -l . | grep -v '^testdata/' && exit 1 || true
 	go vet ./...
 	go test -count=1 ./...
+
+# The same suite with every corpus in the environment, which is the only way most
+# of it runs at all.
+#
+# "test" above hands `go test` an empty environment, and a test that needs a Noto
+# face or the reftest checkout answers that by skipping. A hundred and fifty-six
+# of them do — every test that loads a fallback face, every reftest, the two
+# colour oracles, and the grapheme suite's own teeth — and only two were reached
+# by anything else the gate ran. They passed; nothing was checking that they
+# still did, which is the same as not having them.
+#
+# So this is where they run. It fetches what each corpus needs first, because a
+# target that quietly skips is the thing it was written to stop.
+test-corpora: wpt noto-fonts css-tests bidi-tests grapheme-tests $(HTML_ENTITIES)
+	WPT_TESTS="$(abspath $(WPT_DIR))" \
+	NOTO_FONTS="$(abspath $(NOTO_DIR))" \
+	CSS_PARSING_TESTS="$(abspath $(CSS_TESTS_DIR))" \
+	UNICODE_BIDI_TESTS="$(abspath $(BIDI_DIR))" \
+	UNICODE_GRAPHEME_TESTS="$(abspath $(GRAPHEME_DIR))" \
+	  go test -count=1 ./...
 
 # The same suite under the race detector.
 #
@@ -388,8 +408,13 @@ $(GRAPHEME_DIR)/.ok:
 	$(FETCH) -o $(GRAPHEME_DIR)/GraphemeBreakTest.txt $(UCD_URL)/auxiliary/GraphemeBreakTest.txt
 	touch $@
 
+# TestTheConformanceSuiteHasTeeth is named as well as matched, because it is the
+# test that plants a defect and checks the conformance sweep above catches it —
+# and "TestGrapheme" does not match its name, so for as long as that was the
+# whole pattern the check on the check never ran.
 test-grapheme: grapheme-tests
-	UNICODE_GRAPHEME_TESTS=$(abspath $(GRAPHEME_DIR)) go test -v -run TestGrapheme -count=1 ./segment
+	UNICODE_GRAPHEME_TESTS=$(abspath $(GRAPHEME_DIR)) \
+	  go test -v -run 'TestGrapheme|TestTheConformanceSuiteHasTeeth' -count=1 ./segment
 
 clean-grapheme-tests:
 	rm -rf $(GRAPHEME_DIR)
@@ -427,8 +452,13 @@ $(CSS_TESTS_DIR)/.ok:
 
 # The path is absolute because `go test ./css` runs with the package directory
 # as its working directory, not the repository root.
+# ./style as well as ./css: the colour oracle reads the same corpus, checking
+# every colour the CSS Syntax tests name against what this engine parses it to,
+# and no target set the variable for it — so it skipped, everywhere, always.
 test-css: css-tests
-	CSS_PARSING_TESTS=$(abspath $(CSS_TESTS_DIR)) go test -v -run TestCSSOracle -count=1 ./css
+	CSS_PARSING_TESTS=$(abspath $(CSS_TESTS_DIR)) go test -v -count=1 \
+	  -run 'TestCSSOracle|TestColorOracle|TestUnsupportedColorFilesAreAccountedFor' \
+	  ./css ./style
 
 clean-css-tests:
 	rm -rf $(CSS_TESTS_DIR)
@@ -443,9 +473,17 @@ clean-css-tests:
 # this is a rare errand rather than part of a build.
 HTML_ENTITIES := testdata/html/entities.json
 
-html-entities:
-	mkdir -p $(dir $(HTML_ENTITIES))
-	$(FETCH) -o $(HTML_ENTITIES) https://html.spec.whatwg.org/entities.json
+# The fetch is a target of its own so that a caller can have the standard's file
+# without having the table rebuilt from it. That is the difference between
+# checking the table and asserting it equals itself: TestEntityTableMatchesTheStandard
+# reads this file and compares it with the committed html/entities.go, and if
+# fetching it also regenerated that file the test would compare the generator's
+# output with the generator's output and pass whatever either said.
+$(HTML_ENTITIES):
+	mkdir -p $(dir $@)
+	$(FETCH) -o $@ https://html.spec.whatwg.org/entities.json
+
+html-entities: $(HTML_ENTITIES)
 	go run ./cmd/genhtmlentities -in $(HTML_ENTITIES) -out html/entities.go
 	gofmt -w html/entities.go
 
@@ -536,6 +574,30 @@ clean-css-colors:
 # Licensing: the compiled fonts are SIL Open Font License 1.1 — unifoundry's
 # LICENSE.txt says so in as many words, the GPL covering the build sources rather
 # than the fonts — and it is fetched alongside them.
+# A fetch that succeeds and hands back something that is not a font.
+#
+# unifoundry.com has now broken CI twice, in two different ways. The first was
+# not answering at all, which the retries above cover. The second was answering
+# 200 with content that is not an sfnt — and that one is the worse failure,
+# because curl is content and the corpus looks fetched. The run then reports a
+# hundred and four reftests below the baseline, which reads as a layout
+# regression right up to the last line of the message, where the harness says
+# the fallback faces did not load.
+#
+# So a font is checked to be one where it is fetched, and the run stops there
+# with the first two hundred bytes of whatever arrived. The four magic numbers
+# are every sfnt wrapper the fonts here can arrive in: 0x00010000 for TrueType
+# outlines, "OTTO" for CFF, "true" for the older Apple flavour, and "wOFF" for
+# the one web font the suite ships.
+define sfnt
+	head -c 4 "$(1)" | od -An -tx1 | tr -d ' \n' | \
+	  grep -Eq '^(00010000|4f54544f|74727565|774f4646)$$' || { \
+	    echo "$(1) is not a font: $$(wc -c < "$(1)") bytes beginning"; \
+	    head -c 200 "$(1)" | od -c | head -5; \
+	    exit 1; \
+	  }
+endef
+
 UNIFONT_VER  := 17.0.05
 UNIFONT_BASE := https://unifoundry.com/pub/unifont/unifont-$(UNIFONT_VER)/font-builds
 
@@ -551,7 +613,8 @@ $(NOTO_DIR)/.ok:
 	mkdir -p $(NOTO_DIR)
 	for fam in $(NOTO_HINTED); do \
 	  $(FETCH) -o $(NOTO_DIR)/$$fam-Regular.ttf \
-	    $(NOTO_BASE)/notofonts.github.io/main/fonts/$$fam/hinted/ttf/$$fam-Regular.ttf; \
+	    $(NOTO_BASE)/notofonts.github.io/main/fonts/$$fam/hinted/ttf/$$fam-Regular.ttf \
+	    || exit 1; \
 	done
 	$(FETCH) -o $(NOTO_DIR)/NotoSerifTibetan-Regular.ttf \
 	  $(NOTO_BASE)/notofonts.github.io/main/fonts/NotoSerifTibetan/hinted/ttf/NotoSerifTibetan-Regular.ttf
@@ -564,7 +627,23 @@ $(NOTO_DIR)/.ok:
 	$(FETCH) -o $(NOTO_DIR)/UnifontUpper-Regular.otf \
 	  $(UNIFONT_BASE)/unifont_upper-$(UNIFONT_VER).otf
 	$(FETCH) -o $(NOTO_DIR)/UNIFONT-LICENSE.txt https://unifoundry.com/LICENSE.txt
+	$(MAKE) verify-fonts
 	touch $@
+
+# Every fetched face, checked to be a face.
+#
+# A target of its own, and CI runs it whether or not anything was fetched. That
+# is the half the check in the recipe above cannot cover: a cache hit skips the
+# fetch entirely — the .ok sentinel is restored with the fonts — so a corrupt
+# file that once reached the cache would be served to every run afterwards and
+# never looked at again.
+verify-fonts:
+	for f in $(NOTO_DIR)/*.ttf $(NOTO_DIR)/*.otf $(WPT_DIR)/fonts/*.ttf \
+	         $(WPT_DIR)/fonts/*.otf $(WPT_DIR)/fonts/*.woff; do \
+	  [ -e "$$f" ] || continue; \
+	  $(call sfnt,$$f); \
+	done
+	@echo "every font in $(NOTO_DIR) and $(WPT_DIR)/fonts is one"
 
 clean-noto-fonts:
 	rm -rf $(NOTO_DIR)

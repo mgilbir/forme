@@ -839,6 +839,21 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				// pre-wrap-align tests measure. It is invisible in a left-to-right
 				// document, where the hang follows the content and moves nothing.
 				shift := l.alignLine(b, align, rtl, avail, used)
+				if lineIndent > 0 && shift < 0 {
+					// §7.1 makes the indent "a margin applied to the start edge
+					// of the line box", and content is not pulled back into a
+					// margin. An indent that takes the whole width leaves the
+					// alignment nothing to distribute — a negative slack is the
+					// line overflowing, not room to take — and the line begins
+					// where the indent put it.
+					//
+					// Without this an indent as wide as its block cancels
+					// itself: "text-indent: 200px; text-align: right" in two
+					// hundred pixels set a fifty-pixel box at 150, which is
+					// where no indent at all would have put it, and the suite
+					// writes that document as text-indent-overflow.
+					shift = 0
+				}
 				if !rtl {
 					// §16.1's indent is measured from the line's *start* edge,
 					// and only a left-to-right line starts at the left. The room
