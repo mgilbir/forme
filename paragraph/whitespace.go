@@ -82,6 +82,16 @@ type WhiteSpace struct {
 	// the run. That is what it is for: it is the value for text where the
 	// spaces are data.
 	BreakSpaces bool
+	// Discard is §4.1's "discard": every white space character in the element
+	// is removed, so the words run together.
+	//
+	// It is the far end of the same scale the other bits are on — preserve
+	// keeps every space, collapse keeps one, this keeps none — and it is not a
+	// combination of them, because "collapse to nothing" is not what collapsing
+	// does: a run of spaces between two words collapses to one space and
+	// separates them. The value is for text where the white space is layout in
+	// the source and not part of the content.
+	Discard bool
 }
 
 // WhiteSpaceFor reads the two longhands the white-space shorthand sets.
@@ -114,6 +124,14 @@ func WhiteSpaceOf(value string) WhiteSpace {
 		return WhiteSpace{Collapse: true, PreserveBreaks: true, Wrap: true}
 	case "break-spaces":
 		return WhiteSpace{PreserveBreaks: true, Wrap: true, BreakSpaces: true}
+	case "discard":
+		// Collapse as well as Discard, and that is not belt and braces: every
+		// rule downstream that asks "does this value collapse" is asking
+		// whether a space may be removed at a line edge or folded into its
+		// neighbour, and a value that removes all of them answers yes to both.
+		// What Discard adds is that the removal happens in Phase I, before any
+		// of those rules has anything left to be about.
+		return WhiteSpace{Collapse: true, Wrap: true, Discard: true}
 	}
 	return WhiteSpace{Collapse: true, Wrap: true}
 }
@@ -417,6 +435,18 @@ func CollapseWhitespaceAfter(text, value string, wst WordSpaceTransform,
 	// same under all six of the values rather than under the ones a test
 	// happened to reach.
 	text = SpacesForReturns(text)
+	if ws.Discard {
+		// "This value directs user agents to discard all white space in the
+		// element." There is nothing left for the rest of Phase I to fold or
+		// trim, and nothing for §4.1.2 to hang or remove at a line edge.
+		//
+		// The separators the *document* asked to be made visible are not white
+		// space and survive it: a zero width space is a mark, and
+		// word-space-transform turning one into a space is the property putting
+		// a space in rather than the source having one. So they are expanded
+		// after the removal and not before it.
+		return InsertPhraseSeparators(expandSeparators(discardWhitespace(text), wst), wst, system)
+	}
 	if !ws.Collapse {
 		// pre, pre-wrap and break-spaces keep every space and every tab, so
 		// that substitution is all of Phase I that is left.
@@ -648,6 +678,30 @@ func CollapseWhitespaceAfter(text, value string, wst WordSpaceTransform,
 	// space is one separator to the rule below, and two to the rule as it stood
 	// before the collapsing ran. See InsertPhraseSeparators.
 	return InsertPhraseSeparators(out.String(), wst, system)
+}
+
+// discardWhitespace removes every white space character, which is §4.1's
+// "discard".
+//
+// White space is §4.1's own set — the space, the tab and the segment breaks —
+// and not every character a reader would call one. The other space separators
+// are not white space to this specification and Phase I never sees them: an
+// ideographic space between two words is a character of the text, and a value
+// about the white space in the source has nothing to say about it.
+func discardWhitespace(text string) string {
+	if !strings.ContainsAny(text, " \t\n") {
+		return text
+	}
+	var out strings.Builder
+	out.Grow(len(text))
+	for i := 0; i < len(text); i++ {
+		switch text[i] {
+		case ' ', '\t', '\n':
+		default:
+			out.WriteByte(text[i])
+		}
+	}
+	return out.String()
 }
 
 // expandSeparators replaces the virtual word separators in preserved text.
