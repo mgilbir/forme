@@ -256,9 +256,18 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// item that follows meets the width it really has.
 		//
 		// What does *not* take it back is everything that takes no room — a
-		// forced break, an inline box's own edge, a box out of flow. Those
-		// legitimately follow a character at the end of a line, and "ab c、<br>"
-		// is the suite's row for it.
+		// forced break, a box out of flow, an inline box's own edge where that
+		// edge is nothing. Those legitimately follow a character at the end of a
+		// line, and "ab c、<br>" is the suite's row for it.
+		//
+		// "Where that edge is nothing" is the qualification, and it is the same
+		// one §8.1's shaping reads of the same items: a zero margin is a
+		// boundary and a margin with width is room on the page. A border after
+		// the comma is ink past the end of the line, so the comma is not at the
+		// end of the line and does not hang.
+		// hanging-punctuation-allow-end-inlines writes the pair — an empty
+		// <span> after the comma and a <span> with a one-em border after it —
+		// and asks for the comma to hang in the first and not in the second.
 		//
 		// Without this, a comma inside a "white-space: nowrap" span hung and
 		// pulled the span apart: the atomic inline after it began a new line,
@@ -266,10 +275,24 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// hanging-punctuation-allow-end writes that row too, and its assert says
 		// so in as many words — punctuation does not hang "when a nowrap span
 		// prevents breaking before the punctuation".
-		if hungAt >= 0 && !item.Forced && !item.Inset && item.Abs == nil && item.Float == nil {
+		if hungAt >= 0 && !item.Forced && item.Abs == nil && item.Float == nil &&
+			!(item.Inset && item.Width == 0) {
 			line[hungAt].Hangs, line[hungAt].HangEnd = false, false
 			used = used.Add(line[hungAt].Width)
 			hungAt = -1
+			// An inline box's own border is ink at the end of the line and is
+			// not a place the line may end: the character before it is not the
+			// last thing on the line and cannot hang, and there is nowhere
+			// between the two to break. So the line goes back to where it last
+			// could end, carrying the character with it.
+			//
+			// Only for an edge, and that is the whole of the rule. Everything
+			// else that takes the hang back is a place the line may end — the
+			// text after a hung comma begins a line of its own — so the fill
+			// goes on and breaks there, which is where "ab c、def" belongs.
+			if item.Inset && used > width && oppAt >= 0 {
+				return trimLineEdge(line[:oppLine]), oppAt, 0, outOfFlow[:oppFlow], false
+			}
 		}
 
 		if item.Float != nil {
@@ -379,7 +402,16 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// be reached — not by two commas, and not by two with a float between
 		// them, which is the only thing that stands between two characters and
 		// takes no room.
-		if item.MayHangEnd && content && !item.NoWrap && overflows(used, item, width) {
+		// And a character with an inline box's own border in front of it does
+		// not hang either. Hanging it would put the character outside the line
+		// and leave the border inside, which draws the box's edge against
+		// nothing — and the character is not at the end of the line in the sense
+		// §8.4 means, because the box it is in has not ended.
+		// hanging-punctuation-allow-end-inlines writes it as "12 34<span
+		// style='border-left:1em'>,</span>" and asks for the line to break
+		// earlier instead.
+		afterBorder := len(line) > 0 && line[len(line)-1].Inset && line[len(line)-1].Width != 0
+		if item.MayHangEnd && !afterBorder && content && !item.NoWrap && overflows(used, item, width) {
 			item.Hangs, item.HangEnd = true, true
 			hungAt = len(line)
 			line = append(line, item)
