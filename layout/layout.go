@@ -419,6 +419,11 @@ type layouter struct {
 	reportedScripts map[string]bool
 	// reportedWordBreak is the same for the word-break values read as normal.
 	reportedWordBreak map[string]bool
+	// substituted is what each font-family list did with the text of the inline
+	// formatting context being laid out, and reportedFamilies is which lists
+	// have already been complained about. See noteSubstitution.
+	substituted      map[string]*substitution
+	reportedFamilies map[string]bool
 	// reportedAutospace is the same for the text-autospace values not applied.
 	reportedAutospace map[string]bool
 	// reportedHyphens is the same for the hyphens values read as manual.

@@ -704,7 +704,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	for _, run := range runsOfBox {
 		l.checkGlyphs(b, run.Face, run.Text)
 	}
-	l.reportWhollySubstituted(b, face, runsOfBox)
+	l.noteSubstitution(b, face, runsOfBox)
 
 	size := b.FontSize
 	ws := whiteSpaceFor(b.Style)

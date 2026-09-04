@@ -207,11 +207,16 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	// the paragraph in.
 	_, open, closing := paragraphDirection(b)
 	para := newBidiBuilder(open)
+	// The question the font-fallback finding asks — did this family set any of
+	// *this* text — is about the paragraph, so it is gathered across the whole
+	// walk and answered when the walk is done. See noteSubstitution.
+	done := l.gatherSubstitutions()
 	items, _ := l.collectInline(b, l.markerItems(b), startOfContext(), inlineFrame{
 		Containing: width, CbHeight: origin.cbHeight, CbDefinite: origin.cbDefinite,
 		Strut: st, Bidi: para,
 	})
 	para.Leave(open, closing)
+	done()
 	if len(items) == 0 || onlyLeading(items) {
 		// §9.4.2's zero-height line, and the half of the sentence that is not
 		// about height: such a line "must be treated as not existing for any

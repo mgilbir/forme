@@ -1,6 +1,8 @@
 package layout
 
 import (
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/mgilbir/forme/segment"
@@ -178,67 +180,136 @@ func (l *layouter) faceRunsFor(b *Box, primary *shape.Face, text string) []faceR
 	return runs
 }
 
-// reportWhollySubstituted names the case the font-fallback finding is for: a box
-// whose own family set *none* of its text.
+// The font-fallback finding: a family that set *none* of a paragraph's text.
 //
 // That is a different thing from a fallback, and only one of the two is worth a
 // caller's attention. A word of Hebrew in an English sentence is set in a Hebrew
 // face because that is what fallback *is* — every renderer does it, the page is
-// right, and the English around it keeps the metrics the author asked for. A
-// paragraph the family contributed nothing to is a paragraph set in a font
-// nobody chose, and for a caller who has to embed one that is the thing to know:
-// the family they named cannot do this job.
+// right, and the English around it keeps the metrics the author asked for. Text
+// the family contributed nothing to is text set in a font nobody chose, and for
+// a caller who has to embed one that is the thing to know: the family they named
+// cannot do this job.
 //
 // The distinction only became available when the fallback started working per
 // run. Before, the whole box moved whenever one character was missing, so the
 // two cases were the same event and the question — can one face set the whole of
-// this text — could not tell them apart. It fired on the sentence with one alef
-// in it and said the metrics and the line breaks would differ, which was true of
-// the whole paragraph precisely because the whole paragraph had been moved.
+// this text — could not tell them apart.
 //
 // It is also what makes a broad fallback face safe to have. A face covering most
 // of Unicode can set the whole of almost any text, so the old question found an
 // answer almost every time it was asked: adding GNU Unifont as a last resort
 // reported a substitution on eighty-eight documents that had nothing wrong with
 // them. Asking which characters actually moved reports none of those.
-func (l *layouter) reportWhollySubstituted(b *Box, primary *shape.Face, runs []faceRun) {
+
+// noteSubstitution records what a family did with one box's text, for the
+// finding below.
+//
+// It is a note and not a report because the question is about a *paragraph* and
+// this is called with a box: "high<span lang=he>א</span>way" is one line of
+// English with one Hebrew letter in it, and the span is a box whose family set
+// none of its text. Reporting there said the family could not do the job over a
+// line it does almost all of — and the suite writes exactly that shape, six
+// times over, as a one-character <span> holding a currency sign inside a
+// Japanese paragraph.
+//
+// So the answer is gathered per inline formatting context and given at the end
+// of one. See flushSubstitutions.
+func (l *layouter) noteSubstitution(b *Box, primary *shape.Face, runs []faceRun) {
 	if len(runs) == 0 || primary == nil {
-		return
-	}
-	var alt *shape.Face
-	substituted := false
-	for _, r := range runs {
-		if r.Face == primary {
-			return
-		}
-		if r.substituted {
-			substituted = true
-			if alt == nil {
-				alt = r.Face
-			}
-		}
-	}
-	// Every run went to a face the document itself named — a second family in
-	// the font-family list, reached because the first declared a unicode-range
-	// that excluded this text. That is the list working, not a substitution, and
-	// saying "no face for these families could set any of this" of a face one of
-	// those families provided would be untrue as well as alarming.
-	if !substituted || alt == nil || alt == primary {
 		return
 	}
 	// The document named no particular face, only a kind. Choosing one that can
 	// set the text is what a generic family *is* — see namesOnlyGenericFamilies.
-	if namesOnlyGenericFamilies(b.Style["font-family"]) {
+	families := b.Style["font-family"]
+	if namesOnlyGenericFamilies(families) {
 		return
 	}
-	l.rec.ReportDetail(Finding{
-		Rule: RuleFontFallback,
-		Message: "no face for " + quoteValue(b.Style["font-family"]) +
-			" could set any of this text, so " + quoteValue(alt.Name()) +
-			" was used for it; the metrics and the line breaks will differ",
-		Path:     PathOf(b.Element),
-		Property: "font-family",
-	})
+	if l.substituted == nil {
+		l.substituted = map[string]*substitution{}
+	}
+	got := l.substituted[families]
+	if got == nil {
+		got = &substitution{}
+		l.substituted[families] = got
+	}
+	for _, r := range runs {
+		if r.Face == primary {
+			// The family set something here, which is the whole of what the
+			// finding asks. One run anywhere in the paragraph is enough.
+			got.set = true
+			continue
+		}
+		if r.substituted && got.alt == nil && r.Face != primary {
+			got.alt, got.at = r.Face, b
+		}
+	}
+}
+
+// substitution is what one family did with the text of one inline formatting
+// context: whether it set any of it, and what set the rest.
+type substitution struct {
+	set bool
+	alt *shape.Face
+	at  *Box
+}
+
+// gatherSubstitutions starts a paragraph's tally and returns the call that ends
+// it, which reports and puts back whatever was being gathered around it.
+//
+// Around it, because an inline formatting context can be laid out inside
+// another: an inline-block is laid out where it sits on the line, so its own
+// paragraphs are finished while the paragraph holding it is half gathered.
+// Flushing there would answer the outer paragraph's question from the first half
+// of it, and the family it had not reached yet is exactly the one that would be
+// reported.
+func (l *layouter) gatherSubstitutions() func() {
+	outer := l.substituted
+	l.substituted = nil
+	return func() {
+		l.flushSubstitutions()
+		l.substituted = outer
+	}
+}
+
+// flushSubstitutions reports the families that set nothing in the paragraph just
+// finished, and forgets what it gathered.
+//
+// Once per family per document, because the finding is about the family and a
+// page that names one in a hundred paragraphs has one gap and not a hundred.
+func (l *layouter) flushSubstitutions() {
+	// In name order, because two families both going unset in one paragraph
+	// would otherwise be reported in whichever order the map happened to be
+	// walked in, and a finding list a document reproduces is worth more than
+	// the few nanoseconds the sort costs.
+	lists := slices.Sorted(maps.Keys(l.substituted))
+	for _, families := range lists {
+		got := l.substituted[families]
+		delete(l.substituted, families)
+		if got.set || got.alt == nil {
+			// Every run went to a face the document itself named — a second
+			// family in the font-family list, reached because the first
+			// declared a unicode-range that excluded this text. That is the
+			// list working, not a substitution, and saying "no face for these
+			// families could set any of this" of a face one of those families
+			// provided would be untrue as well as alarming.
+			continue
+		}
+		if l.reportedFamilies == nil {
+			l.reportedFamilies = map[string]bool{}
+		}
+		if l.reportedFamilies[families] {
+			continue
+		}
+		l.reportedFamilies[families] = true
+		l.rec.ReportDetail(Finding{
+			Rule: RuleFontFallback,
+			Message: "no face for " + quoteValue(families) +
+				" could set any of this text, so " + quoteValue(got.alt.Name()) +
+				" was used for it; the metrics and the line breaks will differ",
+			Path:     PathOf(boxElement(got.at)),
+			Property: "font-family",
+		})
+	}
 }
 
 // familyListIsRestricted reports whether any face the box's font-family list

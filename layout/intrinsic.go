@@ -312,9 +312,11 @@ func (l *layouter) inlineWidths(b *Box) intrinsicWidths {
 	// agree.
 	_, open, closing := paragraphDirection(b)
 	para := newBidiBuilder(open)
+	done := l.gatherSubstitutions()
 	items, _ := l.collectInline(b, l.markerItems(b), startOfContext(),
 		inlineFrame{Measuring: true, Bidi: para})
 	para.Leave(open, closing)
+	done()
 	items = l.resolveBidi(b, items, para)
 	// The same context the lines will be filled with, so that a box sized to its
 	// content is sized to the content it will hold: a joined Arabic word is not
