@@ -155,7 +155,7 @@ func (g *hyphenGather) text(b *Box) {
 		g.flush()
 		return
 	}
-	if !hyphenatesLanguage(boxLanguage(b)) {
+	if !hyphenatesLanguage(boxHyphenation(b)) {
 		g.flush()
 		return
 	}
@@ -219,7 +219,7 @@ func (g *hyphenGather) flush() {
 	}
 	// The language is the one the word's letters are in, and every box that
 	// contributed to it agreed — text() refuses a box that did not.
-	points := paragraph.HyphenPoints(string(word), boxLanguage(from[0].box),
+	points := paragraph.HyphenPoints(string(word), boxHyphenation(from[0].box),
 		limits.before, limits.after)
 	for _, p := range points {
 		// A point after the p-th letter of the word is a point after the letter

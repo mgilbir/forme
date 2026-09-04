@@ -3,26 +3,95 @@
 
 package paragraph
 
-// Hyphenation patterns for American English, from the hyph-utf8 package.
-//
-// Copyright (C) 1990, 2004, 2005 Gerard D.C. Kuiken
-// Copying and distribution of this file, with or without modification,
-// are permitted in any medium without royalty provided the copyright
-// notice and this notice are preserved.
+// englishHyphenation is the hyph-utf8 pattern table for "en".
 //
 // 4938 patterns and 14 exceptions. See cmd/genhyphen for what each is
 // and hyphenate.go for the algorithm that reads them.
-
-// enUSHyphenLeft and enUSHyphenRight are the hyphenmins the pattern file
-// states for typesetting: how many letters this language wants left before the
-// first break and after the last.
-const (
-	enUSHyphenLeft  = 2
-	enUSHyphenRight = 3
-)
-
-// enUSPatterns is Liang's \patterns{} block, one pattern per line.
-const enUSPatterns = `.ach4
+//
+// The pattern file's own header follows, entire. It carries the copyright and
+// the licence, and both have to travel with the table.
+//
+// title: Hyphenation patterns for American English
+// copyright: Copyright (C) 1990, 2004, 2005 Gerard D.C. Kuiken
+// notice: This file is part of the hyph-utf8 package.
+//
+//	See http://www.hyphenation.org/tex for more information.
+//
+// language:
+//
+//	name: English, American spelling
+//	tag: en-us
+//
+// version: 2005-05-30
+// authors:
+//
+//	-
+//	  name: Gerard D.C. Kuiken
+//
+// licence:
+//
+//	text: >
+//	    Copying and distribution of this file, with or without modification,
+//	    are permitted in any medium without royalty provided the copyright
+//	    notice and this notice are preserved.
+//
+// hyphenmins:
+//
+//	typesetting:
+//	    left: 2
+//	    right: 3
+//
+// changes:
+//
+//	March 1, 1990 Initial release
+//	May 30, 2005 Added copyright notice, no patterns change.
+//
+// texlive:
+//
+//	encoding: ascii
+//	babelname: usenglishmax
+//	legacy_patterns: ushyphmax.tex
+//	message: Hyphenation patterns for American English
+//	package: english
+//
+// known_bugs:
+//
+//	de-mo-c-rat: 'instead of dem-o-crat (see GitHub issue #15)'
+//
+// ==========================================
+//
+// ushyphmax.tex -- patterns for more hyphenation pattern memory (12000+).
+// Also known as ushyphen.max.
+//
+// Needs extended pattern memory.
+// Hyphenation trie becomes 7283 with 377 ops.
+//
+// These patterns are based on the Hyphenation Exception Log
+// published in TUGboat, Volume 10 (1989), No. 3, pp. 337-341,
+// and a large number of incorrectly hyphenated words not yet published.
+// If added to Liang's before the closing bracket } of \patterns,
+// the patterns run errorfree as far as known at this moment.
+//
+// These patterns find all admissible hyphens of the words in
+// the Exception Log.  ushyph2.tex is a smaller set.
+//
+// Please send bugs or suggestions to tex-live (at) tug.org.
+//
+// 2005-05-30 (karl): in the past, ushyphmax.tex was a file containing
+// only the additional patterns, without the \patterns command, etc.
+// This turned out not to be very useful, since in practice the TeX
+// distributions need one self-contained file for a language.  Therefore,
+// ushyphmax.tex now contains both the additional patterns from
+// Dr. Kuiken, and the original patterns and hyphenations from Knuth's
+// hyphen.tex.
+//
+// The Plain TeX hyphenation tables.
+var englishHyphenation = hyphenSource{
+	key:   "en",
+	left:  2,
+	right: 3,
+	// patterns is Liang's \patterns{} block, one pattern per line.
+	patterns: `.ach4
 .ad4der
 .af1t
 .al3t
@@ -4959,11 +5028,10 @@ y1stro
 yes5ter1y
 z3ian.
 z3o1phr
-z2z3w`
-
-// enUSExceptions is the \hyphenation{} block: the words the patterns get
-// wrong, each written with the breaks it is allowed and no others.
-const enUSExceptions = `as-so-ciate
+z2z3w`,
+	// exceptions is the \hyphenation{} block: the words the patterns get
+	// wrong, each written with the breaks it is allowed and no others.
+	exceptions: `as-so-ciate
 as-so-ciates
 dec-li-na-tion
 oblig-a-tory
@@ -4976,4 +5044,5 @@ reci-procity
 re-cog-ni-zance
 ref-or-ma-tion
 ret-ri-bu-tion
-ta-ble`
+ta-ble`,
+}

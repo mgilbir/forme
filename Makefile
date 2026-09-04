@@ -212,6 +212,44 @@ phrases:
 	  gofmt -w paragraph/$$name'phrases.go'; \
 	done
 
+# Where a word may be divided when the document has not said, which is what
+# "hyphens: auto" asks for.
+#
+# hyph-utf8, which is TeX's, which is Liang's, which is every typesetting
+# system's. As with the models above the pattern file is fetched and the
+# *generated* table is what is committed, and the licence travels into it:
+# cmd/genhyphen copies the file's header entire, because the terms differ from
+# language to language and a table shipped without them is a table nobody may
+# ship.
+#
+# Four languages, and each is a table checked in — Hungarian's alone is half a
+# megabyte, which is what a hyphenation dictionary costs when it is patterns
+# rather than words. They are the four the suite asks for by name; adding a
+# fifth is a pair here and a line in paragraph/hyphenate.go's hyphenSources.
+#
+# The pair is the Go identifier and the key paragraph.HyphenationOf resolves a
+# lang attribute to. They differ for pinyin, whose key carries the script:
+# "zh-Latn" is Mandarin in the Latin alphabet and "zh" is Han, and only the
+# first of the two has syllables to divide between.
+#
+#	make hyphens
+HYPHEN_URL := https://raw.githubusercontent.com/hyphenation/tex-hyphen/master/hyph-utf8/tex/generic/hyph-utf8/patterns/tex
+HYPHEN_DIR := testdata/hyphen
+
+HYPHEN_PATTERNS := english:en:hyph-en-us dutch:nl:hyph-nl \
+                   hungarian:hu:hyph-hu pinyin:zh-latn:hyph-zh-latn-pinyin
+
+hyphens:
+	mkdir -p $(HYPHEN_DIR)
+	for triple in $(HYPHEN_PATTERNS); do \
+	  name=$${triple%%:*}; rest=$${triple#*:}; \
+	  key=$${rest%%:*}; file=$${rest##*:}; \
+	  $(FETCH) -o $(HYPHEN_DIR)/$$file.tex $(HYPHEN_URL)/$$file.tex; \
+	  go run ./cmd/genhyphen $$name $$key $(HYPHEN_DIR)/$$file.tex \
+	    > paragraph/$$name'hyphens.go'; \
+	  gofmt -w paragraph/$$name'hyphens.go'; \
+	done
+
 # Which characters stand upright on a line of vertical text, UAX #50. It is
 # what tells a block of English from a block of Japanese, and so which blocks
 # this engine can turn on their side. See cmd/genvertical.
