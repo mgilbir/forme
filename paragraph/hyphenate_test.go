@@ -143,19 +143,133 @@ func TestOnlyWordsAreHyphenated(t *testing.T) {
 }
 
 // TestOnlyALanguageWithPatterns is §6.1's second condition, at the level that
-// knows about it. The patterns here are English, and English is the primary
-// subtag: LanguageOf has already cut "en-US" down to "en".
+// knows about it. There is a table for four keys and for nothing else, and a
+// document in a fifth language is not divided with a fourth language's patterns.
 func TestOnlyALanguageWithPatterns(t *testing.T) {
-	if !HyphenatesLanguage("en") {
-		t.Error("English is not hyphenated, and the patterns here are English")
+	for _, lang := range []Language{"en", "nl", "hu", "zh-latn"} {
+		if !HyphenatesLanguage(lang) {
+			t.Errorf("%q has a table in hyphenSources and was not hyphenated", lang)
+		}
 	}
-	for _, lang := range []Language{"", "de", "fr", "nl", "e", "eng"} {
+	for _, lang := range []Language{"", "de", "fr", "e", "eng", "zh", "nl-latn"} {
 		if HyphenatesLanguage(lang) {
-			t.Errorf("%q was hyphenated with the American English patterns", lang)
+			t.Errorf("%q was hyphenated with another language's patterns", lang)
 		}
 		if got := HyphenPoints("implementation", lang, 0, 0); got != nil {
 			t.Errorf("%q gave %v", lang, got)
 		}
+	}
+}
+
+// TestEachLanguageDividesItsOwnWords.
+//
+// One word per table, chosen to divide somewhere no other table's patterns put a
+// point: the tables are keyed and a mix-up would be silent otherwise, because
+// every one of them answers *something* for a string of Latin letters.
+func TestEachLanguageDividesItsOwnWords(t *testing.T) {
+	for _, tc := range []struct {
+		word string
+		lang Language
+		want []int
+	}{
+		{"highway", "en", []int{4}},
+		{"woordenlijst", "nl", []int{4, 7}},
+		{"magyarorszag", "hu", []int{2, 6, 8}},
+		{"zhongguo", "zh-latn", []int{5}},
+	} {
+		got := HyphenPoints(tc.word, tc.lang, 0, 0)
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%q in %q divided at %v, want %v", tc.word, tc.lang, got, tc.want)
+		}
+	}
+}
+
+// TestAToneMarkedSyllableIsDividedToo.
+//
+// The pinyin file writes the five tone marks of a syllable side by side —
+// "a1b ā1b á1b ǎ1b à1b" is one line and five patterns — where every other file
+// here writes one to a line. A generator that took a line for a pattern would
+// produce a table of six hundred entries that match nothing, and the plain
+// vowels would go on dividing because they are the ones written first.
+//
+// So the words here carry their tone marks, which is how pinyin is actually
+// written and the only way this is checked.
+func TestAToneMarkedSyllableIsDividedToo(t *testing.T) {
+	for _, tc := range []struct {
+		word string
+		want []int
+	}{
+		{"zhōngguó", []int{5}},
+		{"běijīng", []int{3}},
+		{"hànyǔ", []int{3}},
+	} {
+		got := HyphenPoints(tc.word, "zh-latn", 0, 0)
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%q divided at %v, want %v", tc.word, got, tc.want)
+		}
+	}
+}
+
+// TestTheHyphenminsAreTheLanguagesOwn.
+//
+// Pinyin keeps one letter back where English keeps two, and its file says so:
+// a syllable of one letter is a word of Mandarin, where no English word divides
+// after its first letter. The two tables therefore have to carry their own
+// numbers rather than share the American ones.
+func TestTheHyphenminsAreTheLanguagesOwn(t *testing.T) {
+	if got := HyphenPoints("eguo", "zh-latn", 0, 0); !reflect.DeepEqual(got, []int{1}) {
+		t.Errorf("eguo divided at %v, want [1] — pinyin's own left hyphenmin is 1", got)
+	}
+	// The same word under the American numbers, which is what asking for two
+	// letters does. It is the property overriding the dictionary, and it is how
+	// the line above is shown to be about the *file's* number and not about
+	// there being no point there at all.
+	if got := HyphenPoints("eguo", "zh-latn", 2, 0); len(got) != 0 {
+		t.Errorf("eguo with a left of 2 divided at %v, want nothing", got)
+	}
+}
+
+// TestARomanisationIsKeyedOnItsScript.
+//
+// "zh" is Han, which has no hyphenation at all; "zh-Latn" is Mandarin written in
+// the Latin alphabet, which divides between its syllables. The tag has to be
+// read whole for the two to be told apart — LanguageOf's answer is "zh" for
+// both, which is right for the casing tailorings it is for and wrong here.
+func TestARomanisationIsKeyedOnItsScript(t *testing.T) {
+	for _, tc := range []struct {
+		tag  string
+		want Language
+	}{
+		{"zh-Latn-pinyin", "zh-latn"},
+		{"zh-latn", "zh-latn"},
+		{"zh", "zh"},
+		{"zh-Hant", "zh"},
+		{"zh-CN", "zh"},
+		{"en-GB-oxendict", "en"},
+		{"NL", "nl"},
+		{" hu ", "hu"},
+		{"", ""},
+		// Not every script subtag makes a key. Dutch is written in the Latin
+		// alphabet and its table is "nl", not "nl-latn": romanised names the
+		// languages whose *romanisation* is the separate thing, and Dutch has
+		// none.
+		{"nl-Latn", "nl"},
+	} {
+		if got := HyphenationOf(tc.tag); got != tc.want {
+			t.Errorf("HyphenationOf(%q) = %q, want %q", tc.tag, got, tc.want)
+		}
+	}
+}
+
+// TestHanTextIsNotDividedWithPinyinPatterns is the point of the key above,
+// stated as a page rather than as a tag: a document in Chinese must not be
+// handed the romanisation's dictionary.
+func TestHanTextIsNotDividedWithPinyinPatterns(t *testing.T) {
+	if HyphenatesLanguage(HyphenationOf("zh-Hans")) {
+		t.Error("Chinese in Han characters was given a hyphenation dictionary")
+	}
+	if got := HyphenPoints("zhongguo", HyphenationOf("zh"), 0, 0); got != nil {
+		t.Errorf("a word under lang=zh divided at %v, want nothing", got)
 	}
 }
 

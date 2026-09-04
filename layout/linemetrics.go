@@ -550,8 +550,8 @@ func (l *layouter) faceForText(b *Box) (*shape.Face, bool) {
 	// page was still wrong in a way nothing could undo downstream.
 	//
 	// What the caller is told is decided in itemsFor, once the runs are known —
-	// see reportWhollySubstituted. It cannot be decided here: the question worth
-	// asking is which characters actually moved, and the runs are what that is.
+	// see noteSubstitution. It cannot be decided here: the question worth asking
+	// is which characters actually moved, and the runs are what that is.
 	l.textFaces[b] = face
 	return face, true
 }

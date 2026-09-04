@@ -10,11 +10,11 @@ import (
 // "hyphens: auto" and the half of §6.1 that is about what a UA is *required* to
 // do.
 //
-// This engine has a hyphenation resource for one language, so a word in English
-// is broken where the dictionary allows and a word in anything else only where a
-// soft hyphen asks — which is "manual" — and it says so. That is a page with
-// looser lines than a browser would set, which a reader cannot see and a finding
-// has to name.
+// This engine has a hyphenation resource for four languages, so a word in one of
+// them is broken where its dictionary allows and a word in anything else only
+// where a soft hyphen asks — which is "manual" — and it says so. That is a page
+// with looser lines than a browser would set, which a reader cannot see and a
+// finding has to name.
 //
 // But §6.1 does not ask a UA to hyphenate everything:
 //
@@ -75,7 +75,7 @@ func TestHyphensAutoIsNotReportedWithoutALanguage(t *testing.T) {
 // the finding keeps, and it is the reason §6.1's second condition matters.
 //
 // The sentence has two: a language the author declared, *and* "an appropriate
-// hyphenation resource". This engine ships one language's patterns, so a
+// hyphenation resource". This engine ships four languages' patterns, so a
 // document in German asks for something it will not get — the page really does
 // differ from the one the author asked for and from the one every browser
 // produces, and that is a limitation worth naming.
@@ -87,6 +87,11 @@ func TestHyphensAutoIsStillReportedWithALanguageThisHasNoPatternsFor(t *testing.
 			`<div lang="fr"><p style="hyphens:auto">implementation</p></div>`},
 		{"a region subtag, which is a language all the same",
 			`<div lang="de-AT" style="hyphens:auto">Wiedervereinigung</div>`},
+		// Chinese in its own characters. There is a table under a tag that
+		// begins "zh" and it is for the *romanisation*; Han text is no more
+		// hyphenated for its sake than German is.
+		{"a language whose romanisation has a table and whose own script has none",
+			`<div lang="zh-Hans" style="hyphens:auto">zhongguo</div>`},
 	} {
 		got := hyphensFindings(t, tc.html)
 		if len(got) == 0 {
@@ -116,6 +121,10 @@ func TestHyphensAutoInEnglishIsNotReported(t *testing.T) {
 			`<div lang="en-US" style="hyphens:auto">implementation</div>`},
 		{"a region and a variant",
 			`<div lang="en-GB-oxendict" style="hyphens:auto">implementation</div>`},
+		{"Dutch", `<div lang="nl" style="hyphens:auto">woordenlijst</div>`},
+		{"Hungarian", `<div lang="hu" style="hyphens:auto">magyarorszag</div>`},
+		{"Mandarin in the Latin alphabet, which is the tag read whole",
+			`<div lang="zh-Latn-pinyin" style="hyphens:auto">zhongguo</div>`},
 	} {
 		if got := hyphensFindings(t, tc.html); len(got) != 0 {
 			t.Errorf("%s: reported %q — English is hyphenated here", tc.what, got[0].Message)
@@ -156,29 +165,7 @@ func TestTheLanguageDecidesWhetherTheWordIsBroken(t *testing.T) {
 		t.Helper()
 		root := layoutOf(t, 600, htmlSrc,
 			noDefaults+`div { font-family: Courier; font-size: 20px; width: 60px }`)
-		var out []string
-		var walk func(*Fragment)
-		walk = func(f *Fragment) {
-			if f == nil {
-				return
-			}
-			if f.Box != nil && f.Box.Element != nil {
-				if id, _ := f.Box.Element.Attr("id"); id == "d" {
-					for _, ln := range f.Lines {
-						var b strings.Builder
-						for _, r := range ln.Runs {
-							b.WriteString(r.Text)
-						}
-						out = append(out, b.String())
-					}
-				}
-			}
-			for _, c := range f.Children {
-				walk(c)
-			}
-		}
-		walk(root)
-		return out
+		return lineTextsOf(t, root, "d")
 	}
 	// Untagged: one line, overflowing, which is what hyphens-auto-001 asserts.
 	plain := lines(`<div id="d" style="hyphens:auto">implementation</div>`)
@@ -199,5 +186,47 @@ func TestTheLanguageDecidesWhetherTheWordIsBroken(t *testing.T) {
 	if strings.Join(german, "|") != strings.Join(plain, "|") {
 		t.Errorf("a document tagged de set %q and an untagged one %q; there are no "+
 			"German patterns here, so neither is hyphenated", german, plain)
+	}
+}
+
+// TestEachLanguageIsBrokenByItsOwnDictionary.
+//
+// A word per language, divided where that language's patterns say and nowhere
+// else. It is the same assertion the English case above makes, made four times
+// because four tables that all answer *something* for a string of Latin letters
+// would otherwise hide a document handed the wrong one.
+func TestEachLanguageIsBrokenByItsOwnDictionary(t *testing.T) {
+	for _, tc := range []struct {
+		lang, word string
+		width      int
+		want       []string
+	}{
+		{"en", "implementation", 5, []string{"im-", "ple-", "men-", "ta-", "tion"}},
+		{"nl", "woordenlijst", 5, []string{"woor-", "den-", "lijst"}},
+		{"hu", "magyarorszag", 5, []string{"ma-", "gyar-", "or-", "szag"}},
+		// The tag whole: this is the one document of the four whose language
+		// subtag alone would find no table, and finding one is the whole of what
+		// reading the script does.
+		{"zh-Latn-pinyin", "zhongguo", 7, []string{"zhong-", "guo"}},
+	} {
+		got := hyphenatedLines(t, tc.width,
+			`<span lang="`+tc.lang+`">`+tc.word+`</span>`, `#d { hyphens: auto }`)
+		if strings.Join(got, "|") != strings.Join(tc.want, "|") {
+			t.Errorf("%q in %q set %q, want %q", tc.word, tc.lang, got, tc.want)
+		}
+	}
+}
+
+// TestHanTextIsNotBrokenByThePinyinDictionary is the other half of the tag being
+// read whole, and it is the one that would be a wrong page rather than a loose
+// one: Chinese written in Han characters has no syllable divisions of this kind
+// at all, and a hyphen dropped into it is a character the author never wrote.
+func TestHanTextIsNotBrokenByThePinyinDictionary(t *testing.T) {
+	for _, tag := range []string{"zh", "zh-Hans", "zh-CN"} {
+		got := hyphenatedLines(t, 7,
+			`<span lang="`+tag+`">zhongguo</span>`, `#d { hyphens: auto }`)
+		if strings.Join(got, "|") != "zhongguo" {
+			t.Errorf("lang=%q set %q; the pinyin patterns are for zh-Latn", tag, got)
+		}
 	}
 }

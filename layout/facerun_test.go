@@ -422,3 +422,108 @@ func TestTheGenericTestIsNotPassingByAccident(t *testing.T) {
 			got, hebrew.Name())
 	}
 }
+
+// Which text the question is asked of.
+//
+// A family that cannot set a paragraph is worth reporting; a family that cannot
+// set one span of it is not, because the span is not what the reader sees. The
+// two are the same code asked over different text, and the difference is only
+// where the answer is given — so these tests write one paragraph several ways
+// and check the answer does not depend on the markup.
+//
+// The suite writes that shape often enough to be worth the care: a <br> between
+// two lines of Japanese makes a box of one character each, and a currency sign
+// in a <span> makes a box of one character. Thirty-four of its reftests were
+// held back by an answer given per box.
+
+// substitutionFindings returns the substitution findings' messages.
+func substitutionFindings(findings []Finding) []string {
+	var out []string
+	for _, f := range findings {
+		if f.Rule == RuleFontFallback {
+			out = append(out, f.Message)
+		}
+	}
+	return out
+}
+
+// TestAFamilyIsAskedOfTheParagraphHoweverItIsDivided.
+func TestAFamilyIsAskedOfTheParagraphHoweverItIsDivided(t *testing.T) {
+	hebrew := loadHebrew(t)
+	set := oneFaceSet{fallback: hebrew, standard: StandardFonts()}
+	for _, body := range []string{
+		`the quick א fox`,
+		`the quick <span>א</span> fox`,
+		`the quick<br>א<br>fox`,
+		`<span>א</span> fox`,
+		`the quick <span>א</span>`,
+		`<span>א</span><span>the</span><span>א</span>`,
+	} {
+		_, findings := layoutWith(t, set,
+			`<p id="p">`+body+`</p>`,
+			`#p { font-family: Helvetica; font-size: 20px }`)
+		if said := substitutionFindings(findings); len(said) != 0 {
+			t.Errorf("a paragraph written %q, which Helvetica sets most of, "+
+				"reported %v", body, said)
+		}
+	}
+}
+
+// TestAParagraphTheFamilySetsNoneOfIsReportedHoweverItIsDivided is the other
+// half: dividing it changes nothing, because none of the pieces were set either.
+func TestAParagraphTheFamilySetsNoneOfIsReportedHoweverItIsDivided(t *testing.T) {
+	hebrew := loadHebrew(t)
+	set := oneFaceSet{fallback: hebrew, standard: StandardFonts()}
+	for _, body := range []string{
+		`שלום`,
+		`<span>ש</span>לום`,
+		`ש<br>לום`,
+	} {
+		_, findings := layoutWith(t, set,
+			`<p id="p">`+body+`</p>`,
+			`#p { font-family: Helvetica; font-size: 20px }`)
+		if said := substitutionFindings(findings); len(said) != 1 {
+			t.Errorf("a paragraph written %q, which Helvetica sets none of, "+
+				"reported %v, want one finding", body, said)
+		}
+	}
+}
+
+// TestAnInlineBlockDoesNotAnswerForTheParagraphAroundIt.
+//
+// An inline-block is laid out where it sits on the line, so its own paragraph
+// finishes while the paragraph holding it is half gathered. Answering there
+// answers from the first half — and the first half here is the Hebrew letter,
+// with the English that Helvetica sets still to come.
+func TestAnInlineBlockDoesNotAnswerForTheParagraphAroundIt(t *testing.T) {
+	hebrew := loadHebrew(t)
+	set := oneFaceSet{fallback: hebrew, standard: StandardFonts()}
+	_, findings := layoutWith(t, set,
+		`<p id="p">א<span id="ib">x</span> fox</p>`,
+		`#p { font-family: Helvetica; font-size: 20px }
+		 #ib { display: inline-block; font-family: Courier }`)
+	if said := substitutionFindings(findings); len(said) != 0 {
+		t.Errorf("the inline-block finishing mid-paragraph answered for the "+
+			"paragraph around it: %v", said)
+	}
+}
+
+// TestAFamilyIsReportedOnceHoweverManyParagraphsCannotUseIt. The finding is
+// about the family, and a document naming one in a hundred paragraphs has one
+// gap in it, not a hundred.
+//
+// The paragraphs sit at different depths on purpose. The recorder already folds
+// two identical findings about the same place into one, so three siblings would
+// pass whether the rule was kept or not.
+func TestAFamilyIsReportedOnceHoweverManyParagraphsCannotUseIt(t *testing.T) {
+	hebrew := loadHebrew(t)
+	set := oneFaceSet{fallback: hebrew, standard: StandardFonts()}
+	_, findings := layoutWith(t, set,
+		`<p class="p">שלום</p><div><p class="p">שלום</p></div>`+
+			`<blockquote><p class="p">שלום</p></blockquote>`,
+		`.p { font-family: Helvetica; font-size: 20px }`)
+	if said := substitutionFindings(findings); len(said) != 1 {
+		t.Errorf("three paragraphs in one family reported %v, want one finding",
+			said)
+	}
+}

@@ -1763,6 +1763,25 @@ func languageAt(n *html.Node) paragraph.Language {
 	return ""
 }
 
+// hyphenationAt is the key of the pattern table a node's words are divided
+// with.
+//
+// The tag whole, as orthographyAt reads it and for the same reason: "zh-Latn" is
+// romanised Chinese and divides between its syllables where "zh" is Han and does
+// not. See paragraph.HyphenationOf, which is a different question from
+// languageAt's and must not be answered with it.
+func hyphenationAt(n *html.Node) paragraph.Language {
+	for cur := n; cur != nil; cur = cur.Parent {
+		if cur.Type != html.ElementNode {
+			continue
+		}
+		if v, ok := cur.Attr("lang"); ok && v != "" {
+			return paragraph.HyphenationOf(v)
+		}
+	}
+	return ""
+}
+
 // orthographyAt is the hyphenation orthography in force at a node.
 //
 // The tag whole, as writingSystemAt reads it and for the same reason: what

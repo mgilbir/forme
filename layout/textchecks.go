@@ -539,6 +539,12 @@ func boxLanguage(b *Box) paragraph.Language {
 	return languageAt(boxElement(b))
 }
 
+// boxHyphenation is boxLanguage's neighbour for the one rule that is keyed on
+// the script as well as the language. See paragraph.HyphenationOf.
+func boxHyphenation(b *Box) paragraph.Language {
+	return hyphenationAt(boxElement(b))
+}
+
 // boxWritingSystem is boxLanguage's neighbour for the rules that ask what a text
 // is *typeset* as rather than what language it is in. See
 // paragraph.WritingSystemOf, and writingSystemAt for the walk.

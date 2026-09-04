@@ -704,7 +704,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	for _, run := range runsOfBox {
 		l.checkGlyphs(b, run.Face, run.Text)
 	}
-	l.reportWhollySubstituted(b, face, runsOfBox)
+	l.noteSubstitution(b, face, runsOfBox)
 
 	size := b.FontSize
 	ws := whiteSpaceFor(b.Style)
@@ -743,12 +743,11 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		l.reportLineBreak(b, unhandledLine)
 	}
 	hy, unhandledHyphens := hyphensOf(b.Style["hyphens"])
-	lang := boxLanguage(b)
-	if hy.Auto && !hyphenatesLanguage(lang) {
-		// "auto" asks for the language's own dictionary, and there is one
-		// language here. A document in another gets the manual behaviour and
-		// is told so — which is the report that used to be raised for every
-		// "auto" whatever the language.
+	if hy.Auto && !hyphenatesLanguage(boxHyphenation(b)) {
+		// "auto" asks for the language's own dictionary, and there are four
+		// here. A document in another gets the manual behaviour and is told so
+		// — which is the report that used to be raised for every "auto"
+		// whatever the language.
 		unhandledHyphens = "auto"
 	}
 	if unhandledHyphens != "" {

@@ -33,13 +33,16 @@ import (
 // "project" are both there, because the patterns would break them where the noun
 // and the verb differ.
 //
-// # What is not here
+// # Which languages
 //
-// One language. The table is American English and the caller asks for it by
-// language tag; a document in anything else is not hyphenated and says so. That
-// is the honest shape rather than a limitation to be worked around — hyphenating
-// German with English patterns produces breaks that are not merely wrong but
-// unreadable, which is worse than not breaking at all.
+// The ones there is a table for, and no others: a document in a language this
+// has no patterns for is not hyphenated and says so. That is the honest shape
+// rather than a limitation to be worked around — hyphenating German with English
+// patterns produces breaks that are not merely wrong but unreadable, which is
+// worse than not breaking at all.
+//
+// Four tables, one generated file each, listed in hyphenSources. Adding a fifth
+// is a line there and a line in the Makefile's HYPHEN_PATTERNS.
 
 // maxHyphenWord is the longest word this will hyphenate.
 //
@@ -65,7 +68,8 @@ const maxHyphenWord = 100
 // language, and "co-op", "R2D2" and "don't" are not words it has anything to say
 // about.
 func HyphenPoints(word string, lang Language, left, right int) []int {
-	if !HyphenatesLanguage(lang) {
+	src := hyphenationFor(lang)
+	if src == nil {
 		return nil
 	}
 	runes := []rune(word)
@@ -77,10 +81,10 @@ func HyphenPoints(word string, lang Language, left, right int) []int {
 	// author overriding the dictionary, and an author who asks to keep two
 	// letters back where the language wants three has asked for two.
 	if left <= 0 {
-		left = enUSHyphenLeft
+		left = src.left
 	}
 	if right <= 0 {
-		right = enUSHyphenRight
+		right = src.right
 	}
 	// A word with no room for a point inside the two mins has none, whatever
 	// else is asked. That is also hyphenate-limit-chars' *first* value under
@@ -97,7 +101,7 @@ func HyphenPoints(word string, lang Language, left, right int) []int {
 		lower[i] = unicode.ToLower(r)
 	}
 
-	t := hyphenTable()
+	t := src.table()
 	if points, ok := t.exceptions[string(lower)]; ok {
 		return withinMins(points, len(runes), left, right)
 	}
@@ -115,21 +119,104 @@ func withinMins(points []int, n, left, right int) []int {
 	return out
 }
 
-// HyphenatesLanguage reports whether the patterns here are the ones a language
-// is hyphenated with.
+// HyphenationOf reads a lang attribute as the key of the table its words are
+// divided with.
 //
-// English only, and English is the primary subtag: LanguageOf has already cut
-// "en-US" and "en-GB-oxendict" down to "en". A document that declares no
-// language is not English — the tag is what the author wrote, and hyphenating
-// undeclared text as English is guessing at the language of words one has not
-// read.
+// The tag whole, as OrthographyOf reads it and for the same reason: what decides
+// is sometimes the script. "zh" is Chinese, which has no hyphenation to speak
+// of, and "zh-Latn" is Chinese romanised — a text of Latin syllables that
+// divides between them. Everything else is keyed on the primary subtag, which is
+// what "en-US" and "en-GB-oxendict" have in common.
+//
+// A document that declares no language gets nothing. The tag is what the author
+// wrote, and hyphenating undeclared text as English is guessing at the language
+// of words one has not read.
 //
 // en-GB is hyphenated with the American patterns, which is wrong in the small:
 // the two traditions differ over where a word divides. It is what a browser
 // without the British patterns installed does, it is far closer than not
 // breaking at all, and the alternative is a second table for a few hundred
 // words.
-func HyphenatesLanguage(lang Language) bool { return lang == "en" }
+func HyphenationOf(tag string) Language {
+	tag = strings.ToLower(strings.TrimSpace(tag))
+	if tag == "" {
+		return ""
+	}
+	primary, rest, _ := strings.Cut(tag, "-")
+	script := ""
+	for rest != "" {
+		var sub string
+		sub, rest, _ = strings.Cut(rest, "-")
+		// A script subtag is four letters, which is what tells it from a region
+		// (two letters or three digits) and from a variant. The first one wins.
+		if len(sub) == 4 && isAlpha(sub) {
+			script = sub
+			break
+		}
+	}
+	if script != "" && romanised[primary] == script {
+		return Language(primary + "-" + script)
+	}
+	return Language(primary)
+}
+
+// romanised is the languages whose *romanisation* has a table of its own, and
+// the script subtag that names it.
+//
+// One entry, and the shape is what matters: the table is for pinyin, and pinyin
+// is not Chinese in any sense the patterns care about — it is a Latin
+// orthography that happens to be written under a Chinese tag. A language whose
+// own script is what it is hyphenated in never appears here.
+var romanised = map[string]string{"zh": "latn"}
+
+// HyphenatesLanguage reports whether there is a table for a key.
+//
+// The key is HyphenationOf's answer and not LanguageOf's. The two differ for
+// exactly the tags romanised names, and passing the wrong one there means
+// hyphenating Han text with pinyin patterns.
+func HyphenatesLanguage(lang Language) bool { return hyphenationFor(lang) != nil }
+
+// hyphenSource is one language's pattern file as cmd/genhyphen wrote it out,
+// together with the table built from it on first use.
+type hyphenSource struct {
+	// key is what HyphenationOf resolves a lang attribute to.
+	key Language
+	// left and right are the hyphenmins the file states for typesetting.
+	left, right int
+	// patterns and exceptions are the two blocks, one entry per line.
+	patterns, exceptions string
+
+	once  sync.Once
+	built *hyphenPatterns
+}
+
+// hyphenSources is every table this engine has, one generated file each.
+//
+// Four languages and not the hundred hyph-utf8 publishes, because each is a
+// table checked into the repository and Hungarian's alone is half a megabyte.
+// These four are the ones the suite asks for by name.
+var hyphenSources = []*hyphenSource{
+	&englishHyphenation,
+	&dutchHyphenation,
+	&hungarianHyphenation,
+	&pinyinHyphenation,
+}
+
+// hyphenationFor finds the table for a key, or nil.
+//
+// A scan of four rather than a map, because it is four: the loop is shorter than
+// the hash and a document that hyphenates nothing never reaches it.
+func hyphenationFor(lang Language) *hyphenSource {
+	if lang == "" {
+		return nil
+	}
+	for _, s := range hyphenSources {
+		if s.key == lang {
+			return s
+		}
+	}
+	return nil
+}
 
 // hyphenPatterns is the table the algorithm reads, built once.
 type hyphenPatterns struct {
@@ -143,23 +230,19 @@ type hyphenPatterns struct {
 	exceptions map[string][]int
 }
 
-var (
-	hyphenOnce  sync.Once
-	hyphenBuilt *hyphenPatterns
-)
-
-// hyphenTable builds the table on first use.
+// table builds this language's patterns on first use.
 //
-// Lazily, because a document that hyphenates nothing should not pay for five
+// Lazily, because a document that hyphenates nothing should not pay for sixty
 // thousand patterns, and once, because a document that hyphenates one word
-// hyphenates a hundred.
-func hyphenTable() *hyphenPatterns {
-	hyphenOnce.Do(func() {
+// hyphenates a hundred. Per language and not once for all of them: a page of
+// English should not build the Hungarian table, which is ten times the size.
+func (s *hyphenSource) table() *hyphenPatterns {
+	s.once.Do(func() {
 		t := &hyphenPatterns{
 			byLetters:  make(map[string][]int8, 5000),
 			exceptions: make(map[string][]int, 16),
 		}
-		for _, p := range strings.Split(enUSPatterns, "\n") {
+		for _, p := range strings.Split(s.patterns, "\n") {
 			if p = strings.TrimSpace(p); p == "" {
 				continue
 			}
@@ -169,16 +252,16 @@ func hyphenTable() *hyphenPatterns {
 				t.longest = n
 			}
 		}
-		for _, w := range strings.Split(enUSExceptions, "\n") {
+		for _, w := range strings.Split(s.exceptions, "\n") {
 			if w = strings.TrimSpace(w); w == "" {
 				continue
 			}
 			word, points := splitException(w)
 			t.exceptions[word] = points
 		}
-		hyphenBuilt = t
+		s.built = t
 	})
-	return hyphenBuilt
+	return s.built
 }
 
 // splitPattern separates a pattern's letters from its numbers.

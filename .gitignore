@@ -24,6 +24,10 @@ testdata/notocjk/
 # above, the generated table is committed and the source is fetched.
 testdata/budoux/
 
+# hyph-utf8's pattern files, which cmd/genhyphen reads. Same arrangement: the
+# table is committed, the half-megabyte of TeX it was made from is not.
+testdata/hyphen/
+
 # Built by `make hbfuzz`.
 testdata/harfbuzz/.shapetext
 
