@@ -302,10 +302,10 @@ func (l *layouter) flushSubstitutions() {
 		}
 		l.reportedFamilies[families] = true
 		l.rec.ReportDetail(Finding{
-			Rule: RuleFontFallback,
+			Rule: RuleFontSubstituted,
 			Message: "no face for " + quoteValue(families) +
-				" could set any of this text, so " + quoteValue(got.alt.Name()) +
-				" was used for it; the metrics and the line breaks will differ",
+				" has a glyph for any of this text, so " + quoteValue(got.alt.Name()) +
+				" set it; the metrics and the line breaks are that face's",
 			Path:     PathOf(boxElement(got.at)),
 			Property: "font-family",
 		})

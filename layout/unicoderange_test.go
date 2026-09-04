@@ -197,7 +197,7 @@ func TestASecondNamedFamilyIsNotASubstitution(t *testing.T) {
 	h, _ := style.FromPx(10000)
 	Layout(built.Root, Size{W: w, H: h}, built.Fonts, rec)
 	for _, f := range rec.Findings() {
-		if f.Rule == RuleFontFallback {
+		if aboutTheFace(f) {
 			t.Errorf("using the second family the document named was reported as a "+
 				"substitution: %s", f.Message)
 		}
