@@ -446,6 +446,15 @@ func lookupFullCase(r rune, table []fullCase) (string, bool) {
 // set in the second form is set wrongly. It is also a third mapping rather than
 // a variation on the other two — "ß" titlecases to "Ss" and uppercases to "SS" —
 // so it has a table of its own.
+//
+// "Letter" is §1.3's typographic letter unit and not unicode.IsLetter: "a
+// typographic character unit belonging to one of the Letter or Number general
+// categories". The difference is the letter-numbers — the Roman numerals of
+// U+2160, the Suzhou numerals, the Hangzhou ones — which are letters that count.
+// U+2170 SMALL ROMAN NUMERAL ONE titlecases to U+2160 and was left as it stood,
+// while still ending the word for everything after it: "ⅰⅰⅰ" came out unchanged
+// where "Ⅰⅰⅰ" was asked for. It is the same set isWordRune uses two lines below,
+// which is what makes the two agree about where a word begins.
 func capitalizeWords(text string, inWord bool, lang Language) string {
 	var out strings.Builder
 	out.Grow(len(text))
@@ -466,7 +475,7 @@ func capitalizeWords(text string, inWord bool, lang Language) string {
 		}
 		i += size
 
-		if !inWord && unicode.IsLetter(r) {
+		if !inWord && isWordRune(r) {
 			if s, ok := lookupFullCase(r, fullTitlecase[:]); ok {
 				out.WriteString(s)
 			} else {
