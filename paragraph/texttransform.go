@@ -310,7 +310,10 @@ func localeCased(text string, lang Language, upper bool) string {
 func firstConditional(text string, lang Language, upper bool) int {
 	for i, r := range text {
 		if upper {
-			if _, ok := localeUpper(r, lang); ok {
+			// With the text in front of it, because one of the uppercase
+			// conditions reads it: Lithuanian removes a dot above only where a
+			// soft-dotted letter is what it is above.
+			if _, ok := localeUpper(r, text[:i], lang); ok {
 				return i
 			}
 			continue
@@ -347,7 +350,7 @@ func conditionalCased(text string, lang Language, upper bool, from int) string {
 			ok bool
 		)
 		if upper {
-			s, ok = localeUpper(r, lang)
+			s, ok = localeUpper(r, text[:at], lang)
 		} else {
 			s, ok = localeLower(r, text[:at], text[at+len(string(r)):], lang)
 		}
