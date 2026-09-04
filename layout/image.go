@@ -245,7 +245,7 @@ func (l *replacedLoader) backgrounds(b *Box) {
 		if l.failed[ref] {
 			continue
 		}
-		content, why := l.load(ref, "background image")
+		content, why := l.load(ref, "background image", svgAsImage)
 		if content == nil {
 			l.failed[ref] = true
 			if why != nil {
@@ -309,7 +309,7 @@ func (l *replacedLoader) image(b *Box) {
 		return
 	}
 
-	content, why := l.load(src, "image")
+	content, why := l.load(src, "image", svgAsImage)
 	if content == nil {
 		l.failed[src] = true
 		l.notReplaced(b, why)
@@ -356,7 +356,7 @@ func (l *replacedLoader) object(b *Box) {
 		l.fallbackTo(b, nil, data)
 		return
 	}
-	content, why := l.load(data, "object")
+	content, why := l.load(data, "object", svgAsDocument)
 	if content == nil {
 		l.failed[data] = true
 		l.fallbackTo(b, why, data)
@@ -413,7 +413,7 @@ func (l *replacedLoader) markerImage(b *Box) {
 	if l.failed[ref] {
 		return
 	}
-	content, _ := l.load(ref, "list marker image")
+	content, _ := l.load(ref, "list marker image", svgAsImage)
 	if content == nil {
 		l.failed[ref] = true
 		return
@@ -446,7 +446,7 @@ func (l *replacedLoader) contentImage(b *Box) {
 	if l.failed[ref] {
 		return
 	}
-	content, why := l.load(ref, "generated content image")
+	content, why := l.load(ref, "generated content image", svgAsImage)
 	if content == nil {
 		l.failed[ref] = true
 		if why != nil {
@@ -524,12 +524,12 @@ type loadFailure struct {
 // for a background — because every message below says what did not arrive, and
 // an author told "the image at paper.png was not loaded" while every <img> on
 // the page is fine looks for the wrong element.
-func (l *replacedLoader) load(src, what string) (*ReplacedContent, *loadFailure) {
+func (l *replacedLoader) load(src, what string, as svgAs) (*ReplacedContent, *loadFailure) {
 	data, fail := l.fetch(src, what)
 	if fail != nil {
 		return nil, fail
 	}
-	return l.decode(src, what, data)
+	return l.decode(src, what, data, as)
 }
 
 // fetch obtains the bytes a reference names, applying the policy of resource.go.
@@ -567,14 +567,14 @@ func (l *replacedLoader) fetch(src, what string) ([]byte, *loadFailure) {
 }
 
 // decode reads a header, checks it against the caps, and only then decodes.
-func (l *replacedLoader) decode(src, what string, data []byte) (*ReplacedContent, *loadFailure) {
+func (l *replacedLoader) decode(src, what string, data []byte, as svgAs) (*ReplacedContent, *loadFailure) {
 	// An SVG is not a picture and never becomes one. It is read for its
 	// intrinsic size and, when its content reduces to one, its colour — see
 	// svg.go, which is explicit about how narrow that is and why the rest keeps
 	// its finding. It has to be tried before image.DecodeConfig because no
 	// decoder here reads XML, so an SVG would otherwise be an unknown format.
 	if looksLikeSVG(data) {
-		if c := svgContent(data); c != nil {
+		if c := svgContent(data, as); c != nil {
 			return c, nil
 		}
 		return nil, &loadFailure{
@@ -825,7 +825,7 @@ func (l *replacedLoader) foreign(b *Box) {
 	// The element and its content together are the document, which is what the
 	// reader expects: the intrinsic size is on the root's own attributes.
 	doc := "<svg " + attrSource(b.Element) + ">" + b.Element.Foreign + "</svg>"
-	if c := svgContent([]byte(doc)); c != nil {
+	if c := svgContent([]byte(doc), svgAsImage); c != nil {
 		b.Replaced = c
 		return
 	}
@@ -834,7 +834,7 @@ func (l *replacedLoader) foreign(b *Box) {
 	// the element asked for, because the size is on the element and not in the
 	// picture. Only when the root says nothing either does it fall back to the
 	// 300 by 150 of CSS 2.1 §10.3.2.
-	if size := svgIntrinsicSize([]byte(doc)); size != nil {
+	if size := svgIntrinsicSize([]byte(doc), svgAsImage); size != nil {
 		b.Replaced = size
 	} else {
 		b.Replaced = &ReplacedContent{}

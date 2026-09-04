@@ -92,6 +92,28 @@ func (l *layouter) replacedSize(b *Box, containing, cbHeight style.Unit, cbDefin
 		height = maxZero(height.Sub(insetV))
 	}
 
+	// A percentage the *content* states, which stands in for a declaration the
+	// document did not make.
+	//
+	// It is not an intrinsic dimension — CSS Images §5.4 is explicit that a
+	// percentage is none — and it is not the default object size either. It is a
+	// document embedded with a viewport of its own saying how much of that
+	// viewport it fills, and the viewport is the box CSS gives the element. So
+	// "100%" here means what "width: 100%" would have meant, resolved against
+	// the containing block like any other percentage, and it applies only where
+	// the document itself said nothing. See svgAs for which content states one
+	// at all, and why an <img> never does.
+	//
+	// The height is taken only against a containing block that has one. A
+	// percentage of an indefinite height is indefinite — §10.5, the same rule
+	// that stops an image collapsing inside an auto-height parent — and the
+	// element falls through to the ratio or to the default below.
+	if !hasWidth && rc.WidthPercent > 0 {
+		width, hasWidth = maxZero(containing.Mul(rc.WidthPercent).Sub(insetH)), true
+	}
+	if !hasHeight && rc.HeightPercent > 0 && cbDefinite {
+		height, hasHeight = maxZero(cbHeight.Mul(rc.HeightPercent).Sub(insetV)), true
+	}
 	hasIntrinsicW := rc.Width > 0
 	hasIntrinsicH := rc.Height > 0
 	ratio := rc.Ratio

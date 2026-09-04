@@ -305,7 +305,7 @@ func TestAPercentageThatIsNotALengthIsNotOne(t *testing.T) {
 	for _, attrs := range []string{
 		`width="0%"`, `width="-40%"`, `width="%"`, `width="4 0%"`, `width="40"`,
 	} {
-		got := svgContent(bgSVG(attrs))
+		got := svgContent(bgSVG(attrs), svgAsImage)
 		if got == nil {
 			t.Fatalf("%s: the SVG was refused", attrs)
 		}

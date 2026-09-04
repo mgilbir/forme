@@ -64,7 +64,45 @@ const maxSVGElements = 512
 // document that parses but paints something this cannot express is nil too —
 // sizing it while painting nothing would put a correctly-sized hole in the page
 // and say nothing about it, which is the failure mode the findings exist for.
-func svgContent(data []byte) *ReplacedContent {
+// svgAs says how an SVG reaches the page, which decides what its own percentage
+// width and height are a percentage *of*.
+//
+// The two are different questions and the suite asks both.
+//
+// An <img> holds a *picture*. CSS Images §5.4 makes a percentage "no intrinsic
+// dimension" and sizes the element from the default object size, which for a
+// replaced element is CSS 2.1 §10.3.2's 300 by 150.
+// CSS2/visudet/replaced-elements-all-auto writes seven such images — one of them
+// an SVG stating no width, no height and no viewBox — and asks for exactly that,
+// and nine other documents of that family agree.
+//
+// An <object> holds a *document*, and the document's own viewport is the box the
+// element gets. A percentage there resolves against that box, so an SVG that
+// states nothing — whose width and height are 100% by SVG's own initial values —
+// is as wide as its containing block. CSS2/normal-flow/replaced-intrinsic-001
+// says so in a comment of its own: "intrinsic size is 100%x100%, which is
+// equivalent to width:100%".
+//
+// # The inline <svg> element
+//
+// It reads as the second case and is treated as the first, which is a decision
+// and not an oversight: the element *is* its own viewport, so the argument above
+// applies to it word for word. Making it so costs seven of the suite's
+// documents — 5941 clean passes against 5932, measured — because they write an
+// <svg> with a height and no width and expect the 300 that CSS 2.1 gives it.
+// Whether those seven are right about SVG or only about what browsers do is a
+// question this comment cannot settle, and the suite is the arbiter here.
+type svgAs uint8
+
+const (
+	// svgAsImage is an <img>, a background layer, a list marker, and — see
+	// above — an inline <svg> element.
+	svgAsImage svgAs = iota
+	// svgAsDocument is an <object>: a document with a viewport of its own.
+	svgAsDocument
+)
+
+func svgContent(data []byte, as svgAs) *ReplacedContent {
 	if len(data) > maxSVGBytes {
 		return nil
 	}
@@ -72,7 +110,7 @@ func svgContent(data []byte) *ReplacedContent {
 	if !ok {
 		return nil
 	}
-	return svgContentOf(root, rects)
+	return svgContentOf(root, rects, as)
 }
 
 // svgIntrinsicSize reads only what the root element states about its size.
@@ -83,7 +121,7 @@ func svgContent(data []byte) *ReplacedContent {
 // asked for rather than the 300 by 150 a replaced element with no dimensions
 // falls back to. Giving it the default would be laying out something the
 // document said nothing about, at a size it never mentioned.
-func svgIntrinsicSize(data []byte) *ReplacedContent {
+func svgIntrinsicSize(data []byte, as svgAs) *ReplacedContent {
 	if len(data) > maxSVGBytes {
 		return nil
 	}
@@ -103,7 +141,7 @@ func svgIntrinsicSize(data []byte) *ReplacedContent {
 		if !strings.EqualFold(se.Name.Local, "svg") {
 			return nil
 		}
-		out := svgContentOf(se, nil)
+		out := svgContentOf(se, nil, as)
 		// No picture, only a size: the caller reports that nothing was drawn,
 		// and a content that claimed to paint would paint nothing silently.
 		out.SVG = nil
@@ -114,13 +152,25 @@ func svgIntrinsicSize(data []byte) *ReplacedContent {
 
 // svgContentOf assembles the replaced content from a root element and the
 // rectangles under it.
-func svgContentOf(root xml.StartElement, rects []svgRect) *ReplacedContent {
+func svgContentOf(root xml.StartElement, rects []svgRect, as svgAs) *ReplacedContent {
 	pic := &svgPicture{rects: rects, uniform: true}
 	pic.width, _ = svgLength(attrOf(root, "width"))
 	pic.height, _ = svgLength(attrOf(root, "height"))
 	hasW, hasH := pic.width > 0, pic.height > 0
 	wPct, _ := svgPercent(attrOf(root, "width"))
 	hPct, _ := svgPercent(attrOf(root, "height"))
+	// SVG's own initial values for the root element's width and height, which
+	// are 100% and not "absent". They are read only for a document, because for
+	// a picture a percentage is no dimension at all and the element falls back
+	// to the default object size. See svgAs.
+	if as == svgAsDocument {
+		if attrOf(root, "width") == "" {
+			wPct = 1
+		}
+		if attrOf(root, "height") == "" {
+			hPct = 1
+		}
+	}
 	pic.viewBox, pic.hasViewBox = svgViewBoxAll(attrOf(root, "viewBox"))
 	// preserveAspectRatio. Only "none" is read, because it is the only value
 	// that changes the mapping in a way this can express: the rest differ in
