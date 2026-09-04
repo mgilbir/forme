@@ -60,7 +60,12 @@ func (br *Breaker) BreakOneLine(items []Item, from, fromByte int, width, lineX s
 	line []Item, next, nextByte int, outOfFlow []MidLineBox, forced bool) {
 
 	line, next, nextByte, outOfFlow, forced = br.fillOneLine(items, from, fromByte, width, lineX)
-	return withHyphen(items, line, from, next, nextByte, forced), next, nextByte, outOfFlow, forced
+	line, skip := withHyphen(items, line, from, next, nextByte, forced)
+	// A character the hyphen replaced, taken off the start of the next line.
+	// The offset is the one overflow-wrap's cut already uses, and it is only
+	// ever set where that cut is not — withHyphen declines a line that ended
+	// inside an item. See Item.HyphenSkip and paragraph.Orthography.
+	return line, next, nextByte + skip, outOfFlow, forced
 }
 
 // withHyphen prints the hyphen a soft hyphen asked for, on the line that broke
@@ -82,17 +87,26 @@ func (br *Breaker) BreakOneLine(items []Item, from, fromByte int, width, lineX s
 // carries no break opportunity, is no kind of white space, and is not out of
 // flow. What it does carry is everything about how the text beside it is drawn,
 // because it is drawn as part of that text.
-func withHyphen(items, line []Item, from, next, nextByte int, forced bool) []Item {
+func withHyphen(items, line []Item, from, next, nextByte int, forced bool) ([]Item, int) {
 	// A forced break is the author's own and hyphenates nothing; the end of the
 	// items is the end of the paragraph, where the word was not broken at all;
 	// a non-zero offset means the line ended *inside* an item, which is
 	// overflow-wrap's cut and not a hyphenation point.
 	if forced || nextByte != 0 || next <= from || next >= len(items) {
-		return line
+		return line, 0
 	}
 	at, ok := hyphenBefore(items, next)
 	if !ok {
-		return line
+		return line, 0
+	}
+	// The language may take a character off the start of the next line as well
+	// as print a hyphen at the end of this one, and it may take one only if
+	// there is one to take: the item the next line begins at has to be the item
+	// the rule was computed against, which it is not when a box boundary or a
+	// float stands between them.
+	skip := at.HyphenSkip
+	if skip > len(items[next].Text) {
+		skip = 0
 	}
 	// Capped so the append cannot write into the caller's items.
 	face, above, below := at.Face, at.Above, at.Below
@@ -109,7 +123,7 @@ func withHyphen(items, line []Item, from, next, nextByte int, forced bool) []Ite
 		// the same line, in the same face, and an upright line does not turn one
 		// character of itself on its side.
 		Upright: at.Upright,
-	})
+	}), skip
 }
 
 // hyphenBefore is the item whose soft hyphen the line ended at, if it did.

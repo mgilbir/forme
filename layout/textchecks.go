@@ -397,34 +397,37 @@ func (l *layouter) reportAutospace(b *Box, value string) {
 // Anything that is not a keyword and not a single string is invalid and is
 // treated as the keyword, which is what the cascade does with a declaration it
 // cannot parse.
-func hyphenCharacter(value string, face *shape.Face) string {
+//
+// The second result says the author supplied one, which is what lets a language
+// fill the gap where they did not: §6.3.1 asks a UA to use "the appropriate
+// language-specific hyphenation character(s)", and §6.3.2 lets the document
+// overrule it. Returning "the author said nothing" as the empty string would
+// not do — "hyphenate-character: \"\"" asks for no mark at all.
+func hyphenCharacter(value string) (string, bool) {
 	if strings.TrimSpace(value) == "" || strings.EqualFold(strings.TrimSpace(value), "auto") {
-		return hyphenTextFor(face)
+		return "", false
 	}
 	vals, errs := css.ParseComponentValues(value)
 	if len(errs) != 0 {
-		return hyphenTextFor(face)
+		return "", false
 	}
 	found, seen := "", false
 	for _, v := range vals {
 		if !v.IsToken() {
-			return hyphenTextFor(face)
+			return "", false
 		}
 		switch v.Token.Kind {
 		case css.Whitespace:
 		case css.String:
 			if seen {
-				return hyphenTextFor(face)
+				return "", false
 			}
 			found, seen = v.Token.Value, true
 		default:
-			return hyphenTextFor(face)
+			return "", false
 		}
 	}
-	if !seen {
-		return hyphenTextFor(face)
-	}
-	return found
+	return found, seen
 }
 
 // hyphenTextFor is the character a broken word ends with when the document has

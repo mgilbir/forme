@@ -302,6 +302,19 @@ type Item struct {
 	// the number, and it needs it *before* it decides, since a line that can hold
 	// nine characters and a hyphen cannot hold ten and a hyphen.
 	Hyphen style.Unit
+	// HyphenSkip is how many bytes at the start of the next line are dropped
+	// when the line ends at this item's hyphen: a character the hyphen has
+	// replaced. See Orthography — pinyin's syllable separator is the one this
+	// engine has.
+	//
+	// Zero for every item in almost every document, and the arithmetic is the
+	// same one overflow-wrap already does: the next line begins part-way
+	// through an item, which BreakOneLine returns as an offset.
+	HyphenSkip int
+	// HyphenLead is text put at the start of the next line when the line ends
+	// at this item's hyphen. See Orthography — Uyghur's joiner is the one this
+	// engine has.
+	HyphenLead string
 	// HyphenText is the character to print, carried with the width so that the
 	// item the line breaking appends is one this package can build.
 	//

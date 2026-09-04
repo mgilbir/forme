@@ -1763,6 +1763,23 @@ func languageAt(n *html.Node) paragraph.Language {
 	return ""
 }
 
+// orthographyAt is the hyphenation orthography in force at a node.
+//
+// The tag whole, as writingSystemAt reads it and for the same reason: what
+// decides is the script, and "zh-Latn" is romanised Chinese where "zh" is not.
+// See paragraph.OrthographyOf.
+func orthographyAt(n *html.Node) paragraph.Orthography {
+	for cur := n; cur != nil; cur = cur.Parent {
+		if cur.Type != html.ElementNode {
+			continue
+		}
+		if v, ok := cur.Attr("lang"); ok && v != "" {
+			return paragraph.OrthographyOf(v)
+		}
+	}
+	return paragraph.OrthographyPlain
+}
+
 // writingSystemAt is the writing system in force at a node, which is a
 // different question from the language and is asked of the same attribute.
 //
