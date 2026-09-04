@@ -91,6 +91,21 @@ type DrawText struct {
 	//
 	// See layout/writingmode.go, which is where the rest of the argument is.
 	Sideways bool
+	// Anticlockwise says the turn went the other way: each glyph is turned
+	// ninety degrees *anticlockwise* from the way it stands in the font, and
+	// the advance from one to the next goes upwards from At.
+	//
+	// It goes with Sideways rather than instead of it, the way Upright does,
+	// and for the same reason: the run still runs along the page's vertical
+	// axis and a backend that ignored this would still put the glyphs in the
+	// right column. What it would get wrong is which way up they stand and
+	// which end of the column the first one is at.
+	//
+	// "writing-mode: sideways-lr" is the only thing that asks for it. CSS
+	// Writing Modes §3.1 gives that mode a left-to-right block flow like
+	// vertical-lr's and the *other* quarter turn, which is the one thing about
+	// it a permutation of the four sides cannot hide from a backend.
+	Anticlockwise bool
 	// Upright says the glyphs are *not* turned: each stands the way it does in
 	// the font and the pen moves one em down to the next one, whatever the
 	// face's horizontal advance for it is. It is what "text-orientation:
@@ -1032,7 +1047,7 @@ func textInkAt(v DrawText, above, below style.Unit) Rect {
 	return placeRun(Rect{
 		Y: style.Unit(0).Sub(above),
 		W: width, H: above.Add(below),
-	}, v.At, v.Sideways)
+	}, v.At, turnOfRun(v))
 }
 
 // decorations paints a box's own background and border, which is what §E.2 steps
@@ -1342,7 +1357,13 @@ func (p *painter) lines(f *Fragment) {
 		// baseline is measured from, and the edge half-leading is split above —
 		// is its right one.
 		baseline := content.Y.Add(line.Rect.Y).Add(line.Baseline)
-		if line.Sideways {
+		switch {
+		case line.Anticlockwise:
+			// The other turn puts the glyphs' up to the left, so the ascent is
+			// on the left of the line box and the baseline is measured
+			// rightwards from its near edge rather than back from its far one.
+			baseline = content.X.Add(line.Rect.X).Add(line.Baseline)
+		case line.Sideways:
 			baseline = content.X.Add(line.Rect.X).Add(line.Rect.W).Sub(line.Baseline)
 		}
 		// §E.2's inline layer, in the order it gives: for each line box, the
@@ -1402,7 +1423,18 @@ func (p *painter) lines(f *Fragment) {
 				X: content.X.Add(line.Rect.X).Add(along),
 				Y: baseline.Add(across),
 			}
-			if line.Sideways {
+			switch {
+			case line.Anticlockwise:
+				// The same quarter turn the other way: along the line is *up*
+				// the page, so the offset is measured back from the line box's
+				// foot, and off the baseline is towards the right, because that
+				// is where "down" points once a page has been turned
+				// anticlockwise. See layout/writingmode.go.
+				at = Point{
+					X: baseline.Add(across),
+					Y: content.Y.Add(line.Rect.Y).Add(line.Rect.H).Sub(along),
+				}
+			case line.Sideways:
 				// The same two offsets, a quarter turn round: along the line is
 				// down the page, and off the baseline is back towards the left,
 				// because that is the way "up" points once a page has been
@@ -1428,28 +1460,29 @@ func (p *painter) lines(f *Fragment) {
 				// the page beside the box, and would put the control character
 				// itself into the text extracted from the page, where it is
 				// exactly the thing a reader does not want back.
-				p.ops = append(p.ops, controlBox(at, run.Width, run.Size, colour, line.Sideways)...)
+				p.ops = append(p.ops, controlBox(at, run.Width, run.Size, colour, turnOfLine(line))...)
 				continue
 			}
-			p.decorate(run, at, line.Sideways, false)
+			p.decorate(run, at, turnOfLine(line), false)
 			p.ops = append(p.ops, DrawText{
-				At:           at,
-				Sideways:     line.Sideways,
-				Upright:      run.Upright,
-				Features:     run.Features,
-				Text:         drawableText(run.Text),
-				PreContext:   run.PreContext,
-				PostContext:  run.PostContext,
-				MergePre:     run.MergePre,
-				MergePost:    run.MergePost,
-				ContextKerns: run.ContextKerns,
-				RTL:          run.RTL,
-				Face:         run.Face,
-				Size:         run.Size,
-				Color:        colour,
-				CharSpacing:  run.LetterSpacing,
+				At:            at,
+				Sideways:      line.Sideways,
+				Anticlockwise: line.Anticlockwise,
+				Upright:       run.Upright,
+				Features:      run.Features,
+				Text:          drawableText(run.Text),
+				PreContext:    run.PreContext,
+				PostContext:   run.PostContext,
+				MergePre:      run.MergePre,
+				MergePost:     run.MergePost,
+				ContextKerns:  run.ContextKerns,
+				RTL:           run.RTL,
+				Face:          run.Face,
+				Size:          run.Size,
+				Color:         colour,
+				CharSpacing:   run.LetterSpacing,
 			})
-			p.decorate(run, at, line.Sideways, true)
+			p.decorate(run, at, turnOfLine(line), true)
 		}
 	}
 }
@@ -1472,7 +1505,7 @@ func (p *painter) lines(f *Fragment) {
 // overlining div are ruled by one straight line. at.Y is the run's own baseline
 // and carries the run's own shift, which is undone here and the declaring box's
 // put in its place.
-func (p *painter) decorate(run TextRun, at Point, sideways, over bool) {
+func (p *painter) decorate(run TextRun, at Point, turn runTurn, over bool) {
 	if len(run.Decorations) == 0 || run.Width <= 0 {
 		return
 	}
@@ -1496,7 +1529,7 @@ func (p *painter) decorate(run TextRun, at Point, sideways, over bool) {
 			continue
 		}
 		p.ops = append(p.ops, FillRect{
-			Rect: placeRun(band, at, sideways), Color: colour, Overhang: true,
+			Rect: placeRun(band, at, turn), Color: colour, Overhang: true,
 		})
 	}
 }
@@ -1511,10 +1544,34 @@ func (p *painter) decorate(run TextRun, at Point, sideways, over bool) {
 // The sideways case is the quarter turn: along the line becomes down the page,
 // and off the baseline becomes back towards the left. A rectangle's far edge in
 // the second axis is its near edge afterwards, which is where the extra
-// subtraction of the height comes from.
-func placeRun(r Rect, at Point, sideways bool) Rect {
-	if !sideways {
+// subtraction of the height comes from. Anticlockwise is the same turn the
+// other way round, and the subtraction moves to the other axis with it.
+// runTurn is which way a run is set on the page: across it, or down it one way
+// or the other.
+//
+// The two facts travel together because they are one decision, and because two
+// bare booleans side by side at a call site are an invitation to pass them in
+// the wrong order — which no test would catch for a run that is not turned at
+// all, which is almost every run in almost every document.
+type runTurn struct{ sideways, anticlockwise bool }
+
+func turnOfLine(l LineFragment) runTurn {
+	return runTurn{sideways: l.Sideways, anticlockwise: l.Anticlockwise}
+}
+
+func turnOfRun(v DrawText) runTurn {
+	return runTurn{sideways: v.Sideways, anticlockwise: v.Anticlockwise}
+}
+
+func placeRun(r Rect, at Point, turn runTurn) Rect {
+	switch {
+	case !turn.sideways:
 		return Rect{X: at.X.Add(r.X), Y: at.Y.Add(r.Y), W: r.W, H: r.H}
+	case turn.anticlockwise:
+		// The other turn, so both axes go the other way: along the line runs up
+		// the page and off the baseline runs right. The extra subtraction moves
+		// from the first axis to the second for exactly that reason.
+		return Rect{X: at.X.Add(r.Y), Y: at.Y.Sub(r.X).Sub(r.W), W: r.H, H: r.W}
 	}
 	return Rect{X: at.X.Sub(r.Y).Sub(r.H), Y: at.Y.Add(r.X), W: r.H, H: r.W}
 }

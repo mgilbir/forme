@@ -969,7 +969,7 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 		// Everything inside is in the coordinates of a horizontal page. This is
 		// the quarter turn that puts it on this one, and it is the whole of what
 		// a vertical writing mode costs the rest of the engine.
-		turnContent(frag, turnTo)
+		turnContent(frag, turnTo, Size{W: frag.ContentRect().W, H: lineLength})
 		// What the content came to along the block axis, which is a distance
 		// across the page and not down it. The box is as tall as its declared
 		// height and its content can only overflow it sideways, which is a

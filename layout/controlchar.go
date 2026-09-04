@@ -82,7 +82,7 @@ func controlOf(text string) (rune, bool) {
 // and size the font size — which is what the box is proportioned from rather
 // than the advance, so that a face with a wide .notdef does not get a box of a
 // different shape from one with a narrow one.
-func controlBox(at Point, advance, size style.Unit, colour style.RGBA, sideways bool) []Op {
+func controlBox(at Point, advance, size style.Unit, colour style.RGBA, turn runTurn) []Op {
 	// Two thirds of the em tall, which sits between the baseline and about the
 	// cap height, and inset from the advance so two of them in a row do not
 	// touch.
@@ -104,7 +104,7 @@ func controlBox(at Point, advance, size style.Unit, colour style.RGBA, sideways 
 	x := inset
 	y := style.Unit(0).Sub(h)
 	ring := func(r Rect) Op {
-		return FillRect{Rect: placeRun(r, at, sideways), Color: colour, Overhang: true}
+		return FillRect{Rect: placeRun(r, at, turn), Color: colour, Overhang: true}
 	}
 	if w <= thick.Mul(2) || h <= thick.Mul(2) {
 		// Too small for a ring to have a hole. A solid mark is still a visible

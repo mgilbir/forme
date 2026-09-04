@@ -58,15 +58,24 @@ const (
 	// horizontalTB is the initial value and what every box was before this:
 	// lines stack downwards and text runs across them.
 	horizontalTB writingMode = iota
-	// verticalRL is the one that is laid out: lines stack from the right edge
-	// leftwards, text runs from the top downwards.
+	// The four vertical modes, all of which are laid out. They differ in two
+	// bits and nothing else: which edge the lines stack from, and which way the
+	// quarter turn goes.
+	//
+	// verticalRL stacks from the right edge leftwards and turns clockwise.
 	verticalRL
-	// The three that are read and reported. They are told apart rather than
-	// lumped together because the finding names the value the author wrote, and
-	// "this is not laid out" is a more useful sentence when it is about the mode
-	// in front of them.
+	// verticalLR stacks from the left edge rightwards, and turns clockwise
+	// too — see turnRect, which is where the reading of §4.3 that would have it
+	// the other way up is argued down.
 	verticalLR
+	// sidewaysRL is verticalRL with every character lying along the line
+	// whatever UAX #50 would have made of it. That is the whole difference:
+	// §5.1's text-orientation has no effect in either sideways mode, so the
+	// mixture a quarter turn cannot draw cannot arise in one.
 	sidewaysRL
+	// sidewaysLR stacks from the left like verticalLR and turns the other way,
+	// which is the only thing in this file that is not a permutation of the
+	// four sides. It is why the display list has DrawText.Anticlockwise.
 	sidewaysLR
 )
 
@@ -104,6 +113,22 @@ func writingModeOf(b *Box) writingMode {
 
 func (m writingMode) vertical() bool { return m != horizontalTB }
 
+// sideways reports whether the mode is one of CSS Writing Modes §3.1's two
+// sideways values, whose typographic mode is horizontal.
+//
+// It is what the two properties that "have no effect in horizontal typographic
+// modes" — text-orientation (§5.1) and text-combine-upright (§9.1) — are asked
+// about, and it is also what says every character lies along the line whatever
+// UAX #50 makes of it. Those are the only two things that separate a sideways
+// mode from the vertical mode beside it.
+func (m writingMode) sideways() bool { return m == sidewaysRL || m == sidewaysLR }
+
+// stacksFromTheRight reports whether the mode's lines stack back from the right
+// edge, which is the whole of what the -rl modes do that the -lr ones do not.
+func (m writingMode) stacksFromTheRight() bool {
+	return m == verticalRL || m == sidewaysRL
+}
+
 // String is the keyword, for the finding. It is the author's spelling of the
 // value and not a description of it, because the sentence it goes into is about
 // the declaration they wrote.
@@ -132,7 +157,12 @@ func (m writingMode) String() string {
 // The margins, borders and padding of a box inside a turned one are physical by
 // the time anything paints them, and this is where they become physical.
 func turnEdges(e Edges, mode writingMode) Edges {
-	if mode == verticalLR {
+	switch {
+	case mode == sidewaysLR:
+		// The other turn, so the two sides the inline axis runs between swap:
+		// the frame's left is the foot of the page rather than its head.
+		return Edges{Bottom: e.Left, Left: e.Top, Top: e.Right, Right: e.Bottom}
+	case !mode.stacksFromTheRight():
 		return Edges{Top: e.Left, Left: e.Top, Bottom: e.Right, Right: e.Bottom}
 	}
 	return Edges{Top: e.Left, Right: e.Top, Bottom: e.Right, Left: e.Bottom}
@@ -154,7 +184,10 @@ func turnEdges(e Edges, mode writingMode) Edges {
 // paragraph one, so a vertical box holding an <h1> was a vertical box this
 // engine would not lay out.
 func untuneEdges(e Edges, mode writingMode) Edges {
-	if mode == verticalLR {
+	switch {
+	case mode == sidewaysLR:
+		return Edges{Left: e.Bottom, Top: e.Left, Right: e.Top, Bottom: e.Right}
+	case !mode.stacksFromTheRight():
 		return Edges{Left: e.Top, Top: e.Left, Right: e.Bottom, Bottom: e.Right}
 	}
 	return Edges{Left: e.Top, Top: e.Right, Right: e.Bottom, Bottom: e.Left}
@@ -180,12 +213,21 @@ func (l *layouter) insideTurn(b *Box) (writingMode, bool) {
 
 // turnRect maps one rectangle of the horizontal frame onto the page.
 //
-// mirror is the physical width of the content box the rectangle is positioned
-// inside, and it is what the two vertical modes differ by. Both run their text
-// from the top downwards and turn their glyphs the same quarter turn clockwise;
-// what one does and the other does not is stack its lines *back* from the right
-// edge. So vertical-rl measures the block coordinate from the mirror and
-// vertical-lr takes it as it stands.
+// in is the physical content box the rectangle is positioned inside: its width
+// is the frame's block extent and its height is the frame's inline extent,
+// because the turn has already swapped the two by the time this is asked.
+//
+// The three clockwise modes run their text from the top downwards and turn
+// their glyphs the same quarter turn; what vertical-rl and sideways-rl do and
+// vertical-lr does not is stack their lines *back* from the right edge. So the
+// -rl modes measure the block coordinate from the width and the -lr ones take
+// it as it stands.
+//
+// sideways-lr is the other turn and mirrors the *inline* coordinate instead:
+// its lines run from the foot of the page to its head, so a run's offset along
+// the line is measured back from the frame's inline extent. It is the one mode
+// that mirrors an axis a permutation of the four sides cannot express, which is
+// why it needed a fact on the display list and the other three did not.
 //
 // That is the whole of the difference, and it is worth saying why it is so
 // small. The block-start side of a vertical-lr box is its left, so a reading of
@@ -201,14 +243,18 @@ func (l *layouter) insideTurn(b *Box) (writingMode, bool) {
 // The inline coordinate never takes a mirror. Text runs from the top downwards
 // in both, which is the direction a horizontal line's own coordinate already
 // runs in.
-func turnRect(r Rect, mode writingMode, mirror style.Unit) Rect {
+func turnRect(r Rect, mode writingMode, in Size) Rect {
 	x := r.Y
-	if mode == verticalRL {
-		x = mirror.Sub(r.Y).Sub(r.H)
+	if mode.stacksFromTheRight() {
+		x = in.W.Sub(r.Y).Sub(r.H)
+	}
+	y := r.X
+	if mode == sidewaysLR {
+		y = in.H.Sub(r.X).Sub(r.W)
 	}
 	return Rect{
 		X: x,
-		Y: r.X,
+		Y: y,
 		W: r.H,
 		H: r.W,
 	}
@@ -221,28 +267,35 @@ func turnRect(r Rect, mode writingMode, mirror style.Unit) Rect {
 // "padding-top" is the top of the page whichever way the text inside runs. What
 // turns is what the box holds.
 //
-// The walk carries each level's own physical content width rather than the
+// The walk carries each level's own physical content box rather than the
 // outermost one, because the mirror is per containing block: a line inside a
-// nested block starts at *that* block's right edge. Composing the turn level by
-// level like this is what makes it a rigid motion of the whole subtree rather
-// than of its first generation.
-func turnContent(f *Fragment, mode writingMode) {
-	mirror := f.ContentRect().W
+// nested block starts at *that* block's right edge, and in sideways-lr at that
+// block's foot. Composing the turn level by level like this is what makes it a
+// rigid motion of the whole subtree rather than of its first generation.
+// in is the fragment's own physical content box, and it is passed rather than
+// read off the fragment because the outermost turned box does not have one yet.
+// Its physical *height* is the frame's inline extent — the length its lines were
+// broken against — and that number is settled long before the height arithmetic
+// that would put it on the fragment: block layout resolves a box's height from
+// what its content came to, which for a turned box is a distance across the page
+// and not down it. Every level below the first reads it off itself, because
+// turnFragment has already turned that fragment's own rectangle by then.
+func turnContent(f *Fragment, mode writingMode, in Size) {
 	for i := range f.Lines {
-		turnLine(&f.Lines[i], mode, mirror)
+		turnLine(&f.Lines[i], mode, in)
 	}
 	for _, c := range f.Children {
-		turnFragment(c, mode, mirror)
+		turnFragment(c, mode, in)
 	}
 }
 
-func turnFragment(f *Fragment, mode writingMode, mirror style.Unit) {
+func turnFragment(f *Fragment, mode writingMode, in Size) {
 	if f == nil {
 		return
 	}
-	f.BorderRect = turnRect(f.BorderRect, mode, mirror)
+	f.BorderRect = turnRect(f.BorderRect, mode, in)
 	for i := range f.bgBands {
-		f.bgBands[i] = turnRect(f.bgBands[i], mode, mirror)
+		f.bgBands[i] = turnRect(f.bgBands[i], mode, in)
 	}
 	f.Margin = turnEdges(f.Margin, mode)
 	f.Border = turnEdges(f.Border, mode)
@@ -251,7 +304,7 @@ func turnFragment(f *Fragment, mode writingMode, mirror style.Unit) {
 	// only by the overflow arithmetic, which asks it of the box it belongs to
 	// and never compares it across a turn, so it keeps its name and changes its
 	// meaning here along with everything else.
-	turnContent(f, mode)
+	turnContent(f, mode, f.ContentRect().Size())
 }
 
 // turnLine turns one line box and the inline boxes hanging off it.
@@ -262,17 +315,18 @@ func turnFragment(f *Fragment, mode writingMode, mirror style.Unit) {
 // — see painter.lines. Doing it here instead would mean turning a position that
 // is not a rectangle and has no extent, which is exactly the arithmetic that
 // belongs beside the baseline it is measured from.
-func turnLine(l *LineFragment, mode writingMode, mirror style.Unit) {
-	l.Rect = turnRect(l.Rect, mode, mirror)
+func turnLine(l *LineFragment, mode writingMode, in Size) {
+	l.Rect = turnRect(l.Rect, mode, in)
 	l.Sideways = true
+	l.Anticlockwise = mode == sidewaysLR
 	for _, ib := range l.Boxes {
 		// An inline box's fragment is positioned in the block's content
 		// coordinates, the same ones the line is, so it takes the same mirror.
 		// Its own children are the boxes further in, which turnFragment reaches
 		// through turnContent.
-		ib.BorderRect = turnRect(ib.BorderRect, mode, mirror)
+		ib.BorderRect = turnRect(ib.BorderRect, mode, in)
 		for i := range ib.bgBands {
-			ib.bgBands[i] = turnRect(ib.bgBands[i], mode, mirror)
+			ib.bgBands[i] = turnRect(ib.bgBands[i], mode, in)
 		}
 		ib.Margin = turnEdges(ib.Margin, mode)
 		ib.Border = turnEdges(ib.Border, mode)
@@ -303,22 +357,13 @@ func (l *layouter) turns(b *Box, containing style.Unit, hasHeight bool) writingM
 		// subtree is already being laid out horizontally.
 		return horizontalTB
 	}
-	if mode == verticalRL || mode == verticalLR {
-		facing, why := l.refusesToTurn(b, mode, containing, hasHeight)
-		if why == "" {
-			l.turnedUpright[b] = facing == orientationUpright
-			l.turnedMode[b] = mode
-			return mode
-		}
-		l.reportWritingMode(b, mode, why)
-		return horizontalTB
+	facing, why := l.refusesToTurn(b, mode, containing, hasHeight)
+	if why == "" {
+		l.turnedUpright[b] = facing == orientationUpright
+		l.turnedMode[b] = mode
+		return mode
 	}
-	// The two sideways modes. They are the same quarter turn as these with the
-	// upright characters taken out — "sideways-rl" is exactly what this file
-	// does, for every character rather than only the rotatable ones — and
-	// "sideways-lr" is the other quarter turn, which nothing here expresses.
-	// Neither is laid out yet.
-	l.reportWritingMode(b, mode, "only \"vertical-rl\" and \"vertical-lr\" are laid out")
+	l.reportWritingMode(b, mode, why)
 	return horizontalTB
 }
 
@@ -389,7 +434,14 @@ func (l *layouter) refusesToTurn(b *Box, mode writingMode, containing style.Unit
 	// the box tree carries the transformed text, so this is asked of what will
 	// be drawn rather than of what was written.
 	facing := orientationOf(b)
-	if facing == orientationMixed {
+	if mode.sideways() {
+		// §5.1: text-orientation has no effect in a horizontal typographic
+		// mode, and both sideways modes are one. Every character lies along the
+		// line, so the mixture that a quarter turn cannot draw cannot arise —
+		// which is the whole reason the sideways modes exist, and is why this
+		// is a skip and not a second answer to the same question.
+		facing = orientationSideways
+	} else if facing == orientationMixed {
 		upright, rotated := l.subtreeOrientationMix(b)
 		switch {
 		case upright && rotated:
@@ -482,8 +534,8 @@ func (l *layouter) subtreeRefusesToTurn(root *Box, mode writingMode, b *Box) str
 			}
 		}
 	}
-	if orientation := trimmedLower(b.Style["text-orientation"]); orientation != "" &&
-		orientationOf(b) != orientationOf(root) {
+	if orientation := trimmedLower(b.Style["text-orientation"]); !mode.sideways() &&
+		orientation != "" && orientationOf(b) != orientationOf(root) {
 		// The subtree has to agree with the box the turn started at, because the
 		// turn is one decision for the whole of it: one run set upright inside a
 		// box whose lines are turned is a second typesetting mode on the same
@@ -494,7 +546,8 @@ func (l *layouter) subtreeRefusesToTurn(root *Box, mode writingMode, b *Box) str
 		// the clause above has already refused a box that has one.
 		return "\"text-orientation: " + orientation + "\" inside it is not the orientation the box is set in"
 	}
-	if combine := trimmedLower(b.Style["text-combine-upright"]); combine != "" && combine != "none" {
+	if combine := trimmedLower(b.Style["text-combine-upright"]); !mode.sideways() &&
+		combine != "" && combine != "none" {
 		return "\"text-combine-upright: " + combine + "\" asks for a run set across the line, which this engine does not do"
 	}
 	for _, c := range b.Children {

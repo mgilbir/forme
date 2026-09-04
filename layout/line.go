@@ -55,6 +55,13 @@ type LineFragment struct {
 	// what it has in its hand there. See layout/writingmode.go for why a quarter
 	// turn is expressible as one flag at all.
 	Sideways bool
+	// Anticlockwise says the quarter turn went the other way, which is what
+	// "writing-mode: sideways-lr" asks for. It goes with Sideways rather than
+	// instead of it: the line still runs along the page's vertical axis, and
+	// what differs is which way. Its Baseline is measured rightwards from the
+	// line box's *left* edge, because the glyphs' own up points left after this
+	// turn, and each run's X is a distance upwards from the line box's foot.
+	Anticlockwise bool
 }
 
 // TextRun is a piece of text on a line, set in one face at one size.
