@@ -349,7 +349,7 @@ func (l *replacedLoader) object(b *Box) {
 		return
 	}
 	if got, ok := l.loaded[data]; ok {
-		b.Replaced = got
+		l.embed(b, got)
 		return
 	}
 	if l.failed[data] {
@@ -363,7 +363,25 @@ func (l *replacedLoader) object(b *Box) {
 		return
 	}
 	l.loaded[data] = content
+	l.embed(b, content)
+}
+
+// embed replaces an object with the data it named, and takes the fallback
+// content off it.
+//
+// HTML: an object that could be shown is represented by the data and *not* by
+// its children — they are what an author wrote for the case where it could not
+// be, which is the case fallbackTo is about. Leaving them laid out the box out
+// of the object's own size and drew a paragraph reading "FAIL (SVG not
+// supported)" over a picture that was there, which is the suite's
+// replaced-intrinsic-003 exactly.
+//
+// The children are dropped rather than hidden. A hidden box is still a box —
+// it takes part in the sizing and keeps its own out-of-flow descendants — and
+// what HTML says is that the fallback content is not rendered at all.
+func (l *replacedLoader) embed(b *Box, content *ReplacedContent) {
 	b.Replaced = content
+	b.Children = nil
 }
 
 // fallbackTo says an object's data could not be used, so what is on the page is

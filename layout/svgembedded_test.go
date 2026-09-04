@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/mgilbir/forme/style"
@@ -102,5 +103,61 @@ func TestAnSVGThatStatesItsOwnSizeIsNotAPercentage(t *testing.T) {
 			t.Errorf("%s is %v by %v, want %v by %v", tc.what,
 				got.W.Px(), got.H.Px(), want.W.Px(), want.H.Px())
 		}
+	}
+}
+
+// TestAnEmbeddedObjectDoesNotDrawItsFallback.
+//
+// HTML: an object that could be shown is represented by the data and *not* by
+// its children. They are what an author wrote for the case where it could not
+// be shown, so a page that draws them is showing its second choice — and a page
+// that draws them *over* a picture that is there is showing both.
+//
+// The suite's replaced-intrinsic-003 is that document: its object embeds an SVG
+// and its fallback reads "FAIL (SVG not supported)".
+func TestAnEmbeddedObjectDoesNotDrawItsFallback(t *testing.T) {
+	res := mapResolver{"s.svg": []byte(sizelessSVG)}
+	ops := paintWith(t, res,
+		`<div id="d"><object id="r" data="s.svg" type="image/svg+xml">FALLBACK</object></div>`,
+		noDefaults+`#d { width: 150px } #r { display: block }`)
+	for _, op := range ops {
+		if v, ok := op.(DrawText); ok && strings.Contains(v.Text, "FALLBACK") {
+			t.Errorf("the object drew its fallback content %q as well as the "+
+				"picture it embedded", v.Text)
+		}
+	}
+	// The control: an object whose data cannot be embedded *does* draw it, and
+	// says so. Without this the test above would pass on an engine that drew no
+	// fallback content ever.
+	bad := mapResolver{}
+	ops = paintWith(t, bad,
+		`<div id="d"><object id="r" data="nothing.svg" type="image/svg+xml">FALLBACK</object></div>`,
+		noDefaults+`#d { width: 150px } #r { display: block }`)
+	var drew bool
+	for _, op := range ops {
+		if v, ok := op.(DrawText); ok && strings.Contains(v.Text, "FALLBACK") {
+			drew = true
+		}
+	}
+	if !drew {
+		t.Error("an object whose data could not be embedded drew no fallback content")
+	}
+}
+
+// TestAnEmbeddedPercentageIsOfTheBoxAndNotTheContent.
+//
+// The viewport an embedded document fills is the room the element takes on the
+// page, so the padding and the border come off the percentage whatever
+// box-sizing says. A hundred pixels of padding on a hundred-per-cent object
+// leaves a hundred pixels of content in a two-hundred-pixel column, not two
+// hundred pixels of content overflowing it by a hundred.
+func TestAnEmbeddedPercentageIsOfTheBoxAndNotTheContent(t *testing.T) {
+	res := mapResolver{"s.svg": []byte(sizelessSVG)}
+	got := sizeOfReplacedWith(t, res,
+		`<div id="d"><object id="r" data="s.svg" type="image/svg+xml"></object></div>`,
+		`#d { width: 200px } #r { display: block; padding-right: 100px }`)
+	if want := (Size{W: bgpx(200), H: bgpx(150)}); got != want {
+		t.Errorf("the object's border box is %v by %v, want %v by %v",
+			got.W.Px(), got.H.Px(), want.W.Px(), want.H.Px())
 	}
 }

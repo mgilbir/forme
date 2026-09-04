@@ -108,11 +108,22 @@ func (l *layouter) replacedSize(b *Box, containing, cbHeight style.Unit, cbDefin
 	// percentage of an indefinite height is indefinite — §10.5, the same rule
 	// that stops an image collapsing inside an auto-height parent — and the
 	// element falls through to the ratio or to the default below.
+	//
+	// The percentage is of the element's *box* and not of its content, so the
+	// padding and the border come off it whatever box-sizing says — which is
+	// why this is not sizingInset, which is the same subtraction made only for a
+	// border-box declaration. An embedded document's viewport is the room the
+	// element takes on the page, and a document filling its viewport fills that:
+	// replaced-intrinsic-003 puts a hundred pixels of padding on the object and
+	// draws the corner of its picture against the border box, and a content box
+	// of the whole containing block would put it a hundred pixels off the page.
 	if !hasWidth && rc.WidthPercent > 0 {
-		width, hasWidth = maxZero(containing.Mul(rc.WidthPercent).Sub(insetH)), true
+		edge := l.borderWidths(b).Horizontal().Add(l.paddingOf(b, containing).Horizontal())
+		width, hasWidth = maxZero(containing.Mul(rc.WidthPercent).Sub(edge)), true
 	}
 	if !hasHeight && rc.HeightPercent > 0 && cbDefinite {
-		height, hasHeight = maxZero(cbHeight.Mul(rc.HeightPercent).Sub(insetV)), true
+		edge := l.borderWidths(b).Vertical().Add(l.paddingOf(b, containing).Vertical())
+		height, hasHeight = maxZero(cbHeight.Mul(rc.HeightPercent).Sub(edge)), true
 	}
 	hasIntrinsicW := rc.Width > 0
 	hasIntrinsicH := rc.Height > 0
