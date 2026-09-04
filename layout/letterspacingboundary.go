@@ -81,6 +81,52 @@ func (l *layouter) linkLetterSpacing(items []inlineItem) []inlineItem {
 		items[i].Width = items[i].Width.Sub(items[i].Spacing.Letter).Add(want)
 		items[i].EdgeLetterSpacing = want
 	}
+	return l.spaceAfterAtomics(items, order, at)
+}
+
+// spaceAfterAtomics gives a run of pictures the spacing that follows a letter.
+//
+// §8.2: "for the purpose of letter-spacing, each consecutive run of atomic
+// inlines (such as images and inline blocks) is treated as a single typographic
+// character unit". A picture is therefore a character to this property — it
+// takes a spacing after it exactly as a letter does — and a row of pictures is
+// *one* character, so the spacing goes after the last of them and nowhere
+// between.
+//
+// Only the far side needed doing. The gap in front of a run of pictures is
+// already there: it is the trailing spacing of the letter before it, which every
+// run of text carries after its last character. What was missing was the gap
+// after the pictures, because nothing that is not text had one — so
+// "A<img><img>D" set the D hard against the second picture, and the suite's
+// letter-spacing-204 writes that line four ways and asks for the same answer
+// from all of them.
+//
+// It is the width that is adjusted and nothing else, exactly as §8.1's spacing
+// is: a line places every item itself from the accumulated advance, so widening
+// the picture's item moves what follows it along and draws the picture where it
+// always was. Recorded in Autospace as well, so that a line ending at the
+// picture leaves the gap out — two characters on different lines are not
+// adjacent.
+func (l *layouter) spaceAfterAtomics(items []inlineItem, order, at []int) []inlineItem {
+	for i := range items {
+		if items[i].AtomicBox == nil {
+			continue
+		}
+		// The next run of *text*, which is what makes a row of pictures one
+		// unit: gapNeighbour stops at anything that is not one, and another
+		// picture is one of those.
+		j, ok := gapNeighbour(items, order, at, i)
+		if !ok {
+			continue
+		}
+		gap, ok := l.boundarySpacing(items[i], items[j])
+		if !ok || gap == 0 {
+			continue
+		}
+		items[i].Width = items[i].Width.Add(gap)
+		items[i].Autospace = items[i].Autospace.Add(gap)
+		items[i].EdgeLetterSpacing = gap
+	}
 	return items
 }
 

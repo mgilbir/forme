@@ -640,14 +640,19 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 				endRun()
 			}
 			got := l.outerWidths(heldBox(item.AtomicBox), 0)
-			run, runContent = run.Add(got.min), true
-			line = line.Add(got.max)
+			// §8.2's spacing after a run of pictures, which the property
+			// treats as one typographic character unit. It is at the item's
+			// far edge and is what a line ending here leaves out, exactly as a
+			// letter's trailing spacing is — see Item.Autospace, and
+			// spaceAfterAtomics, which is what put it there.
+			gap := item.Autospace
+			run, runContent = run.Add(got.min).Add(gap), true
+			line = line.Add(got.max).Add(gap)
 			// Content, so a space before it is no longer trailing. Without this
 			// a picture after a space would be measured into a box short by the
 			// space's width — the same slip the text case below avoids.
 			edge, runEdge = 0, 0
-			// A picture is not a character and no spacing follows it.
-			lineTail, runTail = 0, 0
+			lineTail, runTail = gap, gap
 
 		case item.Forced:
 			endLine()

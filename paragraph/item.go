@@ -133,15 +133,20 @@ type Item struct {
 	// preserved tabs — rather than Phase I's, which is only U+0020, U+0009 and
 	// the segment breaks. The two differ over the ideographic Space and its
 	// relatives, which hang at the end of a line and are never collapsed.
-	// Autospace is §8.1's ideograph spacing, already inside Width and sitting at
-	// this run's far edge.
+	// Autospace is a gap already inside Width and sitting at this item's far
+	// edge, which belongs *between* two units rather than to either.
 	//
-	// It is kept apart so that a line that ends here can leave it out. The
-	// spacing goes *between* two characters, and two characters on different
-	// lines are not adjacent — so a gap the line break falls on is not a gap at
-	// all, exactly as the letter-spacing after a line's last character is not
-	// applied. Without it a run whose far edge carries an eighth of an em is an
-	// eighth of an em too wide to end a line it fits on.
+	// §8.1's ideograph spacing is one and gave it its name. §8.2's is the other:
+	// a run of atomic inlines is one typographic character unit, so the last
+	// picture of a row takes a letter-spacing after it, and a picture has no
+	// text for the ordinary account of that to be about.
+	//
+	// It is kept apart so that a line that ends here can leave it out. The gap
+	// goes between two characters, and two characters on different lines are not
+	// adjacent — so a gap the line break falls on is not a gap at all, exactly as
+	// the letter-spacing after a line's last character is not applied. Without
+	// it a run whose far edge carries an eighth of an em is an eighth of an em
+	// too wide to end a line it fits on.
 	Autospace style.Unit
 	// EdgeLetterSpacing is the letter-spacing at this run's far edge — the
 	// *logical* far edge, so the right of a left-to-right run and the left of a
