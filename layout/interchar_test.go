@@ -146,3 +146,46 @@ func TestAHangingSpaceIsNotAUnit(t *testing.T) {
 			"space would make", got)
 	}
 }
+
+// A row of pictures is one typographic character unit here too.
+//
+// §8.2 says it of letter-spacing — "each consecutive run of atomic inlines
+// (such as images and inline blocks) is treated as a single typographic
+// character unit" — and it is the same notion this method distributes between:
+// two pictures side by side offer one opportunity, the one between the pair and
+// whatever is beside it, and not three.
+//
+// The suite writes it as text-justify-inter-character-atomic-inline, whose
+// reference puts the padding on the pictures by hand.
+func TestARowOfPicturesIsOneUnitToJustify(t *testing.T) {
+	// Courier at 20px is 12px a character and the boxes below are 12px too, so
+	// four things of 12 in 200px leave 152 of slack. Three units make two gaps
+	// of 76; four would make three of 50⅔.
+	const css = interCSS + ` #p { text-justify: inter-character }
+		.b { display: inline-block; width: 12px; height: 12px }`
+	// Measured from the paragraph's own edge, since the body has a margin.
+	at := func(id string, markup string) float64 {
+		t.Helper()
+		root := layoutOf(t, 600, `<p id="p">`+markup+`</p>`, css)
+		return find(t, root, id).BorderRect.X.Px() - find(t, root, "p").BorderRect.X.Px()
+	}
+	const row = `X<span class="b" id="b1"></span><span class="b" id="b2"></span>X`
+	if got := at("b1", row); got != 88 {
+		t.Errorf("the first picture starts at %gpx, want 88 — one gap of 76 "+
+			"after the X", got)
+	}
+	if got := at("b2", row); got != 100 {
+		t.Errorf("the second picture starts at %gpx, want 100 — hard against the "+
+			"first, because the two are one unit", got)
+	}
+	// A space between them makes two units of what was one, which is what says
+	// the rule above is about *consecutive* pictures and not about pictures.
+	// Five units of 12 in 200 leave 140 over four gaps of 35, so the first
+	// picture sits at 47. Merged into one unit they would be four units and
+	// three gaps, and it would sit at 58⅔.
+	const spaced = `X<span class="b" id="b1"></span> <span class="b" id="b2"></span>X`
+	if got := at("b1", spaced); got != 47 {
+		t.Errorf("with a space between them the first picture starts at %gpx, "+
+			"want 47 — the space is a unit of its own and ends the run", got)
+	}
+}
