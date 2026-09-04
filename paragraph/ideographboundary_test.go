@@ -24,7 +24,7 @@ import (
 func barred(t *testing.T, text string, wb WordBreak) string {
 	t.Helper()
 	pieces, _ := SplitAtBreaks(text, WhiteSpace{Collapse: true, Wrap: true},
-		wb, LineBreak{}, Hyphens{})
+		wb, LineBreak{}, Hyphens{}, WritingSystemOther)
 	var b strings.Builder
 	for _, p := range pieces {
 		if p.BreakBefore {

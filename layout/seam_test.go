@@ -39,7 +39,7 @@ func paragraphLines(t *testing.T, face *shape.Face, text string, size, width sty
 
 	t.Helper()
 	br := paragraph.NewBreaker(nil)
-	pieces, _ := paragraph.SplitAtBreaks(text, ws, paragraph.WordBreak{}, paragraph.LineBreak{}, paragraph.Hyphens{})
+	pieces, _ := paragraph.SplitAtBreaks(text, ws, paragraph.WordBreak{}, paragraph.LineBreak{}, paragraph.Hyphens{}, paragraph.WritingSystemOther)
 
 	items := make([]paragraph.Item, 0, len(pieces))
 	afterCollapsible := true

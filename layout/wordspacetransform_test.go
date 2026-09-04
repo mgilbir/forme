@@ -135,37 +135,88 @@ func TestADocumentThatDoesNotAskIsUnchanged(t *testing.T) {
 	}
 }
 
-// TestAutoPhraseIsReported. The value asks for word separators to be *invented*
-// at phrase boundaries the author did not mark, which for Japanese means a
-// dictionary and a segmentation model. What the document gets is its explicit
-// marks expanded and a finding for the rest — too few spaces rather than none,
-// and a caller who is told.
-func TestAutoPhraseIsReported(t *testing.T) {
-	built := Build(Input{
-		HTML: `<div id="p">a<wbr>b</div>`,
-		CSS:  []Stylesheet{{Source: `#p { word-space-transform: space auto-phrase }`}},
-	})
-	found := false
-	for _, f := range built.Findings {
-		if f.Rule == RuleUnsupportedValue && strings.Contains(f.Message, "auto-phrase") {
-			found = true
+// TestInventedSeparatorsAreReportedOnlyWhereThePhrasesCannotBeFound.
+//
+// The value asks for word separators to be *invented* at phrase boundaries the
+// author did not mark, which takes a model of the language. There is one, so
+// most of what used to be reported is done — and §2.2 disposes of two thirds of
+// the rest for the UA: "if the content language is unknown, or if the user agent
+// does not support detecting phrase boundaries for that language, there are no
+// virtual expandable separators". A document that declares no language gets none
+// and gets that right.
+//
+// What is left is a language another UA would find phrases in and this one
+// cannot, which today is Chinese.
+func TestInventedSeparatorsAreReportedOnlyWhereThePhrasesCannotBeFound(t *testing.T) {
+	said := func(markup string) string {
+		built := Build(Input{
+			HTML: `<div id="p">` + markup + `</div>`,
+			CSS:  []Stylesheet{{Source: `#p { word-space-transform: ideographic-space auto-phrase }`}},
+		})
+		for _, f := range built.Findings {
+			if f.Rule == RuleUnsupportedValue && f.Property == "word-space-transform" {
+				return f.Message
+			}
+		}
+		return ""
+	}
+	for _, tc := range []struct{ markup, why string }{
+		{`<span lang="ja">東京へ行きましょう。</span>`,
+			"Japanese is the language there is a model for"},
+		{`<span>東京へ行きましょう。</span>`,
+			"untagged text gets no separators, which is what the section asks for"},
+		{`<span lang="en">a<wbr>b</span>`,
+			"there are no phrases in English for the missing half to be about"},
+	} {
+		if got := said(tc.markup); got != "" {
+			t.Errorf("%s: reported as %q — %s", tc.markup, got, tc.why)
 		}
 	}
-	if !found {
-		t.Errorf("auto-phrase was not reported: %v", built.Findings)
+	if got := said(`<span lang="zh">中文的句子</span>`); !strings.Contains(got, "auto-phrase") {
+		t.Errorf("Chinese under auto-phrase was reported as %q, which does not "+
+			"name the value", got)
 	}
-	// The half that is done is still done.
+	// And the value's other half is still done wherever it is written.
 	if got := wstText(t, `a<wbr>b`, `#p { word-space-transform: space auto-phrase }`); got != "a b" {
 		t.Errorf("the explicit mark was not expanded: %q", got)
 	}
-	// And a document that does not write it is not reported.
+	// A document that does not write auto-phrase at all is not reported.
 	plain := Build(Input{
-		HTML: `<div id="p">a<wbr>b</div>`,
+		HTML: `<div id="p" lang="zh">中文的句子</div>`,
 		CSS:  []Stylesheet{{Source: `#p { word-space-transform: space }`}},
 	})
 	for _, f := range plain.Findings {
 		if strings.Contains(f.Message, "word-space-transform") {
 			t.Errorf("a document that asked for nothing unusual was reported: %s", f.Message)
 		}
+	}
+}
+
+// A boundary at the edge of a box belongs to the box outside it, so a span whose
+// parent does not transform gets no separator at either end of itself.
+//
+// §2.2 puts it as a note: "because virtual expandable separators are placed in
+// the outermost element that participates in an inline box boundary, if one
+// would coincide with boundary of an inline box whose parent box has a used
+// value of word-space-transform: none, that particular virtual expandable
+// separator is not expanded, since it would be placed in the parent box". The
+// suite's word-space-transform-020 is that document.
+func TestASeparatorAtTheEdgeOfABoxBelongsToTheBoxOutsideIt(t *testing.T) {
+	// The declaration is on the inner span and the parent's value is none, so
+	// the only boundaries the model could find in the span's own text — "へ",
+	// one character — are the two at its edges, and neither is the span's.
+	got := wstText(t, `<span lang="ja">東京<b>へ</b>行きましょう。</span>`,
+		`#p { word-space-transform: none } #p b { word-space-transform: ideographic-space auto-phrase }`)
+	if got != "東京へ行きましょう。" {
+		t.Errorf("came out %q, want the text unchanged — the boundaries either "+
+			"side of the span are the parent's, and the parent transforms nothing", got)
+	}
+	// The control: the same declaration on the element that holds all the text
+	// does invent a separator, so the fixture is one where the value works.
+	whole := wstText(t, `<span lang="ja">東京へ行きましょう。</span>`,
+		`#p { word-space-transform: ideographic-space auto-phrase }`)
+	if whole != "東京へ　行きましょう。" {
+		t.Errorf("the same text on one element came out %q, so the fixture says "+
+			"nothing about where a boundary belongs", whole)
 	}
 }

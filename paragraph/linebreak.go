@@ -355,19 +355,17 @@ func BindsToAtomicInline(r rune) bool {
 // auto-phrase" would break differently from "normal".
 //
 // §5.2 allows a line to end only at a phrase boundary, and a phrase is a thing
-// Japanese has: finding one means a morphological analysis of the text, which
-// is the same class of problem as the dictionary NeedsDictionaryBreaking names
-// and is not implemented either. What is asked here is whether a document would
-// see the difference — and for a paragraph with no Japanese in it, it would not,
-// because there are no phrases in it to keep whole.
-//
-// So this is the predicate that turns one finding into two answers: the value's
-// other half — suppressing hyphenation — is done for every document, and only a
-// document whose text has phrases in it is told that the first half is missing.
+// the CJK writing systems have. What is asked here is whether a document would
+// see the difference — and for a paragraph with no such text in it, it would
+// not, because there are no phrases in it to keep whole.
 //
 // Ideographic is the test, which is Han, hiragana and katakana together. That is
-// the writing the rule is about; it is a wider net than "Japanese" and errs
-// towards reporting, which is the safe direction for a finding.
+// the writing the rule is about; it is a wider net than any one language and
+// errs towards reporting, which is the safe direction for a finding.
+//
+// It is half of the question. The other half is which language the text is
+// declared to be, because §5.2 gives the value effect only where the UA has a
+// model for it — see PhrasesUnfound, which asks both.
 func NeedsPhraseBreaking(text string) bool {
 	for _, r := range text {
 		if IsIdeographic(r) {

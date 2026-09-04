@@ -49,11 +49,14 @@ func (l *layouter) ReportOverflow(item inlineItem, width style.Unit) {
 
 // reportWordBreak reports a word-break value this engine reads as normal.
 //
-// "break-all" is implemented; "keep-all" and "auto-phrase" are not, and both
-// *remove* or *move* opportunities rather than adding them — keep-all stops CJK
-// text breaking between two ideographs, and auto-phrase moves a Korean break to
-// a phrase boundary. Ignoring either breaks a line somewhere the author said not
-// to, which no amount of looking at the page reveals as a missing feature.
+// All four values are implemented, and this fires for the one that is
+// implemented only in part: "auto-phrase" ends a line at a phrase boundary, and
+// finding one takes a model of the language, of which there is one here. A
+// document in another language that has phrases gets "normal" — which is what
+// §5.2 asks of a UA with no model — and is told, because a line that ends in
+// the middle of a phrase is not something looking at the page reveals as a
+// missing feature. See paragraph.PhrasesUnfound for the three things that have
+// to be true at once.
 //
 // Once per value per box, for the same reason checkScript is once per script.
 func (l *layouter) reportWordBreak(b *Box, value string) {
@@ -210,6 +213,22 @@ func (l *layouter) checkGlyphs(b *Box, face *shape.Face, text string) {
 			// Drawn as a synthesized box rather than as a glyph, so no face was
 			// ever asked for one and nothing is missing from the page. See
 			// controlchar.go.
+			continue
+		}
+		if isDefaultIgnorable(r) {
+			// A character that draws nothing cannot be missing from the page:
+			// there is nothing of it to be missing. This finding says "the
+			// character is missing from the page and from the text extracted
+			// out of it", and neither half is true of a joiner or a variation
+			// selector or a soft hyphen.
+			//
+			// The comment above says shaping answers "not missing" for all of
+			// them, and it is nearly right — that was measured on Ahem, and
+			// Ahem does report one: U+180E MONGOLIAN VOWEL SEPARATOR, which
+			// Unicode reclassified from a space to a format character in 6.3
+			// and which the suite's line-breaking-atomic-015 writes. So the
+			// rule is asked directly rather than left to a coincidence about
+			// how faces happen to shape.
 			continue
 		}
 		if _, missing := face.ShapeGlyphs(string(r)); missing == 0 {
@@ -394,34 +413,37 @@ func (l *layouter) reportAutospace(b *Box, value string) {
 // Anything that is not a keyword and not a single string is invalid and is
 // treated as the keyword, which is what the cascade does with a declaration it
 // cannot parse.
-func hyphenCharacter(value string, face *shape.Face) string {
+//
+// The second result says the author supplied one, which is what lets a language
+// fill the gap where they did not: §6.3.1 asks a UA to use "the appropriate
+// language-specific hyphenation character(s)", and §6.3.2 lets the document
+// overrule it. Returning "the author said nothing" as the empty string would
+// not do — "hyphenate-character: \"\"" asks for no mark at all.
+func hyphenCharacter(value string) (string, bool) {
 	if strings.TrimSpace(value) == "" || strings.EqualFold(strings.TrimSpace(value), "auto") {
-		return hyphenTextFor(face)
+		return "", false
 	}
 	vals, errs := css.ParseComponentValues(value)
 	if len(errs) != 0 {
-		return hyphenTextFor(face)
+		return "", false
 	}
 	found, seen := "", false
 	for _, v := range vals {
 		if !v.IsToken() {
-			return hyphenTextFor(face)
+			return "", false
 		}
 		switch v.Token.Kind {
 		case css.Whitespace:
 		case css.String:
 			if seen {
-				return hyphenTextFor(face)
+				return "", false
 			}
 			found, seen = v.Token.Value, true
 		default:
-			return hyphenTextFor(face)
+			return "", false
 		}
 	}
-	if !seen {
-		return hyphenTextFor(face)
-	}
-	return found
+	return found, seen
 }
 
 // hyphenTextFor is the character a broken word ends with when the document has

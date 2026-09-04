@@ -126,6 +126,20 @@ func (l *layouter) faceRunsFor(b *Box, primary *shape.Face, text string) []faceR
 			start, cur, curSub = hi, primary, false
 			continue
 		}
+		if drawsNoPaper(cluster) {
+			// A character that sets no paper stays in the run being gathered.
+			//
+			// Which face it is "in" decides nothing a reader can see and
+			// everything about whether the run is cut in two. A soft hyphen
+			// inside an Arabic word is the case: the standard faces encode
+			// U+00AD through WinAnsi, so the primary face was held to have it
+			// while the letters around it moved to a face that has *them* — and
+			// the word came out as three runs, the letters lost the context
+			// that gives them their joined forms, and the primary face's
+			// quarter-em advance for a character that should take no room
+			// opened a gap in the middle of the word.
+			continue
+		}
 		fromFallback := false
 		if hasRanges {
 			// The document's own list, one cluster at a time. A family whose
@@ -327,4 +341,21 @@ var genericFamilies = map[string]bool{
 	"cursive": true, "fantasy": true, "system-ui": true,
 	"ui-serif": true, "ui-sans-serif": true, "ui-monospace": true,
 	"ui-rounded": true, "math": true, "emoji": true, "fangsong": true,
+}
+
+// drawsNoPaper reports whether a cluster is characters that set no paper: the
+// joiners, the bidi controls, the soft hyphen and the zero widths.
+//
+// An empty cluster answers yes and cannot happen: the boundaries the caller
+// walks are strictly increasing, and a run with no text returned before any of
+// this. Guarding it was written and taken out again — the guard could not be
+// made to fail, and a condition nothing can reach is a condition a reader has
+// to work out is unreachable.
+func drawsNoPaper(cluster string) bool {
+	for _, r := range cluster {
+		if !isDefaultIgnorable(r) {
+			return false
+		}
+	}
+	return true
 }

@@ -183,31 +183,59 @@ func TestAutoPhraseFallsBackToAHyphenFromEverywhereALineRewinds(t *testing.T) {
 	}
 }
 
-// TestAutoPhraseIsReportedOnlyWhereItsOtherHalfWouldShow.
+// TestAutoPhraseIsReportedOnlyWhereThePhrasesCannotBeFound.
 //
-// The half that is missing is about phrases, and a paragraph with no Japanese
-// in it has none. Reporting it there is a finding about a page that is right,
-// in the one channel that says what a page is missing.
-func TestAutoPhraseIsReportedOnlyWhereItsOtherHalfWouldShow(t *testing.T) {
-	said := func(body string) string {
+// Three things have to be true before there is anything to say, and each of the
+// rows below is one of them being false. The text has to have the writing the
+// rule is about in it, or there are no phrases to keep whole. The language has
+// to be declared, because §5.2 gives the value effect only "if the UA supports
+// phrase-based line breaking for the content language" — so untagged text gets
+// "normal" and gets it *correctly*, and a document that declares nothing is not
+// told a feature is missing. And there has to be no model for that language,
+// which is the one row that reports: this engine has Japanese and not Chinese.
+//
+// It used to report every paragraph of Japanese, which was true when nothing
+// could find a phrase. See paragraph.PhrasesUnfound.
+func TestAutoPhraseIsReportedOnlyWhereThePhrasesCannotBeFound(t *testing.T) {
+	said := func(lang, body string) string {
+		attr := ""
+		if lang != "" {
+			attr = ` lang="` + lang + `"`
+		}
 		for _, f := range findingsOf(t,
-			`<div style="word-break: auto-phrase">`+body+`</div>`, "") {
+			`<div style="word-break: auto-phrase"`+attr+`>`+body+`</div>`, "") {
 			if f.Property == "word-break" {
 				return f.Message
 			}
 		}
 		return ""
 	}
-	if got := said("consideration"); got != "" {
-		t.Errorf("a paragraph of English under auto-phrase was reported as %q; "+
-			"there are no phrases in it for the missing half to be about", got)
+	const japanese = "\u65e5\u672c\u8a9e\u306e\u6587"
+	for _, c := range []struct{ lang, body, why string }{
+		{"en", "consideration",
+			"there are no phrases in English for the missing half to be about"},
+		{"ja", japanese,
+			"Japanese is the language there is a model for"},
+		{"", japanese,
+			"untagged text is broken as normal, which is what the section asks of a UA with no model for it"},
+	} {
+		if got := said(c.lang, c.body); got != "" {
+			t.Errorf("lang=%q, %q: reported as %q — %s", c.lang, c.body, got, c.why)
+		}
 	}
-	if got := said("\u65e5\u672c\u8a9e\u306e\u6587"); !strings.Contains(got, "auto-phrase") {
-		t.Errorf("a paragraph of Japanese under auto-phrase was reported as %q, "+
+	// And the one that is missing, so the rows above are not passing because
+	// nothing is ever reported.
+	if got := said("zh", "\u4e2d\u6587\u7684\u53e5\u5b50"); !strings.Contains(got, "auto-phrase") {
+		t.Errorf("a paragraph of Chinese under auto-phrase was reported as %q, "+
 			"which does not name the value", got)
 	}
-	// And the mixture: one ideograph is enough, because one phrase is.
-	if got := said("english \u6587 english"); !strings.Contains(got, "auto-phrase") {
+	// A language this engine has a model for is still only reported over text
+	// the model is about: one ideograph in a line of English is a phrase, and a
+	// line of English is not.
+	if got := said("zh", "english only"); got != "" {
+		t.Errorf("a paragraph of English tagged as Chinese was reported as %q", got)
+	}
+	if got := said("zh", "english \u6587 english"); !strings.Contains(got, "auto-phrase") {
 		t.Errorf("a paragraph with one ideograph in it was reported as %q", got)
 	}
 }

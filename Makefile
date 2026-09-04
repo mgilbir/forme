@@ -17,6 +17,26 @@ test:
 race:
 	go test -count=1 -race ./...
 
+# Every fetch in this file goes through FETCH rather than through a bare curl.
+#
+# The corpora come from a dozen hosts and one of them is always the slow one.
+# unifoundry.com serves GNU Unifont from a single machine with no CDN in front
+# of it, and a CI run failed on it with "Failed to connect after 132634 ms" —
+# which stopped the build before a line of the engine had run, and said nothing
+# whatever about the change under test. A run that could not reach a web server
+# is not a result.
+#
+# --retry-all-errors rather than --retry, because the two are not the same:
+# plain --retry covers a transient HTTP status and a handful of network errors,
+# and the one that actually happened — a connection that never opened — is not
+# among them. --connect-timeout bounds the wait before the first retry, since
+# the default is over two minutes and five of those is longer than the job.
+#
+# -f so that an HTTP error is a failure rather than an error page written into
+# the output file, -sS so that a normal run is quiet and a broken one is not,
+# and -L because some of the sources below redirect.
+FETCH := curl -fsSL --connect-timeout 20 --retry 5 --retry-delay 3 --retry-all-errors
+
 # Unicode's own bidirectional conformance suites, which bidi_conformance_test.go
 # runs in full. Fetched rather than vendored: 15 MB, versioned by Unicode, and
 # pinned to the release the tables were generated from — a character whose class
@@ -29,9 +49,9 @@ bidi-tests: $(BIDI_DIR)/.ok
 
 $(BIDI_DIR)/.ok:
 	mkdir -p $(BIDI_DIR)
-	curl -fsSL -o $(BIDI_DIR)/BidiTest.txt \
+	$(FETCH) -o $(BIDI_DIR)/BidiTest.txt \
 		$(UCD_URL)/BidiTest.txt
-	curl -fsSL -o $(BIDI_DIR)/BidiCharacterTest.txt \
+	$(FETCH) -o $(BIDI_DIR)/BidiCharacterTest.txt \
 		$(UCD_URL)/BidiCharacterTest.txt
 	touch $@
 
@@ -150,9 +170,46 @@ dictionaries:
 	mkdir -p $(DICT_DIR)
 	for pair in $(ICU_DICT_NAMES); do \
 	  name=$${pair%%:*}; file=$${pair##*:}; \
-	  curl -sSf -o $(DICT_DIR)/$$file.txt $(ICU_DICTS)/$$file.txt; \
+	  $(FETCH) -o $(DICT_DIR)/$$file.txt $(ICU_DICTS)/$$file.txt; \
 	  go run ./cmd/gendict $$name $(DICT_DIR)/$$file.txt > paragraph/$$name'dict.go'; \
 	  gofmt -w paragraph/$$name'dict.go'; \
+	done
+
+# The phrase model CSS Text §5.2's "auto-phrase" needs, for the language whose
+# words run together and whose phrases do not.
+#
+# BudouX, which is what Chromium segments Japanese phrases with — so a page laid
+# out from it breaks where a reader of the suite's references expects. As with
+# the word lists above the model is fetched and the *generated* table is what is
+# committed, and the licence travels into it: BudouX is Apache-2.0, whose terms
+# require that recipients get them, so cmd/genphrase copies the file rather than
+# naming it.
+#
+# It is twenty kilobytes against the word lists' four megabytes, and the
+# difference is what a model is. A phrase is a content word with its particles
+# stuck to it, so no list of words can say where one ends; sixteen hundred
+# weights over the characters around a boundary can, and are wrong often enough
+# that the suite's own tests allow more than one answer.
+#
+# One language. BudouX publishes Chinese and Thai as well, no document in the
+# suite asks for either, and Thai already breaks at the words its ICU dictionary
+# knows. Adding one is adding a pair to PHRASE_MODELS.
+#
+#	make phrases
+BUDOUX      := https://raw.githubusercontent.com/google/budoux/main
+BUDOUX_DIR  := testdata/budoux
+
+PHRASE_MODELS := japanese:ja
+
+phrases:
+	mkdir -p $(BUDOUX_DIR)
+	$(FETCH) -o $(BUDOUX_DIR)/LICENSE $(BUDOUX)/LICENSE
+	for pair in $(PHRASE_MODELS); do \
+	  name=$${pair%%:*}; file=$${pair##*:}; \
+	  $(FETCH) -o $(BUDOUX_DIR)/$$file.json $(BUDOUX)/budoux/models/$$file.json; \
+	  go run ./cmd/genphrase $$name $(BUDOUX_DIR)/$$file.json $(BUDOUX_DIR)/LICENSE \
+	    > paragraph/$$name'phrases.go'; \
+	  gofmt -w paragraph/$$name'phrases.go'; \
 	done
 
 # Which characters stand upright on a line of vertical text, UAX #50. It is
@@ -252,7 +309,7 @@ notocjk:
 		out=$(CJK_DIR)/$$(basename $$f); \
 		if [ -s "$$out" ]; then echo "have $$out"; else \
 			echo "fetching $$out"; \
-			curl -fsSL --retry 3 -o "$$out" "$(CJK_BASE)/$$f" || exit 1; \
+			$(FETCH) -o "$$out" "$(CJK_BASE)/$$f" || exit 1; \
 		fi; \
 	done
 	@echo "$$(ls $(CJK_DIR)/*.otf | wc -l | tr -d ' ') CJK faces in $(CJK_DIR)"
@@ -290,7 +347,7 @@ grapheme-tests: $(GRAPHEME_DIR)/.ok
 
 $(GRAPHEME_DIR)/.ok:
 	mkdir -p $(GRAPHEME_DIR)
-	curl -sSf -o $(GRAPHEME_DIR)/GraphemeBreakTest.txt $(UCD_URL)/auxiliary/GraphemeBreakTest.txt
+	$(FETCH) -o $(GRAPHEME_DIR)/GraphemeBreakTest.txt $(UCD_URL)/auxiliary/GraphemeBreakTest.txt
 	touch $@
 
 test-grapheme: grapheme-tests
@@ -350,7 +407,7 @@ HTML_ENTITIES := testdata/html/entities.json
 
 html-entities:
 	mkdir -p $(dir $(HTML_ENTITIES))
-	curl -sSf -o $(HTML_ENTITIES) https://html.spec.whatwg.org/entities.json
+	$(FETCH) -o $(HTML_ENTITIES) https://html.spec.whatwg.org/entities.json
 	go run ./cmd/genhtmlentities -in $(HTML_ENTITIES) -out html/entities.go
 	gofmt -w html/entities.go
 
@@ -369,7 +426,7 @@ CSS_COLOR_SPEC := testdata/css-color-4.bs
 
 css-colors:
 	mkdir -p $(dir $(CSS_COLOR_SPEC))
-	curl -sSf -o $(CSS_COLOR_SPEC) https://raw.githubusercontent.com/w3c/csswg-drafts/main/css-color-4/Overview.bs
+	$(FETCH) -o $(CSS_COLOR_SPEC) https://raw.githubusercontent.com/w3c/csswg-drafts/main/css-color-4/Overview.bs
 	go run ./cmd/gencolors -in $(CSS_COLOR_SPEC) -out style/colors.go
 	gofmt -w style/colors.go
 
@@ -455,20 +512,20 @@ noto-fonts: $(NOTO_DIR)/.ok
 $(NOTO_DIR)/.ok:
 	mkdir -p $(NOTO_DIR)
 	for fam in $(NOTO_HINTED); do \
-	  curl -sSf -o $(NOTO_DIR)/$$fam-Regular.ttf \
+	  $(FETCH) -o $(NOTO_DIR)/$$fam-Regular.ttf \
 	    $(NOTO_BASE)/notofonts.github.io/main/fonts/$$fam/hinted/ttf/$$fam-Regular.ttf; \
 	done
-	curl -sSf -o $(NOTO_DIR)/NotoSerifTibetan-Regular.ttf \
+	$(FETCH) -o $(NOTO_DIR)/NotoSerifTibetan-Regular.ttf \
 	  $(NOTO_BASE)/notofonts.github.io/main/fonts/NotoSerifTibetan/hinted/ttf/NotoSerifTibetan-Regular.ttf
-	curl -sSf -o $(NOTO_DIR)/NotoSansJP-VF.ttf \
+	$(FETCH) -o $(NOTO_DIR)/NotoSansJP-VF.ttf \
 	  $(NOTO_BASE)/noto-cjk/main/Sans/Variable/TTF/Subset/NotoSansJP-VF.ttf
-	curl -sSf -o $(NOTO_DIR)/OFL.txt \
+	$(FETCH) -o $(NOTO_DIR)/OFL.txt \
 	  $(NOTO_BASE)/noto-cjk/main/Sans/LICENSE
-	curl -sSf -o $(NOTO_DIR)/Unifont-Regular.otf \
+	$(FETCH) -o $(NOTO_DIR)/Unifont-Regular.otf \
 	  $(UNIFONT_BASE)/unifont-$(UNIFONT_VER).otf
-	curl -sSf -o $(NOTO_DIR)/UnifontUpper-Regular.otf \
+	$(FETCH) -o $(NOTO_DIR)/UnifontUpper-Regular.otf \
 	  $(UNIFONT_BASE)/unifont_upper-$(UNIFONT_VER).otf
-	curl -sSf -o $(NOTO_DIR)/UNIFONT-LICENSE.txt https://unifoundry.com/LICENSE.txt
+	$(FETCH) -o $(NOTO_DIR)/UNIFONT-LICENSE.txt https://unifoundry.com/LICENSE.txt
 	touch $@
 
 clean-noto-fonts:
@@ -625,7 +682,7 @@ $(WPT_DIR)/.ok:
 DOULOS_URL := https://software.sil.org/downloads/r/doulos/DoulosSIL-5.000-web.zip
 
 $(WPT_DIR)/fonts/DoulosSIL-R.woff: $(WPT_DIR)/.ok
-	curl -sSf -o $(WPT_DIR)/doulos-web.zip $(DOULOS_URL)
+	$(FETCH) -o $(WPT_DIR)/doulos-web.zip $(DOULOS_URL)
 	unzip -o -j -d $(WPT_DIR)/fonts $(WPT_DIR)/doulos-web.zip \
 	  'DoulosSIL-5.000-web/web/DoulosSIL-R.woff' \
 	  'DoulosSIL-5.000-web/OFL.txt'

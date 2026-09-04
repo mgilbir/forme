@@ -130,3 +130,45 @@ func makefile(t *testing.T) []byte {
 		dir = parent
 	}
 }
+
+// Every fetch goes through one command, and this is the check that it does.
+//
+// The rule is not tidiness. The corpora come from a dozen hosts and any of them
+// can be slow: a CI run failed on unifoundry.com with "Failed to connect after
+// 132634 ms", which stopped the build before a line of the engine had run. The
+// FETCH variable is where that is dealt with — a connect timeout and five
+// retries — and a bare curl added later is a fetch that quietly opts out of it,
+// which is exactly the kind of thing nobody notices until a Tuesday afternoon.
+//
+// It is a rule about the Makefile and it lives beside the other one for the same
+// reason: this is where the Makefile is already read.
+func TestEveryFetchInTheMakefileRetries(t *testing.T) {
+	lines := strings.Split(string(makefile(t)), "\n")
+	def := regexp.MustCompile(`^FETCH\s*:?=\s*curl\b`)
+	defined := false
+	for i, line := range lines {
+		if def.MatchString(line) {
+			defined = true
+			continue
+		}
+		// A comment may say "curl" — the note beside the variable does.
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		if regexp.MustCompile(`(^|[;&|\s(])curl\b`).MatchString(line) {
+			t.Errorf("Makefile line %d fetches with a bare curl rather than "+
+				"$(FETCH), so it has no connect timeout and no retries:\n\t%s",
+				i+1, strings.TrimSpace(line))
+		}
+	}
+	if !defined {
+		t.Error("the Makefile defines no FETCH, so there is nothing for the check " +
+			"above to be about")
+	}
+	for _, want := range []string{"--retry", "--connect-timeout", "--retry-all-errors"} {
+		if !strings.Contains(strings.Join(makefileVariable(t, "FETCH"), " "), want) {
+			t.Errorf("FETCH does not pass %s, so a host that never answers still "+
+				"fails the build outright", want)
+		}
+	}
+}

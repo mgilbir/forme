@@ -410,3 +410,28 @@ func TestTheFullWidthTableCoversASCII(t *testing.T) {
 		}
 	}
 }
+
+// "Letter" in §2.1's capitalize is §1.3's typographic letter unit: "a
+// typographic character unit belonging to one of the Letter or Number general
+// categories". The difference is the letter-numbers, and they are letters that
+// count: U+2170 SMALL ROMAN NUMERAL ONE titlecases to U+2160.
+//
+// It was unicode.IsLetter, which they are not, so a word beginning with one was
+// left as it stood — and still counted as a word, so nothing after it was
+// titlecased either. The suite's text-transform-capitalize-024 writes the
+// seventeen of them in the Number Forms block.
+func TestALetterNumberIsALetterToCapitalize(t *testing.T) {
+	for _, tc := range []struct{ text, want, what string }{
+		{"ⅰⅰⅰ", "Ⅰⅰⅰ", "a Roman numeral, which titlecases"},
+		{"ↄ", "Ↄ", "the reversed C, whose pair is at the end of the block"},
+		{"ⅰ ⅱ", "Ⅰ Ⅱ", "one at the start of each word"},
+		{"aⅰ", "Aⅰ", "and not one in the middle of a word"},
+		{"3rd", "3rd", "a digit begins the word and titlecases to itself"},
+		{"ǳur", "ǲur", "the digraph the titlecase mapping was invented for"},
+	} {
+		got, _ := TransformText(tc.text, TransformCapitalize, false, "")
+		if got != tc.want {
+			t.Errorf("%q became %q, want %q — %s", tc.text, got, tc.want, tc.what)
+		}
+	}
+}

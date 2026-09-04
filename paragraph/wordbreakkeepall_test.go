@@ -43,7 +43,7 @@ func keepAll(t *testing.T) WordBreak {
 func splits(t *testing.T, text string, wb WordBreak) string {
 	t.Helper()
 	pieces, _ := SplitAtBreaks(text, WhiteSpace{Collapse: true, Wrap: true},
-		wb, LineBreak{}, Hyphens{})
+		wb, LineBreak{}, Hyphens{}, WritingSystemOther)
 	var b strings.Builder
 	for _, p := range pieces {
 		if p.BreakBefore {
@@ -146,8 +146,8 @@ func TestKeepAllChangesNothingAboutLatinText(t *testing.T) {
 	for _, text := range []string{
 		"hello world", "a-b", "one, two; three!", "a (b) c", "don't", "e.g. this",
 	} {
-		want, _ := SplitAtBreaks(text, ws, WordBreak{}, LineBreak{}, Hyphens{})
-		got, _ := SplitAtBreaks(text, ws, keepAll(t), LineBreak{}, Hyphens{})
+		want, _ := SplitAtBreaks(text, ws, WordBreak{}, LineBreak{}, Hyphens{}, WritingSystemOther)
+		got, _ := SplitAtBreaks(text, ws, keepAll(t), LineBreak{}, Hyphens{}, WritingSystemOther)
 		if len(got) != len(want) {
 			t.Errorf("%q: %d pieces under keep-all, want %d", text, len(got), len(want))
 			continue

@@ -726,13 +726,12 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	// What the box's declarations turn off in the face, which changes what it
 	// substitutes and so changes every advance below. See fontfeatures.go.
 	off := l.featuresFor(b)
-	if wb.AutoPhrase && needsPhraseBreaking(b.Text) {
-		// Half of "auto-phrase" is done and half is not, so which of the two a
-		// document gets depends on its text. Suppressing hyphenation needs
-		// nothing and is done for every box; ending a line only at a phrase
-		// boundary needs a morphological analysis of Japanese and is not done,
-		// and a box with no Japanese in it has no phrases for that to be about.
-		// See paragraph.NeedsPhraseBreaking.
+	if wb.AutoPhrase && phrasesUnfound(b.Text, boxWritingSystem(b)) {
+		// The value is implemented for the one language there is a model for.
+		// A document in another that has phrases in it gets "normal", which is
+		// what §5.2 prescribes for a UA with no model — and is told, because a
+		// line that ends in the middle of a phrase is not something looking at
+		// the page reveals as a missing feature. See paragraph.PhrasesUnfound.
 		l.reportWordBreak(b, "auto-phrase")
 	}
 	lb, unhandledLine := lineBreakOf(b.Style["line-break"])
@@ -764,7 +763,8 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	if unhandledAutospace != "" {
 		l.reportAutospace(b, unhandledAutospace)
 	}
-	pieces, endedAtBreak := splitAtBreaks(b.Text, ws, wb, lb, hy)
+	orthography := orthographyAt(boxElement(b))
+	pieces, endedAtBreak := splitAtBreaks(b.Text, ws, wb, lb, hy, boxWritingSystem(b))
 	pieces = collapsibleSeparators(pieces, wordSpaceTransformValue(b.Style))
 	if points := l.hyphenPoints[b]; len(points) > 0 {
 		var endsAtHyphen bool
@@ -1126,6 +1126,8 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 				// there would cut a word in two for a reason no reader can see.
 				first: ri == 0, last: ri == len(runs)-1,
 				spaceMayTakeIt: i == 0 && boundaryBreakSpaces,
+				orthography:    orthography,
+				nextText:       nextPieceText(pieces, i),
 				// Only the box's first piece sits at the boundary the state
 				// carried in; everything after it is inside the box.
 				noWrap: pieceNoWrap,
@@ -1219,6 +1221,13 @@ type textItemArgs struct {
 	// wb is the box's word-break, of which the item needs one fact: whether a
 	// hyphen's opportunity is one to be given up. See Item.HyphenLastResort.
 	wb paragraph.WordBreak
+	// orthography is what the box's language does to a word broken inside it,
+	// and nextText is the text the next piece begins with — which is what the
+	// rules read. Empty where the piece is the box's last: the text after the
+	// break is in another box, and a rule about the characters either side of
+	// it cannot see them both. See paragraph.Orthography.
+	orthography paragraph.Orthography
+	nextText    string
 	// off is what the box's declarations turn off in the face. See
 	// layouter.featuresFor.
 	off       shape.Features
@@ -1302,6 +1311,12 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		// removal.
 		BreakBefore: a.first && (p.BreakBefore ||
 			(a.state.BreakOpportunity && (!p.Space || a.spaceMayTakeIt))),
+		// And its rank, where the piece's own withheld opportunity is the whole
+		// of what puts it there. An opportunity carried in from another box is
+		// one this box's word-break never saw and is not this box's to give up.
+		// See Piece.LastResort.
+		LastResort: a.first && p.LastResort &&
+			!(a.state.BreakOpportunity && (!p.Space || a.spaceMayTakeIt)),
 		Space: p.Space, Collapsible: p.Collapsible,
 		// A trailing space is trimmed off the end of a line, and only the
 		// last run of a piece has an end for one to be at.
@@ -1343,8 +1358,15 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		// line may break here at all. Only the last run of a piece has an end
 		// for a hyphen to be at — a piece cut in two by a change of face is one
 		// word, and the hyphen belongs after all of it.
+		//
+		// And what the language does besides printing one, which is three more
+		// things and is empty for English: letters restored in front of the
+		// hyphen, a character dropped from the start of the next line, and a
+		// joining control at both. See paragraph.Orthography.
+		how := a.orthography.HyphenateBetween(p.Text, a.nextText)
+		item.HyphenSkip, item.HyphenLead = how.Dropped, how.Lead
 		var face *shape.Face
-		item.HyphenText, face = l.hyphenRun(b, a.run.Face, b.Style["hyphenate-character"])
+		item.HyphenText, face = l.hyphenRun(b, a.run.Face, b.Style["hyphenate-character"], how)
 		// Measured the way the run it belongs to is measured: a hyphen printed
 		// at the end of an upright line stands upright with the letters, and it
 		// is an em per character there like any other.
@@ -1477,19 +1499,46 @@ func (l *layouter) leadingItem(b *Box) inlineItem {
 // hyphens-vs-float-clearance-001 and -002 are the suite's case, and they are
 // exact to the pixel once the character matches: four floated monospace boxes,
 // each hyphenating one long word around a float.
-func (l *layouter) hyphenRun(b *Box, face *shape.Face, value string) (string, *shape.Face) {
+func (l *layouter) hyphenRun(b *Box, face *shape.Face, value string,
+	how paragraph.Hyphenation) (string, *shape.Face) {
+
 	// The face U+2010 would be set in, found the way any other character's is.
 	// hyphenCharacter chooses between the two hyphens by asking whether the face
 	// has the better one, and the face it should ask is the one the character
 	// would be drawn in rather than the one the box declared.
-	auto := l.faceThatHas(b, face, autoHyphen)
-	text := hyphenCharacter(value, auto)
-	if text == autoHyphen {
-		return text, auto
+	text, said := hyphenCharacter(value)
+	switch {
+	case said:
+		// The document's own string, which overrules everything below: §6.3.2
+		// is the author saying what a broken word ends with.
+	case how.Character != "":
+		// The language's, which §6.3.1 asks for by name — "the appropriate
+		// language-specific hyphenation character(s)".
+		text = how.Character
+	default:
+		// The two Latin hyphens, chosen by whether the face has the better one,
+		// asked of the face the character would be drawn in rather than of the
+		// one the box declared.
+		//
+		// What the language restored in front of the hyphen is asked *with* it,
+		// and that is the whole of what keeps the two together. Those are
+		// letters of the word: they belong in the word's own face, and a face
+		// found for U+2010 alone is whatever in the fallback stack happens to
+		// have it. Hungarian's "Ösz-" in Times came out with the "z" in Noto
+		// and the hyphen beside it, which is one syllable of a word set in two
+		// fonts.
+		text = hyphenTextFor(l.faceThatHas(b, face, how.Restored+autoHyphen))
 	}
-	// A string the author wrote, or U+002D where no face had U+2010. Both are
-	// set in whatever can set them, for the same reason.
-	return text, l.faceThatHas(b, face, text)
+	return how.Restored + text, l.faceThatHas(b, face, how.Restored+text)
+}
+
+// nextPieceText is what the piece after the one at i begins with, or "" where
+// there is none. It is what an orthography reads on the far side of a break.
+func nextPieceText(pieces []piece, i int) string {
+	if i+1 >= len(pieces) {
+		return ""
+	}
+	return pieces[i+1].Text
 }
 
 // autoHyphen is U+2010 HYPHEN: the character "hyphenate-character: auto" asks

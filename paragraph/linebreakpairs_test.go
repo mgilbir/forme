@@ -268,7 +268,7 @@ func TestTheGlueSeparatorsStillHoldWithoutAnywhere(t *testing.T) {
 // splitsWith is splits with a line-break value as well.
 func splitsWith(t *testing.T, text string, wb WordBreak, lb LineBreak) string {
 	t.Helper()
-	pieces, _ := SplitAtBreaks(text, WhiteSpace{Collapse: true, Wrap: true}, wb, lb, Hyphens{})
+	pieces, _ := SplitAtBreaks(text, WhiteSpace{Collapse: true, Wrap: true}, wb, lb, Hyphens{}, WritingSystemOther)
 	out := ""
 	for _, p := range pieces {
 		if p.BreakBefore {

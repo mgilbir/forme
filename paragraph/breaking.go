@@ -60,7 +60,12 @@ func (br *Breaker) BreakOneLine(items []Item, from, fromByte int, width, lineX s
 	line []Item, next, nextByte int, outOfFlow []MidLineBox, forced bool) {
 
 	line, next, nextByte, outOfFlow, forced = br.fillOneLine(items, from, fromByte, width, lineX)
-	return withHyphen(items, line, from, next, nextByte, forced), next, nextByte, outOfFlow, forced
+	line, skip := withHyphen(items, line, from, next, nextByte, forced)
+	// A character the hyphen replaced, taken off the start of the next line.
+	// The offset is the one overflow-wrap's cut already uses, and it is only
+	// ever set where that cut is not — withHyphen declines a line that ended
+	// inside an item. See Item.HyphenSkip and paragraph.Orthography.
+	return line, next, nextByte + skip, outOfFlow, forced
 }
 
 // withHyphen prints the hyphen a soft hyphen asked for, on the line that broke
@@ -82,17 +87,26 @@ func (br *Breaker) BreakOneLine(items []Item, from, fromByte int, width, lineX s
 // carries no break opportunity, is no kind of white space, and is not out of
 // flow. What it does carry is everything about how the text beside it is drawn,
 // because it is drawn as part of that text.
-func withHyphen(items, line []Item, from, next, nextByte int, forced bool) []Item {
+func withHyphen(items, line []Item, from, next, nextByte int, forced bool) ([]Item, int) {
 	// A forced break is the author's own and hyphenates nothing; the end of the
 	// items is the end of the paragraph, where the word was not broken at all;
 	// a non-zero offset means the line ended *inside* an item, which is
 	// overflow-wrap's cut and not a hyphenation point.
 	if forced || nextByte != 0 || next <= from || next >= len(items) {
-		return line
+		return line, 0
 	}
 	at, ok := hyphenBefore(items, next)
 	if !ok {
-		return line
+		return line, 0
+	}
+	// The language may take a character off the start of the next line as well
+	// as print a hyphen at the end of this one, and it may take one only if
+	// there is one to take: the item the next line begins at has to be the item
+	// the rule was computed against, which it is not when a box boundary or a
+	// float stands between them.
+	skip := at.HyphenSkip
+	if skip > len(items[next].Text) {
+		skip = 0
 	}
 	// Capped so the append cannot write into the caller's items.
 	face, above, below := at.Face, at.Above, at.Below
@@ -109,7 +123,7 @@ func withHyphen(items, line []Item, from, next, nextByte int, forced bool) []Ite
 		// the same line, in the same face, and an upright line does not turn one
 		// character of itself on its side.
 		Upright: at.Upright,
-	})
+	}), skip
 }
 
 // hyphenBefore is the item whose soft hyphen the line ended at, if it did.
@@ -242,9 +256,18 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// item that follows meets the width it really has.
 		//
 		// What does *not* take it back is everything that takes no room — a
-		// forced break, an inline box's own edge, a box out of flow. Those
-		// legitimately follow a character at the end of a line, and "ab c、<br>"
-		// is the suite's row for it.
+		// forced break, a box out of flow, an inline box's own edge where that
+		// edge is nothing. Those legitimately follow a character at the end of a
+		// line, and "ab c、<br>" is the suite's row for it.
+		//
+		// "Where that edge is nothing" is the qualification, and it is the same
+		// one §8.1's shaping reads of the same items: a zero margin is a
+		// boundary and a margin with width is room on the page. A border after
+		// the comma is ink past the end of the line, so the comma is not at the
+		// end of the line and does not hang.
+		// hanging-punctuation-allow-end-inlines writes the pair — an empty
+		// <span> after the comma and a <span> with a one-em border after it —
+		// and asks for the comma to hang in the first and not in the second.
 		//
 		// Without this, a comma inside a "white-space: nowrap" span hung and
 		// pulled the span apart: the atomic inline after it began a new line,
@@ -252,10 +275,24 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// hanging-punctuation-allow-end writes that row too, and its assert says
 		// so in as many words — punctuation does not hang "when a nowrap span
 		// prevents breaking before the punctuation".
-		if hungAt >= 0 && !item.Forced && !item.Inset && item.Abs == nil && item.Float == nil {
+		if hungAt >= 0 && !item.Forced && item.Abs == nil && item.Float == nil &&
+			!(item.Inset && item.Width == 0) {
 			line[hungAt].Hangs, line[hungAt].HangEnd = false, false
 			used = used.Add(line[hungAt].Width)
 			hungAt = -1
+			// An inline box's own border is ink at the end of the line and is
+			// not a place the line may end: the character before it is not the
+			// last thing on the line and cannot hang, and there is nowhere
+			// between the two to break. So the line goes back to where it last
+			// could end, carrying the character with it.
+			//
+			// Only for an edge, and that is the whole of the rule. Everything
+			// else that takes the hang back is a place the line may end — the
+			// text after a hung comma begins a line of its own — so the fill
+			// goes on and breaks there, which is where "ab c、def" belongs.
+			if item.Inset && used > width && oppAt >= 0 {
+				return trimLineEdge(line[:oppLine]), oppAt, 0, outOfFlow[:oppFlow], false
+			}
 		}
 
 		if item.Float != nil {
@@ -365,7 +402,16 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// be reached — not by two commas, and not by two with a float between
 		// them, which is the only thing that stands between two characters and
 		// takes no room.
-		if item.MayHangEnd && content && !item.NoWrap && overflows(used, item, width) {
+		// And a character with an inline box's own border in front of it does
+		// not hang either. Hanging it would put the character outside the line
+		// and leave the border inside, which draws the box's edge against
+		// nothing — and the character is not at the end of the line in the sense
+		// §8.4 means, because the box it is in has not ended.
+		// hanging-punctuation-allow-end-inlines writes it as "12 34<span
+		// style='border-left:1em'>,</span>" and asks for the line to break
+		// earlier instead.
+		afterBorder := len(line) > 0 && line[len(line)-1].Inset && line[len(line)-1].Width != 0
+		if item.MayHangEnd && !afterBorder && content && !item.NoWrap && overflows(used, item, width) {
 			item.Hangs, item.HangEnd = true, true
 			hungAt = len(line)
 			line = append(line, item)
@@ -393,6 +439,12 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 			if item.HyphenLastResort && pendingHyphen(line) != 0 && oppAt >= 0 {
 				// Ending here would divide a word, and the box asked for that to
 				// be given up while the line has anywhere else to end. It has.
+				return trimLineEdge(line[:oppLine]), oppAt, 0, outOfFlow[:oppFlow], false
+			}
+			// And the same for an opportunity "auto-phrase" withheld: ending
+			// here would divide a phrase, and the line has somewhere else to
+			// end. See Item.LastResort.
+			if item.LastResort && oppAt >= 0 {
 				return trimLineEdge(line[:oppLine]), oppAt, 0, outOfFlow[:oppFlow], false
 			}
 			if h := pendingHyphen(line); h == 0 || used.Add(h) <= width {
@@ -431,9 +483,27 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// and this is not the change that should alter it; extending the rule to
 		// text alone moves nothing on the suite either way and fixes the case
 		// above, which makes it a strict improvement rather than a trade.
+		//
+		// "cannot begin a line of its own" is two things and used to be one. An
+		// item with no opportunity in front of it is the obvious half; the other
+		// is an item that has one and may not take it, which is what
+		// "white-space: nowrap" makes of every item inside a span but the first.
+		// That combination reached no branch here at all — the branch above ends
+		// a line at an item and refuses one a line may not begin at, and this one
+		// took only items with nothing in front of them — so a nowrap span wider
+		// than the room left stayed where it was and overflowed.
+		//
+		// The disjunct is the rule written down rather than a live filter, and
+		// that is worth saying: the branch above returns for any item that has an
+		// opportunity and may take it, so nothing with "item.BreakBefore &&
+		// !item.NoWrap" ever arrives here. Dropping it outright leaves the suite
+		// at the same 5875. It stays because the sentence at the top of this
+		// comment is a claim about both halves, and a reader given the code
+		// without it would have to rediscover which items the branch above lets
+		// through.
 		if (item.Space || item.AtomicBox == nil) && !item.Collapsible &&
-			!item.Hangs && i < tailFrom && !item.NoWrap && !item.Inset &&
-			!item.BreakBefore && backAt >= 0 && overflows(used, item, width) {
+			!item.Hangs && i < tailFrom && !item.Inset &&
+			(!item.BreakBefore || item.NoWrap) && backAt >= 0 && overflows(used, item, width) {
 			return trimLineEdge(line[:backLine]), backAt, 0, outOfFlow[:backFlow], false
 		}
 
@@ -550,15 +620,24 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// Recorded before the switch below, because that is where content becomes
 		// true: an opportunity at the very start of a line is not one the line can
 		// be sent back to.
-		if item.BreakBefore && content {
+		//
+		// And neither is one a line may not begin at. §3's "white-space: nowrap"
+		// suppresses the opportunities inside a span, and SplitAtBreaks does not
+		// know it: the value is on the box and that function is given one box's
+		// text, so the cuts are made as usual and NoWrap travels beside them.
+		// Recording one let the fill rewind into the middle of a span whose whole
+		// purpose is that no line begins in the middle of it — "a <span
+		// class=nowrap>bb cc</span>dddddd" came out as "a bb" and "ccdddddd".
+		if item.BreakBefore && content && !item.NoWrap {
 			// Not an opportunity the line can be sent back to if the hyphen it
 			// would have to print does not fit in the room the line had.
 			if h := pendingHyphen(line); h == 0 || used.Add(h) <= width {
 				switch {
-				case h != 0 && item.HyphenLastResort:
-					// A hyphen the box asked to be given up. Remembered, and
-					// kept apart from the rest so that any other opportunity on
-					// the line is preferred to it however early it was.
+				case item.LastResort || (h != 0 && item.HyphenLastResort):
+					// A hyphen the box asked to be given up, or a break inside a
+					// phrase it asked to be kept whole. Remembered, and kept
+					// apart from the rest so that any other opportunity on the
+					// line is preferred to it however early it was.
 					hypAt, hypLine, hypFlow = i, len(line), len(outOfFlow)
 				default:
 					oppAt, oppLine, oppFlow = i, len(line), len(outOfFlow)

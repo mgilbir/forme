@@ -420,7 +420,7 @@ func CollapseWhitespaceAfter(text, value string, wst WordSpaceTransform,
 	if !ws.Collapse {
 		// pre, pre-wrap and break-spaces keep every space and every tab, so
 		// that substitution is all of Phase I that is left.
-		return expandSeparators(text, wst)
+		return InsertPhraseSeparators(expandSeparators(text, wst), wst, system)
 	}
 
 	// U+200B ZERO WIDTH SPACE is the segment break transformation's one
@@ -642,7 +642,12 @@ func CollapseWhitespaceAfter(text, value string, wst WordSpaceTransform,
 	for _, c := range pending {
 		out.WriteRune(c)
 	}
-	return out.String()
+	// And last, the separators the document did not write. It is after the
+	// collapsing rather than before it because a boundary is decided by the
+	// characters a reader will see: a run of white space that collapsed to one
+	// space is one separator to the rule below, and two to the rule as it stood
+	// before the collapsing ran. See InsertPhraseSeparators.
+	return InsertPhraseSeparators(out.String(), wst, system)
 }
 
 // expandSeparators replaces the virtual word separators in preserved text.

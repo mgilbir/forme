@@ -495,6 +495,12 @@ type boxBuilder struct {
 	// documentElement is the root, which §2.7 blockifies and so exempts from
 	// "display: contents". See contentsIsHonoured.
 	documentElement *html.Node
+	// reportedPhraseSeparators says the finding below has been made once. It is
+	// once per document rather than once per box for the reason
+	// layouter.reportWordBreak is: the value is inherited, so a page that
+	// declares it once and has a hundred text nodes has one gap and not a
+	// hundred.
+	reportedPhraseSeparators bool
 	// afterWord says the last character emitted was part of a word, which is what
 	// "text-transform: capitalize" needs to know and what a text node cannot
 	// answer on its own: in "<b>e</b>xample" the "x" does not begin a word. It is
@@ -952,6 +958,7 @@ func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSi
 	}
 	text := collapseWhitespaceAfter(n.Text, inherited["white-space-collapse"], wst,
 		before, writingSystemAt(n))
+	b.reportPhraseSeparators(n, text, wst)
 	// Whether the run of white space this node ends with is still open, asked
 	// of the collapsed text and *before* the transform below rewrites it. See
 	// Boundary.Collapsed: "full-width" turns the space into a U+3000, and by
@@ -1756,6 +1763,23 @@ func languageAt(n *html.Node) paragraph.Language {
 	return ""
 }
 
+// orthographyAt is the hyphenation orthography in force at a node.
+//
+// The tag whole, as writingSystemAt reads it and for the same reason: what
+// decides is the script, and "zh-Latn" is romanised Chinese where "zh" is not.
+// See paragraph.OrthographyOf.
+func orthographyAt(n *html.Node) paragraph.Orthography {
+	for cur := n; cur != nil; cur = cur.Parent {
+		if cur.Type != html.ElementNode {
+			continue
+		}
+		if v, ok := cur.Attr("lang"); ok && v != "" {
+			return paragraph.OrthographyOf(v)
+		}
+	}
+	return paragraph.OrthographyPlain
+}
+
 // writingSystemAt is the writing system in force at a node, which is a
 // different question from the language and is asked of the same attribute.
 //
@@ -1776,33 +1800,46 @@ func writingSystemAt(n *html.Node) paragraph.WritingSystem {
 	return paragraph.WritingSystemOther
 }
 
-// wordSpaceTransformFor reads word-space-transform off a computed style and
-// reports the half of it this engine cannot do.
-//
-// The reporting is here rather than in the cascade because it is a value the
-// property parser understands and this engine declines: "auto-phrase" asks for
-// word separators to be *invented* at phrase boundaries the author did not mark,
-// which for Japanese means a dictionary and a segmentation model. A document
-// that writes it beside "space" still gets its explicit marks expanded, and is
-// told the inferred ones are missing — which is a page with too few spaces
-// rather than a page with none.
+// wordSpaceTransformFor reads word-space-transform off a computed style.
 func (b *boxBuilder) wordSpaceTransformFor(cs style.ComputedStyle) paragraph.WordSpaceTransform {
-	wst, unhandled := wordSpaceTransformOf(cs["word-space-transform"])
-	if unhandled != "" {
-		b.rec.ReportDetail(Finding{
-			Rule: RuleUnsupportedValue,
-			Message: "\"" + unhandled + "\" in word-space-transform was not applied: " +
-				"inventing a word boundary where the document marked none needs a " +
-				"dictionary for the language, so only the marks it did write are expanded",
-			Property: "word-space-transform",
-		})
-	}
+	wst, _ := wordSpaceTransformOf(cs["word-space-transform"])
 	return wst
 }
 
-// wordSpaceTransformValue is the same read without the report, for a caller that
-// has a Box rather than the style it was built from — the report has already
-// been made for the element the box belongs to.
+// reportPhraseSeparators says that "auto-phrase" found no phrases in a node's
+// text because there is no model for the language it is in.
+//
+// It is a question about the text and the content language rather than about
+// the declaration, which is why it is here and not where the value is read.
+// §2.2 answers two thirds of it for the UA — "if the content language is
+// unknown, or if the user agent does not support detecting phrase boundaries for
+// that language, there are no virtual expandable separators" — so a document
+// that declares no language gets no separators and gets that *right*. What is
+// left is a language whose phrases another UA would find and this one cannot,
+// which today is Chinese. See paragraph.PhrasesUnfound.
+func (b *boxBuilder) reportPhraseSeparators(n *html.Node, text string,
+	wst paragraph.WordSpaceTransform) {
+
+	if b.reportedPhraseSeparators || !wst.Invents() {
+		return
+	}
+	if !paragraph.PhrasesUnfound(text, writingSystemAt(n)) {
+		return
+	}
+	b.reportedPhraseSeparators = true
+	b.rec.ReportDetail(Finding{
+		Rule: RuleUnsupportedValue,
+		Message: "\"auto-phrase\" in word-space-transform found no boundaries: " +
+			"inventing a word separator where the document marked none needs a " +
+			"phrase model for the language, and there is none here for this one, " +
+			"so only the marks the document did write are expanded",
+		Property: "word-space-transform",
+		Path:     PathOf(n),
+	})
+}
+
+// wordSpaceTransformValue is the same read without the node, for a caller that
+// has a Box rather than the style it was built from.
 func wordSpaceTransformValue(s map[string]string) paragraph.WordSpaceTransform {
 	wst, _ := wordSpaceTransformOf(s["word-space-transform"])
 	return wst

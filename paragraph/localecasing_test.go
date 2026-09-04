@@ -79,8 +79,12 @@ func TestLithuanianKeepsTheDot(t *testing.T) {
 		{"Ì", "i̇̀", "I with grave"},
 		{"Í", "i̇́", "I with acute"},
 		{"Ĩ", "i̇̃", "I with tilde"},
-		// "0307; ; ...; lt After_Soft_Dotted" — one dot and not two.
-		{"i̇", "i", "an explicit dot after a soft-dotted letter"},
+		// "0307; 0307; ; ; lt After_Soft_Dotted" — the *lower*case field is the
+		// one that keeps the dot, which is the whole point of the language's
+		// tailoring. See TestLithuanianDropsTheDotWhenItCapitalizes for the two
+		// fields that remove it.
+		{"i\u0307", "i\u0307", "an explicit dot after a soft-dotted letter"},
+		{"i\u0307\u0301", "i\u0307\u0301", "and the same under an accent"},
 		// Without an accent there is nothing to keep the dot from, so the
 		// ordinary mapping applies.
 		{"I", "i", "a bare I"},
@@ -93,6 +97,42 @@ func TestLithuanianKeepsTheDot(t *testing.T) {
 	// And none of it happens in a language that is not Lithuanian.
 	if got := casedIn(t, "Í", TransformLowercase, "en"); got != "í" {
 		t.Errorf("in English the dot was kept: %q", got)
+	}
+}
+
+// TestLithuanianDropsTheDotWhenItCapitalizes is the other half of the same line
+// of SpecialCasing.txt, and the half this engine had backwards.
+//
+//	0307; 0307;     ;     ; lt After_Soft_Dotted
+//
+// The four fields are the character, its lowercase, its titlecase and its
+// uppercase, and the two that are empty are the last two — which is what the
+// file's own heading says in words: "Remove DOT ABOVE after \"i\" with upper or
+// titlecase". A capital I has no dot of its own for a second one to sit above.
+//
+// It reads the other way round at a glance. The rule *sounds* like "Lithuanian
+// keeps one dot and not two", which is true — of the lowercase, where the dot
+// is what is kept.
+func TestLithuanianDropsTheDotWhenItCapitalizes(t *testing.T) {
+	for _, tc := range []struct{ text, want, what string }{
+		{"i\u0307", "I", "the dot a lowercase i carries"},
+		{"i\u0307\u0301", "I\u0301", "with an accent above it as well"},
+		{"j\u0307", "J", "and on a j"},
+		{"\u012f\u0307", "\u012e", "and on an i with an ogonek"},
+		{"i\u0307i\u0307", "II", "twice over"},
+		// The dot goes only where a soft-dotted letter is what it is above. The
+		// suite's text-transform-upperlower-044 writes this row itself, with the
+		// comment "check that dot isn't deleted in other contexts".
+		{"x\u0307", "X\u0307", "a dot above something that is not soft-dotted"},
+		{"a\u0307", "A\u0307", "and above an a"},
+	} {
+		if got := casedIn(t, tc.text, TransformUppercase, "lt"); got != tc.want {
+			t.Errorf("%s: %q became %q, want %q", tc.what, tc.text, got, tc.want)
+		}
+	}
+	// And nowhere else: English uppercases the letter and keeps the mark.
+	if got := casedIn(t, "i\u0307", TransformUppercase, "en"); got != "I\u0307" {
+		t.Errorf("in English the dot was dropped: %q", got)
 	}
 }
 

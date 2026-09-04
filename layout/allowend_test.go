@@ -431,3 +431,60 @@ func TestACommaAtTheEndOfANowrapSpanStillHangs(t *testing.T) {
 			"value from nothing")
 	}
 }
+
+// An inline box's own border is ink at the end of the line, and a character in
+// front of it is not the last thing on the line.
+//
+// The engine hangs a candidate as soon as it does not fit and takes the hang
+// back when something lands after it — and what did *not* take it back was an
+// inline box's edge, which is right for an edge that is nothing and wrong for
+// one with a border on it. The suite's hanging-punctuation-allow-end-inlines
+// writes the pair and asks for opposite answers.
+func TestABorderAfterItStopsACharacterHanging(t *testing.T) {
+	const border = `#b { border-left: 9.59375px solid black }`
+	for _, tc := range []struct {
+		body string
+		want []string
+		what string
+	}{
+		{`ab c, de`, []string{"ab c,", "de"},
+			"the comma hangs, which is the value working"},
+		{`ab c,<span></span> de`, []string{"ab c,", "de"},
+			"an empty inline after it is nothing and does not stop it"},
+		{`ab c,<span id="b"></span> de`, []string{"ab", "c,", "de"},
+			"a border after it is ink, so the comma does not hang and the line " +
+				"goes back to where it last could end"},
+	} {
+		got := allowEndLines(t, 4, tc.body, "", border)
+		if strings.Join(got, "|") != strings.Join(tc.want, "|") {
+			t.Errorf("%s\n%q came out %q, want %q", tc.what, tc.body, got, tc.want)
+		}
+	}
+}
+
+// And a character with a border in *front* of it does not hang either: the box
+// it is in has not ended, so the character is not at the end of the line in the
+// sense §8.4 means.
+func TestABorderBeforeItStopsACharacterHanging(t *testing.T) {
+	const border = `#b { border-left: 9.59375px solid black }`
+	got := allowEndLines(t, 4, `ab c<span id="b">,</span> de`, "", border)
+	want := []string{"ab", "c,", "de"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("%q came out %q, want %q — the comma hung with the box's own "+
+			"border left inside the line", `ab c<span id=b>,</span> de`, got, want)
+	}
+	// The control: without the border the same markup hangs the comma, so the
+	// span itself is not what stops it.
+	plain := allowEndLines(t, 4, `ab c<span id="b">,</span> de`, "")
+	if strings.Join(plain, "|") != "ab c,|de" {
+		t.Errorf("without the border the lines are %q, want [ab c, de] — the "+
+			"fixture says nothing about the border", plain)
+	}
+	// And an edge that is nothing is nothing: a box that opens in front of the
+	// comma without drawing anything leaves it at the end of the line.
+	empty := allowEndLines(t, 4, `ab c<span></span>, de`, "", border)
+	if strings.Join(empty, "|") != "ab c,|de" {
+		t.Errorf("with an empty box in front of the comma the lines are %q, want "+
+			"[ab c, de] — an edge with no border on it is not ink", empty)
+	}
+}

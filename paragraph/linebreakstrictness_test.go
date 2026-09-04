@@ -32,7 +32,7 @@ func breaksBefore(t *testing.T, r rune, lb LineBreak) bool {
 	lb.ChineseOrJapanese = true
 	text := "中中" + string(r) + "文"
 	pieces, _ := SplitAtBreaks(text, WhiteSpace{Collapse: true, Wrap: true},
-		WordBreak{}, lb, Hyphens{})
+		WordBreak{}, lb, Hyphens{}, WritingSystemOther)
 	for _, p := range pieces {
 		if strings.HasPrefix(p.Text, string(r)) {
 			return p.BreakBefore
@@ -164,7 +164,7 @@ func TestLooseLetsALineEndAfterAPrefix(t *testing.T) {
 	breaksAfter := func(r rune, lb LineBreak) bool {
 		text := "中中" + string(r) + "文"
 		pieces, _ := SplitAtBreaks(text, WhiteSpace{Collapse: true, Wrap: true},
-			WordBreak{}, lb, Hyphens{})
+			WordBreak{}, lb, Hyphens{}, WritingSystemOther)
 		for _, p := range pieces {
 			if strings.HasPrefix(p.Text, "文") {
 				return p.BreakBefore
@@ -200,13 +200,13 @@ func TestTheTailoringDoesNothingToLatinText(t *testing.T) {
 		"hello world", "a-b", "one, two; three!", "a (b) c", "50% off", "x…y",
 		"don't", "e.g. this", "1,000",
 	} {
-		want, _ := SplitAtBreaks(text, ws, WordBreak{}, LineBreak{}, Hyphens{})
+		want, _ := SplitAtBreaks(text, ws, WordBreak{}, LineBreak{}, Hyphens{}, WritingSystemOther)
 		for _, v := range []struct {
 			name string
 			lb   LineBreak
 		}{{"normal", LineBreak{Normal: true}}, {"strict", LineBreak{Strict: true}},
 			{"loose", LineBreak{Loose: true}}} {
-			got, _ := SplitAtBreaks(text, ws, WordBreak{}, v.lb, Hyphens{})
+			got, _ := SplitAtBreaks(text, ws, WordBreak{}, v.lb, Hyphens{}, WritingSystemOther)
 			if len(got) != len(want) {
 				t.Errorf("%q under %s: %d pieces, want %d", text, v.name, len(got), len(want))
 				continue
@@ -280,7 +280,7 @@ func TestTheLooseHyphensNeedTheWritingSystem(t *testing.T) {
 			// And the same value over text that is neither.
 			text := "中中" + string(r) + "文"
 			pieces, _ := SplitAtBreaks(text, WhiteSpace{Collapse: true, Wrap: true},
-				WordBreak{}, v.lb, Hyphens{})
+				WordBreak{}, v.lb, Hyphens{}, WritingSystemOther)
 			for _, p := range pieces {
 				if strings.HasPrefix(p.Text, string(r)) && p.BreakBefore {
 					t.Errorf("%#04X: %s let a line begin with it where the writing "+

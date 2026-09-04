@@ -133,15 +133,20 @@ type Item struct {
 	// preserved tabs — rather than Phase I's, which is only U+0020, U+0009 and
 	// the segment breaks. The two differ over the ideographic Space and its
 	// relatives, which hang at the end of a line and are never collapsed.
-	// Autospace is §8.1's ideograph spacing, already inside Width and sitting at
-	// this run's far edge.
+	// Autospace is a gap already inside Width and sitting at this item's far
+	// edge, which belongs *between* two units rather than to either.
 	//
-	// It is kept apart so that a line that ends here can leave it out. The
-	// spacing goes *between* two characters, and two characters on different
-	// lines are not adjacent — so a gap the line break falls on is not a gap at
-	// all, exactly as the letter-spacing after a line's last character is not
-	// applied. Without it a run whose far edge carries an eighth of an em is an
-	// eighth of an em too wide to end a line it fits on.
+	// §8.1's ideograph spacing is one and gave it its name. §8.2's is the other:
+	// a run of atomic inlines is one typographic character unit, so the last
+	// picture of a row takes a letter-spacing after it, and a picture has no
+	// text for the ordinary account of that to be about.
+	//
+	// It is kept apart so that a line that ends here can leave it out. The gap
+	// goes between two characters, and two characters on different lines are not
+	// adjacent — so a gap the line break falls on is not a gap at all, exactly as
+	// the letter-spacing after a line's last character is not applied. Without
+	// it a run whose far edge carries an eighth of an em is an eighth of an em
+	// too wide to end a line it fits on.
 	Autospace style.Unit
 	// EdgeLetterSpacing is the letter-spacing at this run's far edge — the
 	// *logical* far edge, so the right of a left-to-right run and the left of a
@@ -279,6 +284,16 @@ type Item struct {
 	// for by name, "must give up on suppressing hyphenation when that would lead
 	// to overflow". So the opportunity is kept and reached for last.
 	HyphenLastResort bool
+	// LastResort says the opportunity in front of this item is one the line
+	// reaches for only when it has no other, whatever else is on the line.
+	//
+	// It is HyphenLastResort's neighbour and not its duplicate. That one is a
+	// property of the *value* — "auto-phrase" is on the box, so every item in it
+	// carries the flag, and whether it means anything depends on whether a
+	// hyphen is pending. This is a property of the opportunity itself: only the
+	// items whose break "auto-phrase" withheld carry it, and it means what it
+	// says wherever it is set. See Piece.LastResort.
+	LastResort bool
 	// Off is what the document turned off for this run: a font's own rules a
 	// CSS property or a CSS Text rule has overruled. See shape.Features.
 	Off shape.Features
@@ -292,6 +307,19 @@ type Item struct {
 	// the number, and it needs it *before* it decides, since a line that can hold
 	// nine characters and a hyphen cannot hold ten and a hyphen.
 	Hyphen style.Unit
+	// HyphenSkip is how many bytes at the start of the next line are dropped
+	// when the line ends at this item's hyphen: a character the hyphen has
+	// replaced. See Orthography — pinyin's syllable separator is the one this
+	// engine has.
+	//
+	// Zero for every item in almost every document, and the arithmetic is the
+	// same one overflow-wrap already does: the next line begins part-way
+	// through an item, which BreakOneLine returns as an offset.
+	HyphenSkip int
+	// HyphenLead is text put at the start of the next line when the line ends
+	// at this item's hyphen. See Orthography — Uyghur's joiner is the one this
+	// engine has.
+	HyphenLead string
 	// HyphenText is the character to print, carried with the width so that the
 	// item the line breaking appends is one this package can build.
 	//

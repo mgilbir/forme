@@ -26,7 +26,7 @@ import (
 //	00CC; 0069 0307 0300; 00CC; 00CC; lt
 //	00CD; 0069 0307 0301; 00CD; 00CD; lt
 //	0128; 0069 0307 0303; 0128; 0128; lt
-//	0307;     ; 0307; 0307; lt After_Soft_Dotted
+//	0307; 0307;     ;     ; lt After_Soft_Dotted
 //
 // # Why this is not a nicety
 //
@@ -116,14 +116,29 @@ func (l Language) keepsDot() bool { return l == "lt" }
 // localeUpper is the language-dependent part of uppercasing one character, and
 // says whether it applied.
 //
-// The uppercase side is the short one: only the dotted and dotless i differ, and
-// only in Turkish and Azerbaijani.
-func localeUpper(r rune, lang Language) (string, bool) {
+// before is the text in front of the character, which the Lithuanian condition
+// reads.
+func localeUpper(r rune, before string, lang Language) (string, bool) {
 	if lang.dotless() && r == 'i' {
 		// "0069; 0069; 0130; 0130; tr" — an ordinary i uppercases to the dotted
 		// capital, because the dotless one is a different letter with a capital
 		// of its own.
 		return "İ", true
+	}
+	if lang.keepsDot() && r == 0x0307 && afterSoftDotted(before) {
+		// "0307; 0307; ; ; lt After_Soft_Dotted", whose own heading in
+		// SpecialCasing.txt is "Remove DOT ABOVE after \"i\" with upper or
+		// titlecase". The four fields are the character, its lowercase, its
+		// titlecase and its uppercase, and the two that are empty are the last
+		// two — so a capital keeps no dot above the letter that already draws
+		// one, and a lowercase letter does.
+		//
+		// It reads the other way round at a glance, which is how this engine
+		// had it: the rule *sounds* like "Lithuanian keeps one dot and not two",
+		// and that is true of the lowercase, where the dot is kept. The removal
+		// belongs to the capital, which has no dot of its own for a second one
+		// to be beside.
+		return "", true
 	}
 	return "", false
 }
@@ -145,10 +160,6 @@ func localeLower(r rune, before, after string, lang Language) (string, bool) {
 		return "ı", true
 	case lang.dotless() && r == 0x0307 && afterI(before):
 		// "0307; ; ...; tr After_I" — that removal.
-		return "", true
-	case lang.keepsDot() && r == 0x0307 && afterSoftDotted(before):
-		// "0307; ; ...; lt After_Soft_Dotted" — Lithuanian keeps one dot and
-		// not two, so an explicit one after a letter that already has it goes.
 		return "", true
 	case lang.keepsDot() && moreAbove(after):
 		// "0049; 0069 0307; ...; lt More_Above" and its two neighbours. A

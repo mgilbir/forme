@@ -40,7 +40,7 @@ func clusterStarts(s string) map[int]bool {
 func TestNoBreakOpportunityFallsInsideACluster(t *testing.T) {
 	for _, w := range whiteSpaces {
 		for _, tc := range texts {
-			pieces, _ := SplitAtBreaks(tc.text, w.ws, WordBreak{}, LineBreak{}, Hyphens{})
+			pieces, _ := SplitAtBreaks(tc.text, w.ws, WordBreak{}, LineBreak{}, Hyphens{}, WritingSystemOther)
 
 			// The boundaries are taken over what the pieces actually spell rather
 			// than over the input, because a collapsing value rewrites a tab as a
