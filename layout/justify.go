@@ -240,7 +240,8 @@ func (l *layouter) justifyBetweenCharacters(items []inlineItem, xs, widths []sty
 		}
 		if items[k].Atomic != nil || items[k].AtomicBox != nil {
 			// A picture is a character unit: the slack goes round it as it goes
-			// round a letter.
+			// round a letter. Whether *this* picture is a unit of its own is the
+			// caller's question — see the run below.
 			return 1
 		}
 		if items[k].Face == nil || items[k].Text == "" {
@@ -248,9 +249,42 @@ func (l *layouter) justifyBetweenCharacters(items []inlineItem, xs, widths []sty
 		}
 		return paragraph.SpacedUnits(items[k].Text)
 	}
-	total := 0
+	// §8.2's rule, which this method shares because it is the same notion:
+	// "each consecutive run of atomic inlines (such as images and inline
+	// blocks) is treated as a single typographic character unit". Two pictures
+	// side by side offer one opportunity — the one between them and whatever is
+	// beside the pair — and not three.
+	//
+	// Counted once into a slice rather than asked twice, because the answer
+	// depends on what came before and the two walks below have to agree about
+	// it: a total that counted a run as two and a distribution that counted it
+	// as one would put the slack somewhere the width was never made for.
+	//
+	// A run is broken by anything that is a unit of its own and is not a
+	// picture. An inline box's edge and a hanging space are neither, and neither
+	// breaks it: the suite writes the pictures inside spans and asks for the
+	// same answer.
+	count := make([]int, len(items))
+	lastPicture := -1
 	for i, k := range order {
-		total += units(i, k)
+		n := units(i, k)
+		if items[k].Atomic != nil || items[k].AtomicBox != nil {
+			if lastPicture >= 0 {
+				// The run goes on, so the opportunity moves along with it: the
+				// slack for a unit is added to that unit's width, which is to
+				// say *after* it, and the one gap a row of pictures offers is
+				// after the last of them.
+				count[lastPicture] = 0
+			}
+			lastPicture = k
+		} else if n > 0 {
+			lastPicture = -1
+		}
+		count[k] = n
+	}
+	total := 0
+	for _, n := range count {
+		total += n
 	}
 	if total < 2 {
 		// One unit offers no opportunity, and none offers none.
@@ -262,9 +296,9 @@ func (l *layouter) justifyBetweenCharacters(items []inlineItem, xs, widths []sty
 	}
 
 	var acc style.Unit
-	for i, k := range order {
+	for _, k := range order {
 		xs[k] = xs[k].Add(acc)
-		n := units(i, k)
+		n := count[k]
 		if n == 0 {
 			continue
 		}
