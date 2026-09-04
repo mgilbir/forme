@@ -242,3 +242,77 @@ func TestAValueThisCannotReadLeavesEveryLimitAtAuto(t *testing.T) {
 		}
 	}
 }
+
+// A word the author has divided takes their divisions and no others.
+//
+// §6.3.1: "Automatic hyphenation opportunities elsewhere within a word must be
+// ignored if the word contains a conditional hyphen (&shy; or U+00AD SOFT
+// HYPHEN), in favor of the conditional hyphen(s)."
+//
+// The mark neither ends the word nor joins it. Ending it — which is what this
+// did, because a soft hyphen is not a letter — hyphenated each half on its own,
+// so a word with one division in it came out with four. The suite writes it as
+// hyphens-auto-control: "fragilistic&shy;expiali" in three widths, whose own
+// comment lists the opportunities as "frag[A]ilis[A]tic[C]ex[A]pi[A]ali" and
+// asks for the [C] and none of the [A]s.
+func TestAWordWithASoftHyphenInItTakesNoOtherDivision(t *testing.T) {
+	// The mark stays in the run — it is what says a line may end there, and
+	// "hyphens: none" has to be able to see it again — and draws nothing. What
+	// is compared here is what a reader sees.
+	joined := func(lines []string) string {
+		return strings.Map(func(r rune) rune {
+			if isDefaultIgnorable(r) {
+				return -1
+			}
+			return r
+		}, joined(lines))
+	}
+	// "highway" divides as "high-way" and the box holds six characters, so a
+	// dictionary point after "high" is what the first row proves is there.
+	if got := joined(hyphLines(t, "highway", "")); got != "high-|way" {
+		t.Fatalf("the fixture cannot say what it means to say: %q", got)
+	}
+	// With a division of the author's own, the dictionary's is not offered —
+	// so the line ends where they put it and nowhere else.
+	if got := joined(hyphLines(t, "high&shy;way", "")); got != "high-|way" {
+		t.Errorf("\"high&shy;way\" set as %q, want \"high-|way\"", got)
+	}
+	if got := joined(hyphLines(t, "hi&shy;ghway", "")); got != "hi-|ghway" {
+		t.Errorf("\"hi&shy;ghway\" set as %q, want \"hi-|ghway\" — the "+
+			"dictionary's point after \"high\" was offered as well", got)
+	}
+	// And the mark joins the halves into one word rather than making two. Each
+	// half of "hy&shy;phenation" would divide on its own — "phen-ation" is a
+	// point the dictionary has — and the word as a whole must not.
+	if got := joined(hyphLines(t, "hy&shy;phenation", "")); got != "hy-|phenation" {
+		t.Errorf("\"hy&shy;phenation\" set as %q, want \"hy-|phenation\" — the "+
+			"half after the mark was hyphenated as a word of its own", got)
+	}
+	// A mark in one box and the letters in another is the same word, which is
+	// the whole reason this is a pass over the subtree.
+	if got := joined(hyphLines(t, "hy<span>&shy;</span>phenation", "")); got != "hy-|phenation" {
+		t.Errorf("with the mark in a span of its own: %q", got)
+	}
+	// And a word with no mark in it is untouched by any of this, even next to
+	// one that has.
+	if got := joined(hyphLines(t, "a&shy;b highway", "")); !strings.HasSuffix(got, "high-|way") {
+		t.Errorf("%q — a marked word turned the dictionary off for the next one", got)
+	}
+	// An out-of-flow box's own text is a word of its own and its mark is its
+	// own too: the two formatting contexts are not part of each other's words,
+	// which is what hyphens-out-of-flow-002 is about from the other side.
+	if got := joined(hyphLines(t, `high<div style="position:absolute">a&shy;b</div>way`, "")); got != "high-|way" {
+		t.Errorf("with a marked word inside an absolutely positioned box: %q, "+
+			"want \"high-|way\" — the mark was carried out of the box", got)
+	}
+	// And it does not reach in either. The word around the box has a mark; the
+	// word inside it does not, and divides.
+	root := layoutOf(t, 600,
+		`<div id="d" lang="en">hi&shy;gh<div id="abs">highway</div>way</div>`,
+		`#d { font-family: Courier; font-size: 20px; width: 72px; hyphens: auto }
+		 #abs { position: absolute; width: 72px }`)
+	if got := joined(lineTextsOf(t, root, "abs")); got != "high-|way" {
+		t.Errorf("inside the box: %q, want \"high-|way\" — the mark outside it "+
+			"turned its own dictionary off", got)
+	}
+}

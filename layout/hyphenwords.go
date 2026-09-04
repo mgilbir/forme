@@ -89,7 +89,10 @@ type hyphenGather struct {
 	// is about a word and a word has one beginning, so the box that started it
 	// is the one asked — the same box the language is taken from.
 	limits hyphenLimits
-	out    map[*Box][]int
+	// conditional says the word being gathered has a soft hyphen in it, which
+	// is the author dividing it themselves. See flush.
+	conditional bool
+	out         map[*Box][]int
 }
 
 type hyphenSource struct {
@@ -167,6 +170,22 @@ func (g *hyphenGather) text(b *Box) {
 		return
 	}
 	for i, r := range []rune(b.Text) {
+		if r == softHyphen {
+			// §6.3.1: "Automatic hyphenation opportunities elsewhere within a
+			// word must be ignored if the word contains a conditional hyphen
+			// (&shy; or U+00AD SOFT HYPHEN), in favor of the conditional
+			// hyphen(s)." An author who has divided a word has said where it
+			// divides, and a dictionary that adds three more places is
+			// overruling them.
+			//
+			// So the mark neither ends the word nor joins it: the letters
+			// either side are one word — "frag&shy;ilistic" is one word divided
+			// once and not two words — and the word it makes takes no automatic
+			// points at all. Ending the word here instead is what this did, and
+			// it hyphenated each half on its own.
+			g.conditional = true
+			continue
+		}
 		if !unicode.IsLetter(r) {
 			g.flush()
 			continue
@@ -182,9 +201,15 @@ func (g *hyphenGather) text(b *Box) {
 // flush asks the dictionary about the word gathered so far and records where it
 // said the word may be divided.
 func (g *hyphenGather) flush() {
-	word, from := g.word, g.from
-	g.word, g.from = g.word[:0], g.from[:0]
-	if len(word) == 0 {
+	word, from, conditional := g.word, g.from, g.conditional
+	g.word, g.from, g.conditional = g.word[:0], g.from[:0], false
+	if len(word) == 0 || conditional {
+		// A word the author divided takes the division they wrote and no
+		// others. The section allows one exception — "if, even after breaking
+		// at such opportunities, a portion of that word is still too long to
+		// fit on one line, an automatic hyphenation opportunity *may* be used"
+		// — and it is a may, so a UA that offers none is conforming and this
+		// one offers none.
 		return
 	}
 	limits := g.limits
@@ -214,9 +239,13 @@ func (g *hyphenGather) flush() {
 // flush a block-level child gets — a block *ends* the word around it and an
 // out-of-flow box does not.
 func (g *hyphenGather) inside(b *Box) {
-	word, from, limits := g.word, g.from, g.limits
-	g.word, g.from, g.limits = nil, nil, hyphenLimits{}
+	word, from, limits, cond := g.word, g.from, g.limits, g.conditional
+	g.word, g.from, g.limits, g.conditional = nil, nil, hyphenLimits{}, false
 	g.walk(b)
 	g.flush()
-	g.word, g.from, g.limits = word, from, limits
+	g.word, g.from, g.limits, g.conditional = word, from, limits, cond
 }
+
+// softHyphen is U+00AD, the mark an author writes inside a word to say where it
+// divides.
+const softHyphen = '\u00ad'
