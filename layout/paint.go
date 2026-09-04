@@ -300,15 +300,112 @@ func (TileImage) isOp() {}
 // so neither appears here, and step 2 is a background image, which nothing draws
 // yet. Every other step of §E.2 is present, reduced to the primitives this engine
 // emits.
-func Paint(root *Fragment) []Op {
+func Paint(root *Fragment) []Op { return PaintReporting(root, nil) }
+
+// PaintReporting is Paint, with the findings the painting itself raises.
+//
+// There is one kind: an opacity group whose marks could not be folded into. It
+// cannot be raised in layout, where every other finding about a box is raised,
+// because the question is about the marks the box turned out to paint and
+// nothing before the paint knows them — so the recorder comes here instead of
+// the finding going there. See opacity.go.
+//
+// A nil recorder is the plain Paint, and is what the package's own tests use:
+// they read the display list and none of them asks what was reported. The path
+// that matters is Compose's, and TestAGroupThatOverlapsItselfIsReported goes
+// through it.
+func PaintReporting(root *Fragment, rec *Recorder) []Op {
 	if root == nil {
 		return nil
 	}
 	p := &painter{colors: map[string]style.RGBA{}}
+	p.dimming(root, 1, nil)
 	p.canvasBackground(root)
 	p.stackingContext(root)
 	p.outlines(root)
+	for _, b := range p.order {
+		p.groups[b].report(rec)
+	}
 	return p.ops
+}
+
+// dimming works out, before anything is painted, how much of each fragment's
+// own paint reaches the page and which boxes decided it.
+//
+// owners is outermost first and is carried down rather than looked up, because
+// a block that was lifted out of an inline is no longer inside it — §9.2.1.1
+// made it a sibling of the inline's two halves — and the opacity the inline
+// asked for still covers it. That is the whole of what splitFrom is for here,
+// and it is the case opacity-affects-block-in-inline draws.
+func (p *painter) dimming(f *Fragment, a float64, owners *opacityOwner) {
+	if f == nil || f.Box == nil {
+		return
+	}
+	for _, from := range f.Box.splitFrom {
+		if groupsItsPaint(from) {
+			a, owners = a*opacityOf(from.Style), p.groupFor(from, owners)
+		}
+	}
+	if groupsItsPaint(f.Box) {
+		a, owners = a*opacityOf(f.Box.Style), p.groupFor(f.Box, owners)
+	}
+	if a < 1 {
+		if p.alpha == nil {
+			p.alpha, p.owners = map[*Fragment]float64{}, map[*Fragment]*opacityOwner{}
+		}
+		p.alpha[f], p.owners[f] = a, owners
+	}
+	for _, c := range f.Children {
+		p.dimming(c, a, owners)
+	}
+}
+
+// opacityOwner is one box that asked for opacity, and the chain of the ones
+// outside it.
+//
+// A list rather than a slice, and the reason is worth the type. Two siblings
+// under one group are handed the same chain to extend; extending a *slice*
+// appends to it twice, and if it happens to have spare capacity the second
+// append overwrites the first's entry — so the elder sibling's marks are
+// credited to the younger and the elder is never reported. Whether the slice has
+// spare capacity depends on how the runtime grew it three levels up, which is to
+// say the bug is invisible until a document is nested one box deeper. Copying
+// the slice at every level would fix it and would leave the next reader free to
+// stop copying; a list cannot be extended in place at all.
+type opacityOwner struct {
+	box *Box
+	up  *opacityOwner
+}
+
+// groupFor records a box that asked for opacity, once, and puts it at the head
+// of the chain covering what is inside it.
+func (p *painter) groupFor(b *Box, owners *opacityOwner) *opacityOwner {
+	if p.groups == nil {
+		p.groups = map[*Box]*group{}
+	}
+	if _, seen := p.groups[b]; !seen {
+		p.groups[b] = &group{box: b, alpha: opacityOf(b.Style)}
+		p.order = append(p.order, b)
+	}
+	return &opacityOwner{box: b, up: owners}
+}
+
+// grouped paints a fragment's own marks and folds into them the opacity of
+// every box around it that asked for one.
+func (p *painter) grouped(f *Fragment, paint func()) {
+	a, dimmed := p.alpha[f]
+	if !dimmed {
+		paint()
+		return
+	}
+	at := len(p.ops)
+	paint()
+	ops, marks := dimOps(p.ops, at, a)
+	p.ops = ops
+	for o := p.owners[f]; o != nil; o = o.up {
+		g := p.groups[o.box]
+		g.marks = append(g.marks, marks...)
+	}
 }
 
 // canvasBackground paints the page's own background, before anything else.
@@ -382,6 +479,18 @@ type painter struct {
 	// colors memoizes parsing a computed colour, which is asked for once per
 	// box per property and is almost always one of a handful of values.
 	colors map[string]style.RGBA
+
+	// alpha is the fraction of a fragment's own marks that reaches the page,
+	// and owners are the boxes that asked for it. Both are worked out before
+	// anything is painted, because the paint walk sorts the tree into Appendix
+	// E's layers and a fragment is painted from a flat list that no longer says
+	// what it was inside. Only the fragments that are dimmed are in either map.
+	alpha  map[*Fragment]float64
+	owners map[*Fragment]*opacityOwner
+	// groups is what each of those boxes painted, in the order the boxes were
+	// met, so that the report about a group is in document order.
+	groups map[*Box]*group
+	order  []*Box
 }
 
 // stackLevel is one positioned box waiting to be painted, with what decides
@@ -535,7 +644,7 @@ func (p *painter) stackLevel(s stackLevel) {
 // The root is the other half of the sentence and needs nothing here: the paint
 // begins by making a stacking context of it, so it never reaches this.
 func sealsItsDescendants(b *Box) bool {
-	return !b.ZAuto || b.Position == PositionFixed
+	return !b.ZAuto || b.Position == PositionFixed || groupsItsPaint(b)
 }
 
 // unit paints a fragment and its non-positioned content as one indivisible
@@ -591,7 +700,7 @@ func (p *painter) gather(f *Fragment, lv *layers, root, collect bool) {
 		if c.Box == nil {
 			continue
 		}
-		if c.Box.Position.positioned() || stacksWithASplitInline(c.Box) != nil {
+		if c.Box.Position.positioned() || stacksWithASplitInline(c.Box) != nil || groupsItsPaint(c.Box) {
 			if !collect {
 				// Already hoisted; painting it here as well would draw it twice.
 				continue
@@ -657,7 +766,7 @@ func (p *painter) hoist(f *Fragment, lv *layers) {
 		// The same two kinds gather sorts out, and for the same reason: a box
 		// gather will skip as "already hoisted" has to actually be hoisted here,
 		// or it is painted nowhere at all.
-		if c.Box.Position.positioned() || stacksWithASplitInline(c.Box) != nil {
+		if c.Box.Position.positioned() || stacksWithASplitInline(c.Box) != nil || groupsItsPaint(c.Box) {
 			lv.positioned = append(lv.positioned, stackLevel{
 				frag: c, z: levelOf(c), order: c.Box.Order,
 			})
@@ -936,6 +1045,10 @@ func (p *painter) decorations(f *Fragment) {
 	if f.Box == nil {
 		return
 	}
+	p.grouped(f, func() { p.decorationsIn(f) })
+}
+
+func (p *painter) decorationsIn(f *Fragment) {
 	if len(f.bgBands) > 0 {
 		// The background is shown through the bands and nothing else — see
 		// Fragment.bgBands — while the border, if the box has one at all, is one
@@ -1009,7 +1122,7 @@ func (p *painter) paintBackground(f *Fragment) {
 // pictures inside it to its padding box. That is §11.1.1 in one line, and it is
 // the half of clipping every author uses.
 func (p *painter) content(f *Fragment) {
-	p.clipping(f.clipContent, func() { p.paintContent(f) })
+	p.grouped(f, func() { p.clipping(f.clipContent, func() { p.paintContent(f) }) })
 }
 
 func (p *painter) paintContent(f *Fragment) {
@@ -1155,7 +1268,7 @@ func (p *painter) outlines(f *Fragment) {
 	if f == nil {
 		return
 	}
-	p.outline(f)
+	p.grouped(f, func() { p.outline(f) })
 	for _, c := range f.Children {
 		p.outlines(c)
 	}

@@ -168,7 +168,7 @@ func Compose(in Input, opts Options) Composed {
 	checkScale(rec, scale, opts.MinScale)
 	checkFontSizes(rec, root, scale, opts.MinFontSizePt)
 
-	ops := Paint(root)
+	ops := PaintReporting(root, rec)
 	checkPageOverflow(rec, ops, avail, scale)
 
 	return Composed{

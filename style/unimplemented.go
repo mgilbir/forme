@@ -30,10 +30,19 @@ package style
 // need is the consequence: whether the page will be laid out as though the
 // declaration were absent, and what that looks like. Each string below finishes
 // the sentence "the property was not applied, so ...".
-var unimplementedProperties = map[string]string{
-	"opacity": "the box is painted fully opaque, so anything it was meant to " +
-		"show through it is hidden",
-}
+//
+// # It is empty, and that is the point
+//
+// Every property that was here has been implemented. The last was "opacity",
+// and where its report went is the thing to read before adding an entry: not
+// away, but to the box. An engine that applies a property to most boxes and
+// approximates it on the rest has nothing true to say in a table keyed by
+// property — the same declaration is honoured on one box and not on the next —
+// so the finding is raised where the box is. See layout/opacity.go and
+// layout/writingmode.go, which went the same way for the same reason.
+//
+// An entry here is still the right thing for a property nothing reads at all.
+var unimplementedProperties = map[string]string{}
 
 // readByConstruction lists properties whose names are built rather than written.
 //
