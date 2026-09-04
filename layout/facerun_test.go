@@ -347,8 +347,6 @@ func TestAFamilyThatSetsNothingIsReported(t *testing.T) {
 	_, findings := layoutWith(t, set,
 		`<p id="p">שלום</p>`,
 		`#p { font-family: Helvetica; font-size: 20px }`)
-	fired[RuleFontSubstituted] = true
-
 	var said bool
 	for _, f := range findings {
 		if f.Rule == RuleFontSubstituted {

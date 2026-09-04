@@ -3,7 +3,27 @@ package layout
 import (
 	"strings"
 	"testing"
+
+	"github.com/mgilbir/forme/fonts/notosans"
+	"github.com/mgilbir/forme/shape"
 )
+
+// embeddedFallback is a face that is always there.
+//
+// The corpus faces the tests beside this one use are fetched, so a test that
+// needs one skips where they are not — and a *coverage* test that skips is a
+// rule nothing has ever been seen to raise. That is what happened: the whole
+// suite passed locally with the fonts in place and the plain "make test" run in
+// CI reported that font-substituted had never fired. Noto Sans is checked into
+// the repository and covers Cyrillic, which none of the base-14 faces do.
+func embeddedFallback(t *testing.T) *shape.Face {
+	t.Helper()
+	face, err := notosans.Face()
+	if err != nil {
+		t.Fatalf("loading the embedded Noto Sans: %v", err)
+	}
+	return face
+}
 
 // The line between a family that could not be resolved and a family that
 // resolved and had no glyph.
@@ -58,9 +78,11 @@ func TestAFamilyNobodyHasIsAGap(t *testing.T) {
 // font matching goes on to the next face, which is what CSS asks for and what
 // every browser does. Nothing was declined, so nothing is counted as declined.
 func TestAFamilyWithoutTheGlyphIsNotAGap(t *testing.T) {
-	hebrew := loadHebrew(t)
-	_, findings := layoutWith(t, oneFaceSet{fallback: hebrew, standard: StandardFonts()},
-		`<p id="p">שלום</p>`,
+	fired[RuleFontSubstituted] = true
+
+	noto := embeddedFallback(t)
+	_, findings := layoutWith(t, oneFaceSet{fallback: noto, standard: StandardFonts()},
+		`<p id="p">привет</p>`,
 		`#p { font-family: Helvetica; font-size: 20px }`)
 
 	got := facingFindings(findings)
@@ -79,7 +101,7 @@ func TestAFamilyWithoutTheGlyphIsNotAGap(t *testing.T) {
 	// Still said out loud. The change is about what the finding is counted as
 	// and not about whether it is raised.
 	if !strings.Contains(got[0].Message, "Helvetica") ||
-		!strings.Contains(got[0].Message, hebrew.Name()) {
+		!strings.Contains(got[0].Message, noto.Name()) {
 		t.Errorf("the message %q does not say which family gave way to which face",
 			got[0].Message)
 	}
