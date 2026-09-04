@@ -440,6 +440,38 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 		prev = r
 
 		switch {
+		case IsMandatoryBreak(r):
+			// UAX #14's BK and NL: a character that ends a line wherever it
+			// appears, which is not the same thing as a segment break. A
+			// segment break is collapsible — a newline under "white-space:
+			// normal" becomes a space and the line goes on — and these are not:
+			// LB4 and LB5 make the break mandatory, and no value of white-space
+			// is written over them.
+			//
+			// They reached here as ordinary characters and were set as ordinary
+			// characters, so "1<FF>2" came out on one line with a notdef box
+			// between the digits. line-breaking-022 writes all five between
+			// spans in a column one character wide and asks for six lines.
+			//
+			// The character is written into the piece that ends the line and
+			// the break is emitted after it, rather than the character being
+			// swallowed the way a newline is. §5.1's note asks for both:
+			//
+			//	Control characters other than [tab, newline] ... are ignored
+			//	for the purpose of ... but are otherwise rendered as a visible
+			//	glyph
+			//
+			// and the suite asks for it twice over, by the same author. Three
+			// of the white-space/control-chars-0XX documents are mismatch
+			// references against a blank page — "U+000C, which is in the
+			// unicode category CC, must be visible" — and line-breaking-022
+			// wants the same character to end a line. Swallowing it satisfies
+			// the second and fails the first three.
+			cur.WriteRune(r)
+			flush()
+			emit(Piece{Space: true, Segment: true})
+			breakNext = true
+
 		case r == '\n' || r == '\r':
 			// Only a *preserved* break reaches here: Phase I turned a
 			// collapsible one into a space. A CR is folded with the LF that may

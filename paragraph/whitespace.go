@@ -771,6 +771,25 @@ func isCollapsibleSpace(c byte) bool {
 	return c == ' ' || c == '\t' || c == '\n' || c == '\r'
 }
 
+// IsMandatoryBreak reports whether a character ends a line wherever it appears.
+//
+// UAX #14's BK class — U+000B LINE TABULATION, U+000C FORM FEED, U+2028 LINE
+// SEPARATOR, U+2029 PARAGRAPH SEPARATOR — and its NL class, U+0085 NEXT LINE.
+// LB4 and LB5 make each of them a mandatory break.
+//
+// It is not the newline question. U+000A and U+000D are segment breaks, which
+// §4.1.1 *collapses*: under "white-space: normal" a newline becomes a space and
+// the line goes on. These five are not collapsible and no value of white-space
+// is written over them, which is why they are asked about here rather than
+// folded into the newline case.
+func IsMandatoryBreak(r rune) bool {
+	switch r {
+	case '\v', '\f', '\u0085', '\u2028', '\u2029':
+		return true
+	}
+	return false
+}
+
 // IsOtherSpaceSeparator is §4.1's term of art, and the definition is exact:
 // "all characters in the Unicode general category Zs except space (U+0020) and
 // no-break space (U+00A0)".
