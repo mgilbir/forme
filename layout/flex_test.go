@@ -211,7 +211,9 @@ func TestAContainerThisEngineCannotArrangeIsLaidOutAsABlockAndSaysSo(t *testing.
 		{"a reversed column", `#f { flex-direction: column-reverse }`, "backwards along their axis"},
 		{"a right-to-left row", `#f { direction: rtl }`, "runs from the right"},
 		{"a right-to-left column", `#f { direction: rtl; flex-direction: column }`, "runs from the right"},
-		{"wrapping", `#f { flex-wrap: wrap }`, "more than one line"},
+		{"lines stacked backwards", `#f { flex-wrap: wrap-reverse }`, "from the far side"},
+		{"a wrapping column", `#f { flex-wrap: wrap; flex-direction: column }`, "wrap into columns"},
+		{"lines on a baseline", `#f { flex-wrap: wrap; align-content: baseline }`, "placed by a rule"},
 		{"a safe alignment", `#f { justify-content: safe center }`, "packed by a rule"},
 		{"items on a baseline", `#f { align-items: baseline }`, "shared baseline"},
 		{"an item on the baseline", `#f > div:first-child { align-self: baseline }`, "shared baseline"},
@@ -264,6 +266,8 @@ func TestAnArrangedContainerSaysNothing(t *testing.T) {
 		`#f { width: 300px; justify-content: right; align-items: center }`,
 		`#f { width: 300px } #f > div { align-self: auto; order: 0 }`,
 		`#f { width: 300px } #f > div:first-child { align-self: flex-start }`,
+		`#f { width: 300px; flex-wrap: wrap }`,
+		`#f { width: 300px; height: 100px; flex-wrap: wrap; align-content: space-around }`,
 	} {
 		got := Compose(Input{HTML: threeItems,
 			CSS: []Stylesheet{{Source: flexCSS + css}}}, Options{})
@@ -909,4 +913,143 @@ func TestAColumnMeasuresAnItemFromTheEdgeItIsAlignedTo(t *testing.T) {
 	// the edge: 300 less 12 of item and 10 of margin.
 	wantRow(t, flexRow(t, one, column+`#f { align-items: flex-end } #a { margin-right: 10px }`),
 		[][2]float64{{278, 12}}, "an item at the far side with a right margin")
+}
+
+// The wrapping fixture: four items that are each exactly a third of the
+// container and cannot give way, so three fit on a line and the fourth starts
+// another. Every number in the tests below comes off those two lines.
+const fourWide = `<div id="f"><div>a</div><div>b</div><div>c</div><div>d</div></div>`
+
+const wrapping = `#f { width: 300px; flex-wrap: wrap } #f > div { flex: 0 0 100px }`
+
+// TestAWrappingRowBreaksWhenTheLineIsFull is §9.3. An item goes on the line in
+// hand while it fits and starts a new one when it does not, and the container
+// is as deep as the lines it ended up with.
+func TestAWrappingRowBreaksWhenTheLineIsFull(t *testing.T) {
+	wantRow(t, flexRow(t, fourWide, wrapping),
+		[][2]float64{{0, 100}, {100, 100}, {200, 100}, {0, 100}}, "four items over two lines")
+	wantCross(t, flexCross(t, fourWide, wrapping),
+		[][2]float64{{0, 20}, {0, 20}, {0, 20}, {20, 20}}, "the second line below the first")
+	if h := flexHeight(t, fourWide, wrapping); h != 40 {
+		t.Errorf("the container is %gpx deep and holds two 20px lines", h)
+	}
+
+	// A container that does not wrap keeps all four on one line and overflows,
+	// which is the same document and the property is the whole difference.
+	wantRow(t, flexRow(t, fourWide, `#f { width: 300px } #f > div { flex: 0 0 100px }`),
+		[][2]float64{{0, 100}, {100, 100}, {200, 100}, {300, 100}}, "four items that do not wrap")
+}
+
+// TestAnItemTooWideForItsLineGetsOneOfItsOwn. A line always holds at least one
+// item: an item wider than the whole container has nowhere narrower to go, and
+// putting it on a line by itself is what keeps the overflow to that one item
+// instead of pushing the next one out with it.
+func TestAnItemTooWideForItsLineGetsOneOfItsOwn(t *testing.T) {
+	const two = `<div id="f"><div id="a">a</div><div id="b">b</div></div>`
+	const wide = `#f { width: 300px; flex-wrap: wrap } #f > div { flex: 0 0 400px }`
+	wantRow(t, flexRow(t, two, wide),
+		[][2]float64{{0, 400}, {0, 400}}, "two items too wide for the container")
+
+	// Two lines and not three. An empty line before the first item would sit
+	// there costing nothing until the lines are spaced apart, and then it is a
+	// gap above the first row that no declaration asked for.
+	wantCross(t, flexCross(t, two, wide+`#f { row-gap: 10px }`),
+		[][2]float64{{0, 20}, {30, 20}}, "two overwide items with a gap between the lines")
+}
+
+// TestTheGapCountsWhenTheLineIsMeasured. The room an item needs on a line is
+// its own size and the gap that separates it from the one before, so the gap is
+// part of what decides where the line breaks — three 95px items fit across
+// 300px until 10px of gap is asked for between them.
+func TestTheGapCountsWhenTheLineIsMeasured(t *testing.T) {
+	const three = `<div id="f"><div>a</div><div>b</div><div>c</div></div>`
+	const tight = `#f { width: 300px; flex-wrap: wrap } #f > div { flex: 0 0 95px }`
+
+	wantRow(t, flexRow(t, three, tight),
+		[][2]float64{{0, 95}, {95, 95}, {190, 95}}, "three items that fit together")
+	wantRow(t, flexRow(t, three, tight+`#f { column-gap: 10px }`),
+		[][2]float64{{0, 95}, {105, 95}, {0, 95}}, "three items that no longer fit")
+}
+
+// TestEachLineSharesOutItsOwnFreeSpace. §9.7 is resolved per line, not per
+// container: the three items on the full line have nothing left over between
+// them, and the one on the second line has the whole width to itself.
+//
+// This is the clause behind the row of cards that comes out with one enormous
+// card at the bottom, and it is what tells the two readings apart — a container
+// that resolved the sizes once for all four items would have given every one of
+// them a quarter.
+func TestEachLineSharesOutItsOwnFreeSpace(t *testing.T) {
+	got := flexRow(t, fourWide,
+		`#f { width: 300px; flex-wrap: wrap } #f > div { flex: 1 1 100px }`)
+	wantRow(t, got, [][2]float64{{0, 100}, {100, 100}, {200, 100}, {0, 300}},
+		"three items on a full line and one with the line to itself")
+}
+
+// TestTheLinesAreSeparatedByARowGap. The gap between the lines of a row is the
+// row gap, which is the other half of the pair the items themselves are
+// separated by.
+func TestTheLinesAreSeparatedByARowGap(t *testing.T) {
+	wantCross(t, flexCross(t, fourWide, wrapping+`#f { row-gap: 10px }`),
+		[][2]float64{{0, 20}, {0, 20}, {0, 20}, {30, 20}}, "two lines 10px apart")
+	if h := flexHeight(t, fourWide, wrapping+`#f { row-gap: 10px }`); h != 50 {
+		t.Errorf("the container is %gpx deep: two 20px lines with 10 between", h)
+	}
+}
+
+// TestAlignContentPlacesTheLines is §9.6's align-content, which moves the lines
+// and not what is on them.
+//
+// Two 20px lines in a 100px container leave 60px over, and each keyword is a
+// different answer to where it goes — the same six answers justify-content
+// gives on the other axis, because in Box Alignment they are one property.
+func TestAlignContentPlacesTheLines(t *testing.T) {
+	for _, c := range []struct {
+		value string
+		want  [][2]float64
+	}{
+		// The initial value divides the leftover between the lines instead of
+		// leaving it anywhere: 30px onto each 20px line, and the items stretch
+		// to the lines they are on.
+		{"normal", [][2]float64{{0, 50}, {0, 50}, {0, 50}, {50, 50}}},
+		{"stretch", [][2]float64{{0, 50}, {0, 50}, {0, 50}, {50, 50}}},
+		{"flex-start", [][2]float64{{0, 20}, {0, 20}, {0, 20}, {20, 20}}},
+		{"flex-end", [][2]float64{{60, 20}, {60, 20}, {60, 20}, {80, 20}}},
+		{"center", [][2]float64{{30, 20}, {30, 20}, {30, 20}, {50, 20}}},
+		{"space-between", [][2]float64{{0, 20}, {0, 20}, {0, 20}, {80, 20}}},
+		// Three shares of 20: half a share above the first line and below the
+		// last, a whole one between them.
+		{"space-around", [][2]float64{{15, 20}, {15, 20}, {15, 20}, {65, 20}}},
+		// Three gaps of 20, all equal.
+		{"space-evenly", [][2]float64{{20, 20}, {20, 20}, {20, 20}, {60, 20}}},
+	} {
+		t.Run(c.value, func(t *testing.T) {
+			got := flexCross(t, fourWide,
+				wrapping+`#f { height: 100px; align-content: `+c.value+` }`)
+			wantCross(t, got, c.want, "two lines aligned by "+c.value)
+		})
+	}
+}
+
+// TestAlignContentSaysNothingToAContainerThatDoesNotWrap. The property moves the
+// lines of a container that has them, and a container that does not wrap has
+// one line whose size is the container's own — there is nothing left for
+// align-content to place, and the specification says so rather than leaving it
+// to fall out.
+//
+// The difference is visible, which is why this is a test and not a comment: the
+// same declaration on the same document leaves the items 100px tall without the
+// wrap and 20px tall with it.
+func TestAlignContentSaysNothingToAContainerThatDoesNotWrap(t *testing.T) {
+	const two = `<div id="f"><div>a</div><div>b</div></div>`
+	const sized = `#f { width: 300px; height: 100px; align-content: center }` +
+		`#f > div { flex: 0 0 100px }`
+
+	wantCross(t, flexCross(t, two, sized),
+		[][2]float64{{0, 100}, {0, 100}}, "a container that does not wrap")
+
+	// Allowed to wrap, the same container has a line of its own size again —
+	// 20px of content — and the leftover is align-content's to place.
+	wantCross(t, flexCross(t, two, sized+`#f { flex-wrap: wrap }`),
+		[][2]float64{{40, 20}, {40, 20}}, "a container that wraps and did not need to")
 }

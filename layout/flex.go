@@ -217,6 +217,9 @@ type flexItem struct {
 	// only a column asks for and only a column can answer: it is a height, and
 	// a height is found by laying the item out rather than by reading it.
 	measured style.Unit
+	// line is which of the container's lines the item landed on, which is what
+	// the cross-axis half of §9.4 and §9.6 is asked about.
+	line int
 	// base is §9.2's flex base size and hypothetical is that clamped by the
 	// item's own minimum and maximum, both as content sizes.
 	base, hypothetical style.Unit
@@ -275,8 +278,24 @@ func (l *layouter) refusesToFlex(b *Box, containing style.Unit) string {
 	}
 	switch trimmedLower(b.Style["flex-wrap"]) {
 	case "", "nowrap":
+	case "wrap":
+		if a.column {
+			// A wrapping column's lines are columns side by side, and each is
+			// as wide as the widest item on it — but an item stretched across
+			// its line is as wide as the line, which is the number being
+			// worked out. A row has no such knot: an item's height does not
+			// decide its own line's height by way of its width.
+			return "its items wrap into columns, where how wide a line is and " +
+				"how wide the items on it are decide each other"
+		}
 	default:
-		return "its items wrap onto more than one line"
+		return "its lines are stacked from the far side"
+	}
+	switch trimmedLower(b.Style["align-content"]) {
+	case "", "normal", "stretch", "flex-start", "start", "flex-end", "end",
+		"center", "space-between", "space-around", "space-evenly":
+	default:
+		return "its lines are placed by a rule this engine does not apply"
 	}
 	switch trimmedLower(b.Style["justify-content"]) {
 	case "", "normal", "flex-start", "start", "left", "flex-end", "end", "right",
@@ -401,14 +420,20 @@ func (l *layouter) flexContent(b *Box, parent *Fragment, width style.Unit,
 	// space that shrinking gives back — a row of "flex: 1" items divides what is
 	// left after the gaps, which is why every number below is measured against
 	// the line and not against the container's own size.
-	gap := l.flexGap(b, a, width)
-	gaps := gap.Mul(float64(len(items) - 1))
-	line := l.flexLine(b, a, items, gaps, width, origin)
-	l.resolveFlexibleLengths(items, line)
+	gap, crossGap := l.flexGap(b, a, width), l.flexCrossGap(b, a, width)
+	main := l.flexMain(b, a, items, gap, width, origin)
 
-	// §9.4: each item laid out at the size it was given. A row learns its cross
-	// size from this — the line is as tall as the tallest item — while a column
-	// settled every item's width before it could measure a height at all.
+	// §9.3: which items are on which line. A container that does not wrap has
+	// one line whatever it holds.
+	lines := flexLines(items, main, gap, l.wraps(b))
+	for _, ln := range lines {
+		l.resolveFlexibleLengths(ln, main.Sub(gap.Mul(float64(len(ln)-1))))
+	}
+
+	// §9.4: each item laid out at the size it was given. A row learns its lines'
+	// cross sizes from this — a line is as tall as the tallest item on it —
+	// while a column settled every item's width before it could measure a
+	// height at all.
 	mark := len(l.deferred)
 	starts := make([]int, len(items))
 	for i, it := range items {
@@ -417,29 +442,20 @@ func (l *layouter) flexContent(b *Box, parent *Fragment, width style.Unit,
 	}
 	end := len(l.deferred)
 
-	cross := width
-	if !a.column {
-		cross = 0
-		for _, it := range items {
-			if h := it.outerCross(it.frag.BorderRect.H); h > cross {
-				cross = h
-			}
-		}
-		if h, ok := l.explicitHeight(b, width, origin.cbHeight, origin.cbDefinite); ok {
-			// §9.4's "definite cross size of the flex container", which the
-			// single line takes whole. An item stretched to it reaches the
-			// container's own edge rather than the tallest of its siblings.
-			cross = h
-		}
+	crosses, cross := l.flexCrossSizes(b, a, lines, crossGap, width, origin)
 
+	leadCross, betweenLines := l.alignContentSpacing(b, a, crosses, cross, crossGap)
+
+	if !a.column {
 		// §9.6's stretch, which is what "align-items: normal" comes to. An item
 		// that states its own height keeps it; one that does not is laid out
-		// again at the line's height, because a box's height changes where its
+		// again at its line's height, because a box's height changes where its
 		// content sits inside it and cannot be applied afterwards.
 		//
 		// A column has nothing to do here: its cross size is the container's
 		// own width, which was known before any of this and is already the size
 		// each item was laid out at.
+		//
 		// The out-of-flow boxes a discarded layout found are discarded with it,
 		// which is the same rule the block re-layout keeps and is kept here the
 		// long way round. An absolutely positioned box inside a fragment that
@@ -462,7 +478,7 @@ func (l *layouter) flexContent(b *Box, parent *Fragment, width style.Unit,
 			if i+1 < len(items) {
 				stop = starts[i+1]
 			}
-			want := maxZero(cross.Sub(it.crossMargin))
+			want := maxZero(crosses[it.line].Sub(it.crossMargin))
 			if l.alignOf(b, it) == crossStretch && l.stretchesAcross(a, it) &&
 				it.frag.BorderRect.H != want {
 				it.cross, it.hasCross = want, true
@@ -476,30 +492,189 @@ func (l *layouter) flexContent(b *Box, parent *Fragment, width style.Unit,
 		l.deferred = kept
 	}
 
-	// §9.5's main-axis placement and §9.6's cross-axis placement, in that order
-	// because the first needs the free space and the second needs the line.
-	used := style.Unit(0)
-	for _, it := range items {
-		used = used.Add(it.outer(it.target))
-	}
-	justify, free := l.justifyOf(b, a), line.Sub(used)
+	// §9.5's main-axis placement and §9.6's cross-axis placement, line by line,
+	// in that order because the first needs the free space on the line and the
+	// second needs the line's size.
+	justify := l.justifyOf(b, a)
+	at := leadCross
+	for n, ln := range lines {
+		used := gap.Mul(float64(len(ln) - 1))
+		for _, it := range ln {
+			used = used.Add(it.outer(it.target))
+		}
+		free := main.Sub(used)
 
-	along := style.Unit(0)
-	for i, it := range items {
-		at := along.Add(justifyOffset(justify, free, len(items), i))
-		a.place(it.frag, at.Add(a.mainStart(it.margin)), l.crossOffset(b, a, it, cross))
-		parent.Children = append(parent.Children, it.frag)
-		along = along.Add(it.outer(it.target)).Add(gap)
+		along := style.Unit(0)
+		for i, it := range ln {
+			pos := along.Add(justifyOffset(justify, free, len(ln), i))
+			a.place(it.frag, pos.Add(a.mainStart(it.margin)),
+				at.Add(l.crossOffset(b, a, it, crosses[n])))
+			parent.Children = append(parent.Children, it.frag)
+			along = along.Add(it.outer(it.target)).Add(gap)
+		}
+		at = at.Add(crosses[n]).Add(crossGap).Add(betweenLines)
 	}
 	if a.column {
-		// The height the container came to: the line the items divided, and the
-		// gaps that were taken off it before they did.
-		return line.Add(gaps)
+		// The height the container came to is the main size its items divided.
+		return main
 	}
 	return cross
 }
 
-// flexLine is the main size the items divide.
+// wraps reports whether the container's lines break, which is §5.2.
+//
+// "wrap-reverse" is refused by the gate, so what is left is whether there is
+// more than one line at all.
+func (l *layouter) wraps(b *Box) bool {
+	return trimmedLower(b.Style["flex-wrap"]) == "wrap"
+}
+
+// flexLines is §9.3: which items sit on which line.
+//
+// An item goes on the line in hand while it fits and starts a new one when it
+// does not, measured against the *hypothetical* main sizes — what each item
+// asked for before any of the free space moved. That order matters: the sizes
+// §9.7 resolves are a consequence of which items share a line, so breaking
+// against them would be circular.
+//
+// A line always holds at least one item. An item wider than the whole container
+// has nowhere narrower to go, and pushing it to a line of its own is what makes
+// the overflow one item's rather than the following item's as well.
+func flexLines(items []*flexItem, main, gap style.Unit, wraps bool) [][]*flexItem {
+	if !wraps {
+		for _, it := range items {
+			it.line = 0
+		}
+		return [][]*flexItem{items}
+	}
+	var out [][]*flexItem
+	var line []*flexItem
+	used := style.Unit(0)
+	for _, it := range items {
+		room := it.outer(it.hypothetical)
+		if len(line) > 0 && used.Add(gap).Add(room) > main {
+			out = append(out, line)
+			line, used = nil, 0
+		}
+		if len(line) > 0 {
+			used = used.Add(gap)
+		}
+		it.line = len(out)
+		line = append(line, it)
+		used = used.Add(room)
+	}
+	return append(out, line)
+}
+
+// flexCrossSizes is §9.4's step 8: how far across each line reaches, and how far
+// the container does.
+//
+// A container that does not wrap has one line and, where its cross size is a
+// number, that line takes the whole of it — the specification's own step, and
+// what makes an item stretch to the container's edge rather than to the tallest
+// of its siblings. Every other line is as big as the largest thing on it,
+// including the single line of a container that was allowed to wrap and did
+// not: it is the wrapping that decides this and not how many lines came of it,
+// because align-content has the leftover to place either way.
+func (l *layouter) flexCrossSizes(b *Box, a flexAxis, lines [][]*flexItem,
+	crossGap, width style.Unit, origin flow) (crosses []style.Unit, cross style.Unit) {
+
+	container, definite := width, true
+	if !a.column {
+		container, definite = l.explicitHeight(b, width, origin.cbHeight, origin.cbDefinite)
+	}
+	crosses = make([]style.Unit, len(lines))
+	for i, ln := range lines {
+		for _, it := range ln {
+			if c := it.outerCross(a.crossOf(it.frag.BorderRect)); c > crosses[i] {
+				crosses[i] = c
+			}
+		}
+	}
+	if !l.wraps(b) && definite {
+		crosses[0] = container
+	}
+	if definite {
+		return crosses, container
+	}
+	for i, c := range crosses {
+		if i > 0 {
+			cross = cross.Add(crossGap)
+		}
+		cross = cross.Add(c)
+	}
+	return crosses, cross
+}
+
+// alignContentSpacing is §9.6's align-content: where the lines sit in a cross
+// size that is bigger than they are.
+//
+// It has nothing to say to a container that does not wrap, and there is no
+// clause here that says so: such a container has one line, §9.4 gives that line
+// the container's whole cross size, and a line that fills what it is in leaves
+// nothing to place. The distinction is real and not a technicality — the same
+// declaration on the same document moves the line of a container that was
+// allowed to wrap and did not, because that line is only as big as its content.
+// The property that moves an item inside its line is align-items; this moves
+// the lines.
+//
+// The initial value stretches: the leftover is divided equally between the lines
+// and added to each, which is why a wrapping container with a height has lines
+// taller than their content. Every other value packs them and leaves the space
+// where the keyword says, using the same arithmetic as justify-content on the
+// other axis — they are one property in Box Alignment and it is one function
+// here.
+func (l *layouter) alignContentSpacing(b *Box, a flexAxis, crosses []style.Unit,
+	cross, crossGap style.Unit) (lead, between style.Unit) {
+
+	used := crossGap.Mul(float64(len(crosses) - 1))
+	for _, c := range crosses {
+		used = used.Add(c)
+	}
+	free := cross.Sub(used)
+	switch trimmedLower(b.Style["align-content"]) {
+	case "", "normal", "stretch":
+		if free <= 0 {
+			return 0, 0
+		}
+		share := free.Div(float64(len(crosses)))
+		for i := range crosses {
+			crosses[i] = crosses[i].Add(share)
+		}
+		return 0, 0
+	}
+	align := l.alignContentOf(b)
+	// The lines are placed one after another, so what each one needs is where it
+	// begins relative to the one before: the first line's own offset, and the
+	// difference between consecutive offsets for the rest. Every distribution
+	// this uses spaces its slots evenly, so that difference is one number.
+	lead = justifyOffset(align, free, len(crosses), 0)
+	if len(crosses) > 1 {
+		between = justifyOffset(align, free, len(crosses), 1).Sub(lead)
+	}
+	return lead, between
+}
+
+// alignContentOf reads align-content, whose values are justify-content's and
+// mean the same thing on the other axis.
+func (l *layouter) alignContentOf(b *Box) flexJustify {
+	switch trimmedLower(b.Style["align-content"]) {
+	case "flex-end", "end":
+		return justifyEnd
+	case "center":
+		return justifyCenter
+	case "space-between":
+		return justifyBetween
+	case "space-around":
+		return justifyAround
+	case "space-evenly":
+		return justifyEvenly
+	}
+	return justifyStart
+}
+
+// flexMain is the container's inner main size, and whether it is a number at
+// all.
 //
 // A row's is its width, which its own containing block gave it: definite, and
 // the same number whatever the items do. A column's is its height, and a height
@@ -510,20 +685,27 @@ func (l *layouter) flexContent(b *Box, parent *Fragment, width style.Unit,
 // nothing missing, so §9.7 resolves every item to the size it asked for and
 // neither flex-grow nor flex-shrink has anything to do — which is why a column
 // of "flex: 1" items does not fill a container that never said how tall it was.
-func (l *layouter) flexLine(b *Box, a flexAxis, items []*flexItem,
-	gaps, width style.Unit, origin flow) style.Unit {
+//
+// Nothing wraps against a size arrived at this way, and §9.3 would have to say
+// what to do if it could: a line breaks against the room left on it, and a
+// container whose main size is the sum of its items always has exactly enough.
+// It cannot arise — the gate refuses a wrapping column, and a row's main size is
+// its width, which its containing block always states — and it is worth knowing
+// that the two clauses meet rather than merely never having been seen to.
+func (l *layouter) flexMain(b *Box, a flexAxis, items []*flexItem,
+	gap, width style.Unit, origin flow) style.Unit {
 
 	if !a.column {
-		return width.Sub(gaps)
+		return width
 	}
 	if h, ok := l.explicitHeight(b, width, origin.cbHeight, origin.cbDefinite); ok {
-		return maxZero(h.Sub(gaps))
+		return h
 	}
-	line := style.Unit(0)
+	main := gap.Mul(float64(len(items) - 1))
 	for _, it := range items {
-		line = line.Add(it.outer(it.hypothetical))
+		main = main.Add(it.outer(it.hypothetical))
 	}
-	return line
+	return main
 }
 
 // flexGap is the room §8 of Box Alignment leaves between one item and the next.
@@ -542,6 +724,13 @@ func (l *layouter) flexGap(b *Box, a flexAxis, width style.Unit) style.Unit {
 		return v
 	}
 	return 0
+}
+
+// flexCrossGap is the room left between one line and the next, which is the gap
+// along the other axis: rows of items are separated by a row gap, and the
+// columns a wrapping column container makes by a column gap.
+func (l *layouter) flexCrossGap(b *Box, a flexAxis, width style.Unit) style.Unit {
+	return l.flexGap(b, flexAxis{column: !a.column}, width)
 }
 
 // flexJustify is §9.5's justify-content, and flexAlign is §9.6's align-items and

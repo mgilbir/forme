@@ -328,9 +328,15 @@ var properties = map[string]property{
 	"justify-content": {false, "normal"},
 	"align-items":     {false, "normal"},
 	"align-self":      {false, "auto"},
-	"column-count":    {false, "auto"},
-	"column-width":    {false, "auto"},
-	"column-gap":      {false, "normal"},
+	// align-content is the third of them and the odd one out: it moves the
+	// container's *lines* rather than anything in them, so it has nothing to
+	// say to a container that has only ever one line. Its "normal" behaves as
+	// "stretch" in a flex container, which is again a behaviour and not a
+	// synonym.
+	"align-content": {false, "normal"},
+	"column-count":  {false, "auto"},
+	"column-width":  {false, "auto"},
+	"column-gap":    {false, "normal"},
 	// row-gap is column-gap's other half, and which of the two a container
 	// reads is a question about its axis rather than about the property: items
 	// in a row are separated by a column gap and items in a column by a row
