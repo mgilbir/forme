@@ -405,15 +405,6 @@ func (l *layouter) refusesToFlex(b *Box, containing style.Unit) string {
 	switch trimmedLower(b.Style["flex-wrap"]) {
 	case "", "nowrap":
 	case "wrap", "wrap-reverse":
-		if a.column {
-			// A wrapping column's lines are columns side by side, and each is
-			// as wide as the widest item on it — but an item stretched across
-			// its line is as wide as the line, which is the number being
-			// worked out. A row has no such knot: an item's height does not
-			// decide its own line's height by way of its width.
-			return "its items wrap into columns, where how wide a line is and " +
-				"how wide the items on it are decide each other"
-		}
 	default:
 		return "its lines wrap by a rule this engine does not apply"
 	}
@@ -707,15 +698,13 @@ func (l *layouter) flexContent(b *Box, parent *Fragment, width style.Unit,
 
 	leadCross, betweenLines := l.alignContentSpacing(b, a, crosses, cross, crossGap)
 
-	if !a.column {
-		// §9.6's stretch, which is what "align-items: normal" comes to. An item
-		// that states its own height keeps it; one that does not is laid out
-		// again at its line's height, because a box's height changes where its
-		// content sits inside it and cannot be applied afterwards.
-		//
-		// A column has nothing to do here: its cross size is the container's
-		// own width, which was known before any of this and is already the size
-		// each item was laid out at.
+	{
+		// §9.6's stretch. An item that states its own cross size keeps it; one
+		// that does not is laid out again at its line's, because a size changes
+		// where an item's content sits inside it and cannot be applied
+		// afterwards. Most items need nothing: a single-line container's line
+		// is the container, so they were laid out at that size already, and the
+		// comparison below is what keeps this to the ones that have moved.
 		//
 		// The out-of-flow boxes a discarded layout found are discarded with it,
 		// which is the same rule the block re-layout keeps and is kept here the
@@ -741,7 +730,7 @@ func (l *layouter) flexContent(b *Box, parent *Fragment, width style.Unit,
 			}
 			want := maxZero(crosses[it.line].size.Sub(it.crossMargin))
 			if l.alignOf(b, a, it) == crossStretch && l.stretchesAcross(a, it) &&
-				it.frag.BorderRect.H != want {
+				a.crossOf(it.frag.BorderRect) != want {
 				it.cross, it.hasCross = want, true
 				l.deferred = kept
 				it.frag = l.layOutFlexItem(it, a, width, origin, it.target, true)
@@ -1439,7 +1428,16 @@ func (l *layouter) crossSizeOf(b *Box, a flexAxis, it *flexItem, width style.Uni
 		// either.
 		return declared.Add(edge)
 	}
-	if l.alignOf(b, a, it) == crossStretch && l.stretchesAcross(a, it) {
+	if l.alignOf(b, a, it) == crossStretch && l.stretchesAcross(a, it) && !l.wraps(b) {
+		// The line of a container that does not wrap is the container, so a
+		// stretched item's cross size is known here and the item can be
+		// measured at the size it will really be.
+		//
+		// Where the container wraps it is not known: §9.4 works out each line's
+		// cross size from its items' *hypothetical* ones, which are what they
+		// would be with no stretching at all, and only then stretches them to
+		// the line. Measuring at the stretched size would be measuring against
+		// a number this is one of the inputs to.
 		return room
 	}
 	want := l.contentWidths(it.box)
