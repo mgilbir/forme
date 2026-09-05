@@ -103,7 +103,41 @@ func (l *layouter) flexValuesOf(b *Box, containing style.Unit) flexValues {
 // height comes from its content. That asymmetry is why a column measures its
 // items before it sizes them, and it is the only place the two directions are
 // not each other's mirror image.
-type flexAxis struct{ column bool }
+//
+// Which end each axis starts at is the other half. Three declarations move it —
+// flex-direction's two reversed values, wrap-reverse, and direction: rtl — and
+// they compose rather than override: a right-to-left row-reverse runs left to
+// right, because reversing twice is not reversing. They are kept apart here
+// rather than folded into one flag because the alignment keywords need to tell
+// them apart: "flex-start" follows the flex axis, "start" follows the writing
+// mode, and "left" follows neither.
+type flexAxis struct {
+	column bool
+	// reverse is flex-direction's, rtl is direction's, and wrapReverse is
+	// flex-wrap's. Each names one declaration and nothing more.
+	reverse, rtl, wrapReverse bool
+}
+
+// mainReversed and crossReversed are which way each axis actually runs, once
+// the declarations above have been composed.
+//
+// A row's main axis is the inline axis, so "rtl" reverses it and "column" is
+// not affected by it at all; a row's cross axis is the block axis, which no
+// writing mode this engine lays out runs backwards. A column is the same
+// sentence with the two axes exchanged.
+func (a flexAxis) mainReversed() bool {
+	if a.column {
+		return a.reverse
+	}
+	return a.reverse != a.rtl
+}
+
+func (a flexAxis) crossReversed() bool {
+	if a.column {
+		return a.wrapReverse != a.rtl
+	}
+	return a.wrapReverse
+}
 
 // The property that names a size along each axis. There is no table for these:
 // a main size in a column is a height and the whole of the difference is which
@@ -188,10 +222,40 @@ func (a flexAxis) place(f *Fragment, main, cross style.Unit) {
 	f.BorderRect.X, f.BorderRect.Y = main, cross
 }
 
-// axisOf reads flex-direction. The gate has refused the two reversed values, so
-// what is left is which of the two axes the items run along.
+// axisOf reads the three declarations that decide which way each axis runs.
 func (l *layouter) axisOf(b *Box) flexAxis {
-	return flexAxis{column: trimmedLower(b.Style["flex-direction"]) == "column"}
+	direction := trimmedLower(b.Style["flex-direction"])
+	return flexAxis{
+		column:      direction == "column" || direction == "column-reverse",
+		reverse:     direction == "row-reverse" || direction == "column-reverse",
+		rtl:         isRTL(b),
+		wrapReverse: trimmedLower(b.Style["flex-wrap"]) == "wrap-reverse",
+	}
+}
+
+// mainAt and crossAt turn a position measured from an axis's start into one
+// measured from the container's leading edge, which is the only place the
+// direction of an axis is applied.
+//
+// Everything above works in one direction: the first item is at nought, the
+// packing measures from there, and the free space is at the far end. Mirroring
+// that answer is exactly what running the axis backwards means, and doing it
+// once here is what keeps §9.3, §9.5, §9.6 and §9.7 written the way they are
+// written — a line whose items were laid out backwards would have to reverse
+// the order it breaks in, the end it packs from, and the edge each alignment
+// measures to, all separately and all consistently.
+func (a flexAxis) mainAt(pos, outer, container style.Unit) style.Unit {
+	if a.mainReversed() {
+		return container.Sub(pos).Sub(outer)
+	}
+	return pos
+}
+
+func (a flexAxis) crossAt(pos, outer, container style.Unit) style.Unit {
+	if a.crossReversed() {
+		return container.Sub(pos).Sub(outer)
+	}
+	return pos
 }
 
 // flexItem is one in-flow child of a flex container, with everything §9 needs
@@ -259,26 +323,13 @@ func (it *flexItem) outerCross(border style.Unit) style.Unit {
 func (l *layouter) refusesToFlex(b *Box, containing style.Unit) string {
 	a := l.axisOf(b)
 	switch trimmedLower(b.Style["flex-direction"]) {
-	case "", "row", "column":
+	case "", "row", "column", "row-reverse", "column-reverse":
 	default:
-		// The two reversed directions put the main axis's start at the far end,
-		// which reverses the order the items are placed in and the end each
-		// alignment measures from. That is the same reversal "rtl" asks for
-		// below, and it is one change, not two.
-		return "its items run backwards along their axis"
-	}
-	if isRTL(b) {
-		// Every offset below is measured from the left edge, because that is
-		// where a left-to-right inline axis starts — the main axis of a row and
-		// the cross axis of a column. Under "rtl" it starts at the right, so
-		// packing at the start, the meaning of "left" and "right", and the
-		// order the items are placed in all reverse together.
-		return "its inline axis runs from the right, which reverses every " +
-			"position on it"
+		return "its main axis is not one of the four flex-direction names"
 	}
 	switch trimmedLower(b.Style["flex-wrap"]) {
 	case "", "nowrap":
-	case "wrap":
+	case "wrap", "wrap-reverse":
 		if a.column {
 			// A wrapping column's lines are columns side by side, and each is
 			// as wide as the widest item on it — but an item stretched across
@@ -289,7 +340,7 @@ func (l *layouter) refusesToFlex(b *Box, containing style.Unit) string {
 				"how wide the items on it are decide each other"
 		}
 	default:
-		return "its lines are stacked from the far side"
+		return "its lines wrap by a rule this engine does not apply"
 	}
 	switch trimmedLower(b.Style["align-content"]) {
 	case "", "normal", "stretch", "flex-start", "start", "flex-end", "end",
@@ -479,7 +530,7 @@ func (l *layouter) flexContent(b *Box, parent *Fragment, width style.Unit,
 				stop = starts[i+1]
 			}
 			want := maxZero(crosses[it.line].Sub(it.crossMargin))
-			if l.alignOf(b, it) == crossStretch && l.stretchesAcross(a, it) &&
+			if l.alignOf(b, a, it) == crossStretch && l.stretchesAcross(a, it) &&
 				it.frag.BorderRect.H != want {
 				it.cross, it.hasCross = want, true
 				l.deferred = kept
@@ -506,9 +557,19 @@ func (l *layouter) flexContent(b *Box, parent *Fragment, width style.Unit,
 
 		along := style.Unit(0)
 		for i, it := range ln {
+			// Both positions are of the item's *margin* box and are measured
+			// from the start of their axis. Turning them into the page's own
+			// coordinates is two steps, in this order: mirror where the axis
+			// runs backwards, then step in by the leading margin — which is the
+			// physical one either way, because a margin is a side of the box
+			// and not an end of an axis.
+			outer, outerCross := it.outer(it.target),
+				it.outerCross(a.crossOf(it.frag.BorderRect))
 			pos := along.Add(justifyOffset(justify, free, len(ln), i))
-			a.place(it.frag, pos.Add(a.mainStart(it.margin)),
-				at.Add(l.crossOffset(b, a, it, crosses[n])))
+			across := at.Add(l.crossOffset(b, a, it, crosses[n]))
+			a.place(it.frag,
+				a.mainAt(pos, outer, main).Add(a.mainStart(it.margin)),
+				a.crossAt(across, outerCross, cross).Add(a.crossStart(it.margin)))
 			parent.Children = append(parent.Children, it.frag)
 			along = along.Add(it.outer(it.target)).Add(gap)
 		}
@@ -523,10 +584,15 @@ func (l *layouter) flexContent(b *Box, parent *Fragment, width style.Unit,
 
 // wraps reports whether the container's lines break, which is §5.2.
 //
-// "wrap-reverse" is refused by the gate, so what is left is whether there is
-// more than one line at all.
+// Both wrapping values wrap. Which end the lines are stacked from is the
+// difference between them and is the cross axis's direction, which flexAxis
+// carries; here the question is only whether there can be more than one line.
 func (l *layouter) wraps(b *Box) bool {
-	return trimmedLower(b.Style["flex-wrap"]) == "wrap"
+	switch trimmedLower(b.Style["flex-wrap"]) {
+	case "wrap", "wrap-reverse":
+		return true
+	}
+	return false
 }
 
 // flexLines is §9.3: which items sit on which line.
@@ -643,7 +709,7 @@ func (l *layouter) alignContentSpacing(b *Box, a flexAxis, crosses []style.Unit,
 		}
 		return 0, 0
 	}
-	align := l.alignContentOf(b)
+	align := l.alignContentOf(b, a)
 	// The lines are placed one after another, so what each one needs is where it
 	// begins relative to the one before: the first line's own offset, and the
 	// difference between consecutive offsets for the rest. Every distribution
@@ -657,20 +723,25 @@ func (l *layouter) alignContentSpacing(b *Box, a flexAxis, crosses []style.Unit,
 
 // alignContentOf reads align-content, whose values are justify-content's and
 // mean the same thing on the other axis.
-func (l *layouter) alignContentOf(b *Box) flexJustify {
-	switch trimmedLower(b.Style["align-content"]) {
-	case "flex-end", "end":
-		return justifyEnd
-	case "center":
-		return justifyCenter
+func (l *layouter) alignContentOf(b *Box, a flexAxis) flexJustify {
+	switch value := trimmedLower(b.Style["align-content"]); value {
 	case "space-between":
 		return justifyBetween
 	case "space-around":
 		return justifyAround
 	case "space-evenly":
 		return justifyEvenly
+	default:
+		// The rest name an end of the cross axis, which is the question
+		// align-items asks about one item and this asks about every line.
+		switch crossAlignment(value, a) {
+		case crossEnd:
+			return justifyEnd
+		case crossCenter:
+			return justifyCenter
+		}
+		return justifyStart
 	}
-	return justifyStart
 }
 
 // flexMain is the container's inner main size, and whether it is a number at
@@ -756,19 +827,24 @@ const (
 )
 
 // justifyOf reads justify-content, whose initial value "normal" behaves as
-// flex-start in a flex container. "left" and "right" are the physical pair, and
-// in a left-to-right row they are the same two ends.
+// flex-start in a flex container.
+//
+// Three families of keyword name the same two ends by different routes, and
+// they part company the moment an axis is reversed. "flex-start" is the end the
+// items are laid out from, whichever end that is. "start" is the writing mode's
+// — the inline start of a row, the block start of a column — which
+// flex-direction can turn away from but "rtl" cannot, because "rtl" moves the
+// writing mode and the axis together. "left" and "right" are the page's own,
+// and they are the only pair that has to be resolved against everything at
+// once.
+//
+// Each is expressed as the flex-relative value that lands in the same place,
+// because that is the one the packing below is written in.
 func (l *layouter) justifyOf(b *Box, a flexAxis) flexJustify {
-	value := trimmedLower(b.Style["justify-content"])
-	if a.column && (value == "left" || value == "right") {
-		// §6.2: the two physical keywords name an inline-axis side, and a
-		// column's main axis is not the inline axis. They have nothing to say
-		// about it and behave as "start".
-		return justifyStart
-	}
-	switch value {
-	case "flex-end", "end", "right":
-		return justifyEnd
+	atStart, atEnd := justifyStart, justifyEnd
+	switch trimmedLower(b.Style["justify-content"]) {
+	case "flex-end":
+		return atEnd
 	case "center":
 		return justifyCenter
 	case "space-between":
@@ -777,8 +853,35 @@ func (l *layouter) justifyOf(b *Box, a flexAxis) flexJustify {
 		return justifyAround
 	case "space-evenly":
 		return justifyEvenly
+	case "end":
+		if a.reverse {
+			return atStart
+		}
+		return atEnd
+	case "start":
+		if a.reverse {
+			return atEnd
+		}
+		return atStart
+	case "left", "right":
+		// §6.2: a column's main axis is not the inline axis, so neither
+		// keyword has anything to say about it and both behave as "start".
+		if a.column {
+			if a.reverse {
+				return atEnd
+			}
+			return atStart
+		}
+		wantsEnd := trimmedLower(b.Style["justify-content"]) == "right"
+		if a.mainReversed() {
+			wantsEnd = !wantsEnd
+		}
+		if wantsEnd {
+			return atEnd
+		}
+		return atStart
 	}
-	return justifyStart
+	return atStart
 }
 
 // alignOf is an item's cross-axis alignment: its own align-self where it states
@@ -789,18 +892,39 @@ func (l *layouter) justifyOf(b *Box, a flexAxis) flexJustify {
 // same behaviour by different routes and both are kept as themselves in the
 // computed value, which is why this is a lookup and not a comparison against a
 // resolved string.
-func (l *layouter) alignOf(b *Box, it *flexItem) flexAlign {
+func (l *layouter) alignOf(b *Box, a flexAxis, it *flexItem) flexAlign {
 	self := trimmedLower(it.box.Style["align-self"])
 	if self == "" || self == "auto" {
 		self = trimmedLower(b.Style["align-items"])
 	}
-	switch self {
-	case "flex-start", "start", "self-start":
+	return crossAlignment(self, a)
+}
+
+// crossAlignment turns one of §6.2's keywords into the end of the cross axis it
+// names.
+//
+// "flex-start" is the end the lines are stacked from. "start" and "self-start"
+// are the writing mode's block start for a row and its inline start for a
+// column, which is the same end until wrap-reverse turns the cross axis round —
+// and only wrap-reverse, because "rtl" moves the writing mode with the axis.
+func crossAlignment(value string, a flexAxis) flexAlign {
+	switch value {
+	case "flex-start":
 		return crossStart
-	case "flex-end", "end", "self-end":
+	case "flex-end":
 		return crossEnd
 	case "center":
 		return crossCenter
+	case "start", "self-start":
+		if a.wrapReverse {
+			return crossEnd
+		}
+		return crossStart
+	case "end", "self-end":
+		if a.wrapReverse {
+			return crossStart
+		}
+		return crossEnd
 	}
 	return crossStretch
 }
@@ -852,27 +976,27 @@ func justifyOffset(justify flexJustify, free style.Unit, n, i int) style.Unit {
 	return 0
 }
 
-// crossOffset is where an item's border box sits across the line.
+// crossOffset is how far into its line an item's margin box begins.
 //
-// A stretched item is at the top for the same reason a start-aligned one is:
-// stretching has already given it the line's height, so there is nowhere else
-// for it to be. The other two measure back from the line's far edge, which is
-// what makes them right whether the line is this item's height or taller.
+// A stretched item is at the start for the same reason a start-aligned one is:
+// stretching has already given it the line's whole size, so there is nowhere
+// else for it to be. The other two measure back from the line's far end, which
+// is what makes them right whether the line is this item's size or bigger.
 //
 // The room left over is not floored at zero. An item taller than its line — the
-// container stated a height and an item overran it — hangs off the top under
-// flex-end and off both edges under center, which is what an alignment that is
+// container stated a height and an item overran it — hangs off the start under
+// flex-end and off both ends under center, which is what an alignment that is
 // not "safe" means: it keeps the relationship it names and lets the overflow
 // fall where the arithmetic puts it.
 func (l *layouter) crossOffset(b *Box, a flexAxis, it *flexItem, cross style.Unit) style.Unit {
 	left := cross.Sub(it.outerCross(a.crossOf(it.frag.BorderRect)))
-	switch l.alignOf(b, it) {
+	switch l.alignOf(b, a, it) {
 	case crossEnd:
-		return left.Add(a.crossStart(it.margin))
+		return left
 	case crossCenter:
-		return left.Div(2).Add(a.crossStart(it.margin))
+		return left.Div(2)
 	}
-	return a.crossStart(it.margin)
+	return 0
 }
 
 // stretchesAcross reports whether an item is stretched to the line's height.
@@ -991,7 +1115,7 @@ func (l *layouter) crossSizeOf(b *Box, a flexAxis, it *flexItem, width style.Uni
 	if declared, ok := l.intrinsicLength(it.box, a.crossName()); ok {
 		return declared.Add(edge)
 	}
-	if l.alignOf(b, it) == crossStretch && l.stretchesAcross(a, it) {
+	if l.alignOf(b, a, it) == crossStretch && l.stretchesAcross(a, it) {
 		return room
 	}
 	want := l.contentWidths(it.box)
