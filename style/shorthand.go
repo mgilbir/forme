@@ -1,6 +1,7 @@
 package style
 
 import (
+	"math"
 	"strconv"
 	"strings"
 
@@ -1020,5 +1021,135 @@ func textAlignShorthand(vals []css.ComponentValue) (map[string][]css.ComponentVa
 	return map[string][]css.ComponentValue{
 		"text-align-all":  ident(all),
 		"text-align-last": ident(last),
+	}, nil, true
+}
+
+// flexShorthand is CSS Flexible Box Layout §7.1's "flex".
+//
+// Its grammar is "none | [ <'flex-grow'> <'flex-shrink'>? || <'flex-basis'> ]",
+// and the part worth writing down is that the shorthand's own defaults are not
+// the longhands' initial values. "flex: 1" is "1 1 0", not "1 1 auto" — an
+// omitted basis in the shorthand is *zero*, so a row of "flex: 1" items comes
+// out in equal parts however long their text is, which is the thing people
+// reach for the shorthand to get. Setting the longhands by hand gives the other
+// answer, and §7.1 says so in as many words: "the shorthand resets any omitted
+// components to values other than their initial value".
+//
+// "initial" and "auto" are named here rather than left to the CSS-wide keyword
+// machinery, because only one of them is a CSS-wide keyword: "flex: auto" is a
+// value of this property meaning "1 1 auto", and "flex: initial" — which is
+// "0 1 auto" — is the keyword, whose expansion to the longhands' own initials
+// happens to be the same thing.
+func flexShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, []string, bool) {
+	parts := splitOnWhitespace(vals)
+	if len(parts) == 0 || len(parts) > 3 {
+		return nil, nil, false
+	}
+	set := func(growN, shrinkN float64, grow, shrink, basis string) (map[string][]css.ComponentValue, []string, bool) {
+		return map[string][]css.ComponentValue{
+			"flex-grow":   number(growN, grow),
+			"flex-shrink": number(shrinkN, shrink),
+			"flex-basis":  ident(basis),
+		}, nil, true
+	}
+	if len(parts) == 1 && len(parts[0]) == 1 && parts[0][0].IsToken() &&
+		parts[0][0].Token.Kind == css.Ident {
+		switch strings.ToLower(parts[0][0].Token.Value) {
+		case "none":
+			return set(0, 0, "0", "0", "auto")
+		case "auto":
+			return set(1, 1, "1", "1", "auto")
+		case "content":
+			return set(1, 1, "1", "1", "content")
+		}
+	}
+
+	grow, shrink := number(1, "1"), number(1, "1")
+	var basis []css.ComponentValue
+	var seenGrow, seenShrink, seenBasis bool
+	for _, part := range parts {
+		switch {
+		case isNumberPart(part) && !seenBasis && !seenGrow:
+			grow, seenGrow = part, true
+		case isNumberPart(part) && seenGrow && !seenShrink:
+			shrink, seenShrink = part, true
+		case !seenBasis && (isLengthOrPercent(part) || isFlexBasisKeyword(part)):
+			basis, seenBasis = part, true
+		default:
+			return nil, nil, false
+		}
+	}
+	if !seenBasis {
+		// §7.1's reset: an omitted basis is zero and not "auto".
+		basis = zeroLength()
+	}
+	return map[string][]css.ComponentValue{
+		"flex-grow": grow, "flex-shrink": shrink, "flex-basis": basis,
+	}, nil, true
+}
+
+// isFlexBasisKeyword accepts the two identifiers a flex-basis may be.
+func isFlexBasisKeyword(part []css.ComponentValue) bool {
+	if len(part) != 1 || !part[0].IsToken() || part[0].Token.Kind != css.Ident {
+		return false
+	}
+	switch strings.ToLower(part[0].Token.Value) {
+	case "auto", "content":
+		return true
+	}
+	return false
+}
+
+// number and zeroLength are the two literals the expansion above writes.
+//
+// A numeric token carries its value in Number and its text in Repr, and Value is
+// empty for one — which is the trap here, because a token built with Value set
+// and Number left at zero parses as nothing and serialises as nothing. It cost
+// an afternoon: "flex: 1" expanded to a flex-basis that would not parse, every
+// item fell back to "auto", and a row of "flex: 1" items came out sized from
+// their text with the free space shared on top. The arithmetic was right and the
+// input to it was not.
+func number(v float64, repr string) []css.ComponentValue {
+	return []css.ComponentValue{{Token: css.Token{
+		Kind: css.Number, Number: v, Repr: repr, IsInteger: v == math.Trunc(v),
+	}}}
+}
+
+func zeroLength() []css.ComponentValue {
+	return []css.ComponentValue{{Token: css.Token{
+		Kind: css.Dimension, Number: 0, Repr: "0", Unit: "px", IsInteger: true,
+	}}}
+}
+
+// flexFlowShorthand is §5.1's "flex-flow", which is the two properties that
+// decide the axis and whether it wraps. They are told apart by their keywords,
+// which do not overlap.
+func flexFlowShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, []string, bool) {
+	direction, wrap := ident("row"), ident("nowrap")
+	var seenDirection, seenWrap bool
+	for _, part := range splitOnWhitespace(vals) {
+		if len(part) != 1 || !part[0].IsToken() || part[0].Token.Kind != css.Ident {
+			return nil, nil, false
+		}
+		switch v := strings.ToLower(part[0].Token.Value); v {
+		case "row", "row-reverse", "column", "column-reverse":
+			if seenDirection {
+				return nil, nil, false
+			}
+			direction, seenDirection = part, true
+		case "nowrap", "wrap", "wrap-reverse":
+			if seenWrap {
+				return nil, nil, false
+			}
+			wrap, seenWrap = part, true
+		default:
+			return nil, nil, false
+		}
+	}
+	if !seenDirection && !seenWrap {
+		return nil, nil, false
+	}
+	return map[string][]css.ComponentValue{
+		"flex-direction": direction, "flex-wrap": wrap,
 	}, nil, true
 }

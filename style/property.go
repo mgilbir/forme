@@ -43,11 +43,19 @@ type property struct {
 // indistinguishable to an author from one that was ignored.
 var properties = map[string]property{
 	// Box model.
-	"display":        {false, "inline"},
-	"width":          {false, "auto"},
-	"height":         {false, "auto"},
-	"min-width":      {false, "0"},
-	"min-height":     {false, "0"},
+	"display": {false, "inline"},
+	"width":   {false, "auto"},
+	"height":  {false, "auto"},
+	// CSS Sizing 3 §5.1 gives both an initial value of "auto", not the "0" CSS
+	// 2.1 gave them. For an ordinary box the two are the same page — "auto"
+	// behaves as zero where nothing else defines it, and every reader here
+	// guards with "> 0" so a missing minimum and a zero one were already one
+	// case. For a *flex item* they are not: §4.5 makes an automatic minimum the
+	// item's content-based minimum size, which is what stops a row of words
+	// collapsing into a column of letters, and an initial value of zero would
+	// make every item look as though its author had asked for that.
+	"min-width":      {false, "auto"},
+	"min-height":     {false, "auto"},
 	"max-width":      {false, "none"},
 	"max-height":     {false, "none"},
 	"margin-top":     {false, "0"},
@@ -289,10 +297,41 @@ var properties = map[string]property{
 	// multicol. It is kept as the keyword here and resolved where the em is
 	// known, which is the box, because a computed value of "1em" would resolve
 	// against the wrong font the moment the container and its text disagree.
-	"column-count": {false, "auto"},
-	"column-width": {false, "auto"},
-	"column-gap":   {false, "normal"},
-	"column-fill":  {false, "balance"},
+	// CSS Flexible Box Layout 1, and CSS Box Alignment 3's three that a flex
+	// container reads. None of them inherits: a flex container's arrangement is
+	// its own, and a block inside a flex item is not itself a flex container
+	// because its grandparent was.
+	//
+	// They are here because layout/flex.go reads them. That order is the rule
+	// this table states about itself — "a property is added here when something
+	// downstream acts on it" — and it is the one that keeps
+	// style/unimplemented.go's list short: registering a property is what makes
+	// the unsupported-property finding go quiet, so a name here with nothing
+	// reading it is a declaration silently dropped.
+	//
+	// flex-basis's initial value is "auto", which defers to the item's own width
+	// rather than naming a length. flex-shrink's is 1 and flex-grow's is 0,
+	// which together are §7.1's "flex: 0 1 auto" — an item that gives way when
+	// the line is short of room and does not take more when it is over.
+	"flex-direction": {false, "row"},
+	"flex-wrap":      {false, "nowrap"},
+	"flex-grow":      {false, "0"},
+	"flex-shrink":    {false, "1"},
+	"flex-basis":     {false, "auto"},
+	"order":          {false, "0"},
+	// Box Alignment 3's initial value is "normal" for both, and "normal" is not
+	// a synonym for the behaviour it produces here: §6.2 makes it behave as
+	// "flex-start" for justify-content in a flex container and as "stretch" for
+	// align-items, and those are different keywords with different meanings in
+	// other layout modes. Keeping "normal" is what lets layout say which it was
+	// given.
+	"justify-content": {false, "normal"},
+	"align-items":     {false, "normal"},
+	"align-self":      {false, "auto"},
+	"column-count":    {false, "auto"},
+	"column-width":    {false, "auto"},
+	"column-gap":      {false, "normal"},
+	"column-fill":     {false, "balance"},
 	// §6.3's column-span, which is read to be refused: an element spanning the
 	// columns divides the container into two of them with the element between,
 	// and that is a second container rather than a column. It has to be
@@ -458,7 +497,9 @@ var shorthands = map[string]shorthand{
 		"border-bottom-style", "border-left-style"),
 	"border-color": boxShorthand("border-top-color", "border-right-color",
 		"border-bottom-color", "border-left-color"),
-	"overflow": boxShorthand("overflow-x", "overflow-y"),
+	"overflow":  boxShorthand("overflow-x", "overflow-y"),
+	"flex":      {flexShorthand, []string{"flex-grow", "flex-shrink", "flex-basis"}},
+	"flex-flow": {flexFlowShorthand, []string{"flex-direction", "flex-wrap"}},
 
 	// The shorthands whose parts are told apart by type rather than position.
 	// They live in shorthand.go, with the reset rule explained there.

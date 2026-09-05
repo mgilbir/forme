@@ -146,7 +146,10 @@ func TestNegativeValueDropsTheDeclaration(t *testing.T) {
 		// would have produced.
 		{"p { max-height: -1px }", "max-height", "none"},
 		{"p { width: -1px }", "width", "auto"},
-		{"p { min-width: -1px }", "min-width", "0"},
+		// The initial value CSS Sizing 3 gives it, which is what a dropped
+		// declaration leaves behind. It was "0" until flex items needed the two
+		// told apart — see style/property.go and layout/flex.go.
+		{"p { min-width: -1px }", "min-width", "auto"},
 		// §8.5.1's border widths, where the initial value is the one case in
 		// this list that puts ink on the page: "medium" is three pixels of
 		// border, so clamping a negative width to zero drew nothing where CSS
@@ -525,19 +528,19 @@ func TestShorthandWithAWideKeyword(t *testing.T) {
 // does not act on, and a page where one was dropped is plausible and wrong.
 func TestUnsupportedPropertyIsReported(t *testing.T) {
 	doc := parseDoc(t, "<p id=\"target\">x</p>")
-	got := Apply(doc, []Sheet{author(t, "p { flex-wrap: wrap; font-family: kept }")})
+	got := Apply(doc, []Sheet{author(t, "p { text-shadow: 1px 1px red; font-family: kept }")})
 
 	var found *Finding
 	for i := range got.Findings {
-		if got.Findings[i].Property == "flex-wrap" {
+		if got.Findings[i].Property == "text-shadow" {
 			found = &got.Findings[i]
 		}
 	}
 	if found == nil {
-		t.Fatalf("dropping flex-wrap was not reported; findings were %v", got.Findings)
+		t.Fatalf("dropping text-shadow was not reported; findings were %v", got.Findings)
 	}
 	if !found.Unsupported {
-		t.Error("dropping flex-wrap was reported as malformed input, and it is correct CSS")
+		t.Error("dropping text-shadow was reported as malformed input, and it is correct CSS")
 	}
 	// The declaration beside it still applied, so one unknown property does not
 	// cost the rule.
@@ -549,22 +552,28 @@ func TestUnsupportedPropertyIsReported(t *testing.T) {
 // TestUnsupportedPropertyIsReportedOnce pins that a stylesheet using an
 // unimplemented property forty times tells the author once. A report a person
 // will not read is a report that does not exist.
+//
+// The example was flex-wrap until flexbox was implemented, and swapping it is
+// what this test is *for* on the other side: a property that stops being
+// reported is a property something started reading, and the registry's own
+// guard in style/unimplemented_test.go is what makes the two impossible to
+// confuse.
 func TestUnsupportedPropertyIsReportedOnce(t *testing.T) {
 	var b strings.Builder
 	for i := 0; i < 40; i++ {
-		b.WriteString("p { flex-wrap: wrap }\n")
+		b.WriteString("p { text-shadow: 1px 1px red }\n")
 	}
 	doc := parseDoc(t, "<p>x</p>")
 	got := Apply(doc, []Sheet{author(t, b.String())})
 
 	n := 0
 	for _, f := range got.Findings {
-		if f.Property == "flex-wrap" {
+		if f.Property == "text-shadow" {
 			n++
 		}
 	}
 	if n != 1 {
-		t.Errorf("flex-wrap was reported %d times, want once", n)
+		t.Errorf("text-shadow was reported %d times, want once", n)
 	}
 }
 
