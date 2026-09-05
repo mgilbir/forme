@@ -216,8 +216,6 @@ func TestAContainerThisEngineCannotArrangeIsLaidOutAsABlockAndSaysSo(t *testing.
 		{"items on a baseline", `#f { align-items: baseline }`, "shared baseline"},
 		{"an item on the baseline", `#f > div:first-child { align-self: baseline }`, "shared baseline"},
 		{"a reordered item", `#f > div:first-child { order: 2 }`, "moved in the order"},
-		{"an automatic margin", `#f > div:first-child { margin-left: auto }`, "automatic margin"},
-		{"an automatic cross margin", `#f > div:first-child { margin-top: auto }`, "automatic margin"},
 		{"a percentage item", `#f > div:first-child { width: 50% }`, "percentage of the row"},
 		{"a floated child", `#f > div:first-child { float: left }`, "floated or absolutely"},
 	} {
@@ -264,6 +262,7 @@ func TestAnArrangedContainerSaysNothing(t *testing.T) {
 		`#f { width: 300px; justify-content: right; align-items: center }`,
 		`#f { width: 300px } #f > div { align-self: auto; order: 0 }`,
 		`#f { width: 300px } #f > div:first-child { align-self: flex-start }`,
+		`#f { width: 300px } #f > div:first-child { margin-left: auto }`,
 		`#f { width: 300px; flex-wrap: wrap }`,
 		`#f { width: 300px; height: 100px; flex-wrap: wrap; align-content: space-around }`,
 	} {
@@ -1196,4 +1195,116 @@ func TestARightToLeftColumnTurnsOnlyTheAxisTheWritingModeIsOn(t *testing.T) {
 	// what makes that read the same way in both.
 	wantRow(t, flexRow(t, twoHeights, rtlColumn+`#f { align-items: end }`),
 		[][2]float64{{0, 12}, {0, 12}}, "items at the inline end of a right-to-left column")
+}
+
+const threeNamed = `<div id="f"><div id="a">a</div><div id="b">b</div><div id="c">c</div></div>`
+
+// TestAnAutomaticMarginTakesTheFreeSpaceFirst is §9.5's first sentence, which
+// runs before the packing and usually instead of it.
+//
+// An auto margin on the main axis takes what is left on the line, and where
+// there are several they take an equal share each. It is the idiom for pushing
+// one item to the far end of a toolbar and for centring one between its
+// neighbours, and both are here.
+func TestAnAutomaticMarginTakesTheFreeSpaceFirst(t *testing.T) {
+	// All 264px of it goes to the left of the first item, so the row is pushed
+	// against the far end.
+	wantRow(t, flexRow(t, threeNamed, `#f { width: 300px } #a { margin-left: auto }`),
+		[][2]float64{{264, 12}, {276, 12}, {288, 12}}, "the whole row pushed over")
+
+	// On the second item it splits the row in two, which is the toolbar.
+	wantRow(t, flexRow(t, threeNamed, `#f { width: 300px } #b { margin-left: auto }`),
+		[][2]float64{{0, 12}, {276, 12}, {288, 12}}, "one item pushed away from the first")
+
+	// Both margins of one item, and it is centred between the two ends.
+	wantRow(t, flexRow(t, threeNamed,
+		`#f { width: 300px } #b { margin-left: auto; margin-right: auto }`),
+		[][2]float64{{0, 12}, {144, 12}, {288, 12}}, "one item centred between its neighbours")
+
+	// Three margins share 264 equally: 88 each.
+	wantRow(t, flexRow(t, threeNamed, `#f { width: 300px } #f > div { margin-left: auto }`),
+		[][2]float64{{88, 12}, {188, 12}, {288, 12}}, "three margins sharing the free space")
+
+	// A margin on the trailing side takes the same space from the other end,
+	// which leaves the row where it started.
+	wantRow(t, flexRow(t, threeNamed, `#f { width: 300px } #c { margin-right: auto }`),
+		[][2]float64{{0, 12}, {12, 12}, {24, 12}}, "a trailing margin taking the space")
+}
+
+// TestAnAutomaticMarginLeavesNothingForJustifyContent. The two are the same
+// budget spent twice, and §9.5 spends it in this order: the margins take the
+// free space, and the packing is then handed a line with none.
+//
+// It is the surprising half of the property — "justify-content: center" on a
+// container holding an auto margin does nothing at all — and it is the half a
+// document depends on, because an item pushed to the far end has to stay there
+// whatever the container was told to do with its slack.
+func TestAnAutomaticMarginLeavesNothingForJustifyContent(t *testing.T) {
+	wantRow(t, flexRow(t, threeNamed,
+		`#f { width: 300px; justify-content: center } #b { margin-left: auto }`),
+		[][2]float64{{0, 12}, {276, 12}, {288, 12}}, "centred against an automatic margin")
+
+	// And nothing is left for the margin either, when §9.7 got there first: a
+	// row of growing items has no free space by the time this is asked.
+	wantRow(t, flexRow(t, threeNamed,
+		`#f { width: 300px } #f > div { flex: 1 } #b { margin-left: auto }`),
+		[][2]float64{{0, 100}, {100, 100}, {200, 100}}, "an automatic margin on a growing item")
+
+	// A line with nothing to spare gives the margin nothing rather than
+	// something negative: three 120px items overflow 300px, and the margin is
+	// zero.
+	wantRow(t, flexRow(t, threeNamed,
+		`#f { width: 300px } #f > div { flex: 0 0 120px } #b { margin-left: auto }`),
+		[][2]float64{{0, 120}, {120, 120}, {240, 120}}, "an automatic margin on an overfull line")
+}
+
+// TestAnAutomaticMarginAcrossTheLineAlignsTheItem is §9.6's version: the room
+// left across the line goes to whichever cross-axis margin asked for it, and to
+// both equally where both did.
+//
+// An item with one is not stretched, which is the part that has to be said out
+// loud — a stretched item fills its line and has no leftover to give away, so
+// the margin would silently do nothing.
+func TestAnAutomaticMarginAcrossTheLineAlignsTheItem(t *testing.T) {
+	// The line is 40px because of the two-line item beside it, and the 20px one
+	// is pushed to the bottom of it.
+	wantCross(t, flexCross(t, twoHeights, `#f { width: 300px } #a { margin-top: auto }`),
+		[][2]float64{{20, 20}, {0, 40}}, "an item pushed down its line")
+	wantCross(t, flexCross(t, twoHeights, `#f { width: 300px } #a { margin-bottom: auto }`),
+		[][2]float64{{0, 20}, {0, 40}}, "an item held at the top of its line")
+	wantCross(t, flexCross(t, twoHeights,
+		`#f { width: 300px } #a { margin-top: auto; margin-bottom: auto }`),
+		[][2]float64{{10, 20}, {0, 40}}, "an item centred in its line")
+
+	// Without the margin the same item is stretched to the line, which is what
+	// the margin is being asked instead of.
+	wantCross(t, flexCross(t, twoHeights, `#f { width: 300px }`),
+		[][2]float64{{0, 40}, {0, 40}}, "an item with no automatic margin")
+
+	// An automatic margin has taken the room the alignment would have moved the
+	// item through, so there is nothing left for align-self to do and the two
+	// do not add up. §9.6 says the margin wins, and the arithmetic agrees: a
+	// margin that took the leftover leaves an item that already fills its line.
+	wantCross(t, flexCross(t, twoHeights,
+		`#f { width: 300px } #a { margin-top: auto; align-self: flex-end }`),
+		[][2]float64{{20, 20}, {0, 40}}, "an automatic margin against an alignment")
+}
+
+// TestAnAutomaticMarginKnowsWhichAxisItIsOn. A margin is on the main axis or the
+// cross axis depending on which way the container runs, and the two rules are
+// different — one shares a line's leftover between every margin that asked,
+// the other gives one item the room across its own line.
+func TestAnAutomaticMarginKnowsWhichAxisItIsOn(t *testing.T) {
+	const column = `#f { width: 300px; height: 200px; flex-direction: column }`
+
+	// Vertical, so main: the 140px left in the column goes below the first item
+	// and pushes the second to the bottom.
+	wantCross(t, flexCross(t, twoHeights, column+`#a { margin-bottom: auto }`),
+		[][2]float64{{0, 20}, {160, 40}}, "a main-axis margin in a column")
+
+	// Horizontal, so cross: the first item is not stretched across the column
+	// and is pushed to the far side of it instead.
+	wantRow(t, flexRow(t, twoHeights,
+		`#f { width: 300px; flex-direction: column } #a { margin-left: auto }`),
+		[][2]float64{{288, 12}, {0, 300}}, "a cross-axis margin in a column")
 }
