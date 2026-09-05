@@ -1,0 +1,756 @@
+package layout
+
+import (
+	"slices"
+	"strings"
+
+	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/style"
+)
+
+// CSS Grid Layout 2: a table of tracks, and the items that fall into its cells.
+//
+// # What a grid is, in one paragraph
+//
+// A flex container arranges its items along one axis and negotiates their sizes
+// from a shared budget. A grid does not negotiate with the items at all: it
+// works out a set of *tracks* — columns and rows — from what the stylesheet
+// says and what the content needs, and then puts each item in a cell of that
+// table. The items influence the tracks only through their content sizes, and
+// the tracks decide everything else. That inversion is the whole of the
+// difference, and it is why this file's shape is track sizing first and items
+// second, where layout/flex.go's is items first.
+//
+// # What is laid out here, and what is refused
+//
+// The explicit columns of "grid-template-columns", the rows of
+// "grid-template-rows" and the implicit rows the items overflow into, with
+// every item placed by §8.5's automatic flow: one cell each, left to right and
+// then down, in order-modified document order. Track sizes may be a length, a
+// percentage, a fraction of the free space, or one of the three content
+// keywords, and "repeat()" writes any of them more than once. The gaps are
+// "row-gap" and "column-gap", which a grid reads on both axes rather than one.
+//
+// Everything else is refused with a finding and laid out as it was before this
+// file existed, which is as a column of blocks. The gate is the same shape as
+// flex's and multicol's, and for the same reason: a box refused here is the
+// page this engine drew yesterday and is *reported*, while a box laid out
+// wrongly is a page that is plausible and silent. See refusesToGrid, where each
+// clause is stated as a condition on the box.
+//
+// # Why the suite cannot check this
+//
+// It has one document that lays out a grid — text-indent/anonymous-grid-item-001
+// — and that one is about anonymous items rather than about tracks. So the
+// reftest count is a regression check here and nothing more, and the evidence
+// that this is right is the arithmetic in layout/grid_test.go, where Courier at
+// 20px makes every advance a whole number and every share of the free space an
+// exact one. That is the standard layout/flex.go is held to and for the same
+// reason.
+
+// trackKind is which of §7.2's sizes a track was written as.
+type trackKind uint8
+
+const (
+	// trackFixed is a length or a percentage: a size the stylesheet states and
+	// the content cannot change.
+	trackFixed trackKind = iota
+	// trackAuto, trackMin and trackMax are the three content keywords. "auto"
+	// is max-content that may also be stretched to fill the container, which is
+	// what makes it the useful default and not a synonym for either.
+	trackAuto
+	trackMin
+	trackMax
+	// trackFlex is a fraction of the space the other tracks left over.
+	trackFlex
+)
+
+// gridTrack is one column or one row.
+type gridTrack struct {
+	kind trackKind
+	// size is the stated length of a trackFixed, and factor the number in front
+	// of the "fr" of a trackFlex. base is what the sizing resolved.
+	size   style.Unit
+	factor float64
+	base   style.Unit
+}
+
+// gridItem is one in-flow child of a grid container, together with the cell it
+// was placed in.
+type gridItem struct {
+	box                     *Box
+	margin, border, padding Edges
+	// column and row are the indexes of the cell it fills. This slice of the
+	// specification gives every item exactly one, which is why they are numbers
+	// rather than spans.
+	column, row int
+	order       int
+	frag        *Fragment
+}
+
+// horizontal and vertical are the room around the item's content on each axis.
+func (it *gridItem) horizontal() style.Unit {
+	return it.margin.Horizontal().Add(it.border.Horizontal()).Add(it.padding.Horizontal())
+}
+
+func (it *gridItem) vertical() style.Unit {
+	return it.margin.Vertical().Add(it.border.Vertical()).Add(it.padding.Vertical())
+}
+
+// gridContent lays a grid container's items into its tracks and returns the
+// height they came to.
+//
+// The order is §12's: the columns are sized against the container's own width,
+// the items are laid out at the widths that gives them, the rows are sized from
+// what those layouts came to, and only then is anything placed. A row cannot be
+// sized before the columns are, because how tall a paragraph is depends on how
+// wide it was allowed to be.
+func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
+	origin flow) style.Unit {
+
+	items := l.gridItems(b, width)
+	if len(items) == 0 {
+		// A container with nothing to place still has its out-of-flow children
+		// to record. Nobody else will: the block walk is what does that, and
+		// this is in its place.
+		l.deferGridOutOfFlow(b, parent, width)
+		return 0
+	}
+	columnGap, rowGap := l.gridGap(b, "column-gap", width), l.gridGap(b, "row-gap", width)
+
+	columns, _ := l.trackList(b, "grid-template-columns", width)
+	if len(columns) == 0 {
+		// §7.1: a container with no explicit columns still has one, because
+		// every item has to be somewhere. The implicit track is "auto", which
+		// is the same answer a single-column grid would have been given.
+		columns = []gridTrack{{kind: trackAuto}}
+	}
+	rows, _ := l.trackList(b, "grid-template-rows", width)
+
+	// §8.5's automatic placement, which is the whole of it for a slice where no
+	// item names a line: one cell each, along the columns and then down.
+	for i, it := range items {
+		it.column, it.row = i%len(columns), i/len(columns)
+	}
+	for len(rows) < items[len(items)-1].row+1 {
+		// The implicit rows, which are "auto" because grid-auto-rows is.
+		rows = append(rows, gridTrack{kind: trackAuto})
+	}
+
+	l.sizeColumns(columns, items, width, columnGap)
+
+	// Each item laid out at the width its column gives it, which is what tells
+	// the rows how tall they are. The fragments are thrown away: an item is
+	// laid out again at its cell's full size once the rows are settled, because
+	// a height changes where an item's content sits inside it.
+	mark := len(l.deferred)
+	heights := make([]style.Unit, len(items))
+	for i, it := range items {
+		frag := l.layOutGridItem(it, columns[it.column].base, 0, false, width, origin)
+		heights[i] = frag.BorderRect.H.Add(it.margin.Vertical())
+	}
+	l.deferred = l.deferred[:mark]
+
+	height, definite := l.explicitHeight(b, width, origin.cbHeight, origin.cbDefinite)
+	l.sizeRows(rows, items, heights, height, definite, rowGap)
+
+	// §12's answer for the container itself: the tracks and the gaps between
+	// them, which is what a grid comes to when nothing states its height.
+	inner := rowGap.Mul(float64(len(rows) - 1))
+	for _, r := range rows {
+		inner = inner.Add(r.base)
+	}
+
+	for _, it := range items {
+		cellWidth := columns[it.column].base
+		cellHeight := rows[it.row].base
+		it.frag = l.layOutGridItem(it, cellWidth,
+			maxZero(cellHeight.Sub(it.margin.Vertical())), true, width, origin)
+		it.frag.BorderRect.X = trackStart(columns, it.column, columnGap).Add(it.margin.Left)
+		it.frag.BorderRect.Y = trackStart(rows, it.row, rowGap).Add(it.margin.Top)
+		parent.Children = append(parent.Children, it.frag)
+	}
+	l.deferGridOutOfFlow(b, parent, width)
+	if definite {
+		return height
+	}
+	return inner
+}
+
+// deferGridOutOfFlow records the container's absolutely positioned children,
+// which are not items and are placed once the tree is absolute.
+//
+// §10.1 gives such a box a static position "as if it were the sole grid item in
+// a grid area whose edges coincide with the padding edges of the grid
+// container", which with every alignment property at its initial value is the
+// content box's start corner — where the block walk would have put it, and
+// where it would not have been recorded at all if this did not do it.
+func (l *layouter) deferGridOutOfFlow(b *Box, parent *Fragment, width style.Unit) {
+	index := 0
+	for _, c := range b.Children {
+		if c.ListItem {
+			index++
+		}
+		if c.Position.outOfFlow() {
+			l.deferAbsolute(c, parent, 0, 0, width, index)
+		}
+	}
+}
+
+// trackStart is how far along the axis a track begins: everything before it and
+// the gaps between.
+func trackStart(tracks []gridTrack, at int, gap style.Unit) style.Unit {
+	out := gap.Mul(float64(at))
+	for i := 0; i < at && i < len(tracks); i++ {
+		out = out.Add(tracks[i].base)
+	}
+	return out
+}
+
+// sizeColumns is §12.4 to §12.8 on the inline axis.
+//
+// A track has two numbers and the difference between them is the whole of the
+// algorithm: a base size it may not go below, and a growth limit it may not
+// pass. For "auto" they are the items' min-content and max-content
+// contributions — the width below which the content would spill out, and the
+// width at which it would stop wrapping — and the space between the two is what
+// the container has to give away.
+//
+// That is why "grid-template-columns: auto auto" in a container narrower than
+// its content does not overflow: the columns start at min-content, there is
+// nothing left over, and neither grows. Sizing them at max-content instead
+// would push content off the edge of a box that had room for it.
+func (l *layouter) sizeColumns(columns []gridTrack, items []*gridItem,
+	width, gap style.Unit) {
+
+	l.resolveTracks(columns, func(i int) (style.Unit, style.Unit) {
+		var min, max style.Unit
+		for _, it := range items {
+			if it.column != i {
+				continue
+			}
+			gotMin, gotMax := l.gridItemWidths(it)
+			min, max = style.Max(min, gotMin), style.Max(max, gotMax)
+		}
+		return min, max
+	}, maxZero(width.Sub(gap.Mul(float64(len(columns)-1)))), true)
+}
+
+// gridItemWidths is what one item asks of its column: its min-content and
+// max-content contributions, which are its content's unless it states a width
+// of its own — a box that did is that wide however its words would break.
+func (l *layouter) gridItemWidths(it *gridItem) (style.Unit, style.Unit) {
+	if declared, ok := l.intrinsicLength(it.box, "width"); ok {
+		return declared.Add(it.horizontal()), declared.Add(it.horizontal())
+	}
+	got := l.contentWidths(it.box)
+	return got.min.Add(it.horizontal()), got.max.Add(it.horizontal())
+}
+
+// sizeRows is the same on the block axis, with one difference that is not a
+// difference in the algorithm: a row's content size is not asked of the box
+// tree but of the layout, because how tall an item is depends on how wide it
+// was made. There is no second number to grow towards — a block is as tall as
+// it is at the width it was given — so a row's base and its growth limit are
+// the same, and only a container that states a height has anything to give the
+// rows beyond them.
+func (l *layouter) sizeRows(rows []gridTrack, items []*gridItem, heights []style.Unit,
+	height style.Unit, definite bool, gap style.Unit) {
+
+	l.resolveTracks(rows, func(i int) (style.Unit, style.Unit) {
+		var base style.Unit
+		for j, it := range items {
+			if it.row == i && heights[j] > base {
+				base = heights[j]
+			}
+		}
+		return base, base
+	}, maxZero(height.Sub(gap.Mul(float64(len(rows)-1)))), definite)
+}
+
+// resolveTracks is §12.4 to §12.8 on either axis: the base sizes, and then what
+// the room left over is spent on.
+//
+// The three ways it is spent run in this order and each takes what the one
+// before left. §12.6 grows every track towards its growth limit, which is what
+// fills a container out of its own content. §12.7 gives what is still over to
+// the flexible tracks in proportion to their factors — and only to them, which
+// is why a container with a "1fr" in it stretches nothing else. §12.8 is Box
+// Alignment's "stretch", the initial value of justify-content and align-content
+// in a grid, and it goes to the automatic tracks alone: "max-content" asked for
+// the size of its content and got it, while "auto" is the one that says it will
+// take more if there is more.
+func (l *layouter) resolveTracks(tracks []gridTrack,
+	contribution func(int) (style.Unit, style.Unit), room style.Unit, definite bool) {
+
+	limits := make([]style.Unit, len(tracks))
+	for i := range tracks {
+		min, max := contribution(i)
+		switch tracks[i].kind {
+		case trackFixed:
+			tracks[i].base, limits[i] = maxZero(tracks[i].size), maxZero(tracks[i].size)
+		case trackMin:
+			tracks[i].base, limits[i] = min, min
+		case trackMax:
+			tracks[i].base, limits[i] = max, max
+		default:
+			// "auto" and a flexible track, which are minmax(auto, max-content)
+			// and minmax(auto, <flex>): neither may go below its content, and
+			// both are grown afterwards by different clauses.
+			tracks[i].base, limits[i] = min, max
+		}
+	}
+	if !definite {
+		return
+	}
+	free := room.Sub(sumTracks(tracks))
+	if free <= 0 {
+		return
+	}
+	free = growToLimits(tracks, limits, free)
+	if expandFlexibleTracks(tracks, room) {
+		return
+	}
+	stretchAutoTracks(tracks, free)
+}
+
+// growToLimits is §12.6: the free space is shared equally between the tracks
+// that can still take it, and a track that reaches its growth limit stops.
+//
+// Equally and not in proportion, which is the specification's word and is what
+// brings two columns of very different content closer together than their
+// content is. The loop cannot run more times than there are tracks: every pass
+// either spends everything or freezes at least one track.
+func growToLimits(tracks []gridTrack, limits []style.Unit, free style.Unit) style.Unit {
+	for pass := 0; pass <= len(tracks) && free > 0; pass++ {
+		growing := 0
+		for i := range tracks {
+			if tracks[i].kind != trackFlex && tracks[i].base < limits[i] {
+				growing++
+			}
+		}
+		if growing == 0 {
+			return free
+		}
+		share := free.Div(float64(growing))
+		for i := range tracks {
+			if tracks[i].kind == trackFlex || tracks[i].base >= limits[i] {
+				continue
+			}
+			want := style.Min(share, limits[i].Sub(tracks[i].base))
+			tracks[i].base = tracks[i].base.Add(want)
+			free = free.Sub(want)
+		}
+	}
+	return free
+}
+
+// expandFlexibleTracks is §12.7, and reports whether there were any.
+//
+// The clause worth naming is the one for factors adding to less than one: two
+// "0.25fr" tracks between them asked for a quarter of the free space each and
+// take exactly that, leaving the rest of the container empty. Without it a lone
+// "0.5fr" track would fill the container, which is the same picture "1fr" gives
+// and is why the two have to be told apart. It is §9.7.4b of flexbox, in the
+// other specification and in the same words.
+//
+// A flexible track never comes out smaller than its content: the share is what
+// the fraction is worth, and the base is what the words inside need.
+func expandFlexibleTracks(tracks []gridTrack, room style.Unit) bool {
+	factors := 0.0
+	fixed := style.Unit(0)
+	for _, t := range tracks {
+		if t.kind == trackFlex {
+			factors += t.factor
+			continue
+		}
+		fixed = fixed.Add(t.base)
+	}
+	if factors == 0 {
+		return false
+	}
+	leftover := maxZero(room.Sub(fixed))
+	each := leftover
+	if factors > 1 {
+		each = leftover.Div(factors)
+	}
+	for i := range tracks {
+		if tracks[i].kind != trackFlex {
+			continue
+		}
+		if share := each.Mul(tracks[i].factor); share > tracks[i].base {
+			tracks[i].base = share
+		}
+	}
+	return true
+}
+
+// stretchAutoTracks is §12.8: what is still over goes to the automatic tracks,
+// equally, because justify-content and align-content are at "normal" and
+// "normal" behaves as "stretch" in a grid.
+func stretchAutoTracks(tracks []gridTrack, free style.Unit) {
+	autos := 0
+	for _, t := range tracks {
+		if t.kind == trackAuto {
+			autos++
+		}
+	}
+	if autos == 0 || free <= 0 {
+		return
+	}
+	each := free.Div(float64(autos))
+	for i := range tracks {
+		if tracks[i].kind == trackAuto {
+			tracks[i].base = tracks[i].base.Add(each)
+		}
+	}
+}
+
+func sumTracks(tracks []gridTrack) style.Unit {
+	out := style.Unit(0)
+	for _, t := range tracks {
+		out = out.Add(t.base)
+	}
+	return out
+}
+
+// layOutGridItem lays one item out at the size its cell gives it.
+//
+// The sizes are forced rather than declared, which is the path a flex item and
+// a table cell take: the item goes through ordinary block layout with its
+// geometry decided by the caller, so everything inside it works as it does
+// anywhere else. The width is the column's less the item's own margins and
+// edges, because a cell is a room and the item's border box goes inside it.
+func (l *layouter) layOutGridItem(it *gridItem, column, row style.Unit, hasRow bool,
+	width style.Unit, origin flow) *Fragment {
+
+	geom := &forcedGeometry{
+		margin: it.margin,
+		width:  maxZero(column.Sub(it.horizontal())),
+	}
+	if hasRow {
+		geom.height, geom.hasHeight = maxZero(row.
+			Sub(it.border.Vertical()).Sub(it.padding.Vertical())), true
+	}
+	return outOfClamp(l, func() *Fragment {
+		f, _ := l.blockIn(it.box, width,
+			flow{ctx: &floatContext{}, cbHeight: origin.cbHeight, cbDefinite: origin.cbDefinite},
+			geom)
+		return f
+	})
+}
+
+// gridItems gathers the container's items in order-modified document order,
+// which is where every question about placement is answered from.
+func (l *layouter) gridItems(b *Box, width style.Unit) []*gridItem {
+	var out []*gridItem
+	for _, c := range b.Children {
+		if c.IsText() || (c.Anonymous() && len(c.Children) == 0) || c.outOfFlow() {
+			continue
+		}
+		out = append(out, &gridItem{
+			box:     c,
+			margin:  l.edges(c, "margin", width),
+			border:  l.borderWidths(c),
+			padding: l.paddingOf(c, width),
+			order:   orderOf(c),
+		})
+	}
+	// §6.2's order-modified document order, and the sort is stable for the
+	// reason it is in a flex container: items that named the same order keep
+	// the order the document put them in, which is what makes "order: 1" mean
+	// "after everything that did not ask".
+	slices.SortStableFunc(out, func(x, y *gridItem) int { return x.order - y.order })
+	return out
+}
+
+// gridGap reads one of the two gaps. "normal" is zero in a grid, as it is in a
+// flex container and as it is not in a multi-column one; see flexGap, which
+// makes the same argument about the same keyword.
+func (l *layouter) gridGap(b *Box, property string, width style.Unit) style.Unit {
+	if v, ok := l.lengthOf(b, property, width); ok && v >= 0 {
+		return v
+	}
+	return 0
+}
+
+// trackList reads one of the two templates, or says it holds something this
+// slice does not size.
+//
+// "none" and an empty declaration are no tracks at all, which is not a refusal:
+// a container with no explicit columns has one implicit column, and one with no
+// explicit rows has as many implicit rows as its items need.
+func (l *layouter) trackList(b *Box, property string, width style.Unit) ([]gridTrack, bool) {
+	raw := strings.TrimSpace(b.Style[property])
+	if raw == "" || strings.EqualFold(raw, "none") {
+		return nil, true
+	}
+	vals, _ := css.ParseComponentValues(raw)
+	return l.tracksFrom(b, vals, width, true)
+}
+
+// tracksFrom turns a track list into tracks, or returns false for anything in
+// it this slice does not size: a named line, a minmax(), a subgrid, a repeat()
+// that is not a plain count.
+func (l *layouter) tracksFrom(b *Box, vals []css.ComponentValue, width style.Unit,
+	mayRepeat bool) ([]gridTrack, bool) {
+
+	var out []gridTrack
+	for _, part := range splitValuesOnWhitespace(vals) {
+		if len(part) != 1 {
+			return nil, false
+		}
+		v := part[0]
+		if v.IsFunction() && strings.EqualFold(v.Token.Value, "repeat") {
+			if !mayRepeat {
+				return nil, false
+			}
+			got, ok := l.repeatedTracks(b, v.Values, width)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, got...)
+			continue
+		}
+		got, ok := l.trackFrom(b, v, width)
+		if !ok {
+			return nil, false
+		}
+		out = append(out, got)
+	}
+	return out, len(out) > 0
+}
+
+// repeatedTracks expands "repeat(<integer>, <track-list>)".
+//
+// The count is a plain number here and not "auto-fill" or "auto-fit", which ask
+// how many tracks the container has room for — a question that cannot be
+// answered until the tracks are sized, and answered here would be a second
+// sizing pass with its own rules.
+func (l *layouter) repeatedTracks(b *Box, args []css.ComponentValue,
+	width style.Unit) ([]gridTrack, bool) {
+
+	comma := -1
+	for i, v := range args {
+		if v.IsToken() && v.Token.Kind == css.Comma {
+			comma = i
+			break
+		}
+	}
+	if comma < 0 {
+		return nil, false
+	}
+	count := 0
+	for _, v := range splitValuesOnWhitespace(args[:comma]) {
+		if len(v) != 1 || !v[0].IsToken() || v[0].Token.Kind != css.Number ||
+			!v[0].Token.IsInteger || count != 0 {
+			return nil, false
+		}
+		count = int(v[0].Token.Number)
+	}
+	if count <= 0 || count > maxRepeatedTracks {
+		return nil, false
+	}
+	one, ok := l.tracksFrom(b, args[comma+1:], width, false)
+	if !ok {
+		return nil, false
+	}
+	var out []gridTrack
+	for i := 0; i < count; i++ {
+		out = append(out, one...)
+	}
+	if len(out) > maxRepeatedTracks {
+		return nil, false
+	}
+	return out, true
+}
+
+// maxRepeatedTracks bounds what a repeat() may expand to. A document is
+// untrusted and "repeat(1000000, 1fr)" is a line of CSS; the bound is far above
+// any grid anyone lays out and turns a memory exhaustion into a finding.
+const maxRepeatedTracks = 1000
+
+// trackFrom reads one track size.
+func (l *layouter) trackFrom(b *Box, v css.ComponentValue, width style.Unit) (gridTrack, bool) {
+	if v.IsToken() && v.Token.Kind == css.Ident {
+		switch strings.ToLower(v.Token.Value) {
+		case "auto":
+			return gridTrack{kind: trackAuto}, true
+		case "min-content":
+			return gridTrack{kind: trackMin}, true
+		case "max-content":
+			return gridTrack{kind: trackMax}, true
+		}
+		return gridTrack{}, false
+	}
+	if v.IsToken() && v.Token.Kind == css.Dimension &&
+		strings.EqualFold(v.Token.Unit, "fr") {
+		if v.Token.Number < 0 {
+			return gridTrack{}, false
+		}
+		return gridTrack{kind: trackFlex, factor: v.Token.Number}, true
+	}
+	length, ok := l.lengthOfValues(b, []css.ComponentValue{v})
+	if !ok {
+		return gridTrack{}, false
+	}
+	size, ok := length.Resolve(width, true)
+	if !ok || size < 0 {
+		return gridTrack{}, false
+	}
+	return gridTrack{kind: trackFixed, size: size}, true
+}
+
+// splitValuesOnWhitespace is style's splitter, which is not exported and is two
+// lines. A track list is written as space-separated values and read that way.
+func splitValuesOnWhitespace(vals []css.ComponentValue) [][]css.ComponentValue {
+	var out [][]css.ComponentValue
+	var cur []css.ComponentValue
+	for _, v := range vals {
+		if v.IsToken() && v.Token.Kind == css.Whitespace {
+			if len(cur) > 0 {
+				out = append(out, cur)
+				cur = nil
+			}
+			continue
+		}
+		cur = append(cur, v)
+	}
+	if len(cur) > 0 {
+		out = append(out, cur)
+	}
+	return out
+}
+
+// refusesToGrid is why a grid container is laid out as a column of blocks
+// anyway, or the empty string if it is arranged.
+//
+// Every clause is a way for the table of tracks to stop being the picture the
+// document asked for, and each is stated as a condition on the box. The set is
+// deliberately narrow, and narrowing is the safe direction: a box refused here
+// is laid out exactly as it was before this file existed and is reported, which
+// is the honest answer; a box arranged that should not have been is a page that
+// is quietly wrong.
+func (l *layouter) refusesToGrid(b *Box, width style.Unit) string {
+	if _, ok := l.trackList(b, "grid-template-columns", width); !ok {
+		return "its columns are written with something this engine does not " +
+			"size, such as a named line, a minmax() or a repeat() that counts " +
+			"how many will fit"
+	}
+	if _, ok := l.trackList(b, "grid-template-rows", width); !ok {
+		return "its rows are written with something this engine does not size, " +
+			"such as a named line, a minmax() or a repeat() that counts how " +
+			"many will fit"
+	}
+	switch trimmedLower(b.Style["grid-template-areas"]) {
+	case "", "none":
+	default:
+		return "its cells are named by a template, which places items by name " +
+			"rather than in order"
+	}
+	switch trimmedLower(b.Style["grid-auto-flow"]) {
+	case "", "row":
+	default:
+		// "column" fills down before across and "dense" goes back for the
+		// holes an item that did not fit left behind. Both are placement
+		// algorithms of their own, and this slice has one.
+		return "its items are placed by a flow this engine does not follow"
+	}
+	switch trimmedLower(b.Style["grid-auto-rows"]) {
+	case "", "auto":
+	default:
+		return "its implicit rows are given a size of their own"
+	}
+	switch trimmedLower(b.Style["grid-auto-columns"]) {
+	case "", "auto":
+	default:
+		return "its implicit columns are given a size of their own"
+	}
+	if why := refusesGridAlignment(b); why != "" {
+		return why
+	}
+	if isRTL(b) {
+		// The columns are laid out from the left edge, which in a right-to-left
+		// grid is where they end rather than where they start. It is the same
+		// reversal a flex row waited on, and it is one change to the placement
+		// rather than a condition on each track.
+		return "its columns run from the right, which reverses every position " +
+			"across it"
+	}
+	for _, c := range b.Children {
+		if c.IsText() || (c.Anonymous() && len(c.Children) == 0) || c.outOfFlow() {
+			continue
+		}
+		for _, p := range [...]string{"grid-column", "grid-row", "grid-area",
+			"grid-column-start", "grid-column-end", "grid-row-start", "grid-row-end"} {
+			switch trimmedLower(c.Style[p]) {
+			case "", "auto":
+			default:
+				return "one of its items names the line it starts or ends at, " +
+					"which places it somewhere the automatic flow would not"
+			}
+		}
+		if auto := l.autoMarginEdges(c); auto != (Edges{}) {
+			// §10.2 gives an auto margin the room left in the cell before the
+			// alignment properties see any of it, which is a second way of
+			// spending the same space and is not this one.
+			return "one of its items has an automatic margin, which takes the " +
+				"room left in its cell"
+		}
+		if why := refusesGridAlignment(c); why != "" {
+			return why
+		}
+	}
+	return ""
+}
+
+// refusesGridAlignment is the alignment half of the gate, which is the same
+// four properties on the container and on an item.
+//
+// Every one of them is at its initial value here, and that value is not
+// nothing: "normal" behaves as "stretch" in a grid, which is what makes an item
+// fill its cell and an automatic track fill the container. What is refused is
+// every value that would move something, because moving it needs the free space
+// on each axis to be worked out per track rather than per container.
+func refusesGridAlignment(b *Box) string {
+	for _, p := range [...]string{"justify-content", "align-content",
+		"justify-items", "align-items", "justify-self", "align-self"} {
+		switch trimmedLower(b.Style[p]) {
+		case "", "normal", "stretch", "auto", "legacy":
+		default:
+			return "its tracks or its items are aligned by a rule this engine " +
+				"does not apply, and everything in a grid it does arrange is " +
+				"stretched to the cell it is in"
+		}
+	}
+	return ""
+}
+
+// arrangesGrid reports whether the container is arranged here, and says so when
+// it is not.
+//
+// The finding is raised once per box rather than once per declaration, which is
+// the argument layout/flex.go's own gate makes: whether the page is wrong is a
+// question about the box, and the same stylesheet may be right for one
+// container and wrong for the next.
+func (l *layouter) arrangesGrid(b *Box, width style.Unit) bool {
+	why := l.refusesToGrid(b, width)
+	if why == "" {
+		return true
+	}
+	if l.reportedGrid == nil {
+		l.reportedGrid = map[*Box]bool{}
+	}
+	if !l.reportedGrid[b] {
+		l.reportedGrid[b] = true
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleUnsupportedValue,
+			Source: AtHTML(offsetOf(b)),
+			Message: "this grid container was laid out as a column of blocks because " +
+				why + "; its items are stacked rather than placed in cells",
+			Path:     PathOf(b.Element),
+			Property: "display",
+		})
+	}
+	return false
+}

@@ -166,3 +166,449 @@ func TestTheTwoValueDisplayNamesTheGridToo(t *testing.T) {
 		}
 	}
 }
+
+// CSS Grid Layout 2 §12, laid out.
+//
+// The suite has one document that arranges a grid — text-indent's anonymous
+// item test, which is about the items and not the tracks — so the reftest count
+// is a regression check here and nothing more. What says this is right is the
+// arithmetic below, and the fixture is chosen so that every number in it is a
+// whole one: Courier at 20px puts one character at exactly 12px, and every
+// container width divides its free space exactly.
+
+const gridCSS = `body { margin: 0 }
+	#g { display: grid; font-family: Courier; font-size: 20px; line-height: 20px }
+	#g > div { font-family: Courier; font-size: 20px; line-height: 20px }`
+
+// gridCells is where each item of #g was placed, in pixels.
+func gridCells(t *testing.T, htmlSrc, extra string) []Rect {
+	t.Helper()
+	g := fragmentFor(layoutOf(t, 1000, htmlSrc, gridCSS+extra), "g")
+	if g == nil {
+		t.Fatalf("the grid container generated no fragment")
+	}
+	out := make([]Rect, 0, len(g.Children))
+	for _, c := range g.Children {
+		out = append(out, c.BorderRect)
+	}
+	return out
+}
+
+func wantCells(t *testing.T, got []Rect, want [][4]float64, what string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("%s: %d items, want %d: %v", what, len(got), len(want), got)
+	}
+	for i := range want {
+		g := [4]float64{got[i].X.Px(), got[i].Y.Px(), got[i].W.Px(), got[i].H.Px()}
+		if g != want[i] {
+			t.Errorf("%s: item %d is at %v, want %v\n  whole grid: %v",
+				what, i, g, want[i], got)
+		}
+	}
+}
+
+// The four-item fixture: one, two, three and four characters, so that which
+// item is in which cell can be read off the row.
+const fourItems = `<div id="g"><div>a</div><div>bb</div><div>ccc</div><div>dddd</div></div>`
+
+// TestItemsAreDealtIntoTheColumnsInOrder is §8.5's automatic placement: one
+// cell each, along the columns and then down, which is the whole of the
+// placement in a grid where no item names a line.
+func TestItemsAreDealtIntoTheColumnsInOrder(t *testing.T) {
+	got := gridCells(t, fourItems, `#g { width: 300px; grid-template-columns: 100px 100px }`)
+	wantCells(t, got, [][4]float64{
+		{0, 0, 100, 20}, {100, 0, 100, 20},
+		{0, 20, 100, 20}, {100, 20, 100, 20},
+	}, "four items in two fixed columns")
+
+	// Three columns and four items make a second row holding one, and the
+	// container is as deep as the two rows come to.
+	got = gridCells(t, fourItems, `#g { width: 300px; grid-template-columns: 100px 100px 100px }`)
+	wantCells(t, got, [][4]float64{
+		{0, 0, 100, 20}, {100, 0, 100, 20}, {200, 0, 100, 20},
+		{0, 20, 100, 20},
+	}, "four items in three columns")
+}
+
+// TestAFractionTakesItsShareOfWhatIsLeft is §12.7. An "fr" is not a length: it
+// is a share of the space the other tracks did not take, which is why "1fr 2fr"
+// is a third and two thirds and why the same declaration in a wider container
+// gives wider columns.
+func TestAFractionTakesItsShareOfWhatIsLeft(t *testing.T) {
+	got := gridCells(t, fourItems, `#g { width: 300px; grid-template-columns: 1fr 1fr }`)
+	wantCells(t, got, [][4]float64{
+		{0, 0, 150, 20}, {150, 0, 150, 20},
+		{0, 20, 150, 20}, {150, 20, 150, 20},
+	}, "two equal fractions")
+
+	got = gridCells(t, fourItems, `#g { width: 300px; grid-template-columns: 1fr 2fr }`)
+	wantCells(t, got, [][4]float64{
+		{0, 0, 100, 20}, {100, 0, 200, 20},
+		{0, 20, 100, 20}, {100, 20, 200, 20},
+	}, "one fraction against two")
+
+	// A length beside a fraction takes its size first and the fraction takes
+	// the rest, which is the two-column page every document has.
+	got = gridCells(t, fourItems, `#g { width: 300px; grid-template-columns: 60px 1fr }`)
+	wantCells(t, got, [][4]float64{
+		{0, 0, 60, 20}, {60, 0, 240, 20},
+		{0, 20, 60, 20}, {60, 20, 240, 20},
+	}, "a length beside a fraction")
+}
+
+// TestFactorsBelowOneTakeOnlyThatFractionOfTheSpaceInAGrid is §12.7.1's clause
+// for factors adding to less than one, which is what gives "0.25fr" its
+// meaning: the tracks between them asked for half the container and take
+// exactly that, leaving the rest empty. Without it a lone "0.5fr" track would
+// fill the container, which is the same picture "1fr" gives.
+func TestFactorsBelowOneTakeOnlyThatFractionOfTheSpaceInAGrid(t *testing.T) {
+	got := gridCells(t, fourItems, `#g { width: 300px; grid-template-columns: 0.25fr 0.25fr }`)
+	wantCells(t, got, [][4]float64{
+		{0, 0, 75, 20}, {75, 0, 75, 20},
+		{0, 20, 75, 20}, {75, 20, 75, 20},
+	}, "factors adding to a half")
+
+	// Exactly one is the boundary and the clause does not apply at it.
+	got = gridCells(t, fourItems, `#g { width: 300px; grid-template-columns: 0.5fr 0.5fr }`)
+	wantCells(t, got, [][4]float64{
+		{0, 0, 150, 20}, {150, 0, 150, 20},
+		{0, 20, 150, 20}, {150, 20, 150, 20},
+	}, "factors adding to one")
+}
+
+// TestAnAutomaticTrackGrowsFromItsContentToTheContainer is the difference
+// between "auto" and "max-content", and it is the one worth stating twice:
+// both start at what their content needs, and only "auto" takes what is left
+// over afterwards.
+//
+// The columns hold one and three characters, and two and four: 36px and 48px of
+// content in a 300px container leaves 216px, and half of that on each is 144
+// and 156.
+func TestAnAutomaticTrackGrowsFromItsContentToTheContainer(t *testing.T) {
+	got := gridCells(t, fourItems, `#g { width: 300px; grid-template-columns: auto auto }`)
+	wantCells(t, got, [][4]float64{
+		{0, 0, 144, 20}, {144, 0, 156, 20},
+		{0, 20, 144, 20}, {144, 20, 156, 20},
+	}, "two automatic columns")
+
+	got = gridCells(t, fourItems,
+		`#g { width: 300px; grid-template-columns: max-content max-content }`)
+	wantCells(t, got, [][4]float64{
+		{0, 0, 36, 20}, {36, 0, 48, 20},
+		{0, 20, 36, 20}, {36, 20, 48, 20},
+	}, "two max-content columns")
+}
+
+// TestAnAutomaticTrackDoesNotOverflowTheContainerItIsIn is §12.4's two numbers,
+// and the reason a track has two: a column starts at the width below which its
+// content would spill out and grows towards the width at which it would stop
+// wrapping, as far as the container allows and no further.
+//
+// "ab cd" is 60px of max-content and 24px of min-content, so two such columns
+// in a 100px container cannot both have the whole width they would like. They
+// come out 50 and 50 rather than 60 and 60 — the room was shared equally and
+// ran out — and each item wraps onto a second line, which is what a column
+// sized at max-content would have hidden by overflowing instead.
+func TestAnAutomaticTrackDoesNotOverflowTheContainerItIsIn(t *testing.T) {
+	const two = `<div id="g"><div>ab cd</div><div>ef gh</div></div>`
+	got := gridCells(t, two, `#g { width: 100px; grid-template-columns: auto auto }`)
+	wantCells(t, got, [][4]float64{{0, 0, 50, 40}, {50, 0, 50, 40}}, "two narrow columns")
+
+	// The same content in a container with room for it: 60 and 60 of content,
+	// and the 180px left over shared equally.
+	got = gridCells(t, two, `#g { width: 300px; grid-template-columns: auto auto }`)
+	wantCells(t, got, [][4]float64{{0, 0, 150, 20}, {150, 0, 150, 20}}, "two roomy columns")
+}
+
+// TestRepeatWritesTheSameTrackAgain. §7.2.3.1's repeat() with a count is a
+// spelling of the track list it holds, and it is how every real grid is
+// written.
+func TestRepeatWritesTheSameTrackAgain(t *testing.T) {
+	got := gridCells(t, fourItems, `#g { width: 300px; grid-template-columns: repeat(2, 1fr) }`)
+	wantCells(t, got, [][4]float64{
+		{0, 0, 150, 20}, {150, 0, 150, 20},
+		{0, 20, 150, 20}, {150, 20, 150, 20},
+	}, "two repeated fractions")
+
+	// A repeat of more than one track, and a track beside it.
+	got = gridCells(t, fourItems,
+		`#g { width: 300px; grid-template-columns: 60px repeat(2, 1fr) }`)
+	wantCells(t, got, [][4]float64{
+		{0, 0, 60, 20}, {60, 0, 120, 20}, {180, 0, 120, 20},
+		{0, 20, 60, 20},
+	}, "a length and two repeated fractions")
+}
+
+// TestTheGapsComeOutOfTheTracks. A grid reads both gaps, one per axis, and they
+// are taken off the container before the tracks divide it — so two fractions in
+// a 300px container with a 20px gap are 140 each and not 150.
+func TestTheGapsComeOutOfTheTracks(t *testing.T) {
+	got := gridCells(t, fourItems,
+		`#g { width: 300px; grid-template-columns: 1fr 1fr; column-gap: 20px; row-gap: 10px }`)
+	wantCells(t, got, [][4]float64{
+		{0, 0, 140, 20}, {160, 0, 140, 20},
+		{0, 30, 140, 20}, {160, 30, 140, 20},
+	}, "two columns and two rows with gaps")
+
+	// The "gap" shorthand is the pair, in the order row then column.
+	got = gridCells(t, fourItems, `#g { width: 300px; grid-template-columns: 1fr 1fr; gap: 10px 20px }`)
+	wantCells(t, got, [][4]float64{
+		{0, 0, 140, 20}, {160, 0, 140, 20},
+		{0, 30, 140, 20}, {160, 30, 140, 20},
+	}, "the same two gaps written as one")
+}
+
+// TestARowIsAsTallAsTheTallestThingInIt, and an item fills the cell it is in on
+// both axes — which is what "align-items: normal" and "justify-items: normal"
+// come to in a grid.
+func TestARowIsAsTallAsTheTallestThingInIt(t *testing.T) {
+	const two = `<div id="g"><div>a</div><div>b<br>c</div></div>`
+	got := gridCells(t, two, `#g { width: 300px; grid-template-columns: 1fr 1fr }`)
+	wantCells(t, got, [][4]float64{{0, 0, 150, 40}, {150, 0, 150, 40}},
+		"a one-line item beside a two-line one")
+}
+
+// TestAContainerWithAHeightSharesItOutBetweenTheRows. §12.8 again, on the other
+// axis: the rows start at their content and the automatic ones take what the
+// container has over.
+func TestAContainerWithAHeightSharesItOutBetweenTheRows(t *testing.T) {
+	got := gridCells(t, fourItems,
+		`#g { width: 300px; height: 200px; grid-template-columns: 1fr 1fr }`)
+	wantCells(t, got, [][4]float64{
+		{0, 0, 150, 100}, {150, 0, 150, 100},
+		{0, 100, 150, 100}, {150, 100, 150, 100},
+	}, "two rows in a container twice their height")
+
+	// A stated row height is stated, and the rows below it start after it.
+	got = gridCells(t, fourItems,
+		`#g { width: 300px; grid-template-columns: 1fr 1fr; grid-template-rows: 60px }`)
+	wantCells(t, got, [][4]float64{
+		{0, 0, 150, 60}, {150, 0, 150, 60},
+		{0, 60, 150, 20}, {150, 60, 150, 20},
+	}, "one stated row and one implicit one")
+}
+
+// TestTextInsideAGridContainerBecomesAnItemOfItsOwn is §6's anonymous grid
+// item, which is CSS Flexible Box Layout §4's rule in the other specification
+// and in the same words. It is what the one document in the suite that arranges
+// a grid is about.
+func TestTextInsideAGridContainerBecomesAnItemOfItsOwn(t *testing.T) {
+	got := gridCells(t, `<div id="g">ab<div>c</div></div>`,
+		`#g { width: 300px; grid-template-columns: 1fr 1fr }`)
+	wantCells(t, got, [][4]float64{{0, 0, 150, 20}, {150, 0, 150, 20}},
+		"a run of text beside an element")
+
+	// White space that collapses to nothing is not an item, or every document
+	// written with a newline between its elements would have twice the items it
+	// wrote.
+	got = gridCells(t, "<div id=\"g\">\n  <div>a</div>\n  <div>b</div>\n</div>",
+		`#g { width: 300px; grid-template-columns: 1fr 1fr }`)
+	wantCells(t, got, [][4]float64{{0, 0, 150, 20}, {150, 0, 150, 20}},
+		"two items with newlines between them")
+}
+
+// TestAFloatInAGridContainerIsAnItem is §6's other sentence — "float and clear
+// have no effect on a grid item" — and it is the flex rule again: a float is
+// out of the flow everywhere else, and a box out of the flow is not an item at
+// all.
+func TestAFloatInAGridContainerIsAnItem(t *testing.T) {
+	got := gridCells(t, fourItems,
+		`#g { width: 300px; grid-template-columns: 1fr 1fr } #g > div:first-child { float: left }`)
+	wantCells(t, got, [][4]float64{
+		{0, 0, 150, 20}, {150, 0, 150, 20},
+		{0, 20, 150, 20}, {150, 20, 150, 20},
+	}, "a floated item in a grid")
+}
+
+// TestAnAbsolutelyPositionedChildOfAGridIsStillPlaced. It is not an item — §10.1
+// takes it out of the flow — and it is not nobody's business either: the block
+// walk is what records such a box for placing, and this file is in its place.
+func TestAnAbsolutelyPositionedChildOfAGridIsStillPlaced(t *testing.T) {
+	for _, doc := range []string{
+		`<div id="g"><div id="p" style="position: absolute">x</div></div>`,
+		`<div id="g"><div>a</div><div id="p" style="position: absolute">x</div></div>`,
+	} {
+		root := layoutOf(t, 1000, doc, gridCSS+`#g { width: 300px; grid-template-columns: 1fr }`)
+		if n := fragmentsWithID(root, "p"); n != 1 {
+			t.Errorf("the absolutely positioned box is on the page %d times, want "+
+				"once: %s", n, doc)
+		}
+	}
+}
+
+// TestOrderMovesAGridItemToAnotherCell. §6.2's order-modified document order is
+// what the automatic flow deals from, so an item that asks to come last is
+// placed in the last cell — and the sort is stable, so the items that did not
+// ask keep the order the document put them in.
+func TestOrderMovesAGridItemToAnotherCell(t *testing.T) {
+	got := gridCells(t, `<div id="g"><div id="a">a</div><div>bb</div><div>ccc</div></div>`,
+		`#g { width: 300px; grid-template-columns: 100px 100px } #a { order: 1 }`)
+	wantCells(t, got, [][4]float64{
+		{0, 0, 100, 20}, {100, 0, 100, 20}, {0, 20, 100, 20},
+	}, "three items with the first sent to the end")
+}
+
+// TestAGridContainerThisEngineCannotArrangeSaysSo.
+//
+// The gate. Each of these is a grid this file does not lay out, and each must
+// come out as the column of blocks it was before — and be reported, because a
+// table of tracks silently laid out as a stack is exactly the plausible
+// wrongness the finding exists for.
+func TestAGridContainerThisEngineCannotArrangeSaysSo(t *testing.T) {
+	for _, c := range []struct{ what, css, names string }{
+		{"a named line", `#g { grid-template-columns: [start] 1fr }`, "does not size"},
+		{"a minmax", `#g { grid-template-columns: minmax(10px, 1fr) }`, "does not size"},
+		{"a repeat that counts", `#g { grid-template-columns: repeat(auto-fill, 1fr) }`, "does not size"},
+		{"a nested repeat", `#g { grid-template-columns: repeat(2, repeat(2, 1fr)) }`, "does not size"},
+		{"a named row", `#g { grid-template-rows: [top] 20px }`, "does not size"},
+		{"named areas", `#g { grid-template-areas: "a b" }`, "named by a template"},
+		{"a column flow", `#g { grid-auto-flow: column }`, "flow this engine does not follow"},
+		{"a dense flow", `#g { grid-auto-flow: row dense }`, "flow this engine does not follow"},
+		{"sized implicit rows", `#g { grid-auto-rows: 50px }`, "implicit rows"},
+		{"sized implicit columns", `#g { grid-auto-columns: 50px }`, "implicit columns"},
+		{"a right-to-left grid", `#g { direction: rtl }`, "from the right"},
+		{"centred tracks", `#g { justify-content: center }`, "aligned by a rule"},
+		{"centred items", `#g { align-items: center }`, "aligned by a rule"},
+		{"an item that names a line", `#g > div:first-child { grid-column: 2 }`, "names the line"},
+		{"an item with an area", `#g > div:first-child { grid-area: a }`, "names the line"},
+		{"an item aligned by itself", `#g > div:first-child { justify-self: end }`, "aligned by a rule"},
+		{"an automatic margin", `#g > div:first-child { margin-left: auto }`, "automatic margin"},
+	} {
+		t.Run(c.what, func(t *testing.T) {
+			got := Compose(Input{HTML: fourItems, CSS: []Stylesheet{{
+				Source: gridCSS + `#g { width: 300px; grid-template-columns: 1fr 1fr }` + c.css}}},
+				Options{})
+			var said string
+			for _, f := range got.Findings {
+				if strings.Contains(f.Message, "grid container") {
+					said = f.Message
+				}
+			}
+			if said == "" {
+				t.Fatalf("nothing was reported about a grid with %s, so a table of "+
+					"tracks laid out as a stack says nothing about it: %v",
+					c.what, got.Findings)
+			}
+			if !strings.Contains(said, c.names) {
+				t.Errorf("the finding for %s is %q, which does not name %q",
+					c.what, said, c.names)
+			}
+			// And it really was laid out as a column of blocks.
+			row := gridCells(t, fourItems,
+				`#g { width: 300px; grid-template-columns: 1fr 1fr }`+c.css)
+			for i, it := range row {
+				if it.X.Px() != 0 || it.W.Px() != 300 {
+					t.Errorf("item %d of a refused grid is at x=%v and %vpx wide, "+
+						"want a full-width block at nought", i, it.X, it.W)
+				}
+			}
+		})
+	}
+}
+
+// TestAnArrangedGridSaysNothing is the containment argument: the finding must
+// not fire on the containers this file does arrange, or every grid document in
+// the world would carry a report of a page that is right.
+func TestAnArrangedGridSaysNothing(t *testing.T) {
+	for _, css := range []string{
+		`#g { width: 300px }`,
+		`#g { width: 300px; grid-template-columns: 1fr 1fr }`,
+		`#g { width: 300px; grid-template-columns: repeat(3, 100px); gap: 10px }`,
+		`#g { width: 300px; grid-template-columns: auto max-content min-content }`,
+		`#g { width: 300px; grid-template-rows: 40px 40px; grid-auto-flow: row }`,
+		`#g { width: 300px; justify-content: normal; align-items: stretch }`,
+		`#g { width: 300px } #g > div { order: 0; grid-column: auto }`,
+	} {
+		got := Compose(Input{HTML: fourItems,
+			CSS: []Stylesheet{{Source: gridCSS + css}}}, Options{})
+		for _, f := range got.Findings {
+			if strings.Contains(f.Message, "grid") || f.Property == "display" {
+				t.Errorf("%q reported %q, and the container was arranged", css, f.Message)
+			}
+		}
+	}
+}
+
+// TestATrackStopsGrowingAtItsLimit is §12.6's freeze, and it is the clause that
+// tells "max-content" from "auto" a second time: growing every track equally
+// until the space runs out would give a column more room than its content can
+// use, and take that room from the column that could.
+//
+// One character beside four, in a 300px container: the max-content column stops
+// at the 12px it asked for and the automatic one takes the other 288.
+func TestATrackStopsGrowingAtItsLimit(t *testing.T) {
+	const two = `<div id="g"><div>a</div><div>dddd</div></div>`
+	got := gridCells(t, two, `#g { width: 300px; grid-template-columns: max-content auto }`)
+	wantCells(t, got, [][4]float64{{0, 0, 12, 20}, {12, 0, 288, 20}},
+		"a max-content column beside an automatic one")
+
+	// Two automatic columns where only one of them can use more room: "ab cd"
+	// starts at the 24px of its longest word and would stop wrapping at 60,
+	// while "dddd" is 48 either way. The 228px over is offered to both, the
+	// second is full at once, and the first takes 36 of it to reach its limit —
+	// and only then is what is *still* left shared equally between them.
+	//
+	// Growing them equally from the start would give the first column all 228
+	// and leave the second at 48: a column stretched far past the width its
+	// content could use, beside one that could have used it.
+	const wrapping = `<div id="g"><div>ab cd</div><div>dddd</div></div>`
+	got = gridCells(t, wrapping, `#g { width: 300px; grid-template-columns: auto auto }`)
+	wantCells(t, got, [][4]float64{{0, 0, 156, 20}, {156, 0, 144, 20}},
+		"one column that can grow beside one that cannot")
+
+	// The same two columns with only 48px to give: 36 of it takes the first to
+	// its limit and the 12 left over is split.
+	got = gridCells(t, wrapping, `#g { width: 120px; grid-template-columns: auto auto }`)
+	wantCells(t, got, [][4]float64{{0, 0, 66, 20}, {66, 0, 54, 20}},
+		"one column that can grow, in a narrow container")
+}
+
+// TestAnItemsOwnWidthIsWhatItAsksOfItsColumn. §12.5's contributions are the
+// item's, not its content's: a box that stated a width is that wide whatever
+// its words would do, and the column is sized to hold it.
+func TestAnItemsOwnWidthIsWhatItAsksOfItsColumn(t *testing.T) {
+	const two = `<div id="g"><div>a</div><div>b</div></div>`
+	got := gridCells(t, two,
+		`#g { width: 300px; grid-template-columns: max-content max-content }`+
+			`#g > div:first-child { width: 80px }`)
+	wantCells(t, got, [][4]float64{{0, 0, 80, 20}, {80, 0, 12, 20}},
+		"an item that stated a width of its own")
+}
+
+// TestWhatAMeasuringLayoutTookOutOfTheFlowGoesWithIt. Every item is laid out
+// twice — once at its column's width to find out how tall it is, and once at
+// the whole cell — and the first answer is thrown away. An absolutely
+// positioned box found inside a discarded fragment hangs off a fragment nobody
+// will paint, and leaving its record on placeAbsolutes' list spends that list's
+// budget on a box that is not on the page.
+//
+// The cap is lowered to make the arithmetic small: three out-of-flow boxes and
+// a limit of four. Before this was handled the grid recorded six.
+func TestWhatAMeasuringLayoutTookOutOfTheFlowGoesWithIt(t *testing.T) {
+	held := maxAbsolutes
+	defer func() { maxAbsolutes = held }()
+	maxAbsolutes = 4
+
+	const doc = `<div id="g">` +
+		`<div>a<i id="p1" style="position: absolute">1</i></div>` +
+		`<div>b<i id="p2" style="position: absolute">2</i></div>` +
+		`<div>c<i id="p3" style="position: absolute">3</i></div></div>`
+	const css = `#g { width: 300px; grid-template-columns: 1fr 1fr }`
+
+	got := Compose(Input{HTML: doc, CSS: []Stylesheet{{Source: gridCSS + css}}}, Options{})
+	for _, f := range got.Findings {
+		if f.Rule == RuleLimit {
+			t.Errorf("three out-of-flow boxes with a limit of four reported %q, "+
+				"so the measuring layouts are still on the list", f.Message)
+		}
+	}
+
+	// And the three that are real are still placed.
+	root := layoutOf(t, 1000, doc, gridCSS+css)
+	for _, id := range []string{"p1", "p2", "p3"} {
+		if n := fragmentsWithID(root, id); n != 1 {
+			t.Errorf("%s is on the page %d times, want once", id, n)
+		}
+	}
+}

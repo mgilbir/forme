@@ -431,7 +431,7 @@ func (l *layouter) refusesToFlex(b *Box, containing style.Unit) string {
 		if c.IsText() || (c.Anonymous() && len(c.Children) == 0) {
 			// What is left of a text child once §4's anonymous item has been
 			// made is white space that collapses to nothing, which is not
-			// content and not an item. See wrapFlexText in box.go.
+			// content and not an item. See wrapLooseText in box.go.
 			continue
 		}
 		if c.outOfFlow() {

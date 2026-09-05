@@ -286,22 +286,17 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 // style/unimplemented.go, which makes the same argument about a property
 // nothing reads.
 //
-// "flex" was here and is not any more: layout/flex.go arranges the containers
-// it can and reports the ones it cannot, at the box, with the reason. A value
-// that is laid out has nothing to say here, and one whose *arrangement* is
-// refused is a fact about the container rather than about the keyword.
+// "flex" was here and is not any more, and "grid" has gone the same way:
+// layout/flex.go and layout/grid.go arrange the containers they can and report
+// the ones they cannot, at the box, with the reason. A value that is laid out
+// has nothing to say here, and one whose *arrangement* is refused is a fact
+// about the container rather than about the keyword.
 //
 // They are named rather than gathered by exclusion. A list of "everything this
 // engine does not lay out" would go stale in the direction that matters: silent
 // about a value that had stopped being laid out.
 func unlaidFormattingContext(value string) (what, laid string) {
-	const asBlocks = "the box and everything in it were laid out as blocks, " +
-		"so the items are stacked rather than arranged"
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "grid":
-		return "grid", asBlocks
-	case "inline-grid":
-		return "inline-grid", asBlocks
 	case "ruby":
 		return "ruby", "the box was laid out as an inline box, so the " +
 			"annotation runs along the line instead of above it"
@@ -312,59 +307,24 @@ func unlaidFormattingContext(value string) (what, laid string) {
 // unlaidBoxIsNotTheBoxAsked reports whether laying the box out as this engine
 // does actually produces a different page.
 //
-// Reporting every such box would be crying wolf, and the suite says so in six
+// Reporting every such box would be crying wolf, and the suite said so in six
 // documents: five of them write "display: ruby" on a span with no annotation in
 // it, to make an element boundary for a text rule to be asked about, and the
-// sixth writes an *empty* "display: inline-flex" as an atomic inline for
+// sixth wrote an *empty* "display: inline-flex" as an atomic inline for
 // letter-spacing to space. In each of them the box this engine builds is the box
 // the specification asks for, and a finding would say the page was wrong when it
 // was right. That is the argument style/inert.go makes for a declaration asking
 // for the behaviour that is already there.
 //
-// So the question is asked of the content, and each answer is exact rather than
-// cautious:
-//
-//   - A flex or grid container with *any* in-flow item is different. A flex item
-//     is sized from its own content where a block child fills its container, so
-//     even one item is laid out at a different width. Only an empty one is the
-//     same box — and an empty box is empty however it is laid out.
-//   - A ruby box is different where there is an annotation in it. Ruby lays a
-//     "ruby-text" above its base; with no annotation there is nothing to lift,
-//     and §3.1's own answer for a base alone is the base.
+// Only the five are left, because the boxes that were counted by content are
+// laid out now and answer for themselves. A ruby box is different where there
+// is an annotation in it: ruby lays a "ruby-text" above its base, and with no
+// annotation there is nothing to lift — §3.1's own answer for a base alone is
+// the base.
 func unlaidBoxIsNotTheBoxAsked(n *html.Node, styles map[*html.Node]style.ComputedStyle,
 	what string) bool {
 
-	if what == "ruby" {
-		return hasRubyAnnotation(n, styles)
-	}
-	for _, c := range n.Children {
-		switch c.Type {
-		case html.TextNode:
-			// White space alone is not an item: §4's box construction wraps a
-			// run of text in an anonymous item only where it has content.
-			if strings.TrimSpace(c.Text) != "" {
-				return true
-			}
-		case html.ElementNode:
-			cs, ok := styles[c]
-			if !ok {
-				continue
-			}
-			d := strings.ToLower(strings.TrimSpace(cs["display"]))
-			if d == "none" {
-				continue
-			}
-			// An absolutely positioned child is not a flex item — §4.1 takes it
-			// out of the flow and lays it out against the container as its
-			// containing block — so it is not what makes the layout differ.
-			switch strings.ToLower(strings.TrimSpace(cs["position"])) {
-			case "absolute", "fixed":
-				continue
-			}
-			return true
-		}
-	}
-	return false
+	return what == "ruby" && hasRubyAnnotation(n, styles)
 }
 
 // hasRubyAnnotation reports whether a ruby box has anything to lift above its

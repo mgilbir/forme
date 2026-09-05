@@ -334,9 +334,42 @@ var properties = map[string]property{
 	// "stretch" in a flex container, which is again a behaviour and not a
 	// synonym.
 	"align-content": {false, "normal"},
-	"column-count":  {false, "auto"},
-	"column-width":  {false, "auto"},
-	"column-gap":    {false, "normal"},
+	// CSS Grid Layout 2, and the two Box Alignment properties a grid reads that
+	// a flex container does not. None of them inherits: a grid container's
+	// tracks are its own, and a block inside a grid item is not itself a grid.
+	//
+	// The first six are the container's own template and flow. The seven after
+	// them place one item, and they are registered *to be refused*: an
+	// unregistered property is dropped by the cascade before layout sees it, so
+	// without them a container whose item names a line would be arranged by the
+	// automatic flow with the declaration silently gone. That is the argument
+	// column-span makes below, and it is the same one. They become real the day
+	// layout/grid.go places an item by name.
+	//
+	// justify-items' initial value is "legacy", which is not a spelling of
+	// "normal": it is the keyword that makes an item inherit a legacy
+	// text-align from its container. Nothing in this engine sets one, so it
+	// behaves as normal — but it is kept as itself, because a computed value of
+	// "normal" would be a claim about a declaration nobody wrote.
+	"grid-template-columns": {false, "none"},
+	"grid-template-rows":    {false, "none"},
+	"grid-template-areas":   {false, "none"},
+	"grid-auto-flow":        {false, "row"},
+	"grid-auto-rows":        {false, "auto"},
+	"grid-auto-columns":     {false, "auto"},
+	"grid-column":           {false, "auto"},
+	"grid-row":              {false, "auto"},
+	"grid-area":             {false, "auto"},
+	"grid-column-start":     {false, "auto"},
+	"grid-column-end":       {false, "auto"},
+	"grid-row-start":        {false, "auto"},
+	"grid-row-end":          {false, "auto"},
+	"justify-items":         {false, "legacy"},
+	"justify-self":          {false, "auto"},
+
+	"column-count": {false, "auto"},
+	"column-width": {false, "auto"},
+	"column-gap":   {false, "normal"},
 	// row-gap is column-gap's other half, and which of the two a container
 	// reads is a question about its axis rather than about the property: items
 	// in a row are separated by a column gap and items in a column by a row

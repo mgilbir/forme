@@ -1248,17 +1248,17 @@ func (b *boxBuilder) fixup(box *Box) {
 	for _, c := range box.Children {
 		b.fixup(c)
 	}
-	unfloatFlexItems(box)
+	unfloatItems(box)
 	box.Children = b.fixupTables(box)
 	box.Children = b.splitBlockInInline(box)
 	box.Children = b.wrapInlines(box)
-	box.Children = b.wrapFlexText(box)
+	box.Children = b.wrapLooseText(box)
 }
 
-// unfloatFlexItems is CSS Flexible Box Layout §4: "float and clear have no
-// effect on a flex item".
+// unfloatItems is CSS Flexible Box Layout §4 and CSS Grid Layout §6: "float and
+// clear have no effect on a flex item", and the same sentence for a grid item.
 //
-// A float in a flex container is not a float. It is an item like any other,
+// A float in a flex or grid container is not a float. It is an item like any other,
 // laid out in its place along the axis — which is not a small difference:
 // float takes a box out of the flow everywhere else in this engine, and a box
 // out of the flow is not an item at all, so a container holding one would
@@ -1270,8 +1270,8 @@ func (b *boxBuilder) fixup(box *Box) {
 // here. What the declaration still does is what it did before it reached this:
 // §9.7 has already blockified the box, so "float: left" on a <span> in a flex
 // container makes it a block-level item rather than an inline one.
-func unfloatFlexItems(parent *Box) {
-	if parent.Inner != InnerFlex {
+func unfloatItems(parent *Box) {
+	if parent.Inner != InnerFlex && parent.Inner != InnerGrid {
 		return
 	}
 	for _, c := range parent.Children {
@@ -1283,8 +1283,9 @@ func unfloatFlexItems(parent *Box) {
 	}
 }
 
-// wrapFlexText is CSS Flexible Box Layout §4's anonymous flex item: a run of
-// text written straight inside a flex container is wrapped in a box of its own.
+// wrapLooseText is CSS Flexible Box Layout §4's anonymous flex item and CSS
+// Grid Layout §6's anonymous grid item, which are one rule written twice: a run
+// of text written straight inside the container is wrapped in a box of its own.
 //
 // It is the same idea as the anonymous block rule above and not the same rule,
 // and the differences are what make it a second function. §2.1 wraps inline
@@ -1298,8 +1299,11 @@ func unfloatFlexItems(parent *Box) {
 // three: the word in a box the document does not contain, and the span beside
 // it. Without this the container was refused and laid out as a block, which is
 // most of the flex containers anyone writes.
-func (b *boxBuilder) wrapFlexText(parent *Box) []*Box {
-	if parent.Inner != InnerFlex || len(parent.Children) == 0 {
+func (b *boxBuilder) wrapLooseText(parent *Box) []*Box {
+	if parent.Inner != InnerFlex && parent.Inner != InnerGrid {
+		return parent.Children
+	}
+	if len(parent.Children) == 0 {
 		return parent.Children
 	}
 	var out, run []*Box
