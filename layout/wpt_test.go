@@ -994,7 +994,25 @@ const wptEnv = "WPT_TESTS"
 // property". The engine looked for it among the word-break values, found
 // nothing, and did nothing — without reporting it either, which is what made it
 // silent. See layout/overflowwrap_test.go.
-const wptCleanPassBaseline = 5959
+//
+// 5959 to 5958 is the one entry here that goes *down*, and it is deliberate. A
+// "display: flex" container has always become an ordinary block — a column of
+// full-width children where a row was asked for — and said nothing at all, which
+// is the plausible silent wrongness this whole vocabulary is against. It is
+// reported now, and the finding costs exactly one document:
+// text-indent/anonymous-flex-item-001, which passed because it is *about* an
+// anonymous flex item and this engine lays that out as a block. A false pass
+// paid for an honest report.
+//
+// The number is the one thing in this file that may not be moved to make a run
+// green, so it is worth saying what makes this different from that: the change
+// was measured both ways before it was made, the six documents the blunt version
+// would have cost were read one by one, and the report was narrowed to the boxes
+// whose page really is different — leaving five "display: ruby" spans with no
+// annotation in them and one empty "display: inline-flex" alone, because for
+// those the box this engine builds is the box the specification asks for. See
+// layout/pipeline.go's unlaidBoxIsNotTheBoxAsked.
+const wptCleanPassBaseline = 5958
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
