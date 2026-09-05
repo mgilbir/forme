@@ -150,15 +150,29 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 		return 0
 	}
 	columnGap, rowGap := l.gridGap(b, "column-gap", width), l.gridGap(b, "row-gap", width)
+	height, definite := l.explicitHeight(b, width, origin.cbHeight, origin.cbDefinite)
 
-	columns, _ := l.trackList(b, "grid-template-columns", width)
+	columns, fit, _ := l.trackList(b, "grid-template-columns", width,
+		trackRoom{size: width, definite: true, gap: columnGap})
+	if fit && len(items) < len(columns) {
+		// §7.2.3.2's "auto-fit": the tracks that no item landed in are
+		// collapsed, which for a grid whose items are dealt in order means the
+		// ones past the last item. A collapsed track has no size and no gap
+		// beside it, so dropping them is what collapsing comes to — and it is
+		// why "auto-fit" fills the row with three cards where "auto-fill"
+		// leaves room for the fourth.
+		// There is at least one item — a container with none returned above —
+		// so there is at least one column left standing.
+		columns = columns[:len(items)]
+	}
 	if len(columns) == 0 {
 		// §7.1: a container with no explicit columns still has one, because
 		// every item has to be somewhere. The implicit track is "auto", which
 		// is the same answer a single-column grid would have been given.
 		columns = []gridTrack{autoTrack()}
 	}
-	rows, _ := l.trackList(b, "grid-template-rows", width)
+	rows, _, _ := l.trackList(b, "grid-template-rows", width,
+		trackRoom{size: height, definite: definite, gap: rowGap})
 
 	// §8.5's automatic placement, which is the whole of it for a slice where no
 	// item names a line: one cell each, along the columns and then down.
@@ -197,7 +211,6 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 	}
 	l.deferred = l.deferred[:mark]
 
-	height, definite := l.explicitHeight(b, width, origin.cbHeight, origin.cbDefinite)
 	l.sizeRows(rows, items, height, definite, rowGap,
 		l.gridContentAlignment(b, "align-content"))
 
@@ -682,55 +695,171 @@ func (l *layouter) gridGap(b *Box, property string, width style.Unit) style.Unit
 // "none" and an empty declaration are no tracks at all, which is not a refusal:
 // a container with no explicit columns has one implicit column, and one with no
 // explicit rows has as many implicit rows as its items need.
-func (l *layouter) trackList(b *Box, property string, width style.Unit) ([]gridTrack, bool) {
+func (l *layouter) trackList(b *Box, property string, width style.Unit,
+	room trackRoom) (tracks []gridTrack, fit, ok bool) {
+
 	raw := strings.TrimSpace(b.Style[property])
 	if raw == "" || strings.EqualFold(raw, "none") {
-		return nil, true
+		return nil, false, true
 	}
 	vals, _ := css.ParseComponentValues(raw)
-	return l.tracksFrom(b, vals, width, true)
+	return l.tracksFrom(b, vals, width, room, true)
+}
+
+// trackRoom is what an automatic repetition is counted against: how much the
+// container has along the axis, whether that is a number at all, and the gap
+// that goes between one track and the next.
+//
+// Only "repeat(auto-fill, …)" reads it. Every other track list is the same list
+// however big the container is, which is why the rest of this file never asks.
+type trackRoom struct {
+	size     style.Unit
+	definite bool
+	gap      style.Unit
 }
 
 // tracksFrom turns a track list into tracks, or returns false for anything in
 // it this slice does not size: a named line, a minmax(), a subgrid, a repeat()
 // that is not a plain count.
 func (l *layouter) tracksFrom(b *Box, vals []css.ComponentValue, width style.Unit,
-	mayRepeat bool) ([]gridTrack, bool) {
+	room trackRoom, mayRepeat bool) (tracks []gridTrack, fit, ok bool) {
 
-	var out []gridTrack
+	// The list is read in two halves because an automatic repetition cannot be
+	// counted until everything else in the list has been: §7.2.3.2 fits as many
+	// as will go in what is *left*, so the tracks written beside it have to be
+	// sized first. before and after are the tracks either side of it, and one
+	// is what it repeats.
+	var before, after, one []gridTrack
+	auto := false
 	for _, part := range splitValuesOnWhitespace(vals) {
 		if len(part) != 1 {
-			return nil, false
+			return nil, false, false
 		}
 		v := part[0]
 		if v.IsFunction() && strings.EqualFold(v.Token.Value, "repeat") {
 			if !mayRepeat {
-				return nil, false
+				return nil, false, false
 			}
-			got, ok := l.repeatedTracks(b, v.Values, width)
+			got, kind, ok := l.repeatedTracks(b, v.Values, width, room)
 			if !ok {
-				return nil, false
+				return nil, false, false
 			}
-			out = append(out, got...)
+			if kind == repeatCounted {
+				if auto {
+					after = append(after, got...)
+					continue
+				}
+				before = append(before, got...)
+				continue
+			}
+			if auto {
+				// §7.2.3.2 allows one automatic repetition in a track list, and
+				// the reason is arithmetic rather than taste: two of them would
+				// each be counted against the room the other had not taken yet.
+				return nil, false, false
+			}
+			auto, one, fit = true, got, kind == repeatFit
 			continue
 		}
 		got, ok := l.trackFrom(b, v, width)
 		if !ok {
-			return nil, false
+			return nil, false, false
 		}
-		out = append(out, got)
+		if auto {
+			after = append(after, got)
+			continue
+		}
+		before = append(before, got)
 	}
-	return out, len(out) > 0
+	if !auto {
+		return before, false, len(before) > 0
+	}
+	out := append([]gridTrack(nil), before...)
+	for i, n := 0, l.autoRepetitions(one, before, after, room); i < n; i++ {
+		out = append(out, one...)
+	}
+	out = append(out, after...)
+	if len(out) > maxRepeatedTracks {
+		return nil, false, false
+	}
+	return out, fit, len(out) > 0
 }
 
-// repeatedTracks expands "repeat(<integer>, <track-list>)".
+// autoRepetitions is §7.2.3.2: how many times a "repeat(auto-fill, …)" goes
+// into what the container has left.
 //
-// The count is a plain number here and not "auto-fill" or "auto-fit", which ask
-// how many tracks the container has room for — a question that cannot be
-// answered until the tracks are sized, and answered here would be a second
-// sizing pass with its own rules.
+// The room it is counted against is the container's own size less the tracks
+// written beside it and all the gaps, and the size a track counts as is its
+// *maximum* where that is a length and its minimum otherwise — which is what
+// makes "repeat(auto-fill, minmax(200px, 1fr))" fit as many 200px columns as
+// there is room for rather than one column of everything.
+//
+// One is the answer wherever the question cannot be asked: a repeated list that
+// is all content-sized has nothing to divide by, and a container with no
+// definite size along the axis has nothing to divide — its room is nought,
+// which the arithmetic below reaches without a clause of its own. That is the
+// specification's own fallback and not a bail-out: the track list is still the
+// list, it is simply written once.
+func (l *layouter) autoRepetitions(one, before, after []gridTrack, room trackRoom) int {
+	each := style.Unit(0)
+	for _, t := range one {
+		size, ok := definiteTrackSize(t)
+		if !ok {
+			return 1
+		}
+		each = each.Add(size)
+	}
+	each = each.Add(room.gap.Mul(float64(len(one))))
+	if each <= 0 {
+		return 1
+	}
+	left := room.size.Add(room.gap)
+	for _, t := range append(append([]gridTrack(nil), before...), after...) {
+		size, _ := definiteTrackSize(t)
+		left = left.Sub(size).Sub(room.gap)
+	}
+	if left <= 0 {
+		return 1
+	}
+	n := int(left / each)
+	if n < 1 {
+		return 1
+	}
+	return n
+}
+
+// definiteTrackSize is what a track counts as while the repetitions are being
+// worked out: a length if either end is one, and nothing if neither is.
+func definiteTrackSize(t gridTrack) (style.Unit, bool) {
+	if t.max.kind == trackFixed {
+		return maxZero(t.max.size), true
+	}
+	if t.min.kind == trackFixed {
+		return maxZero(t.min.size), true
+	}
+	return 0, false
+}
+
+// repeatKind is which of repeat()'s two counts was written: a number, which is
+// a spelling of the list it holds, or "auto-fill", which is a question about
+// the container.
+type repeatKind uint8
+
+const (
+	repeatCounted repeatKind = iota
+	repeatFill
+	repeatFit
+)
+
+// repeatedTracks expands "repeat(<integer>, <track-list>)" and reads the count
+// of "repeat(auto-fill, <track-list>)" without expanding it — the caller does
+// that, once it knows what the rest of the list took.
+//
+// "auto-fit" is "auto-fill" with the empty tracks collapsed afterwards, and
+// collapsing is the caller's too: which tracks are empty is a question about
+// where the items landed, which is not known here.
 func (l *layouter) repeatedTracks(b *Box, args []css.ComponentValue,
-	width style.Unit) ([]gridTrack, bool) {
+	width style.Unit, room trackRoom) ([]gridTrack, repeatKind, bool) {
 
 	comma := -1
 	for i, v := range args {
@@ -740,31 +869,42 @@ func (l *layouter) repeatedTracks(b *Box, args []css.ComponentValue,
 		}
 	}
 	if comma < 0 {
-		return nil, false
+		return nil, repeatCounted, false
 	}
-	count := 0
-	for _, v := range splitValuesOnWhitespace(args[:comma]) {
-		if len(v) != 1 || !v[0].IsToken() || v[0].Token.Kind != css.Number ||
-			!v[0].Token.IsInteger || count != 0 {
-			return nil, false
-		}
-		count = int(v[0].Token.Number)
+	head := splitValuesOnWhitespace(args[:comma])
+	if len(head) != 1 || len(head[0]) != 1 || !head[0][0].IsToken() {
+		return nil, repeatCounted, false
 	}
-	if count <= 0 || count > maxRepeatedTracks {
-		return nil, false
-	}
-	one, ok := l.tracksFrom(b, args[comma+1:], width, false)
+	token := head[0][0].Token
+
+	one, _, ok := l.tracksFrom(b, args[comma+1:], width, room, false)
 	if !ok {
-		return nil, false
+		return nil, repeatCounted, false
+	}
+	if token.Kind == css.Ident {
+		switch strings.ToLower(token.Value) {
+		case "auto-fill":
+			return one, repeatFill, true
+		case "auto-fit":
+			return one, repeatFit, true
+		}
+		return nil, repeatCounted, false
+	}
+	if token.Kind != css.Number || !token.IsInteger {
+		return nil, repeatCounted, false
+	}
+	count := int(token.Number)
+	if count <= 0 || count > maxRepeatedTracks {
+		return nil, repeatCounted, false
 	}
 	var out []gridTrack
 	for i := 0; i < count; i++ {
 		out = append(out, one...)
 	}
 	if len(out) > maxRepeatedTracks {
-		return nil, false
+		return nil, repeatCounted, false
 	}
-	return out, true
+	return out, repeatCounted, true
 }
 
 // maxRepeatedTracks bounds what a repeat() may expand to. A document is
@@ -902,12 +1042,12 @@ func splitValuesOnWhitespace(vals []css.ComponentValue) [][]css.ComponentValue {
 // is the honest answer; a box arranged that should not have been is a page that
 // is quietly wrong.
 func (l *layouter) refusesToGrid(b *Box, width style.Unit) string {
-	if _, ok := l.trackList(b, "grid-template-columns", width); !ok {
+	if _, _, ok := l.trackList(b, "grid-template-columns", width, trackRoom{}); !ok {
 		return "its columns are written with something this engine does not " +
 			"size, such as a named line, a minmax() or a repeat() that counts " +
 			"how many will fit"
 	}
-	if _, ok := l.trackList(b, "grid-template-rows", width); !ok {
+	if _, _, ok := l.trackList(b, "grid-template-rows", width, trackRoom{}); !ok {
 		return "its rows are written with something this engine does not size, " +
 			"such as a named line, a minmax() or a repeat() that counts how " +
 			"many will fit"

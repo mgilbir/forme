@@ -461,7 +461,9 @@ func TestAGridContainerThisEngineCannotArrangeSaysSo(t *testing.T) {
 		{"a flexible minimum", `#g { grid-template-columns: minmax(1fr, 2fr) }`, "does not size"},
 		{"a minmax of one thing", `#g { grid-template-columns: minmax(100px) }`, "does not size"},
 		{"a fit-content", `#g { grid-template-columns: fit-content(100px) }`, "does not size"},
-		{"a repeat that counts", `#g { grid-template-columns: repeat(auto-fill, 1fr) }`, "does not size"},
+		{"two automatic repeats",
+			`#g { grid-template-columns: repeat(auto-fill, 50px) repeat(auto-fill, 50px) }`,
+			"does not size"},
 		{"a nested repeat", `#g { grid-template-columns: repeat(2, repeat(2, 1fr)) }`, "does not size"},
 		{"a named row", `#g { grid-template-rows: [top] 20px }`, "does not size"},
 		{"named areas", `#g { grid-template-areas: "a b" }`, "named by a template"},
@@ -831,4 +833,99 @@ func TestASingleTrackSizeIsBothEnds(t *testing.T) {
 	// A fixed track is its length at both ends whatever its content needs.
 	wantCells(t, gridCells(t, two, `#g { width: 300px; grid-template-columns: 20px 20px }`),
 		[][4]float64{{0, 0, 20, 40}, {20, 0, 20, 40}}, "two fixed columns narrower than their text")
+}
+
+// TestAutoFillPutsInAsManyTracksAsWillFit is §7.2.3.2: "repeat(auto-fill, …)"
+// is not a count but a question about the container, and the answer is the
+// largest number of repetitions that does not overflow it.
+//
+// It is the responsive layout the whole feature is written for — a row of cards
+// that becomes two rows on a narrower page — and the size each track counts as
+// is its *maximum* where that is a length and its minimum otherwise, which is
+// what makes "minmax(200px, 1fr)" fit as many 200px columns as there is room
+// for rather than one column of everything.
+func TestAutoFillPutsInAsManyTracksAsWillFit(t *testing.T) {
+	const three = `<div id="g"><div>a</div><div>b</div><div>c</div></div>`
+
+	// Three 100px columns go into 300px exactly.
+	wantCells(t, gridCells(t, three,
+		`#g { width: 300px; grid-template-columns: repeat(auto-fill, 100px) }`),
+		[][4]float64{{0, 0, 100, 20}, {100, 0, 100, 20}, {200, 0, 100, 20}},
+		"three columns that fit exactly")
+
+	// 140px is the minimum, so only two fit — and the two then take a half of
+	// the container each, because their maximum is a fraction. The third item
+	// starts a second row.
+	wantCells(t, gridCells(t, three,
+		`#g { width: 300px; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)) }`),
+		[][4]float64{{0, 0, 150, 20}, {150, 0, 150, 20}, {0, 20, 150, 20}},
+		"two columns and a second row")
+
+	// The gaps are counted with the tracks: 100px columns with 20px between
+	// them fit twice in 300px and not three times.
+	wantCells(t, gridCells(t, three,
+		`#g { width: 300px; column-gap: 20px; grid-template-columns: repeat(auto-fill, 100px) }`),
+		[][4]float64{{0, 0, 100, 20}, {120, 0, 100, 20}, {0, 20, 100, 20}},
+		"two columns and a gap")
+
+	// A track written beside the repetition takes its room first, and what is
+	// left is what the repetition is counted against: 200px of it, four times
+	// 50. Six items are enough to reach the end of the row and see that there
+	// are five columns and not six.
+	const six = `<div id="g"><div>a</div><div>b</div><div>c</div>` +
+		`<div>d</div><div>e</div><div>f</div></div>`
+	wantCells(t, gridCells(t, six,
+		`#g { width: 300px; grid-template-columns: 100px repeat(auto-fill, 50px) }`),
+		[][4]float64{
+			{0, 0, 100, 20}, {100, 0, 50, 20}, {150, 0, 50, 20},
+			{200, 0, 50, 20}, {250, 0, 50, 20}, {0, 20, 100, 20},
+		}, "a fixed column beside a repetition")
+
+	// The size a track counts as is its maximum where that is a length: two
+	// hundred goes into three hundred once, and the column then takes the whole
+	// container because a fraction is what it grows to.
+	wantCells(t, gridCells(t, three,
+		`#g { width: 300px; grid-template-columns: repeat(auto-fill, minmax(100px, 200px)) }`),
+		[][4]float64{{0, 0, 200, 20}, {0, 20, 200, 20}, {0, 40, 200, 20}},
+		"a repetition counted by its maximum")
+
+	// A repetition of something with no definite size cannot be counted, and
+	// §7.2.3.2's own answer is one — the track list is still the list, it is
+	// simply written once. The gap is there because without it the arithmetic
+	// would come to one anyway, and a rule that is only right when a second
+	// thing is absent has not been tested.
+	wantCells(t, gridCells(t, three,
+		`#g { width: 300px; column-gap: 20px; grid-template-columns: repeat(auto-fill, auto) }`),
+		[][4]float64{{0, 0, 300, 20}, {0, 20, 300, 20}, {0, 40, 300, 20}},
+		"a repetition with nothing to count")
+}
+
+// TestAutoFitCollapsesTheTracksNoItemLandedIn is the other half of §7.2.3.2,
+// and the difference between the two keywords is a difference an author sees at
+// once: "auto-fill" leaves the empty columns standing, so three cards in a row
+// with room for five stay a fifth of the way across; "auto-fit" collapses them,
+// and the three cards share the whole width.
+func TestAutoFitCollapsesTheTracksNoItemLandedIn(t *testing.T) {
+	const three = `<div id="g"><div>a</div><div>b</div><div>c</div></div>`
+
+	wantCells(t, gridCells(t, three,
+		`#g { width: 300px; grid-template-columns: repeat(auto-fill, minmax(60px, 1fr)) }`),
+		[][4]float64{{0, 0, 60, 20}, {60, 0, 60, 20}, {120, 0, 60, 20}},
+		"five columns with three items in them")
+
+	wantCells(t, gridCells(t, three,
+		`#g { width: 300px; grid-template-columns: repeat(auto-fit, minmax(60px, 1fr)) }`),
+		[][4]float64{{0, 0, 100, 20}, {100, 0, 100, 20}, {200, 0, 100, 20}},
+		"the same five with the empty ones collapsed")
+
+	// Nothing is collapsed where nothing is empty: six items in five columns
+	// fill them and start a second row.
+	const six = `<div id="g"><div>a</div><div>b</div><div>c</div>` +
+		`<div>d</div><div>e</div><div>f</div></div>`
+	wantCells(t, gridCells(t, six,
+		`#g { width: 300px; grid-template-columns: repeat(auto-fit, minmax(60px, 1fr)) }`),
+		[][4]float64{
+			{0, 0, 60, 20}, {60, 0, 60, 20}, {120, 0, 60, 20},
+			{180, 0, 60, 20}, {240, 0, 60, 20}, {0, 20, 60, 20},
+		}, "six items in five columns")
 }
