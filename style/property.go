@@ -331,7 +331,13 @@ var properties = map[string]property{
 	"column-count":    {false, "auto"},
 	"column-width":    {false, "auto"},
 	"column-gap":      {false, "normal"},
-	"column-fill":     {false, "balance"},
+	// row-gap is column-gap's other half, and which of the two a container
+	// reads is a question about its axis rather than about the property: items
+	// in a row are separated by a column gap and items in a column by a row
+	// gap. See layout/flex.go's flexAxis.gapName, which is the whole of the
+	// difference.
+	"row-gap":     {false, "normal"},
+	"column-fill": {false, "balance"},
 	// §6.3's column-span, which is read to be refused: an element spanning the
 	// columns divides the container into two of them with the element between,
 	// and that is a second container rather than a column. It has to be
@@ -500,6 +506,12 @@ var shorthands = map[string]shorthand{
 	"overflow":  boxShorthand("overflow-x", "overflow-y"),
 	"flex":      {flexShorthand, []string{"flex-grow", "flex-shrink", "flex-basis"}},
 	"flex-flow": {flexFlowShorthand, []string{"flex-direction", "flex-wrap"}},
+	// "gap" is Box Alignment §8.3, and it is the two-slot box shorthand: one
+	// value sets both gaps and two set them in the order row then column. The
+	// order is the specification's and is worth noticing — it is block axis
+	// first, like "margin", and not the inline-first order the property names
+	// suggest when read left to right.
+	"gap": boxShorthand("row-gap", "column-gap"),
 
 	// The shorthands whose parts are told apart by type rather than position.
 	// They live in shorthand.go, with the reset rule explained there.
