@@ -527,3 +527,110 @@ func TestTheLastItemLandsOnTheFarEdge(t *testing.T) {
 			got[3].x+got[3].w)
 	}
 }
+
+// TestAGapComesOutOfTheLineBeforeTheItemsDo is §8 of Box Alignment. The gaps are
+// not free space: they are taken off the main axis first, and what the items
+// then divide is what is left.
+//
+// Three 12px items in 300px with a 30px gap: 60px of gap, 240px of line, and the
+// items sit 12 and 30 apart instead of 12.
+func TestAGapComesOutOfTheLineBeforeTheItemsDo(t *testing.T) {
+	got := flexRow(t, threeItems, `#f { width: 300px; column-gap: 30px }`)
+	wantRow(t, got, [][2]float64{{0, 12}, {42, 12}, {84, 12}}, "three items 30px apart")
+
+	// The clause that makes this more than an offset: an item that grows
+	// divides the line and not the container, so the row still ends on the
+	// container's edge. 240px over three equal factors is 80 each.
+	got = flexRow(t, threeItems, `#f { width: 300px; column-gap: 30px } #f > div { flex: 1 }`)
+	wantRow(t, got, [][2]float64{{0, 80}, {110, 80}, {220, 80}}, "three growing items with a gap")
+	if len(got) == 3 && got[2].x+got[2].w != 300 {
+		t.Errorf("the row ends at %gpx and the container is 300px wide",
+			got[2].x+got[2].w)
+	}
+
+	// And shrinking gives back to the line, not to the gap. Two items asking
+	// for 200px each in 300px with a 20px gap have 280px to divide, so each
+	// gives up 60.
+	got = flexRow(t, `<div id="f"><div id="a">a</div><div id="b">b</div></div>`,
+		`#f { width: 300px; column-gap: 20px } #f > div { flex-basis: 200px }`)
+	wantRow(t, got, [][2]float64{{0, 140}, {160, 140}}, "two items shrinking around a gap")
+}
+
+// TestTheFreeSpaceThatIsPackedIsWhatTheGapsLeft. justify-content distributes
+// what is over after the gaps, and it adds its share on top of each gap rather
+// than instead of it.
+func TestTheFreeSpaceThatIsPackedIsWhatTheGapsLeft(t *testing.T) {
+	// 240px of line less 36px of items is 204px over, all of it before the
+	// first item — which is 60px nearer the start than it would be with no gap.
+	got := flexRow(t, threeItems,
+		`#f { width: 300px; column-gap: 30px; justify-content: flex-end }`)
+	wantRow(t, got, [][2]float64{{204, 12}, {246, 12}, {288, 12}}, "a gapped row packed at the end")
+
+	got = flexRow(t, threeItems,
+		`#f { width: 300px; column-gap: 30px; justify-content: center }`)
+	wantRow(t, got, [][2]float64{{102, 12}, {144, 12}, {186, 12}}, "a gapped row centred")
+
+	// space-between adds 102 to each 30px gap, and the ends stay put.
+	got = flexRow(t, threeItems,
+		`#f { width: 300px; column-gap: 30px; justify-content: space-between }`)
+	wantRow(t, got, [][2]float64{{0, 12}, {144, 12}, {288, 12}}, "a gapped row spread out")
+}
+
+// TestAGapWiderThanTheRowOverflowsIt. The gaps are taken first even when there
+// is not enough room for them, because they are not what gives way — the items
+// are, and these cannot shrink below their own text.
+func TestAGapWiderThanTheRowOverflowsIt(t *testing.T) {
+	got := flexRow(t, threeItems, `#f { width: 300px; column-gap: 200px }`)
+	wantRow(t, got, [][2]float64{{0, 12}, {212, 12}, {424, 12}}, "gaps wider than the row")
+}
+
+// TestWhatAGapIsWrittenAs. "normal" is the initial value and in a flex container
+// it is zero — the same keyword is one em in a multi-column container, which is
+// why the cascade keeps it as a keyword. A percentage is of the container, and a
+// negative length is not a gap at all.
+func TestWhatAGapIsWrittenAs(t *testing.T) {
+	none := [][2]float64{{0, 12}, {12, 12}, {24, 12}}
+	apart := [][2]float64{{0, 12}, {42, 12}, {84, 12}}
+	for _, c := range []struct {
+		value string
+		want  [][2]float64
+	}{
+		{"normal", none},
+		{"0", none},
+		{"-30px", none},
+		{"30px", apart},
+		{"10%", apart},
+		{"1.5em", apart},
+	} {
+		t.Run(c.value, func(t *testing.T) {
+			got := flexRow(t, threeItems, `#f { width: 300px; column-gap: `+c.value+` }`)
+			wantRow(t, got, c.want, "column-gap: "+c.value)
+		})
+	}
+}
+
+// TestTheGapShorthandIsNotApplied records the edge of what this does, because an
+// edge that is not written down is one that moves without anyone deciding to
+// move it.
+//
+// "gap" sets row-gap as well, and a row gap needs rows to separate: this engine
+// arranges one line of one row, and neither has a second row in it. So the
+// shorthand is not registered, an author who writes it is told the declaration
+// was not applied, and the day something here has rows — a column of items, or
+// a container whose lines wrap — the two arrive together.
+func TestTheGapShorthandIsNotApplied(t *testing.T) {
+	got := Compose(Input{HTML: threeItems, CSS: []Stylesheet{{
+		Source: flexCSS + `#f { width: 300px; gap: 30px }`}}}, Options{})
+	said := false
+	for _, f := range got.Findings {
+		if f.Property == "gap" || f.Property == "row-gap" {
+			said = true
+		}
+	}
+	if !said {
+		t.Errorf("nothing was reported about \"gap: 30px\", which is not applied: %v",
+			got.Findings)
+	}
+	wantRow(t, flexRow(t, threeItems, `#f { width: 300px; gap: 30px }`),
+		[][2]float64{{0, 12}, {12, 12}, {24, 12}}, "a row with an unapplied gap")
+}

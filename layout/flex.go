@@ -264,7 +264,15 @@ func (l *layouter) flexContent(b *Box, parent *Fragment, width style.Unit,
 	if len(items) == 0 {
 		return 0
 	}
-	l.resolveFlexibleLengths(items, width)
+
+	// §8 of Box Alignment: the gaps come out of the main axis before anything
+	// else does. They are not free space that an item could grow into and not
+	// space that shrinking gives back — a row of "flex: 1" items divides what is
+	// left after the gaps, which is why every number below is measured against
+	// the line and not against the container's own width.
+	gap := l.flexGap(b, width)
+	line := width.Sub(gap.Mul(float64(len(items) - 1)))
+	l.resolveFlexibleLengths(items, line)
 
 	// §9.4: each item laid out at the size it was given, which is what tells
 	// the line how tall it is.
@@ -302,7 +310,7 @@ func (l *layouter) flexContent(b *Box, parent *Fragment, width style.Unit,
 	for _, it := range items {
 		used = used.Add(it.outer(it.target))
 	}
-	justify, free := l.justifyOf(b), width.Sub(used)
+	justify, free := l.justifyOf(b), line.Sub(used)
 
 	x := style.Unit(0)
 	for i, it := range items {
@@ -310,9 +318,27 @@ func (l *layouter) flexContent(b *Box, parent *Fragment, width style.Unit,
 		it.frag.BorderRect.X = at.Add(it.margin.Left)
 		it.frag.BorderRect.Y = l.crossOffset(b, it, cross)
 		parent.Children = append(parent.Children, it.frag)
-		x = x.Add(it.outer(it.target))
+		x = x.Add(it.outer(it.target)).Add(gap)
 	}
 	return cross
+}
+
+// flexGap is the room §8 of Box Alignment leaves between one item and the next.
+//
+// column-gap's initial value is the keyword "normal", and what it computes to
+// depends on who is asking: one em in a multi-column container, and zero in a
+// flex one. That is why the cascade keeps the keyword rather than resolving it —
+// see the entry in style/property.go, and l.columnGap, which answers the same
+// question the other way for the same declaration.
+//
+// A negative gap is not a smaller one. The grammar does not allow it, so the
+// declaration is thrown out and the initial value stands, which is the answer
+// every other invalid length in this file gets.
+func (l *layouter) flexGap(b *Box, width style.Unit) style.Unit {
+	if v, ok := l.lengthOf(b, "column-gap", width); ok && v >= 0 {
+		return v
+	}
+	return 0
 }
 
 // flexJustify is §9.5's justify-content, and flexAlign is §9.6's align-items and
