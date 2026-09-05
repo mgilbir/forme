@@ -426,12 +426,8 @@ func (l *layouter) refusesToFlex(b *Box, containing style.Unit) string {
 		// not about.
 		return "its items are packed by a rule this engine does not apply"
 	}
-	switch trimmedLower(b.Style["align-items"]) {
-	case "", "normal", "stretch", "flex-start", "start", "self-start",
-		"flex-end", "end", "self-end", "center":
-	default:
-		return "its items are aligned across the line by a rule this engine " +
-			"does not apply, such as to a shared baseline"
+	if why := refusesAlignment(trimmedLower(b.Style["align-items"]), a); why != "" {
+		return "its items are " + why
 	}
 	items, outOfFlow := 0, false
 	for _, c := range b.Children {
@@ -452,12 +448,8 @@ func (l *layouter) refusesToFlex(b *Box, containing style.Unit) string {
 			continue
 		}
 		items++
-		switch trimmedLower(c.Style["align-self"]) {
-		case "", "auto", "normal", "stretch", "flex-start", "start", "self-start",
-			"flex-end", "end", "self-end", "center":
-		default:
-			return "one of its items is aligned across the line by a rule this " +
-				"engine does not apply, such as to a shared baseline"
+		if why := refusesAlignment(trimmedLower(c.Style["align-self"]), a); why != "" {
+			return "one of its items is " + why
 		}
 		if l.percentageMainSize(c, a) {
 			// A percentage of the container's own main size, which is what this
@@ -476,6 +468,43 @@ func (l *layouter) refusesToFlex(b *Box, containing style.Unit) string {
 	}
 	_ = containing
 	return ""
+}
+
+// refusesAlignment is why an item cannot be aligned across the line the way it
+// asked to be, or the empty string if it can.
+//
+// Two of §6.2's keywords are missing here and one of them only sometimes. "last
+// baseline" aligns the *bottom* line of an item's text, which is a second
+// baseline this engine does not find; the overflow keywords "safe" and "unsafe"
+// are a second answer to what happens when an item does not fit, and this file
+// has one already.
+//
+// "baseline" is refused across a reversed cross axis, and the reason is the
+// mirror in crossAt. Every other alignment here names an end, and a mirrored end
+// is the other end; a baseline is a line *inside* each item, at a different
+// depth in each, so mirroring moves every item by its own depth and the
+// baselines that met before it do not meet after. A column is refused for a
+// plainer reason: its cross axis is horizontal, and the baseline of a box across
+// its inline axis is not a thing this engine finds at all.
+func refusesAlignment(value string, a flexAxis) string {
+	switch value {
+	case "", "auto", "normal", "stretch", "flex-start", "start", "self-start",
+		"flex-end", "end", "self-end", "center":
+		return ""
+	case "baseline", "first baseline":
+		if a.column {
+			return "aligned to a shared baseline down a column, where a " +
+				"baseline runs across the axis they would be aligned on"
+		}
+		if a.crossReversed() {
+			return "aligned to a shared baseline on lines that stack from the " +
+				"far side, where mirroring the line would move each item by " +
+				"its own depth and part the baselines again"
+		}
+		return ""
+	}
+	return "aligned across the line by a rule this engine does not apply, " +
+		"such as to the last baseline of their text"
 }
 
 // autoMarginEdges is which of a box's margins were declared "auto": one per
@@ -676,7 +705,7 @@ func (l *layouter) flexContent(b *Box, parent *Fragment, width style.Unit,
 
 	crosses, cross := l.flexCrossSizes(b, a, lines, crossGap, width, origin)
 	for _, it := range items {
-		l.fillCrossAutoMargins(a, it, crosses[it.line])
+		l.fillCrossAutoMargins(a, it, crosses[it.line].size)
 	}
 
 	leadCross, betweenLines := l.alignContentSpacing(b, a, crosses, cross, crossGap)
@@ -713,7 +742,7 @@ func (l *layouter) flexContent(b *Box, parent *Fragment, width style.Unit,
 			if i+1 < len(items) {
 				stop = starts[i+1]
 			}
-			want := maxZero(crosses[it.line].Sub(it.crossMargin))
+			want := maxZero(crosses[it.line].size.Sub(it.crossMargin))
 			if l.alignOf(b, a, it) == crossStretch && l.stretchesAcross(a, it) &&
 				it.frag.BorderRect.H != want {
 				it.cross, it.hasCross = want, true
@@ -757,7 +786,7 @@ func (l *layouter) flexContent(b *Box, parent *Fragment, width style.Unit,
 			parent.Children = append(parent.Children, it.frag)
 			along = along.Add(it.outer(it.target)).Add(gap)
 		}
-		at = at.Add(crosses[n]).Add(crossGap).Add(betweenLines)
+		at = at.Add(crosses[n].size).Add(crossGap).Add(betweenLines)
 	}
 	if a.column {
 		// The height the container came to is the main size its items divided.
@@ -827,22 +856,38 @@ func flexLines(items []*flexItem, main, gap style.Unit, wraps bool) [][]*flexIte
 // not: it is the wrapping that decides this and not how many lines came of it,
 // because align-content has the leftover to place either way.
 func (l *layouter) flexCrossSizes(b *Box, a flexAxis, lines [][]*flexItem,
-	crossGap, width style.Unit, origin flow) (crosses []style.Unit, cross style.Unit) {
+	crossGap, width style.Unit, origin flow) (crosses []lineCross, cross style.Unit) {
 
 	container, definite := width, true
 	if !a.column {
 		container, definite = l.explicitHeight(b, width, origin.cbHeight, origin.cbDefinite)
 	}
-	crosses = make([]style.Unit, len(lines))
+	crosses = make([]lineCross, len(lines))
 	for i, ln := range lines {
+		// The items aligned to a shared baseline are measured in two halves —
+		// what is above that baseline and what is below — because the line has
+		// to hold the deepest of each, and the two need not come from the same
+		// item. The rest are measured whole, as they are aligned whole.
+		var above, below style.Unit
 		for _, it := range ln {
-			if c := it.outerCross(a.crossOf(it.frag.BorderRect)); c > crosses[i] {
-				crosses[i] = c
+			outer := it.outerCross(a.crossOf(it.frag.BorderRect))
+			if l.alignOf(b, a, it) != crossBaseline {
+				if outer > crosses[i].size {
+					crosses[i].size = outer
+				}
+				continue
 			}
+			base := baselineOf(a, it)
+			above = max(above, base)
+			below = max(below, outer.Sub(base))
+		}
+		crosses[i].above = above
+		if sum := above.Add(below); sum > crosses[i].size {
+			crosses[i].size = sum
 		}
 	}
 	if !l.wraps(b) && definite {
-		crosses[0] = container
+		crosses[0].size = container
 	}
 	if definite {
 		return crosses, container
@@ -851,9 +896,29 @@ func (l *layouter) flexCrossSizes(b *Box, a flexAxis, lines [][]*flexItem,
 		if i > 0 {
 			cross = cross.Add(crossGap)
 		}
-		cross = cross.Add(c)
+		cross = cross.Add(c.size)
 	}
 	return crosses, cross
+}
+
+// lineCross is what a line came to across the axis: how far it reaches, and how
+// far into it sits the baseline the items that asked for one share.
+type lineCross struct{ size, above style.Unit }
+
+// baselineOf is how far the item's first baseline is from the start of its
+// margin box, across the line.
+//
+// §9.4.8's fallback for an item that has no baseline — an empty box, a picture,
+// anything with no text on a line — is to make one from its border box, and the
+// edge it makes it from is the end: a box with nothing in it sits on the
+// baseline rather than straddling it, which is what an inline-block with no
+// content does in a line of text and is the same rule.
+func baselineOf(a flexAxis, it *flexItem) style.Unit {
+	start := a.crossStart(it.margin)
+	if v, ok := firstBaseline(it.frag); ok {
+		return start.Add(v)
+	}
+	return start.Add(a.crossOf(it.frag.BorderRect))
 }
 
 // alignContentSpacing is §9.6's align-content: where the lines sit in a cross
@@ -874,12 +939,12 @@ func (l *layouter) flexCrossSizes(b *Box, a flexAxis, lines [][]*flexItem,
 // where the keyword says, using the same arithmetic as justify-content on the
 // other axis — they are one property in Box Alignment and it is one function
 // here.
-func (l *layouter) alignContentSpacing(b *Box, a flexAxis, crosses []style.Unit,
+func (l *layouter) alignContentSpacing(b *Box, a flexAxis, crosses []lineCross,
 	cross, crossGap style.Unit) (lead, between style.Unit) {
 
 	used := crossGap.Mul(float64(len(crosses) - 1))
 	for _, c := range crosses {
-		used = used.Add(c)
+		used = used.Add(c.size)
 	}
 	free := cross.Sub(used)
 	switch trimmedLower(b.Style["align-content"]) {
@@ -889,7 +954,7 @@ func (l *layouter) alignContentSpacing(b *Box, a flexAxis, crosses []style.Unit,
 		}
 		share := free.Div(float64(len(crosses)))
 		for i := range crosses {
-			crosses[i] = crosses[i].Add(share)
+			crosses[i].size = crosses[i].size.Add(share)
 		}
 		return 0, 0
 	}
@@ -1008,6 +1073,7 @@ const (
 	crossStart
 	crossEnd
 	crossCenter
+	crossBaseline
 )
 
 // justifyOf reads justify-content, whose initial value "normal" behaves as
@@ -1099,6 +1165,8 @@ func crossAlignment(value string, a flexAxis) flexAlign {
 		return crossEnd
 	case "center":
 		return crossCenter
+	case "baseline", "first baseline":
+		return crossBaseline
 	case "start", "self-start":
 		if a.wrapReverse {
 			return crossEnd
@@ -1172,13 +1240,20 @@ func justifyOffset(justify flexJustify, free style.Unit, n, i int) style.Unit {
 // flex-end and off both ends under center, which is what an alignment that is
 // not "safe" means: it keeps the relationship it names and lets the overflow
 // fall where the arithmetic puts it.
-func (l *layouter) crossOffset(b *Box, a flexAxis, it *flexItem, cross style.Unit) style.Unit {
-	left := cross.Sub(it.outerCross(a.crossOf(it.frag.BorderRect)))
+func (l *layouter) crossOffset(b *Box, a flexAxis, it *flexItem, line lineCross) style.Unit {
+	left := line.size.Sub(it.outerCross(a.crossOf(it.frag.BorderRect)))
 	switch l.alignOf(b, a, it) {
 	case crossEnd:
 		return left
 	case crossCenter:
 		return left.Div(2)
+	case crossBaseline:
+		// The item is moved down by as much as the deepest item's baseline is
+		// deeper than its own, which is what puts the two on the same line. An
+		// item that *is* the deepest does not move at all, so the group sits
+		// against the start of the line rather than floating in the middle of
+		// it — which is §9.4.8's other half and falls out of the arithmetic.
+		return line.above.Sub(baselineOf(a, it))
 	}
 	return 0
 }
