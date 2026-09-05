@@ -20,10 +20,10 @@ import (
 //
 // # What is laid out here, and what is refused
 //
-// One line, running left to right, with every alignment property at its initial
-// value. That is "display: flex" and nothing else written down, which is what
-// the overwhelming majority of flex containers in real documents are — and it
-// is the slice whose arithmetic can be stated exactly.
+// One line, running left to right, its items packed and aligned by any of the
+// keywords that name a position on an axis. That is "display: flex" and the
+// handful of declarations that go with it in most real documents — and it is the
+// slice whose arithmetic can be stated exactly.
 //
 // Everything else is refused with a finding and laid out as it was before this
 // file existed, which is as an ordinary block. The gate is the same shape as
@@ -134,20 +134,36 @@ func (l *layouter) refusesToFlex(b *Box, containing style.Unit) string {
 	default:
 		return "its main axis is not a left-to-right row"
 	}
+	if isRTL(b) {
+		// Every offset below is measured from the left edge because in a
+		// left-to-right row that is where the main axis starts. Under "rtl" it
+		// starts at the right, so packing at the start, the meaning of "left"
+		// and "right", and the order the items are placed in all reverse
+		// together — one axis abstraction, not one condition.
+		return "its main axis runs from the right, which reverses every " +
+			"position on it"
+	}
 	switch trimmedLower(b.Style["flex-wrap"]) {
 	case "", "nowrap":
 	default:
 		return "its items wrap onto more than one line"
 	}
 	switch trimmedLower(b.Style["justify-content"]) {
-	case "", "normal", "flex-start", "start", "left":
+	case "", "normal", "flex-start", "start", "left", "flex-end", "end", "right",
+		"center", "space-between", "space-around", "space-evenly":
 	default:
-		return "its items are not packed at the start of the line"
+		// The two this does not do are §6.2's overflow alignment — "safe" and
+		// "unsafe" — which are a second answer to what happens when the line is
+		// over-full, and the baseline set, which aligns along an axis this is
+		// not about.
+		return "its items are packed by a rule this engine does not apply"
 	}
 	switch trimmedLower(b.Style["align-items"]) {
-	case "", "normal", "stretch":
+	case "", "normal", "stretch", "flex-start", "start", "self-start",
+		"flex-end", "end", "self-end", "center":
 	default:
-		return "its items are not stretched across the line"
+		return "its items are aligned across the line by a rule this engine " +
+			"does not apply, such as to a shared baseline"
 	}
 	items, outOfFlow := 0, false
 	for _, c := range b.Children {
@@ -175,19 +191,23 @@ func (l *layouter) refusesToFlex(b *Box, containing style.Unit) string {
 		}
 		items++
 		switch trimmedLower(c.Style["align-self"]) {
-		case "", "auto", "normal", "stretch":
+		case "", "auto", "normal", "stretch", "flex-start", "start", "self-start",
+			"flex-end", "end", "self-end", "center":
 		default:
-			return "one of its items is aligned across the line by itself"
+			return "one of its items is aligned across the line by a rule this " +
+				"engine does not apply, such as to a shared baseline"
 		}
 		if v, ok := parseNumber(trimmedLower(c.Style["order"])); ok && v != 0 {
 			return "one of its items asks to be moved in the order"
 		}
 		if hasAutoMargin(c) {
-			// §9.5 gives an auto margin the free space before justify-content
-			// sees any of it, which is a second way of distributing the same
-			// budget and is not this one.
+			// §9.5 gives an auto main-axis margin the free space before
+			// justify-content sees any of it, and §9.6 gives an auto cross-axis
+			// one the room left across the line before align-self does. Both are
+			// a second way of distributing the same budget, and both would have
+			// to be settled before the alignment below is even asked.
 			return "one of its items has an automatic margin, which takes the " +
-				"free space before the items do"
+				"free space before the alignment does"
 		}
 		if l.percentageMainSize(c) {
 			// A percentage of the container's own main size, which is what this
@@ -208,11 +228,14 @@ func (l *layouter) refusesToFlex(b *Box, containing style.Unit) string {
 	return ""
 }
 
-// hasAutoMargin reports whether a box declares an automatic margin on the main
-// axis.
+// hasAutoMargin reports whether a box declares an automatic margin on either
+// axis. Both axes distribute free space to one before the alignment properties
+// see it; see the clause in refusesToFlex that refuses them.
 func hasAutoMargin(b *Box) bool {
 	return trimmedLower(b.Style["margin-left"]) == "auto" ||
-		trimmedLower(b.Style["margin-right"]) == "auto"
+		trimmedLower(b.Style["margin-right"]) == "auto" ||
+		trimmedLower(b.Style["margin-top"]) == "auto" ||
+		trimmedLower(b.Style["margin-bottom"]) == "auto"
 }
 
 // percentageMainSize reports whether a box's own main-axis size is a percentage.
@@ -261,41 +284,180 @@ func (l *layouter) flexContent(b *Box, parent *Fragment, width style.Unit,
 		cross = h
 	}
 
-	// §9.6's stretch, which is what "align-items: normal" comes to in a flex
-	// container. An item that states its own height keeps it; one that does not
-	// is laid out again at the line's height, because a box's height changes
-	// where its content sits inside it and cannot be applied afterwards.
+	// §9.6's stretch, which is what "align-items: normal" comes to. An item that
+	// states its own height keeps it; one that does not is laid out again at the
+	// line's height, because a box's height changes where its content sits
+	// inside it and cannot be applied afterwards.
 	for _, it := range items {
 		want := maxZero(cross.Sub(it.margin.Vertical()))
-		if l.stretchesAcross(it) && it.frag.BorderRect.H != want {
+		if l.alignOf(b, it) == crossStretch && l.stretchesAcross(it) &&
+			it.frag.BorderRect.H != want {
 			it.frag = l.layOutFlexItem(b, it, width, origin, want, true)
 		}
 	}
 
-	// §9.5's main-axis placement, packed at the start of the line, and §9.6's
-	// cross-axis placement, which for a stretched item is the line's top.
-	x := style.Unit(0)
+	// §9.5's main-axis placement and §9.6's cross-axis placement, in that order
+	// because the first needs the free space and the second needs the line.
+	used := style.Unit(0)
 	for _, it := range items {
-		it.frag.BorderRect.X = x.Add(it.margin.Left)
-		it.frag.BorderRect.Y = it.margin.Top
+		used = used.Add(it.outer(it.target))
+	}
+	justify, free := l.justifyOf(b), width.Sub(used)
+
+	x := style.Unit(0)
+	for i, it := range items {
+		at := x.Add(justifyOffset(justify, free, len(items), i))
+		it.frag.BorderRect.X = at.Add(it.margin.Left)
+		it.frag.BorderRect.Y = l.crossOffset(b, it, cross)
 		parent.Children = append(parent.Children, it.frag)
 		x = x.Add(it.outer(it.target))
 	}
 	return cross
 }
 
+// flexJustify is §9.5's justify-content, and flexAlign is §9.6's align-items and
+// align-self, which take the same values as each other on one axis each.
+type flexJustify uint8
+
+const (
+	justifyStart flexJustify = iota
+	justifyEnd
+	justifyCenter
+	justifyBetween
+	justifyAround
+	justifyEvenly
+)
+
+type flexAlign uint8
+
+const (
+	crossStretch flexAlign = iota
+	crossStart
+	crossEnd
+	crossCenter
+)
+
+// justifyOf reads justify-content, whose initial value "normal" behaves as
+// flex-start in a flex container. "left" and "right" are the physical pair, and
+// in a left-to-right row they are the same two ends.
+func (l *layouter) justifyOf(b *Box) flexJustify {
+	switch trimmedLower(b.Style["justify-content"]) {
+	case "flex-end", "end", "right":
+		return justifyEnd
+	case "center":
+		return justifyCenter
+	case "space-between":
+		return justifyBetween
+	case "space-around":
+		return justifyAround
+	case "space-evenly":
+		return justifyEvenly
+	}
+	return justifyStart
+}
+
+// alignOf is an item's cross-axis alignment: its own align-self where it states
+// one, and the container's align-items where it does not.
+//
+// §6.2's "auto" on align-self means "whatever the container says", and "normal"
+// on either means stretch in a flex container. The two keywords arrive at the
+// same behaviour by different routes and both are kept as themselves in the
+// computed value, which is why this is a lookup and not a comparison against a
+// resolved string.
+func (l *layouter) alignOf(b *Box, it *flexItem) flexAlign {
+	self := trimmedLower(it.box.Style["align-self"])
+	if self == "" || self == "auto" {
+		self = trimmedLower(b.Style["align-items"])
+	}
+	switch self {
+	case "flex-start", "start", "self-start":
+		return crossStart
+	case "flex-end", "end", "self-end":
+		return crossEnd
+	case "center":
+		return crossCenter
+	}
+	return crossStretch
+}
+
+// justifyOffset is §9.5's distribution: how far past its packed position the
+// item at index i begins, out of n on a line with this much space left over.
+//
+// Each answer is a fraction of the whole free space rather than a gap added once
+// per item, because a gap has to be rounded to a layout unit and adding a
+// rounded gap n times puts the last item up to n half-units short of where the
+// arithmetic says it goes. Taking the fraction each time bounds the error at
+// half a unit no matter how many items there are.
+//
+// The fallbacks for an over-full line are §4.4 of Box Alignment, not a
+// convenience: with nothing to distribute, space-between would want a negative
+// gap and pull the items back over each other, so it packs at the start, and the
+// two that fill the ends centre instead. The ones that were already packing —
+// end and centre — keep their arithmetic, and overflow the near edge as much as
+// the far one, which is what an unsafe alignment means.
+func justifyOffset(justify flexJustify, free style.Unit, n, i int) style.Unit {
+	if free < 0 {
+		switch justify {
+		case justifyBetween:
+			return 0
+		case justifyAround, justifyEvenly:
+			justify = justifyCenter
+		}
+	}
+	switch justify {
+	case justifyEnd:
+		return free
+	case justifyCenter:
+		return free.Div(2)
+	case justifyBetween:
+		// A single item has no pair to sit between and stays at the start,
+		// which is what one interval over a zero-length row of gaps comes to.
+		// The denominator is floored rather than special-cased because the
+		// special case would be a branch no document can reach: with one item
+		// the only index is zero, and zero of anything is zero.
+		return free.Mul(float64(i) / float64(max(n-1, 1)))
+	case justifyAround:
+		// Half a share before the first and after the last, a whole one between
+		// each pair, which is the same as i+½ shares of the n the line is cut
+		// into.
+		return free.Mul((float64(i) + 0.5) / float64(n))
+	case justifyEvenly:
+		return free.Mul(float64(i+1) / float64(n+1))
+	}
+	return 0
+}
+
+// crossOffset is where an item's border box sits across the line.
+//
+// A stretched item is at the top for the same reason a start-aligned one is:
+// stretching has already given it the line's height, so there is nowhere else
+// for it to be. The other two measure back from the line's far edge, which is
+// what makes them right whether the line is this item's height or taller.
+//
+// The room left over is not floored at zero. An item taller than its line — the
+// container stated a height and an item overran it — hangs off the top under
+// flex-end and off both edges under center, which is what an alignment that is
+// not "safe" means: it keeps the relationship it names and lets the overflow
+// fall where the arithmetic puts it.
+func (l *layouter) crossOffset(b *Box, it *flexItem, cross style.Unit) style.Unit {
+	left := cross.Sub(it.frag.BorderRect.H.Add(it.margin.Vertical()))
+	switch l.alignOf(b, it) {
+	case crossEnd:
+		return left.Add(it.margin.Top)
+	case crossCenter:
+		return left.Div(2).Add(it.margin.Top)
+	}
+	return it.margin.Top
+}
+
 // stretchesAcross reports whether an item is stretched to the line's height.
 //
-// §9.6: an item whose cross size is auto and whose cross-axis margins are not
-// auto is stretched. The gate has already refused every align-self this does
-// not answer, so what is left to ask is whether the item stated a height of its
-// own — a box that did is the height it asked for, and stretching it would be
-// overruling the declaration.
+// §9.6: an item whose cross size is auto is stretched. Its caller has already
+// asked whether the alignment is a stretch at all, and the gate has refused the
+// auto cross-axis margins that would take the room first, so what is left to ask
+// is whether the item stated a height of its own — a box that did is the height
+// it asked for, and stretching it would be overruling the declaration.
 func (l *layouter) stretchesAcross(it *flexItem) bool {
-	if trimmedLower(it.box.Style["margin-top"]) == "auto" ||
-		trimmedLower(it.box.Style["margin-bottom"]) == "auto" {
-		return false
-	}
 	return l.isAuto(it.box, "height") || trimmedLower(it.box.Style["height"]) == ""
 }
 
