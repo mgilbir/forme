@@ -215,7 +215,6 @@ func TestAContainerThisEngineCannotArrangeIsLaidOutAsABlockAndSaysSo(t *testing.
 		{"a safe alignment", `#f { justify-content: safe center }`, "packed by a rule"},
 		{"items on a baseline", `#f { align-items: baseline }`, "shared baseline"},
 		{"an item on the baseline", `#f > div:first-child { align-self: baseline }`, "shared baseline"},
-		{"a reordered item", `#f > div:first-child { order: 2 }`, "moved in the order"},
 		{"a percentage item", `#f > div:first-child { width: 50% }`, "percentage of the row"},
 		{"a floated child", `#f > div:first-child { float: left }`, "floated or absolutely"},
 	} {
@@ -263,6 +262,7 @@ func TestAnArrangedContainerSaysNothing(t *testing.T) {
 		`#f { width: 300px } #f > div { align-self: auto; order: 0 }`,
 		`#f { width: 300px } #f > div:first-child { align-self: flex-start }`,
 		`#f { width: 300px } #f > div:first-child { margin-left: auto }`,
+		`#f { width: 300px } #f > div:first-child { order: 2 }`,
 		`#f { width: 300px; flex-wrap: wrap }`,
 		`#f { width: 300px; height: 100px; flex-wrap: wrap; align-content: space-around }`,
 	} {
@@ -1307,4 +1307,127 @@ func TestAnAutomaticMarginKnowsWhichAxisItIsOn(t *testing.T) {
 	wantRow(t, flexRow(t, twoHeights,
 		`#f { width: 300px; flex-direction: column } #a { margin-left: auto }`),
 		[][2]float64{{288, 12}, {0, 300}}, "a cross-axis margin in a column")
+}
+
+// TestOrderMovesAnItemAmongItsSiblings is §5.4. The property changes where an
+// item sits and nothing else about it: its size, its alignment and its own
+// content are what they were, and the document it came from is unchanged.
+//
+// The three items are 12, 24 and 36 wide, so each row below can be read back as
+// a picture: the widths say which box is which, and the order they are listed in
+// is the order the container holds them — which is the order they were laid out
+// in, and the order they will be painted in.
+func TestOrderMovesAnItemAmongItsSiblings(t *testing.T) {
+	const named = `<div id="f"><div id="a">a</div><div id="b">bb</div><div id="c">ccc</div></div>`
+
+	// Untouched: 12, 24 and 36 of Courier, in the order they were written.
+	wantRow(t, flexRow(t, named, `#f { width: 300px }`),
+		[][2]float64{{0, 12}, {12, 24}, {36, 36}}, "three items in document order")
+
+	// The first item asked to come last, so it is laid out last: b and c move
+	// up and a starts where the other two end.
+	wantRow(t, flexRow(t, named, `#f { width: 300px } #a { order: 2 }`),
+		[][2]float64{{0, 24}, {24, 36}, {60, 12}}, "the first item sent to the end")
+
+	// A negative order brings an item forward, which is the only way to get in
+	// front of a sibling that named nothing: the initial value is zero.
+	wantRow(t, flexRow(t, named, `#f { width: 300px } #c { order: -1 }`),
+		[][2]float64{{0, 36}, {36, 12}, {48, 24}}, "the last item brought to the front")
+}
+
+// TestItemsThatNameTheSameOrderKeepTheirOwn. The sort is stable, and that is
+// the specification's requirement rather than an artefact: "order-modified
+// document order" is document order for every pair that named the same value,
+// which is what makes the property usable at all — an author who moves one item
+// has not shuffled the rest.
+func TestItemsThatNameTheSameOrderKeepTheirOwn(t *testing.T) {
+	const named = `<div id="f"><div id="a">a</div><div id="b">bb</div><div id="c">ccc</div></div>`
+
+	wantRow(t, flexRow(t, named, `#f { width: 300px } #a { order: 1 } #b { order: 1 }`),
+		[][2]float64{{0, 36}, {36, 12}, {48, 24}}, "two items with the same order")
+
+	// And a value that is not an integer is not a value: the declaration is
+	// thrown out and the item keeps the initial zero, rather than being rounded
+	// to a number nobody wrote.
+	wantRow(t, flexRow(t, named, `#f { width: 300px } #a { order: 2.5 }`),
+		[][2]float64{{0, 12}, {12, 24}, {36, 36}}, "an order with a fraction in it")
+}
+
+// flexIDs is which items the container holds, named, in the order it holds
+// them — which is the order they were laid out in and the order they will be
+// painted in.
+func flexIDs(t *testing.T, htmlSrc, extra string) []string {
+	t.Helper()
+	root := layoutOf(t, 1000, htmlSrc, flexCSS+extra)
+	var out []string
+	var walk func(*Fragment)
+	walk = func(f *Fragment) {
+		if f == nil {
+			return
+		}
+		if f.Box != nil && f.Box.Element != nil {
+			if id, _ := f.Box.Element.Attr("id"); id == "f" {
+				for _, c := range f.Children {
+					id := ""
+					if c.Box != nil && c.Box.Element != nil {
+						id, _ = c.Box.Element.Attr("id")
+					}
+					out = append(out, id)
+				}
+				return
+			}
+		}
+		for _, c := range f.Children {
+			walk(c)
+		}
+	}
+	walk(root)
+	return out
+}
+
+// TestAReorderedItemIsPaintedInTheOrderItIsLaidOut. §5.4 says the property
+// affects painting as well as placement — the items are painted in
+// order-modified document order — and here that is not a second mechanism but
+// the same one: the fragments are made in the order they are laid out, and the
+// painter walks them in the order they were made.
+func TestAReorderedItemIsPaintedInTheOrderItIsLaidOut(t *testing.T) {
+	got := flexIDs(t, `<div id="f"><div id="a">a</div><div id="b">b</div></div>`,
+		`#f { width: 300px } #a { order: 1 }`)
+	if len(got) != 2 || got[0] != "b" || got[1] != "a" {
+		t.Errorf("the container's children are %v, and the item that asked to "+
+			"come last is painted last", got)
+	}
+}
+
+// TestTheOrderOfEqualItemsSurvivesAWholeContainerOfThem is the stability of the
+// sort, at a size where it can be seen.
+//
+// A sort that is not stable will still put three items in the right order —
+// small runs come out of any reasonable algorithm in the order they went in, so
+// a test with three items proves nothing about the property. Fourteen is past
+// the point where the sort stops being an insertion sort, and an unstable one
+// shuffles the items that named the same value into an order nobody wrote.
+func TestTheOrderOfEqualItemsSurvivesAWholeContainerOfThem(t *testing.T) {
+	doc, css := `<div id="f">`, `#f { width: 1000px }`
+	var want []string
+	for i := 0; i < 14; i++ {
+		name := string(rune('a' + i))
+		doc += `<div id="` + name + `">x</div>`
+		if i%2 == 0 {
+			css += `#` + name + ` { order: 1 }`
+		}
+	}
+	doc += `</div>`
+	for i := 1; i < 14; i += 2 {
+		want = append(want, string(rune('a'+i)))
+	}
+	for i := 0; i < 14; i += 2 {
+		want = append(want, string(rune('a'+i)))
+	}
+
+	got := flexIDs(t, doc, css)
+	if strings.Join(got, "") != strings.Join(want, "") {
+		t.Errorf("the container holds %v, want %v — seven items named the same "+
+			"order and the document put them in that one", got, want)
+	}
 }
