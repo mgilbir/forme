@@ -207,12 +207,10 @@ func TestItemsAreStretchedAcrossTheLine(t *testing.T) {
 // plausible wrongness the finding exists for.
 func TestAContainerThisEngineCannotArrangeIsLaidOutAsABlockAndSaysSo(t *testing.T) {
 	for _, c := range []struct{ what, css, names string }{
-		{"a reversed row", `#f { flex-direction: row-reverse }`, "backwards along their axis"},
-		{"a reversed column", `#f { flex-direction: column-reverse }`, "backwards along their axis"},
-		{"a right-to-left row", `#f { direction: rtl }`, "runs from the right"},
-		{"a right-to-left column", `#f { direction: rtl; flex-direction: column }`, "runs from the right"},
-		{"lines stacked backwards", `#f { flex-wrap: wrap-reverse }`, "from the far side"},
 		{"a wrapping column", `#f { flex-wrap: wrap; flex-direction: column }`, "wrap into columns"},
+		{"a column wrapping backwards", `#f { flex-wrap: wrap-reverse; flex-direction: column }`, "wrap into columns"},
+		{"an axis with no name", `#f { flex-direction: sideways }`, "four flex-direction names"},
+		{"lines that wrap some other way", `#f { flex-wrap: reverse }`, "wrap by a rule"},
 		{"lines on a baseline", `#f { flex-wrap: wrap; align-content: baseline }`, "placed by a rule"},
 		{"a safe alignment", `#f { justify-content: safe center }`, "packed by a rule"},
 		{"items on a baseline", `#f { align-items: baseline }`, "shared baseline"},
@@ -1052,4 +1050,150 @@ func TestAlignContentSaysNothingToAContainerThatDoesNotWrap(t *testing.T) {
 	// 20px of content — and the leftover is align-content's to place.
 	wantCross(t, flexCross(t, two, sized+`#f { flex-wrap: wrap }`),
 		[][2]float64{{40, 20}, {40, 20}}, "a container that wraps and did not need to")
+}
+
+// TestAReversedAxisRunsFromTheOtherEnd. flex-direction's two reversed values and
+// "direction: rtl" all say the same thing — the axis starts at the far end — and
+// they compose rather than override, so a right-to-left row-reverse runs left to
+// right again.
+//
+// The items keep their order in the document and are laid out along the axis;
+// what changes is which end that is. Reading the numbers back in the tree order,
+// a reversed row's first item has the largest position.
+func TestAReversedAxisRunsFromTheOtherEnd(t *testing.T) {
+	back := [][2]float64{{288, 12}, {276, 12}, {264, 12}}
+	forth := [][2]float64{{0, 12}, {12, 12}, {24, 12}}
+	for _, c := range []struct {
+		what string
+		css  string
+		want [][2]float64
+	}{
+		{"a row", ``, forth},
+		{"a reversed row", `#f { flex-direction: row-reverse }`, back},
+		{"a right-to-left row", `#f { direction: rtl }`, back},
+		{"both at once", `#f { direction: rtl; flex-direction: row-reverse }`, forth},
+	} {
+		t.Run(c.what, func(t *testing.T) {
+			wantRow(t, flexRow(t, threeItems, `#f { width: 300px }`+c.css), c.want, c.what)
+		})
+	}
+
+	// The gaps go with it: 30px between each pair, measured from the right.
+	wantRow(t, flexRow(t, threeItems,
+		`#f { width: 300px; flex-direction: row-reverse; column-gap: 30px }`),
+		[][2]float64{{288, 12}, {246, 12}, {204, 12}}, "a reversed row with a gap")
+
+	// And a column-reverse stacks upwards: the 20px item ends up below the 40px
+	// one, at the bottom of the 60px the two came to.
+	wantCross(t, flexCross(t, twoHeights, `#f { width: 300px; flex-direction: column-reverse }`),
+		[][2]float64{{40, 20}, {0, 40}}, "a reversed column")
+}
+
+// TestWhichEndAnAlignmentKeywordNames is the part of §6.2 that only shows up
+// once an axis runs backwards: three families of keyword name the same two ends
+// by different routes, and they part company there.
+//
+// "flex-start" is the end the items are laid out from, whichever end that is.
+// "start" is the writing mode's, which flex-direction can turn away from but
+// "rtl" cannot — because "rtl" moves the writing mode and the axis together.
+// "left" is the page's own and answers to both at once.
+func TestWhichEndAnAlignmentKeywordNames(t *testing.T) {
+	// Read these as pictures: "packed left" is the three characters against the
+	// left edge, whatever order they are in.
+	left := [][2]float64{{24, 12}, {12, 12}, {0, 12}}
+	right := [][2]float64{{288, 12}, {276, 12}, {264, 12}}
+	for _, c := range []struct {
+		what, css string
+		want      [][2]float64
+	}{
+		{"flex-start in a reversed row is the right",
+			`#f { flex-direction: row-reverse; justify-content: flex-start }`, right},
+		{"flex-end in a reversed row is the left",
+			`#f { flex-direction: row-reverse; justify-content: flex-end }`, left},
+		{"start in a reversed row is still the inline start",
+			`#f { flex-direction: row-reverse; justify-content: start }`, left},
+		{"start in a right-to-left row moves with the writing mode",
+			`#f { direction: rtl; justify-content: start }`, right},
+		{"left is the left of the page in a reversed row",
+			`#f { flex-direction: row-reverse; justify-content: left }`, left},
+		{"left is the left of the page in a right-to-left row",
+			`#f { direction: rtl; justify-content: left }`, left},
+		{"right is the right of the page in a right-to-left row",
+			`#f { direction: rtl; justify-content: right }`, right},
+	} {
+		t.Run(c.what, func(t *testing.T) {
+			wantRow(t, flexRow(t, threeItems, `#f { width: 300px }`+c.css), c.want, c.what)
+		})
+	}
+}
+
+// TestTheLinesStackFromTheOtherEndUnderWrapReverse. "wrap-reverse" turns the
+// cross axis round, so the first line is at the bottom and the last at the top —
+// and every alignment across that axis turns with it, which is the whole reason
+// the two ends are named twice in Box Alignment.
+func TestTheLinesStackFromTheOtherEndUnderWrapReverse(t *testing.T) {
+	const reversed = `#f { width: 300px; flex-wrap: wrap-reverse } #f > div { flex: 0 0 100px }`
+
+	// Four items over two lines: the first three are on the lower line.
+	wantCross(t, flexCross(t, fourWide, reversed),
+		[][2]float64{{20, 20}, {20, 20}, {20, 20}, {0, 20}}, "two lines stacked upwards")
+
+	// With room to spare, "flex-start" packs the lines at the end they are
+	// stacked from, which is now the bottom.
+	wantCross(t, flexCross(t, fourWide, reversed+`#f { height: 100px; align-content: flex-start }`),
+		[][2]float64{{80, 20}, {80, 20}, {80, 20}, {60, 20}}, "lines packed at the flex start")
+
+	// "start" is the block start and does not turn with the axis: the same two
+	// lines, in the same order, at the top of the container.
+	wantCross(t, flexCross(t, fourWide, reversed+`#f { height: 100px; align-content: start }`),
+		[][2]float64{{20, 20}, {20, 20}, {20, 20}, {0, 20}}, "lines packed at the block start")
+}
+
+// TestAnItemIsAlignedAcrossTheAxisItsContainerReversed. The same two families of
+// keyword, one line down: align-items names an end of the cross axis, and under
+// wrap-reverse "flex-start" is the bottom of the line while "start" is the top.
+func TestAnItemIsAlignedAcrossTheAxisItsContainerReversed(t *testing.T) {
+	const reversed = `#f { width: 300px; flex-wrap: wrap-reverse }`
+
+	wantCross(t, flexCross(t, twoHeights, reversed+`#f { align-items: flex-start }`),
+		[][2]float64{{20, 20}, {0, 40}}, "an item at the flex start of its line")
+	wantCross(t, flexCross(t, twoHeights, reversed+`#f { align-items: start }`),
+		[][2]float64{{0, 20}, {0, 40}}, "an item at the block start of its line")
+	wantCross(t, flexCross(t, twoHeights, reversed+`#f { align-items: flex-end }`),
+		[][2]float64{{0, 20}, {0, 40}}, "an item at the flex end of its line")
+	wantCross(t, flexCross(t, twoHeights, reversed+`#f { align-items: end }`),
+		[][2]float64{{20, 20}, {0, 40}}, "an item at the block end of its line")
+
+	// And with nothing said, the item is stretched, which has no end to name.
+	wantCross(t, flexCross(t, twoHeights, reversed),
+		[][2]float64{{0, 40}, {0, 40}}, "an item stretched across a reversed line")
+}
+
+// TestARightToLeftColumnTurnsOnlyTheAxisTheWritingModeIsOn. "rtl" is a
+// declaration about the inline axis, and which of a container's two axes that
+// is depends on its direction. In a column it is the cross axis: the items
+// still stack downwards, and it is the side they are aligned to that moves.
+//
+// A container that turned both would stack its items from the bottom, which is
+// what "column-reverse" is for and what nobody wrote here.
+func TestARightToLeftColumnTurnsOnlyTheAxisTheWritingModeIsOn(t *testing.T) {
+	const rtlColumn = `#f { width: 300px; flex-direction: column; direction: rtl }`
+
+	wantCross(t, flexCross(t, twoHeights, rtlColumn),
+		[][2]float64{{0, 20}, {20, 40}}, "a right-to-left column stacks downwards")
+
+	// The cross axis is the one that turned: an item at the start of it is
+	// against the right edge, where a left-to-right column would put it at 0.
+	wantRow(t, flexRow(t, twoHeights, rtlColumn+`#f { align-items: flex-start }`),
+		[][2]float64{{288, 12}, {288, 12}}, "items at the start of a right-to-left column")
+	wantRow(t, flexRow(t, twoHeights,
+		`#f { width: 300px; flex-direction: column; align-items: flex-start }`),
+		[][2]float64{{0, 12}, {0, 12}}, "items at the start of a left-to-right column")
+
+	// "end" is the other side of the same coin: the inline end of a
+	// right-to-left column is the left edge, which is where a left-to-right one
+	// puts its items at the *start*. Naming the two ends by the writing mode is
+	// what makes that read the same way in both.
+	wantRow(t, flexRow(t, twoHeights, rtlColumn+`#f { align-items: end }`),
+		[][2]float64{{0, 12}, {0, 12}}, "items at the inline end of a right-to-left column")
 }
