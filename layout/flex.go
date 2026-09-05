@@ -213,6 +213,51 @@ func (a flexAxis) crossStart(e Edges) style.Unit {
 	return e.Top
 }
 
+// The same four sides as places rather than as values, so that a filled-in
+// automatic margin can be written back to the side that asked for it.
+func (a flexAxis) mainStartOf(e *Edges) *style.Unit {
+	if a.column {
+		return &e.Top
+	}
+	return &e.Left
+}
+
+func (a flexAxis) mainEndOf(e *Edges) *style.Unit {
+	if a.column {
+		return &e.Bottom
+	}
+	return &e.Right
+}
+
+func (a flexAxis) crossStartOf(e *Edges) *style.Unit {
+	if a.column {
+		return &e.Left
+	}
+	return &e.Top
+}
+
+func (a flexAxis) crossEndOf(e *Edges) *style.Unit {
+	if a.column {
+		return &e.Right
+	}
+	return &e.Bottom
+}
+
+// mainEnd and crossEnd are the other side of each: the trailing physical edge.
+func (a flexAxis) mainEnd(e Edges) style.Unit {
+	if a.column {
+		return e.Bottom
+	}
+	return e.Right
+}
+
+func (a flexAxis) crossEnd(e Edges) style.Unit {
+	if a.column {
+		return e.Right
+	}
+	return e.Bottom
+}
+
 // place puts a fragment at a main and cross position.
 func (a flexAxis) place(f *Fragment, main, cross style.Unit) {
 	if a.column {
@@ -269,8 +314,16 @@ type flexItem struct {
 	margin, border, padding Edges
 	// mainSurround is that sum along the main axis, and crossMargin is the
 	// margins alone across it. Both are taken once: every line of §9.7 needs
-	// one of them and neither depends on the item's size.
+	// one of them and neither depends on the item's size. Both are added to
+	// when an automatic margin is filled in, because an auto margin that has
+	// taken the free space is a margin of that size and takes that much room.
 	mainSurround, crossMargin style.Unit
+	// auto is which of the four margins were declared "auto", one per edge and
+	// non-zero where they were. It is an Edges rather than four booleans so
+	// that it can go through the same permutation the lengths do — a box inside
+	// a turned subtree has its edges rearranged, and the answer has to be about
+	// the same sides the margins ended up on.
+	auto Edges
 	// cross is the item's used cross size as a border box, and hasCross says it
 	// is known. A column resolves it before anything else — an item's height
 	// cannot be measured until its width is settled — while a row learns it
@@ -296,6 +349,17 @@ type flexItem struct {
 	target style.Unit
 	frozen bool
 	frag   *Fragment
+}
+
+// addMargin puts a filled-in automatic margin on one side of the item, and on
+// the fragment if there is one yet: the used value of an auto margin is the room
+// it took, and a fragment that reported zero would be describing a box that is
+// not where it was put.
+func (it *flexItem) addMargin(side *style.Unit, by style.Unit) {
+	*side = side.Add(by)
+	if it.frag != nil {
+		it.frag.Margin = it.margin
+	}
 }
 
 // outer is the room an item takes on the line: its content size and everything
@@ -400,15 +464,6 @@ func (l *layouter) refusesToFlex(b *Box, containing style.Unit) string {
 		if v, ok := parseNumber(trimmedLower(c.Style["order"])); ok && v != 0 {
 			return "one of its items asks to be moved in the order"
 		}
-		if hasAutoMargin(c) {
-			// §9.5 gives an auto main-axis margin the free space before
-			// justify-content sees any of it, and §9.6 gives an auto cross-axis
-			// one the room left across the line before align-self does. Both are
-			// a second way of distributing the same budget, and both would have
-			// to be settled before the alignment below is even asked.
-			return "one of its items has an automatic margin, which takes the " +
-				"free space before the alignment does"
-		}
 		if l.percentageMainSize(c, a) {
 			// A percentage of the container's own main size, which is what this
 			// is resolving. §9.2 answers it — the percentage is against the
@@ -428,14 +483,106 @@ func (l *layouter) refusesToFlex(b *Box, containing style.Unit) string {
 	return ""
 }
 
-// hasAutoMargin reports whether a box declares an automatic margin on either
-// axis. Both axes distribute free space to one before the alignment properties
-// see it; see the clause in refusesToFlex that refuses them.
-func hasAutoMargin(b *Box) bool {
-	return trimmedLower(b.Style["margin-left"]) == "auto" ||
-		trimmedLower(b.Style["margin-right"]) == "auto" ||
-		trimmedLower(b.Style["margin-top"]) == "auto" ||
-		trimmedLower(b.Style["margin-bottom"]) == "auto"
+// autoMarginEdges is which of a box's margins were declared "auto": one per
+// edge, non-zero where the declaration was the keyword.
+//
+// It is built as an Edges and passed through the same arrangement the resolved
+// margins are, because a box inside a turned subtree has its edges rearranged
+// and the two answers have to be about the same sides. The value on each edge
+// is a flag and not a length; nothing adds them up.
+func (l *layouter) autoMarginEdges(b *Box) Edges {
+	auto := func(name string) style.Unit {
+		if trimmedLower(b.Style["margin-"+name]) == "auto" {
+			return 1
+		}
+		return 0
+	}
+	return l.asLaidOut(b, Edges{
+		Top:    auto("top"),
+		Right:  auto("right"),
+		Bottom: auto("bottom"),
+		Left:   auto("left"),
+	})
+}
+
+// fillMainAutoMargins is §9.5's first sentence, which comes before the packing
+// and often instead of it.
+//
+// An automatic margin on the main axis takes the free space that is left on the
+// line, and where there are several they take an equal share each. Only then is
+// there anything for justify-content to place — and after this there is not,
+// because the margins have absorbed all of it. That is the specification's
+// order and it is why "margin-left: auto" pushes an item to the far end however
+// the container is packed.
+//
+// The share goes into the item's own margin rather than being remembered
+// separately, so everything downstream — the room the item takes on the line,
+// the fragment's own reported margins, and the free space justify-content is
+// handed — follows from the one number. A margin that has taken the free space
+// *is* a margin that size.
+func (l *layouter) fillMainAutoMargins(a flexAxis, line []*flexItem, main, gap style.Unit) {
+	used := gap.Mul(float64(len(line) - 1))
+	autos := 0
+	for _, it := range line {
+		used = used.Add(it.outer(it.target))
+		if a.mainStart(it.auto) != 0 {
+			autos++
+		}
+		if a.mainEnd(it.auto) != 0 {
+			autos++
+		}
+	}
+	free := main.Sub(used)
+	if autos == 0 || free <= 0 {
+		// §9.5's other half: with nothing to take, an auto margin is zero,
+		// which is what it already is here.
+		return
+	}
+	share := free.Div(float64(autos))
+	for _, it := range line {
+		if a.mainStart(it.auto) != 0 {
+			it.addMargin(a.mainStartOf(&it.margin), share)
+			it.mainSurround = it.mainSurround.Add(share)
+		}
+		if a.mainEnd(it.auto) != 0 {
+			it.addMargin(a.mainEndOf(&it.margin), share)
+			it.mainSurround = it.mainSurround.Add(share)
+		}
+	}
+}
+
+// fillCrossAutoMargins is §9.6's version of the same rule, one item at a time
+// rather than one line: the room left across the line goes to whichever of the
+// item's cross-axis margins asked for it, and to both equally where both did —
+// which is the idiom for centring one item in a line.
+//
+// It runs before the stretch, because an item with an automatic cross margin is
+// not stretched: it asked for the leftover as margin, and an item stretched to
+// its line has no leftover to give.
+func (l *layouter) fillCrossAutoMargins(a flexAxis, it *flexItem, cross style.Unit) {
+	autos := 0
+	if a.crossStart(it.auto) != 0 {
+		autos++
+	}
+	if a.crossEnd(it.auto) != 0 {
+		autos++
+	}
+	if autos == 0 {
+		return
+	}
+	free := cross.Sub(it.outerCross(a.crossOf(it.frag.BorderRect)))
+	if free <= 0 {
+		return
+	}
+	share := free.Div(float64(autos))
+	if a.crossStart(it.auto) != 0 {
+		it.addMargin(a.crossStartOf(&it.margin), share)
+		it.crossMargin = it.crossMargin.Add(share)
+	}
+	if a.crossEnd(it.auto) != 0 {
+		it.addMargin(a.crossEndOf(&it.margin), share)
+		it.crossMargin = it.crossMargin.Add(share)
+	}
 }
 
 // percentageMainSize reports whether a box's own main-axis size is a percentage.
@@ -479,6 +626,9 @@ func (l *layouter) flexContent(b *Box, parent *Fragment, width style.Unit,
 	lines := flexLines(items, main, gap, l.wraps(b))
 	for _, ln := range lines {
 		l.resolveFlexibleLengths(ln, main.Sub(gap.Mul(float64(len(ln)-1))))
+		// §9.5 before §9.4, because an automatic margin decides how much room
+		// the item takes on the line and the item is about to be laid out.
+		l.fillMainAutoMargins(a, ln, main, gap)
 	}
 
 	// §9.4: each item laid out at the size it was given. A row learns its lines'
@@ -494,6 +644,9 @@ func (l *layouter) flexContent(b *Box, parent *Fragment, width style.Unit,
 	end := len(l.deferred)
 
 	crosses, cross := l.flexCrossSizes(b, a, lines, crossGap, width, origin)
+	for _, it := range items {
+		l.fillCrossAutoMargins(a, it, crosses[it.line])
+	}
 
 	leadCross, betweenLines := l.alignContentSpacing(b, a, crosses, cross, crossGap)
 
@@ -1001,12 +1154,16 @@ func (l *layouter) crossOffset(b *Box, a flexAxis, it *flexItem, cross style.Uni
 
 // stretchesAcross reports whether an item is stretched to the line's height.
 //
-// §9.6: an item whose cross size is auto is stretched. Its caller has already
-// asked whether the alignment is a stretch at all, and the gate has refused the
-// auto cross-axis margins that would take the room first, so what is left to ask
-// is whether the item stated a height of its own — a box that did is the height
-// it asked for, and stretching it would be overruling the declaration.
+// §9.6: an item whose cross size is auto and whose cross-axis margins are not
+// is stretched. Its caller has already asked whether the alignment is a stretch
+// at all, so what is left is the two ways an item can have said otherwise
+// itself: a size of its own — a box that stated one is that size, and
+// stretching it would be overruling the declaration — and an automatic margin,
+// which asked for the room across the line that stretching would use up.
 func (l *layouter) stretchesAcross(a flexAxis, it *flexItem) bool {
+	if a.crossStart(it.auto) != 0 || a.crossEnd(it.auto) != 0 {
+		return false
+	}
 	name := a.crossName()
 	return l.isAuto(it.box, name) || trimmedLower(it.box.Style[name]) == ""
 }
@@ -1072,6 +1229,7 @@ func (l *layouter) flexItems(b *Box, a flexAxis, width style.Unit, origin flow) 
 		it.mainSurround = a.mainEdge(it.margin).
 			Add(a.mainEdge(it.border)).Add(a.mainEdge(it.padding))
 		it.crossMargin = a.crossEdge(it.margin)
+		it.auto = l.autoMarginEdges(c)
 		out = append(out, it)
 	}
 	// A column measures each item by laying it out, and every one of those
