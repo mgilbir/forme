@@ -475,8 +475,10 @@ func TestAGridContainerThisEngineCannotArrangeSaysSo(t *testing.T) {
 		{"tracks on a baseline", `#g { align-content: baseline }`, "aligned by a rule"},
 		{"items on a baseline", `#g { align-items: baseline }`, "aligned by a rule"},
 		{"a safe alignment", `#g { justify-content: safe center }`, "aligned by a rule"},
-		{"an item that names a line", `#g > div:first-child { grid-column: 2 }`, "names the line"},
-		{"an item with an area", `#g > div:first-child { grid-area: a }`, "names the line"},
+		{"an item with an area", `#g > div:first-child { grid-area: a }`, "placed by area"},
+		{"an item at a named line", `#g > div:first-child { grid-column: main }`, "cannot find"},
+		{"an item counting from the end", `#g > div:first-child { grid-column: -1 }`, "cannot find"},
+		{"an item spanning to a name", `#g > div:first-child { grid-row: span main }`, "cannot find"},
 		{"an item on a baseline", `#g > div:first-child { align-self: baseline }`, "aligned by a rule"},
 		{"an automatic margin", `#g > div:first-child { margin-left: auto }`, "automatic margin"},
 	} {
@@ -526,6 +528,8 @@ func TestAnArrangedGridSaysNothing(t *testing.T) {
 		`#g { width: 300px; justify-content: space-between; align-items: center }`,
 		`#g { width: 300px } #g > div:first-child { justify-self: end; align-self: start }`,
 		`#g { width: 300px } #g > div { order: 0; grid-column: auto }`,
+		`#g { width: 300px; grid-template-columns: 100px 100px } #g > div:first-child { grid-column: 2 }`,
+		`#g { width: 300px; grid-template-columns: 100px 100px } #g > div:first-child { grid-row: 1 / 3 }`,
 	} {
 		got := Compose(Input{HTML: fourItems,
 			CSS: []Stylesheet{{Source: gridCSS + css}}}, Options{})
@@ -928,4 +932,141 @@ func TestAutoFitCollapsesTheTracksNoItemLandedIn(t *testing.T) {
 			{0, 0, 60, 20}, {60, 0, 60, 20}, {120, 0, 60, 20},
 			{180, 0, 60, 20}, {240, 0, 60, 20}, {0, 20, 60, 20},
 		}, "six items in five columns")
+}
+
+// The three-item fixture with names, for the placement tests: which item ended
+// up where is the whole question, and the widths are all the same so that only
+// the positions differ.
+const threeCells = `<div id="g"><div id="a">a</div><div id="b">b</div><div id="c">c</div></div>`
+
+const threeColumns = `#g { width: 300px; grid-template-columns: 100px 100px 100px }`
+
+// TestAnItemGoesToTheLineItNamed is §8.3 and the first two steps of §8.5: an
+// item that named a line is placed there, and the automatic flow deals the rest
+// into what is left — around it, not over it.
+func TestAnItemGoesToTheLineItNamed(t *testing.T) {
+	// The first item asks for the second column. The other two are dealt from
+	// the start, so one lands in front of it.
+	wantCells(t, gridCells(t, threeCells, threeColumns+`#a { grid-column: 2 }`),
+		[][4]float64{{100, 0, 100, 20}, {0, 0, 100, 20}, {200, 0, 100, 20}},
+		"one item in the second column")
+
+	// A line for the row instead, which the flow then works around: the item is
+	// on the second row and the two after it fill the first.
+	wantCells(t, gridCells(t, threeCells, threeColumns+`#a { grid-row: 2 }`),
+		[][4]float64{{0, 20, 100, 20}, {0, 0, 100, 20}, {100, 0, 100, 20}},
+		"one item in the second row")
+
+	// Both lines, which is a cell.
+	wantCells(t, gridCells(t, threeCells, threeColumns+`#a { grid-row: 2; grid-column: 3 }`),
+		[][4]float64{{200, 20, 100, 20}, {0, 0, 100, 20}, {100, 0, 100, 20}},
+		"one item in a named cell")
+
+	// The longhands say the same thing, and an end line with no start is one
+	// track wide ending there — line 3 is the far edge of the second column.
+	wantCells(t, gridCells(t, threeCells, threeColumns+`#a { grid-column-start: 3 }`),
+		[][4]float64{{200, 0, 100, 20}, {0, 0, 100, 20}, {100, 0, 100, 20}},
+		"an item that named only its start")
+	wantCells(t, gridCells(t, threeCells, threeColumns+`#a { grid-column-end: 3 }`),
+		[][4]float64{{100, 0, 100, 20}, {0, 0, 100, 20}, {200, 0, 100, 20}},
+		"an item that named only its end")
+}
+
+// TestAnItemSpansTheTracksItWasGiven. A span is a cell that covers more than
+// one track, and it covers the gaps between them too — they separate the tracks
+// from each other and there is nothing between a track and itself.
+func TestAnItemSpansTheTracksItWasGiven(t *testing.T) {
+	// Two lines apart is two tracks wide.
+	wantCells(t, gridCells(t, threeCells, threeColumns+`#a { grid-column: 2 / 4 }`),
+		[][4]float64{{100, 0, 200, 20}, {0, 0, 100, 20}, {0, 20, 100, 20}},
+		"an item across two columns")
+
+	// A pair of lines the wrong way round is the same pair: §8.3 swaps them
+	// rather than throwing the declaration out.
+	wantCells(t, gridCells(t, threeCells, threeColumns+`#a { grid-column: 3 / 1 }`),
+		[][4]float64{{0, 0, 200, 20}, {200, 0, 100, 20}, {0, 20, 100, 20}},
+		"an item between two lines written backwards")
+
+	// "span 2" is the same width from wherever the flow puts it.
+	wantCells(t, gridCells(t, threeCells, threeColumns+`#a { grid-column: span 2 }`),
+		[][4]float64{{0, 0, 200, 20}, {200, 0, 100, 20}, {0, 20, 100, 20}},
+		"an item spanning two columns from the flow")
+
+	// The gaps between the spanned tracks belong to the item: two 90px columns
+	// and the 20px between them.
+	wantCells(t, gridCells(t, threeCells,
+		`#g { width: 300px; grid-template-columns: 90px 90px 90px; column-gap: 20px }`+
+			`#a { grid-column: 1 / 3 }`),
+		[][4]float64{{0, 0, 200, 20}, {220, 0, 90, 20}, {0, 20, 90, 20}},
+		"an item across two columns and the gap between them")
+}
+
+// TestASpanningItemAsksTheTracksItCoversTogether is §12.5's other half, and the
+// reason it is a second pass: an item across two columns that needs 96px says
+// nothing about either column on its own — any pair adding to 96 would hold it
+// — so the columns are sized from the items *inside* them first, and only what
+// is still missing is shared out between them.
+func TestASpanningItemAsksTheTracksItCoversTogether(t *testing.T) {
+	const wide = `<div id="g"><div id="a">aaaaaaaa</div><div id="b">b</div><div id="c">c</div></div>`
+
+	// Two max-content columns: one character each from the items in them, then
+	// 72px short of the eight-character item across both, shared equally.
+	wantCells(t, gridCells(t, wide,
+		`#g { width: 400px; grid-template-columns: max-content max-content }`+
+			`#a { grid-column: 1 / 3 }`),
+		[][4]float64{{0, 0, 96, 20}, {0, 20, 48, 20}, {48, 20, 48, 20}},
+		"a spanning item over two content columns")
+
+	// The gaps between the spanned tracks are room the item already has, so
+	// they come off the shortfall: 12 and 12 of content with 20 between them is
+	// 44 of the 96 it needs, and the 52 missing is shared.
+	wantCells(t, gridCells(t, wide,
+		`#g { width: 400px; grid-template-columns: max-content max-content; column-gap: 20px }`+
+			`#a { grid-column: 1 / 3 }`),
+		[][4]float64{{0, 0, 96, 20}, {0, 20, 38, 20}, {58, 20, 38, 20}},
+		"a spanning item over two content columns with a gap")
+
+	// A fixed column takes no share of it: the stylesheet said 30px and an item
+	// spanning it does not overrule that, so the whole shortfall goes to the
+	// automatic column beside it — which then stretches into the room left over.
+	wantCells(t, gridCells(t, wide,
+		`#g { width: 400px; grid-template-columns: 30px auto } #a { grid-column: 1 / 3 }`),
+		[][4]float64{{0, 0, 400, 20}, {0, 20, 30, 20}, {30, 20, 370, 20}},
+		"a spanning item over a fixed column and an automatic one")
+
+	// And down the rows: three lines of text across two rows of one line each
+	// makes both rows taller, by half the shortfall each.
+	const tall = `<div id="g"><div id="a">a<br>b<br>c</div><div id="d">d</div><div id="e">e</div></div>`
+	wantCells(t, gridCells(t, tall,
+		`#g { width: 300px; grid-template-columns: 100px 100px } #a { grid-row: 1 / 3 }`),
+		[][4]float64{{0, 0, 100, 60}, {100, 0, 100, 30}, {100, 30, 100, 30}},
+		"a spanning item down two rows")
+}
+
+// TestAnItemThatNamesALineThisEngineCannotFindIsRefused. What is left out of the
+// grammar is what needs a name: a line called something, an area, and a number
+// counted back from the end of the grid — which is a real value and needs the
+// far edge of a grid that is still being worked out.
+func TestAnItemThatNamesALineThisEngineCannotFindIsRefused(t *testing.T) {
+	for _, css := range []string{
+		`#a { grid-column: main }`,
+		`#a { grid-column: 1 / main }`,
+		`#a { grid-column: -1 }`,
+		`#a { grid-row: span main }`,
+		`#a { grid-area: header }`,
+		`#a { grid-column: 1 / 2 / 3 }`,
+	} {
+		got := Compose(Input{HTML: threeCells, CSS: []Stylesheet{{
+			Source: gridCSS + threeColumns + css}}}, Options{})
+		said := false
+		for _, f := range got.Findings {
+			if strings.Contains(f.Message, "grid container") {
+				said = true
+			}
+		}
+		if !said {
+			t.Errorf("nothing was reported about %q, so an item placed somewhere "+
+				"this engine cannot find says nothing about it", css)
+		}
+	}
 }

@@ -107,10 +107,11 @@ func (t gridTrack) stretches() bool { return t.max.kind == trackAuto }
 type gridItem struct {
 	box                     *Box
 	margin, border, padding Edges
-	// column and row are the indexes of the cell it fills. This slice of the
-	// specification gives every item exactly one, which is why they are numbers
-	// rather than spans.
+	// column and row are where the item's cell begins, and place is what it
+	// asked for on each axis — the row first, because §8.5 places a row before
+	// it places anything in one.
 	column, row int
+	place       [2]gridPlacement
 	order       int
 	// across and down are how the item is aligned in its cell on each axis,
 	// and width and height are the sizes that gave it. A stretched item is its
@@ -174,12 +175,11 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 	rows, _, _ := l.trackList(b, "grid-template-rows", width,
 		trackRoom{size: height, definite: definite, gap: rowGap})
 
-	// §8.5's automatic placement, which is the whole of it for a slice where no
-	// item names a line: one cell each, along the columns and then down.
-	for i, it := range items {
-		it.column, it.row = i%len(columns), i/len(columns)
-	}
-	for len(rows) < items[len(items)-1].row+1 {
+	// §8.5: the items that named a line go where they asked, and the rest are
+	// dealt into what is left. However many rows that took is how many the grid
+	// has.
+	used := placeItems(items, len(columns))
+	for len(rows) < used {
 		// The implicit rows, which are "auto" because grid-auto-rows is.
 		rows = append(rows, autoTrack())
 	}
@@ -194,9 +194,10 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 	for _, it := range items {
 		it.across = l.itemAlignment(it, "justify-self", across)
 		it.down = l.itemAlignment(it, "align-self", down)
-		it.width = columns[it.column].base
+		cell := trackSpan(columns, it.column, it.place[1].span, columnGap)
+		it.width = cell
 		if it.across != crossStretch {
-			it.width = l.gridFitContent(it, columns[it.column].base)
+			it.width = l.gridFitContent(it, cell)
 		}
 	}
 
@@ -230,7 +231,7 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 	}
 
 	for _, it := range items {
-		cellHeight := rows[it.row].base
+		cellHeight := trackSpan(rows, it.row, it.place[0].span, rowGap)
 		if it.down == crossStretch {
 			it.height = cellHeight
 		}
@@ -242,7 +243,8 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 		y := trackStart(rows, it.row, rowGap).
 			Add(rowLead).Add(rowBetween.Mul(float64(it.row)))
 		it.frag.BorderRect.X = x.
-			Add(alignmentOffset(it.across, columns[it.column].base, it.width)).
+			Add(alignmentOffset(it.across,
+				trackSpan(columns, it.column, it.place[1].span, columnGap), it.width)).
 			Add(it.margin.Left)
 		it.frag.BorderRect.Y = y.
 			Add(alignmentOffset(it.down, cellHeight, it.height)).
@@ -276,11 +278,319 @@ func (l *layouter) deferGridOutOfFlow(b *Box, parent *Fragment, width style.Unit
 	}
 }
 
+// gridPlacement is what one item said about where it goes on one axis: §8.3's
+// two lines, read as a start and a span.
+//
+// A line number is one-based in CSS and zero-based here, and the conversion is
+// done once at the edge — "grid-column: 2" is the second line, which is the
+// first *track's* far edge, so the item starts in track one. Getting that wrong
+// is off by one everywhere, which is why it is done in one place and named.
+type gridPlacement struct {
+	// start is the track the item begins in, and definite says the stylesheet
+	// named it rather than leaving it to the flow.
+	start    int
+	definite bool
+	// span is how many tracks it covers, which is at least one.
+	span int
+}
+
+// placementOf reads the two properties that place an item on one axis, and the
+// shorthand that writes them together.
+//
+// The grammar this reads is the everyday half of §8.3: a line number, a span of
+// so many tracks, or "auto" for either end, with "a / b" writing the two ends
+// at once. What it does not read is a named line, which is refused by the gate
+// — naming a line is how grid-template-areas works, and areas are a placement
+// algorithm of their own.
+// The three property names are passed rather than assembled from the axis, and
+// that is not a style choice: style/unimplemented_test.go looks for every
+// registered property as a literal in the source, and a name built out of
+// "grid-" and a variable is a property nothing appears to read.
+func (l *layouter) placementOf(b *Box, shorthandName, startName, endName string) (gridPlacement, bool) {
+	start, end := trimmedLower(b.Style[startName]), trimmedLower(b.Style[endName])
+	if shorthand := trimmedLower(b.Style[shorthandName]); shorthand != "" &&
+		shorthand != "auto" {
+		one, two, ok := splitOnSlash(shorthand)
+		if !ok {
+			return gridPlacement{}, false
+		}
+		// §8.3: the shorthand's second half is "auto" where it was left out,
+		// and the longhands lose to it because a shorthand resets what it does
+		// not say.
+		start, end = one, two
+	}
+	return placementFrom(start, end)
+}
+
+// placementFrom turns one pair of line values into a start and a span.
+//
+// The four shapes are the ones a stylesheet writes: nothing, a line, a span, or
+// a line and something after it. A span with no line is a span from wherever
+// the flow puts the item; a line with no end is one track wide; a line and a
+// line are the tracks between them, and a line after a line that is not after
+// it is one track — §8.3 swaps a backwards pair rather than throwing it out.
+func placementFrom(start, end string) (gridPlacement, bool) {
+	from, fromSpan, ok := lineValue(start)
+	if !ok {
+		return gridPlacement{}, false
+	}
+	to, toSpan, ok := lineValue(end)
+	if !ok {
+		return gridPlacement{}, false
+	}
+	out := gridPlacement{span: 1}
+	switch {
+	case fromSpan > 0 && from == 0:
+		// "span n" with no line of its own: the flow decides where, and the
+		// span is what it takes when it gets there.
+		out.span = fromSpan
+	case from != 0:
+		out.start, out.definite = from-1, true
+	}
+	switch {
+	case toSpan > 0:
+		if toSpan > out.span {
+			out.span = toSpan
+		}
+	case to != 0 && out.definite:
+		if to-1 < out.start {
+			out.start, to = to-1, out.start+1
+		}
+		if n := to - 1 - out.start; n > 0 {
+			out.span = n
+		}
+	case to != 0:
+		// An end line with no start: the item ends there and is one track wide,
+		// which is the same as starting one track earlier.
+		out.start, out.definite = to-2, true
+		if out.start < 0 {
+			out.start = 0
+		}
+	}
+	if out.start < 0 || out.span < 1 || out.span > maxRepeatedTracks {
+		return gridPlacement{}, false
+	}
+	return out, true
+}
+
+// lineValue reads one end of a placement: a line number, a span, or nothing.
+//
+// The number is returned as written — one-based, with nought meaning "not
+// given" — because that is the only way to tell "auto" from a line, and CSS has
+// no line zero to be confused with it.
+func lineValue(raw string) (line, span int, ok bool) {
+	value := strings.TrimSpace(raw)
+	if value == "" || strings.EqualFold(value, "auto") {
+		return 0, 0, true
+	}
+	if rest, found := strings.CutPrefix(strings.ToLower(value), "span"); found {
+		rest = strings.TrimSpace(rest)
+		if rest == "" {
+			// "span" on its own is "span 1".
+			return 0, 1, true
+		}
+		n, ok := positiveNumber(rest)
+		return 0, n, ok
+	}
+	n, ok := positiveNumber(value)
+	return n, 0, ok
+}
+
+// positiveNumber reads a whole number above nought, which is every line number
+// and every span this slice places.
+//
+// A negative line counts from the end of the explicit grid, which is a real
+// value and not one this reads: it needs the far edge of a grid that is still
+// being worked out, and the gate refuses it rather than guessing.
+func positiveNumber(value string) (int, bool) {
+	if value == "" {
+		return 0, false
+	}
+	n := 0
+	for i := 0; i < len(value); i++ {
+		if value[i] < '0' || value[i] > '9' {
+			return 0, false
+		}
+		n = n*10 + int(value[i]-'0')
+		if n > maxRepeatedTracks {
+			return 0, false
+		}
+	}
+	return n, n > 0
+}
+
+// splitOnSlash cuts a shorthand into its two halves.
+func splitOnSlash(value string) (string, string, bool) {
+	one, two, found := strings.Cut(value, "/")
+	if !found {
+		return strings.TrimSpace(one), "", true
+	}
+	if strings.Contains(two, "/") {
+		return "", "", false
+	}
+	return strings.TrimSpace(one), strings.TrimSpace(two), true
+}
+
+// placeItems is §8.5's automatic placement, with the items that named a line
+// put where they asked first.
+//
+// The order is the specification's and each step is there for a reason the step
+// before it could not have known. An item that named both its lines goes where
+// it said, whatever else is there. An item that named only its row goes in that
+// row, at the first place its span will fit. Everything else is dealt from a
+// cursor that walks along the columns and then down, and that cursor never goes
+// back — which is what "sparse" packing means, and what leaves the holes that
+// "dense" would go back for.
+func placeItems(items []*gridItem, columns int) int {
+	grid := &gridOccupancy{columns: columns}
+	var flow []*gridItem
+	for _, it := range items {
+		switch {
+		case it.place[0].definite && it.place[1].definite:
+			it.row, it.column = it.place[0].start, it.place[1].start
+			grid.fill(it)
+		case it.place[0].definite:
+			it.row = it.place[0].start
+			it.column = grid.freeInRow(it.row, it.place[1].span)
+			grid.fill(it)
+		default:
+			flow = append(flow, it)
+		}
+	}
+	row, column := 0, 0
+	for _, it := range flow {
+		if it.place[1].definite {
+			// A definite column and no row: the item drops down the column
+			// until it finds a row with room for it, starting from the cursor's
+			// row so that the order the items were written in is kept.
+			it.column = it.place[1].start
+			it.row = grid.freeInColumn(row, it.column, it.place[0].span,
+				it.place[1].span)
+			grid.fill(it)
+			continue
+		}
+		it.row, it.column = grid.next(row, column, it.place[0].span, it.place[1].span)
+		grid.fill(it)
+		row, column = it.row, it.column+it.place[1].span
+		if column >= grid.columns {
+			row, column = row+1, 0
+		}
+	}
+	return grid.rows
+}
+
+// gridOccupancy is which cells are taken, which is all §8.5 needs to remember.
+//
+// It grows downwards and never sideways: the number of columns is settled
+// before any of this runs — the template says how many there are — and a row is
+// made whenever an item needs one that is not there yet.
+type gridOccupancy struct {
+	columns int
+	rows    int
+	taken   []bool
+}
+
+func (g *gridOccupancy) at(row, column int) bool {
+	if column < 0 || column >= g.columns || row < 0 {
+		return false
+	}
+	if i := row*g.columns + column; i < len(g.taken) {
+		return g.taken[i]
+	}
+	return false
+}
+
+func (g *gridOccupancy) fill(it *gridItem) {
+	end := it.row + it.place[0].span
+	if end > g.rows {
+		g.rows = end
+	}
+	for len(g.taken) < g.rows*g.columns {
+		g.taken = append(g.taken, false)
+	}
+	for r := it.row; r < end; r++ {
+		for c := it.column; c < it.column+it.place[1].span && c < g.columns; c++ {
+			g.taken[r*g.columns+c] = true
+		}
+	}
+}
+
+// free reports whether a band of cells is empty and inside the grid.
+func (g *gridOccupancy) free(row, column, rowSpan, columnSpan int) bool {
+	if column < 0 || column+columnSpan > g.columns {
+		return false
+	}
+	for r := row; r < row+rowSpan; r++ {
+		for c := column; c < column+columnSpan; c++ {
+			if g.at(r, c) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// freeInRow is the first column in one row where a span will fit.
+func (g *gridOccupancy) freeInRow(row, span int) int {
+	for c := 0; c+span <= g.columns; c++ {
+		if g.free(row, c, 1, span) {
+			return c
+		}
+	}
+	return 0
+}
+
+// freeInColumn is the first row at or after one where a span will fit in a
+// given column.
+func (g *gridOccupancy) freeInColumn(from, column, rowSpan, columnSpan int) int {
+	for r := from; ; r++ {
+		if g.free(r, column, rowSpan, columnSpan) {
+			return r
+		}
+		if r > g.rows+len(g.taken) {
+			// Unreachable while the grid grows downwards: a row past the last
+			// filled one is empty. The bound is here because the loop has no
+			// other end, and a document is untrusted.
+			return r
+		}
+	}
+}
+
+// next is where the cursor finds room for an item, walking along the columns
+// and then down.
+func (g *gridOccupancy) next(row, column, rowSpan, columnSpan int) (int, int) {
+	for r := row; ; r++ {
+		start := 0
+		if r == row {
+			start = column
+		}
+		for c := start; c+columnSpan <= g.columns; c++ {
+			if g.free(r, c, rowSpan, columnSpan) {
+				return r, c
+			}
+		}
+		if r > g.rows+len(g.taken) {
+			return r, 0
+		}
+	}
+}
+
 // gridInner is what the tracks and the gaps between them come to.
 func gridInner(tracks []gridTrack, gap style.Unit) style.Unit {
 	out := gap.Mul(float64(len(tracks) - 1))
 	for _, t := range tracks {
 		out = out.Add(t.base)
+	}
+	return out
+}
+
+// trackSpan is how far a band of tracks reaches: the tracks themselves and the
+// gaps between them, which belong to the item that spans them rather than
+// separating it from anything.
+func trackSpan(tracks []gridTrack, from, span int, gap style.Unit) style.Unit {
+	out := gap.Mul(float64(span - 1))
+	for i := from; i < from+span && i < len(tracks); i++ {
+		out = out.Add(tracks[i].base)
 	}
 	return out
 }
@@ -418,17 +728,15 @@ func (l *layouter) gridFitContent(it *gridItem, cell style.Unit) style.Unit {
 func (l *layouter) sizeColumns(columns []gridTrack, items []*gridItem,
 	width, gap style.Unit, stretch bool) {
 
-	l.resolveTracks(columns, func(i int) (style.Unit, style.Unit) {
-		var min, max style.Unit
-		for _, it := range items {
-			if it.column != i {
-				continue
-			}
-			gotMin, gotMax := l.gridItemWidths(it)
-			min, max = style.Max(min, gotMin), style.Max(max, gotMax)
-		}
-		return min, max
-	}, maxZero(width.Sub(gap.Mul(float64(len(columns)-1)))), true, stretch)
+	asks := make([]trackAsk, 0, len(items))
+	for _, it := range items {
+		min, max := l.gridItemWidths(it)
+		asks = append(asks, trackAsk{
+			from: it.column, span: it.place[1].span, min: min, max: max,
+		})
+	}
+	l.resolveTracks(columns, asks, gap,
+		maxZero(width.Sub(gap.Mul(float64(len(columns)-1)))), true, stretch)
 }
 
 // gridItemWidths is what one item asks of its column: its min-content and
@@ -452,15 +760,14 @@ func (l *layouter) gridItemWidths(it *gridItem) (style.Unit, style.Unit) {
 func (l *layouter) sizeRows(rows []gridTrack, items []*gridItem,
 	height style.Unit, definite bool, gap style.Unit, stretch bool) {
 
-	l.resolveTracks(rows, func(i int) (style.Unit, style.Unit) {
-		var base style.Unit
-		for _, it := range items {
-			if it.row == i && it.height > base {
-				base = it.height
-			}
-		}
-		return base, base
-	}, maxZero(height.Sub(gap.Mul(float64(len(rows)-1)))), definite, stretch)
+	asks := make([]trackAsk, 0, len(items))
+	for _, it := range items {
+		asks = append(asks, trackAsk{
+			from: it.row, span: it.place[0].span, min: it.height, max: it.height,
+		})
+	}
+	l.resolveTracks(rows, asks, gap,
+		maxZero(height.Sub(gap.Mul(float64(len(rows)-1)))), definite, stretch)
 }
 
 // resolveTracks is §12.4 to §12.8 on either axis: the base sizes, and then what
@@ -475,16 +782,22 @@ func (l *layouter) sizeRows(rows []gridTrack, items []*gridItem,
 // in a grid, and it goes to the automatic tracks alone: "max-content" asked for
 // the size of its content and got it, while "auto" is the one that says it will
 // take more if there is more.
-func (l *layouter) resolveTracks(tracks []gridTrack,
-	contribution func(int) (style.Unit, style.Unit), room style.Unit,
-	definite, stretch bool) {
+func (l *layouter) resolveTracks(tracks []gridTrack, asks []trackAsk,
+	gap, room style.Unit, definite, stretch bool) {
 
 	limits := make([]style.Unit, len(tracks))
 	for i := range tracks {
-		min, max := contribution(i)
+		var min, max style.Unit
+		for _, a := range asks {
+			if a.span != 1 || a.from != i {
+				continue
+			}
+			min, max = style.Max(min, a.min), style.Max(max, a.max)
+		}
 		tracks[i].base = resolveTrackSize(tracks[i].min, min, max, min)
 		limits[i] = resolveTrackSize(tracks[i].max, min, max, max)
 	}
+	spreadSpanningAsks(tracks, limits, asks, gap)
 	if !definite {
 		return
 	}
@@ -527,6 +840,79 @@ func resolveTrackSize(f trackSize, min, max, auto style.Unit) style.Unit {
 		return max
 	}
 	return auto
+}
+
+// trackAsk is what one item needs of the tracks it covers: where it starts, how
+// many it spans, and the two sizes it would like across them.
+type trackAsk struct {
+	from, span int
+	min, max   style.Unit
+}
+
+// spreadSpanningAsks is §12.5's other half: an item that covers more than one
+// track asks something of all of them together, and what it asks is shared out.
+//
+// An item spanning two columns that needs 300px says nothing about either
+// column on its own — any pair of widths adding to 300 would hold it — so the
+// tracks are sized from the items inside them first, and only what is *still*
+// missing is spread. That is why this runs after the single-track pass and in
+// order of span: a wider item's ask is measured against tracks that the
+// narrower ones have already grown.
+//
+// The shortfall goes to the tracks that can take it, which are the ones sized
+// from their content. A fixed track is the size it states whatever spans it,
+// and giving it a share would be overruling the stylesheet with an item.
+func spreadSpanningAsks(tracks []gridTrack, limits []style.Unit, asks []trackAsk,
+	gap style.Unit) {
+
+	widest := 1
+	for _, a := range asks {
+		if a.span > widest {
+			widest = a.span
+		}
+	}
+	for span := 2; span <= widest; span++ {
+		for _, a := range asks {
+			if a.span != span || a.from < 0 || a.from+span > len(tracks) {
+				continue
+			}
+			covered := gap.Mul(float64(span - 1))
+			intrinsic := 0
+			for i := a.from; i < a.from+span; i++ {
+				covered = covered.Add(tracks[i].base)
+				if tracks[i].min.kind != trackFixed {
+					intrinsic++
+				}
+			}
+			if intrinsic == 0 {
+				continue
+			}
+			if short := a.min.Sub(covered); short > 0 {
+				share := short.Div(float64(intrinsic))
+				for i := a.from; i < a.from+span; i++ {
+					if tracks[i].min.kind != trackFixed {
+						tracks[i].base = tracks[i].base.Add(share)
+						limits[i] = style.Max(limits[i], tracks[i].base)
+					}
+				}
+			}
+			// The growth limits take the same treatment with the item's
+			// max-content ask, so that a spanning item can grow the tracks it
+			// covers as far as it would have grown one of its own.
+			room := gap.Mul(float64(span - 1))
+			for i := a.from; i < a.from+span; i++ {
+				room = room.Add(limits[i])
+			}
+			if short := a.max.Sub(room); short > 0 {
+				share := short.Div(float64(intrinsic))
+				for i := a.from; i < a.from+span; i++ {
+					if tracks[i].min.kind != trackFixed {
+						limits[i] = limits[i].Add(share)
+					}
+				}
+			}
+		}
+	}
 }
 
 // growToLimits is §12.6: the free space is shared equally between the tracks
@@ -663,13 +1049,19 @@ func (l *layouter) gridItems(b *Box, width style.Unit) []*gridItem {
 		if c.IsText() || (c.Anonymous() && len(c.Children) == 0) || c.outOfFlow() {
 			continue
 		}
-		out = append(out, &gridItem{
+		it := &gridItem{
 			box:     c,
 			margin:  l.edges(c, "margin", width),
 			border:  l.borderWidths(c),
 			padding: l.paddingOf(c, width),
 			order:   orderOf(c),
-		})
+		}
+		// The gate has read these already and refused the container where it
+		// could not; what comes back here is what it accepted.
+		it.place[0], _ = l.placementOf(c, "grid-row", "grid-row-start", "grid-row-end")
+		it.place[1], _ = l.placementOf(c,
+			"grid-column", "grid-column-start", "grid-column-end")
+		out = append(out, it)
 	}
 	// §6.2's order-modified document order, and the sort is stable for the
 	// reason it is in a flex container: items that named the same order keep
@@ -1091,14 +1483,20 @@ func (l *layouter) refusesToGrid(b *Box, width style.Unit) string {
 		if c.IsText() || (c.Anonymous() && len(c.Children) == 0) || c.outOfFlow() {
 			continue
 		}
-		for _, p := range [...]string{"grid-column", "grid-row", "grid-area",
-			"grid-column-start", "grid-column-end", "grid-row-start", "grid-row-end"} {
-			switch trimmedLower(c.Style[p]) {
-			case "", "auto":
-			default:
-				return "one of its items names the line it starts or ends at, " +
-					"which places it somewhere the automatic flow would not"
-			}
+		switch trimmedLower(c.Style["grid-area"]) {
+		case "", "auto":
+		default:
+			// The four-part shorthand, which is how an item is put in a named
+			// area — and an area is a placement algorithm of its own.
+			return "one of its items is placed by area rather than by line"
+		}
+		_, row := l.placementOf(c, "grid-row", "grid-row-start", "grid-row-end")
+		_, column := l.placementOf(c,
+			"grid-column", "grid-column-start", "grid-column-end")
+		if !row || !column {
+			return "one of its items names a line this engine cannot find, " +
+				"such as a name from a template or a number counted back from " +
+				"the end of the grid"
 		}
 		if why := refusesGridAlignment(c); why != "" {
 			return why
