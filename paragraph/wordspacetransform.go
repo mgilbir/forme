@@ -142,10 +142,7 @@ func InsertPhraseSeparators(text string, wst WordSpaceTransform, w WritingSystem
 		}
 		prev, _ := utf8.DecodeLastRuneInString(text[:at])
 		next, _ := utf8.DecodeRuneInString(text[at:])
-		if separatorAlready(prev) || separatorAlready(next) {
-			continue
-		}
-		if isBinding(prev) || isBinding(next) {
+		if !PhraseSeparatorAt(prev, next) {
 			continue
 		}
 		out.WriteString(text[last:at])
@@ -156,6 +153,26 @@ func InsertPhraseSeparators(text string, wst WordSpaceTransform, w WritingSystem
 		return text
 	}
 	return out.String() + text[last:]
+}
+
+// PhraseSeparatorAt reports whether a virtual separator belongs between two
+// characters that a phrase boundary was found between.
+//
+// It is exported because the boundary is not always inside one run of text: a
+// phrase can end where an inline box does, and the caller that inserts a
+// separator *there* has the two characters and nothing else. Both callers ask
+// the same question and must get the same answer, which is what this being one
+// function is for.
+//
+// The two clauses are §2.2's. A separator already at the boundary is not
+// doubled — the text has had the ones the document wrote expanded by the time
+// this is asked, so a U+200B that became a U+3000 counts. And a boundary beside
+// one of UAX #14's GL, WJ or ZWJ characters is a boundary in a place a line may
+// not be divided, so it is not a word boundary at all; see isBinding, which is
+// those three classes and is the table word-break's own auto-phrase uses.
+func PhraseSeparatorAt(prev, next rune) bool {
+	return !separatorAlready(prev) && !separatorAlready(next) &&
+		!isBinding(prev) && !isBinding(next)
 }
 
 // separatorAlready reports whether a character is one §2.2 counts as a
