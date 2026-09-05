@@ -458,7 +458,9 @@ func TestOrderMovesAGridItemToAnotherCell(t *testing.T) {
 func TestAGridContainerThisEngineCannotArrangeSaysSo(t *testing.T) {
 	for _, c := range []struct{ what, css, names string }{
 		{"a named line", `#g { grid-template-columns: [start] 1fr }`, "does not size"},
-		{"a minmax", `#g { grid-template-columns: minmax(10px, 1fr) }`, "does not size"},
+		{"a flexible minimum", `#g { grid-template-columns: minmax(1fr, 2fr) }`, "does not size"},
+		{"a minmax of one thing", `#g { grid-template-columns: minmax(100px) }`, "does not size"},
+		{"a fit-content", `#g { grid-template-columns: fit-content(100px) }`, "does not size"},
 		{"a repeat that counts", `#g { grid-template-columns: repeat(auto-fill, 1fr) }`, "does not size"},
 		{"a nested repeat", `#g { grid-template-columns: repeat(2, repeat(2, 1fr)) }`, "does not size"},
 		{"a named row", `#g { grid-template-rows: [top] 20px }`, "does not size"},
@@ -764,4 +766,69 @@ func TestAnAlignedTrackIsNotStretched(t *testing.T) {
 			{108, 0, 36, 20}, {144, 0, 48, 20},
 			{108, 20, 36, 20}, {144, 20, 48, 20},
 		}, "two automatic columns centred instead")
+}
+
+// TestMinmaxWritesTheTwoEndsOfATrackSeparately is §7.2.2. Every track has two
+// sizing functions and minmax() is the spelling that writes them apart: a
+// column that may not be narrower than 100px and takes a share of what is left
+// over is the responsive layout every document has.
+func TestMinmaxWritesTheTwoEndsOfATrackSeparately(t *testing.T) {
+	const two = `<div id="g"><div>ab cd</div><div>dddd</div></div>`
+
+	// Room for both minimums and more: the fraction decides, and the minimum
+	// does nothing.
+	wantCells(t, gridCells(t, two,
+		`#g { width: 300px; grid-template-columns: minmax(100px, 1fr) minmax(100px, 1fr) }`),
+		[][4]float64{{0, 0, 150, 20}, {150, 0, 150, 20}}, "two fractions above their minimums")
+
+	// One minimum bigger than its share: it holds, and the other fraction takes
+	// what is left rather than its own half.
+	wantCells(t, gridCells(t, two,
+		`#g { width: 300px; grid-template-columns: minmax(200px, 1fr) minmax(100px, 1fr) }`),
+		[][4]float64{{0, 0, 200, 20}, {200, 0, 100, 20}}, "a minimum bigger than its share")
+
+	// No room for either: the minimums hold and the grid overflows, which is
+	// what a minimum is for — a column narrower than that was not wanted.
+	wantCells(t, gridCells(t, two,
+		`#g { width: 100px; grid-template-columns: minmax(80px, 1fr) minmax(80px, 1fr) }`),
+		[][4]float64{{0, 0, 80, 20}, {80, 0, 80, 20}}, "two minimums in a container too narrow")
+
+	// A maximum that is a length caps the growing, and what it did not take
+	// goes to the automatic track beside it.
+	wantCells(t, gridCells(t, two,
+		`#g { width: 300px; grid-template-columns: minmax(min-content, 100px) auto }`),
+		[][4]float64{{0, 0, 100, 20}, {100, 0, 200, 20}}, "a capped column beside an automatic one")
+
+	// A maximum that is a length stops the stretching too, which is the one
+	// place the two ends have to be told apart: the *maximum* decides whether a
+	// track takes what is left over, so "minmax(auto, 60px)" stops at 60 and
+	// the automatic track beside it takes the other 240.
+	wantCells(t, gridCells(t, two,
+		`#g { width: 300px; grid-template-columns: minmax(auto, 60px) auto }`),
+		[][4]float64{{0, 0, 60, 20}, {60, 0, 240, 20}}, "a capped column that does not stretch")
+
+	// And it composes with repeat(), which is how it is written in practice.
+	wantCells(t, gridCells(t, two,
+		`#g { width: 300px; grid-template-columns: repeat(2, minmax(50px, 1fr)) }`),
+		[][4]float64{{0, 0, 150, 20}, {150, 0, 150, 20}}, "a repeated minmax")
+}
+
+// TestASingleTrackSizeIsBothEnds, except for the two that are not: "auto" is
+// the largest minimum its items need at the low end and max-content at the
+// high one, and a flexible track is "auto" at the low end — which is why "1fr"
+// never comes out narrower than the words in it.
+func TestASingleTrackSizeIsBothEnds(t *testing.T) {
+	const two = `<div id="g"><div>ab cd</div><div>dddd</div></div>`
+
+	// A container with no room to give: the fraction cannot go below the
+	// longest word in it, so the two columns come out at their content's
+	// minimum — 24px for the wider of "ab" and "cd", 48 for "dddd" — and
+	// overflow rather than taking half the container each. The row is as tall
+	// as the item that had to wrap.
+	wantCells(t, gridCells(t, two, `#g { width: 40px; grid-template-columns: 1fr 1fr }`),
+		[][4]float64{{0, 0, 24, 40}, {24, 0, 48, 40}}, "two fractions with nothing to divide")
+
+	// A fixed track is its length at both ends whatever its content needs.
+	wantCells(t, gridCells(t, two, `#g { width: 300px; grid-template-columns: 20px 20px }`),
+		[][4]float64{{0, 0, 20, 40}, {20, 0, 20, 40}}, "two fixed columns narrower than their text")
 }

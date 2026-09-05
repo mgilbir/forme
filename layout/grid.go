@@ -65,15 +65,42 @@ const (
 	trackFlex
 )
 
-// gridTrack is one column or one row.
-type gridTrack struct {
+// trackSize is one of §7.2's sizing functions: what a track asks for at one of
+// its two ends.
+type trackSize struct {
 	kind trackKind
 	// size is the stated length of a trackFixed, and factor the number in front
-	// of the "fr" of a trackFlex. base is what the sizing resolved.
+	// of the "fr" of a trackFlex.
 	size   style.Unit
 	factor float64
-	base   style.Unit
 }
+
+// gridTrack is one column or one row.
+//
+// Every track has *two* sizing functions and not one — §7.2 says so, and
+// minmax() is the spelling that writes them separately. A single value is
+// minmax() of itself twice, except for the two that mean different things at
+// each end: "auto" is the largest minimum its items need at the low end and
+// max-content at the high one, and a flexible track is "auto" at the low end
+// and its own share at the high one. That is why "1fr" never comes out narrower
+// than the words in it.
+type gridTrack struct {
+	min, max trackSize
+	base     style.Unit
+}
+
+// autoTrack is the implicit track: "auto" at both ends, which is what
+// grid-auto-rows and grid-auto-columns are set to and what a track this engine
+// makes for itself has to be.
+func autoTrack() gridTrack {
+	return gridTrack{min: trackSize{kind: trackAuto}, max: trackSize{kind: trackAuto}}
+}
+
+// flexible and stretches are the two questions the sizing asks about a track's
+// *maximum*, which is the end that decides both: a flexible track takes a share
+// of the free space, and an automatic one takes what is left after that.
+func (t gridTrack) flexible() bool  { return t.max.kind == trackFlex }
+func (t gridTrack) stretches() bool { return t.max.kind == trackAuto }
 
 // gridItem is one in-flow child of a grid container, together with the cell it
 // was placed in.
@@ -129,7 +156,7 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 		// §7.1: a container with no explicit columns still has one, because
 		// every item has to be somewhere. The implicit track is "auto", which
 		// is the same answer a single-column grid would have been given.
-		columns = []gridTrack{{kind: trackAuto}}
+		columns = []gridTrack{autoTrack()}
 	}
 	rows, _ := l.trackList(b, "grid-template-rows", width)
 
@@ -140,7 +167,7 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 	}
 	for len(rows) < items[len(items)-1].row+1 {
 		// The implicit rows, which are "auto" because grid-auto-rows is.
-		rows = append(rows, gridTrack{kind: trackAuto})
+		rows = append(rows, autoTrack())
 	}
 
 	across, down := l.gridAlignment(b, "justify-items"), l.gridAlignment(b, "align-items")
@@ -442,19 +469,8 @@ func (l *layouter) resolveTracks(tracks []gridTrack,
 	limits := make([]style.Unit, len(tracks))
 	for i := range tracks {
 		min, max := contribution(i)
-		switch tracks[i].kind {
-		case trackFixed:
-			tracks[i].base, limits[i] = maxZero(tracks[i].size), maxZero(tracks[i].size)
-		case trackMin:
-			tracks[i].base, limits[i] = min, min
-		case trackMax:
-			tracks[i].base, limits[i] = max, max
-		default:
-			// "auto" and a flexible track, which are minmax(auto, max-content)
-			// and minmax(auto, <flex>): neither may go below its content, and
-			// both are grown afterwards by different clauses.
-			tracks[i].base, limits[i] = min, max
-		}
+		tracks[i].base = resolveTrackSize(tracks[i].min, min, max, min)
+		limits[i] = resolveTrackSize(tracks[i].max, min, max, max)
 	}
 	if !definite {
 		return
@@ -472,6 +488,34 @@ func (l *layouter) resolveTracks(tracks []gridTrack,
 	}
 }
 
+// resolveTrackSize turns one sizing function into a number, given what the
+// items in the track need.
+//
+// "auto" is the one that answers differently at each end, and the caller says
+// which end it is asking about by what it passes as its own: the largest
+// minimum at the low end, max-content at the high one. A flexible function
+// arrives here only as a maximum — the gate refuses minmax() with a flexible
+// minimum, and a bare "1fr" is written out as minmax(auto, 1fr) — and the
+// number it comes to is never read, because §12.4 gives a track with a flexible
+// maximum a growth limit equal to its base and §12.6 leaves it alone until
+// §12.7 hands it a share.
+//
+// A growth limit smaller than the base size is left as it is rather than
+// clamped up to it. Nothing needs the clamp: the limit is only ever read as
+// "how much further may this grow", and a track whose base is already past it
+// grows by nothing either way.
+func resolveTrackSize(f trackSize, min, max, auto style.Unit) style.Unit {
+	switch f.kind {
+	case trackFixed:
+		return maxZero(f.size)
+	case trackMin:
+		return min
+	case trackMax:
+		return max
+	}
+	return auto
+}
+
 // growToLimits is §12.6: the free space is shared equally between the tracks
 // that can still take it, and a track that reaches its growth limit stops.
 //
@@ -483,7 +527,7 @@ func growToLimits(tracks []gridTrack, limits []style.Unit, free style.Unit) styl
 	for pass := 0; pass <= len(tracks) && free > 0; pass++ {
 		growing := 0
 		for i := range tracks {
-			if tracks[i].kind != trackFlex && tracks[i].base < limits[i] {
+			if !tracks[i].flexible() && tracks[i].base < limits[i] {
 				growing++
 			}
 		}
@@ -492,7 +536,7 @@ func growToLimits(tracks []gridTrack, limits []style.Unit, free style.Unit) styl
 		}
 		share := free.Div(float64(growing))
 		for i := range tracks {
-			if tracks[i].kind == trackFlex || tracks[i].base >= limits[i] {
+			if tracks[i].flexible() || tracks[i].base >= limits[i] {
 				continue
 			}
 			want := style.Min(share, limits[i].Sub(tracks[i].base))
@@ -518,8 +562,8 @@ func expandFlexibleTracks(tracks []gridTrack, room style.Unit) bool {
 	factors := 0.0
 	fixed := style.Unit(0)
 	for _, t := range tracks {
-		if t.kind == trackFlex {
-			factors += t.factor
+		if t.flexible() {
+			factors += t.max.factor
 			continue
 		}
 		fixed = fixed.Add(t.base)
@@ -533,10 +577,10 @@ func expandFlexibleTracks(tracks []gridTrack, room style.Unit) bool {
 		each = leftover.Div(factors)
 	}
 	for i := range tracks {
-		if tracks[i].kind != trackFlex {
+		if !tracks[i].flexible() {
 			continue
 		}
-		if share := each.Mul(tracks[i].factor); share > tracks[i].base {
+		if share := each.Mul(tracks[i].max.factor); share > tracks[i].base {
 			tracks[i].base = share
 		}
 	}
@@ -549,7 +593,7 @@ func expandFlexibleTracks(tracks []gridTrack, room style.Unit) bool {
 func stretchAutoTracks(tracks []gridTrack, free style.Unit) {
 	autos := 0
 	for _, t := range tracks {
-		if t.kind == trackAuto {
+		if t.stretches() {
 			autos++
 		}
 	}
@@ -558,7 +602,7 @@ func stretchAutoTracks(tracks []gridTrack, free style.Unit) {
 	}
 	each := free.Div(float64(autos))
 	for i := range tracks {
-		if tracks[i].kind == trackAuto {
+		if tracks[i].stretches() {
 			tracks[i].base = tracks[i].base.Add(each)
 		}
 	}
@@ -728,35 +772,103 @@ func (l *layouter) repeatedTracks(b *Box, args []css.ComponentValue,
 // any grid anyone lays out and turns a memory exhaustion into a finding.
 const maxRepeatedTracks = 1000
 
-// trackFrom reads one track size.
+// trackFrom reads one track, which is either a size written once or a minmax()
+// that writes the two ends separately.
+//
+// A single size is that size at both ends, and the two that are not are the two
+// that mean different things there: "auto" and a flexible track are both
+// "whatever the items need" at the low end. Writing them out as a minmax() here
+// rather than special-casing them later is what lets the sizing ask one
+// question of each end and never ask which spelling it came from.
 func (l *layouter) trackFrom(b *Box, v css.ComponentValue, width style.Unit) (gridTrack, bool) {
+	if v.IsFunction() && strings.EqualFold(v.Token.Value, "minmax") {
+		return l.minmaxTrack(b, v.Values, width)
+	}
+	size, ok := l.trackSizeFrom(b, v, width)
+	if !ok {
+		return gridTrack{}, false
+	}
+	switch size.kind {
+	case trackAuto, trackFlex:
+		return gridTrack{min: trackSize{kind: trackAuto}, max: size}, true
+	}
+	return gridTrack{min: size, max: size}, true
+}
+
+// minmaxTrack reads §7.2.2's minmax(), whose two arguments are the track's two
+// sizing functions and are not interchangeable: the minimum may not be
+// flexible, because a track that took a share of the free space as its *floor*
+// would be asking for the space before there was any to have.
+func (l *layouter) minmaxTrack(b *Box, args []css.ComponentValue,
+	width style.Unit) (gridTrack, bool) {
+
+	var parts [][]css.ComponentValue
+	var cur []css.ComponentValue
+	for _, v := range args {
+		if v.IsToken() && v.Token.Kind == css.Comma {
+			parts = append(parts, cur)
+			cur = nil
+			continue
+		}
+		cur = append(cur, v)
+	}
+	parts = append(parts, cur)
+	if len(parts) != 2 {
+		return gridTrack{}, false
+	}
+	var out gridTrack
+	for i, part := range parts {
+		one := splitValuesOnWhitespace(part)
+		if len(one) != 1 || len(one[0]) != 1 {
+			return gridTrack{}, false
+		}
+		size, ok := l.trackSizeFrom(b, one[0][0], width)
+		if !ok {
+			return gridTrack{}, false
+		}
+		if i == 0 {
+			if size.kind == trackFlex {
+				return gridTrack{}, false
+			}
+			out.min = size
+			continue
+		}
+		out.max = size
+	}
+	return out, true
+}
+
+// trackSizeFrom reads one sizing function.
+func (l *layouter) trackSizeFrom(b *Box, v css.ComponentValue,
+	width style.Unit) (trackSize, bool) {
+
 	if v.IsToken() && v.Token.Kind == css.Ident {
 		switch strings.ToLower(v.Token.Value) {
 		case "auto":
-			return gridTrack{kind: trackAuto}, true
+			return trackSize{kind: trackAuto}, true
 		case "min-content":
-			return gridTrack{kind: trackMin}, true
+			return trackSize{kind: trackMin}, true
 		case "max-content":
-			return gridTrack{kind: trackMax}, true
+			return trackSize{kind: trackMax}, true
 		}
-		return gridTrack{}, false
+		return trackSize{}, false
 	}
 	if v.IsToken() && v.Token.Kind == css.Dimension &&
 		strings.EqualFold(v.Token.Unit, "fr") {
 		if v.Token.Number < 0 {
-			return gridTrack{}, false
+			return trackSize{}, false
 		}
-		return gridTrack{kind: trackFlex, factor: v.Token.Number}, true
+		return trackSize{kind: trackFlex, factor: v.Token.Number}, true
 	}
 	length, ok := l.lengthOfValues(b, []css.ComponentValue{v})
 	if !ok {
-		return gridTrack{}, false
+		return trackSize{}, false
 	}
 	size, ok := length.Resolve(width, true)
 	if !ok || size < 0 {
-		return gridTrack{}, false
+		return trackSize{}, false
 	}
-	return gridTrack{kind: trackFixed, size: size}, true
+	return trackSize{kind: trackFixed, size: size}, true
 }
 
 // splitValuesOnWhitespace is style's splitter, which is not exported and is two
