@@ -1629,3 +1629,80 @@ func TestAMarginIsPartOfTheDistanceToABaseline(t *testing.T) {
 		`#f { width: 300px; align-items: baseline } #f > div#b { margin-top: 10px }`),
 		[][2]float64{{10, 20}, {10, 20}}, "an item held off the top by a margin")
 }
+
+// TestBoxSizingTakesTheEdgeOffTheAxisTheSizeIsOn.
+//
+// "box-sizing: border-box" says a declared size includes the border and the
+// padding — the ones on the axis that size is on, which is the container's
+// question and not the property's: the same "height: 100px" is a main size down
+// a column and a cross size across a row.
+//
+// The failure this pins is not a rounding. An item asked to be 100px wide came
+// out 120 because the *vertical* padding was the one taken off its width, and
+// one asked to be 100px tall came out 80 because the horizontal padding was
+// taken off its height. Both are the same mistake and neither shows unless the
+// two paddings differ.
+func TestBoxSizingTakesTheEdgeOffTheAxisTheSizeIsOn(t *testing.T) {
+	const two = `<div id="f"><div id="a">a</div><div id="b">b</div></div>`
+
+	// Every number below is a border box, which is what these declarations are
+	// about: 100px of border box is 100px of the line whatever is inside it,
+	// and the failure is an item that comes out 120 or 80 instead.
+	wantRow(t, flexRow(t, two,
+		`#f { width: 300px } #f > div { box-sizing: border-box; flex-basis: 100px;`+
+			` padding: 0 10px; flex-shrink: 0 }`),
+		[][2]float64{{0, 100}, {100, 100}}, "a basis in border-box widths")
+
+	// The padding down the item has nothing to do with its width.
+	wantRow(t, flexRow(t, two,
+		`#f { width: 300px } #f > div { box-sizing: border-box; flex-basis: 100px;`+
+			` padding: 10px 0; flex-shrink: 0 }`),
+		[][2]float64{{0, 100}, {100, 100}}, "a basis beside a padding down the item")
+
+	// A column, and the two the other way round: the padding above and below
+	// comes out of a declared height, and the padding either side does not.
+	wantCross(t, flexCross(t, two,
+		`#f { width: 300px; flex-direction: column }`+
+			`#f > div { box-sizing: border-box; height: 100px; padding: 10px 0 }`),
+		[][2]float64{{0, 100}, {100, 100}}, "a height in border-box heights")
+	wantCross(t, flexCross(t, two,
+		`#f { width: 300px; flex-direction: column }`+
+			`#f > div { box-sizing: border-box; height: 100px; padding: 0 10px }`),
+		[][2]float64{{0, 100}, {100, 100}}, "a height beside a padding across the item")
+
+	// The same for the limits, which are read the same way and were wrong the
+	// same way: a minimum of 100px of border box is 100px of border box.
+	wantCross(t, flexCross(t, two,
+		`#f { width: 300px; height: 400px; flex-direction: column }`+
+			`#f > div { box-sizing: border-box; min-height: 100px; padding: 10px 0; flex-grow: 0 }`),
+		[][2]float64{{0, 100}, {100, 100}}, "a minimum in border-box heights")
+
+	// And the cross size the same way round: an item's width down a column is
+	// a cross size, so it is the padding across the item that comes out of it.
+	wantRow(t, flexRow(t, two,
+		`#f { width: 300px; flex-direction: column }`+
+			`#f > div { box-sizing: border-box; width: 100px; padding: 10px 0 }`),
+		[][2]float64{{0, 100}, {0, 100}}, "a width in border-box widths down a column")
+}
+
+// TestAPercentagePaddingIsOfTheContainerEvenInBorderBox. What box-sizing takes
+// off is the used padding, and a padding written as a percentage is a
+// percentage of the container's width — which this knows, because the item is
+// being fitted into a line whose width is settled.
+func TestAPercentagePaddingIsOfTheContainerEvenInBorderBox(t *testing.T) {
+	// 10% of 300px is 30px each side, so 100px of border box leaves 40 of
+	// content — and the item still takes exactly 100px of the line. Resolving
+	// the percentage against nothing would leave the content at 100 and the
+	// item at 160.
+	wantRow(t, flexRow(t, `<div id="f"><div id="a">a</div></div>`,
+		`#f { width: 300px } #f > div { box-sizing: border-box; flex-basis: 100px;`+
+			` padding: 0 10%; flex-shrink: 0 }`),
+		[][2]float64{{0, 100}}, "a percentage padding inside a border box")
+
+	// The same for a declared size rather than a basis, which is read by its
+	// own path and was wrong in its own way.
+	wantRow(t, flexRow(t, `<div id="f"><div id="a">a</div></div>`,
+		`#f { width: 300px } #f > div { box-sizing: border-box; width: 100px;`+
+			` padding: 0 10%; flex-shrink: 0 }`),
+		[][2]float64{{0, 100}}, "a percentage padding inside a declared width")
+}

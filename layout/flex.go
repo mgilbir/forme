@@ -1390,7 +1390,11 @@ func (l *layouter) flexItems(b *Box, a flexAxis, width style.Unit, origin flow) 
 func (l *layouter) crossSizeOf(b *Box, a flexAxis, it *flexItem, width style.Unit) style.Unit {
 	edge := a.crossEdge(it.border).Add(a.crossEdge(it.padding))
 	room := maxZero(width.Sub(it.crossMargin))
-	if declared, ok := l.intrinsicLength(it.box, a.crossName()); ok {
+	if declared, ok := l.mainLength(it.box, flexAxis{column: !a.column}, a.crossName(), width); ok {
+		// The item's own cross size, which is the main size of the axis this
+		// one is not: a column's cross axis is a row's main axis, and what
+		// box-sizing takes out of a declared size is decided the same way on
+		// either.
 		return declared.Add(edge)
 	}
 	if l.alignOf(b, a, it) == crossStretch && l.stretchesAcross(a, it) {
@@ -1428,9 +1432,9 @@ func (l *layouter) measuredMain(it *flexItem, a flexAxis, width style.Unit,
 // wide rather than three equal thirds.
 func (l *layouter) flexBaseSize(it *flexItem, a flexAxis, width style.Unit) style.Unit {
 	if !it.values.basisAuto {
-		return maxZero(it.values.basis.Sub(l.sizingEdgeOf(it.box, width)))
+		return maxZero(it.values.basis.Sub(l.sizingEdgeOf(it.box, a, width)))
 	}
-	if declared, ok := l.intrinsicLength(it.box, a.mainName()); ok {
+	if declared, ok := l.mainLength(it.box, a, a.mainName(), width); ok {
 		return declared
 	}
 	if a.column {
@@ -1441,10 +1445,35 @@ func (l *layouter) flexBaseSize(it *flexItem, a flexAxis, width style.Unit) styl
 	return l.contentWidths(it.box).max
 }
 
-// sizingEdgeOf is what box-sizing takes out of a declared size.
-func (l *layouter) sizingEdgeOf(c *Box, containing style.Unit) style.Unit {
-	_, inset := l.sizingInset(c, containing)
-	return inset
+// mainLength is one of the item's own main-axis sizes, resolved as a content
+// size, or false where the declaration is not a length this can answer.
+//
+// It exists because "box-sizing: border-box" means a declared size includes the
+// border and the padding *on the axis that size is on*, and which axis that is
+// is the container's question rather than the property's: the same "height:
+// 100px" is a main size down a column and a cross size across a row.
+// intrinsicLength answers for a width, which is right wherever a main size is
+// one and wrong by the difference between the two insets everywhere else.
+//
+// The padding is resolved against the container's own width, on both axes,
+// because that is what a percentage padding is a percentage of — and unlike
+// intrinsic sizing, which has to ask before there is an answer, a flex item is
+// being fitted into a line whose width is already known.
+func (l *layouter) mainLength(c *Box, a flexAxis, property string, width style.Unit) (style.Unit, bool) {
+	length, ok := l.parseLength(c, property)
+	if !ok || length.Kind != style.LengthAbsolute {
+		return 0, false
+	}
+	return maxZero(length.Value.Sub(l.sizingEdgeOf(c, a, width))), true
+}
+
+// sizingEdgeOf is what box-sizing takes out of a declared main size.
+func (l *layouter) sizingEdgeOf(c *Box, a flexAxis, containing style.Unit) style.Unit {
+	horizontal, vertical := l.sizingInset(c, containing)
+	if a.column {
+		return vertical
+	}
+	return horizontal
 }
 
 // flexMainLimits is an item's own minimum and maximum main size.
@@ -1457,11 +1486,11 @@ func (l *layouter) sizingEdgeOf(c *Box, containing style.Unit) style.Unit {
 func (l *layouter) flexMainLimits(it *flexItem, a flexAxis, width style.Unit) (min, max style.Unit) {
 	c := it.box
 	max = style.MaxUnit
-	if v, ok := l.intrinsicLength(c, a.maxName()); ok {
+	if v, ok := l.mainLength(c, a, a.maxName(), width); ok {
 		max = v
 	}
 	if !l.isAuto(c, a.minName()) {
-		if v, ok := l.intrinsicLength(c, a.minName()); ok {
+		if v, ok := l.mainLength(c, a, a.minName(), width); ok {
 			return v, max
 		}
 	}
@@ -1479,7 +1508,7 @@ func (l *layouter) flexMainLimits(it *flexItem, a flexAxis, width style.Unit) (m
 		// behaviour authors meet as "my flex item will not get smaller".
 		min = it.measured
 	}
-	if declared, ok := l.intrinsicLength(c, a.mainName()); ok && declared < min {
+	if declared, ok := l.mainLength(c, a, a.mainName(), width); ok && declared < min {
 		min = declared
 	}
 	if max < min {
