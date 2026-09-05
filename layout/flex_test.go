@@ -213,8 +213,13 @@ func TestAContainerThisEngineCannotArrangeIsLaidOutAsABlockAndSaysSo(t *testing.
 		{"lines that wrap some other way", `#f { flex-wrap: reverse }`, "wrap by a rule"},
 		{"lines on a baseline", `#f { flex-wrap: wrap; align-content: baseline }`, "placed by a rule"},
 		{"a safe alignment", `#f { justify-content: safe center }`, "packed by a rule"},
-		{"items on a baseline", `#f { align-items: baseline }`, "shared baseline"},
-		{"an item on the baseline", `#f > div:first-child { align-self: baseline }`, "shared baseline"},
+		{"items on the last baseline", `#f { align-items: last baseline }`, "last baseline of their text"},
+		{"items on a baseline down a column",
+			`#f { align-items: baseline; flex-direction: column }`,
+			"across the axis they would be aligned on"},
+		{"an item on a baseline in lines that stack backwards",
+			`#f { flex-wrap: wrap-reverse } #f > div:first-child { align-self: baseline }`,
+			"part the baselines again"},
 		{"a percentage item", `#f > div:first-child { width: 50% }`, "percentage of the row"},
 		{"a floated child", `#f > div:first-child { float: left }`, "floated or absolutely"},
 	} {
@@ -1505,4 +1510,122 @@ func TestAnAnonymousItemIsAnonymous(t *testing.T) {
 	wantRow(t, flexRow(t, `<div id="f">abc<div>d</div></div>`,
 		`#f { width: 300px } #f > div { flex: 1 }`),
 		[][2]float64{{0, 36}, {36, 264}}, "a growing element beside an anonymous item")
+}
+
+// flexBaselines is where each item's first baseline ended up on the page, which
+// is the thing baseline alignment is about and the only thing about it that can
+// be stated without knowing a font's metrics.
+func flexBaselines(t *testing.T, htmlSrc, extra string) []float64 {
+	t.Helper()
+	root := layoutOf(t, 1000, htmlSrc, flexCSS+extra)
+	var out []float64
+	var walk func(*Fragment)
+	walk = func(f *Fragment) {
+		if f == nil {
+			return
+		}
+		if f.Box != nil && f.Box.Element != nil {
+			if id, _ := f.Box.Element.Attr("id"); id == "f" {
+				for _, c := range f.Children {
+					v, ok := firstBaseline(c)
+					if !ok {
+						v = c.BorderRect.H
+					}
+					out = append(out, c.BorderRect.Y.Add(v).Px())
+				}
+				return
+			}
+		}
+		for _, c := range f.Children {
+			walk(c)
+		}
+	}
+	walk(root)
+	return out
+}
+
+// TestItemsOnABaselineLineUpTheirText is §9.4.8. The items are moved across the
+// line until the first line of text in each sits on one line with the others,
+// which is what a row of labels beside a heading needs and what no other
+// alignment can do — every other one names an end of the item, and this names
+// something inside it.
+//
+// The assertion is that the baselines meet, not where they are: where they are
+// depends on the ascent of a font, and a test written against that number would
+// be checking Courier rather than this file.
+func TestItemsOnABaselineLineUpTheirText(t *testing.T) {
+	const two = `<div id="f"><div id="a">a</div><div id="b">b</div></div>`
+	const big = `#f { width: 300px; align-items: baseline }` +
+		`#f > div#b { font-size: 40px; line-height: 40px }`
+
+	got := flexBaselines(t, two, big)
+	if len(got) != 2 || got[0] != got[1] {
+		t.Errorf("the two baselines are at %v; the items are aligned to one", got)
+	}
+
+	// The item with the deeper baseline does not move: the group sits against
+	// the start of the line rather than floating in the middle of it.
+	wantCross(t, flexCross(t, two, big),
+		[][2]float64{{15.546875, 20}, {0, 40}}, "a small item beside a large one")
+
+	// Without the alignment they are both at the top and the baselines are not
+	// on one line, which is the picture this is instead of.
+	got = flexBaselines(t, two, `#f { width: 300px; align-items: flex-start }`+
+		`#f > div#b { font-size: 40px; line-height: 40px }`)
+	if len(got) != 2 || got[0] == got[1] {
+		t.Errorf("the two baselines are at %v, and nothing asked them to meet", got)
+	}
+}
+
+// TestAPaddingMovesAnItemsBaselineAndTheOthersFollow says the same thing in
+// whole numbers.
+//
+// Ten pixels of padding above one item's text puts its baseline ten pixels
+// lower, so every item aligned with it moves down by exactly ten — no font
+// metric anywhere in the arithmetic, which is what makes this the test that
+// pins the behaviour rather than the one that describes it.
+func TestAPaddingMovesAnItemsBaselineAndTheOthersFollow(t *testing.T) {
+	const two = `<div id="f"><div id="a">a</div><div id="b">b</div></div>`
+	const opposite = `#f { width: 300px; align-items: baseline }` +
+		`#f > div#a { padding-top: 10px } #f > div#b { padding-bottom: 30px }`
+
+	wantCross(t, flexCross(t, two,
+		`#f { width: 300px; align-items: baseline } #f > div#b { padding-top: 10px }`),
+		[][2]float64{{10, 20}, {0, 30}}, "an item pushed down by another's padding")
+
+	// And the line holds the deepest of each half, which need not be the same
+	// item: one item is 10px deeper above its baseline and another 30px deeper
+	// below, so the line is 60px while neither item is more than 50.
+	wantCross(t, flexCross(t, two, opposite),
+		[][2]float64{{0, 30}, {10, 50}}, "two items deeper on opposite sides")
+	if h := flexHeight(t, two, opposite); h != 60 {
+		t.Errorf("the line is %gpx and holds 10px above the deepest baseline and "+
+			"30px below the shallowest", h)
+	}
+}
+
+// TestAnItemWithNoTextIsAlignedByItsBottomEdge is §9.4.8's fallback: an item
+// with no baseline of its own is given one at the end of its border box.
+//
+// It is the same rule an empty inline-block follows in a line of text — it sits
+// on the baseline rather than straddling it — and it is the only answer that
+// does not need to invent a font for a box that has none.
+func TestAnItemWithNoTextIsAlignedByItsBottomEdge(t *testing.T) {
+	// Two boxes with nothing in them, 30px and 50px: their bottom edges meet,
+	// so the shallower one is pushed down by the difference.
+	got := flexCross(t, `<div id="f"><div id="a"></div><div id="b"></div></div>`,
+		`#f { width: 300px; align-items: baseline }`+
+			`#f > div#a { height: 30px } #f > div#b { height: 50px }`)
+	wantCross(t, got, [][2]float64{{20, 30}, {0, 50}}, "two empty boxes on a baseline")
+}
+
+// TestAMarginIsPartOfTheDistanceToABaseline. A baseline is measured from the
+// start of the item's *margin* box, because that is where the item begins on
+// the line — an item held 10px off the top of the line by a margin has its text
+// 10px further down, and every item aligned with it follows.
+func TestAMarginIsPartOfTheDistanceToABaseline(t *testing.T) {
+	const two = `<div id="f"><div id="a">a</div><div id="b">b</div></div>`
+	wantCross(t, flexCross(t, two,
+		`#f { width: 300px; align-items: baseline } #f > div#b { margin-top: 10px }`),
+		[][2]float64{{10, 20}, {10, 20}}, "an item held off the top by a margin")
 }
