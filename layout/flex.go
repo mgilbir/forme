@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/mgilbir/forme/style"
@@ -337,6 +338,9 @@ type flexItem struct {
 	// line is which of the container's lines the item landed on, which is what
 	// the cross-axis half of §9.4 and §9.6 is asked about.
 	line int
+	// order is §5.4's, which decides where the item sits among its siblings and
+	// nothing else about it.
+	order int
 	// base is §9.2's flex base size and hypothetical is that clamped by the
 	// item's own minimum and maximum, both as content sizes.
 	base, hypothetical style.Unit
@@ -461,9 +465,6 @@ func (l *layouter) refusesToFlex(b *Box, containing style.Unit) string {
 			return "one of its items is aligned across the line by a rule this " +
 				"engine does not apply, such as to a shared baseline"
 		}
-		if v, ok := parseNumber(trimmedLower(c.Style["order"])); ok && v != 0 {
-			return "one of its items asks to be moved in the order"
-		}
 		if l.percentageMainSize(c, a) {
 			// A percentage of the container's own main size, which is what this
 			// is resolving. §9.2 answers it — the percentage is against the
@@ -583,6 +584,42 @@ func (l *layouter) fillCrossAutoMargins(a flexAxis, it *flexItem, cross style.Un
 		it.addMargin(a.crossEndOf(&it.margin), share)
 		it.crossMargin = it.crossMargin.Add(share)
 	}
+}
+
+// orderOf reads §5.4's order, which is an integer and nothing else.
+//
+// A value with a fraction in it is not an integer, so the declaration is thrown
+// out and the initial value stands — the grammar has nowhere to put the half,
+// and rounding it would be inventing a value the author did not write. That is
+// the same answer flexValuesOf gives a factor it cannot read.
+//
+// The magnitude is bounded because only the relative order matters and an
+// unbounded one would overflow the comparison. A document that reaches the
+// bound has items whose order differs by more than a billion, and they tie —
+// which leaves them in document order, the answer they would have had anyway.
+func orderOf(b *Box) int {
+	s := trimmedLower(b.Style["order"])
+	sign := 1
+	if strings.HasPrefix(s, "+") {
+		s = s[1:]
+	} else if strings.HasPrefix(s, "-") {
+		sign, s = -1, s[1:]
+	}
+	if s == "" {
+		return 0
+	}
+	const bound = 1 << 30
+	n := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return 0
+		}
+		n = n*10 + int(s[i]-'0')
+		if n > bound {
+			n = bound
+		}
+	}
+	return sign * n
 }
 
 // percentageMainSize reports whether a box's own main-axis size is a percentage.
@@ -1230,8 +1267,20 @@ func (l *layouter) flexItems(b *Box, a flexAxis, width style.Unit, origin flow) 
 			Add(a.mainEdge(it.border)).Add(a.mainEdge(it.padding))
 		it.crossMargin = a.crossEdge(it.margin)
 		it.auto = l.autoMarginEdges(c)
+		it.order = orderOf(c)
 		out = append(out, it)
 	}
+
+	// §5.4's order-modified document order, which is where every other
+	// question about an item is answered from: which line it lands on, where on
+	// that line it sits, and — because the fragments are made in this order —
+	// which of two overlapping items is painted over the other.
+	//
+	// The sort is stable, and that is the property rather than an
+	// implementation note: items that named the same order keep the order the
+	// document put them in, and the initial value being zero is what makes
+	// "order: 1" mean "after everything that did not ask".
+	slices.SortStableFunc(out, func(x, y *flexItem) int { return x.order - y.order })
 	// A column measures each item by laying it out, and every one of those
 	// layouts is thrown away — the fragment that is kept is the one made at the
 	// size §9.7 settles on. What they took out of the flow goes with them; see
