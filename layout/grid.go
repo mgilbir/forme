@@ -85,7 +85,13 @@ type gridItem struct {
 	// rather than spans.
 	column, row int
 	order       int
-	frag        *Fragment
+	// across and down are how the item is aligned in its cell on each axis,
+	// and width and height are the sizes that gave it. A stretched item is its
+	// cell's size; an aligned one is its own, and the difference between the
+	// two is what the alignment has to place.
+	across, down  flexAlign
+	width, height style.Unit
+	frag          *Fragment
 }
 
 // horizontal and vertical are the room around the item's content on each axis.
@@ -137,37 +143,70 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 		rows = append(rows, gridTrack{kind: trackAuto})
 	}
 
-	l.sizeColumns(columns, items, width, columnGap)
+	across, down := l.gridAlignment(b, "justify-items"), l.gridAlignment(b, "align-items")
+	l.sizeColumns(columns, items, width, columnGap, l.gridContentAlignment(b, "justify-content"))
 
-	// Each item laid out at the width its column gives it, which is what tells
-	// the rows how tall they are. The fragments are thrown away: an item is
-	// laid out again at its cell's full size once the rows are settled, because
-	// a height changes where an item's content sits inside it.
+	// How wide each item is used at, which is its cell's width where it is
+	// stretched and its own fit-content width where it is aligned instead. It
+	// has to be settled before the heights are measured and cannot be settled
+	// before the columns are sized: it is the one thing between the two.
+	for _, it := range items {
+		it.across = l.itemAlignment(it, "justify-self", across)
+		it.down = l.itemAlignment(it, "align-self", down)
+		it.width = columns[it.column].base
+		if it.across != crossStretch {
+			it.width = l.gridFitContent(it, columns[it.column].base)
+		}
+	}
+
+	// Each item laid out at that width, which is what tells the rows how tall
+	// they are. The fragments are thrown away: an item is laid out again at the
+	// size its cell settles on, because a height changes where an item's
+	// content sits inside it.
 	mark := len(l.deferred)
-	heights := make([]style.Unit, len(items))
-	for i, it := range items {
-		frag := l.layOutGridItem(it, columns[it.column].base, 0, false, width, origin)
-		heights[i] = frag.BorderRect.H.Add(it.margin.Vertical())
+	for _, it := range items {
+		frag := l.layOutGridItem(it, it.width, 0, false, width, origin)
+		it.height = frag.BorderRect.H.Add(it.margin.Vertical())
 	}
 	l.deferred = l.deferred[:mark]
 
 	height, definite := l.explicitHeight(b, width, origin.cbHeight, origin.cbDefinite)
-	l.sizeRows(rows, items, heights, height, definite, rowGap)
+	l.sizeRows(rows, items, height, definite, rowGap,
+		l.gridContentAlignment(b, "align-content"))
 
 	// §12's answer for the container itself: the tracks and the gaps between
 	// them, which is what a grid comes to when nothing states its height.
-	inner := rowGap.Mul(float64(len(rows) - 1))
-	for _, r := range rows {
-		inner = inner.Add(r.base)
+	inner := gridInner(rows, rowGap)
+
+	// §10.3 and §10.4: where the tracks sit in a container that is bigger than
+	// they are. With everything at its initial value there is nothing over —
+	// the automatic tracks took it — so these offsets are nought and the whole
+	// of the arithmetic is skipped by being zero rather than by a branch.
+	columnLead, columnBetween := l.trackSpacing(b, "justify-content", columns, width, columnGap)
+	rowLead, rowBetween := l.trackSpacing(b, "align-content", rows, gridInner(rows, rowGap),
+		rowGap)
+	if definite {
+		rowLead, rowBetween = l.trackSpacing(b, "align-content", rows, height, rowGap)
 	}
 
 	for _, it := range items {
-		cellWidth := columns[it.column].base
 		cellHeight := rows[it.row].base
-		it.frag = l.layOutGridItem(it, cellWidth,
-			maxZero(cellHeight.Sub(it.margin.Vertical())), true, width, origin)
-		it.frag.BorderRect.X = trackStart(columns, it.column, columnGap).Add(it.margin.Left)
-		it.frag.BorderRect.Y = trackStart(rows, it.row, rowGap).Add(it.margin.Top)
+		if it.down == crossStretch {
+			it.height = cellHeight
+		}
+		it.frag = l.layOutGridItem(it, it.width,
+			maxZero(it.height.Sub(it.margin.Vertical())), true, width, origin)
+
+		x := trackStart(columns, it.column, columnGap).
+			Add(columnLead).Add(columnBetween.Mul(float64(it.column)))
+		y := trackStart(rows, it.row, rowGap).
+			Add(rowLead).Add(rowBetween.Mul(float64(it.row)))
+		it.frag.BorderRect.X = x.
+			Add(alignmentOffset(it.across, columns[it.column].base, it.width)).
+			Add(it.margin.Left)
+		it.frag.BorderRect.Y = y.
+			Add(alignmentOffset(it.down, cellHeight, it.height)).
+			Add(it.margin.Top)
 		parent.Children = append(parent.Children, it.frag)
 	}
 	l.deferGridOutOfFlow(b, parent, width)
@@ -197,6 +236,15 @@ func (l *layouter) deferGridOutOfFlow(b *Box, parent *Fragment, width style.Unit
 	}
 }
 
+// gridInner is what the tracks and the gaps between them come to.
+func gridInner(tracks []gridTrack, gap style.Unit) style.Unit {
+	out := gap.Mul(float64(len(tracks) - 1))
+	for _, t := range tracks {
+		out = out.Add(t.base)
+	}
+	return out
+}
+
 // trackStart is how far along the axis a track begins: everything before it and
 // the gaps between.
 func trackStart(tracks []gridTrack, at int, gap style.Unit) style.Unit {
@@ -205,6 +253,113 @@ func trackStart(tracks []gridTrack, at int, gap style.Unit) style.Unit {
 		out = out.Add(tracks[i].base)
 	}
 	return out
+}
+
+// gridAlignment reads one of the four properties that align an item in its
+// cell, and itemAlignment asks the item's own before the container's.
+//
+// The keywords are Box Alignment's and the reader is layout/flex.go's: §6.2
+// names the two ends of an axis once for every layout mode that has axes, and a
+// grid whose columns run left to right and whose rows run down is the case that
+// reader answers with no writing mode to unpick. That is why the value comes
+// back as a flexAlign — it is the same value, and having two of them would be
+// two ways to spell one specification.
+func (l *layouter) gridAlignment(b *Box, property string) flexAlign {
+	return crossAlignment(gridAlignmentValue(b.Style[property]), flexAxis{})
+}
+
+func (l *layouter) itemAlignment(it *gridItem, property string, container flexAlign) flexAlign {
+	value := gridAlignmentValue(it.box.Style[property])
+	if value == "" || value == "auto" {
+		return container
+	}
+	return crossAlignment(value, flexAxis{})
+}
+
+// gridAlignmentValue is the value with the two spellings that mean nothing here
+// taken out: "legacy" is justify-items' initial value and is a rule about
+// inheriting a text-align this engine never sets, and "auto" on a *-self
+// property means "the container's", which the caller answers.
+func gridAlignmentValue(raw string) string {
+	value := trimmedLower(raw)
+	switch value {
+	case "legacy", "normal":
+		return ""
+	case "left":
+		// A grid's columns run left to right here — the gate refuses the other
+		// direction — so the physical pair and the logical one name the same
+		// two ends.
+		return "start"
+	case "right":
+		return "end"
+	}
+	return value
+}
+
+// gridContentAlignment reports whether the tracks on an axis are stretched,
+// which is the one thing the *sizing* needs to know about alignment: §12.8
+// gives the space left over to the automatic tracks, and every other value
+// leaves it for §10.3 to place the tracks in.
+func (l *layouter) gridContentAlignment(b *Box, property string) bool {
+	switch trimmedLower(b.Style[property]) {
+	case "", "normal", "stretch":
+		return true
+	}
+	return false
+}
+
+// trackSpacing is §10.3 and §10.4: where the tracks sit when the container is
+// bigger than they are.
+//
+// It is justify-content and align-content, and it is the same arithmetic
+// layout/flex.go packs a line with — one specification, one function. What
+// comes back is where the first track begins and how much is added between each
+// pair, which is all a grid needs: the tracks are evenly spaced by every value
+// that spaces them at all.
+func (l *layouter) trackSpacing(b *Box, property string, tracks []gridTrack,
+	room, gap style.Unit) (lead, between style.Unit) {
+
+	free := room.Sub(gridInner(tracks, gap))
+	if free == 0 || len(tracks) == 0 {
+		return 0, 0
+	}
+	align := justifyStart
+	switch property {
+	case "align-content":
+		align = l.alignContentOf(b, flexAxis{})
+	default:
+		align = l.justifyOf(b, flexAxis{})
+	}
+	lead = justifyOffset(align, free, len(tracks), 0)
+	if len(tracks) > 1 {
+		between = justifyOffset(align, free, len(tracks), 1).Sub(lead)
+	}
+	return lead, between
+}
+
+// alignmentOffset is how far into its cell an aligned item sits: nothing at the
+// start, all of what is left at the end, and half of it in the middle.
+//
+// A stretched item has no offset because it has no room to move in — it was
+// made the size of the cell — and an item bigger than its cell has a negative
+// one, which is what an alignment that is not "safe" comes to: it keeps the
+// relationship it names and lets the overflow fall where the arithmetic puts it.
+func alignmentOffset(align flexAlign, cell, used style.Unit) style.Unit {
+	switch align {
+	case crossEnd:
+		return cell.Sub(used)
+	case crossCenter:
+		return cell.Sub(used).Div(2)
+	}
+	return 0
+}
+
+// gridFitContent is what an item that is not stretched is wide: its
+// max-content size held down to the cell and up to its min-content size, which
+// is §10.5's "fit-content" and is the same clause a floated box is sized by.
+func (l *layouter) gridFitContent(it *gridItem, cell style.Unit) style.Unit {
+	min, max := l.gridItemWidths(it)
+	return style.Clamp(cell, min, max)
 }
 
 // sizeColumns is §12.4 to §12.8 on the inline axis.
@@ -221,7 +376,7 @@ func trackStart(tracks []gridTrack, at int, gap style.Unit) style.Unit {
 // nothing left over, and neither grows. Sizing them at max-content instead
 // would push content off the edge of a box that had room for it.
 func (l *layouter) sizeColumns(columns []gridTrack, items []*gridItem,
-	width, gap style.Unit) {
+	width, gap style.Unit, stretch bool) {
 
 	l.resolveTracks(columns, func(i int) (style.Unit, style.Unit) {
 		var min, max style.Unit
@@ -233,7 +388,7 @@ func (l *layouter) sizeColumns(columns []gridTrack, items []*gridItem,
 			min, max = style.Max(min, gotMin), style.Max(max, gotMax)
 		}
 		return min, max
-	}, maxZero(width.Sub(gap.Mul(float64(len(columns)-1)))), true)
+	}, maxZero(width.Sub(gap.Mul(float64(len(columns)-1)))), true, stretch)
 }
 
 // gridItemWidths is what one item asks of its column: its min-content and
@@ -254,18 +409,18 @@ func (l *layouter) gridItemWidths(it *gridItem) (style.Unit, style.Unit) {
 // it is at the width it was given — so a row's base and its growth limit are
 // the same, and only a container that states a height has anything to give the
 // rows beyond them.
-func (l *layouter) sizeRows(rows []gridTrack, items []*gridItem, heights []style.Unit,
-	height style.Unit, definite bool, gap style.Unit) {
+func (l *layouter) sizeRows(rows []gridTrack, items []*gridItem,
+	height style.Unit, definite bool, gap style.Unit, stretch bool) {
 
 	l.resolveTracks(rows, func(i int) (style.Unit, style.Unit) {
 		var base style.Unit
-		for j, it := range items {
-			if it.row == i && heights[j] > base {
-				base = heights[j]
+		for _, it := range items {
+			if it.row == i && it.height > base {
+				base = it.height
 			}
 		}
 		return base, base
-	}, maxZero(height.Sub(gap.Mul(float64(len(rows)-1)))), definite)
+	}, maxZero(height.Sub(gap.Mul(float64(len(rows)-1)))), definite, stretch)
 }
 
 // resolveTracks is §12.4 to §12.8 on either axis: the base sizes, and then what
@@ -281,7 +436,8 @@ func (l *layouter) sizeRows(rows []gridTrack, items []*gridItem, heights []style
 // the size of its content and got it, while "auto" is the one that says it will
 // take more if there is more.
 func (l *layouter) resolveTracks(tracks []gridTrack,
-	contribution func(int) (style.Unit, style.Unit), room style.Unit, definite bool) {
+	contribution func(int) (style.Unit, style.Unit), room style.Unit,
+	definite, stretch bool) {
 
 	limits := make([]style.Unit, len(tracks))
 	for i := range tracks {
@@ -311,7 +467,9 @@ func (l *layouter) resolveTracks(tracks []gridTrack,
 	if expandFlexibleTracks(tracks, room) {
 		return
 	}
-	stretchAutoTracks(tracks, free)
+	if stretch {
+		stretchAutoTracks(tracks, free)
+	}
 }
 
 // growToLimits is §12.6: the free space is shared equally between the tracks
@@ -690,6 +848,9 @@ func (l *layouter) refusesToGrid(b *Box, width style.Unit) string {
 					"which places it somewhere the automatic flow would not"
 			}
 		}
+		if why := refusesGridAlignment(c); why != "" {
+			return why
+		}
 		if auto := l.autoMarginEdges(c); auto != (Edges{}) {
 			// §10.2 gives an auto margin the room left in the cell before the
 			// alignment properties see any of it, which is a second way of
@@ -697,30 +858,29 @@ func (l *layouter) refusesToGrid(b *Box, width style.Unit) string {
 			return "one of its items has an automatic margin, which takes the " +
 				"room left in its cell"
 		}
-		if why := refusesGridAlignment(c); why != "" {
-			return why
-		}
 	}
 	return ""
 }
 
-// refusesGridAlignment is the alignment half of the gate, which is the same
-// four properties on the container and on an item.
+// refusesGridAlignment is the alignment half of the gate, which is the same six
+// properties on the container and on an item.
 //
-// Every one of them is at its initial value here, and that value is not
-// nothing: "normal" behaves as "stretch" in a grid, which is what makes an item
-// fill its cell and an automatic track fill the container. What is refused is
-// every value that would move something, because moving it needs the free space
-// on each axis to be worked out per track rather than per container.
+// What is left to refuse is the two that name something other than an end of an
+// axis. A baseline alignment lines the *text* of the items in a row up with
+// each other, which is a measurement across a row rather than a position in a
+// cell; "safe" and "unsafe" are a second answer to what happens when an item
+// does not fit, and this has one already — the overflow falls where the
+// arithmetic puts it.
 func refusesGridAlignment(b *Box) string {
 	for _, p := range [...]string{"justify-content", "align-content",
 		"justify-items", "align-items", "justify-self", "align-self"} {
-		switch trimmedLower(b.Style[p]) {
-		case "", "normal", "stretch", "auto", "legacy":
+		switch value := trimmedLower(b.Style[p]); value {
+		case "", "normal", "stretch", "auto", "legacy", "start", "end", "center",
+			"flex-start", "flex-end", "self-start", "self-end", "left", "right",
+			"space-between", "space-around", "space-evenly":
 		default:
 			return "its tracks or its items are aligned by a rule this engine " +
-				"does not apply, and everything in a grid it does arrange is " +
-				"stretched to the cell it is in"
+				"does not apply, such as to a shared baseline"
 		}
 	}
 	return ""

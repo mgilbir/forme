@@ -468,11 +468,12 @@ func TestAGridContainerThisEngineCannotArrangeSaysSo(t *testing.T) {
 		{"sized implicit rows", `#g { grid-auto-rows: 50px }`, "implicit rows"},
 		{"sized implicit columns", `#g { grid-auto-columns: 50px }`, "implicit columns"},
 		{"a right-to-left grid", `#g { direction: rtl }`, "from the right"},
-		{"centred tracks", `#g { justify-content: center }`, "aligned by a rule"},
-		{"centred items", `#g { align-items: center }`, "aligned by a rule"},
+		{"tracks on a baseline", `#g { align-content: baseline }`, "aligned by a rule"},
+		{"items on a baseline", `#g { align-items: baseline }`, "aligned by a rule"},
+		{"a safe alignment", `#g { justify-content: safe center }`, "aligned by a rule"},
 		{"an item that names a line", `#g > div:first-child { grid-column: 2 }`, "names the line"},
 		{"an item with an area", `#g > div:first-child { grid-area: a }`, "names the line"},
-		{"an item aligned by itself", `#g > div:first-child { justify-self: end }`, "aligned by a rule"},
+		{"an item on a baseline", `#g > div:first-child { align-self: baseline }`, "aligned by a rule"},
 		{"an automatic margin", `#g > div:first-child { margin-left: auto }`, "automatic margin"},
 	} {
 		t.Run(c.what, func(t *testing.T) {
@@ -518,6 +519,8 @@ func TestAnArrangedGridSaysNothing(t *testing.T) {
 		`#g { width: 300px; grid-template-columns: auto max-content min-content }`,
 		`#g { width: 300px; grid-template-rows: 40px 40px; grid-auto-flow: row }`,
 		`#g { width: 300px; justify-content: normal; align-items: stretch }`,
+		`#g { width: 300px; justify-content: space-between; align-items: center }`,
+		`#g { width: 300px } #g > div:first-child { justify-self: end; align-self: start }`,
 		`#g { width: 300px } #g > div { order: 0; grid-column: auto }`,
 	} {
 		got := Compose(Input{HTML: fourItems,
@@ -611,4 +614,154 @@ func TestWhatAMeasuringLayoutTookOutOfTheFlowGoesWithIt(t *testing.T) {
 			t.Errorf("%s is on the page %d times, want once", id, n)
 		}
 	}
+}
+
+// TestJustifyContentPlacesTheTracks is §10.3, and it is the same six answers
+// justify-content gives a flex line — one property in Box Alignment, one
+// function here. The columns are 100px each in a 300px container, so there is
+// 100px over and each keyword is a different answer to where it goes.
+//
+// A fixed track is what makes this visible at all: an automatic one would have
+// taken the leftover itself, which is what "normal" means and is why nothing
+// moves without one of these.
+func TestJustifyContentPlacesTheTracks(t *testing.T) {
+	const fixed = `#g { width: 300px; grid-template-columns: 100px 100px }`
+	for _, c := range []struct {
+		value string
+		want  [][4]float64
+	}{
+		{"normal", [][4]float64{{0, 0, 100, 20}, {100, 0, 100, 20}}},
+		{"start", [][4]float64{{0, 0, 100, 20}, {100, 0, 100, 20}}},
+		{"end", [][4]float64{{100, 0, 100, 20}, {200, 0, 100, 20}}},
+		{"center", [][4]float64{{50, 0, 100, 20}, {150, 0, 100, 20}}},
+		{"space-between", [][4]float64{{0, 0, 100, 20}, {200, 0, 100, 20}}},
+		// Two shares of 50: half of one at each end and a whole one between.
+		{"space-around", [][4]float64{{25, 0, 100, 20}, {175, 0, 100, 20}}},
+		// Three gaps of 33 and a third, which is not a whole number of layout
+		// units and is why the offsets are taken from the whole free space
+		// rather than added up one gap at a time.
+		{"space-evenly", [][4]float64{{33.328125, 0, 100, 20}, {166.671875, 0, 100, 20}}},
+	} {
+		t.Run(c.value, func(t *testing.T) {
+			got := gridCells(t, `<div id="g"><div>a</div><div>bb</div></div>`,
+				fixed+`#g { justify-content: `+c.value+` }`)
+			wantCells(t, got, c.want, "two fixed columns packed by "+c.value)
+		})
+	}
+}
+
+// TestAlignContentPlacesTheRows is the same property on the other axis, and the
+// difference between it and align-items is the difference between moving the
+// rows and moving what is in them: two 20px rows in a 200px container leave
+// 160px, and "center" puts the pair of them in the middle rather than each item
+// in the middle of a stretched row.
+func TestAlignContentPlacesTheRows(t *testing.T) {
+	const tall = `#g { width: 300px; height: 200px; grid-template-columns: 100px 100px }`
+
+	got := gridCells(t, fourItems, tall+`#g { align-content: center }`)
+	wantCells(t, got, [][4]float64{
+		{0, 80, 100, 20}, {100, 80, 100, 20},
+		{0, 100, 100, 20}, {100, 100, 100, 20},
+	}, "two rows centred down the container")
+
+	// With nothing said the rows take the room instead, which is §12.8, and the
+	// items fill them.
+	got = gridCells(t, fourItems, tall)
+	wantCells(t, got, [][4]float64{
+		{0, 0, 100, 100}, {100, 0, 100, 100},
+		{0, 100, 100, 100}, {100, 100, 100, 100},
+	}, "two rows stretched down the container")
+
+	// And align-items moves the items inside those stretched rows.
+	got = gridCells(t, fourItems, tall+`#g { align-items: center }`)
+	wantCells(t, got, [][4]float64{
+		{0, 40, 100, 20}, {100, 40, 100, 20},
+		{0, 140, 100, 20}, {100, 140, 100, 20},
+	}, "items centred in stretched rows")
+}
+
+// TestAnAlignedItemIsItsOwnSize is §10.5, and it is the half of the alignment
+// that is not arithmetic: an item that is stretched is the size of its cell,
+// and an item that is aligned is the size of its own content — fit-content,
+// held down to the cell and up to what its words need.
+//
+// The four items are one, two, three and four characters, so their own widths
+// are 12, 24, 36 and 48 in cells of 100.
+func TestAnAlignedItemIsItsOwnSize(t *testing.T) {
+	const fixed = `#g { width: 300px; grid-template-columns: 100px 100px }`
+
+	wantCells(t, gridCells(t, fourItems, fixed+`#g { justify-items: start }`), [][4]float64{
+		{0, 0, 12, 20}, {100, 0, 24, 20},
+		{0, 20, 36, 20}, {100, 20, 48, 20},
+	}, "items at the start of their cells")
+
+	wantCells(t, gridCells(t, fourItems, fixed+`#g { justify-items: center }`), [][4]float64{
+		{44, 0, 12, 20}, {138, 0, 24, 20},
+		{32, 20, 36, 20}, {126, 20, 48, 20},
+	}, "items centred in their cells")
+
+	wantCells(t, gridCells(t, fourItems, fixed+`#g { justify-items: end }`), [][4]float64{
+		{88, 0, 12, 20}, {176, 0, 24, 20},
+		{64, 20, 36, 20}, {152, 20, 48, 20},
+	}, "items at the end of their cells")
+
+	// "left" and "right" are the same two ends in a grid whose columns run left
+	// to right, which is the only kind this engine arranges.
+	wantCells(t, gridCells(t, fourItems, fixed+`#g { justify-items: right }`), [][4]float64{
+		{88, 0, 12, 20}, {176, 0, 24, 20},
+		{64, 20, 36, 20}, {152, 20, 48, 20},
+	}, "items at the right of their cells")
+}
+
+// TestAnItemAlignsItselfBeforeItsContainerDoes. justify-self and align-self are
+// the item's own answer, and "auto" — their initial value — is what defers to
+// the container's.
+func TestAnItemAlignsItselfBeforeItsContainerDoes(t *testing.T) {
+	const fixed = `#g { width: 300px; grid-template-columns: 100px 100px }`
+
+	// One item aligned in a grid that stretches the rest.
+	wantCells(t, gridCells(t, fourItems, fixed+`#g > div:first-child { justify-self: end }`),
+		[][4]float64{
+			{88, 0, 12, 20}, {100, 0, 100, 20},
+			{0, 20, 100, 20}, {100, 20, 100, 20},
+		}, "one item aligned by itself")
+
+	// And the other way: one item stretched in a grid that aligns the rest.
+	wantCells(t, gridCells(t, fourItems,
+		fixed+`#g { justify-items: center } #g > div:first-child { justify-self: stretch }`),
+		[][4]float64{
+			{0, 0, 100, 20}, {138, 0, 24, 20},
+			{32, 20, 36, 20}, {126, 20, 48, 20},
+		}, "one item stretched by itself")
+
+	// "auto" is not a fourth alignment: it is the container's.
+	wantCells(t, gridCells(t, fourItems,
+		fixed+`#g { justify-items: end } #g > div:first-child { justify-self: auto }`),
+		[][4]float64{
+			{88, 0, 12, 20}, {176, 0, 24, 20},
+			{64, 20, 36, 20}, {152, 20, 48, 20},
+		}, "an item deferring to its container")
+}
+
+// TestAnAlignedTrackIsNotStretched is the one interaction between the two
+// halves: §12.8 gives the space left over to the automatic tracks *because*
+// justify-content and align-content are at "normal", and any other value asks
+// for that space to be left where the alignment puts it instead.
+//
+// Two automatic columns of 36px and 48px of content in a 300px container: with
+// nothing said they take 144 and 156, and centred they stay at 36 and 48 with
+// the 216px over split either side.
+func TestAnAlignedTrackIsNotStretched(t *testing.T) {
+	wantCells(t, gridCells(t, fourItems, `#g { width: 300px; grid-template-columns: auto auto }`),
+		[][4]float64{
+			{0, 0, 144, 20}, {144, 0, 156, 20},
+			{0, 20, 144, 20}, {144, 20, 156, 20},
+		}, "two automatic columns with nothing said")
+
+	wantCells(t, gridCells(t, fourItems,
+		`#g { width: 300px; grid-template-columns: auto auto; justify-content: center }`),
+		[][4]float64{
+			{108, 0, 36, 20}, {144, 0, 48, 20},
+			{108, 20, 36, 20}, {144, 20, 48, 20},
+		}, "two automatic columns centred instead")
 }
