@@ -208,12 +208,14 @@ func TestItemsAreStretchedAcrossTheLine(t *testing.T) {
 func TestAContainerThisEngineCannotArrangeIsLaidOutAsABlockAndSaysSo(t *testing.T) {
 	for _, c := range []struct{ what, css, names string }{
 		{"a column", `#f { flex-direction: column }`, "left-to-right row"},
+		{"a right-to-left row", `#f { direction: rtl }`, "runs from the right"},
 		{"wrapping", `#f { flex-wrap: wrap }`, "more than one line"},
-		{"centred content", `#f { justify-content: center }`, "packed at the start"},
-		{"aligned items", `#f { align-items: center }`, "stretched across"},
-		{"an item aligned by itself", `#f > div:first-child { align-self: center }`, "by itself"},
+		{"a safe alignment", `#f { justify-content: safe center }`, "packed by a rule"},
+		{"items on a baseline", `#f { align-items: baseline }`, "shared baseline"},
+		{"an item on the baseline", `#f > div:first-child { align-self: baseline }`, "shared baseline"},
 		{"a reordered item", `#f > div:first-child { order: 2 }`, "moved in the order"},
 		{"an automatic margin", `#f > div:first-child { margin-left: auto }`, "automatic margin"},
+		{"an automatic cross margin", `#f > div:first-child { margin-top: auto }`, "automatic margin"},
 		{"a percentage item", `#f > div:first-child { width: 50% }`, "percentage of the row"},
 		{"a floated child", `#f > div:first-child { float: left }`, "floated or absolutely"},
 	} {
@@ -256,7 +258,10 @@ func TestAnArrangedContainerSaysNothing(t *testing.T) {
 		`#f { width: 300px } #f > div { flex: 1 }`,
 		`#f { width: 300px; flex-direction: row; flex-wrap: nowrap }`,
 		`#f { width: 300px; justify-content: normal; align-items: stretch }`,
+		`#f { width: 300px; justify-content: space-between; align-items: flex-end }`,
+		`#f { width: 300px; justify-content: right; align-items: center }`,
 		`#f { width: 300px } #f > div { align-self: auto; order: 0 }`,
+		`#f { width: 300px } #f > div:first-child { align-self: flex-start }`,
 	} {
 		got := Compose(Input{HTML: threeItems,
 			CSS: []Stylesheet{{Source: flexCSS + css}}}, Options{})
@@ -307,4 +312,218 @@ func TestFactorsBelowOneTakeOnlyThatFractionOfTheSpace(t *testing.T) {
 	// items asked for the whole of the free space and get it.
 	got = flexRow(t, two, `#f { width: 300px } #f > div { flex: 0.5 }`)
 	wantRow(t, got, [][2]float64{{0, 150}, {150, 150}}, "factors adding to one")
+}
+
+// TestJustifyContentPacksTheItemsAlongTheLine is §9.5. Three 12px items in
+// 300px leave 264px over, and each keyword is a different answer to where that
+// 264 goes — which is the whole of the property.
+//
+// The numbers are written out rather than derived so that a wrong one is a
+// wrong number: 264 into two gaps is 132, into three shares is 88, and into
+// four is 66.
+func TestJustifyContentPacksTheItemsAlongTheLine(t *testing.T) {
+	for _, c := range []struct {
+		value string
+		want  [][2]float64
+	}{
+		{"normal", [][2]float64{{0, 12}, {12, 12}, {24, 12}}},
+		{"flex-start", [][2]float64{{0, 12}, {12, 12}, {24, 12}}},
+		{"flex-end", [][2]float64{{264, 12}, {276, 12}, {288, 12}}},
+		{"right", [][2]float64{{264, 12}, {276, 12}, {288, 12}}},
+		{"center", [][2]float64{{132, 12}, {144, 12}, {156, 12}}},
+		// A gap of 132 between each pair and none at the ends.
+		{"space-between", [][2]float64{{0, 12}, {144, 12}, {288, 12}}},
+		// Three shares of 88, half of one at each end and a whole one between.
+		{"space-around", [][2]float64{{44, 12}, {144, 12}, {244, 12}}},
+		// Four gaps of 66, all of them equal, which is what "evenly" means and
+		// is where it differs from "around".
+		{"space-evenly", [][2]float64{{66, 12}, {144, 12}, {222, 12}}},
+	} {
+		t.Run(c.value, func(t *testing.T) {
+			got := flexRow(t, threeItems, `#f { width: 300px; justify-content: `+c.value+` }`)
+			wantRow(t, got, c.want, c.value)
+		})
+	}
+}
+
+// TestAnOverfullLineFallsBackToPackingIt is Box Alignment §4.4. The items cannot
+// shrink below the width of their own text, so 300px of content in a 240px row
+// has 60px too much rather than none — and a distribution with nothing to
+// distribute has to become a packing or it would pull the items back over each
+// other.
+//
+// Five "abcde"s of Courier at 20px are 60px each. The three distribution values
+// are the ones with a fallback; flex-end and center keep their arithmetic and
+// overflow the near edge, which is what an alignment that is not "safe" does.
+func TestAnOverfullLineFallsBackToPackingIt(t *testing.T) {
+	const five = `<div id="f"><div>abcde</div><div>abcde</div><div>abcde</div>` +
+		`<div>abcde</div><div>abcde</div></div>`
+	packed := [][2]float64{{0, 60}, {60, 60}, {120, 60}, {180, 60}, {240, 60}}
+	centred := [][2]float64{{-30, 60}, {30, 60}, {90, 60}, {150, 60}, {210, 60}}
+	for _, c := range []struct {
+		value string
+		want  [][2]float64
+	}{
+		{"space-between", packed},
+		{"space-around", centred},
+		{"space-evenly", centred},
+		{"center", centred},
+		{"flex-end", [][2]float64{{-60, 60}, {0, 60}, {60, 60}, {120, 60}, {180, 60}}},
+	} {
+		t.Run(c.value, func(t *testing.T) {
+			got := flexRow(t, five, `#f { width: 240px; justify-content: `+c.value+` }`)
+			wantRow(t, got, c.want, "an overfull row with "+c.value)
+		})
+	}
+}
+
+// TestOneItemHasNoGapToPutSpaceIn. §9.5's other fallback, and the reason
+// space-between is not written as free/(n-1): with one item there is no pair to
+// go between, so it packs at the start, while the two that fill the ends still
+// have ends and centre it.
+func TestOneItemHasNoGapToPutSpaceIn(t *testing.T) {
+	const one = `<div id="f"><div>a</div></div>`
+	for _, c := range []struct {
+		value string
+		x     float64
+	}{
+		{"space-between", 0},
+		{"space-around", 144},
+		{"space-evenly", 144},
+	} {
+		got := flexRow(t, one, `#f { width: 300px; justify-content: `+c.value+` }`)
+		wantRow(t, got, [][2]float64{{c.x, 12}}, "one item with "+c.value)
+	}
+}
+
+// flexCross is where each item of #f sits across the line and how tall it is,
+// in pixels.
+func flexCross(t *testing.T, htmlSrc, extra string) []struct{ y, h float64 } {
+	t.Helper()
+	root := layoutOf(t, 1000, htmlSrc, flexCSS+extra)
+	var out []struct{ y, h float64 }
+	var walk func(*Fragment)
+	walk = func(f *Fragment) {
+		if f == nil {
+			return
+		}
+		if f.Box != nil && f.Box.Element != nil {
+			if id, _ := f.Box.Element.Attr("id"); id == "f" {
+				for _, c := range f.Children {
+					out = append(out, struct{ y, h float64 }{
+						c.BorderRect.Y.Px(), c.BorderRect.H.Px()})
+				}
+				return
+			}
+		}
+		for _, c := range f.Children {
+			walk(c)
+		}
+	}
+	walk(root)
+	return out
+}
+
+func wantCross(t *testing.T, got []struct{ y, h float64 }, want [][2]float64, what string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("%s: %d items, want %d: %v", what, len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i].y != want[i][0] || got[i].h != want[i][1] {
+			t.Errorf("%s: item %d is at y=%g height=%g, want y=%g height=%g\n  whole row: %v",
+				what, i, got[i].y, got[i].h, want[i][0], want[i][1], got)
+		}
+	}
+}
+
+// TestAlignItemsPutsTheItemsAcrossTheLine is §9.6. The second item is two 20px
+// lines, so the line is 40px and the first item — one line — has 20px of room
+// to sit in.
+//
+// The height is asserted with the position because the two are the same
+// decision: only a stretched item is the line's height, and an item that is 20px
+// tall under "center" and 40px tall under "stretch" is the difference between
+// aligning it and resizing it.
+func TestAlignItemsPutsTheItemsAcrossTheLine(t *testing.T) {
+	const twoLines = `<div id="f"><div id="a">a</div><div id="b">b<br>c</div></div>`
+	for _, c := range []struct {
+		value string
+		want  [][2]float64
+	}{
+		{"normal", [][2]float64{{0, 40}, {0, 40}}},
+		{"stretch", [][2]float64{{0, 40}, {0, 40}}},
+		{"flex-start", [][2]float64{{0, 20}, {0, 40}}},
+		{"flex-end", [][2]float64{{20, 20}, {0, 40}}},
+		{"center", [][2]float64{{10, 20}, {0, 40}}},
+	} {
+		t.Run(c.value, func(t *testing.T) {
+			got := flexCross(t, twoLines, `#f { width: 300px; align-items: `+c.value+` }`)
+			wantCross(t, got, c.want, c.value)
+		})
+	}
+}
+
+// TestAlignSelfOverridesTheContainer is §6.2: an item states its own alignment
+// and "auto" — the initial value — is what defers to the container's.
+func TestAlignSelfOverridesTheContainer(t *testing.T) {
+	const twoLines = `<div id="f"><div id="a">a</div><div id="b">b<br>c</div></div>`
+
+	// The container stretches and the item refuses to be stretched.
+	got := flexCross(t, twoLines, `#f { width: 300px } #a { align-self: flex-end }`)
+	wantCross(t, got, [][2]float64{{20, 20}, {0, 40}}, "an item at the end of a stretching row")
+
+	// And the other way: the container aligns and the item asks to be stretched
+	// after all.
+	got = flexCross(t, twoLines,
+		`#f { width: 300px; align-items: center } #a { align-self: stretch }`)
+	wantCross(t, got, [][2]float64{{0, 40}, {0, 40}}, "an item stretched in a centring row")
+
+	// "auto" is not a fourth alignment: it is the container's.
+	got = flexCross(t, twoLines,
+		`#f { width: 300px; align-items: flex-end } #a { align-self: auto }`)
+	wantCross(t, got, [][2]float64{{20, 20}, {0, 40}}, "an item deferring to the container")
+}
+
+// TestAnItemTallerThanItsLineHangsOffIt. The container states a height, so the
+// line is that height whatever the items came to, and an item taller than it
+// overflows. Where it overflows is the property's answer, not zero: flex-end
+// keeps the item's bottom on the line's bottom and lets the top hang off.
+//
+// Flooring the room left over at zero would put every one of these at y=0,
+// which is a page where align-items silently stops working the moment an item
+// overruns — the failure that is plausible enough to ship.
+func TestAnItemTallerThanItsLineHangsOffIt(t *testing.T) {
+	const tall = `<div id="f"><div id="a">a<br>b</div></div>`
+	for _, c := range []struct {
+		value string
+		y     float64
+	}{
+		{"flex-start", 0},
+		{"flex-end", -20},
+		{"center", -10},
+	} {
+		got := flexCross(t, tall, `#f { width: 300px; height: 20px; align-items: `+c.value+` }`)
+		wantCross(t, got, [][2]float64{{c.y, 40}}, "a 40px item on a 20px line with "+c.value)
+	}
+}
+
+// TestTheLastItemLandsOnTheFarEdge is why each offset is a fraction of the whole
+// free space rather than a gap added once per item.
+//
+// 265px over three gaps is 88 and a third, which is not a whole number of layout
+// units. Rounding it once and adding it three times loses a unit off the end of
+// the row; taking the fraction each time does not, and the last item's right
+// edge is on the container's — where "space-between" says it is.
+func TestTheLastItemLandsOnTheFarEdge(t *testing.T) {
+	got := flexRow(t, `<div id="f"><div>a</div><div>b</div><div>c</div><div>d</div></div>`,
+		`#f { width: 313px; justify-content: space-between }`)
+	wantRow(t, got, [][2]float64{
+		{0, 12}, {100.328125, 12}, {200.671875, 12}, {301, 12},
+	}, "four items over a free space that does not divide")
+
+	if len(got) == 4 && got[3].x+got[3].w != 313 {
+		t.Errorf("the row ends at %gpx and the container is 313px wide",
+			got[3].x+got[3].w)
+	}
 }
