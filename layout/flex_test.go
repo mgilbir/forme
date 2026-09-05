@@ -1960,3 +1960,85 @@ func TestAnItemAsDeepAsItsLineIsWideIsStillStretched(t *testing.T) {
 	wantCross(t, flexCross(t, two, css), [][2]float64{{0, 20}, {20, 40}},
 		"an item as deep as its line is wide")
 }
+
+// An inline flex container on a line of Courier at 20px, where one character is
+// 12px and a line is 20px tall — the same fixture the rest of this file uses,
+// with the container in a paragraph instead of on its own.
+const inlineFlexCSS = `body { margin: 0 } p { margin: 0; font-family: Courier;` +
+	` font-size: 20px; line-height: 20px } #g > i { font-style: normal }`
+
+// TestABlockInsideAnInlineFlexContainerIsOnThePage.
+//
+// An inline box is walked into, and what the walk finds that is not
+// inline-level is dropped: a block inside an "inline-flex" was not on the page
+// at all. It is the same class of failure as an out-of-flow box that nobody
+// records — content the document contains and the page does not — and it was
+// invisible for as long as the container was treated as a span.
+func TestABlockInsideAnInlineFlexContainerIsOnThePage(t *testing.T) {
+	const doc = `<p>x<span id="g"><div id="in">B</div></span>y</p>`
+	for _, display := range []string{"inline-flex", "inline-block"} {
+		root := layoutOf(t, 1000, doc, inlineFlexCSS+`#g { display: `+display+` }`)
+		if fragmentFor(root, "in") == nil {
+			t.Errorf("the block inside a %q box generated no fragment, so its "+
+				"content is not on the page", display)
+		}
+	}
+}
+
+// TestAnInlineFlexContainerIsABoxOnTheLine. It is an atomic inline: a box that
+// takes part in a line as a box rather than as a run of words, which is what
+// gives it a width, a height and a background of its own — and an arrangement
+// inside it.
+func TestAnInlineFlexContainerIsABoxOnTheLine(t *testing.T) {
+	const doc = `<p>x<span id="g"><i>a</i><i>b</i></span>y</p>`
+
+	// Two one-character items make a 24px row, and it sits after the 12px "x".
+	root := layoutOf(t, 1000, doc, inlineFlexCSS+`#g { display: inline-flex }`)
+	g := fragmentFor(root, "g")
+	if g == nil {
+		t.Fatalf("the inline flex container generated no fragment")
+	}
+	if g.BorderRect.X.Px() != 12 || g.BorderRect.W.Px() != 24 || g.BorderRect.H.Px() != 20 {
+		t.Errorf("the container is %v; it holds two 12px items and follows one "+
+			"character on the line", g.BorderRect)
+	}
+
+	// The row is arranged inside it: the items are side by side, not stacked.
+	if len(g.Children) != 2 {
+		t.Fatalf("the container has %d children, want the two items", len(g.Children))
+	}
+	if g.Children[0].BorderRect.X.Px() != 12 || g.Children[1].BorderRect.X.Px() != 24 {
+		t.Errorf("the items are at x=%v and x=%v, want 12 and 24 — a row",
+			g.Children[0].BorderRect.X, g.Children[1].BorderRect.X)
+	}
+
+	// Its own width and height are the box's, which is the whole of what being
+	// a box rather than a span means: the items stretch to the 40px it asked
+	// for, and the line is that tall.
+	root = layoutOf(t, 1000, doc,
+		inlineFlexCSS+`#g { display: inline-flex; width: 60px; height: 40px }`)
+	g = fragmentFor(root, "g")
+	if g.BorderRect.W.Px() != 60 || g.BorderRect.H.Px() != 40 {
+		t.Errorf("the container is %v; it asked to be 60px by 40px", g.BorderRect)
+	}
+	if len(g.Children) == 2 && g.Children[0].BorderRect.H.Px() != 40 {
+		t.Errorf("the items are %vpx tall in a 40px container, and align-items "+
+			"stretches them to it", g.Children[0].BorderRect.H)
+	}
+}
+
+// TestAnEmptyInlineFlexContainerIsStillABox, which is what the suite uses one
+// for: letter-spacing-204 puts an empty "inline-flex" on a line as something
+// for letter-spacing to space, beside an inline-block doing the same job.
+func TestAnEmptyInlineFlexContainerIsStillABox(t *testing.T) {
+	const doc = `<p>x<span id="g"></span>y</p>`
+	root := layoutOf(t, 1000, doc,
+		inlineFlexCSS+`#g { display: inline-flex; width: 15px; height: 15px }`)
+	g := fragmentFor(root, "g")
+	if g == nil {
+		t.Fatalf("an empty inline flex container generated no fragment")
+	}
+	if g.BorderRect.W.Px() != 15 || g.BorderRect.H.Px() != 15 {
+		t.Errorf("the empty container is %v; it asked to be 15px square", g.BorderRect)
+	}
+}
