@@ -207,8 +207,6 @@ func TestItemsAreStretchedAcrossTheLine(t *testing.T) {
 // plausible wrongness the finding exists for.
 func TestAContainerThisEngineCannotArrangeIsLaidOutAsABlockAndSaysSo(t *testing.T) {
 	for _, c := range []struct{ what, css, names string }{
-		{"a wrapping column", `#f { flex-wrap: wrap; flex-direction: column }`, "wrap into columns"},
-		{"a column wrapping backwards", `#f { flex-wrap: wrap-reverse; flex-direction: column }`, "wrap into columns"},
 		{"an axis with no name", `#f { flex-direction: sideways }`, "four flex-direction names"},
 		{"lines that wrap some other way", `#f { flex-wrap: reverse }`, "wrap by a rule"},
 		{"lines on a baseline", `#f { flex-wrap: wrap; align-content: baseline }`, "placed by a rule"},
@@ -272,6 +270,7 @@ func TestAnArrangedContainerSaysNothing(t *testing.T) {
 		`#f { width: 300px } #f > div:first-child { width: 50% }`,
 		`#f { width: 300px } #f > div:first-child { float: left }`,
 		`#f { width: 300px } #f > div:first-child { position: absolute }`,
+		`#f { width: 300px; height: 60px; flex-direction: column; flex-wrap: wrap }`,
 	} {
 		got := Compose(Input{HTML: threeItems,
 			CSS: []Stylesheet{{Source: flexCSS + css}}}, Options{})
@@ -1864,4 +1863,100 @@ func absAt(t *testing.T, htmlSrc, extra string) [2]float64 {
 	}
 	walk(root)
 	return out
+}
+
+// The wrapping-column fixture: four items of one line each, in a container
+// three lines deep. Their widths are 12, 24, 36 and 48 — one, two, three and
+// four characters of Courier — so which item is where can be read off the row.
+const fourDeep = `<div id="f"><div>a</div><div>bb</div><div>ccc</div><div>dddd</div></div>`
+
+const wrappingColumn = `#f { width: 300px; height: 60px; flex-direction: column;` +
+	` flex-wrap: wrap }`
+
+// TestAColumnWrapsIntoColumns. The lines of a wrapping column are columns side
+// by side: the items fill one to the container's depth and the next starts
+// beside it.
+//
+// It was refused on the grounds that a stretched item is as wide as its line
+// while the line is as wide as its items — but that is not a knot, it is §9.4's
+// order. A line is as wide as its items' *hypothetical* cross sizes, which are
+// what they would be with no stretching at all, and the stretching happens
+// afterwards.
+func TestAColumnWrapsIntoColumns(t *testing.T) {
+	// Three 20px items fill the 60px depth and the fourth starts a second line.
+	wantCross(t, flexCross(t, fourDeep, wrappingColumn),
+		[][2]float64{{0, 20}, {20, 20}, {40, 20}, {0, 20}}, "four items down two columns")
+
+	// Unstretched, each item is as wide as its own text and the second line
+	// begins at the width of the first.
+	wantRow(t, flexRow(t, fourDeep, wrappingColumn+`#f { align-items: flex-start }`),
+		[][2]float64{{0, 12}, {0, 24}, {0, 36}, {144, 48}},
+		"four items down two columns, unstretched")
+}
+
+// TestAWrappingColumnsLinesTakeTheirShareOfTheWidth. The line sizes come from
+// the widest item on each — 36 and 48 — and align-content does the rest, which
+// for its initial value means dividing the 216px left over between them.
+//
+// The items are then stretched to the lines they are on, which is the pass that
+// could not run while the two were thought to decide each other.
+func TestAWrappingColumnsLinesTakeTheirShareOfTheWidth(t *testing.T) {
+	wantRow(t, flexRow(t, fourDeep, wrappingColumn),
+		[][2]float64{{0, 144}, {0, 144}, {0, 144}, {144, 156}},
+		"two columns sharing the width")
+
+	// Packed instead of stretched, each line is its own width and the leftover
+	// is where align-content says: 216px over two lines, half of it in front.
+	wantRow(t, flexRow(t, fourDeep, wrappingColumn+`#f { align-content: center }`),
+		[][2]float64{{108, 36}, {108, 36}, {108, 36}, {144, 48}},
+		"two columns centred across the container")
+
+	// The gap between the lines of a column is the column gap, which is the
+	// one across its axis: 36 and 48 of line with 10 between leaves 206.
+	wantRow(t, flexRow(t, fourDeep, wrappingColumn+`#f { column-gap: 10px }`),
+		[][2]float64{{0, 139}, {0, 139}, {0, 139}, {149, 151}},
+		"two columns with a gap between them")
+
+	// And wrap-reverse stacks them from the far side, first line last.
+	wantRow(t, flexRow(t, fourDeep, wrappingColumn+`#f { flex-wrap: wrap-reverse }`),
+		[][2]float64{{156, 144}, {156, 144}, {156, 144}, {0, 156}},
+		"two columns stacked from the right")
+}
+
+// TestAColumnWithNoDepthHasNothingToWrapAgainst. §9.3 breaks a line against the
+// room left on it, and a container that was never told how tall to be has a
+// main size that is exactly the sum of its items — so there is always room and
+// the line never breaks.
+//
+// It falls out of the arithmetic rather than being a clause, which is worth a
+// test of its own: the four items stack, and the container is as deep as they
+// are.
+func TestAColumnWithNoDepthHasNothingToWrapAgainst(t *testing.T) {
+	const noDepth = `#f { width: 300px; flex-direction: column; flex-wrap: wrap }`
+	wantCross(t, flexCross(t, fourDeep, noDepth),
+		[][2]float64{{0, 20}, {20, 20}, {40, 20}, {60, 20}}, "four items in a column of no stated depth")
+	if h := flexHeight(t, fourDeep, noDepth); h != 80 {
+		t.Errorf("the container is %gpx deep and holds four 20px items", h)
+	}
+}
+
+// TestAnItemAsDeepAsItsLineIsWideIsStillStretched. The stretch pass asks
+// whether an item is already the size it is about to be given, and the question
+// is about the cross axis: down a column that is the item's width, and its
+// height has nothing to do with it.
+//
+// The two are the same number here on purpose — an item 40px tall on a line
+// 40px wide — which is the one document where asking about the wrong one
+// silently leaves an item unstretched.
+func TestAnItemAsDeepAsItsLineIsWideIsStillStretched(t *testing.T) {
+	const two = `<div id="f"><div id="a">aaa</div><div id="b">x<br>y</div></div>`
+	const css = `#f { width: 300px; height: 60px; flex-direction: column; flex-wrap: wrap;` +
+		` align-content: flex-start } #f > div#a { padding-left: 4px }`
+
+	// The line is 40px wide, which is the padded three characters; the item
+	// beside it holds two lines and is 40px deep. Both come out 40px wide.
+	wantRow(t, flexRow(t, two, css), [][2]float64{{0, 40}, {0, 40}},
+		"an item as deep as its line is wide")
+	wantCross(t, flexCross(t, two, css), [][2]float64{{0, 20}, {20, 40}},
+		"an item as deep as its line is wide")
 }
