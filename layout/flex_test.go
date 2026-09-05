@@ -207,8 +207,10 @@ func TestItemsAreStretchedAcrossTheLine(t *testing.T) {
 // plausible wrongness the finding exists for.
 func TestAContainerThisEngineCannotArrangeIsLaidOutAsABlockAndSaysSo(t *testing.T) {
 	for _, c := range []struct{ what, css, names string }{
-		{"a column", `#f { flex-direction: column }`, "left-to-right row"},
+		{"a reversed row", `#f { flex-direction: row-reverse }`, "backwards along their axis"},
+		{"a reversed column", `#f { flex-direction: column-reverse }`, "backwards along their axis"},
 		{"a right-to-left row", `#f { direction: rtl }`, "runs from the right"},
+		{"a right-to-left column", `#f { direction: rtl; flex-direction: column }`, "runs from the right"},
 		{"wrapping", `#f { flex-wrap: wrap }`, "more than one line"},
 		{"a safe alignment", `#f { justify-content: safe center }`, "packed by a rule"},
 		{"items on a baseline", `#f { align-items: baseline }`, "shared baseline"},
@@ -609,28 +611,302 @@ func TestWhatAGapIsWrittenAs(t *testing.T) {
 	}
 }
 
-// TestTheGapShorthandIsNotApplied records the edge of what this does, because an
-// edge that is not written down is one that moves without anyone deciding to
-// move it.
-//
-// "gap" sets row-gap as well, and a row gap needs rows to separate: this engine
-// arranges one line of one row, and neither has a second row in it. So the
-// shorthand is not registered, an author who writes it is told the declaration
-// was not applied, and the day something here has rows — a column of items, or
-// a container whose lines wrap — the two arrive together.
-func TestTheGapShorthandIsNotApplied(t *testing.T) {
-	got := Compose(Input{HTML: threeItems, CSS: []Stylesheet{{
-		Source: flexCSS + `#f { width: 300px; gap: 30px }`}}}, Options{})
-	said := false
-	for _, f := range got.Findings {
-		if f.Property == "gap" || f.Property == "row-gap" {
-			said = true
+// TestTheGapShorthandSetsTheGapOnBothAxes. "gap" is the two together, in the
+// order row then column — block axis first, as "margin" is, and not the order
+// the names suggest read left to right. A container reads the one that lies
+// across its own axis and the other has nothing to say to it.
+func TestTheGapShorthandSetsTheGapOnBothAxes(t *testing.T) {
+	wantRow(t, flexRow(t, threeItems, `#f { width: 300px; gap: 30px }`),
+		[][2]float64{{0, 12}, {42, 12}, {84, 12}}, "one value in a row")
+	wantCross(t, flexCross(t, threeItems, `#f { width: 300px; flex-direction: column; gap: 30px }`),
+		[][2]float64{{0, 20}, {50, 20}, {100, 20}}, "one value in a column")
+
+	// Two values, and each container takes the half that is across its axis:
+	// the row is 30 apart and the column 10.
+	wantRow(t, flexRow(t, threeItems, `#f { width: 300px; gap: 10px 30px }`),
+		[][2]float64{{0, 12}, {42, 12}, {84, 12}}, "two values in a row")
+	wantCross(t, flexCross(t, threeItems,
+		`#f { width: 300px; flex-direction: column; gap: 10px 30px }`),
+		[][2]float64{{0, 20}, {30, 20}, {60, 20}}, "two values in a column")
+}
+
+// flexHeight is what the container itself came to.
+func flexHeight(t *testing.T, htmlSrc, extra string) float64 {
+	t.Helper()
+	root := layoutOf(t, 1000, htmlSrc, flexCSS+extra)
+	var out float64
+	var walk func(*Fragment)
+	walk = func(f *Fragment) {
+		if f == nil {
+			return
+		}
+		if f.Box != nil && f.Box.Element != nil {
+			if id, _ := f.Box.Element.Attr("id"); id == "f" {
+				out = f.BorderRect.H.Px()
+				return
+			}
+		}
+		for _, c := range f.Children {
+			walk(c)
 		}
 	}
-	if !said {
-		t.Errorf("nothing was reported about \"gap: 30px\", which is not applied: %v",
-			got.Findings)
+	walk(root)
+	return out
+}
+
+const twoHeights = `<div id="f"><div id="a">a</div><div id="b">b<br>c</div></div>`
+
+// TestAColumnStacksItsItemsDownTheContainer is flex-direction: column, which is
+// the same algorithm with the axes exchanged.
+//
+// A 20px item and a 40px one stack to 60px, and each is as wide as the
+// container because "stretch" across a column's axis is a width. That looks
+// like the block stacking it replaces, and the two differ everywhere it
+// matters: the items' margins do not collapse, the free space is shared along
+// the height, and every alignment property changes which axis it acts on.
+func TestAColumnStacksItsItemsDownTheContainer(t *testing.T) {
+	const column = `#f { width: 300px; flex-direction: column }`
+	wantCross(t, flexCross(t, twoHeights, column),
+		[][2]float64{{0, 20}, {20, 40}}, "two items stacked")
+	wantRow(t, flexRow(t, twoHeights, column),
+		[][2]float64{{0, 300}, {0, 300}}, "two items stretched across the column")
+	if h := flexHeight(t, twoHeights, column); h != 60 {
+		t.Errorf("the container is %gpx tall and its items are 20 and 40", h)
 	}
-	wantRow(t, flexRow(t, threeItems, `#f { width: 300px; gap: 30px }`),
-		[][2]float64{{0, 12}, {12, 12}, {24, 12}}, "a row with an unapplied gap")
+}
+
+// TestAColumnWithNoHeightHasNothingToShareOut. §9.4: a container whose main size
+// is indefinite takes the size its items asked for, so there is no free space —
+// and no free space is not a small amount of it. "flex: 1" on every item is a
+// declaration about a share of nothing, and the column comes out exactly as
+// tall as it would have without it.
+//
+// This is the clause behind the thing every author has hit: a column of
+// "flex: 1" children fills its parent only once the parent has a height.
+func TestAColumnWithNoHeightHasNothingToShareOut(t *testing.T) {
+	const grow = `#f { width: 300px; flex-direction: column } #f > div { flex: 1 }`
+	wantCross(t, flexCross(t, twoHeights, grow),
+		[][2]float64{{0, 20}, {20, 40}}, "growing items in a column of no stated height")
+	if h := flexHeight(t, twoHeights, grow); h != 60 {
+		t.Errorf("the container is %gpx tall, and with no height of its own it is "+
+			"as tall as its items", h)
+	}
+
+	// State the height and the same declaration means something: 200px over two
+	// equal factors from a zero basis is 100 each.
+	wantCross(t, flexCross(t, twoHeights, grow+`#f { height: 200px }`),
+		[][2]float64{{0, 100}, {100, 100}}, "growing items in a column that has a height")
+}
+
+// TestAColumnPacksAndAlignsAcrossTheOtherAxis. Every alignment property acts on
+// the axis it names and not on a direction, so in a column justify-content moves
+// the items down and align-items moves them across.
+//
+// The widths are the other half of it: an item that is not stretched is
+// fit-content wide, which for one Courier character is 12px — so "align-items:
+// center" is a 12px box in the middle of a 300px container and not a 300px box
+// with its text centred, which is what the same page would look like if the
+// property were being applied to the wrong thing.
+func TestAColumnPacksAndAlignsAcrossTheOtherAxis(t *testing.T) {
+	const tall = `#f { width: 300px; height: 200px; flex-direction: column }`
+
+	wantCross(t, flexCross(t, twoHeights, tall+`#f { justify-content: space-between }`),
+		[][2]float64{{0, 20}, {160, 40}}, "a column spread down the container")
+	wantCross(t, flexCross(t, twoHeights, tall+`#f { justify-content: center }`),
+		[][2]float64{{70, 20}, {90, 40}}, "a column centred down the container")
+
+	wantRow(t, flexRow(t, twoHeights, tall+`#f { align-items: center }`),
+		[][2]float64{{144, 12}, {144, 12}}, "a column of centred items")
+	wantRow(t, flexRow(t, twoHeights, tall+`#f { align-items: flex-end }`),
+		[][2]float64{{288, 12}, {288, 12}}, "a column of items at the far side")
+
+	// "left" and "right" name a side of the inline axis, which is not a
+	// column's main axis. §6.2 says they behave as "start" there, and a column
+	// packed at the start is a column that has not moved.
+	wantCross(t, flexCross(t, twoHeights, tall+`#f { justify-content: right }`),
+		[][2]float64{{0, 20}, {20, 40}}, "a column packed to the right")
+}
+
+// TestAnItemInAColumnIsNotShrunkBelowItsContent is §4.5's automatic minimum on
+// the block axis, and it is the one place the two axes are not mirror images.
+//
+// A row can shrink a word by breaking the line it is on; a block cannot be made
+// shorter than the lines it holds. So a column item's content-based minimum is
+// the height its content came to, which is why two 40px items in a 40px column
+// overflow it instead of halving.
+func TestAnItemInAColumnIsNotShrunkBelowItsContent(t *testing.T) {
+	const two = `<div id="f"><div>a<br>b</div><div>c<br>d</div></div>`
+	wantCross(t, flexCross(t, two, `#f { width: 300px; height: 40px; flex-direction: column }`),
+		[][2]float64{{0, 40}, {40, 40}}, "two items too tall for the column")
+
+	// A declared height below the content is the author saying so, and §4.5
+	// caps the automatic minimum by it.
+	wantCross(t, flexCross(t, two,
+		`#f { width: 300px; height: 40px; flex-direction: column } #f > div { height: 10px }`),
+		[][2]float64{{0, 10}, {10, 10}}, "two items that stated a height")
+}
+
+// TestAColumnIsSeparatedByARowGap. Which gap a container reads is a question
+// about its axis: a column's items are stacked one above the next, and what
+// lies between them is a row gap. The column gap has nothing to say about it,
+// and saying so is the whole of the test — a container that read the wrong one
+// would look right in every document that sets both.
+func TestAColumnIsSeparatedByARowGap(t *testing.T) {
+	const column = `#f { width: 300px; flex-direction: column }`
+
+	wantCross(t, flexCross(t, twoHeights, column+`#f { row-gap: 30px }`),
+		[][2]float64{{0, 20}, {50, 40}}, "a column with a row gap")
+	if h := flexHeight(t, twoHeights, column+`#f { row-gap: 30px }`); h != 90 {
+		t.Errorf("the container is %gpx tall: 20 and 40 of items with 30 between", h)
+	}
+
+	wantCross(t, flexCross(t, twoHeights, column+`#f { column-gap: 30px }`),
+		[][2]float64{{0, 20}, {20, 40}}, "a column with a column gap")
+
+	// And the same the other way round: a row reads the column gap and not the
+	// row gap.
+	wantRow(t, flexRow(t, threeItems, `#f { width: 300px; row-gap: 30px }`),
+		[][2]float64{{0, 12}, {12, 12}, {24, 12}}, "a row with a row gap")
+}
+
+// TestAColumnSaysNothing. The containment argument again, for the direction
+// this file has just started arranging.
+func TestAColumnSaysNothing(t *testing.T) {
+	for _, css := range []string{
+		`#f { width: 300px; flex-direction: column }`,
+		`#f { width: 300px; height: 200px; flex-direction: column; justify-content: center }`,
+		`#f { width: 300px; flex-direction: column; align-items: flex-end; gap: 10px }`,
+	} {
+		got := Compose(Input{HTML: twoHeights,
+			CSS: []Stylesheet{{Source: flexCSS + css}}}, Options{})
+		for _, f := range got.Findings {
+			if strings.Contains(f.Message, "flex") || f.Property == "display" {
+				t.Errorf("%q reported %q, and the container was arranged", css, f.Message)
+			}
+		}
+	}
+}
+
+// TestWhatADiscardedLayoutTookOutOfTheFlowGoesWithIt.
+//
+// Both directions lay an item out and throw the answer away: a row that has to
+// stretch an item lays it out again at the line's height, and a column lays
+// every item out once just to see how tall it is. An absolutely positioned box
+// found inside a discarded fragment hangs off a fragment nobody will paint —
+// but its *record* is on the list placeAbsolutes works through, and that list
+// has a budget. Spending it on boxes that are not on the page ends with a
+// document being told it holds more out-of-flow boxes than this engine will
+// place, which is a report of a broken page that is not broken.
+//
+// The cap is lowered to make the arithmetic small: four items, four absolutely
+// positioned boxes, and a limit of five. Before this was handled the row
+// recorded seven and the column eight.
+func TestWhatADiscardedLayoutTookOutOfTheFlowGoesWithIt(t *testing.T) {
+	held := maxAbsolutes
+	defer func() { maxAbsolutes = held }()
+	maxAbsolutes = 5
+
+	const doc = `<div id="f">` +
+		`<div>a<i id="p1" style="position: absolute">1</i></div>` +
+		`<div>b<i id="p2" style="position: absolute">2</i></div>` +
+		`<div>c<i id="p3" style="position: absolute">3</i></div>` +
+		`<div>d<br>e<i id="p4" style="position: absolute">4</i></div></div>`
+
+	for _, dir := range []string{"row", "column"} {
+		t.Run(dir, func(t *testing.T) {
+			css := flexCSS + `#f { width: 300px; flex-direction: ` + dir + ` }`
+			got := Compose(Input{HTML: doc, CSS: []Stylesheet{{Source: css}}}, Options{})
+			for _, f := range got.Findings {
+				if f.Rule == RuleLimit {
+					t.Errorf("four out-of-flow boxes with a limit of five reported "+
+						"%q, so the discarded layouts are still on the list", f.Message)
+				}
+			}
+
+			// And the four that are real are still placed: a rebuild that threw
+			// away too much would leave the page short of them, which is the
+			// failure in the other direction.
+			root := layoutOf(t, 1000, doc, css)
+			for _, id := range []string{"p1", "p2", "p3", "p4"} {
+				if n := fragmentsWithID(root, id); n != 1 {
+					t.Errorf("%s is on the page %d times, want once", id, n)
+				}
+			}
+		})
+	}
+}
+
+// fragmentsWithID counts the fragments generated by one element.
+func fragmentsWithID(f *Fragment, id string) int {
+	if f == nil {
+		return 0
+	}
+	n := 0
+	if f.Box != nil && f.Box.Element != nil {
+		if got, _ := f.Box.Element.Attr("id"); got == id {
+			n++
+		}
+	}
+	for _, c := range f.Children {
+		n += fragmentsWithID(c, id)
+	}
+	return n
+}
+
+// TestAColumnReadsTheSizesOnItsOwnAxis. Which property is a main size is the
+// whole of what flex-direction changes, and getting it wrong is invisible in
+// the ordinary case: an item's measured height already accounts for a height it
+// declared, so a column that read "width" where it meant "height" lays most
+// documents out correctly.
+//
+// These are the documents where it does not. An item that states a width in a
+// column has stated a cross size, and its main size is still whatever its
+// content came to; an item that states a maximum width has said nothing at all
+// about how tall it may be.
+func TestAColumnReadsTheSizesOnItsOwnAxis(t *testing.T) {
+	const one = `<div id="f"><div id="a">a</div></div>`
+	const column = `#f { width: 300px; flex-direction: column }`
+
+	wantCross(t, flexCross(t, one, column+`#a { width: 50px }`),
+		[][2]float64{{0, 20}}, "an item that stated a width")
+	wantRow(t, flexRow(t, one, column+`#a { width: 50px }`),
+		[][2]float64{{0, 50}}, "an item that stated a width")
+
+	wantCross(t, flexCross(t, one, column+`#a { max-width: 10px }`),
+		[][2]float64{{0, 20}}, "an item that stated a maximum width")
+}
+
+// TestAColumnShrinksInProportionToWhatItsItemsAskedFor is §9.7.4c on the block
+// axis. An item's share of the shortfall is its flex-shrink scaled by its flex
+// base size, and in a column the base size is what the item's content came to
+// — so the two items below give up 20 and 40 of the 60px the container is short
+// rather than 30 each.
+//
+// It takes "min-height: 0" to see at all. §4.5's automatic minimum would
+// otherwise hold both items at their content height, which is the right default
+// and the reason a column of text does not squash; the declaration is the
+// documented way of asking for the other behaviour.
+func TestAColumnShrinksInProportionToWhatItsItemsAskedFor(t *testing.T) {
+	const two = `<div id="f"><div>a<br>b</div><div>c<br>d<br>e<br>f</div></div>`
+	got := flexCross(t, two,
+		`#f { width: 300px; height: 60px; flex-direction: column } #f > div { min-height: 0 }`)
+	wantCross(t, got, [][2]float64{{0, 20}, {20, 40}}, "two items shrinking down a column")
+}
+
+// TestAColumnMeasuresAnItemFromTheEdgeItIsAlignedTo. The margins across a
+// column's axis are the horizontal ones, and an item is placed from the one on
+// the side it is aligned to.
+func TestAColumnMeasuresAnItemFromTheEdgeItIsAlignedTo(t *testing.T) {
+	const one = `<div id="f"><div id="a">a</div></div>`
+	const column = `#f { width: 300px; flex-direction: column }`
+
+	// Stretched, so the item is the container less its own margins and starts
+	// at the left one.
+	wantRow(t, flexRow(t, one, column+`#a { margin-left: 10px }`),
+		[][2]float64{{10, 290}}, "a stretched item with a left margin")
+
+	// Aligned to the far side, so the margin on that side is what holds it off
+	// the edge: 300 less 12 of item and 10 of margin.
+	wantRow(t, flexRow(t, one, column+`#f { align-items: flex-end } #a { margin-right: 10px }`),
+		[][2]float64{{278, 12}}, "an item at the far side with a right margin")
 }
