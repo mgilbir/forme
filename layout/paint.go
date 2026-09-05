@@ -91,6 +91,21 @@ type DrawText struct {
 	//
 	// See layout/writingmode.go, which is where the rest of the argument is.
 	Sideways bool
+	// Anticlockwise says the turn went the other way: each glyph is turned
+	// ninety degrees *anticlockwise* from the way it stands in the font, and
+	// the advance from one to the next goes upwards from At.
+	//
+	// It goes with Sideways rather than instead of it, the way Upright does,
+	// and for the same reason: the run still runs along the page's vertical
+	// axis and a backend that ignored this would still put the glyphs in the
+	// right column. What it would get wrong is which way up they stand and
+	// which end of the column the first one is at.
+	//
+	// "writing-mode: sideways-lr" is the only thing that asks for it. CSS
+	// Writing Modes §3.1 gives that mode a left-to-right block flow like
+	// vertical-lr's and the *other* quarter turn, which is the one thing about
+	// it a permutation of the four sides cannot hide from a backend.
+	Anticlockwise bool
 	// Upright says the glyphs are *not* turned: each stands the way it does in
 	// the font and the pen moves one em down to the next one, whatever the
 	// face's horizontal advance for it is. It is what "text-orientation:
@@ -118,6 +133,9 @@ type DrawText struct {
 	// They are context and not content: nothing of them is drawn, and nothing of
 	// them belongs to the text a reader extracts from the page.
 	PreContext, PostContext string
+	// MergePre and MergePost say that side may contribute glyphs and not only
+	// forms. See paragraph.Item.MergePre.
+	MergePre, MergePost string
 	// ContextKerns says the neighbours above are set in this run's own face, so
 	// a pair that spans the boundary is this font's pair. It is false where font
 	// fallback put the neighbour in another face: a character is the same
@@ -297,15 +315,112 @@ func (TileImage) isOp() {}
 // so neither appears here, and step 2 is a background image, which nothing draws
 // yet. Every other step of §E.2 is present, reduced to the primitives this engine
 // emits.
-func Paint(root *Fragment) []Op {
+func Paint(root *Fragment) []Op { return PaintReporting(root, nil) }
+
+// PaintReporting is Paint, with the findings the painting itself raises.
+//
+// There is one kind: an opacity group whose marks could not be folded into. It
+// cannot be raised in layout, where every other finding about a box is raised,
+// because the question is about the marks the box turned out to paint and
+// nothing before the paint knows them — so the recorder comes here instead of
+// the finding going there. See opacity.go.
+//
+// A nil recorder is the plain Paint, and is what the package's own tests use:
+// they read the display list and none of them asks what was reported. The path
+// that matters is Compose's, and TestAGroupThatOverlapsItselfIsReported goes
+// through it.
+func PaintReporting(root *Fragment, rec *Recorder) []Op {
 	if root == nil {
 		return nil
 	}
 	p := &painter{colors: map[string]style.RGBA{}}
+	p.dimming(root, 1, nil)
 	p.canvasBackground(root)
 	p.stackingContext(root)
 	p.outlines(root)
+	for _, b := range p.order {
+		p.groups[b].report(rec)
+	}
 	return p.ops
+}
+
+// dimming works out, before anything is painted, how much of each fragment's
+// own paint reaches the page and which boxes decided it.
+//
+// owners is outermost first and is carried down rather than looked up, because
+// a block that was lifted out of an inline is no longer inside it — §9.2.1.1
+// made it a sibling of the inline's two halves — and the opacity the inline
+// asked for still covers it. That is the whole of what splitFrom is for here,
+// and it is the case opacity-affects-block-in-inline draws.
+func (p *painter) dimming(f *Fragment, a float64, owners *opacityOwner) {
+	if f == nil || f.Box == nil {
+		return
+	}
+	for _, from := range f.Box.splitFrom {
+		if groupsItsPaint(from) {
+			a, owners = a*opacityOf(from.Style), p.groupFor(from, owners)
+		}
+	}
+	if groupsItsPaint(f.Box) {
+		a, owners = a*opacityOf(f.Box.Style), p.groupFor(f.Box, owners)
+	}
+	if a < 1 {
+		if p.alpha == nil {
+			p.alpha, p.owners = map[*Fragment]float64{}, map[*Fragment]*opacityOwner{}
+		}
+		p.alpha[f], p.owners[f] = a, owners
+	}
+	for _, c := range f.Children {
+		p.dimming(c, a, owners)
+	}
+}
+
+// opacityOwner is one box that asked for opacity, and the chain of the ones
+// outside it.
+//
+// A list rather than a slice, and the reason is worth the type. Two siblings
+// under one group are handed the same chain to extend; extending a *slice*
+// appends to it twice, and if it happens to have spare capacity the second
+// append overwrites the first's entry — so the elder sibling's marks are
+// credited to the younger and the elder is never reported. Whether the slice has
+// spare capacity depends on how the runtime grew it three levels up, which is to
+// say the bug is invisible until a document is nested one box deeper. Copying
+// the slice at every level would fix it and would leave the next reader free to
+// stop copying; a list cannot be extended in place at all.
+type opacityOwner struct {
+	box *Box
+	up  *opacityOwner
+}
+
+// groupFor records a box that asked for opacity, once, and puts it at the head
+// of the chain covering what is inside it.
+func (p *painter) groupFor(b *Box, owners *opacityOwner) *opacityOwner {
+	if p.groups == nil {
+		p.groups = map[*Box]*group{}
+	}
+	if _, seen := p.groups[b]; !seen {
+		p.groups[b] = &group{box: b, alpha: opacityOf(b.Style)}
+		p.order = append(p.order, b)
+	}
+	return &opacityOwner{box: b, up: owners}
+}
+
+// grouped paints a fragment's own marks and folds into them the opacity of
+// every box around it that asked for one.
+func (p *painter) grouped(f *Fragment, paint func()) {
+	a, dimmed := p.alpha[f]
+	if !dimmed {
+		paint()
+		return
+	}
+	at := len(p.ops)
+	paint()
+	ops, marks := dimOps(p.ops, at, a)
+	p.ops = ops
+	for o := p.owners[f]; o != nil; o = o.up {
+		g := p.groups[o.box]
+		g.marks = append(g.marks, marks...)
+	}
 }
 
 // canvasBackground paints the page's own background, before anything else.
@@ -379,6 +494,18 @@ type painter struct {
 	// colors memoizes parsing a computed colour, which is asked for once per
 	// box per property and is almost always one of a handful of values.
 	colors map[string]style.RGBA
+
+	// alpha is the fraction of a fragment's own marks that reaches the page,
+	// and owners are the boxes that asked for it. Both are worked out before
+	// anything is painted, because the paint walk sorts the tree into Appendix
+	// E's layers and a fragment is painted from a flat list that no longer says
+	// what it was inside. Only the fragments that are dimmed are in either map.
+	alpha  map[*Fragment]float64
+	owners map[*Fragment]*opacityOwner
+	// groups is what each of those boxes painted, in the order the boxes were
+	// met, so that the report about a group is in document order.
+	groups map[*Box]*group
+	order  []*Box
 }
 
 // stackLevel is one positioned box waiting to be painted, with what decides
@@ -532,7 +659,7 @@ func (p *painter) stackLevel(s stackLevel) {
 // The root is the other half of the sentence and needs nothing here: the paint
 // begins by making a stacking context of it, so it never reaches this.
 func sealsItsDescendants(b *Box) bool {
-	return !b.ZAuto || b.Position == PositionFixed
+	return !b.ZAuto || b.Position == PositionFixed || groupsItsPaint(b)
 }
 
 // unit paints a fragment and its non-positioned content as one indivisible
@@ -588,7 +715,7 @@ func (p *painter) gather(f *Fragment, lv *layers, root, collect bool) {
 		if c.Box == nil {
 			continue
 		}
-		if c.Box.Position.positioned() || stacksWithASplitInline(c.Box) != nil {
+		if c.Box.Position.positioned() || stacksWithASplitInline(c.Box) != nil || groupsItsPaint(c.Box) {
 			if !collect {
 				// Already hoisted; painting it here as well would draw it twice.
 				continue
@@ -654,7 +781,7 @@ func (p *painter) hoist(f *Fragment, lv *layers) {
 		// The same two kinds gather sorts out, and for the same reason: a box
 		// gather will skip as "already hoisted" has to actually be hoisted here,
 		// or it is painted nowhere at all.
-		if c.Box.Position.positioned() || stacksWithASplitInline(c.Box) != nil {
+		if c.Box.Position.positioned() || stacksWithASplitInline(c.Box) != nil || groupsItsPaint(c.Box) {
 			lv.positioned = append(lv.positioned, stackLevel{
 				frag: c, z: levelOf(c), order: c.Box.Order,
 			})
@@ -920,7 +1047,7 @@ func textInkAt(v DrawText, above, below style.Unit) Rect {
 	return placeRun(Rect{
 		Y: style.Unit(0).Sub(above),
 		W: width, H: above.Add(below),
-	}, v.At, v.Sideways)
+	}, v.At, turnOfRun(v))
 }
 
 // decorations paints a box's own background and border, which is what §E.2 steps
@@ -933,6 +1060,10 @@ func (p *painter) decorations(f *Fragment) {
 	if f.Box == nil {
 		return
 	}
+	p.grouped(f, func() { p.decorationsIn(f) })
+}
+
+func (p *painter) decorationsIn(f *Fragment) {
 	if len(f.bgBands) > 0 {
 		// The background is shown through the bands and nothing else — see
 		// Fragment.bgBands — while the border, if the box has one at all, is one
@@ -1006,7 +1137,7 @@ func (p *painter) paintBackground(f *Fragment) {
 // pictures inside it to its padding box. That is §11.1.1 in one line, and it is
 // the half of clipping every author uses.
 func (p *painter) content(f *Fragment) {
-	p.clipping(f.clipContent, func() { p.paintContent(f) })
+	p.grouped(f, func() { p.clipping(f.clipContent, func() { p.paintContent(f) }) })
 }
 
 func (p *painter) paintContent(f *Fragment) {
@@ -1152,7 +1283,7 @@ func (p *painter) outlines(f *Fragment) {
 	if f == nil {
 		return
 	}
-	p.outline(f)
+	p.grouped(f, func() { p.outline(f) })
 	for _, c := range f.Children {
 		p.outlines(c)
 	}
@@ -1226,7 +1357,13 @@ func (p *painter) lines(f *Fragment) {
 		// baseline is measured from, and the edge half-leading is split above —
 		// is its right one.
 		baseline := content.Y.Add(line.Rect.Y).Add(line.Baseline)
-		if line.Sideways {
+		switch {
+		case line.Anticlockwise:
+			// The other turn puts the glyphs' up to the left, so the ascent is
+			// on the left of the line box and the baseline is measured
+			// rightwards from its near edge rather than back from its far one.
+			baseline = content.X.Add(line.Rect.X).Add(line.Baseline)
+		case line.Sideways:
 			baseline = content.X.Add(line.Rect.X).Add(line.Rect.W).Sub(line.Baseline)
 		}
 		// §E.2's inline layer, in the order it gives: for each line box, the
@@ -1286,7 +1423,18 @@ func (p *painter) lines(f *Fragment) {
 				X: content.X.Add(line.Rect.X).Add(along),
 				Y: baseline.Add(across),
 			}
-			if line.Sideways {
+			switch {
+			case line.Anticlockwise:
+				// The same quarter turn the other way: along the line is *up*
+				// the page, so the offset is measured back from the line box's
+				// foot, and off the baseline is towards the right, because that
+				// is where "down" points once a page has been turned
+				// anticlockwise. See layout/writingmode.go.
+				at = Point{
+					X: baseline.Add(across),
+					Y: content.Y.Add(line.Rect.Y).Add(line.Rect.H).Sub(along),
+				}
+			case line.Sideways:
 				// The same two offsets, a quarter turn round: along the line is
 				// down the page, and off the baseline is back towards the left,
 				// because that is the way "up" points once a page has been
@@ -1312,26 +1460,29 @@ func (p *painter) lines(f *Fragment) {
 				// the page beside the box, and would put the control character
 				// itself into the text extracted from the page, where it is
 				// exactly the thing a reader does not want back.
-				p.ops = append(p.ops, controlBox(at, run.Width, run.Size, colour, line.Sideways)...)
+				p.ops = append(p.ops, controlBox(at, run.Width, run.Size, colour, turnOfLine(line))...)
 				continue
 			}
-			p.decorate(run, at, line.Sideways, false)
+			p.decorate(run, at, turnOfLine(line), false)
 			p.ops = append(p.ops, DrawText{
-				At:           at,
-				Sideways:     line.Sideways,
-				Upright:      run.Upright,
-				Features:     run.Features,
-				Text:         drawableText(run.Text),
-				PreContext:   run.PreContext,
-				PostContext:  run.PostContext,
-				ContextKerns: run.ContextKerns,
-				RTL:          run.RTL,
-				Face:         run.Face,
-				Size:         run.Size,
-				Color:        colour,
-				CharSpacing:  run.LetterSpacing,
+				At:            at,
+				Sideways:      line.Sideways,
+				Anticlockwise: line.Anticlockwise,
+				Upright:       run.Upright,
+				Features:      run.Features,
+				Text:          drawableText(run.Text),
+				PreContext:    run.PreContext,
+				PostContext:   run.PostContext,
+				MergePre:      run.MergePre,
+				MergePost:     run.MergePost,
+				ContextKerns:  run.ContextKerns,
+				RTL:           run.RTL,
+				Face:          run.Face,
+				Size:          run.Size,
+				Color:         colour,
+				CharSpacing:   run.LetterSpacing,
 			})
-			p.decorate(run, at, line.Sideways, true)
+			p.decorate(run, at, turnOfLine(line), true)
 		}
 	}
 }
@@ -1354,7 +1505,7 @@ func (p *painter) lines(f *Fragment) {
 // overlining div are ruled by one straight line. at.Y is the run's own baseline
 // and carries the run's own shift, which is undone here and the declaring box's
 // put in its place.
-func (p *painter) decorate(run TextRun, at Point, sideways, over bool) {
+func (p *painter) decorate(run TextRun, at Point, turn runTurn, over bool) {
 	if len(run.Decorations) == 0 || run.Width <= 0 {
 		return
 	}
@@ -1378,7 +1529,7 @@ func (p *painter) decorate(run TextRun, at Point, sideways, over bool) {
 			continue
 		}
 		p.ops = append(p.ops, FillRect{
-			Rect: placeRun(band, at, sideways), Color: colour, Overhang: true,
+			Rect: placeRun(band, at, turn), Color: colour, Overhang: true,
 		})
 	}
 }
@@ -1393,10 +1544,34 @@ func (p *painter) decorate(run TextRun, at Point, sideways, over bool) {
 // The sideways case is the quarter turn: along the line becomes down the page,
 // and off the baseline becomes back towards the left. A rectangle's far edge in
 // the second axis is its near edge afterwards, which is where the extra
-// subtraction of the height comes from.
-func placeRun(r Rect, at Point, sideways bool) Rect {
-	if !sideways {
+// subtraction of the height comes from. Anticlockwise is the same turn the
+// other way round, and the subtraction moves to the other axis with it.
+// runTurn is which way a run is set on the page: across it, or down it one way
+// or the other.
+//
+// The two facts travel together because they are one decision, and because two
+// bare booleans side by side at a call site are an invitation to pass them in
+// the wrong order — which no test would catch for a run that is not turned at
+// all, which is almost every run in almost every document.
+type runTurn struct{ sideways, anticlockwise bool }
+
+func turnOfLine(l LineFragment) runTurn {
+	return runTurn{sideways: l.Sideways, anticlockwise: l.Anticlockwise}
+}
+
+func turnOfRun(v DrawText) runTurn {
+	return runTurn{sideways: v.Sideways, anticlockwise: v.Anticlockwise}
+}
+
+func placeRun(r Rect, at Point, turn runTurn) Rect {
+	switch {
+	case !turn.sideways:
 		return Rect{X: at.X.Add(r.X), Y: at.Y.Add(r.Y), W: r.W, H: r.H}
+	case turn.anticlockwise:
+		// The other turn, so both axes go the other way: along the line runs up
+		// the page and off the baseline runs right. The extra subtraction moves
+		// from the first axis to the second for exactly that reason.
+		return Rect{X: at.X.Add(r.Y), Y: at.Y.Sub(r.X).Sub(r.W), W: r.H, H: r.W}
 	}
 	return Rect{X: at.X.Sub(r.Y).Sub(r.H), Y: at.Y.Add(r.X), W: r.H, H: r.W}
 }
@@ -1507,10 +1682,12 @@ func ShapedGlyphs(v DrawText) ([]shape.Glyph, int) {
 		// The neighbour is set in another face, so its characters decide this
 		// run's joined shapes and its glyphs decide nothing. See
 		// shape.ShapeGlyphsAcrossFaces.
-		return v.Face.ShapeGlyphsAcrossFaces(ShapedText(v), v.PreContext, v.PostContext,
+		return v.Face.ShapeGlyphsMerged(ShapedText(v), v.PreContext, v.PostContext,
+			v.MergePre, v.MergePost, false,
 			v.Features)
 	}
-	return v.Face.ShapeGlyphsInContext(ShapedText(v), v.PreContext, v.PostContext,
+	return v.Face.ShapeGlyphsMerged(ShapedText(v), v.PreContext, v.PostContext,
+		v.MergePre, v.MergePost, true,
 		v.Features)
 }
 

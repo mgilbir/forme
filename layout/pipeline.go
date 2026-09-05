@@ -244,6 +244,16 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 				Property: "display",
 			})
 		}
+		if what, laid := unlaidFormattingContext(cs["display"]); what != "" &&
+			unlaidBoxIsNotTheBoxAsked(n, styles, what) {
+			rec.ReportDetail(Finding{
+				Rule:     RuleUnsupportedValue,
+				Source:   AtHTML(n.Offset),
+				Message:  "\"display: " + what + "\" is not implemented; " + laid,
+				Path:     PathOf(n),
+				Property: "display",
+			})
+		}
 		// "position: sticky" is the one positioning scheme this engine cannot
 		// answer, and it is the one that proves the scope boundary is about
 		// dynamism rather than about difficulty: sticky is defined by where a
@@ -263,6 +273,134 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 		}
 		return true
 	})
+}
+
+// unlaidFormattingContext names a display value whose *inner* layout this engine
+// does not do, and says what the box was laid out as instead.
+//
+// The three are one omission with one shape: the value is recognised, the box is
+// built, and then ordinary layout runs inside it. A flex container becomes a
+// column of full-width blocks where a row was asked for, and until this report
+// existed it said nothing at all — which is the plausible, silent wrongness the
+// whole findings vocabulary is against. See style/unimplemented.go, which makes
+// the same argument about a property nothing reads.
+//
+// They are named rather than gathered by exclusion. A list of "everything this
+// engine does not lay out" would go stale in the direction that matters: silent
+// about a value that had stopped being laid out.
+func unlaidFormattingContext(value string) (what, laid string) {
+	const asBlocks = "the box and everything in it were laid out as blocks, " +
+		"so the items are stacked rather than arranged"
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "flex":
+		return "flex", asBlocks
+	case "inline-flex":
+		return "inline-flex", asBlocks
+	case "grid":
+		return "grid", asBlocks
+	case "inline-grid":
+		return "inline-grid", asBlocks
+	case "ruby":
+		return "ruby", "the box was laid out as an inline box, so the " +
+			"annotation runs along the line instead of above it"
+	}
+	return "", ""
+}
+
+// unlaidBoxIsNotTheBoxAsked reports whether laying the box out as this engine
+// does actually produces a different page.
+//
+// Reporting every such box would be crying wolf, and the suite says so in six
+// documents: five of them write "display: ruby" on a span with no annotation in
+// it, to make an element boundary for a text rule to be asked about, and the
+// sixth writes an *empty* "display: inline-flex" as an atomic inline for
+// letter-spacing to space. In each of them the box this engine builds is the box
+// the specification asks for, and a finding would say the page was wrong when it
+// was right. That is the argument style/inert.go makes for a declaration asking
+// for the behaviour that is already there.
+//
+// So the question is asked of the content, and each answer is exact rather than
+// cautious:
+//
+//   - A flex or grid container with *any* in-flow item is different. A flex item
+//     is sized from its own content where a block child fills its container, so
+//     even one item is laid out at a different width. Only an empty one is the
+//     same box — and an empty box is empty however it is laid out.
+//   - A ruby box is different where there is an annotation in it. Ruby lays a
+//     "ruby-text" above its base; with no annotation there is nothing to lift,
+//     and §3.1's own answer for a base alone is the base.
+func unlaidBoxIsNotTheBoxAsked(n *html.Node, styles map[*html.Node]style.ComputedStyle,
+	what string) bool {
+
+	if what == "ruby" {
+		return hasRubyAnnotation(n, styles)
+	}
+	for _, c := range n.Children {
+		switch c.Type {
+		case html.TextNode:
+			// White space alone is not an item: §4's box construction wraps a
+			// run of text in an anonymous item only where it has content.
+			if strings.TrimSpace(c.Text) != "" {
+				return true
+			}
+		case html.ElementNode:
+			cs, ok := styles[c]
+			if !ok {
+				continue
+			}
+			d := strings.ToLower(strings.TrimSpace(cs["display"]))
+			if d == "none" {
+				continue
+			}
+			// An absolutely positioned child is not a flex item — §4.1 takes it
+			// out of the flow and lays it out against the container as its
+			// containing block — so it is not what makes the layout differ.
+			switch strings.ToLower(strings.TrimSpace(cs["position"])) {
+			case "absolute", "fixed":
+				continue
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// hasRubyAnnotation reports whether a ruby box has anything to lift above its
+// base, anywhere inside it.
+//
+// Anywhere, because the annotation need not be a child: HTML's own <ruby> puts
+// the <rt> beside the base, and a document may wrap either in a span. What it
+// must not do is look through a *nested* ruby, whose annotation belongs to that
+// one — but a nested ruby is itself reported, so the outer one saying so as well
+// is not a second finding about the same box.
+//
+// The walk takes in n itself, and nothing guards against it: the caller has
+// already read n's display and found "ruby", so n cannot also be the
+// "ruby-text" this is looking for. A guard that said so could not be made to
+// fail.
+func hasRubyAnnotation(n *html.Node, styles map[*html.Node]style.ComputedStyle) bool {
+	found := false
+	n.Walk(func(c *html.Node) bool {
+		// The element test is an optimisation and nothing else, and it is worth
+		// saying so because no test can catch it: a text node is not in styles,
+		// so the lookup below would answer "no display" for one anyway. What it
+		// saves is a map lookup per character of a ruby's text. See
+		// style/computed.go's mightHoldAFontRelativeLength, which is the same
+		// kind of check with the same kind of note on it.
+		if found || c.Type != html.ElementNode {
+			return !found
+		}
+		cs, ok := styles[c]
+		if !ok {
+			return true
+		}
+		switch strings.ToLower(strings.TrimSpace(cs["display"])) {
+		case "ruby-text", "ruby-text-container":
+			found = true
+		}
+		return !found
+	})
+	return found
 }
 
 // PathOf renders an element's position in the document, so a finding about a

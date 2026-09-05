@@ -162,9 +162,11 @@ var inertValues = map[string]inertValue{
 	// CSS Backgrounds 3 §5.1: corners are square.
 	"border-radius": {produced: "0", because: "every corner is square"},
 
-	// The identities: CSS Filter Effects 1 §5, CSS Color 4 §3, CSS Transforms 2.
+	// The identities: CSS Filter Effects 1 §5 and CSS Transforms 2. CSS Color
+	// 4 §3's opacity was here and is not any more — it is implemented, and what
+	// it cannot express is reported at the box that asked for it rather than at
+	// the declaration. See layout/opacity.go.
 	"filter":              {produced: "none", because: "nothing is filtered"},
-	"opacity":             {produced: "1", because: "every box is painted fully opaque"},
 	"transform":           {produced: "none", because: "nothing is transformed"},
 	"transform-style":     {produced: "flat", because: "there is no 3D rendering context"},
 	"backface-visibility": {produced: "visible", because: "nothing is rotated away from the viewer"},

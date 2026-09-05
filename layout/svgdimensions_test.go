@@ -75,8 +75,8 @@ func TestAStylesheetBeatsTheAttribute(t *testing.T) {
 // constraint gets the 300 by 150 CSS 2.1 §10.3.2 gives a replaced element with
 // none — not a percentage of something.
 func TestAPercentageIsStillNotAnIntrinsicDimension(t *testing.T) {
-	c := svgContent([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="50%" height="50%">` +
-		`<rect width="100%" height="100%" fill="green"/></svg>`))
+	c := svgContent([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="50%" height="50%">`+
+		`<rect width="100%" height="100%" fill="green"/></svg>`), svgAsImage)
 	if c == nil {
 		t.Fatal("the picture was refused")
 	}

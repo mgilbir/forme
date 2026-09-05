@@ -768,6 +768,12 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		box.Children = append(box.Children, after)
 	}
 	if outer != OuterInline && !box.outOfFlow() {
+		// §2.2's virtual word separators at a phrase boundary that falls
+		// between two boxes, which is the one place the node-by-node reading
+		// inside the white space processing cannot see. Here because a phrase
+		// is a question about a paragraph and a block-level box is where one
+		// ends. See phraseedge.go.
+		b.phraseSeparatorsAtABoxEdge(box)
 		// And a block-level box ends its text: the word does not continue into
 		// whatever comes after it. An out-of-flow one still does not, for the
 		// reason above.

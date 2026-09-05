@@ -130,6 +130,31 @@ var (
 	burmeseBuilt *dictionary
 )
 
+// wordDictionaryLanguages is the four above, named as a document names them.
+//
+// The table beside them is keyed by *script*, because a character is what a
+// dictionary is looked up for and the four scripts are used by one language
+// each. This one is keyed by language, because it answers a different question:
+// CSS Text 4 §2.2 gives a virtual word separator only where the *content
+// language* is one whose words the user agent can find, and a document that
+// declares none is to get none however its characters read. Untagged Thai is
+// still Thai to the eye and is not Thai to this rule.
+var wordDictionaryLanguages = map[Language]bool{
+	"th": true, // Thai
+	"lo": true, // Lao
+	"km": true, // Khmer
+	"my": true, // Burmese
+}
+
+// HasWordDictionary reports whether this engine can find the words of a
+// language that is written without spaces between them.
+//
+// It is the sibling of HasPhraseModel and of HyphenatesLanguage, and the three
+// are asked the same way for the same reason: what a language needs is a table,
+// and which tables are here is a fact about the build rather than about the
+// document.
+func HasWordDictionary(lang Language) bool { return wordDictionaryLanguages[lang] }
+
 // dictionaryFor is the word list for the script a character belongs to, or nil
 // where this engine has none.
 //

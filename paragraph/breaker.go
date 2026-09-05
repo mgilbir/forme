@@ -147,8 +147,19 @@ func (br *Breaker) MeasureSpacedInContext(face *shape.Face, text string, size st
 		// for what counts as a character here.
 		w = size.Mul(float64(UprightUnits(text)))
 	} else {
-		w, _ = style.FromPx(face.MeasureShapedInContext(text, size.Px(),
-			how.Before, how.After, how.ContextKerns, how.Off))
+		// The two ends of the run within the group it was shaped with, each
+		// rounded to a layout unit, rather than the difference rounded once.
+		// Every run of a group then begins where the one before it ended and
+		// the widths add up to the group's own rounded width — where rounding
+		// the differences leaves a word written in three runs a sixty-fourth of
+		// a pixel from the same word written in one. See
+		// shape.MeasureShapedMergedSpan.
+		head, through := face.MeasureShapedMergedSpan(text, size.Px(),
+			how.Before, how.After, how.MergeBefore, how.MergeAfter,
+			how.ContextKerns, how.Off)
+		lo, _ := style.FromPx(head)
+		hi, _ := style.FromPx(through)
+		w = hi.Sub(lo)
 	}
 	w = w.Add(SpacingAdvance(text, sp))
 	br.measured[key] = w
@@ -178,6 +189,9 @@ type Shaping struct {
 	// Before and After are the text either side of the run, where the boundary
 	// between it and its neighbour did not break shaping. See Item.PreContext.
 	Before, After string
+	// MergeBefore and MergeAfter say that side may contribute glyphs and not
+	// only forms. See Item.MergePre.
+	MergeBefore, MergeAfter string
 	// ContextKerns says the neighbours above are set in this run's own face, so
 	// a pair that spans the boundary is this font's pair. See Item.ContextKerns.
 	ContextKerns bool

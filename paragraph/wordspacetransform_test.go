@@ -278,12 +278,15 @@ func TestAnInventedSeparatorIsAPlaceALineMayEnd(t *testing.T) {
 	text := InsertPhraseSeparators("東京へ行きましょう。", value, WritingSystemJapanese)
 	pieces, _ := SplitAtBreaks(text, WhiteSpace{Collapse: true, Wrap: true},
 		WordBreak{KeepAll: true}, LineBreak{}, Hyphens{}, WritingSystemJapanese)
-	// keep-all forbids every opportunity between two ideographs, so the one
-	// left is the separator's — which is the pairing §2.2's own example writes,
-	// "word-break: keep-all" beside "word-space-transform: ideographic-space".
+	// keep-all demotes every opportunity between two ideographs, so the one a
+	// line reaches for is the separator's — which is the pairing §2.2's own
+	// example writes, "word-break: keep-all" beside "word-space-transform:
+	// ideographic-space". The demoted ones are still there and are not counted:
+	// a line takes one only when it has no separator on it at all, which is the
+	// case this document is written not to be.
 	var breaks int
 	for _, p := range pieces {
-		if p.BreakBefore {
+		if p.BreakBefore && !p.LastResort {
 			breaks++
 		}
 	}

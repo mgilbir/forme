@@ -182,8 +182,6 @@ func TestABoxThisEngineCannotTurnIsReported(t *testing.T) {
 		{"another writing mode", turnedCSS,
 			`<div id="d"><p style="writing-mode: horizontal-tb">ab</p></div>`,
 			"changes the writing mode again"},
-		{"a mode that is not laid out", `#d { writing-mode: sideways-lr; width: 60px; height: 100px }`,
-			`<div id="d">ab</div>`, `only "vertical-rl" and "vertical-lr" are laid out`},
 	} {
 		t.Run(c.what, func(t *testing.T) {
 			// The first, which is the outermost box's: turns() is asked in
@@ -215,12 +213,18 @@ func TestABoxThisEngineCannotTurnIsReported(t *testing.T) {
 // before any of this existed, which is what makes the finding the whole of the
 // difference.
 func TestABoxThisEngineCannotTurnIsLaidOutHorizontally(t *testing.T) {
+	// An inline-block, which is refused for being a box with sizing rules of
+	// its own rather than for the mode it asked for. Every value of the
+	// property is laid out now — the refusals that are left are all about the
+	// box — so these two documents differ in the declaration and in nothing
+	// else, which is what makes the comparison below mean anything.
 	refused := turnedRuns(t, `<div id="d">ab</div>`,
 		`#d { font-family: Courier; font-size: 20px; line-height: 20px;
-		      writing-mode: sideways-lr; width: 60px; height: 100px }`)
+		      display: inline-block;
+		      writing-mode: vertical-rl; width: 60px; height: 100px }`)
 	plain := turnedRuns(t, `<div id="d">ab</div>`,
 		`#d { font-family: Courier; font-size: 20px; line-height: 20px;
-		      width: 60px; height: 100px }`)
+		      display: inline-block; width: 60px; height: 100px }`)
 	if len(refused) != 1 || len(plain) != 1 {
 		t.Fatalf("the fixtures drew %d and %d runs, want 1 each", len(refused), len(plain))
 	}
@@ -682,7 +686,7 @@ func TestAVerticalBlockWithNoWidthIsAsWideAsItsLinesStack(t *testing.T) {
 // returned as an inline-axis one is a box that moved.
 func TestTurningTheEdgesBackAndForthChangesNothing(t *testing.T) {
 	e := Edges{Top: 1, Right: 2, Bottom: 4, Left: 8}
-	for _, mode := range []writingMode{verticalRL, verticalLR} {
+	for _, mode := range []writingMode{verticalRL, verticalLR, sidewaysRL, sidewaysLR} {
 		if got := turnEdges(untuneEdges(e, mode), mode); got != e {
 			t.Errorf("%v: turning %v back and forth gave %v", mode, e, got)
 		}
@@ -702,6 +706,24 @@ func TestTurningTheEdgesBackAndForthChangesNothing(t *testing.T) {
 	if rl == lr {
 		t.Error("the two modes permute the edges the same way; they stack their " +
 			"lines from opposite edges")
+	}
+	// And the four are four different permutations. sideways-rl is the same
+	// turn as vertical-rl, so those two *are* one permutation and are compared
+	// as such; sideways-lr is the other turn, and sends the horizontal left to
+	// the foot of the page rather than to its head.
+	if got := turnEdges(e, sidewaysRL); got != rl {
+		t.Errorf("sideways-rl permuted the edges to %v and vertical-rl to %v; "+
+			"they are the same quarter turn", got, rl)
+	}
+	other := turnEdges(e, sidewaysLR)
+	if other.Bottom != lr.Top {
+		t.Errorf("sideways-lr put the horizontal left at bottom=%v where the "+
+			"clockwise modes put it at top=%v; it turns the other way",
+			other.Bottom, lr.Top)
+	}
+	if other == lr {
+		t.Error("sideways-lr and vertical-lr permute the edges the same way; " +
+			"they stack their lines the same way and turn opposite ways")
 	}
 }
 

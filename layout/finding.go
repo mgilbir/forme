@@ -69,7 +69,35 @@ const (
 	// RuleFontFallback is a requested family that was not available, so the
 	// text was set in something else. The metrics and the line breaks differ,
 	// and nothing about the page says so.
+	//
+	// It is the family that could not be *resolved* — nobody has it, it did not
+	// load, it is not in the set. A family that resolved and simply has no glyph
+	// for the text is the rule below, and the two are separate because one is a
+	// gap and the other is CSS working.
 	RuleFontFallback Rule = "font-fallback"
+	// RuleFontSubstituted is a family that resolved to a face with no glyph for
+	// the text it was asked to set, so font matching went on to another face.
+	//
+	// It is deliberately *not* one of the unsupported rules, and the line
+	// between it and the one above is where the engine stopped short against
+	// where it did what CSS asks. A family nobody has is a gap: the page is set
+	// in something the author never named and there was nothing better to
+	// offer. A family that loaded and has no 国 in it is not a gap at all — CSS
+	// Fonts §5 says to go on to the next face, every browser does, and so does
+	// this.
+	//
+	// The distinction earns the second rule because §7.1's companion signal
+	// reads it. A reftest whose two documents both fell back has not been made
+	// vacuous by falling back: the substitution is the same on both sides, the
+	// text is still drawn, and whatever the test is about — a line break, a
+	// transform, a letter-spacing — is still being compared. That is the
+	// opposite of a picture that failed to load, where the thing under test is
+	// absent from both pages, and it is why that one is in the unsupported set
+	// and this is not.
+	//
+	// It is still reported, and at Warn like the one above, because an author
+	// who asked for a face and did not get it wants to know either way.
+	RuleFontSubstituted Rule = "font-substituted"
 	// RuleUnsupportedScript is text this engine cannot break or order
 	// correctly. §6.3 makes it an error by default, and is right to: unbroken or
 	// unordered text still looks like text, so the failure mode looks like
@@ -231,6 +259,7 @@ var defaultSeverity = map[Rule]Severity{
 	RuleUnsupportedAtRule:   Warn,
 	RuleUnsupportedValue:    Warn,
 	RuleFontFallback:        Warn,
+	RuleFontSubstituted:     Warn,
 	// The two errors. Both produce a page that looks finished and is not, which
 	// is the case where returning no document is better than returning one.
 	RuleUnsupportedScript: Error,
@@ -405,7 +434,12 @@ var unsupportedRules = map[Rule]bool{
 	RuleUnsupportedValue:    true,
 	RuleUnsupportedScript:   true,
 	RuleFontFallback:        true,
-	RuleGlyphMissing:        true,
+	// RuleFontSubstituted is not here, and must not be added. See its
+	// declaration: a family that resolved and lacks the glyph is §5's font
+	// matching working, not something this engine declined to do, and the two
+	// documents of a reftest that both went through it are still comparing the
+	// thing they are about.
+	RuleGlyphMissing: true,
 	// This one says "the engine does not form that containing block", which is a
 	// statement about the engine and not about the input — so a reftest whose
 	// two documents both trip it has not demonstrated anything, and §7.1's

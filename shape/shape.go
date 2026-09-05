@@ -54,6 +54,71 @@ func (f *Face) MeasureShapedInContext(s string, size float64, before, after stri
 	return MeasureGlyphs(glyphs, size)
 }
 
+// MeasureShapedMerged is MeasureShapedInContext where a neighbour may
+// contribute glyphs to the run. See ShapeGlyphsMerged.
+//
+// It is the same call the painting goes through, which is the whole of why it
+// exists: a run whose first characters were swallowed by its neighbour's
+// ligature draws narrower than its text says, and a measure that did not agree
+// would fill a line to one width and paint it at another.
+func (f *Face) MeasureShapedMerged(s string, size float64,
+	before, after, mergeBefore, mergeAfter string, kerns bool, off Features) float64 {
+
+	head, through := f.MeasureShapedMergedSpan(s, size, before, after,
+		mergeBefore, mergeAfter, kerns, off)
+	return through - head
+}
+
+// MeasureShapedMergedSpan is MeasureShapedMerged as the pair of distances it is
+// cut from: how far the pen has come when the run begins, and how far when it
+// ends, both measured through the group the run was shaped with.
+//
+// The pair exists so that a caller rounding to a layout unit can round the two
+// *ends* rather than the difference. Every run of a group then begins where the
+// one before it ended, and the widths add up to the group's own rounded width
+// instead of to a unit more or less of it — which is what a lam-alef written as
+// two runs came out as, one sixty-fourth of a pixel wide of the same word
+// written as one.
+//
+// head is zero for a run that merged nothing, which is every run of almost
+// every document, and the difference is then the run's own width as it always
+// was.
+func (f *Face) MeasureShapedMergedSpan(s string, size float64,
+	before, after, mergeBefore, mergeAfter string, kerns bool,
+	off Features) (head, through float64) {
+
+	if !f.composite() {
+		return 0, f.Measure(s, size)
+	}
+	if mergeBefore == "" && mergeAfter == "" {
+		glyphs, _ := f.ShapeGlyphsInContextOrAcross(s, before, after, kerns, off)
+		return 0, MeasureGlyphs(glyphs, size)
+	}
+	whole, lo, hi := f.shapeWholeGroup(s, before, after, mergeBefore, mergeAfter, kerns, off)
+	var headAdv, mine float64
+	for _, g := range whole {
+		switch {
+		case g.Cluster < lo:
+			headAdv += g.XAdvance
+		case g.Cluster < hi:
+			mine += g.XAdvance
+		}
+	}
+	return headAdv * size / 1000, (headAdv + mine) * size / 1000
+}
+
+// ShapeGlyphsInContextOrAcross picks between the two by whether a pair spanning
+// the boundary is this font's to apply. It is the choice every caller of the
+// two made for itself.
+func (f *Face) ShapeGlyphsInContextOrAcross(s, before, after string, kerns bool,
+	off Features) ([]Glyph, int) {
+
+	if kerns {
+		return f.ShapeGlyphsInContext(s, before, after, off)
+	}
+	return f.ShapeGlyphsAcrossFaces(s, before, after, off)
+}
+
 // HasKerning reports whether the font carries pair kerning this package could
 // read. A caller laying out text can use it to decide whether shaping is worth
 // the extra spans, and a test can use it to notice a font whose kerning went

@@ -313,6 +313,18 @@ func TestTheFamilyFaceIsKeptEvenWhenAnotherCouldSetEverything(t *testing.T) {
 // all of this" fires on every document with one foreign character in it — which
 // is what it did, on eighty-eight of the suite's, until it was keyed on which
 // characters actually moved.
+// aboutTheFace reports whether a finding is one of the two that font matching
+// raises: the family that could not be resolved at all, and the family that
+// resolved and had no glyph for the text.
+//
+// Every test below that asserts *silence* asks about both. Splitting one rule
+// into two would otherwise have quietly halved each of them — the assertion
+// would still pass while the other half of the thing it was watching for fired
+// freely.
+func aboutTheFace(f Finding) bool {
+	return f.Rule == RuleFontFallback || f.Rule == RuleFontSubstituted
+}
+
 func TestAFallbackForOneWordIsNotReported(t *testing.T) {
 	hebrew := loadHebrew(t)
 	set := oneFaceSet{fallback: hebrew, standard: StandardFonts()}
@@ -320,7 +332,7 @@ func TestAFallbackForOneWordIsNotReported(t *testing.T) {
 		`<p id="p">the quick א fox</p>`,
 		`#p { font-family: Helvetica; font-size: 20px }`)
 	for _, f := range findings {
-		if f.Rule == RuleFontFallback {
+		if aboutTheFace(f) {
 			t.Errorf("one word of Hebrew in an English sentence reported %s", f.Error())
 		}
 	}
@@ -337,7 +349,7 @@ func TestAFamilyThatSetsNothingIsReported(t *testing.T) {
 		`#p { font-family: Helvetica; font-size: 20px }`)
 	var said bool
 	for _, f := range findings {
-		if f.Rule == RuleFontFallback {
+		if f.Rule == RuleFontSubstituted {
 			said = true
 		}
 	}
@@ -369,7 +381,7 @@ func TestAGenericFamilyResolvingIsNotASubstitution(t *testing.T) {
 			`<p id="p">שלום</p>`,
 			`#p { font-family: `+family+`; font-size: 20px }`)
 		for _, f := range findings {
-			if f.Rule == RuleFontFallback {
+			if aboutTheFace(f) {
 				t.Errorf("font-family: %s reported a substitution: %s", family, f.Message)
 			}
 		}
@@ -397,7 +409,7 @@ func TestNamingARealFamilyKeepsTheFinding(t *testing.T) {
 			`#p { font-family: `+family+`; font-size: 20px }`)
 		var said bool
 		for _, f := range findings {
-			if f.Rule == RuleFontFallback {
+			if f.Rule == RuleFontSubstituted {
 				said = true
 			}
 		}
@@ -440,7 +452,7 @@ func TestTheGenericTestIsNotPassingByAccident(t *testing.T) {
 func substitutionFindings(findings []Finding) []string {
 	var out []string
 	for _, f := range findings {
-		if f.Rule == RuleFontFallback {
+		if f.Rule == RuleFontSubstituted {
 			out = append(out, f.Message)
 		}
 	}

@@ -55,6 +55,13 @@ type LineFragment struct {
 	// what it has in its hand there. See layout/writingmode.go for why a quarter
 	// turn is expressible as one flag at all.
 	Sideways bool
+	// Anticlockwise says the quarter turn went the other way, which is what
+	// "writing-mode: sideways-lr" asks for. It goes with Sideways rather than
+	// instead of it: the line still runs along the page's vertical axis, and
+	// what differs is which way. Its Baseline is measured rightwards from the
+	// line box's *left* edge, because the glyphs' own up points left after this
+	// turn, and each run's X is a distance upwards from the line box's foot.
+	Anticlockwise bool
 }
 
 // TextRun is a piece of text on a line, set in one face at one size.
@@ -103,6 +110,10 @@ type TextRun struct {
 	// drawn isolated — the two disagree, and the page shows a word broken into
 	// letters standing apart. See shapingcontext.go.
 	PreContext, PostContext string
+	// MergePre and MergePost say that side may contribute glyphs and not only
+	// forms, so a ligature that spans the boundary is formed and drawn by
+	// whichever run holds its first character. See paragraph.Item.MergePre.
+	MergePre, MergePost string
 	// ContextKerns says the neighbours above are set in this run's own face, so
 	// a pair that spans the boundary is this font's pair. A font change is a
 	// change in formatting and its pairs do not cross one; a letter's joined

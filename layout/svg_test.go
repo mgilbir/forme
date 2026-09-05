@@ -22,7 +22,7 @@ import (
 
 func svgOf(t *testing.T, body string) *ReplacedContent {
 	t.Helper()
-	return svgContent([]byte(body))
+	return svgContent([]byte(body), svgAsImage)
 }
 
 // mapResolver serves resources from memory, which is what an SVG fixture wants:
@@ -153,7 +153,7 @@ func TestTheSVGsThisEngineRefuses(t *testing.T) {
 		"not markup at all":     "\x89PNG\r\n\x1a\n",
 		"empty":                 ``,
 	} {
-		if got := svgContent([]byte(body)); got != nil {
+		if got := svgContent([]byte(body), svgAsImage); got != nil {
 			t.Errorf("%s: reduced to %v, and it draws something a fill cannot express",
 				what, got.Solid)
 		}
@@ -184,7 +184,7 @@ func TestASolidSVGIsBoundedByWhatItDeclares(t *testing.T) {
 	big := `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">` +
 		strings.Repeat(" ", maxSVGBytes) +
 		`<rect width="100%" height="100%" fill="green"/></svg>`
-	if svgContent([]byte(big)) != nil {
+	if svgContent([]byte(big), svgAsImage) != nil {
 		t.Errorf("an SVG past the byte cap was read")
 	}
 	var many strings.Builder
@@ -193,7 +193,7 @@ func TestASolidSVGIsBoundedByWhatItDeclares(t *testing.T) {
 		fmt.Fprintf(&many, "<desc>%d</desc>", i)
 	}
 	many.WriteString(`<rect width="100%" height="100%" fill="green"/></svg>`)
-	if svgContent([]byte(many.String())) != nil {
+	if svgContent([]byte(many.String()), svgAsImage) != nil {
 		t.Errorf("an SVG past the element cap was read")
 	}
 }

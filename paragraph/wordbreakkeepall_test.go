@@ -46,7 +46,13 @@ func splits(t *testing.T, text string, wb WordBreak) string {
 		wb, LineBreak{}, Hyphens{}, WritingSystemOther)
 	var b strings.Builder
 	for _, p := range pieces {
-		if p.BreakBefore {
+		switch {
+		case p.BreakBefore && p.LastResort:
+			// An opportunity a line reaches for only when it has no other, which
+			// is a different answer from both "here" and "nowhere" and has to
+			// read as one. See Piece.LastResort.
+			b.WriteString("\u00a6")
+		case p.BreakBefore:
 			b.WriteString("|")
 		}
 		b.WriteString(p.Text)
@@ -54,19 +60,29 @@ func splits(t *testing.T, text string, wb WordBreak) string {
 	return b.String()
 }
 
-// TestKeepAllSuppressesTheOpportunitiesInsideAWord.
-func TestKeepAllSuppressesTheOpportunitiesInsideAWord(t *testing.T) {
+// TestKeepAllDemotesTheOpportunitiesInsideAWord.
+//
+// Demotes and does not delete, which is the value's own note: "this value may
+// be relaxed by the UA if there are no otherwise-acceptable break points in the
+// line". So every opportunity keep-all takes away comes back as a last resort —
+// each bar below is the same place normal breaks at, written with the mark that
+// says a line reaches for it only when it has nothing else.
+//
+// The relaxation is what overflow-wrap-normal-keep-all-001 asks for: eight
+// ideographs in a box of no width at all, whose reference is a column one
+// character wide. Without it the eight sat on one line and overflowed by seven.
+func TestKeepAllDemotesTheOpportunitiesInsideAWord(t *testing.T) {
 	for _, tc := range []struct {
 		text, normal, keepAll, what string
 	}{
-		{"字字字字", "字|字|字|字", "字字字字", "between ideographs"},
+		{"字字字字", "字|字|字|字", "字¦字¦字¦字", "between ideographs"},
 		// Both sides of the Latin, and the suite says so: the reference for
 		// word-break-keep-all-011 sets "中文english中文english…" under
 		// "word-break: normal" as 中文 / english / 中文 / english, which needs an
 		// opportunity after the 文 *and* one in front of the 中.
-		{"中文english中文", "中|文|english|中|文", "中文english中文",
+		{"中文english中文", "中|文|english|中|文", "中¦文¦english¦中¦文",
 			"either side of the letters between two ideographs"},
-		{"字1字", "字|1|字", "字1字", "either side of a digit between two ideographs"},
+		{"字1字", "字|1|字", "字¦1¦字", "either side of a digit between two ideographs"},
 	} {
 		if got := splits(t, tc.text, WordBreak{}); got != tc.normal {
 			t.Errorf("%s, normal: %s, want %s", tc.what, got, tc.normal)
@@ -79,14 +95,20 @@ func TestKeepAllSuppressesTheOpportunitiesInsideAWord(t *testing.T) {
 
 // TestKeepAllLeavesTheOpportunitiesThatAreNotInsideAWord, which is what every
 // one of the suite's fixtures for the value is about: what it must not take.
+//
+// "Leaves" is the whole of the assertion now that the ones inside a word are
+// demoted rather than deleted: the bar after the separator is the one a line
+// reaches for, and the ones inside the words on either side are the ones it
+// reaches for only when there is no separator to be had. A value that demoted
+// all four alike would pass the test above and fail this one.
 func TestKeepAllLeavesTheOpportunitiesThatAreNotInsideAWord(t *testing.T) {
 	for _, tc := range []struct {
 		text, want, what string
 	}{
-		{"字字　字字", "字字　|字字", "after an ideographic space"},
-		{"字字、字字", "字字、|字字", "after an ideographic comma"},
-		{"字字 字字", "字字 |字字", "after an ordinary space"},
-		{"字字）字字", "字字）|字字", "after a fullwidth closing parenthesis"},
+		{"字字　字字", "字¦字　|字¦字", "after an ideographic space"},
+		{"字字、字字", "字¦字、|字¦字", "after an ideographic comma"},
+		{"字字 字字", "字¦字 |字¦字", "after an ordinary space"},
+		{"字字）字字", "字¦字）|字¦字", "after a fullwidth closing parenthesis"},
 	} {
 		if got := splits(t, tc.text, keepAll(t)); got != tc.want {
 			t.Errorf("%s: %s, want %s", tc.what, got, tc.want)

@@ -552,7 +552,7 @@ func trimRunSpace(v DrawText) DrawText {
 		// Past the space the run starts with, in whichever direction the run
 		// runs: down the page for a sideways one. See runAlong.
 		if v.Sideways {
-			v.At.Y = v.At.Y.Add(w)
+			v.At.Y = v.At.Y.Add(runStep(v, w))
 		} else {
 			v.At.X = v.At.X.Add(w)
 		}
@@ -883,7 +883,7 @@ func glyphMarks(v DrawText, what, shape string, opaque bool) []textMark {
 			off, _ := style.FromPx(g.XOffset * v.Size.Px() / 1000)
 			at := Point{X: along.Add(off), Y: v.At.Y}
 			if v.Sideways {
-				at = Point{X: v.At.X, Y: along.Add(off)}
+				at = Point{X: v.At.X, Y: along.Add(runStep(v, off))}
 			}
 			out = append(out, textMark{
 				what: fmt.Sprintf("%s glyph %d", what, g.GID),
@@ -892,9 +892,9 @@ func glyphMarks(v DrawText, what, shape string, opaque bool) []textMark {
 				opaque: opaque,
 			})
 		}
-		along = along.Add(adv)
+		along = along.Add(runStep(v, adv))
 		if n := spaceAfter[i]; n > 0 {
-			along = along.Add(v.CharSpacing.Mul(float64(n)))
+			along = along.Add(runStep(v, v.CharSpacing.Mul(float64(n))))
 		}
 	}
 	return out
@@ -1168,8 +1168,11 @@ func joinRuns(runs []DrawText) [][]DrawText {
 		// joining them would splice a word out of two that are at right angles.
 		//
 		// Upright goes with it: two runs at the same point, one set upright and
-		// one turned, draw two different pictures out of the same letters.
-		sideways, upright bool
+		// one turned, draw two different pictures out of the same letters. So
+		// does anticlockwise, and more sharply — two runs turned opposite ways
+		// share a column and advance towards each other, so joining them would
+		// splice a word out of two that are upside down to one another.
+		sideways, anticlockwise, upright bool
 		// Two runs cut by different clips do not put the same ink down even
 		// where they abut, so they are not joined. Clip is comparable, which is
 		// what lets it sit in a map key at all.
@@ -1201,7 +1204,8 @@ func joinRuns(runs []DrawText) [][]DrawText {
 			out = append(out, []DrawText{v})
 			continue
 		}
-		k := key{runAcross(v), v.Size, v.CharSpacing, v.Face, v.Color, v.Sideways, v.Upright, v.Clip}
+		k := key{runAcross(v), v.Size, v.CharSpacing, v.Face, v.Color, v.Sideways,
+			v.Anticlockwise, v.Upright, v.Clip}
 		if _, seen := groups[k]; !seen {
 			order = append(order, k)
 		}
@@ -1250,6 +1254,21 @@ func runAcross(v DrawText) style.Unit {
 		return v.At.X
 	}
 	return v.At.Y
+}
+
+// runStep turns a distance along a run into the change it makes to the
+// coordinate the run advances in.
+//
+// It is a subtraction for a run turned anticlockwise, whose pen goes *up* the
+// page: "writing-mode: sideways-lr" runs its lines from the foot of the page to
+// the head. Without it every glyph after the first is measured on the wrong
+// side of the run's origin, and the comparison would report a page it had
+// walked backwards as a page that was drawn wrong.
+func runStep(v DrawText, d style.Unit) style.Unit {
+	if v.Anticlockwise {
+		return style.Unit(0).Sub(d)
+	}
+	return d
 }
 
 // joinSlack is how far apart two runs may be and still count as touching.

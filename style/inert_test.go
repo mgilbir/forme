@@ -136,6 +136,14 @@ func TestTheInitialKeywordIsResolvedRatherThanAssumedInert(t *testing.T) {
 // the box beside it that holds a float, and only something that can see the box
 // can tell those apart. See layout/multicol.go.
 
+// "opacity" left both lists last, and the two declarations that were in the
+// list below — "opacity: 0.5" and "opacity: 0" — went with it. Neither asks for
+// a page this engine does not produce any more: the alpha is folded into every
+// mark the box paints, which is exactly the group where the box paints one mark
+// and exactly nothing where the alpha is zero. What it is not exact for is
+// reported, at the box, because whether it was is a fact about what the box
+// turned out to paint. See layout/opacity.go.
+
 // TestADeclarationThatAsksForSomethingIsStillReported is the containment
 // argument, and the half this change most needs to keep.
 //
@@ -151,8 +159,6 @@ func TestADeclarationThatAsksForSomethingIsStillReported(t *testing.T) {
 		"page-break-before: always",
 		"page-break-after: always",
 		"filter: blur(1px)",
-		"opacity: 0.5",
-		"opacity: 0",
 		"border-radius: 20px",
 	} {
 		if !reportsUnsupported(t, decl) {

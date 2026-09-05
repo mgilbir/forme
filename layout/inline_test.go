@@ -543,7 +543,7 @@ func TestFontFallbackIsReported(t *testing.T) {
 	rec = NewRecorder(nil)
 	Layout(got.Root, Size{W: w, H: w}, nil, rec)
 	for _, f := range rec.Findings() {
-		if f.Rule == RuleFontFallback {
+		if aboutTheFace(f) {
 			t.Errorf("an available family was reported as a fallback: %v", f)
 		}
 	}

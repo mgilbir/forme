@@ -41,6 +41,75 @@ import (
 // holding a "normal" span gets the spacing at the boundaries inside the span,
 // because the span is what contains both sides of them.
 
+// visualOrder is the order the items are drawn in, left to right.
+//
+// The walk below needs it because the gap is between two characters a *reader*
+// sees side by side, and after the bidi resolution "side by side" is not "next
+// to each other in the text". In "国国<span>אב</span>ג国国" the two logical
+// neighbours at the second boundary are ג and 国, and ג is at the far *left* of
+// the Hebrew — so a gap opened after it lands in the middle of the word instead
+// of at its end. With the whole word in one item there is nothing to get wrong,
+// which is why only a word split across an inline boundary shows it.
+//
+// It is the same answer §8.2's letter-spacing came to: the gap goes between two
+// visually adjacent characters. See layout/inlinepaint.go's gapNeighbour, and
+// the warning that goes with it — the gap is at a run's right edge whichever way
+// the run reads, and a direction-dependent side reads plausibly and is wrong.
+//
+// The items are segmented per bidi paragraph, because a forced break ends one
+// and starts another and LineVisualOrder answers about a single paragraph: given
+// two, it would give the second paragraph's items the first's levels and reorder
+// across a break that nothing crosses.
+func visualOrder(items []inlineItem) []int {
+	out := make([]int, 0, len(items))
+	lo := 0
+	flush := func(hi int) {
+		seg := items[lo:hi]
+		order := paragraph.LineVisualOrder(seg)
+		for i := range seg {
+			if order == nil {
+				out = append(out, lo+i)
+			} else {
+				out = append(out, lo+order[i])
+			}
+		}
+		lo = hi
+	}
+	var para = items[0].Para
+	for i, it := range items {
+		if it.Para != nil && para != nil && it.Para != para {
+			flush(i)
+		}
+		if it.Para != nil {
+			para = it.Para
+		}
+	}
+	flush(len(items))
+	return out
+}
+
+// leadingBase and trailingBase are the characters at an item's visual left and
+// right ends.
+//
+// For a left-to-right run they are its first and its last, which is what the
+// rule was written with. For a right-to-left one they are the other way round:
+// the shaper hands back glyphs in visual order and the run is drawn from its
+// origin rightwards, so the character a reader sees at the run's right-hand end
+// is the *first* one in the text.
+func leadingBase(it inlineItem) (rune, bool) {
+	if it.Level%2 != 0 {
+		return paragraph.LastAutospaceBase(it.Text)
+	}
+	return paragraph.FirstAutospaceBase(it.Text)
+}
+
+func trailingBase(it inlineItem) (rune, bool) {
+	if it.Level%2 != 0 {
+		return paragraph.FirstAutospaceBase(it.Text)
+	}
+	return paragraph.LastAutospaceBase(it.Text)
+}
+
 // insertAutospace widens the run in front of each ideograph boundary.
 //
 // The walk is from the *later* side of a boundary rather than the earlier one,
@@ -51,15 +120,22 @@ import (
 // character walk and the geometry walk are separate — one looks back for the
 // last run with a base character in it, the other for the run the gap goes into.
 //
+// Both walks are in *visual* order. See visualOrder.
+//
 // It does nothing to a document with no ideographs in it, which is almost every
 // document: the first test is on the characters, and a run of Latin beside a run
 // of Latin is two comparisons and no work.
 func (l *layouter) insertAutospace(items []inlineItem) []inlineItem {
-	for j := range items {
+	if len(items) == 0 {
+		return items
+	}
+	order := visualOrder(items)
+	for vj := range order {
+		j := order[vj]
 		if !isSpacedRun(items[j]) {
 			continue
 		}
-		first, ok := paragraph.FirstAutospaceBase(items[j].Text)
+		first, ok := leadingBase(items[j])
 		if !ok {
 			continue
 		}
@@ -67,7 +143,8 @@ func (l *layouter) insertAutospace(items []inlineItem) []inlineItem {
 		// one. They are the same run except where something with no base
 		// character stands between.
 		gapAt, decides := -1, -1
-		for k := j - 1; k >= 0 && decides < 0; k-- {
+		for vk := vj - 1; vk >= 0 && decides < 0; vk-- {
+			k := order[vk]
 			switch {
 			case items[k].Abs != nil || items[k].Float != nil || items[k].Inset:
 				// Out of flow, or an inline box's own edge. Neither is a
@@ -77,12 +154,12 @@ func (l *layouter) insertAutospace(items []inlineItem) []inlineItem {
 			case !isSpacedRun(items[k]):
 				// A tab, an atomic inline, a forced break: something that is not
 				// a character stands between, so there is no boundary here.
-				k = -1
+				vk = 0
 			default:
 				if gapAt < 0 {
 					gapAt = k
 				}
-				if _, ok := paragraph.LastAutospaceBase(items[k].Text); ok {
+				if _, ok := trailingBase(items[k]); ok {
 					decides = k
 				}
 			}
@@ -90,7 +167,11 @@ func (l *layouter) insertAutospace(items []inlineItem) []inlineItem {
 		if decides < 0 {
 			continue
 		}
-		gap, ok := l.autospaceBetween(items[decides], items[j], first)
+		last, ok := trailingBase(items[decides])
+		if !ok {
+			continue
+		}
+		gap, ok := l.autospaceBetween(items[decides], items[j], last, first)
 		if !ok {
 			continue
 		}
@@ -104,11 +185,7 @@ func (l *layouter) insertAutospace(items []inlineItem) []inlineItem {
 
 // autospaceBetween is what §8.1 puts between the last character of one run and
 // the first of the next, or false where it puts nothing.
-func (l *layouter) autospaceBetween(a, b inlineItem, first rune) (style.Unit, bool) {
-	last, ok := paragraph.LastAutospaceBase(a.Text)
-	if !ok {
-		return 0, false
-	}
+func (l *layouter) autospaceBetween(a, b inlineItem, last, first rune) (style.Unit, bool) {
 	// Cheap first: the characters decide, and for a document with no ideographs
 	// in it the answer is no before anything is looked up.
 	if !paragraph.IsAutospaceIdeograph(last) && !paragraph.IsAutospaceIdeograph(first) {

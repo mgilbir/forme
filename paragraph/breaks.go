@@ -285,8 +285,12 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 		// It is here as well as in layout's boundary rule so that the two agree.
 		// The same text has to break the same way whether or not the author
 		// wrote a <span> between the letter and the ideograph.
+		// keep-all used to be a conjunct here and is now handled with the rest
+		// of its prohibition, below: the value relaxes, so what it forbids has
+		// to be *demoted* rather than deleted, and an opportunity deleted at
+		// this line could not be.
 		beforeIdeograph := IsIdeographic(r) && prev != 0 &&
-			!IsIdeographic(prev) && isLetterUnit(prev) && !wb.KeepAll
+			!IsIdeographic(prev) && isLetterUnit(prev)
 		// And the same shape for the Brahmic scripts, which write without
 		// spaces and whose only opportunity is the boundary between two aksara
 		// clusters. See isAksara: LB28a is a set of prohibitions inside a
@@ -334,11 +338,29 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 		// It stays because the two facts come from one table and a rule that
 		// depends on that coincidence is a rule nobody can check.
 		betweenInseparable := lb.Loose && isInseparable(prev) && isInseparable(r)
+		// keep-all's own prohibition, which §5.2 makes a preference rather than
+		// a rule. It is the only one here that is written down as relaxable:
+		//
+		//	In this style, sequences of NU, AL, AI, and ID characters [...] are
+		//	not broken. [...] Note: this value may be relaxed by the UA if there
+		//	are no otherwise-acceptable break points in the line.
+		//
+		// §6.2 says the same from the other side, and the suite's
+		// overflow-wrap-normal-keep-all-001 asserts it with eight ideographs in
+		// a box of no width at all: nowhere else on the line can the break go,
+		// so keep-all gives way and the column comes out one character wide.
+		//
+		// "Relaxed if there is nothing else" is what Piece.LastResort already
+		// means, so this is offered rather than withheld and demoted below —
+		// which is the same two steps the auto-phrase value takes, in the same
+		// order and for the same reason.
+		keptAll := wb.KeepAll &&
+			((deferBreak && isLetterUnit(r) && !startsSpacePiece(r, ws)) || beforeIdeograph)
 		offered := (deferBreak && !(wb.KeepAll && isLetterUnit(r)) && !startsSpacePiece(r, ws)) ||
 			(heldBreak && !startsSpacePiece(r, ws)) ||
 			(wb.BreakAll && !startsSpacePiece(r, ws)) || lb.Anywhere ||
 			beforeIdeograph || beforeAksara || beforeDictionary ||
-			betweenInseparable
+			betweenInseparable || keptAll
 		// UAX #14 forbids a line beginning with a closing bracket, a hyphen or
 		// a non-starter, and an opportunity offered in front of one is not one.
 		// See linebreak.go for which rules that is and which it is not.
@@ -400,6 +422,12 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 		// here, which is what word-break-auto-phrase-007 asks for: "UAs must not
 		// suppress wrapping opportunities introduced by wbr or ZWSP".
 		giveUp := false
+		// keep-all's, demoted after the prohibitions for the reason the phrase
+		// demotion below is: a prohibition moves an opportunity rather than
+		// deleting one, and what is being ranked is where the break may fall.
+		if keptAll && offered && !lb.Anywhere {
+			offered, giveUp = false, true
+		}
 		if boundary, scored := phrases[start]; scored && !boundary &&
 			offered && !lb.Anywhere {
 			offered, giveUp = false, true
@@ -412,6 +440,38 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 		prev = r
 
 		switch {
+		case IsMandatoryBreak(r):
+			// UAX #14's BK and NL: a character that ends a line wherever it
+			// appears, which is not the same thing as a segment break. A
+			// segment break is collapsible — a newline under "white-space:
+			// normal" becomes a space and the line goes on — and these are not:
+			// LB4 and LB5 make the break mandatory, and no value of white-space
+			// is written over them.
+			//
+			// They reached here as ordinary characters and were set as ordinary
+			// characters, so "1<FF>2" came out on one line with a notdef box
+			// between the digits. line-breaking-022 writes all five between
+			// spans in a column one character wide and asks for six lines.
+			//
+			// The character is written into the piece that ends the line and
+			// the break is emitted after it, rather than the character being
+			// swallowed the way a newline is. §5.1's note asks for both:
+			//
+			//	Control characters other than [tab, newline] ... are ignored
+			//	for the purpose of ... but are otherwise rendered as a visible
+			//	glyph
+			//
+			// and the suite asks for it twice over, by the same author. Three
+			// of the white-space/control-chars-0XX documents are mismatch
+			// references against a blank page — "U+000C, which is in the
+			// unicode category CC, must be visible" — and line-breaking-022
+			// wants the same character to end a line. Swallowing it satisfies
+			// the second and fails the first three.
+			cur.WriteRune(r)
+			flush()
+			emit(Piece{Space: true, Segment: true})
+			breakNext = true
+
 		case r == '\n' || r == '\r':
 			// Only a *preserved* break reaches here: Phase I turned a
 			// collapsible one into a space. A CR is folded with the LF that may

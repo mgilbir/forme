@@ -111,7 +111,7 @@ func TestTextWithNoGlyphIsSetInAFallbackFace(t *testing.T) {
 	// this design is against.
 	var substituted bool
 	for _, f := range withFallback {
-		if f.Rule == RuleFontFallback {
+		if f.Rule == RuleFontSubstituted {
 			substituted = true
 		}
 	}
@@ -153,7 +153,7 @@ func TestLatinIsNotSubstituted(t *testing.T) {
 		"<p id=\"p\">a\u00a0b c</p>",
 		`#p { font-family: Helvetica; font-size: 20px }`)
 	for _, f := range findings {
-		if f.Rule == RuleFontFallback {
+		if aboutTheFace(f) {
 			t.Errorf("Latin text with a no-break space was substituted: %s", f.Message)
 		}
 	}

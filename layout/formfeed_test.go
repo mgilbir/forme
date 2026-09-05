@@ -2,8 +2,6 @@ package layout
 
 import (
 	"testing"
-
-	"github.com/mgilbir/forme/style"
 )
 
 // A form feed reaching the page as the visible glyph CSS Text 3 asks for.
@@ -70,32 +68,67 @@ func TestAFormFeedIsDrawn(t *testing.T) {
 	}
 }
 
-// TestAFormFeedTakesRoomOnTheLine is the half that is not about drawing at all,
-// and is the one an ordinary document would notice: collapsible white space is
-// removed at the end of a line and merged with its neighbours, so a form feed
-// between two letters used to take itself out of the line entirely and leave
-// them joined.
-func TestAFormFeedTakesRoomOnTheLine(t *testing.T) {
-	span := func(text string) style.Unit {
-		var lo, hi style.Unit
-		first := true
-		for _, op := range paintOf(t, `<div id="d">`+text+`</div>`,
-			`#d { font-family: Courier; font-size: 20px; width: 600px; white-space: pre }`) {
-			v, ok := op.(DrawText)
-			if !ok {
-				continue
+// TestAFormFeedTakesRoomOnTheLineItEnds is the half that is not about drawing
+// at all, and is the one an ordinary document would notice.
+//
+// Two facts, and each was a bug on its own. Collapsible white space is removed
+// at the end of a line and merged with its neighbours, so a form feed between
+// two letters used to take itself out of the line entirely and leave them
+// joined — that is the room. And UAX #14 puts it in class BK, so the line ends
+// after it whatever white-space says — that is the break, which the suite writes
+// as line-breaking-022.
+//
+// The two are asserted together because a fix for either alone looks like a fix
+// for both: a form feed that ends the line trivially "takes room" if the room
+// is measured across the break, and one that takes room without ending the line
+// passes any test that only counts lines it never made.
+func TestAFormFeedTakesRoomOnTheLineItEnds(t *testing.T) {
+	const css = `#d { font-family: Courier; font-size: 20px; width: 600px; white-space: pre }`
+	// Where each run of text was drawn, in paint order.
+	runs := func(text string) []Point {
+		t.Helper()
+		var out []Point
+		for _, op := range paintOf(t, `<div id="d">`+text+`</div>`, css) {
+			if v, ok := op.(DrawText); ok {
+				out = append(out, v.At)
 			}
-			if first {
-				lo, first = v.At.X, false
-			}
-			hi = v.At.X
 		}
-		return hi.Sub(lo)
+		return out
 	}
-	// Three characters either way, and in a monospaced face the middle one
-	// takes the same advance whichever it is.
-	if got, want := span("a\fb"), span("a b"); got != want {
-		t.Errorf("a form feed between two letters spans %v and a space spans %v; a "+
-			"form feed is a character and takes a character's room", got, want)
+	// The control: a space between the same two letters, which under "pre" is
+	// a run of its own, so the three characters are three runs on one line.
+	space := runs("a b")
+	if len(space) != 3 || space[0].Y != space[1].Y || space[1].Y != space[2].Y {
+		t.Fatalf("the control drew %v; it is meant to be three runs on one line", space)
+	}
+	feed := runs("a\fb")
+	if len(feed) != 2 {
+		t.Fatalf("a form feed between two letters drew %v, want two runs", feed)
+	}
+	// The break: the letter after it begins a line of its own, at the start.
+	if feed[1].Y == feed[0].Y {
+		t.Errorf("both letters are on the baseline %v; a form feed is UAX #14's "+
+			"class BK and ends the line", feed[0].Y)
+	}
+	if feed[1].X != feed[0].X {
+		t.Errorf("the second letter is at %v and the first at %v; a line begins "+
+			"at the start", feed[1].X, feed[0].X)
+	}
+	// The room: what the form feed draws lies inside the character cell a space
+	// occupies, which is the cell one along from the letter before it. The
+	// glyph is the four thin strokes of an open rectangle rather than one fill,
+	// and it is inset a little inside its cell, so the assertion is containment
+	// and not an equality — an equality here would be pinning the inset.
+	fills, _ := marksFor(t, "<div id=\"d\">a\fb</div>", css)
+	if len(fills) == 0 {
+		t.Fatalf("a form feed drew nothing between two letters")
+	}
+	lo, hi := space[1].X, space[2].X
+	for _, r := range fills {
+		if r.X < lo || r.X.Add(r.W) > hi {
+			t.Errorf("the form feed drew %v, which is outside the cell %v to %v "+
+				"that a space occupies; it takes one character's room on the "+
+				"line it ends", r, lo.Px(), hi.Px())
+		}
 	}
 }

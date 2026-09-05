@@ -92,6 +92,39 @@ func (l *layouter) replacedSize(b *Box, containing, cbHeight style.Unit, cbDefin
 		height = maxZero(height.Sub(insetV))
 	}
 
+	// A percentage the *content* states, which stands in for a declaration the
+	// document did not make.
+	//
+	// It is not an intrinsic dimension — CSS Images §5.4 is explicit that a
+	// percentage is none — and it is not the default object size either. It is a
+	// document embedded with a viewport of its own saying how much of that
+	// viewport it fills, and the viewport is the box CSS gives the element. So
+	// "100%" here means what "width: 100%" would have meant, resolved against
+	// the containing block like any other percentage, and it applies only where
+	// the document itself said nothing. See svgAs for which content states one
+	// at all, and why an <img> never does.
+	//
+	// The height is taken only against a containing block that has one. A
+	// percentage of an indefinite height is indefinite — §10.5, the same rule
+	// that stops an image collapsing inside an auto-height parent — and the
+	// element falls through to the ratio or to the default below.
+	//
+	// The percentage is of the element's *box* and not of its content, so the
+	// padding and the border come off it whatever box-sizing says — which is
+	// why this is not sizingInset, which is the same subtraction made only for a
+	// border-box declaration. An embedded document's viewport is the room the
+	// element takes on the page, and a document filling its viewport fills that:
+	// replaced-intrinsic-003 puts a hundred pixels of padding on the object and
+	// draws the corner of its picture against the border box, and a content box
+	// of the whole containing block would put it a hundred pixels off the page.
+	if !hasWidth && rc.WidthPercent > 0 {
+		edge := l.borderWidths(b).Horizontal().Add(l.paddingOf(b, containing).Horizontal())
+		width, hasWidth = maxZero(containing.Mul(rc.WidthPercent).Sub(edge)), true
+	}
+	if !hasHeight && rc.HeightPercent > 0 && cbDefinite {
+		edge := l.borderWidths(b).Vertical().Add(l.paddingOf(b, containing).Vertical())
+		height, hasHeight = maxZero(cbHeight.Mul(rc.HeightPercent).Sub(edge)), true
+	}
 	hasIntrinsicW := rc.Width > 0
 	hasIntrinsicH := rc.Height > 0
 	ratio := rc.Ratio
