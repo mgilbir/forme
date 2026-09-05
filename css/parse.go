@@ -172,12 +172,16 @@ func ParseRules(input string) ([]Rule, []Error) {
 // ParseDeclarations parses a list of declarations (§5.3.6): the contents of a
 // style rule's block.
 //
-// Declarations and at-rules are returned separately rather than interleaved,
-// because an at-rule inside a declaration block is CSS Nesting, which this
-// engine does not implement — the layer above reports each one as unsupported
-// rather than acting on it. Both carry an Offset, so a caller that does need
-// source order can recover it without this returning a sum type that every
-// caller would then have to switch on.
+// Declarations and rules are returned separately rather than interleaved. Both
+// carry an Offset, so a caller that does need source order can recover it
+// without this returning a sum type that every caller would then have to switch
+// on — and the one caller that needs it, the cascade, needs something else
+// instead: the *nesting*, which the two lists give it directly.
+//
+// The rules are CSS Nesting's. A style rule among the declarations is one, and
+// startsANestedRule is how it is told from a declaration whose colon went
+// missing; an at-rule among them is a conditional group the layer above still
+// reports as unsupported, exactly as it does at the top of a stylesheet.
 func ParseDeclarations(input string) ([]Declaration, []Rule, []Error) {
 	p := newParser(input)
 	decls, rules := p.declarations()
@@ -512,7 +516,74 @@ func (p *parser) qualifiedRule() (Rule, bool) {
 	}
 }
 
-// declarations consumes a list of declarations (§5.4.4).
+// lookAt is the component value at an absolute position, for a look-ahead. In
+// token mode a token stands for itself; in value mode the nesting has already
+// been worked out and a block is one value.
+func (p *parser) lookAt(i int) ComponentValue {
+	if p.fromValues() {
+		if i < len(p.vals) {
+			return p.vals[i]
+		}
+		return ComponentValue{Token: Token{Kind: EOF, Offset: p.endOffset()}}
+	}
+	if i < len(p.toks) {
+		return ComponentValue{Token: p.toks[i]}
+	}
+	return ComponentValue{Token: Token{Kind: EOF, Offset: p.endOffset()}}
+}
+
+// startsANestedRule reports whether what comes next in a declaration block is a
+// style rule rather than a declaration.
+//
+// CSS Nesting lets the two stand side by side inside one block, and the rule for
+// telling them apart is where the first "{" falls: a declaration ends at a
+// semicolon, so a block that opens before one is not part of a declaration.
+//
+// It has to be a look-ahead rather than a try-and-see. A nested rule is not
+// terminated by a semicolon at all, so consuming up to the next one and finding
+// it was a rule would already have swallowed every rule after it — "a {} b {}"
+// is two rules and one run.
+func (p *parser) startsANestedRule() bool {
+	depth := 0
+	for i := p.pos; ; i++ {
+		c := p.lookAt(i)
+		switch {
+		case c.Token.Kind == EOF:
+			return false
+		case c.IsBlock() || c.IsFunction():
+			// Already grouped, so nothing inside it is at this level. A "{}"
+			// block among them is the rule's own.
+			if c.IsBlock() && c.Token.Kind == LeftBrace {
+				return true
+			}
+		case c.Token.Kind == LeftBrace:
+			if depth == 0 {
+				return true
+			}
+			depth++
+		case c.Token.Kind == LeftParen || c.Token.Kind == LeftSquare ||
+			c.Token.Kind == Function:
+			depth++
+		case c.Token.Kind == RightParen || c.Token.Kind == RightSquare:
+			if depth > 0 {
+				depth--
+			}
+		case c.Token.Kind == RightBrace:
+			if depth == 0 {
+				// The end of the block this declaration list is in.
+				return false
+			}
+			depth--
+		case c.Token.Kind == Semicolon:
+			if depth == 0 {
+				return false
+			}
+		}
+	}
+}
+
+// declarations consumes a list of declarations (§5.4.4), and the style rules
+// CSS Nesting allows among them.
 func (p *parser) declarations() ([]Declaration, []Rule) {
 	var decls []Declaration
 	var rules []Rule
@@ -526,6 +597,15 @@ func (p *parser) declarations() ([]Declaration, []Rule) {
 
 		case c.Token.Kind == AtKeyword:
 			rules = append(rules, p.atRule())
+
+		case p.startsANestedRule():
+			// Before the Ident case, because a nested rule usually begins with
+			// one: "span { color: blue }" is a type selector and not a property
+			// whose colon went missing, which is what it was read as until the
+			// look-ahead above existed.
+			if r, ok := p.qualifiedRule(); ok {
+				rules = append(rules, r)
+			}
 
 		case c.Token.Kind == Ident:
 			// The declaration is parsed from the run up to the next semicolon,

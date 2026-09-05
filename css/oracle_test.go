@@ -86,8 +86,22 @@ var diagnostics = map[string]bool{
 var deviationRules = []struct {
 	name string
 	why  string
-	// applies reports whether an expected result exercises the construct.
-	applies func(any) bool
+	// applies reports whether a case exercises the construct. It is given the
+	// input as well as the expected result, because one of the constructs below
+	// is a *position* in the input rather than a node in the output: the
+	// superseded algorithm turned it into nothing, so there is nothing in the
+	// expected result to key on.
+	applies func(input string, expected any) bool
+	// only names the one oracle file a rule may excuse, or is empty for a rule
+	// about the tokenizer, which every file exercises.
+	//
+	// It exists because a deviation can belong to one *algorithm* rather than to
+	// the token stream: a block among declarations is a nested rule now, and at
+	// the top of a stylesheet it always was one. Without this the rule below
+	// took cases out of stylesheet.json and rule_list.json that were passing,
+	// which is the exemption quietly widening — the thing this whole mechanism
+	// is built to prevent.
+	only string
 }{
 	{
 		name: "unicode-range is no longer a token",
@@ -99,7 +113,7 @@ var deviationRules = []struct {
 		// this engine implements. So "U+1?" is an ident, a delimiter and a
 		// number, which is what pdf0 produces.
 		why: "the current specification tokenizes U+1? as ident, delim and number",
-		applies: func(v any) bool {
+		applies: func(_ string, v any) bool {
 			return containsNode(v, func(arr []any) bool {
 				tag, ok := arr[0].(string)
 				return ok && tag == "unicode-range"
@@ -113,7 +127,7 @@ var deviationRules = []struct {
 		// Level 4 parses each from the two delimiters it is written with, so
 		// "^=" is a "^" and an "=", which is what pdf0 produces.
 		why: "~= |= ^= $= *= and || are two delimiters, not one token",
-		applies: func(v any) bool {
+		applies: func(_ string, v any) bool {
 			return containsString(v, func(s string) bool {
 				switch s {
 				case "~=", "|=", "^=", "$=", "*=", "||":
@@ -132,7 +146,7 @@ var deviationRules = []struct {
 		// use areas and the non-characters. pdf0 implements that list, so
 		// U+0080 is a delimiter rather than part of an identifier.
 		why: "non-ASCII ident code points are an explicit list starting at U+00B7",
-		applies: func(v any) bool {
+		applies: func(_ string, v any) bool {
 			return containsNode(v, func(arr []any) bool {
 				tag, _ := arr[0].(string)
 				if tag != "ident" && tag != "at-keyword" && tag != "hash" {
@@ -151,6 +165,67 @@ var deviationRules = []struct {
 			})
 		},
 	},
+	{
+		name: "a style rule among declarations was a parse error",
+		// §5.4.4 in the draft this suite was built on had one answer for
+		// anything in a declaration list that was not an at-rule and did not
+		// begin with an ident: it was a parse error, and everything up to the
+		// next semicolon went with it. The current text consumes a *qualified
+		// rule* there instead — that is what CSS Nesting is — so the block is a
+		// rule whose selector the layer above then judges, and the declaration
+		// after the semicolon survives rather than being swallowed by the
+		// recovery.
+		//
+		// The construct is a position in the input, not a node in the output:
+		// the old algorithm produced nothing for it but the error marker, and
+		// the difference in the result is a declaration that is *missing*. So
+		// this is the one rule that reads the input, and it reads it through
+		// the tokenizer rather than by looking for a brace in the text, so that
+		// a "{" inside a string or a comment is not one.
+		why:  "a block among declarations is a nested rule, not a parse error",
+		only: "declaration_list.json",
+		applies: func(input string, v any) bool {
+			if !containsNode(v, func(arr []any) bool {
+				tag, _ := arr[0].(string)
+				if tag != "error" || len(arr) < 2 {
+					return false
+				}
+				kind, _ := arr[1].(string)
+				return kind == "invalid"
+			}) {
+				return false
+			}
+			return opensABlockBeforeASemicolon(input)
+		},
+	},
+}
+
+// opensABlockBeforeASemicolon reports whether the input's first declaration-list
+// item is a block rather than a declaration, which is the position the rule
+// above is about.
+func opensABlockBeforeASemicolon(input string) bool {
+	toks, _ := Tokenize(input)
+	depth := 0
+	for _, t := range toks {
+		switch t.Kind {
+		case LeftBrace:
+			if depth == 0 {
+				return true
+			}
+			depth++
+		case LeftParen, LeftSquare, Function:
+			depth++
+		case RightBrace, RightParen, RightSquare:
+			if depth > 0 {
+				depth--
+			}
+		case Semicolon:
+			if depth == 0 {
+				return false
+			}
+		}
+	}
+	return false
 }
 
 // containsNode reports whether any array node anywhere in an expected result
@@ -191,9 +266,12 @@ func containsString(v any, pred func(string) bool) bool {
 }
 
 // excuse returns the rule that lets a case through, if any.
-func excuse(expected any) (name, why string, ok bool) {
+func excuse(file, input string, expected any) (name, why string, ok bool) {
 	for _, r := range deviationRules {
-		if r.applies(expected) {
+		if r.only != "" && r.only != file {
+			continue
+		}
+		if r.applies(input, expected) {
 			return r.name, r.why, true
 		}
 	}
@@ -505,7 +583,7 @@ func TestCSSOracle(t *testing.T) {
 				if !ok {
 					t.Fatalf("%s: an input that is not a string: %v", r.file, pair[0])
 				}
-				if name, _, ok := excuse(pair[1]); ok {
+				if name, _, ok := excuse(r.file, input, pair[1]); ok {
 					excused++
 					excusedBy[name]++
 					continue
@@ -629,9 +707,54 @@ func TestCSSOracleDeviationsAreNarrow(t *testing.T) {
 		[]any{"function", "rgb", []any{"number", "1", 1.0, "integer"}},
 		[]any{"{}", []any{"ident", "c"}}, "~", "=", "|",
 	}
+	// The input is an ordinary one too, and it holds a block — so a rule that
+	// keyed on the input alone would take this and be caught here.
 	for _, r := range deviationRules {
-		if r.applies(ordinary) {
+		if r.applies("a { b: c }", ordinary) {
 			t.Errorf("the rule %q excuses an ordinary result, so it would hide real failures", r.name)
+		}
+	}
+	// And the case the last rule is for is not excused by its expected result
+	// alone: "z;a:b" expects the same error marker and must keep being checked,
+	// because the input has no block in it and the two algorithms agree.
+	blocky := []any{[]any{"error", "invalid"},
+		[]any{"declaration", "a", []any{[]any{"ident", "b"}}, false}}
+	for _, r := range deviationRules {
+		if r.applies("z;a:b", blocky) {
+			t.Errorf("the rule %q excuses a parse error that is still a parse "+
+				"error, so a real regression there would go unnoticed", r.name)
+		}
+	}
+	// The input half of the rule, on its own. It is the half no case in the
+	// suite exercises — the one excused case opens its block first — so a wrong
+	// answer to any of these would widen the exemption with nothing to notice
+	// it.
+	for _, tc := range []struct {
+		input string
+		want  bool
+		why   string
+	}{
+		{"@ media screen { div{;}} a:b", true, "a block before any semicolon"},
+		{"z;a:b", false, "no block at all"},
+		{"a: b; c { d }", false, "a declaration first, and the block after its semicolon"},
+		{"a: b(c { d });", false, "a brace inside a function is not at this level"},
+		{"a: b[c { d }];", false, "a brace inside a square block is not at this level"},
+		{"a: 'x { y' ; b { c }", false, "a brace inside a string is not a brace"},
+	} {
+		if got := opensABlockBeforeASemicolon(tc.input); got != tc.want {
+			t.Errorf("opensABlockBeforeASemicolon(%q) = %v, want %v — %s",
+				tc.input, got, tc.want, tc.why)
+		}
+	}
+
+	// Nor in a file whose algorithm never had the construct. A block at the top
+	// of a stylesheet is a qualified rule under both texts, so those cases stay
+	// checked.
+	for _, file := range []string{"stylesheet.json", "rule_list.json", "component_value_list.json"} {
+		if name, _, ok := excuse(file, "@ media screen { div{;}} a:b",
+			[]any{[]any{"error", "invalid"}}); ok {
+			t.Errorf("%s had a case excused by %q; the deviation is in the "+
+				"declaration-list algorithm and nowhere else", file, name)
 		}
 	}
 
@@ -645,7 +768,7 @@ func TestCSSOracleDeviationsAreNarrow(t *testing.T) {
 		{"the C1 controls are not ident code points", []any{[]any{"ident", "a\u0080b"}}},
 	}
 	for _, tc := range exercises {
-		name, _, ok := excuse(tc.expected)
+		name, _, ok := excuse("", "", tc.expected)
 		if !ok {
 			t.Errorf("no rule excused %s, which tests a superseded construct", mustJSON(tc.expected))
 			continue
@@ -653,5 +776,13 @@ func TestCSSOracleDeviationsAreNarrow(t *testing.T) {
 		if name != tc.rule {
 			t.Errorf("%s was excused by %q, want %q", mustJSON(tc.expected), name, tc.rule)
 		}
+	}
+
+	// The nesting rule needs both halves, so it is exercised with both.
+	name, _, ok := excuse("declaration_list.json", "@ media screen { div{;}} a:b",
+		[]any{[]any{"error", "invalid"}})
+	if !ok || name != "a style rule among declarations was a parse error" {
+		t.Errorf("a block among declarations was excused by %q (ok=%v), want the "+
+			"nesting rule", name, ok)
 	}
 }

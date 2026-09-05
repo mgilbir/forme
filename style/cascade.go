@@ -356,55 +356,141 @@ func (s *Styler) prepare(sheets []Sheet) []preparedRule {
 
 	for _, sheet := range sheets {
 		for _, rule := range sheet.Rules {
-			if rule.At {
-				// At-rules are a stage of their own — @media has to be
-				// evaluated against the page it is being laid out for, and
-				// @page describes the surface rather than the content. Neither
-				// belongs in the cascade, and reporting them here is how their
-				// absence stays visible until they arrive.
-				s.report(Finding{
-					Offset:      rule.Offset,
-					Message:     "@" + rule.Name + " is not applied yet",
-					Unsupported: true,
-					Property:    "@" + rule.Name,
-				})
-				continue
-			}
-
-			sels, errs, ok := css.ParseSelectorList(rule.Prelude)
-			for _, e := range errs {
-				s.report(Finding{
-					Offset:      e.Offset,
-					Message:     e.Message,
-					Unsupported: e.Unsupported,
-				})
-			}
-			if !ok {
-				// An unusable selector list invalidates the rule, which is what
-				// the specification requires — and the findings above already
-				// said why.
-				continue
-			}
-
-			decls, _, derrs := css.ParseDeclarationValues(rule.Block)
-			for _, e := range derrs {
-				s.report(Finding{Offset: e.Offset, Message: e.Message, Unsupported: e.Unsupported})
-			}
-
-			prepared := preparedRule{selectors: sels, origin: sheet.Origin}
-			for _, d := range decls {
-				for _, e := range s.expand(d, sheet.Origin) {
-					e.order = order
-					order++
-					prepared.decls = append(prepared.decls, e)
-				}
-			}
-			if len(prepared.decls) > 0 {
-				out = append(out, prepared)
-			}
+			s.prepareRule(rule, nil, sheet.Origin, &out, &order)
 		}
 	}
 	return out
+}
+
+// prepareRule prepares one rule and every rule nested inside it.
+//
+// parent is the enclosing rule's selector list, already desugared, or nil at the
+// top of a stylesheet. It is carried down rather than looked up because nesting
+// composes: a rule three deep is written against the rule above it, which was
+// itself written against the one above that, and each level's answer is the next
+// level's question.
+//
+// The order counter runs through the recursion rather than being restarted, so
+// a nested rule's declarations come after the declarations of the rule holding
+// them. That is what CSS Nesting asks for — the nested rule is at the place it
+// was written — and it falls out of doing the parent's declarations first.
+func (s *Styler) prepareRule(rule css.Rule, parent []css.ComponentValue, origin Origin,
+	out *[]preparedRule, order *int) {
+
+	if rule.At {
+		// At-rules are a stage of their own — @media has to be evaluated
+		// against the page it is being laid out for, and @page describes the
+		// surface rather than the content. Neither belongs in the cascade, and
+		// reporting them here is how their absence stays visible until they
+		// arrive.
+		s.report(Finding{
+			Offset:      rule.Offset,
+			Message:     "@" + rule.Name + " is not applied yet",
+			Unsupported: true,
+			Property:    "@" + rule.Name,
+		})
+		return
+	}
+
+	prelude := rule.Prelude
+	if parent != nil {
+		prelude = nestSelector(parent, prelude)
+	}
+
+	sels, errs, ok := css.ParseSelectorList(prelude)
+	for _, e := range errs {
+		s.report(Finding{
+			Offset:      e.Offset,
+			Message:     e.Message,
+			Unsupported: e.Unsupported,
+		})
+	}
+	if !ok {
+		// An unusable selector list invalidates the rule, which is what the
+		// specification requires — and the findings above already said why.
+		// Its nested rules go with it: each of them is written against this
+		// one, so there is nothing left for them to be relative to.
+		return
+	}
+
+	decls, nested, derrs := css.ParseDeclarationValues(rule.Block)
+	for _, e := range derrs {
+		s.report(Finding{Offset: e.Offset, Message: e.Message, Unsupported: e.Unsupported})
+	}
+
+	prepared := preparedRule{selectors: sels, origin: origin}
+	for _, d := range decls {
+		for _, e := range s.expand(d, origin) {
+			e.order = *order
+			*order++
+			prepared.decls = append(prepared.decls, e)
+		}
+	}
+	if len(prepared.decls) > 0 {
+		*out = append(*out, prepared)
+	}
+	for _, n := range nested {
+		s.prepareRule(n, prelude, origin, out, order)
+	}
+}
+
+// nestSelector writes a nested rule's selector out in full, against the rule it
+// was written inside.
+//
+// CSS Nesting §2: the parent stands in for ":is(<the parent's selector list>)",
+// which is not a convenience — it is what makes the nested rule's specificity
+// right. ":is()" takes the specificity of its most specific argument, which is
+// exactly what the specification says a nested selector inherits from its
+// parent, so writing the substitution out literally means nothing here has to
+// know about specificity at all.
+//
+// Where the nested selector says "&", that is where the parent goes. Where it
+// says nothing, the parent goes in front with a descendant combinator, which is
+// the relaxed syntax every browser implements: "span { }" inside "#c { }" is
+// "#c span", not an error.
+func nestSelector(parent, nested []css.ComponentValue) []css.ComponentValue {
+	parentIs := []css.ComponentValue{
+		{Token: css.Token{Kind: css.Colon}},
+		{Token: css.Token{Kind: css.Function, Value: "is"}, Values: parent},
+	}
+	out, replaced := substituteParent(nested, parentIs)
+	if replaced {
+		return out
+	}
+	// No "&" anywhere, so the parent goes in front. The space is a real
+	// component value and not a formality: without it "#c" and "span" would
+	// join into one compound selector and the rule would match nothing.
+	joined := make([]css.ComponentValue, 0, len(parentIs)+1+len(nested))
+	joined = append(joined, parentIs...)
+	joined = append(joined, css.ComponentValue{Token: css.Token{Kind: css.Whitespace, Value: " "}})
+	return append(joined, nested...)
+}
+
+// substituteParent replaces every "&" with the parent, at any depth, and says
+// whether it found one.
+//
+// At any depth because "&" inside ":not(&)" is the same "&" — a rule written
+// that way is asking to exclude its own parent, and a substitution that only
+// looked at the top level would leave a bare "&" for the selector parser to
+// reject.
+func substituteParent(vals, parent []css.ComponentValue) ([]css.ComponentValue, bool) {
+	found := false
+	out := make([]css.ComponentValue, 0, len(vals))
+	for _, v := range vals {
+		switch {
+		case v.IsToken() && v.Token.Kind == css.Delim && v.Token.Value == "&":
+			found = true
+			out = append(out, parent...)
+		case len(v.Values) > 0:
+			inner, did := substituteParent(v.Values, parent)
+			found = found || did
+			v.Values = inner
+			out = append(out, v)
+		default:
+			out = append(out, v)
+		}
+	}
+	return out, found
 }
 
 // expand turns one declaration into the longhands it sets, dropping and
