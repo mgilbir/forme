@@ -55,9 +55,12 @@ type flexValues struct {
 	// which is what stops a small item shrinking to nothing beside a large one.
 	grow, shrink float64
 	// basis is the declared flex-basis, and basisAuto says the keyword was
-	// "auto" — which defers to the item's own width rather than naming a size.
-	basis     style.Unit
-	basisAuto bool
+	// "auto" — which defers to the item's own size rather than naming one.
+	// basisContent is the keyword that defers to the item's *content* instead,
+	// which is a third answer and not a spelling of either.
+	basis        style.Unit
+	basisAuto    bool
+	basisContent bool
 }
 
 // flexValuesOf reads the three properties off an item.
@@ -65,7 +68,7 @@ type flexValues struct {
 // A value the grammar does not allow gives the initial one, which is what the
 // cascade would have produced had the declaration been thrown out — the same
 // answer floatOf and clearOf give, and for the same reason.
-func (l *layouter) flexValuesOf(b *Box, containing style.Unit) flexValues {
+func (l *layouter) flexValuesOf(b *Box, room flexRoom) flexValues {
 	out := flexValues{grow: 0, shrink: 1, basisAuto: true}
 	if v, ok := parseNumber(trimmedLower(b.Style["flex-grow"])); ok && v >= 0 {
 		out.grow = v
@@ -73,18 +76,22 @@ func (l *layouter) flexValuesOf(b *Box, containing style.Unit) flexValues {
 	if v, ok := parseNumber(trimmedLower(b.Style["flex-shrink"])); ok && v >= 0 {
 		out.shrink = v
 	}
-	switch basis := trimmedLower(b.Style["flex-basis"]); basis {
-	case "", "auto", "content":
-		// "content" is "size it as though flex-basis were auto and width were
-		// auto", which for the boxes this file accepts is what auto already
-		// comes to: the gate refuses a percentage main size, so the only other
-		// thing auto could defer to is a declared length, and "content" says to
-		// ignore that. It is folded in here rather than given a case of its own
-		// because the difference cannot be reached — the gate refuses every box
-		// where the two would disagree.
+	switch trimmedLower(b.Style["flex-basis"]) {
+	case "", "auto":
+	case "content":
+		// "content" is "size it as though flex-basis were auto and the main
+		// size were auto", which is not the same as "auto" and differs from it
+		// exactly where the item declared a main size of its own: auto defers
+		// to the declaration and this one ignores it.
+		out.basisContent = true
 	default:
-		if v, ok := l.lengthOf(b, "flex-basis", containing); ok && v >= 0 {
-			out.basis, out.basisAuto = v, false
+		// A percentage basis is of the line, and where the line has no size it
+		// is indefinite — which leaves the basis auto, deferring to whatever
+		// the item says about itself.
+		if length, ok := l.parseLength(b, "flex-basis"); ok {
+			if v, ok := length.Resolve(room.main, room.definite); ok && v >= 0 {
+				out.basis, out.basisAuto = v, false
+			}
 		}
 	}
 	return out
@@ -451,15 +458,6 @@ func (l *layouter) refusesToFlex(b *Box, containing style.Unit) string {
 		if why := refusesAlignment(trimmedLower(c.Style["align-self"]), a); why != "" {
 			return "one of its items is " + why
 		}
-		if l.percentageMainSize(c, a) {
-			// A percentage of the container's own main size, which is what this
-			// is resolving. §9.2 answers it — the percentage is against the
-			// container's inner size, which is known — but the item's own
-			// intrinsic contribution is then circular, and the circularity is
-			// what this refuses rather than guesses at.
-			return "one of its items sizes itself as a percentage of the row " +
-				"it is being fitted into"
-		}
 	}
 	if outOfFlow && items > 0 {
 		return "it holds a floated or absolutely positioned box beside its " +
@@ -645,19 +643,6 @@ func orderOf(b *Box) int {
 	return sign * n
 }
 
-// percentageMainSize reports whether a box's own main-axis size is a percentage.
-func percentageMainSize(value string) bool {
-	v := trimmedLower(value)
-	return strings.HasSuffix(v, "%") && v != "%"
-}
-
-func (l *layouter) percentageMainSize(b *Box, a flexAxis) bool {
-	return percentageMainSize(b.Style[a.mainName()]) ||
-		percentageMainSize(b.Style["flex-basis"]) ||
-		percentageMainSize(b.Style[a.minName()]) ||
-		percentageMainSize(b.Style[a.maxName()])
-}
-
 // flexContent lays a flex container's items out along its main axis and returns
 // the height they came to.
 //
@@ -668,7 +653,14 @@ func (l *layouter) flexContent(b *Box, parent *Fragment, width style.Unit,
 	origin flow) style.Unit {
 
 	a := l.axisOf(b)
-	items := l.flexItems(b, a, width, origin)
+
+	// The room the items are sized against, asked for before they are gathered
+	// because an item may size itself as a share of it. A row's is its width and
+	// a column's is a height it was told; a column that was told none has a main
+	// size that is indefinite here and settled below, out of what the items
+	// asked for.
+	main, definite := l.statedMain(b, a, width, origin)
+	items := l.flexItems(b, a, flexRoom{main: main, definite: definite, width: width}, origin)
 	if len(items) == 0 {
 		return 0
 	}
@@ -679,7 +671,12 @@ func (l *layouter) flexContent(b *Box, parent *Fragment, width style.Unit,
 	// left after the gaps, which is why every number below is measured against
 	// the line and not against the container's own size.
 	gap, crossGap := l.flexGap(b, a, width), l.flexCrossGap(b, a, width)
-	main := l.flexMain(b, a, items, gap, width, origin)
+	if !definite {
+		main = gap.Mul(float64(len(items) - 1))
+		for _, it := range items {
+			main = main.Add(it.outer(it.hypothetical))
+		}
+	}
 
 	// §9.3: which items are on which line. A container that does not wrap has
 	// one line whatever it holds.
@@ -993,8 +990,8 @@ func (l *layouter) alignContentOf(b *Box, a flexAxis) flexJustify {
 	}
 }
 
-// flexMain is the container's inner main size, and whether it is a number at
-// all.
+// statedMain is the container's inner main size where it has one, which is what
+// an item that sizes itself as a share of the line is a share of.
 //
 // A row's is its width, which its own containing block gave it: definite, and
 // the same number whatever the items do. A column's is its height, and a height
@@ -1012,20 +1009,16 @@ func (l *layouter) alignContentOf(b *Box, a flexAxis) flexJustify {
 // It cannot arise — the gate refuses a wrapping column, and a row's main size is
 // its width, which its containing block always states — and it is worth knowing
 // that the two clauses meet rather than merely never having been seen to.
-func (l *layouter) flexMain(b *Box, a flexAxis, items []*flexItem,
-	gap, width style.Unit, origin flow) style.Unit {
+func (l *layouter) statedMain(b *Box, a flexAxis, width style.Unit,
+	origin flow) (main style.Unit, definite bool) {
 
 	if !a.column {
-		return width
+		return width, true
 	}
 	if h, ok := l.explicitHeight(b, width, origin.cbHeight, origin.cbDefinite); ok {
-		return h
+		return h, true
 	}
-	main := gap.Mul(float64(len(items) - 1))
-	for _, it := range items {
-		main = main.Add(it.outer(it.hypothetical))
-	}
-	return main
+	return 0, false
 }
 
 // flexGap is the room §8 of Box Alignment leaves between one item and the next.
@@ -1317,7 +1310,8 @@ func (l *layouter) layOutFlexItem(it *flexItem, a flexAxis, width style.Unit,
 
 // flexItems gathers the container's items and gives each its flex base size and
 // hypothetical main size, which is §9.2.
-func (l *layouter) flexItems(b *Box, a flexAxis, width style.Unit, origin flow) []*flexItem {
+func (l *layouter) flexItems(b *Box, a flexAxis, room flexRoom, origin flow) []*flexItem {
+	width := room.width
 	var out []*flexItem
 	for _, c := range b.Children {
 		if c.IsText() || (c.Anonymous() && len(c.Children) == 0) || c.outOfFlow() {
@@ -1329,7 +1323,7 @@ func (l *layouter) flexItems(b *Box, a flexAxis, width style.Unit, origin flow) 
 		}
 		it := &flexItem{
 			box:     c,
-			values:  l.flexValuesOf(c, width),
+			values:  l.flexValuesOf(c, room),
 			margin:  l.edges(c, "margin", width),
 			border:  l.borderWidths(c),
 			padding: l.paddingOf(c, width),
@@ -1368,8 +1362,8 @@ func (l *layouter) flexItems(b *Box, a flexAxis, width style.Unit, origin flow) 
 			it.cross, it.hasCross = l.crossSizeOf(b, a, it, width), true
 			it.measured = l.measuredMain(it, a, width, origin)
 		}
-		it.base = l.flexBaseSize(it, a, width)
-		it.min, it.max = l.flexMainLimits(it, a, width)
+		it.base = l.flexBaseSize(it, a, room)
+		it.min, it.max = l.flexMainLimits(it, a, room)
 		it.hypothetical = style.Clamp(it.base, it.min, it.max)
 	}
 	if a.column {
@@ -1390,7 +1384,8 @@ func (l *layouter) flexItems(b *Box, a flexAxis, width style.Unit, origin flow) 
 func (l *layouter) crossSizeOf(b *Box, a flexAxis, it *flexItem, width style.Unit) style.Unit {
 	edge := a.crossEdge(it.border).Add(a.crossEdge(it.padding))
 	room := maxZero(width.Sub(it.crossMargin))
-	if declared, ok := l.mainLength(it.box, flexAxis{column: !a.column}, a.crossName(), width); ok {
+	across := flexRoom{main: width, definite: true, width: width}
+	if declared, ok := l.mainLength(it.box, flexAxis{column: !a.column}, a.crossName(), across); ok {
 		// The item's own cross size, which is the main size of the axis this
 		// one is not: a column's cross axis is a row's main axis, and what
 		// box-sizing takes out of a declared size is decided the same way on
@@ -1430,11 +1425,12 @@ func (l *layouter) measuredMain(it *flexItem, a flexAxis, width style.Unit,
 // max-content size, which is the size it would take if the line were as wide as
 // it liked. That last one is why a row of three words comes out as three words
 // wide rather than three equal thirds.
-func (l *layouter) flexBaseSize(it *flexItem, a flexAxis, width style.Unit) style.Unit {
+func (l *layouter) flexBaseSize(it *flexItem, a flexAxis, room flexRoom) style.Unit {
 	if !it.values.basisAuto {
-		return maxZero(it.values.basis.Sub(l.sizingEdgeOf(it.box, a, width)))
+		return maxZero(it.values.basis.Sub(l.sizingEdgeOf(it.box, a, room.width)))
 	}
-	if declared, ok := l.mainLength(it.box, a, a.mainName(), width); ok {
+	if declared, ok := l.mainLength(it.box, a, a.mainName(), room); ok &&
+		!it.values.basisContent {
 		return declared
 	}
 	if a.column {
@@ -1443,6 +1439,21 @@ func (l *layouter) flexBaseSize(it *flexItem, a flexAxis, width style.Unit) styl
 		return it.measured
 	}
 	return l.contentWidths(it.box).max
+}
+
+// flexRoom is what the container offers an item that sizes itself against it:
+// the main size the items are being fitted to, whether that is a number at all,
+// and the width its percentages resolve against.
+//
+// The two sizes are not the same question. A percentage *main* size is of the
+// line — "width: 50%" in a row is half the row, "height: 50%" down a column is
+// half the column — while a percentage padding or margin is of the container's
+// width whichever axis it is on, because that is what CSS 2.1 §8 says and it is
+// true on both.
+type flexRoom struct {
+	main     style.Unit
+	definite bool
+	width    style.Unit
 }
 
 // mainLength is one of the item's own main-axis sizes, resolved as a content
@@ -1459,12 +1470,22 @@ func (l *layouter) flexBaseSize(it *flexItem, a flexAxis, width style.Unit) styl
 // because that is what a percentage padding is a percentage of — and unlike
 // intrinsic sizing, which has to ask before there is an answer, a flex item is
 // being fitted into a line whose width is already known.
-func (l *layouter) mainLength(c *Box, a flexAxis, property string, width style.Unit) (style.Unit, bool) {
+//
+// A percentage *size* is of the line, and §9.2's answer where the line has no
+// size — a column that was never told how tall to be — is that the declaration
+// is indefinite and the item falls back to what auto would have given it. That
+// is not a refusal: it is what "height: 50%" means inside a box whose height is
+// its content, which is the same rule block layout follows for the same reason.
+func (l *layouter) mainLength(c *Box, a flexAxis, property string, room flexRoom) (style.Unit, bool) {
 	length, ok := l.parseLength(c, property)
-	if !ok || length.Kind != style.LengthAbsolute {
+	if !ok {
 		return 0, false
 	}
-	return maxZero(length.Value.Sub(l.sizingEdgeOf(c, a, width))), true
+	v, ok := length.Resolve(room.main, room.definite)
+	if !ok {
+		return 0, false
+	}
+	return maxZero(v.Sub(l.sizingEdgeOf(c, a, room.width))), true
 }
 
 // sizingEdgeOf is what box-sizing takes out of a declared main size.
@@ -1483,14 +1504,14 @@ func (l *layouter) sizingEdgeOf(c *Box, a flexAxis, containing style.Unit) style
 // automatic minimum is its content-based minimum size, so a word cannot be
 // shrunk narrower than the word. It is capped by a declared size, because an
 // item that asked to be narrower than its content asked for that.
-func (l *layouter) flexMainLimits(it *flexItem, a flexAxis, width style.Unit) (min, max style.Unit) {
+func (l *layouter) flexMainLimits(it *flexItem, a flexAxis, room flexRoom) (min, max style.Unit) {
 	c := it.box
 	max = style.MaxUnit
-	if v, ok := l.mainLength(c, a, a.maxName(), width); ok {
+	if v, ok := l.mainLength(c, a, a.maxName(), room); ok {
 		max = v
 	}
 	if !l.isAuto(c, a.minName()) {
-		if v, ok := l.mainLength(c, a, a.minName(), width); ok {
+		if v, ok := l.mainLength(c, a, a.minName(), room); ok {
 			return v, max
 		}
 	}
@@ -1508,7 +1529,7 @@ func (l *layouter) flexMainLimits(it *flexItem, a flexAxis, width style.Unit) (m
 		// behaviour authors meet as "my flex item will not get smaller".
 		min = it.measured
 	}
-	if declared, ok := l.mainLength(c, a, a.mainName(), width); ok && declared < min {
+	if declared, ok := l.mainLength(c, a, a.mainName(), room); ok && declared < min {
 		min = declared
 	}
 	if max < min {

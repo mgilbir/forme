@@ -220,7 +220,6 @@ func TestAContainerThisEngineCannotArrangeIsLaidOutAsABlockAndSaysSo(t *testing.
 		{"an item on a baseline in lines that stack backwards",
 			`#f { flex-wrap: wrap-reverse } #f > div:first-child { align-self: baseline }`,
 			"part the baselines again"},
-		{"a percentage item", `#f > div:first-child { width: 50% }`, "percentage of the row"},
 		{"a floated child", `#f > div:first-child { float: left }`, "floated or absolutely"},
 	} {
 		t.Run(c.what, func(t *testing.T) {
@@ -270,6 +269,8 @@ func TestAnArrangedContainerSaysNothing(t *testing.T) {
 		`#f { width: 300px } #f > div:first-child { order: 2 }`,
 		`#f { width: 300px; flex-wrap: wrap }`,
 		`#f { width: 300px; height: 100px; flex-wrap: wrap; align-content: space-around }`,
+		`#f { width: 300px; align-items: baseline }`,
+		`#f { width: 300px } #f > div:first-child { width: 50% }`,
 	} {
 		got := Compose(Input{HTML: threeItems,
 			CSS: []Stylesheet{{Source: flexCSS + css}}}, Options{})
@@ -1705,4 +1706,72 @@ func TestAPercentagePaddingIsOfTheContainerEvenInBorderBox(t *testing.T) {
 		`#f { width: 300px } #f > div { box-sizing: border-box; width: 100px;`+
 			` padding: 0 10%; flex-shrink: 0 }`),
 		[][2]float64{{0, 100}}, "a percentage padding inside a declared width")
+}
+
+// TestAnItemSizedAsAShareOfTheLine is §9.2's percentage main size. The line is
+// the container's inner main size, which a row always has and a column has
+// whenever it was told how tall to be, so "width: 50%" in a 300px row is 150px
+// and there is nothing circular about it.
+func TestAnItemSizedAsAShareOfTheLine(t *testing.T) {
+	const two = `<div id="f"><div id="a">a</div><div id="b">b</div></div>`
+
+	wantRow(t, flexRow(t, two, `#f { width: 300px } #f > div#a { width: 50%; flex-shrink: 0 }`),
+		[][2]float64{{0, 150}, {150, 12}}, "an item half the row wide")
+	wantRow(t, flexRow(t, two, `#f { width: 300px } #f > div#a { flex-basis: 50%; flex-shrink: 0 }`),
+		[][2]float64{{0, 150}, {150, 12}}, "a basis of half the row")
+
+	// The limits are read the same way: a maximum of a tenth caps a 200px
+	// basis at 30, and a minimum of a half holds a 20px one up to 150.
+	wantRow(t, flexRow(t, two,
+		`#f { width: 300px } #f > div#a { max-width: 10%; flex-basis: 200px; flex-shrink: 0 }`),
+		[][2]float64{{0, 30}, {30, 12}}, "a maximum of a tenth of the row")
+	wantRow(t, flexRow(t, two,
+		`#f { width: 300px } #f > div#a { min-width: 50%; flex-basis: 20px; flex-shrink: 0 }`),
+		[][2]float64{{0, 150}, {150, 12}}, "a minimum of half the row")
+
+	// Down a column the share is of the height, and it is the same arithmetic
+	// on the other axis: half of 200 is 100.
+	wantCross(t, flexCross(t, two,
+		`#f { width: 300px; height: 200px; flex-direction: column }`+
+			`#f > div#a { height: 50%; flex-shrink: 0 }`),
+		[][2]float64{{0, 100}, {100, 20}}, "an item half the column deep")
+}
+
+// TestAShareOfALineWithNoSizeIsNoShareAtAll. A percentage of an indefinite main
+// size is indefinite, and §9.2's answer is the one block layout gives for the
+// same reason: the declaration says nothing and the item falls back to what
+// "auto" would have given it.
+//
+// The container below was never told how tall to be, so its height is what its
+// items came to — and an item asking for half of that would be asking for half
+// of a number it is helping to decide.
+func TestAShareOfALineWithNoSizeIsNoShareAtAll(t *testing.T) {
+	const two = `<div id="f"><div id="a">a</div><div id="b">b</div></div>`
+	const column = `#f { width: 300px; flex-direction: column }`
+
+	wantCross(t, flexCross(t, two, column+`#f > div#a { height: 50% }`),
+		[][2]float64{{0, 20}, {20, 20}}, "half of a height nobody stated")
+	wantCross(t, flexCross(t, two, column+`#f > div#a { flex-basis: 50% }`),
+		[][2]float64{{0, 20}, {20, 20}}, "a basis of half of nothing")
+}
+
+// TestABasisOfContentIgnoresTheSizeTheItemAsked. §7.1's third keyword, which is
+// neither of the other two: "auto" defers to the item's own main size and
+// "content" ignores it and sizes from what is inside.
+//
+// The difference could not be reached while a percentage main size was refused
+// — the two keywords agree on every other kind of declaration this file accepts
+// — so it arrives with the percentage that makes it visible.
+func TestABasisOfContentIgnoresTheSizeTheItemAsked(t *testing.T) {
+	const two = `<div id="f"><div id="a">a</div><div id="b">b</div></div>`
+
+	// "auto" takes the declared half of the row.
+	wantRow(t, flexRow(t, two,
+		`#f { width: 300px } #f > div#a { width: 50%; flex-basis: auto; flex-shrink: 0 }`),
+		[][2]float64{{0, 150}, {150, 12}}, "a basis deferring to a declared width")
+
+	// "content" ignores it and sizes the item from its one character.
+	wantRow(t, flexRow(t, two,
+		`#f { width: 300px } #f > div#a { width: 50%; flex-basis: content; flex-shrink: 0 }`),
+		[][2]float64{{0, 12}, {12, 12}}, "a basis taken from the content instead")
 }
