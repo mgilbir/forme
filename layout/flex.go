@@ -435,16 +435,10 @@ func (l *layouter) refusesToFlex(b *Box, containing style.Unit) string {
 	}
 	items, outOfFlow := 0, false
 	for _, c := range b.Children {
-		if c.Outer == OuterInline && c.Inner == InnerText &&
-			strings.TrimSpace(c.Text) != "" {
-			// §4's anonymous flex item. It is a box this engine never made —
-			// a run of text in a flex container becomes one item rather than
-			// taking part in an inline formatting context — and making it is a
-			// change to the box tree rather than to layout.
-			return "it holds text that is not inside an element, which becomes " +
-				"an item of its own"
-		}
-		if c.IsText() || c.Anonymous() {
+		if c.IsText() || (c.Anonymous() && len(c.Children) == 0) {
+			// What is left of a text child once §4's anonymous item has been
+			// made is white space that collapses to nothing, which is not
+			// content and not an item. See wrapFlexText in box.go.
 			continue
 		}
 		if c.outOfFlow() {
@@ -1251,9 +1245,11 @@ func (l *layouter) layOutFlexItem(it *flexItem, a flexAxis, width style.Unit,
 func (l *layouter) flexItems(b *Box, a flexAxis, width style.Unit, origin flow) []*flexItem {
 	var out []*flexItem
 	for _, c := range b.Children {
-		if c.IsText() || c.Anonymous() || c.outOfFlow() {
-			// The gate has refused a container holding any of these except an
-			// anonymous box with nothing in it, which is not an item.
+		if c.IsText() || (c.Anonymous() && len(c.Children) == 0) || c.outOfFlow() {
+			// The same three the gate passed over: white space that collapses
+			// to nothing, and a box that is out of the flow rather than in the
+			// row. An anonymous box with something in it *is* an item — §4's
+			// own, made in box.go, or the table repair's around a stray cell.
 			continue
 		}
 		it := &flexItem{

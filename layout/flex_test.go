@@ -1431,3 +1431,78 @@ func TestTheOrderOfEqualItemsSurvivesAWholeContainerOfThem(t *testing.T) {
 			"order and the document put them in that one", got, want)
 	}
 }
+
+// TestTextInsideAFlexContainerBecomesAnItemOfItsOwn is §4's anonymous flex item.
+//
+// A flex container has no inline formatting context of its own — every in-flow
+// child is an item — so a run of text written straight inside one is put in a
+// box the document does not contain. It is the commonest markup there is:
+// "<div class=row>Total <span>9</span></div>" is two items, and before this the
+// whole container was refused and stacked.
+func TestTextInsideAFlexContainerBecomesAnItemOfItsOwn(t *testing.T) {
+	// Three characters of Courier are 36px, and the element beside them is an
+	// item of its own rather than part of the same box.
+	wantRow(t, flexRow(t, `<div id="f">abc<div>d</div></div>`, `#f { width: 300px }`),
+		[][2]float64{{0, 36}, {36, 12}}, "text beside an element")
+
+	// A run is contiguous text and nothing else, so an element between two runs
+	// makes two items and not one: three items here, in the order written.
+	wantRow(t, flexRow(t, `<div id="f">ab<div>x</div>cd</div>`, `#f { width: 300px }`),
+		[][2]float64{{0, 24}, {24, 12}, {36, 24}}, "an element between two runs of text")
+
+	// An inline element is *not* wrapped with the text: it is an in-flow child,
+	// so it is an item in its own right and blockified where it stands.
+	wantRow(t, flexRow(t, `<div id="f">ab<span>x</span>cd</div>`, `#f { width: 300px }`),
+		[][2]float64{{0, 24}, {24, 12}, {36, 24}}, "an inline element between two runs")
+}
+
+// TestWhiteSpaceBetweenItemsIsNotAnItem. Every document in the suite writes a
+// newline between its elements, so a rule that made an item of every text node
+// would make a row of three <div>s into seven items — four of them empty, each
+// taking a share of the line and a gap.
+//
+// It is the collapsing that decides, not the characters: under "white-space:
+// pre" the same space is content and does become an item.
+func TestWhiteSpaceBetweenItemsIsNotAnItem(t *testing.T) {
+	const spaced = "<div id=\"f\">\n  <div>a</div>\n  <div>b</div>\n</div>"
+	wantRow(t, flexRow(t, spaced, `#f { width: 300px }`),
+		[][2]float64{{0, 12}, {12, 12}}, "two items with newlines between them")
+
+	// Preserved, each run between them is a text run like any other and the
+	// row comes out five items. Their widths are the widest line each holds,
+	// because a preserved newline is a line break: "\n  " is two spaces on a
+	// second line and 24px wide, and the trailing "\n" is a break with nothing
+	// after it and no width at all.
+	wantRow(t, flexRow(t, spaced, `#f { width: 300px; white-space: pre }`),
+		[][2]float64{{0, 24}, {24, 12}, {36, 24}, {60, 12}, {72, 0}},
+		"two items with preserved space between them")
+}
+
+// TestAnAnonymousItemIsAnonymous. The box holds the text and nothing else: it
+// inherits its parent's font, so the text is set the way the author wrote it,
+// and it takes none of the parent's own padding, border or margin — a box that
+// took those would draw the container's padding twice and be that much wider.
+//
+// It also cannot be selected, which is the specification's point and not an
+// omission: "#f > div { flex: 1 }" moves the elements beside it and leaves the
+// anonymous item at the size of its own text.
+func TestAnAnonymousItemIsAnonymous(t *testing.T) {
+	// Inherited: at 40px the three characters are 24px each.
+	wantRow(t, flexRow(t, `<div id="f">abc<div>d</div></div>`,
+		`#f { width: 300px; font-size: 40px }`),
+		[][2]float64{{0, 72}, {72, 12}}, "an anonymous item at the container's size")
+
+	// Not inherited: 100px of padding on the container is the container's.
+	got := flexRow(t, `<div id="f">abc<div>d</div></div>`,
+		`#f { width: 300px; padding-left: 100px }`)
+	if len(got) != 2 || got[0].w != 36 {
+		t.Errorf("the anonymous item is %v; it holds three characters and none "+
+			"of its container's padding", got)
+	}
+
+	// Unselectable: the element grows into the whole of what is left and the
+	// anonymous item stays as wide as its text.
+	wantRow(t, flexRow(t, `<div id="f">abc<div>d</div></div>`,
+		`#f { width: 300px } #f > div { flex: 1 }`),
+		[][2]float64{{0, 36}, {36, 264}}, "a growing element beside an anonymous item")
+}

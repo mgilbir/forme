@@ -1240,6 +1240,63 @@ func (b *boxBuilder) fixup(box *Box) {
 	box.Children = b.fixupTables(box)
 	box.Children = b.splitBlockInInline(box)
 	box.Children = b.wrapInlines(box)
+	box.Children = b.wrapFlexText(box)
+}
+
+// wrapFlexText is CSS Flexible Box Layout §4's anonymous flex item: a run of
+// text written straight inside a flex container is wrapped in a box of its own.
+//
+// It is the same idea as the anonymous block rule above and not the same rule,
+// and the differences are what make it a second function. §2.1 wraps inline
+// content only where a block-level sibling forced the parent to choose, and it
+// wraps *inline boxes* along with the text; §4 wraps a run of text whether or
+// not anything else is there, and wraps nothing else — an inline element inside
+// a flex container is an item in its own right, blockified where it stands,
+// because every in-flow child of a flex container is an item.
+//
+// So "<div class=row>Total <span>9</span></div>" is two items, not one and not
+// three: the word in a box the document does not contain, and the span beside
+// it. Without this the container was refused and laid out as a block, which is
+// most of the flex containers anyone writes.
+func (b *boxBuilder) wrapFlexText(parent *Box) []*Box {
+	if parent.Inner != InnerFlex || len(parent.Children) == 0 {
+		return parent.Children
+	}
+	var out, run []*Box
+	flush := func() {
+		if len(run) == 0 {
+			return
+		}
+		// White space that would collapse to nothing is not content and
+		// generates no item. Every document in the suite writes a newline
+		// between its elements, so without this a row of three <div>s would be
+		// seven items — four of them empty, each taking a share of the line.
+		if !hasInFlowContent(run) {
+			run = nil
+			return
+		}
+		anon := &Box{
+			Outer: OuterBlock, Inner: InnerFlow,
+			Style: style.Inherited(parent.Style), Parent: parent,
+			FontSize: parent.FontSize, fontSizeKnown: parent.fontSizeKnown,
+			Children: run,
+		}
+		for _, c := range run {
+			c.Parent = anon
+		}
+		out = append(out, anon)
+		run = nil
+	}
+	for _, c := range parent.Children {
+		if c.IsText() {
+			run = append(run, c)
+			continue
+		}
+		flush()
+		out = append(out, c)
+	}
+	flush()
+	return out
 }
 
 // splitBlockInInline breaks an inline box apart around any block-level box
