@@ -155,6 +155,55 @@ func InsertPhraseSeparators(text string, wst WordSpaceTransform, w WritingSystem
 	return out.String() + text[last:]
 }
 
+// SeparatorBoundaries is where §2.2 puts a virtual word separator, keyed by byte
+// offset, with true at a boundary.
+//
+// Two sources, and which one answers is a question about the language rather
+// than about the property. §2.2 defers to §6.1's phrase detection, and where
+// this engine has a phrase model — Japanese — that is the answer. Where it has
+// none but does have the language's *words*, the dictionary that already decides
+// where a line may be divided decides where a separator goes: a script written
+// without spaces between its words has one place a word separator could belong,
+// and it is the place the dictionary names. The suite says so from the other
+// side — word-space-transform-018 is Thai, and its reference puts a space at
+// every word boundary the dictionary finds.
+//
+// The dictionary is not offered to §5.2's phrase-based line breaking, and the
+// difference is real rather than cautious. A dictionary knows words and
+// "auto-phrase" suppresses breaks *inside a phrase*, which is a coarser thing —
+// a Japanese bunsetsu is several words. Reading a word list as a phrase model
+// would claim knowledge it does not have, in the direction that glues text
+// together.
+//
+// The language gate is §2.2's own: "if the content language is unknown, or if
+// the user agent does not support detecting phrase boundaries for that language,
+// there are no virtual expandable separators". DictionaryBreaks is keyed by
+// character and would answer for untagged Thai; this must not.
+//
+// # It must be asked of a whole stretch of text
+//
+// A phrase model reads three characters either side of each offset and degrades
+// quietly when it is shown a fragment. A dictionary matches whole words and does
+// not: asked about the "สวยง" of "<em>สวยง</em>าม" it finds "สวย" and a leftover
+// letter, which is not a word boundary and is not anywhere a separator goes. So
+// this is asked of the text a reader sees between one interruption and the next,
+// and never of one node of it. See layout/phraseedge.go, which is the caller
+// that has that text.
+func SeparatorBoundaries(text string, lang Language, w WritingSystem) map[int]bool {
+	if HasPhraseModel(w) {
+		return PhraseBreaks(text, w)
+	}
+	if !HasWordDictionary(lang) {
+		return nil
+	}
+	// Returned as it stands. DictionaryBreaks already excepts the first offset
+	// — "a break before the first character of a run is not one the run offers"
+	// — and an offset at the end of the text is not a place a word begins, so
+	// the two boundaries a caller must not be told about are not in it. A pass
+	// that trimmed them was written and could not be made to fail.
+	return DictionaryBreaks(text)
+}
+
 // PhraseSeparatorAt reports whether a virtual separator belongs between two
 // characters that a phrase boundary was found between.
 //

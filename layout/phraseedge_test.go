@@ -28,7 +28,7 @@ func separatorBoxes(t *testing.T, htmlSrc, cssSrc string) []string {
 	var walk func(*Box)
 	walk = func(b *Box) {
 		for _, c := range b.Children {
-			if c.IsText() && strings.TrimLeft(c.Text, "　") == "" {
+			if c.IsText() && strings.Trim(c.Text, "　 ") == "" {
 				name := "(anonymous)"
 				if b.Element != nil {
 					name = b.Element.Name
@@ -230,5 +230,69 @@ func TestTwoBoundariesInOneBoxBothLandWhereTheyBelong(t *testing.T) {
 	if want := "私は　東京へ　行きましょう。"; paragraphText(t, doc, edgePhraseCSS) != want {
 		t.Errorf("the document reads %q, want %q",
 			paragraphText(t, doc, edgePhraseCSS), want)
+	}
+}
+
+// TestAThaiWordBoundaryIsFoundAcrossTheWholeStretch is
+// word-space-transform-018's shape, and it is the case that separates reading
+// the stretch from reading a node.
+//
+// สวยงาม is one word and the document cuts it in two with </em>, so a dictionary
+// shown "สวยง" finds สวย and a letter left over — a boundary that is not one, in
+// the middle of a word. Read across the stretch there is no boundary there at
+// all, and the two that exist are the ones the reference writes.
+func TestAThaiWordBoundaryIsFoundAcrossTheWholeStretch(t *testing.T) {
+	const doc = `<div lang=th>กรุงเทพ<b><u>คือ</u><em>สวยง</em></b>าม</div>`
+	const css = `body, div, b, u, em { margin: 0; padding: 0 }
+		div { word-space-transform: space auto-phrase }`
+	if want := "กรุงเทพ คือ สวยงาม"; paragraphText(t, doc, css) != want {
+		t.Errorf("the document reads %q, want %q", paragraphText(t, doc, css), want)
+	}
+	// The second boundary is inside the <b> and the first is not, so the two
+	// name different hosts — which is the outermost rule doing something rather
+	// than one answer happening to fit both.
+	got := separatorBoxes(t, doc, css)
+	if len(got) != 2 {
+		t.Fatalf("%d separators, want 2: %v", len(got), got)
+	}
+	if got[0] != "div" || got[1] != "b" {
+		t.Errorf("the separators went into %v; the first boundary is between the "+
+			"div's own text and the <b>, and the second is between the <u> and "+
+			"the <em> inside it", got)
+	}
+}
+
+// TestAThaiBoundaryInsideOneBoxIsWrittenIntoItsText. The other kind: a boundary
+// with no box edge at it is written into the text of the box it falls in, which
+// is what the white space processing does for the languages it can answer for.
+// Here it cannot — PhraseBreaks has nothing to say about Thai — so this pass is
+// the only thing that does it, and it must do both kinds or a Thai paragraph
+// with no markup in it gets nothing.
+func TestAThaiBoundaryInsideOneBoxIsWrittenIntoItsText(t *testing.T) {
+	const doc = `<div lang=th>กรุงเทพคือสวยงาม</div>`
+	const css = `body, div { margin: 0 }
+		div { word-space-transform: space auto-phrase }`
+	if want := "กรุงเทพ คือ สวยงาม"; paragraphText(t, doc, css) != want {
+		t.Errorf("the document reads %q, want %q", paragraphText(t, doc, css), want)
+	}
+	if got := separatorBoxes(t, doc, css); len(got) != 0 {
+		t.Errorf("%v separators became boxes of their own; a boundary inside a "+
+			"box goes into that box's text", got)
+	}
+}
+
+// TestUntaggedTextGetsNoSeparatorAtABoxEdge. §2.2 gives separators only where
+// the content language is one the engine models, and the dictionary behind the
+// two tests above is keyed by script — so the gate has to be here too, or a
+// document that declares nothing would get them from its characters alone.
+func TestUntaggedTextGetsNoSeparatorAtABoxEdge(t *testing.T) {
+	const doc = `<div>กรุงเทพ<b><u>คือ</u><em>สวยง</em></b>าม</div>`
+	const css = `body, div, b, u, em { margin: 0; padding: 0 }
+		div { word-space-transform: space auto-phrase }`
+	if got := paragraphText(t, doc, css); got != "กรุงเทพคือสวยงาม" {
+		t.Errorf("the document reads %q, want it unchanged", got)
+	}
+	if got := separatorBoxes(t, doc, css); len(got) != 0 {
+		t.Errorf("%v were invented in a document that declares no language", got)
 	}
 }

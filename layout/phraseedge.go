@@ -92,7 +92,10 @@ func inlineSegments(box *Box) [][]textLeaf {
 	var cur []textLeaf
 	at := 0
 	flush := func() {
-		if len(cur) > 1 {
+		// One leaf is a stretch too. It has no seam in it, but it has an inside
+		// — and for a language whose boundaries only this pass can find, a
+		// paragraph with no markup in it is exactly one leaf.
+		if len(cur) > 0 {
 			out = append(out, cur)
 		}
 		cur, at = nil, 0
@@ -125,52 +128,75 @@ type insertion struct {
 	sep    *Box
 }
 
-// separateSegment finds the phrase boundaries of one stretch of inline content
-// and inserts a separator at each one that falls between two of its boxes.
+// separateSegment finds the word boundaries of one stretch of inline content and
+// puts a separator at each one the document has not already marked.
+//
+// The boundaries come from the whole stretch and never from one node of it,
+// which is the whole reason this pass exists: a phrase model shown a fragment
+// degrades quietly and a dictionary shown one does not. See
+// paragraph.SeparatorBoundaries.
+//
+// Two kinds of boundary come back, and they need different things done. One
+// between two boxes becomes a box, at the outermost element participating in
+// the edge. One inside a box is written into that box's own text, which is what
+// the white space processing already does for the languages it can answer for —
+// and doing it again here is harmless, because a separator already at the
+// boundary is not doubled.
 func (b *boxBuilder) separateSegment(seg []textLeaf) {
+	// The element containing the whole stretch, which is what the language and
+	// the writing system are asked of. Both are inherited and both are
+	// questions about the text rather than about any box in it, so asking them
+	// once of the stretch is asking them of the paragraph.
+	whole := commonAncestor(seg[0].box, seg[len(seg)-1].box)
+	if whole == nil {
+		return
+	}
 	text := ""
 	for _, leaf := range seg {
 		text += leaf.box.Text
 	}
 	var breaks map[int]bool
 	var todo []insertion
-	for i := 0; i+1 < len(seg); i++ {
-		lhs, rhs := seg[i], seg[i+1]
-		// The element containing both characters, which decides the property,
-		// the language, and where the separator goes. All three are the same
-		// element for the same reason.
-		host := commonAncestor(lhs.box, rhs.box)
-		if host == nil {
-			continue
+	for i := range seg {
+		if i+1 < len(seg) {
+			lhs, rhs := seg[i], seg[i+1]
+			// The element containing both characters, which decides the
+			// property and where the separator goes. The same walk §8.1 and
+			// §8.2 use for a gap at a box edge.
+			host := commonAncestor(lhs.box, rhs.box)
+			if host == nil {
+				continue
+			}
+			if !wordSpaceTransformValue(host.Style).Invents() {
+				continue
+			}
+			prev, _ := utf8.DecodeLastRuneInString(lhs.box.Text)
+			next, _ := utf8.DecodeRuneInString(rhs.box.Text)
+			if !paragraph.PhraseSeparatorAt(prev, next) {
+				continue
+			}
+			if breaks = b.boundariesOf(breaks, text, whole); len(breaks) == 0 {
+				return
+			}
+			if !breaks[rhs.start] {
+				continue
+			}
+			sep := b.separatorBox(host, wordSpaceTransformValue(host.Style))
+			if sep == nil {
+				continue
+			}
+			if at, ok := childIndexHolding(host, lhs.box); ok {
+				todo = append(todo, insertion{parent: host, at: at + 1, sep: sep})
+			}
 		}
-		wst := wordSpaceTransformValue(host.Style)
+		wst := wordSpaceTransformValue(seg[i].box.Style)
 		if !wst.Invents() {
 			continue
 		}
-		prev, _ := utf8.DecodeLastRuneInString(lhs.box.Text)
-		next, _ := utf8.DecodeRuneInString(rhs.box.Text)
-		if !paragraph.PhraseSeparatorAt(prev, next) {
-			continue
+		if breaks = b.boundariesOf(breaks, text, whole); len(breaks) == 0 {
+			return
 		}
-		if breaks == nil {
-			// Read once for the segment, and only once something in it has
-			// asked: the model is the expensive part and almost no document
-			// reaches it.
-			breaks = paragraph.PhraseBreaks(text, boxWritingSystem(host))
-			if len(breaks) == 0 {
-				return
-			}
-		}
-		if !breaks[rhs.start] {
-			continue
-		}
-		sep := b.separatorBox(host, wst)
-		if sep == nil {
-			continue
-		}
-		if at, ok := childIndexHolding(host, lhs.box); ok {
-			todo = append(todo, insertion{parent: host, at: at + 1, sep: sep})
-		}
+		seg[i].box.Text = separatedText(seg[i].box.Text, seg[i].start, breaks, wst)
 	}
 	// Back to front, so that an index taken before any insertion is still the
 	// index it names after the ones after it have gone in.
@@ -183,6 +209,50 @@ func (b *boxBuilder) separateSegment(seg []textLeaf) {
 		kids = append(kids, put.parent.Children[put.at:]...)
 		put.parent.Children = kids
 	}
+}
+
+// boundariesOf reads the stretch once, and only once something in it has asked.
+// The model is the expensive part and almost no document reaches it.
+func (b *boxBuilder) boundariesOf(have map[int]bool, text string, whole *Box) map[int]bool {
+	if have != nil {
+		return have
+	}
+	got := paragraph.SeparatorBoundaries(text,
+		languageAt(boxElement(whole)), boxWritingSystem(whole))
+	if got == nil {
+		// Distinguished from "not read yet" by never being nil again, so that a
+		// stretch with no boundaries in it is read once rather than once per
+		// leaf.
+		got = map[int]bool{}
+	}
+	return got
+}
+
+// separatedText writes the separators of one leaf into its text.
+//
+// start is where the leaf begins in the stretch, because the boundaries are the
+// stretch's. Only the ones strictly inside the leaf are its own: the two at its
+// ends are boundaries with its neighbours, and those are the box case above.
+//
+// Back to front, for the reason the insertions above are: an offset taken from
+// the text before any separator went in still names the same place afterwards
+// only if nothing before it has moved.
+func separatedText(text string, start int, breaks map[int]bool, wst paragraph.WordSpaceTransform) string {
+	var at []int
+	for i := 1; i < len(text); i++ {
+		if !breaks[start+i] {
+			continue
+		}
+		prev, _ := utf8.DecodeLastRuneInString(text[:i])
+		next, _ := utf8.DecodeRuneInString(text[i:])
+		if paragraph.PhraseSeparatorAt(prev, next) {
+			at = append(at, i)
+		}
+	}
+	for i := len(at) - 1; i >= 0; i-- {
+		text = text[:at[i]] + wst.Separator + text[at[i]:]
+	}
+	return text
 }
 
 // separatorBox is the text box the invented separator becomes.
