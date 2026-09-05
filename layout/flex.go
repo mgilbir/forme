@@ -436,7 +436,6 @@ func (l *layouter) refusesToFlex(b *Box, containing style.Unit) string {
 	if why := refusesAlignment(trimmedLower(b.Style["align-items"]), a); why != "" {
 		return "its items are " + why
 	}
-	items, outOfFlow := 0, false
 	for _, c := range b.Children {
 		if c.IsText() || (c.Anonymous() && len(c.Children) == 0) {
 			// What is left of a text child once §4's anonymous item has been
@@ -445,24 +444,14 @@ func (l *layouter) refusesToFlex(b *Box, containing style.Unit) string {
 			continue
 		}
 		if c.outOfFlow() {
-			// Noted rather than refused on the spot. §4.1 takes such a box out
-			// of the flow and gives it a static position from the container's
-			// own alignment — which is a different position from the block
-			// stacking's only where there is an arrangement to differ from. A
-			// container whose only children are out of flow has no items, and
-			// an empty box is the same box laid out either way.
-			outOfFlow = true
+			// §4.1's box: not an item, and placed against the container itself
+			// rather than in the row. It has a static position of its own and
+			// deferOutOfFlow gives it that one.
 			continue
 		}
-		items++
 		if why := refusesAlignment(trimmedLower(c.Style["align-self"]), a); why != "" {
 			return "one of its items is " + why
 		}
-	}
-	if outOfFlow && items > 0 {
-		return "it holds a floated or absolutely positioned box beside its " +
-			"items, and that box is placed against the container rather than " +
-			"taking a place in the row"
 	}
 	_ = containing
 	return ""
@@ -662,6 +651,17 @@ func (l *layouter) flexContent(b *Box, parent *Fragment, width style.Unit,
 	main, definite := l.statedMain(b, a, width, origin)
 	items := l.flexItems(b, a, flexRoom{main: main, definite: definite, width: width}, origin)
 	if len(items) == 0 {
+		// A container with nothing to arrange still has its out-of-flow
+		// children to record, and its own cross size is whatever it was told:
+		// nothing was laid out to give it one.
+		empty, _ := l.explicitHeight(b, width, origin.cbHeight, origin.cbDefinite)
+		if a.column {
+			empty = width
+		}
+		if !definite {
+			main = 0
+		}
+		l.deferOutOfFlow(b, a, parent, width, main, empty)
 		return 0
 	}
 
@@ -785,11 +785,58 @@ func (l *layouter) flexContent(b *Box, parent *Fragment, width style.Unit,
 		}
 		at = at.Add(crosses[n].size).Add(crossGap).Add(betweenLines)
 	}
+	l.deferOutOfFlow(b, a, parent, width, main, cross)
 	if a.column {
 		// The height the container came to is the main size its items divided.
 		return main
 	}
 	return cross
+}
+
+// deferOutOfFlow records the container's absolutely positioned children, which
+// are not items and are placed once the tree is absolute.
+//
+// It has to be done here and cannot be left to the block walk, because the
+// block walk is what this replaced: an out-of-flow child of an arranged flex
+// container was reached by nobody and left the page altogether.
+//
+// §4.1 gives it a static position "such that the child is positioned as if it
+// were the sole flex item in the flex container", which is exactly what the
+// arithmetic below says: a lone item of no size on a line of its own, packed
+// and aligned by the container's own properties. With everything at its initial
+// value that is the content box's start corner, which is where the block walk
+// would have put it — and with "justify-content: center" it is the middle of
+// the line, which is where the block walk would not.
+func (l *layouter) deferOutOfFlow(b *Box, a flexAxis, parent *Fragment,
+	width, main, cross style.Unit) {
+
+	index := 0
+	for _, c := range b.Children {
+		if c.ListItem {
+			index++
+		}
+		if !c.Position.outOfFlow() {
+			continue
+		}
+		along := a.mainAt(justifyOffset(l.justifyOf(b, a), main, 1, 0), 0, main)
+		var across style.Unit
+		switch crossAlignment(trimmedLower(b.Style["align-items"]), a) {
+		case crossEnd:
+			across = cross
+		case crossCenter:
+			across = cross.Div(2)
+		}
+		across = a.crossAt(across, 0, cross)
+
+		x, y := along, across
+		if a.column {
+			x, y = across, along
+		}
+		// The hypothetical box has no size, so the distance from the far edge
+		// is the whole of what is left. See absCandidate.staticEnd, which is
+		// what a right-to-left containing block resolves "right" from.
+		l.deferAbsolute(c, parent, x, y, width.Sub(x), index)
+	}
 }
 
 // wraps reports whether the container's lines break, which is §5.2.

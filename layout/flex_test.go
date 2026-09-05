@@ -220,7 +220,6 @@ func TestAContainerThisEngineCannotArrangeIsLaidOutAsABlockAndSaysSo(t *testing.
 		{"an item on a baseline in lines that stack backwards",
 			`#f { flex-wrap: wrap-reverse } #f > div:first-child { align-self: baseline }`,
 			"part the baselines again"},
-		{"a floated child", `#f > div:first-child { float: left }`, "floated or absolutely"},
 	} {
 		t.Run(c.what, func(t *testing.T) {
 			got := Compose(Input{HTML: threeItems, CSS: []Stylesheet{{
@@ -271,6 +270,8 @@ func TestAnArrangedContainerSaysNothing(t *testing.T) {
 		`#f { width: 300px; height: 100px; flex-wrap: wrap; align-content: space-around }`,
 		`#f { width: 300px; align-items: baseline }`,
 		`#f { width: 300px } #f > div:first-child { width: 50% }`,
+		`#f { width: 300px } #f > div:first-child { float: left }`,
+		`#f { width: 300px } #f > div:first-child { position: absolute }`,
 	} {
 		got := Compose(Input{HTML: threeItems,
 			CSS: []Stylesheet{{Source: flexCSS + css}}}, Options{})
@@ -1774,4 +1775,93 @@ func TestABasisOfContentIgnoresTheSizeTheItemAsked(t *testing.T) {
 	wantRow(t, flexRow(t, two,
 		`#f { width: 300px } #f > div#a { width: 50%; flex-basis: content; flex-shrink: 0 }`),
 		[][2]float64{{0, 12}, {12, 12}}, "a basis taken from the content instead")
+}
+
+// TestAFloatInAFlexContainerIsAnItem is §4: "float and clear have no effect on
+// a flex item".
+//
+// Everywhere else in this engine a float is out of the flow, and a box out of
+// the flow is not an item at all — so the declaration would have left the
+// container arranging the rest of its children around a hole. It is cleared off
+// the box instead of answered around, because "is this box floating" is asked
+// by the anonymous box rules, the line breaking and the painter, and every one
+// of them wants the same answer here.
+func TestAFloatInAFlexContainerIsAnItem(t *testing.T) {
+	// The floated item is in its place in the row, the same as if it had not
+	// declared anything.
+	wantRow(t, flexRow(t, threeItems, `#f { width: 300px } #f > div:first-child { float: left }`),
+		[][2]float64{{0, 12}, {12, 12}, {24, 12}}, "a floated item in a row")
+
+	// And it takes its share when there is one to take, which a float never
+	// does: 264px over three growing items is 88 each.
+	wantRow(t, flexRow(t, threeItems,
+		`#f { width: 300px } #f > div { flex-grow: 1 } #f > div:first-child { float: right }`),
+		[][2]float64{{0, 100}, {100, 100}, {200, 100}}, "a floated item taking its share")
+}
+
+// TestAnAbsolutelyPositionedChildIsPlacedAgainstTheContainer is §4.1: such a
+// box is not an item, and its static position is where it would be if it were
+// the container's only one.
+//
+// The first assertion is the one that matters most, and it is not about
+// alignment: the box was *gone*. A container that was arranged never walked its
+// out-of-flow children, nothing recorded them, and a box the document contains
+// left the page without a word.
+func TestAnAbsolutelyPositionedChildIsPlacedAgainstTheContainer(t *testing.T) {
+	const alone = `<div id="f"><div id="p" style="position: absolute">x</div></div>`
+	const beside = `<div id="f"><div>a</div><div id="p" style="position: absolute">x</div></div>`
+
+	for _, doc := range []string{alone, beside} {
+		root := layoutOf(t, 1000, doc, flexCSS+`#f { width: 300px }`)
+		if n := fragmentsWithID(root, "p"); n != 1 {
+			t.Errorf("the absolutely positioned box is on the page %d times, want "+
+				"once: %s", n, doc)
+		}
+	}
+
+	// Where it is: the start corner of the content box with everything at its
+	// initial value — and *not* after the item beside it, which is where the
+	// block stacking would have put it and where a flex container does not.
+	if got := absAt(t, beside, `#f { width: 300px }`); got != [2]float64{0, 0} {
+		t.Errorf("the box is at %v; it is placed as the container's only item "+
+			"and there is nothing above it", got)
+	}
+
+	// The container's own alignment moves it, which is the whole of §4.1: a
+	// lone item of no size, packed and aligned by the container's properties.
+	if got := absAt(t, beside,
+		`#f { width: 300px; height: 100px; justify-content: center; align-items: flex-end }`); got !=
+		[2]float64{150, 100} {
+		t.Errorf("the box is at %v in a centred container 100px deep, want the "+
+			"middle of its far edge", got)
+	}
+
+	// And it turns with the axis, as a sole item would.
+	if got := absAt(t, beside, `#f { width: 300px; flex-direction: row-reverse }`); got !=
+		[2]float64{300, 0} {
+		t.Errorf("the box is at %v in a reversed row, want the far end", got)
+	}
+}
+
+// absAt is where the box with id "p" ended up.
+func absAt(t *testing.T, htmlSrc, extra string) [2]float64 {
+	t.Helper()
+	root := layoutOf(t, 1000, htmlSrc, flexCSS+extra)
+	var out [2]float64
+	var walk func(*Fragment)
+	walk = func(f *Fragment) {
+		if f == nil {
+			return
+		}
+		if f.Box != nil && f.Box.Element != nil {
+			if id, _ := f.Box.Element.Attr("id"); id == "p" {
+				out = [2]float64{f.BorderRect.X.Px(), f.BorderRect.Y.Px()}
+			}
+		}
+		for _, c := range f.Children {
+			walk(c)
+		}
+	}
+	walk(root)
+	return out
 }

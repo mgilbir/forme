@@ -1237,10 +1237,39 @@ func (b *boxBuilder) fixup(box *Box) {
 	for _, c := range box.Children {
 		b.fixup(c)
 	}
+	unfloatFlexItems(box)
 	box.Children = b.fixupTables(box)
 	box.Children = b.splitBlockInInline(box)
 	box.Children = b.wrapInlines(box)
 	box.Children = b.wrapFlexText(box)
+}
+
+// unfloatFlexItems is CSS Flexible Box Layout §4: "float and clear have no
+// effect on a flex item".
+//
+// A float in a flex container is not a float. It is an item like any other,
+// laid out in its place along the axis — which is not a small difference:
+// float takes a box out of the flow everywhere else in this engine, and a box
+// out of the flow is not an item at all, so a container holding one would
+// arrange the rest of its children around a hole.
+//
+// The property is cleared on the box rather than answered around, because
+// "is this box floating" is asked in a dozen places — the anonymous box rules,
+// the line breaking, the painter — and every one of them wants the same answer
+// here. What the declaration still does is what it did before it reached this:
+// §9.7 has already blockified the box, so "float: left" on a <span> in a flex
+// container makes it a block-level item rather than an inline one.
+func unfloatFlexItems(parent *Box) {
+	if parent.Inner != InnerFlex {
+		return
+	}
+	for _, c := range parent.Children {
+		// Every child, including one that is absolutely positioned — which has
+		// no float to clear, because CSS 2.1 §9.7 took it when the box was
+		// built. That box is out of the flow for a reason of its own and §4.1
+		// keeps it there; this is not what makes it not an item.
+		c.Float = FloatNone
+	}
 }
 
 // wrapFlexText is CSS Flexible Box Layout §4's anonymous flex item: a run of
