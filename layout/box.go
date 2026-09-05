@@ -63,9 +63,11 @@ const (
 	// what an inline-block establishes, and what stops margins collapsing
 	// through it.
 	InnerFlowRoot
-	// InnerFlex, InnerTable and the table-internal contexts are named here and
-	// laid out later; naming them now is what lets the box tree be built once.
+	// InnerFlex, InnerGrid, InnerTable and the table-internal contexts are
+	// named here and laid out later; naming them now is what lets the box tree
+	// be built once.
 	InnerFlex
+	InnerGrid
 	InnerTable
 	InnerTableRowGroup
 	InnerTableRow
@@ -83,6 +85,8 @@ func (i Inner) String() string {
 		return "flow-root"
 	case InnerFlex:
 		return "flex"
+	case InnerGrid:
+		return "grid"
 	case InnerTable:
 		return "table"
 	case InnerTableRowGroup:
@@ -1043,6 +1047,10 @@ func displayOf(cs style.ComputedStyle) (Outer, Inner, bool) {
 		return OuterBlock, InnerFlex, false
 	case "inline-flex":
 		return OuterInline, InnerFlex, false
+	case "grid":
+		return OuterBlock, InnerGrid, false
+	case "inline-grid":
+		return OuterInline, InnerGrid, false
 	case "table":
 		return OuterBlock, InnerTable, false
 	case "inline-table":
@@ -1171,9 +1179,10 @@ func outOfFlowDisplay(outer Outer, inner Inner, float FloatSide, position Positi
 	switch inner {
 	case InnerFlow, InnerFlowRoot:
 		return OuterBlock, InnerFlowRoot
-	case InnerTable, InnerFlex:
+	case InnerTable, InnerFlex, InnerGrid:
 		// The two-value forms whose inner half survives blockification: an
-		// inline-table floats as a table, an inline-flex as a flex container.
+		// inline-table floats as a table, an inline-flex as a flex container,
+		// an inline-grid as a grid.
 		return OuterBlock, inner
 	}
 	// The table-internal displays. §9.7 turns each into its block-level
@@ -1217,6 +1226,8 @@ func twoValueDisplay(value string) (Outer, Inner, bool) {
 		inner = InnerFlowRoot
 	case "flex":
 		inner = InnerFlex
+	case "grid":
+		inner = InnerGrid
 	case "table":
 		inner = InnerTable
 	default:
@@ -1399,7 +1410,7 @@ func isBlockContainer(b *Box) bool {
 // lifted out as a block, which is the opposite of what "inline" asked for.
 func laysOutOwnChildren(b *Box) bool {
 	switch b.Inner {
-	case InnerTable, InnerFlex:
+	case InnerTable, InnerFlex, InnerGrid:
 		return true
 	}
 	return isBlockContainer(b)
