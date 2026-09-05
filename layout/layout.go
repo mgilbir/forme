@@ -430,6 +430,10 @@ type layouter struct {
 	reportedHyphens map[string]bool
 	// reportedHanging is the same for the hanging-punctuation values not applied.
 	reportedHanging map[string]bool
+	// reportedFlex is the flex containers already reported as unarranged, so
+	// that a box asked twice — once by the intrinsic pass and once by layout —
+	// is told about once. See layout/flex.go.
+	reportedFlex map[*Box]bool
 	// reportedLineBreak is the same again for line-break.
 	reportedLineBreak map[string]bool
 	// reportedTextJustify is the same again for text-justify, and is reported
@@ -1091,6 +1095,18 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		// and something was placed because a table occupies its own height
 		// whether or not any cell has content in it.
 		return l.tableContent(b, parent, width, origin), marginRun{}, marginRun{}, true
+	}
+	if b.Inner == InnerFlex && l.flexes(b, width) {
+		// A flex container's children are not a flow either: §9 arranges them
+		// along an axis rather than stacking them. The margins are zero for the
+		// reason a table's are — a flex container establishes its own formatting
+		// context, so nothing inside it collapses through either edge.
+		//
+		// The condition is the gate rather than the display value: a container
+		// this engine cannot arrange falls through to the block stacking below,
+		// which is the page it drew before this existed, and has been reported.
+		// See layout/flex.go.
+		return l.flexContent(b, parent, width, origin), marginRun{}, marginRun{}, true
 	}
 	if len(b.Children) == 0 && !markerInside(b) && b.InsideMarker == nil {
 		// An inside marker is content the box did not have to be given: §12.5.1

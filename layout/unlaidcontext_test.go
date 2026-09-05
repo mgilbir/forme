@@ -26,12 +26,16 @@ func unlaidFindings(t *testing.T, htmlSrc, cssSrc string) []string {
 	return out
 }
 
-// TestAFlexContainerWithItemsSaysItIsNotOne. Until this was reported, a flex
+// TestAGridContainerWithItemsSaysItIsNotOne. Until this was reported, a grid
 // container laid its children out as a column of full-width blocks and the
 // document said nothing — the page was plausible, wrong, and had a clean bill of
 // health.
-func TestAFlexContainerWithItemsSaysItIsNotOne(t *testing.T) {
-	for _, value := range []string{"flex", "inline-flex", "grid", "inline-grid"} {
+//
+// "flex" was here too and is not any more: layout/flex.go arranges the
+// containers it can and reports the rest at the box, with the reason. See
+// layout/flex_test.go.
+func TestAGridContainerWithItemsSaysItIsNotOne(t *testing.T) {
+	for _, value := range []string{"grid", "inline-grid"} {
 		got := unlaidFindings(t, `<div id="f"><div>a</div><div>b</div></div>`,
 			`#f { display: `+value+` }`)
 		if len(got) != 1 {
@@ -59,25 +63,25 @@ func TestOneItemIsEnough(t *testing.T) {
 		`<div id="f">bare text</div>`,
 		`<div id="f"><span>a</span></div>`,
 	} {
-		if got := unlaidFindings(t, doc, `#f { display: flex }`); len(got) != 1 {
+		if got := unlaidFindings(t, doc, `#f { display: grid }`); len(got) != 1 {
 			t.Errorf("%s reported %d findings, want 1: %v", doc, len(got), got)
 		}
 	}
 }
 
-// TestAnEmptyFlexContainerIsTheBoxThatWasAsked. letter-spacing-204 writes
+// TestAnEmptyGridContainerIsTheBoxThatWasAsked. letter-spacing-204 writes
 // "A<span class=flex></span><span class=block></span>D" and spaces the atomic
 // inlines: the flex container is empty, an empty box is empty however it is laid
 // out, and a finding there would say the page was wrong when it was right.
-func TestAnEmptyFlexContainerIsTheBoxThatWasAsked(t *testing.T) {
+func TestAnEmptyGridContainerIsTheBoxThatWasAsked(t *testing.T) {
 	for _, doc := range []string{
 		`<div id="f"></div>`,
 		`<div id="f">   </div>`,
 		`<div id="f"><div style="display: none">a</div></div>`,
 		`<div id="f"><div style="position: absolute">a</div></div>`,
 	} {
-		if got := unlaidFindings(t, doc, `#f { display: flex }`); len(got) != 0 {
-			t.Errorf("%s reported %v; the box holds no flex item and is the box "+
+		if got := unlaidFindings(t, doc, `#f { display: grid }`); len(got) != 0 {
+			t.Errorf("%s reported %v; the box holds no grid item and is the box "+
 				"the specification asks for", doc, got)
 		}
 	}

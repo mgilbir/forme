@@ -278,12 +278,18 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 // unlaidFormattingContext names a display value whose *inner* layout this engine
 // does not do, and says what the box was laid out as instead.
 //
-// The three are one omission with one shape: the value is recognised, the box is
-// built, and then ordinary layout runs inside it. A flex container becomes a
-// column of full-width blocks where a row was asked for, and until this report
-// existed it said nothing at all — which is the plausible, silent wrongness the
-// whole findings vocabulary is against. See style/unimplemented.go, which makes
-// the same argument about a property nothing reads.
+// The two are one omission with one shape: the value is recognised, the box is
+// built, and then ordinary layout runs inside it — a grid becomes a column of
+// full-width blocks where a table of tracks was asked for, and until this
+// report existed it said nothing at all, which is the plausible, silent
+// wrongness the whole findings vocabulary is against. See
+// style/unimplemented.go, which makes the same argument about a property
+// nothing reads.
+//
+// "flex" was here and is not any more: layout/flex.go arranges the containers
+// it can and reports the ones it cannot, at the box, with the reason. A value
+// that is laid out has nothing to say here, and one whose *arrangement* is
+// refused is a fact about the container rather than about the keyword.
 //
 // They are named rather than gathered by exclusion. A list of "everything this
 // engine does not lay out" would go stale in the direction that matters: silent
@@ -292,10 +298,6 @@ func unlaidFormattingContext(value string) (what, laid string) {
 	const asBlocks = "the box and everything in it were laid out as blocks, " +
 		"so the items are stacked rather than arranged"
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "flex":
-		return "flex", asBlocks
-	case "inline-flex":
-		return "inline-flex", asBlocks
 	case "grid":
 		return "grid", asBlocks
 	case "inline-grid":

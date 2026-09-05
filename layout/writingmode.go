@@ -492,8 +492,8 @@ func (l *layouter) subtreeOrientationMix(b *Box) (upright, rotated bool) {
 var physicalGeometry = [...]struct{ name, initial string }{
 	{"width", "auto"},
 	{"height", "auto"},
-	{"min-width", "0"},
-	{"min-height", "0"},
+	{"min-width", "auto"},
+	{"min-height", "auto"},
 	{"max-width", "none"},
 	{"max-height", "none"},
 	{"top", "auto"},

@@ -1012,7 +1012,14 @@ const wptEnv = "WPT_TESTS"
 // annotation in them and one empty "display: inline-flex" alone, because for
 // those the box this engine builds is the box the specification asks for. See
 // layout/pipeline.go's unlaidBoxIsNotTheBoxAsked.
-const wptCleanPassBaseline = 5958
+//
+// 5958 to 5959 is that one document coming back, and it is the same document:
+// text-indent/anonymous-flex-item-001. It was lost when the finding was
+// introduced, because the engine could not build the box the test is named
+// after; it is here again because the engine now builds it. The report was
+// honest while it stood and the pass is honest now, which is the whole of what
+// the entry above was holding out for. See layout/box.go's wrapFlexText.
+const wptCleanPassBaseline = 5959
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
