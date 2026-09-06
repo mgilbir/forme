@@ -82,6 +82,10 @@ type parser struct {
 	// stripNewline records that the element just opened is one whose first
 	// character, if it is a line feed, HTML throws away. See dropFirstNewline.
 	stripNewline bool
+	// pending is the text node still being accumulated, and pendingBuf what has
+	// been accumulated into it. See text and flushText.
+	pending    *Node
+	pendingBuf []byte
 	// ns maps a namespace prefix to the URI it was bound to. See bindNamespaces.
 	ns map[string]string
 }
@@ -119,6 +123,13 @@ func (p *parser) run() {
 		// newline rather than none.
 		strip := p.stripNewline
 		p.stripNewline = false
+		if tk.kind != tokText {
+			// Everything but another run of text ends the one in hand. This is
+			// the only place the accumulator is closed, which is what makes it
+			// safe: no other part of the builder can find a text node whose
+			// Text is behind what has been read into it.
+			p.flushText()
+		}
 		switch tk.kind {
 		case tokEOF:
 			p.finish()
@@ -239,12 +250,41 @@ func (p *parser) text(tk token) {
 	}
 	// Adjacent runs are merged, so no element ever has two text children in a
 	// row — a shape every consumer would otherwise have to handle.
+	//
+	// They are merged into a buffer rather than by "+=", because a document
+	// decides how many times that happens. Anything the tokenizer drops without
+	// producing a token splits a run in two — a comment, a processing
+	// instruction, a stray "<" — so "x<!---->" repeated is one text node built
+	// one byte at a time, and "+=" copies the whole node each time: six
+	// megabytes of it took thirty-six seconds and reported no problem at all.
+	// The buffer makes it the linear work it looks like.
 	if n := len(parent.Children); n > 0 && parent.Children[n-1].Type == TextNode {
-		parent.Children[n-1].Text += tk.text
+		if last := parent.Children[n-1]; p.pending != last {
+			p.flushText()
+			p.pending, p.pendingBuf = last, append(p.pendingBuf[:0], last.Text...)
+		}
+		p.pendingBuf = append(p.pendingBuf, tk.text...)
 		return
 	}
+	p.flushText()
 	p.nodes++
-	parent.appendChild(&Node{Type: TextNode, Text: tk.text, Offset: tk.offset})
+	node := &Node{Type: TextNode, Text: tk.text, Offset: tk.offset}
+	parent.appendChild(node)
+	p.pending, p.pendingBuf = node, append(p.pendingBuf[:0], tk.text...)
+}
+
+// flushText writes the accumulated run into the node it belongs to.
+//
+// Node.Text is behind the accumulator between the first merge and this call, so
+// every path that can look at a text node has to go through here first. Exactly
+// one does — the token loop — and it calls this for every token that is not
+// itself text, which includes the end of the document.
+func (p *parser) flushText() {
+	if p.pending == nil {
+		return
+	}
+	p.pending.Text = string(p.pendingBuf)
+	p.pending, p.pendingBuf = nil, p.pendingBuf[:0]
 }
 
 // room reports whether another node may be added, recording the trip if not.
@@ -629,6 +669,10 @@ func (p *parser) skipRaw(name string, off int) {
 
 // finish reports the elements still open at the end of the document.
 func (p *parser) finish() {
+	// The document may end on a run of text — an ordinary end of file, or a
+	// bound that stopped the tree mid-token — so the accumulator is closed here
+	// too rather than only in the token loop.
+	p.flushText()
 	for i := len(p.open) - 1; i >= 0; i-- {
 		el := p.open[i]
 		if el == p.html || el == p.head || el == p.body {
