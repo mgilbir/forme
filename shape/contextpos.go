@@ -138,7 +138,7 @@ func (sh shaper) applyGPOSAt(idx int, buf []Glyph, at, depth int) int {
 // to them — which is what lets this coexist with the flat pass for a lookup that
 // is both named by a feature and reached from a rule. Noto Serif Tibetan has one.
 func (sh shaper) markAttachAt(sub []byte, buf []Glyph, at, flags int, mkmk bool) int {
-	st, ok := readMarkSubtable(sub, 0, false)
+	st, ok := readMarkSubtable(sub, 0, false, sh.covWork)
 	if !ok {
 		return 0
 	}

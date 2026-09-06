@@ -145,6 +145,14 @@ const (
 	// maxSubtableList bounds the subtables of one lookup, and is the format's
 	// own maximum for the same reason.
 	maxSubtableList = 0xFFFF
+	// maxCoverageGlyphs bounds the glyphs one coverage table may name.
+	//
+	// A coverage table lists the glyphs a lookup applies to, so no valid one
+	// names more glyphs than the font has — and a font has at most 65,536.
+	// Format 2 states them as ranges, six bytes each, so six bytes can name the
+	// whole space: the bound cannot come from the table's own size and has to
+	// be this.
+	maxCoverageGlyphs = 1 << 16
 	// The FeatureVariations walk. A real face states a handful of records — Noto
 	// Sans Oriya states one — and each names a few conditions and a few
 	// substituted features.
@@ -384,6 +392,20 @@ type layout struct {
 	// glyphClass is GDEF's classification of each glyph: 1 base, 2 ligature,
 	// 3 mark, 4 component. A glyph GDEF does not name is class 0, unknown.
 	glyphClass map[int]int
+	// covWork is what is left of this layout's allowance for expanding coverage
+	// ranges, and is spent only while the layout is being read.
+	//
+	// One budget for the whole table rather than one per range. A format 2
+	// record is six bytes and may name sixty-five thousand glyphs, and a table
+	// may hold as many records as its bytes allow — and its lookups may point
+	// at the same record over and over. Bounded per range, a hundred and twenty
+	// kilobytes of coverage cost a second and a half at *load*, linear in the
+	// bytes at about thirteen microseconds each. The class definition beside it
+	// has had a total guard since it was written; this had none.
+	//
+	// It is written only by the reader that builds the layout, before the
+	// layout is shared, so it is not state two documents can reach.
+	covWork int
 	// substFlags is the lookup flags of the lookups the substitutions came
 	// from, so that shaping can skip the glyphs those lookups are declared to
 	// ignore. Kerning keeps its flags per lookup — see kern.
@@ -606,6 +628,7 @@ func readPositioning(tables map[string][]byte, sel featureSet, coords []float64)
 		singlePos:  map[int]singleAdjust{},
 		markGlyphs: map[int]bool{},
 		cursive:    map[int]cursiveAnchors{},
+		covWork:    coverageBudget(tables["GPOS"], tables["GDEF"], tables["kern"]),
 	}
 	l.readGDEF(tables["GDEF"])
 	if gpos := tables["GPOS"]; len(gpos) >= 10 {
@@ -635,6 +658,10 @@ func readPositioning(tables map[string][]byte, sel featureSet, coords []float64)
 func readLayout(tables map[string][]byte, gsubSel featureSet, pos *layout, coords []float64) *layout {
 	l := new(layout)
 	*l = *pos
+	// Its own allowance: the positioning half spent one on its own tables, and
+	// this reads a different table. Copying what was left would make how much
+	// of GSUB is read depend on how large GPOS happened to be.
+	l.covWork = coverageBudget(tables["GSUB"])
 	l.ligatures = map[int][]ligature{}
 	l.single = map[string]map[int]int{}
 	l.gsub = nil
@@ -1013,7 +1040,7 @@ func (l *layout) pairPosFormat1(kl *kernLookup, sub []byte) {
 	if len(sub) < 10 {
 		return
 	}
-	first := coverageGlyphs(sub, font.Be16(sub, 2))
+	first := coverageGlyphs(sub, font.Be16(sub, 2), &l.covWork)
 	fmt1, fmt2 := font.Be16(sub, 4), font.Be16(sub, 6)
 	// Only a horizontal advance on the first glyph is kerning; anything else in
 	// the record is a positioning this package does not apply, and it is
@@ -1053,7 +1080,7 @@ func (l *layout) pairPosFormat2(kl *kernLookup, sub []byte) {
 	if len(sub) < 16 {
 		return
 	}
-	covered := coverageGlyphs(sub, font.Be16(sub, 2))
+	covered := coverageGlyphs(sub, font.Be16(sub, 2), &l.covWork)
 	fmt1, fmt2 := font.Be16(sub, 4), font.Be16(sub, 6)
 	class1 := classDef(sub, font.Be16(sub, 8))
 	class2 := classDef(sub, font.Be16(sub, 10))
@@ -1180,10 +1207,32 @@ func xAdvance(rec []byte, format int) (int, bool) {
 	return signed16(font.Be16(rec, off)), true
 }
 
+// coverageBudget is how much coverage expansion reading a set of tables may ask
+// for.
+//
+// Proportional to their size for the reason subtableBudget is: a well-formed
+// table's coverage costs about what its bytes cost, and a crafted one's does
+// not. The multiplier is generous — a coverage record is six bytes and real
+// ranges are short — and the floor is there so that a small table naming one
+// long range is not cut short.
+func coverageBudget(tables ...[]byte) int {
+	n := maxCoverageGlyphs
+	for _, t := range tables {
+		n += 8 * len(t)
+	}
+	return n
+}
+
 // coverageGlyphs returns the glyphs a coverage table covers, in coverage-index
-// order — which is the order the tables that use it index by.
-func coverageGlyphs(base []byte, off int) []int {
-	if off <= 0 || off+4 > len(base) {
+// order — which is the order the tables that use it index by — spending what it
+// expands from a budget.
+//
+// A nil budget is no allowance at all, for the reason an unbudgeted shaper
+// cannot recurse: every reader here draws on either the layout being built or
+// the run being shaped, so a nil one is a reader assembled outside both, which
+// is the state the bound exists to make impossible.
+func coverageGlyphs(base []byte, off int, budget *int) []int {
+	if budget == nil || off <= 0 || off+4 > len(base) {
 		return nil
 	}
 	c := base[off:]
@@ -1192,9 +1241,10 @@ func coverageGlyphs(base []byte, off int) []int {
 		n := font.Be16(c, 2)
 		out := make([]int, 0, n)
 		for i := 0; i < n; i++ {
-			if 4+2*i+2 > len(c) {
+			if 4+2*i+2 > len(c) || *budget <= 0 {
 				break
 			}
+			*budget--
 			out = append(out, font.Be16(c, 4+2*i))
 		}
 		return out
@@ -1211,7 +1261,8 @@ func coverageGlyphs(base []byte, off int) []int {
 			if end < start || end-start > maxPairs {
 				continue
 			}
-			for g := start; g <= end; g++ {
+			for g := start; g <= end && *budget > 0; g++ {
+				*budget--
 				at := idx + (g - start)
 				for len(out) <= at {
 					out = append(out, 0)
@@ -1284,7 +1335,7 @@ func (l *layout) ligatureSubst(sub []byte) {
 	if len(sub) < 6 || font.Be16(sub, 0) != 1 {
 		return
 	}
-	first := coverageGlyphs(sub, font.Be16(sub, 2))
+	first := coverageGlyphs(sub, font.Be16(sub, 2), &l.covWork)
 	setCount := font.Be16(sub, 4)
 	for i := 0; i < setCount && i < len(first); i++ {
 		if 6+2*i+2 > len(sub) {
@@ -1448,7 +1499,7 @@ func (l *layout) singleSubst(tag string, sub []byte) {
 	if len(sub) < 6 {
 		return
 	}
-	covered := coverageGlyphs(sub, font.Be16(sub, 2))
+	covered := coverageGlyphs(sub, font.Be16(sub, 2), &l.covWork)
 	if l.single[tag] == nil {
 		l.single[tag] = map[int]int{}
 	}
@@ -1527,7 +1578,7 @@ func (l *layout) readMarkGlyphSets(gdef []byte) {
 			continue
 		}
 		set := map[int]bool{}
-		for _, gid := range coverageGlyphs(sets, co) {
+		for _, gid := range coverageGlyphs(sets, co, &l.covWork) {
 			set[gid] = true
 		}
 		l.markSets = append(l.markSets, set)

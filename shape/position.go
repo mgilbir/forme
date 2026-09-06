@@ -557,7 +557,7 @@ func (l *layout) singlePosSubtable(sub []byte) {
 	if len(sub) < 6 {
 		return
 	}
-	covered := coverageGlyphs(sub, font.Be16(sub, 2))
+	covered := coverageGlyphs(sub, font.Be16(sub, 2), &l.covWork)
 	format := font.Be16(sub, 0)
 	valueFormat := font.Be16(sub, 4)
 	size := valueSize(valueFormat)
@@ -613,7 +613,7 @@ func (l *layout) cursivePos(sub []byte) {
 	if len(sub) < 6 || font.Be16(sub, 0) != 1 {
 		return
 	}
-	covered := coverageGlyphs(sub, font.Be16(sub, 2))
+	covered := coverageGlyphs(sub, font.Be16(sub, 2), &l.covWork)
 	n := font.Be16(sub, 4)
 	for i := 0; i < n && i < len(covered); i++ {
 		rec := 6 + 4*i
@@ -652,7 +652,7 @@ func (l *layout) readMarkAttachment(subs [][]byte, flags, markSet int, ligature,
 	lookup := l.markLookups
 	l.markLookups++
 	for _, sub := range subs {
-		st, ok := readMarkSubtable(sub, lookup, ligature)
+		st, ok := readMarkSubtable(sub, lookup, ligature, &l.covWork)
 		if !ok {
 			continue
 		}
@@ -669,12 +669,12 @@ func (l *layout) readMarkAttachment(subs [][]byte, flags, markSet int, ligature,
 }
 
 // readMarkSubtable reads one mark-attachment subtable.
-func readMarkSubtable(sub []byte, lookup int, ligature bool) (markAttachment, bool) {
+func readMarkSubtable(sub []byte, lookup int, ligature bool, budget *int) (markAttachment, bool) {
 	if len(sub) < 12 || font.Be16(sub, 0) != 1 {
 		return markAttachment{}, false
 	}
-	markCoverage := coverageGlyphs(sub, font.Be16(sub, 2))
-	baseCoverage := coverageGlyphs(sub, font.Be16(sub, 4))
+	markCoverage := coverageGlyphs(sub, font.Be16(sub, 2), budget)
+	baseCoverage := coverageGlyphs(sub, font.Be16(sub, 4), budget)
 	classCount := font.Be16(sub, 6)
 	markArrayOff := font.Be16(sub, 8)
 	baseArrayOff := font.Be16(sub, 10)

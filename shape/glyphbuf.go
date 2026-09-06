@@ -373,7 +373,7 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	// below reads the tables through it.
 	sh := shaper{f: f, l: f.layoutFor(script), rtl: rtl, ligIDs: new(int),
 		zeroMarks: zeroMarkWidthsFor(script), features: ctx.features,
-		ops: lookupBudget(len(buf))}
+		ops: lookupBudget(len(buf)), covWork: markCoverageBudget(len(buf))}
 	// A script whose characters are not in the order they are drawn is shaped
 	// whole by its own pass: the reordering decides which of the font's rules
 	// apply where, so it cannot be a step before the general substitutions and

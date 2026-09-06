@@ -105,6 +105,26 @@ func lookupBudget(glyphs int) *int {
 	return &n
 }
 
+// markCoverageBudget is a run's allowance for expanding the coverage of the mark
+// subtables its rules reach.
+//
+// It scales with the run for the reason lookupBudget does — a longer run
+// legitimately attaches more marks — and the per-glyph share is a whole glyph
+// space, sixty times what two coverages of a real mark subtable name. The floor
+// is there so that a one-word run is not held to less than a subtable's worth,
+// and the ceiling so that a very long run cannot ask for unbounded work.
+//
+// The clamp is on the glyphs and not on the product, so that the arithmetic
+// cannot overflow where int is thirty-two bits.
+func markCoverageBudget(glyphs int) *int {
+	const floor, ceiling = 16, 1 << 10 // in glyph spaces
+	if glyphs > ceiling-floor {
+		glyphs = ceiling - floor
+	}
+	n := maxCoverageGlyphs * (floor + glyphs)
+	return &n
+}
+
 // recurse reports whether a matched rule may apply another lookup, spending one
 // unit of the run's allowance when it may.
 //

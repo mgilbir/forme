@@ -395,6 +395,15 @@ type shaper struct {
 	// hundred bytes of font. See lookupBudget.
 	ops *int
 
+	// covWork is what is left of the run's allowance for expanding the coverage
+	// of the mark subtables its rules reach. A pointer for the same reason ops
+	// is: the allowance belongs to the run.
+	//
+	// Those subtables are read where they are applied rather than at load — see
+	// markAttachAt — so their cost is per application and the layout's
+	// load-time allowance cannot cover it. See markCoverageBudget.
+	covWork *int
+
 	// markSet is the mark glyph set the lookup being applied names, or -1. It
 	// travels on the shaper rather than through every matcher's arguments
 	// because it belongs to the lookup, and a shaper is copied per lookup — so
