@@ -142,6 +142,15 @@ func subsetCFF(data []byte, keep []bool) ([]byte, error) {
 	// Local subroutines live after the Private DICT and are named from inside
 	// it, relative to its start — so as long as the Private DICT moves as a
 	// unit with them, that offset stays correct and needs no rewriting.
+	//
+	// "As a unit" is the whole of it, and it is why what follows the DICT is
+	// taken from the end of the DICT rather than from where the Subrs operand
+	// points. Nothing in the format says the INDEX begins where the DICT ends:
+	// a font is free to leave bytes between them, and copying the two out
+	// separately and writing them back to back closes that gap — which moves
+	// the INDEX and leaves the operand naming the distance it used to be at.
+	// Copying the gap keeps every offset inside the region true of the region
+	// wherever it is put.
 	var localSubrs []byte
 	if privBlob != nil {
 		privOps, _, err := parseCFFDict(privBlob)
@@ -149,13 +158,22 @@ func subsetCFF(data []byte, keep []bool) ([]byte, error) {
 			return nil, err
 		}
 		for _, e := range privOps {
-			if e.op == opSubrs && len(e.operands) == 1 && e.operands[0] > 0 {
-				idx, err := readCFFIndex(data, privOff+e.operands[0])
-				if err != nil {
-					return nil, err
-				}
-				localSubrs = data[privOff+e.operands[0] : idx.end]
+			if e.op != opSubrs || len(e.operands) != 1 || e.operands[0] <= 0 {
+				continue
 			}
+			if e.operands[0] < privSize {
+				return nil, errors.New("fonts: a CFF Private DICT names local " +
+					"subroutines inside itself")
+			}
+			idx, err := readCFFIndex(data, privOff+e.operands[0])
+			if err != nil {
+				return nil, err
+			}
+			if idx.end < privOff+privSize {
+				return nil, errors.New("fonts: a CFF local subroutine INDEX ends " +
+					"before the Private DICT it belongs to")
+			}
+			localSubrs = data[privOff+privSize : idx.end]
 		}
 	}
 

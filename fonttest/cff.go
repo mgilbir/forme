@@ -43,6 +43,18 @@ type CFFOptions struct {
 	// version of the collection and counts up, so this is malformed; it is here
 	// because it is malformed in a way that parses.
 	NegativeSupplement bool
+	// LocalSubrs is how many local subroutines the Private DICT names, and
+	// LocalSubrsGap how many bytes sit between the end of that DICT and the
+	// INDEX holding them.
+	//
+	// The gap is the point. Nothing in the format says the two are adjacent —
+	// the Subrs operand is a distance from the start of the Private DICT and
+	// says nothing about what lies between — so a font is free to leave bytes
+	// there, and a subsetter that copies the two out separately and writes them
+	// back to back closes the gap and leaves the operand naming where the INDEX
+	// used to be.
+	LocalSubrs    int
+	LocalSubrsGap int
 }
 
 // CFF builds a CFF table: the header, the four INDEXes, a Private DICT and one
@@ -92,6 +104,20 @@ func CFF(opts CFFOptions) []byte {
 	// length as the one written against the real ones and nothing shifts under
 	// it. The fixture checks that rather than trusting it.
 	priv := cffPrivateDict()
+	// The local subroutines, and whatever the font leaves between them and the
+	// DICT that names them. The operand is written in the same fixed three-byte
+	// form as the rest, so its own size is known before its value is.
+	var subrsBlob []byte
+	if opts.LocalSubrs > 0 {
+		const operandAndOp = 4
+		priv = append(priv, cffOperand3(len(priv)+operandAndOp+opts.LocalSubrsGap)...)
+		priv = append(priv, 19) // Subrs
+		items := make([][]byte, opts.LocalSubrs)
+		for i := range items {
+			items[i] = []byte{11} // return: a subroutine that does nothing
+		}
+		subrsBlob = append(make([]byte, opts.LocalSubrsGap), cffINDEX(items...)...)
+	}
 	top := func(csOff, privOff int) []byte {
 		var d []byte
 		if opts.CIDKeyed {
@@ -122,6 +148,7 @@ func CFF(opts CFFOptions) []byte {
 	data = append(data, cffINDEX()...) // Global Subr INDEX, empty
 	privOff := len(data)
 	data = append(data, priv...)
+	data = append(data, subrsBlob...)
 	csOff := len(data)
 
 	const endchar = 14
