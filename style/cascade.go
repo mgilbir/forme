@@ -38,6 +38,10 @@ const (
 type Sheet struct {
 	Origin Origin
 	Rules  []css.Rule
+	// Name says which stylesheet this is, for a finding to point at. It is
+	// whatever the caller called it — a URL, a file name — and is empty for the
+	// document's own <style>, which has no name to give.
+	Name string
 }
 
 // A Finding is something the styling stage noticed and a caller should hear
@@ -49,8 +53,27 @@ type Sheet struct {
 // the guardrail framework in phase 3; until then this carries the information so
 // that nothing has to be reconstructed later.
 type Finding struct {
-	// Offset is the byte offset in the stylesheet the finding came from.
+	// Offset is the byte offset the finding came from, in whatever Sheet and
+	// InMarkup say it is an offset into. It is -1 for a finding about the
+	// styling as a whole, which is in no file at all — reporting one of those
+	// at byte nought of a stylesheet sends an author to the top of a file to
+	// look for something that is not there.
 	Offset int
+	// Sheet names the stylesheet Offset is in. It is empty for the document's
+	// own <style>, which the caller supplies without a name, and for a finding
+	// that is not in a stylesheet.
+	//
+	// A document is styled by several sheets — its own, every <link>, and
+	// everything those @import — and a byte offset means nothing without the
+	// one it is into. The stage that turns these into the caller's findings
+	// cannot recover it: by the time it runs, the sheets have been prepared
+	// into one list and the rule no longer says where it came from.
+	Sheet string
+	// InMarkup says Offset is a byte offset into the *document* rather than
+	// into a stylesheet, because the declaration was written in a style
+	// attribute. Pointing an author at "byte 412 of the stylesheet" for a
+	// declaration in the markup sends them to the wrong file.
+	InMarkup bool
 	// Message says what happened.
 	Message string
 	// Unsupported marks correct CSS this engine does not implement — the
@@ -93,6 +116,18 @@ type Styler struct {
 	// query about a width is false against it — see Media.
 	media    Media
 	findings []Finding
+	// sheet is the name of the stylesheet being prepared, and is what report
+	// stamps on a finding raised while one is. It is empty outside prepare,
+	// which is where the findings that belong to no sheet are raised.
+	sheet string
+	// attrOffset is where in the *markup* the style attribute being expanded
+	// was written, or -1 outside one.
+	//
+	// A declaration in an attribute has an offset of its own, and it is an
+	// offset into the attribute's value — a string the author does not have a
+	// file of. What they can be pointed at is the element that carries it, so
+	// that is what a finding raised from in here says instead.
+	attrOffset int
 	// seen suppresses repeat reports of the same unsupported property. A
 	// stylesheet using "flex-wrap" forty times is one thing an author needs to
 	// be told, not forty.
@@ -197,7 +232,8 @@ func ApplyWith(doc *html.Node, sheets []Sheet, m Metrics) Styled {
 // answered either way, because that one is a fact about this engine rather than
 // about the page: it renders for paper.
 func ApplyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) Styled {
-	s := &Styler{matcher: NewMatcher(doc), media: media, seen: map[string]bool{}}
+	s := &Styler{matcher: NewMatcher(doc), media: media, seen: map[string]bool{},
+		attrOffset: -1}
 
 	// Expand shorthands and drop what the engine does not implement, once for
 	// the whole run rather than once per element — the answer does not depend
@@ -343,6 +379,7 @@ func ApplyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) Styled {
 	out.Incomplete = s.matcher.Tripped()
 	if out.Incomplete {
 		s.report(Finding{
+			Offset: -1,
 			Message: "matching stopped early: some rules did not get the chance " +
 				"to apply, so this document is styled less than its stylesheet describes",
 		})
@@ -372,10 +409,15 @@ func (s *Styler) prepare(sheets []Sheet) []preparedRule {
 	order := 0
 
 	for _, sheet := range sheets {
+		s.sheet = sheet.Name
 		for _, rule := range sheet.Rules {
 			s.prepareRule(rule, nil, sheet.Origin, &out, &order)
 		}
 	}
+	// Everything raised after this belongs to no one sheet: the cascade reads
+	// the prepared rules of all of them at once, and a style attribute is not
+	// in a sheet at all.
+	s.sheet = ""
 	return out
 }
 
@@ -1437,10 +1479,17 @@ func shorthandLonghands(name string) []string {
 
 func (s *Styler) report(f Finding) {
 	switch {
+	case s.attrOffset >= 0 && !f.InMarkup:
+		f.Offset, f.InMarkup, f.Sheet = s.attrOffset, true, ""
+	case f.Sheet == "" && !f.InMarkup:
+		f.Sheet = s.sheet
+	}
+	switch {
 	case len(s.findings) > maxFindings:
 		return
 	case len(s.findings) == maxFindings:
 		s.findings = append(s.findings, Finding{
+			Offset:  -1,
 			Message: "further styling problems were not reported",
 		})
 	default:
@@ -1718,6 +1767,7 @@ func (s *Styler) resolve(name string, prop property, value string, have bool, pa
 			if !s.seen["revert"] {
 				s.seen["revert"] = true
 				s.report(Finding{
+					Offset: -1,
 					Message: "\"revert\" is not implemented and was read as \"unset\", " +
 						"which differs wherever a lower-priority stylesheet set the property",
 					Unsupported: true,
@@ -1830,10 +1880,15 @@ func (s *Styler) inlineDeclarations(n *html.Node) map[string]preparedDecl {
 	decls, _, errs := css.ParseDeclarations(raw)
 	for _, e := range errs {
 		s.report(Finding{
-			Offset: n.Offset, Message: "in a style attribute: " + e.Message,
+			Offset: n.Offset, InMarkup: true,
+			Message:     "in a style attribute: " + e.Message,
 			Unsupported: e.Unsupported,
 		})
 	}
+
+	// Everything expanded from here on is in the attribute, and says so.
+	s.attrOffset = n.Offset
+	defer func() { s.attrOffset = -1 }()
 
 	out := map[string]preparedDecl{}
 	for i, d := range decls {

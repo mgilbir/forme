@@ -185,7 +185,7 @@ func BuildFor(in Input, page PageSize) Built {
 	for _, f := range styled.Findings {
 		rec.ReportDetail(Finding{
 			Rule:     ruleForStyleFinding(f),
-			Source:   AtCSS(f.Offset),
+			Source:   styleFindingSource(f),
 			Message:  f.Message,
 			Property: f.Property,
 		})
@@ -234,7 +234,27 @@ func parseSheet(rec *Recorder, origin style.Origin, name, src string,
 	}
 	rules = splitFontFaces(rules, name, faces)
 	collectPageRules(rules, name, origin, nil, pages)
-	return style.Sheet{Origin: origin, Rules: rules}
+	return style.Sheet{Origin: origin, Rules: rules, Name: name}
+}
+
+// styleFindingSource says where a styling finding happened, in the terms a
+// caller points an author with.
+//
+// Three answers, and each of them was one before: an offset into a named
+// stylesheet, an offset into the markup where the declaration was written in a
+// style attribute, and nowhere at all for a finding about the styling as a
+// whole. All three used to come out as "byte N of the stylesheet" with no name
+// on it — which for a document with a <style>, three <link>s and their imports
+// is an offset into one of five files and no way to tell which, and for the
+// other two an offset into a file it is not an offset into.
+func styleFindingSource(f style.Finding) Source {
+	switch {
+	case f.Offset < 0:
+		return NoSource
+	case f.InMarkup:
+		return AtHTML(f.Offset)
+	}
+	return Source{HTMLOffset: -1, CSSOffset: f.Offset, Sheet: f.Sheet}
 }
 
 // ruleForStyleFinding maps the styling stage's report onto a rule.
