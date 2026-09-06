@@ -1740,7 +1740,19 @@ func (sh shaper) indicFinalReorder(buf []Glyph, info []indicInfo, plan *indicPla
 	// The reph. It was left at the front through the substitutions, because
 	// that is where the font's rule for making it is written; where it is drawn
 	// is each script's own answer.
-	if start+1 < end && info[start].pos == posRaToBecomeReph {
+	//
+	// It moves only if there is one, and the two ways of having one are
+	// opposite tests. A repha written as its own character already is the mark
+	// — 'rphf' has nothing to make of it — so it moves unless the font ligated
+	// it into something else. A Ra and a virama are a reph only once 'rphf' has
+	// made one of them, so that pair moves only if the font did: a font may
+	// declare the form generally and block it in context, and a Ra it left as
+	// an ordinary letter is an ordinary letter. Moving that pair rotated a bare
+	// virama to the front of the syllable and left the consonant where the mark
+	// should be, which is not a thing the script writes. The pre-base Ra beside
+	// this has had the same test since it was written; the reph had none.
+	if start+1 < end && info[start].pos == posRaToBecomeReph &&
+		(info[start].cat == catRepha) != info[start].ligated {
 		if newPos := indicRephPosition(info, plan, start, end, base); newPos > start {
 			if start < base && base <= newPos {
 				base--
