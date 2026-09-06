@@ -184,18 +184,46 @@ func (t *tokenizer) add(e Error) {
 }
 
 // next produces one token.
+//
+// Half of what a document is made of produces no token at all — a comment, a
+// processing instruction, a declaration, a stray "<" — and the reader has to
+// go round again for each one. It goes round in a loop rather than by calling
+// itself, because a document is allowed to be 64 MB of nothing but those: at
+// one frame per skipped construct, fourteen megabytes of comments is a
+// "fatal error: stack overflow", which no recover catches and which takes the
+// whole process down with every other document in flight. A loop is the same
+// work in a fixed frame.
 func (t *tokenizer) next() token {
+	for {
+		before := t.pos
+		if tok, ok := t.step(); ok {
+			return tok
+		}
+		if t.pos == before {
+			// Every branch that produces no token says so by consuming the
+			// construct it skipped; one that consumed nothing would spin here
+			// for ever. No input can reach this — it is a branch added later
+			// that forgot to advance — so it stops rather than hangs.
+			panic("html: the tokenizer skipped a construct without consuming it")
+		}
+	}
+}
+
+// step produces at most one token and reports whether it produced one. A false
+// second result means a construct was consumed that has no token to show for
+// it; next calls step again.
+func (t *tokenizer) step() (token, bool) {
 	if t.raw != "" {
-		return t.rawText()
+		return t.rawText(), true
 	}
 	if t.pos >= len(t.src) {
-		return token{kind: tokEOF, offset: len(t.src)}
+		return token{kind: tokEOF, offset: len(t.src)}, true
 	}
 
 	if t.src[t.pos] == '<' {
 		return t.markup()
 	}
-	return t.text()
+	return t.text(), true
 }
 
 // text reads character data up to the next "<".
@@ -337,8 +365,9 @@ func (t *tokenizer) findEndTag(name string, i int) int {
 	}
 }
 
-// markup reads whatever begins with "<".
-func (t *tokenizer) markup() token {
+// markup reads whatever begins with "<". Like step, whose contract it shares,
+// a false second result means the construct was consumed and produced nothing.
+func (t *tokenizer) markup() (token, bool) {
 	start := t.pos
 
 	// A comment. Dropped rather than tokenized: nothing downstream has any use
@@ -346,21 +375,21 @@ func (t *tokenizer) markup() token {
 	if strings.HasPrefix(t.src[t.pos:], "<!--") {
 		if end := strings.Index(t.src[t.pos+4:], "-->"); end >= 0 {
 			t.pos += 4 + end + 3
-			return t.next()
+			return token{}, false
 		}
 		t.fail(start, "a comment that is never closed")
 		t.pos = len(t.src)
-		return t.next()
+		return token{}, false
 	}
 
 	if hasPrefixFold(t.src[t.pos:], "<!doctype") {
-		return t.doctype()
+		return t.doctype(), true
 	}
 
 	if strings.HasPrefix(t.src[t.pos:], "<![") || strings.HasPrefix(t.src[t.pos:], "<!") {
 		t.fail(start, "a declaration this engine does not read")
 		t.skipTo('>')
-		return t.next()
+		return token{}, false
 	}
 
 	if strings.HasPrefix(t.src[t.pos:], "<?") {
@@ -377,7 +406,7 @@ func (t *tokenizer) markup() token {
 			t.fail(start, "a processing instruction, which HTML has none of")
 		}
 		t.skipTo('>')
-		return t.next()
+		return token{}, false
 	}
 
 	if strings.HasPrefix(t.src[t.pos:], "</") {
@@ -390,9 +419,9 @@ func (t *tokenizer) markup() token {
 	if t.pos+1 >= len(t.src) || !isNameStart(t.src[t.pos+1]) {
 		t.fail(start, "a \"<\" that does not begin a tag; write \"&lt;\" for a literal one")
 		t.pos++
-		return t.next()
+		return token{}, false
 	}
-	return t.startTag()
+	return t.startTag(), true
 }
 
 func (t *tokenizer) skipTo(c byte) {
@@ -410,14 +439,14 @@ func (t *tokenizer) doctype() token {
 	return token{kind: tokDoctype, offset: start}
 }
 
-func (t *tokenizer) endTag() token {
+func (t *tokenizer) endTag() (token, bool) {
 	start := t.pos
 	t.pos += 2
 	name := t.readName()
 	if name == "" {
 		t.fail(start, "an end tag with no name")
 		t.skipTo('>')
-		return t.next()
+		return token{}, false
 	}
 	t.skipSpace()
 	if t.pos < len(t.src) && t.src[t.pos] == '>' {
@@ -426,7 +455,7 @@ func (t *tokenizer) endTag() token {
 		t.fail(start, "the end tag </"+name+" is not closed with \">\"")
 		t.skipTo('>')
 	}
-	return token{kind: tokEndTag, name: name, offset: start}
+	return token{kind: tokEndTag, name: name, offset: start}, true
 }
 
 func (t *tokenizer) startTag() token {
