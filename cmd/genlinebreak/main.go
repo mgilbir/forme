@@ -213,6 +213,30 @@ var aksaraClasses = map[string]bool{"AK": true, "AS": true}
 // between two typographic character units, which is where the words are not.
 var dictionaryClasses = map[string]bool{"SA": true}
 
+// ideographicClasses is what breaks like an ideograph: a character a line may
+// end after and begin with, which is what lets CJK wrap without spaces.
+//
+// ID is Unicode's own Ideographic class. CJ is the Conditional Japanese
+// Starter — the small kana and the prolonged sound mark — which UAX #14 leaves
+// to a tailoring and CSS Text §5.3 resolves to ID under every value but
+// "strict"; the strict prohibition is strictNoBreakRanges above, so this is
+// where the other three values get their answer. H2 and H3 are the Hangul
+// syllables, which wrap the same way and which no reader of this table would
+// think to look for under "ideographic".
+//
+// The conjoining jamo are deliberately not here. LB26 forbids a break inside a
+// jamo sequence and nothing in this package would know to withdraw one, so a
+// syllable spelt in jamo keeps the single opportunity its first character
+// offers rather than gaining one between every piece of it.
+//
+// It replaces six ranges typed out by hand — the two main CJK blocks, the
+// compatibility ideographs, kana, Hangul syllables, and everything from
+// U+20000 to U+2FA1F. Halfwidth katakana, the fullwidth Latin letters,
+// extensions G and H, Yi, Bopomofo, the Kangxi radicals and the enclosed CJK
+// numerals are all class ID and were in none of them, so none of them wrapped
+// at all.
+var ideographicClasses = map[string]bool{"ID": true, "CJ": true, "H2": true, "H3": true}
+
 // prefixClasses is the class a line may end after under "loose" and no other
 // value: a currency sign or a number sign that belongs to the figure following
 // it.
@@ -253,6 +277,7 @@ func main() {
 
 	version := "unknown"
 	var spans, glue, strict, loose, prefix, postfix, inseparable, open, after, aksara, dict []span
+	var ideographic []span
 	seen := map[string]bool{}
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
@@ -308,6 +333,9 @@ func main() {
 		if openClasses[class] {
 			open = append(open, span{lo, hi, class})
 		}
+		if ideographicClasses[class] {
+			ideographic = append(ideographic, span{lo, hi, class})
+		}
 		if inseparableClasses[class] {
 			inseparable = append(inseparable, span{lo, hi, class})
 		}
@@ -343,7 +371,7 @@ func main() {
 	}
 	for _, set := range []map[string]bool{looseBreakClasses, prefixClasses, postfixClasses,
 		inseparableClasses, openClasses, breakAfterClasses, aksaraClasses,
-		dictionaryClasses} {
+		dictionaryClasses, ideographicClasses} {
 		for class := range set {
 			if !seen[class] {
 				fmt.Fprintf(os.Stderr, "genlinebreak: no character has class %s; has it been renamed?\n", class)
@@ -414,6 +442,17 @@ package paragraph
 // spaces are U+0020 and the other space separators, which have their own arms
 // in SplitAtBreaks, and the hyphens are classes HY and HH, which have theirs
 // because a line may not begin with one either.`, version)
+	emit(&w, "ideographicRanges", ideographic, `// The characters that break like an ideograph, UAX #14's classes ID and CJ and
+// the Hangul syllables H2 and H3. Unicode %s.
+//
+// %d ranges, merged from %d the file states separately: %s.
+// A line may end after one of these and begin with one, which is the whole of
+// how CJK wraps without spaces. The prohibitions that take some of those
+// opportunities back — a line may not begin with a small kana under
+// "line-break: strict" — are the tables above; this one is the opportunity.
+//
+// See ideographicClasses in cmd/genlinebreak for what is deliberately left
+// out, and for the six hand-typed ranges this replaces.`, version)
 	emit(&w, "aksaraRanges", aksara, `// The characters an aksara cluster may begin with, UAX #14's classes AK and
 // AS. Unicode %s.
 //
