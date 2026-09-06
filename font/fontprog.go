@@ -2,6 +2,7 @@ package font
 
 import (
 	"encoding/binary"
+	"math"
 	"strings"
 )
 
@@ -204,21 +205,35 @@ func ParseSFNT(data []byte, maxCmapWork int) *Program {
 		longLoca := Be16(head, 50) == 1
 		glyfLen := len(glyf)
 		fp.GlyphPresent = make([]bool, fp.NumGlyphs)
-		offAt := func(i int) int {
+		// A loca entry, and whether it is one this glyf can be cut at.
+		//
+		// The bound is checked on the value the table holds rather than after
+		// it has become an int, because those are not the same question on
+		// every build: a long entry above two gigabytes goes through a 32-bit
+		// int as a *negative* number, which is less than every end and so
+		// passes a check written only against the top — and is then sliced.
+		// Compared as it is read, the answer does not depend on the word size.
+		offAt := func(i int) (int, bool) {
+			v := uint64(Be16(loca, 2*i)) * 2
 			if longLoca {
-				return int(Be32(loca, 4*i))
+				v = uint64(Be32(loca, 4*i))
 			}
-			return Be16(loca, 2*i) * 2
+			if v > uint64(glyfLen) {
+				return 0, false
+			}
+			return int(v), true
 		}
 		fp.GlyphNonEmpty = make([]bool, fp.NumGlyphs)
 		fp.ComponentGID = make([]bool, fp.NumGlyphs)
 		fp.GlyphBBox = make([][4]int, fp.NumGlyphs)
 		for gid := 0; gid < fp.NumGlyphs; gid++ {
-			start, end := offAt(gid), offAt(gid+1)
+			start, startOK := offAt(gid)
+			end, endOK := offAt(gid + 1)
 			// Present when the entry is well-formed and lies within the glyf
 			// table (an empty glyph, start==end, is still present).
-			fp.GlyphPresent[gid] = start <= end && end <= glyfLen
-			fp.GlyphNonEmpty[gid] = start < end && end <= glyfLen
+			inGlyf := startOK && endOK
+			fp.GlyphPresent[gid] = inGlyf && start <= end
+			fp.GlyphNonEmpty[gid] = inGlyf && start < end
 			if fp.GlyphNonEmpty[gid] {
 				MarkComposite(glyf[start:end], fp.NumGlyphs, fp.ComponentGID)
 				// The glyph header is numberOfContours and then the four
@@ -784,8 +799,13 @@ func parseCFFPrivate(data []byte, priv []float64) (def, nom float64, subrs cffIn
 	if len(priv) != 2 {
 		return 0, 0, subrs
 	}
-	pOff, pSize := int(priv[1]), int(priv[0])
-	if pOff <= 0 || pSize < 0 || pOff+pSize > len(data) {
+	pOff, offOK := dictOffset(priv[1])
+	pSize, sizeOK := dictOffset(priv[0])
+	// Subtraction, not addition: pOff+pSize in a font's own numbers is a sum
+	// that can leave the address space, and one that wrapped negative passed
+	// this check and sliced. Both are already known to be non-negative and
+	// inside a four-byte offset, so the difference cannot wrap.
+	if !offOK || !sizeOK || pOff <= 0 || pOff > len(data) || pSize > len(data)-pOff {
 		return 0, 0, subrs
 	}
 	pd := parseCFFDict(data[pOff : pOff+pSize])
@@ -796,8 +816,10 @@ func parseCFFPrivate(data []byte, priv []float64) (def, nom float64, subrs cffIn
 		nom = v[0]
 	}
 	if v, ok := pd[19]; ok && len(v) == 1 { // Subrs, relative to the Private DICT
-		if so := pOff + int(v[0]); so > 0 && so < len(data) {
-			subrs, _ = parseCFFIndex(data, so)
+		if rel, ok := dictOffset(v[0]); ok {
+			if so := pOff + rel; so > 0 && so < len(data) {
+				subrs, _ = parseCFFIndex(data, so)
+			}
 		}
 	}
 	return def, nom, subrs
@@ -817,9 +839,9 @@ func parseCFFFDs(data []byte, top map[int][]float64, numGlyphs int, isCID bool) 
 	if !isCID || numGlyphs == 0 {
 		return nil, nil
 	}
-	fdaOff := dictInt(top, 1236) // FDArray
-	fdsOff := dictInt(top, 1237) // FDSelect
-	if fdaOff <= 0 || fdaOff >= len(data) {
+	fdaOff, haveFDA := dictInt(top, 1236) // FDArray
+	fdsOff, haveFDS := dictInt(top, 1237) // FDSelect
+	if !haveFDA || fdaOff <= 0 || fdaOff >= len(data) {
 		return nil, nil
 	}
 	fontDicts, _ := parseCFFIndex(data, fdaOff)
@@ -838,7 +860,7 @@ func parseCFFFDs(data []byte, top map[int][]float64, numGlyphs int, isCID bool) 
 	// every glyph takes the first — which is what a single-FD font means and is
 	// the least wrong answer for a malformed one.
 	fdOf := make([]int, numGlyphs)
-	if fdsOff <= 0 || fdsOff >= len(data) {
+	if !haveFDS || fdsOff <= 0 || fdsOff >= len(data) {
 		return fdOf, privs
 	}
 	b := data[fdsOff:]
@@ -897,8 +919,8 @@ func ParseCFF(data []byte) *Program {
 	if fm, ok := top[1207]; ok && len(fm) >= 1 && fm[0] != 0 {
 		scale = fm[0] * 1000
 	}
-	csOff := dictInt(top, 17)
-	if csOff <= 0 || csOff >= len(data) {
+	csOff, ok := dictInt(top, 17)
+	if !ok || csOff <= 0 || csOff >= len(data) {
 		return nil
 	}
 	charStrings, _ := parseCFFIndex(data, csOff)
@@ -944,7 +966,10 @@ func ParseCFF(data []byte) *Program {
 	fdOf, fdPriv := parseCFFFDs(data, top, fp.NumGlyphs, isCID)
 
 	// charset: GID → SID (names) or CID.
-	charsetOff := dictInt(top, 15)
+	// A charset operand that is not an offset at all is read as no charset:
+	// zero is the predefined ISOAdobe, which is the reading a font that says
+	// nothing gets.
+	charsetOff, _ := dictInt(top, 15)
 	gidToSID := make([]int, fp.NumGlyphs)
 	if fp.NumGlyphs > 0 {
 		gidToSID[0] = 0 // .notdef
@@ -1077,11 +1102,27 @@ func ParseCFF(data []byte) *Program {
 	return fp
 }
 
-func dictInt(d map[int][]float64, op int) int {
+func dictInt(d map[int][]float64, op int) (int, bool) {
 	if v, ok := d[op]; ok && len(v) >= 1 {
-		return int(v[len(v)-1])
+		return dictOffset(v[len(v)-1])
 	}
-	return 0
+	return 0, false
+}
+
+// dictOffset turns a DICT operand into an offset or a length, and says whether
+// it is one.
+//
+// A DICT operand is a float64 because CFF's real-number operands are, and a
+// font writes whatever it likes into one: "9.2E18" is a legal real. Converting
+// that to an int is not defined in Go — the value does not fit — and what came
+// out was a number that passed a bound check by being negative and was then
+// used to slice. So the conversion is the check: a whole number, not negative,
+// and inside what a four-byte offset can name.
+func dictOffset(v float64) (int, bool) {
+	if math.IsNaN(v) || v < 0 || v > math.MaxInt32 || v != math.Trunc(v) {
+		return 0, false
+	}
+	return int(v), true
 }
 
 // type2CharstringWidth reports the optional leading width delta of a Type 2
@@ -1424,11 +1465,14 @@ func ParseType1(data []byte) *Program {
 			}
 			continue
 		}
-		csLen = parseLeadingInt(string(rest[numStart:j]))
+		var lenOK bool
+		if csLen, lenOK = parseLeadingInt(string(rest[numStart:j])); !lenOK {
+			break
+		}
 		for j < len(rest) && isWhitespace(rest[j]) {
 			j++
 		}
-		// Skip the RD token (RD or -|).
+		// The RD token, which is the operator that reads the bytes.
 		tokStart := j
 		for j < len(rest) && !isWhitespace(rest[j]) {
 			j++
@@ -1436,8 +1480,21 @@ func ParseType1(data []byte) *Program {
 		if j >= len(rest) || j == tokStart {
 			break
 		}
+		// A name followed by a number is not yet a charstring entry, and every
+		// real Type 1 font has one that is not: "/CharStrings 228 dict dup
+		// begin" opens the dictionary the entries go in. Reading that as an
+		// entry registered "CharStrings" as a glyph and swallowed the next 228
+		// bytes, which is every glyph after it. The operator is what tells the
+		// two apart, and it is one of two spellings by convention — the font
+		// defines it, and defines it as RD or as -|.
+		if tok := string(rest[tokStart:j]); tok != "RD" && tok != "-|" {
+			rest = rest[j:]
+			continue
+		}
 		j++ // single space after RD
-		if j+csLen > len(rest) {
+		// Subtraction, so that a length the file chose cannot carry the sum
+		// past what an int holds.
+		if j > len(rest) || csLen > len(rest)-j {
 			break
 		}
 		cs := eexecDecrypt(rest[j:j+csLen], 4330, lenIV)
@@ -1511,19 +1568,34 @@ func sscanInt(s string) (bool, int) {
 	if i == start {
 		return false, 0
 	}
-	return true, parseLeadingInt(s[start:i])
+	v, ok := parseLeadingInt(s[start:i])
+	return ok, v
 }
 
-func parseLeadingInt(s string) int {
+// parseLeadingInt reads the digits at the front of s, and says whether they
+// came to a number.
+//
+// The bound is not decoration. Every digit in a PostScript file is a number the
+// file chose, and nineteen of them overflow: the length of a charstring came
+// out *negative*, which passed a "does this fit in what is left" check by being
+// less than everything and then sliced. The cap is what a four-byte offset can
+// name, which is more than any real Type 1 font has and less than anything that
+// can wrap.
+func parseLeadingInt(s string) (int, bool) {
 	v := 0
+	n := 0
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		if c < '0' || c > '9' {
 			break
 		}
 		v = v*10 + int(c-'0')
+		n++
+		if v > math.MaxInt32 {
+			return 0, false
+		}
 	}
-	return v
+	return v, n > 0
 }
 
 // eexecDecrypt implements the Type 1 decryption (r=55665 for eexec,

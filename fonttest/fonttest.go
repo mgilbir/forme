@@ -21,6 +21,7 @@ package fonttest
 
 import (
 	"encoding/binary"
+	"strconv"
 	"strings"
 )
 
@@ -34,10 +35,9 @@ func Type1Program(names []string) []byte {
 	var priv strings.Builder
 	// lenIV 0 keeps the filler charstrings from needing a decryption prefix.
 	priv.WriteString("dup /Private 8 dict dup begin\n/lenIV 0 def\n")
-	// No dict count after /CharStrings: parseType1 treats a name followed by a
-	// number as a charstring entry, so a count would register "CharStrings"
-	// itself as a glyph.
-	priv.WriteString("2 index /CharStrings dict dup begin\n")
+	// The dict count is written, because every real Type 1 font writes one and
+	// a fixture shaped around a reader's mistake tests the mistake.
+	priv.WriteString("2 index /CharStrings " + strconv.Itoa(len(names)) + " dict dup begin\n")
 	for _, n := range names {
 		// "/name len RD <len bytes> ND"
 		priv.WriteString("/" + n + " 1 RD \x8b ND\n")
