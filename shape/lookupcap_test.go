@@ -252,3 +252,112 @@ func TestADenseLookupListIsBoundedByTheTable(t *testing.T) {
 			"did not finish: the budget is not bounding the work")
 	}
 }
+
+// TestAKernLookupPastTheOldCapIsApplied is the same defect in the other reader,
+// which kept the cap after it was lifted here.
+//
+// featureLookupsIndexed serves everything the flat passes read: kerning, mark
+// and cursive attachment, ligatures on the span path, and every single
+// substitution. It clamped the lookup list to 512 while the comment above said
+// the cap had been lifted — so a font whose 'kern' names lookup 599 kerned
+// nothing, reported no kerning, and said nothing about it. The failure is
+// silent, which is why no corpus could find it.
+func TestAKernLookupPastTheOldCapIsApplied(t *testing.T) {
+	const count = 600 // past the 512 that used to be kept
+
+	lookups := make([]fonttest.Lookup, count)
+	for i := range lookups {
+		// Filler pairs that never occur, so only the last lookup can move
+		// anything.
+		pair := fonttest.KernPair{Left: 3, Right: 4, Adjust: -1}
+		if i == count-1 {
+			pair = fonttest.KernPair{Left: 1, Right: 2, Adjust: -80}
+		}
+		lookups[i] = fonttest.Lookup{
+			Type: 2, Subtables: [][]byte{fonttest.PairPosSubtable([]fonttest.KernPair{pair})},
+		}
+	}
+	gpos := fonttest.GPOSLookups(lookups, map[string][]int{"kern": {count - 1}})
+	f, err := Load(fonttest.SFNT(fonttest.SFNTOptions{
+		Name: "LongKernList",
+		Glyphs: []fonttest.Glyph{
+			{Rune: 'a', Advance: 500, HasShape: true},
+			{Rune: 'b', Advance: 500, HasShape: true},
+			{Rune: 'c', Advance: 500, HasShape: true},
+			{Rune: 'd', Advance: 500, HasShape: true},
+		},
+		Extra: map[string][]byte{"GPOS": gpos},
+	}))
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+
+	if !f.HasKerning() {
+		t.Error("a font whose kern feature names lookup 599 reports no kerning")
+	}
+	// Two glyphs at 500 each, less the 80 the pair takes off, at one em.
+	const want = float64(500+500-80) / 1000
+	if got := f.MeasureShaped("ab", 1); got != want {
+		t.Errorf("\"ab\" measured %v, want %v: the kern lookup past the old cap "+
+			"did not apply", got, want)
+	}
+}
+
+// TestAFeatureListPastTheOldCapIsRead is the same class one list along. A
+// feature is named by its index too — a language system says "feature number
+// 700" — so truncating the feature list breaks the reference rather than losing
+// a tail, and the same reader clamped that list to 512 as well.
+func TestAFeatureListPastTheOldCapIsRead(t *testing.T) {
+	const count = 600
+
+	lookups := make([]fonttest.Lookup, count)
+	named := map[string][]int{}
+	for i := range lookups {
+		pair := fonttest.KernPair{Left: 3, Right: 4, Adjust: -1}
+		if i == count-1 {
+			pair = fonttest.KernPair{Left: 1, Right: 2, Adjust: -80}
+		}
+		lookups[i] = fonttest.Lookup{
+			Type: 2, Subtables: [][]byte{fonttest.PairPosSubtable([]fonttest.KernPair{pair})},
+		}
+		// One feature per lookup, so the feature list is as long as the lookup
+		// list. Every tag but the last is one nothing looks for, and they all
+		// sort before "kern" — the records are written in tag order, so this is
+		// what puts the feature that matters at the end of the list.
+		if i == count-1 {
+			named["kern"] = []int{i}
+		} else {
+			named[featureTagFor(i)] = []int{i}
+		}
+	}
+	f, err := Load(fonttest.SFNT(fonttest.SFNTOptions{
+		Name: "LongFeatureList",
+		Glyphs: []fonttest.Glyph{
+			{Rune: 'a', Advance: 500, HasShape: true},
+			{Rune: 'b', Advance: 500, HasShape: true},
+			{Rune: 'c', Advance: 500, HasShape: true},
+			{Rune: 'd', Advance: 500, HasShape: true},
+		},
+		Extra: map[string][]byte{"GPOS": fonttest.GPOSLookups(lookups, named)},
+	}))
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+	const want = float64(500+500-80) / 1000
+	if got := f.MeasureShaped("ab", 1); got != want {
+		t.Errorf("\"ab\" measured %v, want %v: the feature past the old cap was not read",
+			got, want)
+	}
+}
+
+// featureTagFor spells a distinct four-letter tag per index, all of them
+// beginning with "a" so that they sort before the tag the tests look for.
+func featureTagFor(i int) string {
+	const letters = "abcdefghijklmnopqrstuvwxyz"
+	return string([]byte{
+		'a',
+		letters[i/(26*26)%26],
+		letters[i/26%26],
+		letters[i%26],
+	})
+}

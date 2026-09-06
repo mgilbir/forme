@@ -119,23 +119,29 @@ import (
 // lookup list, and Noto Serif Tibetan declares 1190 lookups. Truncating that
 // list is worse than truncating any other, because a lookup is named by *index*
 // and a contextual rule reaching past the cut silently does nothing. A third of
-// that font's Tibetan was set wrongly and nothing said so. See maxLookupList.
+// that font's Tibetan was set wrongly and nothing said so. See maxDeclaredList.
 const (
-	maxLookups   = 512
 	maxSubtables = 256
 	maxPairs     = 1 << 18
 	maxLigatures = 1 << 14
 	maxScripts   = 256
 	maxLangSys   = 256
-	// maxLookupList bounds a lookup list, and is the format's own maximum
-	// rather than a guess at what a font might hold: the count is a uint16, so
-	// no valid font can exceed it and no valid font is ever truncated.
+	// maxDeclaredList bounds every counted list these tables hold — the
+	// lookups, the features, the lookup indices a feature names, the feature
+	// indices a language system names — and is the format's own maximum rather
+	// than a guess at what a font might hold: each of those counts is a uint16,
+	// so no valid font can exceed it and no valid font is ever truncated.
 	//
-	// It is not what stops a crafted one. That is the walk itself, which needs
-	// two bytes of offset per lookup present in the table and stops when they
-	// run out — so the work a font can ask for is bounded by its own size,
-	// which is the bound that means something. This is the backstop.
-	maxLookupList = 0xFFFF
+	// It has to be all of them, because everything in these tables is named by
+	// its index in one of these lists. Truncating any of them does not lose a
+	// tail: it silently breaks every reference past the cut, and the rule
+	// naming one does nothing at all.
+	//
+	// It is not what stops a crafted font. That is the walk itself, which needs
+	// each entry's bytes present in the table and stops when they run out — so
+	// the work a font can ask for is bounded by its own size, which is the
+	// bound that means something. This is the backstop.
+	maxDeclaredList = 0xFFFF
 	// maxSubtableList bounds the subtables of one lookup, and is the format's
 	// own maximum for the same reason.
 	maxSubtableList = 0xFFFF
@@ -326,10 +332,10 @@ func featureTableSubstitution(fv []byte, off int) featureSubst {
 		}
 		alt := ts[ao:]
 		m := font.Be16(alt, 2)
-		if m > maxLookups {
-			m = maxLookups
+		if m > maxDeclaredList {
+			m = maxDeclaredList
 		}
-		lookups := make([]int, 0, m)
+		lookups := make([]int, 0, min(m, max(0, (len(alt)-4)/2)))
 		for j := 0; j < m; j++ {
 			if 4+2*j+2 > len(alt) {
 				break
@@ -360,8 +366,8 @@ func featureLookupList(list []byte, index int, varied featureSubst) []int {
 	}
 	feature := list[off:]
 	n := font.Be16(feature, 2)
-	if n > maxLookupList {
-		n = maxLookupList
+	if n > maxDeclaredList {
+		n = maxDeclaredList
 	}
 	out := make([]int, 0, min(n, max(0, (len(feature)-4)/2)))
 	for j := 0; j < n; j++ {
@@ -664,8 +670,8 @@ func lookupList(gsub []byte, extension int) []rawLookup {
 	}
 	list := gsub[off:]
 	n := font.Be16(list, 0)
-	if n > maxLookupList {
-		n = maxLookupList
+	if n > maxDeclaredList {
+		n = maxDeclaredList
 	}
 	// The capacity is what the table could actually hold — two bytes of offset
 	// each — rather than what it claims to. A font declaring sixty thousand
@@ -703,8 +709,8 @@ func featureLookupIndices(t []byte, feats tableFeatures) map[string][]int {
 	}
 	list := t[off:]
 	n := font.Be16(list, 0)
-	if n > maxLookupList {
-		n = maxLookupList
+	if n > maxDeclaredList {
+		n = maxDeclaredList
 	}
 	// The duplicates are tracked in a set rather than by scanning what has been
 	// kept. Several feature records may carry the same tag and name overlapping
@@ -773,11 +779,22 @@ func featureLookupsIndexed(t []byte, tag string, feats tableFeatures) ([][]byte,
 	lookupList := t[lookupListOff:]
 
 	// The lookup list, so a feature's indices can be resolved.
+	//
+	// The bound is the format's own and not a guess, for the reason
+	// maxDeclaredList gives: a lookup is named by index, and truncating the list
+	// does not lose its tail — it silently breaks every reference into it. That
+	// was fixed once, in the reader beside this one, and this reader kept the
+	// old cap: a font's kerning, its mark and cursive attachment, its ligatures
+	// on the span path and every single substitution all come through here, and
+	// any of them past lookup 512 did nothing at all with nothing said.
 	lookupCount := font.Be16(lookupList, 0)
-	if lookupCount > maxLookups {
-		lookupCount = maxLookups
+	if lookupCount > maxDeclaredList {
+		lookupCount = maxDeclaredList
 	}
-	lookups := make([][]byte, 0, lookupCount)
+	// The capacity is what the table could hold — two bytes of offset each —
+	// rather than what it claims to, so a declared count with no data behind it
+	// costs nothing. The walk below stops when the offsets run out.
+	lookups := make([][]byte, 0, min(lookupCount, max(0, (len(lookupList)-2)/2)))
 	for i := 0; i < lookupCount; i++ {
 		if 2+2*i+2 > len(lookupList) {
 			break
@@ -793,8 +810,8 @@ func featureLookupsIndexed(t []byte, tag string, feats tableFeatures) ([][]byte,
 	var out [][]byte
 	var indices []int
 	featureCount := font.Be16(featureList, 0)
-	if featureCount > maxLookups {
-		featureCount = maxLookups
+	if featureCount > maxDeclaredList {
+		featureCount = maxDeclaredList
 	}
 	for i := 0; i < featureCount; i++ {
 		rec := 2 + 6*i
@@ -843,7 +860,7 @@ func subtables(lookup []byte, extensionType int, budget *int) (kind, flags, mark
 	// at the front still match. Noto Serif Tibetan states one lookup in 738
 	// subtables.
 	//
-	// The bound is the format's own, for the reason maxLookupList is: the count
+	// The bound is the format's own, for the reason maxDeclaredList is: the count
 	// is a uint16, so no valid font is truncated, and what stops a crafted one
 	// is that each subtable needs two bytes of offset present in the lookup.
 	count := font.Be16(lookup, 4)
@@ -1398,8 +1415,8 @@ func (l *layout) readSingleSubstitutions(gsub []byte, feats tableFeatures) {
 	}
 	featureList := gsub[featureListOff:]
 	count := font.Be16(featureList, 0)
-	if count > maxLookups {
-		count = maxLookups
+	if count > maxDeclaredList {
+		count = maxDeclaredList
 	}
 	seen := map[string]bool{}
 	for i := 0; i < count; i++ {

@@ -529,8 +529,8 @@ func featureTags(t []byte, sel featureSet) []string {
 	}
 	list := t[off:]
 	n := font.Be16(list, 0)
-	if n > maxLookups {
-		n = maxLookups
+	if n > maxDeclaredList {
+		n = maxDeclaredList
 	}
 	seen := map[string]bool{}
 	var out []string

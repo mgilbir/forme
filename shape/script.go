@@ -237,8 +237,8 @@ func readLangSys(script []byte, lang string) (langSys, bool) {
 	ls := script[off:]
 	out := langSys{required: font.Be16(ls, 2)}
 	n := font.Be16(ls, 4)
-	if n > maxLookups {
-		n = maxLookups
+	if n > maxDeclaredList {
+		n = maxDeclaredList
 	}
 	for i := 0; i < n; i++ {
 		if 6+2*i+2 > len(ls) {
