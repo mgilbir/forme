@@ -27,6 +27,7 @@ var (
 	errWindow        = errors.New("brotli: a window size outside the range RFC 7932 allows")
 	errDistance      = errors.New("brotli: a reference to text before the start of the stream")
 	errTooLarge      = errors.New("brotli: the stream decompresses to more than the caller allows")
+	errOverproduced  = errors.New("brotli: a meta-block's commands produce more bytes than it declared")
 	errNoBlockSwitch = errors.New("brotli: a switch to another block type where the meta-block declared only one")
 )
 

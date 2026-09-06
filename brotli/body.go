@@ -102,6 +102,15 @@ func (d *decoder) compressed(remaining int) error {
 		// more than it costs.
 		distTree := distMap[b.current[2]<<2+cmd.context]
 
+		// The meta-block said how many bytes it holds, and the commands in it
+		// have to produce exactly that many. A command that would produce more
+		// is not a command whose tail is ignored — it is a stream no conforming
+		// encoder wrote, and the reference decoder refuses it. Accepting one
+		// meant this decoder produced output nobody else would: bytes past the
+		// declared length, written and kept.
+		if insert > remaining {
+			return errOverproduced
+		}
 		if insert > 0 {
 			at, ok := d.extend(insert)
 			if !ok {
@@ -124,9 +133,10 @@ func (d *decoder) compressed(remaining int) error {
 				d.out[at+k] = p1
 			}
 			remaining -= insert
-			if remaining <= 0 {
+			if remaining == 0 {
 				// The command's copy is not read: the meta-block said how many
-				// bytes it holds and they have all been produced.
+				// bytes it holds and they have all been produced. The format
+				// allows exactly this of the last command and of no other.
 				break
 			}
 		}
@@ -169,10 +179,16 @@ func (d *decoder) compressed(remaining int) error {
 			if err != nil {
 				return err
 			}
+			if n > remaining {
+				return errOverproduced
+			}
 			remaining -= n
 		} else {
 			if distance <= 0 {
 				return errDistance
+			}
+			if copyLen > remaining {
+				return errOverproduced
 			}
 			d.distRB[d.distIdx&3] = distance
 			d.distIdx++
