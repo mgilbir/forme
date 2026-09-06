@@ -35,6 +35,10 @@ type Breaker struct {
 	// balancer measures a whole paragraph once per candidate width. The key is
 	// everything that scales or shifts the answer — see measureKey.
 	measured map[measureKey]style.Unit
+	// grouped memoizes the glyphs of a whole merge group, which every run of
+	// that group needs and which every run of it used to shape for itself. See
+	// mergedSpan.
+	grouped map[groupKey][]shape.Glyph
 	// report is where a run that would not fit is said to have overflowed.
 	//
 	// It is an interface because the finding wants to name the element the run
@@ -154,9 +158,7 @@ func (br *Breaker) MeasureSpacedInContext(face *shape.Face, text string, size st
 		// the differences leaves a word written in three runs a sixty-fourth of
 		// a pixel from the same word written in one. See
 		// shape.MeasureShapedMergedSpan.
-		head, through := face.MeasureShapedMergedSpan(text, size.Px(),
-			how.Before, how.After, how.MergeBefore, how.MergeAfter,
-			how.ContextKerns, how.Off)
+		head, through := br.mergedSpan(face, text, size.Px(), how)
 		lo, _ := style.FromPx(head)
 		hi, _ := style.FromPx(through)
 		w = hi.Sub(lo)
@@ -164,6 +166,56 @@ func (br *Breaker) MeasureSpacedInContext(face *shape.Face, text string, size st
 	w = w.Add(SpacingAdvance(text, sp))
 	br.measured[key] = w
 	return w
+}
+
+// mergedSpan is where a run sits within the group it is shaped with.
+//
+// The group is shaped once and kept. Every run of a group asks for the same
+// string — that is what a group is — and each used to shape it for itself, so a
+// paragraph written as a thousand adjacent spans shaped a thousand characters a
+// thousand times over, and held the glyphs of each. Two thousand of them
+// allocated 1.2 GB and took nearly three seconds; the same document is now the
+// work of shaping it once.
+//
+// The context is the group's rather than the run's, because a side the group
+// already holds supplies its own — so the runs in the middle of a group share
+// one entry and only the two at its ends bring anything of their own. See
+// shape.GroupContext.
+func (br *Breaker) mergedSpan(face *shape.Face, text string, size float64,
+	how Shaping) (head, through float64) {
+
+	if how.MergeBefore == "" && how.MergeAfter == "" {
+		// Not a group: the run is shaped on its own, in its own context, and
+		// there is nothing to share.
+		return face.MeasureShapedMergedSpan(text, size, how.Before, how.After,
+			"", "", how.ContextKerns, how.Off)
+	}
+	before, after := shape.GroupContext(how.Before, how.After, how.MergeBefore, how.MergeAfter)
+	key := groupKey{
+		face: face, whole: how.MergeBefore + text + how.MergeAfter,
+		before: before, after: after, kerns: how.ContextKerns, off: how.Off,
+	}
+	glyphs, ok := br.grouped[key]
+	if !ok {
+		glyphs = face.ShapeGroup(key.whole, before, after, how.ContextKerns, how.Off)
+		if br.grouped == nil {
+			br.grouped = map[groupKey][]shape.Glyph{}
+		}
+		br.grouped[key] = glyphs
+	}
+	return shape.GroupSpan(glyphs, len(how.MergeBefore),
+		len(how.MergeBefore)+len(text), size)
+}
+
+// groupKey identifies one shaping of one merge group: everything that decides
+// what the glyphs come out as, and nothing that differs between the runs
+// sharing them.
+type groupKey struct {
+	face          *shape.Face
+	whole         string
+	before, after string
+	kerns         bool
+	off           shape.Features
 }
 
 type measureKey struct {

@@ -611,20 +611,20 @@ func (f *Face) missingIn(s string) int {
 	return n
 }
 
-// shapeWholeGroup shapes a run together with the neighbours that merge with it
-// and reports the glyphs of the whole, with the byte range the run itself
-// covers. It is what MeasureShapedMergedSpan cuts its two distances from.
-func (f *Face) shapeWholeGroup(s, before, after, mergeBefore, mergeAfter string,
-	kerns bool, off Features) (glyphs []Glyph, lo, hi int) {
-
-	outer := shapeContext{kerns: kerns, features: off}
-	if mergeBefore == "" {
-		outer.before = before
-	}
-	if mergeAfter == "" {
-		outer.after = after
-	}
-	whole := mergeBefore + s + mergeAfter
-	glyphs, _ = f.shapeGlyphsWith(whole, nil, outer)
-	return glyphs, len(mergeBefore), len(mergeBefore) + len(s)
+// ShapeGroup shapes a whole merge group — the runs that shape as one string,
+// concatenated — so that every run of it can take its own slice of the result
+// rather than shaping the group again for itself.
+//
+// The group and not the run is what is shaped, because two runs of one word
+// that shape different strings disagree about where a ligature begins and a
+// character between them is drawn by neither. That the group is the same string
+// for every run of it is also what makes it memoizable: shaped once per run, a
+// group of a thousand runs shapes a thousand characters a thousand times over.
+//
+// before and after are the context the group itself does not hold. See
+// GroupContext, and GroupSpan for cutting one run out of the result.
+func (f *Face) ShapeGroup(whole, before, after string, kerns bool, off Features) []Glyph {
+	glyphs, _ := f.shapeGlyphsWith(whole, nil,
+		shapeContext{before: before, after: after, kerns: kerns, features: off})
+	return glyphs
 }

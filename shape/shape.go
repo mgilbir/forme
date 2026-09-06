@@ -94,7 +94,38 @@ func (f *Face) MeasureShapedMergedSpan(s string, size float64,
 		glyphs, _ := f.ShapeGlyphsInContextOrAcross(s, before, after, kerns, off)
 		return 0, MeasureGlyphs(glyphs, size)
 	}
-	whole, lo, hi := f.shapeWholeGroup(s, before, after, mergeBefore, mergeAfter, kerns, off)
+	outerBefore, outerAfter := GroupContext(before, after, mergeBefore, mergeAfter)
+	whole := f.ShapeGroup(mergeBefore+s+mergeAfter, outerBefore, outerAfter, kerns, off)
+	return GroupSpan(whole, len(mergeBefore), len(mergeBefore)+len(s), size)
+}
+
+// GroupContext is the text either side of a *group* that shapes it, given the
+// text either side of one run of that group.
+//
+// A side the group already holds supplies its own context, so only a side the
+// group does not reach contributes: the first run of a group brings the text
+// before it and the last the text after it, and a run in the middle brings
+// neither. Returning the pair rather than deciding it inside the shaping is
+// what lets a caller memoize a group — every run of one asks for the same
+// string, and this says which of them ask with the same context.
+func GroupContext(before, after, mergeBefore, mergeAfter string) (outerBefore, outerAfter string) {
+	if mergeBefore == "" {
+		outerBefore = before
+	}
+	if mergeAfter == "" {
+		outerAfter = after
+	}
+	return outerBefore, outerAfter
+}
+
+// GroupSpan is where one run sits within a group already shaped: the advance
+// from the group's start to the run's start, and to its end.
+//
+// lo and hi are byte offsets into the group's text. The two ends are returned
+// rather than the difference so that a caller can round each of them once —
+// every run of a group then begins where the one before it ended, and the
+// widths add up to the group's own rounded width.
+func GroupSpan(whole []Glyph, lo, hi int, size float64) (head, through float64) {
 	var headAdv, mine float64
 	for _, g := range whole {
 		switch {
