@@ -33,6 +33,17 @@ func TestSpacingIsNotAddedInsideACursiveScript(t *testing.T) {
 		{"ء", "a hamza alone, which is Arabic and joins to nothing"},
 		{"ܫܠܡܐ", "Syriac"},
 		{"ߛߊߟߌ", "N'Ko"},
+
+		// The rest of the script, which is not in Unicode's joining table and
+		// was therefore not read as cursive text at all: an Arabic script's
+		// digits, its punctuation, and the whole of the presentation forms —
+		// which is how a great deal of Arabic on the web is still encoded.
+		{"٢٠٢٦", "Arabic-Indic digits"},
+		{"۱۲۳", "extended Arabic-Indic digits, which Persian and Urdu write"},
+		{"مرحبا۔", "an Arabic word and the Arabic full stop Urdu writes"},
+		{"ﻣﺮﺣﺒﺎ", "an Arabic word written in presentation forms"},
+		{"ﻼ", "an Arabic lam-alef ligature, likewise a presentation form"},
+		{"᠀ᠮᠣᠩ", "Mongolian after a birga"},
 	} {
 		if got := SpacedUnits(tc.text); got != 0 {
 			t.Errorf("%s (%q) counts %d spaced unit(s); §8.2 adds none inside a "+

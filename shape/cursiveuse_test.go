@@ -112,14 +112,14 @@ func TestAJoinerDecidesTheFormAcrossARunEnd(t *testing.T) {
 	}
 }
 
-// TestOnlyACursiveRunIsMarked. The decision is membership of
-// ArabicShaping.txt, which is what HarfBuzz decides by script and this decides
-// by character — the same answer, since the file names every character of every
-// cursive-joining script and nothing else.
+// TestOnlyACursiveRunIsMarked. The decision is the script of the run's
+// characters, which is what HarfBuzz decides of the run as a whole.
 //
 // Javanese and Balinese are set by the same shaper and do not join, so the four
 // features stay where they were for them. Getting this wrong the other way
-// would change every script the universal shaper sets.
+// would change every script the universal shaper sets — and it did, for any run
+// holding a joiner or a narrow no-break space, because those are listed in
+// ArabicShaping.txt and membership of that file was what this asked.
 func TestOnlyACursiveRunIsMarked(t *testing.T) {
 	for _, tc := range []struct {
 		what string
@@ -133,10 +133,85 @@ func TestOnlyACursiveRunIsMarked(t *testing.T) {
 		{"Balinese", "ᬳᬓ", false},
 		{"Tibetan", "བོད", false},
 		{"Latin", "ab", false},
+
+		// The characters ArabicShaping.txt lists that are not text of a
+		// cursive script. A Javanese word is written with a joiner where two
+		// letters must or must not join, and one of these in it used to turn
+		// the four positional forms on for the whole run — which applies all
+		// four to every glyph and substitutes each letter three times over.
+		{"Javanese with a zero-width joiner", "ꦲ‍ꦏ", false},
+		{"Javanese with a zero-width non-joiner", "ꦲ‌ꦏ", false},
+		{"Javanese with a narrow no-break space", "ꦲ ꦏ", false},
+		{"Latin in a bidi isolate", "⁦ab⁩", false},
+		{"Kaithi with its number sign", "𑂽𑄏", false},
 	} {
 		if got := anyCursive([]rune(tc.text)); got != tc.want {
 			t.Errorf("%s: anyCursive(%q) = %v, want %v", tc.what, tc.text,
 				got, tc.want)
+		}
+	}
+}
+
+// TestWhatCountsAsCursiveText pins the predicate itself, on both sides of what
+// changed.
+//
+// It was membership of ArabicShaping.txt. That file gives a joining type to
+// every character of every cursive-joining script, which is why it looked like
+// the property — but it is a file about joining and not about scripts, so it
+// leaves out everything of those scripts that does not join and takes in a
+// handful of characters that join in any script at all.
+func TestWhatCountsAsCursiveText(t *testing.T) {
+	for _, tc := range []struct {
+		r    rune
+		want bool
+		what string
+	}{
+		// What the file lists and is cursive text: the letters, and the marks
+		// and signs written among them.
+		{0x0628, true, "ARABIC LETTER BEH"},
+		{0x0621, true, "ARABIC LETTER HAMZA, which is non-joining and still Arabic"},
+		{0x0640, true, "ARABIC TATWEEL, a Common-script character that is Arabic text"},
+		{0x0605, true, "ARABIC NUMBER MARK ABOVE, likewise Common and likewise Arabic"},
+		{0x07CA, true, "NKO LETTER A"},
+		{0x0840, true, "MANDAIC LETTER HALQA"},
+
+		// What the file leaves out and is cursive text all the same. A
+		// thousand and some characters, which letter-spacing was being
+		// inserted into.
+		{0x0660, true, "ARABIC-INDIC DIGIT ZERO"},
+		{0x060E, true, "ARABIC POETIC VERSE SIGN"},
+		{0xFE8D, true, "ARABIC LETTER ALEF ISOLATED FORM, a presentation form"},
+		{0xFEFB, true, "ARABIC LIGATURE LAM WITH ALEF ISOLATED FORM"},
+		{0x0730, true, "SYRIAC PTHAHA ABOVE"},
+		{0x1800, true, "MONGOLIAN BIRGA"},
+
+		// What the file lists and is not text of a cursive script at all.
+		{0x200D, false, "ZERO WIDTH JOINER, which joins in every script and is of none"},
+		{0x200C, false, "ZERO WIDTH NON-JOINER"},
+		{0x202F, false, "NARROW NO-BREAK SPACE, a space of no script"},
+		{0x2066, false, "LEFT-TO-RIGHT ISOLATE"},
+		{0x2069, false, "POP DIRECTIONAL ISOLATE"},
+		{0x00AD, false, "SOFT HYPHEN, which the file lists as transparent"},
+		{0x110BD, false, "KAITHI NUMBER SIGN, which is Kaithi and does not join"},
+
+		// And the marks, which have no script of their own to answer with:
+		// Unicode calls an Arabic fatha Inherited because it takes the script
+		// of the letter it is written on. Every reader resolves that from the
+		// base instead of asking here.
+		{0x064E, false, "ARABIC FATHA, which Unicode calls Inherited"},
+		{0x0670, false, "ARABIC LETTER SUPERSCRIPT ALEF, likewise Inherited"},
+		{0x060C, false, "ARABIC COMMA, which Unicode calls Common: Syriac and Thaana write it too"},
+
+		// And ordinary text of scripts that do not join.
+		{'a', false, "a Latin letter"},
+		{' ', false, "a space"},
+		{0x0301, false, "a Latin combining acute"},
+		{0xA98F, false, "JAVANESE LETTER KA"},
+		{0x0915, false, "DEVANAGARI LETTER KA"},
+	} {
+		if got := InCursiveScript(tc.r); got != tc.want {
+			t.Errorf("U+%04X %s: InCursiveScript = %v, want %v",
+				tc.r, tc.what, got, tc.want)
 		}
 	}
 }

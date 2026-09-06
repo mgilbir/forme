@@ -1063,10 +1063,10 @@ var universalScripts = map[string]bool{
 	"yezi": true, "zanb": true,
 }
 
-// anyCursive reports whether a run holds a letter of a script whose letters
-// join. It is the question HarfBuzz asks by script and this asks by character,
-// which is the same answer: ArabicShaping.txt names every character of every
-// cursive-joining script and nothing else. See InCursiveScript.
+// anyCursive reports whether a run holds a character of a script whose letters
+// join. It is the question HarfBuzz asks of the run's script and this asks of
+// its characters, which is the same answer for a run of one script and the
+// safer one for a run of several. See InCursiveScript.
 func anyCursive(runes []rune) bool {
 	for _, r := range runes {
 		if InCursiveScript(r) {
