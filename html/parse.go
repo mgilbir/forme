@@ -354,6 +354,18 @@ func (p *parser) startTag(tk token) {
 		// is not HTML. The element stays, its source is kept for whoever can
 		// read it, and the subtree is not parsed on — which is what used to
 		// splice an SVG's text into the paragraph around it.
+		//
+		// It is content, so it starts the body, which every other content
+		// element does on the line below its own insertion and this one did
+		// not. A document beginning "<title>t</title><svg>…</svg>" put the
+		// graphic inside <head>, where the user agent sheet gives it
+		// "display: none" — so it was never drawn, and nothing was reported,
+		// because from the tree builder's side nothing had gone wrong. Every
+		// fixture in foreign_test.go starts with a paragraph, which is what
+		// hid it.
+		if !p.bodyStarted {
+			p.enterBody()
+		}
 		el := p.insert(tk)
 		if el != nil && !tk.selfClosing {
 			start := p.tok.pos
