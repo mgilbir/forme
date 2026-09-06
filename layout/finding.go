@@ -566,8 +566,16 @@ func (r *Recorder) ReportDetail(f Finding) bool {
 	// Deduplicate on everything a reader would use to tell two findings apart.
 	// Two identical messages about two different elements are two findings; two
 	// identical messages about the same place are one.
+	//
+	// The *file* is one of those things and the offset is not. A stylesheet that
+	// uses one unimplemented property four hundred times is one thing to be told
+	// and four hundred offsets to be told it at, which is what the count beside
+	// the list is for — but the same mistake in two stylesheets is two mistakes,
+	// in two files, and the second was silently dropped for having the same
+	// words as the first. An author fixing the one they were shown found the
+	// finding still there.
 	key := string(f.Rule) + "\x00" + f.Message + "\x00" + f.Path + "\x00" +
-		f.Property + "\x00" + f.Selector
+		f.Property + "\x00" + f.Selector + "\x00" + f.Source.Sheet
 	if r.seen[key] {
 		return severity == Error
 	}

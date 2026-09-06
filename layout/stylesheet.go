@@ -3,6 +3,7 @@ package layout
 import (
 	"fmt"
 	"path"
+	"strconv"
 	"strings"
 
 	"github.com/mgilbir/forme/css"
@@ -122,6 +123,16 @@ type sheetLoader struct {
 	// Recorder deduplicates the finding on its own; what this saves is the
 	// system calls.
 	failed map[string]bool
+	// open is the sheets being expanded right now, innermost last: the chain of
+	// @imports that led here.
+	//
+	// A cycle — a.css imports b.css imports a.css — is not stopped by the cache,
+	// because the cache is what makes the second read succeed. It ran until the
+	// document-wide count refused the twenty-first sheet, applied the two sheets
+	// ten times each, and said nothing: the refusal on the cached path returns
+	// without a finding, so an author saw a document styled by rules applied ten
+	// times over and no word about why.
+	open []string
 	// applied counts the stylesheets handed to the cascade from outside the
 	// document, which is what maxDocumentStylesheets bounds.
 	//
@@ -406,8 +417,15 @@ var bareMediaTypes = map[string]bool{
 // expandImports returns the sheets one author sheet stands for: everything it
 // imports, in the order it imports them, and then what is left of it.
 func (l *sheetLoader) expandImports(s authorSheet) []authorSheet {
-	if !strings.Contains(s.source, "@import") {
+	if !containsFold(s.source, "@import") {
 		return []authorSheet{s}
+	}
+	// This sheet is open while its imports are read, so that one of them naming
+	// it again is seen as the ring it is. A sheet with no name cannot be named
+	// by an import and so cannot be in one.
+	if s.name != "" {
+		l.open = append(l.open, s.name)
+		defer func() { l.open = l.open[:len(l.open)-1] }()
 	}
 	rules, _ := css.ParseStylesheet(s.source)
 	var out []authorSheet
@@ -442,7 +460,16 @@ func (l *sheetLoader) expandImports(s authorSheet) []authorSheet {
 		// cascade report the same fact a second time and differently.
 		cut, found = len(s.source), true
 		if src, ok := l.fetchImport(ref, s.name); ok {
-			out = append(out, l.expandImports(authorSheet{name: ref, source: src})...)
+			next := authorSheet{name: resolveAgainstSheet(ref, s.name), source: src}
+			if why := l.cycle(next.name); why != "" {
+				l.rec.ReportDetail(Finding{
+					Rule:    RuleInvalidCSS,
+					Source:  Source{HTMLOffset: -1, CSSOffset: r.Offset, Sheet: s.name},
+					Message: why,
+				})
+				continue
+			}
+			out = append(out, l.expandImports(next)...)
 		}
 	}
 	if !found {
@@ -537,6 +564,60 @@ func (l *sheetLoader) fetchImport(ref, from string) (string, bool) {
 	return src, true
 }
 
+// containsFold is strings.Contains for an ASCII needle, ignoring case.
+//
+// The fast path in front of the parse, and it has to ignore case because an
+// at-rule's name does: "@IMPORT" is an @import and a sheet holding one was
+// handed to the cascade with the rule still in it, to be reported as an at-rule
+// nothing applied. strings.ToLower would copy every stylesheet in the document
+// to answer a question that is almost always no.
+func containsFold(s, needle string) bool {
+	if len(needle) == 0 || len(s) < len(needle) {
+		return len(needle) == 0
+	}
+	fold := func(c byte) byte {
+		if c >= 'A' && c <= 'Z' {
+			return c + 'a' - 'A'
+		}
+		return c
+	}
+	for i := 0; i+len(needle) <= len(s); i++ {
+		if fold(s[i]) != needle[0] {
+			continue
+		}
+		match := true
+		for j := 1; j < len(needle); j++ {
+			if fold(s[i+j]) != needle[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
+// cycle says why a sheet may not be expanded again, or the empty string.
+//
+// A sheet already open is a sheet importing itself, directly or round a ring,
+// and expanding it again produces nothing a reader wants: the same rules a
+// second time, in the same place in the cascade, until a bound elsewhere stops
+// it. The chain is named in the message because "a.css imports itself" and
+// "a.css imports b.css imports a.css" are different mistakes to go and find.
+func (l *sheetLoader) cycle(name string) string {
+	for i, open := range l.open {
+		if open != name {
+			continue
+		}
+		chain := append(append([]string(nil), l.open[i:]...), name)
+		return "the stylesheet at " + strconv.Quote(name) + " imports itself: " +
+			strings.Join(chain, " imports ") + ", so the second time round was not applied"
+	}
+	return ""
+}
+
 // resolveAgainstSheet makes a reference written in one sheet relative to that
 // sheet rather than to the document.
 //
@@ -557,6 +638,17 @@ func (l *sheetLoader) fetchImport(ref, from string) (string, bool) {
 // path.Clean has nowhere to take it, and the resolver refuses it as before.
 func resolveAgainstSheet(ref, from string) string {
 	if from == "" || strings.HasPrefix(ref, "/") {
+		return ref
+	}
+	if _, named := schemeOf(from); named {
+		// The sheet arrived as a URL rather than as a path — a "data:"
+		// stylesheet is the one this engine can have — and a URL is not a
+		// directory to join onto. "data:text/css,…" holds a slash in its media
+		// type, so joining produced "data:text/theme.css", which is a reference
+		// to nothing and was reported as a missing file.
+		//
+		// A data: URL has no base, so what a relative reference in one is
+		// relative to is the document — which is what an unnamed sheet gets.
 		return ref
 	}
 	i := strings.LastIndexByte(from, '/')

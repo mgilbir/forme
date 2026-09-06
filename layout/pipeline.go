@@ -27,6 +27,14 @@ import (
 type Stylesheet struct {
 	// Name identifies the sheet in a finding — a filename, usually. It is empty
 	// for the document's own <style> content.
+	//
+	// It is also what a relative @import inside this sheet is resolved against,
+	// because that is what a reference in a stylesheet is relative to: an
+	// "@import \"base.css\"" in a sheet named "css/page.css" asks for
+	// "css/base.css", and the same import in a sheet with no name asks for
+	// "base.css" beside the document. So the name is a path and not a label —
+	// naming a sheet "the caller's theme" would send its imports looking in a
+	// directory called that.
 	Name string
 	// Source is the CSS.
 	Source string
@@ -168,8 +176,16 @@ func buildWith(in Input, page PageSize, rec *Recorder) Built {
 
 	sheets := make([]style.Sheet, 0, len(in.CSS)+2)
 	sheets = append(sheets, parseSheet(rec, style.OriginUserAgent, "user agent", UserAgentCSS, &faces, &pages))
+	importer := &sheetLoader{res: in.Resources, rec: rec, failed: map[string]bool{}}
 	if in.UserCSS != "" {
-		sheets = append(sheets, parseSheet(rec, style.OriginUser, "user", in.UserCSS, &faces, &pages))
+		// Through the importer like every other author-supplied sheet. A user
+		// stylesheet is CSS a person wrote, and an @import in one is the same
+		// request it is anywhere else — left unexpanded it was reported as an
+		// at-rule this engine does not apply, which is not what happens to the
+		// identical line in the document's own sheet.
+		for _, e := range importer.expandImports(authorSheet{name: "user", source: in.UserCSS}) {
+			sheets = append(sheets, parseSheet(rec, style.OriginUser, e.name, e.source, &faces, &pages))
+		}
 	}
 	// A <style> element and a <link rel=stylesheet> are both author stylesheets,
 	// and they come before the ones the caller passed only because they were
@@ -182,7 +198,6 @@ func buildWith(in Input, page PageSize, rec *Recorder) Built {
 	}
 	// A caller's own sheets go through the same expansion as the document's, so
 	// that "@import" means the same thing whichever side it was written on.
-	importer := &sheetLoader{res: in.Resources, rec: rec, failed: map[string]bool{}}
 	for _, s := range in.CSS {
 		for _, e := range importer.expandImports(authorSheet{name: s.Name, source: s.Source}) {
 			sheets = append(sheets, parseSheet(rec, style.OriginAuthor, e.name, e.source, &faces, &pages))

@@ -131,6 +131,11 @@ type Styler struct {
 	// seen suppresses repeat reports of the same unsupported property. A
 	// stylesheet using "flex-wrap" forty times is one thing an author needs to
 	// be told, not forty.
+	//
+	// Per stylesheet, which is what suppressed reads: the same property in two
+	// sheets is two files to edit, and telling an author about one of them
+	// sends them back to a document that still has the finding in it. See
+	// suppressed, which is the key.
 	seen map[string]bool
 }
 
@@ -692,8 +697,7 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 	// document using custom properties gets a page that is defensible rather
 	// than one that is right, and the claim on it has to say so.
 	if isCustomProperty(name) {
-		if !s.seen[name] {
-			s.seen[name] = true
+		if !s.suppressed(name) {
 			s.report(Finding{
 				Offset: d.Offset,
 				Message: "the custom property \"" + name + "\" was not applied: this engine " +
@@ -705,8 +709,7 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 		return nil
 	}
 	if usesVar(d.Value) {
-		if !s.seen[name] {
-			s.seen[name] = true
+		if !s.suppressed(name) {
 			s.report(Finding{
 				Offset: d.Offset,
 				Message: "\"" + name + ": " + serialize(d.Value) + "\" refers to a custom " +
@@ -891,9 +894,8 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 		// The gap is still real for the default sheet. It belongs in the note on
 		// the property rather than in every document's findings.
 		if reason, missing := unimplementedReason(name); missing &&
-			origin != OriginUserAgent && !s.seen[name] &&
+			origin != OriginUserAgent && !s.suppressed(name) &&
 			!isInertDeclaration(name, d.Value) {
-			s.seen[name] = true
 			s.report(Finding{
 				Offset: d.Offset,
 				Message: "the property \"" + name + "\" is not implemented, so " +
@@ -940,8 +942,7 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 			// their background image did not appear and wondering why the page
 			// is blank.
 			key := name + "\x00" + part
-			if !s.seen[key] {
-				s.seen[key] = true
+			if !s.suppressed(key) {
 				s.report(Finding{
 					Offset: d.Offset,
 					Message: "\"" + part + "\" in the " + name +
@@ -1020,8 +1021,7 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 	// same kind, and nomedium.go is the list: nobody puts a caret in a printed
 	// paragraph, so "caret-color" colours nothing there and a browser printing
 	// the document applies it exactly as little.
-	if !s.seen[name] {
-		s.seen[name] = true
+	if !s.suppressed(name) {
 		s.report(Finding{
 			Offset:      d.Offset,
 			Message:     "the property \"" + name + "\" is not implemented, so it was not applied",
@@ -1480,6 +1480,21 @@ func shorthandLonghands(name string) []string {
 	return out
 }
 
+// suppressed reports whether this stylesheet has already been told about key,
+// and records that it has been.
+//
+// The sheet is part of it because a finding names one: an unsupported property
+// in two files is two findings, and it was one until the second was dropped for
+// having the same words as the first.
+func (s *Styler) suppressed(key string) bool {
+	full := s.sheet + "\x00" + key
+	if s.seen[full] {
+		return true
+	}
+	s.seen[full] = true
+	return false
+}
+
 func (s *Styler) report(f Finding) {
 	switch {
 	case s.attrOffset >= 0 && !f.InMarkup:
@@ -1520,11 +1535,10 @@ func (s *Styler) reportUncomputedPseudo(name string, offset int) {
 			return
 		}
 	}
-	key := "::" + name
-	if s.seen[key] {
+	if key := "::" + name; s.suppressed(key) {
 		return
 	}
-	s.seen[key] = true
+	key := "::" + name
 	s.report(Finding{
 		Offset: offset,
 		Message: "\"" + key + "\" is not implemented, so what was written for it " +
@@ -1767,8 +1781,7 @@ func (s *Styler) resolve(name string, prop property, value string, have bool, pa
 			// as "unset" is the closest available answer and is wrong whenever a
 			// user-agent rule set the property, so it is reported rather than
 			// quietly substituted.
-			if !s.seen["revert"] {
-				s.seen["revert"] = true
+			if !s.suppressed("revert") {
 				s.report(Finding{
 					Offset: -1,
 					Message: "\"revert\" is not implemented and was read as \"unset\", " +

@@ -596,6 +596,17 @@ func TestAReferenceIsJoinedToTheSheetItWasWrittenIn(t *testing.T) {
 		// resolver to refuse as it always did.
 		{"../theme.css", "outer.css", "../theme.css", "above the document itself"},
 		{"../../x.css", "a/outer.css", "../x.css", "further above it"},
+
+		// A sheet named by a URL rather than by a path is not a directory to
+		// join onto. "data:text/css,…" holds a slash in its media type, so
+		// joining produced "data:text/theme.css" — a reference to nothing,
+		// reported as a missing file. A data: URL has no base, so a relative
+		// reference in one is relative to the document, which is what an
+		// unnamed sheet gets.
+		{"theme.css", "data:text/css,p{color:red}", "theme.css", "from a data: sheet"},
+		{"a/b.css", "data:text/css;base64,cHt9", "a/b.css", "a path from a data: sheet"},
+		{"theme.css", "https://example.invalid/css/page.css", "theme.css",
+			"from a sheet named by an http URL"},
 		// A reference that begins at the root names itself.
 		{"/fonts/ahem.css", "css/deep/outer.css", "/fonts/ahem.css", "root-relative"},
 		{"/a.css", "", "/a.css", "root-relative from a <style>"},
