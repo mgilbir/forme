@@ -62,11 +62,12 @@ race: $(CORPORA)
 # Every fetch in this file goes through FETCH rather than through a bare curl.
 #
 # The corpora come from a dozen hosts and one of them is always the slow one.
-# unifoundry.com serves GNU Unifont from a single machine with no CDN in front
+# unifoundry.com served GNU Unifont from a single machine with no CDN in front
 # of it, and a CI run failed on it with "Failed to connect after 132634 ms" —
 # which stopped the build before a line of the engine had run, and said nothing
 # whatever about the change under test. A run that could not reach a web server
-# is not a result.
+# is not a result. Unifont now comes from GNU's own mirror network; the retries
+# below are still what every other host gets.
 #
 # --retry-all-errors rather than --retry, because the two are not the same:
 # plain --retry covers a transient HTTP status and a handful of network errors,
@@ -716,14 +717,16 @@ clean-css-colors:
 # asked, and eighty-eight documents were reported as substituted that had nothing
 # wrong with them. See layout/facerun.go.
 #
-# Licensing: the compiled fonts are SIL Open Font License 1.1 — unifoundry's
+# Licensing: the compiled fonts are SIL Open Font License 1.1 — the project's own
 # LICENSE.txt says so in as many words, the GPL covering the build sources rather
-# than the fonts — and it is fetched alongside them.
+# than the fonts — and it is committed at testdata/unifont/LICENSE.txt and copied
+# in beside them.
 # A fetch that succeeds and hands back something that is not a font.
 #
-# unifoundry.com has now broken CI twice, in two different ways. The first was
-# not answering at all, which the retries above cover. The second was answering
-# 200 with content that is not an sfnt — and that one is the worse failure,
+# unifoundry.com broke CI three times, in two different ways, which is why
+# Unifont is fetched from GNU now. The first was not answering at all, which the
+# retries above cover. The second was answering 200 with an HTML page where a
+# font should be — and that one is the worse failure,
 # because curl is content and the corpus looks fetched. The run then reports a
 # hundred and four reftests below the baseline, which reads as a layout
 # regression right up to the last line of the message, where the harness says
@@ -743,8 +746,34 @@ define sfnt
 	  }
 endef
 
-UNIFONT_VER  := 17.0.05
-UNIFONT_BASE := https://unifoundry.com/pub/unifont/unifont-$(UNIFONT_VER)/font-builds
+# Unifont comes from GNU rather than from unifoundry.com, which is the author's
+# own site and the single machine the note above is about. It is a GNU package:
+# ftp.gnu.org carries every release and a network of mirrors carries ftp.gnu.org,
+# and ftpmirror.gnu.org is the redirector that sends a fetch to a working one.
+# The two files are byte for byte the ones unifoundry serves — same SHA-256,
+# checked before this was changed — so this is the same font from a source that
+# is not one machine.
+#
+# ftp.gnu.org is named as the fallback rather than left to the redirector,
+# because a redirector that is down redirects nothing.
+#
+# The licence is not fetched at all. It is a licence for a pinned version of a
+# font, it is 24 KB, and it lives in exactly one place on the web — so making
+# the build depend on that place being up, for a file that never changes, is the
+# dependency this whole note is about. It is committed, and copied in beside the
+# fonts it covers.
+UNIFONT_VER      := 17.0.05
+UNIFONT_BASE     := https://ftpmirror.gnu.org/gnu/unifont/unifont-$(UNIFONT_VER)
+UNIFONT_FALLBACK := https://ftp.gnu.org/gnu/unifont/unifont-$(UNIFONT_VER)
+UNIFONT_LICENSE  := testdata/unifont/LICENSE.txt
+
+# One Unifont file, from the redirector or from ftp.gnu.org.
+#
+#	$(call unifont,<destination>,<basename>)
+define unifont
+	$(FETCH) -o $(1) $(UNIFONT_BASE)/$(2) \
+	  || $(FETCH) -o $(1) $(UNIFONT_FALLBACK)/$(2)
+endef
 
 NOTO_DIR := testdata/fonts-noto
 NOTO_BASE := https://raw.githubusercontent.com/notofonts
@@ -767,11 +796,9 @@ $(NOTO_DIR)/.ok:
 	  $(NOTO_BASE)/noto-cjk/main/Sans/Variable/TTF/Subset/NotoSansJP-VF.ttf
 	$(FETCH) -o $(NOTO_DIR)/OFL.txt \
 	  $(NOTO_BASE)/noto-cjk/main/Sans/LICENSE
-	$(FETCH) -o $(NOTO_DIR)/Unifont-Regular.otf \
-	  $(UNIFONT_BASE)/unifont-$(UNIFONT_VER).otf
-	$(FETCH) -o $(NOTO_DIR)/UnifontUpper-Regular.otf \
-	  $(UNIFONT_BASE)/unifont_upper-$(UNIFONT_VER).otf
-	$(FETCH) -o $(NOTO_DIR)/UNIFONT-LICENSE.txt https://unifoundry.com/LICENSE.txt
+	$(call unifont,$(NOTO_DIR)/Unifont-Regular.otf,unifont-$(UNIFONT_VER).otf)
+	$(call unifont,$(NOTO_DIR)/UnifontUpper-Regular.otf,unifont_upper-$(UNIFONT_VER).otf)
+	cp $(UNIFONT_LICENSE) $(NOTO_DIR)/UNIFONT-LICENSE.txt
 	$(MAKE) verify-fonts
 	touch $@
 
