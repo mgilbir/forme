@@ -173,6 +173,7 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 		// so there is at least one column left standing.
 		columns = columns[:len(items)]
 	}
+	flow := l.autoFlow(b)
 	autoColumns := l.implicitTracks(b, "grid-auto-columns", width)
 	autoRows := l.implicitTracks(b, "grid-auto-rows", width)
 	explicitColumns := len(columns)
@@ -183,18 +184,15 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 		columns = append(columns, autoTrack())
 		explicitColumns = len(columns)
 	}
-	if len(columns) == 0 {
-		// §7.1: a container with no explicit columns still has one, because
-		// every item has to be somewhere. The implicit track is "auto", which
-		// is the same answer a single-column grid would have been given.
-		columns = []gridTrack{autoTrack()}
-		explicitColumns = 1
-	}
-	// §7.5: an item that named a column past the explicit grid is not left
+	// §7.5: an item that named a track past the explicit grid is not left
 	// hanging off the end of it — the grid grows to hold it, and the tracks it
-	// grew by are sized by grid-auto-columns.
-	for len(columns) < columnsNeeded(items, explicitColumns) {
-		columns = append(columns, autoColumns[(len(columns)-explicitColumns)%len(autoColumns)])
+	// grew by are sized by grid-auto-columns or grid-auto-rows.
+	//
+	// This is also what gives a container with no template at all its one
+	// column: every item spans at least one track, so at least one track is
+	// asked for. §7.1's "there is always a grid" needs no clause of its own.
+	for len(columns) < tracksNeeded(items, 1, explicitColumns) {
+		columns = append(columns, implicitTrack(autoColumns, len(columns), explicitColumns))
 	}
 	rows, _, _ := l.trackList(b, "grid-template-rows", width,
 		trackRoom{size: height, definite: definite, gap: rowGap})
@@ -204,16 +202,33 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 		rows = append(rows, autoTrack())
 		explicitRows = len(rows)
 	}
+	for len(rows) < tracksNeeded(items, 0, explicitRows) {
+		rows = append(rows, implicitTrack(autoRows, len(rows), explicitRows))
+	}
 
 	// §8.5: the items that named a line go where they asked, and the rest are
-	// dealt into what is left. However many rows that took is how many the grid
-	// has.
-	used := placeItems(items, len(columns))
-	for len(rows) < used {
-		// The implicit rows, sized by grid-auto-rows — which is "auto" unless
-		// the stylesheet said otherwise, and is the height every row of a card
-		// grid gets when nothing draws them.
-		rows = append(rows, autoRows[(len(rows)-explicitRows)%len(autoRows)])
+	// dealt into what is left. One axis is the one the flow fills along and is
+	// as long as the template made it; the other is however far the items
+	// reached, and grows.
+	if flow.column {
+		// The algorithm is the same one with the axes exchanged, so the items
+		// are turned on their side, dealt, and turned back. Writing it twice
+		// would be two chances to write it differently.
+		transposeItems(items)
+		grew := placeItems(items, len(rows), flow.dense)
+		transposeItems(items)
+		for len(columns) < grew {
+			columns = append(columns,
+				implicitTrack(autoColumns, len(columns), explicitColumns))
+		}
+	} else {
+		grew := placeItems(items, len(columns), flow.dense)
+		for len(rows) < grew {
+			// The implicit rows, sized by grid-auto-rows — which is "auto"
+			// unless the stylesheet said otherwise, and is the height every row
+			// of a card grid gets when nothing draws them.
+			rows = append(rows, implicitTrack(autoRows, len(rows), explicitRows))
+		}
 	}
 
 	// The block axis takes no axis of its own: nothing this engine lays out
@@ -657,7 +672,7 @@ func splitOnSlash(value string) (string, string, bool) {
 // cursor that walks along the columns and then down, and that cursor never goes
 // back — which is what "sparse" packing means, and what leaves the holes that
 // "dense" would go back for.
-func placeItems(items []*gridItem, columns int) int {
+func placeItems(items []*gridItem, columns int, dense bool) int {
 	grid := &gridOccupancy{columns: columns}
 	var flow []*gridItem
 	for _, it := range items {
@@ -675,6 +690,14 @@ func placeItems(items []*gridItem, columns int) int {
 	}
 	row, column := 0, 0
 	for _, it := range flow {
+		if dense {
+			// §8.5's dense packing: the cursor goes back to the start for every
+			// item, so a small one later in the document fills a hole a wide
+			// one left behind. Sparse packing is the default because it keeps
+			// the items in the order they were written; dense trades that for
+			// a grid with no gaps in it.
+			row, column = 0, 0
+		}
 		if it.place[1].definite {
 			// A definite column and no row: the item drops down the column
 			// until it finds a row with room for it, starting from the cursor's
@@ -791,21 +814,66 @@ func (g *gridOccupancy) next(row, column, rowSpan, columnSpan int) (int, int) {
 	}
 }
 
-// columnsNeeded is how many columns the items ask for, which is the explicit
-// grid unless one of them named a line past its end or asked for a span wider
-// than it.
-func columnsNeeded(items []*gridItem, explicit int) int {
+// tracksNeeded is how many tracks on one axis the items ask for, which is the
+// explicit grid unless one of them named a line past its end or asked for a
+// span wider than it.
+func tracksNeeded(items []*gridItem, axis, explicit int) int {
 	out := explicit
 	for _, it := range items {
-		want := it.place[1].span
-		if it.place[1].definite {
-			want = it.place[1].start + it.place[1].span
+		want := it.place[axis].span
+		if it.place[axis].definite {
+			want = it.place[axis].start + it.place[axis].span
 		}
 		if want > out {
 			out = want
 		}
 	}
 	return out
+}
+
+// transposeItems turns the items on their side: what they said about their rows
+// they now say about their columns, and where they end up is read back the same
+// way.
+//
+// It is how a column flow is placed by the row-flow algorithm. §8.5 is one
+// algorithm written about one axis, and the specification says as much — "if
+// grid-auto-flow is column, swap all rows and columns in the above" — so
+// swapping is the honest way to say it here too.
+func transposeItems(items []*gridItem) {
+	for _, it := range items {
+		it.place[0], it.place[1] = it.place[1], it.place[0]
+		it.row, it.column = it.column, it.row
+	}
+}
+
+// gridFlow is §8.5's grid-auto-flow: which axis the items are dealt along, and
+// whether the cursor may go back for a hole it left behind.
+type gridFlow struct{ column, dense bool }
+
+// autoFlow reads the property, whose two halves are written in either order and
+// either alone.
+func (l *layouter) autoFlow(b *Box) gridFlow {
+	var out gridFlow
+	for _, word := range strings.Fields(trimmedLower(b.Style["grid-auto-flow"])) {
+		switch word {
+		case "column":
+			out.column = true
+		case "dense":
+			out.dense = true
+		}
+	}
+	return out
+}
+
+// implicitTrack is the size the next track outside the explicit grid takes: the
+// list of implicit sizes, in turn, counted from the first track nobody drew.
+//
+// Counted from there and not from the top of the grid, because a drawn track is
+// the size it was drawn at and the list has nothing to say about it — so a grid
+// with one row of its own and "grid-auto-rows: 50px 30px" makes its second row
+// fifty and its third thirty.
+func implicitTrack(sizes []gridTrack, made, explicit int) gridTrack {
+	return sizes[(made-explicit)%len(sizes)]
 }
 
 // implicitTracks reads grid-auto-rows or grid-auto-columns, which is §7.5's
@@ -1709,11 +1777,9 @@ func (l *layouter) refusesToGrid(b *Box, width style.Unit) string {
 			"places that do not touch"
 	}
 	switch trimmedLower(b.Style["grid-auto-flow"]) {
-	case "", "row":
+	case "", "row", "column", "dense", "row dense", "dense row",
+		"column dense", "dense column":
 	default:
-		// "column" fills down before across and "dense" goes back for the
-		// holes an item that did not fit left behind. Both are placement
-		// algorithms of their own, and this slice has one.
 		return "its items are placed by a flow this engine does not follow"
 	}
 	for _, p := range [...]string{"grid-auto-rows", "grid-auto-columns"} {

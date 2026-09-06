@@ -468,8 +468,8 @@ func TestAGridContainerThisEngineCannotArrangeSaysSo(t *testing.T) {
 		{"a named row", `#g { grid-template-rows: [top] 20px }`, "does not size"},
 		{"a ragged template", `#g { grid-template-areas: "a b" "c" }`, "not all the same length"},
 		{"an area in two places", `#g { grid-template-areas: "a b" "b a" }`, "do not touch"},
-		{"a column flow", `#g { grid-auto-flow: column }`, "flow this engine does not follow"},
-		{"a dense flow", `#g { grid-auto-flow: row dense }`, "flow this engine does not follow"},
+		{"a flow that is neither", `#g { grid-auto-flow: sideways }`,
+			"flow this engine does not follow"},
 		{"implicit tracks sized by a function this engine cannot read",
 			`#g { grid-auto-rows: fit-content(50px) }`, "implicit tracks"},
 		{"tracks on a baseline", `#g { align-content: baseline }`, "aligned by a rule"},
@@ -536,6 +536,7 @@ func TestAnArrangedGridSaysNothing(t *testing.T) {
 		`#g { width: 300px; grid-template-areas: "a b" "c d" }`,
 		`#g { width: 300px; grid-auto-rows: 50px; grid-auto-columns: 50px }`,
 		`#g { width: 300px; direction: rtl; grid-template-columns: 100px 100px }`,
+		`#g { width: 300px; grid-auto-flow: column dense }`,
 	} {
 		got := Compose(Input{HTML: fourItems,
 			CSS: []Stylesheet{{Source: gridCSS + css}}}, Options{})
@@ -1107,6 +1108,15 @@ func TestATemplateOfAreasDrawsTheGrid(t *testing.T) {
 		[][4]float64{{0, 0, 300, 20}, {0, 20, 100, 20}, {100, 20, 200, 20}},
 		"a template beside a set of tracks")
 
+	// The tracks a template draws are *explicit* ones with no size of their own,
+	// which is "auto" — not implicit tracks, so grid-auto-columns has nothing
+	// to say about them.
+	wantCells(t, gridCells(t, threeAreas,
+		`#g { width: 300px; grid-auto-columns: 50px;`+
+			` grid-template-areas: "head head" "nav main" }`+named),
+		[][4]float64{{0, 0, 300, 20}, {0, 20, 150, 20}, {150, 20, 150, 20}},
+		"a template beside a size for the tracks it did not draw")
+
 	// A dot is a cell nobody named, and it is not an area: the header covers
 	// one column and the second is left empty.
 	wantCells(t, gridCells(t, threeAreas,
@@ -1323,4 +1333,75 @@ func TestTheKeywordsTurnWithTheColumns(t *testing.T) {
 	wantCells(t, gridCells(t, threeCells, rtl+`#g { justify-items: left }`),
 		[][4]float64{{200, 0, 12, 20}, {100, 0, 12, 20}, {200, 20, 12, 20}},
 		"items at the left of their cells")
+}
+
+// TestAColumnFlowDealsDownTheColumns is §8.5 with the axes exchanged: the items
+// fill a column to the bottom and start the next, and the tracks the grid grows
+// by are columns rather than rows.
+//
+// The rows are what the template drew, for the reason the columns are in a row
+// flow: the axis the items are dealt *along* is the one that has to be as long
+// as it was written, and the other grows as far as the items reach.
+func TestAColumnFlowDealsDownTheColumns(t *testing.T) {
+	const four = `<div id="g"><div>a</div><div>b</div><div>c</div><div>d</div></div>`
+
+	// Two rows drawn, so two items to a column and two columns of them.
+	wantCells(t, gridCells(t, four,
+		`#g { width: 300px; grid-template-rows: 20px 20px; grid-auto-flow: column }`),
+		[][4]float64{
+			{0, 0, 150, 20}, {0, 20, 150, 20},
+			{150, 0, 150, 20}, {150, 20, 150, 20},
+		}, "four items down two columns")
+
+	// The columns the grid grew by are implicit, so grid-auto-columns sizes
+	// them — all of them, because nothing drew any.
+	wantCells(t, gridCells(t, four,
+		`#g { width: 300px; grid-template-rows: 20px 20px; grid-auto-flow: column;`+
+			` grid-auto-columns: 50px }`),
+		[][4]float64{
+			{0, 0, 50, 20}, {0, 20, 50, 20},
+			{50, 0, 50, 20}, {50, 20, 50, 20},
+		}, "implicit columns given a width")
+
+	// With no rows drawn there is one, and the items run across it. That row is
+	// implicit too, so grid-auto-rows gives it its height.
+	wantCells(t, gridCells(t, four, `#g { width: 300px; grid-auto-flow: column }`),
+		[][4]float64{
+			{0, 0, 75, 20}, {75, 0, 75, 20}, {150, 0, 75, 20}, {225, 0, 75, 20},
+		}, "four items along one row")
+	wantCells(t, gridCells(t, four,
+		`#g { width: 300px; grid-auto-flow: column; grid-auto-rows: 50px }`),
+		[][4]float64{
+			{0, 0, 75, 50}, {75, 0, 75, 50}, {150, 0, 75, 50}, {225, 0, 75, 50},
+		}, "one implicit row given a height")
+
+	// An item that named a row past the end of a column flow grows the grid
+	// down before anything is dealt, because the rows are the axis the flow
+	// fills along and it has to know how long they are.
+	wantCells(t, gridCells(t, threeCells, `#g { width: 300px; grid-auto-flow: column } #a { grid-row: 3 }`),
+		[][4]float64{{0, 40, 300, 20}, {0, 0, 300, 20}, {0, 20, 300, 20}},
+		"a column flow with an item in the third row")
+}
+
+// TestADenseFlowGoesBackForTheHoles. The cursor of a sparse flow never goes
+// back, so an item too wide for what is left of a row leaves a hole that stays
+// empty. "dense" is the other answer: every item is placed from the start of
+// the grid, so a later, narrower one fills it.
+//
+// The two are a trade and the default says which way: sparse keeps the items in
+// the order they were written, dense keeps the grid whole.
+func TestADenseFlowGoesBackForTheHoles(t *testing.T) {
+	const wide = `#g { width: 300px; grid-template-columns: 100px 100px 100px }` +
+		`#a { grid-column: span 2 } #b { grid-column: span 2 }`
+
+	// Sparse: the third item goes after the second, leaving the top right
+	// corner empty.
+	wantCells(t, gridCells(t, threeCells, wide),
+		[][4]float64{{0, 0, 200, 20}, {0, 20, 200, 20}, {200, 20, 100, 20}},
+		"a sparse flow leaving a hole")
+
+	// Dense: it goes back and fills it.
+	wantCells(t, gridCells(t, threeCells, wide+`#g { grid-auto-flow: row dense }`),
+		[][4]float64{{0, 0, 200, 20}, {0, 20, 200, 20}, {200, 0, 100, 20}},
+		"a dense flow filling it")
 }
