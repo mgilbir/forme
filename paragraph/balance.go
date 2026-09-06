@@ -324,6 +324,35 @@ func bandAt(bands []style.Unit, n int) style.Unit {
 // balancing of anyway.
 var maxScoredItems = 400
 
+// maxScoredPositions bounds the same search by the places it can start a line
+// at, which is not the same number as the items.
+//
+// A state is a position, and a position inside an item is a *byte* offset:
+// where overflow-wrap may cut a word, every cluster of that word is somewhere a
+// line can begin, and every one of them enumerates the lines that can start
+// there. One unbreakable word of sixteen hundred characters is one item — far
+// under the bound above — and took three minutes and seventeen seconds. It is
+// reached by an ordinary document: a box with "text-wrap: balance" and a float
+// in it takes this path.
+//
+// Only the items a word may be cut inside are counted by their text. Every
+// other item is one position, so a paragraph of ordinary prose is bounded by
+// this exactly as it was by the count above, and nothing that balanced before
+// stops balancing.
+var maxScoredPositions = 1000
+
+// scoredPositions is how many places the search can start a line at.
+func scoredPositions(items []Item) int {
+	n := 0
+	for _, it := range items {
+		n++
+		if it.BreakWord && !it.NoWrap {
+			n += len(it.Text)
+		}
+	}
+	return n
+}
+
 // BalanceScoredCaps is §5.1's balancing as a choice between break sets rather
 // than as a narrower measure to fill greedily in.
 //
@@ -350,7 +379,8 @@ var maxScoredItems = 400
 func (br *Breaker) BalanceScoredCaps(items []Item, bands []style.Unit,
 	indent style.Unit, lines int) []style.Unit {
 
-	if lines < 2 || lines > MaxBalanceLines || len(items) > maxScoredItems {
+	if lines < 2 || lines > MaxBalanceLines || len(items) > maxScoredItems ||
+		scoredPositions(items) > maxScoredPositions {
 		return nil
 	}
 

@@ -122,3 +122,56 @@ func unit(t *testing.T, px float64) style.Unit {
 }
 
 var _ = shape.Features{}
+
+// TestBalancingALongBreakableWordIsBounded is the bound that was on the wrong
+// quantity.
+//
+// The scored search is quadratic in the places a line can begin, and where
+// overflow-wrap may cut a word every cluster of that word is one of them. The
+// bound counted *items*: one unbreakable word of sixteen hundred characters is
+// one item, far under a bound of four hundred, and the audit measured it at
+// three minutes and seventeen seconds. An ordinary document reaches it — a box
+// with "text-wrap: balance" and a float in it takes this path.
+func TestBalancingALongBreakableWordIsBounded(t *testing.T) {
+	face, err := notosans.Face()
+	if err != nil {
+		t.Fatalf("loading the embedded Noto Sans: %v", err)
+	}
+	br := NewBreaker(nil)
+	item := Item{
+		Text: strings.Repeat("a", 6000), Face: face, BreakWord: true, Size: unit(t, 10),
+	}
+	item.Width = br.MeasureSpaced(item.Face, item.Text, item.Size, TextSpacing{})
+	items := []Item{item}
+	bands := []style.Unit{unit(t, 200), unit(t, 200), unit(t, 150)}
+
+	start := time.Now()
+	br.BalanceScoredCaps(items, bands, 0, 3)
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("balancing one six-thousand-character word took %v; the search is "+
+			"bounded by the places it can start a line at, and there are six "+
+			"thousand of them here", elapsed)
+	}
+}
+
+// TestBalancingAnOrdinaryParagraphIsStillScored is the other side: only the
+// items a word may be cut inside are counted by their text, so a paragraph of
+// prose is bounded by this exactly as it was by the item count, and nothing
+// that was scored before stops being scored.
+func TestBalancingAnOrdinaryParagraphIsStillScored(t *testing.T) {
+	face, err := notosans.Face()
+	if err != nil {
+		t.Fatalf("loading the embedded Noto Sans: %v", err)
+	}
+	br := NewBreaker(nil)
+	var items []Item
+	for i := 0; i < 60; i++ {
+		it := Item{Text: "balanced ", Face: face, Size: unit(t, 10), BreakBefore: i > 0}
+		it.Width = br.MeasureSpaced(it.Face, it.Text, it.Size, TextSpacing{})
+		items = append(items, it)
+	}
+	if got := scoredPositions(items); got > maxScoredPositions {
+		t.Errorf("sixty words of prose come to %d positions, past the bound of %d; "+
+			"an ordinary paragraph must still be scored", got, maxScoredPositions)
+	}
+}
