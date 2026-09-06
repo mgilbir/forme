@@ -127,6 +127,10 @@ func newTokenizer(src string) *tokenizer {
 		// element, so the whole page moves down by a line.
 		t.pos = len(bom)
 	}
+	// Before a byte is read as markup: whether the bytes are text at all, and
+	// whether the document says they are meant to be something this engine
+	// cannot read. See encoding.go.
+	t.checkEncoding()
 	return t
 }
 
