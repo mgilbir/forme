@@ -103,14 +103,24 @@ func resolveContent(raw string, el *html.Node, counters counterValues,
 	// the picture lost between them.
 	var pieces []contentPiece
 	var text strings.Builder
+	// total is everything produced so far, which the loop below checks against
+	// the cap. See flush.
+	total := 0
 	flush := func() {
 		if text.Len() == 0 {
 			return
 		}
+		// The run being ended is charged to the total, which is what makes the
+		// total mean "everything produced so far". It did not: the run was
+		// discarded from the counting when it was flushed, so a url() between
+		// two quote keywords reset the only thing the cap could see. Four
+		// megabytes of marks came out of a two-hundred-kilobyte stylesheet
+		// with no finding, which is the amplification the cap's own comment
+		// says it exists to stop.
+		total += text.Len()
 		pieces = append(pieces, contentPiece{text: text.String()})
 		text.Reset()
 	}
-	total := 0
 	for _, v := range vals {
 		if total+text.Len() > maxContentLength {
 			return contentValue{unsupported: "the content is longer than this engine will generate"}
