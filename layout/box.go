@@ -1870,8 +1870,8 @@ func (b *boxBuilder) listValueOf(n *html.Node, listItem bool) (int, bool) {
 	if !listItem {
 		return 0, false
 	}
-	if vals := b.counters.elements[n]["list-item"]; len(vals) > 0 {
-		return vals[len(vals)-1], true
+	if v, ok := b.counters.elements[n]; ok {
+		return v, true
 	}
 	return 0, false
 }
