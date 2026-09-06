@@ -69,6 +69,57 @@ func (sh shaper) applyContextual(buf []Glyph, lookups []int) []Glyph {
 // nothing in the format forbids it, so the depth is what stops it.
 const maxLookupRecursion = 8
 
+// The allowance for applying a lookup from inside another, spent across one
+// run.
+//
+// Depth alone does not bound this work, and for a while it was all that did. A
+// matched rule names a list of lookup records, each saying "apply lookup N at
+// position P", and nothing stops those records from naming the rule's own
+// lookup — forty of them, forty times over, eight levels deep, is forty to the
+// eighth applications from a few hundred bytes of GSUB. It is not a cycle the
+// depth catches; it is a tree, and the depth bounds its height while the
+// records decide its width.
+//
+// So the run carries an allowance and every recursion spends one unit of it,
+// which is what HarfBuzz does and with the same numbers. The size is chosen to
+// be unreachable by a font that means well: a thousand nested applications per
+// glyph is orders of magnitude beyond what the most elaborate real script needs,
+// and the floor keeps a short run from being held to a small number. When it
+// runs out the remaining nested lookups do nothing, which is the same answer as
+// a rule that did not match.
+const (
+	lookupOpsPerGlyph = 1024
+	lookupOpsFloor    = 16384
+	lookupOpsCeiling  = 1 << 29
+)
+
+// lookupBudget is one run's allowance, sized from the glyphs it holds.
+func lookupBudget(glyphs int) *int {
+	n := glyphs * lookupOpsPerGlyph
+	if n < lookupOpsFloor {
+		n = lookupOpsFloor
+	}
+	if n > lookupOpsCeiling {
+		n = lookupOpsCeiling
+	}
+	return &n
+}
+
+// recurse reports whether a matched rule may apply another lookup, spending one
+// unit of the run's allowance when it may.
+//
+// A shaper with no allowance at all cannot recurse. That is the safe answer for
+// a value assembled by hand rather than by the one place that builds one: an
+// unbudgeted shaper is the state this bound exists to make impossible, so it is
+// treated as one that has already spent everything.
+func (sh shaper) recurse() bool {
+	if sh.ops == nil || *sh.ops <= 0 {
+		return false
+	}
+	*sh.ops--
+	return true
+}
+
 // applyGSUBAt applies one GSUB lookup at a position, returning how many input
 // glyphs it consumed (zero when it did not match) and the resulting buffer.
 func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph) {
@@ -831,6 +882,11 @@ func (sh shaper) runRecords(base []byte, at, count int, positions []int, buf []G
 			continue
 		}
 		target := positions[seqIndex]
+		if !sh.recurse() {
+			// The run has spent its allowance. Every remaining record does
+			// nothing, which is what a rule that did not match does.
+			break
+		}
 		if sh.positioning {
 			// Positioning never changes how many glyphs there are, so there is
 			// nothing to keep in step and nothing to resume differently for.

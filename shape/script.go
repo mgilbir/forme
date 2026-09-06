@@ -387,6 +387,14 @@ type shaper struct {
 	// forms they make.
 	manualJoiners bool
 
+	// ops is what is left of the run's allowance for applying one lookup from
+	// inside another. It is a pointer because a shaper is copied per lookup and
+	// the allowance belongs to the run, not to a lookup: a rule that names
+	// forty lookups which each name it again would otherwise be bounded only by
+	// the recursion depth, and eight levels of forty is a hang from a few
+	// hundred bytes of font. See lookupBudget.
+	ops *int
+
 	// markSet is the mark glyph set the lookup being applied names, or -1. It
 	// travels on the shaper rather than through every matcher's arguments
 	// because it belongs to the lookup, and a shaper is copied per lookup — so
