@@ -110,3 +110,44 @@ func TestAPageRuleCannotMakeAPageWithNoRoomOnIt(t *testing.T) {
 		}
 	}
 }
+
+// TestTheLegacyFlexibleBoxSaysWhatItDoesNotDo is a value accepted and quietly
+// not honoured.
+//
+// This engine implements exactly the part of "display: -webkit-box" that CSS
+// Overflow 4's compatibility section needs — a block that "-webkit-line-clamp"
+// can be written on — and reads it as a block, which is what every engine does
+// for the vertical, single-column case the clamp is used in. Under the
+// horizontal orient it is a row in a browser and a stack of blocks here, and
+// that went unsaid: a navigation bar written the old way came out as one item
+// per line with nothing to show which of the two the page was.
+func TestTheLegacyFlexibleBoxSaysWhatItDoesNotDo(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		css  string
+		want bool
+	}{
+		{"the default orient, which is horizontal",
+			`#a { display: -webkit-box }`, true},
+		{"the horizontal orient written out",
+			`#a { display: -webkit-box; -webkit-box-orient: horizontal }`, true},
+		{"the vertical orient, which is the clamp idiom",
+			`#a { display: -webkit-box; -webkit-box-orient: vertical }`, false},
+		{"an ordinary block", `#a { display: block }`, false},
+	} {
+		built := Build(Input{
+			HTML: `<div id="a"><span>one</span><span>two</span></div>`,
+			CSS:  []Stylesheet{{Source: noDefaults + tc.css}},
+		})
+		var said bool
+		for _, f := range built.Findings {
+			if f.Property == "display" && strings.Contains(f.Message, "-webkit-box") {
+				said = true
+			}
+		}
+		if said != tc.want {
+			t.Errorf("%s: reported %v, want %v (%v)", tc.name, said, tc.want,
+				ruleNames(built.Findings))
+		}
+	}
+}

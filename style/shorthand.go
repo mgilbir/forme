@@ -679,6 +679,7 @@ func fontShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, 
 
 	style, weight := ident("normal"), ident("normal")
 	var size, lineHeight, family []css.ComponentValue
+	var unsupported []string
 
 	i := 0
 	for ; i < len(parts); i++ {
@@ -695,9 +696,17 @@ func fontShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, 
 		case "bold", "bolder", "lighter", "100", "200", "300", "400",
 			"500", "600", "700", "800", "900":
 			weight = part
-		case "normal", "small-caps":
-			// "normal" says nothing and small-caps is a variant this engine
-			// does not set; neither changes what is produced.
+		case "normal":
+			// The initial value of every slot the shorthand can set, so it says
+			// nothing and changes nothing.
+		case "small-caps":
+			// A variant this engine does not set. It changes nothing either,
+			// and that is exactly what has to be said: the longhand
+			// "font-variant: small-caps" is reported as unimplemented, and the
+			// same request written inside the shorthand was swallowed — so a
+			// page whose small capitals came out as ordinary letters carried no
+			// claim that anything was missing from it.
+			unsupported = append(unsupported, "small-caps")
 		default:
 			return nil, nil, false
 		}
@@ -705,7 +714,7 @@ func fontShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, 
 	if i >= len(parts) {
 		// No size, so this is not a font shorthand at all — the size and the
 		// family are the two required parts.
-		return nil, nil, false
+		return nil, unsupported, false
 	}
 
 	size = parts[i]
@@ -747,7 +756,7 @@ func fontShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, 
 	} else {
 		out["line-height"] = ident("normal")
 	}
-	return out, nil, true
+	return out, unsupported, true
 }
 
 func isFontSize(part []css.ComponentValue) bool {

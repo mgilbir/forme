@@ -507,6 +507,9 @@ func (s *Styler) prepareRule(rule css.Rule, parent []css.ComponentValue, origin 
 			Unsupported: e.Unsupported,
 		})
 	}
+	for _, sel := range sels {
+		s.reportUncomputedPseudo(sel.PseudoElement, rule.Offset)
+	}
 	if !ok {
 		// An unusable selector list invalidates the rule, which is what the
 		// specification requires — and the findings above already said why.
@@ -907,11 +910,17 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 			}
 		}
 		if !ok {
-			s.report(Finding{
-				Offset:   d.Offset,
-				Message:  "\"" + name + ": " + serialize(d.Value) + "\" is not a value this engine can read",
-				Property: name,
-			})
+			// Unless the expander has already said what it could not produce,
+			// in which case this would be a second finding contradicting the
+			// first: "font: menu" is a system font, which is reported as
+			// unsupported above and is not a value the author got wrong.
+			if len(unsupported) == 0 {
+				s.report(Finding{
+					Offset:   d.Offset,
+					Message:  "\"" + name + ": " + serialize(d.Value) + "\" is not a value this engine can read",
+					Property: name,
+				})
+			}
 			return nil
 		}
 		out := make([]preparedDecl, 0, len(parts))
@@ -1439,6 +1448,40 @@ func (s *Styler) report(f Finding) {
 	}
 }
 
+// reportUncomputedPseudo names a pseudo-element the selector parser accepts and
+// this stage does not compute a style for.
+//
+// The parser's list and this one are two answers to "which pseudo-elements does
+// this engine have", and where they differ the rules written for the difference
+// do nothing at all. "::first-letter" parsed, matched, and was never computed:
+// a drop cap written the ordinary way was silently an ordinary first letter,
+// and the page carried no claim that anything was missing from it.
+//
+// Derived rather than listed, so that a pseudo-element the parser learns to
+// accept is reported until this stage learns to compute it.
+func (s *Styler) reportUncomputedPseudo(name string, offset int) {
+	if name == "" {
+		return
+	}
+	for _, computed := range pseudoElementNames {
+		if name == computed {
+			return
+		}
+	}
+	key := "::" + name
+	if s.seen[key] {
+		return
+	}
+	s.seen[key] = true
+	s.report(Finding{
+		Offset: offset,
+		Message: "\"" + key + "\" is not implemented, so what was written for it " +
+			"was not applied",
+		Unsupported: true,
+		Property:    key,
+	})
+}
+
 // pseudoElementNames are the ones this stage computes a style for.
 //
 // Three of them generate a box. ::first-line does not — it styles part of
@@ -1448,7 +1491,9 @@ func (s *Styler) report(f Finding) {
 // the element's own, and every em in it is absolutised against the answer, which
 // is work only the cascade can do.
 //
-// ::first-letter is still absent, because nothing reads it yet.
+// ::first-letter is still absent, because nothing reads it yet — and a rule
+// written for one is reported as unimplemented rather than dropped in silence.
+// See reportUncomputedPseudo.
 var pseudoElementNames = []string{"before", "after", "marker", "first-line"}
 
 // anyRuleTargets reports whether any rule selects a pseudo-element of an

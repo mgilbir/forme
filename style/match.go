@@ -51,7 +51,17 @@ type Matcher struct {
 	kids map[*html.Node][]*html.Node
 	idx  map[*html.Node]int
 
+	// steps is the work spent on the match in hand and over says that match ran
+	// out; tripped remembers that some match did, for the caller.
+	//
+	// The two are separate because the budget is *per match*. One selector on
+	// one element used to turn matching off for the rest of the document: the
+	// flag the walk read was the same one the caller reads, and nothing reset
+	// it — so a deep ".x .x .x … p" on one paragraph left every later selector
+	// on every later element unmatched, and the page was styled by whatever
+	// happened to come before it.
 	steps   int
+	over    bool
 	tripped bool
 }
 
@@ -94,7 +104,7 @@ func (m *Matcher) Match(s css.Selector, n *html.Node) bool {
 	if n == nil || n.Type != html.ElementNode || len(s.Compounds) == 0 {
 		return false
 	}
-	m.steps = 0
+	m.steps, m.over = 0, false
 	return m.complex(s.Compounds, len(s.Compounds)-1, n)
 }
 
@@ -151,12 +161,12 @@ func (m *Matcher) complex(compounds []css.Compound, i int, n *html.Node) bool {
 
 // spent charges one step and reports whether the budget is gone.
 func (m *Matcher) spent() bool {
-	if m.tripped {
+	if m.over {
 		return true
 	}
 	m.steps++
 	if m.steps > maxMatchSteps {
-		m.tripped = true
+		m.over, m.tripped = true, true
 		return true
 	}
 	return false

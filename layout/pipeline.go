@@ -300,6 +300,28 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 				Property: "display",
 			})
 		}
+		// The legacy flexible box. This engine implements exactly the part CSS
+		// Overflow 4's compatibility section needs — a block that
+		// "-webkit-line-clamp" can be written on — and the old flexbox layout
+		// it otherwise asks for is not implemented at all.
+		//
+		// Read as a block, which is what every engine does for the vertical,
+		// single-column case the clamp is used in. Under the *horizontal*
+		// orient it is a row in a browser and a stack of blocks here, and that
+		// went unsaid: a navigation bar written the old way came out as one
+		// item per line with nothing to show which of the two the page was.
+		if strings.EqualFold(strings.TrimSpace(cs["display"]), "-webkit-box") &&
+			!strings.EqualFold(strings.TrimSpace(cs["-webkit-box-orient"]), "vertical") {
+			rec.ReportDetail(Finding{
+				Rule:   RuleUnsupportedValue,
+				Source: AtHTML(n.Offset),
+				Message: "\"display: -webkit-box\" lays its children out in a row here " +
+					"only under \"-webkit-box-orient: vertical\"; the old flexible box is " +
+					"not implemented, so the element was laid out as a block",
+				Path:     PathOf(n),
+				Property: "display",
+			})
+		}
 		// "position: sticky" is the one positioning scheme this engine cannot
 		// answer, and it is the one that proves the scope boundary is about
 		// dynamism rather than about difficulty: sticky is defined by where a

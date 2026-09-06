@@ -1026,7 +1026,24 @@ const wptEnv = "WPT_TESTS"
 // things at once — a grid container that is a box, an anonymous grid item
 // around each run of text, and columns sized from their content — and it has
 // been reported as unlaid since the report existed. See layout/grid.go.
-const wptCleanPassBaseline = 5960
+//
+// 5960 to 5956 is four documents that pass and now say what is missing from
+// them, and it is the first entry here that goes down. The selector parser
+// accepts "::first-letter" and the cascade computes no style for it, so a rule
+// written for one matched, was thrown away, and left the page carrying no claim
+// that anything had been. Four documents in the suite write one — three text
+// transform tests and a line-height one — and all four still draw the reference
+// picture, which is why they are in the "something unsupported" bucket rather
+// than the failing one.
+//
+// The number that changed is the count of documents this engine renders
+// correctly *and* claims nothing about. Those four were only ever in it because
+// the claim was missing, so the drop is the measurement catching up with the
+// engine rather than the engine getting worse — the same correction, in the
+// same direction, as every entry above. It was measured with the report on and
+// off to be sure of the attribution: nothing else in that change moved a
+// document. See style/cascade.go's reportUncomputedPseudo.
+const wptCleanPassBaseline = 5956
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
