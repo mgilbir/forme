@@ -457,13 +457,14 @@ $(GRAPHEME_DIR)/.ok:
 	$(FETCH) -o $(GRAPHEME_DIR)/GraphemeBreakTest.txt $(UCD_URL)/auxiliary/GraphemeBreakTest.txt
 	touch $@
 
-# TestTheConformanceSuiteHasTeeth is named as well as matched, because it is the
-# test that plants a defect and checks the conformance sweep above catches it —
-# and "TestGrapheme" does not match its name, so for as long as that was the
-# whole pattern the check on the check never ran.
+# The whole package, because the three tests that matter here are named three
+# different things and a pattern that has to list them is a pattern that will be
+# wrong again. TestTheConformanceSuiteHasTeeth takes each of UAX #29's rules
+# away in turn and requires the sweep to reject the result — it is the check on
+# the check, and it once matched no pattern at all and so never ran.
 test-grapheme: grapheme-tests
 	UNICODE_GRAPHEME_TESTS=$(abspath $(GRAPHEME_DIR)) \
-	  go test -v -run 'TestGrapheme|TestTheConformanceSuiteHasTeeth' -count=1 ./segment
+	  go test -v -count=1 ./segment
 
 clean-grapheme-tests:
 	rm -rf $(GRAPHEME_DIR)
