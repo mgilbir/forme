@@ -46,10 +46,24 @@ import (
 // ResourceResolver turns a reference written in a document into bytes.
 //
 // It is deliberately not an io.Reader factory or a URL fetcher. A resolver is
-// handed the reference exactly as the document wrote it, with no scheme and no
-// leading slash — those are refused before it is called — and returns the whole
+// handed the reference exactly as the document wrote it and returns the whole
 // resource or an error. Returning an error is normal: a missing image is a
 // finding, not a failure of the render.
+//
+// What the engine guarantees before a resolver is called is what makes
+// os.ReadFile(filepath.Join(dir, ref)) a safe thing to write, so it is worth
+// stating exactly. The reference has been decoded — per-cent escapes resolved,
+// the query and fragment dropped — and the decoded form has been refused if it
+// names a scheme, begins with a slash or a backslash, or has any component
+// equal to "..". A resolver is handed the *undecoded* reference, so a name that
+// still contains "%2e%2e" is one whose decoded form was checked and is not a
+// traversal.
+//
+// That is containment against the reference, and it is not containment against
+// the filesystem: a symbolic link inside the directory pointing out of it is
+// still a way out, and no check on a name can see one. DirResolver uses os.Root
+// so that every component is resolved at the system call; a resolver written by
+// hand should do the same.
 //
 // A resolver must bound what it returns. The engine caps what it will decode,
 // but it cannot cap what a resolver allocates before returning, so a resolver
@@ -174,6 +188,25 @@ func (d *DirResolver) Resolve(ref string) ([]byte, error) {
 		return nil, fmt.Errorf("render: %s is larger than the %d bytes this engine will read", name, max)
 	}
 	return data, nil
+}
+
+// checkResourceRef is the policy of resourcePath applied to a reference the
+// engine is about to hand a resolver, without the rewriting.
+//
+// The refusals have to happen on the *decoded* form — "%2e%2e/x" is "../x" —
+// and the resolver is handed the reference the document wrote, because that is
+// what ResourceResolver says it gets and what DirResolver decodes for itself.
+// Decoding here as well would decode twice: "blue%2520sky.png" would become
+// "blue sky.png", a different file, and a file whose name holds a colon would
+// come back as a URL scheme.
+//
+// It is safe to check one form and pass the other because decoding can only
+// reveal a traversal, never hide one: a reference with a literal ".." component
+// still has it after decoding, and one with a leading slash still begins with
+// it.
+func checkResourceRef(ref string) error {
+	_, err := resourcePath(ref)
+	return err
 }
 
 // resourcePath turns a reference written in a document into a relative path,

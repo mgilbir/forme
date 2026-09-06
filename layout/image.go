@@ -562,6 +562,12 @@ func (l *replacedLoader) fetch(src, what string) ([]byte, *loadFailure) {
 				" scheme; this engine resolves no URLs and fetches nothing, so it was not drawn",
 		}
 	}
+	if err := checkResourceRef(src); err != nil {
+		return nil, &loadFailure{
+			rule:    RuleResourceBlocked,
+			message: "the " + what + " at " + quoteValue(src) + " was not loaded: " + err.Error(),
+		}
+	}
 	if l.res == nil {
 		return nil, &loadFailure{
 			rule:    RuleResourceBlocked,

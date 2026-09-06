@@ -871,6 +871,12 @@ func (l *fontFaceLoader) fetch(ref string) ([]byte, *loadFailure) {
 				" scheme; this engine resolves no URLs and fetches nothing",
 		}
 	}
+	if err := checkResourceRef(ref); err != nil {
+		return nil, &loadFailure{
+			rule:    RuleResourceBlocked,
+			message: "the font at " + quoteValue(ref) + " was not loaded: " + err.Error(),
+		}
+	}
 	if l.res == nil {
 		return nil, &loadFailure{
 			rule:    RuleResourceBlocked,

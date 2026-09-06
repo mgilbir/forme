@@ -264,6 +264,12 @@ func (l *sheetLoader) bytes(href string) ([]byte, *loadFailure) {
 				" scheme; this engine resolves no URLs and fetches nothing, so it was not applied",
 		}
 	}
+	if err := checkResourceRef(href); err != nil {
+		return nil, &loadFailure{
+			rule:    RuleResourceBlocked,
+			message: "the stylesheet at " + quoteValue(href) + " was not loaded: " + err.Error(),
+		}
+	}
 	if l.res == nil {
 		return nil, &loadFailure{
 			rule:    RuleResourceBlocked,
