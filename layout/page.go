@@ -80,14 +80,41 @@ type Options struct {
 }
 
 // Composed is a document laid out and painted, ready for a backend.
+//
+// # What a backend has to do with this
+//
+// Three things, and none of them is optional.
+//
+// Refused is the verdict. A backend that sees it produces nothing: the caller
+// was told not to render, rather than left to work it out from the list.
+//
+// Scale is a factor the backend applies. Every coordinate in Ops is at the
+// document's natural size, so a page that had to be shrunk to fit comes out
+// unshrunk here — a backend that draws the ops as they are draws a page too
+// large for the paper. Multiply by Scale about the origin of the content box.
+//
+// Page is the sheet, and the origin. Ops are measured from the top left corner
+// of the *content box* — inside the margins — with y increasing downwards, so a
+// backend that draws on the whole sheet translates by Page.Margin.Left and
+// Page.Margin.Top. It is returned because the document may have changed it: an
+// @page rule sets the size and the margins, and the sheet that was laid out on
+// is not always the sheet the caller asked for.
 type Composed struct {
-	// Ops is the display list, in paint order.
+	// Ops is the display list, in paint order, in content-box coordinates at
+	// the document's natural size. See the note above: Scale and Page.Margin
+	// are the backend's to apply.
 	Ops []Op
 	// Root is the fragment tree the display list was painted from.
 	Root *Fragment
+	// Page is the sheet the document was laid out on, after its own @page rules
+	// were applied to whatever the caller asked for. Its margins are the offset
+	// from the corner of the paper to the origin Ops are measured from.
+	Page PageSize
 	// Scale is the factor of §5: 1 when the content fitted, less when it had to
-	// be shrunk. It is reported because a caller may want to refuse a document
-	// that only fitted by being made small.
+	// be shrunk. A backend applies it — the ops are unscaled. It is reported
+	// rather than baked in because a caller may want to refuse a document that
+	// only fitted by being made small, and because a backend with a
+	// transformation matrix of its own should not be handed rounded numbers.
 	Scale float64
 	// NaturalSize is what the content needed at its natural size, before any
 	// scaling. It is what a caller adjusting a template needs to know.
@@ -172,7 +199,7 @@ func Compose(in Input, opts Options) Composed {
 	checkPageOverflow(rec, ops, avail, scale)
 
 	return Composed{
-		Ops: ops, Root: root, Scale: scale, NaturalSize: natural,
+		Ops: ops, Root: root, Page: built.Page, Scale: scale, NaturalSize: natural,
 		Findings:  rec.Findings(),
 		Refused:   rec.Failed() || buildRefused,
 		Truncated: rec.Truncated() || buildTruncated,
