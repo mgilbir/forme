@@ -84,9 +84,13 @@ func OrientationMix(text string) (upright, rotated bool) {
 // rules are one definition and would be a bug apart.
 func UprightUnits(text string) int {
 	n := 0
+	// The cluster boundaries are found once. They were found inside the loop —
+	// the whole string walked again per cluster, which is the same answer every
+	// time and quadratic in the length of the run.
+	bounds := segment.Boundaries(nil, text)
 	for i, start := 0, 0; start < len(text); i++ {
 		end := len(text)
-		if bounds := segment.Boundaries(nil, text); i < len(bounds) {
+		if i < len(bounds) {
 			end = bounds[i]
 		}
 		for _, r := range text[start:end] {

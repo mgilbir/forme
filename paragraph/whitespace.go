@@ -657,7 +657,16 @@ func CollapseWhitespaceAfter(text, value string, wst WordSpaceTransform,
 			}
 			continue
 		}
-		flush(r, nextSeen(text[i:]))
+		// The forward scan is made only when there is a run to end, because
+		// that is the only thing flush reads it for. Made for every character
+		// it was quadratic on a run of characters nothing is drawn for: each
+		// one scanned past all the rest, so a megabyte of soft hyphens took
+		// about fifty minutes.
+		var seen rune
+		if inRun {
+			seen = nextSeen(text[i:])
+		}
+		flush(r, seen)
 		for _, c := range pending {
 			out.WriteRune(c)
 		}
@@ -924,9 +933,12 @@ func wideAtSegmentBreak(r rune) bool {
 // variation selectors and asks for the break to go anyway, and a reader who
 // cannot see the selector would not expect it to change the answer.
 //
-// It is bounded by that run rather than by the text: the scan stops at the first
-// character that is not ignorable, and the loop that called it consumes what was
-// scanned, so no character is looked at twice.
+// It is bounded by the run of undrawn characters rather than by the text: the
+// scan stops at the first character that is not ignorable. What keeps it from
+// being quadratic is the caller, which asks only where a run of white space has
+// just ended — so between two scans there is always a character that is neither
+// ignorable nor space, and the scans cannot overlap by more than the run each
+// one stops at.
 func nextSeen(text string) rune {
 	for _, r := range text {
 		if IsDefaultIgnorable(r) || IsBidiControl(r) {
