@@ -1945,8 +1945,18 @@ func TestWPTReftests(t *testing.T) {
 		}
 	}
 	if cleanPass > wptCleanPassBaseline {
-		t.Logf("the clean-pass baseline can be raised from %d to %d",
-			wptCleanPassBaseline, cleanPass)
+		// A rise is a failure, and that is what makes this a ratchet rather
+		// than a number somebody looks at. It used to be a Logf: invisible
+		// without -v, green either way, and nothing ever raised the constant —
+		// so the README's figure fell about fifteen hundred passes behind the
+		// engine and neither number was wrong enough to notice.
+		//
+		// The work is one line in the same commit as the improvement, where the
+		// person who knows why it rose is the person writing it down.
+		t.Errorf("%d reftests pass cleanly and the baseline is %d: raise "+
+			"wptCleanPassBaseline to %d in this commit, and say in its message "+
+			"what made the difference",
+			cleanPass, wptCleanPassBaseline, cleanPass)
 	}
 }
 

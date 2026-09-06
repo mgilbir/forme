@@ -120,15 +120,18 @@ record of what it thought of.
 
 | | |
 |---|---|
-| **CSS Working Group reftests** | 5,177 documents rendered and compared against their references — **4,438 pass with nothing unsupported reported in either document** |
+| **CSS Working Group reftests** | 6,253 documents rendered and compared against their references — **5,956 pass with nothing unsupported reported in either document** |
 | **Unicode's bidi conformance** | 861,948 cases across `BidiTest.txt` and `BidiCharacterTest.txt`, no failures |
 | **Unicode's grapheme boundaries** | all 766 cases of `GraphemeBreakTest.txt` |
 | **HarfBuzz**, over six fonts | 20,623 strings, two deliberate differences |
-| **The CSS Syntax suite** | 207 cases, from the suite `css-parsing-tests` publishes |
+| **The CSS Syntax suite** | 206 cases from the suite `css-parsing-tests` publishes, with 13 more deliberately excused and each excuse named |
 
-The reftest number is a **ratchet**: it may rise and must never be lowered to make
-a red test green, so a drop is a layout regression and the failing names are
-printed. It is also counted honestly — a document only counts once *nothing* in
+The reftest number is a **ratchet**: it may never be lowered to make a red test
+green, so a drop is a layout regression and the failing names are printed. A
+*rise* fails the test too, and asks for the constant to be raised in the same
+commit — a number that only tightens when somebody remembers to look is not a
+ratchet, and this one fell about fifteen hundred passes behind before that was
+true. It is also counted honestly — a document only counts once *nothing* in
 either half of the comparison raised an unsupported finding, because two pages
 agreeing about a feature neither implements is not evidence.
 
@@ -137,9 +140,10 @@ settled by asking CoreText as a third opinion rather than by argument. They are
 listed with their reasons in `shape/harfbuzz_test.go` and pinned in the corpora,
 so a difference that stops being deliberate fails the test.
 
-Beyond the suites: ten fuzz targets, a differential fuzzer against HarfBuzz that
-generates text rather than listing it, and a CoreText harness for the questions
-two implementations cannot settle between them.
+Beyond the suites: 16 fuzz targets, eleven of them scheduled weekly, a
+differential fuzzer against HarfBuzz that generates text rather than listing it,
+and a CoreText harness for the questions two implementations cannot settle
+between them.
 
 	make test          # gofmt, vet, and the tests that need nothing fetched
 	make race          # the same, under the race detector

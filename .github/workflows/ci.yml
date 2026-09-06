@@ -114,21 +114,26 @@ jobs:
       - run: make test-grapheme
       # The CSS Syntax test suite, which this repository did not write.
       - run: make test-css
-      # The reftest ratchet: 5,177 documents from the CSS Working Group's suite,
-      # rendered and compared against their references. The number it holds is a
-      # minimum that may rise and must never be lowered to make a red test green,
-      # so a drop here is a layout regression and the failing names are printed.
+      # The reftest ratchet: six thousand documents from the CSS Working Group's
+      # suite, rendered and compared against their references. The number it
+      # holds must never be lowered to make a red test green, so a drop is a
+      # layout regression and the failing names are printed — and a rise fails
+      # too, asking for the constant to be raised in the same commit.
+      #
+      # The corpus checks run with it. The count is of *these* documents, so a
+      # checkout at another revision is not a measurement of this engine, and
+      # "TestWPT" does not match the tests that say which checkout it is.
       - name: The reftest ratchet
         run: |
           WPT_TESTS="$PWD/testdata/wpt" \
           NOTO_FONTS="$PWD/testdata/fonts-noto" \
-            go test -v -run TestWPT -count=1 ./layout/
+            go test -v -run 'TestWPT|TestTheCorpus|TestTheReadme' -count=1 ./layout/
 
       # And everything else that needs a corpus, which is most of this
       # repository's tests. The "make test" job above runs them with an empty
-      # environment, so a hundred and fifty-four of them skip there and were
-      # reached by nothing here either: the steps above name what they run, and
-      # what they name is the reftest ratchet and four conformance sweeps.
+      # environment, so most of them skip there and were reached by nothing here
+      # either: the steps above name what they run, and what they name is the
+      # reftest ratchet and four conformance sweeps.
       #
       # This is the step that runs the rest. It re-runs the ratchet as well,
       # which is half a minute and is left alone deliberately — the step above

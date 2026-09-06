@@ -9,11 +9,14 @@ test:
 # of it runs at all.
 #
 # "test" above hands `go test` an empty environment, and a test that needs a Noto
-# face or the reftest checkout answers that by skipping. A hundred and fifty-six
-# of them do — every test that loads a fallback face, every reftest, the two
-# colour oracles, and the grapheme suite's own teeth — and only two were reached
-# by anything else the gate ran. They passed; nothing was checking that they
-# still did, which is the same as not having them.
+# face or the reftest checkout answers that by skipping. Most of the suite does —
+# every test that loads a fallback face, every reftest, the two colour oracles —
+# and only two were reached by anything else the gate ran. They passed; nothing
+# was checking that they still did, which is the same as not having them.
+#
+# The count that stood here was written once and never remeasured, which is the
+# fault this whole paragraph is about; it is left out rather than replaced with a
+# number that will be wrong again.
 #
 # So this is where they run. It fetches what each corpus needs first, because a
 # target that quietly skips is the thing it was written to stop.
@@ -494,10 +497,19 @@ endef
 # corpus` and `make arlington`.
 CSS_TESTS_DIR := testdata/css-parsing-tests
 
+# The commit, because a corpus is only an oracle if two runs read the same one.
+# This named CSS_TESTS_REF, which nothing ever defined, so the fetch asked for
+# the empty string and took whatever the default branch pointed at that morning
+# — and the number of cases the suite checks is quoted in the README. What held
+# it still was a CI cache keyed on this file, which is to say: any edit here
+# swapped the corpus. The reftest corpus was pinned for exactly that reason;
+# this one was not.
+CSS_TESTS_COMMIT := 203ce36bffd617db7f118c551e32794561fb273d
+
 css-tests: $(CSS_TESTS_DIR)/.ok
 
 $(CSS_TESTS_DIR)/.ok:
-	$(call shallow_at,$(CSS_TESTS_DIR),https://github.com/SimonSapin/css-parsing-tests,$(CSS_TESTS_REF))
+	$(call shallow_at,$(CSS_TESTS_DIR),https://github.com/SimonSapin/css-parsing-tests,$(CSS_TESTS_COMMIT))
 	touch $@
 
 # The path is absolute because `go test ./css` runs with the package directory
@@ -719,7 +731,6 @@ clean-noto-fonts:
 # positioning and z-index are emphatically *in* — they are only dynamic in a
 # viewport that resizes, and this one does not.
 WPT_DIR  := testdata/wpt
-WPT_REF  ?= master
 WPT_DIRS := css/CSS2/normal-flow css/CSS2/box-display css/CSS2/margin-padding-clear \
             css/CSS2/abspos css/CSS2/positioning css/CSS2/visuren css/CSS2/visudet \
             css/CSS2/visufx css/CSS2/floats css/CSS2/floats-clear css/CSS2/tables \
@@ -889,9 +900,15 @@ $(WPT_DIR)/fonts/NotoSansGeorgian-Regular.ttf: $(WPT_DIR)/.ok $(NOTO_DIR)/.ok
 # 4,624 and printed "this is a layout regression" — which is the one thing a
 # ratchet must never say when it is wrong, because the reading it invites is to
 # lower the number.
+# The corpus checks run beside the ratchet and not somewhere else, because the
+# number the ratchet holds means nothing without them: it is a count of *these*
+# documents, and a checkout at another revision or with another sparse list is a
+# measurement of a different suite. They are named here because "TestWPT" does
+# not match them, so for as long as that was the whole pattern the pin was
+# checked by nothing that anybody ran.
 test-wpt: wpt noto-fonts
 	WPT_TESTS=$(abspath $(WPT_DIR)) NOTO_FONTS=$(abspath $(NOTO_DIR)) \
-	  go test -v -run TestWPT -count=1 ./layout/
+	  go test -v -run 'TestWPT|TestTheCorpus|TestTheReadme' -count=1 ./layout/
 
 clean-wpt:
 	rm -rf $(WPT_DIR)
