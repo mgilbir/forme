@@ -827,8 +827,12 @@ func (f *Face) GlyphIDForTest(r rune) (int, bool) {
 	return gid, ok && gid != 0
 }
 
-// forDocument returns a face that shares this one's parsing but keeps its own
-// record of what a document used.
+// Clone returns a face that shares this one's parsing but keeps its own record
+// of what a document used.
+//
+// It is what a caller with a font library calls per document, and what layout
+// calls for every face it is handed: a library is loaded once and used for
+// years, and the two things below have to be told apart before it can be.
 //
 // The split is between what the *font* says and what a *document* did with it.
 // The program, the tables and the rules read out of them are facts about the
@@ -845,14 +849,12 @@ func (f *Face) GlyphIDForTest(r rune) (int, bool) {
 // The per-script layout caches are fresh too. They are lazily filled, so
 // sharing them across faces would be a write from two goroutines to one map;
 // the alternative is a lock on a path taken once per script per document, and
-// the reading they save is small beside the reading forDocument already avoids.
-// Clone returns a face that shares this one's reading of the font and records
-// its own glyphs.
+// the reading they save is small beside the reading this already avoids.
 //
-// A face remembers which glyphs it was asked to set, because that is what a
-// subset is computed from — so one face used for two outputs puts each one's
-// glyphs into the other. Reading the font again instead costs milliseconds and
-// megabytes for an answer that cannot differ. Share the parse, not the face.
+// So: one face used for two outputs puts each one's glyphs into the other, and
+// two documents set at the same time write one map from two goroutines.
+// Reading the font again instead costs milliseconds and megabytes for an answer
+// that cannot differ. Share the parse, not the face.
 func (f *Face) Clone() *Face {
 	out := *f
 	out.used = map[int]bool{}
