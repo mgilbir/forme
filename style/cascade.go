@@ -436,10 +436,13 @@ func (s *Styler) prepareRule(rule css.Rule, parent []css.ComponentValue, origin 
 			s.prepareMedia(rule, parent, origin, out, order)
 			return
 		}
-		// The at-rules that are still a stage of their own: @page describes the
-		// surface rather than the content. It does not belong in the cascade,
-		// and reporting it here is how its absence stays visible until it
-		// arrives.
+		// An at-rule this package does not act on. The two that are a stage
+		// of their own — @font-face, which loads a file, and @page, which
+		// describes the surface rather than the content — are taken out of the
+		// stylesheet before it reaches here, so one that arrives came from a
+		// caller that does not do that and reporting it is right. Everything
+		// else genuinely is not applied, and reporting it is how that stays
+		// visible until it is.
 		s.report(Finding{
 			Offset:      rule.Offset,
 			Message:     "@" + rule.Name + " is not applied yet",
@@ -1560,12 +1563,23 @@ func beats(a, b candidate) bool {
 // ordering. The sequence, weakest first, is user-agent, user, author, then
 // important author, important user, important user-agent.
 func cascadeRank(c candidate) int {
-	if !c.important {
-		return int(c.origin) // 0, 1, 2
+	return CascadeRank(c.origin, c.important)
+}
+
+// CascadeRank is that term for a declaration outside the cascade.
+//
+// It is exported because @page is decided by it and is not styling anything: an
+// at-rule that describes the paper never reaches this file, and the caller that
+// does read it has the same two declarations of the same margin to choose
+// between. The rule belongs to the package that owns the cascade, and one
+// definition of it is how a second reader cannot drift from the first.
+func CascadeRank(origin Origin, important bool) int {
+	if !important {
+		return int(origin) // 0, 1, 2
 	}
 	// 3, 4, 5 with the origins reversed: author important is 3, user is 4,
 	// user-agent is 5.
-	return 3 + (int(OriginAuthor) - int(c.origin))
+	return 3 + (int(OriginAuthor) - int(origin))
 }
 
 // inlineDeclarations reads an element's style attribute.

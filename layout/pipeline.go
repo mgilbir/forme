@@ -76,6 +76,12 @@ type Built struct {
 	Root *Box
 	// Styles is every element's computed style.
 	Styles map[*html.Node]style.ComputedStyle
+	// Page is the sheet the document is to be laid out on: the one the caller
+	// asked for, with what the document's own @page rules said about it
+	// applied. A caller calling Layout directly should measure against this
+	// rather than against the page it passed in, or a document that set its own
+	// margins is laid out in the space it did not ask for.
+	Page PageSize
 	// Fonts is the set the document is to be laid out in: the caller's library
 	// with the faces the document's own @font-face rules loaded over it. It is
 	// never nil, and it is what a caller calling Layout directly must hand it —
@@ -103,7 +109,9 @@ func Build(in Input) Built {
 }
 
 // BuildFor is Build for a known sheet, which is what a media query is asked
-// about. See Build.
+// about and what the document's own @page rules are applied over. The sheet it
+// settled on is Built.Page, and that — not the one passed here — is what the
+// boxes are to be laid out in. See Build.
 func BuildFor(in Input, page PageSize) Built {
 	rec := NewRecorder(in.Policy)
 
@@ -121,11 +129,16 @@ func BuildFor(in Input, page PageSize) Built {
 	// here because a rule in the last stylesheet may replace one in the first,
 	// and because the caps below are on the document rather than on a sheet.
 	var faces []pendingFontFace
+	// The document's @page rules, gathered the same way and for the same
+	// reason: which of two declarations of a margin wins depends on the origin
+	// of the sheet each was written in, so all of them have to be in hand
+	// before any of them is read.
+	var pages []pendingPage
 
 	sheets := make([]style.Sheet, 0, len(in.CSS)+2)
-	sheets = append(sheets, parseSheet(rec, style.OriginUserAgent, "user agent", UserAgentCSS, &faces))
+	sheets = append(sheets, parseSheet(rec, style.OriginUserAgent, "user agent", UserAgentCSS, &faces, &pages))
 	if in.UserCSS != "" {
-		sheets = append(sheets, parseSheet(rec, style.OriginUser, "user", in.UserCSS, &faces))
+		sheets = append(sheets, parseSheet(rec, style.OriginUser, "user", in.UserCSS, &faces, &pages))
 	}
 	// A <style> element and a <link rel=stylesheet> are both author stylesheets,
 	// and they come before the ones the caller passed only because they were
@@ -134,14 +147,14 @@ func BuildFor(in Input, page PageSize) Built {
 	// interleaved in document order for that reason; see stylesheet.go for what
 	// a linked one is allowed to be read from.
 	for _, s := range documentStylesheets(doc, in.Resources, rec) {
-		sheets = append(sheets, parseSheet(rec, style.OriginAuthor, s.name, s.source, &faces))
+		sheets = append(sheets, parseSheet(rec, style.OriginAuthor, s.name, s.source, &faces, &pages))
 	}
 	// A caller's own sheets go through the same expansion as the document's, so
 	// that "@import" means the same thing whichever side it was written on.
 	importer := &sheetLoader{res: in.Resources, rec: rec, failed: map[string]bool{}}
 	for _, s := range in.CSS {
 		for _, e := range importer.expandImports(authorSheet{name: s.Name, source: s.Source}) {
-			sheets = append(sheets, parseSheet(rec, style.OriginAuthor, e.name, e.source, &faces))
+			sheets = append(sheets, parseSheet(rec, style.OriginAuthor, e.name, e.source, &faces, &pages))
 		}
 	}
 
@@ -150,6 +163,13 @@ func BuildFor(in Input, page PageSize) Built {
 		base = StandardFonts()
 	}
 	fontSet := loadFontFaces(faces, in.Resources, base, rec)
+
+	// The sheet the document asked for, settled before it is styled. A margin
+	// does not change what a media query is answered with — a query asks about
+	// the paper and the margin is inside it — but the page has to be decided
+	// before layout either way, and deciding it here is what lets Compose lay
+	// out on the sheet the document chose.
+	page = applyPageRules(page, pages, rec)
 
 	styled := style.ApplyIn(doc, sheets, fontMetrics{fontSet},
 		style.Media{Width: page.Width, Height: page.Height})
@@ -177,6 +197,7 @@ func BuildFor(in Input, page PageSize) Built {
 	return Built{
 		Document:  doc,
 		Root:      root,
+		Page:      page,
 		Styles:    styled.Styles,
 		Fonts:     fontSet,
 		Findings:  rec.Findings(),
@@ -192,7 +213,8 @@ func BuildFor(in Input, page PageSize) Built {
 // a cascade matter at all: an @font-face selects nothing and computes nothing,
 // it loads a file. Leaving them in would mean the styling stage reporting each
 // as an at-rule it does not apply, which after fontface.go would be untrue.
-func parseSheet(rec *Recorder, origin style.Origin, name, src string, faces *[]pendingFontFace) style.Sheet {
+func parseSheet(rec *Recorder, origin style.Origin, name, src string,
+	faces *[]pendingFontFace, pages *[]pendingPage) style.Sheet {
 	rules, errs := css.ParseStylesheet(src)
 	for _, e := range errs {
 		rec.ReportDetail(Finding{
@@ -201,7 +223,9 @@ func parseSheet(rec *Recorder, origin style.Origin, name, src string, faces *[]p
 			Message: e.Message,
 		})
 	}
-	return style.Sheet{Origin: origin, Rules: splitFontFaces(rules, name, faces)}
+	rules = splitFontFaces(rules, name, faces)
+	rules = splitPageRules(rules, name, origin, pages)
+	return style.Sheet{Origin: origin, Rules: rules}
 }
 
 // ruleForStyleFinding maps the styling stage's report onto a rule.

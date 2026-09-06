@@ -609,9 +609,14 @@ func itoa(i int) string {
 	return string(b)
 }
 
-// TestAtRulesAreReported pins that @media and @page are visibly absent rather
-// than silently ignored — they are the next stage's work, and until it arrives
-// an author has to be told their rules did nothing.
+// TestAtRulesAreReported pins that an at-rule this package does not act on is
+// visibly absent rather than silently ignored — it is another stage's work, and
+// until that stage arrives an author has to be told their rules did nothing.
+//
+// @page is one of them here and is not one in the engine: layout takes those
+// rules out of the sheet before the cascade sees them, exactly as it does
+// @font-face. What this test pins is what this package says about a rule
+// nothing took out.
 func TestAtRulesAreReported(t *testing.T) {
 	doc := parseDoc(t, "<p>x</p>")
 	got := Apply(doc, []Sheet{author(t, "@page { margin: 1cm } @font-face { src: url(x) }")})

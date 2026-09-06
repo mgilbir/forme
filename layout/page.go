@@ -148,7 +148,10 @@ func Compose(in Input, opts Options) Composed {
 	// both are taken across rather than re-derived from what survived.
 	buildRefused, buildTruncated := built.Failed, built.Truncated
 
-	avail := opts.Page.Content()
+	// built.Page rather than opts.Page: an @page rule in the document may have
+	// changed the margins, and laying out in the space the caller asked for
+	// would ignore what the document said about its own.
+	avail := built.Page.Content()
 	// built.Fonts rather than in.Fonts: the document's own @font-face rules
 	// have been loaded onto the caller's library by now, and laying out with
 	// the library alone would set the page in the wrong faces.
