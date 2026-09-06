@@ -1,4 +1,4 @@
-.PHONY: verify-fonts test-corpora linebreak vertical dictionaries test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors noto-fonts clean-noto-fonts wpt test-wpt clean-wpt varinstance test-varinstance
+.PHONY: verify-fonts test-corpora linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors noto-fonts clean-noto-fonts wpt test-wpt clean-wpt varinstance test-varinstance
 
 test:
 	gofmt -l . | grep -v '^testdata/' && exit 1 || true
@@ -133,7 +133,48 @@ hbfuzz:
 # property files plus the engine's corrections. See cmd/genuse.
 #
 #	make useable UCD=/path/to/unpacked/ucd
-UCD ?= testdata/ucd
+#
+# UCD_DIR is where this file would put one; UCD is where a generator reads one
+# from, and is the same place unless a caller says otherwise. The two are
+# separate so that clean-ucd can refuse to remove a directory it did not make.
+UCD_DIR := testdata/ucd
+UCD ?= $(UCD_DIR)
+
+# The tables the shaper derives from Unicode, which cmd/genuse's table above is
+# only one of. Each was runnable and none was wired up, so the only way to
+# regenerate one was to read its usage line — which named a directory this
+# repository does not have.
+#
+#	make shapetables UCD=/path/to/unpacked/ucd
+shapetables:
+	go run ./cmd/genscripts $(UCD)/Scripts.txt $(UCD)/PropertyValueAliases.txt \
+	  > shape/scripts.go
+	go run ./cmd/genjoining $(UCD)/ArabicShaping.txt > shape/joining.go
+	go run ./cmd/genignorable $(UCD)/DerivedCoreProperties.txt > shape/ignorabletable.go
+	go run ./cmd/genindic $(UCD)/IndicSyllabicCategory.txt \
+	  $(UCD)/IndicPositionalCategory.txt > shape/indiccategory.go
+	go run ./cmd/genmatra $(UCD)/UnicodeData.txt > shape/indicmatra.go
+	go run ./cmd/genvowel testdata/ms-use/IndicShapingInvalidCluster.txt \
+	  > shape/indicvowel.go
+	go run ./cmd/gencanonical $(UCD)/UnicodeData.txt \
+	  $(UCD)/CompositionExclusions.txt > shape/canonical.go
+	gofmt -w shape/scripts.go shape/joining.go shape/ignorabletable.go \
+	  shape/indiccategory.go shape/indicmatra.go shape/indicvowel.go shape/canonical.go
+
+# The bidirectional character properties, UAX #9. See cmd/genbidi.
+#
+#	make bidi-tables UCD=/path/to/unpacked/ucd
+bidi-tables:
+	go run ./cmd/genbidi $(UCD)/UnicodeData.txt $(UCD)/DerivedBidiClass.txt \
+	  $(UCD)/BidiBrackets.txt $(UCD)/BidiMirroring.txt > bidi/tables.go
+	gofmt -w bidi/tables.go
+
+# The grapheme cluster properties, UAX #29. See cmd/gensegment.
+#
+#	make grapheme-tables UCD=/path/to/unpacked/ucd
+grapheme-tables:
+	go run ./cmd/gensegment -ucd $(UCD) -out segment/tables.go
+	gofmt -w segment/tables.go
 
 # The characters a line may not begin with, from Unicode's line-breaking
 # property. See cmd/genlinebreak for which of UAX #14's rules are in it.
@@ -300,8 +341,16 @@ useable:
 		> shape/usetable.go
 	gofmt -w shape/usetable.go
 
+# Only the directory this file fetches into. "make clean-ucd UCD=/path/to/ucd"
+# is the documented way to run a generator against a copy someone already has,
+# and the same variable removing it recursively is a way to lose a directory
+# that was never ours to remove.
 clean-ucd:
-	rm -rf $(UCD)
+	@if [ "$(UCD)" != "$(UCD_DIR)" ]; then \
+	  echo "clean-ucd removes $(UCD_DIR) and nothing else; UCD is $(UCD)" >&2; \
+	  exit 1; \
+	fi
+	rm -rf $(UCD_DIR)
 
 # The broad font sweeps, over two libraries far too large to vendor: every OFL
 # family Google publishes, and Noto's CJK faces.

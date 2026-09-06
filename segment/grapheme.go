@@ -35,7 +35,7 @@
 // and emoji text when they are missing: GB9c, which holds a consonant conjunct
 // together across its virama, and GB11, which holds an emoji ZWJ sequence
 // together. The tables are generated from the Unicode Character Database by
-// cmd/gengrapheme and the whole of it is checked against Unicode's own
+// cmd/gensegment and the whole of it is checked against Unicode's own
 // GraphemeBreakTest.txt — see conformance_test.go.
 package segment
 
