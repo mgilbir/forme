@@ -403,6 +403,66 @@ func TestAnImportIsRelativeToTheSheetItWasWrittenIn(t *testing.T) {
 	}
 }
 
+// TestAnImportOneDirectoryUpIsFollowed is the same rule the other way, and it
+// is the ordinary shape of a document with a css/ directory: the shared sheet
+// sits beside the document and each page's sheet says `@import "../base.css"`.
+//
+// It was refused. The join was left as written — "css/../base.css" — which is
+// the same file to anything that resolves paths and a parent-relative reference
+// to anything that inspects them, and DirResolver inspects them: a ".."
+// anywhere in a reference is refused before os.Root ever sees the path. So the
+// engine manufactured a reference that its own resolver would not take, and
+// reported the author's stylesheet as an attempt to leave the document's
+// directory.
+func TestAnImportOneDirectoryUpIsFollowed(t *testing.T) {
+	dir := cssDir(t)
+	if err := os.MkdirAll(filepath.Join(dir, "css"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeCSS(t, filepath.Join(dir, "base.css"), "p { color: rgb(1, 2, 3) }")
+	writeCSS(t, filepath.Join(dir, "css", "page.css"), `@import "../base.css";`)
+
+	built := buildLinking(t, dir,
+		`<link rel=stylesheet href="css/page.css"><p id=p>x</p>`)
+	if got := colourOf(t, built, "p"); got != wantColour {
+		t.Errorf("the colour is %q; an @import one directory up names the file "+
+			"beside the document", got)
+	}
+	for _, f := range built.Findings {
+		if strings.Contains(f.Message, "..") || strings.Contains(f.Message, "base.css") {
+			t.Errorf("an @import that was applied was still reported: %s", f.Message)
+		}
+	}
+}
+
+// TestAnImportAboveTheDocumentIsStillRefused is the other side, and the reason
+// the reference is cleaned rather than the resolver relaxed: a sheet beside the
+// document asking for one above it has nowhere to be cleaned to, keeps its
+// "..", and is refused exactly as it always was.
+func TestAnImportAboveTheDocumentIsStillRefused(t *testing.T) {
+	dir := cssDir(t)
+	writeCSS(t, filepath.Join(dir, "outer.css"), `@import "../secret.css";`)
+	if err := os.WriteFile(filepath.Join(filepath.Dir(dir), "secret.css"),
+		[]byte("p { color: rgb(9, 9, 9) }"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	built := buildLinking(t, dir,
+		`<link rel=stylesheet href="outer.css"><p id=p>x</p>`)
+	if got := colourOf(t, built, "p"); got == "rgb(9, 9, 9)" {
+		t.Error("an @import above the document's own directory was followed")
+	}
+	found := false
+	for _, f := range built.Findings {
+		if strings.Contains(f.Message, "secret.css") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("nothing was reported about the refused @import; findings: %v",
+			built.Findings)
+	}
+}
+
 // TestAnImportedSheetComesBeforeTheSheetThatImportedIt. "@import" is how a sheet
 // says "these are my defaults", so the importing sheet's own rules have to win a
 // tie — which in the cascade means arriving later.
@@ -520,8 +580,22 @@ func TestAChainOfImportsTerminates(t *testing.T) {
 func TestAReferenceIsJoinedToTheSheetItWasWrittenIn(t *testing.T) {
 	for _, tc := range []struct{ ref, from, want, what string }{
 		{"theme.css", "support/outer.css", "support/theme.css", "beside the sheet"},
-		{"../theme.css", "support/outer.css", "support/../theme.css", "above it"},
 		{"a/b.css", "x/y/outer.css", "x/y/a/b.css", "below it"},
+
+		// The join is cleaned. "../theme.css" written in "support/outer.css"
+		// names a file beside the document, and left as "support/../theme.css"
+		// it named the same file to anything that resolves paths and a
+		// parent-relative reference to anything that inspects them — which
+		// DirResolver does, so the ordinary case of one directory up was
+		// refused outright.
+		{"../theme.css", "support/outer.css", "theme.css", "one directory up"},
+		{"../../theme.css", "a/b/c/outer.css", "a/theme.css", "two directories up"},
+		{"./theme.css", "support/outer.css", "support/theme.css", "written with a dot"},
+		{"d/../theme.css", "support/outer.css", "support/theme.css", "up from a sibling"},
+		// And one that really does leave the root keeps its "..", for the
+		// resolver to refuse as it always did.
+		{"../theme.css", "outer.css", "../theme.css", "above the document itself"},
+		{"../../x.css", "a/outer.css", "../x.css", "further above it"},
 		// A reference that begins at the root names itself.
 		{"/fonts/ahem.css", "css/deep/outer.css", "/fonts/ahem.css", "root-relative"},
 		{"/a.css", "", "/a.css", "root-relative from a <style>"},

@@ -2,6 +2,7 @@ package layout
 
 import (
 	"fmt"
+	"path"
 	"strings"
 
 	"github.com/mgilbir/forme/css"
@@ -542,15 +543,27 @@ func (l *sheetLoader) fetchImport(ref, from string) (string, bool) {
 // A reference that begins at the root names itself, and a sheet with no name of
 // its own — a <style> element — leaves the reference alone, because the document
 // is what it is already relative to.
+//
+// The join is cleaned, and that is the whole of what a resolver can be handed.
+// "../base.css" written in "css/page.css" names "base.css", a file beside the
+// document; joined and left alone it named "css/../base.css", which is the same
+// file to anything that resolves paths and a parent-relative reference to
+// anything that inspects them. DirResolver inspects them — it refuses a ".."
+// segment outright, before os.Root ever sees the path — so an ordinary @import
+// one directory up was refused as an attempt to leave the document's
+// directory, which is a thing it was not doing.
+//
+// A reference that really does go above the sheet's own root keeps its "..":
+// path.Clean has nowhere to take it, and the resolver refuses it as before.
 func resolveAgainstSheet(ref, from string) string {
 	if from == "" || strings.HasPrefix(ref, "/") {
 		return ref
 	}
 	i := strings.LastIndexByte(from, '/')
 	if i < 0 {
-		return ref
+		return path.Clean(ref)
 	}
-	return from[:i+1] + ref
+	return path.Clean(from[:i+1] + ref)
 }
 
 // overCapImport reports the document-wide count tripping on an @import. It is
