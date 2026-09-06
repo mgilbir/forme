@@ -1254,6 +1254,9 @@ func type2CharstringWidth(cs []byte, local, global cffIndex) (float64, bool) {
 // cyclic subroutine meets instead of spinning.
 const maxSubrDepth = 10
 
+// CFFSubrBias is subrBias, for the subsetter's seac walk. See subrBias.
+func CFFSubrBias(n int) int { return subrBias(n) }
+
 // subrBias is the number a Type 2 subroutine index is offset by, which the
 // specification makes depend on how many subroutines there are so that the
 // commonest indices encode in one byte.

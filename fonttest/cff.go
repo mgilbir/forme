@@ -55,6 +55,17 @@ type CFFOptions struct {
 	// used to be.
 	LocalSubrs    int
 	LocalSubrsGap int
+	// Charstrings replaces the default one-byte endchar per glyph. It has to
+	// hold exactly Glyphs entries, and .notdef is the first of them.
+	Charstrings [][]byte
+	// CharsetSIDs are the SIDs the charset gives glyphs 1 upwards — .notdef is
+	// never listed — written as a format 0 charset. It overrides Charset.
+	//
+	// A fixture needs one wherever a glyph has to be found by *name*: a seac
+	// names its two glyphs by StandardEncoding code, and the only way from a
+	// code to a glyph is through the name it stands for and the charset that
+	// gives that name to a glyph.
+	CharsetSIDs []int
 }
 
 // CFF builds a CFF table: the header, the four INDEXes, a Private DICT and one
@@ -103,6 +114,13 @@ func CFF(opts CFFOptions) []byte {
 	// value, so the Top DICT written against placeholder offsets is the same
 	// length as the one written against the real ones and nothing shifts under
 	// it. The fixture checks that rather than trusting it.
+	if opts.Charstrings != nil && len(opts.Charstrings) != opts.Glyphs {
+		panic("fonttest: Charstrings has to hold one entry per glyph")
+	}
+	if n := len(opts.CharsetSIDs); n > 0 && n != opts.Glyphs-1 {
+		panic("fonttest: CharsetSIDs has to hold one entry per glyph but .notdef")
+	}
+
 	priv := cffPrivateDict()
 	// The local subroutines, and whatever the font leaves between them and the
 	// DICT that names them. The operand is written in the same fixed three-byte
@@ -118,7 +136,7 @@ func CFF(opts CFFOptions) []byte {
 		}
 		subrsBlob = append(make([]byte, opts.LocalSubrsGap), cffINDEX(items...)...)
 	}
-	top := func(csOff, privOff int) []byte {
+	top := func(csOff, privOff, charsetOff int) []byte {
 		var d []byte
 		if opts.CIDKeyed {
 			d = append(d, cffOperand3(regSID)...)
@@ -126,9 +144,13 @@ func CFF(opts CFFOptions) []byte {
 			d = append(d, cffOperand3(supplement)...)
 			d = append(d, 12, 30) // ROS
 		}
-		if opts.Charset != 0 {
-			d = append(d, cffOperand3(opts.Charset)...)
+		switch {
+		case len(opts.CharsetSIDs) > 0:
+			d = append(d, cffOperand3(charsetOff)...)
 			d = append(d, 15) // charset
+		case opts.Charset != 0:
+			d = append(d, cffOperand3(opts.Charset)...)
+			d = append(d, 15)
 		}
 		d = append(d, cffOperand3(csOff)...)
 		d = append(d, 17) // CharStrings
@@ -142,23 +164,37 @@ func CFF(opts CFFOptions) []byte {
 	data = append(data, 1, 0, 4, 1) // version 1.0, hdrSize 4, offSize 1
 	data = append(data, cffINDEX([]byte("Fixture"))...)
 	topAt := len(data)
-	data = append(data, cffINDEX(top(0, 0))...)
+	data = append(data, cffINDEX(top(0, 0, 0))...)
 	topLen := len(data) - topAt
 	data = append(data, cffINDEX(strs...)...)
 	data = append(data, cffINDEX()...) // Global Subr INDEX, empty
 	privOff := len(data)
 	data = append(data, priv...)
 	data = append(data, subrsBlob...)
+
+	// The charset, in format 0: a version byte and one SID per glyph but
+	// .notdef.
+	charsetOff := 0
+	if len(opts.CharsetSIDs) > 0 {
+		charsetOff = len(data)
+		data = append(data, 0)
+		for _, sid := range opts.CharsetSIDs {
+			data = append(data, byte(sid>>8), byte(sid))
+		}
+	}
 	csOff := len(data)
 
 	const endchar = 14
-	charstrings := make([][]byte, opts.Glyphs)
-	for i := range charstrings {
-		charstrings[i] = []byte{endchar}
+	charstrings := opts.Charstrings
+	if charstrings == nil {
+		charstrings = make([][]byte, opts.Glyphs)
+		for i := range charstrings {
+			charstrings[i] = []byte{endchar}
+		}
 	}
 	data = append(data, cffINDEX(charstrings...)...)
 
-	final := cffINDEX(top(csOff, privOff))
+	final := cffINDEX(top(csOff, privOff, charsetOff))
 	if len(final) != topLen {
 		panic("fonttest: the Top DICT changed length between passes, so every " +
 			"offset in it now points somewhere else")

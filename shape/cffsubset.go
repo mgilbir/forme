@@ -502,10 +502,13 @@ func (f *Face) subsetOpenTypeCFF() ([]byte, []int, error) {
 			keep[gid] = true
 		}
 	}
-	// CFF has no composite glyphs in the glyf sense — a charstring that reuses
-	// another shape does it through seac or a subroutine, and both are carried
-	// along by keeping the subroutine INDEXes whole — so there is no closure to
-	// take here.
+	// A charstring that reuses another shape does it through a subroutine or
+	// through a seac, and only the first of those is carried along by keeping
+	// the subroutine INDEXes whole. A seac names two other *glyphs*, so it
+	// needs a closure exactly as a composite glyf glyph does. See cffseac.go.
+	if err := cffSeacClosure(tables["CFF "], keep); err != nil {
+		return nil, nil, err
+	}
 
 	sub, err := subsetCFF(tables["CFF "], keep)
 	if err != nil {
