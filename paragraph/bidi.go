@@ -197,10 +197,6 @@ func LineVisualOrder(runs []Item) []int {
 		switch {
 		case item.Para == para && item.BidiStart-start < len(lineLevels):
 			levels[i] = lineLevels[item.BidiStart-start]
-		case item.InsetLevelKnown && !item.Inset:
-			// Kept for a caller that sets the field on something other than an
-			// inset; nothing in this engine does.
-			levels[i] = item.InsetLevel
 		default:
 			levels[i] = levelUnset
 		}

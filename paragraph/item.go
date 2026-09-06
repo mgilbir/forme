@@ -451,22 +451,6 @@ type Item struct {
 	// which way the text runs and not on which end of the box the edge is. So
 	// both are kept, and shapingcontext.go picks the one that is actually there.
 	InsetLeft, InsetRight style.Unit
-	// InsetLevel is the embedding level the box's own edges sit at, and
-	// insetLevelKnown says insetSides worked one out.
-	//
-	// An inset carries no characters, so the algorithm gives it no level of its
-	// own, and the two obvious guesses are both wrong somewhere: the level of the
-	// neighbouring item glues the box's edge to whatever run happens to abut it,
-	// and the paragraph's base level detaches it from its own content. What the
-	// edge of an inline box sits at is the *lowest* level anything inside it
-	// reached — an embedding inside the box only raises the level of what is
-	// inside, and the box's own boundary is outside all of them.
-	//
-	// The flag is separate because zero is a real level, the left-to-right one,
-	// and a box with no content on the line at all has to stay distinguishable
-	// from a box whose content is left-to-right.
-	InsetLevel      int
-	InsetLevelKnown bool
 	// Float is a Float met in this run of inline content. It carries no text of
 	// its own: it is a marker saying "a Float belongs here", because where a
 	// Float appears among the words decides which line box it is placed against,
