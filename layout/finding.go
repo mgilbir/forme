@@ -75,6 +75,17 @@ const (
 	// for the text is the rule below, and the two are separate because one is a
 	// gap and the other is CSS working.
 	RuleFontFallback Rule = "font-fallback"
+	// RuleNoFace is the set having no face at all — not the requested family,
+	// not the initial one, nothing.
+	//
+	// It is separate from RuleFontFallback because it is a different fact and a
+	// different severity. A fallback is CSS working: the family asked for was
+	// not there, another one set the text, and the page differs in its metrics.
+	// This is the engine having nothing to set text with, so no text is drawn
+	// at all — a page that is blank where its words should be, which is the one
+	// outcome worth refusing outright.
+	RuleNoFace Rule = "no-face"
+
 	// RuleFontSubstituted is a family that resolved to a face with no glyph for
 	// the text it was asked to set, so font matching went on to another face.
 	//
@@ -303,6 +314,10 @@ var defaultSeverity = map[Rule]Severity{
 	// was used. Refusing to produce the document over it would be a default
 	// turned off wholesale by anyone whose fonts are woff2.
 	RuleFontUndecodable: Warn,
+	// Nothing to set text in is not a degraded page, it is an empty one. A
+	// caller shown a blank sheet with no finding on it has no way to tell that
+	// from a document that said nothing.
+	RuleNoFace: Error,
 	// A self-check: this firing means the scale computation is wrong, and a
 	// document produced from a wrong scale is worse than none.
 	RuleOverflowPage:  Error,

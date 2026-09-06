@@ -344,6 +344,9 @@ type layouter struct {
 	// keeps the per-cluster family walk off every document that has no such
 	// descriptor, which is almost all of them.
 	restrictedFamilies map[string]bool
+	// reportedNoFace records that the set was found to have no face at all, so
+	// the finding is raised once rather than once per box. See fontFor.
+	reportedNoFace bool
 	// br is the half of inline layout that is about text rather than boxes, and
 	// it owns the memo of measured runs. See breaker.
 	br *breaker

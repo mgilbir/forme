@@ -244,6 +244,20 @@ func (l *layouter) fontFor(b *Box) (*shape.Face, bool) {
 	face, ok := l.fontSet.Face(initialFamily, key.bold, key.italic)
 	l.fonts[key] = resolvedFont{face: face}
 	if !ok {
+		// Not even the initial family. The set has nothing, so this box's text
+		// is not drawn — and neither is any other box's, since they all end up
+		// here. That was silent: a set with no faces in it produced a blank
+		// page, no finding, and Refused false, which a caller cannot tell from
+		// a document that said nothing.
+		if !l.reportedNoFace {
+			l.reportedNoFace = true
+			l.rec.ReportDetail(Finding{
+				Rule: RuleNoFace,
+				Message: "no font face is available at all, not even for " +
+					quoteValue(initialFamily) + ", so no text was drawn",
+				Property: "font-family",
+			})
+		}
 		return nil, false
 	}
 	if len(families) > 0 {
