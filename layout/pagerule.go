@@ -81,6 +81,32 @@ func isPageRule(r css.Rule) bool {
 	return r.At && strings.EqualFold(r.Name, "page")
 }
 
+// pageDeclarations is what a document's @page rules said, before any of it is
+// applied. They are gathered rather than applied as they are read because the
+// descriptors are not independent: a margin may be a percentage of the size,
+// and the size is not settled until the last rule has been seen.
+type pageDeclarations struct {
+	sides [4]pageDeclaration
+	size  pageSizeDeclaration
+}
+
+// pageSizeDeclaration is the size descriptor as one rule declared it, already
+// resolved to a sheet. It is one value and not two — "size" declares the pair,
+// so a later rule saying "landscape" replaces the width and the height together
+// rather than turning what an earlier one chose.
+type pageSizeDeclaration struct {
+	width, height style.Unit
+	rank          int
+	order         int
+	set           bool
+}
+
+func takeSize(held *pageSizeDeclaration, d pageSizeDeclaration) {
+	if !held.set || d.rank > held.rank || (d.rank == held.rank && d.order > held.order) {
+		*held = d
+	}
+}
+
 // pageDeclaration is one side's margin as one rule declared it, with what
 // deciding against another declaration of the same side needs.
 type pageDeclaration struct {
@@ -118,10 +144,19 @@ func applyPageRules(page PageSize, pages []pendingPage, rec *Recorder) PageSize 
 	if len(pages) == 0 {
 		return page
 	}
-	var sides [4]pageDeclaration
+	var got pageDeclarations
 	order := 0
 	for _, p := range pages {
-		readPageRule(p, &sides, &order, rec)
+		readPageRule(p, page, &got, &order, rec)
+	}
+
+	// The size first, because a margin may be a percentage of it. A rule
+	// saying "size: A5; margin: 10%" means a tenth of the A5 it just asked
+	// for, not a tenth of the sheet the caller happened to pass in — the two
+	// descriptors are one statement about one page and reading them in the
+	// order they happen to be written would make the second depend on it.
+	if got.size.set {
+		page.Width, page.Height = got.size.width, got.size.height
 	}
 
 	// A percentage is of the page box, which is the whole sheet: the left and
@@ -132,7 +167,7 @@ func applyPageRules(page PageSize, pages []pendingPage, rec *Recorder) PageSize 
 	// where it was read rather than silently becoming nought here.
 	basis := [4]style.Unit{page.Height, page.Width, page.Height, page.Width}
 	out := [4]style.Unit{page.Margin.Top, page.Margin.Right, page.Margin.Bottom, page.Margin.Left}
-	for i, d := range sides {
+	for i, d := range got.sides {
 		if !d.set {
 			continue
 		}
@@ -144,8 +179,8 @@ func applyPageRules(page PageSize, pages []pendingPage, rec *Recorder) PageSize 
 	return page
 }
 
-// readPageRule reads the descriptors of one @page rule into the sides.
-func readPageRule(p pendingPage, sides *[4]pageDeclaration, order *int, rec *Recorder) {
+// readPageRule reads the descriptors of one @page rule into the set.
+func readPageRule(p pendingPage, base PageSize, got *pageDeclarations, order *int, rec *Recorder) {
 	if len(nonWhitespace(p.rule.Prelude)) > 0 {
 		// ":first", ":left", ":right" and a named page all select some pages
 		// and not others. This engine composes one page, so there is no
@@ -183,9 +218,9 @@ func readPageRule(p pendingPage, sides *[4]pageDeclaration, order *int, rec *Rec
 		rank := style.CascadeRank(p.origin, d.Important)
 		switch strings.ToLower(d.Name) {
 		case "margin":
-			if got, ok := pageMarginShorthand(d.Value); ok {
-				for i, l := range got {
-					take(&sides[i], pageDeclaration{length: l, rank: rank, order: *order, set: true})
+			if spread, ok := pageMarginShorthand(d.Value); ok {
+				for i, l := range spread {
+					take(&got.sides[i], pageDeclaration{length: l, rank: rank, order: *order, set: true})
 				}
 			} else {
 				badPageMargin(rec, p, d)
@@ -198,17 +233,23 @@ func readPageRule(p pendingPage, sides *[4]pageDeclaration, order *int, rec *Rec
 				"margin-bottom": sideBottom, "margin-left": sideLeft,
 			}[strings.ToLower(d.Name)]
 			if l, ok := pageMarginValue(d.Value); ok {
-				take(&sides[at], pageDeclaration{length: l, rank: rank, order: *order, set: true})
+				take(&got.sides[at], pageDeclaration{length: l, rank: rank, order: *order, set: true})
 			} else {
 				badPageMargin(rec, p, d)
 			}
+		case "size":
+			if w, h, ok := pageSizeValue(d.Value, base); ok {
+				takeSize(&got.size, pageSizeDeclaration{
+					width: w, height: h, rank: rank, order: *order, set: true})
+			} else {
+				badPageSize(rec, p, d)
+			}
 		default:
 			// Everything else an @page block can hold changes the page in a way
-			// this engine does not make: "size" chooses the paper, "marks" and
-			// "bleed" are for a press, and a property like "background" paints
-			// the sheet rather than the document on it. Passing over one
-			// silently would print a page the author did not ask for with
-			// nothing saying so.
+			// this engine does not make: "marks" and "bleed" are for a press,
+			// and a property like "background" paints the sheet rather than the
+			// document on it. Passing over one silently would print a page the
+			// author did not ask for with nothing saying so.
 			rec.ReportDetail(Finding{
 				Rule:     RuleUnsupportedProperty,
 				Source:   Source{HTMLOffset: -1, CSSOffset: d.Offset, Sheet: p.sheet},
@@ -225,6 +266,16 @@ func take(held *pageDeclaration, d pageDeclaration) {
 	if d.beats(*held) {
 		*held = d
 	}
+}
+
+func badPageSize(rec *Recorder, p pendingPage, d css.Declaration) {
+	rec.ReportDetail(Finding{
+		Rule:   RuleInvalidCSS,
+		Source: Source{HTMLOffset: -1, CSSOffset: d.Offset, Sheet: p.sheet},
+		Message: "the @page size " + quoteValue(strings.TrimSpace(pageText(d.Value))) +
+			" is not a sheet this engine can read; the page kept the size it had",
+		Property: "size",
+	})
 }
 
 func badPageMargin(rec *Recorder, p pendingPage, d css.Declaration) {
@@ -273,6 +324,16 @@ func pageMarginShorthand(vals []css.ComponentValue) ([4]style.Length, bool) {
 // an auto page margin to the printer. Reading it as nought would print to the
 // edge of the sheet, so it is refused and the caller's margin stands.
 func pageMarginValue(vals []css.ComponentValue) (style.Length, bool) {
+	l, _, ok := pageMarginLength(vals)
+	if !ok || l.Kind == style.LengthAuto {
+		return l, false
+	}
+	return l, true
+}
+
+// pageMarginLength parses one length in the page context, which is what both
+// the margins and the size are written in.
+func pageMarginLength(vals []css.ComponentValue) (style.Length, bool, bool) {
 	ctx := style.LengthContext{
 		// An em on the page is the initial font size, for the reason a media
 		// query's em is: there is no element here whose font it could be
@@ -281,11 +342,7 @@ func pageMarginValue(vals []css.ComponentValue) (style.Length, bool) {
 		FontSize:     pageFontSize(),
 		RootFontSize: pageFontSize(),
 	}
-	l, _, ok := style.ParseLength(vals, ctx)
-	if !ok || l.Kind == style.LengthAuto {
-		return l, false
-	}
-	return l, true
+	return style.ParseLength(vals, ctx)
 }
 
 func pageFontSize() style.Unit {
@@ -365,4 +422,128 @@ func blockDelimiters(k css.Kind) (string, string) {
 		return "{", "}"
 	}
 	return "(", ")"
+}
+
+// The paper a stylesheet can name, from CSS Paged Media 3 §5.1.
+//
+// The four this engine already exports are taken from those rather than
+// restated, so that "@page { size: A4 }" and layout.A4 cannot come to mean two
+// different sheets. The rest are their own dimensions: the ISO B series, the
+// JIS B series — which is a different paper of the same name, and is why the
+// specification lists both — and the two North American sizes past letter.
+//
+// Every one of them is given portrait, which is how the specification lists
+// them and what makes "landscape" a turn rather than a size of its own.
+var pageSizes = map[string]Size{
+	"a5":     {W: A5.Width, H: A5.Height},
+	"a4":     {W: A4.Width, H: A4.Height},
+	"a3":     paperMm(297, 420),
+	"b5":     paperMm(176, 250),
+	"b4":     paperMm(250, 353),
+	"jis-b5": paperMm(182, 257),
+	"jis-b4": paperMm(257, 364),
+	"letter": {W: Letter.Width, H: Letter.Height},
+	"legal":  {W: Legal.Width, H: Legal.Height},
+	"ledger": paperIn(11, 17),
+}
+
+func paperMm(w, h float64) Size {
+	return Size{W: ptToUnit(w * 72 / 25.4), H: ptToUnit(h * 72 / 25.4)}
+}
+
+func paperIn(w, h float64) Size {
+	return Size{W: ptToUnit(w * 72), H: ptToUnit(h * 72)}
+}
+
+// pageSizeValue reads the size descriptor, which is what chooses the paper.
+//
+// The grammar of §5.1 is "auto | <length>{1,2} | <page-size> || <orientation>",
+// and the "||" is the part worth stating: a named size and an orientation may
+// be written in either order, and either may appear without the other. So this
+// classifies the one or two parts rather than matching a sequence, which is
+// also what makes "size: A4 A5" a value it refuses instead of one it half
+// reads.
+//
+// base is the sheet the caller asked for, which is what "auto" is and what an
+// orientation with no size of its own turns.
+func pageSizeValue(vals []css.ComponentValue, base PageSize) (style.Unit, style.Unit, bool) {
+	parts := splitValuesOnWhitespace(vals)
+	if len(parts) == 0 || len(parts) > 2 {
+		return 0, 0, false
+	}
+
+	var (
+		sheet          = Size{W: base.Width, H: base.Height}
+		named, turned  bool
+		landscape      bool
+		lengths        []style.Unit
+		sawAutoKeyword bool
+	)
+	for _, part := range parts {
+		if name, ok := identName(part); ok {
+			switch {
+			case name == "auto":
+				sawAutoKeyword = true
+			case name == "portrait" || name == "landscape":
+				if turned {
+					return 0, 0, false
+				}
+				turned, landscape = true, name == "landscape"
+			default:
+				size, known := pageSizes[name]
+				if !known || named {
+					return 0, 0, false
+				}
+				sheet, named = size, true
+			}
+			continue
+		}
+		// Not a keyword, so it is one of the one or two lengths. A percentage
+		// has nothing to be a percentage of here — the page is what everything
+		// else is measured against — and ParseLength's other kinds are refused
+		// with it.
+		l, _, ok := pageMarginLength(part)
+		if !ok || l.Kind != style.LengthAbsolute || l.Value <= 0 {
+			return 0, 0, false
+		}
+		lengths = append(lengths, l.Value)
+	}
+
+	switch {
+	case len(lengths) > 0:
+		// A length cannot be combined with any of the keywords: the pair is the
+		// sheet outright.
+		if named || turned || sawAutoKeyword {
+			return 0, 0, false
+		}
+		if len(lengths) == 1 {
+			// One length is a square page, which §5.1 says and which is the
+			// only way to ask for one.
+			return lengths[0], lengths[0], true
+		}
+		return lengths[0], lengths[1], true
+	case sawAutoKeyword:
+		// "auto" is the caller's sheet, and it is not a value that combines
+		// with anything either.
+		if named || turned {
+			return 0, 0, false
+		}
+		return base.Width, base.Height, true
+	}
+
+	w, h := sheet.W, sheet.H
+	if turned && (landscape == (h > w)) {
+		// The named sizes are listed portrait, so turning is a swap and asking
+		// for the orientation a sheet already has is not.
+		w, h = h, w
+	}
+	return w, h, true
+}
+
+// identName reads a part that is one keyword.
+func identName(part []css.ComponentValue) (string, bool) {
+	if len(part) != 1 || !part[0].IsToken() || part[0].Token.Kind != css.Ident {
+		return "", false
+	}
+	return strings.ToLower(part[0].Token.Value), true
 }

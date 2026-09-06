@@ -199,8 +199,8 @@ func TestAPageRuleThatSelectsSomePagesIsReported(t *testing.T) {
 // for with nothing saying so.
 func TestAPageDescriptorThatIsNotAMarginIsReported(t *testing.T) {
 	for _, css := range []string{
-		`@page { size: A5 }`,
 		`@page { marks: crop }`,
+		`@page { bleed: 6pt }`,
 		`@page { background: red }`,
 	} {
 		if !reportsPage(t, css, "is not applied") {
@@ -253,10 +253,10 @@ func TestAPageWithNoBlockIsReported(t *testing.T) {
 func TestAPageRuleSaysWhereItCameFrom(t *testing.T) {
 	got := Compose(Input{
 		HTML: `<div id="a">x</div>`,
-		CSS:  []Stylesheet{{Name: "theme.css", Source: `@page { size: A5 }`}},
+		CSS:  []Stylesheet{{Name: "theme.css", Source: `@page { marks: crop }`}},
 	}, sheet600x800())
 	for _, f := range got.Findings {
-		if strings.Contains(f.Message, "size") {
+		if strings.Contains(f.Message, "marks") {
 			if f.Source.Sheet != "theme.css" {
 				t.Errorf("the finding points at %q, want theme.css", f.Source.Sheet)
 			}
@@ -283,4 +283,242 @@ func reportsPage(t *testing.T, css, want string) bool {
 		}
 	}
 	return false
+}
+
+// pageSheetPx is the sheet a document ended up being laid out on, in pixels,
+// measured rather than read off a field: the block that fills the page is as
+// wide as the content area, and the margin is nought in every case below.
+func pageSheetPx(t *testing.T, css string, opts Options) float64 {
+	t.Helper()
+	got := Compose(Input{
+		HTML: `<div id="a">x</div>`,
+		CSS: []Stylesheet{{Name: "sheet.css",
+			Source: "body { margin: 0 } @page { margin: 0 }" + css}},
+	}, opts)
+	frag := fragmentFor(got.Root, "a")
+	if frag == nil {
+		t.Fatalf("the box is not on the page at all")
+	}
+	return frag.BorderRect.W.Px()
+}
+
+// pageSheetHeightPx is the height of the sheet a document was laid out on. It
+// is read from the scale rather than from a field: a box of a known height that
+// does not fit is shrunk by exactly the ratio of the two, which is §5's factor.
+func pageSheetHeightPx(t *testing.T, css string, opts Options) float64 {
+	t.Helper()
+	const boxPx = 960 // 10in.
+	got := Compose(Input{
+		HTML: `<div id="a" style="height: 10in"></div>`,
+		CSS: []Stylesheet{{Name: "sheet.css",
+			Source: "body { margin: 0 } @page { margin: 0 }" + css}},
+	}, Options{Page: opts.Page, MinScale: 0.01})
+	if got.Scale == 0 {
+		t.Fatal("the document was scaled to nothing")
+	}
+	if got.Scale == 1 {
+		t.Fatalf("the box fitted, so the height of the sheet cannot be read from the scale")
+	}
+	return boxPx * got.Scale
+}
+
+// TestAPageSizeChoosesThePaper is the descriptor doing its job: a document that
+// says what it is to be printed on is printed on it, whatever the caller passed
+// in Options.
+func TestAPageSizeChoosesThePaper(t *testing.T) {
+	// 10in by 5in is 960 by 480px.
+	w := pageSheetPx(t, `@page { size: 10in 5in }`, sheet600x800())
+	if w != 960 {
+		t.Errorf("@page { size: 10in 5in } laid out on a %gpx sheet, want 960", w)
+	}
+	// One length is a square page, which is the only way to ask for one — so
+	// the height has to be measured too, or a size that took the second
+	// dimension from somewhere else would look right across the page.
+	w = pageSheetPx(t, `@page { size: 7in }`, sheet600x800())
+	if w != 672 {
+		t.Errorf("@page { size: 7in } laid out on a %gpx sheet, want 672", w)
+	}
+	if h := pageSheetHeightPx(t, `@page { size: 7in }`, sheet600x800()); h != 672 {
+		t.Errorf("@page { size: 7in } is %gpx tall, want the square 672", h)
+	}
+	// "auto" is the caller's sheet, which is what it means and not nothing.
+	w = pageSheetPx(t, `@page { size: auto }`, sheet600x800())
+	if w != 800 {
+		t.Errorf("@page { size: auto } laid out on a %gpx sheet, want the caller's 800", w)
+	}
+}
+
+// TestAPageSizeCanNameThePaper pins the sizes of §5.1 against their real
+// dimensions. A4 is 210mm wide and letter is 8.5in, and a table that had them
+// the other way round would still produce a page.
+func TestAPageSizeCanNameThePaper(t *testing.T) {
+	cases := []struct {
+		name string
+		want float64 // the width in px: 210mm is 210 / 25.4 * 96.
+	}{
+		{"A5", 148.0 / 25.4 * 96},
+		{"A4", 210.0 / 25.4 * 96},
+		{"A3", 297.0 / 25.4 * 96},
+		{"B5", 176.0 / 25.4 * 96},
+		{"B4", 250.0 / 25.4 * 96},
+		{"JIS-B5", 182.0 / 25.4 * 96},
+		{"JIS-B4", 257.0 / 25.4 * 96},
+		{"letter", 8.5 * 96},
+		{"legal", 8.5 * 96},
+		{"ledger", 11 * 96},
+	}
+	for _, tc := range cases {
+		w := pageSheetPx(t, `@page { size: `+tc.name+` }`, sheet600x800())
+		// Within a hundredth of a pixel: the sheet is stored in layout units
+		// and a millimetre is not a whole number of them.
+		if diff := w - tc.want; diff > 0.01 || diff < -0.01 {
+			t.Errorf("size: %s laid out on a %gpx sheet, want %g", tc.name, w, tc.want)
+		}
+	}
+	// The JIS B series is a different paper of the same name, which is why the
+	// specification lists both — a table that aliased one to the other would
+	// pass every case above on its own.
+	iso := pageSheetPx(t, `@page { size: B5 }`, sheet600x800())
+	jis := pageSheetPx(t, `@page { size: JIS-B5 }`, sheet600x800())
+	if iso == jis {
+		t.Errorf("B5 and JIS-B5 are the same %gpx sheet; they are different paper", iso)
+	}
+}
+
+// TestAPageSizeTurnsTheSheet. "landscape" is a turn and not a size: it swaps a
+// named sheet that is taller than it is wide, and asking for the orientation a
+// sheet already has changes nothing.
+func TestAPageSizeTurnsTheSheet(t *testing.T) {
+	portrait := pageSheetPx(t, `@page { size: A4 }`, sheet600x800())
+	landscape := pageSheetPx(t, `@page { size: A4 landscape }`, sheet600x800())
+	want := 297.0 / 25.4 * 96
+	if diff := landscape - want; diff > 0.01 || diff < -0.01 {
+		t.Errorf("A4 landscape is %gpx wide, want its long edge of %g", landscape, want)
+	}
+	if landscape <= portrait {
+		t.Errorf("A4 landscape (%g) is no wider than A4 (%g)", landscape, portrait)
+	}
+	// Either order, because §5.1 joins the two terms with "||".
+	other := pageSheetPx(t, `@page { size: landscape A4 }`, sheet600x800())
+	if other != landscape {
+		t.Errorf("landscape A4 is %gpx wide and A4 landscape is %g", other, landscape)
+	}
+	// Asking for the orientation it already has is not a swap.
+	if got := pageSheetPx(t, `@page { size: A4 portrait }`, sheet600x800()); got != portrait {
+		t.Errorf("A4 portrait is %gpx wide and A4 is %g", got, portrait)
+	}
+	// With no size of its own it turns the caller's sheet, which is 800 by
+	// 1066.67px and so becomes 1066.67 wide.
+	turned := pageSheetPx(t, `@page { size: landscape }`, sheet600x800())
+	if diff := turned - 1066.666; diff > 0.01 || diff < -0.01 {
+		t.Errorf("size: landscape gave a %gpx sheet, want the caller's long edge", turned)
+	}
+}
+
+// TestAPageMarginIsAPercentageOfTheSizeTheSameRuleChose. The two descriptors
+// are one statement about one page: "size: A5; margin: 10%" is a tenth of the
+// A5 it just asked for, not a tenth of the sheet the caller happened to pass.
+// Reading them in the order they were written would make the second depend on
+// which came first.
+func TestAPageMarginIsAPercentageOfTheSizeTheSameRuleChose(t *testing.T) {
+	got := Compose(Input{
+		HTML: `<div id="a">x</div>`,
+		CSS: []Stylesheet{{Source: "body { margin: 0 }" +
+			`@page { margin: 10%; size: 10in 5in }`}},
+	}, sheet600x800())
+	frag := fragmentFor(got.Root, "a")
+	if frag == nil {
+		t.Fatal("the box is not on the page at all")
+	}
+	// 10% of the 960px sheet is 96px a side: 960 - 192.
+	if w := frag.BorderRect.W.Px(); w != 768 {
+		t.Errorf("the margin came out %gpx wide, want 768 — a tenth of the size the rule chose", w)
+	}
+}
+
+// TestAMediaQueryIsAnsweredAboutTheSheetTheDocumentChose. A query asks about
+// the paper, and after this the paper may be what the document asked for — so
+// the size is settled before the cascade runs rather than after it. A query
+// answered about the caller's sheet and then printed on another is a document
+// styled for a page it is not on.
+func TestAMediaQueryIsAnsweredAboutTheSheetTheDocumentChose(t *testing.T) {
+	const doc = `<p id="a">a</p>`
+	// The caller's sheet is 800px wide, so this query is false on it. The
+	// document then asks for a 960px sheet, on which it is true.
+	css := `@page { size: 10in 5in } @media (min-width: 900px) { #a { display: none } }`
+
+	got := Compose(Input{HTML: doc, CSS: []Stylesheet{{Source: css}}}, sheet600x800())
+	if fragmentFor(got.Root, "a") != nil {
+		t.Error("the query was answered about the caller's sheet, not the one the document chose")
+	}
+}
+
+// TestAnUnreadablePageSizeKeepsTheSheetItHad. A size this engine cannot read is
+// not a reason to print on a page of nothing, and the combinations refused here
+// are the ones §5.1's grammar does not allow: two named sizes, a length with a
+// keyword, two orientations, a percentage of a page that is what percentages
+// are of, and a sheet with no extent.
+func TestAnUnreadablePageSizeKeepsTheSheetItHad(t *testing.T) {
+	for _, css := range []string{
+		`@page { size: A4 A5 }`,
+		`@page { size: 10in landscape }`,
+		`@page { size: landscape portrait }`,
+		`@page { size: auto A4 }`,
+		`@page { size: 50% }`,
+		`@page { size: 0in }`,
+		`@page { size: -3in 4in }`,
+		`@page { size: 1in 2in 3in }`,
+		`@page { size: quarto }`,
+		`@page { size: }`,
+	} {
+		if w := pageSheetPx(t, css, sheet600x800()); w != 800 {
+			t.Errorf("%s changed the sheet to %gpx, want the caller's 800", css, w)
+		}
+		if !reportsPage(t, css, "is not a sheet this engine can read") {
+			t.Errorf("%s was dropped with nothing said about it", css)
+		}
+	}
+}
+
+// TestTheLastPageSizeWins, and an important one wins before that — the size is
+// decided by the same term as the margins, which is the same term the cascade
+// decides everything by.
+func TestTheLastPageSizeWins(t *testing.T) {
+	w := pageSheetPx(t, `@page { size: 10in 5in } @page { size: 6in 5in }`, sheet600x800())
+	if w != 576 {
+		t.Errorf("the later size did not win: %gpx, want 576", w)
+	}
+
+	got := Compose(Input{
+		HTML:    `<div id="a">x</div>`,
+		UserCSS: `@page { size: 10in 5in !important; margin: 0 }`,
+		CSS:     []Stylesheet{{Source: `body { margin: 0 } @page { size: 6in 5in; margin: 0 }`}},
+	}, sheet600x800())
+	frag := fragmentFor(got.Root, "a")
+	if frag == nil {
+		t.Fatal("the box is not on the page at all")
+	}
+	if w := frag.BorderRect.W.Px(); w != 960 {
+		t.Errorf("the author's later size won over an important user one: %gpx, want 960", w)
+	}
+}
+
+// TestAPageSizeSetsTheHeightAsWellAsTheWidth. Every case above is measured
+// across the page, and a size that took only the width would pass all of them.
+// The height shows in the scale: a document taller than the sheet is shrunk to
+// fit, by exactly the ratio §5 computes.
+func TestAPageSizeSetsTheHeightAsWellAsTheWidth(t *testing.T) {
+	const doc = `<div id="a" style="height: 10in"></div>`
+	sheet := func(css string) float64 {
+		return Compose(Input{HTML: doc, CSS: []Stylesheet{{
+			Source: "body { margin: 0 } @page { margin: 0 }" + css}}}, sheet600x800()).Scale
+	}
+	// The caller's sheet is 1066.67px tall and the box is 960, so it fits.
+	if got := sheet(""); got != 1 {
+		t.Fatalf("the box already had to be scaled by %g on the caller's sheet", got)
+	}
+	// A 5in page is 480px tall, and 480 / 960 is a half.
+	if got := sheet(`@page { size: 10in 5in }`); got != 0.5 {
+		t.Errorf("on a 5in-tall page the document was scaled by %g, want 0.5", got)
+	}
 }
