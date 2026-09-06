@@ -46,7 +46,8 @@ func (sh shaper) shapeSyllabic(buf []Glyph, runes []rune, script uint16,
 		return buf, false
 	}
 	if cfg := indicConfigFor(script); cfg != nil {
-		return sh.shapeIndic(buf, runes, sh.indicPlan(cfg, sh.f.indicOldSpec(cfg, script))), true
+		return sh.shapeIndic(buf, runes, before,
+			sh.indicPlan(cfg, sh.f.indicOldSpec(cfg, script))), true
 	}
 	if isKhmerScript(script) {
 		return sh.shapeKhmer(buf, runes), true

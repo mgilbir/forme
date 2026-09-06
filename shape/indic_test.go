@@ -647,6 +647,39 @@ func TestInitAppliesToAWordInitialMatra(t *testing.T) {
 	}
 }
 
+// TestTheWordInitialMatraReadsTheTextAndNotTheRun.
+//
+// What decides the form is the character before the syllable in the *text*, and
+// a run is not the text: it is one face, one direction and one style, and none
+// of those opens a word. The run's own start was taken for the word's start
+// whatever the caller said came before it, so a word divided by a change of
+// colour — or measured a second time to find where a line may break, which is
+// what the breaker does to every word it considers — took the word-initial form
+// in the middle of itself.
+func TestTheWordInitialMatraReadsTheTextAndNotTheRun(t *testing.T) {
+	f := devaFace(t, devaInit())
+	syllable := str(devKa, devIMatra)
+	for _, tc := range []struct {
+		before string
+		want   []int
+		what   string
+	}{
+		{"", []int{gidIMatraIni, gidDKa}, "nothing before the run, so the text does start here"},
+		{" ", []int{gidIMatraIni, gidDKa}, "a space, which ends a word"},
+		{"\u0964", []int{gidIMatraIni, gidDKa}, "a danda, which ends a sentence"},
+		{str(devKa), []int{gidIMatra, gidDKa}, "a letter, which continues a word"},
+		{str(devKa, devIMatra), []int{gidIMatra, gidDKa}, "a syllable ending in a mark"},
+		{"\u200D", []int{gidIMatra, gidDKa}, "a zero-width joiner, which is not a break in a word"},
+	} {
+		gs, _ := f.ShapeGlyphsInContext(syllable, tc.before, "", Features{})
+		got := make([]int, len(gs))
+		for i, g := range gs {
+			got[i] = g.GID
+		}
+		wantGIDs(t, got, tc.want, tc.what+" before "+syllable)
+	}
+}
+
 // TestBasicFeaturesDoNotCrossASyllable is the teeth of the syllable bound. The
 // fixture declares a ligature of two Ka, which no real font would; two Ka in a
 // row are two syllables, and a basic feature applied to one of them must not

@@ -762,7 +762,7 @@ var indicRunFeatures = []struct {
 
 // shapeIndic is the whole Indic pass: it replaces both the joining pass and the
 // default substitutions for a run it handles.
-func (sh shaper) shapeIndic(buf []Glyph, runes []rune, plan *indicPlan) []Glyph {
+func (sh shaper) shapeIndic(buf []Glyph, runes, before []rune, plan *indicPlan) []Glyph {
 	// Before anything is classified: a vowel followed by a sign that spells a
 	// different vowel is shown against a dotted circle. It has to happen on the
 	// characters, because it is about which characters were written, and it
@@ -795,7 +795,7 @@ func (sh shaper) shapeIndic(buf []Glyph, runes []rune, plan *indicPlan) []Glyph 
 			shift++
 		}
 		var delta int
-		buf, delta = sh.shapeIndicSyllable(buf, &info, runes, plan, syl.start, start, end)
+		buf, delta = sh.shapeIndicSyllable(buf, &info, runes, before, plan, syl.start, start, end)
 		shift += delta
 	}
 
@@ -959,7 +959,7 @@ func (sh shaper) insertDottedCircle(buf []Glyph, info []indicInfo, start, end, g
 //
 // textStart is where the syllable begins in the original characters, which the
 // word-initial rule below needs and the buffer can no longer say.
-func (sh shaper) shapeIndicSyllable(buf []Glyph, info *[]indicInfo, runes []rune,
+func (sh shaper) shapeIndicSyllable(buf []Glyph, info *[]indicInfo, runes, before []rune,
 	plan *indicPlan, textStart, start, end int) ([]Glyph, int) {
 
 	total := 0
@@ -1032,7 +1032,7 @@ func (sh shaper) shapeIndicSyllable(buf []Glyph, info *[]indicInfo, runes []rune
 	// counts as a word start is what precedes the syllable in the *text*: a
 	// letter or a mark continues a word, a space or a stop does not.
 	if lookups := sh.l.featureLookups["init"]; len(lookups) > 0 &&
-		start < end && (*info)[start].pos == posPreM && indicWordStart(runes, textStart) {
+		start < end && (*info)[start].pos == posPreM && indicWordStart(before, runes, textStart) {
 		var d int
 		buf, d = sh.applyIndicFeature(buf, info, lookups, start, start+1, start, end, true)
 		grow(d)
@@ -1056,11 +1056,29 @@ func (sh shaper) shapeIndicSyllable(buf []Glyph, info *[]indicInfo, runes []rune
 }
 
 // indicWordStart reports whether the character before a syllable ends a word.
-func indicWordStart(runes []rune, at int) bool {
-	if at <= 0 || at > len(runes) {
+//
+// The character before the *text*, not before the run. A run is a stretch of
+// one face, one direction and one style, and none of those is a word boundary:
+// a word split across two of them by a change of colour, or shaped a second
+// time to measure where a line may break, opens no new word. The caller says
+// what preceded it, and where it says nothing the run's start is the text's.
+func indicWordStart(before, runes []rune, at int) bool {
+	if at > len(runes) {
 		return true
 	}
-	r := runes[at-1]
+	if at <= 0 {
+		if len(before) == 0 {
+			return true
+		}
+		return endsWordForIndic(before[len(before)-1])
+	}
+	return endsWordForIndic(runes[at-1])
+}
+
+// endsWordForIndic reports whether a character closes a word: a letter, a mark
+// or a formatting character continues one, and anything else — a space, a stop,
+// a digit — does not.
+func endsWordForIndic(r rune) bool {
 	return !unicode.In(r, unicode.L, unicode.M, unicode.Cf)
 }
 
