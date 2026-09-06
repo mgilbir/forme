@@ -465,6 +465,10 @@ var properties = map[string]property{
 	// — the value has to travel by the keyword rather than by default.
 	"clip":    {false, "auto"},
 	"opacity": {false, "1"},
+	// CSS Images 3 §5.5. It is about a replaced element's *content* rather than
+	// about its box: the box is sized by the rules above, and this says what
+	// the picture inside it does with the rectangle it was given.
+	"object-fit": {false, "fill"},
 }
 
 // Inherited returns the style an anonymous box has: everything that inherits

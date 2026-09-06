@@ -183,11 +183,12 @@ type DrawText struct {
 
 // DrawImage paints a decoded image to fill a rectangle.
 //
-// The rectangle is the element's *content* box, which is where a replaced
-// element's content goes: inside its padding, inside its border. The image is
-// stretched to it rather than fitted, because the sizing rules upstream have
-// already chosen a rectangle with the right shape — object-fit, which is what
-// asks for anything else, is not implemented.
+// The image is stretched to the rectangle, and the rectangle is where the
+// picture goes rather than where the box is. For "object-fit: fill", which is
+// the initial value, the two are the same and it is the element's content box:
+// inside its padding, inside its border. For every other value objectfit.go has
+// already worked out a smaller or larger rectangle of the picture's own shape,
+// and set Clip when that rectangle reaches outside the box.
 type DrawImage struct {
 	Rect  Rect
 	Image image.Image
@@ -1149,20 +1150,29 @@ func (p *painter) paintContent(f *Fragment) {
 	// its next sibling is a real overlap rather than a theoretical one.
 	hidden := isHidden(f.Box)
 	if r := f.Box.Replaced; r.Paints() && !hidden {
-		if rect := f.ContentRect(); !rect.Empty() {
-			// Content that is one colour is a fill, not a picture stretched over
-			// the box. The two paint the same pixels and only one of them says
-			// on the page what the document said in its source — see the note on
-			// ReplacedContent.Solid.
-			if r.SVG != nil {
-				// A picture with geometry in it: each rectangle placed through
-				// the viewport transform and clipped to the box. See svg.go.
-				p.ops = append(p.ops, r.SVG.paint(rect)...)
-			} else if r.Solid != nil {
-				p.ops = append(p.ops, FillRect{Rect: rect, Color: *r.Solid})
-			} else {
-				p.ops = append(p.ops, DrawImage{Rect: rect, Image: r.Image, Key: r.Key})
-			}
+		if box := f.ContentRect(); !box.Empty() {
+			// Where the content goes inside that box, which is object-fit's
+			// question and not the box's. The clip comes back active only when
+			// the content reaches outside — "cover" always does, and "none"
+			// does when the picture is larger than the box it was put in.
+			fit, _ := objectFitOf(f.Box.Style["object-fit"])
+			rect, clip := fitContent(box, naturalSizeOf(r), fit)
+			p.clipping(clip, func() {
+				// Content that is one colour is a fill, not a picture stretched
+				// over the box. The two paint the same pixels and only one of
+				// them says on the page what the document said in its source —
+				// see the note on ReplacedContent.Solid.
+				if r.SVG != nil {
+					// A picture with geometry in it: each rectangle placed
+					// through the viewport transform and clipped to the box.
+					// See svg.go.
+					p.ops = append(p.ops, r.SVG.paint(rect)...)
+				} else if r.Solid != nil {
+					p.ops = append(p.ops, FillRect{Rect: rect, Color: *r.Solid})
+				} else {
+					p.ops = append(p.ops, DrawImage{Rect: rect, Image: r.Image, Key: r.Key})
+				}
+			})
 		}
 	}
 	if m := f.Marker; m != nil && m.Image != nil && m.Image.Image != nil && !hidden {
