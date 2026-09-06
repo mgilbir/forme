@@ -466,7 +466,8 @@ func TestAGridContainerThisEngineCannotArrangeSaysSo(t *testing.T) {
 			"does not size"},
 		{"a nested repeat", `#g { grid-template-columns: repeat(2, repeat(2, 1fr)) }`, "does not size"},
 		{"a named row", `#g { grid-template-rows: [top] 20px }`, "does not size"},
-		{"named areas", `#g { grid-template-areas: "a b" }`, "named by a template"},
+		{"a ragged template", `#g { grid-template-areas: "a b" "c" }`, "not all the same length"},
+		{"an area in two places", `#g { grid-template-areas: "a b" "b a" }`, "do not touch"},
 		{"a column flow", `#g { grid-auto-flow: column }`, "flow this engine does not follow"},
 		{"a dense flow", `#g { grid-auto-flow: row dense }`, "flow this engine does not follow"},
 		{"sized implicit rows", `#g { grid-auto-rows: 50px }`, "implicit rows"},
@@ -475,7 +476,8 @@ func TestAGridContainerThisEngineCannotArrangeSaysSo(t *testing.T) {
 		{"tracks on a baseline", `#g { align-content: baseline }`, "aligned by a rule"},
 		{"items on a baseline", `#g { align-items: baseline }`, "aligned by a rule"},
 		{"a safe alignment", `#g { justify-content: safe center }`, "aligned by a rule"},
-		{"an item with an area", `#g > div:first-child { grid-area: a }`, "placed by area"},
+		{"an item in an area nobody drew", `#g > div:first-child { grid-area: header }`,
+			"the template does not draw"},
 		{"an item at a named line", `#g > div:first-child { grid-column: main }`, "cannot find"},
 		{"an item counting from the end", `#g > div:first-child { grid-column: -1 }`, "cannot find"},
 		{"an item spanning to a name", `#g > div:first-child { grid-row: span main }`, "cannot find"},
@@ -530,6 +532,7 @@ func TestAnArrangedGridSaysNothing(t *testing.T) {
 		`#g { width: 300px } #g > div { order: 0; grid-column: auto }`,
 		`#g { width: 300px; grid-template-columns: 100px 100px } #g > div:first-child { grid-column: 2 }`,
 		`#g { width: 300px; grid-template-columns: 100px 100px } #g > div:first-child { grid-row: 1 / 3 }`,
+		`#g { width: 300px; grid-template-areas: "a b" "c d" }`,
 	} {
 		got := Compose(Input{HTML: fourItems,
 			CSS: []Stylesheet{{Source: gridCSS + css}}}, Options{})
@@ -1068,5 +1071,136 @@ func TestAnItemThatNamesALineThisEngineCannotFindIsRefused(t *testing.T) {
 			t.Errorf("nothing was reported about %q, so an item placed somewhere "+
 				"this engine cannot find says nothing about it", css)
 		}
+	}
+}
+
+// The three-item fixture for the area tests, named so that each item can be put
+// somewhere by name.
+const threeAreas = `<div id="g"><div id="h">h</div><div id="n">n</div><div id="m">m</div></div>`
+
+// TestATemplateOfAreasDrawsTheGrid is §7.3, which is the other way a grid is
+// authored: the container draws a picture of itself, one string per row and one
+// word per cell, and the items say which part of the picture they are in and
+// never count a line.
+//
+// The picture also *makes* the explicit grid. Two words per row is two columns
+// whether or not grid-template-columns named them.
+func TestATemplateOfAreasDrawsTheGrid(t *testing.T) {
+	const named = `#h { grid-area: head } #n { grid-area: nav } #m { grid-area: main }`
+
+	// A header across the top of two columns, and two items under it. Nothing
+	// said how wide the columns are, so they are automatic and share the
+	// container.
+	wantCells(t, gridCells(t, threeAreas,
+		`#g { width: 300px; grid-template-areas: "head head" "nav main" }`+named),
+		[][4]float64{{0, 0, 300, 20}, {0, 20, 150, 20}, {150, 20, 150, 20}},
+		"a header across two columns")
+
+	// The same picture with the columns named: the areas say where, the tracks
+	// say how wide.
+	wantCells(t, gridCells(t, threeAreas,
+		`#g { width: 300px; grid-template-columns: 100px 200px;`+
+			` grid-template-areas: "head head" "nav main" }`+named),
+		[][4]float64{{0, 0, 300, 20}, {0, 20, 100, 20}, {100, 20, 200, 20}},
+		"a template beside a set of tracks")
+
+	// A dot is a cell nobody named, and it is not an area: the header covers
+	// one column and the second is left empty.
+	wantCells(t, gridCells(t, threeAreas,
+		`#g { width: 300px; grid-template-areas: "head ." "nav main" }`+named),
+		[][4]float64{{0, 0, 150, 20}, {0, 20, 150, 20}, {150, 20, 150, 20}},
+		"a template with an empty cell")
+
+	// A run of dots is the same empty cell as one dot, which is how §7.3 lets a
+	// template be lined up in the stylesheet.
+	wantCells(t, gridCells(t, threeAreas,
+		`#g { width: 300px; grid-template-areas: "head ..." "nav  main" }`+named),
+		[][4]float64{{0, 0, 150, 20}, {0, 20, 150, 20}, {150, 20, 150, 20}},
+		"a template lined up with dots")
+}
+
+// TestAnAreaCoversTheRectangleItWasDrawnIn. An area is a band of tracks on each
+// axis, so a name written over two rows and two columns is one item across four
+// cells.
+func TestAnAreaCoversTheRectangleItWasDrawnIn(t *testing.T) {
+	const doc = `<div id="g"><div id="h">h</div><div id="n">n</div></div>`
+	wantCells(t, gridCells(t, doc,
+		`#g { width: 300px; grid-template-columns: 100px 100px 100px;`+
+			` grid-template-rows: 30px 30px;`+
+			` grid-template-areas: "big big side" "big big side" }`+
+			`#h { grid-area: big } #n { grid-area: side }`),
+		[][4]float64{{0, 0, 200, 60}, {200, 0, 100, 60}},
+		"an area two rows deep and two columns wide")
+}
+
+// TestGridAreaAlsoWritesFourLines. §8.4's other form: the shorthand is the four
+// lines written together, in the order row-start, column-start, row-end,
+// column-end — the block axis first, as everything in Box Alignment is, and not
+// the reading order the slashes suggest.
+func TestGridAreaAlsoWritesFourLines(t *testing.T) {
+	wantCells(t, gridCells(t, threeAreas,
+		`#g { width: 300px; grid-template-columns: 100px 100px }`+
+			`#h { grid-area: 1 / 2 / 3 / 3 }`),
+		[][4]float64{{100, 0, 100, 40}, {0, 0, 100, 20}, {0, 20, 100, 20}},
+		"an item placed by four lines")
+}
+
+// TestATemplateThatDoesNotDrawAGridIsRefused. The two ways §7.3 says a template
+// is invalid are the two this refuses, and refusing is the whole of the answer:
+// a template that does not describe a grid describes nothing, and guessing at
+// what was meant would put boxes somewhere no stylesheet asked for.
+func TestATemplateThatDoesNotDrawAGridIsRefused(t *testing.T) {
+	for _, css := range []string{
+		// Rows of different lengths.
+		`#g { grid-template-areas: "a b" "c" }`,
+		// A name in two places with a hole between them.
+		`#g { grid-template-areas: "a b" "b a" }`,
+		// The same, in one row.
+		`#g { grid-template-areas: "a b a" }`,
+		// A name that is not one.
+		`#g { grid-template-areas: "1a b" }`,
+		// Something that is not a string at all.
+		`#g { grid-template-areas: a b }`,
+	} {
+		got := Compose(Input{HTML: threeAreas, CSS: []Stylesheet{{
+			Source: gridCSS + `#g { width: 300px }` + css}}}, Options{})
+		said := false
+		for _, f := range got.Findings {
+			if strings.Contains(f.Message, "grid container") {
+				said = true
+			}
+		}
+		if !said {
+			t.Errorf("nothing was reported about %q, so a template that draws no "+
+				"grid says nothing about it", css)
+		}
+	}
+}
+
+// TestATemplateMakesEveryRowItDraws, including one no item landed in. §7.3's
+// picture is the explicit grid, so a template of two rows has two rows whether
+// or not both are filled — and the gap between them is real, which is the one
+// place an empty row is visible: the container is as deep as the row that is
+// there, the gap, and the row that is empty.
+func TestATemplateMakesEveryRowItDraws(t *testing.T) {
+	const one = `<div id="g"><div id="h">h</div></div>`
+	const drawn = `#g { width: 300px; grid-template-areas: "a" "b"; row-gap: 10px }` +
+		`#h { grid-area: a }`
+
+	got, ok := gridRect(t, one, gridCSS+drawn, "g")
+	if !ok {
+		t.Fatalf("the grid container generated no fragment")
+	}
+	if got.H.Px() != 30 {
+		t.Errorf("the container is %vpx deep; it holds a 20px row, a 10px gap "+
+			"and a row the template drew and nobody filled", got.H)
+	}
+
+	// The same picture with only the row that is used: 20px and no gap.
+	got, _ = gridRect(t, one,
+		gridCSS+`#g { width: 300px; grid-template-areas: "a"; row-gap: 10px } #h { grid-area: a }`,
+		"g")
+	if got.H.Px() != 20 {
+		t.Errorf("the container is %vpx deep and its template draws one row", got.H)
 	}
 }

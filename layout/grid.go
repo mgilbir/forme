@@ -142,7 +142,8 @@ func (it *gridItem) vertical() style.Unit {
 func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 	origin flow) style.Unit {
 
-	items := l.gridItems(b, width)
+	areas, _ := l.areasOf(b)
+	items := l.gridItems(b, width, areas)
 	if len(items) == 0 {
 		// A container with nothing to place still has its out-of-flow children
 		// to record. Nobody else will: the block walk is what does that, and
@@ -166,6 +167,12 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 		// so there is at least one column left standing.
 		columns = columns[:len(items)]
 	}
+	for len(columns) < areas.columns {
+		// §7.3: the picture makes the explicit grid. A template of two words
+		// per row has two columns whether or not grid-template-columns named
+		// them, and the ones it did not name are "auto".
+		columns = append(columns, autoTrack())
+	}
 	if len(columns) == 0 {
 		// §7.1: a container with no explicit columns still has one, because
 		// every item has to be somewhere. The implicit track is "auto", which
@@ -174,6 +181,10 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 	}
 	rows, _, _ := l.trackList(b, "grid-template-rows", width,
 		trackRoom{size: height, definite: definite, gap: rowGap})
+
+	for len(rows) < areas.rows {
+		rows = append(rows, autoTrack())
+	}
 
 	// §8.5: the items that named a line go where they asked, and the rest are
 	// dealt into what is left. However many rows that took is how many the grid
@@ -276,6 +287,179 @@ func (l *layouter) deferGridOutOfFlow(b *Box, parent *Fragment, width style.Unit
 			l.deferAbsolute(c, parent, 0, 0, width, index)
 		}
 	}
+}
+
+// gridAreas is §7.3's template: the names an author draws the grid with, and
+// the band of tracks each one covers.
+//
+// "grid-template-areas: 'head head' 'nav main'" is a picture of the grid, one
+// string per row and one word per cell, and it is the other way a grid is
+// authored — the items say which area they are in and never count a line. It
+// also *makes* the explicit grid: two words per row is two columns whether or
+// not grid-template-columns says so.
+type gridAreas struct {
+	// at is where each name sits, as the same start-and-span pair an item
+	// writes by hand. The row is first, as it is everywhere else here.
+	at map[string][2]gridPlacement
+	// rows and columns are how big the picture is, which is the size of the
+	// explicit grid the template draws.
+	rows, columns int
+}
+
+// areasOf reads the template, or says it is not one this engine can draw.
+//
+// The two ways a template is invalid are the two §7.3 names: a row with a
+// different number of cells from the others is not a rectangle, and a name that
+// appears in two places that do not touch is not an area. Both are refused
+// rather than repaired — a template that does not describe a grid describes
+// nothing, and guessing at what was meant would put boxes somewhere no
+// stylesheet asked for.
+func (l *layouter) areasOf(b *Box) (gridAreas, bool) {
+	raw := strings.TrimSpace(b.Style["grid-template-areas"])
+	if raw == "" || strings.EqualFold(raw, "none") {
+		return gridAreas{}, true
+	}
+	vals, _ := css.ParseComponentValues(raw)
+	var rows [][]string
+	for _, v := range splitValuesOnWhitespace(vals) {
+		if len(v) != 1 || !v[0].IsToken() || v[0].Token.Kind != css.String {
+			return gridAreas{}, false
+		}
+		cells := strings.Fields(v[0].Token.Value)
+		if len(cells) == 0 {
+			return gridAreas{}, false
+		}
+		if len(rows) > 0 && len(cells) != len(rows[0]) {
+			return gridAreas{}, false
+		}
+		rows = append(rows, cells)
+	}
+	if len(rows) == 0 {
+		return gridAreas{}, false
+	}
+
+	out := gridAreas{at: map[string][2]gridPlacement{}, rows: len(rows), columns: len(rows[0])}
+	seen := map[string][4]int{}
+	for r, cells := range rows {
+		for c, name := range cells {
+			if isNullCell(name) {
+				continue
+			}
+			if !isAreaName(name) {
+				return gridAreas{}, false
+			}
+			box, ok := seen[name]
+			if !ok {
+				seen[name] = [4]int{r, c, r + 1, c + 1}
+				continue
+			}
+			// The name has been met before, so this cell has to extend the
+			// rectangle it is already part of rather than start a second one.
+			if r > box[2] || c > box[3] {
+				return gridAreas{}, false
+			}
+			if c < box[1] {
+				box[1] = c
+			}
+			if r+1 > box[2] {
+				box[2] = r + 1
+			}
+			if c+1 > box[3] {
+				box[3] = c + 1
+			}
+			seen[name] = box
+		}
+	}
+	for name, box := range seen {
+		// Every cell of the rectangle the name's corners describe has to carry
+		// that name, or the name is in two places with a hole between them.
+		for r := box[0]; r < box[2]; r++ {
+			for c := box[1]; c < box[3]; c++ {
+				if rows[r][c] != name {
+					return gridAreas{}, false
+				}
+			}
+		}
+		out.at[name] = [2]gridPlacement{
+			{start: box[0], definite: true, span: box[2] - box[0]},
+			{start: box[1], definite: true, span: box[3] - box[1]},
+		}
+	}
+	return out, true
+}
+
+// isNullCell reports whether a cell in the template is one nobody named: §7.3
+// spells it as a run of dots, so "." and "..." are the same empty cell.
+func isNullCell(name string) bool {
+	for i := 0; i < len(name); i++ {
+		if name[i] != '.' {
+			return false
+		}
+	}
+	return true
+}
+
+// isAreaName reports whether a word in the template is a name rather than
+// something this engine would have to make sense of.
+//
+// It is deliberately narrow — letters, digits, dashes and underscores, not
+// starting with a digit — because a name here is matched against grid-area by
+// string equality, and a name that needed unescaping to compare would be
+// compared wrongly rather than refused.
+func isAreaName(name string) bool {
+	if name == "" || (name[0] >= '0' && name[0] <= '9') {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9',
+			c == '-', c == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// areaPlacement is §8.4's grid-area: the shorthand that places an item on both
+// axes at once, either by naming an area or by writing all four lines.
+//
+// The four-line form is the two other shorthands written together, in the order
+// row-start, column-start, row-end, column-end — block axis first, as
+// everything in Box Alignment is, and not the reading order the slashes
+// suggest.
+func (l *layouter) areaPlacement(c *Box, areas gridAreas) ([2]gridPlacement, bool) {
+	raw := trimmedLower(c.Style["grid-area"])
+	if raw == "" || raw == "auto" {
+		return [2]gridPlacement{}, true
+	}
+	parts := strings.Split(raw, "/")
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	if len(parts) == 1 {
+		at, ok := areas.at[parts[0]]
+		if !ok {
+			return [2]gridPlacement{}, false
+		}
+		return at, true
+	}
+	if len(parts) > 4 {
+		return [2]gridPlacement{}, false
+	}
+	for len(parts) < 4 {
+		parts = append(parts, "auto")
+	}
+	row, ok := placementFrom(parts[0], parts[2])
+	if !ok {
+		return [2]gridPlacement{}, false
+	}
+	column, ok := placementFrom(parts[1], parts[3])
+	if !ok {
+		return [2]gridPlacement{}, false
+	}
+	return [2]gridPlacement{row, column}, true
 }
 
 // gridPlacement is what one item said about where it goes on one axis: §8.3's
@@ -1043,7 +1227,7 @@ func (l *layouter) layOutGridItem(it *gridItem, column, row style.Unit, hasRow b
 
 // gridItems gathers the container's items in order-modified document order,
 // which is where every question about placement is answered from.
-func (l *layouter) gridItems(b *Box, width style.Unit) []*gridItem {
+func (l *layouter) gridItems(b *Box, width style.Unit, areas gridAreas) []*gridItem {
 	var out []*gridItem
 	for _, c := range b.Children {
 		if c.IsText() || (c.Anonymous() && len(c.Children) == 0) || c.outOfFlow() {
@@ -1058,9 +1242,16 @@ func (l *layouter) gridItems(b *Box, width style.Unit) []*gridItem {
 		}
 		// The gate has read these already and refused the container where it
 		// could not; what comes back here is what it accepted.
+		//
+		// grid-area wins where it says anything, because §8.4 makes it the
+		// shorthand for all four lines and a shorthand resets what it does not
+		// mention.
 		it.place[0], _ = l.placementOf(c, "grid-row", "grid-row-start", "grid-row-end")
 		it.place[1], _ = l.placementOf(c,
 			"grid-column", "grid-column-start", "grid-column-end")
+		if at, ok := l.areaPlacement(c, areas); ok && at[0].span > 0 {
+			it.place = at
+		}
 		out = append(out, it)
 	}
 	// §6.2's order-modified document order, and the sort is stable for the
@@ -1444,11 +1635,11 @@ func (l *layouter) refusesToGrid(b *Box, width style.Unit) string {
 			"such as a named line, a minmax() or a repeat() that counts how " +
 			"many will fit"
 	}
-	switch trimmedLower(b.Style["grid-template-areas"]) {
-	case "", "none":
-	default:
-		return "its cells are named by a template, which places items by name " +
-			"rather than in order"
+	areas, ok := l.areasOf(b)
+	if !ok {
+		return "its cells are named by a template that does not draw a grid: " +
+			"either its rows are not all the same length or a name is in two " +
+			"places that do not touch"
 	}
 	switch trimmedLower(b.Style["grid-auto-flow"]) {
 	case "", "row":
@@ -1483,12 +1674,8 @@ func (l *layouter) refusesToGrid(b *Box, width style.Unit) string {
 		if c.IsText() || (c.Anonymous() && len(c.Children) == 0) || c.outOfFlow() {
 			continue
 		}
-		switch trimmedLower(c.Style["grid-area"]) {
-		case "", "auto":
-		default:
-			// The four-part shorthand, which is how an item is put in a named
-			// area — and an area is a placement algorithm of its own.
-			return "one of its items is placed by area rather than by line"
+		if _, ok := l.areaPlacement(c, areas); !ok {
+			return "one of its items is in an area the template does not draw"
 		}
 		_, row := l.placementOf(c, "grid-row", "grid-row-start", "grid-row-end")
 		_, column := l.placementOf(c,
