@@ -165,6 +165,16 @@ func (a flexAxis) crossName() string {
 }
 
 func (a flexAxis) minName() string { return "min-" + a.mainName() }
+
+// overflowName is the overflow property of the axis the items run along, which
+// is what §4.5 asks about before giving an item a content-based minimum.
+func (a flexAxis) overflowName() string {
+	if a.column {
+		return "overflow-y"
+	}
+	return "overflow-x"
+}
+
 func (a flexAxis) maxName() string { return "max-" + a.mainName() }
 func (a flexAxis) gapName() string {
 	// The gap between one item and the next is *across* the axis they run
@@ -1565,6 +1575,20 @@ func (l *layouter) flexMainLimits(it *flexItem, a flexAxis, room flexRoom) (min,
 	// value is "auto" in the registry and not the "0" CSS 2.1 gave it: an item
 	// carrying a computed zero is indistinguishable from one whose author asked
 	// for zero, and asking for zero is the idiom for defeating this very rule.
+	//
+	// The clause after it: an item that clips its own overflow along the main
+	// axis has an automatic minimum of nothing. That is not an exception, it is
+	// the reason the rule is safe — the minimum exists so that content is not
+	// cut off invisibly, and a box that says it will cut its content off has
+	// asked for exactly that. It is what makes the ellipsis idiom work, "flex:
+	// 1 1 0" with "overflow: hidden" on a long word, which could not shrink at
+	// all: 588px of word in a 300px container.
+	if !overflowIsVisibleOn(c.Style, a.overflowName()) {
+		if declared, ok := l.mainLength(c, a, a.mainName(), room); ok && declared < max {
+			return declared, max
+		}
+		return 0, max
+	}
 	min = l.contentWidths(c).min
 	if a.column {
 		// §4.5's content size suggestion along the block axis: the smallest a
