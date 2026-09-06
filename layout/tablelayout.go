@@ -320,9 +320,16 @@ func (l *layouter) placeRun(g *tableGrid, run *rowRun) {
 
 // spanValue reads a colspan or rowspan attribute, clamped.
 //
-// An absent, unreadable or negative value is one, which is what HTML says and is
-// the only safe answer: a span of zero would put two cells in one slot and a
-// negative one would walk the column index backwards.
+// By HTML's own rules for parsing a non-negative integer, which read the digits
+// at the front and stop: "2abc" is two, "2.5" is two, and "+2" is two. It used
+// to be strconv.Atoi over the whole string, which refuses all three and made
+// them one — so "colspan=2.5", which is a typo a person makes, silently put the
+// cell in one column and the table's columns out by one from there on. The
+// comment already said "what HTML says"; this is what it says.
+//
+// An absent or unreadable value is one, and so is a negative: a span of zero
+// would put two cells in one slot and a negative one would walk the column
+// index backwards.
 func spanValue(b *Box, name string, limit int) int {
 	if b.Element == nil {
 		return 1
@@ -331,8 +338,8 @@ func spanValue(b *Box, name string, limit int) int {
 	if !ok {
 		return 1
 	}
-	n, err := strconv.Atoi(strings.TrimSpace(raw))
-	if err != nil || n < 0 {
+	n, ok := leadingNonNegative(strings.TrimSpace(raw))
+	if !ok {
 		return 1
 	}
 	if n == 0 && name != "rowspan" {
@@ -344,6 +351,40 @@ func spanValue(b *Box, name string, limit int) int {
 	}
 	return n
 }
+
+// leadingNonNegative is HTML's "rules for parsing non-negative integers": an
+// optional plus, then the digits at the front, and whatever follows them is not
+// this value's business.
+//
+// It stops at the first non-digit rather than refusing the string, which is the
+// whole difference from strconv.Atoi. A value with no digits at all, or one that
+// begins with a minus, is not a non-negative integer and is refused.
+func leadingNonNegative(s string) (int, bool) {
+	if strings.HasPrefix(s, "+") {
+		s = s[1:]
+	}
+	n, digits := 0, 0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < '0' || c > '9' {
+			break
+		}
+		digits++
+		n = n*10 + int(c-'0')
+		if n > maxSpanValue {
+			// Past anything a table can use, and past anything the caller's
+			// limit will keep — so the digits after this one cannot change the
+			// answer and are not read, which is what stops a thousand-digit
+			// attribute from being arithmetic.
+			return maxSpanValue, true
+		}
+	}
+	return n, digits > 0
+}
+
+// maxSpanValue is where reading a span's digits stops. Every caller clamps to
+// its own limit below this; what this bounds is the arithmetic.
+const maxSpanValue = 1 << 20
 
 // spanAttr reads a <col> or <colgroup> span, which is at least one.
 func spanAttr(b *Box) int {
