@@ -1524,7 +1524,14 @@ func (p *painter) decorate(run TextRun, at Point, turn runTurn, over bool) {
 		// used — a decoration is measured from the baseline it crosses, which
 		// is a fact about the text and not about the page — so placeRun is all
 		// that separates one that runs across the page from one that runs down.
-		band := decorationBand(d.Kind, 0, run.Width, d.Shift.Sub(run.Shift), metrics)
+		//
+		// How thick it is and how far off the baseline it sits are the
+		// *declaring* box's, for the reason its colour and its height are: a
+		// decoration is drawn across what it crosses without paying attention
+		// to it, so a thickness set on the paragraph is one weight of line
+		// under words at three sizes.
+		band := decorationBand(d.Kind, 0, run.Width, d.Shift.Sub(run.Shift),
+			asDeclared(metrics, d))
 		if band.Empty() {
 			continue
 		}

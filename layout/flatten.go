@@ -30,12 +30,26 @@ import (
 // nothing — a shape of failure that looks like the declarations were ignored
 // rather than like the box was.
 //
-// An inline table and an inline flex container are atomic too, and are
-// deliberately not here: neither has a layout to be atomic *with* yet, and
-// giving them a box before they have contents to put in it would produce an
-// empty rectangle where the author expected a table.
+// An inline flex container and an inline grid are two more for the same reason,
+// and the flex one is here now that there is a flex layout for it to be atomic
+// *with*. It was left out while
+// there was not, on the argument that a box with nothing arranged in it is an
+// empty rectangle where the author expected a row — but the cost of leaving it
+// out is worse than that and was not seen at the time: an inline box is walked
+// into, and what the walk finds that is not inline-level is dropped. A block
+// inside an "inline-flex" was not on the page at all.
+//
+// The grid is here without a grid layout behind it, and that is not the case
+// the note above argues against: what is inside it is laid out — as blocks, for
+// now, and reported as such — so the box holds its content rather than standing
+// empty. Leaving it out is what would lose the content.
+//
+// An inline table is atomic too and is still not here, because it does not
+// arrive as itself: §17.4 wraps every table in a box, that wrapper is a flow
+// root, and the first test catches it.
 func isAtomicInline(b *Box) bool {
-	return b.Outer == OuterInline && b.Inner == InnerFlowRoot
+	return b.Outer == OuterInline &&
+		(b.Inner == InnerFlowRoot || b.Inner == InnerFlex || b.Inner == InnerGrid)
 }
 
 // atomicItem lays out an atomic inline and makes the line item for it.

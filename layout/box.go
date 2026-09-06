@@ -63,9 +63,11 @@ const (
 	// what an inline-block establishes, and what stops margins collapsing
 	// through it.
 	InnerFlowRoot
-	// InnerFlex, InnerTable and the table-internal contexts are named here and
-	// laid out later; naming them now is what lets the box tree be built once.
+	// InnerFlex, InnerGrid, InnerTable and the table-internal contexts are
+	// named here and laid out later; naming them now is what lets the box tree
+	// be built once.
 	InnerFlex
+	InnerGrid
 	InnerTable
 	InnerTableRowGroup
 	InnerTableRow
@@ -83,6 +85,8 @@ func (i Inner) String() string {
 		return "flow-root"
 	case InnerFlex:
 		return "flex"
+	case InnerGrid:
+		return "grid"
 	case InnerTable:
 		return "table"
 	case InnerTableRowGroup:
@@ -1043,6 +1047,10 @@ func displayOf(cs style.ComputedStyle) (Outer, Inner, bool) {
 		return OuterBlock, InnerFlex, false
 	case "inline-flex":
 		return OuterInline, InnerFlex, false
+	case "grid":
+		return OuterBlock, InnerGrid, false
+	case "inline-grid":
+		return OuterInline, InnerGrid, false
 	case "table":
 		return OuterBlock, InnerTable, false
 	case "inline-table":
@@ -1171,9 +1179,10 @@ func outOfFlowDisplay(outer Outer, inner Inner, float FloatSide, position Positi
 	switch inner {
 	case InnerFlow, InnerFlowRoot:
 		return OuterBlock, InnerFlowRoot
-	case InnerTable, InnerFlex:
+	case InnerTable, InnerFlex, InnerGrid:
 		// The two-value forms whose inner half survives blockification: an
-		// inline-table floats as a table, an inline-flex as a flex container.
+		// inline-table floats as a table, an inline-flex as a flex container,
+		// an inline-grid as a grid.
 		return OuterBlock, inner
 	}
 	// The table-internal displays. §9.7 turns each into its block-level
@@ -1217,6 +1226,8 @@ func twoValueDisplay(value string) (Outer, Inner, bool) {
 		inner = InnerFlowRoot
 	case "flex":
 		inner = InnerFlex
+	case "grid":
+		inner = InnerGrid
 	case "table":
 		inner = InnerTable
 	default:
@@ -1237,17 +1248,17 @@ func (b *boxBuilder) fixup(box *Box) {
 	for _, c := range box.Children {
 		b.fixup(c)
 	}
-	unfloatFlexItems(box)
+	unfloatItems(box)
 	box.Children = b.fixupTables(box)
 	box.Children = b.splitBlockInInline(box)
 	box.Children = b.wrapInlines(box)
-	box.Children = b.wrapFlexText(box)
+	box.Children = b.wrapLooseText(box)
 }
 
-// unfloatFlexItems is CSS Flexible Box Layout §4: "float and clear have no
-// effect on a flex item".
+// unfloatItems is CSS Flexible Box Layout §4 and CSS Grid Layout §6: "float and
+// clear have no effect on a flex item", and the same sentence for a grid item.
 //
-// A float in a flex container is not a float. It is an item like any other,
+// A float in a flex or grid container is not a float. It is an item like any other,
 // laid out in its place along the axis — which is not a small difference:
 // float takes a box out of the flow everywhere else in this engine, and a box
 // out of the flow is not an item at all, so a container holding one would
@@ -1259,8 +1270,8 @@ func (b *boxBuilder) fixup(box *Box) {
 // here. What the declaration still does is what it did before it reached this:
 // §9.7 has already blockified the box, so "float: left" on a <span> in a flex
 // container makes it a block-level item rather than an inline one.
-func unfloatFlexItems(parent *Box) {
-	if parent.Inner != InnerFlex {
+func unfloatItems(parent *Box) {
+	if parent.Inner != InnerFlex && parent.Inner != InnerGrid {
 		return
 	}
 	for _, c := range parent.Children {
@@ -1272,8 +1283,9 @@ func unfloatFlexItems(parent *Box) {
 	}
 }
 
-// wrapFlexText is CSS Flexible Box Layout §4's anonymous flex item: a run of
-// text written straight inside a flex container is wrapped in a box of its own.
+// wrapLooseText is CSS Flexible Box Layout §4's anonymous flex item and CSS
+// Grid Layout §6's anonymous grid item, which are one rule written twice: a run
+// of text written straight inside the container is wrapped in a box of its own.
 //
 // It is the same idea as the anonymous block rule above and not the same rule,
 // and the differences are what make it a second function. §2.1 wraps inline
@@ -1287,8 +1299,11 @@ func unfloatFlexItems(parent *Box) {
 // three: the word in a box the document does not contain, and the span beside
 // it. Without this the container was refused and laid out as a block, which is
 // most of the flex containers anyone writes.
-func (b *boxBuilder) wrapFlexText(parent *Box) []*Box {
-	if parent.Inner != InnerFlex || len(parent.Children) == 0 {
+func (b *boxBuilder) wrapLooseText(parent *Box) []*Box {
+	if parent.Inner != InnerFlex && parent.Inner != InnerGrid {
+		return parent.Children
+	}
+	if len(parent.Children) == 0 {
 		return parent.Children
 	}
 	var out, run []*Box
@@ -1399,7 +1414,7 @@ func isBlockContainer(b *Box) bool {
 // lifted out as a block, which is the opposite of what "inline" asked for.
 func laysOutOwnChildren(b *Box) bool {
 	switch b.Inner {
-	case InnerTable, InnerFlex:
+	case InnerTable, InnerFlex, InnerGrid:
 		return true
 	}
 	return isBlockContainer(b)

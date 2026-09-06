@@ -1018,8 +1018,15 @@ const wptEnv = "WPT_TESTS"
 // introduced, because the engine could not build the box the test is named
 // after; it is here again because the engine now builds it. The report was
 // honest while it stood and the pass is honest now, which is the whole of what
-// the entry above was holding out for. See layout/box.go's wrapFlexText.
-const wptCleanPassBaseline = 5959
+// the entry above was holding out for. See layout/box.go's wrapLooseText.
+//
+// 5959 to 5960 is text-indent/anonymous-grid-item-001, the flex document's
+// twin: it writes two lines of text straight inside a "grid-template-columns:
+// auto auto" container and asks where the second one starts. It needs three
+// things at once — a grid container that is a box, an anonymous grid item
+// around each run of text, and columns sized from their content — and it has
+// been reported as unlaid since the report existed. See layout/grid.go.
+const wptCleanPassBaseline = 5960
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

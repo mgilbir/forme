@@ -7,11 +7,16 @@ import (
 
 // A formatting context this engine recognises and does not lay out.
 //
+// Ruby is the last of them. Flex and grid were here too, and each left when it
+// was arranged: layout/flex.go and layout/grid.go report the containers they
+// cannot arrange at the box, with the reason, which is a fact about the
+// container rather than about the keyword. See layout/flex_test.go and
+// layout/grid_test.go.
+//
 // Every test here asks *which boxes are reported*, not whether the finding
-// exists. That is the whole difficulty: reporting every flex, grid and ruby box
-// would be crying wolf on six of the suite's documents, and reporting none of
-// them is the silence the finding is for. The line between the two is the
-// content, and each case below is one side of it.
+// exists. That is the whole difficulty: reporting every ruby box would be
+// crying wolf on five of the suite's documents, and reporting none of them is
+// the silence the finding is for.
 
 // unlaidFindings returns the messages reported about display, in order.
 func unlaidFindings(t *testing.T, htmlSrc, cssSrc string) []string {
@@ -24,67 +29,6 @@ func unlaidFindings(t *testing.T, htmlSrc, cssSrc string) []string {
 		}
 	}
 	return out
-}
-
-// TestAGridContainerWithItemsSaysItIsNotOne. Until this was reported, a grid
-// container laid its children out as a column of full-width blocks and the
-// document said nothing — the page was plausible, wrong, and had a clean bill of
-// health.
-//
-// "flex" was here too and is not any more: layout/flex.go arranges the
-// containers it can and reports the rest at the box, with the reason. See
-// layout/flex_test.go.
-func TestAGridContainerWithItemsSaysItIsNotOne(t *testing.T) {
-	for _, value := range []string{"grid", "inline-grid"} {
-		got := unlaidFindings(t, `<div id="f"><div>a</div><div>b</div></div>`,
-			`#f { display: `+value+` }`)
-		if len(got) != 1 {
-			t.Errorf("display: %s reported %d findings, want 1: %v", value, len(got), got)
-			continue
-		}
-		if !strings.Contains(got[0], value) {
-			t.Errorf("the finding for display: %s is %q and does not name the value",
-				value, got[0])
-		}
-		if !strings.Contains(got[0], "stacked") {
-			t.Errorf("the finding %q does not say what the page came out as", got[0])
-		}
-	}
-}
-
-// TestOneItemIsEnough. A flex item is sized from its own content where a block
-// child fills its container, so a container with a single item is already laid
-// out at the wrong width — there is no "small enough not to matter" here, and a
-// rule that waited for two would be quiet about exactly the page an author
-// notices first.
-func TestOneItemIsEnough(t *testing.T) {
-	for _, doc := range []string{
-		`<div id="f"><div>a</div></div>`,
-		`<div id="f">bare text</div>`,
-		`<div id="f"><span>a</span></div>`,
-	} {
-		if got := unlaidFindings(t, doc, `#f { display: grid }`); len(got) != 1 {
-			t.Errorf("%s reported %d findings, want 1: %v", doc, len(got), got)
-		}
-	}
-}
-
-// TestAnEmptyGridContainerIsTheBoxThatWasAsked. letter-spacing-204 writes
-// "A<span class=flex></span><span class=block></span>D" and spaces the atomic
-// inlines: the flex container is empty, an empty box is empty however it is laid
-// out, and a finding there would say the page was wrong when it was right.
-func TestAnEmptyGridContainerIsTheBoxThatWasAsked(t *testing.T) {
-	for _, doc := range []string{
-		`<div id="f"></div>`,
-		`<div id="f">   </div>`,
-		`<div id="f"><div style="display: none">a</div></div>`,
-		`<div id="f"><div style="position: absolute">a</div></div>`,
-	} {
-		if got := unlaidFindings(t, doc, `#f { display: grid }`); len(got) != 0 {
-			t.Errorf("%s reported %v; the box holds no grid item and is the box "+
-				"the specification asks for", doc, got)
-		}
-	}
 }
 
 // TestARubyBoxIsReportedOnlyWhereThereIsAnAnnotation.
@@ -130,6 +74,7 @@ func TestOnlyTheContextsThisEngineDoesNotLayOutAreReported(t *testing.T) {
 	for _, value := range []string{
 		"block", "inline", "inline-block", "flow-root", "list-item",
 		"table", "inline-table", "table-row", "table-cell", "none",
+		"flex", "inline-flex", "grid", "inline-grid",
 	} {
 		if got := unlaidFindings(t, doc, `#f { display: `+value+` }`+ann); len(got) != 0 {
 			t.Errorf("display: %s reported %v, and it is laid out", value, got)
