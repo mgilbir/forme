@@ -59,6 +59,31 @@ type Decoration struct {
 	// that draws the display list has no styles left to ask.
 	Thickness, Offset       style.Unit
 	HasThickness, HasOffset bool
+	// Metrics is where the three bands sit and how thick they are according to
+	// the declaring box's *face*, which is the answer for every document that
+	// leaves the two properties above alone — almost all of them.
+	//
+	// It is here for the same reason they are, and it is the same rule: §16.3.1
+	// draws a decoration across the whole of the box that declared it "without
+	// paying any attention to" what it crosses. A paragraph's underline is one
+	// straight line of one weight under words at three sizes and in three
+	// faces; read off each run instead, it steps up and down and changes
+	// thickness wherever a <span> changes the font.
+	Metrics DecorationMetrics
+}
+
+// DecorationMetrics is a face's own statement of where a decoration sits.
+//
+// The units are the ones the display list uses, resolved against the declaring
+// box's font size: thickness is a height and the other three are the *top* edge
+// of each band, measured off the baseline and positive downwards.
+type DecorationMetrics struct {
+	Thickness style.Unit
+	// StrikeThickness is the face's own strikeout size, and is zero where the
+	// face states none — in which case the line-through is drawn at Thickness
+	// like the rest.
+	StrikeThickness             style.Unit
+	Underline, Overline, Strike style.Unit
 }
 
 // Frame is what the walk over an inline subtree carries down: enough to

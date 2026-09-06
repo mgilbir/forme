@@ -3,6 +3,7 @@ package layout
 import (
 	"strings"
 
+	"github.com/mgilbir/forme/paragraph"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -94,6 +95,12 @@ func (l *layouter) decorationsFor(b *Box) []textDecoration {
 		own[i].Thickness, own[i].HasThickness =
 			l.decorationLength(b, "text-decoration-thickness")
 		own[i].Offset, own[i].HasOffset = l.decorationLength(b, "text-underline-offset")
+		// And where it said nothing, what its own face says — which is the
+		// answer for almost every document. Read here for the same reason: the
+		// stage that draws the band has no styles to ask and no faces to ask
+		// either, and §16.3.1's line is the *declaring* box's whatever it
+		// crosses.
+		own[i].Metrics = l.declaredDecorationMetrics(b)
 	}
 	var above []textDecoration
 	switch {
@@ -257,8 +264,16 @@ type decorationMetrics struct {
 	underline, overline, strike style.Unit
 }
 
-// asDeclared is the metrics with what the declaring box asked for put in place
-// of what the face said.
+// asDeclared is where the bands sit and how thick they are: the declaring box's
+// face, with anything the box said explicitly put in place of it.
+//
+// Every number in it belongs to the box that declared the decoration and none
+// of them to the run being drawn. That is §16.3.1 — a decoration is drawn
+// across the whole of the declaring box "without paying any attention to" the
+// descendants it crosses — and it held for the colour and the height and not
+// for the thickness or the offset, which were read off each run's own face and
+// size. An underline on a paragraph stepped up and down and changed weight
+// wherever a <span> changed the font.
 //
 // §2.2's thickness applies to every line of the decoration — an underline and a
 // line-through declared together are drawn at one weight — so it replaces both
@@ -270,7 +285,14 @@ type decorationMetrics struct {
 // the letters, and a positive value moves it away from them. That is the whole
 // of the property and it is why the number goes straight into the band's top
 // edge, which is what the rest of this file already measures.
-func asDeclared(m decorationMetrics, d textDecoration) decorationMetrics {
+func asDeclared(d textDecoration) decorationMetrics {
+	m := decorationMetrics{
+		thickness:       d.Metrics.Thickness,
+		strikeThickness: d.Metrics.StrikeThickness,
+		underline:       d.Metrics.Underline,
+		overline:        d.Metrics.Overline,
+		strike:          d.Metrics.Strike,
+	}
 	if d.HasThickness {
 		m.thickness, m.strikeThickness = d.Thickness, d.Thickness
 	}
@@ -306,6 +328,23 @@ func (l *layouter) decorationLength(b *Box, property string) (style.Unit, bool) 
 		return 0, false
 	}
 	return v, true
+}
+
+// declaredDecorationMetrics is where a box's own face puts the three bands.
+//
+// Its own face and its own font size, not the run's. A decoration is drawn
+// across the whole of the box that declared it without paying attention to what
+// it crosses (§16.3.1), so an underline declared on a paragraph is one straight
+// line of one weight under words at three sizes — and read off each run it
+// steps wherever a <span> changes the font.
+func (l *layouter) declaredDecorationMetrics(b *Box) paragraph.DecorationMetrics {
+	l.ensureFontSize(b)
+	face, _ := l.fontFor(b)
+	m := decorationMetricsFor(face, b.FontSize)
+	return paragraph.DecorationMetrics{
+		Thickness: m.thickness, StrikeThickness: m.strikeThickness,
+		Underline: m.underline, Overline: m.overline, Strike: m.strike,
+	}
 }
 
 // decorationMetricsFor works the three positions out from a face.

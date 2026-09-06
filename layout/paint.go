@@ -1519,7 +1519,6 @@ func (p *painter) decorate(run TextRun, at Point, turn runTurn, over bool) {
 	if len(run.Decorations) == 0 || run.Width <= 0 {
 		return
 	}
-	metrics := decorationMetricsFor(run.Face, run.Size)
 	for _, d := range run.Decorations {
 		if (d.Kind == decorationLineThrough) != over {
 			continue
@@ -1539,9 +1538,11 @@ func (p *painter) decorate(run TextRun, at Point, turn runTurn, over bool) {
 		// *declaring* box's, for the reason its colour and its height are: a
 		// decoration is drawn across what it crosses without paying attention
 		// to it, so a thickness set on the paragraph is one weight of line
-		// under words at three sizes.
+		// under words at three sizes. Where the box said neither, its own
+		// face's answer is carried on the decoration — a face is not something
+		// this stage can ask.
 		band := decorationBand(d.Kind, 0, run.Width, d.Shift.Sub(run.Shift),
-			asDeclared(metrics, d))
+			asDeclared(d))
 		if band.Empty() {
 			continue
 		}

@@ -707,3 +707,80 @@ func TestTheThicknessDoesNotInheritAndTheOffsetDoes(t *testing.T) {
 			"its parent asked for: the offset is an inherited property", top)
 	}
 }
+
+// TestOneLineOfOneWeightUnderTextOfThreeSizes.
+//
+// §16.3.1's third consequence, and the one that was missing. The colour and the
+// height of the band were the declaring box's; where it sits and how thick it
+// is were read off each run's own face and size, so a paragraph's underline
+// stepped up and down and changed weight wherever a <span> changed the font.
+//
+// Courier at 20px: 0.05em is a 1px band, and its top edge is 20 x 0.1 - 0.5 =
+// 1.5px below the baseline. At 40px the same arithmetic gives 2px and 3px, so a
+// run measured against itself is unmistakably different from one measured
+// against the paragraph.
+func TestOneLineOfOneWeightUnderTextOfThreeSizes(t *testing.T) {
+	root := layoutOf(t, 600,
+		`<div id="p">ab<span id="big">cd</span>ef</div>`,
+		noDefaults+decoCSS+` #p { text-decoration: underline }
+		 #big { font-size: 40px }`)
+	got := bands(Paint(root), black)
+	if len(got) != 3 {
+		t.Fatalf("the three runs painted %d bands, want one each", len(got))
+	}
+	base := baselineOfFirstRun(t, root, "p")
+	for i, b := range got {
+		if h := b.H.Px(); h != 1 {
+			t.Errorf("band %d is %gpx thick, want 1 — the paragraph is 20px and "+
+				"0.05em of that is one, whatever size the run under it is", i, h)
+		}
+		if off := b.Y.Sub(base).Px(); off != 1.5 {
+			t.Errorf("band %d sits %gpx below the baseline, want 1.5 — the "+
+				"paragraph's own offset, not the run's", i, off)
+		}
+	}
+	// And they join up, which they cannot do if they are at three heights.
+	for i := 1; i < len(got); i++ {
+		if got[i-1].Y != got[i].Y {
+			t.Errorf("bands %d and %d are at y=%v and y=%v; §16.3.1 rules one "+
+				"straight line", i-1, i, got[i-1].Y, got[i].Y)
+		}
+	}
+}
+
+// TestTheDeclaringBoxesFaceDecidesTheBand is the same rule where the *face*
+// rather than the size differs, since a face states its own underline position
+// and a fallback does not.
+func TestTheDeclaringBoxesFaceDecidesTheBand(t *testing.T) {
+	dir := os.Getenv("NOTO_FONTS")
+	if dir == "" {
+		t.Skip("set NOTO_FONTS (or run `make test-wpt`) for a face that states an underline")
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "NotoSans-Regular.ttf"))
+	if err != nil {
+		t.Skip("no Noto Sans: ", err)
+	}
+	res := &fileResolver{files: map[string][]byte{"noto.ttf": data}}
+	// The paragraph is Courier, which states nothing and takes the 0.05em and
+	// 0.1em fallbacks; the span inside it is Noto Sans, which states both. A
+	// band measured against the span would be at Noto's numbers.
+	ops := paintWith(t, res, `<div id="p">ab<span id="n">cd</span>ef</div>`,
+		noDefaults+decoCSS+`
+		 @font-face { font-family: Noto; src: url(noto.ttf) }
+		 #p { text-decoration: underline }
+		 #n { font-family: Noto }`)
+	got := bands(ops, black)
+	if len(got) != 3 {
+		t.Fatalf("the three runs painted %d bands, want one each", len(got))
+	}
+	for i, b := range got {
+		if h := b.H.Px(); h != 1 {
+			t.Errorf("band %d is %gpx thick, want 1 — Courier's 0.05em at 20px, "+
+				"which is what the paragraph declared the line in", i, h)
+		}
+		if b.Y != got[0].Y {
+			t.Errorf("band %d is at y=%v and the first at y=%v; the face under the "+
+				"line does not move it", i, b.Y, got[0].Y)
+		}
+	}
+}
