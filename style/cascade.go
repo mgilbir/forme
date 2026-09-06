@@ -563,6 +563,59 @@ func substituteParent(vals, parent []css.ComponentValue) ([]css.ComponentValue, 
 func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 	name := strings.ToLower(d.Name)
 
+	// Custom properties, and every declaration whose value uses one.
+	//
+	// This is asked first because the question "is this value legal for this
+	// property" cannot be answered while a var() stands in the middle of it —
+	// the value is whatever the custom property holds, and nothing here
+	// substitutes it. Asked afterwards, one feature got three different
+	// answers: "--c: red" was reported as an unimplemented property, "color:
+	// var(--c)" was dropped as not a colour, and "width: var(--w)" was kept
+	// verbatim. None of the three was marked unsupported — a custom property
+	// looked like a vendor prefix, and a vendor prefix is a spelling of
+	// something this engine does implement — so a page set in the wrong colour
+	// carried no claim that anything was missing from it, and the reftest
+	// ratchet counted it as clean.
+	//
+	// One answer now, and it is the one a browser gives. A declaration whose
+	// value cannot be resolved is "invalid at computed-value time" — CSS
+	// Variables §3.3 — which is not the same as an invalid declaration: it
+	// still wins the cascade, and it computes to "unset", so an inherited
+	// property takes the parent's value and every other one its initial value.
+	// Dropping it instead would restore whatever the user agent sheet said,
+	// which is a third wrong answer.
+	//
+	// The finding says the engine does not do this, because it does not: a
+	// document using custom properties gets a page that is defensible rather
+	// than one that is right, and the claim on it has to say so.
+	if isCustomProperty(name) {
+		if !s.seen[name] {
+			s.seen[name] = true
+			s.report(Finding{
+				Offset: d.Offset,
+				Message: "the custom property \"" + name + "\" was not applied: this engine " +
+					"does not substitute custom properties, so nothing can refer to it",
+				Unsupported: true,
+				Property:    name,
+			})
+		}
+		return nil
+	}
+	if usesVar(d.Value) {
+		if !s.seen[name] {
+			s.seen[name] = true
+			s.report(Finding{
+				Offset: d.Offset,
+				Message: "\"" + name + ": " + serialize(d.Value) + "\" refers to a custom " +
+					"property, which this engine does not substitute, so the declaration " +
+					"computes to \"unset\"",
+				Unsupported: true,
+				Property:    name,
+			})
+		}
+		d.Value = unsetValue()
+	}
+
 	if nonNegative[name] && hasNegativeNumber(d.Value) {
 		// A declaration whose value is illegal is not a declaration with a
 		// strange value: CSS 2.1 §4.2 says the whole declaration is dropped, and
@@ -1637,6 +1690,12 @@ func (s *Styler) inlineDeclarations(n *html.Node) map[string]preparedDecl {
 // contradiction: this is only reached for a name nothing acts on, and a prefixed
 // property the engine implements never gets that far.
 func vendorPrefixed(name string) bool {
+	// A leading "--" is not a prefix. CSS Variables §2 reserves that shape for
+	// custom properties, which are a feature and not another engine's spelling
+	// of one — see expand, which takes them before this is ever asked.
+	if isCustomProperty(name) {
+		return false
+	}
 	for _, prefix := range []string{"-webkit-", "-moz-", "-ms-", "-o-"} {
 		if strings.HasPrefix(name, prefix) {
 			return true
@@ -1647,6 +1706,31 @@ func vendorPrefixed(name string) bool {
 	// reserves the shape for.
 	if len(name) > 1 && name[0] == '-' {
 		return strings.Contains(name[1:], "-")
+	}
+	return false
+}
+
+// isCustomProperty reports whether a name is a custom property: CSS Variables
+// §2's two leading dashes, which are reserved for exactly this.
+func isCustomProperty(name string) bool { return strings.HasPrefix(name, "--") }
+
+// unsetValue is the CSS-wide keyword "unset" as a value, which is what a
+// declaration this engine cannot resolve computes to. See expand.
+func unsetValue() []css.ComponentValue {
+	return []css.ComponentValue{{Token: css.Token{Kind: css.Ident, Value: kwUnset}}}
+}
+
+// usesVar reports whether a value refers to a custom property, at any depth. A
+// var() inside a calc() inside a shorthand is still a value this engine cannot
+// know.
+func usesVar(vals []css.ComponentValue) bool {
+	for _, v := range vals {
+		if v.IsFunction() && strings.EqualFold(v.Token.Value, "var") {
+			return true
+		}
+		if len(v.Values) > 0 && usesVar(v.Values) {
+			return true
+		}
 	}
 	return false
 }
