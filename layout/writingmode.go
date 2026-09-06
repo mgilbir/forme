@@ -10,9 +10,9 @@ import (
 //
 // # What is laid out
 //
-// One mode, "vertical-rl", and only for a box turnable() accepts. Everything
-// else — the other three vertical modes, and a vertical-rl box this cannot lay
-// out — is reported per box and laid out horizontally, which is the page that
+// All four vertical modes — "vertical-rl", "vertical-lr", "sideways-rl" and
+// "sideways-lr" — and only for a box refusesToTurn accepts. A box it will not
+// turn is reported, per box, and laid out horizontally, which is the page that
 // was already there.
 //
 // # Why a rotation and not an axis abstraction
@@ -38,9 +38,12 @@ import (
 // not leave alone.
 //
 // The limit of the trick is exactly the set of things that are not a rotation of
-// the horizontal page, and turnable() is the list. "text-orientation: upright"
-// is the biggest of them: an upright ideograph on a vertical line is not any
-// rotation of a horizontal line, and no amount of turning produces one.
+// the horizontal page, and refusesToTurn is the list. Upright text is where it
+// stops being one thing: an upright ideograph on a vertical line is no rotation
+// of a horizontal line, so a run that needs one is set upright rather than
+// turned — which is a second fact in the display list and not a second
+// rotation — and a *box* whose text needs both at once is refused, because one
+// box is one turn.
 //
 // # Why the report is per box
 //

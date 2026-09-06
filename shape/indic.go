@@ -52,11 +52,10 @@ import (
 // rules would be worse than leaving it, since it would move glyphs by a grammar
 // that is not theirs.
 //
-// The scripts the Universal Shaping Engine covers are absent and have no shaper
-// of their own: they are set as they were before, their characters turned into
-// glyphs in storage order with the font's default features applied. Text in
-// them is not correctly set by this package and should be shaped elsewhere and
-// passed in as glyph indices.
+// The scripts the Universal Shaping Engine covers have a shaper of their own
+// too — use.go, which is a fourth model and not a fallback: its clusters are a
+// grammar, its features are applied in three groups with a pass between them,
+// and it reorders. syllabic.go is what chooses between the four.
 //
 // These are not done:
 //

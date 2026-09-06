@@ -17,7 +17,7 @@ import (
 // strings, whether a boundary falls there — and it is built to exercise each
 // rule against each class rather than to look like text, so it reaches the
 // combinations no document in this repository contains. It is the oracle for
-// this package in the way BidiCharacterTest.txt is the oracle for internal/bidi,
+// this package in the way BidiCharacterTest.txt is the oracle for package bidi,
 // and for the same reason: the answer comes from the Consortium rather than from
 // this repository's reading of the specification.
 //

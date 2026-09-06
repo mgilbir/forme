@@ -139,15 +139,15 @@ func WhiteSpaceOf(value string) WhiteSpace {
 // WordBreak is what the word-break property sets: whether a line may end
 // between two characters of a word rather than only between words.
 //
-// CSS Text §5.2 gives it four values and this is a bool, which is a statement
-// about two of them rather than a simplification. "normal" and "break-all" are
-// the two this engine distinguishes; "keep-all" and "auto-phrase" change where
-// CJK and Korean text may break and are read as normal *and reported*, because
-// a value that moves a break and is silently ignored produces a line broken in
-// a place the author asked it not to be.
+// CSS Text §5.2 gives it five values and four of them are here: "normal" is the
+// zero value, and break-all, keep-all and manual are each a field below. Only
+// "auto-phrase" is read as normal, and it is *reported* — a value that moves a
+// break and is silently ignored produces a line broken where the author asked
+// it not to be. See PhrasesUnfound, which is what asks whether this engine has
+// a model for the text at all.
 type WordBreak struct {
 	// BreakAll allows a line to end at any typographic character unit boundary
-	// inside a word, which is the grapheme cluster — see internal/grapheme for
+	// inside a word, which is the grapheme cluster — see package segment for
 	// why that is the unit and why the shaper's clusters are not it.
 	BreakAll bool
 	// KeepAll forbids one, and forbids it in exactly the places this engine
@@ -222,15 +222,15 @@ func WordBreakOf(value string) (WordBreak, string) {
 // LineBreak is what the line-break property sets: how strict the rules are about
 // where a line may end.
 //
-// Three of its four values are about CJK text — loose, normal and strict move
-// breaks around small kana, iteration marks and centred punctuation — and this
-// engine's CJK breaking is one rule, "between two ideographs", which none of the
-// three refines. They are read as auto for that reason, and reported only over
-// text that contains an ideograph: the suite has three tests whose whole
-// assertion is that "line-break: loose" changes nothing about "XX    XX", and a
-// warning there would be a false one.
+// All four values are here. Three are about CJK text — loose, normal and strict
+// move breaks around the small kana, the iteration marks and the centred
+// punctuation — and each is a set of characters read off LineBreak.txt by
+// cmd/genlinebreak, so the tailoring is Unicode's list and the policy is this
+// package's. The zero value is "auto", which §5.3 leaves to the engine and
+// which this one answers with UAX #14 untailored; see Strict, Normal and Loose
+// for why that has to differ from "normal".
 //
-// The fourth is different in kind and is implemented. CSS Text §5.3:
+// The fourth is different in kind. CSS Text §5.3:
 //
 //	anywhere: There is a soft wrap opportunity around every typographic
 //	character unit, including around any punctuation character or preserved

@@ -1082,11 +1082,16 @@ func displayOf(cs style.ComputedStyle) (Outer, Inner, bool) {
 	case "table-column":
 		return OuterBlock, InnerTableColumn, false
 	case "contents":
-		// "display: contents" replaces the element with its children. It is not
-		// implemented, and the closest available answer — treating it as inline
-		// — is wrong in a way that shows: the element's own box would take part
-		// in layout when the author asked for it not to. Treated as inline and
-		// reported by the caller.
+		// "display: contents" replaces the element with its children, and where
+		// it is honoured the element never reaches here at all —
+		// contentsIsHonoured decides that, and the walk skips the box.
+		//
+		// What reaches here is the cases it refuses: the root element, a
+		// replaced element, a form control. Each of those has content of its
+		// own that is not its children, so there is nothing to replace it with;
+		// the specification's own answer is to treat the value as an ordinary
+		// one, and inline is what the element would have been. The caller
+		// reports it.
 		return OuterInline, InnerFlow, false
 	}
 	// An unrecognised value: the initial one, which is what the cascade would

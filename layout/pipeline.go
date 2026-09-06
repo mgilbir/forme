@@ -17,10 +17,11 @@ import (
 // learn three vocabularies to find that out. Everything arrives here as a rule
 // identifier and a place in the author's input.
 //
-// This is not the final entry point. Render will be, once there is a layout to
-// run and a page to run it onto; what is here is the prefix of it that exists,
-// exposed because the stages are worth testing against real documents rather
-// than against hand-built trees.
+// This is not the entry point most callers want. Compose is: it runs these
+// stages, lays the result out on a sheet, decides the scale and paints it. What
+// is here is the prefix of that, exposed because the stages are worth testing
+// against real documents rather than against hand-built trees, and because a
+// caller laying out its own pages needs the box tree without the page.
 
 // Stylesheet is one stylesheet with a name to report against.
 type Stylesheet struct {

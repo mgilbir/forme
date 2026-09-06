@@ -40,14 +40,18 @@ import (
 //
 // # Where the lines go, and where the numbers came from
 //
-// A face carries an underline position and thickness in its post table, and
-// forme's descriptor does not expose either — it stops at ascent, descent, cap
-// height and the bounding box. Rather than guess, the numbers below are the ones
-// the fourteen standard faces actually declare in their own AFM metrics: every
-// one of Times, Helvetica and Courier states an underline position of -100 and a
-// thickness of 50 per 1000 em. So an underline is a band 0.05em thick centred
-// 0.1em below the baseline, which is exactly right for the faces this engine
-// sets by default and within a few thousandths of an em for the rest.
+// A face carries an underline position and thickness in its post table, and the
+// descriptor exposes both — MetricUnderline says whether the face declared
+// them. Where it did, they are what the band is drawn from, which is the answer
+// the font's designer gave.
+//
+// The fallback is for a face that declares neither, and it is not a guess: the
+// numbers are the ones the fourteen standard faces declare in their own AFM
+// metrics, where every one of Times, Helvetica and Courier states an underline
+// position of -100 and a thickness of 50 per 1000 em. So an underline with
+// nothing else to go on is a band 0.05em thick centred 0.1em below the
+// baseline, which is exactly right for the faces this engine sets by default
+// and within a few thousandths of an em for the rest.
 //
 // The other two lines are not in a font's metrics at all — a strikeout position
 // is in OS/2, which the descriptor does not carry either — so they are placed

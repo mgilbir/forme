@@ -1448,9 +1448,12 @@ func onlyIdent(vals []css.ComponentValue) bool {
 // exactly as strong as the semantic one for this rule.
 //
 // A function's arguments are not looked into. "calc(10px - 20px)" is negative
-// and this does not say so; calc is not implemented, so there is nothing here
-// to be wrong about yet, and guessing at the sign of an expression that is not
-// evaluated would drop declarations that are perfectly legal.
+// and this does not say so, and that is the same reason as the paragraph above
+// rather than a gap: a calc() is evaluated per element, against a font size and
+// a containing block that do not exist while a sheet is being prepared, so its
+// sign is not a fact about the declaration. "calc(1em - 20px)" is negative in
+// one element and positive in the next. Guessing would drop declarations that
+// are perfectly legal in the element they land on.
 func hasNegativeNumber(vals []css.ComponentValue) bool {
 	for _, v := range vals {
 		if !v.IsToken() {

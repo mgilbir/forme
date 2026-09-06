@@ -21,10 +21,14 @@ import (
 //
 // # What is laid out here, and what is refused
 //
-// One line, running left to right, its items packed and aligned by any of the
-// keywords that name a position on an axis. That is "display: flex" and the
-// handful of declarations that go with it in most real documents — and it is the
-// slice whose arithmetic can be stated exactly.
+// All four flex-directions, wrapping or not, with the lines placed by
+// align-content and the items packed by justify-content and aligned by
+// align-items and align-self — any of the keywords that name a position on an
+// axis. That is "display: flex" and the declarations that go with it in real
+// documents, and it is the slice whose arithmetic can be stated exactly.
+//
+// It began as one line running left to right, which is what the paragraph below
+// was written about; the gate is the same and what it refuses has narrowed.
 //
 // Everything else is refused with a finding and laid out as it was before this
 // file existed, which is as an ordinary block. The gate is the same shape as

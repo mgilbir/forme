@@ -50,32 +50,20 @@ import (
 //     stepped over by every rule that is not about them, and removed before
 //     anything is positioned or drawn. See ignorable.go, which also says which
 //     of Unicode's other default-ignorable characters are *not* handled.
+//   - Reordering for every syllabic model this engine sets: Devanagari and its
+//     eight relatives (indic.go), Khmer (khmer.go), Myanmar (myanmar.go) and
+//     the Universal Shaping Engine (use.go), which covers Tibetan, Javanese,
+//     Balinese, Buginese, Tai Tham, Cham, Sinhala and a long tail. syllabic.go
+//     chooses between the four models, and each file says what within its own
+//     is left out.
+//   - A variable font at any point in its design space. LoadInstance rewrites
+//     the outlines for the coordinates asked for, and FeatureVariations is read
+//     at those coordinates rather than at the default's — so a record whose
+//     conditions cover the instance is applied, which is how a font states
+//     different lookups for a weight.
 //
 // # What is not, and what each absence costs
 //
-//   - Reordering for the scripts the Universal Shaping Engine covers — Tibetan,
-//     Javanese, Balinese, Buginese, Tai Tham, Cham, Sinhala and a long tail.
-//     Their tags are still selected, because that is where such a font declares
-//     its features, but their characters are turned into glyphs in storage
-//     order, so text in them is not correctly set here and should be shaped
-//     elsewhere and passed in as glyph indices.
-//
-//     The engine is not one more shaper. It needs a category table over all of
-//     Unicode whose two normative override files are not in the published
-//     sources, a record of *which* substitution produced each glyph that this
-//     package does not keep, and a joining model over syllables that interacts
-//     with Arabic joining. Half of it shipped would move glyphs by a grammar
-//     that is not theirs, which is worse than leaving them in storage order.
-//
-//     Devanagari and its eight relatives (indic.go), Khmer (khmer.go) and
-//     Myanmar (myanmar.go) *are* reordered; syllabic.go chooses between the
-//     three models, and each file says what within its own is left out.
-//   - Every point in a variable font's design space but the default one.
-//     FeatureVariations is read, and read for the coordinates in force — which
-//     are the default instance's, because nothing here instances a font: the
-//     subsetter drops fvar and gvar, and what reaches a document is the default
-//     instance. A record whose conditions do not cover the default is a rule for
-//     a weight this module never sets, and is not applied.
 //   - 'rclt' anywhere but an Indic run. It is a required feature and every other
 //     shaper applies it generally; here only the Indic pass does, because that
 //     is where its absence was measured.

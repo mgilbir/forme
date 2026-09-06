@@ -31,9 +31,12 @@ import (
 // for an engine whose job is to print somebody else's HTML: the caller chose
 // the paper and the document knows its own design.
 //
-// The size of the sheet is not read here yet, and neither is a rule that
-// selects only some pages — a document is one page in this engine, so ":first"
-// is a distinction it does not have. Both are reported rather than ignored.
+// The size of the sheet is read, and so is a rule that selects a page: this
+// engine composes one page and that page is the first, so ":first" applies and
+// is more particular than a rule without it — see pageSelector, which returns a
+// specificity for exactly that reason. What is refused is a selector needing a
+// sequence of pages to mean anything: ":left", ":right", ":blank" and a named
+// page. Those are reported rather than ignored.
 
 // pendingPage is an @page rule with what deciding between two of them needs:
 // the stylesheet it was written in, so a finding can say where it came from,

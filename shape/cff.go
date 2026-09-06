@@ -9,7 +9,7 @@ import (
 // Reading and rewriting the structures of a Compact Font Format program, for
 // subsetting it.
 //
-// These are the producing side. internal/font reads a CFF to answer questions
+// These are the producing side. Package font reads a CFF to answer questions
 // about a document — which glyphs exist, how wide they are — and shares nothing
 // with this beyond the format itself. That separation is deliberate: a
 // subsetter and a validator that agreed by sharing code would agree even when

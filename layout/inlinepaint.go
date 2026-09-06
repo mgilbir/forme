@@ -49,8 +49,10 @@ import (
 // visual pieces on one line. It paints one rectangle covering both, where a
 // browser paints two.
 //
-// Outline is not painted either. Nothing in this engine paints one, on an inline
-// box or on any other, so an inline box is not the place to start.
+// An outline is painted, and on the same fragment: it is a border drawn outside
+// the box's edge, which for an inline box is the room reserved here. See
+// paint.go's outline handling, which reads outline-style, outline-width and
+// outline-color the way the border painting reads theirs.
 
 // maxInlineDecorations bounds how many of these fragments one document may
 // produce.

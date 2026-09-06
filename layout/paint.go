@@ -312,10 +312,10 @@ func (TileImage) isOp() {}
 //
 // # What is not done
 //
-// Opacity and transforms also create stacking contexts and are not implemented,
-// so neither appears here, and step 2 is a background image, which nothing draws
-// yet. Every other step of §E.2 is present, reduced to the primitives this engine
-// emits.
+// A transform creates a stacking context and is not implemented, so it does not
+// appear here. Opacity does and is: see dimming, which works out what fraction
+// of each fragment's own marks reaches the page and which box asked for it.
+// Every step of §E.2 is present, reduced to the primitives this engine emits.
 func Paint(root *Fragment) []Op { return PaintReporting(root, nil) }
 
 // PaintReporting is Paint, with the findings the painting itself raises.
