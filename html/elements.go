@@ -21,6 +21,18 @@ var knownElements = map[string]bool{
 	// not HTML. See foreignElements.
 	"svg": true, "math": true,
 	"title": true, "meta": true, "link": true, "base": true, "style": true,
+	// <noscript> is what an author writes for a reader whose engine runs no
+	// script, and this engine runs no script. It was dropped, with the reason
+	// "there is no script for this to be an alternative to" — which is exactly
+	// backwards: a document is *always* in the case the element was written
+	// for, so its content is always what should be shown. HTML says the same
+	// thing structurally, by parsing a noscript's content as ordinary markup
+	// wherever scripting is disabled.
+	//
+	// It has no presentation of its own. Like a <span> it is an inline box that
+	// inherits everything and that a stylesheet may select, which is what a
+	// browser with scripting off gives it.
+	"noscript": true,
 
 	// Sections and grouping.
 	"address": true, "article": true, "aside": true, "blockquote": true,
@@ -165,7 +177,6 @@ var droppedElements = map[string]string{
 	"dialog":   "a dialog is opened by script, which is never run",
 	"template": "a template's content is instantiated by script",
 	"slot":     "a shadow tree needs scripting",
-	"noscript": "there is no script for this to be an alternative to",
 	"map":      "an image map needs somewhere to click",
 	"area":     "an image map needs somewhere to click",
 	"marquee":  "a page laid out once cannot animate",

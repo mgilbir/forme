@@ -400,6 +400,26 @@ func (t *tokenizer) markup() (token, bool) {
 		return t.doctype(), true
 	}
 
+	// A CDATA section, which is XML's way of saying "the characters between
+	// these markers are literal". In an XHTML document it is text and is read
+	// as text; skipping it to the first ">" — which is what a declaration gets
+	// — dropped its content and, where the content held a ">", took the rest of
+	// the document with it.
+	//
+	// Outside XML there is no such syntax: HTML reads "<![CDATA[" as a bogus
+	// comment ending at the first ">", which is what the branch below does.
+	if t.xml && strings.HasPrefix(t.src[t.pos:], cdataOpen) {
+		body := t.src[t.pos+len(cdataOpen):]
+		end := strings.Index(body, cdataClose)
+		if end < 0 {
+			t.fail(start, "a CDATA section that is never closed")
+			t.pos = len(t.src)
+			return token{kind: tokText, text: body, offset: start}, true
+		}
+		t.pos += len(cdataOpen) + end + len(cdataClose)
+		return token{kind: tokText, text: body[:end], offset: start}, true
+	}
+
 	if strings.HasPrefix(t.src[t.pos:], "<![") || strings.HasPrefix(t.src[t.pos:], "<!") {
 		t.fail(start, "a declaration this engine does not read")
 		t.skipTo('>')
@@ -724,6 +744,16 @@ func (t *tokenizer) reference(s string, off int, inAttr bool) (string, int, bool
 	// so the one case worth reporting.
 	if legacy, n := longestLegacyName(s); legacy != "" {
 		if inAttr {
+			// HTML's named character reference state has one clause about an
+			// attribute, and it is this: a name with no ";" followed by "=" or
+			// by an alphanumeric is not a reference at all, and is not a parse
+			// error either. "?q=1&copy=2" is a query string, in this engine and
+			// in every browser, which is exactly the case the clause exists
+			// for — and it was reported as something "a character reference in
+			// some browsers", which no browser makes it.
+			if next := 1 + n; next < len(s) && (s[next] == '=' || isEntityNamePart(s[next])) {
+				return "", 0, false
+			}
 			t.fail(off, "\"&"+legacy+"\" without a \";\" is a literal ampersand here "+
 				"and a character reference in some browsers; write \"&amp;\" or \"&"+legacy+";\"")
 		} else {

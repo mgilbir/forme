@@ -469,6 +469,16 @@ func (p *parser) startTag(tk token) {
 		return
 	}
 
+	if tk.selfClosing && !voidElements[name] && p.tok.xml {
+		// XML *does* have self-closing syntax, and it means an empty element.
+		// "<div/>" in an XHTML document is a div with nothing in it, and the
+		// rule was applied to the elements HTML has never heard of and not to
+		// the ones it has: "<my-widget/>" was read correctly in the same
+		// document where "<div/>" was reported as a mistake and opened,
+		// swallowing everything after it.
+		p.insert(tk)
+		return
+	}
 	if tk.selfClosing && !voidElements[name] {
 		// "<div/>" is not an empty div. HTML has no self-closing syntax for
 		// ordinary elements, so a browser reads this as an open <div> and every
