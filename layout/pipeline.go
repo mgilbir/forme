@@ -113,8 +113,29 @@ func Build(in Input) Built {
 // settled on is Built.Page, and that — not the one passed here — is what the
 // boxes are to be laid out in. See Build.
 func BuildFor(in Input, page PageSize) Built {
-	rec := NewRecorder(in.Policy)
+	return buildWith(in, page, NewRecorder(in.Policy))
+}
 
+// buildWith is BuildFor into a recorder the caller already has.
+//
+// Compose has one: it raises findings of its own about the options and the
+// sheet before the document is read, and more about the layout and the paint
+// after. Replaying Build's finished list into it instead — which is what it
+// did — loses three things.
+//
+// The counts, because a replay carries the *deduplicated* list: a stylesheet
+// that used one unimplemented property four hundred times comes back as one
+// finding, and the second recorder counts one. What Count is for is saying "and
+// 399 more", and after a replay it says "and none more".
+//
+// The bound, because a document whose build filled the five hundred hands the
+// second recorder five hundred findings before layout begins — so every finding
+// about the layout and the paint is dropped, and the page that overflowed its
+// box is not reported. The two stages shared a bound they did not share a list
+// with.
+//
+// And the work: every finding is deduplicated twice, once in each recorder.
+func buildWith(in Input, page PageSize, rec *Recorder) Built {
 	doc, htmlErrs, _ := html.Parse(in.HTML)
 	for _, e := range htmlErrs {
 		// Three kinds, and they are three because they send an author to three

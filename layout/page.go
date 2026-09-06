@@ -121,6 +121,14 @@ type Composed struct {
 	NaturalSize Size
 	// Findings is everything the guardrails raised, in a deterministic order.
 	Findings []Finding
+	// Counts is how many times each rule fired, including the occurrences the
+	// list does not hold — the duplicates, and everything past the bound.
+	//
+	// It is what lets a report say "flex-wrap was dropped 412 times" while
+	// showing the finding once, which is more useful than either the one or the
+	// four hundred alone. The list cannot answer it: deduplication is the whole
+	// reason the list is readable.
+	Counts map[Rule]int
 	// Refused is a rule having fired at Error severity. A backend that sees it
 	// should produce nothing: the caller was told not to render, rather than
 	// left to decide.
@@ -152,17 +160,18 @@ type Composed struct {
 func Compose(in Input, opts Options) Composed {
 	opts, optionsRefused := checkOptions(opts)
 
-	// The sheet is settled before the document is styled, because a media
-	// query is a question about it: "@media print" and "@media (min-width:
-	// 200mm)" both decide which rules the cascade ever sees.
-	built := BuildFor(in, opts.Page)
 	rec := NewRecorder(in.Policy)
 	for _, why := range optionsRefused {
 		rec.ReportDetail(Finding{Rule: RuleInvalidCSS, Message: why})
 	}
-	for _, f := range built.Findings {
-		rec.ReportDetail(f)
-	}
+	// The sheet is settled before the document is styled, because a media
+	// query is a question about it: "@media print" and "@media (min-width:
+	// 200mm)" both decide which rules the cascade ever sees.
+	//
+	// Into this recorder rather than one of its own. Replaying a finished list
+	// into a second recorder loses the counts, spends the bound twice and
+	// deduplicates everything twice — see buildWith.
+	built := buildWith(in, opts.Page, rec)
 	// The sheet the document settled on, checked the same way. An @page rule
 	// writes into the same geometry the caller does and had nothing checking
 	// it: "@page { margin: 100mm }" on A5 left a content box of negative width,
@@ -173,12 +182,6 @@ func Compose(in Input, opts Options) Composed {
 	for _, why := range pageRefused {
 		rec.ReportDetail(Finding{Rule: RuleInvalidCSS, Message: why})
 	}
-	// Build kept its own recorder and this one replays its findings, which
-	// carries everything except the two answers that are not findings. A build
-	// whose list overflowed has a verdict its list no longer explains — the
-	// finding that refused it may be one of the ones the bound dropped — so
-	// both are taken across rather than re-derived from what survived.
-	buildRefused, buildTruncated := built.Failed, built.Truncated
 
 	// built.Page rather than opts.Page: an @page rule in the document may have
 	// changed the margins, and laying out in the space the caller asked for
@@ -201,8 +204,9 @@ func Compose(in Input, opts Options) Composed {
 	return Composed{
 		Ops: ops, Root: root, Page: built.Page, Scale: scale, NaturalSize: natural,
 		Findings:  rec.Findings(),
-		Refused:   rec.Failed() || buildRefused,
-		Truncated: rec.Truncated() || buildTruncated,
+		Counts:    rec.Counts(),
+		Refused:   rec.Failed(),
+		Truncated: rec.Truncated(),
 	}
 }
 

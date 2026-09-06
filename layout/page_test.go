@@ -1,6 +1,10 @@
 package layout
 
-import "testing"
+import (
+	"fmt"
+	"strings"
+	"testing"
+)
 
 // TestComposeReturnsTheSheetItLaidOutOn.
 //
@@ -49,5 +53,68 @@ func TestComposeReturnsTheCallersSheetWhereTheDocumentSaysNothing(t *testing.T) 
 	if out.Page != asked {
 		t.Errorf("Compose returned %+v for a document that says nothing about its "+
 			"own page, want %+v", out.Page, asked)
+	}
+}
+
+// What Compose keeps of what the build found.
+//
+// Build had a recorder of its own and Compose replayed its finished list into a
+// second one. A replay carries the findings and nothing else the recorder knew,
+// and three things went with it.
+
+// TestTheCountsSurviveIntoTheComposedDocument.
+//
+// A document that makes one mistake forty times is one finding and forty
+// occurrences, and the count is what lets a report say so past the
+// deduplication that makes the list readable. Replayed into a second recorder
+// the finding arrives once — already deduplicated — and the count says one.
+func TestTheCountsSurviveIntoTheComposedDocument(t *testing.T) {
+	var body strings.Builder
+	for i := 0; i < 40; i++ {
+		fmt.Fprintf(&body, `<p id="e%d" style="color: ;">x</p>`, i)
+	}
+	out := Compose(Input{HTML: body.String()}, Options{})
+
+	if n := len(out.Findings); n != 1 {
+		t.Fatalf("%d findings for forty copies of one mistake, want one: %v",
+			n, out.Findings)
+	}
+	if got := out.Counts[RuleInvalidCSS]; got != 40 {
+		t.Errorf("%s fired %d times by Compose's count, want 40 — the count is "+
+			"what a report says \"and 39 more\" from", RuleInvalidCSS, got)
+	}
+}
+
+// TestWhatTheBoundCutIsStillCounted.
+//
+// The bound is on the list, and a document that fills it is told so — but
+// "truncated" on its own says only that something is missing. The counts are
+// what say *what*: a page shrunk past its minimum is counted whether or not
+// there was room to write it down, so a report can name it after a build that
+// used up the list. Compose exposed no counts at all, so there was nothing to
+// say it with.
+func TestWhatTheBoundCutIsStillCounted(t *testing.T) {
+	old := maxFindings
+	defer func() { maxFindings = old }()
+	maxFindings = 5
+
+	var css, body strings.Builder
+	for i := 0; i < 20; i++ {
+		fmt.Fprintf(&css, "#e%d { color: rgb(%d) }\n", i, i)
+		fmt.Fprintf(&body, `<p id="e%d">x</p>`, i)
+	}
+	// And one box far too large for the sheet, so the page has to be shrunk.
+	css.WriteString(`#big { width: 4000pt; height: 4000pt }`)
+	body.WriteString(`<div id="big">x</div>`)
+
+	out := Compose(Input{HTML: body.String(), CSS: []Stylesheet{{Source: css.String()}}},
+		Options{MinScale: 0.9})
+	if !out.Truncated {
+		t.Fatalf("the list was not truncated, so this document does not reach the "+
+			"bound: %d findings", len(out.Findings))
+	}
+	if out.Counts[RuleMinScale] == 0 {
+		t.Errorf("the page was shrunk past the minimum and nothing counted it; "+
+			"counts: %v", out.Counts)
 	}
 }

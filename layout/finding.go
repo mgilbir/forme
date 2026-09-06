@@ -612,3 +612,13 @@ func (r *Recorder) Truncated() bool { return r.truncated }
 // the finding once, which is more useful than either the one or the four hundred
 // on their own.
 func (r *Recorder) Count(rule Rule) int { return r.counts[rule] }
+
+// Counts is every rule that fired and how often, copied so that a caller
+// holding it cannot change what the recorder goes on counting.
+func (r *Recorder) Counts() map[Rule]int {
+	out := make(map[Rule]int, len(r.counts))
+	for rule, n := range r.counts {
+		out[rule] = n
+	}
+	return out
+}
