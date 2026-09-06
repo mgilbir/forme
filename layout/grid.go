@@ -167,17 +167,6 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 
 	columns, fit, _ := l.trackList(b, "grid-template-columns", width,
 		trackRoom{size: width, definite: true, gap: columnGap})
-	if fit && len(items) < len(columns) {
-		// §7.2.3.2's "auto-fit": the tracks that no item landed in are
-		// collapsed, which for a grid whose items are dealt in order means the
-		// ones past the last item. A collapsed track has no size and no gap
-		// beside it, so dropping them is what collapsing comes to — and it is
-		// why "auto-fit" fills the row with three cards where "auto-fill"
-		// leaves room for the fourth.
-		// There is at least one item — a container with none returned above —
-		// so there is at least one column left standing.
-		columns = columns[:len(items)]
-	}
 	flow := l.autoFlow(b)
 	autoColumns := l.implicitTracks(b, "grid-auto-columns", width)
 	autoRows := l.implicitTracks(b, "grid-auto-rows", width)
@@ -199,7 +188,7 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 	for len(columns) < tracksNeeded(items, 1, explicitColumns) {
 		columns = append(columns, implicitTrack(autoColumns, len(columns), explicitColumns))
 	}
-	rows, _, _ := l.trackList(b, "grid-template-rows", width,
+	rows, fitRows, _ := l.trackList(b, "grid-template-rows", width,
 		trackRoom{size: height, definite: definite, gap: rowGap})
 
 	explicitRows := len(rows)
@@ -234,6 +223,22 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 			// of a card grid gets when nothing draws them.
 			rows = append(rows, implicitTrack(autoRows, len(rows), explicitRows))
 		}
+	}
+
+	// §7.2.3.2's "auto-fit": the tracks no item landed in are collapsed. It
+	// happens here, after the placement, because "no item landed in it" is a
+	// question only the placement can answer — it was asked of the item *count*
+	// instead, before anything had been placed, which is the same number only
+	// when every item takes one track. One item spanning two of four hundred-
+	// pixel tracks left one track standing and came out four hundred pixels
+	// wide; two tracks stand now and it comes out two hundred, which is what
+	// "auto-fit" means and why it fills a row with three cards where
+	// "auto-fill" leaves room for a fourth.
+	if fit {
+		columns = collapseUnusedTracks(columns, items, 1)
+	}
+	if fitRows {
+		rows = collapseUnusedTracks(rows, items, 0)
 	}
 
 	// The block axis takes no axis of its own: nothing this engine lays out
@@ -611,9 +616,16 @@ func placementFrom(start, end string) (gridPlacement, bool) {
 			out.span = n
 		}
 	case to != 0:
-		// An end line with no start: the item ends there and is one track wide,
-		// which is the same as starting one track earlier.
-		out.start, out.definite = to-2, true
+		// An end line with no start: the item ends there and takes the span it
+		// asked for, so it begins that many tracks earlier. It was read as
+		// though the span were always one — "span 2 / 4" started at line 3 and
+		// ran off the end of the grid, one track further right for every track
+		// of span past the first.
+		span := out.span
+		if span < 1 {
+			span = 1
+		}
+		out.start, out.definite = to-1-span, true
 		if out.start < 0 {
 			out.start = 0
 		}
@@ -1072,6 +1084,60 @@ func tracksDefinite(tracks []gridTrack, from, span int) bool {
 		}
 	}
 	return true
+}
+
+// collapseUnusedTracks drops the tracks of one axis that no item occupies and
+// moves the items onto what is left.
+//
+// A collapsed track has no size and no gap beside it, so dropping it is what
+// collapsing comes to. Every track *inside* an item's span is occupied by that
+// item and so is never dropped, which is what keeps each item's tracks
+// contiguous after the renumbering and lets the spans stand unchanged.
+//
+// At least one track is always kept: every item occupies one, and a container
+// with no items never reaches here.
+func collapseUnusedTracks(tracks []gridTrack, items []*gridItem, axis int) []gridTrack {
+	used := make([]bool, len(tracks))
+	for _, it := range items {
+		from, span := it.column, it.place[1].span
+		if axis == 0 {
+			from, span = it.row, it.place[0].span
+		}
+		if span < 1 {
+			span = 1
+		}
+		for i := from; i < from+span && i < len(used); i++ {
+			if i >= 0 {
+				used[i] = true
+			}
+		}
+	}
+	renumbered := make([]int, len(tracks))
+	out := make([]gridTrack, 0, len(tracks))
+	for i, t := range tracks {
+		renumbered[i] = len(out)
+		if used[i] {
+			out = append(out, t)
+		}
+	}
+	if len(out) == len(tracks) {
+		return tracks
+	}
+	if len(out) == 0 {
+		return tracks[:1]
+	}
+	for _, it := range items {
+		if axis == 0 {
+			if it.row >= 0 && it.row < len(renumbered) {
+				it.row = renumbered[it.row]
+			}
+			continue
+		}
+		if it.column >= 0 && it.column < len(renumbered) {
+			it.column = renumbered[it.column]
+		}
+	}
+	return out
 }
 
 // gridDeclaredSize is the size an item states for one axis, as the margin-box
