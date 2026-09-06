@@ -48,10 +48,21 @@ const (
 // complete.
 func Parse(src string) (doc *Node, errs []Error, ok bool) {
 	if len(src) > maxInputBytes {
-		return nil, []Error{{
+		// None of it is read, and the tree is still returned, because the
+		// contract above says so without qualification and because the caller
+		// that reads it is the one showing an author what went wrong. Returning
+		// nil here made this the single input in the language that turned a
+		// finding into a nil dereference two packages away.
+		//
+		// What comes back is what an empty document parses to: the frame, with
+		// nothing in the body. It is the honest tree for a document this engine
+		// did not read a byte of.
+		doc, _, _ = Parse("")
+		return doc, []Error{{
 			Offset: maxInputBytes,
 			Message: "the document is larger than this engine will read (" +
 				strconv.Itoa(len(src)) + " bytes, limit " + strconv.Itoa(maxInputBytes) + ")",
+			Limit: true,
 		}}, false
 	}
 
@@ -291,7 +302,7 @@ func (p *parser) flushText() {
 func (p *parser) room(off int) bool {
 	if p.nodes >= maxNodes {
 		if !p.truncated {
-			p.tok.fail(off, "the document has more elements than this engine will build ("+
+			p.tok.limit(off, "the document has more elements than this engine will build ("+
 				strconv.Itoa(maxNodes)+"); the rest was not read")
 			p.truncated = true
 		}
@@ -427,7 +438,7 @@ func (p *parser) startTag(tk token) {
 	p.open = append(p.open, el)
 
 	if len(p.open) > maxDepth {
-		p.tok.fail(tk.offset, "elements are nested more deeply than this engine will read ("+
+		p.tok.limit(tk.offset, "elements are nested more deeply than this engine will read ("+
 			strconv.Itoa(maxDepth)+")")
 		p.truncated = true
 	}
@@ -467,7 +478,7 @@ func (p *parser) insertUnknown(tk token) {
 	}
 	p.open = append(p.open, el)
 	if len(p.open) > maxDepth {
-		p.tok.fail(tk.offset, "elements are nested more deeply than this engine will read ("+
+		p.tok.limit(tk.offset, "elements are nested more deeply than this engine will read ("+
 			strconv.Itoa(maxDepth)+")")
 		p.truncated = true
 	}

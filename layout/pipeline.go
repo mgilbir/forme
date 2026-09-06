@@ -117,8 +117,17 @@ func BuildFor(in Input, page PageSize) Built {
 
 	doc, htmlErrs, _ := html.Parse(in.HTML)
 	for _, e := range htmlErrs {
+		// Three kinds, and they are three because they send an author to three
+		// different places: fix the markup, the engine does not do this, or the
+		// engine stopped short. A bound that was reached is the third — the
+		// document is correct and part of it was not read anyway — and
+		// reporting it as invalid markup sent an author looking for a mistake
+		// that was not there.
 		rule := RuleInvalidMarkup
-		if e.Unsupported {
+		switch {
+		case e.Limit:
+			rule = RuleLimit
+		case e.Unsupported:
 			rule = RuleUnsupportedElement
 		}
 		rec.Report(rule, AtHTML(e.Offset), e.Message)

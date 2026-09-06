@@ -31,6 +31,14 @@ type Error struct {
 	// author: malformed markup is theirs to fix, an unsupported element is a
 	// limit of the renderer. See css.Error, which draws the same line.
 	Unsupported bool
+	// Limit marks a bound on the document that was reached — its size, its node
+	// count, its nesting depth, or the length of this list — rather than
+	// anything the document got wrong. It is the third thing an author can be
+	// told and it is not either of the other two: the markup is correct, the
+	// engine implements it, and some of the document was not read anyway. A
+	// caller that reports this as malformed markup sends an author looking for
+	// a mistake that is not there.
+	Limit bool
 }
 
 func (e Error) Error() string { return fmt.Sprintf("byte %d: %s", e.Offset, e.Message) }
@@ -169,6 +177,11 @@ func (t *tokenizer) unsupported(off int, msg string) {
 	t.add(Error{Offset: off, Message: msg, Unsupported: true})
 }
 
+// limit reports a bound on the document that was reached. See Error.Limit.
+func (t *tokenizer) limit(off int, msg string) {
+	t.add(Error{Offset: off, Message: msg, Limit: true})
+}
+
 func (t *tokenizer) add(e Error) {
 	switch {
 	case len(t.errs) > maxErrors:
@@ -177,6 +190,7 @@ func (t *tokenizer) add(e Error) {
 		t.errs = append(t.errs, Error{
 			Offset:  e.Offset,
 			Message: "further problems in this document were not reported",
+			Limit:   true,
 		})
 	default:
 		t.errs = append(t.errs, e)
