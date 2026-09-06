@@ -234,6 +234,25 @@ func (p *parser) current() *Node {
 	return p.open[len(p.open)-1]
 }
 
+// insertionParent is where a node goes, which is current() except in the one
+// place where current() names a parent that would put it in the wrong order.
+//
+// Nothing may go directly into <html> while the body has not started. <body>
+// was appended there when the document was opened, so a node placed beside it
+// lands *after* it in document order — and a <style> written between </head>
+// and <body> therefore came after every stylesheet in the body and won the
+// cascade against all of them. The document said the opposite.
+//
+// HTML's "after head" mode processes such an element as though it were still in
+// the head, and the head is where it goes: that is its position in the source,
+// and it is before the body wherever the body's content came from.
+func (p *parser) insertionParent() *Node {
+	if cur := p.current(); cur != p.html || p.bodyStarted {
+		return cur
+	}
+	return p.head
+}
+
 func (p *parser) text(tk token) {
 	if tk.text == "" {
 		return
@@ -539,7 +558,7 @@ func (p *parser) insert(tk token) *Node {
 	}
 	el := p.element(tk.name, tk.offset)
 	el.Attrs = tk.attrs
-	p.current().appendChild(el)
+	p.insertionParent().appendChild(el)
 	return el
 }
 
@@ -600,6 +619,20 @@ func (p *parser) endTag(tk token) {
 		// break carrying a class. Assigning nil to them was written first and
 		// a planted defect showed it changed nothing.
 		p.startTag(tk)
+		return
+	}
+
+	switch name {
+	case "body", "html":
+		// HTML's "after body" and "after after body" modes: everything that
+		// follows goes back into the body. A document does not end because a
+		// tag said so, and there is nowhere else for content to go.
+		//
+		// Popping the element instead made what followed a *sibling* of <body>
+		// — and then </html> popped the last frame and sent it back into the
+		// body, so the two tags together were a no-op and either one alone was
+		// not. Both readings put content somewhere no browser puts it, and the
+		// document was not refused either way.
 		return
 	}
 
