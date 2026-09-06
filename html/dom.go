@@ -245,3 +245,22 @@ func (n *Node) appendChild(c *Node) {
 	c.Parent = n
 	n.Children = append(n.Children, c)
 }
+
+// insertBefore adds a child immediately in front of one already there, or at
+// the end when that one is not a child of n.
+//
+// It exists for foster parenting, which is the one rule of HTML that puts a
+// node somewhere other than where the parser stands. See parser.fosterParent.
+func (n *Node) insertBefore(c, before *Node) {
+	at := len(n.Children)
+	for i, existing := range n.Children {
+		if existing == before {
+			at = i
+			break
+		}
+	}
+	c.Parent = n
+	n.Children = append(n.Children, nil)
+	copy(n.Children[at+1:], n.Children[at:])
+	n.Children[at] = c
+}

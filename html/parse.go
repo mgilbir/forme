@@ -234,6 +234,44 @@ func (p *parser) current() *Node {
 	return p.open[len(p.open)-1]
 }
 
+// fosterParentOf is where a node written inside a table but not belonging to
+// one goes, and whether it is such a node.
+//
+// HTML calls this foster parenting and every browser does it: content that is
+// not table content is inserted immediately in front of the table it was
+// written inside. Left where it stands it is a table child, which CSS 2.1
+// §17.2.1 then wraps in an anonymous row of its own — a paragraph between two
+// rows became a row, and the table it was written in gained a line nobody
+// asked for.
+//
+// The element is still opened, so the tags round it nest as they were written.
+// That is what HTML does too: the node goes to the foster parent and stays on
+// the stack of open elements.
+// The empty name is text, which belongs to no element and so is never table
+// content.
+func (p *parser) fosterParentOf(name string) (parent, before *Node, ok bool) {
+	if name != "" && tableContent[name] {
+		return nil, nil, false
+	}
+	// The outermost table this node is inside, which is what it goes in front
+	// of: content written inside a row of a table nested in a cell belongs
+	// before the *inner* table, and the walk stops at the first one it meets
+	// from the top of the stack.
+	for i := len(p.open) - 1; i >= 0; i-- {
+		el := p.open[i]
+		if !tableContexts[el.Name] {
+			return nil, nil, false
+		}
+		if el.Name == "table" {
+			if el.Parent == nil {
+				return nil, nil, false
+			}
+			return el.Parent, el, true
+		}
+	}
+	return nil, nil, false
+}
+
 // insertionParent is where a node goes, which is current() except in the one
 // place where current() names a parent that would put it in the wrong order.
 //
@@ -277,6 +315,22 @@ func (p *parser) text(tk token) {
 	}
 	if !p.room(tk.offset) {
 		return
+	}
+	// Text written inside a table goes where any other content written there
+	// goes. HTML's "in table text" mode foster-parents the whole run as soon as
+	// one character of it is not white space, and keeps a run that is entirely
+	// white space where it stands — which is the space between two rows and
+	// belongs to neither.
+	if strings.TrimSpace(tk.text) != "" {
+		if to, before, ok := p.fosterParentOf(""); ok {
+			p.tok.fail(tk.offset, "text was written inside a table, outside any cell; "+
+				"it belongs before the table and is read there")
+			p.nodes++
+			node := &Node{Type: TextNode, Text: tk.text, Offset: tk.offset}
+			to.insertBefore(node, before)
+			p.pending, p.pendingBuf = node, append(p.pendingBuf[:0], tk.text...)
+			return
+		}
 	}
 	// Adjacent runs are merged, so no element ever has two text children in a
 	// row — a shape every consumer would otherwise have to handle.
@@ -558,6 +612,12 @@ func (p *parser) insert(tk token) *Node {
 	}
 	el := p.element(tk.name, tk.offset)
 	el.Attrs = tk.attrs
+	if parent, before, ok := p.fosterParentOf(tk.name); ok {
+		p.tok.fail(tk.offset, "<"+tk.name+"> is not table content and was written "+
+			"inside a table; it belongs before the table and is read there")
+		parent.insertBefore(el, before)
+		return el
+	}
 	p.insertionParent().appendChild(el)
 	return el
 }
