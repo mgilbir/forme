@@ -56,7 +56,7 @@ var colorFiles = []string{
 // sRGB is a rendering-intent decision. Making that choice silently would produce
 // a document whose colours are nearly right with nothing to say a choice was
 // made; when these arrive they should arrive with an ICC profile and an output
-// intent, which pdf0 already writes.
+// intent, which forme already writes.
 var unsupportedColorFiles = map[string]string{
 	"color_function_4.json":  "the color() function names a colour space to convert from",
 	"color_hwb_4.json":       "hwb() is a cylindrical space needing conversion",

@@ -9,7 +9,7 @@ taken away shaped to three glyphs and said `DOTTED`.
 
 Then every remaining line said `DOTTED`.
 
-| | pdf0 | HarfBuzz | CoreText |
+| | forme | HarfBuzz | CoreText |
 | --- | --- | --- | --- |
 | Devanagari, ignorable inside the syllable | 1 glyph | 4 glyphs, dotted | **4 glyphs, dotted** |
 | Khmer, ignorable inside the syllable | 1 glyph | 3 glyphs, dotted | **3 glyphs, dotted** |
@@ -72,7 +72,7 @@ Controls passed in all three files.
 
 | | devanagari | tibetan | balinese |
 | --- | --- | --- | --- |
-| CoreText agrees with pdf0 | 4 | 19 | 0 |
+| CoreText agrees with forme | 4 | 19 | 0 |
 | CoreText agrees with HarfBuzz | 1 | 6 | 1 |
 | CoreText agrees with neither | 0 | 17 | 0 |
 
@@ -115,7 +115,7 @@ correctly and the composed one wrongly.**
 	U+0F45 U+0FB2 U+0F71 U+0F80 U+0F74   both: 68 1766 1424 1347
 	U+0F45 U+0FB2 U+0F71 U+0F74 U+0F80   both: 68 1766 1424 1347
 	U+0F45 U+0F77                        both: 291 1421 1347
-	U+0F45 U+0F77 U+0F74                 pdf0: 11 1765 1421 1347 1432
+	U+0F45 U+0F77 U+0F74                 forme: 11 1765 1421 1347 1432
 	                                     hb:   68 1766 1424 1347
 
 So nothing is wrong with the shaping, and nothing is wrong with taking the sign
@@ -170,7 +170,7 @@ agree exactly. The corpora stayed green. The differential fuzzer did not: over
 half a million strings it went from 42 differences to 78, and the new ones are
 this package inserting a dotted circle where neither of the others does —
 
-	U+0F43 U+0F79 U+0F77   pdf0 has 1282 (U+25CC) and HarfBuzz has none
+	U+0F43 U+0F79 U+0F77   forme has 1282 (U+25CC) and HarfBuzz has none
 
 because two signs taken apart make a run of marks the cluster grammar reads as
 broken. Six fixed against thirty introduced.
@@ -197,13 +197,13 @@ Controls passed. Not one line went to HarfBuzz.
 
 | | devanagari | tibetan |
 | --- | --- | --- |
-| CoreText agrees with pdf0 | 6 | 21 |
+| CoreText agrees with forme | 6 | 21 |
 | CoreText agrees with HarfBuzz | 0 | 0 |
 | CoreText agrees with neither | 0 | 19 |
 
 The nineteen are the dotted-circle class again — CoreText judging the text more
 malformed than either of the others and inserting U+25CC two or three times a
-line, where pdf0 and HarfBuzz agree exactly. That is a disagreement about
+line, where forme and HarfBuzz agree exactly. That is a disagreement about
 cluster validity, not about where a mark sits, and on it CoreText is alone.
 
 So the "mark a few units to one side" family is decided, four questions running.
@@ -219,7 +219,7 @@ That takes the fuzzer from 46 differences to 3.
 `U+0975 U+0930 U+094D U+094B`, and two like it: the same five glyphs in a
 different order, with the dotted circle in a different place.
 
-	pdf0     3898,1023  3979,409  3932,0   1586,594  3964,259
+	forme     3898,1023  3979,409  3932,0   1586,594  3964,259
 	harfbuzz 3898,1023  1586,594  3979,409 3932,0    3964,259
 
 The circle marks where a broken cluster begins, so the two disagree about where

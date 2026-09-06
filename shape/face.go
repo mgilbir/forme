@@ -1,13 +1,17 @@
-// Package fonts embeds font programs into a PDF and answers the measurement
-// questions laying text out asks.
+// Package shape turns text into glyphs, and answers the measurement questions
+// laying it out asks.
 //
-// It is the other half of drawing text. The content package writes the
-// operators; this decides what bytes those operators show and puts the font
-// program in the file so a reader can render them.
+// It reads a font program — sfnt or CFF, static or variable — and does the two
+// things a layout engine cannot do without: it says which glyphs a string is
+// set with and how wide they are, and it says what a document format needs in
+// order to embed the face. What it does not do is write a file. See
+// embedding.go: what is here is the facts, in the font's own units, and packing
+// them into any format's encoding belongs to whoever writes it.
 //
 // # Composite fonts only, deliberately
 //
-// A face is embedded as a Type0 font with Identity-H encoding and a
+// The subsetter and the encoder are written for a face embedded as a Type0 font
+// with Identity-H encoding and a
 // CIDFontType2 descendant (ISO 32000-2 9.7). The alternative — a simple font
 // with a single-byte encoding — is limited to 256 codes and to the glyphs a
 // standard encoding names, which rules out most of Unicode. Anything laying out

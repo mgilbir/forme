@@ -23,7 +23,7 @@ import (
 //
 // A CSS reftest is a pair of documents with the assertion *these two render
 // identically*. The pair and the claim come from the CSS Working Group, so a
-// disagreement is evidence about pdf0 rather than a restatement of pdf0's own
+// disagreement is evidence about forme rather than a restatement of this engine's own
 // reading — which is the distinction ADR 0003 records this repository learning
 // twice, the hard way.
 //
@@ -34,7 +34,7 @@ import (
 // document and not the other, and shows up as a difference rather than as two
 // matching wrong answers.
 //
-// No browser is involved. pdf0 renders both and compares.
+// No browser is involved. forme renders both and compares.
 //
 // # What is compared, and why not the fragment tree
 //

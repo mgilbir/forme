@@ -896,7 +896,7 @@ func (l *fontFaceLoader) fetch(ref string) ([]byte, *loadFailure) {
 // overRuleCap reports the document-wide rule count tripping.
 //
 // Two findings, on the model of stylesheet.go's: the guard tripped, which every
-// other part of pdf0 reports as "limit", and the document is missing fonts it
+// other part of forme reports as "limit", and the document is missing fonts it
 // asked for, which is what makes the page wrong.
 func (l *fontFaceLoader) overRuleCap(p pendingFontFace, total int) {
 	if !l.cappedRules {

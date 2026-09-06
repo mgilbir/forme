@@ -250,12 +250,12 @@ func TestFindingsAreDeterministic(t *testing.T) {
 	}
 }
 
-// TestFindingSatisfiesViolation pins the three methods pdf0's Violation
+// TestFindingSatisfiesViolation pins the three methods the Violation
 // interface asks for. The interface is satisfied structurally and is not
-// imported here — internal/finding takes the same approach and says why — so
+// imported here, so that this package does not depend on what consumes it — so
 // nothing but a test checks the shape.
 func TestFindingSatisfiesViolation(t *testing.T) {
-	// The same shape as pdf0.Violation, declared locally so this package does
+	// The same shape as that interface, declared locally so this package does
 	// not import the one that documents it.
 	type violation interface {
 		error
@@ -320,13 +320,13 @@ func TestFindingMessageNamesThePlace(t *testing.T) {
 	}
 }
 
-// TestLimitRuleMatchesTheRestOfPdf0 pins the spelling. Every other part of pdf0
+// TestLimitRuleMatchesEveryOtherGuard pins the spelling. Every guard here
 // reports "we stopped short" under "limit", and a caller that already
 // distinguishes that from "the input is bad" must not have to learn a second
 // spelling for it.
 func TestLimitRuleMatchesTheRestOfPdf0(t *testing.T) {
 	if RuleLimit != "limit" {
-		t.Errorf("the limit rule is %q; internal/finding.LimitRule is \"limit\"", RuleLimit)
+		t.Errorf("the limit rule is %q; every guard here reports \"limit\"", RuleLimit)
 	}
 }
 

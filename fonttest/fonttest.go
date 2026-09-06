@@ -7,7 +7,7 @@
 // ligature, a mark class, a cmap subtable of a chosen format — and nothing else.
 //
 // It is exported rather than internal because more than one module reads font
-// programs. The shaping here is one; pdf0 validating an embedded font is
+// programs. The shaping here is one; forme validating an embedded font is
 // another, and its rules about glyph coverage and declared widths need exactly
 // these fixtures. A second copy is the thing to avoid: both would be edited,
 // neither would be edited the same way, and a difference between them would

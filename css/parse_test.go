@@ -9,7 +9,7 @@ import (
 //
 // These tests cover what the external suite in oracle_test.go does not. That
 // division is deliberate and worth stating: the suite is the authority on
-// whether pdf0 reads CSS the way the specification says, because it was written
+// whether forme reads CSS the way the specification says, because it was written
 // by someone else, and these tests would carry no such authority if they
 // duplicated it. What is here is the ground the suite leaves uncovered —
 // measured, not guessed, by planting each fault and checking whether the suite

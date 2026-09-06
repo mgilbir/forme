@@ -49,7 +49,7 @@ type Sheet struct {
 //
 // It is the same shape as the css and html packages' Error, and for the same
 // reason: an author needs to tell "I wrote this wrongly" from "this engine does
-// not do that". The layer that turns these into pdf0.Violation values lands with
+// not do that". The layer that turns these into forme.Violation values lands with
 // the guardrail framework in phase 3; until then this carries the information so
 // that nothing has to be reconstructed later.
 type Finding struct {

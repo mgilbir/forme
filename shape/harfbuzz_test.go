@@ -134,7 +134,7 @@ func TestShapingAgreesWithHarfBuzz(t *testing.T) {
 				if !same {
 					differing++
 					if differing <= 40 && tc.agree == 0 {
-						t.Errorf("%s\n  %s\n  pdf0     %s\n  harfbuzz %s",
+						t.Errorf("%s\n  %s\n  forme     %s\n  harfbuzz %s",
 							describeRunes(s), why, describeGlyphs(glyphs), describeExpected(f, expected[i]))
 					}
 				}

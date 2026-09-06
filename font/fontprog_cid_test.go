@@ -10,7 +10,7 @@ import (
 //
 // ISO 32000-2 9.7.4.2 requires a CIDFont's /CIDSystemInfo to be compatible with
 // the collection of its glyph source, so a consumer that cannot read this has
-// to either guess or refuse. pdf0 refused, which is what this is for.
+// to either guess or refuse. forme refused, which is what this is for.
 
 // TestCFFReportsItsCharacterCollection reads a real CID-keyed face, because the
 // thing under test is a structure no synthetic fixture here builds: a ROS whose

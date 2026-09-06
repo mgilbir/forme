@@ -22,7 +22,7 @@ import (
 // approximated. Converting one of those to sRGB is a *rendering intent*
 // decision, and silently picking one would produce a document whose colours are
 // nearly right, with nothing to say that a choice was made. When they arrive
-// they should arrive with an ICC profile and an output intent, which pdf0
+// they should arrive with an ICC profile and an output intent, which forme
 // already knows how to write.
 
 // RGBA is a colour in sRGB: three components on a 0–255 scale and an alpha in

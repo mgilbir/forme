@@ -22,7 +22,7 @@ import (
 //
 // It is also why the coordinates here are still CSS's: origin at the top left,
 // y increasing downwards, lengths in layout units. The flip to PDF's bottom-left
-// origin and the conversion to points happen once, in pdfout, and a coordinate
+// origin and the conversion to points happen once, in the backend, and a coordinate
 // system that changed halfway through would make every sign error plausible.
 
 // Op is one primitive of the display list.

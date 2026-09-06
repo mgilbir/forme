@@ -24,7 +24,7 @@ func paintOf(t *testing.T, htmlSrc, cssSrc string) []Op {
 // TestTheTransformIsWrittenOnce pins the one "cm" this stage exists to emit, and
 // every conversion folded into it.
 //
-// Nothing above pdfout has ever seen PDF's coordinate system, so this matrix is
+// Nothing in this repository has ever seen PDF's coordinate system, so this matrix is
 // the only place the flip happens — and it was entirely untested until a planted
 // defect showed that inverting it, dropping the unit conversion, dropping the
 // scale and dropping the page margin all left every other test passing.

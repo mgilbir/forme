@@ -17,17 +17,16 @@ import (
 //
 // # Why this and not more tests of our own
 //
-// docs/adr/0003-arlington-as-parser-oracle.md records two attempts this
-// repository made at a guard that guarded nothing — one that tested pdf0's own
-// trivial output, one whose consistency check was tautological — and the lesson
-// it drew: a check built from the same understanding as the thing it checks
-// cannot find a misunderstanding. The tokenizer and parser tests next door are
+// Two earlier attempts at a guard here guarded nothing — one tested this
+// package's own trivial output, and one's consistency check was tautological —
+// and the lesson both drew is the same: a check built from the same
+// understanding as the thing it checks cannot find a misunderstanding. The tokenizer and parser tests next door are
 // worth having and they have that exact weakness. They asserts that the code
 // does what its author read the specification to say.
 //
 // These expectations were written by someone else, from the specification, and
 // three independent implementations are held to them. So a disagreement here is
-// evidence about pdf0.
+// evidence about forme.
 //
 // # How our results are expressed in the suite's notation
 //
@@ -36,22 +35,22 @@ import (
 // rewrites a result until it matches would be the tautology again.
 //
 // First, the suite models a *parse error as a node in the stream* — tinycss2
-// returns them inline — while pdf0 keeps tokens and diagnostics apart, tokens in
+// returns them inline — while forme keeps tokens and diagnostics apart, tokens in
 // the tree and problems in an Errors slice. Its nine error spellings split
 // cleanly in two, and the split is the README's, not one invented here:
 //
 //   - "bad-string", "bad-url", ")", "]" and "}" are *nodes*. The README defines
 //     each as the representation of a token — a <bad-string-token>, a
 //     <bad-url-token>, an unmatched close delimiter — so each maps to the token
-//     pdf0 produces, and each is compared.
+//     forme produces, and each is compared.
 //   - "invalid", "eof-in-string", "eof-in-url", "empty" and "extra-input" are
 //     *diagnostics*. They stand for nothing in the value stream; they say the
 //     input was malformed. These are dropped from the expected node sequence and
-//     checked against pdf0's Errors slice instead — by presence, not by message,
+//     checked against this engine's Errors slice instead — by presence, not by message,
 //     because matching our wording to tinycss2's would be a hand-written table
 //     that could be tuned until it passed.
 //
-// Second, nothing else is adjusted. Where pdf0 disagrees with the suite the
+// Second, nothing else is adjusted. Where forme disagrees with the suite the
 // case is listed in deviations, with the reason, and the reason has to be about
 // the specification rather than about this code.
 
@@ -69,9 +68,9 @@ var diagnostics = map[string]bool{
 }
 
 // The suite is built on the 2021 Candidate Recommendation draft of CSS Syntax
-// Level 3, and the specification has moved since. Where the two disagree pdf0
+// Level 3, and the specification has moved since. Where the two disagree forme
 // follows the current text: a browser today does what the current text says, and
-// matching a superseded draft would put pdf0 alone.
+// matching a superseded draft would put forme alone.
 //
 // Each disagreement is excused by a *rule* naming the construct that was
 // removed, rather than by a list of inputs. That is deliberate. A list keyed on
@@ -82,7 +81,7 @@ var diagnostics = map[string]bool{
 //
 // deviationRules is checked against the *expected* result, so the question asked
 // is "does this case test something the specification no longer has", never
-// "did pdf0 fail here".
+// "did forme fail here".
 var deviationRules = []struct {
 	name string
 	why  string
@@ -111,7 +110,7 @@ var deviationRules = []struct {
 		// moved to the value layer (§5.5.11), reached only from the
 		// unicode-range descriptor of @font-face — which is not in the subset
 		// this engine implements. So "U+1?" is an ident, a delimiter and a
-		// number, which is what pdf0 produces.
+		// number, which is what forme produces.
 		why: "the current specification tokenizes U+1? as ident, delim and number",
 		applies: func(_ string, v any) bool {
 			return containsNode(v, func(arr []any) bool {
@@ -125,7 +124,7 @@ var deviationRules = []struct {
 		// <include-match-token> and its five siblings — ~= |= ^= $= *= and the
 		// column token || — are absent from the token list in §4. Selectors
 		// Level 4 parses each from the two delimiters it is written with, so
-		// "^=" is a "^" and an "=", which is what pdf0 produces.
+		// "^=" is a "^" and an "=", which is what forme produces.
 		why: "~= |= ^= $= *= and || are two delimiters, not one token",
 		applies: func(_ string, v any) bool {
 			return containsString(v, func(s string) bool {
@@ -143,7 +142,7 @@ var deviationRules = []struct {
 		// above U+0080 into a name. The current definition of "non-ASCII ident
 		// code point" is an explicit list that begins at U+00B7 and leaves out
 		// the C1 controls, the bidirectional formatting characters, the private
-		// use areas and the non-characters. pdf0 implements that list, so
+		// use areas and the non-characters. forme implements that list, so
 		// U+0080 is a delimiter rather than part of an identifier.
 		why: "non-ASCII ident code points are an explicit list starting at U+00B7",
 		applies: func(_ string, v any) bool {
@@ -598,20 +597,20 @@ func TestCSSOracle(t *testing.T) {
 						r.file, input, mustJSON(got), mustJSON(want))
 					continue
 				}
-				// The suite says the input was malformed, so pdf0 must have
+				// The suite says the input was malformed, so forme must have
 				// noticed something.
 				//
-				// Only this direction is asserted. The converse — that pdf0 is
+				// Only this direction is asserted. The converse — that forme is
 				// silent wherever the suite is — would be false, and not because
-				// pdf0 is noisy: the suite's markers are the errors tinycss2
+				// forme is noisy: the suite's markers are the errors tinycss2
 				// chose to put in the tree, while these are every parse error
 				// the specification defines. An unterminated comment, a
 				// backslash at end of input and an unclosed block are all parse
 				// errors in §4 and §5, and the suite marks none of the three.
 				// Requiring agreement would mean copying another parser's
-				// reporting policy and calling it conformance. That pdf0 stays
+				// reporting policy and calling it conformance. That forme stays
 				// quiet on correct input is asserted next door, over stylesheets
-				// written to be correct, where it is a claim about pdf0 rather
+				// written to be correct, where it is a claim about forme rather
 				// than about tinycss2.
 				if wantErrs > 0 && len(errs) == 0 {
 					t.Errorf("%s\ninput %q\nparsed identically but reported nothing, "+
@@ -682,7 +681,7 @@ func TestCSSOracleHasTeeth(t *testing.T) {
 	}
 
 	// And the diagnostic split must actually remove markers, or every
-	// malformed-input case would compare against a stream pdf0 never produces.
+	// malformed-input case would compare against a stream forme never produces.
 	in := []any{ident("a"), []any{"error", "eof-in-string"}, []any{"error", "bad-url"}}
 	kept, n := splitDiagnostics(in)
 	if n != 1 {

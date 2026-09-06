@@ -28,7 +28,7 @@ import (
 // scripts the fourteen standard PDF faces do not have, which is exactly the job
 // FallbackFontSet exists for.
 //
-// They are loaded from the checkout rather than vendored: pdf0 ships no font
+// They are loaded from the checkout rather than vendored: forme ships no font
 // bytes at all. See the note beside NOTO_DIR in the Makefile.
 
 // suiteFonts is a FontSet that falls back to Noto for the scripts the standard

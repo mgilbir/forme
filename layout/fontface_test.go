@@ -26,7 +26,7 @@ import (
 // realFont is a font program these tests can hand the engine.
 //
 // It is forme's bundled Noto Sans, which is already a dependency of this
-// repository through pdf0/fonts, so nothing new is vendored and no corpus is
+// repository through forme's font packages, so nothing new is vendored and no corpus is
 // needed — these tests run in a bare checkout. It is loaded once because it is
 // two megabytes and parsing it per test would be paid for a dozen times.
 func realFont() []byte {

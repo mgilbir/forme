@@ -213,7 +213,7 @@ func (l *sheetLoader) link(n *html.Node) (authorSheet, bool) {
 // overCap reports the document-wide count tripping.
 //
 // Two findings, because two different things are true and a caller filters on
-// different ones: the guard tripped, which every other part of pdf0 reports as
+// different ones: the guard tripped, which every other part of forme reports as
 // "limit"; and the document is missing styles it asked for, which is the thing
 // that makes the page wrong. The first is raised once and the second names each
 // sheet, because which stylesheet went missing is what an author needs.

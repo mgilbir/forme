@@ -473,7 +473,7 @@ clean-grapheme-tests:
 	rm -rf $(GRAPHEME_DIR)
 
 # shallow_at fetches exactly one commit of one repository: no history, no other
-# branches. It came from pdf0 with the corpora below, which are the only things
+# branches. It came from forme with the corpora below, which are the only things
 # here that need it.
 define shallow_at
 	rm -rf $(1)
@@ -491,7 +491,7 @@ endef
 # repository scrapped for guarding nothing. These expectations were written by
 # someone else, from the specification, and three independent parsers
 # (tinycss2, rust-cssparser, Crass) are checked against them. So a disagreement
-# is evidence about pdf0 rather than a restatement of pdf0's own reading.
+# is evidence about forme rather than a restatement of this engine's own reading.
 #
 # Cloned under testdata (gitignored); tests skip if absent, mirroring `make
 # corpus` and `make arlington`.
@@ -588,7 +588,7 @@ clean-css-colors:
 #
 # Licensing: all three are SIL Open Font License 1.1, which is why they were
 # chosen over DejaVu Sans — it scores better on characters and is under the
-# Bitstream Vera licence instead. As with Ahem, pdf0 neither vendors nor
+# Bitstream Vera licence instead. As with Ahem, forme neither vendors nor
 # redistributes them: they are fetched into this gitignored directory, used only
 # to run the tests, and no font bytes ship in this repository or anything it
 # builds. The licence text is fetched alongside them.
@@ -715,12 +715,12 @@ clean-noto-fonts:
 #
 # A CSS reftest is a pair of documents with the assertion *these two render
 # identically*, and the pair and the claim come from the CSS Working Group. That
-# is what makes it an oracle rather than a restatement of pdf0's own reading —
+# is what makes it an oracle rather than a restatement of this engine's own reading —
 # ADR 0003 records what this repository already learned about the difference.
 # Reftests are also built so that the two documents reach the same rendering by
 # *different* mechanisms, so an engine bug usually moves one and not the other.
 #
-# No browser is needed: pdf0 renders both and compares its own display lists.
+# No browser is needed: forme renders both and compares its own display lists.
 #
 # WPT is enormous, so this is a blobless sparse clone rather than the whole of
 # it. The directories are everything a page laid out *once* can be held to.
@@ -786,13 +786,13 @@ WPT_DIRS := css/CSS2/normal-flow css/CSS2/box-display css/CSS2/margin-padding-cl
 # Text 4 features it has never claimed.
 
 # "fonts" is there for Ahem.ttf, which a quarter of the suite is written
-# against and which the harness hands to the engine — see render/ahem_test.go
+# against and which the harness hands to the engine — see layout/suitefonts_test.go
 # for why a test font is the only way those assertions can be expressed.
 #
 # Licensing, since it is a font and fonts often are not as free as the code
 # around them: Ahem.ttf is tracked in the web-platform-tests repository, which
 # is under the 3-Clause BSD licence above, and carries no separate licence of
-# its own. pdf0 neither vendors nor redistributes it — it is fetched into this
+# its own. forme neither vendors nor redistributes it — it is fetched into this
 # gitignored directory exactly as the rest of the corpus is, is used only to run
 # the tests, and no font bytes are shipped in this repository or in anything it
 # builds. The exposure is therefore the same as depending on the suite at all,
