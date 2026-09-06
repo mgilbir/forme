@@ -296,9 +296,9 @@ func TestFindingMessageNamesThePlace(t *testing.T) {
 			[]string{"unsupported-element", "canvas", "html byte 17", "html > body > div"},
 		},
 		{
-			Finding{Rule: RuleUnsupportedAtRule, Message: "@page is not applied yet",
+			Finding{Rule: RuleUnsupportedAtRule, Message: "@supports is not applied yet",
 				Source: Source{HTMLOffset: -1, CSSOffset: 3, Sheet: "theme.css"}},
-			[]string{"@page", "theme.css byte 3"},
+			[]string{"@supports", "theme.css byte 3"},
 		},
 		{
 			Finding{Rule: RuleLimit, Message: "matching stopped early", Source: NoSource},

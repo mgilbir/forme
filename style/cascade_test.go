@@ -609,21 +609,30 @@ func itoa(i int) string {
 	return string(b)
 }
 
-// TestAtRulesAreReported pins that @media and @page are visibly absent rather
-// than silently ignored — they are the next stage's work, and until it arrives
-// an author has to be told their rules did nothing.
+// TestAtRulesAreReported pins that an at-rule this package does not act on is
+// visibly absent rather than silently ignored — it is another stage's work, and
+// until that stage arrives an author has to be told their rules did nothing.
+//
+// @page is not on the list and is the reason to say what the list is: it
+// selects no element and computes no value on one, and the stage that lays a
+// document out on paper reads it. A rule another stage applies is not one this
+// package should report as unapplied, so it says nothing about it either way.
 func TestAtRulesAreReported(t *testing.T) {
 	doc := parseDoc(t, "<p>x</p>")
-	got := Apply(doc, []Sheet{author(t, "@page { margin: 1cm } @font-face { src: url(x) }")})
+	got := Apply(doc, []Sheet{author(t,
+		"@page { margin: 1cm } @font-face { src: url(x) } @supports (a: b) { p { color: red } }")})
 
 	names := map[string]bool{}
 	for _, f := range got.Findings {
 		names[f.Property] = true
 	}
-	for _, want := range []string{"@page", "@font-face"} {
+	for _, want := range []string{"@font-face", "@supports"} {
 		if !names[want] {
 			t.Errorf("%s was not reported; findings were %v", want, got.Findings)
 		}
+	}
+	if names["@page"] {
+		t.Errorf("@page was reported as unapplied by the cascade, which does not decide it")
 	}
 	// @media is not on that list any more: it is answered rather than skipped,
 	// and a query this engine can read reports nothing at all. See media_test.go.
