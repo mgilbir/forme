@@ -49,7 +49,8 @@ import (
 
 // requiredTables are the tables a subset font keeps. Hinting (cvt, fpgm, prep)
 // is dropped with the rest: it improves rendering at small sizes and costs
-// bytes, and a subset that keeps it must keep all of it to stay coherent.
+// bytes, and a subset that keeps it must keep all of it to stay coherent —
+// which is why the glyphs' own instructions go too. See stripInstructions.
 var requiredTables = []string{"cmap", "glyf", "head", "hhea", "hmtx", "loca", "maxp", "name", "post", "OS/2"}
 
 // Subset returns a font program carrying only the glyphs this face has encoded,
@@ -119,7 +120,7 @@ func (f *Face) subset() ([]byte, []int, error) {
 		if start > end || int(end) > len(glyf) {
 			return nil, nil, fmt.Errorf("fonts: glyph %d lies outside the glyf table", gid)
 		}
-		newGlyf = append(newGlyf, glyf[start:end]...)
+		newGlyf = append(newGlyf, stripInstructions(glyf[start:end])...)
 		for len(newGlyf)%4 != 0 { // glyf entries are long-aligned
 			newGlyf = append(newGlyf, 0)
 		}
@@ -133,6 +134,14 @@ func (f *Face) subset() ([]byte, []int, error) {
 		}
 	}
 	out["glyf"] = newGlyf
+	// And the count that describes what was just taken out. maxp is copied from
+	// the original, so it has to be copied *out* of it before it is written to:
+	// the map holds the caller's own table bytes, and a face is shared.
+	if maxp, ok := out["maxp"]; ok && len(maxp) >= 32 {
+		newMaxp := append([]byte(nil), maxp...)
+		binary.BigEndian.PutUint16(newMaxp[26:], 0) // maxSizeOfInstructions
+		out["maxp"] = newMaxp
+	}
 	// Always write the long loca form: the short form stores offsets halved, so
 	// it cannot represent an odd offset, and choosing between them is one more
 	// thing to get wrong for no benefit at this size.
@@ -153,6 +162,83 @@ func (f *Face) subset() ([]byte, []int, error) {
 		}
 	}
 	return assembleSFNT(out), keptList, nil
+}
+
+// stripInstructions removes a glyph's hinting instructions, leaving its outline
+// exactly as it was.
+//
+// It is the other half of dropping cvt, fpgm and prep. A glyph's instructions
+// call functions defined in fpgm and read values out of cvt, so a subset that
+// keeps the instructions and drops those tables has handed a rasteriser a
+// program whose first CALL is to a function nobody defined. That is an error by
+// the specification; what a rasteriser does with it is its own business, and
+// FreeType abandons hinting for the glyph while others are less careful.
+//
+// The whole of the outline is left alone — no point is decoded and no
+// coordinate re-encoded — because the instructions are a contiguous run with a
+// length in front of them and taking them out is a splice. Every Noto face in
+// the corpus carries them: .notdef alone is forty-two bytes of program in eight
+// of them.
+//
+// A composite says it has instructions with a flag on its last component, so
+// there the splice is a truncation and the flag is cleared. The component
+// references themselves are untouched, which is the property the whole
+// subsetter is built on.
+func stripInstructions(g []byte) []byte {
+	if len(g) < 10 {
+		return g // an empty glyph: a space, and nothing to strip
+	}
+	contours := int(int16(binary.BigEndian.Uint16(g)))
+	if contours >= 0 {
+		at := 10 + 2*contours
+		if at+2 > len(g) {
+			return g
+		}
+		n := int(binary.BigEndian.Uint16(g[at:]))
+		if n == 0 || at+2+n > len(g) {
+			return g
+		}
+		out := make([]byte, 0, len(g)-n)
+		out = append(out, g[:at]...)
+		out = append(out, 0, 0) // instructionLength
+		return append(out, g[at+2+n:]...)
+	}
+
+	// A composite: walk to the last component, which is the one that says
+	// whether instructions follow it.
+	for at := 10; ; {
+		if at+4 > len(g) {
+			return g
+		}
+		flags := int(binary.BigEndian.Uint16(g[at:]))
+		flagsAt := at
+		at += 4 // the flags and the component's glyph index
+		if flags&compArgsAreWords != 0 {
+			at += 4
+		} else {
+			at += 2
+		}
+		switch {
+		case flags&compHaveScale != 0:
+			at += 2
+		case flags&compHaveXYScale != 0:
+			at += 4
+		case flags&compHave2x2 != 0:
+			at += 8
+		}
+		if at > len(g) {
+			return g
+		}
+		if flags&compMoreComponents != 0 {
+			continue
+		}
+		if flags&compHaveInstructions == 0 {
+			return g
+		}
+		out := append([]byte(nil), g[:at]...)
+		binary.BigEndian.PutUint16(out[flagsAt:], uint16(flags&^compHaveInstructions))
+		return out
+	}
 }
 
 // keepSet decides which glyph indices survive: .notdef, every glyph this face
