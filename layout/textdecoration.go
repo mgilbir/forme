@@ -87,6 +87,14 @@ func (l *layouter) decorationsFor(b *Box) []textDecoration {
 	l.checkDecorationValue(b)
 
 	own := ownDecorations(b)
+	for i := range own {
+		// What the box said about the lines it draws, resolved here because a
+		// length in ems needs the box's font size and the stage that draws them
+		// has no styles left to ask.
+		own[i].Thickness, own[i].HasThickness =
+			l.decorationLength(b, "text-decoration-thickness")
+		own[i].Offset, own[i].HasOffset = l.decorationLength(b, "text-underline-offset")
+	}
 	var above []textDecoration
 	switch {
 	case len(b.splitFrom) > 0:
@@ -247,6 +255,57 @@ type decorationMetrics struct {
 	strikeThickness style.Unit
 	// underline, overline and strike are the *top* edge of each band.
 	underline, overline, strike style.Unit
+}
+
+// asDeclared is the metrics with what the declaring box asked for put in place
+// of what the face said.
+//
+// §2.2's thickness applies to every line of the decoration — an underline and a
+// line-through declared together are drawn at one weight — so it replaces both
+// of the sizes here. §2.3's offset is the underline's alone, which is what its
+// name says and is why the other two bands are untouched by it.
+//
+// The offset is measured from the alphabetic baseline, downwards, to the edge of
+// the line *nearest the text*: "text-underline-offset: 0" rules a line touching
+// the letters, and a positive value moves it away from them. That is the whole
+// of the property and it is why the number goes straight into the band's top
+// edge, which is what the rest of this file already measures.
+func asDeclared(m decorationMetrics, d textDecoration) decorationMetrics {
+	if d.HasThickness {
+		m.thickness, m.strikeThickness = d.Thickness, d.Thickness
+	}
+	if d.HasOffset {
+		m.underline = d.Offset
+	}
+	return m
+}
+
+// decorationLength reads one of the two, or says the box left it to the face.
+//
+// "auto" and "from-font" are the same answer here, and that is a fact about
+// this engine rather than a shortcut: "auto" already takes the face's own
+// underline thickness where the face states one, which is exactly what
+// "from-font" asks for, and falls back to a fraction of the font size where it
+// does not — which is what "from-font" says to do in that case too.
+//
+// A percentage is of the font size, which is what CSS Text Decoration 4 says a
+// percentage of either property is. Neither may be negative: a band of negative
+// height paints nothing and an underline above the baseline is not what the
+// property is for, so the declaration is thrown out and the face answers.
+func (l *layouter) decorationLength(b *Box, property string) (style.Unit, bool) {
+	if b == nil {
+		return 0, false
+	}
+	switch trimmedLower(b.Style[property]) {
+	case "", "auto", "from-font":
+		return 0, false
+	}
+	l.ensureFontSize(b)
+	v, ok := l.lengthOf(b, property, b.FontSize)
+	if !ok || v < 0 {
+		return 0, false
+	}
+	return v, true
 }
 
 // decorationMetricsFor works the three positions out from a face.

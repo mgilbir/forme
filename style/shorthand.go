@@ -797,7 +797,8 @@ func joinParts(parts ...[]css.ComponentValue) []css.ComponentValue {
 	return out
 }
 
-// textDecorationShorthand expands "text-decoration": the lines and a colour.
+// textDecorationShorthand expands "text-decoration": the lines, a colour and a
+// thickness.
 //
 // The line part is a *set* rather than a single keyword — "text-decoration:
 // underline overline" is one declaration asking for two lines — so the keywords
@@ -811,7 +812,8 @@ func joinParts(parts ...[]css.ComponentValue) []css.ComponentValue {
 func textDecorationShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, []string, bool) {
 	var lines []css.ComponentValue
 	colour := ident("currentcolor")
-	var seenNone, seenColour bool
+	thickness := ident("auto")
+	var seenNone, seenColour, seenThickness bool
 	seen := map[string]bool{}
 	var unsupported []string
 
@@ -832,6 +834,12 @@ func textDecorationShorthand(vals []css.ComponentValue) (map[string][]css.Compon
 			lines = append(lines, part...)
 		case isColour(part) && !seenColour:
 			colour, seenColour = part, true
+		case isDecorationThickness(part) && !seenThickness:
+			// §2.2's thickness, which is part of the shorthand in CSS Text
+			// Decoration 4. Without this a declaration that named one — "text-
+			// decoration: underline 2px" — was not a declaration this parser
+			// recognised at all, so the underline went with the thickness.
+			thickness, seenThickness = part, true
 		case isIdentPart(part):
 			if isInertDeclaration("text-decoration-style", part) {
 				// The style component at its own initial value, which is the
@@ -859,9 +867,31 @@ func textDecorationShorthand(vals []css.ComponentValue) (map[string][]css.Compon
 		lines = ident("none")
 	}
 	return map[string][]css.ComponentValue{
-		"text-decoration-line":  lines,
-		"text-decoration-color": colour,
+		"text-decoration-line":      lines,
+		"text-decoration-color":     colour,
+		"text-decoration-thickness": thickness,
 	}, unsupported, true
+}
+
+// isDecorationThickness reports whether one part of the shorthand is a
+// thickness: the two keywords, or a length or a percentage.
+func isDecorationThickness(part []css.ComponentValue) bool {
+	if len(part) != 1 || !part[0].IsToken() {
+		return false
+	}
+	switch part[0].Token.Kind {
+	case css.Dimension, css.Percentage:
+		return true
+	case css.Number:
+		// A bare nought is a length, and it is the only number that is.
+		return part[0].Token.Number == 0
+	case css.Ident:
+		switch strings.ToLower(part[0].Token.Value) {
+		case "auto", "from-font":
+			return true
+		}
+	}
+	return false
 }
 
 func isDecorationLine(part []css.ComponentValue) bool {

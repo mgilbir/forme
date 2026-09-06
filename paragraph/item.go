@@ -48,6 +48,17 @@ type Decoration struct {
 	// line's own geometry known, and it stays zero for the decorations of every
 	// document that does not use the property.
 	Shift style.Unit
+	// Thickness is CSS Text Decoration 4 §2.2's text-decoration-thickness and
+	// Offset is §2.3's text-underline-offset, resolved against the declaring
+	// box — and each has a flag beside it because nought is a value both of
+	// them take. An offset of nought is a line touching the letters, which is
+	// not the same answer as "the face decides".
+	//
+	// They are resolved here rather than where the line is drawn for the reason
+	// Shift is: a length in ems is a length against a font size, and the stage
+	// that draws the display list has no styles left to ask.
+	Thickness, Offset       style.Unit
+	HasThickness, HasOffset bool
 }
 
 // Frame is what the walk over an inline subtree carries down: enough to

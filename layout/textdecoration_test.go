@@ -530,3 +530,180 @@ func TestADecorationIsDrawnStraightThroughADescender(t *testing.T) {
 			"descenders are the only difference between the two documents", got, plain)
 	}
 }
+
+// CSS Text Decoration 4 §2.2 and §2.3: how thick the line is, and how far it
+// sits from the text.
+//
+// The arithmetic is the same one the file opens with. Courier at 20px gives a
+// decoration 1px thick — 0.05em — with its top edge 1.5px below the baseline,
+// and every number below is that one moved by a declaration.
+
+// underlineBand is the single band an underlined word paints, as its top edge
+// relative to the baseline and its height.
+func underlineBand(t *testing.T, css string) (top, height float64) {
+	t.Helper()
+	root := layoutOf(t, 600, `<div id="p">abcdef</div>`, noDefaults+decoCSS+css)
+	got := bands(Paint(root), black)
+	if len(got) != 1 {
+		t.Fatalf("%q painted %d bands, want 1", css, len(got))
+	}
+	base := baselineOfFirstRun(t, root, "p")
+	return got[0].Y.Sub(base).Px(), got[0].H.Px()
+}
+
+// TestAnUnderlineIsAsThickAsItWasAskedToBe is §2.2. The face's own thickness is
+// what "auto" comes to, and a length or a percentage replaces it — a percentage
+// of the font size, which is what a percentage of either of these properties is.
+func TestAnUnderlineIsAsThickAsItWasAskedToBe(t *testing.T) {
+	for _, c := range []struct {
+		css    string
+		height float64
+	}{
+		{` #p { text-decoration: underline }`, 1},
+		{` #p { text-decoration: underline; text-decoration-thickness: 4px }`, 4},
+		{` #p { text-decoration: underline; text-decoration-thickness: 0.2em }`, 4},
+		{` #p { text-decoration: underline; text-decoration-thickness: 25% }`, 5},
+		// The shorthand carries it, which is CSS Text Decoration 4's grammar —
+		// and before this it made the whole declaration invalid, so the
+		// underline went with the thickness.
+		{` #p { text-decoration: underline 4px }`, 4},
+	} {
+		top, height := underlineBand(t, c.css)
+		if height != c.height {
+			t.Errorf("%q drew a band %gpx thick, want %g", c.css, height, c.height)
+		}
+		// The line does not move: the position a face states is the top of the
+		// stroke, so a thicker line grows away from the text rather than into
+		// it.
+		if top != 1.5 {
+			t.Errorf("%q put the band %gpx below the baseline, want 1.5", c.css, top)
+		}
+	}
+}
+
+// TestAThicknessAppliesToEveryLineOfTheDecoration. §2.2 is a property of the
+// decoration and not of one of its lines, so an underline and a line-through
+// declared together are drawn at one weight — which is what stops a face whose
+// strikeout is thicker than its underline from drawing a lopsided pair.
+func TestAThicknessAppliesToEveryLineOfTheDecoration(t *testing.T) {
+	root := layoutOf(t, 600, `<div id="p">abcdef</div>`, noDefaults+decoCSS+
+		` #p { text-decoration: underline line-through; text-decoration-thickness: 4px }`)
+	got := bands(Paint(root), black)
+	if len(got) != 2 {
+		t.Fatalf("two lines painted %d bands, want 2", len(got))
+	}
+	for i, b := range got {
+		if b.H.Px() != 4 {
+			t.Errorf("band %d is %gpx thick, want 4 — the thickness is the "+
+				"decoration's and not one line's", i, b.H.Px())
+		}
+	}
+}
+
+// TestAnUnderlineSitsWhereItWasToldTo is §2.3, whose zero position is the
+// alphabetic baseline: "text-underline-offset: 0" rules a line touching the
+// letters and a positive value moves it away from them.
+//
+// It moves the line without changing its weight, which is the whole point of
+// its being a second property.
+func TestAnUnderlineSitsWhereItWasToldTo(t *testing.T) {
+	for _, c := range []struct {
+		css string
+		top float64
+	}{
+		{` #p { text-decoration: underline; text-underline-offset: 10px }`, 10},
+		{` #p { text-decoration: underline; text-underline-offset: 0 }`, 0},
+		{` #p { text-decoration: underline; text-underline-offset: 50% }`, 10},
+		{` #p { text-decoration: underline; text-underline-offset: 0.25em }`, 5},
+	} {
+		top, height := underlineBand(t, c.css)
+		if top != c.top {
+			t.Errorf("%q put the band %gpx below the baseline, want %g",
+				c.css, top, c.top)
+		}
+		if height != 1 {
+			t.Errorf("%q drew a band %gpx thick; the offset moves the line and "+
+				"does not thicken it", c.css, height)
+		}
+	}
+}
+
+// TestTheOffsetIsTheUnderlinesAlone. Its name says which line it is about, and
+// a line-through declared beside an underline stays where the face put it.
+func TestTheOffsetIsTheUnderlinesAlone(t *testing.T) {
+	root := layoutOf(t, 600, `<div id="p">abcdef</div>`, noDefaults+decoCSS+
+		` #p { text-decoration: underline line-through; text-underline-offset: 10px }`)
+	got := bands(Paint(root), black)
+	if len(got) != 2 {
+		t.Fatalf("two lines painted %d bands, want 2", len(got))
+	}
+	base := baselineOfFirstRun(t, root, "p")
+	if top := got[0].Y.Sub(base).Px(); top != 10 {
+		t.Errorf("the underline is %gpx below the baseline, want 10", top)
+	}
+	if top := got[1].Y.Sub(base).Px(); top >= 0 {
+		t.Errorf("the line-through is %gpx below the baseline; it goes through "+
+			"the letters and the underline's offset is not its", top)
+	}
+}
+
+// TestAThicknessThisEngineCannotUseLeavesTheFaceToAnswer. "auto" and "from-font"
+// are the same answer here and that is a fact about this engine rather than a
+// shortcut: "auto" already takes the face's own underline thickness where the
+// face states one. A negative length is not a thickness at all, and the
+// declaration is thrown out rather than drawn as nothing.
+func TestAThicknessThisEngineCannotUseLeavesTheFaceToAnswer(t *testing.T) {
+	for _, css := range []string{
+		` #p { text-decoration: underline; text-decoration-thickness: auto }`,
+		` #p { text-decoration: underline; text-decoration-thickness: from-font }`,
+		` #p { text-decoration: underline; text-decoration-thickness: -3px }`,
+		` #p { text-decoration: underline; text-underline-offset: -3px }`,
+	} {
+		top, height := underlineBand(t, css)
+		if top != 1.5 || height != 1 {
+			t.Errorf("%q drew a band %gpx below the baseline and %gpx thick, "+
+				"want the face's own 1.5 and 1", css, top, height)
+		}
+	}
+}
+
+// TestTheThicknessDoesNotInheritAndTheOffsetDoes is the difference between the
+// two properties that is not about geometry at all.
+//
+// §2.2's thickness is part of the decoration, and a decoration reaches a
+// descendant by being *drawn across* it rather than by being inherited — so a
+// child that declares a decoration of its own draws it at the weight its own
+// face asks for, not at its parent's. §2.3's offset is an inherited property
+// like the rest of the underline family, and a child's underline sits where its
+// parent said.
+func TestTheThicknessDoesNotInheritAndTheOffsetDoes(t *testing.T) {
+	const doc = `<div id="p">a<span id="e">bc</span></div>`
+
+	// The child writes the *longhand*, and that is not incidental: the
+	// shorthand resets the thickness to "auto" whether or not it names one, so
+	// a child writing "text-decoration: underline" never inherits a thickness
+	// even if the property inherited. The longhand is the only way to ask the
+	// question.
+	root := layoutOf(t, 600, doc, noDefaults+decoCSS+
+		` #p { text-decoration-thickness: 4px } #e { text-decoration-line: underline }`)
+	got := bands(Paint(root), black)
+	if len(got) != 1 {
+		t.Fatalf("the span painted %d bands, want 1", len(got))
+	}
+	if got[0].H.Px() != 1 {
+		t.Errorf("the span's underline is %gpx thick; the thickness is the "+
+			"decoration's and a decoration is not inherited", got[0].H.Px())
+	}
+
+	root = layoutOf(t, 600, doc, noDefaults+decoCSS+
+		` #p { text-underline-offset: 10px } #e { text-decoration: underline }`)
+	got = bands(Paint(root), black)
+	if len(got) != 1 {
+		t.Fatalf("the span painted %d bands, want 1", len(got))
+	}
+	base := baselineOfFirstRun(t, root, "p")
+	if top := got[0].Y.Sub(base).Px(); top != 10 {
+		t.Errorf("the span's underline is %gpx below the baseline, want the 10 "+
+			"its parent asked for: the offset is an inherited property", top)
+	}
+}

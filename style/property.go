@@ -273,8 +273,16 @@ var properties = map[string]property{
 	"text-fit":              {true, "none"},
 	"text-decoration-line":  {false, "none"},
 	"text-decoration-color": {false, "currentcolor"},
-	"vertical-align":        {false, "baseline"},
-	"direction":             {true, "ltr"},
+	// CSS Text Decoration 4 §2.2 and §2.3, and the two of them do not inherit
+	// the same way: the thickness is part of the decoration, which reaches a
+	// descendant by being *drawn across* it rather than by being inherited,
+	// while the offset is an inherited property like the rest of the underline
+	// family. Writing them side by side with different flags is the whole of
+	// the difference, and it is the specification's.
+	"text-decoration-thickness": {false, "auto"},
+	"text-underline-offset":     {true, "auto"},
+	"vertical-align":            {false, "baseline"},
+	"direction":                 {true, "ltr"},
 
 	// CSS Writing Modes 4 §3.1, §4.1 and §9.1. All three are registered rather
 	// than dropped because layout/writingmode.go reads them: which way a box's
@@ -570,7 +578,8 @@ var shorthands = map[string]shorthand{
 	"font": {fontShorthand, []string{
 		"font-style", "font-weight", "font-size", "font-family", "line-height"}},
 	"text-decoration": {textDecorationShorthand,
-		[]string{"text-decoration-line", "text-decoration-color"}},
+		[]string{"text-decoration-line", "text-decoration-color",
+			"text-decoration-thickness"}},
 
 	// CSS Text 4 makes white-space a shorthand, and that is not a reshuffle for
 	// its own sake: "text-wrap: nowrap" and "white-space: nowrap" set the same
