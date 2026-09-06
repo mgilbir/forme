@@ -987,6 +987,14 @@ func rotateUse(buf []Glyph, info []useInfo, start, mid, end int) {
 // A script with a shaper of its own is not here: Devanagari and its relatives,
 // Khmer and Myanmar are each modelled in their own file, because each has rules
 // the general model does not carry.
+//
+// Sinhala is the one that was in neither. It reorders — "කෙ" is a consonant and
+// a vowel sign written after it and drawn before it, which is the whole reason
+// a syllabic shaper exists — and it was absent from this list and from
+// indicConfigs alike, so its text came out in the order it was stored. The
+// table below already carried its rows: usetable.go gives U+0DCA the halant
+// class and U+0D9A onwards the base class, and nothing asked. HarfBuzz shapes
+// it here, which is where it belongs — its cluster model is the general one.
 var universalScripts = map[string]bool{
 	"adlm": true, "ahom": true, "bali": true, "batk": true, "bhks": true,
 	"brah": true, "bugi": true, "buhd": true, "cakm": true, "cham": true,
@@ -999,7 +1007,8 @@ var universalScripts = map[string]bool{
 	"mong": true, "mtei": true, "mult": true, "nagm": true, "nand": true,
 	"newa": true, "nko ": true, "ougr": true, "phag": true, "phlp": true,
 	"plrd": true, "rjng": true, "rohg": true, "saur": true, "shrd": true,
-	"sidd": true, "sind": true, "sogd": true, "sogo": true, "soyo": true,
+	"sidd": true, "sind": true, "sinh": true, "sogd": true, "sogo": true,
+	"soyo": true,
 	"sund": true, "sylo": true, "tagb": true, "takr": true, "tale": true,
 	"talu": true, "tavt": true, "tfng": true, "tglg": true, "tibt": true,
 	"tirh": true, "tnsa": true, "toto": true, "vith": true, "wcho": true,
