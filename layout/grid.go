@@ -167,23 +167,36 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 		// so there is at least one column left standing.
 		columns = columns[:len(items)]
 	}
+	autoColumns := l.implicitTracks(b, "grid-auto-columns", width)
+	autoRows := l.implicitTracks(b, "grid-auto-rows", width)
+	explicitColumns := len(columns)
 	for len(columns) < areas.columns {
 		// §7.3: the picture makes the explicit grid. A template of two words
 		// per row has two columns whether or not grid-template-columns named
 		// them, and the ones it did not name are "auto".
 		columns = append(columns, autoTrack())
+		explicitColumns = len(columns)
 	}
 	if len(columns) == 0 {
 		// §7.1: a container with no explicit columns still has one, because
 		// every item has to be somewhere. The implicit track is "auto", which
 		// is the same answer a single-column grid would have been given.
 		columns = []gridTrack{autoTrack()}
+		explicitColumns = 1
+	}
+	// §7.5: an item that named a column past the explicit grid is not left
+	// hanging off the end of it — the grid grows to hold it, and the tracks it
+	// grew by are sized by grid-auto-columns.
+	for len(columns) < columnsNeeded(items, explicitColumns) {
+		columns = append(columns, autoColumns[(len(columns)-explicitColumns)%len(autoColumns)])
 	}
 	rows, _, _ := l.trackList(b, "grid-template-rows", width,
 		trackRoom{size: height, definite: definite, gap: rowGap})
 
+	explicitRows := len(rows)
 	for len(rows) < areas.rows {
 		rows = append(rows, autoTrack())
+		explicitRows = len(rows)
 	}
 
 	// §8.5: the items that named a line go where they asked, and the rest are
@@ -191,8 +204,10 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 	// has.
 	used := placeItems(items, len(columns))
 	for len(rows) < used {
-		// The implicit rows, which are "auto" because grid-auto-rows is.
-		rows = append(rows, autoTrack())
+		// The implicit rows, sized by grid-auto-rows — which is "auto" unless
+		// the stylesheet said otherwise, and is the height every row of a card
+		// grid gets when nothing draws them.
+		rows = append(rows, autoRows[(len(rows)-explicitRows)%len(autoRows)])
 	}
 
 	across, down := l.gridAlignment(b, "justify-items"), l.gridAlignment(b, "align-items")
@@ -757,6 +772,38 @@ func (g *gridOccupancy) next(row, column, rowSpan, columnSpan int) (int, int) {
 			return r, 0
 		}
 	}
+}
+
+// columnsNeeded is how many columns the items ask for, which is the explicit
+// grid unless one of them named a line past its end or asked for a span wider
+// than it.
+func columnsNeeded(items []*gridItem, explicit int) int {
+	out := explicit
+	for _, it := range items {
+		want := it.place[1].span
+		if it.place[1].definite {
+			want = it.place[1].start + it.place[1].span
+		}
+		if want > out {
+			out = want
+		}
+	}
+	return out
+}
+
+// implicitTracks reads grid-auto-rows or grid-auto-columns, which is §7.5's
+// list of sizes the tracks outside the explicit grid take, one after another
+// and starting again at the end.
+//
+// "auto" is the initial value and the commonest one, and it is a list of one:
+// every implicit track is as big as what lands in it. A list of two is how a
+// grid gives its rows alternating heights without drawing any of them.
+func (l *layouter) implicitTracks(b *Box, property string, width style.Unit) []gridTrack {
+	tracks, _, ok := l.trackList(b, property, width, trackRoom{})
+	if !ok || len(tracks) == 0 {
+		return []gridTrack{autoTrack()}
+	}
+	return tracks
 }
 
 // gridInner is what the tracks and the gaps between them come to.
@@ -1649,15 +1696,11 @@ func (l *layouter) refusesToGrid(b *Box, width style.Unit) string {
 		// algorithms of their own, and this slice has one.
 		return "its items are placed by a flow this engine does not follow"
 	}
-	switch trimmedLower(b.Style["grid-auto-rows"]) {
-	case "", "auto":
-	default:
-		return "its implicit rows are given a size of their own"
-	}
-	switch trimmedLower(b.Style["grid-auto-columns"]) {
-	case "", "auto":
-	default:
-		return "its implicit columns are given a size of their own"
+	for _, p := range [...]string{"grid-auto-rows", "grid-auto-columns"} {
+		if _, _, ok := l.trackList(b, p, width, trackRoom{}); !ok {
+			return "its implicit tracks are sized with something this engine " +
+				"does not size"
+		}
 	}
 	if why := refusesGridAlignment(b); why != "" {
 		return why

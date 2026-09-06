@@ -470,8 +470,8 @@ func TestAGridContainerThisEngineCannotArrangeSaysSo(t *testing.T) {
 		{"an area in two places", `#g { grid-template-areas: "a b" "b a" }`, "do not touch"},
 		{"a column flow", `#g { grid-auto-flow: column }`, "flow this engine does not follow"},
 		{"a dense flow", `#g { grid-auto-flow: row dense }`, "flow this engine does not follow"},
-		{"sized implicit rows", `#g { grid-auto-rows: 50px }`, "implicit rows"},
-		{"sized implicit columns", `#g { grid-auto-columns: 50px }`, "implicit columns"},
+		{"implicit tracks sized by a function this engine cannot read",
+			`#g { grid-auto-rows: fit-content(50px) }`, "implicit tracks"},
 		{"a right-to-left grid", `#g { direction: rtl }`, "from the right"},
 		{"tracks on a baseline", `#g { align-content: baseline }`, "aligned by a rule"},
 		{"items on a baseline", `#g { align-items: baseline }`, "aligned by a rule"},
@@ -533,6 +533,7 @@ func TestAnArrangedGridSaysNothing(t *testing.T) {
 		`#g { width: 300px; grid-template-columns: 100px 100px } #g > div:first-child { grid-column: 2 }`,
 		`#g { width: 300px; grid-template-columns: 100px 100px } #g > div:first-child { grid-row: 1 / 3 }`,
 		`#g { width: 300px; grid-template-areas: "a b" "c d" }`,
+		`#g { width: 300px; grid-auto-rows: 50px; grid-auto-columns: 50px }`,
 	} {
 		got := Compose(Input{HTML: fourItems,
 			CSS: []Stylesheet{{Source: gridCSS + css}}}, Options{})
@@ -1203,4 +1204,65 @@ func TestATemplateMakesEveryRowItDraws(t *testing.T) {
 	if got.H.Px() != 20 {
 		t.Errorf("the container is %vpx deep and its template draws one row", got.H)
 	}
+}
+
+// TestTheGridGrowsToHoldAnItemPlacedPastIt is §7.5's implicit grid. An item that
+// named a column past the last one drawn is not left hanging off the end: the
+// grid grows to hold it, and the tracks it grew by are sized by
+// grid-auto-columns.
+//
+// Before this the item was placed at the far edge of the explicit grid with no
+// width at all — a box in the document and a sliver on the page.
+func TestTheGridGrowsToHoldAnItemPlacedPastIt(t *testing.T) {
+	const two = `<div id="g"><div id="a">a</div><div id="b">b</div></div>`
+
+	// Two explicit columns and an item in the fourth: the two implicit columns
+	// are 40px each because that is what the stylesheet asked for.
+	wantCells(t, gridCells(t, two,
+		`#g { width: 300px; grid-template-columns: 100px 100px; grid-auto-columns: 40px }`+
+			`#a { grid-column: 4 }`),
+		[][4]float64{{240, 0, 40, 20}, {0, 0, 100, 20}}, "an item in an implicit column")
+
+	// A span wider than the grid grows it too: four columns for an item that
+	// asked for four, and the two implicit ones share what is left.
+	wantCells(t, gridCells(t, two,
+		`#g { width: 300px; grid-template-columns: 100px 100px } #a { grid-column: span 4 }`),
+		[][4]float64{{0, 0, 300, 20}, {0, 20, 100, 20}}, "an item spanning past the grid")
+}
+
+// TestGridAutoRowsSizesTheRowsNobodyDrew is the other half of §7.5, and the one
+// a card grid uses: the rows are made as the items need them, and
+// grid-auto-rows says how tall each is.
+func TestGridAutoRowsSizesTheRowsNobodyDrew(t *testing.T) {
+	const two = `<div id="g"><div id="a">a</div><div id="b">b</div></div>`
+
+	wantCells(t, gridCells(t, two,
+		`#g { width: 300px; grid-template-columns: 100px 100px; grid-auto-rows: 50px }`),
+		[][4]float64{{0, 0, 100, 50}, {100, 0, 100, 50}}, "a row given a height of its own")
+
+	// A list of sizes is taken in turn and started again at the end, which is
+	// how a grid gives its rows alternating heights without drawing any of them.
+	const four = `<div id="g"><div>a</div><div>b</div><div>c</div><div>d</div></div>`
+	wantCells(t, gridCells(t, four,
+		`#g { width: 300px; grid-template-columns: 100px; grid-auto-rows: 50px 30px }`),
+		[][4]float64{
+			{0, 0, 100, 50}, {0, 50, 100, 30},
+			{0, 80, 100, 50}, {0, 130, 100, 30},
+		}, "four rows of two alternating heights")
+
+	// The list is counted from the first row *nobody drew*, not from the top of
+	// the grid: a drawn row is the size it was drawn at, and the list starts
+	// after it.
+	const three = `<div id="g"><div>a</div><div>b</div><div>c</div></div>`
+	wantCells(t, gridCells(t, three,
+		`#g { width: 300px; grid-template-columns: 100px; grid-template-rows: 20px;`+
+			` grid-auto-rows: 50px 30px }`),
+		[][4]float64{{0, 0, 100, 20}, {0, 20, 100, 50}, {0, 70, 100, 30}},
+		"a drawn row and two undrawn ones")
+
+	// The initial value is "auto", which is what makes an undrawn row as tall
+	// as what lands in it.
+	wantCells(t, gridCells(t, two,
+		`#g { width: 300px; grid-template-columns: 100px 100px; grid-auto-rows: auto }`),
+		[][4]float64{{0, 0, 100, 20}, {100, 0, 100, 20}}, "a row as tall as its content")
 }
