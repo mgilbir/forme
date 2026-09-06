@@ -146,26 +146,32 @@ func (sh shaper) markAttachAt(sub []byte, buf []Glyph, at, flags int, mkmk bool)
 	if !covered {
 		return 0
 	}
-	// Back to what this mark attaches to: for mark-to-mark the nearest mark,
-	// for mark-to-base the nearest thing that is not one.
-	for j := at - 1; j >= 0; j-- {
-		if sh.l.isMark(buf[j]) != mkmk {
-			if mkmk {
-				continue
-			}
-			break
+	// Back to what this mark attaches to: for mark-to-base the nearest glyph
+	// that is not a mark, stepping over the marks between; for mark-to-mark the
+	// glyph immediately before, which has to be one.
+	//
+	// The two were the wrong way round. Mark-to-base stopped at the first mark
+	// it met, so a second accent on one letter never found the letter and
+	// stayed at the origin; and mark-to-mark stepped over every letter it met,
+	// so it went looking for a mark belonging to another word. The flat pass in
+	// position.go does both correctly and is what this now mirrors — a font
+	// states one anchor and it must not matter whether a feature named the
+	// lookup or a rule reached it.
+	j := at - 1
+	if !mkmk {
+		for j >= 0 && sh.l.isMark(buf[j]) {
+			j--
 		}
-		base, has := st.bases[key2{buf[j].GID, mark.class}]
-		if !has {
-			if mkmk {
-				continue
-			}
-			break
-		}
-		sh.placeMark(buf, at, j, mark.anchor, base)
-		return 1
 	}
-	return 0
+	if j < 0 || sh.l.isMark(buf[j]) != mkmk {
+		return 0
+	}
+	base, has := st.bases[key2{buf[j].GID, mark.class}]
+	if !has {
+		return 0
+	}
+	sh.placeMark(buf, at, j, mark.anchor, base)
+	return 1
 }
 
 // positioningContext and chainedPositioningContext match a type 7 or type 8

@@ -350,3 +350,122 @@ func markRuleFace(t *testing.T, lookups []fonttest.Lookup, named []int) *Face {
 	}
 	return f
 }
+
+// markRuleFaceWithMarks is markRuleFace with a second mark, so that a test can
+// write two accents on one letter and stack one on the other.
+func markRuleFaceWithMarks(t *testing.T, lookups []fonttest.Lookup, named []int) *Face {
+	t.Helper()
+	f, err := Load(fonttest.SFNT(fonttest.SFNTOptions{
+		Name: "MarkRuleTwo",
+		Glyphs: []fonttest.Glyph{
+			{Rune: 'a', Advance: 500, HasShape: true},
+			{Rune: 'b', Advance: 500, HasShape: true},
+			{Rune: 0x0301, Advance: 0, HasShape: true}, // acute
+			{Rune: 0x0308, Advance: 0, HasShape: true}, // diaeresis
+		},
+		Extra: map[string][]byte{
+			"GPOS": fonttest.GPOSLookups(lookups, map[string][]int{"kern": named}),
+			"GDEF": fonttest.GDEF(map[int]int{
+				1: classBase, 2: classBase, 3: classMark, 4: classMark,
+			}),
+		},
+	}))
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+	return f
+}
+
+// TestASecondMarkReachedFromARuleStillFindsItsBase is the search this path had
+// backwards.
+//
+// Mark-to-base attaches a mark to the nearest glyph that is *not* a mark, so
+// the marks between are stepped over — the flat pass does exactly that. The
+// contextual path stopped at the first mark it met, so a letter with two
+// accents on it placed the first and left the second at the origin, which is on
+// top of the letter.
+func TestASecondMarkReachedFromARuleStillFindsItsBase(t *testing.T) {
+	const (
+		base, acute, diaeresis = 1, 3, 4
+	)
+	markSub := fonttest.MarkAttachSubtable(
+		[]fonttest.MarkAttachment{
+			{Glyph: acute, Class: 0, Anchor: fonttest.Anchor{X: 100, Y: 200}},
+			{Glyph: diaeresis, Class: 0, Anchor: fonttest.Anchor{X: 100, Y: 200}},
+		},
+		[]fonttest.BaseAttachment{
+			{Glyph: base, Anchors: map[int]fonttest.Anchor{0: {X: 400, Y: 700}}},
+		},
+	)
+	f := markRuleFaceWithMarks(t, []fonttest.Lookup{
+		// Named by no feature: only the rule below can reach it.
+		{Type: 4, Subtables: [][]byte{markSub}},
+		{Type: 8, Subtables: [][]byte{fonttest.ChainedContext3(
+			// Either a letter or the mark before it may precede the mark this
+			// rule places, since the second accent of a pair follows the first.
+			[][]int{{base, acute}}, [][]int{{acute, diaeresis}}, nil,
+			[]fonttest.SeqLookup{{At: 0, Lookup: 0}})}},
+	}, []int{1})
+
+	glyphs, _ := f.ShapeGlyphs("á̈")
+	if len(glyphs) != 3 {
+		t.Fatalf("shaped to %d glyphs, want 3", len(glyphs))
+	}
+	for i, g := range glyphs[1:] {
+		if g.XOffset != -200 || g.YOffset != 500 {
+			t.Errorf("mark %d is at (%v, %v), want (-200, 500) — both attach to the "+
+				"letter, and the second has to look past the first to find it",
+				i+1, g.XOffset, g.YOffset)
+		}
+	}
+}
+
+// TestAMarkToMarkReachedFromARuleStopsAtALetter is the same search the other
+// way round.
+//
+// Mark-to-mark stacks a mark on the glyph immediately before it, which has to
+// be a mark. The contextual path stepped over every letter it met instead, so a
+// mark with no mark before it went looking backwards through the text for one —
+// and stacked itself on a mark belonging to another word.
+func TestAMarkToMarkReachedFromARuleStopsAtALetter(t *testing.T) {
+	const (
+		base, other, acute, diaeresis = 1, 2, 3, 4
+	)
+	// A mark-to-mark subtable: the diaeresis stacks on the acute.
+	mkmk := fonttest.MarkAttachSubtable(
+		[]fonttest.MarkAttachment{
+			{Glyph: diaeresis, Class: 0, Anchor: fonttest.Anchor{X: 100, Y: 200}},
+		},
+		[]fonttest.BaseAttachment{
+			{Glyph: acute, Anchors: map[int]fonttest.Anchor{0: {X: 400, Y: 900}}},
+		},
+	)
+	f := markRuleFaceWithMarks(t, []fonttest.Lookup{
+		{Type: 6, Subtables: [][]byte{mkmk}},
+		{Type: 8, Subtables: [][]byte{fonttest.ChainedContext3(
+			nil, [][]int{{diaeresis}}, nil,
+			[]fonttest.SeqLookup{{At: 0, Lookup: 0}})}},
+	}, []int{1})
+
+	// An acute on the first letter and a diaeresis on the second. The two marks
+	// belong to different letters and must not stack.
+	glyphs, _ := f.ShapeGlyphs("áb̈")
+	if len(glyphs) != 4 {
+		t.Fatalf("shaped to %d glyphs, want 4", len(glyphs))
+	}
+	if glyphs[3].XOffset != 0 || glyphs[3].YOffset != 0 {
+		t.Errorf("the second mark is at (%v, %v); the glyph before it is a letter, "+
+			"so there is nothing for it to stack on",
+			glyphs[3].XOffset, glyphs[3].YOffset)
+	}
+
+	// And where there *is* a mark before it, it stacks.
+	glyphs, _ = f.ShapeGlyphs("á̈")
+	if len(glyphs) != 3 {
+		t.Fatalf("shaped to %d glyphs, want 3", len(glyphs))
+	}
+	if glyphs[2].XOffset == 0 && glyphs[2].YOffset == 0 {
+		t.Error("the diaeresis did not stack on the acute, so the test above " +
+			"proves nothing")
+	}
+}

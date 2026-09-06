@@ -276,6 +276,23 @@ func (f *Face) shapeGlyphsWith(s string, extra []string, ctx shapeContext) ([]Gl
 			before: ctx.before + s[:r.Start],
 			after:  s[r.End:] + ctx.after,
 			kerns:  ctx.kerns,
+			// What the caller turned off is off for every run of the string.
+			// It was dropped here, so a document that said "font-kerning: none"
+			// got it for a Latin word and not for the same word beside a Hebrew
+			// one — the same declaration, honoured or not by whether the
+			// paragraph happened to change direction.
+			features: ctx.features,
+		}
+		// The sides that may contribute *glyphs* belong to the pieces they
+		// touch: what precedes the whole string precedes its first run, and
+		// what follows it follows its last. They were dropped as well, so a
+		// ligature across an element boundary was formed for a run of one
+		// direction and not for the same run beside text of the other.
+		if r.Start == 0 {
+			inner.mergeBefore = ctx.mergeBefore
+		}
+		if r.End == len(s) {
+			inner.mergeAfter = ctx.mergeAfter
 		}
 		glyphs, gone := f.shapeGlyphsIn(piece, runScript(piece), r.RTL(), extra, inner)
 		missing += gone
