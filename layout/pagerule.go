@@ -115,12 +115,29 @@ type pageDeclarations struct {
 type pageSizeDeclaration struct {
 	width, height style.Unit
 	rank          int
+	spec          int
 	order         int
 	set           bool
 }
 
+// beatsSize is pageDeclaration.beats over the same three terms. The size is
+// decided the way a margin is, because it is a declaration in the same rule and
+// nothing about it is a different kind of question.
+func (d pageSizeDeclaration) beatsSize(o pageSizeDeclaration) bool {
+	if !o.set {
+		return true
+	}
+	if d.rank != o.rank {
+		return d.rank > o.rank
+	}
+	if d.spec != o.spec {
+		return d.spec > o.spec
+	}
+	return d.order > o.order
+}
+
 func takeSize(held *pageSizeDeclaration, d pageSizeDeclaration) {
-	if !held.set || d.rank > held.rank || (d.rank == held.rank && d.order > held.order) {
+	if d.beatsSize(*held) {
 		*held = d
 	}
 }
@@ -129,11 +146,12 @@ func takeSize(held *pageSizeDeclaration, d pageSizeDeclaration) {
 // deciding against another declaration of the same side needs.
 type pageDeclaration struct {
 	length style.Length
-	// rank is the importance-and-origin term of CSS Cascade 4 §6, and order is
-	// where the declaration was written. There is no specificity term between
-	// them: every rule read here selects every page, so all of them are equally
-	// specific and appearance is the only tie-break left.
+	// rank is the importance-and-origin term of CSS Cascade 4 §6, spec is how
+	// particular the rule's page selector was, and order is where the
+	// declaration was written. The three are consulted in that order, which is
+	// the cascade's own.
 	rank  int
+	spec  int
 	order int
 	set   bool
 }
@@ -145,6 +163,9 @@ func (d pageDeclaration) beats(o pageDeclaration) bool {
 	}
 	if d.rank != o.rank {
 		return d.rank > o.rank
+	}
+	if d.spec != o.spec {
+		return d.spec > o.spec
 	}
 	return d.order > o.order
 }
@@ -240,11 +261,13 @@ func pageRuleApplies(p pendingPage, asked style.Media, rec *Recorder) bool {
 
 // readPageRule reads the descriptors of one @page rule into the set.
 func readPageRule(p pendingPage, base PageSize, got *pageDeclarations, order *int, rec *Recorder) {
-	if len(nonWhitespace(p.rule.Prelude)) > 0 {
-		// ":first", ":left", ":right" and a named page all select some pages
-		// and not others. This engine composes one page, so there is no
-		// sequence for them to pick out of and no honest way to decide whether
-		// the rule applies to it.
+	spec, ok := pageSelector(p.rule.Prelude)
+	if !ok {
+		// ":left", ":right", ":blank" and a named page each pick pages out of a
+		// sequence this engine does not have: a document is one page, and which
+		// side of a sheet it would be printed on, or whether a page break left
+		// it empty, are questions about a run of pages. There is no honest way
+		// to decide whether such a rule applies to the one page there is.
 		rec.ReportDetail(Finding{
 			Rule:     RuleUnsupportedAtRule,
 			Source:   p.at(),
@@ -279,7 +302,8 @@ func readPageRule(p pendingPage, base PageSize, got *pageDeclarations, order *in
 		case "margin":
 			if spread, ok := pageMarginShorthand(d.Value); ok {
 				for i, l := range spread {
-					take(&got.sides[i], pageDeclaration{length: l, rank: rank, order: *order, set: true})
+					take(&got.sides[i], pageDeclaration{
+						length: l, rank: rank, spec: spec, order: *order, set: true})
 				}
 			} else {
 				badPageMargin(rec, p, d)
@@ -292,14 +316,15 @@ func readPageRule(p pendingPage, base PageSize, got *pageDeclarations, order *in
 				"margin-bottom": sideBottom, "margin-left": sideLeft,
 			}[strings.ToLower(d.Name)]
 			if l, ok := pageMarginValue(d.Value); ok {
-				take(&got.sides[at], pageDeclaration{length: l, rank: rank, order: *order, set: true})
+				take(&got.sides[at], pageDeclaration{
+					length: l, rank: rank, spec: spec, order: *order, set: true})
 			} else {
 				badPageMargin(rec, p, d)
 			}
 		case "size":
 			if w, h, ok := pageSizeValue(d.Value, base); ok {
 				takeSize(&got.size, pageSizeDeclaration{
-					width: w, height: h, rank: rank, order: *order, set: true})
+					width: w, height: h, rank: rank, spec: spec, order: *order, set: true})
 			} else {
 				badPageSize(rec, p, d)
 			}
@@ -605,4 +630,34 @@ func identName(part []css.ComponentValue) (string, bool) {
 		return "", false
 	}
 	return strings.ToLower(part[0].Token.Value), true
+}
+
+// pageSelector reads an @page rule's prelude: whether it selects the page this
+// engine composes, and how particular it was about it.
+//
+// A document is one page here, and that page is the first one — so ":first",
+// the rule a title page is written with, applies. What it is not is the *only*
+// page selector, and CSS 2.1 §13.2.4 orders them: a rule with a pseudo-page
+// beats one without, whichever was written first. So this returns a
+// specificity rather than a yes, and the cascade term goes between origin and
+// order exactly where the specification puts it.
+//
+// The ones refused are the ones that need a sequence: ":left" and ":right" are
+// the two sides of a leaf, ":blank" is a page a break left empty, and a named
+// page is chosen by a "page" property on content that would have to break onto
+// it. None of those is a question a single page can answer.
+func pageSelector(prelude []css.ComponentValue) (int, bool) {
+	parts := nonWhitespace(prelude)
+	if len(parts) == 0 {
+		return 0, true
+	}
+	// ":first" is a colon and an identifier, and nothing else this engine reads
+	// is two tokens long — so anything of another shape is refused before its
+	// spelling is looked at.
+	if len(parts) == 2 && parts[0].IsToken() && parts[0].Token.Kind == css.Colon &&
+		parts[1].IsToken() && parts[1].Token.Kind == css.Ident &&
+		strings.EqualFold(parts[1].Token.Value, "first") {
+		return 1, true
+	}
+	return 0, false
 }

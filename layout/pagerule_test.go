@@ -173,16 +173,19 @@ func TestAPageRuleIsNoLongerAnUnsupportedAtRule(t *testing.T) {
 	}
 }
 
-// TestAPageRuleThatSelectsSomePagesIsReported. ":first", ":left" and a named
-// page each pick pages out of a sequence, and this engine composes one page.
+// TestAPageRuleThatSelectsSomePagesIsReported. ":left", ":right", ":blank" and
+// a named page each pick pages out of a sequence this engine does not have.
 // Applying such a rule anyway would be a guess about which page this is;
 // dropping it silently would print a document with the margins of a page it was
 // never meant to have.
 func TestAPageRuleThatSelectsSomePagesIsReported(t *testing.T) {
 	for _, css := range []string{
-		`@page :first { margin: 2in }`,
 		`@page :left { margin: 2in }`,
+		`@page :right { margin: 2in }`,
+		`@page :blank { margin: 2in }`,
 		`@page narrow { margin: 2in }`,
+		`@page :first:left { margin: 2in }`,
+		`@page :fist { margin: 2in }`,
 	} {
 		if got := pageWidthPx(t, css, sheet600x800()); got != 800 {
 			t.Errorf("%s changed the page anyway: %gpx of content, want the untouched 800", css, got)
@@ -620,5 +623,60 @@ func TestAPageRuleSomewhereElseIsNotReadAsOne(t *testing.T) {
 		if got := pageWidthPx(t, css, sheet600x800()); got != 800 {
 			t.Errorf("%s was read as a page rule: %gpx of content, want 800", css, got)
 		}
+	}
+}
+
+// TestTheOnePageIsTheFirstPage. "@page :first { margin-top: 0 }" is how a title
+// page is written, and it is the commonest pseudo-page there is. A document is
+// one page in this engine and that page is the first one, so the rule applies.
+func TestTheOnePageIsTheFirstPage(t *testing.T) {
+	if got := pageWidthPx(t, `@page :first { margin: 1in }`, sheet600x800()); got != 608 {
+		t.Errorf("@page :first left %gpx of content, want 608", got)
+	}
+	// The spelling is a colon and the word, in either case, and nothing else.
+	if got := pageWidthPx(t, `@page :FIRST { margin: 1in }`, sheet600x800()); got != 608 {
+		t.Errorf("@page :FIRST left %gpx of content, want 608", got)
+	}
+}
+
+// TestAFirstPageRuleBeatsAPlainOneWhicheverWasWrittenFirst. CSS 2.1 §13.2.4
+// orders the page selectors, and a rule with a pseudo-page is the more
+// particular one — so this is a real cascade term and not a matter of where the
+// rules happen to sit. An engine deciding it by order alone gets the right
+// answer for the stylesheet that puts :first last and the wrong one for the
+// stylesheet that does not.
+func TestAFirstPageRuleBeatsAPlainOneWhicheverWasWrittenFirst(t *testing.T) {
+	after := `@page { margin: 1in } @page :first { margin: 2in }`
+	if got := pageWidthPx(t, after, sheet600x800()); got != 416 {
+		t.Errorf("with :first written last the content is %gpx, want 416", got)
+	}
+	before := `@page :first { margin: 2in } @page { margin: 1in }`
+	if got := pageWidthPx(t, before, sheet600x800()); got != 416 {
+		t.Errorf("with :first written first the content is %gpx, want 416", got)
+	}
+	// It is the *third* term, though: an important declaration in a user
+	// stylesheet still beats a more particular author rule, because importance
+	// and origin are settled before specificity is looked at.
+	got := Compose(Input{
+		HTML:    `<div id="a">x</div>`,
+		UserCSS: `@page { margin: 3in !important }`,
+		CSS:     []Stylesheet{{Source: `body { margin: 0 } @page :first { margin: 2in }`}},
+	}, sheet600x800())
+	frag := fragmentFor(got.Root, "a")
+	if frag == nil {
+		t.Fatal("the box is not on the page at all")
+	}
+	if w := frag.BorderRect.W.Px(); w != 224 {
+		t.Errorf(":first beat an important user rule: %gpx, want 224", w)
+	}
+}
+
+// TestAFirstPageRuleDecidesTheSizeToo. The size is a declaration in the same
+// rule and nothing about it is a different kind of question, so it is decided
+// by the same three terms.
+func TestAFirstPageRuleDecidesTheSizeToo(t *testing.T) {
+	css := `@page :first { size: 10in 5in } @page { size: 6in 5in }`
+	if got := pageSheetPx(t, css, sheet600x800()); got != 960 {
+		t.Errorf("the plain rule's size won over the :first rule's: %gpx, want 960", got)
 	}
 }
