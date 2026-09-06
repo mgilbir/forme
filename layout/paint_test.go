@@ -545,19 +545,26 @@ func TestClippedAwayMarkDoesNotTripTheOverflowPageGuard(t *testing.T) {
 	if got.Refused {
 		t.Fatalf("the document was refused: %v", got.Findings)
 	}
-	// The control: the same box without the clip does reach off the page, so
-	// the guard is one that can fire on this document.
+	if got.Scale != 1 {
+		t.Errorf("a page whose only oversize box is clipped away was scaled to %v; "+
+			"nobody can see what was clipped, so there is nothing to make room for", got.Scale)
+	}
+
+	// The control: the same box without the clip is content the page has to
+	// make room for, so it is measured and the document is scaled down. That is
+	// what says the clip is doing the work above rather than the box being
+	// missed either way.
 	loose := Compose(Input{HTML: doc, CSS: []Stylesheet{{Source: noDefaults + `
 		#a { width: 100px; height: 50px }
 		#i { background-color: #ff0000; width: 4000px; height: 4000px }`}}}, Options{})
-	var fired bool
+	if loose.Scale >= 1 {
+		t.Errorf("a four-thousand-pixel box on an A4 page was not scaled (%v), so the "+
+			"assertion above proves nothing", loose.Scale)
+	}
 	for _, f := range loose.Findings {
 		if f.Rule == RuleOverflowPage {
-			fired = true
+			t.Errorf("the scale was computed from the oversize box and the guard fired "+
+				"anyway, which means the two disagree: %s", f.Message)
 		}
-	}
-	if !fired {
-		t.Error("the unclipped control did not trip the page-overflow guard, so the " +
-			"assertion above proves nothing")
 	}
 }

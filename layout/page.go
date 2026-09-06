@@ -157,18 +157,7 @@ func Compose(in Input, opts Options) Composed {
 	// the library alone would set the page in the wrong faces.
 	root := Layout(built.Root, avail, built.Fonts, rec)
 
-	// The natural size is the far edge of the root's border box, not its margin
-	// box, and the difference is not cosmetic. A block-level box resolves an
-	// over-constrained width by widening its right margin, so the root's margin
-	// box is *always* exactly the page width — measuring that would report every
-	// document as needing precisely the space it was given, and scale-to-fit
-	// would never fire. The border box's far edges include the root's own left
-	// and top margins, since those move it, and exclude the one that was
-	// invented to make the arithmetic add up.
-	natural := Size{}
-	if root != nil {
-		natural = Size{W: root.BorderRect.Right(), H: root.BorderRect.Bottom()}
-	}
+	natural := naturalSize(root)
 
 	scale := fitScale(natural, avail, opts.AllowScaleUp)
 	checkScale(rec, scale, opts.MinScale)
@@ -183,6 +172,98 @@ func Compose(in Input, opts Options) Composed {
 		Refused:   rec.Failed() || buildRefused,
 		Truncated: rec.Truncated() || buildTruncated,
 	}
+}
+
+// naturalSize is what the content needed before any scaling: the far edge of
+// everything the document put on the page.
+//
+// It is measured over the whole fragment tree and not, as it was, over the
+// root's border box alone. The root's own width is the page's by construction —
+// a block-level box resolves an over-constrained width by widening its right
+// margin — so reading it reported every document as needing exactly the space
+// it was given, and horizontal scale-to-fit could not fire at all. A table two
+// thousand pixels wide on a six-hundred-pixel page was drawn at its full width
+// with no finding of any kind, which is the commonest way a document meant for
+// the screen fails on paper.
+//
+// Vertical overflow was never affected, because the root's height does grow
+// with its content. That is why the defect survived: the axis that reaches the
+// page bound in ordinary use worked, and the other one had never been measured.
+//
+// The border box rather than the margin box, for the reason the root's case
+// gives: the margin invented to make the arithmetic add up is not space the
+// content needed. The far edges include a box's own left and top margins, since
+// those move it.
+//
+// What an ancestor clips does not count. A box with "overflow: hidden" holding
+// something twice its width shows what fits and no more, so scaling the page
+// down to make room for the part nobody can see would shrink a document to fit
+// something it deliberately hid. Layout has already resolved every clip onto
+// the fragments by the time this runs, so the answer here is the same one the
+// painter uses rather than a second reading of the same properties.
+func naturalSize(root *Fragment) Size {
+	if root == nil {
+		return Size{}
+	}
+	var w, h style.Unit
+	take := func(r Rect, c Clip) {
+		if c.Active {
+			r = c.Rect.Intersect(r)
+		}
+		if r.Empty() {
+			return
+		}
+		if r.Right() > w {
+			w = r.Right()
+		}
+		if r.Bottom() > h {
+			h = r.Bottom()
+		}
+	}
+	var walk func(f *Fragment)
+	walk = func(f *Fragment) {
+		take(f.BorderRect, f.clipSelf)
+		content := f.ContentRect()
+		for _, line := range f.Lines {
+			// A line box is stated relative to the block's content box, and how
+			// far the text on it reached is stated relative to the line box.
+			// The second matters because a line box is the width it was given
+			// rather than the width its content took: a run that cannot be
+			// broken — "white-space: nowrap", one long word — reaches past it,
+			// and that reach is content needing more room like any other.
+			r := line.Rect
+			for _, run := range line.Runs {
+				if line.Anticlockwise {
+					// Along the line is *up* the page here, so a run past the
+					// line box's length reaches above it rather than below, and
+					// nothing above the page's top edge is a thing scaling can
+					// fix. See the painter, which measures this one back from
+					// the line box's foot.
+					continue
+				}
+				end := run.X.Add(run.Offset.X).Add(run.Width)
+				switch {
+				case line.Sideways && end > r.H:
+					r.H = end
+				case !line.Sideways && end > r.W:
+					r.W = end
+				}
+			}
+			r.X, r.Y = content.X.Add(r.X), content.Y.Add(r.Y)
+			take(r, f.clipContent)
+			// An inline box's own fragments hang from the line rather than from
+			// the block's children — one per line it was broken across — so the
+			// walk below never reaches them.
+			for _, box := range line.Boxes {
+				take(box.BorderRect, f.clipContent)
+			}
+		}
+		for _, c := range f.Children {
+			walk(c)
+		}
+	}
+	walk(root)
+	return Size{W: w, H: h}
 }
 
 // fitScale is §5's factor: one number, applied to everything.
@@ -277,24 +358,68 @@ func checkFontSizes(rec *Recorder, root *Fragment, scale, floorPt float64) {
 //
 // Content that overflows its own *box* is the other guardrail's business; this
 // is only about leaving the page.
+//
+// Every operation that puts a rectangle of ink on the page is checked, and not
+// only the fills. An <img> is a rectangle layout placed exactly as a <div> with
+// a background is, and checking one and not the other meant the same box off
+// the same page was refused or silent depending on whether what filled it was a
+// colour or a picture. Text is the one thing still not checked, for the reason
+// FillRect.Overhang gives: a glyph's ascender is ink no layout decision placed,
+// and refusing a document over two pixels of it is what that flag exists to
+// stop.
 func checkPageOverflow(rec *Recorder, ops []Op, avail Size, scale float64) {
 	page := Rect{W: avail.W.Div(scale), H: avail.H.Div(scale)}
+	// How far a rectangle reaches outside the page on its worst side. Measuring
+	// this rather than the far corner is what makes the report readable for a
+	// box at a negative coordinate: such a box "reaches" less far right than
+	// one inside the page, and picking the worst by its right and bottom edges
+	// alone named an innocent box and quoted its far corner as the problem.
+	excess := func(r Rect) style.Unit {
+		out := style.Unit(0)
+		for _, d := range [...]style.Unit{style.Unit(0).Sub(r.X), style.Unit(0).Sub(r.Y),
+			r.Right().Sub(page.W), r.Bottom().Sub(page.H)} {
+			if d > out {
+				out = d
+			}
+		}
+		return out
+	}
+
 	var worst Rect
+	var worstBy style.Unit
 	var found bool
+	consider := func(r Rect) {
+		if r.Empty() || page.Contains(r) {
+			return
+		}
+		if by := excess(r); !found || by > worstBy {
+			worst, worstBy, found = r, by, true
+		}
+	}
 
 	for _, op := range ops {
-		r, ok := op.(FillRect)
-		if !ok || r.Rect.Empty() || r.Overhang {
-			// A text decoration, and an inline box's background and border, are
-			// skipped for the reason FillRect.Overhang gives: this guard is about
-			// boxes the scale was computed from, and none of those is one.
-			continue
-		}
-		if page.Contains(r.Rect) {
-			continue
-		}
-		if !found || r.Rect.Right() > worst.Right() || r.Rect.Bottom() > worst.Bottom() {
-			worst, found = r.Rect, true
+		switch o := op.(type) {
+		case FillRect:
+			if o.Overhang {
+				// A text decoration, and an inline box's background and border,
+				// are skipped for the reason FillRect.Overhang gives: this
+				// guard is about boxes the scale was computed from, and none of
+				// those is one.
+				continue
+			}
+			consider(o.Rect)
+		case DrawImage:
+			r := o.Rect
+			if o.Clip.Active {
+				// What is drawn is what the clip admits, which is also what the
+				// scale was computed from.
+				r = o.Clip.Rect.Intersect(r)
+			}
+			consider(r)
+		case TileImage:
+			// The clip is the area painted; nothing is drawn outside it,
+			// including the part of a tile that reaches past it.
+			consider(o.Clip)
 		}
 	}
 	if !found {
@@ -303,8 +428,9 @@ func checkPageOverflow(rec *Recorder, ops []Op, avail Size, scale float64) {
 	rec.ReportDetail(Finding{
 		Rule: RuleOverflowPage,
 		Message: fmt.Sprintf(
-			"content reaches %.1f x %.1f px after scaling, outside the page's %.1f x %.1f; "+
-				"the scale-to-fit calculation did not account for it",
-			worst.Right().Px(), worst.Bottom().Px(), page.W.Px(), page.H.Px()),
+			"content occupies %.1f,%.1f to %.1f,%.1f px after scaling, reaching %.1f px "+
+				"outside the page's %.1f x %.1f; the scale-to-fit calculation did not account for it",
+			worst.X.Px(), worst.Y.Px(), worst.Right().Px(), worst.Bottom().Px(),
+			worstBy.Px(), page.W.Px(), page.H.Px()),
 	})
 }
