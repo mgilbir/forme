@@ -1156,7 +1156,7 @@ func (p *painter) paintContent(f *Fragment) {
 			// the content reaches outside — "cover" always does, and "none"
 			// does when the picture is larger than the box it was put in.
 			fit, _ := objectFitOf(f.Box.Style["object-fit"])
-			rect, clip := fitContent(box, naturalSizeOf(r), fit)
+			rect, clip := fitContent(box, naturalSizeOf(r), fit, objectPositionOf(f.Box))
 			p.clipping(clip, func() {
 				// Content that is one colour is a fill, not a picture stretched
 				// over the box. The two paint the same pixels and only one of

@@ -189,6 +189,16 @@ type Box struct {
 	// a <span>.
 	Replaced *ReplacedContent
 
+	// objectPos is where object-position puts that content inside the box,
+	// resolved once when the box is sized and nil until then.
+	//
+	// It is here rather than on the fragment because it is a property of the
+	// box and not of the geometry: the same box laid out twice resolves the
+	// same position. It has to be resolved in layout — a length in it may be an
+	// em or an ex, which needs the font and the face the paint walk no longer
+	// has — and the box is how the answer reaches the paint that uses it.
+	objectPos *bgPosPair
+
 	// Control is what makes a box a form control, or nil for every other box.
 	//
 	// It carries only what CSS cannot say — an intrinsic size in characters and

@@ -218,7 +218,7 @@ func TestObjectFitLeavesTheBoxWhereItWas(t *testing.T) {
 // and no ratio is the box itself — so there is nothing to fit and nothing to
 // centre, and any value paints what "fill" would.
 func TestObjectFitOnContentWithNoSizeOfItsOwnFillsTheBox(t *testing.T) {
-	got, _ := fitContent(Rect{W: bgpx(100), H: bgpx(100)}, Size{}, objectContain)
+	got, _ := fitContent(Rect{W: bgpx(100), H: bgpx(100)}, Size{}, objectContain, centredObject())
 	if r := pictureAt(got); r != [4]float64{0, 0, 100, 100} {
 		t.Errorf("content with no size of its own was fitted to %v, want the box", r)
 	}
@@ -229,7 +229,7 @@ func TestObjectFitOnContentWithNoSizeOfItsOwnFillsTheBox(t *testing.T) {
 // format can supply either — and a shape is all fitting needs.
 func TestObjectFitKeepsAShapeStatedOnlyAsARatio(t *testing.T) {
 	box := Rect{W: bgpx(100), H: bgpx(100)}
-	rect, _ := fitContent(box, naturalSizeOf(&ReplacedContent{Ratio: 2}), objectContain)
+	rect, _ := fitContent(box, naturalSizeOf(&ReplacedContent{Ratio: 2}), objectContain, centredObject())
 	if got := pictureAt(rect); got != [4]float64{0, 25, 100, 50} {
 		t.Errorf("a two-to-one ratio was contained as %v, want 0,25 100x50", got)
 	}
@@ -272,5 +272,141 @@ func TestAnObjectFitThisEngineCannotReadIsReported(t *testing.T) {
 		if f.Property == "object-fit" {
 			t.Errorf("object-fit: cover was reported: %s", f.Message)
 		}
+	}
+}
+
+// TestObjectPositionMovesTheContentInsideItsBox. The picture is 40 by 20 and
+// the box is 100 by 100 under "object-fit: none", so there is 60 of free space
+// across and 80 down for the position to divide.
+func TestObjectPositionMovesTheContentInsideItsBox(t *testing.T) {
+	cases := []struct {
+		css  string
+		want [4]float64
+	}{
+		// The initial value, and the same thing written out.
+		{``, [4]float64{30, 40, 40, 20}},
+		{`img { object-position: 50% 50% }`, [4]float64{30, 40, 40, 20}},
+		{`img { object-position: center }`, [4]float64{30, 40, 40, 20}},
+		// The corners. A percentage aligns the picture's own point with the
+		// box's, so 100% is the picture against the far edge and not the
+		// picture pushed a whole box-width out.
+		{`img { object-position: 0% 0% }`, [4]float64{0, 0, 40, 20}},
+		{`img { object-position: 100% 100% }`, [4]float64{60, 80, 40, 20}},
+		{`img { object-position: left top }`, [4]float64{0, 0, 40, 20}},
+		{`img { object-position: right bottom }`, [4]float64{60, 80, 40, 20}},
+		// One axis named, the other left at its middle.
+		{`img { object-position: right }`, [4]float64{60, 40, 40, 20}},
+		{`img { object-position: top }`, [4]float64{30, 0, 40, 20}},
+		// Lengths, and the four-value form that measures from the far edge.
+		{`img { object-position: 10px 5px }`, [4]float64{10, 5, 40, 20}},
+		{`img { object-position: right 10px bottom 5px }`, [4]float64{50, 75, 40, 20}},
+	}
+	for _, tc := range cases {
+		got := drawnPictureOf(t, `img { object-fit: none }`+tc.css)
+		if got != tc.want {
+			t.Errorf("%q put the picture at %v, want %v", tc.css, got, tc.want)
+		}
+	}
+}
+
+// TestObjectPositionMovesWhatCoverCutsOff. The position decides which part of
+// an overflowing picture is the part kept, which is the whole reason a
+// photograph library sets it: "cover" with "object-position: top" keeps the
+// heads in the frame.
+func TestObjectPositionMovesWhatCoverCutsOff(t *testing.T) {
+	// Cover is 200 by 100 in a 100 by 100 box, so there is -100 of free space
+	// across: 0% leaves the left edge of the picture at the left edge of the
+	// box and cuts the right half off.
+	if got := drawnPictureOf(t, `img { object-fit: cover; object-position: 0% 50% }`); got !=
+		[4]float64{0, 0, 200, 100} {
+		t.Errorf("cover at 0%% drew the picture at %v, want 0,0 200x100", got)
+	}
+	if got := drawnPictureOf(t, `img { object-fit: cover; object-position: 100% 50% }`); got !=
+		[4]float64{-100, 0, 200, 100} {
+		t.Errorf("cover at 100%% drew the picture at %v, want -100,0 200x100", got)
+	}
+}
+
+// TestObjectPositionDoesNothingUnderFill. There is no free space to divide when
+// the content is the box, so every position is the same page — which is what
+// makes it safe for the property to be read whatever the fit says.
+func TestObjectPositionDoesNothingUnderFill(t *testing.T) {
+	for _, css := range []string{`0% 0%`, `100% 100%`, `right bottom`} {
+		got := drawnPictureOf(t, `img { object-fit: fill; object-position: `+css+` }`)
+		if got != [4]float64{0, 0, 100, 100} {
+			t.Errorf("fill with object-position: %s drew the picture at %v, want the box", css, got)
+		}
+	}
+}
+
+// TestAnObjectPositionThisEngineCannotReadIsReported, and leaves the content
+// centred — which is the initial value and what the finding says happened.
+func TestAnObjectPositionThisEngineCannotReadIsReported(t *testing.T) {
+	res := mapResolver{"wide.png": encodePNG(t, 40, 20)}
+	got := Compose(Input{
+		HTML:      objectFitDoc,
+		Resources: res,
+		CSS: []Stylesheet{{Source: objectFitCSS +
+			` img { object-fit: none; object-position: sideways }`}},
+	}, Options{})
+	found := false
+	for _, f := range got.Findings {
+		if f.Property == "object-position" && strings.Contains(f.Message, "the content was centred") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("an unreadable object-position was not reported; findings were %v", got.Findings)
+	}
+	if at := drawnPictureOf(t, `img { object-fit: none; object-position: sideways }`); at !=
+		[4]float64{30, 40, 40, 20} {
+		t.Errorf("an unreadable object-position drew the picture at %v, want it centred", at)
+	}
+
+	// A value it reads is not reported, or the finding says nothing about
+	// which values are understood.
+	got = Compose(Input{
+		HTML:      objectFitDoc,
+		Resources: res,
+		CSS:       []Stylesheet{{Source: objectFitCSS + ` img { object-position: right 10px bottom 5px }`}},
+	}, Options{})
+	for _, f := range got.Findings {
+		if f.Property == "object-position" {
+			t.Errorf("a position this engine reads was reported: %s", f.Message)
+		}
+	}
+}
+
+// TestObjectFitAndPositionDoNotInherit. Neither property inherits, and a
+// registry entry that says one does is a change nothing else would show: a
+// stylesheet setting the pair on a wrapper — which is where a page's rules for
+// a gallery are written — would move every picture inside it.
+func TestObjectFitAndPositionDoNotInherit(t *testing.T) {
+	res := mapResolver{"wide.png": encodePNG(t, 40, 20)}
+	at := func(css string) [4]float64 {
+		t.Helper()
+		ops := paintWith(t, res, `<div id="w"><img id="i" src="wide.png"></div>`, objectFitCSS+css)
+		var found []DrawImage
+		for _, op := range ops {
+			if d, ok := op.(DrawImage); ok {
+				found = append(found, d)
+			}
+		}
+		if len(found) != 1 {
+			t.Fatalf("%d pictures drawn, want 1", len(found))
+		}
+		return pictureAt(found[0].Rect)
+	}
+
+	// The fit: an inherited "none" would draw the picture at its own 40 by 20.
+	if got := at(` #w { object-fit: none }`); got != [4]float64{0, 0, 100, 100} {
+		t.Errorf("the picture came out at %v; the wrapper's object-fit reached it", got)
+	}
+	// The position, which needs a fit on the picture itself to be visible at
+	// all — under "fill" there is no free space for any position to divide, so
+	// a test that let the fit inherit as well would prove nothing about it.
+	if got := at(` #w { object-position: left top } img { object-fit: none }`); got !=
+		[4]float64{30, 40, 40, 20} {
+		t.Errorf("the picture came out at %v; the wrapper's object-position reached it, want it centred", got)
 	}
 }

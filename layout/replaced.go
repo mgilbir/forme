@@ -71,6 +71,7 @@ func (l *layouter) replacedSize(b *Box, containing, cbHeight style.Unit, cbDefin
 	// replaced box goes through, and a value the engine cannot read is worth
 	// saying so where every other finding about a box is raised.
 	l.checkObjectFit(b)
+	l.resolveObjectPosition(b)
 
 	width, hasWidth := l.lengthOf(b, "width", containing)
 	height, hasHeight := l.verticalLength(b, "height", cbHeight, cbDefinite)

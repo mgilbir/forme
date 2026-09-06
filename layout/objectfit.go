@@ -3,6 +3,7 @@ package layout
 import (
 	"strings"
 
+	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -84,12 +85,21 @@ func objectFitOf(value string) (objectFit, bool) {
 // Deciding it here as well would be a second answer to a settled question, and
 // one no test could tell from the first.
 //
-// The content is centred in the box, which is object-position's initial value
-// of "50% 50%" and the only placement this engine reads. A half-pixel is not
-// rounded away: the layout unit is finer than a pixel and a backend that wants
-// a whole one is the backend that should round.
-func fitContent(box Rect, natural Size, fit objectFit) (Rect, Clip) {
+// pos is where in the box the content sits, and is the same rule
+// background-position resolves by — a percentage aligns the content's own
+// corresponding point with the box's, so 50% puts the middle of the picture at
+// the middle of the box rather than moving it half the box's width. That is
+// what makes the initial "50% 50%" a centring and what makes "100%" the right
+// edge rather than a picture pushed entirely outside.
+//
+// A half-pixel is not rounded away: the layout unit is finer than a pixel and a
+// backend that wants a whole one is the backend that should round.
+func fitContent(box Rect, natural Size, fit objectFit, pos bgPosPair) (Rect, Clip) {
 	if fit == objectFill {
+		// The content is the box, so there is no free space for a position to
+		// divide and nowhere else for it to go. Falling through would give the
+		// same answer — place() of no free space is nought at every percentage
+		// — and this says so without depending on that.
 		return box, Clip{}
 	}
 	if natural.W <= 0 || natural.H <= 0 {
@@ -114,8 +124,8 @@ func fitContent(box Rect, natural Size, fit objectFit) (Rect, Clip) {
 	}
 
 	out := Rect{
-		X: box.X.Add(box.W.Sub(size.W).Div(2)),
-		Y: box.Y.Add(box.H.Sub(size.H).Div(2)),
+		X: box.X.Add(pos.x.place(box.W, size.W)),
+		Y: box.Y.Add(pos.y.place(box.H, size.H)),
 		W: size.W, H: size.H,
 	}
 	return out, Clip{Rect: box, Active: true}
@@ -177,4 +187,55 @@ func (l *layouter) checkObjectFit(b *Box) {
 		Path:     PathOf(b.Element),
 		Property: "object-fit",
 	})
+}
+
+// centredObject is object-position's initial value, "50% 50%".
+//
+// It is built rather than parsed because it is the answer for every box that
+// never reached the resolution below — one whose sizing took a path that does
+// not go through replacedSize — and a default that has to be parsed is a
+// default that can fail.
+func centredObject() bgPosPair {
+	half := style.Length{Kind: style.LengthPercent, Percent: 50}
+	return bgPosPair{x: bgPos{offset: half}, y: bgPos{offset: half}}
+}
+
+// objectPositionOf is where a box's content sits inside it.
+func objectPositionOf(b *Box) bgPosPair {
+	if b == nil || b.objectPos == nil {
+		return centredObject()
+	}
+	return *b.objectPos
+}
+
+// resolveObjectPosition reads object-position onto the box, reporting a value
+// it cannot read.
+//
+// The parsing is the one background-position uses, because the two properties
+// take the same <position> and a second reading of that grammar is a second set
+// of answers to "what does 'left -1em' mean". A value it refuses leaves the
+// content centred, which is the initial value and the placement a document that
+// said nothing gets.
+func (l *layouter) resolveObjectPosition(b *Box) {
+	if b.objectPos != nil {
+		return
+	}
+	raw := strings.TrimSpace(b.Style["object-position"])
+	pos := centredObject()
+	if raw != "" {
+		vals, _ := css.ParseComponentValues(raw)
+		if got, ok := l.parsePosition(b, vals); ok {
+			pos = got
+		} else {
+			l.reportOnce("object-position:"+raw, Finding{
+				Rule:   RuleUnsupportedValue,
+				Source: AtHTML(offsetOf(b)),
+				Message: "the value " + quoteValue(raw) + " of object-position" +
+					" is not one this engine reads; the content was centred",
+				Path:     PathOf(b.Element),
+				Property: "object-position",
+			})
+		}
+	}
+	b.objectPos = &pos
 }
