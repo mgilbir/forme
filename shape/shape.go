@@ -95,8 +95,10 @@ func (f *Face) MeasureShapedMergedSpan(s string, size float64,
 		return 0, MeasureGlyphs(glyphs, size)
 	}
 	outerBefore, outerAfter := GroupContext(before, after, mergeBefore, mergeAfter)
-	whole := f.ShapeGroup(mergeBefore+s+mergeAfter, outerBefore, outerAfter, kerns, off)
-	return GroupSpan(whole, len(mergeBefore), len(mergeBefore)+len(s), size)
+	text := mergeBefore + s + mergeAfter
+	whole := f.ShapeGroup(text, outerBefore, outerAfter, kerns, off)
+	return GroupSpan(GroupAdvances(whole, len(text)),
+		len(mergeBefore), len(mergeBefore)+len(s), size)
 }
 
 // GroupContext is the text either side of a *group* that shapes it, given the
@@ -118,24 +120,54 @@ func GroupContext(before, after, mergeBefore, mergeAfter string) (outerBefore, o
 	return outerBefore, outerAfter
 }
 
-// GroupSpan is where one run sits within a group already shaped: the advance
-// from the group's start to the run's start, and to its end.
+// GroupAdvances is a group's shaped glyphs turned into what every question
+// about a stretch of it needs: the advance of everything before each byte
+// offset, in font units, with one entry per byte of the group's text and one
+// past the end.
+//
+// It is built once per shaping because the alternative is a walk of every glyph
+// per question, and the questions are asked a logarithmic number of times per
+// line for a word broken across many lines — which put the walk back into the
+// inner loop it was taken out of. Bytes rather than glyphs, so that a caller
+// indexes it with the offsets it already has, and a prefix sum rather than a
+// search, so that a stretch is two lookups.
+//
+// The glyphs need not be in logical order: a right-to-left run comes back the
+// way the pen meets it, and each glyph is charged to its own cluster here, so
+// the order it arrived in does not matter.
+func GroupAdvances(whole []Glyph, bytes int) []float64 {
+	cum := make([]float64, bytes+1)
+	for _, g := range whole {
+		if g.Cluster >= 0 && g.Cluster < bytes {
+			cum[g.Cluster+1] += g.XAdvance
+		}
+	}
+	for i := 1; i <= bytes; i++ {
+		cum[i] += cum[i-1]
+	}
+	return cum
+}
+
+// GroupSpan is where one stretch sits within a group already measured by
+// GroupAdvances: the advance from the group's start to the stretch's start, and
+// to its end.
 //
 // lo and hi are byte offsets into the group's text. The two ends are returned
 // rather than the difference so that a caller can round each of them once —
 // every run of a group then begins where the one before it ended, and the
 // widths add up to the group's own rounded width.
-func GroupSpan(whole []Glyph, lo, hi int, size float64) (head, through float64) {
-	var headAdv, mine float64
-	for _, g := range whole {
-		switch {
-		case g.Cluster < lo:
-			headAdv += g.XAdvance
-		case g.Cluster < hi:
-			mine += g.XAdvance
-		}
+func GroupSpan(cum []float64, lo, hi int, size float64) (head, through float64) {
+	return at(cum, lo) * size / 1000, at(cum, hi) * size / 1000
+}
+
+func at(cum []float64, i int) float64 {
+	switch {
+	case i <= 0 || len(cum) == 0:
+		return 0
+	case i >= len(cum):
+		return cum[len(cum)-1]
 	}
-	return headAdv * size / 1000, (headAdv + mine) * size / 1000
+	return cum[i]
 }
 
 // ShapeGlyphsInContextOrAcross picks between the two by whether a pair spanning

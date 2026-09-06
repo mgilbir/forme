@@ -3,6 +3,9 @@ package paragraph
 import (
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
+	"sort"
+
+	"github.com/mgilbir/forme/segment"
 )
 
 // Breaker is the half of inline layout that is about text rather than about
@@ -38,7 +41,10 @@ type Breaker struct {
 	// grouped memoizes the glyphs of a whole merge group, which every run of
 	// that group needs and which every run of it used to shape for itself. See
 	// mergedSpan.
-	grouped map[groupKey][]shape.Glyph
+	grouped map[groupKey][]float64
+	// bounds memoizes where a divided run may be cut, so that a word broken
+	// across many lines has its clusters found once. See Breaker.clustersOf.
+	bounds map[string][]int
 	// report is where a run that would not fit is said to have overflowed.
 	//
 	// It is an interface because the finding wants to name the element the run
@@ -195,16 +201,107 @@ func (br *Breaker) mergedSpan(face *shape.Face, text string, size float64,
 		face: face, whole: how.MergeBefore + text + how.MergeAfter,
 		before: before, after: after, kerns: how.ContextKerns, off: how.Off,
 	}
-	glyphs, ok := br.grouped[key]
-	if !ok {
-		glyphs = face.ShapeGroup(key.whole, before, after, how.ContextKerns, how.Off)
-		if br.grouped == nil {
-			br.grouped = map[groupKey][]shape.Glyph{}
-		}
-		br.grouped[key] = glyphs
-	}
-	return shape.GroupSpan(glyphs, len(how.MergeBefore),
+	return shape.GroupSpan(br.advances(key), len(how.MergeBefore),
 		len(how.MergeBefore)+len(text), size)
+}
+
+// spanWidth is the width of one stretch of an item, taken from a single shaping
+// of the whole of it.
+//
+// It is what makes a word broken across many lines linear work. Measured
+// piecewise, the rest of the word is shaped again at every line it is cut at —
+// twenty thousand characters in two-hundred-pixel lines shaped eleven million
+// characters, twelve seconds and nine gigabytes for one long word. Shaped once,
+// each line's question is a sum over the glyphs it covers.
+//
+// The item's own text is the string, so the stretch's context is the rest of
+// the item and comes from the text itself, exactly as it does for a merge
+// group; the outer context is the item's own. piece is the item the width is
+// for, and is what the fallback measures when the shaping cannot be shared —
+// an upright run, whose advance is a count of characters rather than a sum of
+// glyphs, and a run that is part of a merge group, whose string is not its own.
+func (br *Breaker) spanWidth(item Item, from, to int, piece Item) style.Unit {
+	if item.Face == nil || item.Upright || item.MergePre != "" || item.MergePost != "" {
+		return br.MeasureSpacedInContext(item.Face, piece.Text, item.Size, item.Spacing,
+			piece.shaping())
+	}
+	whole, base := item.Text, 0
+	before, after, kerns := item.PreContext, item.PostContext, item.ContextKerns
+	if c := item.Cut; c != nil {
+		// Already a stretch of a longer run: the shaping to share is that run's,
+		// and this stretch sits inside it. See Item.Cut.
+		whole, base = c.Text, item.CutAt
+		before, after, kerns = c.Before, c.After, c.Kerns
+	}
+	key := groupKey{
+		face: item.Face, whole: whole, before: before, after: after,
+		kerns: kerns, off: item.Off,
+	}
+	// The two ends rounded separately, so that the pieces of one item add up to
+	// the item's own rounded width. See shape.GroupSpan.
+	head, through := shape.GroupSpan(br.advances(key), base+from, base+to, item.Size.Px())
+	lo, _ := style.FromPx(head)
+	hi, _ := style.FromPx(through)
+	return hi.Sub(lo).Add(SpacingAdvance(piece.Text, item.Spacing))
+}
+
+// clusters is where an item's text may be cut, as offsets into that item's own
+// text, drawn from one analysis of the run the item is a stretch of.
+type clusters struct {
+	// all is the whole run's boundaries, base where this item begins in the
+	// run, and from the index of the first boundary inside the item.
+	all  []int
+	base int
+	from int
+}
+
+func (c clusters) len() int     { return len(c.all) - c.from }
+func (c clusters) at(i int) int { return c.all[c.from+i] - c.base }
+
+// clustersOf finds where an item may be cut.
+//
+// A run divided for a line is divided again on the next line, and the tail is
+// what is left of the same run — so its cluster boundaries are the run's, taken
+// from where the tail begins. Found from the tail's own text instead they were
+// found again for every line, over everything still to come: a word of twenty
+// thousand characters in narrow lines analysed eleven million characters and
+// allocated a boundary list the length of the remaining word each time.
+func (br *Breaker) clustersOf(item Item) clusters {
+	if item.Cut == nil {
+		return clusters{all: segment.Boundaries(nil, item.Text)}
+	}
+	// Keyed on the run's text rather than on the RunCut, because a line that
+	// resumes inside a word divides the *original* item again from the offset
+	// it reached — so the two lines name the same run through two different
+	// values, and only the text they share tells them apart.
+	all, ok := br.bounds[item.Cut.Text]
+	if !ok {
+		all = segment.Boundaries(nil, item.Cut.Text)
+		if br.bounds == nil {
+			br.bounds = map[string][]int{}
+		}
+		br.bounds[item.Cut.Text] = all
+	}
+	base := item.CutAt
+	// The boundaries strictly inside this stretch: the one at its own start is
+	// not a place to cut it, and neither is anything at or past its end.
+	// Boundaries leaves both ends of a text out for the same reason.
+	end := sort.SearchInts(all, base+len(item.Text))
+	return clusters{all: all[:end], base: base, from: sort.SearchInts(all, base+1)}
+}
+
+// advances is the group's cumulative advances, shaped once and kept.
+func (br *Breaker) advances(key groupKey) []float64 {
+	if cum, ok := br.grouped[key]; ok {
+		return cum
+	}
+	glyphs := key.face.ShapeGroup(key.whole, key.before, key.after, key.kerns, key.off)
+	cum := shape.GroupAdvances(glyphs, len(key.whole))
+	if br.grouped == nil {
+		br.grouped = map[groupKey][]float64{}
+	}
+	br.grouped[key] = cum
+	return cum
 }
 
 // groupKey identifies one shaping of one merge group: everything that decides
