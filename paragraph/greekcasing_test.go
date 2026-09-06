@@ -105,6 +105,40 @@ func TestNonGreekTextIsUntouchedByTheGreekRule(t *testing.T) {
 	}
 }
 
+// TestTheRestOfAGreekRunIsCasedAsItWouldBeAnywhere.
+//
+// The check above is only about a run with no Greek in it at all. A run with
+// one Greek character took a path of its own for every character in it, and
+// that path knew only the simple one-to-one mappings — so a German word beside
+// a Greek one kept its ß through the capitals, a Latin ligature stayed a
+// ligature, and Georgian, which is not uppercased at all, was.
+//
+// The mappings are not a tailoring: SpecialCasing.txt is the same in every
+// language, and a run tagged Greek is still a run of text.
+func TestTheRestOfAGreekRunIsCasedAsItWouldBeAnywhere(t *testing.T) {
+	for _, tc := range []struct{ text, want, what string }{
+		{"straße ά", "STRASSE Α", "a German word beside a Greek one"},
+		{"ﬁnale ά", "FINALE Α", "a Latin fi ligature, which is two letters in capitals"},
+		{"ǳ ά", "Ǳ Α", "a digraph, which has a title case of its own"},
+		{"ﬃ ά", "FFI Α", "three letters written as one"},
+		{"ბა ά", "ბა Α", "Georgian Mkhedruli, which has no capitals"},
+		{"ﬅ straße ό,τι", "ST STRASSE Ο,ΤΙ", "all three rules in one run"},
+	} {
+		if got := casedIn(t, tc.text, TransformUppercase, "el"); got != tc.want {
+			t.Errorf("%s: %q became %q, want %q", tc.what, tc.text, got, tc.want)
+		}
+		// And the same text under no language at all gives the same answer for
+		// everything but the Greek, which is the point: only the accents are
+		// tailored.
+		plain, _ := TransformText(tc.text, TransformUppercase, false, "")
+		if got := casedIn(t, tc.text, TransformUppercase, "el"); len(got) != len(plain) {
+			t.Errorf("%s: Greek gives %q (%d bytes) and no language gives %q (%d); "+
+				"the tailoring changed more than the accents",
+				tc.what, got, len(got), plain, len(plain))
+		}
+	}
+}
+
 // TestDutchCapitalisesBothLettersOfIJ. IJ is one letter of the Dutch alphabet
 // written as two, and "Ijsland" is as wrong as it would look in English.
 func TestDutchCapitalisesBothLettersOfIJ(t *testing.T) {
