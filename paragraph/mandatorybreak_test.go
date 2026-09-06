@@ -86,3 +86,57 @@ func TestAMandatoryBreakIsStillACharacter(t *testing.T) {
 			"that ends a line is still drawn", text)
 	}
 }
+
+// TestAMandatoryBreakKeepsItsCharacter is the other half of the distinction
+// above, and the one a fuzzer found: the break a mandatory-break character
+// produces carries no text, because the character stays in the piece before it.
+//
+// A segment break is not the same: the piece for a preserved line feed carries
+// the newline it was made from. The two look alike — both are Segment pieces —
+// and spelling them alike is what put a newline into a document that had none.
+// See spellPieces in invariants_test.go, and testdata/fuzz/FuzzSplitAtBreaks,
+// where the input that found it is kept.
+func TestAMandatoryBreakKeepsItsCharacter(t *testing.T) {
+	for _, text := range []string{"\v", "\f", "\u0085", "\u2028", "\u2029", "a\vb"} {
+		for _, value := range []string{"pre", "pre-wrap", "break-spaces"} {
+			pieces, _ := SplitAtBreaks(text, WhiteSpaceOf(value), WordBreak{},
+				LineBreak{}, Hyphens{}, WritingSystemOther)
+			var spelled string
+			breaks := 0
+			for _, p := range pieces {
+				spelled += p.Text
+				if p.Segment {
+					breaks++
+					if p.Text != "" {
+						t.Errorf("%q under %s: the break carries %q, and the "+
+							"character it came from is in the piece before it",
+							text, value, p.Text)
+					}
+				}
+			}
+			if spelled != text {
+				t.Errorf("%q under %s: the pieces spell %q — a preserving value "+
+					"loses and invents nothing", text, value, spelled)
+			}
+			if breaks != 1 {
+				t.Errorf("%q under %s made %d breaks, want 1", text, value, breaks)
+			}
+		}
+	}
+
+	// And the segment break it is not: a preserved newline *is* its piece's
+	// text, so the same reading spells the input back.
+	pieces, _ := SplitAtBreaks("a\nb", WhiteSpaceOf("pre"), WordBreak{}, LineBreak{},
+		Hyphens{}, WritingSystemOther)
+	var spelled string
+	for _, p := range pieces {
+		spelled += p.Text
+		if p.Segment && p.Text != "\n" {
+			t.Errorf("the piece for a preserved newline carries %q, want the "+
+				"newline it was made from", p.Text)
+		}
+	}
+	if spelled != "a\nb" {
+		t.Errorf("a preserved newline spelled %q", spelled)
+	}
+}

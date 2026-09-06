@@ -187,21 +187,14 @@ func FuzzSplitAtBreaks(f *testing.F) {
 		w := whiteSpaces[int(mode)%len(whiteSpaces)]
 		pieces, _ := SplitAtBreaks(text, w.ws, WordBreak{}, LineBreak{}, Hyphens{}, WritingSystemOther)
 
-		var b strings.Builder
-		for _, p := range pieces {
-			if p.Segment {
-				b.WriteString("\n")
-				continue
-			}
-			b.WriteString(p.Text)
-		}
-		if visible(b.String()) != visible(text) {
+		spelled := spellPieces(pieces)
+		if visible(spelled) != visible(text) {
 			t.Fatalf("%q under %s: the pieces spell %q, want the visible characters "+
-				"of the input", text, w.name, b.String())
+				"of the input", text, w.name, spelled)
 		}
-		if !w.ws.Collapse && asSegmented(b.String()) != asSegmented(text) {
+		if !w.ws.Collapse && asSegmented(spelled) != asSegmented(text) {
 			t.Fatalf("%q under %s: the pieces spell %q and nothing is collapsed under "+
-				"this value, so nothing may change", text, w.name, b.String())
+				"this value, so nothing may change", text, w.name, spelled)
 		}
 		// A piece carrying no text is a segment break and nothing else: an empty
 		// piece that is not one would be a break opportunity offered at a place

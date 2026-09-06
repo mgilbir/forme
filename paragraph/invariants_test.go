@@ -197,6 +197,28 @@ func visible(s string) string {
 	return b.String()
 }
 
+// spellPieces is the text the pieces come to, read back in order.
+//
+// Every piece is spelled by its own Text and none of them by what it is *for*,
+// which is the whole of the correction this made: a segment break is not always
+// a newline. §4.1.1's is — the piece for a preserved line feed carries the "\n"
+// it was made from — but the break a mandatory-break character produces carries
+// no text at all, because the character itself stays in the piece before it.
+// U+000B, U+000C, U+001C, U+001D, U+001E, U+0085, U+2028 and U+2029 all end a
+// line by UAX #14's LB4 and LB5 *and* are rendered, which is what
+// mandatorybreak_test.go is about and what the suite's control-chars documents
+// ask for.
+//
+// Spelling those as "\n" invented a character that was never in the input, and
+// an oracle that invents one cannot see a splitter that loses one.
+func spellPieces(pieces []Piece) string {
+	var b strings.Builder
+	for _, p := range pieces {
+		b.WriteString(p.Text)
+	}
+	return b.String()
+}
+
 // asSegmented is the input as §4.1.1 hands it to the cutting, with the two
 // normalisations that section defines already applied.
 //
@@ -658,15 +680,7 @@ func TestSplittingKeepsTheTextExactly(t *testing.T) {
 	for _, w := range whiteSpaces {
 		for _, tc := range texts {
 			pieces, _ := SplitAtBreaks(tc.text, w.ws, WordBreak{}, LineBreak{}, Hyphens{}, WritingSystemOther)
-			var b strings.Builder
-			for _, p := range pieces {
-				if p.Segment {
-					b.WriteString("\n")
-					continue
-				}
-				b.WriteString(p.Text)
-			}
-			got := b.String()
+			got := spellPieces(pieces)
 			if visible(got) != visible(tc.text) {
 				t.Errorf("%s under white-space %s: the pieces spell %q, want the visible "+
 					"characters of %q — splitting decides where a line may end and must "+
