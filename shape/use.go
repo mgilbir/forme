@@ -686,7 +686,42 @@ func (sh shaper) shapeUseCluster(buf []Glyph, info *[]useInfo, start, end int,
 		}
 	}
 	apply(useBasicFeatures)
-	apply(useRephFeature)
+
+	// 'rphf' is the font saying "the consonant at the head of this cluster is
+	// drawn as a repha" — a mark written before the letter it belongs to and
+	// drawn after the base of the syllable. Which consonant has one is not
+	// something the categories know: a repha is a form and not a character, and
+	// only the font says which of its letters is given one. So it is read the
+	// way 'pref' is, off where the feature applied, and whatever it applied to
+	// is a repha from here on — which is what the reordering below looks for.
+	// Without that, the feature ran, the glyph changed, and the repha stayed
+	// where the characters put it: in front of the letter, on the wrong side of
+	// the whole syllable.
+	//
+	// And it is offered only the head of the cluster. The model gives the
+	// feature the first three glyphs, or just the first where that is already a
+	// repha; a rule matching further in is matching a letter in the middle of a
+	// syllable, which is not what a repha is. It may still *look* past them,
+	// because a font may write the context it needs.
+	for _, tag := range useRephFeature {
+		lookups := sh.l.featureLookups[tag]
+		if len(lookups) == 0 {
+			continue
+		}
+		until := start + 3
+		if start < len(*info) && (*info)[start].cat == useR {
+			until = start + 1
+		}
+		if until > end {
+			until = end
+		}
+		var d, at int
+		buf, d, at = sh.applyUseFeatureIn(buf, info, lookups, start, until, end)
+		total, end = total+d, end+d
+		if at >= 0 && at < len(*info) {
+			(*info)[at].cat = useR
+		}
+	}
 
 	// 'pref' is the font saying "this mark has a form that goes before the
 	// letter". Which mark it said it about is not something the categories
@@ -782,6 +817,18 @@ func (sh shaper) applyUseFeature(buf []Glyph, info *[]useInfo, lookups []int, st
 // applyUseFeatureAt is applyUseFeature, also reporting the first position a
 // lookup applied at — which is how 'pref' is read. It is -1 when none did.
 func (sh shaper) applyUseFeatureAt(buf []Glyph, info *[]useInfo, lookups []int, start, end int) ([]Glyph, int, int) {
+	return sh.applyUseFeatureIn(buf, info, lookups, start, end, end)
+}
+
+// applyUseFeatureIn is the general form: the lookups are offered the positions
+// in [start, until) and may match as far as end.
+//
+// The two edges are separate because 'rphf' needs them to be. It applies at the
+// head of the cluster and nowhere else, and a rule that says "this letter, when
+// what follows it is such and such" is stating context it must be allowed to
+// read — so what is bounded is where a rule may *start*, not how far it may
+// look.
+func (sh shaper) applyUseFeatureIn(buf []Glyph, info *[]useInfo, lookups []int, start, until, end int) ([]Glyph, int, int) {
 	total, step, first := 0, 0, -1
 	sh.onResize = func(at, d int) {
 		*info = respliceUseInfo(*info, at, d)
@@ -807,7 +854,7 @@ func (sh shaper) applyUseFeatureAt(buf []Glyph, info *[]useInfo, lookups []int, 
 	}
 	sh.floor = start
 	for _, idx := range lookups {
-		for i := start; i < end && i < len(buf); {
+		for i := start; i < until && i < len(buf); {
 			step = 0
 			// The cluster's far edge, as it stands now. It moves: a lookup that
 			// takes a glyph apart makes the cluster longer, and the next lookup
@@ -822,6 +869,7 @@ func (sh shaper) applyUseFeatureAt(buf []Glyph, info *[]useInfo, lookups []int, 
 			consumed, out := sh.applyGSUBAt(idx, buf, i, 0)
 			buf = out
 			end += step
+			until += step
 			total += step
 			if consumed > 0 {
 				if first < 0 {
