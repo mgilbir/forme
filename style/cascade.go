@@ -410,10 +410,47 @@ func (s *Styler) prepareMedia(rule css.Rule, parent []css.ComponentValue, origin
 	if !matches || !rule.HasBlock {
 		return
 	}
-	inner, _ := css.ParseRulesFromValues(rule.Block)
+	if parent != nil {
+		s.prepareNestedConditional(rule, parent, origin, out, order)
+		return
+	}
+	inner, errs := css.ParseRulesFromValues(rule.Block)
+	for _, e := range errs {
+		// The errors inside a block are the author's to act on exactly as the
+		// ones outside it are, and they were thrown away here.
+		s.report(Finding{Offset: e.Offset, Message: e.Message, Unsupported: e.Unsupported})
+	}
 	for _, r := range inner {
 		s.prepareRule(r, parent, origin, out, order)
 	}
+}
+
+// prepareNestedConditional prepares an @media written *inside* a style rule.
+//
+// The block holds a style block rather than a rule list — CSS Conditional Rules
+// 5 §3 — which is to say declarations, which belong to the rule the @media is
+// written inside, and rules, which are relative to it. Read as a rule list, the
+// way the top-level form is, "color: red" becomes a qualified rule with no
+// block and is discarded by the parser: "p { color: blue; @media print { color:
+// red } }" was blue on paper, with the error going nowhere and no finding
+// raised. That is the shape every stylesheet written since nesting arrived
+// uses.
+//
+// The selectors are the enclosing rule's, already desugared by the caller, so
+// the declarations land on exactly the elements the rule they were written in
+// lands on. The order counter runs on through, which is what puts a declaration
+// inside the @media after one written above it.
+func (s *Styler) prepareNestedConditional(rule css.Rule, parent []css.ComponentValue,
+	origin Origin, out *[]preparedRule, order *int) {
+
+	sels, errs, ok := css.ParseSelectorList(parent)
+	for _, e := range errs {
+		s.report(Finding{Offset: e.Offset, Message: e.Message, Unsupported: e.Unsupported})
+	}
+	if !ok {
+		return
+	}
+	s.prepareStyleBlock(rule.Block, sels, parent, origin, out, order)
 }
 
 // prepareRule prepares one rule and every rule nested inside it.
@@ -478,24 +515,45 @@ func (s *Styler) prepareRule(rule css.Rule, parent []css.ComponentValue, origin 
 		return
 	}
 
-	decls, nested, derrs := css.ParseDeclarationValues(rule.Block)
+	s.prepareStyleBlock(rule.Block, sels, prelude, origin, out, order)
+}
+
+// prepareStyleBlock prepares one style block: the declarations it holds, which
+// belong to the given selector list, and the rules nested in it, which are
+// written against the given prelude.
+//
+// The two are interleaved by where they were written rather than done in two
+// passes. The order counter is what the cascade breaks a tie with, so a pass
+// that did every declaration and then every nested rule would put a rule
+// written *above* a declaration after it — which nested rules rarely show,
+// since a different selector usually differs in specificity, and which a nested
+// @media shows immediately: its declarations land on the very selector they are
+// written inside, so the only thing separating them is order.
+func (s *Styler) prepareStyleBlock(block []css.ComponentValue, sels []css.Selector,
+	prelude []css.ComponentValue, origin Origin, out *[]preparedRule, order *int) {
+
+	decls, nested, derrs := css.ParseDeclarationValues(block)
 	for _, e := range derrs {
 		s.report(Finding{Offset: e.Offset, Message: e.Message, Unsupported: e.Unsupported})
 	}
 
 	prepared := preparedRule{selectors: sels, origin: origin}
-	for _, d := range decls {
-		for _, e := range s.expand(d, origin) {
-			e.order = *order
-			*order++
-			prepared.decls = append(prepared.decls, e)
+	di, ni := 0, 0
+	for di < len(decls) || ni < len(nested) {
+		if ni >= len(nested) || (di < len(decls) && decls[di].Offset <= nested[ni].Offset) {
+			for _, e := range s.expand(decls[di], origin) {
+				e.order = *order
+				*order++
+				prepared.decls = append(prepared.decls, e)
+			}
+			di++
+			continue
 		}
+		s.prepareRule(nested[ni], prelude, origin, out, order)
+		ni++
 	}
 	if len(prepared.decls) > 0 {
 		*out = append(*out, prepared)
-	}
-	for _, n := range nested {
-		s.prepareRule(n, prelude, origin, out, order)
 	}
 }
 
