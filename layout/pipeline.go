@@ -92,7 +92,19 @@ type Built struct {
 }
 
 // Build parses, styles and boxes a document.
+//
+// The media queries in the document are answered against A4, because Build has
+// no sheet of its own and A4 is the sheet Compose uses when it is not told
+// otherwise. A caller laying the boxes out on something else should call
+// BuildFor, or the two features a query can ask about — the width and the
+// height of the paper — will be answered about a page it is not printing on.
 func Build(in Input) Built {
+	return BuildFor(in, A4)
+}
+
+// BuildFor is Build for a known sheet, which is what a media query is asked
+// about. See Build.
+func BuildFor(in Input, page PageSize) Built {
 	rec := NewRecorder(in.Policy)
 
 	doc, htmlErrs, _ := html.Parse(in.HTML)
@@ -139,7 +151,8 @@ func Build(in Input) Built {
 	}
 	fontSet := loadFontFaces(faces, in.Resources, base, rec)
 
-	styled := style.ApplyWith(doc, sheets, fontMetrics{fontSet})
+	styled := style.ApplyIn(doc, sheets, fontMetrics{fontSet},
+		style.Media{Width: page.Width, Height: page.Height})
 	for _, f := range styled.Findings {
 		rec.ReportDetail(Finding{
 			Rule:     ruleForStyleFinding(f),

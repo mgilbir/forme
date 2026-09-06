@@ -133,7 +133,10 @@ func Compose(in Input, opts Options) Composed {
 		opts.MinFontSizePt = 6
 	}
 
-	built := Build(in)
+	// The sheet is settled before the document is styled, because a media
+	// query is a question about it: "@media print" and "@media (min-width:
+	// 200mm)" both decide which rules the cascade ever sees.
+	built := BuildFor(in, opts.Page)
 	rec := NewRecorder(in.Policy)
 	for _, f := range built.Findings {
 		rec.ReportDetail(f)

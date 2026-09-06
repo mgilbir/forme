@@ -614,15 +614,23 @@ func itoa(i int) string {
 // an author has to be told their rules did nothing.
 func TestAtRulesAreReported(t *testing.T) {
 	doc := parseDoc(t, "<p>x</p>")
-	got := Apply(doc, []Sheet{author(t, "@media print { p { color: c } } @page { margin: 1cm }")})
+	got := Apply(doc, []Sheet{author(t, "@page { margin: 1cm } @font-face { src: url(x) }")})
 
 	names := map[string]bool{}
 	for _, f := range got.Findings {
 		names[f.Property] = true
 	}
-	for _, want := range []string{"@media", "@page"} {
+	for _, want := range []string{"@page", "@font-face"} {
 		if !names[want] {
 			t.Errorf("%s was not reported; findings were %v", want, got.Findings)
+		}
+	}
+	// @media is not on that list any more: it is answered rather than skipped,
+	// and a query this engine can read reports nothing at all. See media_test.go.
+	got = Apply(doc, []Sheet{author(t, "@media print { p { color: red } }")})
+	for _, f := range got.Findings {
+		if f.Property == "@media" {
+			t.Errorf("a media query this engine answers reported %q", f.Message)
 		}
 	}
 }

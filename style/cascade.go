@@ -87,7 +87,11 @@ type candidate struct {
 
 // Styler applies stylesheets to a document.
 type Styler struct {
-	matcher  *Matcher
+	matcher *Matcher
+	// media is the surface the document is being laid out for, which is what a
+	// media query is asked about. Its zero value is a sheet of no size, and a
+	// query about a width is false against it — see Media.
+	media    Media
 	findings []Finding
 	// seen suppresses repeat reports of the same unsupported property. A
 	// stylesheet using "flex-wrap" forty times is one thing an author needs to
@@ -180,7 +184,20 @@ func Apply(doc *html.Node, sheets []Sheet) Styled {
 // ApplyWith is Apply with a source for the font metrics a font-size may need.
 // See Metrics. A nil source is the same as Apply.
 func ApplyWith(doc *html.Node, sheets []Sheet, m Metrics) Styled {
-	s := &Styler{matcher: NewMatcher(doc), seen: map[string]bool{}}
+	return ApplyIn(doc, sheets, m, Media{})
+}
+
+// ApplyIn is ApplyWith for a known sheet of paper, which is what a media query
+// is asked about.
+//
+// A caller that knows the page it is laying out for should say so: without it
+// the two features a page can answer — its width and its height — are asked
+// about a sheet of no size, and "@media (min-width: 1cm)" is false for a
+// document that would have printed on anything at all. The media *type* is
+// answered either way, because that one is a fact about this engine rather than
+// about the page: it renders for paper.
+func ApplyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) Styled {
+	s := &Styler{matcher: NewMatcher(doc), media: media, seen: map[string]bool{}}
 
 	// Expand shorthands and drop what the engine does not implement, once for
 	// the whole run rather than once per element — the answer does not depend
@@ -362,6 +379,43 @@ func (s *Styler) prepare(sheets []Sheet) []preparedRule {
 	return out
 }
 
+// prepareMedia evaluates an @media query and, where it matches, prepares the
+// rules inside it as though they had been written where the block is.
+//
+// "As though they had been written there" is the whole of §3's cascading
+// behaviour: an @media block adds no specificity and no priority, so the rules
+// in it are ordered among their neighbours by where the block sits. That falls
+// out of preparing them here, in place, rather than gathering them for later.
+//
+// A query that does not match drops what is inside it, and that is not a
+// failure to report: the stylesheet said those rules were for another medium
+// and this is not it. What *is* reported is a query naming something this
+// engine cannot answer — a feature about a screen's abilities, or a syntax
+// beyond the "and"-joined list this reads — because there a browser printing
+// the same document may apply rules this page does not have.
+func (s *Styler) prepareMedia(rule css.Rule, parent []css.ComponentValue, origin Origin,
+	out *[]preparedRule, order *int) {
+
+	matches, unknown := mediaQueryMatches(rule.Prelude, s.media)
+	if unknown != "" {
+		s.report(Finding{
+			Offset: rule.Offset,
+			Message: "the media query \"" + strings.TrimSpace(serialize(rule.Prelude)) +
+				"\" asks about \"" + unknown + "\", which this engine cannot " +
+				"answer, so the rules inside it were not applied",
+			Unsupported: true,
+			Property:    "@media",
+		})
+	}
+	if !matches || !rule.HasBlock {
+		return
+	}
+	inner, _ := css.ParseRulesFromValues(rule.Block)
+	for _, r := range inner {
+		s.prepareRule(r, parent, origin, out, order)
+	}
+}
+
 // prepareRule prepares one rule and every rule nested inside it.
 //
 // parent is the enclosing rule's selector list, already desugared, or nil at the
@@ -378,11 +432,14 @@ func (s *Styler) prepareRule(rule css.Rule, parent []css.ComponentValue, origin 
 	out *[]preparedRule, order *int) {
 
 	if rule.At {
-		// At-rules are a stage of their own — @media has to be evaluated
-		// against the page it is being laid out for, and @page describes the
-		// surface rather than the content. Neither belongs in the cascade, and
-		// reporting them here is how their absence stays visible until they
-		// arrive.
+		if strings.EqualFold(rule.Name, "media") {
+			s.prepareMedia(rule, parent, origin, out, order)
+			return
+		}
+		// The at-rules that are still a stage of their own: @page describes the
+		// surface rather than the content. It does not belong in the cascade,
+		// and reporting it here is how its absence stays visible until it
+		// arrives.
 		s.report(Finding{
 			Offset:      rule.Offset,
 			Message:     "@" + rule.Name + " is not applied yet",
