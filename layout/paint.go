@@ -1622,8 +1622,12 @@ func (p *painter) color(b *Box, property string) (style.RGBA, bool) {
 	}
 	if strings.EqualFold(raw, "currentcolor") {
 		if property == "color" {
-			// A "color: currentcolor" is circular; the initial value breaks it,
-			// which is what the specification says to do.
+			// The cascade resolves this one: CSS Color 4 §7.2 makes
+			// "currentcolor" on "color" itself an "inherit", and inheritance is
+			// the cascade's. A computed style therefore never carries it here,
+			// and what is left is a box whose style a caller assembled by hand.
+			// The initial value is the only answer available with no parent to
+			// ask, and it is a backstop rather than the rule.
 			return style.RGBA{A: 1}, true
 		}
 		return p.color(b, "color")

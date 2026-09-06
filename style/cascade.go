@@ -1217,6 +1217,57 @@ var nonNegative = map[string]bool{
 	"border": true, "border-top": true, "border-right": true,
 	"border-bottom": true, "border-left": true,
 	"outline": true, "font": true,
+
+	// And the properties that arrived after this list was written, each with
+	// its range stated the same way. flex-grow and flex-shrink are
+	// <number [0,∞]>, flex-basis is a <'width'>, column-count and the two
+	// line-clamps are <integer [1,∞]>, column-width is <length [0,∞]>, and the
+	// gaps are non-negative lengths or percentages.
+	//
+	// The cost of the omission is not that the negative was drawn — it is that
+	// it was *kept*. "flex-grow: 2; flex-grow: -1" reached layout as the second
+	// declaration, layout could make nothing of it and fell back to the initial
+	// value of 0, and the author's 2 was lost. That is exactly the failure the
+	// comment at the head of this list describes, in a property added later.
+	"flex-grow": true, "flex-shrink": true, "flex-basis": true,
+	"column-count": true, "column-width": true,
+	"column-gap": true, "row-gap": true, "gap": true, "columns": true,
+	"line-clamp": true, "-webkit-line-clamp": true,
+	"flex": true,
+}
+
+// The logical longhands and shorthands whose physical counterparts may not be
+// negative.
+//
+// They are derived rather than typed, because the two lists cannot be allowed
+// to drift: a longhand added to logicalSides is covered the day it is added.
+// The check has to know the logical name at all because the rename to a
+// physical one happens per element, several steps after §4.2's drop — so
+// "padding-inline-start: -8px" was a declaration this file never looked at and
+// computed to "padding-left: -8px".
+func init() {
+	for logical, sides := range logicalSides {
+		if nonNegative[sides[0]] {
+			nonNegative[logical] = true
+		}
+	}
+	// A shorthand is non-negative when every longhand it sets is, which is the
+	// rule the physical list above is written by and states one by one.
+	//
+	// Read out of logicalShorthands rather than out of the merged table, since
+	// the merge is another package-level init and nothing orders the two.
+	for name, sh := range logicalShorthands {
+		if len(sh.longhands) == 0 {
+			continue
+		}
+		all := true
+		for _, l := range sh.longhands {
+			all = all && nonNegative[l]
+		}
+		if all {
+			nonNegative[name] = true
+		}
+	}
 }
 
 // legalQuotes reports whether a "quotes" value matches §12.3.2's grammar.
@@ -1528,11 +1579,24 @@ func (s *Styler) computeFor(n *html.Node, rules []preparedRule,
 			value, have = serialize(c.value), true
 		}
 		if d, ok := inline[name]; ok {
-			// Inline wins over everything an author rule can say, important or
-			// not — except an important author rule, which the cascade puts
-			// above it. That case is rare enough, and the ordering subtle
-			// enough, that it is spelled out rather than left to fall out.
-			if c, ok := winners[name]; !ok || !c.important {
+			// A style attribute is an author declaration whose specificity is
+			// above every selector — Cascade 4 §3.1 — so it is decided by the
+			// same two terms every other declaration is, and only the second of
+			// them is settled in advance.
+			//
+			// Importance is the first term and inverts the origins, so an
+			// important inline declaration beats an important author rule and
+			// still loses to an important user-agent one; a normal inline
+			// declaration loses to any important rule. The specificity is the
+			// second and the inline always wins it, which is why equal ranks
+			// go to the inline.
+			//
+			// It was read as "inline wins unless the author rule is important",
+			// which said the opposite about the one case authors write it for:
+			// "style=\"color: red !important\"" lost to a stylesheet's own
+			// important rule.
+			c, beaten := winners[name]
+			if !beaten || CascadeRank(OriginAuthor, d.important) >= cascadeRank(c) {
 				value, have = serialize(d.value), true
 			}
 		}
@@ -1578,6 +1642,17 @@ func (s *Styler) resolve(name string, prop property, value string, have bool, pa
 	}
 
 	if have {
+		if name == "color" && strings.EqualFold(strings.TrimSpace(value), "currentcolor") {
+			// CSS Color 4 §7.2: "If the 'currentcolor' keyword is set on the
+			// 'color' property itself, it is treated as 'color: inherit'."
+			//
+			// It is answered here because this is where inheritance is, and
+			// because the alternative is answering it at paint time with no
+			// parent to hand — which is what happened, and came out as the
+			// initial value: black, on a paragraph inside a green div that had
+			// asked for the green.
+			return inheritFrom()
+		}
 		switch strings.ToLower(value) {
 		case kwInherit:
 			return inheritFrom()
