@@ -193,9 +193,22 @@ func (f *Fragment) MarginRect() Rect { return f.BorderRect.Outset(f.Margin) }
 //
 // set supplies the faces; a nil one uses the fourteen standard faces, which need
 // no embedding and cover Latin.
+//
+// rec may be nil, and then the findings are dropped. PaintReporting beside it
+// has always taken a nil one, and this took one for as long as the document
+// said nothing worth reporting: the first family it could not resolve
+// dereferenced it, so whether a caller's own nil was fatal depended on the
+// document. A caller that does not want the findings is entitled to say so once
+// rather than to be right about which documents raise them.
 func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 	if root == nil {
 		return nil
+	}
+	if rec == nil {
+		// An ordinary recorder nobody reads. Bounded like every other one, and
+		// simpler than a second kind of recorder that answers every question
+		// with silence.
+		rec = NewRecorder(nil)
 	}
 	l := &layouter{
 		rec: rec, avail: avail,

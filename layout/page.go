@@ -123,23 +123,28 @@ type Composed struct {
 // into a raster, into a test — and everything above this line is the same
 // whichever it is.
 func Compose(in Input, opts Options) Composed {
-	if opts.Page.Width == 0 || opts.Page.Height == 0 {
-		opts.Page = A4
-	}
-	if opts.MinScale == 0 {
-		opts.MinScale = 0.5
-	}
-	if opts.MinFontSizePt == 0 {
-		opts.MinFontSizePt = 6
-	}
+	opts, optionsRefused := checkOptions(opts)
 
 	// The sheet is settled before the document is styled, because a media
 	// query is a question about it: "@media print" and "@media (min-width:
 	// 200mm)" both decide which rules the cascade ever sees.
 	built := BuildFor(in, opts.Page)
 	rec := NewRecorder(in.Policy)
+	for _, why := range optionsRefused {
+		rec.ReportDetail(Finding{Rule: RuleInvalidCSS, Message: why})
+	}
 	for _, f := range built.Findings {
 		rec.ReportDetail(f)
+	}
+	// The sheet the document settled on, checked the same way. An @page rule
+	// writes into the same geometry the caller does and had nothing checking
+	// it: "@page { margin: 100mm }" on A5 left a content box of negative width,
+	// which came out as a scale of -1.60 and a finding saying the text would be
+	// set at minus nineteen points.
+	var pageRefused []string
+	built.Page, pageRefused = checkPage(built.Page, "the @page rule's")
+	for _, why := range pageRefused {
+		rec.ReportDetail(Finding{Rule: RuleInvalidCSS, Message: why})
 	}
 	// Build kept its own recorder and this one replays its findings, which
 	// carries everything except the two answers that are not findings. A build
@@ -266,6 +271,99 @@ func naturalSize(root *Fragment) Size {
 	return Size{W: w, H: h}
 }
 
+// checkOptions replaces anything in Options this engine cannot lay out against,
+// and says what it replaced.
+//
+// None of these was checked. "MinScale: 2" is a floor above every scale there
+// is and refused every document; a negative one turned the guard off silently,
+// which is the same shape of mistake as a zero cap; a page one point wide left
+// no content box at all. They are the caller's numbers rather than the
+// document's, and a caller has no other way to be told — Compose returns no
+// error — so they are reported as refused input like any other.
+func checkOptions(opts Options) (Options, []string) {
+	var why []string
+	// The zero value is A4, which is what the field's own documentation says
+	// and is the ordinary case. A *negative* or half-stated one is a mistake.
+	switch {
+	case opts.Page.Width == 0 && opts.Page.Height == 0 &&
+		opts.Page.Margin == (Edges{}):
+		opts.Page = A4
+	case opts.Page.Width <= 0 || opts.Page.Height <= 0:
+		why = append(why, fmt.Sprintf(
+			"the page passed to Compose is %.1f x %.1f px, which is not a sheet; A4 was used",
+			opts.Page.Width.Px(), opts.Page.Height.Px()))
+		opts.Page = A4
+	}
+	var pageWhy []string
+	opts.Page, pageWhy = checkPage(opts.Page, "the page passed to Compose's")
+	why = append(why, pageWhy...)
+
+	switch {
+	case opts.MinScale == 0:
+		opts.MinScale = 0.5
+	case opts.MinScale < 0:
+		why = append(why, fmt.Sprintf(
+			"the minimum scale passed to Compose is %v, which no scale can be below, "+
+				"so the guard would never fire; %v was used", opts.MinScale, 0.5))
+		opts.MinScale = 0.5
+	case opts.MinScale > 1:
+		why = append(why, fmt.Sprintf(
+			"the minimum scale passed to Compose is %v, which no scale can reach, "+
+				"so every document would be refused; 1 was used", opts.MinScale))
+		opts.MinScale = 1
+	}
+	switch {
+	case opts.MinFontSizePt == 0:
+		opts.MinFontSizePt = 6
+	case opts.MinFontSizePt < 0:
+		why = append(why, fmt.Sprintf(
+			"the minimum font size passed to Compose is %vpt, which no size is below, "+
+				"so the guard would never fire; %vpt was used", opts.MinFontSizePt, 6.0))
+		opts.MinFontSizePt = 6
+	}
+	return opts, why
+}
+
+// checkPage replaces margins that leave no sheet to lay out on, and says what
+// it replaced. whose names where the geometry came from, since the same numbers
+// reach here from a caller and from an @page rule.
+//
+// A negative margin is not a smaller margin: it puts the content box outside
+// the paper, where nothing is printed. Margins wider than the sheet are the
+// same thing said with two numbers, and left alone they made the content box
+// negative — which came out of the scale-to-fit arithmetic as a scale of minus
+// one and a half.
+func checkPage(page PageSize, whose string) (PageSize, []string) {
+	var why []string
+	for _, side := range []struct {
+		name string
+		at   *style.Unit
+	}{
+		{"top", &page.Margin.Top}, {"right", &page.Margin.Right},
+		{"bottom", &page.Margin.Bottom}, {"left", &page.Margin.Left},
+	} {
+		if *side.at < 0 {
+			why = append(why, fmt.Sprintf("%s %s margin is %.1f px; a margin outside "+
+				"the paper prints nothing, so it was read as none",
+				whose, side.name, side.at.Px()))
+			*side.at = 0
+		}
+	}
+	if h := page.Margin.Horizontal(); page.Width > 0 && h >= page.Width {
+		why = append(why, fmt.Sprintf("%s left and right margins come to %.1f px on a "+
+			"sheet %.1f px wide, which leaves nothing to print in; they were dropped",
+			whose, h.Px(), page.Width.Px()))
+		page.Margin.Left, page.Margin.Right = 0, 0
+	}
+	if v := page.Margin.Vertical(); page.Height > 0 && v >= page.Height {
+		why = append(why, fmt.Sprintf("%s top and bottom margins come to %.1f px on a "+
+			"sheet %.1f px tall, which leaves nothing to print in; they were dropped",
+			whose, v.Px(), page.Height.Px()))
+		page.Margin.Top, page.Margin.Bottom = 0, 0
+	}
+	return page, why
+}
+
 // fitScale is §5's factor: one number, applied to everything.
 //
 // The proposal argues this at length and the argument decides the whole shape of
@@ -313,10 +411,15 @@ func checkScale(rec *Recorder, scale, floor float64) {
 // checkFontSizes is the min-font-size guardrail of §6.1.
 //
 // Because the scale is geometric, the effective size of every element is exactly
-// its natural size times the factor — so this is one multiplication per box,
+// its natural size times the factor — so this is one multiplication per run,
 // computed before anything is emitted, with no iteration and no possibility of a
 // later pass invalidating it. That exactness is the whole reason §5 chose
 // geometric scaling.
+//
+// Per *run* and not per block. A block container's own font size is the size
+// its text inherits, and any inline box inside it may set another: a paragraph
+// at 20px holding a two-pixel span was checked at twenty and drawn at two. The
+// runs are what is drawn, and each carries the size it will be drawn at.
 func checkFontSizes(rec *Recorder, root *Fragment, scale, floorPt float64) {
 	if root == nil {
 		return
@@ -324,21 +427,39 @@ func checkFontSizes(rec *Recorder, root *Fragment, scale, floorPt float64) {
 	seen := map[style.Unit]bool{}
 	var walk func(*Fragment)
 	walk = func(f *Fragment) {
-		if f.Box != nil && len(f.Lines) > 0 {
-			size := f.Box.FontSize
-			if !seen[size] {
-				seen[size] = true
-				effective := size.Mul(scale).Pt()
-				if effective < floorPt {
-					rec.ReportDetail(Finding{
-						Rule: RuleMinFontSize,
-						Message: fmt.Sprintf(
-							"text would be set at %.2fpt, below the floor of %.2fpt"+
-								" (%.2fpt before the page scaling of %.0f%%)",
-							effective, floorPt, size.Pt(), scale*100),
-						Path: PathOf(f.Box.Element),
-					})
+		for _, line := range f.Lines {
+			for _, run := range line.Runs {
+				if run.Text == "" || seen[run.Size] {
+					continue
 				}
+				seen[run.Size] = true
+				effective := run.Size.Mul(scale).Pt()
+				if effective >= floorPt {
+					continue
+				}
+				rec.ReportDetail(Finding{
+					Rule: RuleMinFontSize,
+					Message: fmt.Sprintf(
+						"text would be set at %.2fpt, below the floor of %.2fpt"+
+							" (%.2fpt before the page scaling of %.0f%%)",
+						effective, floorPt, run.Size.Pt(), scale*100),
+					Path: PathOf(boxElement(run.Box)),
+				})
+			}
+		}
+		// A list item's marker is text a box draws that is on no line of its
+		// own, so it is asked about separately and at its own size.
+		if m := f.Marker; m != nil && m.Text != "" && m.Image == nil && !seen[m.Size] {
+			seen[m.Size] = true
+			if effective := m.Size.Mul(scale).Pt(); effective < floorPt {
+				rec.ReportDetail(Finding{
+					Rule: RuleMinFontSize,
+					Message: fmt.Sprintf(
+						"a list marker would be set at %.2fpt, below the floor of %.2fpt"+
+							" (%.2fpt before the page scaling of %.0f%%)",
+						effective, floorPt, m.Size.Pt(), scale*100),
+					Path: PathOf(boxElement(f.Box)),
+				})
 			}
 		}
 		for _, c := range f.Children {
