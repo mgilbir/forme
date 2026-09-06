@@ -37,12 +37,18 @@ import (
 
 // pendingPage is an @page rule with what deciding between two of them needs:
 // the stylesheet it was written in, so a finding can say where it came from,
-// and the origin of that sheet, because origin is the strongest term in the
-// cascade and it is no weaker here.
+// the origin of that sheet, because origin is the strongest term in the cascade
+// and it is no weaker here, and the media queries it was written inside.
 type pendingPage struct {
 	rule   css.Rule
 	sheet  string
 	origin style.Origin
+	// media is the prelude of every @media block enclosing the rule, outermost
+	// first. All of them have to match for the rule to apply, which is what
+	// nesting them means. It is carried rather than evaluated where it was
+	// found because the answer depends on the sheet, and the sheet is not
+	// settled until every stylesheet has been read.
+	media [][]css.ComponentValue
 }
 
 // at is the place a finding about one rule points to.
@@ -50,31 +56,43 @@ func (p pendingPage) at() Source {
 	return Source{HTMLOffset: -1, CSSOffset: p.rule.Offset, Sheet: p.sheet}
 }
 
-// splitPageRules separates the @page rules of one stylesheet from the rest.
+// collectPageRules gathers the @page rules of one stylesheet, including the
+// ones written inside a media query.
 //
-// It is splitFontFaces for a different at-rule and the reasoning there applies
-// unchanged: an at-rule never contributed a declaration, so removing it leaves
-// the ordering the cascade counts exactly as it was.
-func splitPageRules(rules []css.Rule, sheet string, origin style.Origin, pages *[]pendingPage) []css.Rule {
-	found := false
+// They are left in the stylesheet rather than taken out of it. The cascade
+// skips an @page of its own accord — it selects no element and computes no
+// value on one, so there is nothing there for it to do — and that is what makes
+// this able to reach the ones inside an @media block, which are component
+// values in the enclosing rule rather than rules in the list this walks.
+//
+// A print stylesheet is where those are: "@media print { @page { margin: 0 } }"
+// is how a page rule is written by anyone whose document is also read on a
+// screen, and reading only the top-level ones would miss most of the @page
+// rules that exist.
+func collectPageRules(rules []css.Rule, sheet string, origin style.Origin,
+	media [][]css.ComponentValue, pages *[]pendingPage) {
+
 	for _, r := range rules {
-		if isPageRule(r) {
-			found = true
-			break
+		switch {
+		case isPageRule(r):
+			*pages = append(*pages, pendingPage{
+				rule: r, sheet: sheet, origin: origin, media: media})
+		case r.At && strings.EqualFold(r.Name, "media") && r.HasBlock:
+			// Only @media is descended into. An @page written inside anything
+			// else — a style rule, @supports, a nested rule — is not a page
+			// rule this engine has a way to decide, and the cascade reports the
+			// enclosing at-rule as one it does not apply.
+			inner, _ := css.ParseRulesFromValues(r.Block)
+			// A fresh slice rather than an append to this one: two @media
+			// blocks at the same depth would otherwise append into the same
+			// spare capacity, and the second would overwrite the query the
+			// first had already handed to a rule it enclosed.
+			within := make([][]css.ComponentValue, len(media)+1)
+			copy(within, media)
+			within[len(media)] = r.Prelude
+			collectPageRules(inner, sheet, origin, within, pages)
 		}
 	}
-	if !found {
-		return rules
-	}
-	out := make([]css.Rule, 0, len(rules))
-	for _, r := range rules {
-		if isPageRule(r) {
-			*pages = append(*pages, pendingPage{rule: r, sheet: sheet, origin: origin})
-			continue
-		}
-		out = append(out, r)
-	}
-	return out
 }
 
 func isPageRule(r css.Rule) bool {
@@ -144,9 +162,22 @@ func applyPageRules(page PageSize, pages []pendingPage, rec *Recorder) PageSize 
 	if len(pages) == 0 {
 		return page
 	}
+	// The queries are answered about the sheet the caller asked for, because
+	// the answer is part of deciding what the sheet becomes. A print
+	// stylesheet's "@media print" is the case that matters and asks nothing
+	// about the paper's size; one that does ask — "@media (min-width: 200mm)
+	// { @page { size: A3 } }" — is answered about the page before the rule
+	// inside it could change it, which is the only order that terminates.
+	// Everything *else* in the document is then styled against the sheet this
+	// chose, which is the answer an author means.
+	asked := style.Media{Width: page.Width, Height: page.Height}
+
 	var got pageDeclarations
 	order := 0
 	for _, p := range pages {
+		if !pageRuleApplies(p, asked, rec) {
+			continue
+		}
 		readPageRule(p, page, &got, &order, rec)
 	}
 
@@ -177,6 +208,34 @@ func applyPageRules(page PageSize, pages []pendingPage, rec *Recorder) PageSize 
 	}
 	page.Margin = Edges{Top: out[sideTop], Right: out[sideRight], Bottom: out[sideBottom], Left: out[sideLeft]}
 	return page
+}
+
+// pageRuleApplies answers the media queries an @page rule was written inside.
+//
+// A query that does not match drops the rule, and that is not a failure to
+// report: the stylesheet said it was for another medium and this is not it. A
+// query naming something this engine cannot answer is reported for the reason
+// the cascade reports one — a browser printing the same document may know the
+// feature, and its page would differ from this one.
+func pageRuleApplies(p pendingPage, asked style.Media, rec *Recorder) bool {
+	applies := true
+	for _, query := range p.media {
+		matches, unknown := style.MatchesMedia(query, asked)
+		if unknown != "" {
+			rec.ReportDetail(Finding{
+				Rule:   RuleUnsupportedAtRule,
+				Source: p.at(),
+				Message: "the media query " + quoteValue(strings.TrimSpace(pageText(query))) +
+					" around an @page rule asks about " + quoteValue(unknown) +
+					", which this engine cannot answer, so the rule was not applied",
+				Property: "@media",
+			})
+		}
+		if !matches {
+			applies = false
+		}
+	}
+	return applies
 }
 
 // readPageRule reads the descriptors of one @page rule into the set.

@@ -396,7 +396,7 @@ func (s *Styler) prepare(sheets []Sheet) []preparedRule {
 func (s *Styler) prepareMedia(rule css.Rule, parent []css.ComponentValue, origin Origin,
 	out *[]preparedRule, order *int) {
 
-	matches, unknown := mediaQueryMatches(rule.Prelude, s.media)
+	matches, unknown := MatchesMedia(rule.Prelude, s.media)
 	if unknown != "" {
 		s.report(Finding{
 			Offset: rule.Offset,
@@ -436,13 +436,18 @@ func (s *Styler) prepareRule(rule css.Rule, parent []css.ComponentValue, origin 
 			s.prepareMedia(rule, parent, origin, out, order)
 			return
 		}
-		// An at-rule this package does not act on. The two that are a stage
-		// of their own — @font-face, which loads a file, and @page, which
-		// describes the surface rather than the content — are taken out of the
-		// stylesheet before it reaches here, so one that arrives came from a
-		// caller that does not do that and reporting it is right. Everything
-		// else genuinely is not applied, and reporting it is how that stays
-		// visible until it is.
+		if strings.EqualFold(rule.Name, "page") {
+			// @page selects no element and computes no value on one: it
+			// describes the paper, and the stage that lays a document out on
+			// paper reads it. There is nothing for the cascade to say about it
+			// either way, so it says nothing rather than reporting a rule that
+			// is applied elsewhere as one that is not.
+			return
+		}
+		// An at-rule this package does not act on and no other stage does
+		// either. @font-face is taken out of the stylesheet before it reaches
+		// here, and @page is skipped above; everything left genuinely is not
+		// applied, and reporting it is how that stays visible until it is.
 		s.report(Finding{
 			Offset:      rule.Offset,
 			Message:     "@" + rule.Name + " is not applied yet",

@@ -522,3 +522,103 @@ func TestAPageSizeSetsTheHeightAsWellAsTheWidth(t *testing.T) {
 		t.Errorf("on a 5in-tall page the document was scaled by %g, want 0.5", got)
 	}
 }
+
+// TestAPageRuleInsideAMediaQueryIsRead. This is where a print stylesheet
+// actually puts one: a document that is also read on a screen writes
+// "@media print { @page { margin: 0 } }", and reading only the top-level rules
+// would miss most of the @page rules that exist.
+func TestAPageRuleInsideAMediaQueryIsRead(t *testing.T) {
+	// The medium is paper, so this applies: 800 - 2 * 96.
+	if got := pageWidthPx(t, `@media print { @page { margin: 1in } }`, sheet600x800()); got != 608 {
+		t.Errorf("an @page inside @media print left %gpx of content, want 608", got)
+	}
+	// And this does not, because the page is not a screen.
+	if got := pageWidthPx(t, `@media screen { @page { margin: 1in } }`, sheet600x800()); got != 800 {
+		t.Errorf("an @page inside @media screen was applied to paper: %gpx of content", got)
+	}
+}
+
+// TestNestedMediaQueriesAroundAPageRuleAllHaveToMatch. Nesting is "and", and a
+// rule reached through a query that does not match is not reached at all.
+func TestNestedMediaQueriesAroundAPageRuleAllHaveToMatch(t *testing.T) {
+	both := `@media print { @media (min-width: 400px) { @page { margin: 1in } } }`
+	if got := pageWidthPx(t, both, sheet600x800()); got != 608 {
+		t.Errorf("both queries matched but the rule was dropped: %gpx of content", got)
+	}
+	inner := `@media print { @media (min-width: 900px) { @page { margin: 1in } } }`
+	if got := pageWidthPx(t, inner, sheet600x800()); got != 800 {
+		t.Errorf("the inner query did not match and the rule was applied anyway: %gpx", got)
+	}
+	// The outer one counts too, and it is the one a reader who only checked the
+	// nearest query would lose.
+	outer := `@media (min-width: 900px) { @media print { @page { margin: 1in } } }`
+	if got := pageWidthPx(t, outer, sheet600x800()); got != 800 {
+		t.Errorf("the outer query did not match and the rule was applied anyway: %gpx", got)
+	}
+	// Two blocks at the same depth, each holding a rule: the second must not
+	// take the first's query with it. This is the shape that breaks when the
+	// chain is grown by appending into shared capacity, and it needs four
+	// levels before the spare capacity exists to be shared.
+	deep := `@media print { @media print { @media print {
+		@media (min-width: 400px) { @page { margin-left: 1in } }
+		@media (min-width: 900px) { @page { margin-right: 2in } }
+	} } }`
+	// Only the first applies: 800 - 96.
+	if got := pageWidthPx(t, deep, sheet600x800()); got != 704 {
+		t.Errorf("nested sibling queries came out at %gpx of content, want 704", got)
+	}
+}
+
+// TestAPageRuleInAQueryThisEngineCannotAnswerIsReported. An unknown feature is
+// false, so the rule is dropped — but a browser printing the same document may
+// know the feature, and its page would differ from this one. That is worth a
+// finding whichever way the query then went.
+func TestAPageRuleInAQueryThisEngineCannotAnswerIsReported(t *testing.T) {
+	css := `@media (prefers-color-scheme: dark) { @page { margin: 1in } }`
+	if got := pageWidthPx(t, css, sheet600x800()); got != 800 {
+		t.Errorf("a query this engine cannot answer was treated as matching: %gpx", got)
+	}
+	if !reportsPage(t, css, "which this engine cannot answer") {
+		t.Error("the unanswerable query around an @page rule was not reported")
+	}
+}
+
+// TestAQueryAroundAPageRuleIsAnsweredAboutTheSheetItWasGiven. The rule inside
+// may change the sheet, so the query outside it cannot be answered about the
+// sheet it produces — that is a circle. It is answered about the page the
+// caller asked for, which is the only order that terminates, and the rest of
+// the document is then styled against whatever the rule chose.
+func TestAQueryAroundAPageRuleIsAnsweredAboutTheSheetItWasGiven(t *testing.T) {
+	// The caller's sheet is 800px wide, so this matches and the page becomes
+	// 1440px wide — on which the query would have been true anyway.
+	wide := `@media (min-width: 400px) { @page { size: 15in 5in } }`
+	if got := pageSheetPx(t, wide, sheet600x800()); got != 1440 {
+		t.Errorf("the query was not answered about the caller's 800px sheet: %gpx", got)
+	}
+	// Here the query is false on the caller's sheet, and the size it would
+	// have chosen is one on which it would have been true. It stays false.
+	narrow := `@media (min-width: 1000px) { @page { size: 15in 5in } }`
+	if got := pageSheetPx(t, narrow, sheet600x800()); got != 800 {
+		t.Errorf("the query was answered about the sheet its own rule would have chosen: %gpx", got)
+	}
+}
+
+// TestAPageRuleSomewhereElseIsNotReadAsOne. Only @media is descended into. An
+// @page written inside anything else is not a page rule this engine has a way
+// to decide, and the at-rule holding it is reported by the cascade as one it
+// does not apply.
+func TestAPageRuleSomewhereElseIsNotReadAsOne(t *testing.T) {
+	for _, css := range []string{
+		`@supports (display: grid) { @page { margin: 1in } }`,
+		`div { @page { margin: 1in } }`,
+		// The prelude of an at-rule that is not @media is not a media query,
+		// and reading one as though it were would apply a rule that was never
+		// in a query at all — this one reads as the media type "print", which
+		// is the paper the document is on.
+		`@layer print { @page { margin: 1in } }`,
+	} {
+		if got := pageWidthPx(t, css, sheet600x800()); got != 800 {
+			t.Errorf("%s was read as a page rule: %gpx of content, want 800", css, got)
+		}
+	}
+}

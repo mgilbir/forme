@@ -44,14 +44,19 @@ type Media struct {
 	Width, Height Unit
 }
 
-// mediaQueryMatches reports whether a query list matches the medium, and names
-// the first thing in it this engine could not answer.
+// MatchesMedia reports whether a query list matches the medium, and names the
+// first thing in it this engine could not answer.
 //
 // A list matches when any query in it does, which is what the comma means. The
 // name is returned even when something else in the list matched, because the
 // author still wrote a query this engine reads differently from a browser and
 // that is worth one finding either way.
-func mediaQueryMatches(prelude []css.ComponentValue, m Media) (bool, string) {
+//
+// It is exported because @page is decided outside the cascade and a print
+// stylesheet writes its page rules inside "@media print": the stage that reads
+// them has the same question to ask, and asking it with a second copy of this
+// is how the two answers come to differ.
+func MatchesMedia(prelude []css.ComponentValue, m Media) (bool, string) {
 	matched, unknown := false, ""
 	for _, query := range splitOnComma(prelude) {
 		ok, why := oneMediaQuery(query, m)

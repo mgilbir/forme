@@ -224,7 +224,7 @@ func parseSheet(rec *Recorder, origin style.Origin, name, src string,
 		})
 	}
 	rules = splitFontFaces(rules, name, faces)
-	rules = splitPageRules(rules, name, origin, pages)
+	collectPageRules(rules, name, origin, nil, pages)
 	return style.Sheet{Origin: origin, Rules: rules}
 }
 
