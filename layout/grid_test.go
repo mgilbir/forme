@@ -472,10 +472,11 @@ func TestAGridContainerThisEngineCannotArrangeSaysSo(t *testing.T) {
 		{"a dense flow", `#g { grid-auto-flow: row dense }`, "flow this engine does not follow"},
 		{"implicit tracks sized by a function this engine cannot read",
 			`#g { grid-auto-rows: fit-content(50px) }`, "implicit tracks"},
-		{"a right-to-left grid", `#g { direction: rtl }`, "from the right"},
 		{"tracks on a baseline", `#g { align-content: baseline }`, "aligned by a rule"},
 		{"items on a baseline", `#g { align-items: baseline }`, "aligned by a rule"},
 		{"a safe alignment", `#g { justify-content: safe center }`, "aligned by a rule"},
+		{"items aligned down the page by a side of it",
+			`#g { align-items: left }`, "names a side across it"},
 		{"an item in an area nobody drew", `#g > div:first-child { grid-area: header }`,
 			"the template does not draw"},
 		{"an item at a named line", `#g > div:first-child { grid-column: main }`, "cannot find"},
@@ -534,6 +535,7 @@ func TestAnArrangedGridSaysNothing(t *testing.T) {
 		`#g { width: 300px; grid-template-columns: 100px 100px } #g > div:first-child { grid-row: 1 / 3 }`,
 		`#g { width: 300px; grid-template-areas: "a b" "c d" }`,
 		`#g { width: 300px; grid-auto-rows: 50px; grid-auto-columns: 50px }`,
+		`#g { width: 300px; direction: rtl; grid-template-columns: 100px 100px }`,
 	} {
 		got := Compose(Input{HTML: fourItems,
 			CSS: []Stylesheet{{Source: gridCSS + css}}}, Options{})
@@ -1265,4 +1267,60 @@ func TestGridAutoRowsSizesTheRowsNobodyDrew(t *testing.T) {
 	wantCells(t, gridCells(t, two,
 		`#g { width: 300px; grid-template-columns: 100px 100px; grid-auto-rows: auto }`),
 		[][4]float64{{0, 0, 100, 20}, {100, 0, 100, 20}}, "a row as tall as its content")
+}
+
+// TestARightToLeftGridStartsItsColumnsOnTheRight. A grid's rows run down the
+// page whatever the writing mode is, and its columns run from whichever side
+// the text starts at — so under "rtl" the first column is the rightmost one and
+// every position across the container is measured from that edge.
+//
+// It is one mirror at the end rather than a reversal threaded through the
+// sizing, for the reason layout/flex.go gives: every position on the axis turns
+// together, so turning them one at a time is the same answer arrived at more
+// ways than it needs.
+func TestARightToLeftGridStartsItsColumnsOnTheRight(t *testing.T) {
+	const columns = `#g { width: 300px; grid-template-columns: 100px 100px }`
+
+	wantCells(t, gridCells(t, threeCells, columns),
+		[][4]float64{{0, 0, 100, 20}, {100, 0, 100, 20}, {0, 20, 100, 20}},
+		"three items in two columns")
+
+	wantCells(t, gridCells(t, threeCells, columns+`#g { direction: rtl }`),
+		[][4]float64{{200, 0, 100, 20}, {100, 0, 100, 20}, {200, 20, 100, 20}},
+		"the same three from the right")
+
+	// A named line counts from the same end: the second column of a
+	// right-to-left grid is the second from the right.
+	wantCells(t, gridCells(t, threeCells, columns+`#g { direction: rtl } #a { grid-column: 2 }`),
+		[][4]float64{{100, 0, 100, 20}, {200, 0, 100, 20}, {200, 20, 100, 20}},
+		"an item in the second column of a right-to-left grid")
+}
+
+// TestTheKeywordsTurnWithTheColumns. §6.2 again, one specification down: "start"
+// is where the columns begin, which is the right edge here; "left" is the left
+// edge whatever the direction is, and in a right-to-left grid that is where
+// they end.
+func TestTheKeywordsTurnWithTheColumns(t *testing.T) {
+	const rtl = `#g { width: 300px; grid-template-columns: 100px 100px; direction: rtl }`
+
+	// The tracks packed at the end of the axis, which is the left of the page.
+	wantCells(t, gridCells(t, threeCells, rtl+`#g { justify-content: end }`),
+		[][4]float64{{100, 0, 100, 20}, {0, 0, 100, 20}, {100, 20, 100, 20}},
+		"tracks packed at the end")
+
+	// "left" names the same place by the other route.
+	wantCells(t, gridCells(t, threeCells, rtl+`#g { justify-content: left }`),
+		[][4]float64{{100, 0, 100, 20}, {0, 0, 100, 20}, {100, 20, 100, 20}},
+		"tracks packed at the left")
+
+	// And an item at the start of its cell is against the cell's right edge.
+	wantCells(t, gridCells(t, threeCells, rtl+`#g { justify-items: start }`),
+		[][4]float64{{288, 0, 12, 20}, {188, 0, 12, 20}, {288, 20, 12, 20}},
+		"items at the start of their cells")
+
+	// "left" on an item is the left of the page, which is the far end of its
+	// cell here — the same distinction one line up, one property down.
+	wantCells(t, gridCells(t, threeCells, rtl+`#g { justify-items: left }`),
+		[][4]float64{{200, 0, 12, 20}, {100, 0, 12, 20}, {200, 20, 12, 20}},
+		"items at the left of their cells")
 }

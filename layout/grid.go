@@ -142,6 +142,12 @@ func (it *gridItem) vertical() style.Unit {
 func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 	origin flow) style.Unit {
 
+	// The inline axis, which is the only one a writing mode turns: a grid's
+	// rows run down the page whatever the direction is, and its columns run
+	// from whichever side the text starts at. flexAxis is what layout/flex.go
+	// asks the same question with, and a grid's columns are a flex row's main
+	// axis — same axis, same keywords, same mirror.
+	axis := flexAxis{rtl: isRTL(b)}
 	areas, _ := l.areasOf(b)
 	items := l.gridItems(b, width, areas)
 	if len(items) == 0 {
@@ -210,7 +216,11 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 		rows = append(rows, autoRows[(len(rows)-explicitRows)%len(autoRows)])
 	}
 
-	across, down := l.gridAlignment(b, "justify-items"), l.gridAlignment(b, "align-items")
+	// The block axis takes no axis of its own: nothing this engine lays out
+	// runs a grid's rows backwards, and the gate has refused the two keywords
+	// that would have to be turned if something did.
+	across, down := l.gridAlignment(b, "justify-items", axis),
+		l.gridAlignment(b, "align-items", flexAxis{})
 	l.sizeColumns(columns, items, width, columnGap, l.gridContentAlignment(b, "justify-content"))
 
 	// How wide each item is used at, which is its cell's width where it is
@@ -218,8 +228,8 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 	// has to be settled before the heights are measured and cannot be settled
 	// before the columns are sized: it is the one thing between the two.
 	for _, it := range items {
-		it.across = l.itemAlignment(it, "justify-self", across)
-		it.down = l.itemAlignment(it, "align-self", down)
+		it.across = l.itemAlignment(it, "justify-self", across, axis)
+		it.down = l.itemAlignment(it, "align-self", down, flexAxis{})
 		cell := trackSpan(columns, it.column, it.place[1].span, columnGap)
 		it.width = cell
 		if it.across != crossStretch {
@@ -249,11 +259,13 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 	// they are. With everything at its initial value there is nothing over —
 	// the automatic tracks took it — so these offsets are nought and the whole
 	// of the arithmetic is skipped by being zero rather than by a branch.
-	columnLead, columnBetween := l.trackSpacing(b, "justify-content", columns, width, columnGap)
-	rowLead, rowBetween := l.trackSpacing(b, "align-content", rows, gridInner(rows, rowGap),
-		rowGap)
+	columnLead, columnBetween := l.trackSpacing(b, "justify-content", axis, columns,
+		width, columnGap)
+	rowLead, rowBetween := l.trackSpacing(b, "align-content", flexAxis{}, rows,
+		gridInner(rows, rowGap), rowGap)
 	if definite {
-		rowLead, rowBetween = l.trackSpacing(b, "align-content", rows, height, rowGap)
+		rowLead, rowBetween = l.trackSpacing(b, "align-content", flexAxis{}, rows,
+			height, rowGap)
 	}
 
 	for _, it := range items {
@@ -268,10 +280,15 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 			Add(columnLead).Add(columnBetween.Mul(float64(it.column)))
 		y := trackStart(rows, it.row, rowGap).
 			Add(rowLead).Add(rowBetween.Mul(float64(it.row)))
-		it.frag.BorderRect.X = x.
-			Add(alignmentOffset(it.across,
-				trackSpan(columns, it.column, it.place[1].span, columnGap), it.width)).
-			Add(it.margin.Left)
+		x = x.Add(alignmentOffset(it.across,
+			trackSpan(columns, it.column, it.place[1].span, columnGap), it.width))
+		// Everything above is measured from where the columns start, which
+		// under "rtl" is the right edge. Mirroring the item's margin box once,
+		// here, is what turns that into a place on the page — the same one
+		// step layout/flex.go takes for the same reason, and for the same
+		// reason it is one step: every position on the axis reverses together.
+		it.frag.BorderRect.X = axis.mainAt(x, it.width.Add(it.margin.Horizontal()),
+			width).Add(it.margin.Left)
 		it.frag.BorderRect.Y = y.
 			Add(alignmentOffset(it.down, cellHeight, it.height)).
 			Add(it.margin.Top)
@@ -845,12 +862,14 @@ func trackStart(tracks []gridTrack, at int, gap style.Unit) style.Unit {
 // reader answers with no writing mode to unpick. That is why the value comes
 // back as a flexAlign — it is the same value, and having two of them would be
 // two ways to spell one specification.
-func (l *layouter) gridAlignment(b *Box, property string) flexAlign {
-	return crossAlignment(gridAlignmentValue(b.Style[property]), flexAxis{})
+func (l *layouter) gridAlignment(b *Box, property string, a flexAxis) flexAlign {
+	return crossAlignment(gridAlignmentValue(b.Style[property], a), flexAxis{})
 }
 
-func (l *layouter) itemAlignment(it *gridItem, property string, container flexAlign) flexAlign {
-	value := gridAlignmentValue(it.box.Style[property])
+func (l *layouter) itemAlignment(it *gridItem, property string, container flexAlign,
+	a flexAxis) flexAlign {
+
+	value := gridAlignmentValue(it.box.Style[property], a)
 	if value == "" || value == "auto" {
 		return container
 	}
@@ -861,18 +880,19 @@ func (l *layouter) itemAlignment(it *gridItem, property string, container flexAl
 // taken out: "legacy" is justify-items' initial value and is a rule about
 // inheriting a text-align this engine never sets, and "auto" on a *-self
 // property means "the container's", which the caller answers.
-func gridAlignmentValue(raw string) string {
+func gridAlignmentValue(raw string, a flexAxis) string {
 	value := trimmedLower(raw)
 	switch value {
 	case "legacy", "normal":
 		return ""
-	case "left":
-		// A grid's columns run left to right here — the gate refuses the other
-		// direction — so the physical pair and the logical one name the same
-		// two ends.
+	case "left", "right":
+		// The physical pair, which names the same two ends as the logical one
+		// until the columns run the other way: "left" is where the tracks start
+		// in a left-to-right grid and where they end in a right-to-left one.
+		if (value == "left") == a.rtl {
+			return "end"
+		}
 		return "start"
-	case "right":
-		return "end"
 	}
 	return value
 }
@@ -897,8 +917,8 @@ func (l *layouter) gridContentAlignment(b *Box, property string) bool {
 // comes back is where the first track begins and how much is added between each
 // pair, which is all a grid needs: the tracks are evenly spaced by every value
 // that spaces them at all.
-func (l *layouter) trackSpacing(b *Box, property string, tracks []gridTrack,
-	room, gap style.Unit) (lead, between style.Unit) {
+func (l *layouter) trackSpacing(b *Box, property string, a flexAxis,
+	tracks []gridTrack, room, gap style.Unit) (lead, between style.Unit) {
 
 	free := room.Sub(gridInner(tracks, gap))
 	if free == 0 || len(tracks) == 0 {
@@ -907,9 +927,9 @@ func (l *layouter) trackSpacing(b *Box, property string, tracks []gridTrack,
 	align := justifyStart
 	switch property {
 	case "align-content":
-		align = l.alignContentOf(b, flexAxis{})
+		align = l.alignContentOf(b, a)
 	default:
-		align = l.justifyOf(b, flexAxis{})
+		align = l.justifyOf(b, a)
 	}
 	lead = justifyOffset(align, free, len(tracks), 0)
 	if len(tracks) > 1 {
@@ -1705,14 +1725,6 @@ func (l *layouter) refusesToGrid(b *Box, width style.Unit) string {
 	if why := refusesGridAlignment(b); why != "" {
 		return why
 	}
-	if isRTL(b) {
-		// The columns are laid out from the left edge, which in a right-to-left
-		// grid is where they end rather than where they start. It is the same
-		// reversal a flex row waited on, and it is one change to the placement
-		// rather than a condition on each track.
-		return "its columns run from the right, which reverses every position " +
-			"across it"
-	}
 	for _, c := range b.Children {
 		if c.IsText() || (c.Anonymous() && len(c.Children) == 0) || c.outOfFlow() {
 			continue
@@ -1756,8 +1768,18 @@ func refusesGridAlignment(b *Box) string {
 		"justify-items", "align-items", "justify-self", "align-self"} {
 		switch value := trimmedLower(b.Style[p]); value {
 		case "", "normal", "stretch", "auto", "legacy", "start", "end", "center",
-			"flex-start", "flex-end", "self-start", "self-end", "left", "right",
+			"flex-start", "flex-end", "self-start", "self-end",
 			"space-between", "space-around", "space-evenly":
+		case "left", "right":
+			// The physical pair names a side of the *inline* axis, so it says
+			// nothing about the three properties that align down the page.
+			// §6.2 throws the declaration out there rather than guessing which
+			// end was meant, and a container that wrote one is reported rather
+			// than laid out as though it had not.
+			if strings.HasPrefix(p, "align-") {
+				return "its tracks or its items are aligned down the page by a " +
+					"keyword that names a side across it"
+			}
 		default:
 			return "its tracks or its items are aligned by a rule this engine " +
 				"does not apply, such as to a shared baseline"
