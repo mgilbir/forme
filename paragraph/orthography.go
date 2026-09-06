@@ -122,17 +122,12 @@ type Hyphenation struct {
 	// Dropped is how many bytes are taken off the start of the next line: a
 	// character the hyphen has replaced. Pinyin's apostrophe is one.
 	Dropped int
-	// Lead is text put at the start of the next line. Uyghur's zero width
-	// joiner is one — the letters either side of a break are still shaped as
-	// though the word were whole, and the control is what says so to a shaper
-	// that has only the next line to look at.
-	Lead string
 }
 
 // Any reports whether the language asks for anything at all here, which for
 // almost every document is no.
 func (h Hyphenation) Any() bool {
-	return h.Restored != "" || h.Character != "" || h.Dropped != 0 || h.Lead != ""
+	return h.Restored != "" || h.Character != "" || h.Dropped != 0
 }
 
 // HyphenateBetween is what the language does to a word broken between before
@@ -231,14 +226,23 @@ func pinyinApostrophe(after string) Hyphenation {
 // character that joins nothing — a digit, a full stop, the end of the text —
 // has nothing to keep joined, and a tatweel drawn there would be a stroke
 // hanging off nothing.
+// The letter *after* the break needs nothing here, and that is worth saying
+// because it looks like an omission. §6.3's note is written for an engine that
+// shapes a line at a time, which would have to be told in the text that the
+// word goes on — a zero width joiner at the head of the next line. This one
+// shapes each run with the text either side of it, and that context is settled
+// over the paragraph's runs before any line is filled, so the first letter of
+// the continuation already sees the word it belongs to and takes the form it
+// would have taken unbroken. A joiner added here would say a second time what
+// the context has already said, in text a reader could select and copy.
+//
+// It is pinned rather than assumed: see layout's TestAHyphenatedWordKeepsIts
+// JoiningFormsAcrossTheBreak, which lays the word out both ways and compares
+// the glyphs.
 func uyghurTatweel(before, after string) Hyphenation {
 	last, size := utf8.DecodeLastRuneInString(before)
 	if size == 0 || !IsCursiveScript(last) {
 		return Hyphenation{}
 	}
-	h := Hyphenation{Character: "ـ", Restored: "‍"}
-	if r, n := utf8.DecodeRuneInString(after); n > 0 && IsCursiveScript(r) {
-		h.Lead = "‍"
-	}
-	return h
+	return Hyphenation{Character: "ـ", Restored: "‍"}
 }

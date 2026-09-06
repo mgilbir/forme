@@ -348,10 +348,6 @@ type Item struct {
 	// same one overflow-wrap already does: the next line begins part-way
 	// through an item, which BreakOneLine returns as an offset.
 	HyphenSkip int
-	// HyphenLead is text put at the start of the next line when the line ends
-	// at this item's hyphen. See Orthography — Uyghur's joiner is the one this
-	// engine has.
-	HyphenLead string
 	// HyphenText is the character to print, carried with the width so that the
 	// item the line breaking appends is one this package can build.
 	//
