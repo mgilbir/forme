@@ -294,7 +294,7 @@ func (f *Face) shapeGlyphsWith(s string, extra []string, ctx shapeContext) ([]Gl
 		if r.End == len(s) {
 			inner.mergeAfter = ctx.mergeAfter
 		}
-		glyphs, gone := f.shapeGlyphsIn(piece, runScript(piece), r.RTL(), extra, inner)
+		glyphs, gone := f.shapeGlyphsIn(piece, scriptAround(s, r.Start, r.End), r.RTL(), extra, inner)
 		missing += gone
 		for i := range glyphs {
 			glyphs[i].Cluster += r.Start

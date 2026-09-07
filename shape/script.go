@@ -87,6 +87,35 @@ func runScript(s string) uint16 {
 	return scriptUnknown
 }
 
+// scriptAround is the script of a piece of a string, taking the text it sits in
+// where the piece itself decides nothing.
+//
+// A bidirectional run is cut by *direction*, and a run of digits inside Arabic
+// is a run of its own: Arabic-Indic digits are class AN and the letters around
+// them are AL, so the digits come out as a piece whose every character is
+// Common. runScript answers scriptUnknown for that piece, which selects DFLT —
+// so a font stating its digit forms under 'arab', as Arabic fonts do, had them
+// selected away by the direction the digits are read in.
+//
+// UAX #24's resolution: a character of Common or Inherited takes the script
+// around it. Backwards first, because a run of digits belongs to the word it
+// follows, and forwards where there is nothing behind.
+func scriptAround(s string, start, end int) uint16 {
+	if sc := runScript(s[start:end]); sc != scriptUnknown {
+		return sc
+	}
+	last := uint16(scriptUnknown)
+	for _, r := range s[:start] {
+		if sc := scriptOf(r); decides(sc) {
+			last = sc
+		}
+	}
+	if last != scriptUnknown {
+		return last
+	}
+	return runScript(s[end:])
+}
+
 // scriptTags is the OpenType tags a script selects, most specific first.
 func scriptTags(script uint16) []string {
 	if int(script) < len(scriptOpenTypeTags) {
