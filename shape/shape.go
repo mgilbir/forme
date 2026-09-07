@@ -194,9 +194,17 @@ func (f *Face) HasLigatures() bool { return len(f.layout.ligatures) > 0 }
 
 // Features lists the substitution features this face offers by name, sorted.
 // A caller can present them, or check one before asking for it.
+//
+// It is the features ShapeGlyphsWith will act on, which is what "check one
+// before asking for it" has to mean. It listed a different set: the tags the
+// flat single-substitution reader kept a table for, which is every feature
+// whose lookups are all type 1 and no other. A face offering a feature through
+// a ligature or a contextual rule was not listed, so a caller checking first
+// was told the face has nothing and asked for nothing — and asking would have
+// worked. Noto Sans Devanagari offers twelve and reported one.
 func (f *Face) Features() []string {
-	out := make([]string, 0, len(f.layout.single))
-	for tag := range f.layout.single {
+	out := make([]string, 0, len(f.layout.featureLookups))
+	for tag := range f.layout.featureLookups {
 		out = append(out, tag)
 	}
 	sortStrings(out)

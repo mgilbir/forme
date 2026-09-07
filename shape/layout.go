@@ -394,10 +394,6 @@ type layout struct {
 	// It is written only by the reader that builds the layout, before the
 	// layout is shared, so it is not state two documents can reach.
 	covWork int
-	// substFlags is the lookup flags of the lookups the substitutions came
-	// from, so that shaping can skip the glyphs those lookups are declared to
-	// ignore. Kerning keeps its flags per lookup — see kern.
-	substFlags int
 	// markAttach is GDEF's mark attachment class per glyph, used by the
 	// MarkAttachmentType field of a lookup flag.
 	markAttach map[int]int
@@ -654,7 +650,6 @@ func readLayout(tables map[string][]byte, gsubSel featureSet, pos *layout, coord
 	l.single = map[string]map[int]int{}
 	l.gsub = nil
 	l.featureLookups = nil
-	l.substFlags = 0
 	if gsub := tables["GSUB"]; len(gsub) >= 10 {
 		feats := tableFeatures{sel: gsubSel, varied: readFeatureVariations(gsub, coords)}
 		l.readGSUBLigatures(gsub, feats)
@@ -1323,7 +1318,19 @@ func (l *layout) readGSUBLigatures(gsub []byte, feats tableFeatures) {
 		if kind != 4 {                                        // 4 = ligature substitution
 			continue
 		}
-		l.substFlags |= flags
+		// The flags are not kept. They were, OR-ed together across every
+		// lookup of every feature into one int that nothing ever read — and
+		// OR-ing them is not a thing that can be right: a lookup flag holds a
+		// mark attachment *class* in its top eight bits and a mark filtering
+		// set index elsewhere, so two lookups' flags merged are a third
+		// lookup's that neither font declared. Of the fetched faces, Noto Sans
+		// merged to IgnoreMarks and Noto Sans Arabic to UseMarkFilteringSet.
+		//
+		// What honours them is the path that applies the lookups, which has
+		// each lookup's own flags to hand: see shaper.ignores, and
+		// nogdef_test.go for what IgnoreMarks does there. This table is read
+		// only by HasLigatures.
+		_ = flags
 		for _, sub := range subs {
 			l.ligatureSubst(sub)
 		}
@@ -1484,7 +1491,9 @@ func (l *layout) readSingleSubstitutions(gsub []byte, feats tableFeatures) {
 			if kind != 1 { // 1 = single substitution
 				continue
 			}
-			l.substFlags |= flags
+			// See the note beside the ligature reader: the flags belong to
+			// the lookup, and the pass that applies it has them.
+			_ = flags
 			for _, sub := range subs {
 				l.singleSubst(tag, sub)
 			}
