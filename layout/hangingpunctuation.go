@@ -195,8 +195,20 @@ func (l *layouter) cutHang(items []inlineItem, i int, atStart bool) []inlineItem
 	if n == len(item.Text) {
 		// The run is the character. Nothing to cut, and cutting would leave an
 		// item with no text in it.
-		items[i].HangStart, items[i].HangEnd = atStart, !atStart
-		items[i].Hangs = items[i].Hangs || !atStart
+		//
+		// One end is marked, never both, and never the other end cleared: a
+		// block whose whole content is one quotation mark under
+		// "hanging-punctuation: first last" is this item at both ends of the
+		// list, so it is cut twice — a straight quote opens and closes, and so
+		// does every Pi and Pf. Setting the pair from atStart made the second
+		// cut undo the first, and the mark that was to hang in the margin was
+		// left sitting inside the line.
+		if atStart {
+			items[i].HangStart = true
+		} else {
+			items[i].HangEnd = true
+			items[i].Hangs = true
+		}
 		return items
 	}
 	at := n

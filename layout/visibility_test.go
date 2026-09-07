@@ -363,3 +363,86 @@ func TestACellSpanningIntoACollapsedTrackIsReported(t *testing.T) {
 		t.Errorf("an ordinary table was reported %d times", got)
 	}
 }
+
+// TestACollapsedTrackTakesNoShareOfWhatTheTableWasGiven.
+//
+// A table given a width or a height shares the surplus between its tracks in
+// proportion to what they already hold. Where nothing holds anything the share
+// falls back to an equal one — and a §17.5.5 track was in it, because it had
+// been zeroed and zero is what a track asking for nothing looks like too.
+//
+// The two are not the same. A track that asks for nothing is still one of the
+// tracks the table is divided between; a collapsed one is not rendered at all,
+// so the share handed to it was simply lost: a table asked to be 100px tall
+// whose three rows are empty, one of them collapsed, came out with two rows of
+// a third each and a sixth of the table nobody was standing in.
+func TestACollapsedTrackTakesNoShareOfWhatTheTableWasGiven(t *testing.T) {
+	// Empty cells, no padding and no spacing, so every track holds nothing and
+	// the equal share is what decides the table.
+	const cellCSS = noDefaults + `table { border-spacing: 0 } td { padding: 0 }`
+
+	t.Run("rows", func(t *testing.T) {
+		f := layoutOf(t, 600, `<table id="t"><tr id="r1"><td></td></tr>`+
+			`<tr id="r2"><td></td></tr><tr id="r3"><td></td></tr></table>`,
+			cellCSS+`table { height: 100px } #r2 { visibility: collapse }`)
+		var total style.Unit
+		for _, id := range []string{"r1", "r2", "r3"} {
+			h := find(t, f, id).BorderRect.H
+			total = total.Add(h)
+			want := picPx(50)
+			if id == "r2" {
+				want = 0
+			}
+			if h != want {
+				t.Errorf("#%s is %v tall, want %v", id, h, want)
+			}
+		}
+		if want := picPx(100); total != want {
+			t.Errorf("the rows come to %v of a table asked to be %v; the share "+
+				"given to the collapsed row is height the table does not use",
+				total, want)
+		}
+	})
+
+	// The fixed algorithm reaches the same share by its own road: every column
+	// was declared, none of them fills the table, and the surplus is spread over
+	// what is rendered.
+	t.Run("fixed columns", func(t *testing.T) {
+		f := layoutOf(t, 600, `<table id="t">`+
+			`<colgroup><col id="c1"><col id="c2"><col id="c3"></colgroup>`+
+			`<tr><td id="d1"></td><td id="d2"></td><td id="d3"></td></tr></table>`,
+			cellCSS+`table { table-layout: fixed; width: 300px }
+			 col { width: 0 } #c2 { visibility: collapse }`)
+		var total style.Unit
+		for _, id := range []string{"d1", "d3"} {
+			w := find(t, f, id).BorderRect.W
+			total = total.Add(w)
+			if want := picPx(150); w != want {
+				t.Errorf("#%s is %v wide, want %v", id, w, want)
+			}
+		}
+		if want := picPx(300); total != want {
+			t.Errorf("the rendered columns come to %v of a fixed table asked to "+
+				"be %v", total, want)
+		}
+	})
+
+	t.Run("columns", func(t *testing.T) {
+		f := layoutOf(t, 600, `<table id="t">`+
+			`<colgroup><col id="c1"><col id="c2"><col id="c3"></colgroup>`+
+			`<tr><td id="d1"></td><td id="d2"></td><td id="d3"></td></tr></table>`,
+			cellCSS+`table { width: 300px } #c2 { visibility: collapse }`)
+		var total style.Unit
+		for _, id := range []string{"d1", "d3"} {
+			w := find(t, f, id).BorderRect.W
+			total = total.Add(w)
+			if want := picPx(150); w != want {
+				t.Errorf("#%s is %v wide, want %v", id, w, want)
+			}
+		}
+		if want := picPx(300); total != want {
+			t.Errorf("the rendered columns come to %v of a table asked to be %v",
+				total, want)
+		}
+	})
+}

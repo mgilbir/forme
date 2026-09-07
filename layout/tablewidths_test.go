@@ -115,6 +115,30 @@ func TestDistributeIsProportionalToTheWeights(t *testing.T) {
 		t.Errorf("the real weights got %g and %g, want 50 each — the negative one "+
 			"was counted in the sum they divide", neg[1].Px(), neg[2].Px())
 	}
+
+	// The two rules meet where nothing has any weight at all. An entry asking
+	// for nothing is one of the entries the whole is split between; an entry
+	// that is not there is not, and the share it used to take was a share
+	// nothing rendered — §17.5.5's collapsed row in a table given a height.
+	absent := make([]style.Unit, 4)
+	distribute(u(100), []float64{0, -1, 0, 0}, absent)
+	if absent[1] != 0 {
+		t.Errorf("an absent entry took %g of a weightless set, want 0",
+			absent[1].Px())
+	}
+	var whole style.Unit
+	for _, v := range absent {
+		whole = whole.Add(v)
+	}
+	if whole.Px() != 100 {
+		t.Errorf("the parts come to %g, want 100 (all %v)", whole.Px(), units(absent))
+	}
+	for _, i := range []int{0, 2, 3} {
+		if got := absent[i].Px(); got < 33 || got > 34 {
+			t.Errorf("part %d is %g of a weightless set of three, want a third "+
+				"(all %v)", i, got, units(absent))
+		}
+	}
 }
 
 // TestDistributeAddsToWhatIsAlreadyThere pins that out is accumulated into and

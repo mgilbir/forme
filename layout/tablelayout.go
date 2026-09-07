@@ -488,6 +488,12 @@ type tableColumnDemand struct {
 	// on the content at all — it is a claim on the table's final width, which is
 	// not known while the demands are being collected.
 	percent float64
+	// collapsed says the column is §17.5.5's, and is not the same as asking for
+	// no width. A column that asks for nothing is still a column the table's
+	// surplus is shared with when nothing else asks for anything either; a
+	// collapsed one is not rendered at all, and a share given to it is a share
+	// the table does not use.
+	collapsed bool
 }
 
 // tableColumnDemands measures every column, memoized per table.
@@ -661,7 +667,7 @@ func (l *layouter) tableColumnDemands(table *Box, s tableSpacing) []tableColumnD
 	// in it.
 	for i := range out {
 		if i < len(g.colBoxes) && isCollapsedTrack(g.colBoxes[i]) {
-			out[i] = tableColumnDemand{}
+			out[i] = tableColumnDemand{collapsed: true}
 		}
 	}
 	for i := range out {
@@ -821,6 +827,12 @@ func spreadPercent(cols []tableColumnDemand, want float64) {
 // distribute shares an amount over a set of weights so that the parts add up to
 // exactly the whole.
 //
+// A negative weight is not a small one: it says the entry takes no part in the
+// distribution at all, which is different from asking for nothing. The two part
+// company exactly where every weight is zero and the share falls back to an
+// equal one — an entry asking for nothing is then one of the entries the whole
+// is split between, and an entry that is not there is not.
+//
 // The running total is what makes that true: each part is the difference between
 // two roundings of a cumulative fraction, so the errors cancel instead of
 // accumulating. Rounding each share on its own leaves a table a unit or two
@@ -830,29 +842,52 @@ func distribute(total style.Unit, weights []float64, out []style.Unit) {
 		return
 	}
 	var sum float64
+	shares := 0
 	for _, w := range weights {
-		if w > 0 {
-			sum += w
+		if w < 0 {
+			continue
 		}
+		shares++
+		sum += w
 	}
+	// Nothing has any weight to weigh, so an equal share between the entries
+	// that take part is the only answer that does not favour one for no reason.
+	// The entries that do not take part are still passed over: a table given a
+	// height whose rows are all zero shares it between the rows it renders, and
+	// §17.5.5's collapsed row is not one of them — the share it used to take was
+	// height the table was given and then did not use, so the rows came to
+	// two-thirds of a table that had asked to be full.
 	equal := sum <= 0
 	if equal {
-		sum = float64(len(weights))
+		sum = float64(shares)
+	}
+	if sum <= 0 {
+		return
 	}
 	var acc float64
 	var given style.Unit
 	for i := range weights {
 		w := weights[i]
-		if equal {
-			w = 1
-		} else if w < 0 {
+		switch {
+		case w < 0:
 			w = 0
+		case equal:
+			w = 1
 		}
 		acc += w
 		want := total.Mul(acc / sum)
 		out[i] = out[i].Add(want.Sub(given))
 		given = want
 	}
+}
+
+// demandWeight is a column's weight in a distribution, and distribute's "takes
+// no part" for a column §17.5.5 does not render.
+func demandWeight(d tableColumnDemand, w float64) float64 {
+	if d.collapsed {
+		return -1
+	}
+	return w
 }
 
 // tableGridWidths is §17.5.2.2's MIN and MAX, and the floor under them: the
@@ -1179,7 +1214,7 @@ func (l *layouter) autoColumnWidths(table *Box, room style.Unit, s tableSpacing)
 		// for beyond that.
 		weights := make([]float64, len(demands))
 		for i, d := range demands {
-			weights[i] = float64(d.min.Sub(d.floor))
+			weights[i] = demandWeight(d, float64(d.min.Sub(d.floor)))
 		}
 		distribute(room.Sub(floor), weights, out)
 	case room <= max:
@@ -1188,7 +1223,7 @@ func (l *layouter) autoColumnWidths(table *Box, room style.Unit, s tableSpacing)
 		}
 		weights := make([]float64, len(demands))
 		for i, d := range demands {
-			weights[i] = float64(d.max.Sub(d.min))
+			weights[i] = demandWeight(d, float64(d.max.Sub(d.min)))
 		}
 		distribute(room.Sub(min), weights, out)
 	default:
@@ -1200,7 +1235,7 @@ func (l *layouter) autoColumnWidths(table *Box, room style.Unit, s tableSpacing)
 		// do, and it keeps the relative widths the content asked for.
 		weights := make([]float64, len(demands))
 		for i, d := range demands {
-			weights[i] = float64(d.max)
+			weights[i] = demandWeight(d, float64(d.max))
 		}
 		distribute(room.Sub(max), weights, out)
 	}
@@ -1372,10 +1407,15 @@ func (l *layouter) fixedColumnWidths(table *Box, g *tableGrid, room style.Unit,
 	} else if used < room {
 		// Every column was declared and they do not fill the table. The surplus
 		// is spread over them in proportion, which is what keeps a fixed table
-		// with a declared width the width it was given.
+		// with a declared width the width it was given — over the columns that
+		// are rendered, since a collapsed one is settled at nothing and is not
+		// a column the table's width is shared with.
 		weights := make([]float64, len(out))
 		for i := range out {
 			weights[i] = float64(out[i])
+			if i < len(g.colBoxes) && isCollapsedTrack(g.colBoxes[i]) {
+				weights[i] = -1
+			}
 		}
 		distribute(room.Sub(used), weights, out)
 	}
@@ -1952,6 +1992,11 @@ func (l *layouter) rowHeights(g *tableGrid, placed []placedCell, s tableSpacing,
 			weights := make([]float64, len(rowH))
 			for i, h := range rowH {
 				weights[i] = float64(h)
+				if i < len(g.rows) && isCollapsedTrack(g.rows[i].box) {
+					// Zeroed just above, but zero is a row asking for nothing
+					// and this row is not there at all. See distribute.
+					weights[i] = -1
+				}
 			}
 			distribute(origin.cbHeight.Sub(total), weights, rowH)
 		}
