@@ -581,12 +581,13 @@ func (l *layouter) tableColumnDemands(table *Box, s tableSpacing) []tableColumnD
 		if c.colSpan == 1 {
 			continue
 		}
-		bottom, lo, hi, _ := l.cellDemand(c.box)
+		bottom, lo, hi, pct := l.cellDemand(c.box)
 		// The spacing between the columns a cell spans is width the cell gets
 		// for free: a cell two columns wide sits across the gap between them.
 		gaps := s.h.Mul(float64(c.colSpan - 1))
 		spreadDemand(out[c.col:c.col+c.colSpan],
 			bottom.Sub(gaps), lo.Sub(gaps), hi.Sub(gaps))
+		spreadPercent(out[c.col:c.col+c.colSpan], pct)
 	}
 	// §10.4's two limits, applied once the cells have spoken. A column is on the
 	// list the two properties apply to — everything but non-replaced inlines,
@@ -777,6 +778,44 @@ func spreadDemand(cols []tableColumnDemand, floor, min, max style.Unit) {
 	spread(floor, func(d *tableColumnDemand) *style.Unit { return &d.floor })
 	spread(min, func(d *tableColumnDemand) *style.Unit { return &d.min })
 	spread(max, func(d *tableColumnDemand) *style.Unit { return &d.max })
+}
+
+// spreadPercent shares a spanning cell's percentage width over the columns it
+// spans.
+//
+// A cell two columns wide asking for forty per cent is asking those two columns
+// to be forty per cent of the table between them. §17.5.2.2 says nothing about
+// it — it is written for cells that occupy one column — and this discarded the
+// number entirely, so "width: 40%" on a spanning cell did nothing at all while
+// the same declaration on a cell beside it did.
+//
+// Only the shortfall is shared, and by the same weights the widths are: a
+// column already carrying a percentage of its own keeps it, and what is spread
+// is what the cell asks for beyond what the columns already promise.
+func spreadPercent(cols []tableColumnDemand, want float64) {
+	if want <= 0 || len(cols) == 0 {
+		return
+	}
+	var have, weight float64
+	for i := range cols {
+		have += cols[i].percent
+		weight += float64(cols[i].max)
+	}
+	if want <= have {
+		return
+	}
+	short := want - have
+	if weight <= 0 {
+		// No column has any width to weigh, so an equal share is the only
+		// answer that does not favour one of them for no reason.
+		for i := range cols {
+			cols[i].percent += short / float64(len(cols))
+		}
+		return
+	}
+	for i := range cols {
+		cols[i].percent += short * float64(cols[i].max) / weight
+	}
 }
 
 // distribute shares an amount over a set of weights so that the parts add up to

@@ -139,3 +139,44 @@ func TestASpanWrittenWithATypoStillSpans(t *testing.T) {
 		}
 	}
 }
+
+// TestASpanningCellsPercentageReachesItsColumns.
+//
+// §17.5.2.2 is written for cells that occupy one column and says nothing about
+// a spanning one, so its percentage was read and thrown away: "width: 40%" on a
+// cell two columns wide did nothing at all, while the same declaration on the
+// cell beside it decided a column.
+func TestASpanningCellsPercentageReachesItsColumns(t *testing.T) {
+	firstRow := func(markup string) []float64 {
+		t.Helper()
+		root := layoutOf(t, 600, markup, noDefaults+
+			`table { border-collapse: collapse; width: 400px }
+			 td { padding: 0; border: 0; font-family: Courier; font-size: 10px }`)
+		var out []float64
+		for _, row := range find(t, root, "t").Children {
+			for _, cell := range row.Children {
+				out = append(out, cell.BorderRect.W.Px())
+			}
+			break // the first row is the one that spans
+		}
+		return out
+	}
+	// Three columns, and a first row whose one cell spans the first two. The
+	// third column is what the percentage takes room from, so the split between
+	// the pair and it is the whole of what this measures.
+	const rest = `<tr><td>a</td><td>b</td><td>c</td></tr></table>`
+	plain := firstRow(`<table id=t><tr><td colspan=2>ab</td><td>c</td></tr>` + rest)
+	wide := firstRow(`<table id=t><tr><td colspan=2 style="width: 80%">ab</td>` +
+		`<td>c</td></tr>` + rest)
+	if len(plain) < 2 || len(wide) < 2 {
+		t.Fatalf("the first row laid out %d and %d cells, want two", len(plain), len(wide))
+	}
+	if wide[0] <= plain[0] {
+		t.Errorf("the spanning cell is %gpx wide with the percentage and %gpx "+
+			"without it; the declaration did nothing", wide[0], plain[0])
+	}
+	// Eighty per cent of four hundred, within a unit of rounding.
+	if got := wide[0]; got < 315 || got > 325 {
+		t.Errorf("the spanning cell is %gpx of a 400px table, want about 320", got)
+	}
+}
