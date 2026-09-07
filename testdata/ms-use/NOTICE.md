@@ -1,14 +1,22 @@
 # Vendored Universal Shaping Engine override data
 
-These two files are vendored, unmodified, from HarfBuzz:
+These three files are vendored, unmodified, from HarfBuzz:
 
   https://github.com/harfbuzz/harfbuzz/tree/main/src/ms-use
 
-They carry the Universal Shaping Engine's corrections to two Unicode
+Two of them carry the Universal Shaping Engine's corrections to two Unicode
 properties — `Indic_Syllabic_Category` and `Indic_Positional_Category` — and
 their own headers say what they are: *"Override values … Not derivable"*,
 maintained since Unicode 7.0 by Andrew Glass, who edits the engine's
 specification at Microsoft.
+
+The third, `IndicShapingInvalidCluster.txt`, is `Indic_Shaping_Invalid_Cluster`:
+the sequences an independent vowel may not be followed by, which every shaper
+draws with a dotted circle between them. It is a list published in the script
+development specifications and derivable from no character property, and
+`cmd/genvowel` reads it. It is here for the same reason as the other two — the
+generator that reads it is in this repository, and a generator whose input is
+not is a generator nobody can run. `make shapetables` could not, until it was.
 
 ## Why they are here rather than derived
 

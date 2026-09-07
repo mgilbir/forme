@@ -1,10 +1,10 @@
 package shape
 
 import (
-	"os"
 	"testing"
 
 	"github.com/mgilbir/forme/font"
+	"github.com/mgilbir/forme/fonttest"
 )
 
 // A face whose outlines are a CID-keyed CFF.
@@ -21,17 +21,18 @@ import (
 // two agree for a font whose charset is the identity, and many are — which is
 // why a mistake here shows on some CJK faces and not others.
 
-// cidKeyedFace is the fetched Noto Sans JP, or a skip. `make notocjk` puts it
-// there. It is a real font rather than a synthetic one because what is under
-// test is a structure fonttest does not build: a charset that is not the
-// identity, which is the only thing that tells a CID from a glyph index.
+// cidKeyedFace is the fetched Noto Sans JP. `make notocjk` puts it there. It is
+// a real font rather than a synthetic one because what is under test is a
+// structure fonttest does not build: a charset that is not the identity, which
+// is the only thing that tells a CID from a glyph index.
+//
+// A checkout that never fetched it skips; a NOTO_CJK that names a directory
+// without it fails. CI sets the variable, which is what lets its step for these
+// tests fail — it used to run them with nothing fetched into place and pass by
+// skipping, under a comment saying a skip here is worse than a failure.
 func cidKeyedFace(t *testing.T) []byte {
 	t.Helper()
-	data, err := os.ReadFile("../testdata/notocjk/NotoSansJP-Regular.otf")
-	if err != nil {
-		t.Skip("run `make notocjk` for a CID-keyed face to read: ", err)
-	}
-	return data
+	return fonttest.CJKFile(t, "NotoSansJP-Regular.otf")
 }
 
 func TestACIDKeyedFaceLoadsAndShapes(t *testing.T) {

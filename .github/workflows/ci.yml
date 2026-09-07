@@ -85,11 +85,12 @@ jobs:
             testdata/unicode-bidi
             testdata/unicode-grapheme
             testdata/notocjk
+            testdata/ucd
             testdata/html
-          key: corpora-3-${{ hashFiles('Makefile') }}
+          key: corpora-4-${{ hashFiles('Makefile') }}
 
       - name: Fetch whatever the cache did not have
-        run: make wpt noto-fonts css-tests bidi-tests grapheme-tests notocjk
+        run: make wpt noto-fonts css-tests bidi-tests grapheme-tests notocjk ucd
 
       # Before anything is measured, because a corpus that did not arrive is not
       # a result about the engine. unifoundry.com has answered 200 with an error
@@ -106,8 +107,13 @@ jobs:
       # The CID-keyed CFF tests read a real CJK face, because the thing they are
       # about — a charset that is not the identity — is not something a synthetic
       # font carries. They skip without it, which is worse than failing.
+      #
+      # NOTO_CJK is what makes that true rather than a wish. The step ran them
+      # with nothing naming the corpus, so a fetch that did not happen showed as
+      # seven skips and a green tick; naming the directory turns the same
+      # situation into a failure that says which face is not there.
       - name: The faces that are read rather than generated
-        run: go test -count=1 -run 'CIDKeyed|TheCIDs' -v ./shape/
+        run: NOTO_CJK="$PWD/testdata/notocjk" go test -count=1 -run 'CIDKeyed|TheCIDs' -v ./shape/
 
       # Unicode's own conformance data, 862,000 bidi cases and 766 grapheme ones.
       - run: make test-bidi
@@ -161,4 +167,22 @@ jobs:
       # What this watches is whether two documents laid out at once share
       # anything, which only moves when something becomes shared on purpose. It
       # is here rather than in "test" because it is five times slower.
+      #
+      # `make race` fetches the corpora and names them, because the shared
+      # things are the font sets: with an empty environment the detector saw
+      # only the tests that need nothing fetched, which are the tests that share
+      # nothing.
+      - name: Restore the fetched corpora
+        uses: actions/cache@v6
+        with:
+          path: |
+            testdata/wpt
+            testdata/fonts-noto
+            testdata/css-parsing-tests
+            testdata/unicode-bidi
+            testdata/unicode-grapheme
+            testdata/notocjk
+            testdata/ucd
+            testdata/html
+          key: corpora-4-${{ hashFiles('Makefile') }}
       - run: make race

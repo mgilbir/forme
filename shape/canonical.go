@@ -14,7 +14,7 @@ package shape
 // 2081 canonical decompositions, one step at a time as Unicode states them, and
 // 961 compositions, which are the decompositions that may be put back together:
 // the singletons and the excluded ones are not here. Hangul is in neither, being
-// arithmetic rather than data — see fonts/normalize.go.
+// arithmetic rather than data — see shape/normalize.go.
 
 // charClass is a run of code points sharing a combining class and a category.
 type charClass struct {

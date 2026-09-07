@@ -77,7 +77,7 @@ func run(f func(TB)) (rec *recorder) {
 func library(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, notoMarker), []byte("not a font"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, noto.marker), []byte("not a font"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -144,7 +144,7 @@ func TestAPresentFaceIsRead(t *testing.T) {
 	t.Setenv(NotoEnv, library(t))
 
 	var got []byte
-	rec := run(func(tb TB) { got = NotoFile(tb, notoMarker) })
+	rec := run(func(tb TB) { got = NotoFile(tb, noto.marker) })
 	if string(got) != "not a font" {
 		t.Errorf("NotoFile came back with %q (skipped: %q, failed: %q)",
 			got, rec.skipped, rec.failed)
@@ -155,7 +155,34 @@ func TestAPresentFaceIsRead(t *testing.T) {
 // returns the call that puts it back.
 func swapDefault(t *testing.T, dir string) func() {
 	t.Helper()
-	was := notoDefault
-	notoDefault = dir
-	return func() { notoDefault = was }
+	was := noto.dir
+	noto.dir = dir
+	return func() { noto.dir = was }
+}
+
+// The CID-keyed faces are the same rule with a different marker, and it is
+// worth its own case: CI names that directory precisely so its step for those
+// tests can fail, and a corpus helper that skipped instead would leave the
+// step passing on a fetch that did not happen.
+func TestTheCIDKeyedCorpusFollowsTheSameRule(t *testing.T) {
+	t.Setenv(CJKEnv, filepath.Join(t.TempDir(), "no-such-directory"))
+	rec := run(func(tb TB) { CJKDir(tb) })
+	if rec.skipped != "" {
+		t.Errorf("a NOTO_CJK that is set and wrong skipped: %s", rec.skipped)
+	}
+	if !strings.Contains(rec.failed, CJKEnv) {
+		t.Errorf("the failure does not name %s: %q", CJKEnv, rec.failed)
+	}
+
+	// And a face missing from a corpus that is there.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, cjk.marker), []byte("not a font"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(CJKEnv, dir)
+	rec = run(func(tb TB) { CJKFile(tb, "NotoSansKR-Regular.otf") })
+	if rec.skipped != "" || !strings.Contains(rec.failed, "NotoSansKR-Regular.otf") {
+		t.Errorf("a face missing from a present corpus skipped or said nothing "+
+			"(skipped: %q, failed: %q)", rec.skipped, rec.failed)
+	}
 }

@@ -2,6 +2,8 @@ package font
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -20,6 +22,11 @@ import (
 // subroutine width was 289 of them reading as the default. Neither is subtle
 // against hmtx and neither was visible without it.
 func TestCFFWidthsAgreeWithHmtx(t *testing.T) {
+	// How many of the three were actually read. A `continue` on every one of
+	// them used to be a pass: the oracle for the whole CFF width reader is
+	// three fetched files, and with none of them in the checkout this reported
+	// success having compared nothing.
+	read := 0
 	for _, path := range []string{
 		"../testdata/notocjk/NotoSansJP-Regular.otf",
 		"../testdata/wpt/fonts/noto/cjk/NotoSansCJKjp-Regular-subset-chws.otf",
@@ -27,8 +34,16 @@ func TestCFFWidthsAgreeWithHmtx(t *testing.T) {
 	} {
 		data, err := os.ReadFile(path)
 		if err != nil {
-			continue // fetched corpora; `make notocjk wpt` puts them there
+			// A corpus that is in the checkout has to hold the face it is
+			// listed for. Absent, that is an unfinished fetch and not a
+			// difference between checkouts.
+			if _, statErr := os.Stat(corpusOf(path)); statErr == nil {
+				t.Errorf("%s: %v\nIts corpus is in this checkout, so this is "+
+					"an unfinished fetch rather than a face nobody has.", path, err)
+			}
+			continue
 		}
+		read++
 		tables := SFNTTables(data)
 		if tables == nil || tables["CFF "] == nil {
 			continue
@@ -73,4 +88,18 @@ func TestCFFWidthsAgreeWithHmtx(t *testing.T) {
 				"the first is glyph %d, %v against %v", path, wrong, n, first, gotW, wantW)
 		}
 	}
+	if read == 0 {
+		t.Skip("no CID-keyed face in this checkout; run `make notocjk wpt`")
+	}
+}
+
+// corpusOf is the fetched directory a path lives in — ../testdata/<name> — so
+// that a face missing from a corpus that is present can be told from a corpus
+// nobody fetched.
+func corpusOf(path string) string {
+	parts := strings.Split(filepath.ToSlash(path), "/")
+	if len(parts) < 3 {
+		return ""
+	}
+	return strings.Join(parts[:3], "/")
 }

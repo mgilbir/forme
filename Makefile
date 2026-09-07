@@ -1,4 +1,4 @@
-.PHONY: verify-fonts test-corpora linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors noto-fonts clean-noto-fonts wpt test-wpt clean-wpt varinstance test-varinstance
+.PHONY: ucd verify-fonts test-corpora linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors noto-fonts clean-noto-fonts wpt test-wpt clean-wpt varinstance test-varinstance
 
 test:
 	gofmt -l . | grep -v '^testdata/' && exit 1 || true
@@ -19,14 +19,27 @@ test:
 # number that will be wrong again.
 #
 # So this is where they run. It fetches what each corpus needs first, because a
-# target that quietly skips is the thing it was written to stop.
-test-corpora: wpt noto-fonts css-tests bidi-tests grapheme-tests $(HTML_ENTITIES)
+# target that quietly skips is the thing it was written to stop — and it names
+# every one of them, because a variable that is set and wrong is now a failure
+# rather than a skip, which is only worth having if the variable is set.
+#
+# notocjk and ucd were missing from both lists. The CID-keyed CFF tests read a
+# real CJK face and nothing fetched one, so they skipped here and in CI under a
+# step whose own comment says a skip there is worse than a failure; and the
+# generator tables are checked by regenerating them, which needs the database.
+CORPUS_ENV = \
 	WPT_TESTS="$(abspath $(WPT_DIR))" \
 	NOTO_FONTS="$(abspath $(NOTO_DIR))" \
+	NOTO_CJK="$(abspath $(CJK_DIR))" \
 	CSS_PARSING_TESTS="$(abspath $(CSS_TESTS_DIR))" \
 	UNICODE_BIDI_TESTS="$(abspath $(BIDI_DIR))" \
-	UNICODE_GRAPHEME_TESTS="$(abspath $(GRAPHEME_DIR))" \
-	  go test -count=1 ./...
+	UNICODE_GRAPHEME_TESTS="$(abspath $(GRAPHEME_DIR))"
+
+CORPORA = wpt noto-fonts notocjk ucd css-tests bidi-tests grapheme-tests $(HTML_ENTITIES)
+
+test-corpora: $(CORPORA)
+	$(MAKE) verify-fonts
+	$(CORPUS_ENV) go test -count=1 ./...
 
 # The same suite under the race detector.
 #
@@ -37,8 +50,14 @@ test-corpora: wpt noto-fonts css-tests bidi-tests grapheme-tests $(HTML_ENTITIES
 # happened: a new memo, a package-level var, a font set that caches.
 .PHONY: race
 
-race:
-	go test -count=1 -race ./...
+# With every corpus in the environment, for the same reason test-corpora has
+# them: an empty environment leaves the font sets, the shared block-glyph
+# registry and every document that loads an @font-face out of the run, and those
+# are the shared things the detector is here to watch. It ran `go test -race`
+# over the tests that need nothing fetched, which are the ones that share
+# nothing.
+race: $(CORPORA)
+	$(CORPUS_ENV) go test -count=1 -race ./...
 
 # Every fetch in this file goes through FETCH rather than through a bare curl.
 #
@@ -143,13 +162,71 @@ hbfuzz:
 UCD_DIR := testdata/ucd
 UCD ?= $(UCD_DIR)
 
+# The database itself, which every generator below reads and nothing fetched.
+#
+# .gitignore said testdata/ucd was "fetched into place for `make useable`" and
+# no target put anything there: nine generator targets each documented as
+# `make thing UCD=/path/to/unpacked/ucd`, and finding unicode.org and unpacking
+# a zip was left to the reader. It was the one corpus in this file that had to
+# be done by hand, and the reason clean-ucd guarded a directory nothing made.
+#
+# Three of those nine could not have run against a database at all — the
+# argument lists had drifted, and nothing was in a position to notice. See
+# cmd/regenerate_test.go, which now runs every one of them.
+#
+# The seventeen files that are read, rather than UCD.zip: the archive is an
+# order of magnitude larger than the files taken from it, unzip is one more
+# thing to have installed, and a file that moves in a new release fails here by
+# name instead of as a "no such file" from inside a generator.
+#
+# The layout is the database's own, subdirectories and all, so that a caller who
+# already has one unpacked can point UCD at it and every target works.
+UCD_FILES := \
+	ArabicShaping.txt \
+	BidiBrackets.txt \
+	BidiMirroring.txt \
+	CompositionExclusions.txt \
+	DerivedCoreProperties.txt \
+	EastAsianWidth.txt \
+	IndicPositionalCategory.txt \
+	IndicSyllabicCategory.txt \
+	LineBreak.txt \
+	PropertyValueAliases.txt \
+	Scripts.txt \
+	SpecialCasing.txt \
+	UnicodeData.txt \
+	VerticalOrientation.txt \
+	auxiliary/GraphemeBreakProperty.txt \
+	emoji/emoji-data.txt \
+	extracted/DerivedBidiClass.txt
+
+ucd: $(UCD_DIR)/.ok
+
+$(UCD_DIR)/.ok:
+	@for f in $(UCD_FILES); do \
+	  mkdir -p $(UCD_DIR)/$$(dirname $$f); \
+	  $(FETCH) -o $(UCD_DIR)/$$f $(UCD_URL)/$$f || exit 1; \
+	done
+	@echo "Unicode $(UNICODE_VERSION) in $(UCD_DIR)"
+	touch $@
+
+# A generator reads the fetched database only when it is the fetched one. A
+# caller who passed UCD= has their own, and fetching over the top of it would be
+# this file taking a decision that is theirs.
+ifeq ($(UCD),$(UCD_DIR))
+UCD_DEP := $(UCD_DIR)/.ok
+else
+UCD_DEP :=
+endif
+
 # The tables the shaper derives from Unicode, which cmd/genuse's table above is
 # only one of. Each was runnable and none was wired up, so the only way to
 # regenerate one was to read its usage line — which named a directory this
-# repository does not have.
+# repository did not have until `make ucd` fetched one.
 #
-#	make shapetables UCD=/path/to/unpacked/ucd
-shapetables:
+#	make shapetables                              # against the fetched database
+#	make shapetables UCD=/path/to/unpacked/ucd    # against one you already have
+shapetables: $(UCD_DEP)
 	go run ./cmd/genscripts $(UCD)/Scripts.txt $(UCD)/PropertyValueAliases.txt \
 	  > shape/scripts.go
 	go run ./cmd/genjoining $(UCD)/ArabicShaping.txt > shape/joining.go
@@ -167,15 +244,16 @@ shapetables:
 # The bidirectional character properties, UAX #9. See cmd/genbidi.
 #
 #	make bidi-tables UCD=/path/to/unpacked/ucd
-bidi-tables:
-	go run ./cmd/genbidi $(UCD)/UnicodeData.txt $(UCD)/DerivedBidiClass.txt \
+bidi-tables: $(UCD_DEP)
+	go run ./cmd/genbidi $(UCD)/UnicodeData.txt \
+	  $(UCD)/extracted/DerivedBidiClass.txt \
 	  $(UCD)/BidiBrackets.txt $(UCD)/BidiMirroring.txt > bidi/tables.go
 	gofmt -w bidi/tables.go
 
 # The grapheme cluster properties, UAX #29. See cmd/gensegment.
 #
 #	make grapheme-tables UCD=/path/to/unpacked/ucd
-grapheme-tables:
+grapheme-tables: $(UCD_DEP)
 	go run ./cmd/gensegment -ucd $(UCD) -out segment/tables.go
 	gofmt -w segment/tables.go
 
@@ -183,7 +261,7 @@ grapheme-tables:
 # property. See cmd/genlinebreak for which of UAX #14's rules are in it.
 #
 #	make linebreak UCD=/path/to/unpacked/ucd
-linebreak:
+linebreak: $(UCD_DEP)
 	go run ./cmd/genlinebreak $(UCD)/LineBreak.txt > paragraph/linebreaktable.go
 	gofmt -w paragraph/linebreaktable.go
 
@@ -191,7 +269,7 @@ linebreak:
 # one, which Go's own case functions cannot express. See cmd/gencasing.
 #
 #	make casing UCD=/path/to/unpacked/ucd
-casing:
+casing: $(UCD_DEP)
 	go run ./cmd/gencasing $(UCD)/SpecialCasing.txt > paragraph/casingtable.go
 	gofmt -w paragraph/casingtable.go
 
@@ -199,8 +277,9 @@ casing:
 # Width, and which characters are Hangul. See cmd/geneastasian.
 #
 #	make eastasian UCD=/path/to/unpacked/ucd
-eastasian:
+eastasian: $(UCD_DEP)
 	go run ./cmd/geneastasian $(UCD)/EastAsianWidth.txt $(UCD)/Scripts.txt \
+	  $(UCD)/UnicodeData.txt $(UCD)/emoji/emoji-data.txt \
 	  > paragraph/eastasiantable.go
 	gofmt -w paragraph/eastasiantable.go
 
@@ -319,7 +398,7 @@ hyphens:
 # this engine can turn on their side. See cmd/genvertical.
 #
 #	make vertical UCD=/path/to/unpacked/ucd
-vertical:
+vertical: $(UCD_DEP)
 	go run ./cmd/genvertical $(UCD)/VerticalOrientation.txt > paragraph/verticaltable.go
 	gofmt -w paragraph/verticaltable.go
 
@@ -327,12 +406,12 @@ vertical:
 # from UnicodeData.txt. See cmd/genfullwidth and cmd/genfullsizekana.
 #
 #	make widths UCD=/path/to/unpacked/ucd
-widths:
+widths: $(UCD_DEP)
 	go run ./cmd/genfullwidth $(UCD)/UnicodeData.txt > paragraph/widthtable.go
 	go run ./cmd/genfullsizekana $(UCD)/UnicodeData.txt > paragraph/kanatable.go
 	gofmt -w paragraph/widthtable.go paragraph/kanatable.go
 
-useable:
+useable: $(UCD_DEP)
 	go run ./cmd/genuse \
 		$(UCD)/IndicSyllabicCategory.txt \
 		$(UCD)/IndicPositionalCategory.txt \
