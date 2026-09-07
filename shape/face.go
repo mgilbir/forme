@@ -438,26 +438,23 @@ func postItalicAngle(post []byte) float64 {
 // The instance records after them are deliberately not read. They name points
 // in the design space, and naming a point is only useful to something that can
 // go there — which this cannot.
+// It is parseFvar's answer and not a second reading of the same table.
+//
+// There were two, and they did not agree: this one checked neither the version
+// nor the axis count nor that an axis runs the way an axis runs, and stopped at
+// the first record that did not fit rather than refusing the table. So Axes
+// named axes LoadInstance would not accept — a design space with a default
+// outside its own range, or sixty-five thousand axes of it — and a caller
+// reading Axes to find out what it may ask for was told something the thing it
+// would ask could not do.
 func readAxes(fvar []byte) []Axis {
-	if len(fvar) < 16 {
+	axes, err := parseFvar(fvar)
+	if err != nil {
 		return nil
 	}
-	off, count, size := font.Be16(fvar, 4), font.Be16(fvar, 8), font.Be16(fvar, 10)
-	if size < 20 {
-		return nil
-	}
-	var out []Axis
-	for i := 0; i < count; i++ {
-		p := off + i*size
-		if p < 0 || p+20 > len(fvar) {
-			break
-		}
-		out = append(out, Axis{
-			Tag:     string(fvar[p : p+4]),
-			Min:     fixed1616(font.Be32(fvar, p+4)),
-			Default: fixed1616(font.Be32(fvar, p+8)),
-			Max:     fixed1616(font.Be32(fvar, p+12)),
-		})
+	out := make([]Axis, len(axes))
+	for i, a := range axes {
+		out[i] = Axis{Tag: a.tag, Min: a.min, Default: a.def, Max: a.max}
 	}
 	return out
 }

@@ -261,7 +261,11 @@ func instanceProgram(data []byte, want map[string]float64) ([]byte, []float64, e
 	out["hmtx"], out["hhea"] = buildMetrics(hhea, newAdvances, origins, bounds)
 	out["head"] = instanceHead(head, bounds)
 	instanceDesign(out, axes, want)
-	if name := instanceName(tables["name"], fvar, axes, want); name != nil {
+	name, err := instanceName(tables["name"], fvar, axes, want)
+	if err != nil {
+		return nil, nil, err
+	}
+	if name != nil {
 		out["name"] = name
 	}
 	return assembleSFNT(out), coords, nil
@@ -830,15 +834,23 @@ func widthClass(percent float64) int {
 // PostScript name, which is the name its publisher chose. Anything else is named
 // from its coordinates, which is ugly and unambiguous — the two properties that
 // matter for a name nobody reads and everything compares.
-func instanceName(name, fvar []byte, axes []varAxis, want map[string]float64) []byte {
+// It reports an error where the name has to change and the table cannot be
+// rebuilt, which is not the same as there being nothing to change. Returning nil
+// for both was the collision this function exists to prevent, arrived at by the
+// other road: a name table the rewriter cannot read left the instance carrying
+// the *default* instance's name, and the caller could not tell that from "this
+// is already the right name".
+func instanceName(name, fvar []byte, axes []varAxis, want map[string]float64) ([]byte, error) {
 	if len(name) == 0 {
-		return nil
+		// No name to collide with. A font that names nothing gives its
+		// instances nothing to be confused about.
+		return nil, nil
 	}
 	if named := namedInstanceName(fvar, name, axes, want); named != "" {
 		if named == postScriptName(name) {
-			return nil
+			return nil, nil
 		}
-		return replacePostScriptName(name, sanitizeName(named))
+		return rewrittenName(name, named)
 	}
 	suffix := ""
 	for _, a := range axes {
@@ -852,13 +864,29 @@ func instanceName(name, fvar []byte, axes []varAxis, want map[string]float64) []
 		suffix += "-" + a.tag + strconv.FormatFloat(v, 'g', -1, 64)
 	}
 	if suffix == "" {
-		return nil // the default instance, which is the name the font already has
+		return nil, nil // the default instance, which is the name the font already has
 	}
 	base := postScriptName(name)
 	if base == "" {
 		base = "Instance"
 	}
-	return replacePostScriptName(name, sanitizeName(base+suffix))
+	return rewrittenName(name, base+suffix)
+}
+
+// rewrittenName is replacePostScriptName with the failure said out loud.
+//
+// A table this cannot rebuild is a table whose records or storage do not lie
+// where it says they do. There is no answer to give: the instance must not go
+// out under the default instance's name, because two weights of one face in one
+// document under one /BaseFont is a document nothing downstream can take apart.
+func rewrittenName(name []byte, to string) ([]byte, error) {
+	out := replacePostScriptName(name, sanitizeName(to))
+	if out == nil {
+		return nil, fmt.Errorf("fonts: this font's name table cannot be rebuilt, "+
+			"so the instance cannot be named %q and must not go out under the "+
+			"default instance's name", sanitizeName(to))
+	}
+	return out, nil
 }
 
 // namedInstanceName is the PostScript name the font itself gives a location,

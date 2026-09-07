@@ -873,7 +873,13 @@ func subtables(lookup []byte, extensionType int, budget *int) (kind, flags, mark
 	// The bound is the format's own, for the reason maxDeclaredList is: the count
 	// is a uint16, so no valid font is truncated, and what stops a crafted one
 	// is that each subtable needs two bytes of offset present in the lookup.
-	count := font.Be16(lookup, 4)
+	// The declared count, kept apart from the clamped one: the mark filtering
+	// set below is written *after* the offsets the lookup declares, so where it
+	// sits is decided by that number and not by how many of them are read.
+	// Reading it at the clamped position took two bytes of an offset instead —
+	// a mark glyph set index out of the middle of the table.
+	declared := font.Be16(lookup, 4)
+	count := declared
 	if count > maxSubtableList {
 		count = maxSubtableList
 	}
@@ -924,7 +930,7 @@ func subtables(lookup []byte, extensionType int, budget *int) (kind, flags, mark
 	// offsets, which is why this is read last: where the number sits depends on
 	// how many subtables there are.
 	if flags&flagUseMarkFilteringSet != 0 {
-		if at := 6 + 2*count; at+2 <= len(lookup) {
+		if at := 6 + 2*declared; at+2 <= len(lookup) {
 			markSet = font.Be16(lookup, at)
 		}
 	}
