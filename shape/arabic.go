@@ -25,6 +25,29 @@ import (
 // strokes themselves, which is cursive attachment (GPOS 3). Reordering is
 // indic.go's, and the two are alternatives rather than stages: no script both
 // joins cursively and reorders.
+//
+// Three more things every other shaper does are absent, and they were absent
+// without being written down here, which is worse than being absent:
+//
+//   - Syriac's Alaph. The letter U+0710 takes a final form chosen by what
+//     precedes it rather than by what it joins to, which is a rule of its own
+//     over and above the four shapes — HarfBuzz spells it as a fifth state with
+//     its own feature tags ('fin2', 'fin3', 'med2'). Without it a Syriac Alaph
+//     is set in the ordinary final form, which is the wrong glyph wherever the
+//     letter before it does not join forward.
+//   - 'stch', the stretching feature Syriac uses to fill a line by lengthening
+//     a letter rather than by spacing its words. A font that declares it is set
+//     without it, which is a line short of the width it was justified to.
+//   - Fallback shaping. A font that declares none of 'init', 'medi', 'fina' or
+//     'isol' is set here in the letters as written, one isolated form after
+//     another. Unicode's Arabic Presentation Forms block holds those four
+//     shapes as characters, and a shaper with nothing else to go on maps to
+//     them — which is what a reader of a font with no layout tables at all
+//     gets from every other engine and does not get from this one.
+//
+// Each of the three is a font this engine sets less well than another would
+// rather than a font it refuses, so none of them is reported: nothing here can
+// tell "this font has no joining forms" from "this run needs none".
 
 // joiningType is what a character can join to.
 type joiningType uint8

@@ -748,16 +748,31 @@ var indicRunFeatures = []struct {
 	tag    string
 	manual bool
 }{
-	{"pres", true},
-	{"abvs", true},
-	{"blws", true},
-	{"psts", true},
-	{"haln", true},
 	{"rlig", false},
 	{"clig", false},
 	{"calt", false},
 	{"rclt", false},
 }
+
+// indicPresentationFeatures turn the reordered pieces of one syllable into the
+// shapes a reader sees, and they see that syllable and nothing else.
+//
+// They were applied to the whole run, once every syllable was in drawing order,
+// which is what the Khmer model asks for and not what this one does. The
+// difference is in the two models as written: Khmer's other features are
+// "applied all at once after clearing syllables", and the Indic model's are
+// "applied all at once, after final reordering, *constrained to the syllable*".
+//
+// It is not a distinction without a difference. A lookup that ran over the whole
+// run could join the end of one syllable to the start of the next — a below-base
+// form reaching past its own cluster into the letter after it — and no font
+// writes those rules meaning that. What made it hard to see is that a font whose
+// rules are narrow enough never produces one, so most text comes out the same
+// either way.
+//
+// 'init' belongs to this group and is applied just before it, where the
+// condition it needs — a pre-base matra opening a word — is known.
+var indicPresentationFeatures = []string{"pres", "abvs", "blws", "psts", "haln"}
 
 // shapeIndic is the whole Indic pass: it replaces both the joining pass and the
 // default substitutions for a run it handles.
@@ -1051,6 +1066,18 @@ func (sh shaper) shapeIndicSyllable(buf []Glyph, info *[]indicInfo, runes, befor
 		start < end && (*info)[start].pos == posPreM && indicWordStart(before, runes, textStart) {
 		var d int
 		buf, d = sh.applyIndicFeature(buf, info, lookups, start, start+1, start, end, true)
+		grow(d)
+	}
+
+	// The presentation features, which see this syllable and nothing else. See
+	// indicPresentationFeatures.
+	for _, tag := range indicPresentationFeatures {
+		lookups := sh.l.featureLookups[tag]
+		if len(lookups) == 0 {
+			continue
+		}
+		var d int
+		buf, d = sh.applyIndicFeature(buf, info, lookups, start, end, start, end, true)
 		grow(d)
 	}
 
