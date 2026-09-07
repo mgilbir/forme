@@ -48,178 +48,42 @@ import "github.com/mgilbir/forme/style"
 // than the memmove at these sizes. It is still Θ(n^1.5) over a page, which for
 // untrusted input is a smaller version of the same problem rather than an
 // answer to it.
-type bottomSet struct {
-	root *bottomNode
-	n    int
-}
+// floatBottom is one float's bottom edge, which is its own key.
+type floatBottom style.Unit
 
-// bottomNode is one value. Duplicates are separate nodes: two floats can end at
-// the same y, and removing one must leave the other.
-type bottomNode struct {
-	value       style.Unit
-	height      int8
-	left, right *bottomNode
+func (b floatBottom) unitKey() style.Unit { return style.Unit(b) }
+
+// bottomSet is the multiset, over the tree in unittree.go.
+type bottomSet struct {
+	tree unitTree[floatBottom]
 }
 
 // len is how many bottoms are in the set.
-func (s *bottomSet) len() int { return s.n }
+func (s *bottomSet) len() int { return s.tree.len() }
 
 // insert adds one bottom.
-func (s *bottomSet) insert(v style.Unit) {
-	s.root = insertBottom(s.root, v)
-	s.n++
-}
+func (s *bottomSet) insert(v style.Unit) { s.tree.insert(floatBottom(v)) }
 
 // remove takes out one bottom equal to v, and reports whether it found one.
 //
 // One occurrence, not all of them: the set is a multiset because the values are
 // float bottoms and two floats can end at the same y, and rewind takes out
 // exactly the float it is undoing.
-func (s *bottomSet) remove(v style.Unit) bool {
-	var removed bool
-	s.root, removed = removeBottom(s.root, v)
-	if removed {
-		s.n--
-	}
-	return removed
-}
+func (s *bottomSet) remove(v style.Unit) bool { return s.tree.removeKey(v) }
 
 // firstAbove is the smallest bottom strictly greater than y.
-//
-// The descent keeps the best candidate seen: at a node above y, that node is a
-// candidate and anything better is to its left; at a node at or below y,
-// nothing in its left subtree can help.
 func (s *bottomSet) firstAbove(y style.Unit) (style.Unit, bool) {
-	var best style.Unit
-	found := false
-	for t := s.root; t != nil; {
-		if t.value > y {
-			best, found = t.value, true
-			t = t.left
-		} else {
-			t = t.right
-		}
-	}
-	return best, found
+	b, ok := s.tree.firstAbove(y)
+	return style.Unit(b), ok
 }
 
 // values returns the set in order, for the tests that compare it against a
 // sorted slice.
 func (s *bottomSet) values() []style.Unit {
-	out := make([]style.Unit, 0, s.n)
-	var walk func(*bottomNode)
-	walk = func(t *bottomNode) {
-		if t == nil {
-			return
-		}
-		walk(t.left)
-		out = append(out, t.value)
-		walk(t.right)
+	items := s.tree.all()
+	out := make([]style.Unit, len(items))
+	for i, b := range items {
+		out[i] = style.Unit(b)
 	}
-	walk(s.root)
 	return out
-}
-
-func heightOf(t *bottomNode) int8 {
-	if t == nil {
-		return 0
-	}
-	return t.height
-}
-
-func fixHeight(t *bottomNode) {
-	l, r := heightOf(t.left), heightOf(t.right)
-	if l > r {
-		t.height = l + 1
-	} else {
-		t.height = r + 1
-	}
-}
-
-func balanceOf(t *bottomNode) int8 { return heightOf(t.left) - heightOf(t.right) }
-
-func rotateRight(t *bottomNode) *bottomNode {
-	l := t.left
-	t.left = l.right
-	l.right = t
-	fixHeight(t)
-	fixHeight(l)
-	return l
-}
-
-func rotateLeft(t *bottomNode) *bottomNode {
-	r := t.right
-	t.right = r.left
-	r.left = t
-	fixHeight(t)
-	fixHeight(r)
-	return r
-}
-
-// rebalance restores the AVL invariant at one node after its subtrees changed.
-func rebalance(t *bottomNode) *bottomNode {
-	fixHeight(t)
-	switch b := balanceOf(t); {
-	case b > 1:
-		if balanceOf(t.left) < 0 {
-			t.left = rotateLeft(t.left)
-		}
-		return rotateRight(t)
-	case b < -1:
-		if balanceOf(t.right) > 0 {
-			t.right = rotateRight(t.right)
-		}
-		return rotateLeft(t)
-	}
-	return t
-}
-
-// insertBottom adds v, sending a duplicate right so that equal values keep the
-// order they arrived in — which nothing depends on, but which makes the tree's
-// contents a function of the input alone.
-func insertBottom(t *bottomNode, v style.Unit) *bottomNode {
-	if t == nil {
-		return &bottomNode{value: v, height: 1}
-	}
-	if v < t.value {
-		t.left = insertBottom(t.left, v)
-	} else {
-		t.right = insertBottom(t.right, v)
-	}
-	return rebalance(t)
-}
-
-// removeBottom takes out one node holding v.
-func removeBottom(t *bottomNode, v style.Unit) (*bottomNode, bool) {
-	if t == nil {
-		return nil, false
-	}
-	var removed bool
-	switch {
-	case v < t.value:
-		t.left, removed = removeBottom(t.left, v)
-	case v > t.value:
-		t.right, removed = removeBottom(t.right, v)
-	default:
-		removed = true
-		switch {
-		case t.left == nil:
-			return t.right, true
-		case t.right == nil:
-			return t.left, true
-		}
-		// Two children: the in-order successor takes this node's place, and is
-		// then removed from where it was. It is the smallest value in the right
-		// subtree, so exactly one node there holds it and this recursion ends.
-		next := t.right
-		for next.left != nil {
-			next = next.left
-		}
-		t.value = next.value
-		t.right, _ = removeBottom(t.right, next.value)
-	}
-	if !removed {
-		return t, false
-	}
-	return rebalance(t), true
 }

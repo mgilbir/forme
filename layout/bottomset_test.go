@@ -117,13 +117,13 @@ func TestTheBottomSetStaysBalanced(t *testing.T) {
 			// number this tree happens to reach, so that a different but still
 			// balanced insertion does not have to be argued about here.
 			limit := int8(1.4405*float64(bits.Len(uint(n+2))) + 1)
-			if h := heightOf(s.root); h > limit {
+			if h := unitHeight(s.tree.root); h > limit {
 				t.Errorf("%d values inserted in %s order gave a tree %d deep, "+
 					"and AVL's bound is %d", n, c.name, h, limit)
 			}
-			if bad := unbalanced(s.root); bad != nil {
+			if bad := unbalanced(s.tree.root); bad != nil {
 				t.Errorf("a node holding %v has subtrees %d and %d deep",
-					bad.value, heightOf(bad.left), heightOf(bad.right))
+					style.Unit(bad.item), unitHeight(bad.left), unitHeight(bad.right))
 			}
 			// And it still holds what was put in, in order.
 			vals := s.values()
@@ -142,7 +142,7 @@ func TestTheBottomSetStaysBalanced(t *testing.T) {
 
 // unbalanced returns a node whose subtrees differ in depth by more than one, or
 // whose recorded height is not what its subtrees say.
-func unbalanced(t *bottomNode) *bottomNode {
+func unbalanced[T unitKeyed](t *unitNode[T]) *unitNode[T] {
 	if t == nil {
 		return nil
 	}
@@ -152,11 +152,11 @@ func unbalanced(t *bottomNode) *bottomNode {
 	if bad := unbalanced(t.right); bad != nil {
 		return bad
 	}
-	b := balanceOf(t)
+	b := unitBalance(t)
 	if b < -1 || b > 1 {
 		return t
 	}
-	l, r := heightOf(t.left), heightOf(t.right)
+	l, r := unitHeight(t.left), unitHeight(t.right)
 	if l < r {
 		l = r
 	}
@@ -214,7 +214,7 @@ func TestARowOfEqualFloatsIsLinearInTheirNumber(t *testing.T) {
 	}
 	// They really did go side by side: a run that stacked them would have a
 	// different list and would not be measuring this.
-	if steps := len(fc.idx.left.steps); steps > 4 {
+	if steps := fc.idx.left.steps.len(); steps > 4 {
 		t.Fatalf("the left staircase has %d steps; the floats are all the same "+
 			"height, so this is not the row this test is about", steps)
 	}

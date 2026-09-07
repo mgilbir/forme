@@ -86,14 +86,47 @@ type stairStep struct {
 	set  bool
 }
 
+// unitKey is the y the step begins at, which is what orders them.
+func (st stairStep) unitKey() style.Unit { return st.y }
+
 // stair is the greatest (or least) float edge in force at each y.
 //
-// steps is sorted by y and holds no two adjacent entries with the same value, so
-// its length is bounded by the number of *distinct* spans the floats cover rather
-// than by the number of floats: the common page, where floats stack in rows,
-// gives one or two steps per row and not one per float.
+// The steps are ordered by y and hold no two adjacent entries with the same
+// value, so their number is bounded by the number of *distinct* spans the floats
+// cover rather than by the number of floats: the common page, where floats stack
+// in rows, gives one or two steps per row and not one per float.
+//
+// # Why they are a tree and not a slice
+//
+// They were a slice, and cover's rewrite of the window was a splice into it:
+// the entries after the window moved by the difference in length. That is Θ(n)
+// per float however few breakpoints the float itself touches, and which page
+// pays for it depends on where the windows fall. Floats stacked down the page
+// splice at the end and cost nothing; floats in a row of *decreasing* height
+// splice at the front every time, and each one moves everything already there.
+//
+// Measured, placing n left floats side by side with decreasing heights:
+//
+//	n          slice      tree
+//	32,000      0.11 s    0.043 s
+//	64,000      0.44 s    0.079 s
+//	128,000     4.8 s     0.178 s
+//	256,000    26.5 s     0.367 s
+//
+// Four times the time for twice the floats against a little over two, and 72×
+// at the last row. End to end, laying out a document of n floated elements —
+// about four megabytes of markup at 128,000 — it is 0.37 s, 0.95 s and 5.7 s
+// against 0.33 s, 0.69 s and 1.37 s, which is where the quadratic term goes
+// from a third of the layout to none of it. A profile of the 128,000 case spent
+// 94.6% of its time in the splice's memmove.
+//
+// The window itself is walked either way, and that is not the cost: the splice
+// moved what the window did not touch. So cover does the same work it always
+// did — collect the steps in [y0, y1), decide what replaces them — and then
+// applies it as a handful of insertions and removals, each of which is a walk
+// down the tree rather than a walk over the page.
 type stair struct {
-	steps []stairStep
+	steps unitTree[stairStep]
 
 	// least says which of two floats covering the same y wins. The left edge of
 	// a band is the greatest right edge of the left floats; the right edge is the
@@ -102,9 +135,15 @@ type stair struct {
 }
 
 // stairEdit is what one call to cover changed, so that it can be undone.
+//
+// The steps themselves rather than a position and a count: a tree has no
+// positions, and undoing is putting the removed steps back and taking the added
+// ones out again. It is exact — the tree after undoing float k is the tree that
+// existed before float k was added — which is what lets the property test
+// compare against a linear scan after an arbitrary sequence of adds and
+// removals.
 type stairEdit struct {
-	at      int
-	added   int
+	added   []stairStep
 	removed []stairStep
 }
 
@@ -116,42 +155,13 @@ func (s *stair) beats(a, b style.Unit) bool {
 	return a > b
 }
 
-// stepAt returns the index of the step in force at y, or -1 when no float
-// reaches that high.
-func (s *stair) stepAt(y style.Unit) int {
-	lo, hi := 0, len(s.steps)
-	for lo < hi {
-		mid := int(uint(lo+hi) >> 1)
-		if s.steps[mid].y <= y {
-			lo = mid + 1
-		} else {
-			hi = mid
-		}
-	}
-	return lo - 1
-}
-
-// lowerBound returns the first index whose step begins at or after y.
-func (s *stair) lowerBound(y style.Unit) int {
-	lo, hi := 0, len(s.steps)
-	for lo < hi {
-		mid := int(uint(lo+hi) >> 1)
-		if s.steps[mid].y < y {
-			lo = mid + 1
-		} else {
-			hi = mid
-		}
-	}
-	return lo
-}
-
 // at answers the point query: the edge in force at one y.
 func (s *stair) at(y style.Unit) (style.Unit, bool) {
-	k := s.stepAt(y)
-	if k < 0 || !s.steps[k].set {
+	st, ok := s.steps.lastAtOrBelow(y)
+	if !ok || !st.set {
 		return 0, false
 	}
-	return s.steps[k].edge, true
+	return st.edge, true
 }
 
 // over answers the range query: the winning edge anywhere in [y0, y1).
@@ -160,21 +170,21 @@ func (s *stair) at(y style.Unit) (style.Unit, bool) {
 // at y0 — which may have begun well above it — and stops at the first step that
 // begins at or after y1.
 func (s *stair) over(y0, y1 style.Unit) (style.Unit, bool) {
-	k := s.stepAt(y0)
-	if k < 0 {
-		k = 0
+	from := y0
+	if st, ok := s.steps.lastAtOrBelow(y0); ok {
+		from = st.y
 	}
 	var best style.Unit
 	found := false
-	for ; k < len(s.steps) && s.steps[k].y < y1; k++ {
-		st := s.steps[k]
-		if !st.set {
-			continue
+	s.steps.rangeFrom(from, func(st stairStep) bool {
+		if st.y >= y1 {
+			return false
 		}
-		if !found || s.beats(st.edge, best) {
+		if st.set && (!found || s.beats(st.edge, best)) {
 			best, found = st.edge, true
 		}
-	}
+		return true
+	})
 	return best, found
 }
 
@@ -192,24 +202,32 @@ func (s *stair) combine(st stairStep, edge style.Unit) stairStep {
 // cover records a float that occupies [y0, y1) with the given edge, returning
 // what it changed.
 //
-// The window that can change is [y0, y1) and nothing else, so the rewrite is a
-// splice: the steps that begin inside the window are recombined with the new
-// edge, a step is opened at y0 unless one already begins there, and the value the
-// old staircase had just below y1 is restored at y1 unless a step already begins
-// there. Adjacent steps that end up equal are merged, which is what keeps the
-// array proportional to the distinct spans rather than to the floats.
+// The window that can change is [y0, y1) and nothing else, so the rewrite
+// touches only what is in it: the steps that begin inside the window are
+// recombined with the new edge, a step is opened at y0 unless one already begins
+// there, and the value the old staircase had just below y1 is restored at y1
+// unless a step already begins there. Adjacent steps that end up equal are
+// merged, which is what keeps the tree proportional to the distinct spans rather
+// than to the floats.
 func (s *stair) cover(y0, y1, edge style.Unit) stairEdit {
-	lo, hi := s.lowerBound(y0), s.lowerBound(y1)
+	// The window, and the two steps either side of it. These are what the
+	// slice read as steps[lo:hi], steps[lo-1] and steps[hi].
+	var window []stairStep
+	s.steps.rangeFrom(y0, func(st stairStep) bool {
+		if st.y >= y1 {
+			return false
+		}
+		window = append(window, st)
+		return true
+	})
+	before, haveBefore := s.steps.lastBelow(y0)
+	next, haveNext := s.steps.firstAtOrAbove(y1)
 
-	// out is the replacement for steps[lo:hi]. It is built against the value in
+	// out is the replacement for the window. It is built against the value in
 	// force immediately above the window, so a first step that repeats it is
 	// dropped rather than splitting one run into two identical ones.
 	var out []stairStep
-	var last stairStep
-	haveLast := lo > 0
-	if haveLast {
-		last = s.steps[lo-1]
-	}
+	last, haveLast := before, haveBefore
 	push := func(st stairStep) {
 		if haveLast && last.set == st.set && (!st.set || last.edge == st.edge) {
 			return
@@ -218,64 +236,61 @@ func (s *stair) cover(y0, y1, edge style.Unit) stairEdit {
 		last, haveLast = st, true
 	}
 
-	if lo == len(s.steps) || s.steps[lo].y > y0 {
+	if len(window) == 0 || window[0].y > y0 {
 		// The float begins part way through the step above it (or past the end of
 		// the staircase), so the covered run needs a step of its own at y0.
 		prev := stairStep{y: y0}
-		if lo > 0 {
-			prev = s.steps[lo-1]
+		if haveBefore {
+			prev = before
 			prev.y = y0
 		}
 		push(s.combine(prev, edge))
 	}
-	for k := lo; k < hi; k++ {
-		push(s.combine(s.steps[k], edge))
+	for _, st := range window {
+		push(s.combine(st, edge))
 	}
-	if hi == len(s.steps) || s.steps[hi].y > y1 {
+	if !haveNext || next.y > y1 {
 		// Below the float the staircase goes back to whatever it was, which is
 		// the value in force just above y1 — the last step the window swallowed,
-		// or nothing at all when the float reaches past the end.
+		// or the step above the window, or nothing at all when the float reaches
+		// past the end.
 		tail := stairStep{y: y1}
-		if hi > 0 {
-			tail = s.steps[hi-1]
+		switch {
+		case len(window) > 0:
+			tail = window[len(window)-1]
+			tail.y = y1
+		case haveBefore:
+			tail = before
 			tail.y = y1
 		}
 		push(tail)
 	}
+
+	removed := window
 	// The step just below the window can now repeat the last one written, in
 	// which case it is redundant and is swallowed too.
-	if hi < len(s.steps) && haveLast {
-		if next := s.steps[hi]; next.set == last.set && (!next.set || next.edge == last.edge) {
-			hi++
+	if haveNext && haveLast {
+		if next.set == last.set && (!next.set || next.edge == last.edge) {
+			removed = append(removed, next)
 		}
 	}
 
-	e := stairEdit{at: lo, added: len(out)}
-	if hi > lo {
-		e.removed = append(e.removed, s.steps[lo:hi]...)
-	}
-	s.steps = spliceSteps(s.steps, lo, hi, out)
-	return e
+	s.apply(removed, out)
+	return stairEdit{added: out, removed: removed}
 }
 
 // undo puts back exactly what cover took out.
-func (s *stair) undo(e stairEdit) {
-	s.steps = spliceSteps(s.steps, e.at, e.at+e.added, e.removed)
-}
+func (s *stair) undo(e stairEdit) { s.apply(e.added, e.removed) }
 
-// spliceSteps replaces dst[from:to] with with, in place where the capacity
-// allows. copy is a move, so the overlapping shifts below are sound.
-func spliceSteps(dst []stairStep, from, to int, with []stairStep) []stairStep {
-	switch delta := len(with) - (to - from); {
-	case delta > 0:
-		dst = append(dst, make([]stairStep, delta)...)
-		copy(dst[to+delta:], dst[to:])
-	case delta < 0:
-		copy(dst[to+delta:], dst[to:])
-		dst = dst[:len(dst)+delta]
+// apply takes out one set of steps and puts in another. The removals go first
+// because an added step may sit at the y of a removed one.
+func (s *stair) apply(remove, add []stairStep) {
+	for _, st := range remove {
+		s.steps.removeKey(st.y)
 	}
-	copy(dst[from:], with)
-	return dst
+	for _, st := range add {
+		s.steps.insert(st)
+	}
 }
 
 // A float with no height is still an obstacle, and this is where that is kept.
