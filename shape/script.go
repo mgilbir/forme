@@ -330,11 +330,14 @@ type shaper struct {
 	f *Face
 	l *layout
 
-	// rtl says the run will be drawn right to left, and is what the positioning
-	// pass needs to know. Everything before positioning works in the order the
-	// text is written and is the same either way; positioning states where a
-	// glyph sits relative to the pen, and the pen will meet the run's glyphs in
-	// the opposite order.
+	// rtl says the run will be drawn right to left.
+	//
+	// Positioning needs it because it states where a glyph sits relative to the
+	// pen, and the pen will meet the run's glyphs in the opposite order.
+	// Substitution needs it for one thing only: which of 'rtlm'/'rtla' and
+	// 'ltrm'/'ltra' a font's direction-selected forms are read from. Everything
+	// else in substitution works in the order the text is written and is the
+	// same either way.
 	rtl bool
 
 	// zeroMarks says when a mark's own advance is cancelled, which each script's

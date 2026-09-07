@@ -57,6 +57,7 @@ package shape
 import (
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 
 	"github.com/mgilbir/forme/font"
@@ -280,9 +281,18 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 		f.lineGap = signed16(font.Be16(hhea, 8))
 		f.declared |= MetricLineGap
 	}
-	if os2 := tables["OS/2"]; len(os2) >= 90 {
-		f.capHeight = signed16(font.Be16(os2, 88))
-		f.declared |= MetricCapHeight
+	// sCapHeight arrived in OS/2 version 2, so what says a font states one is
+	// the version and not the table's length: a version 1 table long enough to
+	// reach offset 88 has something else there, and a version 2 table that puts
+	// a zero there has not measured its capitals. Both were read as a declared
+	// cap height, and the zero was then quietly replaced by the ascent two
+	// lines below — so a Descriptor said "this font states a cap height" and
+	// handed back a number the font had never written.
+	if os2 := tables["OS/2"]; len(os2) >= 90 && font.Be16(os2, 0) >= 2 {
+		if h := signed16(font.Be16(os2, 88)); h != 0 {
+			f.capHeight = h
+			f.declared |= MetricCapHeight
+		}
 	}
 	f.readOS2(tables["OS/2"])
 	f.readPost(tables["post"])
@@ -388,9 +398,39 @@ func (f *Face) readPost(post []byte) {
 	if len(post) < 12 {
 		return
 	}
+	// The italic angle, which nothing read.
+	//
+	// post states it as a 16.16 fixed-point number of degrees counter-clockwise
+	// from vertical, and it is the only place a font says how far its letters
+	// lean. What stood in for it was macStyle's italic *bit* and the constant
+	// -12: every italic face embedded at twelve degrees whatever it was drawn
+	// at, and every oblique instance of a variable font — where the angle is
+	// the axis being varied — embedded at zero, because macStyle's bit is not
+	// set on the default instance the bit was read from.
+	//
+	// A font that says nothing keeps the macStyle guess, since a reader that
+	// leans an italic by nothing at all is worse than one that leans it by
+	// roughly the right amount.
+	if angle := postItalicAngle(post); angle != 0 {
+		f.italic = angle
+		f.declared |= MetricItalicAngle
+	}
 	f.underlinePos = signed16(font.Be16(post, 8))
 	f.underlineThick = signed16(font.Be16(post, 10))
 	f.declared |= MetricUnderline
+}
+
+// postItalicAngle reads post's italicAngle: a 16.16 signed fixed-point number of
+// degrees counter-clockwise from vertical.
+//
+// Rounded to a hundredth. The angle reaches a PDF as a number and every real
+// font states two decimal places or fewer, so what is past them is the binary
+// fraction's own noise — -12.000001 where the font wrote -12.
+func postItalicAngle(post []byte) float64 {
+	if len(post) < 8 {
+		return 0
+	}
+	return math.Round(fixed1616(font.Be32(post, 4))*100) / 100
 }
 
 // readAxes reads fvar's axis records, which is all this module wants from it.

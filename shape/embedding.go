@@ -106,6 +106,7 @@ const (
 	MetricXHeight
 	MetricCapHeight
 	MetricUnderline
+	MetricItalicAngle
 	MetricStrikeout
 	MetricWeight
 )
