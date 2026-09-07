@@ -725,16 +725,100 @@ func serialize(vals []css.ComponentValue) string {
 }
 
 func writeValues(b *strings.Builder, vals []css.ComponentValue) {
-	for _, v := range vals {
+	for i, v := range vals {
+		if i > 0 && wouldMerge(vals[i-1], v) {
+			// CSS Syntax §9: a comment between two tokens that would otherwise
+			// run together. It is the only separator that adds no token of its
+			// own — a space would, and a space is often what stood between them
+			// in the source anyway, in which case there is a whitespace token
+			// here and this never fires.
+			b.WriteString("/**/")
+		}
 		writeValue(b, v)
 	}
+}
+
+// wouldMerge reports whether writing b straight after a would tokenize as
+// something other than the two of them.
+//
+// The pairs are §9's table. They arise here for two reasons, and both were live:
+// a comment stood between the two tokens in the source and is not written back
+// — "red/* CDC */-->" came back as the identifier "red--" and a ">" — and an
+// escape this serialiser writes ends in a space that the next token then
+// continues, so two identifiers become one.
+func wouldMerge(a, b css.ComponentValue) bool {
+	at, bt := a.Token, b.Token
+	// "/" then "*" opens a comment, which swallows everything after it. The
+	// input "/*/*///** /* **/*//* " leaves three delimiters — "/", "*", "/" —
+	// and written plainly they are a comment that never closes.
+	if isDelim(at, "/") && isDelim(bt, "*") {
+		return true
+	}
+	switch {
+	case startsWithName(at) && continuesName(b):
+		return true
+	case at.Kind == css.Number && continuesNumberOrName(b):
+		return true
+	case isDelim(at, "@") && (bt.Kind == css.Ident || b.IsFunction() ||
+		bt.Kind == css.URL || bt.Kind == css.BadURL || isDelim(bt, "-")):
+		return true
+	case (isDelim(at, ".") || isDelim(at, "+")) &&
+		(bt.Kind == css.Number || bt.Kind == css.Percentage || bt.Kind == css.Dimension):
+		return true
+	}
+	return false
+}
+
+func isDelim(t css.Token, v string) bool { return t.Kind == css.Delim && t.Value == v }
+
+// startsWithName is a token whose text ends in a name, so that a name written
+// after it continues it.
+func startsWithName(t css.Token) bool {
+	switch t.Kind {
+	case css.Ident, css.AtKeyword, css.Hash, css.Dimension:
+		return true
+	}
+	return isDelim(t, "-") || isDelim(t, "#")
+}
+
+// continuesName is a token whose text would be read as more of the name before
+// it.
+func continuesName(v css.ComponentValue) bool {
+	switch v.Token.Kind {
+	case css.Ident, css.URL, css.BadURL, css.Number, css.Percentage,
+		css.Dimension, css.CDC:
+		return true
+	case css.LeftParen:
+		// A bracket straight after a name is a function token, which is a
+		// different thing from a name and a block.
+		return v.IsFunction() || v.IsBlock()
+	}
+	return isDelim(v.Token, "-")
+}
+
+// continuesNumberOrName is the same for a number on the left, which a "%" also
+// continues.
+func continuesNumberOrName(v css.ComponentValue) bool {
+	if isDelim(v.Token, "%") {
+		return true
+	}
+	switch v.Token.Kind {
+	case css.Ident, css.URL, css.BadURL, css.Number, css.Percentage, css.Dimension:
+		return true
+	case css.LeftParen:
+		return v.IsFunction()
+	}
+	return isDelim(v.Token, "-")
 }
 
 func writeValue(b *strings.Builder, v css.ComponentValue) {
 	t := v.Token
 	switch {
 	case v.IsFunction():
-		b.WriteString(t.Value)
+		// The name is escaped like any other identifier: "\30rgba()" is a
+		// function whose name is "0rgba", and "0rgba(" is a number followed by
+		// an identifier and a bracket.
+		writeCSSIdent(b, t.Value)
 		b.WriteByte('(')
 		writeValues(b, v.Values)
 		b.WriteByte(')')
@@ -754,25 +838,60 @@ func writeValue(b *strings.Builder, v css.ComponentValue) {
 	}
 
 	switch t.Kind {
-	case css.Ident, css.Delim:
+	case css.Ident:
+		writeCSSIdent(b, t.Value)
+	case css.Delim:
+		// A lone backslash is a delimiter — it is the one character that cannot
+		// begin an escape — and written back bare it becomes the escape for
+		// whatever follows it. "a\<newline>b" is an "a", a backslash, a newline
+		// and a "b", and serialised with the newline as a space it came back as
+		// the single identifier "a b".
+		//
+		// A newline is what follows it, because that is the only thing that can:
+		// a backslash is a delimiter exactly when what comes next is a newline
+		// or nothing at all, since anything else makes it an escape. Written
+		// back that way it is a delimiter again, and the trailing one is trimmed
+		// off the end of the value where it stood at the end anyway. "\\" would
+		// not do — that is the escape for a backslash, and comes back as an
+		// identifier.
+		if t.Value == `\` {
+			b.WriteString("\\\n")
+			break
+		}
 		b.WriteString(t.Value)
 	case css.AtKeyword:
-		b.WriteString("@" + t.Value)
+		b.WriteByte('@')
+		writeCSSIdent(b, t.Value)
 	case css.Hash:
-		b.WriteString("#" + t.Value)
+		b.WriteByte('#')
+		if t.IsID {
+			// The type flag is part of the value — only an id hash matches an
+			// ID selector — and it is set by whether the name is an identifier.
+			// "#\31 23" is an id hash named "123"; written back as "#123" it
+			// comes back as an unrestricted one, which no ID selector matches.
+			writeCSSIdent(b, t.Value)
+			break
+		}
+		// An unrestricted hash may begin with a digit, so the identifier rules
+		// would escape one that is allowed to be there and change "#123" into
+		// "#\31 23" — an id hash, which is the same fault the other way round.
+		writeCSSName(b, t.Value, false)
 	case css.String:
 		// Quoted, because a string that serialised bare would be
 		// indistinguishable from an identifier — and "none" the keyword is not
 		// "none" the font family.
 		writeCSSString(b, t.Value)
 	case css.URL:
-		b.WriteString("url(" + t.Value + ")")
+		b.WriteString("url(")
+		writeCSSURL(b, t.Value)
+		b.WriteByte(')')
 	case css.Number:
 		b.WriteString(t.Repr)
 	case css.Percentage:
 		b.WriteString(t.Repr + "%")
 	case css.Dimension:
-		b.WriteString(t.Repr + t.Unit)
+		b.WriteString(t.Repr)
+		writeCSSUnit(b, t.Unit)
 	case css.Whitespace:
 		b.WriteByte(' ')
 	case css.Colon:
@@ -781,11 +900,129 @@ func writeValue(b *strings.Builder, v css.ComponentValue) {
 		b.WriteByte(';')
 	case css.Comma:
 		b.WriteByte(',')
+	case css.CDO:
+		b.WriteString("<!--")
+	case css.CDC:
+		b.WriteString("-->")
+	case css.RightParen:
+		b.WriteByte(')')
+	case css.RightSquare:
+		b.WriteByte(']')
+	case css.RightBrace:
+		b.WriteByte('}')
 	case css.BadString, css.BadURL:
 		// A value that did not tokenize cannot be rendered back; anything
 		// written here would be a value the author did not type.
 		b.WriteString("<invalid>")
 	}
+}
+
+// writeCSSIdent renders a name as a CSS <ident-token>.
+//
+// It exists for the reason writeCSSString does, and the fault it fixes is the
+// same one: the cascade keeps a winning value as *text* and every reader of that
+// value tokenizes it again, so a name written back without its escapes comes
+// back as something else entirely — and comes back quietly, because what it
+// comes back as is a value the author could have typed.
+//
+// Three of those, all live before this existed:
+//
+//   - A digit at the start. "\31 23" is an identifier whose name is "123", and
+//     "content: \31 23" is a stylesheet asking for that keyword. Written back
+//     as "123" it is a *number*, so the declaration became one this engine does
+//     not understand and was reported as unsupported.
+//
+//   - A space inside a name. "a\ b" is one identifier; written back as "a b" it
+//     is two, and a font-family of "a b" became the two families "a" and "b".
+//
+//   - The same at an at-keyword. "@\31 23" written back as "@123" is not an
+//     at-keyword at all — an "@" delimiter and a number — because "@" only
+//     begins one when an identifier follows it.
+//
+// The rules are CSSOM's "serialize an identifier": a leading digit, and a digit
+// after a leading "-", are escaped because they would otherwise begin a number;
+// a lone "-" is escaped because it would be a delimiter; a control character
+// becomes a hexadecimal escape; NULL becomes U+FFFD; and anything that is not a
+// name code point is escaped with a backslash.
+func writeCSSIdent(b *strings.Builder, s string) {
+	writeCSSName(b, s, true)
+}
+
+// writeCSSName is the shared body: ident says whether the name has to be one,
+// which is what decides the three rules about its first two characters.
+func writeCSSName(b *strings.Builder, s string, ident bool) {
+	for i, r := range s {
+		switch {
+		case r == 0:
+			// A NULL never survives tokenizing, so this cannot arise from a
+			// parsed stylesheet; it is here because the rule is part of the
+			// definition, and a caller may hand over a name from elsewhere.
+			b.WriteRune('\uFFFD')
+		case r <= 0x1F || r == 0x7F:
+			writeHexEscape(b, r)
+		case ident && i == 0 && r >= '0' && r <= '9':
+			writeHexEscape(b, r)
+		case ident && i == 1 && r >= '0' && r <= '9' && s[0] == '-':
+			writeHexEscape(b, r)
+		case ident && i == 0 && r == '-' && len(s) == 1:
+			b.WriteString(`\-`)
+		case r >= 0x80 || r == '-' || r == '_' ||
+			(r >= '0' && r <= '9') || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z'):
+			b.WriteRune(r)
+		default:
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		}
+	}
+}
+
+// writeCSSUnit renders a dimension's unit.
+//
+// It is an identifier with one more rule, and the rule is why "3\65-2" is in
+// the tests: that is the number 3 with the unit "e-2", and the unit written
+// back plainly gives "3e-2", which is a *number* in scientific notation. So a
+// unit that begins with an "e" the number could swallow has that "e" escaped.
+func writeCSSUnit(b *strings.Builder, unit string) {
+	if len(unit) >= 2 && (unit[0] == 'e' || unit[0] == 'E') {
+		switch c := unit[1]; {
+		case c >= '0' && c <= '9', c == '+', c == '-':
+			writeHexEscape(b, rune(unit[0]))
+			writeCSSName(b, unit[1:], false)
+			return
+		}
+	}
+	writeCSSIdent(b, unit)
+}
+
+// writeCSSURL renders the contents of an unquoted url() token.
+//
+// A url-token's text runs to the closing bracket, so anything that would end it
+// early — a bracket, a quote, whitespace — has to be escaped, or the value comes
+// back shorter than it went in and the rest becomes tokens of its own.
+func writeCSSURL(b *strings.Builder, s string) {
+	for _, r := range s {
+		switch {
+		case r == 0:
+			b.WriteRune('\uFFFD')
+		case r <= 0x1F || r == 0x7F:
+			writeHexEscape(b, r)
+		case r == '"' || r == '\'' || r == '(' || r == ')' || r == '\\' || r == ' ':
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+}
+
+// writeHexEscape writes a code point as "\" + hex + " ".
+//
+// The trailing space is required and is part of the escape: without it "\31"
+// followed by a literal "2" would read back as the single escape "\312".
+func writeHexEscape(b *strings.Builder, r rune) {
+	b.WriteByte('\\')
+	b.WriteString(strconv.FormatInt(int64(r), 16))
+	b.WriteByte(' ')
 }
 
 // writeCSSString renders a string value as a CSS <string> token.
