@@ -409,7 +409,7 @@ func (it *flexItem) outerCross(border style.Unit) style.Unit {
 // refused here is laid out exactly as it was before this file existed and is
 // reported, which is the honest answer; a box arranged that should not have
 // been is a page that is quietly wrong.
-func (l *layouter) refusesToFlex(b *Box, containing style.Unit) string {
+func (l *layouter) refusesToFlex(b *Box) string {
 	a := l.axisOf(b)
 	switch trimmedLower(b.Style["flex-direction"]) {
 	case "", "row", "column", "row-reverse", "column-reverse":
@@ -458,7 +458,6 @@ func (l *layouter) refusesToFlex(b *Box, containing style.Unit) string {
 			return "one of its items is " + why
 		}
 	}
-	_ = containing
 	return ""
 }
 
@@ -1806,7 +1805,7 @@ func absUnit(v style.Unit) style.Unit {
 // Once per container, because the finding is about the box and a container
 // asked twice — the intrinsic pass and the layout — would say it twice.
 func (l *layouter) flexes(b *Box, width style.Unit) bool {
-	why := l.refusesToFlex(b, width)
+	why := l.refusesToFlex(b)
 	if why == "" {
 		return true
 	}

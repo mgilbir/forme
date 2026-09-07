@@ -539,7 +539,9 @@ func indicPositionOf(r rune, cat indicCat, pos indicPosition) indicPos {
 		return indicMatraPosition(r, side)
 	case cat == catSM || cat == catSMPst || cat == catVD || cat == catSymbol:
 		return posSMVD
-	case cat == catCM || cat == catRS || indicIsHalant(cat):
+	// Not catCM: a consonant medial is a base candidate, which the first case
+	// above answers, so naming it here reached nothing.
+	case cat == catRS || indicIsHalant(cat):
 		return side
 	}
 	return posEnd

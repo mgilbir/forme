@@ -74,6 +74,13 @@ const (
 	tokStartTag
 	tokEndTag
 	tokDoctype
+	// tokComment is a comment, and carries nothing: it is dropped, and the
+	// reason it is a token at all is that HTML's rules are stated over the token
+	// stream. "If the next token is a line feed, ignore it" is the <pre> rule,
+	// and a comment written between the start tag and the newline makes the
+	// newline not the next token — so a tokenizer that consumed the comment in
+	// silence dropped a newline the author meant to write.
+	tokComment
 )
 
 type token struct {
@@ -461,12 +468,13 @@ func (t *tokenizer) findEndTag(name string, i int) int {
 func (t *tokenizer) markup() (token, bool) {
 	start := t.pos
 
-	// A comment. Dropped rather than tokenized: nothing downstream has any use
-	// for one.
+	// A comment. Its content is dropped — nothing downstream has any use for one
+	// — but it is a token, because the rules that count tokens have to count it.
+	// See tokComment.
 	if strings.HasPrefix(t.src[t.pos:], "<!--") {
 		if n, ok := commentLength(t.src[t.pos:]); ok {
 			t.pos += n
-			return token{}, false
+			return token{kind: tokComment, offset: start}, true
 		}
 		t.fail(start, "a comment that is never closed")
 		t.pos = len(t.src)
@@ -844,7 +852,6 @@ func (t *tokenizer) reference(s string, off int, inAttr bool) (string, int, bool
 			t.fail(off, "\"&"+legacy+"\" is missing its \";\"; write \"&"+legacy+";\", "+
 				"or \"&amp;\" for a literal ampersand")
 		}
-		_ = n
 	}
 	return "", 0, false
 }
@@ -882,13 +889,21 @@ func (t *tokenizer) numericReference(s string, off int) (string, int, bool) {
 		return "", 0, false
 	}
 
+	// Leading zeros are not magnitude. "&#000000065;" is the letter A written
+	// with nine digits, and counting them against the length refused it — while
+	// "&#x00000041;", the same character written with eight, was accepted, so
+	// the rule was not even the same in the two bases.
+	digitsAt := start
+	for digitsAt < i-1 && s[digitsAt] == '0' {
+		digitsAt++
+	}
 	// A number too long to be a code point is rejected before it is parsed, so
 	// a run of a million digits costs nothing.
-	if i-start > 8 {
+	if i-digitsAt > 8 {
 		t.fail(off, "a numeric character reference far outside Unicode")
 		return "", 0, false
 	}
-	v, err := strconv.ParseInt(s[start:i], base, 64)
+	v, err := strconv.ParseInt(s[digitsAt:i], base, 64)
 	if err != nil {
 		t.fail(off, "a numeric character reference that is not a number")
 		return "", 0, false
@@ -959,11 +974,4 @@ var windows1252Reference = map[int64]rune{
 
 func isEntityNamePart(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

@@ -66,7 +66,7 @@ func main() {
 	decomp, mark := read(os.Args[1])
 
 	var out []entry
-	for r, d := range decomp {
+	for r := range decomp {
 		if !inIndicBlock(r) {
 			continue
 		}
@@ -78,7 +78,6 @@ func main() {
 			fmt.Fprintf(os.Stderr, "genmatra: U+%04X is drawn as %d marks, which the table cannot hold\n", r, len(full))
 			os.Exit(1)
 		}
-		_ = d
 		out = append(out, entry{r: r, parts: full})
 	}
 	if len(out) == 0 {

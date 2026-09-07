@@ -281,8 +281,7 @@ func (l *layouter) perLineScale(fit textFit, runs []inlineItem, avail style.Unit
 	// The line's own width, measured the way the alignment measures it: the
 	// hanging white space at its end is not on the page and is not stretched to
 	// put it there.
-	xs, total := l.lineOffsets(runs)
-	_ = xs
+	_, total := l.lineOffsets(runs)
 	used := alignedWidth(runs, total).Sub(hangEndWidth(runs)).Sub(trailingSpacing(runs))
 	room := avail.Sub(used.Sub(a))
 	if room <= 0 {

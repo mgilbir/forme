@@ -1314,8 +1314,8 @@ func (l *layout) readGSUBLigatures(gsub []byte, feats tableFeatures) {
 	// whole table — see subtables.
 	budget := subtableBudget(gsub)
 	for _, lookup := range featureLookups(gsub, "liga", feats) {
-		kind, flags, _, subs := subtables(lookup, 7, &budget) // 7 = extension substitution
-		if kind != 4 {                                        // 4 = ligature substitution
+		kind, _, _, subs := subtables(lookup, 7, &budget) // 7 = extension substitution
+		if kind != 4 {                                    // 4 = ligature substitution
 			continue
 		}
 		// The flags are not kept. They were, OR-ed together across every
@@ -1330,7 +1330,6 @@ func (l *layout) readGSUBLigatures(gsub []byte, feats tableFeatures) {
 		// each lookup's own flags to hand: see shaper.ignores, and
 		// nogdef_test.go for what IgnoreMarks does there. This table is read
 		// only by HasLigatures.
-		_ = flags
 		for _, sub := range subs {
 			l.ligatureSubst(sub)
 		}
@@ -1487,13 +1486,12 @@ func (l *layout) readSingleSubstitutions(gsub []byte, feats tableFeatures) {
 		}
 		seen[tag] = true
 		for _, lookup := range featureLookups(gsub, tag, feats) {
-			kind, flags, _, subs := subtables(lookup, 7, &budget)
+			kind, _, _, subs := subtables(lookup, 7, &budget)
 			if kind != 1 { // 1 = single substitution
 				continue
 			}
 			// See the note beside the ligature reader: the flags belong to
 			// the lookup, and the pass that applies it has them.
-			_ = flags
 			for _, sub := range subs {
 				l.singleSubst(tag, sub)
 			}
