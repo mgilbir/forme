@@ -124,7 +124,7 @@ record of what it thought of.
 | **Unicode's bidi conformance** | 861,948 cases across `BidiTest.txt` and `BidiCharacterTest.txt`, no failures |
 | **Unicode's grapheme boundaries** | all 766 cases of `GraphemeBreakTest.txt` |
 | **HarfBuzz**, over six fonts | 20,623 strings, two deliberate differences |
-| **The CSS Syntax suite** | 206 cases from the suite `css-parsing-tests` publishes, with 13 more deliberately excused and each excuse named |
+| **The CSS Syntax suite** | 229 cases from the suite `css-parsing-tests` publishes, with 13 more deliberately excused and each excuse named |
 
 The reftest number is a **ratchet**: it may never be lowered to make a red test
 green, so a drop is a layout regression and the failing names are printed. A
