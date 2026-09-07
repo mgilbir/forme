@@ -284,7 +284,14 @@ func ParseSFNT(data []byte, maxCmapWork int) *Program {
 					// The chosen cmap's partialness is what matters; a
 					// discarded lower-ranked subtable's is not.
 					fp.CmapPartial = partial
+					continue
 				}
+				// Nothing came back, which is two things: a subtable this
+				// cannot read, and one the budget stopped before it read
+				// anything. The flag is what tells them apart, and dropping it
+				// with the empty map made a reader that gave up look like a
+				// font with no cmap at all.
+				fp.CmapPartial = fp.CmapPartial || partial
 			case plat == 3 && enc == 0:
 				m, partial := ParseCmapSubtable(sub, maxCmapWork)
 				if m == nil {
@@ -363,6 +370,25 @@ func cmapResult(out map[rune]int) map[rune]int {
 	}
 	return out
 }
+
+// budgetStop is what the three cmap walks do when maxWork runs out: they hand
+// back what they have, nil where that is nothing, and the partial flag *set*.
+//
+// The flag says the walk stopped short, which is a fact about the walk and not
+// about how much it had read. It used to be "len(out) > 0", so a budget that
+// ran out before the first mapping reported false — and an empty map is nil to
+// the caller, which is how "this font has no cmap" is spelt. The two were the
+// same answer, so a reader that gave up looked like a font with nothing in it.
+//
+// The map stays nil, deliberately, and that is the other half of the same
+// rule: trueTypeGID treats a non-nil cmap as authoritative, so an empty one
+// answers .notdef for every code and reports the whole font. Nil and partial
+// together are the honest pair — "nothing was read, and not because there was
+// nothing".
+//
+// A comment rather than a function because each walk returns its own local map;
+// this is what the three returns point at, and what ParseSFNT keeps by
+// recording partialness whether or not a map came back.
 
 // unicodeMaxRune is the last code point Unicode defines. Every format here that
 // can express a wider code — 8, 10, 12 and 13 all carry 32-bit codes — stops at
@@ -510,7 +536,7 @@ func ParseCmapSubtable(b []byte, maxWork int) (map[rune]int, bool) {
 			// segment beginning at code 0 (audit C46).
 			for c := start; c <= end; c++ {
 				if work++; work > maxWork {
-					return cmapResult(out), len(out) > 0
+					return cmapResult(out), true // see budgetStop
 				}
 				var gid int
 				if rangeOff == 0 {
@@ -569,7 +595,7 @@ func ParseCmapSubtable(b []byte, maxWork int) (map[rune]int, bool) {
 		}
 		work := 0
 		if cmapCoverageGroups(b, int(nGroups), 16+is32Len, maxWork, true, &work, out) {
-			return cmapResult(out), len(out) > 0
+			return cmapResult(out), true // see budgetStop
 		}
 	case 10:
 		// Trimmed array, the 32-bit twin of format 6: format(2) reserved(2)
@@ -637,7 +663,7 @@ func ParseCmapSubtable(b []byte, maxWork int) (map[rune]int, bool) {
 		work := 0
 		sequential := Be16(b, 0) == 12
 		if cmapCoverageGroups(b, int(nGroups), 16, maxWork, sequential, &work, out) {
-			return cmapResult(out), len(out) > 0
+			return cmapResult(out), true // see budgetStop
 		}
 	default:
 		// Formats 2 and 14 are not parsed; see the note on ParseCmapSubtable.

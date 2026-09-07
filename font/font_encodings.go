@@ -316,6 +316,9 @@ var MacRomanEncodingNames = map[byte]string{
 	199: "guillemotleft",
 	200: "guillemotright",
 	201: "ellipsis",
+	// Annex D.2 again: in MacRomanEncoding code 312 octal (0xCA) is SPACE. It
+	// is the no-break space of Mac OS Roman, and this table had nothing there.
+	202: "space",
 	203: "Agrave",
 	204: "Atilde",
 	205: "Otilde",
@@ -492,6 +495,12 @@ var WinAnsiEncodingNames = map[byte]string{
 	156: "oe",
 	158: "zcaron",
 	159: "Ydieresis",
+	// PDF 32000-1 Annex D.2's own note: in WinAnsiEncoding code 240 octal
+	// (0xA0) is SPACE and 255 octal (0xAD) is HYPHEN, each a second code for a
+	// character that already has one. They are the no-break space and the soft
+	// hyphen of the source encoding, and a document holding either had nothing
+	// to encode it as.
+	160: "space",
 	161: "exclamdown",
 	162: "cent",
 	163: "sterling",
@@ -504,6 +513,7 @@ var WinAnsiEncodingNames = map[byte]string{
 	170: "ordfeminine",
 	171: "guillemotleft",
 	172: "logicalnot",
+	173: "hyphen",
 	174: "registered",
 	175: "macron",
 	176: "degree",
