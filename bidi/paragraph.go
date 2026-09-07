@@ -57,9 +57,17 @@ func (p *Paragraph) Len() int { return len(p.levels) }
 
 // Levels is the resolved embedding level of each character, in logical order.
 //
-// A character rule X9 removed carries -1: it has no level of its own, and a
-// caller that must place it anyway takes the level of what precedes it. The
-// slice is the paragraph's own and must not be modified.
+// A character rule X9 removed — an embedding control, an override, a boundary
+// neutral — has no level of its own, and carries the level of what precedes it:
+// Resolve fills those in before it returns, so that a caller placing one has an
+// answer rather than a sentinel to interpret. The first characters of a
+// paragraph, where there is nothing before them, take the paragraph's own
+// level. See fillRemoved.
+//
+// This said the slice carries -1 there, which it has not since the filling was
+// added — so a caller reading the documentation wrote a branch for a value that
+// never arrives, and one testing for it would conclude the paragraph had no
+// controls in it. The slice is the paragraph's own and must not be modified.
 //
 // L1 has already been applied to these, with the whole paragraph taken as one
 // line — which is the only line there is until a caller says otherwise. That is

@@ -50,32 +50,20 @@ import (
 //     stepped over by every rule that is not about them, and removed before
 //     anything is positioned or drawn. See ignorable.go, which also says which
 //     of Unicode's other default-ignorable characters are *not* handled.
+//   - Reordering for every syllabic model this engine sets: Devanagari and its
+//     eight relatives (indic.go), Khmer (khmer.go), Myanmar (myanmar.go) and
+//     the Universal Shaping Engine (use.go), which covers Tibetan, Javanese,
+//     Balinese, Buginese, Tai Tham, Cham, Sinhala and a long tail. syllabic.go
+//     chooses between the four models, and each file says what within its own
+//     is left out.
+//   - A variable font at any point in its design space. LoadInstance rewrites
+//     the outlines for the coordinates asked for, and FeatureVariations is read
+//     at those coordinates rather than at the default's — so a record whose
+//     conditions cover the instance is applied, which is how a font states
+//     different lookups for a weight.
 //
 // # What is not, and what each absence costs
 //
-//   - Reordering for the scripts the Universal Shaping Engine covers — Tibetan,
-//     Javanese, Balinese, Buginese, Tai Tham, Cham, Sinhala and a long tail.
-//     Their tags are still selected, because that is where such a font declares
-//     its features, but their characters are turned into glyphs in storage
-//     order, so text in them is not correctly set here and should be shaped
-//     elsewhere and passed in as glyph indices.
-//
-//     The engine is not one more shaper. It needs a category table over all of
-//     Unicode whose two normative override files are not in the published
-//     sources, a record of *which* substitution produced each glyph that this
-//     package does not keep, and a joining model over syllables that interacts
-//     with Arabic joining. Half of it shipped would move glyphs by a grammar
-//     that is not theirs, which is worse than leaving them in storage order.
-//
-//     Devanagari and its eight relatives (indic.go), Khmer (khmer.go) and
-//     Myanmar (myanmar.go) *are* reordered; syllabic.go chooses between the
-//     three models, and each file says what within its own is left out.
-//   - Every point in a variable font's design space but the default one.
-//     FeatureVariations is read, and read for the coordinates in force — which
-//     are the default instance's, because nothing here instances a font: the
-//     subsetter drops fvar and gvar, and what reaches a document is the default
-//     instance. A record whose conditions do not cover the default is a rule for
-//     a weight this module never sets, and is not applied.
 //   - 'rclt' anywhere but an Indic run. It is a required feature and every other
 //     shaper applies it generally; here only the Indic pass does, because that
 //     is where its absence was measured.
@@ -119,26 +107,40 @@ import (
 // lookup list, and Noto Serif Tibetan declares 1190 lookups. Truncating that
 // list is worse than truncating any other, because a lookup is named by *index*
 // and a contextual rule reaching past the cut silently does nothing. A third of
-// that font's Tibetan was set wrongly and nothing said so. See maxLookupList.
+// that font's Tibetan was set wrongly and nothing said so. See maxDeclaredList.
 const (
-	maxLookups   = 512
 	maxSubtables = 256
 	maxPairs     = 1 << 18
 	maxLigatures = 1 << 14
 	maxScripts   = 256
 	maxLangSys   = 256
-	// maxLookupList bounds a lookup list, and is the format's own maximum
-	// rather than a guess at what a font might hold: the count is a uint16, so
-	// no valid font can exceed it and no valid font is ever truncated.
+	// maxDeclaredList bounds every counted list these tables hold — the
+	// lookups, the features, the lookup indices a feature names, the feature
+	// indices a language system names — and is the format's own maximum rather
+	// than a guess at what a font might hold: each of those counts is a uint16,
+	// so no valid font can exceed it and no valid font is ever truncated.
 	//
-	// It is not what stops a crafted one. That is the walk itself, which needs
-	// two bytes of offset per lookup present in the table and stops when they
-	// run out — so the work a font can ask for is bounded by its own size,
-	// which is the bound that means something. This is the backstop.
-	maxLookupList = 0xFFFF
+	// It has to be all of them, because everything in these tables is named by
+	// its index in one of these lists. Truncating any of them does not lose a
+	// tail: it silently breaks every reference past the cut, and the rule
+	// naming one does nothing at all.
+	//
+	// It is not what stops a crafted font. That is the walk itself, which needs
+	// each entry's bytes present in the table and stops when they run out — so
+	// the work a font can ask for is bounded by its own size, which is the
+	// bound that means something. This is the backstop.
+	maxDeclaredList = 0xFFFF
 	// maxSubtableList bounds the subtables of one lookup, and is the format's
 	// own maximum for the same reason.
 	maxSubtableList = 0xFFFF
+	// maxCoverageGlyphs bounds the glyphs one coverage table may name.
+	//
+	// A coverage table lists the glyphs a lookup applies to, so no valid one
+	// names more glyphs than the font has — and a font has at most 65,536.
+	// Format 2 states them as ranges, six bytes each, so six bytes can name the
+	// whole space: the bound cannot come from the table's own size and has to
+	// be this.
+	maxCoverageGlyphs = 1 << 16
 	// The FeatureVariations walk. A real face states a handful of records — Noto
 	// Sans Oriya states one — and each names a few conditions and a few
 	// substituted features.
@@ -326,10 +328,10 @@ func featureTableSubstitution(fv []byte, off int) featureSubst {
 		}
 		alt := ts[ao:]
 		m := font.Be16(alt, 2)
-		if m > maxLookups {
-			m = maxLookups
+		if m > maxDeclaredList {
+			m = maxDeclaredList
 		}
-		lookups := make([]int, 0, m)
+		lookups := make([]int, 0, min(m, max(0, (len(alt)-4)/2)))
 		for j := 0; j < m; j++ {
 			if 4+2*j+2 > len(alt) {
 				break
@@ -360,8 +362,8 @@ func featureLookupList(list []byte, index int, varied featureSubst) []int {
 	}
 	feature := list[off:]
 	n := font.Be16(feature, 2)
-	if n > maxLookupList {
-		n = maxLookupList
+	if n > maxDeclaredList {
+		n = maxDeclaredList
 	}
 	out := make([]int, 0, min(n, max(0, (len(feature)-4)/2)))
 	for j := 0; j < n; j++ {
@@ -378,10 +380,20 @@ type layout struct {
 	// glyphClass is GDEF's classification of each glyph: 1 base, 2 ligature,
 	// 3 mark, 4 component. A glyph GDEF does not name is class 0, unknown.
 	glyphClass map[int]int
-	// substFlags is the lookup flags of the lookups the substitutions came
-	// from, so that shaping can skip the glyphs those lookups are declared to
-	// ignore. Kerning keeps its flags per lookup — see kern.
-	substFlags int
+	// covWork is what is left of this layout's allowance for expanding coverage
+	// ranges, and is spent only while the layout is being read.
+	//
+	// One budget for the whole table rather than one per range. A format 2
+	// record is six bytes and may name sixty-five thousand glyphs, and a table
+	// may hold as many records as its bytes allow — and its lookups may point
+	// at the same record over and over. Bounded per range, a hundred and twenty
+	// kilobytes of coverage cost a second and a half at *load*, linear in the
+	// bytes at about thirteen microseconds each. The class definition beside it
+	// has had a total guard since it was written; this had none.
+	//
+	// It is written only by the reader that builds the layout, before the
+	// layout is shared, so it is not state two documents can reach.
+	covWork int
 	// markAttach is GDEF's mark attachment class per glyph, used by the
 	// MarkAttachmentType field of a lookup flag.
 	markAttach map[int]int
@@ -600,6 +612,7 @@ func readPositioning(tables map[string][]byte, sel featureSet, coords []float64)
 		singlePos:  map[int]singleAdjust{},
 		markGlyphs: map[int]bool{},
 		cursive:    map[int]cursiveAnchors{},
+		covWork:    coverageBudget(tables["GPOS"], tables["GDEF"], tables["kern"]),
 	}
 	l.readGDEF(tables["GDEF"])
 	if gpos := tables["GPOS"]; len(gpos) >= 10 {
@@ -629,11 +642,14 @@ func readPositioning(tables map[string][]byte, sel featureSet, coords []float64)
 func readLayout(tables map[string][]byte, gsubSel featureSet, pos *layout, coords []float64) *layout {
 	l := new(layout)
 	*l = *pos
+	// Its own allowance: the positioning half spent one on its own tables, and
+	// this reads a different table. Copying what was left would make how much
+	// of GSUB is read depend on how large GPOS happened to be.
+	l.covWork = coverageBudget(tables["GSUB"])
 	l.ligatures = map[int][]ligature{}
 	l.single = map[string]map[int]int{}
 	l.gsub = nil
 	l.featureLookups = nil
-	l.substFlags = 0
 	if gsub := tables["GSUB"]; len(gsub) >= 10 {
 		feats := tableFeatures{sel: gsubSel, varied: readFeatureVariations(gsub, coords)}
 		l.readGSUBLigatures(gsub, feats)
@@ -664,8 +680,8 @@ func lookupList(gsub []byte, extension int) []rawLookup {
 	}
 	list := gsub[off:]
 	n := font.Be16(list, 0)
-	if n > maxLookupList {
-		n = maxLookupList
+	if n > maxDeclaredList {
+		n = maxDeclaredList
 	}
 	// The capacity is what the table could actually hold — two bytes of offset
 	// each — rather than what it claims to. A font declaring sixty thousand
@@ -703,8 +719,8 @@ func featureLookupIndices(t []byte, feats tableFeatures) map[string][]int {
 	}
 	list := t[off:]
 	n := font.Be16(list, 0)
-	if n > maxLookupList {
-		n = maxLookupList
+	if n > maxDeclaredList {
+		n = maxDeclaredList
 	}
 	// The duplicates are tracked in a set rather than by scanning what has been
 	// kept. Several feature records may carry the same tag and name overlapping
@@ -773,11 +789,22 @@ func featureLookupsIndexed(t []byte, tag string, feats tableFeatures) ([][]byte,
 	lookupList := t[lookupListOff:]
 
 	// The lookup list, so a feature's indices can be resolved.
+	//
+	// The bound is the format's own and not a guess, for the reason
+	// maxDeclaredList gives: a lookup is named by index, and truncating the list
+	// does not lose its tail — it silently breaks every reference into it. That
+	// was fixed once, in the reader beside this one, and this reader kept the
+	// old cap: a font's kerning, its mark and cursive attachment, its ligatures
+	// on the span path and every single substitution all come through here, and
+	// any of them past lookup 512 did nothing at all with nothing said.
 	lookupCount := font.Be16(lookupList, 0)
-	if lookupCount > maxLookups {
-		lookupCount = maxLookups
+	if lookupCount > maxDeclaredList {
+		lookupCount = maxDeclaredList
 	}
-	lookups := make([][]byte, 0, lookupCount)
+	// The capacity is what the table could hold — two bytes of offset each —
+	// rather than what it claims to, so a declared count with no data behind it
+	// costs nothing. The walk below stops when the offsets run out.
+	lookups := make([][]byte, 0, min(lookupCount, max(0, (len(lookupList)-2)/2)))
 	for i := 0; i < lookupCount; i++ {
 		if 2+2*i+2 > len(lookupList) {
 			break
@@ -793,8 +820,8 @@ func featureLookupsIndexed(t []byte, tag string, feats tableFeatures) ([][]byte,
 	var out [][]byte
 	var indices []int
 	featureCount := font.Be16(featureList, 0)
-	if featureCount > maxLookups {
-		featureCount = maxLookups
+	if featureCount > maxDeclaredList {
+		featureCount = maxDeclaredList
 	}
 	for i := 0; i < featureCount; i++ {
 		rec := 2 + 6*i
@@ -843,7 +870,7 @@ func subtables(lookup []byte, extensionType int, budget *int) (kind, flags, mark
 	// at the front still match. Noto Serif Tibetan states one lookup in 738
 	// subtables.
 	//
-	// The bound is the format's own, for the reason maxLookupList is: the count
+	// The bound is the format's own, for the reason maxDeclaredList is: the count
 	// is a uint16, so no valid font is truncated, and what stops a crafted one
 	// is that each subtable needs two bytes of offset present in the lookup.
 	count := font.Be16(lookup, 4)
@@ -996,7 +1023,7 @@ func (l *layout) pairPosFormat1(kl *kernLookup, sub []byte) {
 	if len(sub) < 10 {
 		return
 	}
-	first := coverageGlyphs(sub, font.Be16(sub, 2))
+	first := coverageGlyphs(sub, font.Be16(sub, 2), &l.covWork)
 	fmt1, fmt2 := font.Be16(sub, 4), font.Be16(sub, 6)
 	// Only a horizontal advance on the first glyph is kerning; anything else in
 	// the record is a positioning this package does not apply, and it is
@@ -1036,7 +1063,7 @@ func (l *layout) pairPosFormat2(kl *kernLookup, sub []byte) {
 	if len(sub) < 16 {
 		return
 	}
-	covered := coverageGlyphs(sub, font.Be16(sub, 2))
+	covered := coverageGlyphs(sub, font.Be16(sub, 2), &l.covWork)
 	fmt1, fmt2 := font.Be16(sub, 4), font.Be16(sub, 6)
 	class1 := classDef(sub, font.Be16(sub, 8))
 	class2 := classDef(sub, font.Be16(sub, 10))
@@ -1112,6 +1139,16 @@ func valueSize(format int) int {
 type pairAdjust struct {
 	firstX, firstY, firstAdvance    int16
 	secondX, secondY, secondAdvance int16
+	// takesSecond records that the subtable stated a second ValueRecord at all,
+	// which decides where the *next* pair is looked for and not what this one
+	// does.
+	//
+	// The specification says a pair positioning lookup moves past both glyphs
+	// where ValueFormat2 is non-zero and past only the first where it is zero,
+	// so the second glyph of a pair that adjusted it is not the first glyph of
+	// the next pair. It cannot be read off the numbers: a font is free to state
+	// a second record of all zeroes, and that is not the same as stating none.
+	takesSecond bool
 }
 
 func (p pairAdjust) zero() bool { return p == pairAdjust{} }
@@ -1129,6 +1166,7 @@ func pairAdjustFrom(rec []byte, format1, format2 int) pairAdjust {
 		firstAdvance: clamp16(first.xAdvance),
 		secondX:      clamp16(second.xPlacement), secondY: clamp16(second.yPlacement),
 		secondAdvance: clamp16(second.xAdvance),
+		takesSecond:   format2 != 0,
 	}
 }
 
@@ -1163,10 +1201,32 @@ func xAdvance(rec []byte, format int) (int, bool) {
 	return signed16(font.Be16(rec, off)), true
 }
 
+// coverageBudget is how much coverage expansion reading a set of tables may ask
+// for.
+//
+// Proportional to their size for the reason subtableBudget is: a well-formed
+// table's coverage costs about what its bytes cost, and a crafted one's does
+// not. The multiplier is generous — a coverage record is six bytes and real
+// ranges are short — and the floor is there so that a small table naming one
+// long range is not cut short.
+func coverageBudget(tables ...[]byte) int {
+	n := maxCoverageGlyphs
+	for _, t := range tables {
+		n += 8 * len(t)
+	}
+	return n
+}
+
 // coverageGlyphs returns the glyphs a coverage table covers, in coverage-index
-// order — which is the order the tables that use it index by.
-func coverageGlyphs(base []byte, off int) []int {
-	if off <= 0 || off+4 > len(base) {
+// order — which is the order the tables that use it index by — spending what it
+// expands from a budget.
+//
+// A nil budget is no allowance at all, for the reason an unbudgeted shaper
+// cannot recurse: every reader here draws on either the layout being built or
+// the run being shaped, so a nil one is a reader assembled outside both, which
+// is the state the bound exists to make impossible.
+func coverageGlyphs(base []byte, off int, budget *int) []int {
+	if budget == nil || off <= 0 || off+4 > len(base) {
 		return nil
 	}
 	c := base[off:]
@@ -1175,9 +1235,10 @@ func coverageGlyphs(base []byte, off int) []int {
 		n := font.Be16(c, 2)
 		out := make([]int, 0, n)
 		for i := 0; i < n; i++ {
-			if 4+2*i+2 > len(c) {
+			if 4+2*i+2 > len(c) || *budget <= 0 {
 				break
 			}
+			*budget--
 			out = append(out, font.Be16(c, 4+2*i))
 		}
 		return out
@@ -1194,7 +1255,8 @@ func coverageGlyphs(base []byte, off int) []int {
 			if end < start || end-start > maxPairs {
 				continue
 			}
-			for g := start; g <= end; g++ {
+			for g := start; g <= end && *budget > 0; g++ {
+				*budget--
 				at := idx + (g - start)
 				for len(out) <= at {
 					out = append(out, 0)
@@ -1256,7 +1318,19 @@ func (l *layout) readGSUBLigatures(gsub []byte, feats tableFeatures) {
 		if kind != 4 {                                        // 4 = ligature substitution
 			continue
 		}
-		l.substFlags |= flags
+		// The flags are not kept. They were, OR-ed together across every
+		// lookup of every feature into one int that nothing ever read — and
+		// OR-ing them is not a thing that can be right: a lookup flag holds a
+		// mark attachment *class* in its top eight bits and a mark filtering
+		// set index elsewhere, so two lookups' flags merged are a third
+		// lookup's that neither font declared. Of the fetched faces, Noto Sans
+		// merged to IgnoreMarks and Noto Sans Arabic to UseMarkFilteringSet.
+		//
+		// What honours them is the path that applies the lookups, which has
+		// each lookup's own flags to hand: see shaper.ignores, and
+		// nogdef_test.go for what IgnoreMarks does there. This table is read
+		// only by HasLigatures.
+		_ = flags
 		for _, sub := range subs {
 			l.ligatureSubst(sub)
 		}
@@ -1267,7 +1341,7 @@ func (l *layout) ligatureSubst(sub []byte) {
 	if len(sub) < 6 || font.Be16(sub, 0) != 1 {
 		return
 	}
-	first := coverageGlyphs(sub, font.Be16(sub, 2))
+	first := coverageGlyphs(sub, font.Be16(sub, 2), &l.covWork)
 	setCount := font.Be16(sub, 4)
 	for i := 0; i < setCount && i < len(first); i++ {
 		if 6+2*i+2 > len(sub) {
@@ -1398,8 +1472,8 @@ func (l *layout) readSingleSubstitutions(gsub []byte, feats tableFeatures) {
 	}
 	featureList := gsub[featureListOff:]
 	count := font.Be16(featureList, 0)
-	if count > maxLookups {
-		count = maxLookups
+	if count > maxDeclaredList {
+		count = maxDeclaredList
 	}
 	seen := map[string]bool{}
 	for i := 0; i < count; i++ {
@@ -1417,7 +1491,9 @@ func (l *layout) readSingleSubstitutions(gsub []byte, feats tableFeatures) {
 			if kind != 1 { // 1 = single substitution
 				continue
 			}
-			l.substFlags |= flags
+			// See the note beside the ligature reader: the flags belong to
+			// the lookup, and the pass that applies it has them.
+			_ = flags
 			for _, sub := range subs {
 				l.singleSubst(tag, sub)
 			}
@@ -1431,7 +1507,7 @@ func (l *layout) singleSubst(tag string, sub []byte) {
 	if len(sub) < 6 {
 		return
 	}
-	covered := coverageGlyphs(sub, font.Be16(sub, 2))
+	covered := coverageGlyphs(sub, font.Be16(sub, 2), &l.covWork)
 	if l.single[tag] == nil {
 		l.single[tag] = map[int]int{}
 	}
@@ -1510,7 +1586,7 @@ func (l *layout) readMarkGlyphSets(gdef []byte) {
 			continue
 		}
 		set := map[int]bool{}
-		for _, gid := range coverageGlyphs(sets, co) {
+		for _, gid := range coverageGlyphs(sets, co, &l.covWork) {
 			set[gid] = true
 		}
 		l.markSets = append(l.markSets, set)

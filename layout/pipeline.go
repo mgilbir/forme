@@ -17,15 +17,24 @@ import (
 // learn three vocabularies to find that out. Everything arrives here as a rule
 // identifier and a place in the author's input.
 //
-// This is not the final entry point. Render will be, once there is a layout to
-// run and a page to run it onto; what is here is the prefix of it that exists,
-// exposed because the stages are worth testing against real documents rather
-// than against hand-built trees.
+// This is not the entry point most callers want. Compose is: it runs these
+// stages, lays the result out on a sheet, decides the scale and paints it. What
+// is here is the prefix of that, exposed because the stages are worth testing
+// against real documents rather than against hand-built trees, and because a
+// caller laying out its own pages needs the box tree without the page.
 
 // Stylesheet is one stylesheet with a name to report against.
 type Stylesheet struct {
 	// Name identifies the sheet in a finding — a filename, usually. It is empty
 	// for the document's own <style> content.
+	//
+	// It is also what a relative @import inside this sheet is resolved against,
+	// because that is what a reference in a stylesheet is relative to: an
+	// "@import \"base.css\"" in a sheet named "css/page.css" asks for
+	// "css/base.css", and the same import in a sheet with no name asks for
+	// "base.css" beside the document. So the name is a path and not a label —
+	// naming a sheet "the caller's theme" would send its imports looking in a
+	// directory called that.
 	Name string
 	// Source is the CSS.
 	Source string
@@ -113,12 +122,42 @@ func Build(in Input) Built {
 // settled on is Built.Page, and that — not the one passed here — is what the
 // boxes are to be laid out in. See Build.
 func BuildFor(in Input, page PageSize) Built {
-	rec := NewRecorder(in.Policy)
+	return buildWith(in, page, NewRecorder(in.Policy))
+}
 
+// buildWith is BuildFor into a recorder the caller already has.
+//
+// Compose has one: it raises findings of its own about the options and the
+// sheet before the document is read, and more about the layout and the paint
+// after. Replaying Build's finished list into it instead — which is what it
+// did — loses three things.
+//
+// The counts, because a replay carries the *deduplicated* list: a stylesheet
+// that used one unimplemented property four hundred times comes back as one
+// finding, and the second recorder counts one. What Count is for is saying "and
+// 399 more", and after a replay it says "and none more".
+//
+// The bound, because a document whose build filled the five hundred hands the
+// second recorder five hundred findings before layout begins — so every finding
+// about the layout and the paint is dropped, and the page that overflowed its
+// box is not reported. The two stages shared a bound they did not share a list
+// with.
+//
+// And the work: every finding is deduplicated twice, once in each recorder.
+func buildWith(in Input, page PageSize, rec *Recorder) Built {
 	doc, htmlErrs, _ := html.Parse(in.HTML)
 	for _, e := range htmlErrs {
+		// Three kinds, and they are three because they send an author to three
+		// different places: fix the markup, the engine does not do this, or the
+		// engine stopped short. A bound that was reached is the third — the
+		// document is correct and part of it was not read anyway — and
+		// reporting it as invalid markup sent an author looking for a mistake
+		// that was not there.
 		rule := RuleInvalidMarkup
-		if e.Unsupported {
+		switch {
+		case e.Limit:
+			rule = RuleLimit
+		case e.Unsupported:
 			rule = RuleUnsupportedElement
 		}
 		rec.Report(rule, AtHTML(e.Offset), e.Message)
@@ -137,8 +176,16 @@ func BuildFor(in Input, page PageSize) Built {
 
 	sheets := make([]style.Sheet, 0, len(in.CSS)+2)
 	sheets = append(sheets, parseSheet(rec, style.OriginUserAgent, "user agent", UserAgentCSS, &faces, &pages))
+	importer := &sheetLoader{res: in.Resources, rec: rec, failed: map[string]bool{}}
 	if in.UserCSS != "" {
-		sheets = append(sheets, parseSheet(rec, style.OriginUser, "user", in.UserCSS, &faces, &pages))
+		// Through the importer like every other author-supplied sheet. A user
+		// stylesheet is CSS a person wrote, and an @import in one is the same
+		// request it is anywhere else — left unexpanded it was reported as an
+		// at-rule this engine does not apply, which is not what happens to the
+		// identical line in the document's own sheet.
+		for _, e := range importer.expandImports(authorSheet{name: "user", source: in.UserCSS}) {
+			sheets = append(sheets, parseSheet(rec, style.OriginUser, e.name, e.source, &faces, &pages))
+		}
 	}
 	// A <style> element and a <link rel=stylesheet> are both author stylesheets,
 	// and they come before the ones the caller passed only because they were
@@ -151,7 +198,6 @@ func BuildFor(in Input, page PageSize) Built {
 	}
 	// A caller's own sheets go through the same expansion as the document's, so
 	// that "@import" means the same thing whichever side it was written on.
-	importer := &sheetLoader{res: in.Resources, rec: rec, failed: map[string]bool{}}
 	for _, s := range in.CSS {
 		for _, e := range importer.expandImports(authorSheet{name: s.Name, source: s.Source}) {
 			sheets = append(sheets, parseSheet(rec, style.OriginAuthor, e.name, e.source, &faces, &pages))
@@ -176,7 +222,7 @@ func BuildFor(in Input, page PageSize) Built {
 	for _, f := range styled.Findings {
 		rec.ReportDetail(Finding{
 			Rule:     ruleForStyleFinding(f),
-			Source:   AtCSS(f.Offset),
+			Source:   styleFindingSource(f),
 			Message:  f.Message,
 			Property: f.Property,
 		})
@@ -225,7 +271,27 @@ func parseSheet(rec *Recorder, origin style.Origin, name, src string,
 	}
 	rules = splitFontFaces(rules, name, faces)
 	collectPageRules(rules, name, origin, nil, pages)
-	return style.Sheet{Origin: origin, Rules: rules}
+	return style.Sheet{Origin: origin, Rules: rules, Name: name}
+}
+
+// styleFindingSource says where a styling finding happened, in the terms a
+// caller points an author with.
+//
+// Three answers, and each of them was one before: an offset into a named
+// stylesheet, an offset into the markup where the declaration was written in a
+// style attribute, and nowhere at all for a finding about the styling as a
+// whole. All three used to come out as "byte N of the stylesheet" with no name
+// on it — which for a document with a <style>, three <link>s and their imports
+// is an offset into one of five files and no way to tell which, and for the
+// other two an offset into a file it is not an offset into.
+func styleFindingSource(f style.Finding) Source {
+	switch {
+	case f.Offset < 0:
+		return NoSource
+	case f.InMarkup:
+		return AtHTML(f.Offset)
+	}
+	return Source{HTMLOffset: -1, CSSOffset: f.Offset, Sheet: f.Sheet}
 }
 
 // ruleForStyleFinding maps the styling stage's report onto a rule.
@@ -287,6 +353,28 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 				Rule:     RuleUnsupportedValue,
 				Source:   AtHTML(n.Offset),
 				Message:  "\"display: " + what + "\" is not implemented; " + laid,
+				Path:     PathOf(n),
+				Property: "display",
+			})
+		}
+		// The legacy flexible box. This engine implements exactly the part CSS
+		// Overflow 4's compatibility section needs — a block that
+		// "-webkit-line-clamp" can be written on — and the old flexbox layout
+		// it otherwise asks for is not implemented at all.
+		//
+		// Read as a block, which is what every engine does for the vertical,
+		// single-column case the clamp is used in. Under the *horizontal*
+		// orient it is a row in a browser and a stack of blocks here, and that
+		// went unsaid: a navigation bar written the old way came out as one
+		// item per line with nothing to show which of the two the page was.
+		if strings.EqualFold(strings.TrimSpace(cs["display"]), "-webkit-box") &&
+			!strings.EqualFold(strings.TrimSpace(cs["-webkit-box-orient"]), "vertical") {
+			rec.ReportDetail(Finding{
+				Rule:   RuleUnsupportedValue,
+				Source: AtHTML(n.Offset),
+				Message: "\"display: -webkit-box\" lays its children out in a row here " +
+					"only under \"-webkit-box-orient: vertical\"; the old flexible box is " +
+					"not implemented, so the element was laid out as a block",
 				Path:     PathOf(n),
 				Property: "display",
 			})

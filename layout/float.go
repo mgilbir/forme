@@ -366,7 +366,7 @@ func (fc *floatContext) overlaps(r Rect) bool {
 // point scale of a 64th of a pixel, effectively unbounded.
 func (fc *floatContext) nextBottomBelow(y style.Unit) (style.Unit, bool) {
 	fc.sync()
-	return firstAbove(fc.idx.bottoms, y)
+	return fc.idx.bottoms.firstAbove(y)
 }
 
 // place positions a float and records it, returning its margin box.
@@ -854,12 +854,19 @@ type flow struct {
 // directly rather than through a page.
 func establishesBFC(b *Box) bool {
 	switch b.Inner {
-	case InnerFlowRoot, InnerTable, InnerTableCell, InnerTableCaption, InnerGrid:
+	case InnerFlowRoot, InnerTable, InnerTableCell, InnerTableCaption, InnerGrid, InnerFlex:
 		// A cell, a caption and a table each seal their floats in. §17.4 puts
 		// the table's on the wrapper, which is a flow root and so already on
 		// this list; the table box is here as well because a float that escaped
 		// the grid would be placed against a formatting context whose geometry
 		// the table algorithm never consulted.
+		//
+		// A flex container was named by the paragraph above and left off this
+		// list, which is the same fault twice over: Flexbox §3 says a flex
+		// container establishes a formatting context of its own and that floats
+		// do not intrude into it, and an in-flow flex container beside a left
+		// float was sitting underneath it — at x=0 and full width, while a grid
+		// or a flow root in the same place narrowed correctly.
 		return true
 	}
 	return b.Float != FloatNone || b.Position.outOfFlow()

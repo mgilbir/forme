@@ -156,7 +156,11 @@ func reconstructGlyf(out, src []byte, glyf *woff2Table, f *woff2Font) ([]byte, u
 	// loca's size follows from the glyph count and the offset width, and the
 	// two are stated in different places. They have to agree, because a loca
 	// one entry short is a font whose last glyph is whatever came after it.
-	want := uint32(2) * uint32(f.numGlyphs+1)
+	// In 32 bits, because the count is sixteen and the "+ 1" is the entry past
+	// the last glyph: a font with the full 65,535 glyphs wrapped this to zero
+	// and was refused as "not the size its glyph count calls for". Large CJK
+	// faces reach that count.
+	want := 2 * (uint32(f.numGlyphs) + 1)
 	if f.indexFormat != 0 {
 		want *= 2
 	}
@@ -263,7 +267,15 @@ func reconstructGlyf(out, src []byte, glyf *woff2Table, f *woff2Font) ([]byte, u
 			out = binary.BigEndian.AppendUint32(out, v)
 		} else {
 			// The short form stores half the offset, which is why every glyph
-			// is padded to an even boundary above.
+			// is padded to an even boundary above — and why it can only reach
+			// 128 KiB. A font whose glyphs come to more than that and still
+			// declares the short form is one no reader can use: the offsets it
+			// asks for do not exist. Writing the low sixteen bits instead would
+			// produce a table that parses and points every glyph past the first
+			// 128 KiB at the wrong bytes.
+			if v>>1 > 0xffff {
+				return nil, 0, errors.New("fonts: the WOFF 2's glyphs are past what its short loca table can address")
+			}
 			out = binary.BigEndian.AppendUint16(out, uint16(v>>1))
 		}
 	}
@@ -360,6 +372,15 @@ func rebuildSimple(nContours uint16, counts, flagBits, glyphs, bboxes, instructi
 		if !ok {
 			return nil, scratch, errShortGlyf
 		}
+		// A contour with no points is not a contour. glyf states a contour by
+		// the index of its last point, so an empty one has no index to state:
+		// the first such contour writes 65,535 as its end, and a glyph made
+		// entirely of them has no points at all — which is what used to reach
+		// the bounding-box computation with an empty slice and panic out of the
+		// font parser, from bytes an @font-face URL can deliver.
+		if n == 0 {
+			return nil, scratch, errors.New("fonts: a WOFF 2 glyph declares a contour with no points")
+		}
 		total += n
 		if total > maxWOFF2Points {
 			return nil, scratch, errors.New("fonts: a WOFF 2 glyph declares more points than this engine will hold")
@@ -406,7 +427,11 @@ func rebuildSimple(nContours uint16, counts, flagBits, glyphs, bboxes, instructi
 		return nil, points, errShortGlyf
 	}
 	g = append(g, ins...)
-	return appendPoints(g, points, overlap), points, nil
+	out, err := appendPoints(g, points, overlap)
+	if err != nil {
+		return nil, points, err
+	}
+	return out, points, nil
 }
 
 // withSign is how the triplet encoding carries a sign: in the low bit of the
@@ -491,7 +516,7 @@ func tripletDecode(flags, in []byte, n int, scratch []point) ([]point, int, erro
 		// looks like a glyph.
 		x += dx
 		y += dy
-		if x < -(1<<31) || x >= 1<<31 || y < -(1<<31) || y >= 1<<31 {
+		if x < -(1<<15) || x >= 1<<15 || y < -(1<<15) || y >= 1<<15 {
 			return points, 0, errors.New("fonts: a WOFF 2 glyph's outline runs out of the coordinate space")
 		}
 		points[i] = point{x: int32(x), y: int32(y), onCurve: onCurve}
@@ -508,7 +533,7 @@ func appendBbox(g []byte, points []point) []byte {
 		xMin, xMax = points[0].x, points[0].x
 		yMin, yMax = points[0].y, points[0].y
 	}
-	for _, p := range points[1:] {
+	for _, p := range points {
 		if p.x < xMin {
 			xMin = p.x
 		}
@@ -537,7 +562,7 @@ func appendBbox(g []byte, points []point) []byte {
 // transform kept the deltas and threw the encoding away, so an encoder and a
 // decoder that disagree about when a delta is short produce different fonts
 // from the same file.
-func appendPoints(g []byte, points []point, overlap bool) []byte {
+func appendPoints(g []byte, points []point, overlap bool) ([]byte, error) {
 	var flags, xs, ys []byte
 	lastFlag := -1
 	repeat := 0
@@ -553,6 +578,14 @@ func appendPoints(g []byte, points []point, overlap bool) []byte {
 			flag |= glyfOverlap
 		}
 		dx, dy := p.x-lastX, p.y-lastY
+		// glyf writes a delta in sixteen bits and has no other way to write
+		// one, so a pair of points further apart than that cannot be expressed.
+		// Truncating produced an outline with a point in a place the font never
+		// named, which is a glyph that looks like a glyph and is not the one
+		// the font describes.
+		if dx < -(1<<15) || dx >= 1<<15 || dy < -(1<<15) || dy >= 1<<15 {
+			return nil, errors.New("fonts: a WOFF 2 glyph moves further between two points than glyf can state")
+		}
 		switch {
 		case dx == 0:
 			flag |= glyfXSameOrUp
@@ -599,7 +632,7 @@ func appendPoints(g []byte, points []point, overlap bool) []byte {
 
 	g = append(g, flags...)
 	g = append(g, xs...)
-	return append(g, ys...)
+	return append(g, ys...), nil
 }
 
 func abs32(v int32) int32 {

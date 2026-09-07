@@ -603,3 +603,58 @@ func TestUnbreakableOverflowIsAnError(t *testing.T) {
 // calculation was wrong — which is a class of fault no amount of checking the
 // document can reach, and the reason a threshold verifying an earlier
 // calculation is worth having.
+
+// TestAMarkerOutsideItsSystemsRangeFallsBackToDecimal.
+//
+// CSS Counter Styles §7 gives every predefined alphabetic and additive style
+// the range one upwards and "decimal" as its fallback. roman, additive and
+// alphabeticIn all did that; alphabetic returned the empty string, so a list
+// counting from nought or downwards — which "start" and a negative
+// "counter-increment" both produce — was marked with a bare full stop and the
+// number was gone.
+func TestAMarkerOutsideItsSystemsRangeFallsBackToDecimal(t *testing.T) {
+	for _, tc := range []struct {
+		style string
+		index int
+		want  string
+	}{
+		{"lower-alpha", 1, "a."},
+		{"lower-alpha", 0, "0."},
+		{"lower-alpha", -1, "-1."},
+		{"upper-alpha", 0, "0."},
+		{"upper-latin", -3, "-3."},
+		{"lower-roman", 0, "0."},
+		{"upper-roman", -1, "-1."},
+		{"lower-greek", 0, "0."},
+		{"armenian", 0, "0."},
+		{"georgian", -2, "-2."},
+	} {
+		if got := markerText(tc.style, tc.index); got != tc.want {
+			t.Errorf("%s at %d is %q, want %q", tc.style, tc.index, got, tc.want)
+		}
+	}
+}
+
+// TestDecimalLeadingZeroPadsTheDigitsAndNotTheSign. §3.1.4 puts the pad on the
+// representation and the sign in front of it, so -1 is "-01". Padding the whole
+// string gave "0-1".
+func TestDecimalLeadingZeroPadsTheDigitsAndNotTheSign(t *testing.T) {
+	for _, tc := range []struct {
+		index int
+		want  string
+	}{
+		{1, "01."},
+		{9, "09."},
+		{10, "10."},
+		{99, "99."},
+		{100, "100."},
+		{0, "00."},
+		{-1, "-01."},
+		{-9, "-09."},
+		{-10, "-10."},
+	} {
+		if got := markerText("decimal-leading-zero", tc.index); got != tc.want {
+			t.Errorf("decimal-leading-zero at %d is %q, want %q", tc.index, got, tc.want)
+		}
+	}
+}

@@ -193,9 +193,33 @@ func (f *Fragment) MarginRect() Rect { return f.BorderRect.Outset(f.Margin) }
 //
 // set supplies the faces; a nil one uses the fourteen standard faces, which need
 // no embedding and cover Latin.
+//
+// rec may be nil, and then the findings are dropped. PaintReporting beside it
+// has always taken a nil one, and this took one for as long as the document
+// said nothing worth reporting: the first family it could not resolve
+// dereferenced it, so whether a caller's own nil was fatal depended on the
+// document. A caller that does not want the findings is entitled to say so once
+// rather than to be right about which documents raise them.
 func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 	if root == nil {
 		return nil
+	}
+	return newLayouter(root, avail, set, rec).layout()
+}
+
+// newLayouter builds the state one layout run holds.
+//
+// It is separate from Layout so that a test can look at what a run *cost* as
+// well as at what it drew. Some of the work here is bounded by an invariant
+// rather than by an answer — a walk over a slice, a count of resolutions — and
+// a page that is right says nothing about whether the walk was quadratic. See
+// layouter.absScans and TestAligningTableCellsIsLinearInTheOutOfFlowBoxes.
+func newLayouter(root *Box, avail Size, set FontSet, rec *Recorder) *layouter {
+	if rec == nil {
+		// An ordinary recorder nobody reads. Bounded like every other one, and
+		// simpler than a second kind of recorder that answers every question
+		// with silence.
+		rec = NewRecorder(nil)
 	}
 	l := &layouter{
 		rec: rec, avail: avail,
@@ -237,6 +261,14 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 	if l.fontSet == nil {
 		l.fontSet = StandardFonts()
 	}
+	return l
+}
+
+// layout is the run itself, against the box tree and the space newLayouter was
+// given.
+func (l *layouter) layout() *Fragment {
+	root, avail := l.root, l.avail
+
 	// The root box establishes the outermost block formatting context, so no
 	// float in the document can escape the page. The context handed in here is
 	// therefore a placeholder that nothing will ever be put in — block() makes a
@@ -344,6 +376,9 @@ type layouter struct {
 	// keeps the per-cluster family walk off every document that has no such
 	// descriptor, which is almost all of them.
 	restrictedFamilies map[string]bool
+	// reportedNoFace records that the set was found to have no face at all, so
+	// the finding is raised once rather than once per box. See fontFor.
+	reportedNoFace bool
 	// br is the half of inline layout that is about text rather than boxes, and
 	// it owns the memo of measured runs. See breaker.
 	br *breaker
@@ -386,6 +421,19 @@ type layouter struct {
 	// once the tree is in absolute coordinates. See position.go for why they
 	// can wait and floats cannot.
 	deferred []absCandidate
+	// absScans counts the deferred entries table cell alignment has walked over.
+	//
+	// It is here because the walk's cost is not visible in the page. Alignment
+	// moves the static positions of the out-of-flow boxes inside a cell, and it
+	// used to look for them from the cell's own mark to the end of the queue —
+	// so every cell walked every later cell's boxes, found none of them, and
+	// produced exactly the right answer. Sixteen million comparisons to move
+	// eight thousand numbers, and nothing on the page to say so.
+	//
+	// The same reason collapsedGrid carries "resolved": where the work is
+	// bounded by an invariant rather than by an answer, the count is the only
+	// witness there is. See TestAligningTableCellsIsLinearInTheOutOfFlowBoxes.
+	absScans int
 	// positioned maps each positioned box to its fragment, which is how an
 	// absolutely positioned box finds the containing block §10.1 gives it. It is
 	// a map rather than a walk up the fragment tree because a fragment does not

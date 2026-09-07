@@ -1,10 +1,9 @@
 package layout
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
+	"github.com/mgilbir/forme/fonttest"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -394,16 +393,16 @@ func TestUnderlineComesFromTheFaceThatStatesOne(t *testing.T) {
 }
 
 // faceFrom loads a face from the fetched corpora, or skips.
-func faceFrom(t *testing.T, env, rel string) FontSet {
+// faceFrom builds a font set around one file of a fetched corpus, so that a
+// test can measure what a face that states real metrics does.
+//
+// It takes the bytes rather than a directory: which corpus a face comes from
+// decides what an absent one means, and that decision belongs in the corpus
+// helper — fonttest.NotoFile or wptFile — rather than here. Both fail on a file
+// that is missing from a corpus that is present, so this never has to choose
+// between reporting nothing and reporting success.
+func faceFrom(t *testing.T, rel string, data []byte) FontSet {
 	t.Helper()
-	dir := os.Getenv(env)
-	if dir == "" {
-		t.Skipf("set %s for a face that states these metrics", env)
-	}
-	data, err := os.ReadFile(filepath.Join(dir, rel))
-	if err != nil {
-		t.Skipf("no %s: %v", rel, err)
-	}
 	face, err := shape.Load(data)
 	if err != nil {
 		t.Fatalf("loading %s: %v", rel, err)
@@ -438,7 +437,8 @@ func decoBand(t *testing.T, set FontSet, decoration string) (Rect, style.Unit) {
 // wrong for almost every real font, at exactly the right height, which reads as
 // a choice rather than a mistake.
 func TestLineThroughComesFromTheFaceThatStatesOne(t *testing.T) {
-	set := faceFrom(t, "NOTO_FONTS", "NotoSans-Regular.ttf")
+	const face = "NotoSans-Regular.ttf"
+	set := faceFrom(t, face, fonttest.NotoFile(t, face))
 	band, baseline := decoBand(t, set, "line-through")
 
 	// Noto Sans states a strikeout at 322 with a size of 50, out of 1000 units.
@@ -456,7 +456,8 @@ func TestLineThroughComesFromTheFaceThatStatesOne(t *testing.T) {
 // TestLineThroughFallsBackToTheXHeight is the other side, and it needs a face
 // that states an x-height and no strikeout. Two of the eighty-eight do.
 func TestLineThroughFallsBackToTheXHeight(t *testing.T) {
-	set := faceFrom(t, "WPT_TESTS", "fonts/baseline-diagnostic/BaselineDiagnostic.ttf")
+	const face = "fonts/baseline-diagnostic/BaselineDiagnostic.ttf"
+	set := faceFrom(t, face, wptFile(t, face))
 	band, baseline := decoBand(t, set, "line-through")
 
 	// The face states an x-height of 250/1000 and no strikeout, so the line goes
@@ -705,5 +706,75 @@ func TestTheThicknessDoesNotInheritAndTheOffsetDoes(t *testing.T) {
 	if top := got[0].Y.Sub(base).Px(); top != 10 {
 		t.Errorf("the span's underline is %gpx below the baseline, want the 10 "+
 			"its parent asked for: the offset is an inherited property", top)
+	}
+}
+
+// TestOneLineOfOneWeightUnderTextOfThreeSizes.
+//
+// §16.3.1's third consequence, and the one that was missing. The colour and the
+// height of the band were the declaring box's; where it sits and how thick it
+// is were read off each run's own face and size, so a paragraph's underline
+// stepped up and down and changed weight wherever a <span> changed the font.
+//
+// Courier at 20px: 0.05em is a 1px band, and its top edge is 20 x 0.1 - 0.5 =
+// 1.5px below the baseline. At 40px the same arithmetic gives 2px and 3px, so a
+// run measured against itself is unmistakably different from one measured
+// against the paragraph.
+func TestOneLineOfOneWeightUnderTextOfThreeSizes(t *testing.T) {
+	root := layoutOf(t, 600,
+		`<div id="p">ab<span id="big">cd</span>ef</div>`,
+		noDefaults+decoCSS+` #p { text-decoration: underline }
+		 #big { font-size: 40px }`)
+	got := bands(Paint(root), black)
+	if len(got) != 3 {
+		t.Fatalf("the three runs painted %d bands, want one each", len(got))
+	}
+	base := baselineOfFirstRun(t, root, "p")
+	for i, b := range got {
+		if h := b.H.Px(); h != 1 {
+			t.Errorf("band %d is %gpx thick, want 1 — the paragraph is 20px and "+
+				"0.05em of that is one, whatever size the run under it is", i, h)
+		}
+		if off := b.Y.Sub(base).Px(); off != 1.5 {
+			t.Errorf("band %d sits %gpx below the baseline, want 1.5 — the "+
+				"paragraph's own offset, not the run's", i, off)
+		}
+	}
+	// And they join up, which they cannot do if they are at three heights.
+	for i := 1; i < len(got); i++ {
+		if got[i-1].Y != got[i].Y {
+			t.Errorf("bands %d and %d are at y=%v and y=%v; §16.3.1 rules one "+
+				"straight line", i-1, i, got[i-1].Y, got[i].Y)
+		}
+	}
+}
+
+// TestTheDeclaringBoxesFaceDecidesTheBand is the same rule where the *face*
+// rather than the size differs, since a face states its own underline position
+// and a fallback does not.
+func TestTheDeclaringBoxesFaceDecidesTheBand(t *testing.T) {
+	data := fonttest.NotoFile(t, "NotoSans-Regular.ttf")
+	res := &fileResolver{files: map[string][]byte{"noto.ttf": data}}
+	// The paragraph is Courier, which states nothing and takes the 0.05em and
+	// 0.1em fallbacks; the span inside it is Noto Sans, which states both. A
+	// band measured against the span would be at Noto's numbers.
+	ops := paintWith(t, res, `<div id="p">ab<span id="n">cd</span>ef</div>`,
+		noDefaults+decoCSS+`
+		 @font-face { font-family: Noto; src: url(noto.ttf) }
+		 #p { text-decoration: underline }
+		 #n { font-family: Noto }`)
+	got := bands(ops, black)
+	if len(got) != 3 {
+		t.Fatalf("the three runs painted %d bands, want one each", len(got))
+	}
+	for i, b := range got {
+		if h := b.H.Px(); h != 1 {
+			t.Errorf("band %d is %gpx thick, want 1 — Courier's 0.05em at 20px, "+
+				"which is what the paragraph declared the line in", i, h)
+		}
+		if b.Y != got[0].Y {
+			t.Errorf("band %d is at y=%v and the first at y=%v; the face under the "+
+				"line does not move it", i, b.Y, got[0].Y)
+		}
 	}
 }

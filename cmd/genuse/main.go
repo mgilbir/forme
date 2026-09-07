@@ -24,7 +24,7 @@
 // a re-reading.
 //
 //	go run ./cmd/genuse <IndicSyllabicCategory.txt> <IndicPositionalCategory.txt> \
-//		<UnicodeData.txt> <DerivedCoreProperties.txt> <ArabicShaping.txt> > fonts/usetable.go
+//		<UnicodeData.txt> <DerivedCoreProperties.txt> <ArabicShaping.txt> > shape/usetable.go
 package main
 
 import (
@@ -136,7 +136,7 @@ func main() {
 // IndicPositionalCategory.txt, UnicodeData.txt, DerivedCoreProperties.txt and
 // ArabicShaping.txt. DO NOT EDIT.
 
-package fonts
+package shape
 
 // The Universal Shaping Engine's categories. Unicode %s.
 //

@@ -59,6 +59,31 @@ type Decoration struct {
 	// that draws the display list has no styles left to ask.
 	Thickness, Offset       style.Unit
 	HasThickness, HasOffset bool
+	// Metrics is where the three bands sit and how thick they are according to
+	// the declaring box's *face*, which is the answer for every document that
+	// leaves the two properties above alone — almost all of them.
+	//
+	// It is here for the same reason they are, and it is the same rule: §16.3.1
+	// draws a decoration across the whole of the box that declared it "without
+	// paying any attention to" what it crosses. A paragraph's underline is one
+	// straight line of one weight under words at three sizes and in three
+	// faces; read off each run instead, it steps up and down and changes
+	// thickness wherever a <span> changes the font.
+	Metrics DecorationMetrics
+}
+
+// DecorationMetrics is a face's own statement of where a decoration sits.
+//
+// The units are the ones the display list uses, resolved against the declaring
+// box's font size: thickness is a height and the other three are the *top* edge
+// of each band, measured off the baseline and positive downwards.
+type DecorationMetrics struct {
+	Thickness style.Unit
+	// StrikeThickness is the face's own strikeout size, and is zero where the
+	// face states none — in which case the line-through is drawn at Thickness
+	// like the rest.
+	StrikeThickness             style.Unit
+	Underline, Overline, Strike style.Unit
 }
 
 // Frame is what the walk over an inline subtree carries down: enough to
@@ -263,6 +288,20 @@ type Item struct {
 	// the layer that fills them in does not even ask unless the face carries the
 	// positional forms. See layout's linkShapingContext.
 	PreContext, PostContext string
+	// Cut records that this item is a stretch of a longer run that was divided
+	// for a line, and CutAt where in that run the stretch begins.
+	//
+	// It is what makes a word broken across many lines linear work. The run is
+	// shaped once and every stretch of it is a sum over the glyphs it covers;
+	// without it each line shaped the whole rest of the word again, which for
+	// twenty thousand characters in narrow lines is eleven million characters
+	// of shaping for twenty thousand characters of text.
+	//
+	// Nil for an item that was never divided, which is every item a document
+	// produces: it is set by SplitItem and its two halves. See Breaker.SplitItem.
+	Cut   *RunCut
+	CutAt int
+
 	// MergePre and MergePost say that the neighbour on that side may contribute
 	// *glyphs* to this run and not only forms, so a ligature spanning the
 	// boundary is formed. See shape.ShapeGlyphsMerged, and linkShapingContext
@@ -334,10 +373,6 @@ type Item struct {
 	// same one overflow-wrap already does: the next line begins part-way
 	// through an item, which BreakOneLine returns as an offset.
 	HyphenSkip int
-	// HyphenLead is text put at the start of the next line when the line ends
-	// at this item's hyphen. See Orthography — Uyghur's joiner is the one this
-	// engine has.
-	HyphenLead string
 	// HyphenText is the character to print, carried with the width so that the
 	// item the line breaking appends is one this package can build.
 	//
@@ -416,22 +451,6 @@ type Item struct {
 	// which way the text runs and not on which end of the box the edge is. So
 	// both are kept, and shapingcontext.go picks the one that is actually there.
 	InsetLeft, InsetRight style.Unit
-	// InsetLevel is the embedding level the box's own edges sit at, and
-	// insetLevelKnown says insetSides worked one out.
-	//
-	// An inset carries no characters, so the algorithm gives it no level of its
-	// own, and the two obvious guesses are both wrong somewhere: the level of the
-	// neighbouring item glues the box's edge to whatever run happens to abut it,
-	// and the paragraph's base level detaches it from its own content. What the
-	// edge of an inline box sits at is the *lowest* level anything inside it
-	// reached — an embedding inside the box only raises the level of what is
-	// inside, and the box's own boundary is outside all of them.
-	//
-	// The flag is separate because zero is a real level, the left-to-right one,
-	// and a box with no content on the line at all has to stay distinguishable
-	// from a box whose content is left-to-right.
-	InsetLevel      int
-	InsetLevelKnown bool
 	// Float is a Float met in this run of inline content. It carries no text of
 	// its own: it is a marker saying "a Float belongs here", because where a
 	// Float appears among the words decides which line box it is placed against,
@@ -659,7 +678,67 @@ func StartOfContext() State { return State{AfterCollapsibleSpace: true} }
 // to the whole, and the number that has to be right is the one used to place the
 // text that is actually drawn.
 func (br *Breaker) SplitItem(item Item, at int) (head, tail Item) {
+	head, tail = splitItemAt(item, at)
+	head.Width = br.spanWidth(item, 0, at, head)
+	tail.Width = br.spanWidth(item, at, len(item.Text), tail)
+	// §8.1's gap sits at the item's far edge, so it goes with the tail — the
+	// head's far edge is the cut, which is a boundary the gap was never at. The
+	// measurements above do not include it, since it is not in the text.
+	tail.Width = tail.Width.Add(item.Autospace)
+	return head, tail
+}
+
+// SplitHead is SplitItem's first half alone.
+//
+// The tail is discarded by the caller that looks for where a line ends: what
+// follows the cut begins the next line and is split again there. Measuring it
+// anyway is a measurement of the whole rest of the word for every line the word
+// is broken across, which is quadratic in exactly the words this is reached for
+// — it is reached for the longest word in a document and for no other.
+func (br *Breaker) SplitHead(item Item, at int) Item {
+	head, _ := splitItemAt(item, at)
+	head.Width = br.spanWidth(item, 0, at, head)
+	return head
+}
+
+// SplitTail is SplitItem's second half alone.
+//
+// The head is discarded by the caller that resumes a line inside a word: the
+// line before it drew that head, and what is being asked for is what is left.
+// Measuring it again is a measurement of everything already drawn, once per
+// line the word is broken across.
+func (br *Breaker) SplitTail(item Item, at int) Item {
+	_, tail := splitItemAt(item, at)
+	tail.Width = br.spanWidth(item, at, len(item.Text), tail)
+	tail.Width = tail.Width.Add(item.Autospace)
+	return tail
+}
+
+// RunCut is the run a divided item is a stretch of: its whole text, and the
+// context that run was to be shaped in. Everything a measurement of any stretch
+// of it needs, so that the run is shaped once however many lines it is divided
+// across.
+type RunCut struct {
+	Text          string
+	Before, After string
+	Kerns         bool
+}
+
+// splitItemAt is everything about the two halves except their widths.
+func splitItemAt(item Item, at int) (head, tail Item) {
 	head, tail = item, item
+	// Which run these two are stretches of. A first cut names the item itself;
+	// a later one keeps the run the item was already a stretch of, so that
+	// dividing a word for a hundred lines still points at one shaping.
+	cut, base := item.Cut, item.CutAt
+	if cut == nil {
+		cut, base = &RunCut{
+			Text: item.Text, Before: item.PreContext, After: item.PostContext,
+			Kerns: item.ContextKerns,
+		}, 0
+	}
+	head.Cut, head.CutAt = cut, base
+	tail.Cut, tail.CutAt = cut, base+at
 	head.Text, tail.Text = item.Text[:at], item.Text[at:]
 	// at is an offset into the string, and the bidi range counts runes: the
 	// paragraph the levels were resolved over is a []rune, and bidiStart is a
@@ -692,21 +771,19 @@ func (br *Breaker) SplitItem(item Item, at int) (head, tail Item) {
 	// The context either side of the whole item goes on the outside of each
 	// half, because that is where it was: what preceded the item still precedes
 	// the head, and what followed it still follows the tail.
-	head.PostContext = tail.Text + item.PostContext
-	tail.PreContext = item.PreContext + head.Text
+	// Each side trimmed before it is joined as well as after, so that the join
+	// itself never copies the rest of the word: a cut two characters into a
+	// twenty-thousand-character run would otherwise build a twenty-thousand-
+	// byte string and then throw all but a hundred and twenty-eight of it away.
+	head.PostContext = ContextAfter(ContextAfter(tail.Text) + item.PostContext)
+	tail.PreContext = ContextBefore(item.PreContext + ContextBefore(head.Text))
 	// The two halves are the same run cut in two, so the boundary between them
 	// is one this font states its pairs over whatever the outer context is.
 	head.ContextKerns, tail.ContextKerns = true, true
-	head.Width = br.MeasureSpacedInContext(item.Face, head.Text, item.Size, item.Spacing,
-		head.shaping())
-	tail.Width = br.MeasureSpacedInContext(item.Face, tail.Text, item.Size, item.Spacing,
-		tail.shaping())
 	// §8.1's gap sits at the item's far edge, so it goes with the tail — the
-	// head's far edge is the cut, which is a boundary the gap was never at. The
-	// measurements above do not include it, since it is not in the text.
+	// head's far edge is the cut, which is a boundary the gap was never at.
 	head.Autospace = 0
 	tail.Autospace = item.Autospace
-	tail.Width = tail.Width.Add(item.Autospace)
 	// The tail begins a line, so it takes no opportunity from what was in front
 	// of the head — there is nothing in front of it any more.
 	//

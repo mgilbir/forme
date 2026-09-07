@@ -240,10 +240,8 @@ func (l *layouter) resolveBidi(b *Box, items []inlineItem, p *bidiBuilder) []inl
 //
 // # How it is done
 //
-// Two things are decided per box, and both are about the box's content rather
-// than about anything declared on it.
-//
-// The first is whether the two items should swap what they hold. They are
+// One thing is decided per box: whether the two items should swap what they
+// hold. They are
 // emitted in logical order with the left inset first; a box whose content
 // resolves to an odd level *throughout* will have that content reversed by the
 // reordering and the two items reversed with it, so their widths are exchanged
@@ -261,58 +259,40 @@ func (l *layouter) resolveBidi(b *Box, items []inlineItem, p *bidiBuilder) []inl
 // swapping on the <bdo>'s level put the span's left border three pixels inside
 // where the reference draws it.
 //
-// The second is the level the two items are *reordered* at, which they need
-// because they carry no characters and so the algorithm gave them none. It is
-// the lowest level anything inside the box reached. An embedding raises the
-// level of what is inside it and leaves the box's own boundary outside, so the
-// lowest is the box's own — and both other candidates were tried and are wrong:
+// # What is not decided here
 //
-//   - the neighbouring item's level glues the box's edge to whatever run abuts
-//     it, which is the tab-bidi-001 fault again, one border out of place;
-//   - the paragraph's base level detaches the edge from its own content, which
-//     costs bidi-span-003: a purple-bordered <span> of Latin in a
-//     "direction: rtl" div had its opening border thrown to the far end of the
-//     line, so the border drawn round one word enclosed two.
+// A level for the two items to be reordered at. They carry no characters, so
+// the algorithm gives them none, and this used to work one out — the lowest
+// level anything inside the box reached. It no longer does, because an inset
+// takes no part in the reordering at all: a level of its own splits the run it
+// lands in, and rule L2 then reverses the halves separately. See
+// paragraph.orderRuns, which says what that did to a span holding three
+// characters at three levels.
+//
+// The bookkeeping outlived the decision. Its sentinel was -1 and its test was
+// "lower than the lowest so far", which no level from nought upwards can ever
+// be, so the field was never written — and the one place that read it asked for
+// an inset that is not an inset, which is nothing. Two ways of being dead in
+// one mechanism, and it is gone rather than repaired: what would have used it
+// was removed on purpose.
 //
 // # Cost
 //
 // One pass and no allocation beyond the stack of inline boxes currently open.
-// Every question is answered in constant time per box: the counts are subtracted
-// from the running totals at the close, and the minimum is folded into the
-// enclosing box's as each one pops, so no box ever rescans its own content. The
-// stack's depth is the inline nesting, which the HTML parser caps at 256.
+// The stack's depth is the inline nesting, which the HTML parser caps at 256.
 func insetSides(items []inlineItem) {
-	// noLevel is above every level UAX #9 can produce: MaxDepth is 125 and rule
-	// X8 admits one more.
-	const noLevel = -1
-
 	// open is one inline box whose lead inset has been seen and whose trail
 	// inset has not.
 	type open struct {
 		box  *Box
 		lead int
-		// content and odd are the running counts at the moment the box opened.
-		// Subtracting them at the close gives the box's own.
-		//
-		// They are counts rather than a level and a "have we got one yet" flag
-		// because zero is a real embedding level — the left-to-right one — so a
-		// box that has seen no content and a box whose content is left-to-right
-		// have to stay distinguishable. Counting keeps them apart without a
-		// sentinel: no content is a count of zero, which swaps nothing.
-		content, odd int
-		// min is the lowest level seen inside this box so far, or noLevel.
-		min int
 	}
 	var stack []open
-	content, odd := 0, 0
 
 	for i := range items {
 		if items[i].Inset {
 			if items[i].InsetLead {
-				stack = append(stack, open{
-					box: heldBox(items[i].Box), lead: i,
-					content: content, odd: odd, min: noLevel,
-				})
+				stack = append(stack, open{box: heldBox(items[i].Box), lead: i})
 				continue
 			}
 			if len(stack) == 0 || stack[len(stack)-1].box != items[i].Box {
@@ -324,11 +304,6 @@ func insetSides(items []inlineItem) {
 			}
 			top := stack[len(stack)-1]
 			stack = stack[:len(stack)-1]
-			// A box's content counts as its parent's too, so the minimum folds
-			// outwards as the stack unwinds rather than being recomputed.
-			if len(stack) > 0 && top.min < stack[len(stack)-1].min {
-				stack[len(stack)-1].min = top.min
-			}
 			// Which of the box's two physical insets belongs to the end that
 			// *begins* it. §8.6 answers with the element's own direction, and
 			// that is what beginsAtRight reads.
@@ -342,23 +317,6 @@ func insetSides(items []inlineItem) {
 				items[top.lead].Width, items[i].Width =
 					items[i].Width, items[top.lead].Width
 			}
-			if top.min != noLevel {
-				items[top.lead].InsetLevel, items[top.lead].InsetLevelKnown = top.min, true
-				items[i].InsetLevel, items[i].InsetLevelKnown = top.min, true
-			}
-			continue
-		}
-		if items[i].Para == nil {
-			// No characters of its own: a float marker, or a run in a paragraph
-			// the algorithm did not resolve. It says nothing about direction.
-			continue
-		}
-		content++
-		if items[i].Level&1 == 1 {
-			odd++
-		}
-		if len(stack) > 0 && items[i].Level < stack[len(stack)-1].min {
-			stack[len(stack)-1].min = items[i].Level
 		}
 	}
 }

@@ -6,7 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -17,17 +20,16 @@ import (
 //
 // # Why this and not more tests of our own
 //
-// docs/adr/0003-arlington-as-parser-oracle.md records two attempts this
-// repository made at a guard that guarded nothing — one that tested pdf0's own
-// trivial output, one whose consistency check was tautological — and the lesson
-// it drew: a check built from the same understanding as the thing it checks
-// cannot find a misunderstanding. The tokenizer and parser tests next door are
+// Two earlier attempts at a guard here guarded nothing — one tested this
+// package's own trivial output, and one's consistency check was tautological —
+// and the lesson both drew is the same: a check built from the same
+// understanding as the thing it checks cannot find a misunderstanding. The tokenizer and parser tests next door are
 // worth having and they have that exact weakness. They asserts that the code
 // does what its author read the specification to say.
 //
 // These expectations were written by someone else, from the specification, and
 // three independent implementations are held to them. So a disagreement here is
-// evidence about pdf0.
+// evidence about forme.
 //
 // # How our results are expressed in the suite's notation
 //
@@ -36,22 +38,22 @@ import (
 // rewrites a result until it matches would be the tautology again.
 //
 // First, the suite models a *parse error as a node in the stream* — tinycss2
-// returns them inline — while pdf0 keeps tokens and diagnostics apart, tokens in
+// returns them inline — while forme keeps tokens and diagnostics apart, tokens in
 // the tree and problems in an Errors slice. Its nine error spellings split
 // cleanly in two, and the split is the README's, not one invented here:
 //
 //   - "bad-string", "bad-url", ")", "]" and "}" are *nodes*. The README defines
 //     each as the representation of a token — a <bad-string-token>, a
 //     <bad-url-token>, an unmatched close delimiter — so each maps to the token
-//     pdf0 produces, and each is compared.
+//     forme produces, and each is compared.
 //   - "invalid", "eof-in-string", "eof-in-url", "empty" and "extra-input" are
 //     *diagnostics*. They stand for nothing in the value stream; they say the
 //     input was malformed. These are dropped from the expected node sequence and
-//     checked against pdf0's Errors slice instead — by presence, not by message,
+//     checked against this engine's Errors slice instead — by presence, not by message,
 //     because matching our wording to tinycss2's would be a hand-written table
 //     that could be tuned until it passed.
 //
-// Second, nothing else is adjusted. Where pdf0 disagrees with the suite the
+// Second, nothing else is adjusted. Where forme disagrees with the suite the
 // case is listed in deviations, with the reason, and the reason has to be about
 // the specification rather than about this code.
 
@@ -69,9 +71,9 @@ var diagnostics = map[string]bool{
 }
 
 // The suite is built on the 2021 Candidate Recommendation draft of CSS Syntax
-// Level 3, and the specification has moved since. Where the two disagree pdf0
+// Level 3, and the specification has moved since. Where the two disagree forme
 // follows the current text: a browser today does what the current text says, and
-// matching a superseded draft would put pdf0 alone.
+// matching a superseded draft would put forme alone.
 //
 // Each disagreement is excused by a *rule* naming the construct that was
 // removed, rather than by a list of inputs. That is deliberate. A list keyed on
@@ -82,7 +84,7 @@ var diagnostics = map[string]bool{
 //
 // deviationRules is checked against the *expected* result, so the question asked
 // is "does this case test something the specification no longer has", never
-// "did pdf0 fail here".
+// "did forme fail here".
 var deviationRules = []struct {
 	name string
 	why  string
@@ -111,7 +113,7 @@ var deviationRules = []struct {
 		// moved to the value layer (§5.5.11), reached only from the
 		// unicode-range descriptor of @font-face — which is not in the subset
 		// this engine implements. So "U+1?" is an ident, a delimiter and a
-		// number, which is what pdf0 produces.
+		// number, which is what forme produces.
 		why: "the current specification tokenizes U+1? as ident, delim and number",
 		applies: func(_ string, v any) bool {
 			return containsNode(v, func(arr []any) bool {
@@ -125,7 +127,7 @@ var deviationRules = []struct {
 		// <include-match-token> and its five siblings — ~= |= ^= $= *= and the
 		// column token || — are absent from the token list in §4. Selectors
 		// Level 4 parses each from the two delimiters it is written with, so
-		// "^=" is a "^" and an "=", which is what pdf0 produces.
+		// "^=" is a "^" and an "=", which is what forme produces.
 		why: "~= |= ^= $= *= and || are two delimiters, not one token",
 		applies: func(_ string, v any) bool {
 			return containsString(v, func(s string) bool {
@@ -143,7 +145,7 @@ var deviationRules = []struct {
 		// above U+0080 into a name. The current definition of "non-ASCII ident
 		// code point" is an explicit list that begins at U+00B7 and leaves out
 		// the C1 controls, the bidirectional formatting characters, the private
-		// use areas and the non-characters. pdf0 implements that list, so
+		// use areas and the non-characters. forme implements that list, so
 		// U+0080 is a delimiter rather than part of an identifier.
 		why: "non-ASCII ident code points are an explicit list starting at U+00B7",
 		applies: func(_ string, v any) bool {
@@ -278,17 +280,35 @@ func excuse(file, input string, expected any) (name, why string, ok bool) {
 	return "", "", false
 }
 
+// oracleDir is the fetched suite: the variable if it is set, the checkout's own
+// fetch directory otherwise, and a failure rather than a skip when a directory
+// was named and the suite is not in it.
+//
+// The same rule bidi's testDir and fonttest's NotoDir follow, and for the same
+// reason: a skip is indistinguishable from a pass, so a mistyped path would
+// leave this reporting success having read no case at all.
 func oracleDir(t *testing.T) string {
 	t.Helper()
-	dir := os.Getenv(oracleEnv)
-	if dir == "" {
-		t.Skipf("set %s (or run `make test-css`) to check the parser against the CSS parsing tests", oracleEnv)
+	env := os.Getenv(oracleEnv)
+	dir := env
+	if env == "" {
+		dir = filepath.Join("..", "testdata", "css-parsing-tests")
 	}
-	if _, err := os.Stat(dir); err != nil {
-		t.Fatalf("%s=%s: %v", oracleEnv, dir, err)
+	if _, err := os.Stat(filepath.Join(dir, oracleMarker)); err == nil {
+		return dir
 	}
-	return dir
+	if env == "" {
+		t.Skipf("the CSS parsing tests are not in this checkout; run `make css-tests`")
+	}
+	t.Fatalf("%s is set to %q, and there is no %s there.\n"+
+		"Failing rather than skipping: this is the external oracle for the "+
+		"parser, and a skip would report success having read no case.",
+		oracleEnv, env, oracleMarker)
+	return ""
 }
+
+// oracleMarker is the file whose presence says a directory is the suite.
+const oracleMarker = "component_value_list.json"
 
 // loadPairs reads one suite file, whose JSON is a flat array alternating input
 // and expected result.
@@ -464,6 +484,23 @@ func oracleRuns() []run {
 			decls, rules, errs := ParseDeclarations(in)
 			return renderDeclarationList(decls, rules), errs
 		}},
+		// The current algorithm for the same thing, and the file that says so.
+		//
+		// declaration_list.json is the 2021 draft's §5.4.4, where anything in a
+		// declaration list that did not begin with an ident was a parse error
+		// and everything up to the next semicolon went with it. The current text
+		// consumes a *qualified rule* there — that is CSS Nesting — and
+		// blocks_contents.json is the suite's file for it.
+		//
+		// Which is what forme implements, and it was not being run. The
+		// nesting behaviour was visible only as a deviation rule taking cases
+		// *out* of declaration_list.json, so the old answers were excused and
+		// the new ones were checked by nothing. Thirteen cases, and they pass
+		// with no excuse at all.
+		{"blocks_contents.json", func(in string) ([]any, []Error) {
+			decls, rules, errs := ParseDeclarations(in)
+			return renderDeclarationList(decls, rules), errs
+		}},
 	}
 }
 
@@ -598,20 +635,20 @@ func TestCSSOracle(t *testing.T) {
 						r.file, input, mustJSON(got), mustJSON(want))
 					continue
 				}
-				// The suite says the input was malformed, so pdf0 must have
+				// The suite says the input was malformed, so forme must have
 				// noticed something.
 				//
-				// Only this direction is asserted. The converse — that pdf0 is
+				// Only this direction is asserted. The converse — that forme is
 				// silent wherever the suite is — would be false, and not because
-				// pdf0 is noisy: the suite's markers are the errors tinycss2
+				// forme is noisy: the suite's markers are the errors tinycss2
 				// chose to put in the tree, while these are every parse error
 				// the specification defines. An unterminated comment, a
 				// backslash at end of input and an unclosed block are all parse
 				// errors in §4 and §5, and the suite marks none of the three.
 				// Requiring agreement would mean copying another parser's
-				// reporting policy and calling it conformance. That pdf0 stays
+				// reporting policy and calling it conformance. That forme stays
 				// quiet on correct input is asserted next door, over stylesheets
-				// written to be correct, where it is a claim about pdf0 rather
+				// written to be correct, where it is a claim about forme rather
 				// than about tinycss2.
 				if wantErrs > 0 && len(errs) == 0 {
 					t.Errorf("%s\ninput %q\nparsed identically but reported nothing, "+
@@ -682,7 +719,7 @@ func TestCSSOracleHasTeeth(t *testing.T) {
 	}
 
 	// And the diagnostic split must actually remove markers, or every
-	// malformed-input case would compare against a stream pdf0 never produces.
+	// malformed-input case would compare against a stream forme never produces.
 	in := []any{ident("a"), []any{"error", "eof-in-string"}, []any{"error", "bad-url"}}
 	kept, n := splitDiagnostics(in)
 	if n != 1 {
@@ -785,4 +822,229 @@ func TestCSSOracleDeviationsAreNarrow(t *testing.T) {
 		t.Errorf("a block among declarations was excused by %q (ok=%v), want the "+
 			"nesting rule", name, ok)
 	}
+}
+
+// unrunSuiteFiles are the suite's files this package does not answer, each with
+// why.
+//
+// A file is never simply absent from the run. blocks_contents.json was, and
+// nothing said so: it is the file for the algorithm forme implements, and its
+// thirteen cases were checked by nobody while the superseded file beside it was
+// checked with a deviation rule excusing the difference. The one thing that
+// would have caught that is this list, so here it is.
+//
+// The three below are algorithms rather than tables, and the entry points they
+// name are not ones this package has. That is a real absence rather than a
+// dodge: "parse a declaration" consumes its whole input as one declaration —
+// "foo:;bar:;" is one declaration whose value holds the second — where
+// ParseDeclarations splits at semicolons, so answering the file from the public
+// API would mean writing a second parser in a test and comparing this
+// repository's two guesses with each other.
+var unrunSuiteFiles = map[string]string{
+	"one_declaration.json": "§5.3.7 parses one declaration out of a whole input " +
+		"without splitting at semicolons; ParseDeclarations splits, and there is " +
+		"no caller for the other",
+	"one_rule.json": "§5.3.5 parses exactly one rule and refuses trailing input; " +
+		"ParseRules parses a list, and there is no caller for the other",
+	"stylesheet_bytes.json": "the input is bytes and the answer includes the " +
+		"encoding, which is decided before this package sees a string — see " +
+		"style's @charset handling and html's sniffing",
+}
+
+// TestEverySuiteFileIsRunOrExplained stops a file from being quietly skipped.
+//
+// The colour files have their own accounting next door in style; everything
+// else the suite ships has to be answered here or named above with a reason,
+// and a file that arrives in a regenerated suite fails rather than going
+// unnoticed.
+func TestEverySuiteFileIsRunOrExplained(t *testing.T) {
+	dir := oracleDir(t)
+
+	present, err := filepath.Glob(filepath.Join(dir, "*.json"))
+	if err != nil || len(present) == 0 {
+		t.Fatalf("no suite files in %s: %v", dir, err)
+	}
+
+	answered := map[string]bool{
+		// Its own test, because the file's shape is different: the expected
+		// result is a pair of integers rather than an AST.
+		"An+B.json": true,
+		// Its own test, because the expected result is a single component
+		// value rather than a list of them.
+		"one_component_value.json": true,
+	}
+	for _, r := range oracleRuns() {
+		answered[r.file] = true
+	}
+
+	for _, path := range present {
+		name := filepath.Base(path)
+		if strings.HasPrefix(name, "color_") {
+			continue // style/color_test.go accounts for these
+		}
+		if answered[name] {
+			continue
+		}
+		if _, ok := unrunSuiteFiles[name]; !ok {
+			t.Errorf("the suite ships %s, which is neither answered nor listed "+
+				"with a reason for not being.\nA file nobody runs and nobody "+
+				"mentions is the whole of how blocks_contents.json went "+
+				"unchecked.", name)
+		}
+	}
+
+	// And the reasons do not outlive their files.
+	for name := range unrunSuiteFiles {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Errorf("%s is listed as unrun and the suite no longer ships it", name)
+		}
+	}
+}
+
+// parseOneComponentValue is §5.3.7, written over ParseComponentValues because
+// the algorithm is that plus two conditions: leading and trailing whitespace is
+// ignored, and exactly one value has to remain.
+//
+// Unlike "parse a declaration" and "parse a rule", nothing here is a second
+// reading of the specification — the work is all in ParseComponentValues, and
+// what is added is the counting.
+func parseOneComponentValue(input string) (val ComponentValue, problem string) {
+	vals, _ := ParseComponentValues(input)
+	for len(vals) > 0 && vals[0].Token.Kind == Whitespace {
+		vals = vals[1:]
+	}
+	for len(vals) > 0 && vals[len(vals)-1].Token.Kind == Whitespace {
+		vals = vals[:len(vals)-1]
+	}
+	switch {
+	case len(vals) == 0:
+		return ComponentValue{}, "empty"
+	case len(vals) > 1:
+		return ComponentValue{}, "extra-input"
+	}
+	return vals[0], ""
+}
+
+// TestCSSOracleOneComponentValue runs one_component_value.json.
+//
+// Four of its ten cases are input that is not a component value at all —
+// nothing, whitespace, a comment, and a value with something after it — and
+// those are the half worth having: a reader that answers "." for ".foo" has
+// taken the first thing it saw and called the rest a success.
+func TestCSSOracleOneComponentValue(t *testing.T) {
+	dir := oracleDir(t)
+
+	pairs := loadPairs(t, dir, "one_component_value.json")
+	if len(pairs) == 0 {
+		t.Fatal("one_component_value.json holds no cases")
+	}
+	var values, refusals int
+	for _, pair := range pairs {
+		input, ok := pair[0].(string)
+		if !ok {
+			t.Fatalf("an input that is not a string: %v", pair[0])
+		}
+		got, problem := parseOneComponentValue(input)
+
+		// A top-level ["error", kind] where kind is one of the suite's
+		// diagnostics is the algorithm refusing. An error node *inside* a value
+		// — an unmatched ")" — is a preserved token and not a refusal, which is
+		// why this looks at the top level only.
+		if want, kind := refusedAs(pair[1]); want {
+			refusals++
+			if problem == "" {
+				t.Errorf("input %q\nparsed as %s, and the suite says %q",
+					input, mustJSON(oracleValue(got)), kind)
+			} else if problem != kind {
+				t.Errorf("input %q\nrefused as %q, and the suite says %q",
+					input, problem, kind)
+			}
+			continue
+		}
+		values++
+		if problem != "" {
+			t.Errorf("input %q\nrefused as %q, and the suite gives a value: %s",
+				input, problem, mustJSON(pair[1]))
+			continue
+		}
+		if rendered := oracleValue(got); !reflect.DeepEqual(rendered, pair[1]) {
+			t.Errorf("input %q\n got %s\nwant %s", input, mustJSON(rendered), mustJSON(pair[1]))
+		}
+	}
+	t.Logf("one_component_value.json: %d values and %d refusals checked", values, refusals)
+}
+
+// refusedAs reports whether an expected result is the algorithm refusing, and
+// how the suite spells the refusal.
+func refusedAs(v any) (bool, string) {
+	arr, ok := v.([]any)
+	if !ok || len(arr) != 2 {
+		return false, ""
+	}
+	tag, _ := arr[0].(string)
+	kind, _ := arr[1].(string)
+	if tag != "error" || !diagnostics[kind] {
+		return false, ""
+	}
+	return true, kind
+}
+
+// TestTheReadmeCountsTheSyntaxSuite.
+//
+// The README's figure is the only place a reader learns how much of the suite
+// is run, and it went on saying 206 while blocks_contents.json's thirteen cases
+// sat unrun beside it. A number in prose that nothing checks is a number that
+// stops being true the first time the run changes, and this is the check.
+func TestTheReadmeCountsTheSyntaxSuite(t *testing.T) {
+	dir := oracleDir(t)
+	checked, excused := suiteTotals(t, dir)
+
+	text, err := os.ReadFile(filepath.Join("..", "README.md"))
+	if err != nil {
+		t.Fatalf("reading the README: %v", err)
+	}
+	if got := readmeCount(t, string(text), `([\d,]+) cases from the suite`); got != checked {
+		t.Errorf("the README says %d cases are run and the suite gives %d", got, checked)
+	}
+	if got := readmeCount(t, string(text), `with ([\d,]+) more deliberately excused`); got != excused {
+		t.Errorf("the README says %d cases are excused and %d are", got, excused)
+	}
+}
+
+// suiteTotals counts what the oracle above checks and what it excuses, without
+// asserting anything about the answers — those are checked where they are
+// produced. It is separate so that the count and the run cannot disagree: both
+// walk the same files and the same deviation rules.
+func suiteTotals(t *testing.T, dir string) (checked, excused int) {
+	t.Helper()
+	for _, r := range oracleRuns() {
+		for _, pair := range loadPairs(t, dir, r.file) {
+			input, _ := pair[0].(string)
+			if _, _, ok := excuse(r.file, input, pair[1]); ok {
+				excused++
+				continue
+			}
+			checked++
+		}
+	}
+	// The two files with a shape of their own. Neither has ever needed an
+	// excuse: An+B is a microsyntax the current text has not moved, and a
+	// component value is the token stream itself.
+	checked += len(loadPairs(t, dir, "An+B.json"))
+	checked += len(loadPairs(t, dir, "one_component_value.json"))
+	return checked, excused
+}
+
+// readmeCount pulls a number out of the README.
+func readmeCount(t *testing.T, text, pattern string) int {
+	t.Helper()
+	m := regexp.MustCompile(pattern).FindStringSubmatch(text)
+	if m == nil {
+		t.Fatalf("the README no longer says %q, so this test cannot check it", pattern)
+	}
+	n, err := strconv.Atoi(strings.ReplaceAll(m[1], ",", ""))
+	if err != nil {
+		t.Fatalf("the README's %q is not a number: %v", m[1], err)
+	}
+	return n
 }

@@ -6,7 +6,7 @@
 // says what it means with a uniXXXX name, which GlyphNameToRune already
 // resolves without a table.
 //
-//	go run ./cmd/genglyphlist <glyphlist.txt> > internal/font/glyphnames.go
+//	go run ./cmd/genglyphlist <glyphlist.txt> > font/glyphnames.go
 package main
 
 import (

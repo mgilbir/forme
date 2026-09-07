@@ -1,9 +1,9 @@
 package shape
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
+
+	"github.com/mgilbir/forme/fonttest"
 )
 
 // Which positioning features apply without being asked for.
@@ -24,15 +24,8 @@ import (
 // to. It is the font the case was found with, and it declares 'palt'.
 func notoJP(t *testing.T) *Face {
 	t.Helper()
-	dir := os.Getenv("NOTO_FONTS")
-	if dir == "" {
-		t.Skip("set NOTO_FONTS (or run `make test-wpt`) for a face that declares palt")
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "NotoSansJP-VF.ttf"))
-	if err != nil {
-		t.Skipf("the Japanese face is not in the checkout: %v", err)
-	}
-	f, err := LoadInstance(data, map[string]float64{"wght": 400})
+	f, err := LoadInstance(fonttest.NotoFile(t, "NotoSansJP-VF.ttf"),
+		map[string]float64{"wght": 400})
 	if err != nil {
 		t.Fatalf("the face did not load: %v", err)
 	}

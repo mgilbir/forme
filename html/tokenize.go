@@ -31,6 +31,14 @@ type Error struct {
 	// author: malformed markup is theirs to fix, an unsupported element is a
 	// limit of the renderer. See css.Error, which draws the same line.
 	Unsupported bool
+	// Limit marks a bound on the document that was reached — its size, its node
+	// count, its nesting depth, or the length of this list — rather than
+	// anything the document got wrong. It is the third thing an author can be
+	// told and it is not either of the other two: the markup is correct, the
+	// engine implements it, and some of the document was not read anyway. A
+	// caller that reports this as malformed markup sends an author looking for
+	// a mistake that is not there.
+	Limit bool
 }
 
 func (e Error) Error() string { return fmt.Sprintf("byte %d: %s", e.Offset, e.Message) }
@@ -92,6 +100,52 @@ type tokenizer struct {
 	xml bool
 }
 
+// commentLength is how many bytes a comment occupies, from its "<!--" to the
+// end of whatever closed it.
+//
+// Three ways to close one, and only the first was read. The other two are
+// errors in the markup and the standard names them, gives each a parse error,
+// and says where the comment ends anyway — because it has to: a document does
+// not stop being a document because somebody wrote a comment badly.
+//
+//   - "-->", the ordinary one.
+//   - "--!>", which the standard calls an incorrectly-closed comment. It is
+//     what an editor produces from "<!-- x --!>" and a person reads as closed.
+//   - ">" straight after the "<!--" or after "<!---", which the standard calls
+//     an abrupt closing of an empty comment. "<!-->" is a comment of nothing.
+//
+// Reading only "-->" meant the other two ran to the end of the document and
+// took every element after them with it, reported as one comment that was never
+// closed. A single "<!-->" in a template emptied the page.
+func commentLength(src string) (int, bool) {
+	body := src[len("<!--"):]
+	// The abrupt close, which is only abrupt at the very start.
+	if strings.HasPrefix(body, ">") {
+		return len("<!--") + 1, true
+	}
+	if strings.HasPrefix(body, "->") {
+		return len("<!--") + 2, true
+	}
+	// One pass, stopping at whichever terminator comes first. Searching for
+	// each separately and taking the earlier is the obvious way and is
+	// quadratic: the one that is not there scans to the end of the document
+	// every time, so a page of six hundred thousand comments spent a hundred
+	// seconds looking for a "--!>" that no comment had.
+	for at := 0; ; at++ {
+		i := strings.Index(body[at:], "--")
+		if i < 0 {
+			return 0, false
+		}
+		at += i
+		switch rest := body[at+2:]; {
+		case strings.HasPrefix(rest, ">"):
+			return len("<!--") + at + len("-->"), true
+		case strings.HasPrefix(rest, "!>"):
+			return len("<!--") + at + len("--!>"), true
+		}
+	}
+}
+
 // bom is the byte order mark, U+FEFF, whose encoded form is the three bytes
 // EF BB BF that a Windows editor writes at the front of a UTF-8 file.
 const bom = "\ufeff"
@@ -119,6 +173,10 @@ func newTokenizer(src string) *tokenizer {
 		// element, so the whole page moves down by a line.
 		t.pos = len(bom)
 	}
+	// Before a byte is read as markup: whether the bytes are text at all, and
+	// whether the document says they are meant to be something this engine
+	// cannot read. See encoding.go.
+	t.checkEncoding()
 	return t
 }
 
@@ -169,6 +227,11 @@ func (t *tokenizer) unsupported(off int, msg string) {
 	t.add(Error{Offset: off, Message: msg, Unsupported: true})
 }
 
+// limit reports a bound on the document that was reached. See Error.Limit.
+func (t *tokenizer) limit(off int, msg string) {
+	t.add(Error{Offset: off, Message: msg, Limit: true})
+}
+
 func (t *tokenizer) add(e Error) {
 	switch {
 	case len(t.errs) > maxErrors:
@@ -177,6 +240,7 @@ func (t *tokenizer) add(e Error) {
 		t.errs = append(t.errs, Error{
 			Offset:  e.Offset,
 			Message: "further problems in this document were not reported",
+			Limit:   true,
 		})
 	default:
 		t.errs = append(t.errs, e)
@@ -184,18 +248,46 @@ func (t *tokenizer) add(e Error) {
 }
 
 // next produces one token.
+//
+// Half of what a document is made of produces no token at all — a comment, a
+// processing instruction, a declaration, a stray "<" — and the reader has to
+// go round again for each one. It goes round in a loop rather than by calling
+// itself, because a document is allowed to be 64 MB of nothing but those: at
+// one frame per skipped construct, fourteen megabytes of comments is a
+// "fatal error: stack overflow", which no recover catches and which takes the
+// whole process down with every other document in flight. A loop is the same
+// work in a fixed frame.
 func (t *tokenizer) next() token {
+	for {
+		before := t.pos
+		if tok, ok := t.step(); ok {
+			return tok
+		}
+		if t.pos == before {
+			// Every branch that produces no token says so by consuming the
+			// construct it skipped; one that consumed nothing would spin here
+			// for ever. No input can reach this — it is a branch added later
+			// that forgot to advance — so it stops rather than hangs.
+			panic("html: the tokenizer skipped a construct without consuming it")
+		}
+	}
+}
+
+// step produces at most one token and reports whether it produced one. A false
+// second result means a construct was consumed that has no token to show for
+// it; next calls step again.
+func (t *tokenizer) step() (token, bool) {
 	if t.raw != "" {
-		return t.rawText()
+		return t.rawText(), true
 	}
 	if t.pos >= len(t.src) {
-		return token{kind: tokEOF, offset: len(t.src)}
+		return token{kind: tokEOF, offset: len(t.src)}, true
 	}
 
 	if t.src[t.pos] == '<' {
 		return t.markup()
 	}
-	return t.text()
+	return t.text(), true
 }
 
 // text reads character data up to the next "<".
@@ -204,7 +296,34 @@ func (t *tokenizer) text() token {
 	for t.pos < len(t.src) && t.src[t.pos] != '<' {
 		t.pos++
 	}
-	return token{kind: tokText, text: t.decodeRefs(t.src[start:t.pos], start, false), offset: start}
+	return token{kind: tokText, text: t.dropNULs(t.decodeRefs(t.src[start:t.pos], start, false), start),
+		offset: start}
+}
+
+// dropNULs takes the NUL bytes out of a run of text and says so once.
+//
+// U+0000 is not a character a document can contain: the standard's tokenizer
+// makes one a parse error in every state that can meet it, and in the states
+// that produce text it drops the byte. It was kept, so a text node held a byte
+// that is not text — into the shaper, into a PDF, into whatever a caller does
+// with Node.Text — and the parse reported success.
+//
+// One finding for the run and not one per byte, and the offset is the run's:
+// a file with NULs in it usually has a great many, and they are one fault
+// (something wrote UTF-16, or a binary file was handed over as HTML) rather
+// than a hundred.
+func (t *tokenizer) dropNULs(text string, off int) string {
+	if !strings.ContainsRune(text, 0) {
+		return text
+	}
+	n := strings.Count(text, "\x00")
+	word := "byte"
+	if n > 1 {
+		word = "bytes"
+	}
+	t.fail(off, "text holding "+strconv.Itoa(n)+" NUL "+word+", which are not "+
+		"characters; they are dropped")
+	return strings.ReplaceAll(text, "\x00", "")
 }
 
 // rawText reads the content of a raw-text or RCDATA element, up to its end tag.
@@ -337,30 +456,51 @@ func (t *tokenizer) findEndTag(name string, i int) int {
 	}
 }
 
-// markup reads whatever begins with "<".
-func (t *tokenizer) markup() token {
+// markup reads whatever begins with "<". Like step, whose contract it shares,
+// a false second result means the construct was consumed and produced nothing.
+func (t *tokenizer) markup() (token, bool) {
 	start := t.pos
 
 	// A comment. Dropped rather than tokenized: nothing downstream has any use
 	// for one.
 	if strings.HasPrefix(t.src[t.pos:], "<!--") {
-		if end := strings.Index(t.src[t.pos+4:], "-->"); end >= 0 {
-			t.pos += 4 + end + 3
-			return t.next()
+		if n, ok := commentLength(t.src[t.pos:]); ok {
+			t.pos += n
+			return token{}, false
 		}
 		t.fail(start, "a comment that is never closed")
 		t.pos = len(t.src)
-		return t.next()
+		return token{}, false
 	}
 
 	if hasPrefixFold(t.src[t.pos:], "<!doctype") {
-		return t.doctype()
+		return t.doctype(), true
+	}
+
+	// A CDATA section, which is XML's way of saying "the characters between
+	// these markers are literal". In an XHTML document it is text and is read
+	// as text; skipping it to the first ">" — which is what a declaration gets
+	// — dropped its content and, where the content held a ">", took the rest of
+	// the document with it.
+	//
+	// Outside XML there is no such syntax: HTML reads "<![CDATA[" as a bogus
+	// comment ending at the first ">", which is what the branch below does.
+	if t.xml && strings.HasPrefix(t.src[t.pos:], cdataOpen) {
+		body := t.src[t.pos+len(cdataOpen):]
+		end := strings.Index(body, cdataClose)
+		if end < 0 {
+			t.fail(start, "a CDATA section that is never closed")
+			t.pos = len(t.src)
+			return token{kind: tokText, text: body, offset: start}, true
+		}
+		t.pos += len(cdataOpen) + end + len(cdataClose)
+		return token{kind: tokText, text: body[:end], offset: start}, true
 	}
 
 	if strings.HasPrefix(t.src[t.pos:], "<![") || strings.HasPrefix(t.src[t.pos:], "<!") {
 		t.fail(start, "a declaration this engine does not read")
 		t.skipTo('>')
-		return t.next()
+		return token{}, false
 	}
 
 	if strings.HasPrefix(t.src[t.pos:], "<?") {
@@ -377,7 +517,7 @@ func (t *tokenizer) markup() token {
 			t.fail(start, "a processing instruction, which HTML has none of")
 		}
 		t.skipTo('>')
-		return t.next()
+		return token{}, false
 	}
 
 	if strings.HasPrefix(t.src[t.pos:], "</") {
@@ -390,9 +530,9 @@ func (t *tokenizer) markup() token {
 	if t.pos+1 >= len(t.src) || !isNameStart(t.src[t.pos+1]) {
 		t.fail(start, "a \"<\" that does not begin a tag; write \"&lt;\" for a literal one")
 		t.pos++
-		return t.next()
+		return token{}, false
 	}
-	return t.startTag()
+	return t.startTag(), true
 }
 
 func (t *tokenizer) skipTo(c byte) {
@@ -410,14 +550,14 @@ func (t *tokenizer) doctype() token {
 	return token{kind: tokDoctype, offset: start}
 }
 
-func (t *tokenizer) endTag() token {
+func (t *tokenizer) endTag() (token, bool) {
 	start := t.pos
 	t.pos += 2
 	name := t.readName()
 	if name == "" {
 		t.fail(start, "an end tag with no name")
 		t.skipTo('>')
-		return t.next()
+		return token{}, false
 	}
 	t.skipSpace()
 	if t.pos < len(t.src) && t.src[t.pos] == '>' {
@@ -426,7 +566,7 @@ func (t *tokenizer) endTag() token {
 		t.fail(start, "the end tag </"+name+" is not closed with \">\"")
 		t.skipTo('>')
 	}
-	return token{kind: tokEndTag, name: name, offset: start}
+	return token{kind: tokEndTag, name: name, offset: start}, true
 }
 
 func (t *tokenizer) startTag() token {
@@ -541,13 +681,20 @@ func (t *tokenizer) attribute(tag string) (Attribute, bool) {
 
 func (t *tokenizer) readName() string {
 	start := t.pos
-	// A colon is part of a name in XML and not in HTML, which is the whole of
-	// the difference. XML gives a name an optional namespace prefix — the suite
-	// writes its inline SVG as "<svg:svg>" — and a reader that stopped at the
-	// colon read the end tag "</svg:svg>" as "</svg" and then reported the
-	// document as malformed. What the prefix *means* is the parser's question,
-	// not this one's: see parser.resolveName.
-	for t.pos < len(t.src) && (isNamePart(t.src[t.pos]) || (t.xml && t.src[t.pos] == ':')) {
+	// A colon is part of a name, in HTML as well as in XML.
+	//
+	// XML gives a name an optional namespace prefix — the suite writes its
+	// inline SVG as "<svg:svg>" — and a reader that stopped at the colon read
+	// the end tag "</svg:svg>" as "</svg" and reported the document as
+	// malformed. HTML has no namespaces and no prefixes, and its tag-name state
+	// ends only at white space, "/" or ">" — so a colon is simply part of the
+	// name there. It was admitted in XML alone, which made "<o:p>" — the tag a
+	// Word document is full of — an element "o" with an attribute ":p", and
+	// "</o:p>" an end tag that was never closed.
+	//
+	// What the prefix *means* is the parser's question, not this one's: see
+	// parser.resolveName.
+	for t.pos < len(t.src) && (isNamePart(t.src[t.pos]) || t.src[t.pos] == ':') {
 		t.pos++
 	}
 	return strings.ToLower(t.src[start:t.pos])
@@ -681,6 +828,16 @@ func (t *tokenizer) reference(s string, off int, inAttr bool) (string, int, bool
 	// so the one case worth reporting.
 	if legacy, n := longestLegacyName(s); legacy != "" {
 		if inAttr {
+			// HTML's named character reference state has one clause about an
+			// attribute, and it is this: a name with no ";" followed by "=" or
+			// by an alphanumeric is not a reference at all, and is not a parse
+			// error either. "?q=1&copy=2" is a query string, in this engine and
+			// in every browser, which is exactly the case the clause exists
+			// for — and it was reported as something "a character reference in
+			// some browsers", which no browser makes it.
+			if next := 1 + n; next < len(s) && (s[next] == '=' || isEntityNamePart(s[next])) {
+				return "", 0, false
+			}
 			t.fail(off, "\"&"+legacy+"\" without a \";\" is a literal ampersand here "+
 				"and a character reference in some browsers; write \"&amp;\" or \"&"+legacy+";\"")
 		} else {
@@ -764,7 +921,40 @@ func (t *tokenizer) codePoint(v int64, off int) (rune, bool) {
 		t.fail(off, fmt.Sprintf("a character reference to %d, which is outside Unicode", v))
 		return 0, false
 	}
+	if r, remapped := windows1252Reference[v]; remapped && !t.xml {
+		// A reference into the C1 control range means what windows-1252 puts
+		// there, which is what HTML says and what every browser does with an
+		// HTML document. A page written by a Windows editor spells a curly
+		// apostrophe "&#146;" and a euro "&#128;", and reading those as control
+		// characters puts a character nothing draws where a letter belongs.
+		//
+		// In XHTML it does not. XML 1.0 §4.1 says a character reference is the
+		// code point it names and nothing else, so "&#x80;" there is U+0080 —
+		// which is what the suite's own control-characters-002.xht is written
+		// to test, one box per control character.
+		//
+		// Not reported either way. In HTML it is not a mistake an author made,
+		// it is the convention their editor writes in, and the standard's own
+		// answer is the character rather than a complaint.
+		return r, true
+	}
 	return rune(v), true
+}
+
+// windows1252Reference is what a numeric character reference in the C1 range
+// stands for, from the standard's own table.
+//
+// The range is where windows-1252 puts its punctuation and Unicode puts control
+// characters, and a numeric reference written by a Windows editor means the
+// former. Seven of the thirty-two are unassigned in windows-1252 and are left
+// as they are, which is what the table's own gaps say.
+var windows1252Reference = map[int64]rune{
+	0x80: 0x20AC, 0x82: 0x201A, 0x83: 0x0192, 0x84: 0x201E, 0x85: 0x2026,
+	0x86: 0x2020, 0x87: 0x2021, 0x88: 0x02C6, 0x89: 0x2030, 0x8A: 0x0160,
+	0x8B: 0x2039, 0x8C: 0x0152, 0x8E: 0x017D, 0x91: 0x2018, 0x92: 0x2019,
+	0x93: 0x201C, 0x94: 0x201D, 0x95: 0x2022, 0x96: 0x2013, 0x97: 0x2014,
+	0x98: 0x02DC, 0x99: 0x2122, 0x9A: 0x0161, 0x9B: 0x203A, 0x9C: 0x0153,
+	0x9E: 0x017E, 0x9F: 0x0178,
 }
 
 func isEntityNamePart(c byte) bool {

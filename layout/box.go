@@ -1082,11 +1082,16 @@ func displayOf(cs style.ComputedStyle) (Outer, Inner, bool) {
 	case "table-column":
 		return OuterBlock, InnerTableColumn, false
 	case "contents":
-		// "display: contents" replaces the element with its children. It is not
-		// implemented, and the closest available answer — treating it as inline
-		// — is wrong in a way that shows: the element's own box would take part
-		// in layout when the author asked for it not to. Treated as inline and
-		// reported by the caller.
+		// "display: contents" replaces the element with its children, and where
+		// it is honoured the element never reaches here at all —
+		// contentsIsHonoured decides that, and the walk skips the box.
+		//
+		// What reaches here is the cases it refuses: the root element, a
+		// replaced element, a form control. Each of those has content of its
+		// own that is not its children, so there is nothing to replace it with;
+		// the specification's own answer is to treat the value as an ordinary
+		// one, and inline is what the element would have been. The caller
+		// reports it.
 		return OuterInline, InnerFlow, false
 	}
 	// An unrecognised value: the initial one, which is what the cascade would
@@ -1204,11 +1209,19 @@ func outOfFlowDisplay(outer Outer, inner Inner, float FloatSide, position Positi
 // other than visible.
 func overflowIsScrollable(cs style.ComputedStyle) bool {
 	for _, axis := range [2]string{"overflow-x", "overflow-y"} {
-		switch strings.ToLower(strings.TrimSpace(cs[axis])) {
-		case "", "visible":
-		default:
+		if !overflowIsVisibleOn(cs, axis) {
 			return true
 		}
+	}
+	return false
+}
+
+// overflowIsVisibleOn is the same question about one axis, which is what a rule
+// keyed on a box's main axis asks. See flexMainLimits.
+func overflowIsVisibleOn(cs style.ComputedStyle, axis string) bool {
+	switch strings.ToLower(strings.TrimSpace(cs[axis])) {
+	case "", "visible":
+		return true
 	}
 	return false
 }
@@ -1368,6 +1381,17 @@ func (b *boxBuilder) wrapLooseText(parent *Box) []*Box {
 // wrapping a card of block content is the everyday case — so leaving it
 // unhandled is not a corner.
 func (b *boxBuilder) splitBlockInInline(parent *Box) []*Box {
+	switch parent.Inner {
+	case InnerFlex, InnerGrid:
+		// A flex or grid container has no inline formatting context to split.
+		// Flexbox §4 and Grid §6 blockify every in-flow child into an item, so
+		// a <span> holding a block is one item and not three — and three is
+		// what came out: "<div style=display:flex><span>a<div>b</div>c</span>"
+		// laid out as three separate items, which is a row of three cells where
+		// the author wrote one.
+		return parent.Children
+	}
+
 	// There is deliberately no early return for an inline parent. One was
 	// written here first, on the reasoning that inside an inline formatting
 	// context there is nothing to promote a block *to* — and removing it changes
@@ -1851,8 +1875,8 @@ func (b *boxBuilder) listValueOf(n *html.Node, listItem bool) (int, bool) {
 	if !listItem {
 		return 0, false
 	}
-	if vals := b.counters.elements[n]["list-item"]; len(vals) > 0 {
-		return vals[len(vals)-1], true
+	if v, ok := b.counters.elements[n]; ok {
+		return v, true
 	}
 	return 0, false
 }

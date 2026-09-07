@@ -137,3 +137,57 @@ func TestASplitKeepsTheGapOnItsFarEdge(t *testing.T) {
 			"take an eighth of an em out of the line", got, whole)
 	}
 }
+
+// TestEveryScriptThatBreaksLikeAnIdeographDoes.
+//
+// The rule was six ranges typed out beside a generated table: the two main CJK
+// blocks, the compatibility ideographs, kana, the Hangul syllables and
+// everything from U+20000 to U+2FA1F. UAX #14's class ID is a good deal more
+// than that, and everything the six ranges missed had no soft wrap opportunity
+// at all — a paragraph of it was one unbreakable run, which is the overflow
+// §5.1 forbids outright.
+func TestEveryScriptThatBreaksLikeAnIdeographDoes(t *testing.T) {
+	for _, tc := range []struct{ text, want, what string }{
+		// What the ranges already reached, unchanged.
+		{"中文", "中|文", "CJK Unified Ideographs"},
+		{"ひら", "ひ|ら", "hiragana"},
+		{"한글", "한|글", "Hangul syllables"},
+		{"\U00020000\U00020001", "\U00020000|\U00020001", "extension B"},
+
+		// And what they did not.
+		{"ﾃｽﾄ", "ﾃ|ｽ|ﾄ", "halfwidth katakana"},
+		{"ＡＢ", "Ａ|Ｂ", "fullwidth Latin letters"},
+		{"\U00030000\U00030001", "\U00030000|\U00030001", "extension G"},
+		{"\U00031350\U00031351", "\U00031350|\U00031351", "extension H"},
+		{"ꀀꀁ", "ꀀ|ꀁ", "Yi syllables"},
+		{"ㄅㄆ", "ㄅ|ㄆ", "Bopomofo"},
+		{"⼀⼁", "⼀|⼁", "Kangxi radicals"},
+		{"㈠㈡", "㈠|㈡", "enclosed CJK numerals"},
+	} {
+		if got := barred(t, tc.text, WordBreak{}); got != tc.want {
+			t.Errorf("%s: %q gives %q, want %q", tc.what, tc.text, got, tc.want)
+		}
+	}
+}
+
+// TestWhatDoesNotBreakLikeAnIdeograph is the other side. The class is Unicode's
+// and not "anything that looks Asian": a conjoining jamo spells one syllable
+// with the jamo beside it, and a line may not be broken between them.
+func TestWhatDoesNotBreakLikeAnIdeograph(t *testing.T) {
+	for _, r := range []struct {
+		r    rune
+		what string
+	}{
+		{0x1100, "HANGUL CHOSEONG KIYEOK, a conjoining jamo"},
+		{0x1161, "HANGUL JUNGSEONG A, likewise"},
+		{0x11A8, "HANGUL JONGSEONG KIYEOK, likewise"},
+		{'a', "a Latin letter"},
+		{0x0915, "DEVANAGARI LETTER KA"},
+		{0x3000, "IDEOGRAPHIC SPACE, which is a space"},
+		{0x3001, "IDEOGRAPHIC COMMA, which a line may not begin with"},
+	} {
+		if IsIdeographic(r.r) {
+			t.Errorf("U+%04X %s: IsIdeographic says it breaks on both sides", r.r, r.what)
+		}
+	}
+}

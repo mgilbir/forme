@@ -1,10 +1,9 @@
 package layout
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
+	"github.com/mgilbir/forme/fonttest"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -109,17 +108,9 @@ func (o oneFace) Face(string, bool, bool) (*shape.Face, bool) { return o.f, true
 // decision matters even where the number does not: measuring a face that has no
 // ideograph measures its notdef box, and Courier's is three fifths of the em.
 func TestIcIsTheFacesOwnAdvanceWhenItHasTheIdeograph(t *testing.T) {
-	dir := os.Getenv("NOTO_FONTS")
-	if dir == "" {
-		t.Skip("set NOTO_FONTS (or run `make test-wpt`) for a face with ideographs")
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "NotoSansJP-VF.ttf"))
+	jp, err := loadSuiteFace(fonttest.NotoFile(t, "NotoSansJP-VF.ttf"))
 	if err != nil {
-		t.Skipf("reading the CJK face: %v", err)
-	}
-	jp, err := loadSuiteFace(data)
-	if err != nil {
-		t.Skipf("parsing the CJK face: %v", err)
+		t.Fatalf("parsing the CJK face: %v", err)
 	}
 	if missesVisible(jp, "水") {
 		t.Skip("the CJK face has no water ideograph, so it cannot answer this")

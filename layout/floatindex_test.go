@@ -242,20 +242,30 @@ func checkAgainstScan(t *testing.T, fc *floatContext, want []placedFloat, rng *r
 func checkStairs(t *testing.T, fc *floatContext, where string) {
 	t.Helper()
 	for name, s := range map[string]*stair{"left": &fc.idx.left, "right": &fc.idx.right} {
-		for i, st := range s.steps {
-			if i > 0 && st.y <= s.steps[i-1].y {
-				t.Fatalf("%s: the %s staircase is out of order at %d: %v", where, name, i, s.steps)
+		steps := s.steps.all()
+		for i, st := range steps {
+			if i > 0 && st.y <= steps[i-1].y {
+				t.Fatalf("%s: the %s staircase is out of order at %d: %v", where, name, i, steps)
 			}
 			if i > 0 {
-				prev := s.steps[i-1]
+				prev := steps[i-1]
 				if prev.set == st.set && (!st.set || prev.edge == st.edge) {
 					t.Fatalf("%s: the %s staircase repeats itself at %d: %v",
-						where, name, i, s.steps)
+						where, name, i, steps)
 				}
 			}
 		}
-		if len(s.steps) > 0 && !s.steps[0].set {
-			t.Fatalf("%s: the %s staircase begins with a gap: %v", where, name, s.steps)
+		if len(steps) > 0 && !steps[0].set {
+			t.Fatalf("%s: the %s staircase begins with a gap: %v", where, name, steps)
+		}
+		// The tree is what orders them now, so its own invariant is checked
+		// here too: an unbalanced tree answers every query correctly and does
+		// it in the time the slice took, which is the whole point of the
+		// change and is invisible in the answers.
+		if bad := unbalanced(s.steps.root); bad != nil {
+			t.Fatalf("%s: the %s staircase has a node at y=%v with subtrees %d "+
+				"and %d deep", where, name, bad.item.y,
+				unitHeight(bad.left), unitHeight(bad.right))
 		}
 	}
 }

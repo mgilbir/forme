@@ -23,7 +23,7 @@ import (
 //
 // A CSS reftest is a pair of documents with the assertion *these two render
 // identically*. The pair and the claim come from the CSS Working Group, so a
-// disagreement is evidence about pdf0 rather than a restatement of pdf0's own
+// disagreement is evidence about forme rather than a restatement of this engine's own
 // reading — which is the distinction ADR 0003 records this repository learning
 // twice, the hard way.
 //
@@ -34,7 +34,7 @@ import (
 // document and not the other, and shows up as a difference rather than as two
 // matching wrong answers.
 //
-// No browser is involved. pdf0 renders both and compares.
+// No browser is involved. forme renders both and compares.
 //
 // # What is compared, and why not the fragment tree
 //
@@ -1026,7 +1026,47 @@ const wptEnv = "WPT_TESTS"
 // things at once — a grid container that is a box, an anonymous grid item
 // around each run of text, and columns sized from their content — and it has
 // been reported as unlaid since the report existed. See layout/grid.go.
-const wptCleanPassBaseline = 5960
+//
+// 5960 to 5956 is four documents that pass and now say what is missing from
+// them, and it is the first entry here that goes down. The selector parser
+// accepts "::first-letter" and the cascade computes no style for it, so a rule
+// written for one matched, was thrown away, and left the page carrying no claim
+// that anything had been. Four documents in the suite write one — three text
+// transform tests and a line-height one — and all four still draw the reference
+// picture, which is why they are in the "something unsupported" bucket rather
+// than the failing one.
+//
+// The number that changed is the count of documents this engine renders
+// correctly *and* claims nothing about. Those four were only ever in it because
+// the claim was missing, so the drop is the measurement catching up with the
+// engine rather than the engine getting worse — the same correction, in the
+// same direction, as every entry above. It was measured with the report on and
+// off to be sure of the attribution: nothing else in that change moved a
+// document. See style/cascade.go's reportUncomputedPseudo.
+//
+// 5956 to 5955 is one document, and it is the suite being wrong rather than
+// this engine. HTML's tokenizer maps a numeric character reference in the C1
+// range to what windows-1252 puts there — "&#146;" is a curly apostrophe,
+// "&#128;" is a euro — because that is what the editors of the world write and
+// what every browser reads. This engine did not, so those came out as control
+// characters nothing draws, which is C113 of the audit and the reason the table
+// is now there.
+//
+// css-text/line-breaking/line-breaking-022.html separates six spans with five
+// characters and asks for six lines, and the last of the five is "&#x0085;",
+// meaning U+0085 NEXT LINE, whose line-break class is NL. In an HTML document
+// that reference is not U+0085: the standard's own table maps 0x85 to U+2026
+// HORIZONTAL ELLIPSIS, which breaks nothing, so the document gets five lines
+// and the red square shows. A conforming browser does the same — the test can
+// only say what it means by writing the character itself, and it writes a
+// reference instead. Its twin in XHTML would still pass, and does: the mapping
+// is HTML's and XML says a reference is the code point it names, which is why
+// control-characters-002.xht is unaffected.
+//
+// So the drop is a document this engine used to pass by sharing its mistake.
+// Measured with the table on and off to be sure of the attribution: it is that
+// one document and nothing else. See html/tokenize.go's windows1252Reference.
+const wptCleanPassBaseline = 5955
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
@@ -1074,6 +1114,24 @@ func wptDir(t *testing.T) string {
 		t.Fatalf("%s=%s: %v", wptEnv, dir, err)
 	}
 	return dir
+}
+
+// wptFile reads one file out of the fetched suite.
+//
+// A file that is absent from a suite that is present fails rather than
+// skipping. The suite is fetched whole at one commit, so a font it is supposed
+// to carry and does not is an unfinished fetch — and a test that quietly stops
+// measuring the only face that states a line gap reports success having
+// measured nothing.
+func wptFile(t *testing.T, rel string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(wptDir(t), filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatalf("reading %s out of the suite: %v\n"+
+			"`make wpt` fetches this file; a suite without it is an "+
+			"unfinished fetch.", rel, err)
+	}
+	return data
 }
 
 // reftest is one test document and the references it may be satisfied by.
@@ -1928,8 +1986,18 @@ func TestWPTReftests(t *testing.T) {
 		}
 	}
 	if cleanPass > wptCleanPassBaseline {
-		t.Logf("the clean-pass baseline can be raised from %d to %d",
-			wptCleanPassBaseline, cleanPass)
+		// A rise is a failure, and that is what makes this a ratchet rather
+		// than a number somebody looks at. It used to be a Logf: invisible
+		// without -v, green either way, and nothing ever raised the constant —
+		// so the README's figure fell about fifteen hundred passes behind the
+		// engine and neither number was wrong enough to notice.
+		//
+		// The work is one line in the same commit as the improvement, where the
+		// person who knows why it rose is the person writing it down.
+		t.Errorf("%d reftests pass cleanly and the baseline is %d: raise "+
+			"wptCleanPassBaseline to %d in this commit, and say in its message "+
+			"what made the difference",
+			cleanPass, wptCleanPassBaseline, cleanPass)
 	}
 }
 

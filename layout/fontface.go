@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/shape"
@@ -215,6 +216,49 @@ type documentFonts struct {
 	faces []*documentFace
 	// byFamily indexes faces by lowercased family, in declaration order.
 	byFamily map[string][]*documentFace
+
+	// mu guards mine, which is filled as families are resolved.
+	mu sync.Mutex
+	// mine is this document's own copy of every face it has been handed,
+	// keyed by the face it was made from. See own.
+	mine map[*shape.Face]*shape.Face
+}
+
+// own returns this document's copy of a face.
+//
+// A face remembers which glyphs it was asked to set, because that is what a
+// subset is computed from — and it is written by shaping, which means by
+// *measuring*, so a face is written to long before anything is drawn in it. A
+// caller's font set outlives any one document and is documented as shared
+// across goroutines, so handing its faces straight through made two things
+// wrong at once: two documents laid out at the same time wrote the same map,
+// which the race detector reports at the first word of text; and a face's tally
+// accumulated over every document the process had ever set, so a subset built
+// from it carried other documents' glyphs.
+//
+// Both are the same mistake, and shape has said what to do about it since
+// before this was written: share the parse, not the face. Clone keeps the
+// program, the tables and every reading of them — which is all of what loading
+// a face costs — and gives the copy a tally of its own.
+//
+// Keyed by the source face, so a set answering "arial" and "helvetica" with one
+// face gives this document one face for both, and the identity a run is grouped
+// by holds.
+func (d *documentFonts) own(f *shape.Face, ok bool) (*shape.Face, bool) {
+	if !ok || f == nil {
+		return f, ok
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if got := d.mine[f]; got != nil {
+		return got, true
+	}
+	if d.mine == nil {
+		d.mine = map[*shape.Face]*shape.Face{}
+	}
+	c := f.Clone()
+	d.mine[f] = c
+	return c, true
 }
 
 // fallbackDocumentFonts is documentFonts over a base that answers the
@@ -235,7 +279,7 @@ func (d fallbackDocumentFonts) FaceFor(text string, bold, italic bool) (*shape.F
 	// face the document loaded for some *other* family would substitute a
 	// webfont for a script it was never chosen for. The base set is the one
 	// that was given coverage as its job.
-	return d.base.(FallbackFontSet).FaceFor(text, bold, italic)
+	return d.own(d.base.(FallbackFontSet).FaceFor(text, bold, italic))
 }
 
 // Face answers for a family the document defined, and defers otherwise.
@@ -268,13 +312,12 @@ func (d *documentFonts) faceFor(family, text string, bold, italic bool) (*shape.
 	key = strings.TrimSpace(key)
 	candidates := d.byFamily[key]
 	if len(candidates) == 0 {
-		if text == "" {
-			return d.base.Face(family, bold, italic)
-		}
 		// The base set knows nothing of unicode-range — only an @font-face
 		// carries one — so a family it holds covers whatever it has glyphs for,
-		// which is the question faceRunsFor asks next and not this one.
-		return d.base.Face(family, bold, italic)
+		// which is the question faceRunsFor asks next and not this one. Either
+		// way the answer is one of the caller's faces, and this document takes
+		// its own copy of it: see own.
+		return d.own(d.base.Face(family, bold, italic))
 	}
 	desired := 400.0
 	if bold {
@@ -363,20 +406,23 @@ func weightRank(desired, w float64) float64 {
 // in.
 //
 // base is what the caller supplied and is never nil by the time this is called.
-// When nothing loaded, base is returned unchanged rather than wrapped — a
-// wrapper with no faces in it would answer every question by delegating, and
-// would drop the FallbackFontSet interface on the way for no gain.
+//
+// The wrapper is always built, even for a document with no @font-face rule of
+// its own, because it has a second job besides holding those rules: it is what
+// makes the faces this document is set in *this document's*. See own. A
+// document that declared nothing still sets text in the caller's library, and
+// the caller's library is shared.
 func loadFontFaces(pending []pendingFontFace, res ResourceResolver, base FontSet, rec *Recorder) FontSet {
+	set := &documentFonts{base: base, byFamily: map[string][]*documentFace{}}
 	if len(pending) == 0 {
-		return base
+		return wrapDocumentFonts(set)
 	}
 	l := &fontFaceLoader{
-		res: res, rec: rec, base: base,
+		res: res, rec: rec, base: base, set: set,
 		loaded: map[string]*shape.Face{},
 		failed: map[string]bool{},
 		budget: maxDocumentFontBytes,
 	}
-	set := &documentFonts{base: base, byFamily: map[string][]*documentFace{}}
 	for _, p := range pending {
 		if l.rules >= maxFontFaceRules {
 			l.overRuleCap(p, len(pending))
@@ -396,10 +442,13 @@ func loadFontFaces(pending []pendingFontFace, res ResourceResolver, base FontSet
 		key := strings.ToLower(rule.family)
 		set.byFamily[key] = append(set.byFamily[key], df)
 	}
-	if len(set.faces) == 0 {
-		return base
-	}
-	if _, ok := base.(FallbackFontSet); ok {
+	return wrapDocumentFonts(set)
+}
+
+// wrapDocumentFonts keeps the FallbackFontSet interface where the base had one
+// and does not invent it where it did not. See fallbackDocumentFonts.
+func wrapDocumentFonts(set *documentFonts) FontSet {
+	if _, ok := set.base.(FallbackFontSet); ok {
 		return fallbackDocumentFonts{set}
 	}
 	return set
@@ -410,6 +459,9 @@ type fontFaceLoader struct {
 	res  ResourceResolver
 	rec  *Recorder
 	base FontSet
+	// set is the document's set, which is where a face taken from the caller's
+	// library is turned into one of this document's. See documentFonts.own.
+	set *documentFonts
 
 	// loaded memoizes by reference, so a document naming one file in four
 	// @font-face rules reads and parses it once. Sharing a face between two
@@ -683,7 +735,9 @@ func (l *fontFaceLoader) face(p pendingFontFace, r fontFaceRule) (*shape.Face, s
 			// treated and are not asked for again here. The set is asked for
 			// the upright regular of the name, which is the only thing a set
 			// keyed by family can answer to a full face name.
-			if face, ok := l.base.Face(s.ref, false, false); ok {
+			// Through the document's own copy, because a local() face is one
+			// of the caller's and the caller's faces are shared. See own.
+			if face, ok := l.set.own(l.base.Face(s.ref, false, false)); ok {
 				return face, "local(" + s.ref + ")", true
 			}
 			// Not having a local face is the ordinary case and not a fault:
@@ -842,7 +896,7 @@ func (l *fontFaceLoader) fetch(ref string) ([]byte, *loadFailure) {
 // overRuleCap reports the document-wide rule count tripping.
 //
 // Two findings, on the model of stylesheet.go's: the guard tripped, which every
-// other part of pdf0 reports as "limit", and the document is missing fonts it
+// other part of forme reports as "limit", and the document is missing fonts it
 // asked for, which is what makes the page wrong.
 func (l *fontFaceLoader) overRuleCap(p pendingFontFace, total int) {
 	if !l.cappedRules {

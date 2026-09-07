@@ -299,10 +299,7 @@ func markerText(listStyle string, index int) string {
 	case "square":
 		return "▪" // ▪
 	case "decimal-leading-zero":
-		if index < 10 {
-			return "0" + strconv.Itoa(index) + "."
-		}
-		return strconv.Itoa(index) + "."
+		return leadingZero(index) + "."
 	case "decimal":
 		return strconv.Itoa(index) + "."
 	case "lower-alpha", "lower-latin":
@@ -335,7 +332,13 @@ func markerText(listStyle string, index int) string {
 // notices until a document has one.
 func alphabetic(index int, first rune) string {
 	if index < 1 {
-		return ""
+		// Outside the system's range, which for every alphabetic and additive
+		// style is one upwards. CSS Counter Styles §7 gives each of them
+		// "decimal" as its fallback, and that is what roman, additive and
+		// alphabeticIn beside this already do; this returned the empty string,
+		// so a list starting at nought or counting down was marked with a bare
+		// full stop and the number was gone.
+		return strconv.Itoa(index)
 	}
 	var out []rune
 	for index > 0 {
@@ -344,6 +347,24 @@ func alphabetic(index int, first rune) string {
 		index /= 26
 	}
 	return string(out)
+}
+
+// leadingZero is "decimal-leading-zero": the decimal representation padded to
+// two digits.
+//
+// The pad goes on the digits and the sign goes in front of the pad, which is
+// the order CSS Counter Styles §3.1.4 gives — so -1 is "-01" and not "0-1",
+// which is what came out of padding the whole thing.
+func leadingZero(index int) string {
+	digits := strconv.Itoa(index)
+	sign := ""
+	if index < 0 {
+		sign, digits = "-", digits[1:]
+	}
+	if len(digits) < 2 {
+		digits = "0" + digits
+	}
+	return sign + digits
 }
 
 // lowerGreek is the alphabet §12.6.2's "lower-greek" counts in.

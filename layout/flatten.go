@@ -1372,12 +1372,12 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		// for a hyphen to be at — a piece cut in two by a change of face is one
 		// word, and the hyphen belongs after all of it.
 		//
-		// And what the language does besides printing one, which is three more
+		// And what the language does besides printing one, which is two more
 		// things and is empty for English: letters restored in front of the
-		// hyphen, a character dropped from the start of the next line, and a
-		// joining control at both. See paragraph.Orthography.
+		// hyphen, and a character dropped from the start of the next line. See
+		// paragraph.Orthography.
 		how := a.orthography.HyphenateBetween(p.Text, a.nextText)
-		item.HyphenSkip, item.HyphenLead = how.Dropped, how.Lead
+		item.HyphenSkip = how.Dropped
 		var face *shape.Face
 		item.HyphenText, face = l.hyphenRun(b, a.run.Face, b.Style["hyphenate-character"], how)
 		// Measured the way the run it belongs to is measured: a hyphen printed

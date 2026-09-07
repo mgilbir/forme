@@ -56,7 +56,7 @@ var colorFiles = []string{
 // sRGB is a rendering-intent decision. Making that choice silently would produce
 // a document whose colours are nearly right with nothing to say a choice was
 // made; when these arrive they should arrive with an ICC profile and an output
-// intent, which pdf0 already writes.
+// intent, which forme already writes.
 var unsupportedColorFiles = map[string]string{
 	"color_function_4.json":  "the color() function names a colour space to convert from",
 	"color_hwb_4.json":       "hwb() is a cylindrical space needing conversion",
@@ -68,15 +68,32 @@ var unsupportedColorFiles = map[string]string{
 	"color_functions_5.json": "Level 5 relative colours resolve against another colour",
 }
 
+// colorOracleDir is the fetched suite, on the same three-way rule as every
+// other corpus here: unset and absent skips, unset and present uses the
+// checkout, and set and wrong fails. It used to return whatever the variable
+// held, so a mistyped path reached the per-file "is not present" skip and the
+// whole colour oracle passed having read nothing.
 func colorOracleDir(t *testing.T) string {
 	t.Helper()
-	dir := os.Getenv(colorOracleEnv)
-	if dir == "" {
-		t.Skipf("set %s (or run `make test-css`) to check colours against the CSS parsing tests",
-			colorOracleEnv)
+	env := os.Getenv(colorOracleEnv)
+	dir := env
+	if env == "" {
+		dir = filepath.Join("..", "testdata", "css-parsing-tests")
 	}
-	return dir
+	if _, err := os.Stat(filepath.Join(dir, colorOracleMarker)); err == nil {
+		return dir
+	}
+	if env == "" {
+		t.Skipf("the CSS parsing tests are not in this checkout; run `make css-tests`")
+	}
+	t.Fatalf("%s is set to %q, and there is no %s there.\n"+
+		"Failing rather than skipping: a skip would report success having "+
+		"checked no colour.", colorOracleEnv, env, colorOracleMarker)
+	return ""
 }
+
+// colorOracleMarker is the file whose presence says a directory is the suite.
+const colorOracleMarker = "color_keywords_3.json"
 
 func TestColorOracle(t *testing.T) {
 	dir := colorOracleDir(t)
@@ -85,7 +102,8 @@ func TestColorOracle(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			raw, err := os.ReadFile(filepath.Join(dir, name))
 			if err != nil {
-				t.Skipf("%s is not present: %v", name, err)
+				t.Fatalf("reading %s: %v\nThe suite is in place, so this is an "+
+					"unfinished fetch rather than a file nobody has.", name, err)
 			}
 			var flat []any
 			if err := json.Unmarshal(raw, &flat); err != nil {

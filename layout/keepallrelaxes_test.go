@@ -1,8 +1,7 @@
 package layout
 
 import (
-	"os"
-	"path/filepath"
+	"github.com/mgilbir/forme/fonttest"
 	"strings"
 	"testing"
 )
@@ -26,17 +25,9 @@ import (
 // ideograph is one em and a width in pixels is a number of characters.
 func cjkFace(t *testing.T) FontSet {
 	t.Helper()
-	dir := os.Getenv("NOTO_FONTS")
-	if dir == "" {
-		t.Skip("set NOTO_FONTS (or run `make test-wpt`) for a face with ideographs")
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "NotoSansJP-VF.ttf"))
+	face, err := loadSuiteFace(fonttest.NotoFile(t, "NotoSansJP-VF.ttf"))
 	if err != nil {
-		t.Skipf("reading the CJK face: %v", err)
-	}
-	face, err := loadSuiteFace(data)
-	if err != nil {
-		t.Skipf("parsing the CJK face: %v", err)
+		t.Fatalf("parsing the CJK face: %v", err)
 	}
 	return oneFace{face}
 }

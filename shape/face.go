@@ -1,13 +1,17 @@
-// Package fonts embeds font programs into a PDF and answers the measurement
-// questions laying text out asks.
+// Package shape turns text into glyphs, and answers the measurement questions
+// laying it out asks.
 //
-// It is the other half of drawing text. The content package writes the
-// operators; this decides what bytes those operators show and puts the font
-// program in the file so a reader can render them.
+// It reads a font program — sfnt or CFF, static or variable — and does the two
+// things a layout engine cannot do without: it says which glyphs a string is
+// set with and how wide they are, and it says what a document format needs in
+// order to embed the face. What it does not do is write a file. See
+// embedding.go: what is here is the facts, in the font's own units, and packing
+// them into any format's encoding belongs to whoever writes it.
 //
 // # Composite fonts only, deliberately
 //
-// A face is embedded as a Type0 font with Identity-H encoding and a
+// The subsetter and the encoder are written for a face embedded as a Type0 font
+// with Identity-H encoding and a
 // CIDFontType2 descendant (ISO 32000-2 9.7). The alternative — a simple font
 // with a single-byte encoding — is limited to 256 codes and to the glyphs a
 // standard encoding names, which rules out most of Unicode. Anything laying out
@@ -35,12 +39,11 @@
 // The rules applied are those the font declares for the run's own script, and
 // for the language system named by SetLanguage. The syllabic scripts are also
 // reordered: their characters are not stored in the order they are drawn, and
-// ShapeGlyphs puts them right. Nine Indic scripts share one model (indic.go),
-// and Khmer (khmer.go) and Myanmar (myanmar.go) each have their own. The
-// scripts the Universal Shaping Engine covers — Tibetan, Javanese, Balinese,
-// Sinhala and a long tail — are not reordered, so text in them is still not
-// correctly set by this package. See layout.go for exactly what is read and
-// each shaper's own file for what it covers.
+// ShapeGlyphs puts them right. Four models between them — nine Indic scripts
+// share one (indic.go), Khmer (khmer.go) and Myanmar (myanmar.go) each have
+// their own, and the Universal Shaping Engine (use.go) covers Tibetan,
+// Javanese, Balinese, Sinhala and a long tail. See layout.go for exactly what
+// is read and each shaper's own file for what it covers.
 //
 // # What it does not do
 //
@@ -827,8 +830,12 @@ func (f *Face) GlyphIDForTest(r rune) (int, bool) {
 	return gid, ok && gid != 0
 }
 
-// forDocument returns a face that shares this one's parsing but keeps its own
-// record of what a document used.
+// Clone returns a face that shares this one's parsing but keeps its own record
+// of what a document used.
+//
+// It is what a caller with a font library calls per document, and what layout
+// calls for every face it is handed: a library is loaded once and used for
+// years, and the two things below have to be told apart before it can be.
 //
 // The split is between what the *font* says and what a *document* did with it.
 // The program, the tables and the rules read out of them are facts about the
@@ -845,14 +852,12 @@ func (f *Face) GlyphIDForTest(r rune) (int, bool) {
 // The per-script layout caches are fresh too. They are lazily filled, so
 // sharing them across faces would be a write from two goroutines to one map;
 // the alternative is a lock on a path taken once per script per document, and
-// the reading they save is small beside the reading forDocument already avoids.
-// Clone returns a face that shares this one's reading of the font and records
-// its own glyphs.
+// the reading they save is small beside the reading this already avoids.
 //
-// A face remembers which glyphs it was asked to set, because that is what a
-// subset is computed from — so one face used for two outputs puts each one's
-// glyphs into the other. Reading the font again instead costs milliseconds and
-// megabytes for an answer that cannot differ. Share the parse, not the face.
+// So: one face used for two outputs puts each one's glyphs into the other, and
+// two documents set at the same time write one map from two goroutines.
+// Reading the font again instead costs milliseconds and megabytes for an answer
+// that cannot differ. Share the parse, not the face.
 func (f *Face) Clone() *Face {
 	out := *f
 	out.used = map[int]bool{}

@@ -35,7 +35,13 @@ func TestTheCorpusIsAtTheCommitTheMakefileNames(t *testing.T) {
 	want := pinnedCommit(t)
 	got, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
 	if err != nil {
-		t.Skipf("the checkout at %s is not a git repository: %v", root, err)
+		// Not a skip. A corpus that cannot say which revision it is is a corpus
+		// the number cannot be compared against, and a skip here reads as a
+		// pass in the output — which is how a run against some other checkout
+		// looks exactly like a run against the pinned one.
+		t.Fatalf("the checkout at %s cannot say what revision it is at (%v), so "+
+			"the count this suite ratchets on cannot be compared with any other "+
+			"run. Run `make clean-wpt wpt` to take the pinned corpus.", root, err)
 	}
 	if at := strings.TrimSpace(string(got)); at != want {
 		t.Errorf("the corpus is at %s and the Makefile pins %s.\n"+

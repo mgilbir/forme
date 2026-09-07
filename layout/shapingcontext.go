@@ -108,6 +108,7 @@ func (l *layouter) linkShapingContext(items []inlineItem) []inlineItem {
 	if !joins {
 		return items
 	}
+	groups := mergeGroupTexts(items)
 	for i := range items {
 		if !isShapedRun(items[i]) || !contextCanChange(items[i].Face) {
 			continue
@@ -128,8 +129,8 @@ func (l *layouter) linkShapingContext(items []inlineItem) []inlineItem {
 		// And the text either side that may contribute *glyphs* and not only
 		// forms, which is a third question and the strictest of them. It is the
 		// whole of the group rather than the neighbour alone: every run of one
-		// has to shape the same string. See mergeGroupAround.
-		mergePre, mergePost := l.mergeGroupAround(items, i)
+		// has to shape the same string. See mergeGroupTexts.
+		mergePre, mergePost := groups.around(items, i)
 		if before == "" && after == "" {
 			continue
 		}
@@ -345,8 +346,8 @@ func itemShaping(it *inlineItem) shaping {
 	}
 }
 
-// mergeGroupAround is the text before and after the run at i that may be shaped
-// *with* it, which is every run of the group its boundaries do not break.
+// The merge group: the text before and after a run that may be shaped *with*
+// it, which is every run of the group its boundaries do not break.
 //
 // The whole group and not the neighbour alone, and that is the correction that
 // made this work at all. Shaped a neighbour at a time the runs of one word
@@ -355,24 +356,72 @@ func itemShaping(it *inlineItem) shaping {
 // in one reading and to a glyph in the other — so it is drawn by neither and
 // falls off the page. One string for the group and each run keeping its own
 // slice of the glyphs is the only division that adds up.
-func (l *layouter) mergeGroupAround(items []inlineItem, i int) (before, after string) {
-	for j := i; ; {
-		k, ok := shapingNeighbour(items, j, -1)
-		if !ok || !sharesGlyphsWith(items, k, j) {
-			break
-		}
-		before = textBetween(items, k, j) + before
-		j = k
+type mergeGroups struct {
+	// text is the group's whole text, one entry per item, shared by every run
+	// of the group; at is where that item's own text begins in it.
+	text []string
+	at   []int
+}
+
+// around is the text before and after the run at i that is shaped with it.
+//
+// Both are slices of the group's one string rather than strings of their own,
+// so a group of a thousand runs costs one copy of its text and not a thousand.
+func (g mergeGroups) around(items []inlineItem, i int) (before, after string) {
+	if i >= len(g.text) || g.text[i] == "" {
+		return "", ""
 	}
-	for j := i; ; {
-		k, ok := shapingNeighbour(items, j, +1)
-		if !ok || !sharesGlyphsWith(items, j, k) {
-			break
+	return g.text[i][:g.at[i]], g.text[i][g.at[i]+len(items[i].Text):]
+}
+
+// mergeGroupTexts finds every merge group and the text its runs are shaped
+// with, in one walk.
+//
+// It used to be a walk per run: each run gathered its whole group from itself
+// outwards, building the text again from scratch and concatenating it a
+// neighbour at a time. That is quadratic in the runs of a group and worse in
+// their bytes — four thousand adjacent spans took twenty-nine seconds and
+// about 1.6 GB of strings, and four thousand adjacent spans is one line of
+// generated markup. Separated by spaces the same four thousand took a quarter
+// of a second, because a space ends the group.
+//
+// A group is a contiguous range of items: the runs that shape together, and
+// everything written between them, which textBetween gathers because a shaper
+// reads an ignorable character as transparent and a context with a hole in it
+// is a different context.
+func mergeGroupTexts(items []inlineItem) mergeGroups {
+	g := mergeGroups{text: make([]string, len(items)), at: make([]int, len(items))}
+	for i := 0; i < len(items); {
+		if !isShapedRun(items[i]) {
+			i++
+			continue
 		}
-		after += textBetween(items, j+1, k+1)
-		j = k
+		// How far the group reaches: the last run that shares glyphs with the
+		// one before it.
+		last := i
+		for {
+			k, ok := shapingNeighbour(items, last, +1)
+			if !ok || !sharesGlyphsWith(items, last, k) {
+				break
+			}
+			last = k
+		}
+		if last == i {
+			// A run that shapes with nobody. Its group is itself, and the two
+			// contexts are empty — which is what the empty string here says,
+			// without building anything.
+			i++
+			continue
+		}
+		text := textBetween(items, i, last+1)
+		at := 0
+		for k := i; k <= last; k++ {
+			g.text[k], g.at[k] = text, at
+			at += len(items[k].Text)
+		}
+		i = last + 1
 	}
-	return before, after
+	return g
 }
 
 // sharesGlyphsWith reports whether the runs at from and to — which are

@@ -57,3 +57,26 @@ var cffStandardStrings = []string{
 	"Ydieresissmall", "001.000", "001.001", "001.002", "001.003", "Black", "Bold", "Book", "Light",
 	"Medium", "Regular", "Roman", "Semibold",
 }
+
+// standardSIDs is cffStandardStrings inverted, built once.
+var standardSIDs = func() map[string]int {
+	m := make(map[string]int, len(cffStandardStrings))
+	for sid, name := range cffStandardStrings {
+		if _, seen := m[name]; !seen {
+			m[name] = sid
+		}
+	}
+	return m
+}()
+
+// CFFStandardSID is the SID of one of the 391 predefined strings, and whether
+// the name is one of them.
+//
+// It is exported for the subsetter's seac closure. A seac names its two glyphs
+// by StandardEncoding code, every name that encoding gives is a predefined
+// string, and a predefined string has the same SID in every CFF ever written —
+// so the font's own string INDEX does not have to be read to resolve one.
+func CFFStandardSID(name string) (int, bool) {
+	sid, ok := standardSIDs[name]
+	return sid, ok
+}

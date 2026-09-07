@@ -1,6 +1,7 @@
 package paragraph
 
 import (
+	"math"
 	"strconv"
 	"strings"
 
@@ -17,6 +18,15 @@ import (
 // either clamp property this engine acts on.
 func PositiveInteger(value string) (int, bool) {
 	s := strings.TrimSpace(value)
+	if s == "" {
+		return 0, false
+	}
+	// CSS's <integer> takes a leading sign, and "+3" is three. It was refused,
+	// so "-webkit-line-clamp: +3" — which is an integer written the way the
+	// grammar allows — clamped nothing.
+	if s[0] == '+' {
+		s = s[1:]
+	}
 	if s == "" {
 		return 0, false
 	}
@@ -54,11 +64,31 @@ func ParseNumber(s string) (float64, bool) {
 		}
 		s = s[1:]
 	}
-	for i := 0; i < len(s); i++ {
-		c := s[i]
+	// And an exponent, which the grammar has and this did not: <number> is
+	// "[+-]? [digits ['.' digits]? | '.' digits] [e [+-]? digits]?", so
+	// "line-height: 1e2" is a hundred. It was refused as though the "e" were a
+	// letter in the middle of a number.
+	//
+	// The digits after a dot are required too. "5." is not a number by the
+	// grammar — there is no production for a dot with nothing after it — and
+	// reading it as five accepted a value no browser does.
+	digits := s
+	exponent := 0.0
+	if i := strings.IndexAny(s, "eE"); i >= 0 {
+		digits = s[:i]
+		exp, ok := exponentOf(s[i+1:])
+		if !ok {
+			return 0, false
+		}
+		exponent = exp
+	}
+	sawDotWithNothingAfter := false
+	for i := 0; i < len(digits); i++ {
+		c := digits[i]
 		switch {
 		case c >= '0' && c <= '9':
 			seenDigit = true
+			sawDotWithNothingAfter = false
 			if seenDot {
 				v += float64(c-'0') * frac
 				frac /= 10
@@ -66,12 +96,44 @@ func ParseNumber(s string) (float64, bool) {
 				v = v*10 + float64(c-'0')
 			}
 		case c == '.' && !seenDot:
-			seenDot = true
+			seenDot, sawDotWithNothingAfter = true, true
 		default:
 			return 0, false
 		}
 	}
-	return sign * v, seenDigit
+	if !seenDigit || sawDotWithNothingAfter {
+		return 0, false
+	}
+	return sign * v * math.Pow(10, exponent), true
+}
+
+// exponentOf reads the digits after an "e", with their own optional sign.
+func exponentOf(s string) (float64, bool) {
+	sign := 1.0
+	if len(s) > 0 && (s[0] == '+' || s[0] == '-') {
+		if s[0] == '-' {
+			sign = -1
+		}
+		s = s[1:]
+	}
+	if s == "" {
+		return 0, false
+	}
+	v := 0.0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		v = v*10 + float64(c-'0')
+		if v > 400 {
+			// Past anything a length can be, and past what math.Pow returns a
+			// finite answer for. A number this large is not a mistake to
+			// compute carefully; it is one to refuse.
+			return 0, false
+		}
+	}
+	return sign * v, true
 }
 
 // strconvFormat renders a length for a diagnostic, to a tenth of a pixel — more

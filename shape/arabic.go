@@ -260,24 +260,75 @@ func (f *Face) HasJoiningForms() bool {
 	return false
 }
 
+// cursiveScripts is the set of scripts whose letters join, indexed by script.
+//
+// Derived rather than named. A script is cursive when some character of it
+// joins — has a joining type other than transparent or non-joining — and
+// ArabicShaping.txt gives a type to every character of every such script, so
+// the set is exactly what the generated joining table already says. Thirteen of
+// them: Arabic, Syriac, Mandaic, Mongolian, N'Ko, Phags-pa, Manichaean, Psalter
+// Pahlavi, Hanifi Rohingya, Sogdian, Adlam, Chorasmian and Old Uyghur. A script
+// that gains cursive joining arrives with the next generated table rather than
+// having to be remembered here.
+var cursiveScripts = func() []bool {
+	out := make([]bool, len(scriptOpenTypeTags))
+	for _, jr := range joiningRanges {
+		if jr.t == joinT || jr.t == joinU {
+			continue
+		}
+		for r := jr.lo; r <= jr.hi; r++ {
+			if s := scriptOf(r); decides(s) && int(s) < len(out) {
+				out[s] = true
+			}
+		}
+	}
+	return out
+}()
+
+// hasDeclaredJoiningType reports whether ArabicShaping.txt gives a character a
+// joining type of its own, rather than the type its category implies.
+func hasDeclaredJoiningType(r rune) bool {
+	i := sort.Search(len(joiningRanges), func(i int) bool { return joiningRanges[i].hi >= r })
+	return i < len(joiningRanges) && r >= joiningRanges[i].lo
+}
+
 // InCursiveScript reports whether a character belongs to a script whose letters
 // join, which is the question CSS Text §8.2's cursive tracking asks.
 //
-// It is membership of the table above rather than a joining type, and the
-// difference is the whole of why this is here. A hamza is non-joining and an
-// Arabic vowel sign is transparent, and both are Arabic: letter-spacing may not
-// be inserted beside either, because what §8.2 forbids is spacing *within
-// cursive text* and not spacing between two letters that happen to touch.
-// joiningTypeOf answers joinU for a hamza and for a "b" alike, and joinT for an
-// Arabic fatha and for a Latin acute alike, so neither answer separates the two
-// scripts.
+// It is the script and not a joining type, and the difference is the whole of
+// why this is here: what §8.2 forbids is spacing *within cursive text*, not
+// spacing between two letters that happen to touch. A hamza does not join and a
+// Latin "b" does not join, and joiningTypeOf answers joinU for both — so the
+// joining type cannot tell an Arabic letter from a Latin one, which is the only
+// thing this has to do.
 //
-// The table is Unicode's ArabicShaping.txt, which names every character of every
-// cursive-joining script and nothing else — Arabic, Syriac, Mongolian, N'Ko,
-// Phags-pa, Manichaean, Psalter Pahlavi, Hanifi Rohingya, Sogdian, Adlam,
-// Chorasmian, Old Uyghur and Yezidi. So membership is exactly the property, and
-// a script that gains cursive joining arrives with the next generated table.
+// It was membership of ArabicShaping.txt, which is close but is not the
+// property. The file leaves out an Arabic script's digits, its punctuation and
+// the whole of the Arabic Presentation Forms — a thousand and some characters
+// of cursive text that letter-spacing was being inserted into — and it takes in
+// a zero-width joiner, a narrow no-break space, the bidi isolates and the
+// Kaithi number signs, none of which is text of a cursive script at all.
+//
+// Common and Inherited say nothing about what a character is written among, so
+// a character of one of them counts only where Unicode gives it a joining type
+// of its own — the tatweel, the Arabic number signs — and not where it is a
+// general-purpose formatting or spacing character that happens to have one. A
+// zero-width joiner is listed because it joins in *any* script, which is not a
+// script of its own.
+//
+// A combining mark is the case that cannot be answered here at all. Unicode
+// calls an Arabic fatha Inherited, because a mark takes the script of the
+// letter it is written on, and no predicate over one character can know what
+// that letter was. Every reader resolves it the same way instead: a mark does
+// not decide, and the base it hangs off has already decided. See the cluster
+// walk in paragraph/spacing.go.
 func InCursiveScript(r rune) bool {
-	i := sort.Search(len(joiningRanges), func(i int) bool { return joiningRanges[i].hi >= r })
-	return i < len(joiningRanges) && r >= joiningRanges[i].lo
+	if r < joiningRanges[0].lo {
+		return false // every letter of an ASCII document, in one comparison
+	}
+	if s := scriptOf(r); decides(s) {
+		return int(s) < len(cursiveScripts) && cursiveScripts[s]
+	}
+	return hasDeclaredJoiningType(r) && !isDefaultIgnorable(r) &&
+		!unicode.Is(unicode.Zs, r)
 }

@@ -1,7 +1,6 @@
 package paragraph
 
 import (
-	"github.com/mgilbir/forme/segment"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -244,7 +243,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 			// rather than a rewritten items slice: the caller re-runs this over
 			// several band widths, so anything written back would be seen by the
 			// next attempt and the split would compound.
-			_, item = br.SplitItem(item, fromByte)
+			item = br.SplitTail(item, fromByte)
 		}
 
 		// §8.4's hang, taken back.
@@ -922,37 +921,55 @@ func (br *Breaker) breakInsideWord(item Item, width style.Unit, content bool) (h
 		// word begin the next one — where there will be a whole line's room.
 		return Item{}, 0, false
 	}
-	bounds := segment.Boundaries(nil, item.Text)
-	if len(bounds) == 0 {
+	bounds := br.clustersOf(item)
+	if bounds.len() == 0 {
 		return Item{}, 0, false // one cluster: nothing to cut
 	}
 
-	// The largest boundary whose prefix fits. Bisection needs the predicate to
-	// be monotone, and it is for any face whose advances are non-negative: a
-	// longer prefix is never narrower. A face with a negative advance would make
-	// this pick a cut that is merely *a* fitting one rather than the longest,
-	// which is a worse line and not a wrong page.
-	lo, hi := 0, len(bounds) // lo is known to fit (the empty prefix), hi is not known
-	for lo < hi {
-		mid := (lo + hi + 1) / 2
-		if mid > len(bounds) {
-			break
-		}
-		// Measured in the context the prefix will be shaped in, which is what
-		// SplitItem gives it: the rest of the word follows it whether or not
-		// the line does. Measuring it alone picked a cut against one width and
-		// then drew the head at another — the two disagree by exactly the
-		// difference between a final form and an isolated one.
-		cut := bounds[mid-1]
-		// The far side of the cut is this run's own text, so a pair across it is
-		// this font's whatever the outer context is.
-		w := br.MeasureSpacedInContext(item.Face, item.Text[:cut], item.Size, item.Spacing,
-			Shaping{Before: item.PreContext, After: item.Text[cut:] + item.PostContext,
-				ContextKerns: true, Upright: item.Upright, Off: item.Off})
-		if w <= width {
+	// Whether the first n clusters fit.
+	//
+	// Measured in the context the prefix will be shaped in, which is what
+	// SplitItem gives it: the rest of the word follows it whether or not the
+	// line does. Measuring it alone picked a cut against one width and then
+	// drew the head at another — the two disagree by exactly the difference
+	// between a final form and an isolated one. The far side of the cut is this
+	// run's own text, so a pair across it is this font's whatever the outer
+	// context is.
+	fits := func(n int) bool {
+		return br.SplitHead(item, bounds.at(n-1)).Width <= width
+	}
+
+	// The largest number of clusters whose prefix fits: found by doubling from
+	// one and then bisecting inside the range that found.
+	//
+	// The search needs the predicate to be monotone, and it is for any face
+	// whose advances are non-negative: a longer prefix is never narrower. A
+	// face with a negative advance would make this pick a cut that is merely
+	// *a* fitting one rather than the longest, which is a worse line and not a
+	// wrong page.
+	//
+	// Doubling rather than halving is what bounds the measurements. Bisecting
+	// the whole remaining text measures half of it on the first step, and half
+	// of the remaining text is nearly all of the word — once per line, for
+	// every line the word is broken across, which is quadratic in exactly the
+	// input this is reached for. Doubling never measures more than twice what
+	// actually fits, so the work of a line is the work of that line.
+	//
+	// lo is known to fit, and the empty prefix always does; hi is known not to,
+	// or is one past the last boundary there is.
+	lo, hi := 0, 1
+	for hi <= bounds.len() && fits(hi) {
+		lo, hi = hi, hi*2
+	}
+	if hi > bounds.len() {
+		hi = bounds.len() + 1
+	}
+	for lo+1 < hi {
+		mid := (lo + hi) / 2
+		if fits(mid) {
 			lo = mid
 		} else {
-			hi = mid - 1
+			hi = mid
 		}
 	}
 	if lo == 0 {
@@ -973,9 +990,8 @@ func (br *Breaker) breakInsideWord(item Item, width style.Unit, content bool) (h
 		// that the last resort is for.
 		lo = 1
 	}
-	at = bounds[lo-1]
-	head, _ = br.SplitItem(item, at)
-	return head, at, true
+	at = bounds.at(lo - 1)
+	return br.SplitHead(item, at), at, true
 }
 
 // contentOnLine reports whether what is already on a line would keep it from

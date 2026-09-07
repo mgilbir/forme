@@ -48,10 +48,21 @@ const (
 // complete.
 func Parse(src string) (doc *Node, errs []Error, ok bool) {
 	if len(src) > maxInputBytes {
-		return nil, []Error{{
+		// None of it is read, and the tree is still returned, because the
+		// contract above says so without qualification and because the caller
+		// that reads it is the one showing an author what went wrong. Returning
+		// nil here made this the single input in the language that turned a
+		// finding into a nil dereference two packages away.
+		//
+		// What comes back is what an empty document parses to: the frame, with
+		// nothing in the body. It is the honest tree for a document this engine
+		// did not read a byte of.
+		doc, _, _ = Parse("")
+		return doc, []Error{{
 			Offset: maxInputBytes,
 			Message: "the document is larger than this engine will read (" +
 				strconv.Itoa(len(src)) + " bytes, limit " + strconv.Itoa(maxInputBytes) + ")",
+			Limit: true,
 		}}, false
 	}
 
@@ -82,6 +93,10 @@ type parser struct {
 	// stripNewline records that the element just opened is one whose first
 	// character, if it is a line feed, HTML throws away. See dropFirstNewline.
 	stripNewline bool
+	// pending is the text node still being accumulated, and pendingBuf what has
+	// been accumulated into it. See text and flushText.
+	pending    *Node
+	pendingBuf []byte
 	// ns maps a namespace prefix to the URI it was bound to. See bindNamespaces.
 	ns map[string]string
 }
@@ -119,6 +134,13 @@ func (p *parser) run() {
 		// newline rather than none.
 		strip := p.stripNewline
 		p.stripNewline = false
+		if tk.kind != tokText {
+			// Everything but another run of text ends the one in hand. This is
+			// the only place the accumulator is closed, which is what makes it
+			// safe: no other part of the builder can find a text node whose
+			// Text is behind what has been read into it.
+			p.flushText()
+		}
 		switch tk.kind {
 		case tokEOF:
 			p.finish()
@@ -212,6 +234,63 @@ func (p *parser) current() *Node {
 	return p.open[len(p.open)-1]
 }
 
+// fosterParentOf is where a node written inside a table but not belonging to
+// one goes, and whether it is such a node.
+//
+// HTML calls this foster parenting and every browser does it: content that is
+// not table content is inserted immediately in front of the table it was
+// written inside. Left where it stands it is a table child, which CSS 2.1
+// §17.2.1 then wraps in an anonymous row of its own — a paragraph between two
+// rows became a row, and the table it was written in gained a line nobody
+// asked for.
+//
+// The element is still opened, so the tags round it nest as they were written.
+// That is what HTML does too: the node goes to the foster parent and stays on
+// the stack of open elements.
+// The empty name is text, which belongs to no element and so is never table
+// content.
+func (p *parser) fosterParentOf(name string) (parent, before *Node, ok bool) {
+	if name != "" && tableContent[name] {
+		return nil, nil, false
+	}
+	// The outermost table this node is inside, which is what it goes in front
+	// of: content written inside a row of a table nested in a cell belongs
+	// before the *inner* table, and the walk stops at the first one it meets
+	// from the top of the stack.
+	for i := len(p.open) - 1; i >= 0; i-- {
+		el := p.open[i]
+		if !tableContexts[el.Name] {
+			return nil, nil, false
+		}
+		if el.Name == "table" {
+			if el.Parent == nil {
+				return nil, nil, false
+			}
+			return el.Parent, el, true
+		}
+	}
+	return nil, nil, false
+}
+
+// insertionParent is where a node goes, which is current() except in the one
+// place where current() names a parent that would put it in the wrong order.
+//
+// Nothing may go directly into <html> while the body has not started. <body>
+// was appended there when the document was opened, so a node placed beside it
+// lands *after* it in document order — and a <style> written between </head>
+// and <body> therefore came after every stylesheet in the body and won the
+// cascade against all of them. The document said the opposite.
+//
+// HTML's "after head" mode processes such an element as though it were still in
+// the head, and the head is where it goes: that is its position in the source,
+// and it is before the body wherever the body's content came from.
+func (p *parser) insertionParent() *Node {
+	if cur := p.current(); cur != p.html || p.bodyStarted {
+		return cur
+	}
+	return p.head
+}
+
 func (p *parser) text(tk token) {
 	if tk.text == "" {
 		return
@@ -237,21 +316,66 @@ func (p *parser) text(tk token) {
 	if !p.room(tk.offset) {
 		return
 	}
+	// Text written inside a table goes where any other content written there
+	// goes. HTML's "in table text" mode foster-parents the whole run as soon as
+	// one character of it is not white space, and keeps a run that is entirely
+	// white space where it stands — which is the space between two rows and
+	// belongs to neither.
+	if strings.TrimSpace(tk.text) != "" {
+		if to, before, ok := p.fosterParentOf(""); ok {
+			p.tok.fail(tk.offset, "text was written inside a table, outside any cell; "+
+				"it belongs before the table and is read there")
+			p.nodes++
+			node := &Node{Type: TextNode, Text: tk.text, Offset: tk.offset}
+			to.insertBefore(node, before)
+			p.pending, p.pendingBuf = node, append(p.pendingBuf[:0], tk.text...)
+			return
+		}
+	}
 	// Adjacent runs are merged, so no element ever has two text children in a
 	// row — a shape every consumer would otherwise have to handle.
+	//
+	// They are merged into a buffer rather than by "+=", because a document
+	// decides how many times that happens. Anything the tokenizer drops without
+	// producing a token splits a run in two — a comment, a processing
+	// instruction, a stray "<" — so "x<!---->" repeated is one text node built
+	// one byte at a time, and "+=" copies the whole node each time: six
+	// megabytes of it took thirty-six seconds and reported no problem at all.
+	// The buffer makes it the linear work it looks like.
 	if n := len(parent.Children); n > 0 && parent.Children[n-1].Type == TextNode {
-		parent.Children[n-1].Text += tk.text
+		if last := parent.Children[n-1]; p.pending != last {
+			p.flushText()
+			p.pending, p.pendingBuf = last, append(p.pendingBuf[:0], last.Text...)
+		}
+		p.pendingBuf = append(p.pendingBuf, tk.text...)
 		return
 	}
+	p.flushText()
 	p.nodes++
-	parent.appendChild(&Node{Type: TextNode, Text: tk.text, Offset: tk.offset})
+	node := &Node{Type: TextNode, Text: tk.text, Offset: tk.offset}
+	parent.appendChild(node)
+	p.pending, p.pendingBuf = node, append(p.pendingBuf[:0], tk.text...)
+}
+
+// flushText writes the accumulated run into the node it belongs to.
+//
+// Node.Text is behind the accumulator between the first merge and this call, so
+// every path that can look at a text node has to go through here first. Exactly
+// one does — the token loop — and it calls this for every token that is not
+// itself text, which includes the end of the document.
+func (p *parser) flushText() {
+	if p.pending == nil {
+		return
+	}
+	p.pending.Text = string(p.pendingBuf)
+	p.pending, p.pendingBuf = nil, p.pendingBuf[:0]
 }
 
 // room reports whether another node may be added, recording the trip if not.
 func (p *parser) room(off int) bool {
 	if p.nodes >= maxNodes {
 		if !p.truncated {
-			p.tok.fail(off, "the document has more elements than this engine will build ("+
+			p.tok.limit(off, "the document has more elements than this engine will build ("+
 				strconv.Itoa(maxNodes)+"); the rest was not read")
 			p.truncated = true
 		}
@@ -303,6 +427,18 @@ func (p *parser) startTag(tk token) {
 		// is not HTML. The element stays, its source is kept for whoever can
 		// read it, and the subtree is not parsed on — which is what used to
 		// splice an SVG's text into the paragraph around it.
+		//
+		// It is content, so it starts the body, which every other content
+		// element does on the line below its own insertion and this one did
+		// not. A document beginning "<title>t</title><svg>…</svg>" put the
+		// graphic inside <head>, where the user agent sheet gives it
+		// "display: none" — so it was never drawn, and nothing was reported,
+		// because from the tree builder's side nothing had gone wrong. Every
+		// fixture in foreign_test.go starts with a paragraph, which is what
+		// hid it.
+		if !p.bodyStarted {
+			p.enterBody()
+		}
 		el := p.insert(tk)
 		if el != nil && !tk.selfClosing {
 			start := p.tok.pos
@@ -333,6 +469,16 @@ func (p *parser) startTag(tk token) {
 		return
 	}
 
+	if tk.selfClosing && !voidElements[name] && p.tok.xml {
+		// XML *does* have self-closing syntax, and it means an empty element.
+		// "<div/>" in an XHTML document is a div with nothing in it, and the
+		// rule was applied to the elements HTML has never heard of and not to
+		// the ones it has: "<my-widget/>" was read correctly in the same
+		// document where "<div/>" was reported as a mistake and opened,
+		// swallowing everything after it.
+		p.insert(tk)
+		return
+	}
 	if tk.selfClosing && !voidElements[name] {
 		// "<div/>" is not an empty div. HTML has no self-closing syntax for
 		// ordinary elements, so a browser reads this as an open <div> and every
@@ -387,20 +533,26 @@ func (p *parser) startTag(tk token) {
 	p.open = append(p.open, el)
 
 	if len(p.open) > maxDepth {
-		p.tok.fail(tk.offset, "elements are nested more deeply than this engine will read ("+
+		p.tok.limit(tk.offset, "elements are nested more deeply than this engine will read ("+
 			strconv.Itoa(maxDepth)+")")
 		p.truncated = true
 	}
 }
 
-// insertUnknown opens an element HTML gives no behaviour to.
+// insertUnknown opens an element whose *layout* HTML gives no behaviour to.
 //
-// It is the ordinary path with everything that is keyed on a name left out:
-// there is no optional end tag to close, no head to belong to, no raw text, no
-// void form and no newline to strip, because every one of those is a rule about
-// a *particular* element and this is not one of them. What is left is an element
-// that opens, holds its children and closes — which is the whole of what HTML
-// says about a name nobody has defined.
+// It is the ordinary path with the rules that belong to the box left out: no
+// head to belong to and no newline to strip. What it keeps is every rule that
+// is about the tag's name in the tokenizer and the tree — an optional end tag
+// it closes, a void form with no content, content that is not markup — because
+// those are facts about the name and not about what can be drawn with it, and
+// an element this engine has no style for still has to be *read* correctly.
+//
+// It used to leave all of them out, on the reading that "unknown" meant
+// "nothing applies". It cost three things at once: <track> opened and swallowed
+// the rest of the document, <menu> nested inside the paragraph it ends, and the
+// tags inside an <xmp> were parsed as markup by an element whose whole purpose
+// is to show them.
 //
 // A self-closing "<my-widget/>" is the one thing to say about it, and HTML says
 // it too: outside the void elements the slash is a parse error and the element
@@ -409,6 +561,31 @@ func (p *parser) startTag(tk token) {
 func (p *parser) insertUnknown(tk token) {
 	if !p.bodyStarted {
 		p.enterBody()
+	}
+	// The two rules that are about the tag's *name* rather than about what this
+	// engine can lay out, and that this path used to skip.
+	//
+	// A void element has no content and no end tag, and opening one puts every
+	// following element inside it: "<video><track kind=subs></video>" left the
+	// track open, took the rest of the document into it, and reported a tag
+	// that was never closed — for a tag that is never written closed. And an
+	// element that ends an open paragraph ends it whether or not this engine
+	// has heard of it: "<p>a<menu>b</menu>" nested the menu inside the
+	// paragraph, which is not where a browser puts it or where the author's
+	// stylesheet expects it.
+	//
+	// Both sets are keyed by name and neither has anything to do with layout,
+	// which is why the answer is here rather than in knownElements: an element
+	// added to either set is covered the day it is added.
+	p.closeImplied(tk.name)
+	if voidElements[tk.name] {
+		p.insert(tk)
+		return
+	}
+	if rawTextElements[tk.name] {
+		p.tok.raw, p.tok.rcdata = tk.name, false
+	} else if rcdataElements[tk.name] {
+		p.tok.raw, p.tok.rcdata = tk.name, true
 	}
 	if tk.selfClosing && p.tok.xml {
 		// XML *does* have self-closing syntax, and it means an empty element.
@@ -427,7 +604,7 @@ func (p *parser) insertUnknown(tk token) {
 	}
 	p.open = append(p.open, el)
 	if len(p.open) > maxDepth {
-		p.tok.fail(tk.offset, "elements are nested more deeply than this engine will read ("+
+		p.tok.limit(tk.offset, "elements are nested more deeply than this engine will read ("+
 			strconv.Itoa(maxDepth)+")")
 		p.truncated = true
 	}
@@ -476,7 +653,13 @@ func (p *parser) insert(tk token) *Node {
 	}
 	el := p.element(tk.name, tk.offset)
 	el.Attrs = tk.attrs
-	p.current().appendChild(el)
+	if parent, before, ok := p.fosterParentOf(tk.name); ok {
+		p.tok.fail(tk.offset, "<"+tk.name+"> is not table content and was written "+
+			"inside a table; it belongs before the table and is read there")
+		parent.insertBefore(el, before)
+		return el
+	}
+	p.insertionParent().appendChild(el)
 	return el
 }
 
@@ -537,6 +720,20 @@ func (p *parser) endTag(tk token) {
 		// break carrying a class. Assigning nil to them was written first and
 		// a planted defect showed it changed nothing.
 		p.startTag(tk)
+		return
+	}
+
+	switch name {
+	case "body", "html":
+		// HTML's "after body" and "after after body" modes: everything that
+		// follows goes back into the body. A document does not end because a
+		// tag said so, and there is nowhere else for content to go.
+		//
+		// Popping the element instead made what followed a *sibling* of <body>
+		// — and then </html> popped the last frame and sent it back into the
+		// body, so the two tags together were a no-op and either one alone was
+		// not. Both readings put content somewhere no browser puts it, and the
+		// document was not refused either way.
 		return
 	}
 
@@ -629,6 +826,10 @@ func (p *parser) skipRaw(name string, off int) {
 
 // finish reports the elements still open at the end of the document.
 func (p *parser) finish() {
+	// The document may end on a run of text — an ordinary end of file, or a
+	// bound that stopped the tree mid-token — so the accumulator is closed here
+	// too rather than only in the token loop.
+	p.flushText()
 	for i := len(p.open) - 1; i >= 0; i-- {
 		el := p.open[i]
 		if el == p.html || el == p.head || el == p.body {

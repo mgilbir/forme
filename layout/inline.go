@@ -75,7 +75,7 @@ import (
 // are not even ordered — the glyphs come back as they are drawn — so "the
 // cluster changed" does not name a position in the text.
 //
-// So internal/grapheme is a UAX #29 segmenter over the *characters*, which is
+// So package segment is a UAX #29 segmenter over the *characters*, which is
 // where this belongs anyway since splitAtBreaks never sees a glyph. Every cut
 // this file makes now goes through it, not only break-all's, and that caught a
 // break the ideograph rule had been offering since it was written: a Hangul
@@ -88,10 +88,12 @@ import (
 // paragraph/wordbreakautophrase_test.go — and what is left of the report is
 // auto-phrase over a language there is no phrase model for.
 //
-// overflow-wrap is not implemented and is reported. It is a different shape of
-// problem from break-all rather than a smaller one: its opportunities exist
-// only when the line cannot otherwise fit, so it is not a question about the
-// text at all but about what the breaker should do having failed once.
+// overflow-wrap is implemented, and it is a different shape of problem from
+// break-all rather than a smaller one: its opportunities exist only when the
+// line cannot otherwise fit, so it is not a question about the text at all but
+// about what the breaker should do having failed once. That is why it reaches
+// the breaker as a last resort rather than the segmenter as an opportunity —
+// see paragraph.OverflowWrap and Piece.LastResort.
 //
 // # White space at a line edge
 //

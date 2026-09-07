@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"github.com/mgilbir/forme/fonttest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,16 +23,10 @@ import (
 
 // TestAFaceThatWillNotLoadIsRecorded.
 func TestAFaceThatWillNotLoadIsRecorded(t *testing.T) {
-	if os.Getenv(notoEnv) == "" {
-		t.Skipf("set %s (or run `make test-wpt`)", notoEnv)
-	}
+	real := fonttest.NotoFile(t, "NotoSans-Regular.ttf")
 	// A directory holding one real face and one file that is not a font. The
 	// loader has to come back with the first and a complaint about the second.
 	dir := t.TempDir()
-	real, err := os.ReadFile(filepath.Join(os.Getenv(notoEnv), "NotoSans-Regular.ttf"))
-	if err != nil {
-		t.Skipf("the library has no NotoSans-Regular.ttf: %v", err)
-	}
 	if err := os.WriteFile(filepath.Join(dir, "NotoSans-Regular.ttf"), real, 0o644); err != nil {
 		t.Fatal(err)
 	}

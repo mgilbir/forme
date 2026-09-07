@@ -35,7 +35,7 @@
 // and emoji text when they are missing: GB9c, which holds a consonant conjunct
 // together across its virama, and GB11, which holds an emoji ZWJ sequence
 // together. The tables are generated from the Unicode Character Database by
-// cmd/gengrapheme and the whole of it is checked against Unicode's own
+// cmd/gensegment and the whole of it is checked against Unicode's own
 // GraphemeBreakTest.txt — see conformance_test.go.
 package segment
 
@@ -76,14 +76,27 @@ const (
 	conjunctLinker
 )
 
-// asciiLimit is the code point below which the three properties are known
-// without a table: everything under it is Other, except the two line
-// terminators and the C0 controls.
+// asciiLimit is the code point below which two of the three properties are
+// known without a table: everything under it is Indic_Conjunct_Break=None and
+// not Extended_Pictographic. The break property is read from its table either
+// way, because the C0 controls and the two line terminators are in it.
 //
-// It is 0x300 rather than 0x80 because the first table entry that is not a
-// control is U+00AD SOFT HYPHEN, and the run from there to the combining marks
-// at U+0300 is entirely Other as well. Latin text therefore never bisects.
-const asciiLimit = 0x300
+// Derived from the tables rather than written down, which is what it has to be:
+// it was 0x300, on the reading that nothing below the combining marks is
+// pictographic — and U+00A9 © and U+00AE ® are, so the fast path answered "not
+// pictographic" for the two characters GB11 exists to hold together. "©‍©" came
+// apart at the joiner.
+//
+// The cost of the true floor is that Latin-1 text bisects where ASCII does not,
+// which is one comparison and a short search on a table of a hundred and forty
+// ranges. The cost of the wrong floor was a rule that did not apply.
+var asciiLimit = func() rune {
+	limit := conjunctRanges[0].lo
+	if pictRanges[0].lo < limit {
+		limit = pictRanges[0].lo
+	}
+	return limit
+}()
 
 // BreakOf returns a character's Grapheme_Cluster_Break.
 func BreakOf(r rune) Break {
@@ -303,36 +316,51 @@ func (s *Scanner) Boundary(r rune) bool { return s.sc.boundaryBefore(r) }
 // dst is appended to so a caller in a loop can reuse one buffer; pass nil for a
 // fresh slice.
 func Boundaries(dst []int, s string) []int {
-	var sc scanner
-	for i, r := range s {
-		// An invalid byte is its own cluster on both sides. range yields
-		// U+FFFD for one, which is Other and would let a following mark attach
-		// to it; that would be a cluster spanning a byte that is not a
-		// character, so it is cut instead.
-		if r == utf8.RuneError {
-			if _, n := utf8.DecodeRuneInString(s[i:]); n == 1 {
-				if i > 0 {
-					dst = append(dst, i)
-				}
-				sc = scanner{}
-				continue
-			}
-		}
-		if sc.boundaryBefore(r) && i > 0 {
+	walkClusters(s, func(i int) {
+		// The boundary at nought is not a place to cut: every string starts a
+		// cluster, and a caller asking where it may cut wants neither end.
+		if i > 0 {
 			dst = append(dst, i)
 		}
-	}
+	})
 	return dst
 }
 
 // Count returns the number of grapheme clusters in s.
+//
+// It walks the string exactly as Boundaries does, including what both of them
+// make of a byte that is not UTF-8, because two answers about the same string
+// that disagree are worse than either. They did: Boundaries cut on both sides
+// of an invalid byte and reset the scanner, and this let range's U+FFFD through
+// as an ordinary character — so a following combining mark attached to it here
+// and did not there, and a caller holding both numbers had one cluster more in
+// one than in the other.
 func Count(s string) int {
-	var sc scanner
 	n := 0
-	for _, r := range s {
+	walkClusters(s, func(int) { n++ })
+	return n
+}
+
+// walkClusters calls at with the byte offset of every cluster start in s,
+// including the one at nought.
+//
+// The one place that decides what a cluster is, so that Boundaries and Count
+// cannot drift apart. An invalid byte is its own cluster on both sides: range
+// yields U+FFFD for one, which is Other and would let a following mark attach
+// to it — a cluster spanning a byte that is not a character — so it is cut
+// instead and the scanner starts again after it.
+func walkClusters(s string, at func(offset int)) {
+	var sc scanner
+	for i, r := range s {
+		if r == utf8.RuneError {
+			if _, n := utf8.DecodeRuneInString(s[i:]); n == 1 {
+				at(i)
+				sc = scanner{}
+				continue
+			}
+		}
 		if sc.boundaryBefore(r) {
-			n++
+			at(i)
 		}
 	}
-	return n
 }

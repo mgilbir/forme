@@ -276,6 +276,23 @@ func (f *Face) shapeGlyphsWith(s string, extra []string, ctx shapeContext) ([]Gl
 			before: ctx.before + s[:r.Start],
 			after:  s[r.End:] + ctx.after,
 			kerns:  ctx.kerns,
+			// What the caller turned off is off for every run of the string.
+			// It was dropped here, so a document that said "font-kerning: none"
+			// got it for a Latin word and not for the same word beside a Hebrew
+			// one — the same declaration, honoured or not by whether the
+			// paragraph happened to change direction.
+			features: ctx.features,
+		}
+		// The sides that may contribute *glyphs* belong to the pieces they
+		// touch: what precedes the whole string precedes its first run, and
+		// what follows it follows its last. They were dropped as well, so a
+		// ligature across an element boundary was formed for a run of one
+		// direction and not for the same run beside text of the other.
+		if r.Start == 0 {
+			inner.mergeBefore = ctx.mergeBefore
+		}
+		if r.End == len(s) {
+			inner.mergeAfter = ctx.mergeAfter
 		}
 		glyphs, gone := f.shapeGlyphsIn(piece, runScript(piece), r.RTL(), extra, inner)
 		missing += gone
@@ -355,7 +372,8 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	// The run's script decides which of the font's rules apply, and everything
 	// below reads the tables through it.
 	sh := shaper{f: f, l: f.layoutFor(script), rtl: rtl, ligIDs: new(int),
-		zeroMarks: zeroMarkWidthsFor(script), features: ctx.features}
+		zeroMarks: zeroMarkWidthsFor(script), features: ctx.features,
+		ops: lookupBudget(len(buf)), covWork: markCoverageBudget(len(buf))}
 	// A script whose characters are not in the order they are drawn is shaped
 	// whole by its own pass: the reordering decides which of the font's rules
 	// apply where, so it cannot be a step before the general substitutions and
@@ -610,20 +628,20 @@ func (f *Face) missingIn(s string) int {
 	return n
 }
 
-// shapeWholeGroup shapes a run together with the neighbours that merge with it
-// and reports the glyphs of the whole, with the byte range the run itself
-// covers. It is what MeasureShapedMergedSpan cuts its two distances from.
-func (f *Face) shapeWholeGroup(s, before, after, mergeBefore, mergeAfter string,
-	kerns bool, off Features) (glyphs []Glyph, lo, hi int) {
-
-	outer := shapeContext{kerns: kerns, features: off}
-	if mergeBefore == "" {
-		outer.before = before
-	}
-	if mergeAfter == "" {
-		outer.after = after
-	}
-	whole := mergeBefore + s + mergeAfter
-	glyphs, _ = f.shapeGlyphsWith(whole, nil, outer)
-	return glyphs, len(mergeBefore), len(mergeBefore) + len(s)
+// ShapeGroup shapes a whole merge group — the runs that shape as one string,
+// concatenated — so that every run of it can take its own slice of the result
+// rather than shaping the group again for itself.
+//
+// The group and not the run is what is shaped, because two runs of one word
+// that shape different strings disagree about where a ligature begins and a
+// character between them is drawn by neither. That the group is the same string
+// for every run of it is also what makes it memoizable: shaped once per run, a
+// group of a thousand runs shapes a thousand characters a thousand times over.
+//
+// before and after are the context the group itself does not hold. See
+// GroupContext, and GroupSpan for cutting one run out of the result.
+func (f *Face) ShapeGroup(whole, before, after string, kerns bool, off Features) []Glyph {
+	glyphs, _ := f.shapeGlyphsWith(whole, nil,
+		shapeContext{before: before, after: after, kerns: kerns, features: off})
+	return glyphs
 }

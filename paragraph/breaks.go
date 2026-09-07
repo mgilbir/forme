@@ -737,20 +737,14 @@ func endsRunOrSpace(text string, i int) bool {
 
 // IsIdeographic reports whether a rune breaks on both sides, which is what makes
 // CJK line breaking possible without word boundaries.
-func IsIdeographic(r rune) bool {
-	switch {
-	case r >= 0x4E00 && r <= 0x9FFF: // CJK Unified Ideographs
-		return true
-	case r >= 0x3400 && r <= 0x4DBF: // Extension A
-		return true
-	case r >= 0xF900 && r <= 0xFAFF: // Compatibility Ideographs
-		return true
-	case r >= 0x3040 && r <= 0x30FF: // Hiragana and Katakana
-		return true
-	case r >= 0xAC00 && r <= 0xD7AF: // Hangul syllables
-		return true
-	case r >= 0x20000 && r <= 0x2FA1F: // Extensions B and beyond
-		return true
-	}
-	return false
-}
+//
+// UAX #14's classes ID and CJ, and the Hangul syllables H2 and H3 — read off
+// LineBreak.txt by cmd/genlinebreak, like every other class this package asks
+// about. It was six ranges typed out here: the two main CJK blocks, the
+// compatibility ideographs, kana, the Hangul syllables and everything from
+// U+20000 to U+2FA1F. Halfwidth katakana, the fullwidth Latin letters,
+// extensions G and H, Yi, Bopomofo, the Kangxi radicals and the enclosed CJK
+// numerals are class ID and were in none of them, so a paragraph of any of them
+// was one unbreakable run and overflowed its box — which is what §5.1 forbids
+// outright.
+func IsIdeographic(r rune) bool { return inLineBreakRanges(r, ideographicRanges[:]) }

@@ -907,7 +907,11 @@ func TestALongRunOfIdenticalFlagsIsBrokenAtTwoHundredAndFiftySix(t *testing.T) {
 		{513, []byte{flag | glyfRepeat, 255, flag | glyfRepeat, 255, flag}},
 	} {
 		pts := points(tc.n)
-		got := appendPoints(nil, pts, false)
+		got, err := appendPoints(nil, pts, false)
+		if err != nil {
+			t.Errorf("%d points: %v", tc.n, err)
+			continue
+		}
 		// The flags come first, then one byte of x per point and one of y.
 		if len(got) != len(tc.flags)+2*tc.n {
 			t.Errorf("%d points came to %d bytes, want %d flag bytes and %d of "+
@@ -930,7 +934,10 @@ func TestALongRunOfIdenticalFlagsIsBrokenAtTwoHundredAndFiftySix(t *testing.T) {
 
 	// The overlap bit goes on the first point and nowhere else, which is what
 	// makes it a statement about the glyph rather than about a point.
-	got := appendPoints(nil, points(3), true)
+	got, err := appendPoints(nil, points(3), true)
+	if err != nil {
+		t.Fatalf("three points: %v", err)
+	}
 	if got[0]&glyfOverlap == 0 {
 		t.Errorf("the overlap bit is not on the first flag: %08b", got[0])
 	}

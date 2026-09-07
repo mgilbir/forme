@@ -94,17 +94,80 @@ func (f *Face) MeasureShapedMergedSpan(s string, size float64,
 		glyphs, _ := f.ShapeGlyphsInContextOrAcross(s, before, after, kerns, off)
 		return 0, MeasureGlyphs(glyphs, size)
 	}
-	whole, lo, hi := f.shapeWholeGroup(s, before, after, mergeBefore, mergeAfter, kerns, off)
-	var headAdv, mine float64
+	outerBefore, outerAfter := GroupContext(before, after, mergeBefore, mergeAfter)
+	text := mergeBefore + s + mergeAfter
+	whole := f.ShapeGroup(text, outerBefore, outerAfter, kerns, off)
+	return GroupSpan(GroupAdvances(whole, len(text)),
+		len(mergeBefore), len(mergeBefore)+len(s), size)
+}
+
+// GroupContext is the text either side of a *group* that shapes it, given the
+// text either side of one run of that group.
+//
+// A side the group already holds supplies its own context, so only a side the
+// group does not reach contributes: the first run of a group brings the text
+// before it and the last the text after it, and a run in the middle brings
+// neither. Returning the pair rather than deciding it inside the shaping is
+// what lets a caller memoize a group — every run of one asks for the same
+// string, and this says which of them ask with the same context.
+func GroupContext(before, after, mergeBefore, mergeAfter string) (outerBefore, outerAfter string) {
+	if mergeBefore == "" {
+		outerBefore = before
+	}
+	if mergeAfter == "" {
+		outerAfter = after
+	}
+	return outerBefore, outerAfter
+}
+
+// GroupAdvances is a group's shaped glyphs turned into what every question
+// about a stretch of it needs: the advance of everything before each byte
+// offset, in font units, with one entry per byte of the group's text and one
+// past the end.
+//
+// It is built once per shaping because the alternative is a walk of every glyph
+// per question, and the questions are asked a logarithmic number of times per
+// line for a word broken across many lines — which put the walk back into the
+// inner loop it was taken out of. Bytes rather than glyphs, so that a caller
+// indexes it with the offsets it already has, and a prefix sum rather than a
+// search, so that a stretch is two lookups.
+//
+// The glyphs need not be in logical order: a right-to-left run comes back the
+// way the pen meets it, and each glyph is charged to its own cluster here, so
+// the order it arrived in does not matter.
+func GroupAdvances(whole []Glyph, bytes int) []float64 {
+	cum := make([]float64, bytes+1)
 	for _, g := range whole {
-		switch {
-		case g.Cluster < lo:
-			headAdv += g.XAdvance
-		case g.Cluster < hi:
-			mine += g.XAdvance
+		if g.Cluster >= 0 && g.Cluster < bytes {
+			cum[g.Cluster+1] += g.XAdvance
 		}
 	}
-	return headAdv * size / 1000, (headAdv + mine) * size / 1000
+	for i := 1; i <= bytes; i++ {
+		cum[i] += cum[i-1]
+	}
+	return cum
+}
+
+// GroupSpan is where one stretch sits within a group already measured by
+// GroupAdvances: the advance from the group's start to the stretch's start, and
+// to its end.
+//
+// lo and hi are byte offsets into the group's text. The two ends are returned
+// rather than the difference so that a caller can round each of them once —
+// every run of a group then begins where the one before it ended, and the
+// widths add up to the group's own rounded width.
+func GroupSpan(cum []float64, lo, hi int, size float64) (head, through float64) {
+	return at(cum, lo) * size / 1000, at(cum, hi) * size / 1000
+}
+
+func at(cum []float64, i int) float64 {
+	switch {
+	case i <= 0 || len(cum) == 0:
+		return 0
+	case i >= len(cum):
+		return cum[len(cum)-1]
+	}
+	return cum[i]
 }
 
 // ShapeGlyphsInContextOrAcross picks between the two by whether a pair spanning
@@ -131,9 +194,17 @@ func (f *Face) HasLigatures() bool { return len(f.layout.ligatures) > 0 }
 
 // Features lists the substitution features this face offers by name, sorted.
 // A caller can present them, or check one before asking for it.
+//
+// It is the features ShapeGlyphsWith will act on, which is what "check one
+// before asking for it" has to mean. It listed a different set: the tags the
+// flat single-substitution reader kept a table for, which is every feature
+// whose lookups are all type 1 and no other. A face offering a feature through
+// a ligature or a contextual rule was not listed, so a caller checking first
+// was told the face has nothing and asked for nothing — and asking would have
+// worked. Noto Sans Devanagari offers twelve and reported one.
 func (f *Face) Features() []string {
-	out := make([]string, 0, len(f.layout.single))
-	for tag := range f.layout.single {
+	out := make([]string, 0, len(f.layout.featureLookups))
+	for tag := range f.layout.featureLookups {
 		out = append(out, tag)
 	}
 	sortStrings(out)

@@ -26,7 +26,7 @@ import (
 // realFont is a font program these tests can hand the engine.
 //
 // It is forme's bundled Noto Sans, which is already a dependency of this
-// repository through pdf0/fonts, so nothing new is vendored and no corpus is
+// repository through forme's font packages, so nothing new is vendored and no corpus is
 // needed — these tests run in a bare checkout. It is loaded once because it is
 // two megabytes and parsing it per test would be paid for a dozen times.
 func realFont() []byte {
@@ -251,8 +251,20 @@ func TestFontFaceReportsWhenNothingLoads(t *testing.T) {
 			src: local(Nonesuch), url(missing.ttf); }`),
 		Resources: res,
 	})
-	if _, ok := built.Fonts.(*documentFonts); ok {
-		t.Error("a rule that loaded nothing still produced a document font set")
+	// The set the document is laid out in is always the wrapper — it is what
+	// makes the faces this document's rather than the caller's library's — so
+	// what says the rule contributed nothing is that the family it declared
+	// does not resolve to any of the document's own faces.
+	set, ok := built.Fonts.(*documentFonts)
+	if !ok {
+		t.Fatalf("the document's set is %T", built.Fonts)
+	}
+	if len(set.faces) != 0 {
+		t.Errorf("a rule that loaded nothing still put %d faces in the document's set",
+			len(set.faces))
+	}
+	if _, has := set.byFamily["trial"]; has {
+		t.Error("a rule that loaded nothing still declared its family")
 	}
 	requireFinding(t, built.Findings, RuleResourceBlocked, "loaded no font")
 	fired[RuleResourceBlocked] = true

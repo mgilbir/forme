@@ -53,7 +53,7 @@ package.
 
 Both controls agree, which is what makes them controls:
 
-| line | | pdf0 | HarfBuzz |
+| line | | forme | HarfBuzz |
 | --- | --- | --- | --- |
 | 1 | the syllable, nothing inside it | 1 glyph | 1 glyph |
 | 2 | the same, consonant removed | 3 glyphs, dotted | 3 glyphs, dotted |
@@ -125,7 +125,7 @@ three answers for the last glyph are:
 
 | | absolute x |
 | --- | --- |
-| pdf0 | **427** |
+| forme | **427** |
 | CoreText | **427** |
 | HarfBuzz | 422 |
 
@@ -180,7 +180,7 @@ to line 2, which is to say the invisible character changed nothing.
 
 | | hamza at |
 | --- | --- |
-| pdf0 | **250** |
+| forme | **250** |
 | CoreText | **250** |
 | HarfBuzz | 850 |
 
@@ -236,7 +236,7 @@ python3 compare.py batch-tibetan    out-tibetan.txt
 It names only the lines where CoreText sides with HarfBuzz. Those are defects.
 Silence means it sides with this package, and a failing control stops it.
 
-If the count comes back all-pdf0, the family closes as one decision rather than
+If the count comes back all-forme, the family closes as one decision rather than
 forty-six investigations. If any line names HarfBuzz, that line is a real defect
 and the way in is the trace — both engines through the same string, before
 forming any opinion about it. Four readings of the font tables produced four

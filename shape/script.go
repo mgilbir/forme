@@ -237,8 +237,8 @@ func readLangSys(script []byte, lang string) (langSys, bool) {
 	ls := script[off:]
 	out := langSys{required: font.Be16(ls, 2)}
 	n := font.Be16(ls, 4)
-	if n > maxLookups {
-		n = maxLookups
+	if n > maxDeclaredList {
+		n = maxDeclaredList
 	}
 	for i := 0; i < n; i++ {
 		if 6+2*i+2 > len(ls) {
@@ -386,6 +386,23 @@ type shaper struct {
 	// features do, because a joiner is written precisely to force or forbid the
 	// forms they make.
 	manualJoiners bool
+
+	// ops is what is left of the run's allowance for applying one lookup from
+	// inside another. It is a pointer because a shaper is copied per lookup and
+	// the allowance belongs to the run, not to a lookup: a rule that names
+	// forty lookups which each name it again would otherwise be bounded only by
+	// the recursion depth, and eight levels of forty is a hang from a few
+	// hundred bytes of font. See lookupBudget.
+	ops *int
+
+	// covWork is what is left of the run's allowance for expanding the coverage
+	// of the mark subtables its rules reach. A pointer for the same reason ops
+	// is: the allowance belongs to the run.
+	//
+	// Those subtables are read where they are applied rather than at load — see
+	// markAttachAt — so their cost is per application and the layout's
+	// load-time allowance cannot cover it. See markCoverageBudget.
+	covWork *int
 
 	// markSet is the mark glyph set the lookup being applied names, or -1. It
 	// travels on the shaper rather than through every matcher's arguments

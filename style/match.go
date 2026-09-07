@@ -51,7 +51,17 @@ type Matcher struct {
 	kids map[*html.Node][]*html.Node
 	idx  map[*html.Node]int
 
+	// steps is the work spent on the match in hand and over says that match ran
+	// out; tripped remembers that some match did, for the caller.
+	//
+	// The two are separate because the budget is *per match*. One selector on
+	// one element used to turn matching off for the rest of the document: the
+	// flag the walk read was the same one the caller reads, and nothing reset
+	// it — so a deep ".x .x .x … p" on one paragraph left every later selector
+	// on every later element unmatched, and the page was styled by whatever
+	// happened to come before it.
 	steps   int
+	over    bool
 	tripped bool
 }
 
@@ -94,7 +104,7 @@ func (m *Matcher) Match(s css.Selector, n *html.Node) bool {
 	if n == nil || n.Type != html.ElementNode || len(s.Compounds) == 0 {
 		return false
 	}
-	m.steps = 0
+	m.steps, m.over = 0, false
 	return m.complex(s.Compounds, len(s.Compounds)-1, n)
 }
 
@@ -151,12 +161,12 @@ func (m *Matcher) complex(compounds []css.Compound, i int, n *html.Node) bool {
 
 // spent charges one step and reports whether the budget is gone.
 func (m *Matcher) spent() bool {
-	if m.tripped {
+	if m.over {
 		return true
 	}
 	m.steps++
 	if m.steps > maxMatchSteps {
-		m.tripped = true
+		m.over, m.tripped = true, true
 		return true
 	}
 	return false
@@ -205,12 +215,32 @@ func hasClass(n *html.Node, want string) bool {
 	if !ok {
 		return false
 	}
-	for _, got := range strings.Fields(v) {
+	for _, got := range asciiFields(v) {
 		if got == want {
 			return true
 		}
 	}
 	return false
+}
+
+// asciiFields splits on HTML's white space and not on Unicode's.
+//
+// The two are not the same set, and the difference is a class name. HTML says
+// the class attribute is "a set of space-separated tokens" split on *ASCII*
+// white space — tab, line feed, form feed, carriage return and space — so
+// class="a\u00a0b" is one class whose name holds a no-break space, and .a
+// selects nothing. strings.Fields splits on unicode.IsSpace, which takes the
+// no-break space and every other space separator with it, so it found two
+// classes where the document has one and applied a rule the author did not
+// write. The same set decides "~=", which HTML defines the same way.
+func asciiFields(s string) []string {
+	return strings.FieldsFunc(s, func(r rune) bool {
+		switch r {
+		case '\t', '\n', '\f', '\r', ' ':
+			return true
+		}
+		return false
+	})
 }
 
 func matchAttr(a css.Attr, n *html.Node) bool {
@@ -257,7 +287,7 @@ func matchAttr(a css.Attr, n *html.Node) bool {
 }
 
 func slices(value, want string) bool {
-	for _, f := range strings.Fields(value) {
+	for _, f := range asciiFields(value) {
 		if f == want {
 			return true
 		}

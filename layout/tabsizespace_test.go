@@ -1,8 +1,6 @@
 package layout
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/mgilbir/forme/shape"
@@ -38,15 +36,7 @@ func (n noSpaceSet) Face(family string, bold, italic bool) (*shape.Face, bool) {
 
 func loadNoSpace(t *testing.T) noSpaceSet {
 	t.Helper()
-	dir := os.Getenv(wptEnv)
-	if dir == "" {
-		t.Skipf("set %s for a face that has no space in it", wptEnv)
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "fonts", "CanvasTest-nospace.ttf"))
-	if err != nil {
-		t.Skipf("no CanvasTest-nospace.ttf: %v", err)
-	}
-	face, err := shape.Load(data)
+	face, err := shape.Load(wptFile(t, "fonts/CanvasTest-nospace.ttf"))
 	if err != nil {
 		t.Fatalf("loading CanvasTest-nospace: %v", err)
 	}

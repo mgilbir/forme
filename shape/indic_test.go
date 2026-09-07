@@ -647,6 +647,39 @@ func TestInitAppliesToAWordInitialMatra(t *testing.T) {
 	}
 }
 
+// TestTheWordInitialMatraReadsTheTextAndNotTheRun.
+//
+// What decides the form is the character before the syllable in the *text*, and
+// a run is not the text: it is one face, one direction and one style, and none
+// of those opens a word. The run's own start was taken for the word's start
+// whatever the caller said came before it, so a word divided by a change of
+// colour — or measured a second time to find where a line may break, which is
+// what the breaker does to every word it considers — took the word-initial form
+// in the middle of itself.
+func TestTheWordInitialMatraReadsTheTextAndNotTheRun(t *testing.T) {
+	f := devaFace(t, devaInit())
+	syllable := str(devKa, devIMatra)
+	for _, tc := range []struct {
+		before string
+		want   []int
+		what   string
+	}{
+		{"", []int{gidIMatraIni, gidDKa}, "nothing before the run, so the text does start here"},
+		{" ", []int{gidIMatraIni, gidDKa}, "a space, which ends a word"},
+		{"\u0964", []int{gidIMatraIni, gidDKa}, "a danda, which ends a sentence"},
+		{str(devKa), []int{gidIMatra, gidDKa}, "a letter, which continues a word"},
+		{str(devKa, devIMatra), []int{gidIMatra, gidDKa}, "a syllable ending in a mark"},
+		{"\u200D", []int{gidIMatra, gidDKa}, "a zero-width joiner, which is not a break in a word"},
+	} {
+		gs, _ := f.ShapeGlyphsInContext(syllable, tc.before, "", Features{})
+		got := make([]int, len(gs))
+		for i, g := range gs {
+			got[i] = g.GID
+		}
+		wantGIDs(t, got, tc.want, tc.what+" before "+syllable)
+	}
+}
+
 // TestBasicFeaturesDoNotCrossASyllable is the teeth of the syllable bound. The
 // fixture declares a ligature of two Ka, which no real font would; two Ka in a
 // row are two syllables, and a basic feature applied to one of them must not
@@ -1150,4 +1183,58 @@ func gids(glyphs []Glyph) []int {
 		out[i] = g.GID
 	}
 	return out
+}
+
+// devaRphfDeclined declares 'rphf' as two lookups, the way devaPrefDeclined
+// declares 'pref': one that replaces the Ra with another form of it, and one
+// that would ligate the *original* Ra and the virama into the reph. Asked about
+// the pair the font answers yes — the ligature covers it — and then, run over
+// the text, the first lookup changes the Ra out from under the second and no
+// reph is made.
+//
+// It is the fixture for a font that declares the mark generally and blocks it
+// in context, which the specification says to expect and which no
+// non-contextual rule can show.
+func devaRphfDeclined() devaFeature {
+	return devaFeature{tag: "rphf", build: func(base int) ([]fonttest.Lookup, []int) {
+		return []fonttest.Lookup{
+			{Type: 1, Subtables: [][]byte{fonttest.SingleSubst(
+				[]int{gidDRa}, []int{gidRaAlt})}},
+			{Type: 4, Subtables: [][]byte{fonttest.LigatureSubst([]fonttest.Ligature{
+				{Components: []int{gidDRa, gidVirama}, Glyph: gidReph},
+			})}},
+		}, []int{base, base + 1}
+	}}
+}
+
+// TestARephMovesOnlyIfTheFontMadeOne is the half of the rule the pre-base Ra
+// beside it has always had.
+//
+// A Ra and a virama at the front of a syllable are a reph only once 'rphf' has
+// made one of them. The move was made on the *marking* alone, so a font that
+// declares the mark and blocks it in context had a bare virama rotated to the
+// front of the syllable and its consonant left where the mark should be —
+// which is not a thing the script writes.
+func TestARephMovesOnlyIfTheFontMadeOne(t *testing.T) {
+	s := str(devRa, devVirama, devKa)
+
+	// The case the rule is written for: the font's 'rphf' covers this pair, so
+	// the pair is marked and the feature is applied to it, and no reph comes
+	// out. What the font made is an ordinary letter and stays where it was.
+	f := devaFace(t, devaRphfDeclined())
+	wantGIDs(t, shapedGIDs(t, f, s), []int{gidRaAlt, gidVirama, gidDKa}, s)
+
+	// A font whose 'rphf' covers a different pair marks nothing and moves
+	// nothing, which is the same answer by an easier road.
+	f = devaFace(t, devaRphfElsewhere())
+	wantGIDs(t, shapedGIDs(t, f, s), []int{gidDRa, gidVirama, gidDKa}, s)
+}
+
+// TestARephThatWasMadeStillMoves is the control. A rule that never moved a reph
+// would pass the test above and lose the mark from every Devanagari word that
+// begins with one.
+func TestARephThatWasMadeStillMoves(t *testing.T) {
+	f := devaFace(t, devaRphf())
+	s := str(devRa, devVirama, devKa)
+	wantGIDs(t, shapedGIDs(t, f, s), []int{gidDKa, gidReph}, s)
 }

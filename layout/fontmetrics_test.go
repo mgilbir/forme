@@ -1,11 +1,10 @@
 package layout
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/mgilbir/forme/fonttest"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -37,15 +36,7 @@ func (a ahemSet) Face(family string, bold, italic bool) (*shape.Face, bool) {
 
 func loadAhem(t *testing.T) FontSet {
 	t.Helper()
-	dir := os.Getenv(wptEnv)
-	if dir == "" {
-		t.Skipf("set %s to check the metrics against a face that states them", wptEnv)
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "fonts", "Ahem.ttf"))
-	if err != nil {
-		t.Skipf("no Ahem: %v", err)
-	}
-	face, err := shape.Load(data)
+	face, err := shape.Load(wptFile(t, "fonts/Ahem.ttf"))
 	if err != nil {
 		t.Fatalf("loading Ahem: %v", err)
 	}
@@ -88,15 +79,7 @@ func TestNormalLineHeightComesFromTheFont(t *testing.T) {
 // a planted defect that dropped it from the sum went unnoticed until this test
 // existed.
 func TestNormalLineHeightIncludesTheLineGap(t *testing.T) {
-	dir := os.Getenv(wptEnv)
-	if dir == "" {
-		t.Skipf("set %s for a face that states a line gap", wptEnv)
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "fonts", "CanvasTest.ttf"))
-	if err != nil {
-		t.Skipf("no CanvasTest.ttf: %v", err)
-	}
-	face, err := shape.Load(data)
+	face, err := shape.Load(wptFile(t, "fonts/CanvasTest.ttf"))
 	if err != nil {
 		t.Fatalf("loading CanvasTest: %v", err)
 	}
@@ -159,15 +142,7 @@ func TestNormalLineHeightUsesTheGlyphBoxWhenTheFontStatesNoGap(t *testing.T) {
 // the whole reason the box is a fallback and not the answer: it is the extreme
 // of what the face can draw, and hhea is what the face asks for.
 func TestNormalLineHeightPrefersTheFontsOwnMetricsOverItsGlyphBox(t *testing.T) {
-	dir := os.Getenv(notoEnv)
-	if dir == "" {
-		t.Skipf("set %s for a face whose box and metrics differ", notoEnv)
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "NotoSans-Regular.ttf"))
-	if err != nil {
-		t.Skipf("no Noto Sans: %v", err)
-	}
-	face, err := shape.Load(data)
+	face, err := shape.Load(fonttest.NotoFile(t, "NotoSans-Regular.ttf"))
 	if err != nil {
 		t.Fatalf("loading Noto Sans: %v", err)
 	}

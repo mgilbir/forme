@@ -575,6 +575,23 @@ func (p *selParser) complex(vals []ComponentValue, depth int) (Selector, bool) {
 	return out, true
 }
 
+// onlyWhitespace reports whether a function's arguments are empty, which is not
+// the same as unusable.
+func onlyWhitespace(vals []ComponentValue) bool {
+	for _, v := range vals {
+		if !v.IsToken() || v.Token.Kind != Whitespace {
+			return false
+		}
+	}
+	return true
+}
+
+// isPseudoAt reports whether the value at i begins a pseudo-class, which is the
+// one thing that may follow a pseudo-element.
+func isPseudoAt(vals []ComponentValue, i int) bool {
+	return i < len(vals) && vals[i].IsToken() && vals[i].Token.Kind == Colon
+}
+
 // isCombinatorAt reports whether a combinator begins at i. Whitespace counts,
 // because the descendant combinator *is* whitespace — but only whitespace that
 // separates two compounds, which the caller settles by trimming the ends first.
@@ -666,6 +683,22 @@ func (p *selParser) compound(vals []ComponentValue, depth int) (Compound, string
 
 	for i < len(vals) {
 		v := vals[i]
+
+		// A pseudo-element ends its compound. Selectors 4 §3.3: it "must appear
+		// after the compound selector" and only a pseudo-class from a short
+		// list may follow it — no class, no id, no attribute, no element name.
+		//
+		// The check across a combinator was here and the one inside a compound
+		// was not, so "a::before.foo" was accepted and then *reordered*: the
+		// class was collected into the same compound as the pseudo-element and
+		// matched against the element itself, so the rule applied to every <a>
+		// of that class rather than to none of them. A pseudo-element is not
+		// something a class can narrow.
+		if pseudoElem != "" && !isPseudoAt(vals, i) {
+			p.fail(v.Token.Offset, "nothing may follow the pseudo-element ::"+
+				pseudoElem+" in the same compound selector")
+			return out, "", false
+		}
 
 		// A namespace separator anywhere makes this a qualified name.
 		if v.IsToken() && v.Token.IsDelim('|') {
@@ -824,6 +857,27 @@ func (p *selParser) pseudo(vals []ComponentValue, i int, out *Compound, depth in
 			p.fail(colon.Offset, "\":"+name+"\" needs a selector list in parentheses")
 			return i, "", false
 		}
+		if kind != PseudoNot && onlyWhitespace(v.Values) {
+			// Written with nothing in it, which is *valid* for the two
+			// forgiving ones. Selectors 4 §3.5 makes the argument a forgiving
+			// selector list, and an empty one is a list of one unknown
+			// selector: it matches nothing, and ":is()" is a selector all the
+			// same.
+			//
+			// The difference is the rest of the list. A style rule's selector
+			// list is all-or-nothing — one invalid selector invalidates the
+			// lot, which is the specification's own rule — so refusing ":is()"
+			// took "p" down with it in "p, q:is()", and a stylesheet using the
+			// forgiving construct the way it is meant to be used lost rules
+			// that had nothing to do with it.
+			//
+			// Asked before the list is parsed, because parsing an empty one
+			// reports an empty selector — which is right for a rule's own
+			// prelude and is not what this is.
+			ps.Args = nil
+			out.Pseudos = append(out.Pseudos, ps)
+			return i + 1, "", true
+		}
 		args, all := p.list(v.Values, depth+1)
 		// :is() and :where() are forgiving: an argument they cannot use is
 		// dropped and the rest stand. :not() is not — the specification says an
@@ -837,9 +891,11 @@ func (p *selParser) pseudo(vals []ComponentValue, i int, out *Compound, depth in
 			return i, "", false
 		}
 		if len(args) == 0 {
-			// Nothing left at all is not forgivable either way: :is() with
-			// nothing matches nothing and :not() with nothing matches
-			// everything, and neither is what was written.
+			// Nothing usable left, which is not the same as nothing written.
+			// :not() with nothing matches everything, the opposite of what was
+			// written; and an :is() whose arguments this engine dropped —
+			// ":is(:hover)" — would silently narrow a rule the author wrote to
+			// match something. Both are refused and both are reported.
 			p.fail(colon.Offset, "\":"+name+"\" has no selector this engine can use")
 			return i, "", false
 		}

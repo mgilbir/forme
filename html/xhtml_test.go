@@ -362,10 +362,23 @@ func TestAPrefixThisEngineCannotResolveIsKept(t *testing.T) {
 	}
 }
 
-// TestANameWithAColonIsNotAPrefixInHTML: the colon is part of a name in XML and
-// is not in HTML, and this is the whole of the difference the tokenizer makes.
+// TestANameWithAColonIsNotAPrefixInHTML: the colon is part of a name in both
+// languages, and what differs is whether it *means* anything.
+//
+// HTML has no namespaces, so its tag-name state ends only at white space, "/"
+// or ">" and a colon is simply a character of the name: "<a:b>" is an element
+// called "a:b", which is what a browser produces and what a stylesheet has to
+// be able to select. XML reads the same characters as a prefix and a local
+// name, and resolveName binds it.
+//
+// This used to admit the colon in XML alone, so an HTML "<o:p>" — the tag a
+// Word document is full of — came out as an element "o" carrying an attribute
+// ":p", and its end tag was reported as one that was never closed.
 func TestANameWithAColonIsNotAPrefixInHTML(t *testing.T) {
-	doc, _, _ := Parse(`<!DOCTYPE html><body><a:b>x</a:b></body>`)
+	doc, errs, ok := Parse(`<!DOCTYPE html><body><a:b>x</a:b><o:p>y</o:p></body>`)
+	if !ok {
+		t.Errorf("an HTML document with prefixed-looking tags was reported: %v", errs)
+	}
 	var names []string
 	var walk func(*Node)
 	walk = func(n *Node) {
@@ -377,11 +390,22 @@ func TestANameWithAColonIsNotAPrefixInHTML(t *testing.T) {
 		}
 	}
 	walk(doc)
-	for _, n := range names {
-		if n == "a:b" {
-			t.Errorf("an HTML document produced the element %q; a colon is not part "+
-				"of a name there, and nothing binds a prefix in HTML", n)
+	for _, want := range []string{"a:b", "o:p"} {
+		found := false
+		for _, n := range names {
+			if n == want {
+				found = true
+			}
 		}
+		if !found {
+			t.Errorf("an HTML document produced %v; %q is one element and the colon "+
+				"is a character of its name", names, want)
+		}
+	}
+	// And nothing bound a prefix: the name is the whole of it, attributes and
+	// all.
+	if got := doc.TextContent(); got != "xy" {
+		t.Errorf("the text is %q, want \"xy\"", got)
 	}
 }
 

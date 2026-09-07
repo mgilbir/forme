@@ -813,7 +813,50 @@ func looksLikeSVG(data []byte) bool {
 	if len(head) > 1024 {
 		head = head[:1024]
 	}
-	return bytes.Contains(head, []byte("<svg")) || bytes.Contains(head, []byte("<SVG"))
+	head = bytes.TrimPrefix(head, []byte("\xef\xbb\xbf")) // a byte order mark
+	head = bytes.TrimLeft(head, " \t\r\n")
+	if len(head) == 0 || head[0] != '<' {
+		// Every binary format this reads begins with bytes of its own — PNG
+		// with an 0x89, JPEG with an 0xFF, GIF with a "G" — and none of them
+		// begins with "<". This used to be a search for "<svg" anywhere in the
+		// first kilobyte, which is a search for three bytes that occur in
+		// compressed data as often as any other three: a PNG with them in its
+		// first chunk was read as a picture this engine cannot draw and
+		// refused.
+		return false
+	}
+	if hasFoldPrefix(head, "<svg") {
+		return true
+	}
+	// A declaration, a comment or a doctype may come first, and the root
+	// element after it. Anything else that begins with "<" is markup that is
+	// not an SVG.
+	if !hasFoldPrefix(head, "<?xml") && !hasFoldPrefix(head, "<!") {
+		return false
+	}
+	for i := 0; i+4 <= len(head); i++ {
+		if hasFoldPrefix(head[i:], "<svg") {
+			return true
+		}
+	}
+	return false
+}
+
+// hasFoldPrefix reports whether b begins with an ASCII prefix, ignoring case.
+func hasFoldPrefix(b []byte, prefix string) bool {
+	if len(b) < len(prefix) {
+		return false
+	}
+	for i := 0; i < len(prefix); i++ {
+		c := b[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		if c != prefix[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // foreign reads an inline <svg> as replaced content.

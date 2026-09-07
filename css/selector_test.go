@@ -475,7 +475,6 @@ func TestMalformedSelectorsAreRefused(t *testing.T) {
 		"a::", "a:", "::", ":",
 		"a::before::after", "a::before b",
 		"a:not()", // nothing to negate
-		"a:is()",
 		"a:nth-child()", "a:nth-child(x)", "a:nth-child(2n of)",
 		"a:lang()", "a:root(x)",
 	}
@@ -566,5 +565,78 @@ func TestSelectorErrorsAreBounded(t *testing.T) {
 	}
 	if len(errs) == 0 {
 		t.Fatal("a list of nothing but refused selectors reported nothing")
+	}
+}
+
+// TestAnEmptyIsIsASelectorThatMatchesNothing.
+//
+// Selectors 4 §3.5 makes :is()'s argument a forgiving selector list, and an
+// empty one is a list of one unknown selector — which matches nothing, and
+// leaves ":is()" a perfectly valid selector.
+//
+// The difference is the rest of the list. A style rule's selector list is
+// all-or-nothing, which is the specification's own rule, so refusing ":is()"
+// took every other selector in the rule down with it: "p, q:is()" lost "p", and
+// a stylesheet using the forgiving construct the way it is meant to be used
+// lost rules that had nothing to do with it.
+func TestAnEmptyIsIsASelectorThatMatchesNothing(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  int
+		what  string
+	}{
+		{"a:is()", 1, "on its own"},
+		{"a:where()", 1, "the other one"},
+		{"p, q:is()", 2, "beside a selector that matches something"},
+		{"p:is(), q", 2, "the other way round"},
+	} {
+		sels, errs, ok := parseSel(t, tc.input)
+		if !ok {
+			t.Errorf("%s: %q was refused: %v", tc.what, tc.input, errs)
+			continue
+		}
+		if len(sels) != tc.want {
+			t.Errorf("%s: %q gave %d selectors, want %d", tc.what, tc.input,
+				len(sels), tc.want)
+		}
+	}
+	// An empty :not() is still refused: it would match everything, which is the
+	// opposite of what was written.
+	if _, _, ok := parseSel(t, "a:not()"); ok {
+		t.Error("\"a:not()\" was accepted; an empty :not() matches everything")
+	}
+}
+
+// TestNothingFollowsAPseudoElementInItsOwnCompound.
+//
+// Selectors 4 §3.3: a pseudo-element comes after the compound selector, and
+// only a pseudo-class from a short list may follow it. The check across a
+// combinator was there and the one inside a compound was not, so
+// "a::before.foo" was accepted and then *reordered*: the class went into the
+// same compound as the pseudo-element and was matched against the element
+// itself, so the rule applied to every <a> of that class rather than to none.
+func TestNothingFollowsAPseudoElementInItsOwnCompound(t *testing.T) {
+	for _, input := range []string{
+		"a::before.foo",
+		"a::before#bar",
+		"a::before[href]",
+		"a::beforespan",
+		"a::first-line.foo",
+	} {
+		if _, _, ok := parseSel(t, input); ok {
+			t.Errorf("%q was accepted; nothing may follow a pseudo-element in its "+
+				"own compound", input)
+		}
+	}
+	// And the things that legitimately follow one still do.
+	for _, input := range []string{
+		"a::before",
+		"a::first-line",
+		"a.foo::before",
+		"a::before, b",
+	} {
+		if _, errs, ok := parseSel(t, input); !ok {
+			t.Errorf("%q was refused: %v", input, errs)
+		}
 	}
 }

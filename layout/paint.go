@@ -22,7 +22,7 @@ import (
 //
 // It is also why the coordinates here are still CSS's: origin at the top left,
 // y increasing downwards, lengths in layout units. The flip to PDF's bottom-left
-// origin and the conversion to points happen once, in pdfout, and a coordinate
+// origin and the conversion to points happen once, in the backend, and a coordinate
 // system that changed halfway through would make every sign error plausible.
 
 // Op is one primitive of the display list.
@@ -312,10 +312,10 @@ func (TileImage) isOp() {}
 //
 // # What is not done
 //
-// Opacity and transforms also create stacking contexts and are not implemented,
-// so neither appears here, and step 2 is a background image, which nothing draws
-// yet. Every other step of §E.2 is present, reduced to the primitives this engine
-// emits.
+// A transform creates a stacking context and is not implemented, so it does not
+// appear here. Opacity does and is: see dimming, which works out what fraction
+// of each fragment's own marks reaches the page and which box asked for it.
+// Every step of §E.2 is present, reduced to the primitives this engine emits.
 func Paint(root *Fragment) []Op { return PaintReporting(root, nil) }
 
 // PaintReporting is Paint, with the findings the painting itself raises.
@@ -1519,7 +1519,6 @@ func (p *painter) decorate(run TextRun, at Point, turn runTurn, over bool) {
 	if len(run.Decorations) == 0 || run.Width <= 0 {
 		return
 	}
-	metrics := decorationMetricsFor(run.Face, run.Size)
 	for _, d := range run.Decorations {
 		if (d.Kind == decorationLineThrough) != over {
 			continue
@@ -1539,9 +1538,11 @@ func (p *painter) decorate(run TextRun, at Point, turn runTurn, over bool) {
 		// *declaring* box's, for the reason its colour and its height are: a
 		// decoration is drawn across what it crosses without paying attention
 		// to it, so a thickness set on the paragraph is one weight of line
-		// under words at three sizes.
+		// under words at three sizes. Where the box said neither, its own
+		// face's answer is carried on the decoration — a face is not something
+		// this stage can ask.
 		band := decorationBand(d.Kind, 0, run.Width, d.Shift.Sub(run.Shift),
-			asDeclared(metrics, d))
+			asDeclared(d))
 		if band.Empty() {
 			continue
 		}
@@ -1622,8 +1623,12 @@ func (p *painter) color(b *Box, property string) (style.RGBA, bool) {
 	}
 	if strings.EqualFold(raw, "currentcolor") {
 		if property == "color" {
-			// A "color: currentcolor" is circular; the initial value breaks it,
-			// which is what the specification says to do.
+			// The cascade resolves this one: CSS Color 4 §7.2 makes
+			// "currentcolor" on "color" itself an "inherit", and inheritance is
+			// the cascade's. A computed style therefore never carries it here,
+			// and what is left is a box whose style a caller assembled by hand.
+			// The initial value is the only answer available with no parent to
+			// ask, and it is a backstop rather than the rule.
 			return style.RGBA{A: 1}, true
 		}
 		return p.color(b, "color")

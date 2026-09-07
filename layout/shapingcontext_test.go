@@ -1,10 +1,9 @@
 package layout
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
+	"github.com/mgilbir/forme/fonttest"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -27,14 +26,7 @@ import (
 // ids drawn, in order.
 func arabicDoc(t *testing.T, markup, css string) []int {
 	t.Helper()
-	dir := os.Getenv("NOTO_FONTS")
-	if dir == "" {
-		t.Skip("set NOTO_FONTS (or run `make test-wpt`) for a face that joins")
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "NotoSansArabic-Regular.ttf"))
-	if err != nil {
-		t.Skip("no Arabic face: ", err)
-	}
+	data := fonttest.NotoFile(t, "NotoSansArabic-Regular.ttf")
 	res := &fileResolver{files: map[string][]byte{"ar.ttf": data}}
 	ops := paintWith(t, res, `<div id="d" dir="rtl">`+markup+`</div>`,
 		`@font-face { font-family: Joins; src: url(ar.ttf) }
@@ -204,14 +196,7 @@ func TestThePaddingThatIsBetweenThemIsTheOneThatCounts(t *testing.T) {
 // from widths measured without it is filled to the wrong widths, and the page
 // then overflows or stops short with nothing in either measurement to say so.
 func TestAJoinedWordIsNarrowerThanLettersApart(t *testing.T) {
-	dir := os.Getenv("NOTO_FONTS")
-	if dir == "" {
-		t.Skip("set NOTO_FONTS (or run `make test-wpt`) for a face that joins")
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "NotoSansArabic-Regular.ttf"))
-	if err != nil {
-		t.Skip("no Arabic face: ", err)
-	}
+	data := fonttest.NotoFile(t, "NotoSansArabic-Regular.ttf")
 	width := func(markup, css string) float64 {
 		t.Helper()
 		res := &fileResolver{files: map[string][]byte{"ar.ttf": data}}
@@ -364,14 +349,7 @@ func TestSomethingInvisibleThatTakesRoomStillBreaksShaping(t *testing.T) {
 // is what makes any of this observable.
 func joiningFace(t *testing.T) *shape.Face {
 	t.Helper()
-	dir := os.Getenv("NOTO_FONTS")
-	if dir == "" {
-		t.Skip("set NOTO_FONTS (or run `make test-wpt`) for a face that joins")
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "NotoSansArabic-Regular.ttf"))
-	if err != nil {
-		t.Skip("no Arabic face: ", err)
-	}
+	data := fonttest.NotoFile(t, "NotoSansArabic-Regular.ttf")
 	face, err := shape.Load(data)
 	if err != nil {
 		t.Fatal(err)
@@ -380,4 +358,87 @@ func joiningFace(t *testing.T) *shape.Face {
 		t.Skip("the face here does not join")
 	}
 	return face
+}
+
+// arabicFaceData is the joining face these tests use, and the face itself, so
+// that a test can ask it which glyph a character is.
+func arabicFaceData(t *testing.T) ([]byte, *shape.Face) {
+	t.Helper()
+	data := fonttest.NotoFile(t, "NotoSansArabic-Regular.ttf")
+	f, err := shape.Load(data)
+	if err != nil {
+		t.Fatalf("the Arabic face did not load: %v", err)
+	}
+	return data, f
+}
+
+// uyghurDoc is arabicDoc with the language declared, which is what turns on
+// §6.3's tailoring.
+func uyghurDoc(t *testing.T, markup, css string) []int {
+	t.Helper()
+	data, _ := arabicFaceData(t)
+	res := &fileResolver{files: map[string][]byte{"ar.ttf": data}}
+	ops := paintWith(t, res, `<div id="d" dir="rtl" lang="ug">`+markup+`</div>`,
+		`@font-face { font-family: Joins; src: url(ar.ttf) }
+		 #d { font-family: Joins; font-size: 20px; hyphens: manual } `+css)
+	var out []int
+	for _, op := range ops {
+		v, ok := op.(DrawText)
+		if !ok {
+			continue
+		}
+		glyphs, _ := ShapedGlyphs(v)
+		for _, g := range glyphs {
+			out = append(out, g.GID)
+		}
+	}
+	return out
+}
+
+// TestAHyphenatedWordKeepsItsJoiningFormsAcrossTheBreak is CSS Text §6.3's
+// note, which is a claim about a *line* break rather than about an element
+// boundary:
+//
+//	when shaping scripts such as Arabic are allowed to break within words due
+//	to hyphenation, the characters are still shaped as if the word were not
+//	broken
+//
+// An engine that shaped a line at a time would have to be told in the text
+// that the word goes on — a zero width joiner at the head of the continuation,
+// which is what paragraph.Orthography used to carry and nothing read. This one
+// settles the shaping context over the paragraph's runs before any line is
+// filled, so the continuation already sees the word it belongs to.
+//
+// That is the guarantee the joiner would have provided, and it is asserted
+// here so that it stays one: the broken word draws exactly the glyphs of the
+// unbroken word, plus the tatweel the language prints at the break.
+func TestAHyphenatedWordKeepsItsJoiningFormsAcrossTheBreak(t *testing.T) {
+	_, face := arabicFaceData(t)
+	tatweel, ok := face.GlyphID(0x0640)
+	if !ok {
+		t.Skip("the face has no tatweel")
+	}
+	whole := uyghurDoc(t, ain+ain+ain+ain, "#d { width: 400px }")
+	broken := uyghurDoc(t, ain+ain+"&shy;"+ain+ain, "#d { width: 28px }")
+	if len(broken) != len(whole)+1 {
+		t.Fatalf("the broken word draws %d glyphs %v and the whole one %d %v; it "+
+			"should draw the same letters and one tatweel",
+			len(broken), broken, len(whole), whole)
+	}
+	rest, removed := make([]int, 0, len(whole)), false
+	for _, g := range broken {
+		if g == tatweel && !removed {
+			removed = true
+			continue
+		}
+		rest = append(rest, g)
+	}
+	if !removed {
+		t.Fatalf("the broken word drew %v and none of it is the tatweel (glyph %d)",
+			broken, tatweel)
+	}
+	if !sameGlyphs(rest, whole) {
+		t.Errorf("broken %v (tatweel removed: %v), whole %v — a letter took a "+
+			"different form on one side of the break", broken, rest, whole)
+	}
 }

@@ -62,6 +62,23 @@ func greekUppercase(text string) string {
 			// A character with no tailoring of its own, which is every
 			// unaccented letter — and is where the added dialytika lands, since
 			// a plain iota is exactly what needs one.
+			//
+			// It takes the mapping it would have taken in any other run, which
+			// is the *full* one. A Greek-tagged run is still a run of text: a
+			// German word in it uppercases to STRASSE and a Georgian one is not
+			// uppercased at all, exactly as they would be under any other
+			// language. Reading only unicode.ToUpper here left the ß standing
+			// in the middle of the capitals.
+			switch s, has := lookupFullCase(r, fullUppercase[:]); {
+			case isMkhedruli(r):
+				out.WriteRune(r)
+				lostAccent = false
+				continue
+			case has:
+				out.WriteString(s)
+				lostAccent = false
+				continue
+			}
 			upper = unicode.ToUpper(r)
 			dropped = false
 		}

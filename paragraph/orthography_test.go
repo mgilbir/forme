@@ -59,7 +59,7 @@ func TestHungarianWritesADoubledDigraphOutOnBothSides(t *testing.T) {
 			t.Errorf("%q|%q: restored %q, want %q — %s",
 				tc.before, tc.after, got.Restored, tc.want, tc.what)
 		}
-		if got.Character != "" || got.Dropped != 0 || got.Lead != "" {
+		if got.Character != "" || got.Dropped != 0 {
 			t.Errorf("%q|%q: Hungarian asked for more than a spelling change: %+v",
 				tc.before, tc.after, got)
 		}
@@ -91,7 +91,7 @@ func TestPinyinDropsTheSyllableSeparator(t *testing.T) {
 			t.Errorf("tú|%q: dropped %d bytes, want %d — %s",
 				tc.after, got.Dropped, tc.want, tc.what)
 		}
-		if got.Restored != "" || got.Character != "" || got.Lead != "" {
+		if got.Restored != "" || got.Character != "" {
 			t.Errorf("tú|%q: pinyin asked for more than a character dropped: %+v",
 				tc.after, got)
 		}
@@ -108,9 +108,9 @@ func TestUyghurHyphenatesWithATatweelAndKeepsTheLettersJoined(t *testing.T) {
 	if got.Character != "ـ" {
 		t.Errorf("the hyphen is %q, want a tatweel", got.Character)
 	}
-	if got.Restored != "‍" || got.Lead != "‍" {
-		t.Errorf("the joiners are %q and %q, want one either side of the break",
-			got.Restored, got.Lead)
+	if got.Restored != "‍" {
+		t.Errorf("the joiner before the hyphen is %q, want a zero width joiner",
+			got.Restored)
 	}
 	if got.Dropped != 0 {
 		t.Errorf("Uyghur dropped %d bytes; it takes nothing away", got.Dropped)
@@ -120,9 +120,15 @@ func TestUyghurHyphenatesWithATatweelAndKeepsTheLettersJoined(t *testing.T) {
 	if got := OrthographyUyghur.HyphenateBetween("abc", "دى"); got.Any() {
 		t.Errorf("after Latin: %+v, want nothing", got)
 	}
-	if got := OrthographyUyghur.HyphenateBetween("دامي", "abc"); got.Lead != "" {
-		t.Errorf("before Latin: the joiner is %q, want none — there is nothing "+
-			"on the far side for it to join to", got.Lead)
+	// And the far side of the break asks for nothing at all, whatever is there.
+	// §6.3's note is written for an engine that shapes a line at a time; this
+	// one settles the shaping context over the paragraph before any line is
+	// filled, so the continuation already sees the word it belongs to. See
+	// uyghurTatweel.
+	for _, after := range []string{"دى", "abc", ""} {
+		if got := OrthographyUyghur.HyphenateBetween("دامي", after); got.Dropped != 0 {
+			t.Errorf("before %q: Uyghur dropped %d bytes, want 0", after, got.Dropped)
+		}
 	}
 }
 

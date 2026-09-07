@@ -640,9 +640,29 @@ func TestMixedIsWhicheverOrientationTheTextNeeds(t *testing.T) {
 	if got := textInk(plain[0]).H.Px(); got != 24 {
 		t.Errorf("two characters lying along the line reach %gpx, want 24", got)
 	}
-	if got := textInk(wide[0]).H.Px(); got != 40 {
+	// Measured across every run of the upright box rather than in the first of
+	// them: a fullwidth letter is UAX #14's class ID and breaks on both sides,
+	// so the two characters are two typographic units and may be drawn as two
+	// runs. How far the text reaches is the question, not how it was divided.
+	if got := extentDown(wide); got != 40 {
 		t.Errorf("two characters standing upright reach %gpx, want 40 — an em each", got)
 	}
+}
+
+// extentDown is how far a set of runs reaches down the line, first ink to last.
+func extentDown(runs []DrawText) float64 {
+	top, bottom := 0.0, 0.0
+	for i, r := range runs {
+		ink := textInk(r)
+		lo, hi := ink.Y.Px(), ink.Y.Px()+ink.H.Px()
+		if i == 0 || lo < top {
+			top = lo
+		}
+		if i == 0 || hi > bottom {
+			bottom = hi
+		}
+	}
+	return bottom - top
 }
 
 // TestAVerticalBlockWithNoWidthIsAsWideAsItsLinesStack.

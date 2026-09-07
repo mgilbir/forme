@@ -1,6 +1,11 @@
-// Package render lays HTML and CSS out onto a PDF page.
+// Package layout lays HTML and CSS out onto a page and says what it drew.
 //
-// This file is its guardrail vocabulary, and it exists before the layout engine
+// What comes out is a display list — text, rectangles and pictures, in the
+// page's own coordinates — and the findings beside it. Nothing here writes a
+// file: a backend takes the ops and puts them somewhere, and everything above
+// that line is the same whichever it is. See Compose.
+//
+// This file is the guardrail vocabulary, and it exists before the layout engine
 // on purpose. §9 of the rendering proposal asks for the reporting layer to land
 // *with* the engine rather than after it, and gives the reason: a reporting
 // layer retrofitted onto a finished engine is how it becomes decorative. The
@@ -75,6 +80,17 @@ const (
 	// for the text is the rule below, and the two are separate because one is a
 	// gap and the other is CSS working.
 	RuleFontFallback Rule = "font-fallback"
+	// RuleNoFace is the set having no face at all — not the requested family,
+	// not the initial one, nothing.
+	//
+	// It is separate from RuleFontFallback because it is a different fact and a
+	// different severity. A fallback is CSS working: the family asked for was
+	// not there, another one set the text, and the page differs in its metrics.
+	// This is the engine having nothing to set text with, so no text is drawn
+	// at all — a page that is blank where its words should be, which is the one
+	// outcome worth refusing outright.
+	RuleNoFace Rule = "no-face"
+
 	// RuleFontSubstituted is a family that resolved to a face with no glyph for
 	// the text it was asked to set, so font matching went on to another face.
 	//
@@ -209,11 +225,13 @@ const (
 
 	// RuleLimit is a resource guard that tripped, or a run that was cancelled.
 	//
-	// It is spelled the same as internal/finding.LimitRule, and deliberately so:
-	// every other part of pdf0 already reports "we stopped short" under that
-	// identifier, and a caller that distinguishes "the input is bad" from
-	// "pdf0 could not finish" should not have to learn a second spelling for
-	// the second one.
+	// "limit" and not "truncated" or "budget", and deliberately so: a caller
+	// that distinguishes "the input is bad" from "the engine could not finish"
+	// wants one identifier for the second, and every guard in this repository
+	// that stops short reports under this one.
+	//
+	// It is spelled to match the validators this engine's findings collect
+	// beside — see Finding, which is shaped for the same reason.
 	RuleLimit Rule = "limit"
 )
 
@@ -303,6 +321,10 @@ var defaultSeverity = map[Rule]Severity{
 	// was used. Refusing to produce the document over it would be a default
 	// turned off wholesale by anyone whose fonts are woff2.
 	RuleFontUndecodable: Warn,
+	// Nothing to set text in is not a degraded page, it is an empty one. A
+	// caller shown a blank sheet with no finding on it has no way to tell that
+	// from a document that said nothing.
+	RuleNoFace: Error,
 	// A self-check: this firing means the scale computation is wrong, and a
 	// document produced from a wrong scale is worse than none.
 	RuleOverflowPage:  Error,
@@ -369,11 +391,14 @@ func AtCSS(offset int) Source { return Source{HTMLOffset: -1, CSSOffset: offset}
 
 // Finding is one guardrail firing.
 //
-// It satisfies pdf0's Violation interface — error, RuleID and ObjectNum — so
-// findings from a render collect into one slice alongside those from
-// ValidatePDFA and ValidatePDFUA, which is the whole point of that interface.
-// The interface is satisfied structurally and is not imported here, so this
-// package does not depend on the one that documents it.
+// It satisfies a Violation interface — error, RuleID and ObjectNum — so that a
+// consumer collecting findings from several stages puts these in the same slice
+// as the rest. That interface belongs to whatever consumes a render and is
+// deliberately not imported: this package does not depend on the one that
+// documents it, and satisfying it structurally is what keeps that true.
+//
+// Which is why the three methods are pinned by a test that declares the shape
+// locally. See TestFindingSatisfiesViolation.
 //
 // ObjectNum is always 0, which the interface already documents as "not tied to a
 // specific object": a layout finding is about a paragraph in the source, not
@@ -464,7 +489,7 @@ var unsupportedRules = map[Rule]bool{
 // not implement.
 func (f Finding) Unsupported() bool { return unsupportedRules[f.Rule] }
 
-// RuleID is the identifier of the violated rule, for pdf0.Violation.
+// RuleID is the identifier of the violated rule, for the Violation interface.
 func (f Finding) RuleID() string { return string(f.Rule) }
 
 // ObjectNum is 0: a layout finding is not tied to a PDF object.
@@ -541,8 +566,16 @@ func (r *Recorder) ReportDetail(f Finding) bool {
 	// Deduplicate on everything a reader would use to tell two findings apart.
 	// Two identical messages about two different elements are two findings; two
 	// identical messages about the same place are one.
+	//
+	// The *file* is one of those things and the offset is not. A stylesheet that
+	// uses one unimplemented property four hundred times is one thing to be told
+	// and four hundred offsets to be told it at, which is what the count beside
+	// the list is for — but the same mistake in two stylesheets is two mistakes,
+	// in two files, and the second was silently dropped for having the same
+	// words as the first. An author fixing the one they were shown found the
+	// finding still there.
 	key := string(f.Rule) + "\x00" + f.Message + "\x00" + f.Path + "\x00" +
-		f.Property + "\x00" + f.Selector
+		f.Property + "\x00" + f.Selector + "\x00" + f.Source.Sheet
 	if r.seen[key] {
 		return severity == Error
 	}
@@ -559,9 +592,9 @@ func (r *Recorder) ReportDetail(f Finding) bool {
 // Findings returns what was recorded, in a deterministic order.
 //
 // The order is by rule, then by where in the input the finding came from, then
-// by message — the same shape internal/finding.Sort gives every validator,
-// because two runs over the same document must produce the same slice and
-// several of the stages above range over maps.
+// by message. Two runs over the same document must produce the same slice, and
+// several of the stages above range over maps, so the order is imposed here
+// rather than left to whatever the walk happened to do.
 func (r *Recorder) Findings() []Finding {
 	out := append([]Finding(nil), r.findings...)
 	sort.SliceStable(out, func(i, j int) bool {
@@ -597,3 +630,13 @@ func (r *Recorder) Truncated() bool { return r.truncated }
 // the finding once, which is more useful than either the one or the four hundred
 // on their own.
 func (r *Recorder) Count(rule Rule) int { return r.counts[rule] }
+
+// Counts is every rule that fired and how often, copied so that a caller
+// holding it cannot change what the recorder goes on counting.
+func (r *Recorder) Counts() map[Rule]int {
+	out := make(map[Rule]int, len(r.counts))
+	for rule, n := range r.counts {
+		out[rule] = n
+	}
+	return out
+}

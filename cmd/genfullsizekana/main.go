@@ -31,6 +31,7 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"go/format"
 	"os"
@@ -46,11 +47,20 @@ import (
 var smallKana = regexp.MustCompile(`^((?:HALFWIDTH )?(?:HIRAGANA|KATAKANA) LETTER )SMALL (.+)$`)
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: genfullsizekana <UnicodeData.txt>")
+	// UnicodeData.txt is the one file in the database with no header at all —
+	// it is pure data — so unlike every other generator here this one cannot
+	// read the release it was handed and has to be told. The Makefile fills it
+	// in from UNICODE_VERSION, which is the variable that decides what `make
+	// ucd` fetches. It used to be the string "17.0.0", printed whatever the
+	// file held.
+	version := flag.String("version", "", "the Unicode version the file came from")
+	flag.Parse()
+	args := flag.Args()
+	if len(args) != 1 || *version == "" {
+		fmt.Fprintln(os.Stderr, "usage: genfullsizekana -version <X.Y.Z> <UnicodeData.txt>")
 		os.Exit(2)
 	}
-	f, err := os.Open(os.Args[1])
+	f, err := os.Open(args[0])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -108,7 +118,7 @@ func main() {
 
 package paragraph
 
-// The full-size form of every small kana. Unicode 17.0.0.
+// The full-size form of every small kana. Unicode %s.
 //
 // %d of them, found by their names — see cmd/genfullsizekana for why that is
 // the rule and what checks it. Sorted by the character transformed. The comment
@@ -116,7 +126,7 @@ package paragraph
 // for.
 
 var fullSizeKana = [...]widthPair{
-`, len(pairs))
+`, *version, len(pairs))
 	for _, p := range pairs {
 		fmt.Fprintf(&b, "\t{%#04X, %#04X}, // %s\n", p.from, p.to, p.name)
 	}

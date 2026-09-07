@@ -5,6 +5,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -204,5 +205,134 @@ func TestOneFontSetServesManyLayoutsAtOnce(t *testing.T) {
 					g, i)
 			}
 		}
+	}
+}
+
+// TestOneFontSetSetsTextFromManyLayoutsAtOnce is the assertion the test above
+// leaves out, and the one that mattered.
+//
+// TestOneFontSetServesManyLayoutsAtOnce asks a set for faces from many
+// goroutines, which is not what a layout does with a set: it takes a face and
+// then *sets text in it*. A face records the glyphs it was asked for, because
+// that is what a subset is computed from, and it records them while measuring —
+// so the first word of the first paragraph writes to the face, and two
+// documents sharing a set write to the same map. It reported a data race on the
+// first document that had any text in it, which is every document.
+//
+// Documents rather than bare Face calls, and different documents rather than
+// one repeated, for the reason raceDocuments gives.
+func TestOneFontSetSetsTextFromManyLayoutsAtOnce(t *testing.T) {
+	set := StandardFonts()
+	alone := make([][]string, len(raceDocuments))
+	for i, d := range raceDocuments {
+		alone[i] = drawnTextOf(d.html, d.css, set)
+		if len(alone[i]) == 0 {
+			t.Fatalf("%s drew no text on its own; the fixture says nothing", d.name)
+		}
+	}
+
+	const rounds = 4
+	got := make([][]string, len(raceDocuments)*rounds)
+	var wg sync.WaitGroup
+	for r := range rounds {
+		for i, d := range raceDocuments {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				got[r*len(raceDocuments)+i] = drawnTextOf(d.html, d.css, set)
+			}()
+		}
+	}
+	wg.Wait()
+
+	for k, out := range got {
+		i := k % len(raceDocuments)
+		if strings.Join(out, "\x00") != strings.Join(alone[i], "\x00") {
+			t.Errorf("%s composed beside the others drew %q and alone drew %q — "+
+				"two documents are sharing a face", raceDocuments[i].name, out, alone[i])
+		}
+	}
+}
+
+// drawnTextOf composes a document through a given set and returns the text of
+// every run drawn, which is the whole of what the shaping produced.
+func drawnTextOf(htmlSrc, cssSrc string, set FontSet) []string {
+	out := []string{}
+	for _, op := range Compose(Input{
+		HTML: htmlSrc, CSS: []Stylesheet{{Source: cssSrc}}, Fonts: set,
+	}, Options{MinScale: 0.01}).Ops {
+		if t, ok := op.(DrawText); ok {
+			out = append(out, t.Text)
+		}
+	}
+	return out
+}
+
+// TestAFaceRecordsOneDocumentsGlyphs is the other half of the same defect, and
+// the half no detector would have found.
+//
+// The record of which glyphs were set is what a subset is built from and what
+// /CIDSet is written from. Kept on a face the caller's library owns, it
+// accumulated over every document the process had ever set — so a document
+// asking for "a" embedded a font carrying the "z" of the document before it,
+// and the set describing its glyphs described neither document's.
+func TestAFaceRecordsOneDocumentsGlyphs(t *testing.T) {
+	set := StandardFonts()
+	library, ok := set.Face("serif", false, false)
+	if !ok {
+		t.Fatal("the standard set has no serif face")
+	}
+	if n := len(library.Used()); n != 0 {
+		t.Fatalf("the library's face already records %d glyphs", n)
+	}
+
+	faceOf := func(src string) *shape.Face {
+		t.Helper()
+		for _, op := range Compose(Input{HTML: src, Fonts: set}, Options{}).Ops {
+			if d, ok := op.(DrawText); ok && d.Face != nil {
+				return d.Face
+			}
+		}
+		t.Fatalf("%q drew no text", src)
+		return nil
+	}
+	first := faceOf(`<p style="font-family:serif">aaa</p>`)
+	second := faceOf(`<p style="font-family:serif">zzz</p>`)
+
+	if first == second {
+		t.Error("two documents were set in the same face, so each holds the other's glyphs")
+	}
+	if first == library || second == library {
+		t.Error("a document was set in the caller's own face, so the library accumulates " +
+			"every document the process ever set")
+	}
+	if n := len(library.Used()); n != 0 {
+		t.Errorf("the caller's face records %d glyphs after two documents were composed", n)
+	}
+
+	glyphOf := func(f *shape.Face, r rune) int {
+		t.Helper()
+		gid, ok := f.GlyphID(r)
+		if !ok {
+			t.Fatalf("the serif face has no glyph for %q", r)
+		}
+		return gid
+	}
+	has := func(f *shape.Face, gid int) bool {
+		for _, g := range f.Used() {
+			if g == gid {
+				return true
+			}
+		}
+		return false
+	}
+	if !has(first, glyphOf(first, 'a')) {
+		t.Error("the first document's face does not record the letter it set")
+	}
+	if has(first, glyphOf(first, 'z')) {
+		t.Error("the first document's face records a letter only the second document set")
+	}
+	if has(second, glyphOf(second, 'a')) {
+		t.Error("the second document's face records a letter only the first document set")
 	}
 }

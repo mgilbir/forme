@@ -60,16 +60,16 @@ import (
 // contains no such character is not copied at all: it takes the same
 // strings.ToUpper it always did.
 //
-// # What is still not done
+// # The conditional mappings
 //
-// The conditional mappings. Three of them are language tailorings — Turkish and
-// Azeri map i and I to their dotted and dotless forms, Lithuanian keeps a dot
-// above a lowercased vowel — and applying one needs the element's language,
-// which the box tree does not carry down to here. The fourth is Final_Sigma: a
-// lowercased Σ is ς at the end of a word and σ inside one, which needs the
-// characters either side rather than a table. Both are visible faults — a
-// reader sees the wrong letter — rather than the silent kind this engine's
-// guardrails exist for.
+// All four are applied, and each needed something the tables above do not have.
+// Three are language tailorings — Turkish and Azeri map i and I to their dotted
+// and dotless forms, Lithuanian keeps a dot above a lowercased vowel — and take
+// the element's declared language, which reaches here as a Language. The fourth
+// is Final_Sigma: a lowercased Σ is ς at the end of a word and σ inside one,
+// which needs the characters either side rather than a table. See
+// localecasing.go for all four, and greekcasing.go for the tailoring that is a
+// whole-run rule rather than a per-character one.
 //
 // # What is done and looks like a fault
 //

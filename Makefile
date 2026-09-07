@@ -1,4 +1,4 @@
-.PHONY: verify-fonts test-corpora linebreak vertical dictionaries test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors noto-fonts clean-noto-fonts wpt test-wpt clean-wpt varinstance test-varinstance
+.PHONY: ucd verify-fonts test-corpora linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors noto-fonts clean-noto-fonts wpt test-wpt clean-wpt varinstance test-varinstance
 
 test:
 	gofmt -l . | grep -v '^testdata/' && exit 1 || true
@@ -9,21 +9,37 @@ test:
 # of it runs at all.
 #
 # "test" above hands `go test` an empty environment, and a test that needs a Noto
-# face or the reftest checkout answers that by skipping. A hundred and fifty-six
-# of them do — every test that loads a fallback face, every reftest, the two
-# colour oracles, and the grapheme suite's own teeth — and only two were reached
-# by anything else the gate ran. They passed; nothing was checking that they
-# still did, which is the same as not having them.
+# face or the reftest checkout answers that by skipping. Most of the suite does —
+# every test that loads a fallback face, every reftest, the two colour oracles —
+# and only two were reached by anything else the gate ran. They passed; nothing
+# was checking that they still did, which is the same as not having them.
+#
+# The count that stood here was written once and never remeasured, which is the
+# fault this whole paragraph is about; it is left out rather than replaced with a
+# number that will be wrong again.
 #
 # So this is where they run. It fetches what each corpus needs first, because a
-# target that quietly skips is the thing it was written to stop.
-test-corpora: wpt noto-fonts css-tests bidi-tests grapheme-tests $(HTML_ENTITIES)
+# target that quietly skips is the thing it was written to stop — and it names
+# every one of them, because a variable that is set and wrong is now a failure
+# rather than a skip, which is only worth having if the variable is set.
+#
+# notocjk and ucd were missing from both lists. The CID-keyed CFF tests read a
+# real CJK face and nothing fetched one, so they skipped here and in CI under a
+# step whose own comment says a skip there is worse than a failure; and the
+# generator tables are checked by regenerating them, which needs the database.
+CORPUS_ENV = \
 	WPT_TESTS="$(abspath $(WPT_DIR))" \
 	NOTO_FONTS="$(abspath $(NOTO_DIR))" \
+	NOTO_CJK="$(abspath $(CJK_DIR))" \
 	CSS_PARSING_TESTS="$(abspath $(CSS_TESTS_DIR))" \
 	UNICODE_BIDI_TESTS="$(abspath $(BIDI_DIR))" \
-	UNICODE_GRAPHEME_TESTS="$(abspath $(GRAPHEME_DIR))" \
-	  go test -count=1 ./...
+	UNICODE_GRAPHEME_TESTS="$(abspath $(GRAPHEME_DIR))"
+
+CORPORA = wpt noto-fonts notocjk ucd css-tests bidi-tests grapheme-tests $(HTML_ENTITIES)
+
+test-corpora: $(CORPORA)
+	$(MAKE) verify-fonts
+	$(CORPUS_ENV) go test -count=1 ./...
 
 # The same suite under the race detector.
 #
@@ -34,8 +50,14 @@ test-corpora: wpt noto-fonts css-tests bidi-tests grapheme-tests $(HTML_ENTITIES
 # happened: a new memo, a package-level var, a font set that caches.
 .PHONY: race
 
-race:
-	go test -count=1 -race ./...
+# With every corpus in the environment, for the same reason test-corpora has
+# them: an empty environment leaves the font sets, the shared block-glyph
+# registry and every document that loads an @font-face out of the run, and those
+# are the shared things the detector is here to watch. It ran `go test -race`
+# over the tests that need nothing fetched, which are the ones that share
+# nothing.
+race: $(CORPORA)
+	$(CORPUS_ENV) go test -count=1 -race ./...
 
 # Every fetch in this file goes through FETCH rather than through a bare curl.
 #
@@ -133,13 +155,114 @@ hbfuzz:
 # property files plus the engine's corrections. See cmd/genuse.
 #
 #	make useable UCD=/path/to/unpacked/ucd
-UCD ?= testdata/ucd
+#
+# UCD_DIR is where this file would put one; UCD is where a generator reads one
+# from, and is the same place unless a caller says otherwise. The two are
+# separate so that clean-ucd can refuse to remove a directory it did not make.
+UCD_DIR := testdata/ucd
+UCD ?= $(UCD_DIR)
+
+# The database itself, which every generator below reads and nothing fetched.
+#
+# .gitignore said testdata/ucd was "fetched into place for `make useable`" and
+# no target put anything there: nine generator targets each documented as
+# `make thing UCD=/path/to/unpacked/ucd`, and finding unicode.org and unpacking
+# a zip was left to the reader. It was the one corpus in this file that had to
+# be done by hand, and the reason clean-ucd guarded a directory nothing made.
+#
+# Three of those nine could not have run against a database at all — the
+# argument lists had drifted, and nothing was in a position to notice. See
+# cmd/regenerate_test.go, which now runs every one of them.
+#
+# The seventeen files that are read, rather than UCD.zip: the archive is an
+# order of magnitude larger than the files taken from it, unzip is one more
+# thing to have installed, and a file that moves in a new release fails here by
+# name instead of as a "no such file" from inside a generator.
+#
+# The layout is the database's own, subdirectories and all, so that a caller who
+# already has one unpacked can point UCD at it and every target works.
+UCD_FILES := \
+	ArabicShaping.txt \
+	BidiBrackets.txt \
+	BidiMirroring.txt \
+	CompositionExclusions.txt \
+	DerivedCoreProperties.txt \
+	EastAsianWidth.txt \
+	IndicPositionalCategory.txt \
+	IndicSyllabicCategory.txt \
+	LineBreak.txt \
+	PropertyValueAliases.txt \
+	Scripts.txt \
+	SpecialCasing.txt \
+	UnicodeData.txt \
+	VerticalOrientation.txt \
+	auxiliary/GraphemeBreakProperty.txt \
+	emoji/emoji-data.txt \
+	extracted/DerivedBidiClass.txt
+
+ucd: $(UCD_DIR)/.ok
+
+$(UCD_DIR)/.ok:
+	@for f in $(UCD_FILES); do \
+	  mkdir -p $(UCD_DIR)/$$(dirname $$f); \
+	  $(FETCH) -o $(UCD_DIR)/$$f $(UCD_URL)/$$f || exit 1; \
+	done
+	@echo "Unicode $(UNICODE_VERSION) in $(UCD_DIR)"
+	touch $@
+
+# A generator reads the fetched database only when it is the fetched one. A
+# caller who passed UCD= has their own, and fetching over the top of it would be
+# this file taking a decision that is theirs.
+ifeq ($(UCD),$(UCD_DIR))
+UCD_DEP := $(UCD_DIR)/.ok
+else
+UCD_DEP :=
+endif
+
+# The tables the shaper derives from Unicode, which cmd/genuse's table above is
+# only one of. Each was runnable and none was wired up, so the only way to
+# regenerate one was to read its usage line — which named a directory this
+# repository did not have until `make ucd` fetched one.
+#
+#	make shapetables                              # against the fetched database
+#	make shapetables UCD=/path/to/unpacked/ucd    # against one you already have
+shapetables: $(UCD_DEP)
+	go run ./cmd/genscripts $(UCD)/Scripts.txt $(UCD)/PropertyValueAliases.txt \
+	  > shape/scripts.go
+	go run ./cmd/genjoining $(UCD)/ArabicShaping.txt > shape/joining.go
+	go run ./cmd/genignorable $(UCD)/DerivedCoreProperties.txt > shape/ignorabletable.go
+	go run ./cmd/genindic $(UCD)/IndicSyllabicCategory.txt \
+	  $(UCD)/IndicPositionalCategory.txt > shape/indiccategory.go
+	go run ./cmd/genmatra $(UCD)/UnicodeData.txt > shape/indicmatra.go
+	go run ./cmd/genvowel testdata/ms-use/IndicShapingInvalidCluster.txt \
+	  > shape/indicvowel.go
+	go run ./cmd/gencanonical $(UCD)/UnicodeData.txt \
+	  $(UCD)/CompositionExclusions.txt > shape/canonical.go
+	gofmt -w shape/scripts.go shape/joining.go shape/ignorabletable.go \
+	  shape/indiccategory.go shape/indicmatra.go shape/indicvowel.go shape/canonical.go
+
+# The bidirectional character properties, UAX #9. See cmd/genbidi.
+#
+#	make bidi-tables UCD=/path/to/unpacked/ucd
+bidi-tables: $(UCD_DEP)
+	go run ./cmd/genbidi $(UCD)/UnicodeData.txt \
+	  $(UCD)/extracted/DerivedBidiClass.txt \
+	  $(UCD)/BidiBrackets.txt $(UCD)/BidiMirroring.txt > bidi/tables.go
+	gofmt -w bidi/tables.go
+
+# The grapheme cluster properties, UAX #29. See cmd/gensegment.
+#
+#	make grapheme-tables UCD=/path/to/unpacked/ucd
+grapheme-tables: $(UCD_DEP)
+	go run ./cmd/gensegment -version $(UNICODE_VERSION) -ucd $(UCD) \
+	  -out segment/tables.go
+	gofmt -w segment/tables.go
 
 # The characters a line may not begin with, from Unicode's line-breaking
 # property. See cmd/genlinebreak for which of UAX #14's rules are in it.
 #
 #	make linebreak UCD=/path/to/unpacked/ucd
-linebreak:
+linebreak: $(UCD_DEP)
 	go run ./cmd/genlinebreak $(UCD)/LineBreak.txt > paragraph/linebreaktable.go
 	gofmt -w paragraph/linebreaktable.go
 
@@ -147,7 +270,7 @@ linebreak:
 # one, which Go's own case functions cannot express. See cmd/gencasing.
 #
 #	make casing UCD=/path/to/unpacked/ucd
-casing:
+casing: $(UCD_DEP)
 	go run ./cmd/gencasing $(UCD)/SpecialCasing.txt > paragraph/casingtable.go
 	gofmt -w paragraph/casingtable.go
 
@@ -155,8 +278,10 @@ casing:
 # Width, and which characters are Hangul. See cmd/geneastasian.
 #
 #	make eastasian UCD=/path/to/unpacked/ucd
-eastasian:
-	go run ./cmd/geneastasian $(UCD)/EastAsianWidth.txt $(UCD)/Scripts.txt \
+eastasian: $(UCD_DEP)
+	go run ./cmd/geneastasian -version $(UNICODE_VERSION) \
+	  $(UCD)/EastAsianWidth.txt $(UCD)/Scripts.txt \
+	  $(UCD)/UnicodeData.txt $(UCD)/emoji/emoji-data.txt \
 	  > paragraph/eastasiantable.go
 	gofmt -w paragraph/eastasiantable.go
 
@@ -275,7 +400,7 @@ hyphens:
 # this engine can turn on their side. See cmd/genvertical.
 #
 #	make vertical UCD=/path/to/unpacked/ucd
-vertical:
+vertical: $(UCD_DEP)
 	go run ./cmd/genvertical $(UCD)/VerticalOrientation.txt > paragraph/verticaltable.go
 	gofmt -w paragraph/verticaltable.go
 
@@ -283,12 +408,14 @@ vertical:
 # from UnicodeData.txt. See cmd/genfullwidth and cmd/genfullsizekana.
 #
 #	make widths UCD=/path/to/unpacked/ucd
-widths:
-	go run ./cmd/genfullwidth $(UCD)/UnicodeData.txt > paragraph/widthtable.go
-	go run ./cmd/genfullsizekana $(UCD)/UnicodeData.txt > paragraph/kanatable.go
+widths: $(UCD_DEP)
+	go run ./cmd/genfullwidth -version $(UNICODE_VERSION) \
+	  $(UCD)/UnicodeData.txt > paragraph/widthtable.go
+	go run ./cmd/genfullsizekana -version $(UNICODE_VERSION) \
+	  $(UCD)/UnicodeData.txt > paragraph/kanatable.go
 	gofmt -w paragraph/widthtable.go paragraph/kanatable.go
 
-useable:
+useable: $(UCD_DEP)
 	go run ./cmd/genuse \
 		$(UCD)/IndicSyllabicCategory.txt \
 		$(UCD)/IndicPositionalCategory.txt \
@@ -300,8 +427,16 @@ useable:
 		> shape/usetable.go
 	gofmt -w shape/usetable.go
 
+# Only the directory this file fetches into. "make clean-ucd UCD=/path/to/ucd"
+# is the documented way to run a generator against a copy someone already has,
+# and the same variable removing it recursively is a way to lose a directory
+# that was never ours to remove.
 clean-ucd:
-	rm -rf $(UCD)
+	@if [ "$(UCD)" != "$(UCD_DIR)" ]; then \
+	  echo "clean-ucd removes $(UCD_DIR) and nothing else; UCD is $(UCD)" >&2; \
+	  exit 1; \
+	fi
+	rm -rf $(UCD_DIR)
 
 # The broad font sweeps, over two libraries far too large to vendor: every OFL
 # family Google publishes, and Noto's CJK faces.
@@ -408,19 +543,20 @@ $(GRAPHEME_DIR)/.ok:
 	$(FETCH) -o $(GRAPHEME_DIR)/GraphemeBreakTest.txt $(UCD_URL)/auxiliary/GraphemeBreakTest.txt
 	touch $@
 
-# TestTheConformanceSuiteHasTeeth is named as well as matched, because it is the
-# test that plants a defect and checks the conformance sweep above catches it —
-# and "TestGrapheme" does not match its name, so for as long as that was the
-# whole pattern the check on the check never ran.
+# The whole package, because the three tests that matter here are named three
+# different things and a pattern that has to list them is a pattern that will be
+# wrong again. TestTheConformanceSuiteHasTeeth takes each of UAX #29's rules
+# away in turn and requires the sweep to reject the result — it is the check on
+# the check, and it once matched no pattern at all and so never ran.
 test-grapheme: grapheme-tests
 	UNICODE_GRAPHEME_TESTS=$(abspath $(GRAPHEME_DIR)) \
-	  go test -v -run 'TestGrapheme|TestTheConformanceSuiteHasTeeth' -count=1 ./segment
+	  go test -v -count=1 ./segment
 
 clean-grapheme-tests:
 	rm -rf $(GRAPHEME_DIR)
 
 # shallow_at fetches exactly one commit of one repository: no history, no other
-# branches. It came from pdf0 with the corpora below, which are the only things
+# branches. It came from forme with the corpora below, which are the only things
 # here that need it.
 define shallow_at
 	rm -rf $(1)
@@ -438,16 +574,25 @@ endef
 # repository scrapped for guarding nothing. These expectations were written by
 # someone else, from the specification, and three independent parsers
 # (tinycss2, rust-cssparser, Crass) are checked against them. So a disagreement
-# is evidence about pdf0 rather than a restatement of pdf0's own reading.
+# is evidence about forme rather than a restatement of this engine's own reading.
 #
 # Cloned under testdata (gitignored); tests skip if absent, mirroring `make
 # corpus` and `make arlington`.
 CSS_TESTS_DIR := testdata/css-parsing-tests
 
+# The commit, because a corpus is only an oracle if two runs read the same one.
+# This named CSS_TESTS_REF, which nothing ever defined, so the fetch asked for
+# the empty string and took whatever the default branch pointed at that morning
+# — and the number of cases the suite checks is quoted in the README. What held
+# it still was a CI cache keyed on this file, which is to say: any edit here
+# swapped the corpus. The reftest corpus was pinned for exactly that reason;
+# this one was not.
+CSS_TESTS_COMMIT := 203ce36bffd617db7f118c551e32794561fb273d
+
 css-tests: $(CSS_TESTS_DIR)/.ok
 
 $(CSS_TESTS_DIR)/.ok:
-	$(call shallow_at,$(CSS_TESTS_DIR),https://github.com/SimonSapin/css-parsing-tests,$(CSS_TESTS_REF))
+	$(call shallow_at,$(CSS_TESTS_DIR),https://github.com/SimonSapin/css-parsing-tests,$(CSS_TESTS_COMMIT))
 	touch $@
 
 # The path is absolute because `go test ./css` runs with the package directory
@@ -526,7 +671,7 @@ clean-css-colors:
 #
 # Licensing: all three are SIL Open Font License 1.1, which is why they were
 # chosen over DejaVu Sans — it scores better on characters and is under the
-# Bitstream Vera licence instead. As with Ahem, pdf0 neither vendors nor
+# Bitstream Vera licence instead. As with Ahem, forme neither vendors nor
 # redistributes them: they are fetched into this gitignored directory, used only
 # to run the tests, and no font bytes ship in this repository or anything it
 # builds. The licence text is fetched alongside them.
@@ -653,12 +798,12 @@ clean-noto-fonts:
 #
 # A CSS reftest is a pair of documents with the assertion *these two render
 # identically*, and the pair and the claim come from the CSS Working Group. That
-# is what makes it an oracle rather than a restatement of pdf0's own reading —
+# is what makes it an oracle rather than a restatement of this engine's own reading —
 # ADR 0003 records what this repository already learned about the difference.
 # Reftests are also built so that the two documents reach the same rendering by
 # *different* mechanisms, so an engine bug usually moves one and not the other.
 #
-# No browser is needed: pdf0 renders both and compares its own display lists.
+# No browser is needed: forme renders both and compares its own display lists.
 #
 # WPT is enormous, so this is a blobless sparse clone rather than the whole of
 # it. The directories are everything a page laid out *once* can be held to.
@@ -669,7 +814,6 @@ clean-noto-fonts:
 # positioning and z-index are emphatically *in* — they are only dynamic in a
 # viewport that resizes, and this one does not.
 WPT_DIR  := testdata/wpt
-WPT_REF  ?= master
 WPT_DIRS := css/CSS2/normal-flow css/CSS2/box-display css/CSS2/margin-padding-clear \
             css/CSS2/abspos css/CSS2/positioning css/CSS2/visuren css/CSS2/visudet \
             css/CSS2/visufx css/CSS2/floats css/CSS2/floats-clear css/CSS2/tables \
@@ -725,13 +869,13 @@ WPT_DIRS := css/CSS2/normal-flow css/CSS2/box-display css/CSS2/margin-padding-cl
 # Text 4 features it has never claimed.
 
 # "fonts" is there for Ahem.ttf, which a quarter of the suite is written
-# against and which the harness hands to the engine — see render/ahem_test.go
+# against and which the harness hands to the engine — see layout/suitefonts_test.go
 # for why a test font is the only way those assertions can be expressed.
 #
 # Licensing, since it is a font and fonts often are not as free as the code
 # around them: Ahem.ttf is tracked in the web-platform-tests repository, which
 # is under the 3-Clause BSD licence above, and carries no separate licence of
-# its own. pdf0 neither vendors nor redistributes it — it is fetched into this
+# its own. forme neither vendors nor redistributes it — it is fetched into this
 # gitignored directory exactly as the rest of the corpus is, is used only to run
 # the tests, and no font bytes are shipped in this repository or in anything it
 # builds. The exposure is therefore the same as depending on the suite at all,
@@ -839,9 +983,15 @@ $(WPT_DIR)/fonts/NotoSansGeorgian-Regular.ttf: $(WPT_DIR)/.ok $(NOTO_DIR)/.ok
 # 4,624 and printed "this is a layout regression" — which is the one thing a
 # ratchet must never say when it is wrong, because the reading it invites is to
 # lower the number.
+# The corpus checks run beside the ratchet and not somewhere else, because the
+# number the ratchet holds means nothing without them: it is a count of *these*
+# documents, and a checkout at another revision or with another sparse list is a
+# measurement of a different suite. They are named here because "TestWPT" does
+# not match them, so for as long as that was the whole pattern the pin was
+# checked by nothing that anybody ran.
 test-wpt: wpt noto-fonts
 	WPT_TESTS=$(abspath $(WPT_DIR)) NOTO_FONTS=$(abspath $(NOTO_DIR)) \
-	  go test -v -run TestWPT -count=1 ./layout/
+	  go test -v -run 'TestWPT|TestTheCorpus|TestTheReadme' -count=1 ./layout/
 
 clean-wpt:
 	rm -rf $(WPT_DIR)

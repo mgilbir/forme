@@ -157,6 +157,20 @@ func (c *counterState) snapshot() counterValues {
 	return out
 }
 
+// innermost is the value of one counter in the nearest scope holding it, and
+// whether there is one at all.
+//
+// It is what a list item's marker reads, and reading it alone is what keeps the
+// element side of the snapshots to an integer per list item rather than to
+// every counter in the document per element.
+func (c *counterState) innermost(name string) (int, bool) {
+	stack := c.stacks[name]
+	if len(stack) == 0 {
+		return 0, false
+	}
+	return stack[len(stack)-1].value, true
+}
+
 // counterSnapshots is what every box that can name a counter sees.
 //
 // Elements and pseudo-elements are kept apart because they see different things:
@@ -164,7 +178,17 @@ func (c *counterState) snapshot() counterValues {
 // content, and the element it hangs from must not — the pseudo-element is a
 // child of the element, so its scope is nested inside.
 type counterSnapshots struct {
-	elements map[*html.Node]counterValues
+	// elements holds the "list-item" counter of every element that has one in
+	// scope, which is the only counter an element itself can name: its marker's
+	// number. Everything else a document says about a counter is said in a
+	// "content" declaration, and content belongs to a pseudo-element.
+	//
+	// It used to be every counter of every element, taken with the same
+	// snapshot the pseudo-elements get — a map and a slice per counter name per
+	// element, for one integer that a list item might read. Two thousand
+	// elements under a stylesheet naming a thousand counters came to 229 MB of
+	// snapshots, and a document need not have a single list in it.
+	elements map[*html.Node]int
 	pseudo   map[style.PseudoKey]counterValues
 	// quoteDepth is the level of quotation nesting each pseudo-element's content
 	// begins at. It rides along with the counters because it is the same kind of
@@ -216,7 +240,7 @@ func computeCounters(root *html.Node, styles map[*html.Node]style.ComputedStyle,
 	pseudo map[style.PseudoKey]style.ComputedStyle) counterSnapshots {
 
 	out := counterSnapshots{
-		elements:   map[*html.Node]counterValues{},
+		elements:   map[*html.Node]int{},
 		pseudo:     map[style.PseudoKey]counterValues{},
 		quoteDepth: map[style.PseudoKey]int{},
 	}
@@ -264,7 +288,9 @@ func computeCounters(root *html.Node, styles map[*html.Node]style.ComputedStyle,
 			}
 			state.enter(depth)
 			apply(cs, depth)
-			out.elements[n] = state.snapshot()
+			if v, ok := state.innermost("list-item"); ok {
+				out.elements[n] = v
+			}
 			atPseudo(n, "before", depth+1)
 		}
 		for _, child := range n.Children {

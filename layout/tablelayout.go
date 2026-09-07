@@ -320,9 +320,16 @@ func (l *layouter) placeRun(g *tableGrid, run *rowRun) {
 
 // spanValue reads a colspan or rowspan attribute, clamped.
 //
-// An absent, unreadable or negative value is one, which is what HTML says and is
-// the only safe answer: a span of zero would put two cells in one slot and a
-// negative one would walk the column index backwards.
+// By HTML's own rules for parsing a non-negative integer, which read the digits
+// at the front and stop: "2abc" is two, "2.5" is two, and "+2" is two. It used
+// to be strconv.Atoi over the whole string, which refuses all three and made
+// them one — so "colspan=2.5", which is a typo a person makes, silently put the
+// cell in one column and the table's columns out by one from there on. The
+// comment already said "what HTML says"; this is what it says.
+//
+// An absent or unreadable value is one, and so is a negative: a span of zero
+// would put two cells in one slot and a negative one would walk the column
+// index backwards.
 func spanValue(b *Box, name string, limit int) int {
 	if b.Element == nil {
 		return 1
@@ -331,8 +338,8 @@ func spanValue(b *Box, name string, limit int) int {
 	if !ok {
 		return 1
 	}
-	n, err := strconv.Atoi(strings.TrimSpace(raw))
-	if err != nil || n < 0 {
+	n, ok := leadingNonNegative(strings.TrimSpace(raw))
+	if !ok {
 		return 1
 	}
 	if n == 0 && name != "rowspan" {
@@ -344,6 +351,40 @@ func spanValue(b *Box, name string, limit int) int {
 	}
 	return n
 }
+
+// leadingNonNegative is HTML's "rules for parsing non-negative integers": an
+// optional plus, then the digits at the front, and whatever follows them is not
+// this value's business.
+//
+// It stops at the first non-digit rather than refusing the string, which is the
+// whole difference from strconv.Atoi. A value with no digits at all, or one that
+// begins with a minus, is not a non-negative integer and is refused.
+func leadingNonNegative(s string) (int, bool) {
+	if strings.HasPrefix(s, "+") {
+		s = s[1:]
+	}
+	n, digits := 0, 0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < '0' || c > '9' {
+			break
+		}
+		digits++
+		n = n*10 + int(c-'0')
+		if n > maxSpanValue {
+			// Past anything a table can use, and past anything the caller's
+			// limit will keep — so the digits after this one cannot change the
+			// answer and are not read, which is what stops a thousand-digit
+			// attribute from being arithmetic.
+			return maxSpanValue, true
+		}
+	}
+	return n, digits > 0
+}
+
+// maxSpanValue is where reading a span's digits stops. Every caller clamps to
+// its own limit below this; what this bounds is the arithmetic.
+const maxSpanValue = 1 << 20
 
 // spanAttr reads a <col> or <colgroup> span, which is at least one.
 func spanAttr(b *Box) int {
@@ -540,12 +581,13 @@ func (l *layouter) tableColumnDemands(table *Box, s tableSpacing) []tableColumnD
 		if c.colSpan == 1 {
 			continue
 		}
-		bottom, lo, hi, _ := l.cellDemand(c.box)
+		bottom, lo, hi, pct := l.cellDemand(c.box)
 		// The spacing between the columns a cell spans is width the cell gets
 		// for free: a cell two columns wide sits across the gap between them.
 		gaps := s.h.Mul(float64(c.colSpan - 1))
 		spreadDemand(out[c.col:c.col+c.colSpan],
 			bottom.Sub(gaps), lo.Sub(gaps), hi.Sub(gaps))
+		spreadPercent(out[c.col:c.col+c.colSpan], pct)
 	}
 	// §10.4's two limits, applied once the cells have spoken. A column is on the
 	// list the two properties apply to — everything but non-replaced inlines,
@@ -736,6 +778,44 @@ func spreadDemand(cols []tableColumnDemand, floor, min, max style.Unit) {
 	spread(floor, func(d *tableColumnDemand) *style.Unit { return &d.floor })
 	spread(min, func(d *tableColumnDemand) *style.Unit { return &d.min })
 	spread(max, func(d *tableColumnDemand) *style.Unit { return &d.max })
+}
+
+// spreadPercent shares a spanning cell's percentage width over the columns it
+// spans.
+//
+// A cell two columns wide asking for forty per cent is asking those two columns
+// to be forty per cent of the table between them. §17.5.2.2 says nothing about
+// it — it is written for cells that occupy one column — and this discarded the
+// number entirely, so "width: 40%" on a spanning cell did nothing at all while
+// the same declaration on a cell beside it did.
+//
+// Only the shortfall is shared, and by the same weights the widths are: a
+// column already carrying a percentage of its own keeps it, and what is spread
+// is what the cell asks for beyond what the columns already promise.
+func spreadPercent(cols []tableColumnDemand, want float64) {
+	if want <= 0 || len(cols) == 0 {
+		return
+	}
+	var have, weight float64
+	for i := range cols {
+		have += cols[i].percent
+		weight += float64(cols[i].max)
+	}
+	if want <= have {
+		return
+	}
+	short := want - have
+	if weight <= 0 {
+		// No column has any width to weigh, so an equal share is the only
+		// answer that does not favour one of them for no reason.
+		for i := range cols {
+			cols[i].percent += short / float64(len(cols))
+		}
+		return
+	}
+	for i := range cols {
+		cols[i].percent += short * float64(cols[i].max) / weight
+	}
 }
 
 // distribute shares an amount over a set of weights so that the parts add up to
@@ -1523,10 +1603,22 @@ type placedCell struct {
 	baseline    style.Unit
 	hasBaseline bool
 	align       string
-	// absFrom is where in the deferred queue this cell's out-of-flow boxes
-	// begin, so that vertical alignment can move their static positions with the
-	// content they were written in.
-	absFrom int
+	// absFrom and absTo bound this cell's own stretch of the deferred queue, so
+	// that vertical alignment can move the static positions of the out-of-flow
+	// boxes written inside it along with the content they were written in.
+	//
+	// Both ends, and the end is the point. Alignment used to scan from absFrom
+	// to whatever the queue had grown to by the time the row was aligned, which
+	// is every out-of-flow box in every cell laid out after this one: work
+	// proportional to cells times deferred boxes, for a walk that could only
+	// ever match entries this cell put there. A table of 8,000 cells each
+	// holding one absolutely positioned box did sixteen million comparisons to
+	// move eight thousand numbers.
+	//
+	// The parent check inside the range stays. A cell holding a nested table
+	// contributes that table's cells' boxes to this range too, and those move
+	// with the inner fragment rather than with this one.
+	absFrom, absTo int
 }
 
 // tableContent lays out a table's grid and returns the content height it needs.
@@ -1735,7 +1827,7 @@ func (l *layouter) layoutCells(table *Box, g *tableGrid, cols []style.Unit,
 			cell: c, frag: frag, natural: frag.BorderRect.H, content: frag.contentH,
 			baseline: baseline, hasBaseline: hasBaseline,
 			align:   strings.ToLower(strings.TrimSpace(c.box.Style["vertical-align"])),
-			absFrom: absFrom,
+			absFrom: absFrom, absTo: len(l.deferred),
 		})
 	}
 	return out
@@ -2154,7 +2246,8 @@ func (l *layouter) alignCell(p placedCell, height, rowBaseline style.Unit) {
 	for i := range p.frag.Lines {
 		p.frag.Lines[i].Rect.Y = p.frag.Lines[i].Rect.Y.Add(delta)
 	}
-	for i := p.absFrom; i < len(l.deferred); i++ {
+	l.absScans += p.absTo - p.absFrom
+	for i := p.absFrom; i < p.absTo && i < len(l.deferred); i++ {
 		if l.deferred[i].parent == p.frag {
 			l.deferred[i].staticY = l.deferred[i].staticY.Add(delta)
 		}

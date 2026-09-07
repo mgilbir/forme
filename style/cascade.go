@@ -2,6 +2,7 @@ package style
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/mgilbir/forme/css"
@@ -38,6 +39,10 @@ const (
 type Sheet struct {
 	Origin Origin
 	Rules  []css.Rule
+	// Name says which stylesheet this is, for a finding to point at. It is
+	// whatever the caller called it — a URL, a file name — and is empty for the
+	// document's own <style>, which has no name to give.
+	Name string
 }
 
 // A Finding is something the styling stage noticed and a caller should hear
@@ -45,12 +50,31 @@ type Sheet struct {
 //
 // It is the same shape as the css and html packages' Error, and for the same
 // reason: an author needs to tell "I wrote this wrongly" from "this engine does
-// not do that". The layer that turns these into pdf0.Violation values lands with
+// not do that". The layer that turns these into forme.Violation values lands with
 // the guardrail framework in phase 3; until then this carries the information so
 // that nothing has to be reconstructed later.
 type Finding struct {
-	// Offset is the byte offset in the stylesheet the finding came from.
+	// Offset is the byte offset the finding came from, in whatever Sheet and
+	// InMarkup say it is an offset into. It is -1 for a finding about the
+	// styling as a whole, which is in no file at all — reporting one of those
+	// at byte nought of a stylesheet sends an author to the top of a file to
+	// look for something that is not there.
 	Offset int
+	// Sheet names the stylesheet Offset is in. It is empty for the document's
+	// own <style>, which the caller supplies without a name, and for a finding
+	// that is not in a stylesheet.
+	//
+	// A document is styled by several sheets — its own, every <link>, and
+	// everything those @import — and a byte offset means nothing without the
+	// one it is into. The stage that turns these into the caller's findings
+	// cannot recover it: by the time it runs, the sheets have been prepared
+	// into one list and the rule no longer says where it came from.
+	Sheet string
+	// InMarkup says Offset is a byte offset into the *document* rather than
+	// into a stylesheet, because the declaration was written in a style
+	// attribute. Pointing an author at "byte 412 of the stylesheet" for a
+	// declaration in the markup sends them to the wrong file.
+	InMarkup bool
 	// Message says what happened.
 	Message string
 	// Unsupported marks correct CSS this engine does not implement — the
@@ -93,9 +117,26 @@ type Styler struct {
 	// query about a width is false against it — see Media.
 	media    Media
 	findings []Finding
+	// sheet is the name of the stylesheet being prepared, and is what report
+	// stamps on a finding raised while one is. It is empty outside prepare,
+	// which is where the findings that belong to no sheet are raised.
+	sheet string
+	// attrOffset is where in the *markup* the style attribute being expanded
+	// was written, or -1 outside one.
+	//
+	// A declaration in an attribute has an offset of its own, and it is an
+	// offset into the attribute's value — a string the author does not have a
+	// file of. What they can be pointed at is the element that carries it, so
+	// that is what a finding raised from in here says instead.
+	attrOffset int
 	// seen suppresses repeat reports of the same unsupported property. A
 	// stylesheet using "flex-wrap" forty times is one thing an author needs to
 	// be told, not forty.
+	//
+	// Per stylesheet, which is what suppressed reads: the same property in two
+	// sheets is two files to edit, and telling an author about one of them
+	// sends them back to a document that still has the finding in it. See
+	// suppressed, which is the key.
 	seen map[string]bool
 }
 
@@ -197,7 +238,8 @@ func ApplyWith(doc *html.Node, sheets []Sheet, m Metrics) Styled {
 // answered either way, because that one is a fact about this engine rather than
 // about the page: it renders for paper.
 func ApplyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) Styled {
-	s := &Styler{matcher: NewMatcher(doc), media: media, seen: map[string]bool{}}
+	s := &Styler{matcher: NewMatcher(doc), media: media, seen: map[string]bool{},
+		attrOffset: -1}
 
 	// Expand shorthands and drop what the engine does not implement, once for
 	// the whole run rather than once per element — the answer does not depend
@@ -343,6 +385,7 @@ func ApplyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) Styled {
 	out.Incomplete = s.matcher.Tripped()
 	if out.Incomplete {
 		s.report(Finding{
+			Offset: -1,
 			Message: "matching stopped early: some rules did not get the chance " +
 				"to apply, so this document is styled less than its stylesheet describes",
 		})
@@ -372,10 +415,15 @@ func (s *Styler) prepare(sheets []Sheet) []preparedRule {
 	order := 0
 
 	for _, sheet := range sheets {
+		s.sheet = sheet.Name
 		for _, rule := range sheet.Rules {
 			s.prepareRule(rule, nil, sheet.Origin, &out, &order)
 		}
 	}
+	// Everything raised after this belongs to no one sheet: the cascade reads
+	// the prepared rules of all of them at once, and a style attribute is not
+	// in a sheet at all.
+	s.sheet = ""
 	return out
 }
 
@@ -410,10 +458,47 @@ func (s *Styler) prepareMedia(rule css.Rule, parent []css.ComponentValue, origin
 	if !matches || !rule.HasBlock {
 		return
 	}
-	inner, _ := css.ParseRulesFromValues(rule.Block)
+	if parent != nil {
+		s.prepareNestedConditional(rule, parent, origin, out, order)
+		return
+	}
+	inner, errs := css.ParseRulesFromValues(rule.Block)
+	for _, e := range errs {
+		// The errors inside a block are the author's to act on exactly as the
+		// ones outside it are, and they were thrown away here.
+		s.report(Finding{Offset: e.Offset, Message: e.Message, Unsupported: e.Unsupported})
+	}
 	for _, r := range inner {
 		s.prepareRule(r, parent, origin, out, order)
 	}
+}
+
+// prepareNestedConditional prepares an @media written *inside* a style rule.
+//
+// The block holds a style block rather than a rule list — CSS Conditional Rules
+// 5 §3 — which is to say declarations, which belong to the rule the @media is
+// written inside, and rules, which are relative to it. Read as a rule list, the
+// way the top-level form is, "color: red" becomes a qualified rule with no
+// block and is discarded by the parser: "p { color: blue; @media print { color:
+// red } }" was blue on paper, with the error going nowhere and no finding
+// raised. That is the shape every stylesheet written since nesting arrived
+// uses.
+//
+// The selectors are the enclosing rule's, already desugared by the caller, so
+// the declarations land on exactly the elements the rule they were written in
+// lands on. The order counter runs on through, which is what puts a declaration
+// inside the @media after one written above it.
+func (s *Styler) prepareNestedConditional(rule css.Rule, parent []css.ComponentValue,
+	origin Origin, out *[]preparedRule, order *int) {
+
+	sels, errs, ok := css.ParseSelectorList(parent)
+	for _, e := range errs {
+		s.report(Finding{Offset: e.Offset, Message: e.Message, Unsupported: e.Unsupported})
+	}
+	if !ok {
+		return
+	}
+	s.prepareStyleBlock(rule.Block, sels, parent, origin, out, order)
 }
 
 // prepareRule prepares one rule and every rule nested inside it.
@@ -428,6 +513,33 @@ func (s *Styler) prepareMedia(rule css.Rule, parent []css.ComponentValue, origin
 // a nested rule's declarations come after the declarations of the rule holding
 // them. That is what CSS Nesting asks for — the nested rule is at the place it
 // was written — and it falls out of doing the parent's declarations first.
+// charsetLabel is the encoding an @charset names, which is a single string.
+func charsetLabel(prelude []css.ComponentValue) (string, bool) {
+	var only css.ComponentValue
+	n := 0
+	for _, v := range prelude {
+		if v.IsToken() && v.Token.Kind == css.Whitespace {
+			continue
+		}
+		only, n = v, n+1
+	}
+	if n != 1 || !only.IsToken() || only.Token.Kind != css.String {
+		return "", false
+	}
+	return strings.ToLower(strings.TrimSpace(only.Token.Value)), true
+}
+
+// utf8Charset reports whether a label names UTF-8, from the Encoding Standard's
+// own table of aliases.
+func utf8Charset(label string) bool {
+	switch label {
+	case "utf-8", "utf8", "unicode-1-1-utf-8", "unicode11utf8", "unicode20utf8",
+		"x-unicode20utf8":
+		return true
+	}
+	return false
+}
+
 func (s *Styler) prepareRule(rule css.Rule, parent []css.ComponentValue, origin Origin,
 	out *[]preparedRule, order *int) {
 
@@ -442,6 +554,32 @@ func (s *Styler) prepareRule(rule css.Rule, parent []css.ComponentValue, origin 
 			// paper reads it. There is nothing for the cascade to say about it
 			// either way, so it says nothing rather than reporting a rule that
 			// is applied elsewhere as one that is not.
+			return
+		}
+		if strings.EqualFold(rule.Name, "charset") {
+			// @charset names the encoding the stylesheet is written in, which
+			// is not something the cascade applies to anything — it is a fact
+			// about the bytes, settled before they were parsed. A sheet saying
+			// it is UTF-8 is saying what is already true here and is passed
+			// over in silence; one naming anything else is the same report the
+			// document's own <meta charset> gets, because this engine reads
+			// UTF-8 and cannot decode another.
+			//
+			// It was reported as an at-rule "not applied yet", which is what
+			// every unrecognised at-rule gets — so a stylesheet that opens with
+			// the perfectly ordinary "@charset \"utf-8\";" put its document in
+			// the bucket of pages carrying something unsupported, and the
+			// measurement of how much this engine really does was that much
+			// smaller.
+			if label, named := charsetLabel(rule.Prelude); named && !utf8Charset(label) {
+				s.report(Finding{
+					Offset: rule.Offset,
+					Message: "the stylesheet declares the " + strconv.Quote(label) +
+						" encoding; this engine reads UTF-8 and cannot decode any other",
+					Unsupported: true,
+					Property:    "@charset",
+				})
+			}
 			return
 		}
 		// An at-rule this package does not act on and no other stage does
@@ -470,6 +608,9 @@ func (s *Styler) prepareRule(rule css.Rule, parent []css.ComponentValue, origin 
 			Unsupported: e.Unsupported,
 		})
 	}
+	for _, sel := range sels {
+		s.reportUncomputedPseudo(sel.PseudoElement, rule.Offset)
+	}
 	if !ok {
 		// An unusable selector list invalidates the rule, which is what the
 		// specification requires — and the findings above already said why.
@@ -478,24 +619,45 @@ func (s *Styler) prepareRule(rule css.Rule, parent []css.ComponentValue, origin 
 		return
 	}
 
-	decls, nested, derrs := css.ParseDeclarationValues(rule.Block)
+	s.prepareStyleBlock(rule.Block, sels, prelude, origin, out, order)
+}
+
+// prepareStyleBlock prepares one style block: the declarations it holds, which
+// belong to the given selector list, and the rules nested in it, which are
+// written against the given prelude.
+//
+// The two are interleaved by where they were written rather than done in two
+// passes. The order counter is what the cascade breaks a tie with, so a pass
+// that did every declaration and then every nested rule would put a rule
+// written *above* a declaration after it — which nested rules rarely show,
+// since a different selector usually differs in specificity, and which a nested
+// @media shows immediately: its declarations land on the very selector they are
+// written inside, so the only thing separating them is order.
+func (s *Styler) prepareStyleBlock(block []css.ComponentValue, sels []css.Selector,
+	prelude []css.ComponentValue, origin Origin, out *[]preparedRule, order *int) {
+
+	decls, nested, derrs := css.ParseDeclarationValues(block)
 	for _, e := range derrs {
 		s.report(Finding{Offset: e.Offset, Message: e.Message, Unsupported: e.Unsupported})
 	}
 
 	prepared := preparedRule{selectors: sels, origin: origin}
-	for _, d := range decls {
-		for _, e := range s.expand(d, origin) {
-			e.order = *order
-			*order++
-			prepared.decls = append(prepared.decls, e)
+	di, ni := 0, 0
+	for di < len(decls) || ni < len(nested) {
+		if ni >= len(nested) || (di < len(decls) && decls[di].Offset <= nested[ni].Offset) {
+			for _, e := range s.expand(decls[di], origin) {
+				e.order = *order
+				*order++
+				prepared.decls = append(prepared.decls, e)
+			}
+			di++
+			continue
 		}
+		s.prepareRule(nested[ni], prelude, origin, out, order)
+		ni++
 	}
 	if len(prepared.decls) > 0 {
 		*out = append(*out, prepared)
-	}
-	for _, n := range nested {
-		s.prepareRule(n, prelude, origin, out, order)
 	}
 }
 
@@ -562,6 +724,57 @@ func substituteParent(vals, parent []css.ComponentValue) ([]css.ComponentValue, 
 // reporting anything the engine does not implement.
 func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 	name := strings.ToLower(d.Name)
+
+	// Custom properties, and every declaration whose value uses one.
+	//
+	// This is asked first because the question "is this value legal for this
+	// property" cannot be answered while a var() stands in the middle of it —
+	// the value is whatever the custom property holds, and nothing here
+	// substitutes it. Asked afterwards, one feature got three different
+	// answers: "--c: red" was reported as an unimplemented property, "color:
+	// var(--c)" was dropped as not a colour, and "width: var(--w)" was kept
+	// verbatim. None of the three was marked unsupported — a custom property
+	// looked like a vendor prefix, and a vendor prefix is a spelling of
+	// something this engine does implement — so a page set in the wrong colour
+	// carried no claim that anything was missing from it, and the reftest
+	// ratchet counted it as clean.
+	//
+	// One answer now, and it is the one a browser gives. A declaration whose
+	// value cannot be resolved is "invalid at computed-value time" — CSS
+	// Variables §3.3 — which is not the same as an invalid declaration: it
+	// still wins the cascade, and it computes to "unset", so an inherited
+	// property takes the parent's value and every other one its initial value.
+	// Dropping it instead would restore whatever the user agent sheet said,
+	// which is a third wrong answer.
+	//
+	// The finding says the engine does not do this, because it does not: a
+	// document using custom properties gets a page that is defensible rather
+	// than one that is right, and the claim on it has to say so.
+	if isCustomProperty(name) {
+		if !s.suppressed(name) {
+			s.report(Finding{
+				Offset: d.Offset,
+				Message: "the custom property \"" + name + "\" was not applied: this engine " +
+					"does not substitute custom properties, so nothing can refer to it",
+				Unsupported: true,
+				Property:    name,
+			})
+		}
+		return nil
+	}
+	if usesVar(d.Value) {
+		if !s.suppressed(name) {
+			s.report(Finding{
+				Offset: d.Offset,
+				Message: "\"" + name + ": " + serialize(d.Value) + "\" refers to a custom " +
+					"property, which this engine does not substitute, so the declaration " +
+					"computes to \"unset\"",
+				Unsupported: true,
+				Property:    name,
+			})
+		}
+		d.Value = unsetValue()
+	}
 
 	if nonNegative[name] && hasNegativeNumber(d.Value) {
 		// A declaration whose value is illegal is not a declaration with a
@@ -735,9 +948,8 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 		// The gap is still real for the default sheet. It belongs in the note on
 		// the property rather than in every document's findings.
 		if reason, missing := unimplementedReason(name); missing &&
-			origin != OriginUserAgent && !s.seen[name] &&
+			origin != OriginUserAgent && !s.suppressed(name) &&
 			!isInertDeclaration(name, d.Value) {
-			s.seen[name] = true
 			s.report(Finding{
 				Offset: d.Offset,
 				Message: "the property \"" + name + "\" is not implemented, so " +
@@ -784,8 +996,7 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 			// their background image did not appear and wondering why the page
 			// is blank.
 			key := name + "\x00" + part
-			if !s.seen[key] {
-				s.seen[key] = true
+			if !s.suppressed(key) {
 				s.report(Finding{
 					Offset: d.Offset,
 					Message: "\"" + part + "\" in the " + name +
@@ -796,11 +1007,17 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 			}
 		}
 		if !ok {
-			s.report(Finding{
-				Offset:   d.Offset,
-				Message:  "\"" + name + ": " + serialize(d.Value) + "\" is not a value this engine can read",
-				Property: name,
-			})
+			// Unless the expander has already said what it could not produce,
+			// in which case this would be a second finding contradicting the
+			// first: "font: menu" is a system font, which is reported as
+			// unsupported above and is not a value the author got wrong.
+			if len(unsupported) == 0 {
+				s.report(Finding{
+					Offset:   d.Offset,
+					Message:  "\"" + name + ": " + serialize(d.Value) + "\" is not a value this engine can read",
+					Property: name,
+				})
+			}
 			return nil
 		}
 		out := make([]preparedDecl, 0, len(parts))
@@ -858,8 +1075,7 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 	// same kind, and nomedium.go is the list: nobody puts a caret in a printed
 	// paragraph, so "caret-color" colours nothing there and a browser printing
 	// the document applies it exactly as little.
-	if !s.seen[name] {
-		s.seen[name] = true
+	if !s.suppressed(name) {
 		s.report(Finding{
 			Offset:      d.Offset,
 			Message:     "the property \"" + name + "\" is not implemented, so it was not applied",
@@ -1106,6 +1322,57 @@ var nonNegative = map[string]bool{
 	"border": true, "border-top": true, "border-right": true,
 	"border-bottom": true, "border-left": true,
 	"outline": true, "font": true,
+
+	// And the properties that arrived after this list was written, each with
+	// its range stated the same way. flex-grow and flex-shrink are
+	// <number [0,∞]>, flex-basis is a <'width'>, column-count and the two
+	// line-clamps are <integer [1,∞]>, column-width is <length [0,∞]>, and the
+	// gaps are non-negative lengths or percentages.
+	//
+	// The cost of the omission is not that the negative was drawn — it is that
+	// it was *kept*. "flex-grow: 2; flex-grow: -1" reached layout as the second
+	// declaration, layout could make nothing of it and fell back to the initial
+	// value of 0, and the author's 2 was lost. That is exactly the failure the
+	// comment at the head of this list describes, in a property added later.
+	"flex-grow": true, "flex-shrink": true, "flex-basis": true,
+	"column-count": true, "column-width": true,
+	"column-gap": true, "row-gap": true, "gap": true, "columns": true,
+	"line-clamp": true, "-webkit-line-clamp": true,
+	"flex": true,
+}
+
+// The logical longhands and shorthands whose physical counterparts may not be
+// negative.
+//
+// They are derived rather than typed, because the two lists cannot be allowed
+// to drift: a longhand added to logicalSides is covered the day it is added.
+// The check has to know the logical name at all because the rename to a
+// physical one happens per element, several steps after §4.2's drop — so
+// "padding-inline-start: -8px" was a declaration this file never looked at and
+// computed to "padding-left: -8px".
+func init() {
+	for logical, sides := range logicalSides {
+		if nonNegative[sides[0]] {
+			nonNegative[logical] = true
+		}
+	}
+	// A shorthand is non-negative when every longhand it sets is, which is the
+	// rule the physical list above is written by and states one by one.
+	//
+	// Read out of logicalShorthands rather than out of the merged table, since
+	// the merge is another package-level init and nothing orders the two.
+	for name, sh := range logicalShorthands {
+		if len(sh.longhands) == 0 {
+			continue
+		}
+		all := true
+		for _, l := range sh.longhands {
+			all = all && nonNegative[l]
+		}
+		if all {
+			nonNegative[name] = true
+		}
+	}
 }
 
 // legalQuotes reports whether a "quotes" value matches §12.3.2's grammar.
@@ -1235,9 +1502,12 @@ func onlyIdent(vals []css.ComponentValue) bool {
 // exactly as strong as the semantic one for this rule.
 //
 // A function's arguments are not looked into. "calc(10px - 20px)" is negative
-// and this does not say so; calc is not implemented, so there is nothing here
-// to be wrong about yet, and guessing at the sign of an expression that is not
-// evaluated would drop declarations that are perfectly legal.
+// and this does not say so, and that is the same reason as the paragraph above
+// rather than a gap: a calc() is evaluated per element, against a font size and
+// a containing block that do not exist while a sheet is being prepared, so its
+// sign is not a fact about the declaration. "calc(1em - 20px)" is negative in
+// one element and positive in the next. Guessing would drop declarations that
+// are perfectly legal in the element they land on.
 func hasNegativeNumber(vals []css.ComponentValue) bool {
 	for _, v := range vals {
 		if !v.IsToken() {
@@ -1264,17 +1534,72 @@ func shorthandLonghands(name string) []string {
 	return out
 }
 
+// suppressed reports whether this stylesheet has already been told about key,
+// and records that it has been.
+//
+// The sheet is part of it because a finding names one: an unsupported property
+// in two files is two findings, and it was one until the second was dropped for
+// having the same words as the first.
+func (s *Styler) suppressed(key string) bool {
+	full := s.sheet + "\x00" + key
+	if s.seen[full] {
+		return true
+	}
+	s.seen[full] = true
+	return false
+}
+
 func (s *Styler) report(f Finding) {
+	switch {
+	case s.attrOffset >= 0 && !f.InMarkup:
+		f.Offset, f.InMarkup, f.Sheet = s.attrOffset, true, ""
+	case f.Sheet == "" && !f.InMarkup:
+		f.Sheet = s.sheet
+	}
 	switch {
 	case len(s.findings) > maxFindings:
 		return
 	case len(s.findings) == maxFindings:
 		s.findings = append(s.findings, Finding{
+			Offset:  -1,
 			Message: "further styling problems were not reported",
 		})
 	default:
 		s.findings = append(s.findings, f)
 	}
+}
+
+// reportUncomputedPseudo names a pseudo-element the selector parser accepts and
+// this stage does not compute a style for.
+//
+// The parser's list and this one are two answers to "which pseudo-elements does
+// this engine have", and where they differ the rules written for the difference
+// do nothing at all. "::first-letter" parsed, matched, and was never computed:
+// a drop cap written the ordinary way was silently an ordinary first letter,
+// and the page carried no claim that anything was missing from it.
+//
+// Derived rather than listed, so that a pseudo-element the parser learns to
+// accept is reported until this stage learns to compute it.
+func (s *Styler) reportUncomputedPseudo(name string, offset int) {
+	if name == "" {
+		return
+	}
+	for _, computed := range pseudoElementNames {
+		if name == computed {
+			return
+		}
+	}
+	if key := "::" + name; s.suppressed(key) {
+		return
+	}
+	key := "::" + name
+	s.report(Finding{
+		Offset: offset,
+		Message: "\"" + key + "\" is not implemented, so what was written for it " +
+			"was not applied",
+		Unsupported: true,
+		Property:    key,
+	})
 }
 
 // pseudoElementNames are the ones this stage computes a style for.
@@ -1286,7 +1611,9 @@ func (s *Styler) report(f Finding) {
 // the element's own, and every em in it is absolutised against the answer, which
 // is work only the cascade can do.
 //
-// ::first-letter is still absent, because nothing reads it yet.
+// ::first-letter is still absent, because nothing reads it yet — and a rule
+// written for one is reported as unimplemented rather than dropped in silence.
+// See reportUncomputedPseudo.
 var pseudoElementNames = []string{"before", "after", "marker", "first-line"}
 
 // anyRuleTargets reports whether any rule selects a pseudo-element of an
@@ -1417,11 +1744,24 @@ func (s *Styler) computeFor(n *html.Node, rules []preparedRule,
 			value, have = serialize(c.value), true
 		}
 		if d, ok := inline[name]; ok {
-			// Inline wins over everything an author rule can say, important or
-			// not — except an important author rule, which the cascade puts
-			// above it. That case is rare enough, and the ordering subtle
-			// enough, that it is spelled out rather than left to fall out.
-			if c, ok := winners[name]; !ok || !c.important {
+			// A style attribute is an author declaration whose specificity is
+			// above every selector — Cascade 4 §3.1 — so it is decided by the
+			// same two terms every other declaration is, and only the second of
+			// them is settled in advance.
+			//
+			// Importance is the first term and inverts the origins, so an
+			// important inline declaration beats an important author rule and
+			// still loses to an important user-agent one; a normal inline
+			// declaration loses to any important rule. The specificity is the
+			// second and the inline always wins it, which is why equal ranks
+			// go to the inline.
+			//
+			// It was read as "inline wins unless the author rule is important",
+			// which said the opposite about the one case authors write it for:
+			// "style=\"color: red !important\"" lost to a stylesheet's own
+			// important rule.
+			c, beaten := winners[name]
+			if !beaten || CascadeRank(OriginAuthor, d.important) >= cascadeRank(c) {
 				value, have = serialize(d.value), true
 			}
 		}
@@ -1467,6 +1807,17 @@ func (s *Styler) resolve(name string, prop property, value string, have bool, pa
 	}
 
 	if have {
+		if name == "color" && strings.EqualFold(strings.TrimSpace(value), "currentcolor") {
+			// CSS Color 4 §7.2: "If the 'currentcolor' keyword is set on the
+			// 'color' property itself, it is treated as 'color: inherit'."
+			//
+			// It is answered here because this is where inheritance is, and
+			// because the alternative is answering it at paint time with no
+			// parent to hand — which is what happened, and came out as the
+			// initial value: black, on a paragraph inside a green div that had
+			// asked for the green.
+			return inheritFrom()
+		}
 		switch strings.ToLower(value) {
 		case kwInherit:
 			return inheritFrom()
@@ -1484,9 +1835,9 @@ func (s *Styler) resolve(name string, prop property, value string, have bool, pa
 			// as "unset" is the closest available answer and is wrong whenever a
 			// user-agent rule set the property, so it is reported rather than
 			// quietly substituted.
-			if !s.seen["revert"] {
-				s.seen["revert"] = true
+			if !s.suppressed("revert") {
 				s.report(Finding{
+					Offset: -1,
 					Message: "\"revert\" is not implemented and was read as \"unset\", " +
 						"which differs wherever a lower-priority stylesheet set the property",
 					Unsupported: true,
@@ -1599,10 +1950,15 @@ func (s *Styler) inlineDeclarations(n *html.Node) map[string]preparedDecl {
 	decls, _, errs := css.ParseDeclarations(raw)
 	for _, e := range errs {
 		s.report(Finding{
-			Offset: n.Offset, Message: "in a style attribute: " + e.Message,
+			Offset: n.Offset, InMarkup: true,
+			Message:     "in a style attribute: " + e.Message,
 			Unsupported: e.Unsupported,
 		})
 	}
+
+	// Everything expanded from here on is in the attribute, and says so.
+	s.attrOffset = n.Offset
+	defer func() { s.attrOffset = -1 }()
 
 	out := map[string]preparedDecl{}
 	for i, d := range decls {
@@ -1637,6 +1993,12 @@ func (s *Styler) inlineDeclarations(n *html.Node) map[string]preparedDecl {
 // contradiction: this is only reached for a name nothing acts on, and a prefixed
 // property the engine implements never gets that far.
 func vendorPrefixed(name string) bool {
+	// A leading "--" is not a prefix. CSS Variables §2 reserves that shape for
+	// custom properties, which are a feature and not another engine's spelling
+	// of one — see expand, which takes them before this is ever asked.
+	if isCustomProperty(name) {
+		return false
+	}
 	for _, prefix := range []string{"-webkit-", "-moz-", "-ms-", "-o-"} {
 		if strings.HasPrefix(name, prefix) {
 			return true
@@ -1647,6 +2009,31 @@ func vendorPrefixed(name string) bool {
 	// reserves the shape for.
 	if len(name) > 1 && name[0] == '-' {
 		return strings.Contains(name[1:], "-")
+	}
+	return false
+}
+
+// isCustomProperty reports whether a name is a custom property: CSS Variables
+// §2's two leading dashes, which are reserved for exactly this.
+func isCustomProperty(name string) bool { return strings.HasPrefix(name, "--") }
+
+// unsetValue is the CSS-wide keyword "unset" as a value, which is what a
+// declaration this engine cannot resolve computes to. See expand.
+func unsetValue() []css.ComponentValue {
+	return []css.ComponentValue{{Token: css.Token{Kind: css.Ident, Value: kwUnset}}}
+}
+
+// usesVar reports whether a value refers to a custom property, at any depth. A
+// var() inside a calc() inside a shorthand is still a value this engine cannot
+// know.
+func usesVar(vals []css.ComponentValue) bool {
+	for _, v := range vals {
+		if v.IsFunction() && strings.EqualFold(v.Token.Value, "var") {
+			return true
+		}
+		if len(v.Values) > 0 && usesVar(v.Values) {
+			return true
+		}
 	}
 	return false
 }

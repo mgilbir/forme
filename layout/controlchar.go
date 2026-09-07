@@ -35,9 +35,15 @@ import (
 //
 // Tab, line feed and carriage return are named out of it by the specification:
 // each is white space with a meaning the white-space processing has already
-// acted on. Form feed goes with them — CSS 2.1 counts it among the white space a
-// document may be written with, so drawing a box for one would put a mark on the
-// page where an author put a page break in their source.
+// acted on.
+//
+// Form feed is not one of those and is drawn. §5.1's note asks for both halves
+// — a mandatory break *and* "otherwise rendered as a visible glyph" — so the
+// character stays in the text that ends the line rather than being swallowed
+// the way a newline is, and three of the suite's control-chars documents are
+// mismatch references against a blank page that say exactly that. See
+// paragraph's TestAMandatoryBreakIsStillACharacter, which is the other half of
+// the same decision.
 func isVisibleControl(r rune) bool {
 	switch r {
 	case '\t', '\n', '\r':

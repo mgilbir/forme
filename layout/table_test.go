@@ -98,15 +98,23 @@ func TestTableAnonymousObjects(t *testing.T) {
 		// One row for the whole run, not one per box: the ordering of §17.2.1's
 		// three groups is what decides this, and getting it wrong puts the two
 		// on separate lines of the table.
+		//
+		// Written with "display: table" rather than with a <table> element. The
+		// two are the same box tree, and only one of them is reachable: HTML
+		// foster-parents a <div> written inside a real table out in front of
+		// it, so that markup never produces a stray box for this rule to
+		// repair. The rule is still needed, and this is the shape that reaches
+		// it — a document is free to say "display: table" about anything.
 		name: "a run of strays shares one anonymous row",
-		html: `<table><div>d</div><td>c</td></table>`,
+		html: `<div style="display:table"><div>d</div>` +
+			`<div style="display:table-cell">c</div></div>`,
 		want: `anonymous block/flow-root
-  table block/table
+  div block/table
     anonymous block/table-row
       anonymous block/table-cell
         div block
           text "d"
-      td block/table-cell
+      div block/table-cell
         text "c"
 `,
 	}, {

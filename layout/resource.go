@@ -46,15 +46,38 @@ import (
 // ResourceResolver turns a reference written in a document into bytes.
 //
 // It is deliberately not an io.Reader factory or a URL fetcher. A resolver is
-// handed the reference exactly as the document wrote it, with no scheme and no
-// leading slash — those are refused before it is called — and returns the whole
+// handed the reference exactly as the document wrote it and returns the whole
 // resource or an error. Returning an error is normal: a missing image is a
 // finding, not a failure of the render.
 //
-// A resolver must bound what it returns. The engine caps what it will decode,
-// but it cannot cap what a resolver allocates before returning, so a resolver
-// reading from anywhere unbounded has to impose its own limit. DirResolver
-// does.
+// # What the engine has already refused, and what it has not
+//
+// One thing: a reference naming a scheme never reaches a resolver. That refusal
+// is not a convenience, it is the boundary — an engine that fetches URLs is a
+// server-side request forgery primitive with a friendly interface, and it must
+// not be possible to build one by writing a resolver that hands the string to
+// something that does.
+//
+// Everything else arrives as written. In particular a resolver **is** handed
+// "/etc/passwd" and "../../secrets/id_rsa" when a document writes them, because
+// neither is refusable here without refusing an ordinary document: "/css/x.png"
+// is a reference to the root of wherever the document is served from, and
+// "../images/logo.png" is a reference to a sibling directory, and only the
+// caller knows where either of those is or whether it is allowed. A browser
+// resolves both.
+//
+// So the containment is the resolver's, and it needs to be real containment.
+// os.ReadFile(filepath.Join(dir, ref)) is not: it walks out of dir on a "..",
+// it reads anywhere on an absolute path, and it follows a symbolic link inside
+// dir that points out of it — which no check on the name can see, because the
+// name says nothing about what it resolves to. DirResolver uses os.Root, which
+// resolves every path component at the system call; a resolver written by hand
+// should do the same, and one that cannot should refuse rather than guess.
+//
+// A resolver must also bound what it returns. The engine caps what it will
+// decode, but it cannot cap what a resolver allocates before returning, so a
+// resolver reading from anywhere unbounded has to impose its own limit.
+// DirResolver does.
 type ResourceResolver interface {
 	// Resolve returns the bytes of the resource a document referred to.
 	Resolve(ref string) ([]byte, error)

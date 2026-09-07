@@ -318,13 +318,22 @@ func (l *layouter) flushSubstitutions() {
 // It is the guard that keeps the per-cluster walk off every other document. The
 // answer depends only on the family list, so it is memoized per list rather than
 // per box — a page of ten thousand paragraphs in one family asks once.
+//
+// The answer can only be read off this package's own set, which is the one that
+// holds the @font-face rules and their ranges. A caller's own RangedFontSet
+// knows which of its faces are restricted and there is nothing here to ask it,
+// so the walk runs: implementing the interface is the statement that some face
+// might be, and an optimisation that cannot see the answer must not assume the
+// cheap one. It used to assume it, and so no external RangedFontSet was ever
+// consulted — the one gate in front of the whole interface answered false for
+// every implementation but this package's.
 func (l *layouter) familyListIsRestricted(b *Box) bool {
 	set, ok := l.fontSet.(*documentFonts)
 	if !ok {
 		if f, isFallback := l.fontSet.(fallbackDocumentFonts); isFallback {
 			set = f.documentFonts
 		} else {
-			return false
+			return true
 		}
 	}
 	families := b.Style["font-family"]

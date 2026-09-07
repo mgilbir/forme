@@ -14,14 +14,10 @@ import (
 // other. These are the two questions layout has to answer for it to be reached
 // at all: which runs are given a context, and when.
 
-// kernFaces are the fallback faces, or a skip.
+// kernFaces are the fallback faces.
 func kernFaces(t *testing.T) []*shape.Face {
 	t.Helper()
-	faces := notoFaces()
-	if len(faces) == 0 {
-		t.Skip("set NOTO_FONTS (or run `make test-wpt`) to read a face with kern pairs")
-	}
-	return faces
+	return fallbackLibrary(t)
 }
 
 // kernLayout lays a document out in those faces.

@@ -1,8 +1,9 @@
 package font
 
 import (
-	"os"
 	"testing"
+
+	"github.com/mgilbir/forme/fonttest"
 )
 
 // The ROS of a CID-keyed CFF: the character collection its CIDs are numbered
@@ -10,16 +11,13 @@ import (
 //
 // ISO 32000-2 9.7.4.2 requires a CIDFont's /CIDSystemInfo to be compatible with
 // the collection of its glyph source, so a consumer that cannot read this has
-// to either guess or refuse. pdf0 refused, which is what this is for.
+// to either guess or refuse. forme refused, which is what this is for.
 
 // TestCFFReportsItsCharacterCollection reads a real CID-keyed face, because the
 // thing under test is a structure no synthetic fixture here builds: a ROS whose
 // SIDs resolve through the font's own string index.
 func TestCFFReportsItsCharacterCollection(t *testing.T) {
-	data, err := os.ReadFile("../testdata/notocjk/NotoSansJP-Regular.otf")
-	if err != nil {
-		t.Skip("run `make notocjk` for a CID-keyed face to read: ", err)
-	}
+	data := fonttest.CJKFile(t, "NotoSansJP-Regular.otf")
 	p := ParseCFF(SFNTTables(data)["CFF "])
 	if p == nil {
 		t.Fatal("the CFF did not parse")

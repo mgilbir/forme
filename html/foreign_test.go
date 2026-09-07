@@ -192,3 +192,70 @@ func TestAnUnclosedForeignElementEndsAtTheDocument(t *testing.T) {
 		t.Fatal("parsing an unclosed <svg> did not terminate")
 	}
 }
+
+// TestForeignContentBeforeAnyOtherContentStartsTheBody is the case every
+// fixture in this file was written past.
+//
+// A foreign element is content: it has a box and it is drawn. Every other
+// content element starts the body on the way in, and this one did not — it was
+// inserted at whatever was current, which for a document that has not reached
+// its body yet is <head>. The user agent sheet gives everything in the head
+// "display: none", so the graphic was never drawn; and nothing was reported,
+// because from the tree builder's side nothing had gone wrong. Every other test
+// here begins with a paragraph, which is exactly what hid it.
+func TestForeignContentBeforeAnyOtherContentStartsTheBody(t *testing.T) {
+	for _, tc := range []struct{ name, src string }{
+		{"an svg first of all", `<svg><circle/></svg><p>after</p>`},
+		{"an svg after the title", `<title>t</title><svg><circle/></svg><p>after</p>`},
+		{"an svg after a stylesheet", `<style>p{color:red}</style><svg><circle/></svg>`},
+		{"maths first of all", `<math><mi>x</mi></math><p>after</p>`},
+		{"an svg in an explicit head's wake", `<head><title>t</title></head><svg></svg>`},
+	} {
+		doc, _, _ := Parse(tc.src)
+		if doc == nil {
+			t.Fatalf("%s: no tree", tc.name)
+		}
+		var inHead, inBody bool
+		var walk func(n *Node, head, body bool)
+		walk = func(n *Node, head, body bool) {
+			if n.Type == ElementNode && (n.Name == "svg" || n.Name == "math") {
+				inHead = inHead || head
+				inBody = inBody || body
+			}
+			for _, c := range n.Children {
+				walk(c, head || n.Name == "head", body || n.Name == "body")
+			}
+		}
+		walk(doc, false, false)
+		if inHead {
+			t.Errorf("%s: the foreign element is inside <head>, where it is never drawn", tc.name)
+		}
+		if !inBody {
+			t.Errorf("%s: the foreign element is not inside <body>", tc.name)
+		}
+	}
+}
+
+// TestForeignContentAfterTheBodyHasStartedIsUnchanged is the case that always
+// worked, kept working: the body is entered once, and a graphic in the middle
+// of a document belongs where it was written.
+func TestForeignContentAfterTheBodyHasStartedIsUnchanged(t *testing.T) {
+	doc, _, _ := Parse(`<p>before<svg><circle/></svg>after</p>`)
+	if doc == nil {
+		t.Fatal("no tree")
+	}
+	var parent string
+	var walk func(n *Node)
+	walk = func(n *Node) {
+		for _, c := range n.Children {
+			if c.Type == ElementNode && c.Name == "svg" {
+				parent = n.Name
+			}
+			walk(c)
+		}
+	}
+	walk(doc)
+	if parent != "p" {
+		t.Errorf("the svg's parent is <%s>, want <p>", parent)
+	}
+}

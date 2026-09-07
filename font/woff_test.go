@@ -2,11 +2,14 @@ package font
 
 import (
 	"bufio"
+	"bytes"
+	"compress/zlib"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -397,4 +400,92 @@ func keysOf(m map[string][]byte) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// TestWOFFRefusesADeclaredLengthThatWrapsTheRounding is the same cap and the
+// three numbers that walked past it.
+//
+// The total is rounded to a four-byte boundary per table, and that rounding was
+// done in the thirty-two bits the length is stated in. An origLength of
+// 0xFFFFFFFD, FE or FF rounds up to 2^32, which is zero in those bits — so a
+// table declaring four gigabytes contributed nothing at all to the sum the cap
+// is checked against, and the check the allocation depends on was passed by the
+// one value it exists to stop. The test beside this one uses 0xFFFFFF00, which
+// is enormous and does not wrap, so it never saw this.
+func TestWOFFRefusesADeclaredLengthThatWrapsTheRounding(t *testing.T) {
+	for _, lie := range []uint32{0xFFFFFFFD, 0xFFFFFFFE, 0xFFFFFFFF} {
+		_, err := DecodeWOFF(fonttest.WOFF(fonttest.WOFFOptions{
+			Tables:             []fonttest.WOFFTable{{Tag: "Awxy", Data: make([]byte, 4096)}},
+			LieAboutOrigLength: lie,
+		}))
+		if err == nil {
+			t.Errorf("a table declaring %#x bytes was accepted", lie)
+			continue
+		}
+		// And refused by the cap, not by the size the stream turned out to be.
+		// The second refusal happens after the table has been inflated, which
+		// is after the number the cap exists to reject has been acted on.
+		if !strings.Contains(err.Error(), "more than this engine will decompress") {
+			t.Errorf("a table declaring %#x bytes was refused as %q, which is not the "+
+				"cap: the declared total walked past it", lie, err)
+		}
+	}
+}
+
+// TestInflatingATableDoesNotAllocateWhatTheFileAsksFor is the allocation
+// itself, measured.
+//
+// A table's declared length was the capacity its buffer was made with, before
+// a byte of the stream had been read. That is a number the file chose: four
+// gigabytes of memory from a font of a few kilobytes, which under a memory
+// limit is not an error but the end of the process. What actually arrives is
+// bounded by the reader; the buffer only has to hold it.
+func TestInflatingATableDoesNotAllocateWhatTheFileAsksFor(t *testing.T) {
+	var buf bytes.Buffer
+	zw := zlib.NewWriter(&buf)
+	zw.Write(make([]byte, 32))
+	zw.Close()
+
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	// A stream of thirty-two bytes claiming to be four gigabytes. Its caller is
+	// what notices the disagreement; what matters here is what was allocated
+	// before anyone could.
+	got, err := inflateWOFFTable(buf.Bytes(), 0xFFFFFFFF)
+	runtime.ReadMemStats(&after)
+	if err != nil {
+		t.Fatalf("a readable stream was refused: %v", err)
+	}
+	if len(got) != 32 {
+		t.Fatalf("the stream produced %d bytes, want 32", len(got))
+	}
+
+	const cap = 16 << 20
+	if grew := after.TotalAlloc - before.TotalAlloc; grew > cap {
+		t.Errorf("inflating a table that declared 4 GB allocated %d bytes; the stream "+
+			"held 32, so the size came from the file rather than from the data", grew)
+	}
+}
+
+// TestInflatingATableStillHoldsWhatArrives is the control: a table larger than
+// the starting size must still come out whole, or the fix above would be a
+// truncation.
+func TestInflatingATableStillHoldsWhatArrives(t *testing.T) {
+	want := make([]byte, 4*inflateHint)
+	for i := range want {
+		want[i] = byte(i)
+	}
+	var buf bytes.Buffer
+	zw := zlib.NewWriter(&buf)
+	zw.Write(want)
+	zw.Close()
+
+	got, err := inflateWOFFTable(buf.Bytes(), uint32(len(want)))
+	if err != nil {
+		t.Fatalf("a %d-byte table was refused: %v", len(want), err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("a %d-byte table came back as %d bytes", len(want), len(got))
+	}
 }

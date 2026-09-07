@@ -157,22 +157,16 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 		l.deferGridOutOfFlow(b, parent, width)
 		return 0
 	}
-	columnGap, rowGap := l.gridGap(b, "column-gap", width), l.gridGap(b, "row-gap", width)
 	height, definite := l.explicitHeight(b, width, origin.cbHeight, origin.cbDefinite)
+	// A percentage gap is of the container's size on the gap's own axis — Box
+	// Alignment §8 — and a row gap was being taken of the container's width.
+	// A percentage of a height the container does not state resolves to
+	// nothing, which is what a gap of an indefinite size comes to.
+	columnGap := l.gridGap(b, "column-gap", width, true)
+	rowGap := l.gridGap(b, "row-gap", height, definite)
 
 	columns, fit, _ := l.trackList(b, "grid-template-columns", width,
 		trackRoom{size: width, definite: true, gap: columnGap})
-	if fit && len(items) < len(columns) {
-		// §7.2.3.2's "auto-fit": the tracks that no item landed in are
-		// collapsed, which for a grid whose items are dealt in order means the
-		// ones past the last item. A collapsed track has no size and no gap
-		// beside it, so dropping them is what collapsing comes to — and it is
-		// why "auto-fit" fills the row with three cards where "auto-fill"
-		// leaves room for the fourth.
-		// There is at least one item — a container with none returned above —
-		// so there is at least one column left standing.
-		columns = columns[:len(items)]
-	}
 	flow := l.autoFlow(b)
 	autoColumns := l.implicitTracks(b, "grid-auto-columns", width)
 	autoRows := l.implicitTracks(b, "grid-auto-rows", width)
@@ -194,7 +188,7 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 	for len(columns) < tracksNeeded(items, 1, explicitColumns) {
 		columns = append(columns, implicitTrack(autoColumns, len(columns), explicitColumns))
 	}
-	rows, _, _ := l.trackList(b, "grid-template-rows", width,
+	rows, fitRows, _ := l.trackList(b, "grid-template-rows", width,
 		trackRoom{size: height, definite: definite, gap: rowGap})
 
 	explicitRows := len(rows)
@@ -231,6 +225,22 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 		}
 	}
 
+	// §7.2.3.2's "auto-fit": the tracks no item landed in are collapsed. It
+	// happens here, after the placement, because "no item landed in it" is a
+	// question only the placement can answer — it was asked of the item *count*
+	// instead, before anything had been placed, which is the same number only
+	// when every item takes one track. One item spanning two of four hundred-
+	// pixel tracks left one track standing and came out four hundred pixels
+	// wide; two tracks stand now and it comes out two hundred, which is what
+	// "auto-fit" means and why it fills a row with three cards where
+	// "auto-fill" leaves room for a fourth.
+	if fit {
+		columns = collapseUnusedTracks(columns, items, 1)
+	}
+	if fitRows {
+		rows = collapseUnusedTracks(rows, items, 0)
+	}
+
 	// The block axis takes no axis of its own: nothing this engine lays out
 	// runs a grid's rows backwards, and the gate has refused the two keywords
 	// that would have to be turned if something did.
@@ -246,8 +256,17 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 		it.across = l.itemAlignment(it, "justify-self", across, axis)
 		it.down = l.itemAlignment(it, "align-self", down, flexAxis{})
 		cell := trackSpan(columns, it.column, it.place[1].span, columnGap)
-		it.width = cell
-		if it.across != crossStretch {
+		switch declared, stated := l.gridDeclaredSize(it, "width", cell, true); {
+		case stated:
+			// An item that stated a width is a box of that width placed in its
+			// area, not a box resized to it. §6.6 makes "stretch" apply only
+			// where the item's own size in the axis is auto, and this asked
+			// nowhere: a fifty-pixel item in a two-hundred-pixel cell came out
+			// two hundred, and so did one asking for half the cell.
+			it.width = declared
+		case it.across == crossStretch:
+			it.width = cell
+		default:
 			it.width = l.gridFitContent(it, cell)
 		}
 	}
@@ -285,7 +304,13 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 
 	for _, it := range items {
 		cellHeight := trackSpan(rows, it.row, it.place[0].span, rowGap)
-		if it.down == crossStretch {
+		// The same clause on the other axis. it.height already holds what the
+		// item's own layout came to, which honours a declared height; stretch
+		// was overwriting it.
+		areaDefinite := definite || tracksDefinite(rows, it.row, it.place[0].span)
+		if declared, stated := l.gridDeclaredSize(it, "height", cellHeight, areaDefinite); stated {
+			it.height = declared
+		} else if it.down == crossStretch {
 			it.height = cellHeight
 		}
 		it.frag = l.layOutGridItem(it, it.width,
@@ -591,9 +616,16 @@ func placementFrom(start, end string) (gridPlacement, bool) {
 			out.span = n
 		}
 	case to != 0:
-		// An end line with no start: the item ends there and is one track wide,
-		// which is the same as starting one track earlier.
-		out.start, out.definite = to-2, true
+		// An end line with no start: the item ends there and takes the span it
+		// asked for, so it begins that many tracks earlier. It was read as
+		// though the span were always one — "span 2 / 4" started at line 3 and
+		// ran off the end of the grid, one track further right for every track
+		// of span past the first.
+		span := out.span
+		if span < 1 {
+			span = 1
+		}
+		out.start, out.definite = to-1-span, true
 		if out.start < 0 {
 			out.start = 0
 		}
@@ -1031,6 +1063,110 @@ func (l *layouter) gridFitContent(it *gridItem, cell style.Unit) style.Unit {
 	return style.Clamp(cell, min, max)
 }
 
+// tracksDefinite reports whether the span of tracks an item covers has a size
+// that does not depend on what is in it, which is what makes a percentage
+// against it resolvable.
+//
+// A track written as a length is definite; "auto" and a flexible track are what
+// the items in them come to, so a percentage of one would be a percentage of
+// itself. The container having a definite size on the axis answers it too, and
+// the caller asks that first.
+func tracksDefinite(tracks []gridTrack, from, span int) bool {
+	if span < 1 {
+		span = 1
+	}
+	for i := from; i < from+span; i++ {
+		if i < 0 || i >= len(tracks) {
+			return false
+		}
+		if tracks[i].min.kind != trackFixed || tracks[i].max.kind != trackFixed {
+			return false
+		}
+	}
+	return true
+}
+
+// collapseUnusedTracks drops the tracks of one axis that no item occupies and
+// moves the items onto what is left.
+//
+// A collapsed track has no size and no gap beside it, so dropping it is what
+// collapsing comes to. Every track *inside* an item's span is occupied by that
+// item and so is never dropped, which is what keeps each item's tracks
+// contiguous after the renumbering and lets the spans stand unchanged.
+//
+// At least one track is always kept: every item occupies one, and a container
+// with no items never reaches here.
+func collapseUnusedTracks(tracks []gridTrack, items []*gridItem, axis int) []gridTrack {
+	used := make([]bool, len(tracks))
+	for _, it := range items {
+		from, span := it.column, it.place[1].span
+		if axis == 0 {
+			from, span = it.row, it.place[0].span
+		}
+		if span < 1 {
+			span = 1
+		}
+		for i := from; i < from+span && i < len(used); i++ {
+			if i >= 0 {
+				used[i] = true
+			}
+		}
+	}
+	renumbered := make([]int, len(tracks))
+	out := make([]gridTrack, 0, len(tracks))
+	for i, t := range tracks {
+		renumbered[i] = len(out)
+		if used[i] {
+			out = append(out, t)
+		}
+	}
+	if len(out) == len(tracks) {
+		return tracks
+	}
+	if len(out) == 0 {
+		return tracks[:1]
+	}
+	for _, it := range items {
+		if axis == 0 {
+			if it.row >= 0 && it.row < len(renumbered) {
+				it.row = renumbered[it.row]
+			}
+			continue
+		}
+		if it.column >= 0 && it.column < len(renumbered) {
+			it.column = renumbered[it.column]
+		}
+	}
+	return out
+}
+
+// gridDeclaredSize is the size an item states for one axis, as the margin-box
+// size the placement works in, and whether it stated one at all.
+//
+// The percentage resolves against the item's grid area, which §6.6 makes the
+// containing block for an item's percentages — so "width: 50%" in a
+// two-hundred-pixel cell is a hundred pixels rather than the two hundred it
+// came out as, and a percentage of an area with no definite size is not a size
+// at all.
+func (l *layouter) gridDeclaredSize(it *gridItem, property string, area style.Unit,
+	definite bool) (style.Unit, bool) {
+
+	length, ok := l.parseLength(it.box, property)
+	if !ok || length.Kind == style.LengthAuto {
+		return 0, false
+	}
+	v, ok := length.Resolve(area, definite)
+	if !ok {
+		return 0, false
+	}
+	horizontal, vertical := l.sizingInset(it.box, area)
+	inset, around := horizontal, it.horizontal()
+	if property == "height" {
+		inset, around = vertical, it.vertical()
+	}
+	return maxZero(v.Sub(inset)).Add(around), true
+}
+
 // sizeColumns is §12.4 to §12.8 on the inline axis.
 //
 // A track has two numbers and the difference between them is the whole of the
@@ -1400,8 +1536,12 @@ func (l *layouter) gridItems(b *Box, width style.Unit, areas gridAreas) []*gridI
 // gridGap reads one of the two gaps. "normal" is zero in a grid, as it is in a
 // flex container and as it is not in a multi-column one; see flexGap, which
 // makes the same argument about the same keyword.
-func (l *layouter) gridGap(b *Box, property string, width style.Unit) style.Unit {
-	if v, ok := l.lengthOf(b, property, width); ok && v >= 0 {
+func (l *layouter) gridGap(b *Box, property string, basis style.Unit, definite bool) style.Unit {
+	length, ok := l.parseLength(b, property)
+	if !ok {
+		return 0
+	}
+	if v, ok := length.Resolve(basis, definite); ok && v >= 0 {
 		return v
 	}
 	return 0
@@ -1479,7 +1619,7 @@ func (l *layouter) tracksFrom(b *Box, vals []css.ComponentValue, width style.Uni
 			auto, one, fit = true, got, kind == repeatFit
 			continue
 		}
-		got, ok := l.trackFrom(b, v, width)
+		got, ok := l.trackFrom(b, v, room)
 		if !ok {
 			return nil, false, false
 		}
@@ -1638,11 +1778,11 @@ const maxRepeatedTracks = 1000
 // "whatever the items need" at the low end. Writing them out as a minmax() here
 // rather than special-casing them later is what lets the sizing ask one
 // question of each end and never ask which spelling it came from.
-func (l *layouter) trackFrom(b *Box, v css.ComponentValue, width style.Unit) (gridTrack, bool) {
+func (l *layouter) trackFrom(b *Box, v css.ComponentValue, room trackRoom) (gridTrack, bool) {
 	if v.IsFunction() && strings.EqualFold(v.Token.Value, "minmax") {
-		return l.minmaxTrack(b, v.Values, width)
+		return l.minmaxTrack(b, v.Values, room)
 	}
-	size, ok := l.trackSizeFrom(b, v, width)
+	size, ok := l.trackSizeFrom(b, v, room)
 	if !ok {
 		return gridTrack{}, false
 	}
@@ -1658,7 +1798,7 @@ func (l *layouter) trackFrom(b *Box, v css.ComponentValue, width style.Unit) (gr
 // flexible, because a track that took a share of the free space as its *floor*
 // would be asking for the space before there was any to have.
 func (l *layouter) minmaxTrack(b *Box, args []css.ComponentValue,
-	width style.Unit) (gridTrack, bool) {
+	room trackRoom) (gridTrack, bool) {
 
 	var parts [][]css.ComponentValue
 	var cur []css.ComponentValue
@@ -1680,7 +1820,7 @@ func (l *layouter) minmaxTrack(b *Box, args []css.ComponentValue,
 		if len(one) != 1 || len(one[0]) != 1 {
 			return gridTrack{}, false
 		}
-		size, ok := l.trackSizeFrom(b, one[0][0], width)
+		size, ok := l.trackSizeFrom(b, one[0][0], room)
 		if !ok {
 			return gridTrack{}, false
 		}
@@ -1697,8 +1837,19 @@ func (l *layouter) minmaxTrack(b *Box, args []css.ComponentValue,
 }
 
 // trackSizeFrom reads one sizing function.
+//
+// A percentage is of the container's size *on this track's own axis*, which is
+// what room carries. It was resolved against the container's width whichever
+// axis the list was for, and always as though that width were definite: so
+// "grid-template-rows: 50% 50%" in a four-hundred-pixel-tall box put the second
+// row at a hundred — half the width — and in a box with no height at all it
+// made two rows of that same number out of ten pixels of content.
+//
+// A percentage of a size that is not definite is not a size. §7.2.1 says such a
+// track behaves as "auto", which is the same answer this gives a row whose
+// container states no height.
 func (l *layouter) trackSizeFrom(b *Box, v css.ComponentValue,
-	width style.Unit) (trackSize, bool) {
+	room trackRoom) (trackSize, bool) {
 
 	if v.IsToken() && v.Token.Kind == css.Ident {
 		switch strings.ToLower(v.Token.Value) {
@@ -1722,8 +1873,11 @@ func (l *layouter) trackSizeFrom(b *Box, v css.ComponentValue,
 	if !ok {
 		return trackSize{}, false
 	}
-	size, ok := length.Resolve(width, true)
-	if !ok || size < 0 {
+	size, ok := length.Resolve(room.size, room.definite)
+	if !ok {
+		return trackSize{kind: trackAuto}, true
+	}
+	if size < 0 {
 		return trackSize{}, false
 	}
 	return trackSize{kind: trackFixed, size: size}, true

@@ -1,7 +1,8 @@
 # Unicode's bidirectional conformance suites, fetched by `make bidi-tests`.
 testdata/unicode-bidi/
 
-# Unicode's property files, fetched into place for `make useable`.
+# Unicode's property files, fetched by `make ucd` and read by every generator
+# that derives a table from them.
 testdata/ucd/
 # The ICU word lists cmd/gendict reads. The generated table is committed; the
 # source is fetched, like every other upstream data file here.

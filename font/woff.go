@@ -165,7 +165,12 @@ func DecodeWOFF(data []byte) ([]byte, error) {
 	body := 12 + 16*len(entries)
 	total := uint64(body)
 	for _, e := range entries {
-		total += uint64(e.origLength+3) &^ 3
+		// The rounding is done in sixty-four bits, not in the thirty-two the
+		// length is stated in. Rounded in place, an origLength of 0xFFFFFFFD or
+		// above wrapped to zero and contributed nothing at all to the total, so
+		// a table declaring four gigabytes passed the cap that exists to stop
+		// exactly that.
+		total += (uint64(e.origLength) + 3) &^ 3
 		if total > maxWOFFSfntSize {
 			return nil, errors.New("fonts: the WOFF's tables come to more than this engine will decompress")
 		}
@@ -218,6 +223,11 @@ func DecodeWOFF(data []byte) ([]byte, error) {
 	return out, nil
 }
 
+// inflateHint is how much room a table is given before it has produced
+// anything. It is a starting size and not a bound: what bounds the output is
+// the reader below, which stops at what the table declared.
+const inflateHint = 64 << 10
+
 // inflateWOFFTable decompresses one table, refusing a stream that produces more
 // than it said it would.
 //
@@ -233,9 +243,19 @@ func inflateWOFFTable(raw []byte, want uint32) ([]byte, error) {
 	}
 	defer zr.Close()
 
-	out := make([]byte, 0, want)
-	buf := bytes.NewBuffer(out)
-	n, err := io.Copy(buf, io.LimitReader(zr, int64(want)+1))
+	// The buffer is not sized from want. want is the file's own claim about how
+	// large the table will be, and an allocation sized from an attacker's
+	// number is how a two-kilobyte font asks for four gigabytes of memory
+	// before a byte of it has been read — which under a memory limit is not an
+	// error but the end of the process. The reader below bounds what actually
+	// arrives; the buffer grows to hold it.
+	var buf bytes.Buffer
+	if want < inflateHint {
+		buf.Grow(int(want))
+	} else {
+		buf.Grow(inflateHint)
+	}
+	n, err := io.Copy(&buf, io.LimitReader(zr, int64(want)+1))
 	if err != nil {
 		return nil, errors.New("fonts: a WOFF table could not be decompressed: " + err.Error())
 	}

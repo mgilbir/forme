@@ -13,7 +13,7 @@ import (
 //
 // §10 of the rendering proposal makes the font set the caller's to supply,
 // through an interface, and the reason is packaging: a font committed to this
-// repository is paid for by every pdf0 user including the ones who only parse.
+// repository is paid for by every forme user including the ones who only parse.
 // What is here is the interface and a default made of the fourteen faces every
 // PDF reader already has, which need no embedding at all.
 
@@ -244,6 +244,20 @@ func (l *layouter) fontFor(b *Box) (*shape.Face, bool) {
 	face, ok := l.fontSet.Face(initialFamily, key.bold, key.italic)
 	l.fonts[key] = resolvedFont{face: face}
 	if !ok {
+		// Not even the initial family. The set has nothing, so this box's text
+		// is not drawn — and neither is any other box's, since they all end up
+		// here. That was silent: a set with no faces in it produced a blank
+		// page, no finding, and Refused false, which a caller cannot tell from
+		// a document that said nothing.
+		if !l.reportedNoFace {
+			l.reportedNoFace = true
+			l.rec.ReportDetail(Finding{
+				Rule: RuleNoFace,
+				Message: "no font face is available at all, not even for " +
+					quoteValue(initialFamily) + ", so no text was drawn",
+				Property: "font-family",
+			})
+		}
 		return nil, false
 	}
 	if len(families) > 0 {

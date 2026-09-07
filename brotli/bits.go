@@ -80,6 +80,19 @@ func (r *reader) align() bool {
 	return pad == 0 || r.take(uint(pad)) == 0
 }
 
+// remaining is how many whole bytes of the input have not been read.
+//
+// Counted from the bits handed out rather than from pos, because the
+// accumulator reads ahead: pos is where the *filling* has got to and says
+// nothing about what the stream has consumed.
+func (r *reader) remaining() int {
+	used := (r.consumed + 7) / 8
+	if used >= uint64(len(r.src)) {
+		return 0
+	}
+	return len(r.src) - int(used)
+}
+
 // bytes reads n whole bytes, which is only meaningful directly after align. It
 // returns a slice of the input rather than a copy; the caller appends it to the
 // output and does not hold it.
