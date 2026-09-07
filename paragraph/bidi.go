@@ -54,8 +54,19 @@ func NewBidiBuilder(open []rune) *BidiBuilder {
 	return p
 }
 
-// cur is the paragraph being built.
-func (p *BidiBuilder) cur() *[]rune { return &p.Paras[len(p.Paras)-1] }
+// cur is the paragraph being built, starting one where there is none.
+//
+// NewBidiBuilder makes the first, and every path that reaches here from a
+// builder made that way finds one. A zero BidiBuilder does not, and every
+// method on it indexed the last of no paragraphs and panicked — from a public
+// type, on a value the language says is ready to use. Starting one is the same
+// answer BreakParagraph gives and costs a caller nothing.
+func (p *BidiBuilder) cur() *[]rune {
+	if len(p.Paras) == 0 {
+		p.Paras = append(p.Paras, nil)
+	}
+	return &p.Paras[len(p.Paras)-1]
+}
 
 // Add appends a run of text and returns where it landed: which paragraph, and
 // the range of runes within it. The paragraph number counts from one; see
@@ -112,11 +123,21 @@ func (p *BidiBuilder) Enter(open []rune) {
 	p.Needed = true
 }
 
+// Leave closes what the matching Enter opened.
+//
+// A Leave with no Enter to match is a caller's mistake and not this package's
+// business to diagnose, but it is not a reason to bring the process down
+// either: the stack is empty, there is nothing to pop, and the closing codes
+// are appended to whatever is open. It used to slice a length of nought and
+// panic, which is a panic out of a *layout* engine — reached from a tree the
+// caller built, with no way back.
 func (p *BidiBuilder) Leave(open, close []rune) {
 	if p == nil || len(open) == 0 {
 		return
 	}
-	p.stack = p.stack[:len(p.stack)-1]
+	if len(p.stack) > 0 {
+		p.stack = p.stack[:len(p.stack)-1]
+	}
 	cur := p.cur()
 	*cur = append(*cur, close...)
 }
