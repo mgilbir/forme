@@ -531,7 +531,14 @@ func (f *Face) Advance(r rune) (float64, bool) {
 // and writes codes of the wrong width, which is a page of scrambled text.
 func (f *Face) composite() bool { return f.std == nil && !f.simple }
 
-// advanceGID is the advance of a glyph index, in font units.
+// advanceGID is the advance of a glyph index, in thousandths of an em.
+//
+// Not font units, which is what this said for a long time and what a reader of
+// the header would expect: font.FontProgram scales WidthByGID on the way in, so
+// that every caller of it is on one grid whatever the face's own grid is. A
+// Descriptor's lengths *are* font units, and the two are the same number only
+// for the fonts whose em is a thousand units — which the bundled face is, so
+// nothing here saw the difference.
 //
 // It is only meaningful for a composite face; the guard is against a caller
 // reaching it for one of the others, where there may be no program at all.

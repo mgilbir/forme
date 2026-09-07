@@ -23,10 +23,18 @@
 //
 // # What is deliberately absent
 //
-// No scripting, at any point, under any option. <script>, <iframe>, <object>
-// and <embed> are dropped and reported, per §4.1 — they are the whole of the
-// remote-content and code-execution surface, and a renderer that quietly
-// ignored them would still be one that read them.
+// No scripting, at any point, under any option. <script> and <embed> are
+// dropped and reported, per §4.1, along with everything else whose content is
+// produced by running something — see droppedElements for the list and a reason
+// against each name. A renderer that quietly ignored them would still be one
+// that had read them.
+//
+// Dropping the element is not the same as dropping its *box*, and the two were
+// once confused here. An <iframe> and an <object> are replaced elements: their
+// boxes are on the page whether or not anything was ever loaded into them, and
+// they are in knownElements for those boxes. What would have been inside is not
+// laid out — an iframe's children are the fallback a browser without frames
+// would show, and no browser with them renders it.
 //
 // No network and no filesystem. Nothing here resolves a URL; an <img src> is
 // recorded as written and left for the caller's resolver to decide about.

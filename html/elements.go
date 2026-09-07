@@ -7,13 +7,21 @@ package html
 // decision this package exists to enforce, and a boundary spread through
 // conditionals is one nobody can read off.
 
-// knownElements is everything the layout engine can do something with.
+// knownElements is everything this package has something to say about: an
+// element whose name decides how it nests, what it may contain, or what box it
+// makes.
 //
-// An element outside this set is refused rather than treated as an anonymous
-// box. Rendering an unknown tag as a generic inline is what a browser does, and
-// it is the wrong answer here: it produces a page that looks nearly right, so
-// nothing signals that a <fancy-callout> the author expected to matter was laid
-// out as though it were a <span>.
+// An element outside this set is *not* refused. It is kept, and laid out as the
+// ordinary inline box HTML gives it — see the note at insertUnknown, which is
+// where that decision is argued. Refusing it is what this used to do, on the
+// reading that an element the engine does not know is one it cannot lay out.
+// That is true of <canvas> and <video>, which need something this engine does
+// not have and are refused above by name; it was never true of a custom element,
+// where dropping the tag threw away every rule the author had written for it.
+//
+// So membership here is a statement about parsing and not about acceptance. The
+// elements this engine will not render are droppedElements, each with its own
+// reason, and they are named rather than left to be inferred from an absence.
 var knownElements = map[string]bool{
 	// Document structure.
 	"html": true, "head": true, "body": true,
