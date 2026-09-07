@@ -154,6 +154,7 @@ between them.
 	make test-normalization # and its normalisation forms
 	make test-css      # the CSS Syntax suite
 	make hbfuzz        # differential fuzzing; needs python and uharfbuzz
+	make test-difffuzz # that fuzzer's classifier, which needs only python
 
 The corpora are fetched rather than vendored — the reftests alone are eighty
 megabytes of somebody else's repository — and everything fetched is gitignored.

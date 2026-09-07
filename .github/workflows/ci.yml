@@ -121,6 +121,8 @@ jobs:
       - run: make test-bidi
       - run: make test-grapheme
       - run: make test-normalization
+      # The differential fuzzer's classifier, which needs no font libraries.
+      - run: make test-difffuzz
       # The CSS Syntax test suite, which this repository did not write.
       - run: make test-css
       # The reftest ratchet: six thousand documents from the CSS Working Group's

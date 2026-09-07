@@ -1,4 +1,4 @@
-.PHONY: ucd verify-fonts test-corpora linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors noto-fonts clean-noto-fonts wpt test-wpt clean-wpt varinstance test-varinstance
+.PHONY: ucd verify-fonts test-corpora linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors noto-fonts clean-noto-fonts wpt test-wpt clean-wpt varinstance test-varinstance
 
 test:
 	gofmt -l . | grep -v '^testdata/' && exit 1 || true
@@ -153,6 +153,16 @@ test-varinstance:
 hbfuzz:
 	go build -o $(HARFBUZZ_DIR)/.shapetext ./cmd/shapetext
 	SHAPETEXT=$(abspath $(HARFBUZZ_DIR)/.shapetext) $(PYTHON) $(HARFBUZZ_DIR)/difffuzz.py 60
+
+# The fuzzer's classifier, on its own.
+#
+# It is the part of difffuzz with a decision in it: a difference it names is a
+# difference nobody is ever shown, so a class that quietly grew to cover
+# something new would hide the next defect rather than report it. This needs
+# neither uharfbuzz nor fontTools — the imports for those are where they are used
+# — so it runs anywhere python3 does, and it runs in CI.
+test-difffuzz:
+	$(PYTHON) $(HARFBUZZ_DIR)/difffuzz.py --self-test
 
 # The Universal Shaping Engine's category table, derived from Unicode's own
 # property files plus the engine's corrections. See cmd/genuse.
