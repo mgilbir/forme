@@ -225,6 +225,14 @@ func colorArgs(vals []css.ComponentValue) (args [][]css.ComponentValue, alpha []
 		groups = append(groups, cur)
 		for i := range groups {
 			groups[i] = trimSpace(groups[i])
+			if len(groups[i]) == 0 {
+				// A comma with nothing on one side of it. "rgb(1,2,3,)" is not
+				// a colour with no alpha — it is a function whose last argument
+				// is missing — and reading it as one made a declaration no
+				// browser accepts into an opaque colour, which is a page that
+				// is plausible and wrong rather than one that fell back.
+				return nil, nil, false, false
+			}
 		}
 		switch len(groups) {
 		case 3:

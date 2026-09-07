@@ -2,6 +2,7 @@ package style
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/mgilbir/forme/css"
@@ -512,6 +513,33 @@ func (s *Styler) prepareNestedConditional(rule css.Rule, parent []css.ComponentV
 // a nested rule's declarations come after the declarations of the rule holding
 // them. That is what CSS Nesting asks for — the nested rule is at the place it
 // was written — and it falls out of doing the parent's declarations first.
+// charsetLabel is the encoding an @charset names, which is a single string.
+func charsetLabel(prelude []css.ComponentValue) (string, bool) {
+	var only css.ComponentValue
+	n := 0
+	for _, v := range prelude {
+		if v.IsToken() && v.Token.Kind == css.Whitespace {
+			continue
+		}
+		only, n = v, n+1
+	}
+	if n != 1 || !only.IsToken() || only.Token.Kind != css.String {
+		return "", false
+	}
+	return strings.ToLower(strings.TrimSpace(only.Token.Value)), true
+}
+
+// utf8Charset reports whether a label names UTF-8, from the Encoding Standard's
+// own table of aliases.
+func utf8Charset(label string) bool {
+	switch label {
+	case "utf-8", "utf8", "unicode-1-1-utf-8", "unicode11utf8", "unicode20utf8",
+		"x-unicode20utf8":
+		return true
+	}
+	return false
+}
+
 func (s *Styler) prepareRule(rule css.Rule, parent []css.ComponentValue, origin Origin,
 	out *[]preparedRule, order *int) {
 
@@ -526,6 +554,32 @@ func (s *Styler) prepareRule(rule css.Rule, parent []css.ComponentValue, origin 
 			// paper reads it. There is nothing for the cascade to say about it
 			// either way, so it says nothing rather than reporting a rule that
 			// is applied elsewhere as one that is not.
+			return
+		}
+		if strings.EqualFold(rule.Name, "charset") {
+			// @charset names the encoding the stylesheet is written in, which
+			// is not something the cascade applies to anything — it is a fact
+			// about the bytes, settled before they were parsed. A sheet saying
+			// it is UTF-8 is saying what is already true here and is passed
+			// over in silence; one naming anything else is the same report the
+			// document's own <meta charset> gets, because this engine reads
+			// UTF-8 and cannot decode another.
+			//
+			// It was reported as an at-rule "not applied yet", which is what
+			// every unrecognised at-rule gets — so a stylesheet that opens with
+			// the perfectly ordinary "@charset \"utf-8\";" put its document in
+			// the bucket of pages carrying something unsupported, and the
+			// measurement of how much this engine really does was that much
+			// smaller.
+			if label, named := charsetLabel(rule.Prelude); named && !utf8Charset(label) {
+				s.report(Finding{
+					Offset: rule.Offset,
+					Message: "the stylesheet declares the " + strconv.Quote(label) +
+						" encoding; this engine reads UTF-8 and cannot decode any other",
+					Unsupported: true,
+					Property:    "@charset",
+				})
+			}
 			return
 		}
 		// An at-rule this package does not act on and no other stage does

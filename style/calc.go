@@ -82,8 +82,14 @@ func calcSum(vals []css.ComponentValue, ctx LengthContext) (calcTerm, []css.Comp
 		// decoration: without it "calc(1px -2px)" would be a subtraction or a
 		// length followed by a negative length depending on which way you
 		// squint, and the tokenizer has already chosen the second. So an
-		// operator is a delimiter with space in front of it, and anything else
+		// operator is a delimiter with space on *both* sides, and anything else
 		// ends the sum.
+		//
+		// Both sides, which is what §10.1 says and what this checked on one:
+		// "calc(1px +-2px)" was read as a subtraction, because the space in
+		// front was there and the tokenizer had already made "-2px" a negative
+		// length — so a declaration no browser accepts came out as minus one
+		// pixel rather than as the mistake it is.
 		after := skipSpace(rest)
 		if len(after) == len(rest) || len(after) == 0 {
 			return left, rest, true
@@ -91,6 +97,10 @@ func calcSum(vals []css.ComponentValue, ctx LengthContext) (calcTerm, []css.Comp
 		op, isOp := calcOperator(after[0], "+-")
 		if !isOp {
 			return left, rest, true
+		}
+		if tail := after[1:]; len(tail) == 0 || !tail[0].IsToken() ||
+			tail[0].Token.Kind != css.Whitespace {
+			return calcTerm{}, nil, false
 		}
 		right, more, ok := calcProduct(after[1:], ctx)
 		if !ok {
