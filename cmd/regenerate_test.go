@@ -141,7 +141,9 @@ func generatorRuns(t *testing.T) []generatorRun {
 		if !strings.HasPrefix(full, "go run ./cmd/gen") {
 			continue
 		}
-		full = strings.ReplaceAll(full, "$(UCD)", "testdata/ucd")
+		for name, value := range makeVars(t) {
+			full = strings.ReplaceAll(full, "$("+name+")", value)
+		}
 		if strings.Contains(full, "$(") {
 			continue
 		}
@@ -169,21 +171,49 @@ func generatorRuns(t *testing.T) []generatorRun {
 	return out
 }
 
+// makeVars are the Makefile variables a generator recipe names, with what they
+// expand to here.
+//
+// They are read from the Makefile rather than written down, so that the
+// database's directory and the release it holds cannot be one thing there and
+// another here — which is the whole failure this file is about, one level up.
+func makeVars(t *testing.T) map[string]string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "Makefile"))
+	if err != nil {
+		t.Fatalf("reading the Makefile: %v", err)
+	}
+	out := map[string]string{}
+	for _, line := range strings.Split(string(data), "\n") {
+		for _, name := range []string{"UCD", "UCD_DIR", "UNICODE_VERSION"} {
+			for _, op := range []string{" ?= ", " := ", " = "} {
+				if v, ok := strings.CutPrefix(line, name+op); ok {
+					if _, seen := out[name]; !seen {
+						out[name] = strings.TrimSpace(v)
+					}
+				}
+			}
+		}
+	}
+	// UCD defaults to UCD_DIR, and the recipes name UCD.
+	if out["UCD"] == "$(UCD_DIR)" {
+		out["UCD"] = out["UCD_DIR"]
+	}
+	for _, name := range []string{"UCD", "UNICODE_VERSION"} {
+		if out[name] == "" {
+			t.Fatalf("the Makefile no longer sets %s, so the recipes below "+
+				"cannot be expanded", name)
+		}
+	}
+	return out
+}
+
 // unicodeVersion is what the Makefile fetched, for the failure message: a table
 // generated from one release and compared against another differs in thousands
 // of lines, and the reason is not in the diff.
 func unicodeVersion(t *testing.T) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "Makefile"))
-	if err != nil {
-		return "unknown"
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if v, ok := strings.CutPrefix(line, "UNICODE_VERSION ?= "); ok {
-			return strings.TrimSpace(v)
-		}
-	}
-	return "unknown"
+	return makeVars(t)["UNICODE_VERSION"]
 }
 
 // firstDifference names the first line that differs, since a table is tens of

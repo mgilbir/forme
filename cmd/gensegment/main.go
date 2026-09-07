@@ -38,6 +38,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	ucdmeta "github.com/mgilbir/forme/cmd/internal/ucd"
 )
 
 // rng is one run of code points sharing a value.
@@ -49,13 +51,23 @@ type rng struct {
 func main() {
 	ucd := flag.String("ucd", "testdata/ucd", "directory holding the UCD files")
 	out := flag.String("out", "segment/tables.go", "file to write")
-	version := flag.String("version", "17.0.0", "the Unicode version the files came from")
+	version := flag.String("version", "", "the Unicode version the files came from")
 	flag.Parse()
 
-	gcb := parse(filepath.Join(*ucd, "auxiliary", "GraphemeBreakProperty.txt"), nil)
+	// No default. A default is a constant that prints whatever the files hold,
+	// which is what three of the generators beside this one were doing; the
+	// Makefile fills it in from UNICODE_VERSION, and the two files below that
+	// declare a release are checked against it.
+	gcbPath := filepath.Join(*ucd, "auxiliary", "GraphemeBreakProperty.txt")
+	derivedPath := filepath.Join(*ucd, "DerivedCoreProperties.txt")
+	if err := ucdmeta.Check(*version, gcbPath, derivedPath); err != nil {
+		fatalf("%v", err)
+	}
+
+	gcb := parse(gcbPath, nil)
 	pict := parse(filepath.Join(*ucd, "emoji", "emoji-data.txt"),
 		func(v string) bool { return v == "Extended_Pictographic" })
-	incb := parseINCB(filepath.Join(*ucd, "DerivedCoreProperties.txt"))
+	incb := parseINCB(derivedPath)
 
 	// A value that names nothing in the Go source is a table that would compile
 	// to the wrong thing, so the mapping is checked rather than assumed.

@@ -120,3 +120,49 @@ func packageOf(t *testing.T, path string) string {
 	}
 	return f.Name.Name
 }
+
+// TestEveryTableNamesTheReleaseTheMakefileFetches.
+//
+// Every generated table says which release of the database it came from, and
+// three of them said "Unicode 17.0.0" because that string was typed into the
+// generator: geneastasian in five places, genfullwidth and genfullsizekana in
+// one each. Regenerated against a later release they would have carried the
+// name of the release before it, and a provenance line that is a constant is
+// worse than none — it is read as a fact.
+//
+// They are told now, from the Makefile's UNICODE_VERSION, which is the variable
+// that decides what `make ucd` fetches; the generators whose inputs declare a
+// release check the two agree. This is the other end of that: what the
+// committed tables say, against what the Makefile fetches.
+func TestEveryTableNamesTheReleaseTheMakefileFetches(t *testing.T) {
+	want := unicodeVersion(t)
+	named := 0
+	for gen, out := range generated {
+		src, err := os.ReadFile(filepath.Join("..", out))
+		if err != nil {
+			t.Errorf("%s: %v", out, err)
+			continue
+		}
+		for _, m := range unicodeVersionRe.FindAllStringSubmatch(string(src), -1) {
+			named++
+			if m[1] != want {
+				t.Errorf("%s says it is from Unicode %s and the Makefile fetches "+
+					"%s; either cmd/%s has the release typed into it, or the "+
+					"table was not regenerated", out, m[1], want, gen)
+			}
+		}
+	}
+	// Thirteen files name it, twenty-nine times between them. A floor rather
+	// than the count, so that a new table does not have to be added here — but
+	// a floor all the same, because a sweep that matched nothing would pass.
+	if named < 20 {
+		t.Fatalf("only %d version claims were found in the generated tables; "+
+			"they carry twenty-nine, so this has stopped reading them", named)
+	}
+	t.Logf("%d version claims, all Unicode %s", named, want)
+}
+
+// unicodeVersionRe finds a release named in a generated file, in the two forms
+// the generators write: a sentence, and segment's exported constant.
+var unicodeVersionRe = regexp.MustCompile(
+	`(?:Unicode |UnicodeVersion = ")(\d+\.\d+\.\d+)`)

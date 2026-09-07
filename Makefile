@@ -254,7 +254,8 @@ bidi-tables: $(UCD_DEP)
 #
 #	make grapheme-tables UCD=/path/to/unpacked/ucd
 grapheme-tables: $(UCD_DEP)
-	go run ./cmd/gensegment -ucd $(UCD) -out segment/tables.go
+	go run ./cmd/gensegment -version $(UNICODE_VERSION) -ucd $(UCD) \
+	  -out segment/tables.go
 	gofmt -w segment/tables.go
 
 # The characters a line may not begin with, from Unicode's line-breaking
@@ -278,7 +279,8 @@ casing: $(UCD_DEP)
 #
 #	make eastasian UCD=/path/to/unpacked/ucd
 eastasian: $(UCD_DEP)
-	go run ./cmd/geneastasian $(UCD)/EastAsianWidth.txt $(UCD)/Scripts.txt \
+	go run ./cmd/geneastasian -version $(UNICODE_VERSION) \
+	  $(UCD)/EastAsianWidth.txt $(UCD)/Scripts.txt \
 	  $(UCD)/UnicodeData.txt $(UCD)/emoji/emoji-data.txt \
 	  > paragraph/eastasiantable.go
 	gofmt -w paragraph/eastasiantable.go
@@ -407,8 +409,10 @@ vertical: $(UCD_DEP)
 #
 #	make widths UCD=/path/to/unpacked/ucd
 widths: $(UCD_DEP)
-	go run ./cmd/genfullwidth $(UCD)/UnicodeData.txt > paragraph/widthtable.go
-	go run ./cmd/genfullsizekana $(UCD)/UnicodeData.txt > paragraph/kanatable.go
+	go run ./cmd/genfullwidth -version $(UNICODE_VERSION) \
+	  $(UCD)/UnicodeData.txt > paragraph/widthtable.go
+	go run ./cmd/genfullsizekana -version $(UNICODE_VERSION) \
+	  $(UCD)/UnicodeData.txt > paragraph/kanatable.go
 	gofmt -w paragraph/widthtable.go paragraph/kanatable.go
 
 useable: $(UCD_DEP)

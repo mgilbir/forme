@@ -33,6 +33,7 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"go/format"
 	"os"
@@ -42,11 +43,20 @@ import (
 )
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: genfullwidth <UnicodeData.txt>")
+	// UnicodeData.txt is the one file in the database with no header at all —
+	// it is pure data — so unlike every other generator here this one cannot
+	// read the release it was handed and has to be told. The Makefile fills it
+	// in from UNICODE_VERSION, which is the variable that decides what `make
+	// ucd` fetches. It used to be the string "17.0.0", printed whatever the
+	// file held.
+	version := flag.String("version", "", "the Unicode version the file came from")
+	flag.Parse()
+	args := flag.Args()
+	if len(args) != 1 || *version == "" {
+		fmt.Fprintln(os.Stderr, "usage: genfullwidth -version <X.Y.Z> <UnicodeData.txt>")
 		os.Exit(2)
 	}
-	f, err := os.Open(os.Args[1])
+	f, err := os.Open(args[0])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -111,7 +121,7 @@ func main() {
 
 package paragraph
 
-// The fullwidth form of every character that has one. Unicode 17.0.0.
+// The fullwidth form of every character that has one. Unicode %s.
 //
 // %d mappings: %d read backwards from a <wide> decomposition and %d forwards
 // from a <narrow> one — see cmd/genfullwidth, which is also where the reason
@@ -124,7 +134,7 @@ type widthPair struct {
 }
 
 var fullWidthForms = [...]widthPair{
-`, len(pairs), wide, narrow)
+`, *version, len(pairs), wide, narrow)
 	for _, p := range pairs {
 		fmt.Fprintf(&b, "\t{%#04X, %#04X}, // %s\n", p.from, p.to, p.name)
 	}
