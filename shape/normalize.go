@@ -241,6 +241,93 @@ func canonicalCompose(a, b rune) (rune, bool) {
 	return canonicalCompositions[i].ab, true
 }
 
+// ComposeCanonically puts text into Unicode's Normalization Form C, and says
+// where each character it returns came from.
+//
+// This is the plain, face-independent normalisation the rest of this file
+// deliberately is not: the normalizer above composes only what the *font* can
+// draw, because what a shaper wants is the spelling that face sets best. A
+// consumer asking a question about the text rather than about the glyphs wants
+// the other thing — one spelling for text that Unicode says is the same text,
+// whatever font it will end up in. paragraph's hyphenation dictionary is that
+// consumer: its patterns are written in NFC, and "café" spelled with a
+// combining acute matched none of them.
+//
+// It lives here because this is where the tables are. Decomposing, ordering by
+// combining class and composing back are the same three rounds, run
+// unconditionally.
+//
+// The second result is one index per returned rune: the position in the input of
+// the last rune that went into it. A caller that has offsets of its own — which
+// character of which box a hyphenation point falls after — needs that to say
+// anything about the text it started with.
+func ComposeCanonically(runes []rune) ([]rune, []int) {
+	// Round one: take everything apart, as far as Unicode does.
+	out := make([]rune, 0, len(runes))
+	from := make([]int, 0, len(runes))
+	var expand func(r rune, at, depth int)
+	expand = func(r rune, at, depth int) {
+		// The depth is Unicode's own — no canonical decomposition is more than
+		// a few levels deep — and is a bound rather than a rule.
+		if a, b, ok := canonicalDecompose(r); ok && depth < 8 {
+			expand(a, at, depth+1)
+			// A singleton decomposition is one character and leaves b unset:
+			// U+0340 is written U+0300 and nothing else. Emitting the zero as
+			// well put a NUL into the middle of every one of them.
+			if b != 0 {
+				expand(b, at, depth+1)
+			}
+			return
+		}
+		out = append(out, r)
+		from = append(from, at)
+	}
+	for i, r := range runes {
+		expand(r, i, 0)
+	}
+
+	// Round two: canonical order. A stable insertion sort by combining class,
+	// which is what the standard's own algorithm is.
+	for i := 1; i < len(out); i++ {
+		cc := CombiningClass(out[i])
+		if cc == 0 {
+			continue
+		}
+		for j := i; j > 0 && CombiningClass(out[j-1]) > cc; j-- {
+			out[j-1], out[j] = out[j], out[j-1]
+			from[j-1], from[j] = from[j], from[j-1]
+		}
+	}
+
+	// Round three: compose back into the last starter, where the pair composes
+	// and nothing stands between them. "Nothing stands between them" is UAX #15's
+	// blocking rule: a character is blocked from the starter by anything at or
+	// above its own combining class, so the two marks of "ậ" compose in turn and
+	// two marks of the same class do not swap places by composing out of order.
+	res := make([]rune, 0, len(out))
+	resFrom := make([]int, 0, len(out))
+	starter, lastCC := -1, uint8(0)
+	for i, r := range out {
+		cc := CombiningClass(r)
+		if starter >= 0 && (starter == len(res)-1 || lastCC < cc) {
+			if ab, ok := canonicalCompose(res[starter], r); ok {
+				res[starter] = ab
+				if from[i] > resFrom[starter] {
+					resFrom[starter] = from[i]
+				}
+				continue
+			}
+		}
+		res = append(res, r)
+		resFrom = append(resFrom, from[i])
+		lastCC = cc
+		if cc == 0 {
+			starter = len(res) - 1
+		}
+	}
+	return res, resFrom
+}
+
 // hasGlyph reports whether the face can draw a character as itself.
 func (f *Face) hasGlyph(r rune) bool {
 	_, ok := f.GlyphID(r)

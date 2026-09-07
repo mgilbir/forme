@@ -123,6 +123,7 @@ record of what it thought of.
 | **CSS Working Group reftests** | 6,253 documents rendered and compared against their references — **5,955 pass with nothing unsupported reported in either document** |
 | **Unicode's bidi conformance** | 861,948 cases across `BidiTest.txt` and `BidiCharacterTest.txt`, no failures |
 | **Unicode's grapheme boundaries** | all 766 cases of `GraphemeBreakTest.txt` |
+| **Unicode's normalisation forms** | all 20,034 cases of `NormalizationTest.txt`, both NFC invariants |
 | **HarfBuzz**, over six fonts | 20,623 strings, two deliberate differences |
 | **The CSS Syntax suite** | 229 cases from the suite `css-parsing-tests` publishes, with 13 more deliberately excused and each excuse named |
 
@@ -150,6 +151,7 @@ between them.
 	make test-wpt      # fetches the CSS WG reftests and runs the ratchet
 	make test-bidi     # fetches Unicode's bidi conformance suites
 	make test-grapheme # and its grapheme boundary cases
+	make test-normalization # and its normalisation forms
 	make test-css      # the CSS Syntax suite
 	make hbfuzz        # differential fuzzing; needs python and uharfbuzz
 

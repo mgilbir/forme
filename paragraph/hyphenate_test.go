@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/mgilbir/forme/shape"
 )
 
 // Liang's algorithm, checked against the answers the pattern file itself
@@ -328,5 +330,69 @@ func TestHyphenatePiecesSplitsAtTheOffsetsItIsGiven(t *testing.T) {
 	// And no points is the text untouched, with nothing allocated to say so.
 	if got, ends := HyphenatePieces(pieces, nil); ends || len(got) != 2 {
 		t.Errorf("an empty point list changed the pieces: %v", got)
+	}
+}
+
+// The two spellings of the same word.
+//
+// Unicode writes "zhōng" as five characters or as six, and says the two are the
+// same text. A pattern table is written in one of them — hyph-utf8's files are
+// composed — so a word arriving in the other matched nothing at all, and what
+// the dictionary had to say about it was said about the letters before the first
+// accent instead: the mark ended the word, and "cafe" was hyphenated on its own.
+var spellings = []struct{ nfc, nfd string }{
+	{"zhōngguó", "zhōngguó"},
+	{"hànyǔ", "hànyǔ"},
+	{"pīnyīn", "pīnyīn"},
+	{"xiāngjiāo", "xiāngjiāo"},
+	{"diànnǎo", "diànnǎo"},
+}
+
+// TestAWordDividesTheSameWhicheverWayItIsSpelled.
+func TestAWordDividesTheSameWhicheverWayItIsSpelled(t *testing.T) {
+	for _, w := range spellings {
+		nfc := HyphenPoints(w.nfc, "zh-latn", 0, 0)
+		nfd := HyphenPoints(w.nfd, "zh-latn", 0, 0)
+		if len(nfc) == 0 {
+			t.Fatalf("%q has no points at all, so this test is watching nothing",
+				w.nfc)
+		}
+		if len(nfc) != len(nfd) {
+			t.Errorf("%q divides in %d places and its decomposed spelling in %d: "+
+				"%v against %v", w.nfc, len(nfc), len(nfd), nfc, nfd)
+			continue
+		}
+		// The same *place in the text*, which is a different index in each
+		// spelling: the head of the word up to the point has to be the same
+		// text, and "the same text" is what canonical equivalence means.
+		for i := range nfc {
+			a, _ := shape.ComposeCanonically([]rune(w.nfc)[:nfc[i]])
+			b, _ := shape.ComposeCanonically([]rune(w.nfd)[:nfd[i]])
+			if string(a) != string(b) {
+				t.Errorf("%q divides after %q and its decomposed spelling after "+
+					"%q", w.nfc, string(a), string(b))
+			}
+		}
+	}
+}
+
+// TestAWordIsNeverDividedBetweenALetterAndItsMark. A point is a place a hyphen
+// is drawn, and a hyphen between a letter and the accent written on it divides
+// nothing — it is one letter, and half of it would be left on the line above.
+func TestAWordIsNeverDividedBetweenALetterAndItsMark(t *testing.T) {
+	for _, w := range spellings {
+		runes := []rune(w.nfd)
+		points := HyphenPoints(w.nfd, "zh-latn", 0, 0)
+		if len(points) == 0 {
+			t.Fatalf("%q has no points at all, so this test is watching nothing",
+				w.nfd)
+		}
+		for _, p := range points {
+			if p < len(runes) && shape.CombiningClass(runes[p]) != 0 {
+				t.Errorf("%q may be divided after %d runes, which is between "+
+					"U+%04X and the mark U+%04X written on it",
+					w.nfd, p, runes[p-1], runes[p])
+			}
+		}
 	}
 }

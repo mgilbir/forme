@@ -3,6 +3,8 @@ package layout
 import (
 	"strings"
 	"testing"
+
+	"github.com/mgilbir/forme/shape"
 )
 
 // A word is not a box, and automatic hyphenation is about words.
@@ -314,5 +316,41 @@ func TestAWordWithASoftHyphenInItTakesNoOtherDivision(t *testing.T) {
 	if got := joined(lineTextsOf(t, root, "abs")); got != "high-|way" {
 		t.Errorf("inside the box: %q, want \"high-|way\" — the mark outside it "+
 			"turned its own dictionary off", got)
+	}
+}
+
+// TestAMarkIsPartOfTheWordItIsWrittenOn.
+//
+// Unicode spells "shí" with three characters or with four, and says the two are
+// the same word. The gathering asked unicode.IsLetter of each character, and a
+// combining mark is not a letter — so the word ended at the accent, and the
+// dictionary was asked about the letters before it as though they were a word of
+// their own. What came back was a division in a different place, or none.
+//
+// The two spellings are written out here rather than derived, so that the
+// fixture does not depend on the composition the fix is about.
+func TestAMarkIsPartOfTheWordItIsWrittenOn(t *testing.T) {
+	const (
+		nfc = "sh\u00edji\u0101n"
+		nfd = "shi\u0301jia\u0304n"
+	)
+	lines := func(word string) string {
+		t.Helper()
+		got := lineTextsOf(t, layoutOf(t, 600, `<div id="d" lang="zh-latn">`+word+`</div>`,
+			`#d { font-family: Courier; font-size: 20px; width: 60px; hyphens: auto }`), "d")
+		// Compared as text rather than as bytes: the lines of the decomposed
+		// word are spelled the way it was written, and the question is whether
+		// they divide it in the same place.
+		composed, _ := shape.ComposeCanonically([]rune(strings.Join(got, "|")))
+		return string(composed)
+	}
+	want := lines(nfc)
+	if !strings.Contains(want, "-") {
+		t.Fatalf("the composed spelling set as %q and was not divided at all, so "+
+			"this test is watching nothing", want)
+	}
+	if got := lines(nfd); got != want {
+		t.Errorf("the decomposed spelling set as %q and the composed one as %q; "+
+			"they are the same word and divide in the same place", got, want)
 	}
 }

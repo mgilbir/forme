@@ -84,13 +84,14 @@ jobs:
             testdata/css-parsing-tests
             testdata/unicode-bidi
             testdata/unicode-grapheme
+            testdata/unicode-normalization
             testdata/notocjk
             testdata/ucd
             testdata/html
           key: corpora-4-${{ hashFiles('Makefile') }}
 
       - name: Fetch whatever the cache did not have
-        run: make wpt noto-fonts css-tests bidi-tests grapheme-tests notocjk ucd
+        run: make wpt noto-fonts css-tests bidi-tests grapheme-tests normalization-tests notocjk ucd
 
       # Before anything is measured, because a corpus that did not arrive is not
       # a result about the engine. unifoundry.com has answered 200 with an error
@@ -115,9 +116,11 @@ jobs:
       - name: The faces that are read rather than generated
         run: NOTO_CJK="$PWD/testdata/notocjk" go test -count=1 -run 'CIDKeyed|TheCIDs' -v ./shape/
 
-      # Unicode's own conformance data, 862,000 bidi cases and 766 grapheme ones.
+      # Unicode's own conformance data: 862,000 bidi cases, 766 grapheme ones and
+      # 20,000 normalisation ones.
       - run: make test-bidi
       - run: make test-grapheme
+      - run: make test-normalization
       # The CSS Syntax test suite, which this repository did not write.
       - run: make test-css
       # The reftest ratchet: six thousand documents from the CSS Working Group's
