@@ -21,7 +21,8 @@
 // the suite's references expects. They are plain word lists, one word per line,
 // with a header of comments.
 //
-// The header is a licence and it is copied into the generated file rather than
+// The header — the comments above the first word, and not every comment in the
+// file — is a licence, and it is copied into the generated file rather than
 // summarised. The Unicode licence permits redistribution "provided that either
 // (a) this copyright and permission notice appear with all copies of the Data
 // Files, or (b) this copyright and permission notice appear in associated
@@ -34,37 +35,39 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
 	"unicode/utf8"
 )
 
-func main() {
-	if len(os.Args) != 3 {
-		fmt.Fprintln(os.Stderr, "usage: gendict <name> <dictionary.txt>")
-		os.Exit(2)
-	}
-	name := os.Args[1]
-	f, err := os.Open(os.Args[2])
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	defer f.Close()
-
-	var notice []string
-	var words []string
+// readDictionary reads one of ICU's lists: the licence at the top of it, and
+// the words below.
+//
+// The licence is the header and *only* the header — the comments before the
+// first word. A comment lower down is not one: these files annotate their own
+// data, and the Thai list has seven such lines, six of them entries somebody
+// commented out with a note asking why they have full stops in them. Taking
+// every "#" line put "TODO: why does this have full stop in it?" into the
+// generated file under the words "the licence the word list is under", which is
+// both wrong about the licence and a claim about somebody else's terms.
+//
+// Nothing else about the two halves changes: the header is kept exactly as it
+// stands, comment marker and all, because the Unicode terms require the notice
+// to travel with the data rather than be summarised.
+func readDictionary(r io.Reader) (notice, words []string, err error) {
 	seen := map[string]bool{}
-	sc := bufio.NewScanner(f)
+	inHeader := true
+	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	for sc.Scan() {
 		line := strings.TrimPrefix(sc.Text(), "\ufeff")
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "#") {
-			// The header, which is the licence. It is kept exactly as it
-			// stands, comment marker and all.
-			notice = append(notice, strings.TrimRight(line, " \t"))
+			if inHeader {
+				notice = append(notice, strings.TrimRight(line, " \t"))
+			}
 			continue
 		}
 		if trimmed == "" {
@@ -79,13 +82,33 @@ func main() {
 			// generated file readable and the check against the source exact.
 			continue
 		}
+		// The first word ends the header. A blank line does not: the Thai file
+		// has one inside its notice.
+		inHeader = false
 		if seen[word] {
 			continue
 		}
 		seen[word] = true
 		words = append(words, word)
 	}
-	if err := sc.Err(); err != nil {
+	return notice, words, sc.Err()
+}
+
+func main() {
+	if len(os.Args) != 3 {
+		fmt.Fprintln(os.Stderr, "usage: gendict <name> <dictionary.txt>")
+		os.Exit(2)
+	}
+	name := os.Args[1]
+	f, err := os.Open(os.Args[2])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer f.Close()
+
+	notice, words, err := readDictionary(f)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
