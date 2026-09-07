@@ -215,12 +215,32 @@ func hasClass(n *html.Node, want string) bool {
 	if !ok {
 		return false
 	}
-	for _, got := range strings.Fields(v) {
+	for _, got := range asciiFields(v) {
 		if got == want {
 			return true
 		}
 	}
 	return false
+}
+
+// asciiFields splits on HTML's white space and not on Unicode's.
+//
+// The two are not the same set, and the difference is a class name. HTML says
+// the class attribute is "a set of space-separated tokens" split on *ASCII*
+// white space — tab, line feed, form feed, carriage return and space — so
+// class="a\u00a0b" is one class whose name holds a no-break space, and .a
+// selects nothing. strings.Fields splits on unicode.IsSpace, which takes the
+// no-break space and every other space separator with it, so it found two
+// classes where the document has one and applied a rule the author did not
+// write. The same set decides "~=", which HTML defines the same way.
+func asciiFields(s string) []string {
+	return strings.FieldsFunc(s, func(r rune) bool {
+		switch r {
+		case '\t', '\n', '\f', '\r', ' ':
+			return true
+		}
+		return false
+	})
 }
 
 func matchAttr(a css.Attr, n *html.Node) bool {
@@ -267,7 +287,7 @@ func matchAttr(a css.Attr, n *html.Node) bool {
 }
 
 func slices(value, want string) bool {
-	for _, f := range strings.Fields(value) {
+	for _, f := range asciiFields(value) {
 		if f == want {
 			return true
 		}

@@ -413,12 +413,31 @@ func ResolveFontSizeIn(vals []css.ComponentValue, ctx LengthContext) (u Unit, un
 	// to assume "in the cases where it is impossible or impractical to determine
 	// the x-height". The suite's numbers-units-012 is that document.
 	l, unsupported, ok := ParseLength(vals, ctx)
-	if !ok || l.Kind != LengthAbsolute {
+	if !ok {
+		return 0, unsupported, false
+	}
+	size := l.Value
+	switch l.Kind {
+	case LengthAbsolute:
+	case LengthPercent, LengthCalc:
+		// A percentage in a font-size is of the *parent's* font size, and that
+		// is the one number a calc() cannot usually be resolved against here —
+		// but here it can, because the context already holds it. So
+		// "calc(100% + 2px)" is two pixels more than the parent, which is
+		// exactly what it says.
+		//
+		// It used to be refused for not being absolute, and refused silently:
+		// the declaration was dropped, the element kept the size it inherited,
+		// and nothing said the rule had not applied. The value is
+		// perfectly ordinary — it is how a stylesheet says "a little larger
+		// than the text around it" — and every browser resolves it.
+		size = size.Add(parent.Mul(l.Percent / 100))
+	default:
 		return 0, unsupported, false
 	}
 	// A negative font size is not a small one; the specification forbids it.
-	if l.Value < 0 {
+	if size < 0 {
 		return 0, false, false
 	}
-	return l.Value, false, true
+	return size, false, true
 }

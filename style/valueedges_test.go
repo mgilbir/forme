@@ -119,3 +119,46 @@ func TestACharsetSayingUTF8IsPassedOverInSilence(t *testing.T) {
 		t.Errorf("@supports gave %d findings, want one: %v", len(got), got)
 	}
 }
+
+// TestAFontSizeMayBeACalc.
+//
+// A percentage in a font-size is of the parent's font size, and that is the one
+// number a calc() usually cannot be resolved against — but here the context
+// already holds it. "calc(100% + 2px)" is two pixels more than the text around
+// it, which is how a stylesheet says exactly that, and every browser resolves
+// it. It was refused for not being an absolute length, and refused silently:
+// the declaration was dropped, the element kept what it inherited, and nothing
+// said the rule had not applied.
+func TestAFontSizeMayBeACalc(t *testing.T) {
+	parent, _ := FromPx(16)
+	ctx := LengthContext{FontSize: parent, RootFontSize: parent}
+	for _, tc := range []struct {
+		src  string
+		want float64
+		ok   bool
+	}{
+		{"calc(100% + 2px)", 18, true},
+		{"calc(100% - 4px)", 12, true},
+		{"calc(50% + 50%)", 16, true},
+		{"calc(1em + 2px)", 18, true},
+		{"calc(2 * 100%)", 32, true},
+		{"120%", 19.2, true},
+		{"12px", 12, true},
+
+		// And what is still refused.
+		{"calc(0% - 4px)", 0, false},
+		{"-2px", 0, false},
+		{"calc(100vw + 1px)", 0, false},
+	} {
+		vals, _ := css.ParseComponentValues(tc.src)
+		got, _, ok := ResolveFontSizeIn(vals, ctx)
+		if ok != tc.ok {
+			t.Errorf("%q resolves = %v, want %v", tc.src, ok, tc.ok)
+			continue
+		}
+		// Within a layout unit, which is what a length rounds to.
+		if d := got.Px() - tc.want; ok && (d > 0.01 || d < -0.01) {
+			t.Errorf("%q is %gpx against a 16px parent, want %g", tc.src, got.Px(), tc.want)
+		}
+	}
+}
