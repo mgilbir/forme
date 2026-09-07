@@ -11,6 +11,9 @@ import "encoding/binary"
 type KernPair struct {
 	Left, Right int // glyph indices
 	Adjust      int
+	// SecondAdjust is the xAdvance of the pair's *second* ValueRecord, and is
+	// only written by PairPosBothSides.
+	SecondAdjust int
 }
 
 // Ligature is one substitution: a run of glyph indices replaced by one.
@@ -75,6 +78,61 @@ func PairPosSubtable(pairs []KernPair) []byte {
 		body = append(body, set...)
 	}
 	return body
+}
+
+// PairPosBothSides is PairPosSubtable with a second ValueRecord stated for
+// every pair, whose xAdvance is SecondAdjust.
+//
+// The record is what decides where the *next* pair is looked for: a lookup that
+// states one moves past both glyphs, and one that does not moves past the first
+// alone. A font is free to state a second record of all zeroes — and that is
+// not the same thing as stating none, which is the whole reason this builder
+// exists beside the one above.
+func PairPosBothSides(pairs []KernPair) []byte {
+	order := []int{}
+	byLeft := map[int][]KernPair{}
+	for _, p := range pairs {
+		if _, seen := byLeft[p.Left]; !seen {
+			order = append(order, p.Left)
+		}
+		byLeft[p.Left] = append(byLeft[p.Left], p)
+	}
+	sortInts(order)
+
+	// Each record is now (secondGlyph, xAdvance1, xAdvance2): six bytes.
+	var sets [][]byte
+	for _, left := range order {
+		ps := byLeft[left]
+		set := make([]byte, 2+6*len(ps))
+		binary.BigEndian.PutUint16(set, uint16(len(ps)))
+		for i, p := range ps {
+			binary.BigEndian.PutUint16(set[2+6*i:], uint16(p.Right))
+			binary.BigEndian.PutUint16(set[2+6*i+2:], uint16(int16(p.Adjust)))
+			binary.BigEndian.PutUint16(set[2+6*i+4:], uint16(int16(p.SecondAdjust)))
+		}
+		sets = append(sets, set)
+	}
+
+	coverage := coverageFormat1(order)
+	head := make([]byte, 10+2*len(sets))
+	binary.BigEndian.PutUint16(head[0:], 1)
+	binary.BigEndian.PutUint16(head[4:], 0x0004) // valueFormat1: XAdvance
+	binary.BigEndian.PutUint16(head[6:], 0x0004) // valueFormat2: XAdvance
+	binary.BigEndian.PutUint16(head[8:], uint16(len(sets)))
+	body := append([]byte(nil), head...)
+	covOff := len(body)
+	body = append(body, coverage...)
+	binary.BigEndian.PutUint16(body[2:], uint16(covOff))
+	for i, set := range sets {
+		binary.BigEndian.PutUint16(body[10+2*i:], uint16(len(body)))
+		body = append(body, set...)
+	}
+	return body
+}
+
+// GPOSBothSides is GPOS with the subtable above under a 'kern' feature.
+func GPOSBothSides(pairs []KernPair) []byte {
+	return layoutTable("kern", 2, PairPosBothSides(pairs))
 }
 
 // GSUB builds a GSUB table with a single 'liga' feature whose one lookup is a

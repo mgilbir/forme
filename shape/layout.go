@@ -1144,6 +1144,16 @@ func valueSize(format int) int {
 type pairAdjust struct {
 	firstX, firstY, firstAdvance    int16
 	secondX, secondY, secondAdvance int16
+	// takesSecond records that the subtable stated a second ValueRecord at all,
+	// which decides where the *next* pair is looked for and not what this one
+	// does.
+	//
+	// The specification says a pair positioning lookup moves past both glyphs
+	// where ValueFormat2 is non-zero and past only the first where it is zero,
+	// so the second glyph of a pair that adjusted it is not the first glyph of
+	// the next pair. It cannot be read off the numbers: a font is free to state
+	// a second record of all zeroes, and that is not the same as stating none.
+	takesSecond bool
 }
 
 func (p pairAdjust) zero() bool { return p == pairAdjust{} }
@@ -1161,6 +1171,7 @@ func pairAdjustFrom(rec []byte, format1, format2 int) pairAdjust {
 		firstAdvance: clamp16(first.xAdvance),
 		secondX:      clamp16(second.xPlacement), secondY: clamp16(second.yPlacement),
 		secondAdvance: clamp16(second.xAdvance),
+		takesSecond:   format2 != 0,
 	}
 }
 

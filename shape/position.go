@@ -115,6 +115,21 @@ func (sh shaper) position(buf []Glyph) {
 				buf[i].XOffset += sh.f.scale(int(k.secondX))
 				buf[i].YOffset += sh.f.scale(int(k.secondY))
 				buf[i].XAdvance += sh.f.scale(int(k.secondAdvance))
+				if k.takesSecond {
+					// The lookup moves past both glyphs where the subtable
+					// stated a second ValueRecord, so the glyph this pair
+					// adjusted is not the first glyph of the next one. Where it
+					// stated none, only the first is consumed and the second
+					// begins the next pair — which is the ordinary kerning
+					// case and is why "AVA" kerns twice.
+					//
+					// It cannot be read off the numbers: a font may state a
+					// second record of all zeroes, and that is not the same as
+					// stating none. Advancing past one glyph either way applied
+					// a pair a conforming shaper never looks for.
+					prev = -1
+					continue
+				}
 			}
 			prev = i
 		}
