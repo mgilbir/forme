@@ -539,14 +539,20 @@ func (p *parser) startTag(tk token) {
 	}
 }
 
-// insertUnknown opens an element HTML gives no behaviour to.
+// insertUnknown opens an element whose *layout* HTML gives no behaviour to.
 //
-// It is the ordinary path with everything that is keyed on a name left out:
-// there is no optional end tag to close, no head to belong to, no raw text, no
-// void form and no newline to strip, because every one of those is a rule about
-// a *particular* element and this is not one of them. What is left is an element
-// that opens, holds its children and closes — which is the whole of what HTML
-// says about a name nobody has defined.
+// It is the ordinary path with the rules that belong to the box left out: no
+// head to belong to and no newline to strip. What it keeps is every rule that
+// is about the tag's name in the tokenizer and the tree — an optional end tag
+// it closes, a void form with no content, content that is not markup — because
+// those are facts about the name and not about what can be drawn with it, and
+// an element this engine has no style for still has to be *read* correctly.
+//
+// It used to leave all of them out, on the reading that "unknown" meant
+// "nothing applies". It cost three things at once: <track> opened and swallowed
+// the rest of the document, <menu> nested inside the paragraph it ends, and the
+// tags inside an <xmp> were parsed as markup by an element whose whole purpose
+// is to show them.
 //
 // A self-closing "<my-widget/>" is the one thing to say about it, and HTML says
 // it too: outside the void elements the slash is a parse error and the element
@@ -555,6 +561,31 @@ func (p *parser) startTag(tk token) {
 func (p *parser) insertUnknown(tk token) {
 	if !p.bodyStarted {
 		p.enterBody()
+	}
+	// The two rules that are about the tag's *name* rather than about what this
+	// engine can lay out, and that this path used to skip.
+	//
+	// A void element has no content and no end tag, and opening one puts every
+	// following element inside it: "<video><track kind=subs></video>" left the
+	// track open, took the rest of the document into it, and reported a tag
+	// that was never closed — for a tag that is never written closed. And an
+	// element that ends an open paragraph ends it whether or not this engine
+	// has heard of it: "<p>a<menu>b</menu>" nested the menu inside the
+	// paragraph, which is not where a browser puts it or where the author's
+	// stylesheet expects it.
+	//
+	// Both sets are keyed by name and neither has anything to do with layout,
+	// which is why the answer is here rather than in knownElements: an element
+	// added to either set is covered the day it is added.
+	p.closeImplied(tk.name)
+	if voidElements[tk.name] {
+		p.insert(tk)
+		return
+	}
+	if rawTextElements[tk.name] {
+		p.tok.raw, p.tok.rcdata = tk.name, false
+	} else if rcdataElements[tk.name] {
+		p.tok.raw, p.tok.rcdata = tk.name, true
 	}
 	if tk.selfClosing && p.tok.xml {
 		// XML *does* have self-closing syntax, and it means an empty element.

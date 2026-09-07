@@ -1043,7 +1043,30 @@ const wptEnv = "WPT_TESTS"
 // same direction, as every entry above. It was measured with the report on and
 // off to be sure of the attribution: nothing else in that change moved a
 // document. See style/cascade.go's reportUncomputedPseudo.
-const wptCleanPassBaseline = 5956
+//
+// 5956 to 5955 is one document, and it is the suite being wrong rather than
+// this engine. HTML's tokenizer maps a numeric character reference in the C1
+// range to what windows-1252 puts there — "&#146;" is a curly apostrophe,
+// "&#128;" is a euro — because that is what the editors of the world write and
+// what every browser reads. This engine did not, so those came out as control
+// characters nothing draws, which is C113 of the audit and the reason the table
+// is now there.
+//
+// css-text/line-breaking/line-breaking-022.html separates six spans with five
+// characters and asks for six lines, and the last of the five is "&#x0085;",
+// meaning U+0085 NEXT LINE, whose line-break class is NL. In an HTML document
+// that reference is not U+0085: the standard's own table maps 0x85 to U+2026
+// HORIZONTAL ELLIPSIS, which breaks nothing, so the document gets five lines
+// and the red square shows. A conforming browser does the same — the test can
+// only say what it means by writing the character itself, and it writes a
+// reference instead. Its twin in XHTML would still pass, and does: the mapping
+// is HTML's and XML says a reference is the code point it names, which is why
+// control-characters-002.xht is unaffected.
+//
+// So the drop is a document this engine used to pass by sharing its mistake.
+// Measured with the table on and off to be sure of the attribution: it is that
+// one document and nothing else. See html/tokenize.go's windows1252Reference.
+const wptCleanPassBaseline = 5955
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

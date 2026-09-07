@@ -118,8 +118,19 @@ var voidElements = map[string]bool{
 
 // rawTextElements have content that is not markup at all: it runs to the
 // matching end tag, and neither "<" nor "&" means anything inside.
+//
+// The four beyond style and script are the ones HTML kept from before it had a
+// parser worth the name. <xmp> is what <pre> used to be and is still written by
+// generators that predate it; <noembed> and <noframes> hold what to show
+// instead of something this engine does not do; <plaintext> is the oldest of
+// all and turns the rest of the document into text.
+//
+// They were read as markup, so "<xmp><b>not bold</b></xmp>" — which says on its
+// face that the tags in it are to be shown — came out with a bold word in it and
+// the tags gone.
 var rawTextElements = map[string]bool{
 	"style": true, "script": true,
+	"xmp": true, "noembed": true, "noframes": true, "plaintext": true,
 }
 
 // rcdataElements have content with no markup but with character references,

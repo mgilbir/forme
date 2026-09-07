@@ -100,6 +100,52 @@ type tokenizer struct {
 	xml bool
 }
 
+// commentLength is how many bytes a comment occupies, from its "<!--" to the
+// end of whatever closed it.
+//
+// Three ways to close one, and only the first was read. The other two are
+// errors in the markup and the standard names them, gives each a parse error,
+// and says where the comment ends anyway — because it has to: a document does
+// not stop being a document because somebody wrote a comment badly.
+//
+//   - "-->", the ordinary one.
+//   - "--!>", which the standard calls an incorrectly-closed comment. It is
+//     what an editor produces from "<!-- x --!>" and a person reads as closed.
+//   - ">" straight after the "<!--" or after "<!---", which the standard calls
+//     an abrupt closing of an empty comment. "<!-->" is a comment of nothing.
+//
+// Reading only "-->" meant the other two ran to the end of the document and
+// took every element after them with it, reported as one comment that was never
+// closed. A single "<!-->" in a template emptied the page.
+func commentLength(src string) (int, bool) {
+	body := src[len("<!--"):]
+	// The abrupt close, which is only abrupt at the very start.
+	if strings.HasPrefix(body, ">") {
+		return len("<!--") + 1, true
+	}
+	if strings.HasPrefix(body, "->") {
+		return len("<!--") + 2, true
+	}
+	// One pass, stopping at whichever terminator comes first. Searching for
+	// each separately and taking the earlier is the obvious way and is
+	// quadratic: the one that is not there scans to the end of the document
+	// every time, so a page of six hundred thousand comments spent a hundred
+	// seconds looking for a "--!>" that no comment had.
+	for at := 0; ; at++ {
+		i := strings.Index(body[at:], "--")
+		if i < 0 {
+			return 0, false
+		}
+		at += i
+		switch rest := body[at+2:]; {
+		case strings.HasPrefix(rest, ">"):
+			return len("<!--") + at + len("-->"), true
+		case strings.HasPrefix(rest, "!>"):
+			return len("<!--") + at + len("--!>"), true
+		}
+	}
+}
+
 // bom is the byte order mark, U+FEFF, whose encoded form is the three bytes
 // EF BB BF that a Windows editor writes at the front of a UTF-8 file.
 const bom = "\ufeff"
@@ -250,7 +296,34 @@ func (t *tokenizer) text() token {
 	for t.pos < len(t.src) && t.src[t.pos] != '<' {
 		t.pos++
 	}
-	return token{kind: tokText, text: t.decodeRefs(t.src[start:t.pos], start, false), offset: start}
+	return token{kind: tokText, text: t.dropNULs(t.decodeRefs(t.src[start:t.pos], start, false), start),
+		offset: start}
+}
+
+// dropNULs takes the NUL bytes out of a run of text and says so once.
+//
+// U+0000 is not a character a document can contain: the standard's tokenizer
+// makes one a parse error in every state that can meet it, and in the states
+// that produce text it drops the byte. It was kept, so a text node held a byte
+// that is not text — into the shaper, into a PDF, into whatever a caller does
+// with Node.Text — and the parse reported success.
+//
+// One finding for the run and not one per byte, and the offset is the run's:
+// a file with NULs in it usually has a great many, and they are one fault
+// (something wrote UTF-16, or a binary file was handed over as HTML) rather
+// than a hundred.
+func (t *tokenizer) dropNULs(text string, off int) string {
+	if !strings.ContainsRune(text, 0) {
+		return text
+	}
+	n := strings.Count(text, "\x00")
+	word := "byte"
+	if n > 1 {
+		word = "bytes"
+	}
+	t.fail(off, "text holding "+strconv.Itoa(n)+" NUL "+word+", which are not "+
+		"characters; they are dropped")
+	return strings.ReplaceAll(text, "\x00", "")
 }
 
 // rawText reads the content of a raw-text or RCDATA element, up to its end tag.
@@ -391,8 +464,8 @@ func (t *tokenizer) markup() (token, bool) {
 	// A comment. Dropped rather than tokenized: nothing downstream has any use
 	// for one.
 	if strings.HasPrefix(t.src[t.pos:], "<!--") {
-		if end := strings.Index(t.src[t.pos+4:], "-->"); end >= 0 {
-			t.pos += 4 + end + 3
+		if n, ok := commentLength(t.src[t.pos:]); ok {
+			t.pos += n
 			return token{}, false
 		}
 		t.fail(start, "a comment that is never closed")
@@ -608,13 +681,20 @@ func (t *tokenizer) attribute(tag string) (Attribute, bool) {
 
 func (t *tokenizer) readName() string {
 	start := t.pos
-	// A colon is part of a name in XML and not in HTML, which is the whole of
-	// the difference. XML gives a name an optional namespace prefix — the suite
-	// writes its inline SVG as "<svg:svg>" — and a reader that stopped at the
-	// colon read the end tag "</svg:svg>" as "</svg" and then reported the
-	// document as malformed. What the prefix *means* is the parser's question,
-	// not this one's: see parser.resolveName.
-	for t.pos < len(t.src) && (isNamePart(t.src[t.pos]) || (t.xml && t.src[t.pos] == ':')) {
+	// A colon is part of a name, in HTML as well as in XML.
+	//
+	// XML gives a name an optional namespace prefix — the suite writes its
+	// inline SVG as "<svg:svg>" — and a reader that stopped at the colon read
+	// the end tag "</svg:svg>" as "</svg" and reported the document as
+	// malformed. HTML has no namespaces and no prefixes, and its tag-name state
+	// ends only at white space, "/" or ">" — so a colon is simply part of the
+	// name there. It was admitted in XML alone, which made "<o:p>" — the tag a
+	// Word document is full of — an element "o" with an attribute ":p", and
+	// "</o:p>" an end tag that was never closed.
+	//
+	// What the prefix *means* is the parser's question, not this one's: see
+	// parser.resolveName.
+	for t.pos < len(t.src) && (isNamePart(t.src[t.pos]) || t.src[t.pos] == ':') {
 		t.pos++
 	}
 	return strings.ToLower(t.src[start:t.pos])
@@ -841,7 +921,40 @@ func (t *tokenizer) codePoint(v int64, off int) (rune, bool) {
 		t.fail(off, fmt.Sprintf("a character reference to %d, which is outside Unicode", v))
 		return 0, false
 	}
+	if r, remapped := windows1252Reference[v]; remapped && !t.xml {
+		// A reference into the C1 control range means what windows-1252 puts
+		// there, which is what HTML says and what every browser does with an
+		// HTML document. A page written by a Windows editor spells a curly
+		// apostrophe "&#146;" and a euro "&#128;", and reading those as control
+		// characters puts a character nothing draws where a letter belongs.
+		//
+		// In XHTML it does not. XML 1.0 §4.1 says a character reference is the
+		// code point it names and nothing else, so "&#x80;" there is U+0080 —
+		// which is what the suite's own control-characters-002.xht is written
+		// to test, one box per control character.
+		//
+		// Not reported either way. In HTML it is not a mistake an author made,
+		// it is the convention their editor writes in, and the standard's own
+		// answer is the character rather than a complaint.
+		return r, true
+	}
 	return rune(v), true
+}
+
+// windows1252Reference is what a numeric character reference in the C1 range
+// stands for, from the standard's own table.
+//
+// The range is where windows-1252 puts its punctuation and Unicode puts control
+// characters, and a numeric reference written by a Windows editor means the
+// former. Seven of the thirty-two are unassigned in windows-1252 and are left
+// as they are, which is what the table's own gaps say.
+var windows1252Reference = map[int64]rune{
+	0x80: 0x20AC, 0x82: 0x201A, 0x83: 0x0192, 0x84: 0x201E, 0x85: 0x2026,
+	0x86: 0x2020, 0x87: 0x2021, 0x88: 0x02C6, 0x89: 0x2030, 0x8A: 0x0160,
+	0x8B: 0x2039, 0x8C: 0x0152, 0x8E: 0x017D, 0x91: 0x2018, 0x92: 0x2019,
+	0x93: 0x201C, 0x94: 0x201D, 0x95: 0x2022, 0x96: 0x2013, 0x97: 0x2014,
+	0x98: 0x02DC, 0x99: 0x2122, 0x9A: 0x0161, 0x9B: 0x203A, 0x9C: 0x0153,
+	0x9E: 0x017E, 0x9F: 0x0178,
 }
 
 func isEntityNamePart(c byte) bool {

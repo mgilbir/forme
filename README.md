@@ -120,7 +120,7 @@ record of what it thought of.
 
 | | |
 |---|---|
-| **CSS Working Group reftests** | 6,253 documents rendered and compared against their references — **5,956 pass with nothing unsupported reported in either document** |
+| **CSS Working Group reftests** | 6,253 documents rendered and compared against their references — **5,955 pass with nothing unsupported reported in either document** |
 | **Unicode's bidi conformance** | 861,948 cases across `BidiTest.txt` and `BidiCharacterTest.txt`, no failures |
 | **Unicode's grapheme boundaries** | all 766 cases of `GraphemeBreakTest.txt` |
 | **HarfBuzz**, over six fonts | 20,623 strings, two deliberate differences |
