@@ -101,6 +101,16 @@ type inertValue struct {
 	initial string
 	// because is the behaviour the entry claims, for a reader checking it.
 	because string
+	// inherits says the property is an inherited one, which decides what three
+	// of the four CSS-wide keywords stand for. "unset", "revert" and
+	// "revert-layer" are the initial value on a property that does not inherit,
+	// and the parent's on one that does — and the parent's is not knowable
+	// here, so an inherited property's is left as written and reported.
+	//
+	// It is a field rather than a lookup because these are the properties this
+	// engine does *not* implement: none of them is in the property table, which
+	// is where inheritance is recorded for the ones that are.
+	inherits bool
 }
 
 // inertValues is what this engine produces for each unimplemented property a
@@ -113,7 +123,7 @@ var inertValues = map[string]inertValue{
 	// CSS Fonts 4 §6.4 and §6.5. Shaping applies the face's own kerning and its
 	// default features, which is what "auto" and "normal" ask for.
 	// TestKerningIsApplied in the shape package is what holds the first.
-	"font-variation-settings": {produced: "normal", because: "no variation is applied beyond the instance"},
+	"font-variation-settings": {inherits: true, produced: "normal", because: "no variation is applied beyond the instance"},
 
 	// CSS Fragmentation 3 §3.1, and the two values are inert for opposite
 	// reasons that meet in the same page.
@@ -177,7 +187,7 @@ var inertValues = map[string]inertValue{
 	// "none" is the one documents actually write, and writing it is the author
 	// making sure of the very thing this engine has no other way of doing. See
 	// TestADecorationIsDrawnStraightThroughADescender.
-	"text-decoration-skip-ink": {produced: "auto", also: "none",
+	"text-decoration-skip-ink": {inherits: true, produced: "auto", also: "none",
 		because: "decorations are drawn straight through descenders"},
 
 	// CSS Text Decoration 3 §2.2. A decoration is drawn as a solid line, which
@@ -192,7 +202,7 @@ var inertValues = map[string]inertValue{
 	"will-change":         {produced: "auto", because: "nothing is optimised for change"},
 	"transition":          {produced: "none", because: "nothing transitions"},
 	"animation":           {produced: "none", because: "nothing animates"},
-	"pointer-events":      {produced: "auto", because: "there is no pointer"},
+	"pointer-events":      {inherits: true, produced: "auto", because: "there is no pointer"},
 	"user-select":         {produced: "auto", because: "there is no selection"},
 	"touch-action":        {produced: "auto", because: "there is no touch"},
 	"scroll-behavior":     {produced: "auto", because: "there is nothing to scroll"},
@@ -220,13 +230,30 @@ func isInertDeclaration(name string, vals []css.ComponentValue) bool {
 	if entry.always {
 		return true
 	}
-	// The CSS-wide keyword stands for the property's initial value, which is
-	// not always what this engine produces — so it is resolved rather than
-	// accepted, and then compared like any other value.
-	if value == "initial" {
-		value = entry.initial
-		if value == "" {
-			value = entry.produced
+	// A CSS-wide keyword stands for a value rather than being one, so it is
+	// resolved before the comparison — and there are four of them, not one.
+	//
+	// "initial" is the property's initial value, which is not always what this
+	// engine produces. "unset", "revert" and "revert-layer" are the same value
+	// again for a property that does not inherit, which is what "as though
+	// nothing had been said" comes to when there is no parent value to fall back
+	// to; for one that *does* inherit they are the parent's value, which this
+	// cannot know — so they are left alone, and a declaration written with one
+	// is not called inert.
+	//
+	// Only "initial" was resolved. So "resize: unset" — the same page as
+	// "resize: none", which is listed — was reported as a difference from a
+	// browser that there is not.
+	initial := entry.initial
+	if initial == "" {
+		initial = entry.produced
+	}
+	switch value {
+	case kwInitial:
+		value = initial
+	case kwUnset, kwRevert, kwRevertLayer:
+		if !entry.inherits {
+			value = initial
 		}
 	}
 	if value == entry.produced || (entry.also != "" && value == entry.also) {

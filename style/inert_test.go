@@ -183,23 +183,55 @@ func TestAnUnknownPropertyIsStillReported(t *testing.T) {
 	}
 }
 
-// TestTheOtherCSSWideKeywordsAreNotAssumedInert.
+// TestACSSWideKeywordIsResolvedBeforeItIsJudgedInert.
 //
-// "inherit" takes the parent's value, which for an inherited property can be
-// anything; "unset" is inherit or initial depending on the property; "revert"
-// depends on the cascade origin. None is resolved here, so none may be treated
-// as the initial value — reading "unset" as inert would be right about half the
-// properties in CSS and wrong about the other half.
-func TestTheOtherCSSWideKeywordsAreNotAssumedInert(t *testing.T) {
+// A keyword stands for a value rather than being one, so a comparison against
+// the value this engine produces has to resolve it first. Which value it stands
+// for depends on the property, and that is the whole difficulty: "unset" is the
+// initial value on a property that does not inherit and the parent's on one that
+// does, and "revert" and "revert-layer" come to the same thing here — this
+// engine reverts to nothing and has no cascade layers.
+//
+// So the three of them are resolved for an entry that does not inherit and left
+// alone for one that does. "inherit" is never resolved: the parent's value can
+// be anything, and this is a question about one declaration.
+//
+// Only "initial" was resolved, and the rest were reported on the reading that
+// treating them as inert "would be right about half the properties in CSS and
+// wrong about the other half" — which is true, and is why inertValue now records
+// which half each of its entries is in.
+func TestACSSWideKeywordIsResolvedBeforeItIsJudgedInert(t *testing.T) {
+	// "resize" does not inherit and this engine produces "none", which is what
+	// all four of these come to.
 	for _, decl := range []string{
-		"resize: inherit",
-		"resize: unset",
-		"resize: revert",
+		"resize: none", "resize: initial", "resize: unset",
+		"resize: revert", "resize: revert-layer",
+	} {
+		if reportsUnsupported(t, decl) {
+			t.Errorf("%q was reported; it is the page this engine already draws", decl)
+		}
+	}
+	// "font-variation-settings" does inherit, so the parent's value decides and
+	// this cannot know it.
+	for _, decl := range []string{
+		"font-variation-settings: unset", "font-variation-settings: revert",
+		"font-variation-settings: revert-layer",
+		"text-decoration-skip-ink: unset",
 	} {
 		if !reportsUnsupported(t, decl) {
-			t.Errorf("%q was not reported; this engine does not resolve that keyword, "+
-				"so it cannot know the declaration asks for nothing", decl)
+			t.Errorf("%q was not reported; the property inherits, so the keyword "+
+				"stands for a value this cannot see", decl)
 		}
+	}
+	// And "inherit" is never resolvable, whichever half the property is in.
+	for _, decl := range []string{"resize: inherit", "font-variation-settings: inherit"} {
+		if !reportsUnsupported(t, decl) {
+			t.Errorf("%q was not reported; the parent's value can be anything", decl)
+		}
+	}
+	// The control: a value that really does ask for something else.
+	if !reportsUnsupported(t, "resize: both") {
+		t.Error("\"resize: both\" was not reported, so this test is watching nothing")
 	}
 }
 
