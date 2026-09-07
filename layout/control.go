@@ -335,23 +335,38 @@ func (b *boxBuilder) reportApproximation(n *html.Node, kind controlKind) {
 }
 
 // optionsOf collects a select's options, through any optgroups.
+//
+// Iterative, on a stack of its own, rather than recursive. Markup cannot nest an
+// optgroup — the optional-end-tag rules close one when the next opens — so a
+// parsed document reaches this two levels deep at most. A caller building a tree
+// by hand is under no such rule, and this is reached from box generation for
+// every child of a select, so the nesting it walks is whatever that caller
+// built. The depth cap box generation is under does not help: this descends
+// below the box that reached it.
 func optionsOf(sel *html.Node) []*html.Node {
 	var out []*html.Node
-	var walk func(n *html.Node)
-	walk = func(n *html.Node) {
-		for _, c := range n.Children {
-			if c.Type != html.ElementNode {
-				continue
-			}
-			switch strings.ToLower(c.Name) {
-			case "option":
-				out = append(out, c)
-			case "optgroup":
-				walk(c)
+	// pending holds what is still to visit, in reverse document order, so that
+	// the top of the stack is always the next node in document order.
+	var pending []*html.Node
+	push := func(n *html.Node) {
+		for i := len(n.Children) - 1; i >= 0; i-- {
+			if c := n.Children[i]; c.Type == html.ElementNode {
+				pending = append(pending, c)
 			}
 		}
 	}
-	walk(sel)
+	push(sel)
+	for len(pending) > 0 {
+		n := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		switch strings.ToLower(n.Name) {
+		case "option":
+			// An option's own content is its label, not more options.
+			out = append(out, n)
+		case "optgroup":
+			push(n)
+		}
+	}
 	return out
 }
 
