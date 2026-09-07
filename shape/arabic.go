@@ -223,25 +223,27 @@ func (sh shaper) applyJoiningForms(buf []Glyph) []Glyph {
 			continue
 		}
 		for _, idx := range lookups {
-			for i := 0; i < len(buf); {
-				if buf[i].join != form {
-					i++
+			rb := newRunBuf(buf, 0)
+			sh.run = rb
+			for len(rb.pending()) > 0 {
+				if rb.pending()[0].join != form {
+					rb.settle(1)
 					continue
 				}
-				was := len(buf)
-				consumed, out := sh.applyGSUBAt(idx, buf, i, 0)
-				buf = out
+				was := len(rb.pending())
+				consumed, _ := sh.applyGSUBAt(idx, rb.pending(), 0, 0)
 				if consumed > 0 {
-					i += consumed
+					rb.settle(consumed)
 					continue
 				}
 				// A lookup that consumed nothing and shortened the buffer took
 				// a glyph out; what followed it is now here and unexamined.
-				if len(buf) < was {
+				if len(rb.pending()) < was {
 					continue
 				}
-				i++
+				rb.settle(1)
 			}
+			buf = rb.flatten()
 		}
 	}
 	return buf

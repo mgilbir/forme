@@ -777,26 +777,43 @@ func (sh shaper) shapeIndic(buf []Glyph, runes, before []rune, plan *indicPlan) 
 		cats[i] = info[i].cat
 	}
 
-	// Each syllable is shaped where it lies, and what it does to the buffer's
-	// length shifts every syllable after it — so the syllables are walked in
-	// order and the shift carried along, rather than their bounds recorded up
-	// front and then found to be stale.
-	shift := 0
+	// Each syllable is shaped on its own and the run is put back together from
+	// what comes out.
+	//
+	// Shaping them where they lay was the arrangement here, with the length
+	// each one changed by carried forward as a shift into the bounds of the
+	// next. It is the same answer and it is quadratic: a syllable that ligates
+	// moves every glyph after it, and a run is n/3 syllables of three glyphs, so
+	// a page of Devanagari copied itself n/3 times over. Nothing needs it —
+	// every rule a syllable is put through is bounded by the syllable, floor and
+	// ceiling both, so a syllable is shaped from what is in it and nothing else.
+	// Appending the answers costs each glyph one copy.
+	out := make([]Glyph, 0, len(buf))
+	outInfo := make([]indicInfo, 0, len(info))
 	dotted, hasDotted := sh.f.GlyphID(dottedCircle)
+	prev := 0
 	for _, syl := range indicSyllables(cats) {
 		if syl.kind == sylNonIndic || syl.kind == sylSymbol {
 			continue
 		}
-		start, end := syl.start+shift, syl.end+shift
+		// Whatever lies between the last syllable shaped and this one — the
+		// non-Indic stretches and the symbols — passes through untouched.
+		out = append(out, buf[prev:syl.start]...)
+		outInfo = append(outInfo, info[prev:syl.start]...)
+		prev = syl.end
+
+		syllable := append([]Glyph(nil), buf[syl.start:syl.end]...)
+		record := append([]indicInfo(nil), info[syl.start:syl.end]...)
 		if syl.kind == sylBroken && hasDotted {
-			buf, info = sh.insertDottedCircle(buf, info, start, end, dotted)
-			end++
-			shift++
+			syllable, record = sh.insertDottedCircle(syllable, record, 0, len(syllable), dotted)
 		}
-		var delta int
-		buf, delta = sh.shapeIndicSyllable(buf, &info, runes, before, plan, syl.start, start, end)
-		shift += delta
+		syllable, _ = sh.shapeIndicSyllable(syllable, &record, runes, before, plan,
+			syl.start, 0, len(syllable))
+		out = append(out, syllable...)
+		outInfo = append(outInfo, record...)
 	}
+	buf = append(out, buf[prev:]...)
+	info = append(outInfo, info[prev:]...)
 
 	// The features that see the whole run rather than one syllable. They go
 	// through applyIndicFeature rather than applyContextual so that the
@@ -1138,11 +1155,12 @@ func (sh shaper) applyIndicFeature(buf []Glyph, info *[]indicInfo, lookups []int
 	sh.manualJoiners = manual
 	sh.floor = floor
 	for _, idx := range lookups {
-		for i := from; i < to; {
+		rb := newRunBuf(buf, from)
+		sh.run = rb
+		for rb.w < to && len(rb.pending()) > 0 {
 			step = 0
 			sh.limit = ceil
-			consumed, out := sh.applyGSUBAt(idx, buf, i, 0)
-			buf = out
+			consumed, _ := sh.applyGSUBAt(idx, rb.pending(), 0, 0)
 			to += step
 			ceil += step
 			total += step
@@ -1150,12 +1168,13 @@ func (sh shaper) applyIndicFeature(buf []Glyph, info *[]indicInfo, lookups []int
 				// A lookup that consumed nothing and shortened the run took a
 				// glyph out; what followed it is now here and unexamined.
 				if step >= 0 {
-					i++
+					rb.settle(1)
 				}
 				continue
 			}
-			i += consumed
+			rb.settle(consumed)
 		}
+		buf = rb.flatten()
 	}
 	return buf, total
 }
@@ -1210,7 +1229,8 @@ func (sh shaper) wouldSubstitute(lookups []int, gids []int) bool {
 		for i, g := range gids {
 			probe[i] = Glyph{GID: g}
 		}
-		_, out := sh.applyGSUBAt(idx, probe, 0, 0)
+		sh.run = newRunBuf(probe, 0)
+		_, out := sh.applyGSUBAt(idx, sh.run.pending(), 0, 0)
 		if len(out) != len(probe) {
 			return true
 		}
