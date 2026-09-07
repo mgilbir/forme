@@ -49,7 +49,7 @@ func TestBreakingOneLongWordIsNotQuadratic(t *testing.T) {
 	items := []Item{item}
 	lines := 0
 	for from, fromByte := 0, 0; from < len(items); {
-		line, next, nextByte, _, _ := br.BreakOneLine(items, from, fromByte, width, 0)
+		line, next, nextByte, _, _, _ := br.BreakOneLine(items, from, fromByte, width, 0)
 		if len(line) == 0 && next == from && nextByte == fromByte {
 			t.Fatal("the breaker stopped making progress")
 		}

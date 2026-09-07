@@ -161,7 +161,7 @@ func brokenLines(t *testing.T, br *Breaker, items []Item, width float64) [][]Ite
 			t.Fatalf("%d items produced %d lines at %gpx; the breaker is not making "+
 				"progress", len(items), len(lines), width)
 		}
-		line, next, nextByte, _, _ := br.BreakOneLine(items, i, iByte, u(width), 0)
+		line, next, nextByte, _, _, _ := br.BreakOneLine(items, i, iByte, u(width), 0)
 		if next < i || (next == i && nextByte <= iByte) {
 			t.Fatalf("the cursor went from item %d byte %d to item %d byte %d at "+
 				"%gpx: it must always move forward", i, iByte, next, nextByte, width)
@@ -381,7 +381,7 @@ func TestALineIsAsFullAsItCouldBe(t *testing.T) {
 				items := itemsOf(t, br, face, tc.text, w.ws, OverflowWrap{})
 				from, fromByte := 0, 0
 				for from < len(items) {
-					line, next, nextByte, _, forced := br.BreakOneLine(
+					line, next, nextByte, _, forced, _ := br.BreakOneLine(
 						items, from, fromByte, u(width), 0)
 					if next >= len(items) || forced || nextByte != 0 || fromByte != 0 {
 						// The last line, a break the author asked for, or a line

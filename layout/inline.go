@@ -500,7 +500,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				l.deferred = l.deferred[:midAbs]
 				midKids = midKids[:0]
 
-				runs, next, nextByte, mid, forced = l.br.BreakOneLine(items, i, iByte,
+				runs, next, nextByte, mid, forced, _ = l.br.BreakOneLine(items, i, iByte,
 					// The cap is a *line* width, so the indent comes off it and not
 					// off the band before it: the search counted the first line's
 					// room as the balanced width less the indent, and taking the

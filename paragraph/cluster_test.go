@@ -82,7 +82,7 @@ func TestNoLineEndsInsideACluster(t *testing.T) {
 				WhiteSpaceOf("collapse"), OverflowWrap{BreakWord: true})
 			from, fromByte := 0, 0
 			for from < len(items) {
-				_, next, nextByte, _, _ := br.BreakOneLine(items, from, fromByte, u(width), 0)
+				_, next, nextByte, _, _, _ := br.BreakOneLine(items, from, fromByte, u(width), 0)
 				if nextByte != 0 {
 					if next >= len(items) {
 						t.Fatalf("%s at %gpx: the cursor points %d bytes into item %d, "+
@@ -129,7 +129,7 @@ func TestAClusterIsNeverSplitEvenWhenItAloneOverflows(t *testing.T) {
 		if len(items) == 0 {
 			continue
 		}
-		line, next, nextByte, _, _ := br.BreakOneLine(items, 0, 0, u(1), 0)
+		line, next, nextByte, _, _, _ := br.BreakOneLine(items, 0, 0, u(1), 0)
 		if nextByte != 0 {
 			t.Errorf("%s: a 1px line cut %q at byte %d — the whole of it is one "+
 				"character and there is nowhere inside it a line may end",

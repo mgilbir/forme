@@ -71,7 +71,7 @@ func paragraphLines(t *testing.T, face *shape.Face, text string, size, width sty
 	var out []string
 	from, fromByte := 0, 0
 	for from < len(items) {
-		line, next, nextByte, _, _ := br.BreakOneLine(items, from, fromByte, width, 0)
+		line, next, nextByte, _, _, _ := br.BreakOneLine(items, from, fromByte, width, 0)
 		var b strings.Builder
 		for _, it := range line {
 			b.WriteString(it.Text)

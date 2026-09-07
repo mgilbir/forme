@@ -355,8 +355,13 @@ type Item struct {
 	// CSS property or a CSS Text rule has overruled. See shape.Features.
 	Off shape.Features
 	// Hyphen is how much wider the line becomes if it ends after this item: the
-	// width of the hyphen a soft hyphen asks to have printed. Zero means this is
-	// not a hyphenation point, which is every item in almost every document.
+	// width of the hyphen a soft hyphen asks to have printed.
+	//
+	// It is a width and not a claim: whether this is a hyphenation point at all
+	// is HyphenText, and Hyphenates is the one place that is asked. Reading a
+	// non-zero width as the claim was the second predicate for one fact, and the
+	// two could disagree — a face whose hyphen glyph has no advance offered a
+	// hyphenation point that nothing would print.
 	//
 	// A width rather than a flag because this half of the engine has no faces to
 	// ask. Which character is printed and how wide it is are questions about the
@@ -543,6 +548,20 @@ type Item struct {
 	Para  *bidiParagraph
 	Level int
 }
+
+// Hyphenates reports whether a line may end after this item with a hyphen
+// printed at the end of it.
+//
+// One fact, asked in one place. It used to be asked as two — a non-zero Hyphen
+// width *and* a HyphenText to print — in one of the two places that needed it
+// and as the width alone in the other, so the room reserved for a hyphen and the
+// decision to print one were separate answers to the same question. A face whose
+// hyphen glyph has no advance parts them: the width is zero and the character is
+// there, and the line was then not hyphenated at all.
+//
+// The character is what decides, because it is what a reader sees. A hyphen of
+// no width is still a hyphen.
+func (it Item) Hyphenates() bool { return it.HyphenText != "" }
 
 // CursorAdvanced reports whether a line took at least one item, or at least one
 // byte of one, from where it began.

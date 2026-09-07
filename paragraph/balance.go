@@ -168,7 +168,7 @@ func (br *Breaker) clampedReach(items []Item,
 			room = room.Sub(ellipsis)
 		}
 		wasI, wasByte := i, iByte
-		runs, next, nextByte, _, _ := br.BreakOneLine(items, i, iByte, room, 0)
+		runs, next, nextByte, _, _, _ := br.BreakOneLine(items, i, iByte, room, 0)
 		if last {
 			var used style.Unit
 			for _, r := range runs {
@@ -242,11 +242,11 @@ func (br *Breaker) countLinesInBands(items []Item, bands []style.Unit,
 			room = room.Sub(indent)
 		}
 		wasI, wasByte := i, iByte
-		runs, next, nextByte, _, forced := br.BreakOneLine(items, i, iByte, room, 0)
+		runs, next, nextByte, _, forced, hyphenated := br.BreakOneLine(items, i, iByte, room, 0)
 		if len(runs) > 0 || forced {
 			n++
 		}
-		if nextByte != 0 && next < len(items) && !items[next].Anywhere {
+		if nextByte != 0 && !hyphenated && next < len(items) && !items[next].Anywhere {
 			split = true
 		}
 		if n >= limit {
@@ -453,10 +453,10 @@ func (br *Breaker) BalanceScoredCaps(items []Item, bands []style.Unit,
 		// The same rule the width search has — see the note on BalanceWidth —
 		// asked once for this line: whether the greedy break here had to open a
 		// word, which is the only reason a narrower one may.
-		_, _, greedyByte, _, _ := br.BreakOneLine(items, st.i, st.iByte, r, 0)
-		mustSplit := greedyByte != 0
+		_, _, greedyByte, _, _, greedyHyphen := br.BreakOneLine(items, st.i, st.iByte, r, 0)
+		mustSplit := greedyByte != 0 && !greedyHyphen
 		for w := r; w >= 0; {
-			runs, next, nextByte, _, _ := br.BreakOneLine(items, st.i, st.iByte, w, 0)
+			runs, next, nextByte, _, _, hyphenated := br.BreakOneLine(items, st.i, st.iByte, w, 0)
 			if !CursorAdvanced(st.i, st.iByte, next, nextByte) {
 				break
 			}
@@ -464,7 +464,7 @@ func (br *Breaker) BalanceScoredCaps(items []Item, bands []style.Unit,
 			for _, run := range runs {
 				used = used.Add(run.Width)
 			}
-			split := nextByte != 0 && !mustSplit &&
+			split := nextByte != 0 && !hyphenated && !mustSplit &&
 				next < len(items) && !items[next].Anywhere
 			rest := best(state{next, nextByte, st.n + 1})
 			if rest.ok && !split {
@@ -539,13 +539,13 @@ func (br *Breaker) countLines(items []Item, width, indent style.Unit, limit int)
 			room = width.Sub(indent)
 		}
 		wasI, wasByte := i, iByte
-		runs, next, nextByte, _, forced := br.BreakOneLine(items, i, iByte, room, 0)
+		runs, next, nextByte, _, forced, hyphenated := br.BreakOneLine(items, i, iByte, room, 0)
 		if len(runs) > 0 || forced {
 			n++
 		}
 		// A cursor left inside an item is a word broken open. See the note on
 		// BalanceWidth for which values may do that and which may not.
-		if nextByte != 0 && next < len(items) && !items[next].Anywhere {
+		if nextByte != 0 && !hyphenated && next < len(items) && !items[next].Anywhere {
 			split = true
 		}
 		if n >= limit {
