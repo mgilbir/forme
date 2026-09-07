@@ -1603,10 +1603,22 @@ type placedCell struct {
 	baseline    style.Unit
 	hasBaseline bool
 	align       string
-	// absFrom is where in the deferred queue this cell's out-of-flow boxes
-	// begin, so that vertical alignment can move their static positions with the
-	// content they were written in.
-	absFrom int
+	// absFrom and absTo bound this cell's own stretch of the deferred queue, so
+	// that vertical alignment can move the static positions of the out-of-flow
+	// boxes written inside it along with the content they were written in.
+	//
+	// Both ends, and the end is the point. Alignment used to scan from absFrom
+	// to whatever the queue had grown to by the time the row was aligned, which
+	// is every out-of-flow box in every cell laid out after this one: work
+	// proportional to cells times deferred boxes, for a walk that could only
+	// ever match entries this cell put there. A table of 8,000 cells each
+	// holding one absolutely positioned box did sixteen million comparisons to
+	// move eight thousand numbers.
+	//
+	// The parent check inside the range stays. A cell holding a nested table
+	// contributes that table's cells' boxes to this range too, and those move
+	// with the inner fragment rather than with this one.
+	absFrom, absTo int
 }
 
 // tableContent lays out a table's grid and returns the content height it needs.
@@ -1815,7 +1827,7 @@ func (l *layouter) layoutCells(table *Box, g *tableGrid, cols []style.Unit,
 			cell: c, frag: frag, natural: frag.BorderRect.H, content: frag.contentH,
 			baseline: baseline, hasBaseline: hasBaseline,
 			align:   strings.ToLower(strings.TrimSpace(c.box.Style["vertical-align"])),
-			absFrom: absFrom,
+			absFrom: absFrom, absTo: len(l.deferred),
 		})
 	}
 	return out
@@ -2234,7 +2246,8 @@ func (l *layouter) alignCell(p placedCell, height, rowBaseline style.Unit) {
 	for i := range p.frag.Lines {
 		p.frag.Lines[i].Rect.Y = p.frag.Lines[i].Rect.Y.Add(delta)
 	}
-	for i := p.absFrom; i < len(l.deferred); i++ {
+	l.absScans += p.absTo - p.absFrom
+	for i := p.absFrom; i < p.absTo && i < len(l.deferred); i++ {
 		if l.deferred[i].parent == p.frag {
 			l.deferred[i].staticY = l.deferred[i].staticY.Add(delta)
 		}
