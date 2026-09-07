@@ -220,9 +220,9 @@ func TestTheBlockCountCodeIsRFC7932s(t *testing.T) {
 // 1020 of the four-letter ones, transform 63, which cuts five letters off a
 // four-letter word. What that transform leaves is nothing.
 //
-// §8 tolerates a reference that comes to nothing when the distance is large,
-// which this one is. So the command is legal, produces no output, and moves the
-// meta-block no closer to its stated length. The stream then simply stops, and
+// A reference that comes to nothing is legal — RFC 7932 states no rule against
+// one, at any distance. So the command is legal, produces no output, and moves
+// the meta-block no closer to its stated length. The stream then simply stops, and
 // past the end the bit reader hands out zeroes, which decode to that same
 // command again, for ever.
 //

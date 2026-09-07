@@ -147,3 +147,41 @@ func TestAStreamEndsWhereItSaysItDoes(t *testing.T) {
 		t.Errorf("the clean stream was refused: %v", err)
 	}
 }
+
+// TestAWordThatTransformsAwayToNothingIsNotAnError.
+//
+// A transform may leave nothing — OmitFirst9 over a four-letter word — and the
+// reference decoder appends nothing and carries on. RFC 7932 states no rule
+// against it at any distance.
+//
+// This refused one below a distance of 120 and allowed it above, on a threshold
+// with no authority behind it: a stream the reference decodes came back as an
+// error, and which answer you got depended on how far into the dictionary the
+// reference reached. What stops a command producing nothing from meaning
+// nothing forever is the reader running past the end of the input, which is
+// TestAStreamThatProducesNothingForEverIsRefused.
+func TestAWordThatTransformsAwayToNothingIsNotAnError(t *testing.T) {
+	// Find a length and a transform that leave nothing: the word is four bytes
+	// and the transform cuts more than four off the front.
+	var index int
+	found := false
+	for kind, tr := range transforms {
+		// omitFirst1 is 12, so cutting five or more off the front is 16 and up.
+		if tr.prefix == "" && tr.suffix == "" &&
+			tr.kind >= omitFirst1+4 && tr.kind <= omitFirst9 {
+			index = kind << wordBits[4]
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Skip("no transform in the table cuts a four-letter word away to nothing")
+	}
+	out, err := word(nil, 4, index)
+	if err != nil {
+		t.Errorf("a word that transforms away to nothing gave %v", err)
+	}
+	if len(out) != 0 {
+		t.Errorf("it produced %q, want nothing", out)
+	}
+}

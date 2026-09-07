@@ -238,15 +238,6 @@ func (d *decoder) dictionaryWord(distance, reach, length, roll int) (int, error)
 
 	before := len(d.out)
 	out, err := word(d.out, length, distance-reach-1)
-	if err == errEmptyWord {
-		// A transform that leaves nothing. RFC 7932 tolerates it far out in the
-		// distance range, where no encoder would emit one deliberately, and
-		// refuses it where one plainly meant something.
-		if distance <= 120 {
-			return 0, err
-		}
-		err = nil
-	}
 	if err != nil {
 		return 0, err
 	}

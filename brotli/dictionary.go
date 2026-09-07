@@ -72,7 +72,6 @@ const (
 var (
 	errNoSuchWord      = errors.New("brotli: a reference to a dictionary word that does not exist")
 	errNoSuchTransform = errors.New("brotli: a reference to a transform that does not exist")
-	errEmptyWord       = errors.New("brotli: a dictionary reference that transforms away to nothing")
 )
 
 // word returns one dictionary reference, transformed and ready to append.
@@ -130,9 +129,16 @@ func applyTransform(dst, w []byte, t transform) ([]byte, error) {
 	}
 
 	dst = append(dst, t.suffix...)
-	if n == 0 && t.prefix == "" && t.suffix == "" {
-		return dst, errEmptyWord
-	}
+	// A transform that leaves nothing — OmitFirst9 over a four-letter word, say
+	// — contributes nothing, which is not an error. RFC 7932 states no rule
+	// against one, and this refused it below a distance of 120 and allowed it
+	// above: a threshold with no authority behind it, standing between a
+	// stream the reference decodes and this decoder's answer.
+	//
+	// The meta-block's own length is what stops a command producing nothing
+	// from meaning nothing forever: the loop that spends commands gives up when
+	// the reader runs past the end of the input, which is the note at the top
+	// of it.
 	return dst, nil
 }
 
