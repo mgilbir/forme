@@ -28,6 +28,8 @@ var (
 	errDistance      = errors.New("brotli: a reference to text before the start of the stream")
 	errTooLarge      = errors.New("brotli: the stream decompresses to more than the caller allows")
 	errOverproduced  = errors.New("brotli: a meta-block's commands produce more bytes than it declared")
+	errTailPadding   = errors.New("brotli: the bits after the last meta-block are not zero")
+	errTrailing      = errors.New("brotli: there are bytes after the end of the stream")
 	errNoBlockSwitch = errors.New("brotli: a switch to another block type where the meta-block declared only one")
 )
 
@@ -64,6 +66,23 @@ func Decode(src []byte, limit int) ([]byte, error) {
 	}
 	if d.r.overrun() {
 		return nil, errTruncated
+	}
+	// What is left after the last meta-block. RFC 7932 §9.2 requires the bits
+	// to the end of the final byte to be zero, and there is nothing after that
+	// byte: a stream is exactly as long as it says it is.
+	//
+	// Both were accepted, so bytes appended to a stream were read as a stream
+	// that ended where it did — which is a decoder that agrees with itself
+	// about input the reference calls corrupt, and the difference matters
+	// wherever the length came from somewhere else. A WOFF 2 states its
+	// compressed length in its own header and this is handed exactly that many
+	// bytes, so a stream that ends early inside them is a font whose header and
+	// body disagree.
+	if !d.r.align() {
+		return nil, errTailPadding
+	}
+	if d.r.remaining() > 0 {
+		return nil, errTrailing
 	}
 	return d.out, nil
 }

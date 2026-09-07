@@ -102,3 +102,48 @@ func TestAMetaBlockThatProducesExactlyWhatItDeclaredIsAccepted(t *testing.T) {
 		t.Errorf("it decoded to %q, want %q", out, "AAAAA")
 	}
 }
+
+// TestAStreamEndsWhereItSaysItDoes.
+//
+// RFC 7932 §9.2 requires the bits from the end of the last meta-block to the
+// end of the byte to be zero, and there is nothing after that byte: a stream is
+// exactly as long as it says it is. Both were accepted, so bytes appended to a
+// stream were read as a stream that ended where it did.
+//
+// Both fixtures were run through the reference decoder first:
+//
+//	$ brotli -d < padding.br    # exit 1, corrupt input
+//	$ brotli -d < trailing.br   # exit 1, corrupt input
+//	$ brotli -d < clean.br      # exit 0, "hi"
+func TestAStreamEndsWhereItSaysItDoes(t *testing.T) {
+	clean := func() *bitWriter {
+		w := &bitWriter{}
+		w.write(0, 1) // a 16-bit window
+		w.storedBlock([]byte("hi"), 0)
+		w.end()
+		return w
+	}
+
+	if out, err := Decode(clean().out, 1<<20); err != nil || string(out) != "hi" {
+		t.Fatalf("the clean stream gave %q and %v", out, err)
+	}
+
+	padded := clean()
+	padded.pad(1)
+	if out, err := Decode(padded.out, 1<<20); !errors.Is(err, errTailPadding) {
+		t.Errorf("a stream whose tail padding is not zero gave %q and %v", out, err)
+	}
+
+	trailing := clean()
+	trailing.pad(0)
+	trailing.raw([]byte{0x41, 0x42})
+	if out, err := Decode(trailing.out, 1<<20); !errors.Is(err, errTrailing) {
+		t.Errorf("a stream with two bytes after it gave %q and %v", out, err)
+	}
+
+	// And a stream that ends exactly on a byte boundary needs no padding at
+	// all, which is the case the check must not refuse.
+	if _, err := Decode(clean().out, 1<<20); err != nil {
+		t.Errorf("the clean stream was refused: %v", err)
+	}
+}
