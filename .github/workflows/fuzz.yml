@@ -56,6 +56,11 @@ jobs:
             target: FuzzLoadAndUse
           - package: ./layout
             target: FuzzImageLoading
+          # The numbers a caller hands the line breaker, rather than the text:
+          # an index into the items and a byte offset into one of them, which a
+          # caller that computes its own can compute wrongly.
+          - package: ./paragraph
+            target: FuzzBreakerCursor
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7

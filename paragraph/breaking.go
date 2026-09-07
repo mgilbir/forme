@@ -58,6 +58,7 @@ const BlockEllipsis = "\u2026"
 func (br *Breaker) BreakOneLine(items []Item, from, fromByte int, width, lineX style.Unit) (
 	line []Item, next, nextByte int, outOfFlow []MidLineBox, forced, hyphenated bool) {
 
+	from, fromByte = cursorWithin(items, from, fromByte)
 	line, next, nextByte, outOfFlow, forced = br.fillOneLine(items, from, fromByte, width, lineX)
 	line, skip := withHyphen(items, line, from, next, nextByte, forced)
 	// A character the hyphen replaced, taken off the start of the next line.
@@ -72,6 +73,29 @@ func (br *Breaker) BreakOneLine(items []Item, from, fromByte int, width, lineX s
 	// that hyphenated, and a pinyin paragraph, whose syllable separator is
 	// exactly this rule, could not be balanced at any width at all.
 	return line, next, nextByte + skip, outOfFlow, forced, skip > 0
+}
+
+// cursorWithin brings a caller's position into the items and onto a character.
+//
+// The two numbers are an index into the items and a byte offset into the text of
+// the one at that index — a cursor, which a caller advances by handing back what
+// the last call returned. A caller that computes one itself can compute one that
+// is not there: a negative index was a slice panic, an offset past the end of an
+// item's text was another, and an offset inside a character produced halves of
+// it that are not text at all.
+//
+// None of those is a case to answer differently. They are a caller's arithmetic
+// gone wrong, and what this owes them is a defined answer rather than a crash
+// inside a document generator — so the position is brought to the nearest one
+// that exists, which is where the line then begins.
+func cursorWithin(items []Item, from, fromByte int) (int, int) {
+	if from < 0 {
+		from = 0
+	}
+	if from >= len(items) {
+		return len(items), 0
+	}
+	return from, cutWithinText(items[from].Text, fromByte)
 }
 
 // withHyphen prints the hyphen a soft hyphen asked for, on the line that broke
