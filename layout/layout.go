@@ -803,7 +803,7 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	// the answer changes what the rest of this function means: the length its
 	// lines are broken against becomes its height, and it seals its edges. See
 	// layout/writingmode.go.
-	turnTo := l.turns(b, containing, hasHeight)
+	turnTo := l.turns(b, containing)
 	turn := turnTo.vertical()
 
 	sealed := establishesBFC(b) || b == l.root || turn

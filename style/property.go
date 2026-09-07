@@ -689,6 +689,13 @@ const (
 	kwInitial = "initial"
 	kwUnset   = "unset"
 	kwRevert  = "revert"
+	// kwRevertLayer is CSS Cascade 5's, and it is the same keyword as revert
+	// here. It rolls the value back to the previous cascade *layer*, and this
+	// engine has none — no @layer rule reaches it, so every declaration is in
+	// the implicit outer layer — and the specification says what that means:
+	// with no lower-priority layer to roll back to, it rolls back to the
+	// previous origin, which is revert.
+	kwRevertLayer = "revert-layer"
 )
 
 // wideKeyword returns the CSS-wide keyword a value consists of, or "".
@@ -705,7 +712,7 @@ func wideKeyword(vals []css.ComponentValue) string {
 		return ""
 	}
 	switch kw := strings.ToLower(v.Token.Value); kw {
-	case kwInherit, kwInitial, kwUnset, kwRevert:
+	case kwInherit, kwInitial, kwUnset, kwRevert, kwRevertLayer:
 		return kw
 	}
 	return ""

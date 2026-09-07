@@ -87,6 +87,35 @@ func runScript(s string) uint16 {
 	return scriptUnknown
 }
 
+// scriptAround is the script of a piece of a string, taking the text it sits in
+// where the piece itself decides nothing.
+//
+// A bidirectional run is cut by *direction*, and a run of digits inside Arabic
+// is a run of its own: Arabic-Indic digits are class AN and the letters around
+// them are AL, so the digits come out as a piece whose every character is
+// Common. runScript answers scriptUnknown for that piece, which selects DFLT —
+// so a font stating its digit forms under 'arab', as Arabic fonts do, had them
+// selected away by the direction the digits are read in.
+//
+// UAX #24's resolution: a character of Common or Inherited takes the script
+// around it. Backwards first, because a run of digits belongs to the word it
+// follows, and forwards where there is nothing behind.
+func scriptAround(s string, start, end int) uint16 {
+	if sc := runScript(s[start:end]); sc != scriptUnknown {
+		return sc
+	}
+	last := uint16(scriptUnknown)
+	for _, r := range s[:start] {
+		if sc := scriptOf(r); decides(sc) {
+			last = sc
+		}
+	}
+	if last != scriptUnknown {
+		return last
+	}
+	return runScript(s[end:])
+}
+
 // scriptTags is the OpenType tags a script selects, most specific first.
 func scriptTags(script uint16) []string {
 	if int(script) < len(scriptOpenTypeTags) {
@@ -330,11 +359,14 @@ type shaper struct {
 	f *Face
 	l *layout
 
-	// rtl says the run will be drawn right to left, and is what the positioning
-	// pass needs to know. Everything before positioning works in the order the
-	// text is written and is the same either way; positioning states where a
-	// glyph sits relative to the pen, and the pen will meet the run's glyphs in
-	// the opposite order.
+	// rtl says the run will be drawn right to left.
+	//
+	// Positioning needs it because it states where a glyph sits relative to the
+	// pen, and the pen will meet the run's glyphs in the opposite order.
+	// Substitution needs it for one thing only: which of 'rtlm'/'rtla' and
+	// 'ltrm'/'ltra' a font's direction-selected forms are read from. Everything
+	// else in substitution works in the order the text is written and is the
+	// same either way.
 	rtl bool
 
 	// zeroMarks says when a mark's own advance is cancelled, which each script's
@@ -417,6 +449,16 @@ type shaper struct {
 	// matchers serves both.
 	positioning bool
 
+	// run is the array a substitution pass is editing, or nil where nothing is
+	// being edited — positioning, and the probes that ask whether a lookup
+	// would do anything.
+	//
+	// It is a pointer because every method here takes a shaper by value: the
+	// pass's own cursors have to be the same cursors in a lookup that a
+	// contextual rule called into. See runBuf, which is where the arrangement
+	// is written down.
+	run *runBuf
+
 	// ligIDs hands out the numbers that tie a ligature glyph to the marks that
 	// were inside it, so that positioning can put each mark against the part of
 	// the ligature it belongs to. It is a pointer because a shaper is copied
@@ -441,25 +483,87 @@ func (sh shaper) nextLigatureID() int {
 	return *sh.ligIDs
 }
 
+// base is where the glyphs a lookup sees begin, counted from the start of the
+// run.
+//
+// A lookup's positions are relative to the pending part of the buffer, and
+// everything a pass keeps *beside* the buffer — the per-glyph record, the two
+// bounds, where the joiners are — is counted from the start of the run. This is
+// what maps one to the other, and it is zero wherever no pass is editing.
+func (sh shaper) base() int {
+	if sh.run == nil {
+		return 0
+	}
+	return sh.run.w
+}
+
+// glyphAt reads a position a lookup is working with, which may be behind the
+// glyphs it was given: a backtrack walks off the front of them into what the
+// pass has already settled. See runBuf.
+func (sh shaper) glyphAt(buf []Glyph, at int) Glyph {
+	if at >= 0 {
+		return buf[at]
+	}
+	settled := sh.run.settled()
+	return settled[len(settled)+at]
+}
+
+// product is an empty slice with room for n glyphs, for a substitution to build
+// its replacement in before replace writes it.
+func (sh shaper) product(n int) []Glyph {
+	if sh.run == nil {
+		return make([]Glyph, 0, n)
+	}
+	return sh.run.product(n)
+}
+
+// replace puts product where the span glyphs at buf[at:at+span] were, and
+// reports the glyphs the lookup is working with as they now stand.
+//
+// It is the one place a substitution changes how many glyphs there are. See
+// runBuf for why that is not a new slice built out of the three parts.
+func (sh shaper) replace(buf []Glyph, at, span int, product []Glyph) []Glyph {
+	if sh.run == nil {
+		// No pass is editing, so there is no array to edit in place and no
+		// promise about whose it is. A copy is what this used to do everywhere.
+		sh.run = newRunBuf(append([]Glyph(nil), buf...), 0)
+	}
+	return sh.run.replace(at, span, product)
+}
+
+// settledRun is what the pass has finished with, and nothing where no pass is
+// editing.
+func (sh shaper) settledRun() []Glyph {
+	if sh.run == nil {
+		return nil
+	}
+	return sh.run.settled()
+}
+
 // resized reports a change in the buffer's length at a position, for a caller
 // keeping something in step with it.
 func (sh shaper) resized(at, delta int) {
 	if sh.onResize != nil && delta != 0 {
-		sh.onResize(at, delta)
+		sh.onResize(sh.base()+at, delta)
 	}
 }
 
 // deleted tells a per-glyph record that the glyph at a position is gone.
 func (sh shaper) deleted(at int) {
 	if sh.onDelete != nil {
-		sh.onDelete(at)
+		sh.onDelete(sh.base() + at)
 	}
 }
 
 // end is one past the last glyph a lookup may look at.
 func (sh shaper) end(buf []Glyph) int {
-	if sh.limit > 0 && sh.limit < len(buf) {
-		return sh.limit
+	if sh.limit > 0 {
+		if n := sh.limit - sh.base(); n < len(buf) {
+			if n < 0 {
+				return 0
+			}
+			return n
+		}
 	}
 	return len(buf)
 }

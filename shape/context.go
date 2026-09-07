@@ -44,22 +44,27 @@ type rawLookup struct {
 // what the lookup consumed rather than by one.
 func (sh shaper) applyContextual(buf []Glyph, lookups []int) []Glyph {
 	for _, idx := range lookups {
-		for i := 0; i < len(buf); {
-			was := len(buf)
-			consumed, out := sh.applyGSUBAt(idx, buf, i, 0)
-			buf = out
+		// The walk is always at the front of what is left: what it has passed
+		// is settled, and a lookup that changes the run's length gives its room
+		// back to the gap between the two rather than closing it. See runBuf.
+		rb := newRunBuf(buf, 0)
+		sh.run = rb
+		for len(rb.pending()) > 0 {
+			was := len(rb.pending())
+			consumed, _ := sh.applyGSUBAt(idx, rb.pending(), 0, 0)
 			if consumed > 0 {
-				i += consumed
+				rb.settle(consumed)
 				continue
 			}
 			// A lookup that consumed nothing and yet shortened the buffer took
 			// a glyph out. The position is not advanced past what followed it,
 			// because what followed it is now here and has not been looked at.
-			if len(buf) < was {
+			if len(rb.pending()) < was {
 				continue
 			}
-			i++
+			rb.settle(1)
 		}
+		buf = rb.flatten()
 	}
 	return buf
 }
@@ -181,9 +186,7 @@ func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph)
 			// Nothing was consumed, so the caller stays where it is: what
 			// followed has moved into this place and has not been looked at.
 			if ok && len(reps) == 0 {
-				// Capped, so that append cannot write into the array the caller
-				// still holds a slice of.
-				out := append(buf[:at:at], buf[at+1:]...)
+				out := sh.replace(buf, at, 1, nil)
 				sh.deleted(at)
 				return 0, out
 			}
@@ -192,8 +195,7 @@ func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph)
 			// to the buffer and the wrong thing to the record beside it,
 			// reporting a ligature where a glyph was removed.
 			if ok && len(reps) > 0 {
-				out := make([]Glyph, 0, len(buf)+len(reps)-1)
-				out = append(out, buf[:at]...)
+				product := sh.product(len(reps))
 				for _, gid := range reps {
 					// Each part still stands for the character the whole stood
 					// for, so it is classified as that character was and takes
@@ -202,12 +204,12 @@ func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph)
 					// a skeleton and its dots must leave the skeleton still
 					// knowing it is the first letter of a word, because that is
 					// the glyph the font states the form over.
-					out = append(out, Glyph{
+					product = append(product, Glyph{
 						GID: gid, Cluster: buf[at].Cluster, XAdvance: sh.f.advanceGID(gid),
 						class: buf[at].class, join: buf[at].join,
 					})
 				}
-				out = append(out, buf[at+1:]...)
+				out := sh.replace(buf, at, 1, product)
 				sh.resized(at, len(reps)-1)
 				return len(reps), out
 			}
@@ -439,8 +441,7 @@ func (sh shaper) formLigature(buf []Glyph, at, gid int, comps []int) (int, []Gly
 		comps0-- // the count started at one for the first component
 	}
 
-	out := make([]Glyph, 0, len(buf)-len(comps)+1)
-	out = append(out, buf[:at]...)
+	product := sh.product(last - at + 1)
 	// What the product is, for a font that classifies nothing itself. Several
 	// letters drawn as one glyph is a ligature; a letter drawn together with its
 	// own marks is still that letter, which is the same distinction the
@@ -449,7 +450,7 @@ func (sh shaper) formLigature(buf []Glyph, at, gid int, comps []int) (int, []Gly
 	if joined {
 		class = classLigature
 	}
-	out = append(out, Glyph{
+	product = append(product, Glyph{
 		GID: gid, Cluster: cluster, XAdvance: sh.f.advanceGID(gid),
 		lig: ligatureRef{id: id, comps: comps0}, class: class,
 	})
@@ -459,7 +460,7 @@ func (sh shaper) formLigature(buf []Glyph, at, gid int, comps []int) (int, []Gly
 	// belongs to the first, and so on; a ligature made of ligatures counts each
 	// of their parts, which is why the running total is of components rather
 	// than of glyphs.
-	kept, soFar := 0, componentsOf(buf[at])
+	soFar := componentsOf(buf[at])
 	for i := at + 1; i <= last; i++ {
 		if isComponent[i-at] {
 			soFar += componentsOf(buf[i])
@@ -470,12 +471,12 @@ func (sh shaper) formLigature(buf []Glyph, at, gid int, comps []int) (int, []Gly
 		if id != 0 {
 			g.lig = ligatureRef{id: id, comp: soFar, comps: componentsOf(g)}
 		}
-		out = append(out, g)
-		kept++
+		product = append(product, g)
 	}
-	out = append(out, buf[last+1:]...)
 
-	sh.resized(at, (1+kept)-(last-at+1))
+	span := last - at + 1
+	out := sh.replace(buf, at, span, product)
+	sh.resized(at, len(product)-span)
 	return 1, out
 }
 
@@ -539,10 +540,17 @@ func (sh shaper) positionsFrom(buf []Glyph, at, n, flags int, context bool) ([]i
 // backtrackPositions collects the positions before a position, nearest first,
 // which is the order the format stores a backtrack sequence in. It is context,
 // so it steps over joiners.
+// A position may be negative, which is a glyph the pass has already settled and
+// so is behind the ones the lookup was given: a rule at the front of what is
+// left still has the run before it as its context. glyphAt is what reads one.
 func (sh shaper) backtrackPositions(buf []Glyph, before, n, flags int) ([]int, bool) {
 	out := make([]int, 0, n)
-	for pos := before - 1; pos >= sh.floor && len(out) < n; pos-- {
-		if !sh.ignores(flags, buf[pos]) && !sh.stepsOverJoiner(pos, true) {
+	low := sh.floor - sh.base()
+	if settled := -len(sh.settledRun()); low < settled {
+		low = settled
+	}
+	for pos := before - 1; pos >= low && len(out) < n; pos-- {
+		if !sh.ignores(flags, sh.glyphAt(buf, pos)) && !sh.stepsOverJoiner(pos, true) {
 			out = append(out, pos)
 		}
 	}
@@ -694,10 +702,11 @@ func (sh shaper) chainedRuleSet(sub []byte, setsAt, index int, buf []Glyph, at, 
 	set := sub[off:]
 	byGlyph := classes == nil
 	item := func(m map[int]int, pos int) int {
+		gid := sh.glyphAt(buf, pos).GID
 		if byGlyph {
-			return buf[pos].GID
+			return gid
 		}
-		return m[buf[pos].GID]
+		return m[gid]
 	}
 
 	for r := 0; r < font.Be16(set, 0); r++ {
@@ -857,7 +866,7 @@ func (sh shaper) chainedFormat3(sub []byte, buf []Glyph, at, flags, depth int) (
 			return 0, buf, false
 		}
 		for k, cov := range back {
-			if _, covered := coverageIndex(sub, cov, buf[bp[k]].GID); !covered {
+			if _, covered := coverageIndex(sub, cov, sh.glyphAt(buf, bp[k]).GID); !covered {
 				return 0, buf, false
 			}
 		}

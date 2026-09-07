@@ -41,10 +41,26 @@ jobs:
             target: FuzzSFNTCmap
           - package: ./font
             target: FuzzParseCFF
+          # The three the audit found missing. WOFF 1 and Type 1 had no target
+          # at all, and the glyf transform had one only in name: FuzzDecodeWOFF2
+          # reads a whole file, and the fixtures that carry a transformed glyf
+          # are Brotli streams, so nearly every mutation breaks the compression
+          # and the decoder stops before the transform is reached.
+          - package: ./font
+            target: FuzzDecodeWOFF
+          - package: ./font
+            target: FuzzWOFF2Glyf
+          - package: ./font
+            target: FuzzParseType1
           - package: ./shape
             target: FuzzLoadAndUse
           - package: ./layout
             target: FuzzImageLoading
+          # The numbers a caller hands the line breaker, rather than the text:
+          # an index into the items and a byte offset into one of them, which a
+          # caller that computes its own can compute wrongly.
+          - package: ./paragraph
+            target: FuzzBreakerCursor
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7

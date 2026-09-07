@@ -4,6 +4,8 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+
+	"github.com/mgilbir/forme/shape"
 )
 
 // Automatic hyphenation, CSS Text §6.1: where a word may be broken when the
@@ -76,6 +78,15 @@ func HyphenPoints(word string, lang Language, left, right int) []int {
 	if len(runes) > maxHyphenWord {
 		return nil
 	}
+	// The patterns are written in one spelling of the language's letters and
+	// text arrives in either: "café" is four characters or five, Unicode says
+	// they are the same word, and a table keyed on the four has nothing to say
+	// about the five. So the word is composed before it is looked up, and the
+	// points that come back are put into the caller's own positions again — a
+	// point after the "e" of a decomposed "é" is a point after the mark that
+	// follows it, because the two are one letter and a line cannot be broken
+	// between them.
+	letters, at := shape.ComposeCanonically(runes)
 	// Zero means "whatever the language says", which is the hyphenmins its own
 	// pattern file states. A number is the number: hyphenate-limit-chars is the
 	// author overriding the dictionary, and an author who asks to keep two
@@ -90,11 +101,15 @@ func HyphenPoints(word string, lang Language, left, right int) []int {
 	// else is asked. That is also hyphenate-limit-chars' *first* value under
 	// "auto": the shortest word this will divide is one that can hold both
 	// halves, and the property's own minimum is applied by the caller on top.
-	if len(runes) < left+right {
+	if len(letters) < left+right {
 		return nil
 	}
-	lower := make([]rune, len(runes))
-	for i, r := range runes {
+	lower := make([]rune, len(letters))
+	for i, r := range letters {
+		// A mark the composition could not take up is not a letter and stops
+		// this as any other non-letter does: the word is spelled with something
+		// the dictionary was not written over, and a dictionary that has nothing
+		// to say says nothing rather than guessing.
 		if !unicode.IsLetter(r) {
 			return nil
 		}
@@ -102,10 +117,39 @@ func HyphenPoints(word string, lang Language, left, right int) []int {
 	}
 
 	t := src.table()
-	if points, ok := t.exceptions[string(lower)]; ok {
-		return withinMins(points, len(runes), left, right)
+	points, ok := t.exceptions[string(lower)]
+	if !ok {
+		points = t.points(lower)
 	}
-	return withinMins(t.points(lower), len(runes), left, right)
+	return atSourceRunes(withinMins(points, len(letters), left, right), at)
+}
+
+// atSourceRunes turns points counted in composed letters into points counted in
+// the runes the caller passed.
+//
+// A point after the i-th letter is a point after every rune that went into those
+// letters, which is the highest source index among them: the caller's own
+// offsets are what it will draw a hyphen at, and a hyphen between a letter and
+// its own accent is not a place the word divides. Two letters that came from one
+// rune — a decomposition Unicode does not allow to be put back together — would
+// otherwise land on the same point twice, so a repeat is dropped.
+func atSourceRunes(points []int, at []int) []int {
+	if len(points) == 0 {
+		return points
+	}
+	out := points[:0:0]
+	high, k := -1, 0
+	for _, p := range points {
+		for ; k < p && k < len(at); k++ {
+			if at[k] > high {
+				high = at[k]
+			}
+		}
+		if n := high + 1; len(out) == 0 || out[len(out)-1] != n {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // withinMins drops the points the hyphenmins forbid.

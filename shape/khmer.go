@@ -213,26 +213,34 @@ func (sh shaper) shapeKhmer(buf []Glyph, runes []rune) []Glyph {
 		cats[i] = info[i].cat
 	}
 
-	// Each syllable is shaped where it lies, and what it does to the buffer's
-	// length shifts every syllable after it — so the syllables are walked in
-	// order and the shift carried along.
-	shift := 0
+	// Each syllable is shaped on its own and the run is put back together from
+	// what comes out. Shaping them where they lay carried the length each one
+	// changed by forward as a shift into the next, which is the same answer and
+	// is quadratic — see the note in indic.go.
 	dotted, hasDotted := sh.f.GlyphID(dottedCircle)
+	out := make([]Glyph, 0, len(buf))
+	outInfo := make([]indicInfo, 0, len(info))
+	prev := 0
 	for _, syl := range khmerSyllables(cats) {
 		if syl.kind == khmerNonKhmer {
 			continue
 		}
-		start, end := syl.start+shift, syl.end+shift
+		out = append(out, buf[prev:syl.start]...)
+		outInfo = append(outInfo, info[prev:syl.start]...)
+		prev = syl.end
+
+		syllable := append([]Glyph(nil), buf[syl.start:syl.end]...)
+		record := append([]indicInfo(nil), info[syl.start:syl.end]...)
 		if syl.kind == khmerBroken && hasDotted {
-			buf, info = sh.insertGlyphAt(buf, info, start, dotted,
+			syllable, record = sh.insertGlyphAt(syllable, record, 0, dotted,
 				indicInfo{cat: catDottedCircle, pos: posBaseC})
-			end++
-			shift++
 		}
-		var delta int
-		buf, delta = sh.shapeKhmerSyllable(buf, &info, start, end)
-		shift += delta
+		syllable, _ = sh.shapeKhmerSyllable(syllable, &record, 0, len(syllable))
+		out = append(out, syllable...)
+		outInfo = append(outInfo, record...)
 	}
+	buf = append(out, buf[prev:]...)
+	info = append(outInfo, info[prev:]...)
 
 	for _, f := range khmerRunFeatures {
 		lookups := sh.l.featureLookups[f.tag]

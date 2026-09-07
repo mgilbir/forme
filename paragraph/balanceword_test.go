@@ -23,7 +23,7 @@ func linesAt(t *testing.T, br *Breaker, items []Item, width style.Unit) []string
 	var out []string
 	iByte := 0
 	for i := 0; i < len(items) && len(out) < 10; {
-		runs, next, nextByte, _, _ := br.BreakOneLine(items, i, iByte, width, 0)
+		runs, next, nextByte, _, _, _ := br.BreakOneLine(items, i, iByte, width, 0)
 		var b strings.Builder
 		for _, r := range runs {
 			b.WriteString(r.Text)
@@ -130,7 +130,7 @@ func TestTheScoredSearchDoesNotBreakAWordOpenEither(t *testing.T) {
 	if len(caps) != 2 {
 		t.Fatalf("the scored search returned %d caps, want 2", len(caps))
 	}
-	runs, _, nextByte, _, _ := br.BreakOneLine(items, 0, 0, style.Min(caps[0], width), 0)
+	runs, _, nextByte, _, _, _ := br.BreakOneLine(items, 0, 0, style.Min(caps[0], width), 0)
 	var first string
 	for _, r := range runs {
 		first += r.Text

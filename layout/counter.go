@@ -293,8 +293,19 @@ func computeCounters(root *html.Node, styles map[*html.Node]style.ComputedStyle,
 			}
 			atPseudo(n, "before", depth+1)
 		}
-		for _, child := range n.Children {
-			walk(child, depth+1)
+		// The same bound box generation is under, and for the same reason:
+		// this runs first, over the document rather than over the boxes, and
+		// recurses once per level. A branch box.go will not build is a branch
+		// whose counters nothing reads, so stopping here changes no answer that
+		// survives — and leaving it unbounded left the whole cap doing nothing,
+		// since this walk is what a deep tree reaches first.
+		// depth is the level this node sits on, counted from zero, so the
+		// deepest level box generation will build is maxBoxDepth-1 and the
+		// children below it are the ones it stops at.
+		if depth+1 < maxBoxDepth {
+			for _, child := range n.Children {
+				walk(child, depth+1)
+			}
 		}
 		if n.Type == html.ElementNode {
 			atPseudo(n, "after", depth+1)

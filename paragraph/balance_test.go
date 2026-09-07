@@ -214,7 +214,7 @@ func longestLine(t *testing.T, br *Breaker, items []Item, width style.Unit) styl
 	var most style.Unit
 	from, fromByte := 0, 0
 	for from < len(items) {
-		line, next, nextByte, _, _ := br.BreakOneLine(items, from, fromByte, width, 0)
+		line, next, nextByte, _, _, _ := br.BreakOneLine(items, from, fromByte, width, 0)
 		if w := lineWidth(line); w > most {
 			most = w
 		}
@@ -324,7 +324,7 @@ func TestTheNthLineGetsTheNthBand(t *testing.T) {
 		items := itemsOf(t, br, face, text, WhiteSpaceOf("collapse"), OverflowWrap{})
 
 		// The first line, in the first band.
-		first, next, nextByte, _, forced := br.BreakOneLine(items, 0, 0, u(60), 0)
+		first, next, nextByte, _, forced, _ := br.BreakOneLine(items, 0, 0, u(60), 0)
 		if nextByte != 0 {
 			// It ended inside a word, so "what is left" is not a suffix of the
 			// items and the oracle cannot be assembled by hand.

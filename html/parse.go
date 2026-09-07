@@ -134,7 +134,7 @@ func (p *parser) run() {
 		// newline rather than none.
 		strip := p.stripNewline
 		p.stripNewline = false
-		if tk.kind != tokText {
+		if tk.kind != tokText && tk.kind != tokComment {
 			// Everything but another run of text ends the one in hand. This is
 			// the only place the accumulator is closed, which is what makes it
 			// safe: no other part of the builder can find a text node whose
@@ -148,6 +148,13 @@ func (p *parser) run() {
 		case tokDoctype:
 			// Nothing to do with it: there is one document model here, and it
 			// is not chosen by a doctype.
+		case tokComment:
+			// Nothing to do with it either, and that is the point: it is here so
+			// that it *counts* as a token. The strip flag above has already been
+			// cleared by it, which is what makes "<pre><!-- --> \n x" keep its
+			// newline. The text in hand is deliberately not flushed — a comment
+			// between two runs of text does not divide them here, because
+			// nothing in this model records one.
 		case tokText:
 			if strip {
 				tk.text = strings.TrimPrefix(tk.text, "\n")

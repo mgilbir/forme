@@ -52,15 +52,54 @@ func Tokenize(input string) ([]Token, []Error) {
 }
 
 type tokenizer struct {
-	// src is the input after the preprocessing of §3.3, as code points. offs
-	// holds each one's byte offset in the *original* input, because
-	// preprocessing changes lengths — a CRLF becomes one newline — and a
-	// diagnostic has to point into the file the author wrote.
+	// input is the stylesheet as the author wrote it, and n is how many code
+	// points the preprocessing of §3.3 makes of it.
+	input string
+	n     int
+	// src is that preprocessed input as code points, and offs holds each one's
+	// byte offset in the original, because the preprocessing changes lengths —
+	// a CRLF becomes one newline — and a diagnostic has to point into the file
+	// the author wrote.
+	//
+	// Both are nil for the common case, which is the whole point of them being
+	// separable. A stylesheet of plain ASCII carrying no carriage return and no
+	// null *is* its own preprocessed form: every code point is one byte, so the
+	// byte index is the code point index, and the one rule that still applies —
+	// a form feed is a newline — is applied where the character is read.
+	//
+	// Materialising it cost twelve bytes for every byte of the sheet, spent
+	// before the first token was produced: four for the rune and eight for the
+	// offset that is equal to its index. For the sheets a document carries that
+	// is all of them.
 	src  []rune
 	offs []int
 	end  int // len(input), the offset of end-of-file
 	pos  int
 	errs []Error
+}
+
+// alwaysPreprocess forces the slow path, so that a test can read one stylesheet
+// both ways and require the same tokens.
+//
+// A var for the reason the other bounds here are: the fast path is the one every
+// stylesheet a document carries takes, so the slow one is reached by a sheet
+// somebody wrote in another alphabet, or by a test. It is unexported and nothing
+// outside this package's tests writes it.
+var alwaysPreprocess = false
+
+// preprocessed reports whether the input is its own §3.3 form but for the form
+// feed, which at handles.
+//
+// A carriage return merges with a newline after it and a null becomes U+FFFD,
+// and either makes a code point that is not the byte it came from — so both send
+// the input down the slow path along with everything non-ASCII.
+func preprocessed(input string) bool {
+	for i := 0; i < len(input); i++ {
+		if c := input[i]; c >= 0x80 || c == '\r' || c == 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // newTokenizer applies the input preprocessing of §3.3: the three newline forms
@@ -71,7 +110,10 @@ type tokenizer struct {
 // CR, LF, FF and CRLF at each of the dozen places a newline matters gets one of
 // them wrong.
 func newTokenizer(input string) *tokenizer {
-	t := &tokenizer{end: len(input)}
+	t := &tokenizer{input: input, n: len(input), end: len(input)}
+	if !alwaysPreprocess && preprocessed(input) {
+		return t
+	}
 	t.src = make([]rune, 0, len(input))
 	t.offs = make([]int, 0, len(input))
 	for i := 0; i < len(input); {
@@ -94,20 +136,30 @@ func newTokenizer(input string) *tokenizer {
 		t.offs = append(t.offs, i)
 		i += size
 	}
+	t.n = len(t.src)
 	return t
 }
 
 func (t *tokenizer) at(n int) rune {
-	if i := t.pos + n; i >= 0 && i < len(t.src) {
-		return t.src[i]
+	i := t.pos + n
+	if i < 0 || i >= t.n {
+		return eof
 	}
-	return eof
+	if t.src == nil {
+		// The input is its own preprocessed form, so the byte is the code
+		// point. The form feed is the one rule left to apply.
+		if r := rune(t.input[i]); r != '\f' {
+			return r
+		}
+		return '\n'
+	}
+	return t.src[i]
 }
 
 func (t *tokenizer) cur() rune { return t.at(0) }
 
 func (t *tokenizer) advance() {
-	if t.pos < len(t.src) {
+	if t.pos < t.n {
 		t.pos++
 	}
 }
@@ -120,10 +172,14 @@ func (t *tokenizer) skip(n int) {
 
 // offset is where the current code point begins in the original input.
 func (t *tokenizer) offset() int {
-	if t.pos < len(t.offs) {
-		return t.offs[t.pos]
+	if t.pos >= t.n {
+		return t.end
 	}
-	return t.end
+	if t.offs == nil {
+		// One byte to the code point, so the two indexes are the same number.
+		return t.pos
+	}
+	return t.offs[t.pos]
 }
 
 func (t *tokenizer) fail(off int, msg string) {

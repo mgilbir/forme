@@ -86,7 +86,7 @@ func breakAll(t *testing.T, br *Breaker, items []Item, width float64) []string {
 			t.Fatalf("the breaker did not reach the end of %d items in %d lines; "+
 				"it is not advancing", len(items), n)
 		}
-		line, next, nextByte, _, _ := br.BreakOneLine(items, i, iByte, u(width), 0)
+		line, next, nextByte, _, _, _ := br.BreakOneLine(items, i, iByte, u(width), 0)
 		if next == i && nextByte == iByte {
 			t.Fatalf("the cursor did not move at item %d byte %d", i, iByte)
 		}
@@ -260,7 +260,7 @@ func TestAFloatMarkerIsHandedBackWithHowFarAlongItWasReached(t *testing.T) {
 	marker := Item{Float: "a float, and this package never asks what kind"}
 	items = append([]Item{items[0], items[1], marker}, items[2:]...)
 
-	line, _, _, outOfFlow, _ := br.BreakOneLine(items, 0, 0, u(500), 0)
+	line, _, _, outOfFlow, _, _ := br.BreakOneLine(items, 0, 0, u(500), 0)
 	if len(outOfFlow) != 1 {
 		t.Fatalf("the line reported %d out-of-flow boxes, want 1", len(outOfFlow))
 	}
@@ -301,7 +301,7 @@ func TestAFloatDoesNotHaveToClearTheSpaceBeforeIt(t *testing.T) {
 	marker := Item{Float: "a float"}
 	items = append([]Item{items[0], items[1], marker}, items[2:]...)
 
-	_, _, _, outOfFlow, _ := br.BreakOneLine(items, 0, 0, u(500), 0)
+	_, _, _, outOfFlow, _, _ := br.BreakOneLine(items, 0, 0, u(500), 0)
 	if len(outOfFlow) != 1 {
 		t.Fatalf("the line reported %d out-of-flow boxes, want 1", len(outOfFlow))
 	}
@@ -328,7 +328,7 @@ func TestOnlyTheSpaceAtTheEndOfTheLineIsDiscounted(t *testing.T) {
 	marker := Item{Float: "a float"}
 	items = append(items, space, marker)
 
-	_, _, _, outOfFlow, _ := br.BreakOneLine(items, 0, 0, u(500), 0)
+	_, _, _, outOfFlow, _, _ := br.BreakOneLine(items, 0, 0, u(500), 0)
 	if len(outOfFlow) != 1 {
 		t.Fatalf("the line reported %d out-of-flow boxes, want 1", len(outOfFlow))
 	}
@@ -358,7 +358,7 @@ func TestAnInlineBoxEdgeDoesNotHideTheSpaceBeforeAFloat(t *testing.T) {
 	marker := Item{Float: "a float"}
 	items = []Item{items[0], items[1], inset, marker, items[2]}
 
-	_, _, _, outOfFlow, _ := br.BreakOneLine(items, 0, 0, u(500), 0)
+	_, _, _, outOfFlow, _, _ := br.BreakOneLine(items, 0, 0, u(500), 0)
 	if len(outOfFlow) != 1 {
 		t.Fatalf("the line reported %d out-of-flow boxes, want 1", len(outOfFlow))
 	}
@@ -383,7 +383,7 @@ func TestAFloatStillClearsAPreservedSpace(t *testing.T) {
 	marker := Item{Float: "a float"}
 	items = append([]Item{items[0], items[1], marker}, items[2:]...)
 
-	_, _, _, outOfFlow, _ := br.BreakOneLine(items, 0, 0, u(500), 0)
+	_, _, _, outOfFlow, _, _ := br.BreakOneLine(items, 0, 0, u(500), 0)
 	if got := outOfFlow[0].Used.Px(); got != 48 {
 		t.Errorf("the float has to clear %gpx, want 48 — a preserved space is "+
 			"content and the line keeps it", got)
@@ -421,7 +421,7 @@ func TestABreakerWithNowhereToReportSurvivesAnOverflow(t *testing.T) {
 	// One word of six characters, 72px, in a line of 10px: an overflow with no
 	// opportunity anywhere, which is exactly what gets reported.
 	items := words(t, br, face, "abcdef")
-	line, next, _, _, _ := br.BreakOneLine(items, 0, 0, u(10), 0)
+	line, next, _, _, _, _ := br.BreakOneLine(items, 0, 0, u(10), 0)
 	if got := lineText(line); got != "abcdef" {
 		t.Errorf("the overflowing word came back as %q, want %q", got, "abcdef")
 	}

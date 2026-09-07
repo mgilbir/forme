@@ -41,7 +41,7 @@ func TestBreakingNeverWritesBackToItsItems(t *testing.T) {
 				br.BalanceScoredCaps(items, []style.Unit{u(60), u(200)}, 0, 3)
 				from, fromByte := 0, 0
 				for from < len(items) {
-					_, next, nextByte, _, _ := br.BreakOneLine(items, from, fromByte, u(width), 0)
+					_, next, nextByte, _, _, _ := br.BreakOneLine(items, from, fromByte, u(width), 0)
 					if !CursorAdvanced(from, fromByte, next, nextByte) {
 						break
 					}
@@ -83,7 +83,7 @@ func linesWithCaps(t *testing.T, br *Breaker, items []Item, bands, caps []style.
 		if n == 0 {
 			room = room.Sub(indent)
 		}
-		line, next, nextByte, _, _ := br.BreakOneLine(items, from, fromByte, room, 0)
+		line, next, nextByte, _, _, _ := br.BreakOneLine(items, from, fromByte, room, 0)
 		lines = append(lines, line)
 		rooms = append(rooms, room)
 		if !CursorAdvanced(from, fromByte, next, nextByte) {

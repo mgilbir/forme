@@ -873,7 +873,13 @@ func subtables(lookup []byte, extensionType int, budget *int) (kind, flags, mark
 	// The bound is the format's own, for the reason maxDeclaredList is: the count
 	// is a uint16, so no valid font is truncated, and what stops a crafted one
 	// is that each subtable needs two bytes of offset present in the lookup.
-	count := font.Be16(lookup, 4)
+	// The declared count, kept apart from the clamped one: the mark filtering
+	// set below is written *after* the offsets the lookup declares, so where it
+	// sits is decided by that number and not by how many of them are read.
+	// Reading it at the clamped position took two bytes of an offset instead —
+	// a mark glyph set index out of the middle of the table.
+	declared := font.Be16(lookup, 4)
+	count := declared
 	if count > maxSubtableList {
 		count = maxSubtableList
 	}
@@ -924,7 +930,7 @@ func subtables(lookup []byte, extensionType int, budget *int) (kind, flags, mark
 	// offsets, which is why this is read last: where the number sits depends on
 	// how many subtables there are.
 	if flags&flagUseMarkFilteringSet != 0 {
-		if at := 6 + 2*count; at+2 <= len(lookup) {
+		if at := 6 + 2*declared; at+2 <= len(lookup) {
 			markSet = font.Be16(lookup, at)
 		}
 	}
@@ -1314,8 +1320,8 @@ func (l *layout) readGSUBLigatures(gsub []byte, feats tableFeatures) {
 	// whole table — see subtables.
 	budget := subtableBudget(gsub)
 	for _, lookup := range featureLookups(gsub, "liga", feats) {
-		kind, flags, _, subs := subtables(lookup, 7, &budget) // 7 = extension substitution
-		if kind != 4 {                                        // 4 = ligature substitution
+		kind, _, _, subs := subtables(lookup, 7, &budget) // 7 = extension substitution
+		if kind != 4 {                                    // 4 = ligature substitution
 			continue
 		}
 		// The flags are not kept. They were, OR-ed together across every
@@ -1330,7 +1336,6 @@ func (l *layout) readGSUBLigatures(gsub []byte, feats tableFeatures) {
 		// each lookup's own flags to hand: see shaper.ignores, and
 		// nogdef_test.go for what IgnoreMarks does there. This table is read
 		// only by HasLigatures.
-		_ = flags
 		for _, sub := range subs {
 			l.ligatureSubst(sub)
 		}
@@ -1487,13 +1492,12 @@ func (l *layout) readSingleSubstitutions(gsub []byte, feats tableFeatures) {
 		}
 		seen[tag] = true
 		for _, lookup := range featureLookups(gsub, tag, feats) {
-			kind, flags, _, subs := subtables(lookup, 7, &budget)
+			kind, _, _, subs := subtables(lookup, 7, &budget)
 			if kind != 1 { // 1 = single substitution
 				continue
 			}
 			// See the note beside the ligature reader: the flags belong to
 			// the lookup, and the pass that applies it has them.
-			_ = flags
 			for _, sub := range subs {
 				l.singleSubst(tag, sub)
 			}

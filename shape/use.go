@@ -611,20 +611,37 @@ func (sh shaper) shapeUniversal(buf []Glyph, runes []rune, before, after []rune)
 		markJoiningForms(buf, runes, before, after)
 	}
 
-	// Each cluster is shaped where it lies, and what it does to the buffer's
-	// length shifts every cluster after it — so they are walked in order and the
-	// shift carried along.
+	// Each cluster is shaped on its own and the run is put back together from
+	// what comes out.
+	//
+	// Shaping them where they lay was the arrangement here, with the length each
+	// one changed by carried forward as a shift into the bounds of the next. It
+	// is the same answer and it is quadratic: a cluster that ligates moves every
+	// glyph after it. Nothing needs it — every rule a cluster is put through is
+	// bounded by the cluster, floor and ceiling both — and appending the answers
+	// costs each glyph one copy. See the same note in indic.go.
 	dotted, hasDotted := sh.f.GlyphID(dottedCircle)
-	shift := 0
+	out := make([]Glyph, 0, len(buf))
+	outInfo := make([]useInfo, 0, len(info))
+	prev := 0
 	for _, cl := range useClusters(info, runes) {
-		start, end := cl.start+shift, cl.end+shift
-		if start < 0 || end > len(buf) || start >= end {
+		if cl.start < prev || cl.end > len(buf) || cl.start >= cl.end {
 			continue
 		}
-		var delta int
-		buf, delta = sh.shapeUseCluster(buf, &info, start, end, cl.kind, dotted, hasDotted)
-		shift += delta
+		// Whatever lies between the last cluster shaped and this one passes
+		// through untouched.
+		out = append(out, buf[prev:cl.start]...)
+		outInfo = append(outInfo, info[prev:cl.start]...)
+		prev = cl.end
+
+		cluster := append([]Glyph(nil), buf[cl.start:cl.end]...)
+		record := append([]useInfo(nil), info[cl.start:cl.end]...)
+		cluster, _ = sh.shapeUseCluster(cluster, &record, 0, len(cluster), cl.kind, dotted, hasDotted)
+		out = append(out, cluster...)
+		outInfo = append(outInfo, record...)
 	}
+	buf = append(out, buf[prev:]...)
+	info = append(outInfo, info[prev:]...)
 	// The presentation features, applied in lookup order rather than feature
 	// order.
 	//
@@ -854,7 +871,9 @@ func (sh shaper) applyUseFeatureIn(buf []Glyph, info *[]useInfo, lookups []int, 
 	}
 	sh.floor = start
 	for _, idx := range lookups {
-		for i := start; i < until && i < len(buf); {
+		rb := newRunBuf(buf, start)
+		sh.run = rb
+		for rb.w < until && len(rb.pending()) > 0 {
 			step = 0
 			// The cluster's far edge, as it stands now. It moves: a lookup that
 			// takes a glyph apart makes the cluster longer, and the next lookup
@@ -866,16 +885,15 @@ func (sh shaper) applyUseFeatureIn(buf []Glyph, info *[]useInfo, lookups []int, 
 			// and then reorders the pieces in a later 'ccmp' lookup, and the
 			// reordering could not match because the pieces were past the edge.
 			sh.limit = end
-			consumed, out := sh.applyGSUBAt(idx, buf, i, 0)
-			buf = out
+			consumed, _ := sh.applyGSUBAt(idx, rb.pending(), 0, 0)
 			end += step
 			until += step
 			total += step
 			if consumed > 0 {
 				if first < 0 {
-					first = i
+					first = rb.w
 				}
-				i += consumed
+				rb.settle(consumed)
 				continue
 			}
 			// A lookup that consumed nothing and shortened the run took a glyph
@@ -883,8 +901,9 @@ func (sh shaper) applyUseFeatureIn(buf []Glyph, info *[]useInfo, lookups []int, 
 			if step < 0 {
 				continue
 			}
-			i++
+			rb.settle(1)
 		}
+		buf = rb.flatten()
 	}
 	return buf, total, first
 }

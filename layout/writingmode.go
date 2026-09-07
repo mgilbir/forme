@@ -347,7 +347,7 @@ func turnLine(l *LineFragment, mode writingMode, in Size) {
 // whose parent already answered, and a box inside an untuned vertical parent is
 // laid out horizontally because its parent was — the finding belongs on the
 // parent, and repeating it on every descendant would bury it.
-func (l *layouter) turns(b *Box, containing style.Unit, hasHeight bool) writingMode {
+func (l *layouter) turns(b *Box, containing style.Unit) writingMode {
 	mode := writingModeOf(b)
 	if mode == writingModeOf(b.Parent) {
 		return horizontalTB
@@ -360,7 +360,7 @@ func (l *layouter) turns(b *Box, containing style.Unit, hasHeight bool) writingM
 		// subtree is already being laid out horizontally.
 		return horizontalTB
 	}
-	facing, why := l.refusesToTurn(b, mode, containing, hasHeight)
+	facing, why := l.refusesToTurn(b, mode, containing)
 	if why == "" {
 		l.turnedUpright[b] = facing == orientationUpright
 		l.turnedMode[b] = mode
@@ -393,7 +393,7 @@ func (l *layouter) reportWritingMode(b *Box, mode writingMode, why string) {
 // refused here is laid out exactly as it was before this file existed and is
 // reported, which is the honest answer; a box turned that should not have been
 // is a page that is quietly wrong.
-func (l *layouter) refusesToTurn(b *Box, mode writingMode, containing style.Unit, hasHeight bool) (textOrientation, string) {
+func (l *layouter) refusesToTurn(b *Box, mode writingMode, containing style.Unit) (textOrientation, string) {
 	if b.Outer != OuterBlock || (b.Inner != InnerFlow && b.Inner != InnerFlowRoot) {
 		// A table, an inline-block, a table part. Each has sizing rules of its
 		// own that resolve the two axes together, and turning the result would
@@ -408,7 +408,6 @@ func (l *layouter) refusesToTurn(b *Box, mode writingMode, containing style.Unit
 	if b.Position != PositionStatic || b.Replaced != nil {
 		return orientationMixed, "it is positioned or replaced"
 	}
-	_ = hasHeight
 	if _, declared := l.explicitWidth(b, containing); !declared && l.widthAskedOfTheContent(b) {
 		// Shrink-to-fit measures the *horizontal* widths of the content, which
 		// for a turned box are its inline extents and not the block axis its

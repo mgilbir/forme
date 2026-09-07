@@ -40,9 +40,6 @@ import sys
 import time
 import unicodedata
 
-import uharfbuzz as hb
-from fontTools.ttLib import TTFont
-
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 
@@ -163,10 +160,29 @@ def classify(text, ours, theirs):
     #   it is not the first  129 of 129 have something in front to attach to
     #   nothing else changed the glyphs and advances agree throughout
     #
-    # No bound is put on how far it moved. The measured range is -185 to +675 and
-    # depends on how far the target went, so any threshold would be invented
-    # rather than observed — and a mark that followed its target a long way is
-    # still this and not something else.
+    # No bound is put on how far it moved, and that is the one thing about this
+    # class that is not checked — so what it lets through is counted and printed
+    # instead. See report_masked.
+    #
+    # The distance is not a property of the defect. It is how far the target
+    # went, which the next font can make as large as it likes, so a threshold on
+    # it would be invented rather than observed. Two attempts at doing better
+    # than that failed against the fuzzer itself, and are recorded here so that a
+    # third starts further along:
+    #
+    #   - A range. The 129 adjudicated cases spanned -185 to +675, and a
+    #     four-minute run turns up -669 and -557 as well. The range is a fact
+    #     about which fonts have been fuzzed rather than about the mechanism.
+    #   - The mechanism as an equality. HarfBuzz carries the mark along with what
+    #     it was attached to, so the amount ought to be that glyph's own offset —
+    #     and it is, for the -669 and the -557. It is not for the +185 and the -5
+    #     the same run produces, where the glyph in front of the mark sits at
+    #     zero. So either the target is not the glyph in front, or there is a
+    #     second mechanism here, and settling that needs CoreText — the harness
+    #     in testdata/coretext, not something a fuzz run can do for itself.
+    #
+    # The five properties stay, the magnitude is reported rather than asserted,
+    # and a run says how far the marks it masked actually went.
     a, b = _fields(ours), _fields(theirs)
     if len(a) == len(b) and a != b:
         moved = [i for i, (x, y) in enumerate(zip(a, b)) if x != y]
@@ -175,8 +191,43 @@ def classify(text, ours, theirs):
                 and all(x[:2] == y[:2] for x, y in zip(a, b))
                 and a[moved[0]][1] == 0
                 and a[moved[0]][3] == b[moved[0]][3]):
+            _masked_mark_offsets.append(b[moved[0]][2] - a[moved[0]][2])
             return "mark-offset"
     return None
+
+
+# The x distances the mark-offset class has let through in this run, which
+# report_masked prints. A class nobody can see the workings of is a class that
+# grows without anybody deciding to grow it.
+_masked_mark_offsets = []
+
+# The range the 129 differences taken to CoreText spanned: 86 agreed with this
+# package, 0 with HarfBuzz, and the remaining 43 were CoreText answering a
+# different question. A distance outside it is not a defect and is not evidence
+# of one — it is a case nobody has looked at, and the summary says how many.
+ADJUDICATED_MIN, ADJUDICATED_MAX = -185, 675
+
+
+def report_masked():
+    """Print what the known-difference classes hid, so that they hide nothing.
+
+    A class exists to keep a difference already understood from burying a new
+    one, and the cost of one is that it is silent. mark-offset is the class where
+    that silence costs something: it is a shape rather than a string, so it
+    covers cases nobody has seen, and the only thing about it that is not checked
+    is how far the mark went.
+    """
+    if not _masked_mark_offsets:
+        return
+    lo, hi = min(_masked_mark_offsets), max(_masked_mark_offsets)
+    outside = [d for d in _masked_mark_offsets
+               if not ADJUDICATED_MIN <= d <= ADJUDICATED_MAX]
+    print(f"mark-offset masked {len(_masked_mark_offsets)} differences, "
+          f"x from {lo} to {hi}")
+    if outside:
+        print(f"  {len(outside)} of them outside the adjudicated "
+              f"{ADJUDICATED_MIN}..{ADJUDICATED_MAX}: {sorted(set(outside))}")
+        print("  those are cases nobody has taken to CoreText; see classify")
 
 
 def _fields(line):
@@ -195,6 +246,19 @@ def _fields(line):
     return out
 
 
+def _shaping_imports():
+    """uharfbuzz and fontTools, imported where they are used rather than at the
+    top.
+
+    The classifier below is the part of this file with a decision in it, and it
+    is the part worth running in CI — where neither of those is installed. See
+    --self-test.
+    """
+    import uharfbuzz as hb
+    from fontTools.ttLib import TTFont
+    return hb, TTFont
+
+
 def alphabet(path, ranges, rtl):
     """The characters of the script the font has, and the letters among them.
 
@@ -210,6 +274,7 @@ def alphabet(path, ranges, rtl):
     thousand strings produced sixteen hundred of those and not one defect.
     """
     strong = {"AL", "NSM"} if rtl else {"L", "NSM"}
+    _, TTFont = _shaping_imports()
     cmap = set(TTFont(path, lazy=True).getBestCmap())
     alpha = sorted(
         c for c in cmap
@@ -221,6 +286,7 @@ def alphabet(path, ranges, rtl):
 
 
 def shape_harfbuzz(face, lines):
+    hb, _ = _shaping_imports()
     out = []
     for s in lines:
         font = hb.Font(face)
@@ -296,6 +362,89 @@ def minimise(font_path, face, text):
     return best
 
 
+# The cases classify has to get right, and the ones it has to refuse.
+#
+# Each is (what it is, the text, ours, theirs, the class or None). The shaped
+# lines are written in the same form shapetext and shape_harfbuzz produce:
+# "glyph,advance" per glyph, with the two offsets appended where either is not
+# zero.
+SELF_TEST_CASES = [
+    ("identical runs are not a difference at all",
+     "x", "1,500 2,0", "1,500 2,0", None),
+    ("a mark a few units to one side, which is the class",
+     "x", "1,500 2,0", "1,500 2,0,5,0", "mark-offset"),
+    ("and a long way to the other, which is still the class",
+     "x", "1,500 2,0,100,0", "1,500 2,0,-569,0", "mark-offset"),
+    ("a mark that also moved in y is not this",
+     "x", "1,500 2,0", "1,500 2,0,5,5", None),
+    ("a glyph with an advance is not a mark",
+     "x", "1,500 2,300", "1,500 2,300,5,0", None),
+    ("the first glyph has nothing in front to attach to",
+     "x", "1,0 2,500", "1,0,5,0 2,500", None),
+    ("two glyphs moved is two differences, not this one",
+     "x", "1,500 2,0 3,0", "1,500 2,0,5,0 3,0,5,0", None),
+    ("a different glyph is a different answer",
+     "x", "1,500 2,0", "1,500 3,0", None),
+    ("a different advance is a different answer",
+     "x", "1,500 2,0", "1,500 2,10", None),
+    ("a run of a different length is not comparable this way",
+     "x", "1,500 2,0", "1,500", None),
+    ("the Tibetan string pinned in the corpus, by name",
+     "\u0F52\u0F8F\u0FAD\u0F91\u0F73\u0F37", "1,500", "1,400", "five-units-of-x"),
+    ("a string holding U+061C, by name",
+     "a\u061Cb", "1,500", "1,400", "invisible-character-with-a-width"),
+    # The four a four-minute run turns up, written as they came out. Two are
+    # inside the range that was adjudicated and two are not, which is what
+    # report_masked is for — six mark-offset cases in this table, three of them
+    # outside it.
+    ("a Tibetan mark carried -669",
+     "x", "55,620 1837,0,-669,110 1324,0,585,-269",
+     "55,620 1837,0,-669,110 1324,0,-84,-269", "mark-offset"),
+    ("one carried -557",
+     "x", "1212,704 1529,0,-557,-873 1324,0,394,-300",
+     "1212,704 1529,0,-557,-873 1324,0,-163,-300", "mark-offset"),
+    ("one carried +42",
+     "x", "146,595 1736,0,-583,-53 1634,0,-561,-749 1322,0,-127,-25",
+     "146,595 1736,0,-583,-53 1634,0,-561,-749 1322,0,-85,-25", "mark-offset"),
+    ("and one carried +185, where the glyph in front of it sits at zero",
+     "x", "54,710 1269,380 1767,0 1421,0,185,-480 1347,0 1321,0,631,-29",
+     "54,710 1269,380 1767,0 1421,0,185,-480 1347,0 1321,0,816,-29", "mark-offset"),
+]
+
+
+def self_test():
+    """Check classify against the cases above, and report what failed.
+
+    It is here rather than in a test file because it is about this file, and it
+    runs without uharfbuzz or fontTools so that CI can run it: the classifier is
+    the part of the fuzzer with a decision in it, and a class that silently grew
+    to cover something new is a difference nobody would ever see reported.
+    """
+    bad = 0
+    for what, text, ours, theirs, want in SELF_TEST_CASES:
+        got = classify(text, ours, theirs)
+        if got != want:
+            bad += 1
+            print(f"{what}: classify({text!r}, {ours!r}, {theirs!r}) is {got!r}, "
+                  f"want {want!r}", file=sys.stderr)
+    if bad:
+        print(f"{bad} of {len(SELF_TEST_CASES)} cases wrong", file=sys.stderr)
+        return 1
+    # And the counting the report rests on: six of the cases above are
+    # mark-offset differences and three of those are outside the adjudicated
+    # range, so a class that had stopped counting would say so here.
+    masked = len(_masked_mark_offsets)
+    outside = [d for d in _masked_mark_offsets
+               if not ADJUDICATED_MIN <= d <= ADJUDICATED_MAX]
+    if masked != 6 or len(outside) != 3:
+        print(f"the class masked {masked} differences with {len(outside)} "
+              f"outside the adjudicated range, want 6 and 3", file=sys.stderr)
+        return 1
+    print(f"{len(SELF_TEST_CASES)} classifier cases pass")
+    report_masked()
+    return 0
+
+
 def main():
     budget = float(sys.argv[1]) if len(sys.argv) > 1 else 60.0
     seed = 0
@@ -303,6 +452,7 @@ def main():
         seed = int(sys.argv[sys.argv.index("--seed") + 1])
     rng = random.Random(seed)
 
+    hb, _ = _shaping_imports()
     loaded = []
     for name, path, ranges, rtl in FONTS:
         if not os.path.exists(path):
@@ -361,8 +511,11 @@ def main():
         print(f"\n{name}: {cps}")
         print(f"   pdf0     {a}")
         print(f"   harfbuzz {b}")
+    report_masked()
     return 1 if found else 0
 
 
 if __name__ == "__main__":
+    if "--self-test" in sys.argv:
+        sys.exit(self_test())
     sys.exit(main())

@@ -93,7 +93,6 @@ func TestSkippedConstructsDoNotGrowTheStackHelper(t *testing.T) {
 // further on than it found it.
 func TestEveryDroppedConstructIsConsumed(t *testing.T) {
 	for _, tc := range []struct{ name, src string }{
-		{"a closed comment", "<!---->"},
 		{"a comment that is never closed", "<!--x"},
 		{"a declaration", "<!x>"},
 		{"a declaration with no terminator", "<!x"},
@@ -115,5 +114,16 @@ func TestEveryDroppedConstructIsConsumed(t *testing.T) {
 			t.Errorf("%s: produced no token and left pos at %d, so next would spin for ever",
 				tc.name, tk.pos)
 		}
+	}
+	// A closed comment used to be on that list and is not: it produces a token
+	// now, carrying nothing, because HTML's rules count tokens and one of them
+	// counts this. It has to consume itself all the same.
+	tk := newTokenizer("<!---->")
+	tok, ok := tk.step()
+	if !ok || tok.kind != tokComment {
+		t.Errorf("a closed comment produced %v, %v; want a comment token", tok.kind, ok)
+	}
+	if tk.pos != len("<!---->") {
+		t.Errorf("a closed comment left pos at %d of %d", tk.pos, len("<!---->"))
 	}
 }

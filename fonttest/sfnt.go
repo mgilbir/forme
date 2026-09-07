@@ -216,7 +216,13 @@ func simpleSquare(em int) []byte {
 	putI16(hdr[2:], lo)
 	putI16(hdr[4:], 0)
 	putI16(hdr[6:], hi)
-	putI16(hdr[8:], hi)
+	// yMax is the top of the contour and not the right edge of it: the points
+	// below rise by hi-lo from a baseline of zero, so a header saying hi claims
+	// ink a hundred units above where the outline puts it. A reader that trusts
+	// the header — which every one of them does, since checking would mean
+	// interpreting the contours — was being handed a box the fixture does not
+	// draw.
+	putI16(hdr[8:], hi-lo)
 	g = append(g, hdr...)
 	end := make([]byte, 2)
 	binary.BigEndian.PutUint16(end, 3) // endPtsOfContours[0] = 3 (four points)

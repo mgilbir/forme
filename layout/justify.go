@@ -295,6 +295,24 @@ func (l *layouter) justifyBetweenCharacters(items []inlineItem, xs, widths []sty
 		return 0, false
 	}
 
+	// The gap a unit is given goes *after* it, and the last unit's gap would be
+	// past the end of the line: there is nothing on the far side of it to be
+	// pushed away, and a line that took it ended one gap beyond the edge it was
+	// justified to. Eight characters in a 240px box came out 850 units wide of
+	// it.
+	//
+	// The arithmetic above already says so — a line of n units has n-1
+	// opportunities, which is what extra is divided by — so what is missing is
+	// only that the last unit does not take one. Taken off after the division
+	// rather than before it, because the division is over the opportunities and
+	// this is one of the units.
+	for i := len(order) - 1; i >= 0; i-- {
+		if k := order[i]; count[k] > 0 {
+			count[k]--
+			break
+		}
+	}
+
 	var acc style.Unit
 	for _, k := range order {
 		xs[k] = xs[k].Add(acc)

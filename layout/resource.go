@@ -45,6 +45,21 @@ import (
 
 // ResourceResolver turns a reference written in a document into bytes.
 //
+// # What is done with the error, and when it is called
+//
+// The text of a returned error is put into a finding verbatim: "the image at
+// "x.png" was not loaded: " and then whatever Error() said. Findings are what a
+// document's *author* is shown, so a resolver's error text is author-facing —
+// and a resolver that writes an absolute path, a host name or a credential into
+// one has published it to whoever wrote the document. Say what the author can
+// act on and nothing else; the caller's own logging is where the rest belongs.
+//
+// Resolve is called from the goroutine that called Build or Layout, never from
+// one of this package's, because this package starts none. A resolver therefore
+// need not be safe for concurrent use — unless the caller renders two documents
+// at once and hands both the same resolver, which is the caller's arrangement to
+// make safe. The same is true of a Recorder: one render's is its own.
+//
 // It is deliberately not an io.Reader factory or a URL fetcher. A resolver is
 // handed the reference exactly as the document wrote it and returns the whole
 // resource or an error. Returning an error is normal: a missing image is a

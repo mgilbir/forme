@@ -1,6 +1,9 @@
 # Unicode's bidirectional conformance suites, fetched by `make bidi-tests`.
 testdata/unicode-bidi/
 
+# Unicode's normalisation conformance suite, fetched by `make normalization-tests`.
+testdata/unicode-normalization/
+
 # Unicode's property files, fetched by `make ucd` and read by every generator
 # that derives a table from them.
 testdata/ucd/

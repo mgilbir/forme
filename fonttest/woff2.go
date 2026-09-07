@@ -161,28 +161,6 @@ func WOFF2(opts WOFF2Options) []byte {
 	return out
 }
 
-// WOFF2TransformHmtx returns the transformed form of an hmtx table: the
-// advances kept, and the left side bearings dropped wherever they are already
-// the left edge of the outline.
-//
-// This is W3C WOFF 2.0 §5.4 from the writing end, and it is here rather than in
-// the decoder because it is what makes a fixture for the reading end. The flag
-// byte says which of the two runs of bearings were dropped; this drops both,
-// which is what the transform is for.
-//
-// A font using it must also transform glyf, and not because the format says so:
-// the bearings are put back from the left edge of each outline, and the only
-// thing that knows those is the code that rebuilds the outlines. A WOFF 2 with
-// a transformed hmtx and an untransformed glyf is refused by every decoder
-// there is, this one included.
-func WOFF2TransformHmtx(hmtx []byte, numGlyphs, numHMetrics int) []byte {
-	out := []byte{0x03} // neither run of bearings is present
-	for i := 0; i < numHMetrics; i++ {
-		out = append(out, hmtx[4*i], hmtx[4*i+1])
-	}
-	return out
-}
-
 // woff2Known is the format's list of tags that may be named by index, in the
 // order that gives them their numbers.
 var woff2Known = [63]string{
@@ -271,6 +249,11 @@ func (w *brotliBits) write(v uint32, bits uint) {
 
 // SortWOFF2Tables puts tables in tag order, which is the order a real font's
 // directory is in and is not the order they have to be written in.
+//
+// It is what a fixture uses when the thing under test is the directory rather
+// than the data: a decoder that read the tags in the order they arrive and a
+// decoder that sorted them would agree on an unsorted fixture and not on a real
+// font. See font/woff2transform_test.go.
 func SortWOFF2Tables(tables []WOFF2Table) {
 	sort.SliceStable(tables, func(i, j int) bool { return tables[i].Tag < tables[j].Tag })
 }

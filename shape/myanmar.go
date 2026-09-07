@@ -217,23 +217,33 @@ func (sh shaper) shapeMyanmar(buf []Glyph, runes []rune) []Glyph {
 		cats[i] = info[i].cat
 	}
 
-	shift := 0
+	// Each syllable on its own, and the run put back together from what comes
+	// out: shaping them where they lay moved every glyph after each one that
+	// ligated. See the note in indic.go.
 	dotted, hasDotted := sh.f.GlyphID(dottedCircle)
+	out := make([]Glyph, 0, len(buf))
+	outInfo := make([]indicInfo, 0, len(info))
+	prev := 0
 	for _, syl := range myanmarSyllables(cats) {
 		if syl.kind == myanmarNonMyanmar {
 			continue
 		}
-		start, end := syl.start+shift, syl.end+shift
+		out = append(out, buf[prev:syl.start]...)
+		outInfo = append(outInfo, info[prev:syl.start]...)
+		prev = syl.end
+
+		syllable := append([]Glyph(nil), buf[syl.start:syl.end]...)
+		record := append([]indicInfo(nil), info[syl.start:syl.end]...)
 		if syl.kind == myanmarBroken && hasDotted {
-			buf, info = sh.insertGlyphAt(buf, info, start, dotted,
+			syllable, record = sh.insertGlyphAt(syllable, record, 0, dotted,
 				indicInfo{cat: catDottedCircle, pos: posBaseC})
-			end++
-			shift++
 		}
-		var delta int
-		buf, delta = sh.shapeMyanmarSyllable(buf, &info, start, end)
-		shift += delta
+		syllable, _ = sh.shapeMyanmarSyllable(syllable, &record, 0, len(syllable))
+		out = append(out, syllable...)
+		outInfo = append(outInfo, record...)
 	}
+	buf = append(out, buf[prev:]...)
+	info = append(outInfo, info[prev:]...)
 
 	for _, f := range myanmarRunFeatures {
 		lookups := sh.l.featureLookups[f.tag]

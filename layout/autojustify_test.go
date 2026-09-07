@@ -157,3 +157,42 @@ func TestTheLineIsAskedRatherThanTheElement(t *testing.T) {
 		t.Errorf("the line drew %v, want the digits left where they started", got)
 	}
 }
+
+// TestInterCharacterJustificationStopsAtTheEdge.
+//
+// The slack a unit is given goes after it, so the last unit's share would sit
+// past the end of the line — there is nothing on the far side of it to be pushed
+// away. A line that took that share ended beyond the edge it was justified to,
+// which is the one thing justification is for: eight characters in a 240px box
+// came out 850 units wide of it, and eleven came out 448.
+//
+// The arithmetic was already right about the count. A line of n units has n-1
+// opportunities and the slack is divided by n-1; what was missing is that the
+// last unit does not take one.
+func TestInterCharacterJustificationStopsAtTheEdge(t *testing.T) {
+	const width = 240
+	for _, n := range []int{6, 8, 9, 11, 14} {
+		src := `<div id="p">` + strings.Repeat("a", n) + ` b</div>`
+		f := find(t, justified(t, src,
+			"text-align: justify; text-align-last: justify; "+
+				"text-justify: inter-character"), "p")
+		if len(f.Lines) == 0 {
+			t.Fatalf("%d characters laid out no lines", n)
+		}
+		end := lineEnd(f.Lines[0])
+		// Within a pixel of the edge, in either direction: the shares are whole
+		// units and the division rounds, so a line lands a few of them either
+		// side. The defect was thirteen pixels past it for six characters and
+		// seven for eleven, which no rounding reaches.
+		if off := end.Sub(u(width)); off > u(1) || off < u(-1) {
+			t.Errorf("%d characters justified to %v in a box %v wide: the last "+
+				"unit took the gap after it, and there is no after", n, end, u(width))
+		}
+		// And it really was stretched: a line that reaches the edge because it
+		// happened to fit proves nothing about where the slack went.
+		if natural := u(float64(n+2) * 12); end <= natural {
+			t.Errorf("%d characters ended at %v, which is no further than the %v "+
+				"they measure unjustified", n, end, natural)
+		}
+	}
+}

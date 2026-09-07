@@ -1936,9 +1936,7 @@ func TestWPTReftests(t *testing.T) {
 		switch {
 		case !passed:
 			fail++
-			if len(failed) < 20 {
-				failed = append(failed, rt.name)
-			}
+			failed = append(failed, rt.name)
 		case gotClean && wantClean:
 			cleanPass++
 		default:
@@ -1953,7 +1951,15 @@ func TestWPTReftests(t *testing.T) {
 		"%d failed, %d could not be read",
 		len(tests), cleanPass, vacuousPass, fail, broke)
 	if len(failed) > 0 {
-		t.Logf("first failures: %s", strings.Join(failed, ", "))
+		t.Logf("failures: %s", strings.Join(failed, ", "))
+	}
+	// Every one of them, which is what the README says happens and what a
+	// regression needs. Twenty was the number kept, and a list of the first
+	// twenty of two hundred is a list nobody can diff against the last run.
+	if len(failed) != fail {
+		t.Errorf("%d reftests failed and %d names were reported; a report that "+
+			"names some of them is one nobody can compare with the run before",
+			fail, len(failed))
 	}
 
 	if cleanPass < wptCleanPassBaseline {

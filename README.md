@@ -123,11 +123,13 @@ record of what it thought of.
 | **CSS Working Group reftests** | 6,253 documents rendered and compared against their references — **5,955 pass with nothing unsupported reported in either document** |
 | **Unicode's bidi conformance** | 861,948 cases across `BidiTest.txt` and `BidiCharacterTest.txt`, no failures |
 | **Unicode's grapheme boundaries** | all 766 cases of `GraphemeBreakTest.txt` |
+| **Unicode's normalisation forms** | all 20,034 cases of `NormalizationTest.txt`, both NFC invariants |
 | **HarfBuzz**, over six fonts | 20,623 strings, two deliberate differences |
 | **The CSS Syntax suite** | 229 cases from the suite `css-parsing-tests` publishes, with 13 more deliberately excused and each excuse named |
 
 The reftest number is a **ratchet**: it may never be lowered to make a red test
-green, so a drop is a layout regression and the failing names are printed. A
+green, so a drop is a layout regression and every failing name is printed — all
+of them, which the run checks against its own count. A
 *rise* fails the test too, and asks for the constant to be raised in the same
 commit — a number that only tightens when somebody remembers to look is not a
 ratchet, and this one fell about fifteen hundred passes behind before that was
@@ -140,7 +142,7 @@ settled by asking CoreText as a third opinion rather than by argument. They are
 listed with their reasons in `shape/harfbuzz_test.go` and pinned in the corpora,
 so a difference that stops being deliberate fails the test.
 
-Beyond the suites: 16 fuzz targets, eleven of them scheduled weekly, a
+Beyond the suites: 20 fuzz targets, fifteen of them scheduled weekly, a
 differential fuzzer against HarfBuzz that generates text rather than listing it,
 and a CoreText harness for the questions two implementations cannot settle
 between them.
@@ -150,8 +152,10 @@ between them.
 	make test-wpt      # fetches the CSS WG reftests and runs the ratchet
 	make test-bidi     # fetches Unicode's bidi conformance suites
 	make test-grapheme # and its grapheme boundary cases
+	make test-normalization # and its normalisation forms
 	make test-css      # the CSS Syntax suite
 	make hbfuzz        # differential fuzzing; needs python and uharfbuzz
+	make test-difffuzz # that fuzzer's classifier, which needs only python
 
 The corpora are fetched rather than vendored — the reftests alone are eighty
 megabytes of somebody else's repository — and everything fetched is gitignored.

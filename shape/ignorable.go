@@ -262,7 +262,7 @@ func (sh shaper) stepsOverJoiner(at int, context bool) bool {
 	if sh.joinerAt == nil {
 		return false
 	}
-	switch sh.joinerAt(at) {
+	switch sh.joinerAt(sh.base() + at) {
 	case joinerZWJ:
 		return context || !sh.manualJoiners
 	case joinerZWNJ:

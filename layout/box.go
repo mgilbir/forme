@@ -414,6 +414,31 @@ func (b *Box) IsText() bool { return b.Inner == InnerText }
 // with the cap removed.
 var maxBoxes = 1 << 20
 
+// maxBoxDepth bounds how deeply boxes may nest, which the box count does not.
+//
+// The walk that makes them is recursive, and so is every walk over what it
+// makes — fixup, the table wrapper, layout itself, painting. A tree a hundred
+// thousand deep is a hundred thousand frames in each of them and well under the
+// box cap, so the cap that exists to bound the *work* does not bound the
+// *stack*.
+//
+// The html package's own cap bounds a parsed document at 256 elements deep and
+// says why in the same words. It does not bound this: BuildBoxes is exported
+// and takes an *html.Node, so a caller assembling a tree by hand — which is
+// what the package's own tests do — reaches this with whatever depth it built.
+// Nothing in the package said so, and the answer was a stack overflow, which in
+// Go is fatal and cannot be recovered.
+//
+// Four times the parser's cap, because box generation legitimately nests deeper
+// than the elements do: an anonymous block here, §17.4's table wrapper there,
+// and "display: contents" standing in for an element that is gone. Four is
+// generous for all of them together and is still three orders of magnitude
+// below where the stack goes.
+//
+// A variable for the reason maxBoxes is one: a bound that is never seen to fire
+// is one nobody knows works.
+var maxBoxDepth = 1024
+
 // BuildBoxes turns a styled document into a box tree.
 //
 // The root box is the one the document element generated. It is nil when the
@@ -536,10 +561,18 @@ type boxBuilder struct {
 	// stopped records that the box cap was reached, so it is reported once
 	// rather than per box.
 	stopped bool
+	// depth is how many levels of the tree the walk is inside, and tooDeep
+	// records that the depth cap was reached — reported once, like stopped.
+	depth   int
+	tooDeep bool
 }
 
 // build makes the box or boxes for one node, or nil for none.
 func (b *boxBuilder) build(n *html.Node, inherited style.ComputedStyle, fontSize style.Unit) *Box {
+	if !b.descend(n.Offset) {
+		return nil
+	}
+	defer func() { b.depth-- }()
 	switch n.Type {
 	case html.TextNode:
 		return b.textBox(n, inherited, fontSize)
@@ -547,6 +580,22 @@ func (b *boxBuilder) build(n *html.Node, inherited style.ComputedStyle, fontSize
 		return b.elementBox(n, fontSize)
 	}
 	return nil
+}
+
+// descend takes one level of the depth allowance, reporting once when it runs
+// out. The subtree below is not built, which is what the box cap does too.
+func (b *boxBuilder) descend(offset int) bool {
+	if b.depth >= maxBoxDepth {
+		if !b.tooDeep {
+			b.tooDeep = true
+			b.rec.Report(RuleLimit, AtHTML(offset),
+				"the document nests boxes more deeply than this engine will "+
+					"build; the rest of that branch was not laid out")
+		}
+		return false
+	}
+	b.depth++
+	return true
 }
 
 // fontSizeOf resolves an element's computed font-size against its parent's.

@@ -57,6 +57,7 @@ package shape
 import (
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 
 	"github.com/mgilbir/forme/font"
@@ -280,9 +281,18 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 		f.lineGap = signed16(font.Be16(hhea, 8))
 		f.declared |= MetricLineGap
 	}
-	if os2 := tables["OS/2"]; len(os2) >= 90 {
-		f.capHeight = signed16(font.Be16(os2, 88))
-		f.declared |= MetricCapHeight
+	// sCapHeight arrived in OS/2 version 2, so what says a font states one is
+	// the version and not the table's length: a version 1 table long enough to
+	// reach offset 88 has something else there, and a version 2 table that puts
+	// a zero there has not measured its capitals. Both were read as a declared
+	// cap height, and the zero was then quietly replaced by the ascent two
+	// lines below — so a Descriptor said "this font states a cap height" and
+	// handed back a number the font had never written.
+	if os2 := tables["OS/2"]; len(os2) >= 90 && font.Be16(os2, 0) >= 2 {
+		if h := signed16(font.Be16(os2, 88)); h != 0 {
+			f.capHeight = h
+			f.declared |= MetricCapHeight
+		}
 	}
 	f.readOS2(tables["OS/2"])
 	f.readPost(tables["post"])
@@ -388,9 +398,39 @@ func (f *Face) readPost(post []byte) {
 	if len(post) < 12 {
 		return
 	}
+	// The italic angle, which nothing read.
+	//
+	// post states it as a 16.16 fixed-point number of degrees counter-clockwise
+	// from vertical, and it is the only place a font says how far its letters
+	// lean. What stood in for it was macStyle's italic *bit* and the constant
+	// -12: every italic face embedded at twelve degrees whatever it was drawn
+	// at, and every oblique instance of a variable font — where the angle is
+	// the axis being varied — embedded at zero, because macStyle's bit is not
+	// set on the default instance the bit was read from.
+	//
+	// A font that says nothing keeps the macStyle guess, since a reader that
+	// leans an italic by nothing at all is worse than one that leans it by
+	// roughly the right amount.
+	if angle := postItalicAngle(post); angle != 0 {
+		f.italic = angle
+		f.declared |= MetricItalicAngle
+	}
 	f.underlinePos = signed16(font.Be16(post, 8))
 	f.underlineThick = signed16(font.Be16(post, 10))
 	f.declared |= MetricUnderline
+}
+
+// postItalicAngle reads post's italicAngle: a 16.16 signed fixed-point number of
+// degrees counter-clockwise from vertical.
+//
+// Rounded to a hundredth. The angle reaches a PDF as a number and every real
+// font states two decimal places or fewer, so what is past them is the binary
+// fraction's own noise — -12.000001 where the font wrote -12.
+func postItalicAngle(post []byte) float64 {
+	if len(post) < 8 {
+		return 0
+	}
+	return math.Round(fixed1616(font.Be32(post, 4))*100) / 100
 }
 
 // readAxes reads fvar's axis records, which is all this module wants from it.
@@ -398,26 +438,23 @@ func (f *Face) readPost(post []byte) {
 // The instance records after them are deliberately not read. They name points
 // in the design space, and naming a point is only useful to something that can
 // go there — which this cannot.
+// It is parseFvar's answer and not a second reading of the same table.
+//
+// There were two, and they did not agree: this one checked neither the version
+// nor the axis count nor that an axis runs the way an axis runs, and stopped at
+// the first record that did not fit rather than refusing the table. So Axes
+// named axes LoadInstance would not accept — a design space with a default
+// outside its own range, or sixty-five thousand axes of it — and a caller
+// reading Axes to find out what it may ask for was told something the thing it
+// would ask could not do.
 func readAxes(fvar []byte) []Axis {
-	if len(fvar) < 16 {
+	axes, err := parseFvar(fvar)
+	if err != nil {
 		return nil
 	}
-	off, count, size := font.Be16(fvar, 4), font.Be16(fvar, 8), font.Be16(fvar, 10)
-	if size < 20 {
-		return nil
-	}
-	var out []Axis
-	for i := 0; i < count; i++ {
-		p := off + i*size
-		if p < 0 || p+20 > len(fvar) {
-			break
-		}
-		out = append(out, Axis{
-			Tag:     string(fvar[p : p+4]),
-			Min:     fixed1616(font.Be32(fvar, p+4)),
-			Default: fixed1616(font.Be32(fvar, p+8)),
-			Max:     fixed1616(font.Be32(fvar, p+12)),
-		})
+	out := make([]Axis, len(axes))
+	for i, a := range axes {
+		out[i] = Axis{Tag: a.tag, Min: a.min, Default: a.def, Max: a.max}
 	}
 	return out
 }
@@ -491,7 +528,14 @@ func (f *Face) Advance(r rune) (float64, bool) {
 // and writes codes of the wrong width, which is a page of scrambled text.
 func (f *Face) composite() bool { return f.std == nil && !f.simple }
 
-// advanceGID is the advance of a glyph index, in font units.
+// advanceGID is the advance of a glyph index, in thousandths of an em.
+//
+// Not font units, which is what this said for a long time and what a reader of
+// the header would expect: font.FontProgram scales WidthByGID on the way in, so
+// that every caller of it is on one grid whatever the face's own grid is. A
+// Descriptor's lengths *are* font units, and the two are the same number only
+// for the fonts whose em is a thousand units — which the bundled face is, so
+// nothing here saw the difference.
 //
 // It is only meaningful for a composite face; the guard is against a caller
 // reaching it for one of the others, where there may be no program at all.

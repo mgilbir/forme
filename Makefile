@@ -1,4 +1,4 @@
-.PHONY: ucd verify-fonts test-corpora linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors noto-fonts clean-noto-fonts wpt test-wpt clean-wpt varinstance test-varinstance
+.PHONY: ucd verify-fonts test-corpora linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors noto-fonts clean-noto-fonts wpt test-wpt clean-wpt varinstance test-varinstance
 
 test:
 	gofmt -l . | grep -v '^testdata/' && exit 1 || true
@@ -33,9 +33,11 @@ CORPUS_ENV = \
 	NOTO_CJK="$(abspath $(CJK_DIR))" \
 	CSS_PARSING_TESTS="$(abspath $(CSS_TESTS_DIR))" \
 	UNICODE_BIDI_TESTS="$(abspath $(BIDI_DIR))" \
-	UNICODE_GRAPHEME_TESTS="$(abspath $(GRAPHEME_DIR))"
+	UNICODE_GRAPHEME_TESTS="$(abspath $(GRAPHEME_DIR))" \
+	UNICODE_NORMALIZATION_TESTS="$(abspath $(NORMALIZATION_DIR))"
 
-CORPORA = wpt noto-fonts notocjk ucd css-tests bidi-tests grapheme-tests $(HTML_ENTITIES)
+CORPORA = wpt noto-fonts notocjk ucd css-tests bidi-tests grapheme-tests \
+	normalization-tests $(HTML_ENTITIES)
 
 test-corpora: $(CORPORA)
 	$(MAKE) verify-fonts
@@ -151,6 +153,16 @@ test-varinstance:
 hbfuzz:
 	go build -o $(HARFBUZZ_DIR)/.shapetext ./cmd/shapetext
 	SHAPETEXT=$(abspath $(HARFBUZZ_DIR)/.shapetext) $(PYTHON) $(HARFBUZZ_DIR)/difffuzz.py 60
+
+# The fuzzer's classifier, on its own.
+#
+# It is the part of difffuzz with a decision in it: a difference it names is a
+# difference nobody is ever shown, so a class that quietly grew to cover
+# something new would hide the next defect rather than report it. This needs
+# neither uharfbuzz nor fontTools — the imports for those are where they are used
+# — so it runs anywhere python3 does, and it runs in CI.
+test-difffuzz:
+	$(PYTHON) $(HARFBUZZ_DIR)/difffuzz.py --self-test
 
 # The Universal Shaping Engine's category table, derived from Unicode's own
 # property files plus the engine's corrections. See cmd/genuse.
@@ -555,6 +567,31 @@ test-grapheme: grapheme-tests
 
 clean-grapheme-tests:
 	rm -rf $(GRAPHEME_DIR)
+
+# UAX #15's normalisation forms, which shape.ComposeCanonically produces one of.
+#
+# NormalizationTest.txt gives five spellings of the same text per line and states
+# the invariants an implementation has to satisfy. Fetched and not committed,
+# like the two suites above: twenty thousand lines of upstream data that a
+# checkout does not need to build.
+NORMALIZATION_DIR := testdata/unicode-normalization
+
+normalization-tests: $(NORMALIZATION_DIR)/.ok
+
+$(NORMALIZATION_DIR)/.ok:
+	mkdir -p $(NORMALIZATION_DIR)
+	$(FETCH) -o $(NORMALIZATION_DIR)/NormalizationTest.txt $(UCD_URL)/NormalizationTest.txt
+	touch $@
+
+# Both tests, because the second is the check on the first: the sweep is run
+# again against a normaliser that returns its input unchanged, and has to reject
+# it. A sweep handed no cases passes in silence.
+test-normalization: normalization-tests
+	UNICODE_NORMALIZATION_TESTS=$(abspath $(NORMALIZATION_DIR)) \
+	  go test -v -count=1 -run 'NFC|Normalization' ./shape
+
+clean-normalization-tests:
+	rm -rf $(NORMALIZATION_DIR)
 
 # shallow_at fetches exactly one commit of one repository: no history, no other
 # branches. It came from forme with the corpora below, which are the only things

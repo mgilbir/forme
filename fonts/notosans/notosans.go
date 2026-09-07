@@ -88,12 +88,28 @@ var (
 // tables. Use it for plain Latin text where size matters; use NotoSans
 // otherwise.
 func Simple() (*shape.Face, error) {
-	f, err := shape.LoadSimple(notoSansRegular)
-	if err != nil {
-		return nil, fmt.Errorf("notosans: the bundled Noto Sans could not be read: %w", err)
+	simpleOnce.Do(func() {
+		simplePrototype, simpleErr = shape.LoadSimple(notoSansRegular)
+	})
+	if simpleErr != nil {
+		return nil, fmt.Errorf("notosans: the bundled Noto Sans could not be read: %w", simpleErr)
 	}
-	return f, nil
+	return simplePrototype.Clone(), nil
 }
+
+// The simple face's prototype, read once for the reason the composite one is.
+//
+// This read the two megabytes again on every call, and a program that writes
+// documents calls it once per document — so a hundred documents were a hundred
+// parses of the same bytes, while the composite face beside it had been shared
+// since the day the cost was measured. Nothing about the parse depends on the
+// document; what does is the record of which glyphs it used, and Clone is what
+// gives each caller its own.
+var (
+	simpleOnce      sync.Once
+	simplePrototype *shape.Face
+	simpleErr       error
+)
 
 // NotoSansLicense is the text of the SIL Open Font License 1.1 as it is
 // distributed with the bundled font, including the copyright line.

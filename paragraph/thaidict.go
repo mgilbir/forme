@@ -10,13 +10,6 @@ package paragraph
 // # License & terms of use: http://www.unicode.org/copyright.html
 // #  	Copyright (c) 2006-2015 International Business Machines Corporation,
 //   #  	Apple Inc., and others. All Rights Reserved.
-//  #   ดี.ซี. -- TODO: why does this have full stop in it?
-//  #   วี.ดี.  #   TODO: why do these have full stops?
-//  #   วี.ไอ.พี.
-//  #   ส.ธรนินทร์ -- TODO: why do these have full stops?
-//  #   ส.ธรรมภักดี
-//  #   ส.นิยม
-//  #   เอ.ยู.เอ. -- TODO: why do we have a full stop?
 
 // thaiWords is the dictionary, one word per line and sorted.
 //

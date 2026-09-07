@@ -508,6 +508,12 @@ var maxFindings = 500
 
 // Recorder collects findings under a policy.
 //
+// One render's recorder is its own. Nothing here takes a lock, because nothing
+// in this package starts a goroutine: a Recorder is written to from the one that
+// called Build or Layout, and two renders at once are two recorders. Sharing one
+// across them is a data race, and it is the caller's to avoid — which is worth
+// stating, because the type reads like a collector something might hand around.
+//
 // It applies the policy at the point of recording rather than at the end, so a
 // rule set to Ignore costs nothing to raise — which matters because the callers
 // are the inner loops of layout, and a guardrail that is expensive to check is

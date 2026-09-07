@@ -173,7 +173,7 @@ func breakAllLines(br *Breaker, items []Item, width float64) [][]Item {
 	var lines [][]Item
 	i, iByte := 0, 0
 	for i < len(items) && len(lines) <= maxLines(items) {
-		line, next, nextByte, _, _ := br.BreakOneLine(items, i, iByte, u(width), 0)
+		line, next, nextByte, _, _, _ := br.BreakOneLine(items, i, iByte, u(width), 0)
 		lines = append(lines, line)
 		if !CursorAdvanced(i, iByte, next, nextByte) {
 			break

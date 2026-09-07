@@ -355,8 +355,13 @@ type Item struct {
 	// CSS property or a CSS Text rule has overruled. See shape.Features.
 	Off shape.Features
 	// Hyphen is how much wider the line becomes if it ends after this item: the
-	// width of the hyphen a soft hyphen asks to have printed. Zero means this is
-	// not a hyphenation point, which is every item in almost every document.
+	// width of the hyphen a soft hyphen asks to have printed.
+	//
+	// It is a width and not a claim: whether this is a hyphenation point at all
+	// is HyphenText, and Hyphenates is the one place that is asked. Reading a
+	// non-zero width as the claim was the second predicate for one fact, and the
+	// two could disagree — a face whose hyphen glyph has no advance offered a
+	// hyphenation point that nothing would print.
 	//
 	// A width rather than a flag because this half of the engine has no faces to
 	// ask. Which character is printed and how wide it is are questions about the
@@ -544,6 +549,20 @@ type Item struct {
 	Level int
 }
 
+// Hyphenates reports whether a line may end after this item with a hyphen
+// printed at the end of it.
+//
+// One fact, asked in one place. It used to be asked as two — a non-zero Hyphen
+// width *and* a HyphenText to print — in one of the two places that needed it
+// and as the width alone in the other, so the room reserved for a hyphen and the
+// decision to print one were separate answers to the same question. A face whose
+// hyphen glyph has no advance parts them: the width is zero and the character is
+// there, and the line was then not hyphenated at all.
+//
+// The character is what decides, because it is what a reader sees. A hyphen of
+// no width is still a hyphen.
+func (it Item) Hyphenates() bool { return it.HyphenText != "" }
+
 // CursorAdvanced reports whether a line took at least one item, or at least one
 // byte of one, from where it began.
 //
@@ -678,6 +697,7 @@ func StartOfContext() State { return State{AfterCollapsibleSpace: true} }
 // to the whole, and the number that has to be right is the one used to place the
 // text that is actually drawn.
 func (br *Breaker) SplitItem(item Item, at int) (head, tail Item) {
+	at = cutWithinText(item.Text, at)
 	head, tail = splitItemAt(item, at)
 	head.Width = br.spanWidth(item, 0, at, head)
 	tail.Width = br.spanWidth(item, at, len(item.Text), tail)
@@ -696,6 +716,7 @@ func (br *Breaker) SplitItem(item Item, at int) (head, tail Item) {
 // is broken across, which is quadratic in exactly the words this is reached for
 // — it is reached for the longest word in a document and for no other.
 func (br *Breaker) SplitHead(item Item, at int) Item {
+	at = cutWithinText(item.Text, at)
 	head, _ := splitItemAt(item, at)
 	head.Width = br.spanWidth(item, 0, at, head)
 	return head
@@ -708,6 +729,7 @@ func (br *Breaker) SplitHead(item Item, at int) Item {
 // Measuring it again is a measurement of everything already drawn, once per
 // line the word is broken across.
 func (br *Breaker) SplitTail(item Item, at int) Item {
+	at = cutWithinText(item.Text, at)
 	_, tail := splitItemAt(item, at)
 	tail.Width = br.spanWidth(item, at, len(item.Text), tail)
 	tail.Width = tail.Width.Add(item.Autospace)
@@ -725,7 +747,34 @@ type RunCut struct {
 }
 
 // splitItemAt is everything about the two halves except their widths.
+// cutWithinText brings a caller's cut into the text and onto a character.
+//
+// The three splits above take a byte offset from a caller, and two things a
+// caller can hand in are not offsets into this text. One is outside it, which
+// was a slice panic — a poor way to hear about a bug in a document generator,
+// and a crash in a process that was doing something else. The other is inside a
+// character, which was worse, because it did not fail at all: the two halves
+// were invalid UTF-8 — "héllo" cut at 2 came back as "h\xc3" and "\xa9llo" —
+// and invalid UTF-8 does not stop being text, it just stops being the author's.
+//
+// Backwards to the character's start rather than forwards, so a cut inside a
+// letter puts the whole letter on the second line: the first line is short by a
+// character it could not draw either way, and no character is drawn twice.
+func cutWithinText(text string, at int) int {
+	if at <= 0 {
+		return 0
+	}
+	if at >= len(text) {
+		return len(text)
+	}
+	for at > 0 && !utf8.RuneStart(text[at]) {
+		at--
+	}
+	return at
+}
+
 func splitItemAt(item Item, at int) (head, tail Item) {
+	at = cutWithinText(item.Text, at)
 	head, tail = item, item
 	// Which run these two are stretches of. A first cut names the item itself;
 	// a later one keeps the run the item was already a stretch of, so that

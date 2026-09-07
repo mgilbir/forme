@@ -186,7 +186,7 @@ func (g *hyphenGather) text(b *Box) {
 			g.conditional = true
 			continue
 		}
-		if !unicode.IsLetter(r) {
+		if !g.continuesTheWord(r) {
 			g.flush()
 			continue
 		}
@@ -196,6 +196,23 @@ func (g *hyphenGather) text(b *Box) {
 		g.word = append(g.word, r)
 		g.from = append(g.from, hyphenSource{box: b, at: i})
 	}
+}
+
+// continuesTheWord reports whether a character is part of the word being
+// gathered.
+//
+// Letters, and the marks written on them. A combining mark is not a letter and
+// is not a word of its own: "café" spelled with a combining acute is one word,
+// and ending the word at the mark made it two — "cafe" hyphenated on its own and
+// an accent nobody could divide. UAX #29 says the same thing about where a word
+// ends, and it is why a mark cannot *begin* one either: a mark with no letter
+// before it belongs to whatever it was written on, which is not a word this
+// gathered.
+func (g *hyphenGather) continuesTheWord(r rune) bool {
+	if unicode.IsLetter(r) {
+		return true
+	}
+	return len(g.word) > 0 && unicode.In(r, unicode.Mn, unicode.Mc, unicode.Me)
 }
 
 // flush asks the dictionary about the word gathered so far and records where it

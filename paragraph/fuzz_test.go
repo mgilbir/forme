@@ -87,7 +87,7 @@ func FuzzBreakParagraph(f *testing.F) {
 					"breaking is not making progress",
 					text, width, w.name, len(items), len(lines))
 			}
-			line, next, nextByte, _, _ := br.BreakOneLine(items, i, iByte, u(width), 0)
+			line, next, nextByte, _, _, _ := br.BreakOneLine(items, i, iByte, u(width), 0)
 			if next < i || (next == i && nextByte <= iByte) {
 				t.Fatalf("%q at %gpx under %s: the cursor went from item %d byte %d "+
 					"to item %d byte %d; it must always move forward",
@@ -140,7 +140,7 @@ func FuzzBreakParagraph(f *testing.F) {
 		resolved := resolveBidi(items, bidi.LeftToRight)
 		i, iByte = 0, 0
 		for i < len(resolved) {
-			line, next, nextByte, _, _ := br.BreakOneLine(resolved, i, iByte, u(width), 0)
+			line, next, nextByte, _, _, _ := br.BreakOneLine(resolved, i, iByte, u(width), 0)
 			order := LineVisualOrder(line)
 			if order != nil {
 				if len(order) != len(line) {

@@ -15,8 +15,10 @@ package shape
 // Descriptor is a face's own metrics: what a reader needs to set the text when
 // the font is not available to it.
 //
-// Lengths are in font units. Divide by UnitsPerEm for fractions of an em, which
-// is what most formats state them in.
+// Lengths are in font units — the face's own grid, whose size is Face.UnitsPerEm.
+// Divide by it for fractions of an em, which is what most formats state them in.
+// Face.GlyphAdvance is *not* in these units: widths arrive already scaled to a
+// thousandth of an em, which is the one place the two grids part company.
 type Descriptor struct {
 	// Ascent and Descent are the font's own, from hhea. Descent is negative.
 	Ascent, Descent int
@@ -106,6 +108,7 @@ const (
 	MetricXHeight
 	MetricCapHeight
 	MetricUnderline
+	MetricItalicAngle
 	MetricStrikeout
 	MetricWeight
 )
@@ -139,14 +142,20 @@ func (f *Face) Descriptor() Descriptor {
 	}
 }
 
-// GlyphAdvance is how far the pen moves after a glyph, in font units.
+// GlyphAdvance is how far the pen moves after a glyph, in thousandths of an em.
+//
+// Not font units, and not the unit Descriptor's lengths are in — see the note on
+// advanceGID. A thousandth of an em is what the formats that state a width table
+// state it in, which is why the scaling happens once on the way in rather than
+// at each of them.
 //
 // It is the font's own advance and not the one shaping decided: a kern or a
 // mark attachment changes what a *run* does without changing what the glyph
 // says about itself, and a width table describes the glyph.
 func (f *Face) GlyphAdvance(gid int) float64 { return f.advanceGID(gid) }
 
-// GlyphAdvances is the advance of every glyph, indexed by glyph id.
+// GlyphAdvances is the advance of every glyph, indexed by glyph id, in
+// thousandths of an em.
 //
 // The whole table at once, because a format that states widths states them for
 // a range and has to see which are alike.

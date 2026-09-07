@@ -3,6 +3,7 @@ package shape
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -140,6 +141,14 @@ var fuzzTexts = []string{
 	// Arabic: letters that join both ways, a hamza and a vowel, so the joining
 	// forms and the mark ordering are both reached.
 	"\u0628\u0640\u0628\u0648\u0655\u064E",
+	// Both directions in one string, with a number between them. Nothing above
+	// reaches the reordering: every one of them is a run of one direction, and
+	// the code that cuts a string into runs and puts them back in drawing order
+	// only runs when there is more than one.
+	"a\u05D0b 12 \u0628\u0644\u0627 c",
+	// A directional control with nothing to match it, which is the shape of an
+	// override a document can carry.
+	"a\u202Eb\u0628c",
 }
 
 // FuzzLoadAndUse drives the whole writing pipeline on arbitrary bytes: parse,
@@ -220,16 +229,118 @@ func FuzzLoadAndUse(f *testing.F) {
 			if err != nil || face == nil {
 				continue
 			}
-			for _, text := range fuzzTexts {
-				_ = face.Measure(text, 10)
-				_ = face.MeasureShaped(text, 10)
-				_, _ = face.Encode(text)
-				_, _ = face.ShapeGlyphs(text)
-			}
+			useFace(face)
 
-			_, _ = face.Subset()
+			// The instance, which is a second reader over the same bytes: the
+			// variation tables are read here and nowhere else, and a face
+			// carrying a hostile fvar or gvar reaches this and not Load.
+			coords := map[string]float64{}
+			for _, a := range face.Axes() {
+				// The far end of the range rather than the default, so that the
+				// deltas are actually applied.
+				coords[a.Tag] = a.Max
+			}
+			if inst, err := LoadInstance(data, coords); err == nil && inst != nil {
+				useFace(inst)
+			}
+			// And with an axis the font does not declare, and a coordinate
+			// outside the range it does.
+			if inst, err := LoadInstance(data, map[string]float64{
+				"wght": 1e9, "zzzz": -1e9,
+			}); err == nil && inst != nil {
+				useFace(inst)
+			}
 		}
 	})
+}
+
+// useFace drives everything a caller can ask a face, which is what the fuzzer is
+// for: a panic anywhere here is a panic in a process that was doing something
+// else with a font somebody supplied.
+//
+// It is a list rather than a handful of calls, and
+// TestTheFuzzTargetReachesEveryEntryPoint is what keeps it one: this used to
+// measure, encode, shape and subset, and the four of them missed the whole of
+// the context and merging API, the named features, the stack, and instancing —
+// which is the reader most exposed to a crafted file, since it is the only one
+// that walks the variation tables.
+func useFace(face *Face) {
+	_ = face.Name()
+	_ = face.Axes()
+	_ = face.IsVariable()
+	_ = face.IsSimple()
+	_ = face.IsCFF()
+	_ = face.IsStandard()
+	_ = face.UnitsPerEm()
+	_ = face.NumGlyphs()
+	_ = face.Descriptor()
+	_ = face.Cmap()
+	_ = face.Used()
+	_ = face.Scripts()
+	_ = face.Language()
+	face.SetLanguage("sr")
+	_ = face.Features()
+	_ = face.HasScript("arab")
+	_ = face.HasKerning()
+	_ = face.HasLigatures()
+	_ = face.HasJoiningForms()
+	_, _, _, _ = face.CharacterCollection()
+	_ = face.GlyphAdvances()
+
+	// Per glyph, past the end of the table as well: a count a font states and a
+	// table that does not hold it is the shape of the bug this is looking for.
+	for _, gid := range []int{-1, 0, 1, face.NumGlyphs(), face.NumGlyphs() + 1} {
+		_ = face.GlyphAdvance(gid)
+		_ = face.GlyphCode(gid)
+	}
+	for _, r := range []rune{'a', 0x0628, 0x0915, 0x1B13, 0x10FFFF} {
+		_, _ = face.GlyphID(r)
+		_, _ = face.Advance(r)
+		_, _ = face.GlyphIDForTest(r)
+	}
+
+	clone := face.Clone()
+	stack := NewStack(face, clone)
+	_ = stack.Faces()
+
+	off := Features{NoOptionalLigatures: true}
+	// Every text through the basic calls, because each is a different script
+	// and a different model.
+	for _, text := range fuzzTexts {
+		_ = face.Measure(text, 10)
+		_, _ = face.Encode(text)
+		_, _, _ = face.InkExtent(text, 10)
+		_ = face.MeasureShaped(text, 10)
+		glyphs, _ := face.ShapeGlyphs(text)
+		_ = MeasureGlyphs(glyphs, 10)
+		runs, _ := stack.ShapeRuns(text)
+		_ = MeasureRuns(runs, 10)
+	}
+
+	// And one of them through the rest, which is about reaching each entry point
+	// rather than about the text: the whole list through all of these is ten
+	// times the work for the same coverage, and a fuzzer's budget is executions.
+	text := fuzzTexts[len(fuzzTexts)-1]
+	before, after := fuzzTexts[0], fuzzTexts[1]
+	_ = face.MeasureShapedInContext(text, 10, before, after, true, off)
+	_ = face.MeasureShapedMerged(text, 10, before, after, before, after, false, off)
+	_, _ = face.MeasureShapedMergedSpan(text, 10, before, after, before, after, true, off)
+	_, _ = face.ShapeGlyphsWith(text, "smcp", "zzzz")
+	_, _ = face.ShapeGlyphsInContext(text, before, after, off)
+	_, _ = face.ShapeGlyphsAcrossFaces(text, before, after, off)
+	_, _ = face.ShapeGlyphsMerged(text, before, after, before, after, false, off)
+	_, _ = face.ShapeGlyphsInContextOrAcross(text, before, after, true, off)
+
+	whole := face.ShapeGroup(text, before, after, true, off)
+	_, _ = GroupContext(before, after, before, after)
+	cum := GroupAdvances(whole, len(text))
+	_, _ = GroupSpan(cum, 0, len(cum), 10)
+	for _, r := range text {
+		_ = stack.Covers(r)
+	}
+
+	_, _ = face.Subset()
+	_, _, _ = face.SubsetGlyphs()
 }
 
 // TestAFontDeclaringNoGlyphsIsRefused pins the crash the fuzzer found.
@@ -284,3 +395,81 @@ func corruptMaxpGlyphCount(t *testing.T, data []byte, count uint16) []byte {
 }
 
 func be16(b []byte, i int) uint16 { return uint16(b[i])<<8 | uint16(b[i+1]) }
+
+// entryPointPattern matches the exported entry points of this package: a
+// function, or a method on a face.
+var entryPointPattern = regexp.MustCompile(`(?m)^func (?:\(f \*Face\) |\(s \*Stack\) )?([A-Z]\w*)\(`)
+
+// notAboutFontBytes are the exported names the fuzz target does not have to
+// reach, each with the reason it does not.
+//
+// The list is short on purpose. Everything that reads what a font says has to be
+// on the other side of it: the reader is what an attacker's bytes reach, and a
+// reader nothing drives is a reader nothing has ever tried to break.
+var notAboutFontBytes = map[string]string{
+	"Load":               "named rather than called: the target's own loader loop takes it as a value",
+	"LoadSimple":         "the same",
+	"Standard":           "one of the built-in faces, which are not read from bytes a caller supplied",
+	"StandardNames":      "the names of those, which are a constant",
+	"InCursiveScript":    "a property of a character, and no font is consulted",
+	"DrawsNothing":       "the same",
+	"CombiningClass":     "the same",
+	"ComposeCanonically": "the same",
+	"PrivateDictForTest": "reached through Load in the CFF tests, which fuzz those bytes themselves",
+	"CharStringsForTest": "the same",
+}
+
+// TestTheFuzzTargetReachesEveryEntryPoint is what keeps useFace a list.
+//
+// FuzzLoadAndUse measured, encoded, shaped and subsetted, and its own comment
+// said it drove the whole pipeline. The four of them missed the context and
+// merging API, the named features, the stack, the group measurements and
+// instancing — and instancing is the reader most exposed to a crafted file,
+// since it is the only one that walks the variation tables. A gap like that is
+// invisible: the fuzzer runs, finds nothing, and says nothing about what it
+// never called.
+//
+// So the entry points are read off the package rather than remembered, and an
+// exported one that is neither driven nor excused fails this. Adding a method is
+// then a decision about whether hostile bytes can reach it.
+func TestTheFuzzTargetReachesEveryEntryPoint(t *testing.T) {
+	body, err := os.ReadFile("panic_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	names, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := 0
+	for _, name := range names {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range entryPointPattern.FindAllStringSubmatch(string(src), -1) {
+			entry := m[1]
+			found++
+			if why, excused := notAboutFontBytes[entry]; excused {
+				if why == "" {
+					t.Errorf("%s is excused with no reason", entry)
+				}
+				continue
+			}
+			if !strings.Contains(string(body), entry+"(") {
+				t.Errorf("%s (%s) is exported and the fuzz target never calls it; "+
+					"drive it in useFace, or say in notAboutFontBytes why bytes a "+
+					"caller supplied cannot reach it", entry, name)
+			}
+		}
+	}
+	// The pattern is what everything above rests on, so it has to have matched
+	// something like the number of entry points this package has.
+	if found < 40 {
+		t.Errorf("only %d entry points were found in the package; the pattern "+
+			"that reads them off is not matching what it should", found)
+	}
+}

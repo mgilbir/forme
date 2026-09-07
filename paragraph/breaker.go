@@ -149,14 +149,21 @@ func (br *Breaker) MeasureSpacedInContext(face *shape.Face, text string, size st
 	// characters — the standard PDF fonts — substitutes and kerns nothing, and
 	// MeasureShaped hands those straight back to the sum.
 	var w style.Unit
-	if how.Upright {
+	switch {
+	case how.Upright:
 		// A run set upright on a line of vertical text advances one em per
 		// character, and the face's horizontal advances say nothing about it.
 		// CSS Writing Modes §4.4: where a face states no vertical metrics the
 		// UA synthesizes them, and the em box is the synthesis. See UprightUnits
 		// for what counts as a character here.
 		w = size.Mul(float64(UprightUnits(text)))
-	} else {
+	case face == nil:
+		// An item with text and no face. What a glyph advances is the face's to
+		// say and there is none, so the answer is zero — which is a caller's
+		// mistake shown on the page rather than a nil dereference in a process
+		// that was doing something else. Every item this package builds for
+		// itself carries a face; this is the contract for one it is handed.
+	default:
 		// The two ends of the run within the group it was shaped with, each
 		// rounded to a layout unit, rather than the difference rounded once.
 		// Every run of a group then begins where the one before it ended and

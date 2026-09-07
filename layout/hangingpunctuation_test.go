@@ -386,3 +386,56 @@ func TestAnInnerValueDoesNotReachACharacterOutsideIt(t *testing.T) {
 			"not hold the bracket", got, want)
 	}
 }
+
+// TestAMarkThatOpensAndClosesHangsAtBothEnds.
+//
+// A straight quote opens and closes, and so does every Pi and Pf — the marks a
+// language sets in pairs are one character used at both ends. A block whose
+// whole content is one of them is therefore the first item of the list and the
+// last, and "hanging-punctuation: first last" cuts it twice.
+//
+// Neither cut splits anything, because the run *is* the character. So each has
+// to mark the end it is about and leave the other alone: setting the two flags
+// together from one of them made the second cut undo the first, and the mark
+// that was to hang in the margin was left sitting inside the line.
+func TestAMarkThatOpensAndClosesHangsAtBothEnds(t *testing.T) {
+	for _, mark := range []string{`"`, `'`, "“", "«", "‘"} {
+		plain := firstRun(t, mark, "")
+		hung := firstRun(t, mark, `#p { hanging-punctuation: first last }`)
+		if want := plain.X.Sub(plain.Width); hung.X != want {
+			t.Errorf("%q hanging at both ends begins at %v, want %v: the mark is "+
+				"%v wide and hangs that far into the margin",
+				mark, hung.X, want, plain.Width)
+		}
+	}
+}
+
+// TestAMarkThatOpensAndClosesStillHangsPastTheEnd is the other half of the same
+// cut: marking the start must not cost the end either.
+func TestAMarkThatOpensAndClosesStillHangsPastTheEnd(t *testing.T) {
+	// Right-aligned, so what the line is measured as decides where it sits: a
+	// mark that hangs past the end is one the alignment does not count.
+	right := func(css string) TextRun {
+		t.Helper()
+		f := find(t, layoutOf(t, 600, `<div id="p">"</div>`,
+			hangCSS+`#p { text-align: right }`+css), "p")
+		return f.Lines[0].Runs[0]
+	}
+	plain := right("")
+	hung := right(`#p { hanging-punctuation: first last }`)
+	if want := plain.X.Add(plain.Width); hung.X != want {
+		t.Errorf("the right-aligned mark begins at %v, want %v: it sits past the "+
+			"edge and is not counted", hung.X, want)
+	}
+}
+
+// firstRun is the first run of the first line, which carries both the offset the
+// hang moves and the width it moves by.
+func firstRun(t *testing.T, markup, css string) TextRun {
+	t.Helper()
+	f := find(t, layoutOf(t, 600, `<div id="p">`+markup+`</div>`, hangCSS+css), "p")
+	if len(f.Lines) == 0 || len(f.Lines[0].Runs) == 0 {
+		t.Fatalf("%q laid out no runs", markup)
+	}
+	return f.Lines[0].Runs[0]
+}

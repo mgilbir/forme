@@ -1133,7 +1133,7 @@ func legalColour(name string, vals []css.ComponentValue) bool {
 	if parts := splitOnWhitespace(vals); len(parts) == 1 && len(parts[0]) == 1 {
 		if v := parts[0][0]; v.IsToken() && v.Token.Kind == css.Ident {
 			switch strings.ToLower(v.Token.Value) {
-			case kwInherit, kwInitial, kwUnset, kwRevert, "currentcolor":
+			case kwInherit, kwInitial, kwUnset, kwRevert, kwRevertLayer, "currentcolor":
 				return true
 			case "invert":
 				return name == "outline-color"
@@ -1180,7 +1180,7 @@ func legalBackgroundImage(vals []css.ComponentValue) bool {
 		}
 		switch strings.ToLower(v.Token.Value) {
 		case "none":
-		case kwInherit, kwInitial, kwUnset, kwRevert:
+		case kwInherit, kwInitial, kwUnset, kwRevert, kwRevertLayer:
 			// A CSS-wide keyword is the whole value or it is nothing:
 			// "none, inherit" is not a layer list with a keyword in it.
 			if len(layers) != 1 {
@@ -1231,7 +1231,7 @@ func legalDisplay(vals []css.ComponentValue) bool {
 	}
 	if len(words) == 1 {
 		switch words[0] {
-		case kwInherit, kwInitial, kwUnset, kwRevert:
+		case kwInherit, kwInitial, kwUnset, kwRevert, kwRevertLayer:
 			return true
 		}
 		if singleDisplay[words[0]] {
@@ -1785,7 +1785,7 @@ func declaresItsOwnValue(value string, prop property) bool {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case kwInherit:
 		return false
-	case kwUnset, kwRevert:
+	case kwUnset, kwRevert, kwRevertLayer:
 		return !prop.inherits
 	}
 	return true
@@ -1830,15 +1830,24 @@ func (s *Styler) resolve(name string, prop property, value string, have bool, pa
 				return inheritFrom()
 			}
 			return prop.initial
-		case kwRevert:
+		case kwRevert, kwRevertLayer:
 			// Reverting to the previous origin is not implemented. Treating it
 			// as "unset" is the closest available answer and is wrong whenever a
 			// user-agent rule set the property, so it is reported rather than
 			// quietly substituted.
-			if !s.suppressed("revert") {
+			//
+			// "revert-layer" is the same keyword here. It rolls back to the
+			// previous cascade layer and this engine has none, so the
+			// specification's own answer for that case is "revert" — which is
+			// this one. It was not recognised at all, so a declaration using it
+			// was read as a value of the property and dropped for not being
+			// one: "color: revert-layer" left the colour the *earlier*
+			// declaration had set, which is the opposite of what it asks for.
+			said := strings.ToLower(value)
+			if !s.suppressed(said) {
 				s.report(Finding{
 					Offset: -1,
-					Message: "\"revert\" is not implemented and was read as \"unset\", " +
+					Message: "\"" + said + "\" is not implemented and was read as \"unset\", " +
 						"which differs wherever a lower-priority stylesheet set the property",
 					Unsupported: true,
 					Property:    name,

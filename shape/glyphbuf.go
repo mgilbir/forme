@@ -294,7 +294,7 @@ func (f *Face) shapeGlyphsWith(s string, extra []string, ctx shapeContext) ([]Gl
 		if r.End == len(s) {
 			inner.mergeAfter = ctx.mergeAfter
 		}
-		glyphs, gone := f.shapeGlyphsIn(piece, runScript(piece), r.RTL(), extra, inner)
+		glyphs, gone := f.shapeGlyphsIn(piece, scriptAround(s, r.Start, r.End), r.RTL(), extra, inner)
 		missing += gone
 		for i := range glyphs {
 			glyphs[i].Cluster += r.Start
@@ -529,6 +529,39 @@ var (
 	afterJoiningFeatures  = []string{"rlig", "rclt", "calt", "liga", "clig"}
 )
 
+// The forms a run's *direction* selects, applied before everything else.
+//
+// A mirrored form is the glyph a character is drawn with when the line runs the
+// other way. Unicode mirrors a bracket by character — U+0028 in a
+// right-to-left paragraph is drawn as U+0029's shape — and a font may state the
+// same thing by glyph instead, which is what 'rtlm' is for: the pair it names is
+// the pair the designer drew, and it covers what the character property cannot,
+// such as an integral sign or an arrow that leans. 'rtla' is the same for a
+// letterform a right-to-left line wants rather than a mirror of it, and 'ltra'
+// and 'ltrm' are both of those for a left-to-right line.
+//
+// None of the four was applied. A font stating them was answered with the
+// glyphs it states for the other direction, and nothing said so — the page
+// carries a bracket pointing the wrong way and no finding, because a
+// substitution that never ran leaves no trace.
+//
+// They come first, before 'ccmp', because everything after is written against
+// the glyphs the direction chose: HarfBuzz puts them in the same place and for
+// the same reason. They are also the one part of substitution that depends on
+// which way the run is drawn — see shaper.rtl.
+var (
+	rightToLeftFeatures = []string{"rtla", "rtlm"}
+	leftToRightFeatures = []string{"ltra", "ltrm"}
+)
+
+// directionFeatures are the forms this run's direction selects.
+func (sh shaper) directionFeatures() []string {
+	if sh.rtl {
+		return rightToLeftFeatures
+	}
+	return leftToRightFeatures
+}
+
 // substitute runs the GSUB lookups over a shaped buffer, preserving the cluster
 // of the first glyph of each run it replaces so that a ligature still maps back
 // to the text it came from.
@@ -548,6 +581,7 @@ func (sh shaper) applyNamedFeatures(buf []Glyph, tags []string) []Glyph {
 }
 
 func (sh shaper) substitute(buf []Glyph) []Glyph {
+	buf = sh.applyNamedFeatures(buf, sh.directionFeatures())
 	buf = sh.applyNamedFeatures(buf, beforeJoiningFeatures)
 	buf = sh.applyJoiningForms(buf)
 	// The features a document turned off are dropped from the list rather than
