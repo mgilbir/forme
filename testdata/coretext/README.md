@@ -15,7 +15,7 @@ identifiers, searching and sorting, and display — and shaping is not one of
 them; the display rule says only that the character has no glyph of its own
 "although they may have an effect on the display of other characters". So the
 standard neither asks for the removal nor forbids it, and the reasons for the
-choice are argued in `deliberateDifferences` in `fonts/harfbuzz_test.go`.
+choice are argued in `deliberateDifferences` in `shape/harfbuzz_test.go`.
 
 What is not known is whether anything other than HarfBuzz agrees with HarfBuzz.
 If CoreText breaks the syllable too, this package stands alone among the engines
@@ -134,7 +134,7 @@ measuring what it claims to. HarfBuzz is the one out of step, on the one string
 where the other two agree.
 
 That closes it: there is nothing to fix, and the difference is recorded in
-`deliberateDifferences` in `fonts/harfbuzz_test.go` with the string pinned in the
+`deliberateDifferences` in `shape/harfbuzz_test.go` with the string pinned in the
 Tibetan corpus, so it is checked in both directions and cannot go stale.
 
 ## The third question: does an invisible character take up room

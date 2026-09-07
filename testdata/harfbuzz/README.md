@@ -1,6 +1,6 @@
 # Shaping checked against HarfBuzz
 
-`fonts/harfbuzz_test.go` shapes every line of three corpora, each with its own
+`shape/harfbuzz_test.go` shapes every line of six corpora, each with its own
 font, and compares the result against what HarfBuzz answered for it.
 
 ## Why
@@ -67,8 +67,8 @@ needs a Go toolchain. This has to run on every change to the shaper, and an
 oracle that needs the right Python on the machine is one that quietly stops
 running.
 
-The three expectation files come to about 210 KB together, and the two extra
-fonts to 1.2 MB — against the 2 MB the bundled face already costs.
+The six expectation files come to about 450 KB together, and the five extra
+fonts to 3.6 MB — against the 2 MB the bundled face already costs.
 
 ## Files
 
@@ -123,7 +123,7 @@ overfitted to it, and the defect that found was in code five years older than th
 engine: a vowel sign written as one character and drawn as two marks on opposite
 sides of the letter was being taken apart and then put back together.
 
-All five corpora must now agree exactly. The ratchet the test still supports was
+All six corpora must now agree exactly. The ratchet the test still supports was
 used while the engine was being written and is documented there for the next time
 something lands in pieces.
 
@@ -151,20 +151,21 @@ direction from the first character that has a script. So for `RLO a b c` HarfBuz
 answers `abc` and this package answers `cba` — and this package is right, because
 an override means what it says. That is a difference in what the two are *for*.
 The right oracle for it is Unicode's own `BidiTest.txt` and
-`BidiCharacterTest.txt`, which `fonts/bidi_conformance_test.go` runs in full;
+`BidiCharacterTest.txt`, which `bidi/conformance_test.go` runs in full;
 `corpus.py` therefore leaves the right-to-left forcing controls out.
 
-**Thirteen cases that differ on purpose**, all in the Latin corpus, listed with
-their reasons in `deliberateDifferences` in `fonts/harfbuzz_test.go`. Tibetan
-had two more and no longer does: they were recorded as a difference of opinion
-about how to decorate a letter that is not there, and were really a reserved
-code point being given a category that broke the cluster. All
-thirteen are the same thing: a character nothing is drawn for, written between a
-consonant and its virama. This package removes it before shaping, so the conjunct forms; HarfBuzz
-keeps it until after, so the syllable breaks and the orphaned virama gets a
-dotted circle. The list is checked in both directions — an entry that starts
-agreeing fails, and so does one that is not in the corpus — so it cannot go
-stale.
+**Two cases that differ on purpose**, listed with their reasons in
+`deliberateDifferences` in `shape/harfbuzz_test.go`: one Arabic string and one
+Tibetan one, each adjudicated by asking CoreText as a third opinion and each
+described where it is listed. The list is checked in both directions — an entry
+that starts agreeing fails, and so does one that is not in the corpus — so it
+cannot go stale.
+
+It used to say thirteen, all in the Latin corpus and all the same thing: a
+character nothing is drawn for, written between a consonant and its virama,
+which this package removes before shaping and HarfBuzz keeps until after. That
+class was settled rather than excused — see testdata/coretext — and the thirteen
+strings agree now.
 
 
 ## Differential fuzzing
@@ -182,7 +183,7 @@ python3 testdata/harfbuzz/difffuzz.py 600     # ten
 It does not mutate the fonts. Random bytes produce a font neither side can read,
 and structured mutation produces one whose *correct* shaping nobody knows —
 HarfBuzz's answer would be as arbitrary as this package's. Malformed fonts are
-the Go fuzzer's job (`fonts/panic_test.go`), which asks a different question: not
+the Go fuzzer's job (`shape/panic_test.go`), which asks a different question: not
 "is this right" but "does this survive".
 
 ### What it took to make the output mean anything
@@ -284,16 +285,21 @@ on the one before it and HarfBuzz leaves it on the base. The smallest case is
 
 ## What is left
 
-Over 421,200 generated strings the fuzzer reports 40 differences, in three
-classes. The figure of one quoted earlier was a 2,000-string sample per script
-and not the whole of it.
+Nothing that is not already named. A run of 818,800 strings over the nine fonts,
+at seed 7 on 2026-09-07, reports one difference: `U+0F67 U+0FAC U+0FB9 U+0F77`,
+where two Tibetan marks each sit 42 units further left here than in HarfBuzz. It
+is the mark-carrying shape the `mark-offset` class is about, in its two-glyph
+form, which the class does not cover — see `classify` in `difffuzz.py`, which
+also prints how far the marks it *did* mask were carried.
 
-**Five units of x, Tibetan.** The one this section used to be about, and it is
-not a defect: CoreText was asked and places the mark where this package places
-it. Absolute positions are 427 for this package, 427 for CoreText and 422 for
-HarfBuzz — see testdata/coretext. Pinned in the corpus and listed in
-`deliberateDifferences`; the fuzzer names only the exact string, so any other
-Tibetan case it reports is a different question wearing the same shape.
+The two adjudicated cases are:
+
+**Five units of x, Tibetan.** Not a defect: CoreText was asked and places the
+mark where this package places it. Absolute positions are 427 for this package,
+427 for CoreText and 422 for HarfBuzz — see testdata/coretext. Pinned in the
+corpus and listed in `deliberateDifferences`; the fuzzer names only the exact
+string, so any other Tibetan case it reports is a different question wearing the
+same shape.
 
 **An invisible character the font gave a width, Arabic.** `U+063D U+061C U+0655`
 puts the mark at 250 against HarfBuzz's 850, and is not a defect either:
@@ -302,16 +308,18 @@ gives U+061C a glyph 600 units wide; HarfBuzz carries it through positioning and
 deletes it at the end, keeping the hole. Pinned in the corpus and listed in
 `deliberateDifferences`.
 
-**Two pre-base vowels, Devanagari.** `U+091B U+094E U+093F` comes out as
-different glyphs in a different order — 3975, 4032 against HarfBuzz's 3935,
-3975. Both U+094E and U+093F are written after the consonant and drawn before
-it, and this is substitution as well as reordering, so it is not the same
-question as the two above.
-## How to look at either
+The mark-stacking class this section used to end on — 334 differences over
+644,400 strings, and the pre-base vowel pair `U+091B U+094E U+093F` — is closed:
+the same fuzzing finds none of them now. What is above is the whole of what a
+run reports.
 
-The per-lookup trace is the tool, and it works from Python — the buffer is not
-passed to the callback, but the buffer object is in scope and can be read from
-inside it:
+## Reading a difference
+
+The per-lookup trace is the tool, and it works from Python. uharfbuzz's message
+callback reports every lookup — an earlier note here said it reported only the
+table boundaries, and that was a filter reading `"GPOS" in message` throwing away
+lines that read `start lookup 19 feature 'blwm'`. The buffer is not passed to the
+callback, but the buffer object is in scope and can be read from inside it:
 
 	log = []
 	def cb(msg):
@@ -321,50 +329,6 @@ inside it:
 	b.set_message_func(cb)
 
 Print only the lines where the positions changed and it says which lookup moved
-what. That is how the last one was found, after four readings of the tables had
+what. That is how the Tibetan case was traced to lookup 21 — a second
+MarkMarkPos with its own filtering set — after four readings of the tables had
 each produced a plausible wrong answer.
-
-## What the trace says, and where it points
-
-uharfbuzz's message callback reports every lookup, which is more than it first
-appeared to — the earlier note here said it reported only the table boundaries,
-and that was a filter reading `"GPOS" in message` throwing away lines that read
-`start lookup 19 feature 'blwm'`.
-
-	python3 - <<'EOF'
-	import uharfbuzz as hb
-	...
-	b.set_message_func(lambda *a: (msgs.append(a), True)[1])
-	EOF
-
-For the Tibetan case the GPOS lookups that run, in order, are 14-17 (abvm),
-18-21 (blwm), 22-23 (dist) and 24-25 (mkmk). Lookups 18 and 19 both apply. So do
-**21, 23 and 24**, and *none of them has been examined*. Lookup 21 is a second
-MarkMarkPos with its own filtering set; 23 is a pair adjustment; 24 is the mkmk
-one already known not to cover this mark.
-
-The arithmetic says HarfBuzz's answer is the mark-to-base placement — mark anchor
-(-235, 0) against a base anchor, not either of the two mark-to-mark targets,
-whose anchors give -439 and +33 against the answer of -102. Something after
-lookup 19 puts it back on the base, and lookup 21 is the candidate nobody has
-looked at.
-
-## What to try next
-
-Dump the buffer between lookups rather than reasoning from the final positions.
-The message callback's first argument is not the buffer — that was tried and
-raised — so the shape of the callback arguments has to be established first, or
-`hb-shape --verbose` used instead, which prints the same trace with the glyph
-positions beside it.
-
-## What to try next
-
-Not another reading of the tables — three have failed. Get HarfBuzz to say which
-lookup it applied:
-
-- `hb-shape --trace` from a HarfBuzz build with `HB_DEBUG_APPLY`, which names
-  every lookup as it is tried. uharfbuzz's message callback is not enough: it
-  reports only `start table GPOS` and `end table GPOS`.
-- Failing that, bisect the font: strip lookup 11 from a copy and see whether
-  HarfBuzz's answer changes. If it does not, the lookup was never reached and
-  the question becomes what reaches it.

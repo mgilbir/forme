@@ -46,7 +46,7 @@ Unicode asks for it not to be drawn, which every engine here does.
 Not a flag. HarfBuzz's model is *keep, then hide*, and this package's is *drop
 first*, so the work is to move the removal from before shaping to after it.
 
-1. Stop `dropHiddenCharacters` at its two call sites in `fonts/glyphbuf.go`,
+1. Stop `dropHiddenCharacters` at its two call sites in `shape/glyphbuf.go`,
    so the characters reach the shaper and can break a cluster.
 2. Give each of them a glyph the font can carry. A face that has no glyph for
    U+00AD would otherwise shape it as `.notdef`, and a `.notdef` is a real glyph
