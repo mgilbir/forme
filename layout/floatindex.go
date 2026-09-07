@@ -399,9 +399,12 @@ type absorbed struct {
 	on   FloatSide
 	edit stairEdit
 
-	// bottomAt is where this float's bottom went in the sorted list, or -1 when
-	// it contributed none.
-	bottomAt int
+	// bottomIn says this float put its bottom in the set, and bottom is the
+	// value it put there — which is what takes it out again, since the set holds
+	// values rather than positions and one float's entry is as good as another's
+	// where two floats end at the same y.
+	bottomIn bool
+	bottom   style.Unit
 
 	// flatOn and flat are the same pair as on and edit, for the float with no
 	// height that goes on neither staircase and is an obstacle all the same.
@@ -424,7 +427,7 @@ type floatIndex struct {
 	n                   int
 	left, right         stair
 	flatLeft, flatRight flatStair
-	bottoms             []style.Unit
+	bottoms             bottomSet
 	marks               []absorbed
 }
 
@@ -440,7 +443,7 @@ func (ix *floatIndex) absorb(f placedFloat) {
 	ix.right.least = true
 	ix.flatRight.least = true
 
-	a := absorbed{on: FloatNone, flatOn: FloatNone, bottomAt: -1}
+	a := absorbed{on: FloatNone, flatOn: FloatNone}
 	if ix.n > 0 {
 		prev := ix.marks[ix.n-1]
 		a.topMax = prev.topMax
@@ -477,7 +480,8 @@ func (ix *floatIndex) absorb(f placedFloat) {
 	// it — or a bottom the list already holds. There is no page whose placement
 	// search needs the step, so it is not offered one.
 	if f.rect.H > 0 {
-		a.bottomAt = insertUnit(&ix.bottoms, bottom)
+		a.bottomIn, a.bottom = true, bottom
+		ix.bottoms.insert(bottom)
 	} else if f.rect.H == 0 && f.rect.W > 0 {
 		// Width, because a float with neither dimension is not an obstacle in
 		// any direction and putting it on the list would be one more entry for
@@ -534,47 +538,9 @@ func (ix *floatIndex) rewind(k int) {
 		case FloatRight:
 			ix.flatRight.undo(a.flat)
 		}
-		if a.bottomAt >= 0 {
-			copy(ix.bottoms[a.bottomAt:], ix.bottoms[a.bottomAt+1:])
-			ix.bottoms = ix.bottoms[:len(ix.bottoms)-1]
+		if a.bottomIn {
+			ix.bottoms.remove(a.bottom)
 		}
 	}
 	ix.marks = ix.marks[:ix.n]
-}
-
-// insertUnit puts v in a sorted list, returning where it went so that the same
-// entry can be taken out again.
-func insertUnit(list *[]style.Unit, v style.Unit) int {
-	s := *list
-	lo, hi := 0, len(s)
-	for lo < hi {
-		mid := int(uint(lo+hi) >> 1)
-		if s[mid] < v {
-			lo = mid + 1
-		} else {
-			hi = mid
-		}
-	}
-	s = append(s, 0)
-	copy(s[lo+1:], s[lo:])
-	s[lo] = v
-	*list = s
-	return lo
-}
-
-// firstAbove returns the first entry of a sorted list strictly greater than v.
-func firstAbove(s []style.Unit, v style.Unit) (style.Unit, bool) {
-	lo, hi := 0, len(s)
-	for lo < hi {
-		mid := int(uint(lo+hi) >> 1)
-		if s[mid] <= v {
-			lo = mid + 1
-		} else {
-			hi = mid
-		}
-	}
-	if lo == len(s) {
-		return 0, false
-	}
-	return s[lo], true
 }

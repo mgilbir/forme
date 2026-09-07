@@ -366,7 +366,7 @@ func (fc *floatContext) overlaps(r Rect) bool {
 // point scale of a 64th of a pixel, effectively unbounded.
 func (fc *floatContext) nextBottomBelow(y style.Unit) (style.Unit, bool) {
 	fc.sync()
-	return firstAbove(fc.idx.bottoms, y)
+	return fc.idx.bottoms.firstAbove(y)
 }
 
 // place positions a float and records it, returning its margin box.
