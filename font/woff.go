@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"sort"
+	"strconv"
 )
 
 // WOFF, the Web Open Font Format — W3C WOFF 1.0.
@@ -103,6 +104,44 @@ func DecodeWOFF(data []byte) ([]byte, error) {
 	if len(data) < headerSize {
 		return nil, errors.New("fonts: the WOFF header is cut short")
 	}
+	// The header's figures have to describe *this* file, which is the same
+	// question WOFF 2 asks a few lines down in woff2.go and which this did not
+	// ask at all. Reading on regardless is how a font with something extra
+	// appended, or with a metadata block pointing outside itself, is read as
+	// though it were ordinary.
+	//
+	// The two formats are checked as far as each one's layout allows, which is
+	// not equally far. WOFF 2 lays its blocks one after another on four-byte
+	// boundaries, so every offset is derivable and nothing may be left over;
+	// WOFF 1's tables are at offsets the file states, so what §3 of the format
+	// requires — and what is required here — is that the length is the file's,
+	// that the reserved field is zero, and that each block lies inside it.
+	if n := uint64(binary.BigEndian.Uint32(data[8:])); n != uint64(len(data)) {
+		return nil, errors.New("fonts: the WOFF says it is " +
+			strconv.FormatUint(n, 10) + " bytes and it is " +
+			strconv.Itoa(len(data)))
+	}
+	if binary.BigEndian.Uint16(data[14:]) != 0 {
+		return nil, errors.New("fonts: the WOFF's reserved field is not zero")
+	}
+	for _, b := range []struct {
+		name            string
+		offAt, lengthAt int
+	}{
+		{"metadata", 24, 28},
+		{"private", 36, 40},
+	} {
+		off := uint64(binary.BigEndian.Uint32(data[b.offAt:]))
+		length := uint64(binary.BigEndian.Uint32(data[b.lengthAt:]))
+		if off == 0 && length == 0 {
+			continue
+		}
+		if off < headerSize || off+length > uint64(len(data)) {
+			return nil, errors.New("fonts: the WOFF's " + b.name +
+				" block is not inside the file")
+		}
+	}
+
 	flavor := binary.BigEndian.Uint32(data[4:])
 	numTables := int(binary.BigEndian.Uint16(data[12:]))
 	if numTables == 0 {

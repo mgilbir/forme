@@ -128,7 +128,8 @@ record of what it thought of.
 | **The CSS Syntax suite** | 229 cases from the suite `css-parsing-tests` publishes, with 13 more deliberately excused and each excuse named |
 
 The reftest number is a **ratchet**: it may never be lowered to make a red test
-green, so a drop is a layout regression and the failing names are printed. A
+green, so a drop is a layout regression and every failing name is printed — all
+of them, which the run checks against its own count. A
 *rise* fails the test too, and asks for the constant to be raised in the same
 commit — a number that only tightens when somebody remembers to look is not a
 ratchet, and this one fell about fifteen hundred passes behind before that was
