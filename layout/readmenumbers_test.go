@@ -97,4 +97,49 @@ func TestTheReadmeCountsTheFuzzTargets(t *testing.T) {
 		t.Errorf("the README says there are %d fuzz targets and the repository "+
 			"declares %d", got, declared)
 	}
+
+	// And how many of them a machine actually runs, which is the half that
+	// matters: a target nothing schedules is a target that has never been run
+	// for longer than its seeds take. The workflow's matrix is the answer, and
+	// the README's word for it was written once and left behind — "eleven"
+	// while the matrix named eleven, then still "eleven" after three were
+	// added.
+	flow, err := os.ReadFile(filepath.Join("..", ".github", "workflows", "fuzz.yml"))
+	if err != nil {
+		t.Fatalf("reading the fuzz workflow: %v", err)
+	}
+	scheduled := strings.Count(string(flow), "\n            target: ")
+	if scheduled == 0 {
+		t.Fatal("the fuzz workflow schedules nothing, so this test says nothing")
+	}
+	if got := readmeWord(t, readme(t), `([a-z]+) of them scheduled weekly`); got != scheduled {
+		t.Errorf("the README says %d targets are scheduled weekly and the "+
+			"workflow names %d", got, scheduled)
+	}
+}
+
+// readmeWord pulls a number the README spells out in words.
+//
+// The prose says "fourteen of them", not "14 of them", and a number written as
+// a word drifts exactly as easily as one written as digits — more easily, since
+// nothing about it looks like a number to a reader skimming for one.
+func readmeWord(t *testing.T, text, pattern string) int {
+	t.Helper()
+	m := regexp.MustCompile(pattern).FindStringSubmatch(text)
+	if m == nil {
+		t.Fatalf("the README no longer says %q, so this test cannot check it", pattern)
+	}
+	words := map[string]int{
+		"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+		"seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
+		"twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+		"sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
+		"twenty": 20,
+	}
+	n, ok := words[m[1]]
+	if !ok {
+		t.Fatalf("the README says %q of them are scheduled, which this test "+
+			"cannot read as a number", m[1])
+	}
+	return n
 }

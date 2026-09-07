@@ -41,6 +41,17 @@ jobs:
             target: FuzzSFNTCmap
           - package: ./font
             target: FuzzParseCFF
+          # The three the audit found missing. WOFF 1 and Type 1 had no target
+          # at all, and the glyf transform had one only in name: FuzzDecodeWOFF2
+          # reads a whole file, and the fixtures that carry a transformed glyf
+          # are Brotli streams, so nearly every mutation breaks the compression
+          # and the decoder stops before the transform is reached.
+          - package: ./font
+            target: FuzzDecodeWOFF
+          - package: ./font
+            target: FuzzWOFF2Glyf
+          - package: ./font
+            target: FuzzParseType1
           - package: ./shape
             target: FuzzLoadAndUse
           - package: ./layout
