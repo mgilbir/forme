@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -70,17 +69,7 @@ func TestTurningOffKerningAFaceHasNotGotIsNotReported(t *testing.T) {
 // with a face that kerns, a font-feature-settings that turns kerning off asks
 // for a page this engine does not produce.
 func TestTurningOffKerningAFaceHasIsStillReported(t *testing.T) {
-	faces := notoFaces()
-	var kerning *shape.Face
-	for _, f := range faces {
-		if f.HasKerning() {
-			kerning = f
-			break
-		}
-	}
-	if kerning == nil {
-		t.Skip("set NOTO_FONTS (or run `make test-wpt`) for a face with kerning in it")
-	}
+	kerning := kerningFallbackFace(t)
 	set := oneFace{kerning}
 	for _, css := range []string{
 		`font-feature-settings: "kern" off`,
@@ -140,17 +129,7 @@ func TestAFeatureThatIsNotKerningIsAlwaysReported(t *testing.T) {
 // TestTheFindingIsRaisedOncePerDocument, which is what the other value findings
 // do: a stylesheet rule on four hundred elements is one thing to be told.
 func TestTheFindingIsRaisedOncePerDocument(t *testing.T) {
-	faces := notoFaces()
-	var kerning *shape.Face
-	for _, f := range faces {
-		if f.HasKerning() {
-			kerning = f
-			break
-		}
-	}
-	if kerning == nil {
-		t.Skip("set NOTO_FONTS for a face with kerning in it")
-	}
+	kerning := kerningFallbackFace(t)
 	built := Build(Input{
 		HTML: `<p id="a">AV</p><p id="b">AV</p><p id="c">AV</p>`,
 		CSS: []Stylesheet{{Source: noDefaults +

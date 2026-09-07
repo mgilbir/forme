@@ -1,9 +1,9 @@
 package shape
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
+
+	"github.com/mgilbir/forme/fonttest"
 )
 
 // TestKerningIsApplied pins a fact style/inert.go depends on.
@@ -18,15 +18,7 @@ import (
 // would go on saying "font-kerning: auto is inert" while the engine had started
 // producing "none", and would suppress a finding about a real difference.
 func TestKerningIsApplied(t *testing.T) {
-	dir := os.Getenv("NOTO_FONTS")
-	if dir == "" {
-		t.Skip("set NOTO_FONTS (or run `make test-wpt`) to read a face with kern pairs")
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "NotoSans-Regular.ttf"))
-	if err != nil {
-		t.Skipf("no such font in this checkout: %v", err)
-	}
-	face, err := Load(data)
+	face, err := Load(fonttest.NotoFile(t, "NotoSans-Regular.ttf"))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}

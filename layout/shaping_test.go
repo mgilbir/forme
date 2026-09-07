@@ -1,10 +1,9 @@
 package layout
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
+	"github.com/mgilbir/forme/fonttest"
 	"github.com/mgilbir/forme/shape"
 )
 
@@ -18,16 +17,8 @@ import (
 // So a font is only worth adding to the fallback if the shaper applies its
 // script, and that is a claim to check rather than assume. This is the check.
 func TestShapingIsContextual(t *testing.T) {
-	dir := os.Getenv("NOTO_FONTS")
-	if dir == "" {
-		t.Skip("set NOTO_FONTS")
-	}
 	load := func(name string) *shape.Face {
-		data, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			t.Skipf("no %s", name)
-		}
-		f, err := shape.Load(data)
+		f, err := shape.Load(fonttest.NotoFile(t, name))
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}

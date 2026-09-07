@@ -85,14 +85,7 @@ func TestCoverageExpansionIsBoundedForTheWholeTable(t *testing.T) {
 // budget a shipping font exhausts would drop kerning, ligatures or mark
 // attachment silently, which is worse than the load it saves.
 func TestARealFaceDoesNotSpendItsCoverageAllowance(t *testing.T) {
-	dir := os.Getenv("NOTO_FONTS")
-	if dir == "" {
-		t.Skip("set NOTO_FONTS (or run `make test-wpt`) for faces with real coverage")
-	}
-	names, err := filepath.Glob(filepath.Join(dir, "*.ttf"))
-	if err != nil || len(names) == 0 {
-		t.Skipf("no faces in %s", dir)
-	}
+	names := notoTTFs(t)
 	for _, name := range names {
 		data, err := os.ReadFile(name)
 		if err != nil {

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/mgilbir/forme/fonttest"
 	"github.com/mgilbir/forme/shape"
 )
 
@@ -78,8 +79,10 @@ func fontSetForWPT() FontSet {
 	return wptFontSet
 }
 
-// notoEnv names the directory `make noto-fonts` fetches into.
-const notoEnv = "NOTO_FONTS"
+// notoEnv names the directory `make noto-fonts` fetches into. It is fonttest's
+// so that the variable a message tells a reader to set cannot drift from the
+// one the helpers read.
+const notoEnv = fonttest.NotoEnv
 
 // fallbackFacesInUse returns the faces the harness is actually lending the
 // engine, so a report can say how many there were.
@@ -94,6 +97,36 @@ func fallbackFacesInUse() []*shape.Face {
 	return nil
 }
 
+// notoFaceNames is the fallback library, in the order it is asked in.
+//
+// It is named rather than written inline in notoFaces because it is what
+// "the library is complete" means: a face that is not loaded changes what every
+// document holding text it covers is set in, so the count of loaded faces is
+// checked against this list rather than against a number written down beside it.
+var notoFaceNames = []string{
+	// Broadest first, so the common case is answered by the first face
+	// asked. The rest each add a script the one before it does not have.
+	"NotoSans-Regular.ttf",
+	"NotoSansHebrew-Regular.ttf",
+	"NotoSansArabic-Regular.ttf",
+	"NotoSansDevanagari-Regular.ttf",
+	"NotoSerifTibetan-Regular.ttf",
+	"NotoSansArmenian-Regular.ttf",
+	"NotoSansGeorgian-Regular.ttf",
+	"NotoSansJP-VF.ttf",
+	// One block apiece, and each is the only face here with a glyph for it:
+	// Ogham, Coptic, Deseret, and the Number Forms the Roman numerals live
+	// in. They are last because they answer nothing else — a face that
+	// covers one script is asked after every face that might cover the
+	// text outright.
+	"NotoSansOgham-Regular.ttf",
+	"NotoSansCoptic-Regular.ttf",
+	"NotoSansDeseret-Regular.ttf",
+	"NotoSansSymbols-Regular.ttf",
+	"Unifont-Regular.otf",
+	"UnifontUpper-Regular.otf",
+}
+
 // notoFaces loads the fallback faces, or none.
 //
 // Absent, everything still runs: the documents that need them report a missing
@@ -102,34 +135,12 @@ func fallbackFacesInUse() []*shape.Face {
 // the two that add a script it does not have — so the common case is answered
 // by the first one asked.
 func notoFaces() []*shape.Face {
-	dir := os.Getenv(notoEnv)
-	if dir == "" {
+	dir, _ := fonttest.NotoRoot()
+	if !fonttest.NotoPresent(dir) {
 		return nil
 	}
 	var out []*shape.Face
-	for _, name := range []string{
-		// Broadest first, so the common case is answered by the first face
-		// asked. The rest each add a script the one before it does not have.
-		"NotoSans-Regular.ttf",
-		"NotoSansHebrew-Regular.ttf",
-		"NotoSansArabic-Regular.ttf",
-		"NotoSansDevanagari-Regular.ttf",
-		"NotoSerifTibetan-Regular.ttf",
-		"NotoSansArmenian-Regular.ttf",
-		"NotoSansGeorgian-Regular.ttf",
-		"NotoSansJP-VF.ttf",
-		// One block apiece, and each is the only face here with a glyph for it:
-		// Ogham, Coptic, Deseret, and the Number Forms the Roman numerals live
-		// in. They are last because they answer nothing else — a face that
-		// covers one script is asked after every face that might cover the
-		// text outright.
-		"NotoSansOgham-Regular.ttf",
-		"NotoSansCoptic-Regular.ttf",
-		"NotoSansDeseret-Regular.ttf",
-		"NotoSansSymbols-Regular.ttf",
-		"Unifont-Regular.otf",
-		"UnifontUpper-Regular.otf",
-	} {
+	for _, name := range notoFaceNames {
 		data, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
 			missingFallbackFaces.add(name, err)
@@ -233,14 +244,7 @@ func loadSuiteFace(data []byte) (*shape.Face, error) {
 // changed is that the face the harness lends the engine is now the one a caller
 // would lend it.
 func TestTheSuitesVariableFaceIsLoadedAtNormalWeight(t *testing.T) {
-	dir := os.Getenv(notoEnv)
-	if dir == "" {
-		t.Skip("set " + notoEnv + " (or run `make test-wpt`) to read the suite's faces")
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "NotoSansJP-VF.ttf"))
-	if err != nil {
-		t.Skipf("no such font in this checkout: %v", err)
-	}
+	data := fonttest.NotoFile(t, "NotoSansJP-VF.ttf")
 
 	// As it stands: the font's own default, which is the lightest weight it has.
 	asIs, err := shape.Load(data)
@@ -264,10 +268,7 @@ func TestTheSuitesVariableFaceIsLoadedAtNormalWeight(t *testing.T) {
 
 	// A face with no weight axis is read as it stands rather than refused, which
 	// is the other half of loadSuiteFace and is most of the list it loads.
-	static, err := os.ReadFile(filepath.Join(dir, "NotoSans-Regular.ttf"))
-	if err != nil {
-		t.Skipf("no such font: %v", err)
-	}
+	static := fonttest.NotoFile(t, "NotoSans-Regular.ttf")
 	if _, err := loadSuiteFace(static); err != nil {
 		t.Errorf("a face with no weight axis was refused: %v", err)
 	}

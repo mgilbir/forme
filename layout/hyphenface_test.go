@@ -42,9 +42,7 @@ func hyphenatedRuns(t *testing.T, htmlSrc string) []string {
 // there and the rule cannot be seen at all.
 func hyphenatedWithFallback(t *testing.T, htmlSrc, css string) []string {
 	t.Helper()
-	if len(fallbackFacesInUse()) == 0 {
-		t.Skip("no fallback faces; set NOTO_FONTS")
-	}
+	fallbackLibrary(t)
 	built := Build(Input{
 		HTML: htmlSrc, CSS: []Stylesheet{{Source: css}}, Fonts: fontSetForWPT(),
 	})
@@ -135,9 +133,7 @@ func TestTheHyphensLineIsAsTallAsTheFaceThatDrewIt(t *testing.T) {
 // that asked it there would pass however the code answered.
 func lineTopsWithFallback(t *testing.T, htmlSrc, css string) []style.Unit {
 	t.Helper()
-	if len(fallbackFacesInUse()) == 0 {
-		t.Skip("no fallback faces; set NOTO_FONTS")
-	}
+	fallbackLibrary(t)
 	built := Build(Input{
 		HTML: htmlSrc, CSS: []Stylesheet{{Source: css}}, Fonts: fontSetForWPT(),
 	})

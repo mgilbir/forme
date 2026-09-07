@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/mgilbir/forme/fonttest"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -106,15 +107,7 @@ func TestBlockGlyphsCoverAhem(t *testing.T) {
 // or a counter in it is refused, and nothing in a text face is mistaken for the
 // em-filling square that would make it compare equal to a box.
 func TestBlockGlyphsRefuseOrdinaryFaces(t *testing.T) {
-	dir := os.Getenv(notoEnv)
-	if dir == "" {
-		t.Skipf("set %s (or run `make noto-fonts`) to check the rule refuses a text face", notoEnv)
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "NotoSans-Regular.ttf"))
-	if err != nil {
-		t.Skipf("NotoSans-Regular.ttf: %v", err)
-	}
-	bf, err := newBlockFont(data)
+	bf, err := newBlockFont(fonttest.NotoFile(t, "NotoSans-Regular.ttf"))
 	if err != nil {
 		t.Fatalf("NotoSans has no glyph table this can read: %v", err)
 	}
@@ -250,7 +243,13 @@ func TestBlockFillsLeavesTextAlone(t *testing.T) {
 	// Ahem cannot express that on its own — every character it has is a
 	// rectangle — so the run is set in a Noto face, where 'l' is a plain bar and
 	// 'o' is not.
-	if noto := notoFaces(); len(noto) > 0 {
+	//
+	// A subtest, so that a checkout without the fallback library skips this and
+	// not the rest of the case. It used to be `if len(noto) > 0`, which ran the
+	// body when the faces were there and reported nothing at all when they were
+	// not — and loaded a second copy of all fourteen to find out.
+	t.Run("a mixed run in a real face", func(t *testing.T) {
+		noto := fallbackLibrary(t)
 		if blockFonts[noto[0]] == nil {
 			t.Fatal("the Noto face has no rectangle table, so the mixed run below proves nothing")
 		}
@@ -270,7 +269,7 @@ func TestBlockFillsLeavesTextAlone(t *testing.T) {
 		if got := blockFills([]Op{bars}); len(got) != 2 {
 			t.Errorf("a run of two rectangles produced %d ops, want two fills", len(got))
 		}
-	}
+	})
 
 	// A character the face draws nothing for is stepped over rather than
 	// refused. A default-ignorable is taken out before a glyph is chosen, so it
@@ -300,7 +299,8 @@ func TestBlockFillsLeavesTextAlone(t *testing.T) {
 	// the step-over is about ink rather than about advance. A combining mark
 	// advances nothing and draws something, which is the case that would go
 	// wrong if this were written as "zero width".
-	if noto := notoFaces(); len(noto) > 0 {
+	t.Run("a combining mark in a real face", func(t *testing.T) {
+		noto := fallbackLibrary(t)
 		mark := DrawText{
 			At: Point{X: upx(t, 0), Y: upx(t, 20)}, Text: "l\u0301",
 			Face: noto[0], Size: upx(t, 20), Color: red,
@@ -324,7 +324,7 @@ func TestBlockFillsLeavesTextAlone(t *testing.T) {
 					"ink this reconstruction cannot place", got[0])
 			}
 		}
-	}
+	})
 
 	got = blockFills([]Op{fill, ahemRun, fill})
 	if len(got) != 3 {

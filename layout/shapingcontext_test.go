@@ -1,10 +1,9 @@
 package layout
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
+	"github.com/mgilbir/forme/fonttest"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -27,14 +26,7 @@ import (
 // ids drawn, in order.
 func arabicDoc(t *testing.T, markup, css string) []int {
 	t.Helper()
-	dir := os.Getenv("NOTO_FONTS")
-	if dir == "" {
-		t.Skip("set NOTO_FONTS (or run `make test-wpt`) for a face that joins")
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "NotoSansArabic-Regular.ttf"))
-	if err != nil {
-		t.Skip("no Arabic face: ", err)
-	}
+	data := fonttest.NotoFile(t, "NotoSansArabic-Regular.ttf")
 	res := &fileResolver{files: map[string][]byte{"ar.ttf": data}}
 	ops := paintWith(t, res, `<div id="d" dir="rtl">`+markup+`</div>`,
 		`@font-face { font-family: Joins; src: url(ar.ttf) }
@@ -204,14 +196,7 @@ func TestThePaddingThatIsBetweenThemIsTheOneThatCounts(t *testing.T) {
 // from widths measured without it is filled to the wrong widths, and the page
 // then overflows or stops short with nothing in either measurement to say so.
 func TestAJoinedWordIsNarrowerThanLettersApart(t *testing.T) {
-	dir := os.Getenv("NOTO_FONTS")
-	if dir == "" {
-		t.Skip("set NOTO_FONTS (or run `make test-wpt`) for a face that joins")
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "NotoSansArabic-Regular.ttf"))
-	if err != nil {
-		t.Skip("no Arabic face: ", err)
-	}
+	data := fonttest.NotoFile(t, "NotoSansArabic-Regular.ttf")
 	width := func(markup, css string) float64 {
 		t.Helper()
 		res := &fileResolver{files: map[string][]byte{"ar.ttf": data}}
@@ -364,14 +349,7 @@ func TestSomethingInvisibleThatTakesRoomStillBreaksShaping(t *testing.T) {
 // is what makes any of this observable.
 func joiningFace(t *testing.T) *shape.Face {
 	t.Helper()
-	dir := os.Getenv("NOTO_FONTS")
-	if dir == "" {
-		t.Skip("set NOTO_FONTS (or run `make test-wpt`) for a face that joins")
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "NotoSansArabic-Regular.ttf"))
-	if err != nil {
-		t.Skip("no Arabic face: ", err)
-	}
+	data := fonttest.NotoFile(t, "NotoSansArabic-Regular.ttf")
 	face, err := shape.Load(data)
 	if err != nil {
 		t.Fatal(err)
@@ -386,14 +364,7 @@ func joiningFace(t *testing.T) *shape.Face {
 // that a test can ask it which glyph a character is.
 func arabicFaceData(t *testing.T) ([]byte, *shape.Face) {
 	t.Helper()
-	dir := os.Getenv("NOTO_FONTS")
-	if dir == "" {
-		t.Skip("set NOTO_FONTS (or run `make test-wpt`) for a face that joins")
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "NotoSansArabic-Regular.ttf"))
-	if err != nil {
-		t.Skip("no Arabic face: ", err)
-	}
+	data := fonttest.NotoFile(t, "NotoSansArabic-Regular.ttf")
 	f, err := shape.Load(data)
 	if err != nil {
 		t.Fatalf("the Arabic face did not load: %v", err)

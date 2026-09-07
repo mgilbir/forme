@@ -1116,6 +1116,24 @@ func wptDir(t *testing.T) string {
 	return dir
 }
 
+// wptFile reads one file out of the fetched suite.
+//
+// A file that is absent from a suite that is present fails rather than
+// skipping. The suite is fetched whole at one commit, so a font it is supposed
+// to carry and does not is an unfinished fetch — and a test that quietly stops
+// measuring the only face that states a line gap reports success having
+// measured nothing.
+func wptFile(t *testing.T, rel string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(wptDir(t), filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatalf("reading %s out of the suite: %v\n"+
+			"`make wpt` fetches this file; a suite without it is an "+
+			"unfinished fetch.", rel, err)
+	}
+	return data
+}
+
 // reftest is one test document and the references it may be satisfied by.
 type reftest struct {
 	name string

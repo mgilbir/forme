@@ -1,10 +1,9 @@
 package paragraph
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
+	"github.com/mgilbir/forme/fonttest"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -24,15 +23,7 @@ import (
 
 func shapedFace(t *testing.T, name string) *shape.Face {
 	t.Helper()
-	dir := os.Getenv("NOTO_FONTS")
-	if dir == "" {
-		t.Skip("set NOTO_FONTS (or run `make test-wpt`) for a face that shapes")
-	}
-	data, err := os.ReadFile(filepath.Join(dir, name))
-	if err != nil {
-		t.Skipf("%s is not in the checkout: %v", name, err)
-	}
-	f, err := shape.Load(data)
+	f, err := shape.Load(fonttest.NotoFile(t, name))
 	if err != nil {
 		t.Fatalf("%s did not load: %v", name, err)
 	}

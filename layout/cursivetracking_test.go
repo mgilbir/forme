@@ -1,10 +1,9 @@
 package layout
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
+	"github.com/mgilbir/forme/fonttest"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -169,15 +168,7 @@ func TestARunThatMixesScriptsIsCutSoTheDisplayListCanSayIt(t *testing.T) {
 // what happens when one face answers for text the stack would otherwise split.
 func oneFaceFor(t *testing.T, name string) *shape.Face {
 	t.Helper()
-	dir := os.Getenv(notoEnv)
-	if dir == "" {
-		t.Skip("set NOTO_FONTS (or run `make test-wpt`) for a pan-Unicode face")
-	}
-	data, err := os.ReadFile(filepath.Join(dir, name))
-	if err != nil {
-		t.Skipf("%s is not in this checkout: %v", name, err)
-	}
-	face, err := loadSuiteFace(data)
+	face, err := loadSuiteFace(fonttest.NotoFile(t, name))
 	if err != nil {
 		t.Fatalf("%s did not load: %v", name, err)
 	}

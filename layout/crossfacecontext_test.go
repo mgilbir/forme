@@ -1,11 +1,10 @@
 package layout
 
 import (
-	"os"
-	"path/filepath"
 	"sort"
 	"testing"
 
+	"github.com/mgilbir/forme/fonttest"
 	"github.com/mgilbir/forme/shape"
 )
 
@@ -26,14 +25,7 @@ import (
 // file loaded twice, so the faces differ and their coverage cannot: what is
 // being changed is the face and nothing else.
 func TestAFaceChangeStillGivesTheRunItsContext(t *testing.T) {
-	dir := os.Getenv(notoEnv)
-	if dir == "" {
-		t.Skip("set NOTO_FONTS (or run `make test-wpt`) for a face that joins")
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "NotoSansArabic-Regular.ttf"))
-	if err != nil {
-		t.Skip("no Arabic face: ", err)
-	}
+	data := fonttest.NotoFile(t, "NotoSansArabic-Regular.ttf")
 	res := &fileResolver{files: map[string][]byte{"a.ttf": data, "b.ttf": data}}
 	glyphs := func(markup string) []int {
 		t.Helper()
@@ -85,14 +77,7 @@ func TestAFaceChangeStillGivesTheRunItsContext(t *testing.T) {
 // function a backend calls: the same run, the same neighbour, and the only
 // difference is whether the pair across the boundary is this font's to apply.
 func TestThePainterHonoursWhichContextItHas(t *testing.T) {
-	dir := os.Getenv(notoEnv)
-	if dir == "" {
-		t.Skip("set NOTO_FONTS (or run `make test-wpt`) for a face with kern pairs")
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "NotoSans-Regular.ttf"))
-	if err != nil {
-		t.Skipf("no such font in this checkout: %v", err)
-	}
+	data := fonttest.NotoFile(t, "NotoSans-Regular.ttf")
 	face, err := shape.Load(data)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -135,14 +120,7 @@ func TestThePainterHonoursWhichContextItHas(t *testing.T) {
 // side of the boundary is a pair this font states — and still not one it may
 // apply, because the two glyphs are in two fonts.
 func TestAFaceChangeIsNotKernedAcross(t *testing.T) {
-	dir := os.Getenv(notoEnv)
-	if dir == "" {
-		t.Skip("set NOTO_FONTS (or run `make test-wpt`) for a face with kern pairs")
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "NotoSans-Regular.ttf"))
-	if err != nil {
-		t.Skipf("no such font in this checkout: %v", err)
-	}
+	data := fonttest.NotoFile(t, "NotoSans-Regular.ttf")
 	face, err := shape.Load(data)
 	if err != nil {
 		t.Fatalf("Load: %v", err)

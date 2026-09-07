@@ -1,9 +1,9 @@
 package shape
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
+
+	"github.com/mgilbir/forme/fonttest"
 )
 
 // Pair kerning across the boundary between two runs.
@@ -18,15 +18,7 @@ import (
 // kerningFace loads a face known to carry pair kerning.
 func kerningFace(t *testing.T, name string) *Face {
 	t.Helper()
-	dir := os.Getenv("NOTO_FONTS")
-	if dir == "" {
-		t.Skip("set NOTO_FONTS (or run `make test-wpt`) to read a face with kern pairs")
-	}
-	data, err := os.ReadFile(filepath.Join(dir, name))
-	if err != nil {
-		t.Skipf("no such font in this checkout: %v", err)
-	}
-	face, err := Load(data)
+	face, err := Load(fonttest.NotoFile(t, name))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}

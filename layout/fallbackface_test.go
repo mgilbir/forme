@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/mgilbir/forme/fonttest"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -22,14 +23,11 @@ import (
 // reported a missing glyph before and reports a font substitution now, and both
 // keep it out of the clean-pass bucket. The gain is that the text is on the page.
 
-// notoDir returns the fetched fallback fonts, or skips.
+// notoDir returns the fetched fallback fonts, skipping a checkout that has none
+// and failing a directory that was named and holds none. See fonttest/noto.go.
 func notoDir(t *testing.T) string {
 	t.Helper()
-	dir := os.Getenv("NOTO_FONTS")
-	if dir == "" {
-		t.Skip("set NOTO_FONTS (or run `make noto-fonts`) to check the fallback face")
-	}
-	return dir
+	return fonttest.NotoDir(t)
 }
 
 // oneFaceSet is a FontSet with a single fallback face, which is enough to pin

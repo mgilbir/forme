@@ -61,10 +61,7 @@ func glyphsOf(f *shape.Face, s string) []int {
 
 // TestAWordBrokenByOverflowWrapKeepsItsJoiningForms is the bug.
 func TestAWordBrokenByOverflowWrapKeepsItsJoiningForms(t *testing.T) {
-	faces := notoFaces()
-	if len(faces) == 0 {
-		t.Skip("set NOTO_FONTS (or run `make test-wpt`) to read a face that joins")
-	}
+	faces := fallbackLibrary(t)
 	const word = "عائلة"
 	face, ok := faceWithGlyphFor(faces, word)
 	if !ok || !face.HasJoiningForms() {
@@ -121,10 +118,7 @@ func TestAWordBrokenByOverflowWrapKeepsItsJoiningForms(t *testing.T) {
 // chose where to cut chose against the wrong number — so the line is filled to
 // a width the page does not have.
 func TestACutHalfIsAsWideAsItIsDrawn(t *testing.T) {
-	faces := notoFaces()
-	if len(faces) == 0 {
-		t.Skip("set NOTO_FONTS (or run `make test-wpt`) to read a face that joins")
-	}
+	faces := fallbackLibrary(t)
 	const word = "عائلة"
 	face, ok := faceWithGlyphFor(faces, word)
 	if !ok || !face.HasJoiningForms() {
@@ -165,10 +159,7 @@ func TestACutHalfIsAsWideAsItIsDrawn(t *testing.T) {
 // the greedy rule and not this font's numbers: the largest prefix that fits, and
 // nothing about which prefix that is.
 func TestTheCutIsChosenAgainstTheWidthTheHeadWillHave(t *testing.T) {
-	faces := notoFaces()
-	if len(faces) == 0 {
-		t.Skip("set NOTO_FONTS (or run `make test-wpt`) to read a face that joins")
-	}
+	faces := fallbackLibrary(t)
 	const word = "بببببب" // six behs, which join throughout
 	const size, box = 64.0, 65.0
 	face, ok := faceWithGlyphFor(faces, word)

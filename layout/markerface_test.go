@@ -28,9 +28,7 @@ import (
 // fallback possible at all.
 func markerRunOf(t *testing.T, css string) (TextRun, bool) {
 	t.Helper()
-	if len(fallbackFacesInUse()) == 0 {
-		t.Skip("no fallback faces; set NOTO_FONTS")
-	}
+	fallbackLibrary(t)
 	built := Build(Input{
 		HTML:  `<ul><li id="i">x</li></ul>`,
 		CSS:   []Stylesheet{{Source: noDefaults + css}},
@@ -101,9 +99,7 @@ func TestAMarkerIsSetInAFaceThatHasIt(t *testing.T) {
 // which is the face that could not draw it. The two markers below are the same
 // size in the same box and differ only in which face has them.
 func TestAMarkersLineIsAsTallAsTheFaceThatDrewIt(t *testing.T) {
-	if len(fallbackFacesInUse()) == 0 {
-		t.Skip("no fallback faces; set NOTO_FONTS")
-	}
+	fallbackLibrary(t)
 	height := func(style string) style.Unit {
 		t.Helper()
 		built := Build(Input{

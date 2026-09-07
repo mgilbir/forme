@@ -1,10 +1,9 @@
 package layout
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
+	"github.com/mgilbir/forme/fonttest"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -394,16 +393,16 @@ func TestUnderlineComesFromTheFaceThatStatesOne(t *testing.T) {
 }
 
 // faceFrom loads a face from the fetched corpora, or skips.
-func faceFrom(t *testing.T, env, rel string) FontSet {
+// faceFrom builds a font set around one file of a fetched corpus, so that a
+// test can measure what a face that states real metrics does.
+//
+// It takes the bytes rather than a directory: which corpus a face comes from
+// decides what an absent one means, and that decision belongs in the corpus
+// helper — fonttest.NotoFile or wptFile — rather than here. Both fail on a file
+// that is missing from a corpus that is present, so this never has to choose
+// between reporting nothing and reporting success.
+func faceFrom(t *testing.T, rel string, data []byte) FontSet {
 	t.Helper()
-	dir := os.Getenv(env)
-	if dir == "" {
-		t.Skipf("set %s for a face that states these metrics", env)
-	}
-	data, err := os.ReadFile(filepath.Join(dir, rel))
-	if err != nil {
-		t.Skipf("no %s: %v", rel, err)
-	}
 	face, err := shape.Load(data)
 	if err != nil {
 		t.Fatalf("loading %s: %v", rel, err)
@@ -438,7 +437,8 @@ func decoBand(t *testing.T, set FontSet, decoration string) (Rect, style.Unit) {
 // wrong for almost every real font, at exactly the right height, which reads as
 // a choice rather than a mistake.
 func TestLineThroughComesFromTheFaceThatStatesOne(t *testing.T) {
-	set := faceFrom(t, "NOTO_FONTS", "NotoSans-Regular.ttf")
+	const face = "NotoSans-Regular.ttf"
+	set := faceFrom(t, face, fonttest.NotoFile(t, face))
 	band, baseline := decoBand(t, set, "line-through")
 
 	// Noto Sans states a strikeout at 322 with a size of 50, out of 1000 units.
@@ -456,7 +456,8 @@ func TestLineThroughComesFromTheFaceThatStatesOne(t *testing.T) {
 // TestLineThroughFallsBackToTheXHeight is the other side, and it needs a face
 // that states an x-height and no strikeout. Two of the eighty-eight do.
 func TestLineThroughFallsBackToTheXHeight(t *testing.T) {
-	set := faceFrom(t, "WPT_TESTS", "fonts/baseline-diagnostic/BaselineDiagnostic.ttf")
+	const face = "fonts/baseline-diagnostic/BaselineDiagnostic.ttf"
+	set := faceFrom(t, face, wptFile(t, face))
 	band, baseline := decoBand(t, set, "line-through")
 
 	// The face states an x-height of 250/1000 and no strikeout, so the line goes
@@ -752,14 +753,7 @@ func TestOneLineOfOneWeightUnderTextOfThreeSizes(t *testing.T) {
 // rather than the size differs, since a face states its own underline position
 // and a fallback does not.
 func TestTheDeclaringBoxesFaceDecidesTheBand(t *testing.T) {
-	dir := os.Getenv("NOTO_FONTS")
-	if dir == "" {
-		t.Skip("set NOTO_FONTS (or run `make test-wpt`) for a face that states an underline")
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "NotoSans-Regular.ttf"))
-	if err != nil {
-		t.Skip("no Noto Sans: ", err)
-	}
+	data := fonttest.NotoFile(t, "NotoSans-Regular.ttf")
 	res := &fileResolver{files: map[string][]byte{"noto.ttf": data}}
 	// The paragraph is Courier, which states nothing and takes the 0.05em and
 	// 0.1em fallbacks; the span inside it is Noto Sans, which states both. A

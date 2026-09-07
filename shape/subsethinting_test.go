@@ -102,15 +102,7 @@ func glyfEntries(t *testing.T, data []byte) [][]byte {
 
 func notoFaces(t *testing.T) []string {
 	t.Helper()
-	dir := os.Getenv("NOTO_FONTS")
-	if dir == "" {
-		t.Skip("set NOTO_FONTS (or run `make test-wpt`) for real hinted faces")
-	}
-	names, err := filepath.Glob(filepath.Join(dir, "*.ttf"))
-	if err != nil || len(names) == 0 {
-		t.Skipf("no faces in %s", dir)
-	}
-	return names
+	return notoTTFs(t)
 }
 
 // TestASubsetCarriesNoInstructionsAtAll.

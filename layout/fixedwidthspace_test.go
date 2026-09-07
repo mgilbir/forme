@@ -50,11 +50,7 @@ func spaceWidth(t *testing.T, set FontSet, ch string) style.Unit {
 // the suite writes: an ideographic space beside the ideographs it has to line up
 // with.
 func TestAFixedWidthSpaceTakesItsOwnWidth(t *testing.T) {
-	faces := notoFaces()
-	if len(faces) == 0 {
-		t.Skip("set NOTO_FONTS (or run `make test-wpt`) to read a face that has them")
-	}
-	set := suiteFonts{standard: StandardFonts(), fallback: faces}
+	set := fallbackFontSet(t)
 
 	// One em at 16px. The standard serif face has no glyph for it and would
 	// give it a quarter em, which is the four pixels this is about.
@@ -98,11 +94,7 @@ func TestANoBreakSpaceIsStillLeftAlone(t *testing.T) {
 // whether it is trimmed and whether a line may break after it between two items
 // that cannot both own them.
 func TestASpacePieceTakesAFaceWithoutBeingSplit(t *testing.T) {
-	faces := notoFaces()
-	if len(faces) == 0 {
-		t.Skip("set NOTO_FONTS to read a face that has them")
-	}
-	set := suiteFonts{standard: StandardFonts(), fallback: faces}
+	set := fallbackFontSet(t)
 	// Three ideographic spaces preserved: three ems, in one run.
 	if got, want := spaceWidth(t, set, "\u3000\u3000\u3000"), bgpx(48); got != want {
 		t.Errorf("three ideographic spaces are %v wide, want %v", got, want)
@@ -120,10 +112,7 @@ func TestASpacePieceTakesAFaceWithoutBeingSplit(t *testing.T) {
 // words below it make the second; anything else puts a line of nothing but
 // spaces between them.
 func TestARunOfSpacesHangsOffOneLine(t *testing.T) {
-	faces := notoFaces()
-	if len(faces) == 0 {
-		t.Skip("set NOTO_FONTS (or run `make test-wpt`) to read a face with ideographs")
-	}
+	set := fallbackFontSet(t)
 	built := Build(Input{
 		HTML: `<div id="d">ああ<span>　　 　 　</span>ああ</div>`,
 		CSS:  []Stylesheet{{Source: `#d { font-size: 16px; width: 2.5em; white-space: normal }`}},
@@ -133,8 +122,7 @@ func TestARunOfSpacesHangsOffOneLine(t *testing.T) {
 	}
 	w, _ := style.FromPx(600)
 	h, _ := style.FromPx(10000)
-	frag := Layout(built.Root, Size{W: w, H: h},
-		suiteFonts{standard: StandardFonts(), fallback: faces}, NewRecorder(nil))
+	frag := Layout(built.Root, Size{W: w, H: h}, set, NewRecorder(nil))
 
 	var d *Fragment
 	var walk func(*Fragment)
