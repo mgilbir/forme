@@ -205,13 +205,50 @@ func readWOFF2Directory(r *woff2Reader, numTables int) ([]woff2Table, error) {
 		}
 		t.version = (flags >> 6) & 3
 
-		// Which version means "transformed" depends on the table, because glyf
-		// and loca have one transform and it is the default, while everything
-		// else has none and version 0 is what says so.
-		if t.tag == tagGlyf || t.tag == tagLoca {
-			t.transformed = t.version == 0
-		} else {
-			t.transformed = t.version != 0
+		// Which version means "transformed" depends on the table, and every
+		// other value is reserved.
+		//
+		// §4.1 defines exactly two transforms. glyf and loca share one: it is
+		// version 0 and it is their default, with version 3 saying "not
+		// transformed". hmtx has one at version 1, and version 0 says "not
+		// transformed" for it and for every other table. Nothing else is
+		// defined, and the specification says so in as many words — the
+		// remaining values "are reserved for future use and MUST NOT be used".
+		//
+		// They were read as one of the two anyway: a glyf at version 1 or 2 was
+		// taken for an untransformed table and its transformed bytes were
+		// copied into the font whole, and *any* table at a non-zero version was
+		// taken for a transformed one — so a cmap at version 2 was handed to
+		// the hmtx transform's reader, and a font whose future transform this
+		// engine does not implement was decoded as though it did.
+		//
+		// Refusing is the same answer this reader gives a trailing byte and a
+		// meta-block that overruns: a file the format does not describe is not
+		// a file to guess at.
+		switch {
+		case t.tag == tagGlyf || t.tag == tagLoca:
+			switch t.version {
+			case 0:
+				t.transformed = true
+			case 3:
+			default:
+				return nil, errors.New("fonts: the WOFF 2's glyf or loca table " +
+					"names a transform this format does not define")
+			}
+		case t.tag == tagHmtx:
+			switch t.version {
+			case 0:
+			case 1:
+				t.transformed = true
+			default:
+				return nil, errors.New("fonts: the WOFF 2's hmtx table names a " +
+					"transform this format does not define")
+			}
+		default:
+			if t.version != 0 {
+				return nil, errors.New("fonts: a WOFF 2 table names a transform " +
+					"this format defines for no table")
+			}
 		}
 
 		if t.origLength, ok = r.base128(); !ok {
