@@ -35,10 +35,10 @@ func TestBreakingNeverWritesBackToItsItems(t *testing.T) {
 			// Everything a caller does with a set of items, in the order the
 			// balancer does it: count, search for a cap, and break.
 			for _, width := range widths {
-				br.countLines(items, u(width), 0, 99)
-				br.BalanceWidth(items, u(width), 0)
-				br.BalanceWidthInBands(items, []style.Unit{u(60), u(200)}, u(width), 0)
-				br.BalanceScoredCaps(items, []style.Unit{u(60), u(200)}, 0, 3)
+				br.countLines(items, nil, u(width), 0, 99)
+				br.BalanceWidth(items, nil, u(width), 0)
+				br.BalanceWidthInBands(items, nil, []style.Unit{u(60), u(200)}, u(width), 0)
+				br.BalanceScoredCaps(items, nil, []style.Unit{u(60), u(200)}, 0, 3)
 				from, fromByte := 0, 0
 				for from < len(items) {
 					_, next, nextByte, _, _, _ := br.BreakOneLine(items, from, fromByte, u(width), 0)
@@ -138,7 +138,7 @@ func TestTheScoredCapsAreNoWorseThanBreakingGreedily(t *testing.T) {
 				continue
 			}
 			for _, lines := range []int{2, 3, 4} {
-				caps := br.BalanceScoredCaps(items, bs.bands, 0, lines)
+				caps := br.BalanceScoredCaps(items, nil, bs.bands, 0, lines)
 				if caps == nil {
 					continue // nothing to choose, or too much
 				}
@@ -183,9 +183,9 @@ func TestTheScoredCapsNeverChangeTheLineCount(t *testing.T) {
 			// greedy layout came to, never a number picked out of the air. No width
 			// reaches this search — it works inside the bands — so the count is
 			// taken there too, with nothing capping them.
-			want, _ := br.countLinesInBands(items, bs.bands, style.MaxUnit, 0, MaxBalanceLines+1)
+			want, _ := br.countLinesInBands(items, nil, bs.bands, style.MaxUnit, 0, MaxBalanceLines+1)
 			{
-				caps := br.BalanceScoredCaps(items, bs.bands, 0, want)
+				caps := br.BalanceScoredCaps(items, nil, bs.bands, 0, want)
 				if caps == nil {
 					continue
 				}
@@ -226,7 +226,7 @@ func TestBreakingWithCapsNeverOverflowsAvoidably(t *testing.T) {
 				continue
 			}
 			for _, want := range []int{2, 3, 4} {
-				caps := br.BalanceScoredCaps(items, bs.bands, 0, want)
+				caps := br.BalanceScoredCaps(items, nil, bs.bands, 0, want)
 				if caps == nil {
 					continue
 				}
@@ -361,7 +361,7 @@ func TestTheScoredSearchFindsTheBestArrangement(t *testing.T) {
 				continue
 			}
 			for _, lines := range []int{2, 3} {
-				caps := br.BalanceScoredCaps(items, bs.bands, 0, lines)
+				caps := br.BalanceScoredCaps(items, nil, bs.bands, 0, lines)
 				if caps == nil {
 					continue
 				}

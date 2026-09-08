@@ -234,13 +234,13 @@ func FuzzBalance(f *testing.F) {
 
 		// The width search: a cap that never widens the box, and never costs a
 		// line against the same bands it was searched in.
-		if cap := br.BalanceWidthInBands(items, bands, width, 0); cap != style.MaxUnit {
+		if cap := br.BalanceWidthInBands(items, nil, bands, width, 0); cap != style.MaxUnit {
 			if cap > width {
 				t.Fatalf("%q at %gpx, bands %v: balanced to %gpx, wider than the box",
 					text, width.Px(), bands, cap.Px())
 			}
-			full, _ := br.countLinesInBands(items, bands, width, 0, MaxBalanceLines+1)
-			capped, _ := br.countLinesInBands(items, bands, cap, 0, MaxBalanceLines+2)
+			full, _ := br.countLinesInBands(items, nil, bands, width, 0, MaxBalanceLines+1)
+			capped, _ := br.countLinesInBands(items, nil, bands, cap, 0, MaxBalanceLines+2)
 			if capped > full {
 				t.Fatalf("%q at %gpx, bands %v: the box takes %d lines and the balanced "+
 					"%gpx takes %d", text, width.Px(), bands, full, cap.Px(), capped)
@@ -251,8 +251,8 @@ func FuzzBalance(f *testing.F) {
 		// and the plain one are the same paragraph.
 		narrow := style.Min(bands[0], bands[1])
 		if narrow > 0 && narrow < width {
-			banded, _ := br.countLinesInBands(items, []style.Unit{narrow}, width, 0, 99)
-			plain, _ := br.countLines(items, narrow, 0, 99)
+			banded, _ := br.countLinesInBands(items, nil, []style.Unit{narrow}, width, 0, 99)
+			plain, _ := br.countLines(items, nil, narrow, 0, 99)
 			if banded != plain {
 				t.Fatalf("%q: %d lines in a uniform %gpx band probed at %gpx, and %d at a "+
 					"plain %gpx", text, banded, narrow.Px(), width.Px(), plain, narrow.Px())
@@ -269,8 +269,8 @@ func FuzzBalance(f *testing.F) {
 		// capping them. Deriving it at some probe width instead asks for an
 		// arrangement into a number of lines the bands cannot make, which is not a
 		// case layout produces and not one the answer is defined for.
-		lines, _ := br.countLinesInBands(items, bands, style.MaxUnit, 0, MaxBalanceLines+1)
-		if caps := br.BalanceScoredCaps(items, bands, 0, lines); caps != nil {
+		lines, _ := br.countLinesInBands(items, nil, bands, style.MaxUnit, 0, MaxBalanceLines+1)
+		if caps := br.BalanceScoredCaps(items, nil, bands, 0, lines); caps != nil {
 			if len(caps) != lines {
 				t.Fatalf("%q: asked for %d lines and got %d caps", text, lines, len(caps))
 			}
@@ -285,13 +285,13 @@ func FuzzBalance(f *testing.F) {
 		// the text than the box did.
 		ellipsis := u(12)
 		clampLines := int(rawLines%6) + 1
-		clamped := br.BalanceClampedWidth(items, width, 0, ellipsis, clampLines)
+		clamped := br.BalanceClampedWidth(items, nil, width, 0, ellipsis, clampLines)
 		if clamped > width {
 			t.Fatalf("%q at %gpx: the clamped balance is %gpx, wider than the box",
 				text, width.Px(), clamped.Px())
 		}
-		wantI, wantByte := br.clampedReach(items, width, 0, ellipsis, clampLines)
-		gotI, gotByte := br.clampedReach(items, clamped, 0, ellipsis, clampLines)
+		wantI, wantByte := br.clampedReach(items, nil, width, 0, ellipsis, clampLines)
+		gotI, gotByte := br.clampedReach(items, nil, clamped, 0, ellipsis, clampLines)
 		if gotI < wantI || (gotI == wantI && gotByte < wantByte) {
 			t.Fatalf("%q at %gpx, %d lines: the box reached item %d byte %d and the "+
 				"balanced %gpx reaches only %d/%d",

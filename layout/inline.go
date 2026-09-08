@@ -369,7 +369,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		firstIndent = indent
 	}
 	firstIndent = firstIndent.Sub(hangStart)
-	balanceCaps := l.balanceCaps(b, items, width, firstIndent)
+	balanceCaps := l.balanceCaps(b, items, firstItems, width, firstIndent)
 	if balanceCaps != nil && clamped && maxLines > 0 {
 		// Balancing a clamped block is a different question, because the clamp
 		// has already decided how many lines there are: any width at all
@@ -377,7 +377,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		// asks nothing. What must not change is how much of the content is
 		// *shown* — §5.1 evens out the lines, it does not throw more away — so
 		// the search is over the reach instead. See balanceClampedWidth.
-		w := l.br.BalanceClampedWidth(items, width, firstIndent, clampEllipsis, maxLines)
+		w := l.br.BalanceClampedWidth(items, firstItems, width, firstIndent, clampEllipsis, maxLines)
 		for i := range balanceCaps {
 			balanceCaps[i] = w
 		}
@@ -1103,9 +1103,9 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		// long to search, or one whose lines cannot be made to come out at the
 		// count the first pass found — the width search stands, and its answer
 		// is at least measured in the right bands.
-		lineCaps = l.br.BalanceScoredCaps(items, bands, firstIndent, len(bands))
+		lineCaps = l.br.BalanceScoredCaps(items, firstItems, bands, firstIndent, len(bands))
 		if lineCaps == nil {
-			w := l.br.BalanceWidthInBands(items, bands, width, firstIndent)
+			w := l.br.BalanceWidthInBands(items, firstItems, bands, width, firstIndent)
 			for i := range balanceCaps {
 				balanceCaps[i] = w
 			}

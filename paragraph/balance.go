@@ -58,8 +58,8 @@ var MaxBalanceLines = 6
 //
 // Returns MaxUnit — no cap at all — when the box does not balance, when it is
 // one line already, or when it is longer than this engine will balance.
-func (br *Breaker) BalanceWidth(items []Item, width, indent style.Unit) style.Unit {
-	full, splitFull := br.countLines(items, width, indent, MaxBalanceLines+1)
+func (br *Breaker) BalanceWidth(items, first []Item, width, indent style.Unit) style.Unit {
+	full, splitFull := br.countLines(items, first, width, indent, MaxBalanceLines+1)
 	if full < 2 || full > MaxBalanceLines {
 		return style.MaxUnit
 	}
@@ -69,7 +69,7 @@ func (br *Breaker) BalanceWidth(items []Item, width, indent style.Unit) style.Un
 	lo, hi := style.Unit(1), width
 	for hi.Sub(lo) > 1 {
 		mid := lo.Add(hi.Sub(lo).Div(2))
-		n, split := br.countLines(items, mid, indent, full+1)
+		n, split := br.countLines(items, first, mid, indent, full+1)
 		if n <= full && (splitFull || !split) {
 			hi = mid
 			continue
@@ -97,6 +97,27 @@ func (br *Breaker) BalanceWidth(items []Item, width, indent style.Unit) style.Un
 // gives its opportunities to the intrinsic sizes as well, so they are real ones
 // and a balancer may use them like any other.
 
+// firstLineItems is the list a balancing probe breaks its *first* line from.
+//
+// §5.12.1's pseudo-element changes the type the first line is set in, and a
+// width search that measured that line in the block's own type is answering
+// about a line the layout will not produce: the search settles on a width that
+// makes two lines of items it measured, the real loop breaks the first of them
+// from the restyled list, and the line count it was searching for is not the one
+// it gets. The suite writes it as text-wrap-balance-word-spacing-001, whose
+// first line takes a word-spacing of 30px that none of the others do.
+//
+// The two lists are parallel — same length, same order, same item at every index
+// — which is what makes an index from one usable in the other and is the same
+// invariant layout's own loop relies on. A nil second list is a block with no
+// ::first-line, which is nearly every block, and costs a comparison.
+func firstLineItems(items, first []Item) []Item {
+	if first == nil {
+		return items
+	}
+	return first
+}
+
 // capAt is the balanced width for a line beginning at an item.
 func capAt(caps []style.Unit, i int) style.Unit {
 	if i < 0 || i >= len(caps) {
@@ -121,14 +142,14 @@ func capAt(caps []style.Unit, i int) style.Unit {
 // So the search is over how far into the content the clamped layout reaches,
 // and the answer is the narrowest width that reaches as far as the full width
 // did. Reaching *further* is fine and is what the third line above does.
-func (br *Breaker) BalanceClampedWidth(items []Item,
+func (br *Breaker) BalanceClampedWidth(items, first []Item,
 	width, indent, ellipsis style.Unit, maxLines int) style.Unit {
 
-	wantI, wantByte := br.clampedReach(items, width, indent, ellipsis, maxLines)
+	wantI, wantByte := br.clampedReach(items, first, width, indent, ellipsis, maxLines)
 	lo, hi := style.Unit(1), width
 	for hi.Sub(lo) > 1 {
 		mid := lo.Add(hi.Sub(lo).Div(2))
-		i, iByte := br.clampedReach(items, mid, indent, ellipsis, maxLines)
+		i, iByte := br.clampedReach(items, first, mid, indent, ellipsis, maxLines)
 		if i > wantI || (i == wantI && iByte >= wantByte) {
 			hi = mid
 			continue
@@ -148,7 +169,7 @@ func (br *Breaker) BalanceClampedWidth(items []Item,
 // asks for, since what does not fit beside the mark is what the mark stands for.
 // "unbreakable" against nine characters less an ellipsis shows nothing at all,
 // which is what the suite's line-clamp-003 draws.
-func (br *Breaker) clampedReach(items []Item,
+func (br *Breaker) clampedReach(items, first []Item,
 	width, indent, ellipsis style.Unit, maxLines int) (int, int) {
 
 	i, iByte := 0, 0
@@ -160,15 +181,17 @@ func (br *Breaker) clampedReach(items []Item,
 			break
 		}
 		room := width
+		use := items
 		if n == 0 {
 			room = room.Sub(indent)
+			use = firstLineItems(items, first)
 		}
 		last := n == maxLines-1
 		if last {
 			room = room.Sub(ellipsis)
 		}
 		wasI, wasByte := i, iByte
-		runs, next, nextByte, _, _, _ := br.BreakOneLine(items, i, iByte, room, 0)
+		runs, next, nextByte, _, _, _ := br.BreakOneLine(use, i, iByte, room, 0)
 		if last {
 			var used style.Unit
 			for _, r := range runs {
@@ -198,17 +221,17 @@ func (br *Breaker) clampedReach(items []Item,
 // layout's bands and the balanced one may differ slightly, since a line that
 // changes height meets a different set of floats; the difference is a line's
 // worth of a float's edge, and browsers make the same approximation.
-func (br *Breaker) BalanceWidthInBands(items []Item, bands []style.Unit,
+func (br *Breaker) BalanceWidthInBands(items, first []Item, bands []style.Unit,
 	width, indent style.Unit) style.Unit {
 
-	full, splitFull := br.countLinesInBands(items, bands, width, indent, MaxBalanceLines+1)
+	full, splitFull := br.countLinesInBands(items, first, bands, width, indent, MaxBalanceLines+1)
 	if full < 2 || full > MaxBalanceLines {
 		return style.MaxUnit
 	}
 	lo, hi := style.Unit(1), width
 	for hi.Sub(lo) > 1 {
 		mid := lo.Add(hi.Sub(lo).Div(2))
-		n, split := br.countLinesInBands(items, bands, mid, indent, full+1)
+		n, split := br.countLinesInBands(items, first, bands, mid, indent, full+1)
 		if n <= full && (splitFull || !split) {
 			hi = mid
 			continue
@@ -224,7 +247,7 @@ func (br *Breaker) BalanceWidthInBands(items []Item, bands []style.Unit,
 // A line's room is the narrower of the band it is in and the width being
 // probed — the cap chooses break points inside the room the floats leave, it
 // does not widen a line past them.
-func (br *Breaker) countLinesInBands(items []Item, bands []style.Unit,
+func (br *Breaker) countLinesInBands(items, first []Item, bands []style.Unit,
 	cap, indent style.Unit, limit int) (int, bool) {
 
 	n := 0
@@ -238,11 +261,13 @@ func (br *Breaker) countLinesInBands(items []Item, bands []style.Unit,
 			break
 		}
 		room := style.Min(bandAt(bands, n), cap)
+		use := items
 		if n == 0 {
 			room = room.Sub(indent)
+			use = firstLineItems(items, first)
 		}
 		wasI, wasByte := i, iByte
-		runs, next, nextByte, _, forced, hyphenated := br.BreakOneLine(items, i, iByte, room, 0)
+		runs, next, nextByte, _, forced, hyphenated := br.BreakOneLine(use, i, iByte, room, 0)
 		if len(runs) > 0 || forced {
 			n++
 		}
@@ -376,7 +401,7 @@ func scoredPositions(items []Item) int {
 //
 // Returns the width to break each line at, or nil where there is nothing to
 // choose or too much to choose between.
-func (br *Breaker) BalanceScoredCaps(items []Item, bands []style.Unit,
+func (br *Breaker) BalanceScoredCaps(items, first []Item, bands []style.Unit,
 	indent style.Unit, lines int) []style.Unit {
 
 	if lines < 2 || lines > MaxBalanceLines || len(items) > maxScoredItems ||
@@ -450,13 +475,17 @@ func (br *Breaker) BalanceScoredCaps(items []Item, bands []style.Unit,
 
 		out := answer{}
 		r := room(st.n)
+		use := items
+		if st.n == 0 {
+			use = firstLineItems(items, first)
+		}
 		// The same rule the width search has — see the note on BalanceWidth —
 		// asked once for this line: whether the greedy break here had to open a
 		// word, which is the only reason a narrower one may.
-		_, _, greedyByte, _, _, greedyHyphen := br.BreakOneLine(items, st.i, st.iByte, r, 0)
+		_, _, greedyByte, _, _, greedyHyphen := br.BreakOneLine(use, st.i, st.iByte, r, 0)
 		mustSplit := greedyByte != 0 && !greedyHyphen
 		for w := r; w >= 0; {
-			runs, next, nextByte, _, _, hyphenated := br.BreakOneLine(items, st.i, st.iByte, w, 0)
+			runs, next, nextByte, _, _, hyphenated := br.BreakOneLine(use, st.i, st.iByte, w, 0)
 			if !CursorAdvanced(st.i, st.iByte, next, nextByte) {
 				break
 			}
@@ -493,12 +522,14 @@ func (br *Breaker) BalanceScoredCaps(items []Item, bands []style.Unit,
 		return out
 	}
 
-	first := best(state{0, 0, 0})
-	if !first.ok {
+	// Named for the line it answers about rather than "first", which is now the
+	// item list §5.12.1 sets that line in.
+	top := best(state{0, 0, 0})
+	if !top.ok {
 		return nil
 	}
 	caps := make([]style.Unit, 0, lines)
-	for st, cur := (state{0, 0, 0}), first; cur.ok && len(caps) < lines; {
+	for st, cur := (state{0, 0, 0}), top; cur.ok && len(caps) < lines; {
 		caps = append(caps, cur.at)
 		st = cur.next
 		if st.i >= len(items) {
@@ -523,7 +554,7 @@ func (br *Breaker) BalanceScoredCaps(items []Item, bands []style.Unit,
 // content has, and what that room is on each line is decided by the real loop
 // against the real bands; a count that placed floats would have to place them
 // once per probe and roll them back once per probe.
-func (br *Breaker) countLines(items []Item, width, indent style.Unit, limit int) (int, bool) {
+func (br *Breaker) countLines(items, first []Item, width, indent style.Unit, limit int) (int, bool) {
 	n := 0
 	iByte := 0
 	split := false
@@ -535,11 +566,13 @@ func (br *Breaker) countLines(items []Item, width, indent style.Unit, limit int)
 			break
 		}
 		room := width
+		use := items
 		if n == 0 {
 			room = width.Sub(indent)
+			use = firstLineItems(items, first)
 		}
 		wasI, wasByte := i, iByte
-		runs, next, nextByte, _, forced, hyphenated := br.BreakOneLine(items, i, iByte, room, 0)
+		runs, next, nextByte, _, forced, hyphenated := br.BreakOneLine(use, i, iByte, room, 0)
 		if len(runs) > 0 || forced {
 			n++
 		}

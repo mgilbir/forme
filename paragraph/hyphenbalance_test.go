@@ -85,13 +85,13 @@ func TestAWidthThatHyphenatesIsNotAWidthThatCutAWord(t *testing.T) {
 	// already hyphenated would let every width through, and the refusal being
 	// tested for would never be reached.
 	const full = size20 * 8
-	if _, split := br.countLines(items, u(full), 0, 99); split {
+	if _, split := br.countLines(items, nil, u(full), 0, 99); split {
 		t.Fatalf("the paragraph already breaks a word at %v, so the balancing "+
 			"below is not refusing anything", u(full))
 	}
 
 	const withoutHyphenating = size20 * 6.6 // 132px, two whole words and one
-	got := br.BalanceWidth(items, u(full), 0)
+	got := br.BalanceWidth(items, nil, u(full), 0)
 	if got >= u(withoutHyphenating) {
 		t.Errorf("balancing a paragraph whose breaks hyphenate returned %v; "+
 			"%v is what a search that refuses to hyphenate reaches, and 108px is "+
@@ -109,7 +109,7 @@ func TestAWidthThatCutAWordIsStillRefused(t *testing.T) {
 		WhiteSpaceOf("collapse"), OverflowWrap{Anywhere: false, BreakWord: true})
 
 	const full = size20 * 30
-	got := br.BalanceWidth(items, u(full), 0)
+	got := br.BalanceWidth(items, nil, u(full), 0)
 	// The long word is 34 characters. A balanced width that cut it would be
 	// narrower than the word, and there is no such width this may return.
 	if got < u(size20*34) && got != style.MaxUnit {

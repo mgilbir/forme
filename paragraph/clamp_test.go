@@ -43,14 +43,14 @@ func TestTheClampedSearchNeverShowsLessThanTheBoxDid(t *testing.T) {
 		for _, width := range []float64{100, 200, 400} {
 			for _, maxLines := range []int{1, 2, 3} {
 				for _, ellipsis := range []float64{0, 12, 36} {
-					got := br.BalanceClampedWidth(items, u(width), 0, u(ellipsis), maxLines)
+					got := br.BalanceClampedWidth(items, nil, u(width), 0, u(ellipsis), maxLines)
 					if got > u(width) {
 						t.Errorf("%q at %gpx, %d lines, %gpx of ellipsis: balanced to "+
 							"%gpx, which is wider than the box",
 							text, width, maxLines, ellipsis, got.Px())
 					}
-					wantI, wantByte := br.clampedReach(items, u(width), 0, u(ellipsis), maxLines)
-					gotI, gotByte := br.clampedReach(items, got, 0, u(ellipsis), maxLines)
+					wantI, wantByte := br.clampedReach(items, nil, u(width), 0, u(ellipsis), maxLines)
+					gotI, gotByte := br.clampedReach(items, nil, got, 0, u(ellipsis), maxLines)
 					if gotI < wantI || (gotI == wantI && gotByte < wantByte) {
 						t.Errorf("%q at %gpx, %d lines, %gpx of ellipsis: the box reached "+
 							"item %d byte %d and the balanced %gpx reaches only item %d "+
@@ -76,12 +76,12 @@ func TestTheClampedSearchIsTheNarrowestThatStillReaches(t *testing.T) {
 		items := itemsOf(t, br, face, text, WhiteSpaceOf("collapse"), OverflowWrap{})
 		for _, width := range []float64{200, 400} {
 			for _, maxLines := range []int{2, 3} {
-				got := br.BalanceClampedWidth(items, u(width), 0, u(12), maxLines)
+				got := br.BalanceClampedWidth(items, nil, u(width), 0, u(12), maxLines)
 				if got <= 2 {
 					continue
 				}
-				wantI, wantByte := br.clampedReach(items, u(width), 0, u(12), maxLines)
-				narrowI, narrowByte := br.clampedReach(items, got.Sub(1), 0, u(12), maxLines)
+				wantI, wantByte := br.clampedReach(items, nil, u(width), 0, u(12), maxLines)
+				narrowI, narrowByte := br.clampedReach(items, nil, got.Sub(1), 0, u(12), maxLines)
 				if narrowI > wantI || (narrowI == wantI && narrowByte >= wantByte) {
 					t.Errorf("%q at %gpx, %d lines: balanced to %gpx, and one unit "+
 						"narrower still reaches item %d byte %d against the box's %d/%d "+
@@ -114,7 +114,7 @@ func TestAWiderEllipsisNeverReachesFurther(t *testing.T) {
 			for _, maxLines := range []int{1, 2, 3} {
 				prevI, prevByte, first := 0, 0, true
 				for _, ellipsis := range []float64{0, 6, 12, 24, 48} {
-					i, iByte := br.clampedReach(items, u(width), 0, u(ellipsis), maxLines)
+					i, iByte := br.clampedReach(items, nil, u(width), 0, u(ellipsis), maxLines)
 					if !first {
 						if i > prevI || (i == prevI && iByte > prevByte) {
 							t.Errorf("%q at %gpx, %d lines: a %gpx ellipsis reaches item %d "+
@@ -153,7 +153,7 @@ func TestAClampedBlockNeverReachesPastItsContent(t *testing.T) {
 		items := itemsOf(t, br, face, text, WhiteSpaceOf("collapse"), OverflowWrap{})
 		for _, width := range []float64{1, 30, 100, 400} {
 			for _, maxLines := range []int{1, 2, 5} {
-				i, iByte := br.clampedReach(items, u(width), 0, u(12), maxLines)
+				i, iByte := br.clampedReach(items, nil, u(width), 0, u(12), maxLines)
 				if i < 0 || i > len(items) {
 					t.Fatalf("%q at %gpx, %d lines: the reach is item %d of %d",
 						text, width, maxLines, i, len(items))
@@ -185,7 +185,7 @@ func TestMoreClampedLinesNeverShowLess(t *testing.T) {
 		for _, width := range []float64{60, 100, 200, 400} {
 			var prevI, prevByte int
 			for maxLines := 1; maxLines <= 6; maxLines++ {
-				i, iByte := br.clampedReach(items, u(width), 0, u(12), maxLines)
+				i, iByte := br.clampedReach(items, nil, u(width), 0, u(12), maxLines)
 				if maxLines > 1 && (i < prevI || (i == prevI && iByte < prevByte)) {
 					t.Errorf("%q at %gpx: %d lines reach item %d byte %d and %d lines "+
 						"reached %d/%d — showing another line cannot show less",

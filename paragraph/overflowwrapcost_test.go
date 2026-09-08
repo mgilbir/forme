@@ -146,7 +146,7 @@ func TestBalancingALongBreakableWordIsBounded(t *testing.T) {
 	bands := []style.Unit{unit(t, 200), unit(t, 200), unit(t, 150)}
 
 	start := time.Now()
-	br.BalanceScoredCaps(items, bands, 0, 3)
+	br.BalanceScoredCaps(items, nil, bands, 0, 3)
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Errorf("balancing one six-thousand-character word took %v; the search is "+
 			"bounded by the places it can start a line at, and there are six "+

@@ -49,7 +49,7 @@ func balanceWordItems(t *testing.T, br *Breaker, ow OverflowWrap) ([]Item, style
 func TestBalancingDoesNotBreakAWordOpen(t *testing.T) {
 	br := NewBreaker(nil)
 	items, width := balanceWordItems(t, br, OverflowWrap{BreakWord: true})
-	cap := br.BalanceWidth(items, width, 0)
+	cap := br.BalanceWidth(items, nil, width, 0)
 	got := linesAt(t, br, items, style.Min(cap, width))
 	want := []string{"CONTROLLING", "YOUR BU"}
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
@@ -63,7 +63,7 @@ func TestBalancingDoesNotBreakAWordOpen(t *testing.T) {
 func TestBalancingStillNarrowsAsFarAsTheWordsAllow(t *testing.T) {
 	br := NewBreaker(nil)
 	items, width := balanceWordItems(t, br, OverflowWrap{BreakWord: true})
-	cap := br.BalanceWidth(items, width, 0)
+	cap := br.BalanceWidth(items, nil, width, 0)
 	if cap >= width {
 		t.Errorf("the balanced cap is %v against a width of %v; nothing was "+
 			"balanced at all", cap, width)
@@ -85,9 +85,9 @@ func TestAWordWiderThanTheRoomIsStillBroken(t *testing.T) {
 		WhiteSpaceOf("collapse"), OverflowWrap{BreakWord: true})
 	// Ten characters, against a twelve-character word.
 	const width = 10 * 12
-	full, _ := br.countLines(items, u(width), 0, 99)
-	cap := br.BalanceWidth(items, u(width), 0)
-	n, _ := br.countLines(items, style.Min(cap, u(width)), 0, 99)
+	full, _ := br.countLines(items, nil, u(width), 0, 99)
+	cap := br.BalanceWidth(items, nil, u(width), 0)
+	n, _ := br.countLines(items, nil, style.Min(cap, u(width)), 0, 99)
 	if n != full {
 		t.Errorf("balancing turned %d lines into %d; the count is the one thing "+
 			"it may not change", full, n)
@@ -111,7 +111,7 @@ func TestOverflowWrapAnywhereMayStillBeBalancedInto(t *testing.T) {
 	// one that says the opportunities are real.
 	items, width := balanceWordItems(t, br,
 		OverflowWrap{BreakWord: true, Anywhere: true})
-	cap := br.BalanceWidth(items, width, 0)
+	cap := br.BalanceWidth(items, nil, width, 0)
 	if cap >= u(11*12) {
 		t.Errorf("with overflow-wrap: anywhere the balanced cap is %v; the "+
 			"value's opportunities are real ones and the search may use them",
@@ -126,7 +126,7 @@ func TestOverflowWrapAnywhereMayStillBeBalancedInto(t *testing.T) {
 func TestTheScoredSearchDoesNotBreakAWordOpenEither(t *testing.T) {
 	br := NewBreaker(nil)
 	items, width := balanceWordItems(t, br, OverflowWrap{BreakWord: true})
-	caps := br.BalanceScoredCaps(items, []style.Unit{width, width}, 0, 2)
+	caps := br.BalanceScoredCaps(items, nil, []style.Unit{width, width}, 0, 2)
 	if len(caps) != 2 {
 		t.Fatalf("the scored search returned %d caps, want 2", len(caps))
 	}

@@ -328,11 +328,15 @@ func (l *layouter) lineClamp(b *Box) int {
 //
 // The text indent belongs to the first group alone, for the same reason it
 // belongs to the first line: §16.1 gives it to the first formatted line of the
-// element, and the line after a <br> is not one.
+// element, and the line after a <br> is not one. §5.12.1's first line belongs to
+// it for the third time, and the search has to be told: a width chosen by
+// measuring that line in the block's own type is a width the layout will not
+// reproduce, because the layout breaks that line from the restyled list.
 //
 // A nil result means no cap anywhere, which is what a box that does not balance
 // gets and is what capAt reads as MaxUnit.
-func (l *layouter) balanceCaps(b *Box, items []inlineItem, width, indent style.Unit) []style.Unit {
+func (l *layouter) balanceCaps(b *Box, items, first []inlineItem,
+	width, indent style.Unit) []style.Unit {
 	if !strings.EqualFold(strings.TrimSpace(b.Style["text-wrap-style"]), "balance") {
 		return nil
 	}
@@ -346,10 +350,14 @@ func (l *layouter) balanceCaps(b *Box, items []inlineItem, width, indent style.U
 			continue
 		}
 		ind := style.Unit(0)
+		var firstOfGroup []inlineItem
 		if start == 0 {
 			ind = indent
+			if first != nil {
+				firstOfGroup = first[start:i]
+			}
 		}
-		w := l.br.BalanceWidth(items[start:i], width, ind)
+		w := l.br.BalanceWidth(items[start:i], firstOfGroup, width, ind)
 		for j := start; j < i; j++ {
 			caps[j] = w
 		}
