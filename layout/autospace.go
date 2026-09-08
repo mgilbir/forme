@@ -191,6 +191,19 @@ func (l *layouter) autospaceBetween(a, b inlineItem, last, first rune) (style.Un
 	if !paragraph.IsAutospaceIdeograph(last) && !paragraph.IsAutospaceIdeograph(first) {
 		return 0, false
 	}
+	// A run set upright takes none, on either side of the boundary. §8.1's gap
+	// is between an ideograph and a *non-ideographic* letter or number, and a
+	// character typeset upright in vertical text is set the way an ideograph is:
+	// standing as it does in the code charts, one em to the next. There is no
+	// boundary of the kind the property spaces, so there is nothing to space.
+	//
+	// The suite writes it as text-autospace-vertical-upright-001, whose
+	// reference is the same four lines with "text-autospace: no-autospace" on
+	// them — both where the whole line is upright and where only a span in the
+	// middle of it is.
+	if a.Upright || b.Upright {
+		return 0, false
+	}
 	box := commonAncestor(heldBox(a.Box), heldBox(b.Box))
 	if box == nil {
 		return 0, false
