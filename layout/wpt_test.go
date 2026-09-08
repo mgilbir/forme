@@ -1080,7 +1080,14 @@ const wptEnv = "WPT_TESTS"
 // replaced element's intrinsic contribution to resolve a percentage height
 // against a definite containing block. replacedIntrinsicWidth reads only an
 // absolute one, and says so.
-const wptCleanPassBaseline = 5956
+//
+// 5956 to 5957 is that second document, and that rule. A percentage *width* is
+// given up while an intrinsic width is being measured, because the width being
+// measured is the one it would be a percentage of; a percentage *height* is a
+// percentage of an ancestor's, which settledAncestorHeight settles from the
+// stylesheet whenever the stylesheet decides it — through §9.2.1.1's anonymous
+// block, through a chain of percentages, and through §10.7's two limits.
+const wptCleanPassBaseline = 5957
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
