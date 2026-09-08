@@ -170,6 +170,15 @@ param { display: none }
    "area { display: block }" and asks for the generated content on the box that
    makes. */
 area { display: none }
+
+/* <slot> renders what it holds where no shadow tree fills it, and none ever
+   does here. "display: contents" is HTML's own rule for it and is what makes
+   the fallback content reach the page without the slot's own box. */
+slot { display: contents }
+
+/* <marquee> stands still on paper, which is what a browser asked to print one
+   draws. HTML's rendering section gives it an inline-block. */
+marquee { display: inline-block }
 input[type="hidden" i] { display: none }
 
 /* A <textarea> is preserved white space that wraps, which is the one rule in

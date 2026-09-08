@@ -91,6 +91,34 @@ var knownElements = map[string]bool{
 	// contentSkippedElements.
 	"iframe": true,
 
+	// Three more the same argument reaches, each refused for what it *does* and
+	// each an ordinary box while it does it.
+	//
+	// <output> is an inline element and nothing else. "An output is computed by
+	// script" describes what fills one, not what one is: a document that writes
+	// "<output>42</output>" has written the 42, and dropping the element threw
+	// the reader's own text away.
+	//
+	// <slot> renders its children where there is no shadow tree to fill it, and
+	// there never is one here. HTML gives it "display: contents", which is a
+	// value this engine honours, so the fallback content it holds reaches the
+	// page as the specification asks.
+	//
+	// <marquee> animates, and a page laid out once shows it standing still —
+	// which is what a browser asked to print one does. What it must not do is
+	// lose the words.
+	//
+	// What stays refused, and why it is not this: <details> and <summary> need a
+	// disclosure triangle and a rule that hides a closed element's content;
+	// <dialog> needs the same for a closed one; <video>, <audio>, <progress> and
+	// <meter> each need a widget drawn from a state. Every one of those is a
+	// thing to build rather than a refusal to lift.
+	//
+	// Membership here is documentation for these three, as it is for <map>
+	// below: the parser has no rule about how any of them nests. What changed is
+	// that none is in droppedElements.
+	"output": true, "slot": true, "marquee": true,
+
 	// <map> and <area>, which are markup about *where a reader may click* and
 	// nothing else — and this engine's pages are not clicked. The image map is
 	// refused and always will be, on the same footing as an iframe's browsing
@@ -236,11 +264,8 @@ var droppedElements = map[string]string{
 	"summary":  "a disclosure widget needs somewhere to click",
 	"dialog":   "a dialog is opened by script, which is never run",
 	"template": "a template's content is instantiated by script",
-	"slot":     "a shadow tree needs scripting",
-	"marquee":  "a page laid out once cannot animate",
 	"progress": "a progress bar reflects a state that does not change here",
 	"meter":    "a meter reflects a state that does not change here",
-	"output":   "an output is computed by script",
 }
 
 // closedByStartTag says which open element an incoming start tag ends.
