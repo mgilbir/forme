@@ -840,9 +840,14 @@ func IsOtherSpaceSeparator(r rune) bool {
 // are class BA, except U+3000, which is class ID and breaks on both sides like
 // the ideographs it is spaced among.
 //
-// break-spaces overrides all of it: that value puts an opportunity "after every
-// preserved white space character and after every other space separator", with
-// no exception for the no-break ones, and it is the caller that applies it.
+// break-spaces does *not* override it, and was read as doing so. The value puts
+// an opportunity "after every preserved white space character", and CSS Text
+// means its own term: white space is U+0020, the tab and the segment breaks.
+// These are the characters §4.1.2 has to list separately — "white space, other
+// space separators, and/or preserved tabs" — because they are not white space,
+// and it is that list, from the *hanging* rule, that the earlier reading here
+// borrowed. Hanging and breaking are different questions, which is the first
+// thing this comment says.
 func SeparatorBreaksAfter(r rune) bool {
 	return r != 0x2007 && r != 0x202F
 }

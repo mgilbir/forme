@@ -1087,7 +1087,16 @@ const wptEnv = "WPT_TESTS"
 // percentage of an ancestor's, which settledAncestorHeight settles from the
 // stylesheet whenever the stylesheet decides it — through §9.2.1.1's anonymous
 // block, through a chain of percentages, and through §10.7's two limits.
-const wptCleanPassBaseline = 5957
+//
+// 5957 to 5959 is break-spaces letting go of the two space separators it never
+// had a claim on. The value puts a soft wrap opportunity "after every preserved
+// white space character", and CSS Text means its own term: white space is
+// U+0020, the tab and the segment breaks. U+2007 and U+202F are the two "other
+// space separators" UAX #14 gives class GL, and glue does not break on either
+// side whatever the property says — trailing-other-space-separators-break-
+// spaces-009 and -013, the only two of that family of fifteen where the reading
+// changes anything.
+const wptCleanPassBaseline = 5959
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
