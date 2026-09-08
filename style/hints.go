@@ -110,6 +110,25 @@ var hintedAttributes = map[string]map[string]string{
 	// of seven steps — size. They are the reason the element is worth laying out
 	// at all, since without them a <font> is a <span>.
 	"font": {"color": "color", "face": "font-family", "size": "font-size"},
+	// valign, which HTML's table rendering section maps to vertical-align on
+	// every part of a table that can carry it. A cell's own is read by
+	// cellHints, which is where td and th go; these are the rest.
+	//
+	// It reaches the cells through the user-agent stylesheet already there:
+	// "tr, td, th { vertical-align: inherit }" is the rule that carries a row's
+	// alignment down, because the property does not inherit on its own. So
+	// "<tr valign=top>" sets the row and the cells take it, which is the
+	// behaviour the attribute has always had.
+	//
+	// A hint rather than a rule, and the difference is a place in the cascade:
+	// "td { vertical-align: middle }" in a stylesheet has to beat the markup,
+	// and the user-agent's own "vertical-align: inherit" must not.
+	"tr":       {"valign": "vertical-align"},
+	"tbody":    {"valign": "vertical-align"},
+	"thead":    {"valign": "vertical-align"},
+	"tfoot":    {"valign": "vertical-align"},
+	"col":      {"valign": "vertical-align"},
+	"colgroup": {"valign": "vertical-align"},
 	// <br clear>, which is older than the property it sets and is the only
 	// place the property applies to something that is not a block-level box.
 	// HTML's rendering section maps it by name — "left", "right", "all" or
@@ -126,6 +145,10 @@ var hintedAttributes = map[string]map[string]string{
 // clearHintAttributes are the entries whose value is one of a handful of
 // keywords rather than a length, a colour or a number.
 var clearHintAttributes = map[string]bool{"clear": true}
+
+// valignHintAttributes are the entries whose value is HTML's table alignment
+// keyword, which is not quite the CSS one — see valignValue.
+var valignHintAttributes = map[string]bool{"valign": true}
 
 // colourHintAttributes are the entries above whose value is a colour rather than
 // a length or a counter.
@@ -183,6 +206,8 @@ func presentationalHints(n *html.Node) map[string][]css.ComponentValue {
 			value, ok = fontSizeValue(raw)
 		} else if clearHintAttributes[attr] {
 			value, ok = clearValue(raw)
+		} else if valignHintAttributes[attr] {
+			value, ok = valignValue(raw)
 		} else if counterHintAttributes[attr] {
 			// "start" and "value" set the counter to one *below* the number
 			// they name, because the item increments it on the way in. That is
@@ -336,6 +361,14 @@ func dimensionValue(raw string) (string, bool) {
 // "white-space: pre" table with nowrap on it collapses its spaces.
 func cellHints(n *html.Node) map[string][]css.ComponentValue {
 	out := cellPaddingHint(n)
+	if raw, ok := n.Attr("valign"); ok {
+		if value, ok := valignValue(raw); ok {
+			if out == nil {
+				out = make(map[string][]css.ComponentValue, 3)
+			}
+			out["vertical-align"] = ident(value)
+		}
+	}
 	if _, ok := n.Attr("nowrap"); !ok {
 		return out
 	}
@@ -347,7 +380,35 @@ func cellHints(n *html.Node) map[string][]css.ComponentValue {
 	return out
 }
 
-// cellPaddingHint reads the cellpadding an ancestor table declares.
+// valignValue turns a table part's valign attribute into a vertical-align
+// keyword.
+//
+// The four HTML names it and the property share are the same word, and the one
+// that differs is the reason this is a function rather than a pass-through:
+// "center" is what a document writes and "middle" is what the property calls
+// it. Anything else is not one of the five and the attribute is ignored, which
+// is what HTML asks for and is also the safe answer — a word this cannot read
+// must not become an alignment it guessed at.
+//
+// Case-insensitively, because HTML attribute *values* are matched that way here
+// even though their names are already folded: "<td VALIGN=Bottom>" is what a
+// document written in 1998 looks like, and it is the reason the attribute is
+// worth reading at all.
+func valignValue(raw string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "top":
+		return "top", true
+	case "middle", "center":
+		return "middle", true
+	case "bottom":
+		return "bottom", true
+	case "baseline":
+		return "baseline", true
+	}
+	return "", false
+}
+
+// cellPaddingHint reads the cellpadding an ancestor table declares.// cellPaddingHint reads the cellpadding an ancestor table declares.
 //
 // It is the one hint that is not an attribute of the element it styles:
 // cellpadding is written once on the table and applies to every cell in it. The

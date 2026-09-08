@@ -1096,7 +1096,14 @@ const wptEnv = "WPT_TESTS"
 // side whatever the property says — trailing-other-space-separators-break-
 // spaces-009 and -013, the only two of that family of fifteen where the reading
 // changes anything.
-const wptCleanPassBaseline = 5959
+//
+// 5959 to 5960 is the valign attribute, which HTML's table rendering section
+// maps to vertical-align on every part of a table that can carry one and which
+// this engine read nowhere. normal-flow/inline-block-valign-001 is an
+// inline-block two lines tall in a cell two hundred tall: bottom-aligned its
+// last baseline lands where a one-line reference's does, and centred — which is
+// what the cell was doing — it does not.
+const wptCleanPassBaseline = 5960
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
