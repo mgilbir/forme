@@ -1298,7 +1298,25 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 				// content width: its left margin edge is at the parent's content
 				// left edge and its right margin edge at the parent's content
 				// right edge, which is what makes both static positions nought.
-				l.deferAbsolute(child, parent, 0, y.Add(offset), 0, listIndex)
+				//
+				// Unless the box was written as an inline one. §9.7 blockifies
+				// every absolutely positioned box, so the used display says
+				// nothing about this — but §10.6.4 asks where the box would have
+				// been *had it been static*, and a box the document wrote as
+				// inline would have been on the first line. That line begins an
+				// indent in from the start edge, which is where a box written
+				// among words gets its static position from too; see inline.go's
+				// lineShift, which is the same rule where the line exists.
+				//
+				// A block whose only child is such a box makes no line box at
+				// all, which is why the answer cannot come from there.
+				x := style.Unit(0)
+				if child.staticInline && !lineBaseIsRTL(b, nil) {
+					if indent, mode := l.textIndent(b, width); mode.indentsLine(true, false) {
+						x = indent
+					}
+				}
+				l.deferAbsolute(child, parent, x, y.Add(offset), 0, listIndex)
 				continue
 			}
 			parent.Children = append(parent.Children,
