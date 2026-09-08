@@ -500,3 +500,65 @@ func TestWhichEndOfARightToLeftRunDecides(t *testing.T) {
 			"does not space it", got)
 	}
 }
+
+// §8.1's gap and §5.12.1's first line, which are the same rule read twice.
+//
+// The spacing between an ideograph and a letter is opened by a pass over the
+// finished items: it widens the run in front of the boundary, because a line
+// places every item from the accumulated advance and there is nowhere else to
+// put a gap that belongs to neither run. ::first-line then re-measures every run
+// it restyles from its new font — so a first line restyled *after* that pass had
+// the gap measured away again, and the line came out with no spacing at all
+// around the Latin whatever the rule said.
+//
+// Whatever the rule said is the part worth pinning: a ::first-line that changes
+// only the colour took the gap out just as thoroughly as one that changed the
+// font, because what removes it is the re-measurement and not the declaration.
+
+// TestAFirstLineKeepsItsIdeographSpacing.
+func TestAFirstLineKeepsItsIdeographSpacing(t *testing.T) {
+	const src = `<div id="d">漢A</div>`
+	const autospace = `div { text-autospace: normal }`
+
+	want := contentWidth(autospaceRuns(t, src, autospace))
+	none := contentWidth(autospaceRuns(t, src, autospace+`div { text-autospace: no-autospace }`))
+	if want <= none {
+		t.Fatalf("the fixture opens no gap at all: %v with autospace and %v "+
+			"without, so this test is watching nothing", want, none)
+	}
+
+	// A ::first-line that says nothing about the type. The line is set in the
+	// same font at the same size, so it is the same width — and it was the
+	// width of the same text with no autospace at all.
+	got := contentWidth(autospaceRuns(t, src, autospace+`#d::first-line { color: green }`))
+	if got != want {
+		t.Errorf("with a ::first-line rule the line is %v wide and without one it "+
+			"is %v; the rule changes only the colour, and the gap §8.1 opens is "+
+			"not the colour's to remove", got, want)
+	}
+}
+
+// TestAFirstLineMeasuresTheGapInItsOwnType is the other half. §8.1's gap is an
+// eighth of the em, so a first line set at twice the size has twice the gap —
+// which is why the answer is to open the gap over the restyled runs rather than
+// to carry the old one across.
+func TestAFirstLineMeasuresTheGapInItsOwnType(t *testing.T) {
+	const src = `<div id="d">漢A</div>`
+	const autospace = `div { text-autospace: normal }`
+
+	plain := contentWidth(autospaceRuns(t, src, autospace))
+	noGap := contentWidth(autospaceRuns(t, src, autospace+`div { text-autospace: no-autospace }`))
+	gap := plain.Sub(noGap)
+
+	// The same text at twice the size, through ::first-line. Everything doubles
+	// — the two characters and the gap between them — so the difference from the
+	// same line with no autospace is twice the gap and not once.
+	big := contentWidth(autospaceRuns(t, src, autospace+`#d::first-line { font-size: 200% }`))
+	bigNone := contentWidth(autospaceRuns(t, src,
+		autospace+`div { text-autospace: no-autospace } #d::first-line { font-size: 200% }`))
+	if got, want := big.Sub(bigNone), gap.Mul(2); got != want {
+		t.Errorf("a first line set at twice the size opens a gap of %v; an eighth "+
+			"of the em is %v at the ordinary size, so twice the size is %v",
+			got, gap, want)
+	}
+}

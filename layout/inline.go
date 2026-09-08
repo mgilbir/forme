@@ -260,31 +260,57 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	}
 	items = l.hangPunctuation(items, hp)
 	items = l.linkShapingContext(items)
-	// §8.2's spacing at an element boundary, which is the innermost element
-	// containing both characters rather than either character's own. It changes
-	// the width of a run, so it has to be settled before any line is filled.
-	items = l.linkLetterSpacing(items)
-	// §8.1's ideograph spacing, after the letter-spacing boundary rule and for
-	// the same reason it is a pass over the finished items: both are gaps
-	// *between* two runs, and neither can be decided while one of them is still
-	// being built. They add to the same width and are independent — a document
-	// that sets letter-spacing across an ideograph boundary gets both.
-	items = l.insertAutospace(items)
-	// A float written after an absolutely positioned box still begins a line.
-	// See floatsBeforeOutOfFlow.
-	items = floatsBeforeOutOfFlow(items)
 
 	// §5.12.1's ::first-line, which is not a box and cannot be one: it changes
 	// the type the first line is *set* in, so it has to reach the breaking. The
 	// second list is parallel to the first — same length, same order, same item
 	// at every index — which is what lets the line after the first continue from
 	// the ordinary items with nothing to map.
+	//
+	// It is restyled *before* the three passes below rather than after, and that
+	// is a correctness rule and not an ordering preference. Two of those passes
+	// widen a run to open a gap beside it, and the restyling re-measures every
+	// run it touches from its new font — so a first line restyled afterwards had
+	// the gaps measured away again. "国国XX国" under "text-autospace: normal" set
+	// its first line with no spacing at all around the Latin, whatever the
+	// ::first-line rule said: even one that only changed the colour. The suite
+	// writes it as text-autospace-first-line-001, whose ::first-line doubles the
+	// font size and so doubles the gap the line needs — which is the other half
+	// of the same rule, and why the answer is to run the passes over the
+	// restyled list rather than to add the old gap back.
 	var firstItems []inlineItem
 	if b.FirstLine != nil && !b.afterTheFirstLine {
 		l.reportFirstLine(b)
 		if declared := l.firstLineDeclared(b); declared != nil {
 			firstItems = l.firstLineItems(items, b, declared)
 		}
+	}
+
+	// §8.2's spacing at an element boundary, which is the innermost element
+	// containing both characters rather than either character's own. It changes
+	// the width of a run, so it has to be settled before any line is filled.
+	//
+	// §8.1's ideograph spacing comes after the letter-spacing boundary rule and
+	// for the same reason it is a pass over the finished items: both are gaps
+	// *between* two runs, and neither can be decided while one of them is still
+	// being built. They add to the same width and are independent — a document
+	// that sets letter-spacing across an ideograph boundary gets both.
+	//
+	// A float written after an absolutely positioned box still begins a line.
+	// See floatsBeforeOutOfFlow.
+	//
+	// All three run over the first line's list as well, in the same order. The
+	// parallelism the comment above depends on survives it: each pass looks only
+	// at what an item *is* — its text, its kind, whether it is a float or out of
+	// flow — and the restyling changes none of that, so the two lists are
+	// reordered the same way and every index still names the same item.
+	items = l.linkLetterSpacing(items)
+	items = l.insertAutospace(items)
+	items = floatsBeforeOutOfFlow(items)
+	if firstItems != nil {
+		firstItems = l.linkLetterSpacing(firstItems)
+		firstItems = l.insertAutospace(firstItems)
+		firstItems = floatsBeforeOutOfFlow(firstItems)
 	}
 
 	lo, hi := origin.x, origin.x.Add(width)
