@@ -1066,7 +1066,21 @@ const wptEnv = "WPT_TESTS"
 // So the drop is a document this engine used to pass by sharing its mistake.
 // Measured with the table on and off to be sure of the attribution: it is that
 // one document and nothing else. See html/tokenize.go's windows1252Reference.
-const wptCleanPassBaseline = 5955
+//
+// 5955 to 5956 is <canvas> becoming the replaced element it is. The element was
+// refused, under "a canvas is drawn by script, which is never run" — true of the
+// bitmap and false of the box, whose size HTML puts on the element's own width
+// and height attributes. CSS2/floats-clear/clear-on-replaced-element is two
+// canvases inside a striped wrapper and cannot pass without them.
+//
+// One and not two: normal-flow/intrinsic-size-with-anonymous-block also needs
+// the element and still fails, on a different rule. Its canvas takes its height
+// from a percentage and its width from the ratio, and what the test measures is
+// the *inline-block around it* shrink-wrapping to that width — which needs a
+// replaced element's intrinsic contribution to resolve a percentage height
+// against a definite containing block. replacedIntrinsicWidth reads only an
+// absolute one, and says so.
+const wptCleanPassBaseline = 5956
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

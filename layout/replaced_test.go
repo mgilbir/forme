@@ -464,13 +464,19 @@ func TestOneSourceIsOneImage(t *testing.T) {
 // TestObjectReportsItsBlockedData.
 //
 // <iframe> left for a third reason, and the sentence above about a box at the
-// wrong size is why the rest stay. A <video> and a <canvas> take their size from
-// content this engine does not have, so any box drawn for one is a guess. An
-// iframe does not: CSS 2.1 §10.3.2 gives a replaced element with no intrinsic
-// dimensions 300 by 150, and it took those numbers from this element. The size
-// is knowable without the browsing context, so the box is not a guess and
-// refusing to draw it was losing something real. See
+// wrong size is why the rest stay. A <video> takes its size from content this
+// engine does not have, so any box drawn for one is a guess. An iframe does
+// not: CSS 2.1 §10.3.2 gives a replaced element with no intrinsic dimensions
+// 300 by 150, and it took those numbers from this element. The size is knowable
+// without the browsing context, so the box is not a guess and refusing to draw
+// it was losing something real. See
 // TestAnIframeIsAReplacedBoxOfTheDefaultSize.
+//
+// <canvas> left last, and it is the case that shows the reason above was being
+// applied too widely. A canvas takes its size from *its own attributes* and not
+// from its content — HTML §4.12.5, with the same 300 by 150 default — so the box
+// is knowable exactly, and the bitmap a page with no script has is blank rather
+// than absent. See TestACanvasIsABlankBitmapOfItsOwnSize.
 //
 // <svg> left later, for the iframe's reason exactly. Its size is on its own
 // attributes — width, height, viewBox — which the element carries whether or not
@@ -479,9 +485,8 @@ func TestOneSourceIsOneImage(t *testing.T) {
 // TestAnInlineSVGIsSizedFromItsOwnAttributes.
 func TestOtherReplacedElementsAreReported(t *testing.T) {
 	cases := map[string]string{
-		"video":  `<video src="x.mp4"></video>`,
-		"canvas": `<canvas width="100" height="100"></canvas>`,
-		"embed":  `<embed src="x.swf">`,
+		"video": `<video src="x.mp4"></video>`,
+		"embed": `<embed src="x.swf">`,
 	}
 	for name, markup := range cases {
 		built := Build(Input{HTML: `<div>` + markup + `</div>`})

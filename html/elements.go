@@ -15,9 +15,11 @@ package html
 // ordinary inline box HTML gives it — see the note at insertUnknown, which is
 // where that decision is argued. Refusing it is what this used to do, on the
 // reading that an element the engine does not know is one it cannot lay out.
-// That is true of <canvas> and <video>, which need something this engine does
-// not have and are refused above by name; it was never true of a custom element,
-// where dropping the tag threw away every rule the author had written for it.
+// That is true of <video>, which needs something this engine does not have and
+// is refused above by name; it was never true of a custom element, where
+// dropping the tag threw away every rule the author had written for it, and it
+// was not true of <canvas> either — see the entry for it, and the one for
+// <iframe> beside it.
 //
 // So membership here is a statement about parsing and not about acceptance. The
 // elements this engine will not render are droppedElements, each with its own
@@ -88,6 +90,25 @@ var knownElements = map[string]bool{
 	// every reftest using an iframe is actually about. See
 	// contentSkippedElements.
 	"iframe": true,
+
+	// <canvas>, for the same reason and by the same argument, which this table
+	// has now made three times.
+	//
+	// It was dropped, under "a canvas is drawn by script, which is never run".
+	// That is a true sentence about the *bitmap* and a false one about the
+	// element: a canvas is a replaced element whose intrinsic dimensions are its
+	// own width and height attributes — 300 by 150 when it states none — and
+	// that box is on the page whether or not anything was ever drawn into it. A
+	// browser with scripting turned off does not omit the canvas and does not
+	// show its fallback content; it lays out a blank one of exactly that size,
+	// and so does this.
+	//
+	// Nothing is missing from such a page, so nothing is reported. A canvas a
+	// script would have painted is a page whose <script> was thrown away, and
+	// droppedElements already says so where it happened; saying it twice would
+	// taint every document holding an empty canvas with a finding about a
+	// picture that was never going to exist.
+	"canvas": true,
 
 	// Forms, as static boxes.
 	//
@@ -188,7 +209,6 @@ var droppedElements = map[string]string{
 	"script":   "scripts are never run, and never will be",
 	"embed":    "an embedded plugin would need a plugin",
 	"applet":   "applets would need a virtual machine",
-	"canvas":   "a canvas is drawn by script, which is never run",
 	"audio":    "a page laid out once cannot play anything",
 	"video":    "a page laid out once cannot play anything",
 	"details":  "a disclosure widget needs somewhere to click",

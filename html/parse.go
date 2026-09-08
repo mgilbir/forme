@@ -466,12 +466,12 @@ func (p *parser) startTag(tk token) {
 		//
 		// It used to be dropped and reported, on the reading that an element
 		// this engine does not know is one it cannot lay out. That is true of
-		// <canvas> and <video>, which need something this engine does not have,
-		// and they are refused above by name. It was never true of a custom
-		// element: the box is not a special one, and dropping it lost every rule
-		// an author had written for it. CSS2/linebox/line-breaking-font-size-
-		// zero-001 styles <inline-block> and <sep> and is the shape a modern
-		// document is full of.
+		// <video>, which needs something this engine does not have and is
+		// refused above by name. It was never true of a custom element: the box
+		// is not a special one, and dropping it lost every rule an author had
+		// written for it. CSS2/linebox/line-breaking-font-size-zero-001 styles
+		// <inline-block> and <sep> and is the shape a modern document is full
+		// of.
 		p.insertUnknown(tk)
 		return
 	}
