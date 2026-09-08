@@ -1112,7 +1112,14 @@ const wptEnv = "WPT_TESTS"
 // around it collapsed together where the reference keeps both — which is what
 // ReplacedContent.Stated is for: an intrinsic dimension of nought is a third
 // thing from the absence of one, and the absence is §10.3.2's 300 by 150.
-const wptCleanPassBaseline = 5961
+//
+// 5961 to 5962 is an inside list marker's own characters reaching the bidi
+// algorithm. The marker was kept out of the paragraph altogether so that it
+// would not join the directional run of the text after it — which bought where
+// it sits at the price of never resolving what is in it, and "1." in a
+// right-to-left list came out in logical order. CSS2/lists/list-style-position
+// -024 checks that list against the same two characters written as text.
+const wptCleanPassBaseline = 5962
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

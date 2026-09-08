@@ -213,7 +213,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	// *this* text — is about the paragraph, so it is gathered across the whole
 	// walk and answered when the walk is done. See noteSubstitution.
 	done := l.gatherSubstitutions()
-	items, _ := l.collectInline(b, l.markerItems(b), startOfContext(), inlineFrame{
+	items, _ := l.collectInline(b, l.markerItems(b, para), startOfContext(), inlineFrame{
 		Containing: width, CbHeight: origin.cbHeight, CbDefinite: origin.cbDefinite,
 		Strut: st, Bidi: para,
 	})
