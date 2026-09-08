@@ -1100,13 +1100,28 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	// is meant to fall, even though its own precondition is the narrower case
 	// where the parent's *top* margin is in the collapse too.
 	//
-	// Only a minimum that actually bound counts. Where the content is taller than
-	// the minimum the margin reaches the edge exactly as it did before, and where
-	// a maximum cut the box down the child is overflowing rather than being held
-	// off the edge — hence the comparison is against what the content needed and
-	// not against whether a minimum was declared.
-	raisedByMinimum := hasMinHeight && contentHeight > contentNeeded
-	if bottomOpen && !raisedByMinimum {
+	// So the test is whether the box ended where its content did, and it is one
+	// comparison rather than two named limits because there is only one thing
+	// being asked: §8.3.1 makes two margins adjoining where nothing separates
+	// them, and what has to be true for this pair is that the box's bottom edge
+	// and its last child's bottom margin edge are the *same* edge. A minimum
+	// that bound puts the box's edge below the child's; a maximum that bound
+	// puts it above, with the child overflowing past it. Neither is one edge.
+	//
+	// A limit that did not bind changes nothing, which falls out of comparing
+	// the heights rather than asking whether a limit was declared.
+	//
+	// The maximum half of this is a change and it trades one of the suite's
+	// documents for another. normal-flow/max-height-separates-margin caps a
+	// parent at 50px over a 51px child with ten pixels of bottom margin and asks
+	// for a hundred-pixel square with nothing between its halves;
+	// margin-padding-clear/margin-collapse-038 writes the same shape and says in
+	// its own comment that the margin *should* collapse out. They cannot both be
+	// right. Chrome and Firefox pass the first and Chromium fails the second, so
+	// the reading here is theirs — and the ratchet does not move either way,
+	// which is what makes the trade one about conformance rather than about a
+	// number.
+	if bottomOpen && contentHeight == contentNeeded {
 		out.bottom = out.bottom.merge(hoistBottom)
 	}
 
