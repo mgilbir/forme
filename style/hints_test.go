@@ -314,3 +314,98 @@ func TestAFaceIsQuotedBecauseAnAttributeIsNotAStylesheet(t *testing.T) {
 		}
 	}
 }
+
+// The valign attribute, which HTML's table rendering section maps to
+// vertical-align on every part of a table that can carry one.
+//
+// It is worth its own set because the mapping is not the identity — "center" is
+// what a document writes and "middle" is what the property calls it — and
+// because a cell reaches its value by a different route from a row's: td and th
+// are read by cellHints and everything else by the table above it.
+
+func TestValignMapsToVerticalAlign(t *testing.T) {
+	for _, tc := range []struct{ attr, want string }{
+		{"top", "top"},
+		{"middle", "middle"},
+		// The one name the two vocabularies do not share.
+		{"center", "middle"},
+		{"bottom", "bottom"},
+		{"baseline", "baseline"},
+		// Case-insensitively, which is what a document written in 1998 looks
+		// like and the reason the attribute is worth reading at all.
+		{"BOTTOM", "bottom"},
+		{" Center ", "middle"},
+	} {
+		got := computed(t, `<table><tr id="r" valign="`+tc.attr+`"><td id="c" valign="`+tc.attr+`">x</td></tr></table>`)
+		if v := got["r"]["vertical-align"]; v != tc.want {
+			t.Errorf("<tr valign=%q> gave vertical-align %q, want %q", tc.attr, v, tc.want)
+		}
+		if v := got["c"]["vertical-align"]; v != tc.want {
+			t.Errorf("<td valign=%q> gave vertical-align %q, want %q", tc.attr, v, tc.want)
+		}
+	}
+}
+
+// TestAnUnreadableValignIsIgnored. A word that is not one of the five is not an
+// alignment, and passing it through would put it in the computed style as a
+// value of vertical-align that nothing can read — a length where a keyword
+// belongs, or a keyword the property has never had.
+//
+// Asserted against a cell with no attribute at all rather than against a
+// stylesheet, because a hint loses to an author rule whatever it says: a test
+// that let one compete would pass with the attribute value handed straight
+// through.
+func TestAnUnreadableValignIsIgnored(t *testing.T) {
+	base := computed(t, `<table><tr><td id="c">x</td></tr></table>`)["c"]["vertical-align"]
+	if base == "" {
+		t.Fatal("a cell with no valign has no computed vertical-align, so this " +
+			"test is comparing nothing")
+	}
+	for _, attr := range []string{"", "centre", "sub", "5", "top bottom", "super"} {
+		got := computed(t, `<table><tr><td id="c" valign="`+attr+`">x</td></tr></table>`)["c"]["vertical-align"]
+		if got != base {
+			t.Errorf("<td valign=%q> computed vertical-align %q; a value that is "+
+				"not one of the five leaves the cell as it was, which is %q",
+				attr, got, base)
+		}
+	}
+}
+
+// TestValignIsAHintAndNotARule is the cascade half, and it is the half that
+// decides whether the attribute is usable.
+//
+// The user-agent sheet says "tr, td, th { vertical-align: inherit }" — that rule
+// is what carries a row's alignment to its cells, since the property does not
+// inherit on its own — so a valign that lost to a user-agent rule would never
+// apply to a cell at all. An author rule has to win, or a stylesheet could not
+// take control of markup it did not write.
+func TestValignIsAHintAndNotARule(t *testing.T) {
+	got := computed(t, `<table><tr><td id="c" valign="bottom">x</td></tr></table>`,
+		sheet(t, OriginUserAgent, `td { vertical-align: inherit }`))
+	if v := got["c"]["vertical-align"]; v != "bottom" {
+		t.Errorf("vertical-align is %q; a user-agent rule beat the valign attribute", v)
+	}
+
+	got = computed(t, `<table><tr><td id="c" valign="bottom">x</td></tr></table>`,
+		sheet(t, OriginAuthor, `td { vertical-align: top }`))
+	if v := got["c"]["vertical-align"]; v != "top" {
+		t.Errorf("vertical-align is %q; the valign attribute beat an author rule", v)
+	}
+}
+
+// TestValignOnARowReachesItsCells is the whole point of putting the attribute
+// on the row groups and rows as well as on the cells: the property does not
+// inherit, and the user-agent sheet's "inherit" is what makes it travel.
+func TestValignOnARowReachesItsCells(t *testing.T) {
+	for _, markup := range []string{
+		`<table><tr valign="bottom"><td id="c">x</td></tr></table>`,
+		`<table><tbody valign="bottom"><tr><td id="c">x</td></tr></tbody></table>`,
+	} {
+		got := computed(t, markup, sheet(t, OriginUserAgent,
+			`thead, tbody, tfoot, table > tr { vertical-align: middle }
+			 tr, td, th { vertical-align: inherit }`))
+		if v := got["c"]["vertical-align"]; v != "bottom" {
+			t.Errorf("in %s the cell's vertical-align is %q, want bottom", markup, v)
+		}
+	}
+}

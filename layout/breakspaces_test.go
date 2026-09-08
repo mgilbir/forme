@@ -256,11 +256,21 @@ func TestSeparatorBreakOpportunitiesFollowUAX14(t *testing.T) {
 			t.Errorf("the text after U+%04X may begin a line: got %v, want %v",
 				r, pieces[2].BreakBefore, want)
 		}
-		// break-spaces overrides both exceptions: it puts an opportunity "after
-		// every other space separator", with no carve-out for the no-break ones.
+		// break-spaces changes none of it, and was read as overriding both
+		// exceptions. The value puts an opportunity "after every preserved
+		// white space character", and CSS Text means its own term by that:
+		// white space is U+0020, the tab and the segment breaks. These fifteen
+		// are the characters §4.1.2 has to name separately as "other space
+		// separators" precisely because they are not white space — phase I
+		// never sees one and phase II only hangs it — so nothing in the value
+		// reaches a line-breaking class and UAX #14 still decides.
+		//
+		// The same expectation as the line above, deliberately: what is being
+		// asserted is that the property does not move it.
 		pieces, _ = splitAtBreaks("ab"+string(r)+"cd", whiteSpaceOf("break-spaces"), wordBreak{}, lineBreak{}, hyphens{}, writingSystemOther)
-		if len(pieces) == 3 && !pieces[2].BreakBefore {
-			t.Errorf("break-spaces left no opportunity after U+%04X", r)
+		if len(pieces) == 3 && pieces[2].BreakBefore != want {
+			t.Errorf("under break-spaces a line may end after U+%04X: got %v, want %v",
+				r, pieces[2].BreakBefore, want)
 		}
 	}
 }
@@ -300,6 +310,41 @@ func TestNoBreakSeparatorDoesNotBreakALine(t *testing.T) {
 	root = layoutOf(t, 10000, strings.Replace(shrink, "%", "ab\u2000cd", 1), css)
 	px(t, "the minimum width across a breakable separator",
 		find(t, root, "f").BorderRect.W, 2*ch)
+}
+
+// TestBreakSpacesDoesNotUnglueANoBreakSeparator is the same claim about the one
+// property that was read as overruling it.
+//
+// break-spaces is about *white space*: it stops a preserved space hanging and
+// puts an opportunity after every one, including between two of them. U+2007
+// FIGURE SPACE and U+202F NARROW NO-BREAK SPACE are not white space in CSS
+// Text's sense — they are the "other space separators" §4.1.2 lists beside it —
+// so the value has nothing to say about them and UAX #14's GL still glues.
+//
+// It matters because the two answers are visibly different: five characters that
+// cannot be broken overflow a three-character line as one line, and the same
+// five with an opportunity in the middle come out as two.
+//
+// The suite writes it as trailing-other-space-separators-break-spaces-009 and
+// -013, which are the only two of that family of fifteen where the reading
+// changes anything — the other thirteen separators are class BA and break after
+// themselves whatever the property says.
+func TestBreakSpacesDoesNotUnglueANoBreakSeparator(t *testing.T) {
+	for _, r := range []rune{0x2007, 0x202F} {
+		root := layoutOf(t, 10000, "<p id=\"p\">ab"+string(r)+"cd</p>",
+			widthCSS(3, "white-space: break-spaces"))
+		if got := lineTexts(linesOf(t, root, "p")); len(got) != 1 {
+			t.Errorf("under break-spaces U+%04X broke the text into %q, want one "+
+				"line: it is glue, and break-spaces is about white space", r, got)
+		}
+	}
+	// A class BA separator in the same place does break, so what is asserted
+	// above is the character's class and not that break-spaces was turned off.
+	root := layoutOf(t, 10000, "<p id=\"p\">ab\u2000cd</p>",
+		widthCSS(3, "white-space: break-spaces"))
+	if got := lineTexts(linesOf(t, root, "p")); len(got) != 2 {
+		t.Errorf("an en quad did not break under break-spaces; got %q", got)
+	}
 }
 
 // TestIdeographicSpaceHangsAtTheEndOfALine is §4.1.2's fourth rule reaching a

@@ -350,12 +350,21 @@ func (l *layouter) verticalLength(b *Box, property string, basis style.Unit, def
 // width calculation — the shrink-to-fit of a float around it, or the preferred
 // width of a line it sits on.
 //
-// A declared length is used as it stands. A percentage is not: there is no
-// containing block to take a percentage of while an intrinsic width is being
-// measured, and CSS Sizing says such a percentage behaves as auto here, which
-// is the intrinsic size. That is the same approximation intrinsic.go already
-// documents for every other box, made in the same place and for the same
-// reason.
+// A declared length is used as it stands. A percentage *width* is not: there is
+// no containing block to take a percentage of while an intrinsic width is being
+// measured, and CSS Sizing says such a percentage behaves as auto here, which is
+// the intrinsic size. That is the same approximation intrinsic.go already
+// documents for every other box, made in the same place and for the same reason.
+//
+// A percentage height is a different question and is answered. It is not a
+// percentage of the width being measured — it is a percentage of an *ancestor's*
+// height, which the walk below settles without laying anything out whenever a
+// stylesheet wrote that height down. The width it then gives is a real one, and
+// leaving it out is not conservatism: the box comes out at its intrinsic width
+// instead, which is a different number rather than a missing one. The suite
+// writes it as CSS2/normal-flow/intrinsic-size-with-anonymous-block, where a
+// square canvas told to be a hundred tall has to make the inline-block around it
+// a hundred wide.
 func (l *layouter) replacedIntrinsicWidth(b *Box) style.Unit {
 	rc := b.Replaced
 	if rc == nil {
@@ -367,8 +376,113 @@ func (l *layouter) replacedIntrinsicWidth(b *Box) style.Unit {
 	}
 	// An auto width with a declared height and a ratio is decided by the
 	// height, exactly as §10.3.2 decides it in layout.
-	if length, ok := l.parseLength(b, "height"); ok && length.Kind == style.LengthAbsolute && rc.Ratio > 0 {
-		return maxZero(l.clampWidth(b, maxZero(length.Value.Sub(insetV)).Mul(rc.Ratio), 0))
+	if length, ok := l.parseLength(b, "height"); ok && rc.Ratio > 0 {
+		switch length.Kind {
+		case style.LengthAbsolute:
+			return maxZero(l.clampWidth(b, maxZero(length.Value.Sub(insetV)).Mul(rc.Ratio), 0))
+		case style.LengthPercent:
+			if basis, ok := l.settledAncestorHeight(b); ok {
+				h, _ := length.Resolve(basis, true)
+				return maxZero(l.clampWidth(b, maxZero(h.Sub(insetV)).Mul(rc.Ratio), 0))
+			}
+		}
 	}
 	return maxZero(l.clampWidth(b, rc.Width, 0))
+}
+
+// settledAncestorHeight is the height a percentage on b resolves against, for a
+// caller with no layout to ask.
+//
+// §10.5 puts the containing block for a percentage height at the nearest block
+// container ancestor, and §9.2.1.1's note takes the anonymous ones out of it: a
+// box inside an anonymous block resolves against the block that anonymous one is
+// inside, because an anonymous box has no declarations and so no height. Layout
+// does both already — see the Anonymous branch in layout.go — and this is the
+// same two rules asked before any layout exists.
+func (l *layouter) settledAncestorHeight(b *Box) (style.Unit, bool) {
+	for at := b.Parent; at != nil; at = at.Parent {
+		if at.Anonymous() {
+			continue
+		}
+		return l.settledContentHeight(at)
+	}
+	return 0, false
+}
+
+// settledContentHeight is a box's content height as far as its stylesheet
+// decides it: the declared height, put through §10.7's maximum and then its
+// minimum, with every percentage among the three resolved against the box's own
+// settled containing-block height.
+//
+// It answers only where the answer is written down. A height of "auto" is
+// §10.5's other half — a height nothing has decided, which makes every
+// percentage of it indefinite — and so is a percentage whose own chain runs out.
+// Declining there is not a shortcoming: the caller falls back to the intrinsic
+// size, which is what it did before any of this existed.
+//
+// The two limits are applied rather than treated as a reason to decline. Layout
+// clamps a height before handing it down, so a walk that ignored the limits
+// would answer a number the box is not — and one that declined at the sight of
+// them would decline always, because "min-height: auto" and "max-height: none"
+// are the initial values and every computed style in the document carries them.
+// The first version of this did exactly that and answered nothing at all, which
+// is the silent kind of wrong: every box kept the intrinsic width it already
+// had.
+//
+// The recursion terminates because each step moves strictly towards the root,
+// and its depth is the box tree's, which maxBoxDepth bounds.
+func (l *layouter) settledContentHeight(b *Box) (style.Unit, bool) {
+	h, ok := l.settledLength(b, "height")
+	if !ok {
+		return 0, false
+	}
+	if max, ok := l.settledLength(b, "max-height"); ok && max >= 0 {
+		h = style.Min(h, max)
+	} else if declaresALimit(l.parseLength(b, "max-height")) {
+		// A maximum the stylesheet wrote and this cannot settle — a percentage
+		// of a height that is itself undecided. Answering past it would be
+		// answering a number the box is not.
+		return 0, false
+	}
+	if min, ok := l.settledLength(b, "min-height"); ok && min > 0 {
+		h = style.Max(h, min)
+	} else if declaresALimit(l.parseLength(b, "min-height")) {
+		return 0, false
+	}
+	_, insetV := l.sizingInset(b, 0)
+	return maxZero(h.Sub(insetV)), true
+}
+
+// settledLength reads one of a box's vertical lengths, resolving a percentage
+// against the box's own containing block by the walk above. "auto" and "none"
+// are not lengths and are declined, which is what makes them the initial values
+// that change nothing.
+func (l *layouter) settledLength(b *Box, property string) (style.Unit, bool) {
+	length, ok := l.parseLength(b, property)
+	if !ok {
+		return 0, false
+	}
+	switch length.Kind {
+	case style.LengthAbsolute:
+		return length.Value, true
+	case style.LengthPercent:
+		basis, ok := l.settledAncestorHeight(b)
+		if !ok {
+			return 0, false
+		}
+		v, _ := length.Resolve(basis, true)
+		return v, true
+	}
+	return 0, false
+}
+
+// declaresALimit reports whether a min-height or max-height says anything at
+// all about the height.
+//
+// It is asked only after settledLength has failed to produce a number, to tell
+// a limit that was never written — "min-height: auto", "max-height: none",
+// which every computed style carries — from one that was written and could not
+// be settled. The first changes nothing and the second is a reason to stop.
+func declaresALimit(l style.Length, ok bool) bool {
+	return ok && l.Kind != style.LengthAuto
 }

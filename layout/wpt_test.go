@@ -1066,7 +1066,44 @@ const wptEnv = "WPT_TESTS"
 // So the drop is a document this engine used to pass by sharing its mistake.
 // Measured with the table on and off to be sure of the attribution: it is that
 // one document and nothing else. See html/tokenize.go's windows1252Reference.
-const wptCleanPassBaseline = 5955
+//
+// 5955 to 5956 is <canvas> becoming the replaced element it is. The element was
+// refused, under "a canvas is drawn by script, which is never run" — true of the
+// bitmap and false of the box, whose size HTML puts on the element's own width
+// and height attributes. CSS2/floats-clear/clear-on-replaced-element is two
+// canvases inside a striped wrapper and cannot pass without them.
+//
+// One and not two: normal-flow/intrinsic-size-with-anonymous-block also needs
+// the element and still fails, on a different rule. Its canvas takes its height
+// from a percentage and its width from the ratio, and what the test measures is
+// the *inline-block around it* shrink-wrapping to that width — which needs a
+// replaced element's intrinsic contribution to resolve a percentage height
+// against a definite containing block. replacedIntrinsicWidth reads only an
+// absolute one, and says so.
+//
+// 5956 to 5957 is that second document, and that rule. A percentage *width* is
+// given up while an intrinsic width is being measured, because the width being
+// measured is the one it would be a percentage of; a percentage *height* is a
+// percentage of an ancestor's, which settledAncestorHeight settles from the
+// stylesheet whenever the stylesheet decides it — through §9.2.1.1's anonymous
+// block, through a chain of percentages, and through §10.7's two limits.
+//
+// 5957 to 5959 is break-spaces letting go of the two space separators it never
+// had a claim on. The value puts a soft wrap opportunity "after every preserved
+// white space character", and CSS Text means its own term: white space is
+// U+0020, the tab and the segment breaks. U+2007 and U+202F are the two "other
+// space separators" UAX #14 gives class GL, and glue does not break on either
+// side whatever the property says — trailing-other-space-separators-break-
+// spaces-009 and -013, the only two of that family of fifteen where the reading
+// changes anything.
+//
+// 5959 to 5960 is the valign attribute, which HTML's table rendering section
+// maps to vertical-align on every part of a table that can carry one and which
+// this engine read nowhere. normal-flow/inline-block-valign-001 is an
+// inline-block two lines tall in a cell two hundred tall: bottom-aligned its
+// last baseline lands where a one-line reference's does, and centred — which is
+// what the cell was doing — it does not.
+const wptCleanPassBaseline = 5960
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

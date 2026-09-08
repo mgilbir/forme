@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"image"
 	"net/url"
+	"strconv"
 	"strings"
 
 	// The decoders. Registering them is what makes image.DecodeConfig able to
@@ -212,6 +213,9 @@ func (l *replacedLoader) walk(b *Box) {
 	if b.Element != nil && strings.EqualFold(b.Element.Name, "iframe") {
 		l.iframe(b)
 	}
+	if b.Element != nil && strings.EqualFold(b.Element.Name, "canvas") {
+		l.canvas(b)
+	}
 	if b.Element != nil && b.Element.Foreign != "" {
 		l.foreign(b)
 	}
@@ -401,6 +405,98 @@ func (l *replacedLoader) fallbackTo(b *Box, fail *loadFailure, data string) {
 		Path:    PathOf(b.Element),
 	})
 }
+
+// canvas makes a <canvas> the replaced element it is.
+//
+// A canvas is a bitmap, and its intrinsic dimensions are that bitmap's: HTML
+// §4.12.5 puts them on the element's own width and height attributes and gives
+// them a default of 300 by 150 — the same two numbers CSS 2.1 §10.3.2 uses, and
+// not a coincidence. Those are *intrinsic* dimensions and not HTML's dimension
+// attributes: they are not in style/hints.go's table and must not be, because
+// mapping them to the width and height properties would make "<canvas width=10
+// height=10 style='height: 100%'>" ten pixels wide where its ratio makes it as
+// wide as it is tall. The suite writes that as
+// normal-flow/intrinsic-size-with-anonymous-block.
+//
+// Nothing is drawn and nothing is reported. The bitmap of a canvas nobody
+// scripted is transparent black — a browser with scripting turned off lays out
+// a blank canvas of exactly this size rather than omitting it — so the page has
+// what it should have and there is nothing missing to name. A canvas a script
+// would have painted is a page whose <script> was thrown away, and that is
+// already reported where it happened.
+//
+// The fallback children go, for the reason embed drops an object's: a canvas's
+// children are what a user agent that cannot do canvas would show instead, and
+// one that can never renders them. Dropped rather than hidden, because a hidden
+// box is still a box.
+func (l *replacedLoader) canvas(b *Box) {
+	w := canvasDimension(b.Element, "width", 300)
+	h := canvasDimension(b.Element, "height", 150)
+	content := &ReplacedContent{Width: w, Height: h}
+	if w > 0 && h > 0 {
+		// Only a bitmap with area has a ratio. A canvas may state a zero
+		// dimension — "width=0" is a valid non-negative integer and HTML keeps
+		// it — and a ratio computed from one would be zero or infinite, which
+		// §10.3.2 would then solve the other dimension from.
+		content.Ratio = w.Px() / h.Px()
+	}
+	// A stated zero is where this diverges, and it is written down rather than
+	// left to be found. ReplacedContent spells "no intrinsic dimension" as zero,
+	// so it cannot also spell "an intrinsic dimension of nought", and
+	// replacedSize reads a zero as the first — which sends a canvas of no area
+	// to §10.3.2's default size instead of drawing nothing. Saying it properly
+	// means a stated/unstated flag on every producer of replaced content, and
+	// the case it buys is a bitmap a document cannot see. See
+	// TestACanvasDimensionIsReadTheWayHTMLReadsOne, which asserts the reader
+	// rather than the box for exactly this reason.
+	b.Replaced = content
+	b.Children = nil
+}
+
+// canvasDimension reads one of a canvas's two bitmap dimensions.
+//
+// HTML's *rules for parsing non-negative integers*, which are not Atoi: leading
+// white space is skipped, a leading plus is allowed, digits are collected, and
+// anything after them is ignored — so "10px" is ten. Anything that yields no
+// digits at all, or a negative, is not an error to report but a value the
+// attribute does not have, and the element takes its default.
+//
+// The digit bound is style.maxHintDigits' argument in a second place: the
+// attribute is untrusted text, ten digits is already four orders of magnitude
+// past any page, and a longer run of them is not a large canvas but a number
+// nobody meant.
+func canvasDimension(n *html.Node, name string, fallback int) style.Unit {
+	def := mustPx(float64(fallback))
+	if n == nil {
+		return def
+	}
+	raw, ok := n.Attr(name)
+	if !ok {
+		return def
+	}
+	s := strings.TrimLeft(raw, " \t\n\f\r")
+	s = strings.TrimPrefix(s, "+")
+	digits := 0
+	for digits < len(s) && s[digits] >= '0' && s[digits] <= '9' {
+		digits++
+	}
+	if digits == 0 || digits > maxCanvasDigits {
+		return def
+	}
+	v, err := strconv.Atoi(s[:digits])
+	if err != nil {
+		return def
+	}
+	u, fits := style.FromPx(float64(v))
+	if !fits {
+		return def
+	}
+	return u
+}
+
+// maxCanvasDigits bounds the number a canvas dimension attribute may state, for
+// the reason style/hints.go's maxHintDigits gives about the same kind of text.
+const maxCanvasDigits = 10
 
 // markerImage loads the picture list-style-image names, for a box that draws a
 // marker.

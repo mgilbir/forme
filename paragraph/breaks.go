@@ -523,7 +523,20 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 			// separator do not get to. U+202F NARROW NO-BREAK SPACE is class GL
 			// and glues what follows it to what precedes it — which is the right
 			// answer everywhere else and is exactly what the value overrules.
-			breakNext = ws.BreakSpaces || lb.Anywhere || SeparatorBreaksAfter(r)
+			//
+			// break-spaces is *not* beside it, and used to be. That value puts a
+			// soft wrap opportunity "after every preserved white space
+			// character", and CSS Text means its own term by that: white space
+			// is U+0020, the tab and the segment breaks, and these are the
+			// characters §4.1.2 has to name separately as "other space
+			// separators" precisely because they are not it. Phase I never sees
+			// one and phase II only hangs it; nothing in the value reaches its
+			// line-breaking class, so UAX #14 decides it here as it does
+			// everywhere else. The suite writes the two that differ as
+			// trailing-other-space-separators-break-spaces-009 and -013, which
+			// are the two GL separators and the only two of the fifteen where
+			// the answers part company.
+			breakNext = lb.Anywhere || SeparatorBreaksAfter(r)
 
 		case r == ' ' || r == '\t':
 			flush()

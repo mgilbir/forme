@@ -418,9 +418,8 @@ func TestScriptContentIsNotMarkup(t *testing.T) {
 // of them.
 //
 // It used to be dropped and reported, on the reading that an element this engine
-// does not know is one it cannot lay out. That is true of <canvas> and <video>,
-// which need something this engine does not have, and those are still refused by
-// name. It was never true of a custom element: the box is not a special one, and
+// does not know is one it cannot lay out. That is true of <video>, which needs
+// something this engine does not have, and it is still refused by name. It was never true of a custom element: the box is not a special one, and
 // dropping it lost every rule an author had written for it —
 // CSS2/linebox/line-breaking-font-size-zero-001 styles <inline-block> and <sep>
 // and could not pass while they were gone.
@@ -471,13 +470,19 @@ func TestAnUnknownElementIsClosedLikeAnyOther(t *testing.T) {
 }
 
 // TestTheElementsThatReallyCannotBeLaidOutAreStillRefused is the containment
-// argument. <canvas> is drawn by a script, <video> plays, <iframe> loads another
-// document: each needs something a page laid out once does not have, and
-// rendering an empty box where one belongs is the silent wrongness the finding
-// vocabulary exists for.
+// argument. A <video> plays and a <script> runs: each needs something a page
+// laid out once does not have, and rendering an empty box where one belongs is
+// the silent wrongness the finding vocabulary exists for.
+//
+// The list is shorter than it was, twice, and both departures are the same
+// correction. An <iframe> and a <canvas> were here on the reading that an
+// element whose *content* this engine cannot produce is one it cannot lay out.
+// Neither takes its size from that content — §10.3.2 gives the iframe 300 by
+// 150 and HTML gives the canvas its own two attributes — so the box was
+// knowable all along and refusing it lost something real. What is left are the
+// elements where the size itself is the unknown.
 func TestTheElementsThatReallyCannotBeLaidOutAreStillRefused(t *testing.T) {
 	for _, src := range []string{
-		"<canvas>x</canvas>",
 		"<video>x</video>",
 		"<script>x</script>",
 	} {
@@ -1057,5 +1062,34 @@ func TestObsoletePresentationalElementsAreLaidOut(t *testing.T) {
 		if got := textOf(doc); got != "x" {
 			t.Errorf("%q kept the text as %q", src, got)
 		}
+	}
+}
+
+// TestACanvasIsKeptWithItsFallbackContent.
+//
+// The element is parsed and kept: it is a replaced element whose size is on its
+// own attributes, so layout has everything it needs — see layout's
+// TestACanvasIsABlankBitmapOfItsOwnSize. Its children are parsed as ordinary
+// markup and stay in the tree, which is what HTML's content model says and is
+// not the same question as whether they are *rendered*: an engine that draws
+// the bitmap does not render the fallback, and layout is where that is decided,
+// because that is where it is known.
+func TestACanvasIsKeptWithItsFallbackContent(t *testing.T) {
+	src := `<p>a<canvas id="c" width="10">no <b>canvas</b></canvas>b</p>`
+	_, errs, ok := Parse(src)
+	if !ok || len(errs) != 0 {
+		t.Fatalf("%q was refused: %v", src, errs)
+	}
+	got := body(t, src)
+	want := `<p>
+  "a"
+  <canvas> id="c" width="10"
+    "no "
+    <b>
+      "canvas"
+  "b"
+`
+	if got != want {
+		t.Errorf("the body is\n%s\nwant\n%s", got, want)
 	}
 }

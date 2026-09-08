@@ -1,4 +1,4 @@
-.PHONY: ucd verify-fonts test-corpora linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors noto-fonts clean-noto-fonts wpt test-wpt clean-wpt varinstance test-varinstance
+.PHONY: ucd verify-fonts test-corpora linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance
 
 test:
 	gofmt -l . | grep -v '^testdata/' && exit 1 || true
@@ -1056,6 +1056,22 @@ $(WPT_DIR)/fonts/NotoSansGeorgian-Regular.ttf: $(WPT_DIR)/.ok $(NOTO_DIR)/.ok
 test-wpt: wpt noto-fonts
 	WPT_TESTS=$(abspath $(WPT_DIR)) NOTO_FONTS=$(abspath $(NOTO_DIR)) \
 	  go test -v -run 'TestWPT|TestTheCorpus|TestTheReadme' -count=1 ./layout/
+
+# Where the reftests that are not clean actually are.
+#
+# The ratchet says how many pass; this says what the rest are, which is a
+# different question and the one a person asks before deciding what to work on
+# next. It groups the failures by suite and by test family, counts every
+# unsupported rule by the tests it appears in, and — the part worth having —
+# lists the tests that *pass* and are held back by exactly one rule, with what
+# that rule named. Those are the ones a single fix moves onto the clean count.
+#
+# It is behind its own target rather than run with the ratchet because it is an
+# analysis and not an assertion: it fails at nothing, and a sweep that always
+# passes has no business in a test run that is supposed to mean something.
+wpt-breakdown: wpt noto-fonts
+	WPT_BREAKDOWN=1 WPT_TESTS=$(abspath $(WPT_DIR)) NOTO_FONTS=$(abspath $(NOTO_DIR)) \
+	  go test -v -run TestWPTBreakdown -count=1 ./layout/
 
 clean-wpt:
 	rm -rf $(WPT_DIR)

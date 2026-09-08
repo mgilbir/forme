@@ -1192,3 +1192,83 @@ func flexFlowShorthand(vals []css.ComponentValue) (map[string][]css.ComponentVal
 		"flex-direction": direction, "flex-wrap": wrap,
 	}, nil, true
 }
+
+// columnsShorthand is CSS Multi-column §3.3: "columns: <'column-width'> ||
+// <'column-count'>".
+//
+// The two parts are told apart by *type* rather than by position — a length is
+// the width and an integer is the count, in either order — which is the shape
+// the border and outline shorthands have and the reason this is here rather than
+// in the two-slot family.
+//
+// "auto" is the awkward one. It is the initial value of both and it names
+// neither: "columns: auto" sets both to auto, and "columns: auto 12em" sets the
+// width from the length and leaves the count auto. So it is read as "this slot
+// is not being set", which is what the || grammar means by leaving a term out.
+//
+// The whole of this was missing. Both longhands are registered and both are
+// read — they are what multicol.go sizes its tracks from — so a document writing
+// the shorthand every author writes had its declaration reported as an
+// unimplemented property and dropped, while the same thing written as two
+// longhands worked.
+func columnsShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, []string, bool) {
+	width, count := ident("auto"), ident("auto")
+	var seenWidth, seenCount, seenAuto bool
+
+	parts := splitOnWhitespace(vals)
+	if len(parts) == 0 || len(parts) > 2 {
+		return nil, nil, false
+	}
+	for _, part := range parts {
+		switch {
+		case isAutoKeyword(part):
+			if seenAuto {
+				// "columns: auto auto" names one slot twice and neither of
+				// them, which is not a value of this shorthand.
+				return nil, nil, false
+			}
+			seenAuto = true
+		case isColumnCount(part) && !seenCount:
+			count, seenCount = part, true
+		case isColumnWidth(part) && !seenWidth:
+			width, seenWidth = part, true
+		default:
+			// Half a shorthand is not what was asked for: a declaration this
+			// cannot read whole is dropped, and the author hears about it.
+			return nil, nil, false
+		}
+	}
+	return map[string][]css.ComponentValue{
+		"column-width": width,
+		"column-count": count,
+	}, nil, true
+}
+
+// isAutoKeyword reports the one keyword both halves of "columns" share.
+func isAutoKeyword(part []css.ComponentValue) bool {
+	return len(part) == 1 && part[0].IsToken() && part[0].Token.Kind == css.Ident &&
+		strings.EqualFold(part[0].Token.Value, "auto")
+}
+
+// isColumnCount is <integer>: written with no fractional part and no unit.
+//
+// The range is not checked here. §3.2 makes a count of zero or less invalid and
+// the cascade drops it a step later with every other negative — see the list
+// that names column-count for exactly that reason — and a shorthand that refused
+// it here would drop the *width* along with it.
+func isColumnCount(part []css.ComponentValue) bool {
+	if len(part) != 1 || !part[0].IsToken() {
+		return false
+	}
+	t := part[0].Token
+	return t.Kind == css.Number && t.IsInteger
+}
+
+// isColumnWidth is <length>, which a bare zero may spell.
+func isColumnWidth(part []css.ComponentValue) bool {
+	if len(part) != 1 || !part[0].IsToken() {
+		return false
+	}
+	t := part[0].Token
+	return t.Kind == css.Dimension || (t.Kind == css.Number && t.Number == 0)
+}

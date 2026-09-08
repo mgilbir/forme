@@ -566,6 +566,23 @@ var shorthands = map[string]shorthand{
 	// suggest when read left to right.
 	"gap": boxShorthand("row-gap", "column-gap"),
 
+	// Box Alignment §8.4-8.6's three, which are the same two-slot shorthand
+	// again and in the same order: the block axis first and the inline axis
+	// second, which is "gap"'s order and "margin"'s and not the one the names
+	// suggest when read left to right.
+	//
+	// All six longhands were registered and read and none of the three
+	// shorthands was expanded, so "place-items: center" — which is how the
+	// property is written in practice — was reported as an unimplemented
+	// property and dropped, while the two longhands it stands for worked.
+	"place-items":   boxShorthand("align-items", "justify-items"),
+	"place-content": boxShorthand("align-content", "justify-content"),
+	"place-self":    boxShorthand("align-self", "justify-self"),
+
+	// CSS Multi-column §3.3. Told apart by type rather than position, so it is
+	// in shorthand.go with the others of that shape.
+	"columns": {columnsShorthand, []string{"column-width", "column-count"}},
+
 	// The shorthands whose parts are told apart by type rather than position.
 	// They live in shorthand.go, with the reset rule explained there.
 	"border":        borderSides("top", "right", "bottom", "left"),
