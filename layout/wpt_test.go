@@ -1119,7 +1119,15 @@ const wptEnv = "WPT_TESTS"
 // it sits at the price of never resolving what is in it, and "1." in a
 // right-to-left list came out in logical order. CSS2/lists/list-style-position
 // -024 checks that list against the same two characters written as text.
-const wptCleanPassBaseline = 5962
+//
+// 5962 to 5963 is §5.12.1's first line keeping the faces its runs are set in.
+// Restyling re-asks the box for its font, which it has to — a rule may change
+// the family or the size — and it was forcing that face onto runs the *fallback*
+// had found another for, then measuring their leading against it. A Japanese run
+// on a restyled first line was set in the Latin face beside it and given its
+// metrics. text-autospace-first-line-001 is that document, and this is the third
+// thing it needed.
+const wptCleanPassBaseline = 5963
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

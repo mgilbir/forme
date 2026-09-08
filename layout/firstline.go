@@ -208,7 +208,14 @@ func (l *layouter) firstLineItems(items []inlineItem, block *Box,
 		}
 		it.Box = box
 		if it.Face != nil && it.Text != "" {
-			if face, ok := l.fontFor(box); ok {
+			// The restyled box's own face, but only where it can set this run.
+			// A ::first-line rule restyles the *box*, and the run under it may
+			// be one the box's family never set — the fallback found another,
+			// and forcing the declared face back onto it draws the text in a
+			// font that has no glyphs for it. What the run keeps then is the
+			// face it already had, which is the fallback's answer for the same
+			// characters.
+			if face, ok := l.fontFor(box); ok && !missesVisible(face, it.Text) {
 				it.Face = face
 			}
 			it.Size = box.FontSize
@@ -218,7 +225,19 @@ func (l *layouter) firstLineItems(items []inlineItem, block *Box,
 				it.Spacing, itemShaping(it))
 		}
 		if it.Leads {
-			it.Above, it.Below = l.leading(box)
+			// Against the face the run is actually set in, which is not always
+			// the one its box declares: §10.8.1 measures leading against "the
+			// font", and a run the declared family could not set is in whichever
+			// family the fallback found. leadingInFace is the same call the
+			// ordinary path makes, and asking l.leading here instead measured a
+			// Japanese run against the Latin face beside it — which is a line as
+			// much too short as the two faces differ, on the one line a
+			// ::first-line rule restyles.
+			if it.Face != nil && it.Text != "" {
+				it.Above, it.Below = l.leadingInFace(box, it.Face)
+			} else {
+				it.Above, it.Below = l.leading(box)
+			}
 		}
 	}
 	return out
