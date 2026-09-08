@@ -1103,7 +1103,16 @@ const wptEnv = "WPT_TESTS"
 // inline-block two lines tall in a cell two hundred tall: bottom-aligned its
 // last baseline lands where a one-line reference's does, and centred — which is
 // what the cell was doing — it does not.
-const wptCleanPassBaseline = 5960
+//
+// 5960 to 5961 is text-wrap-balance-word-spacing-001, and it needed two things.
+// The balancing search was measuring the first line in the block's own type
+// where a ::first-line rule sets it in another, so the width it settled on was
+// one the layout could not reproduce. And an <img> naming no file was not a
+// replaced element at all, so it was not content either, and the two spaces
+// around it collapsed together where the reference keeps both — which is what
+// ReplacedContent.Stated is for: an intrinsic dimension of nought is a third
+// thing from the absence of one, and the absence is §10.3.2's 300 by 150.
+const wptCleanPassBaseline = 5961
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

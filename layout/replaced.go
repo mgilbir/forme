@@ -131,8 +131,11 @@ func (l *layouter) replacedSize(b *Box, containing, cbHeight style.Unit, cbDefin
 		edge := l.borderWidths(b).Vertical().Add(l.paddingOf(b, containing).Vertical())
 		height, hasHeight = maxZero(cbHeight.Mul(rc.HeightPercent).Sub(edge)), true
 	}
-	hasIntrinsicW := rc.Width > 0
-	hasIntrinsicH := rc.Height > 0
+	// Stated is what tells a dimension of nought from the absence of one. See
+	// ReplacedContent.Stated, and §10.3.2's default size, which is the answer
+	// for the absence and not for the nought.
+	hasIntrinsicW := rc.Width > 0 || rc.Stated
+	hasIntrinsicH := rc.Height > 0 || rc.Stated
 	ratio := rc.Ratio
 
 	var w, h style.Unit

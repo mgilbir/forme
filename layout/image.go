@@ -94,6 +94,23 @@ type ReplacedContent struct {
 	// size, one image pixel to one CSS pixel.
 	Width, Height style.Unit
 
+	// Stated says the two above are the content's own even where they are
+	// nought.
+	//
+	// Zero is how this spells "no intrinsic dimension", which is what a decoded
+	// picture never has and what an iframe always has, so for nearly every kind
+	// of content the two readings are the same. They part company for content
+	// that *states* a size and states it as nothing: "<canvas width=0>" is a
+	// valid non-negative integer and HTML keeps it, and an <img> naming no file
+	// is an element HTML says represents nothing at all. Read as "no intrinsic
+	// dimension" those become §10.3.2's 300 by 150, which is a box a document
+	// asked for the absence of.
+	//
+	// A flag rather than a pair of them, because the two kinds of content that
+	// set it state both dimensions or neither; and set by those two alone, so
+	// that everything already here keeps the reading it had.
+	Stated bool
+
 	// WidthPercent and HeightPercent are the dimensions an SVG states as a
 	// percentage, as a fraction, and are zero when it states none.
 	//
@@ -300,7 +317,25 @@ func (l *replacedLoader) image(b *Box) {
 		// An <img> with no src is not a broken image, it is an element that
 		// names nothing. HTML says it represents nothing at all, and there is
 		// no reference for a resolver to have refused.
-		l.notReplaced(b, nil)
+		//
+		// Nothing is still *replaced* nothing. The element has no content to
+		// take a size from, so its intrinsic dimensions are nought and stated —
+		// and that is not the same as having none, which would make it
+		// §10.3.2's 300 by 150. What it buys is the two things a replaced
+		// element is: CSS may size it, since width and height do not apply to a
+		// non-replaced inline, and it is content, so the white space either side
+		// of it does not collapse together across it. The suite writes the
+		// second as text-wrap-balance-word-spacing-001, whose reference keeps
+		// both spaces around an <img> that names no file.
+		//
+		// Unless the element carries alt text, which is a different case with a
+		// different answer: HTML says what an image that cannot be shown
+		// contains is that text, and CSS says an element whose replaced content
+		// is unavailable is not a replaced element at all. altOnly is where that
+		// is decided, and this asks it first.
+		if l.altOnly(b); len(b.Children) == 0 {
+			b.Replaced = &ReplacedContent{Stated: true}
+		}
 		return
 	}
 
@@ -432,7 +467,7 @@ func (l *replacedLoader) fallbackTo(b *Box, fail *loadFailure, data string) {
 func (l *replacedLoader) canvas(b *Box) {
 	w := canvasDimension(b.Element, "width", 300)
 	h := canvasDimension(b.Element, "height", 150)
-	content := &ReplacedContent{Width: w, Height: h}
+	content := &ReplacedContent{Width: w, Height: h, Stated: true}
 	if w > 0 && h > 0 {
 		// Only a bitmap with area has a ratio. A canvas may state a zero
 		// dimension — "width=0" is a valid non-negative integer and HTML keeps
@@ -440,15 +475,9 @@ func (l *replacedLoader) canvas(b *Box) {
 		// §10.3.2 would then solve the other dimension from.
 		content.Ratio = w.Px() / h.Px()
 	}
-	// A stated zero is where this diverges, and it is written down rather than
-	// left to be found. ReplacedContent spells "no intrinsic dimension" as zero,
-	// so it cannot also spell "an intrinsic dimension of nought", and
-	// replacedSize reads a zero as the first — which sends a canvas of no area
-	// to §10.3.2's default size instead of drawing nothing. Saying it properly
-	// means a stated/unstated flag on every producer of replaced content, and
-	// the case it buys is a bitmap a document cannot see. See
-	// TestACanvasDimensionIsReadTheWayHTMLReadsOne, which asserts the reader
-	// rather than the box for exactly this reason.
+	// Stated, so that a canvas of no area lays out as one rather than falling
+	// through to §10.3.2's default size: "width=0" is a valid non-negative
+	// integer and HTML keeps it. See ReplacedContent.Stated.
 	b.Replaced = content
 	b.Children = nil
 }

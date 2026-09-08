@@ -71,14 +71,9 @@ func TestACanvasAttributeIsNotADimensionProperty(t *testing.T) {
 // rest, and anything that yields no digits at all leaves the element with its
 // default rather than with nothing.
 //
-// Against the reader rather than through a layout, because one of the answers
-// is not observable in a box: a stated zero *is* a valid non-negative integer
-// and the reader returns it, but ReplacedContent has no way to say "an
-// intrinsic dimension of nought" — zero is how it spells "none" — so the sizing
-// above falls through to §10.3.2's default. That divergence is real, it is
-// bounded to a bitmap with no area, and canvas() says so; asserting the reader
-// here is asserting the half that is right rather than dressing the other half
-// up.
+// Against the reader rather than through a layout, because the reader is what
+// is being asserted: a box would be answering about §10.3.2 as well, and the
+// stated zero among these has its own test below.
 func TestACanvasDimensionIsReadTheWayHTMLReadsOne(t *testing.T) {
 	for _, tc := range []struct {
 		attr string
@@ -104,6 +99,29 @@ func TestACanvasDimensionIsReadTheWayHTMLReadsOne(t *testing.T) {
 	// one that is there and says nothing.
 	px(t, "no width attribute at all",
 		canvasDimension(&html.Node{Type: html.ElementNode, Name: "canvas"}, "width", 300), 300)
+}
+
+// TestACanvasOfNoAreaIsLaidOutAsOne.
+//
+// "width=0" is a valid non-negative integer and HTML keeps it, so the bitmap has
+// no area and neither has the box. It is the one case where an intrinsic
+// dimension of nought has to be told from the absence of one — the absence is
+// §10.3.2's 300 by 150, which is a size a document asked for the opposite of.
+// See ReplacedContent.Stated.
+func TestACanvasOfNoAreaIsLaidOutAsOne(t *testing.T) {
+	for _, attr := range []string{`width="0"`, `height="0"`, `width="0" height="0"`} {
+		root := replacedLayout(t, 500, `<div><canvas id="c" `+attr+`></canvas></div>`, noDefaults)
+		w, h := contentSize(find(t, root, "c"))
+		wantW, wantH := 300.0, 150.0
+		if strings.Contains(attr, `width="0"`) {
+			wantW = 0
+		}
+		if strings.Contains(attr, `height="0"`) {
+			wantH = 0
+		}
+		px(t, attr+" — the used width", w, wantW)
+		px(t, attr+" — the used height", h, wantH)
+	}
 }
 
 // TestACanvasFallbackContentIsNotRendered.
