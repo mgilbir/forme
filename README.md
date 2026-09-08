@@ -93,6 +93,19 @@ content, backgrounds and borders, overflow and clipping, and the stacking order
 of Appendix E. From CSS Text: white space processing, word and line breaking,
 `text-wrap: balance`, tab stops. From CSS Overflow: `line-clamp`.
 
+**Boxes beyond CSS 2.1**, each a deliberately narrow slice: flexbox
+(`display: flex`), grid (`display: grid`), multiple columns (`column-count`,
+`column-width`) and the vertical writing modes (`writing-mode`,
+`text-orientation`). Narrow on purpose, and each says so out loud — a container
+written with something its slice does not arrange is laid out as it would have
+been without the feature, and the reason is reported. A box arranged that should
+not have been is a page that is quietly wrong; a box refused is a page with a
+finding attached to it.
+
+What it does *not* do is fragment across pages. A document is laid out on one
+sheet and scaled to fit it (`Page.MinScale`), and the only fragmentation
+anywhere is multicol's, within a single box.
+
 **Paragraphs.** Where a line may break and where it does, what order the runs on
 it are drawn in, and how tall it turns out — stated over text, measured widths
 and Unicode, with no box tree anywhere near it.
@@ -156,6 +169,7 @@ between them.
 	make test-css      # the CSS Syntax suite
 	make hbfuzz        # differential fuzzing; needs python and uharfbuzz
 	make test-difffuzz # that fuzzer's classifier, which needs only python
+	make wpt-breakdown # where the reftests that are not clean actually are
 
 The corpora are fetched rather than vendored — the reftests alone are eighty
 megabytes of somebody else's repository — and everything fetched is gitignored.
