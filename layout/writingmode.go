@@ -350,6 +350,7 @@ func turnLine(l *LineFragment, mode writingMode, in Size) {
 func (l *layouter) turns(b *Box, containing style.Unit) writingMode {
 	mode := writingModeOf(b)
 	if mode == writingModeOf(b.Parent) {
+		l.reportInheritedOrientation(b)
 		return horizontalTB
 	}
 	if mode == horizontalTB {
@@ -368,6 +369,52 @@ func (l *layouter) turns(b *Box, containing style.Unit) writingMode {
 	}
 	l.reportWritingMode(b, mode, why)
 	return horizontalTB
+}
+
+// reportInheritedOrientation says that a text-orientation on a box that did not
+// turn is not applied.
+//
+// A turned subtree has *one* orientation here: refusesToTurn asks the box that
+// changes the writing mode which way its characters face, and a page needing
+// both at once is the one thing a quarter turn cannot draw, so the turn is
+// refused rather than half-made. That is a real limit and it was a silent one —
+// "<div style='text-orientation: upright'>" inside a vertical box did nothing
+// at all and said nothing about it.
+//
+// Only where the property has an effect at all, which is §5.1's rule and not
+// this engine's: text-orientation does nothing in a horizontal typographic mode,
+// and *both sideways modes are one* — every character there lies along the line
+// whatever the property says. refusesToTurn already reads it that way. Reporting
+// a declaration that CSS itself ignores would be reporting CSS rather than this
+// engine, and the suite has a document saying so in its own comment:
+// text-autospace-004 writes text-orientation and text-combine-upright inside a
+// "sideways-lr" container and notes that neither has any effect there.
+//
+// And only where it asks for something other than what the turn settled on, so
+// a document that writes it on every box in a subtree is told once about the box
+// that decided and nothing about the ones that agree.
+func (l *layouter) reportInheritedOrientation(b *Box) {
+	if b.Element == nil || orientationOf(b) == orientationMixed {
+		return
+	}
+	if mode := writingModeOf(b); !mode.vertical() || mode.sideways() {
+		return
+	}
+	want := orientationOf(b) == orientationUpright
+	if got := l.uprightText(b.Parent); got == want {
+		return
+	}
+	l.rec.ReportDetail(Finding{
+		Rule:   RuleUnsupportedValue,
+		Source: AtHTML(offsetOf(b)),
+		Message: "\"text-orientation: " + trimmedLower(b.Style["text-orientation"]) +
+			"\" was not applied to this box: the orientation of a turned box is " +
+			"settled once, on the box that changes the writing mode, because a " +
+			"line needing characters upright and characters along it at once is " +
+			"not a line a quarter turn can draw",
+		Path:     PathOf(b.Element),
+		Property: "text-orientation",
+	})
 }
 
 func (l *layouter) reportWritingMode(b *Box, mode writingMode, why string) {
