@@ -91,6 +91,27 @@ var knownElements = map[string]bool{
 	// contentSkippedElements.
 	"iframe": true,
 
+	// <map> and <area>, which are markup about *where a reader may click* and
+	// nothing else — and this engine's pages are not clicked. The image map is
+	// refused and always will be, on the same footing as an iframe's browsing
+	// context: nothing here turns a rectangle into a link.
+	//
+	// What was refused with it is a box, and it should not have been. A <map> is
+	// an ordinary inline box holding whatever the author put in it, and an
+	// <area> is hidden by HTML's own rendering section rather than by anything
+	// this engine decided — which is a rule a stylesheet may overrule, and one
+	// the suite's content-100 does overrule: "area { display: block }" with a
+	// ":before" on it, checked for the word its attribute holds. Dropping the
+	// element threw away that content along with the click.
+	//
+	// Membership here changes nothing on its own for these two: the parser has
+	// no rule about how either nests, and <area> is already among the void
+	// elements. What changed is that neither is in droppedElements any more.
+	// They are listed because this table is where that boundary is argued — the
+	// form controls and <iframe> above are here for the same reason — and a
+	// removal leaves no place to say why.
+	"map": true, "area": true,
+
 	// <canvas>, for the same reason and by the same argument, which this table
 	// has now made three times.
 	//
@@ -216,8 +237,6 @@ var droppedElements = map[string]string{
 	"dialog":   "a dialog is opened by script, which is never run",
 	"template": "a template's content is instantiated by script",
 	"slot":     "a shadow tree needs scripting",
-	"map":      "an image map needs somewhere to click",
-	"area":     "an image map needs somewhere to click",
 	"marquee":  "a page laid out once cannot animate",
 	"progress": "a progress bar reflects a state that does not change here",
 	"meter":    "a meter reflects a state that does not change here",

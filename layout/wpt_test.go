@@ -1127,7 +1127,14 @@ const wptEnv = "WPT_TESTS"
 // on a restyled first line was set in the Latin face beside it and given its
 // metrics. text-autospace-first-line-001 is that document, and this is the third
 // thing it needed.
-const wptCleanPassBaseline = 5963
+//
+// 5963 to 5964 is <map> and <area> becoming boxes. They were dropped, under "an
+// image map needs somewhere to click" — true of the map and false of the
+// elements: a <map> is an ordinary inline box and an <area> is hidden by HTML's
+// own rendering section, which is a rule a stylesheet may overrule.
+// generated-content/content-100 overrules it and asks for the ":before" on the
+// box that makes.
+const wptCleanPassBaseline = 5964
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

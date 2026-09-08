@@ -163,6 +163,13 @@ bdo[dir] { unicode-bidi: isolate-override }
 form, fieldset, legend, optgroup, option { display: block }
 input, button, select, textarea { display: inline-block }
 param { display: none }
+
+/* HTML's own rendering section hides an <area>: it is markup about where a
+   reader may click, and it draws nothing of itself. A rule and not a refusal,
+   which is the difference the suite's content-100 turns on — it writes
+   "area { display: block }" and asks for the generated content on the box that
+   makes. */
+area { display: none }
 input[type="hidden" i] { display: none }
 
 /* A <textarea> is preserved white space that wraps, which is the one rule in
