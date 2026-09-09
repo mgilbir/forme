@@ -83,6 +83,14 @@ jobs:
           # nobody tabulated and the half a document actually arrives in.
           - package: ./segment
             target: FuzzBoundaries
+          # Two walks over one paragraph, asked to agree. A box that shrink-wraps
+          # its content is sized from the intrinsic widths, which a pass computes
+          # without breaking a line; the lines are then filled by a different
+          # walk with a different accounting, and nothing else says the two have
+          # to arrive at the same number. They have not: a word split by a span
+          # measured one way in each.
+          - package: ./layout
+            target: FuzzShrinkToFit
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7

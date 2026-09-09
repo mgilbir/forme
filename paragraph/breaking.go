@@ -640,11 +640,21 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 			return trimLineEdge(line), i, base, outOfFlow, false
 		}
 
-		if item.Width > width && !content && !item.Space && !item.NoWrap && !item.Inset {
+		if overflows(0, item, width) && !content && !item.Space && !item.NoWrap && !item.Inset {
 			// An inset is not text and has no text to name in the report. A
 			// margin wider than the line is also not the fault the report is
 			// about — nothing is clipped, the content is simply pushed past the
 			// edge, and the box the author wrote is the box that was drawn.
+			//
+			// Asked through overflows, which is the same question the fill above
+			// asks, rather than through the item's width alone — which is what
+			// it used to be and disagreed with the fill. The two differ by the
+			// spacing after the item's last character: §8.2 puts one there and a
+			// line ending here hangs it, so it is not width the line has to
+			// find. A word that exactly fills a box shrink-wrapped around it was
+			// reported as overflowing by the letter-spacing that hangs off the
+			// end of it — the fill knew it fitted, and the report said it did
+			// not. See TrailingSpacing.
 			br.report.ReportOverflow(item, width)
 		}
 		// Recorded before the switch below, because that is where content becomes
