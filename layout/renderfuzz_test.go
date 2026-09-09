@@ -1,8 +1,11 @@
 package layout
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
+	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -25,6 +28,16 @@ import (
 //     display list is finite, whatever the document asked for.
 //   - Honesty. A tree that was cut off says so, because a branch nobody laid out
 //     is a page missing content and the reader has to be told.
+//   - Repeatability. The same document laid out twice gives the same display
+//     list and the same findings, down to the layout unit.
+//
+// The last one is what the whole of style.Unit is for. §5.1's argument for fixed
+// point over float64 ends "it makes layout bit-reproducible", and the reftest
+// comparison and the caching an embedder does both rest on it — but the stages
+// feeding this range over maps, and a map is where reproducibility goes. There
+// was a test of it and it was one document of four elements compared by its box
+// rectangles; this is every document the corpus reaches, compared by what is
+// drawn.
 //
 // It deliberately hands over no resolver, so nothing is fetched: the surface
 // under test is the markup and the stylesheet, and image decoding has a fuzz
@@ -115,10 +128,92 @@ func checkRender(t testing.TB, src, sheetSrc string) {
 	if frag == nil {
 		t.Fatal("a box tree laid out to no fragment at all")
 	}
-	// Painting is the third stage and the one a caller sees; what is checked is
-	// that it returns rather than panics, and the assignment is what keeps the
-	// call from being optimised away.
-	_ = Paint(frag)
+	// Painting is the third stage and the one a caller sees.
+	ops := Paint(frag)
+
+	// And the same document again, from the same source, which has to give the
+	// same page. Built again rather than laid out again: the box tree is what
+	// the cascade produced, and the cascade is one of the stages that ranges
+	// over maps.
+	again := Build(Input{HTML: src, CSS: []Stylesheet{{Source: sheetSrc}}})
+	if again.Root == nil {
+		t.Fatal("the same document built a root box once and not twice")
+	}
+	rec2 := NewRecorder(nil)
+	ops2 := Paint(Layout(again.Root, Size{W: w, H: h}, again.Fonts, rec2))
+	if got, want := renderKey(ops2), renderKey(ops); got != want {
+		t.Fatalf("two runs of the same document drew different pages:\n%s\n%s",
+			want, got)
+	}
+	if got, want := findingKey(rec2.Findings()), findingKey(rec.Findings()); got != want {
+		t.Fatalf("two runs of the same document reported differently:\n%s\n%s",
+			want, got)
+	}
+	if got, want := findingKey(again.Findings), findingKey(built.Findings); got != want {
+		t.Fatalf("two builds of the same document reported differently:\n%s\n%s",
+			want, got)
+	}
+}
+
+// renderKey renders a display list as text, exactly.
+//
+// Exactly, which is what makes it different from normaliseOps and from
+// sketchOps: those two compare *two documents* and are right to drop a mark that
+// paints nothing, because two documents may reach an empty box by different
+// routes. Two runs of one document may not reach anything by different routes at
+// all, so nothing here is dropped and every field that decides what is drawn is
+// in the key.
+//
+// A face is written by name rather than by pointer. Two runs share the standard
+// faces and would compare equal by address today, and the day they do not is the
+// day this test starts failing for a reason that is not a difference in the page.
+func renderKey(ops []Op) string {
+	var b strings.Builder
+	for _, op := range ops {
+		switch v := op.(type) {
+		case FillRect:
+			fmt.Fprintf(&b, "fill %v %v overhang=%v\n", v.Rect, v.Color, v.Overhang)
+		case DrawText:
+			fmt.Fprintf(&b, "text %q at %v,%v %s %v %v rtl=%v sideways=%v "+
+				"anticlockwise=%v upright=%v pre=%q post=%q merge=%q,%q "+
+				"kerns=%v spacing=%v features=%+v clip=%v\n",
+				v.Text, v.At.X, v.At.Y, faceName(v.Face), v.Size, v.Color,
+				v.RTL, v.Sideways, v.Anticlockwise, v.Upright,
+				v.PreContext, v.PostContext, v.MergePre, v.MergePost,
+				v.ContextKerns, v.CharSpacing, v.Features, v.Clip)
+		case DrawImage:
+			fmt.Fprintf(&b, "image %v %q\n", v.Rect, v.Key)
+		case TileImage:
+			fmt.Fprintf(&b, "tile %+v\n", tileKey(v))
+		default:
+			fmt.Fprintf(&b, "op %T\n", op)
+		}
+	}
+	return b.String()
+}
+
+// faceName is a face's name, or a word for the absence of one.
+func faceName(f *shape.Face) string {
+	if f == nil {
+		return "<none>"
+	}
+	return f.Name()
+}
+
+// tileKey is a tiling without the picture, which has no comparable identity.
+func tileKey(v TileImage) string {
+	return fmt.Sprintf("%v %q %v %v %v", v.Clip, v.Key, v.Tile, v.StepX, v.StepY)
+}
+
+// findingKey renders a report as text. The order is part of it: page.go says the
+// findings are in a deterministic order, and an order that changes between runs
+// is a report an embedder cannot diff.
+func findingKey(findings []Finding) string {
+	var b strings.Builder
+	for _, f := range findings {
+		fmt.Fprintf(&b, "%s|%s|%s|%s|%v\n", f.Rule, f.Severity, f.Property, f.Path, f.Message)
+	}
+	return b.String()
 }
 
 // TestTheRenderInvariantsAreLive drives the body above with the depth cap
