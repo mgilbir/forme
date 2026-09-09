@@ -1168,7 +1168,19 @@ const wptEnv = "WPT_TESTS"
 // The room a run can take is at its end, because that is all a width can say —
 // so a box that may justify has its text cut after every separator, which is the
 // cut word-spacing already asks for and is made in the same place.
-const wptCleanPassBaseline = 5969
+// 5969 to 5970 is an opportunity offered by the last character of a text node
+// reaching the box after it.
+//
+// SplitAtBreaks returns a flag for exactly that and the soft hyphen's own note
+// says it is "what every other opportunity here already does". Two were not: an
+// ordinary hyphen and, under line-break: loose, a currency or number sign each
+// asked whether they stood at the end of the *text* and gave their opportunity
+// up when they did. The end of a text node is not the end of a word, and the
+// suite writes the character in an element of its own precisely because that is
+// what a test for a character does — line-break-loose-018 colours five prefixes
+// that way. The same fault broke nothing in "high-<span>way</span>", which is
+// one word written in two elements and overflowed its box.
+const wptCleanPassBaseline = 5970
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

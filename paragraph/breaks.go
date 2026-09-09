@@ -599,22 +599,41 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 			cur.WriteRune(r)
 			deferBreak = true
 
-		case lb.Loose && BreaksAfterUnderLoose(r) && !endsRunOrSpace(text, i):
+		case lb.Loose && BreaksAfterUnderLoose(r) && !startsSpace(text, i):
 			// §5.3's one rule the other way round: under "loose" a line may end
 			// after a currency sign or a number sign, which belongs to the
 			// figure following it and which no other value lets go of.
 			//
 			// It is written beside the hyphen below because it is the same
 			// shape of rule — a character that ends a run and lets the next one
-			// begin a line — and it carries the same guard: a prefix with
-			// nothing after it offers an opportunity nothing could take.
+			// begin a line — and it carries the same guard: a space after it is
+			// not an opportunity, because the space already is one and a line
+			// may not end in front of it.
+			//
+			// The end of this text is *not* that guard, which is what it used to
+			// ask. A prefix that ends a text node has whatever comes after it in
+			// another box, and the flag this function returns is how the
+			// opportunity gets there — which is what the soft hyphen below says
+			// in full and what every other opportunity here already does. The
+			// suite writes the prefix in an element of its own so that it can be
+			// coloured: line-break-loose-018 is
+			// "サンプル文サンプル<span>€</span>サンプル文", and asking for the
+			// end of the node meant the opportunity was offered in none of its
+			// five pairs.
 			cur.WriteRune(r)
 			flush()
 			breakNext = true
 
-		case (r == '-' || isLatinHyphen(r)) && !endsRunOrSpace(text, i):
+		case (r == '-' || isLatinHyphen(r)) && !startsSpace(text, i):
 			// A hyphen ends a run and the next may begin a line — which is what
 			// lets a hyphenated compound break where it is written.
+			//
+			// Including where the next line's half is in another box.
+			// "high-<span>way</span>" and "<span>high-</span>way" are the same
+			// word as "high-way" and have to break the same way; asking for the
+			// end of the *text* rather than for a space after it, they broke
+			// nowhere and the compound overflowed its box. It is the rule the
+			// soft hyphen below states in full, and the two are one rule.
 			//
 			// All three of them. U+002D HYPHEN-MINUS is class HY and U+2010
 			// HYPHEN and U+2013 EN DASH are class HH, and what the classes differ
@@ -661,8 +680,9 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 			// layout tidier is how a paragraph comes out of a PDF missing pieces
 			// of its words.
 			//
-			// Not endsRunOrSpace, which is what the ordinary hyphen above uses:
-			// the end of *this text* is not the end of the word. The suite's
+			// startsSpace and not "the end of this text", which is the rule the
+			// ordinary hyphen above now shares and once did not: the end of
+			// *this text* is not the end of the word. The suite's
 			// hyphens-span-001 writes the same word nine ways —
 			// "<span>high&shy;</span>way", "high<span>&shy;</span>way",
 			// "high&shy;<span>way</span>" — and asks for one answer from all of
@@ -743,17 +763,6 @@ func startsSpacePiece(r rune, ws WhiteSpace) bool {
 func startsSpace(text string, i int) bool {
 	if i >= len(text) {
 		return false
-	}
-	r, _ := utf8.DecodeRuneInString(text[i:])
-	return unicode.IsSpace(r)
-}
-
-// endsRunOrSpace reports whether the text at i is the end of the run or white
-// space, which is what stops a trailing hyphen being a break opportunity: there
-// would be nothing after it to move to the next line.
-func endsRunOrSpace(text string, i int) bool {
-	if i >= len(text) {
-		return true
 	}
 	r, _ := utf8.DecodeRuneInString(text[i:])
 	return unicode.IsSpace(r)
