@@ -1180,7 +1180,21 @@ const wptEnv = "WPT_TESTS"
 // what a test for a character does — line-break-loose-018 colours five prefixes
 // that way. The same fault broke nothing in "high-<span>way</span>", which is
 // one word written in two elements and overflowed its box.
-const wptCleanPassBaseline = 5970
+// 5970 to 5971 is before-after-table-parts-001, and it needed two rules.
+//
+// A picture that is the whole of a "content" value makes the pseudo-element a
+// replaced element and one that is not does not, which decides whether a height
+// sizes the picture or the line's box it sits on, and whether a border is drawn
+// once or twice.
+//
+// And a column group with no column children describes a column when it is an
+// element and none when it is a pseudo-element: "span" is an attribute, HTML's
+// table model defaults it to one for an element, and a pseudo-element carries no
+// attributes to default. The test puts "display: table-column-group" on both
+// pseudo-elements of a table whose one row has one cell, and its reference draws
+// that table with a single column — where two columns cost a border-spacing the
+// reference does not have.
+const wptCleanPassBaseline = 5971
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

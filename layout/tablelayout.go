@@ -220,7 +220,7 @@ func (l *layouter) collectColumns(table *Box, g *tableGrid) {
 		switch c.Inner {
 		case InnerTableColumnGroup:
 			start := len(g.colBoxes)
-			if len(c.Children) == 0 {
+			if n := emptyGroupSpan(c); len(c.Children) == 0 && n > 0 {
 				// §17.2's second rule: a column group with no column children
 				// generates the columns itself. It is therefore the box that
 				// describes them, and its own "width" is theirs — the columns
@@ -229,7 +229,7 @@ func (l *layouter) collectColumns(table *Box, g *tableGrid) {
 				// their content, and a table of empty cells then has no width at
 				// all; width-applies-to-005 in the suite is 96 pixels of exactly
 				// that.
-				add(c, spanAttr(c))
+				add(c, n)
 			}
 			for _, col := range c.Children {
 				add(col, spanAttr(col))
@@ -392,6 +392,32 @@ func spanAttr(b *Box) int {
 		return n
 	}
 	return 1
+}
+
+// emptyGroupSpan is how many columns a column group with no column children
+// describes, which is one for an element and none for a pseudo-element.
+//
+// §17.2 takes the count from the group's "span" and from its column children,
+// and with no children the span is the whole of it. "span" is an attribute:
+// HTML's table model reads it off the element and defaults it to one, and this
+// engine applies that default to any element a "display" value has made a column
+// group of, which is what the six "applies to elements with display set to
+// table-column-group" tests are — each is a <div> with a width and no children,
+// and each needs the column that width is for.
+//
+// A pseudo-element is not an element and carries no attributes at all, so there
+// is no span to read and none to default: it describes no columns. The suite
+// writes it as before-after-table-parts-001, which puts
+// "display: table-column-group" on both of one table's pseudo-elements and whose
+// reference draws that table with a single column and no generated content in
+// it. Counting one each gave it two columns where its one row has one cell, and
+// the empty second column cost a border-spacing — two pixels wide of the
+// reference, on a table 41 pixels wide.
+func emptyGroupSpan(b *Box) int {
+	if b.Pseudo != "" || b.Element == nil {
+		return 0
+	}
+	return spanAttr(b)
 }
 
 // ---------------------------------------------------------------------------
@@ -2056,7 +2082,11 @@ func (l *layouter) paintableColumns(parent *Fragment, g *tableGrid,
 		return
 	}
 	span := func(box *Box, first, count int) *Fragment {
-		if first >= len(cols) {
+		if first >= len(cols) || count <= 0 {
+			// A group that covers no column has nothing to paint over, which is
+			// what a column group with no column children and no span attribute
+			// is: §17.2 takes its count from one of those two and it has
+			// neither. See emptyGroupSpan.
 			return nil
 		}
 		last := first + count - 1
