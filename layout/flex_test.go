@@ -521,14 +521,19 @@ func TestAnItemTallerThanItsLineHangsOffIt(t *testing.T) {
 // free space rather than a gap added once per item.
 //
 // 265px over three gaps is 88 and a third, which is not a whole number of layout
-// units. Rounding it once and adding it three times loses a unit off the end of
-// the row; taking the fraction each time does not, and the last item's right
-// edge is on the container's — where "space-between" says it is.
+// units. Quantising it once and adding it three times loses three units off the
+// end of the row; taking the fraction of the whole free space each time does
+// not, and the last item's right edge is on the container's — where
+// "space-between" says it is.
+//
+// The middle offsets are the quantised fractions and not the exact ones: 200 and
+// two thirds is 12842.67 sixty-fourths, so 200.65625 on the page. Only the last
+// one is exact, and it is exact because 265 is.
 func TestTheLastItemLandsOnTheFarEdge(t *testing.T) {
 	got := flexRow(t, `<div id="f"><div>a</div><div>b</div><div>c</div><div>d</div></div>`,
 		`#f { width: 313px; justify-content: space-between }`)
 	wantRow(t, got, [][2]float64{
-		{0, 12}, {100.328125, 12}, {200.671875, 12}, {301, 12},
+		{0, 12}, {100.328125, 12}, {200.65625, 12}, {301, 12},
 	}, "four items over a free space that does not divide")
 
 	if len(got) == 4 && got[3].x+got[3].w != 313 {

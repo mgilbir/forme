@@ -569,11 +569,15 @@ type lengthKey struct {
 //
 // It is a value, and comparable, because it is part of the memoization key.
 type faceMetrics struct {
-	xHeight      style.Unit
+	// In CSS pixels rather than layout units, for the reason
+	// style.LengthContext gives: "16ch" is sixteen of one of these, and
+	// multiplying before the rounding is what makes sixteen of them hold
+	// sixteen characters.
+	xHeight      float64
 	xHeightKnown bool
-	zeroAdvance  style.Unit
+	zeroAdvance  float64
 	zeroKnown    bool
-	icAdvance    style.Unit
+	icAdvance    float64
 	icKnown      bool
 }
 
@@ -2262,11 +2266,11 @@ func (l *layouter) lengthContext(b *Box, m faceMetrics) style.LengthContext {
 		ViewportWidth:    l.avail.W,
 		ViewportHeight:   l.avail.H,
 		ViewportKnown:    true,
-		ZeroAdvance:      m.zeroAdvance,
+		ZeroAdvancePx:    m.zeroAdvance,
 		FontMetricsKnown: m.zeroKnown,
-		XHeight:          m.xHeight,
+		XHeightPx:        m.xHeight,
 		XHeightKnown:     m.xHeightKnown,
-		IcAdvance:        m.icAdvance,
+		IcAdvancePx:      m.icAdvance,
 		IcAdvanceKnown:   m.icKnown,
 	}
 }
@@ -2327,7 +2331,7 @@ func usesUnit(raw string, a, b byte) bool {
 // sizing. The fourteen standard faces all state one (Courier 426, Times 450,
 // Helvetica 523, out of 1000), so the fallback is for a face that has no OS/2
 // table and for a family the set does not have at all.
-func (l *layouter) xHeightOf(b *Box) (style.Unit, bool) {
+func (l *layouter) xHeightOf(b *Box) (float64, bool) {
 	face, ok := l.fontFor(b)
 	if !ok {
 		return 0, false
@@ -2342,7 +2346,7 @@ func (l *layouter) xHeightOf(b *Box) (style.Unit, bool) {
 // about a *parent's* face, before any layouter exists: "font-size: 6ex" is
 // relative to the parent's font, and the size it produces is what every other
 // length on the element is measured against. See boxBuilder.fontMetricsFor.
-func xHeightIn(face *shape.Face, size style.Unit) (style.Unit, bool) {
+func xHeightIn(face *shape.Face, size style.Unit) (float64, bool) {
 	if face == nil {
 		return 0, false
 	}
@@ -2358,7 +2362,7 @@ func xHeightIn(face *shape.Face, size style.Unit) (style.Unit, bool) {
 	if upem <= 0 || !d.Has(shape.MetricXHeight) || d.XHeight <= 0 {
 		return 0, false
 	}
-	return size.Mul(float64(d.XHeight) / upem), true
+	return size.Px() * float64(d.XHeight) / upem, true
 }
 
 // zeroAdvance is the width of "0" in a box's own font, which is what "ch" means.
@@ -2366,12 +2370,12 @@ func xHeightIn(face *shape.Face, size style.Unit) (style.Unit, bool) {
 // It reports false when no face could be found, so that a "ch" length is
 // unresolvable — and therefore reported — rather than silently zero, which would
 // collapse the box the author was trying to size.
-func (l *layouter) zeroAdvance(b *Box) (style.Unit, bool) {
+func (l *layouter) zeroAdvance(b *Box) (float64, bool) {
 	face, ok := l.fontFor(b)
 	if !ok {
 		return 0, false
 	}
-	return l.br.Measure(face, "0", b.FontSize), true
+	return l.br.MeasurePx(face, "0", b.FontSize), true
 }
 
 // waterIdeograph is CSS Values §5.1.4's own choice of character for "ic":
@@ -2406,7 +2410,7 @@ const waterIdeograph = "\u6c34"
 // would size every "ic" box wrong with nothing to say so. What pins the decision
 // meanwhile is TestIcIsTheFacesOwnAdvanceWhenItHasTheIdeograph, which asks this
 // function rather than a page.
-func (l *layouter) icAdvance(b *Box) (style.Unit, bool) {
+func (l *layouter) icAdvance(b *Box) (float64, bool) {
 	face, ok := l.fontFor(b)
 	if !ok {
 		return 0, false
@@ -2414,7 +2418,18 @@ func (l *layouter) icAdvance(b *Box) (style.Unit, bool) {
 	if missesVisible(face, waterIdeograph) {
 		return 0, false
 	}
-	return l.br.Measure(face, waterIdeograph, b.FontSize), true
+	// In pixels, like the other two, and it is the one of the three where that
+	// cannot be shown to matter — recorded rather than left as an implied claim.
+	//
+	// A face that has a water ideograph makes it exactly one em, which is what a
+	// full-width character is, and a font size is already a whole number of
+	// layout units. So the advance is exact, "16ic" is sixteen exact ems
+	// whichever way it is quantised, and a planted defect measuring this the
+	// quantised way changes nothing any font in the checkout can show. It is
+	// carried in pixels because the rule is about the unit and not about the
+	// fonts here: a face whose 水 is not full-width would be measured wrongly by
+	// the other reading, and nothing would say so.
+	return l.br.MeasurePx(face, waterIdeograph, b.FontSize), true
 }
 
 // ensureFontSize gives a box a font size where nothing decided one, so that an

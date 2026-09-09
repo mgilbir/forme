@@ -214,7 +214,11 @@ type Metrics interface {
 	// and whether that face states one at all. A face that states none is not
 	// an error: §5.1.1 says to assume half an em, which is what a false here
 	// produces.
-	XHeight(cs ComputedStyle, size Unit) (Unit, bool)
+	//
+	// In CSS pixels, for the reason LengthContext gives: "6ex" is six of this
+	// number, and multiplying before the rounding is what makes six of them the
+	// height of six.
+	XHeight(cs ComputedStyle, size Unit) (float64, bool)
 }
 
 // Apply computes a style for every element in a document.

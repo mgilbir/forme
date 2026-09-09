@@ -674,11 +674,18 @@ func TestBackgroundPropagatesToTheCanvas(t *testing.T) {
 // both directions — a document that trips it at the real value, and the same
 // document passing once the cap is raised.
 func TestBackgroundTileCapFires(t *testing.T) {
-	// A hundredth of a pixel over a 260 × 160 border box is 26000 × 16000 tiles,
-	// which is four hundred million: past the cap by two orders of magnitude and
-	// reached with a declaration eleven characters long.
+	// One layout unit — a sixty-fourth of a pixel — over a 260 × 160 border box
+	// is 16640 × 10240 tiles, which is a hundred and seventy million: past the
+	// cap by two orders of magnitude, and asked for by a declaration a dozen
+	// characters long.
+	//
+	// One unit and not a hundredth of a pixel, which is what stood here and is
+	// the real extreme anyway: a length is quantised to a whole layout unit, so
+	// 0.01px is a tile of no size at all, and a tiling refused for having no
+	// tile is not the cap firing. The smallest tile a stylesheet can name is the
+	// most tiles it can ask for.
 	const css = bgBoxCSS + `#a { background-image: url(wide.png);
-		background-size: 0.01px 0.01px; background-repeat: repeat }`
+		background-size: 0.015625px 0.015625px; background-repeat: repeat }`
 
 	frag, findings := bgLayoutWithFindings(t, `<div id="a"></div>`, css)
 	if got := tilings(Paint(frag)); len(got) != 0 {

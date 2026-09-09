@@ -249,6 +249,33 @@ input { font-family: monospace; font-size: 20px; margin: 0; padding: 0;
 	if got, want := find(t, root, "x").ContentRect().W, zero.Mul(20); got != want {
 		t.Errorf("an input with no size is %v wide, want %v", got, want)
 	}
+
+	// At a size whose digit is not a whole number of layout units, which is
+	// where "size characters wide" stops being arithmetic anyone can do twice.
+	//
+	// Twenty above says nothing about it: a monospace digit at 20px is 12px
+	// exactly, so quantising the advance and quantising the product are the same
+	// number. At 13px it is 7.8px — 499.2 sixty-fourths — and six of them are
+	// 2995.2, which is 2995 quantised once and 2994 quantised first. The field
+	// has to hold the six digits it says it holds, so the box is measured
+	// against the six as one string. See style.LengthContext.
+	const odd = `
+html, body { margin: 0; padding: 0 }
+input { font-family: Courier; font-size: 13px; margin: 0; padding: 0;
+  border: none; display: block }
+`
+	face, err := shape.Standard("Courier")
+	if err != nil {
+		t.Fatalf("loading Courier: %v", err)
+	}
+	for _, n := range []int{2, 6, 20, 41} {
+		root = layoutWithFonts(t, set, `<input id=x size=`+itoa(n)+`>`, odd)
+		want, _ := style.FromPx(face.Measure(strings.Repeat("0", n), 13))
+		if got := find(t, root, "x").ContentRect().W; got != want {
+			t.Errorf("an input of size=%d at 13px Courier is %v wide and %d digits "+
+				"measure %v", n, got, n, want)
+		}
+	}
 }
 
 // TestControlAttributesAreClamped is the security bound. cols, rows and size are

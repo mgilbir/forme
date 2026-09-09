@@ -1134,7 +1134,25 @@ const wptEnv = "WPT_TESTS"
 // own rendering section, which is a rule a stylesheet may overrule.
 // generated-content/content-100 overrules it and asks for the ":before" on the
 // box that makes.
-const wptCleanPassBaseline = 5964
+// 5964 to 5967 is a change to the arithmetic rather than to a rule: a length is
+// quantised *downwards*, and the units a face measures — ch, ex and ic — are
+// carried in pixels so that "16ch" is one quantisation of sixteen advances and
+// not sixteen quantisations added up.
+//
+// The two go together and neither works alone. What they buy is one invariant:
+// n parts of size x fit a container of size n·x, because a whole number of units
+// taken from n·x is never less than n times a whole number taken from x. Under
+// rounding it is not so, and the three documents say it three ways. units-005
+// puts a hundred floats of 0.87em in a box of 8.7em, and nine of every ten rows
+// left the tenth column showing the red it was there to cover; both
+// overflow-wrap-*-003 put "PASS FAIL" in a box of 4ch, and "PASS" measured a
+// sixty-fourth of a pixel wider than the four digits the box was built from, so
+// the line broke inside the word.
+//
+// It is the same trade every browser has taken. What it costs is accuracy: the
+// error in a length is up to a sixty-fourth of a pixel and always downwards,
+// where rounding is half that and unbiased.
+const wptCleanPassBaseline = 5967
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

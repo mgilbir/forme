@@ -17,8 +17,17 @@ import (
 // Two separate faults made them differ, and the second is the worse of the two
 // because it is not about letter-spacing at all.
 
-// spacedWidth is the width of one line of text under the given declarations.
-func spacedWidth(t *testing.T, text, decl string) style.Unit {
+// spacedWidth is the width of one line of text under the given declarations,
+// and how many runs it was drawn as.
+//
+// The count is returned because it bounds what the width can be asked to equal.
+// A zero width format character is a place a line may end, so the letters either
+// side of one are two runs that may land on two lines, and each is quantised to
+// a whole layout unit on its own — so a word salted with them can be a unit per
+// boundary away from the same word without them. See
+// TestOneWordMeasuresTheSameHoweverInlineBoxesCutIt for the boundary that
+// carries no opportunity, which is required to add up exactly.
+func spacedWidth(t *testing.T, text, decl string) (style.Unit, int) {
 	t.Helper()
 	f := find(t, layoutOf(t, 4000, `<div id="p">`+text+`</div>`,
 		`#p { font-family: Courier; font-size: 12px; `+decl+` }`), "p")
@@ -29,12 +38,12 @@ func spacedWidth(t *testing.T, text, decl string) style.Unit {
 	for _, r := range f.Lines[0].Runs {
 		w = w.Add(r.Width)
 	}
-	return w
+	return w, len(f.Lines[0].Runs)
 }
 
 // TestNoLetterSpacingAfterACharacterNothingIsDrawnFor.
 func TestNoLetterSpacingAfterACharacterNothingIsDrawnFor(t *testing.T) {
-	plain := spacedWidth(t, "letter", "letter-spacing: 4px")
+	plain, _ := spacedWidth(t, "letter", "letter-spacing: 4px")
 	for _, tc := range []struct{ text, what string }{
 		{"le\u200Btter", "a zero width space"},
 		{"le\u200Ctter", "a zero width non-joiner"},
@@ -46,8 +55,15 @@ func TestNoLetterSpacingAfterACharacterNothingIsDrawnFor(t *testing.T) {
 		{"le\u061Ctter", "the Arabic letter mark"},
 		{"\u200Ble\u200Btte\u200Br\u200B", "several of them, including at the edges"},
 	} {
-		if got := spacedWidth(t, tc.text, "letter-spacing: 4px"); got != plain {
-			t.Errorf("%s: %v against %v for the same word without it", tc.what, got, plain)
+		got, runs := spacedWidth(t, tc.text, "letter-spacing: 4px")
+		// One layout unit per boundary the format characters made, which is the
+		// quantisation and not a tolerance chosen to fit. A spacing wrongly
+		// added after one of them would be 4px — 256 units — and the widest
+		// fixture here has three.
+		slack := style.Unit(runs - 1)
+		if d := got.Sub(plain); d > slack || d < -slack {
+			t.Errorf("%s: %v against %v for the same word without it, in %d runs",
+				tc.what, got, plain, runs)
 		}
 	}
 }
@@ -56,8 +72,8 @@ func TestNoLetterSpacingAfterACharacterNothingIsDrawnFor(t *testing.T) {
 // has to be here: every assertion above is an equality between two widths, and
 // they would all hold if letter-spacing did nothing whatever.
 func TestLetterSpacingIsStillAddedAfterEveryLetter(t *testing.T) {
-	plain := spacedWidth(t, "letter", "")
-	spaced := spacedWidth(t, "letter", "letter-spacing: 4px")
+	plain, _ := spacedWidth(t, "letter", "")
+	spaced, _ := spacedWidth(t, "letter", "letter-spacing: 4px")
 	// Six characters, six spacings — CSS Text adds one after the last character
 	// too, and it is the trailing one that hangs at the end of a line.
 	want, _ := style.FromPx(24)
@@ -78,12 +94,15 @@ func TestLetterSpacingIsStillAddedAfterEveryLetter(t *testing.T) {
 // an unmapped character gets, which is a space. A document spelling a word with
 // a non-joiner came out with a gap in the middle of it.
 func TestAJoinerIsNotDrawnAsASpace(t *testing.T) {
-	plain := spacedWidth(t, "letter", "")
+	plain, _ := spacedWidth(t, "letter", "")
 	for _, tc := range []struct{ text, what string }{
 		{"le\u200Ctter", "a non-joiner"},
 		{"le\u200Dtter", "a joiner"},
 	} {
-		if got := spacedWidth(t, tc.text, ""); got != plain {
+		// Exactly, and it can be asked exactly: a join control is kept inside
+		// the run rather than cutting it, so there is one run here and one
+		// quantisation. See spacedWidth.
+		if got, _ := spacedWidth(t, tc.text, ""); got != plain {
 			t.Errorf("%s in a standard face measured %v against %v, with no "+
 				"letter-spacing involved at all", tc.what, got, plain)
 		}

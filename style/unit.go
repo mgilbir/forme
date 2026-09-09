@@ -65,6 +65,33 @@ const (
 
 // FromPx converts a length in CSS pixels, saturating rather than wrapping.
 //
+// # Which way a length that is not a whole unit goes
+//
+// Downwards, and not to the nearest — which is the less accurate of the two and
+// is chosen anyway, because accuracy is not what this decides.
+//
+// What it decides is whether a box built out of n things of size x holds n of
+// them. A whole number of units taken downwards from n·x is never less than n
+// times a whole number taken downwards from x; taken to the *nearest*, it can be
+// less, by up to half a unit for every part. The suite says it three ways.
+// units-005 puts a hundred floats of 0.87em in a box of 8.7em and shows through
+// the red they were laid over; both overflow-wrap-*-003 put "PASS FAIL" in a box
+// of 4ch and break the word, because "PASS" measured a sixty-fourth of a pixel
+// wider than the four digits the box was built from.
+//
+// It is what every browser does with its own fixed-point length, for the same
+// reason. What it costs is an error of up to a sixty-fourth of a pixel, always
+// downwards, where rounding is half that and unbiased. Nothing on a page is
+// measured to a sixty-fourth of a pixel; a great many things are counted.
+//
+// Downwards means towards zero, so a negative length loses magnitude rather than
+// gaining it — the same direction, read as "no further from the origin than the
+// author asked for".
+//
+// See TestALengthIsQuantisedDownwards and
+// TestNPartsFitAContainerOfNTimesTheirSize, which assert the property and then
+// assert that rounding to the nearest fails it.
+//
 // ok reports whether the value fitted. A caller that ignores it gets a
 // well-defined number at the end of the range, which is the safe direction to be
 // wrong in — but "width: 1e9px" is a stylesheet saying something impossible, and
@@ -84,7 +111,7 @@ func FromPx(px float64) (u Unit, ok bool) {
 	case v < float64(MinUnit):
 		return MinUnit, false
 	}
-	return Unit(math.Round(v)), true
+	return Unit(math.Trunc(v)), true
 }
 
 // Px returns the length in CSS pixels.
@@ -113,6 +140,9 @@ func (u Unit) Sub(v Unit) Unit {
 
 // Mul scales a length by a plain number, which is what a scale factor, a
 // line-height multiplier and a percentage all are.
+//
+// It quantises the same way FromPx does and for the same reason: half a
+// line-height is half a line-height, not the nearest sixty-fourth to it.
 func (u Unit) Mul(f float64) Unit {
 	if math.IsNaN(f) {
 		return 0
@@ -124,7 +154,7 @@ func (u Unit) Mul(f float64) Unit {
 	case v < float64(MinUnit):
 		return MinUnit
 	}
-	return Unit(math.Round(v))
+	return Unit(math.Trunc(v))
 }
 
 // Div divides by a plain number. Dividing by zero saturates in the direction of

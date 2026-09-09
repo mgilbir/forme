@@ -88,20 +88,24 @@ func TestNormalLineHeightIncludesTheLineGap(t *testing.T) {
 	// ascent 1745, descent -805, line gap 92, out of 1024 units: 2642/1024 of an
 	// em. At 20px that is 51.6015625 in real arithmetic and it is not what a
 	// layout unit can hold — 20px is 1280 units, 1280 x 2642/1024 is 3302.5, and
-	// half a unit rounds up to 3303, which is 51.609375. The expectation is the
-	// quantised figure and the workings are here because a test that quietly
-	// widened its tolerance to absorb the difference would also absorb a bug of
-	// the same size.
+	// a layout unit is a whole sixty-fourth, so it is 3302: 51.59375. The
+	// expectation is the quantised figure and the workings are here because a
+	// test that quietly widened its tolerance to absorb the difference would
+	// also absorb a bug of the same size.
 	//
-	// Without the gap the sum is 2550/1024: 3187.5 units, rounding to 3188,
-	// which is 49.8125. Far enough apart that the rounding cannot hide it.
+	// Half a unit down rather than up, which is style.FromPx's rule and not this
+	// font's arithmetic: a length is truncated so that n parts of size x fit a
+	// container of size n·x. See style.Unit.
+	//
+	// Without the gap the sum is 2550/1024: 3187.5 units, truncating to 3187,
+	// which is 49.796875. Far enough apart that the quantisation cannot hide it.
 	got := boxHeight(t, set, `<p id="p">x</p>`,
 		noDefaults+`p { font-family: Ahem; font-size: 20px; line-height: normal }`, "p")
-	const want = 51.609375
+	const want = 51.59375
 	if got != want {
 		t.Errorf("a line of 20px CanvasTest is %gpx tall, want %g — "+
 			"(1745 + 805 + 92) / 1024 of an em, quantised to a 64th; %g is the "+
-			"sum without the gap", got, want, 49.8125)
+			"sum without the gap", got, want, 49.796875)
 	}
 }
 
@@ -114,7 +118,9 @@ func TestNormalLineHeightIncludesTheLineGap(t *testing.T) {
 // being asked — how much room does a line of this face need — so it is used
 // rather than a constant.
 //
-// Helvetica's box is -225 to 931 out of 1000: 1.156em, or 23.125px at 20. The
+// Helvetica's box is -225 to 931 out of 1000: 1.156em, which is 23.12px at 20
+// and is not a layout unit — 1479.68 sixty-fourths, quantised down to 1479, so
+// 23.109375. The
 // AFM's own Ascender and Descender come to 0.925em, which is what a line spaced
 // by them would be and is tighter than any browser sets the same text; the 1.2
 // factor that used to stand here was in §10.8.1's recommended range but bore no
@@ -123,8 +129,8 @@ func TestNormalLineHeightIncludesTheLineGap(t *testing.T) {
 func TestNormalLineHeightUsesTheGlyphBoxWhenTheFontStatesNoGap(t *testing.T) {
 	got := boxHeight(t, StandardFonts(), `<p id="p">x</p>`,
 		noDefaults+`p { font-family: Helvetica; font-size: 20px; line-height: normal }`, "p")
-	if got != 23.125 {
-		t.Errorf("a line of 20px Helvetica is %gpx tall, want 23.125 — the glyph "+
+	if got != 23.109375 {
+		t.Errorf("a line of 20px Helvetica is %gpx tall, want 23.109375 — the glyph "+
 			"box, (931 + 225) / 1000 of an em; 24 is the old constant and 18.5 "+
 			"the AFM ascender and descender alone", got)
 	}
@@ -267,10 +273,16 @@ func TestExFollowsTheFace(t *testing.T) {
 	a := boxHeight(t, set, `<div id="a"></div><div id="b"></div>`, css, "a")
 	b := boxHeight(t, set, `<div id="a"></div><div id="b"></div>`, css, "b")
 	// Ahem's x-height is 800/1000, so 3ex at 20px is 48px. Helvetica's is
-	// 523/1000 from its AFM — 31.38px, quantised to 31.359375 in 64ths — where
-	// this used to read 30px off the half-em fallback. Two faces that both state
-	// an x-height still separate the cache keys, which is what is under test.
-	const wantB = 31.359375
+	// 523/1000 from its AFM — 31.38px, which is 2008.32 sixty-fourths and so
+	// 31.375 — where this used to read 30px off the half-em fallback. Two faces
+	// that both state an x-height still separate the cache keys, which is what
+	// is under test.
+	//
+	// Three x-heights and not three *quantised* x-heights, which is the half of
+	// the unit rule this face happens to show: one x-height is 669.44 units, and
+	// three of those taken to a unit each would be 2007, a sixty-fourth short of
+	// three of them. See style.LengthContext.
+	const wantB = 31.375
 	if a != 48 || b != wantB {
 		t.Errorf("3ex resolved to %gpx in Ahem and %gpx in Helvetica, want 48 and %g — "+
 			"equal values mean the cached length is shared across faces", a, b, wantB)

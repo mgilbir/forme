@@ -132,6 +132,22 @@ func TestACutHalfIsAsWideAsItIsDrawn(t *testing.T) {
 	frag := Layout(built.Root, Size{W: w, H: h},
 		suiteFonts{standard: StandardFonts(), fallback: faces}, NewRecorder(nil))
 
+	// Within a layout unit, and that bound is the rule rather than a tolerance
+	// chosen to make this pass.
+	//
+	// A run inside a merge group is measured as the two ends of its own stretch
+	// of the group's single shaping, each quantised — so that the runs of a
+	// group tile it and add up to the group's own width. Quantising two ends and
+	// subtracting is not the same number as quantising the difference, and the
+	// two can be a sixty-fourth of a pixel apart. That sixty-fourth is the price
+	// of the runs adding up, and it is also the finest distinction any cut can
+	// be made on: a length on the page is a whole layout unit.
+	//
+	// What this exists to catch is nothing like a sixty-fourth. A prefix
+	// measured alone is measured with its last letter in its final form and
+	// drawn in a medial one — three joined behs in NotoSansArabic at 64px are
+	// 61px in context and 109px alone. Three thousand units, not one.
+	const unit = style.Unit(1)
 	for i, line := range linesOf(t, frag, "d") {
 		for _, r := range line.Runs {
 			if r.Face == nil {
@@ -139,7 +155,7 @@ func TestACutHalfIsAsWideAsItIsDrawn(t *testing.T) {
 			}
 			want, _ := style.FromPx(r.Face.MeasureShapedInContext(r.Text, r.Size.Px(),
 				r.PreContext, r.PostContext, r.ContextKerns, r.Features))
-			if r.Width != want {
+			if d := r.Width.Sub(want); d > unit || d < -unit {
 				t.Errorf("line %d's run %q is %v wide and is drawn %v wide",
 					i, r.Text, r.Width, want)
 			}

@@ -202,7 +202,7 @@ func fontSizeOf(cs ComputedStyle, own bool, parent, root Unit, m Metrics,
 	ctx := LengthContext{FontSize: parent, RootFontSize: root}
 	if m != nil {
 		if xh, ok := m.XHeight(fontStyle, parent); ok {
-			ctx.XHeight, ctx.XHeightKnown = xh, true
+			ctx.XHeightPx, ctx.XHeightKnown = xh, true
 		}
 	}
 	size, _, ok := ResolveFontSizeIn(vals, ctx)

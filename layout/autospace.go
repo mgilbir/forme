@@ -230,7 +230,17 @@ func (l *layouter) autospaceBetween(a, b inlineItem, last, first rune) (style.Un
 		// §5.1.4's fallback for a face with no water ideograph, which is what
 		// every Latin face is — one em. It is the same answer the "ic" unit
 		// gives, and it is reached here for the same reason.
-		adv = ib.FontSize
+		adv = ib.FontSize.Px()
 	}
-	return adv.Div(8), true
+	// The division in pixels, because the advance now arrives in pixels — the
+	// same carrying the "ic" unit itself does, for the reason
+	// style.LengthContext gives.
+	//
+	// Nothing turns on doing it before the quantisation rather than after: an
+	// eighth of a whole number of layout units is the same whole number of
+	// layout units either way, because the part a truncation drops is less than
+	// one unit and an eighth of it cannot reach the next. The order is here so
+	// that the file reads the same as every other length built from a face.
+	u, _ := style.FromPx(adv / 8)
+	return u, true
 }

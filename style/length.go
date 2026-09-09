@@ -108,25 +108,39 @@ type LengthContext struct {
 	ViewportWidth, ViewportHeight Unit
 	ViewportKnown                 bool
 
-	// XHeight is the height of a lowercase x in the element's own font, which is
-	// what "ex" is. It is zero when the face does not state one, and
+	// The three units a face measures, each in CSS pixels rather than in layout
+	// units.
+	//
+	// In pixels because they are *multiplied* here. A layout unit is a
+	// sixty-fourth of a pixel and a font's advance is not one: quantizing the
+	// measure and then taking sixteen of it is sixteen truncations, where
+	// quantizing once at the end is one. "width: 16ch" has to hold sixteen
+	// digits, and the digits are measured from the same face by the same
+	// arithmetic — so the box and the text agree exactly when the multiplication
+	// happens before the rounding and disagree by up to fifteen sixty-fourths
+	// when it happens after. The suite writes that as white-space-pre-034,
+	// word-break-break-all-062 and hyphens-auto-010, all of which wrapped a
+	// character early.
+
+	// XHeightPx is the height of a lowercase x in the element's own font, which
+	// is what "ex" is. It is zero when the face does not state one, and
 	// XHeightKnown says which — a font stating zero and a font with no OS/2
 	// table both report zero, and only one of them has answered.
-	XHeight      Unit
+	XHeightPx    float64
 	XHeightKnown bool
 
-	// ZeroAdvance is the width of "0" in the element's own font, which is what
+	// ZeroAdvancePx is the width of "0" in the element's own font, which is what
 	// "ch" is. It is zero when no face has been chosen — during the cascade,
 	// where a length is parsed before layout knows what will set it — and
 	// FontMetricsKnown says which of the two a zero means.
-	ZeroAdvance      Unit
+	ZeroAdvancePx    float64
 	FontMetricsKnown bool
 
-	// IcAdvance is the advance of U+6C34 (水) in the element's own font, which
+	// IcAdvancePx is the advance of U+6C34 (水) in the element's own font, which
 	// is what "ic" is, and IcAdvanceKnown says whether a face was found that has
 	// the glyph at all. A face without it has no ideographic advance to state,
 	// and §5.1.4 says what to do then.
-	IcAdvance      Unit
+	IcAdvancePx    float64
 	IcAdvanceKnown bool
 }
 
@@ -239,7 +253,7 @@ func pxPerUnit(unit string, ctx LengthContext) (px float64, known, supported boo
 		if !ctx.FontMetricsKnown {
 			return 0, false, true
 		}
-		return ctx.ZeroAdvance.Px(), true, true
+		return ctx.ZeroAdvancePx, true, true
 
 	// ic is the advance of "水" — CSS Values §5.1.4's "CJK water ideograph",
 	// U+6C34 — in the element's own font. It is what an author sizes a box in
@@ -256,7 +270,7 @@ func pxPerUnit(unit string, ctx LengthContext) (px float64, known, supported boo
 	// come out the same width.
 	case "ic":
 		if ctx.IcAdvanceKnown {
-			return ctx.IcAdvance.Px(), true, true
+			return ctx.IcAdvancePx, true, true
 		}
 		return ctx.FontSize.Px(), true, true
 
@@ -270,8 +284,8 @@ func pxPerUnit(unit string, ctx LengthContext) (px float64, known, supported boo
 	// Now the face is asked first and half an em is what is left when it does
 	// not say, which is what §5.1.2 was written for.
 	case "ex":
-		if ctx.XHeightKnown && ctx.XHeight > 0 {
-			return ctx.XHeight.Px(), true, true
+		if ctx.XHeightKnown && ctx.XHeightPx > 0 {
+			return ctx.XHeightPx, true, true
 		}
 		return ctx.FontSize.Px() / 2, true, true
 
