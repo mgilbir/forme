@@ -68,6 +68,14 @@ jobs:
           # handed back.
           - package: ./layout
             target: FuzzRender
+          # The algorithm every document with two directions in it goes through.
+          # Its conformance suite settles what the answers are for the cases
+          # Unicode tabulated; this settles that arbitrary text gets an answer at
+          # all, and that the levels are a shape a caller can index by. It found
+          # LineLevels contradicting Levels over a trailing PDF within an hour of
+          # being written.
+          - package: ./bidi
+            target: FuzzResolve
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7

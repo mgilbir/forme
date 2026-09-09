@@ -110,15 +110,37 @@ func (p *Paragraph) LineLevels(start, end int) []int {
 
 	// Backwards from the end of the line, which is the only place clause 4
 	// starts from. It stops at the first character that marks the page.
+	//
+	// A character rule X9 removed is neither reset nor a stop *by itself*. §5.2
+	// says two things about one and they are not in conflict: it takes the level
+	// of the character before it, "so that the character does not interrupt a
+	// run", and it joins a sequence of white space that L1 resets. So a PDF in
+	// the middle of a run of spaces is part of that run, and a PDF with a letter
+	// in front of it is part of the letter — it is held until the scan learns
+	// which, and dropped if the scan stops before it finds white space.
+	//
+	// Resetting one on sight was what this did, and it contradicted the levels
+	// Resolve had already settled: "a<LRO>b<RLO>c<PDF>" gave the trailing PDF
+	// the paragraph's level here and c's level there, so LineLevels over the
+	// whole paragraph disagreed with Levels — which the note on Levels says
+	// cannot happen. A caller splitting runs where the level changes got one
+	// extra run of a character that marks no paper.
+	var held []int
 	for i := end - 1; i >= start; i-- {
 		c := p.classes[i]
-		// §5.2 puts the isolate formatting characters and the ones rule X9
-		// removed in with the white space: they mark no paper, so a run of
-		// spaces with a PDF in the middle of it is still a run of spaces.
-		if c != WS && c != LRI && c != RLI && c != FSI && c != PDI && !isRemoved(c) {
-			break
+		switch {
+		case isRemoved(c):
+			held = append(held, i-start)
+			continue
+		case c == WS || c == LRI || c == RLI || c == FSI || c == PDI:
+			for _, at := range held {
+				out[at] = p.para
+			}
+			held = held[:0]
+			out[i-start] = p.para
+		default:
+			return out
 		}
-		out[i-start] = p.para
 	}
 	return out
 }
