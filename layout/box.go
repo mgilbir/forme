@@ -830,6 +830,12 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		after.Parent = box
 		box.Children = append(box.Children, after)
 	}
+	if inner == InnerFlow && outer != OuterInline {
+		// §5.12.2's ::first-letter, which applies to a block container and is
+		// done here because the letter is a stretch of text that has already
+		// been collapsed and transformed. See firstletter.go.
+		b.applyFirstLetter(box, n, fontSize)
+	}
 	if outer != OuterInline && !box.outOfFlow() {
 		// §2.2's virtual word separators at a phrase boundary that falls
 		// between two boxes, which is the one place the node-by-node reading

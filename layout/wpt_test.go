@@ -1210,7 +1210,28 @@ const wptEnv = "WPT_TESTS"
 // poster and no controls, has nothing missing from it and reports nothing —
 // which is the half that moves the count, and is the same rule an iframe naming
 // no document already follows.
-const wptCleanPassBaseline = 5972
+// 5972 to 5976 is ::first-letter, which parsed and matched and was never
+// computed — so a rule written for one did nothing at all, and the cascade
+// reported that rather than doing it.
+//
+// It is a division of the text and not a box, which is §5.12.1's model for
+// ::first-line applied to a letter: what changes is the type the letter is *set*
+// in. Done in the box builder, because the letter is a stretch of text that has
+// already been through white-space processing and the element's own
+// text-transform, and text-transform is a property that applies to a
+// ::first-letter.
+//
+// The four documents are what the four properties this engine acts on reach:
+// combining-characters-002 asks for "text-transform: uppercase" on a letter and
+// its combining mark and asserts the two are styled as one character, which is
+// what makes the unit the typographic character unit; three
+// text-transform-shaping tests put "capitalize" on the first letter of Arabic
+// and ask that the shaping not break; line-height-bleed-002 colours it.
+//
+// What still needs a box of its own — a float, a border, a background, a margin —
+// is reported, because that is how a drop cap is written and an author has to be
+// told the letter came out ordinary.
+const wptCleanPassBaseline = 5976
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
