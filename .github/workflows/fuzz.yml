@@ -61,6 +61,13 @@ jobs:
           # caller that computes its own can compute wrongly.
           - package: ./paragraph
             target: FuzzBreakerCursor
+          # The whole pipeline, which is the one an embedder calls. Every target
+          # above covers a reader; this covers what happens once all of their
+          # answers have to agree with each other, and it is the only place where
+          # a failure is the embedder's process rather than a value it can be
+          # handed back.
+          - package: ./layout
+            target: FuzzRender
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
