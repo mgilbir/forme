@@ -252,8 +252,61 @@ func FuzzLoadAndUse(f *testing.F) {
 				useFace(inst)
 			}
 			checkClusters(t, face)
+			checkSubset(t, face)
 		}
 	})
+}
+
+// checkSubset asserts that a font this package writes is a font it can read,
+// and that the glyphs it kept are the glyphs the page will draw with.
+//
+// Subsetting is the last thing that happens to a font before it goes into a PDF
+// and the first place a fault in it is invisible: the document opens, the page
+// has text on it, and a letter is drawn at the wrong width or with the wrong
+// outline. Nothing downstream can notice — the reader is given a font and
+// believes it.
+//
+// Three things are asked, and the first is the one that makes the other two
+// mean anything:
+//
+//   - The program parses. A subsetter that emits a table it cannot read back is
+//     emitting one no reader can either.
+//   - Every glyph the face used is in it. That is what the subset is *for*, and
+//     a glyph left out is a letter missing from the page.
+//   - Every kept glyph has the advance it had. The indices are retained on
+//     purpose — see the note on Subset — and hmtx is kept at full length, so
+//     this is a property the design promises rather than one it merely happens
+//     to have. A width that moved is a line drawn to the wrong length with the
+//     right letters in it.
+//
+// An error is a legitimate answer and is not one of the three: a standard font
+// has no program to subset, and a font whose loca and glyf disagree is one
+// Subset refuses rather than lies about.
+func checkSubset(t *testing.T, f *Face) {
+	t.Helper()
+	prog, kept, err := f.SubsetGlyphs()
+	if err != nil || len(prog) == 0 {
+		return
+	}
+	in := map[int]bool{}
+	for _, gid := range kept {
+		in[gid] = true
+	}
+	for _, gid := range f.Used() {
+		if !in[gid] {
+			t.Fatalf("glyph %d was used and is not in the subset", gid)
+		}
+	}
+	sub, err := Load(prog)
+	if err != nil || sub == nil {
+		t.Fatalf("the subset this package wrote cannot be read back: %v", err)
+	}
+	for _, gid := range kept {
+		if got, want := sub.advanceGID(gid), f.advanceGID(gid); got != want {
+			t.Fatalf("glyph %d advances %v in the subset and %v in the font",
+				gid, got, want)
+		}
+	}
 }
 
 // checkClusters asserts the contract the group arithmetic rests on: every glyph
