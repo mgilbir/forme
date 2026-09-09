@@ -1152,7 +1152,23 @@ const wptEnv = "WPT_TESTS"
 // It is the same trade every browser has taken. What it costs is accuracy: the
 // error in a length is up to a sixty-fourth of a pixel and always downwards,
 // where rounding is half that and unbiased.
-const wptCleanPassBaseline = 5967
+// 5967 to 5969 is §7.3's inter-word justification reading §8.3's list of
+// word-separator characters, which is the list word-spacing in this same engine
+// already reads, and reading it one character at a time.
+//
+// It had the ordinary space alone — a no-break space was held to be
+// unstretchable, which is a guess about what an author means by typing one and
+// is not what the section says — and it took a run of preserved spaces as a
+// single gap. white-space-pre-wrap-justify-002 puts the two halves in one
+// document: "one two  three   four" under pre-wrap beside the same characters
+// written with no-break spaces under white-space: normal, which can only render
+// alike if three spaces are three opportunities and a no-break space is one.
+// text-justify-word-separators is the other half stated on its own.
+//
+// The room a run can take is at its end, because that is all a width can say —
+// so a box that may justify has its text cut after every separator, which is the
+// cut word-spacing already asks for and is made in the same place.
+const wptCleanPassBaseline = 5969
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

@@ -133,7 +133,7 @@ record of what it thought of.
 
 | | |
 |---|---|
-| **CSS Working Group reftests** | 6,253 documents rendered and compared against their references — **5,967 pass with nothing unsupported reported in either document** |
+| **CSS Working Group reftests** | 6,253 documents rendered and compared against their references — **5,969 pass with nothing unsupported reported in either document** |
 | **Unicode's bidi conformance** | 861,948 cases across `BidiTest.txt` and `BidiCharacterTest.txt`, no failures |
 | **Unicode's grapheme boundaries** | all 766 cases of `GraphemeBreakTest.txt` |
 | **Unicode's normalisation forms** | all 20,034 cases of `NormalizationTest.txt`, both NFC invariants |

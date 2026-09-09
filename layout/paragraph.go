@@ -38,6 +38,7 @@ var (
 	wordSpaceTransformOf    = paragraph.WordSpaceTransformOf
 	// The two rune predicates the line breaking shares with the collapsing.
 	isOtherSpaceSeparator = paragraph.IsOtherSpaceSeparator
+	isWordSeparator       = paragraph.IsWordSeparator
 	separatorBreaksAfter  = paragraph.SeparatorBreaksAfter
 )
 

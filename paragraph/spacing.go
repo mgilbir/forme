@@ -324,6 +324,17 @@ func SplitAtCursiveTracking(text string) []string {
 	return append(out, text[start:])
 }
 
+// IsWordSeparator reports whether a character is one of CSS Text §8.3's
+// word-separator characters.
+//
+// The same list answers two questions and it is one list because the
+// specification writes it once: word-spacing goes after each of these, and §7.3's
+// inter-word justification puts its slack at each of them. Nothing that reads it
+// may narrow it on its own account — a no-break space is a word separator, and
+// the "no break" is about where a line may end rather than about how wide the
+// space is.
+func IsWordSeparator(r rune) bool { return isWordSeparator(r) }
+
 // isWordSeparator reports whether §8.3's word-spacing goes after a character.
 func isWordSeparator(r rune) bool {
 	switch r {

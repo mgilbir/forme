@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/mgilbir/forme/paragraph"
 	"github.com/mgilbir/forme/style"
@@ -29,28 +30,102 @@ import (
 //
 // # Where the space goes
 //
-// Between words, at ordinary spaces. CSS 2.1 leaves the algorithm to the UA and
+// Between words, at word separators. CSS 2.1 leaves the algorithm to the UA and
 // CSS Text 3 §7.3 makes "inter-word" the behaviour of text-justify: auto for
 // scripts that have word separators, which is the case this engine can act on.
 //
-// It is ordinary spaces only, and not the rest of the word-separator list that
-// word-spacing applies to. A no-break space is written to keep two things
-// together, and stretching one to line up a margin is the one thing an author
-// who typed it asked for it not to do. The Ethiopic and Aegean separators are
-// left out with it rather than guessed at.
+// At *every* word separator, and at each one of them separately — which is two
+// corrections to a reading that took the ordinary space alone and took a run of
+// them as one gap.
+//
+// The list is §8.3's, the one word-spacing already uses, and the two questions
+// are one question: a no-break space is a word separator, and "no break" is
+// about where a line may end rather than about how wide the space is. Reading it
+// as unstretchable was a guess about what an author meant by typing one, and it
+// left this engine disagreeing with its own word-spacing about the same
+// character. The Ethiopic and Aegean separators come with it.
+//
+// Separately, because a run of preserved spaces is several separators and not
+// one gap: "one two  three" under white-space: pre-wrap has to justify like
+// "one two&nbsp; three" under white-space: normal, which is what the suite's
+// white-space-pre-wrap-justify-002 puts side by side and asks to match. Taking
+// the run as one opportunity gave the two documents different word positions
+// with the same line ends.
 //
 // A line with no space in it — one long word, or a line of Chinese — cannot be
 // justified this way and is left where "start" put it, and *that* is what is
 // still reported: the page is not what was asked for, and nothing here can make
 // it so.
+//
+// # Where in a run the room goes
+//
+// At its end, because that is all a run's width can say. A display list carries a
+// width and nothing that means "and four pixels after the third character", so
+// the only separator a run can be expanded at is the one it ends with.
+//
+// That is not a restriction on the rule, because the runs are cut to suit it: a
+// box that may justify has its text divided after every word separator, which is
+// the same cut word-spacing asks for and is made in the same place. See
+// mayJustify and paragraph.SplitAtWordSeparators. Without the cut a run of three
+// preserved spaces is one opportunity where it should be three, and a no-break
+// space in the middle of a run — "\u00a0four\u00a0" in the reference of
+// white-space-pre-wrap-justify-003 — is none where it should be one.
+
+// mayJustify reports whether a box's text can be reached by inter-word
+// justification.
+//
+// It is asked when the runs are built, long before any line exists, and it
+// decides one thing: whether to cut a run after each word separator so that the
+// slack §7.3 puts at one falls at the end of a run, where a width can hold it.
+// It is the same cut word-spacing asks for and for the same reason — see
+// paragraph.SplitAtWordSeparators — and a document that justifies nothing takes
+// the scan and no cut.
+//
+// Either alignment counts and both directions are asked as one: "justify"
+// resolves to itself whichever way the line runs, and the question here is only
+// whether the value can be reached at all. A false answer where it could be is a
+// separator that quietly takes no slack; a true answer where it cannot be is one
+// more run in the display list, which nothing on the page shows.
+func mayJustify(b *Box) bool {
+	if b == nil {
+		return false
+	}
+	if m, _, _ := justificationOf(b); m != justifyWords {
+		return false
+	}
+	return alignmentOf(b, false) == alignJustify ||
+		lastLineAlignment(b, false) == alignJustify
+}
 
 // justifiableSpace reports whether a run is a stretch of the ordinary spaces
 // justification expands.
+//
+// It answers "is there anything of the line after this", which is why it is the
+// ordinary space and not the whole separator list: a no-break space is not white
+// space a line edge removes or hangs, so a run of one is content and something
+// that follows it is not past the end of the line.
 func justifiableSpace(text string) bool {
 	if text == "" {
 		return false
 	}
 	return strings.Trim(text, " ") == ""
+}
+
+// expandsAfter reports whether a run carries one of §7.3's opportunities: it
+// ends with a word separator, and the slack goes after it.
+//
+// The separator it *ends* with is the whole of the rule rather than a narrowing
+// of it, because a box that may justify has its runs cut after every separator —
+// so each one is at the end of a run, and a run has at most one. See mayJustify
+// and the note above on where in a run the room goes. False for a run that ends
+// in anything else, which is every run of every unjustified document and nearly
+// every word of a justified one.
+func expandsAfter(text string) bool {
+	if text == "" {
+		return false
+	}
+	r, _ := utf8.DecodeLastRuneInString(text)
+	return isWordSeparator(r)
 }
 
 // justifiableHere reports whether §7.3 allows an opportunity at this item.
@@ -151,7 +226,7 @@ func justifyItems(items []inlineItem, xs, widths []style.Unit, hangs []bool, sla
 	// property of the line's order rather than of anything's position, is what
 	// makes one pass and two passes the same answer.
 	expands := func(i, k int) bool {
-		return i < last && i > lastTab && justifiableSpace(items[k].Text) &&
+		return i < last && i > lastTab && expandsAfter(items[k].Text) &&
 			!hangs[k] && justifiableHere(items[k])
 	}
 	n := 0

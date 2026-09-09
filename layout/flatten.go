@@ -727,6 +727,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	// the decorations are memoized across the whole tree besides.
 	decorations := l.decorationsFor(b)
 	spacing := l.spacingFor(b)
+	justifies := mayJustify(b)
 	// §10.8.1's leading, for the same reason and read the same number of times.
 	// It is the inline box's own line-height and font rather than the block's,
 	// which is the whole of what makes a <span> set larger than the paragraph
@@ -1113,16 +1114,24 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 					runs = cutRunsAt(runs, parts)
 				}
 			}
-			// And after each word separator, for the same reason again: §8.3's
-			// spacing goes after the character, and a run carries a width and
-			// no way to say where inside it the extra room is. A space is
-			// already a piece of its own — a line may end after one — so what
-			// this is for is the separator that offers no break, the no-break
-			// space above all.
-			if spacing.Word != 0 {
-				if parts := splitAtWordSeparators(p.Text); len(parts) > 1 {
-					runs = cutRunsAt(runs, parts)
-				}
+		}
+		// And after each word separator, for the same reason again: §8.3's
+		// spacing goes after the character, and a run carries a width and no way
+		// to say where inside it the extra room is.
+		//
+		// Two things put room there. word-spacing is one. §7.3's justification is
+		// the other, and it needs the cut in one more place than word-spacing
+		// does — inside a *space* piece, where a run of preserved spaces is
+		// several separators and each takes its own share of the slack. So this
+		// one cut is made outside the guard the others are under, and a tab is
+		// all that is excluded: its advance is a distance to the next stop
+		// rather than a string, and there is no separator in it to cut at.
+		//
+		// See mayJustify for why the question is asked of the box rather than of
+		// the line, which does not exist yet.
+		if !p.Tab && (spacing.Word != 0 || justifies) {
+			if parts := splitAtWordSeparators(p.Text); len(parts) > 1 {
+				runs = cutRunsAt(runs, parts)
 			}
 		}
 		for ri, run := range runs {
