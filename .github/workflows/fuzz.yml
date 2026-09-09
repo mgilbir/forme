@@ -91,6 +91,12 @@ jobs:
           # measured one way in each.
           - package: ./layout
             target: FuzzShrinkToFit
+          # The one bit in the property registry that decides what a document
+          # looks like — a colour on <body> reaches every word under it and a
+          # margin reaches nothing — asserted over a tree the parser built out
+          # of whatever it was given, with no stylesheet to muddy the answer.
+          - package: ./style
+            target: FuzzInheritance
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
