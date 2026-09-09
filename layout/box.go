@@ -853,6 +853,27 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 	return box
 }
 
+// replacedFallback reports whether an element's children are the content a user
+// agent shows *instead* of the element, so this one — which draws the element —
+// lays none of them out.
+//
+// The two here are the two whose replacement is settled by the element itself: a
+// canvas is its bitmap and a video is its poster or its default box, and neither
+// asks anything of this engine that it might fail to provide. An <object> and an
+// <svg> are not here, and that is the distinction rather than an omission —
+// their fallback is shown when the data cannot be read, which is a thing that
+// happens.
+//
+// An <img> and an <iframe> need no entry: the first is void and the second has
+// its content skipped by the tokenizer, which is a stronger form of the same
+// rule and is recorded in html.contentSkippedElements.
+func replacedFallback(n *html.Node) bool {
+	if n == nil || n.Type != html.ElementNode {
+		return false
+	}
+	return strings.EqualFold(n.Name, "canvas") || strings.EqualFold(n.Name, "video")
+}
+
 // appendChildren builds an element's children into a box, following the ones
 // that stand for their own contents rather than for a box.
 //
@@ -864,6 +885,19 @@ func (b *boxBuilder) appendChildren(box *Box, n *html.Node,
 
 	for _, child := range n.Children {
 		if controlSkipsChild(box, child) {
+			continue
+		}
+		if replacedFallback(n) {
+			// The children of a replaced element are what a user agent that
+			// cannot draw it would show instead, and this one draws it.
+			//
+			// Skipped here rather than thrown away once the box tree is built,
+			// which is where it used to be done and was one step too late: a
+			// *block* among the fallback splits the inline box around it, and
+			// what is left is the block and no replaced box at all.
+			// "<canvas><p>x</p></canvas>" drew the paragraph and lost the
+			// canvas — the element's own bitmap gone and its fallback on the
+			// page, which is both halves of the rule the wrong way round.
 			continue
 		}
 		if child.Type == html.ElementNode && b.replacedByItsContents(child) {

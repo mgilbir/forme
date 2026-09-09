@@ -126,12 +126,8 @@ func TestAVideoPosterIsTheContent(t *testing.T) {
 // fallback left in the tree is invisible and still costs every box in it. That
 // is what "dropped rather than hidden" means, and a hidden box is still a box.
 //
-// The fallback is inline here on purpose, and the reason is a defect this change
-// does not fix: a *block* inside a replaced element splits the inline box around
-// it before any of this runs, and what is left is the block and no replaced box
-// at all. "<canvas><p>x</p></canvas>" loses its canvas the same way, so it is
-// not something <video> brought — but a fixture written with a <p> would be
-// testing that instead of this.
+// See TestAReplacedElementLaysOutNoFallback for the block case, which is the
+// same rule and needs the children left out one step earlier.
 func TestAVideoDropsItsFallback(t *testing.T) {
 	built := Build(Input{HTML: `<div><video id="v"><span>no video here</span></video></div>`})
 	var found *Box

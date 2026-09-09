@@ -463,10 +463,15 @@ func (l *replacedLoader) fallbackTo(b *Box, fail *loadFailure, data string) {
 // would have painted is a page whose <script> was thrown away, and that is
 // already reported where it happened.
 //
-// The fallback children go, for the reason embed drops an object's: a canvas's
-// children are what a user agent that cannot do canvas would show instead, and
-// one that can never renders them. Dropped rather than hidden, because a hidden
-// box is still a box.
+// The fallback children never arrive. A canvas's children are what a user agent
+// that cannot do canvas would show instead, and one that can never renders them
+// — so the box builder does not build them at all. See layout.replacedFallback,
+// and note that it is the *builder* that has to do it: this pass runs after the
+// tree is built, and a block among the fallback has split the inline box around
+// it by then, taking the canvas with it. Clearing the children here as well was
+// written first, and a planted defect removing it now changes nothing in the
+// unit tests or in the suite, so it is gone rather than kept as a second answer
+// to a question with one.
 func (l *replacedLoader) canvas(b *Box) {
 	w := canvasDimension(b.Element, "width", 300)
 	h := canvasDimension(b.Element, "height", 150)
@@ -482,7 +487,6 @@ func (l *replacedLoader) canvas(b *Box) {
 	// through to §10.3.2's default size: "width=0" is a valid non-negative
 	// integer and HTML keeps it. See ReplacedContent.Stated.
 	b.Replaced = content
-	b.Children = nil
 }
 
 // video makes a <video> the replaced element it is, and reports what a reader
@@ -527,14 +531,17 @@ func (l *replacedLoader) video(b *Box) {
 	if src, ok := b.Element.Attr("src"); ok && strings.TrimSpace(src) != "" {
 		named = true
 	}
-	for _, c := range b.Children {
-		if c.Element != nil && strings.EqualFold(c.Element.Name, "source") {
-			if src, ok := c.Element.Attr("src"); ok && strings.TrimSpace(src) != "" {
+	// The <source> children are read from the *element* and not from the box,
+	// because the box has none: a replaced element's fallback is not laid out,
+	// and the box builder leaves it out rather than this pass throwing it away.
+	// See layout.replacedFallback.
+	for _, c := range b.Element.Children {
+		if c.Type == html.ElementNode && strings.EqualFold(c.Name, "source") {
+			if src, ok := c.Attr("src"); ok && strings.TrimSpace(src) != "" {
 				named = true
 			}
 		}
 	}
-	b.Children = nil
 
 	if poster, ok := b.Element.Attr("poster"); ok && strings.TrimSpace(poster) != "" {
 		content, why := l.load(strings.TrimSpace(poster), "video poster", svgAsImage)
