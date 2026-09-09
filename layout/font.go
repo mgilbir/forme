@@ -338,7 +338,7 @@ func isItalic(value string) bool {
 // Ahem, whose x-height is eight tenths of an em, and asks for an inch.
 type fontMetrics struct{ fonts FontSet }
 
-func (m fontMetrics) XHeight(cs style.ComputedStyle, size style.Unit) (style.Unit, bool) {
+func (m fontMetrics) XHeight(cs style.ComputedStyle, size style.Unit) (float64, bool) {
 	return xHeightIn(faceForStyle(m.fonts, cs), size)
 }
 

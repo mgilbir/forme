@@ -133,7 +133,7 @@ record of what it thought of.
 
 | | |
 |---|---|
-| **CSS Working Group reftests** | 6,253 documents rendered and compared against their references — **5,960 pass with nothing unsupported reported in either document** |
+| **CSS Working Group reftests** | 6,253 documents rendered and compared against their references — **5,976 pass with nothing unsupported reported in either document** |
 | **Unicode's bidi conformance** | 861,948 cases across `BidiTest.txt` and `BidiCharacterTest.txt`, no failures |
 | **Unicode's grapheme boundaries** | all 766 cases of `GraphemeBreakTest.txt` |
 | **Unicode's normalisation forms** | all 20,034 cases of `NormalizationTest.txt`, both NFC invariants |
@@ -155,7 +155,7 @@ settled by asking CoreText as a third opinion rather than by argument. They are
 listed with their reasons in `shape/harfbuzz_test.go` and pinned in the corpora,
 so a difference that stops being deliberate fails the test.
 
-Beyond the suites: 20 fuzz targets, fifteen of them scheduled weekly, a
+Beyond the suites: 25 fuzz targets, twenty of them scheduled weekly, a
 differential fuzzer against HarfBuzz that generates text rather than listing it,
 and a CoreText harness for the questions two implementations cannot settle
 between them.

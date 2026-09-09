@@ -1103,7 +1103,135 @@ const wptEnv = "WPT_TESTS"
 // inline-block two lines tall in a cell two hundred tall: bottom-aligned its
 // last baseline lands where a one-line reference's does, and centred — which is
 // what the cell was doing — it does not.
-const wptCleanPassBaseline = 5960
+//
+// 5960 to 5961 is text-wrap-balance-word-spacing-001, and it needed two things.
+// The balancing search was measuring the first line in the block's own type
+// where a ::first-line rule sets it in another, so the width it settled on was
+// one the layout could not reproduce. And an <img> naming no file was not a
+// replaced element at all, so it was not content either, and the two spaces
+// around it collapsed together where the reference keeps both — which is what
+// ReplacedContent.Stated is for: an intrinsic dimension of nought is a third
+// thing from the absence of one, and the absence is §10.3.2's 300 by 150.
+//
+// 5961 to 5962 is an inside list marker's own characters reaching the bidi
+// algorithm. The marker was kept out of the paragraph altogether so that it
+// would not join the directional run of the text after it — which bought where
+// it sits at the price of never resolving what is in it, and "1." in a
+// right-to-left list came out in logical order. CSS2/lists/list-style-position
+// -024 checks that list against the same two characters written as text.
+//
+// 5962 to 5963 is §5.12.1's first line keeping the faces its runs are set in.
+// Restyling re-asks the box for its font, which it has to — a rule may change
+// the family or the size — and it was forcing that face onto runs the *fallback*
+// had found another for, then measuring their leading against it. A Japanese run
+// on a restyled first line was set in the Latin face beside it and given its
+// metrics. text-autospace-first-line-001 is that document, and this is the third
+// thing it needed.
+//
+// 5963 to 5964 is <map> and <area> becoming boxes. They were dropped, under "an
+// image map needs somewhere to click" — true of the map and false of the
+// elements: a <map> is an ordinary inline box and an <area> is hidden by HTML's
+// own rendering section, which is a rule a stylesheet may overrule.
+// generated-content/content-100 overrules it and asks for the ":before" on the
+// box that makes.
+// 5964 to 5967 is a change to the arithmetic rather than to a rule: a length is
+// quantised *downwards*, and the units a face measures — ch, ex and ic — are
+// carried in pixels so that "16ch" is one quantisation of sixteen advances and
+// not sixteen quantisations added up.
+//
+// The two go together and neither works alone. What they buy is one invariant:
+// n parts of size x fit a container of size n·x, because a whole number of units
+// taken from n·x is never less than n times a whole number taken from x. Under
+// rounding it is not so, and the three documents say it three ways. units-005
+// puts a hundred floats of 0.87em in a box of 8.7em, and nine of every ten rows
+// left the tenth column showing the red it was there to cover; both
+// overflow-wrap-*-003 put "PASS FAIL" in a box of 4ch, and "PASS" measured a
+// sixty-fourth of a pixel wider than the four digits the box was built from, so
+// the line broke inside the word.
+//
+// It is the same trade every browser has taken. What it costs is accuracy: the
+// error in a length is up to a sixty-fourth of a pixel and always downwards,
+// where rounding is half that and unbiased.
+// 5967 to 5969 is §7.3's inter-word justification reading §8.3's list of
+// word-separator characters, which is the list word-spacing in this same engine
+// already reads, and reading it one character at a time.
+//
+// It had the ordinary space alone — a no-break space was held to be
+// unstretchable, which is a guess about what an author means by typing one and
+// is not what the section says — and it took a run of preserved spaces as a
+// single gap. white-space-pre-wrap-justify-002 puts the two halves in one
+// document: "one two  three   four" under pre-wrap beside the same characters
+// written with no-break spaces under white-space: normal, which can only render
+// alike if three spaces are three opportunities and a no-break space is one.
+// text-justify-word-separators is the other half stated on its own.
+//
+// The room a run can take is at its end, because that is all a width can say —
+// so a box that may justify has its text cut after every separator, which is the
+// cut word-spacing already asks for and is made in the same place.
+// 5969 to 5970 is an opportunity offered by the last character of a text node
+// reaching the box after it.
+//
+// SplitAtBreaks returns a flag for exactly that and the soft hyphen's own note
+// says it is "what every other opportunity here already does". Two were not: an
+// ordinary hyphen and, under line-break: loose, a currency or number sign each
+// asked whether they stood at the end of the *text* and gave their opportunity
+// up when they did. The end of a text node is not the end of a word, and the
+// suite writes the character in an element of its own precisely because that is
+// what a test for a character does — line-break-loose-018 colours five prefixes
+// that way. The same fault broke nothing in "high-<span>way</span>", which is
+// one word written in two elements and overflowed its box.
+// 5970 to 5971 is before-after-table-parts-001, and it needed two rules.
+//
+// A picture that is the whole of a "content" value makes the pseudo-element a
+// replaced element and one that is not does not, which decides whether a height
+// sizes the picture or the line's box it sits on, and whether a border is drawn
+// once or twice.
+//
+// And a column group with no column children describes a column when it is an
+// element and none when it is a pseudo-element: "span" is an attribute, HTML's
+// table model defaults it to one for an element, and a pseudo-element carries no
+// attributes to default. The test puts "display: table-column-group" on both
+// pseudo-elements of a table whose one row has one cell, and its reference draws
+// that table with a single column — where two columns cost a border-spacing the
+// reference does not have.
+// 5971 to 5972 is <video> becoming the replaced element it is.
+//
+// It was refused under "a page laid out once cannot play anything", which is
+// true of playing and says nothing about layout — the same confusion the form
+// controls and <iframe> were moved out of droppedElements for. HTML §4.8.9 gives
+// the element the poster's intrinsic dimensions where there is one and the
+// default object size where there is not, and video-paint-order draws a green
+// block over a 95 by 95 video and asks that the video not show through. With no
+// box there was nothing for the block to cover and nothing the test could be
+// about; with one, the answer it gives is an answer.
+//
+// What is still refused is the film and the control bar, and each is reported
+// only where the document asked for it. A <video> naming no media, with no
+// poster and no controls, has nothing missing from it and reports nothing —
+// which is the half that moves the count, and is the same rule an iframe naming
+// no document already follows.
+// 5972 to 5976 is ::first-letter, which parsed and matched and was never
+// computed — so a rule written for one did nothing at all, and the cascade
+// reported that rather than doing it.
+//
+// It is a division of the text and not a box, which is §5.12.1's model for
+// ::first-line applied to a letter: what changes is the type the letter is *set*
+// in. Done in the box builder, because the letter is a stretch of text that has
+// already been through white-space processing and the element's own
+// text-transform, and text-transform is a property that applies to a
+// ::first-letter.
+//
+// The four documents are what the four properties this engine acts on reach:
+// combining-characters-002 asks for "text-transform: uppercase" on a letter and
+// its combining mark and asserts the two are styled as one character, which is
+// what makes the unit the typographic character unit; three
+// text-transform-shaping tests put "capitalize" on the first letter of Arabic
+// and ask that the shaping not break; line-height-bleed-002 colours it.
+//
+// What still needs a box of its own — a float, a border, a background, a margin —
+// is reported, because that is how a drop cap is written and an author has to be
+// told the letter came out ordinary.
+const wptCleanPassBaseline = 5976
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

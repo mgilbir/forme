@@ -479,7 +479,7 @@ func TestFontRelativeUnitsResolve(t *testing.T) {
 	if _, unsupported, ok := ParseLength(vals, ctx); ok || !unsupported {
 		t.Errorf("10ch without metrics gave (unsupported=%v, ok=%v), want it reported", unsupported, ok)
 	}
-	ctx.ZeroAdvance, ctx.FontMetricsKnown = px(12), true
+	ctx.ZeroAdvancePx, ctx.FontMetricsKnown = 12, true
 	got, _, ok = ParseLength(vals, ctx)
 	if !ok || got.Value != px(120) {
 		t.Errorf("10ch with a 12px advance gave (%v, ok=%v), want 120px", got.Value.Px(), ok)

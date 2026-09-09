@@ -548,6 +548,11 @@ func TestNoBoxesIsNotACrash(t *testing.T) {
 
 // TestLayoutIsDeterministic pins that two runs agree, since the stages feeding
 // this range over maps.
+//
+// One document compared by its box rectangles, which is the cheap check and not
+// the whole of it: FuzzRender asserts the same thing over every document its
+// corpus reaches and compares what is *drawn* and what is reported, which is
+// where a map walk that leaked into the answer would show.
 func TestLayoutIsDeterministic(t *testing.T) {
 	const src = `<section id="wrap"><div id="a"></div><p id="b">text</p>
 		<div id="c"><span>inline</span></div></section>`

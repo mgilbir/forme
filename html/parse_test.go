@@ -470,20 +470,24 @@ func TestAnUnknownElementIsClosedLikeAnyOther(t *testing.T) {
 }
 
 // TestTheElementsThatReallyCannotBeLaidOutAreStillRefused is the containment
-// argument. A <video> plays and a <script> runs: each needs something a page
-// laid out once does not have, and rendering an empty box where one belongs is
-// the silent wrongness the finding vocabulary exists for.
+// argument. A <script> runs, and running is something a page laid out once does
+// not do; rendering a box where one belongs would be the silent wrongness the
+// finding vocabulary exists for.
 //
-// The list is shorter than it was, twice, and both departures are the same
-// correction. An <iframe> and a <canvas> were here on the reading that an
-// element whose *content* this engine cannot produce is one it cannot lay out.
-// Neither takes its size from that content — §10.3.2 gives the iframe 300 by
-// 150 and HTML gives the canvas its own two attributes — so the box was
-// knowable all along and refusing it lost something real. What is left are the
-// elements where the size itself is the unknown.
+// The list is shorter than it was, three times, and every departure is the same
+// correction. An <iframe>, a <canvas> and a <video> were each here on the
+// reading that an element whose *content* this engine cannot produce is one it
+// cannot lay out. None of the three takes its size from that content — §10.3.2
+// gives the iframe 300 by 150, HTML gives the canvas its own two attributes, and
+// HTML §4.8.9 gives the video its poster's dimensions or that same default — so
+// the box was knowable all along and refusing it lost something real.
+//
+// What is left is the element that produces no box under any reading, which is
+// one. That is worth saying plainly rather than leaving the list to imply it:
+// the boundary is not "this engine cannot do the whole element" but "there is
+// nothing to draw".
 func TestTheElementsThatReallyCannotBeLaidOutAreStillRefused(t *testing.T) {
 	for _, src := range []string{
-		"<video>x</video>",
 		"<script>x</script>",
 	} {
 		_, errs, ok := Parse(src)

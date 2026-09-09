@@ -203,7 +203,7 @@ func firstRune(s string) rune {
 // It seeds both the line building and the intrinsic-width measurement, and it
 // has to seed both: a shrink-to-fit list item whose width was measured without
 // its marker is narrower than the marker it then draws.
-func (l *layouter) markerItems(b *Box) []inlineItem {
+func (l *layouter) markerItems(b *Box, para *bidiBuilder) []inlineItem {
 	// The marker belongs to the list item and is drawn by whichever box §12.5.1
 	// makes its first inline box — which for an item whose content is
 	// block-level is an anonymous block rather than the item. See
@@ -212,7 +212,7 @@ func (l *layouter) markerItems(b *Box) []inlineItem {
 	if b.InsideMarker != nil {
 		owner = b.InsideMarker
 	}
-	item, ok := l.markerItem(owner)
+	item, ok := l.markerItem(owner, para)
 	if !ok {
 		return nil
 	}
@@ -230,11 +230,16 @@ func (l *layouter) markerItems(b *Box) []inlineItem {
 // is one line tall and shows its background; drawn as a mark beside the box it
 // was zero-tall, and the background of a dozen tests went missing.
 //
-// It is deliberately not registered with the bidi builder. A marker is its own
-// box rather than part of the run of text after it, so it does not join that
-// text's directional run — which is what leaves it at the start of the line in a
-// right-to-left list rather than reordered into the middle of the first word.
-func (l *layouter) markerItem(b *Box) (inlineItem, bool) {
+// Its text is registered with the bidi builder, and used not to be. The reason
+// it was left out — "a marker is its own box rather than part of the run of text
+// after it" — is about where the marker goes on the line, and leaving it out
+// bought that at the price of never resolving the marker's own characters. In a
+// right-to-left list "1." is a European number and a common separator, and UAX
+// #9 puts the stop on the far side of the digit; unregistered it came out in
+// logical order, which is the order nothing reads it in. CSS2/lists/list-style-
+// position-024 is that list, checked against the same two characters written as
+// text.
+func (l *layouter) markerItem(b *Box, para *bidiBuilder) (inlineItem, bool) {
 	if !markerInside(b) {
 		return inlineItem{}, false
 	}
@@ -280,13 +285,23 @@ func (l *layouter) markerItem(b *Box) (inlineItem, bool) {
 	// borrowed from another face sat on a line the size of the face that could
 	// not draw it.
 	above, below := l.leadingInFace(b, face)
-	return inlineItem{
+	item := inlineItem{
 		Text: text, Box: b, Face: face, Size: size,
 		// The same half-em the outside marker leaves, spent as width rather than
 		// as an offset: here what it separates is the next item on the line.
+		//
+		// Declared as Room as well as counted in the width, because it is room
+		// between two runs and two rules ask about that rather than about the
+		// number: a measurement taken again from the text would not know the gap
+		// was there, and §8.1 does not shape across it. See Item.Room.
 		Width: l.br.Measure(face, text, size).Add(markerGap(size)),
+		Room:  markerGap(size),
 		Leads: true, Above: above, Below: below,
-	}, true
+	}
+	if para != nil {
+		item.BidiPara, item.BidiStart, item.BidiEnd = para.Add(text)
+	}
+	return item, true
 }
 
 // markerText renders the marker for a list-style-type and a position.

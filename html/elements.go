@@ -91,6 +91,55 @@ var knownElements = map[string]bool{
 	// contentSkippedElements.
 	"iframe": true,
 
+	// Three more the same argument reaches, each refused for what it *does* and
+	// each an ordinary box while it does it.
+	//
+	// <output> is an inline element and nothing else. "An output is computed by
+	// script" describes what fills one, not what one is: a document that writes
+	// "<output>42</output>" has written the 42, and dropping the element threw
+	// the reader's own text away.
+	//
+	// <slot> renders its children where there is no shadow tree to fill it, and
+	// there never is one here. HTML gives it "display: contents", which is a
+	// value this engine honours, so the fallback content it holds reaches the
+	// page as the specification asks.
+	//
+	// <marquee> animates, and a page laid out once shows it standing still —
+	// which is what a browser asked to print one does. What it must not do is
+	// lose the words.
+	//
+	// What stays refused, and why it is not this: <details> and <summary> need a
+	// disclosure triangle and a rule that hides a closed element's content;
+	// <dialog> needs the same for a closed one; <audio>, <progress> and <meter>
+	// each need a widget drawn from a state. Every one of those is a thing to
+	// build rather than a refusal to lift.
+	//
+	// Membership here is documentation for these three, as it is for <map>
+	// below: the parser has no rule about how any of them nests. What changed is
+	// that none is in droppedElements.
+	"output": true, "slot": true, "marquee": true,
+
+	// <map> and <area>, which are markup about *where a reader may click* and
+	// nothing else — and this engine's pages are not clicked. The image map is
+	// refused and always will be, on the same footing as an iframe's browsing
+	// context: nothing here turns a rectangle into a link.
+	//
+	// What was refused with it is a box, and it should not have been. A <map> is
+	// an ordinary inline box holding whatever the author put in it, and an
+	// <area> is hidden by HTML's own rendering section rather than by anything
+	// this engine decided — which is a rule a stylesheet may overrule, and one
+	// the suite's content-100 does overrule: "area { display: block }" with a
+	// ":before" on it, checked for the word its attribute holds. Dropping the
+	// element threw away that content along with the click.
+	//
+	// Membership here changes nothing on its own for these two: the parser has
+	// no rule about how either nests, and <area> is already among the void
+	// elements. What changed is that neither is in droppedElements any more.
+	// They are listed because this table is where that boundary is argued — the
+	// form controls and <iframe> above are here for the same reason — and a
+	// removal leaves no place to say why.
+	"map": true, "area": true,
+
 	// <canvas>, for the same reason and by the same argument, which this table
 	// has now made three times.
 	//
@@ -109,6 +158,24 @@ var knownElements = map[string]bool{
 	// taint every document holding an empty canvas with a finding about a
 	// picture that was never going to exist.
 	"canvas": true,
+
+	// <video>, for its box, which is the same argument the <iframe> above is
+	// here for and the same one that moved the form controls.
+	//
+	// It was refused under "a page laid out once cannot play anything", and that
+	// is true of *playing* and says nothing about layout. A video element is a
+	// replaced element: HTML §4.8.9 gives it the poster's intrinsic dimensions
+	// where there is one and the default object size — CSS 2.1 §10.3.2's 300 by
+	// 150 — where there is not, and a browser asked to print a page with a video
+	// on it prints that box. Dropping the element threw the box away, and a
+	// reftest about what paints over a video cannot be about anything when
+	// nothing was painted.
+	//
+	// What is still refused is the film and the control bar, and each is
+	// reported where it is refused rather than here. A <video> naming no media
+	// and asking for no controls has nothing missing from it at all, which is
+	// the half that matters: see layout's video loader.
+	"video": true,
 
 	// Forms, as static boxes.
 	//
@@ -206,22 +273,21 @@ var contentSkippedElements = map[string]bool{
 // dropping it lost the content. They are in knownElements now, and the
 // interactivity boundary is stated there rather than deleted.
 var droppedElements = map[string]string{
-	"script":   "scripts are never run, and never will be",
-	"embed":    "an embedded plugin would need a plugin",
-	"applet":   "applets would need a virtual machine",
+	"script": "scripts are never run, and never will be",
+	"embed":  "an embedded plugin would need a plugin",
+	"applet": "applets would need a virtual machine",
+	// <audio> stays, and the reason above holds for it where it did not for
+	// <video>: HTML renders an audio element with no "controls" attribute as
+	// "display: none", so the page is the same either way, and one *with*
+	// controls is a player whose size no specification states. There is no box
+	// to lose by refusing it.
 	"audio":    "a page laid out once cannot play anything",
-	"video":    "a page laid out once cannot play anything",
 	"details":  "a disclosure widget needs somewhere to click",
 	"summary":  "a disclosure widget needs somewhere to click",
 	"dialog":   "a dialog is opened by script, which is never run",
 	"template": "a template's content is instantiated by script",
-	"slot":     "a shadow tree needs scripting",
-	"map":      "an image map needs somewhere to click",
-	"area":     "an image map needs somewhere to click",
-	"marquee":  "a page laid out once cannot animate",
 	"progress": "a progress bar reflects a state that does not change here",
 	"meter":    "a meter reflects a state that does not change here",
-	"output":   "an output is computed by script",
 }
 
 // closedByStartTag says which open element an incoming start tag ends.

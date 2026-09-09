@@ -376,12 +376,12 @@ func TestUnderlineComesFromTheFaceThatStatesOne(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("an underlined word painted %d bands, want 1", len(got))
 	}
-	// 20 units of 1000 at 20px is 0.4px, which is 25.6 layout units and rounds
-	// to 26 — a sixty-fourth over, and the figure is written out rather than
-	// rounded off because a test that tolerated the difference would tolerate a
-	// wrong thickness too.
-	if h := got[0].H.Px(); h != 0.40625 {
-		t.Errorf("the underline is %gpx thick, want 0.40625 (20/1000 em at 20px, "+
+	// 20 units of 1000 at 20px is 0.4px, which is 25.6 layout units and so 25 —
+	// a sixty-fourth under, and the figure is written out rather than rounded
+	// off because a test that tolerated the difference would tolerate a wrong
+	// thickness too.
+	if h := got[0].H.Px(); h != 0.390625 {
+		t.Errorf("the underline is %gpx thick, want 0.390625 (20/1000 em at 20px, "+
 			"quantised); 1 means the face was ignored for the fallback", h)
 	}
 	baseline := baselineOfFirstRun(t, root, "p")

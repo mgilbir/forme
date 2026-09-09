@@ -16,9 +16,9 @@ import (
 var calcCtx = LengthContext{
 	FontSize:         calcPx(20),
 	RootFontSize:     calcPx(16),
-	ZeroAdvance:      calcPx(10),
+	ZeroAdvancePx:    10,
 	FontMetricsKnown: true,
-	XHeight:          calcPx(8),
+	XHeightPx:        8,
 	XHeightKnown:     true,
 	ViewportWidth:    calcPx(1000),
 	ViewportHeight:   calcPx(500),

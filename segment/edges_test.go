@@ -2,7 +2,6 @@ package segment
 
 import (
 	"testing"
-	"unicode/utf8"
 )
 
 // TestAPictographicBelowTheFastPathIsStillPictographic.
@@ -79,23 +78,77 @@ func TestCountAndBoundariesAgreeOnEveryString(t *testing.T) {
 			t.Errorf("%s (%q): Count says %d clusters and Boundaries says %d",
 				tc.what, tc.s, count, want)
 		}
-		// And a Scanner, which is the third way to ask.
+		// And a Scanner, which is the third way to ask — driven the way its
+		// documentation says a caller walking a string must drive it.
+		//
+		// A Scanner is handed runes and cannot see the bytes behind them: Go's
+		// decoder yields U+FFFD for a byte that is not UTF-8, and the same
+		// U+FFFD is an ordinary character a document may contain. This used to
+		// be where that was written down and then skipped over — the Scanner
+		// "legitimately answers differently", so invalid strings went untested
+		// and the third answer was nobody's. InvalidByte is the missing half of
+		// the protocol, and with it the three agree about every string.
 		var sc Scanner
 		n := 0
-		for _, r := range tc.s {
+		for i, r := range tc.s {
+			if InvalidByte(tc.s, i) {
+				sc, n = Scanner{}, n+1
+				continue
+			}
 			if sc.Boundary(r) {
 				n++
 			}
-		}
-		if tc.s != "" && !utf8.ValidString(tc.s) {
-			// A Scanner is handed runes and cannot see the bytes behind them,
-			// so it is the one that legitimately answers differently — which is
-			// worth stating rather than leaving for someone to find.
-			continue
 		}
 		if n != count {
 			t.Errorf("%s (%q): a Scanner says %d clusters and Count says %d",
 				tc.what, tc.s, n, count)
 		}
+	}
+}
+
+// TestInvalidByteTellsTheTwoReplacementCharactersApart.
+//
+// The rule the walks share, pinned on its own. Every test that asks two of them
+// to agree asks this function on both sides, so breaking it moves both answers
+// together and none of them notices — this is the one that would.
+//
+// What it has to know is the difference a rune cannot carry: Go's decoder hands
+// back U+FFFD for a byte that is not UTF-8, and a document may contain a U+FFFD
+// of its own. One is a byte wide and the other is three.
+func TestInvalidByteTellsTheTwoReplacementCharactersApart(t *testing.T) {
+	for _, tc := range []struct {
+		s    string
+		i    int
+		want bool
+		what string
+	}{
+		{"a\xffb", 1, true, "a byte that is not UTF-8"},
+		{"a�b", 1, false, "a U+FFFD the string contains"},
+		{"abc", 0, false, "a letter"},
+		{"é", 0, false, "a two-byte character"},
+		{"\xa9", 0, true, "a continuation byte standing alone"},
+		{"\xed\xa0\x80", 0, true, "an encoded surrogate, first byte"},
+		{"\xed\xa0\x80", 1, true, "an encoded surrogate, second byte"},
+		{"\xed\xa0\x80", 2, true, "an encoded surrogate, third byte"},
+		{"\U0001F1E6", 0, false, "a four-byte character"},
+		{"a\xffb", -1, false, "before the string"},
+		{"a\xffb", 3, false, "past the end of the string"},
+		{"", 0, false, "the empty string"},
+	} {
+		if got := InvalidByte(tc.s, tc.i); got != tc.want {
+			t.Errorf("%s: InvalidByte(%q, %d) is %v, want %v",
+				tc.what, tc.s, tc.i, got, tc.want)
+		}
+	}
+
+	// And the difference it makes, which is why it is asked: a combining mark
+	// attaches to a written U+FFFD and cannot attach to a byte that is not a
+	// character, so the same three characters are one cluster in one string and
+	// two in the other.
+	if n := Count("a�́"); n != 2 {
+		t.Errorf("a letter and a written U+FFFD with a mark on it is %d clusters, want 2", n)
+	}
+	if n := Count("a\xff́"); n != 3 {
+		t.Errorf("a letter, an invalid byte and a mark is %d clusters, want 3", n)
 	}
 }

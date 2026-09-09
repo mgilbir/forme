@@ -23,12 +23,12 @@ type fakeMetrics struct {
 	families []string
 }
 
-func (m *fakeMetrics) XHeight(cs ComputedStyle, size Unit) (Unit, bool) {
+func (m *fakeMetrics) XHeight(cs ComputedStyle, size Unit) (float64, bool) {
 	m.families = append(m.families, cs["font-family"])
 	if !m.known {
 		return 0, false
 	}
-	return size.Mul(m.fraction), true
+	return size.Px() * m.fraction, true
 }
 
 // sizeOf computes one element's font-size through the cascade.

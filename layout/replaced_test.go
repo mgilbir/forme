@@ -483,9 +483,15 @@ func TestOneSourceIsOneImage(t *testing.T) {
 // anything can draw its content, so a box for one is not a guess either. What it
 // draws is a separate question and a narrower one; see svg.go and
 // TestAnInlineSVGIsSizedFromItsOwnAttributes.
+//
+// <video> left last and for the same reason again — HTML §4.8.9 gives it the
+// poster's dimensions or §10.3.2's default — which leaves one case here. An
+// <embed> is a plugin's rectangle and a plugin states its own size; there is
+// nothing to fall back to and nothing to draw, so the element is refused whole
+// and no box is made. See video_test.go for what a replaced element that *is*
+// laid out has to say for itself instead.
 func TestOtherReplacedElementsAreReported(t *testing.T) {
 	cases := map[string]string{
-		"video": `<video src="x.mp4"></video>`,
 		"embed": `<embed src="x.swf">`,
 	}
 	for name, markup := range cases {

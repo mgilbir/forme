@@ -181,6 +181,29 @@ func (br *Breaker) MeasureSpacedInContext(face *shape.Face, text string, size st
 	return w
 }
 
+// MeasurePx is the advance of a run in CSS pixels, before it is quantized to a
+// layout unit.
+//
+// It is for the units a face measures — "ch" and "ic" — whose value the
+// stylesheet then *multiplies*: "width: 16ch" is sixteen of this number.
+// Quantizing first and multiplying after is sixteen truncated sixty-fourths,
+// which is up to fifteen of them narrower than the one truncation of the
+// product — so the box holds fifteen characters where the author asked for
+// sixteen and the sixteenth wraps. Multiplying first and quantizing once gives
+// the box exactly the width the same text measures, because the text reaches
+// the same arithmetic.
+//
+// Every other caller wants Measure, which is this quantized: a length that ends
+// up on the page has to be a layout unit, and the memo behind Measure is what
+// makes line breaking affordable.
+func (br *Breaker) MeasurePx(face *shape.Face, text string, size style.Unit) float64 {
+	if face == nil || text == "" {
+		return 0
+	}
+	head, through := br.mergedSpan(face, text, size.Px(), Shaping{ContextKerns: true})
+	return through - head
+}
+
 // mergedSpan is where a run sits within the group it is shaped with.
 //
 // The group is shaped once and kept. Every run of a group asks for the same

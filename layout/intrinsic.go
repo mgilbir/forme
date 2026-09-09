@@ -313,7 +313,7 @@ func (l *layouter) inlineWidths(b *Box) intrinsicWidths {
 	_, open, closing := paragraphDirection(b)
 	para := newBidiBuilder(open)
 	done := l.gatherSubstitutions()
-	items, _ := l.collectInline(b, l.markerItems(b), startOfContext(),
+	items, _ := l.collectInline(b, l.markerItems(b, para), startOfContext(),
 		inlineFrame{Measuring: true, Bidi: para})
 	para.Leave(open, closing)
 	done()

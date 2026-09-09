@@ -105,12 +105,24 @@ func (l *layouter) linkShapingContext(items []inlineItem) []inlineItem {
 			break
 		}
 	}
-	if !joins {
+	// The groups are found whether or not any face's shaping can change with
+	// its context, and that is not the same question.
+	//
+	// A group is what a run's width is measured *within*: the two ends of the
+	// run inside the group's one shaping, each quantized, so that the runs of a
+	// group tile it exactly and add up to the group's own width. That is
+	// arithmetic and not shaping, and it is wanted for every face. Left to the
+	// gate above, a face with no forms, no kerning and no ligatures took none of
+	// it — so the same word measured differently depending on how it had been
+	// cut into runs, and "letter" written with a zero width space between every
+	// pair of letters came out a sixty-fourth of a pixel wider than "letter".
+	// See TestOneWordMeasuresTheSameHoweverItIsCutIntoRuns.
+	groups := mergeGroupTexts(items)
+	if !joins && groups.empty() {
 		return items
 	}
-	groups := mergeGroupTexts(items)
 	for i := range items {
-		if !isShapedRun(items[i]) || !contextCanChange(items[i].Face) {
+		if !isShapedRun(items[i]) {
 			continue
 		}
 		before, after := "", ""
@@ -118,20 +130,22 @@ func (l *layouter) linkShapingContext(items []inlineItem) []inlineItem {
 		// is a different question from whether the context reaches the run at
 		// all. See Item.ContextKerns.
 		kerns := true
-		if j, ok := shapingNeighbour(items, i, -1); ok {
-			before = textBetween(items, j, i)
-			kerns = kerns && items[j].Face == items[i].Face
-		}
-		if j, ok := shapingNeighbour(items, i, +1); ok {
-			after = textBetween(items, i+1, j+1)
-			kerns = kerns && items[j].Face == items[i].Face
+		if contextCanChange(items[i].Face) {
+			if j, ok := shapingNeighbour(items, i, -1); ok {
+				before = textBetween(items, j, i)
+				kerns = kerns && items[j].Face == items[i].Face
+			}
+			if j, ok := shapingNeighbour(items, i, +1); ok {
+				after = textBetween(items, i+1, j+1)
+				kerns = kerns && items[j].Face == items[i].Face
+			}
 		}
 		// And the text either side that may contribute *glyphs* and not only
 		// forms, which is a third question and the strictest of them. It is the
 		// whole of the group rather than the neighbour alone: every run of one
 		// has to shape the same string. See mergeGroupTexts.
 		mergePre, mergePost := groups.around(items, i)
-		if before == "" && after == "" {
+		if before == "" && after == "" && mergePre == "" && mergePost == "" {
 			continue
 		}
 		items[i].PreContext, items[i].PostContext = before, after
@@ -169,6 +183,23 @@ func shapingNeighbour(items []inlineItem, i, step int) (int, bool) {
 	// letter beside it takes. The suite's shaping-join-002 is a table cell
 	// holding "&zwj;&#x0627;&zwj;" and nothing else.
 	last, blank := 0, false
+	// Room between the two, declared by the item that spends it. §8.1 breaks
+	// shaping where there is room between the characters, which is the same rule
+	// the insets below are read by — an inside list marker's half-em is that
+	// room, and the marker and the item's text are two strings and not one.
+	//
+	// It is also what keeps such an item's width right, and that is worth saying
+	// because it looks like two rules. A run inside a group is measured again
+	// from its own text, and an item whose width is more than its text would
+	// lose the difference — so the width could be repaired instead, by adding
+	// Room back after the measure. Both were written and each was measured to
+	// cover the other exactly: with either one in place the marker keeps its
+	// gap, and only removing both loses it. The repair is the one that went,
+	// because it answers a case this rule does not allow to arise, and a guard
+	// that has never been seen to fire is not a guard.
+	if step > 0 && items[i].Room != 0 {
+		return last, blank
+	}
 	for j := i + step; j >= 0 && j < len(items); j += step {
 		switch {
 		case items[j].Abs != nil || items[j].Float != nil:
@@ -204,6 +235,18 @@ func shapingNeighbour(items []inlineItem, i, step int) (int, bool) {
 			return last, blank
 		}
 		if !sameShaping(items[i], items[j]) {
+			return last, blank
+		}
+		if step < 0 && items[j].Room != 0 {
+			// The same room, reached from the other side. The boundary is what
+			// the rule is about, not which of the two runs asks about it.
+			//
+			// No document reaches this and a planted defect removing it changes
+			// nothing: the only thing that spends room is an inside list
+			// marker, which leads its line, so nothing is ever looking back
+			// past one. It stays because the half above would otherwise be a
+			// rule about markers rather than about room, and the next item that
+			// spends some need not lead anything.
 			return last, blank
 		}
 		return j, true
@@ -359,9 +402,15 @@ func itemShaping(it *inlineItem) shaping {
 type mergeGroups struct {
 	// text is the group's whole text, one entry per item, shared by every run
 	// of the group; at is where that item's own text begins in it.
+	//
+	// Both are nil until a group of more than one run is found, so a box whose
+	// text is one run — which is most boxes — pays one walk and no allocation.
 	text []string
 	at   []int
 }
+
+// empty reports whether no run shapes with a neighbour, so there is no group.
+func (g mergeGroups) empty() bool { return g.text == nil }
 
 // around is the text before and after the run at i that is shaped with it.
 //
@@ -390,7 +439,7 @@ func (g mergeGroups) around(items []inlineItem, i int) (before, after string) {
 // reads an ignorable character as transparent and a context with a hole in it
 // is a different context.
 func mergeGroupTexts(items []inlineItem) mergeGroups {
-	g := mergeGroups{text: make([]string, len(items)), at: make([]int, len(items))}
+	var g mergeGroups
 	for i := 0; i < len(items); {
 		if !isShapedRun(items[i]) {
 			i++
@@ -412,6 +461,9 @@ func mergeGroupTexts(items []inlineItem) mergeGroups {
 			// without building anything.
 			i++
 			continue
+		}
+		if g.text == nil {
+			g.text, g.at = make([]string, len(items)), make([]int, len(items))
 		}
 		text := textBetween(items, i, last+1)
 		at := 0

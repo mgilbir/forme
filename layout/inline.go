@@ -213,7 +213,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	// *this* text — is about the paragraph, so it is gathered across the whole
 	// walk and answered when the walk is done. See noteSubstitution.
 	done := l.gatherSubstitutions()
-	items, _ := l.collectInline(b, l.markerItems(b), startOfContext(), inlineFrame{
+	items, _ := l.collectInline(b, l.markerItems(b, para), startOfContext(), inlineFrame{
 		Containing: width, CbHeight: origin.cbHeight, CbDefinite: origin.cbDefinite,
 		Strut: st, Bidi: para,
 	})
@@ -369,7 +369,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		firstIndent = indent
 	}
 	firstIndent = firstIndent.Sub(hangStart)
-	balanceCaps := l.balanceCaps(b, items, width, firstIndent)
+	balanceCaps := l.balanceCaps(b, items, firstItems, width, firstIndent)
 	if balanceCaps != nil && clamped && maxLines > 0 {
 		// Balancing a clamped block is a different question, because the clamp
 		// has already decided how many lines there are: any width at all
@@ -377,7 +377,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		// asks nothing. What must not change is how much of the content is
 		// *shown* — §5.1 evens out the lines, it does not throw more away — so
 		// the search is over the reach instead. See balanceClampedWidth.
-		w := l.br.BalanceClampedWidth(items, width, firstIndent, clampEllipsis, maxLines)
+		w := l.br.BalanceClampedWidth(items, firstItems, width, firstIndent, clampEllipsis, maxLines)
 		for i := range balanceCaps {
 			balanceCaps[i] = w
 		}
@@ -484,6 +484,23 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			}
 			if firstLine {
 				lineIndent = lineIndent.Sub(hangStart)
+			}
+			// Where this line's content ended up along the line, once §16.1's
+			// indent and §16.2's alignment had both moved it. It is hoisted out
+			// of the placement below because something else needs it: the static
+			// position of an absolutely positioned box written among the words
+			// is a *pen* position, and a pen position on a line nobody moved is
+			// not the one the reader sees.
+			//
+			// A line with nothing on it still has one: a block whose only child
+			// is an absolutely positioned box makes no line box, and the static
+			// position is still "where the box would have been had it been
+			// static", which is an indent in from the start edge. So the indent
+			// is the starting answer and the placement below replaces it with
+			// what the line really took, on the lines that have one.
+			lineShift := style.Unit(0)
+			if !lineBaseIsRTL(b, nil) {
+				lineShift = lineIndent
 			}
 			// The room the ellipsis needs on this line, which is the last one the
 			// clamp allows and nothing before it.
@@ -897,6 +914,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				if rtl {
 					shift = shift.Sub(total.Sub(used))
 				}
+				lineShift = shift
 				if shift != 0 {
 					for k := range line.Runs {
 						line.Runs[k].X = line.Runs[k].X.Add(shift)
@@ -1002,9 +1020,28 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 						continue
 					}
 					// The offset of the inline boxes it was written inside, which
-					// travels with the item — see collectInline.
+					// travels with the item — see collectInline — and the shift
+					// the line itself took.
+					//
+					// The shift is what §16.1's indent and §16.2's alignment came
+					// to for this line, and it belongs here for the reason the
+					// static position exists at all: §10.6.4 puts the box where
+					// it would have been had it been static, and had it been
+					// static it would have been indented and aligned with
+					// everything else on the line. Without it a box written at
+					// the start of an indented first line stood at the block's
+					// edge while the words beside it began an indent further in.
+					// The suite writes it as
+					// text-indent/text-indent-with-absolute-pos-child.
+					//
+					// Only the left-hand answer takes it. The right-hand one is
+					// measured from the block's content right edge for a
+					// right-to-left containing block, and on such a line the
+					// alignment has already been applied to the room the line had
+					// — see the note on shift above, where the indent is added
+					// for a left-to-right line and not for the other.
 					l.deferAbsolute(abs, parent,
-						left.Sub(lo).Add(f.Used).Add(f.Offset.X), y.Add(f.Offset.Y),
+						left.Sub(lo).Add(lineShift).Add(f.Used).Add(f.Offset.X), y.Add(f.Offset.Y),
 						width.Sub(right.Sub(lo).Sub(f.Used)).Sub(f.Offset.X), 0)
 				}
 			}
@@ -1103,9 +1140,9 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		// long to search, or one whose lines cannot be made to come out at the
 		// count the first pass found — the width search stands, and its answer
 		// is at least measured in the right bands.
-		lineCaps = l.br.BalanceScoredCaps(items, bands, firstIndent, len(bands))
+		lineCaps = l.br.BalanceScoredCaps(items, firstItems, bands, firstIndent, len(bands))
 		if lineCaps == nil {
-			w := l.br.BalanceWidthInBands(items, bands, width, firstIndent)
+			w := l.br.BalanceWidthInBands(items, firstItems, bands, width, firstIndent)
 			for i := range balanceCaps {
 				balanceCaps[i] = w
 			}

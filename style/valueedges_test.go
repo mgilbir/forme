@@ -156,8 +156,13 @@ func TestAFontSizeMayBeACalc(t *testing.T) {
 			t.Errorf("%q resolves = %v, want %v", tc.src, ok, tc.ok)
 			continue
 		}
-		// Within a layout unit, which is what a length rounds to.
-		if d := got.Px() - tc.want; ok && (d > 0.01 || d < -0.01) {
+		// Within a layout unit, which is what a length is quantised to — and
+		// stated as the unit rather than as 0.01, which is smaller than one and
+		// so was not the tolerance this says it is: 120% of 16px is 19.2, which
+		// is 1228.8 sixty-fourths and so 19.1875 on the page, a hundredth and a
+		// quarter away.
+		const unit = 1.0 / 64
+		if d := got.Px() - tc.want; ok && (d > unit || d < -unit) {
 			t.Errorf("%q is %gpx against a 16px parent, want %g", tc.src, got.Px(), tc.want)
 		}
 	}

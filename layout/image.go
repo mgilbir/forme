@@ -94,6 +94,23 @@ type ReplacedContent struct {
 	// size, one image pixel to one CSS pixel.
 	Width, Height style.Unit
 
+	// Stated says the two above are the content's own even where they are
+	// nought.
+	//
+	// Zero is how this spells "no intrinsic dimension", which is what a decoded
+	// picture never has and what an iframe always has, so for nearly every kind
+	// of content the two readings are the same. They part company for content
+	// that *states* a size and states it as nothing: "<canvas width=0>" is a
+	// valid non-negative integer and HTML keeps it, and an <img> naming no file
+	// is an element HTML says represents nothing at all. Read as "no intrinsic
+	// dimension" those become §10.3.2's 300 by 150, which is a box a document
+	// asked for the absence of.
+	//
+	// A flag rather than a pair of them, because the two kinds of content that
+	// set it state both dimensions or neither; and set by those two alone, so
+	// that everything already here keeps the reading it had.
+	Stated bool
+
 	// WidthPercent and HeightPercent are the dimensions an SVG states as a
 	// percentage, as a fraction, and are zero when it states none.
 	//
@@ -216,6 +233,9 @@ func (l *replacedLoader) walk(b *Box) {
 	if b.Element != nil && strings.EqualFold(b.Element.Name, "canvas") {
 		l.canvas(b)
 	}
+	if b.Element != nil && strings.EqualFold(b.Element.Name, "video") {
+		l.video(b)
+	}
 	if b.Element != nil && b.Element.Foreign != "" {
 		l.foreign(b)
 	}
@@ -300,7 +320,25 @@ func (l *replacedLoader) image(b *Box) {
 		// An <img> with no src is not a broken image, it is an element that
 		// names nothing. HTML says it represents nothing at all, and there is
 		// no reference for a resolver to have refused.
-		l.notReplaced(b, nil)
+		//
+		// Nothing is still *replaced* nothing. The element has no content to
+		// take a size from, so its intrinsic dimensions are nought and stated —
+		// and that is not the same as having none, which would make it
+		// §10.3.2's 300 by 150. What it buys is the two things a replaced
+		// element is: CSS may size it, since width and height do not apply to a
+		// non-replaced inline, and it is content, so the white space either side
+		// of it does not collapse together across it. The suite writes the
+		// second as text-wrap-balance-word-spacing-001, whose reference keeps
+		// both spaces around an <img> that names no file.
+		//
+		// Unless the element carries alt text, which is a different case with a
+		// different answer: HTML says what an image that cannot be shown
+		// contains is that text, and CSS says an element whose replaced content
+		// is unavailable is not a replaced element at all. altOnly is where that
+		// is decided, and this asks it first.
+		if l.altOnly(b); len(b.Children) == 0 {
+			b.Replaced = &ReplacedContent{Stated: true}
+		}
 		return
 	}
 
@@ -425,14 +463,19 @@ func (l *replacedLoader) fallbackTo(b *Box, fail *loadFailure, data string) {
 // would have painted is a page whose <script> was thrown away, and that is
 // already reported where it happened.
 //
-// The fallback children go, for the reason embed drops an object's: a canvas's
-// children are what a user agent that cannot do canvas would show instead, and
-// one that can never renders them. Dropped rather than hidden, because a hidden
-// box is still a box.
+// The fallback children never arrive. A canvas's children are what a user agent
+// that cannot do canvas would show instead, and one that can never renders them
+// — so the box builder does not build them at all. See layout.replacedFallback,
+// and note that it is the *builder* that has to do it: this pass runs after the
+// tree is built, and a block among the fallback has split the inline box around
+// it by then, taking the canvas with it. Clearing the children here as well was
+// written first, and a planted defect removing it now changes nothing in the
+// unit tests or in the suite, so it is gone rather than kept as a second answer
+// to a question with one.
 func (l *replacedLoader) canvas(b *Box) {
 	w := canvasDimension(b.Element, "width", 300)
 	h := canvasDimension(b.Element, "height", 150)
-	content := &ReplacedContent{Width: w, Height: h}
+	content := &ReplacedContent{Width: w, Height: h, Stated: true}
 	if w > 0 && h > 0 {
 		// Only a bitmap with area has a ratio. A canvas may state a zero
 		// dimension — "width=0" is a valid non-negative integer and HTML keeps
@@ -440,17 +483,104 @@ func (l *replacedLoader) canvas(b *Box) {
 		// §10.3.2 would then solve the other dimension from.
 		content.Ratio = w.Px() / h.Px()
 	}
-	// A stated zero is where this diverges, and it is written down rather than
-	// left to be found. ReplacedContent spells "no intrinsic dimension" as zero,
-	// so it cannot also spell "an intrinsic dimension of nought", and
-	// replacedSize reads a zero as the first — which sends a canvas of no area
-	// to §10.3.2's default size instead of drawing nothing. Saying it properly
-	// means a stated/unstated flag on every producer of replaced content, and
-	// the case it buys is a bitmap a document cannot see. See
-	// TestACanvasDimensionIsReadTheWayHTMLReadsOne, which asserts the reader
-	// rather than the box for exactly this reason.
+	// Stated, so that a canvas of no area lays out as one rather than falling
+	// through to §10.3.2's default size: "width=0" is a valid non-negative
+	// integer and HTML keeps it. See ReplacedContent.Stated.
 	b.Replaced = content
-	b.Children = nil
+}
+
+// video makes a <video> the replaced element it is, and reports what a reader
+// would have seen and does not.
+//
+// The box first, because that is the half that was missing. HTML §4.8.9: a video
+// element's intrinsic dimensions are the video's, or the poster image's while
+// there is no video, and where there is neither it takes the default object size
+// — CSS 2.1 §10.3.2's 300 by 150, the same two numbers an <iframe> with nothing
+// in it takes and for the same reason.
+//
+// The poster is a picture this engine can draw and is exactly what a browser
+// shows before anything plays, so it is loaded and it is the content. A poster
+// that cannot be read is a blocked resource like any other.
+//
+// Then the two things that are refused, each reported only when the document
+// asked for it:
+//
+//   - The film. A "src", or a <source> child, names media that is not on the
+//     page. That is a blocked resource in the sense an <object>'s data is, and a
+//     page laid out once genuinely cannot show it.
+//   - The controls. "controls" asks for a player a reader operates, and this
+//     page is not operated; the box is drawn and the bar in it is not, which is
+//     what RuleControlApproximated is for.
+//
+// A <video> that names no media, has no poster and asks for no controls has
+// nothing missing from it, and nothing is reported. That is the iframe's rule
+// again — "an iframe naming nothing has nothing missing" — and it is the half
+// that decides whether a reftest about a video's box is evidence of anything:
+// video-paint-order draws a green block over an empty video and asks that the
+// video not show through, and a finding about a film nobody named would have
+// held the answer out of the count.
+//
+// The fallback children go, for the reason canvas drops its own: they are what a
+// user agent that cannot play video would show instead, and this one draws the
+// element rather than replacing it.
+func (l *replacedLoader) video(b *Box) {
+	// No intrinsic width, height or ratio: replacedSize then falls through to
+	// §10.3.2's default dimensions rather than to a box of no size.
+	b.Replaced = &ReplacedContent{}
+	named := false
+	if src, ok := b.Element.Attr("src"); ok && strings.TrimSpace(src) != "" {
+		named = true
+	}
+	// The <source> children are read from the *element* and not from the box,
+	// because the box has none: a replaced element's fallback is not laid out,
+	// and the box builder leaves it out rather than this pass throwing it away.
+	// See layout.replacedFallback.
+	for _, c := range b.Element.Children {
+		if c.Type == html.ElementNode && strings.EqualFold(c.Name, "source") {
+			if src, ok := c.Attr("src"); ok && strings.TrimSpace(src) != "" {
+				named = true
+			}
+		}
+	}
+
+	if poster, ok := b.Element.Attr("poster"); ok && strings.TrimSpace(poster) != "" {
+		content, why := l.load(strings.TrimSpace(poster), "video poster", svgAsImage)
+		switch {
+		case content != nil:
+			b.Replaced = content
+		case why != nil:
+			l.rec.ReportDetail(Finding{
+				Rule:     why.rule,
+				Source:   AtHTML(offsetOf(b)),
+				Message:  why.message,
+				Path:     PathOf(b.Element),
+				Property: "poster",
+			})
+		}
+	}
+
+	if named {
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleResourceBlocked,
+			Source: AtHTML(offsetOf(b)),
+			Message: "the video this <video> names is not played, because a page " +
+				"laid out once has no time in it; the element's box is on the page " +
+				"and the frames are not",
+			Path:     PathOf(b.Element),
+			Property: "video",
+		})
+	}
+	if _, ok := b.Element.Attr("controls"); ok {
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleControlApproximated,
+			Source: AtHTML(offsetOf(b)),
+			Message: "the controls this <video> asks for are not drawn: a player is " +
+				"operated and this page is not, so the box is here and the bar in " +
+				"it is not",
+			Path:     PathOf(b.Element),
+			Property: "controls",
+		})
+	}
 }
 
 // canvasDimension reads one of a canvas's two bitmap dimensions.

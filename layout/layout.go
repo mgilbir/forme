@@ -569,11 +569,15 @@ type lengthKey struct {
 //
 // It is a value, and comparable, because it is part of the memoization key.
 type faceMetrics struct {
-	xHeight      style.Unit
+	// In CSS pixels rather than layout units, for the reason
+	// style.LengthContext gives: "16ch" is sixteen of one of these, and
+	// multiplying before the rounding is what makes sixteen of them hold
+	// sixteen characters.
+	xHeight      float64
 	xHeightKnown bool
-	zeroAdvance  style.Unit
+	zeroAdvance  float64
 	zeroKnown    bool
-	icAdvance    style.Unit
+	icAdvance    float64
 	icKnown      bool
 }
 
@@ -1100,13 +1104,28 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	// is meant to fall, even though its own precondition is the narrower case
 	// where the parent's *top* margin is in the collapse too.
 	//
-	// Only a minimum that actually bound counts. Where the content is taller than
-	// the minimum the margin reaches the edge exactly as it did before, and where
-	// a maximum cut the box down the child is overflowing rather than being held
-	// off the edge — hence the comparison is against what the content needed and
-	// not against whether a minimum was declared.
-	raisedByMinimum := hasMinHeight && contentHeight > contentNeeded
-	if bottomOpen && !raisedByMinimum {
+	// So the test is whether the box ended where its content did, and it is one
+	// comparison rather than two named limits because there is only one thing
+	// being asked: §8.3.1 makes two margins adjoining where nothing separates
+	// them, and what has to be true for this pair is that the box's bottom edge
+	// and its last child's bottom margin edge are the *same* edge. A minimum
+	// that bound puts the box's edge below the child's; a maximum that bound
+	// puts it above, with the child overflowing past it. Neither is one edge.
+	//
+	// A limit that did not bind changes nothing, which falls out of comparing
+	// the heights rather than asking whether a limit was declared.
+	//
+	// The maximum half of this is a change and it trades one of the suite's
+	// documents for another. normal-flow/max-height-separates-margin caps a
+	// parent at 50px over a 51px child with ten pixels of bottom margin and asks
+	// for a hundred-pixel square with nothing between its halves;
+	// margin-padding-clear/margin-collapse-038 writes the same shape and says in
+	// its own comment that the margin *should* collapse out. They cannot both be
+	// right. Chrome and Firefox pass the first and Chromium fails the second, so
+	// the reading here is theirs — and the ratchet does not move either way,
+	// which is what makes the trade one about conformance rather than about a
+	// number.
+	if bottomOpen && contentHeight == contentNeeded {
 		out.bottom = out.bottom.merge(hoistBottom)
 	}
 
@@ -1283,7 +1302,25 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 				// content width: its left margin edge is at the parent's content
 				// left edge and its right margin edge at the parent's content
 				// right edge, which is what makes both static positions nought.
-				l.deferAbsolute(child, parent, 0, y.Add(offset), 0, listIndex)
+				//
+				// Unless the box was written as an inline one. §9.7 blockifies
+				// every absolutely positioned box, so the used display says
+				// nothing about this — but §10.6.4 asks where the box would have
+				// been *had it been static*, and a box the document wrote as
+				// inline would have been on the first line. That line begins an
+				// indent in from the start edge, which is where a box written
+				// among words gets its static position from too; see inline.go's
+				// lineShift, which is the same rule where the line exists.
+				//
+				// A block whose only child is such a box makes no line box at
+				// all, which is why the answer cannot come from there.
+				x := style.Unit(0)
+				if child.staticInline && !lineBaseIsRTL(b, nil) {
+					if indent, mode := l.textIndent(b, width); mode.indentsLine(true, false) {
+						x = indent
+					}
+				}
+				l.deferAbsolute(child, parent, x, y.Add(offset), 0, listIndex)
 				continue
 			}
 			parent.Children = append(parent.Children,
@@ -2229,11 +2266,11 @@ func (l *layouter) lengthContext(b *Box, m faceMetrics) style.LengthContext {
 		ViewportWidth:    l.avail.W,
 		ViewportHeight:   l.avail.H,
 		ViewportKnown:    true,
-		ZeroAdvance:      m.zeroAdvance,
+		ZeroAdvancePx:    m.zeroAdvance,
 		FontMetricsKnown: m.zeroKnown,
-		XHeight:          m.xHeight,
+		XHeightPx:        m.xHeight,
 		XHeightKnown:     m.xHeightKnown,
-		IcAdvance:        m.icAdvance,
+		IcAdvancePx:      m.icAdvance,
 		IcAdvanceKnown:   m.icKnown,
 	}
 }
@@ -2294,7 +2331,7 @@ func usesUnit(raw string, a, b byte) bool {
 // sizing. The fourteen standard faces all state one (Courier 426, Times 450,
 // Helvetica 523, out of 1000), so the fallback is for a face that has no OS/2
 // table and for a family the set does not have at all.
-func (l *layouter) xHeightOf(b *Box) (style.Unit, bool) {
+func (l *layouter) xHeightOf(b *Box) (float64, bool) {
 	face, ok := l.fontFor(b)
 	if !ok {
 		return 0, false
@@ -2309,7 +2346,7 @@ func (l *layouter) xHeightOf(b *Box) (style.Unit, bool) {
 // about a *parent's* face, before any layouter exists: "font-size: 6ex" is
 // relative to the parent's font, and the size it produces is what every other
 // length on the element is measured against. See boxBuilder.fontMetricsFor.
-func xHeightIn(face *shape.Face, size style.Unit) (style.Unit, bool) {
+func xHeightIn(face *shape.Face, size style.Unit) (float64, bool) {
 	if face == nil {
 		return 0, false
 	}
@@ -2325,7 +2362,7 @@ func xHeightIn(face *shape.Face, size style.Unit) (style.Unit, bool) {
 	if upem <= 0 || !d.Has(shape.MetricXHeight) || d.XHeight <= 0 {
 		return 0, false
 	}
-	return size.Mul(float64(d.XHeight) / upem), true
+	return size.Px() * float64(d.XHeight) / upem, true
 }
 
 // zeroAdvance is the width of "0" in a box's own font, which is what "ch" means.
@@ -2333,12 +2370,12 @@ func xHeightIn(face *shape.Face, size style.Unit) (style.Unit, bool) {
 // It reports false when no face could be found, so that a "ch" length is
 // unresolvable — and therefore reported — rather than silently zero, which would
 // collapse the box the author was trying to size.
-func (l *layouter) zeroAdvance(b *Box) (style.Unit, bool) {
+func (l *layouter) zeroAdvance(b *Box) (float64, bool) {
 	face, ok := l.fontFor(b)
 	if !ok {
 		return 0, false
 	}
-	return l.br.Measure(face, "0", b.FontSize), true
+	return l.br.MeasurePx(face, "0", b.FontSize), true
 }
 
 // waterIdeograph is CSS Values §5.1.4's own choice of character for "ic":
@@ -2373,7 +2410,7 @@ const waterIdeograph = "\u6c34"
 // would size every "ic" box wrong with nothing to say so. What pins the decision
 // meanwhile is TestIcIsTheFacesOwnAdvanceWhenItHasTheIdeograph, which asks this
 // function rather than a page.
-func (l *layouter) icAdvance(b *Box) (style.Unit, bool) {
+func (l *layouter) icAdvance(b *Box) (float64, bool) {
 	face, ok := l.fontFor(b)
 	if !ok {
 		return 0, false
@@ -2381,7 +2418,18 @@ func (l *layouter) icAdvance(b *Box) (style.Unit, bool) {
 	if missesVisible(face, waterIdeograph) {
 		return 0, false
 	}
-	return l.br.Measure(face, waterIdeograph, b.FontSize), true
+	// In pixels, like the other two, and it is the one of the three where that
+	// cannot be shown to matter — recorded rather than left as an implied claim.
+	//
+	// A face that has a water ideograph makes it exactly one em, which is what a
+	// full-width character is, and a font size is already a whole number of
+	// layout units. So the advance is exact, "16ic" is sixteen exact ems
+	// whichever way it is quantised, and a planted defect measuring this the
+	// quantised way changes nothing any font in the checkout can show. It is
+	// carried in pixels because the rule is about the unit and not about the
+	// fonts here: a face whose 水 is not full-width would be measured wrongly by
+	// the other reading, and nothing would say so.
+	return l.br.MeasurePx(face, waterIdeograph, b.FontSize), true
 }
 
 // ensureFontSize gives a box a font size where nothing decided one, so that an

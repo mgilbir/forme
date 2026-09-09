@@ -141,18 +141,21 @@ const (
 	//
 	// RuleUnbreakableOverflow is atomic content wider than the box holding it: a
 	// long URL, a nowrap run, an oversized image. §6.2 calls it the classic
-	// silent clip, and it is — the text is there, the box is there, and the part
-	// past the edge is simply not drawn.
+	// silent clip, and it is one of two things: where something clips, the part
+	// past the edge is not drawn; where nothing does — which is the initial
+	// value of "overflow" and so the ordinary case — every glyph is on the page,
+	// over whatever was beside it. The finding says which. See
+	// layouter.overflowFate.
 	RuleUnbreakableOverflow Rule = "unbreakable-overflow"
 	// RuleTableColumnUnderflow is a table column narrower than the content in
-	// it, so the content is cut off at the column edge.
+	// it, so the content leaves the column.
 	//
-	// It is the table-shaped form of the silent clip §6.2 is named after, and it
-	// has its own identifier because it has its own cause and its own fix: the
-	// fixed table layout of §17.5.2.1 deliberately ignores what is in the cells,
-	// so a column can end up narrower than its content and the specification
-	// says so. That is a trade an author may want and may not know they made —
-	// the table looks tidy and a word is missing from it.
+	// It is the table-shaped form of the rule above, and it has its own
+	// identifier because it has its own cause and its own fix: the fixed table
+	// layout of §17.5.2.1 deliberately ignores what is in the cells, so a column
+	// can end up narrower than its content and the specification says so. That
+	// is a trade an author may want and may not know they made — the table looks
+	// tidy and a word is over the top of the next column.
 	RuleTableColumnUnderflow Rule = "table-column-underflow"
 
 	// RulePositionApproximated is a positioned box this engine placed by a

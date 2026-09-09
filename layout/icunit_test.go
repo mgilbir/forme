@@ -146,7 +146,9 @@ func icAdvanceWith(t *testing.T, set FontSet) (style.Unit, bool) {
 	box := findBox(t, built.Root, "d")
 	l := &layouter{fontSet: set, rec: NewRecorder(nil), fonts: map[fontKey]resolvedFont{}}
 	l.br = newBreaker(l)
-	return l.icAdvance(box)
+	px, ok := l.icAdvance(box)
+	u, _ := style.FromPx(px)
+	return u, ok
 }
 
 func twentyPx(t *testing.T) style.Unit {
@@ -192,7 +194,15 @@ func TestTheOtherFaceUnitsStillAnswerAsTheyDid(t *testing.T) {
 	if !d.Has(shape.MetricXHeight) || d.XHeight <= 0 {
 		t.Skip("Courier states no x-height, so there is nothing to compare against")
 	}
-	want := twentyPx(t).Mul(float64(d.XHeight) / float64(face.UnitsPerEm())).Mul(4)
+	//
+	// Four x-heights, quantized once — not four quantized x-heights. A face
+	// measures in whatever the face measures in and a layout unit is a
+	// sixty-fourth of a pixel, so rounding the metric before multiplying it
+	// rounds four times and can land up to four sixty-fourths from where four of
+	// them are. Which way it lands is not the point; that "4ex" and four ex are
+	// the same length is. See style.LengthContext, and paragraph.MeasurePx for
+	// the "ch" half of the same rule.
+	want, _ := style.FromPx(20 * float64(d.XHeight) / float64(face.UnitsPerEm()) * 4)
 	if got := icWidth(t, `font-family: Courier; font-size: 20px; width: 4ex`, set); got != want {
 		t.Errorf("width: 4ex came to %v and four times the face's x-height is %v",
 			got, want)

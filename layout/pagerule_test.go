@@ -372,9 +372,13 @@ func TestAPageSizeCanNameThePaper(t *testing.T) {
 	}
 	for _, tc := range cases {
 		w := pageSheetPx(t, `@page { size: `+tc.name+` }`, sheet600x800())
-		// Within a hundredth of a pixel: the sheet is stored in layout units
-		// and a millimetre is not a whole number of them.
-		if diff := w - tc.want; diff > 0.01 || diff < -0.01 {
+		// Within a layout unit: the sheet is stored in them and a millimetre is
+		// not a whole number of them. Stated as the unit rather than as 0.01,
+		// which is smaller than one and so was not the tolerance this claimed —
+		// A4 is 793.7007874 px, which is 50796.85 sixty-fourths and so 793.6875
+		// on the sheet, a hundredth and a quarter away.
+		const unit = 1.0 / 64
+		if diff := w - tc.want; diff > unit || diff < -unit {
 			t.Errorf("size: %s laid out on a %gpx sheet, want %g", tc.name, w, tc.want)
 		}
 	}

@@ -597,9 +597,13 @@ func (l *layouter) controlIntrinsicWidth(b *Box) (style.Unit, bool) {
 		// with no x-height, and for the same reason: a control of no width at
 		// all is the one answer that is silently wrong.
 		l.ensureFontSize(b)
-		zero = b.FontSize.Div(2)
+		zero = b.FontSize.Px() / 2
 	}
-	return zero.Mul(float64(b.Control.Chars)), true
+	// The multiplication before the quantization, for the reason
+	// paragraph.MeasurePx gives: a field of twenty characters has to be as wide
+	// as twenty characters measure, and twenty truncated advances are not.
+	u, _ := style.FromPx(zero * float64(b.Control.Chars))
+	return u, true
 }
 
 // controlIntrinsicHeight is a control's auto height, as a content height.

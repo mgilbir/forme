@@ -42,9 +42,40 @@ func (l *layouter) ReportOverflow(item inlineItem, width style.Unit) {
 		Rule: RuleUnbreakableOverflow,
 		Message: what + " is " +
 			fmtPx(item.Width) + " wide and cannot be broken, in a space " +
-			fmtPx(width) + " wide; the part past the edge will not be drawn",
+			fmtPx(width) + " wide" + l.overflowFate(heldBox(item.Box)),
 		Path: PathOf(heldBox(item.Box).Element),
 	})
+}
+
+// overflowFate says what becomes of content that leaves a box's edge, as a
+// clause to hang off the end of a finding.
+//
+// There are two answers and this engine used to give only one of them. Both
+// this rule and the table column's said "the part past the edge will not be
+// drawn", and that is what happens when something clips: "overflow" is the
+// property, its initial value is "visible", and a box whose overflow is visible
+// draws its content wherever the content goes. Measured on a 60px box holding
+// ten W's at 20px monospace, the run is emitted at the box's own origin with no
+// clip on it and covers 128px — every glyph on the page, over whatever was
+// beside it.
+//
+// Telling an author their text was cut off when it is drawn over the next
+// column is the wrong finding twice: they look for missing words and find them
+// all, and they do not look for the thing that is actually wrong. So the clause
+// is chosen by asking, and it is exact rather than a guess — the box and its
+// ancestors are right here, and overflowClips is the same question paint asks
+// when it builds the clip.
+//
+// Both remain worth a finding. Content that overlaps its neighbour is as much a
+// page nobody proofread as content that vanished.
+func (l *layouter) overflowFate(b *Box) string {
+	for ; b != nil; b = b.Parent {
+		if l.overflowClips(b) {
+			return "; the part past the edge is not drawn, because \"overflow\" " +
+				"on <" + elementName(b) + "> clips it"
+		}
+	}
+	return "; it is drawn past the edge, over whatever is beside it"
 }
 
 // reportWordBreak reports a word-break value this engine reads as normal.

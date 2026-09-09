@@ -44,9 +44,23 @@ func TestTextIsMeasuredAgainstTheFace(t *testing.T) {
 	}
 	// Helvetica's advances are in units of 1000 per em, so a size of 100 makes
 	// the arithmetic legible: "Hello world" is 494.5 units.
-	want := face.Measure("Hello world", 100)
-	if want <= 0 {
+	//
+	// Measured as the line measures it, which is a word and the space after it
+	// and then the next word: nothing between a word and its space is a place a
+	// line may end, so the two are one string, and the word after the space is
+	// another. Each is a length on the page and so a whole layout unit, and the
+	// two quantisations need not add up to the quantisation of 494.5. See
+	// TestOneWordMeasuresTheSameHoweverInlineBoxesCutIt.
+	whole := face.Measure("Hello world", 100)
+	if whole <= 0 {
 		t.Fatal("the face measured nothing")
+	}
+	head, _ := style.FromPx(face.Measure("Hello ", 100))
+	tail, _ := style.FromPx(face.Measure("world", 100))
+	expect := head.Add(tail)
+	if d := expect.Px() - whole; d > 1.0/64 || d < -1.0/64 {
+		t.Fatalf("the two groups measure %g and the whole string %g, which is "+
+			"more than a layout unit apart", expect.Px(), whole)
 	}
 
 	root := layoutOf(t, 10000, `<p id="p">Hello world</p>`,
@@ -60,9 +74,8 @@ func TestTextIsMeasuredAgainstTheFace(t *testing.T) {
 	for _, r := range lines[0].Runs {
 		total = total.Add(r.Width)
 	}
-	expect, _ := style.FromPx(want)
 	if total != expect {
-		t.Errorf("the line measures %.3f px, want the face's %.3f", total.Px(), want)
+		t.Errorf("the line measures %.3f px, want the face's %.3f", total.Px(), expect.Px())
 	}
 }
 
@@ -128,8 +141,9 @@ func TestTrailingSpacesAreTrimmed(t *testing.T) {
 func TestLineHeight(t *testing.T) {
 	cases := map[string]float64{
 		// Helvetica states no line gap, so "normal" is the box enclosing its
-		// glyphs: -225 to 931 out of 1000, which is 1.15625 x 20px.
-		"normal": 23.125,
+		// glyphs: -225 to 931 out of 1000, which is 1.156 x 20px — 23.12, and
+		// 1479.68 sixty-fourths, so 23.109375 on the page.
+		"normal": 23.109375,
 		"1.5":    30, // a multiplier
 		"2":      40, //
 		"30px":   30, // a length

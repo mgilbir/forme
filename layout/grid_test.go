@@ -654,8 +654,9 @@ func TestJustifyContentPlacesTheTracks(t *testing.T) {
 		{"space-around", [][4]float64{{25, 0, 100, 20}, {175, 0, 100, 20}}},
 		// Three gaps of 33 and a third, which is not a whole number of layout
 		// units and is why the offsets are taken from the whole free space
-		// rather than added up one gap at a time.
-		{"space-evenly", [][4]float64{{33.328125, 0, 100, 20}, {166.671875, 0, 100, 20}}},
+		// rather than added up one gap at a time. Each is the quantised
+		// fraction: two thirds of 100 is 10666.67 sixty-fourths, so 166.65625.
+		{"space-evenly", [][4]float64{{33.328125, 0, 100, 20}, {166.65625, 0, 100, 20}}},
 	} {
 		t.Run(c.value, func(t *testing.T) {
 			got := gridCells(t, `<div id="g"><div>a</div><div>bb</div></div>`,

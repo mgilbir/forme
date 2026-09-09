@@ -610,8 +610,12 @@ func TestBreakAfterAHyphenAndNotAfterATrailingOne(t *testing.T) {
 		t.Errorf("got %q, want [\"well-\" \"known\"]", got)
 	}
 
-	// A hyphen with nothing after it is not an opportunity: there would be
-	// nothing to move to the next line.
+	// A hyphen with nothing after it *in this text* still leaves an
+	// opportunity, because what comes after it may be in another box: the same
+	// word may be written "high-<span>way</span>", and it has to break where
+	// "high-way" breaks. See TestAnOpportunityAtTheEndOfANodeReachesTheNextBox
+	// and the soft hyphen's own note in SplitAtBreaks, which states the rule
+	// this shares.
 	//
 	// The piece count is not the assertion, and that is the trap here. A
 	// trailing hyphen joins the run before it either way, so a test that
@@ -622,8 +626,9 @@ func TestBreakAfterAHyphenAndNotAfterATrailingOne(t *testing.T) {
 	if len(pieces) != 1 || pieces[0].Text != "end-" {
 		t.Errorf("a trailing hyphen cut the text into %d pieces", len(pieces))
 	}
-	if endedAtBreak {
-		t.Error("a hyphen at the end of the run left a break opportunity behind it")
+	if !endedAtBreak {
+		t.Error("a hyphen at the end of the run left no break opportunity for " +
+			"the box after it")
 	}
 	// One before a space does not either, for the same reason: the space is
 	// already the opportunity, and the hyphen must not claim it — a piece that
@@ -636,8 +641,8 @@ func TestBreakAfterAHyphenAndNotAfterATrailingOne(t *testing.T) {
 	if pieces[1].BreakBefore {
 		t.Error("the space after a trailing hyphen was marked as beginning a line")
 	}
-	// And a hyphen inside a word does leave one, so the assertions above are
-	// about where the hyphen is and not about hyphens.
+	// And a word that ends in a letter leaves none, so the assertion above is
+	// about the hyphen and not about the end of the text.
 	if _, ok := splitAtBreaks("well-known", whiteSpaceOf("collapse"), wordBreak{}, lineBreak{}, hyphens{}, paragraph.WritingSystemOther); ok {
 		t.Error("a word ending after a hyphenated compound ended at an opportunity")
 	}

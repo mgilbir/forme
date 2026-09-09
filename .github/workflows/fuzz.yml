@@ -61,6 +61,42 @@ jobs:
           # caller that computes its own can compute wrongly.
           - package: ./paragraph
             target: FuzzBreakerCursor
+          # The whole pipeline, which is the one an embedder calls. Every target
+          # above covers a reader; this covers what happens once all of their
+          # answers have to agree with each other, and it is the only place where
+          # a failure is the embedder's process rather than a value it can be
+          # handed back.
+          - package: ./layout
+            target: FuzzRender
+          # The algorithm every document with two directions in it goes through.
+          # Its conformance suite settles what the answers are for the cases
+          # Unicode tabulated; this settles that arbitrary text gets an answer at
+          # all, and that the levels are a shape a caller can index by. It found
+          # LineLevels contradicting Levels over a trailing PDF within an hour of
+          # being written.
+          - package: ./bidi
+            target: FuzzResolve
+          # Where a line may be cut, over bytes rather than over text. The
+          # conformance files settle the boundaries for strings Unicode
+          # tabulated; this settles that three APIs reading one string agree
+          # about it — including a string that is not UTF-8, which is the half
+          # nobody tabulated and the half a document actually arrives in.
+          - package: ./segment
+            target: FuzzBoundaries
+          # Two walks over one paragraph, asked to agree. A box that shrink-wraps
+          # its content is sized from the intrinsic widths, which a pass computes
+          # without breaking a line; the lines are then filled by a different
+          # walk with a different accounting, and nothing else says the two have
+          # to arrive at the same number. They have not: a word split by a span
+          # measured one way in each.
+          - package: ./layout
+            target: FuzzShrinkToFit
+          # The one bit in the property registry that decides what a document
+          # looks like — a colour on <body> reaches every word under it and a
+          # margin reaches nothing — asserted over a tree the parser built out
+          # of whatever it was given, with no stylesheet to muddy the answer.
+          - package: ./style
+            target: FuzzInheritance
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7

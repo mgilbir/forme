@@ -278,6 +278,7 @@ func ParseSFNT(data []byte, maxCmapWork int) *Program {
 					continue
 				}
 				m, partial := ParseCmapSubtable(sub, maxCmapWork)
+				m = onlyDeclaredGlyphs(m, fp.NumGlyphs)
 				if m != nil {
 					fp.Cmap = m
 					bestRank = rank
@@ -294,6 +295,7 @@ func ParseSFNT(data []byte, maxCmapWork int) *Program {
 				fp.CmapPartial = fp.CmapPartial || partial
 			case plat == 3 && enc == 0:
 				m, partial := ParseCmapSubtable(sub, maxCmapWork)
+				m = onlyDeclaredGlyphs(m, fp.NumGlyphs)
 				if m == nil {
 					continue // unreadable: leave the cmap unset, not empty
 				}
@@ -304,6 +306,7 @@ func ParseSFNT(data []byte, maxCmapWork int) *Program {
 				}
 			case plat == 1 && enc == 0:
 				m, partial := ParseCmapSubtable(sub, maxCmapWork)
+				m = onlyDeclaredGlyphs(m, fp.NumGlyphs)
 				if m == nil {
 					continue
 				}
@@ -318,6 +321,41 @@ func ParseSFNT(data []byte, maxCmapWork int) *Program {
 		}
 	}
 	return fp
+}
+
+// onlyDeclaredGlyphs drops the mappings that name a glyph the font does not
+// have.
+//
+// A cmap entry pointing past maxp's count is not a mapping. There is no such
+// glyph: it has no outline, no advance, and nothing to put in a subset — so a
+// character "mapped" to one is a character the font cannot set, which is what
+// being unmapped means. Keeping the entry says the opposite to everything
+// downstream, and every one of them believes it: the shaper records the index as
+// used, the width table answers nought for it, the subsetter cannot keep it, and
+// the page carries a code the embedded program has no glyph for. Nothing
+// reports any of that, because at each step the font appeared to have said so.
+//
+// Dropping it puts the character back on the path it belongs to — no glyph, so
+// the missing-glyph finding and §5's font fallback both see it — which is the
+// answer for a character the font has not got.
+//
+// Found by fuzzing the subsetter: a font declaring two glyphs whose cmap named
+// several hundred, of which "glyph 12385 was used and is not in the subset" was
+// the first to be noticed.
+//
+// Nought is left alone: a font with no readable maxp declares no count rather
+// than a count of none, and filtering against it would empty every cmap in a
+// font whose maxp this reader could not take apart.
+func onlyDeclaredGlyphs(m map[rune]int, numGlyphs int) map[rune]int {
+	if m == nil || numGlyphs <= 0 {
+		return m
+	}
+	for r, gid := range m {
+		if gid < 0 || gid >= numGlyphs {
+			delete(m, r)
+		}
+	}
+	return cmapResult(m)
 }
 
 // unicodeCmapRank ranks a cmap subtable's (platform, encoding) as a source of

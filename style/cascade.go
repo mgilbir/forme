@@ -214,7 +214,11 @@ type Metrics interface {
 	// and whether that face states one at all. A face that states none is not
 	// an error: §5.1.1 says to assume half an em, which is what a false here
 	// produces.
-	XHeight(cs ComputedStyle, size Unit) (Unit, bool)
+	//
+	// In CSS pixels, for the reason LengthContext gives: "6ex" is six of this
+	// number, and multiplying before the rounding is what makes six of them the
+	// height of six.
+	XHeight(cs ComputedStyle, size Unit) (float64, bool)
 }
 
 // Apply computes a style for every element in a document.
@@ -1579,7 +1583,13 @@ func (s *Styler) report(f Finding) {
 // and the page carried no claim that anything was missing from it.
 //
 // Derived rather than listed, so that a pseudo-element the parser learns to
-// accept is reported until this stage learns to compute it.
+// accept is reported until this stage learns to compute it. The two lists are
+// equal today — ::first-letter was the last of the difference — so no document
+// reaches this, and it is driven directly by
+// TestAPseudoElementThatIsParsedAndNotComputedIsReported rather than left as a
+// guard nothing has been seen to fire. The property it exists for is asserted
+// separately, from the parser's side: see
+// TestEveryPseudoElementTheParserAcceptsIsComputed.
 func (s *Styler) reportUncomputedPseudo(name string, offset int) {
 	if name == "" {
 		return
@@ -1611,10 +1621,13 @@ func (s *Styler) reportUncomputedPseudo(name string, offset int) {
 // the element's own, and every em in it is absolutised against the answer, which
 // is work only the cascade can do.
 //
-// ::first-letter is still absent, because nothing reads it yet — and a rule
-// written for one is reported as unimplemented rather than dropped in silence.
-// See reportUncomputedPseudo.
-var pseudoElementNames = []string{"before", "after", "marker", "first-line"}
+// ::first-letter does not generate one either, and for a reason that reads the
+// same and is not: there is no first letter until the text has been through
+// white-space processing and its element's own text-transform, which the box
+// builder does. What this stage owes it is the style, absolutised here like
+// ::first-line's — a ::first-letter font-size is relative to the element's own —
+// and the builder divides the text.
+var pseudoElementNames = []string{"before", "after", "marker", "first-line", "first-letter"}
 
 // anyRuleTargets reports whether any rule selects a pseudo-element of an
 // element.
