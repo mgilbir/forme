@@ -76,6 +76,13 @@ jobs:
           # being written.
           - package: ./bidi
             target: FuzzResolve
+          # Where a line may be cut, over bytes rather than over text. The
+          # conformance files settle the boundaries for strings Unicode
+          # tabulated; this settles that three APIs reading one string agree
+          # about it — including a string that is not UTF-8, which is the half
+          # nobody tabulated and the half a document actually arrives in.
+          - package: ./segment
+            target: FuzzBoundaries
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7

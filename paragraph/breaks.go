@@ -177,6 +177,17 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 	// A Scanner rather than a list of offsets: the scan is already linear, and a
 	// list would allocate one int per character for Latin text, where every
 	// character is its own cluster and nothing is learned.
+	//
+	// A Scanner is also the *right* reading here, and not merely the cheap one.
+	// segment.Boundaries would answer differently about a byte that is not
+	// UTF-8: it has the bytes, so it calls one its own cluster on both sides,
+	// and segment.InvalidByte is how a caller walking a string asks for that
+	// answer. This walk must not ask. It does not hand the bytes on — it writes
+	// the rune it decoded, so an invalid byte leaves here as a U+FFFD the pieces
+	// really contain, and the unit a line may be cut at is the cluster of the
+	// text that is *emitted*. Under segment's reading a combining mark after an
+	// invalid byte would begin a piece of its own, and a line would be allowed
+	// to start with it.
 	var clusters segment.Scanner
 	// deferBreak says the previous character allows a line to end after it, and
 	// the opportunity has not been taken yet.

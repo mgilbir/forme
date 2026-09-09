@@ -303,7 +303,48 @@ type Scanner struct {
 // It is true for the first character of a string, which is a boundary in UAX
 // #29's terms (rule GB1). A caller looking for the positions it may cut at
 // should ignore that first answer, as Boundaries does.
+//
+// This is a rune API and a rune cannot carry one distinction the bytes make: Go's
+// decoder hands back U+FFFD for a byte that is not UTF-8, and the same U+FFFD is
+// an ordinary character a document may contain. Boundaries has the bytes and
+// separates them; a Scanner cannot.
+//
+// So a caller walking a *string* and wanting Boundaries' answer has to ask
+// InvalidByte at each offset first, take a yes as a boundary without asking here,
+// and start a new Scanner after it. That is the whole protocol, and following it
+// reproduces Boundaries exactly — TestCountAndBoundariesAgreeOnEveryString and
+// FuzzBoundaries both check that it does.
+//
+// A caller that wants the *rune* reading is right not to ask, and there is one:
+// paragraph's line breaker decodes the text and re-writes it, so what leaves it
+// is a U+FFFD the pieces really contain, and the clusters it must not cut are
+// that string's. Which reading is wanted depends on which string the caller is
+// going to hand on. See InvalidByte.
 func (s *Scanner) Boundary(r rune) bool { return s.sc.boundaryBefore(r) }
+
+// InvalidByte reports whether the character at i in s is Go's replacement for a
+// byte that is not UTF-8, rather than a U+FFFD the string contains.
+//
+// The two are the same rune and only the bytes tell them apart: a decode error
+// is one byte wide and a written U+FFFD is three. Every walk over grapheme
+// clusters in this repository asks it at the same point and for the same reason
+// — an invalid byte is its own cluster on both sides, because a mark that
+// attached to one would make a cluster spanning something that is not a
+// character.
+//
+// It is exported so that the rule is stated once and can be asked for. It lived
+// inside walkClusters, so a caller holding a string and a Scanner could not get
+// the answer Boundaries gives however carefully it read — the difference was
+// written down as one the Scanner "legitimately" makes and then skipped over in
+// the test that would have pinned it, which is how a third reading of one string
+// goes unnoticed. A fuzz target found the two disagreeing in three minutes.
+func InvalidByte(s string, i int) bool {
+	if i < 0 || i >= len(s) {
+		return false
+	}
+	r, n := utf8.DecodeRuneInString(s[i:])
+	return r == utf8.RuneError && n == 1
+}
 
 // Boundaries appends to dst the byte offsets *inside* s at which a grapheme
 // cluster begins, in increasing order.
@@ -352,12 +393,10 @@ func Count(s string) int {
 func walkClusters(s string, at func(offset int)) {
 	var sc scanner
 	for i, r := range s {
-		if r == utf8.RuneError {
-			if _, n := utf8.DecodeRuneInString(s[i:]); n == 1 {
-				at(i)
-				sc = scanner{}
-				continue
-			}
+		if InvalidByte(s, i) {
+			at(i)
+			sc = scanner{}
+			continue
 		}
 		if sc.boundaryBefore(r) {
 			at(i)
