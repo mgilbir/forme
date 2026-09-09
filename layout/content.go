@@ -328,21 +328,46 @@ func (b *boxBuilder) generated(n *html.Node, name string, fontSize style.Unit) *
 	// Only Phase I, as in textBox: the rules that cross a box boundary and the
 	// rules that need a line are applied later, by the same passes that apply
 	// them to everything else.
+	// A picture that is the whole of the content makes the pseudo-element
+	// itself a replaced element. CSS 2.1 §12.2: "if the value is a URI, the
+	// pseudo-element is replaced by the object"; css-content-3 says the same of
+	// a single <image>, and only of a single one.
+	//
+	// So the reference goes on this box rather than on a child of it, and what
+	// follows from that is everything the property means: a width or a height
+	// sizes the *picture*, and the border, padding and background are drawn once
+	// around it. Built as a child carrying the pseudo-element's own style, they
+	// were drawn twice — the pseudo-element's box around the image's box, both
+	// bordered, both padded — and only the coincidence that a height applied to
+	// the child stretches the image the same way it would stretch a replaced
+	// pseudo-element kept the sizing right.
+	if len(value.pieces) == 1 && value.pieces[0].image != "" {
+		box.ContentImage = value.pieces[0].image
+		return box
+	}
+
 	wst := b.wordSpaceTransformFor(cs)
 	for _, piece := range value.pieces {
 		if !b.room(n) {
 			return box
 		}
 		if piece.image != "" {
-			// A picture in generated content is a replaced inline box, which is
-			// what it is in a browser: it has an intrinsic size, it sits on the
-			// line like an <img>, and it is styled by the pseudo-element's own
-			// rules. The reference is carried on the box rather than fetched
+			// A picture among other content is a replaced inline box of its
+			// own: it has an intrinsic size and it sits on the line like an
+			// <img>. The reference is carried on the box rather than fetched
 			// here — see Box.ContentImage.
+			//
+			// Anonymous, so it takes the inherited properties and no others.
+			// The pseudo-element's box is the pseudo-element's: a height on it
+			// is the height of the line's box and not of the picture in it, and
+			// its border is drawn once, around everything the content produced.
+			// Handed the pseudo-element's whole style, "content: 'a' url(x) 'b'"
+			// with a height stretched the picture to it — which is what a
+			// *replaced* pseudo-element does, and this is not one.
 			box.Children = append(box.Children, &Box{
 				Outer: OuterInline, Inner: InnerFlow,
-				Style: cs, FontSize: size, fontSizeKnown: true, Parent: box,
-				ContentImage: piece.image,
+				Style: style.Inherited(cs), FontSize: size, fontSizeKnown: true,
+				Parent: box, ContentImage: piece.image,
 			})
 			continue
 		}
