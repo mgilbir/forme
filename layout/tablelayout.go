@@ -1490,10 +1490,15 @@ func (l *layouter) declaredTrackWidth(col *Box, room style.Unit) (style.Unit, bo
 
 // reportColumnUnderflow names a column too narrow for what is in it.
 //
-// This is §6.2's silent clip in its table-shaped form: the text is there, the
-// column is there, and the part past the edge is simply not drawn. The fixed
-// algorithm produces it by design — that is the trade it offers — so the author
-// is told rather than left to notice.
+// The fixed algorithm produces it by design — that is the trade it offers — so
+// the author is told rather than left to notice. What becomes of the overflow
+// depends on whether anything clips, which overflowFate answers.
+//
+// It is asked of the *table*, which is not quite the box the content is in: a
+// cell of its own with "overflow: hidden" would clip where the table does not.
+// The column is what this finding is about and a column is several cells, so
+// there is no one box to ask — and the cell that clips reports its own overflow
+// through ReportOverflow, which asks exactly.
 func (l *layouter) reportColumnUnderflow(table *Box, widths []style.Unit, s tableSpacing) {
 	demands := l.tableColumnDemands(table, s)
 	for i, w := range widths {
@@ -1505,7 +1510,7 @@ func (l *layouter) reportColumnUnderflow(table *Box, widths []style.Unit, s tabl
 			Source: AtHTML(offsetOf(table)),
 			Message: "column " + strconv.Itoa(i+1) + " is " + fmtPx(w) +
 				" wide under the fixed table layout and its content needs " +
-				fmtPx(demands[i].floor) + "; the overflow is not drawn",
+				fmtPx(demands[i].floor) + l.overflowFate(table),
 			Path:     PathOf(table.Element),
 			Property: "table-layout",
 		})
