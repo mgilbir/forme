@@ -289,7 +289,13 @@ func (l *layouter) markerItem(b *Box, para *bidiBuilder) (inlineItem, bool) {
 		Text: text, Box: b, Face: face, Size: size,
 		// The same half-em the outside marker leaves, spent as width rather than
 		// as an offset: here what it separates is the next item on the line.
+		//
+		// Declared as Room as well as counted in the width, because it is room
+		// between two runs and two rules ask about that rather than about the
+		// number: a measurement taken again from the text would not know the gap
+		// was there, and §8.1 does not shape across it. See Item.Room.
 		Width: l.br.Measure(face, text, size).Add(markerGap(size)),
+		Room:  markerGap(size),
 		Leads: true, Above: above, Below: below,
 	}
 	if para != nil {

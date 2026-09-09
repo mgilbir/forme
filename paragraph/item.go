@@ -159,6 +159,18 @@ type Item struct {
 	Face  *shape.Face
 	Size  style.Unit
 	Width style.Unit
+	// Room is the part of Width that is not the text's own advance: space this
+	// item takes on the line beyond what its characters measure.
+	//
+	// One thing makes one — an inside list marker, which spends half an em
+	// between itself and the item's text — and it is a field rather than a fact
+	// about markers because CSS Text §8.1 asks it: shaping breaks where there is
+	// room between the characters, so the run before the room and the run after
+	// it are two strings and not one. What follows from that is the width: a run
+	// shaped as part of a group is measured again from the group, and an item
+	// kept out of every group keeps the width it was built with.
+	// See layout.linkShapingContext.
+	Room style.Unit
 	// BreakBefore marks an item that may begin a line, which is what a break
 	// opportunity is once the text has been cut into pieces.
 	BreakBefore bool

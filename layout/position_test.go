@@ -428,10 +428,17 @@ func TestAbsoluteSolvesTheHorizontalConstraint(t *testing.T) {
 // guard above the second case fails loudly if the face's metrics ever move the
 // two widths to the same side of 20.
 func TestAbsoluteAutoWidthShrinksToFit(t *testing.T) {
-	// max-content is the whole run on one line, measured piece by piece the way
-	// inline layout measures it; min-content is the widest unbreakable run.
+	// max-content is the whole run on one line, measured the way inline layout
+	// measures it: a word and the space after it are one string, because
+	// nothing between them is a place a line may end, and the next word is
+	// another. Measured as three pieces instead — the word, the space, the word
+	// — the answer is a sixty-fourth of a pixel out, which is the difference
+	// between quantizing a sum and summing quantities. See
+	// TestOneWordMeasuresTheSameHoweverInlineBoxesCutIt.
+	//
+	// min-content is the widest unbreakable run.
 	u := func(v float64) style.Unit { r, _ := style.FromPx(v); return r }
-	maxContent := u(measured(t, "aa", 16)).Add(u(measured(t, " ", 16))).Add(u(measured(t, "aa", 16)))
+	maxContent := u(measured(t, "aa ", 16)).Add(u(measured(t, "aa", 16)))
 	minContent := u(measured(t, "aa", 16))
 
 	css := `
