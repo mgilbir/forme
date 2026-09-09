@@ -233,6 +233,9 @@ func (l *replacedLoader) walk(b *Box) {
 	if b.Element != nil && strings.EqualFold(b.Element.Name, "canvas") {
 		l.canvas(b)
 	}
+	if b.Element != nil && strings.EqualFold(b.Element.Name, "video") {
+		l.video(b)
+	}
 	if b.Element != nil && b.Element.Foreign != "" {
 		l.foreign(b)
 	}
@@ -480,6 +483,97 @@ func (l *replacedLoader) canvas(b *Box) {
 	// integer and HTML keeps it. See ReplacedContent.Stated.
 	b.Replaced = content
 	b.Children = nil
+}
+
+// video makes a <video> the replaced element it is, and reports what a reader
+// would have seen and does not.
+//
+// The box first, because that is the half that was missing. HTML §4.8.9: a video
+// element's intrinsic dimensions are the video's, or the poster image's while
+// there is no video, and where there is neither it takes the default object size
+// — CSS 2.1 §10.3.2's 300 by 150, the same two numbers an <iframe> with nothing
+// in it takes and for the same reason.
+//
+// The poster is a picture this engine can draw and is exactly what a browser
+// shows before anything plays, so it is loaded and it is the content. A poster
+// that cannot be read is a blocked resource like any other.
+//
+// Then the two things that are refused, each reported only when the document
+// asked for it:
+//
+//   - The film. A "src", or a <source> child, names media that is not on the
+//     page. That is a blocked resource in the sense an <object>'s data is, and a
+//     page laid out once genuinely cannot show it.
+//   - The controls. "controls" asks for a player a reader operates, and this
+//     page is not operated; the box is drawn and the bar in it is not, which is
+//     what RuleControlApproximated is for.
+//
+// A <video> that names no media, has no poster and asks for no controls has
+// nothing missing from it, and nothing is reported. That is the iframe's rule
+// again — "an iframe naming nothing has nothing missing" — and it is the half
+// that decides whether a reftest about a video's box is evidence of anything:
+// video-paint-order draws a green block over an empty video and asks that the
+// video not show through, and a finding about a film nobody named would have
+// held the answer out of the count.
+//
+// The fallback children go, for the reason canvas drops its own: they are what a
+// user agent that cannot play video would show instead, and this one draws the
+// element rather than replacing it.
+func (l *replacedLoader) video(b *Box) {
+	// No intrinsic width, height or ratio: replacedSize then falls through to
+	// §10.3.2's default dimensions rather than to a box of no size.
+	b.Replaced = &ReplacedContent{}
+	named := false
+	if src, ok := b.Element.Attr("src"); ok && strings.TrimSpace(src) != "" {
+		named = true
+	}
+	for _, c := range b.Children {
+		if c.Element != nil && strings.EqualFold(c.Element.Name, "source") {
+			if src, ok := c.Element.Attr("src"); ok && strings.TrimSpace(src) != "" {
+				named = true
+			}
+		}
+	}
+	b.Children = nil
+
+	if poster, ok := b.Element.Attr("poster"); ok && strings.TrimSpace(poster) != "" {
+		content, why := l.load(strings.TrimSpace(poster), "video poster", svgAsImage)
+		switch {
+		case content != nil:
+			b.Replaced = content
+		case why != nil:
+			l.rec.ReportDetail(Finding{
+				Rule:     why.rule,
+				Source:   AtHTML(offsetOf(b)),
+				Message:  why.message,
+				Path:     PathOf(b.Element),
+				Property: "poster",
+			})
+		}
+	}
+
+	if named {
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleResourceBlocked,
+			Source: AtHTML(offsetOf(b)),
+			Message: "the video this <video> names is not played, because a page " +
+				"laid out once has no time in it; the element's box is on the page " +
+				"and the frames are not",
+			Path:     PathOf(b.Element),
+			Property: "video",
+		})
+	}
+	if _, ok := b.Element.Attr("controls"); ok {
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleControlApproximated,
+			Source: AtHTML(offsetOf(b)),
+			Message: "the controls this <video> asks for are not drawn: a player is " +
+				"operated and this page is not, so the box is here and the bar in " +
+				"it is not",
+			Path:     PathOf(b.Element),
+			Property: "controls",
+		})
+	}
 }
 
 // canvasDimension reads one of a canvas's two bitmap dimensions.

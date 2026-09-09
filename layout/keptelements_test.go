@@ -82,8 +82,16 @@ func TestNoneOfTheThreeIsReportedAsUnsupported(t *testing.T) {
 // Each of these needs something drawn from a state — a disclosure triangle and
 // a rule that hides a closed element's content, or a control rendered from a
 // value — which is a thing to build rather than a refusal to lift.
+//
+// <video> left the list, and the decision is the one this test exists to make
+// visible. It is not a widget: it is a replaced element with a size HTML states,
+// and the widget in it is the control bar, which is refused where it is asked
+// for and reported there. See TestAVideoWithControlsSaysTheBarIsNotDrawn.
+// <audio> stays, because HTML renders one without controls as "display: none"
+// and one with them as a player whose size no specification states — there is no
+// box to lose by refusing it.
 func TestTheWidgetsAreStillRefused(t *testing.T) {
-	for _, name := range []string{"details", "summary", "dialog", "video", "progress", "meter"} {
+	for _, name := range []string{"details", "summary", "dialog", "audio", "progress", "meter"} {
 		built := Build(Input{HTML: `<` + name + `>x</` + name + `>`})
 		var said bool
 		for _, f := range built.Findings {

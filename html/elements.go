@@ -110,9 +110,9 @@ var knownElements = map[string]bool{
 	//
 	// What stays refused, and why it is not this: <details> and <summary> need a
 	// disclosure triangle and a rule that hides a closed element's content;
-	// <dialog> needs the same for a closed one; <video>, <audio>, <progress> and
-	// <meter> each need a widget drawn from a state. Every one of those is a
-	// thing to build rather than a refusal to lift.
+	// <dialog> needs the same for a closed one; <audio>, <progress> and <meter>
+	// each need a widget drawn from a state. Every one of those is a thing to
+	// build rather than a refusal to lift.
 	//
 	// Membership here is documentation for these three, as it is for <map>
 	// below: the parser has no rule about how any of them nests. What changed is
@@ -158,6 +158,24 @@ var knownElements = map[string]bool{
 	// taint every document holding an empty canvas with a finding about a
 	// picture that was never going to exist.
 	"canvas": true,
+
+	// <video>, for its box, which is the same argument the <iframe> above is
+	// here for and the same one that moved the form controls.
+	//
+	// It was refused under "a page laid out once cannot play anything", and that
+	// is true of *playing* and says nothing about layout. A video element is a
+	// replaced element: HTML §4.8.9 gives it the poster's intrinsic dimensions
+	// where there is one and the default object size — CSS 2.1 §10.3.2's 300 by
+	// 150 — where there is not, and a browser asked to print a page with a video
+	// on it prints that box. Dropping the element threw the box away, and a
+	// reftest about what paints over a video cannot be about anything when
+	// nothing was painted.
+	//
+	// What is still refused is the film and the control bar, and each is
+	// reported where it is refused rather than here. A <video> naming no media
+	// and asking for no controls has nothing missing from it at all, which is
+	// the half that matters: see layout's video loader.
+	"video": true,
 
 	// Forms, as static boxes.
 	//
@@ -255,11 +273,15 @@ var contentSkippedElements = map[string]bool{
 // dropping it lost the content. They are in knownElements now, and the
 // interactivity boundary is stated there rather than deleted.
 var droppedElements = map[string]string{
-	"script":   "scripts are never run, and never will be",
-	"embed":    "an embedded plugin would need a plugin",
-	"applet":   "applets would need a virtual machine",
+	"script": "scripts are never run, and never will be",
+	"embed":  "an embedded plugin would need a plugin",
+	"applet": "applets would need a virtual machine",
+	// <audio> stays, and the reason above holds for it where it did not for
+	// <video>: HTML renders an audio element with no "controls" attribute as
+	// "display: none", so the page is the same either way, and one *with*
+	// controls is a player whose size no specification states. There is no box
+	// to lose by refusing it.
 	"audio":    "a page laid out once cannot play anything",
-	"video":    "a page laid out once cannot play anything",
 	"details":  "a disclosure widget needs somewhere to click",
 	"summary":  "a disclosure widget needs somewhere to click",
 	"dialog":   "a dialog is opened by script, which is never run",

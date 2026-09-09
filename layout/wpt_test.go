@@ -1194,7 +1194,23 @@ const wptEnv = "WPT_TESTS"
 // pseudo-elements of a table whose one row has one cell, and its reference draws
 // that table with a single column — where two columns cost a border-spacing the
 // reference does not have.
-const wptCleanPassBaseline = 5971
+// 5971 to 5972 is <video> becoming the replaced element it is.
+//
+// It was refused under "a page laid out once cannot play anything", which is
+// true of playing and says nothing about layout — the same confusion the form
+// controls and <iframe> were moved out of droppedElements for. HTML §4.8.9 gives
+// the element the poster's intrinsic dimensions where there is one and the
+// default object size where there is not, and video-paint-order draws a green
+// block over a 95 by 95 video and asks that the video not show through. With no
+// box there was nothing for the block to cover and nothing the test could be
+// about; with one, the answer it gives is an answer.
+//
+// What is still refused is the film and the control bar, and each is reported
+// only where the document asked for it. A <video> naming no media, with no
+// poster and no controls, has nothing missing from it and reports nothing —
+// which is the half that moves the count, and is the same rule an iframe naming
+// no document already follows.
+const wptCleanPassBaseline = 5972
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
