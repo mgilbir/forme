@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/mgilbir/forme/fonttest"
 )
@@ -250,8 +251,60 @@ func FuzzLoadAndUse(f *testing.F) {
 			}); err == nil && inst != nil {
 				useFace(inst)
 			}
+			checkClusters(t, face)
 		}
 	})
+}
+
+// checkClusters asserts the contract the group arithmetic rests on: every glyph
+// is charged to a byte of the run it came from.
+//
+// It is not a panic and it is not visible in a glyph. GroupAdvances builds the
+// cumulative advance of a run by adding each glyph to its own cluster, and it
+// guards the index — a glyph whose cluster is outside the text is skipped. That
+// guard is right as a guard and wrong as an answer: what it produces is a run
+// whose group width is *narrower* than the same run measured directly, so a line
+// is filled to one width and painted at another with nothing in either call's
+// output to show it. See MeasureShaped, which is written about that failure.
+//
+// Every run of every document goes through the group path when its box's text is
+// cut into more than one run, so this is not a corner: it is the arithmetic a
+// word split by a <span> is measured with.
+//
+// A hostile font is what makes it worth fuzzing. The clusters come from the
+// shaper, which reorders for the syllabic scripts and merges for ligatures, and
+// a font whose lookups say something no designer would say is exactly the input
+// that would produce one out of range.
+func checkClusters(t *testing.T, f *Face) {
+	t.Helper()
+	for _, text := range fuzzTexts {
+		glyphs, _ := f.ShapeGlyphs(text)
+		for i, g := range glyphs {
+			if g.Cluster < 0 || g.Cluster >= len(text) {
+				t.Fatalf("glyph %d of %q is charged to byte %d of %d",
+					i, text, g.Cluster, len(text))
+			}
+			if !utf8.RuneStart(text[g.Cluster]) {
+				t.Fatalf("glyph %d of %q is charged to byte %d, which is inside "+
+					"a character", i, text, g.Cluster)
+			}
+		}
+		// And the total, which is what the range above buys: a glyph the group
+		// walk skipped is width the run loses.
+		//
+		// Within a tolerance rather than exactly, and the reason is arithmetic
+		// rather than doubt: the two sums add the same numbers in different
+		// orders — one per glyph, one per cluster and then prefixed — and
+		// floating-point addition is not associative. The tolerance is far below
+		// a layout unit at any size a document uses.
+		cum := GroupAdvances(glyphs, len(text))
+		_, through := GroupSpan(cum, 0, len(text), 1000)
+		direct := MeasureGlyphs(glyphs, 1000)
+		if d := through - direct; d > 1e-6 || d < -1e-6 {
+			t.Fatalf("the group walk over %q makes it %v wide and the glyphs "+
+				"measure %v", text, through, direct)
+		}
+	}
 }
 
 // useFace drives everything a caller can ask a face, which is what the fuzzer is
