@@ -999,15 +999,17 @@ func textWrapShorthand(vals []css.ComponentValue) (map[string][]css.ComponentVal
 	}, nil, true
 }
 
-// CSS Fonts 4 §6.10's "font-variant", for the two longhands this engine has.
+// CSS Fonts 4 §6.10's "font-variant", for the longhands this engine has.
 //
-// The property is a shorthand for seven, and four of them are here:
-// font-variant-ligatures, font-variant-caps, font-variant-numeric and
-// font-variant-east-asian. The other three are not registered, so a declaration
-// naming one of their values is refused whole and reported as an unsupported
-// property — which is the right answer for a value nothing downstream can act
-// on, and the same answer the property got as a whole until small capitals were
-// implemented.
+// The property is a shorthand for seven, and five of them are here:
+// font-variant-ligatures, font-variant-caps, font-variant-numeric,
+// font-variant-east-asian and font-variant-position. What is left is
+// font-variant-alternates, whose values are mostly functional notations, and
+// font-variant-emoji, whose three keywords the shorthand's grammar has taken on
+// in the current draft. A declaration naming one of their values is refused
+// whole and reported as an unsupported property — the right answer for a value
+// nothing downstream can act on, and the same answer the property got as a whole
+// until small capitals were implemented.
 //
 // # Why it is a shorthand at all rather than a keyword this reads
 //
@@ -1037,10 +1039,10 @@ func fontVariantShorthand(vals []css.ComponentValue) (map[string][]css.Component
 		switch name {
 		case "normal":
 			return fontVariantLonghands(ident("normal"), ident("normal"),
-				ident("normal"), ident("normal")), nil, true
+				ident("normal"), ident("normal"), ident("normal")), nil, true
 		case "none":
 			return fontVariantLonghands(ident("none"), ident("normal"),
-				ident("normal"), ident("normal")), nil, true
+				ident("normal"), ident("normal"), ident("normal")), nil, true
 		}
 	}
 
@@ -1052,6 +1054,7 @@ func fontVariantShorthand(vals []css.ComponentValue) (map[string][]css.Component
 		seenNum     = map[string]bool{}
 		eastWords   [][]css.ComponentValue
 		seenEast    = map[string]bool{}
+		position    []css.ComponentValue
 		unsupported []string
 	)
 	for _, part := range parts {
@@ -1075,6 +1078,13 @@ func fontVariantShorthand(vals []css.ComponentValue) (map[string][]css.Component
 			// seven from a value that names a third is a page whose styling is
 			// neither what was asked for nor what the cascade would produce.
 			unsupported = append(unsupported, name)
+		case name == "sub" || name == "super":
+			// §6.5 is one group of two, so it needs no map: a value naming both
+			// asks for the same character above and below the line at once.
+			if position != nil {
+				return nil, nil, false
+			}
+			position = part
 		case fontVariantCapsKeywords[name]:
 			// §6.10 takes one value from the caps group and no more: the six
 			// name six different things to do to the same letters.
@@ -1141,7 +1151,10 @@ func fontVariantShorthand(vals []css.ComponentValue) (map[string][]css.Component
 	if caps == nil {
 		caps = ident("normal")
 	}
-	return fontVariantLonghands(lig, caps, numeric, east), nil, true
+	if position == nil {
+		position = ident("normal")
+	}
+	return fontVariantLonghands(lig, caps, numeric, east, position), nil, true
 }
 
 // variantFunction reads one of font-variant-alternates' functional notations.
@@ -1158,9 +1171,10 @@ func variantFunction(part []css.ComponentValue) (string, bool) {
 	return "", false
 }
 
-// fontVariantOtherKeywords is every ident value of the three longhands
-// "font-variant" controls that this engine does not have: the sub- and
-// superscript positions, and font-variant-alternates' one keyword.
+// fontVariantOtherKeywords is every ident value of the two longhands
+// "font-variant" controls that this engine does not have: font-variant-emoji's
+// three, and font-variant-alternates' one keyword — the rest of that property
+// being functional notations, which variantFunction reads.
 //
 // It is written out rather than left to the default branch because the two
 // answers differ. A value in this list is correct CSS the engine cannot produce
@@ -1171,18 +1185,23 @@ var fontVariantOtherKeywords = map[string]bool{
 	// font-variant-alternates §6.8. The rest of it is functional notations,
 	// which variantFunction reads.
 	"historical-forms": true,
-	// font-variant-position §6.5.
-	"sub": true, "super": true,
+	// font-variant-emoji, whose three keywords the shorthand's grammar has
+	// taken on in the current draft. They ask which presentation a character
+	// with two — a text one and an emoji one — is drawn in, which is a choice
+	// between glyphs of *different fonts* rather than a feature of one, and so
+	// is not the kind of request the rest of this family makes.
+	"text": true, "emoji": true, "unicode": true,
 }
 
 // fontVariantLonghands is the set the shorthand always sets, written once so
 // that the reset cannot be forgotten on one of the branches above.
-func fontVariantLonghands(lig, caps, numeric, east []css.ComponentValue) map[string][]css.ComponentValue {
+func fontVariantLonghands(lig, caps, numeric, east, position []css.ComponentValue) map[string][]css.ComponentValue {
 	return map[string][]css.ComponentValue{
 		"font-variant-ligatures":  lig,
 		"font-variant-caps":       caps,
 		"font-variant-numeric":    numeric,
 		"font-variant-east-asian": east,
+		"font-variant-position":   position,
 	}
 }
 

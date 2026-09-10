@@ -835,6 +835,74 @@ func eastAsianCharacters(text string) (ideographs, wide, narrow bool) {
 	return ideographs, wide, narrow
 }
 
+// reportPosition names a request for a subscript or a superscript the face
+// cannot supply.
+//
+// CSS Fonts 4 §6.5's "sub" and "super" ask a face for 'subs' and 'sups': the
+// small raised and lowered forms it draws for the characters that get them. A
+// face that declares neither leaves the run where it is, at the size it is —
+// the 2 of a chemical formula the same size as the H beside it, an exponent
+// standing on the baseline — which reads as ordinary text rather than as
+// something missing.
+//
+// # This engine does not synthesize them, and §6.5 says it may
+//
+// "If the font does not have glyphs for a given character in a
+// superscript/subscript form, the user agent may synthesize them by scaling and
+// repositioning the default glyphs." That is a raise and a shrink, and the two
+// are what small capitals already needed — but a raised copy of the ordinary
+// glyph is not what a font's own superscript is. The designer's is a second
+// drawing: narrower, and with its weight adjusted for the size it is set at, so
+// that it does not read thin beside the letters around it. Scaling the ordinary
+// one produces exactly that thinness, and it is the difference a reader sees.
+//
+// So this reports, and the finding says which of the two the page came out as.
+//
+// # What it is asked about
+//
+// Per face run, like the rest of this file. The narrowing is the loosest of the
+// four, and that is the property rather than a corner cut: a font's 'sups' may
+// cover the digits alone or every letter as well — Noto Sans covers the digits,
+// the lowercase letters and the arithmetic signs and leaves the capitals, which
+// is why "H2O" comes out with only its 2 lowered — and which characters a face
+// that declares *nothing* would have covered cannot be known from here. What can
+// be known is that a run with nothing but white space in it is set identically
+// either way, because a raised space is a space.
+func (l *layouter) reportPosition(b *Box, face *shape.Face, text string) {
+	want, unhandled := variantPositionOf(b.Style["font-variant-position"])
+	if unhandled != "" {
+		l.reportOnce("font-variant-position:"+unhandled, Finding{
+			Rule:     RuleUnsupportedValue,
+			Property: "font-variant-position",
+			Message: quoteValue(unhandled) + " is not a value of " +
+				"font-variant-position this engine reads; the text was set on " +
+				"the baseline",
+			Path: PathOf(boxElement(b)),
+		})
+		return
+	}
+	if want == shape.PositionNormal || face == nil || strings.TrimSpace(text) == "" {
+		return
+	}
+	tag := want.Features()[0]
+	if faceDeclares(face, tag) {
+		return
+	}
+	which := "a superscript"
+	if want == shape.PositionSub {
+		which = "a subscript"
+	}
+	l.reportOnce("font-variant-position:"+tag+":"+face.Name(), Finding{
+		Rule:     RuleUnsupportedValue,
+		Property: "font-variant-position",
+		Message: which + " was asked for and " + quoteValue(face.Name()) +
+			" declares no " + tag + "; the text was set on the baseline at the " +
+			"size it is written, because this engine uses the raised and lowered " +
+			"forms a face draws and does not make them out of the ordinary ones",
+		Path: PathOf(boxElement(b)),
+	})
+}
+
 // inertFontFeatures reports whether a font-feature-settings value asks for the
 // page that is already there.
 //

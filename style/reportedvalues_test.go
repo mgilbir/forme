@@ -195,15 +195,24 @@ func TestFontVariantSetsBothLonghandsItControls(t *testing.T) {
 	}
 }
 
-// TestAFontVariantValueThisEngineHasNoLonghandForIsReported is the other three
-// groups the shorthand controls.
+// TestAFontVariantValueThisEngineHasNoLonghandForIsReported is what is left of
+// the groups the shorthand controls.
 //
-// Four of the seven longhands are registered, so a value from one of the other
-// three — a superscript position, a swash — has nothing to be set on. Refusing
-// the declaration whole is what raises the unsupported-property finding, and
-// swallowing it silently is what that finding exists to stop.
+// Five of the seven longhands are registered, and of the two that are not,
+// font-variant-emoji is not this shorthand's business at all — so what reaches
+// this is font-variant-alternates, whose one keyword has nothing to be set on.
+// Refusing the declaration whole is what raises the unsupported-property
+// finding, and swallowing it silently is what that finding exists to stop.
 func TestAFontVariantValueThisEngineHasNoLonghandForIsReported(t *testing.T) {
-	for _, value := range []string{"sub", "super", "historical-forms"} {
+	for _, value := range []string{
+		"historical-forms", "styleset(ss01)", "swash(x)",
+		// font-variant-emoji's three, which the shorthand's grammar has taken
+		// on in the current draft. They are a choice between the glyphs of
+		// different *fonts* rather than a feature of one, so they are not the
+		// kind of request the rest of this family makes and are refused with
+		// the alternates beside them.
+		"text", "emoji", "unicode",
+	} {
 		got := findingsOf(t, `<p id="a">1</p>`, `#a { font-variant: `+value+` }`)
 		found, unsupported := says(got, "font-variant")
 		if !found {
@@ -302,6 +311,41 @@ func TestAFontVariantEastAsianValueSetsTheLonghand(t *testing.T) {
 	if cs := styled.Styles[elementFor(t, doc, "#a")]; cs["font-variant-east-asian"] != "normal" {
 		t.Errorf("font-variant-east-asian is %q inside a jis78 container after "+
 			"\"font-variant: small-caps\", want normal", cs["font-variant-east-asian"])
+	}
+}
+
+// TestAFontVariantPositionValueSetsTheLonghand, and the reset with it.
+func TestAFontVariantPositionValueSetsTheLonghand(t *testing.T) {
+	if got := findingsOf(t, `<p id="a">x</p>`, `#a { font-variant: super }`); len(got) != 0 {
+		t.Errorf("raised %v; the shorthand sets a property this engine reads "+
+			"and the stylesheet has nothing wrong with it", got)
+	}
+	doc := parseDoc(t, `<p id="outer"><span id="a">x</span></p>`)
+	rules, _ := css.ParseStylesheet(
+		`#outer { font-variant: super } #a { font-variant: small-caps }`)
+	styled := Apply(doc, []Sheet{{Origin: OriginAuthor, Rules: rules}})
+	if cs := styled.Styles[elementFor(t, doc, "#outer")]; cs["font-variant-position"] != "super" {
+		t.Fatalf("font-variant-position computed to %q, want super",
+			cs["font-variant-position"])
+	}
+	if cs := styled.Styles[elementFor(t, doc, "#a")]; cs["font-variant-position"] != "normal" {
+		t.Errorf("font-variant-position is %q inside a super container after "+
+			"\"font-variant: small-caps\", want normal", cs["font-variant-position"])
+	}
+}
+
+// TestBothPositionsAtOnceAreRefused.
+//
+// §6.5 is one group of two: a value naming both asks for the same character
+// above and below the line at once.
+func TestBothPositionsAtOnceAreRefused(t *testing.T) {
+	got := findingsOf(t, `<p id="a">x</p>`, `#a { font-variant: sub super }`)
+	found, unsupported := says(got, "not a value this engine can read")
+	if !found {
+		t.Fatalf("raised %v, want it refused as a value", got)
+	}
+	if unsupported {
+		t.Error("it is invalid CSS and was reported as a missing feature")
 	}
 }
 

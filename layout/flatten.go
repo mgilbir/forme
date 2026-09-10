@@ -738,6 +738,9 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		// a face that draws no JIS78 ideographs sets the ones it has. See
 		// reportEastAsian.
 		l.reportEastAsian(b, run.Face, run.Text)
+		// And whether the face draws the raised and lowered forms §6.5 asks
+		// for, which is the last of the same question. See reportPosition.
+		l.reportPosition(b, run.Face, run.Text)
 	}
 	// And the glyphs, asked of the text that will be *drawn* — which for a run
 	// whose small capitals were synthesised is the uppercase of what the

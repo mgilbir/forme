@@ -71,6 +71,7 @@ func (l *layouter) featuresFor(b *Box) shape.Features {
 	out.Caps, _ = capsOf(b.Style["font-variant-caps"])
 	out.Numeric, _ = numericOf(b.Style["font-variant-numeric"])
 	out.EastAsian, _ = eastAsianOf(b.Style["font-variant-east-asian"])
+	out.Position, _ = variantPositionOf(b.Style["font-variant-position"])
 	return out
 }
 
@@ -338,4 +339,31 @@ func eastAsianKeyword(word string) (bit, group shape.EastAsian, ok bool) {
 		return shape.EastAsianRuby, shape.EastAsianRuby, true
 	}
 	return 0, 0, false
+}
+
+// variantPositionOf reads CSS Fonts 4 §6.5's font-variant-position.
+//
+// The name is not positionOf, which layout/position.go already has for the
+// property that takes a box out of the flow. Two properties of CSS are called
+// "position" and neither of them will give the name up.
+//
+// One value of three, which is what makes it the odd one of the family: a run is
+// a subscript or a superscript or neither, and the two are not independent the
+// way §6.7's five groups are. So the answer is a value and not a set, and it is
+// shape's own for the reason capsOf's is — every value is a request for a
+// feature the face declares.
+//
+// The second result is the value where it is not one of the three, which
+// reportPosition names.
+func variantPositionOf(raw string) (shape.Position, string) {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	switch value {
+	case "", "normal":
+		return shape.PositionNormal, ""
+	case "sub":
+		return shape.PositionSub, ""
+	case "super":
+		return shape.PositionSuper, ""
+	}
+	return shape.PositionNormal, value
 }

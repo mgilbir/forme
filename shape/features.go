@@ -30,7 +30,8 @@ package shape
 // The font-variant family asks for rules the font states and no run gets by
 // default: 'smcp' and the five other ways §6.6 has of setting a run in
 // capitals, 'onum' and 'tnum' and the six other things §6.7 does to a figure,
-// and §6.9's national forms and ideographic widths. They are here rather than in
+// §6.9's national forms and ideographic widths, and §6.5's subscripts and
+// superscripts. They are here rather than in
 // ShapeGlyphsWith's caller-named list because they are the same kind of fact as
 // the other three — something about the run that its own text does not say,
 // decided by a declaration — and because they have to travel the whole way to
@@ -87,7 +88,56 @@ type Features struct {
 	// A set for the same reason Numeric is: CSS Fonts 4 §6.9 lets a document
 	// ask for the JIS78 forms at full width at once. See EastAsian.
 	EastAsian EastAsian
+	// Position is whether a run is set as a subscript or a superscript — the
+	// small raised or lowered forms a font draws for the characters that get
+	// them, rather than the same glyph moved.
+	//
+	// One value and not a set, because a run is one or the other or neither:
+	// CSS Fonts 4 §6.5's grammar is "normal | sub | super". See Position.
+	Position Position
 }
+
+// Position is CSS Fonts 4 §6.5's font-variant-position, as the feature it asks
+// a face for.
+//
+// It is the one property of the family whose request is about where a character
+// sits as much as which glyph it is. A font's 'sups' is not the ordinary glyph
+// moved up: it is a second drawing, narrower and with its weight adjusted for
+// the size it is set at, and already at the height it belongs — which is why the
+// tag is asked for rather than the run displaced.
+//
+// A face that does not declare it leaves the run where it is, at the size it is,
+// and that is a page the document did not ask for. §6.5 allows a user agent to
+// synthesize the forms by scaling and repositioning the ordinary glyphs; this
+// engine does not, and the caller reports it.
+type Position uint8
+
+const (
+	// PositionNormal is the character where it is written.
+	PositionNormal Position = iota
+	// PositionSub is 'subs': the form drawn below the baseline, for the 2 of a
+	// chemical formula.
+	PositionSub
+	// PositionSuper is 'sups': the form drawn above it, for an exponent or a
+	// footnote mark.
+	PositionSuper
+)
+
+// Features are the tags this value asks a face for.
+func (p Position) Features() []string {
+	switch p {
+	case PositionSub:
+		return positionSub
+	case PositionSuper:
+		return positionSuper
+	}
+	return nil
+}
+
+var (
+	positionSub   = []string{"subs"}
+	positionSuper = []string{"sups"}
+)
 
 // Caps is CSS Fonts 4 §6.6's font-variant-caps, as a set of features to ask a
 // face for.
@@ -194,17 +244,29 @@ var capsFeatures = [...]struct{ capitals, lowercase string }{
 // anything asks under one property, and returning that property's own slice
 // hands the shaper the list it already has rather than a copy of it.
 func (f Features) adds() []string {
-	caps, numeric, east := f.Caps.Features(), f.Numeric.Features(), f.EastAsian.Features()
-	switch {
-	case len(numeric) == 0 && len(east) == 0:
-		return caps
-	case len(caps) == 0 && len(east) == 0:
-		return numeric
-	case len(caps) == 0 && len(numeric) == 0:
-		return east
+	asked := [...][]string{
+		f.Caps.Features(), f.Numeric.Features(),
+		f.EastAsian.Features(), f.Position.Features(),
 	}
-	out := make([]string, 0, len(caps)+len(numeric)+len(east))
-	return append(append(append(out, caps...), numeric...), east...)
+	var (
+		only  []string
+		lists int
+		total int
+	)
+	for _, list := range asked {
+		if len(list) == 0 {
+			continue
+		}
+		only, lists, total = list, lists+1, total+len(list)
+	}
+	if lists <= 1 {
+		return only
+	}
+	out := make([]string, 0, total)
+	for _, list := range asked {
+		out = append(out, list...)
+	}
+	return out
 }
 
 // EastAsian is CSS Fonts 4 §6.9's font-variant-east-asian, as the set of

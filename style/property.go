@@ -282,6 +282,21 @@ var properties = map[string]property{
 	// shape a designer drew — so a face that declares none of what a value asks
 	// for sets the forms it has, and layout says so. See layout/fontfeatures.go.
 	"font-variant-east-asian": {true, "normal"},
+	// CSS Fonts 4 §6.5. It inherits with the rest of the family, and its
+	// initial value is "normal" — the character where it is written.
+	//
+	// "sub" and "super" ask a face for 'subs' and 'sups', the small raised and
+	// lowered forms it draws for the characters that get them. §6.5 lets a user
+	// agent synthesize them by scaling and repositioning the ordinary glyphs and
+	// this engine does not, so a face that declares neither leaves the run where
+	// it is and layout says so. See layout/fontfeatures.go.
+	//
+	// It is not "vertical-align: super" with a smaller size, and the difference
+	// is what a font's own superscript is: a second drawing, narrower and with
+	// its weight adjusted for the size it is set at. A raised copy of the
+	// ordinary glyph is thinner than the letters around it, which is what a
+	// synthesized one always looks like.
+	"font-variant-position": {true, "normal"},
 	// text-autospace inherits, which is what lets a document turn it off once
 	// on the body. Its initial value is "normal", and "normal" asks for the
 	// spacing — a page of Japanese with Latin words in it is set wrong without
@@ -643,11 +658,11 @@ var shorthands = map[string]shorthand{
 		"font-style", "font-weight", "font-size", "font-family", "line-height",
 		"font-variant-caps"}},
 
-	// CSS Fonts 4 §6.10, for the four longhands this engine has. See
+	// CSS Fonts 4 §6.10, for the five longhands this engine has. See
 	// fontVariantShorthand for why the property is expanded rather than read.
 	"font-variant": {fontVariantShorthand, []string{
 		"font-variant-ligatures", "font-variant-caps", "font-variant-numeric",
-		"font-variant-east-asian"}},
+		"font-variant-east-asian", "font-variant-position"}},
 	"text-decoration": {textDecorationShorthand,
 		[]string{"text-decoration-line", "text-decoration-color",
 			"text-decoration-thickness"}},
