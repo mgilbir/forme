@@ -105,7 +105,16 @@ func IsAutospaceIdeograph(r rune) bool {
 		0x309D, // HIRAGANA ITERATION MARK
 		0x309E, // HIRAGANA VOICED ITERATION MARK
 		0x30FD, // KATAKANA ITERATION MARK
-		0x30FE: // KATAKANA VOICED ITERATION MARK
+		0x30FE, // KATAKANA VOICED ITERATION MARK
+		// The halfwidth twins of two of the above. Unicode gives these the
+		// Common script as it does U+30FC, and category Lm — so unlike
+		// U+309B/U+309C, which are Sk and are no letter to anything, these are
+		// letters to unicode.IsLetter and would be §8.1's *other side*. That
+		// puts an eighth of an em between a halfwidth kana and its own dakuten,
+		// which is inside a word: "ｼﾞ" is one syllable.
+		0xFF70, // HALFWIDTH KATAKANA-HIRAGANA PROLONGED SOUND MARK
+		0xFF9E, // HALFWIDTH KATAKANA VOICED SOUND MARK
+		0xFF9F: // HALFWIDTH KATAKANA SEMI-VOICED SOUND MARK
 		return true
 	}
 	return unicode.Is(unicode.Han, r) ||

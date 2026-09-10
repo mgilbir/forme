@@ -1231,7 +1231,23 @@ const wptEnv = "WPT_TESTS"
 // What still needs a box of its own — a float, a border, a background, a margin —
 // is reported, because that is how a drop cap is written and an author has to be
 // told the letter came out ordinary.
-const wptCleanPassBaseline = 5976
+// 5976 to 5977 on 2026-09-10: hanging-punctuation-allow-end-001, and it took
+// two changes that are only worth anything together.
+//
+// §8.1 was opening an eighth of an em between a halfwidth katakana and its own
+// dakuten. Unicode gives U+FF70, U+FF9E and U+FF9F the Common script and
+// category Lm, so unicode.IsLetter answered true and they were §8.1's *other
+// side* — unlike their fullwidth twins, U+30FC which is named in the list and
+// U+309B/U+309C which are Sk and no letter to anything. "ｼﾞ" is one syllable,
+// and the gap made every halfwidth row of that document an eighth of an em per
+// syllable too wide, so its lines broke early.
+//
+// The fix alone takes the failure away and leaves a *tainted* pass: the document
+// names IPAMincho and there was no such face, so it reported a font-fallback.
+// The harness lends the family by name now — see ipaFamilies — and the pass is
+// clean. Measured both ways: the fix without the font is 5976 clean, 80 tainted,
+// 197 failed; with it, 5977 clean, 79 tainted, 197 failed.
+const wptCleanPassBaseline = 5977
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

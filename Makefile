@@ -814,6 +814,37 @@ endef
 
 NOTO_DIR := testdata/fonts-noto
 NOTO_BASE := https://raw.githubusercontent.com/notofonts
+
+# IPAMincho and IPAGothic, which four hanging-punctuation documents ask for by
+# *name*.
+#
+# This is not the Doulos SIL arrangement and the difference is the whole reason
+# it is fetched here rather than into $(WPT_DIR)/fonts. Doulos is an
+# "@font-face { src: url('/fonts/DoulosSIL-R.woff') }" — a URL the engine's own
+# resolver fetches — so putting the file where the URL points answers the
+# document. These four write
+#
+#	font-family: "IPAMincho", "IPAGothic", "IPA明朝", "IPAゴシック";
+#
+# and no @font-face at all: a *system* family the suite expects the platform to
+# have. No file in the corpus can answer that, so the harness lends the faces by
+# name instead, which is what layout/suitefonts_test.go's ipaFamilies does. They
+# belong in the font library a caller supplies, and that is this directory.
+#
+# What it is worth, measured rather than estimated: **no clean passes**. The
+# library's NotoSansJP-VF is already a fullwidth Japanese face, so these
+# documents were already being set with the metrics the tests need, and
+# hanging-punctuation-allow-end-001 is forty marks from its reference in either
+# face. What it buys is honesty and a work queue: four documents stop reporting
+# a font-fallback that was true and useless, and two of them move from unclean
+# failures to clean ones — which is what puts them in the distance probe, where
+# the next person looks. The ratchet does not move and is not meant to.
+#
+# Licensing: the IPA Font License 1.0 permits redistribution, and the licence is
+# unpacked beside the fonts. No font bytes are vendored in this repository or
+# shipped in anything it builds — the same arrangement as Ahem, Doulos and the
+# Noto faces.
+IPAFONT_URL := https://moji.or.jp/wp-content/ipafont/IPAfont/IPAfont00303.zip
 NOTO_HINTED := NotoSans NotoSansHebrew NotoSansArabic NotoSansDevanagari \
                NotoSansArmenian NotoSansGeorgian \
                NotoSansOgham NotoSansCoptic NotoSansDeseret NotoSansSymbols
@@ -836,6 +867,14 @@ $(NOTO_DIR)/.ok:
 	$(call unifont,$(NOTO_DIR)/Unifont-Regular.otf,unifont-$(UNIFONT_VER).otf)
 	$(call unifont,$(NOTO_DIR)/UnifontUpper-Regular.otf,unifont_upper-$(UNIFONT_VER).otf)
 	cp $(UNIFONT_LICENSE) $(NOTO_DIR)/UNIFONT-LICENSE.txt
+	$(FETCH) -o $(NOTO_DIR)/ipafont.zip $(IPAFONT_URL)
+	unzip -o -j -d $(NOTO_DIR) $(NOTO_DIR)/ipafont.zip \
+	  'IPAfont00303/ipam.ttf' \
+	  'IPAfont00303/ipag.ttf' \
+	  'IPAfont00303/IPA_Font_License_Agreement_v1.0.txt'
+	mv $(NOTO_DIR)/IPA_Font_License_Agreement_v1.0.txt \
+	  $(NOTO_DIR)/IPA-Font-License-v1.0.txt
+	rm -f $(NOTO_DIR)/ipafont.zip
 	$(MAKE) verify-fonts
 	touch $@
 

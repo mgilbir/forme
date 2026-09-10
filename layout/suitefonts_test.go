@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -37,6 +38,10 @@ import (
 type suiteFonts struct {
 	fallback []*shape.Face
 	standard FontSet
+
+	// named answers a family the document asks for by name, which the standard
+	// fourteen have no face for. See ipaFamilies.
+	named map[string]*shape.Face
 }
 
 // FaceFor implements FallbackFontSet: the first Noto face that can set the whole
@@ -56,6 +61,9 @@ func (w suiteFonts) FaceFor(text string, bold, italic bool) (*shape.Face, bool) 
 }
 
 func (w suiteFonts) Face(family string, bold, italic bool) (*shape.Face, bool) {
+	if f, ok := w.named[strings.ToLower(strings.TrimSpace(family))]; ok {
+		return f, true
+	}
 	return w.standard.Face(family, bold, italic)
 }
 
@@ -74,7 +82,11 @@ var (
 // display lists and writes no PDF.
 func fontSetForWPT() FontSet {
 	wptFontsOnce.Do(func() {
-		wptFontSet = suiteFonts{standard: StandardFonts(), fallback: notoFaces()}
+		wptFontSet = suiteFonts{
+			standard: StandardFonts(),
+			fallback: notoFaces(),
+			named:    ipaFaces(),
+		}
 	})
 	return wptFontSet
 }
@@ -272,4 +284,61 @@ func TestTheSuitesVariableFaceIsLoadedAtNormalWeight(t *testing.T) {
 	if _, err := loadSuiteFace(static); err != nil {
 		t.Errorf("a face with no weight axis was refused: %v", err)
 	}
+}
+
+// ipaFamilies is the Japanese faces the suite asks for by name.
+//
+// Four hanging-punctuation documents write
+// `font-family: "IPAMincho", "IPAGothic", "IPA明朝", "IPAゴシック"` and no
+// @font-face at all, so there is no URL for the resolver to fetch: the family
+// is a *system* font the suite expects the platform to have. That is a
+// different request from Doulos SIL's, which is an @font-face the engine loads
+// through its own resolver, and it is why copying the file into the corpus the
+// way Armenian and Georgian were copied cannot answer it.
+//
+// So the harness answers it the way a caller would, which is what this whole
+// file is: a font library lent to the engine. The Noto faces above are lent for
+// *coverage* — FaceFor asks which face can set some text — and these are lent
+// by *name*, which is the other half of the same job.
+//
+// The two Japanese names are the same two faces spelled in Japanese, which is
+// how the suite writes them.
+var ipaFamilies = map[string]string{
+	"ipamincho": "ipam.ttf",
+	"ipa明朝":     "ipam.ttf",
+	"ipagothic": "ipag.ttf",
+	"ipaゴシック":   "ipag.ttf",
+}
+
+// ipaFaces loads them, or none.
+//
+// Missing files are recorded in the same place a missing fallback face is, for
+// the same reason: a face that is not loaded changes what the documents naming
+// it are set in, and a silent skip is what once turned an incomplete library
+// into "this is a layout regression".
+func ipaFaces() map[string]*shape.Face {
+	dir, _ := fonttest.NotoRoot()
+	if !fonttest.NotoPresent(dir) {
+		return nil
+	}
+	out := map[string]*shape.Face{}
+	byFile := map[string]*shape.Face{}
+	for family, name := range ipaFamilies {
+		face, ok := byFile[name]
+		if !ok {
+			data, err := os.ReadFile(filepath.Join(dir, name))
+			if err != nil {
+				missingFallbackFaces.add(name, err)
+				continue
+			}
+			if face, err = loadSuiteFace(data); err != nil {
+				missingFallbackFaces.add(name, err)
+				continue
+			}
+			registerBlockFont(face, data)
+			byFile[name] = face
+		}
+		out[family] = face
+	}
+	return out
 }

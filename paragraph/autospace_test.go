@@ -248,3 +248,51 @@ func TestSplitAtAutospaceCutsWhereTheGapGoes(t *testing.T) {
 		}
 	}
 }
+
+// TestAHalfwidthSoundMarkIsNotTheOtherSideOfABoundary.
+//
+// The three halfwidth marks Unicode gives the Common script — the prolonged
+// sound mark and the two voiced sound marks — are Lm, so unicode.IsLetter is
+// true for every one of them. That is enough on its own: a character that is
+// not an ideograph and is a letter is §8.1's *other side*, and the eighth of an
+// em then opens inside a Japanese word. "ｼﾞ" is the shape — a halfwidth katakana
+// and its own dakuten, one syllable to a reader and two characters to a table.
+//
+// Their fullwidth twins are already ideographs here: U+30FC is in the list by
+// name, and U+309B/U+309C escape by being Sk rather than a letter. The halfwidth
+// three had neither protection, which is why the suite's
+// hanging-punctuation-allow-end-001 measured its halfwidth rows an eighth of an
+// em per syllable too wide and broke its lines early.
+func TestAHalfwidthSoundMarkIsNotTheOtherSideOfABoundary(t *testing.T) {
+	for _, tc := range []struct {
+		r    rune
+		what string
+	}{
+		{0xFF70, "the halfwidth prolonged sound mark, the twin of U+30FC"},
+		{0xFF9E, "the halfwidth voiced sound mark"},
+		{0xFF9F, "the halfwidth semi-voiced sound mark"},
+	} {
+		if !IsAutospaceIdeograph(tc.r) {
+			t.Errorf("%s (U+%04X) is not an ideograph to §8.1", tc.what, tc.r)
+		}
+		if IsAutospaceLetter(tc.r) {
+			t.Errorf("%s (U+%04X) is §8.1's other side, so a gap opens beside it",
+				tc.what, tc.r)
+		}
+	}
+	// The boundary the bug actually opened, stated as the suite states it.
+	as := Autospace{IdeographAlpha: true, IdeographNumeric: true}
+	for _, tc := range []struct {
+		a, b rune
+		what string
+	}{
+		{'ｼ', 0xFF9E, "a halfwidth katakana and its own dakuten"},
+		{'ｱ', 0xFF70, "a halfwidth katakana and a prolonged sound mark"},
+		{0xFF9E, 'ｼ', "the same pair the other way round"},
+	} {
+		if AutospaceAt(tc.a, tc.b, as) {
+			t.Errorf("%s (U+%04X U+%04X) got an eighth of an em between them",
+				tc.what, tc.a, tc.b)
+		}
+	}
+}
