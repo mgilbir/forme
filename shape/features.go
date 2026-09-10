@@ -27,16 +27,15 @@ package shape
 //
 // # The one that goes the other way
 //
-// "font-variant-caps" and "font-variant-numeric" ask for rules the font states
-// and no run gets by default: 'smcp', the small capitals a designer drew for the
-// lowercase letters, and the five other ways §6.6 has of setting a run in
-// capitals; 'onum' and 'tnum' and the six other things §6.7 does to a figure.
-// They are here rather than in ShapeGlyphsWith's caller-named list because they
-// are the same kind of fact as the other three — something about the run that
-// its own text does not say, decided by a declaration — and because they have to
-// travel the whole way to the backend that draws the run. Everything between
-// layout and the pen already carries a Features, and nothing carries a list of
-// tags.
+// The font-variant family asks for rules the font states and no run gets by
+// default: 'smcp' and the five other ways §6.6 has of setting a run in
+// capitals, 'onum' and 'tnum' and the six other things §6.7 does to a figure,
+// and §6.9's national forms and ideographic widths. They are here rather than in
+// ShapeGlyphsWith's caller-named list because they are the same kind of fact as
+// the other three — something about the run that its own text does not say,
+// decided by a declaration — and because they have to travel the whole way to
+// the backend that draws the run. Everything between layout and the pen already
+// carries a Features, and nothing carries a list of tags.
 //
 // It is *not* the same in the one way that matters to a report: turning a rule
 // off is right whether or not the face has it, and turning one on is only
@@ -81,6 +80,13 @@ type Features struct {
 	// figures, tabular spacing and a slashed zero at once, and the three are
 	// three of the font's rules over the same digits. See Numeric.
 	Numeric Numeric
+	// EastAsian is which national standard's forms a run's ideographs take,
+	// whether its characters are set on the ideographic advance or their own,
+	// and whether its kana are the small forms an annotation is set in.
+	//
+	// A set for the same reason Numeric is: CSS Fonts 4 §6.9 lets a document
+	// ask for the JIS78 forms at full width at once. See EastAsian.
+	EastAsian EastAsian
 }
 
 // Caps is CSS Fonts 4 §6.6's font-variant-caps, as a set of features to ask a
@@ -175,22 +181,99 @@ var capsFeatures = [...]struct{ capitals, lowercase string }{
 	CapsTitling:   {capitals: "titl"},
 }
 
-// adds returns the tags this set turns on, in the order they are applied.
+// adds returns the tags this set turns on.
 //
-// The capitals before the figures, which is the order §6.6 and §6.7 are written
-// in and is not a decision this can make well: the two act on disjoint sets of
-// characters — letters and digits — so no rule of one can see what the other
-// did, and the order between them is unobservable.
+// The order they are returned in decides nothing, and that is worth saying
+// rather than leaving to be inferred: applyRequestedFeatures merges these by
+// the font's own lookup index before any of them is applied, so what this
+// returns is a set written as a slice. The properties' own order is kept anyway,
+// because a caller reading a list of tags in a message wants the order the
+// declarations were written in.
+//
+// The three branches are not tidiness either. Almost every run that asks for
+// anything asks under one property, and returning that property's own slice
+// hands the shaper the list it already has rather than a copy of it.
 func (f Features) adds() []string {
-	caps, numeric := f.Caps.Features(), f.Numeric.Features()
+	caps, numeric, east := f.Caps.Features(), f.Numeric.Features(), f.EastAsian.Features()
 	switch {
-	case len(numeric) == 0:
+	case len(numeric) == 0 && len(east) == 0:
 		return caps
-	case len(caps) == 0:
+	case len(caps) == 0 && len(east) == 0:
 		return numeric
+	case len(caps) == 0 && len(numeric) == 0:
+		return east
 	}
-	out := make([]string, 0, len(caps)+len(numeric))
-	return append(append(out, caps...), numeric...)
+	out := make([]string, 0, len(caps)+len(numeric)+len(east))
+	return append(append(append(out, caps...), numeric...), east...)
+}
+
+// EastAsian is CSS Fonts 4 §6.9's font-variant-east-asian, as the set of
+// features it asks a face for.
+//
+// A set and not a value, for the reason Numeric is one: §6.9's grammar is a
+// group of six alternatives, a pair, and a keyword that stands alone, and a
+// document may name one of each. Nothing in it is synthesised — a JIS78
+// ideograph is a shape a designer drew, and a full-width Latin letter is a
+// second drawing of the same letter on the ideographic advance.
+type EastAsian uint16
+
+const (
+	// The six forms §6.9 calls <east-asian-variant-values>. Four are the
+	// Japanese national standards, whose successive revisions changed which
+	// glyph a character is drawn with: a font that carries them can set the
+	// same text as it was printed in 1978 or in 2004. The other two are the
+	// simplified and traditional forms of the characters that have both.
+	EastAsianJis78 EastAsian = 1 << iota
+	EastAsianJis83
+	EastAsianJis90
+	EastAsianJis04
+	EastAsianSimplified
+	EastAsianTraditional
+	// <east-asian-width-values>: whether a character is set on the ideographic
+	// advance — one em, so that a line of them is a grid — or on its own. It is
+	// the pair that reaches Latin text as well, because a Japanese font draws
+	// the ASCII letters twice.
+	EastAsianFullWidth
+	EastAsianProportionalWidth
+	// EastAsianRuby is the kana cut for an annotation: a ruby gloss is set at a
+	// fraction of the size beside the characters it explains, and a kana simply
+	// scaled down is too light to read at it.
+	EastAsianRuby
+)
+
+// Features are the tags this set asks a face for, in §6.9's own order: the
+// national form, the width, then ruby.
+func (e EastAsian) Features() []string {
+	if e == 0 {
+		return nil
+	}
+	out := make([]string, 0, 3)
+	for _, each := range eastAsianFeatures {
+		if e&each.bit != 0 {
+			out = append(out, each.tag)
+		}
+	}
+	return out
+}
+
+// Has reports whether a set asks for one of §6.9's features.
+func (e EastAsian) Has(bit EastAsian) bool { return e&bit != 0 }
+
+// eastAsianFeatures is the tag each bit names, in the order Features returns
+// them.
+var eastAsianFeatures = [...]struct {
+	bit EastAsian
+	tag string
+}{
+	{EastAsianJis78, "jp78"},
+	{EastAsianJis83, "jp83"},
+	{EastAsianJis90, "jp90"},
+	{EastAsianJis04, "jp04"},
+	{EastAsianSimplified, "smpl"},
+	{EastAsianTraditional, "trad"},
+	{EastAsianFullWidth, "fwid"},
+	{EastAsianProportionalWidth, "pwid"},
+	{EastAsianRuby, "ruby"},
 }
 
 // Numeric is CSS Fonts 4 §6.7's font-variant-numeric, as the set of features it

@@ -70,6 +70,7 @@ func (l *layouter) featuresFor(b *Box) shape.Features {
 	// answer can be reported.
 	out.Caps, _ = capsOf(b.Style["font-variant-caps"])
 	out.Numeric, _ = numericOf(b.Style["font-variant-numeric"])
+	out.EastAsian, _ = eastAsianOf(b.Style["font-variant-east-asian"])
 	return out
 }
 
@@ -264,6 +265,77 @@ func numericKeyword(word string) (bit, group shape.Numeric, ok bool) {
 		return shape.NumericOrdinal, shape.NumericOrdinal, true
 	case "slashed-zero":
 		return shape.NumericSlashedZero, shape.NumericSlashedZero, true
+	}
+	return 0, 0, false
+}
+
+// eastAsianOf reads CSS Fonts 4 §6.9's font-variant-east-asian.
+//
+// Nine keywords in three groups — the national form, the width, and the ruby
+// kana — and a value is any combination with at most one from each. So the
+// answer is a set, and shape's own set for the reason numericOf gives: every
+// keyword is a request for a feature the face declares, which is the whole of
+// what the property does.
+//
+// The first group is six alternatives rather than a pair, which is the one thing
+// about this grammar that surprises. JIS78, JIS83, JIS90 and JIS04 were four
+// revisions of one standard and "simplified" and "traditional" are two forms of
+// one character, so all six are answers to the same question and a value naming
+// two of them asks for one ideograph in two shapes.
+//
+// The second result is the first word that is not one of the nine, or the first
+// that repeats a group, which reportEastAsian names.
+func eastAsianOf(raw string) (shape.EastAsian, string) {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	if value == "" || value == "normal" {
+		return 0, ""
+	}
+	var (
+		out  shape.EastAsian
+		seen = map[shape.EastAsian]bool{}
+	)
+	for _, word := range strings.Fields(value) {
+		bit, group, ok := eastAsianKeyword(word)
+		if !ok || seen[group] {
+			return 0, word
+		}
+		seen[group] = true
+		out |= bit
+	}
+	return out, ""
+}
+
+// eastAsianKeyword reads one of §6.9's keywords: which feature it asks for, and
+// which of the three groups it belongs to.
+//
+// The group is the set of bits it competes with, for the reason numericKeyword
+// returns one: what it is used for is whether the group has been named already.
+func eastAsianKeyword(word string) (bit, group shape.EastAsian, ok bool) {
+	const (
+		variant = shape.EastAsianJis78 | shape.EastAsianJis83 |
+			shape.EastAsianJis90 | shape.EastAsianJis04 |
+			shape.EastAsianSimplified | shape.EastAsianTraditional
+		width = shape.EastAsianFullWidth | shape.EastAsianProportionalWidth
+	)
+	switch word {
+	case "jis78":
+		return shape.EastAsianJis78, variant, true
+	case "jis83":
+		return shape.EastAsianJis83, variant, true
+	case "jis90":
+		return shape.EastAsianJis90, variant, true
+	case "jis04":
+		return shape.EastAsianJis04, variant, true
+	case "simplified":
+		return shape.EastAsianSimplified, variant, true
+	case "traditional":
+		return shape.EastAsianTraditional, variant, true
+	case "full-width":
+		return shape.EastAsianFullWidth, width, true
+	case "proportional-width":
+		return shape.EastAsianProportionalWidth, width, true
+	case "ruby":
+		return shape.EastAsianRuby, shape.EastAsianRuby, true
 	}
 	return 0, 0, false
 }

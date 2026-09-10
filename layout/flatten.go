@@ -734,6 +734,10 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		// has no synthesis behind it: a face that draws no oldstyle digits sets
 		// the ones it has. See reportNumeric.
 		l.reportNumeric(b, run.Face, run.Text)
+		// And the East Asian forms, which is the third of the same question:
+		// a face that draws no JIS78 ideographs sets the ones it has. See
+		// reportEastAsian.
+		l.reportEastAsian(b, run.Face, run.Text)
 	}
 	// And the glyphs, asked of the text that will be *drawn* — which for a run
 	// whose small capitals were synthesised is the uppercase of what the

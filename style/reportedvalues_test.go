@@ -195,15 +195,15 @@ func TestFontVariantSetsBothLonghandsItControls(t *testing.T) {
 	}
 }
 
-// TestAFontVariantValueThisEngineHasNoLonghandForIsReported is the other four
+// TestAFontVariantValueThisEngineHasNoLonghandForIsReported is the other three
 // groups the shorthand controls.
 //
-// Three of the seven longhands are registered, so a value from one of the other
-// four — an east-asian form, a superscript position — has nothing to be set on.
-// Refusing the declaration whole is what raises the unsupported-property
-// finding, and swallowing it silently is what that finding exists to stop.
+// Four of the seven longhands are registered, so a value from one of the other
+// three — a superscript position, a swash — has nothing to be set on. Refusing
+// the declaration whole is what raises the unsupported-property finding, and
+// swallowing it silently is what that finding exists to stop.
 func TestAFontVariantValueThisEngineHasNoLonghandForIsReported(t *testing.T) {
-	for _, value := range []string{"sub", "jis78", "historical-forms", "ruby"} {
+	for _, value := range []string{"sub", "super", "historical-forms"} {
 		got := findingsOf(t, `<p id="a">1</p>`, `#a { font-variant: `+value+` }`)
 		found, unsupported := says(got, "font-variant")
 		if !found {
@@ -272,6 +272,63 @@ func TestTheFontVariantShorthandResetsTheNumericLonghand(t *testing.T) {
 	}
 	if cs["font-variant-caps"] != "small-caps" {
 		t.Errorf("font-variant-caps is %q, want small-caps", cs["font-variant-caps"])
+	}
+}
+
+// TestAFontVariantEastAsianValueSetsTheLonghand, and the reset that comes with
+// it.
+//
+// §6.9's nine keywords were reported as a part of the shorthand that is not
+// implemented, and are now expanded into font-variant-east-asian like the three
+// beside them.
+func TestAFontVariantEastAsianValueSetsTheLonghand(t *testing.T) {
+	if got := findingsOf(t, `<p id="a">x</p>`,
+		`#a { font-variant: jis78 full-width ruby }`); len(got) != 0 {
+		t.Errorf("raised %v; the shorthand sets a property this engine reads "+
+			"and the stylesheet has nothing wrong with it", got)
+	}
+	doc := parseDoc(t, `<p id="outer"><span id="a">x</span></p>`)
+	rules, _ := css.ParseStylesheet(
+		`#outer { font-variant: jis78 full-width ruby }
+		 #a { font-variant: small-caps }`)
+	styled := Apply(doc, []Sheet{{Origin: OriginAuthor, Rules: rules}})
+	outer := styled.Styles[elementFor(t, doc, "#outer")]
+	if want := "jis78 full-width ruby"; outer["font-variant-east-asian"] != want {
+		t.Fatalf("font-variant-east-asian computed to %q, want %q",
+			outer["font-variant-east-asian"], want)
+	}
+	// And the span resets it, which is the whole reason the property is
+	// expanded rather than read.
+	if cs := styled.Styles[elementFor(t, doc, "#a")]; cs["font-variant-east-asian"] != "normal" {
+		t.Errorf("font-variant-east-asian is %q inside a jis78 container after "+
+			"\"font-variant: small-caps\", want normal", cs["font-variant-east-asian"])
+	}
+}
+
+// TestAGroupOfFontVariantEastAsianWrittenTwiceIsRefused.
+//
+// §6.9's first group is six alternatives rather than a pair: the four Japanese
+// standards were revisions of one thing and "simplified" and "traditional" are
+// two forms of one character, so any two of the six ask for the same ideograph
+// in two shapes.
+func TestAGroupOfFontVariantEastAsianWrittenTwiceIsRefused(t *testing.T) {
+	for _, value := range []string{
+		"jis78 jis83",
+		"jis04 traditional",
+		"simplified traditional",
+		"full-width proportional-width",
+		"ruby ruby",
+	} {
+		got := findingsOf(t, `<p id="a">x</p>`, `#a { font-variant: `+value+` }`)
+		found, unsupported := says(got, "not a value this engine can read")
+		if !found {
+			t.Errorf("%q raised %v, want it refused as a value", value, got)
+			continue
+		}
+		if unsupported {
+			t.Errorf("%q is invalid CSS and was reported as a missing feature",
+				value)
+		}
 	}
 }
 

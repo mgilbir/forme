@@ -270,6 +270,18 @@ var properties = map[string]property{
 	// and small capitals. A face that declares none of what a value asks for
 	// sets the figures it has, and layout says so. See layout/fontfeatures.go.
 	"font-variant-numeric": {true, "normal"},
+	// CSS Fonts 4 §6.9. It inherits with the rest of the family, and its
+	// initial value is "normal" — whichever forms the face draws by default,
+	// at whichever width it draws them.
+	//
+	// Nine keywords and all of them a feature the face declares: 'jp78' and its
+	// three successors for the Japanese national standards, 'smpl' and 'trad'
+	// for the two forms of a simplified character, 'fwid' and 'pwid' for the
+	// ideographic advance against the character's own, and 'ruby' for the kana
+	// an annotation is set in. None is synthesised — a JIS78 ideograph is a
+	// shape a designer drew — so a face that declares none of what a value asks
+	// for sets the forms it has, and layout says so. See layout/fontfeatures.go.
+	"font-variant-east-asian": {true, "normal"},
 	// text-autospace inherits, which is what lets a document turn it off once
 	// on the body. Its initial value is "normal", and "normal" asks for the
 	// spacing — a page of Japanese with Latin words in it is set wrong without
@@ -631,10 +643,11 @@ var shorthands = map[string]shorthand{
 		"font-style", "font-weight", "font-size", "font-family", "line-height",
 		"font-variant-caps"}},
 
-	// CSS Fonts 4 §6.10, for the three longhands this engine has. See
+	// CSS Fonts 4 §6.10, for the four longhands this engine has. See
 	// fontVariantShorthand for why the property is expanded rather than read.
 	"font-variant": {fontVariantShorthand, []string{
-		"font-variant-ligatures", "font-variant-caps", "font-variant-numeric"}},
+		"font-variant-ligatures", "font-variant-caps", "font-variant-numeric",
+		"font-variant-east-asian"}},
 	"text-decoration": {textDecorationShorthand,
 		[]string{"text-decoration-line", "text-decoration-color",
 			"text-decoration-thickness"}},

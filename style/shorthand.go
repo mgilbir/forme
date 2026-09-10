@@ -1001,12 +1001,13 @@ func textWrapShorthand(vals []css.ComponentValue) (map[string][]css.ComponentVal
 
 // CSS Fonts 4 §6.10's "font-variant", for the two longhands this engine has.
 //
-// The property is a shorthand for seven, and three of them are here:
-// font-variant-ligatures, font-variant-caps and font-variant-numeric. The other
-// four are not registered, so a declaration naming one of their values is
-// refused whole and reported as an unsupported property — which is the right
-// answer for a value nothing downstream can act on, and the same answer the
-// property got as a whole until small capitals were implemented.
+// The property is a shorthand for seven, and four of them are here:
+// font-variant-ligatures, font-variant-caps, font-variant-numeric and
+// font-variant-east-asian. The other three are not registered, so a declaration
+// naming one of their values is refused whole and reported as an unsupported
+// property — which is the right answer for a value nothing downstream can act
+// on, and the same answer the property got as a whole until small capitals were
+// implemented.
 //
 // # Why it is a shorthand at all rather than a keyword this reads
 //
@@ -1035,9 +1036,11 @@ func fontVariantShorthand(vals []css.ComponentValue) (map[string][]css.Component
 	if name, ok := singleIdent(vals); ok {
 		switch name {
 		case "normal":
-			return fontVariantLonghands(ident("normal"), ident("normal"), ident("normal")), nil, true
+			return fontVariantLonghands(ident("normal"), ident("normal"),
+				ident("normal"), ident("normal")), nil, true
 		case "none":
-			return fontVariantLonghands(ident("none"), ident("normal"), ident("normal")), nil, true
+			return fontVariantLonghands(ident("none"), ident("normal"),
+				ident("normal"), ident("normal")), nil, true
 		}
 	}
 
@@ -1047,6 +1050,8 @@ func fontVariantShorthand(vals []css.ComponentValue) (map[string][]css.Component
 		seenLig     = map[string]bool{}
 		numWords    [][]css.ComponentValue
 		seenNum     = map[string]bool{}
+		eastWords   [][]css.ComponentValue
+		seenEast    = map[string]bool{}
 		unsupported []string
 	)
 	for _, part := range parts {
@@ -1098,6 +1103,16 @@ func fontVariantShorthand(vals []css.ComponentValue) (map[string][]css.Component
 			}
 			seenNum[group] = true
 			numWords = append(numWords, part)
+		case eastAsianKeywordGroup[name] != "":
+			// §6.9's three groups, by the same rule: the six national forms are
+			// alternatives to each other, the two widths are a pair, and "ruby"
+			// is a group of one.
+			group := eastAsianKeywordGroup[name]
+			if seenEast[group] {
+				return nil, nil, false
+			}
+			seenEast[group] = true
+			eastWords = append(eastWords, part)
 		default:
 			return nil, nil, false
 		}
@@ -1111,7 +1126,7 @@ func fontVariantShorthand(vals []css.ComponentValue) (map[string][]css.Component
 	if len(unsupported) > 0 {
 		return nil, unsupported, false
 	}
-	lig, numeric := ident("normal"), ident("normal")
+	lig, numeric, east := ident("normal"), ident("normal"), ident("normal")
 	if len(ligWords) > 0 {
 		// Kept in the order they were written, which is the order
 		// font-variant-ligatures' own grammar puts them in.
@@ -1120,10 +1135,13 @@ func fontVariantShorthand(vals []css.ComponentValue) (map[string][]css.Component
 	if len(numWords) > 0 {
 		numeric = joinParts(numWords...)
 	}
+	if len(eastWords) > 0 {
+		east = joinParts(eastWords...)
+	}
 	if caps == nil {
 		caps = ident("normal")
 	}
-	return fontVariantLonghands(lig, caps, numeric), nil, true
+	return fontVariantLonghands(lig, caps, numeric, east), nil, true
 }
 
 // variantFunction reads one of font-variant-alternates' functional notations.
@@ -1140,9 +1158,9 @@ func variantFunction(part []css.ComponentValue) (string, bool) {
 	return "", false
 }
 
-// fontVariantOtherKeywords is every ident value of the four longhands
-// "font-variant" controls that this engine does not have: the east-asian forms,
-// the sub- and superscript positions, and font-variant-alternates' one keyword.
+// fontVariantOtherKeywords is every ident value of the three longhands
+// "font-variant" controls that this engine does not have: the sub- and
+// superscript positions, and font-variant-alternates' one keyword.
 //
 // It is written out rather than left to the default branch because the two
 // answers differ. A value in this list is correct CSS the engine cannot produce
@@ -1153,22 +1171,31 @@ var fontVariantOtherKeywords = map[string]bool{
 	// font-variant-alternates §6.8. The rest of it is functional notations,
 	// which variantFunction reads.
 	"historical-forms": true,
-	// font-variant-east-asian §6.9.
-	"jis78": true, "jis83": true, "jis90": true, "jis04": true,
-	"simplified": true, "traditional": true,
-	"full-width": true, "proportional-width": true, "ruby": true,
 	// font-variant-position §6.5.
 	"sub": true, "super": true,
 }
 
 // fontVariantLonghands is the set the shorthand always sets, written once so
 // that the reset cannot be forgotten on one of the branches above.
-func fontVariantLonghands(lig, caps, numeric []css.ComponentValue) map[string][]css.ComponentValue {
+func fontVariantLonghands(lig, caps, numeric, east []css.ComponentValue) map[string][]css.ComponentValue {
 	return map[string][]css.ComponentValue{
-		"font-variant-ligatures": lig,
-		"font-variant-caps":      caps,
-		"font-variant-numeric":   numeric,
+		"font-variant-ligatures":  lig,
+		"font-variant-caps":       caps,
+		"font-variant-numeric":    numeric,
+		"font-variant-east-asian": east,
 	}
+}
+
+// eastAsianKeywordGroup maps §6.9's nine keywords to the group each belongs to.
+//
+// Three groups, and the first of them is six alternatives rather than a pair:
+// the Japanese standards were four revisions of one thing, so a document naming
+// two of them is asking for the same ideograph in two shapes.
+var eastAsianKeywordGroup = map[string]string{
+	"jis78": "variant", "jis83": "variant", "jis90": "variant", "jis04": "variant",
+	"simplified": "variant", "traditional": "variant",
+	"full-width": "width", "proportional-width": "width",
+	"ruby": "ruby",
 }
 
 // numericKeywordGroup maps §6.7's eight keywords to the group each belongs to,

@@ -729,6 +729,112 @@ func hasDigit(text string) bool {
 	return false
 }
 
+// reportEastAsian names a request about the East Asian forms the face cannot
+// carry out.
+//
+// Every keyword of CSS Fonts 4 §6.9 is a request for a feature the face
+// declares: the Japanese national standards, the two forms of a simplified
+// character, the ideographic advance against the character's own, and the kana
+// an annotation is set in. A face that declares none of them sets the forms it
+// has — a page of ideographs in whichever revision the designer drew, Latin
+// letters on their own advance where a grid was asked for — and none of it looks
+// wrong, which is the shape of failure §6.3's findings exist for.
+//
+// Nothing here is synthesised. A JIS78 ideograph is a shape a designer drew, and
+// so is a ruby kana; a full-width Latin letter is a second drawing of the same
+// letter on the ideographic advance, and centring the proportional one in an em
+// would be this engine inventing a typeface. No browser does either.
+//
+// # Which characters each tag could act on
+//
+// Three classes, and they are coarser than the nine features because what can be
+// known here is coarser. The six national forms and 'ruby' need an East Asian
+// character — an ideograph or a kana — and a run of Latin is set identically
+// with them and without.
+//
+// The two widths are the ones that reach Latin text, and that is the whole point
+// of them: a Japanese font draws the ASCII letters twice, and "full-width" asks
+// for the wide drawing. So 'fwid' needs a character that *has* a full-width form
+// and 'pwid' one that *is* one — read from the table text-transform's own
+// full-width value is applied from, so the two cannot drift apart. An East Asian
+// character counts for both, because a font may set its kana proportionally and
+// a halfwidth kana is a width pair as well as a kana.
+func (l *layouter) reportEastAsian(b *Box, face *shape.Face, text string) {
+	want, unhandled := eastAsianOf(b.Style["font-variant-east-asian"])
+	if unhandled != "" {
+		l.reportOnce("font-variant-east-asian:"+unhandled, Finding{
+			Rule:     RuleUnsupportedValue,
+			Property: "font-variant-east-asian",
+			Message: quoteValue(unhandled) + " is not a value of " +
+				"font-variant-east-asian this engine reads; the text was set in " +
+				"the forms the face draws",
+			Path: PathOf(boxElement(b)),
+		})
+		return
+	}
+	if want == 0 || face == nil {
+		return
+	}
+	ideographs, wide, narrow := eastAsianCharacters(text)
+	var missing []string
+	for _, tag := range want.Features() {
+		if faceDeclares(face, tag) || !eastAsianTagWouldShow(tag, ideographs, wide, narrow) {
+			continue
+		}
+		missing = append(missing, tag)
+	}
+	if len(missing) == 0 {
+		return
+	}
+	value := strings.ToLower(strings.TrimSpace(b.Style["font-variant-east-asian"]))
+	l.reportOnce("font-variant-east-asian:"+value+":"+strings.Join(missing, ",")+":"+face.Name(),
+		Finding{
+			Rule:     RuleUnsupportedValue,
+			Property: "font-variant-east-asian",
+			Message: "font-variant-east-asian " + quoteValue(value) + " asks a face for " +
+				strings.Join(want.Features(), " and ") + "; " + quoteValue(face.Name()) +
+				" declares no " + strings.Join(missing, " or ") + ", and this engine " +
+				"does not draw a form a designer did not — so that much of the " +
+				"text was set in the forms the face has",
+			Path: PathOf(boxElement(b)),
+		})
+}
+
+// eastAsianTagWouldShow reports whether a tag has anything in this run to act
+// on. See reportEastAsian for the three classes.
+func eastAsianTagWouldShow(tag string, ideographs, wide, narrow bool) bool {
+	switch tag {
+	case "fwid":
+		return ideographs || narrow
+	case "pwid":
+		return ideographs || wide
+	}
+	return ideographs
+}
+
+// eastAsianCharacters is what a run holds that §6.9's features could act on: an
+// East Asian character, one that is a full-width form, and one that has a
+// full-width form.
+//
+// All three in one pass, because a run of Japanese with Latin words in it is
+// every one of them and asking three times would walk the text three times.
+func eastAsianCharacters(text string) (ideographs, wide, narrow bool) {
+	for _, r := range text {
+		switch {
+		case paragraph.IsAutospaceIdeograph(r):
+			ideographs = true
+		case paragraph.IsFullWidthForm(r):
+			wide = true
+		case paragraph.HasFullWidthForm(r):
+			narrow = true
+		}
+		if ideographs && wide && narrow {
+			break
+		}
+	}
+	return ideographs, wide, narrow
+}
+
 // inertFontFeatures reports whether a font-feature-settings value asks for the
 // page that is already there.
 //
