@@ -390,6 +390,17 @@ type Item struct {
 	// Off is what the document turned off for this run: a font's own rules a
 	// CSS property or a CSS Text rule has overruled. See shape.Features.
 	Off shape.Features
+	// Synthesised says this run's small capitals were made out of the uppercase
+	// letters, because the face declares none of its own: its Text is the
+	// uppercase of what the document wrote and its Size is below its box's.
+	//
+	// Nothing in this package reads it. It is carried because the run cannot be
+	// rebuilt from its box any more — the text has been rewritten and the
+	// original is not here — so anything that *restyles* an item has to know,
+	// or it will set the run back to its box's size and ask the face for the
+	// feature the run is standing in for. See layout's firstLineItems, which is
+	// the one caller that does, and layout/smallcaps.go for the whole of it.
+	Synthesised bool
 	// Hyphen is how much wider the line becomes if it ends after this item: the
 	// width of the hyphen a soft hyphen asks to have printed.
 	//

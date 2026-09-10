@@ -42,6 +42,15 @@ import (
 type faceRun struct {
 	Text string
 	Face *shape.Face
+	// synthesised marks a run this engine set as small capitals by uppercasing
+	// it and shrinking it, because the face declares none of its own.
+	//
+	// It travels on the run rather than on the item because it is decided where
+	// the run is cut — the cut and the rewrite are the same operation — and it
+	// is read once more where the item is built, to shrink the size and to stop
+	// the run asking the face for a feature it is standing in for. See
+	// layout/smallcaps.go.
+	synthesised bool
 	// substituted marks a run whose face came from the fallback set rather than
 	// from a family the document named.
 	//

@@ -8,6 +8,7 @@ import (
 	"github.com/mgilbir/forme/fonts/notosans"
 	"github.com/mgilbir/forme/fonttest"
 	"github.com/mgilbir/forme/shape"
+	"github.com/mgilbir/forme/style"
 )
 
 // CSS Fonts 4 §6.6's small capitals: the one font-variant value this engine
@@ -74,7 +75,7 @@ func TestSmallCapsReachesTheRunThatIsDrawn(t *testing.T) {
 		{"nothing declared", "", shape.CapsNormal},
 		{"the longhand", "font-variant-caps: small-caps", shape.CapsSmall},
 		{"the font-variant shorthand", "font-variant: small-caps", shape.CapsSmall},
-		{"the font shorthand", "font: small-caps 20px serif", shape.CapsSmall},
+		{"the font shorthand", "font: small-caps 20px Cap", shape.CapsSmall},
 		{"normal", "font-variant-caps: normal", shape.CapsNormal},
 		{"all-small-caps", "font-variant-caps: all-small-caps", shape.CapsAllSmall},
 		{"petite-caps", "font-variant: petite-caps", shape.CapsPetite},
@@ -83,11 +84,16 @@ func TestSmallCapsReachesTheRunThatIsDrawn(t *testing.T) {
 		{"titling-caps", "font-variant: titling-caps", shape.CapsTitling},
 		{"a value of no level at all", "font-variant-caps: sideways", shape.CapsNormal},
 	} {
+		// Through the face that declares small capitals, so that what reaches
+		// the run is what the declaration asked for and not what synthesis had
+		// to do instead: a synthesised run carries CapsNormal by construction,
+		// because it must not ask the face for the feature it stands in for.
+		frag, _ := layoutWith(t, smallCapsFontSet(t),
+			`<div id="d" style="`+c.css+`">office</div>`,
+			`body{margin:0} #d{font-family:Cap; font-size:20px}`)
 		var got shape.Features
 		var found bool
-		for _, op := range Paint(layoutOf(t, 400,
-			`<div id="d" style="`+c.css+`">office</div>`,
-			`body{margin:0} #d{font-size:20px}`)) {
+		for _, op := range Paint(frag) {
 			if v, ok := op.(DrawText); ok && strings.Contains(v.Text, "off") {
 				got, found = v.Features, true
 			}
@@ -109,10 +115,11 @@ func TestSmallCapsReachesTheRunThatIsDrawn(t *testing.T) {
 // property inherits — which is a fact about the registry, and the thing that
 // would silently stop this working if it were ever changed there.
 func TestSmallCapsIsInheritedThroughTheInlineBoxThatCarriesTheText(t *testing.T) {
-	var runs int
-	for _, op := range Paint(layoutOf(t, 400,
+	frag, _ := layoutWith(t, smallCapsFontSet(t),
 		`<div id="d">plain <span id="s">inner</span></div>`,
-		`body{margin:0} #d{font-size:20px; font-variant: small-caps}`)) {
+		`body{margin:0} #d{font-family:Cap; font-size:20px; font-variant: small-caps}`)
+	var runs int
+	for _, op := range Paint(frag) {
 		v, ok := op.(DrawText)
 		if !ok || strings.TrimSpace(v.Text) == "" {
 			continue
@@ -154,14 +161,18 @@ func TestSmallCapsChangesTheGlyphsAndTheWidth(t *testing.T) {
 	}
 }
 
-// TestCapsAreReportedWhenTheFaceHasNone.
+// TestCapsAreReportedWhenTheFaceHasNoneAndNothingIsSynthesised.
 //
 // The standard fourteen carry no OpenType features at all, so a document that
-// asks them for capitals of any kind gets the letters it wrote. Nothing about
-// the page says so, which is why the finding has to.
-func TestCapsAreReportedWhenTheFaceHasNone(t *testing.T) {
+// asks them for capitals of a kind this engine does not synthesise gets the
+// letters it wrote. Nothing about the page says so, which is why the finding
+// has to.
+//
+// "small-caps" is not in the list, and that is the point of the list: it is the
+// one value synthesis covers, so it is the one value whose page is right. See
+// TestSmallCapsAreSynthesisedWhenTheFaceHasNone.
+func TestCapsAreReportedWhenTheFaceHasNoneAndNothingIsSynthesised(t *testing.T) {
 	for _, c := range []struct{ value, tags string }{
-		{"small-caps", "smcp"},
 		{"all-small-caps", "c2sc and smcp"},
 		{"petite-caps", "pcap"},
 		{"all-petite-caps", "c2pc and pcap"},
@@ -501,6 +512,294 @@ func TestNoGlyphIsSharedAcrossASmallCapsBoundary(t *testing.T) {
 	if small != shape.CapsSmall {
 		t.Error("the span was not drawn with small capitals, so the two sides " +
 			"of the boundary ask for the same thing and the group may merge")
+	}
+}
+
+// Small capitals made out of the capitals, for a face that drew none.
+//
+// §6.6 allows it and does not say how, and it is what the great majority of
+// documents get: the fourteen standard PDF faces declare no OpenType feature at
+// all, so a page set in the default serif has no 'smcp' to ask for. The runs are
+// cut where the case changes and each piece set at its own size, which is what
+// makes this different from every other thing done to a run of text here.
+
+// synthesisedRuns is what a document was drawn as: the text of each run and the
+// size it was set at.
+func synthesisedRuns(t *testing.T, set FontSet, htmlSrc, cssSrc string) []DrawText {
+	t.Helper()
+	frag, _ := layoutWith(t, set, htmlSrc, cssSrc)
+	var out []DrawText
+	for _, op := range Paint(frag) {
+		if v, ok := op.(DrawText); ok && v.Text != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// TestSmallCapsAreSynthesisedWhenTheFaceHasNone is the capability, end to end.
+//
+// "Filler Text" in a face with no small capitals comes out as four runs: the
+// capitals at the box's own size, and the letters between them uppercased and
+// set smaller. Every one of those four facts is load-bearing — a version that
+// uppercased without shrinking would draw a line of capitals, and one that
+// shrank without uppercasing would draw small lowercase letters.
+func TestSmallCapsAreSynthesisedWhenTheFaceHasNone(t *testing.T) {
+	runs := synthesisedRuns(t, StandardFonts(),
+		`<p id="p">Filler Text</p>`,
+		`body{margin:0} #p { font-family: Helvetica; font-size: 20px;
+		 font-variant: small-caps }`)
+	full, _ := style.FromPx(20)
+	want := []struct {
+		text  string
+		small bool
+	}{
+		{"F", false},    // written as a capital, so already the right letter
+		{"ILLER", true}, // uppercased and shrunk
+		{" ", false},    // no case, so nothing to do to it
+		{"T", false},    //
+		{"EXT", true},   //
+	}
+	if len(runs) != len(want) {
+		var got []string
+		for _, r := range runs {
+			got = append(got, r.Text)
+		}
+		t.Fatalf("the page was drawn as %d runs %q, want %d", len(runs), got, len(want))
+	}
+	var drawn string
+	for i, r := range runs {
+		drawn += r.Text
+		if r.Text != want[i].text {
+			t.Errorf("run %d is %q, want %q", i, r.Text, want[i].text)
+			continue
+		}
+		if small := r.Size < full; small != want[i].small {
+			t.Errorf("the run %q was set at %v against the box's %v; want "+
+				"smaller=%v", r.Text, r.Size, full, want[i].small)
+		}
+	}
+	if drawn != "FILLER TEXT" {
+		t.Errorf("the page spells %q, want \"FILLER TEXT\"; a synthesised small "+
+			"capital is the uppercase letter", drawn)
+	}
+}
+
+// TestTheSynthesisedSizeComesFromTheFace.
+//
+// A small capital is a capital cut to about the height of the lowercase
+// letters, so the face states the number: its x-height over its cap height.
+// Taking it from the face rather than from a constant is what makes a face with
+// unusually large lowercase letters get capitals that match them — Times is
+// 0.680 and Courier 0.758, and a page set in one and a page set in the other
+// are not the same page.
+func TestTheSynthesisedSizeComesFromTheFace(t *testing.T) {
+	sizes := map[string]style.Unit{}
+	for _, family := range []string{"Times", "Courier", "Helvetica"} {
+		runs := synthesisedRuns(t, StandardFonts(),
+			`<p id="p">filler</p>`,
+			`body{margin:0} #p { font-family: `+family+`; font-size: 100px;
+			 font-variant: small-caps }`)
+		if len(runs) != 1 {
+			t.Fatalf("%s drew %d runs, want one: the text is all lowercase",
+				family, len(runs))
+		}
+		sizes[family] = runs[0].Size
+
+		face, ok := StandardFonts().Face(family, false, false)
+		if !ok {
+			t.Fatalf("no %s face", family)
+		}
+		d := face.Descriptor()
+		want, _ := style.FromPx(100 * float64(d.XHeight) / float64(d.CapHeight))
+		if runs[0].Size != want {
+			t.Errorf("%s set its synthesised capitals at %v; its x-height is %d "+
+				"and its cap height %d, which is %v", family, runs[0].Size,
+				d.XHeight, d.CapHeight, want)
+		}
+	}
+	if sizes["Times"] == sizes["Courier"] {
+		t.Errorf("Times and Courier both set their synthesised capitals at %v; "+
+			"their x-heights differ and the size is taken from the face",
+			sizes["Times"])
+	}
+}
+
+// TestASynthesisedRunDoesNotAskTheFaceForTheFeatureItStandsIn.
+//
+// The two go together and the second is not tidiness. A face with 'c2sc' and no
+// 'smcp' asked for "all-small-caps" would find the letters the synthesis has
+// just uppercased and lower them a second time — capitals at the small-capital
+// size, scaled again.
+func TestASynthesisedRunDoesNotAskTheFaceForTheFeatureItStandsIn(t *testing.T) {
+	for _, r := range synthesisedRuns(t, StandardFonts(),
+		`<p id="p">filler</p>`,
+		`body{margin:0} #p { font-family: Helvetica; font-size: 20px;
+		 font-variant: small-caps }`) {
+		if r.Features.Caps != shape.CapsNormal {
+			t.Errorf("the synthesised run %q asks the face for %v as well",
+				r.Text, r.Features.Caps)
+		}
+	}
+}
+
+// TestSynthesisDoesNotChangeTheHeightOfTheLine.
+//
+// A line's height is the box's, not the run's. A paragraph whose lines grew and
+// shrank with the case of their letters would be set on a ragged baseline, and
+// two paragraphs of the same text in the same face would be different heights
+// because one of them is in small capitals.
+func TestSynthesisDoesNotChangeTheHeightOfTheLine(t *testing.T) {
+	const doc = `<p id="p">Filler Text</p>`
+	const css = `body{margin:0} #p { font-family: Helvetica; font-size: 20px`
+	plain, _ := layoutWith(t, StandardFonts(), doc, css+` }`)
+	small, _ := layoutWith(t, StandardFonts(), doc, css+`; font-variant: small-caps }`)
+	a, b := find(t, plain, "p"), find(t, small, "p")
+	if a.BorderRect.H != b.BorderRect.H {
+		t.Errorf("the paragraph is %v high in small capitals and %v without; "+
+			"the line takes its height from the box and not from the size a "+
+			"run happens to be set at", b.BorderRect.H, a.BorderRect.H)
+	}
+	if len(a.Lines) != len(b.Lines) {
+		t.Errorf("the paragraph has %d lines in small capitals and %d without",
+			len(b.Lines), len(a.Lines))
+	}
+}
+
+// TestSynthesisIsReportedAndIsNotAGap.
+//
+// §6.6 names the technique, so a page that got its capitals this way is a page
+// CSS asked for and §7.1's companion signal must not see a gap — a reftest whose
+// two documents both synthesised is still comparing the thing it is about.
+//
+// It is reported all the same, for two reasons a substituted font does not have:
+// a scaled capital is not the one a designer would have drawn, and the page
+// carries the uppercase text, so a reader copying a synthesised line out of the
+// PDF gets "FILLER" where the document said "Filler".
+func TestSynthesisIsReportedAndIsNotAGap(t *testing.T) {
+	fired[RuleCapsSynthesised] = true
+
+	_, findings := layoutWith(t, StandardFonts(),
+		`<p id="p">Filler Text</p>`,
+		`#p { font-family: Helvetica; font-size: 20px; font-variant: small-caps }`)
+	f, ok := findingNaming(findings, "font-variant-caps")
+	if !ok {
+		t.Fatalf("synthesised capitals were not reported at all: %v", findings)
+	}
+	if f.Rule != RuleCapsSynthesised {
+		t.Errorf("the finding is %s, want %s", f.Rule, RuleCapsSynthesised)
+	}
+	if f.Unsupported() {
+		t.Error("the finding claims the engine is missing something; §6.6 names " +
+			"the synthesis as a thing a user agent may do, and a reftest whose " +
+			"two documents both did it is still comparing what it is about")
+	}
+	if !strings.Contains(f.Message, "uppercase text") {
+		t.Errorf("the finding is %q and does not say that the page carries the "+
+			"uppercase text, which is the half of this an author cannot see",
+			f.Message)
+	}
+}
+
+// TestARestyledFirstLineKeepsItsSynthesis.
+//
+// ::first-line restyles the items on the first line from a box of its own, and
+// a synthesised run cannot be rebuilt from a box: its text has already been
+// uppercased, and setting it back to the box's size draws a line of capitals at
+// full height where small capitals were asked for. The two things the synthesis
+// did are re-applied over the new size instead.
+//
+// The second half is the one that is invisible: an item put back to its box's
+// features asks the face for the very feature the run is standing in for.
+func TestARestyledFirstLineKeepsItsSynthesis(t *testing.T) {
+	runs := synthesisedRuns(t, StandardFonts(),
+		`<p id="p">filler text here and more words to wrap onto a second line</p>`,
+		`body{margin:0} #p { font-family: Helvetica; font-size: 20px; width: 200px;
+		 font-variant: small-caps }
+		 #p::first-line { font-size: 40px }`)
+	if len(runs) < 2 {
+		t.Fatalf("the fixture drew %d runs", len(runs))
+	}
+	face, _ := StandardFonts().Face("Helvetica", false, false)
+	d := face.Descriptor()
+	ratio := float64(d.XHeight) / float64(d.CapHeight)
+	first, _ := style.FromPx(40 * ratio)
+	rest, _ := style.FromPx(20 * ratio)
+	if runs[0].Size != first {
+		t.Errorf("the first line's synthesised run is %v, want %v — the "+
+			"::first-line size shrunk in proportion, not the size itself",
+			runs[0].Size, first)
+	}
+	if runs[0].Features.Caps != shape.CapsNormal {
+		t.Errorf("the restyled run asks the face for %v; it is standing in for "+
+			"that feature and asking for it as well applies it twice",
+			runs[0].Features.Caps)
+	}
+	// And the lines below it are untouched, so what is being checked is the
+	// restyle and not a size the whole paragraph happens to have.
+	var found bool
+	for _, r := range runs {
+		if r.Size == rest {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no run is at the paragraph's own synthesised size %v, so the "+
+			"fixture has only one line and tests no restyle", rest)
+	}
+}
+
+// TestSynthesisCutsMaximalStretches.
+//
+// Every boundary costs a run, and a run is measured, shaped and drawn on its
+// own: a word cut into one run per letter loses every kern and every ligature
+// inside it. So a character with no case of its own is not a cut — it joins
+// whichever side it is next to.
+func TestSynthesisCutsMaximalStretches(t *testing.T) {
+	runs := synthesisedRuns(t, StandardFonts(),
+		`<p id="p">Filler&nbsp;Text</p>`,
+		`body{margin:0} #p { font-family: Helvetica; font-size: 20px;
+		 font-variant: small-caps }`)
+	var got []string
+	for _, r := range runs {
+		got = append(got, r.Text)
+	}
+	want := []string{"F", "ILLER", "\u00a0T", "EXT"}
+	if !equalStrings(got, want) {
+		t.Errorf("the page was drawn as %q, want %q: the no-break space has no "+
+			"case, so it is neither cut at nor made a run of its own", got, want)
+	}
+}
+
+// TestCutAtCaseIsTheReaderOnItsOwn.
+func TestCutAtCaseIsTheReaderOnItsOwn(t *testing.T) {
+	for _, c := range []struct {
+		text string
+		want []casePart
+	}{
+		{"", []casePart{{text: "", lowered: false}}},
+		{"abc", []casePart{{text: "abc", lowered: true}}},
+		{"ABC", []casePart{{text: "ABC", lowered: false}}},
+		{"Filler", []casePart{{text: "F"}, {text: "iller", lowered: true}}},
+		{"aB", []casePart{{text: "a", lowered: true}, {text: "B"}}},
+		// Digits, punctuation and a script with one case have no uppercase form
+		// and are left where they are — which for a stretch between two
+		// lowercase runs means one run and not three.
+		{"a1b", []casePart{{text: "a", lowered: true}, {text: "1"},
+			{text: "b", lowered: true}}},
+		{"日本語", []casePart{{text: "日本語"}}},
+	} {
+		got := cutAtCase(c.text)
+		if len(got) != len(c.want) {
+			t.Errorf("cutAtCase(%q) = %+v, want %+v", c.text, got, c.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("cutAtCase(%q)[%d] = %+v, want %+v",
+					c.text, i, got[i], c.want[i])
+			}
+		}
 	}
 }
 

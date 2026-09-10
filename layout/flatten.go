@@ -709,6 +709,14 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		return nil, in
 	}
 	l.checkScript(b)
+	// The capitals the box asks for, and the language the uppercasing behind
+	// them is tailored by. Both are read here rather than with the rest of the
+	// box's declarations below, because the checks in this paragraph need them:
+	// a face with no small capitals of its own has them made out of the
+	// uppercase letters, and what is then drawn is not what the document wrote.
+	// See layout/smallcaps.go.
+	caps, _ := capsOf(b.Style["font-variant-caps"])
+	lang := languageAt(boxElement(b))
 	// Per face-run rather than per box: a character the family's face cannot set
 	// is not missing from the page if a fallback face set it, and reporting it
 	// would be this engine calling its own correct output a failure. The runs
@@ -716,11 +724,18 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	// exactly what is drawn.
 	runsOfBox := l.faceRunsFor(b, face, b.Text)
 	for _, run := range runsOfBox {
-		l.checkGlyphs(b, run.Face, run.Text)
-		// And whether the face that will set this run has the capitals the
-		// document asked for, which is the same question about the same runs.
-		// See reportCaps.
+		// Whether the face that will set this run has the capitals the document
+		// asked for. It is asked of the text as *written*, because that is the
+		// text whose case decides whether the request would change anything:
+		// the rewritten run below has no lowercase letter left in it. See
+		// reportCaps.
 		l.reportCaps(b, run.Face, run.Text)
+	}
+	// And the glyphs, asked of the text that will be *drawn* — which for a run
+	// whose small capitals were synthesised is the uppercase of what the
+	// document wrote.
+	for _, run := range l.smallCapsRuns(b, runsOfBox, caps, lang) {
+		l.checkGlyphs(b, run.Face, run.Text)
 	}
 	l.noteSubstitution(b, face, runsOfBox)
 
@@ -1138,6 +1153,12 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 				runs = cutRunsAt(runs, parts)
 			}
 		}
+		// And last of all, where small capitals have to be made out of the
+		// capitals. It comes after every other cut because it is the only one
+		// that *rewrites* the text it cuts — the others work in offsets into
+		// the piece, and an uppercased stretch is not the same length as the
+		// one it replaces. See layout/smallcaps.go.
+		runs = l.smallCapsRuns(b, runs, caps, lang)
 		for ri, run := range runs {
 			para, start, end := frame.Bidi.Add(run.Text)
 			item := l.textItem(textItemArgs{
@@ -1294,9 +1315,23 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 	if a.run.Face != nil && a.run.Face != a.boxFace && usesNormalLineHeight(b) {
 		above, below = l.leadingInFace(b, a.run.Face)
 	}
+	// A run whose small capitals were made out of the capitals is set smaller
+	// than the box's own size — that is the whole of what makes it a small
+	// capital — and it must not then ask the face for the feature it is
+	// standing in for. The two go together: a face with 'c2sc' and no 'smcp'
+	// asked for "all-small-caps" would find the letters this run has just
+	// uppercased and lower them a second time.
+	//
+	// The leading is *not* scaled with it. A line's height is the box's, and a
+	// paragraph whose lines grew and shrank with the case of their letters
+	// would be set on a ragged baseline. See leading.
+	size, off := a.size, a.off
+	if a.run.synthesised {
+		size, off.Caps = synthesisedSize(a.size, a.run), shape.CapsNormal
+	}
 	item := inlineItem{
 		BidiPara: a.para, BidiStart: a.bidiStart, BidiEnd: a.bidiEnd,
-		Text: a.run.Text, Box: b, Face: a.run.Face, Size: a.size,
+		Text: a.run.Text, Box: b, Face: a.run.Face, Size: size,
 		Leads: true, Above: above, Below: below,
 		// Whether this run stands upright on a vertical line, which changes
 		// what it measures to and not only how it is drawn. See
@@ -1307,7 +1342,11 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		HyphenLastResort: a.wb.AutoPhrase,
 		// What the document turned off for this run, which changes what the
 		// face substitutes and so changes the advance. See fontfeatures.go.
-		Off: a.off,
+		Off: off,
+		// And whether its capitals were made rather than asked for, which the
+		// run can no longer be asked: its text has been rewritten. See
+		// Item.Synthesised.
+		Synthesised: a.run.synthesised,
 		// §10.8.1's vertical-align, which a text box cannot be asked for
 		// itself: the property is not inherited, so the anonymous box holding
 		// a <span>'s words carries the initial value however the span was
@@ -1396,7 +1435,7 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		// Measured the way the run it belongs to is measured: a hyphen printed
 		// at the end of an upright line stands upright with the letters, and it
 		// is an em per character there like any other.
-		item.Hyphen = l.br.MeasureSpacedInContext(face, item.HyphenText, a.size,
+		item.Hyphen = l.br.MeasureSpacedInContext(face, item.HyphenText, size,
 			a.spacing, shaping{ContextKerns: true, Upright: item.Upright, Off: item.Off})
 		if face != a.run.Face {
 			// Set in another face, so measured against it: §10.8.1's rule for
@@ -1413,7 +1452,7 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		// nothing to measure here and the face's own advance for U+0009 —
 		// whatever a face happens to give a character it has no glyph for —
 		// would be the wrong number to carry.
-		item.Width = l.br.MeasureSpacedInContext(a.run.Face, a.run.Text, a.size,
+		item.Width = l.br.MeasureSpacedInContext(a.run.Face, a.run.Text, size,
 			a.spacing, shaping{ContextKerns: true, Upright: item.Upright, Off: item.Off})
 	}
 	return item
@@ -1441,13 +1480,15 @@ func cutRunsAt(runs []faceRun, parts []string) []faceRun {
 		for i := 1; i < len(run.Text); i++ {
 			if cuts[at+i] {
 				out = append(out, faceRun{
-					Text: run.Text[start:i], Face: run.Face, substituted: run.substituted,
+					Text: run.Text[start:i], Face: run.Face,
+					substituted: run.substituted, synthesised: run.synthesised,
 				})
 				start = i
 			}
 		}
 		out = append(out, faceRun{
-			Text: run.Text[start:], Face: run.Face, substituted: run.substituted,
+			Text: run.Text[start:], Face: run.Face,
+			substituted: run.substituted, synthesised: run.synthesised,
 		})
 		at += len(run.Text)
 	}

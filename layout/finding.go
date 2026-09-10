@@ -114,6 +114,27 @@ const (
 	// It is still reported, and at Warn like the one above, because an author
 	// who asked for a face and did not get it wants to know either way.
 	RuleFontSubstituted Rule = "font-substituted"
+	// RuleCapsSynthesised is small capitals this engine made out of the
+	// capitals, because the face declares none of its own.
+	//
+	// CSS Fonts 4 §6.6 names the technique and leaves it optional: "if the font
+	// does not support small-caps glyphs, the user agent may synthesize
+	// small-caps by scaling uppercase glyphs". So a page that got them this way
+	// is a page CSS asked for, which is why this is not one of the unsupported
+	// rules — see the argument beside RuleFontSubstituted, which is the same
+	// one. A reftest whose two documents both synthesised has not been made
+	// vacuous by it: the capitals are on both pages, at the same size, and
+	// whatever the test is about is still being compared.
+	//
+	// It is reported all the same, at Warn, and for two reasons that a
+	// substituted font does not have. A designer's small capitals are drawn
+	// with their own weight and spacing and a scaled capital is not, so an
+	// author who chose a face for them and did not get them wants to know. And
+	// the page carries the *uppercase* text: a reader copying a synthesised
+	// line out of the PDF gets "FILLER" where the document said "Filler", which
+	// is a consequence of the page rather than of the document and is exactly
+	// what a finding is for. See layout/smallcaps.go.
+	RuleCapsSynthesised Rule = "caps-synthesised"
 	// RuleUnsupportedScript is text this engine cannot break or order
 	// correctly. §6.3 makes it an error by default, and is right to: unbroken or
 	// unordered text still looks like text, so the failure mode looks like
@@ -281,6 +302,10 @@ var defaultSeverity = map[Rule]Severity{
 	RuleUnsupportedValue:    Warn,
 	RuleFontFallback:        Warn,
 	RuleFontSubstituted:     Warn,
+	// Synthesised small capitals warn for the reason the rule's declaration
+	// gives: the page is what CSS asked for and is not what the author chose a
+	// face for, and it carries the uppercase text.
+	RuleCapsSynthesised: Warn,
 	// The two errors. Both produce a page that looks finished and is not, which
 	// is the case where returning no document is better than returning one.
 	RuleUnsupportedScript: Error,
@@ -467,6 +492,12 @@ var unsupportedRules = map[Rule]bool{
 	// matching working, not something this engine declined to do, and the two
 	// documents of a reftest that both went through it are still comparing the
 	// thing they are about.
+	//
+	// RuleCapsSynthesised is not here either, and for the same reason twice
+	// over: §6.6 names the synthesis as a thing a user agent may do, so a page
+	// that got its small capitals that way is a page CSS asked for — and the
+	// capitals are on both documents of a reftest, at the same size, so nothing
+	// about the comparison has been made vacuous.
 	RuleGlyphMissing: true,
 	// This one says "the engine does not form that containing block", which is a
 	// statement about the engine and not about the input — so a reftest whose

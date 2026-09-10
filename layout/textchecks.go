@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -448,6 +449,24 @@ func (l *layouter) reportCaps(b *Box, face *shape.Face, text string) {
 		return
 	}
 	value := strings.ToLower(strings.TrimSpace(b.Style["font-variant-caps"]))
+	if synthesisesFor(want, face) {
+		// The face has none of them and this engine made the capitals itself,
+		// which is a page §6.6 asked for rather than a gap. It is still worth
+		// saying: a scaled capital is not the one a designer would have drawn,
+		// and the page carries the uppercase text. See RuleCapsSynthesised.
+		l.reportOnce("caps-synthesised:"+value+":"+face.Name(), Finding{
+			Rule:     RuleCapsSynthesised,
+			Property: "font-variant-caps",
+			Message: "font-variant-caps " + quoteValue(value) + " asks a face for " +
+				strings.Join(want.Features(), " and ") + " and " +
+				quoteValue(face.Name()) + " declares none; the capitals were made " +
+				"out of the uppercase letters at " +
+				strconv.FormatFloat(smallCapScale(face), 'g', 3, 64) +
+				" of the size, and the page carries them as uppercase text",
+			Path: PathOf(boxElement(b)),
+		})
+		return
+	}
 	// "that part of the text" where the face carried out some of the request: a
 	// face with 'smcp' and no 'c2sc' asked for "all-small-caps" lowers the
 	// lowercase letters and leaves the capitals full height, which is a line in

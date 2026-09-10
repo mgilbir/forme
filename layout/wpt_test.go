@@ -1303,7 +1303,7 @@ const wptEnv = "WPT_TESTS"
 // cannot be conditional, and "break-spaces" preserves spaces too, so forcing
 // "preserve" over it took textarea-break-spaces-001 away and the two documents
 // traded with the count unmoved.
-const wptCleanPassBaseline = 5981
+const wptCleanPassBaseline = 5982
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
