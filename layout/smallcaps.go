@@ -98,30 +98,90 @@ func synthesisedSize(size style.Unit, run faceRun) style.Unit {
 	return size.Mul(smallCapScale(run.Face))
 }
 
-// capsAreSynthesised reports whether this engine will fake a value that the face
-// cannot carry out.
+// capsAreSynthesised reports whether a value is one this engine will fake where
+// the face cannot carry it out.
 //
-// "small-caps" and nothing else so far. §6.6's other five are left to the face:
-// "all-small-caps" needs the capitals lowered as well, which is the same cut
-// again over the other case; the two petite values fall back to small capitals
-// before anything is synthesised; and "unicase" and "titling-caps" are not a
-// letter drawn smaller at all, so there is nothing to scale a capital into.
+// The four that are a letter drawn smaller: "small-caps" and "all-small-caps",
+// and the two petite values, which §6.6 sends to the small capitals first and
+// which are synthesised the same way when those are absent too — a petite
+// capital and a small capital differ in how far the designer cut them down, and
+// a synthesised one has no designer.
+//
+// "unicase" and "titling-caps" are not. Neither replaces a letter with a
+// smaller one: unicase asks for a face's own single-height forms of both cases,
+// and titling capitals are cut lighter for a line that is all capitals. There is
+// nothing to scale a capital into, so a face without them is reported.
 func capsAreSynthesised(want shape.Caps) bool {
-	return want == shape.CapsSmall
+	switch want {
+	case shape.CapsSmall, shape.CapsAllSmall, shape.CapsPetite, shape.CapsAllPetite:
+		return true
+	}
+	return false
 }
 
-// synthesisesFor reports whether this face will have to fake the value, which is
-// the question "does it declare what the value asks for" turned round.
-func synthesisesFor(want shape.Caps, face *shape.Face) bool {
-	if face == nil || !capsAreSynthesised(want) {
-		return false
+// resolveCaps is §6.6's one fallback between values: "if petite capital glyphs
+// are not available, small capital glyphs are used".
+//
+// Read at the value rather than at the tag, which is the sentence as written: a
+// face is asked whether it has *petite capitals*, and one that has none of them
+// is asked for small ones instead. A per-tag reading — this half petite and that
+// half small — would produce a line in two designs, which is not what either
+// value means.
+//
+// Everything else is itself. Small capitals do not fall back to petite ones:
+// §6.6 states the chain in one direction, and it is the direction where the
+// substitute is the commoner cut.
+func resolveCaps(want shape.Caps, face *shape.Face) shape.Caps {
+	if face == nil {
+		return want
 	}
-	for _, tag := range want.Features() {
+	var instead shape.Caps
+	switch want {
+	case shape.CapsPetite:
+		instead = shape.CapsSmall
+	case shape.CapsAllPetite:
+		instead = shape.CapsAllSmall
+	default:
+		return want
+	}
+	if declaresAnyOf(face, want.Features()) || !declaresAnyOf(face, instead.Features()) {
+		// It has petite capitals, or it has neither and there is nothing to
+		// fall back to — in which case the value stays what the document wrote,
+		// so that the report names what was asked for.
+		return want
+	}
+	return instead
+}
+
+// declaresAnyOf reports whether a face offers any of a set of features.
+func declaresAnyOf(face *shape.Face, tags []string) bool {
+	for _, tag := range tags {
 		if faceDeclares(face, tag) {
-			return false
+			return true
 		}
 	}
-	return true
+	return false
+}
+
+// synthesisedCases is which of a value's two halves this face cannot carry out,
+// and so which this engine will make itself.
+//
+// The halves are independent because the features are: a face may declare
+// 'smcp' and not 'c2sc', which is most of "all-small-caps" done and the capitals
+// left standing at full height. What the synthesis then has to do is the *other*
+// half, over the letters the face did not cover — and nothing to the letters it
+// did, or they would be lowered twice.
+func synthesisedCases(want shape.Caps, face *shape.Face) (lower, capitals bool) {
+	if face == nil || !capsAreSynthesised(want) {
+		return false, false
+	}
+	if tag := want.Lowercase(); tag != "" && !faceDeclares(face, tag) {
+		lower = true
+	}
+	if tag := want.Capitals(); tag != "" && !faceDeclares(face, tag) {
+		capitals = true
+	}
+	return lower, capitals
 }
 
 // smallCapsRuns cuts runs where synthesis begins and ends, and rewrites the
@@ -143,25 +203,47 @@ func (l *layouter) smallCapsRuns(b *Box, runs []faceRun, want shape.Caps,
 	var out []faceRun
 	changed := false
 	for _, run := range runs {
-		if !synthesisesFor(want, run.Face) {
+		lower, capitals := synthesisedCases(resolveCaps(want, run.Face), run.Face)
+		if !lower && !capitals {
 			out = append(out, run)
 			continue
 		}
 		parts := cutAtCase(run.Text)
-		if len(parts) == 1 && !parts[0].lowered {
+		if !anySynthesised(parts, lower, capitals) {
 			out = append(out, run)
 			continue
 		}
 		changed = true
+		at := len(out)
 		for _, part := range parts {
 			next := faceRun{Text: part.text, Face: run.Face, substituted: run.substituted}
-			if part.lowered {
+			switch {
+			case part.kind == caseLower && lower:
 				// The same case mapping text-transform uses, so that a page
 				// where both apply cannot disagree with itself: the full
 				// mappings rather than Go's simple ones — "straße" is "STRASSE"
 				// — and the language tailorings with them.
 				next.Text, _ = transformText(part.text, paragraph.TransformUppercase, false, lang)
 				next.synthesised = true
+			case part.kind == caseUpper && capitals:
+				// Already the right letter, and the wrong size. "all-small-caps"
+				// lowers the capitals as well, and a capital lowered is the same
+				// capital drawn smaller — there is nothing to rewrite.
+				next.synthesised = true
+			}
+			// Joined to the stretch before it where the two are set the same
+			// way, which is what makes the cut fall at the boundaries that
+			// matter rather than at every change of case.
+			//
+			// Three of them are not boundaries at all. Under "small-caps" a
+			// capital and the space beside it are both left alone; under
+			// "all-small-caps" a capital and the lowercase letters beside it
+			// are both shrunk, and "Filler" is one run and not two. Every
+			// boundary costs a measurement, a shaping and a place a kern
+			// cannot cross, so the ones that buy nothing are not made.
+			if len(out) > at && out[len(out)-1].synthesised == next.synthesised {
+				out[len(out)-1].Text += next.Text
+				continue
 			}
 			out = append(out, next)
 		}
@@ -174,42 +256,85 @@ func (l *layouter) smallCapsRuns(b *Box, runs []faceRun, want shape.Caps,
 	return out
 }
 
-// casePart is a stretch of text that is all synthesised or all not.
-type casePart struct {
-	text string
-	// lowered says the stretch is what small capitals replace: characters with
-	// an uppercase form of their own.
-	//
-	// Not unicode.IsLower, which is true of characters no face maps anywhere,
-	// and not "is a letter", which is true of the scripts that have one case
-	// only. What 'smcp' covers is a letter with a capital to be replaced by, and
-	// having an uppercase mapping is exactly that.
-	lowered bool
+// anySynthesised reports whether any of a run's stretches is one of the halves
+// this face cannot carry out.
+//
+// Asked before the run is rebuilt, so that a run with nothing to do to it comes
+// back as itself: "1234" under "all-small-caps" has no letter of either case in
+// it, and cutting it into pieces that are all set the same way would cost a
+// measurement and a shaping for nothing.
+func anySynthesised(parts []casePart, lower, capitals bool) bool {
+	for _, part := range parts {
+		if (part.kind == caseLower && lower) || (part.kind == caseUpper && capitals) {
+			return true
+		}
+	}
+	return false
 }
 
-// cutAtCase splits text into maximal stretches that are all lowercase or all
-// not.
+// casePart is a stretch of text whose characters are all of one case.
+type casePart struct {
+	text string
+	kind caseKind
+}
+
+// The three kinds of character §6.6's features tell apart.
+//
+// Not unicode.IsLower and IsUpper, which are true of characters no face maps
+// anywhere, and not "is a letter", which is true of the scripts that have one
+// case only. What these features cover is a letter with a form of the other case
+// to be replaced by, and having a case mapping is exactly that.
+//
+// caseNone is the third and is why this is not a bool. A space, a digit and a
+// full stop are not lowered by "small-caps" and are not *shrunk* by
+// "all-small-caps" either — a line whose spaces were three-quarters of a space
+// wide would be spaced wrong between every pair of words.
+type caseKind uint8
+
+const (
+	caseNone caseKind = iota
+	caseLower
+	caseUpper
+)
+
+func caseOf(r rune) caseKind {
+	switch {
+	case unicode.ToUpper(r) != r:
+		return caseLower
+	case unicode.ToLower(r) != r:
+		return caseUpper
+	}
+	return caseNone
+}
+
+// cutAtCase splits text into maximal stretches of one case.
 //
 // Maximal, because every boundary costs a run: a run is measured, shaped and
 // drawn on its own, and a word cut into one run per letter loses every kern and
-// every ligature inside it. "Filler Text" is four stretches and not eleven.
+// every ligature inside it. "Filler Text" is five stretches and not eleven.
+//
+// Five and not four, though only four of the boundaries can matter to any one
+// value: the caller joins back the stretches its value sets the same way. What
+// this has to produce is every boundary that *could* be one, which is a change
+// of case wherever it falls.
 func cutAtCase(text string) []casePart {
 	var out []casePart
-	start, cur := 0, false
+	start := 0
+	var cur caseKind
 	for i, r := range text {
-		lowered := unicode.ToUpper(r) != r
+		kind := caseOf(r)
 		if i == 0 {
-			cur = lowered
+			cur = kind
 			continue
 		}
-		if lowered == cur {
+		if kind == cur {
 			continue
 		}
-		out = append(out, casePart{text: text[start:i], lowered: cur})
-		start, cur = i, lowered
+		out = append(out, casePart{text: text[start:i], kind: cur})
+		start, cur = i, kind
 	}
 	if start < len(text) || len(out) == 0 {
-		out = append(out, casePart{text: text[start:], lowered: cur})
+		out = append(out, casePart{text: text[start:], kind: cur})
 	}
 	return out
 }

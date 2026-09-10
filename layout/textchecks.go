@@ -444,23 +444,27 @@ func (l *layouter) reportCaps(b *Box, face *shape.Face, text string) {
 	if face == nil {
 		return
 	}
-	missing := missingCapsFeatures(want, face, text)
+	// §6.6's fallback first: a document asking a face with no petite capitals
+	// for them gets its small ones, and what is missing is decided from what
+	// the face will actually be asked. See resolveCaps.
+	use := resolveCaps(want, face)
+	missing := missingCapsFeatures(use, face, text)
 	if len(missing) == 0 {
 		return
 	}
 	value := strings.ToLower(strings.TrimSpace(b.Style["font-variant-caps"]))
-	if synthesisesFor(want, face) {
+	if capsAreSynthesised(use) {
 		// The face has none of them and this engine made the capitals itself,
 		// which is a page §6.6 asked for rather than a gap. It is still worth
 		// saying: a scaled capital is not the one a designer would have drawn,
 		// and the page carries the uppercase text. See RuleCapsSynthesised.
-		l.reportOnce("caps-synthesised:"+value+":"+face.Name(), Finding{
+		l.reportOnce("caps-synthesised:"+value+":"+strings.Join(missing, ",")+":"+face.Name(), Finding{
 			Rule:     RuleCapsSynthesised,
 			Property: "font-variant-caps",
 			Message: "font-variant-caps " + quoteValue(value) + " asks a face for " +
-				strings.Join(want.Features(), " and ") + " and " +
-				quoteValue(face.Name()) + " declares none; the capitals were made " +
-				"out of the uppercase letters at " +
+				strings.Join(use.Features(), " and ") + "; " + quoteValue(face.Name()) +
+				" declares no " + strings.Join(missing, " or ") + ", so " +
+				capsMadeHere(missing, use) + " were made out of the letters at " +
 				strconv.FormatFloat(smallCapScale(face), 'g', 3, 64) +
 				" of the size, and the page carries them as uppercase text",
 			Path: PathOf(boxElement(b)),
@@ -490,6 +494,32 @@ func (l *layouter) reportCaps(b *Box, face *shape.Face, text string) {
 			"make them out of the letters at a smaller size",
 		Path: PathOf(boxElement(b)),
 	})
+}
+
+// capsMadeHere names the letters the synthesis had to make, which is the half of
+// the request the face did not answer.
+//
+// A face may answer one half: 'smcp' and no 'c2sc' asked for "all-small-caps"
+// lowers the lowercase letters and leaves the capitals standing. Saying "the
+// capitals were made here" then tells an author which half of their line is the
+// designer's work and which is this engine's.
+func capsMadeHere(missing []string, use shape.Caps) string {
+	var lower, capitals bool
+	for _, tag := range missing {
+		switch tag {
+		case use.Lowercase():
+			lower = true
+		case use.Capitals():
+			capitals = true
+		}
+	}
+	switch {
+	case lower && capitals:
+		return "both cases"
+	case capitals:
+		return "the capitals"
+	}
+	return "the small capitals"
 }
 
 // missingCapsFeatures is the tags a value needs that this face has not got and

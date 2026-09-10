@@ -78,8 +78,11 @@ func TestSmallCapsReachesTheRunThatIsDrawn(t *testing.T) {
 		{"the font shorthand", "font: small-caps 20px Cap", shape.CapsSmall},
 		{"normal", "font-variant-caps: normal", shape.CapsNormal},
 		{"all-small-caps", "font-variant-caps: all-small-caps", shape.CapsAllSmall},
-		{"petite-caps", "font-variant: petite-caps", shape.CapsPetite},
-		{"all-petite-caps", "font-variant: all-petite-caps", shape.CapsAllPetite},
+		// §6.6's one fallback between values: Noto Sans declares 'smcp' and
+		// 'c2sc' and no petite capitals at all, so a document asking for petite
+		// ones is given the small ones rather than a synthesis.
+		{"petite-caps falls back", "font-variant: petite-caps", shape.CapsSmall},
+		{"all-petite-caps falls back", "font-variant: all-petite-caps", shape.CapsAllSmall},
 		{"unicase", "font-variant: unicase", shape.CapsUnicase},
 		{"titling-caps", "font-variant: titling-caps", shape.CapsTitling},
 		{"a value of no level at all", "font-variant-caps: sideways", shape.CapsNormal},
@@ -168,14 +171,13 @@ func TestSmallCapsChangesTheGlyphsAndTheWidth(t *testing.T) {
 // letters it wrote. Nothing about the page says so, which is why the finding
 // has to.
 //
-// "small-caps" is not in the list, and that is the point of the list: it is the
-// one value synthesis covers, so it is the one value whose page is right. See
-// TestSmallCapsAreSynthesisedWhenTheFaceHasNone.
+// Four of the six are not in the list, and that is the point of the list.
+// Neither of the two that are is a letter drawn smaller: "unicase" asks for a
+// face's own single-height forms of both cases and "titling-caps" for capitals
+// cut lighter, and there is nothing to scale a capital into for either. The
+// other four are synthesised — see TestEveryValueOfTheFamilyIsSynthesised.
 func TestCapsAreReportedWhenTheFaceHasNoneAndNothingIsSynthesised(t *testing.T) {
 	for _, c := range []struct{ value, tags string }{
-		{"all-small-caps", "c2sc and smcp"},
-		{"petite-caps", "pcap"},
-		{"all-petite-caps", "c2pc and pcap"},
 		{"unicase", "unic"},
 		{"titling-caps", "titl"},
 	} {
@@ -237,14 +239,10 @@ func TestCapsAreNotReportedWhenTheFaceHasThem(t *testing.T) {
 // TestHalfAnAnsweredRequestIsReportedAsHalf.
 //
 // "all-small-caps" is two features over two disjoint sets of letters, and a face
-// may declare one of them. What comes out is the lowercase letters lowered and
-// the capitals left standing — a line in two heights of letter, which is neither
-// what was asked for nor obviously wrong to look at.
-//
-// So the finding names the tag that is missing rather than the value that failed,
-// and says that *part* of the text was set as written. An author told only that
-// "all-small-caps was not applied" would go looking for a page with no small
-// capitals on it at all, and find one covered in them.
+// may declare one of them. What the face does is half the work; this engine does
+// the other half, and the finding has to say which half is whose — an author
+// told only that "all-small-caps was synthesised" would look at a line whose
+// small capitals are the designer's and wonder what was wrong with them.
 func TestHalfAnAnsweredRequestIsReportedAsHalf(t *testing.T) {
 	// Noto Sans has both halves, so the half-answering face is one built for it:
 	// 'smcp' declared, 'c2sc' not.
@@ -257,18 +255,63 @@ func TestHalfAnAnsweredRequestIsReportedAsHalf(t *testing.T) {
 	if !ok {
 		t.Fatalf("nothing was reported: %v", findings)
 	}
+	if f.Rule != RuleCapsSynthesised {
+		t.Errorf("the finding is %s, want %s", f.Rule, RuleCapsSynthesised)
+	}
 	if strings.Contains(f.Message, "no c2sc or smcp") {
-		t.Errorf("the finding is %q; the face declares smcp and carried out half "+
-			"the request, so naming both is telling the author their small "+
-			"capitals are absent when they are on the page", f.Message)
+		t.Errorf("the finding is %q; the face declares smcp and did half the "+
+			"work, so naming both is telling the author their small capitals "+
+			"were made here when they were drawn", f.Message)
 	}
 	if !strings.Contains(f.Message, "no c2sc") {
 		t.Errorf("the finding is %q and does not name c2sc, which is the half "+
 			"the face has not got", f.Message)
 	}
-	if !strings.Contains(f.Message, "that part of the text") {
-		t.Errorf("the finding is %q; a request half carried out is not a page "+
-			"set entirely as written", f.Message)
+	if !strings.Contains(f.Message, "the capitals were made") {
+		t.Errorf("the finding is %q; it has to say which case was made here, "+
+			"which for a face with smcp and no c2sc is the capitals", f.Message)
+	}
+}
+
+// TestHalfAnAnsweredRequestSetsOnlyItsOwnHalf is the same face, on the page.
+//
+// The lowercase letters go through the face's 'smcp' at the box's own size — a
+// small capital the designer drew is already the right height — and only the
+// capitals are shrunk. Shrinking both would draw the designer's small capitals
+// at three-quarters of the size they were cut for.
+func TestHalfAnAnsweredRequestSetsOnlyItsOwnHalf(t *testing.T) {
+	face := halfCapsFace(t)
+	set := namedFaceSet{family: "Half", face: face, standard: StandardFonts()}
+	runs := synthesisedRuns(t, set,
+		`<p id="p">iF</p>`,
+		`body{margin:0} #p { font-family: Half; font-size: 100px;
+		 font-variant-caps: all-small-caps }`)
+	full, _ := style.FromPx(100)
+	if len(runs) != 2 {
+		var got []string
+		for _, r := range runs {
+			got = append(got, r.Text)
+		}
+		t.Fatalf("the page was drawn as %d runs %q, want two: one half through "+
+			"the face and one made here", len(runs), got)
+	}
+	if runs[0].Text != "i" || runs[0].Size != full {
+		t.Errorf("the lowercase run is %q at %v; the face declares smcp, so it "+
+			"is set as written at the box's %v and the face lowers it",
+			runs[0].Text, runs[0].Size, full)
+	}
+	if runs[0].Features.Caps != shape.CapsAllSmall {
+		t.Errorf("the lowercase run asks the face for %v, want %v — the half "+
+			"the face can do is still asked for", runs[0].Features.Caps,
+			shape.CapsAllSmall)
+	}
+	if runs[1].Text != "F" || runs[1].Size >= full {
+		t.Errorf("the capital run is %q at %v; the face declares no c2sc, so it "+
+			"is shrunk here and its letter is left alone", runs[1].Text, runs[1].Size)
+	}
+	if runs[1].Features.Caps != shape.CapsNormal {
+		t.Errorf("the synthesised run asks the face for %v as well",
+			runs[1].Features.Caps)
 	}
 }
 
@@ -701,6 +744,220 @@ func TestSynthesisIsReportedAndIsNotAGap(t *testing.T) {
 	}
 }
 
+// TestEveryValueOfTheFamilyIsSynthesised.
+//
+// The four values that are a letter drawn smaller, over a face that declares
+// none of them. What separates them on the page is the capitals: "small-caps"
+// and "petite-caps" leave them alone, and the two "all" values lower them too,
+// so a line under one is in two heights of letter and a line under the other is
+// in one.
+func TestEveryValueOfTheFamilyIsSynthesised(t *testing.T) {
+	full, _ := style.FromPx(100)
+	for _, c := range []struct {
+		value          string
+		capitalsShrunk bool
+	}{
+		{"small-caps", false},
+		{"petite-caps", false},
+		{"all-small-caps", true},
+		{"all-petite-caps", true},
+	} {
+		runs := synthesisedRuns(t, StandardFonts(),
+			`<p id="p">Fi</p>`,
+			`body{margin:0} #p { font-family: Helvetica; font-size: 100px;
+			 font-variant-caps: `+c.value+` }`)
+		var drawn string
+		for _, r := range runs {
+			drawn += r.Text
+		}
+		if drawn != "FI" {
+			t.Errorf("%s drew %q, want \"FI\"", c.value, drawn)
+			continue
+		}
+		if c.capitalsShrunk {
+			if len(runs) != 1 {
+				t.Errorf("%s drew %d runs, want one: both cases are lowered, so "+
+					"the whole of it is set at one size", c.value, len(runs))
+				continue
+			}
+			if runs[0].Size >= full {
+				t.Errorf("%s set the whole run at %v, want below the box's %v",
+					c.value, runs[0].Size, full)
+			}
+			continue
+		}
+		if len(runs) != 2 {
+			t.Errorf("%s drew %d runs, want two: the capital stands and the "+
+				"lowercase letter is lowered", c.value, len(runs))
+			continue
+		}
+		if runs[0].Text != "F" || runs[0].Size != full {
+			t.Errorf("%s set the capital %q at %v, want the box's %v — it leaves "+
+				"the capitals alone", c.value, runs[0].Text, runs[0].Size, full)
+		}
+		if runs[1].Text != "I" || runs[1].Size >= full {
+			t.Errorf("%s set the lowercase letter as %q at %v, want \"I\" below "+
+				"the box's %v", c.value, runs[1].Text, runs[1].Size, full)
+		}
+	}
+}
+
+// TestNothingWithoutACaseIsShrunk.
+//
+// "all-small-caps" lowers both cases, and a space has neither. A line whose
+// spaces were three-quarters of a space wide is spaced wrong between every pair
+// of words — and it is the failure that looks like success, because every letter
+// on it is right.
+//
+// It is why the case cut has three kinds and not two. A version telling only
+// lowercase from everything else passes every fixture that has no space in it,
+// which is most of them.
+func TestNothingWithoutACaseIsShrunk(t *testing.T) {
+	full, _ := style.FromPx(100)
+	runs := synthesisedRuns(t, StandardFonts(),
+		`<p id="p">Ab&nbsp;Cd</p>`,
+		`body{margin:0} #p { font-family: Helvetica; font-size: 100px;
+		 font-variant-caps: all-small-caps }`)
+	var got []string
+	for _, r := range runs {
+		got = append(got, r.Text)
+	}
+	if want := []string{"AB", "\u00a0", "CD"}; !equalStrings(got, want) {
+		t.Fatalf("the page was drawn as %q, want %q: the space has no case, so "+
+			"it is a run of its own between two that are lowered", got, want)
+	}
+	if runs[1].Size != full {
+		t.Errorf("the space was set at %v, want the box's %v; nothing lowers a "+
+			"character that has no case to lower", runs[1].Size, full)
+	}
+	for _, i := range []int{0, 2} {
+		if runs[i].Size >= full {
+			t.Errorf("the run %q was set at %v, want below the box's %v",
+				runs[i].Text, runs[i].Size, full)
+		}
+	}
+}
+
+// TestPetiteCapitalsFallBackToSmallOnesBeforeAnythingIsSynthesised.
+//
+// §6.6's one fallback between values: "if petite capital glyphs are not
+// available, small capital glyphs are used". Noto Sans declares 'smcp' and
+// 'c2sc' and no petite capitals at all, which is what almost every face with
+// small capitals in it declares — so without the fallback the commonest face in
+// the checkout would synthesise where it has the designer's own capitals to
+// hand.
+func TestPetiteCapitalsFallBackToSmallOnesBeforeAnythingIsSynthesised(t *testing.T) {
+	set := smallCapsFontSet(t)
+	for _, c := range []struct {
+		value string
+		want  shape.Caps
+	}{
+		{"petite-caps", shape.CapsSmall},
+		{"all-petite-caps", shape.CapsAllSmall},
+	} {
+		runs := synthesisedRuns(t, set,
+			`<p id="p">Filler</p>`,
+			`body{margin:0} #p { font-family: Cap; font-size: 20px;
+			 font-variant-caps: `+c.value+` }`)
+		if len(runs) != 1 {
+			t.Errorf("%s drew %d runs; the face has small capitals, so nothing "+
+				"is cut and nothing is synthesised", c.value, len(runs))
+			continue
+		}
+		if runs[0].Text != "Filler" {
+			t.Errorf("%s drew %q; the face's own capitals need no uppercasing",
+				c.value, runs[0].Text)
+		}
+		if runs[0].Features.Caps != c.want {
+			t.Errorf("%s asked the face for %v, want %v", c.value,
+				runs[0].Features.Caps, c.want)
+		}
+	}
+	// And it is not reported, because nothing was made here: the page is set in
+	// capitals a designer drew, and the only thing the document did not get is
+	// the second, shorter cut that this face has never had.
+	_, findings := layoutWith(t, set,
+		`<p id="p">Filler</p>`,
+		`#p { font-family: Cap; font-size: 20px; font-variant-caps: petite-caps }`)
+	if f, ok := findingNaming(findings, "font-variant-caps"); ok {
+		t.Errorf("the fallback found the face's small capitals and the page was "+
+			"reported anyway: %s", f.Message)
+	}
+}
+
+// TestPetiteFallsBackAtTheValueAndNotAtTheTag.
+//
+// §6.6's sentence asks whether the face has *petite capitals*, and a face with
+// none of them is asked for small ones. Reading it per tag instead — this half
+// petite and that half small — would set a line in two designs, which is not
+// what either value means.
+//
+// The fixture is the face that has 'pcap' and no 'c2pc': under a per-tag
+// reading its capitals would come from 'c2sc', and under the value reading they
+// are made here, beside the petite capitals the face really drew.
+func TestPetiteFallsBackAtTheValueAndNotAtTheTag(t *testing.T) {
+	face := petiteAndSmallFace(t)
+	set := namedFaceSet{family: "Both", face: face, standard: StandardFonts()}
+	runs := synthesisedRuns(t, set,
+		`<p id="p">Fi</p>`,
+		`body{margin:0} #p { font-family: Both; font-size: 100px;
+		 font-variant-caps: all-petite-caps }`)
+	if len(runs) != 2 {
+		var got []string
+		for _, r := range runs {
+			got = append(got, r.Text)
+		}
+		t.Fatalf("the page was drawn as %d runs %q, want two", len(runs), got)
+	}
+	for _, r := range runs {
+		if r.Features.Caps != shape.CapsNormal && r.Features.Caps != shape.CapsAllPetite {
+			t.Errorf("the run %q asks the face for %v; the face has petite "+
+				"capitals, so the value stays what the document wrote",
+				r.Text, r.Features.Caps)
+		}
+	}
+	full, _ := style.FromPx(100)
+	if runs[0].Text != "F" || runs[0].Size >= full {
+		t.Errorf("the capital run is %q at %v; the face declares no c2pc and "+
+			"does not borrow c2sc, so its capital is shrunk here",
+			runs[0].Text, runs[0].Size)
+	}
+	if runs[1].Text != "i" || runs[1].Size != full {
+		t.Errorf("the lowercase run is %q at %v; the face declares pcap and "+
+			"lowers it itself, at the box's %v", runs[1].Text, runs[1].Size, full)
+	}
+
+	// And the other way round, which is the half the reading above cannot be
+	// told apart from unless the *capitals* are the half the face has. This
+	// face declares 'c2pc' and 'smcp': a per-tag reading would find no 'pcap'
+	// for the lowercase half and borrow the small capitals, setting a line whose
+	// two cases are two different cuts.
+	other := capitalsPetiteOnlyFace(t)
+	runs = synthesisedRuns(t, namedFaceSet{family: "Other", face: other, standard: StandardFonts()},
+		`<p id="p">Fi</p>`,
+		`body{margin:0} #p { font-family: Other; font-size: 100px;
+		 font-variant-caps: all-petite-caps }`)
+	if len(runs) != 2 {
+		var got []string
+		for _, r := range runs {
+			got = append(got, r.Text)
+		}
+		t.Fatalf("the page was drawn as %d runs %q, want two", len(runs), got)
+	}
+	if runs[0].Text != "F" || runs[0].Size != full ||
+		runs[0].Features.Caps != shape.CapsAllPetite {
+		t.Errorf("the capital run is %q at %v asking for %v; the face declares "+
+			"c2pc, so its own petite capital is used at the box's %v",
+			runs[0].Text, runs[0].Size, runs[0].Features.Caps, full)
+	}
+	if runs[1].Text != "I" || runs[1].Size >= full ||
+		runs[1].Features.Caps != shape.CapsNormal {
+		t.Errorf("the lowercase run is %q at %v asking for %v; the face has "+
+			"petite capitals, so the value does not fall back and the other "+
+			"half is made here", runs[1].Text, runs[1].Size, runs[1].Features.Caps)
+	}
+}
+
 // TestARestyledFirstLineKeepsItsSynthesis.
 //
 // ::first-line restyles the items on the first line from a box of its own, and
@@ -772,22 +1029,29 @@ func TestSynthesisCutsMaximalStretches(t *testing.T) {
 }
 
 // TestCutAtCaseIsTheReaderOnItsOwn.
+//
+// The third kind is the one worth having a table for. A space, a digit and a
+// full stop are neither lowered by "small-caps" nor *shrunk* by
+// "all-small-caps", and a version that told only lowercase from everything else
+// would set a line whose spaces were three-quarters of a space wide.
 func TestCutAtCaseIsTheReaderOnItsOwn(t *testing.T) {
 	for _, c := range []struct {
 		text string
 		want []casePart
 	}{
-		{"", []casePart{{text: "", lowered: false}}},
-		{"abc", []casePart{{text: "abc", lowered: true}}},
-		{"ABC", []casePart{{text: "ABC", lowered: false}}},
-		{"Filler", []casePart{{text: "F"}, {text: "iller", lowered: true}}},
-		{"aB", []casePart{{text: "a", lowered: true}, {text: "B"}}},
-		// Digits, punctuation and a script with one case have no uppercase form
-		// and are left where they are — which for a stretch between two
-		// lowercase runs means one run and not three.
-		{"a1b", []casePart{{text: "a", lowered: true}, {text: "1"},
-			{text: "b", lowered: true}}},
-		{"日本語", []casePart{{text: "日本語"}}},
+		{"", []casePart{{text: "", kind: caseNone}}},
+		{"abc", []casePart{{text: "abc", kind: caseLower}}},
+		{"ABC", []casePart{{text: "ABC", kind: caseUpper}}},
+		{"Filler", []casePart{{text: "F", kind: caseUpper}, {text: "iller", kind: caseLower}}},
+		{"aB", []casePart{{text: "a", kind: caseLower}, {text: "B", kind: caseUpper}}},
+		// Digits, punctuation and a script with one case have no form of the
+		// other case and are a stretch of their own — which for a run between
+		// two lowercase stretches means three runs and not one.
+		{"a1b", []casePart{{text: "a", kind: caseLower}, {text: "1", kind: caseNone},
+			{text: "b", kind: caseLower}}},
+		{"A B", []casePart{{text: "A", kind: caseUpper}, {text: " ", kind: caseNone},
+			{text: "B", kind: caseUpper}}},
+		{"日本語", []casePart{{text: "日本語", kind: caseNone}}},
 	} {
 		got := cutAtCase(c.text)
 		if len(got) != len(c.want) {
@@ -829,6 +1093,71 @@ func halfCapsFace(t *testing.T) *shape.Face {
 		},
 		Extra: map[string][]byte{
 			"GSUB": fonttest.GSUBForms(map[string][2][]int{"smcp": {{3}, {11}}}),
+		},
+	})
+	face, err := shape.Load(data)
+	if err != nil {
+		t.Fatalf("loading the fixture face: %v", err)
+	}
+	return face
+}
+
+// capitalsPetiteOnlyFace declares 'c2pc' and 'smcp': petite capitals for the
+// capitals, small ones for the lowercase letters, and neither of the two the
+// other half of each pair would need.
+//
+// It is the fixture for whether §6.6's fallback is read at the value or at the
+// tag, and it is the only shape of font that can tell them apart. A per-tag
+// reading finds no 'pcap' for the lowercase half, falls back to the 'smcp' this
+// face has, and sets a line whose capitals are petite and whose lowercase
+// letters are small — two cuts of the same design, side by side. Reading the
+// sentence at the value keeps the petite capitals the face really drew and makes
+// the other half here.
+func capitalsPetiteOnlyFace(t *testing.T) *shape.Face {
+	t.Helper()
+	data := fonttest.SFNT(fonttest.SFNTOptions{
+		Name: "CapitalsPetite",
+		Glyphs: []fonttest.Glyph{
+			{Rune: 'i', Advance: 500, HasShape: true},
+			{Rune: 'F', Advance: 500, HasShape: true},
+			{Rune: 0xE000, Advance: 400, HasShape: true}, // i.smcp
+			{Rune: 0xE001, Advance: 400, HasShape: true}, // F.c2pc
+		},
+		Extra: map[string][]byte{
+			"GSUB": fonttest.GSUBForms(map[string][2][]int{
+				"smcp": {{1}, {3}},
+				"c2pc": {{2}, {4}},
+			}),
+		},
+	})
+	face, err := shape.Load(data)
+	if err != nil {
+		t.Fatalf("loading the fixture face: %v", err)
+	}
+	return face
+}
+
+// petiteAndSmallFace declares 'pcap' and 'c2sc' and neither of the two the
+// other of each pair would need: petite capitals for the lowercase letters, and
+// small ones for the capitals.
+//
+// It is the fixture for the question "does the fallback read §6.6's sentence at
+// the value or at the tag", and it is the only shape of font that can answer it.
+func petiteAndSmallFace(t *testing.T) *shape.Face {
+	t.Helper()
+	data := fonttest.SFNT(fonttest.SFNTOptions{
+		Name: "PetiteAndSmall",
+		Glyphs: []fonttest.Glyph{
+			{Rune: 'i', Advance: 500, HasShape: true},
+			{Rune: 'F', Advance: 500, HasShape: true},
+			{Rune: 0xE000, Advance: 400, HasShape: true}, // i.pcap
+			{Rune: 0xE001, Advance: 400, HasShape: true}, // F.c2sc
+		},
+		Extra: map[string][]byte{
+			"GSUB": fonttest.GSUBForms(map[string][2][]int{
+				"pcap": {{1}, {3}},
+				"c2sc": {{2}, {4}},
+			}),
 		},
 	})
 	face, err := shape.Load(data)

@@ -108,49 +108,62 @@ const (
 	CapsTitling
 )
 
+// Capitals is the feature a value asks a face to apply to the capitals, and
+// Lowercase the one it asks for the lowercase letters. Either is empty where
+// the value leaves that case alone: "small-caps" does not touch the capitals,
+// and "titling-caps" does not touch the lowercase letters.
+//
+// They are the same tag for "unicase", which is one feature that puts both
+// cases at one height rather than two that meet in the middle.
+//
+// The pair is what the property *is*, and it is what a caller needs rather than
+// the list: which case a face has failed to cover decides which letters come out
+// wrong, and a list of tags cannot say. See Features, which is derived from
+// this so that the two cannot disagree.
+func (c Caps) Capitals() string  { return capsFeatures[c].capitals }
+func (c Caps) Lowercase() string { return capsFeatures[c].lowercase }
+
 // Features are the tags a value asks a face for, in the order they are applied.
 //
 // The order inside a pair does not decide anything: 'c2sc' covers the capitals
 // and 'smcp' the lowercase letters, which are disjoint sets, so neither can see
-// what the other did. It is §6.6's order because that is the order the property
-// is defined in and there is no reason to write a different one.
+// what the other did. It is §6.6's order — the capitals first — because that is
+// the order the property is defined in and there is no reason to write a
+// different one.
 func (c Caps) Features() []string {
-	switch c {
-	case CapsSmall:
-		return capsSmall
-	case CapsAllSmall:
-		return capsAllSmall
-	case CapsPetite:
-		return capsPetite
-	case CapsAllPetite:
-		return capsAllPetite
-	case CapsUnicase:
-		return capsUnicase
-	case CapsTitling:
-		return capsTitling
+	pair := capsFeatures[c]
+	switch {
+	case pair.capitals == "" && pair.lowercase == "":
+		return nil
+	case pair.capitals == "":
+		return []string{pair.lowercase}
+	case pair.lowercase == "" || pair.capitals == pair.lowercase:
+		return []string{pair.capitals}
 	}
-	return nil
+	return []string{pair.capitals, pair.lowercase}
 }
 
-// The tag lists, declared once so that a caller asking what a value needs and
-// the shaper applying it cannot answer differently.
+// capsFeatures is what each value asks of each case, declared once so that a
+// caller asking what a value needs and the shaper applying it cannot answer
+// differently.
 //
-// Where they are applied is the part worth stating. They go after 'ccmp' and
-// 'locl' and *before* the ligatures, which is the order HarfBuzz produces and is
-// not the order a caller-named feature gets: "office" set in Noto Sans with
-// small capitals is six small capitals and no ffi ligature, because the ligature
-// is stated over the lowercase glyphs and by the time 'liga' is reached there
-// are none left. Applying them last instead leaves the ffi ligature standing in
-// the middle of a line of capitals — three letters that did not get the rule the
-// other three did.
-var (
-	capsSmall     = []string{"smcp"}
-	capsAllSmall  = []string{"c2sc", "smcp"}
-	capsPetite    = []string{"pcap"}
-	capsAllPetite = []string{"c2pc", "pcap"}
-	capsUnicase   = []string{"unic"}
-	capsTitling   = []string{"titl"}
-)
+// Where the tags are applied is the part worth stating. They go after 'ccmp'
+// and 'locl' and *before* the ligatures, which is the order HarfBuzz produces
+// and is not the order a caller-named feature gets: "office" set in Noto Sans
+// with small capitals is six small capitals and no ffi ligature, because the
+// ligature is stated over the lowercase glyphs and by the time 'liga' is
+// reached there are none left. Applying them last instead leaves the ffi
+// ligature standing in the middle of a line of capitals — three letters that
+// did not get the rule the other three did.
+var capsFeatures = [...]struct{ capitals, lowercase string }{
+	CapsNormal:    {},
+	CapsSmall:     {lowercase: "smcp"},
+	CapsAllSmall:  {capitals: "c2sc", lowercase: "smcp"},
+	CapsPetite:    {lowercase: "pcap"},
+	CapsAllPetite: {capitals: "c2pc", lowercase: "pcap"},
+	CapsUnicase:   {capitals: "unic", lowercase: "unic"},
+	CapsTitling:   {capitals: "titl"},
+}
 
 // adds returns the tags this set turns on, in the order they are applied.
 func (f Features) adds() []string { return f.Caps.Features() }

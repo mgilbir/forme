@@ -1326,6 +1326,10 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 	// paragraph whose lines grew and shrank with the case of their letters
 	// would be set on a ragged baseline. See leading.
 	size, off := a.size, a.off
+	// §6.6's one fallback between values, which needs the face and so cannot be
+	// answered where the rest of the features are: a document asking for petite
+	// capitals from a face that has none gets its small capitals instead.
+	off.Caps = resolveCaps(off.Caps, a.run.Face)
 	if a.run.synthesised {
 		size, off.Caps = synthesisedSize(a.size, a.run), shape.CapsNormal
 	}
