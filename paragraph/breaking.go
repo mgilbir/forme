@@ -486,7 +486,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// "<span style='margin-left: 200px'><div class=content>" in a container
 		// exactly 200px wide.
 		if !item.NoWrap && !item.Hangs && !isTailSpace(item) && i < tailFrom && item.BreakBefore &&
-			content && overflows(used, item, width) {
+			content && overflows(used.Add(insetsAfter(items, i)), item, width) {
 			// Ending here costs the hyphen as well, where the opportunity is one
 			// a soft hyphen offered. If that does not fit, this is not a place
 			// the line may end at all and it goes back to one that is — the
@@ -516,7 +516,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// not fit — so the line ends where the box began and the box's leading
 		// margin goes with it.
 		if !item.NoWrap && !item.Hangs && i < tailFrom && !item.BreakBefore && !item.Inset &&
-			insetAt >= 0 && overflows(used, item, width) {
+			insetAt >= 0 && overflows(used.Add(insetsAfter(items, i)), item, width) {
 			return trimLineEdge(line[:insetLine]), insetAt, 0, outOfFlow[:insetFlow], false
 		}
 
@@ -658,7 +658,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// are two.
 		if !item.BreakWord && !item.NoWrap && !item.Hangs && i < tailFrom &&
 			!item.Inset && !item.Tab && insetAt < 0 && backAt < 0 &&
-			breaksAfterLast(line) && overflows(used, item, width) {
+			breaksAfterLast(line) && overflows(used.Add(insetsAfter(items, i)), item, width) {
 			base := 0
 			if i == from {
 				base = fromByte
@@ -1124,4 +1124,50 @@ func breaksAfterLast(line []Item) bool {
 		return it.BreakWord
 	}
 	return false
+}
+
+// insetsAfter is the width of the inline box edges that follow an item with no
+// content between them and it.
+//
+// An inline box's own margin, border and padding is ink, and the end edge of one
+// is ink at the end of a line: there is nowhere between the character it closes
+// over and the edge itself to break. So an item and the edges that close over it
+// stand or fall together, and the room the line needs for that item is the item
+// plus them.
+//
+// It is asked at the *content* item rather than at the edge because the answer
+// has to reach the decisions that can act on it, and those are the three above
+// that end a line: the opportunity this item begins, the opportunity an inline
+// box opened just before it, and the fast path for a line that may end after its
+// last item. By the time the edge itself is placed the character before it is on
+// the line and putting it right means unwinding, which is what the hang has to
+// do and what this does not.
+//
+// The sum may be negative, and that half is not a corner. A negative margin on
+// an inline is how a document asks for content to hang past the edge of its box
+// — the suite's hanging-punctuation-first-and-last-together draws a hanging
+// bracket with "margin: 0 -1em" — and a line that would not otherwise hold the
+// last word does hold it when the box it is in gives the room back. An engine
+// that counted the end edge only where it takes room would fix the overflow and
+// leave that half wrong.
+//
+// The walk stops at the first item that is not an edge, which is what makes this
+// the edges belonging to *this* item rather than every edge left on the line.
+//
+// Two of the three call sites are load-bearing and the third is not: a planted
+// defect that takes the lookahead off the fast path moves no test and no
+// reftest, for the reason the note beside that branch already gives about its
+// other conditions — an item that allows the break itself has been returned by
+// then. It is asked there anyway, because the three are one question and a
+// reader given two of them with the lookahead and one without would be told they
+// are two questions.
+func insetsAfter(items []Item, i int) style.Unit {
+	var out style.Unit
+	for j := i + 1; j < len(items); j++ {
+		if !items[j].Inset {
+			break
+		}
+		out = out.Add(items[j].Width)
+	}
+	return out
 }
