@@ -1290,7 +1290,20 @@ const wptEnv = "WPT_TESTS"
 // the old "not implemented" finding is gone, but the two values whose whole
 // content is a line-start rule are reported by value instead, and the census
 // moved by exactly the two documents above and no others.
-const wptCleanPassBaseline = 5980
+// 5980 to 5981 on 2026-09-10: textarea-always-preserves-spaces-001. A
+// <textarea>'s content is its *value* — what the user typed and what the form
+// would send — so an author's white-space does not collapse it. The wrapping
+// half is still theirs: "nowrap" changes how the value is shown and not one
+// character of what it is.
+//
+// The rule upgrades the declared value rather than replacing it, and both ends
+// of the pipeline ask it: Phase I collapses a text node's own white space at box
+// construction, and the fill collapses a run that meets a line edge. A
+// "!important" in the user-agent sheet was written first and is wrong twice — it
+// cannot be conditional, and "break-spaces" preserves spaces too, so forcing
+// "preserve" over it took textarea-break-spaces-001 away and the two documents
+// traded with the count unmoved.
+const wptCleanPassBaseline = 5981
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

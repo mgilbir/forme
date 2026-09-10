@@ -721,7 +721,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	l.noteSubstitution(b, face, runsOfBox)
 
 	size := b.FontSize
-	ws := whiteSpaceFor(b.Style)
+	ws := preservedInAControlBox(b, whiteSpaceFor(b.Style))
 	// Both are read once per text box rather than once per piece: they are
 	// inherited properties, so every piece of one box has the same answer, and
 	// the decorations are memoized across the whole tree besides.

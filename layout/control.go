@@ -618,3 +618,58 @@ func (l *layouter) controlIntrinsicHeight(b *Box) (style.Unit, bool) {
 	}
 	return l.lineHeight(b).Mul(float64(b.Control.Lines)), true
 }
+
+// preservedInAControl is the white-space-collapse value that applies to text
+// which is a control's *value* rather than the page's prose.
+//
+// A <textarea>'s content is what the user typed and what the form would send:
+// two spaces the user entered are two spaces and a newline is a newline.
+// Collapsing them is not a rendering choice a stylesheet gets to make, so an
+// author's value does not reach that half of the question — while the wrapping
+// half stays theirs, because "white-space: nowrap" changes how the value is
+// shown and not one character of what it is.
+//
+// It **upgrades** the value rather than replacing it, and that is the whole
+// reason this is a function and not a "!important" in the user-agent sheet.
+// That was written first and is wrong twice over: it cannot be conditional, and
+// "break-spaces" already preserves spaces — forcing "preserve" over it threw
+// away the part that makes a space at the end of a line wrap rather than hang.
+// The two textarea documents in the suite then traded, one for the other, and
+// the count did not move.
+//
+// It is asked here, where Phase I runs, and not where the line is filled: the
+// collapsing has happened by then and the value it happened under is the only
+// thing that decides it.
+func preservedInAControl(n *html.Node, value string) string {
+	if n == nil || controlKindOf(n.Parent) != controlTextArea {
+		return value
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "preserve", "break-spaces":
+		// Already keeps every space. "break-spaces" keeps them *and* wraps on
+		// them, which is a value an author may reasonably write on a textarea
+		// and which this must not flatten.
+		return value
+	}
+	// "collapse", "preserve-breaks", "discard", and anything unrecognised —
+	// which the cascade has already turned into the initial value, "collapse".
+	return "preserve"
+}
+
+// preservedInAControlBox is preservedInAControl asked of a box rather than of a
+// text node, which is the same question at the other end of the pipeline.
+//
+// Both are needed and neither is enough. Phase I collapses a text node's own
+// white space and runs at box construction; the fill collapses a run of spaces
+// that meets a line edge and runs over the flattened items. A textarea whose
+// author wrote "white-space: nowrap" comes through Phase I with its spaces
+// intact and loses them on the line if only the first is asked.
+func preservedInAControlBox(b *Box, ws whiteSpace) whiteSpace {
+	if controlKindOf(boxElement(b)) != controlTextArea {
+		return ws
+	}
+	ws.Collapse = false
+	ws.Discard = false
+	ws.PreserveBreaks = true
+	return ws
+}
