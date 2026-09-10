@@ -27,14 +27,16 @@ package shape
 //
 // # The one that goes the other way
 //
-// "font-variant-caps" asks for rules the font states and no run gets by
-// default: 'smcp', the small capitals a designer drew for the lowercase
-// letters, and the five other ways §6.6 has of setting a run in capitals. It is
-// here rather than in ShapeGlyphsWith's caller-named list because it is the
-// same kind of fact as the other three — something about the run that its own
-// text does not say, decided by a declaration — and because it has to travel
-// the whole way to the backend that draws the run. Everything between layout
-// and the pen already carries a Features, and nothing carries a list of tags.
+// "font-variant-caps" and "font-variant-numeric" ask for rules the font states
+// and no run gets by default: 'smcp', the small capitals a designer drew for the
+// lowercase letters, and the five other ways §6.6 has of setting a run in
+// capitals; 'onum' and 'tnum' and the six other things §6.7 does to a figure.
+// They are here rather than in ShapeGlyphsWith's caller-named list because they
+// are the same kind of fact as the other three — something about the run that
+// its own text does not say, decided by a declaration — and because they have to
+// travel the whole way to the backend that draws the run. Everything between
+// layout and the pen already carries a Features, and nothing carries a list of
+// tags.
 //
 // It is *not* the same in the one way that matters to a report: turning a rule
 // off is right whether or not the face has it, and turning one on is only
@@ -64,13 +66,21 @@ type Features struct {
 	// NoKerning suppresses the pair adjustments of the "kern" feature and of
 	// GPOS pair positioning, including the pair that spans a run boundary.
 	NoKerning bool
-	// Caps is the capitals a run is set in: the one request here that asks a
+	// Caps is the capitals a run is set in: the first request here that asks a
 	// face for a rule rather than taking one away.
 	//
 	// A face that declares none of the value's features is unaffected, and the
 	// run is set in the letters it is written with. See Caps.Features for what
 	// each value asks for, and Face.Features for the question to ask first.
 	Caps Caps
+	// Numeric is the figures a run is set in: which of the face's digits, how
+	// they are spaced, and what it does with a fraction, an ordinal and a zero.
+	//
+	// It is a *set* where Caps is one value, and that is the property and not a
+	// choice made here: CSS Fonts 4 §6.7 lets a document ask for oldstyle
+	// figures, tabular spacing and a slashed zero at once, and the three are
+	// three of the font's rules over the same digits. See Numeric.
+	Numeric Numeric
 }
 
 // Caps is CSS Fonts 4 §6.6's font-variant-caps, as a set of features to ask a
@@ -166,7 +176,100 @@ var capsFeatures = [...]struct{ capitals, lowercase string }{
 }
 
 // adds returns the tags this set turns on, in the order they are applied.
-func (f Features) adds() []string { return f.Caps.Features() }
+//
+// The capitals before the figures, which is the order §6.6 and §6.7 are written
+// in and is not a decision this can make well: the two act on disjoint sets of
+// characters — letters and digits — so no rule of one can see what the other
+// did, and the order between them is unobservable.
+func (f Features) adds() []string {
+	caps, numeric := f.Caps.Features(), f.Numeric.Features()
+	switch {
+	case len(numeric) == 0:
+		return caps
+	case len(caps) == 0:
+		return numeric
+	}
+	out := make([]string, 0, len(caps)+len(numeric))
+	return append(append(out, caps...), numeric...)
+}
+
+// Numeric is CSS Fonts 4 §6.7's font-variant-numeric, as the set of features it
+// asks a face for.
+//
+// A set and not a value, because the property is: §6.7's grammar is three
+// independent pairs and two independent keywords, and a document may ask for
+// oldstyle figures, tabular spacing and a slashed zero at once. What separates
+// the eight is which of the font's rules they name, and the font knows what each
+// of those does; nothing in this package has to.
+//
+// None of them is synthesised anywhere, by this engine or by a browser. An
+// oldstyle figure is a shape a designer drew, and there is nothing to make one
+// out of — which is the difference between this property and small capitals, and
+// the reason a face that declares none of these is simply reported.
+type Numeric uint16
+
+const (
+	// The figures §6.7 calls <numeric-figure-values>: which set of digits, of
+	// the two a face may draw. Lining figures stand at cap height and are the
+	// default of almost every face; oldstyle figures have ascenders and
+	// descenders and sit with the lowercase letters.
+	NumericLining Numeric = 1 << iota
+	NumericOldstyle
+	// <numeric-spacing-values>: whether the digits are set at one width so that
+	// a column of figures lines up, or each at its own. It is the pair that
+	// matters most in a table and the one an author is most likely to write.
+	NumericProportional
+	NumericTabular
+	// <numeric-fraction-values>: a fraction set on a diagonal, "1/2" with the
+	// numerator raised and the denominator lowered around a slash, or stacked
+	// one above the other.
+	NumericDiagonalFractions
+	NumericStackedFractions
+	// The two that stand alone. "ordinal" is the raised letters after a number
+	// — the "st" of "1st", the "ª" of a Spanish ordinal — and "slashed-zero" is
+	// the zero with a stroke through it, which is what tells it from a capital
+	// O in a serial number.
+	NumericOrdinal
+	NumericSlashedZero
+)
+
+// Features are the tags this set asks a face for, in the order they are applied.
+//
+// §6.7's own order: the figures, the spacing, the fraction, then the two that
+// stand alone. Whether it decides anything depends on the face and cannot be
+// settled here — a font may state its slashed zero over the lining zero, over
+// the oldstyle one, or over both — so the order is the specification's, which is
+// the one a font is most likely to have been tested against.
+func (n Numeric) Features() []string {
+	if n == 0 {
+		return nil
+	}
+	out := make([]string, 0, 5)
+	for _, each := range numericFeatures {
+		if n&each.bit != 0 {
+			out = append(out, each.tag)
+		}
+	}
+	return out
+}
+
+// Has reports whether a set asks for one of §6.7's features.
+func (n Numeric) Has(bit Numeric) bool { return n&bit != 0 }
+
+// numericFeatures is the tag each bit names, in the order Features returns them.
+var numericFeatures = [...]struct {
+	bit Numeric
+	tag string
+}{
+	{NumericLining, "lnum"},
+	{NumericOldstyle, "onum"},
+	{NumericProportional, "pnum"},
+	{NumericTabular, "tnum"},
+	{NumericDiagonalFractions, "frac"},
+	{NumericStackedFractions, "afrc"},
+	{NumericOrdinal, "ordn"},
+	{NumericSlashedZero, "zero"},
+}
 
 // suppresses reports whether a feature tag is one this set turns off.
 func (f Features) suppresses(tag string) bool {

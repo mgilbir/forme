@@ -257,6 +257,19 @@ var properties = map[string]property{
 	// value needs sets the text in the letters it is written with, and layout
 	// says so. See layout/fontfeatures.go.
 	"font-variant-caps": {true, "normal"},
+	// CSS Fonts 4 §6.7. It inherits with the rest of the family, and its
+	// initial value is "normal" — whichever figures the face draws by default,
+	// spaced however it spaces them.
+	//
+	// All eight of its keywords are applied, and all of them the same way: each
+	// names a feature the face declares — 'onum' for the oldstyle figures,
+	// 'tnum' for the tabular spacing a column of them needs, 'frac', 'ordn',
+	// 'zero' — and the shaper asks for them. None is synthesised, here or
+	// anywhere: an oldstyle figure is a shape a designer drew and there is
+	// nothing to make one out of, which is the difference between this property
+	// and small capitals. A face that declares none of what a value asks for
+	// sets the figures it has, and layout says so. See layout/fontfeatures.go.
+	"font-variant-numeric": {true, "normal"},
 	// text-autospace inherits, which is what lets a document turn it off once
 	// on the body. Its initial value is "normal", and "normal" asks for the
 	// spacing — a page of Japanese with Latin words in it is set wrong without
@@ -618,10 +631,10 @@ var shorthands = map[string]shorthand{
 		"font-style", "font-weight", "font-size", "font-family", "line-height",
 		"font-variant-caps"}},
 
-	// CSS Fonts 4 §6.10, for the two longhands this engine has. See
+	// CSS Fonts 4 §6.10, for the three longhands this engine has. See
 	// fontVariantShorthand for why the property is expanded rather than read.
 	"font-variant": {fontVariantShorthand, []string{
-		"font-variant-ligatures", "font-variant-caps"}},
+		"font-variant-ligatures", "font-variant-caps", "font-variant-numeric"}},
 	"text-decoration": {textDecorationShorthand,
 		[]string{"text-decoration-line", "text-decoration-color",
 			"text-decoration-thickness"}},

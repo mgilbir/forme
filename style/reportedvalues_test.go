@@ -195,21 +195,109 @@ func TestFontVariantSetsBothLonghandsItControls(t *testing.T) {
 	}
 }
 
-// TestAFontVariantValueThisEngineHasNoLonghandForIsReported is the other five
+// TestAFontVariantValueThisEngineHasNoLonghandForIsReported is the other four
 // groups the shorthand controls.
 //
-// Only two of the seven longhands are registered, so a value from one of the
-// other five — a numeric figure, an east-asian form — has nothing to be set on.
+// Three of the seven longhands are registered, so a value from one of the other
+// four — an east-asian form, a superscript position — has nothing to be set on.
 // Refusing the declaration whole is what raises the unsupported-property
 // finding, and swallowing it silently is what that finding exists to stop.
 func TestAFontVariantValueThisEngineHasNoLonghandForIsReported(t *testing.T) {
-	got := findingsOf(t, `<p id="a">1</p>`, `#a { font-variant: oldstyle-nums }`)
-	found, unsupported := says(got, "font-variant")
-	if !found {
-		t.Fatalf("raised %v, want a finding naming font-variant", got)
+	for _, value := range []string{"sub", "jis78", "historical-forms", "ruby"} {
+		got := findingsOf(t, `<p id="a">1</p>`, `#a { font-variant: `+value+` }`)
+		found, unsupported := says(got, "font-variant")
+		if !found {
+			t.Errorf("%q raised %v, want a finding naming font-variant", value, got)
+			continue
+		}
+		if !unsupported {
+			t.Errorf("the finding for %q does not claim the engine is missing "+
+				"anything", value)
+		}
 	}
-	if !unsupported {
-		t.Error("the finding does not claim the engine is missing anything")
+}
+
+// TestAFontVariantNumericValueSetsTheLonghand is the group that stopped being
+// one of them.
+//
+// §6.7's eight keywords were reported as a part of the shorthand that is not
+// implemented, and are now expanded into font-variant-numeric like the
+// ligatures and the capitals beside them.
+func TestAFontVariantNumericValueSetsTheLonghand(t *testing.T) {
+	if got := findingsOf(t, `<p id="a">1</p>`,
+		`#a { font-variant: oldstyle-nums tabular-nums slashed-zero }`); len(got) != 0 {
+		t.Errorf("raised %v; the shorthand sets a property this engine reads "+
+			"and the stylesheet has nothing wrong with it", got)
+	}
+	doc := parseDoc(t, `<p id="a">1</p>`)
+	rules, _ := css.ParseStylesheet(
+		`#a { font-variant: oldstyle-nums tabular-nums slashed-zero }`)
+	styled := Apply(doc, []Sheet{{Origin: OriginAuthor, Rules: rules}})
+	cs := styled.Styles[elementFor(t, doc, "#a")]
+	if want := "oldstyle-nums tabular-nums slashed-zero"; cs["font-variant-numeric"] != want {
+		t.Errorf("font-variant-numeric computed to %q, want %q",
+			cs["font-variant-numeric"], want)
+	}
+	// And the two beside it are reset, which is the whole reason the property
+	// is expanded rather than read.
+	if cs["font-variant-caps"] != "normal" {
+		t.Errorf("font-variant-caps is %q, want normal", cs["font-variant-caps"])
+	}
+	if cs["font-variant-ligatures"] != "normal" {
+		t.Errorf("font-variant-ligatures is %q, want normal",
+			cs["font-variant-ligatures"])
+	}
+}
+
+// TestTheFontVariantShorthandResetsTheNumericLonghand is the other half of the
+// reset, and the half a shorthand is most likely to be missing.
+//
+// "font-variant: small-caps" on a span inside a paragraph that asked for
+// oldstyle figures puts the figures back, because a shorthand sets every
+// longhand it controls. A version that set only what was written would leave the
+// span's digits oldstyle, which is a page the stylesheet does not explain.
+func TestTheFontVariantShorthandResetsTheNumericLonghand(t *testing.T) {
+	doc := parseDoc(t, `<p id="outer"><span id="a">1</span></p>`)
+	rules, _ := css.ParseStylesheet(
+		`#outer { font-variant: oldstyle-nums } #a { font-variant: small-caps }`)
+	styled := Apply(doc, []Sheet{{Origin: OriginAuthor, Rules: rules}})
+	if cs := styled.Styles[elementFor(t, doc, "#outer")]; cs["font-variant-numeric"] != "oldstyle-nums" {
+		t.Fatalf("the container's font-variant-numeric is %q; without it the "+
+			"reset below has nothing to undo", cs["font-variant-numeric"])
+	}
+	cs := styled.Styles[elementFor(t, doc, "#a")]
+	if cs["font-variant-numeric"] != "normal" {
+		t.Errorf("font-variant-numeric is %q inside an oldstyle container after "+
+			"\"font-variant: small-caps\", want normal", cs["font-variant-numeric"])
+	}
+	if cs["font-variant-caps"] != "small-caps" {
+		t.Errorf("font-variant-caps is %q, want small-caps", cs["font-variant-caps"])
+	}
+}
+
+// TestAGroupOfFontVariantNumericWrittenTwiceIsRefused.
+//
+// §6.7's grammar is a "||" of five terms and a term may appear once, so
+// "lining-nums oldstyle-nums" asks for both sets of figures at once and is not
+// a value. It is the author's mistake rather than a missing feature, which is a
+// different report — see the message the finding carries.
+func TestAGroupOfFontVariantNumericWrittenTwiceIsRefused(t *testing.T) {
+	for _, value := range []string{
+		"lining-nums oldstyle-nums",
+		"tabular-nums proportional-nums",
+		"diagonal-fractions stacked-fractions",
+		"ordinal ordinal",
+	} {
+		got := findingsOf(t, `<p id="a">1</p>`, `#a { font-variant: `+value+` }`)
+		found, unsupported := says(got, "not a value this engine can read")
+		if !found {
+			t.Errorf("%q raised %v, want it refused as a value", value, got)
+			continue
+		}
+		if unsupported {
+			t.Errorf("%q is invalid CSS and was reported as a missing feature",
+				value)
+		}
 	}
 }
 

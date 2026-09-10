@@ -594,6 +594,141 @@ func hasCase(text string) (lower, upper bool) {
 	return lower, upper
 }
 
+// reportNumeric names a request about the figures the face cannot carry out.
+//
+// Every keyword of CSS Fonts 4 §6.7 is a request for a feature the face
+// declares, and a face that declares none of them sets the digits it has: a
+// column of figures that will not line up, a fraction written as three
+// characters, a zero that cannot be told from a capital O. None of that looks
+// wrong on the page, which is the shape of failure §6.3's findings exist for.
+//
+// # Nothing here is synthesised, and that is not a gap in this file
+//
+// An oldstyle figure is a shape a designer drew, and so is a slashed zero and a
+// stacked fraction. There is nothing to make one out of — the letter at a
+// smaller size, which is what small capitals are synthesised from, has no
+// counterpart here — and no browser makes one either. So this reports where
+// smallcaps.go produces, and the finding is the whole of what the engine can do
+// about it.
+//
+// # Per tag, per run, and only where the tag has something to act on
+//
+// The first two for the reasons reportCaps gives. The third is narrower than it
+// looks: every one of §6.7's features acts on digits, so a run with none in it
+// is set identically with them and without, and a finding about it would be this
+// engine calling a correct page a failure. A digit is a necessary condition and
+// not a sufficient one — 'ordn' wants letters after one and 'frac' a slash
+// between two — and it is where the line is drawn, because the rest is the
+// font's business and cannot be known from here.
+//
+// # The two the face may already be doing
+//
+// "tabular-nums" asks for digits that all take the same room, and almost every
+// text face draws them that way to begin with: the fourteen standard PDF faces
+// do, and so does Noto Sans. A face whose digits already share an advance is
+// being asked for the page it is already setting, and reporting it would hold a
+// correct document out of the clean count for ever — which is the narrowing
+// reportKerning makes for a "kern" a face has not got, arrived at from the other
+// side. "proportional-nums" is the same question with the answer reversed.
+//
+// The other six cannot be answered this way. Whether a face's default figures
+// are lining or oldstyle, whether its zero is slashed, whether it builds a
+// fraction — none of that is in the metrics, and guessing would be worse than
+// the report.
+func (l *layouter) reportNumeric(b *Box, face *shape.Face, text string) {
+	want, unhandled := numericOf(b.Style["font-variant-numeric"])
+	if unhandled != "" {
+		// All eight of §6.7 are read, so a word outside them is either a
+		// mistake the author made or a value from a level this engine has not
+		// read, and nothing here can tell the two apart. See reportCaps, which
+		// makes the same choice for the same reason.
+		l.reportOnce("font-variant-numeric:"+unhandled, Finding{
+			Rule:     RuleUnsupportedValue,
+			Property: "font-variant-numeric",
+			Message: quoteValue(unhandled) + " is not a value of " +
+				"font-variant-numeric this engine reads; the figures were set " +
+				"as the face draws them",
+			Path: PathOf(boxElement(b)),
+		})
+		return
+	}
+	if want == 0 || face == nil || !hasDigit(text) {
+		return
+	}
+	var missing []string
+	for _, tag := range want.Features() {
+		if faceDeclares(face, tag) || numericIsInert(tag, face) {
+			continue
+		}
+		missing = append(missing, tag)
+	}
+	if len(missing) == 0 {
+		return
+	}
+	value := strings.ToLower(strings.TrimSpace(b.Style["font-variant-numeric"]))
+	l.reportOnce("font-variant-numeric:"+value+":"+strings.Join(missing, ",")+":"+face.Name(),
+		Finding{
+			Rule:     RuleUnsupportedValue,
+			Property: "font-variant-numeric",
+			Message: "font-variant-numeric " + quoteValue(value) + " asks a face for " +
+				strings.Join(want.Features(), " and ") + "; " + quoteValue(face.Name()) +
+				" declares no " + strings.Join(missing, " or ") + ", and this engine " +
+				"does not draw a figure a designer did not — so that much of the " +
+				"text was set in the figures the face has",
+			Path: PathOf(boxElement(b)),
+		})
+}
+
+// numericIsInert reports whether a tag asks for the page the face is already
+// setting.
+//
+// Two of the eight can be answered from the metrics, and they are the two an
+// author is most likely to write. See reportNumeric.
+func numericIsInert(tag string, face *shape.Face) bool {
+	switch tag {
+	case "tnum":
+		return digitsShareAnAdvance(face)
+	case "pnum":
+		return !digitsShareAnAdvance(face)
+	}
+	return false
+}
+
+// digitsShareAnAdvance reports whether every digit in the face takes the same
+// room, which is what "tabular" means and what a column of figures needs.
+//
+// A face missing a digit answers false, which is the safe direction: it is not
+// the face a document setting figures wants, the request cannot be shown to be
+// inert, and the report says so.
+func digitsShareAnAdvance(face *shape.Face) bool {
+	first, ok := face.Advance('0')
+	if !ok {
+		return false
+	}
+	for r := '1'; r <= '9'; r++ {
+		got, ok := face.Advance(r)
+		if !ok || got != first {
+			return false
+		}
+	}
+	return true
+}
+
+// hasDigit reports whether §6.7's features would have anything to act on.
+//
+// The decimal digits and nothing wider. unicode.IsDigit is true of every
+// script's digits, and a face's 'onum' or 'tnum' covers the European ones it
+// drew — so a run of Devanagari numerals is set identically either way, and a
+// report about it would name a feature that could not have changed it.
+func hasDigit(text string) bool {
+	for _, r := range text {
+		if r >= '0' && r <= '9' {
+			return true
+		}
+	}
+	return false
+}
+
 // inertFontFeatures reports whether a font-feature-settings value asks for the
 // page that is already there.
 //

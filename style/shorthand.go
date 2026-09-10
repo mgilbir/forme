@@ -1001,12 +1001,12 @@ func textWrapShorthand(vals []css.ComponentValue) (map[string][]css.ComponentVal
 
 // CSS Fonts 4 §6.10's "font-variant", for the two longhands this engine has.
 //
-// The property is a shorthand for seven, and two of them are here:
-// font-variant-ligatures and font-variant-caps. The other five are not
-// registered, so a declaration naming one of their values is refused whole and
-// reported as an unsupported property — which is the right answer for a value
-// nothing downstream can act on, and the same answer the property got as a
-// whole until small capitals were implemented.
+// The property is a shorthand for seven, and three of them are here:
+// font-variant-ligatures, font-variant-caps and font-variant-numeric. The other
+// four are not registered, so a declaration naming one of their values is
+// refused whole and reported as an unsupported property — which is the right
+// answer for a value nothing downstream can act on, and the same answer the
+// property got as a whole until small capitals were implemented.
 //
 // # Why it is a shorthand at all rather than a keyword this reads
 //
@@ -1029,15 +1029,15 @@ func fontVariantShorthand(vals []css.ComponentValue) (map[string][]css.Component
 	}
 	// "normal" and "none" are the two values that may only be written alone, so
 	// they are taken before the loop. Anything else with one part goes through
-	// it like the rest — a lone "oldstyle-nums" is a value of a longhand this
-	// engine has not got and has to be reported as one, and a lone "styleset()"
-	// is not an ident at all.
+	// it like the rest — a lone "sub" is a value of a longhand this engine has
+	// not got and has to be reported as one, and a lone "styleset()" is not an
+	// ident at all.
 	if name, ok := singleIdent(vals); ok {
 		switch name {
 		case "normal":
-			return fontVariantLonghands(ident("normal"), ident("normal")), nil, true
+			return fontVariantLonghands(ident("normal"), ident("normal"), ident("normal")), nil, true
 		case "none":
-			return fontVariantLonghands(ident("none"), ident("normal")), nil, true
+			return fontVariantLonghands(ident("none"), ident("normal"), ident("normal")), nil, true
 		}
 	}
 
@@ -1045,6 +1045,8 @@ func fontVariantShorthand(vals []css.ComponentValue) (map[string][]css.Component
 		caps        []css.ComponentValue
 		ligWords    [][]css.ComponentValue
 		seenLig     = map[string]bool{}
+		numWords    [][]css.ComponentValue
+		seenNum     = map[string]bool{}
 		unsupported []string
 	)
 	for _, part := range parts {
@@ -1085,6 +1087,17 @@ func fontVariantShorthand(vals []css.ComponentValue) (map[string][]css.Component
 			}
 			seenLig[group] = true
 			ligWords = append(ligWords, part)
+		case numericKeywordGroup[name] != "":
+			// §6.7's three pairs and two lone keywords, by the same rule: each
+			// group may be written once. "ordinal" and "slashed-zero" are
+			// groups of one, which is what makes "ordinal ordinal" invalid the
+			// same way "lining-nums oldstyle-nums" is.
+			group := numericKeywordGroup[name]
+			if seenNum[group] {
+				return nil, nil, false
+			}
+			seenNum[group] = true
+			numWords = append(numWords, part)
 		default:
 			return nil, nil, false
 		}
@@ -1098,16 +1111,19 @@ func fontVariantShorthand(vals []css.ComponentValue) (map[string][]css.Component
 	if len(unsupported) > 0 {
 		return nil, unsupported, false
 	}
-	lig := ident("normal")
+	lig, numeric := ident("normal"), ident("normal")
 	if len(ligWords) > 0 {
 		// Kept in the order they were written, which is the order
 		// font-variant-ligatures' own grammar puts them in.
 		lig = joinParts(ligWords...)
 	}
+	if len(numWords) > 0 {
+		numeric = joinParts(numWords...)
+	}
 	if caps == nil {
 		caps = ident("normal")
 	}
-	return fontVariantLonghands(lig, caps), nil, true
+	return fontVariantLonghands(lig, caps, numeric), nil, true
 }
 
 // variantFunction reads one of font-variant-alternates' functional notations.
@@ -1124,10 +1140,9 @@ func variantFunction(part []css.ComponentValue) (string, bool) {
 	return "", false
 }
 
-// fontVariantOtherKeywords is every ident value of the five longhands
-// "font-variant" controls that this engine does not have: the numeric figures,
-// the east-asian forms, the sub- and superscript positions, and
-// font-variant-alternates' one keyword.
+// fontVariantOtherKeywords is every ident value of the four longhands
+// "font-variant" controls that this engine does not have: the east-asian forms,
+// the sub- and superscript positions, and font-variant-alternates' one keyword.
 //
 // It is written out rather than left to the default branch because the two
 // answers differ. A value in this list is correct CSS the engine cannot produce
@@ -1135,11 +1150,6 @@ func variantFunction(part []css.ComponentValue) (string, bool) {
 // a value outside it is a declaration the author got wrong, which is a different
 // report and not that one.
 var fontVariantOtherKeywords = map[string]bool{
-	// font-variant-numeric §6.7.
-	"lining-nums": true, "oldstyle-nums": true,
-	"proportional-nums": true, "tabular-nums": true,
-	"diagonal-fractions": true, "stacked-fractions": true,
-	"ordinal": true, "slashed-zero": true,
 	// font-variant-alternates §6.8. The rest of it is functional notations,
 	// which variantFunction reads.
 	"historical-forms": true,
@@ -1151,13 +1161,29 @@ var fontVariantOtherKeywords = map[string]bool{
 	"sub": true, "super": true,
 }
 
-// fontVariantLonghands is the pair the shorthand always sets, written once so
+// fontVariantLonghands is the set the shorthand always sets, written once so
 // that the reset cannot be forgotten on one of the branches above.
-func fontVariantLonghands(lig, caps []css.ComponentValue) map[string][]css.ComponentValue {
+func fontVariantLonghands(lig, caps, numeric []css.ComponentValue) map[string][]css.ComponentValue {
 	return map[string][]css.ComponentValue{
 		"font-variant-ligatures": lig,
 		"font-variant-caps":      caps,
+		"font-variant-numeric":   numeric,
 	}
+}
+
+// numericKeywordGroup maps §6.7's eight keywords to the group each belongs to,
+// so that the shorthand can refuse a group written twice.
+//
+// Five groups: three pairs and two keywords that stand alone. The lone two are
+// groups of their own rather than ungrouped, which is what makes "ordinal
+// ordinal" invalid by the same rule that refuses "lining-nums oldstyle-nums" —
+// §6.7's grammar is a "||" of five terms, and a term may appear once.
+var numericKeywordGroup = map[string]string{
+	"lining-nums": "figure", "oldstyle-nums": "figure",
+	"proportional-nums": "spacing", "tabular-nums": "spacing",
+	"diagonal-fractions": "fraction", "stacked-fractions": "fraction",
+	"ordinal":      "ordinal",
+	"slashed-zero": "slashed-zero",
 }
 
 // fontVariantCapsKeywords is CSS Fonts 4 §6.6's closed set.

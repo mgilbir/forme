@@ -730,6 +730,10 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		// the rewritten run below has no lowercase letter left in it. See
 		// reportCaps.
 		l.reportCaps(b, run.Face, run.Text)
+		// And the figures, which is the same question about the same runs and
+		// has no synthesis behind it: a face that draws no oldstyle digits sets
+		// the ones it has. See reportNumeric.
+		l.reportNumeric(b, run.Face, run.Text)
 	}
 	// And the glyphs, asked of the text that will be *drawn* — which for a run
 	// whose small capitals were synthesised is the uppercase of what the

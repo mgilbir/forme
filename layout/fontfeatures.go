@@ -69,6 +69,7 @@ func (l *layouter) featuresFor(b *Box) shape.Features {
 	// and it is asked once per face run by reportCaps, which is where the
 	// answer can be reported.
 	out.Caps, _ = capsOf(b.Style["font-variant-caps"])
+	out.Numeric, _ = numericOf(b.Style["font-variant-numeric"])
 	return out
 }
 
@@ -197,4 +198,72 @@ func capsOf(raw string) (shape.Caps, string) {
 		return shape.CapsTitling, ""
 	}
 	return shape.CapsNormal, value
+}
+
+// numericOf reads CSS Fonts 4 §6.7's font-variant-numeric.
+//
+// Eight keywords in five independent groups — the figures, their spacing, the
+// fraction, the ordinal and the slashed zero — and a value is any combination
+// with at most one from each. So the answer is a set and not a value, and it is
+// shape's own set rather than one of this package's: every keyword is a request
+// for a feature the face declares, which is the whole of what the property does,
+// and there is nothing for a second enumeration to say. See shape.Numeric.
+//
+// The second result is the first word that is not one of the eight, which
+// reportNumeric names. A word that *is* one of the eight and repeats a group is
+// the other kind of mistake — "lining-nums oldstyle-nums" asks for both sets of
+// figures at once — and is reported the same way, because the two are equally
+// declarations this engine cannot act on and neither is more the author's fault
+// than the other.
+func numericOf(raw string) (shape.Numeric, string) {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	if value == "" || value == "normal" {
+		return 0, ""
+	}
+	var (
+		out  shape.Numeric
+		seen = map[shape.Numeric]bool{}
+	)
+	for _, word := range strings.Fields(value) {
+		bit, group, ok := numericKeyword(word)
+		if !ok || seen[group] {
+			return 0, word
+		}
+		seen[group] = true
+		out |= bit
+	}
+	return out, ""
+}
+
+// numericKeyword reads one of §6.7's keywords: which feature it asks for, and
+// which of the five groups it belongs to.
+//
+// The group is returned as the *pair* of bits rather than as a name, because
+// that is what it is used for — a value may name one member of a group and the
+// check is whether the group has been named already.
+func numericKeyword(word string) (bit, group shape.Numeric, ok bool) {
+	const (
+		figures  = shape.NumericLining | shape.NumericOldstyle
+		spacing  = shape.NumericProportional | shape.NumericTabular
+		fraction = shape.NumericDiagonalFractions | shape.NumericStackedFractions
+	)
+	switch word {
+	case "lining-nums":
+		return shape.NumericLining, figures, true
+	case "oldstyle-nums":
+		return shape.NumericOldstyle, figures, true
+	case "proportional-nums":
+		return shape.NumericProportional, spacing, true
+	case "tabular-nums":
+		return shape.NumericTabular, spacing, true
+	case "diagonal-fractions":
+		return shape.NumericDiagonalFractions, fraction, true
+	case "stacked-fractions":
+		return shape.NumericStackedFractions, fraction, true
+	case "ordinal":
+		return shape.NumericOrdinal, shape.NumericOrdinal, true
+	case "slashed-zero":
+		return shape.NumericSlashedZero, shape.NumericSlashedZero, true
+	}
+	return 0, 0, false
 }
