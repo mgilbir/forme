@@ -378,16 +378,18 @@ func (l *layouter) reportKerning(b *Box, face *shape.Face) {
 	}
 }
 
-// reportSmallCaps names a request for capitals the face cannot supply.
+// reportCaps names a request for capitals the face cannot supply.
 //
-// "font-variant-caps: small-caps" is applied by asking the face for the 'smcp'
-// it declares, and a face that declares none sets the text in ordinary letters
-// at ordinary size. That is a page the document did not ask for and nothing
-// about it looks wrong, which is exactly the shape of failure §6.3's findings
-// exist for — a paragraph the author expects in small capitals comes out in
-// lowercase and reads perfectly well.
+// Every value of CSS Fonts 4 §6.6's font-variant-caps is a request for features
+// the face declares — 'smcp' for small capitals, 'c2sc' beside it for the
+// capitals too, 'pcap' and 'c2pc' for petite ones, 'unic', 'titl' — and a face
+// that declares none of them sets the text in the letters it is written with, at
+// the size it is written at. That is a page the document did not ask for and
+// nothing about it looks wrong, which is exactly the shape of failure §6.3's
+// findings exist for: a paragraph the author expects in small capitals comes out
+// in lowercase and reads perfectly well.
 //
-// This engine does not synthesise them. A synthesised small capital is the
+// This engine synthesises none of them. A synthesised small capital is the
 // uppercase letter drawn at a fraction of the size, which every browser does and
 // none of them the same way, and doing it here means the run is no longer one
 // run: the letters it changes are set at a different size from the ones it does
@@ -402,67 +404,145 @@ func (l *layouter) reportKerning(b *Box, face *shape.Face) {
 // neither. The runs are the ones the items are built from, so what is checked is
 // what is drawn.
 //
-// And only when the run has something to change. Small capitals replace
-// lowercase letters; a run of digits, of capitals, or of Han is set identically
-// with the feature and without it, so a finding about it would be this engine
-// calling a correct page a failure — the same narrowing reportKerning makes for
-// a "kern" a face has not got.
-func (l *layouter) reportSmallCaps(b *Box, face *shape.Face, text string) {
+// # Per tag, and only where the tag has something to act on
+//
+// A value asking for two features may get one of them. Noto Sans declares both
+// 'smcp' and 'c2sc', and a face with only the first carries out half of
+// "all-small-caps": the lowercase letters become small capitals and the capitals
+// stay full height, which is "small-caps" and not what was asked for. Naming the
+// tag that is missing is the difference between an author knowing which half of
+// their line is wrong and knowing only that something is.
+//
+// And a tag is only reported where the text has a letter it could act on. 'smcp'
+// replaces lowercase letters and 'c2sc' capitals, so a run of digits, of Han, or
+// of one case where the missing tag wants the other is set identically with the
+// feature and without it — and a finding about it would be this engine calling a
+// correct page a failure. It is the same narrowing reportKerning makes for a
+// "kern" a face has not got.
+func (l *layouter) reportCaps(b *Box, face *shape.Face, text string) {
 	want, unhandled := capsOf(b.Style["font-variant-caps"])
 	if unhandled != "" {
+		// All six of §6.6 are read, so a value outside them is either a mistake
+		// the author made or a value from a level this engine has not read —
+		// and nothing here can tell the two apart. It is reported as the second,
+		// which is the way every other reader in this file answers a value it
+		// cannot act on, and the direction to err in: an author whose typo is
+		// called a missing feature looks at their stylesheet and finds it, and
+		// an author whose new value is called a typo is told the opposite of
+		// what is true.
 		l.reportOnce("font-variant-caps:"+unhandled, Finding{
 			Rule:     RuleUnsupportedValue,
 			Property: "font-variant-caps",
-			Message: quoteValue(unhandled) + " in font-variant-caps was not " +
-				"applied; this engine sets small capitals and no other case " +
-				"variant, and the text was set as it is written",
+			Message: quoteValue(unhandled) + " is not a value of font-variant-caps " +
+				"this engine reads; the text was set in the letters it is " +
+				"written with",
 			Path: PathOf(boxElement(b)),
 		})
 		return
 	}
-	if want != capsSmall || face == nil || !hasLowercase(text) || faceHasSmallCaps(face) {
+	if face == nil {
 		return
 	}
-	l.reportOnce("font-variant-caps:no-smcp:"+face.Name(), Finding{
+	missing := missingCapsFeatures(want, face, text)
+	if len(missing) == 0 {
+		return
+	}
+	value := strings.ToLower(strings.TrimSpace(b.Style["font-variant-caps"]))
+	// "that part of the text" where the face carried out some of the request: a
+	// face with 'smcp' and no 'c2sc' asked for "all-small-caps" lowers the
+	// lowercase letters and leaves the capitals full height, which is a line in
+	// two heights of letter rather than a line in the wrong ones.
+	came := "the text was set in the letters it is written with"
+	if len(missing) < len(want.Features()) {
+		came = "that part of the text was set in the letters it is written with"
+	}
+	// Keyed on the value as well as the face and the tags: two declarations can
+	// fall short in the same tag — "small-caps" and "all-small-caps" over
+	// lowercase text both come down to a missing 'smcp' — and an author who
+	// wrote both wants to hear about both, since the message names the value
+	// they wrote.
+	l.reportOnce("font-variant-caps:"+value+":"+strings.Join(missing, ",")+":"+face.Name(), Finding{
 		Rule:     RuleUnsupportedValue,
 		Property: "font-variant-caps",
-		Message: "small capitals were asked for and " + quoteValue(face.Name()) +
-			" declares none; the text was set in ordinary letters, because this " +
-			"engine uses the capitals a face draws and does not make them out of " +
-			"the uppercase letters at a smaller size",
+		Message: "font-variant-caps " + quoteValue(value) + " asks a face for " +
+			strings.Join(want.Features(), " and ") + "; " + quoteValue(face.Name()) +
+			" declares no " + strings.Join(missing, " or ") + ", so " + came +
+			", because this engine uses the capitals a face draws and does not " +
+			"make them out of the letters at a smaller size",
 		Path: PathOf(boxElement(b)),
 	})
 }
 
-// faceHasSmallCaps asks the face whether the request can be carried out.
+// missingCapsFeatures is the tags a value needs that this face has not got and
+// this text would have shown.
+func missingCapsFeatures(want shape.Caps, face *shape.Face, text string) []string {
+	wanted := want.Features()
+	if len(wanted) == 0 {
+		return nil
+	}
+	lower, upper := hasCase(text)
+	var missing []string
+	for _, tag := range wanted {
+		if !capsTagWouldShow(tag, lower, upper) || faceDeclares(face, tag) {
+			continue
+		}
+		missing = append(missing, tag)
+	}
+	return missing
+}
+
+// capsTagWouldShow reports whether a tag has a letter in this text to act on.
 //
-// It is the 'smcp' feature and not a table lookup, because a face may offer it
+// The three answers are the three kinds of rule §6.6 names: one that replaces
+// lowercase letters ('smcp', 'pcap'), one that replaces capitals ('c2sc',
+// 'c2pc', and 'titl', which cuts the capitals differently), and 'unic', which
+// puts both cases at one height and so acts on either.
+func capsTagWouldShow(tag string, lower, upper bool) bool {
+	switch tag {
+	case "smcp", "pcap":
+		return lower
+	case "c2sc", "c2pc", "titl":
+		return upper
+	case "unic":
+		return lower || upper
+	}
+	return false
+}
+
+// faceDeclares reports whether a face offers a feature.
+//
+// It is Features() and not a table lookup, because a face may offer a feature
 // through a ligature or a contextual rule as well as a plain one-for-one
 // substitution — see shape's TestAFeatureOfferedThroughALigatureIsListed, which
 // is that case stated as a font.
-func faceHasSmallCaps(face *shape.Face) bool {
-	for _, tag := range face.Features() {
-		if tag == "smcp" {
+func faceDeclares(face *shape.Face, tag string) bool {
+	for _, got := range face.Features() {
+		if got == tag {
 			return true
 		}
 	}
 	return false
 }
 
-// hasLowercase reports whether small capitals would change anything about the
-// text.
+// hasCase reports which cases the text has letters in.
 //
-// A letter with an uppercase form of its own is what 'smcp' covers, so that is
-// the question — not unicode.IsLower, which is true of characters no face maps
-// anywhere, and not "is a letter", which is true of the scripts that have one
-// case only.
-func hasLowercase(text string) bool {
+// A letter with a form of the other case is what these features cover, so that
+// is the question — not unicode.IsLower and IsUpper, which are true of
+// characters no face maps anywhere, and not "is a letter", which is true of the
+// scripts that have one case only.
+func hasCase(text string) (lower, upper bool) {
 	for _, r := range text {
 		if unicode.ToUpper(r) != r {
-			return true
+			lower = true
+		}
+		if unicode.ToLower(r) != r {
+			upper = true
+		}
+		if lower && upper {
+			break
 		}
 	}
-	return false
+	return lower, upper
 }
 
 // inertFontFeatures reports whether a font-feature-settings value asks for the

@@ -15,12 +15,13 @@ import (
 // whether it has a feature: a face that declares no ligatures is unaffected by a
 // rule that turns ligatures off, so the question never has to be asked.
 //
-// "font-variant-caps: small-caps" is the exception in both halves of that.
-// It *adds* a rule — 'smcp', the capitals a designer drew at lowercase height —
-// and it is the one request a face can fail to carry out, because a face that
-// does not declare the feature sets the text in ordinary letters. The question
-// is still not asked here; it is asked once per box, beside the report that
-// depends on it. See reportSmallCaps in textchecks.go.
+// "font-variant-caps" is the exception in both halves of that. It *adds* rules —
+// 'smcp', the capitals a designer drew at lowercase height, and the five other
+// ways §6.6 has of setting a run in capitals — and it is the one request a face
+// can fail to carry out, because a face that does not declare the feature sets
+// the text in ordinary letters. The question is still not asked here; it is
+// asked once per face run, beside the report that depends on it. See reportCaps
+// in textchecks.go.
 //
 // # Why the two properties are not one flag
 //
@@ -61,14 +62,13 @@ func (l *layouter) featuresFor(b *Box) shape.Features {
 	if l.spacingSuppressesLigatures(b) {
 		out.NoOptionalLigatures = true
 	}
-	// And the one that goes the other way: a rule the face states and no run
-	// gets unless it is asked for. Whether the face *has* it is not asked here
-	// — a run set in a face without small capitals comes out in ordinary
+	// And the one that goes the other way: rules the face states and no run
+	// gets unless it is asked for. Whether the face *has* them is not asked
+	// here — a run set in a face without small capitals comes out in ordinary
 	// letters at the same width, which is the shaping layer's own contract —
-	// and it is asked once per box by reportSmallCaps, which is where the
+	// and it is asked once per face run by reportCaps, which is where the
 	// answer can be reported.
-	caps, _ := capsOf(b.Style["font-variant-caps"])
-	out.SmallCaps = caps == capsSmall
+	out.Caps, _ = capsOf(b.Style["font-variant-caps"])
 	return out
 }
 
@@ -166,45 +166,35 @@ func noKerning(b *Box) bool {
 	return strings.EqualFold(strings.TrimSpace(b.Style["font-kerning"]), "none")
 }
 
-// The values of font-variant-caps this engine reads.
+// capsOf reads CSS Fonts 4 §6.6's font-variant-caps.
 //
-// CSS Fonts 4 §6.6 names six ways of setting a run in capitals and this engine
-// produces one of them: "small-caps", by asking the face for the 'smcp' it
-// declares. The other five are read, cascaded and reported.
+// All six of its values are a request for features the face declares, so all
+// six are read and the answer is shape's own enumeration rather than one of this
+// package's: there is nothing for a second enumeration to say. What each value
+// asks a face for is Caps.Features, and it is stated there rather than here
+// because the shaper and the report have to agree about it.
 //
-// They are not variations on one idea, which is why the enumeration is not a
-// bool with a report beside it:
-//
-//   - "small-caps" replaces the *lowercase* letters with the capitals a
-//     designer drew at their height, and leaves the capitals alone. It is
-//     'smcp'.
-//   - "all-small-caps" does that and turns the capitals into small capitals
-//     too, which is 'smcp' and 'c2sc' together — a second feature, and one Noto
-//     Sans has, so this is a value the engine could set and does not yet.
-//   - "petite-caps" and "all-petite-caps" are the same pair again for a second,
-//     shorter set of capitals ('pcap' and 'c2pc'), which few faces draw.
-//   - "unicase" mixes the two cases at one height ('unic'), and "titling-caps"
-//     asks for capitals cut for a line that is all capitals ('titl'). Neither
-//     replaces a letter with a letter of the other case.
-//
-// A face with none of them sets the text plainly, which is a page the document
-// did not ask for and is what reportSmallCaps says.
-type caps uint8
-
-const (
-	capsNormal caps = iota
-	capsSmall
-)
-
-// capsOf reads the property. The second result is the value when it is one this
-// engine does not set, which reportSmallCaps names.
-func capsOf(raw string) (caps, string) {
+// The second result is the value where it is not one of the six, which reportCaps
+// names. A face that declares none of what a value asks for is a different
+// answer and a different report: the property was read and the page still came
+// out as it is written. See reportCaps.
+func capsOf(raw string) (shape.Caps, string) {
 	value := strings.ToLower(strings.TrimSpace(raw))
 	switch value {
 	case "", "normal":
-		return capsNormal, ""
+		return shape.CapsNormal, ""
 	case "small-caps":
-		return capsSmall, ""
+		return shape.CapsSmall, ""
+	case "all-small-caps":
+		return shape.CapsAllSmall, ""
+	case "petite-caps":
+		return shape.CapsPetite, ""
+	case "all-petite-caps":
+		return shape.CapsAllPetite, ""
+	case "unicase":
+		return shape.CapsUnicase, ""
+	case "titling-caps":
+		return shape.CapsTitling, ""
 	}
-	return capsNormal, value
+	return shape.CapsNormal, value
 }

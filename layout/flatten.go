@@ -717,10 +717,10 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	runsOfBox := l.faceRunsFor(b, face, b.Text)
 	for _, run := range runsOfBox {
 		l.checkGlyphs(b, run.Face, run.Text)
-		// And whether the face that will set this run has the small capitals
-		// the document asked for, which is the same question about the same
-		// runs. See reportSmallCaps.
-		l.reportSmallCaps(b, run.Face, run.Text)
+		// And whether the face that will set this run has the capitals the
+		// document asked for, which is the same question about the same runs.
+		// See reportCaps.
+		l.reportCaps(b, run.Face, run.Text)
 	}
 	l.noteSubstitution(b, face, runsOfBox)
 

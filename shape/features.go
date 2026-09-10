@@ -27,21 +27,22 @@ package shape
 //
 // # The one that goes the other way
 //
-// "font-variant-caps: small-caps" asks for a rule the font states and no run
-// gets by default: 'smcp', the small capitals a designer drew for the lowercase
-// letters. It is here rather than in ShapeGlyphsWith's caller-named list
-// because it is the same kind of fact as the other three — something about the
-// run that its own text does not say, decided by a declaration — and because
-// it has to travel the whole way to the backend that draws the run. Everything
-// between layout and the pen already carries a Features, and nothing carries a
-// list of tags.
+// "font-variant-caps" asks for rules the font states and no run gets by
+// default: 'smcp', the small capitals a designer drew for the lowercase
+// letters, and the five other ways §6.6 has of setting a run in capitals. It is
+// here rather than in ShapeGlyphsWith's caller-named list because it is the
+// same kind of fact as the other three — something about the run that its own
+// text does not say, decided by a declaration — and because it has to travel
+// the whole way to the backend that draws the run. Everything between layout
+// and the pen already carries a Features, and nothing carries a list of tags.
 //
 // It is *not* the same in the one way that matters to a report: turning a rule
 // off is right whether or not the face has it, and turning one on is only
 // possible when it does. A face with no small capitals sets the text in
 // ordinary letters, which is a page the document did not ask for. Nothing here
 // says so — this is the shaping layer, and the run still comes out — but the
-// caller can ask Features() before it draws and say so itself.
+// caller can compare Caps.Features against Face.Features before it draws and
+// say so itself.
 
 // Features is what a caller has turned off in a font's own rules, and the one
 // it has turned on.
@@ -63,33 +64,96 @@ type Features struct {
 	// NoKerning suppresses the pair adjustments of the "kern" feature and of
 	// GPOS pair positioning, including the pair that spans a run boundary.
 	NoKerning bool
-	// SmallCaps applies "smcp": the capitals a designer drew at lowercase size,
-	// which a font states and no run is given unless it asks.
+	// Caps is the capitals a run is set in: the one request here that asks a
+	// face for a rule rather than taking one away.
 	//
-	// A face that does not declare it is unaffected, and the run is set in
-	// ordinary letters. See Face.Features for the question to ask first.
-	SmallCaps bool
+	// A face that declares none of the value's features is unaffected, and the
+	// run is set in the letters it is written with. See Caps.Features for what
+	// each value asks for, and Face.Features for the question to ask first.
+	Caps Caps
 }
+
+// Caps is CSS Fonts 4 §6.6's font-variant-caps, as a set of features to ask a
+// face for.
+//
+// All six values are exactly that — a tag or a pair of tags the font states and
+// no run is given unless it asks — which is why the property is one field here
+// and not six. What separates them is which letters they act on and what they
+// turn those letters into, and the font knows both; nothing in this package has
+// to.
+type Caps uint8
+
+const (
+	// CapsNormal is the letters the text is written with.
+	CapsNormal Caps = iota
+	// CapsSmall is "small-caps": the capitals a designer drew at lowercase
+	// height, put in place of the lowercase letters. The capitals are left
+	// alone, which is the whole difference between this and CapsAllSmall.
+	CapsSmall
+	// CapsAllSmall is "all-small-caps": the same, and the capitals lowered to
+	// match, so that a line has one height of letter throughout.
+	CapsAllSmall
+	// CapsPetite and CapsAllPetite are the same pair for a second, shorter set
+	// of capitals — petite capitals are cut to x-height where small capitals
+	// stand a little above it. Few faces draw them.
+	CapsPetite
+	CapsAllPetite
+	// CapsUnicase mixes the two cases at one height: the capitals kept and the
+	// lowercase letters left as they are, with the face's own single-height
+	// forms for both.
+	CapsUnicase
+	// CapsTitling is capitals cut for a line that is all capitals — lighter,
+	// and spaced for a title rather than for a word inside a sentence. It
+	// replaces no letter with a letter of the other case.
+	CapsTitling
+)
+
+// Features are the tags a value asks a face for, in the order they are applied.
+//
+// The order inside a pair does not decide anything: 'c2sc' covers the capitals
+// and 'smcp' the lowercase letters, which are disjoint sets, so neither can see
+// what the other did. It is §6.6's order because that is the order the property
+// is defined in and there is no reason to write a different one.
+func (c Caps) Features() []string {
+	switch c {
+	case CapsSmall:
+		return capsSmall
+	case CapsAllSmall:
+		return capsAllSmall
+	case CapsPetite:
+		return capsPetite
+	case CapsAllPetite:
+		return capsAllPetite
+	case CapsUnicase:
+		return capsUnicase
+	case CapsTitling:
+		return capsTitling
+	}
+	return nil
+}
+
+// The tag lists, declared once so that a caller asking what a value needs and
+// the shaper applying it cannot answer differently.
+//
+// Where they are applied is the part worth stating. They go after 'ccmp' and
+// 'locl' and *before* the ligatures, which is the order HarfBuzz produces and is
+// not the order a caller-named feature gets: "office" set in Noto Sans with
+// small capitals is six small capitals and no ffi ligature, because the ligature
+// is stated over the lowercase glyphs and by the time 'liga' is reached there
+// are none left. Applying them last instead leaves the ffi ligature standing in
+// the middle of a line of capitals — three letters that did not get the rule the
+// other three did.
+var (
+	capsSmall     = []string{"smcp"}
+	capsAllSmall  = []string{"c2sc", "smcp"}
+	capsPetite    = []string{"pcap"}
+	capsAllPetite = []string{"c2pc", "pcap"}
+	capsUnicase   = []string{"unic"}
+	capsTitling   = []string{"titl"}
+)
 
 // adds returns the tags this set turns on, in the order they are applied.
-func (f Features) adds() []string {
-	if !f.SmallCaps {
-		return nil
-	}
-	return smallCapsFeatures
-}
-
-// The features "font-variant-caps: small-caps" asks a face for.
-//
-// One tag, and where it is applied is the part worth stating. It goes after
-// 'ccmp' and 'locl' and *before* the ligatures, which is the order HarfBuzz
-// produces and is not the order a caller-named feature gets: "office" set in
-// Noto Sans with small capitals is six small capitals and no ffi ligature,
-// because the ligature is stated over the lowercase glyphs and by the time
-// 'liga' is reached there are none left. Applying it last instead leaves the
-// ffi ligature standing in the middle of a line of capitals — three letters
-// that did not get the rule the other three did.
-var smallCapsFeatures = []string{"smcp"}
+func (f Features) adds() []string { return f.Caps.Features() }
 
 // suppresses reports whether a feature tag is one this set turns off.
 func (f Features) suppresses(tag string) bool {

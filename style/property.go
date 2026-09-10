@@ -249,12 +249,13 @@ var properties = map[string]property{
 	// CSS Fonts 4 §6.6. It inherits like the rest of the family, and its
 	// initial value is "normal" — the letters the text is written with.
 	//
-	// "small-caps" is applied by asking the face for the 'smcp' it declares,
-	// which is the only way this engine can produce small capitals: it does not
-	// synthesise them out of the capitals at a smaller size, so a face without
-	// the feature sets the text in ordinary letters and layout says so. The
-	// other five values are read and reported for the same reason and in the
-	// same place. See layout/fontfeatures.go.
+	// All six of its values are applied, and all six the same way: each names
+	// features the face declares — 'smcp' for small capitals, 'c2sc' beside it
+	// for the capitals too, 'pcap' and 'c2pc' for petite ones, 'unic', 'titl' —
+	// and the shaper asks for them. That is the only way this engine produces
+	// any of them: it synthesises none, so a face that declares none of what a
+	// value needs sets the text in the letters it is written with, and layout
+	// says so. See layout/fontfeatures.go.
 	"font-variant-caps": {true, "normal"},
 	// text-autospace inherits, which is what lets a document turn it off once
 	// on the body. Its initial value is "normal", and "normal" asks for the

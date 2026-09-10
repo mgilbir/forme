@@ -1162,10 +1162,10 @@ func fontVariantLonghands(lig, caps []css.ComponentValue) map[string][]css.Compo
 
 // fontVariantCapsKeywords is CSS Fonts 4 §6.6's closed set.
 //
-// All six are accepted here and only "small-caps" is applied; the rest are read,
-// cascaded and reported by layout, which is where the question can be asked
-// properly — whether a page came out wrong depends on the face that set it. See
-// layout/fontfeatures.go.
+// All six are accepted here and all six are applied, by asking the face for the
+// features each of them names. Whether that produced the page the document asked
+// for is a question about the face rather than about the declaration, so it is
+// asked in layout and not here. See layout/fontfeatures.go.
 var fontVariantCapsKeywords = map[string]bool{
 	"small-caps": true, "all-small-caps": true, "petite-caps": true,
 	"all-petite-caps": true, "unicase": true, "titling-caps": true,
