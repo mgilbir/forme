@@ -2,6 +2,7 @@ package layout
 
 import (
 	"strings"
+	"unicode"
 
 	"github.com/mgilbir/forme/html"
 	"github.com/mgilbir/forme/paragraph"
@@ -375,6 +376,93 @@ func (l *layouter) reportKerning(b *Box, face *shape.Face) {
 			Path: PathOf(boxElement(b)),
 		})
 	}
+}
+
+// reportSmallCaps names a request for capitals the face cannot supply.
+//
+// "font-variant-caps: small-caps" is applied by asking the face for the 'smcp'
+// it declares, and a face that declares none sets the text in ordinary letters
+// at ordinary size. That is a page the document did not ask for and nothing
+// about it looks wrong, which is exactly the shape of failure §6.3's findings
+// exist for — a paragraph the author expects in small capitals comes out in
+// lowercase and reads perfectly well.
+//
+// This engine does not synthesise them. A synthesised small capital is the
+// uppercase letter drawn at a fraction of the size, which every browser does and
+// none of them the same way, and doing it here means the run is no longer one
+// run: the letters it changes are set at a different size from the ones it does
+// not, so the item has to be cut, measured and drawn in pieces. Until that is
+// built the honest answer is the report.
+//
+// # What it is asked about, and why not once per box
+//
+// Per face run, like checkGlyphs and for the same reason: the box's own face may
+// have no small capitals while the fallback face that actually set a word does,
+// or the other way round, and a report keyed on the box would be right about
+// neither. The runs are the ones the items are built from, so what is checked is
+// what is drawn.
+//
+// And only when the run has something to change. Small capitals replace
+// lowercase letters; a run of digits, of capitals, or of Han is set identically
+// with the feature and without it, so a finding about it would be this engine
+// calling a correct page a failure — the same narrowing reportKerning makes for
+// a "kern" a face has not got.
+func (l *layouter) reportSmallCaps(b *Box, face *shape.Face, text string) {
+	want, unhandled := capsOf(b.Style["font-variant-caps"])
+	if unhandled != "" {
+		l.reportOnce("font-variant-caps:"+unhandled, Finding{
+			Rule:     RuleUnsupportedValue,
+			Property: "font-variant-caps",
+			Message: quoteValue(unhandled) + " in font-variant-caps was not " +
+				"applied; this engine sets small capitals and no other case " +
+				"variant, and the text was set as it is written",
+			Path: PathOf(boxElement(b)),
+		})
+		return
+	}
+	if want != capsSmall || face == nil || !hasLowercase(text) || faceHasSmallCaps(face) {
+		return
+	}
+	l.reportOnce("font-variant-caps:no-smcp:"+face.Name(), Finding{
+		Rule:     RuleUnsupportedValue,
+		Property: "font-variant-caps",
+		Message: "small capitals were asked for and " + quoteValue(face.Name()) +
+			" declares none; the text was set in ordinary letters, because this " +
+			"engine uses the capitals a face draws and does not make them out of " +
+			"the uppercase letters at a smaller size",
+		Path: PathOf(boxElement(b)),
+	})
+}
+
+// faceHasSmallCaps asks the face whether the request can be carried out.
+//
+// It is the 'smcp' feature and not a table lookup, because a face may offer it
+// through a ligature or a contextual rule as well as a plain one-for-one
+// substitution — see shape's TestAFeatureOfferedThroughALigatureIsListed, which
+// is that case stated as a font.
+func faceHasSmallCaps(face *shape.Face) bool {
+	for _, tag := range face.Features() {
+		if tag == "smcp" {
+			return true
+		}
+	}
+	return false
+}
+
+// hasLowercase reports whether small capitals would change anything about the
+// text.
+//
+// A letter with an uppercase form of its own is what 'smcp' covers, so that is
+// the question — not unicode.IsLower, which is true of characters no face maps
+// anywhere, and not "is a letter", which is true of the scripts that have one
+// case only.
+func hasLowercase(text string) bool {
+	for _, r := range text {
+		if unicode.ToUpper(r) != r {
+			return true
+		}
+	}
+	return false
 }
 
 // inertFontFeatures reports whether a font-feature-settings value asks for the

@@ -797,6 +797,18 @@ type lineSplit struct {
 // approximation, because a single cluster's width is what it is. What is lost is
 // kerning between two clusters, and there is none: they are never adjacent on a
 // line this width.
+//
+// # The features the item carries reach it
+//
+// This was the one measurement of an item's own text that took none of them.
+// Nothing ever showed it, because the three flags a document turns *off* are
+// inert over a single cluster: one cluster cannot ligate with itself and has no
+// pair to kern, so the answer was the same either way.
+//
+// "font-variant-caps: small-caps" is not inert. A small capital is not the
+// letter it replaces and is not its width, so a box narrowed to the widest
+// character of a small-caps run was narrowed to the width of a character it
+// will not set, and the text it was sized to hold overflowed it.
 func (l *layouter) widestCluster(item inlineItem) style.Unit {
 	if item.Face == nil || item.Text == "" {
 		return item.Width
@@ -804,7 +816,8 @@ func (l *layouter) widestCluster(item inlineItem) style.Unit {
 	var widest style.Unit
 	prev := 0
 	for _, at := range append(segment.Boundaries(nil, item.Text), len(item.Text)) {
-		w := l.br.MeasureSpaced(item.Face, item.Text[prev:at], item.Size, item.Spacing)
+		w := l.br.MeasureSpacedInContext(item.Face, item.Text[prev:at], item.Size,
+			item.Spacing, shaping{ContextKerns: true, Off: item.Off})
 		widest = style.Max(widest, w)
 		prev = at
 	}

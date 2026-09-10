@@ -118,30 +118,98 @@ func TestAPseudoElementThatIsComputedIsNotReported(t *testing.T) {
 	}
 }
 
-// TestSmallCapsInsideTheFontShorthandIsReported is the same gap between a
-// longhand and the shorthand that sets it.
+// TestSmallCapsInsideTheFontShorthandSetsTheLonghand is the gap between a
+// longhand and the shorthand that sets it, closed.
 //
-// "font-variant: small-caps" is reported as unimplemented and the same request
-// written inside "font" was swallowed, so a page whose small capitals came out
-// as ordinary letters carried no claim that anything was missing from it.
-func TestSmallCapsInsideTheFontShorthandIsReported(t *testing.T) {
-	got := findingsOf(t, `<p id="a">x</p>`, `#a { font: small-caps 12px serif }`)
-	found, unsupported := says(got, "small-caps")
-	if !found {
-		t.Fatalf("raised %v, want a finding naming small-caps", got)
+// It used to be a report: neither "font-variant: small-caps" nor the same
+// request written inside "font" set anything, and only the longhand said so —
+// the shorthand swallowed the keyword, so a page whose small capitals came out
+// as ordinary letters carried no claim that anything was missing from it. Both
+// now set font-variant-caps, and whether the page is wrong is a question about
+// the face that sets it, which layout asks. See layout/textchecks.go.
+func TestSmallCapsInsideTheFontShorthandSetsTheLonghand(t *testing.T) {
+	if got := findingsOf(t, `<p id="a">x</p>`, `#a { font: small-caps 12px serif }`); len(got) != 0 {
+		t.Errorf("raised %v; the shorthand sets a property this engine reads "+
+			"and the stylesheet has nothing wrong with it", got)
 	}
-	if !unsupported {
-		t.Error("the finding does not claim the engine is missing anything")
-	}
-	// And the rest of the shorthand still applies, since the variant changes
-	// nothing about what is produced.
 	doc := parseDoc(t, `<p id="a">x</p>`)
 	rules, _ := css.ParseStylesheet(`#a { font: small-caps 12px serif }`)
 	styled := Apply(doc, []Sheet{{Origin: OriginAuthor, Rules: rules}})
 	cs := styled.Styles[elementFor(t, doc, "#a")]
+	if cs["font-variant-caps"] != "small-caps" {
+		t.Errorf("font-variant-caps computed to %q, want small-caps",
+			cs["font-variant-caps"])
+	}
+	// And the rest of the shorthand still applies.
 	if !strings.Contains(cs["font-size"], "12") {
 		t.Errorf("the size computed to %q; the shorthand still sets what it can",
 			cs["font-size"])
+	}
+}
+
+// TestTheFontShorthandResetsSmallCaps is the half of the shorthand rule that is
+// easy to leave out.
+//
+// "font: 12px serif" names no variant, so it sets font-variant-caps back to
+// "normal" — which is what makes the shorthand undo an inherited small-caps
+// rather than quietly keeping it.
+func TestTheFontShorthandResetsSmallCaps(t *testing.T) {
+	doc := parseDoc(t, `<div id="outer"><p id="a">x</p></div>`)
+	rules, _ := css.ParseStylesheet(
+		`#outer { font-variant: small-caps } #a { font: 12px serif }`)
+	styled := Apply(doc, []Sheet{{Origin: OriginAuthor, Rules: rules}})
+	if cs := styled.Styles[elementFor(t, doc, "#outer")]; cs["font-variant-caps"] != "small-caps" {
+		t.Fatalf("the container's font-variant-caps is %q; without it the reset "+
+			"below has nothing to undo", cs["font-variant-caps"])
+	}
+	cs := styled.Styles[elementFor(t, doc, "#a")]
+	if cs["font-variant-caps"] != "normal" {
+		t.Errorf("font-variant-caps is %q inside a small-caps container after "+
+			"\"font: 12px serif\", want normal", cs["font-variant-caps"])
+	}
+}
+
+// TestFontVariantSetsBothLonghandsItControls is the reset in the other
+// direction, which is the whole reason "font-variant" is expanded rather than
+// read as a value.
+//
+// §6.10 makes it a shorthand, so "font-variant: small-caps" on a span inside a
+// paragraph that turned its ligatures off puts them back.
+func TestFontVariantSetsBothLonghandsItControls(t *testing.T) {
+	doc := parseDoc(t, `<p id="outer"><span id="a">x</span></p>`)
+	rules, _ := css.ParseStylesheet(
+		`#outer { font-variant: none } #a { font-variant: small-caps }`)
+	styled := Apply(doc, []Sheet{{Origin: OriginAuthor, Rules: rules}})
+	if cs := styled.Styles[elementFor(t, doc, "#outer")]; cs["font-variant-ligatures"] != "none" {
+		t.Fatalf("\"font-variant: none\" left font-variant-ligatures at %q, "+
+			"want none", cs["font-variant-ligatures"])
+	}
+	cs := styled.Styles[elementFor(t, doc, "#a")]
+	if cs["font-variant-caps"] != "small-caps" {
+		t.Errorf("font-variant-caps is %q, want small-caps", cs["font-variant-caps"])
+	}
+	if cs["font-variant-ligatures"] != "normal" {
+		t.Errorf("font-variant-ligatures is %q inside a container that turned "+
+			"them off, want the normal the shorthand resets it to",
+			cs["font-variant-ligatures"])
+	}
+}
+
+// TestAFontVariantValueThisEngineHasNoLonghandForIsReported is the other five
+// groups the shorthand controls.
+//
+// Only two of the seven longhands are registered, so a value from one of the
+// other five — a numeric figure, an east-asian form — has nothing to be set on.
+// Refusing the declaration whole is what raises the unsupported-property
+// finding, and swallowing it silently is what that finding exists to stop.
+func TestAFontVariantValueThisEngineHasNoLonghandForIsReported(t *testing.T) {
+	got := findingsOf(t, `<p id="a">1</p>`, `#a { font-variant: oldstyle-nums }`)
+	found, unsupported := says(got, "font-variant")
+	if !found {
+		t.Fatalf("raised %v, want a finding naming font-variant", got)
+	}
+	if !unsupported {
+		t.Error("the finding does not claim the engine is missing anything")
 	}
 }
 

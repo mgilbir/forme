@@ -373,6 +373,7 @@ func TestShorthandLonghandsMatchWhatTheExpanderProduces(t *testing.T) {
 		"background":      "red",
 		"list-style":      "square inside",
 		"font":            "12px serif",
+		"font-variant":    "small-caps",
 		"text-decoration": "underline red",
 		"white-space":     "pre-line",
 		"text-wrap":       "balance",

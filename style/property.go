@@ -246,6 +246,16 @@ var properties = map[string]property{
 	// font's own rules, applied as the font states them.
 	"font-variant-ligatures": {true, "normal"},
 	"font-feature-settings":  {true, "normal"},
+	// CSS Fonts 4 §6.6. It inherits like the rest of the family, and its
+	// initial value is "normal" — the letters the text is written with.
+	//
+	// "small-caps" is applied by asking the face for the 'smcp' it declares,
+	// which is the only way this engine can produce small capitals: it does not
+	// synthesise them out of the capitals at a smaller size, so a face without
+	// the feature sets the text in ordinary letters and layout says so. The
+	// other five values are read and reported for the same reason and in the
+	// same place. See layout/fontfeatures.go.
+	"font-variant-caps": {true, "normal"},
 	// text-autospace inherits, which is what lets a document turn it off once
 	// on the body. Its initial value is "normal", and "normal" asks for the
 	// spacing — a page of Japanese with Latin words in it is set wrong without
@@ -604,7 +614,13 @@ var shorthands = map[string]shorthand{
 	"list-style": {listStyleShorthand,
 		[]string{"list-style-type", "list-style-position", "list-style-image"}},
 	"font": {fontShorthand, []string{
-		"font-style", "font-weight", "font-size", "font-family", "line-height"}},
+		"font-style", "font-weight", "font-size", "font-family", "line-height",
+		"font-variant-caps"}},
+
+	// CSS Fonts 4 §6.10, for the two longhands this engine has. See
+	// fontVariantShorthand for why the property is expanded rather than read.
+	"font-variant": {fontVariantShorthand, []string{
+		"font-variant-ligatures", "font-variant-caps"}},
 	"text-decoration": {textDecorationShorthand,
 		[]string{"text-decoration-line", "text-decoration-color",
 			"text-decoration-thickness"}},

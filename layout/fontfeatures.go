@@ -6,14 +6,21 @@ import (
 	"github.com/mgilbir/forme/shape"
 )
 
-// CSS Fonts 4's two properties that turn a font's own rules off, and CSS Text
-// §8.2's rule that does the same thing for a different reason.
+// CSS Fonts 4's properties that turn a font's own rules off, CSS Text §8.2's
+// rule that does the same thing for a different reason, and the one property
+// that turns a rule on.
 //
 // A font states what it wants done to its glyphs and a document may overrule it.
-// That is the whole of what these are: nothing here adds a feature, and nothing
-// here asks a face whether it has one — a face that declares no ligatures is
-// unaffected by a rule that turns ligatures off, so the question never has to be
-// asked.
+// That is the whole of what the first three are, and nothing here asks a face
+// whether it has a feature: a face that declares no ligatures is unaffected by a
+// rule that turns ligatures off, so the question never has to be asked.
+//
+// "font-variant-caps: small-caps" is the exception in both halves of that.
+// It *adds* a rule — 'smcp', the capitals a designer drew at lowercase height —
+// and it is the one request a face can fail to carry out, because a face that
+// does not declare the feature sets the text in ordinary letters. The question
+// is still not asked here; it is asked once per box, beside the report that
+// depends on it. See reportSmallCaps in textchecks.go.
 //
 // # Why the two properties are not one flag
 //
@@ -28,10 +35,10 @@ import (
 // Folding the two together would answer one rule's question with the other's
 // set, on documents where only one of them applies. See shape.Features.
 
-// featuresFor is what a box's declarations turn off.
+// featuresFor is what a box's declarations turn off, and the one they turn on.
 //
 // It is asked of the box the text is in, which is the box the properties are on:
-// all three inherit or are inherited through the inline box that carries the
+// all four inherit or are inherited through the inline box that carries the
 // text, so the answer is the one the run is set with.
 func (l *layouter) featuresFor(b *Box) shape.Features {
 	if b == nil {
@@ -54,6 +61,14 @@ func (l *layouter) featuresFor(b *Box) shape.Features {
 	if l.spacingSuppressesLigatures(b) {
 		out.NoOptionalLigatures = true
 	}
+	// And the one that goes the other way: a rule the face states and no run
+	// gets unless it is asked for. Whether the face *has* it is not asked here
+	// — a run set in a face without small capitals comes out in ordinary
+	// letters at the same width, which is the shaping layer's own contract —
+	// and it is asked once per box by reportSmallCaps, which is where the
+	// answer can be reported.
+	caps, _ := capsOf(b.Style["font-variant-caps"])
+	out.SmallCaps = caps == capsSmall
 	return out
 }
 
@@ -149,4 +164,47 @@ func ligaturesOf(raw string) (ligatures, bool) {
 // this engine never does, so the two are one answer here.
 func noKerning(b *Box) bool {
 	return strings.EqualFold(strings.TrimSpace(b.Style["font-kerning"]), "none")
+}
+
+// The values of font-variant-caps this engine reads.
+//
+// CSS Fonts 4 §6.6 names six ways of setting a run in capitals and this engine
+// produces one of them: "small-caps", by asking the face for the 'smcp' it
+// declares. The other five are read, cascaded and reported.
+//
+// They are not variations on one idea, which is why the enumeration is not a
+// bool with a report beside it:
+//
+//   - "small-caps" replaces the *lowercase* letters with the capitals a
+//     designer drew at their height, and leaves the capitals alone. It is
+//     'smcp'.
+//   - "all-small-caps" does that and turns the capitals into small capitals
+//     too, which is 'smcp' and 'c2sc' together — a second feature, and one Noto
+//     Sans has, so this is a value the engine could set and does not yet.
+//   - "petite-caps" and "all-petite-caps" are the same pair again for a second,
+//     shorter set of capitals ('pcap' and 'c2pc'), which few faces draw.
+//   - "unicase" mixes the two cases at one height ('unic'), and "titling-caps"
+//     asks for capitals cut for a line that is all capitals ('titl'). Neither
+//     replaces a letter with a letter of the other case.
+//
+// A face with none of them sets the text plainly, which is a page the document
+// did not ask for and is what reportSmallCaps says.
+type caps uint8
+
+const (
+	capsNormal caps = iota
+	capsSmall
+)
+
+// capsOf reads the property. The second result is the value when it is one this
+// engine does not set, which reportSmallCaps names.
+func capsOf(raw string) (caps, string) {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	switch value {
+	case "", "normal":
+		return capsNormal, ""
+	case "small-caps":
+		return capsSmall, ""
+	}
+	return capsNormal, value
 }

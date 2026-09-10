@@ -512,7 +512,8 @@ func MeasureGlyphs(glyphs []Glyph, size float64) float64 {
 // 'liga' and 'clig' are the ligatures a reader expects to see; 'calt' and 'rclt'
 // pick the variant that fits its neighbours. A font that declares them means
 // them, which is what separates these from 'smcp' or 'onum' — those change what
-// the text says it is, and wait to be asked for (ShapeWith).
+// the text says it is, and wait to be asked for, by a declaration
+// (Features.SmallCaps) or by a caller naming the tag (ShapeGlyphsWith).
 //
 // The order matters and is not alphabetical: composition before the rules that
 // read its output, required ligatures before optional ones, contextual
@@ -583,6 +584,11 @@ func (sh shaper) applyNamedFeatures(buf []Glyph, tags []string) []Glyph {
 func (sh shaper) substitute(buf []Glyph) []Glyph {
 	buf = sh.applyNamedFeatures(buf, sh.directionFeatures())
 	buf = sh.applyNamedFeatures(buf, beforeJoiningFeatures)
+	// What the document asked the face *for*, which is small capitals and
+	// nothing else so far. It goes here — after composition and the localised
+	// forms, before the ligatures — because the ligatures are stated over the
+	// letters it replaces. See smallCapsFeatures.
+	buf = sh.applyNamedFeatures(buf, sh.features.adds())
 	buf = sh.applyJoiningForms(buf)
 	// The features a document turned off are dropped from the list rather than
 	// skipped inside the loop, so that what is left keeps the order the

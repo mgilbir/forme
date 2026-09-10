@@ -677,9 +677,8 @@ func fontShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, 
 		}
 	}
 
-	style, weight := ident("normal"), ident("normal")
+	style, weight, caps := ident("normal"), ident("normal"), ident("normal")
 	var size, lineHeight, family []css.ComponentValue
-	var unsupported []string
 
 	i := 0
 	for ; i < len(parts); i++ {
@@ -700,13 +699,12 @@ func fontShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, 
 			// The initial value of every slot the shorthand can set, so it says
 			// nothing and changes nothing.
 		case "small-caps":
-			// A variant this engine does not set. It changes nothing either,
-			// and that is exactly what has to be said: the longhand
-			// "font-variant: small-caps" is reported as unimplemented, and the
-			// same request written inside the shorthand was swallowed — so a
-			// page whose small capitals came out as ordinary letters carried no
-			// claim that anything was missing from it.
-			unsupported = append(unsupported, "small-caps")
+			// The one font-variant value "font" can carry: §6.10 lets the
+			// shorthand take a caps keyword and nothing else from the variant
+			// group. It sets the longhand, and — like every other slot here —
+			// the shorthand resets it to "normal" when it is not written, which
+			// is what makes "font: 12px serif" undo an inherited small-caps.
+			caps = part
 		default:
 			return nil, nil, false
 		}
@@ -714,7 +712,7 @@ func fontShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, 
 	if i >= len(parts) {
 		// No size, so this is not a font shorthand at all — the size and the
 		// family are the two required parts.
-		return nil, unsupported, false
+		return nil, nil, false
 	}
 
 	size = parts[i]
@@ -744,10 +742,11 @@ func fontShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, 
 	family = joinParts(parts[i:]...)
 
 	out := map[string][]css.ComponentValue{
-		"font-style":  style,
-		"font-weight": weight,
-		"font-size":   size,
-		"font-family": family,
+		"font-style":        style,
+		"font-weight":       weight,
+		"font-size":         size,
+		"font-family":       family,
+		"font-variant-caps": caps,
 	}
 	// The shorthand resets line-height whether or not it was written, which is
 	// what makes "font: 12px serif" undo an inherited one.
@@ -756,7 +755,7 @@ func fontShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, 
 	} else {
 		out["line-height"] = ident("normal")
 	}
-	return out, unsupported, true
+	return out, nil, true
 }
 
 func isFontSize(part []css.ComponentValue) bool {
@@ -998,6 +997,191 @@ func textWrapShorthand(vals []css.ComponentValue) (map[string][]css.ComponentVal
 		"text-wrap-mode":  ident(mode),
 		"text-wrap-style": ident(style),
 	}, nil, true
+}
+
+// CSS Fonts 4 §6.10's "font-variant", for the two longhands this engine has.
+//
+// The property is a shorthand for seven, and two of them are here:
+// font-variant-ligatures and font-variant-caps. The other five are not
+// registered, so a declaration naming one of their values is refused whole and
+// reported as an unsupported property — which is the right answer for a value
+// nothing downstream can act on, and the same answer the property got as a
+// whole until small capitals were implemented.
+//
+// # Why it is a shorthand at all rather than a keyword this reads
+//
+// Because of the reset. "font-variant: small-caps" sets font-variant-ligatures
+// back to "normal", and a document that turns ligatures off on a paragraph and
+// then writes "font-variant: small-caps" on a span inside it gets its ligatures
+// back. A reader of the value on its own cannot produce that; only a shorthand
+// with a declared longhand list can.
+//
+// # "none" is not "normal"
+//
+// §6.10 defines the bare "none" as font-variant-ligatures: none with everything
+// else at its initial value — so it turns off the ligatures and does *not* turn
+// off small capitals, which were not on. It is valid only on its own, which is
+// why it is taken before the loop.
+func fontVariantShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, []string, bool) {
+	parts := splitOnWhitespace(vals)
+	if len(parts) == 0 {
+		return nil, nil, false
+	}
+	// "normal" and "none" are the two values that may only be written alone, so
+	// they are taken before the loop. Anything else with one part goes through
+	// it like the rest — a lone "oldstyle-nums" is a value of a longhand this
+	// engine has not got and has to be reported as one, and a lone "styleset()"
+	// is not an ident at all.
+	if name, ok := singleIdent(vals); ok {
+		switch name {
+		case "normal":
+			return fontVariantLonghands(ident("normal"), ident("normal")), nil, true
+		case "none":
+			return fontVariantLonghands(ident("none"), ident("normal")), nil, true
+		}
+	}
+
+	var (
+		caps        []css.ComponentValue
+		ligWords    [][]css.ComponentValue
+		seenLig     = map[string]bool{}
+		unsupported []string
+	)
+	for _, part := range parts {
+		name, ok := singleIdent(part)
+		if !ok {
+			// A functional notation — stylistic(), styleset(), swash() and the
+			// rest of font-variant-alternates. Valid CSS for a longhand this
+			// engine has not got, which is the same answer as the keywords
+			// below and not "the author wrote something wrong".
+			if fn, isFn := variantFunction(part); isFn {
+				unsupported = append(unsupported, fn)
+				continue
+			}
+			return nil, nil, false
+		}
+		switch {
+		case fontVariantOtherKeywords[name]:
+			// A value of one of the five longhands this engine does not have.
+			// The declaration is refused whole rather than partly applied: a
+			// shorthand sets every longhand it controls, and setting two of
+			// seven from a value that names a third is a page whose styling is
+			// neither what was asked for nor what the cascade would produce.
+			unsupported = append(unsupported, name)
+		case fontVariantCapsKeywords[name]:
+			// §6.10 takes one value from the caps group and no more: the six
+			// name six different things to do to the same letters.
+			if caps != nil {
+				return nil, nil, false
+			}
+			caps = part
+		case ligatureKeywordGroup[name] != "":
+			// The four ligature pairs are independent of each other and each
+			// may be written once. "common-ligatures no-common-ligatures" is
+			// the pair written twice and is not a value.
+			group := ligatureKeywordGroup[name]
+			if seenLig[group] {
+				return nil, nil, false
+			}
+			seenLig[group] = true
+			ligWords = append(ligWords, part)
+		default:
+			return nil, nil, false
+		}
+	}
+	// Only once the whole value has been read, and only if the rest of it was
+	// well formed. A declaration this engine had a longhand for *and* could not
+	// parse is a mistake the author made, and "\"font-variant: oldstyle-nums
+	// bogus\" is not a value this engine can read" is the report for it —
+	// naming the part that is merely unimplemented would suppress that one and
+	// send the author looking for a missing feature instead of a typo.
+	if len(unsupported) > 0 {
+		return nil, unsupported, false
+	}
+	lig := ident("normal")
+	if len(ligWords) > 0 {
+		// Kept in the order they were written, which is the order
+		// font-variant-ligatures' own grammar puts them in.
+		lig = joinParts(ligWords...)
+	}
+	if caps == nil {
+		caps = ident("normal")
+	}
+	return fontVariantLonghands(lig, caps), nil, true
+}
+
+// variantFunction reads one of font-variant-alternates' functional notations.
+//
+// They are told apart from a keyword by being a function at all: nothing else in
+// the property's grammar is one, so the name does not have to be checked against
+// a list to know it belongs to a longhand this engine has not got.
+func variantFunction(part []css.ComponentValue) (string, bool) {
+	for _, v := range part {
+		if v.IsFunction() {
+			return strings.ToLower(v.Token.Value) + "()", true
+		}
+	}
+	return "", false
+}
+
+// fontVariantOtherKeywords is every ident value of the five longhands
+// "font-variant" controls that this engine does not have: the numeric figures,
+// the east-asian forms, the sub- and superscript positions, and
+// font-variant-alternates' one keyword.
+//
+// It is written out rather than left to the default branch because the two
+// answers differ. A value in this list is correct CSS the engine cannot produce
+// — the unsupported-property finding, which §7.1's companion signal counts — and
+// a value outside it is a declaration the author got wrong, which is a different
+// report and not that one.
+var fontVariantOtherKeywords = map[string]bool{
+	// font-variant-numeric §6.7.
+	"lining-nums": true, "oldstyle-nums": true,
+	"proportional-nums": true, "tabular-nums": true,
+	"diagonal-fractions": true, "stacked-fractions": true,
+	"ordinal": true, "slashed-zero": true,
+	// font-variant-alternates §6.8. The rest of it is functional notations,
+	// which variantFunction reads.
+	"historical-forms": true,
+	// font-variant-east-asian §6.9.
+	"jis78": true, "jis83": true, "jis90": true, "jis04": true,
+	"simplified": true, "traditional": true,
+	"full-width": true, "proportional-width": true, "ruby": true,
+	// font-variant-position §6.5.
+	"sub": true, "super": true,
+}
+
+// fontVariantLonghands is the pair the shorthand always sets, written once so
+// that the reset cannot be forgotten on one of the branches above.
+func fontVariantLonghands(lig, caps []css.ComponentValue) map[string][]css.ComponentValue {
+	return map[string][]css.ComponentValue{
+		"font-variant-ligatures": lig,
+		"font-variant-caps":      caps,
+	}
+}
+
+// fontVariantCapsKeywords is CSS Fonts 4 §6.6's closed set.
+//
+// All six are accepted here and only "small-caps" is applied; the rest are read,
+// cascaded and reported by layout, which is where the question can be asked
+// properly — whether a page came out wrong depends on the face that set it. See
+// layout/fontfeatures.go.
+var fontVariantCapsKeywords = map[string]bool{
+	"small-caps": true, "all-small-caps": true, "petite-caps": true,
+	"all-petite-caps": true, "unicase": true, "titling-caps": true,
+}
+
+// ligatureKeywordGroup maps §6.4's eight keywords to the pair each belongs to,
+// so that the shorthand can refuse a pair written twice.
+//
+// "none" is not among them: it is the whole property's value rather than one of
+// the four pairs, and inside "font-variant" it is not a value at all.
+var ligatureKeywordGroup = map[string]string{
+	"common-ligatures": "common", "no-common-ligatures": "common",
+	"discretionary-ligatures":    "discretionary",
+	"no-discretionary-ligatures": "discretionary",
+	"historical-ligatures":       "historical", "no-historical-ligatures": "historical",
+	"contextual": "contextual", "no-contextual": "contextual",
 }
 
 // singleIdent reads a value that is exactly one keyword, ignoring the whitespace

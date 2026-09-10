@@ -133,11 +133,11 @@ func (l *layouter) linkShapingContext(items []inlineItem) []inlineItem {
 		if contextCanChange(items[i].Face) {
 			if j, ok := shapingNeighbour(items, i, -1); ok {
 				before = textBetween(items, j, i)
-				kerns = kerns && items[j].Face == items[i].Face
+				kerns = kerns && sameFaceRules(items[j], items[i])
 			}
 			if j, ok := shapingNeighbour(items, i, +1); ok {
 				after = textBetween(items, i+1, j+1)
-				kerns = kerns && items[j].Face == items[i].Face
+				kerns = kerns && sameFaceRules(items[j], items[i])
 			}
 		}
 		// And the text either side that may contribute *glyphs* and not only
@@ -159,6 +159,24 @@ func (l *layouter) linkShapingContext(items []inlineItem) []inlineItem {
 			items[i].Size, items[i].Spacing, itemShaping(&items[i]))
 	}
 	return items
+}
+
+// sameFaceRules reports whether a pair spanning the boundary between two runs is
+// this font's pair to apply.
+//
+// The face is the obvious half: a pair is stated by one font over two of its own
+// glyphs, and a glyph index means nothing outside the font it came from. See
+// TestAFaceChangeIsNotKernedAcross.
+//
+// What the two runs turned off or asked for is the other half, and it is the
+// same argument. The neighbour's glyphs are found by shaping its text with *this*
+// run's rules, so where the two disagree the pair is looked up between a glyph on
+// the page and one that is not — a small capital beside a letter set as an
+// ordinary one, or the reverse. That is not a pair the font stated about
+// anything, and a page is better without it than with a distance measured
+// between a glyph and a glyph that was never drawn.
+func sameFaceRules(a, b inlineItem) bool {
+	return a.Face == b.Face && a.Off == b.Off
 }
 
 // isShapedRun reports whether an item is a run of text that a face shapes: not a
@@ -505,6 +523,23 @@ func mergeGroupTexts(items []inlineItem) mergeGroups {
 func sharesGlyphsWith(items []inlineItem, from, to int) bool {
 	a, b := items[from], items[to]
 	if !sameShaping(a, b) || a.Size != b.Size || a.Face != b.Face {
+		return false
+	}
+	// And the font's own rules the two runs turned off or asked for. One
+	// shaping of one string applies one set of them, so two runs that disagree
+	// cannot be that shaping — whichever set were used, one of the runs would
+	// be cut out of a string that was not shaped the way it is drawn.
+	//
+	// It is visible with small capitals, which are the first of these that adds
+	// a glyph rather than suppressing one. "of<span>f</span>ice" with the span
+	// in small capitals is one group: the plain runs shape "office" and form the
+	// ffi ligature, the span shapes it with 'smcp' and forms none, and the page
+	// gets the ligature *and* a small capital F — the letter drawn twice, in the
+	// middle of a word.
+	//
+	// The three suppressing flags have the same fault and no such symptom, since
+	// the two shapings of the group agree everywhere the ligature is not.
+	if a.Off != b.Off {
 		return false
 	}
 	// Neither side moved by vertical-align, which is the question rather than
