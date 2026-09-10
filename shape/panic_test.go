@@ -398,6 +398,7 @@ func useFace(face *Face) {
 	for _, gid := range []int{-1, 0, 1, face.NumGlyphs(), face.NumGlyphs() + 1} {
 		_ = face.GlyphAdvance(gid)
 		_ = face.GlyphCode(gid)
+		_, _, _ = face.HalfWidthTrim(gid)
 	}
 	for _, r := range []rune{'a', 0x0628, 0x0915, 0x1B13, 0x10FFFF} {
 		_, _ = face.GlyphID(r)

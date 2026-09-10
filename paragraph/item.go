@@ -299,6 +299,17 @@ type Item struct {
 	// and a comma with more text after it on the same line is not at the end of
 	// one. That restore already existed for allow-end and needed nothing added.
 	MustHangEnd bool
+	// TrimEnd is how much narrower §8.2's half-width form of this item is, for
+	// an item that is a single full-width closing punctuation at a place a line
+	// could end. Zero for everything else, including a character in a face that
+	// states no half-width form for it.
+	//
+	// A candidate rather than a decision, for the same reason MayHangEnd is: the
+	// value trims "if it does not fit on the line before justification", which
+	// is a question about a line. The fill takes it by narrowing its own copy's
+	// Width, which is what makes the trimmed advance reach the display list and
+	// the line's measure together.
+	TrimEnd style.Unit
 	// PreContext and PostContext are the text either side of this run, where the
 	// boundary between it and its neighbour does not break shaping.
 	//

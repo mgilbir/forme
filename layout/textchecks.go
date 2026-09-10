@@ -553,3 +553,31 @@ func boxHyphenation(b *Box) paragraph.Language {
 func boxWritingSystem(b *Box) paragraph.WritingSystem {
 	return writingSystemAt(boxElement(b))
 }
+
+// reportSpacingTrim reports a text-spacing-trim value whose rule this engine
+// does not follow.
+//
+// §8.2's values differ in what they do at the *start* of a line — whether a
+// full-width opening bracket keeps the half em of blank in front of it, and on
+// which lines — and that is the half of the property this engine does not do.
+// So "space-first" and "trim-start" are reported and the other two are not:
+// "space-all" asks for full-width everywhere, which is what an engine that
+// trims only at the end of a line already gives it, and "normal" is the initial
+// value.
+//
+// Not reporting the initial value is a decision and not an oversight. Every
+// document that holds CJK text has it, so a finding would appear on documents
+// whose author never wrote the property and never depended on the clause; what
+// it would say is "this engine does not do all of §8.2", which is a fact about
+// the engine and not about the page. The clause that is missing takes room away
+// at the start of a line, and a document that needs it says so.
+func (l *layouter) reportSpacingTrim(b *Box, value string) {
+	l.reportOnce("text-spacing-trim", Finding{
+		Rule:     RuleUnsupportedValue,
+		Property: "text-spacing-trim",
+		Message: "text-spacing-trim " + quoteValue(value) + " was not applied at the " +
+			"start of a line, so a full-width opening bracket keeps the half em " +
+			"of blank in front of it",
+		Path: PathOf(b.Element),
+	})
+}

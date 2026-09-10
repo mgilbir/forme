@@ -167,6 +167,11 @@ var properties = map[string]property{
 	"text-justify":   {true, "auto"},
 	"text-indent":    {true, "0"},
 	"text-transform": {true, "none"},
+	// CSS Text 4 §8.2. Inherited, and its initial value is "normal" — which is
+	// not "do nothing": it trims a full-width closing bracket at the end of a
+	// line that would not otherwise hold it. See paragraph/spacingtrim.go, which
+	// also says which of the value's clauses this engine does.
+	"text-spacing-trim": {true, "normal"},
 	// white-space is a shorthand in CSS Text 4 — see the shorthands table — and
 	// these are the two longhands it sets that this engine acts on. The third,
 	// white-space-trim, is not registered because nothing trims yet, and

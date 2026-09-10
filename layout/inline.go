@@ -256,6 +256,13 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	// something the measuring can leave out.
 	hp := hangingPunctuationOf(b.Style["hanging-punctuation"])
 	items = l.hangPunctuation(items, hp)
+	// §8.2's trim, after §8.4's hang and reading what the hang has already
+	// claimed: a character outside the line has no blank left in it to give up.
+	trim, unhandledTrim := spacingTrimOf(b.Style["text-spacing-trim"])
+	if unhandledTrim != "" {
+		l.reportSpacingTrim(b, unhandledTrim)
+	}
+	items = l.markClosingPunctuation(items, trim)
 	items = l.linkShapingContext(items)
 
 	// §5.12.1's ::first-line, which is not a box and cannot be one: it changes

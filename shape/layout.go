@@ -404,6 +404,10 @@ type layout struct {
 	cursFlags int
 	// singlePos holds GPOS type 1 adjustments by glyph.
 	singlePos map[int]singleAdjust
+	// halfWidth holds 'halt' by glyph, and is applied to nothing: it is the
+	// font's statement of what a full-width punctuation's trimmed form is, for
+	// a caller that has a character to trim to ask about. See halfwidth.go.
+	halfWidth map[int]singleAdjust
 	// markAnchors holds each mark's own attachment point and class;
 	// markBases and markMarkBases hold where a base or another mark receives a
 	// mark of each class.
@@ -620,6 +624,7 @@ func readPositioning(tables map[string][]byte, sel featureSet, coords []float64)
 		l.readGPOSPairs(gpos, feats)
 		l.readGPOSAttachment(gpos, feats)
 		l.readContextualPositioning(gpos, feats)
+		l.readHalfWidth(gpos, feats)
 	}
 	if len(l.kern) == 0 {
 		// Only as a fallback: a font with both should be read through GPOS,

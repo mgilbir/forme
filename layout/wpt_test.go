@@ -1271,7 +1271,26 @@ const wptEnv = "WPT_TESTS"
 // The report went with it. There is no value of the property left to name, so
 // reportHangingPunctuation and the second return of HangingPunctuationOf are
 // gone rather than left to answer "" forever.
-const wptCleanPassBaseline = 5979
+// 5979 to 5980 on 2026-09-10: text-spacing-trim's end-of-line clause, which
+// wins text-spacing-trim-end-span-001 clean and text-spacing-trim-end-001 as a
+// tainted pass — that one declares "trim-start", whose line-*start* rule is
+// still not done and is still reported.
+//
+// §8.2's initial value is "normal", and "normal" is not "leave everything
+// alone": a full-width closing bracket at the end of a line that would not
+// otherwise hold it takes its half-width form. The document relies on exactly
+// that — eight full-width characters in 7.5em, which fit only if the closing
+// bracket gives up the half em of blank behind it.
+//
+// The amount is the face's own. shape reads 'halt' into a table it applies to
+// nothing, so a caller with a character to trim can ask what the trimmed form is
+// rather than assume it is half the advance — which is right for a closing
+// bracket and wrong for an opening one, whose ink moves back into the space it
+// vacates. Nothing was silenced to get this: the property is registered now, so
+// the old "not implemented" finding is gone, but the two values whose whole
+// content is a line-start rule are reported by value instead, and the census
+// moved by exactly the two documents above and no others.
+const wptCleanPassBaseline = 5980
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

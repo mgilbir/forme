@@ -454,6 +454,26 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 			continue
 		}
 
+		// §8.2's trim, which is the same shape as the hang above and a different
+		// answer to the same question: where that one puts the character past
+		// the end of the line, this one takes the half em of blank out of it so
+		// that the line holds it after all. Both are "only if it does not
+		// otherwise fit", so both are asked here, where the room is known.
+		//
+		// After the hang and not before it, because a character that can do
+		// both should hang: hanging keeps the glyph whole and its full advance,
+		// and trimming changes the type. Nothing in the suite writes one, and
+		// the order is stated rather than left to fall out of which branch came
+		// first.
+		if item.TrimEnd != 0 && content && !item.NoWrap && overflows(used, item, width) &&
+			used.Add(item.Width).Sub(item.TrimEnd) <= width {
+			item.Width = item.Width.Sub(item.TrimEnd)
+			item.TrimEnd = 0
+			line = append(line, item)
+			used = used.Add(item.Width)
+			continue
+		}
+
 		// A hanging space never causes a break: it sits past the line's end
 		// rather than moving to the next one. Without this, "XX    XX" under
 		// pre-wrap would push the second word down a line for spaces that take
