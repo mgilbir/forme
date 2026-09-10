@@ -512,35 +512,6 @@ func hyphenTextFor(face *shape.Face) string {
 	return hyphenMinus
 }
 
-// reportHangingPunctuation reports a hanging-punctuation value this engine
-// reads as none.
-//
-// "first", "last" and "allow-end" are implemented. "force-end" is not: it hangs
-// a stop or a comma at the end of *every* line whether or not the line would
-// otherwise hold it, which is a decision about every line rather than about the
-// one that overflowed — and the one that overflowed is the only one the fill has
-// a reason to ask about.
-//
-// What they change is where a line breaks, and that shows as a word moved to
-// the next line with nothing on the page to say why, so it is exactly the kind
-// of difference a reader cannot diagnose and a finding has to state.
-func (l *layouter) reportHangingPunctuation(b *Box, value string) {
-	if l.reportedHanging == nil {
-		l.reportedHanging = map[string]bool{}
-	}
-	if l.reportedHanging[value] {
-		return
-	}
-	l.reportedHanging[value] = true
-	l.rec.ReportDetail(Finding{
-		Rule:     RuleUnsupportedValue,
-		Property: "hanging-punctuation",
-		Message: value + " was not applied, so a stop or a comma at the end of a " +
-			"line takes room the value asked it to give up",
-		Path: PathOf(b.Element),
-	})
-}
-
 // boxElement is the element a box belongs to: its own, or the nearest one above
 // it.
 //

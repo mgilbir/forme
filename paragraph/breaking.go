@@ -441,7 +441,13 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// style='border-left:1em'>,</span>" and asks for the line to break
 		// earlier instead.
 		afterBorder := len(line) > 0 && line[len(line)-1].Inset && line[len(line)-1].Width != 0
-		if item.MayHangEnd && !afterBorder && content && !item.NoWrap && overflows(used, item, width) {
+		// §8.4's two end values meet here and part company on the last clause:
+		// force-end hangs the character whatever the room, allow-end "only if it
+		// does not otherwise fit". Everything before it — that the character is a
+		// candidate at all, that no inline box's border stands in front of it,
+		// that the line has content to end — is the same question for both.
+		if item.MayHangEnd && !afterBorder && content && !item.NoWrap &&
+			(item.MustHangEnd || overflows(used, item, width)) {
 			item.Hangs, item.HangEnd = true, true
 			hungAt = len(line)
 			line = append(line, item)

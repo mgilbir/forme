@@ -255,41 +255,25 @@ func TestHangingPunctuationInherits(t *testing.T) {
 	}
 }
 
-// TestTheEndValuesAreReported, which is now one value rather than two.
+// TestNoValueOfTheGrammarIsReported.
 //
-// force-end hangs a stop or a comma at the end of *every* line whether or not
-// the line would otherwise hold it, and is not implemented. What it changes is
-// where a line breaks, which shows as a word moved with nothing on the page to
-// say why.
+// §8.4's grammar is four keywords and this engine does all four, so there is no
+// value left to report. This test was the other way round for as long as
+// force-end was a promise: it asserted that "force-end" and "first force-end"
+// *were* reported, and allow-end moved out of that list when it stopped being a
+// promise. force-end followed it, and the list it moved to is the whole grammar.
 //
-// allow-end hangs one only where hanging it is what lets the line have it, and
-// is implemented — see allowend_test.go. It moved out of the list below when it
-// stopped being a promise.
-func TestTheEndValuesAreReported(t *testing.T) {
-	for _, value := range []string{"force-end", "first force-end"} {
+// An invalid declaration is still not reported, and that is not an omission: the
+// cascade drops one whole, so the element is set as though nobody had written a
+// declaration at all, and there is nothing the page is missing to tell a reader
+// about.
+func TestNoValueOfTheGrammarIsReported(t *testing.T) {
+	for _, value := range []string{"first", "last", "first last", "none",
+		"allow-end", "first allow-end", "allow-end last",
+		"force-end", "first force-end", "force-end last",
+		"wibble", "first first"} {
 		built := Build(Input{
 			HTML: `<div id="p">one, two, three</div>`,
-			CSS:  []Stylesheet{{Source: hangCSS + `#p { hanging-punctuation: ` + value + ` }`}},
-		})
-		rec := NewRecorder(nil)
-		w, _ := style.FromPx(600)
-		h, _ := style.FromPx(10000)
-		Layout(built.Root, Size{W: w, H: h}, built.Fonts, rec)
-		found := false
-		for _, f := range rec.Findings() {
-			if f.Property == "hanging-punctuation" && f.Unsupported() {
-				found = true
-			}
-		}
-		if !found {
-			t.Errorf("%q was not reported: %v", value, rec.Findings())
-		}
-	}
-	// And the two that are implemented are not reported.
-	for _, value := range []string{"first", "last", "first last", "none",
-		"allow-end", "first allow-end", "allow-end last"} {
-		built := Build(Input{
-			HTML: `<div id="p">(one)</div>`,
 			CSS:  []Stylesheet{{Source: hangCSS + `#p { hanging-punctuation: ` + value + ` }`}},
 		})
 		rec := NewRecorder(nil)
@@ -300,6 +284,59 @@ func TestTheEndValuesAreReported(t *testing.T) {
 			if f.Property == "hanging-punctuation" {
 				t.Errorf("%q was reported: %s", value, f.Message)
 			}
+		}
+	}
+}
+
+// TestForceEndHangsAStopTheLineWouldHaveHeld is what separates §8.4's two end
+// values, and the only thing that does.
+//
+// They are one clause apart: "a stop or comma at the end of a line hangs",
+// against the same sentence ending "if it does not otherwise fit prior to
+// justification". So the discriminating case is a comma the line has **room**
+// for — force-end puts it past the edge and allow-end leaves it inside. A comma
+// the line has no room for tells the two apart not at all, because both hang
+// that one, and hanging-punctuation-force-end-001 is written entirely out of
+// those: it is the same document as the allow-end one with the keyword changed.
+//
+// Measured through the alignment, which is where a hang shows without depending
+// on where a line broke. A hanging character is one that does not count, so the
+// line's measure is a character shorter and a right-aligned line sits a
+// character further right — half of one when it is centred, which is the same
+// fact seen through a division and is worth asserting for that reason.
+func TestForceEndHangsAStopTheLineWouldHaveHeld(t *testing.T) {
+	at := func(align, value string) style.Unit {
+		t.Helper()
+		css := hangCSS + `#p { text-align: ` + align + `; ` +
+			`hanging-punctuation: ` + value + ` }`
+		f := find(t, layoutOf(t, 600, `<div id="p">one,</div>`, css), "p")
+		if len(f.Lines) != 1 {
+			t.Fatalf("%q %q made %d lines; this measures one", align, value,
+				len(f.Lines))
+		}
+		return f.Lines[0].Runs[0].X
+	}
+	for _, tc := range []struct {
+		align string
+		hang  style.Unit
+		what  string
+	}{
+		{"right", chars(1), "a right-aligned line moves by the whole character"},
+		{"center", chars(0.5), "a centred one by half of it"},
+	} {
+		none := at(tc.align, "none")
+		allow := at(tc.align, "allow-end")
+		force := at(tc.align, "force-end")
+
+		if allow != none {
+			t.Errorf("%s: allow-end put the line at %v where none puts it at %v "+
+				"— the line had room for the comma, so allow-end does not hang it",
+				tc.align, allow, none)
+		}
+		if want := none.Add(tc.hang); force != want {
+			t.Errorf("%s: force-end put the line at %v, want %v — %s, because "+
+				"the comma hangs whatever the room and the line's measure is a "+
+				"character shorter", tc.align, force, want, tc.what)
 		}
 	}
 }

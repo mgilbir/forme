@@ -40,54 +40,70 @@ type HangingPunctuation struct {
 	// Last hangs a closing bracket or quote past the end of the last one.
 	Last bool
 	// EndAllow hangs a stop or a comma past the end of *any* line, but only
-	// where the line would not otherwise hold it. It is the one of §8.4's two
-	// end values this engine does: the other hangs one always, which is a
-	// decision about every line rather than about the line that overflowed.
+	// where the line would not otherwise hold it.
 	EndAllow bool
+	// EndForce hangs one past the end of any line whatever the room. It is the
+	// same character in the same place as EndAllow and differs in one clause:
+	// §8.4 writes allow-end as force-end's sentence with "if it does not
+	// otherwise fit prior to justification" added to it.
+	EndForce bool
 }
 
-// HangingPunctuationOf reads the property, and names the value it could not
-// honour.
+// HangsAtEndOfALine reports whether either of §8.4's two end values is asked
+// for, which is the question every site but the fill has: both cut the same
+// character out of the same run, and only the fill weighs the room.
+func (h HangingPunctuation) HangsAtEndOfALine() bool {
+	return h.EndAllow || h.EndForce
+}
+
+// HangingPunctuationOf reads the property.
+
+// It named the value it could not honour until force-end was implemented, and
+// then there was no such value: §8.4's grammar is four keywords and this engine
+// does all four, so the only thing left to say about a declaration is that it is
+// invalid — which is a zero value and not a finding, because an invalid
+// declaration is dropped by the cascade and the element is set as though nobody
+// had written one.
 //
 // The grammar is a set, like text-transform's: "first last" is legal and so is
 // "last first". A keyword repeated, or both of the two end values together, is
 // invalid — and an invalid declaration is dropped whole, which is what the
 // cascade does with one.
-func HangingPunctuationOf(value string) (HangingPunctuation, string) {
+func HangingPunctuationOf(value string) HangingPunctuation {
 	var out HangingPunctuation
-	var end, unhandled string
+	var end string
 	seenFirst, seenLast := false, false
 	for _, word := range strings.Fields(strings.ToLower(value)) {
 		switch word {
 		case "none":
 			// Valid alone and invalid beside anything else, and both answers are
 			// the same one.
-			return HangingPunctuation{}, ""
+			return HangingPunctuation{}
 		case "first":
 			if seenFirst {
-				return HangingPunctuation{}, ""
+				return HangingPunctuation{}
 			}
 			seenFirst, out.First = true, true
 		case "last":
 			if seenLast {
-				return HangingPunctuation{}, ""
+				return HangingPunctuation{}
 			}
 			seenLast, out.Last = true, true
 		case "allow-end":
 			if end != "" {
-				return HangingPunctuation{}, ""
+				return HangingPunctuation{}
 			}
 			end, out.EndAllow = word, true
 		case "force-end":
 			if end != "" {
-				return HangingPunctuation{}, ""
+				return HangingPunctuation{}
 			}
-			end, unhandled = word, word
+			end, out.EndForce = word, true
 		default:
-			return HangingPunctuation{}, ""
+			return HangingPunctuation{}
 		}
 	}
-	return out, unhandled
+	return out
 }
 
 // HangsAtStart reports whether a character is one §8.4 hangs into the margin

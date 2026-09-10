@@ -254,10 +254,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	// block's content before anything is measured against a line: a hanging
 	// character is one that does not count, and what does not count has to be
 	// something the measuring can leave out.
-	hp, unhandledHang := hangingPunctuationOf(b.Style["hanging-punctuation"])
-	if unhandledHang != "" {
-		l.reportHangingPunctuation(b, unhandledHang)
-	}
+	hp := hangingPunctuationOf(b.Style["hanging-punctuation"])
 	items = l.hangPunctuation(items, hp)
 	items = l.linkShapingContext(items)
 

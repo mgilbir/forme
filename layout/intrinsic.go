@@ -328,7 +328,7 @@ func (l *layouter) inlineWidths(b *Box) intrinsicWidths {
 	// bracket that will be drawn in its margin. Every one of the suite's
 	// fixtures for the property floats its boxes, which is what makes this the
 	// half that decides the page rather than a refinement of it.
-	hp, _ := hangingPunctuationOf(b.Style["hanging-punctuation"])
+	hp := hangingPunctuationOf(b.Style["hanging-punctuation"])
 	items = l.hangPunctuation(items, hp)
 	items = l.linkLetterSpacing(items)
 	// §8.1's ideograph spacing, after the letter-spacing boundary rule and for

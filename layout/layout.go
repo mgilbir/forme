@@ -476,8 +476,6 @@ type layouter struct {
 	reportedAutospace map[string]bool
 	// reportedHyphens is the same for the hyphens values read as manual.
 	reportedHyphens map[string]bool
-	// reportedHanging is the same for the hanging-punctuation values not applied.
-	reportedHanging map[string]bool
 	// reportedFlex is the flex containers already reported as unarranged, so
 	// that a box asked twice — once by the intrinsic pass and once by layout —
 	// is told about once. See layout/flex.go.

@@ -1256,7 +1256,22 @@ const wptEnv = "WPT_TESTS"
 // Including it discounted it from the measure and then handed it straight back,
 // which cancelled the discount for exactly the lines that needed it and set every
 // glyph one tracking width too far left.
-const wptCleanPassBaseline = 5978
+// 5978 to 5979 on 2026-09-10: hanging-punctuation-force-end-001, and §8.4's
+// grammar is now complete. force-end was recognised and reported rather than
+// applied, on the reading that hanging a stop at the end of every line is "a
+// decision about every line rather than about the line that overflowed".
+//
+// It is the same decision the fill already makes, one clause shorter: allow-end
+// is force-end's sentence with "if it does not otherwise fit prior to
+// justification" added to it. So the candidate is cut out of the run in the same
+// place for both values and they part company at the fill's room test, and the
+// restore that takes a hang back when more text follows on the line — which is
+// what makes a comma mid-line not a comma at the end of one — was already there.
+//
+// The report went with it. There is no value of the property left to name, so
+// reportHangingPunctuation and the second return of HangingPunctuationOf are
+// gone rather than left to answer "" forever.
+const wptCleanPassBaseline = 5979
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

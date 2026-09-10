@@ -286,6 +286,19 @@ type Item struct {
 	// hangingpunctuation.go gives for the other two values: a hang is a width,
 	// and a width is a property of an item.
 	MayHangEnd bool
+	// MustHangEnd says the candidate above hangs whatever the room, which is
+	// §8.4's force-end where MayHangEnd alone is its allow-end.
+	//
+	// The two values differ in one clause and nothing else — "a stop or comma at
+	// the end of a line hangs", against the same sentence ending "if it does not
+	// otherwise fit prior to justification" — so they mark the same character in
+	// the same place and part company only where the fill weighs the room.
+	//
+	// A candidate that turns out not to be at the end of a line is taken back by
+	// the fill either way: force-end hangs a character at the end of *a line*,
+	// and a comma with more text after it on the same line is not at the end of
+	// one. That restore already existed for allow-end and needed nothing added.
+	MustHangEnd bool
 	// PreContext and PostContext are the text either side of this run, where the
 	// boundary between it and its neighbour does not break shaping.
 	//
