@@ -739,7 +739,8 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				// a line's measure ends at its last glyph. Without this a centred
 				// or right-aligned line of tracked text sits half a tracking
 				// width off.
-				used = used.Sub(trailingSpacing(runs))
+				lineTracking := trailingSpacing(runs)
+				used = used.Sub(lineTracking)
 				if fitPending {
 					// css-text-5's "(A + B) / A": A is the type on the line and
 					// B what is left of the line's room once everything that is
@@ -912,7 +913,30 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					shift = shift.Add(lineIndent)
 				}
 				if rtl {
-					shift = shift.Sub(total.Sub(used))
+					// What was discounted from the measure hangs past the line's
+					// *end*, and a right-to-left line ends at its left — so the
+					// content begins that much further left than the alignment
+					// put it.
+					//
+					// All of it but one. §8.2's trailing letter-spacing is
+					// discounted from the measure like the rest, because the
+					// line's content ends at its last glyph and the slack a
+					// justified line has to spread is measured to there. But it
+					// does not *hang*: a run is drawn from its own origin
+					// accumulating advances and the spacing is added after each
+					// glyph, so the one after the last glyph drawn is at the
+					// run's right edge whatever the run's direction — see
+					// letterspacingboundary.go, which checks that against the
+					// display list rather than reasoning about it. At the left
+					// end of a right-to-left line that puts it *inside* the
+					// line, not past the edge, and moving the line by it sets
+					// every glyph one tracking width too far left.
+					//
+					// letter-spacing-bidi-003 is the measurement: its "dir=rtl"
+					// line was displaced by exactly 1ch — 30px, Courier at 50px
+					// — while the left-to-right line above it, where the hang
+					// really is at the end, was correct glyph for glyph.
+					shift = shift.Sub(total.Sub(used).Sub(lineTracking))
 				}
 				lineShift = shift
 				if shift != 0 {

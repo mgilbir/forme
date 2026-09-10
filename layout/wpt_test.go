@@ -1247,7 +1247,16 @@ const wptEnv = "WPT_TESTS"
 // The harness lends the family by name now — see ipaFamilies — and the pass is
 // clean. Measured both ways: the fix without the font is 5976 clean, 80 tainted,
 // 197 failed; with it, 5977 clean, 79 tainted, 197 failed.
-const wptCleanPassBaseline = 5977
+// 5977 to 5978 on 2026-09-10: letter-spacing-bidi-003. A right-to-left line is
+// shifted by everything discounted from its measure, because such a line ends at
+// its left and what was discounted hangs off that edge — a trailing space does,
+// and so does §8.4's hanging punctuation. §8.2's tracking does not: the spacing
+// after the last glyph drawn is at the run's *right* edge whatever the run's
+// direction, so at the left end of a right-to-left line it is inside the line.
+// Including it discounted it from the measure and then handed it straight back,
+// which cancelled the discount for exactly the lines that needed it and set every
+// glyph one tracking width too far left.
+const wptCleanPassBaseline = 5978
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
