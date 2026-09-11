@@ -715,6 +715,12 @@ type State struct {
 	// word-break-keep-all-006, whose four ideographs around a comma set as
 	// three and one rather than two and two.
 	AfterHeld bool
+	// AfterText is the run of text in front of the next box that a dictionary
+	// would segment together with it: everything back to the last character of
+	// another script, or of none, and then forward to the last word boundary in
+	// it. See paragraph.Carried.Before and Trailing.DictTail, and note that it
+	// is empty for every document with no such script in it.
+	AfterText string
 	// AfterRune is the last character emitted, which the next box needs for the
 	// pair rules and to know it is not at the start of the paragraph.
 	//

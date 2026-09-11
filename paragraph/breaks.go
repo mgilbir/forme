@@ -181,6 +181,24 @@ type Carried struct {
 	// for the rules that need to know there is any text in front of this at all.
 	// It is zero at the start of a paragraph and nowhere else.
 	Prev rune
+	// Before is the text in front of this one, for the scripts whose words are
+	// found with a dictionary rather than by a rule.
+	//
+	// Those need more than the character before: a segmentation is a statement
+	// about a stretch of text, and "ภาษาไทย" divides after "ภาษา" because of
+	// what follows, which no walk that has only reached that point can know.
+	// DictionaryBreaks is given this and the text together, so a word written
+	// across a box boundary is one word — "<span>ภาษา</span><span>ไทย</span>"
+	// set one line where "ภาษาไทย" sets two, because each box was segmented on
+	// its own and the offset the break falls at is the second box's first, which
+	// DictionaryBreaks excludes on purpose.
+	//
+	// About a word of it, which is exact rather than a bound that is usually
+	// enough: text on the far side of a space or of another script would not
+	// have been segmented with this anyway, and inside the run the words already
+	// found have been decided. See Trailing.DictTail, which is what fills this
+	// in and where the measurement is.
+	Before string
 	// SpaceMayTakeIt says a space at this text's start may take the opportunity
 	// rather than withholding it, which is white-space: break-spaces overruling
 	// LB7. See boundaryWhiteSpace: the value that decides it belongs to the box
@@ -206,7 +224,11 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 	// of what follows its first character, and no walk that has only reached
 	// that character can know. Nil for the overwhelming majority of documents,
 	// which have no such script in them at all. See DictionaryBreaks.
-	dictBreaks := DictionaryBreaks(text)
+	// The boundary is part of the stretch: see Carried.Before. dictAt is where
+	// this text begins in what was segmented, and is zero for every document
+	// that has no such script in it.
+	dictAt := len(at.Before)
+	dictBreaks := DictionaryBreaks(at.Before + text)
 
 	// And where the phrases are, for the value that ends a line only at one.
 	// Computed once for the same reason and nil for the same documents — see
@@ -410,7 +432,7 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 		beforeDictionary := NeedsDictionaryBreaking(r) && prev != 0 &&
 			!wb.KeepAll && !wb.Manual
 		if beforeDictionary && HasDictionary(r) {
-			beforeDictionary = dictBreaks[start]
+			beforeDictionary = dictBreaks[dictAt+start]
 		}
 		// §5.3's "breaks are allowed ... between inseparable characters (such as
 		// U+2025 and U+2026)", which is an opportunity nothing else here makes.
@@ -810,6 +832,7 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 	}
 	flush()
 	return out, Trailing{
+		DictTail: dictionaryTail(at.Before+text, dictBreaks),
 		Offered:  breakNext || deferBreak || heldBreak,
 		Deferred: deferBreak,
 		Held:     heldBreak,
@@ -844,6 +867,22 @@ type Trailing struct {
 	// rest wrong: "0|!" is one unbreakable run and "<span>0|</span><span>!</span>"
 	// broke in two, because nothing asked LB13 about the exclamation mark.
 	Deferred bool
+	// DictTail is what the next box needs to be segmented together with this
+	// text, for the scripts whose words a dictionary finds. It is empty for
+	// every document with no such script in it.
+	//
+	// The text since the last word boundary, and no more, which is exact rather
+	// than a bound that is usually enough. segmentWords is greedy and runs left
+	// to right: once it has put a boundary at an offset, how the text after that
+	// offset divides depends on that text alone. So the words already found can
+	// be dropped, and what is carried is the part-word in progress.
+	//
+	// That is what keeps it from being quadratic. Carrying the whole script run
+	// instead — which is the obvious reading of "the dictionary needs the
+	// context" — made two thousand Thai words in two thousand spans take 845ms
+	// against 279ms, because each box re-segmented everything before it. This
+	// carries about a word.
+	DictTail string
 	// Held says the opportunity has already been through the rules once: it was
 	// offered, a prohibition moved it past the character in front of it rather
 	// than deleting it, and the character it lands on is in the next box.

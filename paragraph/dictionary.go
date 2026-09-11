@@ -258,3 +258,57 @@ func segmentWords(d *dictionary, s string) []int {
 	}
 	return out
 }
+
+// trailingDictionaryRun is the tail of text that a dictionary would segment
+// together with whatever follows it: the longest suffix whose characters all
+// belong to one dictionary's script.
+//
+// It is what a box hands the box after it, and the bound on how much travels.
+// DictionaryBreaks segments a maximal stretch of one script and stops at the
+// first character of another, so nothing beyond such a stop can change how the
+// text after it divides — a space between two Thai phrases ends the run as
+// surely as a Latin letter does. Without the bound a paragraph of Thai written
+// in a hundred spans would carry its whole text through each of them and be
+// segmented a hundred times.
+//
+// The empty string is the answer for the overwhelming majority of documents,
+// which have no such script in them at all.
+func trailingDictionaryRun(text string) string {
+	var d *dictionary
+	at := len(text)
+	for at > 0 {
+		r, size := utf8.DecodeLastRuneInString(text[:at])
+		this := dictionaryFor(r)
+		if this == nil || (d != nil && this != d) {
+			break
+		}
+		d, at = this, at-size
+	}
+	return text[at:]
+}
+
+// dictionaryTail is the part of text a following box has to be segmented with:
+// the stretch since the last word boundary, where text ends in a script whose
+// words a dictionary finds.
+//
+// breaks is the segmentation of this same text. Both bounds matter and neither
+// is enough alone: the run bound drops text on the far side of a space or of
+// another script, which DictionaryBreaks would not have segmented with this
+// anyway, and the boundary bound drops the words already found inside the run.
+// What is left is the part-word in progress, which is what the next box's first
+// character continues.
+func dictionaryTail(text string, breaks map[int]bool) string {
+	run := trailingDictionaryRun(text)
+	if run == "" {
+		// The text ends in a character no dictionary knows, so nothing after it
+		// is segmented with anything before it.
+		return ""
+	}
+	at := len(text) - len(run)
+	for off := range breaks {
+		if off > at && off <= len(text) {
+			at = off
+		}
+	}
+	return text[at:]
+}

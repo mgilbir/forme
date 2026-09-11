@@ -812,6 +812,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	carried := paragraph.Carried{
 		Offered: in.BreakOpportunity, Deferred: in.AfterDeferred,
 		Held: in.AfterHeld, Prev: in.AfterRune,
+		Before:         in.AfterText,
 		SpaceMayTakeIt: boundaryBreakSpaces,
 	}
 	if carried.Offered && in.AfterAtomic && bindsToAtomicInline(b.Text) {
@@ -1125,9 +1126,14 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		// got wrong — and an opportunity held at this box's own edge counts with
 		// it: that one was offered too, the first character refused it, and the
 		// one it lands on is in a third box.
-		AfterDeferred:   trailing.Deferred,
-		AfterHeld:       trailing.Held,
-		AfterRune:       lastRuneOf(b.Text),
+		AfterDeferred: trailing.Deferred,
+		AfterHeld:     trailing.Held,
+		AfterRune:     lastRuneOf(b.Text),
+		// What the *next* box's first character has to be segmented with, for
+		// the scripts a dictionary finds the words of. The scan says it, because
+		// the scan is what did the segmenting — and it says about a word rather
+		// than the whole run. See paragraph.Trailing.DictTail.
+		AfterText:       trailing.DictTail,
 		AfterLetterUnit: state.AfterLetterUnit,
 		AfterBox:        b,
 	}
