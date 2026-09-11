@@ -721,6 +721,20 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		case item.Inset && item.BreakBefore && content && insetAt < 0:
 			// The line could have ended here. Remember enough to come back.
 			insetAt, insetLine, insetFlow = i, len(line), len(outOfFlow)
+		case IsBidiControlOnly(item.Text):
+			// Not content, and not a margin either. It is an instruction to the
+			// bidirectional algorithm: it sets no paper, takes no room, and puts
+			// nothing on the line for a reader to see.
+			//
+			// Counting it made a line that holds nothing look like a line that
+			// holds something, and the rule that lets an overlong word overflow
+			// an *empty* line then did not fire. "<span>&#x202D;</span> A" in a
+			// box narrower than the A set an empty first line and put the letter
+			// on the second.
+			//
+			// It does not spend the rewind point either, for the same reason the
+			// inset case above does not: nothing has been placed, so a break
+			// before the last box is still the nearest one to come back to.
 		case !item.Inset:
 			// Something that is not a margin has been placed, so the break
 			// before the last box is no longer the one to rewind to: there is a
