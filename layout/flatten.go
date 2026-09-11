@@ -1081,6 +1081,29 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			})
 			out = append(out, item)
 		}
+		if isBidiControlOnly(p.Text) {
+			// §4.1.1's run of white space is not broken in two by a bidi
+			// control, so the state carries through as if this piece were not
+			// there. CollapseWhitespaceAfter already holds to that inside a
+			// text node — "ccc ‮ lll" has one space in it and not two — and a
+			// run that crosses a box boundary is the same run: what this piece
+			// is, is an instruction to the bidirectional algorithm, and it puts
+			// nothing between the space before it and the space after.
+			//
+			// bidi-003 is what the rule is for, and it says so in its markup
+			// rather than in its assert: it writes one boundary as a control
+			// and the same boundary as "</span><span>", and asks for the two to
+			// render identically. A control in a box of its own is those two
+			// spellings met in the middle, and it read as neither —
+			// "a <span>&#x202D;</span> b" kept a space that "a &#x202D; b"
+			// collapses away.
+			//
+			// The item is still built. The character is dropped from the page
+			// but not from the paragraph: it is what the bidirectional
+			// algorithm reads to know the run it opens, and a box holding one
+			// and nothing else is the only place it could be read from.
+			continue
+		}
 		state = inlineState{
 			AfterCollapsibleSpace: p.Collapsible,
 			// Whether the piece ended on a character that would hold on to a
@@ -1480,6 +1503,34 @@ func cutRunsAt(runs []faceRun, parts []string) []faceRun {
 		at += len(run.Text)
 	}
 	return out
+}
+
+// isBidiControlOnly reports whether a piece is bidi controls and nothing else,
+// so that §4.1.1 should look straight through it.
+//
+// Nothing else is transparent this way, and the narrow test is the point rather
+// than caution. A default-ignorable character that is not a control — a
+// variation selector, a soft hyphen, a joiner — is a character of the text: it
+// belongs to what is beside it, and a run of white space it stands in really is
+// two runs. CollapseWhitespaceAfter draws the line in exactly that place for
+// exactly this rule, and the two have to draw it together — widening this one
+// to isDefaultIgnorable makes "a &#xFE0F; b" collapse to one space here while
+// Phase I has already kept two, which is a disagreement no comparison between
+// two spellings can see, because it moves both of them. See
+// TestADefaultIgnorableThatIsNotAControlStillSeparatesTwoSpaces, which asserts
+// the width against the text rather than against another spelling of it.
+//
+// An empty string answers true, and nothing reaches it: SplitAtBreaks emits no
+// piece without text. The loop above is the only caller and it would be the
+// right answer there anyway — a piece with nothing in it puts nothing between
+// two spaces — so there is no guard for a case that cannot arise.
+func isBidiControlOnly(text string) bool {
+	for _, r := range text {
+		if !isBidiControl(r) {
+			return false
+		}
+	}
+	return true
 }
 
 // collapsibleSeparators marks the pieces an expanded virtual word separator

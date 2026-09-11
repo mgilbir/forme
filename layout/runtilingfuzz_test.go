@@ -29,12 +29,15 @@ import (
 // fuzzer likes. What it asserts is the whole of the claim: the widths are equal,
 // to the unit.
 //
-// # The five defects it found, all fixed
+// # The six defects it found, all fixed
 //
 // Each surfaced here as a width — two runs quantized separately are a
-// sixty-fourth of a pixel away from one — and every one of them turned out to be
-// line breaking at the box boundary. They have regression tests of their own in
-// boundarybreak_test.go.
+// sixty-fourth of a pixel away from one — and five of the six turned out to be
+// line breaking at the box boundary, with regression tests of their own in
+// boundarybreak_test.go. The sixth is white space collapsing, in
+// bidicontrolcollapse_test.go, and it is the one that says this target is not
+// a line-breaking test wearing a disguise: what it holds is the arithmetic, and
+// anything that changes what a merge group is shows up in it.
 //
 //   - "0|!" is one unbreakable run and "<span>0|</span><span>!</span>" broke in
 //     two: U+007C is class BA so a line may end after it, U+0021 is class EX so
@@ -51,6 +54,10 @@ import (
 //     — New Tai Lue has no dictionary here, so §5.1 falls back to every
 //     typographic character unit — and an opportunity nothing before the box
 //     knows about had nowhere to be reported.
+//   - "<span> </span><span>\u202D \u202D</span>" kept a space the same text
+//     uncut collapses away. That one is not line breaking at all: §4.1.1's run
+//     of white space is not broken in two by a bidi control, and the collapse
+//     that crosses a box boundary did not know it.
 //
 // # Where the cuts may fall, and why that is not a convenience
 //
@@ -96,6 +103,7 @@ func FuzzRunTiling(f *testing.F) {
 // directions in one line.
 var tilingTexts = []string{
 	"letter", "office", "AVATAR", "", "To.", "0|!", "|!!", "|!0", "x|y", "0ᦤ",
+	"a \u202D b", " \u202D \u202D",
 	"hello world", "a b c d", "one  two", "AA )BB", "中中、中", "\u3042\u3042 abc",
 	"العربية", "ععع", "אבג",
 	"देवनागरी", "क्षत्रिय", "e\u0301cole", "e\u0301\u0302x",

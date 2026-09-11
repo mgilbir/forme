@@ -89,6 +89,7 @@ var (
 	mayNotBeginLine               = paragraph.MayNotBeginLine
 	splitAtBreaks                 = paragraph.SplitAtBreaks
 	splitAtBreaksAfter            = paragraph.SplitAtBreaksAfter
+	isBidiControl                 = paragraph.IsBidiControl
 	tabAdvance                    = paragraph.TabAdvance
 	isIdeographic                 = paragraph.IsIdeographic
 	spacingAdvance                = paragraph.SpacingAdvance
