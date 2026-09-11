@@ -140,6 +140,58 @@ type Piece struct {
 // decoded copy of one is four bytes per character of buffering nobody asked for.
 func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hyphens,
 	w WritingSystem) ([]Piece, Trailing) {
+	return SplitAtBreaksAfter(text, ws, wb, lb, hy, w, Carried{})
+}
+
+// Carried is what the text before this one left at the boundary between them,
+// and what this one needs to finish the rules that boundary interrupted.
+//
+// CSS Text §8.1's boundary between two inline elements does not break shaping,
+// and it does not break line breaking either. UAX #14 is a pair algorithm: what
+// decides an opportunity is the character on each side of it, and a boundary
+// puts those two characters in different boxes. Neither box can answer on its
+// own, so the box before says what it left and the box after runs the rules.
+//
+// Telling layout afterwards is not the same thing and was tried first. An
+// opportunity may have to be taken up at the *second* character of the next box
+// — "<span>|</span><span>!0</span>", where the exclamation mark refuses the
+// break and the digit takes it — and layout resumes at the next Piece, of which
+// "!0" is one. Only the scan can look inside a piece, so the boundary comes in
+// here rather than being corrected there. boundarybreak_test.go holds the five
+// defects that made the case.
+type Carried struct {
+	// Offered says the text before left an opportunity at the boundary at all.
+	// The two below say which kind, and are meaningless without it.
+	Offered bool
+	// Deferred says the opportunity has not been through the prohibitions yet:
+	// it was offered by the character before the boundary, and whether a line
+	// may actually begin here is a question about the character after it, which
+	// is this text's first. word-break still gets to suppress it.
+	Deferred bool
+	// Held says it has been through them once and was *moved* rather than
+	// refused — a prohibition shifts an opportunity past the character a line
+	// may not begin with rather than deleting it. word-break does not get a
+	// second say on the far side of the character that displaced it, which is
+	// what word-break-keep-all-006 asks for.
+	//
+	// Neither set means the opportunity was *taken*: a space left it, the rules
+	// have had their say, and only LB7 still applies.
+	Held bool
+	// Prev is the last character before the boundary, for the pair rules and
+	// for the rules that need to know there is any text in front of this at all.
+	// It is zero at the start of a paragraph and nowhere else.
+	Prev rune
+	// SpaceMayTakeIt says a space at this text's start may take the opportunity
+	// rather than withholding it, which is white-space: break-spaces overruling
+	// LB7. See boundaryWhiteSpace: the value that decides it belongs to the box
+	// the space is in.
+	SpaceMayTakeIt bool
+}
+
+// SplitAtBreaksAfter is SplitAtBreaks for text that follows other text in the
+// same paragraph, with the boundary between them.
+func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hyphens,
+	w WritingSystem, at Carried) ([]Piece, Trailing) {
 	var out []Piece
 	var cur strings.Builder
 	breakNext := false
@@ -195,16 +247,50 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 	// It is deferred because whether the cut is legal depends on the character
 	// that *follows*: only that one says whether the cluster ended. Taking the
 	// opportunity where it is offered is what cut the syllable open.
-	deferBreak := false
+	deferBreak := at.Offered && at.Deferred
 	// heldBreak is an opportunity that was offered and moved rather than
 	// refused: the character in front of it is one a line may not begin with, so
 	// the break belongs after that character instead. It is kept apart from
 	// deferBreak because it has already been through the rules once — word-break
 	// does not get to suppress it a second time on the far side of the character
 	// that displaced it.
-	heldBreak := false
+	heldBreak := at.Offered && at.Held
+	carried := deferBreak || heldBreak
 	// The character before this one, for the pair rules. See gluedPair.
-	var prev rune
+	prev := at.Prev
+	// An opportunity the text before this one *took* rather than offered — a
+	// space left it — which the rules have already had their say over. It marks
+	// the first Piece rather than going through the scan, which is what the
+	// switch below does for a space inside a run.
+	//
+	// Taken at the first character rather than here, because LB7 still applies
+	// to it: a line may not end in front of a space, so an opportunity arriving
+	// at one is withheld unless break-spaces says otherwise. Setting it here
+	// broke a run of preserved spaces in two — white-space-mixed-001, whose
+	// spans hand a pre div a space apiece.
+	takenAtStart := at.Offered && !at.Deferred && !at.Held
+	// Whether there is text in front of this one at all, which is what decides
+	// that an opportunity falling at the very first character is a real one.
+	//
+	// The opportunities above travel forward: the previous box says what it
+	// left, and carried is that. This one is made by the *next* box's own first
+	// character and nothing before it knows about it — the rules that put a
+	// break in front of a character rather than after one, which are the
+	// ideograph's, the aksara's, the dictionary's, and break-all's and
+	// anywhere's every-character pair.
+	//
+	// "0ᦤ" is the shape. New Tai Lue is a script this engine has no dictionary
+	// for, so §5.1's fallback puts an opportunity at every typographic character
+	// unit, and the text breaks between the two. Written as
+	// "<span>0</span><span>ᦤ</span>" the opportunity is at the second box's
+	// first character, where cur is empty and the box before left nothing — so
+	// it was dropped, the two spans were one unbreakable run, and a ligature was
+	// free to cross a boundary a line may fall on.
+	//
+	// The paragraph's own first character is excluded by the same test rather
+	// than by a special case: a break in front of the first thing on the first
+	// line is not a break, and Prev is zero exactly there.
+	afterText := carried || at.Prev != 0
 
 	flush := func() {
 		if cur.Len() == 0 {
@@ -365,11 +451,20 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 		// means, so this is offered rather than withheld and demoted below —
 		// which is the same two steps the auto-phrase value takes, in the same
 		// order and for the same reason.
+		spaceStops := startsSpacePiece(r, ws)
+		if start == 0 {
+			if at.SpaceMayTakeIt {
+				spaceStops = false
+			}
+			if takenAtStart && !spaceStops {
+				breakNext = true
+			}
+		}
 		keptAll := wb.KeepAll &&
-			((deferBreak && isLetterUnit(r) && !startsSpacePiece(r, ws)) || beforeIdeograph)
-		offered := (deferBreak && !(wb.KeepAll && isLetterUnit(r)) && !startsSpacePiece(r, ws)) ||
-			(heldBreak && !startsSpacePiece(r, ws)) ||
-			(wb.BreakAll && !startsSpacePiece(r, ws)) || lb.Anywhere ||
+			((deferBreak && isLetterUnit(r) && !spaceStops) || beforeIdeograph)
+		offered := (deferBreak && !(wb.KeepAll && isLetterUnit(r)) && !spaceStops) ||
+			(heldBreak && !spaceStops) ||
+			(wb.BreakAll && !spaceStops) || lb.Anywhere ||
 			beforeIdeograph || beforeAksara || beforeDictionary ||
 			betweenInseparable || keptAll
 		// UAX #14 forbids a line beginning with a closing bracket, a hyphen or
@@ -443,8 +538,10 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 			offered && !lb.Anywhere {
 			offered, giveUp = false, true
 		}
-		if (offered || giveUp) && atBoundary && cur.Len() > 0 {
-			flush()
+		if (offered || giveUp) && atBoundary && (cur.Len() > 0 || (start == 0 && afterText)) {
+			if cur.Len() > 0 {
+				flush()
+			}
 			breakNext, giveUpNext = true, giveUp
 		}
 		deferBreak, heldBreak = false, held
@@ -713,11 +810,9 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 	}
 	flush()
 	return out, Trailing{
-		// A held one counts with the deferred: it was offered, a rule moved it
-		// past the character in front of it, and the character it lands on is in
-		// the next box.
 		Offered:  breakNext || deferBreak || heldBreak,
-		Deferred: deferBreak || heldBreak,
+		Deferred: deferBreak,
+		Held:     heldBreak,
 	}
 }
 
@@ -749,6 +844,16 @@ type Trailing struct {
 	// rest wrong: "0|!" is one unbreakable run and "<span>0|</span><span>!</span>"
 	// broke in two, because nothing asked LB13 about the exclamation mark.
 	Deferred bool
+	// Held says the opportunity has already been through the rules once: it was
+	// offered, a prohibition moved it past the character in front of it rather
+	// than deleting it, and the character it lands on is in the next box.
+	//
+	// It is Offered and not Deferred, and the difference is which rules still
+	// get to run. UAX #14's prohibitions run again — a line may begin with
+	// neither of "|!!"'s exclamation marks — but word-break does not, because it
+	// already suppressed or allowed this opportunity where it was offered.
+	// Reporting a held one as deferred is what broke word-break-keep-all-006.
+	Held bool
 }
 
 // isLetterUnit reports whether a character is a typographic letter unit in

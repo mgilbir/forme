@@ -705,6 +705,22 @@ type State struct {
 	// held to the same rule as one that did not cross it, or "中中<span>〜</span>文"
 	// and "中中〜文" answer differently about the same text.
 	AfterDeferred bool
+	// AfterHeld says that opportunity was offered and then *moved* rather than
+	// refused: the character in front of it is one a line may not begin with,
+	// so the break belongs after it instead.
+	//
+	// It is kept apart from AfterDeferred because word-break has already had
+	// its say over a held one and does not get a second on the far side of the
+	// character that displaced it. Folding the two together is what broke
+	// word-break-keep-all-006, whose four ideographs around a comma set as
+	// three and one rather than two and two.
+	AfterHeld bool
+	// AfterRune is the last character emitted, which the next box needs for the
+	// pair rules and to know it is not at the start of the paragraph.
+	//
+	// It replaced a question about whether that character was an ideograph,
+	// which is one rule out of the several that read it. See paragraph.Carried.
+	AfterRune rune
 	// AfterLetterUnit says the last character emitted was a typographic letter
 	// unit that is not itself an ideograph, which is what decides whether an
 	// ideograph beginning the next box may be broken away from it. It travels

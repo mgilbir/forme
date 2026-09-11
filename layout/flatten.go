@@ -808,7 +808,16 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		l.reportAutospace(b, unhandledAutospace)
 	}
 	orthography := orthographyAt(boxElement(b))
-	pieces, trailing := splitAtBreaks(b.Text, ws, wb, lb, hy, boxWritingSystem(b))
+	boundaryNoWrap, boundaryBreakSpaces := l.boundaryWhiteSpace(b, ws, in)
+	carried := paragraph.Carried{
+		Offered: in.BreakOpportunity, Deferred: in.AfterDeferred,
+		Held: in.AfterHeld, Prev: in.AfterRune,
+		SpaceMayTakeIt: boundaryBreakSpaces,
+	}
+	if carried.Offered && in.AfterAtomic && bindsToAtomicInline(b.Text) {
+		carried.Offered = false
+	}
+	pieces, trailing := splitAtBreaksAfter(b.Text, ws, wb, lb, hy, boxWritingSystem(b), carried)
 	pieces = collapsibleSeparators(pieces, wordSpaceTransformValue(b.Style))
 	if points := l.hyphenPoints[b]; len(points) > 0 {
 		var endsAtHyphen bool
@@ -855,9 +864,10 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 
 	out := make([]inlineItem, 0, len(pieces))
 	state := in
-	// An opportunity this box's first character refused, waiting on whatever
-	// follows the box. See the branch that sets it.
-	heldAtEdge := false
+	// The boundary's opportunity has been spent: it went into Carried above and
+	// the scan has already run the rules over it, so what comes out is in the
+	// pieces. Leaving it set offered it a second time, from the loop below.
+	state.BreakOpportunity = false
 	// §5.1's rule about which element decides, resolved once for the box.
 	//
 	// The boundary in front of this box's first character has a character on
@@ -877,137 +887,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	// break-all with the span set to pre and asks for the break at both edges of
 	// the span.
 	noWrap := !ws.Wrap
-	boundaryNoWrap := noWrap
-	// And §3's break-spaces at the same boundary, for the same reason and by the
-	// same rule about who decides.
-	//
-	// UAX #14's LB7 is "× SP", so an opportunity carried in from another box is
-	// withheld from a space — a line may not end in front of one. break-spaces
-	// is the value that overrules it, and CSS Text §3 says so in the words that
-	// name this case: "there is a soft wrap opportunity after every preserved
-	// white space character, including between white space characters".
-	//
-	// SplitAtBreaks applies that inside a run, so "ああ␣␣␣␣ああ" in three
-	// ideographs of room sets three, three and two. Putting a <span> — even an
-	// empty one — between the first space and the second split the text into two
-	// boxes, the opportunity between them was withheld as LB7's, and the fill
-	// found nowhere to break the second line: it rewound to the last opportunity
-	// it had, which was between the two ideographs, and set one character on the
-	// first line. trailing-ideographic-space-break-spaces-005 and -006 are that
-	// document.
-	boundaryBreakSpaces := ws.BreakSpaces
-	if prev, ok := in.AfterBox.(*Box); ok {
-		gov := commonAncestor(prev, b)
-		if in.AfterCollapsibleSpace {
-			// Except where a space left the opportunity, which is its own and
-			// not the boundary's. §3 gives it to the space — "there is a soft
-			// wrap opportunity after every white space character" — so what
-			// decides whether it may be taken is the element the space is in.
-			//
-			// The ancestor's answer is the same one everywhere the two elements
-			// agree, which is everywhere white-space is inherited rather than
-			// declared. Where they do not, the suite's
-			// white-space-wrap-after-nowrap-001 is the document: a nowrap block
-			// holding a wrapping span whose last character is a space, and then
-			// more of the block's own text. The common ancestor is the block and
-			// says no; the space is in the span and says yes, and the reference
-			// breaks the line.
-			gov = prev
-		}
-		if gov != nil {
-			boundaryNoWrap = !whiteSpaceFor(gov.Style).Wrap
-			boundaryBreakSpaces = whiteSpaceFor(gov.Style).BreakSpaces
-		}
-	}
-	// Read off the ancestor rather than off this box, because §5.1 gives the
-	// boundary to the innermost element containing both characters. When that
-	// note was written it was a distinction no document made — white-space
-	// inherits, so the two agree everywhere it is not declared, and the suite
-	// gave the same 5594 clean passes either way. The exception above is a
-	// document that does declare it on both, and there the two part.
-	//
-	// The narrower reading — that only an opportunity left behind by a *space*
-	// may be taken by one, since §3's sentence is about the space that leaves it
-	// — was written first and could not be made to fail. An opportunity reaches
-	// a box boundary only when the text before it ended at one, and no document
-	// tells the two readings apart: the reftest suite gives 5594 clean passes
-	// either way with no test moving, and neither does a fixture built for the
-	// case the wider reading would get wrong — an atomic inline, then a space in
-	// a box of its own, then a float, which is the shape flatten.go already
-	// records a measurement about for LB7. It cost a field on the shared state
-	// and three places that had to keep it up to date, so it is gone and this is
-	// the note that says it was tried.
 	for i, p := range pieces {
-		// CSS Text §5.1's exception, on the far side: the opportunity a picture
-		// left behind is not offered to a character that holds on to it.
-		//
-		// Only the first piece can be the one next to the picture — after that
-		// there is text in between — and it is written as the index rather than
-		// as a flag the loop clears, because that is a thing a reader can check
-		// against the loop rather than against every path out of it.
-		if i == 0 && state.AfterAtomic && bindsToAtomicInline(p.Text) {
-			state.BreakOpportunity = false
-		}
-		// And the general form of the same thing. An opportunity carried in from
-		// the box before is offered to whatever begins this one, and a line may
-		// not begin with a closing bracket, a hyphen or a non-starter whichever
-		// box the character happens to be written in. SplitAtBreaks withholds it
-		// *inside* a run; across a boundary there is no character in the earlier
-		// box to test, so the box receiving the opportunity is what asks.
-		//
-		// The suite writes it as "中中<span>〜</span>文" — the character a line
-		// may not begin with in an element of its own, which is what a test that
-		// wants to colour it does — and its whole line-break strictness family
-		// is that shape.
-		//
-		// Only an opportunity an ideograph deferred, which is the same subset the
-		// rule is applied to inside a run: a break after a space is not one this
-		// withholds, and never has been — "AA )BB" breaks after the space. The
-		// two have to agree, or the answer depends on whether the author wrote a
-		// <span>.
-		//
-		// Not after an atomic inline either, and §5.1 says why in as many words:
-		// there is an opportunity before and after each one "even when adjacent
-		// to a character that would normally suppress them". A picture followed
-		// by a closing bracket may still be wrapped away from it. The exception
-		// to the exception is the three binding classes, which the branch above
-		// is. It falls out of AfterDeferred as well — a picture is not an
-		// ideograph — and is written out because it is a rule rather than a
-		// coincidence.
-		if i == 0 && state.BreakOpportunity && state.AfterDeferred &&
-			!state.AfterAtomic && !lb.Anywhere && mayNotBeginLine(p.Text, lb) {
-			state.BreakOpportunity = false
-			// Refused, not deleted. A prohibition moves an opportunity rather
-			// than dropping one — "× CL" says a line may not begin with a
-			// closing bracket and says nothing against one beginning with what
-			// comes after it — and SplitAtBreaks holds it forward for exactly
-			// that reason inside a run. Across a boundary the character that
-			// would take it is in a third box, so the hold has to travel.
-			//
-			heldAtEdge = true
-		}
-		// And the hold taken up, one piece later. The piece after the one that
-		// refused it is the next boundary the opportunity could fall on.
-		//
-		// Where the box runs out first the hold leaves with it, which is the
-		// single-character span the suite writes: "字字<span>、</span>字字" has
-		// the character that takes the opportunity in a third box.
-		//
-		// The mayNotBeginLine test is the correct reading of the rule — a line
-		// may not begin with a closing bracket however many are written in a row,
-		// so a second refusal should keep holding — and it has no test, which is
-		// a different thing from being covered. It cannot fire as the pieces come
-		// out today: SplitAtBreaks does not cut in front of a character a line
-		// may not begin with, so two of them are one piece ("、）中" splits as
-		// "、）" and "中"), and every piece after the first begins where a flush
-		// happened. A planted defect that deleted it moved no test and no
-		// reftest. It stays because the rule is real and the day the split cuts
-		// differently is not a day anyone will remember this.
-		if i > 0 && heldAtEdge {
-			if lb.Anywhere || !mayNotBeginLine(p.Text, lb) {
-				state.BreakOpportunity, heldAtEdge = true, false
-			}
-		}
 		// §5.2's break-all treats every alphabetic, numeric and ideographic
 		// character in this box as ID — and that includes the first one. UAX #14
 		// allows a line to end between whatever precedes an ID and the ID itself,
@@ -1213,7 +1093,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		}
 	}
 	return out, inlineState{
-		BreakOpportunity:      trailing.Offered || heldAtEdge,
+		BreakOpportunity:      trailing.Offered,
 		AfterCollapsibleSpace: state.AfterCollapsibleSpace,
 		AfterBinding:          state.AfterBinding,
 		// Whether the opportunity this box leaves is one the next character may
@@ -1222,7 +1102,9 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		// got wrong — and an opportunity held at this box's own edge counts with
 		// it: that one was offered too, the first character refused it, and the
 		// one it lands on is in a third box.
-		AfterDeferred:   trailing.Deferred || heldAtEdge,
+		AfterDeferred:   trailing.Deferred,
+		AfterHeld:       trailing.Held,
+		AfterRune:       lastRuneOf(b.Text),
 		AfterLetterUnit: state.AfterLetterUnit,
 		AfterBox:        b,
 	}
@@ -1471,6 +1353,96 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 			a.spacing, shaping{ContextKerns: true, Upright: item.Upright, Off: item.Off})
 	}
 	return item
+}
+
+// boundaryWhiteSpace is white-space as it applies to the boundary in front of
+// this box's first character, rather than to the box itself.
+//
+// CSS Text §5.1 gives that boundary to the innermost element containing the
+// characters on both sides of it, which is not this box — see the note at
+// noWrap, and white-space-wrap-after-nowrap-001 for the document where the two
+// answers differ.
+func (l *layouter) boundaryWhiteSpace(b *Box, ws paragraph.WhiteSpace,
+	in inlineState) (noWrap, breakSpaces bool) {
+	boundaryNoWrap := !ws.Wrap
+	// And §3's break-spaces at the same boundary, for the same reason and by the
+	// same rule about who decides.
+	//
+	// UAX #14's LB7 is "× SP", so an opportunity carried in from another box is
+	// withheld from a space — a line may not end in front of one. break-spaces
+	// is the value that overrules it, and CSS Text §3 says so in the words that
+	// name this case: "there is a soft wrap opportunity after every preserved
+	// white space character, including between white space characters".
+	//
+	// SplitAtBreaks applies that inside a run, so "ああ␣␣␣␣ああ" in three
+	// ideographs of room sets three, three and two. Putting a <span> — even an
+	// empty one — between the first space and the second split the text into two
+	// boxes, the opportunity between them was withheld as LB7's, and the fill
+	// found nowhere to break the second line: it rewound to the last opportunity
+	// it had, which was between the two ideographs, and set one character on the
+	// first line. trailing-ideographic-space-break-spaces-005 and -006 are that
+	// document.
+	boundaryBreakSpaces := ws.BreakSpaces
+	// Read off the ancestor rather than off this box, because §5.1 gives the
+	// boundary to the innermost element containing both characters. When that
+	// note was written it was a distinction no document made — white-space
+	// inherits, so the two agree everywhere it is not declared, and the suite
+	// gave the same 5594 clean passes either way. white-space-wrap-after-nowrap-001
+	// is a document that does declare it on both, and there the two part.
+	//
+	// The narrower reading — that only an opportunity left behind by a *space*
+	// may be taken by one, since §3's sentence is about the space that leaves it
+	// — was written first and could not be made to fail. An opportunity reaches
+	// a box boundary only when the text before it ended at one, and no document
+	// tells the two readings apart: the reftest suite gives 5594 clean passes
+	// either way with no test moving, and neither does a fixture built for the
+	// case the wider reading would get wrong — an atomic inline, then a space in
+	// a box of its own, then a float, which is the shape flatten.go already
+	// records a measurement about for LB7. It cost a field on the shared state
+	// and three places that had to keep it up to date, so it is gone and this is
+	// the note that says it was tried.
+	if prev, ok := in.AfterBox.(*Box); ok {
+		gov := commonAncestor(prev, b)
+		if in.AfterCollapsibleSpace {
+			// Except where a space left the opportunity, which is its own and
+			// not the boundary's. §3 gives it to the space — "there is a soft
+			// wrap opportunity after every white space character" — so what
+			// decides whether it may be taken is the element the space is in.
+			//
+			// The ancestor's answer is the same one everywhere the two elements
+			// agree, which is everywhere white-space is inherited rather than
+			// declared. Where they do not, the suite's
+			// white-space-wrap-after-nowrap-001 is the document: a nowrap block
+			// holding a wrapping span whose last character is a space, and then
+			// more of the block's own text. The common ancestor is the block and
+			// says no; the space is in the span and says yes, and the reference
+			// breaks the line.
+			gov = prev
+		}
+		if gov != nil {
+			boundaryNoWrap = !whiteSpaceFor(gov.Style).Wrap
+			boundaryBreakSpaces = whiteSpaceFor(gov.Style).BreakSpaces
+		}
+	}
+	return boundaryNoWrap, boundaryBreakSpaces
+}
+
+// lastRuneOf is the last character of a box's text, for the boundary the next
+// box begins at. See paragraph.Carried.Prev.
+//
+// Zero means there is none, which is what tells the next box it is at the start
+// of the paragraph and that an opportunity in front of its first character is
+// not one. So a character that happens to decode as U+FFFD is not that: only a
+// size of one — a byte that is not a character at all — and an empty string are.
+// Reading RuneError alone gives a box ending in a literal replacement character
+// the paragraph's own answer, and "<span>\uFFFD</span><span>ᦤ</span>" loses the
+// break that "\uFFFDᦤ" has.
+func lastRuneOf(text string) rune {
+	r, size := utf8.DecodeLastRuneInString(text)
+	if r == utf8.RuneError && size <= 1 {
+		return 0
+	}
+	return r
 }
 
 // cutRunsAt re-cuts a piece's face runs so that every boundary in parts is also

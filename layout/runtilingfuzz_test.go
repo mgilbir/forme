@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/mgilbir/forme/fonts/notosans"
@@ -30,33 +29,28 @@ import (
 // fuzzer likes. What it asserts is the whole of the claim: the widths are equal,
 // to the unit.
 //
-// # What it is held to, and the three defects it found
+// # The five defects it found, all fixed
 //
-// Letters, marks, digits, spaces and the format characters — a *word*, which is
-// what the claim is about. Punctuation is excluded, and the reason is the three
-// line-breaking defects this invariant found in it, each of which showed up here
-// as a width: two runs quantized separately are a sixty-fourth of a pixel away
-// from one.
+// Each surfaced here as a width — two runs quantized separately are a
+// sixty-fourth of a pixel away from one — and every one of them turned out to be
+// line breaking at the box boundary. They have regression tests of their own in
+// boundarybreak_test.go.
 //
-//   - "0|!" is one unbreakable run — U+007C is class BA so a line may end after
-//     it, U+0021 is class EX so a line may not begin with one, and the second
-//     rule wins — and "<span>0|</span><span>!</span>" broke in two.
-//   - "中中、中" breaks after the comma, and "<span>中中、</span><span>中</span>"
-//     did not: a box that ran out of text while *holding* an opportunity
-//     dropped it.
-//   - "|!!" is one unbreakable run and three spans took a break that both
-//     exclamation marks refuse.
-//
-// All three are fixed and have regression tests of their own in
-// boundarybreak_test.go. What is left is the fourth of the family, which the
-// engine does not yet do: "<span>|</span><span>!0</span>". The hold has to be
-// taken up *inside* the next box, at its second character, and only the scan can
-// do that — which needs SplitAtBreaks to be handed the boundary rather than told
-// about it afterwards. The attempt is recorded in the memory note; it fixes this
-// case and costs white-space-mixed-001, for a reason not yet understood.
-//
-// So the corpus is words until that lands, and the three fixtures above hold
-// what has been fixed.
+//   - "0|!" is one unbreakable run and "<span>0|</span><span>!</span>" broke in
+//     two: U+007C is class BA so a line may end after it, U+0021 is class EX so
+//     a line may not begin with one, and nothing asked LB13 across the boundary.
+//   - "中中、中" breaks after the comma and "<span>中中、</span><span>中</span>"
+//     did not: a box that ran out of text while *holding* an opportunity dropped
+//     it.
+//   - "|!!" in three spans took a break that both exclamation marks refuse.
+//   - "<span>|</span><span>!0</span>" took one the second box's *second*
+//     character should have taken, which needed the scan to be handed the
+//     boundary rather than told about it afterwards.
+//   - "<span>0</span><span>ᦤ</span>" took none at all. That one is the other
+//     direction: the opportunity is made by the second box's *first* character
+//     — New Tai Lue has no dictionary here, so §5.1 falls back to every
+//     typographic character unit — and an opportunity nothing before the box
+//     knows about had nowhere to be reported.
 //
 // # Where the cuts may fall, and why that is not a convenience
 //
@@ -101,30 +95,12 @@ func FuzzRunTiling(f *testing.F) {
 // letters change form, a cluster with a mark on it, white space, and the two
 // directions in one line.
 var tilingTexts = []string{
-	"letter", "office", "AVATAR", "",
-	"hello world", "a b c d", "one  two", "\u3042\u3042 abc",
+	"letter", "office", "AVATAR", "", "To.", "0|!", "|!!", "|!0", "x|y", "0ᦤ",
+	"hello world", "a b c d", "one  two", "AA )BB", "中中、中", "\u3042\u3042 abc",
 	"العربية", "ععع", "אבג",
 	"देवनागरी", "क्षत्रिय", "e\u0301cole", "e\u0301\u0302x",
 	"abc אבג def", "high\u00adway", "a\u200bb", "a\u200db",
 	"12345", "ﬁreﬂy", "AVA To",
-}
-
-// isWordText reports whether every character is one a word is made of.
-//
-// Letters, the marks that sit on them, digits, the spaces between words, and
-// the format characters a word is spelled with — the soft hyphen, the zero
-// width space, the joiners. Punctuation and symbols are not, and the note at the
-// top says what lives there.
-func isWordText(text string) bool {
-	for _, r := range text {
-		switch {
-		case unicode.IsLetter(r), unicode.IsMark(r), unicode.IsDigit(r),
-			unicode.IsSpace(r), unicode.Is(unicode.Cf, r):
-		default:
-			return false
-		}
-	}
-	return true
 }
 
 // checkRunTiling lays the text out whole and cut, and compares the widths.
@@ -138,11 +114,6 @@ func checkRunTiling(t testing.TB, text, cuts string) {
 		// Markup this would have to escape; the characters that force a line
 		// break, which would make the two documents different numbers of lines
 		// and the comparison meaningless; and the null, for the reason below.
-		return
-	}
-	if !isWordText(text) {
-		// A word, which is what the claim is about. See the note at the top for
-		// the line-breaking defects that live in the punctuation this excludes.
 		return
 	}
 	if !utf8.ValidString(text) {

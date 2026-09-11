@@ -88,6 +88,7 @@ var (
 	splitAtWordSeparators         = paragraph.SplitAtWordSeparators
 	mayNotBeginLine               = paragraph.MayNotBeginLine
 	splitAtBreaks                 = paragraph.SplitAtBreaks
+	splitAtBreaksAfter            = paragraph.SplitAtBreaksAfter
 	tabAdvance                    = paragraph.TabAdvance
 	isIdeographic                 = paragraph.IsIdeographic
 	spacingAdvance                = paragraph.SpacingAdvance
