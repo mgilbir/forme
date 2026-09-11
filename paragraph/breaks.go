@@ -475,10 +475,15 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 		// order and for the same reason.
 		spaceStops := startsSpacePiece(r, ws)
 		if start == 0 {
+			// LB7 at the boundary, which is the two characters the rule names
+			// rather than every character the scan gives a white-space Piece
+			// to — see startsLB7Space. break-spaces overrules it, and that is
+			// the same overruling spaceStops gets below.
+			endsInFrontOfASpace := startsLB7Space(r) && !at.SpaceMayTakeIt
 			if at.SpaceMayTakeIt {
 				spaceStops = false
 			}
-			if takenAtStart && !spaceStops {
+			if takenAtStart && !endsInFrontOfASpace {
 				breakNext = true
 			}
 		}
@@ -949,6 +954,32 @@ func startsSpacePiece(r rune, ws WhiteSpace) bool {
 	}
 	return IsOtherSpaceSeparator(r)
 }
+
+// startsLB7Space reports whether a line may not end in front of this character
+// because of UAX #14's LB7, which is "× SP" and "× ZW" and is those two
+// characters and no others.
+//
+// startsSpacePiece is the wider set and is the wrong question here, which is
+// what this exists to say. That one is "does SplitAtBreaks give this a white
+// space Piece of its own", which is right for break-all's withholding and
+// includes the tab and §4.1's other space separators — and those are class BA,
+// a class a line may perfectly well end in front of.
+//
+// Asked at a box boundary the difference shows: "a &#x2000;" breaks before the
+// EN QUAD, and "<span>a </span><span>&#x2000;</span>" did not, because the
+// opportunity the space took was withheld from a character LB7 says nothing
+// about. Inside a run the question never arises — the space arm offers the
+// opportunity and no test stands between — so the two spellings disagreed.
+//
+// The zero width space is the half no document can see, and it is here because
+// the rule has two characters in it rather than because a test asks. A box
+// beginning with one gets a ZeroWidth Piece, which builds no item — it sets no
+// paper and takes no room, and what it does is stand between its neighbours —
+// so the BreakBefore this would withhold is discarded either way. A planted
+// defect dropping it moved no test and no reftest. Naming only the space would
+// make this a rule of its own that happens to resemble LB7, which is the sort
+// of thing somebody has to re-derive later.
+func startsLB7Space(r rune) bool { return r == ' ' || r == '\u200B' }
 
 // startsSpace reports whether white space follows the text at i. The end of the
 // text is not white space: what comes after it is in another box, and whether

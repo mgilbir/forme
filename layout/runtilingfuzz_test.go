@@ -29,10 +29,10 @@ import (
 // fuzzer likes. What it asserts is the whole of the claim: the widths are equal,
 // to the unit.
 //
-// # The eight defects it found, all fixed
+// # The nine defects it found, all fixed
 //
 // Each surfaced here as a width — two runs quantized separately are a
-// sixty-fourth of a pixel away from one — and seven of the eight turned out to be
+// sixty-fourth of a pixel away from one — and eight of the nine turned out to be
 // line breaking at the box boundary, with regression tests of their own in
 // boundarybreak_test.go. The sixth is white space collapsing, in
 // bidicontrolcollapse_test.go, and it is the one that says this target is not
@@ -66,6 +66,10 @@ import (
 //     the hyphen. The box left two opportunities at one offset — one the
 //     vertical line offered and the hyphen held, one the hyphen took — and
 //     saying it was the held one is saying it can be refused.
+//   - "<span>a </span><span>\u2000</span>" was a sixty-fourth wider than
+//     "a \u2000", and the lines are identical either way: LB7 is "× SP, × ZW"
+//     and the boundary asked the wider "does this get a white-space Piece",
+//     so a merge group was let across an opportunity a ligature may not span.
 //
 // # Where the cuts may fall, and why that is not a convenience
 //
@@ -111,7 +115,7 @@ func FuzzRunTiling(f *testing.F) {
 // directions in one line.
 var tilingTexts = []string{
 	"letter", "office", "AVATAR", "", "To.", "0|!", "|!!", "|!0", "x|y", "0ᦤ",
-	"a \u202D b", " \u202D \u202D", "ภาษาไทย", "ะ๕ะ", "|-!",
+	"a \u202D b", " \u202D \u202D", "ภาษาไทย", "ะ๕ะ", "|-!", "a \u2000",
 	"hello world", "a b c d", "one  two", "AA )BB", "中中、中", "\u3042\u3042 abc",
 	"العربية", "ععع", "אבג",
 	"देवनागरी", "क्षत्रिय", "e\u0301cole", "e\u0301\u0302x",

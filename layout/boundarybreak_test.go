@@ -19,14 +19,14 @@ import (
 // paragraph.Trailing, whose two fields are the two facts that cannot be read
 // back off the text.
 //
-// The six defects here were found by FuzzRunTiling, which asserts the
+// The seven defects here were found by FuzzRunTiling, which asserts the
 // arithmetic — two runs quantized separately are a sixty-fourth of a pixel away
 // from one — and every one of them turned out to be line breaking rather than
 // arithmetic. That is not a coincidence: a merge group is exactly the run of
 // text no line may fall inside, so a lost or invented opportunity changes what
 // is shaped together and the widths say so.
 //
-// Two of the eight are containment rather than regression — LB7 in front of a
+// Two of the nine are containment rather than regression — LB7 in front of a
 // preserved space, and the opportunity a space takes — and each names the fix
 // that broke it. They are the rules an attempt here is most likely to cost.
 
@@ -297,6 +297,58 @@ func TestABoxsFirstCharacterMayOfferItsOwnBreak(t *testing.T) {
 		if len(cut) != len(whole) {
 			t.Errorf("%q set %d lines %q and the same text in spans set %d %q",
 				tc.whole, len(whole), whole, len(cut), cut)
+		}
+	}
+}
+
+// TestLB7IsAboutASpaceAndNotEveryWhiteCharacter is the last of the family, and
+// the one with no symptom in the lines at all.
+//
+// UAX #14's LB7 is "× SP" and "× ZW": a line may not end in front of a space or
+// a zero width space, and in front of those two characters only. Everything else
+// the scan gives a white-space Piece of its own — the tab, and §4.1's other
+// space separators — is class BA, which a line may perfectly well end in front
+// of. The boundary borrowed startsSpacePiece, which is the wider set and is the
+// right answer to a different question (see its note), and so withheld an
+// opportunity from a character the rule says nothing about.
+//
+// Inside a run the question never arises: the space arm offers the opportunity
+// and no test stands between. So the two spellings disagreed, and only about
+// the *arithmetic* — the opportunity is at the same offset either way once the
+// line is long enough to reach it, and what changed is whether a merge group
+// was allowed to span it. A ligature may not cross a break opportunity; a run
+// that is wrongly one group is quantized as one, and comes out a sixty-fourth
+// of a pixel from the same text written plainly.
+//
+// Which is why this is a width and the lines are identical under the defect,
+// and why it took an invariant to find. In Courier because that is where the
+// tiling shows: "⭋ &#x2000;" is what FuzzRunTiling minimized it to.
+func TestLB7IsAboutASpaceAndNotEveryWhiteCharacter(t *testing.T) {
+	const (
+		quad = "\u2000" // EN QUAD, UAX #14 class BA
+		ideo = "\u3000" // IDEOGRAPHIC SPACE, class BA too
+		sp   = "\u0020" // the one LB7 is actually about
+	)
+	for _, tc := range []struct{ what, whole, cut string }{
+		{"an en quad", "a " + quad,
+			"<span>a </span><span>" + quad + "</span>"},
+		{"two of them", "a " + quad + quad,
+			"<span>a " + quad + "</span><span>" + quad + "</span>"},
+		{"an ideographic space", "a " + ideo,
+			"<span>a </span><span>" + ideo + "</span>"},
+		{"one with text after it", "a " + quad + "b",
+			"<span>a </span><span>" + quad + "b</span>"},
+		// And the character the rule *is* about, which must still withhold it.
+		{"an ordinary space does", "a " + sp + "b",
+			"<span>a </span><span>" + sp + "b</span>"},
+	} {
+		whole := widthOfMarkupIn(t, "Courier", tc.whole)
+		cut := widthOfMarkupIn(t, "Courier", tc.cut)
+		if whole != cut {
+			t.Errorf("%s: %q is %v wide written plainly and %v in spans; LB7 is "+
+				"about a space and a zero width space, so the opportunity the "+
+				"space took reaches this character and no merge group may span it",
+				tc.what, tc.whole, whole, cut)
 		}
 	}
 }

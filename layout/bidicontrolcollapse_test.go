@@ -124,13 +124,23 @@ func TestAPieceThatIsNotOnlyControlsStillEndsTheRun(t *testing.T) {
 // in the bundled Noto Sans under nowrap.
 func widthOfMarkup(t *testing.T, markup string) style.Unit {
 	t.Helper()
+	return widthOfMarkupIn(t, "T", markup)
+}
+
+// widthOfMarkupIn is widthOfMarkup in a named family. "T" is the bundled Noto
+// Sans and "Courier" one of the standard fourteen, which is the pair
+// FuzzRunTiling holds every case in: Courier joins, kerns and ligates in none of
+// the ways Noto Sans does, so a merge group that goes wrong there goes unnoticed
+// in the other.
+func widthOfMarkupIn(t *testing.T, family, markup string) style.Unit {
+	t.Helper()
 	face, err := notosans.Face()
 	if err != nil {
 		t.Fatalf("loading the embedded Noto Sans: %v", err)
 	}
 	set := namedFaceSet{family: "T", face: face, standard: StandardFonts()}
 	w, ok := tiledWidth(t, set, markup,
-		`#d { font-family: T; font-size: 16px; white-space: nowrap }`)
+		`#d { font-family: `+family+`; font-size: 16px; white-space: nowrap }`)
 	if !ok {
 		t.Fatalf("%q did not set exactly one line", markup)
 	}
