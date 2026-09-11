@@ -139,7 +139,7 @@ type Piece struct {
 // micro-optimisation: a text node is untrusted and arbitrarily large, and a
 // decoded copy of one is four bytes per character of buffering nobody asked for.
 func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hyphens,
-	w WritingSystem) ([]Piece, bool) {
+	w WritingSystem) ([]Piece, Trailing) {
 	var out []Piece
 	var cur strings.Builder
 	breakNext := false
@@ -712,12 +712,43 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 		}
 	}
 	flush()
-	// breakNext survives the last Piece: it says the text ended at an
-	// opportunity, which matters when what follows is in another box. A deferred
-	// one counts, and has to: text ending in an ideograph offers a break to
-	// whatever box comes next, and the character that would have confirmed it is
-	// in that box rather than this one.
-	return out, breakNext || deferBreak
+	return out, Trailing{
+		// A held one counts with the deferred: it was offered, a rule moved it
+		// past the character in front of it, and the character it lands on is in
+		// the next box.
+		Offered:  breakNext || deferBreak || heldBreak,
+		Deferred: deferBreak || heldBreak,
+	}
+}
+
+// Trailing is what a run of text leaves for whatever follows it in another box.
+//
+// CSS Text §8.1's boundary between two inline elements does not break shaping,
+// and it does not break line breaking either: the character on the far side has
+// to be asked the same questions it would have been asked inside a run. A caller
+// that has one box's text and then another's cannot ask them without this,
+// because neither fact can be read back off the text.
+type Trailing struct {
+	// Offered says the text ended at an opportunity the next box may take.
+	//
+	// A deferred one counts, and has to: text ending in an ideograph offers a
+	// break to whatever box comes next, and the character that would have
+	// confirmed it is in that box rather than this one.
+	Offered bool
+	// Deferred says that opportunity is one the next character may still
+	// refuse. It was *offered* rather than taken, so UAX #14's "a line may not
+	// begin with this character" has yet to run over it — which inside a run is
+	// what turns "字字、字字" into two lines of two rather than three and one.
+	//
+	// It cannot be read off the last character, and the attempt to is what this
+	// field replaced. An ideograph defers an opportunity and so does every class
+	// BA character — a danda, a vertical line — while a hyphen does not, because
+	// the arm that handles it takes the opportunity instead, and nor does a
+	// space. Which arm ran is a fact about the scan and not about the character,
+	// and a caller testing the character alone gets the ideographs right and the
+	// rest wrong: "0|!" is one unbreakable run and "<span>0|</span><span>!</span>"
+	// broke in two, because nothing asked LB13 about the exclamation mark.
+	Deferred bool
 }
 
 // isLetterUnit reports whether a character is a typographic letter unit in

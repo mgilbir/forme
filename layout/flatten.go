@@ -808,7 +808,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		l.reportAutospace(b, unhandledAutospace)
 	}
 	orthography := orthographyAt(boxElement(b))
-	pieces, endedAtBreak := splitAtBreaks(b.Text, ws, wb, lb, hy, boxWritingSystem(b))
+	pieces, trailing := splitAtBreaks(b.Text, ws, wb, lb, hy, boxWritingSystem(b))
 	pieces = collapsibleSeparators(pieces, wordSpaceTransformValue(b.Style))
 	if points := l.hyphenPoints[b]; len(points) > 0 {
 		var endsAtHyphen bool
@@ -817,13 +817,22 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		// box comes next, which is what a soft hyphen ending a node already
 		// does. "high<span>way</span>" is the shape: the point falls between
 		// the two text boxes, so neither of them holds it on its own.
-		endedAtBreak = endedAtBreak || endsAtHyphen
+		if endsAtHyphen {
+			// A hyphenation point *takes* its opportunity — the word is divided
+			// there and a hyphen printed — so it offers one to the next box and
+			// leaves nothing for the next character to refuse. See
+			// paragraph.Trailing.
+			trailing.Offered = true
+		}
 	}
 	if len(pieces) == 0 {
 		// A box that produced nothing passes an opportunity through rather than
 		// swallowing it — and it may have created one of its own, which is what
 		// a <span> holding a single zero-width space is. Either source counts.
-		in.BreakOpportunity = in.BreakOpportunity || endedAtBreak
+		in.BreakOpportunity = in.BreakOpportunity || trailing.Offered
+		if trailing.Offered {
+			in.AfterDeferred = trailing.Deferred
+		}
 		return nil, in
 	}
 
@@ -1198,23 +1207,24 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			// picture after it. A piece is a run between two opportunities, so
 			// its last character is the one next to whatever comes next.
 			AfterBinding: endsBinding(p.Text),
-			// Whether the opportunity this piece leaves behind is one an
-			// ideograph deferred. SplitAtBreaks defers those and takes them at
-			// the next character; a piece that ends in one has handed the
-			// decision to whatever comes after it, which may be another box.
-			AfterDeferred: endsIdeographic(p.Text),
 			// Whether the character before the next boundary is one an
 			// ideograph may be broken away from. See the rule above.
 			AfterLetterUnit: endsLetterUnit(p.Text),
 		}
 	}
 	return out, inlineState{
-		BreakOpportunity:      endedAtBreak || heldAtEdge,
+		BreakOpportunity:      trailing.Offered || heldAtEdge,
 		AfterCollapsibleSpace: state.AfterCollapsibleSpace,
 		AfterBinding:          state.AfterBinding,
-		AfterDeferred:         state.AfterDeferred,
-		AfterLetterUnit:       state.AfterLetterUnit,
-		AfterBox:              b,
+		// Whether the opportunity this box leaves is one the next character may
+		// still refuse. It is the scan's answer and not a guess from the last
+		// character — see paragraph.Trailing.Deferred, which says what the guess
+		// got wrong — and an opportunity held at this box's own edge counts with
+		// it: that one was offered too, the first character refused it, and the
+		// one it lands on is in a third box.
+		AfterDeferred:   trailing.Deferred || heldAtEdge,
+		AfterLetterUnit: state.AfterLetterUnit,
+		AfterBox:        b,
 	}
 }
 
@@ -1245,16 +1255,6 @@ func startsIdeographic(text string) bool {
 func endsLetterUnit(text string) bool {
 	r, _ := utf8.DecodeLastRuneInString(text)
 	return r != utf8.RuneError && paragraph.IsLetterUnit(r) && !paragraph.IsIdeographic(r)
-}
-
-// endsIdeographic reports whether a piece ends on the one character that leaves
-// an opportunity *deferred* rather than taken: an ideograph, which offers a
-// break after itself and lets the next character decide whether it is real.
-//
-// It is the question inlineState.AfterDeferred carries across a box boundary.
-func endsIdeographic(text string) bool {
-	r, _ := utf8.DecodeLastRuneInString(text)
-	return r != utf8.RuneError && paragraph.IsIdeographic(r)
 }
 
 // textItemArgs is what one text item is built from. It is a struct because the

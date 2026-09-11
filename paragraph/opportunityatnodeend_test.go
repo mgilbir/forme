@@ -39,9 +39,9 @@ func TestAnOpportunityAtTheEndOfANodeIsHandedOn(t *testing.T) {
 	} {
 		_, ended := SplitAtBreaks(tc.text, WhiteSpace{Collapse: true, Wrap: true},
 			WordBreak{}, tc.lb, Hyphens{}, WritingSystemOther)
-		if ended != tc.want {
+		if ended.Offered != tc.want {
 			t.Errorf("%s (%q): the text ends at an opportunity = %v, want %v",
-				tc.what, tc.text, ended, tc.want)
+				tc.what, tc.text, ended.Offered, tc.want)
 		}
 	}
 
@@ -72,7 +72,7 @@ func TestAnOpportunityAtTheEndOfANodeIsHandedOn(t *testing.T) {
 	// that the fixture above is not the whole of what the flag can say.
 	_, ended := SplitAtBreaks("high­", WhiteSpace{Collapse: true, Wrap: true},
 		WordBreak{}, LineBreak{}, Hyphens{None: true}, WritingSystemOther)
-	if ended {
+	if ended.Offered {
 		t.Error("a soft hyphen offered an opportunity under hyphens: none")
 	}
 }

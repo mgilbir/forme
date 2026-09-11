@@ -30,31 +30,33 @@ import (
 // fuzzer likes. What it asserts is the whole of the claim: the widths are equal,
 // to the unit.
 //
-// # What it is restricted to, and the defect that restriction names
+// # What it is held to, and the three defects it found
 //
 // Letters, marks, digits, spaces and the format characters — a *word*, which is
-// what the claim is about. Punctuation is excluded, and not for convenience: a
-// second defect lives there and this invariant found it.
+// what the claim is about. Punctuation is excluded, and the reason is the three
+// line-breaking defects this invariant found in it, each of which showed up here
+// as a width: two runs quantized separately are a sixty-fourth of a pixel away
+// from one.
 //
-// "0|!" is one unbreakable run. U+007C is UAX #14 class BA so a line may end
-// after it, and U+0021 is class EX so a line may not begin with one — the
-// second rule wins and the engine agrees, cutting "0|!" into one piece.
-// "<span>0|</span><span>!</span>" is the same text, and there the opportunity is
-// found at the end of the first box and offered at the start of the second,
-// where the rule that would have refused it is a character away in another box.
-// In an eighteen-pixel box the first sets one line and the second sets two.
+//   - "0|!" is one unbreakable run — U+007C is class BA so a line may end after
+//     it, U+0021 is class EX so a line may not begin with one, and the second
+//     rule wins — and "<span>0|</span><span>!</span>" broke in two.
+//   - "中中、中" breaks after the comma, and "<span>中中、</span><span>中</span>"
+//     did not: a box that ran out of text while *holding* an opportunity
+//     dropped it.
+//   - "|!!" is one unbreakable run and three spans took a break that both
+//     exclamation marks refuse.
 //
-// It shows up here as a width — two runs quantized separately are a
-// sixty-fourth of a pixel short of one — but it is a line-breaking defect, and
-// the fix is not the obvious one. Applying the refusal at the boundary costs
-// four reftests: `<span>A</span>:` is *asked* to break in line-breaking-atomic-009,
-// and the ideographic spaces of trailing-ideographic-space-break-spaces-005 and
-// -006 are asked to break under break-spaces. linebreak_test.go's
-// TestAnOpportunityFromASpaceIsNotWithheld already records part of the rule —
-// the prohibition applies to the opportunities an ideograph defers and not to
-// the break after a space — and a patch that ignores it contradicts a decision
-// that was made on evidence. So the defect is named here and not papered over,
-// and the invariant holds what it can hold today.
+// All three are fixed and have regression tests of their own in
+// boundarybreak_test.go. What is left is the fourth of the family, which the
+// engine does not yet do: "<span>|</span><span>!0</span>". The hold has to be
+// taken up *inside* the next box, at its second character, and only the scan can
+// do that — which needs SplitAtBreaks to be handed the boundary rather than told
+// about it afterwards. The attempt is recorded in the memory note; it fixes this
+// case and costs white-space-mixed-001, for a reason not yet understood.
+//
+// So the corpus is words until that lands, and the three fixtures above hold
+// what has been fixed.
 //
 // # Where the cuts may fall, and why that is not a convenience
 //
@@ -100,11 +102,11 @@ func FuzzRunTiling(f *testing.F) {
 // directions in one line.
 var tilingTexts = []string{
 	"letter", "office", "AVATAR", "",
-	"hello world", "a b c d", "one  two",
+	"hello world", "a b c d", "one  two", "\u3042\u3042 abc",
 	"العربية", "ععع", "אבג",
 	"देवनागरी", "क्षत्रिय", "e\u0301cole", "e\u0301\u0302x",
 	"abc אבג def", "high\u00adway", "a\u200bb", "a\u200db",
-	"12345", "ﬁreﬂy", "AVA To", "\u3042\u3042 abc",
+	"12345", "ﬁreﬂy", "AVA To",
 }
 
 // isWordText reports whether every character is one a word is made of.
@@ -140,7 +142,7 @@ func checkRunTiling(t testing.TB, text, cuts string) {
 	}
 	if !isWordText(text) {
 		// A word, which is what the claim is about. See the note at the top for
-		// the defect that lives in the punctuation this excludes.
+		// the line-breaking defects that live in the punctuation this excludes.
 		return
 	}
 	if !utf8.ValidString(text) {
