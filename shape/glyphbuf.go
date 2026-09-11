@@ -358,7 +358,29 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	for i, r := range runes {
 		gid, ok := f.GlyphID(r)
 		if !ok {
-			missing++
+			// A character nothing draws is not one the face is missing.
+			//
+			// The join controls reach here because the joining scan has to see
+			// them — dropHiddenCharacters keeps them back for exactly that —
+			// and the shaper takes them out again before any rule or any pen
+			// sees the buffer: hideJoiners on the path that chooses cursive
+			// forms, the syllable model's own pass on the other. Counting them
+			// was counting a glyph that was never going to be asked for.
+			//
+			// It decides which face sets a word. A caller's fallback asks "can
+			// this face set the whole of this text" and reads the answer here,
+			// and an emoji sequence is one grapheme cluster with a zero width
+			// joiner inside it: a face holding every visible character of
+			// "\U0001F468\u200D\U0001F4BB" reported one missing and was passed
+			// over for a face holding none of them, which then set both emoji as
+			// spaces.
+			//
+			// The Hangul fillers are not among these and still count: they are
+			// default-ignorable and they are *drawn*, which is what
+			// hiddenAfterShaping is the list of.
+			if !hiddenAfterShaping(r) {
+				missing++
+			}
 			gid = 0
 		}
 		buf = append(buf, Glyph{
