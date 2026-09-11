@@ -900,7 +900,8 @@ func floatClears(line []Item, used style.Unit) style.Unit {
 
 func trimLineEdge(line []Item) []Item {
 	end := len(line)
-	for end > 0 && (line[end-1].TrimAtEnd || line[end-1].Inset) {
+	for end > 0 && (line[end-1].TrimAtEnd || line[end-1].Inset ||
+		IsBidiControlOnly(line[end-1].Text)) {
 		end--
 	}
 	if end == len(line) {
@@ -910,7 +911,7 @@ func trimLineEdge(line []Item) []Item {
 	// after end, which are still the caller's.
 	out := line[:end:end]
 	for _, item := range line[end:] {
-		if item.Inset {
+		if item.Inset || IsBidiControlOnly(item.Text) {
 			out = append(out, item)
 		}
 	}
