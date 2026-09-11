@@ -19,14 +19,14 @@ import (
 // paragraph.Trailing, whose two fields are the two facts that cannot be read
 // back off the text.
 //
-// The five defects here were found by FuzzRunTiling, which asserts the
+// The six defects here were found by FuzzRunTiling, which asserts the
 // arithmetic — two runs quantized separately are a sixty-fourth of a pixel away
 // from one — and every one of them turned out to be line breaking rather than
 // arithmetic. That is not a coincidence: a merge group is exactly the run of
 // text no line may fall inside, so a lost or invented opportunity changes what
 // is shaped together and the widths say so.
 //
-// Two of the seven are containment rather than regression — LB7 in front of a
+// Two of the eight are containment rather than regression — LB7 in front of a
 // preserved space, and the opportunity a space takes — and each names the fix
 // that broke it. They are the rules an attempt here is most likely to cost.
 
@@ -138,6 +138,43 @@ func TestABoundaryDoesNotLoseABreakTheTextHas(t *testing.T) {
 	if len(cut) != len(whole) {
 		t.Errorf("\"中中、中\" set %d lines %q and the same text in two spans set "+
 			"%d %q", len(whole), whole, len(cut), cut)
+	}
+}
+
+// TestATakenBreakIsWhatTheBoundaryIs, and the three kinds are not exclusive.
+//
+// "|-!" sets two lines. The vertical line is class BA and offers a break; the
+// hyphen is one a line may not begin with, so that opportunity is *held* past
+// it; and the hyphen then takes an unconditional opportunity of its own, which
+// is what lets a hyphenated compound break where it is written. Both land at
+// the same offset, and an exclamation mark refuses the first and not the second.
+//
+// At the end of a box the two coincide at the boundary, and Trailing said
+// "held" — so the next box did what a box handed a hold is meant to do, ran the
+// prohibition, and had nothing left. "<span>|-</span><span>!</span>" set one
+// line where the text sets two.
+//
+// It is the one case in this file where the box before is not merely reporting
+// what it left but choosing between two things it left at once.
+func TestATakenBreakIsWhatTheBoundaryIs(t *testing.T) {
+	// Narrow enough that "|-" and the character after it cannot share a line.
+	const narrow = 14
+	for _, tc := range []struct{ whole, cut string }{
+		{"|-!", `<span>|-</span><span>!</span>`},
+		{"|-)", `<span>|-</span><span>)</span>`},
+		{"|\u2010!", `<span>|\u2010</span><span>!</span>`},
+	} {
+		whole := linesOfMarkup(t, tc.whole, narrow)
+		cut := linesOfMarkup(t, tc.cut, narrow)
+		if len(whole) != 2 {
+			t.Fatalf("%q set %d lines %q; the hyphen takes a break nothing "+
+				"after it refuses, so it is two and the comparison below is "+
+				"against the wrong answer", tc.whole, len(whole), whole)
+		}
+		if len(cut) != len(whole) {
+			t.Errorf("%q set %d lines %q and the same text in two spans set "+
+				"%d %q", tc.whole, len(whole), whole, len(cut), cut)
+		}
 	}
 }
 

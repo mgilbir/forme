@@ -834,8 +834,26 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 	return out, Trailing{
 		DictTail: dictionaryTail(at.Before+text, dictBreaks),
 		Offered:  breakNext || deferBreak || heldBreak,
+		// A break the text *took* is what the boundary is, whatever else is
+		// still pending at it. The three are not exclusive, which is easy to
+		// miss because two of them are: "|-" ends with a deferred opportunity
+		// the vertical line offered and the hyphen then held — a line may not
+		// begin with a hyphen — and with the unconditional one the hyphen itself
+		// takes. Both are at the same offset, which is the end of the text.
+		//
+		// Reporting the held one lost the break. "|-!" sets two lines, because
+		// the opportunity the hyphen takes is not one an exclamation mark
+		// refuses; "<span>|-</span><span>!</span>" set one, because the next box
+		// was handed a hold, ran the prohibitions over it as a hold is meant to
+		// be, and had nothing left.
+		//
+		// Deferred needs no such test and does not get one. Both arms that defer
+		// write the character to cur, so the final flush above has emitted it
+		// and cleared breakNext — the two cannot both be true here. A planted
+		// "&& !breakNext" on this line moved nothing, which is what says the
+		// pair is impossible rather than merely unwritten.
 		Deferred: deferBreak,
-		Held:     heldBreak,
+		Held:     heldBreak && !breakNext,
 	}
 }
 
