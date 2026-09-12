@@ -19,14 +19,14 @@ import (
 // paragraph.Trailing, whose two fields are the two facts that cannot be read
 // back off the text.
 //
-// The seven defects here were found by FuzzRunTiling, which asserts the
+// The eight defects here were found by FuzzRunTiling, which asserts the
 // arithmetic — two runs quantized separately are a sixty-fourth of a pixel away
 // from one — and every one of them turned out to be line breaking rather than
 // arithmetic. That is not a coincidence: a merge group is exactly the run of
 // text no line may fall inside, so a lost or invented opportunity changes what
 // is shaped together and the widths say so.
 //
-// Two of the nine are containment rather than regression — LB7 in front of a
+// Two of the ten are containment rather than regression — LB7 in front of a
 // preserved space, and the opportunity a space takes — and each names the fix
 // that broke it. They are the rules an attempt here is most likely to cost.
 
@@ -304,13 +304,13 @@ func TestABoxsFirstCharacterMayOfferItsOwnBreak(t *testing.T) {
 // TestLB7IsAboutASpaceAndNotEveryWhiteCharacter is the last of the family, and
 // the one with no symptom in the lines at all.
 //
-// UAX #14's LB7 is "× SP" and "× ZW": a line may not end in front of a space or
-// a zero width space, and in front of those two characters only. Everything else
-// the scan gives a white-space Piece of its own — the tab, and §4.1's other
-// space separators — is class BA, which a line may perfectly well end in front
-// of. The boundary borrowed startsSpacePiece, which is the wider set and is the
-// right answer to a different question (see its note), and so withheld an
-// opportunity from a character the rule says nothing about.
+// A line may not end between two ordinary spaces, and that is the whole of what
+// the boundary withholds — see betweenTwoSpaces. Everything else the scan gives
+// a white-space Piece of its own — the tab, and §4.1's other space separators —
+// is class BA, which a line may perfectly well end in front of. The boundary
+// borrowed startsSpacePiece, which is the wider set and is the right answer to
+// a different question (see its note), and so withheld an opportunity from a
+// character the rule says nothing about.
 //
 // Inside a run the question never arises: the space arm offers the opportunity
 // and no test stands between. So the two spellings disagreed, and only about
@@ -349,6 +349,45 @@ func TestLB7IsAboutASpaceAndNotEveryWhiteCharacter(t *testing.T) {
 				"about a space and a zero width space, so the opportunity the "+
 				"space took reaches this character and no merge group may span it",
 				tc.what, tc.whole, whole, cut)
+		}
+	}
+}
+
+// TestLB7ReadsBothSidesOfTheBoundary is the same rule from the other end, and
+// the half that reading LB7 as "× SP" alone gets wrong.
+//
+// "a&#x2000; &#x2000;" breaks in front of its ordinary space: the EN QUAD before
+// it is class BA, the scan cuts a Piece at each of them, and an opportunity
+// falls between. Withholding at a boundary because the character *after* it is a
+// space asks only half the question, and the two spellings of that text came out
+// a sixty-fourth of a pixel apart — the merge group was let across an
+// opportunity a ligature may not span, exactly as in the test above.
+//
+// Asking about the white-space value instead — is this an element that gathers a
+// run of spaces — is the other wrong answer, and it costs white-space-mixed-001
+// a line. The two spaces at such a boundary can be in elements that answer
+// differently, and §5.1's common ancestor is not the element whose run the
+// question is about.
+func TestLB7ReadsBothSidesOfTheBoundary(t *testing.T) {
+	const (
+		quad = "\u2000"
+		sp   = "\u0020"
+	)
+	for _, tc := range []struct{ what, whole, cut string }{
+		{"a quad, then a space", "a" + quad + sp + quad,
+			"<span>a" + quad + "</span><span>" + sp + quad + "</span>"},
+		{"without the trailing quad", "a" + quad + sp,
+			"<span>a" + quad + "</span><span>" + sp + "</span>"},
+		{"a quad on both sides", "a" + quad + sp + quad + "b",
+			"<span>a" + quad + "</span><span>" + sp + quad + "b</span>"},
+	} {
+		whole := widthOfMarkupIn(t, "Courier", tc.whole)
+		cut := widthOfMarkupIn(t, "Courier", tc.cut)
+		if whole != cut {
+			t.Errorf("%s: %q is %v wide written plainly and %v in spans; the "+
+				"character in front of the boundary is an EN QUAD, which a line "+
+				"may end after, so the opportunity reaches the space and no "+
+				"merge group may span it", tc.what, tc.whole, whole, cut)
 		}
 	}
 }
