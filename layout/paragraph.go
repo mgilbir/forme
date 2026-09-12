@@ -90,6 +90,7 @@ var (
 	splitAtBreaks                 = paragraph.SplitAtBreaks
 	splitAtBreaksAfter            = paragraph.SplitAtBreaksAfter
 	isBidiControl                 = paragraph.IsBidiControl
+	dictionaryLookahead           = paragraph.DictionaryLookahead
 	tabAdvance                    = paragraph.TabAdvance
 	isIdeographic                 = paragraph.IsIdeographic
 	spacingAdvance                = paragraph.SpacingAdvance

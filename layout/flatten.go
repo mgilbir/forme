@@ -815,6 +815,17 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		Before:         in.AfterText,
 		SpaceMayTakeIt: boundaryBreakSpaces,
 	}
+	// And the other direction, which is read off the tree rather than carried:
+	// what follows this box has not been walked yet, so there is nothing to have
+	// carried it in. See textAfter, and paragraph.Carried.After for why a box
+	// that cannot see past its own end invents a division.
+	//
+	// Asked only where the text ends in a script a dictionary knows, which is
+	// almost never — DictionaryLookahead is zero for every other character, and
+	// the walk does not happen.
+	if n := dictionaryLookahead(lastRuneOf(b.Text)); n > 0 {
+		carried.After = l.textAfter(b, n)
+	}
 	if carried.Offered && in.AfterAtomic && bindsToAtomicInline(b.Text) {
 		carried.Offered = false
 	}
@@ -1454,6 +1465,136 @@ func (l *layouter) boundaryWhiteSpace(b *Box, ws paragraph.WhiteSpace,
 		}
 	}
 	return boundaryNoWrap, boundaryBreakSpaces
+}
+
+// textAfter is the text that follows a box in its inline formatting context, up
+// to n bytes of it.
+//
+// A forward walk of the box tree rather than something carried along with the
+// other boundary facts, and that is the difference between this and
+// paragraph.Carried.Before: the text *before* a box has already been flattened,
+// so the state travelling forward can hold what the next box needs, and the text
+// after it has not been looked at yet by anything.
+//
+// It stops where the run of text stops, which is not only at the end of the
+// context:
+//
+//   - an atomic inline, and CSS Text §5.1 says why in as many words — there is
+//     an opportunity before and after each one, so a word cannot span it;
+//   - a forced break, which ends the line and everything about it;
+//   - and the end of the context itself, which is the block the walk started in.
+//
+// Out of flow is *not* one of them. A float or an absolutely positioned box is
+// written among the text and drawn somewhere else entirely, so it stands between
+// nothing: "a<span class=float></span>b" is one word, which is the same rule
+// collectInline states where it puts them aside.
+//
+// The atomic-inline arm is reached — 77 times over the reftest corpus — and no
+// input has been found where removing it changes a rendering, which is worth
+// saying rather than leaving as an implied claim. Removing it does change what
+// is *gathered*: the walk then goes round the box and picks up the text after
+// it, and "ด๗ไษภหท<span style='display:inline-block'>x</span>ยยย" hands over
+// "xยยย" instead of nothing. Every attempt to turn that into a different set of
+// lines failed, because a run of one script ends at the first character of
+// another and the text on the far side of a picture is rarely the same script
+// with nothing between. It stays because §5.1 states the rule and a word that
+// spans a picture is not a word, not because a test made it stay.
+//
+// There is no test for a *block* box, and that is deliberate rather than an
+// omission. nextInContext comes out of an inline box and no further, so every
+// box this reaches is inside the context the walk began in, and block content
+// written among inline content has been wrapped in anonymous blocks long before
+// layout runs — so a block box is never a box in an inline formatting context to
+// begin with. Counted rather than assumed: over the whole reftest corpus this
+// walk ran 805 times and reached a box that was not inline-level on none of
+// them, while the atomic-inline arm above took 77.
+func (l *layouter) textAfter(b *Box, n int) string {
+	var out strings.Builder
+	for cur := l.nextInContext(b); cur != nil && out.Len() < n; cur = l.nextInContext(cur) {
+		switch {
+		case cur.Position.outOfFlow() || cur.Float != FloatNone:
+			// Written here, drawn elsewhere, between nothing. Skipped rather
+			// than descended into: its content is not in this context.
+		case cur.Replaced != nil || isAtomicInline(cur) || isForcedBreak(cur):
+			return out.String()
+		case cur.IsText():
+			out.WriteString(bounded(cur.Text, n-out.Len()))
+		}
+	}
+	return out.String()
+}
+
+// bounded is the longest prefix of text that is at most n bytes and does not end
+// inside a character.
+//
+// The bound is the point: the walk above stops once it has enough, but a single
+// text box can be a megabyte, and copying one to read the first eighty bytes of
+// it is a cost the document did nothing to ask for. Ending inside a character
+// would be free and wrong in a quieter way — DictionaryBreaks would decode the
+// half and find nothing, which looks exactly like a run that ended.
+func bounded(text string, n int) string {
+	if len(text) <= n {
+		return text
+	}
+	text = text[:n]
+	for len(text) > 0 {
+		if r, size := utf8.DecodeLastRuneInString(text); r != utf8.RuneError || size > 1 {
+			break
+		}
+		text = text[:len(text)-1]
+	}
+	return text
+}
+
+// nextInContext is the next box in document order, without leaving the inline
+// formatting context b is in.
+//
+// Down into an inline box, then along to the next sibling, then up — and up only
+// while there is an inline box to come out of. The box the walk stops under is
+// the one that started the context, and its own siblings are in another.
+func (l *layouter) nextInContext(b *Box) *Box {
+	if b.Outer == OuterInline && len(b.Children) > 0 {
+		return b.Children[0]
+	}
+	for c := b; c.Parent != nil; c = c.Parent {
+		if s := l.nextSiblingOf(c); s != nil {
+			return s
+		}
+		if c.Parent.Outer != OuterInline {
+			return nil
+		}
+	}
+	return nil
+}
+
+// nextSiblingOf is the box written after b inside its parent.
+func (l *layouter) nextSiblingOf(b *Box) *Box {
+	kids := b.Parent.Children
+	i, ok := l.childIndex[b]
+	if !ok || i >= len(kids) || kids[i] != b {
+		// Fill the whole parent rather than this one child: the walk is about to
+		// ask for its neighbours too, and a scan per step is quadratic in the
+		// children. See layouter.childIndex.
+		if l.childIndex == nil {
+			l.childIndex = map[*Box]int{}
+		}
+		for j, k := range kids {
+			l.childIndex[k] = j
+		}
+		i, ok = l.childIndex[b]
+		if !ok {
+			return nil
+		}
+	}
+	if i+1 < len(kids) {
+		return kids[i+1]
+	}
+	return nil
+}
+
+// isForcedBreak reports whether a box ends the line wherever it falls.
+func isForcedBreak(b *Box) bool {
+	return b.Element != nil && strings.EqualFold(b.Element.Name, "br")
 }
 
 // lastRuneOf is the last character of a box's text, for the boundary the next

@@ -306,9 +306,38 @@ func dictionaryTail(text string, breaks map[int]bool) string {
 	}
 	at := len(text) - len(run)
 	for off := range breaks {
-		if off > at && off <= len(text) {
+		// Strictly before the end, which is the whole of what this rule is.
+		//
+		// A break *at* the end is the boundary itself being a word boundary, and
+		// the next box is the one that has to find it — DictionaryBreaks leaves
+		// out the first offset of what it segments, so a box handed nothing
+		// cannot see a break at its own first character. Trimming there left
+		// "<span>ภาษา</span><span>ไทย</span>" with no division at all.
+		if off > at && off < len(text) {
 			at = off
 		}
 	}
 	return text[at:]
+}
+
+// DictionaryLookahead is how many bytes of the text *after* a stretch the
+// segmentation of that stretch needs, where the stretch ends with r.
+//
+// Zero for every character no dictionary knows, which is almost every character
+// in almost every document.
+//
+// Otherwise the longest word in the language, in bytes. That is exactly enough
+// and not a margin for error: segmentWords is greedy and runs left to right, so
+// the only question the text beyond a stretch can answer is what longestAt finds
+// at a position inside it, and longestAt stops after the longest word. A probe
+// that can see that far sees everything that could change its answer.
+func DictionaryLookahead(r rune) int {
+	d := dictionaryFor(r)
+	if d == nil {
+		return 0
+	}
+	// In characters, so in bytes it is that times the longest a character can
+	// be. Reading a few bytes more than the longest word is free; reading fewer
+	// is a word the probe cannot find.
+	return d.longest * utf8.UTFMax
 }

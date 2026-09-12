@@ -199,6 +199,21 @@ type Carried struct {
 	// found have been decided. See Trailing.DictTail, which is what fills this
 	// in and where the measurement is.
 	Before string
+	// After is the text that follows this one, for the same scripts Before is
+	// for and for the other half of the same problem.
+	//
+	// Before carries the context backwards, so a word written across a boundary
+	// keeps the division between its halves. This carries it forwards, so a box
+	// does not invent a division its own text only appears to have: segmentWords
+	// is greedy, and a word that runs past the end of a box is a word the box
+	// cannot match. "ด๗ไษภหทย" has no break at 18 and "ด๗ไษภหท" — the same text
+	// with the last character in another box — has one, because the first box
+	// looked for a word, found none, and fell back to breaking between
+	// typographic character units.
+	//
+	// DictionaryLookahead says how much is enough, and it is exact rather than
+	// generous: a probe reads at most the longest word in the language.
+	After string
 	// SpaceMayTakeIt says a space at this text's start may take the opportunity
 	// rather than withholding it, which is white-space: break-spaces overruling
 	// LB7. See boundaryWhiteSpace: the value that decides it belongs to the box
@@ -228,7 +243,12 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 	// this text begins in what was segmented, and is zero for every document
 	// that has no such script in it.
 	dictAt := len(at.Before)
-	dictBreaks := DictionaryBreaks(at.Before + text)
+	// The stretch this text is responsible for, and the stretch that has to be
+	// segmented to decide it. They differ by the lookahead, which is read and
+	// then thrown away: a break beyond the end of dictSeg belongs to the box
+	// that holds the text it falls in.
+	dictSeg := at.Before + text
+	dictBreaks := DictionaryBreaks(dictSeg + at.After)
 
 	// And where the phrases are, for the value that ends a line only at one.
 	// Computed once for the same reason and nil for the same documents — see
@@ -837,7 +857,7 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 	}
 	flush()
 	return out, Trailing{
-		DictTail: dictionaryTail(at.Before+text, dictBreaks),
+		DictTail: dictionaryTail(dictSeg, dictBreaks),
 		Offered:  breakNext || deferBreak || heldBreak,
 		// A break the text *took* is what the boundary is, whatever else is
 		// still pending at it. The three are not exclusive, which is easy to
