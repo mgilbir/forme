@@ -20,14 +20,14 @@ import (
 // paragraph.Trailing, whose two fields are the two facts that cannot be read
 // back off the text.
 //
-// The ten defects here were found by FuzzRunTiling and FuzzBoundaryLines, which asserts the
+// The eleven defects here were found by FuzzRunTiling and FuzzBoundaryLines, which asserts the
 // arithmetic — two runs quantized separately are a sixty-fourth of a pixel away
 // from one — and every one of them turned out to be line breaking rather than
 // arithmetic. That is not a coincidence: a merge group is exactly the run of
 // text no line may fall inside, so a lost or invented opportunity changes what
 // is shaped together and the widths say so.
 //
-// Two of the twelve are containment rather than regression — LB7 in front of a
+// Two of the thirteen are containment rather than regression — LB7 in front of a
 // preserved space, and the opportunity a space takes — and each names the fix
 // that broke it. They are the rules an attempt here is most likely to cost.
 
@@ -483,6 +483,91 @@ func TestAHyphenAtABoxEdgeLooksAtWhatFollowsIt(t *testing.T) {
 	if strings.Join(cut, "\x00") != strings.Join(whole, "\x00") {
 		t.Errorf("%q set %q and the same text in two spans set %q",
 			"high"+hyphen+"way", whole, cut)
+	}
+}
+
+// TestBreakAllAtABoxEdgeAsksBothPairRules is break-all's own opportunity, and
+// the rule it was asking only half of.
+//
+// §5.2's break-all treats every character in the box as ID, and UAX #14 allows a
+// line to end between whatever precedes an ID and the ID itself — so a box that
+// declares it makes an opportunity at its own leading edge, which SplitAtBreaks
+// cannot: the boundary has a character on each side of it in two different
+// boxes.
+//
+// An opportunity between two characters has two rules over it and the branch
+// asked one. A line may not *begin* with a closing bracket or a non-starter,
+// which it asked; and it may not *end* after a word joiner, a no-break space or
+// a zero width joiner, which it did not. UAX #14's LB8a is "ZWJ ×", so
+// "a&#x200D;b" under break-all is one unbreakable run — and
+// "<span>a&#x200D;</span><span>b</span>" was two lines in a box narrower than a
+// character.
+//
+// line-break: anywhere overrules both, by the same exemption and for the reason
+// §5.3 gives: an opportunity around *every* typographic character unit is a
+// value whose whole purpose is to overrule this.
+func TestBreakAllAtABoxEdgeAsksBothPairRules(t *testing.T) {
+	// Narrower than one Courier character, so every opportunity there is gets
+	// taken and an invented one is a line that should not exist.
+	const narrow = 8
+	const sheet = `#d { font-family: Courier; font-size: 16px; word-break: break-all }`
+	for _, tc := range []struct {
+		what, text string
+		at         int
+	}{
+		{"a zero width joiner", "a\u200Db", 4},
+		{"a word joiner", "a\u2060b", 4},
+		{"a no-break space", "a\u00A0b", 3},
+	} {
+		whole := visibleLinesWith(t, tc.text, sheet, narrow)
+		cut := visibleLinesWith(t,
+			"<span>"+tc.text[:tc.at]+"</span><span>"+tc.text[tc.at:]+"</span>",
+			sheet, narrow)
+		if len(whole) != 1 {
+			t.Fatalf("%s: %q set %d lines %v; a line may not end after it, so "+
+				"break-all finds nowhere to cut", tc.what, tc.text, len(whole), whole)
+		}
+		if !sameVisibleLines(cut, whole) {
+			t.Errorf("%s: %q set %v and the same text in two spans set %v; the "+
+				"opportunity break-all makes at a box's leading edge is between "+
+				"two characters, and both of them have a say", tc.what, tc.text,
+				whole, cut)
+		}
+	}
+	// And the case the branch exists for, which must keep working: a box that
+	// declares break-all may be broken away from what precedes it.
+	plain := visibleLinesWith(t, "ab", sheet, narrow)
+	cutPlain := visibleLinesWith(t, "<span>a</span><span>b</span>", sheet, narrow)
+	if len(plain) != 2 || !sameVisibleLines(cutPlain, plain) {
+		t.Errorf("%q set %v and two spans set %v; break-all still breaks between "+
+			"two letters", "ab", plain, cutPlain)
+	}
+
+	// And line-break: anywhere, which overrules both rules rather than one.
+	// §5.3 puts an opportunity around every typographic character unit
+	// "including around any punctuation character or preserved white space",
+	// and the edge of an inline box is not an exception it carves out — so a
+	// glue test applied here as well would take the break away.
+	const loose = `#d { font-family: Courier; font-size: 16px; line-break: anywhere }`
+	for _, tc := range []struct {
+		text string
+		at   int
+	}{
+		{"a\u200Db", 4}, {"a\u2060b", 4}, {"a\u00A0b", 3},
+	} {
+		whole := visibleLinesWith(t, tc.text, loose, narrow)
+		cut := visibleLinesWith(t,
+			"<span>"+tc.text[:tc.at]+"</span><span>"+tc.text[tc.at:]+"</span>",
+			loose, narrow)
+		if len(whole) < 2 {
+			t.Fatalf("%q set %v under line-break: anywhere; that value puts an "+
+				"opportunity around every character", tc.text, whole)
+		}
+		if !sameVisibleLines(cut, whole) {
+			t.Errorf("%q set %v under line-break: anywhere and the same text in "+
+				"two spans set %v; the value overrules the pair rules at a box "+
+				"edge as it does everywhere else", tc.text, whole, cut)
+		}
 	}
 }
 
