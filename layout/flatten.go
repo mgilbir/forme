@@ -826,6 +826,15 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	if n := dictionaryLookahead(lastRuneOf(b.Text)); n > 0 {
 		carried.After = l.textAfter(b, n)
 	}
+	// And the one character three of the scan's own arms need, which is the
+	// same walk for a different question: a hyphen at the end of a box takes an
+	// opportunity unless white space follows it, and the white space is in the
+	// next box. Asked only of the characters whose arms look — see
+	// NeedsFollowingCharacter — so the walk does not happen for a document
+	// without one.
+	if needsFollowingCharacter(lastRuneOf(b.Text), lb, hy) {
+		carried.Next = firstRuneOf(l.textAfter(b, utf8.UTFMax))
+	}
 	if carried.Offered && in.AfterAtomic && bindsToAtomicInline(b.Text) {
 		carried.Offered = false
 	}
@@ -1596,6 +1605,23 @@ func (l *layouter) nextSiblingOf(b *Box) *Box {
 // isForcedBreak reports whether a box ends the line wherever it falls.
 func isForcedBreak(b *Box) bool {
 	return b.Element != nil && strings.EqualFold(b.Element.Name, "br")
+}
+
+// firstRuneOf is the first character of some text, or zero where there is none.
+//
+// It does not make lastRuneOf's distinction between a byte that is not a
+// character and a literal U+FFFD, and that is measured rather than overlooked: a
+// planted version that read RuneError as nothing moved no test and no reftest.
+// The difference is what the two are read *for*. Zero from lastRuneOf means the
+// start of the paragraph, which several rules turn on; zero from this one is
+// only ever handed to unicode.IsSpace, and a replacement character is not white
+// space either.
+func firstRuneOf(text string) rune {
+	r, size := utf8.DecodeRuneInString(text)
+	if size == 0 {
+		return 0
+	}
+	return r
 }
 
 // lastRuneOf is the last character of a box's text, for the boundary the next

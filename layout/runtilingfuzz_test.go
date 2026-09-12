@@ -29,10 +29,10 @@ import (
 // fuzzer likes. What it asserts is the whole of the claim: the widths are equal,
 // to the unit.
 //
-// # The ten defects it found, all fixed
+// # The eleven defects it found, all fixed
 //
 // Each surfaced here as a width — two runs quantized separately are a
-// sixty-fourth of a pixel away from one — and nine of the ten turned out to be
+// sixty-fourth of a pixel away from one — and ten of the eleven turned out to be
 // line breaking at the box boundary, with regression tests of their own in
 // boundarybreak_test.go. The sixth is white space collapsing, in
 // bidicontrolcollapse_test.go, and it is the one that says this target is not
@@ -76,6 +76,10 @@ import (
 //     it, so a break falls between them, and the boundary withheld it.
 //   - "<span>ด๗ไษภหท</span><span>ย</span>": the dictionary had no lookahead, so
 //     a box that could not see the end of a word invented a division inside it.
+//   - "<span>a\u2010</span><span>\u2000</span>": a hyphen takes an opportunity
+//     unless white space follows it, and at the end of a box the white space is
+//     in the next one. The gate could not see across the boundary, so a box
+//     invented an opportunity at its own last character.
 //
 // # Where the cuts may fall, and why that is not a convenience
 //
@@ -122,7 +126,7 @@ func FuzzRunTiling(f *testing.F) {
 var tilingTexts = []string{
 	"letter", "office", "AVATAR", "", "To.", "0|!", "|!!", "|!0", "x|y", "0ᦤ",
 	"a \u202D b", " \u202D \u202D", "ภาษาไทย", "ะ๕ะ", "|-!", "a \u2000",
-	"a\u2000 \u2000", "ด๗ไษภหทย",
+	"a\u2000 \u2000", "ด๗ไษภหทย", "a\u2010\u2000", "high\u2010way",
 	"hello world", "a b c d", "one  two", "AA )BB", "中中、中", "\u3042\u3042 abc",
 	"العربية", "ععع", "אבג",
 	"देवनागरी", "क्षत्रिय", "e\u0301cole", "e\u0301\u0302x",

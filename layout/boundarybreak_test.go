@@ -20,14 +20,14 @@ import (
 // paragraph.Trailing, whose two fields are the two facts that cannot be read
 // back off the text.
 //
-// The nine defects here were found by FuzzRunTiling and FuzzBoundaryLines, which asserts the
+// The ten defects here were found by FuzzRunTiling and FuzzBoundaryLines, which asserts the
 // arithmetic — two runs quantized separately are a sixty-fourth of a pixel away
 // from one — and every one of them turned out to be line breaking rather than
 // arithmetic. That is not a coincidence: a merge group is exactly the run of
 // text no line may fall inside, so a lost or invented opportunity changes what
 // is shaped together and the widths say so.
 //
-// Two of the eleven are containment rather than regression — LB7 in front of a
+// Two of the twelve are containment rather than regression — LB7 in front of a
 // preserved space, and the opportunity a space takes — and each names the fix
 // that broke it. They are the rules an attempt here is most likely to cost.
 
@@ -425,6 +425,64 @@ func TestLB7ReadsBothSidesOfTheBoundary(t *testing.T) {
 				"may end after, so the opportunity reaches the space and no "+
 				"merge group may span it", tc.what, tc.whole, whole, cut)
 		}
+	}
+}
+
+// TestAHyphenAtABoxEdgeLooksAtWhatFollowsIt is the last of the family, and the
+// one where the box that is wrong is the box *before* the boundary.
+//
+// A hyphen ends a run and the next may begin a line, which is what lets a
+// hyphenated compound break where it is written. Unless white space follows it:
+// a line that ends in front of a space has nothing to move down to the next one,
+// so the opportunity is not taken and the scan's arm is gated on exactly that.
+//
+// At the end of a box the white space is in the next box, and the gate answered
+// "no white space" because it could not see. So "⭋‐&#x2000;" written in one box
+// takes no opportunity at its hyphen and written in two takes one, and the two
+// spellings came out a sixty-fourth of a pixel apart — the merge group was
+// refused across a boundary that has no opportunity on it.
+//
+// Two more arms are gated the same way and are fixed with it: the soft hyphen,
+// and §5.3's loose-break characters. Neither is easy to reach from a document,
+// which is why they are named in the note on startsSpace rather than tested here.
+func TestAHyphenAtABoxEdgeLooksAtWhatFollowsIt(t *testing.T) {
+	const (
+		quad   = "\u2000"
+		hyphen = "\u2010"
+	)
+	for _, tc := range []struct{ what, whole, cut string }{
+		{"a hyphen then an en quad", "a" + hyphen + quad,
+			"<span>a" + hyphen + "</span><span>" + quad + "</span>"},
+		{"a hyphen then a space", "a" + hyphen + " b",
+			"<span>a" + hyphen + "</span><span> b</span>"},
+		{"a hyphen-minus then a space", "a- b",
+			"<span>a-</span><span> b</span>"},
+		// And the case the gate exists for, which must keep working: a hyphen
+		// with a letter after it breaks, wherever the boundary falls.
+		{"a hyphen then a letter", "high" + hyphen + "way",
+			"<span>high" + hyphen + "</span><span>way</span>"},
+	} {
+		whole := widthOfMarkupIn(t, "Courier", tc.whole)
+		cut := widthOfMarkupIn(t, "Courier", tc.cut)
+		if whole != cut {
+			t.Errorf("%s: %q is %v wide written plainly and %v in spans; what "+
+				"the hyphen does depends on the character after it, and a box "+
+				"boundary does not hide that character", tc.what, tc.whole,
+				whole, cut)
+		}
+	}
+	// The letter case says the same thing in lines, where it is plainer: the
+	// compound breaks at its hyphen either way.
+	const narrow = 40
+	whole := linesOfMarkup(t, "high"+hyphen+"way", narrow)
+	cut := linesOfMarkup(t, "<span>high"+hyphen+"</span><span>way</span>", narrow)
+	if len(whole) != 2 {
+		t.Fatalf("%q set %d lines %q; a hyphenated compound breaks where it is "+
+			"written", "high"+hyphen+"way", len(whole), whole)
+	}
+	if strings.Join(cut, "\x00") != strings.Join(whole, "\x00") {
+		t.Errorf("%q set %q and the same text in two spans set %q",
+			"high"+hyphen+"way", whole, cut)
 	}
 }
 

@@ -217,6 +217,18 @@ type Carried struct {
 	// Taken says the text before this one ended at an opportunity it *took*,
 	// which the rules have had their say over. See Trailing.Taken.
 	Taken bool
+	// Next is the first character of the text that follows this one, or zero
+	// where nothing does.
+	//
+	// Prev's counterpart, and got the other way about: the text before a box has
+	// been flattened by the time the box is, and the text after it has not, so
+	// this is read off the tree. See layout.textAfter.
+	//
+	// One character is all anything needs. The arms that read it ask a question
+	// about the character on the far side of the boundary and nothing beyond it
+	// — is there white space there, so that ending a line here would move
+	// nothing down. See startsSpace.
+	Next rune
 	// SpaceMayTakeIt says a space at this text's start may take the opportunity
 	// rather than withholding it, which is white-space: break-spaces overruling
 	// LB7. See boundaryWhiteSpace: the value that decides it belongs to the box
@@ -746,7 +758,7 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 			cur.WriteRune(r)
 			deferBreak = true
 
-		case lb.Loose && BreaksAfterUnderLoose(r) && !startsSpace(text, i):
+		case lb.Loose && BreaksAfterUnderLoose(r) && !startsSpace(text, i, at.Next):
 			// §5.3's one rule the other way round: under "loose" a line may end
 			// after a currency sign or a number sign, which belongs to the
 			// figure following it and which no other value lets go of.
@@ -771,7 +783,7 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 			flush()
 			breakNext = true
 
-		case (r == '-' || isLatinHyphen(r)) && !startsSpace(text, i):
+		case (r == '-' || isLatinHyphen(r)) && !startsSpace(text, i, at.Next):
 			// A hyphen ends a run and the next may begin a line — which is what
 			// lets a hyphenated compound break where it is written.
 			//
@@ -815,7 +827,7 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 			cur.WriteRune(r)
 			deferBreak = true
 
-		case r == 0x00AD && hy.Soft() && !startsSpace(text, i):
+		case r == 0x00AD && hy.Soft() && !startsSpace(text, i, at.Next):
 			// A soft hyphen. §6.1: the author has marked a place the word may be
 			// broken, and a hyphen is printed there if it is.
 			//
@@ -1013,12 +1025,24 @@ func startsSpacePiece(r rune, ws WhiteSpace) bool {
 // this rule disagreeing with the code it exists to agree with.
 func betweenTwoSpaces(prev, r rune) bool { return prev == ' ' && r == ' ' }
 
-// startsSpace reports whether white space follows the text at i. The end of the
-// text is not white space: what comes after it is in another box, and whether
-// there is anything there at all is not this function's to say.
-func startsSpace(text string, i int) bool {
+// startsSpace reports whether white space follows the text at i, where next is
+// the first character of whatever follows the text itself.
+//
+// Three arms are gated on it, and all three are about an opportunity there would
+// be no point taking: a hyphen, a soft hyphen and §5.3's loose-break characters
+// all end a line, and a line that ends in front of white space has nothing to
+// move down to the next one. The gate has to see across a box boundary for the
+// same reason the rest of Carried does — "high-<span> way</span>" is
+// "high- way", and the hyphen in it ends no line.
+//
+// It used to answer false at the end of the text, on the grounds that what comes
+// after it is in another box and not this function's to say. That was true when
+// nothing could tell it: the cost was an opportunity a box invented at its own
+// last character, and "⭋‐&#x2000;" written in two boxes was a sixty-fourth of a
+// pixel wider than the same text written in one.
+func startsSpace(text string, i int, next rune) bool {
 	if i >= len(text) {
-		return false
+		return unicode.IsSpace(next)
 	}
 	r, _ := utf8.DecodeRuneInString(text[i:])
 	return unicode.IsSpace(r)
@@ -1037,3 +1061,23 @@ func startsSpace(text string, i int) bool {
 // was one unbreakable run and overflowed its box — which is what §5.1 forbids
 // outright.
 func IsIdeographic(r rune) bool { return inLineBreakRanges(r, ideographicRanges[:]) }
+
+// NeedsFollowingCharacter reports whether the scan's answer for a text ending in
+// r depends on the character after it.
+//
+// Three arms do: the hyphen, the soft hyphen and §5.3's loose-break characters
+// all take an opportunity unless white space follows, and at the end of a box
+// the white space is in the next one. It is asked so that the walk that fetches
+// that character can be skipped for the characters — which is almost all of
+// them — whose arms never look. See startsSpace and Carried.Next.
+func NeedsFollowingCharacter(r rune, lb LineBreak, hy Hyphens) bool {
+	switch {
+	case r == '-' || isLatinHyphen(r):
+		return true
+	case r == 0x00AD && hy.Soft():
+		return true
+	case lb.Loose && BreaksAfterUnderLoose(r):
+		return true
+	}
+	return false
+}
