@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/mgilbir/forme/fonts/notosans"
@@ -19,14 +20,14 @@ import (
 // paragraph.Trailing, whose two fields are the two facts that cannot be read
 // back off the text.
 //
-// The eight defects here were found by FuzzRunTiling, which asserts the
+// The nine defects here were found by FuzzRunTiling and FuzzBoundaryLines, which asserts the
 // arithmetic — two runs quantized separately are a sixty-fourth of a pixel away
 // from one — and every one of them turned out to be line breaking rather than
 // arithmetic. That is not a coincidence: a merge group is exactly the run of
 // text no line may fall inside, so a lost or invented opportunity changes what
 // is shaped together and the widths say so.
 //
-// Two of the ten are containment rather than regression — LB7 in front of a
+// Two of the eleven are containment rather than regression — LB7 in front of a
 // preserved space, and the opportunity a space takes — and each names the fix
 // that broke it. They are the rules an attempt here is most likely to cost.
 
@@ -138,6 +139,41 @@ func TestABoundaryDoesNotLoseABreakTheTextHas(t *testing.T) {
 	if len(cut) != len(whole) {
 		t.Errorf("\"中中、中\" set %d lines %q and the same text in two spans set "+
 			"%d %q", len(whole), whole, len(cut), cut)
+	}
+}
+
+// TestABoundaryLeavesBothABreakAndAHold is the other half of the test below,
+// and the two together are why Trailing has three fields rather than an enum.
+//
+// "0|-!00" sets three lines in a box narrower than a character: the hyphen takes
+// an unconditional break, and the opportunity the vertical line offered — which
+// the hyphen held, because a line may not begin with one — lands on the "0" that
+// the exclamation mark refused it in front of. Two breaks, from two rules, one
+// of them at the boundary and one of them two characters past it.
+//
+// A box can only say one thing about its far edge, so it says three. Saying only
+// the hold lost the break, which is the test below; saying only the taken one
+// lost the hold, which is this: "<span>0|-</span><span>!00</span>" set two lines
+// where the text sets three.
+func TestABoundaryLeavesBothABreakAndAHold(t *testing.T) {
+	// Narrower than one character, so every opportunity there is gets taken and
+	// a lost one is a line that did not happen.
+	const narrow = 8
+	for _, whole := range []string{"0|-!00", "0|-!0", "|-!00"} {
+		got := linesOfMarkup(t, whole, narrow)
+		at := strings.Index(whole, "!")
+		cut := linesOfMarkup(t,
+			`<span>`+whole[:at]+`</span><span>`+whole[at:]+`</span>`, narrow)
+		if len(got) < 3 {
+			t.Fatalf("%q set %d lines %q; the hyphen takes one break and the "+
+				"vertical line's hold lands past the exclamation mark, so there "+
+				"are at least three", whole, len(got), got)
+		}
+		if strings.Join(cut, "\x00") != strings.Join(got, "\x00") {
+			t.Errorf("%q set %q and the same text cut before the exclamation "+
+				"mark set %q; the box left a taken break *and* a hold, and the "+
+				"one that was dropped is a line", whole, got, cut)
+		}
 	}
 }
 

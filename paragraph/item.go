@@ -721,6 +721,10 @@ type State struct {
 	// it. See paragraph.Carried.Before and Trailing.DictTail, and note that it
 	// is empty for every document with no such script in it.
 	AfterText string
+	// AfterTaken says the opportunity the box left is one its text *took*,
+	// which is not the absence of the two above: a box can leave a taken break
+	// and a hold at the same offset. See paragraph.Trailing.Taken.
+	AfterTaken bool
 	// AfterRune is the last character emitted, which the next box needs for the
 	// pair rules and to know it is not at the start of the paragraph.
 	//

@@ -56,6 +56,25 @@ import (
 // Courier does not join, kern or ligate, and a merge group that goes wrong there
 // goes unnoticed in Noto Sans, which does all three. See the note on
 // tilingFaces.
+//
+// # The four defects it has found
+//
+// Three within a minute of it existing, and all of them at a line edge, which is
+// the half FuzzRunTiling cannot reach:
+//
+//   - a bidi control at the end of a line stopped §4.1.1 removing the space in
+//     front of it, so a first line was a character wider in one spelling than
+//     the other and showed the same letters either way;
+//   - a control at the *start* of a line made the line look occupied, so the
+//     rule that lets an overlong word overflow an empty line did not fire and
+//     the document got an empty line taking a line's height;
+//   - and the collapsing rule the first of those is the sibling of, which
+//     FuzzRunTiling had already found from the other direction.
+//
+// The fourth came later and is the first that is a line *count*:
+// "<span>0|-</span><span>!00</span>" set two lines where "0|-!00" sets three.
+// The box left a taken break and a hold at one offset and could say only one of
+// them. See paragraph.Trailing.
 
 func FuzzBoundaryLines(f *testing.F) {
 	for _, text := range tilingTexts {

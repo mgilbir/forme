@@ -811,7 +811,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	boundaryNoWrap, boundaryBreakSpaces := l.boundaryWhiteSpace(b, ws, in)
 	carried := paragraph.Carried{
 		Offered: in.BreakOpportunity, Deferred: in.AfterDeferred,
-		Held: in.AfterHeld, Prev: in.AfterRune,
+		Held: in.AfterHeld, Taken: in.AfterTaken, Prev: in.AfterRune,
 		Before:         in.AfterText,
 		SpaceMayTakeIt: boundaryBreakSpaces,
 	}
@@ -1139,6 +1139,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		// one it lands on is in a third box.
 		AfterDeferred: trailing.Deferred,
 		AfterHeld:     trailing.Held,
+		AfterTaken:    trailing.Taken,
 		AfterRune:     lastRuneOf(b.Text),
 		// What the *next* box's first character has to be segmented with, for
 		// the scripts a dictionary finds the words of. The scan says it, because

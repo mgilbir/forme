@@ -214,6 +214,9 @@ type Carried struct {
 	// DictionaryLookahead says how much is enough, and it is exact rather than
 	// generous: a probe reads at most the longest word in the language.
 	After string
+	// Taken says the text before this one ended at an opportunity it *took*,
+	// which the rules have had their say over. See Trailing.Taken.
+	Taken bool
 	// SpaceMayTakeIt says a space at this text's start may take the opportunity
 	// rather than withholding it, which is white-space: break-spaces overruling
 	// LB7. See boundaryWhiteSpace: the value that decides it belongs to the box
@@ -310,7 +313,7 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 	// at one is withheld unless break-spaces says otherwise. Setting it here
 	// broke a run of preserved spaces in two — white-space-mixed-001, whose
 	// spans hand a pre div a space apiece.
-	takenAtStart := at.Offered && !at.Deferred && !at.Held
+	takenAtStart := at.Offered && (at.Taken || (!at.Deferred && !at.Held))
 	// Whether there is text in front of this one at all, which is what decides
 	// that an opportunity falling at the very first character is a real one.
 	//
@@ -859,26 +862,23 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 	return out, Trailing{
 		DictTail: dictionaryTail(dictSeg, dictBreaks),
 		Offered:  breakNext || deferBreak || heldBreak,
-		// A break the text *took* is what the boundary is, whatever else is
-		// still pending at it. The three are not exclusive, which is easy to
-		// miss because two of them are: "|-" ends with a deferred opportunity
-		// the vertical line offered and the hyphen then held — a line may not
-		// begin with a hyphen — and with the unconditional one the hyphen itself
-		// takes. Both are at the same offset, which is the end of the text.
+		// The three kinds are not exclusive, and the whole of this family's
+		// history is people assuming they are. "|-" ends with a deferred
+		// opportunity the vertical line offered and the hyphen then held — a
+		// line may not begin with a hyphen — *and* with the unconditional one
+		// the hyphen itself takes. Both are at the same offset, which is the
+		// end of the text, and they land in different places: the taken one is
+		// the boundary, and the hold is still looking for a character it is
+		// allowed to fall in front of.
 		//
-		// Reporting the held one lost the break. "|-!" sets two lines, because
-		// the opportunity the hyphen takes is not one an exclamation mark
-		// refuses; "<span>|-</span><span>!</span>" set one, because the next box
-		// was handed a hold, ran the prohibitions over it as a hold is meant to
-		// be, and had nothing left.
-		//
-		// Deferred needs no such test and does not get one. Both arms that defer
-		// write the character to cur, so the final flush above has emitted it
-		// and cleared breakNext — the two cannot both be true here. A planted
-		// "&& !breakNext" on this line moved nothing, which is what says the
-		// pair is impossible rather than merely unwritten.
+		// Saying only the hold lost the break: "|-!" sets two lines and
+		// "<span>|-</span><span>!</span>" set one. Saying only the taken one
+		// lost the hold: "0|-!00" sets three lines and
+		// "<span>0|-</span><span>!00</span>" set two. So all three are said,
+		// and the next box runs whichever of them still has something to do.
+		Taken:    breakNext,
 		Deferred: deferBreak,
-		Held:     heldBreak && !breakNext,
+		Held:     heldBreak,
 	}
 }
 
@@ -926,6 +926,19 @@ type Trailing struct {
 	// against 279ms, because each box re-segmented everything before it. This
 	// carries about a word.
 	DictTail string
+	// Taken says the text before this one ended at an opportunity it *took*
+	// rather than offered — a hyphen, a space, a picture — which the rules have
+	// already had their say over.
+	//
+	// It is a field rather than the absence of the two below, because a boundary
+	// can be all three at once. See the note where Trailing is returned.
+	//
+	// Offered is still the switch over all three. An inline box's own margin
+	// takes the opportunity in front of it and clears the flag — a line may end
+	// before "<span style='margin-left: 99px'>word</span>" and may not end
+	// between that margin and the word — and reading this one without asking
+	// Offered first put the break back, with the margin left on the line above.
+	Taken bool
 	// Held says the opportunity has already been through the rules once: it was
 	// offered, a prohibition moved it past the character in front of it rather
 	// than deleting it, and the character it lands on is in the next box.
