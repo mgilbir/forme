@@ -251,13 +251,50 @@ func (br *Breaker) mergedSpan(face *shape.Face, text string, size float64,
 // an upright run, whose advance is a count of characters rather than a sum of
 // glyphs, and a run that is part of a merge group, whose string is not its own.
 func (br *Breaker) spanWidth(item Item, from, to int, piece Item) style.Unit {
-	if item.Face == nil || item.Upright || item.MergePre != "" || item.MergePost != "" {
+	if item.Face == nil || item.Upright {
 		return br.MeasureSpacedInContext(item.Face, piece.Text, item.Size, item.Spacing,
 			piece.shaping())
 	}
 	whole, base := item.Text, 0
 	before, after, kerns := item.PreContext, item.PostContext, item.ContextKerns
-	if c := item.Cut; c != nil {
+	if item.MergePre != "" || item.MergePost != "" {
+		// A run of a merge group: its string is the group's, so the shaping to
+		// share is the group's and this run is a stretch inside it. That is the
+		// arithmetic below with a longer string and a base of its own —
+		// mergedSpan does it for a whole run and this does it for a stretch.
+		//
+		// Measuring the stretch on its own is what this used to do, and it
+		// undid the one thing a merge group is for. The runs of a group tile it
+		// exactly because the two ends of each are rounded separately; a stretch
+		// rounded on its own does not, so the pieces of an item stopped adding
+		// up to the item. "abc" in a box two characters wide sets "ab" and "c"
+		// at 1228 and 615, and "<span>a</span><span>bc</span>" — the same word,
+		// the same group — set the second line at 614.
+		//
+		// It is reached where a word is broken *inside*, which is overflow-wrap
+		// and break-all, and nowhere else: a line that ends between two runs
+		// ends at a run's own edge, which the tiling already handles. That is
+		// why FuzzRunTiling never saw it — it lays every case out under nowrap,
+		// so nothing is ever cut.
+		run, at := item.Text, 0
+		if c := item.Cut; c != nil {
+			// And already a stretch of a longer run as well, which is the shape
+			// a word broken across lines takes. MergePre and MergePost are the
+			// *run's* neighbours in the group, so the group's string is built
+			// from the whole run and this stretch sits that much further in.
+			run, at = c.Text, item.CutAt
+			// The contexts come from the cut for the same reason the string
+			// does. A planted version that left them as the item's own moved
+			// nothing, and the shape that would tell them apart is a face whose
+			// context changes a width *and* a word broken three ways across a
+			// box boundary — which is where the defect this does not fix lives,
+			// so there is no honest fixture for it yet. See the note at the end
+			// of TestAWordCutInsideTilesTheSameWay.
+			before, after, kerns = c.Before, c.After, c.Kerns
+		}
+		whole, base = item.MergePre+run+item.MergePost, len(item.MergePre)+at
+		before, after = shape.GroupContext(before, after, item.MergePre, item.MergePost)
+	} else if c := item.Cut; c != nil {
 		// Already a stretch of a longer run: the shaping to share is that run's,
 		// and this stretch sits inside it. See Item.Cut.
 		whole, base = c.Text, item.CutAt
