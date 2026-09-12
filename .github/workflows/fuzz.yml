@@ -91,6 +91,22 @@ jobs:
           # measured one way in each.
           - package: ./layout
             target: FuzzShrinkToFit
+          # The two that hold CSS Text §8.1 at a box boundary, and between them
+          # they have found twelve defects — more than every other target here
+          # put together. Neither is reachable from a reftest: no document in
+          # the suite writes a <span> in the middle of a Thai word or a bidi
+          # control in a box of its own, which is the whole reason the defects
+          # were there to find.
+          #
+          # They are a pair rather than one target twice. FuzzRunTiling lays
+          # every case out under "white-space: nowrap" and compares the total
+          # width, so nothing it does reaches a line edge; FuzzBoundaryLines
+          # wraps and compares the lines, and found two defects in trimming and
+          # in whether a line is empty that the first structurally cannot see.
+          - package: ./layout
+            target: FuzzRunTiling
+          - package: ./layout
+            target: FuzzBoundaryLines
           # The one bit in the property registry that decides what a document
           # looks like — a colour on <body> reaches every word under it and a
           # margin reaches nothing — asserted over a tree the parser built out
