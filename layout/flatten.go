@@ -709,6 +709,14 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		return nil, in
 	}
 	l.checkScript(b)
+	// The capitals the box asks for, and the language the uppercasing behind
+	// them is tailored by. Both are read here rather than with the rest of the
+	// box's declarations below, because the checks in this paragraph need them:
+	// a face with no small capitals of its own has them made out of the
+	// uppercase letters, and what is then drawn is not what the document wrote.
+	// See layout/smallcaps.go.
+	caps, _ := capsOf(b.Style["font-variant-caps"])
+	lang := languageAt(boxElement(b))
 	// Per face-run rather than per box: a character the family's face cannot set
 	// is not missing from the page if a fallback face set it, and reporting it
 	// would be this engine calling its own correct output a failure. The runs
@@ -716,12 +724,34 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	// exactly what is drawn.
 	runsOfBox := l.faceRunsFor(b, face, b.Text)
 	for _, run := range runsOfBox {
+		// Whether the face that will set this run has the capitals the document
+		// asked for. It is asked of the text as *written*, because that is the
+		// text whose case decides whether the request would change anything:
+		// the rewritten run below has no lowercase letter left in it. See
+		// reportCaps.
+		l.reportCaps(b, run.Face, run.Text)
+		// And the figures, which is the same question about the same runs and
+		// has no synthesis behind it: a face that draws no oldstyle digits sets
+		// the ones it has. See reportNumeric.
+		l.reportNumeric(b, run.Face, run.Text)
+		// And the East Asian forms, which is the third of the same question:
+		// a face that draws no JIS78 ideographs sets the ones it has. See
+		// reportEastAsian.
+		l.reportEastAsian(b, run.Face, run.Text)
+		// And whether the face draws the raised and lowered forms §6.5 asks
+		// for, which is the last of the same question. See reportPosition.
+		l.reportPosition(b, run.Face, run.Text)
+	}
+	// And the glyphs, asked of the text that will be *drawn* — which for a run
+	// whose small capitals were synthesised is the uppercase of what the
+	// document wrote.
+	for _, run := range l.smallCapsRuns(b, runsOfBox, caps, lang) {
 		l.checkGlyphs(b, run.Face, run.Text)
 	}
 	l.noteSubstitution(b, face, runsOfBox)
 
 	size := b.FontSize
-	ws := whiteSpaceFor(b.Style)
+	ws := preservedInAControlBox(b, whiteSpaceFor(b.Style))
 	// Both are read once per text box rather than once per piece: they are
 	// inherited properties, so every piece of one box has the same answer, and
 	// the decorations are memoized across the whole tree besides.
@@ -778,7 +808,37 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		l.reportAutospace(b, unhandledAutospace)
 	}
 	orthography := orthographyAt(boxElement(b))
-	pieces, endedAtBreak := splitAtBreaks(b.Text, ws, wb, lb, hy, boxWritingSystem(b))
+	boundaryNoWrap, boundaryBreakSpaces := l.boundaryWhiteSpace(b, ws, in)
+	carried := paragraph.Carried{
+		Offered: in.BreakOpportunity, Deferred: in.AfterDeferred,
+		Held: in.AfterHeld, Taken: in.AfterTaken, Prev: in.AfterRune,
+		Before:         in.AfterText,
+		SpaceMayTakeIt: boundaryBreakSpaces,
+	}
+	// And the other direction, which is read off the tree rather than carried:
+	// what follows this box has not been walked yet, so there is nothing to have
+	// carried it in. See textAfter, and paragraph.Carried.After for why a box
+	// that cannot see past its own end invents a division.
+	//
+	// Asked only where the text ends in a script a dictionary knows, which is
+	// almost never — DictionaryLookahead is zero for every other character, and
+	// the walk does not happen.
+	if n := dictionaryLookahead(lastRuneOf(b.Text)); n > 0 {
+		carried.After = l.textAfter(b, n)
+	}
+	// And the one character three of the scan's own arms need, which is the
+	// same walk for a different question: a hyphen at the end of a box takes an
+	// opportunity unless white space follows it, and the white space is in the
+	// next box. Asked only of the characters whose arms look — see
+	// NeedsFollowingCharacter — so the walk does not happen for a document
+	// without one.
+	if needsFollowingCharacter(lastRuneOf(b.Text), lb, hy) {
+		carried.Next = firstRuneOf(l.textAfter(b, utf8.UTFMax))
+	}
+	if carried.Offered && in.AfterAtomic && bindsToAtomicInline(b.Text) {
+		carried.Offered = false
+	}
+	pieces, trailing := splitAtBreaksAfter(b.Text, ws, wb, lb, hy, boxWritingSystem(b), carried)
 	pieces = collapsibleSeparators(pieces, wordSpaceTransformValue(b.Style))
 	if points := l.hyphenPoints[b]; len(points) > 0 {
 		var endsAtHyphen bool
@@ -787,13 +847,22 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		// box comes next, which is what a soft hyphen ending a node already
 		// does. "high<span>way</span>" is the shape: the point falls between
 		// the two text boxes, so neither of them holds it on its own.
-		endedAtBreak = endedAtBreak || endsAtHyphen
+		if endsAtHyphen {
+			// A hyphenation point *takes* its opportunity — the word is divided
+			// there and a hyphen printed — so it offers one to the next box and
+			// leaves nothing for the next character to refuse. See
+			// paragraph.Trailing.
+			trailing.Offered = true
+		}
 	}
 	if len(pieces) == 0 {
 		// A box that produced nothing passes an opportunity through rather than
 		// swallowing it — and it may have created one of its own, which is what
 		// a <span> holding a single zero-width space is. Either source counts.
-		in.BreakOpportunity = in.BreakOpportunity || endedAtBreak
+		in.BreakOpportunity = in.BreakOpportunity || trailing.Offered
+		if trailing.Offered {
+			in.AfterDeferred = trailing.Deferred
+		}
 		return nil, in
 	}
 
@@ -816,9 +885,10 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 
 	out := make([]inlineItem, 0, len(pieces))
 	state := in
-	// An opportunity this box's first character refused, waiting on whatever
-	// follows the box. See the branch that sets it.
-	heldAtEdge := false
+	// The boundary's opportunity has been spent: it went into Carried above and
+	// the scan has already run the rules over it, so what comes out is in the
+	// pieces. Leaving it set offered it a second time, from the loop below.
+	state.BreakOpportunity = false
 	// §5.1's rule about which element decides, resolved once for the box.
 	//
 	// The boundary in front of this box's first character has a character on
@@ -838,137 +908,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	// break-all with the span set to pre and asks for the break at both edges of
 	// the span.
 	noWrap := !ws.Wrap
-	boundaryNoWrap := noWrap
-	// And §3's break-spaces at the same boundary, for the same reason and by the
-	// same rule about who decides.
-	//
-	// UAX #14's LB7 is "× SP", so an opportunity carried in from another box is
-	// withheld from a space — a line may not end in front of one. break-spaces
-	// is the value that overrules it, and CSS Text §3 says so in the words that
-	// name this case: "there is a soft wrap opportunity after every preserved
-	// white space character, including between white space characters".
-	//
-	// SplitAtBreaks applies that inside a run, so "ああ␣␣␣␣ああ" in three
-	// ideographs of room sets three, three and two. Putting a <span> — even an
-	// empty one — between the first space and the second split the text into two
-	// boxes, the opportunity between them was withheld as LB7's, and the fill
-	// found nowhere to break the second line: it rewound to the last opportunity
-	// it had, which was between the two ideographs, and set one character on the
-	// first line. trailing-ideographic-space-break-spaces-005 and -006 are that
-	// document.
-	boundaryBreakSpaces := ws.BreakSpaces
-	if prev, ok := in.AfterBox.(*Box); ok {
-		gov := commonAncestor(prev, b)
-		if in.AfterCollapsibleSpace {
-			// Except where a space left the opportunity, which is its own and
-			// not the boundary's. §3 gives it to the space — "there is a soft
-			// wrap opportunity after every white space character" — so what
-			// decides whether it may be taken is the element the space is in.
-			//
-			// The ancestor's answer is the same one everywhere the two elements
-			// agree, which is everywhere white-space is inherited rather than
-			// declared. Where they do not, the suite's
-			// white-space-wrap-after-nowrap-001 is the document: a nowrap block
-			// holding a wrapping span whose last character is a space, and then
-			// more of the block's own text. The common ancestor is the block and
-			// says no; the space is in the span and says yes, and the reference
-			// breaks the line.
-			gov = prev
-		}
-		if gov != nil {
-			boundaryNoWrap = !whiteSpaceFor(gov.Style).Wrap
-			boundaryBreakSpaces = whiteSpaceFor(gov.Style).BreakSpaces
-		}
-	}
-	// Read off the ancestor rather than off this box, because §5.1 gives the
-	// boundary to the innermost element containing both characters. When that
-	// note was written it was a distinction no document made — white-space
-	// inherits, so the two agree everywhere it is not declared, and the suite
-	// gave the same 5594 clean passes either way. The exception above is a
-	// document that does declare it on both, and there the two part.
-	//
-	// The narrower reading — that only an opportunity left behind by a *space*
-	// may be taken by one, since §3's sentence is about the space that leaves it
-	// — was written first and could not be made to fail. An opportunity reaches
-	// a box boundary only when the text before it ended at one, and no document
-	// tells the two readings apart: the reftest suite gives 5594 clean passes
-	// either way with no test moving, and neither does a fixture built for the
-	// case the wider reading would get wrong — an atomic inline, then a space in
-	// a box of its own, then a float, which is the shape flatten.go already
-	// records a measurement about for LB7. It cost a field on the shared state
-	// and three places that had to keep it up to date, so it is gone and this is
-	// the note that says it was tried.
 	for i, p := range pieces {
-		// CSS Text §5.1's exception, on the far side: the opportunity a picture
-		// left behind is not offered to a character that holds on to it.
-		//
-		// Only the first piece can be the one next to the picture — after that
-		// there is text in between — and it is written as the index rather than
-		// as a flag the loop clears, because that is a thing a reader can check
-		// against the loop rather than against every path out of it.
-		if i == 0 && state.AfterAtomic && bindsToAtomicInline(p.Text) {
-			state.BreakOpportunity = false
-		}
-		// And the general form of the same thing. An opportunity carried in from
-		// the box before is offered to whatever begins this one, and a line may
-		// not begin with a closing bracket, a hyphen or a non-starter whichever
-		// box the character happens to be written in. SplitAtBreaks withholds it
-		// *inside* a run; across a boundary there is no character in the earlier
-		// box to test, so the box receiving the opportunity is what asks.
-		//
-		// The suite writes it as "中中<span>〜</span>文" — the character a line
-		// may not begin with in an element of its own, which is what a test that
-		// wants to colour it does — and its whole line-break strictness family
-		// is that shape.
-		//
-		// Only an opportunity an ideograph deferred, which is the same subset the
-		// rule is applied to inside a run: a break after a space is not one this
-		// withholds, and never has been — "AA )BB" breaks after the space. The
-		// two have to agree, or the answer depends on whether the author wrote a
-		// <span>.
-		//
-		// Not after an atomic inline either, and §5.1 says why in as many words:
-		// there is an opportunity before and after each one "even when adjacent
-		// to a character that would normally suppress them". A picture followed
-		// by a closing bracket may still be wrapped away from it. The exception
-		// to the exception is the three binding classes, which the branch above
-		// is. It falls out of AfterDeferred as well — a picture is not an
-		// ideograph — and is written out because it is a rule rather than a
-		// coincidence.
-		if i == 0 && state.BreakOpportunity && state.AfterDeferred &&
-			!state.AfterAtomic && !lb.Anywhere && mayNotBeginLine(p.Text, lb) {
-			state.BreakOpportunity = false
-			// Refused, not deleted. A prohibition moves an opportunity rather
-			// than dropping one — "× CL" says a line may not begin with a
-			// closing bracket and says nothing against one beginning with what
-			// comes after it — and SplitAtBreaks holds it forward for exactly
-			// that reason inside a run. Across a boundary the character that
-			// would take it is in a third box, so the hold has to travel.
-			//
-			heldAtEdge = true
-		}
-		// And the hold taken up, one piece later. The piece after the one that
-		// refused it is the next boundary the opportunity could fall on.
-		//
-		// Where the box runs out first the hold leaves with it, which is the
-		// single-character span the suite writes: "字字<span>、</span>字字" has
-		// the character that takes the opportunity in a third box.
-		//
-		// The mayNotBeginLine test is the correct reading of the rule — a line
-		// may not begin with a closing bracket however many are written in a row,
-		// so a second refusal should keep holding — and it has no test, which is
-		// a different thing from being covered. It cannot fire as the pieces come
-		// out today: SplitAtBreaks does not cut in front of a character a line
-		// may not begin with, so two of them are one piece ("、）中" splits as
-		// "、）" and "中"), and every piece after the first begins where a flush
-		// happened. A planted defect that deleted it moved no test and no
-		// reftest. It stays because the rule is real and the day the split cuts
-		// differently is not a day anyone will remember this.
-		if i > 0 && heldAtEdge {
-			if lb.Anywhere || !mayNotBeginLine(p.Text, lb) {
-				state.BreakOpportunity, heldAtEdge = true, false
-			}
-		}
 		// §5.2's break-all treats every alphabetic, numeric and ideographic
 		// character in this box as ID — and that includes the first one. UAX #14
 		// allows a line to end between whatever precedes an ID and the ID itself,
@@ -1134,6 +1074,12 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 				runs = cutRunsAt(runs, parts)
 			}
 		}
+		// And last of all, where small capitals have to be made out of the
+		// capitals. It comes after every other cut because it is the only one
+		// that *rewrites* the text it cuts — the others work in offsets into
+		// the piece, and an uppercased stretch is not the same length as the
+		// one it replaces. See layout/smallcaps.go.
+		runs = l.smallCapsRuns(b, runs, caps, lang)
 		for ri, run := range runs {
 			para, start, end := frame.Bidi.Add(run.Text)
 			item := l.textItem(textItemArgs{
@@ -1156,29 +1102,61 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			})
 			out = append(out, item)
 		}
+		if isBidiControlOnly(p.Text) {
+			// §4.1.1's run of white space is not broken in two by a bidi
+			// control, so the state carries through as if this piece were not
+			// there. CollapseWhitespaceAfter already holds to that inside a
+			// text node — "ccc ‮ lll" has one space in it and not two — and a
+			// run that crosses a box boundary is the same run: what this piece
+			// is, is an instruction to the bidirectional algorithm, and it puts
+			// nothing between the space before it and the space after.
+			//
+			// bidi-003 is what the rule is for, and it says so in its markup
+			// rather than in its assert: it writes one boundary as a control
+			// and the same boundary as "</span><span>", and asks for the two to
+			// render identically. A control in a box of its own is those two
+			// spellings met in the middle, and it read as neither —
+			// "a <span>&#x202D;</span> b" kept a space that "a &#x202D; b"
+			// collapses away.
+			//
+			// The item is still built. The character is dropped from the page
+			// but not from the paragraph: it is what the bidirectional
+			// algorithm reads to know the run it opens, and a box holding one
+			// and nothing else is the only place it could be read from.
+			continue
+		}
 		state = inlineState{
 			AfterCollapsibleSpace: p.Collapsible,
 			// Whether the piece ended on a character that would hold on to a
 			// picture after it. A piece is a run between two opportunities, so
 			// its last character is the one next to whatever comes next.
 			AfterBinding: endsBinding(p.Text),
-			// Whether the opportunity this piece leaves behind is one an
-			// ideograph deferred. SplitAtBreaks defers those and takes them at
-			// the next character; a piece that ends in one has handed the
-			// decision to whatever comes after it, which may be another box.
-			AfterDeferred: endsIdeographic(p.Text),
 			// Whether the character before the next boundary is one an
 			// ideograph may be broken away from. See the rule above.
 			AfterLetterUnit: endsLetterUnit(p.Text),
 		}
 	}
 	return out, inlineState{
-		BreakOpportunity:      endedAtBreak || heldAtEdge,
+		BreakOpportunity:      trailing.Offered,
 		AfterCollapsibleSpace: state.AfterCollapsibleSpace,
 		AfterBinding:          state.AfterBinding,
-		AfterDeferred:         state.AfterDeferred,
-		AfterLetterUnit:       state.AfterLetterUnit,
-		AfterBox:              b,
+		// Whether the opportunity this box leaves is one the next character may
+		// still refuse. It is the scan's answer and not a guess from the last
+		// character — see paragraph.Trailing.Deferred, which says what the guess
+		// got wrong — and an opportunity held at this box's own edge counts with
+		// it: that one was offered too, the first character refused it, and the
+		// one it lands on is in a third box.
+		AfterDeferred: trailing.Deferred,
+		AfterHeld:     trailing.Held,
+		AfterTaken:    trailing.Taken,
+		AfterRune:     lastRuneOf(b.Text),
+		// What the *next* box's first character has to be segmented with, for
+		// the scripts a dictionary finds the words of. The scan says it, because
+		// the scan is what did the segmenting — and it says about a word rather
+		// than the whole run. See paragraph.Trailing.DictTail.
+		AfterText:       trailing.DictTail,
+		AfterLetterUnit: state.AfterLetterUnit,
+		AfterBox:        b,
 	}
 }
 
@@ -1209,16 +1187,6 @@ func startsIdeographic(text string) bool {
 func endsLetterUnit(text string) bool {
 	r, _ := utf8.DecodeLastRuneInString(text)
 	return r != utf8.RuneError && paragraph.IsLetterUnit(r) && !paragraph.IsIdeographic(r)
-}
-
-// endsIdeographic reports whether a piece ends on the one character that leaves
-// an opportunity *deferred* rather than taken: an ideograph, which offers a
-// break after itself and lets the next character decide whether it is real.
-//
-// It is the question inlineState.AfterDeferred carries across a box boundary.
-func endsIdeographic(text string) bool {
-	r, _ := utf8.DecodeLastRuneInString(text)
-	return r != utf8.RuneError && paragraph.IsIdeographic(r)
 }
 
 // textItemArgs is what one text item is built from. It is a struct because the
@@ -1290,9 +1258,27 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 	if a.run.Face != nil && a.run.Face != a.boxFace && usesNormalLineHeight(b) {
 		above, below = l.leadingInFace(b, a.run.Face)
 	}
+	// A run whose small capitals were made out of the capitals is set smaller
+	// than the box's own size — that is the whole of what makes it a small
+	// capital — and it must not then ask the face for the feature it is
+	// standing in for. The two go together: a face with 'c2sc' and no 'smcp'
+	// asked for "all-small-caps" would find the letters this run has just
+	// uppercased and lower them a second time.
+	//
+	// The leading is *not* scaled with it. A line's height is the box's, and a
+	// paragraph whose lines grew and shrank with the case of their letters
+	// would be set on a ragged baseline. See leading.
+	size, off := a.size, a.off
+	// §6.6's one fallback between values, which needs the face and so cannot be
+	// answered where the rest of the features are: a document asking for petite
+	// capitals from a face that has none gets its small capitals instead.
+	off.Caps = resolveCaps(off.Caps, a.run.Face)
+	if a.run.synthesised {
+		size, off.Caps = synthesisedSize(a.size, a.run), shape.CapsNormal
+	}
 	item := inlineItem{
 		BidiPara: a.para, BidiStart: a.bidiStart, BidiEnd: a.bidiEnd,
-		Text: a.run.Text, Box: b, Face: a.run.Face, Size: a.size,
+		Text: a.run.Text, Box: b, Face: a.run.Face, Size: size,
 		Leads: true, Above: above, Below: below,
 		// Whether this run stands upright on a vertical line, which changes
 		// what it measures to and not only how it is drawn. See
@@ -1303,7 +1289,11 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		HyphenLastResort: a.wb.AutoPhrase,
 		// What the document turned off for this run, which changes what the
 		// face substitutes and so changes the advance. See fontfeatures.go.
-		Off: a.off,
+		Off: off,
+		// And whether its capitals were made rather than asked for, which the
+		// run can no longer be asked: its text has been rewritten. See
+		// Item.Synthesised.
+		Synthesised: a.run.synthesised,
 		// §10.8.1's vertical-align, which a text box cannot be asked for
 		// itself: the property is not inherited, so the anonymous box holding
 		// a <span>'s words carries the initial value however the span was
@@ -1392,7 +1382,7 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		// Measured the way the run it belongs to is measured: a hyphen printed
 		// at the end of an upright line stands upright with the letters, and it
 		// is an em per character there like any other.
-		item.Hyphen = l.br.MeasureSpacedInContext(face, item.HyphenText, a.size,
+		item.Hyphen = l.br.MeasureSpacedInContext(face, item.HyphenText, size,
 			a.spacing, shaping{ContextKerns: true, Upright: item.Upright, Off: item.Off})
 		if face != a.run.Face {
 			// Set in another face, so measured against it: §10.8.1's rule for
@@ -1409,10 +1399,247 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		// nothing to measure here and the face's own advance for U+0009 —
 		// whatever a face happens to give a character it has no glyph for —
 		// would be the wrong number to carry.
-		item.Width = l.br.MeasureSpacedInContext(a.run.Face, a.run.Text, a.size,
+		item.Width = l.br.MeasureSpacedInContext(a.run.Face, a.run.Text, size,
 			a.spacing, shaping{ContextKerns: true, Upright: item.Upright, Off: item.Off})
 	}
 	return item
+}
+
+// boundaryWhiteSpace is white-space as it applies to the boundary in front of
+// this box's first character, rather than to the box itself.
+//
+// CSS Text §5.1 gives that boundary to the innermost element containing the
+// characters on both sides of it, which is not this box — see the note at
+// noWrap, and white-space-wrap-after-nowrap-001 for the document where the two
+// answers differ.
+func (l *layouter) boundaryWhiteSpace(b *Box, ws paragraph.WhiteSpace,
+	in inlineState) (noWrap, breakSpaces bool) {
+	boundaryNoWrap := !ws.Wrap
+	// And §3's break-spaces at the same boundary, for the same reason and by the
+	// same rule about who decides.
+	//
+	// UAX #14's LB7 is "× SP", so an opportunity carried in from another box is
+	// withheld from a space — a line may not end in front of one. break-spaces
+	// is the value that overrules it, and CSS Text §3 says so in the words that
+	// name this case: "there is a soft wrap opportunity after every preserved
+	// white space character, including between white space characters".
+	//
+	// SplitAtBreaks applies that inside a run, so "ああ␣␣␣␣ああ" in three
+	// ideographs of room sets three, three and two. Putting a <span> — even an
+	// empty one — between the first space and the second split the text into two
+	// boxes, the opportunity between them was withheld as LB7's, and the fill
+	// found nowhere to break the second line: it rewound to the last opportunity
+	// it had, which was between the two ideographs, and set one character on the
+	// first line. trailing-ideographic-space-break-spaces-005 and -006 are that
+	// document.
+	boundaryBreakSpaces := ws.BreakSpaces
+	// Read off the ancestor rather than off this box, because §5.1 gives the
+	// boundary to the innermost element containing both characters. When that
+	// note was written it was a distinction no document made — white-space
+	// inherits, so the two agree everywhere it is not declared, and the suite
+	// gave the same 5594 clean passes either way. white-space-wrap-after-nowrap-001
+	// is a document that does declare it on both, and there the two part.
+	//
+	// The narrower reading — that only an opportunity left behind by a *space*
+	// may be taken by one, since §3's sentence is about the space that leaves it
+	// — was written first and could not be made to fail. An opportunity reaches
+	// a box boundary only when the text before it ended at one, and no document
+	// tells the two readings apart: the reftest suite gives 5594 clean passes
+	// either way with no test moving, and neither does a fixture built for the
+	// case the wider reading would get wrong — an atomic inline, then a space in
+	// a box of its own, then a float, which is the shape flatten.go already
+	// records a measurement about for LB7. It cost a field on the shared state
+	// and three places that had to keep it up to date, so it is gone and this is
+	// the note that says it was tried.
+	if prev, ok := in.AfterBox.(*Box); ok {
+		gov := commonAncestor(prev, b)
+		if in.AfterCollapsibleSpace {
+			// Except where a space left the opportunity, which is its own and
+			// not the boundary's. §3 gives it to the space — "there is a soft
+			// wrap opportunity after every white space character" — so what
+			// decides whether it may be taken is the element the space is in.
+			//
+			// The ancestor's answer is the same one everywhere the two elements
+			// agree, which is everywhere white-space is inherited rather than
+			// declared. Where they do not, the suite's
+			// white-space-wrap-after-nowrap-001 is the document: a nowrap block
+			// holding a wrapping span whose last character is a space, and then
+			// more of the block's own text. The common ancestor is the block and
+			// says no; the space is in the span and says yes, and the reference
+			// breaks the line.
+			gov = prev
+		}
+		if gov != nil {
+			boundaryNoWrap = !whiteSpaceFor(gov.Style).Wrap
+			boundaryBreakSpaces = whiteSpaceFor(gov.Style).BreakSpaces
+		}
+	}
+	return boundaryNoWrap, boundaryBreakSpaces
+}
+
+// textAfter is the text that follows a box in its inline formatting context, up
+// to n bytes of it.
+//
+// A forward walk of the box tree rather than something carried along with the
+// other boundary facts, and that is the difference between this and
+// paragraph.Carried.Before: the text *before* a box has already been flattened,
+// so the state travelling forward can hold what the next box needs, and the text
+// after it has not been looked at yet by anything.
+//
+// It stops where the run of text stops, which is not only at the end of the
+// context:
+//
+//   - an atomic inline, and CSS Text §5.1 says why in as many words — there is
+//     an opportunity before and after each one, so a word cannot span it;
+//   - a forced break, which ends the line and everything about it;
+//   - and the end of the context itself, which is the block the walk started in.
+//
+// Out of flow is *not* one of them. A float or an absolutely positioned box is
+// written among the text and drawn somewhere else entirely, so it stands between
+// nothing: "a<span class=float></span>b" is one word, which is the same rule
+// collectInline states where it puts them aside.
+//
+// The atomic-inline arm is reached — 77 times over the reftest corpus — and no
+// input has been found where removing it changes a rendering, which is worth
+// saying rather than leaving as an implied claim. Removing it does change what
+// is *gathered*: the walk then goes round the box and picks up the text after
+// it, and "ด๗ไษภหท<span style='display:inline-block'>x</span>ยยย" hands over
+// "xยยย" instead of nothing. Every attempt to turn that into a different set of
+// lines failed, because a run of one script ends at the first character of
+// another and the text on the far side of a picture is rarely the same script
+// with nothing between. It stays because §5.1 states the rule and a word that
+// spans a picture is not a word, not because a test made it stay.
+//
+// There is no test for a *block* box, and that is deliberate rather than an
+// omission. nextInContext comes out of an inline box and no further, so every
+// box this reaches is inside the context the walk began in, and block content
+// written among inline content has been wrapped in anonymous blocks long before
+// layout runs — so a block box is never a box in an inline formatting context to
+// begin with. Counted rather than assumed: over the whole reftest corpus this
+// walk ran 805 times and reached a box that was not inline-level on none of
+// them, while the atomic-inline arm above took 77.
+func (l *layouter) textAfter(b *Box, n int) string {
+	var out strings.Builder
+	for cur := l.nextInContext(b); cur != nil && out.Len() < n; cur = l.nextInContext(cur) {
+		switch {
+		case cur.Position.outOfFlow() || cur.Float != FloatNone:
+			// Written here, drawn elsewhere, between nothing. Skipped rather
+			// than descended into: its content is not in this context.
+		case cur.Replaced != nil || isAtomicInline(cur) || isForcedBreak(cur):
+			return out.String()
+		case cur.IsText():
+			out.WriteString(bounded(cur.Text, n-out.Len()))
+		}
+	}
+	return out.String()
+}
+
+// bounded is the longest prefix of text that is at most n bytes and does not end
+// inside a character.
+//
+// The bound is the point: the walk above stops once it has enough, but a single
+// text box can be a megabyte, and copying one to read the first eighty bytes of
+// it is a cost the document did nothing to ask for. Ending inside a character
+// would be free and wrong in a quieter way — DictionaryBreaks would decode the
+// half and find nothing, which looks exactly like a run that ended.
+func bounded(text string, n int) string {
+	if len(text) <= n {
+		return text
+	}
+	text = text[:n]
+	for len(text) > 0 {
+		if r, size := utf8.DecodeLastRuneInString(text); r != utf8.RuneError || size > 1 {
+			break
+		}
+		text = text[:len(text)-1]
+	}
+	return text
+}
+
+// nextInContext is the next box in document order, without leaving the inline
+// formatting context b is in.
+//
+// Down into an inline box, then along to the next sibling, then up — and up only
+// while there is an inline box to come out of. The box the walk stops under is
+// the one that started the context, and its own siblings are in another.
+func (l *layouter) nextInContext(b *Box) *Box {
+	if b.Outer == OuterInline && len(b.Children) > 0 {
+		return b.Children[0]
+	}
+	for c := b; c.Parent != nil; c = c.Parent {
+		if s := l.nextSiblingOf(c); s != nil {
+			return s
+		}
+		if c.Parent.Outer != OuterInline {
+			return nil
+		}
+	}
+	return nil
+}
+
+// nextSiblingOf is the box written after b inside its parent.
+func (l *layouter) nextSiblingOf(b *Box) *Box {
+	kids := b.Parent.Children
+	i, ok := l.childIndex[b]
+	if !ok || i >= len(kids) || kids[i] != b {
+		// Fill the whole parent rather than this one child: the walk is about to
+		// ask for its neighbours too, and a scan per step is quadratic in the
+		// children. See layouter.childIndex.
+		if l.childIndex == nil {
+			l.childIndex = map[*Box]int{}
+		}
+		for j, k := range kids {
+			l.childIndex[k] = j
+		}
+		i, ok = l.childIndex[b]
+		if !ok {
+			return nil
+		}
+	}
+	if i+1 < len(kids) {
+		return kids[i+1]
+	}
+	return nil
+}
+
+// isForcedBreak reports whether a box ends the line wherever it falls.
+func isForcedBreak(b *Box) bool {
+	return b.Element != nil && strings.EqualFold(b.Element.Name, "br")
+}
+
+// firstRuneOf is the first character of some text, or zero where there is none.
+//
+// It does not make lastRuneOf's distinction between a byte that is not a
+// character and a literal U+FFFD, and that is measured rather than overlooked: a
+// planted version that read RuneError as nothing moved no test and no reftest.
+// The difference is what the two are read *for*. Zero from lastRuneOf means the
+// start of the paragraph, which several rules turn on; zero from this one is
+// only ever handed to unicode.IsSpace, and a replacement character is not white
+// space either.
+func firstRuneOf(text string) rune {
+	r, size := utf8.DecodeRuneInString(text)
+	if size == 0 {
+		return 0
+	}
+	return r
+}
+
+// lastRuneOf is the last character of a box's text, for the boundary the next
+// box begins at. See paragraph.Carried.Prev.
+//
+// Zero means there is none, which is what tells the next box it is at the start
+// of the paragraph and that an opportunity in front of its first character is
+// not one. So a character that happens to decode as U+FFFD is not that: only a
+// size of one — a byte that is not a character at all — and an empty string are.
+// Reading RuneError alone gives a box ending in a literal replacement character
+// the paragraph's own answer, and "<span>\uFFFD</span><span>ᦤ</span>" loses the
+// break that "\uFFFDᦤ" has.
+func lastRuneOf(text string) rune {
+	r, size := utf8.DecodeLastRuneInString(text)
+	if r == utf8.RuneError && size <= 1 {
+		return 0
+	}
+	return r
 }
 
 // cutRunsAt re-cuts a piece's face runs so that every boundary in parts is also
@@ -1437,17 +1664,47 @@ func cutRunsAt(runs []faceRun, parts []string) []faceRun {
 		for i := 1; i < len(run.Text); i++ {
 			if cuts[at+i] {
 				out = append(out, faceRun{
-					Text: run.Text[start:i], Face: run.Face, substituted: run.substituted,
+					Text: run.Text[start:i], Face: run.Face,
+					substituted: run.substituted, synthesised: run.synthesised,
 				})
 				start = i
 			}
 		}
 		out = append(out, faceRun{
-			Text: run.Text[start:], Face: run.Face, substituted: run.substituted,
+			Text: run.Text[start:], Face: run.Face,
+			substituted: run.substituted, synthesised: run.synthesised,
 		})
 		at += len(run.Text)
 	}
 	return out
+}
+
+// isBidiControlOnly reports whether a piece is bidi controls and nothing else,
+// so that §4.1.1 should look straight through it.
+//
+// Nothing else is transparent this way, and the narrow test is the point rather
+// than caution. A default-ignorable character that is not a control — a
+// variation selector, a soft hyphen, a joiner — is a character of the text: it
+// belongs to what is beside it, and a run of white space it stands in really is
+// two runs. CollapseWhitespaceAfter draws the line in exactly that place for
+// exactly this rule, and the two have to draw it together — widening this one
+// to isDefaultIgnorable makes "a &#xFE0F; b" collapse to one space here while
+// Phase I has already kept two, which is a disagreement no comparison between
+// two spellings can see, because it moves both of them. See
+// TestADefaultIgnorableThatIsNotAControlStillSeparatesTwoSpaces, which asserts
+// the width against the text rather than against another spelling of it.
+//
+// An empty string answers true, and nothing reaches it: SplitAtBreaks emits no
+// piece without text. The loop above is the only caller and it would be the
+// right answer there anyway — a piece with nothing in it puts nothing between
+// two spaces — so there is no guard for a case that cannot arise.
+func isBidiControlOnly(text string) bool {
+	for _, r := range text {
+		if !isBidiControl(r) {
+			return false
+		}
+	}
+	return true
 }
 
 // collapsibleSeparators marks the pieces an expanded virtual word separator

@@ -1065,14 +1065,15 @@ func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSi
 	if !transformFreezesSpace(kind) {
 		before.Collapsed = false
 	}
-	text := collapseWhitespaceAfter(n.Text, inherited["white-space-collapse"], wst,
+	collapse := preservedInAControl(n, inherited["white-space-collapse"])
+	text := collapseWhitespaceAfter(n.Text, collapse, wst,
 		before, writingSystemAt(n))
 	b.reportPhraseSeparators(n, text, wst)
 	// Whether the run of white space this node ends with is still open, asked
 	// of the collapsed text and *before* the transform below rewrites it. See
 	// Boundary.Collapsed: "full-width" turns the space into a U+3000, and by
 	// then there is nothing left for the question to be about.
-	endsCollapsed := endsCollapsedSpace(text, inherited["white-space-collapse"], wst)
+	endsCollapsed := endsCollapsedSpace(text, collapse, wst)
 	// text-transform, applied here so that the text every later stage measures,
 	// breaks, draws and writes into the PDF is the text that will appear.
 	// texttransform.go works through why it cannot wait until paint time.

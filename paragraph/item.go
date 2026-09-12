@@ -286,6 +286,30 @@ type Item struct {
 	// hangingpunctuation.go gives for the other two values: a hang is a width,
 	// and a width is a property of an item.
 	MayHangEnd bool
+	// MustHangEnd says the candidate above hangs whatever the room, which is
+	// §8.4's force-end where MayHangEnd alone is its allow-end.
+	//
+	// The two values differ in one clause and nothing else — "a stop or comma at
+	// the end of a line hangs", against the same sentence ending "if it does not
+	// otherwise fit prior to justification" — so they mark the same character in
+	// the same place and part company only where the fill weighs the room.
+	//
+	// A candidate that turns out not to be at the end of a line is taken back by
+	// the fill either way: force-end hangs a character at the end of *a line*,
+	// and a comma with more text after it on the same line is not at the end of
+	// one. That restore already existed for allow-end and needed nothing added.
+	MustHangEnd bool
+	// TrimEnd is how much narrower §8.2's half-width form of this item is, for
+	// an item that is a single full-width closing punctuation at a place a line
+	// could end. Zero for everything else, including a character in a face that
+	// states no half-width form for it.
+	//
+	// A candidate rather than a decision, for the same reason MayHangEnd is: the
+	// value trims "if it does not fit on the line before justification", which
+	// is a question about a line. The fill takes it by narrowing its own copy's
+	// Width, which is what makes the trimmed advance reach the display list and
+	// the line's measure together.
+	TrimEnd style.Unit
 	// PreContext and PostContext are the text either side of this run, where the
 	// boundary between it and its neighbour does not break shaping.
 	//
@@ -366,6 +390,17 @@ type Item struct {
 	// Off is what the document turned off for this run: a font's own rules a
 	// CSS property or a CSS Text rule has overruled. See shape.Features.
 	Off shape.Features
+	// Synthesised says this run's small capitals were made out of the uppercase
+	// letters, because the face declares none of its own: its Text is the
+	// uppercase of what the document wrote and its Size is below its box's.
+	//
+	// Nothing in this package reads it. It is carried because the run cannot be
+	// rebuilt from its box any more — the text has been rewritten and the
+	// original is not here — so anything that *restyles* an item has to know,
+	// or it will set the run back to its box's size and ask the face for the
+	// feature the run is standing in for. See layout's firstLineItems, which is
+	// the one caller that does, and layout/smallcaps.go for the whole of it.
+	Synthesised bool
 	// Hyphen is how much wider the line becomes if it ends after this item: the
 	// width of the hyphen a soft hyphen asks to have printed.
 	//
@@ -670,6 +705,32 @@ type State struct {
 	// held to the same rule as one that did not cross it, or "中中<span>〜</span>文"
 	// and "中中〜文" answer differently about the same text.
 	AfterDeferred bool
+	// AfterHeld says that opportunity was offered and then *moved* rather than
+	// refused: the character in front of it is one a line may not begin with,
+	// so the break belongs after it instead.
+	//
+	// It is kept apart from AfterDeferred because word-break has already had
+	// its say over a held one and does not get a second on the far side of the
+	// character that displaced it. Folding the two together is what broke
+	// word-break-keep-all-006, whose four ideographs around a comma set as
+	// three and one rather than two and two.
+	AfterHeld bool
+	// AfterText is the run of text in front of the next box that a dictionary
+	// would segment together with it: everything back to the last character of
+	// another script, or of none, and then forward to the last word boundary in
+	// it. See paragraph.Carried.Before and Trailing.DictTail, and note that it
+	// is empty for every document with no such script in it.
+	AfterText string
+	// AfterTaken says the opportunity the box left is one its text *took*,
+	// which is not the absence of the two above: a box can leave a taken break
+	// and a hold at the same offset. See paragraph.Trailing.Taken.
+	AfterTaken bool
+	// AfterRune is the last character emitted, which the next box needs for the
+	// pair rules and to know it is not at the start of the paragraph.
+	//
+	// It replaced a question about whether that character was an ideograph,
+	// which is one rule out of the several that read it. See paragraph.Carried.
+	AfterRune rune
 	// AfterLetterUnit says the last character emitted was a typographic letter
 	// unit that is not itself an ideograph, which is what decides whether an
 	// ideograph beginning the next box may be broken away from it. It travels

@@ -67,10 +67,14 @@ type (
 
 type hangingPunctuation = paragraph.HangingPunctuation
 
+type spacingTrim = paragraph.SpacingTrim
+
 var (
-	hangingPunctuationOf = paragraph.HangingPunctuationOf
-	leadingHang          = paragraph.LeadingHang
-	trailingHang         = paragraph.TrailingHang
+	hangingPunctuationOf       = paragraph.HangingPunctuationOf
+	spacingTrimOf              = paragraph.SpacingTrimOf
+	trailingClosingPunctuation = paragraph.TrailingClosingPunctuation
+	leadingHang                = paragraph.LeadingHang
+	trailingHang               = paragraph.TrailingHang
 )
 
 var (
@@ -84,6 +88,10 @@ var (
 	splitAtWordSeparators         = paragraph.SplitAtWordSeparators
 	mayNotBeginLine               = paragraph.MayNotBeginLine
 	splitAtBreaks                 = paragraph.SplitAtBreaks
+	splitAtBreaksAfter            = paragraph.SplitAtBreaksAfter
+	isBidiControl                 = paragraph.IsBidiControl
+	dictionaryLookahead           = paragraph.DictionaryLookahead
+	needsFollowingCharacter       = paragraph.NeedsFollowingCharacter
 	tabAdvance                    = paragraph.TabAdvance
 	isIdeographic                 = paragraph.IsIdeographic
 	spacingAdvance                = paragraph.SpacingAdvance

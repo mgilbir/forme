@@ -358,7 +358,29 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	for i, r := range runes {
 		gid, ok := f.GlyphID(r)
 		if !ok {
-			missing++
+			// A character nothing draws is not one the face is missing.
+			//
+			// The join controls reach here because the joining scan has to see
+			// them — dropHiddenCharacters keeps them back for exactly that —
+			// and the shaper takes them out again before any rule or any pen
+			// sees the buffer: hideJoiners on the path that chooses cursive
+			// forms, the syllable model's own pass on the other. Counting them
+			// was counting a glyph that was never going to be asked for.
+			//
+			// It decides which face sets a word. A caller's fallback asks "can
+			// this face set the whole of this text" and reads the answer here,
+			// and an emoji sequence is one grapheme cluster with a zero width
+			// joiner inside it: a face holding every visible character of
+			// "\U0001F468\u200D\U0001F4BB" reported one missing and was passed
+			// over for a face holding none of them, which then set both emoji as
+			// spaces.
+			//
+			// The Hangul fillers are not among these and still count: they are
+			// default-ignorable and they are *drawn*, which is what
+			// hiddenAfterShaping is the list of.
+			if !hiddenAfterShaping(r) {
+				missing++
+			}
 			gid = 0
 		}
 		buf = append(buf, Glyph{
@@ -512,7 +534,8 @@ func MeasureGlyphs(glyphs []Glyph, size float64) float64 {
 // 'liga' and 'clig' are the ligatures a reader expects to see; 'calt' and 'rclt'
 // pick the variant that fits its neighbours. A font that declares them means
 // them, which is what separates these from 'smcp' or 'onum' — those change what
-// the text says it is, and wait to be asked for (ShapeWith).
+// the text says it is, and wait to be asked for, by a declaration
+// (Features.Caps) or by a caller naming the tag (ShapeGlyphsWith).
 //
 // The order matters and is not alphabetical: composition before the rules that
 // read its output, required ligatures before optional ones, contextual
@@ -580,9 +603,75 @@ func (sh shaper) applyNamedFeatures(buf []Glyph, tags []string) []Glyph {
 	return buf
 }
 
+// applyRequestedFeatures runs the lookups of the features a *declaration* asked
+// for, in the font's own lookup order rather than in the order the tags were
+// named.
+//
+// The difference is what the order between two features actually is. A shaper
+// does not apply 'onum' and then 'zero'; it collects the lookups every enabled
+// feature names and walks them in index order, because that is the order the
+// designer wrote them in and the only one the font was tested against. Where two
+// features name lookups over the same glyphs, that decides which of them the
+// other one sees the output of — and Noto Sans has three pairs where it does:
+//
+//	onum + zero  gives the oldstyle slashed zero, a glyph neither alone reaches
+//	onum + pnum  gives the proportional oldstyle figures, likewise
+//	onum + frac  gives the fraction's numerators, because 'frac' is stated
+//	             later and covers what 'onum' produced
+//
+// Applying them tag by tag gets the first of those right and the third wrong:
+// 'onum' comes before 'frac' in §6.7's order, so the oldstyle figures win and
+// the fraction never forms. Nothing about the page says so — it is a line of
+// oldstyle digits where a fraction was asked for.
+//
+// The default lists are *not* merged this way and keep the order they are
+// written in. They are not one set: the joining forms of a cursive script go
+// between two of them, and the whole of beforeJoiningFeatures has to have run
+// before the forms are chosen. That staging is the design and is what the note
+// above those lists is about — the order there is a decision rather than an
+// accident of how a font was compiled.
+func (sh shaper) applyRequestedFeatures(buf []Glyph, tags []string) []Glyph {
+	if len(tags) == 0 {
+		return buf
+	}
+	if len(tags) == 1 {
+		// One feature has no order to get wrong, and this is nearly every run
+		// that asks for anything at all: "font-variant: small-caps" is one tag
+		// and so is every value of §6.7 written on its own.
+		return sh.applyNamedFeatures(buf, tags)
+	}
+	var merged []int
+	for _, tag := range tags {
+		merged = append(merged, sh.l.featureLookups[tag]...)
+	}
+	if len(merged) == 0 {
+		return buf
+	}
+	sortInts(merged)
+	// A lookup two of the features name is one piece of work and not two.
+	// Running it twice is not the same as running it once — a substitution
+	// applied to its own output is a second substitution — so this is
+	// correctness and not tidiness.
+	out, prev := merged[:0], -1
+	for _, at := range merged {
+		if at != prev {
+			out = append(out, at)
+			prev = at
+		}
+	}
+	return sh.applyContextual(buf, out)
+}
+
 func (sh shaper) substitute(buf []Glyph) []Glyph {
 	buf = sh.applyNamedFeatures(buf, sh.directionFeatures())
 	buf = sh.applyNamedFeatures(buf, beforeJoiningFeatures)
+	// What the document asked the face *for*: the capitals of font-variant-caps
+	// and the figures of font-variant-numeric. They go here — after composition
+	// and the localised forms, before the ligatures — because the ligatures are
+	// stated over the letters they replace. See Caps.Features and
+	// Numeric.Features, and applyRequestedFeatures for why the order among them
+	// is the font's rather than the specification's.
+	buf = sh.applyRequestedFeatures(buf, sh.features.adds())
 	buf = sh.applyJoiningForms(buf)
 	// The features a document turned off are dropped from the list rather than
 	// skipped inside the loop, so that what is left keeps the order the

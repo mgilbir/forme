@@ -3,6 +3,7 @@ package layout
 import (
 	"strings"
 
+	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -221,6 +222,23 @@ func (l *layouter) firstLineItems(items []inlineItem, block *Box,
 			it.Size = box.FontSize
 			it.Spacing = l.spacingFor(box)
 			it.Off = l.featuresFor(box)
+			if it.Synthesised {
+				// A run whose small capitals were made out of the capitals
+				// cannot be rebuilt from the restyled box: its text has already
+				// been uppercased, and there is nothing here to uppercase it
+				// back. So the two things the synthesis did are re-applied over
+				// the new size — the run is shrunk again, in proportion, and it
+				// still must not ask the face for the feature it stands in for.
+				//
+				// What that does not cover is a ::first-line rule that turns
+				// small capitals *off*, or on: the cut was made from the
+				// original box's value and the first line keeps it. It is the
+				// limitation text-transform already has on this pseudo-element
+				// and for the same reason — the text was settled in the box
+				// tree — and it is stated here rather than left to be found.
+				it.Size = it.Size.Mul(smallCapScale(it.Face))
+				it.Off.Caps = shape.CapsNormal
+			}
 			it.Width = l.br.MeasureSpacedInContext(it.Face, it.Text, it.Size,
 				it.Spacing, itemShaping(it))
 		}

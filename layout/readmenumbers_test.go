@@ -112,7 +112,7 @@ func TestTheReadmeCountsTheFuzzTargets(t *testing.T) {
 	if scheduled == 0 {
 		t.Fatal("the fuzz workflow schedules nothing, so this test says nothing")
 	}
-	if got := readmeWord(t, readme(t), `([a-z]+) of them scheduled weekly`); got != scheduled {
+	if got := readmeWord(t, readme(t), `([a-z-]+) of them scheduled weekly`); got != scheduled {
 		t.Errorf("the README says %d targets are scheduled weekly and the "+
 			"workflow names %d", got, scheduled)
 	}
@@ -123,6 +123,11 @@ func TestTheReadmeCountsTheFuzzTargets(t *testing.T) {
 // The prose says "fourteen of them", not "14 of them", and a number written as
 // a word drifts exactly as easily as one written as digits — more easily, since
 // nothing about it looks like a number to a reader skimming for one.
+//
+// A hyphenated compound is the two parts added: "twenty-two" is twenty and two,
+// which is the whole of English's rule between twenty and a hundred. Listing
+// them instead would be eighty entries, seventy-nine of which no README has ever
+// said, and the eightieth is the one somebody writes next.
 func readmeWord(t *testing.T, text, pattern string) int {
 	t.Helper()
 	m := regexp.MustCompile(pattern).FindStringSubmatch(text)
@@ -134,12 +139,17 @@ func readmeWord(t *testing.T, text, pattern string) int {
 		"seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
 		"twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
 		"sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
-		"twenty": 20,
+		"twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60,
+		"seventy": 70, "eighty": 80, "ninety": 90,
 	}
-	n, ok := words[m[1]]
-	if !ok {
-		t.Fatalf("the README says %q of them are scheduled, which this test "+
-			"cannot read as a number", m[1])
+	n := 0
+	for _, part := range strings.Split(m[1], "-") {
+		v, ok := words[part]
+		if !ok {
+			t.Fatalf("the README says %q of them are scheduled, which this test "+
+				"cannot read as a number", m[1])
+		}
+		n += v
 	}
 	return n
 }

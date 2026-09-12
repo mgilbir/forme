@@ -384,3 +384,24 @@ func SplitAtWordSeparators(text string) []string {
 	}
 	return append(out, text[start:])
 }
+
+// IsBidiControlOnly reports whether text is bidi controls and nothing else.
+//
+// Such a run is not content: it sets no paper, takes no room, and what it does
+// is tell the bidirectional algorithm about the text around it. So the rules
+// that ask "what is at the edge of this line" look straight through it, the way
+// they look through an inline box's own boundary — §4.1.1 removes a collapsible
+// space at the end of a line, and a character nobody can see does not stop that
+// space being at the end.
+//
+// The narrow set and not IsDefaultIgnorable, for the reason
+// CollapseWhitespaceAfter draws the same line: a variation selector or a soft
+// hyphen is a character of the text and belongs to what is beside it.
+func IsBidiControlOnly(text string) bool {
+	for _, r := range text {
+		if !IsBidiControl(r) {
+			return false
+		}
+	}
+	return text != ""
+}

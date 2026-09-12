@@ -626,7 +626,7 @@ func TestBreakAfterAHyphenAndNotAfterATrailingOne(t *testing.T) {
 	if len(pieces) != 1 || pieces[0].Text != "end-" {
 		t.Errorf("a trailing hyphen cut the text into %d pieces", len(pieces))
 	}
-	if !endedAtBreak {
+	if !endedAtBreak.Offered {
 		t.Error("a hyphen at the end of the run left no break opportunity for " +
 			"the box after it")
 	}
@@ -643,7 +643,7 @@ func TestBreakAfterAHyphenAndNotAfterATrailingOne(t *testing.T) {
 	}
 	// And a word that ends in a letter leaves none, so the assertion above is
 	// about the hyphen and not about the end of the text.
-	if _, ok := splitAtBreaks("well-known", whiteSpaceOf("collapse"), wordBreak{}, lineBreak{}, hyphens{}, paragraph.WritingSystemOther); ok {
+	if _, ok := splitAtBreaks("well-known", whiteSpaceOf("collapse"), wordBreak{}, lineBreak{}, hyphens{}, paragraph.WritingSystemOther); ok.Offered {
 		t.Error("a word ending after a hyphenated compound ended at an opportunity")
 	}
 	if pieces, _ := splitAtBreaks("well-known", whiteSpaceOf("collapse"), wordBreak{}, lineBreak{}, hyphens{}, paragraph.WritingSystemOther); len(pieces) != 2 ||

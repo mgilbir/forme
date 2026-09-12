@@ -167,6 +167,11 @@ var properties = map[string]property{
 	"text-justify":   {true, "auto"},
 	"text-indent":    {true, "0"},
 	"text-transform": {true, "none"},
+	// CSS Text 4 §8.2. Inherited, and its initial value is "normal" — which is
+	// not "do nothing": it trims a full-width closing bracket at the end of a
+	// line that would not otherwise hold it. See paragraph/spacingtrim.go, which
+	// also says which of the value's clauses this engine does.
+	"text-spacing-trim": {true, "normal"},
 	// white-space is a shorthand in CSS Text 4 — see the shorthands table — and
 	// these are the two longhands it sets that this engine acts on. The third,
 	// white-space-trim, is not registered because nothing trims yet, and
@@ -241,6 +246,57 @@ var properties = map[string]property{
 	// font's own rules, applied as the font states them.
 	"font-variant-ligatures": {true, "normal"},
 	"font-feature-settings":  {true, "normal"},
+	// CSS Fonts 4 §6.6. It inherits like the rest of the family, and its
+	// initial value is "normal" — the letters the text is written with.
+	//
+	// All six of its values are applied, and all six the same way: each names
+	// features the face declares — 'smcp' for small capitals, 'c2sc' beside it
+	// for the capitals too, 'pcap' and 'c2pc' for petite ones, 'unic', 'titl' —
+	// and the shaper asks for them. That is the only way this engine produces
+	// any of them: it synthesises none, so a face that declares none of what a
+	// value needs sets the text in the letters it is written with, and layout
+	// says so. See layout/fontfeatures.go.
+	"font-variant-caps": {true, "normal"},
+	// CSS Fonts 4 §6.7. It inherits with the rest of the family, and its
+	// initial value is "normal" — whichever figures the face draws by default,
+	// spaced however it spaces them.
+	//
+	// All eight of its keywords are applied, and all of them the same way: each
+	// names a feature the face declares — 'onum' for the oldstyle figures,
+	// 'tnum' for the tabular spacing a column of them needs, 'frac', 'ordn',
+	// 'zero' — and the shaper asks for them. None is synthesised, here or
+	// anywhere: an oldstyle figure is a shape a designer drew and there is
+	// nothing to make one out of, which is the difference between this property
+	// and small capitals. A face that declares none of what a value asks for
+	// sets the figures it has, and layout says so. See layout/fontfeatures.go.
+	"font-variant-numeric": {true, "normal"},
+	// CSS Fonts 4 §6.9. It inherits with the rest of the family, and its
+	// initial value is "normal" — whichever forms the face draws by default,
+	// at whichever width it draws them.
+	//
+	// Nine keywords and all of them a feature the face declares: 'jp78' and its
+	// three successors for the Japanese national standards, 'smpl' and 'trad'
+	// for the two forms of a simplified character, 'fwid' and 'pwid' for the
+	// ideographic advance against the character's own, and 'ruby' for the kana
+	// an annotation is set in. None is synthesised — a JIS78 ideograph is a
+	// shape a designer drew — so a face that declares none of what a value asks
+	// for sets the forms it has, and layout says so. See layout/fontfeatures.go.
+	"font-variant-east-asian": {true, "normal"},
+	// CSS Fonts 4 §6.5. It inherits with the rest of the family, and its
+	// initial value is "normal" — the character where it is written.
+	//
+	// "sub" and "super" ask a face for 'subs' and 'sups', the small raised and
+	// lowered forms it draws for the characters that get them. §6.5 lets a user
+	// agent synthesize them by scaling and repositioning the ordinary glyphs and
+	// this engine does not, so a face that declares neither leaves the run where
+	// it is and layout says so. See layout/fontfeatures.go.
+	//
+	// It is not "vertical-align: super" with a smaller size, and the difference
+	// is what a font's own superscript is: a second drawing, narrower and with
+	// its weight adjusted for the size it is set at. A raised copy of the
+	// ordinary glyph is thinner than the letters around it, which is what a
+	// synthesized one always looks like.
+	"font-variant-position": {true, "normal"},
 	// text-autospace inherits, which is what lets a document turn it off once
 	// on the body. Its initial value is "normal", and "normal" asks for the
 	// spacing — a page of Japanese with Latin words in it is set wrong without
@@ -599,7 +655,14 @@ var shorthands = map[string]shorthand{
 	"list-style": {listStyleShorthand,
 		[]string{"list-style-type", "list-style-position", "list-style-image"}},
 	"font": {fontShorthand, []string{
-		"font-style", "font-weight", "font-size", "font-family", "line-height"}},
+		"font-style", "font-weight", "font-size", "font-family", "line-height",
+		"font-variant-caps"}},
+
+	// CSS Fonts 4 §6.10, for the five longhands this engine has. See
+	// fontVariantShorthand for why the property is expanded rather than read.
+	"font-variant": {fontVariantShorthand, []string{
+		"font-variant-ligatures", "font-variant-caps", "font-variant-numeric",
+		"font-variant-east-asian", "font-variant-position"}},
 	"text-decoration": {textDecorationShorthand,
 		[]string{"text-decoration-line", "text-decoration-color",
 			"text-decoration-thickness"}},

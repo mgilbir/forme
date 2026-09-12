@@ -1,7 +1,9 @@
 package layout
 
 import (
+	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/mgilbir/forme/html"
 	"github.com/mgilbir/forme/paragraph"
@@ -377,6 +379,530 @@ func (l *layouter) reportKerning(b *Box, face *shape.Face) {
 	}
 }
 
+// reportCaps names a request for capitals the face cannot supply.
+//
+// Every value of CSS Fonts 4 §6.6's font-variant-caps is a request for features
+// the face declares — 'smcp' for small capitals, 'c2sc' beside it for the
+// capitals too, 'pcap' and 'c2pc' for petite ones, 'unic', 'titl' — and a face
+// that declares none of them sets the text in the letters it is written with, at
+// the size it is written at. That is a page the document did not ask for and
+// nothing about it looks wrong, which is exactly the shape of failure §6.3's
+// findings exist for: a paragraph the author expects in small capitals comes out
+// in lowercase and reads perfectly well.
+//
+// This engine synthesises none of them. A synthesised small capital is the
+// uppercase letter drawn at a fraction of the size, which every browser does and
+// none of them the same way, and doing it here means the run is no longer one
+// run: the letters it changes are set at a different size from the ones it does
+// not, so the item has to be cut, measured and drawn in pieces. Until that is
+// built the honest answer is the report.
+//
+// # What it is asked about, and why not once per box
+//
+// Per face run, like checkGlyphs and for the same reason: the box's own face may
+// have no small capitals while the fallback face that actually set a word does,
+// or the other way round, and a report keyed on the box would be right about
+// neither. The runs are the ones the items are built from, so what is checked is
+// what is drawn.
+//
+// # Per tag, and only where the tag has something to act on
+//
+// A value asking for two features may get one of them. Noto Sans declares both
+// 'smcp' and 'c2sc', and a face with only the first carries out half of
+// "all-small-caps": the lowercase letters become small capitals and the capitals
+// stay full height, which is "small-caps" and not what was asked for. Naming the
+// tag that is missing is the difference between an author knowing which half of
+// their line is wrong and knowing only that something is.
+//
+// And a tag is only reported where the text has a letter it could act on. 'smcp'
+// replaces lowercase letters and 'c2sc' capitals, so a run of digits, of Han, or
+// of one case where the missing tag wants the other is set identically with the
+// feature and without it — and a finding about it would be this engine calling a
+// correct page a failure. It is the same narrowing reportKerning makes for a
+// "kern" a face has not got.
+func (l *layouter) reportCaps(b *Box, face *shape.Face, text string) {
+	want, unhandled := capsOf(b.Style["font-variant-caps"])
+	if unhandled != "" {
+		// All six of §6.6 are read, so a value outside them is either a mistake
+		// the author made or a value from a level this engine has not read —
+		// and nothing here can tell the two apart. It is reported as the second,
+		// which is the way every other reader in this file answers a value it
+		// cannot act on, and the direction to err in: an author whose typo is
+		// called a missing feature looks at their stylesheet and finds it, and
+		// an author whose new value is called a typo is told the opposite of
+		// what is true.
+		l.reportOnce("font-variant-caps:"+unhandled, Finding{
+			Rule:     RuleUnsupportedValue,
+			Property: "font-variant-caps",
+			Message: quoteValue(unhandled) + " is not a value of font-variant-caps " +
+				"this engine reads; the text was set in the letters it is " +
+				"written with",
+			Path: PathOf(boxElement(b)),
+		})
+		return
+	}
+	if face == nil {
+		return
+	}
+	// §6.6's fallback first: a document asking a face with no petite capitals
+	// for them gets its small ones, and what is missing is decided from what
+	// the face will actually be asked. See resolveCaps.
+	use := resolveCaps(want, face)
+	missing := missingCapsFeatures(use, face, text)
+	if len(missing) == 0 {
+		return
+	}
+	value := strings.ToLower(strings.TrimSpace(b.Style["font-variant-caps"]))
+	if capsAreSynthesised(use) {
+		// The face has none of them and this engine made the capitals itself,
+		// which is a page §6.6 asked for rather than a gap. It is still worth
+		// saying: a scaled capital is not the one a designer would have drawn,
+		// and the page carries the uppercase text. See RuleCapsSynthesised.
+		l.reportOnce("caps-synthesised:"+value+":"+strings.Join(missing, ",")+":"+face.Name(), Finding{
+			Rule:     RuleCapsSynthesised,
+			Property: "font-variant-caps",
+			Message: "font-variant-caps " + quoteValue(value) + " asks a face for " +
+				strings.Join(use.Features(), " and ") + "; " + quoteValue(face.Name()) +
+				" declares no " + strings.Join(missing, " or ") + ", so " +
+				capsMadeHere(missing, use) + " were made out of the letters at " +
+				strconv.FormatFloat(smallCapScale(face), 'g', 3, 64) +
+				" of the size, and the page carries them as uppercase text",
+			Path: PathOf(boxElement(b)),
+		})
+		return
+	}
+	// "that part of the text" where the face carried out some of the request: a
+	// face with 'smcp' and no 'c2sc' asked for "all-small-caps" lowers the
+	// lowercase letters and leaves the capitals full height, which is a line in
+	// two heights of letter rather than a line in the wrong ones.
+	came := "the text was set in the letters it is written with"
+	if len(missing) < len(want.Features()) {
+		came = "that part of the text was set in the letters it is written with"
+	}
+	// Keyed on the value as well as the face and the tags: two declarations can
+	// fall short in the same tag — "small-caps" and "all-small-caps" over
+	// lowercase text both come down to a missing 'smcp' — and an author who
+	// wrote both wants to hear about both, since the message names the value
+	// they wrote.
+	l.reportOnce("font-variant-caps:"+value+":"+strings.Join(missing, ",")+":"+face.Name(), Finding{
+		Rule:     RuleUnsupportedValue,
+		Property: "font-variant-caps",
+		Message: "font-variant-caps " + quoteValue(value) + " asks a face for " +
+			strings.Join(want.Features(), " and ") + "; " + quoteValue(face.Name()) +
+			" declares no " + strings.Join(missing, " or ") + ", so " + came +
+			", because this engine uses the capitals a face draws and does not " +
+			"make them out of the letters at a smaller size",
+		Path: PathOf(boxElement(b)),
+	})
+}
+
+// capsMadeHere names the letters the synthesis had to make, which is the half of
+// the request the face did not answer.
+//
+// A face may answer one half: 'smcp' and no 'c2sc' asked for "all-small-caps"
+// lowers the lowercase letters and leaves the capitals standing. Saying "the
+// capitals were made here" then tells an author which half of their line is the
+// designer's work and which is this engine's.
+func capsMadeHere(missing []string, use shape.Caps) string {
+	var lower, capitals bool
+	for _, tag := range missing {
+		switch tag {
+		case use.Lowercase():
+			lower = true
+		case use.Capitals():
+			capitals = true
+		}
+	}
+	switch {
+	case lower && capitals:
+		return "both cases"
+	case capitals:
+		return "the capitals"
+	}
+	return "the small capitals"
+}
+
+// missingCapsFeatures is the tags a value needs that this face has not got and
+// this text would have shown.
+func missingCapsFeatures(want shape.Caps, face *shape.Face, text string) []string {
+	wanted := want.Features()
+	if len(wanted) == 0 {
+		return nil
+	}
+	lower, upper := hasCase(text)
+	var missing []string
+	for _, tag := range wanted {
+		if !capsTagWouldShow(tag, lower, upper) || faceDeclares(face, tag) {
+			continue
+		}
+		missing = append(missing, tag)
+	}
+	return missing
+}
+
+// capsTagWouldShow reports whether a tag has a letter in this text to act on.
+//
+// The three answers are the three kinds of rule §6.6 names: one that replaces
+// lowercase letters ('smcp', 'pcap'), one that replaces capitals ('c2sc',
+// 'c2pc', and 'titl', which cuts the capitals differently), and 'unic', which
+// puts both cases at one height and so acts on either.
+func capsTagWouldShow(tag string, lower, upper bool) bool {
+	switch tag {
+	case "smcp", "pcap":
+		return lower
+	case "c2sc", "c2pc", "titl":
+		return upper
+	case "unic":
+		return lower || upper
+	}
+	return false
+}
+
+// faceDeclares reports whether a face offers a feature.
+//
+// It is Features() and not a table lookup, because a face may offer a feature
+// through a ligature or a contextual rule as well as a plain one-for-one
+// substitution — see shape's TestAFeatureOfferedThroughALigatureIsListed, which
+// is that case stated as a font.
+func faceDeclares(face *shape.Face, tag string) bool {
+	for _, got := range face.Features() {
+		if got == tag {
+			return true
+		}
+	}
+	return false
+}
+
+// hasCase reports which cases the text has letters in.
+//
+// A letter with a form of the other case is what these features cover, so that
+// is the question — not unicode.IsLower and IsUpper, which are true of
+// characters no face maps anywhere, and not "is a letter", which is true of the
+// scripts that have one case only.
+func hasCase(text string) (lower, upper bool) {
+	for _, r := range text {
+		if unicode.ToUpper(r) != r {
+			lower = true
+		}
+		if unicode.ToLower(r) != r {
+			upper = true
+		}
+		if lower && upper {
+			break
+		}
+	}
+	return lower, upper
+}
+
+// reportNumeric names a request about the figures the face cannot carry out.
+//
+// Every keyword of CSS Fonts 4 §6.7 is a request for a feature the face
+// declares, and a face that declares none of them sets the digits it has: a
+// column of figures that will not line up, a fraction written as three
+// characters, a zero that cannot be told from a capital O. None of that looks
+// wrong on the page, which is the shape of failure §6.3's findings exist for.
+//
+// # Nothing here is synthesised, and that is not a gap in this file
+//
+// An oldstyle figure is a shape a designer drew, and so is a slashed zero and a
+// stacked fraction. There is nothing to make one out of — the letter at a
+// smaller size, which is what small capitals are synthesised from, has no
+// counterpart here — and no browser makes one either. So this reports where
+// smallcaps.go produces, and the finding is the whole of what the engine can do
+// about it.
+//
+// # Per tag, per run, and only where the tag has something to act on
+//
+// The first two for the reasons reportCaps gives. The third is narrower than it
+// looks: every one of §6.7's features acts on digits, so a run with none in it
+// is set identically with them and without, and a finding about it would be this
+// engine calling a correct page a failure. A digit is a necessary condition and
+// not a sufficient one — 'ordn' wants letters after one and 'frac' a slash
+// between two — and it is where the line is drawn, because the rest is the
+// font's business and cannot be known from here.
+//
+// # The two the face may already be doing
+//
+// "tabular-nums" asks for digits that all take the same room, and almost every
+// text face draws them that way to begin with: the fourteen standard PDF faces
+// do, and so does Noto Sans. A face whose digits already share an advance is
+// being asked for the page it is already setting, and reporting it would hold a
+// correct document out of the clean count for ever — which is the narrowing
+// reportKerning makes for a "kern" a face has not got, arrived at from the other
+// side. "proportional-nums" is the same question with the answer reversed.
+//
+// The other six cannot be answered this way. Whether a face's default figures
+// are lining or oldstyle, whether its zero is slashed, whether it builds a
+// fraction — none of that is in the metrics, and guessing would be worse than
+// the report.
+func (l *layouter) reportNumeric(b *Box, face *shape.Face, text string) {
+	want, unhandled := numericOf(b.Style["font-variant-numeric"])
+	if unhandled != "" {
+		// All eight of §6.7 are read, so a word outside them is either a
+		// mistake the author made or a value from a level this engine has not
+		// read, and nothing here can tell the two apart. See reportCaps, which
+		// makes the same choice for the same reason.
+		l.reportOnce("font-variant-numeric:"+unhandled, Finding{
+			Rule:     RuleUnsupportedValue,
+			Property: "font-variant-numeric",
+			Message: quoteValue(unhandled) + " is not a value of " +
+				"font-variant-numeric this engine reads; the figures were set " +
+				"as the face draws them",
+			Path: PathOf(boxElement(b)),
+		})
+		return
+	}
+	if want == 0 || face == nil || !hasDigit(text) {
+		return
+	}
+	var missing []string
+	for _, tag := range want.Features() {
+		if faceDeclares(face, tag) || numericIsInert(tag, face) {
+			continue
+		}
+		missing = append(missing, tag)
+	}
+	if len(missing) == 0 {
+		return
+	}
+	value := strings.ToLower(strings.TrimSpace(b.Style["font-variant-numeric"]))
+	l.reportOnce("font-variant-numeric:"+value+":"+strings.Join(missing, ",")+":"+face.Name(),
+		Finding{
+			Rule:     RuleUnsupportedValue,
+			Property: "font-variant-numeric",
+			Message: "font-variant-numeric " + quoteValue(value) + " asks a face for " +
+				strings.Join(want.Features(), " and ") + "; " + quoteValue(face.Name()) +
+				" declares no " + strings.Join(missing, " or ") + ", and this engine " +
+				"does not draw a figure a designer did not — so that much of the " +
+				"text was set in the figures the face has",
+			Path: PathOf(boxElement(b)),
+		})
+}
+
+// numericIsInert reports whether a tag asks for the page the face is already
+// setting.
+//
+// Two of the eight can be answered from the metrics, and they are the two an
+// author is most likely to write. See reportNumeric.
+func numericIsInert(tag string, face *shape.Face) bool {
+	switch tag {
+	case "tnum":
+		return digitsShareAnAdvance(face)
+	case "pnum":
+		return !digitsShareAnAdvance(face)
+	}
+	return false
+}
+
+// digitsShareAnAdvance reports whether every digit in the face takes the same
+// room, which is what "tabular" means and what a column of figures needs.
+//
+// A face missing a digit answers false, which is the safe direction: it is not
+// the face a document setting figures wants, the request cannot be shown to be
+// inert, and the report says so.
+func digitsShareAnAdvance(face *shape.Face) bool {
+	first, ok := face.Advance('0')
+	if !ok {
+		return false
+	}
+	for r := '1'; r <= '9'; r++ {
+		got, ok := face.Advance(r)
+		if !ok || got != first {
+			return false
+		}
+	}
+	return true
+}
+
+// hasDigit reports whether §6.7's features would have anything to act on.
+//
+// The decimal digits and nothing wider. unicode.IsDigit is true of every
+// script's digits, and a face's 'onum' or 'tnum' covers the European ones it
+// drew — so a run of Devanagari numerals is set identically either way, and a
+// report about it would name a feature that could not have changed it.
+func hasDigit(text string) bool {
+	for _, r := range text {
+		if r >= '0' && r <= '9' {
+			return true
+		}
+	}
+	return false
+}
+
+// reportEastAsian names a request about the East Asian forms the face cannot
+// carry out.
+//
+// Every keyword of CSS Fonts 4 §6.9 is a request for a feature the face
+// declares: the Japanese national standards, the two forms of a simplified
+// character, the ideographic advance against the character's own, and the kana
+// an annotation is set in. A face that declares none of them sets the forms it
+// has — a page of ideographs in whichever revision the designer drew, Latin
+// letters on their own advance where a grid was asked for — and none of it looks
+// wrong, which is the shape of failure §6.3's findings exist for.
+//
+// Nothing here is synthesised. A JIS78 ideograph is a shape a designer drew, and
+// so is a ruby kana; a full-width Latin letter is a second drawing of the same
+// letter on the ideographic advance, and centring the proportional one in an em
+// would be this engine inventing a typeface. No browser does either.
+//
+// # Which characters each tag could act on
+//
+// Three classes, and they are coarser than the nine features because what can be
+// known here is coarser. The six national forms and 'ruby' need an East Asian
+// character — an ideograph or a kana — and a run of Latin is set identically
+// with them and without.
+//
+// The two widths are the ones that reach Latin text, and that is the whole point
+// of them: a Japanese font draws the ASCII letters twice, and "full-width" asks
+// for the wide drawing. So 'fwid' needs a character that *has* a full-width form
+// and 'pwid' one that *is* one — read from the table text-transform's own
+// full-width value is applied from, so the two cannot drift apart. An East Asian
+// character counts for both, because a font may set its kana proportionally and
+// a halfwidth kana is a width pair as well as a kana.
+func (l *layouter) reportEastAsian(b *Box, face *shape.Face, text string) {
+	want, unhandled := eastAsianOf(b.Style["font-variant-east-asian"])
+	if unhandled != "" {
+		l.reportOnce("font-variant-east-asian:"+unhandled, Finding{
+			Rule:     RuleUnsupportedValue,
+			Property: "font-variant-east-asian",
+			Message: quoteValue(unhandled) + " is not a value of " +
+				"font-variant-east-asian this engine reads; the text was set in " +
+				"the forms the face draws",
+			Path: PathOf(boxElement(b)),
+		})
+		return
+	}
+	if want == 0 || face == nil {
+		return
+	}
+	ideographs, wide, narrow := eastAsianCharacters(text)
+	var missing []string
+	for _, tag := range want.Features() {
+		if faceDeclares(face, tag) || !eastAsianTagWouldShow(tag, ideographs, wide, narrow) {
+			continue
+		}
+		missing = append(missing, tag)
+	}
+	if len(missing) == 0 {
+		return
+	}
+	value := strings.ToLower(strings.TrimSpace(b.Style["font-variant-east-asian"]))
+	l.reportOnce("font-variant-east-asian:"+value+":"+strings.Join(missing, ",")+":"+face.Name(),
+		Finding{
+			Rule:     RuleUnsupportedValue,
+			Property: "font-variant-east-asian",
+			Message: "font-variant-east-asian " + quoteValue(value) + " asks a face for " +
+				strings.Join(want.Features(), " and ") + "; " + quoteValue(face.Name()) +
+				" declares no " + strings.Join(missing, " or ") + ", and this engine " +
+				"does not draw a form a designer did not — so that much of the " +
+				"text was set in the forms the face has",
+			Path: PathOf(boxElement(b)),
+		})
+}
+
+// eastAsianTagWouldShow reports whether a tag has anything in this run to act
+// on. See reportEastAsian for the three classes.
+func eastAsianTagWouldShow(tag string, ideographs, wide, narrow bool) bool {
+	switch tag {
+	case "fwid":
+		return ideographs || narrow
+	case "pwid":
+		return ideographs || wide
+	}
+	return ideographs
+}
+
+// eastAsianCharacters is what a run holds that §6.9's features could act on: an
+// East Asian character, one that is a full-width form, and one that has a
+// full-width form.
+//
+// All three in one pass, because a run of Japanese with Latin words in it is
+// every one of them and asking three times would walk the text three times.
+func eastAsianCharacters(text string) (ideographs, wide, narrow bool) {
+	for _, r := range text {
+		switch {
+		case paragraph.IsAutospaceIdeograph(r):
+			ideographs = true
+		case paragraph.IsFullWidthForm(r):
+			wide = true
+		case paragraph.HasFullWidthForm(r):
+			narrow = true
+		}
+		if ideographs && wide && narrow {
+			break
+		}
+	}
+	return ideographs, wide, narrow
+}
+
+// reportPosition names a request for a subscript or a superscript the face
+// cannot supply.
+//
+// CSS Fonts 4 §6.5's "sub" and "super" ask a face for 'subs' and 'sups': the
+// small raised and lowered forms it draws for the characters that get them. A
+// face that declares neither leaves the run where it is, at the size it is —
+// the 2 of a chemical formula the same size as the H beside it, an exponent
+// standing on the baseline — which reads as ordinary text rather than as
+// something missing.
+//
+// # This engine does not synthesize them, and §6.5 says it may
+//
+// "If the font does not have glyphs for a given character in a
+// superscript/subscript form, the user agent may synthesize them by scaling and
+// repositioning the default glyphs." That is a raise and a shrink, and the two
+// are what small capitals already needed — but a raised copy of the ordinary
+// glyph is not what a font's own superscript is. The designer's is a second
+// drawing: narrower, and with its weight adjusted for the size it is set at, so
+// that it does not read thin beside the letters around it. Scaling the ordinary
+// one produces exactly that thinness, and it is the difference a reader sees.
+//
+// So this reports, and the finding says which of the two the page came out as.
+//
+// # What it is asked about
+//
+// Per face run, like the rest of this file. The narrowing is the loosest of the
+// four, and that is the property rather than a corner cut: a font's 'sups' may
+// cover the digits alone or every letter as well — Noto Sans covers the digits,
+// the lowercase letters and the arithmetic signs and leaves the capitals, which
+// is why "H2O" comes out with only its 2 lowered — and which characters a face
+// that declares *nothing* would have covered cannot be known from here. What can
+// be known is that a run with nothing but white space in it is set identically
+// either way, because a raised space is a space.
+func (l *layouter) reportPosition(b *Box, face *shape.Face, text string) {
+	want, unhandled := variantPositionOf(b.Style["font-variant-position"])
+	if unhandled != "" {
+		l.reportOnce("font-variant-position:"+unhandled, Finding{
+			Rule:     RuleUnsupportedValue,
+			Property: "font-variant-position",
+			Message: quoteValue(unhandled) + " is not a value of " +
+				"font-variant-position this engine reads; the text was set on " +
+				"the baseline",
+			Path: PathOf(boxElement(b)),
+		})
+		return
+	}
+	if want == shape.PositionNormal || face == nil || strings.TrimSpace(text) == "" {
+		return
+	}
+	tag := want.Features()[0]
+	if faceDeclares(face, tag) {
+		return
+	}
+	which := "a superscript"
+	if want == shape.PositionSub {
+		which = "a subscript"
+	}
+	l.reportOnce("font-variant-position:"+tag+":"+face.Name(), Finding{
+		Rule:     RuleUnsupportedValue,
+		Property: "font-variant-position",
+		Message: which + " was asked for and " + quoteValue(face.Name()) +
+			" declares no " + tag + "; the text was set on the baseline at the " +
+			"size it is written, because this engine uses the raised and lowered " +
+			"forms a face draws and does not make them out of the ordinary ones",
+		Path: PathOf(boxElement(b)),
+	})
+}
+
 // inertFontFeatures reports whether a font-feature-settings value asks for the
 // page that is already there.
 //
@@ -512,35 +1038,6 @@ func hyphenTextFor(face *shape.Face) string {
 	return hyphenMinus
 }
 
-// reportHangingPunctuation reports a hanging-punctuation value this engine
-// reads as none.
-//
-// "first", "last" and "allow-end" are implemented. "force-end" is not: it hangs
-// a stop or a comma at the end of *every* line whether or not the line would
-// otherwise hold it, which is a decision about every line rather than about the
-// one that overflowed — and the one that overflowed is the only one the fill has
-// a reason to ask about.
-//
-// What they change is where a line breaks, and that shows as a word moved to
-// the next line with nothing on the page to say why, so it is exactly the kind
-// of difference a reader cannot diagnose and a finding has to state.
-func (l *layouter) reportHangingPunctuation(b *Box, value string) {
-	if l.reportedHanging == nil {
-		l.reportedHanging = map[string]bool{}
-	}
-	if l.reportedHanging[value] {
-		return
-	}
-	l.reportedHanging[value] = true
-	l.rec.ReportDetail(Finding{
-		Rule:     RuleUnsupportedValue,
-		Property: "hanging-punctuation",
-		Message: value + " was not applied, so a stop or a comma at the end of a " +
-			"line takes room the value asked it to give up",
-		Path: PathOf(b.Element),
-	})
-}
-
 // boxElement is the element a box belongs to: its own, or the nearest one above
 // it.
 //
@@ -581,4 +1078,32 @@ func boxHyphenation(b *Box) paragraph.Language {
 // paragraph.WritingSystemOf, and writingSystemAt for the walk.
 func boxWritingSystem(b *Box) paragraph.WritingSystem {
 	return writingSystemAt(boxElement(b))
+}
+
+// reportSpacingTrim reports a text-spacing-trim value whose rule this engine
+// does not follow.
+//
+// §8.2's values differ in what they do at the *start* of a line — whether a
+// full-width opening bracket keeps the half em of blank in front of it, and on
+// which lines — and that is the half of the property this engine does not do.
+// So "space-first" and "trim-start" are reported and the other two are not:
+// "space-all" asks for full-width everywhere, which is what an engine that
+// trims only at the end of a line already gives it, and "normal" is the initial
+// value.
+//
+// Not reporting the initial value is a decision and not an oversight. Every
+// document that holds CJK text has it, so a finding would appear on documents
+// whose author never wrote the property and never depended on the clause; what
+// it would say is "this engine does not do all of §8.2", which is a fact about
+// the engine and not about the page. The clause that is missing takes room away
+// at the start of a line, and a document that needs it says so.
+func (l *layouter) reportSpacingTrim(b *Box, value string) {
+	l.reportOnce("text-spacing-trim", Finding{
+		Rule:     RuleUnsupportedValue,
+		Property: "text-spacing-trim",
+		Message: "text-spacing-trim " + quoteValue(value) + " was not applied at the " +
+			"start of a line, so a full-width opening bracket keeps the half em " +
+			"of blank in front of it",
+		Path: PathOf(b.Element),
+	})
 }

@@ -1,11 +1,12 @@
 package shape
 
-// What a caller asks a face *not* to apply.
+// What a caller asks a face to apply and not to apply.
 //
 // Every other request to this package is a question about the text: which glyphs
 // it needs, which forms its letters take, how wide it is. This is the one thing
 // the caller knows that the text does not say — CSS has properties that turn a
-// font's own rules off, and a font has no way of knowing it has been overruled.
+// font's own rules off and one that turns a rule on, and a font has no way of
+// knowing either that it has been overruled or that it has been asked.
 //
 // The three are apart rather than one flag because the rules that ask for them
 // name different sets, and folding two of them together would answer one
@@ -23,11 +24,34 @@ package shape
 // A face that declares none of them is unaffected by all three, which is why
 // nothing here has to ask whether the font has the feature before turning it
 // off.
-
-// Features is the set of a font's own rules a caller has turned off.
 //
-// The zero value applies everything, which is what almost every run wants and
-// what every caller that has no opinion should pass.
+// # The one that goes the other way
+//
+// The font-variant family asks for rules the font states and no run gets by
+// default: 'smcp' and the five other ways §6.6 has of setting a run in
+// capitals, 'onum' and 'tnum' and the six other things §6.7 does to a figure,
+// §6.9's national forms and ideographic widths, and §6.5's subscripts and
+// superscripts. They are here rather than in
+// ShapeGlyphsWith's caller-named list because they are the same kind of fact as
+// the other three — something about the run that its own text does not say,
+// decided by a declaration — and because they have to travel the whole way to
+// the backend that draws the run. Everything between layout and the pen already
+// carries a Features, and nothing carries a list of tags.
+//
+// It is *not* the same in the one way that matters to a report: turning a rule
+// off is right whether or not the face has it, and turning one on is only
+// possible when it does. A face with no small capitals sets the text in
+// ordinary letters, which is a page the document did not ask for. Nothing here
+// says so — this is the shaping layer, and the run still comes out — but the
+// caller can compare Caps.Features against Face.Features before it draws and
+// say so itself.
+
+// Features is what a caller has turned off in a font's own rules, and the one
+// it has turned on.
+//
+// The zero value applies exactly the rules the font states for the run, which
+// is what almost every run wants and what every caller that has no opinion
+// should pass.
 type Features struct {
 	// NoOptionalLigatures suppresses "liga", "clig", "dlig" and "hlig": the
 	// ligatures a font offers rather than the ones a script requires.
@@ -42,6 +66,354 @@ type Features struct {
 	// NoKerning suppresses the pair adjustments of the "kern" feature and of
 	// GPOS pair positioning, including the pair that spans a run boundary.
 	NoKerning bool
+	// Caps is the capitals a run is set in: the first request here that asks a
+	// face for a rule rather than taking one away.
+	//
+	// A face that declares none of the value's features is unaffected, and the
+	// run is set in the letters it is written with. See Caps.Features for what
+	// each value asks for, and Face.Features for the question to ask first.
+	Caps Caps
+	// Numeric is the figures a run is set in: which of the face's digits, how
+	// they are spaced, and what it does with a fraction, an ordinal and a zero.
+	//
+	// It is a *set* where Caps is one value, and that is the property and not a
+	// choice made here: CSS Fonts 4 §6.7 lets a document ask for oldstyle
+	// figures, tabular spacing and a slashed zero at once, and the three are
+	// three of the font's rules over the same digits. See Numeric.
+	Numeric Numeric
+	// EastAsian is which national standard's forms a run's ideographs take,
+	// whether its characters are set on the ideographic advance or their own,
+	// and whether its kana are the small forms an annotation is set in.
+	//
+	// A set for the same reason Numeric is: CSS Fonts 4 §6.9 lets a document
+	// ask for the JIS78 forms at full width at once. See EastAsian.
+	EastAsian EastAsian
+	// Position is whether a run is set as a subscript or a superscript — the
+	// small raised or lowered forms a font draws for the characters that get
+	// them, rather than the same glyph moved.
+	//
+	// One value and not a set, because a run is one or the other or neither:
+	// CSS Fonts 4 §6.5's grammar is "normal | sub | super". See Position.
+	Position Position
+}
+
+// Position is CSS Fonts 4 §6.5's font-variant-position, as the feature it asks
+// a face for.
+//
+// It is the one property of the family whose request is about where a character
+// sits as much as which glyph it is. A font's 'sups' is not the ordinary glyph
+// moved up: it is a second drawing, narrower and with its weight adjusted for
+// the size it is set at, and already at the height it belongs — which is why the
+// tag is asked for rather than the run displaced.
+//
+// A face that does not declare it leaves the run where it is, at the size it is,
+// and that is a page the document did not ask for. §6.5 allows a user agent to
+// synthesize the forms by scaling and repositioning the ordinary glyphs; this
+// engine does not, and the caller reports it.
+type Position uint8
+
+const (
+	// PositionNormal is the character where it is written.
+	PositionNormal Position = iota
+	// PositionSub is 'subs': the form drawn below the baseline, for the 2 of a
+	// chemical formula.
+	PositionSub
+	// PositionSuper is 'sups': the form drawn above it, for an exponent or a
+	// footnote mark.
+	PositionSuper
+)
+
+// Features are the tags this value asks a face for.
+func (p Position) Features() []string {
+	switch p {
+	case PositionSub:
+		return positionSub
+	case PositionSuper:
+		return positionSuper
+	}
+	return nil
+}
+
+var (
+	positionSub   = []string{"subs"}
+	positionSuper = []string{"sups"}
+)
+
+// Caps is CSS Fonts 4 §6.6's font-variant-caps, as a set of features to ask a
+// face for.
+//
+// All six values are exactly that — a tag or a pair of tags the font states and
+// no run is given unless it asks — which is why the property is one field here
+// and not six. What separates them is which letters they act on and what they
+// turn those letters into, and the font knows both; nothing in this package has
+// to.
+type Caps uint8
+
+const (
+	// CapsNormal is the letters the text is written with.
+	CapsNormal Caps = iota
+	// CapsSmall is "small-caps": the capitals a designer drew at lowercase
+	// height, put in place of the lowercase letters. The capitals are left
+	// alone, which is the whole difference between this and CapsAllSmall.
+	CapsSmall
+	// CapsAllSmall is "all-small-caps": the same, and the capitals lowered to
+	// match, so that a line has one height of letter throughout.
+	CapsAllSmall
+	// CapsPetite and CapsAllPetite are the same pair for a second, shorter set
+	// of capitals — petite capitals are cut to x-height where small capitals
+	// stand a little above it. Few faces draw them.
+	CapsPetite
+	CapsAllPetite
+	// CapsUnicase mixes the two cases at one height: the capitals kept and the
+	// lowercase letters left as they are, with the face's own single-height
+	// forms for both.
+	CapsUnicase
+	// CapsTitling is capitals cut for a line that is all capitals — lighter,
+	// and spaced for a title rather than for a word inside a sentence. It
+	// replaces no letter with a letter of the other case.
+	CapsTitling
+)
+
+// Capitals is the feature a value asks a face to apply to the capitals, and
+// Lowercase the one it asks for the lowercase letters. Either is empty where
+// the value leaves that case alone: "small-caps" does not touch the capitals,
+// and "titling-caps" does not touch the lowercase letters.
+//
+// They are the same tag for "unicase", which is one feature that puts both
+// cases at one height rather than two that meet in the middle.
+//
+// The pair is what the property *is*, and it is what a caller needs rather than
+// the list: which case a face has failed to cover decides which letters come out
+// wrong, and a list of tags cannot say. See Features, which is derived from
+// this so that the two cannot disagree.
+func (c Caps) Capitals() string  { return capsFeatures[c].capitals }
+func (c Caps) Lowercase() string { return capsFeatures[c].lowercase }
+
+// Features are the tags a value asks a face for, in the order they are applied.
+//
+// The order inside a pair does not decide anything: 'c2sc' covers the capitals
+// and 'smcp' the lowercase letters, which are disjoint sets, so neither can see
+// what the other did. It is §6.6's order — the capitals first — because that is
+// the order the property is defined in and there is no reason to write a
+// different one.
+func (c Caps) Features() []string {
+	pair := capsFeatures[c]
+	switch {
+	case pair.capitals == "" && pair.lowercase == "":
+		return nil
+	case pair.capitals == "":
+		return []string{pair.lowercase}
+	case pair.lowercase == "" || pair.capitals == pair.lowercase:
+		return []string{pair.capitals}
+	}
+	return []string{pair.capitals, pair.lowercase}
+}
+
+// capsFeatures is what each value asks of each case, declared once so that a
+// caller asking what a value needs and the shaper applying it cannot answer
+// differently.
+//
+// Where the tags are applied is the part worth stating. They go after 'ccmp'
+// and 'locl' and *before* the ligatures, which is the order HarfBuzz produces
+// and is not the order a caller-named feature gets: "office" set in Noto Sans
+// with small capitals is six small capitals and no ffi ligature, because the
+// ligature is stated over the lowercase glyphs and by the time 'liga' is
+// reached there are none left. Applying them last instead leaves the ffi
+// ligature standing in the middle of a line of capitals — three letters that
+// did not get the rule the other three did.
+var capsFeatures = [...]struct{ capitals, lowercase string }{
+	CapsNormal:    {},
+	CapsSmall:     {lowercase: "smcp"},
+	CapsAllSmall:  {capitals: "c2sc", lowercase: "smcp"},
+	CapsPetite:    {lowercase: "pcap"},
+	CapsAllPetite: {capitals: "c2pc", lowercase: "pcap"},
+	CapsUnicase:   {capitals: "unic", lowercase: "unic"},
+	CapsTitling:   {capitals: "titl"},
+}
+
+// adds returns the tags this set turns on.
+//
+// The order they are returned in decides nothing, and that is worth saying
+// rather than leaving to be inferred: applyRequestedFeatures merges these by
+// the font's own lookup index before any of them is applied, so what this
+// returns is a set written as a slice. The properties' own order is kept anyway,
+// because a caller reading a list of tags in a message wants the order the
+// declarations were written in.
+//
+// The three branches are not tidiness either. Almost every run that asks for
+// anything asks under one property, and returning that property's own slice
+// hands the shaper the list it already has rather than a copy of it.
+func (f Features) adds() []string {
+	asked := [...][]string{
+		f.Caps.Features(), f.Numeric.Features(),
+		f.EastAsian.Features(), f.Position.Features(),
+	}
+	var (
+		only  []string
+		lists int
+		total int
+	)
+	for _, list := range asked {
+		if len(list) == 0 {
+			continue
+		}
+		only, lists, total = list, lists+1, total+len(list)
+	}
+	if lists <= 1 {
+		return only
+	}
+	out := make([]string, 0, total)
+	for _, list := range asked {
+		out = append(out, list...)
+	}
+	return out
+}
+
+// EastAsian is CSS Fonts 4 §6.9's font-variant-east-asian, as the set of
+// features it asks a face for.
+//
+// A set and not a value, for the reason Numeric is one: §6.9's grammar is a
+// group of six alternatives, a pair, and a keyword that stands alone, and a
+// document may name one of each. Nothing in it is synthesised — a JIS78
+// ideograph is a shape a designer drew, and a full-width Latin letter is a
+// second drawing of the same letter on the ideographic advance.
+type EastAsian uint16
+
+const (
+	// The six forms §6.9 calls <east-asian-variant-values>. Four are the
+	// Japanese national standards, whose successive revisions changed which
+	// glyph a character is drawn with: a font that carries them can set the
+	// same text as it was printed in 1978 or in 2004. The other two are the
+	// simplified and traditional forms of the characters that have both.
+	EastAsianJis78 EastAsian = 1 << iota
+	EastAsianJis83
+	EastAsianJis90
+	EastAsianJis04
+	EastAsianSimplified
+	EastAsianTraditional
+	// <east-asian-width-values>: whether a character is set on the ideographic
+	// advance — one em, so that a line of them is a grid — or on its own. It is
+	// the pair that reaches Latin text as well, because a Japanese font draws
+	// the ASCII letters twice.
+	EastAsianFullWidth
+	EastAsianProportionalWidth
+	// EastAsianRuby is the kana cut for an annotation: a ruby gloss is set at a
+	// fraction of the size beside the characters it explains, and a kana simply
+	// scaled down is too light to read at it.
+	EastAsianRuby
+)
+
+// Features are the tags this set asks a face for, in §6.9's own order: the
+// national form, the width, then ruby.
+func (e EastAsian) Features() []string {
+	if e == 0 {
+		return nil
+	}
+	out := make([]string, 0, 3)
+	for _, each := range eastAsianFeatures {
+		if e&each.bit != 0 {
+			out = append(out, each.tag)
+		}
+	}
+	return out
+}
+
+// Has reports whether a set asks for one of §6.9's features.
+func (e EastAsian) Has(bit EastAsian) bool { return e&bit != 0 }
+
+// eastAsianFeatures is the tag each bit names, in the order Features returns
+// them.
+var eastAsianFeatures = [...]struct {
+	bit EastAsian
+	tag string
+}{
+	{EastAsianJis78, "jp78"},
+	{EastAsianJis83, "jp83"},
+	{EastAsianJis90, "jp90"},
+	{EastAsianJis04, "jp04"},
+	{EastAsianSimplified, "smpl"},
+	{EastAsianTraditional, "trad"},
+	{EastAsianFullWidth, "fwid"},
+	{EastAsianProportionalWidth, "pwid"},
+	{EastAsianRuby, "ruby"},
+}
+
+// Numeric is CSS Fonts 4 §6.7's font-variant-numeric, as the set of features it
+// asks a face for.
+//
+// A set and not a value, because the property is: §6.7's grammar is three
+// independent pairs and two independent keywords, and a document may ask for
+// oldstyle figures, tabular spacing and a slashed zero at once. What separates
+// the eight is which of the font's rules they name, and the font knows what each
+// of those does; nothing in this package has to.
+//
+// None of them is synthesised anywhere, by this engine or by a browser. An
+// oldstyle figure is a shape a designer drew, and there is nothing to make one
+// out of — which is the difference between this property and small capitals, and
+// the reason a face that declares none of these is simply reported.
+type Numeric uint16
+
+const (
+	// The figures §6.7 calls <numeric-figure-values>: which set of digits, of
+	// the two a face may draw. Lining figures stand at cap height and are the
+	// default of almost every face; oldstyle figures have ascenders and
+	// descenders and sit with the lowercase letters.
+	NumericLining Numeric = 1 << iota
+	NumericOldstyle
+	// <numeric-spacing-values>: whether the digits are set at one width so that
+	// a column of figures lines up, or each at its own. It is the pair that
+	// matters most in a table and the one an author is most likely to write.
+	NumericProportional
+	NumericTabular
+	// <numeric-fraction-values>: a fraction set on a diagonal, "1/2" with the
+	// numerator raised and the denominator lowered around a slash, or stacked
+	// one above the other.
+	NumericDiagonalFractions
+	NumericStackedFractions
+	// The two that stand alone. "ordinal" is the raised letters after a number
+	// — the "st" of "1st", the "ª" of a Spanish ordinal — and "slashed-zero" is
+	// the zero with a stroke through it, which is what tells it from a capital
+	// O in a serial number.
+	NumericOrdinal
+	NumericSlashedZero
+)
+
+// Features are the tags this set asks a face for, in the order they are applied.
+//
+// §6.7's own order: the figures, the spacing, the fraction, then the two that
+// stand alone. Whether it decides anything depends on the face and cannot be
+// settled here — a font may state its slashed zero over the lining zero, over
+// the oldstyle one, or over both — so the order is the specification's, which is
+// the one a font is most likely to have been tested against.
+func (n Numeric) Features() []string {
+	if n == 0 {
+		return nil
+	}
+	out := make([]string, 0, 5)
+	for _, each := range numericFeatures {
+		if n&each.bit != 0 {
+			out = append(out, each.tag)
+		}
+	}
+	return out
+}
+
+// Has reports whether a set asks for one of §6.7's features.
+func (n Numeric) Has(bit Numeric) bool { return n&bit != 0 }
+
+// numericFeatures is the tag each bit names, in the order Features returns them.
+var numericFeatures = [...]struct {
+	bit Numeric
+	tag string
+}{
+	{NumericLining, "lnum"},
+	{NumericOldstyle, "onum"},
+	{NumericProportional, "pnum"},
+	{NumericTabular, "tnum"},
+	{NumericDiagonalFractions, "frac"},
+	{NumericStackedFractions, "afrc"},
+	{NumericOrdinal, "ordn"},
+	{NumericSlashedZero, "zero"},
 }
 
 // suppresses reports whether a feature tag is one this set turns off.

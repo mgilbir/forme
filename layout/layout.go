@@ -360,6 +360,17 @@ type layouter struct {
 	// document that asked for none. See hyphenwords.go.
 	hyphenPoints map[*Box][]int
 
+	// childIndex is where a box sits among its parent's children, filled a
+	// parent at a time and only for the parents something asks about.
+	//
+	// Nothing in layout needs it: a walk that descends has the index in hand.
+	// textAfter is the exception — it is handed one box and has to go *forward*
+	// from it — and finding the index by scanning is a scan per step, which over
+	// a paragraph written as one box per word is quadratic in the words. It is
+	// nil for every document that does not reach textAfter, which is every
+	// document with no Thai, Lao, Khmer or Burmese in it.
+	childIndex map[*Box]int
+
 	// lengths memoizes parsing a computed value into a Length.
 	//
 	// The cascade stores computed values as text, so laying out a document
@@ -476,8 +487,6 @@ type layouter struct {
 	reportedAutospace map[string]bool
 	// reportedHyphens is the same for the hyphens values read as manual.
 	reportedHyphens map[string]bool
-	// reportedHanging is the same for the hanging-punctuation values not applied.
-	reportedHanging map[string]bool
 	// reportedFlex is the flex containers already reported as unarranged, so
 	// that a box asked twice — once by the intrinsic pass and once by layout —
 	// is told about once. See layout/flex.go.

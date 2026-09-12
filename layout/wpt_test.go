@@ -1231,7 +1231,79 @@ const wptEnv = "WPT_TESTS"
 // What still needs a box of its own — a float, a border, a background, a margin —
 // is reported, because that is how a drop cap is written and an author has to be
 // told the letter came out ordinary.
-const wptCleanPassBaseline = 5976
+// 5976 to 5977 on 2026-09-10: hanging-punctuation-allow-end-001, and it took
+// two changes that are only worth anything together.
+//
+// §8.1 was opening an eighth of an em between a halfwidth katakana and its own
+// dakuten. Unicode gives U+FF70, U+FF9E and U+FF9F the Common script and
+// category Lm, so unicode.IsLetter answered true and they were §8.1's *other
+// side* — unlike their fullwidth twins, U+30FC which is named in the list and
+// U+309B/U+309C which are Sk and no letter to anything. "ｼﾞ" is one syllable,
+// and the gap made every halfwidth row of that document an eighth of an em per
+// syllable too wide, so its lines broke early.
+//
+// The fix alone takes the failure away and leaves a *tainted* pass: the document
+// names IPAMincho and there was no such face, so it reported a font-fallback.
+// The harness lends the family by name now — see ipaFamilies — and the pass is
+// clean. Measured both ways: the fix without the font is 5976 clean, 80 tainted,
+// 197 failed; with it, 5977 clean, 79 tainted, 197 failed.
+// 5977 to 5978 on 2026-09-10: letter-spacing-bidi-003. A right-to-left line is
+// shifted by everything discounted from its measure, because such a line ends at
+// its left and what was discounted hangs off that edge — a trailing space does,
+// and so does §8.4's hanging punctuation. §8.2's tracking does not: the spacing
+// after the last glyph drawn is at the run's *right* edge whatever the run's
+// direction, so at the left end of a right-to-left line it is inside the line.
+// Including it discounted it from the measure and then handed it straight back,
+// which cancelled the discount for exactly the lines that needed it and set every
+// glyph one tracking width too far left.
+// 5978 to 5979 on 2026-09-10: hanging-punctuation-force-end-001, and §8.4's
+// grammar is now complete. force-end was recognised and reported rather than
+// applied, on the reading that hanging a stop at the end of every line is "a
+// decision about every line rather than about the line that overflowed".
+//
+// It is the same decision the fill already makes, one clause shorter: allow-end
+// is force-end's sentence with "if it does not otherwise fit prior to
+// justification" added to it. So the candidate is cut out of the run in the same
+// place for both values and they part company at the fill's room test, and the
+// restore that takes a hang back when more text follows on the line — which is
+// what makes a comma mid-line not a comma at the end of one — was already there.
+//
+// The report went with it. There is no value of the property left to name, so
+// reportHangingPunctuation and the second return of HangingPunctuationOf are
+// gone rather than left to answer "" forever.
+// 5979 to 5980 on 2026-09-10: text-spacing-trim's end-of-line clause, which
+// wins text-spacing-trim-end-span-001 clean and text-spacing-trim-end-001 as a
+// tainted pass — that one declares "trim-start", whose line-*start* rule is
+// still not done and is still reported.
+//
+// §8.2's initial value is "normal", and "normal" is not "leave everything
+// alone": a full-width closing bracket at the end of a line that would not
+// otherwise hold it takes its half-width form. The document relies on exactly
+// that — eight full-width characters in 7.5em, which fit only if the closing
+// bracket gives up the half em of blank behind it.
+//
+// The amount is the face's own. shape reads 'halt' into a table it applies to
+// nothing, so a caller with a character to trim can ask what the trimmed form is
+// rather than assume it is half the advance — which is right for a closing
+// bracket and wrong for an opening one, whose ink moves back into the space it
+// vacates. Nothing was silenced to get this: the property is registered now, so
+// the old "not implemented" finding is gone, but the two values whose whole
+// content is a line-start rule are reported by value instead, and the census
+// moved by exactly the two documents above and no others.
+// 5980 to 5981 on 2026-09-10: textarea-always-preserves-spaces-001. A
+// <textarea>'s content is its *value* — what the user typed and what the form
+// would send — so an author's white-space does not collapse it. The wrapping
+// half is still theirs: "nowrap" changes how the value is shown and not one
+// character of what it is.
+//
+// The rule upgrades the declared value rather than replacing it, and both ends
+// of the pipeline ask it: Phase I collapses a text node's own white space at box
+// construction, and the fill collapses a run that meets a line edge. A
+// "!important" in the user-agent sheet was written first and is wrong twice — it
+// cannot be conditional, and "break-spaces" preserves spaces too, so forcing
+// "preserve" over it took textarea-break-spaces-001 away and the two documents
+// traded with the count unmoved.
+const wptCleanPassBaseline = 5983
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

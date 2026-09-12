@@ -78,7 +78,7 @@ func (l *layouter) hangPunctuation(items []inlineItem, hp hangingPunctuation) []
 func (l *layouter) markStopsAndCommas(items []inlineItem, hp hangingPunctuation) []inlineItem {
 	any := false
 	for i := range items {
-		if canHangAsStop(items[i]) && hangingFor(items[i], hp).EndAllow {
+		if canHangAsStop(items[i]) && hangingFor(items[i], hp).HangsAtEndOfALine() {
 			any = true
 			break
 		}
@@ -89,19 +89,22 @@ func (l *layouter) markStopsAndCommas(items []inlineItem, hp hangingPunctuation)
 	out := make([]inlineItem, 0, len(items)+4)
 	for i, item := range items {
 		n := 0
-		if canHangAsStop(item) && hangingFor(item, hp).EndAllow && couldEndALine(items, i) {
+		var forced bool
+		if h := hangingFor(item, hp); canHangAsStop(item) && h.HangsAtEndOfALine() &&
+			couldEndALine(items, i) {
 			n = trailingStopOrComma(item.Text)
+			forced = h.EndForce
 		}
 		switch {
 		case n == 0:
 			out = append(out, item)
 		case n == len(item.Text):
 			// The run is the character already.
-			item.MayHangEnd = true
+			item.MayHangEnd, item.MustHangEnd = true, forced
 			out = append(out, item)
 		default:
 			head, tail := l.br.SplitItem(item, len(item.Text)-n)
-			tail.MayHangEnd = true
+			tail.MayHangEnd, tail.MustHangEnd = true, forced
 			out = append(out, head, tail)
 		}
 	}
@@ -139,7 +142,7 @@ func hangingFor(item inlineItem, block hangingPunctuation) hangingPunctuation {
 	if b == nil {
 		return block
 	}
-	hp, _ := hangingPunctuationOf(b.Style["hanging-punctuation"])
+	hp := hangingPunctuationOf(b.Style["hanging-punctuation"])
 	return hp
 }
 
