@@ -20,14 +20,14 @@ import (
 // paragraph.Trailing, whose two fields are the two facts that cannot be read
 // back off the text.
 //
-// The eleven defects here were found by FuzzRunTiling and FuzzBoundaryLines, which asserts the
+// The twelve defects here were found by FuzzRunTiling and FuzzBoundaryLines, which asserts the
 // arithmetic — two runs quantized separately are a sixty-fourth of a pixel away
 // from one — and every one of them turned out to be line breaking rather than
 // arithmetic. That is not a coincidence: a merge group is exactly the run of
 // text no line may fall inside, so a lost or invented opportunity changes what
 // is shaped together and the widths say so.
 //
-// Two of the thirteen are containment rather than regression — LB7 in front of a
+// Two of the fourteen are containment rather than regression — LB7 in front of a
 // preserved space, and the opportunity a space takes — and each names the fix
 // that broke it. They are the rules an attempt here is most likely to cost.
 
@@ -567,6 +567,45 @@ func TestBreakAllAtABoxEdgeAsksBothPairRules(t *testing.T) {
 			t.Errorf("%q set %v under line-break: anywhere and the same text in "+
 				"two spans set %v; the value overrules the pair rules at a box "+
 				"edge as it does everywhere else", tc.text, whole, cut)
+		}
+	}
+}
+
+// TestBreakSpacesOverrulesOnlyASpacesOwnOpportunity is break-spaces read the way
+// §3 writes it, which is narrower than "break-spaces means break anywhere in
+// white space".
+//
+//	there is a soft wrap opportunity after every preserved white space
+//	character, including between white space characters
+//
+// *After a space.* An opportunity an ideograph deferred is not one a space left,
+// and the scan does not let break-spaces overrule the withholding for it either.
+// The boundary cleared the test for every opportunity that reached it, so
+// "ああ␣" written in two boxes put the space on a line of its own and the same
+// text written in one did not.
+//
+// The containment case is in the same loop and is what the flag exists for:
+// between two preserved spaces the opportunity *is* a space's own, and
+// trailing-ideographic-space-break-spaces-005 and -006 turn on it.
+func TestBreakSpacesOverrulesOnlyASpacesOwnOpportunity(t *testing.T) {
+	const sheet = `#d { font-family: Courier; font-size: 16px; white-space: break-spaces }`
+	for _, tc := range []struct{ what, whole, cut string }{
+		{"an ideograph's opportunity, not a space's", "ああ ",
+			`<span>ああ</span><span> </span>`},
+		{"and with text after it", "ああ abc",
+			`<span>ああ</span><span> abc</span>`},
+		// What the flag is for: a run of preserved spaces split between boxes
+		// keeps the opportunity §3 puts after each of them.
+		{"between two spaces", "ああ  ああ",
+			`<span>ああ </span><span> ああ</span>`},
+		{"an empty box between them", "ああ  ああ",
+			`<span>ああ </span><span></span><span> ああ</span>`},
+	} {
+		whole := visibleLinesWith(t, tc.whole, sheet, 25)
+		cut := visibleLinesWith(t, tc.cut, sheet, 25)
+		if !sameVisibleLines(cut, whole) {
+			t.Errorf("%s: %q set %v and %q set %v", tc.what, tc.whole, whole,
+				tc.cut, cut)
 		}
 	}
 }

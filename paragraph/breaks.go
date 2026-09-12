@@ -512,12 +512,21 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 		if start == 0 {
 			// LB7 at the boundary, which is a rule about the two characters on
 			// either side of it rather than about the one after — see
-			// betweenTwoSpaces. break-spaces overrules it, and that is the same
-			// overruling spaceStops gets below.
+			// betweenTwoSpaces. break-spaces overrules it, which is §3's
+			// sentence: "there is a soft wrap opportunity after every preserved
+			// white space character, including between white space characters".
+			//
+			// It is the only thing SpaceMayTakeIt does. It used to clear
+			// spaceStops as well, so that *any* opportunity reaching the
+			// boundary could be taken in front of a space — and that is more
+			// than §3 says, because §3 is about the opportunity a space leaves.
+			// An ideograph's is not one: "ああ␣" keeps its space on the second
+			// ideograph's line, and written as
+			// "<span>ああ</span><span>␣</span>" it put the space on a line of
+			// its own. Narrowing the clearing to an opportunity a space left
+			// made it dead — no test and no reftest moved either way — so it is
+			// gone rather than kept as a rule that cannot fire.
 			endsInFrontOfASpace := betweenTwoSpaces(at.Prev, r) && !at.SpaceMayTakeIt
-			if at.SpaceMayTakeIt {
-				spaceStops = false
-			}
 			if takenAtStart && !endsInFrontOfASpace {
 				breakNext = true
 			}
