@@ -1176,20 +1176,6 @@ func coversAllOfUnicode(spans []unicodeSpan) bool {
 	return next > 0x10FFFF
 }
 
-// unicodeRangeText renders the parsed spans for a finding, so the message says
-// what was actually read rather than what was typed.
-func unicodeRangeText(spans []unicodeSpan) string {
-	parts := make([]string, 0, len(spans))
-	for _, s := range spans {
-		if s.lo == s.hi {
-			parts = append(parts, fmt.Sprintf("U+%04X", s.lo))
-			continue
-		}
-		parts = append(parts, fmt.Sprintf("U+%04X-%04X", s.lo, s.hi))
-	}
-	return strings.Join(parts, ", ")
-}
-
 // rawText renders component values back to the text the author wrote, as far as
 // the tokens preserve it.
 //

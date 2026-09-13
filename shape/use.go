@@ -518,8 +518,6 @@ func useClusters(info []useInfo, runes []rune) []useCluster {
 	return out
 }
 
-func isUseBase(c useCategory) bool { return c == useB || c == useGB || c == useN }
-
 // The features the engine applies, in the order it applies them.
 //
 // They are in three groups because a pass runs between them. The first two are

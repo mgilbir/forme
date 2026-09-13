@@ -461,10 +461,3 @@ func HyphenatePieces(pieces []Piece, points []int) ([]Piece, bool) {
 	}
 	return out, endsAtHyphen
 }
-
-// wordHyphenPoints is HyphenPoints over a word gathered from a document, which
-// is letters and nothing else: the caller ends a word at the first character a
-// dictionary has nothing to say about.
-func wordHyphenPoints(word string, lang Language) []int {
-	return HyphenPoints(word, lang, 0, 0)
-}

@@ -593,29 +593,6 @@ func svgPercent(raw string) (float64, bool) {
 	return v / 100, true
 }
 
-// svgViewBox reads the width and height out of a viewBox, which is four numbers
-// separated by white space or commas.
-func svgViewBox(raw string) (w, h float64, ok bool) {
-	fields := strings.FieldsFunc(raw, func(r rune) bool {
-		return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
-	})
-	if len(fields) != 4 {
-		return 0, 0, false
-	}
-	var vals [4]float64
-	for i, f := range fields {
-		v, err := strconv.ParseFloat(f, 64)
-		if err != nil {
-			return 0, 0, false
-		}
-		vals[i] = v
-	}
-	if vals[2] <= 0 || vals[3] <= 0 {
-		return 0, 0, false
-	}
-	return vals[2], vals[3], true
-}
-
 // rectAttributesThatChangeThePaint are the attributes whose presence means a
 // <rect> is not a flat fill of a rectangle.
 //
