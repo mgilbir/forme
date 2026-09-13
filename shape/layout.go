@@ -1132,8 +1132,6 @@ func valueSize(format int) int {
 	return n
 }
 
-// xAdvance reads the horizontal advance out of a ValueRecord, which is present
-// only when bit 2 of the format says so and sits after any placement fields.
 // pairAdjust is what a font states about a pair of glyphs: a placement and an
 // advance for each of the two.
 //
@@ -1192,24 +1190,6 @@ func clamp16(v int) int16 {
 		return -0x8000
 	}
 	return int16(v)
-}
-
-func xAdvance(rec []byte, format int) (int, bool) {
-	const xAdvanceBit = 0x0004
-	if format&xAdvanceBit == 0 {
-		return 0, false
-	}
-	off := 0
-	if format&0x0001 != 0 { // XPlacement
-		off += 2
-	}
-	if format&0x0002 != 0 { // YPlacement
-		off += 2
-	}
-	if off+2 > len(rec) {
-		return 0, false
-	}
-	return signed16(font.Be16(rec, off)), true
 }
 
 // coverageBudget is how much coverage expansion reading a set of tables may ask
