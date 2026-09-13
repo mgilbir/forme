@@ -368,6 +368,10 @@ func FuzzImageLoading(f *testing.F) {
 	f.Add([]byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A})
 	f.Add([]byte("GIF89a"))
 	f.Add([]byte{0xFF, 0xD8, 0xFF, 0xE0})
+	// An SVG, which decode answers with a size and no pixels. Without one here
+	// the whole of that branch was reached only by whatever the fuzzer made up.
+	f.Add([]byte(`<svg width="10" height="10"></svg>`))
+	f.Add([]byte(`<svg width="10" height="10"><rect fill="red" width="10" height="10"/></svg>`))
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		if len(data) > 1<<20 {
@@ -388,12 +392,24 @@ func FuzzImageLoading(f *testing.F) {
 				t.Fatalf("an image of %d pixels was accepted past the cap of %d",
 					got.Pixels, maxImagePixels)
 			}
-			if got.Image == nil {
-				t.Fatal("a successful decode produced no image")
+			// Pixels, or an SVG, and nothing else. decode says why in as many
+			// words where it takes that path: "An SVG is not a picture and
+			// never becomes one. It is read for its intrinsic size and, when
+			// its content reduces to one, its colour."
+			//
+			// This used to demand pixels outright, and every SVG there is would
+			// have failed it — the seed corpus held none, so the fuzzer had to
+			// invent one before anything noticed. "<sVG/>" is what it wrote.
+			// There is a seed for it now, so the path is covered on purpose
+			// rather than by luck.
+			if got.Image == nil && got.SVG == nil {
+				t.Fatal("a successful decode produced neither a picture nor an SVG")
 			}
-			b := got.Image.Bounds()
-			if int64(b.Dx())*int64(b.Dy()) > maxImagePixels {
-				t.Fatalf("the decoded image is %dx%d, past the cap", b.Dx(), b.Dy())
+			if got.Image != nil {
+				b := got.Image.Bounds()
+				if int64(b.Dx())*int64(b.Dy()) > maxImagePixels {
+					t.Fatalf("the decoded image is %dx%d, past the cap", b.Dx(), b.Dy())
+				}
 			}
 		}
 	})
