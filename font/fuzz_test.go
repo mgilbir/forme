@@ -133,12 +133,26 @@ func FuzzCmapSubtable(f *testing.F) {
 	f.Fuzz(func(t *testing.T, data []byte) {
 		m, partial := ParseCmapSubtable(data, generousCmapWork)
 		checkCmapInvariants(t, "ParseCmapSubtable", m, false)
-		// A partial result is only meaningful alongside a map: reporting "this
-		// is a prefix" while returning nothing would leave a consumer unable to
-		// tell "truncated" from "unreadable", which is the distinction the flag
-		// exists to draw.
-		if partial && m == nil {
-			t.Fatalf("ParseCmapSubtable reported partial with a nil map")
+		// The flag is monotone in the budget: a walk that gave up with room to
+		// spare gives up with less, and a smaller budget never reads *more*.
+		//
+		// This replaced an assertion that a partial result always came with a
+		// map, on the grounds that "reporting a prefix while returning nothing
+		// would leave a consumer unable to tell truncated from unreadable". It
+		// had that backwards, and budgetStop says so: nil with the flag clear is
+		// "there was nothing to read" and nil with it set is "nothing was read,
+		// and not because there was nothing" — which is exactly the distinction
+		// the flag draws. The assertion predates that rule by a month and was
+		// left behind when it changed; the fuzzer needed until then to build an
+		// input whose budget runs out before the first mapping.
+		tight, tightPartial := ParseCmapSubtable(data, 1)
+		if partial && !tightPartial {
+			t.Fatalf("ParseCmapSubtable gave up on a budget of %d and finished on "+
+				"a budget of 1", generousCmapWork)
+		}
+		if len(tight) > len(m) {
+			t.Fatalf("ParseCmapSubtable read %d mappings on a budget of 1 and %d "+
+				"on a budget of %d", len(tight), len(m), generousCmapWork)
 		}
 	})
 }

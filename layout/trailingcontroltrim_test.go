@@ -160,3 +160,23 @@ func visibleLinesOf(t *testing.T, markup string, px float64) []visibleLine {
 	}
 	return out
 }
+
+// visibleLinesWith is visibleLinesOf under a stylesheet of the caller's own.
+func visibleLinesWith(t *testing.T, markup, sheet string, px float64) []visibleLine {
+	t.Helper()
+	root := layoutOf(t, px, `<div id="d">`+markup+`</div>`, noDefaults+sheet)
+	var out []visibleLine
+	for _, line := range find(t, root, "d").Lines {
+		var one visibleLine
+		for _, r := range line.Runs {
+			for _, c := range r.Text {
+				if !isBidiControl(c) {
+					one.text += string(c)
+				}
+			}
+			one.width = one.width.Add(r.Width)
+		}
+		out = append(out, one)
+	}
+	return out
+}

@@ -281,6 +281,16 @@ func gluedPair(prev, r rune) bool {
 	return false
 }
 
+// GluedPair is gluedPair across a box boundary, where the two characters are in
+// different boxes and neither box can ask on its own.
+//
+// It is the same question layout asks MayNotBeginLine for, one rule along: that
+// one is "a line may not begin with this character" and this is "a line may not
+// end after that one". Both have to be asked of an opportunity a box makes at
+// its own leading edge, because that opportunity is between two characters and
+// the box only has one of them.
+func GluedPair(prev, r rune) bool { return gluedPair(prev, r) }
+
 // isBinding reports membership of the GL, WJ and ZWJ classes, which is what
 // BindsToAtomicInline asks with one character carved out of it.
 func isBinding(r rune) bool {

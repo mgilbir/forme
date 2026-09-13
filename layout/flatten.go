@@ -921,14 +921,29 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		// is also the right place for it — the value is the *later* character's,
 		// and the later character is this one.
 		//
-		// line-break: anywhere is here for the same reason and a stronger one:
-		// §5.3 puts an opportunity around every typographic character unit, and
-		// the edge of an inline box is not an exception it carves out.
+		// line-break: anywhere used to be here for the same reason and a
+		// stronger one — §5.3 puts an opportunity around every typographic
+		// character unit, and the edge of an inline box is not an exception it
+		// carves out — and it has gone, because the scan now does it. Handing
+		// SplitAtBreaks the boundary gave it a first character with text in
+		// front of it, and its own "anywhere" arm offers the opportunity there
+		// like anywhere else. Measured rather than reasoned: removing the value
+		// from this branch moves no test and no reftest, and
+		// TestBreakAllAtABoxEdgeAsksBothPairRules holds the three shapes it is
+		// about.
 		//
 		// A line still may not *begin* with a closing bracket or a non-starter,
 		// which is the rule the branch above applies to an opportunity arriving
-		// from another box — so it is applied to this one too, and by the same
-		// exemption line-break: anywhere overrules it.
+		// from another box — so it is applied to this one too.
+		//
+		// Nor may it *end* after a word joiner, a non-break space or a zero
+		// width joiner, which is the other half of the same paragraph of UAX #14
+		// and was missing. The opportunity this branch makes is between two
+		// characters in different boxes, so both rules have to be asked here or
+		// neither is asked at all: "a&#x200D;b" under break-all is one
+		// unbreakable run — LB8a is "ZWJ ×" — and
+		// "<span>a&#x200D;</span><span>b</span>" was two lines in a box narrower
+		// than a character.
 		//
 		// The index test is the correct reading of the rule and has no test,
 		// which is a different thing from being covered. The rule is about one
@@ -952,8 +967,9 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		// left where the working group left it — 004, 007 and 010 are all marked
 		// tentative — rather than settled by picking the fixture that suits this
 		// engine.
-		if i == 0 && (wb.BreakAll || lb.Anywhere) && !p.Space &&
-			(lb.Anywhere || !mayNotBeginLine(p.Text, lb)) {
+		if i == 0 && wb.BreakAll && !p.Space &&
+			!mayNotBeginLine(p.Text, lb) &&
+			!gluedPair(in.AfterRune, firstRuneOf(p.Text)) {
 			state.BreakOpportunity = true
 		}
 		// An ideograph that begins a box, which is the ideograph rule's other

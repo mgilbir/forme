@@ -119,7 +119,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - run: go test -run XXX -fuzz ${{ matrix.target }} -fuzztime 10m ${{ matrix.package }}
+      # Anchored, because -fuzz takes a regular expression and a target whose
+      # name is a prefix of another matches both — which is not a slower run but
+      # no run at all: "will not fuzz, -fuzz matches more than one fuzz test".
+      # FuzzDecodeWOFF matched FuzzDecodeWOFF2 and had been fuzzing nothing.
+      - run: go test -run XXX -fuzz '^${{ matrix.target }}$' -fuzztime 10m ${{ matrix.package }}
       # A crasher is written into testdata/fuzz, which is exactly what wants
       # keeping: it is the seed that reproduces the failure.
       - name: Keep whatever it found

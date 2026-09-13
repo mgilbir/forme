@@ -87,6 +87,7 @@ var (
 	splitAtCursiveTracking        = paragraph.SplitAtCursiveTracking
 	splitAtWordSeparators         = paragraph.SplitAtWordSeparators
 	mayNotBeginLine               = paragraph.MayNotBeginLine
+	gluedPair                     = paragraph.GluedPair
 	splitAtBreaks                 = paragraph.SplitAtBreaks
 	splitAtBreaksAfter            = paragraph.SplitAtBreaksAfter
 	isBidiControl                 = paragraph.IsBidiControl
