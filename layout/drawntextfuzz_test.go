@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/mgilbir/forme/fonts/notosans"
+	"github.com/mgilbir/forme/shape"
 )
 
 // The page draws the document's characters, all of them, once each, in order.
@@ -46,6 +47,34 @@ import (
 // class the two-spelling targets are structurally blind to.
 func FuzzDrawnText(f *testing.F) {
 	for _, text := range tilingTexts {
+		for which := range drawnDecls {
+			f.Add(text, uint8(which))
+		}
+	}
+	// And text that no one face can set, which is the only way a piece is cut
+	// into more than one *face* run. Without it cutRunsAt is a function this
+	// target walks past: a planted version that drops a run moves nothing,
+	// because every run has one face and there is nothing to drop.
+	//
+	// Cyrillic and Greek are what make this work with the fonts in the
+	// repository. None of the base fourteen covers either and the bundled Noto
+	// Sans covers both, so a box asking for Courier gets Courier for its Latin
+	// and Noto Sans for the rest — see fallbackFaceSet. 153 of the lines these
+	// seeds set hold more than one face, where the corpus without them held
+	// none at all.
+	//
+	// cutRunsAt is still not reached, and that is worth writing down rather than
+	// leaving as a thing somebody re-derives. It cuts a piece where §8.1 wants a
+	// gap inside one, where §8.2's cursive tracking starts, and after a word
+	// separator — and each of those needs a piece that has *both* more than one
+	// face run and more than one part. A piece with two faces is a script
+	// boundary, and a script boundary is where the pieces are cut already, so
+	// the two conditions have not been made to meet. Planted both ways with
+	// nothing moving; what does move is a face run dropped or truncated where
+	// the piece is split by face, which is the path these seeds opened.
+	for _, text := range []string{
+		"aЖb", "Жab", "abЖ", "aЖЖb", "a Жb", "aαb", "αaα", "aЖ αb",
+	} {
 		for which := range drawnDecls {
 			f.Add(text, uint8(which))
 		}
@@ -107,7 +136,7 @@ func checkDrawnText(t testing.TB, text, decl string) {
 	if err != nil {
 		t.Fatalf("loading the embedded Noto Sans: %v", err)
 	}
-	set := namedFaceSet{family: "T", face: face, standard: StandardFonts()}
+	set := fallbackFaceSet{family: "T", face: face, standard: StandardFonts()}
 
 	for _, family := range tilingFaces {
 		sheet := `#d { font-family: ` + family + `; font-size: 16px; ` + decl + ` }`
@@ -146,4 +175,39 @@ func visibleRunes(s string) string {
 		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+// fallbackFaceSet is the test font set with the one method that makes a
+// substitution possible.
+//
+// namedFaceSet, which the other targets here use, answers only "give me this
+// family" — so every run is set in one face, every piece is one face run, and a
+// whole stage of the engine is walked past. This adds FallbackFontSet's second
+// question, "give me something that can set *this text*", which is what cuts a
+// piece into runs of its own.
+//
+// It is here rather than on namedFaceSet because being a FallbackFontSet changes
+// what the engine *reports*: a substitution is a finding, and the tests beside
+// that type are about which findings a document raises. This target does not
+// read findings at all.
+type fallbackFaceSet struct {
+	family   string
+	face     *shape.Face
+	standard FontSet
+}
+
+func (s fallbackFaceSet) Face(family string, bold, italic bool) (*shape.Face, bool) {
+	if strings.EqualFold(strings.TrimSpace(family), s.family) {
+		return s.face, true
+	}
+	return s.standard.Face(family, bold, italic)
+}
+
+// FaceFor offers the bundled face for text the named family could not set, and
+// only where it can set the whole of it — which is what the interface asks for.
+func (s fallbackFaceSet) FaceFor(text string, bold, italic bool) (*shape.Face, bool) {
+	if _, missing := s.face.ShapeGlyphs(text); missing == 0 {
+		return s.face, true
+	}
+	return nil, false
 }
