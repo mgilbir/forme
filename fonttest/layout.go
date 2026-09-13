@@ -580,3 +580,50 @@ func sortStrings(a []string) {
 		}
 	}
 }
+
+// ClassPair is one cell of a class-based pair adjustment: the two classes and
+// the advance the font states for that combination, in font units.
+type ClassPair struct {
+	Class1, Class2 int
+	Adjust         int
+}
+
+// PairPosClassSubtable is a type 2 subtable in format 2 — pairs stated by
+// *class* rather than by glyph, which is how a real font states a large kerning
+// table without listing every pair in it.
+//
+// Both value formats are written the way PairPosSubtable writes them: the first
+// glyph's XAdvance and nothing for the second, which is what a Latin kern is.
+//
+// classCount1 and classCount2 are given rather than derived, because the format
+// stores a full rectangle of records and a test wants to say how big it is —
+// class 0 is "everything not otherwise classified" and occupies a row and a
+// column whether or not anything is in it.
+func PairPosClassSubtable(coverage []int, classes1, classes2 map[int]int, classCount1, classCount2 int, pairs []ClassPair) []byte {
+	const valueFormat1, valueFormat2 = 0x0004, 0 // XAdvance for the first glyph
+	const recSize = 2                            // one 16-bit value per record
+
+	body := make([]byte, 16+recSize*classCount1*classCount2)
+	binary.BigEndian.PutUint16(body[0:], 2) // posFormat
+	binary.BigEndian.PutUint16(body[4:], valueFormat1)
+	binary.BigEndian.PutUint16(body[6:], valueFormat2)
+	binary.BigEndian.PutUint16(body[12:], uint16(classCount1))
+	binary.BigEndian.PutUint16(body[14:], uint16(classCount2))
+	for _, p := range pairs {
+		if p.Class1 >= classCount1 || p.Class2 >= classCount2 {
+			continue
+		}
+		binary.BigEndian.PutUint16(body[16+recSize*(p.Class1*classCount2+p.Class2):],
+			uint16(int16(p.Adjust)))
+	}
+
+	// The three sub-tables follow the records, each named by an offset from the
+	// start of the subtable.
+	binary.BigEndian.PutUint16(body[8:], uint16(len(body)))
+	body = append(body, classDefFormat2(classes1)...)
+	binary.BigEndian.PutUint16(body[10:], uint16(len(body)))
+	body = append(body, classDefFormat2(classes2)...)
+	binary.BigEndian.PutUint16(body[2:], uint16(len(body)))
+	body = append(body, sortedCoverage(coverage)...)
+	return body
+}
