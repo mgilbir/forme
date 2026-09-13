@@ -122,3 +122,48 @@ func TestATrimIsNotTakenByALineThatDoesNotNeedIt(t *testing.T) {
 			"for the character whole, so §8.2 leaves it whole", used, want)
 	}
 }
+
+// TestALineThatTookTheTrimIsNarrowerForIt, which is the third corner of the
+// same rule and the one the other two leave open.
+//
+// The test above it checks what a line that needs the trim *holds*, and the one
+// below it checks what a line that does not need it *measures*. Neither checks
+// what a line that took the trim measures — so a fill that decided to trim and
+// then kept the character's full width satisfies both: the line reads "aaa b"
+// either way, and the width that is wrong is never looked at.
+//
+// It matters because the trimmed advance is what reaches the display list. §8.2
+// narrows the character to its half-width form, so the line is narrower by
+// exactly the trim; a line that reported the untrimmed width would centre and
+// right-align its own text a half em off, and would claim room it did not use.
+//
+// Found by planting: taking the narrowing out of breakOneLine — the whole of
+// what the trim does to the width — left every test in this package, every
+// other test in the engine, and all 6253 reftest documents passing.
+func TestALineThatTookTheTrimIsNarrowerForIt(t *testing.T) {
+	br := NewBreaker(nil)
+	face := courier(t)
+	out := words(t, br, face, "aaa b")
+	last := &out[len(out)-1]
+	last.TrimEnd = u(12)
+
+	// 59px: one short of holding the character whole, which is the width that
+	// makes the fill take the trim. See the test above.
+	line, _, _, _, _, _ := br.BreakOneLine(out, 0, 0, u(59), 0)
+	var used style.Unit
+	for _, it := range line {
+		used = used.Add(it.Width)
+	}
+	if want := u(48); used != want {
+		t.Errorf("the line measures %v, want %v — five characters at 12px is 60 "+
+			"and the trim is worth 12. %v is the untrimmed width, which is a "+
+			"line that decided to trim and then did not", used, want, u(60))
+	}
+
+	// And the character is still on it, so this is a trimmed line rather than a
+	// broken one.
+	if len(line) != len(out) {
+		t.Errorf("the line holds %d items and the text has %d; the trim is what "+
+			"keeps the last one on it", len(line), len(out))
+	}
+}
