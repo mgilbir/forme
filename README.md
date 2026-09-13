@@ -133,7 +133,7 @@ record of what it thought of.
 
 | | |
 |---|---|
-| **CSS Working Group reftests** | 6,253 documents rendered and compared against their references — **5,983 pass with nothing unsupported reported in either document** |
+| **CSS Working Group reftests** | 6,253 documents rendered and compared against their references — **5,980 pass with nothing unsupported reported in either document** |
 | **Unicode's bidi conformance** | 861,948 cases across `BidiTest.txt` and `BidiCharacterTest.txt`, no failures |
 | **Unicode's grapheme boundaries** | all 766 cases of `GraphemeBreakTest.txt` |
 | **Unicode's normalisation forms** | all 20,034 cases of `NormalizationTest.txt`, both NFC invariants |
@@ -142,7 +142,10 @@ record of what it thought of.
 
 The reftest number is a **ratchet**: it may never be lowered to make a red test
 green, so a drop is a layout regression and every failing name is printed — all
-of them, which the run checks against its own count. A
+of them, which the run checks against its own count. It has been lowered once,
+deliberately and for a reason recorded beside the constant: the suite holds four
+CSS 2.1 documents asserting a sentence CSS 2.2 withdrew, browsers fail all four,
+and following the current specification costs three of them. A
 *rise* fails the test too, and asks for the constant to be raised in the same
 commit — a number that only tightens when somebody remembers to look is not a
 ratchet, and this one fell about fifteen hundred passes behind before that was
