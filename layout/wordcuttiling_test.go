@@ -60,30 +60,21 @@ func TestAWordCutInsideTilesTheSameWay(t *testing.T) {
 	}
 }
 
-// What this does not fix, measured rather than left to be discovered.
+// What this did not fix, and what did.
 //
 // Over the seed corpus of FuzzBoundaryLines with "overflow-wrap: break-word"
 // added, the two spellings disagreed 326 times before this and 36 after. The 36
-// are all "AVATAR" in the bundled Noto Sans, and they are not rounding: a line
-// holding one "A" is 654 wide in one spelling and 613 in the other, which is the
-// AV kern and two thirds of a pixel.
+// were all "AVATAR" in the bundled Noto Sans: a line holding one "A" was 654
+// wide in one spelling and 613 in the other, which is the AV kern and two
+// thirds of a pixel.
 //
-// So it is a different fault in the same place — how much of a kern each side of
-// a cut keeps, where the cut falls inside a word that a box boundary also runs
-// through — and the tiling this commit fixes is not it. Courier is the face here
-// because Courier does not kern: these cases are the arithmetic alone, and the
-// kerning one is kept out of the fixture rather than smuggled into it.
+// That was a second fault in the same place and not this one, and it is fixed
+// now — see TestAKernAgainstTheNextLineIsNotCharged. It was never the decision
+// it looked like. unkernLineEnd already took the pair kerning out of a line's
+// last run, deliberately and for the reason §8.1 gives; it just gave back
+// nothing for a run of a merge group, because it rebuilt the group from the
+// run's own text and got a string the group never had.
 //
-// It is a *decision* rather than a defect with an obvious fix, which is why it
-// is not done here. The whole text puts each letter on its line unkerned, which
-// is what a kern is — an adjustment between two adjacent glyphs, and two glyphs
-// on different lines are not adjacent. The cut version splits the kerned pair
-// across the two lines, because its items are part of a merge group and the
-// stretch is measured inside the group's shaping.
-//
-// Deciding for the first reading means a cut edge stops inheriting the shaping
-// of what follows it — and SplitHead's note records that decision being taken
-// the other way, deliberately, for cursive joining: an Arabic letter at a line
-// end is drawn in its final form, and measuring it isolated picked a cut against
-// one width and drew it at another. Kerning is the same mechanism with the
-// opposite answer, so whatever settles it has to keep that.
+// Courier is still the face here, and still because Courier does not kern:
+// these cases are the arithmetic alone, and keeping the kerning out of them is
+// what makes a failure here mean the tiling and nothing else.

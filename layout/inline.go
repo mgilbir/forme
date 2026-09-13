@@ -1319,15 +1319,13 @@ func (l *layouter) unkernLineEnd(runs []inlineItem) {
 			it.Face.HasJoiningForms() {
 			return
 		}
-		lone := itemShaping(it)
-		lone.After = ""
-		alone := l.br.MeasureSpacedInContext(it.Face, it.Text, it.Size, it.Spacing, lone)
-		inContext := l.br.MeasureSpacedInContext(it.Face, it.Text, it.Size, it.Spacing,
-			itemShaping(it))
 		// The difference and not the measurement, so that everything else the
 		// width carries — §8.1's gap, the letter-spacing the boundary rule
-		// exchanged — survives.
-		it.Width = it.Width.Add(alone.Sub(inContext))
+		// exchanged — survives. Taken over the group the run is shaped in
+		// rather than over its own text, which is what this used to do and
+		// what made it silently do nothing for a word broken inside: see
+		// LineEndCorrection.
+		it.Width = it.Width.Add(l.br.LineEndCorrection(*it))
 		return
 	}
 }

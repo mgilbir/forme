@@ -150,27 +150,6 @@ var boundaryDecls = []string{
 	"overflow-wrap: anywhere",
 }
 
-// cutsInsideAWord reports whether a declaration lets a line end inside a run
-// rather than only between two of them.
-//
-// It is asked for one reason, and the reason is a defect this target cannot hold
-// yet. A cut inside a word puts the two halves of a kerned pair on different
-// lines, and how much of the kern each half keeps differs between the two
-// spellings — 654 against 613 for a line holding one "A" of "AVATAR", which is
-// the AV kern and two thirds of a pixel. That is a *decision* rather than a
-// rounding fault, and SplitHead's note records it being taken the other way for
-// cursive joining, so it is not one to settle from inside a fuzz target. See
-// TestAWordCutInsideTilesTheSameWay, which measures it.
-//
-// So these two declarations run in Courier and not in the bundled Noto Sans.
-// Courier does not kern, which makes those cases the arithmetic alone — the same
-// reason that test is written in it. The restriction is named here rather than
-// left as a face that quietly went missing, and it goes when the kerning
-// question is answered.
-func cutsInsideAWord(decl string) bool {
-	return strings.HasPrefix(decl, "overflow-wrap:")
-}
-
 // boundaryLineWidths are the widths every case is set at. See the note above.
 var boundaryLineWidths = []float64{10, 16, 25, 40, 70}
 
@@ -209,9 +188,6 @@ func checkBoundaryLines(t testing.TB, text, cuts, decl string) {
 
 	cut := spanned(text, at)
 	for _, family := range tilingFaces {
-		if family != "Courier" && cutsInsideAWord(decl) {
-			continue
-		}
 		sheet := `#d { font-family: ` + family + `; font-size: 16px; ` + decl + ` }`
 		for _, px := range boundaryLineWidths {
 			whole, ok := linesOfSpanned(t, set, text, sheet, px)
