@@ -1440,7 +1440,7 @@ func lineAdvance(runs []inlineItem) style.Unit {
 // one.
 func onlyLeading(items []inlineItem) bool {
 	for _, item := range items {
-		if !item.LeadingOnly {
+		if !item.LeadingOnly && !item.TrimAtEnd {
 			return false
 		}
 	}
