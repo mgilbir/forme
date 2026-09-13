@@ -492,8 +492,6 @@ type layouter struct {
 	// is told about once. See layout/flex.go.
 	reportedFlex map[*Box]bool
 	reportedGrid map[*Box]bool
-	// reportedLineBreak is the same again for line-break.
-	reportedLineBreak map[string]bool
 	// reportedTextJustify is the same again for text-justify, and is reported
 	// only where a line is being justified — see reportTextJustify.
 	reportedTextJustify map[string]bool

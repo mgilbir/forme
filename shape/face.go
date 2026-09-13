@@ -798,22 +798,6 @@ func sanitizeName(s string) string {
 	return string(out)
 }
 
-// mostCommonWidth picks /DW: the advance shared by the most glyphs, so /W
-// carries the exceptions rather than the rule.
-func (f *Face) mostCommonWidth() float64 {
-	counts := map[float64]int{}
-	for _, w := range f.prog.WidthByGID {
-		counts[w]++
-	}
-	best, bestN := 1000.0, -1
-	for w, n := range counts {
-		if n > bestN || (n == bestN && w < best) {
-			best, bestN = w, n
-		}
-	}
-	return best
-}
-
 var errNoGlyphs = fmt.Errorf("fonts: the font program declares no glyphs")
 
 // stemV estimates the dominant vertical stem width, which /FontDescriptor

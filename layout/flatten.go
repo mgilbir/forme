@@ -779,14 +779,11 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		// the page reveals as a missing feature. See paragraph.PhrasesUnfound.
 		l.reportWordBreak(b, "auto-phrase")
 	}
-	lb, unhandledLine := lineBreakOf(b.Style["line-break"])
+	lb, _ := lineBreakOf(b.Style["line-break"])
 	// §5.3's loose tailoring is qualified "in Chinese and Japanese", and which
 	// of those the text is comes from the language tag's *script* rather than
 	// from the property. See paragraph.WritingSystemOf.
 	lb.ChineseOrJapanese = boxWritingSystem(b).ChineseOrJapanese()
-	if unhandledLine != "" {
-		l.reportLineBreak(b, unhandledLine)
-	}
 	hy, unhandledHyphens := hyphensOf(b.Style["hyphens"])
 	if hy.Auto && !hyphenatesLanguage(boxHyphenation(b)) {
 		// "auto" asks for the language's own dictionary, and there are four

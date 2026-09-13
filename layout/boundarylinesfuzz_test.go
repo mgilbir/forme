@@ -77,21 +77,105 @@ import (
 // them. See paragraph.Trailing.
 
 func FuzzBoundaryLines(f *testing.F) {
+	// The whole corpus under no declaration, and then every declaration over a
+	// handful of texts chosen to reach it. The cross product of the two is
+	// twenty times the seeds and twenty times the time an ordinary "go test"
+	// spends running them — a minute for one target — and it buys nothing the
+	// fuzzer will not reach itself, since the declaration is an input like the
+	// others.
 	for _, text := range tilingTexts {
 		for _, cuts := range [][]byte{{1}, {2}, {1, 2}, {255}, {1, 1, 1, 1}} {
-			f.Add(text, string(cuts))
+			f.Add(text, string(cuts), uint8(0))
 		}
 	}
-	f.Fuzz(func(t *testing.T, text, cuts string) {
-		checkBoundaryLines(t, text, cuts)
+	// The texts here are chosen, not sampled. Each is the shape of a defect this
+	// target or FuzzRunTiling has found, so every declaration is seeded with the
+	// inputs most likely to disagree under it — a word to cut inside, a kerned
+	// pair, a joiner a line may not break after, ideographs with a preserved
+	// space, a hyphen that takes a break while a hold is still pending, and a
+	// word only a dictionary can divide.
+	//
+	// Chosen because a corpus that cannot reach a branch says nothing about it
+	// however long it runs. Without the joiner below, planting break-all's
+	// box-edge rule back moved nothing here.
+	for which := range boundaryDecls {
+		for _, text := range []string{
+			"letter", "AVATAR", "a\u200Db", "ああ abc", "ああ ",
+			"a b c d", "0|-!00", "ภาษาไทย",
+		} {
+			f.Add(text, "\x01\x02", uint8(which))
+		}
+	}
+	f.Fuzz(func(t *testing.T, text, cuts string, which uint8) {
+		checkBoundaryLines(t, text, cuts, boundaryDecls[int(which)%len(boundaryDecls)])
 	})
+}
+
+// boundaryDecls are the declarations each case is laid out under, one per run.
+//
+// A declaration is an axis of its own and it is the productive one: everything
+// here was clean under the empty string, and three defects fell out of the first
+// afternoon of adding one — break-all's box-edge opportunity asking half a pair
+// rule, break-spaces overruling an opportunity that was not a space's, and a
+// word cut inside a run not tiling against its group.
+//
+// It is fuzzed rather than looped over. Twenty declarations crossed with two
+// faces and five widths is four hundred layouts for one input, which is a target
+// that runs at a handful of executions a second and searches nothing; the fuzzer
+// picks one, and the search covers them the way it covers the text.
+//
+// The list is values that change *line breaking or measurement*, which is what
+// this invariant is about. A colour or a decoration cannot move a boundary, and
+// putting one here would only dilute the search.
+var boundaryDecls = []string{
+	"",
+	"letter-spacing: 3px",
+	"letter-spacing: -1px",
+	"word-spacing: 5px",
+	"text-transform: uppercase",
+	"text-transform: capitalize",
+	"font-variant-caps: small-caps",
+	"text-indent: 10px",
+	"text-align: justify",
+	"text-align: right",
+	"text-align: center",
+	"hanging-punctuation: last",
+	"hanging-punctuation: first",
+	"word-break: break-all",
+	"word-break: keep-all",
+	"line-break: anywhere",
+	"white-space: pre-wrap",
+	"white-space: break-spaces",
+	"overflow-wrap: break-word",
+	"overflow-wrap: anywhere",
+}
+
+// cutsInsideAWord reports whether a declaration lets a line end inside a run
+// rather than only between two of them.
+//
+// It is asked for one reason, and the reason is a defect this target cannot hold
+// yet. A cut inside a word puts the two halves of a kerned pair on different
+// lines, and how much of the kern each half keeps differs between the two
+// spellings — 654 against 613 for a line holding one "A" of "AVATAR", which is
+// the AV kern and two thirds of a pixel. That is a *decision* rather than a
+// rounding fault, and SplitHead's note records it being taken the other way for
+// cursive joining, so it is not one to settle from inside a fuzz target. See
+// TestAWordCutInsideTilesTheSameWay, which measures it.
+//
+// So these two declarations run in Courier and not in the bundled Noto Sans.
+// Courier does not kern, which makes those cases the arithmetic alone — the same
+// reason that test is written in it. The restriction is named here rather than
+// left as a face that quietly went missing, and it goes when the kerning
+// question is answered.
+func cutsInsideAWord(decl string) bool {
+	return strings.HasPrefix(decl, "overflow-wrap:")
 }
 
 // boundaryLineWidths are the widths every case is set at. See the note above.
 var boundaryLineWidths = []float64{10, 16, 25, 40, 70}
 
 // checkBoundaryLines lays the text out whole and cut and compares the lines.
-func checkBoundaryLines(t testing.TB, text, cuts string) {
+func checkBoundaryLines(t testing.TB, text, cuts, decl string) {
 	if len(text) > 512 || len(cuts) > 64 {
 		// Bounded for the reason every target here is: a long input finds the
 		// memory it takes to hold one and no logic fault.
@@ -125,7 +209,10 @@ func checkBoundaryLines(t testing.TB, text, cuts string) {
 
 	cut := spanned(text, at)
 	for _, family := range tilingFaces {
-		sheet := `#d { font-family: ` + family + `; font-size: 16px }`
+		if family != "Courier" && cutsInsideAWord(decl) {
+			continue
+		}
+		sheet := `#d { font-family: ` + family + `; font-size: 16px; ` + decl + ` }`
 		for _, px := range boundaryLineWidths {
 			whole, ok := linesOfSpanned(t, set, text, sheet, px)
 			if !ok {
@@ -136,11 +223,11 @@ func checkBoundaryLines(t testing.TB, text, cuts string) {
 				continue
 			}
 			if !sameBoundaryLines(whole, got) {
-				t.Fatalf("in %s at %gpx, %q set\n  %v\nand the same text cut at "+
-					"%v set\n  %v\n  %s\n§8.1's boundary does not break shaping, "+
-					"and a span with nothing on it puts nothing on the page: the "+
-					"lines hold the same characters at the same width.",
-					family, px, text, whole, at, got, cut)
+				t.Fatalf("in %s at %gpx under %q, %q set\n  %v\nand the same "+
+					"text cut at %v set\n  %v\n  %s\n§8.1's boundary does not "+
+					"break shaping, and a span with nothing on it puts nothing on "+
+					"the page: the lines hold the same characters at the same width.",
+					family, px, decl, text, whole, at, got, cut)
 			}
 		}
 	}

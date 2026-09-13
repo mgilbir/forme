@@ -36,7 +36,7 @@ func (l *layouter) strutAt(b *Box, size style.Unit) strut {
 	if upem == 0 {
 		return s
 	}
-	if ascent, descent, ok := l.lineExtentsAt(b, face, size); ok {
+	if ascent, descent, ok := lineExtentsAt(face, size); ok {
 		s.Ascent, s.Descent = ascent, descent
 	}
 	// The x-height "vertical-align: middle" is measured against.
@@ -411,7 +411,7 @@ func (l *layouter) lineHeightInFace(b *Box, face *shape.Face) style.Unit {
 func (l *layouter) lineHeightInFaceAt(b *Box, face *shape.Face, size style.Unit) style.Unit {
 	value := strings.ToLower(strings.TrimSpace(b.Style["line-height"]))
 	if value == "" || value == "normal" {
-		return l.normalLineHeightInFaceAt(b, face, size)
+		return normalLineHeightInFaceAt(face, size)
 	}
 	if n, ok := parseNumber(value); ok && n >= 0 {
 		// A negative multiplier is not a line-height: §10.8.1 says the value
@@ -425,26 +425,18 @@ func (l *layouter) lineHeightInFaceAt(b *Box, face *shape.Face, size style.Unit)
 			return v
 		}
 	}
-	return l.normalLineHeightInFaceAt(b, face, size)
+	return normalLineHeightInFaceAt(face, size)
 }
 
-// normalLineHeight is "line-height: normal".
+// normalLineHeightInFaceAt is "line-height: normal", in a given face at a given
+// size.
 //
 // Worth recording what changed when the font finally got asked. Ahem states
 // ascent 800, descent -200 and a line gap of zero, which comes to exactly one
 // em — right for a face whose every glyph is an em square, and a figure no
 // constant would have produced. Noto Sans comes to more than 1.2. Neither is
 // something an engine can guess, which is the whole argument for asking.
-func (l *layouter) normalLineHeight(b *Box) style.Unit {
-	face, _ := l.fontFor(b)
-	return l.normalLineHeightInFace(b, face)
-}
-
-func (l *layouter) normalLineHeightInFace(b *Box, face *shape.Face) style.Unit {
-	return l.normalLineHeightInFaceAt(b, face, b.FontSize)
-}
-
-func (l *layouter) normalLineHeightInFaceAt(b *Box, face *shape.Face, size style.Unit) style.Unit {
+func normalLineHeightInFaceAt(face *shape.Face, size style.Unit) style.Unit {
 	if face == nil {
 		return size.Mul(normalLineHeightFallbackFactor)
 	}
@@ -469,12 +461,8 @@ func (l *layouter) normalLineHeightInFaceAt(b *Box, face *shape.Face, size style
 	return h
 }
 
-// lineExtents is lineMetrics at a box's font size.
-func (l *layouter) lineExtents(b *Box, face *shape.Face) (ascent, descent style.Unit, ok bool) {
-	return l.lineExtentsAt(b, face, b.FontSize)
-}
-
-func (l *layouter) lineExtentsAt(b *Box, face *shape.Face, size style.Unit) (ascent, descent style.Unit, ok bool) {
+// lineExtentsAt is lineMetrics at a given font size.
+func lineExtentsAt(face *shape.Face, size style.Unit) (ascent, descent style.Unit, ok bool) {
 	top, bottom, upem, ok := lineMetrics(face)
 	if !ok {
 		return 0, 0, false
@@ -506,7 +494,7 @@ func (l *layouter) baselineInFaceAt(b *Box, face *shape.Face, lineHeight, size s
 	if face == nil {
 		return lineHeight.Mul(0.8)
 	}
-	ascent, descent, ok := l.lineExtentsAt(b, face, size)
+	ascent, descent, ok := lineExtentsAt(face, size)
 	if !ok {
 		return lineHeight.Mul(0.8)
 	}

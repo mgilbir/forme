@@ -1887,9 +1887,9 @@ func rotateIndicRight(buf []Glyph, info []indicInfo, to, from int) {
 // indicRephPosition reports where in a syllable the reph is drawn.
 //
 // The scripts disagree, and the disagreement is the point of the reph_pos field:
-// Oriya draws it straight after the main consonant, Bengali after the subjoined
-// forms, Gurmukhi before them, Devanagari and Gujarati before the post-base
-// forms, and Tamil, Telugu and Kannada after everything.
+// Oriya and Malayalam draw it straight after the main consonant, Bengali after
+// the subjoined forms, Gurmukhi before them, Devanagari and Gujarati before the
+// post-base forms, and Tamil, Telugu and Kannada after everything.
 //
 // The steps below are the specification's, in its order. Reading them:
 //

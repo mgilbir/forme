@@ -500,20 +500,6 @@ func (f *Face) shapeByCode(s string, rtl bool) ([]Glyph, int) {
 	return buf, missing
 }
 
-// nominalAdvance is how far the text-showing operator will move the pen for one
-// glyph, which is the font's own width for whatever the code names.
-//
-// For a composite face that is the width of the glyph index. For the others no
-// positioning was applied, so the advance already in the buffer *is* the font's
-// own — and asking for it by index would look the width up under a number that
-// is a character code.
-func (f *Face) nominalAdvance(g Glyph) float64 {
-	if !f.composite() {
-		return g.XAdvance
-	}
-	return f.advanceGID(g.GID)
-}
-
 // MeasureGlyphs is the width a shaped run occupies at a given size, which is
 // the sum of its advances — offsets displace glyphs without moving the pen and
 // so contribute nothing.
