@@ -947,6 +947,27 @@ func (it Item) shaping() Shaping {
 // version that left them as the item's own moved nothing; the shape that would
 // tell them apart is a face whose context changes a width *and* a word broken
 // three ways across a box boundary.
+//
+// # What a caller has to be sure of, and cannot check
+//
+// MergePre and MergePost have to be the *run's* neighbours in the group. They
+// are not always. shapingcontext.go sets them from an item's neighbours among
+// the items it is looking at, and where those items are already pieces of one
+// cut run they describe a group built from the pieces rather than from the run.
+// A list marker is how to reach it: "(1)" cut at 2 leaves an item ")" whose
+// MergePre is "(1" while its Cut.Text is still "(1)", so this builds "(1(1) "
+// where the group is "(1) ".
+//
+// There is no local check for it. Both strings hold the item's own text at the
+// offset the fields give — ")" is at 4 in "(1(1) " exactly as it is at 2 in
+// "(1) " — so the two are each self-consistent and differ only in being the
+// right string or the wrong one. A guard written against this passes.
+//
+// So it is a caller's obligation rather than something this can refuse. Routing
+// that pass's re-measure through here was tried and measured: 8 of its 866 cut
+// items came out a sixty-fourth different, and they were the list markers, and
+// the answer that changed was the one that had been right. It is measured the
+// way it is for a reason.
 func (it Item) group() (whole string, base int, before, after string, kerns bool) {
 	whole, base = it.Text, 0
 	before, after, kerns = it.PreContext, it.PostContext, it.ContextKerns
