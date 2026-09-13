@@ -255,61 +255,63 @@ func (br *Breaker) spanWidth(item Item, from, to int, piece Item) style.Unit {
 		return br.MeasureSpacedInContext(item.Face, piece.Text, item.Size, item.Spacing,
 			piece.shaping())
 	}
-	whole, base := item.Text, 0
-	before, after, kerns := item.PreContext, item.PostContext, item.ContextKerns
-	if item.MergePre != "" || item.MergePost != "" {
-		// A run of a merge group: its string is the group's, so the shaping to
-		// share is the group's and this run is a stretch inside it. That is the
-		// arithmetic below with a longer string and a base of its own —
-		// mergedSpan does it for a whole run and this does it for a stretch.
-		//
-		// Measuring the stretch on its own is what this used to do, and it
-		// undid the one thing a merge group is for. The runs of a group tile it
-		// exactly because the two ends of each are rounded separately; a stretch
-		// rounded on its own does not, so the pieces of an item stopped adding
-		// up to the item. "abc" in a box two characters wide sets "ab" and "c"
-		// at 1228 and 615, and "<span>a</span><span>bc</span>" — the same word,
-		// the same group — set the second line at 614.
-		//
-		// It is reached where a word is broken *inside*, which is overflow-wrap
-		// and break-all, and nowhere else: a line that ends between two runs
-		// ends at a run's own edge, which the tiling already handles. That is
-		// why FuzzRunTiling never saw it — it lays every case out under nowrap,
-		// so nothing is ever cut.
-		run, at := item.Text, 0
-		if c := item.Cut; c != nil {
-			// And already a stretch of a longer run as well, which is the shape
-			// a word broken across lines takes. MergePre and MergePost are the
-			// *run's* neighbours in the group, so the group's string is built
-			// from the whole run and this stretch sits that much further in.
-			run, at = c.Text, item.CutAt
-			// The contexts come from the cut for the same reason the string
-			// does. A planted version that left them as the item's own moved
-			// nothing, and the shape that would tell them apart is a face whose
-			// context changes a width *and* a word broken three ways across a
-			// box boundary — which is where the defect this does not fix lives,
-			// so there is no honest fixture for it yet. See the note at the end
-			// of TestAWordCutInsideTilesTheSameWay.
-			before, after, kerns = c.Before, c.After, c.Kerns
-		}
-		whole, base = item.MergePre+run+item.MergePost, len(item.MergePre)+at
-		before, after = shape.GroupContext(before, after, item.MergePre, item.MergePost)
-	} else if c := item.Cut; c != nil {
-		// Already a stretch of a longer run: the shaping to share is that run's,
-		// and this stretch sits inside it. See Item.Cut.
-		whole, base = c.Text, item.CutAt
-		before, after, kerns = c.Before, c.After, c.Kerns
-	}
+	whole, base, before, after, kerns := item.group()
+	return br.spanOf(item, piece, whole, base+from, base+to, before, after, kerns)
+}
+
+// spanOf is spanWidth once the group string and the stretch inside it are known.
+func (br *Breaker) spanOf(item, piece Item, whole string, from, to int, before, after string, kerns bool) style.Unit {
 	key := groupKey{
 		face: item.Face, whole: whole, before: before, after: after,
 		kerns: kerns, off: item.Off,
 	}
 	// The two ends rounded separately, so that the pieces of one item add up to
 	// the item's own rounded width. See shape.GroupSpan.
-	head, through := shape.GroupSpan(br.advances(key), base+from, base+to, item.Size.Px())
+	head, through := shape.GroupSpan(br.advances(key), from, to, item.Size.Px())
 	lo, _ := style.FromPx(head)
 	hi, _ := style.FromPx(through)
 	return hi.Sub(lo).Add(SpacingAdvance(piece.Text, item.Spacing))
+}
+
+// LineEndCorrection is what to add to an item's width because it ends a line.
+//
+// A pair adjusts the *left* glyph's advance, so a face that kerns shrinks an
+// item's last glyph against the first character of whatever follows it. That is
+// right while the two are next to each other and wrong once a line break has
+// come between them: they are not adjacent, and there is nothing on this line
+// for the shortened advance to make room for. So the amount is given back.
+//
+// It is the difference between two measurements of the same item rather than a
+// measurement on its own, so that everything else the width carries — §8.1's
+// gap, the letter-spacing the boundary rule exchanged — survives being
+// corrected. Both are taken over the group the item is shaped in, which is what
+// a measurement of the item alone cannot do: an item that is a stretch of a
+// longer run has a string that is not its own, and reconstructing one from its
+// text and its merge neighbours gives a string the run never had. That is how
+// this came to do nothing at all for a word broken inside by overflow-wrap —
+// "A" with "ATAR" after it rebuilt the group as "AATAR", which holds no "V", so
+// both halves of the subtraction measured the same thing and the correction
+// came out zero.
+//
+// Everything *before* the item stays in both. A ligature the group forms across
+// the boundary in front of it is still formed and the context that chose its
+// glyphs still chooses them; only the far side goes.
+func (br *Breaker) LineEndCorrection(item Item) style.Unit {
+	if item.Face == nil || item.Upright || item.Text == "" {
+		return 0
+	}
+	whole, base, before, after, kerns := item.group()
+	end := base + len(item.Text)
+	if end > len(whole) || base > end {
+		// The item is not the stretch of its own group its fields describe,
+		// which is a caller's mistake rather than a document's. Correcting a
+		// width from a string it did not come from is worse than not correcting
+		// it, so nothing is done.
+		return 0
+	}
+	inContext := br.spanOf(item, item, whole, base, end, before, after, kerns)
+	atEnd := br.spanOf(item, item, whole[:end], base, end, before, "", kerns)
+	return atEnd.Sub(inContext)
 }
 
 // clusters is where an item's text may be cut, as offsets into that item's own

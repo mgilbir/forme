@@ -927,3 +927,42 @@ func (it Item) shaping() Shaping {
 		ContextKerns: it.ContextKerns, Upright: it.Upright, Off: it.Off,
 	}
 }
+
+// group is the string this item's shaping is shared over, where the item begins
+// in it, and the context that string is shaped in.
+//
+// Three shapes reach it. An item that is nothing but itself is its own string.
+// A run of a merge group shapes the group's string — its own is not what the
+// face is asked about, because a ligature that spans a boundary is formed by the
+// group and divided afterwards — and sits at an offset inside it. And an item
+// that is already a stretch of a longer run, which is what a word broken across
+// lines is, shapes that run and sits at the cut.
+//
+// The two combine: a run of a group that has also been cut shapes the group
+// built from the *whole* run, with the stretch that much further in. MergePre
+// and MergePost are the run's neighbours in the group rather than the stretch's,
+// so the group's string is built from the run and not from what is left of it.
+//
+// The contexts come from the cut for the same reason the string does. A planted
+// version that left them as the item's own moved nothing; the shape that would
+// tell them apart is a face whose context changes a width *and* a word broken
+// three ways across a box boundary.
+func (it Item) group() (whole string, base int, before, after string, kerns bool) {
+	whole, base = it.Text, 0
+	before, after, kerns = it.PreContext, it.PostContext, it.ContextKerns
+	if it.MergePre != "" || it.MergePost != "" {
+		run, at := it.Text, 0
+		if c := it.Cut; c != nil {
+			run, at = c.Text, it.CutAt
+			before, after, kerns = c.Before, c.After, c.Kerns
+		}
+		whole, base = it.MergePre+run+it.MergePost, len(it.MergePre)+at
+		before, after = shape.GroupContext(before, after, it.MergePre, it.MergePost)
+		return whole, base, before, after, kerns
+	}
+	if c := it.Cut; c != nil {
+		whole, base = c.Text, it.CutAt
+		before, after, kerns = c.Before, c.After, c.Kerns
+	}
+	return whole, base, before, after, kerns
+}
