@@ -55,7 +55,65 @@ func Type1Program(names []string) []byte {
 		r = (uint16(c)+r)*c1 + c2
 		enc = append(enc, c)
 	}
-	return append([]byte("%!PS-AdobeFont-1.0\n/FontMatrix [0.001 0 0 0.001 0 0] readonly def\ncurrentfile eexec\n"), enc...)
+	return append([]byte(type1Header), enc...)
+}
+
+const type1Header = "%!PS-AdobeFont-1.0\n/FontMatrix [0.001 0 0 0.001 0 0] readonly def\ncurrentfile eexec\n"
+
+// Type1ProgramHex is Type1Program with the encrypted portion in hexadecimal,
+// which is the other form the format allows and the one a font that had to
+// survive a seven-bit channel is in.
+//
+// Type1Hex says how to write the digits. The zero value is one unbroken line of
+// lower-case, which is the simplest thing a writer does.
+type Type1Hex struct {
+	// Wrap is how many digits to put on a line before a newline, because a real
+	// font in this form wraps — Adobe's own tools at 64 — and the decoder's
+	// tolerance of white space between digits is the whole reason it does not
+	// simply unhex. Zero writes one unbroken line.
+	Wrap int
+
+	// Upper writes A-F rather than a-f. Both are digits and fonts use both, so
+	// a decoder that handled one case would be wrong for half the fonts in the
+	// world and right for every fixture that forgot to ask.
+	Upper bool
+
+	// Odd drops the last digit, so the program is a hex string with an odd
+	// number of digits. A reader pads it with a trailing zero, which changes the
+	// final byte; the program is then damaged, and what a caller wants from it
+	// is that the reader does something defined rather than reading off the end.
+	Odd bool
+}
+
+func Type1ProgramHex(names []string, opts Type1Hex) []byte {
+	body := Type1Program(names)[len(type1Header):]
+	digits := make([]byte, 0, 2*len(body))
+	for _, b := range body {
+		digits = append(digits, hexDigit(b>>4, opts.Upper), hexDigit(b&0x0F, opts.Upper))
+	}
+	if opts.Odd {
+		digits = digits[:len(digits)-1]
+	}
+
+	out := []byte(type1Header)
+	for i, d := range digits {
+		if opts.Wrap > 0 && i > 0 && i%opts.Wrap == 0 {
+			out = append(out, '\n')
+		}
+		out = append(out, d)
+	}
+	return append(out, '\n')
+}
+
+func hexDigit(v byte, upper bool) byte {
+	switch {
+	case v < 10:
+		return '0' + v
+	case upper:
+		return 'A' + v - 10
+	default:
+		return 'a' + v - 10
+	}
 }
 
 func CmapFormat4(segs [][3]int) []byte {
