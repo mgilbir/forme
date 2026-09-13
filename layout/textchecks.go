@@ -109,54 +109,13 @@ func (l *layouter) reportWordBreak(b *Box, value string) {
 	})
 }
 
-// reportLineBreak reports a line-break value this engine reads as auto.
-//
-// Unlike its word-break counterpart it is conditional on the text, and the
-// condition is what keeps it honest. loose, normal and strict differ from auto
-// only in how strictly CJK text may break — around small kana, around iteration
-// marks, before centred punctuation — and over Latin text the three provably
-// change nothing. The suite says so: pre-wrap-004, -005 and -006 exist to assert
-// that "XX    XX" wraps the same under all of them. Warning there would be
-// crying wolf on a page that is correct.
-//
-// So the report is made where the difference could show, which is text with an
-// ideograph in it — the only text this engine breaks by a rule the three values
-// have anything to say about.
-//
-// What they have to say about it grew. This engine used to break CJK on one
-// rule, "between two ideographs", which all three values leave alone; it now
-// also refuses to begin a line with a closing bracket, an exclamation mark or a
-// non-starter, which is what linebreak.go is for. That is UAX #14's default and
-// so CSS's normal, and it is exactly the set loose relaxes and strict extends —
-// so the difference the report warns about is now real in both directions
-// rather than merely possible in one, which is what the message says.
-func (l *layouter) reportLineBreak(b *Box, value string) {
-	if !strings.ContainsFunc(b.Text, isIdeographic) {
-		return
-	}
-	if l.reportedLineBreak == nil {
-		l.reportedLineBreak = map[string]bool{}
-	}
-	if l.reportedLineBreak[value] {
-		return
-	}
-	l.reportedLineBreak[value] = true
-	l.rec.ReportDetail(Finding{
-		Rule:     RuleUnsupportedValue,
-		Property: "line-break",
-		Message: value + " was read as auto, so CJK text may break where the " +
-			"value asked it not to, or hold together where it asked it to break",
-		Path: PathOf(b.Element),
-	})
-}
-
 // reportTextJustify reports a justification method this engine does not perform.
 //
 // It is called only where a line is actually being justified, which is the
 // condition that makes the value matter: text-justify on a block that is not
 // justified changes nothing, and warning there would be crying wolf on a page
-// that is correct. The same reasoning as reportLineBreak's, and for the same
-// reason — a finding nobody can act on is a finding nobody reads.
+// that is correct. The same reasoning as reportWordBreak's above, and for the
+// same reason — a finding nobody can act on is a finding nobody reads.
 //
 // What the values ask for is real and not a nuance. inter-character puts the
 // slack between letters as well as between words, which is how Thai and
