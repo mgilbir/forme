@@ -107,6 +107,12 @@ jobs:
             target: FuzzRunTiling
           - package: ./layout
             target: FuzzBoundaryLines
+          # And the third question the other two cannot ask. Both of those
+          # compare two spellings of one document to each other, so a character
+          # lost in both is a page they agree about; this compares the page to
+          # the source.
+          - package: ./layout
+            target: FuzzDrawnText
           # The one bit in the property registry that decides what a document
           # looks like — a colour on <body> reaches every word under it and a
           # margin reaches nothing — asserted over a tree the parser built out
