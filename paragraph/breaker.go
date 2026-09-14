@@ -31,6 +31,12 @@ import (
 // had yet — which is not a property, it is a habit. Here the compiler holds the
 // line.
 type Breaker struct {
+	// The prefix-sum table for the run being cut, and the run it belongs to.
+	// A nil table with spacingSet means that run does not qualify.
+	spacingWhole string
+	spacingIdx   *spacingIndex
+	spacingSet   bool
+
 	// measured memoizes the width of a run as it will be set.
 	//
 	// Measuring is the inner loop of line breaking and the same words recur
@@ -270,7 +276,39 @@ func (br *Breaker) spanOf(item, piece Item, whole string, from, to int, before, 
 	head, through := shape.GroupSpan(br.advances(key), from, to, item.Size.Px())
 	lo, _ := style.FromPx(head)
 	hi, _ := style.FromPx(through)
-	return hi.Sub(lo).Add(SpacingAdvance(piece.Text, item.Spacing))
+	return hi.Sub(lo).Add(br.spacingAdvanceIn(whole, from, to, piece.Text, item.Spacing))
+}
+
+// spacingAdvanceIn is SpacingAdvance for a stretch of a run the breaker is
+// cutting, answered from a table built once for that run instead of by reading
+// the stretch again at every candidate. See spacingIndex.
+func (br *Breaker) spacingAdvanceIn(whole string, from, to int, text string, sp TextSpacing) style.Unit {
+	var out style.Unit
+	if sp.Letter != 0 {
+		out = out.Add(sp.Letter.Mul(float64(br.spacedUnitsIn(whole, from, to, text))))
+	}
+	if sp.Word != 0 {
+		out = out.Add(sp.Word.Mul(float64(countWordSeparators(text))))
+	}
+	return out
+}
+
+func (br *Breaker) spacedUnitsIn(whole string, from, to int, text string) int {
+	if !br.spacingSet || br.spacingWhole != whole {
+		br.spacingIdx, _ = newSpacingIndex(whole)
+		br.spacingWhole, br.spacingSet = whole, true
+	}
+	if br.spacingIdx == nil || from < 0 || to < from || to > len(whole) {
+		return SpacedUnits(text)
+	}
+	if strictSpans && whole[from:to] != text {
+		panic("spanOf: whole[from:to] is not the piece's own text")
+	}
+	if len(text) != to-from {
+		// Not the stretch this table describes; count it rather than guess.
+		return SpacedUnits(text)
+	}
+	return br.spacingIdx.units(from, to)
 }
 
 // spanPx is an item's own text measured under one shaping, in CSS pixels and
@@ -428,6 +466,13 @@ func (br *Breaker) advances(key groupKey) []float64 {
 // groupKey identifies one shaping of one merge group: everything that decides
 // what the glyphs come out as, and nothing that differs between the runs
 // sharing them.
+// strictSpans turns the assumption spacedUnitsIn rests on — that the stretch
+// named by from and to is the piece's own text — into a panic. It is off, and
+// it was on for a full run of the corpus suite, reftests included, which is
+// where the assumption was checked rather than assumed. The length test below
+// stands in for it and falls back to counting rather than guessing.
+const strictSpans = false
+
 type groupKey struct {
 	face          *shape.Face
 	whole         string

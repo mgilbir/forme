@@ -139,6 +139,12 @@ jobs:
           # control character deleted rather than emitted.
           - package: ./css
             target: FuzzTheTokenizerAccountsForEveryCodePoint
+          # The prefix-sum table that made one long word with a letter-spacing
+          # linear again, against the counting it replaces. It is an
+          # optimisation of an existing function and agreeing with that function
+          # is the whole of its correctness.
+          - package: ./paragraph
+            target: FuzzTheSpacingTableAgreesWithCounting
           - package: ./brotli
             target: FuzzDecode
           - package: ./font
