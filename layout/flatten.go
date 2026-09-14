@@ -116,9 +116,7 @@ func (l *layouter) atomicItem(b *Box, frame inlineFrame) inlineItem {
 			bl := baseline
 			ascent := frag.Margin.Top.Add(bl)
 			if overflowIsScrollable(b.Style) {
-				// A smaller ascent is a baseline further up the page, which is
-				// what "higher" means here.
-				ascent = style.Min(ascent, box.H)
+				ascent = box.H
 			}
 			item.Ascent = ascent
 			item.Descent = box.H.Sub(ascent)

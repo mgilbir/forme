@@ -1303,7 +1303,30 @@ const wptEnv = "WPT_TESTS"
 // cannot be conditional, and "break-spaces" preserves spaces too, so forcing
 // "preserve" over it took textarea-break-spaces-001 away and the two documents
 // traded with the count unmoved.
-const wptCleanPassBaseline = 5983
+// 5983 down to 5980 on 2026-09-13, and a drop taken on purpose rather than a
+// regression: §10.8.1's baseline for an inline-block whose overflow is not
+// visible. The rule is the bottom margin edge, flatly; this engine took the
+// *higher* of that and the last line box's baseline.
+//
+// It is the one case where lowering this number is right, and it is worth being
+// exact about why, because "a red test went green" is the thing the ratchet
+// exists to refuse. Nothing was lowered to make anything green. A rule was
+// changed to the one CSS 2.2 REC and css-inline-3 state and every browser
+// implements, and the count fell out of that: +1 for
+// linebox/vertical-align-baseline-005a and −4 for visudet/inline-block-baseline
+// -003 through -006.
+//
+// The four that go red assert the superseded reading in their own words — "the
+// higher of either its bottom margin edge or the baseline of its last line box"
+// — which is CSS 2.1's text and not CSS 2.2's. wpt.fyi settles it rather than
+// the argument: browsers fail all four of them and pass 005a. So the suite
+// contradicts itself here, four documents to one, and the four are the old ones.
+//
+// The engine's own statement of the rule is in
+// TestAnInlineBlockThatClipsSitsOnItsBottomMarginEdge, which is where it should
+// be checked from now on: four vendored documents asserting a withdrawn
+// sentence are not what this behaviour rests on.
+const wptCleanPassBaseline = 5980
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
