@@ -348,6 +348,15 @@ func (p *parser) text(tk token) {
 				p.pendingBuf = append(p.pendingBuf, tk.text...)
 				return
 			}
+			// Flushed for the same reason the ordinary path below flushes
+			// before it replaces the accumulator: whatever run is in there
+			// belongs to a different node, and replacing it without writing it
+			// back is that run being dropped. The merge branch above already
+			// does this; this one did not, and the difference is only visible
+			// when two text tokens arrive with no token between them, which is
+			// what a construct the tokenizer drops does — "<table> <!x> <!y>a"
+			// wrote two spaces into the table and kept one.
+			p.flushText()
 			p.nodes++
 			node := &Node{Type: TextNode, Text: tk.text, Offset: tk.offset}
 			to.insertBefore(node, before)

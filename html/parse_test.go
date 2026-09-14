@@ -1204,3 +1204,75 @@ func TestAStrayLessThanIsCharacterData(t *testing.T) {
 			`no tag is a parse error whatever is done with the character`, ok, len(errs))
 	}
 }
+
+// TestAFosterParentedRunDoesNotDropTheRunBeforeIt: text is accumulated into a
+// buffer and written into its node by flushText, so any path that replaces the
+// buffer without flushing first drops whatever was in it.
+//
+// The ordinary path flushes before it makes a fresh text node, and so does the
+// foster path when it merges into one. The foster path's *fresh node* branch
+// did not, and the run in the buffer at that moment belonged to a different
+// node inside the table.
+//
+// Reaching it takes three things at once, which is why no hand-written document
+// found it:
+//
+//   - a run kept inside the table, which means a run that is entirely white
+//     space, since anything else is foster-parented instead;
+//   - a second run appended to that same node, because the buffer only holds
+//     more than the node's own Text once something has been appended — a node
+//     is created with its first run already in Text;
+//   - no token at all between those two runs, or the token loop flushes. A
+//     construct the tokenizer drops is exactly that: a bogus comment or a
+//     processing instruction produces no token, so the two runs arrive
+//     back to back.
+//
+// Then a third, non-white-space run is foster-parented to a fresh node, and the
+// two spaces standing in the table are written as one.
+func TestAFosterParentedRunDoesNotDropTheRunBeforeIt(t *testing.T) {
+	for _, tc := range []struct{ src, want string }{
+		// Two spaces are written inside the table and two must survive. The
+		// foster-parented "a" is read before the table, which is where foster
+		// parenting puts it.
+		{"<table> <!x> <!y>a", "a  "},
+		// A processing instruction is dropped the same way a bogus comment is.
+		{"<table> <?x> <?y>a", "a  "},
+		// Longer runs, so a count that is merely non-zero cannot pass.
+		{"<table>  <!x>  <!y>b", "b    "},
+		{"<table> <!x> <!y> <!z>a", "a   "},
+		// Tabs are white space too, and are not spaces.
+		{"<table>\t<!x>\t<!y>a", "a\t\t"},
+
+		// The branch next door, which always flushed: here the second run is
+		// merged into the foster-parented node rather than starting a fresh
+		// one, because there is already text in front of the table.
+		{"x<table> <!y>a", "xa "},
+
+		// The other two places the accumulator is replaced. Both already
+		// flushed, and nothing in this package noticed when the flush was taken
+		// out, which is the same as not having it: a later edit removes it and
+		// the suite stays green. These are the documents that reach them.
+		//
+		// The ordinary fresh-node path, entered while the accumulator holds a
+		// run belonging to the foster-parented node in front of the table. "y"
+		// is appended to that node and the white space that follows starts a
+		// fresh node inside the table, so without the flush "y" is dropped.
+		{"x<table>y<!z> ", "xy "},
+		{"x<table>y<!z> <!q> ", "xy  "},
+		// The foster merge branch, entered while the accumulator holds a run
+		// belonging to a node inside the table: two spaces are written there,
+		// then "w" merges into the text in front of the table, so without the
+		// flush the second space is dropped.
+		{"x<table> <!y> <!z>w", "xw  "},
+
+		// And the case with nothing to lose, which must not change: only one
+		// run is written inside the table, so the buffer holds exactly what the
+		// node already has.
+		{"<table> <!x> a", " a "},
+	} {
+		doc, _, _ := Parse(tc.src)
+		if got := doc.TextContent(); got != tc.want {
+			t.Errorf("%q reads %q, want %q", tc.src, got, tc.want)
+		}
+	}
+}
