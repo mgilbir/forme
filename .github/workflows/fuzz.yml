@@ -133,6 +133,12 @@ jobs:
           # well-formed tree.
           - package: ./html
             target: FuzzTheTokenizerAccountsForEveryByte
+          # The same property for the CSS tokenizer, where nothing was losing a
+          # character but three oracles could not have said so: the unit suite,
+          # the css-parsing-tests corpus and FuzzTokenize all pass with a stray
+          # control character deleted rather than emitted.
+          - package: ./css
+            target: FuzzTheTokenizerAccountsForEveryCodePoint
           - package: ./brotli
             target: FuzzDecode
           - package: ./font
