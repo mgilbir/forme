@@ -145,6 +145,11 @@ jobs:
           # is the whole of its correctness.
           - package: ./paragraph
             target: FuzzTheSpacingTableAgreesWithCounting
+          # Canonical ordering against the insertion sort UAX #15 states it
+          # with. The fast one is only correct if it is the same stable sort,
+          # and which of two marks of one class comes first is what is drawn.
+          - package: ./shape
+            target: FuzzCanonicalOrderIsAStableSortByClass
           - package: ./brotli
             target: FuzzDecode
           - package: ./font

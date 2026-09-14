@@ -286,17 +286,35 @@ func ComposeCanonically(runes []rune) ([]rune, []int) {
 		expand(r, i, 0)
 	}
 
-	// Round two: canonical order. A stable insertion sort by combining class,
-	// which is what the standard's own algorithm is.
-	for i := 1; i < len(out); i++ {
-		cc := CombiningClass(out[i])
-		if cc == 0 {
+	// Round two: canonical order, which UAX #15 defines as a stable sort of
+	// each run of combining marks by combining class. A starter never moves, so
+	// each run between two of them is sorted on its own.
+	//
+	// Written as the insertion sort the standard states it with, one mark of a
+	// lower class after a run of higher ones walks back past all of them, and a
+	// text of alternating classes makes that every mark: "a" followed by
+	// sixty-four thousand marks written 220, 230, 220, 230 took **4.9 seconds**
+	// and climbed by four per doubling. The same marks all of one class took
+	// 716 microseconds, because they are already in order — so the shape that
+	// finds this is not a long mark run but a long *unsorted* one, and a text
+	// node is untrusted.
+	//
+	// The insertion sort is kept for a short run, which is every run of every
+	// real document and is faster there than a sort call: "ậ" is two marks.
+	// Past that a stable sort does the same work in n log n. The two agree by
+	// construction — both are stable sorts by combining class — and
+	// TestCanonicalOrderIsAStableSortByClass plants the difference.
+	for start := 0; start < len(out); {
+		if CombiningClass(out[start]) == 0 {
+			start++
 			continue
 		}
-		for j := i; j > 0 && CombiningClass(out[j-1]) > cc; j-- {
-			out[j-1], out[j] = out[j], out[j-1]
-			from[j-1], from[j] = from[j], from[j-1]
+		end := start
+		for end < len(out) && CombiningClass(out[end]) != 0 {
+			end++
 		}
+		orderCanonically(out[start:end], from[start:end])
+		start = end
 	}
 
 	// Round three: compose back into the last starter, where the pair composes
@@ -861,4 +879,43 @@ func (n *normalizer) hasArabicModifier(start, end int) bool {
 		}
 	}
 	return false
+}
+
+// canonRun is one run of combining marks and where each of them came from, so
+// that a stable sort moves the two together.
+type canonRun struct {
+	runes []rune
+	from  []int
+}
+
+func (c canonRun) Len() int           { return len(c.runes) }
+func (c canonRun) Less(i, j int) bool { return CombiningClass(c.runes[i]) < CombiningClass(c.runes[j]) }
+func (c canonRun) Swap(i, j int) {
+	c.runes[i], c.runes[j] = c.runes[j], c.runes[i]
+	c.from[i], c.from[j] = c.from[j], c.from[i]
+}
+
+// orderCanonically puts one run of marks into canonical order, stably.
+//
+// The threshold is where an insertion sort stops being the cheaper of the two.
+// Every combining sequence in ordinary text is far below it — a Vietnamese
+// vowel carries two marks, a Thai syllable three — so the sort call is reached
+// only by text written to reach it.
+const canonInsertionMax = 16
+
+func orderCanonically(runes []rune, from []int) {
+	if len(runes) < 2 {
+		return
+	}
+	if len(runes) <= canonInsertionMax {
+		for i := 1; i < len(runes); i++ {
+			cc := CombiningClass(runes[i])
+			for j := i; j > 0 && CombiningClass(runes[j-1]) > cc; j-- {
+				runes[j-1], runes[j] = runes[j], runes[j-1]
+				from[j-1], from[j] = from[j], from[j-1]
+			}
+		}
+		return
+	}
+	sort.Stable(canonRun{runes: runes, from: from})
 }

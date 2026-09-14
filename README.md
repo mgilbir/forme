@@ -158,7 +158,7 @@ settled by asking CoreText as a third opinion rather than by argument. They are
 listed with their reasons in `shape/harfbuzz_test.go` and pinned in the corpora,
 so a difference that stops being deliberate fails the test.
 
-Beyond the suites: 31 fuzz targets, thirty-one of them scheduled weekly, a
+Beyond the suites: 32 fuzz targets, thirty-two of them scheduled weekly, a
 differential fuzzer against HarfBuzz that generates text rather than listing it,
 and a CoreText harness for the questions two implementations cannot settle
 between them.
