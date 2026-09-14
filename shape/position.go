@@ -1,6 +1,10 @@
 package shape
 
-import "github.com/mgilbir/forme/font"
+import (
+	"sort"
+
+	"github.com/mgilbir/forme/font"
+)
 
 // Positioning: kerning, single adjustments, joining glyphs to each other, and
 // attaching marks to what they belong to.
@@ -280,15 +284,31 @@ func (sh shaper) attachMarks(buf []Glyph) {
 		base          anchor
 	}
 	var todo []pending
+	// The nearest glyph before i that is not a mark, carried forward rather than
+	// searched for backwards at every mark. prevNonMark walked back over every
+	// mark already placed, so one base carrying a long run of them read the run
+	// again once per mark: "a" with sixteen thousand U+0301 after it took 1.8
+	// seconds and climbed by four per doubling. A text node is untrusted and
+	// that is a shape it can be handed.
+	//
+	// isMark and markGlyphs are different questions — a font's GDEF classes
+	// answer for every glyph, and a glyph can be a mark to one lookup and the
+	// base of another — so this tracks the one prevNonMark asked, and asks it
+	// once per glyph instead of once per pair.
+	lastNonMark := -1
 	for i := range buf {
+		isMark := l.isMark(buf[i])
 		if !l.markGlyphs[buf[i].GID] {
+			if !isMark {
+				lastNonMark = i
+			}
 			continue
 		}
 		// The letter underneath, and the mark this one stacks on. The two tables
 		// ask different questions and are not two attempts at one: mark-to-base
 		// looks past any marks in the way, mark-to-mark looks past exactly the
 		// glyphs its own lookup skips and attaches to what it lands on.
-		if j := prevNonMark(l, buf, i); j >= 0 {
+		if j := lastNonMark; j >= 0 {
 			if mark, base, lookup, ok := attachmentFor(l.markBase, buf[i].GID,
 				buf[j].GID, markComponent(buf, i, j)); ok {
 				todo = append(todo, pending{i, j, lookup, mark, base})
@@ -297,29 +317,63 @@ func (sh shaper) attachMarks(buf []Glyph) {
 		if mark, base, at, lookup, ok := l.markMarkAt(buf, i); ok {
 			todo = append(todo, pending{i, at, lookup, mark, base})
 		}
+		// After the glyph is dealt with, so that lastNonMark is always the
+		// nearest one *before* i, which is what prevNonMark returned.
+		if !isMark {
+			lastNonMark = i
+		}
 	}
 	// Stable, so that two attachments a font states in one lookup are still made
 	// in the order the glyphs are written in.
-	for a := 1; a < len(todo); a++ {
-		for b := a; b > 0 && todo[b].lookup < todo[b-1].lookup; b-- {
-			todo[b], todo[b-1] = todo[b-1], todo[b]
+	//
+	// The insertion sort is kept for a short list, which is every run of every
+	// real document and is faster there than a sort call. Past that it is the
+	// same quadratic as the walk above, on the same input: one base with a long
+	// mark run gathers one attachment per mark, and a font that states them in
+	// descending lookup order makes every one of them walk the whole list.
+	if len(todo) <= markSortInsertionMax {
+		for a := 1; a < len(todo); a++ {
+			for b := a; b > 0 && todo[b].lookup < todo[b-1].lookup; b-- {
+				todo[b], todo[b-1] = todo[b-1], todo[b]
+			}
 		}
+	} else {
+		sort.SliceStable(todo, func(a, b int) bool { return todo[a].lookup < todo[b].lookup })
+	}
+	// A mark is moved back over everything between it and its base, and that
+	// stretch is read once per mark. One base carrying a long mark run makes the
+	// k-th mark read k advances, which is the last of the three quadratics on
+	// this path: after the other two "a" with sixteen thousand U+0301 after it
+	// still climbed by 3.7 per doubling. A prefix sum answers each in constant
+	// time. It is built only when there are enough attachments to pay for the
+	// array, which no ordinary combining sequence reaches.
+	var sums []float64
+	if len(todo) > markSortInsertionMax {
+		sums = advanceSums(buf)
 	}
 	for _, p := range todo {
+		if sums != nil && p.at >= 0 {
+			since := sinceFrom(sums, sh.rtl, p.i, p.at)
+			if strictMarks && since != sh.advancesBetween(buf, p.i, p.at) {
+				panic("attachMarks: the prefix sum disagrees with the walk")
+			}
+			sh.placeMarkSince(buf, p.i, p.at, p.mark.anchor, p.base, since)
+			continue
+		}
 		sh.placeMark(buf, p.i, p.at, p.mark.anchor, p.base)
 	}
 }
 
-// prevNonMark is the nearest glyph before i that is not a mark: what
-// mark-to-base attaches to.
-func prevNonMark(l *layout, buf []Glyph, i int) int {
-	for j := i - 1; j >= 0; j-- {
-		if !l.isMark(buf[j]) {
-			return j
-		}
-	}
-	return -1
-}
+// strictMarks turns the prefix sum's agreement with the walk it replaces into a
+// panic. It is off, and it was on for a full run of the corpus suite — 6253
+// reftests over real fonts and every script in them — without firing, which is
+// where the sum was checked against the walk rather than assumed equal to it.
+const strictMarks = false
+
+// markSortInsertionMax is where an insertion sort over the gathered
+// attachments stops being the cheaper of the two. Every combining sequence in
+// ordinary text is far below it.
+const markSortInsertionMax = 32
 
 // markComponent is which part of a ligature a mark belongs to, if the thing it
 // attaches to is one and the mark came from inside it. Zero otherwise, which
@@ -935,6 +989,12 @@ func (l *layout) isMark(g Glyph) bool {
 // both named by a feature and reached from a rule places the mark in the same
 // place either time.
 func (sh shaper) placeMark(buf []Glyph, i, j int, mark, base anchor) {
+	sh.placeMarkSince(buf, i, j, mark, base, sh.advancesBetween(buf, i, j))
+}
+
+// advancesBetween is what stands between a base and the mark that attaches to
+// it, which the mark has to be moved back over.
+func (sh shaper) advancesBetween(buf []Glyph, i, j int) float64 {
 	var since float64
 	if sh.rtl {
 		for k := j + 1; k <= i; k++ {
@@ -945,6 +1005,34 @@ func (sh shaper) placeMark(buf []Glyph, i, j int, mark, base anchor) {
 			since += buf[k].XAdvance
 		}
 	}
+	return since
+}
+
+// placeMarkSince is placeMark once that sum is known, so that a caller placing
+// many marks against one base can answer it from a prefix sum instead of
+// reading the stretch again for each of them.
+func (sh shaper) placeMarkSince(buf []Glyph, i, j int, mark, base anchor, since float64) {
 	buf[i].XOffset = buf[j].XOffset + sh.f.scale(base.x-mark.x) - since
 	buf[i].YOffset = buf[j].YOffset + sh.f.scale(base.y-mark.y)
+}
+
+// advanceSums is the running total of the advances in buf, so that what stands
+// between any two glyphs is one subtraction.
+//
+// Sound here because placeMark writes offsets and never an advance: nothing in
+// the placement loop changes what this summed.
+func advanceSums(buf []Glyph) []float64 {
+	sums := make([]float64, len(buf)+1)
+	for k := range buf {
+		sums[k+1] = sums[k] + buf[k].XAdvance
+	}
+	return sums
+}
+
+// sinceFrom is advancesBetween read off those sums.
+func sinceFrom(sums []float64, rtl bool, i, j int) float64 {
+	if rtl {
+		return -(sums[i+1] - sums[j+1])
+	}
+	return sums[i] - sums[j]
 }

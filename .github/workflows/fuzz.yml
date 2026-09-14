@@ -139,6 +139,17 @@ jobs:
           # control character deleted rather than emitted.
           - package: ./css
             target: FuzzTheTokenizerAccountsForEveryCodePoint
+          # The prefix-sum table that made one long word with a letter-spacing
+          # linear again, against the counting it replaces. It is an
+          # optimisation of an existing function and agreeing with that function
+          # is the whole of its correctness.
+          - package: ./paragraph
+            target: FuzzTheSpacingTableAgreesWithCounting
+          # Canonical ordering against the insertion sort UAX #15 states it
+          # with. The fast one is only correct if it is the same stable sort,
+          # and which of two marks of one class comes first is what is drawn.
+          - package: ./shape
+            target: FuzzCanonicalOrderIsAStableSortByClass
           - package: ./brotli
             target: FuzzDecode
           - package: ./font

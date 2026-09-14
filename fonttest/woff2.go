@@ -33,6 +33,12 @@ type WOFF2Table struct {
 	// Transformed says the table is transformed even when Transform is empty,
 	// which is what a transformed loca is: it carries nothing at all.
 	Transformed bool
+	// StatedOrigLength overrides the original length the directory declares,
+	// which a real one states truthfully and a reader has to check. It is a
+	// pointer because zero is worth writing. A small file may declare a table
+	// of any size this way, which is what a decoder's bound on how much it
+	// will decompress is there for.
+	StatedOrigLength *uint32
 }
 
 // WOFF2Options configures a synthetic WOFF 2 font.
@@ -107,7 +113,11 @@ func WOFF2(opts WOFF2Options) []byte {
 		if index == 0x3f {
 			dir = binary.BigEndian.AppendUint32(dir, tag)
 		}
-		dir = appendBase128(dir, uint32(len(t.Data)))
+		origLength := uint32(len(t.Data))
+		if t.StatedOrigLength != nil {
+			origLength = *t.StatedOrigLength
+		}
+		dir = appendBase128(dir, origLength)
 		if transformed {
 			dir = appendBase128(dir, uint32(len(body)))
 		}
