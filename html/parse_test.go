@@ -1097,3 +1097,57 @@ func TestACanvasIsKeptWithItsFallbackContent(t *testing.T) {
 		t.Errorf("the body is\n%s\nwant\n%s", got, want)
 	}
 }
+
+// TestTwoStrayRunsInATableBecomeOneTextNode.
+//
+// Foster parenting is the one rule that inserts a node somewhere other than
+// where the parser stands, and it inserted a fresh text node every time. The
+// ordinary path merges a run into the text already in the parent; this one did
+// not, so a table with two stray runs in it put two text nodes side by side.
+//
+// Adjacent text nodes are a shape nothing downstream is written for — the DOM
+// merges them on insertion and Node's own documentation says no element ever
+// has two text children in a row. Two of them reach layout as two text boxes,
+// which is a boundary in the middle of what the author wrote as one run.
+//
+// Found by fuzzing html.FuzzParse, which had never been scheduled: the target
+// shares its name with css's FuzzParse, so a workflow list checked by name
+// looked complete while covering only one of the two. Eight seconds of fuzzing
+// the day it was scheduled produced "<tABle>0<00".
+func TestTwoStrayRunsInATableBecomeOneTextNode(t *testing.T) {
+	for _, src := range []string{
+		"<tABle>0<00",
+		"<table>a<!---->b</table>",
+		"<table>a<td>|</td>b</table>",
+	} {
+		doc, _, _ := Parse(src)
+		var walk func(*Node)
+		walk = func(n *Node) {
+			last := false
+			for _, c := range n.Children {
+				if c.Type == TextNode && last {
+					t.Errorf("%q put two text nodes in a row; the runs either "+
+						"side of a table are one run and merging should have "+
+						"joined them", src)
+				}
+				last = c.Type == TextNode
+				walk(c)
+			}
+		}
+		walk(doc)
+	}
+
+	// And the text is all there, in order — a merge that dropped a run would
+	// satisfy the walk above.
+	//
+	// The comment is what splits the run in two here rather than a stray "<",
+	// which the fuzzer's own case used: this parser drops a "<" that opens no
+	// tag and reports the document as having a problem, where HTML emits it as
+	// character data. That is a separate question from merging and not one this
+	// test should depend on either way.
+	doc, _, _ := Parse("<table>a<!---->b</table>")
+	if got := doc.TextContent(); got != "ab" {
+		t.Errorf("the document reads %q, want %q — both runs, in the order "+
+			"they were written", got, "ab")
+	}
+}

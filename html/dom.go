@@ -254,6 +254,27 @@ func (n *Node) appendChild(c *Node) {
 	n.Children = append(n.Children, c)
 }
 
+// childBefore is the node insertBefore would put a new child immediately after,
+// or nil when the insertion would be at the front.
+//
+// It exists so that foster parenting can merge a run of text into the text
+// already there, the way ordinary insertion does. Two adjacent text nodes are a
+// shape no consumer should have to handle, and a table is the one place the
+// parser inserts somewhere other than where it stands.
+func (n *Node) childBefore(before *Node) *Node {
+	at := len(n.Children)
+	for i, existing := range n.Children {
+		if existing == before {
+			at = i
+			break
+		}
+	}
+	if at == 0 {
+		return nil
+	}
+	return n.Children[at-1]
+}
+
 // insertBefore adds a child immediately in front of one already there, or at
 // the end when that one is not a child of n.
 //

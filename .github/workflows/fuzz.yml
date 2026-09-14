@@ -119,6 +119,22 @@ jobs:
           # of whatever it was given, with no stylesheet to muddy the answer.
           - package: ./style
             target: FuzzInheritance
+          # The parsers and decoders that read untrusted bytes, which were
+          # missing from this list rather than excluded from it. html's
+          # FuzzParse is the one that hid: css has a FuzzParse too, so the
+          # repository's twenty-eight targets carry twenty-seven distinct
+          # names, and a list that looked complete covered only one of the two.
+          # TestEveryFuzzTargetIsScheduled will not let that happen again.
+          - package: ./html
+            target: FuzzParse
+          - package: ./brotli
+            target: FuzzDecode
+          - package: ./font
+            target: FuzzDecodeWOFF2
+          - package: ./style
+            target: FuzzApply
+          - package: ./style
+            target: FuzzApplyIsDeterministic
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
