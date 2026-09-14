@@ -122,11 +122,17 @@ jobs:
           # The parsers and decoders that read untrusted bytes, which were
           # missing from this list rather than excluded from it. html's
           # FuzzParse is the one that hid: css has a FuzzParse too, so the
-          # repository's twenty-eight targets carry twenty-seven distinct
-          # names, and a list that looked complete covered only one of the two.
+          # repository's targets carry one fewer distinct name than there are
+          # targets, and a list that looked complete covered only one of the two.
           # TestEveryFuzzTargetIsScheduled will not let that happen again.
           - package: ./html
             target: FuzzParse
+          # The tokenizer read from the input side: every byte either reaches a
+          # token or belongs to a construct HTML discards. FuzzParse cannot see
+          # a character being deleted, because a tree missing one is still a
+          # well-formed tree.
+          - package: ./html
+            target: FuzzTheTokenizerAccountsForEveryByte
           - package: ./brotli
             target: FuzzDecode
           - package: ./font
