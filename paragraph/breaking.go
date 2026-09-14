@@ -794,6 +794,17 @@ func TrailingSpacing(item Item) style.Unit {
 	// and is between two characters that a line break puts on different lines.
 	// Two characters on different lines are not adjacent and get no gap.
 	out := item.Autospace
+	if item.Spacing.Letter == 0 {
+		// Nothing to discount, and nothing below can say otherwise: every
+		// branch of the rest adds either zero or item.Spacing.Letter, which is
+		// the same number here. Asked anyway, it is not free — it walks the
+		// item's grapheme clusters to find out whether §8.2 suppresses the
+		// tracking, and overflows() asks it of the *whole remaining run* at
+		// every candidate the fill considers. For one long word that is a walk
+		// of the word per line, which is quadratic in the word and was 57% of
+		// the time laying one out.
+		return out
+	}
 	if AllIgnorable(item.Text) {
 		// A run of nothing but zero-width formatting characters. It has no
 		// character of its own for a spacing to follow, and the spacing that

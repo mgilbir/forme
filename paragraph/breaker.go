@@ -273,6 +273,14 @@ func (br *Breaker) spanOf(item, piece Item, whole string, from, to int, before, 
 	return hi.Sub(lo).Add(SpacingAdvance(piece.Text, item.Spacing))
 }
 
+// spanPx is an item's own text measured under one shaping, in CSS pixels and
+// before any quantization — so that two of them can be subtracted without each
+// having been rounded first.
+func (br *Breaker) spanPx(item Item, how Shaping) (width float64, ok bool) {
+	head, through := br.mergedSpan(item.Face, item.Text, item.Size.Px(), how)
+	return through - head, true
+}
+
 // LineEndCorrection is what to add to an item's width because it ends a line.
 //
 // A pair adjusts the *left* glyph's advance, so a face that kerns shrinks an
@@ -300,7 +308,7 @@ func (br *Breaker) LineEndCorrection(item Item) style.Unit {
 	if item.Face == nil || item.Upright || item.Text == "" {
 		return 0
 	}
-	whole, base, before, after, kerns := item.group()
+	whole, base, before, after, _ := item.group()
 	end := base + len(item.Text)
 	if end > len(whole) || base > end {
 		// The item is not the stretch of its own group its fields describe,
@@ -309,9 +317,53 @@ func (br *Breaker) LineEndCorrection(item Item) style.Unit {
 		// it, so nothing is done.
 		return 0
 	}
-	inContext := br.spanOf(item, item, whole, base, end, before, after, kerns)
-	atEnd := br.spanOf(item, item, whole[:end], base, end, before, "", kerns)
-	return atEnd.Sub(inContext)
+	// Windows cut from the group's own string, and *bounded* ones. Measuring
+	// the group truncated at the item's end is the obvious way to ask this and
+	// is quadratic: the truncation is a different string for every line the
+	// word is broken across, so the shaping memo never answers twice and each
+	// line end shapes another prefix of the word. One long word went from 109ms
+	// to 331ms at sixteen thousand characters before this was measured, which
+	// is the fault SplitHead's note describes being fixed once already.
+	//
+	// The two measurements differ only in what follows, so everything about the
+	// leading edge — the context that chose the glyphs, a ligature the group
+	// forms in front of the item — is the same in both and cancels. What is
+	// left is the boundary at the far end, which is the whole of what is being
+	// taken off.
+	// The item's own flag and not the cut's. A cut boundary is one the font
+	// states its pairs over whatever the outer context was — splitItemAt sets
+	// this to true for exactly that reason — and the cut remembers what the
+	// *original* item carried, which for a word with no neighbours is false.
+	// Measuring with the rest of the word as context rather than as glyphs puts
+	// the pair on that boundary, so the flag is what decides whether there is
+	// anything to give back at all: taken from the cut it is false, both
+	// measurements come out alike, and the correction is silently nought.
+	lead := ContextBefore(before + ContextBefore(whole[:base]))
+	trail := ContextAfter(ContextAfter(whole[end:]) + after)
+	how := Shaping{Before: lead, After: trail, ContextKerns: item.ContextKerns, Off: item.Off}
+	withTail, _ := br.spanPx(item, how)
+	how.After = ""
+	alone, _ := br.spanPx(item, how)
+	if delta := alone - withTail; delta != 0 {
+		// Applied to the group's own measurement rather than replacing it, and
+		// that is not a detail. The item's width is two ends of a *group*
+		// rounded separately, so that the runs of one word tile it exactly;
+		// measuring the item on its own rounds two different ends and the two
+		// regimes disagree by a sixty-fourth. "AVATAR" came out 2338 whole and
+		// 2339 spanned — one unit, and the fault
+		// TestAWordCutInsideTilesTheSameWay is about.
+		//
+		// So the group's far end moves by the amount the kern was worth and is
+		// rounded once, and the near end never enters the answer.
+		_, through := shape.GroupSpan(br.advances(groupKey{
+			face: item.Face, whole: whole, before: before, after: after,
+			kerns: item.ContextKerns, off: item.Off,
+		}), base, end, item.Size.Px())
+		was, _ := style.FromPx(through)
+		now, _ := style.FromPx(through + delta)
+		return now.Sub(was)
+	}
+	return 0
 }
 
 // clusters is where an item's text may be cut, as offsets into that item's own

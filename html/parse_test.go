@@ -1097,3 +1097,182 @@ func TestACanvasIsKeptWithItsFallbackContent(t *testing.T) {
 		t.Errorf("the body is\n%s\nwant\n%s", got, want)
 	}
 }
+
+// TestTwoStrayRunsInATableBecomeOneTextNode.
+//
+// Foster parenting is the one rule that inserts a node somewhere other than
+// where the parser stands, and it inserted a fresh text node every time. The
+// ordinary path merges a run into the text already in the parent; this one did
+// not, so a table with two stray runs in it put two text nodes side by side.
+//
+// Adjacent text nodes are a shape nothing downstream is written for — the DOM
+// merges them on insertion and Node's own documentation says no element ever
+// has two text children in a row. Two of them reach layout as two text boxes,
+// which is a boundary in the middle of what the author wrote as one run.
+//
+// Found by fuzzing html.FuzzParse, which had never been scheduled: the target
+// shares its name with css's FuzzParse, so a workflow list checked by name
+// looked complete while covering only one of the two. Eight seconds of fuzzing
+// the day it was scheduled produced "<tABle>0<00".
+func TestTwoStrayRunsInATableBecomeOneTextNode(t *testing.T) {
+	for _, src := range []string{
+		"<tABle>0<00",
+		"<table>a<!---->b</table>",
+		"<table>a<td>|</td>b</table>",
+	} {
+		doc, _, _ := Parse(src)
+		var walk func(*Node)
+		walk = func(n *Node) {
+			last := false
+			for _, c := range n.Children {
+				if c.Type == TextNode && last {
+					t.Errorf("%q put two text nodes in a row; the runs either "+
+						"side of a table are one run and merging should have "+
+						"joined them", src)
+				}
+				last = c.Type == TextNode
+				walk(c)
+			}
+		}
+		walk(doc)
+	}
+
+	// And the text is all there, in order — a merge that dropped a run would
+	// satisfy the walk above.
+	//
+	// The comment is what splits the run in two here rather than a stray "<",
+	// which the fuzzer's own case used: this parser drops a "<" that opens no
+	// tag and reports the document as having a problem, where HTML emits it as
+	// character data. That is a separate question from merging and not one this
+	// test should depend on either way.
+	doc, _, _ := Parse("<table>a<!---->b</table>")
+	if got := doc.TextContent(); got != "ab" {
+		t.Errorf("the document reads %q, want %q — both runs, in the order "+
+			"they were written", got, "ab")
+	}
+}
+
+// TestAStrayLessThanIsCharacterData: HTML's tag open state emits a "<" that
+// begins no tag as character data and reconsumes the byte after it.
+//
+//	Anything else: This is an invalid-first-character-of-tag-name parse
+//	error. Emit a U+003C LESS-THAN SIGN character token. Reconsume in the
+//	data state.
+//
+// This parser used to drop the character and report the document instead, on
+// the reasoning that an unescaped "<" in a template is a mistake and the
+// difference is invisible until it swallows a line. The report is right and is
+// kept — the document *is* malformed and an author wants to know. Dropping the
+// character was not: nothing is swallowed by emitting it, which is exactly what
+// separates this from reading it as a tag, and what the old rule did was delete
+// a character the author wrote from the page and from the text extracted out of
+// it.
+//
+// The cases that are *not* this are as much the point. "<!" and "</" begin a
+// bogus comment, which HTML throws away, so those keep nothing — a rule that
+// emitted every "<" would put the openers of comments and end tags into the
+// text.
+func TestAStrayLessThanIsCharacterData(t *testing.T) {
+	for _, tc := range []struct{ src, want string }{
+		{"a<0b", "a<0b"},
+		{"a<", "a<"},
+		{"a< b", "a< b"},
+		// The second "<" here *does* begin a tag — "<b" — which never closes,
+		// so HTML drops it at end of file. Only the first one is text.
+		{"a<<b", "a<"},
+		{"a<<b>c</b>", "a<c"},
+		{"a<=b", "a<=b"},
+		{"1<2 and 3>2", "1<2 and 3>2"},
+
+		// A bogus comment, which is thrown away — the "<" goes with it.
+		{"a<!b", "a"},
+		{"a</0b", "a"},
+
+		// And a real tag is still a tag, or the rule has eaten the language.
+		{"a<b>c</b>d", "acd"},
+	} {
+		doc, _, _ := Parse(tc.src)
+		if got := doc.TextContent(); got != tc.want {
+			t.Errorf("%q reads %q, want %q", tc.src, got, tc.want)
+		}
+	}
+
+	// The document is still reported as malformed: emitting the character is
+	// about what reaches the page, not about pretending the markup was right.
+	if _, errs, ok := Parse("a<0b"); ok || len(errs) == 0 {
+		t.Errorf(`"a<0b" parsed with ok=%v and %d problems; a "<" that begins `+
+			`no tag is a parse error whatever is done with the character`, ok, len(errs))
+	}
+}
+
+// TestAFosterParentedRunDoesNotDropTheRunBeforeIt: text is accumulated into a
+// buffer and written into its node by flushText, so any path that replaces the
+// buffer without flushing first drops whatever was in it.
+//
+// The ordinary path flushes before it makes a fresh text node, and so does the
+// foster path when it merges into one. The foster path's *fresh node* branch
+// did not, and the run in the buffer at that moment belonged to a different
+// node inside the table.
+//
+// Reaching it takes three things at once, which is why no hand-written document
+// found it:
+//
+//   - a run kept inside the table, which means a run that is entirely white
+//     space, since anything else is foster-parented instead;
+//   - a second run appended to that same node, because the buffer only holds
+//     more than the node's own Text once something has been appended — a node
+//     is created with its first run already in Text;
+//   - no token at all between those two runs, or the token loop flushes. A
+//     construct the tokenizer drops is exactly that: a bogus comment or a
+//     processing instruction produces no token, so the two runs arrive
+//     back to back.
+//
+// Then a third, non-white-space run is foster-parented to a fresh node, and the
+// two spaces standing in the table are written as one.
+func TestAFosterParentedRunDoesNotDropTheRunBeforeIt(t *testing.T) {
+	for _, tc := range []struct{ src, want string }{
+		// Two spaces are written inside the table and two must survive. The
+		// foster-parented "a" is read before the table, which is where foster
+		// parenting puts it.
+		{"<table> <!x> <!y>a", "a  "},
+		// A processing instruction is dropped the same way a bogus comment is.
+		{"<table> <?x> <?y>a", "a  "},
+		// Longer runs, so a count that is merely non-zero cannot pass.
+		{"<table>  <!x>  <!y>b", "b    "},
+		{"<table> <!x> <!y> <!z>a", "a   "},
+		// Tabs are white space too, and are not spaces.
+		{"<table>\t<!x>\t<!y>a", "a\t\t"},
+
+		// The branch next door, which always flushed: here the second run is
+		// merged into the foster-parented node rather than starting a fresh
+		// one, because there is already text in front of the table.
+		{"x<table> <!y>a", "xa "},
+
+		// The other two places the accumulator is replaced. Both already
+		// flushed, and nothing in this package noticed when the flush was taken
+		// out, which is the same as not having it: a later edit removes it and
+		// the suite stays green. These are the documents that reach them.
+		//
+		// The ordinary fresh-node path, entered while the accumulator holds a
+		// run belonging to the foster-parented node in front of the table. "y"
+		// is appended to that node and the white space that follows starts a
+		// fresh node inside the table, so without the flush "y" is dropped.
+		{"x<table>y<!z> ", "xy "},
+		{"x<table>y<!z> <!q> ", "xy  "},
+		// The foster merge branch, entered while the accumulator holds a run
+		// belonging to a node inside the table: two spaces are written there,
+		// then "w" merges into the text in front of the table, so without the
+		// flush the second space is dropped.
+		{"x<table> <!y> <!z>w", "xw  "},
+
+		// And the case with nothing to lose, which must not change: only one
+		// run is written inside the table, so the buffer holds exactly what the
+		// node already has.
+		{"<table> <!x> a", " a "},
+	} {
+		doc, _, _ := Parse(tc.src)
+		if got := doc.TextContent(); got != tc.want {
+			t.Errorf("%q reads %q, want %q", tc.src, got, tc.want)
+		}
+	}
+}

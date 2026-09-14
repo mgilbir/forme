@@ -332,6 +332,31 @@ func (p *parser) text(tk token) {
 		if to, before, ok := p.fosterParentOf(""); ok {
 			p.tok.fail(tk.offset, "text was written inside a table, outside any cell; "+
 				"it belongs before the table and is read there")
+			// Merged with the text already in front of the table, exactly as
+			// the ordinary path below merges with the text already in the
+			// parent. Foster parenting is the one rule that inserts somewhere
+			// other than where the parser stands, and it used to insert a fresh
+			// node every time — so a table with two runs of stray text in it,
+			// which is "<table>0<00" once the tokenizer has finished with it,
+			// put two text nodes side by side in the body. Every consumer is
+			// written against runs being merged.
+			if last := to.childBefore(before); last != nil && last.Type == TextNode {
+				if p.pending != last {
+					p.flushText()
+					p.pending, p.pendingBuf = last, append(p.pendingBuf[:0], last.Text...)
+				}
+				p.pendingBuf = append(p.pendingBuf, tk.text...)
+				return
+			}
+			// Flushed for the same reason the ordinary path below flushes
+			// before it replaces the accumulator: whatever run is in there
+			// belongs to a different node, and replacing it without writing it
+			// back is that run being dropped. The merge branch above already
+			// does this; this one did not, and the difference is only visible
+			// when two text tokens arrive with no token between them, which is
+			// what a construct the tokenizer drops does — "<table> <!x> <!y>a"
+			// wrote two spaces into the table and kept one.
+			p.flushText()
 			p.nodes++
 			node := &Node{Type: TextNode, Text: tk.text, Offset: tk.offset}
 			to.insertBefore(node, before)

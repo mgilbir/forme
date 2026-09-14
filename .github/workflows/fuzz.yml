@@ -119,6 +119,34 @@ jobs:
           # of whatever it was given, with no stylesheet to muddy the answer.
           - package: ./style
             target: FuzzInheritance
+          # The parsers and decoders that read untrusted bytes, which were
+          # missing from this list rather than excluded from it. html's
+          # FuzzParse is the one that hid: css has a FuzzParse too, so the
+          # repository's targets carry one fewer distinct name than there are
+          # targets, and a list that looked complete covered only one of the two.
+          # TestEveryFuzzTargetIsScheduled will not let that happen again.
+          - package: ./html
+            target: FuzzParse
+          # The tokenizer read from the input side: every byte either reaches a
+          # token or belongs to a construct HTML discards. FuzzParse cannot see
+          # a character being deleted, because a tree missing one is still a
+          # well-formed tree.
+          - package: ./html
+            target: FuzzTheTokenizerAccountsForEveryByte
+          # The same property for the CSS tokenizer, where nothing was losing a
+          # character but three oracles could not have said so: the unit suite,
+          # the css-parsing-tests corpus and FuzzTokenize all pass with a stray
+          # control character deleted rather than emitted.
+          - package: ./css
+            target: FuzzTheTokenizerAccountsForEveryCodePoint
+          - package: ./brotli
+            target: FuzzDecode
+          - package: ./font
+            target: FuzzDecodeWOFF2
+          - package: ./style
+            target: FuzzApply
+          - package: ./style
+            target: FuzzApplyIsDeterministic
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
