@@ -532,13 +532,21 @@ func (t *tokenizer) markup() (token, bool) {
 		return t.endTag()
 	}
 
-	// "<" that cannot begin a tag. A browser reads it as text; this refuses,
-	// because in a template it is an unescaped character the author meant to
-	// write as "&lt;" and the difference is invisible until it swallows a line.
+	// "<" that cannot begin a tag. HTML's tag open state emits it as character
+	// data and reconsumes the byte after it, and that is what this does.
+	//
+	// It used to drop the character and report the document instead, on the
+	// reasoning that an unescaped "<" in a template is a mistake and the
+	// difference is invisible until it swallows a line. The report is right and
+	// is kept. Dropping it was not: nothing is swallowed by emitting the
+	// character — that is what makes this different from reading it as a tag —
+	// and what the old rule did was delete a character the author wrote from
+	// the page and from the text extracted out of it. "a<0b" rendered as
+	// "a0b" here and as "a<0b" in every browser.
 	if t.pos+1 >= len(t.src) || !isNameStart(t.src[t.pos+1]) {
 		t.fail(start, "a \"<\" that does not begin a tag; write \"&lt;\" for a literal one")
 		t.pos++
-		return token{}, false
+		return token{kind: tokText, text: "<", offset: start}, true
 	}
 	return t.startTag(), true
 }

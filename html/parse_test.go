@@ -1151,3 +1151,56 @@ func TestTwoStrayRunsInATableBecomeOneTextNode(t *testing.T) {
 			"they were written", got, "ab")
 	}
 }
+
+// TestAStrayLessThanIsCharacterData: HTML's tag open state emits a "<" that
+// begins no tag as character data and reconsumes the byte after it.
+//
+//	Anything else: This is an invalid-first-character-of-tag-name parse
+//	error. Emit a U+003C LESS-THAN SIGN character token. Reconsume in the
+//	data state.
+//
+// This parser used to drop the character and report the document instead, on
+// the reasoning that an unescaped "<" in a template is a mistake and the
+// difference is invisible until it swallows a line. The report is right and is
+// kept — the document *is* malformed and an author wants to know. Dropping the
+// character was not: nothing is swallowed by emitting it, which is exactly what
+// separates this from reading it as a tag, and what the old rule did was delete
+// a character the author wrote from the page and from the text extracted out of
+// it.
+//
+// The cases that are *not* this are as much the point. "<!" and "</" begin a
+// bogus comment, which HTML throws away, so those keep nothing — a rule that
+// emitted every "<" would put the openers of comments and end tags into the
+// text.
+func TestAStrayLessThanIsCharacterData(t *testing.T) {
+	for _, tc := range []struct{ src, want string }{
+		{"a<0b", "a<0b"},
+		{"a<", "a<"},
+		{"a< b", "a< b"},
+		// The second "<" here *does* begin a tag — "<b" — which never closes,
+		// so HTML drops it at end of file. Only the first one is text.
+		{"a<<b", "a<"},
+		{"a<<b>c</b>", "a<c"},
+		{"a<=b", "a<=b"},
+		{"1<2 and 3>2", "1<2 and 3>2"},
+
+		// A bogus comment, which is thrown away — the "<" goes with it.
+		{"a<!b", "a"},
+		{"a</0b", "a"},
+
+		// And a real tag is still a tag, or the rule has eaten the language.
+		{"a<b>c</b>d", "acd"},
+	} {
+		doc, _, _ := Parse(tc.src)
+		if got := doc.TextContent(); got != tc.want {
+			t.Errorf("%q reads %q, want %q", tc.src, got, tc.want)
+		}
+	}
+
+	// The document is still reported as malformed: emitting the character is
+	// about what reaches the page, not about pretending the markup was right.
+	if _, errs, ok := Parse("a<0b"); ok || len(errs) == 0 {
+		t.Errorf(`"a<0b" parsed with ok=%v and %d problems; a "<" that begins `+
+			`no tag is a parse error whatever is done with the character`, ok, len(errs))
+	}
+}

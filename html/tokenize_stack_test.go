@@ -99,8 +99,6 @@ func TestEveryDroppedConstructIsConsumed(t *testing.T) {
 		{"a CDATA-shaped declaration", "<![CDATA[x]]>"},
 		{"a processing instruction", "<?x?>"},
 		{"a processing instruction with no terminator", "<?x"},
-		{"a stray less-than sign", "<="},
-		{"a stray less-than sign at the end", "<"},
 		{"a nameless end tag", "</ >"},
 		{"a nameless end tag with no terminator", "</ "},
 	} {
@@ -122,6 +120,23 @@ func TestEveryDroppedConstructIsConsumed(t *testing.T) {
 	tok, ok := tk.step()
 	if !ok || tok.kind != tokComment {
 		t.Errorf("a closed comment produced %v, %v; want a comment token", tok.kind, ok)
+	}
+
+	// A stray "<" was on that list too, and is not: HTML emits it as character
+	// data, so it produces a text token now rather than being dropped. The
+	// property this file is about is unchanged and still has to hold — it must
+	// consume itself, or next spins.
+	for _, src := range []string{"<=", "<"} {
+		tk := newTokenizer(src)
+		before := tk.pos
+		tok, ok := tk.step()
+		if !ok || tok.kind != tokText || tok.text != "<" {
+			t.Errorf("%q produced %v %q, %v; want a text token holding \"<\"",
+				src, tok.kind, tok.text, ok)
+		}
+		if tk.pos <= before {
+			t.Errorf("%q left pos at %d, so next would spin for ever", src, tk.pos)
+		}
 	}
 	if tk.pos != len("<!---->") {
 		t.Errorf("a closed comment left pos at %d of %d", tk.pos, len("<!---->"))
