@@ -33,6 +33,15 @@ type WOFFOptions struct {
 	LieAboutOrigLength uint32
 	// Signature overrides the leading four bytes, for the WOFF 2 refusal.
 	Signature uint32
+	// StatedNumTables writes this count in the header instead of the number of
+	// tables given. numTables is two bytes a font may write anything into and
+	// it sizes the directory a reader walks, so a fixture has to be able to
+	// state one that is not true. Padding makes the file long enough that the
+	// count is what is being tested rather than the file's length.
+	StatedNumTables *uint16
+	// Padding is written after everything else, to make the file longer than
+	// its content needs.
+	Padding int
 }
 
 // WOFF builds a WOFF 1.0 font from the given tables.
@@ -94,7 +103,11 @@ func WOFF(opts WOFFOptions) []byte {
 	}
 	binary.BigEndian.PutUint32(out[0:], sig)
 	binary.BigEndian.PutUint32(out[4:], flavor)
-	binary.BigEndian.PutUint16(out[12:], uint16(len(tables)))
+	numTables := uint16(len(tables))
+	if opts.StatedNumTables != nil {
+		numTables = *opts.StatedNumTables
+	}
+	binary.BigEndian.PutUint16(out[12:], numTables)
 	// totalSfntSize, which a decoder must not size anything from.
 	total := 12 + 16*len(tables)
 	for _, b := range bodies {
@@ -116,6 +129,12 @@ func WOFF(opts WOFFOptions) []byte {
 			out = append(out, 0)
 		}
 	}
+	if opts.Padding > 0 {
+		out = append(out, make([]byte, opts.Padding)...)
+	}
+	// After the padding, so that a padded file still states its own length. The
+	// length is checked before anything else is read, and a fixture that got it
+	// wrong would be testing that check rather than whatever it meant to.
 	binary.BigEndian.PutUint32(out[8:], uint32(len(out))) // length
 	return out
 }
