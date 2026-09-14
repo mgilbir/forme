@@ -95,3 +95,75 @@ func TestOneLongWordDoesNotShapeAPrefixPerLine(t *testing.T) {
 			chars, mb, budgetMB)
 	}
 }
+
+// TestOneLongWordDoesNotWalkItsClustersPerLine is the other half of the same
+// document's cost, and a different fault in a different place.
+//
+// overflows() asks trailingSpacing() of a candidate before deciding whether it
+// fits, and trailingSpacing asked §8.2 whether cursive tracking suppresses the
+// letter-spacing after the item's last character. Answering that walks the
+// item's grapheme clusters — and during a fill the item is the *whole remaining
+// run*, so one long word walked the rest of the word at every candidate the
+// line considered. It was 57% of the time in a CPU profile of laying one out.
+//
+// The answer was never needed. Every branch of trailingSpacing adds either zero
+// or the declared letter-spacing, and where there is no letter-spacing those are
+// the same number — which is almost every document. So the question is not asked
+// unless the answer can matter.
+//
+//	                 asked only when it matters      asked always
+//	16000 chars            44 ms,     42 MB        127 ms,   107 MB
+//	32000 chars            97 ms,     88 MB        402 ms,   370 MB
+//
+// That is what took this path from about 3.3x per doubling to about 2.2x — from
+// quadratic to linear, which is the shape and not the constant.
+//
+// Allocation again rather than the clock, for the reason above: it does not care
+// what else is running. The bound is 200 MB at thirty-two thousand characters,
+// twice the honest cost and under half the faulty one.
+func TestOneLongWordDoesNotWalkItsClustersPerLine(t *testing.T) {
+	const chars = 32000
+	const budgetMB = 200
+
+	// Courier and no letter-spacing, which is the case the short-circuit is for
+	// and the one nearly every document is.
+	built := Build(Input{
+		HTML: `<div id="d">` + strings.Repeat("a", chars) + "</div>",
+		CSS: []Stylesheet{{Source: noDefaults +
+			`#d { font-family: Courier; font-size: 16px; overflow-wrap: break-word }`}}})
+	if built.Root == nil {
+		t.Fatal("the document produced no boxes")
+	}
+	w, _ := style.FromPx(600)
+	h, _ := style.FromPx(1000000)
+
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	frag := Layout(built.Root, Size{W: w, H: h}, nil, NewRecorder(nil))
+	runtime.ReadMemStats(&after)
+
+	lines := 0
+	var walk func(*Fragment)
+	walk = func(f *Fragment) {
+		if f == nil {
+			return
+		}
+		lines += len(f.Lines)
+		for _, c := range f.Children {
+			walk(c)
+		}
+	}
+	walk(frag)
+	if lines < 100 {
+		t.Fatalf("the word set %d lines; a fault that is per-line needs lines "+
+			"to show", lines)
+	}
+
+	if mb := (after.TotalAlloc - before.TotalAlloc) / (1 << 20); mb > budgetMB {
+		t.Errorf("laying out one %d-character word allocated %d MB, over the "+
+			"%d MB budget. The measured cost is about 88 MB; walking the "+
+			"clusters at every candidate is about 370 MB, which is what this "+
+			"guards", chars, mb, budgetMB)
+	}
+}
