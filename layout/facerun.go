@@ -168,8 +168,27 @@ func (l *layouter) faceRunsFor(b *Box, primary *shape.Face, text string) []faceR
 			// same non-answer.
 			if alt, found := set.FaceFor(cluster, bold, italic); found {
 				want, fromFallback = alt, true
+			} else if parts := clusterFaceRuns(set, cluster, primary, bold, italic); parts != nil {
+				// No one face has the whole cluster, but its parts have faces
+				// of their own. "⛹🏿" is the case: Noto Sans Symbols has the
+				// person, Unifont Upper has the skin tone, neither has both —
+				// and the answer "no face" left the whole cluster with the
+				// primary, which has neither either, so both characters came
+				// out as nothing in a document the engine had faces for.
+				//
+				// Cutting a cluster is a real cost: the parts are shaped apart,
+				// so a face cannot draw the two as one mark. It is taken only
+				// here, where the alternative is not a worse shape but no shape
+				// — the cluster is already being set in a face that will draw
+				// blanks for every character of it. A browser cuts it too.
+				flush(lo)
+				for _, part := range parts {
+					runs = append(runs, part)
+				}
+				start, cur, curSub = hi, primary, false
+				continue
 			}
-			// Not found: the cluster stays with the primary face and is
+			// Still nothing: the cluster stays with the primary face and is
 			// reported missing by checkGlyphs, which is what happened before
 			// this file existed and is still the right answer — there is no
 			// face to move it to.
@@ -447,4 +466,57 @@ func drawsNoPaper(cluster string) bool {
 		}
 	}
 	return true
+}
+
+// clusterFaceRuns cuts one grapheme cluster into the longest stretches a single
+// face can set, for the case where no face can set the whole of it.
+//
+// It returns nil unless the cut is worth making: two or more stretches, and at
+// least one of them reaching a face that has what it holds. A cluster no part of
+// which can be set is left whole, because cutting it would trade one run of
+// missing glyphs for several and tell the reader nothing new.
+//
+// A character that sets no paper — a joiner, a variation selector — never
+// decides a face and never starts a stretch. It stays with the stretch it
+// follows, which keeps a ZWJ sequence from being cut at the joiner and keeps the
+// joiner out of a face chosen for it alone.
+func clusterFaceRuns(set FallbackFontSet, cluster string, primary *shape.Face, bold, italic bool) []faceRun {
+	type piece struct {
+		text string
+		face *shape.Face
+		sub  bool
+	}
+	var pieces []piece
+	for _, r := range cluster {
+		if isDefaultIgnorable(r) && len(pieces) > 0 {
+			pieces[len(pieces)-1].text += string(r)
+			continue
+		}
+		// A part with no face of its own stays with the primary, as it would
+		// have if the cluster were left whole: every run carries a face, and a
+		// part nobody can set is still reported missing by checkGlyphs.
+		face, sub := primary, false
+		if alt, ok := set.FaceFor(string(r), bold, italic); ok {
+			face, sub = alt, true
+		}
+		if n := len(pieces); n > 0 && pieces[n-1].face == face {
+			pieces[n-1].text += string(r)
+			continue
+		}
+		pieces = append(pieces, piece{text: string(r), face: face, sub: sub})
+	}
+	// Fewer than two stretches is nothing to cut. That also covers the cluster
+	// no face can set at all: every one of its characters keeps the primary, so
+	// the stretches are all the same face and merge back into one. A separate
+	// "did any part find a face" test was written here first and was dead — it
+	// cannot be false while there are two stretches, because a part that finds
+	// nothing has the same face as the part before it.
+	if len(pieces) < 2 {
+		return nil
+	}
+	out := make([]faceRun, 0, len(pieces))
+	for _, p := range pieces {
+		out = append(out, faceRun{Text: p.text, Face: p.face, substituted: p.sub})
+	}
+	return out
 }
