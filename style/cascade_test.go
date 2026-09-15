@@ -620,13 +620,13 @@ func itoa(i int) string {
 func TestAtRulesAreReported(t *testing.T) {
 	doc := parseDoc(t, "<p>x</p>")
 	got := Apply(doc, []Sheet{author(t,
-		"@page { margin: 1cm } @font-face { src: url(x) } @supports (a: b) { p { color: red } }")})
+		"@page { margin: 1cm } @font-face { src: url(x) } @layer base { p { color: red } }")})
 
 	names := map[string]bool{}
 	for _, f := range got.Findings {
 		names[f.Property] = true
 	}
-	for _, want := range []string{"@font-face", "@supports"} {
+	for _, want := range []string{"@font-face", "@layer"} {
 		if !names[want] {
 			t.Errorf("%s was not reported; findings were %v", want, got.Findings)
 		}
@@ -636,6 +636,8 @@ func TestAtRulesAreReported(t *testing.T) {
 	}
 	// @media is not on that list any more: it is answered rather than skipped,
 	// and a query this engine can read reports nothing at all. See media_test.go.
+	// @supports left it the same way — see supports_test.go — which is why the
+	// control here is @layer.
 	got = Apply(doc, []Sheet{author(t, "@media print { p { color: red } }")})
 	for _, f := range got.Findings {
 		if f.Property == "@media" {
