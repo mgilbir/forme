@@ -361,3 +361,56 @@ func intKeys[V any](m map[int]V) []int {
 	sortInts(out)
 	return out
 }
+
+// GPOSExtensionLookups builds a positioning table whose lookups reach their
+// subtables through the extension indirection, with the real subtables placed
+// past the end of everything a 16-bit offset can address.
+//
+// This is how a large font is laid out and it is the only way to build one:
+// every offset in a layout table is sixteen bits except the extension's, so a
+// LookupList and its lookups have to fit in 64KB between them. A font with more
+// positioning than that puts an eight-byte stub in each lookup and the real
+// subtable far away, which is what extensionOffset is for — and ExtensionSubst
+// does not do it, because it writes the real subtable immediately after the
+// stub, where a 16-bit offset would have reached it anyway.
+//
+// The stubs are found after the fact rather than placed: each carries its index
+// in the offset field, which is patched once the table's own length is known.
+func GPOSExtensionLookups(subs [][]byte, feature string) []byte {
+	const sentinel = 0xF0000000
+
+	lookups := make([]Lookup, len(subs))
+	for i := range subs {
+		stub := make([]byte, 8)
+		binary.BigEndian.PutUint16(stub[0:], 1) // extensionFormat
+		binary.BigEndian.PutUint16(stub[2:], 2) // the real type: PairPos
+		binary.BigEndian.PutUint32(stub[4:], uint32(sentinel|i))
+		lookups[i] = Lookup{Type: 9, Subtables: [][]byte{stub}}
+	}
+	idx := make([]int, len(subs))
+	for i := range idx {
+		idx[i] = i
+	}
+	out := layoutLookups(lookups, map[string][]int{feature: idx})
+
+	// Each stub's offset is from the stub's own start, so the patch needs both
+	// where the stub landed and where its subtable will.
+	for i, sub := range subs {
+		want := uint32(sentinel | i)
+		at := -1
+		for p := 0; p+8 <= len(out); p += 2 {
+			if binary.BigEndian.Uint32(out[p+4:]) == want &&
+				binary.BigEndian.Uint16(out[p:]) == 1 &&
+				binary.BigEndian.Uint16(out[p+2:]) == 2 {
+				at = p
+				break
+			}
+		}
+		if at < 0 {
+			panic("fonttest: an extension stub went missing from the table")
+		}
+		binary.BigEndian.PutUint32(out[at+4:], uint32(len(out)-at))
+		out = append(out, sub...)
+	}
+	return out
+}
