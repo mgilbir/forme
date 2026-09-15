@@ -95,7 +95,9 @@ type candidate struct {
 	value     []css.ComponentValue
 	important bool
 	origin    Origin
-	spec      css.Specificity
+	// layer is the cascade layer the declaration was written in — see layer.go.
+	layer int
+	spec  css.Specificity
 	// order is the position of the declaration in the whole input, which breaks
 	// the remaining ties. Two declarations that are equal in every other term
 	// are decided by which was written later, so this has to be a single
@@ -121,6 +123,18 @@ type Styler struct {
 	// stamps on a finding raised while one is. It is empty outside prepare,
 	// which is where the findings that belong to no sheet are raised.
 	sheet string
+	// The cascade layer being prepared, and the layers seen so far. layer is
+	// zero outside any @layer, which is not layer number zero but the band
+	// above every layer for a normal declaration — see layerRank. layerName is
+	// the full path of the open layer, which is what makes a name written
+	// inside another a sublayer of it.
+	layer      int
+	layerName  string
+	layers     map[string]int
+	layerCount int
+	// reportedNestedLayer keeps the note about a layer inside a layer to one
+	// per document. See reportNestedLayer.
+	reportedNestedLayer bool
 	// attrOffset is where in the *markup* the style attribute being expanded
 	// was written, or -1 outside one.
 	//
@@ -404,6 +418,11 @@ type preparedRule struct {
 	selectors []css.Selector
 	decls     []preparedDecl
 	origin    Origin
+	// layer is the cascade layer the rule was written in, zero for none. See
+	// layer.go: it is a term of the cascade between the origin and the
+	// specificity, and it is carried on the rule because every declaration in
+	// one block is in the same layer.
+	layer int
 }
 
 type preparedDecl struct {
@@ -598,6 +617,10 @@ func (s *Styler) prepareRule(rule css.Rule, parent []css.ComponentValue, origin 
 			s.prepareMedia(rule, parent, origin, out, order)
 			return
 		}
+		if strings.EqualFold(rule.Name, "layer") {
+			s.prepareLayer(rule, parent, origin, out, order)
+			return
+		}
 		if strings.EqualFold(rule.Name, "supports") {
 			s.prepareSupports(rule, parent, origin, out, order)
 			return
@@ -695,7 +718,7 @@ func (s *Styler) prepareStyleBlock(block []css.ComponentValue, sels []css.Select
 		s.report(Finding{Offset: e.Offset, Message: e.Message, Unsupported: e.Unsupported})
 	}
 
-	prepared := preparedRule{selectors: sels, origin: origin}
+	prepared := preparedRule{selectors: sels, origin: origin, layer: s.layer}
 	di, ni := 0, 0
 	for di < len(decls) || ni < len(nested) {
 		if ni >= len(nested) || (di < len(decls) && decls[di].Offset <= nested[ni].Offset) {
@@ -1727,7 +1750,7 @@ func (s *Styler) computeFor(n *html.Node, rules []preparedRule,
 		for _, d := range r.decls {
 			cands = append(cands, candidate{
 				property: d.property, value: d.value, important: d.important,
-				origin: r.origin, spec: spec,
+				origin: r.origin, layer: r.layer, spec: spec,
 				order: d.order, offset: d.offset,
 			})
 		}
@@ -1975,6 +1998,14 @@ func beats(a, b candidate) bool {
 	ao, bo := cascadeRank(a), cascadeRank(b)
 	if ao != bo {
 		return ao > bo
+	}
+	// The layer, which sits between the origin and the specificity: that is
+	// what the feature is for, so that a rule in a later layer wins without
+	// having to out-specify anything. Reaching here means the two agree on
+	// origin and on importance, since CascadeRank tells every pair of those
+	// apart, so one call decides the direction for both.
+	if al, bl := layerRank(a.layer, a.important), layerRank(b.layer, b.important); al != bl {
+		return al > bl
 	}
 	if a.spec != b.spec {
 		return b.spec.Less(a.spec)

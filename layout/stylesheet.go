@@ -429,8 +429,53 @@ func (l *sheetLoader) expandImports(s authorSheet) []authorSheet {
 	}
 	rules, _ := css.ParseStylesheet(s.source)
 	var out []authorSheet
+	// The stretches of this sheet the imports occupied, which come out of it
+	// once they have been read. Only those: what sits between them stays where
+	// it was written.
+	//
+	// It used to be one cut at the end of the leading run, which threw away
+	// everything before it — and a @layer statement is allowed to be there.
+	// "@layer a, b; @import url(x);" is the shape a stylesheet written in
+	// layers begins with, and the scan stopped at the @layer, so the import was
+	// never read at all. Cutting only the imports keeps a statement written
+	// after them and still lifts the rules that were imported; one written
+	// before them is handed over separately, by flush below.
+	var holes []sourceSpan
+	end := func(i int) int {
+		if i+1 < len(rules) {
+			return rules[i+1].Offset
+		}
+		return len(s.source)
+	}
+	// The @layer statements written among the imports, waiting to be handed
+	// over as a sheet of their own.
+	//
+	// They cannot simply stay where they are. An imported sheet is lifted out
+	// and applied *before* what is left of the sheet that imported it, so a
+	// statement left behind would fix the layer order after the imported rules
+	// had already fixed it themselves — and "@layer theme, base; @import
+	// url(x);" over a sheet defining both layers gave the win to theme, which
+	// is the layer the author named first to make it lose. The statement is
+	// handed over ahead of the sheets it orders instead, which is where it was
+	// written.
+	var pending []sourceSpan
+	flush := func() {
+		if len(pending) == 0 {
+			return
+		}
+		var b strings.Builder
+		for _, p := range pending {
+			b.WriteString(s.source[p.from:p.to])
+		}
+		out = append(out, authorSheet{name: s.name, source: b.String()})
+		// And out of the sheet, so the names are declared once. Re-declaring
+		// them would change no order, but a malformed one would be reported
+		// twice and at two different offsets.
+		holes = append(holes, pending...)
+		pending = nil
+	}
 	cut, found := 0, false
-	for _, r := range rules {
+	for i, r := range rules {
 		// Only the leading run. §4 of CSS Cascade puts @import before every
 		// rule but @charset and @layer, and one written later is ignored.
 		if !r.At || r.HasBlock {
@@ -442,10 +487,23 @@ func (l *sheetLoader) expandImports(s authorSheet) []authorSheet {
 			cut = len(s.source)
 			continue
 		}
+		if name == "layer" {
+			// A @layer *statement* — the block form was taken by HasBlock above
+			// — names an order and is allowed among the imports. The order it
+			// fixes is the whole of its effect, so it is kept rather than cut,
+			// and kept ahead of the imports it was written ahead of.
+			pending = append(pending, sourceSpan{from: r.Offset, to: end(i)})
+			cut = len(s.source)
+			continue
+		}
 		if name != "import" {
 			cut = r.Offset
 			break
 		}
+		// Ahead of the import, so the spans stay in order and any layer names
+		// this import's sheet uses are already declared.
+		flush()
+		holes = append(holes, sourceSpan{from: r.Offset, to: end(i)})
 		ref, ok := importReference(r.Prelude)
 		if !ok {
 			// A conditional import — "@import url(x) print" — or a prelude this
@@ -475,7 +533,7 @@ func (l *sheetLoader) expandImports(s authorSheet) []authorSheet {
 	if !found {
 		return []authorSheet{s}
 	}
-	s.source = s.source[cut:]
+	s.source = withoutSpans(s.source, cut, holes)
 	return append(out, s)
 }
 
@@ -672,4 +730,41 @@ func (l *sheetLoader) overCapImport(ref string) {
 			"the @import of %s and any after it were not read",
 			maxDocumentStylesheets, quoteValue(ref)),
 	})
+}
+
+// sourceSpan is a stretch of a stylesheet's own text.
+type sourceSpan struct{ from, to int }
+
+// withoutSpans is a sheet's source up to cut with the given stretches removed,
+// followed by everything from cut onwards.
+//
+// The stretches are the rules already handed over as sheets of their own: the
+// @imports, and the @layer statements written ahead of them. What is left
+// between them — a @layer statement written after the imports, which §3.1
+// allows — stays where it was, because the order it fixes is what the rest of
+// the sheet is read against.
+func withoutSpans(source string, cut int, holes []sourceSpan) string {
+	if len(holes) == 0 {
+		return source[cut:]
+	}
+	var b strings.Builder
+	at := 0
+	for _, h := range holes {
+		if h.from > cut {
+			break
+		}
+		if h.from > at {
+			b.WriteString(source[at:h.from])
+		}
+		if h.to > at {
+			at = h.to
+		}
+	}
+	if cut > at {
+		b.WriteString(source[at:cut])
+	}
+	if cut < len(source) {
+		b.WriteString(source[cut:])
+	}
+	return b.String()
 }

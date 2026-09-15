@@ -114,10 +114,10 @@ func TestACharsetSayingUTF8IsPassedOverInSilence(t *testing.T) {
 		}
 	}
 	// An at-rule nothing acts on is still reported, which is what makes the
-	// silence above a decision rather than a hole. @supports used to be the one
-	// named here and is answered now, so the control moved on to @layer.
-	if got := findingsFor(`@layer base { p { color: red } }`); len(got) != 1 {
-		t.Errorf("@layer gave %d findings, want one: %v", len(got), got)
+	// silence above a decision rather than a hole. The rule named here moves as
+	// at-rules are implemented: @supports, then @layer, and @keyframes now.
+	if got := findingsFor(`@keyframes spin { from { opacity: 0 } }`); len(got) != 1 {
+		t.Errorf("@keyframes gave %d findings, want one: %v", len(got), got)
 	}
 }
 
