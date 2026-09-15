@@ -161,9 +161,10 @@ func TestAPageRuleIsNoLongerAnUnsupportedAtRule(t *testing.T) {
 		}
 	}
 
-	// The control moves as at-rules are implemented: it was @supports until its
-	// conditions were answered. See layout/fontface_test.go for the same list.
-	other := Build(Input{HTML: `<style>@layer base { p { color: red } }</style><p>x</p>`})
+	// The control moves as at-rules are implemented: @supports until its
+	// conditions were answered, @layer until the cascade took it. See
+	// layout/fontface_test.go for the whole list.
+	other := Build(Input{HTML: `<style>@keyframes spin { from { opacity: 0 } }</style><p>x</p>`})
 	found := false
 	for _, f := range other.Findings {
 		if f.Rule == RuleUnsupportedAtRule {
