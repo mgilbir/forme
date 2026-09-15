@@ -477,6 +477,52 @@ func (s *Styler) prepareMedia(rule css.Rule, parent []css.ComponentValue, origin
 	}
 }
 
+// prepareSupports prepares the rules of an @supports whose condition this
+// engine answers yes to, in place, exactly as prepareMedia does.
+//
+// A condition that answers no drops what is inside it, and that is not a
+// failure to report: the block is the version an author wrote for an engine
+// that understands the declaration, and the fallback they wrote outside it is
+// what this page gets. Saying so on every such stylesheet would be reporting
+// the rule working.
+//
+// What is reported is a condition this cannot read — selector(), font-tech(),
+// or a shape beyond the and/or/not of §2 — for the reason a media query naming
+// an unanswerable feature is: a browser printing the same document may apply
+// rules this page does not have.
+func (s *Styler) prepareSupports(rule css.Rule, parent []css.ComponentValue,
+	origin Origin, out *[]preparedRule, order *int) {
+
+	matches, unreadable := supportsCondition(rule.Prelude)
+	if unreadable != "" {
+		s.report(Finding{
+			Offset: rule.Offset,
+			Message: "the @supports condition " + quoted(serialize(rule.Prelude)) +
+				" asks about " + unreadable + ", which this engine cannot answer, " +
+				"so the rules inside it were not applied",
+			Unsupported: true,
+			Property:    "@supports",
+		})
+	}
+	if !matches || !rule.HasBlock {
+		return
+	}
+	if parent != nil {
+		s.prepareNestedConditional(rule, parent, origin, out, order)
+		return
+	}
+	inner, errs := css.ParseRulesFromValues(rule.Block)
+	for _, e := range errs {
+		s.report(Finding{Offset: e.Offset, Message: e.Message, Unsupported: e.Unsupported})
+	}
+	for _, r := range inner {
+		s.prepareRule(r, parent, origin, out, order)
+	}
+}
+
+// quoted is a condition as it appears in a finding.
+func quoted(s string) string { return strconv.Quote(strings.TrimSpace(s)) }
+
 // prepareNestedConditional prepares an @media written *inside* a style rule.
 //
 // The block holds a style block rather than a rule list — CSS Conditional Rules
@@ -550,6 +596,10 @@ func (s *Styler) prepareRule(rule css.Rule, parent []css.ComponentValue, origin 
 	if rule.At {
 		if strings.EqualFold(rule.Name, "media") {
 			s.prepareMedia(rule, parent, origin, out, order)
+			return
+		}
+		if strings.EqualFold(rule.Name, "supports") {
+			s.prepareSupports(rule, parent, origin, out, order)
 			return
 		}
 		if strings.EqualFold(rule.Name, "page") {

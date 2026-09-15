@@ -114,9 +114,10 @@ func TestACharsetSayingUTF8IsPassedOverInSilence(t *testing.T) {
 		}
 	}
 	// An at-rule nothing acts on is still reported, which is what makes the
-	// silence above a decision rather than a hole.
-	if got := findingsFor(`@supports (display: grid) { p { color: red } }`); len(got) != 1 {
-		t.Errorf("@supports gave %d findings, want one: %v", len(got), got)
+	// silence above a decision rather than a hole. @supports used to be the one
+	// named here and is answered now, so the control moved on to @layer.
+	if got := findingsFor(`@layer base { p { color: red } }`); len(got) != 1 {
+		t.Errorf("@layer gave %d findings, want one: %v", len(got), got)
 	}
 }
 
