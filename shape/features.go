@@ -1,5 +1,7 @@
 package shape
 
+import "strings"
+
 // What a caller asks a face to apply and not to apply.
 //
 // Every other request to this package is a question about the text: which glyphs
@@ -81,6 +83,26 @@ type Features struct {
 	// figures, tabular spacing and a slashed zero at once, and the three are
 	// three of the font's rules over the same digits. See Numeric.
 	Numeric Numeric
+	// Tags are features a font-feature-settings declaration asked for by name,
+	// already reduced to the ones it turns *on*, written as one comma-separated
+	// string in a settled order.
+	//
+	// The property is the escape hatch of CSS Fonts 4 §6.11: a face's own
+	// features by their four-letter tag, for everything the font-variant
+	// descriptors have no keyword for. "tnum" is what an invoice's columns are
+	// set with and "ss01" is how a face's alternate letterforms are reached;
+	// neither has a keyword to ask through.
+	//
+	// A string rather than a slice because this whole type has to stay
+	// comparable: it is a field of the key the breaker memoises a shaped group
+	// under, and a slice in it would not compile. One settled order so that two
+	// declarations naming the same features share that memo entry rather than
+	// each paying for its own shaping.
+	//
+	// The tags are merged with the lists the descriptors ask for and applied in
+	// the font's own lookup order, not the order they were written — see
+	// applyRequestedFeatures for why that is the only order there is.
+	Tags string
 	// EastAsian is which national standard's forms a run's ideographs take,
 	// whether its characters are set on the ideographic advance or their own,
 	// and whether its kana are the small forms an annotation is set in.
@@ -247,6 +269,7 @@ func (f Features) adds() []string {
 	asked := [...][]string{
 		f.Caps.Features(), f.Numeric.Features(),
 		f.EastAsian.Features(), f.Position.Features(),
+		f.tags(),
 	}
 	var (
 		only  []string
@@ -445,4 +468,12 @@ func (f Features) keeps(tags []string) []string {
 		}
 	}
 	return out
+}
+
+// tags is Tags as the list applyRequestedFeatures wants, or nothing.
+func (f Features) tags() []string {
+	if f.Tags == "" {
+		return nil
+	}
+	return strings.Split(f.Tags, ",")
 }

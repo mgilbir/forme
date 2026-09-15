@@ -325,17 +325,17 @@ func (l *layouter) reportHyphens(b *Box, value string) {
 // other tag is a feature this engine neither applies nor can ask the face for,
 // so a value naming one is reported whatever the face has in it.
 func (l *layouter) reportKerning(b *Box, face *shape.Face) {
-	kerns := face != nil && face.HasKerning()
-	if value := b.Style["font-feature-settings"]; !inertFontFeatures(value, kerns) {
-		l.reportOnce("font-feature-settings", Finding{
-			Rule:     RuleUnsupportedValue,
-			Property: "font-feature-settings",
-			Message: "font-feature-settings " + quoteValue(value) + " was not applied; " +
-				"this engine applies the features a face declares for the script and " +
-				"takes no direction about which",
-			Path: PathOf(boxElement(b)),
-		})
+	value := b.Style["font-feature-settings"]
+	why := unappliedFontFeatures(value, face)
+	if why == "" {
+		return
 	}
+	l.reportOnce("font-feature-settings", Finding{
+		Rule:     RuleUnsupportedValue,
+		Property: "font-feature-settings",
+		Message:  "font-feature-settings " + quoteValue(value) + " " + why,
+		Path:     PathOf(boxElement(b)),
+	})
 }
 
 // reportCaps names a request for capitals the face cannot supply.
@@ -868,25 +868,55 @@ func (l *layouter) reportPosition(b *Box, face *shape.Face, text string) {
 // "normal" asks for nothing by definition. Otherwise the value is a list of tags
 // with a setting each, and it is inert when every tag in it is one the face
 // cannot act on — which this can answer for "kern" and for nothing else.
-func inertFontFeatures(value string, kerns bool) bool {
-	value = strings.ToLower(strings.TrimSpace(value))
-	if value == "" || value == "normal" {
-		return true
-	}
-	for _, part := range strings.Split(value, ",") {
-		tag := strings.TrimSpace(part)
-		// The tag is a quoted string and the setting follows it. Only the tag
-		// is read: "kern" is inert on a face with no kerning whether it was
-		// asked for or turned off, because neither can change the page.
-		tag = strings.TrimLeft(tag, "\"'")
-		if i := strings.IndexAny(tag, "\"'"); i >= 0 {
-			tag = tag[:i]
+func unappliedFontFeatures(value string, face *shape.Face) string {
+	on, off := featureSettingsOf(value)
+	kerns := face != nil && face.HasKerning()
+
+	// A tag turned off, which this property cannot express. The features this
+	// engine applies without being asked have switches of their own —
+	// font-variant-ligatures and font-kerning — and the rest are not applied
+	// anyway, so turning one off changes nothing either way.
+	var turnedOff []string
+	for _, tag := range off {
+		// "kern" is inert on a face with no kerning whether it was asked for or
+		// turned off, because neither can change the page.
+		if strings.EqualFold(tag, "kern") && !kerns {
+			continue
 		}
-		if tag != "kern" || kerns {
-			return false
+		turnedOff = append(turnedOff, quoteValue(tag))
+	}
+
+	// And a tag turned on that the face has not got. Asking for it is carried
+	// out — the shaping layer runs the lookups of whatever tags it is given —
+	// but a face that declares none of them sets the run in the letters it was
+	// written with, which is the same thing reportCaps says about a face with
+	// no small capitals. The fourteen standard faces are every one of them this
+	// case: they carry no OpenType feature at all.
+	var lacking []string
+	if on != "" {
+		for _, tag := range strings.Split(on, ",") {
+			if face == nil || !faceDeclares(face, tag) {
+				lacking = append(lacking, quoteValue(tag))
+			}
 		}
 	}
-	return true
+
+	switch {
+	case len(turnedOff) > 0 && len(lacking) > 0:
+		return "asks for " + strings.Join(turnedOff, ", ") + " to be turned off, " +
+			"which is done through font-variant-ligatures or font-kerning rather " +
+			"than by tag, and for " + strings.Join(lacking, ", ") +
+			", which this face does not declare"
+	case len(turnedOff) > 0:
+		return "asks for " + strings.Join(turnedOff, ", ") + " to be turned off; a " +
+			"feature this engine applies is turned off through " +
+			"font-variant-ligatures or font-kerning rather than by tag, and the " +
+			"rest of the declaration was applied"
+	case len(lacking) > 0:
+		return "asks for " + strings.Join(lacking, ", ") + ", which this face does " +
+			"not declare; the run is set in the letters it was written with"
+	}
+	return ""
 }
 
 // reportAutospace names the part of text-autospace this engine does not do.

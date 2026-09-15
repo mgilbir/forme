@@ -1,6 +1,8 @@
 package layout
 
 import (
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/mgilbir/forme/shape"
@@ -72,7 +74,101 @@ func (l *layouter) featuresFor(b *Box) shape.Features {
 	out.Numeric, _ = numericOf(b.Style["font-variant-numeric"])
 	out.EastAsian, _ = eastAsianOf(b.Style["font-variant-east-asian"])
 	out.Position, _ = variantPositionOf(b.Style["font-variant-position"])
+	// And the escape hatch: the face's own features by tag, for everything the
+	// descriptors above have no keyword for.
+	out.Tags, _ = featureSettingsOf(b.Style["font-feature-settings"])
 	return out
+}
+
+// featureSettingsOf reads CSS Fonts 4 §6.11's font-feature-settings into the
+// tags it turns on, and the ones it turns off.
+//
+// The two are not symmetrical and that is the property rather than a choice
+// here. A tag turned *on* is a request this engine can carry out for any face:
+// the shaping layer takes a list of tags and runs their lookups, whatever they
+// are. A tag turned *off* is only meaningful for a feature something would
+// otherwise have applied, and the ones this engine applies by default have
+// switches of their own — font-variant-ligatures and font-kerning — reached
+// through the fields above rather than through a tag list. So the off list is
+// returned for reporting and not acted on.
+//
+// The tags come back sorted and deduplicated, as one comma-separated string.
+// The order a document writes them in is not the order they are applied in —
+// that is the font's, by lookup index — so two declarations naming the same
+// features are the same request, and settling the order lets them share the
+// memo entry the shaped group is kept under.
+func featureSettingsOf(raw string) (on string, off []string) {
+	value := strings.TrimSpace(raw)
+	if value == "" || strings.EqualFold(value, "normal") {
+		return "", nil
+	}
+	var enabled []string
+	for _, part := range strings.Split(value, ",") {
+		tag, setting, ok := featureSetting(part)
+		if !ok {
+			continue
+		}
+		if setting {
+			enabled = append(enabled, tag)
+			continue
+		}
+		off = append(off, tag)
+	}
+	if len(enabled) == 0 {
+		return "", off
+	}
+	slices.Sort(enabled)
+	out := enabled[:0]
+	for i, tag := range enabled {
+		if i == 0 || tag != enabled[i-1] {
+			out = append(out, tag)
+		}
+	}
+	return strings.Join(out, ","), off
+}
+
+// featureSetting reads one "<tag> [<setting>]" of the list.
+//
+// A tag is four characters in quotation marks and the setting that follows is
+// absent, "on", "off", or an integer. §6.11 makes an integer above zero select
+// an alternate *within* the feature rather than merely enable it — "salt" 2 is
+// the second alternate — and this engine applies a feature or does not, so any
+// positive setting reads as on. That is the same answer for every face that
+// offers one alternate, which is nearly all of them, and a narrowing rather than
+// a wrong answer where it is not.
+func featureSetting(part string) (tag string, on, ok bool) {
+	field := strings.TrimSpace(part)
+	quote := strings.IndexAny(field, "\"'")
+	if quote < 0 {
+		return "", false, false
+	}
+	rest := field[quote+1:]
+	end := strings.IndexAny(rest, "\"'")
+	if end < 0 {
+		return "", false, false
+	}
+	tag, rest = rest[:end], strings.TrimSpace(rest[end+1:])
+	// A tag is four characters, and the range is the format's: a face names its
+	// features in printable ASCII.
+	if len(tag) != 4 {
+		return "", false, false
+	}
+	for i := 0; i < len(tag); i++ {
+		if tag[i] < 0x20 || tag[i] > 0x7E {
+			return "", false, false
+		}
+	}
+	switch {
+	case rest == "" || strings.EqualFold(rest, "on"):
+		return tag, true, true
+	case strings.EqualFold(rest, "off"):
+		return tag, false, true
+	}
+	n, err := strconv.Atoi(rest)
+	if err != nil {
+		return "", false, false
+	}
+	return tag, n > 0, true
 }
 
 // spacingSuppressesLigatures is CSS Text §8.2's rule: "when the effective
