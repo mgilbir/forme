@@ -91,3 +91,61 @@ func TestALangSysListBeyondTheBoundStopsBeingRead(t *testing.T) {
 			"bound of %d the list stops being read", declared-1, maxLangSys)
 	}
 }
+
+// TestAFeatureSubstitutionListBeyondTheBoundStopsBeingRead is the bound on how
+// many features one FeatureVariations record may substitute.
+//
+// A variable font states, for a region of its design space, that some features
+// are replaced by others — "A real face states a handful of records — Noto Sans
+// Oriya states one — and each names a few conditions and a few substituted
+// features." The count is two bytes of the font.
+//
+// This is the one bound in the audit whose guarded path the suite never reached
+// at all: lowering it to one changed nothing, because no fixture here has a
+// FeatureVariations table. So this is the first table of its kind in the
+// package, and it is built by hand for the same reason the script list is —
+// the reader takes raw bytes, so the fixture is the table.
+func TestAFeatureSubstitutionListBeyondTheBoundStopsBeingRead(t *testing.T) {
+	// A literal above the bound, for the reason the script list test gives: a
+	// fixture sized from the constant grows when the constant does.
+	const declared = 320
+
+	// FeatureTableSubstitution: version 1.0, a count, then the records. Each
+	// record is a feature index and a 32-bit offset to the feature that
+	// replaces it; they all point at one, placed after the records.
+	head := putBe16(nil, 1) // majorVersion, which the reader requires
+	head = putBe16(head, 0) // minorVersion
+	head = putBe16(head, declared)
+	altOff := 6 + 6*declared
+	for i := 0; i < declared; i++ {
+		head = putBe16(head, i) // the feature index this record replaces
+		head = append(head, 0, 0)
+		head = putBe16(head, altOff) // the low half of the 32-bit offset
+	}
+	// An AlternateFeatureTable: a parameters offset, then one lookup index.
+	ts := append(head, 0, 0, 0, 1, 0, 7)
+
+	// The table is placed at a non-zero offset within the FeatureVariations
+	// bytes: the reader treats an offset of zero as "no table", which is the
+	// format's own way of saying a record substitutes nothing.
+	const at = 4
+	fv := append(make([]byte, at), ts...)
+
+	got := featureTableSubstitution(fv, at)
+	if got == nil {
+		t.Fatal("a FeatureTableSubstitution of 320 records read as nothing; the " +
+			"fixture is not a table this reader walks")
+	}
+	if _, ok := got[0]; !ok {
+		t.Fatalf("the first of %d substitutions was not read; the fixture does not "+
+			"reach what the bound is being asked about", declared)
+	}
+	if _, ok := got[declared-1]; ok {
+		t.Errorf("the substitution declared at position %d was read; past the bound "+
+			"of %d the list stops being read", declared-1, maxFeatureSubsts)
+	}
+	if len(got) >= declared {
+		t.Errorf("%d of %d declared substitutions were read; the list is bounded",
+			len(got), declared)
+	}
+}
