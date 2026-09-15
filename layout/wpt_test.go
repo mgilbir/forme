@@ -1326,7 +1326,7 @@ const wptEnv = "WPT_TESTS"
 // TestAnInlineBlockThatClipsSitsOnItsBottomMarginEdge, which is where it should
 // be checked from now on: four vendored documents asserting a withdrawn
 // sentence are not what this behaviour rests on.
-const wptCleanPassBaseline = 5980
+const wptCleanPassBaseline = 5982
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

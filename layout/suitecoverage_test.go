@@ -44,10 +44,21 @@ func TestTheFallbackLibraryCoversWhatTheSuiteWrites(t *testing.T) {
 		{"Number Forms", "ⅬⅭⅮⅯⅼⅽⅾⅿ"},
 		// Only the last resort has these, which is what it is for.
 		{"Regional indicators", "🇮🇱"},
+		// The characters of the emoji sequences line-breaking-013 and -014 are
+		// written in. They are worth naming separately from the blocks above
+		// because no one face has them *together*: the person is in Noto Sans
+		// Symbols and the skin tone in Unifont Upper, so the cluster they form
+		// is the one the engine has to cut rather than set in a single face.
+		// Each of them has to be findable on its own for that cut to land
+		// anywhere, which is what this checks.
+		{"Emoji the suite sequences", "⛹🏿♀🤹"},
 	} {
 		// Per character, because that is how the fallback is asked: a face that
-		// covers one block covers no other, and asking for the whole string at
-		// once is the question that has no answer — see layout/facerun.go.
+		// covers one block covers no other. Asking for a whole *cluster* at
+		// once is a question that can have no answer — no face need hold every
+		// character of one — and layout/facerun.go answers it by cutting the
+		// cluster into stretches one face can set, which is only possible when
+		// the characters are findable one at a time.
 		for _, r := range c.text {
 			if _, found := set.FaceFor(string(r), false, false); !found {
 				t.Errorf("%s: no face in the suite library can set %q (U+%04X)",
