@@ -171,3 +171,147 @@ func TestTheAlignAttributeOnARule(t *testing.T) {
 		}
 	}
 }
+
+// TestTheFrameAttributeChoosesTheTablesEdges, §15.3.8.
+//
+// Eight values, each naming which edges of the table are drawn. They are the
+// one place in HTML where a four-value border-style is the point rather than a
+// shorthand's convenience: "hsides" is "outset hidden outset hidden", and it
+// cannot be said with fewer.
+func TestTheFrameAttributeChoosesTheTablesEdges(t *testing.T) {
+	for _, c := range []struct{ frame, top, right, bottom, left string }{
+		{"void", "hidden", "hidden", "hidden", "hidden"},
+		{"above", "outset", "hidden", "hidden", "hidden"},
+		{"below", "hidden", "hidden", "outset", "hidden"},
+		{"hsides", "outset", "hidden", "outset", "hidden"},
+		{"lhs", "hidden", "hidden", "hidden", "outset"},
+		{"rhs", "hidden", "outset", "hidden", "hidden"},
+		{"vsides", "hidden", "outset", "hidden", "outset"},
+		{"box", "outset", "outset", "outset", "outset"},
+		{"border", "outset", "outset", "outset", "outset"},
+		// The value is compared case-insensitively, which is HTML's flag and
+		// also what "frame" being an enumerated attribute already asks for.
+		{"HSIDES", "outset", "hidden", "outset", "hidden"},
+		// And a value that is none of them draws nothing.
+		{"florb", "none", "none", "none", "none"},
+	} {
+		markup := `<table id="d" frame="` + c.frame + `"><tr><td>x</td></tr></table>`
+		for _, side := range []struct{ name, want string }{
+			{"top", c.top}, {"right", c.right}, {"bottom", c.bottom}, {"left", c.left},
+		} {
+			got, ok := styleOfID(t, markup, "border-"+side.name+"-style")
+			if !ok || got != side.want {
+				t.Errorf("frame=%q gave border-%s-style %q, want %q",
+					c.frame, side.name, got, side.want)
+			}
+		}
+	}
+}
+
+// TestTheRulesAttributeChoosesTheInnerEdges, §15.3.8.
+//
+// It is the other half of frame: which lines are drawn *between* the cells. The
+// part worth stating is that every value of it also puts the table in the
+// collapsed border model, and that is not decoration — CSS 2.1 §17.6.1 ignores
+// a row's and a section's border entirely in the separated model, so
+// "rules=groups" without the collapse would compute borders that nothing draws.
+func TestTheRulesAttributeChoosesTheInnerEdges(t *testing.T) {
+	onTable := func(value string) string {
+		return `<table id="d" rules="` + value + `"><tr><td>x</td></tr></table>`
+	}
+	onCell := func(value string) string {
+		return `<table rules="` + value + `"><tr><td id="d">x</td></tr></table>`
+	}
+	for _, value := range []string{"none", "groups", "rows", "cols", "all"} {
+		if got, _ := styleOfID(t, onTable(value), "border-collapse"); got != "collapse" {
+			t.Errorf("rules=%q left border-collapse %q; a row's border is not "+
+				"drawn at all in the separated model", value, got)
+		}
+		if got, _ := styleOfID(t, onTable(value), "border-top-style"); got != "hidden" {
+			t.Errorf("rules=%q gave the table border-top-style %q, want hidden",
+				value, got)
+		}
+	}
+	// The cells, which is where the five values differ from each other.
+	for _, c := range []struct{ value, block, inline string }{
+		{"none", "none", "none"},
+		{"groups", "none", "none"},
+		{"rows", "none", "none"},
+		{"cols", "none", "solid"},
+		{"all", "solid", "solid"},
+	} {
+		if got, _ := styleOfID(t, onCell(c.value), "border-top-style"); got != c.block {
+			t.Errorf("rules=%q gave the cell border-top-style %q, want %q",
+				c.value, got, c.block)
+		}
+		if got, _ := styleOfID(t, onCell(c.value), "border-left-style"); got != c.inline {
+			t.Errorf("rules=%q gave the cell border-left-style %q, want %q",
+				c.value, got, c.inline)
+		}
+	}
+	// And a value that is none of the five says nothing at all.
+	if got, _ := styleOfID(t, onTable("florb"), "border-collapse"); got != "separate" {
+		t.Errorf("rules=\"florb\" left border-collapse %q, want separate", got)
+	}
+}
+
+// TestRulesReachesTheRowsAndTheGroups is the half of "rules" that is not on the
+// cells at all: "rows" draws a line under each row, and "groups" draws one
+// around each section and between the column groups.
+//
+// The logical properties are the specification's own — "border-block-width" on
+// a row and "border-inline-width" on a colgroup — and they are what says the
+// line is drawn across the writing direction rather than on a named edge.
+func TestRulesReachesTheRowsAndTheGroups(t *testing.T) {
+	const markup = `<table rules="%"><colgroup id="cg"><col></colgroup>` +
+		`<tbody id="tb"><tr id="r"><td>x</td></tr></tbody></table>`
+	with := func(value string) string {
+		out := ""
+		for i := 0; i < len(markup); i++ {
+			if markup[i] == '%' {
+				out += value
+				continue
+			}
+			out += string(markup[i])
+		}
+		return out
+	}
+	for _, c := range []struct{ value, id, property, want string }{
+		{"rows", "r", "border-top-style", "solid"},
+		{"rows", "r", "border-bottom-style", "solid"},
+		{"rows", "r", "border-left-style", "none"},
+		{"groups", "tb", "border-top-style", "solid"},
+		{"groups", "tb", "border-left-style", "none"},
+		{"groups", "cg", "border-left-style", "solid"},
+		{"groups", "cg", "border-top-style", "none"},
+		// And the values that say nothing about them say nothing.
+		{"all", "r", "border-top-style", "none"},
+		{"cols", "tb", "border-top-style", "none"},
+	} {
+		built := Build(Input{HTML: with(c.value)})
+		var found *Box
+		var walk func(*Box)
+		walk = func(b *Box) {
+			if b == nil || found != nil {
+				return
+			}
+			if b.Element != nil {
+				if id, _ := b.Element.Attr("id"); id == c.id {
+					found = b
+					return
+				}
+			}
+			for _, k := range b.Children {
+				walk(k)
+			}
+		}
+		walk(built.Root)
+		if found == nil {
+			t.Fatalf("rules=%q: no box for #%s", c.value, c.id)
+		}
+		if got := found.Style[c.property]; got != c.want {
+			t.Errorf("rules=%q gave #%s %s %q, want %q",
+				c.value, c.id, c.property, got, c.want)
+		}
+	}
+}

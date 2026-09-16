@@ -136,6 +136,106 @@ hr[align=left i] { margin-left: 0; margin-right: auto }
 hr[align=right i] { margin-left: auto; margin-right: 0 }
 hr[align=center i] { margin-left: auto; margin-right: auto }
 
+/* The frame and rules attributes, §15.3.8, which are how a table said which of
+   its edges were drawn before there was a border property to say it with.
+
+   This is HTML's own CSS, transcribed. The selector lists are long because the
+   specification writes out both the tbody-less shape and the three section
+   shapes for every value, and they are kept that way rather than shortened: the
+   parser inserts a <tbody> around a bare <tr>, so "table > tr" matches nothing
+   in a document this engine parsed, and a list written from what *should*
+   match rather than from what the specification says is a list that drifts.
+
+   A "rules" value puts the table in the collapsed border model, which is the
+   only one where a row's or a section's border is drawn at all — CSS 2.1
+   §17.6.1 ignores both in the separated model, which is why rules=groups needs
+   the collapse and not only the borders. */
+table[rules=none i], table[rules=groups i], table[rules=rows i],
+table[rules=cols i], table[rules=all i],
+table[frame=void i], table[frame=above i], table[frame=below i],
+table[frame=hsides i], table[frame=lhs i], table[frame=rhs i],
+table[frame=vsides i], table[frame=box i], table[frame=border i],
+table[rules=none i] > tr > td, table[rules=none i] > tr > th,
+table[rules=groups i] > tr > td, table[rules=groups i] > tr > th,
+table[rules=rows i] > tr > td, table[rules=rows i] > tr > th,
+table[rules=cols i] > tr > td, table[rules=cols i] > tr > th,
+table[rules=all i] > tr > td, table[rules=all i] > tr > th,
+table[rules=none i] > thead > tr > td, table[rules=none i] > thead > tr > th,
+table[rules=groups i] > thead > tr > td, table[rules=groups i] > thead > tr > th,
+table[rules=rows i] > thead > tr > td, table[rules=rows i] > thead > tr > th,
+table[rules=cols i] > thead > tr > td, table[rules=cols i] > thead > tr > th,
+table[rules=all i] > thead > tr > td, table[rules=all i] > thead > tr > th,
+table[rules=none i] > tbody > tr > td, table[rules=none i] > tbody > tr > th,
+table[rules=groups i] > tbody > tr > td, table[rules=groups i] > tbody > tr > th,
+table[rules=rows i] > tbody > tr > td, table[rules=rows i] > tbody > tr > th,
+table[rules=cols i] > tbody > tr > td, table[rules=cols i] > tbody > tr > th,
+table[rules=all i] > tbody > tr > td, table[rules=all i] > tbody > tr > th,
+table[rules=none i] > tfoot > tr > td, table[rules=none i] > tfoot > tr > th,
+table[rules=groups i] > tfoot > tr > td, table[rules=groups i] > tfoot > tr > th,
+table[rules=rows i] > tfoot > tr > td, table[rules=rows i] > tfoot > tr > th,
+table[rules=cols i] > tfoot > tr > td, table[rules=cols i] > tfoot > tr > th,
+table[rules=all i] > tfoot > tr > td, table[rules=all i] > tfoot > tr > th {
+  border-top-color: black; border-right-color: black;
+  border-bottom-color: black; border-left-color: black;
+}
+
+table[frame=void i] { border-style: hidden }
+table[frame=above i] { border-style: outset hidden hidden hidden }
+table[frame=below i] { border-style: hidden hidden outset hidden }
+table[frame=hsides i] { border-style: outset hidden outset hidden }
+table[frame=lhs i] { border-style: hidden hidden hidden outset }
+table[frame=rhs i] { border-style: hidden outset hidden hidden }
+table[frame=vsides i] { border-style: hidden outset }
+table[frame=box i], table[frame=border i] { border-style: outset }
+
+table[rules=none i], table[rules=groups i], table[rules=rows i],
+table[rules=cols i], table[rules=all i] {
+  border-style: hidden; border-collapse: collapse;
+}
+
+table[rules=groups i] > colgroup {
+  border-inline-width: 1px; border-inline-style: solid;
+}
+table[rules=groups i] > thead,
+table[rules=groups i] > tbody,
+table[rules=groups i] > tfoot {
+  border-block-width: 1px; border-block-style: solid;
+}
+
+table[rules=rows i] > tr, table[rules=rows i] > thead > tr,
+table[rules=rows i] > tbody > tr, table[rules=rows i] > tfoot > tr {
+  border-block-width: 1px; border-block-style: solid;
+}
+
+table[rules=none i] > tr > td, table[rules=none i] > tr > th,
+table[rules=none i] > thead > tr > td, table[rules=none i] > thead > tr > th,
+table[rules=none i] > tbody > tr > td, table[rules=none i] > tbody > tr > th,
+table[rules=none i] > tfoot > tr > td, table[rules=none i] > tfoot > tr > th,
+table[rules=groups i] > tr > td, table[rules=groups i] > tr > th,
+table[rules=groups i] > thead > tr > td, table[rules=groups i] > thead > tr > th,
+table[rules=groups i] > tbody > tr > td, table[rules=groups i] > tbody > tr > th,
+table[rules=groups i] > tfoot > tr > td, table[rules=groups i] > tfoot > tr > th,
+table[rules=rows i] > tr > td, table[rules=rows i] > tr > th,
+table[rules=rows i] > thead > tr > td, table[rules=rows i] > thead > tr > th,
+table[rules=rows i] > tbody > tr > td, table[rules=rows i] > tbody > tr > th,
+table[rules=rows i] > tfoot > tr > td, table[rules=rows i] > tfoot > tr > th {
+  border-width: 1px; border-style: none;
+}
+
+table[rules=cols i] > tr > td, table[rules=cols i] > tr > th,
+table[rules=cols i] > thead > tr > td, table[rules=cols i] > thead > tr > th,
+table[rules=cols i] > tbody > tr > td, table[rules=cols i] > tbody > tr > th,
+table[rules=cols i] > tfoot > tr > td, table[rules=cols i] > tfoot > tr > th {
+  border-width: 1px; border-block-style: none; border-inline-style: solid;
+}
+
+table[rules=all i] > tr > td, table[rules=all i] > tr > th,
+table[rules=all i] > thead > tr > td, table[rules=all i] > thead > tr > th,
+table[rules=all i] > tbody > tr > td, table[rules=all i] > tbody > tr > th,
+table[rules=all i] > tfoot > tr > td, table[rules=all i] > tfoot > tr > th {
+  border-width: 1px; border-style: solid;
+}
+
 /* Lists. */
 ul { list-style-type: disc }
 ol { list-style-type: decimal }
