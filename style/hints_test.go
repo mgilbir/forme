@@ -409,3 +409,79 @@ func TestValignOnARowReachesItsCells(t *testing.T) {
 		}
 	}
 }
+
+// TestACellsWidthAndHeightAreHints.
+//
+// HTML's table rendering section maps them exactly as it maps the table's own,
+// and they were missing — so "<td width=50%>", which is how a table said what
+// proportion a column takes and is still how most tables in older documents say
+// it, set nothing and the column was sized by its content.
+//
+// The percentage is the whole point of them. A bare number is a pixel width a
+// stylesheet could have given instead; a percentage is a statement about the
+// table that nothing else in the markup can make.
+func TestACellsWidthAndHeightAreHints(t *testing.T) {
+	for _, c := range []struct{ cell, property, want string }{
+		{`<td id="c" width="120">x</td>`, "width", "120px"},
+		{`<td id="c" width="50%">x</td>`, "width", "50%"},
+		{`<th id="c" width="25%">x</th>`, "width", "25%"},
+		{`<td id="c" height="40">x</td>`, "height", "40px"},
+		{`<th id="c" height="10%">x</th>`, "height", "10%"},
+		// The refusals the table's own attributes take.
+		{`<td id="c" width="120px">x</td>`, "width", "auto"},
+		{`<td id="c" width="-1">x</td>`, "width", "auto"},
+		{`<td id="c" width="florb">x</td>`, "width", "auto"},
+	} {
+		got := computed(t, `<table><tr>`+c.cell+`</tr></table>`)
+		if v := got["c"][c.property]; v != c.want {
+			t.Errorf("%s gave %s %q, want %q", c.cell, c.property, v, c.want)
+		}
+	}
+	// And the two hints a cell had before still arrive, which is what says the
+	// attribute table was added to the cell path rather than put in front of it.
+	got := computed(t, `<table cellpadding="7"><tr>`+
+		`<td id="c" width="120" nowrap valign="top">x</td></tr></table>`)
+	for property, want := range map[string]string{
+		"width": "120px", "padding-top": "7px",
+		"text-wrap-mode": "nowrap", "vertical-align": "top",
+	} {
+		if v := got["c"][property]; v != want {
+			t.Errorf("a cell with four hints on it gave %s %q, want %q", property, v, want)
+		}
+	}
+}
+
+// TestAZeroDimensionIsNoDimension.
+//
+// Most of these attributes are mapped "ignoring zero", which is not a detail:
+// the wording sends the value through the rules for parsing *nonzero* dimension
+// values, which error on a zero, so the attribute is absent rather than zero.
+// "<img width=0>" is an image at its own width in every browser and was an
+// invisible one here.
+//
+// It is a list and not a rule about dimensions, because the wording is not
+// uniform and the difference is deliberate: a table's width ignores a zero and
+// its height does not, in the same sentence of the same section.
+func TestAZeroDimensionIsNoDimension(t *testing.T) {
+	for _, c := range []struct{ markup, id, property, want string }{
+		{`<img id="i" width="0" src="x">`, "i", "width", "auto"},
+		{`<img id="i" height="0" src="x">`, "i", "height", "auto"},
+		{`<img id="i" width="00" src="x">`, "i", "width", "auto"},
+		{`<img id="i" width="0%" src="x">`, "i", "width", "auto"},
+		{`<table id="t" width="0"><tr><td>x</td></tr></table>`, "t", "width", "auto"},
+		{`<table><tr><td id="c" width="0">x</td></tr></table>`, "c", "width", "auto"},
+		{`<table><tr><th id="c" height="0">x</th></tr></table>`, "c", "height", "auto"},
+		// A table's *height* is mapped without the words, so its zero stands.
+		{`<table id="t" height="0"><tr><td>x</td></tr></table>`, "t", "height", "0px"},
+		// And an SVG's are SVG's own, where a zero means the element is not
+		// rendered rather than that the attribute was not written.
+		{`<svg id="s" width="0" height="0"></svg>`, "s", "width", "0px"},
+		// The control: a dimension that is not zero is still read.
+		{`<img id="i" width="1" src="x">`, "i", "width", "1px"},
+	} {
+		got := computed(t, c.markup)
+		if v := got[c.id][c.property]; v != c.want {
+			t.Errorf("%s gave %s %q, want %q", c.markup, c.property, v, c.want)
+		}
+	}
+}

@@ -30,13 +30,23 @@ import (
 // a user-agent rule can never beat a hint, and any author rule at all can,
 // including "* { width: auto }".
 //
-// # Why so few
+// # Which ones are here
 //
-// Only the attributes whose element this engine lays out, and only the ones
-// that are a length. The rest of HTML's presentational attributes — align,
-// bgcolor, border, cellpadding — belong to elements that are refused or to a
-// table algorithm that does not exist yet, and a table of hints for boxes that
-// are never built would read as coverage.
+// Only the attributes whose element this engine lays out. That was once only
+// the ones that are a length, and the note here said so; it has grown as the
+// elements have — bgcolor and cellpadding arrived with the table algorithm they
+// needed, and the colour and font attributes with the elements that carry them.
+//
+// "align" is not here and is not missing: HTML states it as user agent
+// stylesheet *rules* rather than as an attribute mapping, and it is in
+// layout/uastyle.go with the rest of them. The difference is not observable —
+// a hint carries zero specificity in the author origin and loses to every
+// author declaration, and a user agent rule loses to them too — so the place to
+// put it is the place the specification puts it.
+//
+// "border" is still absent, and is the one worth naming: it maps to the four
+// border widths on the table *and* turns the frame and rules attributes on,
+// which is a dozen more rules about which edges of which cells are drawn.
 
 // hintOrder is the cascade order number every hint carries.
 //
@@ -90,6 +100,17 @@ var hintedAttributes = map[string]map[string]string{
 	// test writes as <table height="20">, so a browser that ignored the
 	// attribute would fail its own reftest.
 	"table": {"cellspacing": "border-spacing", "width": "width", "height": "height"},
+	// And on a cell, which the same section maps the same way: "maps to the
+	// dimension property (ignoring zero)". They were missing, so
+	// "<td width=50%>" — which is how a table said what proportion a column
+	// takes, and is still how most tables in older documents say it — set
+	// nothing at all and the column was sized by its content.
+	//
+	// The percentage is the whole point of them. A bare number is a pixel width
+	// a stylesheet could have given instead; a percentage is a statement about
+	// the table that nothing else in the markup can make.
+	"td": {"width": "width", "height": "height"},
+	"th": {"width": "width", "height": "height"},
 	// <ol start="5"> and <li value="3"> are the counter, written as attributes.
 	// They take a signed integer rather than a dimension, so they are read by
 	// integerAttr below instead of the table's usual dimensionValue.
@@ -184,9 +205,26 @@ var counterHintAttributes = map[string]bool{"start": true, "value": true}
 // not become a length it guessed at.
 func presentationalHints(n *html.Node) map[string][]css.ComponentValue {
 	name := strings.ToLower(n.Name)
-	if name == "td" || name == "th" {
-		return cellHints(n)
+	out := attributeHints(name, n)
+	if name != "td" && name != "th" {
+		return out
 	}
+	// A cell takes two more that its own attribute table cannot express: its
+	// *table's* cellpadding, and a boolean attribute that HTML states as a rule
+	// rather than as a mapping. They are separate because they are found
+	// differently, and they set properties the table above does not, so the
+	// merge needs no order.
+	for property, vals := range cellHints(n) {
+		if out == nil {
+			out = map[string][]css.ComponentValue{}
+		}
+		out[property] = vals
+	}
+	return out
+}
+
+// attributeHints is the table above, read for one element.
+func attributeHints(name string, n *html.Node) map[string][]css.ComponentValue {
 	attrs, ok := hintedAttributes[name]
 	if !ok {
 		return nil
@@ -215,6 +253,15 @@ func presentationalHints(n *html.Node) map[string][]css.ComponentValue {
 			value, ok = counterResetValue(raw)
 		} else {
 			value, ok = dimensionValue(raw)
+			if ok && zeroIsNoDimension[name][attr] && isZeroDimension(value) {
+				// "Maps to the dimension property (ignoring zero)", which is
+				// the wording HTML uses for most of these and is not a detail:
+				// a zero is parsed by "the rules for parsing *nonzero*
+				// dimension values", which errors, so the attribute is absent
+				// rather than zero. "<img width=0>" is an image at its own
+				// width in every browser, and was an invisible one here.
+				ok = false
+			}
 		}
 		if !ok {
 			continue
@@ -346,6 +393,34 @@ func dimensionValue(raw string) (string, bool) {
 	return "", false
 }
 
+// zeroIsNoDimension names the attributes HTML maps "ignoring zero", by element.
+//
+// It is a list rather than a rule about dimensions because the wording is not
+// uniform and the difference is deliberate: a table's *width* ignores a zero
+// and its *height* does not, in the same sentence of the same section.
+//
+// <svg width> and <svg height> are absent, and that is SVG's rule rather than
+// an omission: SVG 2 makes a zero width a statement that the element is not
+// rendered, so ignoring it would turn "draw nothing" into "draw at whatever
+// size the viewport gives".
+var zeroIsNoDimension = map[string]map[string]bool{
+	"img":   {"width": true, "height": true},
+	"table": {"width": true},
+	"td":    {"width": true, "height": true},
+	"th":    {"width": true, "height": true},
+}
+
+// isZeroDimension reports whether a dimension this file produced is a zero.
+//
+// It reads what dimensionValue wrote rather than the attribute, because the two
+// spellings a zero arrives in — "0px" and "0%" — are both zero and neither is
+// the text the document held: "000" and "0.0" are not dimension values at all,
+// and "00%" came through as "00%".
+func isZeroDimension(value string) bool {
+	digits := strings.TrimSuffix(strings.TrimSuffix(value, "px"), "%")
+	return digits != "" && strings.Trim(digits, "0") == ""
+}
+
 // cellHints are the hints a table cell takes: its table's cellpadding, and its
 // own nowrap.
 //
@@ -408,7 +483,7 @@ func valignValue(raw string) (string, bool) {
 	return "", false
 }
 
-// cellPaddingHint reads the cellpadding an ancestor table declares.// cellPaddingHint reads the cellpadding an ancestor table declares.
+// cellPaddingHint reads the cellpadding an ancestor table declares.
 //
 // It is the one hint that is not an attribute of the element it styles:
 // cellpadding is written once on the table and applies to every cell in it. The
