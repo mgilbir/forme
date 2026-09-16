@@ -25,6 +25,16 @@ const UserAgentCSS = `
 /* The elements that produce no box at all. */
 head, title, meta, link, base, style { display: none }
 
+/* And the attribute that says so about any element, §15.3.1. It was not read at
+   all, so "<div hidden>" was a visible div — which is the ordinary way a
+   document hides something and the one this engine was most likely to meet.
+
+   "until-found" is the value that means "hidden, but findable by the browser's
+   own search", and there is nothing to search a printed page with; the element
+   is laid out, which is what a browser does with it once the search has found
+   it. The rule is HTML's own, flag for flag. */
+[hidden]:not([hidden=until-found i]) { display: none }
+
 /* Block-level structure. */
 html, body, div, p, blockquote, figure, figcaption, address,
 header, footer, nav, section, article, aside, main, hgroup,
@@ -80,15 +90,75 @@ body { margin-top: 8px; margin-right: 8px; margin-bottom: 8px; margin-left: 8px 
 
 hr {
   margin-top: 0.5em; margin-bottom: 0.5em;
+  margin-left: auto; margin-right: auto;
   border-top-width: 1px; border-right-width: 1px;
   border-bottom-width: 1px; border-left-width: 1px;
   border-top-style: inset; border-right-style: inset;
   border-bottom-style: inset; border-left-style: inset;
 }
 
+/* The align attribute, §15.3.2, which is how a document said "centre this"
+   before text-align existed. The element lists are HTML's own and are not a
+   family that can be shortened: <legend> and <caption> are deliberately absent
+   from all four, and <table align> is not alignment at all but a float.
+
+   The "i" is HTML's too, and is redundant with the folding of an enumerated
+   value — it is kept because the rule is quoted rather than derived, and a
+   reader comparing the two should find them the same. */
+center,
+div[align=center i], div[align=middle i],
+p[align=center i], h1[align=center i], h2[align=center i], h3[align=center i],
+h4[align=center i], h5[align=center i], h6[align=center i],
+thead[align=center i], tbody[align=center i], tfoot[align=center i],
+tr[align=center i], td[align=center i], th[align=center i] { text-align: center }
+
+div[align=left i],
+p[align=left i], h1[align=left i], h2[align=left i], h3[align=left i],
+h4[align=left i], h5[align=left i], h6[align=left i],
+thead[align=left i], tbody[align=left i], tfoot[align=left i],
+tr[align=left i], td[align=left i], th[align=left i] { text-align: left }
+
+div[align=right i],
+p[align=right i], h1[align=right i], h2[align=right i], h3[align=right i],
+h4[align=right i], h5[align=right i], h6[align=right i],
+thead[align=right i], tbody[align=right i], tfoot[align=right i],
+tr[align=right i], td[align=right i], th[align=right i] { text-align: right }
+
+div[align=justify i],
+p[align=justify i], h1[align=justify i], h2[align=justify i], h3[align=justify i],
+h4[align=justify i], h5[align=justify i], h6[align=justify i],
+thead[align=justify i], tbody[align=justify i], tfoot[align=justify i],
+tr[align=justify i], td[align=justify i], th[align=justify i] { text-align: justify }
+
+/* And on an <hr>, where align is not about the text but about which way the
+   rule is pushed. §15.3.6. */
+hr[align=left i] { margin-left: 0; margin-right: auto }
+hr[align=right i] { margin-left: auto; margin-right: 0 }
+hr[align=center i] { margin-left: auto; margin-right: auto }
+
 /* Lists. */
 ul { list-style-type: disc }
 ol { list-style-type: decimal }
+
+/* The type attribute, which is how a list said which counter it wanted before
+   list-style-type existed and is still how half the older documents say it.
+   HTML's rendering section §15.3.7 gives these nine rules and this is them,
+   spelling for spelling.
+
+   The "s" on the ordered ones is the point of them: "type" is one of the
+   attributes HTML compares ASCII case-insensitively, so without the flag
+   "[type=a]" and "[type=A]" would be one selector and "<ol type=A>" would be
+   numbered in lower case. The unordered ones take "i" for the same reason in
+   reverse — "SQUARE" is a square. */
+ol[type="1"], li[type="1"] { list-style-type: decimal }
+ol[type=a s], li[type=a s] { list-style-type: lower-alpha }
+ol[type=A s], li[type=A s] { list-style-type: upper-alpha }
+ol[type=i s], li[type=i s] { list-style-type: lower-roman }
+ol[type=I s], li[type=I s] { list-style-type: upper-roman }
+ul[type=none i], li[type=none i] { list-style-type: none }
+ul[type=disc i], li[type=disc i] { list-style-type: disc }
+ul[type=circle i], li[type=circle i] { list-style-type: circle }
+ul[type=square i], li[type=square i] { list-style-type: square }
 
 /* Text-level semantics. */
 b, strong { font-weight: bold }
