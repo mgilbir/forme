@@ -84,8 +84,17 @@ func absolutiseLengths(cs ComputedStyle, size, root Unit) {
 // walk at all, so a test of what the walk leaves alone has to put an em beside
 // it or it is testing this function instead.
 func mightHoldAFontRelativeLength(v string) bool {
-	return strings.Contains(v, "em") || strings.Contains(v, "EM") ||
-		strings.Contains(v, "eM") || strings.Contains(v, "Em")
+	// One pass and not four. It was written as four strings.Contains — one per
+	// spelling of the two letters — and a computed style holds a hundred and
+	// forty-eight values, so that is nearly six hundred scans of a string per
+	// element. A profile of a small document put this one function at seventeen
+	// per cent of the whole Build.
+	for i := 0; i+1 < len(v); i++ {
+		if (v[i] == 'e' || v[i] == 'E') && (v[i+1] == 'm' || v[i+1] == 'M') {
+			return true
+		}
+	}
+	return false
 }
 
 // absolutiseValues rewrites in place and reports whether it changed anything.
