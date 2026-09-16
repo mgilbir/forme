@@ -95,7 +95,9 @@ type candidate struct {
 	value     []css.ComponentValue
 	important bool
 	origin    Origin
-	spec      css.Specificity
+	// layer is the cascade layer the declaration was written in — see layer.go.
+	layer int
+	spec  css.Specificity
 	// order is the position of the declaration in the whole input, which breaks
 	// the remaining ties. Two declarations that are equal in every other term
 	// are decided by which was written later, so this has to be a single
@@ -121,6 +123,18 @@ type Styler struct {
 	// stamps on a finding raised while one is. It is empty outside prepare,
 	// which is where the findings that belong to no sheet are raised.
 	sheet string
+	// The cascade layer being prepared, and the layers seen so far. layer is
+	// zero outside any @layer, which is not layer number zero but the band
+	// above every layer for a normal declaration — see layerRank. layerName is
+	// the full path of the open layer, which is what makes a name written
+	// inside another a sublayer of it.
+	layer      int
+	layerName  string
+	layers     map[string]int
+	layerCount int
+	// reportedNestedLayer keeps the note about a layer inside a layer to one
+	// per document. See reportNestedLayer.
+	reportedNestedLayer bool
 	// attrOffset is where in the *markup* the style attribute being expanded
 	// was written, or -1 outside one.
 	//
@@ -249,7 +263,7 @@ func ApplyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) Styled {
 	// the whole run rather than once per element — the answer does not depend
 	// on the element, and a document of ten thousand nodes would otherwise ask
 	// the same question ten thousand times.
-	rules := s.prepare(sheets)
+	rules := newRuleSet(s.prepare(sheets))
 
 	out := Styled{
 		Styles:            map[*html.Node]ComputedStyle{},
@@ -403,7 +417,17 @@ func ApplyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) Styled {
 type preparedRule struct {
 	selectors []css.Selector
 	decls     []preparedDecl
-	origin    Origin
+	// subjects is the element names this rule's selectors can select,
+	// ASCII-lower-cased, and is empty when at least one of them names no type
+	// at all — ".a", "#x", "[hidden]" — and so can select anything. It is what
+	// ruleSet indexes on; see there for why.
+	subjects []string
+	origin   Origin
+	// layer is the cascade layer the rule was written in, zero for none. See
+	// layer.go: it is a term of the cascade between the origin and the
+	// specificity, and it is carried on the rule because every declaration in
+	// one block is in the same layer.
+	layer int
 }
 
 type preparedDecl struct {
@@ -476,6 +500,52 @@ func (s *Styler) prepareMedia(rule css.Rule, parent []css.ComponentValue, origin
 		s.prepareRule(r, parent, origin, out, order)
 	}
 }
+
+// prepareSupports prepares the rules of an @supports whose condition this
+// engine answers yes to, in place, exactly as prepareMedia does.
+//
+// A condition that answers no drops what is inside it, and that is not a
+// failure to report: the block is the version an author wrote for an engine
+// that understands the declaration, and the fallback they wrote outside it is
+// what this page gets. Saying so on every such stylesheet would be reporting
+// the rule working.
+//
+// What is reported is a condition this cannot read — selector(), font-tech(),
+// or a shape beyond the and/or/not of §2 — for the reason a media query naming
+// an unanswerable feature is: a browser printing the same document may apply
+// rules this page does not have.
+func (s *Styler) prepareSupports(rule css.Rule, parent []css.ComponentValue,
+	origin Origin, out *[]preparedRule, order *int) {
+
+	matches, unreadable := supportsCondition(rule.Prelude)
+	if unreadable != "" {
+		s.report(Finding{
+			Offset: rule.Offset,
+			Message: "the @supports condition " + quoted(serialize(rule.Prelude)) +
+				" asks about " + unreadable + ", which this engine cannot answer, " +
+				"so the rules inside it were not applied",
+			Unsupported: true,
+			Property:    "@supports",
+		})
+	}
+	if !matches || !rule.HasBlock {
+		return
+	}
+	if parent != nil {
+		s.prepareNestedConditional(rule, parent, origin, out, order)
+		return
+	}
+	inner, errs := css.ParseRulesFromValues(rule.Block)
+	for _, e := range errs {
+		s.report(Finding{Offset: e.Offset, Message: e.Message, Unsupported: e.Unsupported})
+	}
+	for _, r := range inner {
+		s.prepareRule(r, parent, origin, out, order)
+	}
+}
+
+// quoted is a condition as it appears in a finding.
+func quoted(s string) string { return strconv.Quote(strings.TrimSpace(s)) }
 
 // prepareNestedConditional prepares an @media written *inside* a style rule.
 //
@@ -550,6 +620,14 @@ func (s *Styler) prepareRule(rule css.Rule, parent []css.ComponentValue, origin 
 	if rule.At {
 		if strings.EqualFold(rule.Name, "media") {
 			s.prepareMedia(rule, parent, origin, out, order)
+			return
+		}
+		if strings.EqualFold(rule.Name, "layer") {
+			s.prepareLayer(rule, parent, origin, out, order)
+			return
+		}
+		if strings.EqualFold(rule.Name, "supports") {
+			s.prepareSupports(rule, parent, origin, out, order)
 			return
 		}
 		if strings.EqualFold(rule.Name, "page") {
@@ -645,7 +723,8 @@ func (s *Styler) prepareStyleBlock(block []css.ComponentValue, sels []css.Select
 		s.report(Finding{Offset: e.Offset, Message: e.Message, Unsupported: e.Unsupported})
 	}
 
-	prepared := preparedRule{selectors: sels, origin: origin}
+	prepared := preparedRule{selectors: sels, origin: origin, layer: s.layer,
+		subjects: subjectsOf(sels)}
 	di, ni := 0, 0
 	for di < len(decls) || ni < len(nested) {
 		if ni >= len(nested) || (di < len(decls) && decls[di].Offset <= nested[ni].Offset) {
@@ -780,157 +859,14 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 		d.Value = unsetValue()
 	}
 
-	if nonNegative[name] && hasNegativeNumber(d.Value) {
-		// A declaration whose value is illegal is not a declaration with a
-		// strange value: CSS 2.1 §4.2 says the whole declaration is dropped, and
-		// what stands is whatever the cascade would have produced without it.
-		//
-		// That is why this cannot be done where the value is read. "height: 0;
-		// height: -1px" has to compute to zero, and a layout that refuses the
-		// negative number sees only the last declaration and falls back to
-		// auto — which is a full-height box where the author asked for none.
-		// The suite has thirty-five tests of exactly that shape, one per
-		// property per unit, and they are what found it.
-		//
-		// The finding is not marked unsupported. Nothing is missing from the
-		// engine here; a stylesheet said something CSS forbids and CSS says
-		// what to do about it.
-		s.report(Finding{
-			Offset: d.Offset,
-			Message: "\"" + name + ": " + serialize(d.Value) + "\" is negative, which " +
-				name + " does not allow, so the declaration was dropped",
-			Property: name,
-		})
-		return nil
-	}
-
-	if colourValued[name] && !legalColour(name, d.Value) {
-		// §4.2 again, and the same reason it cannot wait until the value is
-		// read: "color: 'red'" is a string where a colour belongs, so the
-		// declaration is invalid and is dropped, and what stands is whatever the
-		// cascade would have produced without it.
-		//
-		// Read at use time instead, the invalid declaration is still the winning
-		// one — it has the higher specificity, that is why it is there — and the
-		// colour comes out as the property's initial value. colors-007 is four
-		// paragraphs that must each be green, and two of them came out black:
-		// the lower-specificity "p.incorrect { color: green }" never got to
-		// apply, because the declaration that should have been thrown away was
-		// still standing in front of it.
+	if why, drop := dropsForValue(name, d.Value); drop {
+		// §4.2: the value is not one the property takes, so there is no
+		// declaration here at all. See valuegate.go for the six of these and
+		// for why they are not written out at this point any more.
 		//
 		// Not marked unsupported. Nothing is missing from the engine; a
-		// stylesheet said something CSS forbids and CSS says what to do about
-		// it.
-		s.report(Finding{
-			Offset: d.Offset,
-			Message: "\"" + name + ": " + serialize(d.Value) + "\" is not a colour, " +
-				"so the declaration was dropped",
-			Property: name,
-		})
-		return nil
-	}
-
-	if name == "background-image" && !legalBackgroundImage(d.Value) {
-		// §4.2 a third time. "background-image: url(x.png) repeat" is a
-		// background-repeat value written where only an <image> belongs, so
-		// there is no declaration here at all and nothing paints — which is
-		// what every browser shows, and is why this is not a gap in the engine.
-		//
-		// It matters that this is not the unsupported report the painter would
-		// otherwise raise. That report says "a browser draws something here and
-		// this does not", and the whole reftest ratchet is built on the
-		// difference: CSS2/backgrounds/background-image-005 asks for green text
-		// and gets it, and was counted as a vacuous pass for years because the
-		// engine claimed to be missing an image no engine draws.
-		//
-		// Not marked unsupported, for the reason the checks above are not.
-		s.report(Finding{
-			Offset: d.Offset,
-			Message: "\"background-image: " + serialize(d.Value) + "\" is not an " +
-				"image, so the declaration was dropped",
-			Property: name,
-		})
-		return nil
-	}
-
-	if name == "display" && !legalDisplay(d.Value) {
-		// §4.2 once more, and this one has a visible cost in the other
-		// direction. An engine that reads an unrecognised display value as the
-		// property's *initial* value makes the element inline, and the initial
-		// value is what CSS says the property means when nobody has set it —
-		// which is not this case. The declaration is invalid, so it never
-		// happened, and what stands is what the cascade would have produced
-		// without it: the user agent sheet's "div { display: block }".
-		//
-		// The two answers are as far apart as they can be. CSS2/abspos/
-		// static-fixed-inside-abspos writes "display: absolute" — the author
-		// meant "position" — on a div whose background is the green square the
-		// test is about. Read as inline, the div has no in-flow content, so it
-		// has no line box, so nothing of it is painted at all and the page is
-		// the red square underneath.
-		//
-		// It is also what makes the prefixed idiom work. An author who writes
-		// "display: -moz-box; display: flex" is relying on the first
-		// declaration being thrown away by everything that does not know it,
-		// and an engine that instead lets it stand as "inline" gets neither.
-		//
-		// Not marked unsupported, for the reason the checks above are not:
-		// nothing is missing here, a stylesheet said something CSS forbids and
-		// CSS says what to do about it.
-		s.report(Finding{
-			Offset: d.Offset,
-			Message: "\"display: " + serialize(d.Value) + "\" is not a display " +
-				"value, so the declaration was dropped",
-			Property: name,
-		})
-		return nil
-	}
-
-	if name == "quotes" && !legalQuotes(d.Value) {
-		// §12.3.2's grammar is "[<string> <string>]+ | none", so an odd number of
-		// strings names a level with an opening mark and no closing one and is not
-		// a value at all. §4.2 drops it, and dropping it here rather than where it
-		// is read is what makes the *inherited* pairs stand: a child of an element
-		// that set two good pairs must go on using them, and an engine that fell
-		// back to the initial value at read time would quote the child in a
-		// different alphabet from its parent.
-		//
-		// Not marked unsupported, for the same reason the negative lengths above
-		// are not: nothing is missing from the engine, and CSS says what to do.
-		s.report(Finding{
-			Offset: d.Offset,
-			Message: "\"quotes: " + serialize(d.Value) + "\" is not a list of pairs of " +
-				"strings, so the declaration was dropped",
-			Property: name,
-		})
-		return nil
-	}
-
-	if name == "content" && !legalCounterFunctions(d.Value) {
-		// §12.2's grammar gives the two counter functions fixed argument lists:
-		//
-		//	counter(<identifier>) | counter(<identifier>, <list-style-type>)
-		//	counters(<identifier>, <string>) | counters(<identifier>, <string>, <list-style-type>)
-		//
-		// so "counter(c, '.')" names a separator on the function that has none,
-		// and "counter(c, decimal, decimal)" gives two styles to a function that
-		// takes one. Neither is a value, and §4.2 drops the declaration.
-		//
-		// Dropping it here is what makes the *earlier* declaration stand, which
-		// is the whole of what a test of this can observe: content-counter-016
-		// writes "content: counter(c)" and then four malformed ones after it,
-		// and requires the numbering to come out 1 to 12 from the first. Read at
-		// use time instead, the last declaration is the only one left and the
-		// page numbers every item 1000.
-		//
-		// Not marked unsupported, for the same reason the two checks above are
-		// not: nothing is missing from the engine, and CSS says what to do.
-		s.report(Finding{
-			Offset: d.Offset,
-			Message: "\"content: " + serialize(d.Value) + "\" calls a counter " +
-				"function with arguments it does not take, so the declaration was dropped",
-			Property: name,
-		})
+		// stylesheet said something CSS forbids and CSS says what to do.
+		s.report(Finding{Offset: d.Offset, Message: why, Property: name})
 		return nil
 	}
 
@@ -1635,18 +1571,21 @@ var pseudoElementNames = []string{"before", "after", "marker", "first-line", "fi
 // It exists so that a pseudo-element with nothing said about it costs nothing: a
 // document of ten thousand elements would otherwise compute three extra styles
 // each, all of them the initial values, and generate nothing from any of them.
-func (s *Styler) anyRuleTargets(rules []preparedRule, n *html.Node, name string) bool {
-	for _, r := range rules {
+func (s *Styler) anyRuleTargets(rules *ruleSet, n *html.Node, name string) bool {
+	found := false
+	rules.forEach(n, func(r *preparedRule) bool {
 		for _, sel := range r.selectors {
 			if sel.PseudoElement != name {
 				continue
 			}
 			if s.matcher.Match(sel, n) {
-				return true
+				found = true
+				return false
 			}
 		}
-	}
-	return false
+		return true
+	})
+	return found
 }
 
 // computeForPseudo resolves the properties of a pseudo-element.
@@ -1654,7 +1593,7 @@ func (s *Styler) anyRuleTargets(rules []preparedRule, n *html.Node, name string)
 // It inherits from the element it belongs to rather than from that element's
 // parent, which is what makes "p { color: red } p::before { content: '>' }" draw
 // a red marker without the author saying so twice.
-func (s *Styler) computeForPseudo(n *html.Node, rules []preparedRule,
+func (s *Styler) computeForPseudo(n *html.Node, rules *ruleSet,
 	owner ComputedStyle, name string) (ComputedStyle, bool) {
 	return s.computeFor(n, rules, map[*html.Node]ComputedStyle{n: owner}, name)
 }
@@ -1665,23 +1604,24 @@ func (s *Styler) computeForPseudo(n *html.Node, rules []preparedRule,
 // It also reports whether font-size came from a declaration rather than by
 // inheritance, which is the one thing a consumer cannot recover from the map it
 // returns. See Styled.OwnFontSize for why that matters.
-func (s *Styler) computeFor(n *html.Node, rules []preparedRule,
+func (s *Styler) computeFor(n *html.Node, rules *ruleSet,
 	done map[*html.Node]ComputedStyle, pseudo string) (ComputedStyle, bool) {
 
 	var cands []candidate
-	for _, r := range rules {
+	rules.forEach(n, func(r *preparedRule) bool {
 		spec, ok := s.matchSpecificityFor(r, n, pseudo)
 		if !ok {
-			continue
+			return true
 		}
 		for _, d := range r.decls {
 			cands = append(cands, candidate{
 				property: d.property, value: d.value, important: d.important,
-				origin: r.origin, spec: spec,
+				origin: r.origin, layer: r.layer, spec: spec,
 				order: d.order, offset: d.offset,
 			})
 		}
-	}
+		return true
+	})
 
 	// The presentational hints of hints.go, at the very bottom of the author
 	// origin: zero specificity and an order number below every declaration an
@@ -1890,7 +1830,133 @@ func (s *Styler) resolve(name string, prop property, value string, have bool, pa
 // The specificity is that of the most specific selector that *matched*, not the
 // most specific in the list. "a, #b {…}" applies to an <a> with the specificity
 // of "a"; taking "#b" would let the rule beat declarations it should lose to.
-func (s *Styler) matchSpecificityFor(r preparedRule, n *html.Node, pseudo string) (css.Specificity, bool) {
+// ruleSet is the prepared rules, with an index from an element's name to the
+// rules that could select it.
+//
+// Every element used to be matched against every rule. The subject compound of
+// a selector is tested for its type before anything else, so most of those
+// comparisons failed on the first byte — but there were a great many of them:
+// the user agent sheet alone is two hundred selectors, and the cost is the
+// product of that and the document.
+//
+// The index is built once per document and asked once per element, which is the
+// part that matters. The first attempt asked *per rule* instead — a set on each
+// rule, tested in the loop — and was ten per cent slower than no filter at all,
+// because hashing the element's name two hundred times costs more than two
+// hundred failed byte comparisons. One lookup, then two short slices.
+type ruleSet struct {
+	rules []preparedRule
+	// byName holds, per element name, the rules every one of whose selectors
+	// names a type, filed under each type they name. A rule naming three types
+	// is in three of these lists and is still reached once, because an element
+	// has one name.
+	byName map[string][]int32
+	// any holds the rules that can select anything, which is every rule with a
+	// selector that names no type. They are walked for every element.
+	any []int32
+}
+
+func newRuleSet(rules []preparedRule) *ruleSet {
+	rs := &ruleSet{rules: rules, byName: make(map[string][]int32, 64)}
+	for i := range rules {
+		if len(rules[i].subjects) == 0 {
+			rs.any = append(rs.any, int32(i))
+			continue
+		}
+		for _, name := range rules[i].subjects {
+			rs.byName[name] = append(rs.byName[name], int32(i))
+		}
+	}
+	return rs
+}
+
+// forEach calls fn for every rule that could select the element, in no
+// particular order.
+//
+// Order does not matter and that is not an accident: every declaration carries
+// its own order number, and beats decides between two candidates from that
+// rather than from the sequence they were collected in.
+func (rs *ruleSet) forEach(n *html.Node, fn func(r *preparedRule) bool) {
+	name := asciiLowerName(n.Name)
+	if name == "" {
+		// A name this cannot fold, which is a name no HTML element has. Every
+		// rule is considered rather than guessed about.
+		for i := range rs.rules {
+			if !fn(&rs.rules[i]) {
+				return
+			}
+		}
+		return
+	}
+	for _, i := range rs.any {
+		if !fn(&rs.rules[i]) {
+			return
+		}
+	}
+	for _, i := range rs.byName[name] {
+		if !fn(&rs.rules[i]) {
+			return
+		}
+	}
+}
+
+// subjectsOf collects the element names a selector list can select, or nothing
+// when it can select anything.
+//
+// A selector whose subject names no type can select anything, and so can one
+// whose type this cannot fold. The matcher compares a type with
+// strings.EqualFold, which is Unicode's folding rather than ASCII's, and the two
+// differ on characters no element name has — but "differ only on characters
+// nobody uses" is not an argument for an index that decides whether a rule is
+// looked at. A type with a byte above ASCII is filed under nothing and so is
+// walked for every element, exactly as before.
+func subjectsOf(sels []css.Selector) []string {
+	names := make([]string, 0, len(sels))
+	for _, sel := range sels {
+		if len(sel.Compounds) == 0 {
+			return nil
+		}
+		name := asciiLowerName(sel.Compounds[len(sel.Compounds)-1].Type)
+		if name == "" {
+			return nil
+		}
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	return names
+}
+
+// asciiLowerName lower-cases an element or type name, or answers empty for one
+// that holds a byte the ASCII fold does not decide.
+func asciiLowerName(s string) string {
+	// The common case by far, and it must not allocate: this is asked once per
+	// element per style computation, and a copy of every element name would
+	// cost more than the loop it is saving.
+	upper := -1
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 0x80 {
+			return ""
+		}
+		if upper < 0 && c >= 'A' && c <= 'Z' {
+			upper = i
+		}
+	}
+	if upper < 0 {
+		return s
+	}
+	lower := []byte(s)
+	for i := upper; i < len(lower); i++ {
+		if c := lower[i]; c >= 'A' && c <= 'Z' {
+			lower[i] = c + 'a' - 'A'
+		}
+	}
+	return string(lower)
+}
+
+func (s *Styler) matchSpecificityFor(r *preparedRule, n *html.Node, pseudo string) (css.Specificity, bool) {
 	var best css.Specificity
 	found := false
 	for _, sel := range r.selectors {
@@ -1925,6 +1991,14 @@ func beats(a, b candidate) bool {
 	ao, bo := cascadeRank(a), cascadeRank(b)
 	if ao != bo {
 		return ao > bo
+	}
+	// The layer, which sits between the origin and the specificity: that is
+	// what the feature is for, so that a rule in a later layer wins without
+	// having to out-specify anything. Reaching here means the two agree on
+	// origin and on importance, since CascadeRank tells every pair of those
+	// apart, so one call decides the direction for both.
+	if al, bl := layerRank(a.layer, a.important), layerRank(b.layer, b.important); al != bl {
+		return al > bl
 	}
 	if a.spec != b.spec {
 		return b.spec.Less(a.spec)

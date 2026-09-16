@@ -123,12 +123,13 @@ func TestFontFaceIsNoLongerAnUnsupportedAtRule(t *testing.T) {
 		}
 	}
 
-	// The control is an at-rule that is still not applied. It was @media until
-	// media queries were answered and @page until page margins were, which is
-	// the same argument two rules later: what makes this test worth having is
-	// that *something* is still reported, so that "nothing is reported" cannot
-	// pass for "this one is implemented".
-	other := Build(Input{HTML: `<style>@supports (display: grid) { p { color: red } }</style><p>x</p>`})
+	// The control is an at-rule that is still not applied, and it has moved four
+	// times now: @media until media queries were answered, @page until page
+	// margins were, @supports until its conditions were, @layer until the
+	// cascade took it. What makes this test worth having is that *something* is
+	// still reported, so that "nothing is reported" cannot pass for "this one is
+	// implemented" — and the moving is the feature working.
+	other := Build(Input{HTML: `<style>@keyframes spin { from { opacity: 0 } }</style><p>x</p>`})
 	found := false
 	for _, f := range other.Findings {
 		if f.Rule == RuleUnsupportedAtRule {
@@ -136,7 +137,7 @@ func TestFontFaceIsNoLongerAnUnsupportedAtRule(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Error("@supports stopped being reported too, so the change was not specific to @font-face")
+		t.Error("@keyframes stopped being reported too, so the change was not specific to @font-face")
 	}
 }
 

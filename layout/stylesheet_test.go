@@ -493,20 +493,69 @@ func TestAnImportInAStyleElementIsRelativeToTheDocument(t *testing.T) {
 	}
 }
 
-// TestAConditionalImportIsStillReported. "@import url(x) print" is a media
-// query, and this engine evaluates none — the same argument the <link media>
-// case makes: applying it is a guess and so is skipping it, and the guess that
-// shows least is the one nobody can see.
-func TestAConditionalImportIsStillReported(t *testing.T) {
+// TestAConditionalImportIsAnsweredLikeEveryOtherMediaQuery.
+//
+// "@import url(x) print" is a media query, and it used to be refused with the
+// same argument the <link media> case made: this engine evaluates none, so
+// applying it is a guess and so is skipping it. The engine evaluates them now —
+// style.MatchesMedia answers the identical query inside a sheet — so refusing it
+// here was one question with two answers, and the answer this side gave dropped
+// a file the author had asked for.
+func TestAConditionalImportIsAnsweredLikeEveryOtherMediaQuery(t *testing.T) {
 	dir := cssDir(t)
 	writeCSS(t, filepath.Join(dir, "inner.css"), "p { color: rgb(1, 2, 3) }")
-	writeCSS(t, filepath.Join(dir, "outer.css"), `@import url("inner.css") print;`)
-
-	built := buildLinking(t, dir, `<link rel=stylesheet href=outer.css><p id=p>x</p>`)
-	if got := colourOf(t, built, "p"); got == wantColour {
-		t.Error("a conditional import was applied")
+	for _, c := range []struct {
+		query string
+		apply bool
+	}{
+		{"print", true},
+		{"all", true},
+		{"not screen", true},
+		{"print and (min-width: 1px)", true},
+		{"screen", false},
+		{"not print", false},
+		{"tty", false},
+	} {
+		writeCSS(t, filepath.Join(dir, "outer.css"),
+			`@import url("inner.css") `+c.query+`;`)
+		built := buildLinking(t, dir, `<link rel=stylesheet href=outer.css><p id=p>x</p>`)
+		if applied := colourOf(t, built, "p") == wantColour; applied != c.apply {
+			t.Errorf("@import url(inner.css) %s applied=%v, want %v", c.query, applied, c.apply)
+		}
+		// And nothing is said either way: a query this engine answers is not a
+		// gap, whichever answer it gives.
+		for _, f := range built.Findings {
+			if f.Rule == RuleUnsupportedAtRule || f.Property == "media" {
+				t.Errorf("@import url(inner.css) %s reported %q", c.query, f.Message)
+			}
+		}
 	}
-	requireFinding(t, built.Findings, RuleUnsupportedAtRule, "@import")
+}
+
+// TestAnImportCarryingALayerNameIsStillRefused is the prelude piece that is not
+// a media query, and it stays refused for a reason the media query has not got.
+//
+// An imported sheet whose layer name was dropped would arrive *unlayered*, and
+// an unlayered rule beats every layered one — so a sheet the author put at the
+// bottom of the layer order would win against all of them. Left in the
+// stylesheet and reported, it cannot mislead. The same goes for supports(),
+// whose condition decides whether the file is wanted at all.
+func TestAnImportCarryingALayerNameIsStillRefused(t *testing.T) {
+	dir := cssDir(t)
+	writeCSS(t, filepath.Join(dir, "inner.css"), "p { color: rgb(1, 2, 3) }")
+	for _, prelude := range []string{
+		`url("inner.css") layer(base)`,
+		`url("inner.css") layer`,
+		`url("inner.css") supports(display: grid)`,
+		`url("inner.css") layer(base) print`,
+	} {
+		writeCSS(t, filepath.Join(dir, "outer.css"), `@import `+prelude+`;`)
+		built := buildLinking(t, dir, `<link rel=stylesheet href=outer.css><p id=p>x</p>`)
+		if colourOf(t, built, "p") == wantColour {
+			t.Errorf("@import %s was applied", prelude)
+		}
+		requireFinding(t, built.Findings, RuleUnsupportedAtRule, "@import")
+	}
 	fired[RuleUnsupportedAtRule] = true
 }
 
@@ -702,13 +751,17 @@ func TestLinkedStylesheetRelIsATokenList(t *testing.T) {
 	}
 }
 
-// TestLinkedStylesheetMedia checks the one media decision this engine can make
-// and the reporting of the ones it cannot.
+// TestLinkedStylesheetMedia checks that a media attribute is answered with the
+// engine's own media query evaluator, and that only what it cannot answer is
+// reported.
 //
-// A page is printed, so "print" and "all" apply and "screen" does not — that is
-// a correct answer rather than a gap, and it raises nothing. A media *query*, on
-// the other hand, is something this engine cannot evaluate at all, and applying
-// it or dropping it silently would both be guesses.
+// There used to be a second reader here that took a comma-separated list of bare
+// media types and refused everything else. It was right when it was written —
+// the engine evaluated no queries then — and wrong afterwards: "not screen",
+// "only print" and a bare "(min-width: 1px)" are the ordinary ways to mark a
+// sheet for paper, and every one of them dropped the whole stylesheet and
+// reported a gap that was not there. The identical query inside a sheet was
+// evaluated exactly.
 func TestLinkedStylesheetMedia(t *testing.T) {
 	dir := cssDir(t)
 	writeCSS(t, filepath.Join(dir, "sheet.css"), "p { color: rgb(1, 2, 3) }")
@@ -725,9 +778,21 @@ func TestLinkedStylesheetMedia(t *testing.T) {
 		{"screen, print", true, false},
 		{"screen", false, false},
 		{"tty", false, false},
-		{"screen and (min-width: 40em)", false, true},
-		{"only print", false, true},
-		{"not screen", false, true},
+		// The ones the old reader refused, every one of them answerable.
+		{"only print", true, false},
+		{"not screen", true, false},
+		{"print and (min-width: 1px)", true, false},
+		{"(min-width: 1px)", true, false},
+		{"screen and (min-width: 40em)", false, false},
+		{"not print", false, false},
+		// A media type this engine has never heard of is not matched, which is
+		// a complete answer and the one a browser gives.
+		{"florb", false, false},
+		{"not florb", true, false},
+		// What is still reported: a feature about a device this is not, because
+		// there a browser printing the same document may differ.
+		{"(hover: hover)", false, true},
+		{"print, (hover: hover)", true, true},
 	} {
 		built := buildLinking(t, dir,
 			`<link rel=stylesheet media="`+tc.media+`" href=sheet.css><p id=p>x</p>`)
@@ -747,6 +812,32 @@ func TestLinkedStylesheetMedia(t *testing.T) {
 		}
 	}
 	fired[RuleUnsupportedValue] = true
+}
+
+// TestAStyleElementHasAMediaAttributeToo. HTML §4.2.6 gives <style> the same
+// media attribute <link> has and means the same thing by it, and it was not
+// read at all — so a document that kept its screen rules in "<style
+// media=screen>", which is what a single-file document writes instead of a
+// second stylesheet, had every one of them applied to the paper.
+func TestAStyleElementHasAMediaAttributeToo(t *testing.T) {
+	for _, tc := range []struct {
+		media string
+		apply bool
+	}{
+		{"print", true},
+		{"all", true},
+		{"not screen", true},
+		{"(min-width: 1px)", true},
+		{"screen", false},
+		{"tty", false},
+		{"not print", false},
+	} {
+		built := Build(Input{HTML: `<style media="` + tc.media +
+			`">p { color: rgb(1, 2, 3) }</style><p id=p>x</p>`})
+		if applied := colourOf(t, built, "p") == wantColour; applied != tc.apply {
+			t.Errorf("<style media=%q> applied=%v, want %v", tc.media, applied, tc.apply)
+		}
+	}
 }
 
 // TestLinkedStylesheetDataURI is the one reference with a scheme that is

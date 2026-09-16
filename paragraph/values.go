@@ -47,7 +47,30 @@ func FmtPx(u style.Unit) string {
 	return strconvFormat(u.Px()) + "px"
 }
 
-// ParseNumber reads a bare number, which line-height accepts as a multiplier.
+// ParseNumber reads CSS Syntax §4.3.3's <number> — which line-height accepts as
+// a multiplier, and which every other reader that starts from a string rather
+// than a token needs too.
+//
+// # Why this is written out rather than handed to strconv.ParseFloat
+//
+// ParseFloat is Go's number syntax, not CSS's, and it accepts four spellings
+// CSS has no way to write: "nan", "inf" (and "infinity"), the hexadecimal float
+// "0x1p3", and the underscore-separated "1_0". The tokenizer reads every one of
+// them as an identifier, so a declaration holding one is invalid and dropped —
+// but a reader that starts from a string never sees a token.
+//
+// **The NaN is the dangerous one, because it is the one each caller already
+// tried to stop.** Every one of them has a guard against a nonsense number —
+// "n < 0" for a percentage, "v <= 0" for a dimension, "wn <= 0" for a ratio —
+// and not one of them stops a NaN, because a NaN is neither greater than nor
+// less than anything and all three comparisons are false for it. The value that
+// most needs refusing is the value that walks straight through.
+//
+// "aspect-ratio: nan" made a box thirty-three million pixels tall before six
+// such readers were brought here: that is style.Unit saturating rather than any
+// arithmetic the author asked for — the lengths are defended, FromPx refuses a
+// NaN and Mul and Div clamp — but nothing refused the *declaration*, so a box
+// was sized by a value nobody could have written, in silence.
 func ParseNumber(s string) (float64, bool) {
 	var v float64
 	var seenDigit, seenDot bool
@@ -104,7 +127,24 @@ func ParseNumber(s string) (float64, bool) {
 	if !seenDigit || sawDotWithNothingAfter {
 		return 0, false
 	}
-	return sign * v * math.Pow(10, exponent), true
+	n := sign * v * math.Pow(10, exponent)
+	if math.IsInf(n, 0) {
+		// The exponent bound below is coarse on purpose — it stops the loop
+		// reading a thousand digits — and it is *inside* the range where the
+		// answer stops existing: 400 passes it and 10^400 is an infinity, which
+		// is how "line-height: 1e400" became a multiplier of +Inf. Nothing
+		// downstream turns that back into a mistake, because every length
+		// operation clamps: the page came out set on the largest line there is,
+		// as though the author had asked for it.
+		//
+		// Refused rather than clamped, which is the same answer the bound gives
+		// one digit later and the answer §4.2 gives a value a property cannot
+		// take. The tokenizer clamps instead, and that is not a disagreement:
+		// it has to hand back a token whatever the text says, and this decides
+		// whether there is a declaration at all.
+		return 0, false
+	}
+	return n, true
 }
 
 // exponentOf reads the digits after an "e", with their own optional sign.

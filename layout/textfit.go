@@ -1,7 +1,6 @@
 package layout
 
 import (
-	"strconv"
 	"strings"
 
 	"github.com/mgilbir/forme/paragraph"
@@ -165,8 +164,8 @@ func percentValue(word string) (float64, bool) {
 	if !strings.HasSuffix(word, "%") {
 		return 0, false
 	}
-	n, err := strconv.ParseFloat(strings.TrimSuffix(word, "%"), 64)
-	if err != nil || n < 0 {
+	n, ok := parseNumber(strings.TrimSuffix(word, "%"))
+	if !ok || n < 0 {
 		return 0, false
 	}
 	return n / 100, true

@@ -4,7 +4,6 @@ import (
 	"encoding/xml"
 	"io"
 	"math"
-	"strconv"
 	"strings"
 
 	"github.com/mgilbir/forme/css"
@@ -368,14 +367,14 @@ func svgCoord(raw string) (svgLen, bool) {
 		return svgLen{}, true
 	}
 	if strings.HasSuffix(s, "%") {
-		v, err := strconv.ParseFloat(strings.TrimSuffix(s, "%"), 64)
-		if err != nil {
+		v, ok := parseNumber(strings.TrimSuffix(s, "%"))
+		if !ok {
 			return svgLen{}, false
 		}
 		return svgLen{value: v, percent: true}, true
 	}
-	v, err := strconv.ParseFloat(strings.TrimSuffix(s, "px"), 64)
-	if err != nil {
+	v, ok := parseNumber(strings.TrimSuffix(s, "px"))
+	if !ok {
 		return svgLen{}, false
 	}
 	return svgLen{value: v}, true
@@ -391,8 +390,8 @@ func svgViewBoxAll(raw string) ([4]float64, bool) {
 		return out, false
 	}
 	for i, f := range fields {
-		v, err := strconv.ParseFloat(f, 64)
-		if err != nil {
+		v, ok := parseNumber(f)
+		if !ok {
 			return [4]float64{}, false
 		}
 		out[i] = v
@@ -557,8 +556,8 @@ func svgLength(raw string) (style.Unit, bool) {
 			break
 		}
 	}
-	v, err := strconv.ParseFloat(s, 64)
-	if err != nil || v < 0 {
+	v, ok := parseNumber(s)
+	if !ok || v < 0 {
 		return 0, false
 	}
 	u, ok := style.FromPx(v)
@@ -586,8 +585,8 @@ func svgPercent(raw string) (float64, bool) {
 	if !strings.HasSuffix(s, "%") {
 		return 0, false
 	}
-	v, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(s, "%")), 64)
-	if err != nil || v <= 0 {
+	v, ok := parseNumber(strings.TrimSpace(strings.TrimSuffix(s, "%")))
+	if !ok || v <= 0 {
 		return 0, false
 	}
 	return v / 100, true

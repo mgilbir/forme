@@ -266,3 +266,55 @@ func TestTheLanguageComesFromTheNearestAncestor(t *testing.T) {
 		}
 	}
 }
+
+// TestXMLLangIsALanguageToo.
+//
+// HTML §3.2.6 says xml:lang *is* the language attribute where there is no lang
+// beside it, and half the older test suite is XHTML, where xml:lang is the
+// natural spelling. Read lang alone, "<div xml:lang='tr'>" was a document with
+// no language at all: the Turkish tailoring never ran and the page came out
+// with the wrong letters on it.
+//
+// The precedence is per element rather than per document. A lang on a child
+// beats an xml:lang on its parent by being nearer, and an xml:lang on the child
+// beats a lang on the parent for the same reason; the two only meet on one
+// element, and there lang wins.
+//
+// Only in a document that is XML. The HTML parser stores "xml:lang" as a
+// literal attribute name in no namespace, and a browser reading an HTML
+// document ignores it — so honouring it there would be a language this engine
+// invented.
+func TestXMLLangIsALanguageToo(t *testing.T) {
+	for _, tc := range []struct{ markup, want, what string }{
+		{`<div id="p" xml:lang="tr">i</div>`, "İ", "on the element itself"},
+		{`<div xml:lang="tr"><div id="p">i</div></div>`, "İ", "on an ancestor"},
+		{`<div xml:lang="tr" lang="en"><div id="p">i</div></div>`, "I",
+			"lang wins on the element that carries both"},
+		{`<div xml:lang="en" lang="tr"><div id="p">i</div></div>`, "İ",
+			"and the other way round"},
+		{`<div xml:lang="tr"><div id="p" lang="en">i</div></div>`, "I",
+			"a nearer lang beats a further xml:lang"},
+		{`<div lang="en"><div id="p" xml:lang="tr">i</div></div>`, "İ",
+			"and a nearer xml:lang beats a further lang"},
+	} {
+		got := drawn(paintOf(t, xhtml(tc.markup), noDefaults+`#p { text-transform: uppercase }`))
+		if got != tc.want {
+			t.Errorf("%s: the page reads %q, want %q", tc.what, got, tc.want)
+		}
+	}
+	// And in an HTML document it is not a language, which is the half that says
+	// this is the specification's rule and not "any attribute with lang in the
+	// name".
+	if got := drawn(paintOf(t, `<div id="p" xml:lang="tr">i</div>`,
+		noDefaults+`#p { text-transform: uppercase }`)); got != "I" {
+		t.Errorf("an HTML document read xml:lang as a language: the page reads %q, want %q",
+			got, "I")
+	}
+}
+
+// xhtml wraps markup in the prologue that makes the parser read it as XML.
+func xhtml(markup string) string {
+	return `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" ` +
+		`"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">` +
+		`<html xmlns="http://www.w3.org/1999/xhtml"><body>` + markup + `</body></html>`
+}
