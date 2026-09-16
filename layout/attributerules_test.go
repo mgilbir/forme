@@ -398,3 +398,114 @@ func TestCentreAndMiddleAreNotTranscribed(t *testing.T) {
 		}
 	}
 }
+
+// TestAHorizontalRuleIsGrey is the line of §15.3.6's default rule that shows on
+// every <hr> ever drawn.
+//
+// border-color defaults to currentcolor, so the rule's own colour *is* its
+// border's — and without "color: gray" every horizontal rule was drawn in the
+// colour it inherited, which is black in almost every document where a browser
+// draws grey. It is asserted on the page rather than in the computed style,
+// because what the property is for here is the paint.
+func TestAHorizontalRuleIsGrey(t *testing.T) {
+	var grey, black int
+	for _, op := range paintOf(t, `<hr>`, noDefaults) {
+		f, ok := op.(FillRect)
+		if !ok {
+			continue
+		}
+		switch {
+		case f.Color.R == 0 && f.Color.G == 0 && f.Color.B == 0:
+			black++
+		case f.Color.R == f.Color.G && f.Color.G == f.Color.B && f.Color.R > 0:
+			grey++
+		}
+	}
+	if grey == 0 || black > 0 {
+		t.Errorf("a rule drew %d grey fills and %d black ones; a browser draws "+
+			"it grey, and the inset shading is grey's own darker half", grey, black)
+	}
+	// And the overflow, which is what keeps a rule shorter than its content
+	// from being pushed open by it.
+	if got, _ := styleOfID(t, `<hr id="d">`, "overflow-x"); got != "hidden" {
+		t.Errorf("a rule's overflow-x is %q, want hidden", got)
+	}
+}
+
+// TestTheColourAndNoshadeAttributesDrawALine, §15.3.6.
+//
+// Both mean the same thing about the shape — draw this as a line rather than as
+// a groove — and one of them also says what colour. They are the one part of
+// the <hr> attributes that is a selector; the rest is arithmetic.
+func TestTheColourAndNoshadeAttributesDrawALine(t *testing.T) {
+	for _, c := range []struct{ markup, style, colour string }{
+		{`<hr id="d">`, "inset", "gray"},
+		{`<hr id="d" color="red">`, "solid", "red"},
+		{`<hr id="d" noshade>`, "solid", "gray"},
+		{`<hr id="d" noshade="noshade">`, "solid", "gray"},
+		{`<hr id="d" color="#800080">`, "solid", "#800080"},
+		// A value that is not a colour leaves the colour alone, and the
+		// attribute being *there* still draws the line: the selector tests the
+		// attribute and the hint tests the value, which is what HTML asks for.
+		{`<hr id="d" color="florb">`, "solid", "gray"},
+	} {
+		if got, _ := styleOfID(t, c.markup, "border-top-style"); got != c.style {
+			t.Errorf("%s gave border-top-style %q, want %q", c.markup, got, c.style)
+		}
+		if got, _ := styleOfID(t, c.markup, "color"); got != c.colour {
+			t.Errorf("%s gave colour %q, want %q", c.markup, got, c.colour)
+		}
+	}
+}
+
+// TestTheSizeAttributeIsTwoDifferentThings, §15.3.6, and which one depends on
+// what is written beside it.
+//
+// With a colour or a noshade the rule is a solid line and the size is its
+// thickness — halved, because it is drawn as a border on both edges and the two
+// have to add up to what was asked for. Without either it is a groove, the
+// height is the gap between the edges, and the size is the whole thing: one is
+// a rule with no gap at all, and anything more is the size less the two edges.
+func TestTheSizeAttributeIsTwoDifferentThings(t *testing.T) {
+	for _, c := range []struct{ markup, property, want string }{
+		// The groove.
+		{`<hr id="d" size="1">`, "border-bottom-width", "0px"},
+		{`<hr id="d" size="1">`, "height", "auto"},
+		{`<hr id="d" size="2">`, "height", "0px"},
+		{`<hr id="d" size="5">`, "height", "3px"},
+		{`<hr id="d" size="0">`, "height", "auto"},
+		// The line.
+		{`<hr id="d" size="4" noshade>`, "border-top-width", "2px"},
+		{`<hr id="d" size="4" noshade>`, "height", "auto"},
+		{`<hr id="d" size="5" color="red">`, "border-bottom-width", "2px"},
+		{`<hr id="d" size="1" noshade>`, "border-top-width", "0px"},
+		// And a size that is not a non-negative integer sets nothing at all.
+		{`<hr id="d" size="florb">`, "height", "auto"},
+		{`<hr id="d" size="-2">`, "height", "auto"},
+		{`<hr id="d" size="">`, "height", "auto"},
+	} {
+		got, ok := styleOfID(t, c.markup, c.property)
+		if !ok || got != c.want {
+			t.Errorf("%s gave %s %q, want %q", c.markup, c.property, got, c.want)
+		}
+	}
+}
+
+// TestTheWidthAttributeOnARule is the ordinary dimension property, and the one
+// of the four that needs no arithmetic.
+func TestTheWidthAttributeOnARule(t *testing.T) {
+	for _, c := range []struct{ markup, want string }{
+		{`<hr id="d" width="100">`, "100px"},
+		{`<hr id="d" width="50%">`, "50%"},
+		// Written *without* "ignoring zero", which the section says by not
+		// saying it — so a zero is a zero here where it is nothing on a table.
+		{`<hr id="d" width="0">`, "0px"},
+		{`<hr id="d" width="100px">`, "auto"},
+		{`<hr id="d">`, "auto"},
+	} {
+		got, ok := styleOfID(t, c.markup, "width")
+		if !ok || got != c.want {
+			t.Errorf("%s gave width %q, want %q", c.markup, got, c.want)
+		}
+	}
+}

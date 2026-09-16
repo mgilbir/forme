@@ -88,7 +88,15 @@ h6 { font-size: 0.67em; margin-top: 2.33em; margin-bottom: 2.33em; font-weight: 
 
 body { margin-top: 8px; margin-right: 8px; margin-bottom: 8px; margin-left: 8px }
 
+/* §15.3.6's rule, all of it. The colour is the part that shows on every <hr>
+   ever drawn: border-color defaults to currentcolor, so the rule's own colour
+   *is* its border's, and without this line every horizontal rule was drawn in
+   the colour it inherited — black in almost every document, where a browser
+   draws grey. The overflow is what keeps a rule shorter than its content from
+   being pushed open by it. */
 hr {
+  color: gray;
+  overflow-x: hidden; overflow-y: hidden;
   margin-top: 0.5em; margin-bottom: 0.5em;
   margin-left: auto; margin-right: auto;
   border-top-width: 1px; border-right-width: 1px;
@@ -131,7 +139,12 @@ thead[align=justify i], tbody[align=justify i], tfoot[align=justify i],
 tr[align=justify i], td[align=justify i], th[align=justify i] { text-align: justify }
 
 /* And on an <hr>, where align is not about the text but about which way the
-   rule is pushed. §15.3.6. */
+   rule is pushed. §15.3.6.
+
+   "color" and "noshade" both mean "draw this as a line rather than as a
+   groove", which is the one part of the <hr> attributes that is a selector: the
+   rest is arithmetic on the size attribute and is in style/hints.go. */
+hr[color], hr[noshade] { border-style: solid }
 hr[align=left i] { margin-left: 0; margin-right: auto }
 hr[align=right i] { margin-left: auto; margin-right: 0 }
 hr[align=center i] { margin-left: auto; margin-right: auto }

@@ -163,6 +163,15 @@ var hintedAttributes = map[string]map[string]string{
 	// user-agent rule does not. A layout that read the attribute directly would
 	// have "br { clear: none }" in a stylesheet lose to the markup.
 	"br": {"clear": "clear"},
+	// <hr color> and <hr width>, §15.3.6. The colour is a legacy colour value,
+	// which colourValue already reads, and the width is the ordinary dimension
+	// property — this one *without* "ignoring zero", which the section says by
+	// not saying it.
+	//
+	// The size attribute is not here: what it sets depends on whether colour or
+	// noshade is beside it, and the table above is one attribute to one
+	// property. See hrSizeHint.
+	"hr": {"color": "color", "width": "width"},
 }
 
 // clearHintAttributes are the entries whose value is one of a handful of
@@ -210,6 +219,14 @@ func presentationalHints(n *html.Node) map[string][]css.ComponentValue {
 	out := attributeHints(name, n)
 	if name == "table" {
 		for property, vals := range tableBorderHint(n) {
+			if out == nil {
+				out = map[string][]css.ComponentValue{}
+			}
+			out[property] = vals
+		}
+	}
+	if name == "hr" {
+		for property, vals := range hrSizeHint(n) {
 			if out == nil {
 				out = map[string][]css.ComponentValue{}
 			}
@@ -595,7 +612,7 @@ func cellBorderHint(n *html.Node) map[string][]css.ComponentValue {
 		if _, drawn := borderAttribute(raw); !drawn {
 			return nil
 		}
-		width, style := onePixel(), ident("inset")
+		width, style := pixels(1), ident("inset")
 		return map[string][]css.ComponentValue{
 			"border-top-width": width, "border-right-width": width,
 			"border-bottom-width": width, "border-left-width": width,
@@ -606,10 +623,75 @@ func cellBorderHint(n *html.Node) map[string][]css.ComponentValue {
 	return nil
 }
 
-// onePixel is the width both halves of the rule above are written in.
-func onePixel() []css.ComponentValue {
-	vals, _ := css.ParseComponentValues("1px")
+// hrSizeHint is §15.3.6's size attribute, which sets two different properties
+// depending on what is written beside it.
+//
+// With a colour or a noshade the rule is drawn as a solid line, and the size is
+// its thickness — halved, because the line is drawn as a border on both edges
+// and the two have to add up to what was asked for. Without either it is drawn
+// as a groove, the height is the gap between the two edges, and the size is the
+// whole thing: one is a rule with no gap at all, and anything more is the size
+// less the two edges.
+//
+// That is the specification's arithmetic and not an interpretation of it. It is
+// here rather than in the attribute table because the table is one attribute to
+// one property, and this is one attribute to two properties chosen by a third.
+func hrSizeHint(n *html.Node) map[string][]css.ComponentValue {
+	raw, ok := n.Attr("size")
+	if !ok {
+		return nil
+	}
+	size, ok := nonNegativeInteger(raw)
+	if !ok {
+		return nil
+	}
+	_, hasColour := n.Attr("color")
+	if hasColour || n.HasAttr("noshade") {
+		half := pixels(size / 2)
+		return map[string][]css.ComponentValue{
+			"border-top-width": half, "border-right-width": half,
+			"border-bottom-width": half, "border-left-width": half,
+		}
+	}
+	switch {
+	case size == 1:
+		return map[string][]css.ComponentValue{"border-bottom-width": pixels(0)}
+	case size > 1:
+		return map[string][]css.ComponentValue{"height": pixels(size - 2)}
+	}
+	return nil
+}
+
+// pixels is a length written the way a stylesheet writes one.
+//
+// It is parsed rather than made, because a component value built by hand out of
+// "2px" is an *identifier* whose name begins with a digit — and serialising one
+// of those escapes the digit, so the cascade was handed "\32 px" where a
+// document had asked for two pixels.
+func pixels(n int) []css.ComponentValue {
+	vals, _ := css.ParseComponentValues(strconv.Itoa(n) + "px")
 	return vals
+}
+
+// nonNegativeInteger is HTML's rule of that name: leading whitespace, then
+// digits, and an error if there are none.
+//
+// It is not borderAttribute's reader, which answers one pixel where this
+// answers nothing — the border attribute has a default and this has not.
+func nonNegativeInteger(raw string) (int, bool) {
+	s := strings.TrimLeft(raw, " \t\n\f\r")
+	digits := 0
+	for digits < len(s) && s[digits] >= '0' && s[digits] <= '9' {
+		digits++
+	}
+	if digits == 0 || digits > maxHintDigits {
+		return 0, false
+	}
+	n, err := strconv.Atoi(s[:digits])
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }
 
 // linkColourHint is the body element's "link" attribute, read on the links it
