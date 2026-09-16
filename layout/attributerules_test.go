@@ -315,3 +315,27 @@ func TestRulesReachesTheRowsAndTheGroups(t *testing.T) {
 		}
 	}
 }
+
+// TestTheBodyLinkAttributeBeatsTheDefaultBlue is the half of the link colour
+// that only a document with the default stylesheet on it can show.
+//
+// The style package's own tests assert that the hint applied; what they cannot
+// assert is what it beat, because the blue an unstyled link gets is a rule in
+// layout's user agent sheet. A hint that lost to it would be a document whose
+// "<body link>" did nothing and looked exactly like one that had not written it.
+func TestTheBodyLinkAttributeBeatsTheDefaultBlue(t *testing.T) {
+	if got, ok := styleOfID(t, `<body><a id="d" href="x">x</a></body>`, "color"); !ok || got != "#0000ee" {
+		t.Fatalf("an unstyled link is %q; the fixture does not reach the rule "+
+			"the attribute has to beat", got)
+	}
+	if got, _ := styleOfID(t, `<body link="red"><a id="d" href="x">x</a></body>`, "color"); got != "red" {
+		t.Errorf("the link is %q, want red: a presentational hint beats the "+
+			"user agent sheet, which is the whole of where it sits", got)
+	}
+	// And the underline stays, which is the other half of the default rule and
+	// is not what the attribute is about.
+	if got, _ := styleOfID(t, `<body link="red"><a id="d" href="x">x</a></body>`,
+		"text-decoration-line"); got != "underline" {
+		t.Errorf("the underline became %q; the attribute names a colour", got)
+	}
+}

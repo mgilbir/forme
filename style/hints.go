@@ -216,6 +216,14 @@ func presentationalHints(n *html.Node) map[string][]css.ComponentValue {
 			out[property] = vals
 		}
 	}
+	if name == "a" || name == "area" {
+		for property, vals := range linkColourHint(n) {
+			if out == nil {
+				out = map[string][]css.ComponentValue{}
+			}
+			out[property] = vals
+		}
+	}
 	if name != "td" && name != "th" {
 		return out
 	}
@@ -602,6 +610,42 @@ func cellBorderHint(n *html.Node) map[string][]css.ComponentValue {
 func onePixel() []css.ComponentValue {
 	vals, _ := css.ParseComponentValues("1px")
 	return vals
+}
+
+// linkColourHint is the body element's "link" attribute, read on the links it
+// colours.
+//
+// It is the second hint that is not an attribute of the element it styles:
+// written once on the body, it applies to "any element that is a link", which is
+// the set :link selects and is asked with the same function so that the two
+// cannot come to differ.
+//
+// Its two neighbours are deliberately absent. "vlink" is the colour of a
+// *visited* link and "alink" of one being clicked, and on paper nothing is
+// either: :visited is answered no here — see the note beside it — and there is
+// no pointer to hold down. They are not reported, for the reason the engine
+// reports anything: a browser printing the same document shows an unvisited,
+// unclicked link too, so there is no difference to tell an author about.
+func linkColourHint(n *html.Node) map[string][]css.ComponentValue {
+	if !isLink(n) {
+		return nil
+	}
+	for anc := n.Parent; anc != nil; anc = anc.Parent {
+		if anc.Type != html.ElementNode || !strings.EqualFold(anc.Name, "body") {
+			continue
+		}
+		raw, ok := anc.Attr("link")
+		if !ok {
+			return nil
+		}
+		value, ok := colourValue(raw)
+		if !ok {
+			return nil
+		}
+		vals, _ := css.ParseComponentValues(value)
+		return map[string][]css.ComponentValue{"color": vals}
+	}
+	return nil
 }
 
 // cellPaddingHint reads the cellpadding an ancestor table declares.

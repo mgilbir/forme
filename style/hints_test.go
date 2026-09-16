@@ -578,3 +578,103 @@ func TestTheBorderAttributeIsAHintLikeTheRest(t *testing.T) {
 		t.Errorf("the table border-top-width is %q, want 4px", w)
 	}
 }
+
+// TestTheBodyLinkAttributeColoursTheLinks.
+//
+// "<body link=#800080>" is how a document set its link colour before there was
+// a selector to say it with, and it is the second hint that is not an attribute
+// of the element it styles: written once on the body, it applies to "any
+// element that is a link" — the set :link selects, asked with the same function
+// so that the two cannot come to differ.
+func TestTheBodyLinkAttributeColoursTheLinks(t *testing.T) {
+	for _, c := range []struct{ markup, want, what string }{
+		// The initial colour, because nothing applied: these tests carry no
+		// user agent sheet, so the blue a document really gets is layout's and
+		// is checked there. What is asserted here is that the hint did not.
+		{`<body><a id="c" href="x">x</a></body>`, "black", "no attribute"},
+		{`<body link="red"><a id="c" href="x">x</a></body>`, "red",
+			"the attribute"},
+		{`<body link="#800080"><a id="c" href="x">x</a></body>`, "#800080",
+			"a hash colour"},
+		{`<body link="RED"><a id="c" href="x">x</a></body>`, "RED",
+			"a colour keyword's case is the value's business"},
+		{`<body link="red"><div><p><a id="c" href="x">x</a></p></div></body>`, "red",
+			"a link deeper in the document"},
+		{`<body link="red"><map><area id="c" href="x"/></map></body>`, "red",
+			"an <area>, which is a link too"},
+		// Not a link, so not coloured: the attribute is about links and an <a>
+		// with no href is not one.
+		{`<body link="red"><a id="c">x</a></body>`, "black",
+			"an <a> with no href"},
+		{`<body link="red"><span id="c">x</span></body>`, "black",
+			"an element that is not a link at all"},
+		// A value that is not a colour leaves the default standing, which is
+		// the same answer as the attribute not being there.
+		{`<body link="florb"><a id="c" href="x">x</a></body>`, "black",
+			"a value that is not a colour"},
+	} {
+		got := computed(t, c.markup)
+		if v := got["c"]["color"]; v != c.want {
+			t.Errorf("%s: the colour is %q, want %q", c.what, v, c.want)
+		}
+	}
+}
+
+// TestVlinkAndAlinkAreNotColoursOnPaper states the narrowing, because it is a
+// decision rather than an omission.
+//
+// "vlink" is the colour of a *visited* link and "alink" of one being clicked.
+// Nothing here is either: :visited is answered no — see the note beside it in
+// match.go — and there is no pointer to hold down on a printed page.
+//
+// They are not reported, for the reason this engine reports anything: a browser
+// printing the same document shows an unvisited, unclicked link too, so there
+// is no difference to tell an author about.
+func TestVlinkAndAlinkAreNotColoursOnPaper(t *testing.T) {
+	for _, attr := range []string{`vlink="red"`, `alink="red"`, `vlink="red" alink="green"`} {
+		got, findings := styledLink(t, `<body `+attr+`><a id="c" href="x">x</a></body>`)
+		if got != "black" {
+			t.Errorf("<body %s> coloured an unvisited link %q", attr, got)
+		}
+		for _, f := range findings {
+			if f.Property == "vlink" || f.Property == "alink" {
+				t.Errorf("<body %s> reported %q; a browser printing this shows "+
+					"the same colour", attr, f.Message)
+			}
+		}
+	}
+	// And "link" beside them still applies, so the refusal is about those two
+	// rather than about the body's attributes.
+	if got, _ := styledLink(t,
+		`<body link="red" vlink="green" alink="blue"><a id="c" href="x">x</a></body>`); got != "red" {
+		t.Errorf("the colour is %q, want red: link applies whatever sits beside it", got)
+	}
+}
+
+// TestTheLinkColourIsAHint, which is where it sits in the cascade: above the
+// default sheet's blue and below anything an author wrote.
+func TestTheLinkColourIsAHint(t *testing.T) {
+	got := computed(t, `<body link="red"><a id="c" href="x">x</a></body>`,
+		author(t, `a { color: rgb(1, 2, 3) }`))
+	if v := got["c"]["color"]; v != "rgb(1, 2, 3)" {
+		t.Errorf("an author's colour lost to the attribute: %q", v)
+	}
+}
+
+// styledLink applies the user agent sheet to a document and answers #c's colour
+// and the findings, which is what the two tests above need and computed does
+// not give.
+func styledLink(t *testing.T, markup string) (string, []Finding) {
+	t.Helper()
+	doc := parseDoc(t, markup)
+	got := Apply(doc, nil)
+	for n, cs := range got.Styles {
+		if n.Type == html.ElementNode {
+			if id, _ := n.Attr("id"); id == "c" {
+				return cs["color"], got.Findings
+			}
+		}
+	}
+	t.Fatal("no element with id c")
+	return "", nil
+}
