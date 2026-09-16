@@ -33,18 +33,35 @@ import (
 // where font-feature-settings sat this morning. Asking the same question the
 // cascade asks means the answer follows it without anyone remembering to.
 //
-// It is answered about the *property* and not the value. §2 tests whether the
-// declaration would parse, and this engine has no single place that says
-// whether a value parses — that is decided per property, in the stage that
+// The value is asked about too, but only where the cascade has an answer. Six
+// properties have their value read early enough for §4.2 to drop the whole
+// declaration — the colours, display, background-image, quotes, content, and
+// every property that refuses a negative number — and dropsForValue is the same
+// list the cascade itself asks, so a condition cannot answer yes about a
+// declaration the very next rule throws away. "(display: grid)" is the case
+// that matters, because it is how a stylesheet asks whether it may use grid at
+// all.
+//
+// For every other property it is answered about the property alone. §2 tests
+// whether the declaration would parse, and this engine has no single place that
+// says whether a value parses — that is decided per property, in the stage that
 // reads it. So "(position: sticky)" is answered yes where position is
 // implemented and sticky is not.
 //
-// That narrowing is sound rather than merely convenient, and the reason is
-// where the report goes. A block let in by this answer holds the declaration
-// itself, and a value this engine cannot act on is reported *there*, by the
-// stage that could not act on it. The author is told the same thing either way;
-// what changes is that the rest of the block — the part that was understood —
-// is applied rather than dropped along with it.
+// That narrowing is sound rather than merely convenient where the block is
+// taken, and the reason is where the report goes. A block let in by this answer
+// holds the declaration itself, and a value this engine cannot act on is
+// reported *there*, by the stage that could not act on it. The author is told
+// the same thing either way; what changes is that the rest of the block — the
+// part that was understood — is applied rather than dropped along with it.
+//
+// **Under a "not" it is not sound, and there is no report to fall back on.**
+// "@supports not (position: sticky)" is how an author writes the fallback for
+// an engine that lacks it, and answering the inner condition yes drops the
+// fallback with nothing said: the block that would have been reported is the
+// block that was thrown away. Nothing here can fix that without the value
+// grammar the engine does not have; what narrows it is the list above, because
+// the properties an author writes such a pair around are mostly on it.
 //
 // A condition this cannot read at all is a different matter and is reported,
 // on the model of a media query asking about something unanswerable: selector()
@@ -161,11 +178,34 @@ func supportsDeclaration(name string, value []css.ComponentValue) bool {
 		// is why it is not in the registry. See prepareDecl.
 		return true
 	}
+	if _, drop := dropsForValue(name, value); drop {
+		// The value is one §4.2 refuses for this property, so the declaration
+		// this condition names would be dropped whole. Answering yes about it
+		// would be the cascade contradicting itself one rule later.
+		return false
+	}
+	if sh, known := shorthands[name]; known {
+		// A shorthand is not in the registry — it is not a property a computed
+		// style holds — and asking the registry about one answered no to
+		// "(margin: 0)", which every engine that parses CSS says yes to. A
+		// document that wraps its rules in a shorthand test got none of them.
+		//
+		// It is supported when this engine can take the value apart. A CSS-wide
+		// keyword needs no taking apart: it sets every longhand to itself, which
+		// is why expand has a case for it before the expander is reached.
+		if wideKeyword(value) != "" {
+			return true
+		}
+		_, _, ok := sh.expand(value)
+		return ok
+	}
 	if _, known := properties[name]; !known {
 		return false
 	}
-	_, missing := unimplementedReason(name)
-	return !missing
+	if _, missing := unimplementedReason(name); missing {
+		return false
+	}
+	return true
 }
 
 // splitDeclaration cuts "ident : value" at its first colon.

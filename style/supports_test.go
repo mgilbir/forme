@@ -1,6 +1,7 @@
 package style
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/mgilbir/forme/css"
@@ -155,9 +156,10 @@ func TestASupportsBlockCascadesWhereItIsWritten(t *testing.T) {
 // TestASupportsConditionNamingAnUnappliedValueIsStillYes states the narrowing,
 // because it is the one place this answers differently from a browser.
 //
-// §2 tests whether the declaration would parse, and this engine has no single
-// place that says whether a value parses — that is decided per property, by the
-// stage that reads it. So a condition is answered about the property, and
+// §2 tests whether the declaration would parse, and outside the six properties
+// dropsForValue covers this engine has no single place that says whether a
+// value parses — that is decided per property, by the stage that reads it. So
+// for the rest a condition is answered about the property, and
 // "(position: sticky)" is yes where position is implemented and sticky is not.
 //
 // It is sound rather than merely convenient, and the reason is where the report
@@ -214,4 +216,117 @@ func declValue(t *testing.T, src string) []css.ComponentValue {
 		t.Fatalf("parsing %q: %v", src, errs)
 	}
 	return vals
+}
+
+// TestSupportsAnswersForAShorthand is the answer that was simply missing.
+//
+// A shorthand is not in the registry — it is not a property a computed style
+// holds, so it has no initial value and nothing would read one — and the
+// registry is what the condition was asked. So every shorthand answered no:
+// "(margin: 0)" was false, and so were "(padding: 1px)", "(border: 1px solid
+// red)", "(font: 12px serif)" and "(background: red)". Every engine that parses
+// CSS says yes to all five, and a document that wraps its rules in one of them
+// — which is the ordinary way to ask "may I use this?" — got none of them.
+func TestSupportsAnswersForAShorthand(t *testing.T) {
+	for _, c := range []struct {
+		cond string
+		want bool
+	}{
+		{`(margin: 0)`, true},
+		{`(padding: 1px)`, true},
+		{`(border: 1px solid red)`, true},
+		{`(font: 12px serif)`, true},
+		{`(background: red)`, true},
+		{`(list-style: disc)`, true},
+		{`(flex: 1)`, true},
+		// A CSS-wide keyword sets every longhand to itself and needs no taking
+		// apart, which is why expand has a case for it before the expander.
+		{`(border: inherit)`, true},
+		// And the value still decides. "padding" is one of the shorthands whose
+		// every numeric component must be non-negative, and "font: florb" is
+		// nothing the expander can take apart.
+		{`(padding: -1px)`, false},
+		{`(font: florb)`, false},
+		// A shorthand this engine does not have is still no.
+		{`(florb: 1px 2px)`, false},
+	} {
+		colour, _ := styledBy(t, `@supports `+c.cond+` { #target { color: red } }`)
+		if applied := colour == "red"; applied != c.want {
+			t.Errorf("@supports %s answered %v, want %v", c.cond, applied, c.want)
+		}
+	}
+}
+
+// TestSupportsAnswersAboutTheValueWhereTheCascadeDoes is the other half, and
+// the invariant it protects is that the two cannot disagree.
+//
+// Six properties have their value read early enough for §4.2 to drop the whole
+// declaration. Answered about the property alone, a condition said yes about a
+// declaration the very next rule throws away — and "(display: grid)" is the one
+// that matters, because it is how a stylesheet asks whether it may use grid at
+// all rather than a spelling nobody writes.
+//
+// dropsForValue is the list the cascade itself asks, so this is not a second
+// opinion that could drift from it; it is the same question.
+func TestSupportsAnswersAboutTheValueWhereTheCascadeDoes(t *testing.T) {
+	for _, c := range []struct {
+		decl string
+		want bool
+	}{
+		{`color: florb`, false},   // not a colour
+		{`color: red`, true},      //
+		{`display: florb`, false}, // not a display value
+		{`display: grid`, true},   //
+		{`width: -5px`, false},    // negative where the property refuses one
+		{`width: 5px`, true},      //
+		{`background-image: url(x) repeat`, false},
+		{`background-image: url(x)`, true},
+		{`quotes: 1px`, false},
+		{`content: counter(c, c, c, c)`, false},
+		// A negative margin is legal and useful, so the list is a list and not
+		// a rule about lengths.
+		{`margin: -5px`, true},
+	} {
+		colour, _ := styledBy(t, `@supports (`+c.decl+`) { #target { color: red } }`)
+		if applied := colour == "red"; applied != c.want {
+			t.Errorf("@supports (%s) answered %v, want %v", c.decl, applied, c.want)
+		}
+	}
+}
+
+// TestNoConditionAnswersYesAboutADeclarationTheCascadeDrops is the invariant
+// itself, checked against the cascade rather than against a table.
+//
+// A table of expected answers says what I believed when I wrote it. This asks
+// the two code paths the same question and requires them to agree, so a gate
+// added to one and not the other is a failure here rather than a surprise in a
+// document three months later.
+func TestNoConditionAnswersYesAboutADeclarationTheCascadeDrops(t *testing.T) {
+	dropped := 0
+	for _, decl := range []string{
+		`color: florb`, `color: red`, `display: florb`, `display: grid`,
+		`width: -5px`, `width: 5px`, `padding: 1px -2px`, `padding: 1px 2px`,
+		`background-image: url(x) repeat`, `background-image: url(x)`,
+		`quotes: 1px`, `quotes: "a" "b"`, `content: counter(c, c, c, c)`,
+		`content: "x"`, `margin: -5px`, `line-height: -1`, `font: 12px serif`,
+	} {
+		name, value, ok := splitDeclaration(declValue(t, decl))
+		if !ok {
+			t.Fatalf("%q is not a declaration; the fixture is wrong", decl)
+		}
+		name = strings.ToLower(strings.TrimSpace(name))
+		_, drops := dropsForValue(name, value)
+		if drops {
+			dropped++
+		}
+		if drops && supportsDeclaration(name, value) {
+			t.Errorf("@supports answers yes about %q, which the cascade drops "+
+				"for its value", decl)
+		}
+	}
+	// The loop has to have found some, or it agrees about nothing.
+	if dropped < 6 {
+		t.Errorf("only %d of the fixtures are dropped by the cascade; the "+
+			"agreement above is between two functions that both said no", dropped)
+	}
 }
