@@ -102,7 +102,7 @@ var hintedAttributes = map[string]map[string]string{
 	// test writes as <table height="20">, so a browser that ignored the
 	// attribute would fail its own reftest.
 	"table": {"cellspacing": "border-spacing", "width": "width", "height": "height",
-		"bgcolor": "background-color"},
+		"bgcolor": "background-color", "background": "background-image"},
 	// And on a cell, which the same section maps the same way: "maps to the
 	// dimension property (ignoring zero)". They were missing, so
 	// "<td width=50%>" — which is how a table said what proportion a column
@@ -112,8 +112,10 @@ var hintedAttributes = map[string]map[string]string{
 	// The percentage is the whole point of them. A bare number is a pixel width
 	// a stylesheet could have given instead; a percentage is a statement about
 	// the table that nothing else in the markup can make.
-	"td": {"width": "width", "height": "height", "bgcolor": "background-color"},
-	"th": {"width": "width", "height": "height", "bgcolor": "background-color"},
+	"td": {"width": "width", "height": "height",
+		"bgcolor": "background-color", "background": "background-image"},
+	"th": {"width": "width", "height": "height",
+		"bgcolor": "background-color", "background": "background-image"},
 	// <ol start="5"> and <li value="3"> are the counter, written as attributes.
 	// They take a signed integer rather than a dimension, so they are read by
 	// integerAttr below instead of the table's usual dimensionValue.
@@ -123,7 +125,8 @@ var hintedAttributes = map[string]map[string]string{
 	// are the oldest thing in this table and the only ones that are not a
 	// length, which is why colourHintAttributes exists below.
 	//
-	"body": {"bgcolor": "background-color", "text": "color"},
+	"body": {"bgcolor": "background-color", "text": "color",
+		"background": "background-image"},
 	// And the table parts, which HTML maps bgcolor on in the same words it maps
 	// it on <body>. It was on <body> alone, deliberately: the note that used to
 	// be here said the cell backgrounds a table's bgcolor sets are painted by
@@ -135,14 +138,17 @@ var hintedAttributes = map[string]map[string]string{
 	// bgcolor=...>" and "<td bgcolor=...>", which is how every document of a
 	// certain age colours a table, mean something at last.
 	//
-	// The "background" attribute beside it, which names an image, is not here.
-	// It is not a colour and not a narrowing of this: see the note at the end
-	// of this file for what it costs and why that is a decision rather than a
-	// gap.
-	"thead": {"bgcolor": "background-color", "valign": "vertical-align"},
-	"tbody": {"bgcolor": "background-color", "valign": "vertical-align"},
-	"tfoot": {"bgcolor": "background-color", "valign": "vertical-align"},
-	"tr":    {"bgcolor": "background-color", "valign": "vertical-align"},
+	// "background" is beside it in the same sentence and is not a colour at
+	// all: the value names a file, which becomes the url() the background-image
+	// property takes. See urlHintValue.
+	"thead": {"bgcolor": "background-color", "background": "background-image",
+		"valign": "vertical-align"},
+	"tbody": {"bgcolor": "background-color", "background": "background-image",
+		"valign": "vertical-align"},
+	"tfoot": {"bgcolor": "background-color", "background": "background-image",
+		"valign": "vertical-align"},
+	"tr": {"bgcolor": "background-color", "background": "background-image",
+		"valign": "vertical-align"},
 	// <font> is three presentational attributes and nothing else. HTML's
 	// rendering section maps them by name: colour, family and — through a table
 	// of seven steps — size. They are the reason the element is worth laying out
@@ -192,6 +198,13 @@ var clearHintAttributes = map[string]bool{"clear": true}
 // valignHintAttributes are the entries whose value is HTML's table alignment
 // keyword, which is not quite the CSS one — see valignValue.
 var valignHintAttributes = map[string]bool{"valign": true}
+
+// urlHintAttributes are the entries whose value is a file to fetch rather than
+// anything CSS has a syntax for. It is written as a url() so that everything
+// downstream reads it as the property it set — the loader that fetches a
+// background image, the painter that tiles it, and the finding that says it did
+// not arrive are the ones a stylesheet already goes through.
+var urlHintAttributes = map[string]bool{"background": true}
 
 // colourHintAttributes are the entries above whose value is a colour rather than
 // a length or a counter.
@@ -282,7 +295,9 @@ func attributeHints(name string, n *html.Node) map[string][]css.ComponentValue {
 			continue
 		}
 		var value string
-		if colourHintAttributes[attr] {
+		if urlHintAttributes[attr] {
+			value, ok = urlHintValue(raw)
+		} else if colourHintAttributes[attr] {
 			value, ok = colourValue(raw)
 		} else if familyHintAttributes[attr] {
 			value, ok = familyValue(raw)
@@ -319,6 +334,28 @@ func attributeHints(name string, n *html.Node) map[string][]css.ComponentValue {
 		out[property] = vals
 	}
 	return out
+}
+
+// urlHintValue turns a "background" attribute into the url() the property takes.
+//
+// The attribute is a file name and the property is a CSS value, so the name has
+// to be quoted on the way across: a bare url() token has escaping rules of its
+// own and a document may write anything at all in an attribute. A name holding
+// a quote, a backslash or a newline is refused rather than escaped, which is
+// familyValue's answer to the same question and for the same reason — escaping
+// it properly is a pass this does not have, and a file by that name is not one
+// anybody has.
+//
+// An empty value is not a file. HTML says so in as many words, "set to a
+// non-empty value", and it matters: url("") is a reference to the document
+// itself, so reading one as a file would have every document with an empty
+// attribute fetch its own markup and fail to decode it.
+func urlHintValue(raw string) (string, bool) {
+	ref := strings.TrimSpace(raw)
+	if ref == "" || strings.ContainsAny(ref, "\"\\\n\r") {
+		return "", false
+	}
+	return "url(\"" + ref + "\")", true
 }
 
 // familyValue turns a <font face> into a font-family list.
@@ -887,25 +924,3 @@ func clearValue(raw string) (string, bool) {
 	}
 	return "", false
 }
-
-// The background attribute, which is not implemented and is not forgotten.
-//
-// HTML maps it on <body> and on every part of a table, in the same sentence it
-// maps bgcolor: the value names a file, which becomes the url() the
-// background-image property takes. It works — it was written, and the image
-// loads and tiles through the same machinery a stylesheet's does.
-//
-// What it costs is one reftest. content-047 writes
-//
-//	<body background="PASS PASS">
-//
-// and reads the value back with attr(), so the "file" is deliberately not one.
-// A browser requests it and fails, and so does this once the attribute is read
-// — the page is identical either way — but the failed load is *reported*, and a
-// document with a finding on it is not a clean pass. The ratchet counts clean
-// passes, so honouring the attribute moves it from 5982 to 5981.
-//
-// That is the whole of the trade and neither side of it is wrong: the engine
-// would be more correct and the number would be lower. Lowering a ratchet is a
-// decision about the project rather than about this file, so it is stated here
-// and left.

@@ -735,3 +735,43 @@ func TestACellsOtherHintsStillArrive(t *testing.T) {
 		}
 	}
 }
+
+// TestTheBackgroundAttributeNamesAFile.
+//
+// HTML maps it on <body> and on every part of a table in the same sentence it
+// maps bgcolor, and it is not a colour: the value names a file, which becomes
+// the url() the background-image property takes. Everything downstream — the
+// loader that fetches it, the painter that tiles it, the finding that says it
+// did not arrive — is the machinery a stylesheet already goes through.
+func TestTheBackgroundAttributeNamesAFile(t *testing.T) {
+	for _, c := range []struct{ markup, want string }{
+		{`<body id="c" background="bg.png">x</body>`, `url("bg.png")`},
+		{`<table id="c" background="bg.png"><tr><td>x</td></tr></table>`, `url("bg.png")`},
+		{`<table><tbody id="c" background="bg.png"><tr><td>x</td></tr></tbody></table>`, `url("bg.png")`},
+		{`<table><tr id="c" background="bg.png"><td>x</td></tr></table>`, `url("bg.png")`},
+		{`<table><tr><td id="c" background="bg.png">x</td></tr></table>`, `url("bg.png")`},
+		{`<table><tr><th id="c" background="bg.png">x</th></tr></table>`, `url("bg.png")`},
+		{`<body id="c" background="../up/one.png">x</body>`, `url("../up/one.png")`},
+		// A name with a space in it, which is what the quoting is *for*: an
+		// unquoted url() token cannot hold one, and content-047 — the document
+		// this feature cost a clean pass — writes exactly that.
+		{`<body id="c" background="PASS PASS">x</body>`, `url("PASS PASS")`},
+		{`<body id="c" background="a(b).png">x</body>`, `url("a(b).png")`},
+		// An empty value is not a file, which HTML says in as many words — "set
+		// to a non-empty value" — and it matters: url("") is a reference to the
+		// document itself, so reading one as a file would have every document
+		// with an empty attribute fetch its own markup.
+		{`<body id="c" background="">x</body>`, "none"},
+		{`<body id="c" background="   ">x</body>`, "none"},
+		// A name this cannot quote is refused rather than escaped, which is what
+		// <font face> does with the same characters and for the same reason.
+		{`<body id="c" background="a&quot;b.png">x</body>`, "none"},
+		{`<body id="c" background="a\b.png">x</body>`, "none"},
+		{`<body id="c">x</body>`, "none"},
+	} {
+		got := computed(t, c.markup)
+		if v := got["c"]["background-image"]; v != c.want {
+			t.Errorf("%s gave background-image %q, want %q", c.markup, v, c.want)
+		}
+	}
+}
