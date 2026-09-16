@@ -136,6 +136,32 @@ hr[align=left i] { margin-left: 0; margin-right: auto }
 hr[align=right i] { margin-left: auto; margin-right: 0 }
 hr[align=center i] { margin-left: auto; margin-right: auto }
 
+/* The align attribute on a replaced box, §15.3.5, which is how a document put a
+   picture beside its text before there was a float property to say it with.
+   "<img align=left>" is the oldest illustration layout there is.
+
+   The element list is HTML's own and is wider than <img>: an <iframe>, an
+   <object>, an <embed> and an <input type=image> are all boxes a document could
+   align this way, and all four are boxes this engine lays out.
+
+   "center" and "middle" are not here and are not a transcription this left out.
+   The specification states those two as prose rather than as CSS — the
+   element's vertical middle against the parent's *baseline* — and that is not
+   "vertical-align: middle", which is the baseline plus half an x-height. A rule
+   written from the value's name rather than from the sentence would be a guess
+   at a position, which is the one thing a box's position must not be. */
+embed[align=left i], iframe[align=left i], img[align=left i],
+input[type=image i][align=left i], object[align=left i] { float: left }
+
+embed[align=right i], iframe[align=right i], img[align=right i],
+input[type=image i][align=right i], object[align=right i] { float: right }
+
+embed[align=top i], iframe[align=top i], img[align=top i],
+input[type=image i][align=top i], object[align=top i] { vertical-align: top }
+
+embed[align=baseline i], iframe[align=baseline i], img[align=baseline i],
+input[type=image i][align=baseline i], object[align=baseline i] { vertical-align: baseline }
+
 /* The frame and rules attributes, §15.3.8, which are how a table said which of
    its edges were drawn before there was a border property to say it with.
 

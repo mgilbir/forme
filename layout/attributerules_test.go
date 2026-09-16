@@ -339,3 +339,62 @@ func TestTheBodyLinkAttributeBeatsTheDefaultBlue(t *testing.T) {
 		t.Errorf("the underline became %q; the attribute names a colour", got)
 	}
 }
+
+// TestTheAlignAttributeOnAReplacedBox, §15.3.5, which is how a document put a
+// picture beside its text before there was a float property to say it with.
+//
+// The element list is HTML's own and is wider than <img>: an <iframe>, an
+// <object>, an <embed> and an <input type=image> are all boxes a document could
+// align this way, and all four are boxes this engine lays out. It is not the
+// same attribute as the one on a <div>, which is about the text inside the box
+// rather than about where the box goes, and the two lists share no element.
+func TestTheAlignAttributeOnAReplacedBox(t *testing.T) {
+	for _, c := range []struct{ markup, property, want string }{
+		{`<img id="d" src="x" align="left">`, "float", "left"},
+		{`<img id="d" src="x" align="right">`, "float", "right"},
+		{`<img id="d" src="x" align="LEFT">`, "float", "left"},
+		{`<img id="d" src="x" align="top">`, "vertical-align", "top"},
+		{`<img id="d" src="x" align="baseline">`, "vertical-align", "baseline"},
+		{`<iframe id="d" align="left"></iframe>`, "float", "left"},
+		{`<object id="d" align="right"></object>`, "float", "right"},
+		{`<input id="d" type="image" align="left">`, "float", "left"},
+		// An <input> that is not an image is not one of these boxes.
+		{`<input id="d" type="text" align="left">`, "float", "none"},
+		// And a value that names none of the four does nothing.
+		{`<img id="d" src="x" align="florb">`, "float", "none"},
+		{`<img id="d" src="x">`, "float", "none"},
+	} {
+		got, ok := styleOfID(t, c.markup, c.property)
+		if !ok || got != c.want {
+			t.Errorf("%s gave %s %q, want %q", c.markup, c.property, got, c.want)
+		}
+	}
+	// An author rule beats it, as with every rule in here.
+	if got, _ := styleOfID(t, `<style>#d { float: none }</style><img id="d" src="x" align="left">`,
+		"float"); got != "none" {
+		t.Errorf("an author's float lost to align=left: %q", got)
+	}
+}
+
+// TestCentreAndMiddleAreNotTranscribed states the narrowing, because it is a
+// decision and not something the transcription missed.
+//
+// The specification gives "left", "right", "top" and "baseline" as CSS and
+// states "center" and "middle" as prose instead: the element's vertical middle
+// against the parent's *baseline*. That is not "vertical-align: middle", which
+// is the baseline plus half an x-height, and a rule written from the value's
+// name rather than from the sentence would be a guess at a box's position.
+func TestCentreAndMiddleAreNotTranscribed(t *testing.T) {
+	for _, value := range []string{"middle", "center"} {
+		if got, _ := styleOfID(t, `<img id="d" src="x" align="`+value+`">`,
+			"vertical-align"); got != "baseline" {
+			t.Errorf("align=%q gave vertical-align %q; the two values the "+
+				"specification states as prose are left alone rather than "+
+				"guessed at", value, got)
+		}
+		if got, _ := styleOfID(t, `<img id="d" src="x" align="`+value+`">`,
+			"float"); got != "none" {
+			t.Errorf("align=%q floated the image", value)
+		}
+	}
+}
