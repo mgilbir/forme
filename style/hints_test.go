@@ -678,3 +678,60 @@ func styledLink(t *testing.T, markup string) (string, []Finding) {
 	t.Fatal("no element with id c")
 	return "", nil
 }
+
+// TestBgcolorOnEveryPartOfATable.
+//
+// HTML maps it on <body> and on the seven table parts in the same words, and it
+// was on <body> alone. The note here said why: the cell backgrounds a table's
+// bgcolor sets are painted by machinery that would have to agree with it, and
+// the rule was one element at a time, each when it can be checked.
+//
+// It can be checked now. Every part of a table paints its own background — that
+// was measured on the page before this was written — so "<table bgcolor=...>"
+// and "<td bgcolor=...>", which is how every document of a certain age colours
+// a table, mean something at last.
+func TestBgcolorOnEveryPartOfATable(t *testing.T) {
+	for _, c := range []struct{ markup, want string }{
+		{`<table id="c" bgcolor="red"><tr><td>x</td></tr></table>`, "red"},
+		{`<table><thead id="c" bgcolor="red"><tr><td>x</td></tr></thead></table>`, "red"},
+		{`<table><tbody id="c" bgcolor="red"><tr><td>x</td></tr></tbody></table>`, "red"},
+		{`<table><tfoot id="c" bgcolor="red"><tr><td>x</td></tr></tfoot></table>`, "red"},
+		{`<table><tr id="c" bgcolor="red"><td>x</td></tr></table>`, "red"},
+		{`<table><tr><td id="c" bgcolor="red">x</td></tr></table>`, "red"},
+		{`<table><tr><th id="c" bgcolor="red">x</th></tr></table>`, "red"},
+		{`<body id="c" bgcolor="red">x</body>`, "red"},
+		{`<table><tr><td id="c" bgcolor="#808000">x</td></tr></table>`, "#808000"},
+		// A value that is not a colour leaves the background alone, which is
+		// the same answer as the attribute not being there.
+		{`<table id="c" bgcolor="florb"><tr><td>x</td></tr></table>`, "transparent"},
+		{`<table id="c"><tr><td>x</td></tr></table>`, "transparent"},
+		// It is not inherited: a table's colour is the table's, and a cell that
+		// wants one says so. background-color does not inherit, so this falls
+		// out — and it is asserted because a hint written on the wrong element
+		// would look like inheritance working.
+		{`<table bgcolor="red"><tr><td id="c">x</td></tr></table>`, "transparent"},
+	} {
+		got := computed(t, c.markup)
+		if v := got["c"]["background-color"]; v != c.want {
+			t.Errorf("%s gave background-color %q, want %q", c.markup, v, c.want)
+		}
+	}
+}
+
+// TestACellsOtherHintsStillArrive is the merge, checked once more now that a
+// cell has five hints on it: two of its own attributes, one of its table's, and
+// two that are its own but read elsewhere.
+func TestACellsOtherHintsStillArrive(t *testing.T) {
+	got := computed(t, `<table cellpadding="7" border="1"><tr>`+
+		`<td id="c" width="120" bgcolor="red" nowrap valign="top">x</td></tr></table>`)
+	for property, want := range map[string]string{
+		"width": "120px", "background-color": "red", "padding-top": "7px",
+		"text-wrap-mode": "nowrap", "vertical-align": "top",
+		"border-left-style": "inset",
+	} {
+		if v := got["c"][property]; v != want {
+			t.Errorf("a cell carrying every hint at once gave %s %q, want %q",
+				property, v, want)
+		}
+	}
+}

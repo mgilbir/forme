@@ -101,7 +101,8 @@ var hintedAttributes = map[string]map[string]string{
 	// for floats-wrap-bfc-005 draws with a plain "height: 20px" div what the
 	// test writes as <table height="20">, so a browser that ignored the
 	// attribute would fail its own reftest.
-	"table": {"cellspacing": "border-spacing", "width": "width", "height": "height"},
+	"table": {"cellspacing": "border-spacing", "width": "width", "height": "height",
+		"bgcolor": "background-color"},
 	// And on a cell, which the same section maps the same way: "maps to the
 	// dimension property (ignoring zero)". They were missing, so
 	// "<td width=50%>" — which is how a table said what proportion a column
@@ -111,8 +112,8 @@ var hintedAttributes = map[string]map[string]string{
 	// The percentage is the whole point of them. A bare number is a pixel width
 	// a stylesheet could have given instead; a percentage is a statement about
 	// the table that nothing else in the markup can make.
-	"td": {"width": "width", "height": "height"},
-	"th": {"width": "width", "height": "height"},
+	"td": {"width": "width", "height": "height", "bgcolor": "background-color"},
+	"th": {"width": "width", "height": "height", "bgcolor": "background-color"},
 	// <ol start="5"> and <li value="3"> are the counter, written as attributes.
 	// They take a signed integer rather than a dimension, so they are read by
 	// integerAttr below instead of the table's usual dimensionValue.
@@ -122,12 +123,26 @@ var hintedAttributes = map[string]map[string]string{
 	// are the oldest thing in this table and the only ones that are not a
 	// length, which is why colourHintAttributes exists below.
 	//
-	// bgcolor is on <body> here and not on <table> and its parts, which map it
-	// the same way. The reason is the same one <table width> waited for: the
-	// attribute needs somewhere to mean something, and the cell backgrounds a
-	// table's bgcolor sets are painted by machinery that would have to agree
-	// with it. One element at a time, each when it can be checked.
 	"body": {"bgcolor": "background-color", "text": "color"},
+	// And the table parts, which HTML maps bgcolor on in the same words it maps
+	// it on <body>. It was on <body> alone, deliberately: the note that used to
+	// be here said the cell backgrounds a table's bgcolor sets are painted by
+	// machinery that would have to agree with it, and one element at a time,
+	// each when it can be checked.
+	//
+	// It can be checked now — every part of a table paints its own background,
+	// which was measured on the page before this was written — so "<table
+	// bgcolor=...>" and "<td bgcolor=...>", which is how every document of a
+	// certain age colours a table, mean something at last.
+	//
+	// The "background" attribute beside it, which names an image, is not here.
+	// It is not a colour and not a narrowing of this: see the note at the end
+	// of this file for what it costs and why that is a decision rather than a
+	// gap.
+	"thead": {"bgcolor": "background-color", "valign": "vertical-align"},
+	"tbody": {"bgcolor": "background-color", "valign": "vertical-align"},
+	"tfoot": {"bgcolor": "background-color", "valign": "vertical-align"},
+	"tr":    {"bgcolor": "background-color", "valign": "vertical-align"},
 	// <font> is three presentational attributes and nothing else. HTML's
 	// rendering section maps them by name: colour, family and — through a table
 	// of seven steps — size. They are the reason the element is worth laying out
@@ -146,10 +161,6 @@ var hintedAttributes = map[string]map[string]string{
 	// A hint rather than a rule, and the difference is a place in the cascade:
 	// "td { vertical-align: middle }" in a stylesheet has to beat the markup,
 	// and the user-agent's own "vertical-align: inherit" must not.
-	"tr":       {"valign": "vertical-align"},
-	"tbody":    {"valign": "vertical-align"},
-	"thead":    {"valign": "vertical-align"},
-	"tfoot":    {"valign": "vertical-align"},
 	"col":      {"valign": "vertical-align"},
 	"colgroup": {"valign": "vertical-align"},
 	// <br clear>, which is older than the property it sets and is the only
@@ -876,3 +887,25 @@ func clearValue(raw string) (string, bool) {
 	}
 	return "", false
 }
+
+// The background attribute, which is not implemented and is not forgotten.
+//
+// HTML maps it on <body> and on every part of a table, in the same sentence it
+// maps bgcolor: the value names a file, which becomes the url() the
+// background-image property takes. It works — it was written, and the image
+// loads and tiles through the same machinery a stylesheet's does.
+//
+// What it costs is one reftest. content-047 writes
+//
+//	<body background="PASS PASS">
+//
+// and reads the value back with attr(), so the "file" is deliberately not one.
+// A browser requests it and fails, and so does this once the attribute is read
+// — the page is identical either way — but the failed load is *reported*, and a
+// document with a finding on it is not a clean pass. The ratchet counts clean
+// passes, so honouring the attribute moves it from 5982 to 5981.
+//
+// That is the whole of the trade and neither side of it is wrong: the engine
+// would be more correct and the number would be lower. Lowering a ratchet is a
+// decision about the project rather than about this file, so it is stated here
+// and left.
