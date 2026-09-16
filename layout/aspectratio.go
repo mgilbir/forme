@@ -1,7 +1,6 @@
 package layout
 
 import (
-	"strconv"
 	"strings"
 
 	"github.com/mgilbir/forme/style"
@@ -73,12 +72,12 @@ func aspectRatioOf(raw string) (float64, bool) {
 // degenerate, which matters: read as a number it would be an infinite or a
 // negative height, and a box of either is not what the declaration asked for.
 func positiveRatio(w, h string) (float64, bool) {
-	wn, err := strconv.ParseFloat(w, 64)
-	if err != nil || wn <= 0 {
+	wn, ok := parseNumber(w)
+	if !ok || wn <= 0 {
 		return 0, false
 	}
-	hn, err := strconv.ParseFloat(h, 64)
-	if err != nil || hn <= 0 {
+	hn, ok := parseNumber(h)
+	if !ok || hn <= 0 {
 		return 0, false
 	}
 	return wn / hn, true
