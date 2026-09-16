@@ -263,7 +263,7 @@ func ApplyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) Styled {
 	// the whole run rather than once per element — the answer does not depend
 	// on the element, and a document of ten thousand nodes would otherwise ask
 	// the same question ten thousand times.
-	rules := s.prepare(sheets)
+	rules := newRuleSet(s.prepare(sheets))
 
 	out := Styled{
 		Styles:            map[*html.Node]ComputedStyle{},
@@ -417,7 +417,12 @@ func ApplyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) Styled {
 type preparedRule struct {
 	selectors []css.Selector
 	decls     []preparedDecl
-	origin    Origin
+	// subjects is the element names this rule's selectors can select,
+	// ASCII-lower-cased, and is empty when at least one of them names no type
+	// at all — ".a", "#x", "[hidden]" — and so can select anything. It is what
+	// ruleSet indexes on; see there for why.
+	subjects []string
+	origin   Origin
 	// layer is the cascade layer the rule was written in, zero for none. See
 	// layer.go: it is a term of the cascade between the origin and the
 	// specificity, and it is carried on the rule because every declaration in
@@ -718,7 +723,8 @@ func (s *Styler) prepareStyleBlock(block []css.ComponentValue, sels []css.Select
 		s.report(Finding{Offset: e.Offset, Message: e.Message, Unsupported: e.Unsupported})
 	}
 
-	prepared := preparedRule{selectors: sels, origin: origin, layer: s.layer}
+	prepared := preparedRule{selectors: sels, origin: origin, layer: s.layer,
+		subjects: subjectsOf(sels)}
 	di, ni := 0, 0
 	for di < len(decls) || ni < len(nested) {
 		if ni >= len(nested) || (di < len(decls) && decls[di].Offset <= nested[ni].Offset) {
@@ -1565,18 +1571,21 @@ var pseudoElementNames = []string{"before", "after", "marker", "first-line", "fi
 // It exists so that a pseudo-element with nothing said about it costs nothing: a
 // document of ten thousand elements would otherwise compute three extra styles
 // each, all of them the initial values, and generate nothing from any of them.
-func (s *Styler) anyRuleTargets(rules []preparedRule, n *html.Node, name string) bool {
-	for _, r := range rules {
+func (s *Styler) anyRuleTargets(rules *ruleSet, n *html.Node, name string) bool {
+	found := false
+	rules.forEach(n, func(r *preparedRule) bool {
 		for _, sel := range r.selectors {
 			if sel.PseudoElement != name {
 				continue
 			}
 			if s.matcher.Match(sel, n) {
-				return true
+				found = true
+				return false
 			}
 		}
-	}
-	return false
+		return true
+	})
+	return found
 }
 
 // computeForPseudo resolves the properties of a pseudo-element.
@@ -1584,7 +1593,7 @@ func (s *Styler) anyRuleTargets(rules []preparedRule, n *html.Node, name string)
 // It inherits from the element it belongs to rather than from that element's
 // parent, which is what makes "p { color: red } p::before { content: '>' }" draw
 // a red marker without the author saying so twice.
-func (s *Styler) computeForPseudo(n *html.Node, rules []preparedRule,
+func (s *Styler) computeForPseudo(n *html.Node, rules *ruleSet,
 	owner ComputedStyle, name string) (ComputedStyle, bool) {
 	return s.computeFor(n, rules, map[*html.Node]ComputedStyle{n: owner}, name)
 }
@@ -1595,14 +1604,14 @@ func (s *Styler) computeForPseudo(n *html.Node, rules []preparedRule,
 // It also reports whether font-size came from a declaration rather than by
 // inheritance, which is the one thing a consumer cannot recover from the map it
 // returns. See Styled.OwnFontSize for why that matters.
-func (s *Styler) computeFor(n *html.Node, rules []preparedRule,
+func (s *Styler) computeFor(n *html.Node, rules *ruleSet,
 	done map[*html.Node]ComputedStyle, pseudo string) (ComputedStyle, bool) {
 
 	var cands []candidate
-	for _, r := range rules {
+	rules.forEach(n, func(r *preparedRule) bool {
 		spec, ok := s.matchSpecificityFor(r, n, pseudo)
 		if !ok {
-			continue
+			return true
 		}
 		for _, d := range r.decls {
 			cands = append(cands, candidate{
@@ -1611,7 +1620,8 @@ func (s *Styler) computeFor(n *html.Node, rules []preparedRule,
 				order: d.order, offset: d.offset,
 			})
 		}
-	}
+		return true
+	})
 
 	// The presentational hints of hints.go, at the very bottom of the author
 	// origin: zero specificity and an order number below every declaration an
@@ -1820,7 +1830,133 @@ func (s *Styler) resolve(name string, prop property, value string, have bool, pa
 // The specificity is that of the most specific selector that *matched*, not the
 // most specific in the list. "a, #b {…}" applies to an <a> with the specificity
 // of "a"; taking "#b" would let the rule beat declarations it should lose to.
-func (s *Styler) matchSpecificityFor(r preparedRule, n *html.Node, pseudo string) (css.Specificity, bool) {
+// ruleSet is the prepared rules, with an index from an element's name to the
+// rules that could select it.
+//
+// Every element used to be matched against every rule. The subject compound of
+// a selector is tested for its type before anything else, so most of those
+// comparisons failed on the first byte — but there were a great many of them:
+// the user agent sheet alone is two hundred selectors, and the cost is the
+// product of that and the document.
+//
+// The index is built once per document and asked once per element, which is the
+// part that matters. The first attempt asked *per rule* instead — a set on each
+// rule, tested in the loop — and was ten per cent slower than no filter at all,
+// because hashing the element's name two hundred times costs more than two
+// hundred failed byte comparisons. One lookup, then two short slices.
+type ruleSet struct {
+	rules []preparedRule
+	// byName holds, per element name, the rules every one of whose selectors
+	// names a type, filed under each type they name. A rule naming three types
+	// is in three of these lists and is still reached once, because an element
+	// has one name.
+	byName map[string][]int32
+	// any holds the rules that can select anything, which is every rule with a
+	// selector that names no type. They are walked for every element.
+	any []int32
+}
+
+func newRuleSet(rules []preparedRule) *ruleSet {
+	rs := &ruleSet{rules: rules, byName: make(map[string][]int32, 64)}
+	for i := range rules {
+		if len(rules[i].subjects) == 0 {
+			rs.any = append(rs.any, int32(i))
+			continue
+		}
+		for _, name := range rules[i].subjects {
+			rs.byName[name] = append(rs.byName[name], int32(i))
+		}
+	}
+	return rs
+}
+
+// forEach calls fn for every rule that could select the element, in no
+// particular order.
+//
+// Order does not matter and that is not an accident: every declaration carries
+// its own order number, and beats decides between two candidates from that
+// rather than from the sequence they were collected in.
+func (rs *ruleSet) forEach(n *html.Node, fn func(r *preparedRule) bool) {
+	name := asciiLowerName(n.Name)
+	if name == "" {
+		// A name this cannot fold, which is a name no HTML element has. Every
+		// rule is considered rather than guessed about.
+		for i := range rs.rules {
+			if !fn(&rs.rules[i]) {
+				return
+			}
+		}
+		return
+	}
+	for _, i := range rs.any {
+		if !fn(&rs.rules[i]) {
+			return
+		}
+	}
+	for _, i := range rs.byName[name] {
+		if !fn(&rs.rules[i]) {
+			return
+		}
+	}
+}
+
+// subjectsOf collects the element names a selector list can select, or nothing
+// when it can select anything.
+//
+// A selector whose subject names no type can select anything, and so can one
+// whose type this cannot fold. The matcher compares a type with
+// strings.EqualFold, which is Unicode's folding rather than ASCII's, and the two
+// differ on characters no element name has — but "differ only on characters
+// nobody uses" is not an argument for an index that decides whether a rule is
+// looked at. A type with a byte above ASCII is filed under nothing and so is
+// walked for every element, exactly as before.
+func subjectsOf(sels []css.Selector) []string {
+	names := make([]string, 0, len(sels))
+	for _, sel := range sels {
+		if len(sel.Compounds) == 0 {
+			return nil
+		}
+		name := asciiLowerName(sel.Compounds[len(sel.Compounds)-1].Type)
+		if name == "" {
+			return nil
+		}
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	return names
+}
+
+// asciiLowerName lower-cases an element or type name, or answers empty for one
+// that holds a byte the ASCII fold does not decide.
+func asciiLowerName(s string) string {
+	// The common case by far, and it must not allocate: this is asked once per
+	// element per style computation, and a copy of every element name would
+	// cost more than the loop it is saving.
+	upper := -1
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 0x80 {
+			return ""
+		}
+		if upper < 0 && c >= 'A' && c <= 'Z' {
+			upper = i
+		}
+	}
+	if upper < 0 {
+		return s
+	}
+	lower := []byte(s)
+	for i := upper; i < len(lower); i++ {
+		if c := lower[i]; c >= 'A' && c <= 'Z' {
+			lower[i] = c + 'a' - 'A'
+		}
+	}
+	return string(lower)
+}
+
+func (s *Styler) matchSpecificityFor(r *preparedRule, n *html.Node, pseudo string) (css.Specificity, bool) {
 	var best css.Specificity
 	found := false
 	for _, sel := range r.selectors {
