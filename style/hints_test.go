@@ -485,3 +485,196 @@ func TestAZeroDimensionIsNoDimension(t *testing.T) {
 		}
 	}
 }
+
+// TestATableBorderAttributeIsThreeThings.
+//
+// HTML's rendering section maps it to the four border widths on the table, and
+// then gives two more rules whose condition the selector language cannot state:
+//
+//	table[border] { border-style: outset }  /* only if border is not equivalent to zero */
+//	table[border] > tr > td, ... { border-width: 1px; border-style: inset }
+//
+// The comment is the specification's own, and it is a comment because "not
+// equivalent to zero" means the value parsed as an integer, which no selector
+// does: "0" and "00" are the same border and "[border=0]" tells them apart.
+func TestATableBorderAttributeIsThreeThings(t *testing.T) {
+	for _, c := range []struct{ attr, width, style string }{
+		{`border="1"`, "1px", "outset"},
+		{`border="5"`, "5px", "outset"},
+		{`border="0"`, "0px", "none"},
+		// The zero a selector cannot see. Both of these are the same border as
+		// "0" and neither is the string "0".
+		{`border="00"`, "0px", "none"},
+		{`border=" 0"`, "0px", "none"},
+		// "Rules for parsing non-negative integers" take the leading digits and
+		// ignore what follows.
+		{`border="3px"`, "3px", "outset"},
+		// And what has no leading digits at all is the parse error the section
+		// gives a default of one pixel for — which is the one thing about this
+		// attribute nobody expects, since every other dimension attribute drops
+		// what it cannot read.
+		{`border="yes"`, "1px", "outset"},
+		{`border=""`, "1px", "outset"},
+		{`border`, "1px", "outset"},
+		{`border="-1"`, "1px", "outset"},
+	} {
+		got := computed(t, `<table id="t" `+c.attr+`><tr><td id="c">x</td></tr></table>`)
+		if w := got["t"]["border-top-width"]; w != c.width {
+			t.Errorf("<table %s> gave the table border-top-width %q, want %q",
+				c.attr, w, c.width)
+		}
+		if s := got["t"]["border-top-style"]; s != c.style {
+			t.Errorf("<table %s> gave the table border-top-style %q, want %q",
+				c.attr, s, c.style)
+		}
+		// And the cell, which takes a one-pixel inset border from a table that
+		// draws one and nothing from a table that does not.
+		wantCell, wantCellWidth := "none", "medium"
+		if c.style != "none" {
+			wantCell, wantCellWidth = "inset", "1px"
+		}
+		if s := got["c"]["border-left-style"]; s != wantCell {
+			t.Errorf("<table %s> gave the cell border-left-style %q, want %q",
+				c.attr, s, wantCell)
+		}
+		if w := got["c"]["border-left-width"]; w != wantCellWidth {
+			t.Errorf("<table %s> gave the cell border-left-width %q, want %q",
+				c.attr, w, wantCellWidth)
+		}
+	}
+}
+
+// TestANestedTablesCellsTakeTheirOwnTablesBorder is the child combinator in the
+// specification's selector, said as a document.
+//
+// "table[border] > tr > td" reaches the cells of that table and not the cells
+// of a table inside one of them, and the walk that finds the table has to stop
+// at the first one for the same reason cellpadding's does.
+func TestANestedTablesCellsTakeTheirOwnTablesBorder(t *testing.T) {
+	got := computed(t, `<table border="3"><tr><td id="outer">`+
+		`<table><tr><td id="inner">x</td></tr></table></td></tr></table>`)
+	if s := got["outer"]["border-left-style"]; s != "inset" {
+		t.Errorf("the outer cell has border-left-style %q, want inset", s)
+	}
+	if s := got["inner"]["border-left-style"]; s != "none" {
+		t.Errorf("the inner cell has border-left-style %q; its own table has no "+
+			"border attribute, and the one it sits inside is not its own", s)
+	}
+}
+
+// TestTheBorderAttributeIsAHintLikeTheRest, which is where it sits in the
+// cascade: below every author declaration and above the user agent sheet.
+func TestTheBorderAttributeIsAHintLikeTheRest(t *testing.T) {
+	got := computed(t, `<table id="t" border="4"><tr><td id="c">x</td></tr></table>`,
+		author(t, `#t { border-top-style: dashed } #c { border-left-width: 9px }`))
+	if s := got["t"]["border-top-style"]; s != "dashed" {
+		t.Errorf("an author's border-top-style lost to the attribute: %q", s)
+	}
+	if w := got["c"]["border-left-width"]; w != "9px" {
+		t.Errorf("an author's border-left-width lost to the attribute: %q", w)
+	}
+	// And the half the author did not write still comes from the attribute.
+	if w := got["t"]["border-top-width"]; w != "4px" {
+		t.Errorf("the table border-top-width is %q, want 4px", w)
+	}
+}
+
+// TestTheBodyLinkAttributeColoursTheLinks.
+//
+// "<body link=#800080>" is how a document set its link colour before there was
+// a selector to say it with, and it is the second hint that is not an attribute
+// of the element it styles: written once on the body, it applies to "any
+// element that is a link" — the set :link selects, asked with the same function
+// so that the two cannot come to differ.
+func TestTheBodyLinkAttributeColoursTheLinks(t *testing.T) {
+	for _, c := range []struct{ markup, want, what string }{
+		// The initial colour, because nothing applied: these tests carry no
+		// user agent sheet, so the blue a document really gets is layout's and
+		// is checked there. What is asserted here is that the hint did not.
+		{`<body><a id="c" href="x">x</a></body>`, "black", "no attribute"},
+		{`<body link="red"><a id="c" href="x">x</a></body>`, "red",
+			"the attribute"},
+		{`<body link="#800080"><a id="c" href="x">x</a></body>`, "#800080",
+			"a hash colour"},
+		{`<body link="RED"><a id="c" href="x">x</a></body>`, "RED",
+			"a colour keyword's case is the value's business"},
+		{`<body link="red"><div><p><a id="c" href="x">x</a></p></div></body>`, "red",
+			"a link deeper in the document"},
+		{`<body link="red"><map><area id="c" href="x"/></map></body>`, "red",
+			"an <area>, which is a link too"},
+		// Not a link, so not coloured: the attribute is about links and an <a>
+		// with no href is not one.
+		{`<body link="red"><a id="c">x</a></body>`, "black",
+			"an <a> with no href"},
+		{`<body link="red"><span id="c">x</span></body>`, "black",
+			"an element that is not a link at all"},
+		// A value that is not a colour leaves the default standing, which is
+		// the same answer as the attribute not being there.
+		{`<body link="florb"><a id="c" href="x">x</a></body>`, "black",
+			"a value that is not a colour"},
+	} {
+		got := computed(t, c.markup)
+		if v := got["c"]["color"]; v != c.want {
+			t.Errorf("%s: the colour is %q, want %q", c.what, v, c.want)
+		}
+	}
+}
+
+// TestVlinkAndAlinkAreNotColoursOnPaper states the narrowing, because it is a
+// decision rather than an omission.
+//
+// "vlink" is the colour of a *visited* link and "alink" of one being clicked.
+// Nothing here is either: :visited is answered no — see the note beside it in
+// match.go — and there is no pointer to hold down on a printed page.
+//
+// They are not reported, for the reason this engine reports anything: a browser
+// printing the same document shows an unvisited, unclicked link too, so there
+// is no difference to tell an author about.
+func TestVlinkAndAlinkAreNotColoursOnPaper(t *testing.T) {
+	for _, attr := range []string{`vlink="red"`, `alink="red"`, `vlink="red" alink="green"`} {
+		got, findings := styledLink(t, `<body `+attr+`><a id="c" href="x">x</a></body>`)
+		if got != "black" {
+			t.Errorf("<body %s> coloured an unvisited link %q", attr, got)
+		}
+		for _, f := range findings {
+			if f.Property == "vlink" || f.Property == "alink" {
+				t.Errorf("<body %s> reported %q; a browser printing this shows "+
+					"the same colour", attr, f.Message)
+			}
+		}
+	}
+	// And "link" beside them still applies, so the refusal is about those two
+	// rather than about the body's attributes.
+	if got, _ := styledLink(t,
+		`<body link="red" vlink="green" alink="blue"><a id="c" href="x">x</a></body>`); got != "red" {
+		t.Errorf("the colour is %q, want red: link applies whatever sits beside it", got)
+	}
+}
+
+// TestTheLinkColourIsAHint, which is where it sits in the cascade: above the
+// default sheet's blue and below anything an author wrote.
+func TestTheLinkColourIsAHint(t *testing.T) {
+	got := computed(t, `<body link="red"><a id="c" href="x">x</a></body>`,
+		author(t, `a { color: rgb(1, 2, 3) }`))
+	if v := got["c"]["color"]; v != "rgb(1, 2, 3)" {
+		t.Errorf("an author's colour lost to the attribute: %q", v)
+	}
+}
+
+// styledLink applies the user agent sheet to a document and answers #c's colour
+// and the findings, which is what the two tests above need and computed does
+// not give.
+func styledLink(t *testing.T, markup string) (string, []Finding) {
+	t.Helper()
+	doc := parseDoc(t, markup)
+	got := Apply(doc, nil)
+	for n, cs := range got.Styles {
+		if n.Type == html.ElementNode {
+			if id, _ := n.Attr("id"); id == "c" {
+				return cs["color"], got.Findings
+			}
+		}
+	}
+	t.Fatal("no element with id c")
+	return "", nil
+}

@@ -364,12 +364,8 @@ func (m *Matcher) pseudo(p css.Pseudo, n *html.Node) bool {
 
 	case css.PseudoAnyLink:
 		// :link and :any-link are the same thing once :visited cannot be true,
-		// and both are about the document rather than about a person: an
-		// element is a link when it is an <a> or an <area> with an href.
-		if !strings.EqualFold(n.Name, "a") && !strings.EqualFold(n.Name, "area") {
-			return false
-		}
-		return n.HasAttr("href")
+		// and both are about the document rather than about a person.
+		return isLink(n)
 
 	case css.PseudoVisited:
 		// Nothing is visited here, and that is an answer rather than a refusal
@@ -379,6 +375,19 @@ func (m *Matcher) pseudo(p css.Pseudo, n *html.Node) bool {
 		return false
 	}
 	return false
+}
+
+// isLink reports whether an element is one: an <a> or an <area> with an href.
+//
+// It is one function because two places ask it. The other is the body element's
+// "link" attribute, which HTML maps to the colour of "any element that is a
+// link" — the same set this selects, and a second reading of "is a link" is a
+// second answer waiting to differ from this one.
+func isLink(n *html.Node) bool {
+	if !strings.EqualFold(n.Name, "a") && !strings.EqualFold(n.Name, "area") {
+		return false
+	}
+	return n.HasAttr("href")
 }
 
 // complexFrom matches a whole selector with n as its subject, which is what the

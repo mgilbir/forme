@@ -44,9 +44,11 @@ import (
 // author declaration, and a user agent rule loses to them too — so the place to
 // put it is the place the specification puts it.
 //
-// "border" is still absent, and is the one worth naming: it maps to the four
-// border widths on the table *and* turns the frame and rules attributes on,
-// which is a dozen more rules about which edges of which cells are drawn.
+// "border" is here now, and is written out below rather than added to the table
+// because it is three declarations with a condition the table cannot express.
+// The "frame" and "rules" attributes it interacts with are not: they are a
+// dozen more rules about which edges of which cells are drawn, and they are
+// plain keyword matches that belong in the user agent sheet.
 
 // hintOrder is the cascade order number every hint carries.
 //
@@ -161,6 +163,15 @@ var hintedAttributes = map[string]map[string]string{
 	// user-agent rule does not. A layout that read the attribute directly would
 	// have "br { clear: none }" in a stylesheet lose to the markup.
 	"br": {"clear": "clear"},
+	// <hr color> and <hr width>, §15.3.6. The colour is a legacy colour value,
+	// which colourValue already reads, and the width is the ordinary dimension
+	// property — this one *without* "ignoring zero", which the section says by
+	// not saying it.
+	//
+	// The size attribute is not here: what it sets depends on whether colour or
+	// noshade is beside it, and the table above is one attribute to one
+	// property. See hrSizeHint.
+	"hr": {"color": "color", "width": "width"},
 }
 
 // clearHintAttributes are the entries whose value is one of a handful of
@@ -206,6 +217,30 @@ var counterHintAttributes = map[string]bool{"start": true, "value": true}
 func presentationalHints(n *html.Node) map[string][]css.ComponentValue {
 	name := strings.ToLower(n.Name)
 	out := attributeHints(name, n)
+	if name == "table" {
+		for property, vals := range tableBorderHint(n) {
+			if out == nil {
+				out = map[string][]css.ComponentValue{}
+			}
+			out[property] = vals
+		}
+	}
+	if name == "hr" {
+		for property, vals := range hrSizeHint(n) {
+			if out == nil {
+				out = map[string][]css.ComponentValue{}
+			}
+			out[property] = vals
+		}
+	}
+	if name == "a" || name == "area" {
+		for property, vals := range linkColourHint(n) {
+			if out == nil {
+				out = map[string][]css.ComponentValue{}
+			}
+			out[property] = vals
+		}
+	}
 	if name != "td" && name != "th" {
 		return out
 	}
@@ -436,6 +471,14 @@ func isZeroDimension(value string) bool {
 // "white-space: pre" table with nowrap on it collapses its spaces.
 func cellHints(n *html.Node) map[string][]css.ComponentValue {
 	out := cellPaddingHint(n)
+	if border := cellBorderHint(n); border != nil {
+		if out == nil {
+			out = make(map[string][]css.ComponentValue, len(border)+3)
+		}
+		for property, vals := range border {
+			out[property] = vals
+		}
+	}
 	if raw, ok := n.Attr("valign"); ok {
 		if value, ok := valignValue(raw); ok {
 			if out == nil {
@@ -481,6 +524,210 @@ func valignValue(raw string) (string, bool) {
 		return "baseline", true
 	}
 	return "", false
+}
+
+// The table border attribute, which is three things at once and so is written
+// out here rather than added to the table above.
+//
+// HTML's rendering section maps it to the four border widths on the table, and
+// then gives two more rules whose condition the selector language cannot state:
+//
+//	table[border] { border-style: outset }  /* only if border is not equivalent to zero */
+//	table[border] > tr > td, ... { border-width: 1px; border-style: inset }
+//
+// The comment is the specification's own, and it is a comment because "not
+// equivalent to zero" means the value parsed as an integer, which no selector
+// does: "0", "00" and " 0" are all zero and "[border=0]" tells them apart. So
+// this is a presentational hint, where the value can be read properly, and the
+// three parts of the attribute are decided together.
+//
+// The reader is not dimensionValue either, and the difference is the one thing
+// about this attribute nobody expects: a value that does not parse is **one
+// pixel**, not nothing. "<table border=yes>" is a bordered table in every
+// browser, which is what the rendering section asks for in as many words, where
+// every other dimension attribute drops what it cannot read.
+
+// borderAttribute reads a table's border attribute into the width it states and
+// whether it draws anything.
+//
+// HTML's "rules for parsing non-negative integers" take the leading digits and
+// ignore what follows, so "1px" is one. What has no leading digits at all —
+// including the empty string of "<table border>" — is the parse error the
+// section gives a default of 1px for.
+func borderAttribute(raw string) (width string, drawn bool) {
+	s := strings.TrimLeft(raw, " \t\n\f\r")
+	digits := 0
+	for digits < len(s) && s[digits] >= '0' && s[digits] <= '9' {
+		digits++
+	}
+	if digits == 0 || digits > maxHintDigits {
+		return "1px", true
+	}
+	n, err := strconv.Atoi(s[:digits])
+	if err != nil {
+		return "1px", true
+	}
+	return strconv.Itoa(n) + "px", n != 0
+}
+
+// tableBorderHint is the border attribute read on the table that carries it.
+func tableBorderHint(n *html.Node) map[string][]css.ComponentValue {
+	raw, ok := n.Attr("border")
+	if !ok {
+		return nil
+	}
+	width, drawn := borderAttribute(raw)
+	vals, _ := css.ParseComponentValues(width)
+	out := map[string][]css.ComponentValue{
+		"border-top-width": vals, "border-right-width": vals,
+		"border-bottom-width": vals, "border-left-width": vals,
+	}
+	if drawn {
+		style := ident("outset")
+		out["border-top-style"] = style
+		out["border-right-style"] = style
+		out["border-bottom-style"] = style
+		out["border-left-style"] = style
+	}
+	return out
+}
+
+// cellBorderHint is the same attribute read on a cell of the table that carries
+// it, which is the second half of the rule above: a bordered table gives every
+// one of its cells a one-pixel inset border.
+//
+// The walk is cellPaddingHint's and stops at the first table, so a nested
+// table's cells take their own table's border rather than the one they happen
+// to sit inside — which is what the specification's "table[border] > tr > td"
+// says with a child combinator.
+func cellBorderHint(n *html.Node) map[string][]css.ComponentValue {
+	for anc := n.Parent; anc != nil; anc = anc.Parent {
+		if anc.Type != html.ElementNode || !strings.EqualFold(anc.Name, "table") {
+			continue
+		}
+		raw, ok := anc.Attr("border")
+		if !ok {
+			return nil
+		}
+		if _, drawn := borderAttribute(raw); !drawn {
+			return nil
+		}
+		width, style := pixels(1), ident("inset")
+		return map[string][]css.ComponentValue{
+			"border-top-width": width, "border-right-width": width,
+			"border-bottom-width": width, "border-left-width": width,
+			"border-top-style": style, "border-right-style": style,
+			"border-bottom-style": style, "border-left-style": style,
+		}
+	}
+	return nil
+}
+
+// hrSizeHint is §15.3.6's size attribute, which sets two different properties
+// depending on what is written beside it.
+//
+// With a colour or a noshade the rule is drawn as a solid line, and the size is
+// its thickness — halved, because the line is drawn as a border on both edges
+// and the two have to add up to what was asked for. Without either it is drawn
+// as a groove, the height is the gap between the two edges, and the size is the
+// whole thing: one is a rule with no gap at all, and anything more is the size
+// less the two edges.
+//
+// That is the specification's arithmetic and not an interpretation of it. It is
+// here rather than in the attribute table because the table is one attribute to
+// one property, and this is one attribute to two properties chosen by a third.
+func hrSizeHint(n *html.Node) map[string][]css.ComponentValue {
+	raw, ok := n.Attr("size")
+	if !ok {
+		return nil
+	}
+	size, ok := nonNegativeInteger(raw)
+	if !ok {
+		return nil
+	}
+	_, hasColour := n.Attr("color")
+	if hasColour || n.HasAttr("noshade") {
+		half := pixels(size / 2)
+		return map[string][]css.ComponentValue{
+			"border-top-width": half, "border-right-width": half,
+			"border-bottom-width": half, "border-left-width": half,
+		}
+	}
+	switch {
+	case size == 1:
+		return map[string][]css.ComponentValue{"border-bottom-width": pixels(0)}
+	case size > 1:
+		return map[string][]css.ComponentValue{"height": pixels(size - 2)}
+	}
+	return nil
+}
+
+// pixels is a length written the way a stylesheet writes one.
+//
+// It is parsed rather than made, because a component value built by hand out of
+// "2px" is an *identifier* whose name begins with a digit — and serialising one
+// of those escapes the digit, so the cascade was handed "\32 px" where a
+// document had asked for two pixels.
+func pixels(n int) []css.ComponentValue {
+	vals, _ := css.ParseComponentValues(strconv.Itoa(n) + "px")
+	return vals
+}
+
+// nonNegativeInteger is HTML's rule of that name: leading whitespace, then
+// digits, and an error if there are none.
+//
+// It is not borderAttribute's reader, which answers one pixel where this
+// answers nothing — the border attribute has a default and this has not.
+func nonNegativeInteger(raw string) (int, bool) {
+	s := strings.TrimLeft(raw, " \t\n\f\r")
+	digits := 0
+	for digits < len(s) && s[digits] >= '0' && s[digits] <= '9' {
+		digits++
+	}
+	if digits == 0 || digits > maxHintDigits {
+		return 0, false
+	}
+	n, err := strconv.Atoi(s[:digits])
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+// linkColourHint is the body element's "link" attribute, read on the links it
+// colours.
+//
+// It is the second hint that is not an attribute of the element it styles:
+// written once on the body, it applies to "any element that is a link", which is
+// the set :link selects and is asked with the same function so that the two
+// cannot come to differ.
+//
+// Its two neighbours are deliberately absent. "vlink" is the colour of a
+// *visited* link and "alink" of one being clicked, and on paper nothing is
+// either: :visited is answered no here — see the note beside it — and there is
+// no pointer to hold down. They are not reported, for the reason the engine
+// reports anything: a browser printing the same document shows an unvisited,
+// unclicked link too, so there is no difference to tell an author about.
+func linkColourHint(n *html.Node) map[string][]css.ComponentValue {
+	if !isLink(n) {
+		return nil
+	}
+	for anc := n.Parent; anc != nil; anc = anc.Parent {
+		if anc.Type != html.ElementNode || !strings.EqualFold(anc.Name, "body") {
+			continue
+		}
+		raw, ok := anc.Attr("link")
+		if !ok {
+			return nil
+		}
+		value, ok := colourValue(raw)
+		if !ok {
+			return nil
+		}
+		vals, _ := css.ParseComponentValues(value)
+		return map[string][]css.ComponentValue{"color": vals}
+	}
+	return nil
 }
 
 // cellPaddingHint reads the cellpadding an ancestor table declares.
