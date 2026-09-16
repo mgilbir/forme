@@ -510,63 +510,101 @@ func TestTheWidthAttributeOnARule(t *testing.T) {
 	}
 }
 
-// TestAReversedListSaysSo is a narrowing stated as a test, because until this
-// it was the other thing: an "<ol reversed>" numbered upwards and said nothing.
+// TestAReversedListCountsDown, §15.3.7 and CSS Lists 3 §4.
 //
-// HTML says what the attribute means in CSS terms — a presentational hint
-// setting "counter-reset: reversed(list-item)" — and a *reversed* counter
-// starts at the number of elements in its scope that increment it and is
-// incremented by the negation of the increment. Neither the reversed() notation
-// nor the implied start is implemented, so the list counts up, which is not a
-// small difference to look at: it is every number in the list wrong and in the
-// wrong order.
+// "<ol reversed>" is a presentational hint setting "counter-reset:
+// reversed(list-item)", and a reversed counter is incremented by the *negation*
+// of the increment — so the same "counter-increment: list-item" that numbers a
+// list upwards numbers this one downwards, and no other rule changes.
 //
-// The implied start is why this is reported rather than guessed at. It needs
-// the count of the items in the counter's scope *before* the walk that numbers
-// them reaches them, and a scope is an element, its descendants and its
-// following siblings — a look-ahead per reversed counter rather than a line in
-// the existing walk.
-func TestAReversedListSaysSo(t *testing.T) {
+// The number it begins at is the one thing about a counter that cannot be read
+// off the element as the walk reaches it: §4.4.2 makes it the sum of the
+// increments in the counter's scope plus the last of them again, which for a
+// list of three items each incrementing by one is four. The first item then
+// shows three.
+func TestAReversedListCountsDown(t *testing.T) {
+	for _, c := range []struct{ markup, want string }{
+		{`<ol reversed><li>a</li><li>b</li><li>c</li></ol>`, "3.a2.b1.c"},
+		{`<ol reversed><li>a</li></ol>`, "1.a"},
+		{`<ol reversed></ol>`, ""},
+		// A start counts down *from* the number it names, which is the same
+		// off-by-one as a list that counts up seen from the other end: the
+		// counter is set before the first increment, so one begins at N+1 and
+		// the other at N-1.
+		{`<ol reversed start="10"><li>a</li><li>b</li></ol>`, "10.a9.b"},
+		{`<ol start="5"><li>a</li><li>b</li></ol>`, "5.a6.b"},
+		{`<ol><li>a</li><li>b</li><li>c</li></ol>`, "1.a2.b3.c"},
+		// The same thing said in CSS, which is what the attribute maps to.
+		{`<ol style="counter-reset:reversed(list-item)"><li>a</li><li>b</li></ol>`, "2.a1.b"},
+		// An explicit number is the counter's value before the first increment,
+		// exactly as it is for a list that counts up.
+		{`<ol style="counter-reset:reversed(list-item) 7"><li>a</li><li>b</li></ol>`, "6.a5.b"},
+	} {
+		if got := drawn(paintOf(t, c.markup, noDefaults)); got != c.want {
+			t.Errorf("%s drew %q, want %q", c.markup, got, c.want)
+		}
+	}
+}
+
+// TestAReversedCountersScopeStopsWhereAnotherBegins is the rule that makes the
+// implied number right, and it is the half a flat list cannot show.
+//
+// §4.4.2 counts "each element that increments or sets the same counter in the
+// same scope", and a nested list instantiates a counter of its own — so its
+// items are in that scope and not in the outer one. An implementation that
+// counted the whole subtree would start the outer list at the number of items
+// in the document rather than in the list.
+func TestAReversedCountersScopeStopsWhereAnotherBegins(t *testing.T) {
+	// Two items outside and two inside, and each list counts its own.
+	const nested = `<ol reversed><li>a<ol reversed><li>x</li><li>y</li></ol></li><li>b</li></ol>`
+	if got := drawn(paintOf(t, nested, noDefaults)); got != "2.a2.x1.y1.b" {
+		t.Errorf("a nested reversed list drew %q, want %q", got, "2.a2.x1.y1.b")
+	}
+	// And an item that generates no box is in no scope, so it is not counted.
+	const hidden = `<ol reversed><li>a</li><li style="display:none">gone</li><li>c</li></ol>`
+	if got := drawn(paintOf(t, hidden, noDefaults)); got != "2.a1.c" {
+		t.Errorf("a list with a hidden item drew %q, want %q", got, "2.a1.c")
+	}
+}
+
+// TestALiValueInAReversedListSaysSo is the one place the engine's reading of
+// "<li value>" is visibly not the specification's, and it only became visible
+// once reversed lists existed.
+//
+// HTML maps the attribute to "counter-set", which writes the counter already
+// there; this engine maps it to "counter-reset", which *creates* one. For a
+// list that counts up the two are the same page, which is why the
+// approximation has stood. For one that counts down they are not: the items
+// after it count upwards, and the ones before it are numbered as though the
+// list ended at it.
+func TestALiValueInAReversedListSaysSo(t *testing.T) {
 	count := func(markup string) int {
 		n := 0
 		for _, f := range Build(Input{HTML: markup}).Findings {
-			if f.Property == "reversed" {
+			if f.Property == "value" {
 				n++
 			}
 		}
 		return n
 	}
-	if got := count(`<ol reversed><li>a</li><li>b</li></ol>`); got != 1 {
-		t.Errorf("<ol reversed> raised %d findings, want 1", got)
+	if got := count(`<ol reversed><li>a</li><li value="9">b</li></ol>`); got != 1 {
+		t.Errorf("<li value> in a reversed list raised %d findings, want 1", got)
 	}
-	// Once per document: a page with twenty countdown lists has one gap in it
-	// and not twenty.
-	//
-	// The two lists are at different depths on purpose. The Recorder's own
-	// deduplication keys on the element's *path*, so two siblings collapse into
-	// one finding whatever this function does — a fixture written that way
-	// tests the Recorder and calls it a test of the flag.
-	if got := count(`<ol reversed><li>a</li></ol>` +
-		`<div><ol reversed><li>b</li></ol></div>`); got != 1 {
-		t.Errorf("two reversed lists at different depths raised %d findings, want 1", got)
+	// Once per document, and the two lists are at different depths because the
+	// Recorder deduplicates on the element's path and two siblings share one.
+	if got := count(`<ol reversed><li value="9">a</li></ol>` +
+		`<div><ol reversed><li value="9">b</li></ol></div>`); got != 1 {
+		t.Errorf("two of them raised %d findings, want 1", got)
 	}
-	// And nothing is said about the lists this engine does number correctly,
-	// which is the containment argument: a finding on every list would be a
-	// report about every document with a list in it.
+	// And nothing is said where the two readings agree, which is every list
+	// that counts up.
 	for _, markup := range []string{
-		`<ol><li>a</li></ol>`,
-		`<ol start="5"><li>a</li></ol>`,
-		`<ul reversed><li>a</li></ul>`,
+		`<ol><li>a</li><li value="9">b</li></ol>`,
+		`<ol reversed><li>a</li></ol>`,
+		`<li value="9">a</li>`,
 	} {
 		if got := count(markup); got != 0 {
-			t.Errorf("%s raised %d findings about reversed, want none", markup, got)
+			t.Errorf("%s raised %d findings about value, want none", markup, got)
 		}
-	}
-	// The numbering itself, so that the report is about something a reader can
-	// see: the list counts up, and the "start" attribute beside it still works,
-	// so the first number is right and the rest are not.
-	if got := drawn(paintOf(t, `<ol reversed start="10"><li>a</li><li>b</li></ol>`, noDefaults)); got != "10.a11.b" {
-		t.Errorf("the reversed list drew %q; it counts up from the start, which "+
-			"is what the finding is about", got)
 	}
 }

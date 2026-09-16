@@ -116,10 +116,13 @@ var hintedAttributes = map[string]map[string]string{
 		"bgcolor": "background-color", "background": "background-image"},
 	"th": {"width": "width", "height": "height",
 		"bgcolor": "background-color", "background": "background-image"},
-	// <ol start="5"> and <li value="3"> are the counter, written as attributes.
-	// They take a signed integer rather than a dimension, so they are read by
-	// integerAttr below instead of the table's usual dimensionValue.
-	"ol": {"start": "counter-reset"},
+	// <li value="3"> is the counter, written as an attribute. It takes a signed
+	// integer rather than a dimension, so it is read by counterResetValue below
+	// instead of the table's usual dimensionValue.
+	//
+	// <ol start> is not here beside it: what it sets depends on whether
+	// "reversed" is written next to it, and the table is one attribute to one
+	// property. See olCounterHint.
 	"li": {"value": "counter-reset"},
 	// The presentational colour attributes of HTML's rendering section. They
 	// are the oldest thing in this table and the only ones that are not a
@@ -243,6 +246,14 @@ func presentationalHints(n *html.Node) map[string][]css.ComponentValue {
 	out := attributeHints(name, n)
 	if name == "table" {
 		for property, vals := range tableBorderHint(n) {
+			if out == nil {
+				out = map[string][]css.ComponentValue{}
+			}
+			out[property] = vals
+		}
+	}
+	if name == "ol" {
+		for property, vals := range olCounterHint(n) {
 			if out == nil {
 				out = map[string][]css.ComponentValue{}
 			}
@@ -671,6 +682,77 @@ func cellBorderHint(n *html.Node) map[string][]css.ComponentValue {
 	return nil
 }
 
+// olCounterHint is §15.3.7's start and reversed attributes, which between them
+// decide one counter-reset.
+//
+// The specification gives it as four steps and they are worth following exactly,
+// because the off-by-one goes in opposite directions:
+//
+//	reversed, with a start   ->  reversed(list-item) <start+1>
+//	reversed, no start       ->  reversed(list-item)
+//	a start, not reversed    ->  list-item <start-1>
+//	neither                  ->  nothing
+//
+// The two ones are the same one seen from either end. counter-reset sets the
+// counter *before* the first increment, so a list that counts up from N starts
+// at N-1 and one that counts down from N starts at N+1.
+//
+// A reversed list with no start takes its value from the counter itself: a
+// reversed counter with no number begins at the number of things in its scope
+// that increment it, which is the count of the items. That is CSS's rule rather
+// than HTML's, and it is why the bare "reversed(list-item)" is a complete
+// answer here.
+func olCounterHint(n *html.Node) map[string][]css.ComponentValue {
+	raw, hasStart := n.Attr("start")
+	reversed := n.HasAttr("reversed")
+	start, startOK := 0, false
+	if hasStart {
+		start, startOK = signedInteger(raw)
+	}
+	value := ""
+	switch {
+	case reversed && startOK:
+		value = "reversed(list-item) " + strconv.Itoa(start+1)
+	case reversed:
+		value = "reversed(list-item)"
+	case startOK:
+		value = "list-item " + strconv.Itoa(start-1)
+	default:
+		return nil
+	}
+	vals, _ := css.ParseComponentValues(value)
+	return map[string][]css.ComponentValue{"counter-reset": vals}
+}
+
+// signedInteger is HTML's "rules for parsing integers": an optional sign and
+// then digits, and an error if there is anything else.
+//
+// It is the whole string rather than a prefix, which is what separates it from
+// the non-negative reader beside it — that one is HTML's other integer rule and
+// takes the leading digits.
+func signedInteger(raw string) (int, bool) {
+	s := strings.TrimSpace(raw)
+	neg := false
+	if len(s) > 0 && (s[0] == '-' || s[0] == '+') {
+		neg = s[0] == '-'
+		s = s[1:]
+	}
+	if s == "" || len(s) > maxHintDigits {
+		return 0, false
+	}
+	n := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return 0, false
+		}
+		n = n*10 + int(s[i]-'0')
+	}
+	if neg {
+		n = -n
+	}
+	return n, true
+}
+
 // hrSizeHint is §15.3.6's size attribute, which sets two different properties
 // depending on what is written beside it.
 //
@@ -819,24 +901,9 @@ func cellPaddingHint(n *html.Node) map[string][]css.ComponentValue {
 // "one less" is why this is not simply the integer: a value of the most negative
 // integer would wrap, and an attribute is untrusted text.
 func counterResetValue(raw string) (string, bool) {
-	s := strings.TrimSpace(raw)
-	neg := false
-	if len(s) > 0 && (s[0] == '-' || s[0] == '+') {
-		neg = s[0] == '-'
-		s = s[1:]
-	}
-	if s == "" || len(s) > maxHintDigits {
+	n, ok := signedInteger(raw)
+	if !ok {
 		return "", false
-	}
-	n := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
-			return "", false
-		}
-		n = n*10 + int(s[i]-'0')
-	}
-	if neg {
-		n = -n
 	}
 	return "list-item " + strconv.Itoa(n-1), true
 }
