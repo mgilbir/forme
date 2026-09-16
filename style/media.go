@@ -57,6 +57,14 @@ type Media struct {
 // them has the same question to ask, and asking it with a second copy of this
 // is how the two answers come to differ.
 func MatchesMedia(prelude []css.ComponentValue, m Media) (bool, string) {
+	if len(trimWhitespace(prelude)) == 0 {
+		// §2.1: an empty media query list evaluates to true. "@media { ... }"
+		// is a block with no condition on it, and a browser applies what is
+		// inside; this dropped it, because the empty query underneath went
+		// through oneMediaQuery and came out false as an empty *query* should.
+		// An empty list and an empty query are not the same thing.
+		return true, ""
+	}
 	matched, unknown := false, ""
 	for _, query := range splitOnComma(prelude) {
 		ok, why := oneMediaQuery(query, m)
@@ -137,15 +145,23 @@ func mediaTerm(part []css.ComponentValue, m Media, mayBeType bool) (bool, string
 // stylesheet that says "@media screen" has not asked for anything this engine
 // failed to do, it has said which medium it was talking about and it was not
 // this one.
+//
+// A name that is none of them is a media type this engine has never heard of,
+// and §3 says what to do with one: an unknown media type is not matched. That
+// is a complete answer and not a gap, so it is not reported — a browser
+// printing the same document drops the same rules, and a finding claiming this
+// engine could not answer would be claiming a difference that is not there.
+//
+// It matters beyond the noise, because a query is negatable. "@media not
+// florb" is true — the type does not match, and "not" inverts it — and coming
+// back with a name here returned false before the negation was reached. The
+// answer was wrong and not merely over-reported.
 func mediaTypeMatches(name string) (bool, string) {
 	switch name {
 	case "all", "print":
 		return true, ""
-	case "screen", "speech", "aural", "braille", "embossed", "handheld",
-		"projection", "tty", "tv":
-		return false, ""
 	}
-	return false, name
+	return false, ""
 }
 
 // mediaFeature evaluates one parenthesised feature.

@@ -234,3 +234,70 @@ func TestAQueryInsideAQuery(t *testing.T) {
 		}
 	}
 }
+
+// TestAnUnknownMediaTypeIsSimplyNotMatched is two faults in one line, and the
+// second is the one that mattered.
+//
+// §3 says an unknown media type is not matched. That is a complete answer, and
+// it is the answer a browser printing the same document gives — so the finding
+// this raised was claiming a difference that was not there, on a query it had
+// read perfectly well.
+//
+// **And it got the answer wrong when the query was negated.** Coming back with
+// the name returned false from the middle of the query, before the "not" was
+// applied, so "@media not florb" dropped its rules where every engine applies
+// them. "not <a medium this is not>" is the whole idiom "@media not screen" is
+// written in; a misspelling or a medium newer than this engine turned it into
+// its opposite.
+func TestAnUnknownMediaTypeIsSimplyNotMatched(t *testing.T) {
+	for _, c := range []struct{ query, want string }{
+		{"florb", "blue"},
+		{"not florb", "red"},
+		{"only florb", "blue"},
+		{"florb, print", "red"},
+		{"screen, florb", "blue"},
+		// The deprecated types are not a separate case any more, and never
+		// needed to be: they are types this engine is not, exactly as an
+		// unknown one is.
+		{"tty", "blue"},
+		{"not tty", "red"},
+	} {
+		if got := underQuery(t, c.query, a4ish); got != c.want {
+			t.Errorf("@media %s left the paragraph %s, want %s", c.query, got, c.want)
+		}
+	}
+	// And nothing is reported about any of them, because there is nothing a
+	// browser does differently.
+	doc := parseDoc(t, "<p id='p'>x</p>")
+	for _, query := range []string{"florb", "not florb", "tty", "screen, florb"} {
+		got := ApplyIn(doc, []Sheet{author(t, "@media "+query+" { p { color: red } }")},
+			nil, a4ish)
+		for _, f := range got.Findings {
+			if f.Property == "@media" {
+				t.Errorf("@media %s reported %q; an unknown media type is a "+
+					"question this engine answers, and the answer is no", query, f.Message)
+			}
+		}
+	}
+}
+
+// TestAnEmptyMediaQueryListIsTrue.
+//
+// §2.1 says so in as many words, and an empty list is not an empty query: the
+// list underneath went through the single-query reader, which quite correctly
+// makes a query with nothing in it false. So "@media { ... }" — a block with no
+// condition on it — dropped everything inside it, where a browser applies it.
+func TestAnEmptyMediaQueryListIsTrue(t *testing.T) {
+	for _, query := range []string{"", " ", "\n\t"} {
+		if got := underQuery(t, query, a4ish); got != "red" {
+			t.Errorf("@media %q left the paragraph %s; an empty media query list "+
+				"evaluates to true", query, got)
+		}
+	}
+	// An empty query *inside* a list is still false, which is what says the two
+	// are different things rather than one thing spelt two ways.
+	if got := underQuery(t, ", screen", a4ish); got != "blue" {
+		t.Errorf("@media \", screen\" left the paragraph %s; the empty query in "+
+			"the list is not the empty list", got)
+	}
+}

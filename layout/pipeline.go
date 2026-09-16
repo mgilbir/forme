@@ -176,7 +176,12 @@ func buildWith(in Input, page PageSize, rec *Recorder) Built {
 
 	sheets := make([]style.Sheet, 0, len(in.CSS)+2)
 	sheets = append(sheets, parseSheet(rec, style.OriginUserAgent, "user agent", UserAgentCSS, &faces, &pages))
-	importer := &sheetLoader{res: in.Resources, rec: rec, failed: map[string]bool{}}
+	// The sheet a media query is asked about, which for a <link> or a <style>
+	// has to be settled before the document's own @page rules can be, because
+	// those rules are inside the sheets being chosen here. It is the page the
+	// caller named; @page narrows it afterwards and the cascade asks again.
+	asked := style.Media{Width: page.Width, Height: page.Height}
+	importer := &sheetLoader{res: in.Resources, rec: rec, media: asked, failed: map[string]bool{}}
 	if in.UserCSS != "" {
 		// Through the importer like every other author-supplied sheet. A user
 		// stylesheet is CSS a person wrote, and an @import in one is the same
@@ -193,7 +198,7 @@ func buildWith(in Input, page PageSize, rec *Recorder) Built {
 	// order the author would expect. documentStylesheets returns the two kinds
 	// interleaved in document order for that reason; see stylesheet.go for what
 	// a linked one is allowed to be read from.
-	for _, s := range documentStylesheets(doc, in.Resources, rec) {
+	for _, s := range documentStylesheets(doc, in.Resources, asked, rec) {
 		sheets = append(sheets, parseSheet(rec, style.OriginAuthor, s.name, s.source, &faces, &pages))
 	}
 	// A caller's own sheets go through the same expansion as the document's, so

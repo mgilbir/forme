@@ -8,6 +8,7 @@ import (
 
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
+	"github.com/mgilbir/forme/style"
 )
 
 // The CSS a document carries, and the CSS it points at.
@@ -78,8 +79,10 @@ type authorSheet struct {
 // it — and a browser orders the two by their position in the markup rather than
 // by their kind. Collecting them in one walk is what makes that true by
 // construction instead of by a sort somebody has to keep right.
-func documentStylesheets(doc *html.Node, res ResourceResolver, rec *Recorder) []authorSheet {
-	l := &sheetLoader{res: res, rec: rec, failed: map[string]bool{}}
+func documentStylesheets(doc *html.Node, res ResourceResolver, media style.Media,
+	rec *Recorder) []authorSheet {
+
+	l := &sheetLoader{res: res, rec: rec, media: media, failed: map[string]bool{}}
 	var out []authorSheet
 	doc.Walk(func(n *html.Node) bool {
 		if n.Type != html.ElementNode {
@@ -87,7 +90,12 @@ func documentStylesheets(doc *html.Node, res ResourceResolver, rec *Recorder) []
 		}
 		switch strings.ToLower(n.Name) {
 		case "style":
-			if text := n.TextContent(); text != "" {
+			// HTML §4.2.6 gives <style> a media attribute and means by it what
+			// <link> does. It was not read at all, so a document that kept its
+			// screen rules in "<style media=screen>" — which is what a
+			// single-file document writes instead of a second stylesheet — had
+			// every one of them applied to the paper.
+			if text := n.TextContent(); text != "" && l.mediaApplies(n, "this <style> element") {
 				out = append(out, l.expandImports(authorSheet{source: text})...)
 			}
 			// A <style> element's content is raw text, so there is nothing
@@ -108,6 +116,10 @@ func documentStylesheets(doc *html.Node, res ResourceResolver, rec *Recorder) []
 type sheetLoader struct {
 	res ResourceResolver
 	rec *Recorder
+
+	// media is the sheet a query is asked about: the page this document is
+	// being printed on, before its own @page rules have narrowed it.
+	media style.Media
 
 	// cache holds the text of every reference already read, so a document
 	// naming one sheet in ten <link> elements reads it once.
@@ -158,32 +170,8 @@ func (l *sheetLoader) link(n *html.Node) (authorSheet, bool) {
 		// does. There is no reference for a resolver to have refused.
 		return authorSheet{}, false
 	}
-	if media, ok := n.Attr("media"); ok {
-		apply, understood := mediaAppliesToPaper(media)
-		if !understood {
-			// A media query this engine cannot evaluate. Applying it would be a
-			// guess and so would skipping it, and the guess that shows least is
-			// the one nobody can see — so the sheet is left out and the reason
-			// is named. A document whose whole appearance is behind a query
-			// then reads as unstyled *and says so*, rather than reading as
-			// styled by rules that may not have been meant for paper.
-			l.rec.ReportDetail(Finding{
-				Rule:   RuleUnsupportedValue,
-				Source: AtHTML(n.Offset),
-				Message: "the stylesheet at " + quoteValue(href) + " applies to " +
-					quoteValue(strings.TrimSpace(media)) + ", and this engine evaluates no " +
-					"media queries; it was not applied",
-				Path:     PathOf(n),
-				Property: "media",
-			})
-			return authorSheet{}, false
-		}
-		if !apply {
-			// A sheet for a medium this is not. A page is printed, so a
-			// screen-only sheet not applying is the correct answer rather than
-			// a gap, and there is nothing to report.
-			return authorSheet{}, false
-		}
+	if !l.mediaApplies(n, "the stylesheet at "+quoteValue(href)) {
+		return authorSheet{}, false
 	}
 
 	if l.failed[href] {
@@ -321,49 +309,48 @@ func relIsStylesheet(rel string) bool {
 	return stylesheet && !alternate
 }
 
-// mediaAppliesToPaper says whether a link's media attribute admits this engine's
-// output, and whether it could be read at all.
+// mediaApplies answers the media attribute of a <link> or a <style> — and
+// answers it with the engine's own media query evaluator, which is the point.
 //
-// Only the simple form is answered: a comma-separated list of bare media types,
-// which is what a document that wants to distinguish print from screen writes.
-// Anything with a feature query in it — "screen and (min-width: 40em)", "not
-// print", "only screen" — is *not* answered, because answering it would mean
-// evaluating a media query and this engine evaluates none. Guessing would be
-// silent either way, and silent is what the reporting layer exists to prevent.
+// There used to be a second reader here that took a comma-separated list of
+// bare media types and refused everything else, because at the time this engine
+// really did evaluate no media queries. Once style.MatchesMedia existed, that
+// left one question with two answers: "@media print and (min-width: 200mm)"
+// inside a sheet was evaluated exactly, and the identical query on the <link>
+// that fetched the sheet was refused and reported. "not screen", "only print"
+// and a bare "(min-width: 1px)" — every one of them the ordinary way to mark a
+// sheet for paper — dropped the whole stylesheet.
 //
-// The medium is print. A PDF page is a sheet of paper with a fixed size and no
-// scrolling, which is the medium "print" was defined for, and it is why "screen"
-// is a *correct* refusal here rather than an unimplemented one.
-func mediaAppliesToPaper(media string) (applies, understood bool) {
-	media = strings.TrimSpace(media)
-	if media == "" {
-		return true, true
+// MatchesMedia is exported so that the stage outside the cascade asks the same
+// question rather than keeping a copy of it. This is that stage.
+//
+// What is reported is what it is reported for anywhere else: a query naming
+// something this engine cannot answer, because there a browser printing the
+// same document may apply rules this page does not have. A query it answers —
+// including "no" — is not a gap and says nothing.
+func (l *sheetLoader) mediaApplies(n *html.Node, what string) bool {
+	media, ok := n.Attr("media")
+	if !ok {
+		return true
 	}
-	for _, part := range strings.Split(media, ",") {
-		part = strings.ToLower(strings.TrimSpace(part))
-		if part == "" {
-			continue
+	vals, _ := css.ParseComponentValues(media)
+	applies, unknown := style.MatchesMedia(vals, l.media)
+	if unknown != "" {
+		did := "it was not applied"
+		if applies {
+			did = "it was applied anyway, because another query in the list matched"
 		}
-		if !bareMediaTypes[part] {
-			return false, false
-		}
-		if part == "all" || part == "print" {
-			applies = true
-		}
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleUnsupportedValue,
+			Source: AtHTML(n.Offset),
+			Message: what + " applies to " + quoteValue(strings.TrimSpace(media)) +
+				", which asks about " + quoteValue(unknown) + " — a question this " +
+				"engine cannot answer, so " + did,
+			Path:     PathOf(n),
+			Property: "media",
+		})
 	}
-	return applies, true
-}
-
-// bareMediaTypes is every media type that may stand alone in a media list.
-//
-// The deprecated ones are here because documents still carry them and because
-// leaving them out would send a "media=tty" sheet down the unsupported path,
-// where it would be reported as a query this engine cannot read. It can read it;
-// the answer is simply no.
-var bareMediaTypes = map[string]bool{
-	"all": true, "print": true, "screen": true, "speech": true,
-	"aural": true, "braille": true, "embossed": true, "handheld": true,
-	"projection": true, "tty": true, "tv": true,
+	return applies
 }
 
 // @import, which is the other way a document names a stylesheet.
@@ -504,19 +491,25 @@ func (l *sheetLoader) expandImports(s authorSheet) []authorSheet {
 		// this import's sheet uses are already declared.
 		flush()
 		holes = append(holes, sourceSpan{from: r.Offset, to: end(i)})
-		ref, ok := importReference(r.Prelude)
+		ref, media, ok := importReference(r.Prelude)
 		if !ok {
-			// A conditional import — "@import url(x) print" — or a prelude this
-			// cannot read. Nothing is loaded and the rule is left where it is,
-			// so the cascade reports it as the at-rule it did not apply.
+			// A prelude this cannot read — a layer name, a supports() condition
+			// — so nothing is loaded and the rule is left where it is, and the
+			// cascade reports it as the at-rule it did not apply.
 			cut = r.Offset
 			break
 		}
 		// Recognised, so it comes out of the source whether or not the file
 		// behind it arrives: a reference that could not be read has been
 		// reported by fetchImport, and leaving the rule in would have the
-		// cascade report the same fact a second time and differently.
+		// cascade report the same fact a second time and differently. A media
+		// query that answers no is recognised too — the rule was read and
+		// correctly not applied, and leaving it in would have the cascade call
+		// that a gap.
 		cut, found = len(s.source), true
+		if !l.importMedia(media, ref, r.Offset, s.name) {
+			continue
+		}
 		if src, ok := l.fetchImport(ref, s.name); ok {
 			next := authorSheet{name: resolveAgainstSheet(ref, s.name), source: src}
 			if why := l.cycle(next.name); why != "" {
@@ -537,44 +530,104 @@ func (l *sheetLoader) expandImports(s authorSheet) []authorSheet {
 	return append(out, s)
 }
 
-// importReference reads the URL out of an @import prelude, and declines
-// anything with more in it than the URL.
+// importReference reads an @import prelude: the URL, and the media query list
+// that may follow it.
 //
-// "@import url(x) print" is a conditional import, and this engine evaluates no
-// media queries — see the <link media> case above for why guessing either way is
-// worse than declining and saying so.
-func importReference(prelude []css.ComponentValue) (string, bool) {
-	ref, have := "", false
-	for _, v := range prelude {
+// CSS Cascade 5 §3.1 writes the prelude as the url, then an optional layer, then
+// an optional supports() condition, then a media query list. The media query is
+// read — it is the same query style.MatchesMedia answers inside a sheet, and
+// "@import url(print.css) print" is how a stylesheet says which medium a file
+// is for — and the other two are not, so a prelude carrying either is declined.
+//
+// Declining layer() is not a narrowing to be tidied away later. An imported
+// sheet whose layer name was dropped would arrive *unlayered*, and an unlayered
+// rule beats every layered one, so a sheet the author put at the bottom of the
+// order would win against all of them. Left in the stylesheet, it is reported as
+// an at-rule that was not applied, which is the answer that cannot mislead.
+func importReference(prelude []css.ComponentValue) (ref string, media []css.ComponentValue, ok bool) {
+	have := false
+	for i, v := range prelude {
 		switch {
 		case v.IsToken() && v.Token.Kind == css.Whitespace:
 			continue
 		case v.IsToken() && v.Token.Kind == css.URL:
 			if have {
-				return "", false
+				return "", nil, false
 			}
 			ref, have = v.Token.Value, true
 		case v.IsToken() && v.Token.Kind == css.String:
 			if have {
-				return "", false
+				return "", nil, false
 			}
 			ref, have = v.Token.Value, true
 		case v.IsFunction() && strings.EqualFold(v.Token.Value, "url"):
 			if have {
-				return "", false
+				return "", nil, false
 			}
 			s, ok := singleString(v.Values)
 			if !ok {
-				return "", false
+				return "", nil, false
 			}
 			ref, have = s, true
+		case !have:
+			// Something before the URL, which the grammar has no place for.
+			return "", nil, false
+		case isLayerOrSupports(v):
+			// A layer name or a supports() condition: more than this reads, and
+			// the sheet is left where it is and reported.
+			return "", nil, false
 		default:
-			// A media query, a layer name, a supports() condition: more than a
-			// reference, and more than this reads.
-			return "", false
+			// Everything after the URL that is not one of those is the media
+			// query list, which runs to the end of the prelude.
+			media = prelude[i:]
+			ref = strings.TrimSpace(ref)
+			return ref, media, ref != ""
 		}
 	}
-	return strings.TrimSpace(ref), have && strings.TrimSpace(ref) != ""
+	ref = strings.TrimSpace(ref)
+	return ref, nil, have && ref != ""
+}
+
+// isLayerOrSupports reports the two prelude pieces that are not a media query.
+//
+// "layer" bare and "layer(name)" are the two spellings of the first, and
+// supports() is the second. Neither can be mistaken for the start of a media
+// query: "layer" and "supports" are media types this engine would answer "no"
+// to, and answering them that way would silently drop a sheet the author asked
+// for under a name that means something else entirely.
+func isLayerOrSupports(v css.ComponentValue) bool {
+	if v.IsToken() && v.Token.Kind == css.Ident && strings.EqualFold(v.Token.Value, "layer") {
+		return true
+	}
+	return v.IsFunction() && (strings.EqualFold(v.Token.Value, "layer") ||
+		strings.EqualFold(v.Token.Value, "supports"))
+}
+
+// importMedia answers the media query list on an @import, with the same
+// evaluator every other media query in this engine is answered with.
+//
+// An empty list is every medium, which is what an @import with nothing after the
+// URL means and what §2.1 says an empty list evaluates to anyway.
+func (l *sheetLoader) importMedia(media []css.ComponentValue, ref string, offset int, sheet string) bool {
+	if len(media) == 0 {
+		return true
+	}
+	applies, unknown := style.MatchesMedia(media, l.media)
+	if unknown != "" {
+		did := "it was not read"
+		if applies {
+			did = "it was read anyway, because another query in the list matched"
+		}
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleUnsupportedValue,
+			Source: Source{HTMLOffset: -1, CSSOffset: offset, Sheet: sheet},
+			Message: "the import of " + quoteValue(ref) + " applies to " +
+				quoteValue(strings.TrimSpace(pageText(media))) + ", which asks about " +
+				quoteValue(unknown) + " — a question this engine cannot answer, so " + did,
+			Property: "media",
+		})
+	}
+	return applies
 }
 
 // fetchImport reads an imported sheet under the same caps and through the same
