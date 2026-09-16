@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
@@ -444,15 +445,127 @@ func (s *Styler) prepare(sheets []Sheet) []preparedRule {
 
 	for _, sheet := range sheets {
 		s.sheet = sheet.Name
+		if done, ok := preparedBefore(sheet, order); ok {
+			// The same sheet, prepared before, at the same place in the order.
+			// The rules are reused; the findings are raised again, because they
+			// belong to this document. See preparedSheet.
+			out = append(out, done.rules...)
+			for _, f := range done.findings {
+				s.report(f)
+			}
+			order = done.endOrder
+			continue
+		}
+		mark := preparation{start: order, rules: len(out), findings: len(s.findings)}
 		for _, rule := range sheet.Rules {
 			s.prepareRule(rule, nil, sheet.Origin, &out, &order)
 		}
+		s.remember(sheet, mark, out, s.findings, order)
 	}
 	// Everything raised after this belongs to no one sheet: the cascade reads
 	// the prepared rules of all of them at once, and a style attribute is not
 	// in a sheet at all.
 	s.sheet = ""
 	return out
+}
+
+// Preparing a stylesheet is parsing every selector in it and expanding every
+// shorthand, and for one sheet it is the same work for every document.
+//
+// That sheet is the user agent's, which every document carries and no document
+// changes. It is two hundred and sixty selectors, and preparing it was **fifty-
+// six per cent of a whole Build** for a small document — more than parsing the
+// markup, styling it and laying it out put together. Adding a rule to the
+// default sheet cost every document that rule's selector parse, which is what
+// made two kilobytes of table rules a thirty-eight per cent regression and is
+// the fault here rather than the rules.
+//
+// The memo is keyed on the identity of the rule slice rather than on its
+// content: the caller hands over the same slice for every document — layout
+// parses the sheet once — so "the same rules" is a pointer comparison and not a
+// fourteen-kilobyte one. A sheet built freshly per document has a different
+// slice, misses, and is prepared as it always was.
+//
+// **It is one slot and not a map, and that is the whole of its memory
+// behaviour.** A map keyed on whatever a caller hands over is a leak that
+// outlives the render that filled it — every author sheet is a fresh slice, so
+// every document would add an entry and none would ever be removed. One slot
+// cannot hold more than one sheet, and it holds the one there is.
+//
+// Three things make it a memo of a pure function rather than a change of
+// behaviour, and each is checked rather than assumed:
+//
+//   - **The findings are raised again**, through report, so the bound on their
+//     number applies as it always did. Preparation reports an unsupported
+//     property, an unreadable selector, a nested layer; those belong to the
+//     document being styled, and a memo that reported them once would put them
+//     on whichever document was styled first in the process.
+//   - **The order numbers have to line up.** Every declaration carries the
+//     number the shared counter gave it, and the cascade breaks its last tie
+//     with it. The memo records the counter it started from and is used only
+//     when the sheet is at that same point again — which for a sheet that is
+//     always first means zero, always.
+//   - **Nothing else about the Styler may have changed.** Preparing an @layer
+//     assigns a layer number, and preparing a nested one raises a note kept to
+//     one per document. A sheet whose preparation touched any of that is not
+//     remembered; the user agent sheet has no at-rule of any kind, so it never
+//     does.
+
+// preparation is where one sheet's preparation began, in each of the three
+// things it appends to.
+type preparation struct {
+	start    int
+	rules    int
+	findings int
+}
+
+// preparedSheet is one remembered preparation.
+type preparedSheet struct {
+	key      *css.Rule
+	rules    []preparedRule
+	findings []Finding
+	start    int
+	endOrder int
+}
+
+// prepared is the one slot. See above for why it is not a map.
+var prepared atomic.Pointer[preparedSheet]
+
+// preparedBefore answers a sheet this has prepared before, at the same point in
+// the cascade order.
+func preparedBefore(sheet Sheet, order int) (*preparedSheet, bool) {
+	done := prepared.Load()
+	switch {
+	case done == nil || len(sheet.Rules) == 0:
+		return nil, false
+	case done.key != &sheet.Rules[0] || done.start != order:
+		return nil, false
+	}
+	return done, true
+}
+
+// remember keeps a preparation if it is one that can be repeated.
+func (s *Styler) remember(sheet Sheet, mark preparation, out []preparedRule,
+	findings []Finding, order int) {
+
+	switch {
+	case len(sheet.Rules) == 0 || sheet.Origin != OriginUserAgent:
+		// Only the default sheet is handed over unchanged for every document.
+		// An author's is a fresh slice each time, so remembering it would evict
+		// the one that pays and keep one that never hits.
+		return
+	case s.layer != 0 || s.layerCount != 0 || s.reportedNestedLayer:
+		// The sheet declared a cascade layer, so preparing it moved state the
+		// next document would have to move again.
+		return
+	}
+	prepared.Store(&preparedSheet{
+		key:      &sheet.Rules[0],
+		rules:    append([]preparedRule(nil), out[mark.rules:]...),
+		findings: append([]Finding(nil), findings[mark.findings:]...),
+		start:    mark.start,
+		endOrder: order,
+	})
 }
 
 // prepareMedia evaluates an @media query and, where it matches, prepares the
