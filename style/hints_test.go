@@ -485,3 +485,96 @@ func TestAZeroDimensionIsNoDimension(t *testing.T) {
 		}
 	}
 }
+
+// TestATableBorderAttributeIsThreeThings.
+//
+// HTML's rendering section maps it to the four border widths on the table, and
+// then gives two more rules whose condition the selector language cannot state:
+//
+//	table[border] { border-style: outset }  /* only if border is not equivalent to zero */
+//	table[border] > tr > td, ... { border-width: 1px; border-style: inset }
+//
+// The comment is the specification's own, and it is a comment because "not
+// equivalent to zero" means the value parsed as an integer, which no selector
+// does: "0" and "00" are the same border and "[border=0]" tells them apart.
+func TestATableBorderAttributeIsThreeThings(t *testing.T) {
+	for _, c := range []struct{ attr, width, style string }{
+		{`border="1"`, "1px", "outset"},
+		{`border="5"`, "5px", "outset"},
+		{`border="0"`, "0px", "none"},
+		// The zero a selector cannot see. Both of these are the same border as
+		// "0" and neither is the string "0".
+		{`border="00"`, "0px", "none"},
+		{`border=" 0"`, "0px", "none"},
+		// "Rules for parsing non-negative integers" take the leading digits and
+		// ignore what follows.
+		{`border="3px"`, "3px", "outset"},
+		// And what has no leading digits at all is the parse error the section
+		// gives a default of one pixel for — which is the one thing about this
+		// attribute nobody expects, since every other dimension attribute drops
+		// what it cannot read.
+		{`border="yes"`, "1px", "outset"},
+		{`border=""`, "1px", "outset"},
+		{`border`, "1px", "outset"},
+		{`border="-1"`, "1px", "outset"},
+	} {
+		got := computed(t, `<table id="t" `+c.attr+`><tr><td id="c">x</td></tr></table>`)
+		if w := got["t"]["border-top-width"]; w != c.width {
+			t.Errorf("<table %s> gave the table border-top-width %q, want %q",
+				c.attr, w, c.width)
+		}
+		if s := got["t"]["border-top-style"]; s != c.style {
+			t.Errorf("<table %s> gave the table border-top-style %q, want %q",
+				c.attr, s, c.style)
+		}
+		// And the cell, which takes a one-pixel inset border from a table that
+		// draws one and nothing from a table that does not.
+		wantCell, wantCellWidth := "none", "medium"
+		if c.style != "none" {
+			wantCell, wantCellWidth = "inset", "1px"
+		}
+		if s := got["c"]["border-left-style"]; s != wantCell {
+			t.Errorf("<table %s> gave the cell border-left-style %q, want %q",
+				c.attr, s, wantCell)
+		}
+		if w := got["c"]["border-left-width"]; w != wantCellWidth {
+			t.Errorf("<table %s> gave the cell border-left-width %q, want %q",
+				c.attr, w, wantCellWidth)
+		}
+	}
+}
+
+// TestANestedTablesCellsTakeTheirOwnTablesBorder is the child combinator in the
+// specification's selector, said as a document.
+//
+// "table[border] > tr > td" reaches the cells of that table and not the cells
+// of a table inside one of them, and the walk that finds the table has to stop
+// at the first one for the same reason cellpadding's does.
+func TestANestedTablesCellsTakeTheirOwnTablesBorder(t *testing.T) {
+	got := computed(t, `<table border="3"><tr><td id="outer">`+
+		`<table><tr><td id="inner">x</td></tr></table></td></tr></table>`)
+	if s := got["outer"]["border-left-style"]; s != "inset" {
+		t.Errorf("the outer cell has border-left-style %q, want inset", s)
+	}
+	if s := got["inner"]["border-left-style"]; s != "none" {
+		t.Errorf("the inner cell has border-left-style %q; its own table has no "+
+			"border attribute, and the one it sits inside is not its own", s)
+	}
+}
+
+// TestTheBorderAttributeIsAHintLikeTheRest, which is where it sits in the
+// cascade: below every author declaration and above the user agent sheet.
+func TestTheBorderAttributeIsAHintLikeTheRest(t *testing.T) {
+	got := computed(t, `<table id="t" border="4"><tr><td id="c">x</td></tr></table>`,
+		author(t, `#t { border-top-style: dashed } #c { border-left-width: 9px }`))
+	if s := got["t"]["border-top-style"]; s != "dashed" {
+		t.Errorf("an author's border-top-style lost to the attribute: %q", s)
+	}
+	if w := got["c"]["border-left-width"]; w != "9px" {
+		t.Errorf("an author's border-left-width lost to the attribute: %q", w)
+	}
+	// And the half the author did not write still comes from the attribute.
+	if w := got["t"]["border-top-width"]; w != "4px" {
+		t.Errorf("the table border-top-width is %q, want 4px", w)
+	}
+}

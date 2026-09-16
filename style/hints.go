@@ -44,9 +44,11 @@ import (
 // author declaration, and a user agent rule loses to them too — so the place to
 // put it is the place the specification puts it.
 //
-// "border" is still absent, and is the one worth naming: it maps to the four
-// border widths on the table *and* turns the frame and rules attributes on,
-// which is a dozen more rules about which edges of which cells are drawn.
+// "border" is here now, and is written out below rather than added to the table
+// because it is three declarations with a condition the table cannot express.
+// The "frame" and "rules" attributes it interacts with are not: they are a
+// dozen more rules about which edges of which cells are drawn, and they are
+// plain keyword matches that belong in the user agent sheet.
 
 // hintOrder is the cascade order number every hint carries.
 //
@@ -206,6 +208,14 @@ var counterHintAttributes = map[string]bool{"start": true, "value": true}
 func presentationalHints(n *html.Node) map[string][]css.ComponentValue {
 	name := strings.ToLower(n.Name)
 	out := attributeHints(name, n)
+	if name == "table" {
+		for property, vals := range tableBorderHint(n) {
+			if out == nil {
+				out = map[string][]css.ComponentValue{}
+			}
+			out[property] = vals
+		}
+	}
 	if name != "td" && name != "th" {
 		return out
 	}
@@ -436,6 +446,14 @@ func isZeroDimension(value string) bool {
 // "white-space: pre" table with nowrap on it collapses its spaces.
 func cellHints(n *html.Node) map[string][]css.ComponentValue {
 	out := cellPaddingHint(n)
+	if border := cellBorderHint(n); border != nil {
+		if out == nil {
+			out = make(map[string][]css.ComponentValue, len(border)+3)
+		}
+		for property, vals := range border {
+			out[property] = vals
+		}
+	}
 	if raw, ok := n.Attr("valign"); ok {
 		if value, ok := valignValue(raw); ok {
 			if out == nil {
@@ -481,6 +499,109 @@ func valignValue(raw string) (string, bool) {
 		return "baseline", true
 	}
 	return "", false
+}
+
+// The table border attribute, which is three things at once and so is written
+// out here rather than added to the table above.
+//
+// HTML's rendering section maps it to the four border widths on the table, and
+// then gives two more rules whose condition the selector language cannot state:
+//
+//	table[border] { border-style: outset }  /* only if border is not equivalent to zero */
+//	table[border] > tr > td, ... { border-width: 1px; border-style: inset }
+//
+// The comment is the specification's own, and it is a comment because "not
+// equivalent to zero" means the value parsed as an integer, which no selector
+// does: "0", "00" and " 0" are all zero and "[border=0]" tells them apart. So
+// this is a presentational hint, where the value can be read properly, and the
+// three parts of the attribute are decided together.
+//
+// The reader is not dimensionValue either, and the difference is the one thing
+// about this attribute nobody expects: a value that does not parse is **one
+// pixel**, not nothing. "<table border=yes>" is a bordered table in every
+// browser, which is what the rendering section asks for in as many words, where
+// every other dimension attribute drops what it cannot read.
+
+// borderAttribute reads a table's border attribute into the width it states and
+// whether it draws anything.
+//
+// HTML's "rules for parsing non-negative integers" take the leading digits and
+// ignore what follows, so "1px" is one. What has no leading digits at all —
+// including the empty string of "<table border>" — is the parse error the
+// section gives a default of 1px for.
+func borderAttribute(raw string) (width string, drawn bool) {
+	s := strings.TrimLeft(raw, " \t\n\f\r")
+	digits := 0
+	for digits < len(s) && s[digits] >= '0' && s[digits] <= '9' {
+		digits++
+	}
+	if digits == 0 || digits > maxHintDigits {
+		return "1px", true
+	}
+	n, err := strconv.Atoi(s[:digits])
+	if err != nil {
+		return "1px", true
+	}
+	return strconv.Itoa(n) + "px", n != 0
+}
+
+// tableBorderHint is the border attribute read on the table that carries it.
+func tableBorderHint(n *html.Node) map[string][]css.ComponentValue {
+	raw, ok := n.Attr("border")
+	if !ok {
+		return nil
+	}
+	width, drawn := borderAttribute(raw)
+	vals, _ := css.ParseComponentValues(width)
+	out := map[string][]css.ComponentValue{
+		"border-top-width": vals, "border-right-width": vals,
+		"border-bottom-width": vals, "border-left-width": vals,
+	}
+	if drawn {
+		style := ident("outset")
+		out["border-top-style"] = style
+		out["border-right-style"] = style
+		out["border-bottom-style"] = style
+		out["border-left-style"] = style
+	}
+	return out
+}
+
+// cellBorderHint is the same attribute read on a cell of the table that carries
+// it, which is the second half of the rule above: a bordered table gives every
+// one of its cells a one-pixel inset border.
+//
+// The walk is cellPaddingHint's and stops at the first table, so a nested
+// table's cells take their own table's border rather than the one they happen
+// to sit inside — which is what the specification's "table[border] > tr > td"
+// says with a child combinator.
+func cellBorderHint(n *html.Node) map[string][]css.ComponentValue {
+	for anc := n.Parent; anc != nil; anc = anc.Parent {
+		if anc.Type != html.ElementNode || !strings.EqualFold(anc.Name, "table") {
+			continue
+		}
+		raw, ok := anc.Attr("border")
+		if !ok {
+			return nil
+		}
+		if _, drawn := borderAttribute(raw); !drawn {
+			return nil
+		}
+		width, style := onePixel(), ident("inset")
+		return map[string][]css.ComponentValue{
+			"border-top-width": width, "border-right-width": width,
+			"border-bottom-width": width, "border-left-width": width,
+			"border-top-style": style, "border-right-style": style,
+			"border-bottom-style": style, "border-left-style": style,
+		}
+	}
+	return nil
+}
+
+// onePixel is the width both halves of the rule above are written in.
+func onePixel() []css.ComponentValue {
+	vals, _ := css.ParseComponentValues("1px")
+	return vals
 }
 
 // cellPaddingHint reads the cellpadding an ancestor table declares.
