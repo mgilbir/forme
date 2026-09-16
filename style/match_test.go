@@ -356,6 +356,35 @@ func TestMatchLang(t *testing.T) {
 	})
 }
 
+// TestMatchLangReadsXMLLangToo. :lang() asks html.Node.Language, the same walk
+// the casing tailoring and the hyphenation patterns ask — four questions of one
+// tag, and they must not read four different tags. Reading lang alone made an
+// XHTML document that declared itself with xml:lang a document with no language
+// at all, here as much as in the text.
+func TestMatchLangReadsXMLLangToo(t *testing.T) {
+	doc := parseDoc(t, `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" `+
+		`"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">`+
+		`<html xmlns="http://www.w3.org/1999/xhtml"><body>
+<div id="outer" xml:lang="en-GB">
+  <p id="a">a</p>
+  <p id="b" xml:lang="fr">b</p>
+  <p id="c" xml:lang="fr" lang="de">c</p>
+</div>
+<p id="d">d</p></body></html>`)
+	check(t, doc, map[string]string{
+		"p:lang(en)": "a",
+		"p:lang(fr)": "b",
+		// lang wins on the element carrying both, and the further xml:lang does
+		// not come back for the one that lost.
+		"p:lang(de)": "c",
+		"p:lang(es)": "",
+	})
+	// An HTML document does not read it, because the HTML parser stores it as a
+	// name in no namespace and a browser ignores it there.
+	html := parseDoc(t, `<div id="outer" xml:lang="en"><p id="a">a</p></div>`)
+	check(t, html, map[string]string{"p:lang(en)": ""})
+}
+
 // TestMatchIsRightToLeft is a performance property rather than a correctness
 // one, and it is asserted because the alternative is quietly quadratic.
 // Matching from the subject outwards rejects most elements on their own name;

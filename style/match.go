@@ -430,23 +430,15 @@ func (m *Matcher) matchesAny(sels []css.Selector, n *html.Node) bool {
 }
 
 // matchLang implements :lang(), which reads the nearest lang attribute at or
-// above the element and compares it as a language range.
+// above the element — html.Node.Language, the same walk the casing and
+// hyphenation readers use — and compares it as a language range.
 //
 // The comparison is the dash-match of attribute selectors, so :lang(en) selects
 // an element declared "en-GB" — which is the whole reason the pseudo-class
 // exists rather than authors writing [lang|=en].
 func matchLang(n *html.Node, langs []string) bool {
-	value := ""
-	for cur := n; cur != nil; cur = cur.Parent {
-		if cur.Type != html.ElementNode {
-			continue
-		}
-		if v, ok := cur.Attr("lang"); ok && v != "" {
-			value = v
-			break
-		}
-	}
-	if value == "" {
+	value, ok := n.Language()
+	if !ok {
 		return false
 	}
 	value = strings.ToLower(value)

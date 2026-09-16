@@ -161,6 +161,45 @@ func (n *Node) AttrExact(name string) (string, bool) {
 	return "", false
 }
 
+// Language is the language in force at a node: the value of the nearest lang
+// attribute at or above it, and whether there was one.
+//
+// It is here rather than in each caller because it had five copies — the casing
+// tailoring, the hyphenation patterns, the orthography, the writing system, and
+// :lang() in the selector matcher — and the answer has to be the same in all
+// five. They ask different questions *of* the tag; they must not ask different
+// tags.
+//
+// **xml:lang is the same attribute.** HTML §3.2.6 says so: an element with an
+// xml:lang in the XML namespace and no lang in no namespace takes its language
+// from the xml:lang, and the precedence is per element rather than per document
+// — a lang on a child beats an xml:lang on its parent because it is nearer, and
+// loses to an xml:lang on the child itself only by being absent. Reading lang
+// alone made "<div xml:lang='tr'>" a document with no language at all, which in
+// XHTML — where xml:lang is the natural spelling and half the older test suite
+// is written — turned the Turkish casing tailoring off and typeset the wrong
+// letters.
+//
+// Only in a document that is XML. The HTML parser stores "xml:lang" as a
+// literal attribute name with no namespace, and a browser reading an HTML
+// document ignores it for exactly that reason; honouring it there would be a
+// language this engine invents. XMLDocument is asked only once, and only when
+// an xml:lang was found with no lang above it.
+func (n *Node) Language() (string, bool) {
+	for cur := n; cur != nil; cur = cur.Parent {
+		if cur.Type != ElementNode {
+			continue
+		}
+		if v, ok := cur.Attr("lang"); ok && v != "" {
+			return v, true
+		}
+		if v, ok := cur.Attr("xml:lang"); ok && v != "" && cur.XMLDocument() {
+			return v, true
+		}
+	}
+	return "", false
+}
+
 // XMLDocument reports whether the node is in a document parsed as XHTML.
 //
 // It walks to the document node, which is the only one the flag is set on. The

@@ -1976,20 +1976,12 @@ func (b *boxBuilder) listValueOf(n *html.Node, listItem bool) (int, bool) {
 //
 // It is read here rather than resolved through the cascade because it is not a
 // CSS property — it is an HTML attribute, and the cascade carries no entry for
-// it. The walk is the same one :lang() does in style/match.go, and is up the
-// tree rather than down because a document usually declares its language once,
-// on <html>.
-//
-// A text node has no attributes of its own, so the walk starts at its parent by
-// construction: the loop below skips anything that is not an element.
+// it. html.Node.Language does the walk, and is shared with the three readers
+// below and with :lang() in the selector matcher: they ask four different
+// questions of the tag and must not ask four different tags.
 func languageAt(n *html.Node) paragraph.Language {
-	for cur := n; cur != nil; cur = cur.Parent {
-		if cur.Type != html.ElementNode {
-			continue
-		}
-		if v, ok := cur.Attr("lang"); ok && v != "" {
-			return paragraph.LanguageOf(v)
-		}
+	if v, ok := n.Language(); ok {
+		return paragraph.LanguageOf(v)
 	}
 	return ""
 }
@@ -2002,13 +1994,8 @@ func languageAt(n *html.Node) paragraph.Language {
 // not. See paragraph.HyphenationOf, which is a different question from
 // languageAt's and must not be answered with it.
 func hyphenationAt(n *html.Node) paragraph.Language {
-	for cur := n; cur != nil; cur = cur.Parent {
-		if cur.Type != html.ElementNode {
-			continue
-		}
-		if v, ok := cur.Attr("lang"); ok && v != "" {
-			return paragraph.HyphenationOf(v)
-		}
+	if v, ok := n.Language(); ok {
+		return paragraph.HyphenationOf(v)
 	}
 	return ""
 }
@@ -2019,13 +2006,8 @@ func hyphenationAt(n *html.Node) paragraph.Language {
 // decides is the script, and "zh-Latn" is romanised Chinese where "zh" is not.
 // See paragraph.OrthographyOf.
 func orthographyAt(n *html.Node) paragraph.Orthography {
-	for cur := n; cur != nil; cur = cur.Parent {
-		if cur.Type != html.ElementNode {
-			continue
-		}
-		if v, ok := cur.Attr("lang"); ok && v != "" {
-			return paragraph.OrthographyOf(v)
-		}
+	if v, ok := n.Language(); ok {
+		return paragraph.OrthographyOf(v)
 	}
 	return paragraph.OrthographyPlain
 }
@@ -2039,13 +2021,8 @@ func orthographyAt(n *html.Node) paragraph.Orthography {
 // typeset as Japanese, and "ja-Latn" is Japanese romanised and is not. See
 // paragraph.WritingSystemOf.
 func writingSystemAt(n *html.Node) paragraph.WritingSystem {
-	for cur := n; cur != nil; cur = cur.Parent {
-		if cur.Type != html.ElementNode {
-			continue
-		}
-		if v, ok := cur.Attr("lang"); ok && v != "" {
-			return paragraph.WritingSystemOf(v)
-		}
+	if v, ok := n.Language(); ok {
+		return paragraph.WritingSystemOf(v)
 	}
 	return paragraph.WritingSystemOther
 }
