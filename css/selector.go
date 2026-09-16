@@ -110,10 +110,22 @@ type Attr struct {
 	// Value is empty when Op is AttrExists.
 	Value string
 	// Insensitive is the "i" flag of "[a=v i]", which asks for an
-	// ASCII case-insensitive comparison of the *value*. The "s" flag asks for a
-	// sensitive one, which is the default, so it is recorded as false rather
-	// than as a third state.
+	// ASCII case-insensitive comparison of the *value*.
 	Insensitive bool
+	// Sensitive is the "s" flag, and it is a third state rather than the
+	// absence of "i".
+	//
+	// It used to be recorded as Insensitive=false, on the reasoning that a
+	// sensitive comparison is the default — and for an attribute of the
+	// author's own it is. It is not the default for the forty-odd attributes
+	// HTML defines as enumerated or as keywords, whose values a selector
+	// compares ASCII case-insensitively with no flag at all, and "s" is how a
+	// selector asks for the comparison those attributes do not get.
+	//
+	// HTML's own user agent stylesheet is the caller that needs it:
+	// "ol[type=a s]" and "ol[type=A s]" are two different list numberings, and
+	// with the flag dropped they are one selector.
+	Sensitive bool
 }
 
 // PseudoKind names a pseudo-class this engine implements. Anything not here is
@@ -1057,7 +1069,7 @@ func (p *selParser) attribute(block ComponentValue) (Attr, bool) {
 	case "i":
 		out.Insensitive = true
 	case "s":
-		out.Insensitive = false
+		out.Sensitive = true
 	default:
 		p.fail(vals[0].Token.Offset, "expected \"i\" or \"s\" after the attribute value")
 		return Attr{}, false

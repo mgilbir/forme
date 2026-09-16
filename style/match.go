@@ -63,6 +63,11 @@ type Matcher struct {
 	steps   int
 	over    bool
 	tripped bool
+
+	// xml says the document was parsed as XHTML, which decides whether the
+	// attribute values below are folded. It is read once here because the
+	// alternative is a walk to the document node inside the matching loop.
+	xml bool
 }
 
 // NewMatcher prepares to match selectors against a document.
@@ -71,6 +76,7 @@ func NewMatcher(doc *html.Node) *Matcher {
 		root: documentElement(doc),
 		kids: map[*html.Node][]*html.Node{},
 		idx:  map[*html.Node]int{},
+		xml:  doc.XMLDocument(),
 	}
 }
 
@@ -194,7 +200,7 @@ func (m *Matcher) compound(c css.Compound, n *html.Node) bool {
 		}
 	}
 	for _, a := range c.Attrs {
-		if !matchAttr(a, n) {
+		if !m.matchAttr(a, n) {
 			return false
 		}
 	}
@@ -243,7 +249,7 @@ func asciiFields(s string) []string {
 	})
 }
 
-func matchAttr(a css.Attr, n *html.Node) bool {
+func (m *Matcher) matchAttr(a css.Attr, n *html.Node) bool {
 	v, ok := n.Attr(a.Name)
 	if !ok {
 		return false
@@ -253,8 +259,8 @@ func matchAttr(a css.Attr, n *html.Node) bool {
 	}
 
 	got, want := v, a.Value
-	if a.Insensitive {
-		got, want = strings.ToLower(got), strings.ToLower(want)
+	if a.Insensitive || (!a.Sensitive && !m.xml && htmlFoldedAttrs[a.Name]) {
+		got, want = asciiLower(got), asciiLower(want)
 	}
 
 	switch a.Op {
@@ -543,4 +549,66 @@ func reversed(ns []*html.Node) []*html.Node {
 		out[len(ns)-1-i] = n
 	}
 	return out
+}
+
+// htmlFoldedAttrs are the attributes whose *values* an attribute selector
+// compares ASCII case-insensitively, without the "i" flag, for an element in an
+// HTML document.
+//
+// Selectors 4 §6.3.2 hands the list to the host language and HTML §15.1 gives
+// it: these are the attributes HTML itself defines as enumerated or as
+// case-insensitive keywords, so "dir=RTL" and "dir=rtl" are the same value and a
+// selector that told them apart would be telling apart two spellings of one
+// thing.
+//
+// It is not a convenience. The user agent stylesheet is written in these
+// selectors — "[dir=rtl]" is where a right-to-left element gets its direction,
+// and "input[type=...]" is where a control gets its shape — so an author who
+// wrote "RTL", which HTML allows, got a left-to-right page.
+//
+// Only in an HTML document. HTML states the condition as "attribute selectors on
+// an HTML element in an HTML document", and in XML a document may define
+// attributes of its own whose values are case-sensitive and happen to share
+// these names. Every element in a tree this engine matches against is an HTML
+// element — an <svg> keeps its children as unparsed source rather than as nodes
+// — so the document is the whole of the condition here.
+//
+// That "type" is on the list is not a slip to be worked around: HTML's own user
+// agent stylesheet writes "ol[type=a s]" and "ol[type=A s]", with the explicit
+// case-*sensitivity* flag, precisely because the default for the attribute is
+// insensitive. A reading that left the list out would make those two selectors
+// the same selector and number every "<ol type=A>" in lower case.
+var htmlFoldedAttrs = map[string]bool{
+	"accept": true, "accept-charset": true, "align": true, "alink": true, "axis": true,
+	"bgcolor": true, "charset": true, "checked": true, "clear": true,
+	"codetype": true, "color": true, "compact": true, "declare": true,
+	"defer": true, "dir": true, "direction": true, "disabled": true,
+	"enctype": true, "face": true, "frame": true, "hreflang": true,
+	"http-equiv": true, "lang": true, "language": true, "link": true,
+	"media": true, "method": true, "multiple": true, "nohref": true,
+	"noresize": true, "noshade": true, "nowrap": true, "readonly": true,
+	"rel": true, "rev": true, "rules": true, "scope": true, "scrolling": true,
+	"selected": true, "shape": true, "target": true, "text": true,
+	"type": true, "valign": true, "valuetype": true, "vlink": true,
+}
+
+// asciiLower folds A-Z and nothing else.
+//
+// strings.ToLower is Unicode's mapping, and CSS asks for ASCII's: U+212A KELVIN
+// SIGN lowercases to "k" under Unicode, so "[type=block\u212A i]" would have
+// matched an attribute written "block" — a match on two strings that are not
+// the same string, from a selector nobody could have meant.
+func asciiLower(s string) string {
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c >= 'A' && c <= 'Z' {
+			b := []byte(s)
+			for ; i < len(b); i++ {
+				if c := b[i]; c >= 'A' && c <= 'Z' {
+					b[i] = c + 'a' - 'A'
+				}
+			}
+			return string(b)
+		}
+	}
+	return s
 }

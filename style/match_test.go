@@ -385,6 +385,104 @@ func TestMatchLangReadsXMLLangToo(t *testing.T) {
 	check(t, html, map[string]string{"p:lang(en)": ""})
 }
 
+// TestHTMLAttributeValuesAreFoldedInAnHTMLDocument.
+//
+// Selectors 4 §6.3.2 hands the folding rule to the host language and HTML §15.1
+// gives the list: the attributes HTML defines as enumerated or as
+// case-insensitive keywords have their *values* compared ASCII
+// case-insensitively, with no "i" flag needed.
+//
+// It is not a convenience, because the user agent stylesheet is written in
+// these selectors. "[dir=rtl]" is where a right-to-left element gets its
+// direction and "input[type=...]" is where a control gets its shape — so an
+// author who wrote dir="RTL", which HTML allows and means exactly the same
+// thing by, got a left-to-right page.
+func TestHTMLAttributeValuesAreFoldedInAnHTMLDocument(t *testing.T) {
+	doc := parseDoc(t, `
+<div id="a" dir="RTL">a</div>
+<input id="b" type="TEXT"/>
+<div id="c" lang="EN-gb">c</div>
+<link id="e" rel="alt STYLESHEET"/>
+<div id="f" data-dir="RTL">f</div>`)
+	check(t, doc, map[string]string{
+		"div[dir=rtl]":          "a",
+		"input[type=text]":      "b",
+		"div[lang|=en]":         "c",
+		"link[rel~=stylesheet]": "e",
+		// Every operator folds, because the folding is a property of the
+		// attribute and not of the comparison.
+		"div[dir^=r]": "a",
+		"div[dir$=l]": "a",
+		"div[dir*=T]": "a",
+		// And an attribute HTML does not define is compared as written. This is
+		// the half that says the list is a list.
+		"div[data-dir=rtl]": "",
+		"div[data-dir=RTL]": "f",
+	})
+}
+
+// TestTheFoldingIsHTMLsAndNotEveryDocumentsIs.
+//
+// Selectors 4 is explicit that the rule belongs to the host language, for its
+// own elements. An XML document may define attributes of its own whose values
+// are case-sensitive and happen to share these names, so nothing there is
+// folded without the flag.
+func TestTheFoldingIsHTMLsAndNotEveryDocumentsIs(t *testing.T) {
+	doc := parseDoc(t, `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" `+
+		`"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">`+
+		`<html xmlns="http://www.w3.org/1999/xhtml"><body>`+
+		`<div id="a" dir="RTL">a</div></body></html>`)
+	check(t, doc, map[string]string{
+		"div[dir=rtl]":   "",
+		"div[dir=RTL]":   "a",
+		"div[dir=rtl i]": "a",
+	})
+}
+
+// TestTheSFlagIsAThirdStateNow.
+//
+// "s" used to be recorded as the absence of "i", on the reasoning that a
+// sensitive comparison is the default — and for an attribute of the author's
+// own it is. It is not the default for the attributes above, and "s" is how a
+// selector asks for the comparison they do not get.
+//
+// HTML's own user agent stylesheet is the caller that needs it: "ol[type=a s]"
+// and "ol[type=A s]" are two different list numberings, and with the flag
+// dropped they are one selector and every "<ol type=A>" is numbered in lower
+// case. This is that pair, asked directly.
+func TestTheSFlagIsAThirdStateNow(t *testing.T) {
+	doc := parseDoc(t, `<ol id="a" type="a"></ol><ol id="b" type="A"></ol>`)
+	check(t, doc, map[string]string{
+		"ol[type=a s]": "a",
+		"ol[type=A s]": "b",
+		// Without it they are one selector, which is the default this attribute
+		// has and the reason the flag is written.
+		"ol[type=a]": "a b",
+		"ol[type=A]": "a b",
+		// And "i" still wins over "s" being absent, on an attribute that is not
+		// on the list at all.
+		"ol[type=A i]": "a b",
+	})
+}
+
+// TestTheFoldingIsASCIIAndNotUnicodes.
+//
+// Both foldings — HTML's list and the "i" flag — are specified as ASCII, and
+// strings.ToLower is Unicode's. U+212A KELVIN SIGN lowercases to "k" under
+// Unicode, so a selector written with one would have matched an attribute
+// written with an ordinary "k": a match between two strings that are not the
+// same string, from a selector nobody could have meant.
+func TestTheFoldingIsASCIIAndNotUnicodes(t *testing.T) {
+	const kelvin = "\u212A"
+	doc := parseDoc(t, `<div id="a" dir="rtl" data-x="block">a</div>`)
+	check(t, doc, map[string]string{
+		`div[data-x="bloc` + kelvin + `" i]`: "",
+		`div[data-x="block" i]`:              "a",
+		// And the ASCII fold itself still works, on the same attribute.
+		`div[data-x="BLOCK" i]`: "a",
+	})
+}
+
 // TestMatchIsRightToLeft is a performance property rather than a correctness
 // one, and it is asserted because the alternative is quietly quadratic.
 // Matching from the subject outwards rejects most elements on their own name;
