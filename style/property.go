@@ -45,7 +45,12 @@ var properties = map[string]property{
 	// Box model.
 	"display": {false, "inline"},
 	"width":   {false, "auto"},
-	"height":  {false, "auto"},
+	// CSS Sizing 4 §4.1. It does not inherit, and its initial value is "auto" —
+	// a box sized by the rules that were already there. What it adds is a
+	// preferred ratio between the two axes, so that one of them can be worked
+	// out from the other instead of from the content.
+	"aspect-ratio": {false, "auto"},
+	"height":       {false, "auto"},
 	// CSS Sizing 3 §5.1 gives both an initial value of "auto", not the "0" CSS
 	// 2.1 gave them. For an ordinary box the two are the same page — "auto"
 	// behaves as zero where nothing else defines it, and every reader here

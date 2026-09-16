@@ -352,6 +352,10 @@ func (l *layouter) layout() *Fragment {
 }
 
 type layouter struct {
+	// reportedAspect keeps each aspect-ratio narrowing to one finding per
+	// document. See reportAspectRatio.
+	reportedAspect map[string]bool
+
 	rec   *Recorder
 	avail Size
 
@@ -785,6 +789,29 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 
 	width := l.resolveWidth(b, margin, border, padding, containing, &margin, replaced)
 	declaredHeight, hasHeight := l.explicitHeight(b, containing, at.cbHeight, at.cbDefinite)
+	if replaced == nil {
+		if _, hasRatio := aspectRatioOf(b.Style["aspect-ratio"]); hasRatio {
+			switch {
+			case !hasHeight:
+				// CSS Sizing 4 §4.1: a box with a preferred ratio and no height
+				// of its own takes the one its width gives it, instead of the
+				// one its content would. This is where the width is known and
+				// the height is not, which is the only place the two meet.
+				if h, ok := l.aspectHeight(b, width); ok {
+					declaredHeight, hasHeight = h, true
+				}
+			case l.isAuto(b, "width"):
+				// The other direction, which this does not do: a block's auto
+				// width fills its containing block by §10.3.3 rather than being
+				// shrunk to a ratio, and changing that reaches into the width
+				// arithmetic rather than sitting after it. See
+				// layout/aspectratio.go.
+				l.reportAspectRatio(b, "was not used to work out a width from a "+
+					"declared height; a block with no width of its own fills the "+
+					"width it is given, and the height decided the box")
+			}
+		}
+	}
 	if replaced != nil {
 		declaredHeight, hasHeight = replaced.H, true
 	}
