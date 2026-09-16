@@ -1326,7 +1326,27 @@ const wptEnv = "WPT_TESTS"
 // TestAnInlineBlockThatClipsSitsOnItsBottomMarginEdge, which is where it should
 // be checked from now on: four vendored documents asserting a withdrawn
 // sentence are not what this behaviour rests on.
-const wptCleanPassBaseline = 5982
+//
+// **5982 to 5981, for HTML's "background" attribute**, and this is the first
+// time the number has been lowered for something the engine started doing
+// rather than stopped. It is worth the space because the rule at the top of
+// this comment — "it may rise and must never be lowered to make a red test
+// green" — is about a *regression*, and this is the opposite.
+//
+// generated-content/content-047 writes
+//
+//	<body background="PASS PASS">
+//
+// and reads the value back with attr(), so the "file" is chosen to be read
+// rather than fetched. A browser requests it and fails; so does this engine now
+// that the attribute is honoured, and the two pages are identical either way —
+// but a failed load is *reported*, and a document carrying a finding is not a
+// clean pass. The one document moved from this count into the one beside it.
+//
+// The alternative was to leave "<body background>" doing nothing, which is a
+// silent wrong page on every document that uses it, in exchange for a number.
+// A ratchet that buys its number that way is measuring the wrong thing.
+const wptCleanPassBaseline = 5981
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

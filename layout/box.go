@@ -540,6 +540,10 @@ type boxBuilder struct {
 	// declares it once and has a hundred text nodes has one gap and not a
 	// hundred.
 	reportedPhraseSeparators bool
+	// reportedReversedList says the note about "<ol reversed>" has been made,
+	// which is once per document for the reason above: a document with twenty
+	// countdown lists has one gap in it and not twenty.
+	reportedReversedList bool
 	// afterWord says the last character emitted was part of a word, which is what
 	// "text-transform: capitalize" needs to know and what a text node cannot
 	// answer on its own: in "<b>e</b>xample" the "x" does not begin a word. It is
@@ -744,6 +748,7 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		Position: position, ZIndex: z, ZAuto: zAuto, Order: order,
 		staticInline: staticInline,
 	}
+	b.reportReversedList(n)
 	box.FirstLine = b.pseudo[style.PseudoKey{Node: n, Name: "first-line"}]
 	box.ListValue, box.ListNumbered = b.listValueOf(n, listItem)
 	box.Control = b.controlFor(n)
@@ -2061,6 +2066,42 @@ func (b *boxBuilder) reportPhraseSeparators(n *html.Node, text string,
 			"phrase model for the language, and there is none here for this one, " +
 			"so only the marks the document did write are expanded",
 		Property: "word-space-transform",
+		Path:     PathOf(n),
+	})
+}
+
+// reportReversedList names the one list attribute this engine does not act on.
+//
+// "<ol reversed>" counts down, and HTML says how in CSS terms: the attribute is
+// a presentational hint setting "counter-reset: reversed(list-item)", and a
+// *reversed* counter starts at the number of elements in its scope that
+// increment it and is incremented by the negation of the increment. Neither the
+// reversed() notation nor the implied start is implemented here, so the list
+// counts up — which is not a small difference to look at, it is every number in
+// the list wrong and in the wrong order.
+//
+// It is reported rather than guessed at. The implied start needs the count of
+// the items in the counter's scope *before* the walk that numbers them reaches
+// them, and a scope is an element, its descendants and its following siblings —
+// so it is a look-ahead per reversed counter rather than a line in the existing
+// walk, and getting it wrong quietly would be worse than the list counting up
+// where the page says it does.
+//
+// The "start" attribute beside it is implemented and is unaffected: a reversed
+// list with a start counts down *from* that number, and this engine counts up
+// from it, so the first item is right and the rest are not.
+func (b *boxBuilder) reportReversedList(n *html.Node) {
+	if b.reportedReversedList || !strings.EqualFold(n.Name, "ol") || !n.HasAttr("reversed") {
+		return
+	}
+	b.reportedReversedList = true
+	b.rec.ReportDetail(Finding{
+		Rule: RuleUnsupportedValue,
+		Message: "\"<ol reversed>\" counts down, and this engine has no reversed " +
+			"counter: the list is numbered upwards instead, so every number in " +
+			"it differs from the one a browser draws",
+		Property: "reversed",
+		Source:   AtHTML(n.Offset),
 		Path:     PathOf(n),
 	})
 }

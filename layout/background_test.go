@@ -858,3 +858,54 @@ func TestBackgroundTilesReportsTheCount(t *testing.T) {
 		})
 	}
 }
+
+// TestTheBackgroundAttributeLoadsAndTiles is the half a computed value cannot
+// show: the file the attribute names goes through the loader, the painter and
+// the finding that says it did not arrive, all of which a stylesheet's url()
+// already goes through.
+//
+// It is here rather than beside the hint because the hint's job ends at the
+// computed value. What this asserts is that nothing downstream tells a hinted
+// url() from a declared one.
+func TestTheBackgroundAttributeLoadsAndTiles(t *testing.T) {
+	tilings := func(markup string) (int, []Finding) {
+		t.Helper()
+		frag, findings := bgLayoutWithFindings(t, markup, noDefaults)
+		n := 0
+		for _, op := range Paint(frag) {
+			if _, ok := op.(TileImage); ok {
+				n++
+			}
+		}
+		return n, findings
+	}
+	// The control: the same picture asked for in a stylesheet.
+	if n, _ := tilings(`<div id="b" style="width:200px;height:100px;` +
+		`background-image:url(wide.png)">x</div>`); n != 1 {
+		t.Fatalf("a declared background tiled %d times; the fixture is wrong", n)
+	}
+	for _, markup := range []string{
+		`<body background="wide.png" style="width:200px;height:100px">x</body>`,
+		`<table><tr><td background="wide.png" style="width:200px;height:100px">x</td></tr></table>`,
+	} {
+		if n, _ := tilings(markup); n != 1 {
+			t.Errorf("%s tiled %d times, want 1", markup, n)
+		}
+	}
+	// And a file that is not there is reported exactly as a stylesheet's would
+	// be — which is the whole of what the reftest count paid for: the page is
+	// the same either way and the *finding* is the difference.
+	n, findings := tilings(`<body background="nope.png">x</body>`)
+	if n != 0 {
+		t.Errorf("a missing background tiled %d times", n)
+	}
+	said := false
+	for _, f := range findings {
+		if f.Rule == RuleResourceBlocked && strings.Contains(f.Message, "nope.png") {
+			said = true
+		}
+	}
+	if !said {
+		t.Errorf("a background the document named and did not get said nothing: %v", findings)
+	}
+}

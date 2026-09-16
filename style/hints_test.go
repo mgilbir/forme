@@ -678,3 +678,100 @@ func styledLink(t *testing.T, markup string) (string, []Finding) {
 	t.Fatal("no element with id c")
 	return "", nil
 }
+
+// TestBgcolorOnEveryPartOfATable.
+//
+// HTML maps it on <body> and on the seven table parts in the same words, and it
+// was on <body> alone. The note here said why: the cell backgrounds a table's
+// bgcolor sets are painted by machinery that would have to agree with it, and
+// the rule was one element at a time, each when it can be checked.
+//
+// It can be checked now. Every part of a table paints its own background — that
+// was measured on the page before this was written — so "<table bgcolor=...>"
+// and "<td bgcolor=...>", which is how every document of a certain age colours
+// a table, mean something at last.
+func TestBgcolorOnEveryPartOfATable(t *testing.T) {
+	for _, c := range []struct{ markup, want string }{
+		{`<table id="c" bgcolor="red"><tr><td>x</td></tr></table>`, "red"},
+		{`<table><thead id="c" bgcolor="red"><tr><td>x</td></tr></thead></table>`, "red"},
+		{`<table><tbody id="c" bgcolor="red"><tr><td>x</td></tr></tbody></table>`, "red"},
+		{`<table><tfoot id="c" bgcolor="red"><tr><td>x</td></tr></tfoot></table>`, "red"},
+		{`<table><tr id="c" bgcolor="red"><td>x</td></tr></table>`, "red"},
+		{`<table><tr><td id="c" bgcolor="red">x</td></tr></table>`, "red"},
+		{`<table><tr><th id="c" bgcolor="red">x</th></tr></table>`, "red"},
+		{`<body id="c" bgcolor="red">x</body>`, "red"},
+		{`<table><tr><td id="c" bgcolor="#808000">x</td></tr></table>`, "#808000"},
+		// A value that is not a colour leaves the background alone, which is
+		// the same answer as the attribute not being there.
+		{`<table id="c" bgcolor="florb"><tr><td>x</td></tr></table>`, "transparent"},
+		{`<table id="c"><tr><td>x</td></tr></table>`, "transparent"},
+		// It is not inherited: a table's colour is the table's, and a cell that
+		// wants one says so. background-color does not inherit, so this falls
+		// out — and it is asserted because a hint written on the wrong element
+		// would look like inheritance working.
+		{`<table bgcolor="red"><tr><td id="c">x</td></tr></table>`, "transparent"},
+	} {
+		got := computed(t, c.markup)
+		if v := got["c"]["background-color"]; v != c.want {
+			t.Errorf("%s gave background-color %q, want %q", c.markup, v, c.want)
+		}
+	}
+}
+
+// TestACellsOtherHintsStillArrive is the merge, checked once more now that a
+// cell has five hints on it: two of its own attributes, one of its table's, and
+// two that are its own but read elsewhere.
+func TestACellsOtherHintsStillArrive(t *testing.T) {
+	got := computed(t, `<table cellpadding="7" border="1"><tr>`+
+		`<td id="c" width="120" bgcolor="red" nowrap valign="top">x</td></tr></table>`)
+	for property, want := range map[string]string{
+		"width": "120px", "background-color": "red", "padding-top": "7px",
+		"text-wrap-mode": "nowrap", "vertical-align": "top",
+		"border-left-style": "inset",
+	} {
+		if v := got["c"][property]; v != want {
+			t.Errorf("a cell carrying every hint at once gave %s %q, want %q",
+				property, v, want)
+		}
+	}
+}
+
+// TestTheBackgroundAttributeNamesAFile.
+//
+// HTML maps it on <body> and on every part of a table in the same sentence it
+// maps bgcolor, and it is not a colour: the value names a file, which becomes
+// the url() the background-image property takes. Everything downstream — the
+// loader that fetches it, the painter that tiles it, the finding that says it
+// did not arrive — is the machinery a stylesheet already goes through.
+func TestTheBackgroundAttributeNamesAFile(t *testing.T) {
+	for _, c := range []struct{ markup, want string }{
+		{`<body id="c" background="bg.png">x</body>`, `url("bg.png")`},
+		{`<table id="c" background="bg.png"><tr><td>x</td></tr></table>`, `url("bg.png")`},
+		{`<table><tbody id="c" background="bg.png"><tr><td>x</td></tr></tbody></table>`, `url("bg.png")`},
+		{`<table><tr id="c" background="bg.png"><td>x</td></tr></table>`, `url("bg.png")`},
+		{`<table><tr><td id="c" background="bg.png">x</td></tr></table>`, `url("bg.png")`},
+		{`<table><tr><th id="c" background="bg.png">x</th></tr></table>`, `url("bg.png")`},
+		{`<body id="c" background="../up/one.png">x</body>`, `url("../up/one.png")`},
+		// A name with a space in it, which is what the quoting is *for*: an
+		// unquoted url() token cannot hold one, and content-047 — the document
+		// this feature cost a clean pass — writes exactly that.
+		{`<body id="c" background="PASS PASS">x</body>`, `url("PASS PASS")`},
+		{`<body id="c" background="a(b).png">x</body>`, `url("a(b).png")`},
+		// An empty value is not a file, which HTML says in as many words — "set
+		// to a non-empty value" — and it matters: url("") is a reference to the
+		// document itself, so reading one as a file would have every document
+		// with an empty attribute fetch its own markup.
+		{`<body id="c" background="">x</body>`, "none"},
+		{`<body id="c" background="   ">x</body>`, "none"},
+		// A name this cannot quote is refused rather than escaped, which is what
+		// <font face> does with the same characters and for the same reason.
+		{`<body id="c" background="a&quot;b.png">x</body>`, "none"},
+		{`<body id="c" background="a\b.png">x</body>`, "none"},
+		{`<body id="c">x</body>`, "none"},
+	} {
+		got := computed(t, c.markup)
+		if v := got["c"]["background-image"]; v != c.want {
+			t.Errorf("%s gave background-image %q, want %q", c.markup, v, c.want)
+		}
+	}
+}
