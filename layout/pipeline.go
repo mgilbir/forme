@@ -2,6 +2,7 @@ package layout
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
@@ -175,7 +176,7 @@ func buildWith(in Input, page PageSize, rec *Recorder) Built {
 	var pages []pendingPage
 
 	sheets := make([]style.Sheet, 0, len(in.CSS)+2)
-	sheets = append(sheets, parseSheet(rec, style.OriginUserAgent, "user agent", UserAgentCSS, &faces, &pages))
+	sheets = append(sheets, userAgentSheet(rec, &faces, &pages))
 	// The sheet a media query is asked about, which for a <link> or a <style>
 	// has to be settled before the document's own @page rules can be, because
 	// those rules are inside the sheets being chosen here. It is the page the
@@ -266,18 +267,77 @@ func buildWith(in Input, page PageSize, rec *Recorder) Built {
 // as an at-rule it does not apply, which after fontface.go would be untrue.
 func parseSheet(rec *Recorder, origin style.Origin, name, src string,
 	faces *[]pendingFontFace, pages *[]pendingPage) style.Sheet {
+	return readSheet(origin, name, src).handOver(rec, origin, name, faces, pages)
+}
+
+// parsedSheet is everything reading one stylesheet produced, kept apart from
+// the recorder and the lists it is reported into so that the reading can be
+// done once and the reporting every time.
+type parsedSheet struct {
+	rules []css.Rule
+	errs  []css.Error
+	faces []pendingFontFace
+	pages []pendingPage
+}
+
+// readSheet parses one stylesheet and sets aside what is not a cascade matter.
+func readSheet(origin style.Origin, name, src string) parsedSheet {
 	rules, errs := css.ParseStylesheet(src)
-	for _, e := range errs {
+	out := parsedSheet{errs: errs}
+	out.rules = splitFontFaces(rules, name, &out.faces)
+	collectPageRules(out.rules, name, origin, nil, &out.pages)
+	return out
+}
+
+// handOver reports what the reading found and returns the sheet for the
+// cascade. It is separate from readSheet so that a sheet read once is still
+// reported once per document.
+func (p parsedSheet) handOver(rec *Recorder, origin style.Origin, name string,
+	faces *[]pendingFontFace, pages *[]pendingPage) style.Sheet {
+
+	for _, e := range p.errs {
 		rec.ReportDetail(Finding{
 			Rule:    RuleInvalidCSS,
 			Source:  Source{HTMLOffset: -1, CSSOffset: e.Offset, Sheet: name},
 			Message: e.Message,
 		})
 	}
-	rules = splitFontFaces(rules, name, faces)
-	collectPageRules(rules, name, origin, nil, pages)
-	return style.Sheet{Origin: origin, Rules: rules, Name: name}
+	*faces = append(*faces, p.faces...)
+	*pages = append(*pages, p.pages...)
+	return style.Sheet{Origin: origin, Rules: p.rules, Name: name}
 }
+
+// userAgentSheetName is what a finding about the default stylesheet points at.
+const userAgentSheetName = "user agent"
+
+// userAgentSheet is UserAgentCSS, parsed once for the process rather than once
+// for every document.
+//
+// It is fourteen kilobytes of the same CSS every time, and it was tokenized,
+// parsed and had its two hundred selectors read again for every single Build.
+// For a document of any size that is amortised; for a small one it *is* the
+// work. "<p>hello <b>world</b></p>" took 714 microseconds and allocated 1.4
+// megabytes, nearly all of it this, and the layout package's fuzz corpora are
+// tens of thousands of documents that size.
+//
+// What made it worth finding: adding two kilobytes of selectors to the sheet —
+// the attribute rules of HTML's rendering section — cost thirty per cent of
+// that Build and half a megabyte of allocation, which is not a proportion any
+// stylesheet should cost a renderer. A default sheet that is re-read per
+// document is a default sheet nobody can add to.
+//
+// The reading is memoized and the *reporting* is not: a finding about the
+// default sheet is still raised into each document's recorder, and any
+// @font-face or @page in it still reaches each document's lists. So this is a
+// memo of a pure function and not a change of behaviour — which is why it is
+// written as readSheet and handOver rather than as a cached style.Sheet.
+func userAgentSheet(rec *Recorder, faces *[]pendingFontFace, pages *[]pendingPage) style.Sheet {
+	return parsedUserAgentCSS().handOver(rec, style.OriginUserAgent, userAgentSheetName, faces, pages)
+}
+
+var parsedUserAgentCSS = sync.OnceValue(func() parsedSheet {
+	return readSheet(style.OriginUserAgent, userAgentSheetName, UserAgentCSS)
+})
 
 // styleFindingSource says where a styling finding happened, in the terms a
 // caller points an author with.
