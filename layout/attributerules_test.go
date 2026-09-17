@@ -567,44 +567,59 @@ func TestAReversedCountersScopeStopsWhereAnotherBegins(t *testing.T) {
 	}
 }
 
-// TestALiValueInAReversedListSaysSo is the one place the engine's reading of
-// "<li value>" is visibly not the specification's, and it only became visible
-// once reversed lists existed.
+// TestALiValueWritesTheCounterRatherThanMakingOne, CSS Lists 3 §4.1 and §4.3.
 //
-// HTML maps the attribute to "counter-set", which writes the counter already
-// there; this engine maps it to "counter-reset", which *creates* one. For a
-// list that counts up the two are the same page, which is why the
-// approximation has stood. For one that counts down they are not: the items
-// after it count upwards, and the ones before it are numbered as though the
-// list ended at it.
-func TestALiValueInAReversedListSaysSo(t *testing.T) {
-	count := func(markup string) int {
-		n := 0
-		for _, f := range Build(Input{HTML: markup}).Findings {
-			if f.Property == "value" {
-				n++
-			}
-		}
-		return n
-	}
-	if got := count(`<ol reversed><li>a</li><li value="9">b</li></ol>`); got != 1 {
-		t.Errorf("<li value> in a reversed list raised %d findings, want 1", got)
-	}
-	// Once per document, and the two lists are at different depths because the
-	// Recorder deduplicates on the element's path and two siblings share one.
-	if got := count(`<ol reversed><li value="9">a</li></ol>` +
-		`<div><ol reversed><li value="9">b</li></ol></div>`); got != 1 {
-		t.Errorf("two of them raised %d findings, want 1", got)
-	}
-	// And nothing is said where the two readings agree, which is every list
-	// that counts up.
-	for _, markup := range []string{
-		`<ol><li>a</li><li value="9">b</li></ol>`,
-		`<ol reversed><li>a</li></ol>`,
-		`<li value="9">a</li>`,
+// HTML maps "<li value>" to counter-set, and this engine mapped it to
+// counter-reset until reversed lists made the difference visible. A reset
+// *creates* a counter, which the element's following siblings are inside; a set
+// writes the one that is already there and leaves the scope where it was.
+//
+// For a list that counts up the two are the same page, which is why the
+// approximation stood for so long: the created counter's scope is the rest of
+// the list and it carries on from the number the attribute named. For one that
+// counts down they are not — a created counter is not the reversed one, so the
+// items after it counted upwards.
+//
+// counter-set is applied *after* counter-increment, which css-lists-3 calls a
+// deliberate choice and which is what makes the number go across unchanged: the
+// item's own increment has already run.
+func TestALiValueWritesTheCounterRatherThanMakingOne(t *testing.T) {
+	for _, c := range []struct{ markup, want string }{
+		// The shape the approximation got right, which is why it stood.
+		{`<ol><li>a</li><li value="9">b</li><li>c</li></ol>`, "1.a9.b10.c"},
+		{`<ol><li value="9">a</li><li>b</li></ol>`, "9.a10.b"},
+		{`<ol><li value="-2">a</li><li>b</li></ol>`, "-2.a-1.b"},
+		// And the shape it got wrong: the counter keeps counting down, because
+		// it is the same counter.
+		{`<ol reversed><li>a</li><li value="9">b</li><li>c</li></ol>`, "3.a9.b8.c"},
+		// The property itself, which is what the attribute now maps to.
+		{`<ol><li>a</li><li style="counter-set:list-item 20">b</li><li>c</li></ol>`, "1.a20.b21.c"},
 	} {
-		if got := count(markup); got != 0 {
-			t.Errorf("%s raised %d findings about value, want none", markup, got)
+		if got := drawn(paintOf(t, c.markup, noDefaults)); got != c.want {
+			t.Errorf("%s drew %q, want %q", c.markup, got, c.want)
 		}
+	}
+}
+
+// TestCounterSetDoesNotOpenAScope is the difference from counter-reset said in
+// one document, because it is the whole of why the property exists.
+//
+// A reset on the second item would put the third inside *its* scope, so a
+// counters() at the third would show two levels. A set leaves the scope where
+// it was and shows one.
+func TestCounterSetDoesNotOpenAScope(t *testing.T) {
+	const doc = `<div id="outer"><p>a</p><p id="mid">b</p><p>c</p></div>`
+	set := drawn(paintOf(t, doc, noDefaults+
+		`#outer{counter-reset:n} p{counter-increment:n} #mid{counter-set:n 7} `+
+		`p::before{content:counters(n, ".")}`))
+	reset := drawn(paintOf(t, doc, noDefaults+
+		`#outer{counter-reset:n} p{counter-increment:n} #mid{counter-reset:n 7} `+
+		`p::before{content:counters(n, ".")}`))
+	if set != "1a7b8c" {
+		t.Errorf("counter-set drew %q, want %q", set, "1a7b8c")
+	}
+	if reset == set {
+		t.Errorf("counter-set and counter-reset drew the same thing, %q; the "+
+			"difference between them is the whole of why the property exists", set)
 	}
 }
