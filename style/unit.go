@@ -114,6 +114,61 @@ func FromPx(px float64) (u Unit, ok bool) {
 	return Unit(math.Trunc(v)), true
 }
 
+// RoundPx converts a length in CSS pixels to the *nearest* unit, for a length
+// that is a container and never a part.
+//
+// # Why this one may round when FromPx may not
+//
+// The argument above is about parts and the box built to hold them: a whole
+// number of units taken downwards from n·x is never less than n times a whole
+// number taken downwards from x. Nothing in it constrains the container to be
+// taken downwards as well — it constrains the container to be *no smaller* than
+// the sum of the parts, and for a non-negative value math.Round is either
+// math.Trunc or one more than it. So a container quantised to the nearest unit
+// is never smaller than the same container quantised downwards, and the
+// property holds with room to spare.
+//
+// A negative length is the mirror of that and is why this is Round rather than
+// Ceil: Ceil on a negative value moves *towards* zero and would make a
+// container smaller, which is the one direction the argument forbids.
+//
+// # What it is for
+//
+// The sheet. A page size is the one length a caller states exactly and can
+// check afterwards — it comes back out of the engine in the PDF's /MediaBox —
+// and it is never laid out on anything. Taken downwards it is short by up to a
+// full unit, always in the same direction: A4's 595.276pt came back as
+// 595.265625 and A5's 419.528 as 419.51953125, each about 0.0105pt low, which
+// is enough to fail a caller checking its own paper to a hundredth of a point.
+// To the nearest they are 595.27734375 and 419.53125, about 0.0013 out.
+//
+// See layout.PageSizePt, which is the caller, and layout.ptToUnit, which is the
+// margin beside it and still takes its length downwards: a margin is subtracted
+// from the sheet, so downwards leaves the content no less room than was asked
+// for, which is the same direction the rule above is about.
+//
+// A page size an author writes as a CSS length — "@page { size: 210mm }" — goes
+// through the cascade like every other length and is still truncated. That is a
+// sixty-fourth of a pixel of disagreement with the same paper named as "A4",
+// and it is left rather than papered over: the fractional pixels are gone by the
+// time a resolved Length reaches the page rule, so closing it means teaching the
+// length parser about paper, which is a larger change than the difference is
+// worth. It is recorded here so the next reader finds it stated rather than has
+// to measure it.
+func RoundPx(px float64) (u Unit, ok bool) {
+	if math.IsNaN(px) {
+		return 0, false
+	}
+	v := px * unitsPerPx
+	switch {
+	case v > float64(MaxUnit):
+		return MaxUnit, false
+	case v < float64(MinUnit):
+		return MinUnit, false
+	}
+	return Unit(math.Round(v)), true
+}
+
 // Px returns the length in CSS pixels.
 func (u Unit) Px() float64 { return float64(u) / unitsPerPx }
 

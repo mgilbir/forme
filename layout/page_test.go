@@ -2,8 +2,11 @@ package layout
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"testing"
+
+	"github.com/mgilbir/forme/style"
 )
 
 // TestComposeReturnsTheSheetItLaidOutOn.
@@ -116,5 +119,65 @@ func TestWhatTheBoundCutIsStillCounted(t *testing.T) {
 	if out.Counts[RuleMinScale] == 0 {
 		t.Errorf("the page was shrunk past the minimum and nothing counted it; "+
 			"counts: %v", out.Counts)
+	}
+}
+
+// TestThePaperIsWhatTheCallerAskedFor.
+//
+// A page size is the one length a caller states exactly and can check
+// afterwards: it leaves the engine as the PDF's /MediaBox, and a caller that
+// asked for A4 compares what came back against 595.276 x 841.89 points.
+//
+// Quantised downwards like every laid-out length it was short by up to a full
+// unit and always in the same direction — A4's width came back as 595.265625
+// and A5's as 419.51953125, each about 0.0105pt low, which is enough to fail a
+// check to a hundredth of a point. The sheet is a container and never a part,
+// so it is quantised to the nearest unit instead; style.RoundPx holds the
+// argument that this cannot weaken what the downward quantisation is for.
+//
+// A hundredth of a point is the tolerance because it is the one a caller
+// actually writes, and because a unit is 0.0117pt — so a check at 0.01 is
+// exactly the check truncation cannot pass and rounding can.
+func TestThePaperIsWhatTheCallerAskedFor(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		got  style.Unit
+		want float64
+	}{
+		{"A4 width", A4.Width, 595.276},
+		{"A4 height", A4.Height, 841.89},
+		{"A5 width", A5.Width, 419.528},
+		{"A5 height", A5.Height, 595.276},
+		{"Letter width", Letter.Width, 612},
+		{"Letter height", Letter.Height, 792},
+		{"Legal height", Legal.Height, 1008},
+	} {
+		if off := math.Abs(tc.got.Pt() - tc.want); off > 0.01 {
+			t.Errorf("%s is %.8fpt, want %gpt — out by %.5f, which is more than the "+
+				"hundredth of a point a caller checks to", tc.name, tc.got.Pt(), tc.want, off)
+		}
+	}
+	// And the named sizes a stylesheet can ask for, which are built the same way
+	// and would otherwise be quantised two different ways from the four above.
+	for _, tc := range []struct {
+		name  string
+		w, h  float64
+		wantW float64
+		wantH float64
+	}{
+		{"a3", 297, 420, 297 * 72 / 25.4, 420 * 72 / 25.4},
+		{"b5", 176, 250, 176 * 72 / 25.4, 250 * 72 / 25.4},
+		{"ledger", 0, 0, 11 * 72, 17 * 72},
+	} {
+		got, ok := pageSizes[tc.name]
+		if !ok {
+			t.Fatalf("%q is not a named page size", tc.name)
+		}
+		if off := math.Abs(got.W.Pt() - tc.wantW); off > 0.01 {
+			t.Errorf("%s is %.8fpt wide, want %.8f — out by %.5f", tc.name, got.W.Pt(), tc.wantW, off)
+		}
+		if off := math.Abs(got.H.Pt() - tc.wantH); off > 0.01 {
+			t.Errorf("%s is %.8fpt tall, want %.8f — out by %.5f", tc.name, got.H.Pt(), tc.wantH, off)
+		}
 	}
 }

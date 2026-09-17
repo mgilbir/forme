@@ -1,8 +1,11 @@
 package layout
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/mgilbir/forme/style"
 )
 
 // oneByOneGIF is the smallest picture that decodes, as a data URI.
@@ -150,6 +153,78 @@ func TestTheGuardIsSilentOnADocumentTheScaleAccountedFor(t *testing.T) {
 		if hasRule(got.Findings, RuleOverflowPage) {
 			t.Errorf("%s: the scale was computed from this box and the guard fired anyway, "+
 				"so the two disagree: %v", tc.name, got.Findings)
+		}
+	}
+}
+
+// TestNoPageSizeTripsTheSelfCheck is the sweep that found the round trip, kept
+// as a test.
+//
+// checkPageOverflow's own documentation says it "should never fire" on a
+// document whose scale was computed from its only box. It fired on about a fifth
+// of the page sizes a caller could name: the page it compares against is the
+// sheet divided by the scale, the scale was computed from the sheet, and a
+// length quantised, divided and quantised again comes back a unit short whenever
+// the division lands between two units.
+//
+// The fixtures above pin three particular pages. This pins the property, over
+// every page width and height in a range a unit apart, because "it fires for
+// some paper sizes and not others" is a shape no fixture finds — the one that
+// fired here was A4 with its width taken to the nearest unit, which is what
+// style.RoundPx now does and what the old truncation happened to avoid.
+func TestNoPageSizeTripsTheSelfCheck(t *testing.T) {
+	for _, src := range []string{
+		`<div style="width:2000px;height:10px;background:red"></div>`,
+		`<div style="width:10px;height:3000px;background:red"></div>`,
+		`<div style="width:4000px;height:4000px;background:red"></div>`,
+	} {
+		var fired int
+		for d := style.Unit(-60); d <= 60; d++ {
+			for axis := 0; axis < 2; axis++ {
+				p := A4
+				if axis == 0 {
+					p.Width = A4.Width.Add(d)
+				} else {
+					p.Height = A4.Height.Add(d)
+				}
+				got := Compose(Input{HTML: src}, Options{MinScale: 0.01, Page: p})
+				if hasRule(got.Findings, RuleOverflowPage) {
+					fired++
+				}
+			}
+		}
+		if fired != 0 {
+			t.Errorf("%s: the self-check fired on %d of 242 page sizes; the scale "+
+				"was computed from this box on every one of them", src, fired)
+		}
+	}
+}
+
+// TestABoxThatReallyLeavesThePageIsStillReported is the containment half: the
+// slack above is one layout unit and must not become a licence.
+//
+// Two units — a thirty-second of a pixel, and the smallest excess the slack does
+// not cover — is still reported, because a tolerance that swallowed twice its
+// stated size would look exactly like this change working. Half a millimetre is
+// 121 units, and the fixture that pins the message puts a box fifty pixels out.
+func TestABoxThatReallyLeavesThePageIsStillReported(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		out  style.Unit
+		want bool
+	}{
+		{"one unit, which is the round trip's own grain", 1, false},
+		{"two units", 2, true},
+		{"half a millimetre", 121, true},
+		{"fifty pixels", 3200, true},
+	} {
+		px := tc.out.Px()
+		src := fmt.Sprintf(`<div style="position:absolute;left:-%.6fpx;top:0;`+
+			`width:10px;height:10px;background:red"></div>`, px)
+		got := Compose(Input{HTML: src}, Options{})
+		if fired := hasRule(got.Findings, RuleOverflowPage); fired != tc.want {
+			t.Errorf("%s: a box %v outside the page reported=%v, want %v",
+				tc.name, tc.out, fired, tc.want)
 		}
 	}
 }

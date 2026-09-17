@@ -534,12 +534,15 @@ var pageSizes = map[string]Size{
 	"ledger": paperIn(11, 17),
 }
 
+// Both take the sheet to the nearest unit rather than downwards, which is what
+// PageSizePt does to the four sizes above them — the alternative is a table
+// where "a4" and "a3" are quantised two different ways. See style.RoundPx.
 func paperMm(w, h float64) Size {
-	return Size{W: ptToUnit(w * 72 / 25.4), H: ptToUnit(h * 72 / 25.4)}
+	return Size{W: ptToSheet(w * 72 / 25.4), H: ptToSheet(h * 72 / 25.4)}
 }
 
 func paperIn(w, h float64) Size {
-	return Size{W: ptToUnit(w * 72), H: ptToUnit(h * 72)}
+	return Size{W: ptToSheet(w * 72), H: ptToSheet(h * 72)}
 }
 
 // pageSizeValue reads the size descriptor, which is what chooses the paper.
