@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 
@@ -40,6 +41,11 @@ type counterEntry struct {
 	// depth is the tree depth of the element whose counter-reset created it. It
 	// is what decides when the entry leaves scope.
 	depth int
+	// reversed says the counter counts down: CSS Lists 3's "reversed()", which
+	// is what "<ol reversed>" maps to. It is incremented by the *negation* of
+	// the increment, so the same "counter-increment: list-item" that numbers a
+	// list upwards numbers this one downwards, and no other rule changes.
+	reversed bool
 }
 
 // counterState is the set of counters visible at a point in the walk.
@@ -93,10 +99,10 @@ func (c *counterState) enter(depth int) {
 // A second counter-reset of the same name at the same depth replaces the first
 // rather than nesting inside it — they are the same scope, and two counters
 // could not be told apart there.
-func (c *counterState) reset(name string, value, depth int) {
+func (c *counterState) reset(name string, value, depth int, reversed bool) {
 	stack := c.stacks[name]
 	if n := len(stack); n > 0 && stack[n-1].depth == depth {
-		stack[n-1].value = value
+		stack[n-1].value, stack[n-1].reversed = value, reversed
 		return
 	}
 	if len(c.stacks) >= maxCounterNames && stack == nil {
@@ -105,7 +111,7 @@ func (c *counterState) reset(name string, value, depth int) {
 	if len(stack) >= maxCounterDepth {
 		return
 	}
-	c.stacks[name] = append(stack, counterEntry{value: value, depth: depth})
+	c.stacks[name] = append(stack, counterEntry{value: value, depth: depth, reversed: reversed})
 }
 
 // increment adds to the innermost counter of a name.
@@ -116,7 +122,7 @@ func (c *counterState) reset(name string, value, depth int) {
 func (c *counterState) increment(name string, by, depth int) {
 	stack := c.stacks[name]
 	if len(stack) == 0 {
-		c.reset(name, 0, depth)
+		c.reset(name, 0, depth, false)
 		stack = c.stacks[name]
 		if len(stack) == 0 {
 			// Refused by a cap.
@@ -124,6 +130,12 @@ func (c *counterState) increment(name string, by, depth int) {
 		}
 	}
 	n := len(stack) - 1
+	if stack[n].reversed {
+		// A reversed counter is incremented by the negation of the increment,
+		// which is the whole of what makes it count down. Everything else about
+		// it — the scope, the stack, the saturation below — is a counter.
+		by = -by
+	}
 	// Saturating, because the increment is a number out of the document and a
 	// stylesheet asking for two billion twice should not wrap to a negative
 	// count.
@@ -253,9 +265,18 @@ func computeCounters(root *html.Node, styles map[*html.Node]style.ComputedStyle,
 	// "counter-reset: n 0; counter-increment: n" on one element yields 1, and the
 	// specification fixes the order rather than leaving it to the declaration
 	// order.
-	apply := func(cs style.ComputedStyle, depth int) {
+	starts := reversedStarts(root, styles, pseudo)
+	apply := func(n *html.Node, cs style.ComputedStyle, depth int) {
 		for _, r := range parseCounterList(cs["counter-reset"], 0) {
-			state.reset(r.name, r.value, depth)
+			value := r.value
+			if r.reversed && r.implied {
+				// A reversed counter with no number begins at the number of
+				// things in its scope that increment it, which for a list is
+				// the count of its items. That is the one thing about a counter
+				// that cannot be read off the element: it is ahead of the walk.
+				value = starts[n][r.name]
+			}
+			state.reset(r.name, value, depth, r.reversed)
 		}
 		for _, r := range parseCounterList(cs["counter-increment"], 1) {
 			state.increment(r.name, r.value, depth)
@@ -270,7 +291,7 @@ func computeCounters(root *html.Node, styles map[*html.Node]style.ComputedStyle,
 			return
 		}
 		state.enter(depth)
-		apply(cs, depth)
+		apply(n, cs, depth)
 		out.pseudo[key] = state.snapshot()
 		// The depth this pseudo-element's content *starts* at, recorded before
 		// its own keywords move it: "content: open-quote" draws the mark for the
@@ -287,7 +308,7 @@ func computeCounters(root *html.Node, styles map[*html.Node]style.ComputedStyle,
 				return
 			}
 			state.enter(depth)
-			apply(cs, depth)
+			apply(n, cs, depth)
 			if v, ok := state.innermost("list-item"); ok {
 				out.elements[n] = v
 			}
@@ -344,6 +365,12 @@ func generatesPseudoBox(cs style.ComputedStyle) bool {
 type counterRequest struct {
 	name  string
 	value int
+	// reversed is CSS Lists 3's "reversed(name)", and implied says the
+	// declaration named no number — which for a reversed counter is not the
+	// same as naming zero: it begins at the count of the things in its scope
+	// that increment it. See reversedStarts.
+	reversed bool
+	implied  bool
 }
 
 // parseCounterList reads "chapter section 2 note -1".
@@ -358,6 +385,22 @@ func parseCounterList(raw string, byDefault int) []counterRequest {
 	vals, _ := css.ParseComponentValues(raw)
 	var out []counterRequest
 	for _, v := range vals {
+		if v.IsFunction() && strings.EqualFold(v.Token.Value, "reversed") {
+			// CSS Lists 3's reversed(): one name, and the counter it creates
+			// counts down. A number may follow the function exactly as it may
+			// follow a bare name, which is what the Number case below handles.
+			name, ok := singleIdent(v.Values)
+			if !ok {
+				return nil
+			}
+			if len(out) >= maxCounterNames {
+				return out
+			}
+			out = append(out, counterRequest{
+				name: name, value: byDefault, reversed: true, implied: true,
+			})
+			continue
+		}
 		if !v.IsToken() {
 			continue
 		}
@@ -367,13 +410,16 @@ func parseCounterList(raw string, byDefault int) []counterRequest {
 			if len(out) >= maxCounterNames {
 				return out
 			}
-			out = append(out, counterRequest{name: v.Token.Value, value: byDefault})
+			out = append(out, counterRequest{
+				name: v.Token.Value, value: byDefault, implied: true,
+			})
 		case css.Number:
 			// The number belongs to the name before it. One with no name before
 			// it is a malformed declaration, and dropping it is what the
 			// specification's grammar does.
 			if len(out) > 0 {
 				out[len(out)-1].value = int(v.Token.Number)
+				out[len(out)-1].implied = false
 			}
 		default:
 			// Anything else makes the declaration invalid.
@@ -381,6 +427,174 @@ func parseCounterList(raw string, byDefault int) []counterRequest {
 		}
 	}
 	return out
+}
+
+// reversedStarts is the implied initial value of every reversed counter in the
+// document: for each element that creates one with no number, the count of the
+// things in that counter's scope that increment it.
+//
+// It is a pass of its own because it is the one thing about a counter that
+// cannot be read off the element as the walk reaches it. A counter's scope is
+// the element, its descendants *and its following siblings with theirs*, so the
+// number is ahead of the walk in both directions at once.
+//
+// One pass answers it for every element at once, which is what keeps it from
+// being a look-ahead per reversed counter — that would be the document times
+// the number of countdown lists in it. Children are visited last to first, so
+// the running total is the scope of the *next* sibling, and an element's own
+// scope is its subtree plus that.
+//
+// Nothing is built for a document with no reversed counter in it, which is
+// nearly all of them: the styles are scanned for the word first, and the scan
+// stops at the first one found.
+func reversedStarts(root *html.Node, styles map[*html.Node]style.ComputedStyle,
+	pseudo map[style.PseudoKey]style.ComputedStyle) map[*html.Node]map[string]int {
+
+	names := reversedNames(styles)
+	if len(names) == 0 {
+		return nil
+	}
+	out := map[*html.Node]map[string]int{}
+	// Two running totals per name, because §4.4.2 adds the last increment to
+	// the sum: three items incrementing by one begin at four, and three
+	// incrementing by two begin at eight. The "last" is the last in document
+	// order, which walking backwards makes the *first* one seen.
+	increments := func(cs style.ComputedStyle, sum, last []int) {
+		for _, r := range parseCounterList(cs["counter-increment"], 1) {
+			for i, name := range names {
+				if name != r.name || r.value == 0 {
+					continue
+				}
+				sum[i] += r.value
+				if last[i] == 0 {
+					last[i] = r.value
+				}
+			}
+		}
+	}
+	// creates says an element instantiates a counter of its own, which takes it
+	// and everything after it out of the scope being counted.
+	creates := func(cs style.ComputedStyle, into []bool) {
+		for _, r := range parseCounterList(cs["counter-reset"], 0) {
+			for i, name := range names {
+				if name == r.name {
+					into[i] = true
+				}
+			}
+		}
+	}
+	// Two numbers travel up out of every node: what its subtree contributes to
+	// the counter *it* creates, and what it contributes to the one enclosing
+	// it. They are the same unless the node creates the counter itself, in
+	// which case the second is nothing — its subtree is in its own scope.
+	var walk func(n *html.Node) (ownSum, ownLast []int, instantiates []bool)
+	walk = func(n *html.Node) ([]int, []int, []bool) {
+		sum, last := make([]int, len(names)), make([]int, len(names))
+		mine := make([]bool, len(names))
+		if n.Type == html.ElementNode {
+			cs := styles[n]
+			if displayIsNone(cs) {
+				// No box, so no increment and no counter: it is not in any
+				// scope, which is what the walk below does with it too.
+				return sum, last, mine
+			}
+			creates(cs, mine)
+			increments(cs, sum, last)
+			for _, name := range []string{"before", "after"} {
+				if ps, ok := pseudo[style.PseudoKey{Node: n, Name: name}]; ok && generatesPseudoBox(ps) {
+					increments(ps, sum, last)
+				}
+			}
+		}
+		// Last to first, so the running total is the scope of the *next*
+		// sibling: an element's own scope is its subtree plus that.
+		afterSum, afterLast := make([]int, len(names)), make([]int, len(names))
+		for i := len(n.Children) - 1; i >= 0; i-- {
+			childSum, childLast, childMine := walk(n.Children[i])
+			if n.Children[i].Type == html.ElementNode {
+				scope := make(map[string]int, len(names))
+				for j, name := range names {
+					// §4.4.2: the sum of the increments in scope, and the last
+					// of them once more. Three items incrementing by one begin
+					// at four; three incrementing by two begin at eight.
+					total, l := childSum[j]+afterSum[j], afterLast[j]
+					if childLast[j] != 0 {
+						l = childLast[j]
+					}
+					scope[name] = total + l
+				}
+				out[n.Children[i]] = scope
+			}
+			for j := range afterSum {
+				if childMine[j] {
+					// The child instantiated the counter, so everything from
+					// here back is in *its* scope rather than in this one.
+					afterSum[j], afterLast[j] = 0, 0
+					continue
+				}
+				afterSum[j] += childSum[j]
+				if childLast[j] != 0 {
+					afterLast[j] = childLast[j]
+				}
+			}
+		}
+		for j := range sum {
+			sum[j] += afterSum[j]
+			if afterLast[j] != 0 && last[j] == 0 {
+				last[j] = afterLast[j]
+			}
+		}
+		return sum, last, mine
+	}
+	walk(root)
+	return out
+}
+
+// reversedNames is every counter a document creates with reversed(), or nothing
+// when it creates none.
+func reversedNames(styles map[*html.Node]style.ComputedStyle) []string {
+	seen := map[string]bool{}
+	for _, cs := range styles {
+		raw := cs["counter-reset"]
+		if !strings.Contains(raw, "reversed(") && !strings.Contains(raw, "REVERSED(") {
+			continue
+		}
+		for _, r := range parseCounterList(raw, 0) {
+			if r.reversed && r.implied {
+				seen[r.name] = true
+			}
+		}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(seen))
+	for name := range seen {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// singleIdent is the one name a reversed() takes.
+func singleIdent(vals []css.ComponentValue) (string, bool) {
+	name := ""
+	for _, v := range vals {
+		if !v.IsToken() {
+			return "", false
+		}
+		switch v.Token.Kind {
+		case css.Whitespace:
+		case css.Ident:
+			if name != "" {
+				return "", false
+			}
+			name = v.Token.Value
+		default:
+			return "", false
+		}
+	}
+	return name, name != ""
 }
 
 // formatCounter renders one counter value in a list style.
