@@ -134,13 +134,29 @@ var inertValues = map[string]inertValue{
 	// across two of them (see page.go). So the box the author did not want split
 	// is not split, which is what the declaration asked for.
 	//
-	// The other break properties are not here and must not join them.
-	// "page-break-before: always" asks for a break this engine cannot make, and
-	// an author who wrote one would get a page that runs on.
 	"page-break-inside": {produced: "auto", also: "avoid",
 		because: "nothing is fragmented, so no box is broken inside"},
 	"break-inside": {produced: "auto", also: "avoid",
 		because: "nothing is fragmented, so no box is broken inside"},
+
+	// The other four join them for "auto" and "avoid", and the line between
+	// what is here and what is not is the whole of why they were kept out at
+	// first. "always" and "page" ask for a break this engine cannot make, and
+	// an author who wrote one gets a page that runs on: those stay reported.
+	//
+	// "avoid" asks for *no* break and gets none, which is the same argument the
+	// two entries above already make about break-inside — the box the author
+	// did not want split is not split. "auto" asks for neither: it is the
+	// initial value and means "break here if the fragmentation wants to", and
+	// where nothing fragments it is the page that is already there.
+	//
+	// Both were being reported for a difference that does not exist, and
+	// documents write them — a reset saying "let this break normally" is the
+	// same defensive shape as the textarea rule above.
+	"break-before":      {produced: "auto", also: "avoid", because: breakAsksForNothing},
+	"break-after":       {produced: "auto", also: "avoid", because: breakAsksForNothing},
+	"page-break-before": {produced: "auto", also: "avoid", because: breakAsksForNothing},
+	"page-break-after":  {produced: "auto", also: "avoid", because: breakAsksForNothing},
 
 	// CSS Multi-column 1's four are not here any more. They are registered
 	// properties now and layout reads them — see layout/multicol.go — so the
@@ -263,6 +279,11 @@ func isInertDeclaration(name string, vals []css.ComponentValue) bool {
 	// length, and "border-radius: 0px" is as inert as "border-radius: 0".
 	return entry.produced == "0" && isZeroLength(value)
 }
+
+// breakAsksForNothing is the reason the four entries above share.
+const breakAsksForNothing = "nothing is fragmented, so a break that is " +
+	"permitted rather than demanded, or refused rather than demanded, changes " +
+	"no page"
 
 // isZeroLength reports whether a value is a zero length however it is spelled.
 func isZeroLength(value string) bool {

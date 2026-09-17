@@ -64,6 +64,24 @@ func TestADeclarationAtItsInitialValueIsNotReported(t *testing.T) {
 		// "text-decoration-skip-ink: none".
 		"page-break-inside: avoid",
 		"break-inside: avoid",
+		// The other four, for the same two values and by the same argument.
+		// "auto" is the initial value and means "break here if the
+		// fragmentation wants to"; where nothing fragments it is the page that
+		// is already there. "avoid" asks for the *absence* of a break, which an
+		// engine that never breaks satisfies.
+		//
+		// They were reported until the day this list was checked against what
+		// the engine does rather than against what the properties are for, and
+		// the finding they raised was about a difference that does not exist.
+		"break-before: auto",
+		"break-after: auto",
+		"page-break-before: auto",
+		"page-break-after: auto",
+		"break-before: avoid",
+		"break-after: avoid",
+		"page-break-before: avoid",
+		"page-break-after: avoid",
+		"break-before: AVOID",
 		"column-gap: normal",
 		"column-fill: balance",
 		"filter: none",
@@ -154,10 +172,19 @@ func TestADeclarationThatAsksForSomethingIsStillReported(t *testing.T) {
 	for _, decl := range []string{
 		"resize: both",
 		"resize: horizontal",
-		// The other break properties, which ask for a break rather than for the
-		// absence of one. An author who wrote either gets a page that runs on.
+		// The break properties' other values, which ask for a break rather than
+		// for the absence of one. An author who wrote any of them gets a page
+		// that runs on, and that is the line between these and the entries
+		// above: "auto" and "avoid" are satisfied by never breaking, and these
+		// are not.
 		"page-break-before: always",
 		"page-break-after: always",
+		"break-before: always",
+		"break-after: always",
+		"break-before: page",
+		"break-after: page",
+		"break-before: left",
+		"break-before: column",
 		"filter: blur(1px)",
 		"border-radius: 20px",
 	} {
