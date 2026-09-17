@@ -96,6 +96,47 @@ func TestADeclarationAtItsInitialValueIsNotReported(t *testing.T) {
 		// satisfies either. layout/textdecoration_test.go holds the fact.
 		"text-decoration-skip-ink: auto",
 		"text-decoration-skip-ink: none",
+		// The rest of the defensive reset a real stylesheet writes. Every one of
+		// these was reported until the table was checked against what this
+		// engine draws, and every one of them says "make sure nothing here is
+		// doing anything" about a thing it never does.
+		"box-shadow: none",
+		"text-shadow: none",
+		"cursor: auto",
+		"content-visibility: visible",
+		"contain: none",
+		"isolation: auto",
+		"mix-blend-mode: normal",
+		"backdrop-filter: none",
+		"appearance: auto",
+		"clip-path: none",
+		"mask: none",
+		"perspective: none",
+		"text-emphasis: none",
+		"text-emphasis-style: none",
+		"font-variant-alternates: normal",
+		"scroll-snap-type: none",
+		"outline-offset: 0",
+		"outline-offset: 0px",
+		// The second property here with two values, and for the same reason as
+		// the first: "auto" leaves the underline's position to the user agent
+		// and "from-font" demands it come from the face's own metrics. This
+		// takes it from the face, so it satisfies the permitting value and the
+		// demanding one. layout/textdecoration_test.go holds that fact too.
+		"text-underline-position: auto",
+		"text-underline-position: from-font",
+		// The one property whose every value is inert, in four spellings of two
+		// different points. It names where a transform turns about, and nothing
+		// is transformed.
+		"transform-origin: 50% 50%",
+		"transform-origin: center",
+		"transform-origin: top left",
+		"transform-origin: 0 0",
+		// The hyphens case again, found this time by looking for it rather than
+		// by being caught out: what this engine produces is "none", because it
+		// applies no variation to a face at all. The initial value is "auto",
+		// and "auto" is in the list below.
+		"font-optical-sizing: none",
 	} {
 		if reportsUnsupported(t, decl) {
 			t.Errorf("%q was reported, and it asks for the page that is already there", decl)
@@ -133,8 +174,13 @@ func TestTheInitialKeywordIsResolvedRatherThanAssumedInert(t *testing.T) {
 		// and reportsUnsupported answers false for the reason this test is not
 		// about. The two rules are independent and both examples below are
 		// properties whose absence really does change a page.
-		"mix-blend-mode: initial",
-		"text-emphasis: initial",
+		//
+		// "mix-blend-mode" and "text-emphasis" stood here until they were given
+		// entries of their own, which is what an example of "no entry" is always
+		// at risk of. These two are picked to be far from the reset vein: a
+		// shape a float wraps to, and a border painted from an image.
+		"shape-outside: initial",
+		"mask-border: initial",
 	} {
 		if !reportsUnsupported(t, decl) {
 			t.Errorf("%q was not reported; this engine does not know that its initial "+
@@ -187,6 +233,36 @@ func TestADeclarationThatAsksForSomethingIsStillReported(t *testing.T) {
 		"break-before: column",
 		"filter: blur(1px)",
 		"border-radius: 20px",
+		// The other half of every entry added above: the value that asks for a
+		// page this engine does not draw. A shadow, a blend, a clip, a mask, a
+		// mark over the text, an alternate glyph, a ring held off the border
+		// edge — none of them arrives, and the author has no other way to learn
+		// it.
+		"box-shadow: 1px 1px red",
+		"text-shadow: 1px 1px red",
+		"content-visibility: hidden",
+		"contain: paint",
+		"isolation: isolate",
+		"mix-blend-mode: multiply",
+		"backdrop-filter: blur(2px)",
+		// The opposite request to the one above: stripping a field back to a
+		// plain box is what this engine does not do, because the chrome comes
+		// from its user agent sheet and stays.
+		"appearance: none",
+		"clip-path: circle(40%)",
+		"perspective: 500px",
+		"text-emphasis: dot",
+		"text-emphasis-style: circle",
+		"font-variant-alternates: historical-forms",
+		"outline-offset: 4px",
+		"text-underline-position: under",
+		// And the hyphens case from the other side. "auto" asks for the face's
+		// optical size axis to be set from the font size, and this sets no axis;
+		// "initial" stands for "auto" and is reported with it. A table written
+		// from the specifications rather than from this engine would have these
+		// two silent and "none" reported, which is exactly backwards.
+		"font-optical-sizing: auto",
+		"font-optical-sizing: initial",
 	} {
 		if !reportsUnsupported(t, decl) {
 			t.Errorf("%q was not reported, and it asks for a page this engine does "+
@@ -349,6 +425,52 @@ func TestNothingIsFragmented(t *testing.T) {
 	}
 	if _, ok := properties["break-inside"]; ok {
 		t.Errorf("break-inside is in the registry now, so something reads it")
+	}
+}
+
+// TestAPropertyInBothTablesStillReportsItsOtherValues is the seam between this
+// file and nomedium.go, and the new entries widened it.
+//
+// Several properties are named by both — "cursor", "pointer-events",
+// "user-select" and "scroll-snap-type" among them — and the two say different
+// things. inert.go says the do-nothing value asks for the page that is already
+// there, so nothing is reported. nomedium.go says *no* value of the property
+// changes this medium, so every other value is still reported and simply does
+// not carry the claim that the page came out wrong.
+//
+// reportsUnsupported answers false for both, which is why this asks the weaker
+// question instead: a finding was raised at all. An entry here with the wrong
+// produced value would swallow these silently, and nothing else in this file
+// would notice.
+func TestAPropertyInBothTablesStillReportsItsOtherValues(t *testing.T) {
+	for _, decl := range []string{
+		"cursor: pointer",
+		"cursor: not-allowed",
+		"scroll-snap-type: x mandatory",
+		"pointer-events: none",
+		"user-select: none",
+	} {
+		if len(findingsFor(t, decl)) == 0 {
+			t.Errorf("%q raised nothing; it was dropped, and an author who wrote it "+
+				"is entitled to know that much", decl)
+		}
+	}
+}
+
+// TestNothingIsTransformed is to transform-origin what TestNothingIsFragmented
+// is to the break properties, and it guards a stronger claim: that entry says
+// *every* value of transform-origin is inert, which is only true while there is
+// no transformation for an origin to belong to.
+//
+// The day any of these is registered and read, an origin decides where a box
+// ends up and the entry has to come out with the same change.
+func TestNothingIsTransformed(t *testing.T) {
+	for _, name := range []string{"transform", "rotate", "scale", "translate", "perspective"} {
+		if _, ok := properties[name]; ok {
+			t.Errorf("%q is in the registry now, so something reads it; the "+
+				"transform-origin entry claims every origin is inert because "+
+				"nothing is transformed", name)
+		}
 	}
 }
 
