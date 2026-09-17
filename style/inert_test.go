@@ -116,6 +116,11 @@ func TestADeclarationAtItsInitialValueIsNotReported(t *testing.T) {
 		"text-emphasis-style: none",
 		"font-variant-alternates: normal",
 		"scroll-snap-type: none",
+		"scroll-margin: 0",
+		"scroll-margin: 0px",
+		"scroll-padding: auto",
+		"overflow-anchor: auto",
+		"scrollbar-color: auto",
 		"outline-offset: 0",
 		"outline-offset: 0px",
 		// The second property here with two values, and for the same reason as
@@ -447,6 +452,10 @@ func TestAPropertyInBothTablesStillReportsItsOtherValues(t *testing.T) {
 		"cursor: pointer",
 		"cursor: not-allowed",
 		"scroll-snap-type: x mandatory",
+		"scroll-margin: 20px",
+		"scroll-padding: 10px",
+		"overflow-anchor: none",
+		"scrollbar-color: red blue",
 		"pointer-events: none",
 		"user-select: none",
 	} {

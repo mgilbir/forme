@@ -69,6 +69,40 @@ var noEffectOnAPage = map[string]bool{
 	"overscroll-behavior-block": true,
 	"scroll-snap-type":          true, "scroll-snap-align": true,
 	"scroll-snap-stop": true,
+	// And where a box would come to rest if anyone ever scrolled it there.
+	// CSS Scroll Snap 1 §5 and §6 define both as geometry on the scrollport:
+	// scroll-margin grows the box's snap area, scroll-padding shrinks the
+	// region it snaps into, and neither is consulted by anything that lays a
+	// box out or paints one. "scroll-margin: 20px" is not a margin.
+	//
+	// The logical forms are here with the physical ones because a stylesheet
+	// that writes one writes the other, and because a table that named only
+	// half of them would report the same declaration in two spellings
+	// differently.
+	"scroll-margin": true, "scroll-margin-top": true, "scroll-margin-right": true,
+	"scroll-margin-bottom": true, "scroll-margin-left": true,
+	"scroll-margin-block": true, "scroll-margin-block-start": true,
+	"scroll-margin-block-end": true, "scroll-margin-inline": true,
+	"scroll-margin-inline-start": true, "scroll-margin-inline-end": true,
+	"scroll-padding": true, "scroll-padding-top": true, "scroll-padding-right": true,
+	"scroll-padding-bottom": true, "scroll-padding-left": true,
+	"scroll-padding-block": true, "scroll-padding-block-start": true,
+	"scroll-padding-block-end": true, "scroll-padding-inline": true,
+	"scroll-padding-inline-start": true, "scroll-padding-inline-end": true,
+	// CSS Scroll Anchoring 1 §3. The property says whether a box may be the one
+	// a scroll position is kept against while content above it changes. Nothing
+	// here scrolls and nothing changes after it is laid out, so there is no
+	// anchor to opt out of.
+	"overflow-anchor": true,
+	// CSS Scrollbars 1 §3. The colours of a scrollbar, on a page that has none.
+	//
+	// "scrollbar-width" and "scrollbar-gutter" are deliberately *not* here, and
+	// the line between them is the same one this file draws everywhere: those
+	// two change the room the content has — a browser reserves a gutter for
+	// "stable" and takes the bar away for "none", and either moves text — while
+	// a colour moves nothing. See caret-color above, which is the same case and
+	// the one this file was written around.
+	"scrollbar-color": true,
 
 	// Change over time. A transition describes what happens *between* two
 	// states; a document rendered once has one state, and every transition

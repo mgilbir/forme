@@ -317,7 +317,21 @@ var inertValues = map[string]inertValue{
 	"appearance": {produced: "auto", because: "a control keeps the chrome the user agent sheet gives it"},
 
 	"scroll-snap-type": {produced: "none", because: "there is nothing to scroll, so nothing snaps"},
-	"outline-offset":   {produced: "0", because: "an outline is drawn at the border edge"},
+
+	// The rest of the scrolling geometry, all of which nomedium.go names too.
+	//
+	// These four are about the *report* rather than about the difference. The
+	// table next door already says no value of them can change a page, so
+	// nothing here claims a page came out wrong either way; what these add is
+	// silence for the value that asks for the geometry that is already there,
+	// which is the value a reset writes. A stylesheet saying "scroll-margin: 0"
+	// is telling a browser not to hold a box off the edge it snaps to, and there
+	// is no edge.
+	"scroll-margin":   {produced: "0", because: "nothing scrolls, so no box has a snap area"},
+	"scroll-padding":  {produced: "auto", because: "nothing scrolls, so there is no scrollport to inset"},
+	"overflow-anchor": {produced: "auto", because: "nothing scrolls and nothing moves after layout"},
+	"scrollbar-color": {produced: "auto", because: "there is no scrollbar to colour"},
+	"outline-offset":  {produced: "0", because: "an outline is drawn at the border edge"},
 }
 
 // isInertDeclaration reports whether a declaration of an unimplemented property
