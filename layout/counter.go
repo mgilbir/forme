@@ -114,6 +114,26 @@ func (c *counterState) reset(name string, value, depth int, reversed bool) {
 	c.stacks[name] = append(stack, counterEntry{value: value, depth: depth, reversed: reversed})
 }
 
+// set writes the innermost counter of a name, without creating a scope.
+//
+// That is the whole difference from reset, and it is the whole reason the
+// property exists: "counter-reset: n 3" makes a *new* counter that the
+// element's following siblings are inside, and "counter-set: n 3" writes the
+// one that is already there, leaving the scope where it was.
+//
+// A counter that is not in scope is instantiated at zero before being written,
+// which css-lists-3 requires in as many words and which makes this the same
+// answer as a reset for an element that had none — the two only differ where
+// there was a counter to keep.
+func (c *counterState) set(name string, value, depth int) {
+	stack := c.stacks[name]
+	if len(stack) == 0 {
+		c.reset(name, value, depth, false)
+		return
+	}
+	stack[len(stack)-1].value = value
+}
+
 // increment adds to the innermost counter of a name.
 //
 // A counter that is not in scope is created on the spot with value zero before
@@ -280,6 +300,12 @@ func computeCounters(root *html.Node, styles map[*html.Node]style.ComputedStyle,
 		}
 		for _, r := range parseCounterList(cs["counter-increment"], 1) {
 			state.increment(r.name, r.value, depth)
+		}
+		// After the increment, which css-lists-3 §4.3 calls a deliberate
+		// choice: "<li value=3>" is three on an element whose own increment has
+		// already run, and it would be four the other way round.
+		for _, r := range parseCounterList(cs["counter-set"], 0) {
+			state.set(r.name, r.value, depth)
 		}
 	}
 	// atPseudo applies one pseudo-element's declarations in a scope of its own
@@ -483,6 +509,14 @@ func reversedStarts(root *html.Node, styles map[*html.Node]style.ComputedStyle,
 			}
 		}
 	}
+	// §4.4.2 has a third case this does not: an element that *sets* the counter
+	// stops the count there, "add that integer value to num and break this
+	// loop". It is left out because the sum over the whole scope is the same
+	// answer for the shape a document actually writes — a reversed list whose
+	// items all increment, with a value on one of them — and the case where the
+	// two differ is a counter-set early in a long reversed list, which is a
+	// number nobody has asked this engine for. It is named here rather than
+	// left to be discovered.
 	// Two numbers travel up out of every node: what its subtree contributes to
 	// the counter *it* creates, and what it contributes to the one enclosing
 	// it. They are the same unless the node creates the counter itself, in

@@ -117,13 +117,21 @@ var hintedAttributes = map[string]map[string]string{
 	"th": {"width": "width", "height": "height",
 		"bgcolor": "background-color", "background": "background-image"},
 	// <li value="3"> is the counter, written as an attribute. It takes a signed
-	// integer rather than a dimension, so it is read by counterResetValue below
+	// integer rather than a dimension, so it is read by counterSetValue below
 	// instead of the table's usual dimensionValue.
+	//
+	// It is counter-set and not counter-reset, which HTML says and which used
+	// to be approximated: a reset *creates* a counter and a set writes the one
+	// that is there. For a list that counts up the two are the same page, which
+	// is why the approximation stood — the new counter's scope is the rest of
+	// the list and it carries on from the number the attribute named. For one
+	// that counts down they are not: a created counter is not the reversed one,
+	// so the items after it would count upwards.
 	//
 	// <ol start> is not here beside it: what it sets depends on whether
 	// "reversed" is written next to it, and the table is one attribute to one
 	// property. See olCounterHint.
-	"li": {"value": "counter-reset"},
+	"li": {"value": "counter-set"},
 	// The presentational colour attributes of HTML's rendering section. They
 	// are the oldest thing in this table and the only ones that are not a
 	// length, which is why colourHintAttributes exists below.
@@ -222,8 +230,9 @@ var familyHintAttributes = map[string]bool{"face": true}
 var sizeHintAttributes = map[string]bool{"size": true}
 
 // counterHintAttributes are the entries above whose value is a plain integer
-// naming a counter, rather than a length.
-var counterHintAttributes = map[string]bool{"start": true, "value": true}
+// naming a counter, rather than a length. "start" is not here: it is read by
+// olCounterHint, because what it sets depends on the attribute beside it.
+var counterHintAttributes = map[string]bool{"value": true}
 
 // There is deliberately no cache of parsed hint values.
 //
@@ -319,10 +328,10 @@ func attributeHints(name string, n *html.Node) map[string][]css.ComponentValue {
 		} else if valignHintAttributes[attr] {
 			value, ok = valignValue(raw)
 		} else if counterHintAttributes[attr] {
-			// "start" and "value" set the counter to one *below* the number
-			// they name, because the item increments it on the way in. That is
-			// what makes <li value="3"> show a 3 rather than a 4.
-			value, ok = counterResetValue(raw)
+			// "value" names the number the item is to show, and
+			// counter-set writes it after the increment has run — so unlike
+			// "start", which is read by olCounterHint, no arithmetic is needed.
+			value, ok = counterSetValue(raw)
 		} else {
 			value, ok = dimensionValue(raw)
 			if ok && zeroIsNoDimension[name][attr] && isZeroDimension(value) {
@@ -894,18 +903,20 @@ func cellPaddingHint(n *html.Node) map[string][]css.ComponentValue {
 	return nil
 }
 
-// counterResetValue turns a start or value attribute into a counter-reset.
+// counterSetValue turns a <li value> into a counter-set.
 //
-// The attribute names the number the item is to show. The list-item counter is
-// incremented as the item is entered, so the reset has to be one less — and
-// "one less" is why this is not simply the integer: a value of the most negative
-// integer would wrap, and an attribute is untrusted text.
-func counterResetValue(raw string) (string, bool) {
+// The attribute names the number the item is to show, and counter-set is
+// applied *after* the increment — css-lists-3 §4.3 calls that a deliberate
+// choice — so the number goes across unchanged. The arithmetic that used to be
+// here belonged to counter-reset, which is applied before the increment and so
+// had to be one less; that reading is olCounterHint's now, where "start" still
+// needs it.
+func counterSetValue(raw string) (string, bool) {
 	n, ok := signedInteger(raw)
 	if !ok {
 		return "", false
 	}
-	return "list-item " + strconv.Itoa(n-1), true
+	return "list-item " + strconv.Itoa(n), true
 }
 
 // colourValue turns a presentational colour attribute into a CSS colour.

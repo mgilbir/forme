@@ -534,9 +534,6 @@ type boxBuilder struct {
 	// documentElement is the root, which §2.7 blockifies and so exempts from
 	// "display: contents". See contentsIsHonoured.
 	documentElement *html.Node
-	// reportedListValueInReversed says the note about "<li value>" inside a
-	// reversed list has been made, once per document.
-	reportedListValueInReversed bool
 	// reportedPhraseSeparators says the finding below has been made once. It is
 	// once per document rather than once per box for the reason
 	// layouter.reportWordBreak is: the value is inherited, so a page that
@@ -747,7 +744,6 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		Position: position, ZIndex: z, ZAuto: zAuto, Order: order,
 		staticInline: staticInline,
 	}
-	b.reportListValueInReversed(n)
 	box.FirstLine = b.pseudo[style.PseudoKey{Node: n, Name: "first-line"}]
 	box.ListValue, box.ListNumbered = b.listValueOf(n, listItem)
 	box.Control = b.controlFor(n)
@@ -2067,50 +2063,6 @@ func (b *boxBuilder) reportPhraseSeparators(n *html.Node, text string,
 		Property: "word-space-transform",
 		Path:     PathOf(n),
 	})
-}
-
-// reportListValueInReversed names the one place the engine's reading of
-// "<li value>" is visibly not the specification's.
-//
-// HTML maps the attribute to "counter-set", which writes the counter that is
-// already there. This engine maps it to "counter-reset", which *creates* one —
-// and for a list that counts up the two are the same page, which is why the
-// approximation has stood: the new counter's scope is the rest of the list and
-// it carries on from the number the attribute named.
-//
-// In a list that counts down they are not the same page. A created counter is
-// not the reversed one, so the items after the attribute count upwards, and the
-// items *before* it lose them from their own count — a reversed counter begins
-// at the number of things in its scope, and the scope now stops at the element
-// that took it over.
-//
-// It is reported rather than worked around. Making "<li value>" create a
-// reversed counter instead would fix the items after it and leave the ones
-// before it wrong, which is a harder thing to notice than either.
-func (b *boxBuilder) reportListValueInReversed(n *html.Node) {
-	if b.reportedListValueInReversed || !strings.EqualFold(n.Name, "li") || !n.HasAttr("value") {
-		return
-	}
-	for anc := n.Parent; anc != nil; anc = anc.Parent {
-		if anc.Type != html.ElementNode || !strings.EqualFold(anc.Name, "ol") {
-			continue
-		}
-		if !anc.HasAttr("reversed") {
-			return
-		}
-		b.reportedListValueInReversed = true
-		b.rec.ReportDetail(Finding{
-			Rule: RuleUnsupportedValue,
-			Message: "\"<li value>\" inside a reversed list is read as a new counter " +
-				"rather than as a value written into the one there: the items after " +
-				"it count upwards, and the ones before it are numbered as though " +
-				"the list ended at it",
-			Property: "value",
-			Source:   AtHTML(n.Offset),
-			Path:     PathOf(n),
-		})
-		return
-	}
 }
 
 // wordSpaceTransformValue is the same read without the node, for a caller that

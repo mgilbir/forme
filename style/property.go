@@ -500,11 +500,16 @@ var properties = map[string]property{
 	"background-size":       {false, "auto"},
 	"background-origin":     {false, "padding-box"},
 	"background-clip":       {false, "border-box"},
-	// The counters. Neither inherits: a counter's value comes from the walk in
-	// counter.go, and inheriting the declaration would make every descendant
+	// The counters. None of them inherits: a counter's value comes from the walk
+	// in counter.go, and inheriting the declaration would make every descendant
 	// increment it again.
+	//
+	// counter-set is the third and is applied *after* counter-increment, which
+	// css-lists-3 calls a deliberate choice: it is what lets "<li value=3>" mean
+	// three rather than four on an element whose own increment has already run.
 	"counter-reset":     {false, "none"},
 	"counter-increment": {false, "none"},
+	"counter-set":       {false, "none"},
 
 	// Lists.
 	"list-style-type":     {true, "disc"},
