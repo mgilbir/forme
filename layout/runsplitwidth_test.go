@@ -111,3 +111,91 @@ func TestABreakOpportunityStillEndsTheGroup(t *testing.T) {
 		t.Fatalf("the fixture drew %d of its two words, so it says nothing", words)
 	}
 }
+
+// TestAnInvisibleDoesNotMoveTheOpportunityBeforeAnIdeograph is the tiling
+// question asked about the *opportunity* rather than about the group.
+//
+// A break opportunity ends a merge group, which is the test above. So a rule
+// that finds an opportunity in one spelling of a text and not in another cuts
+// the two into different groups, and the runs of a group tile it exactly while
+// runs measured alone do not: the same text comes out a sixty-fourth of a pixel
+// apart. That is how FuzzRunTiling found a line-breaking defect from an
+// arithmetic invariant.
+//
+// The defect was that §5.1's opportunity before an ideograph asked what the
+// character before it was, rather than what the typographic character unit
+// before it was — so one right-to-left mark, which sets no paper and takes no
+// room, deleted the only opportunity in "0‏逭". Both halves of the rule had
+// it: the scan inside a text node, and endsLetterUnit at a box boundary.
+//
+// The six spellings are the same three characters divided every way an author
+// could divide them, and the assertion is that one width answers for all of
+// them. See paragraph's TestAnInvisibleDoesNotDeleteTheOpportunityBeforeAnIdeograph,
+// which holds the opportunity itself.
+func TestAnInvisibleDoesNotMoveTheOpportunityBeforeAnIdeograph(t *testing.T) {
+	const decl = `#p { font-family: Courier; font-size: 12px; white-space: nowrap }`
+	width := func(markup string) style.Unit {
+		t.Helper()
+		f := find(t, layoutOf(t, 4000, `<div id="p">`+markup+`</div>`, decl), "p")
+		if len(f.Lines) != 1 {
+			t.Fatalf("%q laid out as %d lines", markup, len(f.Lines))
+		}
+		var w style.Unit
+		for _, r := range f.Lines[0].Runs {
+			w = w.Add(r.Width)
+		}
+		return w
+	}
+	// The character between the digit and the ideograph, which is the one the
+	// rule must look past. The two are the two ways of not being a base: a
+	// format character that sets no paper, and a spacing mark that sets ink and
+	// belongs to the character in front of it all the same.
+	for _, mid := range []struct{ text, what string }{
+		{"\u200f", "a right-to-left mark"},
+		{"\u1064", "a Myanmar spacing mark"},
+	} {
+		want := width("0" + mid.text + "\u9038")
+		for _, markup := range []string{
+			"<span>0</span><span>" + mid.text + "</span><span>\u9038</span>",
+			"<span>0" + mid.text + "</span><span>\u9038</span>",
+			"<span>0</span><span>" + mid.text + "\u9038</span>",
+			"<span>0</span>" + mid.text + "<span>\u9038</span>",
+			"0<span>" + mid.text + "\u9038</span>",
+			"<span>0</span><span>" + mid.text + "</span>\u9038",
+		} {
+			if got := width(markup); got != want {
+				t.Errorf("with %s, %s is %v wide and the same text whole is %v; a "+
+					"box boundary does not change what the text is",
+					mid.what, markup, got, want)
+			}
+		}
+	}
+	// The joiner is the other way round, and it is here because making the rule
+	// right about letter units exposed it. UAX #14's LB8a forbids a break after a
+	// zero width joiner wherever one falls, and a box boundary is nowhere
+	// special — so "0\u200d\u9038" has no opportunity in it however it is cut,
+	// and every spelling is the width of the three characters with none.
+	{
+		want := width("0\u200d\u9038")
+		for _, markup := range []string{
+			"<span>0\u200d</span><span>\u9038</span>",
+			"<span>0</span><span>\u200d</span><span>\u9038</span>",
+			"<span>0</span><span>\u200d\u9038</span>",
+			"0<span>\u200d</span>\u9038",
+		} {
+			if got := width(markup); got != want {
+				t.Errorf("with a zero width joiner, %s is %v wide and the same text "+
+					"whole is %v; a line may not end after a joiner, in any spelling",
+					markup, got, want)
+			}
+		}
+	}
+	// And the invisible changes nothing at all, which is the stronger statement
+	// and the one that says which width is right: a character that sets no paper
+	// and takes no room cannot make the line wider. Only the format character
+	// can be asked this — a spacing mark has an advance of its own.
+	if plain, marked := width("0\u9038"), width("0\u200f\u9038"); plain != marked {
+		t.Errorf("with a right-to-left mark between them the text is %v wide and "+
+			"without it %v; the mark draws nothing and takes no room", marked, plain)
+	}
+}
