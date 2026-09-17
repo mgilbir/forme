@@ -793,7 +793,50 @@ func TrailingSpacing(item Item) style.Unit {
 	// §8.1's ideograph spacing sits at the far edge of the run it was added to,
 	// and is between two characters that a line break puts on different lines.
 	// Two characters on different lines are not adjacent and get no gap.
-	out := item.Autospace
+	//
+	// "Far edge" is the *visual* right of the run and not its logical end, and
+	// for a right-to-left run those are opposite ends. insertAutospace puts the
+	// gap there because that is where it lands: a run's glyphs are drawn from
+	// its origin rightwards whatever their direction, so width added to a run
+	// appears past its rightmost glyph — which is what sets the gap between the
+	// run and whatever is drawn to its right.
+	//
+	// A line ends at the run's visual right only where the run reads that way.
+	// On a right-to-left line the last run is the *leftmost* one, so the gap on
+	// it is between it and the run before it — both on this line, and the gap is
+	// therefore inside the line rather than hanging off the end of it.
+	// Discounting it made a line, and a box shrink-wrapped to one, an eighth of
+	// an em narrower than the text it holds: "㌱ب" in a float came out 24px wide
+	// around 26.5px of content, with the Arabic letter drawn past the left edge
+	// of the box that was sized for it. FuzzShrinkToFit found it; see
+	// TestTheIdeographGapInsideARightToLeftLineIsNotDiscounted.
+	//
+	// The letter-spacing term below is not conditioned the same way, and not
+	// because §8.2's gap sits anywhere else. It does not: the spacing is placed
+	// into the glyph advances, and a run's glyphs are drawn from its origin
+	// rightwards whatever they read, so that gap is at the run's visual right
+	// too. layout/letterspacingboundary.go's gapNeighbour says so and says it
+	// was checked against the display list rather than reasoned about, "because
+	// the reasoning is easy to get backwards". Item.EdgeLetterSpacing's own
+	// comment has it as the logical far edge and is wrong; it is corrected there.
+	//
+	// What differs is which item carries the gap. A run's own trailing spacing
+	// is at its own right edge, so an item that carries one is the rightmost
+	// thing on the line whenever it is last. An ideograph gap is carried by the
+	// run to the *left* of the boundary it belongs to — insertAutospace widens
+	// the earlier of the two in visual order — so the item that carries one is
+	// never the rightmost, and on a right-to-left line it can still be the last.
+	// That is the whole of the difference, and it is why this term is
+	// conditioned and that one is not.
+	//
+	// The letter-spacing term has a question of its own on a right-to-left line,
+	// which is not this defect and is not answered here: the *measure* asks the
+	// last item on the line for its trailing spacing, and on such a line the
+	// last item is not the rightmost one. See the commit that follows this.
+	var out style.Unit
+	if item.Level%2 == 0 {
+		out = item.Autospace
+	}
 	if item.Spacing.Letter == 0 {
 		// Nothing to discount, and nothing below can say otherwise: every
 		// branch of the rest adds either zero or item.Spacing.Letter, which is

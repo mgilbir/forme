@@ -196,9 +196,21 @@ type Item struct {
 	// it a run whose far edge carries an eighth of an em is an eighth of an em
 	// too wide to end a line it fits on.
 	Autospace style.Unit
-	// EdgeLetterSpacing is the letter-spacing at this run's far edge — the
-	// *logical* far edge, so the right of a left-to-right run and the left of a
-	// right-to-left one. It is already inside Width.
+	// EdgeLetterSpacing is the letter-spacing at this run's far edge — its
+	// *visual* right, whatever direction the run reads in. It is already inside
+	// Width.
+	//
+	// This said "the logical far edge, so the right of a left-to-right run and
+	// the left of a right-to-left one" and that was wrong, which is worth
+	// recording rather than quietly correcting: it is the reading the drawing
+	// contradicts. A run is drawn from its own origin accumulating glyph
+	// advances, the shaper hands an Arabic or Hebrew run's glyphs back already
+	// in visual order, and the spacing is added after each of them — so the one
+	// after the last glyph drawn is at the run's right. A right-to-left run in a
+	// "dir=rtl" block does grow leftwards when a letter-spacing is added, which
+	// looks like the gap arriving on its left and is really the block aligning
+	// the run's right edge. See layout/letterspacingboundary.go's gapNeighbour,
+	// which checked it against the display list and says the same.
 	//
 	// It is not Spacing.Letter. §8.2's gap between two characters in different
 	// elements is the innermost element containing both of them, so the spacing
