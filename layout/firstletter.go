@@ -90,7 +90,7 @@ func (b *boxBuilder) applyFirstLetter(box *Box, n *html.Node, fontSize style.Uni
 		// pseudo-element's is a second one, over the letter alone, and it is
 		// what "text-transform: uppercase" on a ::first-letter means. It is
 		// given no word boundary, because a first letter begins one.
-		if got, _ := transformText(head.Text, kind, false, languageAt(n)); got != "" {
+		if got, _ := transformText(head.Text, kind, wordClosed, languageAt(n)); got != "" {
 			head.Text = got
 		}
 	}

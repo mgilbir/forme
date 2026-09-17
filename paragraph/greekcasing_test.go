@@ -92,7 +92,7 @@ func TestNonGreekTextIsUntouchedByTheGreekRule(t *testing.T) {
 	for _, text := range []string{
 		"hello", "straße", "日本語", "Здравствуйте", "", "123 !?",
 	} {
-		want, _ := TransformText(text, TransformUppercase, false, "")
+		want, _ := TransformText(text, TransformUppercase, WordClosed, "")
 		if got := casedIn(t, text, TransformUppercase, "el"); got != want {
 			t.Errorf("%q in Greek: %q, want %q", text, got, want)
 		}
@@ -130,7 +130,7 @@ func TestTheRestOfAGreekRunIsCasedAsItWouldBeAnywhere(t *testing.T) {
 		// And the same text under no language at all gives the same answer for
 		// everything but the Greek, which is the point: only the accents are
 		// tailored.
-		plain, _ := TransformText(tc.text, TransformUppercase, false, "")
+		plain, _ := TransformText(tc.text, TransformUppercase, WordClosed, "")
 		if got := casedIn(t, tc.text, TransformUppercase, "el"); len(got) != len(plain) {
 			t.Errorf("%s: Greek gives %q (%d bytes) and no language gives %q (%d); "+
 				"the tailoring changed more than the accents",

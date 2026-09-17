@@ -13,12 +13,12 @@ import "testing"
 // alike.
 
 func upperOf(text string) string {
-	out, _ := TransformText(text, TransformUppercase, false, "")
+	out, _ := TransformText(text, TransformUppercase, WordClosed, "")
 	return out
 }
 
 func lowerOf(text string) string {
-	out, _ := TransformText(text, TransformLowercase, false, "")
+	out, _ := TransformText(text, TransformLowercase, WordClosed, "")
 	return out
 }
 

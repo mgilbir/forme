@@ -182,9 +182,9 @@ func TransformOf(value string) TextTransform {
 // It allocates once at most: "none" returns the string it was given, and the
 // case transforms build one buffer of the size of the input. A megabyte of text
 // is a megabyte of work and not a rune of garbage per character.
-func TransformText(text string, kind TextTransform, inWord bool, lang Language) (string, bool) {
+func TransformText(text string, kind TextTransform, state WordState, lang Language) (string, WordState) {
 	if text == "" {
-		return text, inWord
+		return text, state
 	}
 	// The order is the specification's and is not the order the keywords were
 	// written in: case first, then width, then size. §2.1.1's own example is
@@ -200,7 +200,7 @@ func TransformText(text string, kind TextTransform, inWord bool, lang Language) 
 		// On its own by construction — see TransformOf — so it is answered
 		// first and nothing else runs. A text node of anything but exactly one
 		// character comes back as it went in.
-		return mathAuto(text), EndsInWord(text)
+		return mathAuto(text), WordStateAfter(text, state)
 	}
 	switch kind & transformCase {
 	case TransformUppercase:
@@ -208,7 +208,7 @@ func TransformText(text string, kind TextTransform, inWord bool, lang Language) 
 	case TransformLowercase:
 		text = localeCased(text, lang, false)
 	case TransformCapitalize:
-		text = capitalizeWords(text, inWord, lang)
+		text = capitalizeWords(text, state, lang)
 	}
 	if kind&TransformFullWidth != 0 {
 		text = remapped(text, fullWidthForms[:])
@@ -216,7 +216,7 @@ func TransformText(text string, kind TextTransform, inWord bool, lang Language) 
 	if kind&TransformFullSizeKana != 0 {
 		text = remapped(text, fullSizeKana[:])
 	}
-	return text, EndsInWord(text)
+	return text, WordStateAfter(text, state)
 }
 
 // remapped replaces every character that one of the width tables names.
@@ -458,17 +458,17 @@ func lookupFullCase(r rune, table []fullCase) (string, bool) {
 // while still ending the word for everything after it: "ⅰⅰⅰ" came out unchanged
 // where "Ⅰⅰⅰ" was asked for. It is the same set isWordRune uses two lines below,
 // which is what makes the two agree about where a word begins.
-func capitalizeWords(text string, inWord bool, lang Language) string {
+func capitalizeWords(text string, state WordState, lang Language) string {
 	var out strings.Builder
 	out.Grow(len(text))
 	for i := 0; i < len(text); {
-		if !inWord && lang == "nl" {
+		if state == WordClosed && lang == "nl" {
 			// IJ is one letter of the Dutch alphabet written as two, so a word
 			// beginning with it takes two capitals. See dutchCapitalize.
 			if got, ok := dutchCapitalize(text, i); ok {
 				out.WriteString(got)
 				i += 2
-				inWord = true
+				state = WordOpen
 				continue
 			}
 		}
@@ -478,7 +478,7 @@ func capitalizeWords(text string, inWord bool, lang Language) string {
 		}
 		i += size
 
-		if !inWord && isWordRune(r) {
+		if state == WordClosed && isWordRune(r) {
 			if s, ok := lookupFullCase(r, fullTitlecase[:]); ok {
 				out.WriteString(s)
 			} else {
@@ -487,19 +487,74 @@ func capitalizeWords(text string, inWord bool, lang Language) string {
 		} else {
 			out.WriteRune(r)
 		}
-		switch {
-		case isWordRune(r):
-			inWord = true
-		case inWord && isMidWord(r) && beginsWithWordRune(text[i:]):
-			// UAX #29's WB6 and WB7: a MidLetter or MidNumLet between two
-			// letters does not end the word. "Between" is the whole of the rule,
-			// which is why this looks at what follows — "cancel·lar" is one
-			// Catalan word and "Cancel· lar" is two.
-		default:
-			inWord = false
-		}
+		state = stepWord(state, r, text[i:])
 	}
 	return out.String()
+}
+
+// WordState is what one text node leaves behind for the next: whether a word is
+// still open, and — the case a yes-or-no cannot hold — whether the character
+// that would settle it has not been seen yet.
+//
+// The third state is not a refinement. A text node ending in an apostrophe
+// leaves a word open if a letter follows it and closes one if anything else
+// does, and what follows is in the next node. Carried as a yes it set
+// "<span>a'</span><span>'b</span>" as one word and gave it one capital where
+// "a”b" in one node takes two; carried as a no it broke "don" and "'t".
+type WordState uint8
+
+const (
+	// WordClosed: the last character ended a word, so the next letter begins one.
+	WordClosed WordState = iota
+	// WordOpen: the last character was a letter or a number.
+	WordOpen
+	// WordPending: the last character was a joiner after a letter, and whether
+	// it joined depends on what the next node begins with.
+	WordPending
+)
+
+// stepWord advances "is a word still open" past one character, given what
+// follows it in the same text.
+//
+// It is one function because it is one question, and it used to be two answers.
+// capitalizeWords tracked the state as it went and EndsInWord read the last
+// character on its own, and the two disagreed about an apostrophe with nothing
+// in front of it: "'a" in one text node capitalised to "'A", and the same two
+// characters in two nodes — "<span>'</span><span>a</span>" — came out "'a",
+// because the first node was read as ending inside a word. FuzzBoundaryLines
+// found it, which is what that target is for: the same characters, cut two ways,
+// have to set the same line.
+func stepWord(state WordState, r rune, rest string) WordState {
+	if isWordRune(r) {
+		return WordOpen
+	}
+	if !isMidWord(r) {
+		return WordClosed
+	}
+	// UAX #29's WB6 and WB7: a MidLetter or MidNumLet joins a word only
+	// *between* two letters. Both sides are conditions — "cancel·lar" is one
+	// Catalan word and "cancel· lar" is two, and "'a" is one word whose letter
+	// is its first, because an apostrophe with nothing in front of it joins
+	// nothing.
+	//
+	// The side in front is WordOpen and not "a word is somehow still going":
+	// arriving here in WordPending means the character before this one was a
+	// joiner too, and a joiner is not a letter for WB6 to be between. "a''b" is
+	// two words and takes two capitals.
+	if state != WordOpen {
+		return WordClosed
+	}
+	if rest == "" {
+		// Nothing after it *here*, and the letter that would settle it is in the
+		// next text node. This is the state that cannot be written as a
+		// yes-or-no: "don'" leaves a word open if a letter follows and closes one
+		// if a joiner does, and which it is belongs to the node after this.
+		return WordPending
+	}
+	if beginsWithWordRune(rest) {
+		return WordOpen
+	}
+	return WordClosed
 }
 
 // beginsWithWordRune reports whether the next character continues a word, which
@@ -546,18 +601,26 @@ func isWordRune(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsNumber(r)
 }
 
-// EndsInWord reports whether the last character of a string continues a word,
-// which is what the next text node needs to know.
-func EndsInWord(text string) bool {
-	if text == "" {
-		return false
+// WordStateAfter is what a text node leaves behind for the next one.
+//
+// It takes the state the node began in as well as its text, and both halves of
+// that are the fix for one defect. Its predecessor read the last character alone
+// and called every joining character a word, apostrophe included, without asking
+// what was in front of it — so "'" on its own ended inside a word and the "a"
+// after it in the next node was not capitalised, while the same "'a" in one node
+// was. The last character cannot answer this: whether an apostrophe joins
+// anything depends on what is in front of it, and what is in front of it can be
+// in the node before.
+//
+// The walk is the same stepWord capitalizeWords uses, which is what keeps the
+// two from drifting apart again. See TestTheTwoWalksAgreeAboutWhereAWordEnds.
+func WordStateAfter(text string, state WordState) WordState {
+	for i := 0; i < len(text); {
+		r, size := utf8.DecodeRuneInString(text[i:])
+		i += size
+		state = stepWord(state, r, text[i:])
 	}
-	r, _ := utf8.DecodeLastRuneInString(text)
-	// A joining character at the very end of a text node has nothing after it
-	// here to be between, and the letter that would settle it is in the *next*
-	// node. Reading it as continuing the word is the answer that keeps "don" and
-	// "'t" in two nodes one word, which is the shape this is asked about.
-	return isWordRune(r) || isMidWord(r)
+	return state
 }
 
 // FreezesSpace reports whether a text-transform turns an ordinary space into a

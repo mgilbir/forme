@@ -223,7 +223,7 @@ func (l *layouter) smallCapsRuns(b *Box, runs []faceRun, want shape.Caps,
 				// where both apply cannot disagree with itself: the full
 				// mappings rather than Go's simple ones — "straße" is "STRASSE"
 				// — and the language tailorings with them.
-				next.Text, _ = transformText(part.text, paragraph.TransformUppercase, false, lang)
+				next.Text, _ = transformText(part.text, paragraph.TransformUppercase, paragraph.WordClosed, lang)
 				next.synthesised = true
 			case part.kind == caseUpper && capitals:
 				// Already the right letter, and the wrong size. "all-small-caps"
