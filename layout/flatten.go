@@ -1003,12 +1003,22 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		}
 		if p.Segment {
 			// A segment break that survived Phase I is a break the author
-			// wrote, and it ends the line as firmly as a <br> does — and ends a
-			// bidi paragraph with it, for the same reason.
+			// wrote, and it ends the line as firmly as a <br> does.
+			//
+			// Whether it ends the *bidi paragraph* with it is a second question
+			// and has a different answer for three of the characters that reach
+			// here. UAX #9 divides text into paragraphs at class B and nowhere
+			// else: a preserved newline, U+0085 and U+2029 are that, and
+			// U+000B, U+000C and U+2028 are not. A line separator is called
+			// that for the reason the paragraph separator beside it is called
+			// the other thing — see paragraph.endsBidiParagraph, and
+			// TestALineSeparatorDoesNotEndTheBidiParagraph.
 			out = append(out, inlineItem{Box: b, Face: face, Size: size, Forced: true,
 				Offset: offset, Leads: true, Above: above, Below: below,
 				Valign: frame.Valign})
-			frame.Bidi.BreakParagraph()
+			if p.EndsBidiParagraph {
+				frame.Bidi.BreakParagraph()
+			}
 			state = startOfContext()
 			continue
 		}

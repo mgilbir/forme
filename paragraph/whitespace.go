@@ -3,6 +3,7 @@ package paragraph
 import (
 	"strings"
 
+	"github.com/mgilbir/forme/bidi"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -798,6 +799,30 @@ func IsMandatoryBreak(r rune) bool {
 	}
 	return false
 }
+
+// endsBidiParagraph reports whether a character that ends a line also ends the
+// bidi paragraph, which is a different question and has a different answer for
+// three of the five.
+//
+// UAX #9 §3.3.1 divides text into paragraphs at class **B** and nowhere else.
+// Of the characters IsMandatoryBreak names, the newline, U+0085 NEXT LINE and
+// U+2029 PARAGRAPH SEPARATOR are class B; U+000B LINE TABULATION is class S and
+// U+000C FORM FEED and U+2028 LINE SEPARATOR are class WS. A line separator is
+// called that for the reason the paragraph separator beside it is called the
+// other thing.
+//
+// The difference is not academic and is what CSS2's bidi-breaking-003 is
+// written to show. Its two halves are the same text either side of one of the
+// two characters, and the expected renderings are *different*: across a
+// paragraph separator each half resolves on its own, so the neutrals between
+// the two Hebrew letters take the block's own direction; across a line
+// separator it is one paragraph, the neutrals sit between two right-to-left
+// characters, and UAX #9's N1 gives them that direction instead. The line
+// reverses.
+//
+// The class is read from this engine's own table rather than listed here, so
+// that the two cannot come to disagree about a character.
+func endsBidiParagraph(r rune) bool { return bidi.ClassOf(r) == bidi.B }
 
 // IsOtherSpaceSeparator is §4.1's term of art, and the definition is exact:
 // "all characters in the Unicode general category Zs except space (U+0020) and
