@@ -108,113 +108,127 @@ func TestAGapNeedsThePairToBeNextToEachOther(t *testing.T) {
 // this reason: without it the run "bא" is one run while measuring and two while
 // filling, no boundary rule can make those agree, and the box comes out a gap
 // wider than the line inside it.
+//
+// # Why the box is not simply the extent of the runs
+//
+// §8.2 puts a letter-spacing after a run's last character as well as between
+// them, and that last one *hangs*: it sits past the end of the line rather than
+// being width the line has to find, which is why the fill discounts it and why a
+// box shrink-wrapped around the text is that much narrower than the runs reach.
+// So "the box equals the extent" is true only of a line with nothing hanging off
+// its right, and this file's own fixture is not one — it was, while the discount
+// was taken from the last character in *logical* order, which on a line that
+// ends in Hebrew is not the character at the line's right-hand end.
+//
+// The hang is written out per fixture rather than computed, because computing it
+// is what is under test. Courier at 20px is 12px a character and the spacing is
+// 24px, so a hang is 24 and no hang is 0.
 func TestTheIntrinsicWidthAgreesWithTheLine(t *testing.T) {
-	const markup = `a<span class="ls">b&#x5d0;</span>&#x5d1;`
-	line := lineSpan(t, markup, spacedDecls)
-	box := boxWidth(t, markup, spacedDecls)
-	if box != line {
-		t.Errorf("max-content is %gpx and the line it holds is %gpx; a box "+
-			"shrink-wrapped to a width its own content does not have is a box "+
-			"with a gap down one side", box.Px(), line.Px())
-	}
-}
-
-// TestTextThatReadsOneWayIsUnchanged is the containment case, and it is most of
-// the web.
-//
-// Where nothing is reordered the visually next run is the logically next one, so
-// every answer here is the answer before this rule was written down. The
-// right-to-left row is the one worth having: a run's gap sits at its *left* when
-// it is laid out right to left, so the run across it is the visually previous
-// one — which, in text that is all one direction, is the logically next one
-// again. The two readings agree, and this is what says so.
-func TestTextThatReadsOneWayIsUnchanged(t *testing.T) {
-	// What lastRunAt measures is the gaps *between* the runs, which is what the
-	// rule is about. A gap the last run carries is past the point measured and a
-	// gap at the end of a line hangs anyway.
 	for _, tc := range []struct {
-		what, markup string
-		gaps         float64
+		markup string
+		hang   float64
+		what   string
 	}{
-		// One: the pair inside the span. The pairs either side of it belong to
-		// the div, which sets nothing.
-		{"left to right", `a<span class="ls">bc</span>d`, 1},
-		// The same, mirrored. Reordering puts the span's run at the left of the
-		// line and the div's letter at the right, and the pair between them is
-		// still the div's.
-		{"right to left", `&#x5d0;<span class="ls">&#x5d1;&#x5d2;</span>`, 1},
-		// Two, from three letters in the span.
-		{"three in the span", `a<span class="ls">bcd</span>e`, 2},
+		// The bidi fixture. Visually the line reads a, b, ב, א — so the
+		// character at its right-hand end is the span's last, and the span's
+		// spacing is what hangs.
+		{`a<span class="ls">b&#x5d0;</span>&#x5d1;`, 24,
+			"the span's last character ends up at the line's right"},
+		// The same shape with nothing to reorder, where the character at the
+		// right is the last one written and carries the paragraph's spacing.
+		{`<span class="ls">ab</span>`, 24, "a span that ends the line"},
+		{`a<span class="ls">b</span>`, 24, "a span of one character that ends the line"},
+		// And a line with no spacing anywhere, where the box is the extent.
+		{`ab`, 0, "nothing hangs"},
 	} {
-		spaced := lastRunAt(t, tc.markup, spacedDecls)
-		plain := lastRunAt(t, tc.markup, ``)
-		if got := spaced.Sub(plain).Px(); got != tc.gaps*24 {
-			t.Errorf("%s: %q came out %gpx wider than the same text without the "+
-				"declaration, want %g — that is %g gaps of 24px",
-				tc.what, tc.markup, got, tc.gaps*24, tc.gaps)
+		line := lineSpan(t, tc.markup, spacedDecls)
+		box := boxWidth(t, tc.markup, spacedDecls)
+		hang, _ := style.FromPx(tc.hang)
+		if want := line.Sub(hang); box != want {
+			t.Errorf("%s: max-content is %gpx and the line it holds reaches %gpx "+
+				"with %gpx hanging off its right, so the box should be %gpx — a box "+
+				"shrink-wrapped to a width its own content does not have is a box "+
+				"with a gap down one side",
+				tc.what, box.Px(), line.Px(), tc.hang, want.Px())
 		}
 	}
 }
 
-// TestASpacingOnTheBlockSurvivesADirectionChange is the containment case that
-// rules out the reading this one replaced.
+// TestTheSpacingThatHangsIsTheRightmostRuns is the defect the two halves above
+// were measured against, stated on a line where the answer differs.
 //
-// "Drop the gap where the two characters end up in different level runs" is the
-// obvious summary of bidi-001's assert, and CSS2's bidi-005 through bidi-010
-// disprove it: each builds a to m out of nested overrides and asks it to render
-// identically to the same letters written plainly, with a letter-spacing on the
-// paragraph. Every pair there is governed by the paragraph whichever side the
-// gap falls on, so every gap survives — and a rule that dropped them at a
-// direction change would take the line to half its width.
-func TestASpacingOnTheBlockSurvivesADirectionChange(t *testing.T) {
-	const onBlock = ` #p { letter-spacing: 24px }`
-	for _, markup := range []string{
-		`a&#x5d0;b`,
-		`a<span>&#x5d0;</span>b`,
-		`<span>a</span>&#x5d0;<span>b</span>`,
+// §8.2's spacing after a run's last character sits at the run's *visual right*
+// whatever direction the run reads — gapNeighbour checked that against the
+// display list — so what hangs off a line is the spacing of the run nothing is
+// drawn to the right of. Both the fill and the intrinsic pass asked the item
+// that comes *last*, which on a right-to-left line is the leftmost one.
+//
+// It shows only where the two runs carry different spacings, which is why no
+// fixture had it: with one value on the paragraph, whichever run is asked gives
+// the same number. Here one span has 2px and the other 16px, and the difference
+// between asking the right run and the wrong one is fourteen pixels of text
+// outside a float that was shrink-wrapped around it.
+//
+// The oracle is the pair: the same two spans in the two source orders, laid out
+// in the two directions, make *the same visual line* twice over — same runs,
+// same widths, same order — so they must shrink-wrap to the same width. That is
+// a stronger statement than any single number, and three of the four were wrong.
+func TestTheSpacingThatHangsIsTheRightmostRuns(t *testing.T) {
+	const sheet = `#p { font-family: Courier; font-size: 20px; float: left }` +
+		`#a { letter-spacing: 16px } #b { letter-spacing: 2px }`
+	width := func(markup, dir string) style.Unit {
+		t.Helper()
+		f := find(t, layoutOf(t, 100000,
+			`<div id="p" style="`+dir+`">`+markup+`</div>`, sheet), "p")
+		if len(f.Lines) != 1 {
+			t.Fatalf("%q under %q laid out as %d lines", markup, dir, len(f.Lines))
+		}
+		return f.ContentRect().W
+	}
+	const (
+		aFirst = `<span id=a>&#x5d0;&#x5d1;&#x5d2;</span> <span id=b>abc</span>`
+		bFirst = `<span id=b>abc</span> <span id=a>&#x5d0;&#x5d1;&#x5d2;</span>`
+	)
+	want := width(aFirst, "direction: ltr")
+	for _, tc := range []struct{ markup, dir string }{
+		{aFirst, "direction: rtl"},
+		{bFirst, "direction: ltr"},
+		{bFirst, "direction: rtl"},
 	} {
-		spaced := lastRunAt(t, markup, onBlock)
-		plain := lastRunAt(t, markup, ``)
-		// Three runs, so two gaps between them, and both are the block's. That
-		// is the whole of the claim — a direction change moves *which pair* a
-		// gap is asked about and cannot change the answer when one element
-		// governs them all.
-		if got := spaced.Sub(plain).Px(); got != 48 {
-			t.Errorf("%q put its last character %gpx further along with the "+
-				"block's letter-spacing, want 48 — two gaps, and a direction "+
-				"change removes neither", markup, got)
+		if got := width(tc.markup, tc.dir); got != want {
+			t.Errorf("%q under %q shrink-wraps to %v and the same visual line "+
+				"written the other way round to %v; the spacing that hangs is the "+
+				"rightmost run's, and the same line has the same rightmost run",
+				tc.markup, tc.dir, got, want)
 		}
 	}
-}
-
-// TestVisualPositionsInvertsTheOrder is a unit test rather than a document, and
-// it is one because no document could be built to catch what it catches.
-//
-// LineVisualOrder gives the items in the order they are drawn; the walk here
-// needs the other direction, a position per item. Getting the inversion
-// backwards is invisible to every fixture in this file, and to the suite: L2's
-// reordering is a reversal of a contiguous block, a reversal is its own inverse,
-// and so is any single one of them. Only a permutation built from reversals at
-// two different levels tells the two apart, and putting one on a page means
-// nesting overrides three deep for a distinction nothing else in the file is
-// about.
-func TestVisualPositionsInvertsTheOrder(t *testing.T) {
-	// Position 0 draws item 0, position 1 draws item 3, and so on.
-	order := []int{0, 3, 1, 2}
-	// So item 1 is drawn third, item 2 fourth and item 3 second.
-	want := []int{0, 2, 3, 1}
-	got := visualPositions(order, len(order))
-	if len(got) != len(want) {
-		t.Fatalf("got %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("item %d is at position %d, want %d (whole answer %v, want %v)",
-				i, got[i], want[i], got, want)
+	// And what the width *is*, so that four boxes agreeing about the wrong
+	// number would not pass.
+	//
+	// It is read off the display list rather than written down: the box is the
+	// ink the line reaches, less the spacing of the run at its right-hand end,
+	// which is the sentence this whole file is about turned into arithmetic. A
+	// number worked out by hand here would only be this same sum done less
+	// carefully — and the one this test was written with was wrong.
+	for _, dir := range []string{"direction: ltr", "direction: rtl"} {
+		f := find(t, layoutOf(t, 100000,
+			`<div id="p" style="`+dir+`">`+aFirst+`</div>`, sheet), "p")
+		var lo, hi style.Unit
+		var rightmost TextRun
+		for i, r := range f.Lines[0].Runs {
+			if i == 0 || r.X < lo {
+				lo = r.X
+			}
+			if end := r.X.Add(r.Width); i == 0 || end > hi {
+				hi, rightmost = end, r
+			}
 		}
-	}
-	// And a nil order is the logical one, which the walk reads as "no table".
-	if visualPositions(nil, 4) != nil {
-		t.Error("a nil order produced a table; the logical order needs none")
+		ink := hi.Sub(lo)
+		hang := rightmost.LetterSpacing
+		if got := width(aFirst, dir); got != ink.Sub(hang) {
+			t.Errorf("under %q the line reaches %v with %v hanging off the run at "+
+				"its right, so the box should be %v and is %v",
+				dir, ink, hang, ink.Sub(hang), got)
+		}
 	}
 }
