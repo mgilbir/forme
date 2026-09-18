@@ -34,6 +34,15 @@ func TestAPropertyWithNothingToApplyToIsReportedWithoutClaimingThePageIsWrong(t 
 		"overscroll-behavior: contain",
 		"scroll-snap-type: x mandatory",
 		"scroll-snap-align: center",
+		// And the geometry that says where a box would come to rest, which is
+		// the half of scroll snapping that looks like layout and is not:
+		// "scroll-margin" is not a margin and "scroll-padding" is not padding.
+		"scroll-margin: 20px",
+		"scroll-margin-block-start: 1em",
+		"scroll-padding: 10px",
+		"scroll-padding-inline-end: 2em",
+		"overflow-anchor: none",
+		"scrollbar-color: red blue",
 		// Change over time, of which a page rendered once has none.
 		"transition: all 1s",
 		"transition-duration: 2s",
@@ -75,6 +84,12 @@ func TestAPropertyThatWouldHaveChangedThePageIsStillUnsupported(t *testing.T) {
 		"mix-blend-mode: multiply",
 		"text-emphasis: filled dot",
 		"clip-path: circle(50%)",
+		// The two scrollbar properties that are *not* in the table, which is the
+		// line it draws: a browser reserves a gutter for "stable" and takes the
+		// bar away for "none", and either moves the text. Only the colour of one
+		// moves nothing.
+		"scrollbar-width: none",
+		"scrollbar-gutter: stable",
 	} {
 		f, ok := findingFor(t, decl)
 		if !ok {

@@ -134,13 +134,29 @@ var inertValues = map[string]inertValue{
 	// across two of them (see page.go). So the box the author did not want split
 	// is not split, which is what the declaration asked for.
 	//
-	// The other break properties are not here and must not join them.
-	// "page-break-before: always" asks for a break this engine cannot make, and
-	// an author who wrote one would get a page that runs on.
 	"page-break-inside": {produced: "auto", also: "avoid",
 		because: "nothing is fragmented, so no box is broken inside"},
 	"break-inside": {produced: "auto", also: "avoid",
 		because: "nothing is fragmented, so no box is broken inside"},
+
+	// The other four join them for "auto" and "avoid", and the line between
+	// what is here and what is not is the whole of why they were kept out at
+	// first. "always" and "page" ask for a break this engine cannot make, and
+	// an author who wrote one gets a page that runs on: those stay reported.
+	//
+	// "avoid" asks for *no* break and gets none, which is the same argument the
+	// two entries above already make about break-inside — the box the author
+	// did not want split is not split. "auto" asks for neither: it is the
+	// initial value and means "break here if the fragmentation wants to", and
+	// where nothing fragments it is the page that is already there.
+	//
+	// Both were being reported for a difference that does not exist, and
+	// documents write them — a reset saying "let this break normally" is the
+	// same defensive shape as the textarea rule above.
+	"break-before":      {produced: "auto", also: "avoid", because: breakAsksForNothing},
+	"break-after":       {produced: "auto", also: "avoid", because: breakAsksForNothing},
+	"page-break-before": {produced: "auto", also: "avoid", because: breakAsksForNothing},
+	"page-break-after":  {produced: "auto", also: "avoid", because: breakAsksForNothing},
 
 	// CSS Multi-column 1's four are not here any more. They are registered
 	// properties now and layout reads them — see layout/multicol.go — so the
@@ -207,6 +223,115 @@ var inertValues = map[string]inertValue{
 	"touch-action":        {produced: "auto", because: "there is no touch"},
 	"scroll-behavior":     {produced: "auto", because: "there is nothing to scroll"},
 	"overscroll-behavior": {produced: "auto", because: "there is nothing to scroll"},
+
+	// The rest of the defensive reset, and it is the same shape as the textarea
+	// rule at the top of this file: a sheet that says "nothing here is doing
+	// anything" property by property. Every one of these was reported, and each
+	// report said a declaration had been dropped when there was no effect in it
+	// to drop.
+
+	// CSS Backgrounds 3 §6 and CSS Text Decoration 4 §6. Nothing is drawn behind
+	// a box or behind a glyph, so a declaration asking for no shadow asks for the
+	// page that is already there. A shadow that asks for something stays
+	// reported: an author who wrote one gets a flat page instead.
+	"box-shadow":  {produced: "none", because: "no shadow is drawn behind a box"},
+	"text-shadow": {inherits: true, produced: "none", because: "no shadow is drawn behind text"},
+
+	// CSS UI 4 §8.1 and CSS Contain 2 §4. A page laid out once has no pointer to
+	// put a cursor under, and it renders every box it lays out rather than
+	// skipping any — "visible" and "none" are what that comes to. The values
+	// these decline stay reported: "content-visibility: hidden" asks for a
+	// subtree not to be painted, and this paints it.
+	"cursor":             {inherits: true, produced: "auto", because: "there is no pointer, so no cursor is chosen"},
+	"content-visibility": {produced: "visible", because: "every box is laid out and painted"},
+	"contain":            {produced: "none", because: "nothing is contained"},
+
+	// CSS Compositing 1 §3 and §4, and CSS Filter Effects 2 §2. Fills are
+	// composited in source order and nothing is blended with what is under it,
+	// which is what "normal" asks for; with no blending there is nothing for an
+	// isolated group to hold apart, and nothing filters what is behind a box.
+	"mix-blend-mode":  {produced: "normal", because: "nothing is blended with what is under it"},
+	"isolation":       {produced: "auto", because: "nothing is blended, so there is no group to isolate"},
+	"backdrop-filter": {produced: "none", because: "nothing behind a box is filtered"},
+
+	// CSS Masking 1 §4 and §6. A box is painted whole.
+	"clip-path": {produced: "none", because: "nothing is clipped to a shape"},
+	"mask":      {produced: "none", because: "nothing is masked"},
+
+	// CSS Transforms 2 §3 and §5. The engine transforms nothing — "transform"
+	// above says so — and a perspective with nothing to see through it is the
+	// same fact again.
+	//
+	// transform-origin is the one property here whose *every* value is inert, and
+	// it is inert for a reason rather than by luck: the property does not do
+	// anything on its own. It names the point a transform turns about, so a
+	// document that declares it either declares a transform too — which is
+	// reported, at the declaration, by the entry above — or declares an origin for
+	// a transformation that was never asked for. Either way nothing is lost by
+	// this being silent, and every spelling of the same point ("center", "50%
+	// 50%", "top left", "0 0") is one fewer report of a difference that is not
+	// there. If transform is ever implemented, this entry has to go with it.
+	"perspective":      {produced: "none", because: "there is no perspective to see through"},
+	"transform-origin": {always: true, because: "nothing is transformed, so no transformation has an origin"},
+
+	// CSS Text Decoration 4 §3.2 and §2.5, and CSS Fonts 4 §4.5 and §6.9.
+	//
+	// Two of these are the hyphens trap and the text-decoration-skip-ink case
+	// respectively, which is why they are written out rather than listed.
+	//
+	// text-underline-position: "auto" leaves the position to the UA, and
+	// "from-font" requires it to come from the face's own metrics. This engine
+	// takes it from the face's post table whenever the face states one, so it
+	// satisfies both — the permitting value and the demanding one, which is what
+	// "also" is for. See TestUnderlineComesFromTheFaceThatStatesOne. "under" asks
+	// for the line below the descenders and is still reported.
+	//
+	// font-optical-sizing: the initial value is "auto", and it is *not* what this
+	// engine produces. "auto" asks for the face's optical size axis to be set from
+	// the font size, and this engine applies no variation beyond the instance it
+	// was given — see font-variation-settings above, and TestKerningIsApplied's
+	// neighbours in the shape package. So what it produces is "none", and "auto"
+	// is the value that is still reported. Exactly the hyphens case, found by
+	// looking for it.
+	"text-underline-position": {inherits: true, produced: "auto", also: "from-font",
+		because: "the underline is placed from the face's own metrics"},
+	"font-optical-sizing": {inherits: true, produced: "none", initial: "auto",
+		because: "no variation is applied beyond the instance, optical sizing included"},
+	"text-emphasis":       {inherits: true, produced: "none", because: "no emphasis mark is drawn"},
+	"text-emphasis-style": {inherits: true, produced: "none", because: "no emphasis mark is drawn"},
+	"font-variant-alternates": {inherits: true, produced: "normal",
+		because: "no alternate glyphs are selected"},
+
+	// CSS Scroll Snap 1 §6 and CSS UI 4 §5.2. There is nothing to scroll, and an
+	// outline drawn at the border edge is what a zero offset asks for. A non-zero
+	// offset moves the ring and is still reported.
+	// CSS UI 4 §6.1. This engine's controls take their chrome from its own user
+	// agent stylesheet — a field is a bordered inline-block, a button a raised
+	// box — and it draws that whether or not a document asks. "auto" is a
+	// document asking for it, which is the page that is already there.
+	//
+	// "none" is the opposite request and stays reported, because it is the one
+	// that would change something: an author writing it wants the field stripped
+	// back to a plain box, and the border and the padding stay. See uastyle.go's
+	// text-entry chrome.
+	"appearance": {produced: "auto", because: "a control keeps the chrome the user agent sheet gives it"},
+
+	"scroll-snap-type": {produced: "none", because: "there is nothing to scroll, so nothing snaps"},
+
+	// The rest of the scrolling geometry, all of which nomedium.go names too.
+	//
+	// These four are about the *report* rather than about the difference. The
+	// table next door already says no value of them can change a page, so
+	// nothing here claims a page came out wrong either way; what these add is
+	// silence for the value that asks for the geometry that is already there,
+	// which is the value a reset writes. A stylesheet saying "scroll-margin: 0"
+	// is telling a browser not to hold a box off the edge it snaps to, and there
+	// is no edge.
+	"scroll-margin":   {produced: "0", because: "nothing scrolls, so no box has a snap area"},
+	"scroll-padding":  {produced: "auto", because: "nothing scrolls, so there is no scrollport to inset"},
+	"overflow-anchor": {produced: "auto", because: "nothing scrolls and nothing moves after layout"},
+	"scrollbar-color": {produced: "auto", because: "there is no scrollbar to colour"},
+	"outline-offset":  {produced: "0", because: "an outline is drawn at the border edge"},
 }
 
 // isInertDeclaration reports whether a declaration of an unimplemented property
@@ -263,6 +388,11 @@ func isInertDeclaration(name string, vals []css.ComponentValue) bool {
 	// length, and "border-radius: 0px" is as inert as "border-radius: 0".
 	return entry.produced == "0" && isZeroLength(value)
 }
+
+// breakAsksForNothing is the reason the four entries above share.
+const breakAsksForNothing = "nothing is fragmented, so a break that is " +
+	"permitted rather than demanded, or refused rather than demanded, changes " +
+	"no page"
 
 // isZeroLength reports whether a value is a zero length however it is spelled.
 func isZeroLength(value string) bool {
