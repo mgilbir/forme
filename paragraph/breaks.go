@@ -93,9 +93,14 @@ type Piece struct {
 	// own width.
 	Space       bool
 	Collapsible bool
-	TrimAtEnd   bool
-	Tab         bool
-	Segment     bool
+	// EndsBidiParagraph says this break ends the bidi paragraph as well as the
+	// line, which is true of a preserved newline and of two of the five
+	// mandatory breaks and false of the other three. See endsBidiParagraph,
+	// which reads UAX #9's class rather than listing the characters again.
+	EndsBidiParagraph bool
+	TrimAtEnd         bool
+	Tab               bool
+	Segment           bool
 	// LastResort marks an opportunity a line reaches for only when it has no
 	// other: it is offered, and everything else on the line is preferred to it.
 	//
@@ -674,9 +679,40 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 			// unicode category CC, must be visible" — and line-breaking-022
 			// wants the same character to end a line. Swallowing it satisfies
 			// the second and fails the first three.
-			cur.WriteRune(r)
+			// Where the character goes, which is the difference between a
+			// control character and a separator.
+			//
+			// §5.1's note is written about the first — "control characters other
+			// than [tab, newline] ... are otherwise rendered as a visible glyph"
+			// — and the suite asks for it by name: three of the
+			// white-space/control-chars-0XX documents are mismatch references
+			// against a blank page, one of them saying "U+000C, which is in the
+			// unicode category CC, must be visible". So a control character is
+			// written into the piece that ends the line and is set with it.
+			//
+			// U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR are not
+			// control characters. They are categories Zl and Zp, they exist to
+			// separate, and nothing draws a separator. They go where a newline
+			// goes: on the break piece itself, whose text layout does not set —
+			// so the character is not lost from the pieces and not put on the
+			// page either. Written into the piece before them, they were two
+			// glyphs a document does not contain, which is what CSS2's
+			// bidi-breaking-003 sees.
+			//
+			// "The pieces spell the input" is the invariant that decides this
+			// rather than either reading of §5.1, and it is one a fuzzer found:
+			// see TestAMandatoryBreakKeepsItsCharacter and
+			// testdata/fuzz/FuzzSplitAtBreaks. Swallowing the separator outright
+			// satisfies the reftest and loses a character.
+			carried := ""
+			if unicode.Is(unicode.Cc, r) {
+				cur.WriteRune(r)
+			} else {
+				carried = string(r)
+			}
 			flush()
-			emit(Piece{Space: true, Segment: true})
+			emit(Piece{Text: carried, Space: true, Segment: true,
+				EndsBidiParagraph: endsBidiParagraph(r)})
 			breakNext = true
 
 		case r == '\n' || r == '\r':
@@ -689,7 +725,7 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 				i++
 			}
 			flush()
-			emit(Piece{Text: "\n", Space: true, Segment: true})
+			emit(Piece{Text: "\n", Space: true, Segment: true, EndsBidiParagraph: true})
 			breakNext = true
 
 		case r == '\t' && !ws.Collapse:

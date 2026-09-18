@@ -1346,7 +1346,28 @@ const wptEnv = "WPT_TESTS"
 // The alternative was to leave "<body background>" doing nothing, which is a
 // silent wrong page on every document that uses it, in exchange for a number.
 // A ratchet that buys its number that way is measuring the wrong thing.
-const wptCleanPassBaseline = 5981
+// **5981 to 5982, for U+2028 LINE SEPARATOR**, and it is two corrections in one
+// document rather than a feature.
+//
+// bidi-breaking-003 writes the same text either side of U+2028 and again either
+// side of U+2029, and asks for the two to render *differently*. UAX #9 §3.3.1
+// divides text into bidi paragraphs at class B and nowhere else: U+2029 is
+// class B and U+2028 is class WS, so across the line separator it is one
+// paragraph, the neutrals between the two Hebrew letters sit between two
+// right-to-left characters, and N1 gives them that direction. This engine ended
+// a bidi paragraph at every mandatory break, so both halves read alike and one
+// of them was wrong.
+//
+// The second is that it *set* the two characters. §5.1's note is about control
+// characters — the suite's own control-chars documents say "U+000C, which is in
+// the unicode category CC, must be visible" — and U+2028 and U+2029 are
+// categories Zl and Zp. A separator is consumed by the break it makes, as a
+// newline is, and setting them put two glyphs on the page the text does not
+// contain.
+//
+// Neither correction wins the document alone; the direction is wrong without
+// the second and the glyph count is wrong without the first.
+const wptCleanPassBaseline = 5982
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
