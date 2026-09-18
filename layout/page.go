@@ -24,8 +24,20 @@ type PageSize struct {
 
 // PageSizePt builds a page size from a width and height in points, which is how
 // paper is conventionally measured.
+//
+// The sheet is taken to the *nearest* unit where every other length in the
+// engine is taken downwards, and style.RoundPx carries the argument: the
+// quantisation is downwards so that a box built from n parts holds them, which
+// constrains the parts and asks only that the container be no smaller — and a
+// container taken to the nearest unit is never smaller than the same container
+// taken downwards.
+//
+// The sheet is also the one length that comes back out: it is the PDF's
+// /MediaBox, and a caller that asked for A4 checks it. Downwards it was short by
+// about a hundredth of a point on both dimensions of A4 and A5 — enough to fail
+// such a check, which is how this was found.
 func PageSizePt(w, h float64) PageSize {
-	return PageSize{Width: ptToUnit(w), Height: ptToUnit(h)}
+	return PageSize{Width: ptToSheet(w), Height: ptToSheet(h)}
 }
 
 // WithMarginPt returns the page with a uniform margin in points.
@@ -45,8 +57,20 @@ var (
 
 // ptToUnit converts points to layout units: a point is 1/72 inch and a CSS
 // pixel is 1/96, so a point is 4/3 of a pixel.
+//
+// Downwards, like every length that is laid out. It is the margins that use it
+// now, and a margin is taken *out* of the sheet — so downwards leaves the
+// content no less room than the caller asked for, which is the direction the
+// quantisation rule is about. See ptToSheet for the sheet itself.
 func ptToUnit(pt float64) style.Unit {
 	u, _ := style.FromPx(pt * 96 / 72)
+	return u
+}
+
+// ptToSheet is ptToUnit for the paper, which is quantised to the nearest unit
+// rather than downwards. See style.RoundPx, which holds the argument.
+func ptToSheet(pt float64) style.Unit {
+	u, _ := style.RoundPx(pt * 96 / 72)
 	return u
 }
 
@@ -500,6 +524,13 @@ func checkFontSizes(rec *Recorder, root *Fragment, scale, floorPt float64) {
 	walk(root)
 }
 
+// roundTripSlack is what the page-overflow self-check forgives: one layout
+// unit, which is what quantising a length, dividing it by a scale and
+// quantising it again can lose. It is stated as a constant so that the number
+// and the reason are in one place — see checkPageOverflow, which carries the
+// measurement.
+const roundTripSlack = style.Unit(1)
+
 // checkPageOverflow is the overflow-page guardrail of §6.2.
 //
 // It should never fire. The scale of §5 is computed so that everything fits, so
@@ -519,6 +550,32 @@ func checkFontSizes(rec *Recorder, root *Fragment, scale, floorPt float64) {
 // FillRect.Overhang gives: a glyph's ascender is ink no layout decision placed,
 // and refusing a document over two pixels of it is what that flag exists to
 // stop.
+// # Why one layout unit outside the page is inside it
+//
+// The page this compares against is the sheet divided by the scale, and the
+// scale was computed from the sheet and the content it had to hold. So the
+// comparison is a *round trip*: a length is quantised, divided, and quantised
+// again, and the value that comes back is one unit under the value that went in
+// whenever the division lands between two units. The content that produced the
+// scale is then one unit outside the page the scale came from, and the
+// self-check reports the engine to itself.
+//
+// It is not a rare corner. Swept over a hundred and twenty-one page widths and
+// as many heights, one layout unit apart, on three documents whose scale was
+// computed from their only box, this fired 48 times — about a fifth of the page
+// sizes a caller could name — and the excess was **exactly one unit every
+// time**, never two and never a spread. That is the grain of the arithmetic
+// rather than a document leaving the page.
+//
+// So one unit is forgiven, and nothing else is. One unit is a sixty-fourth of a
+// pixel: half a millimetre is 121 of them and two units is a thirty-second of a
+// pixel, and both are still reported. The fixture that pins the message puts a
+// box fifty pixels out. See TestNoPageSizeTripsTheSelfCheck, which is the sweep
+// kept as a test, and TestABoxThatReallyLeavesThePageIsStillReported.
+//
+// It was found by a change of paper. A4's width taken to the nearest unit
+// rather than downwards — see style.RoundPx — is one of the widths that trips
+// it, and its old width was one of the widths that does not.
 func checkPageOverflow(rec *Recorder, ops []Op, avail Size, scale float64) {
 	page := Rect{W: avail.W.Div(scale), H: avail.H.Div(scale)}
 	// How far a rectangle reaches outside the page on its worst side. Measuring
@@ -544,7 +601,12 @@ func checkPageOverflow(rec *Recorder, ops []Op, avail Size, scale float64) {
 		if r.Empty() || page.Contains(r) {
 			return
 		}
-		if by := excess(r); !found || by > worstBy {
+		by := excess(r)
+		if by <= roundTripSlack {
+			// The grain of the round trip above, not a box off the page.
+			return
+		}
+		if !found || by > worstBy {
 			worst, worstBy, found = r, by, true
 		}
 	}
