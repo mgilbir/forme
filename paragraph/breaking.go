@@ -186,6 +186,11 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 	// *beginning of a line* is about the text. "<span style='margin-left: 5px'>
 	// x</span>" sets one space in from five pixels, not from nine.
 	content := false
+	// Which of the items placed so far is drawn furthest right, which is where
+	// the line's own trailing spacing hangs. See Rightmost, and layout's
+	// widthsOf, which keeps the same account so that a box shrink-wrapped
+	// around a line is the width the fill measured it to.
+	var tail Rightmost
 	// A break opportunity that fell on an inline box's leading edge is a break
 	// before the box, and the box's margin travels to the next line with the
 	// word it pushes along. That decision cannot be taken when the margin is
@@ -447,7 +452,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// candidate at all, that no inline box's border stands in front of it,
 		// that the line has content to end — is the same question for both.
 		if item.MayHangEnd && !afterBorder && content && !item.NoWrap &&
-			(item.MustHangEnd || overflows(used, item, width)) {
+			(item.MustHangEnd || overflows(used, item, width, tail)) {
 			item.Hangs, item.HangEnd = true, true
 			hungAt = len(line)
 			line = append(line, item)
@@ -465,11 +470,12 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// and trimming changes the type. Nothing in the suite writes one, and
 		// the order is stated rather than left to fall out of which branch came
 		// first.
-		if item.TrimEnd != 0 && content && !item.NoWrap && overflows(used, item, width) &&
+		if item.TrimEnd != 0 && content && !item.NoWrap && overflows(used, item, width, tail) &&
 			used.Add(item.Width).Sub(item.TrimEnd) <= width {
 			item.Width = item.Width.Sub(item.TrimEnd)
 			item.TrimEnd = 0
 			line = append(line, item)
+			tail.Add(item.Level, trailingSpacing(item))
 			used = used.Add(item.Width)
 			continue
 		}
@@ -486,7 +492,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// "<span style='margin-left: 200px'><div class=content>" in a container
 		// exactly 200px wide.
 		if !item.NoWrap && !item.Hangs && !isTailSpace(item) && i < tailFrom && item.BreakBefore &&
-			content && overflows(used.Add(insetsAfter(items, i)), item, width) {
+			content && overflows(used.Add(insetsAfter(items, i)), item, width, tail) {
 			// Ending here costs the hyphen as well, where the opportunity is one
 			// a soft hyphen offered. If that does not fit, this is not a place
 			// the line may end at all and it goes back to one that is — the
@@ -516,7 +522,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// not fit — so the line ends where the box began and the box's leading
 		// margin goes with it.
 		if !item.NoWrap && !item.Hangs && i < tailFrom && !item.BreakBefore && !item.Inset &&
-			insetAt >= 0 && overflows(used.Add(insetsAfter(items, i)), item, width) {
+			insetAt >= 0 && overflows(used.Add(insetsAfter(items, i)), item, width, tail) {
 			return trimLineEdge(line[:insetLine]), insetAt, 0, outOfFlow[:insetFlow], false
 		}
 
@@ -559,7 +565,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// through.
 		if (item.Space || item.AtomicBox == nil) && !item.Collapsible &&
 			!item.Hangs && i < tailFrom && !item.Inset &&
-			(!item.BreakBefore || item.NoWrap) && backAt >= 0 && overflows(used, item, width) {
+			(!item.BreakBefore || item.NoWrap) && backAt >= 0 && overflows(used, item, width, tail) {
 			return trimLineEdge(line[:backLine]), backAt, 0, outOfFlow[:backFlow], false
 		}
 
@@ -595,7 +601,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// Dropping the conjunct therefore moves nothing, which is why it is
 		// recorded here rather than left as an implied claim.
 		if item.BreakWord && !item.NoWrap && !item.Hangs && i < tailFrom && !item.Inset && !item.Tab &&
-			insetAt < 0 && backAt < 0 && overflows(used, item, width) {
+			insetAt < 0 && backAt < 0 && overflows(used, item, width, tail) {
 			// The offset is into items[i]. It is only the cursor's offset away
 			// from that when this *is* the item the cursor pointed at: a line
 			// that began at a float and reached its first text later is at
@@ -658,7 +664,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// are two.
 		if !item.BreakWord && !item.NoWrap && !item.Hangs && i < tailFrom &&
 			!item.Inset && !item.Tab && insetAt < 0 && backAt < 0 &&
-			breaksAfterLast(line) && overflows(used.Add(insetsAfter(items, i)), item, width) {
+			breaksAfterLast(line) && overflows(used.Add(insetsAfter(items, i)), item, width, tail) {
 			base := 0
 			if i == from {
 				base = fromByte
@@ -666,7 +672,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 			return trimLineEdge(line), i, base, outOfFlow, false
 		}
 
-		if overflows(0, item, width) && !content && !item.Space && !item.NoWrap && !item.Inset {
+		if overflows(0, item, width, Rightmost{}) && !content && !item.Space && !item.NoWrap && !item.Inset {
 			// An inset is not text and has no text to name in the report. A
 			// margin wider than the line is also not the fault the report is
 			// about — nothing is clipped, the content is simply pushed past the
@@ -743,6 +749,11 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 			content = true
 		}
 		line = append(line, item)
+		if item.Abs == nil && item.Float == nil {
+			// Out of flow draws nothing on this line, so it is neither the
+			// rightmost thing on it nor anything for a level to stand between.
+			tail.Add(item.Level, trailingSpacing(item))
+		}
 		used = used.Add(item.Width)
 	}
 	return trimLineEdge(line), i, 0, outOfFlow, false
@@ -774,8 +785,13 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 // not have. The harness loads a document's own @font-face now and those three
 // are untainted failures, so they are reachable and this is no longer the whole
 // of what they need. See forme-next-leads.
-func overflows(used style.Unit, item Item, width style.Unit) bool {
-	return used.Add(item.Width).Sub(trailingSpacing(item)) > width
+func overflows(used style.Unit, item Item, width style.Unit, tail Rightmost) bool {
+	// The spacing that would hang if the line ended here is the spacing of
+	// whatever is drawn furthest *right* once this item is placed, which on a
+	// right-to-left line is not this item. The tracker is a value, so placing
+	// the candidate in it answers the question without committing to it.
+	tail.Add(item.Level, trailingSpacing(item))
+	return used.Add(item.Width).Sub(tail.Tail()) > width
 }
 
 // trailingSpacing is the letter-spacing after an item's last character, which is
@@ -793,7 +809,50 @@ func TrailingSpacing(item Item) style.Unit {
 	// §8.1's ideograph spacing sits at the far edge of the run it was added to,
 	// and is between two characters that a line break puts on different lines.
 	// Two characters on different lines are not adjacent and get no gap.
-	out := item.Autospace
+	//
+	// "Far edge" is the *visual* right of the run and not its logical end, and
+	// for a right-to-left run those are opposite ends. insertAutospace puts the
+	// gap there because that is where it lands: a run's glyphs are drawn from
+	// its origin rightwards whatever their direction, so width added to a run
+	// appears past its rightmost glyph — which is what sets the gap between the
+	// run and whatever is drawn to its right.
+	//
+	// A line ends at the run's visual right only where the run reads that way.
+	// On a right-to-left line the last run is the *leftmost* one, so the gap on
+	// it is between it and the run before it — both on this line, and the gap is
+	// therefore inside the line rather than hanging off the end of it.
+	// Discounting it made a line, and a box shrink-wrapped to one, an eighth of
+	// an em narrower than the text it holds: "㌱ب" in a float came out 24px wide
+	// around 26.5px of content, with the Arabic letter drawn past the left edge
+	// of the box that was sized for it. FuzzShrinkToFit found it; see
+	// TestTheIdeographGapInsideARightToLeftLineIsNotDiscounted.
+	//
+	// The letter-spacing term below is not conditioned the same way, and not
+	// because §8.2's gap sits anywhere else. It does not: the spacing is placed
+	// into the glyph advances, and a run's glyphs are drawn from its origin
+	// rightwards whatever they read, so that gap is at the run's visual right
+	// too. layout/letterspacingboundary.go's gapNeighbour says so and says it
+	// was checked against the display list rather than reasoned about, "because
+	// the reasoning is easy to get backwards". Item.EdgeLetterSpacing's own
+	// comment has it as the logical far edge and is wrong; it is corrected there.
+	//
+	// What differs is which item carries the gap. A run's own trailing spacing
+	// is at its own right edge, so an item that carries one is the rightmost
+	// thing on the line whenever it is last. An ideograph gap is carried by the
+	// run to the *left* of the boundary it belongs to — insertAutospace widens
+	// the earlier of the two in visual order — so the item that carries one is
+	// never the rightmost, and on a right-to-left line it can still be the last.
+	// That is the whole of the difference, and it is why this term is
+	// conditioned and that one is not.
+	//
+	// The letter-spacing term has a question of its own on a right-to-left line,
+	// which is not this defect and is not answered here: the *measure* asks the
+	// last item on the line for its trailing spacing, and on such a line the
+	// last item is not the rightmost one. See the commit that follows this.
+	var out style.Unit
+	if item.Level%2 == 0 {
+		out = item.Autospace
+	}
 	if item.Spacing.Letter == 0 {
 		// Nothing to discount, and nothing below can say otherwise: every
 		// branch of the rest adds either zero or item.Spacing.Letter, which is
@@ -1197,3 +1256,77 @@ func insetsAfter(items []Item, i int) style.Unit {
 	}
 	return out
 }
+
+// Rightmost follows which of the items on a line is drawn furthest to the
+// right, which is where the line's own trailing spacing hangs.
+//
+// # Why a line needs this at all
+//
+// §8.2's letter-spacing and §8.1's ideograph gap both sit at a run's *visual
+// right* whatever direction the run reads — layout/letterspacingboundary.go's
+// gapNeighbour says so and says it was checked against the display list. So
+// what hangs off a line, and is therefore not width the line has to find, is
+// the spacing of the run nothing is drawn to the right of.
+//
+// On a left-to-right line that is the last item and the question does not
+// arise. On a right-to-left one the last item is the *leftmost*, and asking it
+// measures the line against a gap that is inside it. Where the two runs carry
+// different spacings the difference is the whole of the difference between
+// them: a float holding "<span letter-spacing:2px>abc</span>
+// <span letter-spacing:16px>אבג</span>" under "direction: rtl" was measured
+// against 2px and hung 16px, and came out fourteen pixels narrower than its own
+// text.
+//
+// # Why it is a tracker and not a reordering
+//
+// The obvious implementation asks for the line's visual order, which is O(n) and
+// is asked once per candidate the fill considers — quadratic in the items of a
+// line, on the path that is already the engine's hottest.
+//
+// It is not needed. For two positions i < k the one drawn further right is
+// decided by the *lowest level between them*: even means the text reads left to
+// right at that level and k is to the right, odd means it reads right to left
+// and k is to the left. That is UAX #9 L2 read for a single pair rather than
+// applied to the whole line, and it makes the running answer O(1) per item — the
+// lowest level since the current rightmost, and one comparison.
+type Rightmost struct {
+	has  bool
+	tail style.Unit
+	min  int
+}
+
+// Add places the next item of a line, in logical order.
+//
+// level is its embedding level and tail is the spacing that would hang if this
+// item were the one nothing is drawn to the right of.
+func (r *Rightmost) Add(level int, tail style.Unit) {
+	if !r.has {
+		r.has, r.tail, r.min = true, tail, level
+		return
+	}
+	m := r.min
+	if level < m {
+		m = level
+	}
+	if m%2 == 0 {
+		// Left to right at the lowest level between them, so this item is drawn
+		// to the right of the one that held the place.
+		r.tail, r.min = tail, level
+		return
+	}
+	// Right to left, so the item that held the place keeps it — and the lowest
+	// level now stands between *it* and whatever comes next.
+	r.min = m
+}
+
+// Tail is the spacing that hangs off the end of the line, or zero where nothing
+// has been placed.
+func (r Rightmost) Tail() style.Unit {
+	if !r.has {
+		return 0
+	}
+	return r.tail
+}
+
+// Reset empties the tracker, for a line that starts again.
+func (r *Rightmost) Reset() { *r = Rightmost{} }

@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"github.com/mgilbir/forme/paragraph"
 	"github.com/mgilbir/forme/segment"
 	"github.com/mgilbir/forme/style"
 )
@@ -518,7 +519,16 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 	// trailing space is trimmed the spacing after it goes with it, so the tail
 	// is left where it was rather than moved to the space — the last character
 	// that counts is the one in front.
-	var lineTail, runTail style.Unit
+	// The spacing that hangs off the end of the line, and off the end of the
+	// unbreakable run — which is the spacing of the item nothing is drawn to the
+	// *right* of, and not of the item that comes last.
+	//
+	// On a left-to-right line those are the same item. On a right-to-left one
+	// the last item is the leftmost, and measuring against its spacing measures
+	// the line against a gap that is inside it. See paragraph.Rightmost, which
+	// tracks it in one comparison per item, and the fill, which keeps the same
+	// account so that the two walks cannot disagree about how wide a line is.
+	var lineTail, runTail paragraph.Rightmost
 	// floats is how much of the line's width is taken by the floats standing
 	// beside it.
 	//
@@ -548,7 +558,7 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 	// the item, so it is left out rather than written as a guard that cannot
 	// fail.
 	endRun := func() {
-		w := run.Sub(runEdge).Sub(runTail)
+		w := run.Sub(runEdge).Sub(runTail.Tail())
 		switch {
 		case runContent && !firstRun:
 			split.first.min, firstRun = w, true
@@ -556,18 +566,20 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 			split.rest.min = style.Max(split.rest.min, w)
 		}
 		out.min = style.Max(out.min, w)
-		run, runEdge, runContent, runTail = 0, 0, false, 0
+		run, runEdge, runContent = 0, 0, false
+		runTail.Reset()
 	}
 	endLine := func() {
 		endRun()
-		w := line.Sub(edge).Sub(lineTail).Add(floats)
+		w := line.Sub(edge).Sub(lineTail.Tail()).Add(floats)
 		if !firstLine {
 			split.first.max, firstLine = w, true
 		} else {
 			split.rest.max = style.Max(split.rest.max, w)
 		}
 		out.max = style.Max(out.max, w)
-		line, edge, lineTail = 0, 0, 0
+		line, edge = 0, 0
+		lineTail.Reset()
 		// floats is not reset with them, and that is the point of keeping it
 		// apart from the line at all. A forced break ends a line and does not
 		// clear anything: two right floats written either side of a <br> stand
@@ -618,7 +630,7 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 				// in: at the maximum width there is one line and it is beside
 				// every row, so a box measured this way is wide enough for the
 				// row it built and never narrower than one.
-				out.max = style.Max(out.max, line.Sub(edge).Sub(lineTail).Add(floats))
+				out.max = style.Max(out.max, line.Sub(edge).Sub(lineTail.Tail()).Add(floats))
 				floats = 0
 			}
 			floats = floats.Add(got.max)
@@ -654,7 +666,8 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 			// a picture after a space would be measured into a box short by the
 			// space's width — the same slip the text case below avoids.
 			edge, runEdge = 0, 0
-			lineTail, runTail = gap, gap
+			lineTail.Add(item.Level, gap)
+			runTail.Add(item.Level, gap)
 
 		case item.Forced:
 			endLine()
@@ -679,7 +692,8 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 				if item.TrimAtEnd || item.Hangs {
 					runEdge = runEdge.Add(w)
 				} else {
-					runEdge, runTail = 0, trailingSpacingOf(item)
+					runEdge = 0
+					runTail.Add(item.Level, trailingSpacingOf(item))
 				}
 			} else {
 				// The run ends at the space — but on which side of it depends on
@@ -706,7 +720,8 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 			if item.TrimAtEnd || item.HangsHard {
 				edge = edge.Add(w)
 			} else {
-				edge, lineTail = 0, trailingSpacingOf(item)
+				edge = 0
+				lineTail.Add(item.Level, trailingSpacingOf(item))
 			}
 
 		case item.Anywhere && !item.NoWrap:
@@ -728,7 +743,8 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 			split.rest.min = style.Max(split.rest.min, got)
 			line = line.Add(item.Width)
 			edge, runEdge = 0, 0
-			lineTail, runTail = trailingSpacingOf(item), trailingSpacingOf(item)
+			lineTail.Add(item.Level, trailingSpacingOf(item))
+			runTail.Add(item.Level, trailingSpacingOf(item))
 
 		default:
 			if item.BreakBefore && !item.NoWrap && !item.LastResort &&
@@ -766,7 +782,8 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 				// and the padding after it is not, so the box is as wide as the
 				// text and the two paddings and no wider.
 				edge, runEdge = 0, 0
-				lineTail, runTail = trailingSpacingOf(item), trailingSpacingOf(item)
+				lineTail.Add(item.Level, trailingSpacingOf(item))
+				runTail.Add(item.Level, trailingSpacingOf(item))
 			}
 		}
 	}

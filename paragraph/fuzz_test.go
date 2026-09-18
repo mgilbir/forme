@@ -112,27 +112,14 @@ func FuzzBreakParagraph(f *testing.F) {
 		}
 
 		// No line overflows where breaking at one of its own opportunities would
-		// have left something that fitted. Merely holding an opportunity is not
-		// enough: a line whose first item is wider than the measure overflows
-		// however it is broken, and an opportunity under a non-wrapping value is
-		// one the line is not allowed to take.
+		// have left something that fitted. The rule and the two things it is
+		// careful about are in avoidableOverflow below.
 		if width > 0 {
-			for n, line := range lines {
-				if lineWidth(line) <= u(width) {
-					continue
-				}
-				var prefix style.Unit
-				for k, it := range line {
-					if k > 0 && it.BreakBefore && !it.NoWrap && prefix <= u(width) {
-						t.Fatalf("%q at %gpx under %s: line %d spends %gpx, and breaking "+
-							"before its item %d would have left %gpx, which fits — the "+
-							"overflow was avoidable",
-							text, width, w.name, n, lineWidth(line).Px(), k, prefix.Px())
-					}
-					if !it.Hangs {
-						prefix = prefix.Add(it.Width)
-					}
-				}
+			if n, k, prefix, bad := avoidableOverflow(lines, u(width)); bad {
+				t.Fatalf("%q at %gpx under %s: line %d spends %gpx, and breaking "+
+					"before its item %d would have left %gpx, which fits — the "+
+					"overflow was avoidable",
+					text, width, w.name, n, lineWidth(lines[n]).Px(), k, prefix.Px())
 			}
 		}
 
@@ -301,4 +288,95 @@ func FuzzBalance(f *testing.F) {
 			t.Fatalf("%q: the clamped reach is item %d of %d", text, gotI, len(items))
 		}
 	})
+}
+
+// avoidableOverflow finds a line that spills past the measure where one of its
+// own break opportunities would have left something that fitted, and answers
+// which line, which item, and what the line would have spent.
+//
+// Merely holding an opportunity is not enough, and it is wrong in two
+// directions rather than one.
+//
+// A line whose first item is wider than the measure overflows however it is
+// broken, so only an opportunity after the first item counts — and an
+// opportunity under a non-wrapping value is one the line is not allowed to
+// take at all.
+//
+// And a break that would have left *nothing* is not an improvement either.
+// "\u202b 00000000000000" at 1.5px was reported as an avoidable overflow on its
+// first line: that line is a right-to-left embedding control and one digit, the
+// control sets no paper, and the collapsible space between them is removed by
+// §4.1.2 for being at the beginning of a line. Breaking before the digit leaves
+// a line of zero width, and a line with nothing on it is not somewhere a line
+// may end. breaking.go states that rule and holds it on purpose: a bidi control
+// is "not content ... it sets no paper, takes no room, and puts nothing on the
+// line for a reader to see", and the overlong-word rule exists exactly so that
+// such a word overflows the empty line it is on rather than pushing down to
+// another empty one.
+//
+// So the prefix has to be positive as well as small enough, which is the
+// sentence "would have left something that fitted" read as arithmetic: zero
+// pixels is not something. Every real avoidable overflow has a visible prefix
+// and therefore a positive width, so nothing this used to catch stops being
+// caught — TestTheAvoidableOverflowCheckHasTeeth is where that is held.
+func avoidableOverflow(lines [][]Item, width style.Unit) (n, k int, prefix style.Unit, bad bool) {
+	for n, line := range lines {
+		if lineWidth(line) <= width {
+			continue
+		}
+		var prefix style.Unit
+		for k, it := range line {
+			if k > 0 && it.BreakBefore && !it.NoWrap && prefix > 0 && prefix <= width {
+				return n, k, prefix, true
+			}
+			if !it.Hangs {
+				prefix = prefix.Add(it.Width)
+			}
+		}
+	}
+	return 0, 0, 0, false
+}
+
+// TestTheAvoidableOverflowCheckHasTeeth.
+//
+// The check above is the only thing in this file that can see a line broken in
+// the wrong place, and the clause that keeps a zero-width prefix from counting
+// narrows it. A narrowing that went too far would be invisible: the fuzzer would
+// go quiet and read as a clean run.
+//
+// So the four cases are built here rather than fuzzed for, and the first is the
+// one the clause must still catch.
+func TestTheAvoidableOverflowCheckHasTeeth(t *testing.T) {
+	text := func(s string, w style.Unit, breakBefore bool) Item {
+		return Item{Text: s, Width: w, BreakBefore: breakBefore}
+	}
+	// A line of "ab" and a word that did not fit beside it, at a measure that
+	// holds the "ab". Breaking before the word was possible and would have left
+	// something, so this is the defect the check exists for.
+	if _, k, prefix, bad := avoidableOverflow([][]Item{{
+		text("ab", 200, false), text("cdefgh", 900, true),
+	}}, 400); !bad || k != 1 || prefix != 200 {
+		t.Errorf("a visible prefix that fits was not reported: item %d, prefix %v, bad %v",
+			k, prefix, bad)
+	}
+	// The crasher's shape: a control that sets no paper, then a digit wider than
+	// the measure. Breaking before the digit leaves a line holding nothing.
+	if _, _, _, bad := avoidableOverflow([][]Item{{
+		text("\u202b", 0, false), text("0", 768, true),
+	}}, 96); bad {
+		t.Error("a break that would have left a line of nothing was reported as avoidable")
+	}
+	// The prefix fits but the opportunity is one the line may not take.
+	nowrap := text("cdefgh", 900, true)
+	nowrap.NoWrap = true
+	if _, _, _, bad := avoidableOverflow([][]Item{{text("ab", 200, false), nowrap}}, 400); bad {
+		t.Error("an opportunity under a non-wrapping value was reported as avoidable")
+	}
+	// And a prefix that is itself wider than the measure: the line overflows
+	// however it is broken.
+	if _, _, _, bad := avoidableOverflow([][]Item{{
+		text("abcdefgh", 900, false), text("ij", 200, true),
+	}}, 400); bad {
+		t.Error("a first item wider than the measure was reported as avoidable")
+	}
 }

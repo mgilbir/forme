@@ -315,6 +315,31 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 	carried := deferBreak || heldBreak
 	// The character before this one, for the pair rules. See gluedPair.
 	prev := at.Prev
+	// And the same character with the marks and the invisibles stepped over,
+	// for the rules stated over *typographic character units* rather than over
+	// characters. UAX #14's LB9 is the statement of it — "X CM* → X", a
+	// combining sequence takes the class of its base — and §5.1's opportunity
+	// before an ideograph is asked in those terms.
+	//
+	// Asked of prev alone it was not. "0逭" broke between the digit and the
+	// ideograph and "0\u200f逭" did not: a right-to-left mark sets no paper,
+	// takes no room and is not a letter or a number, so the test for what was in
+	// front of the ideograph found a format character and refused. One invisible
+	// character deleted the only opportunity in the text.
+	//
+	// The predicate is autospace.go's, which is the same question — "the
+	// character a boundary is judged by when combining marks stand next to it" —
+	// asked by §8.1 about a gap where this asks by §5.1 about a break. The two
+	// gave different answers to it, which is why it is one function.
+	//
+	// Zero where the carried character is itself a mark or an invisible: this
+	// scan cannot see past the boundary to find the base, and the box on the
+	// other side of it answers the same question for itself. See
+	// layout/flatten.go's endsLetterUnit.
+	prevBase := prev
+	if !AutospaceBase(prevBase) {
+		prevBase = 0
+	}
 	// An opportunity the text before this one *took* rather than offered — a
 	// space left it — which the rules have already had their say over. It marks
 	// the first Piece rather than going through the scan, which is what the
@@ -443,8 +468,8 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 		// of its prohibition, below: the value relaxes, so what it forbids has
 		// to be *demoted* rather than deleted, and an opportunity deleted at
 		// this line could not be.
-		beforeIdeograph := IsIdeographic(r) && prev != 0 &&
-			!IsIdeographic(prev) && isLetterUnit(prev)
+		beforeIdeograph := IsIdeographic(r) && prevBase != 0 &&
+			!IsIdeographic(prevBase) && isLetterUnit(prevBase)
 		// And the same shape for the Brahmic scripts, which write without
 		// spaces and whose only opportunity is the boundary between two aksara
 		// clusters. See isAksara: LB28a is a set of prohibitions inside a
@@ -617,6 +642,9 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 		}
 		deferBreak, heldBreak = false, held
 		prev = r
+		if AutospaceBase(r) {
+			prevBase = r
+		}
 
 		switch {
 		case IsMandatoryBreak(r):

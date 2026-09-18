@@ -540,13 +540,18 @@ type boxBuilder struct {
 	// declares it once and has a hundred text nodes has one gap and not a
 	// hundred.
 	reportedPhraseSeparators bool
-	// afterWord says the last character emitted was part of a word, which is what
-	// "text-transform: capitalize" needs to know and what a text node cannot
-	// answer on its own: in "<b>e</b>xample" the "x" does not begin a word. It is
-	// carried on the builder because the walk visits text in document order, and
-	// it is reset around a block-level box because a block starts a new line of
-	// text whatever preceded it.
-	afterWord bool
+	// afterWord says whether the last character emitted left a word open, which
+	// is what "text-transform: capitalize" needs to know and what a text node
+	// cannot answer on its own: in "<b>e</b>xample" the "x" does not begin a
+	// word. It is carried on the builder because the walk visits text in
+	// document order, and it is reset around a block-level box because a block
+	// starts a new line of text whatever preceded it.
+	//
+	// It has three values rather than two, and the third is the node that ends
+	// in an apostrophe: "don'" leaves a word open and "a'" followed by another
+	// apostrophe does not, and the character that tells them apart is in the
+	// next node. See paragraph.WordState.
+	afterWord paragraph.WordState
 	// boundary is the text built so far, as much of it as §4.1.1's segment
 	// break rules need: the last rune written and the last one a reader would
 	// see. It is carried for the reason afterWord is — the walk visits text in
@@ -765,7 +770,7 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		// begins a word. "i ask<br/>questions" under "capitalize" is "I Ask" and
 		// "Questions", which is what text-transform-cap-003 asks for by writing
 		// its expectation out in full.
-		b.afterWord = false
+		b.afterWord = paragraph.WordClosed
 		// And the boundary with it, for the reason above rather than for an
 		// observable one: a segment break at the start or the end of a block is
 		// at the edge of a line, and §4.1.2 removes the space it would become
@@ -846,7 +851,7 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		// And a block-level box ends its text: the word does not continue into
 		// whatever comes after it. An out-of-flow one still does not, for the
 		// reason above.
-		b.afterWord = false
+		b.afterWord = paragraph.WordClosed
 		// And the boundary with it, for the reason above rather than for an
 		// observable one: a segment break at the start or the end of a block is
 		// at the edge of a line, and §4.1.2 removes the space it would become

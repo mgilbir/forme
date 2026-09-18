@@ -191,3 +191,51 @@ func TestWhatDoesNotBreakLikeAnIdeograph(t *testing.T) {
 		}
 	}
 }
+
+// TestAnInvisibleDoesNotDeleteTheOpportunityBeforeAnIdeograph.
+//
+// The rule above asks what the character before the ideograph is, and it asked
+// the character rather than the typographic character unit. UAX #14's LB9 is the
+// statement of the difference — "X CM* → X", a combining sequence takes the
+// class of its base — so a mark or an invisible between the letter and the
+// ideograph is not what the rule is about.
+//
+// Asked of the character, one right-to-left mark deleted the only opportunity in
+// the text: "0逭" broke and "0&#x200f;逭" did not. FuzzRunTiling found it,
+// because the same text cut into spans kept the opportunity and the two
+// spellings then measured a sixty-fourth of a pixel apart.
+func TestAnInvisibleDoesNotDeleteTheOpportunityBeforeAnIdeograph(t *testing.T) {
+	for _, tc := range []struct{ text, want, what string }{
+		{"0永", "0|永", "the plain case, for comparison"},
+		{"0‏永", "0‏|永", "a right-to-left mark"},
+		{"0‎永", "0‎|永", "a left-to-right mark"},
+		{"a‎‏永", "a‎‏|永", "two of them"},
+		{"á永", "á|永", "a combining acute, which is LB9's own case"},
+		{"abć̂永", "abć̂|永", "a stack of marks"},
+	} {
+		if got := barred(t, tc.text, WordBreak{}); got != tc.want {
+			t.Errorf("%s: %s, want %s", tc.what, got, tc.want)
+		}
+	}
+	// The containment half, and both of these would be broken by stepping over
+	// every invisible rather than the ones LB9 is about.
+	//
+	// A zero width joiner is not stepped over: LB8a forbids a break after one
+	// outright, which is the whole of what an author writes it for. And an
+	// invisible with nothing in front of it leaves the rule with no base to
+	// judge, which is the same answer as a text that begins with the ideograph.
+	for _, tc := range []struct{ text, want, what string }{
+		{"0‍永", "0‍永", "a zero width joiner, which LB8a binds"},
+		{"‏永", "‏永", "an invisible with nothing in front of it"},
+		// Between two ideographs the opportunity is the deferred one the first of
+		// them left, and it lands in front of the invisible rather than in front
+		// of the second ideograph. One opportunity and not two, which is what this
+		// case holds: a second at the same place costs 63 clean passes, as the
+		// test above records.
+		{"永‏永", "永|‏永", "between two ideographs, where the deferred one already is"},
+	} {
+		if got := barred(t, tc.text, WordBreak{}); got != tc.want {
+			t.Errorf("%s: %s, want %s", tc.what, got, tc.want)
+		}
+	}
+}

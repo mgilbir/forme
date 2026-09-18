@@ -172,24 +172,38 @@ func checkRunTiling(t testing.TB, text, cuts string) {
 	set := namedFaceSet{family: "T", face: face, standard: StandardFonts()}
 
 	for _, family := range tilingFaces {
-		sheet := `#d { font-family: ` + family +
-			`; font-size: 16px; white-space: nowrap }`
-		whole, ok := tiledWidth(t, set, text, sheet)
-		if !ok {
-			continue
-		}
-		cut, ok := tiledWidth(t, set, spanned(text, at), sheet)
-		if !ok {
-			continue
-		}
-		if whole != cut {
-			t.Fatalf("in %s, %q is %v wide whole and %v cut at %v:\n  %s\n"+
-				"§8.1's boundary does not break shaping, so it may not change "+
-				"the arithmetic either — the runs of a group tile it exactly.",
-				family, text, whole, cut, at, spanned(text, at))
+		for _, dir := range tilingDirections {
+			sheet := `#d { font-family: ` + family +
+				`; font-size: 16px; white-space: nowrap; ` + dir + ` }`
+			whole, ok := tiledWidth(t, set, text, sheet)
+			if !ok {
+				continue
+			}
+			cut, ok := tiledWidth(t, set, spanned(text, at), sheet)
+			if !ok {
+				continue
+			}
+			if whole != cut {
+				t.Fatalf("in %s under %q, %q is %v wide whole and %v cut at %v:\n  %s\n"+
+					"§8.1's boundary does not break shaping, so it may not change "+
+					"the arithmetic either — the runs of a group tile it exactly.",
+					family, dir, text, whole, cut, at, spanned(text, at))
+			}
 		}
 	}
 }
+
+// tilingDirections are the two the claim has to hold in, and the second is not a
+// formality. Which run is beside which is a question about the *visual* order,
+// and three of this engine's boundary rules are written in those terms while the
+// text arrives in logical order — so a document that reads right to left puts
+// the two orders in opposite directions and asks every one of them again.
+//
+// It is the axis that produced the ideograph-gap defect: an eighth of an em
+// between a CJK character and an Arabic letter was discounted as hanging off the
+// end of a line, which is true only where the last run is the rightmost one. A
+// tiling target that laid nothing out right to left could not have asked.
+var tilingDirections = []string{"", "direction: rtl"}
 
 // tilingFaces are the two the claim has to hold in. "T" is the bundled Noto
 // Sans, which joins, kerns and ligates; Courier is one of the standard fourteen

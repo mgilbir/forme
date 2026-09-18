@@ -16,7 +16,7 @@ import (
 // cased is the transform applied to one string in one language.
 func casedIn(t *testing.T, text string, kind TextTransform, lang string) string {
 	t.Helper()
-	got, _ := TransformText(text, kind, false, LanguageOf(lang))
+	got, _ := TransformText(text, kind, WordClosed, LanguageOf(lang))
 	return got
 }
 
@@ -218,7 +218,7 @@ func TestNoLanguageChangesOrdinaryText(t *testing.T) {
 		"", " ", "123", "Ölaf", "Здравствуйте", "ЗДРАВСТВУЙТЕ",
 	} {
 		for _, kind := range []TextTransform{TransformUppercase, TransformLowercase} {
-			want, _ := TransformText(text, kind, false, "")
+			want, _ := TransformText(text, kind, WordClosed, "")
 			for _, lang := range []string{"tr", "az", "lt", "el", "en", "de"} {
 				if got := casedIn(t, text, kind, lang); got != want {
 					t.Errorf("%q in %s: %q, want %q", text, lang, got, want)

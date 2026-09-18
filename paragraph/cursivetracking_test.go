@@ -190,18 +190,18 @@ func TestALineEndDiscountsOnlyTheSpacingTheRunActuallyHas(t *testing.T) {
 	latin := Item{Text: "abc", Width: em.Mul(4), Spacing: sp}
 	arabic := Item{Text: "مرحبا", Width: em.Mul(4), Spacing: sp}
 
-	if overflows(0, latin, width) {
+	if overflows(0, latin, width, Rightmost{}) {
 		t.Errorf("a Latin run of %v overflowed %v; the spacing after its last "+
 			"character is not applied at the end of a line", latin.Width, width)
 	}
-	if !overflows(0, arabic, width) {
+	if !overflows(0, arabic, width, Rightmost{}) {
 		t.Errorf("a cursive run of %v fitted %v; §8.2 gave it no spacing after its "+
 			"last character, so there is none to leave out", arabic.Width, width)
 	}
 	// And an item that is not a run of text keeps the declared value, since an
 	// atomic inline is a character unit letter-spacing goes after.
 	atomic := Item{Width: em.Mul(4), Spacing: sp}
-	if overflows(0, atomic, width) {
+	if overflows(0, atomic, width, Rightmost{}) {
 		t.Errorf("an atomic inline of %v overflowed %v", atomic.Width, width)
 	}
 }

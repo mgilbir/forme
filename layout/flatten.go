@@ -977,8 +977,24 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		// place and the same argument as break-all's rule above. What travels is
 		// only what the earlier character was, which no amount of looking at
 		// this box could recover.
+		//
+		// And glued the same way break-all's rule is, which is the conjunct the
+		// sentence above already implies and this did not have. UAX #14's LB8a,
+		// LB11 and LB12 forbid a break beside a zero width joiner, a word joiner
+		// or a non-breaking glue character wherever one falls, and a box
+		// boundary is nowhere special. "<span>0&#x200d;</span><span>逭</span>"
+		// is the shape: the letter unit in front of the ideograph is the digit,
+		// the character *at* the boundary is a joiner, and a line may not end
+		// after one.
+		//
+		// It was unreachable while endsLetterUnit read the last character,
+		// because a joiner is not a letter unit and the rule declined for the
+		// wrong reason. Reading the last base made the rule right about the
+		// letter unit and left this exposed — FuzzRunTiling found it in the six
+		// minutes after that change.
 		if i == 0 && !state.AfterAtomic && !wb.KeepAll &&
-			state.AfterLetterUnit && startsIdeographic(p.Text) {
+			state.AfterLetterUnit && startsIdeographic(p.Text) &&
+			!gluedPair(in.AfterRune, firstRuneOf(p.Text)) {
 			state.BreakOpportunity = true
 		}
 		pieceNoWrap := noWrap
@@ -1144,7 +1160,10 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			AfterBinding: endsBinding(p.Text),
 			// Whether the character before the next boundary is one an
 			// ideograph may be broken away from. See the rule above.
-			AfterLetterUnit: endsLetterUnit(p.Text),
+			//
+			// The state it had is handed in, because a piece of nothing but
+			// marks does not answer this and passes on what it was given.
+			AfterLetterUnit: endsLetterUnit(p.Text, state.AfterLetterUnit),
 		}
 	}
 	return out, inlineState{
@@ -1192,12 +1211,35 @@ func startsIdeographic(text string) bool {
 	return r != utf8.RuneError && paragraph.IsIdeographic(r)
 }
 
-// endsLetterUnit reports whether a piece ends on a typographic letter unit that
-// is not itself an ideograph, which is the far side of the boundary
-// startsIdeographic asks about. See inlineState.AfterLetterUnit.
-func endsLetterUnit(text string) bool {
-	r, _ := utf8.DecodeLastRuneInString(text)
-	return r != utf8.RuneError && paragraph.IsLetterUnit(r) && !paragraph.IsIdeographic(r)
+// endsLetterUnit reports whether the character before the next boundary is a
+// typographic letter unit that is not itself an ideograph, which is the far side
+// of the boundary startsIdeographic asks about. See inlineState.AfterLetterUnit.
+//
+// The last *base* character and not the last character, which is the same
+// correction breaks.go's prevBase makes on its side of the boundary and for the
+// same reason: §5.1's opportunity is stated over typographic character units,
+// and UAX #14's LB9 gives a combining sequence the class of its base. Reading
+// the last character, "<span>0&#x200f;</span><span>逭</span>" lost the only
+// break opportunity in it to a right-to-left mark that sets no paper — while
+// "0&#x200f;逭" in one text node kept it, which is the disagreement
+// FuzzRunTiling is there to find.
+//
+// And a piece with no base character of its own does not answer the question at
+// all: it hands on whatever it was given. LastAutospaceBase says so where it is
+// defined — it "answers false where a run has no base of its own ... the caller
+// keeps walking" — and taking that false for an answer was a defect of its own.
+// "<span>0</span><span>&#x1064;</span><span>偤</span>" is a digit, a Myanmar
+// spacing mark and an ideograph in three boxes; the mark's box has no base, so
+// the letter unit in front of the ideograph is the digit two boxes back, and a
+// version that reset the state there lost the opportunity the same text kept
+// when it was written whole. FuzzRunTiling found that one too, in the four
+// minutes after the paragraph half of this rule was fixed.
+func endsLetterUnit(text string, was bool) bool {
+	r, ok := paragraph.LastAutospaceBase(text)
+	if !ok {
+		return was
+	}
+	return paragraph.IsLetterUnit(r) && !paragraph.IsIdeographic(r)
 }
 
 // textItemArgs is what one text item is built from. It is a struct because the

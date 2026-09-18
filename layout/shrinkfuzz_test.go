@@ -237,3 +237,63 @@ func TestTheSpacingThatHangsIsNotAnOverflow(t *testing.T) {
 		t.Error("a word ten times its box's width was not reported at all")
 	}
 }
+
+// TestTheIdeographGapInsideARightToLeftLineIsNotDiscounted is the second defect
+// the target above found, pinned on its own.
+//
+// §8.1 puts an eighth of an em between an ideograph and a letter beside it, and
+// the gap is added to the width of the run it follows — which is the run to the
+// *visual left* of the boundary, because a run's glyphs are drawn from its
+// origin rightwards whatever direction they read in, so width added to a run
+// appears past its rightmost glyph.
+//
+// A line ends at that edge only where the run reads left to right. On a
+// right-to-left line the last run is the leftmost one, so a gap on it sits
+// between that run and the one before it — inside the line. The measure
+// discounted it anyway, on the reading that a gap at a run's far edge always
+// hangs off the end, and "㌱ب" in a float came out 24px wide around 26.5px of
+// content: the Arabic letter drawn two and a half pixels past the left edge of
+// the box that had been sized to hold it.
+//
+// The fixture is the same characters set both ways round, because the number the
+// engine must not get wrong is a number the two directions share: the same
+// glyphs with the same gap between them need the same room whichever way they
+// are read. That is a stronger statement than either width on its own, and it is
+// the one that failed — the left-to-right measurement was right the whole time.
+func TestTheIdeographGapInsideARightToLeftLineIsNotDiscounted(t *testing.T) {
+	const text = "㌱ب"
+	w, _ := style.FromPx(100000)
+	h, _ := style.FromPx(10000)
+	width := func(decl string) style.Unit {
+		built := Build(Input{HTML: `<div id="f">` + text + `</div>`,
+			CSS: []Stylesheet{{Source: noDefaults +
+				`#f { float: left; font-family: Courier; font-size: 20px; ` + decl + ` }`}}})
+		f := fragmentFor(Layout(built.Root, Size{W: w, H: h}, built.Fonts, NewRecorder(nil)), "f")
+		if f == nil {
+			t.Fatalf("%q with %q laid out no float", text, decl)
+		}
+		return f.ContentRect().W
+	}
+	rtl, ltr := width("direction: rtl"), width("direction: ltr")
+	if rtl != ltr {
+		t.Errorf("%q shrink-wraps to %v read right to left and %v read left to "+
+			"right; the same glyphs with the same gap need the same room", text, rtl, ltr)
+	}
+	// And the gap is in both numbers rather than out of both, which the equality
+	// above cannot tell apart from the engine having stopped inserting it. Two
+	// Courier characters at 20px are 12px each and §8.1's gap is an eighth of an
+	// em: 26.5px, not 24.
+	want, _ := style.FromPx(26.5)
+	if ltr != want {
+		t.Errorf("%q shrink-wraps to %v, want %v — the two characters and the "+
+			"ideograph gap between them", text, ltr, want)
+	}
+	// The fuzz body's own question, on the fixture that failed it: at the width
+	// the shrink-wrap chose, the text breaks into the lines it breaks into
+	// unbounded.
+	for i, decl := range shrinkStyles {
+		if decl == "direction: rtl" {
+			checkShrinkToFit(t, text, i)
+		}
+	}
+}

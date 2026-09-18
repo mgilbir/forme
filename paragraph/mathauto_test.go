@@ -193,7 +193,7 @@ func TestMathAutoReachesTheTextThroughTheProperty(t *testing.T) {
 		{"h", "\u210E"},
 		{"sin", "sin"},
 	} {
-		got, _ := TransformText(tc.text, TransformOf("math-auto"), false, LanguageOf(""))
+		got, _ := TransformText(tc.text, TransformOf("math-auto"), WordClosed, LanguageOf(""))
 		if got != tc.want {
 			t.Errorf("math-auto over %q gave %q, want %q", tc.text, got, tc.want)
 		}
@@ -231,7 +231,7 @@ func TestTheOtherTransformsAreUntouched(t *testing.T) {
 		{"none", "x", "x"},
 		{"none", "\u2202", "\u2202"},
 	} {
-		got, _ := TransformText(tc.text, TransformOf(tc.value), false, LanguageOf(""))
+		got, _ := TransformText(tc.text, TransformOf(tc.value), WordClosed, LanguageOf(""))
 		if got != tc.want {
 			t.Errorf("%s over %q gave %q, want %q", tc.value, tc.text, got, tc.want)
 		}

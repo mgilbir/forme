@@ -47,15 +47,16 @@ type textTransform = paragraph.TextTransform
 
 const (
 	transformNone       = paragraph.TransformNone
+	wordClosed          = paragraph.WordClosed
 	transformUppercase  = paragraph.TransformUppercase
 	transformLowercase  = paragraph.TransformLowercase
 	transformCapitalize = paragraph.TransformCapitalize
 )
 
 var (
-	transformOf   = paragraph.TransformOf
-	transformText = paragraph.TransformText
-	endsInWord    = paragraph.EndsInWord
+	transformOf    = paragraph.TransformOf
+	transformText  = paragraph.TransformText
+	wordStateAfter = paragraph.WordStateAfter
 )
 
 // Break opportunities and the pieces between them, from CSS Text §5.
