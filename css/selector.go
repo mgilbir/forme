@@ -11,9 +11,11 @@ import (
 //
 // # The subset, and the line it is drawn on
 //
-// A PDF page is static. It has no pointer, no focus and no form state, so a
-// selector that asks about any of those has no answer here — not a false one,
-// none at all. Those are refused: :hover, :focus, :checked and their kin.
+// A PDF page is static. It has no pointer, no focus and no form state, and a
+// selector that asks about one of those is asking a question whose answer on a
+// page laid out once is "no": nothing is hovered, nothing has focus, nothing is
+// selected. That is the answer a browser printing the same document gives, and
+// it is the one given here.
 //
 // The line is *dynamism*, not familiarity. Everything the document itself
 // determines is in, including the whole structural family — :nth-child(),
@@ -21,19 +23,32 @@ import (
 // interactive ones and is not: whether an <a> has an href is a fact about the
 // document.
 //
-// :visited is in too, and matches nothing. That looks like the same case as
-// :hover and is not: there is no browsing history here and no way to acquire
-// one, so the answer is "no link is visited" rather than "cannot say". See
-// PseudoVisited, and note that :link is already implemented on that answer.
+// # Three kinds of selector this does not match, and what each is
 //
-// # Refusing rather than ignoring
+// Selectors 4 separates a selector that is *invalid* from one that is valid and
+// matches nothing, and the difference is the rest of the rule. An invalid
+// selector invalidates its whole selector list (§3.3), so the rule is dropped;
+// a valid one that matches nothing takes its own element out and leaves every
+// other selector in the list standing. "a:hover, .active { }" styles .active in
+// every browser. It did not here, because :hover was a parse failure, and the
+// list semantics spread it to a selector that had nothing to do with it — the
+// standard shape of a framework's stylesheet, dropped whole.
 //
-// A selector outside the subset makes the whole selector invalid, which is what
-// the specification says to do with an unknown pseudo-class, and the rule is
-// dropped. That is deliberately not the same as matching nothing quietly: each
-// one is reported with Unsupported set, so an author is told the rule never
-// applied rather than left wondering why the page looks wrong. Silence here is
-// the failure mode §6.3 of the rendering proposal is written about.
+//   - A selector the medium answers "no" to — :hover, :focus, ::selection — is a
+//     simple selector that parses and never matches (PseudoNever). The author is
+//     told, and the finding does not claim the page is wrong, because it is not.
+//   - A selector the *document* answers and this engine does not — :checked,
+//     :disabled, :has() — parses too, and also matches nothing
+//     (PseudoUnanswered), but that "nothing" is this engine's gap and the finding
+//     says so as Unsupported. Where "matches nothing" would widen a rule rather
+//     than narrow it — under :not(), or in the "of S" that decides what an
+//     :nth-child() counts — the whole pseudo-class around it is unanswered too,
+//     so a rule is only ever missing from elements, never applied to ones it
+//     does not select.
+//   - A selector no specification defines, or one the grammar forbids, is
+//     invalid, as it is in a browser, and takes its list with it.
+//
+// :visited is the first kind, and was the first of it: see PseudoVisited.
 
 // Combinator joins two compound selectors.
 type Combinator uint8
@@ -128,8 +143,10 @@ type Attr struct {
 	Sensitive bool
 }
 
-// PseudoKind names a pseudo-class this engine implements. Anything not here is
-// refused at parse time, so there is no kind for "unknown".
+// PseudoKind names a pseudo-class this engine implements, or one of the two
+// ways a valid one it does not implement is kept: PseudoNever and
+// PseudoUnanswered. A name no specification defines is refused at parse time,
+// so there is no kind for "unknown".
 type PseudoKind uint8
 
 const (
@@ -187,6 +204,28 @@ const (
 	// It has no name an author can write after a colon — it is spelled "&" —
 	// so it is not in pseudoClasses.
 	PseudoNesting
+
+	// PseudoNever is a valid pseudo-class or pseudo-element that a page laid out
+	// once never satisfies — :hover, :focus, ::selection — and so matches
+	// nothing. Name is what was written, colons and all.
+	//
+	// It is :visited's answer given to the rest of the family. Nobody hovers a
+	// printed page, so "no" is not a guess about the element but the truth
+	// about the medium, and it is the truth under :not() as much as anywhere:
+	// ":not(:hover)" is every element.
+	PseudoNever
+
+	// PseudoUnanswered is a valid pseudo-class or pseudo-element whose answer
+	// the document holds and this engine does not work out — ":checked" on an
+	// <input checked>, ":has()" — and so matches nothing, reported as
+	// Unsupported. Name is what was written.
+	//
+	// Unlike PseudoNever, "no" here may be wrong, so it is only given where a
+	// wrong "no" narrows a rule. A :not() or an ":nth-child(… of S)" that holds
+	// one anywhere inside it is itself unanswered, because matching nothing
+	// inside a negation matches everything outside it. Args and Of are kept for
+	// diagnostics and are never matched.
+	PseudoUnanswered
 )
 
 // Pseudo is one pseudo-class in a compound selector.
@@ -236,6 +275,12 @@ type Nesting struct {
 	// use.
 	matchable []Selector
 	spec      Specificity
+
+	// unanswered says some selector "&" stands for holds a PseudoUnanswered,
+	// at any depth, so that an "&" under a :not() is unanswered too. It is
+	// worked out once here, and a nested parent's own "&" reads its parent's,
+	// so asking it never walks more than one level.
+	unanswered bool
 }
 
 // NewNesting makes the parent that the rules nested in a style rule are
@@ -257,7 +302,29 @@ func NewNesting(parent []Selector) *Nesting {
 		n.matchable = append(n.matchable, s)
 		n.spec = n.spec.max(s.Specificity)
 	}
+	n.unanswered = holdsUnanswered(n.matchable)
 	return n
+}
+
+// holdsUnanswered reports whether any of sels holds a PseudoUnanswered, at any
+// depth. An "&" reads its parent's answer, which was settled when the parent
+// was made, rather than walking the parent again.
+func holdsUnanswered(sels []Selector) bool {
+	for _, s := range sels {
+		for _, c := range s.Compounds {
+			for _, ps := range c.Pseudos {
+				switch {
+				case ps.Kind == PseudoUnanswered:
+					return true
+				case ps.Kind == PseudoNesting && ps.Nest != nil && ps.Nest.unanswered:
+					return true
+				case holdsUnanswered(ps.Args), holdsUnanswered(ps.Of):
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // Matchable is the selector list "&" stands for: an element matches "&" when it
@@ -347,8 +414,8 @@ func (s Specificity) max(o Specificity) Specificity {
 }
 
 // pseudoClasses is the implemented subset, keyed by the lowercased name. A
-// pseudo-class absent from here and from dynamicPseudoClasses is not a
-// pseudo-class at all.
+// pseudo-class absent from here, from dynamicPseudoClasses and from
+// unimplementedPseudoClasses is not a pseudo-class at all.
 var pseudoClasses = map[string]PseudoKind{
 	"root":             PseudoRoot,
 	"empty":            PseudoEmpty,
@@ -370,20 +437,25 @@ var pseudoClasses = map[string]PseudoKind{
 	"link":             PseudoAnyLink,
 	"any-link":         PseudoAnyLink,
 	"visited":          PseudoVisited,
+	// Selectors 4 §8.3: with no scoping root — and a stylesheet has none
+	// outside @scope, which this engine does not apply — :scope is the root
+	// element, with the specificity of a pseudo-class. That is :root exactly.
+	"scope": PseudoRoot,
 }
 
-// dynamicPseudoClasses are correct CSS that a static page cannot answer: they
-// ask about a pointer, a keyboard, form state or browsing history, none of
-// which a PDF has.
+// dynamicPseudoClasses are correct CSS whose answer is not in the markup alone:
+// they ask about a pointer, a keyboard, form state or browsing history, and a
+// page laid out once has none of those in motion.
 //
 // They are listed rather than lumped in with the unknown so that the diagnostic
 // can say which it is. "no such pseudo-class" sends an author looking for a
 // typo; ":hover cannot apply to a printed page" tells them the truth, which is
-// that the rule was understood and deliberately not applied.
+// that the rule was understood and selects nothing here.
 //
-// Being on this list says what the *message* is. Whether the finding also claims
-// the page differs from the one CSS describes is a second question, and
-// stateOnAPage is what answers it: see inapplicable.
+// Every one of them is a valid selector that matches nothing — see the note at
+// the head of this file. Whether the finding also claims the page differs from
+// the one CSS describes is a second question, and stateOnAPage is what answers
+// it.
 var dynamicPseudoClasses = map[string]bool{
 	"active": true, "hover": true, "focus": true, "focus-visible": true,
 	"focus-within": true, "target": true, "target-within": true,
@@ -402,16 +474,16 @@ var dynamicPseudoClasses = map[string]bool{
 // stateOnAPage is the half of dynamicPseudoClasses whose answer is written in
 // the document rather than made by a reader.
 //
-// The split is the difference between a rule that *matched nothing* and a rule
-// that *was dropped*. Nobody hovers a printed page, so ":hover" selects nothing
-// there and a browser printing the same page applies it exactly as little — the
-// page is the one CSS describes. But "<input disabled>" is disabled on paper as
-// much as on screen, so ":disabled { color: grey }" asks for grey text that is
-// not there, and an author has no way to find that out except by being told.
+// The split is the difference between PseudoNever and PseudoUnanswered. Nobody
+// hovers a printed page, so ":hover" selects nothing there and a browser
+// printing the same page applies it exactly as little — the page is the one CSS
+// describes. But "<input disabled>" is disabled on paper as much as on screen,
+// so ":disabled { color: grey }" asks for grey text that is not there, and an
+// author has no way to find that out except by being told.
 //
 // ":defined" is on it for the same reason from the other end: with no custom
-// elements every element is defined, so the rule matches *everything* and
-// dropping it drops style from every box it named.
+// elements every element is defined, so the rule matches *everything*, and
+// matching nothing takes style from every box it named.
 var stateOnAPage = map[string]bool{
 	"checked": true, "indeterminate": true, "default": true,
 	"disabled": true, "enabled": true, "read-only": true, "read-write": true,
@@ -420,16 +492,58 @@ var stateOnAPage = map[string]bool{
 	"defined": true,
 }
 
-// pseudoElements is the implemented subset. The rest are refused: ::selection
-// needs a selection, ::backdrop needs a top layer, and ::part and ::slotted
-// need a shadow tree, which needs scripting, which this engine never has.
+// userActionPseudoClasses are the only pseudo-classes that may follow a
+// pseudo-element: Selectors 4 §3.6.3 allows "::before:hover" and nothing else of
+// the kind. Every one of them is a PseudoNever here.
+var userActionPseudoClasses = map[string]bool{
+	"hover": true, "active": true, "focus": true, "focus-visible": true,
+	"focus-within": true,
+}
+
+// unimplementedPseudoClasses are the pseudo-classes Selectors 4 defines that the
+// document answers and this engine does not work out. They are PseudoUnanswered:
+// valid, matching nothing, and reported as a gap. Their arguments are not read,
+// since nothing here would match them.
+//
+// They are named so that "p:has(img), .figure" keeps ".figure", which a browser
+// does and which an unknown name would not; a name that is on no list is still
+// invalid, as it is in a browser, and takes its list with it.
+var unimplementedPseudoClasses = map[string]bool{
+	"has": true, "dir": true, "blank": true, "nth-col": true, "nth-last-col": true,
+}
+
+// pseudoElements is the implemented subset.
 var pseudoElements = map[string]bool{
 	"before": true, "after": true,
 	"first-line": true, "first-letter": true,
 	"marker": true,
 }
 
-// reasonForPseudoElement adds why a refused pseudo-element is refused, when
+// otherPseudoElements are the pseudo-elements CSS Pseudo 4 and its neighbours
+// define that this engine does not generate, and which of the two kinds each is:
+// true for one a page laid out once never has (PseudoNever), false for one a
+// browser would draw on the same page and this engine does not
+// (PseudoUnanswered). A pseudo-element on neither list is invalid.
+//
+// ::placeholder is the one whose answer is not obvious. A browser *does* draw an
+// empty field's placeholder on a page nobody has touched, so a rule styling it
+// asks for ink that is missing — which is a finding about this engine and not
+// about the medium.
+var otherPseudoElements = map[string]bool{
+	// Nothing is selected, targeted or spell-checked.
+	"selection": true, "target-text": true, "highlight": true,
+	"spelling-error": true, "grammar-error": true,
+	// There is no top layer.
+	"backdrop": true,
+	// A shadow tree needs scripting, which never runs here, so there is no
+	// shadow tree to have a part of.
+	"part": true, "slotted": true,
+	// Drawn in a browser, and not here.
+	"placeholder": false, "file-selector-button": false, "details-content": false,
+	"cue": false, "cue-region": false,
+}
+
+// reasonForPseudoElement adds why a pseudo-element matches nothing here, when
 // there is something better to say than "not implemented".
 //
 // The distinction is the same one dynamicPseudoClasses draws: an author whose
@@ -443,35 +557,10 @@ func reasonForPseudoElement(lower string) string {
 		return ": there is no top layer on a printed page"
 	case "part", "slotted":
 		return ": a shadow tree needs scripting, which this engine never runs"
-	case "placeholder":
-		return ": form fields are not interactive here"
+	case "placeholder", "file-selector-button":
+		return ": form fields are not drawn here"
 	}
 	return ""
-}
-
-// matchesNothingOnAPage reports whether a pseudo-element selects a state a page
-// laid out once never enters, so that a rule naming it is one whose condition is
-// false rather than one this engine dropped.
-//
-// ::placeholder is the one on reasonForPseudoElement's list that is not here,
-// and the distinction is the whole reason this is a second function. A browser
-// *does* draw an empty field's placeholder on a page nobody has touched, so a
-// rule styling it asks for ink that is missing — which is a finding about this
-// engine and not about the medium.
-func matchesNothingOnAPage(lower string) bool {
-	switch lower {
-	case "selection", "target-text", "highlight", "spelling-error", "grammar-error":
-		// Nothing is selected, targeted or spell-checked.
-		return true
-	case "backdrop":
-		// There is no top layer.
-		return true
-	case "part", "slotted":
-		// A shadow tree needs scripting, which never runs here, so there is no
-		// shadow tree to have a part of.
-		return true
-	}
-	return false
 }
 
 // legacyPseudoElements may be written with one colon, because they predate the
@@ -482,12 +571,16 @@ var legacyPseudoElements = map[string]bool{
 
 // ParseSelectorList parses the prelude of a style rule into selectors.
 //
-// A selector that cannot be parsed, or that falls outside the subset, is
-// dropped and reported. If *any* of them is dropped the whole list is invalid —
-// that is what the specification requires, and it is the safe direction: a rule
-// whose selector list was silently narrowed applies to fewer elements than its
-// author asked for, and nothing about the resulting page says so. ok reports
-// whether the list survived intact.
+// A selector that cannot be parsed — malformed, or naming a pseudo-class no
+// specification defines — is dropped and reported. If *any* of them is dropped
+// the whole list is invalid: that is what the specification requires, and it is
+// the safe direction, because a rule whose selector list was silently narrowed
+// applies to fewer elements than its author asked for. ok reports whether the
+// list survived intact.
+//
+// A valid selector this engine does not match — ":hover", ":checked" — is not
+// dropped. It is kept, it matches nothing, and it is reported; the rest of the
+// list stands, as it does in a browser. See the note at the head of this file.
 //
 // This is a rule at the top of a stylesheet, where an "&" is the root element
 // with no specificity — see selParser.nesting. A rule written inside another is
@@ -528,6 +621,9 @@ func ParseNestedSelectorList(vals []ComponentValue, parent *Nesting) (sels []Sel
 func parseSelectorList(vals []ComponentValue, parent *Nesting) (sels []Selector, errs []Error, ok bool) {
 	p := &selParser{nest: parent}
 	out, all := p.list(vals, 0)
+	if p.tooDeep {
+		return nil, p.errs, false
+	}
 	// Usability is "every selector written was understood", not "nothing was
 	// reported". The two differ inside :is() and :where(), which are forgiving:
 	// an argument they could not use is dropped and still reported, and the rule
@@ -556,6 +652,17 @@ type selParser struct {
 	errs []Error
 	// nest is the parent rule "&" refers to, or nil at the top of a stylesheet.
 	nest *Nesting
+	// unanswered counts the PseudoUnanswered selectors read so far, including
+	// an "&" whose parent holds one. A :not() or an "of S" reads it before and
+	// after its argument, which is how it learns that the argument holds one
+	// at any depth without walking it again.
+	unanswered int
+	// tooDeep says maxSelectorDepth was reached. What lay below it was not
+	// read, which is this engine stopping short rather than the author
+	// writing something invalid, so a forgiving list may not forgive it: the
+	// whole list is refused, as it was before forgiving lists could be
+	// emptied.
+	tooDeep bool
 }
 
 // nesting is the simple selector "&" is parsed into.
@@ -568,6 +675,9 @@ type selParser struct {
 // terms this package already has.
 func (p *selParser) nesting() Pseudo {
 	if p.nest != nil {
+		if p.nest.unanswered {
+			p.unanswered++
+		}
 		return Pseudo{Kind: PseudoNesting, Name: "&", Nest: p.nest}
 	}
 	root := Selector{
@@ -613,6 +723,11 @@ func (p *selParser) unsupported(off int, msg string) {
 // ratchet reads: a document whose only finding is one of these is rendered
 // exactly as it should be, and counting it as vacuous hid four of the suite's
 // tests behind a rule that changed nothing.
+//
+// That claim is only true because the selector is kept, as a PseudoNever, and
+// the rest of its rule's list still applies. When it was a parse failure,
+// "a:hover, .active" lost ".active" too, and a page missing the style of every
+// .active element was counted as rendered exactly as it should be.
 func (p *selParser) inapplicable(off int, msg string) {
 	p.add(Error{Offset: off, Message: msg})
 }
@@ -636,7 +751,10 @@ func (p *selParser) add(e Error) {
 // forgiving need to know.
 func (p *selParser) list(vals []ComponentValue, depth int) (sels []Selector, all bool) {
 	if depth > maxSelectorDepth {
-		p.fail(offsetOf(vals), "selectors are nested too deeply to read")
+		if !p.tooDeep {
+			p.fail(offsetOf(vals), "selectors are nested too deeply to read")
+		}
+		p.tooDeep = true
 		return nil, false
 	}
 	parts := splitOnComma(vals)
@@ -681,6 +799,10 @@ func (p *selParser) complex(vals []ComponentValue, depth int) (Selector, bool) {
 	out := Selector{Offset: vals[0].Token.Offset}
 	combinator := Descendant
 	i := 0
+	// written is the pseudo-element a compound ended with, as written — one this
+	// engine generates, which is also out.PseudoElement, or one that matches
+	// nothing here, which is not — for the rule that nothing may follow it.
+	written := ""
 
 	// A selector of a nested rule's own list is relative to the parent — see
 	// ParseNestedSelectorList for the three cases. Only at the top of that
@@ -715,19 +837,34 @@ func (p *selParser) complex(vals []ComponentValue, depth int) (Selector, bool) {
 			return Selector{}, false
 		}
 
-		c, pseudoElem, ok := p.compound(vals[i:end], depth)
+		if written != "" {
+			// Only the subject may carry one, so anything after it is an error
+			// rather than a second pseudo-element.
+			p.fail(vals[i].Token.Offset,
+				"nothing may follow the pseudo-element ::"+written)
+			return Selector{}, false
+		}
+
+		c, pseudoElem, wrote, ok := p.compound(vals[i:end], depth)
 		if !ok {
 			return Selector{}, false
 		}
 		c.Combinator = combinator
 
-		if out.PseudoElement != "" {
-			// Only the subject may carry one, so anything after it is an error
-			// rather than a second pseudo-element.
-			p.fail(vals[i].Token.Offset,
-				"nothing may follow the pseudo-element ::"+out.PseudoElement)
+		if wrote != "" && depth > 0 {
+			// Selectors 4 §4.2: :is() "cannot represent pseudo-elements", and
+			// nor can :where(), :not() or the "of S" of :nth-child(). Accepted,
+			// "div:is(::before)" was a selector whose argument had nothing
+			// left in it but a pseudo-element the matcher never looks at, so
+			// it selected every div; ":is(*, ::before)" counted the
+			// pseudo-element's specificity; and "p:not(p::after)" selected no
+			// paragraph. A browser treats the argument as invalid, and so does
+			// this: a forgiving list drops it, the other two are invalid.
+			p.fail(vals[i].Token.Offset, "the pseudo-element ::"+wrote+
+				" cannot be the argument of a pseudo-class")
 			return Selector{}, false
 		}
+		written = wrote
 		out.PseudoElement = pseudoElem
 		out.Compounds = append(out.Compounds, c)
 
@@ -764,7 +901,8 @@ func onlyWhitespace(vals []ComponentValue) bool {
 }
 
 // isPseudoAt reports whether the value at i begins a pseudo-class, which is the
-// one thing that may follow a pseudo-element.
+// one kind of thing that may follow a pseudo-element — and of those, only the
+// user-action ones: see pseudo.
 func isPseudoAt(vals []ComponentValue, i int) bool {
 	return i < len(vals) && vals[i].IsToken() && vals[i].Token.Kind == Colon
 }
@@ -838,9 +976,12 @@ func trimWhitespace(vals []ComponentValue) []ComponentValue {
 
 // compound parses one compound selector — the simple selectors that all
 // constrain the same element — and the pseudo-element that may follow it.
-func (p *selParser) compound(vals []ComponentValue, depth int) (Compound, string, bool) {
-	var out Compound
-	var pseudoElem string
+//
+// It returns the pseudo-element twice. elem is the one this engine generates,
+// which is what the selector's PseudoElement becomes; written is whichever was
+// written, including one that matches nothing here, which is what the grammar
+// around it is checked against.
+func (p *selParser) compound(vals []ComponentValue, depth int) (out Compound, elem, written string, ok bool) {
 	i := 0
 
 	// A type or universal selector, if present, must come first.
@@ -854,7 +995,7 @@ func (p *selParser) compound(vals []ComponentValue, depth int) (Compound, string
 			i = 1
 		case t.IsDelim('|'):
 			p.unsupported(t.Offset, "namespaces in selectors are not implemented")
-			return out, "", false
+			return out, "", "", false
 		}
 	}
 
@@ -870,23 +1011,24 @@ func (p *selParser) compound(vals []ComponentValue, depth int) (Compound, string
 		// class was collected into the same compound as the pseudo-element and
 		// matched against the element itself, so the rule applied to every <a>
 		// of that class rather than to none of them. A pseudo-element is not
-		// something a class can narrow.
-		if pseudoElem != "" && !isPseudoAt(vals, i) {
+		// something a class can narrow. Which pseudo-classes may follow is
+		// pseudo's to say.
+		if written != "" && !isPseudoAt(vals, i) {
 			p.fail(v.Token.Offset, "nothing may follow the pseudo-element ::"+
-				pseudoElem+" in the same compound selector")
-			return out, "", false
+				written+" in the same compound selector")
+			return out, "", "", false
 		}
 
 		// A namespace separator anywhere makes this a qualified name.
 		if v.IsToken() && v.Token.IsDelim('|') {
 			p.unsupported(v.Token.Offset, "namespaces in selectors are not implemented")
-			return out, "", false
+			return out, "", "", false
 		}
 
 		if v.IsBlock() && v.Token.Kind == LeftSquare {
 			a, ok := p.attribute(v)
 			if !ok {
-				return out, "", false
+				return out, "", "", false
 			}
 			out.Attrs = append(out.Attrs, a)
 			i++
@@ -895,7 +1037,7 @@ func (p *selParser) compound(vals []ComponentValue, depth int) (Compound, string
 
 		if !v.IsToken() && !v.IsFunction() {
 			p.fail(v.Token.Offset, "unexpected "+v.Token.String()+" in a selector")
-			return out, "", false
+			return out, "", "", false
 		}
 
 		t := v.Token
@@ -903,7 +1045,7 @@ func (p *selParser) compound(vals []ComponentValue, depth int) (Compound, string
 		case t.Kind == Hash:
 			if !t.IsID {
 				p.fail(t.Offset, "\"#"+t.Value+"\" is a colour, not an identifier selector")
-				return out, "", false
+				return out, "", "", false
 			}
 			out.IDs = append(out.IDs, t.Value)
 			i++
@@ -911,7 +1053,7 @@ func (p *selParser) compound(vals []ComponentValue, depth int) (Compound, string
 		case t.IsDelim('.'):
 			if i+1 >= len(vals) || !vals[i+1].IsToken() || vals[i+1].Token.Kind != Ident {
 				p.fail(t.Offset, "expected a class name after \".\"")
-				return out, "", false
+				return out, "", "", false
 			}
 			out.Classes = append(out.Classes, vals[i+1].Token.Value)
 			i += 2
@@ -926,35 +1068,42 @@ func (p *selParser) compound(vals []ComponentValue, depth int) (Compound, string
 
 		case t.Kind == Colon:
 			var ok bool
-			var elem string
-			i, elem, ok = p.pseudo(vals, i, &out, depth)
+			var gen, wrote string
+			i, gen, wrote, ok = p.pseudo(vals, i, &out, depth, written)
 			if !ok {
-				return out, "", false
+				return out, "", "", false
 			}
-			if elem != "" {
-				if pseudoElem != "" {
-					p.fail(t.Offset, "a second pseudo-element, ::"+elem)
-					return out, "", false
+			if wrote != "" {
+				if written != "" {
+					p.fail(t.Offset, "a second pseudo-element, ::"+wrote)
+					return out, "", "", false
 				}
-				pseudoElem = elem
+				elem, written = gen, wrote
 			}
 
 		case t.Kind == Ident:
 			p.fail(t.Offset, "an element name must come first in \""+t.Value+"\"")
-			return out, "", false
+			return out, "", "", false
 
 		default:
 			p.fail(t.Offset, "unexpected "+t.String()+" in a selector")
-			return out, "", false
+			return out, "", "", false
 		}
 	}
-	return out, pseudoElem, true
+	return out, elem, written, true
 }
 
 // pseudo parses a pseudo-class or pseudo-element beginning at the colon in
-// vals[i]. It returns the index after it and the pseudo-element name, if that is
-// what it was.
-func (p *selParser) pseudo(vals []ComponentValue, i int, out *Compound, depth int) (int, string, bool) {
+// vals[i], adding a pseudo-class to out. It returns the index after it and, for
+// a pseudo-element, the name of the one this engine generates (elem) and the
+// name that was written (written) — which differ for one that matches nothing
+// here, whose elem is empty.
+//
+// after is the pseudo-element that came earlier in the compound, if one did:
+// then only a user-action pseudo-class may follow.
+func (p *selParser) pseudo(vals []ComponentValue, i int, out *Compound, depth int,
+	after string) (next int, elem, written string, ok bool) {
+
 	colon := vals[i].Token
 	i++
 
@@ -966,61 +1115,66 @@ func (p *selParser) pseudo(vals []ComponentValue, i int, out *Compound, depth in
 	}
 	if i >= len(vals) {
 		p.fail(colon.Offset, "expected a name after \":\"")
-		return i, "", false
+		return i, "", "", false
 	}
 
 	v := vals[i]
 	if !v.IsToken() && !v.IsFunction() {
 		p.fail(colon.Offset, "expected a name after \":\"")
-		return i, "", false
+		return i, "", "", false
 	}
 	name := v.Token.Value
 	lower := strings.ToLower(name)
 
-	if element {
-		if !pseudoElements[lower] {
-			if matchesNothingOnAPage(lower) {
-				// A pseudo-element whose state a page laid out once never
-				// enters. See inapplicable.
-				p.inapplicable(colon.Offset, "the pseudo-element ::"+name+
-					" is not implemented"+reasonForPseudoElement(lower))
-				return i, "", false
-			}
-			p.unsupported(colon.Offset, "the pseudo-element ::"+name+
-				" is not implemented"+reasonForPseudoElement(lower))
-			return i, "", false
-		}
-		if v.IsFunction() {
-			p.unsupported(colon.Offset, "the pseudo-element ::"+name+"() is not implemented")
-			return i, "", false
-		}
-		return i + 1, lower, true
-	}
-
 	// One colon may still be a pseudo-element, for the four that predate the
 	// two-colon notation.
-	if !v.IsFunction() && legacyPseudoElements[lower] {
-		return i + 1, lower, true
+	if element || (!v.IsFunction() && legacyPseudoElements[lower]) {
+		if pseudoElements[lower] {
+			if v.IsFunction() {
+				p.unsupported(colon.Offset, "the pseudo-element ::"+name+"() is not implemented")
+				return i, "", "", false
+			}
+			return i + 1, lower, lower, true
+		}
+		never, known := otherPseudoElements[lower]
+		if !known {
+			p.unsupported(colon.Offset, "the pseudo-element ::"+name+" is not implemented")
+			return i, "", "", false
+		}
+		// A pseudo-element this engine generates no box or style for. It is a
+		// valid selector all the same — which is the whole difference between
+		// "p::selection, .x" keeping ".x" and losing it — and it selects
+		// nothing: the compound it ends is given a pseudo-class that never
+		// matches, and the selector carries no pseudo-element for the cascade
+		// to compute.
+		kind := PseudoUnanswered
+		msg := "the pseudo-element ::" + name + " is not implemented" +
+			reasonForPseudoElement(lower) + ", so the selector matches nothing"
+		if never {
+			kind = PseudoNever
+			p.inapplicable(colon.Offset, msg)
+		} else {
+			p.unanswered++
+			p.unsupported(colon.Offset, msg)
+		}
+		out.Pseudos = append(out.Pseudos, Pseudo{Kind: kind, Name: "::" + lower})
+		return i + 1, "", lower, true
+	}
+
+	if after != "" && !userActionPseudoClasses[lower] {
+		// Selectors 4 §3.6.3. What was accepted here instead was moved: the
+		// pseudo-class was collected into the compound the pseudo-element ends,
+		// and matched against the element, so "a::before:first-child" styled
+		// the ::before of every <a> that is a first child — a rule that in a
+		// browser styles nothing, because it is not a selector at all.
+		p.fail(colon.Offset, "\":"+name+"\" may not follow the pseudo-element ::"+
+			after+"; only a user-action pseudo-class such as :hover may")
+		return i, "", "", false
 	}
 
 	kind, known := pseudoClasses[lower]
 	if !known {
-		if dynamicPseudoClasses[lower] {
-			msg := "\":" + name +
-				"\" depends on how a document is being interacted with, " +
-				"which a page laid out once cannot know"
-			if stateOnAPage[lower] {
-				// The markup answers this one, and this engine does not: the
-				// rule is one an author will not see and should be told about
-				// as a gap rather than as a property of the medium.
-				p.unsupported(colon.Offset, msg)
-				return i, "", false
-			}
-			p.inapplicable(colon.Offset, msg)
-			return i, "", false
-		}
-		p.unsupported(colon.Offset, "the pseudo-class \":"+name+"\" is not implemented")
-		return i, "", false
+		return p.unimplementedPseudoClass(v, i, colon, name, lower, out)
 	}
 
 	ps := Pseudo{Kind: kind, Name: lower}
@@ -1029,18 +1183,26 @@ func (p *selParser) pseudo(vals []ComponentValue, i int, out *Compound, depth in
 	case PseudoNthChild, PseudoNthLastChild, PseudoNthOfType, PseudoNthLastOfType:
 		if !v.IsFunction() {
 			p.fail(colon.Offset, "\":"+name+"\" needs an An+B in parentheses")
-			return i, "", false
+			return i, "", "", false
 		}
+		before := p.unanswered
 		anb, of, ok := p.nth(v, lower, depth)
 		if !ok {
-			return i, "", false
+			return i, "", "", false
 		}
 		ps.AnB, ps.Of = anb, of
+		if p.unanswered > before {
+			// "of S" decides which siblings are counted, so a selector in it
+			// that answers "no" where the document says "yes" moves every
+			// position after it, and the rule lands on elements it does not
+			// select. Nothing it says can be used.
+			ps.Kind = PseudoUnanswered
+		}
 
 	case PseudoNot, PseudoIs, PseudoWhere:
 		if !v.IsFunction() {
 			p.fail(colon.Offset, "\":"+name+"\" needs a selector list in parentheses")
-			return i, "", false
+			return i, "", "", false
 		}
 		if kind != PseudoNot && onlyWhitespace(v.Values) {
 			// Written with nothing in it, which is *valid* for the two
@@ -1061,8 +1223,9 @@ func (p *selParser) pseudo(vals []ComponentValue, i int, out *Compound, depth in
 			// prelude and is not what this is.
 			ps.Args = nil
 			out.Pseudos = append(out.Pseudos, ps)
-			return i + 1, "", true
+			return i + 1, "", "", true
 		}
+		before := p.unanswered
 		args, all := p.list(v.Values, depth+1)
 		// :is() and :where() are forgiving: an argument they cannot use is
 		// dropped and the rest stand. :not() is not — the specification says an
@@ -1073,39 +1236,96 @@ func (p *selParser) pseudo(vals []ComponentValue, i int, out *Compound, depth in
 		if kind == PseudoNot && !all {
 			p.fail(colon.Offset, "\":not()\" has an argument this engine cannot use, "+
 				"which would widen what the rule matches")
-			return i, "", false
+			return i, "", "", false
 		}
-		if len(args) == 0 {
-			// Nothing usable left, which is not the same as nothing written.
-			// :not() with nothing matches everything, the opposite of what was
-			// written; and an :is() whose arguments this engine dropped —
-			// ":is(:hover)" — would silently narrow a rule the author wrote to
-			// match something. Both are refused and both are reported.
-			p.fail(colon.Offset, "\":"+name+"\" has no selector this engine can use")
-			return i, "", false
-		}
+		// A forgiving list whose every argument was dropped is the empty one
+		// above by another route: it matches nothing and is still a selector,
+		// as it is in a browser. The arguments were each reported as they were
+		// dropped. Refusing it instead took the rest of the rule's list with
+		// it — "p, q:is(::before)" lost "p".
 		ps.Args = args
+		if kind == PseudoNot && p.unanswered > before {
+			// "Matches nothing" is a safe wrong answer only where it narrows a
+			// rule, and under a negation it widens one: ":not(:checked)" would
+			// select every checked box. So the negation is unanswered too, and
+			// the rule is missing from elements rather than on ones it
+			// excludes.
+			ps.Kind = PseudoUnanswered
+		}
 
 	case PseudoLang:
 		if !v.IsFunction() {
 			p.fail(colon.Offset, "\":lang()\" needs a language in parentheses")
-			return i, "", false
+			return i, "", "", false
 		}
 		langs, ok := p.langs(v)
 		if !ok {
-			return i, "", false
+			return i, "", "", false
 		}
 		ps.Langs = langs
 
 	default:
 		if v.IsFunction() {
 			p.fail(colon.Offset, "\":"+name+"\" takes no arguments")
-			return i, "", false
+			return i, "", "", false
 		}
 	}
 
 	out.Pseudos = append(out.Pseudos, ps)
-	return i + 1, "", true
+	return i + 1, "", "", true
+}
+
+// functionalPseudoClasses says, for the pseudo-classes this engine keeps without
+// matching, which are written as functions: true for one that must be, false
+// for one that may be either. One absent takes no arguments, and written with
+// them is invalid, as it is in a browser.
+var functionalPseudoClasses = map[string]bool{
+	"has": true, "dir": true, "nth-col": true, "nth-last-col": true,
+	"host-context": true, "host": false,
+}
+
+// unimplementedPseudoClass reads a pseudo-class this engine does not match: a
+// dynamic one, which is kept as PseudoNever or PseudoUnanswered, one of
+// unimplementedPseudoClasses, which is kept as PseudoUnanswered, or a name no
+// specification gives, which is invalid.
+//
+// v is the name or function at vals[i], and what is returned is pseudo's.
+func (p *selParser) unimplementedPseudoClass(v ComponentValue, i int, colon Token,
+	name, lower string, out *Compound) (int, string, string, bool) {
+
+	dynamic, unimplemented := dynamicPseudoClasses[lower], unimplementedPseudoClasses[lower]
+	if !dynamic && !unimplemented {
+		p.unsupported(colon.Offset, "the pseudo-class \":"+name+"\" is not implemented")
+		return i, "", "", false
+	}
+	if fn, listed := functionalPseudoClasses[lower]; (listed && fn && !v.IsFunction()) ||
+		(!listed && v.IsFunction()) {
+		p.fail(colon.Offset, "\":"+name+"\" is not written that way")
+		return i, "", "", false
+	}
+
+	switch {
+	case dynamic && !stateOnAPage[lower]:
+		// Nobody hovers a printed page. See inapplicable.
+		p.inapplicable(colon.Offset, "\":"+name+"\" depends on how a document is "+
+			"being interacted with, which a page laid out once cannot know, so it "+
+			"matches nothing here")
+		out.Pseudos = append(out.Pseudos, Pseudo{Kind: PseudoNever, Name: lower})
+	case dynamic:
+		// The markup answers this one, and this engine does not: the rule is one
+		// an author will not see and should be told about as a gap rather than
+		// as a property of the medium.
+		p.unanswered++
+		p.unsupported(colon.Offset, "\":"+name+"\" is answered by the document, "+
+			"which this engine does not read for it, so it matches nothing here")
+		out.Pseudos = append(out.Pseudos, Pseudo{Kind: PseudoUnanswered, Name: lower})
+	default:
+		p.unanswered++
+		p.unsupported(colon.Offset, "the pseudo-class \":"+name+"\" is not "+
+			"implemented, so it matches nothing here")
+		out.Pseudos = append(out.Pseudos, Pseudo{Kind: PseudoUnanswered, Name: lower})
+	}
+	return i + 1, "", "", true
 }
 
 // nth parses the argument of :nth-child() and its three siblings, which is an
@@ -1325,6 +1545,21 @@ func pseudoSpecificity(ps Pseudo) Specificity {
 			return Specificity{}
 		}
 		return ps.Nest.Specificity()
+
+	case PseudoNever, PseudoUnanswered:
+		// Matching nothing does not change what was written, and an :is()
+		// around one of these takes its specificity whichever argument
+		// matched. A pseudo-element counts as one; a :not() or an
+		// ":nth-child(of S)" that was unanswered for what it holds counts as
+		// it would have.
+		switch {
+		case strings.HasPrefix(ps.Name, "::"):
+			return Specificity{0, 0, 1}
+		case ps.Of != nil:
+			return Specificity{0, 1, 0}.add(mostSpecific(ps.Of))
+		case ps.Args != nil:
+			return mostSpecific(ps.Args)
+		}
 	}
 	return Specificity{0, 1, 0}
 }

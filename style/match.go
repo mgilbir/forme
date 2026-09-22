@@ -474,6 +474,13 @@ func (m *Matcher) pseudo(p css.Pseudo, n *html.Node) bool {
 		// above already assumes in order to read :link as :any-link, so a
 		// document cannot get one of the two answers without the other.
 		return false
+
+	case css.PseudoNever, css.PseudoUnanswered:
+		// ":hover" on a page nobody hovers, and ":checked", which this engine
+		// does not work out. Both select nothing, and the parser has already
+		// said which of the two it is and made sure the second only ever
+		// narrows a rule — see the note at the head of css/selector.go.
+		return false
 	}
 	return false
 }
