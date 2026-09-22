@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"fmt"
 	"image"
 	"math"
 	"sort"
@@ -334,11 +335,18 @@ func PaintReporting(root *Fragment, rec *Recorder) []Op {
 	if root == nil {
 		return nil
 	}
-	p := &painter{colors: map[string]style.RGBA{}}
+	if rec == nil {
+		// A recorder nobody reads, for the reason newLayouter makes one: the
+		// work budget it carries bounds the paint whether or not anyone is
+		// told what it cut.
+		rec = NewRecorder(nil)
+	}
+	p := &painter{colors: map[string]style.RGBA{}, rec: rec}
 	p.dimming(root, 1, nil)
 	p.canvasBackground(root)
 	p.stackingContext(root)
 	p.outlines(root)
+	p.settleGroups()
 	for _, b := range p.order {
 		p.groups[b].report(rec)
 	}
@@ -400,7 +408,12 @@ func (p *painter) groupFor(b *Box, owners *opacityOwner) *opacityOwner {
 		p.groups = map[*Box]*group{}
 	}
 	if _, seen := p.groups[b]; !seen {
-		p.groups[b] = &group{box: b, alpha: opacityOf(b.Style)}
+		g := &group{box: b, alpha: opacityOf(b.Style)}
+		if owners != nil {
+			parent := p.groups[owners.box]
+			parent.children = append(parent.children, g)
+		}
+		p.groups[b] = g
 		p.order = append(p.order, b)
 	}
 	return &opacityOwner{box: b, up: owners}
@@ -418,7 +431,10 @@ func (p *painter) grouped(f *Fragment, paint func()) {
 	paint()
 	ops, marks := dimOps(p.ops, at, a)
 	p.ops = ops
-	for o := p.owners[f]; o != nil; o = o.up {
+	// To the innermost group only. The groups around it read these through
+	// their children when they are settled; appending to every one of them
+	// held each mark once per level of nested opacity (audit C21).
+	if o := p.owners[f]; o != nil {
 		g := p.groups[o.box]
 		g.marks = append(g.marks, marks...)
 	}
@@ -442,47 +458,36 @@ func (p *painter) canvasBackground(root *Fragment) {
 	}
 	if b := root.canvasColor; b != nil {
 		if c, ok := p.color(b, "background-color"); ok && c.A > 0 {
-			p.ops = append(p.ops, FillRect{Rect: root.canvas, Color: c})
+			p.emit(FillRect{Rect: root.canvas, Color: c})
 		}
 	}
-	p.backgroundImages(root.canvasLayers)
+	p.backgroundImages(root.canvasLayers, root.canvasColor)
 }
 
-// backgroundImages emits one operation per resolved layer.
+// backgroundImages emits the operations of each resolved layer. who is the box
+// the background is the background of, which a finding about a layer names.
 //
 // The layers arrive in painting order, so this is a loop and not a decision. All
 // the arithmetic — the tile, the step, the clip — happened in layout, where a
-// finding could be raised about it.
-func (p *painter) backgroundImages(layers []bgPaint) {
+// finding could be raised about it. A picture is one TileImage however many
+// tiles it is; a solid or banded layer is rectangles, and tiling says how many.
+func (p *painter) backgroundImages(layers []bgPaint, who *Box) {
 	for _, l := range layers {
 		if l.Clip.Empty() || l.Tile.Empty() {
 			continue
 		}
 		if l.Solid != nil {
-			for _, r := range solidTiles(l) {
-				p.ops = append(p.ops, FillRect{Rect: r, Color: *l.Solid})
-			}
+			p.tiling(l, []bgBand{{Rect: Rect{W: l.Tile.W, H: l.Tile.H}, Color: *l.Solid}}, who)
 			continue
 		}
 		if len(l.Bands) > 0 {
-			for _, tile := range bandTiles(l) {
-				for _, band := range l.Bands {
-					r := Rect{
-						X: tile.X.Add(band.Rect.X), Y: tile.Y.Add(band.Rect.Y),
-						W: band.Rect.W, H: band.Rect.H,
-					}
-					if r = r.Intersect(l.Clip); r.Empty() {
-						continue
-					}
-					p.ops = append(p.ops, FillRect{Rect: r, Color: band.Color})
-				}
-			}
+			p.tiling(l, l.Bands, who)
 			continue
 		}
 		if l.Image == nil {
 			continue
 		}
-		p.ops = append(p.ops, TileImage{
+		p.emit(TileImage{
 			Clip: l.Clip, Tile: l.Tile,
 			StepX: l.StepX, StepY: l.StepY,
 			Image: l.Image, Key: l.Key,
@@ -490,8 +495,26 @@ func (p *painter) backgroundImages(layers []bgPaint) {
 	}
 }
 
+// emit appends operations a fragment paints for itself, charged to the
+// document's work budget as its own content: a background, a border edge, a
+// run of text. What a single declaration can multiply — a tiling, the dashes of
+// a border — is charged before it is expanded, by the code that expands it, and
+// appended directly.
+func (p *painter) emit(ops ...Op) {
+	if len(ops) == 0 {
+		return
+	}
+	if !p.rec.chargeMark(int64(len(ops))*costOp, "the marks past that point") {
+		return
+	}
+	p.ops = append(p.ops, ops...)
+}
+
 type painter struct {
 	ops []Op
+	// rec is the render's recorder, which carries the document's work budget
+	// every operation is charged to. It is never nil. See emit.
+	rec *Recorder
 	// colors memoizes parsing a computed colour, which is asked for once per
 	// box per property and is almost always one of a handful of values.
 	colors map[string]style.RGBA
@@ -1120,10 +1143,10 @@ func (p *painter) paintDecorations(f *Fragment) {
 func (p *painter) paintBackground(f *Fragment) {
 	if bg, ok := p.color(f.Box, "background-color"); ok && bg.A > 0 {
 		if rect := f.bgColorRect; !rect.Empty() {
-			p.ops = append(p.ops, FillRect{Rect: rect, Color: bg})
+			p.emit(FillRect{Rect: rect, Color: bg})
 		}
 	}
-	p.backgroundImages(f.background)
+	p.backgroundImages(f.background, f.Box)
 }
 
 // content paints the inline-level marks a fragment carries: its list marker and
@@ -1166,11 +1189,11 @@ func (p *painter) paintContent(f *Fragment) {
 					// A picture with geometry in it: each rectangle placed
 					// through the viewport transform and clipped to the box.
 					// See svg.go.
-					p.ops = append(p.ops, r.SVG.paint(rect)...)
+					p.emit(r.SVG.paint(rect)...)
 				} else if r.Solid != nil {
-					p.ops = append(p.ops, FillRect{Rect: rect, Color: *r.Solid})
+					p.emit(FillRect{Rect: rect, Color: *r.Solid})
 				} else {
-					p.ops = append(p.ops, DrawImage{Rect: rect, Image: r.Image, Key: r.Key})
+					p.emit(DrawImage{Rect: rect, Image: r.Image, Key: r.Key})
 				}
 			})
 		}
@@ -1184,12 +1207,12 @@ func (p *painter) paintContent(f *Fragment) {
 			W: m.ImageRect.W, H: m.ImageRect.H,
 		}
 		if !rect.Empty() {
-			p.ops = append(p.ops, DrawImage{
+			p.emit(DrawImage{
 				Rect: rect, Image: m.Image.Image, Key: m.Image.Key,
 			})
 		}
 	} else if m := f.Marker; m != nil && m.Face != nil && !hidden {
-		p.ops = append(p.ops, DrawText{
+		p.emit(DrawText{
 			At: Point{
 				X: f.BorderRect.X.Add(m.At.X),
 				Y: f.BorderRect.Y.Add(m.At.Y),
@@ -1470,11 +1493,11 @@ func (p *painter) lines(f *Fragment) {
 				// the page beside the box, and would put the control character
 				// itself into the text extracted from the page, where it is
 				// exactly the thing a reader does not want back.
-				p.ops = append(p.ops, controlBox(at, run.Width, run.Size, colour, turnOfLine(line))...)
+				p.emit(controlBox(at, run.Width, run.Size, colour, turnOfLine(line))...)
 				continue
 			}
 			p.decorate(run, at, turnOfLine(line), false)
-			p.ops = append(p.ops, DrawText{
+			p.emit(DrawText{
 				At:            at,
 				Sideways:      line.Sideways,
 				Anticlockwise: line.Anticlockwise,
@@ -1546,7 +1569,7 @@ func (p *painter) decorate(run TextRun, at Point, turn runTurn, over bool) {
 		if band.Empty() {
 			continue
 		}
-		p.ops = append(p.ops, FillRect{
+		p.emit(FillRect{
 			Rect: placeRun(band, at, turn), Color: colour, Overhang: true,
 		})
 	}
@@ -1713,74 +1736,142 @@ func ShapedGlyphs(v DrawText) ([]shape.Glyph, int) {
 		v.Features)
 }
 
-// solidTiles is the rectangles a one-colour layer paints.
+// maxLayerMarks bounds the rectangles one background layer is drawn as.
 //
-// A tiling of one colour is still a tiling: "background-repeat: space" leaves
-// gaps between its tiles and the gaps show, so this cannot simply fill the clip.
-// What it can do is merge along an axis whose tiles *abut*, which is every
-// repeat except space — the step equals the tile there, so the tiles meet edge
-// to edge and their union is the whole clip on that axis.
+// A solid or banded tiling is not a picture: it leaves here as rectangles, one
+// per band per tile along any axis whose tiles cannot be merged, and the count
+// is (area / tile) — a ratio the stylesheet controls both ends of.
+// "background-size: 1px 1px" on a gradient of two stops over a 600 by 800 box
+// was 960,000 fills and 149 MB from one declaration, and the tile cap did not
+// see it: that cap is per layer and says how many tiles a *backend* will be
+// asked to repeat, and the bands, the layers and the elements sharing the rule
+// all multiply it.
 //
-// That merge is not a tidiness: it is what makes a page written as
-// "linear-gradient(green, green)" produce the same display list as the same page
-// written with background-color, which is what a reftest comparing the two is
-// asking about. Emitting one fill per tile would paint identical pixels and
-// compare unequal.
+// Sixty-five thousand is a stripe a pixel apart down a box thirty thousand
+// pixels long, which is further than any page goes. A layer past it repeats
+// more finely than anything a reader can tell apart, and is drawn as what a
+// reader sees there — see averageTiling.
 //
-// The count is bounded before this runs — see tilesWithinCap, which refuses a
-// layer whose tiles are past what a backend will draw — so the loop below cannot
-// be driven by a stylesheet.
-func solidTiles(l bgPaint) []Rect {
-	return tilesOf(l, solidSpans)
-}
+// A variable so that a test can lower it.
+var maxLayerMarks = 1 << 16
 
-// bandTiles is where a banded gradient's tiles sit.
+// tiling paints a solid or banded layer: bands placed in every tile.
 //
-// It cannot take solidTiles' merge: a solid tiling covers its clip in one
-// rectangle however many tiles it is, because every tile paints the same colour
-// everywhere, and a banded tile does not. So this lists them one by one, which
-// the tile cap has already bounded.
-func bandTiles(l bgPaint) []Rect {
-	return tilesOf(l, everySpan)
-}
-
-func tilesOf(l bgPaint, spans func(clipLo, clipHi, tileLo, size, step style.Unit) []span) []Rect {
-	xs := spans(l.Clip.X, l.Clip.Right(), l.Tile.X, l.Tile.W, l.StepX)
-	ys := spans(l.Clip.Y, l.Clip.Bottom(), l.Tile.Y, l.Tile.H, l.StepY)
-	out := make([]Rect, 0, len(xs)*len(ys))
+// A solid layer is one band the size of its tile. The rectangles are merged
+// along an axis where that is exact — the tiles abut on it (the step is the
+// tile's own size, which is every repeat but space) and every band spans the
+// whole tile across it — so an abutting tiling of one colour is one rectangle
+// however many tiles it is, and a stack of horizontal stripes is one rectangle
+// per stripe per row. That merge is not a tidiness: it is what makes a page
+// written as "linear-gradient(green, green)" produce the same display list as
+// the same page written with background-color, which is what a reftest
+// comparing the two is asking about.
+//
+// What is left is counted before a rectangle is made. Past maxLayerMarks, or
+// past what the document's work budget will pay for, the layer is drawn as its
+// average colour instead, and the box is told.
+func (p *painter) tiling(l bgPaint, bands []bgBand, who *Box) {
+	mergeX, mergeY := l.StepX == l.Tile.W, l.StepY == l.Tile.H
+	for _, b := range bands {
+		mergeX = mergeX && b.Rect.X == 0 && b.Rect.W == l.Tile.W
+		mergeY = mergeY && b.Rect.Y == 0 && b.Rect.H == l.Tile.H
+	}
+	nx, ny := 1, 1
+	if !mergeX {
+		nx = tileSpan(l.Clip.X, l.Clip.Right(), l.Tile.X, l.Tile.W, l.StepX)
+	}
+	if !mergeY {
+		ny = tileSpan(l.Clip.Y, l.Clip.Bottom(), l.Tile.Y, l.Tile.H, l.StepY)
+	}
+	if nx <= 0 || ny <= 0 {
+		return
+	}
+	marks := int64(nx) * int64(ny) * int64(len(bands))
+	if marks > int64(maxLayerMarks) {
+		p.averageTiling(l, bands, who, fmt.Sprintf(
+			"it would take %d rectangles, past the %d this engine draws one background layer as",
+			marks, maxLayerMarks))
+		return
+	}
+	if !p.rec.charge(marks*costOp, "the background tilings past that point, drawn as their average colour") {
+		p.averageTiling(l, bands, who, "")
+		return
+	}
+	xs := axisSpans(mergeX, l.Clip.X, l.Clip.Right(), l.Tile.X, l.Tile.W, l.StepX)
+	ys := axisSpans(mergeY, l.Clip.Y, l.Clip.Bottom(), l.Tile.Y, l.Tile.H, l.StepY)
 	for _, y := range ys {
 		for _, x := range xs {
-			r := Rect{X: x.lo, Y: y.lo, W: x.hi.Sub(x.lo), H: y.hi.Sub(y.lo)}
-			if r = r.Intersect(l.Clip); !r.Empty() {
-				out = append(out, r)
+			for _, b := range bands {
+				r := Rect{X: x.lo.Add(b.Rect.X), Y: y.lo.Add(b.Rect.Y), W: b.Rect.W, H: b.Rect.H}
+				if mergeX {
+					r.X, r.W = x.lo, x.hi.Sub(x.lo)
+				}
+				if mergeY {
+					r.Y, r.H = y.lo, y.hi.Sub(y.lo)
+				}
+				if r = r.Intersect(l.Clip); r.Empty() {
+					continue
+				}
+				// Paid for above, so appended rather than emitted.
+				p.ops = append(p.ops, FillRect{Rect: r, Color: b.Color})
 			}
 		}
 	}
-	return out
+}
+
+// averageTiling paints a tiling as the one colour it averages to, over its
+// clip, and says so when why is given; a refusal by the work budget has said so
+// already.
+//
+// It is what a reader sees. A pattern repeating every hundredth of a pixel is
+// not stripes on any device: a browser rasterises the tile, and a tile smaller
+// than a device pixel is resampled into the pixels it falls in, which is the
+// average of its colours weighted by how much of the tile each covers. That is
+// computed here, with the alpha premultiplied — a band of transparent and a
+// band of red average to half-transparent red, not to a darker red — and with
+// the gaps a "space" repeat leaves counted as transparent. It is exact only
+// where the pattern really is finer than a pixel, which is why the box is told
+// whenever it is drawn this way.
+func (p *painter) averageTiling(l bgPaint, bands []bgBand, who *Box, why string) {
+	period := l.StepX.Px() * l.StepY.Px()
+	if period <= 0 {
+		return
+	}
+	var a, r, g, b float64
+	for _, band := range bands {
+		f := band.Rect.W.Px() * band.Rect.H.Px() / period
+		wa := f * band.Color.A
+		a += wa
+		r += wa * band.Color.R
+		g += wa * band.Color.G
+		b += wa * band.Color.B
+	}
+	if why != "" && who != nil {
+		p.rec.ReportDetail(Finding{
+			Rule:     RuleLimit,
+			Source:   AtHTML(offsetOf(who)),
+			Message:  "a background layer repeats too finely to draw tile by tile, so it was drawn as its average colour: " + why,
+			Path:     PathOf(who.Element),
+			Property: "background-image",
+		})
+	}
+	if a <= 0 {
+		return
+	}
+	avg := style.RGBA{R: r / a, G: g / a, B: b / a, A: min(a, 1)}
+	p.emit(FillRect{Rect: l.Clip, Color: avg})
 }
 
 type span struct{ lo, hi style.Unit }
 
-// solidSpans is the intervals one axis of a solid tiling covers within its clip.
-//
-// Abutting tiles — step equal to the tile's own size — cover the clip entirely,
-// so they come back as one interval however many of them there are. Anything
-// else is listed tile by tile.
-func solidSpans(clipLo, clipHi, tileLo, size, step style.Unit) []span {
+// axisSpans is the intervals one axis of a tiling covers within its clip: the
+// clip itself when the axis merges, and otherwise tile by tile.
+func axisSpans(merge bool, clipLo, clipHi, tileLo, size, step style.Unit) []span {
 	if size <= 0 || step <= 0 || clipHi <= clipLo {
 		return nil
 	}
-	if step == size {
+	if merge {
 		return []span{{clipLo, clipHi}}
-	}
-	return everySpan(clipLo, clipHi, tileLo, size, step)
-}
-
-// everySpan is the intervals one axis of a tiling covers, listed tile by tile
-// with no merging of the abutting case.
-func everySpan(clipLo, clipHi, tileLo, size, step style.Unit) []span {
-	if size <= 0 || step <= 0 || clipHi <= clipLo {
-		return nil
 	}
 	n := tileSpan(clipLo, clipHi, tileLo, size, step)
 	if n <= 0 {

@@ -1,6 +1,8 @@
 package layout
 
 import (
+	"math/rand/v2"
+	"sort"
 	"strings"
 
 	"github.com/mgilbir/forme/style"
@@ -93,11 +95,44 @@ type groupMark struct {
 }
 
 // group is one box that asked for opacity, together with what it painted.
+//
+// marks are the group's own: what was painted by fragments whose innermost
+// group this is. What its nested groups painted is theirs, and reached through
+// children — a mark is held once, however deeply opacity nests around it.
 type group struct {
-	box   *Box
-	alpha float64
-	marks []groupMark
+	box      *Box
+	alpha    float64
+	marks    []groupMark
+	children []*group
+
+	// What settle found, for this group and everything inside it: how many
+	// marks there are, whether one is a picture, and whether any two lie over
+	// each other — or whether that was not checked. See settle.
+	count   int
+	image   bool
+	overlap overlapAnswer
+	settled bool
 }
+
+// overlapAnswer is what the faithfulness check found about a group's marks.
+type overlapAnswer uint8
+
+const (
+	marksApart overlapAnswer = iota
+	marksOverlap
+	marksUnchecked
+)
+
+// maxGroupMarks bounds the marks one group's check compares.
+//
+// The comparison is a sweep, n log n in the marks, and a group is compared with
+// everything inside it, so a mark is read once for each group around it that
+// has more than one thing inside. A box that tiles a gradient at a pixel is a
+// million marks; past this many the check is not made, and the group is
+// reported as unchecked rather than silently as faithful.
+//
+// A variable so that a test can lower it.
+var maxGroupMarks = 1 << 16
 
 // dimOps folds an alpha into every mark from at onwards, and says what it had to
 // work with.
@@ -153,15 +188,222 @@ func dimOps(ops []Op, at int, alpha float64) ([]Op, []groupMark) {
 	return kept, marks
 }
 
-// unfaithful is why folding the alpha into a group's marks is not the group, or
-// the empty string when it is.
+// settleGroups works out, for every group, what unfaithful reports.
+//
+// Inner groups first — p.order has every group after the one around it, so
+// backwards is children before parents — so that a group reads what its
+// children already found rather than finding it again.
+func (p *painter) settleGroups() {
+	for i := len(p.order) - 1; i >= 0; i-- {
+		p.groups[p.order[i]].settle(p.rec)
+	}
+}
+
+// settle decides whether a group's marks, and its children's, lie over each
+// other.
 //
 // Overlap is the whole rule, and one mark falls out of it rather than being a
-// case of its own: a group of one has no pair to test, so the loop below says
-// nothing about it — which is right, because there is nothing under that mark
-// to show through and dimming it is dimming the surface it was alone on. A
-// group of none is the same. Both were once written out above the loop as an
-// early return, and neither could be made to fail: the loop already had them.
+// case of its own: a group of one has no pair to test, which is right, because
+// there is nothing under that mark to show through and dimming it is dimming
+// the surface it was alone on. A group of none is the same.
+//
+// It was every pair, which is n² in the marks and exits early only on a text
+// mark, a picture or an overlap: a box tiling a gradient at four pixels was
+// 60,000 marks that lie side by side and took eleven seconds, and a pixel
+// would have been most of an hour (audit C21). Now it is a sweep, n log n; a
+// group whose child already overlaps overlaps too, since its marks are a
+// superset; and a group with only one thing inside it has the answer that
+// thing has. What is left is charged to the document's work budget, and is
+// reported as unchecked past maxGroupMarks or the budget, rather than as
+// faithful.
+func (g *group) settle(rec *Recorder) {
+	g.settled = true
+	g.count = len(g.marks)
+	g.overlap = marksApart
+	parts := 0
+	if len(g.marks) > 0 {
+		parts++
+	}
+	for _, m := range g.marks {
+		g.image = g.image || m.image
+	}
+	for _, c := range g.children {
+		g.count += c.count
+		g.image = g.image || c.image
+		if c.count > 0 {
+			parts++
+		}
+		switch c.overlap {
+		case marksOverlap:
+			g.overlap = marksOverlap
+		case marksUnchecked:
+			if g.overlap == marksApart {
+				g.overlap = marksUnchecked
+			}
+		}
+	}
+	if g.image || g.overlap != marksApart || g.count < 2 {
+		// A picture is reported whatever else is true of the group, and an
+		// answer read from a child needs nothing more.
+		return
+	}
+	if parts == 1 && len(g.marks) == 0 {
+		// Everything is inside one child, which has answered for it.
+		return
+	}
+	if g.count > maxGroupMarks ||
+		!rec.charge(int64(g.count)*costMarkCompared, "the opacity checks past that point") {
+		g.overlap = marksUnchecked
+		return
+	}
+	all := make([]groupMark, 0, g.count)
+	var gather func(*group)
+	gather = func(h *group) {
+		all = append(all, h.marks...)
+		for _, c := range h.children {
+			gather(c)
+		}
+	}
+	gather(g)
+	for _, m := range all {
+		if m.text {
+			// A run states no rectangle, so it may lie over anything, and
+			// there is at least one other mark for it to lie over.
+			g.overlap = marksOverlap
+			return
+		}
+	}
+	if anyOverlap(all) {
+		g.overlap = marksOverlap
+	}
+}
+
+// anyOverlap reports whether any two of the rectangles share area, in
+// n log n.
+//
+// A sweep across the page from left to right, holding the rectangles the
+// sweep line crosses. Those must be apart from each other — the moment two are
+// not, the answer is yes and the sweep stops — so they are disjoint intervals
+// down the page, kept in order, and a new one can only meet the one above it
+// or the one below. Leaving comes before entering at the same x, because two
+// rectangles that only touch share no area and Rect.Intersect says so.
+func anyOverlap(marks []groupMark) bool {
+	type event struct {
+		x     style.Unit
+		enter bool
+		at    int
+	}
+	events := make([]event, 0, 2*len(marks))
+	for i, m := range marks {
+		if m.rect.Empty() {
+			continue
+		}
+		events = append(events, event{m.rect.X, true, i}, event{m.rect.Right(), false, i})
+	}
+	sort.Slice(events, func(i, j int) bool {
+		a, b := events[i], events[j]
+		if a.x != b.x {
+			return a.x < b.x
+		}
+		return !a.enter && b.enter
+	})
+	var active intervalSet
+	for _, e := range events {
+		r := marks[e.at].rect
+		if !e.enter {
+			active.remove(r.Y)
+			continue
+		}
+		if !active.insert(r.Y, r.Bottom()) {
+			return true
+		}
+	}
+	return false
+}
+
+// intervalSet is a set of disjoint intervals down the page, ordered by where
+// they begin: a treap, whose priorities are random so that no order of
+// insertion a document can arrange makes it deep.
+type intervalSet struct {
+	root *interval
+	rng  *rand.Rand
+}
+
+type interval struct {
+	lo, hi      style.Unit
+	pri         uint64
+	left, right *interval
+}
+
+// insert adds [lo, hi) and reports whether it is apart from every interval
+// already there. One that is not is not added: the answer is known.
+func (s *intervalSet) insert(lo, hi style.Unit) bool {
+	// The last interval beginning at or before lo, and the first beginning
+	// after it. Only those two can meet [lo, hi): the rest are disjoint from
+	// them and further away on the far side of one of them.
+	var below, above *interval
+	for n := s.root; n != nil; {
+		if n.lo <= lo {
+			below, n = n, n.right
+		} else {
+			above, n = n, n.left
+		}
+	}
+	if below != nil && below.hi > lo {
+		return false
+	}
+	if above != nil && above.lo < hi {
+		return false
+	}
+	if s.rng == nil {
+		s.rng = rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))
+	}
+	a, b := splitIntervals(s.root, lo)
+	s.root = mergeIntervals(mergeIntervals(a, &interval{lo: lo, hi: hi, pri: s.rng.Uint64()}), b)
+	return true
+}
+
+// remove takes out the interval beginning at lo.
+func (s *intervalSet) remove(lo style.Unit) {
+	a, b := splitIntervals(s.root, lo)
+	_, c := splitIntervals(b, lo+1)
+	s.root = mergeIntervals(a, c)
+}
+
+// splitIntervals divides a treap into the intervals beginning before at and
+// the rest.
+func splitIntervals(n *interval, at style.Unit) (*interval, *interval) {
+	if n == nil {
+		return nil, nil
+	}
+	if n.lo < at {
+		l, r := splitIntervals(n.right, at)
+		n.right = l
+		return n, r
+	}
+	l, r := splitIntervals(n.left, at)
+	n.left = r
+	return l, n
+}
+
+// mergeIntervals joins two treaps, every interval of a before every one of b.
+func mergeIntervals(a, b *interval) *interval {
+	switch {
+	case a == nil:
+		return b
+	case b == nil:
+		return a
+	case a.pri > b.pri:
+		a.right = mergeIntervals(a.right, b)
+		return a
+	default:
+		b.left = mergeIntervals(a, b.left)
+		return b
+	}
+}
+
+// unfaithful is why folding the alpha into a group's marks is not the group, or
+// the empty string when it is. It reads what settle found.
 //
 // The order of the tests is the order an author needs to hear them in. A picture
 // in the group is the one the engine could do nothing at all about, so it is
@@ -169,24 +411,26 @@ func dimOps(ops []Op, at int, alpha float64) ([]Op, []groupMark) {
 // what they will see, and "the marks blend into each other" would send them
 // looking at the wrong thing.
 func (g group) unfaithful() string {
+	if !g.settled {
+		// A group built by hand, which nothing has settled.
+		g.settle(nil)
+	}
 	if g.alpha == 0 {
 		// Nothing was painted, which is what the group would have come to.
 		return ""
 	}
-	for _, m := range g.marks {
-		if m.image {
-			return "a picture carries its own pixels and there is no colour in " +
-				"it to dim, so it is painted as though the box were opaque"
-		}
-	}
-	for i, a := range g.marks {
-		for _, b := range g.marks[i+1:] {
-			if a.text || b.text || !a.rect.Intersect(b.rect).Empty() {
-				return "the box paints marks that lie over each other, and each " +
-					"is dimmed on its own, so the lower one shows through the " +
-					"upper instead of being hidden by it"
-			}
-		}
+	switch {
+	case g.image:
+		return "a picture carries its own pixels and there is no colour in " +
+			"it to dim, so it is painted as though the box were opaque"
+	case g.overlap == marksOverlap:
+		return "the box paints marks that lie over each other, and each " +
+			"is dimmed on its own, so the lower one shows through the " +
+			"upper instead of being hidden by it"
+	case g.overlap == marksUnchecked:
+		return "the box paints more marks than this engine compares, so " +
+			"whether any lie over each other was not checked, and where they " +
+			"do the lower one shows through the upper"
 	}
 	return ""
 }

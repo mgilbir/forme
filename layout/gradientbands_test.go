@@ -169,9 +169,10 @@ func TestTheBandsSpanTheTileNotTheBox(t *testing.T) {
 
 // TestEveryTileGetsTheWholeStack is the merge that must not happen.
 //
-// solidTiles collapses an abutting tiling into one rectangle because every tile
-// of one colour paints the same thing everywhere. A banded tile does not, and
-// collapsing it would paint the first band over the entire clip.
+// painter.tiling collapses an abutting tiling into one rectangle because every tile
+// of one colour paints the same thing everywhere. A banded tile does not: it may
+// be merged along the stripes, which each tile continues, and never across them,
+// where collapsing it would paint the first band over the entire clip.
 func TestEveryTileGetsTheWholeStack(t *testing.T) {
 	ops, box := bandFixture(t, `background-image:
 		linear-gradient(to bottom, red 50%, green 50%);

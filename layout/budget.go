@@ -58,8 +58,9 @@ package layout
 // all of it. So a reserve — a quarter of the floor, and most of what the
 // input's own size earns — is held back from the work a small input can
 // multiply: generated content, counters, pictures, repeated marks, findings.
-// Only the work the document's own content costs, one box at a time, may spend
-// it. See charge and chargeOwn.
+// Only the work the document's own content costs, one box and one mark at a
+// time, may spend it: half of it for building boxes, and the rest for painting
+// them. See charge, chargeOwn and chargeMark.
 type workBudget struct {
 	// left is what may still be spent, and reserve how much of it only the
 	// document's own content may spend.
@@ -107,6 +108,12 @@ const (
 	// costFindingByte is one byte of a finding the recorder is asked to
 	// remember.
 	costFindingByte = 1
+	// costOp is one operation in the display list, which is about what a
+	// FillRect holds once it is in the slice.
+	costOp = 128
+	// costMarkCompared is one mark an opacity group's faithfulness check
+	// reads. See group.settle.
+	costMarkCompared = 16
 )
 
 // newWorkBudget is the floor.
@@ -162,8 +169,19 @@ func (r *Recorder) charge(steps int64, what string) bool {
 }
 
 // chargeOwn is charge for the work the document's own content costs — a box
-// for an element, a mark for a fragment — which may spend the reserve.
+// for an element — which may spend half the reserve. The other half is for
+// drawing what was built: a tree cut short by its own size is still painted, as
+// far as it goes. See chargeMark.
 func (r *Recorder) chargeOwn(steps int64, what string) bool {
+	if r == nil {
+		return true
+	}
+	return r.take(steps, r.work.reserve/2, what)
+}
+
+// chargeMark is charge for a mark a fragment paints for itself, which may spend
+// all of what is left: it is the last stage, and nothing after it needs any.
+func (r *Recorder) chargeMark(steps int64, what string) bool {
 	if r == nil {
 		return true
 	}

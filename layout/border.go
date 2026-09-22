@@ -101,7 +101,7 @@ func (p *painter) paintEdge(band Rect, kind borderStyle, colour style.RGBA, s si
 		return
 
 	case borderSolid:
-		p.ops = append(p.ops, FillRect{Rect: band, Color: colour})
+		p.emit(FillRect{Rect: band, Color: colour})
 
 	case borderDouble:
 		// Two lines with a gap, each a third of the width. A double border
@@ -109,15 +109,15 @@ func (p *painter) paintEdge(band Rect, kind borderStyle, colour style.RGBA, s si
 		// specification says to draw it solid rather than to lose a line.
 		third := thickness.Div(3)
 		if third <= 0 {
-			p.ops = append(p.ops, FillRect{Rect: band, Color: colour})
+			p.emit(FillRect{Rect: band, Color: colour})
 			return
 		}
 		if horizontal {
-			p.ops = append(p.ops,
+			p.emit(
 				FillRect{Rect: Rect{band.X, band.Y, band.W, third}, Color: colour},
 				FillRect{Rect: Rect{band.X, band.Bottom().Sub(third), band.W, third}, Color: colour})
 		} else {
-			p.ops = append(p.ops,
+			p.emit(
 				FillRect{Rect: Rect{band.X, band.Y, third, band.H}, Color: colour},
 				FillRect{Rect: Rect{band.Right().Sub(third), band.Y, third, band.H}, Color: colour})
 		}
@@ -129,9 +129,13 @@ func (p *painter) paintEdge(band Rect, kind borderStyle, colour style.RGBA, s si
 		p.paint3D(band, colour, kind, s, thickness, horizontal)
 
 	default:
-		p.ops = append(p.ops, FillRect{Rect: band, Color: colour})
+		p.emit(FillRect{Rect: band, Color: colour})
 	}
 }
+
+// onePixel is a device pixel, which on a page is a CSS pixel: the unit this
+// engine lays out in is the one a browser prints at 96 to the inch.
+var onePixel = mustPx(1)
 
 // paintDashes fills an edge with a run of marks.
 //
@@ -139,15 +143,33 @@ func (p *painter) paintEdge(band Rect, kind borderStyle, colour style.RGBA, s si
 // every renderer uses, since the specification leaves them open. The marks are
 // spread so that one lands at each end, which is what keeps a corner from
 // looking chewed.
+//
+// A mark is never shorter than a pixel. The count is the edge's length over
+// twice the mark, and the mark was the border's width, which nothing bounds
+// from below: "border: 0.02px dotted" round a box a thousand pixels wide was
+// 128,000 fills and twenty thousand pixels wide was two and a half million
+// (audit C14). No browser draws that. CSS Values 4 snaps a border width
+// between nought and one device pixel up to one ("snap as a border width"),
+// which is what Chrome and Firefox draw: such a border comes out one device
+// pixel thick, and its dots, which are as long as the border is thick, a device
+// pixel long. The width that is laid out is not changed here
+// — that is layout's, and moving it would move the box — but the length of a
+// mark along the edge is what browsers draw it as, so the marks are at most
+// half the edge's length in pixels. What that comes to is charged to the
+// document before one is made; past its budget the edge is drawn solid, and
+// the budget says so.
 func (p *painter) paintDashes(band Rect, colour style.RGBA, horizontal bool,
 	thickness style.Unit, dotted bool) {
 
 	unit := thickness
+	if thickness > 0 && thickness < onePixel {
+		unit = onePixel
+	}
 	if !dotted {
-		unit = thickness.Mul(3)
+		unit = unit.Mul(3)
 	}
 	if unit <= 0 {
-		p.ops = append(p.ops, FillRect{Rect: band, Color: colour})
+		p.emit(FillRect{Rect: band, Color: colour})
 		return
 	}
 
@@ -160,7 +182,12 @@ func (p *painter) paintDashes(band Rect, colour style.RGBA, horizontal bool,
 	period := unit.Mul(2)
 	count := int(length.Px() / period.Px())
 	if count < 1 {
-		p.ops = append(p.ops, FillRect{Rect: band, Color: colour})
+		p.emit(FillRect{Rect: band, Color: colour})
+		return
+	}
+	if !p.rec.charge(int64(count)*costOp,
+		"the dashes and dots of the borders past that point, drawn solid") {
+		p.emit(FillRect{Rect: band, Color: colour})
 		return
 	}
 	step := length.Div(float64(count))
@@ -174,6 +201,7 @@ func (p *painter) paintDashes(band Rect, colour style.RGBA, horizontal bool,
 		} else {
 			r = Rect{band.X, band.Y.Add(at), band.W, mark}
 		}
+		// Paid for above, so appended rather than emitted.
 		p.ops = append(p.ops, FillRect{Rect: r, Color: colour})
 	}
 }
@@ -194,15 +222,15 @@ func (p *painter) paint3D(band Rect, colour style.RGBA, kind borderStyle,
 	switch kind {
 	case borderInset:
 		if topLeft {
-			p.ops = append(p.ops, FillRect{Rect: band, Color: dark})
+			p.emit(FillRect{Rect: band, Color: dark})
 		} else {
-			p.ops = append(p.ops, FillRect{Rect: band, Color: light})
+			p.emit(FillRect{Rect: band, Color: light})
 		}
 	case borderOutset:
 		if topLeft {
-			p.ops = append(p.ops, FillRect{Rect: band, Color: light})
+			p.emit(FillRect{Rect: band, Color: light})
 		} else {
-			p.ops = append(p.ops, FillRect{Rect: band, Color: dark})
+			p.emit(FillRect{Rect: band, Color: dark})
 		}
 	default:
 		// groove and ridge: two halves, and which half is dark is what tells
@@ -216,15 +244,15 @@ func (p *painter) paint3D(band Rect, colour style.RGBA, kind borderStyle,
 		}
 		half := thickness.Div(2)
 		if half <= 0 {
-			p.ops = append(p.ops, FillRect{Rect: band, Color: outer})
+			p.emit(FillRect{Rect: band, Color: outer})
 			return
 		}
 		if horizontal {
-			p.ops = append(p.ops,
+			p.emit(
 				FillRect{Rect: Rect{band.X, band.Y, band.W, half}, Color: outer},
 				FillRect{Rect: Rect{band.X, band.Y.Add(half), band.W, band.H.Sub(half)}, Color: inner})
 		} else {
-			p.ops = append(p.ops,
+			p.emit(
 				FillRect{Rect: Rect{band.X, band.Y, half, band.H}, Color: outer},
 				FillRect{Rect: Rect{band.X.Add(half), band.Y, band.W.Sub(half), band.H}, Color: inner})
 		}

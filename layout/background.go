@@ -38,13 +38,20 @@ import (
 // "background-size: 0.001px" with the same repeat is four hundred *billion*.
 // Neither number appears anywhere in the document, so nothing upstream bounds it.
 //
-// Two things hold it. The tiling leaves here as a single value with a step in it
-// rather than as one operation per tile, so this engine's own memory does not
-// depend on the count at all. And the count is checked against a cap anyway,
-// because what leaves here is drawn by *something else* — a PDF reader expanding
-// a tiling pattern, a rasteriser walking the display list — and handing it four
-// hundred billion cells is an amplification whoever we hand it to has to survive.
-// See maxBackgroundTiles.
+// Three things hold it. A picture leaves here as a single value with a step in
+// it rather than as one operation per tile, so for a picture this engine's own
+// memory does not depend on the count at all. The count is checked against a
+// cap anyway, because what leaves here is drawn by *something else* — a PDF
+// reader expanding a tiling pattern, a rasteriser walking the display list — and
+// handing it four hundred billion cells is an amplification whoever we hand it
+// to has to survive. See maxBackgroundTiles.
+//
+// And a solid or banded layer is not a picture: it is painted as rectangles,
+// and there the count *is* this engine's memory. Those are merged where that is
+// exact, bounded per layer, and charged to the document's work budget before
+// one is made — see painter.tiling and maxLayerMarks. A comment here said
+// otherwise for all three kinds, and a gradient tiled at a pixel came out as
+// 960,000 fills (audit C14).
 
 // bgBox names one of the three boxes background-origin and background-clip
 // choose between.
@@ -182,10 +189,12 @@ type bgBand struct {
 //
 // The count is what a stylesheet controls both ends of: the painting area comes
 // from the box and the tile from background-size, and "background-size: 0.001px"
-// over an A4 page asks for four hundred billion of them. This engine emits one
-// value however many there are, so the cap is not protecting *this* process — it
-// is protecting whatever draws what this produces, which is a PDF reader
-// expanding a tiling pattern cell by cell.
+// over an A4 page asks for four hundred billion of them. For a picture this
+// engine emits one value however many there are, so there the cap is protecting
+// whatever draws what this produces, which is a PDF reader expanding a tiling
+// pattern cell by cell. A solid or banded layer is expanded here, and what bounds
+// that is maxLayerMarks and the document's work budget, not this: this is per
+// layer, and bands, layers and elements multiply it.
 //
 // A million is past anything a document means. A one-pixel image repeated over
 // an A4 page is four hundred thousand tiles, which is already pathological and
