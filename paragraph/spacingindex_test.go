@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mgilbir/forme/fonts/notosans"
 	"github.com/mgilbir/forme/segment"
@@ -19,6 +20,13 @@ func TestTheSpacingTableAgreesWithCounting(t *testing.T) {
 		"x​z", "​​", "áb", "مرحبا",
 		"é̂f", "\U0001F469‍\U0001F4BB!", "각x",
 		"tab\there", "a­b", "\U0001F1E6\U0001F1E7c", "اً",
+		// The runs the first table declined: a mark with no base in front of
+		// it, marks on a cursive letter, a cursive run with a Latin letter in
+		// it, and marks that a zero width space has cut off from their base —
+		// the one shape where the whole run's scan and a fresh one disagree.
+		"\u0301a", "بًب", "بaب", "ب\u200b\u064e\u064eب", "ب\u200b\u064ea",
+		"e\u0301e\u0301", "\u064e\u064e", "ب\u200b\u064e", "a\u200b\u0301b",
+		"\xff\u0301b", "a\u00a0b\u00a0", "\U00010100x",
 	} {
 		checkSpacingTable(t, text)
 	}
@@ -26,14 +34,10 @@ func TestTheSpacingTableAgreesWithCounting(t *testing.T) {
 
 func checkSpacingTable(t *testing.T, text string) {
 	t.Helper()
-	idx, ok := newSpacingIndex(text)
-	if !ok {
-		// A run with a mark or a cursive letter is counted, not tabulated —
-		// scanCursiveTracking carries its answer across clusters there, so the
-		// difference of two counts is not the count of the difference.
-		return
-	}
-	cuts := append([]int{0}, segment.Boundaries(nil, text)...)
+	bounds := segment.Boundaries(nil, text)
+	idx := newUnitIndex(text, bounds)
+	run := &runIndex{text: text}
+	cuts := append([]int{0}, bounds...)
 	if len(text) > 0 {
 		cuts = append(cuts, len(text))
 	}
@@ -45,9 +49,27 @@ func checkSpacingTable(t *testing.T, text string) {
 	// and killed the fuzz worker. A test that cannot run is not a check.
 	check := func(from, to int) {
 		t.Helper()
-		if got, want := idx.units(from, to), SpacedUnits(text[from:to]); got != want {
-			t.Errorf("%q[%d:%d] = %q: the table says %d and counting says %d",
-				text, from, to, text[from:to], got, want)
+		if !idx.covers(from, to) {
+			t.Errorf("%q[%d:%d]: both ends are cluster boundaries and the table "+
+				"does not cover them", text, from, to)
+			return
+		}
+		piece := text[from:to]
+		if got, want := idx.spacedUnits(from, to), SpacedUnits(piece); got != want {
+			t.Errorf("%q[%d:%d] = %q: the table says %d spaced units and counting says %d",
+				text, from, to, piece, got, want)
+		}
+		if got, want := idx.uprightUnits(from, to), UprightUnits(piece); got != want {
+			t.Errorf("%q[%d:%d] = %q: the table says %d upright units and counting says %d",
+				text, from, to, piece, got, want)
+		}
+		if got, want := run.wordSeparators(from, to), countWordSeparators(piece); got != want {
+			t.Errorf("%q[%d:%d] = %q: the table says %d word separators and counting says %d",
+				text, from, to, piece, got, want)
+		}
+		if got, want := run.runesTo(to), utf8.RuneCountInString(text[:to]); got != want {
+			t.Errorf("%q[:%d]: the table says %d characters and counting says %d",
+				text, to, got, want)
 		}
 	}
 	for i, c := range cuts {

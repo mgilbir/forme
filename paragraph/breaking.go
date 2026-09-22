@@ -55,11 +55,19 @@ const BlockEllipsis = "\u2026"
 //
 // The returned items carry their resolved widths: a tab's is not known until it
 // has a place, so an item on a line is not always the item that came in.
-func (br *Breaker) BreakOneLine(items []Item, from, fromByte int, width, lineX style.Unit) (
+func (p *Lines) BreakOneLine(from, fromByte int, width, lineX style.Unit) (
 	line []Item, next, nextByte int, outOfFlow []MidLineBox, forced, hyphenated bool) {
 
-	from, fromByte = cursorWithin(items, from, fromByte)
-	line, next, nextByte, outOfFlow, forced = br.fillOneLine(items, from, fromByte, width, lineX)
+	from, fromByte = cursorWithin(p.items, from, fromByte)
+	return p.br.breakOneLine(p.items, from, fromByte, width, lineX, p.tailFrom(from))
+}
+
+// breakOneLine is BreakOneLine once the cursor is in the items and the white
+// space at the end of the line's material has been found. See tailFrom.
+func (br *Breaker) breakOneLine(items []Item, from, fromByte int, width, lineX style.Unit, tailFrom int) (
+	line []Item, next, nextByte int, outOfFlow []MidLineBox, forced, hyphenated bool) {
+
+	line, next, nextByte, outOfFlow, forced = br.fillOneLine(items, from, fromByte, width, lineX, tailFrom)
 	line, skip := withHyphen(items, line, from, next, nextByte, forced)
 	// A character the hyphen replaced, taken off the start of the next line.
 	// The offset is the one overflow-wrap's cut already uses, and it is only
@@ -73,6 +81,105 @@ func (br *Breaker) BreakOneLine(items []Item, from, fromByte int, width, lineX s
 	// that hyphenated, and a pinyin paragraph, whose syllable separator is
 	// exactly this rule, could not be balanced at any width at all.
 	return line, next, nextByte + skip, outOfFlow, forced, skip > 0
+}
+
+// BreakOneLine is Lines.BreakOneLine for items that have not been prepared, for
+// a caller that asks for one line of them.
+//
+// It finds the white space at the end of the line's material by walking from
+// the cursor to the next forced break and back, which is work in proportion to
+// the rest of the paragraph and is what every line cost before there were
+// Lines. A caller that breaks a paragraph line by line prepares it once and
+// breaks from that; see Lines for what it costs not to.
+func (br *Breaker) BreakOneLine(items []Item, from, fromByte int, width, lineX style.Unit) (
+	line []Item, next, nextByte int, outOfFlow []MidLineBox, forced, hyphenated bool) {
+
+	from, fromByte = cursorWithin(items, from, fromByte)
+	return br.breakOneLine(items, from, fromByte, width, lineX, scanTailFrom(items, from))
+}
+
+// scanTailFrom is Lines.tailFrom found by walking the items rather than read
+// from a table: forward from the line's start to the next forced break, and back
+// from there over the white space in front of it.
+func scanTailFrom(items []Item, from int) int {
+	end := len(items)
+	for k := from; k < len(items); k++ {
+		if items[k].Forced {
+			end = k
+			break
+		}
+	}
+	tailFrom := end
+	for tailFrom > from && isLineTailSpace(items[tailFrom-1]) {
+		tailFrom--
+	}
+	return tailFrom
+}
+
+// Lines is a paragraph's items made ready to be broken into lines.
+//
+// Two facts decide where a line may end that are facts about the paragraph and
+// not about the line: where the next forced break is, and where the white space
+// in front of it begins — the run §4.1.2 says a line may not end inside, which
+// fillOneLine calls tailFrom. The fill used to find both for itself, by walking
+// from the line's start to the next forced break and then back over the spaces.
+// A paragraph with no forced break in it walked everything still to come for
+// every line, which is quadratic in its words: eighty thousand of them took
+// 0.9s, a hundred and sixty thousand 3.4s, and three quarters of it was that one
+// loop. Every probe text-wrap: balance and line-clamp make of the paragraph paid
+// it again, and a paragraph ending in a long run of hanging spaces paid the same
+// again for the walk back.
+//
+// So they are found once, as two tables over the items, when the paragraph is
+// prepared, and a line reads them.
+//
+// The items are read and not copied. Changing one after they were prepared
+// changes the paragraph under the tables, which go on describing the one that
+// was prepared — so a caller that rewrites its items prepares them again.
+type Lines struct {
+	br    *Breaker
+	items []Item
+	// nextForced[k] is the first item at or after k that is a forced break, or
+	// len(items) where there is none.
+	nextForced []int
+	// tailRun[k] is where the run of line-end white space that ends just before
+	// item k begins — k itself where item k-1 is not such white space. See
+	// isLineTailSpace.
+	tailRun []int
+}
+
+// Lines prepares items for breaking. See Lines.
+func (br *Breaker) Lines(items []Item) *Lines {
+	n := len(items)
+	p := &Lines{br: br, items: items, nextForced: make([]int, n+1), tailRun: make([]int, n+1)}
+	p.nextForced[n] = n
+	for k := n - 1; k >= 0; k-- {
+		p.nextForced[k] = p.nextForced[k+1]
+		if items[k].Forced {
+			p.nextForced[k] = k
+		}
+	}
+	for k := 1; k <= n; k++ {
+		p.tailRun[k] = k
+		if isLineTailSpace(items[k-1]) {
+			p.tailRun[k] = p.tailRun[k-1]
+		}
+	}
+	return p
+}
+
+// Items is the paragraph the lines are broken from.
+func (p *Lines) Items() []Item { return p.items }
+
+// tailFrom is where the white space at the end of the material of a line that
+// begins at item from begins: the run of it in front of the next forced break,
+// or in front of the end of the paragraph, and no earlier than from. The fill
+// may not end a line inside it; see the note at its use.
+//
+// Neither end of the run depends on the line, which is why both are tables;
+// only the line's own start bounds it.
+func (p *Lines) tailFrom(from int) int {
+	return max(from, p.tailRun[p.nextForced[from]])
 }
 
 // cursorWithin brings a caller's position into the items and onto a character.
@@ -176,7 +283,10 @@ func hyphenBefore(items []Item, next int) (Item, bool) {
 }
 
 // fillOneLine is BreakOneLine's greedy fill, before the hyphen is printed.
-func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX style.Unit) (
+//
+// tailFrom is where the white space at the end of the line's material begins;
+// see Lines.tailFrom.
+func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX style.Unit, tailFrom int) (
 	line []Item, next, nextByte int, outOfFlow []MidLineBox, forced bool) {
 
 	var used style.Unit
@@ -250,17 +360,10 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 	// an inline box's own inset is passed over rather than ending it, since a
 	// margin is not content and a span wrapped around the spaces must not make
 	// them breakable again.
-	end := len(items)
-	for k := from; k < len(items); k++ {
-		if items[k].Forced {
-			end = k
-			break
-		}
-	}
-	tailFrom := end
-	for tailFrom > from && isLineTailSpace(items[tailFrom-1]) {
-		tailFrom--
-	}
+	//
+	// The caller hands it in: neither end depends on the line, so a paragraph
+	// prepared as Lines has both as tables, and walking to them from here was
+	// quadratic in the paragraph. See Lines.
 	i := from
 	for ; i < len(items); i++ {
 		item := items[i]
@@ -452,7 +555,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// candidate at all, that no inline box's border stands in front of it,
 		// that the line has content to end — is the same question for both.
 		if item.MayHangEnd && !afterBorder && content && !item.NoWrap &&
-			(item.MustHangEnd || overflows(used, item, width, tail)) {
+			(item.MustHangEnd || br.overflows(used, item, width, tail)) {
 			item.Hangs, item.HangEnd = true, true
 			hungAt = len(line)
 			line = append(line, item)
@@ -470,12 +573,12 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// and trimming changes the type. Nothing in the suite writes one, and
 		// the order is stated rather than left to fall out of which branch came
 		// first.
-		if item.TrimEnd != 0 && content && !item.NoWrap && overflows(used, item, width, tail) &&
+		if item.TrimEnd != 0 && content && !item.NoWrap && br.overflows(used, item, width, tail) &&
 			used.Add(item.Width).Sub(item.TrimEnd) <= width {
 			item.Width = item.Width.Sub(item.TrimEnd)
 			item.TrimEnd = 0
 			line = append(line, item)
-			tail.Add(item.Level, trailingSpacing(item))
+			tail.Add(item.Level, br.trailingSpacing(item))
 			used = used.Add(item.Width)
 			continue
 		}
@@ -492,7 +595,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// "<span style='margin-left: 200px'><div class=content>" in a container
 		// exactly 200px wide.
 		if !item.NoWrap && !item.Hangs && !isTailSpace(item) && i < tailFrom && item.BreakBefore &&
-			content && overflows(used.Add(insetsAfter(items, i)), item, width, tail) {
+			content && br.overflows(used.Add(insetsAfter(items, i)), item, width, tail) {
 			// Ending here costs the hyphen as well, where the opportunity is one
 			// a soft hyphen offered. If that does not fit, this is not a place
 			// the line may end at all and it goes back to one that is — the
@@ -522,7 +625,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// not fit — so the line ends where the box began and the box's leading
 		// margin goes with it.
 		if !item.NoWrap && !item.Hangs && i < tailFrom && !item.BreakBefore && !item.Inset &&
-			insetAt >= 0 && overflows(used.Add(insetsAfter(items, i)), item, width, tail) {
+			insetAt >= 0 && br.overflows(used.Add(insetsAfter(items, i)), item, width, tail) {
 			return trimLineEdge(line[:insetLine]), insetAt, 0, outOfFlow[:insetFlow], false
 		}
 
@@ -565,7 +668,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// through.
 		if (item.Space || item.AtomicBox == nil) && !item.Collapsible &&
 			!item.Hangs && i < tailFrom && !item.Inset &&
-			(!item.BreakBefore || item.NoWrap) && backAt >= 0 && overflows(used, item, width, tail) {
+			(!item.BreakBefore || item.NoWrap) && backAt >= 0 && br.overflows(used, item, width, tail) {
 			return trimLineEdge(line[:backLine]), backAt, 0, outOfFlow[:backFlow], false
 		}
 
@@ -601,7 +704,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// Dropping the conjunct therefore moves nothing, which is why it is
 		// recorded here rather than left as an implied claim.
 		if item.BreakWord && !item.NoWrap && !item.Hangs && i < tailFrom && !item.Inset && !item.Tab &&
-			insetAt < 0 && backAt < 0 && overflows(used, item, width, tail) {
+			insetAt < 0 && backAt < 0 && br.overflows(used, item, width, tail) {
 			// The offset is into items[i]. It is only the cursor's offset away
 			// from that when this *is* the item the cursor pointed at: a line
 			// that began at a float and reached its first text later is at
@@ -664,7 +767,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// are two.
 		if !item.BreakWord && !item.NoWrap && !item.Hangs && i < tailFrom &&
 			!item.Inset && !item.Tab && insetAt < 0 && backAt < 0 &&
-			breaksAfterLast(line) && overflows(used.Add(insetsAfter(items, i)), item, width, tail) {
+			breaksAfterLast(line) && br.overflows(used.Add(insetsAfter(items, i)), item, width, tail) {
 			base := 0
 			if i == from {
 				base = fromByte
@@ -672,7 +775,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 			return trimLineEdge(line), i, base, outOfFlow, false
 		}
 
-		if overflows(0, item, width, Rightmost{}) && !content && !item.Space && !item.NoWrap && !item.Inset {
+		if br.overflows(0, item, width, Rightmost{}) && !content && !item.Space && !item.NoWrap && !item.Inset {
 			// An inset is not text and has no text to name in the report. A
 			// margin wider than the line is also not the fault the report is
 			// about — nothing is clipped, the content is simply pushed past the
@@ -752,7 +855,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		if item.Abs == nil && item.Float == nil {
 			// Out of flow draws nothing on this line, so it is neither the
 			// rightmost thing on it nor anything for a level to stand between.
-			tail.Add(item.Level, trailingSpacing(item))
+			tail.Add(item.Level, br.trailingSpacing(item))
 		}
 		used = used.Add(item.Width)
 	}
@@ -785,27 +888,36 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 // not have. The harness loads a document's own @font-face now and those three
 // are untainted failures, so they are reachable and this is no longer the whole
 // of what they need. See forme-next-leads.
-func overflows(used style.Unit, item Item, width style.Unit, tail Rightmost) bool {
+func (br *Breaker) overflows(used style.Unit, item Item, width style.Unit, tail Rightmost) bool {
 	// The spacing that would hang if the line ended here is the spacing of
 	// whatever is drawn furthest *right* once this item is placed, which on a
 	// right-to-left line is not this item. The tracker is a value, so placing
 	// the candidate in it answers the question without committing to it.
-	tail.Add(item.Level, trailingSpacing(item))
+	tail.Add(item.Level, br.trailingSpacing(item))
 	return used.Add(item.Width).Sub(tail.Tail()) > width
 }
 
-// trailingSpacing is the letter-spacing after an item's last character, which is
-// the part of its width the measure above leaves out.
+// TrailingSpacing is the letter-spacing after an item's last character, which is
+// the part of its width the measure above leaves out. The layout package's
+// intrinsic pass keeps the same account: what a line leaves out when it ends
+// here.
 //
 // It is not simply the declared value. §8.2's cursive tracking adds none inside
 // a cursive script, so such a run has none after its last character either —
 // and discounting one it never had makes it a spacing narrower than it is,
 // which is a word kept on a line it does not fit on.
-func trailingSpacing(item Item) style.Unit { return TrailingSpacing(item) }
-
-// TrailingSpacing is trailingSpacing for the layout package, whose intrinsic
-// pass keeps the same account: what a line leaves out when it ends here.
+//
+// The fill asks it through Breaker.trailingSpacing, which is this with the one
+// count in it taken from a table where the item is a stretch of a run being
+// cut. It is one function with the count passed in so that the two cannot
+// answer differently about anything else.
 func TrailingSpacing(item Item) style.Unit {
+	return trailingSpacingCounted(item, func() int { return SpacedUnits(item.Text) })
+}
+
+// trailingSpacingCounted is TrailingSpacing with the units of the item's text
+// counted by units, which is asked only when nothing cheaper has answered.
+func trailingSpacingCounted(item Item, units func() int) style.Unit {
 	// §8.1's ideograph spacing sits at the far edge of the run it was added to,
 	// and is between two characters that a line break puts on different lines.
 	// Two characters on different lines are not adjacent and get no gap.
@@ -880,7 +992,7 @@ func TrailingSpacing(item Item) style.Unit {
 		// writes it as letter-spacing-202.
 		return out.Add(item.Spacing.Letter)
 	}
-	if CursiveTrackingSuppresses(item.Text) {
+	if cursiveTrackingSuppresses(item.Text, units) {
 		return out
 	}
 	return out.Add(item.Spacing.Letter)

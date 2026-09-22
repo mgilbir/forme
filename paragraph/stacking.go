@@ -284,10 +284,19 @@ type LineStack struct {
 	Height, Baseline style.Unit
 	// groups is one entry per aligned subtree placed against the line box. There
 	// is one for each "vertical-align: top" or "bottom" box with content on the
-	// line, which is none at all in almost every document — so the lookups below
-	// scan a slice rather than consult a map, and an ordinary line never
-	// allocates.
+	// line, which is none at all in almost every document, so an ordinary line
+	// never allocates.
 	groups []alignGroup
+	// group finds a subtree's entry in groups.
+	//
+	// It is a map and not a scan of the slice, which is what it was. Every box
+	// on the line asks for its subtree's entry, once while the line is stacked
+	// and once more when it is placed, and a scan reads every subtree gathered
+	// so far — so a line of top-aligned spans, each its own subtree, was
+	// quadratic in the spans: ten thousand took 0.8s to lay out and twenty
+	// thousand 2.6s. It is made with the first entry, so the line that has no
+	// aligned subtree still allocates nothing.
+	group map[alignSubtree]int
 }
 
 // alignGroup is one of §10.8.1's aligned subtrees, as it appears on one line.
@@ -304,10 +313,7 @@ type alignGroup struct {
 
 // gather adds one box's extents to its subtree's.
 func (ls *LineStack) gather(v VAlignState, ascent, descent style.Unit) {
-	for i := range ls.groups {
-		if ls.groups[i].subtree != v.Subtree {
-			continue
-		}
+	if i, ok := ls.group[v.Subtree]; ok {
 		if ascent > ls.groups[i].Ascent {
 			ls.groups[i].Ascent = ascent
 		}
@@ -316,6 +322,10 @@ func (ls *LineStack) gather(v VAlignState, ascent, descent style.Unit) {
 		}
 		return
 	}
+	if ls.group == nil {
+		ls.group = map[alignSubtree]int{}
+	}
+	ls.group[v.Subtree] = len(ls.groups)
 	ls.groups = append(ls.groups, alignGroup{
 		subtree: v.Subtree, lineAlign: v.LineAlign, Ascent: ascent, Descent: descent,
 	})
@@ -327,10 +337,8 @@ func (ls *LineStack) baselineFor(v VAlignState) style.Unit {
 	if v.LineAlign == VAlignBaseline {
 		return ls.Baseline
 	}
-	for i := range ls.groups {
-		if ls.groups[i].subtree == v.Subtree {
-			return ls.groups[i].Baseline
-		}
+	if i, ok := ls.group[v.Subtree]; ok {
+		return ls.groups[i].Baseline
 	}
 	return ls.Baseline
 }

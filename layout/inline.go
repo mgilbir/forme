@@ -316,6 +316,16 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		firstItems = l.insertAutospace(firstItems)
 		firstItems = floatsBeforeOutOfFlow(firstItems)
 	}
+	// The items are final from here on, so they are prepared for breaking once:
+	// every line of every pass, and every attempt at a line beside a float, then
+	// reads the paragraph's own facts from a table rather than walking the rest
+	// of the paragraph to find them. See paragraph.Lines. The first line's list
+	// is prepared on its own, because it is broken on its own.
+	lines := l.br.Lines(items)
+	firstLines := lines
+	if firstItems != nil {
+		firstLines = l.br.Lines(firstItems)
+	}
 
 	lo, hi := origin.x, origin.x.Add(width)
 
@@ -449,9 +459,9 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			wasI, wasByte := i, iByte
 			// The items this line is broken from, which are the restyled ones
 			// only while the first line is still being made.
-			items := items
+			items, lines := items, lines
 			if firstLine && firstItems != nil {
-				items = firstItems
+				items, lines = firstItems, firstLines
 			}
 			// A float that begins a line is placed before the line is measured,
 			// because it is one of the floats the line has to avoid. §9.5.1 rule 4
@@ -547,7 +557,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				l.deferred = l.deferred[:midAbs]
 				midKids = midKids[:0]
 
-				runs, next, nextByte, mid, forced, _ = l.br.BreakOneLine(items, i, iByte,
+				runs, next, nextByte, mid, forced, _ = lines.BreakOneLine(i, iByte,
 					// The cap is a *line* width, so the indent comes off it and not
 					// off the band before it: the search counted the first line's
 					// room as the balanced width less the indent, and taking the

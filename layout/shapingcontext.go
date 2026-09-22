@@ -150,6 +150,10 @@ func (l *layouter) linkShapingContext(items []inlineItem) []inlineItem {
 		}
 		items[i].PreContext, items[i].PostContext = before, after
 		items[i].MergePre, items[i].MergePost = mergePre, mergePost
+		// And the group as the one string its runs share, so that measuring
+		// each of them finds the group's shaping without building the group's
+		// text again. See paragraph.Item.MergeGroup.
+		items[i].MergeGroup = groups.whole(i)
 		items[i].ContextKerns = kerns
 		// The advance changes with the form, so what was measured without the
 		// context is not what will be drawn with it. Measuring again is the
@@ -402,7 +406,7 @@ func contextCanChange(f *shape.Face) bool {
 func itemShaping(it *inlineItem) shaping {
 	return shaping{
 		Before: it.PreContext, After: it.PostContext,
-		MergeBefore: it.MergePre, MergeAfter: it.MergePost,
+		MergeBefore: it.MergePre, MergeAfter: it.MergePost, MergeGroup: it.MergeGroup,
 		ContextKerns: it.ContextKerns, Upright: it.Upright, Off: it.Off,
 	}
 }
@@ -439,6 +443,15 @@ func (g mergeGroups) around(items []inlineItem, i int) (before, after string) {
 		return "", ""
 	}
 	return g.text[i][:g.at[i]], g.text[i][g.at[i]+len(items[i].Text):]
+}
+
+// whole is the text of the group the run at i belongs to, the one string every
+// run of it shares, or empty where the run shapes with nobody.
+func (g mergeGroups) whole(i int) string {
+	if i >= len(g.text) {
+		return ""
+	}
+	return g.text[i]
 }
 
 // mergeGroupTexts finds every merge group and the text its runs are shaped

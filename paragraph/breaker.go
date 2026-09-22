@@ -31,11 +31,9 @@ import (
 // had yet — which is not a property, it is a habit. Here the compiler holds the
 // line.
 type Breaker struct {
-	// The prefix-sum table for the run being cut, and the run it belongs to.
-	// A nil table with spacingSet means that run does not qualify.
-	spacingWhole string
-	spacingIdx   *spacingIndex
-	spacingSet   bool
+	// run is what has been learned about the run being cut, which is the run
+	// the next cut will ask about too. See runIndex.
+	run *runIndex
 
 	// measured memoizes the width of a run as it will be set.
 	//
@@ -48,6 +46,13 @@ type Breaker struct {
 	// that group needs and which every run of it used to shape for itself. See
 	// mergedSpan.
 	grouped map[groupKey][]float64
+	// lastGroup and lastAdvances are the entry of grouped asked for last,
+	// which is the one a word broken across lines asks for at every cut. A
+	// lookup in grouped hashes the key, and the key holds the whole text of
+	// the group — so each cut of a long word read the whole word to find a
+	// table it already had. Compared instead, the key is two equal pointers.
+	lastGroup    groupKey
+	lastAdvances []float64
 	// bounds memoizes where a divided run may be cut, so that a word broken
 	// across many lines has its clusters found once. See Breaker.clustersOf.
 	bounds map[string][]int
@@ -134,9 +139,17 @@ func (br *Breaker) MeasureSpacedInContext(face *shape.Face, text string, size st
 	if text == "" {
 		return 0
 	}
+	// A run of a merge group is not memoised here. Its key would hold the
+	// group's text on either side of it, so finding the entry hashed the whole
+	// group once per run of it — the quadratic mergedSpan's own memo exists to
+	// take out — and the answer is a subtraction from the group's shaping,
+	// which that memo already holds. See Item.MergeGroup.
+	merged := how.MergeBefore != "" || how.MergeAfter != ""
 	key := measureKey{face: face, text: text, size: size, spacing: sp, how: how}
-	if got, ok := br.measured[key]; ok {
-		return got
+	if !merged {
+		if got, ok := br.measured[key]; ok {
+			return got
+		}
 	}
 	// MeasureShaped returns the advance in the units the size was given in, so a
 	// size in CSS pixels gives an advance in CSS pixels.
@@ -183,7 +196,9 @@ func (br *Breaker) MeasureSpacedInContext(face *shape.Face, text string, size st
 		w = hi.Sub(lo)
 	}
 	w = w.Add(SpacingAdvance(text, sp))
-	br.measured[key] = w
+	if !merged {
+		br.measured[key] = w
+	}
 	return w
 }
 
@@ -234,7 +249,7 @@ func (br *Breaker) mergedSpan(face *shape.Face, text string, size float64,
 	}
 	before, after := shape.GroupContext(how.Before, how.After, how.MergeBefore, how.MergeAfter)
 	key := groupKey{
-		face: face, whole: how.MergeBefore + text + how.MergeAfter,
+		face: face, whole: mergedText(how.MergeBefore, text, how.MergeAfter, how.MergeGroup),
 		before: before, after: after, kerns: how.ContextKerns, off: how.Off,
 	}
 	return shape.GroupSpan(br.advances(key), len(how.MergeBefore),
@@ -253,62 +268,126 @@ func (br *Breaker) mergedSpan(face *shape.Face, text string, size float64,
 // The item's own text is the string, so the stretch's context is the rest of
 // the item and comes from the text itself, exactly as it does for a merge
 // group; the outer context is the item's own. piece is the item the width is
-// for, and is what the fallback measures when the shaping cannot be shared —
-// an upright run, whose advance is a count of characters rather than a sum of
-// glyphs, and a run that is part of a merge group, whose string is not its own.
+// for, and is what the fallback measures when the shaping cannot be shared — a
+// run that is part of a merge group, whose string is not its own, and one with
+// no face.
+//
+// A run set upright is not shaped at all: its advance is a count of its
+// characters, an em each, and where the run is long enough to have a table the
+// count is taken from it like the spacing is, so that the rest of an upright
+// word is not read again at every line either. See UprightUnits.
 func (br *Breaker) spanWidth(item Item, from, to int, piece Item) style.Unit {
+	if item.Face != nil && item.Upright && piece.Text != "" {
+		if n, ok := br.uprightIn(item, from, to, piece.Text); ok {
+			return item.Size.Mul(float64(n)).Add(br.spacingIn(item, from, to, piece.Text))
+		}
+	}
 	if item.Face == nil || item.Upright {
 		return br.MeasureSpacedInContext(item.Face, piece.Text, item.Size, item.Spacing,
 			piece.shaping())
 	}
 	whole, base, before, after, kerns := item.group()
-	return br.spanOf(item, piece, whole, base+from, base+to, before, after, kerns)
-}
-
-// spanOf is spanWidth once the group string and the stretch inside it are known.
-func (br *Breaker) spanOf(item, piece Item, whole string, from, to int, before, after string, kerns bool) style.Unit {
 	key := groupKey{
 		face: item.Face, whole: whole, before: before, after: after,
 		kerns: kerns, off: item.Off,
 	}
 	// The two ends rounded separately, so that the pieces of one item add up to
 	// the item's own rounded width. See shape.GroupSpan.
-	head, through := shape.GroupSpan(br.advances(key), from, to, item.Size.Px())
+	head, through := shape.GroupSpan(br.advances(key), base+from, base+to, item.Size.Px())
 	lo, _ := style.FromPx(head)
 	hi, _ := style.FromPx(through)
-	return hi.Sub(lo).Add(br.spacingAdvanceIn(whole, from, to, piece.Text, item.Spacing))
+	return hi.Sub(lo).Add(br.spacingIn(item, from, to, piece.Text))
 }
 
-// spacingAdvanceIn is SpacingAdvance for a stretch of a run the breaker is
-// cutting, answered from a table built once for that run instead of by reading
-// the stretch again at every candidate. See spacingIndex.
-func (br *Breaker) spacingAdvanceIn(whole string, from, to int, text string, sp TextSpacing) style.Unit {
+// tabulateFrom is the length below which a run is counted rather than
+// tabulated. Reading a short run costs less than building a table for it, and
+// the run the breaker holds is then left for the long one it is cutting.
+const tabulateFrom = 256
+
+// cutRun is the run an item is a stretch of and where the item begins in it:
+// the run it was cut from, or its own text where it has not been cut.
+func (it Item) cutRun() (run string, base int) {
+	if it.Cut != nil {
+		return it.Cut.Text, it.CutAt
+	}
+	return it.Text, 0
+}
+
+// stretchOf is where text[from:to] of an item lies in the run it is a stretch
+// of, and whether the run's tables can be asked about it at all: the run has to
+// be long enough to have them, and the stretch has to be inside the run and be
+// the piece's own length. Anything else is counted, which is what every count
+// here did before there were tables.
+func (it Item) stretchOf(from, to int, text string) (run string, lo, hi int, ok bool) {
+	run, base := it.cutRun()
+	lo, hi = base+from, base+to
+	if len(run) < tabulateFrom || lo < 0 || hi < lo || hi > len(run) || hi-lo != len(text) {
+		return "", 0, 0, false
+	}
+	if strictSpans && run[lo:hi] != text {
+		panic("stretchOf: the run at the stretch is not the piece's own text")
+	}
+	return run, lo, hi, true
+}
+
+// spacingIn is SpacingAdvance for a stretch of an item the breaker is cutting,
+// answered from tables built once for the run instead of by reading the stretch
+// again at every candidate. See runIndex.
+func (br *Breaker) spacingIn(item Item, from, to int, text string) style.Unit {
+	sp := item.Spacing
+	if sp.Letter == 0 && sp.Word == 0 {
+		return 0
+	}
+	run, lo, hi, ok := item.stretchOf(from, to, text)
+	if !ok {
+		return SpacingAdvance(text, sp)
+	}
+	r := br.runOf(run)
 	var out style.Unit
 	if sp.Letter != 0 {
-		out = out.Add(sp.Letter.Mul(float64(br.spacedUnitsIn(whole, from, to, text))))
+		out = out.Add(sp.Letter.Mul(float64(br.spacedUnitsIn(r, lo, hi, text))))
 	}
 	if sp.Word != 0 {
-		out = out.Add(sp.Word.Mul(float64(countWordSeparators(text))))
+		out = out.Add(sp.Word.Mul(float64(r.wordSeparators(lo, hi))))
 	}
 	return out
 }
 
-func (br *Breaker) spacedUnitsIn(whole string, from, to int, text string) int {
-	if !br.spacingSet || br.spacingWhole != whole {
-		br.spacingIdx, _ = newSpacingIndex(whole)
-		br.spacingWhole, br.spacingSet = whole, true
+// spacedUnitsIn is SpacedUnits(text), where text is run[lo:hi].
+func (br *Breaker) spacedUnitsIn(r *runIndex, lo, hi int, text string) int {
+	if idx := br.unitsOf(r); idx != nil && idx.covers(lo, hi) {
+		return idx.spacedUnits(lo, hi)
 	}
-	if br.spacingIdx == nil || from < 0 || to < from || to > len(whole) {
-		return SpacedUnits(text)
+	return SpacedUnits(text)
+}
+
+// uprightIn is UprightUnits for a stretch of an item, from the run's table.
+func (br *Breaker) uprightIn(item Item, from, to int, text string) (int, bool) {
+	run, lo, hi, ok := item.stretchOf(from, to, text)
+	if !ok {
+		return 0, false
 	}
-	if strictSpans && whole[from:to] != text {
-		panic("spanOf: whole[from:to] is not the piece's own text")
+	if idx := br.unitsOf(br.runOf(run)); idx != nil && idx.covers(lo, hi) {
+		return idx.uprightUnits(lo, hi), true
 	}
-	if len(text) != to-from {
-		// Not the stretch this table describes; count it rather than guess.
-		return SpacedUnits(text)
-	}
-	return br.spacingIdx.units(from, to)
+	return 0, false
+}
+
+// trailingSpacing is TrailingSpacing for an item the breaker may be cutting.
+//
+// The question it ends in — does §8.2 take the spacing off this run entirely —
+// is a count of the run's units, and for a stretch of a run of a cursive script
+// that count reads the whole stretch: its first character is cursive, so nothing
+// short of the end can say that no unit follows. The fill asks it of the rest of
+// a word at every candidate on every line, so it is answered from the run's
+// table where the item is a stretch of one.
+func (br *Breaker) trailingSpacing(item Item) style.Unit {
+	return trailingSpacingCounted(item, func() int {
+		if run, lo, hi, ok := item.stretchOf(0, len(item.Text), item.Text); ok {
+			return br.spacedUnitsIn(br.runOf(run), lo, hi, item.Text)
+		}
+		return SpacedUnits(item.Text)
+	})
 }
 
 // spanPx is an item's own text measured under one shaping, in CSS pixels and
@@ -425,23 +504,13 @@ func (c clusters) at(i int) int { return c.all[c.from+i] - c.base }
 // found again for every line, over everything still to come: a word of twenty
 // thousand characters in narrow lines analysed eleven million characters and
 // allocated a boundary list the length of the remaining word each time.
+//
+// An item that has not been cut yet names the same run as the stretches that
+// will be cut from it, through the same string, so the boundaries its first line
+// finds are the ones every line after it reads.
 func (br *Breaker) clustersOf(item Item) clusters {
-	if item.Cut == nil {
-		return clusters{all: segment.Boundaries(nil, item.Text)}
-	}
-	// Keyed on the run's text rather than on the RunCut, because a line that
-	// resumes inside a word divides the *original* item again from the offset
-	// it reached — so the two lines name the same run through two different
-	// values, and only the text they share tells them apart.
-	all, ok := br.bounds[item.Cut.Text]
-	if !ok {
-		all = segment.Boundaries(nil, item.Cut.Text)
-		if br.bounds == nil {
-			br.bounds = map[string][]int{}
-		}
-		br.bounds[item.Cut.Text] = all
-	}
-	base := item.CutAt
+	run, base := item.cutRun()
+	all := br.runBounds(run)
 	// The boundaries strictly inside this stretch: the one at its own start is
 	// not a place to cut it, and neither is anything at or past its end.
 	// Boundaries leaves both ends of a text out for the same reason.
@@ -449,24 +518,54 @@ func (br *Breaker) clustersOf(item Item) clusters {
 	return clusters{all: all[:end], base: base, from: sort.SearchInts(all, base+1)}
 }
 
+// runBounds is segment.Boundaries of a run, memoized.
+//
+// Keyed on the run's text rather than on the RunCut, because a line that
+// resumes inside a word divides the *original* item again from the offset it
+// reached — so the two lines name the same run through two different values,
+// and only the text they share tells them apart. A long run is found through
+// the run the breaker holds, which compares the text rather than hashing it; a
+// short one is looked up, which costs no more than comparing it would.
+func (br *Breaker) runBounds(run string) []int {
+	if len(run) >= tabulateFrom {
+		return br.clusterBounds(br.runOf(run))
+	}
+	all, ok := br.bounds[run]
+	if !ok {
+		all = segment.Boundaries(nil, run)
+		if br.bounds == nil {
+			br.bounds = map[string][]int{}
+		}
+		br.bounds[run] = all
+	}
+	return all
+}
+
 // advances is the group's cumulative advances, shaped once and kept.
 func (br *Breaker) advances(key groupKey) []float64 {
-	if cum, ok := br.grouped[key]; ok {
-		return cum
+	if br.lastAdvances != nil && br.lastGroup == key {
+		// Equal, and perhaps spelled in another string: the comparison after
+		// this one is then of one pointer. See runIndex for why that matters.
+		br.lastGroup = key
+		return br.lastAdvances
 	}
-	glyphs := key.face.ShapeGroup(key.whole, key.before, key.after, key.kerns, key.off)
-	cum := shape.GroupAdvances(glyphs, len(key.whole))
-	if br.grouped == nil {
-		br.grouped = map[groupKey][]float64{}
+	cum, ok := br.grouped[key]
+	if !ok {
+		glyphs := key.face.ShapeGroup(key.whole, key.before, key.after, key.kerns, key.off)
+		cum = shape.GroupAdvances(glyphs, len(key.whole))
+		if br.grouped == nil {
+			br.grouped = map[groupKey][]float64{}
+		}
+		br.grouped[key] = cum
 	}
-	br.grouped[key] = cum
+	br.lastGroup, br.lastAdvances = key, cum
 	return cum
 }
 
 // groupKey identifies one shaping of one merge group: everything that decides
 // what the glyphs come out as, and nothing that differs between the runs
 // sharing them.
-// strictSpans turns the assumption spacedUnitsIn rests on — that the stretch
+// strictSpans turns the assumption stretchOf rests on — that the stretch
 // named by from and to is the piece's own text — into a panic. It is off, and
 // it was on for a full run of the corpus suite, reftests included, which is
 // where the assumption was checked rather than assumed. The length test below
@@ -507,6 +606,9 @@ type Shaping struct {
 	// MergeBefore and MergeAfter say that side may contribute glyphs and not
 	// only forms. See Item.MergePre.
 	MergeBefore, MergeAfter string
+	// MergeGroup is the two of them and the run as one string, where the caller
+	// has it. See Item.MergeGroup.
+	MergeGroup string
 	// ContextKerns says the neighbours above are set in this run's own face, so
 	// a pair that spans the boundary is this font's pair. See Item.ContextKerns.
 	ContextKerns bool

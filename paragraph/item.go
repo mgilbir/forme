@@ -357,6 +357,18 @@ type Item struct {
 	// of colour and a raised baseline, and a glyph — drawn once, in one colour,
 	// on one baseline — cannot.
 	MergePre, MergePost string
+	// MergeGroup is the group's whole text as one string — MergePre, the run's
+	// own text and MergePost, in that order — where the caller has it as one,
+	// and empty where it does not.
+	//
+	// Every run of a group shapes the same string, and without this each run
+	// built that string again from its three parts and then hashed it to find
+	// the shaping it already had: work in proportion to the group, for every run
+	// of the group, which is quadratic in a word written as a thousand spans or
+	// in a run of no-break spaces word-spacing cuts apart. Every run of one
+	// group names the same string here, so the shaping is found by comparing
+	// one pointer. See mergedText.
+	MergeGroup string
 	// ContextKerns says the neighbours above are set in this run's own face.
 	//
 	// Which of its four shapes a letter takes is decided by the characters
@@ -783,7 +795,7 @@ func StartOfContext() State { return State{AfterCollapsibleSpace: true} }
 // text that is actually drawn.
 func (br *Breaker) SplitItem(item Item, at int) (head, tail Item) {
 	at = cutWithinText(item.Text, at)
-	head, tail = splitItemAt(item, at)
+	head, tail = br.splitItemAt(item, at)
 	head.Width = br.spanWidth(item, 0, at, head)
 	tail.Width = br.spanWidth(item, at, len(item.Text), tail)
 	// §8.1's gap sits at the item's far edge, so it goes with the tail — the
@@ -802,7 +814,7 @@ func (br *Breaker) SplitItem(item Item, at int) (head, tail Item) {
 // — it is reached for the longest word in a document and for no other.
 func (br *Breaker) SplitHead(item Item, at int) Item {
 	at = cutWithinText(item.Text, at)
-	head, _ := splitItemAt(item, at)
+	head, _ := br.splitItemAt(item, at)
 	head.Width = br.spanWidth(item, 0, at, head)
 	return head
 }
@@ -815,7 +827,7 @@ func (br *Breaker) SplitHead(item Item, at int) Item {
 // line the word is broken across.
 func (br *Breaker) SplitTail(item Item, at int) Item {
 	at = cutWithinText(item.Text, at)
-	_, tail := splitItemAt(item, at)
+	_, tail := br.splitItemAt(item, at)
 	tail.Width = br.spanWidth(item, at, len(item.Text), tail)
 	tail.Width = tail.Width.Add(item.Autospace)
 	return tail
@@ -829,6 +841,20 @@ type RunCut struct {
 	Text          string
 	Before, After string
 	Kerns         bool
+}
+
+// runesBefore is the number of characters in item.Text[:at], at being where a
+// character begins.
+//
+// Only an item that has not been cut is its own run, so only for one of those
+// is the item's text the key to a table of its own; a stretch's text is a
+// different string at every line, and a table keyed on it would be built again
+// for every line it was asked about.
+func (br *Breaker) runesBefore(item Item, at int) int {
+	if item.Cut == nil && at >= tabulateFrom {
+		return br.runOf(item.Text).runesTo(at)
+	}
+	return utf8.RuneCountInString(item.Text[:at])
 }
 
 // splitItemAt is everything about the two halves except their widths.
@@ -858,7 +884,7 @@ func cutWithinText(text string, at int) int {
 	return at
 }
 
-func splitItemAt(item Item, at int) (head, tail Item) {
+func (br *Breaker) splitItemAt(item Item, at int) (head, tail Item) {
 	at = cutWithinText(item.Text, at)
 	head, tail = item, item
 	// Which run these two are stretches of. A first cut names the item itself;
@@ -885,7 +911,15 @@ func splitItemAt(item Item, at int) (head, tail Item) {
 	// word: the "12" belongs to the left of the letters and was drawn to the
 	// right of them, on the line the tail begins, while the same text unbroken
 	// orders correctly.
-	runesBefore := utf8.RuneCountInString(item.Text[:at])
+	//
+	// And counted from a table where the item is a whole run, not by reading the
+	// text in front of the cut. A line that resumes inside a word divides the
+	// *original* item again at the offset it reached, so a count of what is in
+	// front of the cut is a count of every line the word has already filled,
+	// once per line — quadratic in the word, and 38% of the time a quarter of a
+	// million characters took to lay out. The stretches the fill then cuts from
+	// that tail are cut near their own start, where counting reads a line.
+	runesBefore := br.runesBefore(item, at)
 	head.BidiEnd = item.BidiStart + runesBefore
 	tail.BidiStart = item.BidiStart + runesBefore
 	// CSS Text §5.4, shaping across an intra-word break:
@@ -935,9 +969,25 @@ func splitItemAt(item Item, at int) (head, tail Item) {
 func (it Item) shaping() Shaping {
 	return Shaping{
 		Before: it.PreContext, After: it.PostContext,
-		MergeBefore: it.MergePre, MergeAfter: it.MergePost,
+		MergeBefore: it.MergePre, MergeAfter: it.MergePost, MergeGroup: it.MergeGroup,
 		ContextKerns: it.ContextKerns, Upright: it.Upright, Off: it.Off,
 	}
+}
+
+// mergedText is the text of a merge group: pre, run and post as one string.
+//
+// Where the caller handed the group over as one string already, that string is
+// the answer, and every run of the group then names the same one. It is taken
+// only where its length is the three parts' — which is the one thing that can
+// be checked without reading it — and built from the parts otherwise, which is
+// what it always was. The note on group says why a string can be self-consistent
+// and still be the wrong one; this does not make that case better or worse, and
+// the length is what keeps it from making it different.
+func mergedText(pre, run, post, group string) string {
+	if group != "" && len(group) == len(pre)+len(run)+len(post) {
+		return group
+	}
+	return pre + run + post
 }
 
 // group is the string this item's shaping is shared over, where the item begins
@@ -989,7 +1039,7 @@ func (it Item) group() (whole string, base int, before, after string, kerns bool
 			run, at = c.Text, it.CutAt
 			before, after, kerns = c.Before, c.After, c.Kerns
 		}
-		whole, base = it.MergePre+run+it.MergePost, len(it.MergePre)+at
+		whole, base = mergedText(it.MergePre, run, it.MergePost, it.MergeGroup), len(it.MergePre)+at
 		before, after = shape.GroupContext(before, after, it.MergePre, it.MergePost)
 		return whole, base, before, after, kerns
 	}

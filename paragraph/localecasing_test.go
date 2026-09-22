@@ -79,6 +79,12 @@ func TestLithuanianKeepsTheDot(t *testing.T) {
 		{"Ì", "i̇̀", "I with grave"},
 		{"Í", "i̇́", "I with acute"},
 		{"Ĩ", "i̇̃", "I with tilde"},
+		// And the same letters with a further accent above after them. The
+		// More_Above case above used to match any character with such an accent
+		// after it and then find no mapping for it, so the precomposed letter
+		// never reached its own case and was lowercased as in any language.
+		{"Ì\u0301", "i\u0307\u0300\u0301", "I with grave, under a further acute"},
+		{"Ĩ\u0301", "i\u0307\u0303\u0301", "I with tilde, under a further acute"},
 		// "0307; 0307; ; ; lt After_Soft_Dotted" — the *lower*case field is the
 		// one that keeps the dot, which is the whole point of the language's
 		// tailoring. See TestLithuanianDropsTheDotWhenItCapitalizes for the two
@@ -157,11 +163,21 @@ func TestTheFinalSigma(t *testing.T) {
 		if got := casedIn(t, tc.text, TransformLowercase, "el"); got != tc.want {
 			t.Errorf("%s: %q became %q, want %q", tc.what, tc.text, got, tc.want)
 		}
-		// It is not a Greek-language rule: the same answer with no language.
-		if got := casedIn(t, tc.text, TransformLowercase, ""); got != tc.want {
-			t.Errorf("%s with no language: %q became %q, want %q",
-				tc.what, tc.text, got, tc.want)
+		// It is not a Greek-language rule: the same answer with no language,
+		// and in every language that has a tailoring of its own. Lithuanian's
+		// two cases each matched every character of the text and then found
+		// no mapping for most of them, so a word-final sigma in a lang="lt"
+		// document never reached this rule and was lowercased to σ.
+		for _, lang := range []string{"", "lt", "tr", "az", "nl"} {
+			if got := casedIn(t, tc.text, TransformLowercase, lang); got != tc.want {
+				t.Errorf("%s in %q: %q became %q, want %q",
+					tc.what, lang, tc.text, got, tc.want)
+			}
 		}
+	}
+	// With an accent above after it, which More_Above reads.
+	if got := casedIn(t, "ΟΔΟΣ\u0301", TransformLowercase, "lt"); got != "οδος\u0301" {
+		t.Errorf("in Lithuanian, a final sigma under an accent became %q", got)
 	}
 }
 

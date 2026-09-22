@@ -103,6 +103,13 @@ func IsCursiveScript(r rune) bool { return shape.InCursiveScript(r) }
 // character unit letter-spacing goes after like any other; neither is what this
 // rule is about.
 func CursiveTrackingSuppresses(text string) bool {
+	return cursiveTrackingSuppresses(text, func() int { return SpacedUnits(text) })
+}
+
+// cursiveTrackingSuppresses is CursiveTrackingSuppresses with the count of the
+// text's units passed in, for a caller that can answer it without reading the
+// text. See Breaker.trailingSpacing.
+func cursiveTrackingSuppresses(text string, units func() int) bool {
 	if text == "" {
 		return false
 	}
@@ -129,7 +136,7 @@ func CursiveTrackingSuppresses(text string) bool {
 		}
 		break
 	}
-	return SpacedUnits(text) == 0
+	return units() == 0
 }
 
 // scanCursiveTracking walks the characters letter-spacing could go after and
@@ -430,83 +437,4 @@ func IsBidiControlOnly(text string) bool {
 		}
 	}
 	return text != ""
-}
-
-// spacingIndex answers SpacedUnits for any cut of one run in constant time.
-//
-// The break search for overflow-wrap asks the width of a candidate head once
-// per cluster of the word, and the width asks how many units the head carries.
-// Answered by counting, that is the whole remaining word read again at every
-// candidate, which is the shape of the cost: one long word with a
-// letter-spacing climbed by a factor of four per doubling where the same word
-// without one climbed by two.
-//
-// It is built only for a run with no combining mark and no character of a
-// cursive script, and that restriction is what makes it correct rather than
-// merely fast. scanCursiveTracking carries its answer from one cluster to the
-// next — a cluster of nothing but marks takes the cursive answer of the base
-// before it — so a count taken over part of a run is not in general the
-// difference of two counts taken over the whole of it. With no mark and nothing
-// cursive there is no state to carry: every cluster is a unit, and the count of
-// any stretch is the number of clusters in it.
-//
-// That is the common case and the expensive one. A run that does not qualify
-// falls back to counting, which is what it did before.
-type spacingIndex struct {
-	text string
-	// at[i] is the number of units in text[:i], for every byte offset i. Held
-	// per byte rather than per cluster so that a cut is a lookup and not a
-	// search; a run is bounded by the document and this is one int32 a byte.
-	at []int32
-}
-
-// newSpacingIndex builds the table, or reports that this run does not qualify.
-//
-// The walk is scanCursiveTracking's own, so that the table and the count cannot
-// disagree about where a cluster ends or which one is passed over.
-func newSpacingIndex(text string) (*spacingIndex, bool) {
-	for _, r := range text {
-		if IsCursiveScript(r) || unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r) {
-			return nil, false
-		}
-	}
-	idx := &spacingIndex{text: text, at: make([]int32, len(text)+1)}
-	n := int32(0)
-	bounds := segment.Boundaries(nil, text)
-	for k, start := 0, 0; start < len(text); k++ {
-		end := len(text)
-		if k < len(bounds) {
-			end = bounds[k]
-		}
-		if !allIgnorableBetween(text, start, end) {
-			n++
-		}
-		// Every offset through the end of this cluster carries the count up to
-		// and including it. Only a cluster boundary is ever asked for, and at a
-		// boundary this is exactly the number of units in front of it.
-		for i := start + 1; i <= end; i++ {
-			idx.at[i] = n
-		}
-		start = end
-	}
-	return idx, true
-}
-
-// allIgnorableBetween reports whether text[from:to] is nothing a unit is
-// counted for, which is the one cluster scanCursiveTracking passes over.
-func allIgnorableBetween(text string, from, to int) bool {
-	if from >= to {
-		return false
-	}
-	for _, r := range text[from:to] {
-		if !IsDefaultIgnorable(r) {
-			return false
-		}
-	}
-	return true
-}
-
-// units is the number of spaced units in text[from:to].
-func (idx *spacingIndex) units(from, to int) int {
-	return int(idx.at[to] - idx.at[from])
 }
