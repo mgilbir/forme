@@ -149,7 +149,8 @@ type Rule struct {
 // of a media query.
 func ParseComponentValues(input string) ([]ComponentValue, []Error) {
 	p := newParser(input)
-	return p.componentValues(), p.errs
+	out := p.componentValues()
+	return out, p.report()
 }
 
 // ParseStylesheet parses a stylesheet (§5.3.3): a list of rules, at the top
@@ -157,7 +158,8 @@ func ParseComponentValues(input string) ([]ComponentValue, []Error) {
 // of a qualified rule.
 func ParseStylesheet(input string) ([]Rule, []Error) {
 	p := newParser(input)
-	return p.rules(true), p.errs
+	out := p.rules(true)
+	return out, p.report()
 }
 
 // ParseRules parses a list of rules that is not a whole stylesheet (§5.3.4) —
@@ -166,7 +168,8 @@ func ParseStylesheet(input string) ([]Rule, []Error) {
 // context has no reason to ignore.
 func ParseRules(input string) ([]Rule, []Error) {
 	p := newParser(input)
-	return p.rules(false), p.errs
+	out := p.rules(false)
+	return out, p.report()
 }
 
 // ParseDeclarations parses a list of declarations (§5.3.6): the contents of a
@@ -185,7 +188,7 @@ func ParseRules(input string) ([]Rule, []Error) {
 func ParseDeclarations(input string) ([]Declaration, []Rule, []Error) {
 	p := newParser(input)
 	decls, rules := p.declarations()
-	return decls, rules, p.errs
+	return decls, rules, p.report()
 }
 
 // ParseDeclarationValues is ParseDeclarations over already-parsed input, which
@@ -198,14 +201,15 @@ func ParseDeclarations(input string) ([]Declaration, []Rule, []Error) {
 func ParseDeclarationValues(block []ComponentValue) ([]Declaration, []Rule, []Error) {
 	p := &parser{vals: block}
 	decls, rules := p.declarations()
-	return decls, rules, p.errs
+	return decls, rules, p.report()
 }
 
 // ParseRulesFromValues is ParseRules over already-parsed component values, which
 // is what reading the body of an @media block needs.
 func ParseRulesFromValues(block []ComponentValue) ([]Rule, []Error) {
 	p := &parser{vals: block}
-	return p.rules(false), p.errs
+	out := p.rules(false)
+	return out, p.report()
 }
 
 // parser walks either a token stream or an already-parsed list of component
@@ -216,36 +220,250 @@ func ParseRulesFromValues(block []ComponentValue) ([]Rule, []Error) {
 // has already been parsed is a list of component values, and re-tokenizing it
 // would lose the nesting that was already worked out. Which one is live is
 // decided by fromValues.
+//
+// # The token stream is pulled, not materialised
+//
+// The tokens are read from the tokenizer as the parser reaches them, into a
+// window that holds only those not yet consumed. They used to be tokenized whole
+// first, into a slice held for the length of the parse beside the tree being
+// built from it — and a token is seventy-two bytes, a stylesheet can be a token
+// per byte, and every one of them is copied into that tree anyway. With the
+// slice's growth on top, a megabyte of "a{b:,,,…}" peaked at over four hundred
+// bytes held for each byte of the sheet.
+//
+// Nothing reads behind the position being consumed, and nothing reads far
+// ahead of it into the window: the one look-ahead, startsANestedRule, reads
+// with a copy of the tokenizer instead. So the window holds the token being
+// looked at and not much else, whatever the length of the sheet.
 type parser struct {
-	toks []Token
+	// tz is the token stream, and nil for a parser over component values.
+	tz *tokenizer
+	// window is the tokens pulled from tz and not yet dropped: window[0] is the
+	// token at position base. ended records that tz has produced its EOF,
+	// which is not kept in the window — tokenAt makes one for any position at
+	// or past the end, as reading past the end of the old slice did.
+	window []Token
+	base   int
+	ended  bool
+
 	vals []ComponentValue
+
+	// stack is where the values of every list still being read are gathered,
+	// innermost last. See take.
+	stack gathered
 
 	pos   int
 	depth int
-	errs  []Error
+	// errs is what the parser itself found, in the order it found it. It is
+	// laid after the tokenizer's by report, under one bound for the two.
+	errs []Error
 }
 
 func newParser(input string) *parser {
-	toks, errs := Tokenize(input)
-	return &parser{toks: toks, errs: errs}
+	return &parser{tz: newTokenizer(input)}
 }
 
 // fromValues reports whether this parser walks component values rather than
 // tokens.
-func (p *parser) fromValues() bool { return p.toks == nil }
+func (p *parser) fromValues() bool { return p.tz == nil }
 
-func (p *parser) fail(off int, msg string) {
-	switch {
-	case len(p.errs) > maxErrors:
+// tokenAt is the token at an absolute position of the stream, pulling it from
+// the tokenizer if it has not been read yet. Past the end it is an EOF token.
+func (p *parser) tokenAt(i int) Token {
+	for i-p.base >= len(p.window) {
+		if p.ended {
+			return Token{Kind: EOF, Offset: p.tz.end}
+		}
+		p.pull()
+	}
+	return p.window[i-p.base]
+}
+
+// pull reads one more token into the window.
+//
+// When the window is full, the tokens already consumed are dropped to make room
+// if they are at least half of it, and otherwise it doubles. Either way the
+// cost is paid at most once per token, so reading the stream is linear, and
+// what the window holds is never more than twice what has been pulled and not
+// yet consumed — which, with nothing but peek pulling, is a token.
+func (p *parser) pull() {
+	if len(p.window) == cap(p.window) {
+		if dead := p.pos - p.base; dead > 0 && 2*dead >= len(p.window) {
+			n := copy(p.window, p.window[dead:])
+			clear(p.window[n:])
+			p.window = p.window[:n]
+			p.base = p.pos
+		} else {
+			grown := make([]Token, len(p.window), 2*cap(p.window)+1)
+			copy(grown, p.window)
+			p.window = grown
+		}
+	}
+	tok := p.tz.token()
+	if tok.Kind == EOF {
+		p.ended = true
 		return
-	case len(p.errs) == maxErrors:
-		p.errs = append(p.errs, Error{
-			Offset:  off,
-			Message: "further problems in this stylesheet were not reported",
-		})
-	default:
+	}
+	p.window = append(p.window, tok)
+}
+
+// take is the values gathered on the stack since mark, in a slice of their own
+// and of exactly their length, and pops them.
+//
+// Every list the parser builds — a block's contents, a function's arguments, a
+// prelude, a declaration — is gathered on the stack and copied out once it is
+// complete, rather than appended to where it will live. Appending grows a slice
+// by a quarter at a time once it is large, so a block of a million values was
+// copied a dozen times over on its way to its size and kept up to a quarter
+// again in capacity nothing would use: the tree of "a{b:,,,…}" allocated five
+// times what it ended up holding. A list inside a list is gathered above its
+// parent's values and taken off before the parent adds it, which is why one
+// stack serves the nesting. See gathered for why the stack itself never copies.
+//
+// A parser over component values gathers nothing. What it reads is a list
+// already, one value to a position, so the values since mark are the stretch of
+// that list between mark and where it stands, and that stretch is the list:
+// the declarations of a block of a million values are read without a value of
+// it being copied, where gathering them made the block twice over. The stretch
+// is capped at its own length, so a caller that appends to it gets a slice of
+// its own rather than writing over the values after it — and nothing here or
+// above writes into one. A block met in a list of values was already handed
+// back as the node's own list, for the same reason; see takeBlock.
+//
+// An empty list is nil, as the appends it replaced left it: a caller tells a
+// block with nothing in it by its length, and a declaration value that is never
+// an empty non-nil slice is pinned by a test of its own.
+func (p *parser) take(mark int) []ComponentValue {
+	if p.fromValues() {
+		if p.pos == mark {
+			return nil
+		}
+		return p.vals[mark:p.pos:p.pos]
+	}
+	return p.stack.take(mark)
+}
+
+// mark is where a list about to be gathered begins: a height of the stack, or a
+// position in the values being read. Everything read between it and the take
+// that ends the list has to be pushed, and nothing else may be read, which is
+// why a closing delimiter is consumed after the take and not before.
+func (p *parser) mark() int {
+	if p.fromValues() {
+		return p.pos
+	}
+	return p.stack.len()
+}
+
+// push adds a value to the list being gathered.
+func (p *parser) push(c ComponentValue) {
+	if !p.fromValues() {
+		p.stack.push(c)
+	}
+}
+
+// gathered is the parser's stack of values not yet in a list of their own.
+//
+// It is kept in chunks rather than in one slice, so that growing it copies
+// nothing: a slice that doubles holds up to twice what it needs and copies what
+// it holds each time, and for the one list of a million values that a sheet can
+// be, that was more than the list. Chunks are allocated as the stack first grows
+// into them and kept for reuse by every list after, doubling from one value —
+// most lists are one to ten, and a parse of "12px" should not pay for a hundred
+// — up to a size past which a bigger chunk would save nothing but a few
+// pointers.
+//
+// So what the stack holds is never more than its deepest fill plus one chunk,
+// and a list is copied exactly once: out of here, into the slice it keeps.
+type gathered struct {
+	// chunks are the chunks allocated so far. Those below top are full, top
+	// is the one being filled, and any above it are empty and waiting.
+	chunks [][]ComponentValue
+	top    int
+	// n is how many values are held.
+	n int
+}
+
+// The chunk sizes: the first, and the one past which they stop doubling.
+const (
+	firstChunk = 1
+	maxChunk   = 4096
+)
+
+// len is how many values are held, which is the mark a list begins at.
+func (g *gathered) len() int { return g.n }
+
+func (g *gathered) push(c ComponentValue) {
+	switch {
+	case len(g.chunks) == 0:
+		g.chunks = append(g.chunks, make([]ComponentValue, 0, firstChunk))
+		g.top = 0
+	case len(g.chunks[g.top]) == cap(g.chunks[g.top]):
+		g.top++
+		if g.top == len(g.chunks) {
+			g.chunks = append(g.chunks, make([]ComponentValue, 0, min(2*cap(g.chunks[g.top-1]), maxChunk)))
+		}
+	}
+	g.chunks[g.top] = append(g.chunks[g.top], c)
+	g.n++
+}
+
+func (g *gathered) take(mark int) []ComponentValue {
+	count := g.n - mark
+	if count == 0 {
+		return nil
+	}
+	out := make([]ComponentValue, count)
+	// From the top down, since the values since mark are the top of the stack.
+	for w := count; w > 0; {
+		ch := g.chunks[g.top]
+		k := min(len(ch), w)
+		copy(out[w-k:w], ch[len(ch)-k:])
+		// Cleared so that a chunk does not keep the popped values' own lists
+		// reachable after the tree that holds them has been dropped.
+		clear(ch[len(ch)-k:])
+		g.chunks[g.top] = ch[:len(ch)-k]
+		w -= k
+		if len(g.chunks[g.top]) == 0 && g.top > 0 {
+			g.top--
+		}
+	}
+	g.n = mark
+	return out
+}
+
+// fail records a problem. It keeps one past the bound, and no more, because
+// that is as many as report can use: the one past it is where the note that the
+// list was cut goes.
+func (p *parser) fail(off int, msg string) {
+	if len(p.errs) <= maxErrors {
 		p.errs = append(p.errs, Error{Offset: off, Message: msg})
 	}
+}
+
+// report is the problems of the whole parse: the tokenizer's, then the
+// parser's, under the one maxErrors bound.
+//
+// That is the order and the bound they had when the input was tokenized whole
+// before it was parsed, and pulling the tokens as they are needed is not a
+// reason for a caller to see a different list. So the rest of the stream is
+// read first — every entry point reads to the end already, and this makes it
+// true by construction rather than by each of them — and the parser's own
+// problems are laid after the tokenizer's exactly as they would have been had
+// the tokenizer's all been found first.
+func (p *parser) report() []Error {
+	var out []Error
+	if p.tz != nil {
+		for !p.ended {
+			if p.tz.token().Kind == EOF {
+				p.ended = true
+			}
+		}
+		out = p.tz.errs
+	}
+	for _, e := range p.errs {
+		out = addError(out, e)
+	}
+	return out
 }
 
 // peek returns the next node without consuming it. Past the end it returns an
@@ -257,16 +475,13 @@ func (p *parser) peek() ComponentValue {
 		}
 		return ComponentValue{Token: Token{Kind: EOF, Offset: p.endOffset()}}
 	}
-	if p.pos < len(p.toks) {
-		return ComponentValue{Token: p.toks[p.pos]}
-	}
-	return ComponentValue{Token: Token{Kind: EOF, Offset: p.endOffset()}}
+	return ComponentValue{Token: p.tokenAt(p.pos)}
 }
 
 // endOffset is where the input ended, for a diagnostic that has run off the end.
 func (p *parser) endOffset() int {
-	if n := len(p.toks); n > 0 {
-		return p.toks[n-1].Offset
+	if p.tz != nil {
+		return p.tz.end
 	}
 	if n := len(p.vals); n > 0 {
 		return p.vals[n-1].Token.Offset
@@ -292,11 +507,11 @@ func (p *parser) skipWhitespace() {
 
 // componentValues consumes to the end of the input (§5.4.7 in the list form).
 func (p *parser) componentValues() []ComponentValue {
-	var out []ComponentValue
+	mark := p.mark()
 	for !p.atEOF() {
-		out = append(out, p.componentValue())
+		p.push(p.componentValue())
 	}
-	return out
+	return p.take(mark)
 }
 
 // componentValue consumes one component value (§5.4.6): a block, a function, or
@@ -344,10 +559,11 @@ func (p *parser) block(open Token) ComponentValue {
 	defer func() { p.depth-- }()
 
 	end := mirror(open.Kind)
-	out := ComponentValue{Token: open}
+	mark := p.mark()
 	for {
 		switch c := p.peek(); {
 		case c.Token.Kind == end:
+			out := ComponentValue{Token: open, Values: p.take(mark)}
 			p.pos++
 			return out
 		case c.Token.Kind == EOF:
@@ -355,9 +571,9 @@ func (p *parser) block(open Token) ComponentValue {
 			// throw away every rule in a stylesheet whose last brace is
 			// missing, which is the commonest way a stylesheet is broken.
 			p.fail(open.Offset, "a block that is never closed")
-			return out
+			return ComponentValue{Token: open, Values: p.take(mark)}
 		default:
-			out.Values = append(out.Values, p.componentValue())
+			p.push(p.componentValue())
 		}
 	}
 }
@@ -372,17 +588,18 @@ func (p *parser) function(name Token) ComponentValue {
 	p.depth++
 	defer func() { p.depth-- }()
 
-	out := ComponentValue{Token: name}
+	mark := p.mark()
 	for {
 		switch c := p.peek(); {
 		case c.Token.Kind == RightParen:
+			out := ComponentValue{Token: name, Values: p.take(mark)}
 			p.pos++
 			return out
 		case c.Token.Kind == EOF:
 			p.fail(name.Offset, "a function call that is never closed")
-			return out
+			return ComponentValue{Token: name, Values: p.take(mark)}
 		default:
-			out.Values = append(out.Values, p.componentValue())
+			p.push(p.componentValue())
 		}
 	}
 }
@@ -457,9 +674,11 @@ func (p *parser) rules(topLevel bool) []Rule {
 func (p *parser) atRule() Rule {
 	at := p.next()
 	out := Rule{At: true, Name: at.Token.Value, Offset: at.Token.Offset}
+	mark := p.mark()
 	for {
 		switch c := p.peek(); {
 		case c.Token.Kind == Semicolon:
+			out.Prelude = p.take(mark)
 			p.pos++
 			return out
 
@@ -468,14 +687,16 @@ func (p *parser) atRule() Rule {
 			// only an error if the rule was still collecting its prelude. It
 			// was, or we would have returned; but "@import 'x'" with no
 			// semicolon is so common that reporting it would be noise.
+			out.Prelude = p.take(mark)
 			return out
 
 		case c.Token.Kind == LeftBrace:
+			out.Prelude = p.take(mark)
 			out.Block, out.HasBlock = p.takeBlock(c), true
 			return out
 
 		default:
-			out.Prelude = append(out.Prelude, p.componentValue())
+			p.push(p.componentValue())
 		}
 	}
 }
@@ -500,34 +721,38 @@ func (p *parser) takeBlock(c ComponentValue) []ComponentValue {
 // styles its author never wrote.
 func (p *parser) qualifiedRule() (Rule, bool) {
 	out := Rule{Offset: p.peek().Token.Offset}
+	mark := p.mark()
 	for {
 		switch c := p.peek(); {
 		case c.Token.Kind == EOF:
 			p.fail(out.Offset, "a rule with no block: the \"{\" is missing")
+			// Popped though it is thrown away, or it would sit under whatever
+			// list is gathered next.
+			p.take(mark)
 			return Rule{}, false
 
 		case c.Token.Kind == LeftBrace:
+			out.Prelude = p.take(mark)
 			out.Block, out.HasBlock = p.takeBlock(c), true
 			return out, true
 
 		default:
-			out.Prelude = append(out.Prelude, p.componentValue())
+			p.push(p.componentValue())
 		}
 	}
 }
 
-// lookAt is the component value at an absolute position, for a look-ahead. In
-// token mode a token stands for itself; in value mode the nesting has already
-// been worked out and a block is one value.
+// lookAt is the component value at an absolute position of a parser over
+// component values, for a look-ahead: the nesting has already been worked out,
+// so a block is one value.
+//
+// There is no token-stream form of it, and that is deliberate. Looking ahead in
+// the stream by position pulls every token passed over into the window and
+// keeps it there; startsANestedRule reads ahead with a copy of the tokenizer
+// instead.
 func (p *parser) lookAt(i int) ComponentValue {
-	if p.fromValues() {
-		if i < len(p.vals) {
-			return p.vals[i]
-		}
-		return ComponentValue{Token: Token{Kind: EOF, Offset: p.endOffset()}}
-	}
-	if i < len(p.toks) {
-		return ComponentValue{Token: p.toks[i]}
+	if i < len(p.vals) {
+		return p.vals[i]
 	}
 	return ComponentValue{Token: Token{Kind: EOF, Offset: p.endOffset()}}
 }
@@ -545,41 +770,80 @@ func (p *parser) lookAt(i int) ComponentValue {
 // is two rules and one run.
 func (p *parser) startsANestedRule() bool {
 	depth := 0
-	for i := p.pos; ; i++ {
-		c := p.lookAt(i)
-		switch {
-		case c.Token.Kind == EOF:
-			return false
-		case c.IsBlock() || c.IsFunction():
-			// Already grouped, so nothing inside it is at this level. A "{}"
-			// block among them is the rule's own.
-			if c.IsBlock() && c.Token.Kind == LeftBrace {
-				return true
-			}
-		case c.Token.Kind == LeftBrace:
-			if depth == 0 {
-				return true
-			}
-			depth++
-		case c.Token.Kind == LeftParen || c.Token.Kind == LeftSquare ||
-			c.Token.Kind == Function:
-			depth++
-		case c.Token.Kind == RightParen || c.Token.Kind == RightSquare:
-			if depth > 0 {
-				depth--
-			}
-		case c.Token.Kind == RightBrace:
-			if depth == 0 {
-				// The end of the block this declaration list is in.
-				return false
-			}
-			depth--
-		case c.Token.Kind == Semicolon:
-			if depth == 0 {
-				return false
+	if p.fromValues() {
+		for i := p.pos; ; i++ {
+			if done, nested := nestedRuleStep(p.lookAt(i), &depth); done {
+				return nested
 			}
 		}
 	}
+	// A token stream is read ahead without being kept. The tokens already in
+	// the window are looked at where they are, and the rest are read by a copy
+	// of the tokenizer that is then thrown away, so the parser reads them again
+	// from its own when it gets to them.
+	//
+	// Reading into the window instead would hold every token of the stretch
+	// looked over, and a declaration is as long as its author makes it: the
+	// one declaration of "b:,,,…" made the window the whole of the input, which
+	// is the slice the stream exists not to have. Tokenizing twice is linear,
+	// because the parser always consumes at least as far as this looked — it
+	// stops only at a ";", "{" or "}" outside any block, and this stops at the
+	// first of those inside one or not — so no token is looked ahead over twice.
+	for i := p.pos - p.base; i < len(p.window); i++ {
+		if done, nested := nestedRuleStep(ComponentValue{Token: p.window[i]}, &depth); done {
+			return nested
+		}
+	}
+	if p.ended {
+		return false
+	}
+	probe := *p.tz
+	// Quiet, and with a list of its own: anything wrong ahead is reported when
+	// the parser's own tokenizer reads it, which it will.
+	probe.errs, probe.quiet = nil, true
+	for {
+		if done, nested := nestedRuleStep(ComponentValue{Token: probe.token()}, &depth); done {
+			return nested
+		}
+	}
+}
+
+// nestedRuleStep is startsANestedRule's reading of one value: whether it
+// decides the question, and which way.
+func nestedRuleStep(c ComponentValue, depth *int) (done, nested bool) {
+	switch {
+	case c.Token.Kind == EOF:
+		return true, false
+	case c.IsBlock() || c.IsFunction():
+		// Already grouped, so nothing inside it is at this level. A "{}"
+		// block among them is the rule's own.
+		if c.IsBlock() && c.Token.Kind == LeftBrace {
+			return true, true
+		}
+	case c.Token.Kind == LeftBrace:
+		if *depth == 0 {
+			return true, true
+		}
+		*depth++
+	case c.Token.Kind == LeftParen || c.Token.Kind == LeftSquare ||
+		c.Token.Kind == Function:
+		*depth++
+	case c.Token.Kind == RightParen || c.Token.Kind == RightSquare:
+		if *depth > 0 {
+			*depth--
+		}
+	case c.Token.Kind == RightBrace:
+		if *depth == 0 {
+			// The end of the block this declaration list is in.
+			return true, false
+		}
+		*depth--
+	case c.Token.Kind == Semicolon:
+		if *depth == 0 {
+			return true, false
+		}
+	}
+	return false, false
 }
 
 // declarations consumes a list of declarations (§5.4.4), and the style rules
@@ -625,13 +889,13 @@ func (p *parser) declarations() ([]Declaration, []Rule) {
 // until collects component values up to, but not including, the next top-level
 // token of the given kind.
 func (p *parser) until(end Kind) []ComponentValue {
-	var out []ComponentValue
+	mark := p.mark()
 	for {
 		c := p.peek()
 		if c.Token.Kind == EOF || c.Token.Kind == end {
-			return out
+			return p.take(mark)
 		}
-		out = append(out, p.componentValue())
+		p.push(p.componentValue())
 	}
 }
 
@@ -656,12 +920,25 @@ func parseDeclarationFrom(run []ComponentValue, owner *parser) (Declaration, boo
 	q.pos++
 	q.skipWhitespace()
 
-	for !q.atEOF() {
-		out.Value = append(out.Value, q.componentValue())
+	// The rest of the run is the value, trimmed where it lies. The run is the
+	// declaration's own — until gathered it into a slice of its own length and
+	// nothing else holds it — so the value can stay where it is, and does when
+	// it is most of the run. When it is not, it is copied out at exactly its
+	// length instead, because keeping it where it lies keeps the name, the
+	// colon and whatever was trimmed for as long as the declaration lives: for
+	// "b:c", three values held to keep one. The line between the two is an
+	// eighth, so a value is never kept at more than that over its own size and
+	// the one long declaration a sheet can be is not copied a second time.
+	value, important := takeImportant(run[q.pos:])
+	if value = trimTrailingWhitespace(value); value != nil {
+		if waste := len(run) - len(value); 8*waste <= len(value) {
+			out.Value = value
+		} else {
+			out.Value = make([]ComponentValue, len(value))
+			copy(out.Value, value)
+		}
 	}
-
-	out.Value, out.Important = takeImportant(out.Value)
-	out.Value = trimTrailingWhitespace(out.Value)
+	out.Important = important
 	return out, true
 }
 

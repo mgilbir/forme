@@ -31,22 +31,63 @@ import (
 // An image is bounded by what it decodes to. A stylesheet is bounded by nothing
 // once it is read: every rule in it is matched against every element, so a
 // megabyte of selectors is quadratic work the document did not have to carry.
-// Two caps answer that — one on a sheet and one on how many a document may pull
-// in — and both are checked here rather than left to the resolver, because a
-// caller may supply a resolver of their own and the engine's limits must not
-// depend on which one they wrote.
+// Caps answer that — on the bytes of a sheet fetched, on how many sheets a
+// document may pull in, and on the tokens of one sheet and of all of them — and
+// all are checked here rather than left to the resolver, because a caller may
+// supply a resolver of their own and the engine's limits must not depend on
+// which one they wrote. The token caps are on every stylesheet and not only the
+// fetched ones, because what a sheet costs is its tokens and not where they came
+// from.
 
-// maxStylesheetBytes is the largest linked stylesheet this engine will read.
+// maxStylesheetBytes is the largest linked or imported stylesheet this engine
+// will read.
 //
 // A megabyte is more CSS than any document has: the largest sheets on the web
 // are a few hundred kilobytes, and a sheet past this is not a document's styles
-// but a payload wearing their name. It bounds what is parsed and, through that,
-// what the cascade has to match — which is the cost that matters, since every
-// rule is tried against every element.
+// but a payload wearing their name. It bounds what is fetched, which is bytes
+// the document did not carry and the caller's resolver has to produce.
+//
+// It is not the bound on what a sheet costs to *parse*, which is the tokens in
+// it; see maxStylesheetTokens.
 //
 // It is a variable so that a test can lower it and watch it fire. A cap nobody
 // has seen trip is one nobody knows works.
 var maxStylesheetBytes = 1 << 20
+
+// maxStylesheetTokens is the most tokens of CSS this engine will parse from one
+// stylesheet, from any source: a linked or imported file, a <style> element, a
+// style attribute, and the sheets a caller passes in Input.CSS and
+// Input.UserCSS.
+//
+// Parsing is paid for in tokens. Each becomes a ComponentValue of close to a
+// hundred bytes, and a sheet can be a token per byte, so a megabyte of commas
+// is a hundred megabytes of tree. Only fetched sheets were bounded, and by
+// their bytes: a <style> had no bound at all, a document may be sixty-four
+// megabytes of markup, and one sixteen-megabyte <style> was killed for memory
+// under a four-gigabyte limit.
+//
+// Tokens rather than bytes, because the bytes are not the cost and bounding
+// them refuses what costs nothing: an @font-face carrying its font as a base64
+// data: URL is one string token and megabytes of text, and is the ordinary way
+// a single-file document brings its face. A megabyte of tokens is what the
+// byte cap on a fetched sheet already allowed.
+var maxStylesheetTokens = 1 << 20
+
+// maxDocumentStylesheetTokens is how many tokens of stylesheet one document may
+// have applied, counted across every source maxStylesheetTokens bounds except
+// style attributes — see styleAttributeTooLarge for why those are not counted.
+//
+// The per-sheet bound is not a bound on a document, for the reason
+// maxDocumentStylesheets gives about the number of sheets: twenty linked sheets
+// at the per-sheet bound are twenty legal reads, and <style> elements have no
+// count at all. Every sheet applied is parsed and held until the cascade has
+// run, so what a document holds is the sum of them. Four times the per-sheet
+// bound is four of the largest sheet this engine reads, and ten times what the
+// largest real document carries.
+//
+// A sheet is charged when it is applied, not when it is read, so a file linked
+// ten times is charged ten times — it is parsed and held ten times.
+var maxDocumentStylesheetTokens = 4 << 20
 
 // maxDocumentStylesheets is how many linked stylesheets one document may pull
 // in.
@@ -79,15 +120,17 @@ type authorSheet struct {
 // it — and a browser orders the two by their position in the markup rather than
 // by their kind. Collecting them in one walk is what makes that true by
 // construction instead of by a sort somebody has to keep right.
-func documentStylesheets(doc *html.Node, res ResourceResolver, media style.Media,
-	rec *Recorder) []authorSheet {
-
-	l := &sheetLoader{res: res, rec: rec, media: media, failed: map[string]bool{}}
+//
+// The loader is the document's, shared with the sheets the caller passed, so
+// that the bounds on a document are bounds on the document and not on each of
+// the two places its stylesheets come from.
+func documentStylesheets(doc *html.Node, l *sheetLoader) []authorSheet {
 	var out []authorSheet
 	doc.Walk(func(n *html.Node) bool {
 		if n.Type != html.ElementNode {
 			return true
 		}
+		l.styleAttributeTooLarge(n)
 		switch strings.ToLower(n.Name) {
 		case "style":
 			// HTML §4.2.6 gives <style> a media attribute and means by it what
@@ -95,7 +138,8 @@ func documentStylesheets(doc *html.Node, res ResourceResolver, media style.Media
 			// screen rules in "<style media=screen>" — which is what a
 			// single-file document writes instead of a second stylesheet — had
 			// every one of them applied to the paper.
-			if text := n.TextContent(); text != "" && l.mediaApplies(n, "this <style> element") {
+			if text := n.TextContent(); text != "" && l.mediaApplies(n, "this <style> element") &&
+				l.admit(text, "this <style> element", AtHTML(n.Offset), PathOf(n)) {
 				out = append(out, l.expandImports(authorSheet{source: text})...)
 			}
 			// A <style> element's content is raw text, so there is nothing
@@ -155,6 +199,11 @@ type sheetLoader struct {
 	applied int
 	// capped records that the count cap was reported, so it is reported once.
 	capped bool
+	// spent is the tokens of stylesheet applied so far, which is what
+	// maxDocumentStylesheetTokens bounds, and tokensCapped records that the
+	// bound was reported, so it is reported once.
+	spent        int
+	tokensCapped bool
 }
 
 // link turns one <link> element into a stylesheet, or explains why it did not.
@@ -186,6 +235,10 @@ func (l *sheetLoader) link(n *html.Node) (authorSheet, bool) {
 		return authorSheet{}, false
 	}
 	if src, ok := l.cache[href]; ok {
+		if why := l.charge(src); why != "" {
+			l.overTokens(href, why, AtHTML(n.Offset), PathOf(n))
+			return authorSheet{}, false
+		}
 		l.applied++
 		return authorSheet{name: href, source: src}, true
 	}
@@ -205,8 +258,112 @@ func (l *sheetLoader) link(n *html.Node) (authorSheet, bool) {
 		l.cache = map[string]string{}
 	}
 	l.cache[href] = src
+	if why := l.charge(src); why != "" {
+		l.overTokens(href, why, AtHTML(n.Offset), PathOf(n))
+		return authorSheet{}, false
+	}
 	l.applied++
 	return authorSheet{name: href, source: src}, true
+}
+
+// admit decides whether a stylesheet that was not fetched — a <style> element,
+// or one of the caller's — may be applied, under the same two token bounds a
+// fetched one is, and reports it by name when it may not.
+//
+// The finding is a limit, because that is what happened: the sheet is correct
+// CSS the engine implements, and it was not read because a guard said so. It
+// names the sheet, because "a stylesheet was dropped" sends an author looking
+// through all of them.
+func (l *sheetLoader) admit(src, what string, at Source, path string) bool {
+	why := l.charge(src)
+	if why == "" {
+		return true
+	}
+	l.rec.ReportDetail(Finding{
+		Rule:    RuleLimit,
+		Source:  at,
+		Message: what + " was not applied: " + why,
+		Path:    path,
+	})
+	return false
+}
+
+// charge counts a stylesheet about to be applied against both token bounds, and
+// says why it may not be applied, or nothing when it may. A sheet refused is not
+// counted.
+//
+// The counting reads the sheet once before it is parsed, which is the price of
+// knowing before the parse is paid for. It stops one past the bound, so a sheet
+// too large costs no more to refuse than one at the bound.
+func (l *sheetLoader) charge(src string) string {
+	n := css.CountTokens(src, maxStylesheetTokens)
+	if n > maxStylesheetTokens {
+		return fmt.Sprintf("it is more than the %d tokens of CSS this engine will read "+
+			"from one stylesheet (%d bytes)", maxStylesheetTokens, len(src))
+	}
+	if l.spent+n > maxDocumentStylesheetTokens {
+		return fmt.Sprintf("with its %d tokens of CSS this document's stylesheets would come "+
+			"to %d, more than the %d this engine will read", n, l.spent+n,
+			maxDocumentStylesheetTokens)
+	}
+	l.spent += n
+	return ""
+}
+
+// overTokens reports a fetched sheet refused by a token bound. It is overCap's
+// two findings for the other bounds on what a document reads, and for the same
+// reasons: the guard tripped, said once, and a file the document named was not
+// applied, said for each.
+func (l *sheetLoader) overTokens(href, why string, at Source, path string) {
+	if !l.tokensCapped {
+		l.tokensCapped = true
+		l.rec.Report(RuleLimit, NoSource, fmt.Sprintf(
+			"this document's stylesheets are more than this engine will read: %s", why))
+	}
+	l.rec.ReportDetail(Finding{
+		Rule:    RuleResourceBlocked,
+		Source:  at,
+		Message: "the stylesheet at " + quoteValue(href) + " was not applied: " + why,
+		Path:    path,
+	})
+}
+
+// styleAttributeTooLarge refuses a style attribute longer than any stylesheet
+// this engine reads, and reports it.
+//
+// A style attribute is a stylesheet without a selector, and parsing one costs
+// what parsing a sheet of its tokens costs; the markup cap lets one be sixty
+// megabytes of them. The attribute is emptied rather than removed, so that "[style]"
+// still selects the element — the element has the attribute; what was not read
+// is the declarations in it — and emptied here, before the cascade, because the
+// cascade reads it for every element and has no bound of its own to apply.
+//
+// It is not charged against maxDocumentStylesheetTokens. A sheet is held from
+// when it is parsed until every element has been styled, which is why the
+// document's sheets are bounded together; a style attribute is parsed when its
+// element is styled and let go when that element is done, so what one costs is
+// its own tokens and never the sum.
+//
+// No token has fewer than one byte, so an attribute no longer than the bound
+// in bytes is inside it in tokens and is not counted at all: counting is paid
+// only by the attributes long enough to need it.
+func (l *sheetLoader) styleAttributeTooLarge(n *html.Node) {
+	for i := range n.Attrs {
+		a := &n.Attrs[i]
+		if a.Name != "style" || len(a.Value) <= maxStylesheetTokens ||
+			css.CountTokens(a.Value, maxStylesheetTokens) <= maxStylesheetTokens {
+			continue
+		}
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleLimit,
+			Source: AtHTML(n.Offset),
+			Message: fmt.Sprintf("this element's style attribute is more than the %d tokens "+
+				"of CSS this engine will read from one stylesheet (%d bytes); it was not applied",
+				maxStylesheetTokens, len(a.Value)),
+			Path: PathOf(n),
+		})
+		a.Value = ""
+	}
 }
 
 // overCap reports the document-wide count tripping.
@@ -651,6 +808,10 @@ func (l *sheetLoader) fetchImport(ref, from string) (string, bool) {
 		if l.applied >= maxDocumentStylesheets {
 			return "", false
 		}
+		if why := l.charge(src); why != "" {
+			l.overTokens(ref, why, NoSource, "")
+			return "", false
+		}
 		l.applied++
 		return src, true
 	}
@@ -671,6 +832,10 @@ func (l *sheetLoader) fetchImport(ref, from string) (string, bool) {
 		l.cache = map[string]string{}
 	}
 	l.cache[ref] = src
+	if why := l.charge(src); why != "" {
+		l.overTokens(ref, why, NoSource, "")
+		return "", false
+	}
 	l.applied++
 	return src, true
 }

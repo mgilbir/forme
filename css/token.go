@@ -102,8 +102,25 @@ const (
 // not distinguishable from an absent one — a Number token whose Value is empty
 // is a token whose Kind was never Number. The accessors below are the safe way
 // to read one.
+//
+// The three one-byte fields are declared together, and that is not tidiness.
+// Declared where the flags used to be, after Repr, each of Kind and the two
+// flags sat in an eight-byte word of its own, and a token was eighty bytes
+// rather than seventy-two. There is one Token in every ComponentValue of a
+// parsed stylesheet, and a stylesheet can be a token per byte — "a{b:,,,…}" is
+// — so the padding was a tenth of what parsing a sheet holds.
 type Token struct {
 	Kind Kind
+
+	// IsInteger reports that a numeric token was written with no fractional
+	// part and no exponent. Some properties accept only integers, and 2.0 is
+	// not one of them.
+	IsInteger bool
+
+	// IsID reports that a Hash token's name is also a valid identifier. "#main"
+	// can be an ID selector and "#0f0" cannot, and the two are otherwise the
+	// same token.
+	IsID bool
 
 	// Value is the token's text with escapes resolved and delimiters removed:
 	// the name of an Ident, Function, AtKeyword or Hash (without the "@" or
@@ -123,16 +140,6 @@ type Token struct {
 	// stylesheet back out needs: 1.50 and 1.5 are the same value and not the
 	// same text.
 	Repr string
-
-	// IsInteger reports that a numeric token was written with no fractional
-	// part and no exponent. Some properties accept only integers, and 2.0 is
-	// not one of them.
-	IsInteger bool
-
-	// IsID reports that a Hash token's name is also a valid identifier. "#main"
-	// can be an ID selector and "#0f0" cannot, and the two are otherwise the
-	// same token.
-	IsID bool
 
 	// Offset is the byte offset in the original input at which this token
 	// begins, so that a diagnostic can point at the source.

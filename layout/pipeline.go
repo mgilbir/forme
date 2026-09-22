@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"strconv"
 	"strings"
 	"sync"
 
@@ -182,8 +183,12 @@ func buildWith(in Input, page PageSize, rec *Recorder) Built {
 	// those rules are inside the sheets being chosen here. It is the page the
 	// caller named; @page narrows it afterwards and the cascade asks again.
 	asked := style.Media{Width: page.Width, Height: page.Height}
+	// One loader for every stylesheet the document is given, whichever side it
+	// came from, because the bounds it applies are on the document: two loaders
+	// were two budgets, and the caller's sheets and the document's own could
+	// each spend a whole one.
 	importer := &sheetLoader{res: in.Resources, rec: rec, media: asked, failed: map[string]bool{}}
-	if in.UserCSS != "" {
+	if in.UserCSS != "" && importer.admit(in.UserCSS, "the user stylesheet", NoSource, "") {
 		// Through the importer like every other author-supplied sheet. A user
 		// stylesheet is CSS a person wrote, and an @import in one is the same
 		// request it is anywhere else — left unexpanded it was reported as an
@@ -199,12 +204,19 @@ func buildWith(in Input, page PageSize, rec *Recorder) Built {
 	// order the author would expect. documentStylesheets returns the two kinds
 	// interleaved in document order for that reason; see stylesheet.go for what
 	// a linked one is allowed to be read from.
-	for _, s := range documentStylesheets(doc, in.Resources, asked, rec) {
+	for _, s := range documentStylesheets(doc, importer) {
 		sheets = append(sheets, parseSheet(rec, style.OriginAuthor, s.name, s.source, &faces, &pages))
 	}
 	// A caller's own sheets go through the same expansion as the document's, so
 	// that "@import" means the same thing whichever side it was written on.
-	for _, s := range in.CSS {
+	for i, s := range in.CSS {
+		what := "the stylesheet " + quoteValue(s.Name)
+		if s.Name == "" {
+			what = "the stylesheet at Input.CSS[" + strconv.Itoa(i) + "]"
+		}
+		if !importer.admit(s.Source, what, NoSource, "") {
+			continue
+		}
 		for _, e := range importer.expandImports(authorSheet{name: s.Name, source: s.Source}) {
 			sheets = append(sheets, parseSheet(rec, style.OriginAuthor, e.name, e.source, &faces, &pages))
 		}

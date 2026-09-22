@@ -27,6 +27,21 @@ const (
 	// repeated is an amplification.
 	maxNodes = 1 << 20
 
+	// maxAttributes bounds how many attributes one element may carry, and the
+	// three frame elements count what every start tag for them merged.
+	//
+	// maxNodes says nothing about attributes, and an element's attributes are a
+	// list that anything asking for one of them walks: Attr is a scan, and
+	// Language, the table hints and the path a finding names each make that scan
+	// at every ancestor of the node they are asked about. So a <body> with forty
+	// thousand attributes over forty thousand paragraphs was a walk of all of
+	// them for each paragraph, and building the page went up by three for each
+	// doubling of the document. Bounding the list is what makes every one of
+	// those walks a constant, including the ones not yet written. No element an
+	// author writes comes near it: HTML's own elements take a few dozen at most,
+	// and a template that renders hundreds onto one tag is not styling anything.
+	maxAttributes = 256
+
 	// maxInputBytes bounds the document itself. It is generous — a book's worth
 	// of markup is a few megabytes — and exists so that the caps above are
 	// never the first thing a runaway input meets.
@@ -99,6 +114,9 @@ type parser struct {
 	pendingBuf []byte
 	// ns maps a namespace prefix to the URI it was bound to. See bindNamespaces.
 	ns map[string]string
+	// frameNames is the set of attribute names already on each frame element,
+	// kept for the whole parse. See mergeAttributes.
+	frameNames map[*Node]map[string]bool
 }
 
 // dropFirstNewline are the elements HTML §13.2.6.4.7 ignores a leading line
@@ -431,13 +449,13 @@ func (p *parser) startTag(tk token) {
 	// layout comparison noticed the doubled margin.
 	switch name {
 	case "html":
-		mergeAttributes(p.html, tk.attrs)
+		p.mergeAttributes(p.html, tk.attrs, tk.offset)
 		return
 	case "head":
-		mergeAttributes(p.head, tk.attrs)
+		p.mergeAttributes(p.head, tk.attrs, tk.offset)
 		return
 	case "body":
-		mergeAttributes(p.body, tk.attrs)
+		p.mergeAttributes(p.body, tk.attrs, tk.offset)
 		p.enterBody()
 		return
 	}
@@ -648,14 +666,49 @@ func (p *parser) insertUnknown(tk token) {
 // An attribute already present wins over the one arriving, which is the rule
 // HTML gives: the first value of a repeated attribute is the one that counts, and
 // the frame's own is the first by construction.
-func mergeAttributes(el *Node, attrs []Attribute) {
-	if el == nil {
+//
+// Asking the element whether it has the name is a walk of every attribute merged
+// so far, once for each one arriving, and that made "<body a0 a1 … aN>"
+// quadratic: forty thousand attributes, a quarter of a megabyte of markup, took
+// three and a half seconds, and the same attributes on a <div> took nineteen
+// milliseconds. Two things answer it, and neither alone is enough.
+//
+// maxAttributes bounds what is merged as it bounds what one tag carries: a
+// frame written a thousand times, each with a new attribute, is one element
+// with a thousand attributes, and every lookup on it walks them. That makes the
+// walk a constant — and the constant is the bound, paid again by every tag. A
+// frame holding two hundred and fifty attributes, followed by a million tags
+// repeating one of them, was two hundred and fifty comparisons a tag.
+//
+// So the question is asked of a set of the names on the element, kept for the
+// whole parse, which costs the same however many are there. Built afresh for
+// each tag it would not do, because it would be rebuilt from everything the tags
+// before had merged.
+func (p *parser) mergeAttributes(el *Node, attrs []Attribute, offset int) {
+	if el == nil || len(attrs) == 0 {
 		return
 	}
+	names := p.frameNames[el]
+	if names == nil {
+		if p.frameNames == nil {
+			p.frameNames = map[*Node]map[string]bool{}
+		}
+		names = make(map[string]bool, len(el.Attrs)+len(attrs))
+		for _, a := range el.Attrs {
+			names[a.Name] = true
+		}
+		p.frameNames[el] = names
+	}
 	for _, a := range attrs {
-		if el.HasAttr(a.Name) {
+		if names[a.Name] {
 			continue
 		}
+		if len(el.Attrs) >= maxAttributes {
+			p.tok.limit(offset, "<"+el.Name+"> has more attributes than this engine will read ("+
+				strconv.Itoa(maxAttributes)+"); \""+a.Name+"\" and those after it on this tag were dropped")
+			return
+		}
+		names[a.Name] = true
 		el.Attrs = append(el.Attrs, a)
 	}
 }

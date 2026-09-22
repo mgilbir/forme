@@ -592,6 +592,8 @@ func (t *tokenizer) startTag() token {
 
 	out := token{kind: tokStartTag, name: name, offset: start}
 	seen := map[string]bool{}
+	// cut records that maxAttributes was reached on this tag.
+	cut := false
 
 	for {
 		t.skipSpace()
@@ -622,6 +624,19 @@ func (t *tokenizer) startTag() token {
 			if t.pos == at {
 				t.skipTo('>')
 				return out
+			}
+			continue
+		}
+		if len(out.attrs) == maxAttributes {
+			// Read and not kept, so the tag still ends where it ends, and not
+			// checked for a repeat either: remembering the names of attributes
+			// that are thrown away would be the unbounded list over again, as a
+			// set. Reported once, at the first one dropped, which is where the
+			// author has to look.
+			if !cut {
+				cut = true
+				t.limit(at, "<"+name+"> has more attributes than this engine will read ("+
+					strconv.Itoa(maxAttributes)+"); \""+attr.Name+"\" and those after it were dropped")
 			}
 			continue
 		}

@@ -77,7 +77,9 @@ type Node struct {
 	// kinds.
 	Name string
 
-	// Attrs is in source order, with duplicates already refused.
+	// Attrs is in source order, with duplicates already refused, and holds at
+	// most maxAttributes: the rest are dropped and reported, because every
+	// lookup is a walk of this list.
 	Attrs []Attribute
 
 	// Text is the character data of a TextNode, with references resolved.
@@ -301,13 +303,7 @@ func (n *Node) appendChild(c *Node) {
 // shape no consumer should have to handle, and a table is the one place the
 // parser inserts somewhere other than where it stands.
 func (n *Node) childBefore(before *Node) *Node {
-	at := len(n.Children)
-	for i, existing := range n.Children {
-		if existing == before {
-			at = i
-			break
-		}
-	}
+	at := n.childIndex(before)
 	if at == 0 {
 		return nil
 	}
@@ -320,15 +316,33 @@ func (n *Node) childBefore(before *Node) *Node {
 // It exists for foster parenting, which is the one rule of HTML that puts a
 // node somewhere other than where the parser stands. See parser.fosterParent.
 func (n *Node) insertBefore(c, before *Node) {
-	at := len(n.Children)
-	for i, existing := range n.Children {
-		if existing == before {
-			at = i
-			break
-		}
-	}
+	at := n.childIndex(before)
 	c.Parent = n
 	n.Children = append(n.Children, nil)
 	copy(n.Children[at+1:], n.Children[at:])
 	n.Children[at] = c
+}
+
+// childIndex is where a child is among n's children, or len(n.Children) when it
+// is not one of them.
+//
+// It searches from the end, and that is the whole of what keeps foster
+// parenting linear. Every node fostered out of a table goes immediately in
+// front of it, so the table moves one place further from the *front* of its
+// parent with each of them, and a search from the front walked past every node
+// fostered before: "<table>" and a million "<br>" was half a million million
+// comparisons. From the end, the only nodes between the table and the end of
+// its parent are the tables it was itself fostered in front of — nothing else
+// is put in that parent while the table is open, because the parser does not
+// return to the parent until the table has been closed, and every one of those
+// tables is open too, so they are bounded by maxDepth. The same bound is on the
+// copy insertBefore makes of what follows the table, so an insertion costs at
+// most that and usually one step.
+func (n *Node) childIndex(c *Node) int {
+	for i := len(n.Children) - 1; i >= 0; i-- {
+		if n.Children[i] == c {
+			return i
+		}
+	}
+	return len(n.Children)
 }
