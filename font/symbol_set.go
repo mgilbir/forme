@@ -1,6 +1,6 @@
 package font
 
-// SymbolSetNames is the glyph repertoire of the Adobe Symbol font — the "set of
+// symbolSetNames is the glyph repertoire of the Adobe Symbol font — the "set of
 // named characters in the Symbol font" that PDF Reference Appendix D.5 defines
 // and that ISO 19005-1 6.3.8 names as one of the two glyph-name vocabularies a
 // Type 1 font may draw on without also carrying a ToUnicode CMap.
@@ -9,7 +9,10 @@ package font
 // bracket and integral pieces, apple) sit outside Symbol's own encoding vector
 // and are reachable only through a Differences array, and the rule is about the
 // names a font uses, not the codes it uses them at.
-var SymbolSetNames = map[string]bool{
+//
+// Nothing in this engine reads it. It was exported, as SymbolSetNames, for the
+// PDF/A validator this package came from; see doc.go.
+var symbolSetNames = map[string]bool{
 	"space": true, "exclam": true, "universal": true, "numbersign": true, "existential": true,
 	"percent": true, "ampersand": true, "suchthat": true, "parenleft": true, "parenright": true,
 	"asteriskmath": true, "plus": true, "comma": true, "minus": true, "period": true, "slash": true, "zero": true, "one": true, "two": true, "three": true, "four": true, "five": true,

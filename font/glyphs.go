@@ -2,11 +2,12 @@ package font
 
 import "strings"
 
-// Character-code to glyph-index resolution (ISO 32000-1 9.6.6.4). This is font
-// logic rather than validation logic — it reads only the font program's cmap
-// subtables and the glyph name — so it lives with the parser that produces them.
+// Character-code to glyph-index resolution for a simple TrueType font (ISO
+// 32000-1 9.6.6.4). Nothing in this engine resolves codes this way — shape maps
+// characters through the Unicode cmap directly — and trueTypeGID is kept for
+// the reason doc.go gives. GlyphNameToRune, beside it, is shape's.
 
-// TrueTypeGID maps a character code to a glyph index using the font's cmap
+// trueTypeGID maps a character code to a glyph index using the font's cmap
 // subtables, following ISO 32000-1, 9.6.6.4.
 //
 // # The second result, and why glyph 0 is not the same as "no"
@@ -30,7 +31,7 @@ import "strings"
 // Testing `g == 0` therefore merges "this font does not have that character"
 // with "this reader does not understand this font", which are a finding and the
 // absence of one.
-func TrueTypeGID(fp *Program, symbolic bool, code byte, name string) (int, bool) {
+func trueTypeGID(fp *Program, symbolic bool, code byte, name string) (int, bool) {
 	if symbolic {
 		if fp.SymbolCmap != nil {
 			if gid, ok := fp.SymbolCmap[0xF000|uint16(code)]; ok {
@@ -79,12 +80,12 @@ func TrueTypeGID(fp *Program, symbolic bool, code byte, name string) (int, bool)
 // and the ASCII range, where the standard Latin encodings are identity.
 func GlyphNameToRune(name string, code byte) (rune, bool) {
 	if strings.HasPrefix(name, "uni") && len(name) == 7 {
-		if v, ok := ParseHexN(name[3:]); ok {
+		if v, ok := parseHexN(name[3:]); ok {
 			return rune(v), true
 		}
 	}
 	if strings.HasPrefix(name, "u") && len(name) >= 5 && len(name) <= 7 {
-		if v, ok := ParseHexN(name[1:]); ok {
+		if v, ok := parseHexN(name[1:]); ok {
 			return rune(v), true
 		}
 	}
@@ -103,7 +104,7 @@ func GlyphNameToRune(name string, code byte) (rune, bool) {
 	}
 	return 0, false
 }
-func ParseHexN(s string) (int, bool) {
+func parseHexN(s string) (int, bool) {
 	v := 0
 	for i := 0; i < len(s); i++ {
 		c := s[i]

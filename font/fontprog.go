@@ -4,15 +4,21 @@ import (
 	"encoding/binary"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 )
 
-// Minimal font-program parsers backing the PDF/A font rules: enough of
-// TrueType/OpenType (sfnt tables), CFF, and Type 1 to answer three
-// questions — which glyphs exist, what are their advance widths (in 1/1000
-// text-space units), and which glyph does a character map to.
-
-// Program is the common view the rules consume.
+// Program is what the parsers here read out of a font program: which glyphs
+// exist, their advance widths in 1/1000 of the em, which glyph a character
+// maps to, and, for a CID-keyed CFF, how its CIDs and glyph indices relate.
+//
+// shape.Load reads NumGlyphs, WidthByGID, Cmap, GlyphBBox and CmapPartial, and
+// of a CFF, GIDToCID and the Registry, Ordering and Supplement; the subsetters
+// read NumGlyphs. WidthByName, WidthByCID, GlyphNames, GlyphPresent,
+// GlyphNonEmpty, ComponentGID, MacCmap, SymbolCmap, CmapSubtableCount, CIDGIDs,
+// GIDToFD and BudgetExhausted are read by no code outside this package but
+// tests: they answered questions a PDF/A validator asked of an embedded font,
+// in the repository this package came from. See doc.go.
 type Program struct {
 	// GlyphNames lists the glyph names defined by the program (Type1/CFF
 	// non-CID); nil when the format identifies glyphs by index only.
@@ -110,7 +116,7 @@ type Program struct {
 	// are missing mappings the font really declares. A consumer must not read
 	// "this code is absent from the cmap" as "this code has no glyph" when it
 	// is set — that is audit C46's false positive with a different cause: a
-	// truncated cmap makes TrueTypeGID answer "glyph 0" authoritatively, and a
+	// truncated cmap makes trueTypeGID answer "glyph 0" authoritatively, and a
 	// conformant font is then reported as undefined-glyph / .notdef.
 	//
 	// The parser cannot report the trip itself, having nobody to report it to;
@@ -258,7 +264,23 @@ func ParseSFNTWithin(data []byte, b *Budget) *Program {
 		// int as a *negative* number, which is less than every end and so
 		// passes a check written only against the top — and is then sliced.
 		// Compared as it is read, the answer does not depend on the word size.
+		//
+		// And an entry the loca does not hold is not an entry. Be16 and Be32
+		// answer zero past the end of what they are given, so a loca shorter
+		// than maxp's glyph count read every glyph beyond it as starting and
+		// ending at zero — present and empty, a blank the font never drew.
+		// HarfBuzz takes the glyph count as what the loca can address and
+		// treats a glyph past it as having no outline data at all; the
+		// subsetter in shape refuses such a loca outright. Absent is the
+		// reading that says so: a glyph with no loca entry is not in glyf.
 		offAt := func(i int) (int, bool) {
+			size := 2
+			if longLoca {
+				size = 4
+			}
+			if i < 0 || size*(i+1) > len(loca) {
+				return 0, false
+			}
 			v := uint64(Be16(loca, 2*i)) * 2
 			if longLoca {
 				v = uint64(Be32(loca, 4*i))
@@ -588,7 +610,7 @@ func cmapCoverageGroups(b []byte, nGroups, groupsAt int, sequential bool, bud *B
 	return false
 }
 
-// ParseCmapSubtable handles cmap formats 0, 4, 6, 8, 10, 12 and 13 — every
+// parseCmapSubtableUnder handles cmap formats 0, 4, 6, 8, 10, 12 and 13 — every
 // format whose character codes are Unicode code points. It returns nil — not an
 // empty map — when the subtable cannot be read (an unsupported format, one
 // truncated past use, or one that maps nothing at all): callers treat a non-nil
@@ -621,14 +643,14 @@ func cmapCoverageGroups(b []byte, nGroups, groupsAt int, sequential bool, bud *B
 //
 // Because the budget is the caller's, a caller who lowers it moves where the
 // prefix ends — which is safe precisely because the prefix is self-describing.
-func ParseCmapSubtable(b []byte, maxWork int) (map[rune]int, bool) {
+func parseCmapSubtableUnder(b []byte, maxWork int) (map[rune]int, bool) {
 	return parseCmapSubtable(b, NewBudget(maxWork))
 }
 
 // cmapWork is what a budget that ran out in a cmap walk says it was reading.
 const cmapWork = "the character map"
 
-// parseCmapSubtable is ParseCmapSubtable, charged to a budget the caller may
+// parseCmapSubtable is parseCmapSubtableUnder, charged to a budget the caller may
 // be sharing with the rest of the font.
 func parseCmapSubtable(b []byte, bud *Budget) (map[rune]int, bool) {
 	out := make(map[rune]int)
@@ -813,7 +835,7 @@ func parseCmapSubtable(b []byte, bud *Budget) (map[rune]int, bool) {
 			return cmapResult(out), true // see budgetStop
 		}
 	default:
-		// Formats 2 and 14 are not parsed; see the note on ParseCmapSubtable.
+		// Formats 2 and 14 are not parsed; see the note on parseCmapSubtableUnder.
 		return nil, false
 	}
 	return cmapResult(out), false
@@ -939,7 +961,7 @@ func parseCFFDict(b []byte) map[int][]float64 {
 				}
 			}
 			var f float64
-			ParseFloat(sb.String(), &f)
+			parseBCDReal(sb.String(), &f)
 			operands = append(operands, f)
 		case v >= 32 && v <= 246:
 			operands = append(operands, float64(v-139))
@@ -1622,9 +1644,19 @@ func cffSIDName(sid int, idx cffIndex) string {
 	return ""
 }
 
-// ParseFloat is a tiny indirection so parseCFFDict avoids importing fmt just
-// for BCD reals.
-func ParseFloat(s string, f *float64) {
+// parseBCDReal reads the text a CFF DICT's BCD real spells — the digits, '.',
+// "E", "E-" and '-' its nibbles stand for — into f.
+//
+// It is not strconv.ParseFloat and does not pretend to be: it takes what the
+// nibbles spelled, whatever order they came in, so "1.2.3" is 1.23 and a
+// second "E" is read as more of the exponent, where a strict reader would
+// refuse. A malformed real is a font's own mistake in a width nothing in this
+// engine reads, and the exponent bound below is the part that matters. It was
+// exported, as ParseFloat, under a name promising strconv's contract to callers
+// that had none; and it was also what read a Type 1 /FontMatrix, where the
+// token is PostScript text and "1e-3" came out as 13 — see
+// extractType1FontMatrix, which uses strconv.
+func parseBCDReal(s string, f *float64) {
 	var v float64
 	var neg bool
 	i := 0
@@ -1702,10 +1734,10 @@ func ParseFloat(s string, f *float64) {
 
 // --- Type 1 ---
 
-// ParseType1 parses a Type 1 font program (FontFile): the eexec-encrypted
+// parseType1 parses a Type 1 font program (FontFile): the eexec-encrypted
 // private portion holds the CharStrings dictionary with glyph names and
 // hsbw/sbw widths.
-func ParseType1(data []byte) *Program {
+func parseType1(data []byte) *Program {
 	// PFB segmented format: 0x80 0x01/0x02 length(4, little-endian).
 	if len(data) > 6 && data[0] == 0x80 {
 		var joined []byte
@@ -1836,7 +1868,7 @@ func ParseType1(data []byte) *Program {
 		}
 		fp.GlyphNames[name] = true
 		rest = rest[j+csLen:]
-		if Type1CharStringsEnd(rest) {
+		if type1CharStringsEnd(rest) {
 			break
 		}
 	}
@@ -1844,7 +1876,7 @@ func ParseType1(data []byte) *Program {
 	return fp
 }
 
-// Type1CharStringsEnd reports whether the bytes following a CharStrings entry's
+// type1CharStringsEnd reports whether the bytes following a CharStrings entry's
 // charstring data close the dictionary. A Type 1 CharStrings dictionary
 // (Adobe's Type 1 Font Format, 10.3) ends with a standalone "end" token after
 // the last entry's ND (or |-) token:
@@ -1860,7 +1892,7 @@ func ParseType1(data []byte) *Program {
 //
 // It reads the ND token and the one after it; a dictionary that omits ND
 // terminates on the first token, which is why both positions are compared.
-func Type1CharStringsEnd(b []byte) bool {
+func type1CharStringsEnd(b []byte) bool {
 	i := 0
 	for k := 0; k < 2; k++ {
 		for i < len(b) && isWhitespace(b[i]) {
@@ -2017,8 +2049,14 @@ func extractType1FontMatrix(data []byte) float64 {
 	if len(fields) < 1 {
 		return 0
 	}
-	var f float64
-	ParseFloat(fields[0], &f)
+	// A PostScript number, not a BCD real: "0.001", "1e-3" and "-.5" are
+	// all spellings a font writes, and parseBCDReal read the second as 13.
+	// A token strconv cannot read — a radix number, a name — is no scale,
+	// and the caller's default stands.
+	f, err := strconv.ParseFloat(fields[0], 64)
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+		return 0
+	}
 	return f
 }
 
@@ -2029,9 +2067,9 @@ func extractType1FontMatrix(data []byte) float64 {
 // a program missing one table still answers questions about the others.
 //
 // This is the one thing a font reader and a font writer share. ParseSFNT reads
-// tables to answer validation questions; a writer rewrites them. Beyond finding
-// where a table is, they have nothing in common, and coupling them further
-// would make a subsetter's bug look like a validator's.
+// tables to answer questions about the font; shape's subsetter rewrites them.
+// Beyond finding where a table is, they have nothing in common, and coupling
+// them further would make a subsetter's bug look like a reader's.
 func SFNTTables(data []byte) map[string][]byte {
 	if len(data) < 12 {
 		return nil

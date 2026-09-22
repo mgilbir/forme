@@ -20,7 +20,7 @@ import "errors"
 // than RFC 7932 allows" and "this stopped in the middle" want different answers.
 var (
 	errTruncated     = errors.New("brotli: the stream ends in the middle of what it was saying")
-	errPadding       = errors.New("brotli: the padding before a stored block is not zero")
+	errPadding       = errors.New("brotli: the padding before a stored block or metadata is not zero")
 	errReserved      = errors.New("brotli: a reserved bit is set")
 	errExuberant     = errors.New("brotli: a length is written with more digits than it needs")
 	errLargeWindow   = errors.New("brotli: a large window, which RFC 7932 does not define")

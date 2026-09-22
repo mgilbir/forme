@@ -155,7 +155,7 @@ func TestALocaEntryOutsideGlyfIsNotUsed(t *testing.T) {
 // parser had never met a real Type 1 font.
 func TestParseType1DoesNotReadTheDictionaryHeaderAsAGlyph(t *testing.T) {
 	want := []string{"A", "B", "C", "D", "E"}
-	fp := ParseType1(fonttest.Type1Program(want))
+	fp := parseType1(fonttest.Type1Program(want))
 	if fp == nil {
 		t.Fatal("a Type 1 program was not read at all")
 	}
@@ -195,7 +195,7 @@ func TestParseType1RefusesALengthThatCannotBeALength(t *testing.T) {
 			"/A 1 RD \x8b ND\n" +
 			"/B " + tc.length + " RD \x8b ND\n" +
 			"end\nend\nmark currentfile closefile\n"
-		fp := ParseType1(type1Wrap(src))
+		fp := parseType1(type1Wrap(src))
 		if fp == nil {
 			continue // refused outright is a fine answer
 		}

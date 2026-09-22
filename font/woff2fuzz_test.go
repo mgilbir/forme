@@ -170,14 +170,14 @@ func FuzzParseType1(f *testing.F) {
 	f.Add([]byte{})
 
 	f.Fuzz(func(t *testing.T, src []byte) {
-		p := ParseType1(src)
+		p := parseType1(src)
 		if p == nil {
 			return
 		}
 		if p.NumGlyphs < 0 {
 			t.Fatalf("the program reports %d glyphs", p.NumGlyphs)
 		}
-		again := ParseType1(src)
+		again := parseType1(src)
 		if (again == nil) != (p == nil) {
 			t.Fatal("two reads of the same bytes disagreed about whether it parses")
 		}

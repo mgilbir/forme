@@ -62,7 +62,7 @@ func TestABudgetThatStoppedShortSaysSo(t *testing.T) {
 		{1, true, true, "one unit"},
 		{1000, true, false, "enough"},
 	} {
-		m, partial := ParseCmapSubtable(b, tc.work)
+		m, partial := parseCmapSubtableUnder(b, tc.work)
 		if (m != nil) != tc.nonNil {
 			t.Errorf("%s: the map is non-nil = %v, want %v", tc.what, m != nil, tc.nonNil)
 		}

@@ -119,6 +119,12 @@ func DecodeWOFF2(data []byte) ([]byte, error) {
 	if numTables == 0 {
 		return nil, errors.New("fonts: the WOFF 2 declares no tables")
 	}
+	// The same field WOFF 1 has in the same place, which the same section of
+	// its format requires to be zero. WOFF 1 refused one that was not, and this
+	// never read it.
+	if binary.BigEndian.Uint16(data[14:]) != 0 {
+		return nil, errors.New("fonts: the WOFF 2's reserved field is not zero")
+	}
 	if numTables > maxWOFFTables {
 		return nil, errors.New("fonts: the WOFF 2 declares more tables than an sfnt can address")
 	}
@@ -148,8 +154,17 @@ func DecodeWOFF2(data []byte) ([]byte, error) {
 	}
 	metaOffset := uint64(binary.BigEndian.Uint32(data[28:]))
 	metaLength := uint64(binary.BigEndian.Uint32(data[32:]))
+	metaOrigLength := uint64(binary.BigEndian.Uint32(data[36:]))
 	privOffset := uint64(binary.BigEndian.Uint32(data[40:]))
 	privLength := uint64(binary.BigEndian.Uint32(data[44:]))
+	// A zero offset is the block's absence, and the lengths have to agree —
+	// the question DecodeWOFF asks of WOFF 1, answered the same way.
+	if _, err := absentBlock("WOFF 2", "metadata", metaOffset, metaLength, metaOrigLength); err != nil {
+		return nil, err
+	}
+	if _, err := absentBlock("WOFF 2", "private", privOffset, privLength); err != nil {
+		return nil, err
+	}
 	if metaOffset != 0 {
 		if metaOffset != at || metaOffset+metaLength > uint64(len(data)) {
 			return nil, errors.New("fonts: the WOFF 2's metadata block is not where its header says")

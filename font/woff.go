@@ -73,6 +73,29 @@ func IsWOFF2(data []byte) bool {
 	return len(data) >= 4 && binary.BigEndian.Uint32(data) == woff2Signature
 }
 
+// absentBlock is the one answer both formats give about a metadata or private
+// block the header does not place: whether the header says there is none, and
+// an error if it says so inconsistently.
+//
+// An offset of zero is how either format says a block is absent, and then every
+// length the header gives it has to be zero too. WOFF 1 refused an absent block
+// with a length, because its bounds check caught the zero offset, and let an
+// uncompressed metadata length through; WOFF 2 skipped the whole block on the
+// zero offset, so "metaOffset 0, metaLength 1000" was a font. A header that
+// describes a block and says it is nowhere is describing another file.
+func absentBlock(format, name string, off uint64, lengths ...uint64) (bool, error) {
+	if off != 0 {
+		return false, nil
+	}
+	for _, l := range lengths {
+		if l != 0 {
+			return true, errors.New("fonts: the " + format + "'s " + name +
+				" block has no offset and a length")
+		}
+	}
+	return true, nil
+}
+
 // woffEntry is one table directory record, as written.
 type woffEntry struct {
 	tag        uint32
@@ -92,7 +115,8 @@ type woffEntry struct {
 // and the offsets that address it.
 //
 // The metadata and private blocks a WOFF may carry are not part of the font and
-// are not returned. Neither is read, which is also why neither is validated.
+// are not returned. Neither is read, so neither's contents are validated; what
+// is checked is that the header describes them consistently — see absentBlock.
 func DecodeWOFF(data []byte) ([]byte, error) {
 	if IsWOFF2(data) {
 		return DecodeWOFF2(data)
@@ -127,13 +151,22 @@ func DecodeWOFF(data []byte) ([]byte, error) {
 	for _, b := range []struct {
 		name            string
 		offAt, lengthAt int
+		origAt          int // the metadata's uncompressed length; 0 for none
 	}{
-		{"metadata", 24, 28},
-		{"private", 36, 40},
+		{"metadata", 24, 28, 32},
+		{"private", 36, 40, 0},
 	} {
 		off := uint64(binary.BigEndian.Uint32(data[b.offAt:]))
 		length := uint64(binary.BigEndian.Uint32(data[b.lengthAt:]))
-		if off == 0 && length == 0 {
+		var orig uint64
+		if b.origAt != 0 {
+			orig = uint64(binary.BigEndian.Uint32(data[b.origAt:]))
+		}
+		absent, err := absentBlock("WOFF", b.name, off, length, orig)
+		if err != nil {
+			return nil, err
+		}
+		if absent {
 			continue
 		}
 		if off < headerSize || off+length > uint64(len(data)) {

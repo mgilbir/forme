@@ -1,6 +1,9 @@
 package fonttest
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"fmt"
+)
 
 // Synthetic GPOS and GSUB tables, so that kerning and ligature reading can be
 // tested against something whose contents the test states rather than against
@@ -146,9 +149,13 @@ func GSUB(ligs []Ligature) []byte {
 func LigatureSubst(ligs []Ligature) []byte {
 	order := []int{}
 	byFirst := map[int][]Ligature{}
-	for _, l := range ligs {
+	for i, l := range ligs {
+		// A ligature is of two or more glyphs, as Ligature says. One of fewer
+		// was left out without a word, so the table held fewer ligatures than
+		// the caller wrote.
 		if len(l.Components) < 2 {
-			continue
+			panic(fmt.Sprintf("fonttest: ligature %d has %d components; a ligature has two or more",
+				i, len(l.Components)))
 		}
 		first := l.Components[0]
 		if _, seen := byFirst[first]; !seen {
@@ -163,15 +170,20 @@ func LigatureSubst(ligs []Ligature) []byte {
 		ls := byFirst[first]
 		set := make([]byte, 2+2*len(ls))
 		binary.BigEndian.PutUint16(set, uint16(len(ls)))
-		for _, l := range ls {
+		// The offset slot is the ligature's own place in the set. It was found
+		// by searching for a ligature with the same output glyph and length,
+		// which two ligatures can share — {1,2}→5 and {1,3}→5 both landed in
+		// slot 0, the first became unreachable, and slot 1 kept the zero that
+		// points a reader at the set's own count.
+		for k, l := range ls {
 			rest := l.Components[1:]
 			lig := make([]byte, 4+2*len(rest))
 			binary.BigEndian.PutUint16(lig[0:], uint16(l.Glyph))
 			binary.BigEndian.PutUint16(lig[2:], uint16(len(l.Components)))
-			for k, c := range rest {
-				binary.BigEndian.PutUint16(lig[4+2*k:], uint16(c))
+			for j, c := range rest {
+				binary.BigEndian.PutUint16(lig[4+2*j:], uint16(c))
 			}
-			binary.BigEndian.PutUint16(set[2+2*indexOfLig(ls, l):], uint16(len(set)))
+			binary.BigEndian.PutUint16(set[2+2*k:], uint16(len(set)))
 			set = append(set, lig...)
 		}
 		sets = append(sets, set)
@@ -190,15 +202,6 @@ func LigatureSubst(ligs []Ligature) []byte {
 		body = append(body, set...)
 	}
 	return body
-}
-
-func indexOfLig(ls []Ligature, want Ligature) int {
-	for i, l := range ls {
-		if l.Glyph == want.Glyph && len(l.Components) == len(want.Components) {
-			return i
-		}
-	}
-	return 0
 }
 
 // layoutTable wraps one lookup subtable in the ScriptList / FeatureList /

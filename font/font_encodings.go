@@ -1,11 +1,16 @@
 package font
 
 // Character-code to glyph-name tables for the standard Latin-text encodings,
-// transcribed from ISO 32000-1 Annex D.2 (spec/pdf1.7, gitignored). Unlike the
-// spec-example JSON there is no committed generator, so these are maintained by
-// hand and cannot be regenerated — font_tables_test.go pins their shape and the
-// codes where the encodings deliberately disagree, which is what a bad edit or a
-// shift would break.
+// transcribed from ISO 32000-1 Annex D.2. There is no generator for them —
+// the source is a table in a specification rather than a data file — so they
+// are maintained by hand, and font_tables_test.go pins their shape and the
+// codes where the encodings deliberately disagree, which is what a bad edit or
+// a shift would break. cmd/genglyphlist reads them to decide which glyph names
+// font/glyphnames.go needs.
+//
+// They are exported maps, and a map cannot be made read-only: an importer that
+// wrote to one would change shape's simple-font encoding for the whole process.
+// Nothing does, and shape and cmd/genglyphlist are the only readers.
 
 var StandardEncodingNames = map[byte]string{
 	32:  "space",
