@@ -200,6 +200,31 @@ func FuzzLoadAndUse(f *testing.F) {
 			),
 		},
 	}))
+	// A contextual rule whose first record ligates everything it matched and
+	// whose second names a position the ligature swallowed. Moving that position
+	// by the change put it at -1, and the second record applied a lookup there:
+	// an index out of range from one font. The three glyphs are the first three
+	// characters of the first of fuzzTexts, which is what reaches the rule.
+	f.Add(fonttest.SFNT(fonttest.SFNTOptions{
+		Glyphs: []fonttest.Glyph{
+			{Rune: 'a', Advance: 500, HasShape: true},
+			{Rune: 'ﬁ', Advance: 500, HasShape: true},
+			{Rune: '日', Advance: 500, HasShape: true},
+			{Rune: 'X', Advance: 500, HasShape: true},
+		},
+		Extra: map[string][]byte{
+			"GSUB": fonttest.GSUBLookups([]fonttest.Lookup{
+				{Type: 4, Subtables: [][]byte{fonttest.LigatureSubst([]fonttest.Ligature{
+					{Components: []int{1, 2, 3}, Glyph: 4},
+				})}},
+				{Type: 1, Subtables: [][]byte{fonttest.SingleSubst([]int{1, 2, 3}, []int{4, 4, 4})}},
+				{Type: 5, Subtables: [][]byte{fonttest.SequenceContext3(
+					[][]int{{1}, {2}, {3}},
+					[]fonttest.SeqLookup{{At: 0, Lookup: 0}, {At: 1, Lookup: 1}},
+				)}},
+			}, map[string][]int{"calt": {2}}),
+		},
+	}))
 	f.Add([]byte("OTTO\x00\x00\x00\x00"))
 	f.Add([]byte{})
 

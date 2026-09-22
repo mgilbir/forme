@@ -87,8 +87,11 @@ func (sh shaper) applyContextualPositioning(buf []Glyph) {
 
 // applyGPOSAt applies one positioning lookup at a position, reporting how many
 // glyphs it matched — zero when it did not apply.
+//
+// A position outside the buffer, on either side, applies nothing, for the
+// reason applyGSUBAt gives.
 func (sh shaper) applyGPOSAt(idx int, buf []Glyph, at, depth int) int {
-	if depth > maxLookupRecursion || idx < 0 || idx >= len(sh.l.gpos) || at >= len(buf) {
+	if depth > maxLookupRecursion || idx < 0 || idx >= len(sh.l.gpos) || at < 0 || at >= len(buf) {
 		return 0
 	}
 	lk := sh.l.gpos[idx]

@@ -145,10 +145,18 @@ func (sh shaper) recurse() bool {
 	return true
 }
 
-// applyGSUBAt applies one GSUB lookup at a position, returning how many input
-// glyphs it consumed (zero when it did not match) and the resulting buffer.
+// applyGSUBAt applies one GSUB lookup at a position, returning how many glyphs
+// from the position it consumed — for a contextual rule, the whole span it
+// matched, see runRecords — (zero when it did not match) and the resulting
+// buffer.
+//
+// A position outside the buffer, on either side, applies nothing. Nothing is
+// meant to ask for one — runRecords keeps its positions inside the buffer — but
+// every position a nested rule reaches here was computed from counts a font
+// stated, and a guard at the one door costs nothing beside an index out of range
+// in the middle of Compose, which is what the missing lower bound once was.
 func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph) {
-	if depth > maxLookupRecursion || idx < 0 || idx >= len(sh.l.gsub) || at >= len(buf) {
+	if depth > maxLookupRecursion || idx < 0 || idx >= len(sh.l.gsub) || at < 0 || at >= len(buf) {
 		return 0, buf
 	}
 	lk := sh.l.gsub[idx]
@@ -511,7 +519,12 @@ func (sh shaper) nextNotIgnored(buf []Glyph, from, flags, want int) int {
 // contextual rule that names a joiner explicitly *and* is declared under a
 // feature that steps over joiners, which is a combination that contradicts
 // itself.
+//
+// An input longer than maxContextLength does not match, as in HarfBuzz.
 func (sh shaper) matchedPositions(buf []Glyph, at, n, flags int) ([]int, bool) {
+	if n > maxContextLength {
+		return nil, false
+	}
 	return sh.positionsFrom(buf, at, n, flags, false)
 }
 
@@ -597,7 +610,7 @@ func (sh shaper) sequenceContext(sub []byte, buf []Glyph, at, flags, depth int) 
 				return 0, buf, false
 			}
 		}
-		return sh.runRecords(sub, 6+2*glyphCount, recCount, positions, buf, depth)
+		return sh.runRecords(sub, 6+2*glyphCount, recCount, positions, buf, at, depth)
 	}
 	return 0, buf, false
 }
@@ -644,7 +657,7 @@ func (sh shaper) contextRuleSet(sub []byte, setsAt, index int, buf []Glyph, at, 
 		if !matched {
 			continue
 		}
-		return sh.runRecords(rule, 4+2*(glyphCount-1), recCount, positions, buf, depth)
+		return sh.runRecords(rule, 4+2*(glyphCount-1), recCount, positions, buf, at, depth)
 	}
 	return 0, buf, false
 }
@@ -808,7 +821,7 @@ func (sh shaper) chainedRuleSet(sub []byte, setsAt, index int, buf []Glyph, at, 
 		if !matched {
 			continue
 		}
-		return sh.runRecords(rule, p, recCount, positions, buf, depth)
+		return sh.runRecords(rule, p, recCount, positions, buf, at, depth)
 	}
 	return 0, buf, false
 }
@@ -882,26 +895,78 @@ func (sh shaper) chainedFormat3(sub []byte, buf []Glyph, at, flags, depth int) (
 			}
 		}
 	}
-	return sh.runRecords(sub, p, recCount, positions, buf, depth)
+	return sh.runRecords(sub, p, recCount, positions, buf, at, depth)
 }
 
+// maxContextLength bounds how many glyphs a contextual rule's input may match,
+// and how many positions its records may come to address once the lookups they
+// name have lengthened the run.
+//
+// It is HarfBuzz's HB_MAX_CONTEXT_LENGTH, with the same number, and for the same
+// two reasons. A rule's input is a count the font states, so without a bound a
+// few bytes of rule ask for a position list as long as the run; and a record
+// that decomposes a glyph inserts positions, so a rule whose records each
+// decompose again would grow the list without end. A rule longer than this
+// does not match in HarfBuzz either, and no real font writes one: the longest
+// inputs in the corpus fonts are a handful of glyphs.
+const maxContextLength = 64
+
 // runRecords applies the lookups a matched rule names, each at the position it
-// names, and reports how many glyphs of the buffer the rule accounted for.
+// names, and reports where the walk resumes: how many glyphs from the rule's
+// start, at, it accounted for.
 //
 // The positions are those of the *matched* glyphs, so a record naming index two
 // means the third thing the rule matched — not the third glyph in the buffer,
 // which may differ when the lookup skips marks.
 //
+// # Keeping the positions in step
+//
 // A rule may name several lookups, and one of them may change the buffer's
-// length: a ligature makes it shorter, a decomposition longer. Every position
-// after the one that changed then moves, and a later record aimed at a
-// remembered index would land on the wrong glyph — or past the end. So the
-// positions are carried forward rather than read once, which is the whole
-// reason this takes the slice rather than the buffer offsets.
-func (sh shaper) runRecords(base []byte, at, count int, positions []int, buf []Glyph, depth int) (int, []Glyph, bool) {
-	consumed := len(positions)
+// length: a ligature makes it shorter, a decomposition longer, a deletion takes
+// a glyph out. A later record's index then has to mean something in the buffer
+// as it now is, and this follows HarfBuzz's apply_lookup exactly, because the
+// OpenType text leaves the question open and HarfBuzz's answer is what fonts
+// are tested against:
+//
+//   - A record whose lookup lengthened the buffer by n is taken to have put n
+//     new glyphs straight after its own position. They become matched positions
+//     of their own, and every index after it moves up by n — so a later record
+//     naming index one after a decomposition at index zero reaches the second
+//     piece of the decomposition, not the glyph that was matched second.
+//   - One that shortened it by n is taken to have consumed the n matched
+//     positions after its own. They are dropped, the rest move down, and a
+//     later record naming one that no longer exists does nothing. This is
+//     HarfBuzz's own simplification — a deletion takes out the glyph at the
+//     position rather than the ones after it — and it is kept, since matching
+//     it is the point.
+//
+// The first version kept the list its original length and moved every position
+// past the change by the change. A ligature of three at index zero then moved
+// index one to minus one, and the next record applied a lookup at position -1:
+// an index out of range, from one font, in the middle of Compose.
+//
+// # Where the walk resumes
+//
+// After the last glyph the rule matched, as it stands once the records have
+// run — not after as many glyphs as it matched. The two differ wherever the
+// lookup steps over glyphs: a rule matching c, c across an accent it ignores
+// spans three glyphs, and resuming two in lands on its own second c, which it
+// then matches again as the start of a new rule. HarfBuzz moves past the whole
+// span, and so does this.
+//
+// A rule whose records took out everything from its start on has consumed
+// nothing that is still there, and reports zero with a shorter buffer, which is
+// how a deletion tells the walk to look at what moved into its place.
+func (sh shaper) runRecords(base []byte, recAt, count int, positions []int, buf []Glyph, at, depth int) (int, []Glyph, bool) {
+	if len(positions) == 0 {
+		return 0, buf, false
+	}
+	// One past the last matched glyph, which the records move as they change
+	// the buffer's length.
+	end := positions[len(positions)-1] + 1
+	startLen := len(buf)
 	for i := 0; i < count; i++ {
-		rec := at + 4*i
+		rec := recAt + 4*i
 		if rec+4 > len(base) {
 			break
 		}
@@ -911,6 +976,12 @@ func (sh shaper) runRecords(base []byte, at, count int, positions []int, buf []G
 			continue
 		}
 		target := positions[seqIndex]
+		// A position the records before this one took out from under it. The
+		// bookkeeping below keeps every position inside the buffer, so this is a
+		// guard on that and not a case the arithmetic produces.
+		if target < 0 || target >= len(buf) {
+			continue
+		}
 		if !sh.recurse() {
 			// The run has spent its allowance. Every remaining record does
 			// nothing, which is what a rule that did not match does.
@@ -918,7 +989,7 @@ func (sh shaper) runRecords(base []byte, at, count int, positions []int, buf []G
 		}
 		if sh.positioning {
 			// Positioning never changes how many glyphs there are, so there is
-			// nothing to keep in step and nothing to resume differently for.
+			// nothing to keep in step.
 			sh.applyGPOSAt(lookupIndex, buf, target, depth+1)
 			continue
 		}
@@ -930,16 +1001,49 @@ func (sh shaper) runRecords(base []byte, at, count int, positions []int, buf []G
 		if delta == 0 {
 			continue
 		}
-		for k := range positions {
-			if positions[k] > target {
-				positions[k] += delta
+		// The end moves with the change, but never back past the position the
+		// lookup was applied at: nothing a lookup does at a position can reach
+		// behind it.
+		end += delta
+		if end < target {
+			delta += target - end
+			end = target
+		}
+		next := seqIndex + 1
+		if delta > 0 {
+			if len(positions)+delta > maxContextLength {
+				break
 			}
+			grown := make([]int, len(positions)+delta)
+			copy(grown, positions[:next])
+			for k := 0; k < delta; k++ {
+				grown[next+k] = target + 1 + k
+			}
+			for k, p := range positions[next:] {
+				grown[next+delta+k] = p + delta
+			}
+			positions = grown
+			continue
 		}
-		// The rule now covers correspondingly more or fewer glyphs, which is
-		// what tells the caller where to resume.
-		if consumed += delta; consumed < 1 {
-			consumed = 1
+		// Shrinking: the positions after this one that the change consumed are
+		// dropped, as many as it shortened the buffer by and no more than there
+		// are, and the rest move down by as much.
+		drop := min(-delta, len(positions)-next)
+		kept := positions[next+drop:]
+		for k, p := range kept {
+			positions[next+k] = p + delta
 		}
+		positions = positions[:next+len(kept)]
+	}
+	consumed := end - at
+	if consumed < 1 {
+		// Nothing the rule matched is left from its start on. If the buffer is
+		// shorter the walk looks again at what moved into the place; if it is
+		// not, the walk moves on by one so that it always moves.
+		if len(buf) < startLen {
+			return 0, buf, true
+		}
+		consumed = 1
 	}
 	return consumed, buf, true
 }
