@@ -451,7 +451,7 @@ func BuildBoxes(doc *html.Node, styled style.Styled, rec *Recorder) *Box {
 		// Counters are settled before any box exists, because a counter's value
 		// depends on what came *before* an element in the document and the box
 		// walk cannot answer that while descending.
-		counters: computeCounters(doc, styled.Styles, styled.Pseudo),
+		counters: computeCounters(doc, styled.Styles, styled.Pseudo, rec),
 	}
 	root := documentElementOf(doc)
 	if root == nil {
@@ -572,6 +572,12 @@ type boxBuilder struct {
 	// It is reset where afterWord is, and for the same reason: a block begins
 	// its text afresh, and so does the text after a <br>.
 	boundary textBoundary
+	// chosen is the option each drop-down <select> shows, found once per
+	// select. See controlSkipsChild.
+	chosen map[*html.Node]*html.Node
+	// generatedCut records that the work budget refused generated content, so
+	// that no more of it is resolved. See generated.
+	generatedCut bool
 	// stopped records that the box cap was reached, so it is reported once
 	// rather than per box.
 	stopped bool
@@ -906,7 +912,7 @@ func (b *boxBuilder) appendChildren(box *Box, n *html.Node,
 	inherited style.ComputedStyle, fontSize style.Unit) {
 
 	for _, child := range n.Children {
-		if controlSkipsChild(box, child) {
+		if b.controlSkipsChild(box, child) {
 			continue
 		}
 		if replacedFallback(n) {
@@ -1037,14 +1043,25 @@ func (b *boxBuilder) room(n *html.Node) bool { return b.roomAt(n.Offset) }
 
 // roomAt is room for a box no element generated, which has no node to be
 // reported against — every box §17.2.1 inserts is one.
+//
+// A box is also charged to the document's work budget. The cap above bounds
+// the tree; the budget is what sees a tree that is within the cap and was made
+// large by something small — generated content on every element, say — beside
+// the rest of what the document costs. See budget.go.
 func (b *boxBuilder) roomAt(offset int) bool {
+	if b.stopped {
+		return false
+	}
 	if b.count >= maxBoxes {
-		if !b.stopped {
-			b.stopped = true
-			b.rec.Report(RuleLimit, AtHTML(offset),
-				"the document produces more boxes than this engine will build; "+
-					"the rest of it was not laid out")
-		}
+		b.stopped = true
+		b.rec.Report(RuleLimit, AtHTML(offset),
+			"the document produces more boxes than this engine will build; "+
+				"the rest of it was not laid out")
+		return false
+	}
+	if !b.rec.chargeOwn(costBox, "the rest of the box tree") {
+		// Reported by the budget, under its own finding.
+		b.stopped = true
 		return false
 	}
 	b.count++

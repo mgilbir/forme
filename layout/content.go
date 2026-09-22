@@ -76,6 +76,18 @@ func (v contentValue) text() string {
 // A megabyte of generated content is already past anything a page can show. The
 // refusal is reported rather than truncated, because a marker cut off in the
 // middle is a page that looks finished and is not.
+//
+// It is checked as each piece is written, and a piece is not written if it would
+// cross it. It was checked between the tokens of the value instead, which let
+// one token produce as much as it liked: counters() writes its separator once
+// per level, so "counters(c, <ten kilobytes>)" two hundred levels deep was two
+// megabytes from one token, and over two hundred nested elements 199 MB of text
+// from ten kilobytes of stylesheet, all of it under a cap of one (audit C15).
+//
+// And it is per pseudo-element, so it bounds nothing about the document: the
+// same declaration on every element is the cap times the elements. What bounds
+// the document is its work budget, which every generated character is charged
+// to — see boxBuilder.generated.
 const maxContentLength = 1 << 20
 
 // resolveContent reads a "content" declaration.
@@ -121,9 +133,13 @@ func resolveContent(raw string, el *html.Node, counters counterValues,
 		pieces = append(pieces, contentPiece{text: text.String()})
 		text.Reset()
 	}
+	// fits says whether n more bytes may be written, and every write asks it
+	// first. See maxContentLength for why asking once per token was not enough.
+	fits := func(n int) bool { return total+text.Len()+n <= maxContentLength }
+	tooLong := contentValue{unsupported: "the content is longer than this engine will generate"}
 	for _, v := range vals {
-		if total+text.Len() > maxContentLength {
-			return contentValue{unsupported: "the content is longer than this engine will generate"}
+		if !fits(0) {
+			return tooLong
 		}
 		switch {
 		case v.IsToken() && v.Token.Kind == css.Whitespace:
@@ -131,6 +147,9 @@ func resolveContent(raw string, el *html.Node, counters counterValues,
 			// nothing of its own.
 
 		case v.IsToken() && v.Token.Kind == css.String:
+			if !fits(len(v.Token.Value)) {
+				return tooLong
+			}
 			text.WriteString(v.Token.Value)
 
 		case v.IsFunction() && strings.EqualFold(v.Token.Value, "attr"):
@@ -151,6 +170,9 @@ func resolveContent(raw string, el *html.Node, counters counterValues,
 			value, _ := el.Attr(name)
 			if el.XMLDocument() {
 				value, _ = el.AttrExact(name)
+			}
+			if !fits(len(value)) {
+				return tooLong
 			}
 			text.WriteString(value)
 
@@ -176,7 +198,11 @@ func resolveContent(raw string, el *html.Node, counters counterValues,
 			if len(vals) > 0 {
 				n = vals[len(vals)-1]
 			}
-			text.WriteString(formatCounter(n, listStyle))
+			s := formatCounter(n, listStyle)
+			if !fits(len(s)) {
+				return tooLong
+			}
+			text.WriteString(s)
 
 		case v.IsFunction() && strings.EqualFold(v.Token.Value, "counters"):
 			name, listStyle, sep, ok := counterArguments(v)
@@ -186,11 +212,23 @@ func resolveContent(raw string, el *html.Node, counters counterValues,
 			// Every counter of that name in scope, outermost first. This is what
 			// numbers a nested list "2.1.3" — the three values are three
 			// counters alive at once, one per level.
-			var parts []string
-			for _, n := range counters[name] {
-				parts = append(parts, formatCounter(n, listStyle))
+			//
+			// Written a part at a time, each asked for first: the separator is
+			// the stylesheet's and the number of levels is the document's, and
+			// what they come to together is neither's to decide.
+			for i, n := range counters[name] {
+				s := formatCounter(n, listStyle)
+				if i > 0 {
+					if !fits(len(*sep)) {
+						return tooLong
+					}
+					text.WriteString(*sep)
+				}
+				if !fits(len(s)) {
+					return tooLong
+				}
+				text.WriteString(s)
 			}
-			text.WriteString(strings.Join(parts, *sep))
 
 		case v.IsToken() && v.Token.Kind == css.URL,
 			v.IsFunction() && strings.EqualFold(v.Token.Value, "url"):
@@ -214,6 +252,9 @@ func resolveContent(raw string, el *html.Node, counters counterValues,
 				// and nothing to report.
 				continue
 			}
+			if !fits(len(ref)) {
+				return tooLong
+			}
 			flush()
 			total += len(ref)
 			pieces = append(pieces, contentPiece{image: ref})
@@ -226,6 +267,9 @@ func resolveContent(raw string, el *html.Node, counters counterValues,
 			if op, isQuote := quoteKeyword(v.Token.Value); isQuote {
 				var mark string
 				mark, depth = applyQuote(op, depth, quotes)
+				if !fits(len(mark)) {
+					return tooLong
+				}
 				text.WriteString(mark)
 				continue
 			}
@@ -261,8 +305,34 @@ func (b *boxBuilder) generated(n *html.Node, name string, fontSize style.Unit) *
 		return nil
 	}
 
-	value := resolveContent(cs.Get("content"), n, b.counters.pseudo[key],
+	if b.generatedCut || b.counters.cut[key] {
+		// The work budget refused generated content earlier, or refused this
+		// pseudo-element's counters — and a number read as nought would be a
+		// wrong number rather than a missing one. The budget has said so.
+		return nil
+	}
+	raw := cs.Get("content")
+	value := resolveContent(raw, n, b.counters.pseudo[key],
 		parseQuotes(cs.Get("quotes")), b.counters.quoteDepth[key])
+	// Charged to the document once it is known, which is before a box is made
+	// of it: the value's own text read once, and what it produced at the rate
+	// of everything downstream that will be done to it. maxContentLength bounds
+	// one pseudo-element and nothing else; this is what bounds the document,
+	// where the same declaration on every element is the whole cost.
+	//
+	// A refusal ends generated content for the document rather than for this
+	// pseudo-element. The value has been resolved by now, which maxContentLength
+	// bounds once; resolving the next one to be refused as well would be that
+	// bound times the elements, which is the cost this is here to stop.
+	produced := 0
+	for _, p := range value.pieces {
+		produced += len(p.text) + len(p.image)
+	}
+	if !b.rec.charge(satAdd(int64(len(raw)), satMul(int64(produced), costGeneratedByte)),
+		"the generated content past that point") {
+		b.generatedCut = true
+		return nil
+	}
 	if value.unsupported != "" {
 		b.rec.ReportDetail(Finding{
 			Rule:     RuleUnsupportedValue,

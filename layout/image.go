@@ -195,10 +195,41 @@ type replacedLoader struct {
 	// broken images is one finding rather than a hundred.
 	failed map[string]bool
 
+	// byContent memoizes by what a reference *read*, which is the memo that
+	// decides what decoding costs. The one above is by the reference's
+	// spelling, and a spelling is the document's to vary: "b.png?1", "b.png?2"
+	// and so on name one file to a resolver that ignores the query, and were a
+	// fresh read and a fresh decode each — a hundred of them over a picture
+	// whose body fails took eight seconds from 1790 bytes of markup (audit
+	// C19). The same bytes decode the same way, so they are decoded once.
+	byContent map[contentKey]decoded
+
 	// budget is how many pixels the document may still decode.
 	budget int64
 	// exhausted records that the budget ran out, reported once.
 	exhausted bool
+	// cut records that the document's work budget refused a read or a decode.
+	// Nothing more is read after that: every read costs the resolver's work
+	// before anything can be charged for it, and a document whose next read
+	// would also be refused would otherwise be read in full to be told so.
+	cut bool
+}
+
+// contentKey is what a reference read, and how it is read: an SVG is a
+// different thing as a picture and as a document, and must not come back from
+// the memo as the other.
+type contentKey struct {
+	sum [sha256.Size]byte
+	as  svgAs
+}
+
+// decoded is one memoized decode: the content, or the first reference whose
+// bytes did not decode and what was said about it.
+type decoded struct {
+	content *ReplacedContent
+	failed  *loadFailure
+	src     string
+	what    string
 }
 
 // resolveReplaced loads the content of every replaced element in a box tree.
@@ -213,9 +244,10 @@ func resolveReplaced(root *Box, res ResourceResolver, rec *Recorder) {
 	}
 	l := &replacedLoader{
 		res: res, rec: rec,
-		loaded: map[string]*ReplacedContent{},
-		failed: map[string]bool{},
-		budget: maxDocumentPixels,
+		loaded:    map[string]*ReplacedContent{},
+		failed:    map[string]bool{},
+		byContent: map[contentKey]decoded{},
+		budget:    maxDocumentPixels,
 	}
 	l.walk(root)
 }
@@ -543,8 +575,13 @@ func (l *replacedLoader) video(b *Box) {
 		}
 	}
 
+	// Through the memos every other reference goes through. It was loaded
+	// afresh for every <video>, so a document repeating one poster read and
+	// decoded it once per element — the one path where naming a file again
+	// needed no trick to cost a decode again (audit C19). A poster that failed
+	// is reported for the first element that names it, as a background is.
 	if poster, ok := b.Element.Attr("poster"); ok && strings.TrimSpace(poster) != "" {
-		content, why := l.load(strings.TrimSpace(poster), "video poster", svgAsImage)
+		content, why := l.memoized(strings.TrimSpace(poster), "video poster", svgAsImage)
 		switch {
 		case content != nil:
 			b.Replaced = content
@@ -768,12 +805,70 @@ type loadFailure struct {
 // for a background — because every message below says what did not arrive, and
 // an author told "the image at paper.png was not loaded" while every <img> on
 // the page is fine looks for the wrong element.
+//
+// Everything read is charged to the document's work budget, by its length and
+// whether or not it turns out to be a picture: the reading is done either way.
+// Then the bytes are looked up by what they are, so that a second name for
+// the same file — or the same data: URL written twice — is not decoded twice,
+// and a file that did not decode is not decoded again to fail again.
 func (l *replacedLoader) load(src, what string, as svgAs) (*ReplacedContent, *loadFailure) {
+	if l.cut {
+		return nil, l.cutShort(src, what)
+	}
 	data, fail := l.fetch(src, what)
 	if fail != nil {
 		return nil, fail
 	}
-	return l.decode(src, what, data, as)
+	if !l.rec.charge(int64(len(data))*costFetchedByte, "the pictures past that point") {
+		l.cut = true
+		return nil, l.cutShort(src, what)
+	}
+	key := contentKey{sum: sha256.Sum256(data), as: as}
+	if got, ok := l.byContent[key]; ok {
+		if got.content != nil {
+			return got.content, nil
+		}
+		return nil, &loadFailure{
+			rule: got.failed.rule,
+			message: "the " + what + " at " + quoteValue(src) + " is the same file as the " +
+				got.what + " at " + quoteValue(got.src) + ", which was not drawn",
+		}
+	}
+	// A refusal by a budget is memoized with the rest. Neither budget grows,
+	// so the same bytes asked for again would be refused again.
+	content, why := l.decode(src, what, data, key.sum, as)
+	l.byContent[key] = decoded{content: content, failed: why, src: src, what: what}
+	return content, why
+}
+
+// memoized is load behind the reference memos: the content a reference already
+// loaded, nothing for one that already failed — it was reported the first time
+// — and otherwise a load, remembered either way.
+func (l *replacedLoader) memoized(ref, what string, as svgAs) (*ReplacedContent, *loadFailure) {
+	if got, ok := l.loaded[ref]; ok {
+		return got, nil
+	}
+	if l.failed[ref] {
+		return nil, nil
+	}
+	content, why := l.load(ref, what, as)
+	if content == nil {
+		l.failed[ref] = true
+		return nil, why
+	}
+	l.loaded[ref] = content
+	return content, nil
+}
+
+// cutShort is the finding for a picture the work budget refused. The budget has
+// reported itself; this is the per-reference half, so that the element is
+// still told why it has no picture.
+func (l *replacedLoader) cutShort(src, what string) *loadFailure {
+	return &loadFailure{
+		rule: RuleImageUndecodable,
+		message: "the " + what + " at " + quoteValue(src) +
+			" was not drawn: the document had used up the work this engine does for one document",
+	}
 }
 
 // fetch obtains the bytes a reference names, applying the policy of resource.go.
@@ -810,8 +905,11 @@ func (l *replacedLoader) fetch(src, what string) ([]byte, *loadFailure) {
 	return data, nil
 }
 
-// decode reads a header, checks it against the caps, and only then decodes.
-func (l *replacedLoader) decode(src, what string, data []byte, as svgAs) (*ReplacedContent, *loadFailure) {
+// decode reads a header, checks it against the caps, charges what it declares,
+// and only then decodes. sum is the bytes' digest, which load has already
+// taken.
+func (l *replacedLoader) decode(src, what string, data []byte, sum [sha256.Size]byte,
+	as svgAs) (*ReplacedContent, *loadFailure) {
 	// An SVG is not a picture and never becomes one. It is read for its
 	// intrinsic size and, when its content reduces to one, its colour — see
 	// svg.go, which is explicit about how narrow that is and why the rest keeps
@@ -872,6 +970,18 @@ func (l *replacedLoader) decode(src, what string, data []byte, as svgAs) (*Repla
 		}
 	}
 
+	// Charged now, for what the header declares, and kept whatever the decode
+	// does. A decoder allocates what the header says before it reads a row,
+	// so a picture whose body fails has cost what one that succeeds costs —
+	// sixty-four megabytes for a 4000 by 4000 PNG with its last chunk cut off —
+	// and charging only a success let a document do that as often as it named
+	// the file (audit C19).
+	if !l.rec.charge(pixels*costPixel, "the pictures past that point") {
+		l.cut = true
+		return nil, l.cutShort(src, what)
+	}
+	l.budget -= pixels
+
 	img, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		// A header that parsed and a body that did not. It is a finding rather
@@ -887,8 +997,9 @@ func (l *replacedLoader) decode(src, what string, data []byte, as svgAs) (*Repla
 	if bounds.Dx() != cfg.Width || bounds.Dy() != cfg.Height {
 		// The header and the pixels disagree. Trusting the header would mean
 		// sizing a box from a number the decoder itself did not honour, so the
-		// decoded bounds win and the budget is charged for what was really
-		// allocated.
+		// decoded bounds win. The budget was charged for the header's pixels
+		// before the decode, and is charged the difference when the decoder
+		// allocated more than that.
 		if int64(bounds.Dx())*int64(bounds.Dy()) > maxImagePixels {
 			return nil, &loadFailure{
 				rule: RuleImageUndecodable,
@@ -897,11 +1008,13 @@ func (l *replacedLoader) decode(src, what string, data []byte, as svgAs) (*Repla
 			}
 		}
 		cfg.Width, cfg.Height = bounds.Dx(), bounds.Dy()
-		pixels = int64(cfg.Width) * int64(cfg.Height)
+		if got := int64(cfg.Width) * int64(cfg.Height); got > pixels {
+			l.budget -= got - pixels
+			l.rec.chargeOwn((got-pixels)*costPixel, "the pictures past that point")
+			pixels = got
+		}
 	}
-	l.budget -= pixels
 
-	sum := sha256.Sum256(data)
 	return &ReplacedContent{
 		Image:  img,
 		Width:  mustPx(float64(cfg.Width)),

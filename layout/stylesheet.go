@@ -1,6 +1,8 @@
 package layout
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"path"
 	"strconv"
@@ -105,8 +107,9 @@ var maxDocumentStylesheets = 20
 // authorSheet is one author stylesheet in document order.
 type authorSheet struct {
 	// name identifies the sheet in a finding. It is the href for a linked
-	// sheet and empty for a <style> element, matching the Source.Sheet
-	// convention in finding.go.
+	// sheet — shortened, when the href is a long URL; see sheetName — and
+	// empty for a <style> element, matching the Source.Sheet convention in
+	// finding.go.
 	name string
 	// source is the CSS.
 	source string
@@ -206,6 +209,33 @@ type sheetLoader struct {
 	tokensCapped bool
 }
 
+// sheetName is what a fetched stylesheet is called in a finding.
+//
+// A path is its own name, and it has to be: it is also what an @import in the
+// sheet is resolved against. A URL is not a directory to resolve against — see
+// resolveAgainstSheet — so its name is only a name, and a "data:" URL's name
+// was the whole stylesheet. Every finding about a rule in it carried the sheet
+// in Source.Sheet, and the recorder read that out again for each one, so a
+// data: sheet of three hundred kilobytes cost sixteen gigabytes of copying and
+// one at the one-megabyte cap about a minute (audit C18).
+//
+// So a long URL is named by its beginning, which says what it is, its length,
+// and a digest of the whole, which keeps two different sheets two names: the
+// name is also what tells an @import cycle apart from two sheets that begin
+// alike.
+func sheetName(ref string) string {
+	const keep = 48
+	if len(ref) <= 2*keep {
+		return ref
+	}
+	if _, named := schemeOf(ref); !named {
+		return ref
+	}
+	sum := sha256.Sum256([]byte(ref))
+	return ref[:cutAt(ref, keep)] + "… (" + strconv.Itoa(len(ref)) + " bytes, sha256 " +
+		hex.EncodeToString(sum[:8]) + ")"
+}
+
 // link turns one <link> element into a stylesheet, or explains why it did not.
 func (l *sheetLoader) link(n *html.Node) (authorSheet, bool) {
 	rel, _ := n.Attr("rel")
@@ -240,7 +270,7 @@ func (l *sheetLoader) link(n *html.Node) (authorSheet, bool) {
 			return authorSheet{}, false
 		}
 		l.applied++
-		return authorSheet{name: href, source: src}, true
+		return authorSheet{name: sheetName(href), source: src}, true
 	}
 
 	src, fail := l.fetch(href)
@@ -263,7 +293,7 @@ func (l *sheetLoader) link(n *html.Node) (authorSheet, bool) {
 		return authorSheet{}, false
 	}
 	l.applied++
-	return authorSheet{name: href, source: src}, true
+	return authorSheet{name: sheetName(href), source: src}, true
 }
 
 // admit decides whether a stylesheet that was not fetched — a <style> element,
@@ -668,7 +698,7 @@ func (l *sheetLoader) expandImports(s authorSheet) []authorSheet {
 			continue
 		}
 		if src, ok := l.fetchImport(ref, s.name); ok {
-			next := authorSheet{name: resolveAgainstSheet(ref, s.name), source: src}
+			next := authorSheet{name: sheetName(resolveAgainstSheet(ref, s.name)), source: src}
 			if why := l.cycle(next.name); why != "" {
 				l.rec.ReportDetail(Finding{
 					Rule:    RuleInvalidCSS,

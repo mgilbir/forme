@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
@@ -156,6 +157,16 @@ func BuildFor(in Input, page PageSize) Built {
 //
 // And the work: every finding is deduplicated twice, once in each recorder.
 func buildWith(in Input, page PageSize, rec *Recorder) Built {
+	// The document's share of the work budget, for what the caller handed in.
+	// A sheet the document fetches for itself earns nothing: a budget that
+	// grew with what a document chose to link would be one a document could
+	// raise. See budget.go.
+	input := len(in.HTML) + len(in.UserCSS)
+	for _, s := range in.CSS {
+		input += len(s.Source)
+	}
+	rec.work.grant(input)
+
 	parse := html.Parse
 	if in.XHTML {
 		parse = html.ParseXHTML
@@ -548,8 +559,14 @@ func unlaidBoxIsNotTheBoxAsked(n *html.Node, styles map[*html.Node]style.Compute
 // Anywhere, because the annotation need not be a child: HTML's own <ruby> puts
 // the <rt> beside the base, and a document may wrap either in a span. What it
 // must not do is look through a *nested* ruby, whose annotation belongs to that
-// one — but a nested ruby is itself reported, so the outer one saying so as well
-// is not a second finding about the same box.
+// one, and it does not: the walk stops at one. The nested ruby is asked about
+// itself, and is reported if its annotation is there.
+//
+// Stopping there is also what makes the question cheap. It is asked of every
+// ruby, and a walk that went on through the rubies inside visited each element
+// once for every ruby above it: 250 nested rubies over a hundred thousand
+// elements was seventeen seconds of this (audit C134). Stopped, each element is
+// visited by the walk of the one ruby nearest above it.
 //
 // The walk takes in n itself, and nothing guards against it: the caller has
 // already read n's display and found "ruby", so n cannot also be the
@@ -574,6 +591,9 @@ func hasRubyAnnotation(n *html.Node, styles map[*html.Node]style.ComputedStyle) 
 		switch strings.ToLower(strings.TrimSpace(cs.Get("display"))) {
 		case "ruby-text", "ruby-text-container":
 			found = true
+		case "ruby":
+			// A nested ruby, whose annotation is its own. See above.
+			return c == n
 		}
 		return !found
 	})
@@ -586,25 +606,100 @@ func hasRubyAnnotation(n *html.Node, styles map[*html.Node]style.ComputedStyle) 
 // It is a readable path rather than a selector that would round-trip: it names
 // the element chain with the identifiers and classes that distinguish it, which
 // is what someone reading a report needs.
+//
+// It is bounded, the way quoteValue bounds a value, and for the reason it
+// does: every part of it is the document's. Unbounded, a path was as long as
+// the document made its ids and as deep as it nested them — 250 ancestors with
+// two-thousand-character ids made a half-megabyte path for every finding
+// beneath them, and a finding carries one (audit C18). So a part is cut at
+// pathPartBytes, and a path deeper than pathDepth keeps the elements a reader
+// finds it by — the outermost few, which say where in the page, and the
+// innermost, which say which element — with an ellipsis for those between.
 func PathOf(n *html.Node) string {
 	if n == nil || n.Type != html.ElementNode {
 		return ""
 	}
-	var parts []string
+	// Innermost first, as the walk meets them, and only as many as are kept:
+	// the innermost pathInner, and then a count of the rest, of which only the
+	// outermost pathOuter are named once the walk reaches the top.
+	var inner []string
+	var chain []*html.Node
 	for cur := n; cur != nil && cur.Type == html.ElementNode; cur = cur.Parent {
-		part := cur.Name
-		if id, ok := cur.Attr("id"); ok && id != "" {
-			part += "#" + id
-		} else if class, ok := cur.Attr("class"); ok {
-			if fields := strings.Fields(class); len(fields) > 0 {
-				part += "." + fields[0]
-			}
+		if len(inner) < pathInner {
+			inner = append(inner, pathPart(cur))
+			continue
 		}
-		parts = append(parts, part)
+		chain = append(chain, cur)
 	}
-	// Built innermost first; a path reads outermost first.
-	for i, j := 0, len(parts)-1; i < j; i, j = i+1, j-1 {
-		parts[i], parts[j] = parts[j], parts[i]
+	parts := make([]string, 0, pathOuter+1+len(inner))
+	// chain holds the elements above the innermost few, innermost first; the
+	// outermost pathOuter of them are its last entries.
+	elided := len(chain) > pathOuter
+	for i := len(chain) - 1; i >= 0 && i >= len(chain)-pathOuter; i-- {
+		parts = append(parts, pathPart(chain[i]))
+	}
+	if elided {
+		parts = append(parts, "…"+strconv.Itoa(len(chain)-pathOuter)+" more…")
+	}
+	for i := len(inner) - 1; i >= 0; i-- {
+		parts = append(parts, inner[i])
 	}
 	return strings.Join(parts, " > ")
+}
+
+// The bounds on PathOf. Sixteen levels named is more than a reader follows, and
+// sixty-four bytes is longer than any identifier a person chose.
+const (
+	pathOuter     = 4
+	pathInner     = 12
+	pathPartBytes = 64
+)
+
+// pathPart is one element's step in a path: its name, and the id or first
+// class that distinguishes it, cut at pathPartBytes on a character boundary.
+//
+// Nothing longer than the cut is read. The attribute is the document's, and a
+// path is asked for once per finding: reading a megabyte of class to keep
+// sixty-four bytes of it is the cost the bound is there to remove, paid anyway.
+func pathPart(n *html.Node) string {
+	part := n.Name
+	if id, ok := n.Attr("id"); ok && id != "" {
+		part += "#" + id[:cutAt(id, pathPartBytes+1)]
+	} else if class, ok := n.Attr("class"); ok {
+		// The first class, found within a window: a class list that opens with
+		// more white space than that names nothing a reader would recognise.
+		start := 0
+		for start < len(class) && start < pathPartBytes && isHTMLSpace(class[start]) {
+			start++
+		}
+		end := start
+		for end < len(class) && end-start <= pathPartBytes && !isHTMLSpace(class[end]) {
+			end++
+		}
+		if end > start {
+			part += "." + class[start:start+cutAt(class[start:end], pathPartBytes+1)]
+		}
+	}
+	if len(part) <= pathPartBytes {
+		return part
+	}
+	return part[:cutAt(part, pathPartBytes)] + "…"
+}
+
+// cutAt is the length of s's longest prefix of at most n bytes that ends on a
+// character boundary.
+func cutAt(s string, n int) int {
+	if len(s) <= n {
+		return len(s)
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return n
+}
+
+// isHTMLSpace is HTML's ASCII white space, which is what separates the tokens
+// of a class list.
+func isHTMLSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r'
 }

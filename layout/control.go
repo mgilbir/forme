@@ -535,7 +535,12 @@ func selectAncestor(n *html.Node) *html.Node {
 // What is left out is reported by reportApproximation rather than dropped in
 // silence: a page showing one of six options is a page short of five, and the
 // document says so even if the paper cannot.
-func controlSkipsChild(parent *Box, child *html.Node) bool {
+//
+// The chosen option is found once per select and remembered. It is asked for
+// every child of the select, and finding it walks every option, so asking
+// afresh made a drop-down's box generation quadratic in its options: sixteen
+// thousand of them, 140 KB of markup, took thirteen seconds (audit C47).
+func (b *boxBuilder) controlSkipsChild(parent *Box, child *html.Node) bool {
 	if parent.Element == nil {
 		return false
 	}
@@ -550,12 +555,19 @@ func controlSkipsChild(parent *Box, child *html.Node) bool {
 	if !selectIsDropDown(sel) {
 		return !isOptionLike(child)
 	}
-	chosen := chosenOption(sel)
+	chosen, ok := b.chosen[sel]
+	if !ok {
+		chosen = chosenOption(sel)
+		if b.chosen == nil {
+			b.chosen = map[*html.Node]*html.Node{}
+		}
+		b.chosen[sel] = chosen
+	}
 	if chosen == nil {
 		// A drop-down with no options shows nothing at all.
 		return true
 	}
-	return !containsOrIs(child, chosen)
+	return !containsOrIs(child, chosen, sel)
 }
 
 // isOptionLike reports whether a node is one of the two elements a select
@@ -570,11 +582,16 @@ func isOptionLike(n *html.Node) bool {
 
 // containsOrIs reports whether target is n or is inside it, which is what an
 // <optgroup> holding the chosen option needs.
-func containsOrIs(n, target *html.Node) bool {
+//
+// The walk up from target stops at within, the select both are inside: n is a
+// child of that select or of an optgroup in it, so it is never found above it,
+// and walking on to the root cost every child of a select the depth of the
+// document.
+func containsOrIs(n, target, within *html.Node) bool {
 	if target == nil {
 		return false
 	}
-	for cur := target; cur != nil; cur = cur.Parent {
+	for cur := target; cur != nil && cur != within; cur = cur.Parent {
 		if cur == n {
 			return true
 		}

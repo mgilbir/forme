@@ -99,7 +99,7 @@ func TestTheCounterWalkStopsWhereBoxGenerationDoes(t *testing.T) {
 	}
 	describe(doc)
 
-	got := computeCounters(doc, styles, nil)
+	got := computeCounters(doc, styles, nil, nil)
 	if len(got.elements) == 0 {
 		t.Fatal("no element came back numbered, so this test is watching " +
 			"nothing; the fixture has to make list items for the count to mean " +
@@ -179,7 +179,7 @@ var deepWalks = map[string]struct {
 	// thousand.
 	"counters": {stack: 1 << 20, run: func() {
 		doc := nestedNodes(50000)
-		computeCounters(doc, blockStyles(doc, style.Initial().With("display", "block")), nil)
+		computeCounters(doc, blockStyles(doc, style.Initial().With("display", "block")), nil, nil)
 	}},
 	// The options walk, which descends below the box that reached it and so is
 	// not covered by the depth cap at all. Called directly for the same reason

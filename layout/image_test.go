@@ -162,8 +162,8 @@ func TestImagePixelCapIsCrossedNotApproached(t *testing.T) {
 		t.Fatalf("this test is written against a cap of %d, which is now %d",
 			int64(side)*int64(side), maxImagePixels)
 	}
-	_, atCap := l.decode("at-cap", "image", bombPNG(side, side), svgAsImage)
-	_, overCap := l.decode("over-cap", "image", bombPNG(side, side+1), svgAsImage)
+	_, atCap := l.decode("at-cap", "image", bombPNG(side, side), [32]byte{}, svgAsImage)
+	_, overCap := l.decode("over-cap", "image", bombPNG(side, side+1), [32]byte{}, svgAsImage)
 
 	// The image at the cap gets past the *cap* and then fails on its missing
 	// pixel data, which is a different complaint and the one that proves the
@@ -188,8 +188,12 @@ func TestImagePixelCapIsCrossedNotApproached(t *testing.T) {
 // longer to build than the rest of the suite.
 func TestDocumentPixelBudget(t *testing.T) {
 	dir := t.TempDir()
+	// Two different pictures. Two files holding the same bytes are one
+	// picture, decoded once and charged once whatever they are called — see
+	// replacedLoader.byContent — so a second copy of a.png would not be the
+	// second image this is about.
 	writePNG(t, filepath.Join(dir, "a.png"), 20, 20)
-	writePNG(t, filepath.Join(dir, "b.png"), 20, 20)
+	writePNG(t, filepath.Join(dir, "b.png"), 21, 20)
 
 	old := maxDocumentPixels
 	// Room for one image of 400 pixels and not two.
@@ -381,7 +385,7 @@ func FuzzImageLoading(f *testing.F) {
 			rec: NewRecorder(nil), loaded: map[string]*ReplacedContent{},
 			failed: map[string]bool{}, budget: maxDocumentPixels,
 		}
-		got, fail := l.decode("fuzz", "image", data, svgAsImage)
+		got, fail := l.decode("fuzz", "image", data, [32]byte{}, svgAsImage)
 		switch {
 		case got == nil && fail == nil:
 			t.Fatal("a decode neither succeeded nor explained itself")
