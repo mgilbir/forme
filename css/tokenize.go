@@ -3,7 +3,6 @@ package css
 import (
 	"fmt"
 	"math"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -704,25 +703,22 @@ func (t *tokenizer) consumeNumber() (value float64, repr string, isInteger bool)
 	return parseNumber(repr), repr, isInteger
 }
 
-// parseNumber converts what consumeNumber assembled.
+// parseNumber converts what consumeNumber assembled, through NumberValue — the
+// one reading of a number's value every reader in the engine shares.
 //
-// The only input ParseFloat can reject here is one whose exponent is out of
-// range, which it reports alongside an infinity. An infinite length would poison
-// every arithmetic that touched it and produce a page of NaNs, so it is clamped
-// to the largest finite value: a number too big to represent is still, for
-// layout, just a very large number.
+// A number too large for a float64 comes back out of range, as the infinity of
+// its sign. An infinite length would poison every arithmetic that touched it
+// and produce a page of NaNs, so it is clamped to the largest finite value: a
+// number too big to represent is still, for layout, just a very large number.
 func parseNumber(repr string) float64 {
-	v, err := strconv.ParseFloat(repr, 64)
-	if err == nil {
-		return v
-	}
+	v, inRange := NumberValue(repr)
 	switch {
-	case math.IsInf(v, 1):
+	case inRange:
+		return v
+	case v > 0:
 		return math.MaxFloat64
-	case math.IsInf(v, -1):
-		return -math.MaxFloat64
 	}
-	return 0
+	return -math.MaxFloat64
 }
 
 // validEscape reports whether two code points begin an escape (§4.3.8).
