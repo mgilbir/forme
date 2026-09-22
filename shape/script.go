@@ -427,15 +427,6 @@ type shaper struct {
 	// hundred bytes of font. See lookupBudget.
 	ops *int
 
-	// covWork is what is left of the run's allowance for expanding the coverage
-	// of the mark subtables its rules reach. A pointer for the same reason ops
-	// is: the allowance belongs to the run.
-	//
-	// Those subtables are read where they are applied rather than at load — see
-	// markAttachAt — so their cost is per application and the layout's
-	// load-time allowance cannot cover it. See markCoverageBudget.
-	covWork *int
-
 	// markSet is the mark glyph set the lookup being applied names, or -1. It
 	// travels on the shaper rather than through every matcher's arguments
 	// because it belongs to the lookup, and a shaper is copied per lookup — so
@@ -700,6 +691,45 @@ func (c *layoutCache) layoutFor(gsubKey, gposKey string, build func() *layout) *
 	}
 	c.scriptLayouts[key] = l
 	return l
+}
+
+// LayoutLimits reports the bounds reading this face's layout tables has run
+// into so far, each once, in words that say what was not read.
+//
+// A face's tables are read when it is loaded and again for each script a
+// document sets in it, so a limit can appear after the face has been in use; a
+// caller wanting the whole story asks after shaping. An empty answer means
+// every table read so far was read whole.
+func (f *Face) LayoutLimits() []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(l *layout) {
+		if l == nil {
+			return
+		}
+		for _, m := range l.limits {
+			if !seen[m] {
+				seen[m] = true
+				out = append(out, m)
+			}
+		}
+	}
+	add(f.layout)
+	if f.cache != nil {
+		f.cache.mu.Lock()
+		defer f.cache.mu.Unlock()
+		for _, m := range []map[string]*layout{f.cache.positionings, f.cache.scriptLayouts} {
+			keys := make([]string, 0, len(m))
+			for k := range m {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				add(m[k])
+			}
+		}
+	}
+	return out
 }
 
 func (c *layoutCache) positioningFor(key string, build func() *layout) *layout {

@@ -518,7 +518,7 @@ func TestTheApplyEntryPointsRefuseAPositionOutsideTheBuffer(t *testing.T) {
 	if len(l.gsub) == 0 || len(l.gpos) == 0 {
 		t.Fatal("the fixture's lookups were not read; the test would prove nothing")
 	}
-	sh := shaper{f: f, l: l, ops: lookupBudget(1), covWork: markCoverageBudget(1)}
+	sh := shaper{f: f, l: l, ops: lookupBudget(1)}
 	buf := []Glyph{{GID: 1}}
 	for _, at := range []int{-1, -2, 1, 2} {
 		noPanic(t, "applyGSUBAt", func() {

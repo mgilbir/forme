@@ -120,8 +120,8 @@ func TestALookupSeesOnlyTheMarksItsSetNames(t *testing.T) {
 		outSet = 8 // a mark it does not
 	)
 	l := &layout{
-		glyphClass: map[int]int{base: classBase, inSet: classMark, outSet: classMark},
-		markSets:   []map[int]bool{{inSet: true}},
+		glyphClass: classTableOf(map[int]int{base: classBase, inSet: classMark, outSet: classMark}),
+		markSets:   []coverageTable{coverageOf(inSet)},
 	}
 	const flags = flagUseMarkFilteringSet
 	for _, tc := range []struct {
@@ -256,7 +256,7 @@ func TestADenseLookupListIsBoundedByTheTable(t *testing.T) {
 // TestAKernLookupPastTheOldCapIsApplied is the same defect in the other reader,
 // which kept the cap after it was lifted here.
 //
-// featureLookupsIndexed serves everything the flat passes read: kerning, mark
+// featureLookupsIndexed (now featureIndex) serves everything the flat passes read: kerning, mark
 // and cursive attachment, ligatures on the span path, and every single
 // substitution. It clamped the lookup list to 512 while the comment above said
 // the cap had been lifted — so a font whose 'kern' names lookup 599 kerned

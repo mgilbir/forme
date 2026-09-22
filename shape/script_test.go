@@ -211,16 +211,17 @@ func TestScriptSelectionSurvivesMalformedScriptList(t *testing.T) {
 	for n := 0; n <= len(gsub); n++ {
 		truncated := append([]byte(nil), gsub[:n]...)
 		l := &layout{
-			ligatures:  map[int][]ligature{},
-			glyphClass: map[int]int{}, single: map[string]map[int]int{},
+			ligatures: map[int][]ligature{},
+			single:    map[string]map[int]int{},
 			singlePos: map[int]singleAdjust{}, markGlyphs: map[int]bool{},
 			cursive: map[int]cursiveAnchors{},
 		}
 		sel, _ := scriptFeatures(truncated, []string{"latn"}, "")
 		if len(truncated) >= 10 {
 			feats := tableFeatures{sel: sel, varied: readFeatureVariations(truncated, nil)}
-			l.readSingleSubstitutions(truncated, feats)
-			featureLookupIndices(truncated, feats)
+			idx := indexFeatures(truncated, feats)
+			l.readSingleSubstitutions(truncated, idx)
+			idx.lookupIndices()
 		}
 	}
 }

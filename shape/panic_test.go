@@ -473,6 +473,8 @@ func useFace(face *Face) {
 
 	_, _ = face.Subset()
 	_, _, _ = face.SubsetGlyphs()
+	// Last, so that it reads every layout the shaping above caused to be read.
+	_ = face.LayoutLimits()
 }
 
 // TestAFontDeclaringNoGlyphsIsRefused pins the crash the fuzzer found.

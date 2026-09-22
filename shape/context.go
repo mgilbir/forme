@@ -110,26 +110,6 @@ func lookupBudget(glyphs int) *int {
 	return &n
 }
 
-// markCoverageBudget is a run's allowance for expanding the coverage of the mark
-// subtables its rules reach.
-//
-// It scales with the run for the reason lookupBudget does — a longer run
-// legitimately attaches more marks — and the per-glyph share is a whole glyph
-// space, sixty times what two coverages of a real mark subtable name. The floor
-// is there so that a one-word run is not held to less than a subtable's worth,
-// and the ceiling so that a very long run cannot ask for unbounded work.
-//
-// The clamp is on the glyphs and not on the product, so that the arithmetic
-// cannot overflow where int is thirty-two bits.
-func markCoverageBudget(glyphs int) *int {
-	const floor, ceiling = 16, 1 << 10 // in glyph spaces
-	if glyphs > ceiling-floor {
-		glyphs = ceiling - floor
-	}
-	n := maxCoverageGlyphs * (floor + glyphs)
-	return &n
-}
-
 // recurse reports whether a matched rule may apply another lookup, spending one
 // unit of the run's allowance when it may.
 //
@@ -509,8 +489,31 @@ func (sh shaper) nextNotIgnored(buf []Glyph, from, flags, want int) int {
 	return end
 }
 
-// matchedPositions collects the positions a lookup with these flags would see
-// as its input, starting at a position, up to n of them.
+// # Matching without building
+//
+// A rule states three sequences — what must precede, what is replaced, what
+// must follow — as counts followed by items, and every one of those counts is
+// a number the font wrote. The matchers here read each item from the rule's
+// bytes at the moment it is compared, and stop at the first that differs.
+//
+// They used to collect first and compare after: each rule allocated a list the
+// length of each of its three counts before any byte behind the count was
+// checked, and gathered a position for every item before comparing any. A
+// chained rule set of two thousand offsets to one two-byte rule declaring a
+// backtrack of 65,535 allocated half a megabyte per rule per glyph — 174 ms a
+// glyph, from four kilobytes of GSUB. Now a rule whose parts are not all
+// present in its bytes is skipped before anything is matched, and one that is
+// costs what comparing it costs.
+
+// ruleInput is a place to put the positions a rule's input matched at: the
+// longest input that can match, on the stack of the matcher that fills it.
+type ruleInput [maxContextLength]int
+
+// matchInput walks the glyphs a lookup with these flags looks at, starting at
+// a position, and compares the k-th of them with match. It stops at the first
+// that differs, and fills out with where each one was.
+//
+// An input longer than maxContextLength does not match, as in HarfBuzz.
 //
 // Unlike the ligature walk above this cannot tell whether a joiner in the way is
 // the glyph the rule wanted: the rule's items are compared by the caller, and
@@ -519,55 +522,86 @@ func (sh shaper) nextNotIgnored(buf []Glyph, from, flags, want int) int {
 // contextual rule that names a joiner explicitly *and* is declared under a
 // feature that steps over joiners, which is a combination that contradicts
 // itself.
-//
-// An input longer than maxContextLength does not match, as in HarfBuzz.
-func (sh shaper) matchedPositions(buf []Glyph, at, n, flags int) ([]int, bool) {
-	if n > maxContextLength {
-		return nil, false
+func (sh shaper) matchInput(buf []Glyph, at, count, flags int, out *ruleInput,
+	match func(k, pos int) bool) bool {
+
+	if count < 1 || count > maxContextLength {
+		return false
 	}
-	return sh.positionsFrom(buf, at, n, flags, false)
-}
-
-// lookaheadPositions is matchedPositions for the part of a rule that says what
-// must *follow* what it replaces, which steps over joiners in every case.
-func (sh shaper) lookaheadPositions(buf []Glyph, at, n, flags int) ([]int, bool) {
-	return sh.positionsFrom(buf, at, n, flags, true)
-}
-
-func (sh shaper) positionsFrom(buf []Glyph, at, n, flags int, context bool) ([]int, bool) {
-	out := make([]int, 0, n)
 	end := sh.end(buf)
 	pos := at
-	for len(out) < n {
-		if pos >= end {
-			return nil, false
+	for k := 0; k < count; k++ {
+		for {
+			if pos >= end {
+				return false
+			}
+			if !sh.ignores(flags, buf[pos]) && !sh.stepsOverJoiner(pos, false) {
+				break
+			}
+			pos++
 		}
-		if !sh.ignores(flags, buf[pos]) && !sh.stepsOverJoiner(pos, context) {
-			out = append(out, pos)
+		if !match(k, pos) {
+			return false
+		}
+		out[k] = pos
+		pos++
+	}
+	return true
+}
+
+// matchLookahead is matchInput for the part of a rule that says what must
+// *follow* what it replaces, which steps over joiners in every case and whose
+// positions nothing needs afterwards.
+func (sh shaper) matchLookahead(buf []Glyph, from, count, flags int, match func(k int, g Glyph) bool) bool {
+	end := sh.end(buf)
+	pos := from
+	for k := 0; k < count; k++ {
+		for {
+			if pos >= end {
+				return false
+			}
+			if !sh.ignores(flags, buf[pos]) && !sh.stepsOverJoiner(pos, true) {
+				break
+			}
+			pos++
+		}
+		if !match(k, buf[pos]) {
+			return false
 		}
 		pos++
 	}
-	return out, true
+	return true
 }
 
-// backtrackPositions collects the positions before a position, nearest first,
-// which is the order the format stores a backtrack sequence in. It is context,
-// so it steps over joiners.
+// matchBacktrack compares the glyphs before a position, nearest first, which
+// is the order the format stores a backtrack sequence in. It is context, so it
+// steps over joiners.
+//
 // A position may be negative, which is a glyph the pass has already settled and
 // so is behind the ones the lookup was given: a rule at the front of what is
 // left still has the run before it as its context. glyphAt is what reads one.
-func (sh shaper) backtrackPositions(buf []Glyph, before, n, flags int) ([]int, bool) {
-	out := make([]int, 0, n)
+func (sh shaper) matchBacktrack(buf []Glyph, before, count, flags int, match func(k int, g Glyph) bool) bool {
 	low := sh.floor - sh.base()
 	if settled := -len(sh.settledRun()); low < settled {
 		low = settled
 	}
-	for pos := before - 1; pos >= low && len(out) < n; pos-- {
-		if !sh.ignores(flags, sh.glyphAt(buf, pos)) && !sh.stepsOverJoiner(pos, true) {
-			out = append(out, pos)
+	pos := before - 1
+	for k := 0; k < count; k++ {
+		for {
+			if pos < low {
+				return false
+			}
+			if !sh.ignores(flags, sh.glyphAt(buf, pos)) && !sh.stepsOverJoiner(pos, true) {
+				break
+			}
+			pos--
 		}
+		if !match(k, sh.glyphAt(buf, pos)) {
+			return false
+		}
+		pos--
 	}
-	return out, len(out) == n
+	return true
 }
 
 // sequenceContext matches a GSUB type 5 subtable and applies its lookups.
@@ -591,26 +625,28 @@ func (sh shaper) sequenceContext(sub []byte, buf []Glyph, at, flags, depth int) 
 		if _, ok := coverageIndex(sub, font.Be16(sub, 2), buf[at].GID); !ok {
 			return 0, buf, false
 		}
-		classes := classDef(sub, font.Be16(sub, 4))
-		return sh.contextRuleSet(sub, 8, classes[buf[at].GID], buf, at, flags, depth, func(item, pos int) bool {
-			return classes[buf[pos].GID] == item
-		})
+		// Each glyph's class is searched for in the class table where it is
+		// compared, rather than read out of a map of every glyph the table
+		// names — which this built at every glyph the rule was tried on.
+		classes := font.Be16(sub, 4)
+		return sh.contextRuleSet(sub, 8, classAt(sub, classes, buf[at].GID), buf, at, flags, depth,
+			func(item, pos int) bool {
+				return classAt(sub, classes, buf[pos].GID) == item
+			})
 	case 3:
 		glyphCount := font.Be16(sub, 2)
 		recCount := font.Be16(sub, 4)
 		if glyphCount < 1 || 6+2*glyphCount > len(sub) {
 			return 0, buf, false
 		}
-		positions, ok := sh.matchedPositions(buf, at, glyphCount, flags)
-		if !ok {
+		var in ruleInput
+		if !sh.matchInput(buf, at, glyphCount, flags, &in, func(k, pos int) bool {
+			_, covered := coverageIndex(sub, font.Be16(sub, 6+2*k), buf[pos].GID)
+			return covered
+		}) {
 			return 0, buf, false
 		}
-		for k := 0; k < glyphCount; k++ {
-			if _, covered := coverageIndex(sub, font.Be16(sub, 6+2*k), buf[positions[k]].GID); !covered {
-				return 0, buf, false
-			}
-		}
-		return sh.runRecords(sub, 6+2*glyphCount, recCount, positions, buf, at, depth)
+		return sh.runRecords(sub, 6+2*glyphCount, recCount, in[:glyphCount], buf, at, depth)
 	}
 	return 0, buf, false
 }
@@ -629,6 +665,7 @@ func (sh shaper) contextRuleSet(sub []byte, setsAt, index int, buf []Glyph, at, 
 		return 0, buf, false
 	}
 	set := sub[off:]
+	var in ruleInput
 	for r := 0; r < font.Be16(set, 0); r++ {
 		if 2+2*r+2 > len(set) {
 			break
@@ -643,21 +680,14 @@ func (sh shaper) contextRuleSet(sub []byte, setsAt, index int, buf []Glyph, at, 
 		if glyphCount < 1 || 4+2*(glyphCount-1) > len(rule) {
 			continue
 		}
-		positions, ok := sh.matchedPositions(buf, at, glyphCount, flags)
-		if !ok {
+		// The first item is the glyph the rule set was chosen by, which the
+		// rule does not state again.
+		if !sh.matchInput(buf, at, glyphCount, flags, &in, func(k, pos int) bool {
+			return k == 0 || match(font.Be16(rule, 4+2*(k-1)), pos)
+		}) {
 			continue
 		}
-		matched := true
-		for k := 1; k < glyphCount; k++ {
-			if !match(font.Be16(rule, 4+2*(k-1)), positions[k]) {
-				matched = false
-				break
-			}
-		}
-		if !matched {
-			continue
-		}
-		return sh.runRecords(rule, 4+2*(glyphCount-1), recCount, positions, buf, at, depth)
+		return sh.runRecords(rule, 4+2*(glyphCount-1), recCount, in[:glyphCount], buf, at, depth)
 	}
 	return 0, buf, false
 }
@@ -670,39 +700,46 @@ func (sh shaper) chainedContext(sub []byte, buf []Glyph, at, flags, depth int) (
 	}
 	switch font.Be16(sub, 0) {
 	case 1, 2:
-		var classes, backClasses, aheadClasses map[int]int
 		setsAt := 6
-		if font.Be16(sub, 0) == 2 {
-			if len(sub) < 12 {
-				return 0, buf, false
-			}
-			backClasses = classDef(sub, font.Be16(sub, 4))
-			classes = classDef(sub, font.Be16(sub, 6))
-			aheadClasses = classDef(sub, font.Be16(sub, 8))
-			setsAt = 12
+		byClass := font.Be16(sub, 0) == 2
+		if byClass && len(sub) < 12 {
+			return 0, buf, false
 		}
 		// A rule set is chosen by coverage index in the glyph form and by input
-		// class in the class form; coverage still gates whether any rule applies.
+		// class in the class form; coverage still gates whether any rule
+		// applies, and it is asked first, so that a glyph no rule starts with
+		// costs one search and nothing else.
 		index, ok := coverageIndex(sub, font.Be16(sub, 2), buf[at].GID)
 		if !ok {
 			return 0, buf, false
 		}
-		if classes != nil {
-			index = classes[buf[at].GID]
+		var classes chainClasses
+		if byClass {
+			classes = chainClasses{
+				back:  font.Be16(sub, 4),
+				input: font.Be16(sub, 6),
+				ahead: font.Be16(sub, 8),
+			}
+			setsAt = 12
+			index = classAt(sub, classes.input, buf[at].GID)
 		}
-		return sh.chainedRuleSet(sub, setsAt, index, buf, at, flags, depth,
-			classes, backClasses, aheadClasses)
+		return sh.chainedRuleSet(sub, setsAt, index, buf, at, flags, depth, byClass, classes)
 	case 3:
 		return sh.chainedFormat3(sub, buf, at, flags, depth)
 	}
 	return 0, buf, false
 }
 
+// chainClasses is where a class-form chained subtable's three class tables
+// sit: one each for what precedes, what is matched and what follows, since a
+// glyph may belong to a different group in each role.
+type chainClasses struct{ back, input, ahead int }
+
 // chainedRuleSet walks the rule sets of a chained context in glyph or class
 // form. A rule states three sequences — what must precede, what is matched, and
 // what must follow — and the first is stored nearest-first.
 func (sh shaper) chainedRuleSet(sub []byte, setsAt, index int, buf []Glyph, at, flags, depth int,
-	classes, backClasses, aheadClasses map[int]int) (int, []Glyph, bool) {
+	byClass bool, classes chainClasses) (int, []Glyph, bool) {
 
 	count := font.Be16(sub, setsAt-2)
 	if index < 0 || index >= count || setsAt+2*index+2 > len(sub) {
@@ -713,15 +750,16 @@ func (sh shaper) chainedRuleSet(sub []byte, setsAt, index int, buf []Glyph, at, 
 		return 0, buf, false
 	}
 	set := sub[off:]
-	byGlyph := classes == nil
-	item := func(m map[int]int, pos int) int {
-		gid := sh.glyphAt(buf, pos).GID
-		if byGlyph {
-			return gid
+	// What a glyph is to a rule: itself in the glyph form, its class in the
+	// class table for its role in the class form.
+	item := func(classOff int, g Glyph) int {
+		if byClass {
+			return classAt(sub, classOff, g.GID)
 		}
-		return m[gid]
+		return g.GID
 	}
 
+	var in ruleInput
 	for r := 0; r < font.Be16(set, 0); r++ {
 		if 2+2*r+2 > len(set) {
 			break
@@ -731,97 +769,48 @@ func (sh shaper) chainedRuleSet(sub []byte, setsAt, index int, buf []Glyph, at, 
 			continue
 		}
 		rule := set[ro:]
-		p := 0
-		read := func() (int, bool) {
-			if p+2 > len(rule) {
-				return 0, false
-			}
-			v := font.Be16(rule, p)
-			p += 2
-			return v, true
-		}
-		backCount, ok := read()
-		if !ok {
+		// Where each part of the rule is, and whether all of it is there: a
+		// count with too few bytes behind it is a rule that is not read, and
+		// it is settled here, before anything is matched.
+		backCount := font.Be16(rule, 0)
+		backAt := 2
+		p := backAt + 2*backCount
+		if p+2 > len(rule) {
 			continue
 		}
-		back := make([]int, 0, backCount)
-		for k := 0; k < backCount; k++ {
-			v, ok := read()
-			if !ok {
-				break
-			}
-			back = append(back, v)
-		}
-		inputCount, ok := read()
-		if !ok || inputCount < 1 {
+		inputCount := font.Be16(rule, p)
+		inputAt := p + 2
+		if inputCount < 1 {
 			continue
 		}
-		input := make([]int, 0, inputCount-1)
-		for k := 0; k < inputCount-1; k++ {
-			v, ok := read()
-			if !ok {
-				break
-			}
-			input = append(input, v)
-		}
-		aheadCount, ok := read()
-		if !ok {
+		p = inputAt + 2*(inputCount-1)
+		if p+2 > len(rule) {
 			continue
 		}
-		ahead := make([]int, 0, aheadCount)
-		for k := 0; k < aheadCount; k++ {
-			v, ok := read()
-			if !ok {
-				break
-			}
-			ahead = append(ahead, v)
-		}
-		recCount, ok := read()
-		if !ok {
+		aheadCount := font.Be16(rule, p)
+		aheadAt := p + 2
+		p = aheadAt + 2*aheadCount
+		if p+2 > len(rule) {
 			continue
 		}
+		recCount := font.Be16(rule, p)
 
-		positions, ok := sh.matchedPositions(buf, at, inputCount, flags)
-		if !ok || len(input) != inputCount-1 {
+		if !sh.matchInput(buf, at, inputCount, flags, &in, func(k, pos int) bool {
+			return k == 0 || item(classes.input, buf[pos]) == font.Be16(rule, inputAt+2*(k-1))
+		}) {
 			continue
 		}
-		matched := true
-		for k := 1; k < inputCount; k++ {
-			if item(classes, positions[k]) != input[k-1] {
-				matched = false
-				break
-			}
-		}
-		if matched && len(back) > 0 {
-			bp, ok := sh.backtrackPositions(buf, at, len(back), flags)
-			if !ok {
-				matched = false
-			} else {
-				for k, want := range back {
-					if item(backClasses, bp[k]) != want {
-						matched = false
-						break
-					}
-				}
-			}
-		}
-		if matched && len(ahead) > 0 {
-			ap, ok := sh.lookaheadPositions(buf, positions[inputCount-1]+1, len(ahead), flags)
-			if !ok {
-				matched = false
-			} else {
-				for k, want := range ahead {
-					if item(aheadClasses, ap[k]) != want {
-						matched = false
-						break
-					}
-				}
-			}
-		}
-		if !matched {
+		if backCount > 0 && !sh.matchBacktrack(buf, at, backCount, flags, func(k int, g Glyph) bool {
+			return item(classes.back, g) == font.Be16(rule, backAt+2*k)
+		}) {
 			continue
 		}
-		return sh.runRecords(rule, p, recCount, positions, buf, at, depth)
+		if aheadCount > 0 && !sh.matchLookahead(buf, in[inputCount-1]+1, aheadCount, flags, func(k int, g Glyph) bool {
+			return item(classes.ahead, g) == font.Be16(rule, aheadAt+2*k)
+		}) {
+			continue
+		}
+		return sh.runRecords(rule, p+2, recCount, in[:inputCount], buf, at, depth)
 	}
 	return 0, buf, false
 }
@@ -829,73 +818,50 @@ func (sh shaper) chainedRuleSet(sub []byte, setsAt, index int, buf []Glyph, at, 
 // chainedFormat3 is the coverage-based chained context, the form a modern font
 // uses most: three lists of coverage tables rather than rule sets.
 func (sh shaper) chainedFormat3(sub []byte, buf []Glyph, at, flags, depth int) (int, []Glyph, bool) {
-	p := 2
-	readList := func() ([]int, bool) {
-		if p+2 > len(sub) {
-			return nil, false
-		}
-		n := font.Be16(sub, p)
-		p += 2
-		if p+2*n > len(sub) {
-			return nil, false
-		}
-		out := make([]int, n)
-		for i := range out {
-			out[i] = font.Be16(sub, p+2*i)
-		}
-		p += 2 * n
-		return out, true
-	}
-	back, ok := readList()
-	if !ok {
+	// Where each list is, and whether all of it is there, before anything is
+	// matched; the coverage offsets are read where each is used.
+	backCount := font.Be16(sub, 2)
+	backAt := 4
+	p := backAt + 2*backCount
+	if p+2 > len(sub) {
 		return 0, buf, false
 	}
-	input, ok := readList()
-	if !ok || len(input) < 1 {
+	inputCount := font.Be16(sub, p)
+	inputAt := p + 2
+	p = inputAt + 2*inputCount
+	if inputCount < 1 || p+2 > len(sub) {
 		return 0, buf, false
 	}
-	ahead, ok := readList()
-	if !ok {
-		return 0, buf, false
-	}
+	aheadCount := font.Be16(sub, p)
+	aheadAt := p + 2
+	p = aheadAt + 2*aheadCount
 	if p+2 > len(sub) {
 		return 0, buf, false
 	}
 	recCount := font.Be16(sub, p)
 	p += 2
 
-	positions, ok := sh.matchedPositions(buf, at, len(input), flags)
-	if !ok {
+	covers := func(listAt, k, gid int) bool {
+		_, ok := coverageIndex(sub, font.Be16(sub, listAt+2*k), gid)
+		return ok
+	}
+	var in ruleInput
+	if !sh.matchInput(buf, at, inputCount, flags, &in, func(k, pos int) bool {
+		return covers(inputAt, k, buf[pos].GID)
+	}) {
 		return 0, buf, false
 	}
-	for k, cov := range input {
-		if _, covered := coverageIndex(sub, cov, buf[positions[k]].GID); !covered {
-			return 0, buf, false
-		}
+	if backCount > 0 && !sh.matchBacktrack(buf, at, backCount, flags, func(k int, g Glyph) bool {
+		return covers(backAt, k, g.GID)
+	}) {
+		return 0, buf, false
 	}
-	if len(back) > 0 {
-		bp, ok := sh.backtrackPositions(buf, at, len(back), flags)
-		if !ok {
-			return 0, buf, false
-		}
-		for k, cov := range back {
-			if _, covered := coverageIndex(sub, cov, sh.glyphAt(buf, bp[k]).GID); !covered {
-				return 0, buf, false
-			}
-		}
+	if aheadCount > 0 && !sh.matchLookahead(buf, in[inputCount-1]+1, aheadCount, flags, func(k int, g Glyph) bool {
+		return covers(aheadAt, k, g.GID)
+	}) {
+		return 0, buf, false
 	}
-	if len(ahead) > 0 {
-		ap, ok := sh.lookaheadPositions(buf, positions[len(input)-1]+1, len(ahead), flags)
-		if !ok {
-			return 0, buf, false
-		}
-		for k, cov := range ahead {
-			if _, covered := coverageIndex(sub, cov, buf[ap[k]].GID); !covered {
-				return 0, buf, false
-			}
-		}
-	}
-	return sh.runRecords(sub, p, recCount, positions, buf, at, depth)
+	return sh.runRecords(sub, p, recCount, in[:inputCount], buf, at, depth)
 }
 
 // maxContextLength bounds how many glyphs a contextual rule's input may match,
@@ -1075,14 +1041,23 @@ func coverageIndex(base []byte, off, gid int) (int, bool) {
 			}
 		}
 	case 2:
-		n := font.Be16(c, 2)
-		for i := 0; i < n; i++ {
-			rec := 4 + 6*i
-			if rec+6 > len(c) {
-				return 0, false
-			}
+		// A binary search over the ranges, as HarfBuzz does it and for the
+		// reason format 1 is searched: this is asked for every glyph a rule is
+		// tried on, and a coverage of a thousand ranges was read front to back
+		// each time. The comparisons are HarfBuzz's, so a malformed table whose
+		// ranges are out of order answers the same way in both.
+		n := min(font.Be16(c, 2), (len(c)-4)/6)
+		lo, hi := 0, n-1
+		for lo <= hi {
+			mid := int(uint(lo+hi) >> 1)
+			rec := 4 + 6*mid
 			start, end := font.Be16(c, rec), font.Be16(c, rec+2)
-			if gid >= start && gid <= end {
+			switch {
+			case gid < start:
+				hi = mid - 1
+			case gid > end:
+				lo = mid + 1
+			default:
 				return font.Be16(c, rec+4) + (gid - start), true
 			}
 		}

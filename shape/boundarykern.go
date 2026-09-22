@@ -108,7 +108,7 @@ func (sh shaper) kernAcross(buf, before, after []Glyph) {
 			// because a glyph a lookup ignores does not break a pair.
 			if p, ok := lastNotIgnored(sh.l, kl.flags, before); ok {
 				if i, ok := firstNotIgnored(sh.l, kl.flags, buf); ok {
-					if k, ok := kl.pairs[[2]int{before[p].GID, buf[i].GID}]; ok {
+					if k, ok := kl.pair(before[p].GID, buf[i].GID); ok {
 						buf[i].XOffset += sh.f.scale(int(k.secondX))
 						buf[i].YOffset += sh.f.scale(int(k.secondY))
 						buf[i].XAdvance += sh.f.scale(int(k.secondAdvance))
@@ -119,7 +119,7 @@ func (sh shaper) kernAcross(buf, before, after []Glyph) {
 		if len(after) > 0 {
 			if i, ok := lastNotIgnored(sh.l, kl.flags, buf); ok {
 				if n, ok := firstNotIgnored(sh.l, kl.flags, after); ok {
-					if k, ok := kl.pairs[[2]int{buf[i].GID, after[n].GID}]; ok {
+					if k, ok := kl.pair(buf[i].GID, after[n].GID); ok {
 						buf[i].XOffset += sh.f.scale(int(k.firstX))
 						buf[i].YOffset += sh.f.scale(int(k.firstY))
 						buf[i].XAdvance += sh.f.scale(int(k.firstAdvance))

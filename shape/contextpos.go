@@ -43,14 +43,14 @@ import "github.com/mgilbir/forme/font"
 // The list is not read otherwise. It is a second parse of a table that is
 // already in flat form, and no font without a contextual rule has any use for
 // it.
-func (l *layout) readContextualPositioning(gpos []byte, feats tableFeatures) {
-	byTag := featureLookupIndices(gpos, feats)
+func (l *layout) readContextualPositioning(gpos []byte, idx *featureIndex) {
+	byTag := idx.lookupIndices()
 	if len(byTag) == 0 {
 		return
 	}
 	all := gposLookups(gpos)
 	seen := map[int]bool{}
-	for _, tag := range featureTags(gpos, feats.sel) {
+	for _, tag := range idx.tags {
 		for _, idx := range byTag[tag] {
 			if idx < 0 || idx >= len(all) || seen[idx] {
 				continue
@@ -140,12 +140,26 @@ func (sh shaper) applyGPOSAt(idx int, buf []Glyph, at, depth int) int {
 // Applying it twice is harmless — placeMark sets the offsets rather than adding
 // to them — which is what lets this coexist with the flat pass for a lookup that
 // is both named by a feature and reached from a rule. Noto Serif Tibetan has one.
+//
+// # Nothing is read that is not asked about
+//
+// The subtable is searched, not read: the mark's coverage index, its one
+// record in the mark array, the base's coverage index and its one anchor for
+// the mark's class — four lookups into the bytes, as HarfBuzz does it. This
+// read the whole subtable into maps at every application, both coverages and
+// every anchor, and a run of marks reaching a subtable whose coverage named
+// the whole glyph space paid for the glyph space at each of them; a budget on
+// the run was what stopped it, and it metered the expansion rather than
+// removing it.
 func (sh shaper) markAttachAt(sub []byte, buf []Glyph, at, flags int, mkmk bool) int {
-	st, ok := readMarkSubtable(sub, 0, false, sh.covWork)
-	if !ok {
+	if len(sub) < 12 || font.Be16(sub, 0) != 1 {
 		return 0
 	}
-	mark, covered := st.marks[buf[at].GID]
+	classCount := font.Be16(sub, 6)
+	if classCount <= 0 || classCount > 1024 {
+		return 0
+	}
+	mark, covered := markRecordAt(sub, buf[at].GID, classCount)
 	if !covered {
 		return 0
 	}
@@ -169,12 +183,49 @@ func (sh shaper) markAttachAt(sub []byte, buf []Glyph, at, flags int, mkmk bool)
 	if j < 0 || sh.l.isMark(buf[j]) != mkmk {
 		return 0
 	}
-	base, has := st.bases[key2{buf[j].GID, mark.class}]
+	base, has := baseAnchorAt(sub, buf[j].GID, mark.class, classCount)
 	if !has {
 		return 0
 	}
 	sh.placeMark(buf, at, j, mark.anchor, base)
 	return 1
+}
+
+// markRecordAt is a mark's class and anchor in a mark-attachment subtable, if
+// the subtable covers it.
+func markRecordAt(sub []byte, gid, classCount int) (markAnchor, bool) {
+	i, ok := coverageIndex(sub, font.Be16(sub, 2), gid)
+	off := font.Be16(sub, 8)
+	if !ok || off <= 0 || off+2 > len(sub) {
+		return markAnchor{}, false
+	}
+	ma := sub[off:]
+	rec := 2 + 4*i
+	if i >= font.Be16(ma, 0) || rec+4 > len(ma) {
+		return markAnchor{}, false
+	}
+	class := font.Be16(ma, rec)
+	a, ok := readAnchor(ma, font.Be16(ma, rec+2))
+	if !ok || class >= classCount {
+		return markAnchor{}, false
+	}
+	return markAnchor{class: class, anchor: a}, true
+}
+
+// baseAnchorAt is where a mark-to-base or mark-to-mark subtable says a glyph
+// receives a mark of a class, if the subtable covers the glyph and states one.
+func baseAnchorAt(sub []byte, gid, class, classCount int) (anchor, bool) {
+	i, ok := coverageIndex(sub, font.Be16(sub, 4), gid)
+	off := font.Be16(sub, 10)
+	if !ok || off <= 0 || off+2 > len(sub) {
+		return anchor{}, false
+	}
+	ba := sub[off:]
+	rec := 2 + (i*classCount+class)*2
+	if i >= font.Be16(ba, 0) || rec+2 > len(ba) {
+		return anchor{}, false
+	}
+	return readAnchor(ba, font.Be16(ba, rec))
 }
 
 // positioningContext and chainedPositioningContext match a type 7 or type 8
@@ -275,8 +326,11 @@ func (sh shaper) pairPosAt(sub []byte, buf []Glyph, at, flags int) int {
 		if len(sub) < 16 {
 			return 0
 		}
-		c1 := classDef(sub, font.Be16(sub, 8))[buf[at].GID]
-		c2 := classDef(sub, font.Be16(sub, 10))[buf[next].GID]
+		// Each class is searched for in its table rather than read out of a
+		// map of every glyph the table names, which was two maps of up to the
+		// whole glyph space built at every application.
+		c1 := classAt(sub, font.Be16(sub, 8), buf[at].GID)
+		c2 := classAt(sub, font.Be16(sub, 10), buf[next].GID)
 		n1, n2 := font.Be16(sub, 12), font.Be16(sub, 14)
 		size := valueSize(format1) + valueSize(format2)
 		off := 16 + (c1*n2+c2)*size

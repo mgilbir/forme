@@ -31,7 +31,9 @@ func wideCoverageFont(records int) []byte {
 	binary.BigEndian.PutUint16(sub[0:], 1)      // posFormat 1
 	binary.BigEndian.PutUint16(sub[2:], 12)     // coverage offset
 	binary.BigEndian.PutUint16(sub[4:], 0x0004) // XAdvance only
-	sub = append(sub, make([]byte, 6)...)       // the value record
+	// The value record: an advance of one unit, so that the adjustment is
+	// something and the reader has to visit every glyph it applies to.
+	sub = append(sub, 0, 1, 0, 0, 0, 0)
 	sub = append(sub, coverageFormat2(records)...)
 
 	return fonttest.SFNT(fonttest.SFNTOptions{
@@ -134,8 +136,12 @@ func TestAnOrdinaryCoverageIsReadWhole(t *testing.T) {
 	// An offset of zero is "no coverage here", so the table sits where a
 	// subtable would put it.
 	sub := append(make([]byte, 8), table...)
-	budget := coverageBudget(sub)
-	got := coverageGlyphs(sub, 8, &budget)
+	l := &layout{covWork: coverageBudget(sub)}
+	got := map[int]int{}
+	l.eachCovered(sub, 8, func(index, gid int) bool {
+		got[index] = gid
+		return true
+	})
 	if len(got) != 16+1+200 {
 		t.Fatalf("the table names %d glyphs, want %d", len(got), 16+1+200)
 	}
@@ -154,58 +160,65 @@ func TestAnOrdinaryCoverageIsReadWhole(t *testing.T) {
 // may point at the same record over and over.
 func TestTheCoverageBudgetIsSharedAcrossTheTable(t *testing.T) {
 	sub := append(make([]byte, 8), coverageFormat2(1)...)
-	budget := 100
-	if got := coverageGlyphs(sub, 8, &budget); len(got) != 100 {
-		t.Errorf("a budget of 100 produced %d glyphs", len(got))
+	l := &layout{covWork: 100}
+	count := func() int {
+		n := 0
+		l.eachCovered(sub, 8, func(int, int) bool { n++; return true })
+		return n
 	}
-	if budget != 0 {
-		t.Errorf("the budget is %d after being spent, want 0", budget)
+	if got := count(); got != 100 {
+		t.Errorf("a budget of 100 produced %d glyphs", got)
 	}
-	if got := coverageGlyphs(sub, 8, &budget); len(got) != 0 {
+	if l.covWork != 0 {
+		t.Errorf("the budget is %d after being spent, want 0", l.covWork)
+	}
+	if got := count(); got != 0 {
 		t.Errorf("a spent budget produced %d glyphs; the allowance is the table's "+
-			"and not each call's", len(got))
+			"and not each call's", got)
+	}
+	if !l.workSpent {
+		t.Error("the allowance ran out and the layout does not know it did; " +
+			"it could not say so")
 	}
 }
 
 // TestAnUnbudgetedReaderExpandsNoCoverage pins the fail-closed answer, the same
-// one an unbudgeted shaper gets from recurse. Every reader draws on either the
-// layout being built or the run being shaped, so one holding neither was
-// assembled outside both — which is the state the bound exists to make
-// impossible.
+// one an unbudgeted shaper gets from recurse. Every reader draws on the layout
+// being built, so one with no allowance was assembled outside it — which is
+// the state the bound exists to make impossible.
 func TestAnUnbudgetedReaderExpandsNoCoverage(t *testing.T) {
 	sub := append(make([]byte, 8), coverageFormat2(1)...)
-	if got := coverageGlyphs(sub, 8, nil); got != nil {
-		t.Errorf("a reader with no allowance expanded %d glyphs", len(got))
+	l := &layout{}
+	n := 0
+	l.eachCovered(sub, 8, func(int, int) bool { n++; return true })
+	if n != 0 {
+		t.Errorf("a reader with no allowance expanded %d glyphs", n)
 	}
 }
 
-// TestTheRunAllowanceCoversMoreThanARunAsks is the shaping-time half of the
-// bound. A mark subtable a rule names is read where it is applied rather than
-// at load, so the layout's allowance cannot cover it and the run needs its own.
-//
-// A limit a real run reaches is a correctness bug rather than a safety
-// property, so what this asserts is the headroom: a whole glyph space for every
-// glyph in the run, against the few hundred glyphs a real mark coverage names.
-func TestTheRunAllowanceCoversMoreThanARunAsks(t *testing.T) {
-	// A word, and a paragraph.
-	for _, glyphs := range []int{1, 5, 500} {
-		got := *markCoverageBudget(glyphs)
-		// Two coverages a subtable, and no run applies more mark subtables than
-		// it has glyphs.
-		const realMarkCoverage = 512
-		if want := 2 * glyphs * realMarkCoverage; got < want {
-			t.Errorf("a run of %d glyphs is allowed %d, which is less than the %d a "+
-				"real face could ask for", glyphs, got, want)
-		}
+// classTableOf is a classTable holding the given classes, for a test that
+// builds a layout by hand.
+func classTableOf(classes map[int]int) classTable {
+	highest := -1
+	for g := range classes {
+		highest = max(highest, g)
 	}
-	// And it stops growing, so that a very long run cannot ask for unbounded
-	// work.
-	huge, longer := *markCoverageBudget(1 << 20), *markCoverageBudget(1 << 30)
-	if huge != longer {
-		t.Errorf("a run of 2^20 glyphs is allowed %d and one of 2^30 is allowed %d; "+
-			"the allowance has no ceiling", huge, longer)
+	c := classTable{dense: make([]uint16, highest+1), named: len(classes) > 0}
+	for g, class := range classes {
+		c.dense[g] = uint16(class)
 	}
-	if huge <= 0 {
-		t.Errorf("a very long run is allowed %d, which refuses every coverage", huge)
+	return c
+}
+
+// coverageOf is a format 1 coverage table naming the given glyphs.
+func coverageOf(gids ...int) coverageTable {
+	sorted := append([]int(nil), gids...)
+	sortInts(sorted)
+	b := make([]byte, 2+4+2*len(sorted)) // two bytes in front: a zero offset is no table
+	binary.BigEndian.PutUint16(b[2:], 1)
+	binary.BigEndian.PutUint16(b[4:], uint16(len(sorted)))
+	for i, g := range sorted {
+		binary.BigEndian.PutUint16(b[6+2*i:], uint16(g))
 	}
+	return coverageTable{base: b, off: 2}
 }

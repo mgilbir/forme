@@ -39,13 +39,14 @@ import "github.com/mgilbir/forme/font"
 // adjustment to a glyph wherever it occurs. A font stating it contextually
 // would be stating something else, and the trim would not be a property of the
 // glyph any more.
-func (l *layout) readHalfWidth(gpos []byte, feats tableFeatures) {
+func (l *layout) readHalfWidth(gpos []byte, idx *featureIndex) {
 	budget := subtableBudget(gpos)
-	for _, tag := range featureTags(gpos, feats.sel) {
+	for _, tag := range idx.tags {
 		if tag != "halt" {
 			continue
 		}
-		for _, lookup := range featureLookups(gpos, tag, feats) {
+		lookups, _ := idx.lookupsFor(tag)
+		for _, lookup := range lookups {
 			kind, _, _, subs := subtables(lookup, 9, &budget)
 			if kind != 1 {
 				continue
@@ -69,7 +70,6 @@ func (l *layout) halfWidthSubtable(sub []byte) {
 	if len(sub) < 6 {
 		return
 	}
-	covered := coverageGlyphs(sub, font.Be16(sub, 2), &l.covWork)
 	format := font.Be16(sub, 0)
 	valueFormat := font.Be16(sub, 4)
 	size := valueSize(valueFormat)
@@ -79,20 +79,22 @@ func (l *layout) halfWidthSubtable(sub []byte) {
 		if adj == (singleAdjust{}) {
 			return
 		}
-		for _, gid := range covered {
+		l.eachCovered(sub, font.Be16(sub, 2), func(_, gid int) bool {
 			l.setHalfWidth(gid, adj)
-		}
+			return true
+		})
 	case 2:
 		n := font.Be16(sub, 6)
-		for i := 0; i < n && i < len(covered); i++ {
+		l.eachCovered(sub, font.Be16(sub, 2), func(i, gid int) bool {
 			off := 8 + i*size
-			if off+size > len(sub) {
-				break
+			if i >= n || off+size > len(sub) {
+				return true
 			}
 			if adj := readValueRecord(sub[off:], valueFormat); adj != (singleAdjust{}) {
-				l.setHalfWidth(covered[i], adj)
+				l.setHalfWidth(gid, adj)
 			}
-		}
+			return true
+		})
 	}
 }
 

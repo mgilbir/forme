@@ -108,7 +108,7 @@ func (sh shaper) position(buf []Glyph) {
 				prev = i
 				continue
 			}
-			if k, ok := kl.pairs[[2]int{buf[prev].GID, buf[i].GID}]; ok {
+			if k, ok := kl.pair(buf[prev].GID, buf[i].GID); ok {
 				// Both glyphs, and both what a record can say about each. A
 				// placement moves the glyph and an advance moves what comes
 				// after it, and a right-to-left font uses both for what a Latin
@@ -505,7 +505,7 @@ type singleAdjust struct {
 // one way for one and the other way for the other. Merging them sets a Latin
 // word's whole cursive chain from the Arabic lookup's flag — precisely the "a
 // rule meant for another script" this selection exists to stop.
-func (l *layout) readGPOSAttachment(gpos []byte, feats tableFeatures) {
+func (l *layout) readGPOSAttachment(gpos []byte, idx *featureIndex) {
 	// One budget for every subtable this reader may take, shared across the
 	// whole table — see subtables.
 	budget := subtableBudget(gpos)
@@ -517,11 +517,11 @@ func (l *layout) readGPOSAttachment(gpos []byte, feats tableFeatures) {
 	// its lookups in one list and their indices are the order it means.
 	var order []int
 	byIndex := map[int][]byte{}
-	for _, tag := range featureTags(gpos, feats.sel) {
+	for _, tag := range idx.tags {
 		if !defaultPositionFeatures[tag] {
 			continue
 		}
-		lookups, idxs := featureLookupsIndexed(gpos, tag, feats)
+		lookups, idxs := idx.lookupsFor(tag)
 		for i, lookup := range lookups {
 			if _, seen := byIndex[idxs[i]]; seen {
 				continue
@@ -531,8 +531,11 @@ func (l *layout) readGPOSAttachment(gpos []byte, feats tableFeatures) {
 		}
 	}
 	sortInts(order)
-	for _, idx := range order {
-		lookup := byIndex[idx]
+	// Each mark subtable read so far, by where it sits in the table, so that a
+	// subtable several lookups name is read once — see readMarkAttachment.
+	read := map[int]*markAttachment{}
+	for _, i := range order {
+		lookup := byIndex[i]
 		kind, flags, markSet, subs := subtables(lookup, 9, &budget)
 		switch kind {
 		case 4, 5:
@@ -540,9 +543,9 @@ func (l *layout) readGPOSAttachment(gpos []byte, feats tableFeatures) {
 			// they are alternatives for the same mark, decided by which
 			// lookup covers the glyph the mark is attaching to, and a
 			// ligature glyph may be covered by either.
-			l.readMarkAttachment(subs, flags, markSet, kind == 5, false)
+			l.readMarkAttachment(subs, flags, markSet, kind == 5, false, read)
 		case 6:
-			l.readMarkAttachment(subs, flags, markSet, false, true)
+			l.readMarkAttachment(subs, flags, markSet, false, true, read)
 		default:
 			for _, sub := range subs {
 				switch kind {
@@ -589,44 +592,12 @@ var defaultPositionFeatures = map[string]bool{
 	"mkmk": true, // mark to mark
 }
 
-// featureTags lists every feature tag a layout table declares and the selection
-// admits, in order.
-func featureTags(t []byte, sel featureSet) []string {
-	off := font.Be16(t, 6)
-	if off <= 0 || off+2 > len(t) {
-		return nil
-	}
-	list := t[off:]
-	n := font.Be16(list, 0)
-	if n > maxDeclaredList {
-		n = maxDeclaredList
-	}
-	seen := map[string]bool{}
-	var out []string
-	for i := 0; i < n; i++ {
-		rec := 2 + 6*i
-		if rec+6 > len(list) {
-			break
-		}
-		if !sel.selects(i) {
-			continue
-		}
-		tag := string(list[rec : rec+4])
-		if !seen[tag] {
-			seen[tag] = true
-			out = append(out, tag)
-		}
-	}
-	return out
-}
-
 // singlePosSubtable reads a GPOS type 1 subtable: one adjustment for every
 // covered glyph (format 1) or one per glyph (format 2).
 func (l *layout) singlePosSubtable(sub []byte) {
 	if len(sub) < 6 {
 		return
 	}
-	covered := coverageGlyphs(sub, font.Be16(sub, 2), &l.covWork)
 	format := font.Be16(sub, 0)
 	valueFormat := font.Be16(sub, 4)
 	size := valueSize(valueFormat)
@@ -636,20 +607,22 @@ func (l *layout) singlePosSubtable(sub []byte) {
 		if adj == (singleAdjust{}) {
 			return
 		}
-		for _, gid := range covered {
+		l.eachCovered(sub, font.Be16(sub, 2), func(_, gid int) bool {
 			l.singlePos[gid] = adj
-		}
+			return true
+		})
 	case 2:
 		n := font.Be16(sub, 6)
-		for i := 0; i < n && i < len(covered); i++ {
+		l.eachCovered(sub, font.Be16(sub, 2), func(i, gid int) bool {
 			off := 8 + i*size
-			if off+size > len(sub) {
-				break
+			if i >= n || off+size > len(sub) {
+				return true
 			}
 			if adj := readValueRecord(sub[off:], valueFormat); adj != (singleAdjust{}) {
-				l.singlePos[covered[i]] = adj
+				l.singlePos[gid] = adj
 			}
-		}
+			return true
+		})
 	}
 }
 
@@ -682,12 +655,11 @@ func (l *layout) cursivePos(sub []byte) {
 	if len(sub) < 6 || font.Be16(sub, 0) != 1 {
 		return
 	}
-	covered := coverageGlyphs(sub, font.Be16(sub, 2), &l.covWork)
 	n := font.Be16(sub, 4)
-	for i := 0; i < n && i < len(covered); i++ {
+	l.eachCovered(sub, font.Be16(sub, 2), func(i, gid int) bool {
 		rec := 6 + 4*i
-		if rec+4 > len(sub) {
-			break
+		if i >= n || rec+4 > len(sub) {
+			return true
 		}
 		var c cursiveAnchors
 		if a, ok := readAnchor(sub, font.Be16(sub, rec)); ok {
@@ -697,9 +669,10 @@ func (l *layout) cursivePos(sub []byte) {
 			c.exit, c.hasExit = a, true
 		}
 		if c.hasEntry || c.hasExit {
-			l.cursive[covered[i]] = c
+			l.cursive[gid] = c
 		}
-	}
+		return true
+	})
 }
 
 // readMarkAttachment reads all the subtables of one mark-to-base or
@@ -717,18 +690,47 @@ func (l *layout) cursivePos(sub []byte) {
 // The two kinds have the same shape — a mark array and an array of attachment
 // points, one per class — and differ only in what the second array is indexed
 // by, so one reader serves both.
-func (l *layout) readMarkAttachment(subs [][]byte, flags, markSet int, ligature, mkmk bool) {
+func (l *layout) readMarkAttachment(subs [][]byte, flags, markSet int, ligature, mkmk bool,
+	read map[int]*markAttachment) {
+
 	lookup := l.markLookups
 	l.markLookups++
+	// A subtable this lookup names twice is kept once: within a lookup the
+	// first subtable that applies wins, so the second copy can never be the
+	// one that applies, and every copy kept is one more for every mark in
+	// every run to be tried against.
+	seen := map[int]bool{}
 	for _, sub := range subs {
-		st, ok := readMarkSubtable(sub, lookup, ligature, &l.covWork)
-		if !ok {
+		// Where the subtable sits — every one runs to the end of the table —
+		// and which of the two ways its base array is read, since a subtable
+		// named as mark-to-ligature reads the same bytes differently.
+		key := 2 * len(sub)
+		if ligature {
+			key++
+		}
+		if seen[key] {
 			continue
 		}
-		st.flags, st.markSet = flags, markSet
-		for gid := range st.marks {
-			l.markGlyphs[gid] = true
+		seen[key] = true
+		// A subtable another lookup already named is not read again: the
+		// anchors are the same bytes whoever names them, and only the lookup
+		// they are applied under differs. Its maps are shared, and never
+		// written once read.
+		parsed, done := read[key]
+		if !done {
+			if st, ok := l.readMarkSubtable(sub, ligature); ok {
+				parsed = &st
+				for gid := range st.marks {
+					l.markGlyphs[gid] = true
+				}
+			}
+			read[key] = parsed
 		}
+		if parsed == nil {
+			continue
+		}
+		st := *parsed
+		st.lookup, st.flags, st.markSet = lookup, flags, markSet
 		if mkmk {
 			l.markMark = append(l.markMark, st)
 		} else {
@@ -738,12 +740,14 @@ func (l *layout) readMarkAttachment(subs [][]byte, flags, markSet int, ligature,
 }
 
 // readMarkSubtable reads one mark-attachment subtable.
-func readMarkSubtable(sub []byte, lookup int, ligature bool, budget *int) (markAttachment, bool) {
+//
+// Each coverage is walked by its own records and each array read at the
+// index a glyph's record gives it, so what is built is what the subtable
+// states and nothing is filled in between.
+func (l *layout) readMarkSubtable(sub []byte, ligature bool) (markAttachment, bool) {
 	if len(sub) < 12 || font.Be16(sub, 0) != 1 {
 		return markAttachment{}, false
 	}
-	markCoverage := coverageGlyphs(sub, font.Be16(sub, 2), budget)
-	baseCoverage := coverageGlyphs(sub, font.Be16(sub, 4), budget)
 	classCount := font.Be16(sub, 6)
 	markArrayOff := font.Be16(sub, 8)
 	baseArrayOff := font.Be16(sub, 10)
@@ -751,34 +755,34 @@ func readMarkSubtable(sub []byte, lookup int, ligature bool, budget *int) (markA
 		return markAttachment{}, false
 	}
 	st := markAttachment{
-		lookup: lookup,
-		marks:  map[int]markAnchor{},
-		bases:  map[key2]anchor{},
+		marks: map[int]markAnchor{},
+		bases: map[key2]anchor{},
 	}
 
 	// The mark array: a class and an anchor for each covered mark.
 	if markArrayOff > 0 && markArrayOff+2 <= len(sub) {
 		ma := sub[markArrayOff:]
 		n := font.Be16(ma, 0)
-		for i := 0; i < n && i < len(markCoverage); i++ {
+		l.eachCovered(sub, font.Be16(sub, 2), func(i, gid int) bool {
 			rec := 2 + 4*i
-			if rec+4 > len(ma) {
-				break
+			if i >= n || rec+4 > len(ma) {
+				return true
 			}
 			class := font.Be16(ma, rec)
 			a, ok := readAnchor(ma, font.Be16(ma, rec+2))
 			if !ok || class >= classCount {
-				continue
+				return true
 			}
-			st.marks[markCoverage[i]] = markAnchor{class: class, anchor: a}
-		}
+			st.marks[gid] = markAnchor{class: class, anchor: a}
+			return true
+		})
 	}
 
 	switch {
 	case ligature:
-		readLigatureArray(sub, baseArrayOff, baseCoverage, classCount, &st)
+		l.readLigatureArray(sub, baseArrayOff, classCount, &st)
 	default:
-		readBaseArray(sub, baseArrayOff, baseCoverage, classCount, &st)
+		l.readBaseArray(sub, baseArrayOff, classCount, &st)
 	}
 	if len(st.marks) == 0 || (len(st.bases) == 0 && len(st.components) == 0) {
 		return markAttachment{}, false
@@ -787,13 +791,20 @@ func readMarkSubtable(sub []byte, lookup int, ligature bool, budget *int) (markA
 }
 
 // readBaseArray reads a BaseArray: one anchor per class for each covered base.
-func readBaseArray(sub []byte, off int, coverage []int, classCount int, st *markAttachment) {
+func (l *layout) readBaseArray(sub []byte, off, classCount int, st *markAttachment) {
 	if off <= 0 || off+2 > len(sub) {
 		return
 	}
 	ba := sub[off:]
 	n := font.Be16(ba, 0)
-	for i := 0; i < n && i < len(coverage); i++ {
+	l.eachCovered(sub, font.Be16(sub, 4), func(i, gid int) bool {
+		if i >= n {
+			return true
+		}
+		// A row of anchors per base, charged as a row: bases may share one.
+		if !l.spend(classCount) {
+			return false
+		}
 		for c := 0; c < classCount; c++ {
 			rec := 2 + (i*classCount+c)*2
 			if rec+2 > len(ba) {
@@ -803,9 +814,10 @@ func readBaseArray(sub []byte, off int, coverage []int, classCount int, st *mark
 			if !ok {
 				continue
 			}
-			st.bases[key2{coverage[i], c}] = a
+			st.bases[key2{gid, c}] = a
 		}
-	}
+		return true
+	})
 }
 
 // readLigatureArray reads a LigatureArray, which is the one thing that makes a
@@ -817,28 +829,33 @@ func readBaseArray(sub []byte, off int, coverage []int, classCount int, st *mark
 // giving each ligature not one anchor per class but one per component per class,
 // and the shaper picks the component from which part of the text the mark came
 // from — which is why forming a ligature has to record that.
-func readLigatureArray(sub []byte, off int, coverage []int, classCount int, st *markAttachment) {
+func (l *layout) readLigatureArray(sub []byte, off, classCount int, st *markAttachment) {
 	if off <= 0 || off+2 > len(sub) {
 		return
 	}
 	la := sub[off:]
 	n := font.Be16(la, 0)
 	st.components = map[key2][]anchor{}
-	for i := 0; i < n && i < len(coverage); i++ {
+	l.eachCovered(sub, font.Be16(sub, 4), func(i, gid int) bool {
 		rec := 2 + 2*i
-		if rec+2 > len(la) {
-			break
+		if i >= n || rec+2 > len(la) {
+			return true
 		}
 		attachOff := font.Be16(la, rec)
 		if attachOff <= 0 || attachOff+2 > len(la) {
-			continue
+			return true
 		}
 		attach := la[attachOff:]
 		count := font.Be16(attach, 0)
 		// A ligature of more components than any font ever writes is malformed,
 		// and the count is a length this would otherwise allocate from.
 		if count < 1 || count > maxLigatureComponents {
-			continue
+			return true
+		}
+		// A table of anchors per ligature, charged as one: ligatures may share
+		// one.
+		if !l.spend(count * classCount) {
+			return false
 		}
 		for c := 0; c < classCount; c++ {
 			anchors := make([]anchor, 0, count)
@@ -855,10 +872,11 @@ func readLigatureArray(sub []byte, off int, coverage []int, classCount int, st *
 			// stored, so that attachmentFor can tell "no anchor" from "an
 			// anchor at the origin".
 			if any {
-				st.components[key2{coverage[i], c}] = anchors
+				st.components[key2{gid, c}] = anchors
 			}
 		}
-	}
+		return true
+	})
 	if len(st.components) == 0 {
 		st.components = nil
 	}
@@ -948,7 +966,7 @@ func readAnchor(base []byte, off int) (anchor, bool) {
 // first of two stacked accents is a mark that no *mark-to-mark* array lists as
 // one, because in that lookup it is the base.
 func (l *layout) isMark(g Glyph) bool {
-	if len(l.glyphClass) != 0 {
+	if l.glyphClass.named {
 		// A font that classifies its glyphs has answered for all of them: one it
 		// leaves out is not a mark, whatever else names it. Falling back to the
 		// mark arrays here reads a glyph as a mark because *some* lookup places
@@ -957,7 +975,7 @@ func (l *layout) isMark(g Glyph) bool {
 		// form that GDEF leaves unclassified and a mark-to-base lookup names as
 		// the base — and calling it a mark hid it from the mark that belongs on
 		// it.
-		return l.glyphClass[g.GID] == classMark
+		return l.glyphClass.of(g.GID) == classMark
 	}
 	// No GDEF at all: what the character said, falling back to the mark arrays
 	// for a glyph that came from no character of its own — one a substitution
