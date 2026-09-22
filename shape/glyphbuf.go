@@ -1,5 +1,7 @@
 package shape
 
+import "unicode/utf8"
+
 // The shaped-glyph model.
 //
 // Shape returns spans, which can say only one thing about a glyph: move the pen
@@ -219,15 +221,21 @@ type shapeContext struct {
 // the useful context is everything up to and including the first non-transparent
 // character on each side, and carrying more would be decoding characters whose
 // answer is already settled.
+//
+// The side before is read from its end backwards, so that what it costs is
+// what the scan uses and not the length of everything a caller put in front of
+// the run.
 func (c shapeContext) runes() (before, after []rune) {
-	for _, r := range c.before {
+	for s := c.before; s != ""; {
+		r, size := utf8.DecodeLastRuneInString(s)
+		s = s[:len(s)-size]
 		before = append(before, r)
-	}
-	for i := len(before) - 1; i >= 0; i-- {
-		if joiningTypeOf(before[i]) != joinT {
-			before = before[i:]
+		if joiningTypeOf(r) != joinT {
 			break
 		}
+	}
+	for i, j := 0, len(before)-1; i < j; i, j = i+1, j-1 {
+		before[i], before[j] = before[j], before[i]
 	}
 	for _, r := range c.after {
 		after = append(after, r)
@@ -236,6 +244,36 @@ func (c shapeContext) runes() (before, after []rune) {
 		}
 	}
 	return before, after
+}
+
+// contextRunes is how much of the text either side of a run is carried to it as
+// context when a string is cut into runs by direction.
+//
+// Everything that reads a context reads an end of it: the joining scan walks
+// out to the first character that is not transparent, and the pairs across a
+// run's edge are looked up in boundaryWindow characters. So a bounded end is
+// all that is needed, and carrying each whole side cost a copy of the string
+// per run. Twice boundaryWindow leaves the joining scan room to step over the
+// marks a letter carries, which HarfBuzz bounds at five characters of context
+// in all; a letter with more than sixty marks between it and the edge of a run
+// is joined as though they were the whole of its context.
+const contextRunes = 2 * boundaryWindow
+
+// contextBefore is the end of outer+inner that a run after them needs, built
+// without copying either whole.
+func contextBefore(outer, inner string) string {
+	if tail := lastRunes(inner, contextRunes); len(tail) < len(inner) {
+		return tail
+	}
+	return lastRunes(outer, contextRunes-utf8.RuneCountInString(inner)) + inner
+}
+
+// contextAfter is the start of inner+outer that a run before them needs.
+func contextAfter(inner, outer string) string {
+	if head := firstRunes(inner, contextRunes); len(head) < len(inner) {
+		return head
+	}
+	return inner + firstRunes(outer, contextRunes-utf8.RuneCountInString(inner))
 }
 
 // ShapeGlyphsWith is ShapeGlyphs with extra features named by the caller: the
@@ -260,7 +298,13 @@ func (f *Face) shapeGlyphsWith(s string, extra []string, ctx shapeContext) ([]Gl
 		out     []Glyph
 		missing int
 	)
-	for _, r := range runs {
+	// Every run's script at once — see scriptsAround for why not one by one.
+	pieces := make([][2]int, len(runs))
+	for i, r := range runs {
+		pieces[i] = [2]int{r.Start, r.End}
+	}
+	scripts := scriptsAround(s, pieces)
+	for i, r := range runs {
 		piece := s[r.Start:r.End]
 		// A run inside the string has the rest of the string for context, and
 		// the caller's context outside that. The two are concatenated rather
@@ -272,9 +316,14 @@ func (f *Face) shapeGlyphsWith(s string, extra []string, ctx shapeContext) ([]Gl
 		// character followed by the text — see ShapedText — so the text is never
 		// the first run of the string, and the override alone stood in for the
 		// word the letters were supposed to join to.
+		//
+		// Only the ends that touch the run are kept — see contextRunes. The
+		// whole of each side was concatenated for every run, which copied the
+		// string once per run: a run of digits every other character is a run
+		// per two characters, and the copies were quadratic in the text.
 		inner := shapeContext{
-			before: ctx.before + s[:r.Start],
-			after:  s[r.End:] + ctx.after,
+			before: contextBefore(ctx.before, s[:r.Start]),
+			after:  contextAfter(s[r.End:], ctx.after),
 			kerns:  ctx.kerns,
 			// What the caller turned off is off for every run of the string.
 			// It was dropped here, so a document that said "font-kerning: none"
@@ -294,7 +343,7 @@ func (f *Face) shapeGlyphsWith(s string, extra []string, ctx shapeContext) ([]Gl
 		if r.End == len(s) {
 			inner.mergeAfter = ctx.mergeAfter
 		}
-		glyphs, gone := f.shapeGlyphsIn(piece, scriptAround(s, r.Start, r.End), r.RTL(), extra, inner)
+		glyphs, gone := f.shapeGlyphsIn(piece, scripts[i], r.RTL(), extra, inner)
 		missing += gone
 		for i := range glyphs {
 			glyphs[i].Cluster += r.Start

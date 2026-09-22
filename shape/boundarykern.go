@@ -1,5 +1,7 @@
 package shape
 
+import "unicode/utf8"
+
 // Pair kerning across the boundary between two runs.
 //
 // CSS Text §8.1 says an inline element boundary does not break shaping, and a
@@ -75,21 +77,15 @@ func firstRunes(s string, n int) string {
 }
 
 func lastRunes(s string, n int) string {
-	if n <= 0 {
-		return ""
+	// From the end backwards, so that the cost is the n characters and not
+	// the string: it walked the whole string forwards, and a caller's context
+	// may be everything before the run.
+	i := len(s)
+	for ; n > 0 && i > 0; n-- {
+		_, size := utf8.DecodeLastRuneInString(s[:i])
+		i -= size
 	}
-	// The starts of the last n characters, kept in a ring so that the string is
-	// walked once and nothing is allocated per character.
-	starts, at, seen := make([]int, n), 0, 0
-	for i := range s {
-		starts[at] = i
-		at = (at + 1) % n
-		seen++
-	}
-	if seen <= n {
-		return s
-	}
-	return s[starts[at]:]
+	return s[i:]
 }
 
 // kernAcross applies the pair kerning between a run's edge glyph and its

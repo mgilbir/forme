@@ -296,12 +296,17 @@ func (sh shaper) attachMarks(buf []Glyph) {
 	// base of another — so this tracks the one prevNonMark asked, and asks it
 	// once per glyph instead of once per pair.
 	lastNonMark := -1
+	// And for mark-to-mark, the nearest glyph before i that each of its
+	// subtables does not step over, carried forward the same way — see
+	// markStackTracker.
+	stack := newMarkStackTracker(l)
 	for i := range buf {
 		isMark := l.isMark(buf[i])
 		if !l.markGlyphs[buf[i].GID] {
 			if !isMark {
 				lastNonMark = i
 			}
+			stack.passed(buf[i], i)
 			continue
 		}
 		// The letter underneath, and the mark this one stacks on. The two tables
@@ -314,7 +319,7 @@ func (sh shaper) attachMarks(buf []Glyph) {
 				todo = append(todo, pending{i, j, lookup, mark, base})
 			}
 		}
-		if mark, base, at, lookup, ok := l.markMarkAt(buf, i); ok {
+		if mark, base, at, lookup, ok := l.markMarkAt(buf, i, stack); ok {
 			todo = append(todo, pending{i, at, lookup, mark, base})
 		}
 		// After the glyph is dealt with, so that lastNonMark is always the
@@ -322,6 +327,7 @@ func (sh shaper) attachMarks(buf []Glyph) {
 		if !isMark {
 			lastNonMark = i
 		}
+		stack.passed(buf[i], i)
 	}
 	// Stable, so that two attachments a font states in one lookup are still made
 	// in the order the glyphs are written in.
@@ -393,8 +399,7 @@ func markComponent(buf []Glyph, i, j int) int {
 // which is the one thing it exists to find. What is left is the mark filtering
 // set and the mark attachment class, which are exactly the narrowing a font
 // uses to say which marks stack on which.
-func (l *layout) markMarkAt(buf []Glyph, i int) (mark markAnchor, base anchor, at, lookup int, ok bool) {
-	const ignoreFlags = flagIgnoreBaseGlyphs | flagIgnoreLigatures | flagIgnoreMarks
+func (l *layout) markMarkAt(buf []Glyph, i int, stack *markStackTracker) (mark markAnchor, base anchor, at, lookup int, ok bool) {
 	matched := -1
 	for k := range l.markMark {
 		st := &l.markMark[k]
@@ -405,10 +410,7 @@ func (l *layout) markMarkAt(buf []Glyph, i int) (mark markAnchor, base anchor, a
 		if !has {
 			continue
 		}
-		j := i - 1
-		for j >= 0 && l.ignoresIn(st.flags&^ignoreFlags, st.markSet, buf[j]) {
-			j--
-		}
+		j := stack.nearest(k)
 		if j < 0 || !l.isMark(buf[j]) {
 			continue
 		}
@@ -440,6 +442,81 @@ func (l *layout) markMarkAt(buf []Glyph, i int) (mark markAnchor, base anchor, a
 		mark, base, at, matched, ok = m, b, j, st.lookup, true
 	}
 	return mark, base, at, matched, ok
+}
+
+// markStackIgnore are the lookup flags mark-to-mark does not look back past:
+// they are about finding a base, and would have it step over every mark there
+// is, which is the one thing it exists to find. What is left is the mark
+// filtering set and the mark attachment class.
+const markStackIgnore = flagIgnoreBaseGlyphs | flagIgnoreLigatures | flagIgnoreMarks
+
+// markStackTracker is, for each mark-to-mark subtable, the nearest glyph behind
+// the one being placed that the subtable's lookup does not step over — which is
+// the glyph a mark stacks on, if it is a mark.
+//
+// It is carried forward rather than searched for. The search walked back from
+// each mark over every mark its lookup ignores, so a letter carrying a long run
+// of marks outside a lookup's filtering set or attachment class read the run
+// again for every mark in it: "a" with sixteen thousand U+0301 after it, under a
+// lookup whose attachment class they were not in, took 2.8 seconds and climbed
+// by four and a half per doubling. It is the fourth of that shape on this path;
+// lastNonMark in attachMarks was the first.
+//
+// What a lookup with these flags steps over is only ever a mark: the filtering
+// set and the attachment class narrow which *marks* it sees. So the nearest
+// glyph it does not step over is whichever is nearer of the last glyph that is
+// not a mark and the last mark it sees, and the second depends on the lookup
+// only through its flags and set — subtables that share both share a tracker.
+type markStackTracker struct {
+	l *layout
+	// lastNotMark is the last glyph passed that is not a mark as the flags
+	// read it; keys are the distinct flag and set pairs of the subtables, keyOf
+	// each subtable's among them, and lastSeen the last mark each key sees.
+	lastNotMark int
+	keys        []markStackKey
+	keyOf       []int
+	lastSeen    []int
+}
+
+type markStackKey struct{ flags, markSet int }
+
+func newMarkStackTracker(l *layout) *markStackTracker {
+	t := &markStackTracker{l: l, lastNotMark: -1, keyOf: make([]int, len(l.markMark))}
+	index := map[markStackKey]int{}
+	for k := range l.markMark {
+		key := markStackKey{l.markMark[k].flags &^ markStackIgnore, l.markMark[k].markSet}
+		at, seen := index[key]
+		if !seen {
+			at = len(t.keys)
+			index[key] = at
+			t.keys = append(t.keys, key)
+			t.lastSeen = append(t.lastSeen, -1)
+		}
+		t.keyOf[k] = at
+	}
+	return t
+}
+
+// passed records a glyph the pass has finished with.
+func (t *markStackTracker) passed(g Glyph, i int) {
+	if len(t.keys) == 0 {
+		return
+	}
+	if t.l.classOf(g) != classMark {
+		t.lastNotMark = i
+		return
+	}
+	for k, key := range t.keys {
+		if !t.l.ignoresIn(key.flags, key.markSet, g) {
+			t.lastSeen[k] = i
+		}
+	}
+}
+
+// nearest is the nearest glyph behind the current one that mark-to-mark
+// subtable k does not step over, or -1.
+func (t *markStackTracker) nearest(k int) int {
+	return max(t.lastNotMark, t.lastSeen[t.keyOf[k]])
 }
 
 // anchor is a point in a glyph's own coordinate space, in font units.

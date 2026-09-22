@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/mgilbir/forme/font"
 )
@@ -87,8 +88,9 @@ func runScript(s string) uint16 {
 	return scriptUnknown
 }
 
-// scriptAround is the script of a piece of a string, taking the text it sits in
-// where the piece itself decides nothing.
+// scriptsAround is the script of each piece of a string — the pieces given as
+// byte ranges that do not overlap — taking the text a piece sits in where the
+// piece itself decides nothing.
 //
 // A bidirectional run is cut by *direction*, and a run of digits inside Arabic
 // is a run of its own: Arabic-Indic digits are class AN and the letters around
@@ -100,20 +102,64 @@ func runScript(s string) uint16 {
 // UAX #24's resolution: a character of Common or Inherited takes the script
 // around it. Backwards first, because a run of digits belongs to the word it
 // follows, and forwards where there is nothing behind.
-func scriptAround(s string, start, end int) uint16 {
-	if sc := runScript(s[start:end]); sc != scriptUnknown {
-		return sc
+//
+// The pieces are answered together. Answering one at a time walked everything before the piece to find the
+// last character there that decides a script, and a bidirectional run is cut
+// into a piece per stretch of digits: "ب1" sixteen thousand times over is
+// sixteen thousand pieces, and it took four and a half seconds, three quarters
+// of it here. Taken in the order they stand in the string, the pieces share one
+// walk forward for the script behind each and one walk back for the script
+// after, so each character is read a bounded number of times however many
+// pieces there are.
+func scriptsAround(s string, pieces [][2]int) []uint16 {
+	out := make([]uint16, len(pieces))
+	order := make([]int, len(pieces))
+	for i := range order {
+		order[i] = i
 	}
-	last := uint16(scriptUnknown)
-	for _, r := range s[:start] {
-		if sc := scriptOf(r); decides(sc) {
-			last = sc
+	sort.Slice(order, func(a, b int) bool { return pieces[order[a]][0] < pieces[order[b]][0] })
+
+	// Forwards: a piece's own script, and failing that the last one behind it.
+	pending := false
+	pos, last := 0, uint16(scriptUnknown)
+	for _, k := range order {
+		start, end := pieces[k][0], pieces[k][1]
+		for pos < start {
+			r, size := utf8.DecodeRuneInString(s[pos:])
+			if sc := scriptOf(r); decides(sc) {
+				last = sc
+			}
+			pos += size
+		}
+		switch sc := runScript(s[start:end]); {
+		case sc != scriptUnknown:
+			out[k] = sc
+		case last != scriptUnknown:
+			out[k] = last
+		default:
+			out[k] = scriptUnknown
+			pending = true
 		}
 	}
-	if last != scriptUnknown {
-		return last
+	if !pending {
+		return out
 	}
-	return runScript(s[end:])
+	// Backwards, for a piece with nothing behind it: the first script after it.
+	pos, next := len(s), uint16(scriptUnknown)
+	for i := len(order) - 1; i >= 0; i-- {
+		k := order[i]
+		for pos > pieces[k][1] {
+			r, size := utf8.DecodeLastRuneInString(s[:pos])
+			if sc := scriptOf(r); decides(sc) {
+				next = sc
+			}
+			pos -= size
+		}
+		if out[k] == scriptUnknown {
+			out[k] = next
+		}
+	}
+	return out
 }
 
 // scriptTags is the OpenType tags a script selects, most specific first.

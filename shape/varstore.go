@@ -42,9 +42,29 @@ type varStore struct {
 
 // varStoreData is one delta-set group: which regions its columns are, and a row
 // per item.
+//
+// The rows stay the bytes the table holds them in, and delta decodes the one
+// it is asked for. They were decoded whole, each into a slice of its own, and
+// a store's groups are named by offset: a sixty-kilobyte HVAR whose four hundred
+// group offsets all named one block of sixty thousand rows decoded it four
+// hundred times, 733 MB kept for the life of the face. Decoding on demand costs
+// what is asked, and a group named twice is parsed once (parseVarStore).
 type varStoreData struct {
 	regions []int
-	rows    [][]float64
+	rows    []byte
+	count   int
+	// rowSize is each row's length in bytes; the first wordCount columns of a
+	// row are wordSize bytes each and the rest shortSize.
+	rowSize, wordCount, wordSize, shortSize int
+}
+
+// value is column j of row i, which the caller has checked are in the group.
+func (d *varStoreData) value(i, j int) float64 {
+	at := i * d.rowSize
+	if j < d.wordCount {
+		return float64(signedAt(d.rows, at+j*d.wordSize, d.wordSize))
+	}
+	return float64(signedAt(d.rows, at+d.wordCount*d.wordSize+(j-d.wordCount)*d.shortSize, d.shortSize))
 }
 
 func parseVarStore(t []byte) (*varStore, error) {
@@ -85,16 +105,25 @@ func parseVarStore(t []byte) (*varStore, error) {
 	}
 
 	s.data = make([]varStoreData, count)
+	// A group several offsets name is parsed once, and shared: its region
+	// list is as long as its bytes allow, and parsing it once per offset was
+	// that length once per offset.
+	parsed := map[int]int{}
 	for i := range s.data {
 		off := int(font.Be32(t, 8+4*i))
 		if off < 0 || off+6 > len(t) {
 			return nil, fmt.Errorf("the item variation store's group %d lies outside it", i)
+		}
+		if first, ok := parsed[off]; ok {
+			s.data[i] = s.data[first]
+			continue
 		}
 		d, err := parseVarStoreData(t[off:], regionCount)
 		if err != nil {
 			return nil, fmt.Errorf("the item variation store's group %d: %w", i, err)
 		}
 		s.data[i] = d
+		parsed[off] = i
 	}
 	return s, nil
 }
@@ -133,22 +162,9 @@ func parseVarStoreData(b []byte, regionCount int) (varStoreData, error) {
 	} else if need := itemCount * rowSize; need > len(b)-at {
 		return d, fmt.Errorf("it states %d rows of %d bytes and carries %d", itemCount, rowSize, len(b)-at)
 	}
-	d.rows = make([][]float64, itemCount)
-	for i := range d.rows {
-		row := make([]float64, regionIndexCount)
-		for j := range row {
-			var v int
-			if j < wordCount {
-				v = signedAt(b, at, wordSize)
-				at += wordSize
-			} else {
-				v = signedAt(b, at, shortSize)
-				at += shortSize
-			}
-			row[j] = float64(v)
-		}
-		d.rows[i] = row
-	}
+	d.rows = b[at : at+itemCount*rowSize]
+	d.count = itemCount
+	d.rowSize, d.wordCount, d.wordSize, d.shortSize = rowSize, wordCount, wordSize, shortSize
 	return d, nil
 }
 
@@ -172,11 +188,10 @@ func (s *varStore) delta(outer, inner int, coords []float64) float64 {
 	if outer < 0 || outer >= len(s.data) {
 		return 0
 	}
-	d := s.data[outer]
-	if inner < 0 || inner >= len(d.rows) {
+	d := &s.data[outer]
+	if inner < 0 || inner >= d.count {
 		return 0
 	}
-	row := d.rows[inner]
 	var total float64
 	for i, r := range d.regions {
 		scalar := regionScalar(s.regions[r], coords)
@@ -185,7 +200,7 @@ func (s *varStore) delta(outer, inner int, coords []float64) float64 {
 		}
 		// See the note in gvar.go's infer: the conversion keeps the multiply
 		// from being fused into the add on the architectures that would.
-		total += float64(row[i] * scalar)
+		total += float64(d.value(inner, i) * scalar)
 	}
 	return total
 }

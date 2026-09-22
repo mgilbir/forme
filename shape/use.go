@@ -172,6 +172,9 @@ type useGrammar struct {
 	// idx maps a position in the grammar's input to a position in the run. Two
 	// kinds of character are not in it at all — see useGrammarInput.
 	idx []int
+	// limit is how far the cluster being matched may reach: no production
+	// looks at a position at or past it. See useClusters.
+	limit int
 }
 
 // useGrammarInput is the run as the grammar sees it, which is not all of it.
@@ -210,7 +213,7 @@ func nextUseVisible(info []useInfo, runes []rune, i int) int {
 }
 
 func (g *useGrammar) is(i int, c useCategory) bool {
-	return i >= 0 && i < len(g.idx) && g.info[g.idx[i]].cat == c
+	return i >= 0 && i < g.limit && g.info[g.idx[i]].cat == c
 }
 
 func (g *useGrammar) isAt(i int, c useCategory, p usePosition) bool {
@@ -466,7 +469,7 @@ func (g *useGrammar) cluster(i int) (int, useClusterKind) {
 		fmPstEnd = i + 1
 	}
 	anyEnd := -1
-	if i < len(g.idx) {
+	if i < g.limit {
 		anyEnd = i + 1
 	}
 
@@ -493,10 +496,23 @@ func (g *useGrammar) cluster(i int) (int, useClusterKind) {
 }
 
 // useClusters cuts a run into clusters, saying what each was matched as.
+//
+// A cluster is held to maxIndicSyllable of the characters the grammar sees, as
+// the Indic, Khmer and Myanmar syllables are, and for the reason given there:
+// the grammar lets a cluster grow without limit — a letter followed by any
+// number of pre-base vowel signs is one — and the reordering is quadratic in a
+// cluster's length. "ᬓ" with sixty-four thousand U+1B3E after it took fifteen
+// seconds. The limit is put on the grammar itself rather than on what it
+// returns, so that the scan of a long cluster stops at the limit instead of
+// running to its end once per cut; what lies past it starts the next
+// cluster. HarfBuzz does not cut, and no text written in these scripts comes
+// near the limit — the longest clusters in the corpora are a handful of
+// characters — so what it changes is only text that was never a cluster.
 func useClusters(info []useInfo, runes []rune) []useCluster {
 	g := &useGrammar{info: info, idx: useGrammarInput(info, runes)}
 	var out []useCluster
 	for i := 0; i < len(g.idx); {
+		g.limit = min(len(g.idx), i+maxIndicSyllable)
 		end, kind := g.cluster(i)
 		// Every alternative either consumes a character or does not match, so
 		// this cannot fire — and it is here because a production that consumed
