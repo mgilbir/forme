@@ -63,10 +63,17 @@ import (
 	"github.com/mgilbir/forme/font"
 )
 
-// maxCmapWork bounds the cmap parse. A font reaching this is malformed or
-// hostile; the reader reports a partial cmap rather than spinning, and Load
-// refuses it rather than embedding a font whose mapping it only half knows.
-const maxCmapWork = 1 << 22
+// maxFontWork bounds the work of reading one font program: the cmap, the glyf
+// walk and the CFF's INDEXes and Private DICTs, all drawn from one font.Budget.
+// A font reaching this is malformed or hostile; the readers stop rather than
+// spinning, and Load refuses it rather than embedding a font it only half knows.
+//
+// It is the figure the cmap alone used to be allowed per subtable, now for the
+// whole font. That is nearly four times the one legitimate shape that comes
+// close — a LastResort-style format 13 subtable mapping all of Unicode, 1.1
+// million codes — and more than forty times what the largest CJK face in the
+// corpora spends (Noto Sans SC, about ninety thousand).
+const maxFontWork = 1 << 22
 
 // Face is a loaded font program: its metrics, its character-to-glyph mapping,
 // and the bytes to embed.
@@ -205,12 +212,18 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 	if !hasGlyf && !hasCFF {
 		return nil, errors.New("fonts: the font carries neither glyf nor CFF outlines")
 	}
-	prog := font.ParseSFNT(data, maxCmapWork)
+	// One budget for the whole font, shared by the sfnt and CFF readers, so
+	// that what is bounded is the font and not each of its parts.
+	budget := font.NewBudget(maxFontWork)
+	prog := font.ParseSFNTWithin(data, budget)
 	if prog == nil {
 		return nil, errors.New("fonts: the font program could not be parsed")
 	}
 	if prog.CmapPartial {
 		return nil, errors.New("fonts: the font's character map is truncated, so its glyph coverage is unknown")
+	}
+	if err := budget.Err(); err != nil {
+		return nil, err
 	}
 	if len(prog.Cmap) == 0 {
 		return nil, errors.New("fonts: the font has no Unicode character map")
@@ -226,7 +239,14 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 		// questions from cmap, hmtx and maxp and never opens it, so nothing
 		// about the outlines is known until it is asked directly. (Reading
 		// prog.WidthByCID here instead would be a check that can never fire.)
-		cff := font.ParseCFF(tables["CFF "])
+		//
+		// Not the widths, which are the costly part of a CFF — a charstring
+		// interpreted per glyph — and which nothing here reads: the advances
+		// come from hmtx.
+		cff := font.ParseCFFGlyphs(tables["CFF "], budget)
+		if err := budget.Err(); err != nil {
+			return nil, err
+		}
 		if cff == nil {
 			return nil, errors.New("fonts: the CFF table could not be parsed")
 		}

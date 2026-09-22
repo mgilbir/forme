@@ -198,9 +198,9 @@ func DecodeWOFF(data []byte) ([]byte, error) {
 	// tables themselves each padded to a four-byte boundary.
 	//
 	// This total is computed from origLength, which is stated by the file, so it
-	// is checked against the cap here *and* the decompressed bytes are counted
-	// again below — a table that lies about its size in the safe direction would
-	// otherwise buy itself room.
+	// is only an early refusal: the decompressed bytes are counted again below,
+	// and a table that lies about its size in the safe direction would otherwise
+	// buy itself room.
 	body := 12 + 16*len(entries)
 	total := uint64(body)
 	for _, e := range entries {
@@ -215,7 +215,20 @@ func DecodeWOFF(data []byte) ([]byte, error) {
 		}
 	}
 
-	out := make([]byte, body, total)
+	// Nor is the buffer sized from it. The total is what the file says it will
+	// become, and the file had been allowed to say sixty-four megabytes in
+	// eighty-four bytes: one table declaring that much in front of a ten-byte
+	// "compressed" body, allocated and zeroed in full before a byte of it was
+	// inflated and then refused for coming up short (audit C126). The start is
+	// the room the file's own bytes could fill if every one of them were
+	// stored, which is the most this can know before anything is inflated, and
+	// append grows it from there against what actually arrives — under the
+	// running check below, which is what bounds it.
+	hint := uint64(body) + uint64(len(data))
+	if hint > total {
+		hint = total
+	}
+	out := make([]byte, body, hint)
 	binary.BigEndian.PutUint32(out, flavor)
 	binary.BigEndian.PutUint16(out[4:], uint16(len(entries)))
 	// searchRange, entrySelector and rangeShift: the binary-search hints. They

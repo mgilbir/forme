@@ -55,6 +55,10 @@ type CFFOptions struct {
 	// used to be.
 	LocalSubrs    int
 	LocalSubrsGap int
+	// Subrs gives the local subroutines' charstrings, and overrides
+	// LocalSubrs' count when it is set. A subroutine is named in a charstring
+	// by its index less the bias, which for an INDEX this size is 107.
+	Subrs [][]byte
 	// Charstrings replaces the default one-byte endchar per glyph. It has to
 	// hold exactly Glyphs entries, and .notdef is the first of them.
 	Charstrings [][]byte
@@ -126,13 +130,16 @@ func CFF(opts CFFOptions) []byte {
 	// DICT that names them. The operand is written in the same fixed three-byte
 	// form as the rest, so its own size is known before its value is.
 	var subrsBlob []byte
-	if opts.LocalSubrs > 0 {
+	if opts.LocalSubrs > 0 || opts.Subrs != nil {
 		const operandAndOp = 4
 		priv = append(priv, cffOperand3(len(priv)+operandAndOp+opts.LocalSubrsGap)...)
 		priv = append(priv, 19) // Subrs
-		items := make([][]byte, opts.LocalSubrs)
-		for i := range items {
-			items[i] = []byte{11} // return: a subroutine that does nothing
+		items := opts.Subrs
+		if items == nil {
+			items = make([][]byte, opts.LocalSubrs)
+			for i := range items {
+				items[i] = []byte{11} // return: a subroutine that does nothing
+			}
 		}
 		subrsBlob = append(make([]byte, opts.LocalSubrsGap), cffINDEX(items...)...)
 	}
@@ -201,6 +208,35 @@ func CFF(opts CFFOptions) []byte {
 	}
 	copy(data[topAt:], final)
 	return data
+}
+
+// SubrFanOut builds a CFF of the given number of glyphs, every one past
+// .notdef reaching a subroutine call tree of the given fan-out and depth:
+// subroutine i calls subroutine i+1 fanOut times and returns, and the last only
+// returns. Walked in full that is fanOut^depth calls per glyph from about
+// 2·fanOut·depth bytes — the shape of audit C4 — and no subroutine holds a
+// stack-clearing operator, so a reader looking for a glyph's width has no
+// reason to stop early. Each glyph ends with endchar after the call.
+//
+// Both are bounded by the fixture's one-byte INDEX offsets: the subroutines have
+// to come to 255 bytes, which a fan-out of sixteen at a depth of seven reaches,
+// and the charstrings too, which is three bytes a glyph.
+func SubrFanOut(fanOut, depth, glyphs int) []byte {
+	const callsubr, ret, endchar = 10, 11, 14
+	operand := func(subr int) byte { return byte(subr - 107 + 139) } // biased by 107
+	subrs := make([][]byte, depth+1)
+	for i := 0; i < depth; i++ {
+		for k := 0; k < fanOut; k++ {
+			subrs[i] = append(subrs[i], operand(i+1), callsubr)
+		}
+		subrs[i] = append(subrs[i], ret)
+	}
+	subrs[depth] = []byte{ret}
+	charstrings := [][]byte{{endchar}}
+	for len(charstrings) < glyphs {
+		charstrings = append(charstrings, []byte{operand(0), callsubr, endchar})
+	}
+	return CFF(CFFOptions{Glyphs: glyphs, Subrs: subrs, Charstrings: charstrings})
 }
 
 // cffPrivateDict states defaultWidthX and nominalWidthX, which is what a
