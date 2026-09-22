@@ -115,7 +115,7 @@ func (s *Styler) anonymousLayer() int {
 // layer is a sublayer of it — "@layer a { @layer b {} }" is "a.b" — and is
 // ordered among its siblings rather than globally, which this reads by keeping
 // the full path as the name.
-func (s *Styler) prepareLayer(rule css.Rule, parent []css.ComponentValue, origin Origin,
+func (s *Styler) prepareLayer(rule css.Rule, parent *css.Nesting, origin Origin,
 	out *[]preparedRule, order *int) {
 
 	names := layerNames(rule.Prelude)

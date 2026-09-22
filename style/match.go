@@ -51,6 +51,10 @@ type Matcher struct {
 	kids map[*html.Node][]*html.Node
 	idx  map[*html.Node]int
 
+	// nested remembers which elements match which nested rule's parent — see
+	// nesting.
+	nested map[nestingKey]bool
+
 	// steps is the work spent on the match in hand and over says that match ran
 	// out; tripped remembers that some match did, for the caller.
 	//
@@ -73,10 +77,11 @@ type Matcher struct {
 // NewMatcher prepares to match selectors against a document.
 func NewMatcher(doc *html.Node) *Matcher {
 	return &Matcher{
-		root: documentElement(doc),
-		kids: map[*html.Node][]*html.Node{},
-		idx:  map[*html.Node]int{},
-		xml:  doc.XMLDocument(),
+		root:   documentElement(doc),
+		kids:   map[*html.Node][]*html.Node{},
+		idx:    map[*html.Node]int{},
+		nested: map[nestingKey]bool{},
+		xml:    doc.XMLDocument(),
 	}
 }
 
@@ -359,6 +364,9 @@ func (m *Matcher) pseudo(p css.Pseudo, n *html.Node) bool {
 		}
 		return false
 
+	case css.PseudoNesting:
+		return m.nesting(p.Nest, n)
+
 	case css.PseudoLang:
 		return matchLang(n, p.Langs)
 
@@ -397,6 +405,41 @@ func (m *Matcher) complexFrom(s css.Selector, n *html.Node) bool {
 		return false
 	}
 	return m.complex(s.Compounds, len(s.Compounds)-1, n)
+}
+
+// nestingKey is one question about "&": does this element match that parent.
+type nestingKey struct {
+	nest *css.Nesting
+	n    *html.Node
+}
+
+// nesting matches "&", which is ":is()" over the parent rule's selector list.
+//
+// The answer is remembered per element, and that is what keeps nesting as cheap
+// as it is short. A rule's "&" is its parent's list, whose own "&" is *its*
+// parent's, so "& & & & & & & &" nested seven deep asks about the outermost
+// rule once per way of placing every level on the ancestors — eight to the
+// seventh ways, for 162 bytes of CSS. Asked once per element instead, each level
+// costs what its own selector costs, and the whole is the sum of the levels
+// rather than their product.
+//
+// It is safe to remember because the question has no context: whether an
+// element matches a selector list as its subject depends on the element and the
+// tree, and neither changes while a document is matched. The one answer not
+// kept is one the budget cut short, which is a "no" that may be wrong.
+func (m *Matcher) nesting(nest *css.Nesting, n *html.Node) bool {
+	if nest == nil {
+		return false
+	}
+	key := nestingKey{nest, n}
+	if got, ok := m.nested[key]; ok {
+		return got
+	}
+	got := m.matchesAny(nest.Matchable(), n)
+	if !m.over {
+		m.nested[key] = got
+	}
+	return got
 }
 
 // indexOf returns an element's one-based position among its siblings, counting

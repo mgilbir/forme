@@ -180,6 +180,13 @@ const (
 	// nothing for privacy, and a renderer that treats every link as unvisited is
 	// the private answer as well as the true one.
 	PseudoVisited
+
+	// PseudoNesting is "&" in a rule nested inside another: the parent rule's
+	// selector list, as a unit. Pseudo.Nest says which parent. See Nesting.
+	//
+	// It has no name an author can write after a colon — it is spelled "&" —
+	// so it is not in pseudoClasses.
+	PseudoNesting
 )
 
 // Pseudo is one pseudo-class in a compound selector.
@@ -196,7 +203,71 @@ type Pseudo struct {
 	Args []Selector
 	// Langs is set for :lang().
 	Langs []string
+	// Nest is set for PseudoNesting, and is the parent rule "&" stands for.
+	// It is shared by every "&" written against that rule, never copied.
+	Nest *Nesting
 }
+
+// Nesting is a style rule as the rules nested inside it see it: the thing their
+// "&" means.
+//
+// CSS Nesting 1 §3 makes "&" the parent's selector list *as a unit*, with the
+// matching and the specificity of ":is(<that list>)". It is not text to be
+// pasted in where the "&" is. It was, once — the parent's component values
+// spliced into every "&" before parsing — and that is a copy of the parent per
+// use, so a rule whose selector is "& & & & & & & &" is eight copies of its
+// parent, each of which is eight copies of *its* parent: 162 bytes of CSS
+// became gigabytes of selector at seven levels deep. Pasting also cannot say
+// where one selector of the list ends, which is how ".card { h2, p { } }"
+// scoped "h2" to the card and let "p" select every paragraph in the document.
+//
+// So the parent is parsed once, and every "&" written against it holds a
+// pointer to this. A selector nested any number of levels deep is as large as
+// what its author wrote.
+type Nesting struct {
+	// Selectors is the parent's list exactly as parsed, pseudo-elements and
+	// all. It is what a declaration written directly inside a nested @media
+	// applies to, which is the parent rule's own selectors and not "&" — see
+	// the nested declarations rule of CSS Nesting §3.2.
+	Selectors []Selector
+
+	// matchable is the part of Selectors that "&" can stand for, and spec is
+	// the specificity it contributes, both settled once here rather than per
+	// use.
+	matchable []Selector
+	spec      Specificity
+}
+
+// NewNesting makes the parent that the rules nested in a style rule are
+// relative to. Build it once per parent rule and share it: its identity is
+// what a matcher may remember an answer against.
+//
+// A selector with a pseudo-element is left out of what "&" means. "&" is
+// ":is()", and a pseudo-element is not valid inside ":is()" — Selectors 4 §4.2
+// says ":is()" "cannot represent pseudo-elements" — so "div::before { & { } }"
+// selects nothing, and not the div, and "*, ::before { & * { } }" has the
+// specificity of "*" alone. The WPT tests
+// css-nesting/contextually-invalid-selectors-001 and -003 are these two cases.
+func NewNesting(parent []Selector) *Nesting {
+	n := &Nesting{Selectors: parent}
+	for _, s := range parent {
+		if s.PseudoElement != "" {
+			continue
+		}
+		n.matchable = append(n.matchable, s)
+		n.spec = n.spec.max(s.Specificity)
+	}
+	return n
+}
+
+// Matchable is the selector list "&" stands for: an element matches "&" when it
+// matches any of these. It may be empty, and then "&" matches nothing.
+func (n *Nesting) Matchable() []Selector { return n.matchable }
+
+// Specificity is what "&" contributes to a selector it is in, which is that of
+// ":is()" over the same list: the most specific of them, whichever one an
+// element happens to match.
+func (n *Nesting) Specificity() Specificity { return n.spec }
 
 // Compound is a run of simple selectors that all constrain the same element,
 // together with the combinator joining it to the compound before it.
@@ -417,8 +488,45 @@ var legacyPseudoElements = map[string]bool{
 // whose selector list was silently narrowed applies to fewer elements than its
 // author asked for, and nothing about the resulting page says so. ok reports
 // whether the list survived intact.
+//
+// This is a rule at the top of a stylesheet, where an "&" is the root element
+// with no specificity — see selParser.nesting. A rule written inside another is
+// read with ParseNestedSelectorList.
 func ParseSelectorList(vals []ComponentValue) (sels []Selector, errs []Error, ok bool) {
-	p := &selParser{}
+	return parseSelectorList(vals, nil)
+}
+
+// ParseNestedSelectorList parses the prelude of a style rule written inside
+// another, whose "&" is parent.
+//
+// CSS Nesting 1 §2.1 makes the prelude a list of *relative* selectors, and each
+// one is read on its own:
+//
+//   - One that begins with a combinator — "> p", "+ .x" — is relative to the
+//     parent through that combinator: "& > p". It is, even when an "&" appears
+//     later in it, because the combinator has to be relative to something.
+//   - One that contains "&" anywhere, at any depth, is taken as written: the
+//     author has said where the parent goes.
+//   - Any other is a descendant of the parent: "p" is "& p".
+//
+// Per selector, and never once for the whole list: ".card { h2, p { } }" is
+// "& h2, & p", and ".card { & h2, p { } }" is "& h2, & p" too. Reading the
+// list as one unit prefixed the parent to its first selector only, so the
+// second selected every paragraph in the document.
+//
+// Whether a selector "contains &" is asked of what was written, before anything
+// in it is parsed. An "&" inside an argument that a forgiving ":is()" goes on
+// to drop still counts: ".x { :is(.y, !&) { } }" selects .y anywhere, and not
+// only inside .x — which is the WPT test
+// css-nesting/nest-containing-forgiving.
+//
+// A nil parent is a rule at the top of a stylesheet, and is ParseSelectorList.
+func ParseNestedSelectorList(vals []ComponentValue, parent *Nesting) (sels []Selector, errs []Error, ok bool) {
+	return parseSelectorList(vals, parent)
+}
+
+func parseSelectorList(vals []ComponentValue, parent *Nesting) (sels []Selector, errs []Error, ok bool) {
+	p := &selParser{nest: parent}
 	out, all := p.list(vals, 0)
 	// Usability is "every selector written was understood", not "nothing was
 	// reported". The two differ inside :is() and :where(), which are forgiving:
@@ -446,6 +554,41 @@ const maxSelectorDepth = 32
 
 type selParser struct {
 	errs []Error
+	// nest is the parent rule "&" refers to, or nil at the top of a stylesheet.
+	nest *Nesting
+}
+
+// nesting is the simple selector "&" is parsed into.
+//
+// Inside a nested rule it is the parent, by reference. At the top of a
+// stylesheet there is no parent, and CSS Nesting §3 makes "&" there mean
+// ":scope" — which, with no scoping root, is the root element — with no
+// specificity at all: the WPT tests css-nesting/top-level-is-scope and
+// top-level-parent-pseudo-specificity. ":where(:root)" is exactly that, in
+// terms this package already has.
+func (p *selParser) nesting() Pseudo {
+	if p.nest != nil {
+		return Pseudo{Kind: PseudoNesting, Name: "&", Nest: p.nest}
+	}
+	root := Selector{
+		Compounds:   []Compound{{Pseudos: []Pseudo{{Kind: PseudoRoot, Name: "root"}}}},
+		Specificity: Specificity{0, 1, 0},
+	}
+	return Pseudo{Kind: PseudoWhere, Name: "&", Args: []Selector{root}}
+}
+
+// containsNesting reports whether an "&" was written anywhere in vals, at any
+// depth — inside ":not(&)" as much as at the top.
+func containsNesting(vals []ComponentValue) bool {
+	for _, v := range vals {
+		if v.IsToken() && v.Token.IsDelim('&') {
+			return true
+		}
+		if len(v.Values) > 0 && containsNesting(v.Values) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *selParser) fail(off int, msg string) {
@@ -538,6 +681,28 @@ func (p *selParser) complex(vals []ComponentValue, depth int) (Selector, bool) {
 	out := Selector{Offset: vals[0].Token.Offset}
 	combinator := Descendant
 	i := 0
+
+	// A selector of a nested rule's own list is relative to the parent — see
+	// ParseNestedSelectorList for the three cases. Only at the top of that
+	// list: a selector inside ":is()" is not relative to anything, and "&"
+	// written there is where the author put it.
+	if p.nest != nil && depth == 0 {
+		if leads := isCombinatorAt(vals, 0); leads || !containsNesting(vals) {
+			out.Compounds = append(out.Compounds, Compound{Pseudos: []Pseudo{p.nesting()}})
+			if leads {
+				var ok bool
+				combinator, i, ok = p.combinator(vals, 0)
+				if !ok {
+					return Selector{}, false
+				}
+				if i >= len(vals) {
+					p.fail(vals[len(vals)-1].Token.Offset,
+						"the selector is only the combinator \""+combinator.String()+"\"")
+					return Selector{}, false
+				}
+			}
+		}
+	}
 
 	for i < len(vals) {
 		// A run of simple selectors, up to the next combinator.
@@ -750,6 +915,14 @@ func (p *selParser) compound(vals []ComponentValue, depth int) (Compound, string
 			}
 			out.Classes = append(out.Classes, vals[i+1].Token.Value)
 			i += 2
+
+		case t.IsDelim('&'):
+			// The nesting selector, which is a simple selector like any other:
+			// "div&", "&.x" and "&&" are all compounds. It may not come before a
+			// type selector — "&div" — and that falls out of the type being
+			// read only at the start, as for ".x div".
+			out.Pseudos = append(out.Pseudos, p.nesting())
+			i++
 
 		case t.Kind == Colon:
 			var ok bool
@@ -1145,6 +1318,13 @@ func pseudoSpecificity(ps Pseudo) Specificity {
 	case PseudoNthChild, PseudoNthLastChild:
 		// A pseudo-class, plus the most specific of the "of" list.
 		return Specificity{0, 1, 0}.add(mostSpecific(ps.Of))
+
+	case PseudoNesting:
+		// ":is()" over the parent's list, worked out once when the parent was.
+		if ps.Nest == nil {
+			return Specificity{}
+		}
+		return ps.Nest.Specificity()
 	}
 	return Specificity{0, 1, 0}
 }

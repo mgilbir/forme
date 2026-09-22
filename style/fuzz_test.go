@@ -43,6 +43,10 @@ func FuzzApply(f *testing.F) {
 		"p { margin: }",
 		"p:nth-child(2n+1) { color: a }",
 		"p:hover { color: a }",
+		".a { & p, > b, + i { color: a } }",
+		"div { & & { & & { p { color: a } } } }",
+		"p::before { & { color: a } @media print { color: b } }",
+		"& p { color: a }",
 		"{}", ";", "p{", "}",
 	}
 	for _, d := range docs {

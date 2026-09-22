@@ -582,7 +582,7 @@ func (s *Styler) remember(sheet Sheet, mark preparation, out []preparedRule,
 // engine cannot answer — a feature about a screen's abilities, or a syntax
 // beyond the "and"-joined list this reads — because there a browser printing
 // the same document may apply rules this page does not have.
-func (s *Styler) prepareMedia(rule css.Rule, parent []css.ComponentValue, origin Origin,
+func (s *Styler) prepareMedia(rule css.Rule, parent *css.Nesting, origin Origin,
 	out *[]preparedRule, order *int) {
 
 	matches, unknown := MatchesMedia(rule.Prelude, s.media)
@@ -627,7 +627,7 @@ func (s *Styler) prepareMedia(rule css.Rule, parent []css.ComponentValue, origin
 // or a shape beyond the and/or/not of §2 — for the reason a media query naming
 // an unanswerable feature is: a browser printing the same document may apply
 // rules this page does not have.
-func (s *Styler) prepareSupports(rule css.Rule, parent []css.ComponentValue,
+func (s *Styler) prepareSupports(rule css.Rule, parent *css.Nesting,
 	origin Origin, out *[]preparedRule, order *int) {
 
 	matches, unreadable := supportsCondition(rule.Prelude)
@@ -671,35 +671,21 @@ func quoted(s string) string { return strconv.Quote(strings.TrimSpace(s)) }
 // raised. That is the shape every stylesheet written since nesting arrived
 // uses.
 //
-// The selectors are the enclosing rule's, already desugared by the caller, so
-// the declarations land on exactly the elements the rule they were written in
-// lands on. The order counter runs on through, which is what puts a declaration
-// inside the @media after one written above it.
-func (s *Styler) prepareNestedConditional(rule css.Rule, parent []css.ComponentValue,
+// The selectors are the enclosing rule's own, already parsed, so the
+// declarations land on exactly the elements the rule they were written in lands
+// on, with that rule's specificity — CSS Nesting §3.2's nested declarations
+// rule, and the WPT test css-nesting/nested-declarations-matching. They are the
+// very list the enclosing rule was prepared with, shared rather than parsed
+// again: this used to re-parse the parent's prelude for every @media it held.
+// Rules nested in the block are relative to the same parent, so they get the
+// same Nesting. The order counter runs on through, which is what puts a
+// declaration inside the @media after one written above it.
+func (s *Styler) prepareNestedConditional(rule css.Rule, parent *css.Nesting,
 	origin Origin, out *[]preparedRule, order *int) {
 
-	sels, errs, ok := css.ParseSelectorList(parent)
-	for _, e := range errs {
-		s.report(Finding{Offset: e.Offset, Message: e.Message, Unsupported: e.Unsupported})
-	}
-	if !ok {
-		return
-	}
-	s.prepareStyleBlock(rule.Block, sels, parent, origin, out, order)
+	s.prepareStyleBlock(rule.Block, parent.Selectors, parent, origin, out, order)
 }
 
-// prepareRule prepares one rule and every rule nested inside it.
-//
-// parent is the enclosing rule's selector list, already desugared, or nil at the
-// top of a stylesheet. It is carried down rather than looked up because nesting
-// composes: a rule three deep is written against the rule above it, which was
-// itself written against the one above that, and each level's answer is the next
-// level's question.
-//
-// The order counter runs through the recursion rather than being restarted, so
-// a nested rule's declarations come after the declarations of the rule holding
-// them. That is what CSS Nesting asks for — the nested rule is at the place it
-// was written — and it falls out of doing the parent's declarations first.
 // charsetLabel is the encoding an @charset names, which is a single string.
 func charsetLabel(prelude []css.ComponentValue) (string, bool) {
 	var only css.ComponentValue
@@ -727,7 +713,19 @@ func utf8Charset(label string) bool {
 	return false
 }
 
-func (s *Styler) prepareRule(rule css.Rule, parent []css.ComponentValue, origin Origin,
+// prepareRule prepares one rule and every rule nested inside it.
+//
+// parent is the rule this one is written inside, or nil at the top of a
+// stylesheet. It is carried down rather than looked up because nesting
+// composes: a rule three deep is written against the rule above it, which was
+// itself written against the one above that, and each level's "&" is the level
+// above as it was parsed — a reference, never a copy. See css.Nesting.
+//
+// The order counter runs through the recursion rather than being restarted, so
+// a nested rule's declarations come after the declarations of the rule holding
+// them. That is what CSS Nesting asks for — the nested rule is at the place it
+// was written — and it falls out of doing the parent's declarations first.
+func (s *Styler) prepareRule(rule css.Rule, parent *css.Nesting, origin Origin,
 	out *[]preparedRule, order *int) {
 
 	if rule.At {
@@ -790,12 +788,10 @@ func (s *Styler) prepareRule(rule css.Rule, parent []css.ComponentValue, origin 
 		return
 	}
 
-	prelude := rule.Prelude
-	if parent != nil {
-		prelude = nestSelector(parent, prelude)
-	}
-
-	sels, errs, ok := css.ParseSelectorList(prelude)
+	// Nested or not, the prelude is parsed once and as the author wrote it: a
+	// nested rule's selectors are relative, and their "&" is the parent by
+	// reference. See css.ParseNestedSelectorList.
+	sels, errs, ok := css.ParseNestedSelectorList(rule.Prelude, parent)
 	for _, e := range errs {
 		s.report(Finding{
 			Offset:      e.Offset,
@@ -814,12 +810,17 @@ func (s *Styler) prepareRule(rule css.Rule, parent []css.ComponentValue, origin 
 		return
 	}
 
-	s.prepareStyleBlock(rule.Block, sels, prelude, origin, out, order)
+	s.prepareStyleBlock(rule.Block, sels, nil, origin, out, order)
 }
 
 // prepareStyleBlock prepares one style block: the declarations it holds, which
 // belong to the given selector list, and the rules nested in it, which are
-// written against the given prelude.
+// written against it.
+//
+// nest is that selector list as a parent, when the caller already has one — a
+// block inside a nested @media is its enclosing rule's, and shares that rule's
+// Nesting. Otherwise one is made here, once for the block, and only if
+// something is nested in it: every "&" in every rule below points at it.
 //
 // The two are interleaved by where they were written rather than done in two
 // passes. The order counter is what the cascade breaks a tie with, so a pass
@@ -829,11 +830,14 @@ func (s *Styler) prepareRule(rule css.Rule, parent []css.ComponentValue, origin 
 // @media shows immediately: its declarations land on the very selector they are
 // written inside, so the only thing separating them is order.
 func (s *Styler) prepareStyleBlock(block []css.ComponentValue, sels []css.Selector,
-	prelude []css.ComponentValue, origin Origin, out *[]preparedRule, order *int) {
+	nest *css.Nesting, origin Origin, out *[]preparedRule, order *int) {
 
 	decls, nested, derrs := css.ParseDeclarationValues(block)
 	for _, e := range derrs {
 		s.report(Finding{Offset: e.Offset, Message: e.Message, Unsupported: e.Unsupported})
+	}
+	if nest == nil && len(nested) > 0 {
+		nest = css.NewNesting(sels)
 	}
 
 	prepared := preparedRule{selectors: sels, origin: origin, layer: s.layer,
@@ -849,71 +853,12 @@ func (s *Styler) prepareStyleBlock(block []css.ComponentValue, sels []css.Select
 			di++
 			continue
 		}
-		s.prepareRule(nested[ni], prelude, origin, out, order)
+		s.prepareRule(nested[ni], nest, origin, out, order)
 		ni++
 	}
 	if len(prepared.decls) > 0 {
 		*out = append(*out, prepared)
 	}
-}
-
-// nestSelector writes a nested rule's selector out in full, against the rule it
-// was written inside.
-//
-// CSS Nesting §2: the parent stands in for ":is(<the parent's selector list>)",
-// which is not a convenience — it is what makes the nested rule's specificity
-// right. ":is()" takes the specificity of its most specific argument, which is
-// exactly what the specification says a nested selector inherits from its
-// parent, so writing the substitution out literally means nothing here has to
-// know about specificity at all.
-//
-// Where the nested selector says "&", that is where the parent goes. Where it
-// says nothing, the parent goes in front with a descendant combinator, which is
-// the relaxed syntax every browser implements: "span { }" inside "#c { }" is
-// "#c span", not an error.
-func nestSelector(parent, nested []css.ComponentValue) []css.ComponentValue {
-	parentIs := []css.ComponentValue{
-		{Token: css.Token{Kind: css.Colon}},
-		{Token: css.Token{Kind: css.Function, Value: "is"}, Values: parent},
-	}
-	out, replaced := substituteParent(nested, parentIs)
-	if replaced {
-		return out
-	}
-	// No "&" anywhere, so the parent goes in front. The space is a real
-	// component value and not a formality: without it "#c" and "span" would
-	// join into one compound selector and the rule would match nothing.
-	joined := make([]css.ComponentValue, 0, len(parentIs)+1+len(nested))
-	joined = append(joined, parentIs...)
-	joined = append(joined, css.ComponentValue{Token: css.Token{Kind: css.Whitespace, Value: " "}})
-	return append(joined, nested...)
-}
-
-// substituteParent replaces every "&" with the parent, at any depth, and says
-// whether it found one.
-//
-// At any depth because "&" inside ":not(&)" is the same "&" — a rule written
-// that way is asking to exclude its own parent, and a substitution that only
-// looked at the top level would leave a bare "&" for the selector parser to
-// reject.
-func substituteParent(vals, parent []css.ComponentValue) ([]css.ComponentValue, bool) {
-	found := false
-	out := make([]css.ComponentValue, 0, len(vals))
-	for _, v := range vals {
-		switch {
-		case v.IsToken() && v.Token.Kind == css.Delim && v.Token.Value == "&":
-			found = true
-			out = append(out, parent...)
-		case len(v.Values) > 0:
-			inner, did := substituteParent(v.Values, parent)
-			found = found || did
-			v.Values = inner
-			out = append(out, v)
-		default:
-			out = append(out, v)
-		}
-	}
-	return out, found
 }
 
 // expand turns one declaration into the longhands it sets, dropping and
