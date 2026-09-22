@@ -3,6 +3,7 @@
 package shape
 
 // The vowel signs written as one character and drawn as two or three marks.
+// Unicode 17.0.0.
 //
 // A split sign cannot be placed while it is one character: its parts go to
 // different places, one before the letter and one after. So the reordering

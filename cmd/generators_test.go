@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/mgilbir/forme/cmd/internal/tables"
 )
 
 // The generators and the files they write.
@@ -29,36 +31,20 @@ import (
 //
 // So this is the check that could have caught it, and it needs nothing fetched:
 // the package a generator emits has to be the package of the file it says it
-// writes.
-var generated = map[string]string{
-	"genbidi":         "bidi/tables.go",
-	"gencanonical":    "shape/canonical.go",
-	"gencasing":       "paragraph/casingtable.go",
-	"geneastasian":    "paragraph/eastasiantable.go",
-	"genfullsizekana": "paragraph/kanatable.go",
-	"genfullwidth":    "paragraph/widthtable.go",
-	"genglyphlist":    "font/glyphnames.go",
-	"genignorable":    "shape/ignorabletable.go",
-	"genindic":        "shape/indiccategory.go",
-	"genjoining":      "shape/joining.go",
-	"genlinebreak":    "paragraph/linebreaktable.go",
-	"genmatra":        "shape/indicmatra.go",
-	"genscripts":      "shape/scripts.go",
-	"gensegment":      "segment/tables.go",
-	"genstdfonts":     "shape/standard14.go",
-	"genuse":          "shape/usetable.go",
-	"genvertical":     "paragraph/verticaltable.go",
-	"genvowel":        "shape/indicvowel.go",
-}
+// writes. The generators and their files are cmd/internal/tables.Manifest — a
+// list here used to name eighteen of them and leave out the six that were not
+// read from the Unicode database.
 
 // emitsPackage finds the "package x" line a generator writes into its output.
 // It is inside a string literal, so it is found in the source text rather than
-// through the parser.
-var emitsPackage = regexp.MustCompile(`(?m)^package (\w+)$`)
+// through the parser: on a line of its own in a raw literal, between two "\n"
+// escapes in an interpreted one, or as the whole of one written by Fprintln.
+var emitsPackage = regexp.MustCompile(`(?m)(?:^|\\n|")package (\w+)(?:$|\\n|")`)
 
 // TestEveryGeneratorEmitsThePackageItWritesInto is the check.
 func TestEveryGeneratorEmitsThePackageItWritesInto(t *testing.T) {
-	for gen, out := range generated {
+	for _, tb := range tables.Manifest {
+		gen, out := tb.Generator, tb.Out
 		src, err := os.ReadFile(filepath.Join(gen, "main.go"))
 		if err != nil {
 			t.Errorf("%s: %v", gen, err)
@@ -82,16 +68,29 @@ func TestEveryGeneratorEmitsThePackageItWritesInto(t *testing.T) {
 
 // TestEveryGeneratorNamesTheFileItWrites keeps the usage lines honest: they are
 // how anyone finds out what a generator is for, and every one of the nine named
-// a directory this repository does not have.
+// a directory this repository does not have. A generator the manifest runs
+// several times over — one per language — names the directory it writes into.
 func TestEveryGeneratorNamesTheFileItWrites(t *testing.T) {
-	for gen, out := range generated {
+	outs := map[string][]string{}
+	for _, tb := range tables.Manifest {
+		outs[tb.Generator] = append(outs[tb.Generator], tb.Out)
+	}
+	for gen, files := range outs {
 		src, err := os.ReadFile(filepath.Join(gen, "main.go"))
 		if err != nil {
 			t.Errorf("%s: %v", gen, err)
 			continue
 		}
-		if !strings.Contains(string(src), out) {
-			t.Errorf("%s nowhere names %s, which is the file it writes", gen, out)
+		if len(files) == 1 {
+			if !strings.Contains(string(src), files[0]) {
+				t.Errorf("%s nowhere names %s, which is the file it writes", gen, files[0])
+			}
+			continue
+		}
+		for _, f := range files {
+			if dir := filepath.Dir(f) + "/"; !strings.Contains(string(src), dir) {
+				t.Errorf("%s writes %s and nowhere names %s", gen, f, dir)
+			}
 		}
 	}
 }
@@ -99,7 +98,8 @@ func TestEveryGeneratorNamesTheFileItWrites(t *testing.T) {
 // TestEveryGeneratedFileSaysWhichGeneratorMadeIt is the other direction: a file
 // that names a command nobody can run sends a reader to look for it.
 func TestEveryGeneratedFileSaysWhichGeneratorMadeIt(t *testing.T) {
-	for gen, out := range generated {
+	for _, tb := range tables.Manifest {
+		gen, out := tb.Generator, tb.Out
 		src, err := os.ReadFile(filepath.Join("..", out))
 		if err != nil {
 			t.Errorf("%s: %v", out, err)
@@ -133,17 +133,26 @@ func packageOf(t *testing.T, path string) string {
 // They are told now, from the Makefile's UNICODE_VERSION, which is the variable
 // that decides what `make ucd` fetches; the generators whose inputs declare a
 // release check the two agree. This is the other end of that: what the
-// committed tables say, against what the Makefile fetches.
+// committed tables say, against what the Makefile fetches — and every table
+// read from the database says it at least once.
 func TestEveryTableNamesTheReleaseTheMakefileFetches(t *testing.T) {
 	want := unicodeVersion(t)
 	named := 0
-	for gen, out := range generated {
+	for _, tb := range tables.Manifest {
+		if !readsTheDatabase(tb) {
+			continue
+		}
+		gen, out := tb.Generator, tb.Out
 		src, err := os.ReadFile(filepath.Join("..", out))
 		if err != nil {
 			t.Errorf("%s: %v", out, err)
 			continue
 		}
-		for _, m := range unicodeVersionRe.FindAllStringSubmatch(string(src), -1) {
+		found := unicodeVersionRe.FindAllStringSubmatch(string(src), -1)
+		if len(found) == 0 {
+			t.Errorf("%s is read from the Unicode database and names no release", out)
+		}
+		for _, m := range found {
 			named++
 			if m[1] != want {
 				t.Errorf("%s says it is from Unicode %s and the Makefile fetches "+
@@ -152,12 +161,12 @@ func TestEveryTableNamesTheReleaseTheMakefileFetches(t *testing.T) {
 			}
 		}
 	}
-	// Thirteen files name it, twenty-nine times between them. A floor rather
+	// Fifteen files name it, thirty-two times between them. A floor rather
 	// than the count, so that a new table does not have to be added here — but
 	// a floor all the same, because a sweep that matched nothing would pass.
 	if named < 20 {
 		t.Fatalf("only %d version claims were found in the generated tables; "+
-			"they carry twenty-nine, so this has stopped reading them", named)
+			"they carry thirty-two, so this has stopped reading them", named)
 	}
 	t.Logf("%d version claims, all Unicode %s", named, want)
 }

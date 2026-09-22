@@ -14,41 +14,46 @@
 // change what the font is asked for, and four more because a renderer that hid
 // them would be wrong about Korean.
 //
-//	go run ./cmd/genignorable <DerivedCoreProperties.txt> > shape/ignorabletable.go
+//	go run ./cmd/genignorable -version <X.Y.Z> <DerivedCoreProperties.txt> > shape/ignorabletable.go
 package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/mgilbir/forme/cmd/internal/ucd"
 )
 
 type span struct{ lo, hi rune }
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: genignorable <DerivedCoreProperties.txt>")
+	version := flag.String("version", "", "the Unicode version the file came from")
+	flag.Parse()
+	args := flag.Args()
+	if len(args) != 1 {
+		fmt.Fprintln(os.Stderr, "usage: genignorable -version <X.Y.Z> <DerivedCoreProperties.txt>")
 		os.Exit(2)
 	}
-	f, err := os.Open(os.Args[1])
+	if err := ucd.Check(*version, args...); err != nil {
+		fmt.Fprintln(os.Stderr, "genignorable:", err)
+		os.Exit(1)
+	}
+	f, err := os.Open(args[0])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 	defer f.Close()
 
-	version := "unknown"
 	var spans []span
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		line := sc.Text()
-		// The file names its own version on the first line.
-		if strings.HasPrefix(line, "# DerivedCoreProperties-") {
-			version = strings.TrimSuffix(strings.TrimPrefix(line, "# DerivedCoreProperties-"), ".txt")
-		}
 		if i := strings.IndexByte(line, '#'); i >= 0 {
 			line = line[:i]
 		}
@@ -99,7 +104,7 @@ package shape
 // nothing at all. Which of them this package acts on is decided in
 // ignorable.go, not here: this table is Unicode's statement, not a policy.
 var defaultIgnorableRanges = [...]struct{ lo, hi rune }{
-`, version, len(merged))
+`, *version, len(merged))
 	for _, s := range merged {
 		fmt.Fprintf(&w, "\t{0x%04X, 0x%04X},\n", s.lo, s.hi)
 	}

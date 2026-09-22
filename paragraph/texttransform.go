@@ -54,11 +54,12 @@ import (
 // §2.1.1 asks for the full mappings by name, and casingtable.go holds them —
 // see cmd/gencasing for where they come from and which were left out.
 //
-// The tables are consulted first and Go's mapping is the fallback, so a
+// The tables are consulted first and the simple mapping is the fallback, so a
 // character with no full mapping — which is all but a hundred of them — costs a
 // binary search over a table of a hundred entries and nothing else. Text that
-// contains no such character is not copied at all: it takes the same
-// strings.ToUpper it always did.
+// contains no such character takes the whole-string path, upperString or
+// lowerString. The simple mappings are generated too, from the same release,
+// and not Go's — see simplecasing.go for what Go's cost.
 //
 // # The conditional mappings
 //
@@ -296,9 +297,9 @@ func localeCased(text string, lang Language, upper bool) string {
 		return conditionalCased(text, lang, upper, i)
 	}
 	if upper {
-		return fullCased(text, fullUppercase[:], unicode.ToUpper, strings.ToUpper, isMkhedruli)
+		return fullCased(text, fullUppercase[:], simpleUpper, upperString, isMkhedruli)
 	}
-	return fullCased(text, fullLowercase[:], unicode.ToLower, strings.ToLower, nil)
+	return fullCased(text, fullLowercase[:], simpleLower, lowerString, nil)
 }
 
 // firstConditional is the byte offset of the first character a conditional
@@ -339,9 +340,9 @@ func conditionalCased(text string, lang Language, upper bool, from int) string {
 	var out strings.Builder
 	out.Grow(len(text) + 8)
 	if upper {
-		out.WriteString(fullCased(text[:from], fullUppercase[:], unicode.ToUpper, strings.ToUpper, isMkhedruli))
+		out.WriteString(fullCased(text[:from], fullUppercase[:], simpleUpper, upperString, isMkhedruli))
 	} else {
-		out.WriteString(fullCased(text[:from], fullLowercase[:], unicode.ToLower, strings.ToLower, nil))
+		out.WriteString(fullCased(text[:from], fullLowercase[:], simpleLower, lowerString, nil))
 	}
 	for i, r := range text[from:] {
 		at := from + i
@@ -358,9 +359,9 @@ func conditionalCased(text string, lang Language, upper bool, from int) string {
 			out.WriteString(s)
 			continue
 		}
-		table, simple := fullUppercase[:], unicode.ToUpper
+		table, simple := fullUppercase[:], simpleUpper
 		if !upper {
-			table, simple = fullLowercase[:], unicode.ToLower
+			table, simple = fullLowercase[:], simpleLower
 		}
 		if s, ok := lookupFullCase(r, table); ok {
 			out.WriteString(s)
@@ -375,7 +376,7 @@ func conditionalCased(text string, lang Language, upper bool, from int) string {
 //
 // The whole-string function is the fast path and does the work whenever no
 // character of the text has a full mapping — which is the ordinary case, and
-// keeps an ASCII heading on the byte-wise loop inside strings.ToUpper rather
+// keeps an ASCII heading on the byte-wise loop inside upperString rather
 // than on a rune-by-rune one here. Only text that really does contain one of
 // the hundred characters in the table is rebuilt.
 func fullCased(text string, table []fullCase, simple func(rune) rune, whole func(string) string,
@@ -482,7 +483,7 @@ func capitalizeWords(text string, state WordState, lang Language) string {
 			if s, ok := lookupFullCase(r, fullTitlecase[:]); ok {
 				out.WriteString(s)
 			} else {
-				out.WriteRune(unicode.ToTitle(r))
+				out.WriteRune(simpleTitle(r))
 			}
 		} else {
 			out.WriteRune(r)

@@ -1,0 +1,202 @@
+package cmd
+
+import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/mgilbir/forme/cmd/internal/tables"
+)
+
+// One Unicode in the engine, and it is the one the tables say.
+//
+// The tables are generated from the release the Makefile pins, and say so. Two
+// generators also asked Go's package unicode, which answers from the release
+// the toolchain shipped — 15.0.0 for Go 1.26 — and those answers went into
+// tables labelled 17.0.0:
+//
+//   - cmd/gencasing kept a full mapping only where it differed from
+//     unicode.ToUpper and friends, and the consumer fell back to them, so the
+//     hundred and ten characters Unicode 16 and 17 gave case mappings were in no table at
+//     all;
+//   - cmd/genjoining left "an unlisted non-spacing mark is transparent" to the
+//     shaper, which asks unicode.In, so U+0897 ARABIC PEPET — a mark since
+//     Unicode 16 — breaks the Arabic join it sits in. The default is generated
+//     now; see cmd/genjoining for what is left for the shaper to read it.
+//
+// It also made the tables depend on the toolchain that ran the generator: a Go
+// release that updated package unicode would have changed what the drift test
+// expects from the same pinned files.
+//
+// So no generator imports package unicode. Every property a generator needs is
+// in the database it is pointed at, and cmd/internal/ucd reads UnicodeData.txt
+// for the ones that live there. unicode/utf8 is not a property question and is
+// allowed.
+
+// TestNoGeneratorAsksPackageUnicode.
+func TestNoGeneratorAsksPackageUnicode(t *testing.T) {
+	dirs, err := filepath.Glob("gen*/*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	internal, err := filepath.Glob("internal/*/*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked := 0
+	for _, path := range append(dirs, internal...) {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checked++
+		for _, imp := range f.Imports {
+			if p, _ := strconv.Unquote(imp.Path.Value); p == "unicode" {
+				t.Errorf("%s imports package unicode, which answers from Unicode of "+
+					"the toolchain's release and not the one the table is labelled "+
+					"with; read the property from the pinned database instead "+
+					"(cmd/internal/ucd reads UnicodeData.txt)", path)
+			}
+		}
+	}
+	if checked < len(tables.Manifest)/2 {
+		t.Fatalf("only %d generator sources were read", checked)
+	}
+}
+
+// TestEveryDatabaseGeneratorChecksItsRelease. A generator told the release by
+// -version holds its inputs to it with ucd.Check; one that did not could label
+// a table built from one release's files with another's name. Three used to
+// work the version out of whichever file named one first, and never compared
+// the rest.
+func TestEveryDatabaseGeneratorChecksItsRelease(t *testing.T) {
+	seen := map[string]bool{}
+	for _, tb := range tables.Manifest {
+		if !readsTheDatabase(tb) || seen[tb.Generator] {
+			continue
+		}
+		seen[tb.Generator] = true
+		f, err := parser.ParseFile(token.NewFileSet(), filepath.Join(tb.Generator, "main.go"), nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The name the ucd package is imported under.
+		name := ""
+		for _, imp := range f.Imports {
+			if p, _ := strconv.Unquote(imp.Path.Value); p == "github.com/mgilbir/forme/cmd/internal/ucd" {
+				name = "ucd"
+				if imp.Name != nil {
+					name = imp.Name.Name
+				}
+			}
+		}
+		// A call, and not a mention: "var _ = ucd.Check" names it and checks
+		// nothing.
+		calls := false
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Check" {
+				if id, ok := sel.X.(*ast.Ident); ok && id.Name == name {
+					calls = true
+				}
+			}
+			return true
+		})
+		if !calls {
+			t.Errorf("cmd/%s is told the Unicode release and does not call ucd.Check", tb.Generator)
+		}
+	}
+	if len(seen) < 15 {
+		t.Fatalf("only %d generators read the database, by the manifest", len(seen))
+	}
+}
+
+// TestTheReorderedClassesAreNormalizesOwn. cmd/gencanonical fails if the data
+// stops giving any character one of the combining classes shape/normalize.go
+// reorders, and its list said it was that table's. It was not: nine of its
+// classes were in no rule, and the check guarded rules that did not exist. The
+// two lists are read here and have to be the same.
+func TestTheReorderedClassesAreNormalizesOwn(t *testing.T) {
+	gen := intsOf(t, filepath.Join("gencanonical", "main.go"), "reorderedClasses", false)
+	shape := intsOf(t, filepath.Join(root, "shape", "normalize.go"), "reorderClasses", true)
+	if len(shape) == 0 {
+		t.Fatal("shape/normalize.go's reorderClasses has no entries this can read")
+	}
+	if strings.Join(gen, " ") != strings.Join(shape, " ") {
+		t.Errorf("cmd/gencanonical checks the classes\n  %v\nand shape/normalize.go reorders\n  %v",
+			gen, shape)
+	}
+}
+
+// intsOf reads a package-level composite literal of integers: its elements, or
+// with keys set, its keys. Sorted, as strings.
+func intsOf(t *testing.T, path, name string, keys bool) []string {
+	t.Helper()
+	f, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []int
+	found := false
+	ast.Inspect(f, func(n ast.Node) bool {
+		spec, ok := n.(*ast.ValueSpec)
+		if !ok || len(spec.Names) != 1 || spec.Names[0].Name != name || len(spec.Values) != 1 {
+			return true
+		}
+		lit, ok := spec.Values[0].(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		found = true
+		for _, e := range lit.Elts {
+			if kv, ok := e.(*ast.KeyValueExpr); ok {
+				if keys {
+					e = kv.Key
+				} else {
+					e = kv.Value
+				}
+			}
+			bl, ok := e.(*ast.BasicLit)
+			if !ok || bl.Kind != token.INT {
+				t.Fatalf("%s: an element of %s is not an integer literal", path, name)
+			}
+			v, err := strconv.Atoi(bl.Value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, v)
+		}
+		return false
+	})
+	if !found {
+		t.Fatalf("%s has no %s", path, name)
+	}
+	sort.Ints(out)
+	var s []string
+	for _, v := range out {
+		s = append(s, strconv.Itoa(v))
+	}
+	return s
+}
+
+// readsTheDatabase reports whether a table is read from the Unicode Character
+// Database, which is to say whether its generator is told the release.
+func readsTheDatabase(tb tables.Table) bool {
+	for _, a := range tb.Args {
+		if strings.Contains(a, "${UNICODE_VERSION}") {
+			return true
+		}
+	}
+	return false
+}

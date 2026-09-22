@@ -34,31 +34,40 @@
 // would have been right, and a character wrongly called rotated costs a page
 // that is wrong with nothing said about it.
 //
-// # The unassigned ranges
+// # The code points the data does not list
 //
-// The file's data is explicit code points, and its *header* states that certain
-// ranges of unassigned code points default to U rather than to the property's
-// R. They are listed in defaultUpright below, copied from that header, because
-// the file says so in prose and not in a field. Within those ranges an assigned
-// character carries whatever value the data gives it; only the code points the
-// data does not mention take the default.
+// The file's data is explicit code points, and what it says about the rest is
+// its "# @missing:" line — the machine-readable form of a property's default,
+// which UAX #44 defines for every file of the database. In 17.0.0 there is one,
+// "0000..10FFFF; R", because the data has listed every upright code point
+// explicitly since 15.1, unassigned ones included: the reserved code points of
+// the CJK blocks, the private use areas.
 //
-// Reading the data alone would make an unassigned code point in the middle of
-// the CJK blocks rotated, which is the unsafe direction and is the one shape of
-// this mistake that no document would ever reveal.
+// The header also carries a prose list of ranges whose unassigned code points
+// "default to U", from the releases before the data was explicit. It is not
+// read. This generator used to carry a copy of it, which had drifted from the
+// header it claimed to be copied from — U+FF00..FFEF where the header now names
+// only U+FFE7, among others — and made eighteen unassigned code points upright
+// that the data calls R. A default read from the @missing lines cannot drift
+// from the file, and a release that states an upright default there gets it:
+// the defaults are applied in the order they appear, a later line overriding
+// an earlier one as UAX #44 says, to every code point the data is silent on.
 //
 // Usage:
 //
-//	genvertical VerticalOrientation.txt > paragraph/verticaltable.go
+//	genvertical -version <X.Y.Z> VerticalOrientation.txt > paragraph/verticaltable.go
 package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/mgilbir/forme/cmd/internal/ucd"
 )
 
 // uprightValues are the Vertical_Orientation values that stand upright.
@@ -68,57 +77,45 @@ var uprightValues = map[string]bool{"U": true, "Tu": true}
 // file gains is an error here rather than a silent omission from one of them.
 var rotatedValues = map[string]bool{"R": true, "Tr": true}
 
-// defaultUpright are the ranges whose *unassigned* code points default to U,
-// from the header of VerticalOrientation.txt. See the note above.
-var defaultUpright = [...]struct {
-	lo, hi rune
-	what   string
-}{
-	{0x18B0, 0x18FF, "Canadian Syllabics Extended"},
-	{0x2065, 0x2065, "Reserved Default_Ignorable_Code_Point"},
-	{0x2150, 0x218F, "Number Forms"},
-	{0x2400, 0x245F, "Control Pictures & OCR"},
-	{0x2BB8, 0x2BFF, "Symbols"},
-	{0x2E80, 0xA4CF, "CJK-Related & Yi"},
-	{0xA960, 0xA97F, "Hangul Jamo Extended-A"},
-	{0xAC00, 0xD7FF, "Hangul Syllables & Jamo Extended-B"},
-	{0xE000, 0xFAFF, "PUA & CJK Compatibility Ideographs"},
-	{0xFE10, 0xFE1F, "Vertical Forms"},
-	{0xFE50, 0xFE6F, "Small Form Variants"},
-	{0xFF00, 0xFFEF, "Halfwidth and Fullwidth Forms"},
-	{0x1F200, 0x1F2FF, "Enclosed Ideographic Supplement"},
-	{0x20000, 0x3FFFD, "CJK Unified Ideographs Extensions"},
-	{0xF0000, 0x10FFFD, "Supplementary Private Use Areas"},
-}
-
 type span struct {
 	lo, hi rune
 	class  string
 }
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: genvertical <VerticalOrientation.txt>")
+	version := flag.String("version", "", "the Unicode version the file came from")
+	flag.Parse()
+	args := flag.Args()
+	if len(args) != 1 {
+		fmt.Fprintln(os.Stderr, "usage: genvertical -version <X.Y.Z> <VerticalOrientation.txt>")
 		os.Exit(2)
 	}
-	f, err := os.Open(os.Args[1])
+	if err := ucd.Check(*version, args...); err != nil {
+		fail(err.Error())
+	}
+	f, err := os.Open(args[0])
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		fail(err.Error())
 	}
 	defer f.Close()
 
-	version := "unknown"
-	var upright []span
-	// Every code point the data mentions, whatever its value: a default range
+	var upright, defaults []span
+	// Every code point the data mentions, whatever its value: a default
 	// applies only where the file is silent.
 	stated := map[rune]bool{}
 	seen := map[string]bool{}
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		line := sc.Text()
-		if strings.HasPrefix(line, "# VerticalOrientation-") {
-			version = strings.TrimSuffix(strings.TrimPrefix(line, "# VerticalOrientation-"), ".txt")
+		if rest, ok := strings.CutPrefix(line, "# @missing:"); ok {
+			// "# @missing: 0000..10FFFF; R"
+			fields := strings.Split(rest, ";")
+			lo, hi, ok := parseRange(strings.TrimSpace(fields[0]))
+			if len(fields) != 2 || !ok {
+				fail(fmt.Sprintf("an @missing line this cannot read: %q", line))
+			}
+			defaults = append(defaults, span{lo, hi, value(strings.TrimSpace(fields[1]))})
+			continue
 		}
 		if i := strings.IndexByte(line, '#'); i >= 0 {
 			line = line[:i]
@@ -127,61 +124,60 @@ func main() {
 		if len(fields) < 2 {
 			continue
 		}
-		value := strings.TrimSpace(fields[1])
+		v := value(strings.TrimSpace(fields[1]))
 		lo, hi, ok := parseRange(strings.TrimSpace(fields[0]))
 		if !ok {
 			continue
 		}
-		if !uprightValues[value] && !rotatedValues[value] {
-			fmt.Fprintf(os.Stderr, "genvertical: %q is a Vertical_Orientation value "+
-				"neither list names; decide whether it stands upright\n", value)
-			os.Exit(1)
-		}
-		seen[value] = true
+		seen[v] = true
 		for r := lo; r <= hi; r++ {
 			stated[r] = true
 		}
-		if uprightValues[value] {
-			upright = append(upright, span{lo, hi, value})
+		if uprightValues[v] {
+			upright = append(upright, span{lo, hi, v})
 		}
 	}
 	if err := sc.Err(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		fail(err.Error())
 	}
 	// A value that has vanished from the file is a value renamed upstream, and
 	// the characters it held would drop out of the table without a word.
-	for value := range uprightValues {
-		if !seen[value] {
-			fmt.Fprintf(os.Stderr, "genvertical: no character has value %s; has it been renamed?\n", value)
-			os.Exit(1)
-		}
-	}
-	for value := range rotatedValues {
-		if !seen[value] {
-			fmt.Fprintf(os.Stderr, "genvertical: no character has value %s; has it been renamed?\n", value)
-			os.Exit(1)
+	for _, values := range []map[string]bool{uprightValues, rotatedValues} {
+		for v := range values {
+			if !seen[v] {
+				fail(fmt.Sprintf("no character has value %s; has it been renamed?", v))
+			}
 		}
 	}
 	if len(upright) == 0 {
-		fmt.Fprintln(os.Stderr, "genvertical: no lines matched")
-		os.Exit(1)
+		fail("no lines matched")
 	}
-	// The header's ranges, minus everything the data spoke about.
-	for _, d := range defaultUpright {
-		start := rune(-1)
-		for r := d.lo; r <= d.hi+1; r++ {
-			if r <= d.hi && !stated[r] {
-				if start < 0 {
-					start = r
-				}
-				continue
-			}
-			if start >= 0 {
-				upright = append(upright, span{start, r - 1, "unassigned"})
-				start = -1
+	// The property has a default, and a file that states none is not the one
+	// this reads: every code point the data is silent on would be nothing at
+	// all, rather than rotated or upright.
+	if len(defaults) == 0 {
+		fail("no @missing line, so what the data does not list has no value")
+	}
+	// The defaults, later lines over earlier ones, minus everything the data
+	// spoke about. Only an upright default contributes to the table.
+	for r := rune(0); r <= 0x10FFFF; r++ {
+		if stated[r] {
+			continue
+		}
+		d := ""
+		for _, m := range defaults {
+			if m.lo <= r && r <= m.hi {
+				d = m.class
 			}
 		}
+		if !uprightValues[d] {
+			continue
+		}
+		if n := len(upright); n > 0 && upright[n-1].class == "default" && upright[n-1].hi == r-1 {
+			upright[n-1].hi = r
+			continue
+		}
+		upright = append(upright, span{r, r, "default"})
 	}
 
 	var w strings.Builder
@@ -193,15 +189,14 @@ package paragraph
 	emit(&w, "uprightRanges", upright, `// The characters that stand upright on a line of vertical text, UAX #50's
 // values U and Tu. Unicode %s.
 //
-// %d ranges, merged from %d the file and its header state separately: %s.
-// The ideographs, the kana, the Hangul, the fullwidth forms and the symbols
-// that are set square in East Asian text. "unassigned" is the header's ranges
-// of unassigned code points that default to U — see cmd/genvertical for why
-// they are not in the data and why leaving them out would be the dangerous
-// direction to be wrong in.
+// %d ranges, merged from %d the file states: %s. The ideographs, the kana,
+// the Hangul, the fullwidth forms and the symbols that are set square in East
+// Asian text, and the unassigned and private use code points of their blocks,
+// which the data lists explicitly. A "default" count would be code points the
+// data is silent on and an @missing line calls upright — see cmd/genvertical.
 //
 // What reads it is a gate rather than a typesetting rule: this engine sets no
-// upright text, and the table is how it knows to say so. See IsUpright.`, version)
+// upright text, and the table is how it knows to say so. See IsUpright.`, *version)
 	fmt.Print(w.String())
 }
 
@@ -240,6 +235,20 @@ func emit(w *strings.Builder, name string, spans []span, doc, version string) {
 		fmt.Fprintf(w, "\t{0x%04X, 0x%04X},\n", s.lo, s.hi)
 	}
 	fmt.Fprintln(w, "}")
+}
+
+// value is a Vertical_Orientation value, refused if it is none of the four.
+func value(v string) string {
+	if !uprightValues[v] && !rotatedValues[v] {
+		fail(fmt.Sprintf("%q is a Vertical_Orientation value neither list names; "+
+			"decide whether it stands upright", v))
+	}
+	return v
+}
+
+func fail(msg string) {
+	fmt.Fprintln(os.Stderr, "genvertical:", msg)
+	os.Exit(1)
 }
 
 func parseRange(s string) (rune, rune, bool) {

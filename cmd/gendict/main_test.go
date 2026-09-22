@@ -15,8 +15,9 @@ import (
 // "TODO: why does this have full stop in it?" into paragraph/thaidict.go under
 // the words "the licence the word list is under".
 func TestOnlyTheHeaderIsTheLicence(t *testing.T) {
-	// The shape of ICU's own files: a notice with a blank line inside it, the
-	// words, and annotations among them.
+	// The shape of ICU's own files — a notice, the words, and annotations among
+	// them — with a blank line inside the notice, which none of the four has
+	// today and which must not end it.
 	const src = "# Copyright (C) 2016 and later: Unicode, Inc. and others.\n" +
 		"# License & terms of use: http://www.unicode.org/copyright.html\n" +
 		"\n" +

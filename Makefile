@@ -1,4 +1,4 @@
-.PHONY: ucd verify-fonts test-corpora linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance
+.PHONY: ucd verify-fonts test-corpora linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance
 
 test:
 	gofmt -l . | grep -v '^testdata/' && exit 1 || true
@@ -34,12 +34,16 @@ CORPUS_ENV = \
 	CSS_PARSING_TESTS="$(abspath $(CSS_TESTS_DIR))" \
 	UNICODE_BIDI_TESTS="$(abspath $(BIDI_DIR))" \
 	UNICODE_GRAPHEME_TESTS="$(abspath $(GRAPHEME_DIR))" \
-	UNICODE_NORMALIZATION_TESTS="$(abspath $(NORMALIZATION_DIR))"
+	UNICODE_NORMALIZATION_TESTS="$(abspath $(NORMALIZATION_DIR))" \
+	TABLE_INPUTS=required
 
+# The inputs of every generated table are corpora too: cmd/regenerate_test.go
+# regenerates each table from them and compares, and with TABLE_INPUTS=required
+# above, a table whose inputs are not here is a failure rather than a skip.
 CORPORA = wpt noto-fonts notocjk ucd css-tests bidi-tests grapheme-tests \
-	normalization-tests $(HTML_ENTITIES)
+	normalization-tests $(HTML_ENTITIES) $(TABLE_SOURCES)
 
-test-corpora: $(CORPORA)
+test-corpora:
 	$(MAKE) verify-fonts
 	$(CORPUS_ENV) go test -count=1 ./...
 
@@ -58,7 +62,7 @@ test-corpora: $(CORPORA)
 # are the shared things the detector is here to watch. It ran `go test -race`
 # over the tests that need nothing fetched, which are the ones that share
 # nothing.
-race: $(CORPORA)
+race:
 	$(CORPUS_ENV) go test -count=1 -race ./...
 
 # Every fetch in this file goes through FETCH rather than through a bare curl.
@@ -220,7 +224,7 @@ ucd: $(UCD_DIR)/.ok
 $(UCD_DIR)/.ok:
 	@for f in $(UCD_FILES); do \
 	  mkdir -p $(UCD_DIR)/$$(dirname $$f); \
-	  $(FETCH) -o $(UCD_DIR)/$$f $(UCD_URL)/$$f || exit 1; \
+	  $(call fetch,$(UCD_DIR)/$$f,$(UCD_URL)/$$f) || exit 1; \
 	done
 	@echo "Unicode $(UNICODE_VERSION) in $(UCD_DIR)"
 	touch $@
@@ -234,6 +238,51 @@ else
 UCD_DEP :=
 endif
 
+# Every generated table in this repository, and how a target regenerates one.
+#
+# A recipe here used to be "go run ./cmd/genX ... > table.go", and that shape
+# had three faults. The redirection emptied the committed table before the
+# generator ran, so a generator that failed left a file under version control
+# empty and the build broken. The loops over several tables had no "set -e",
+# so a failed fetch truncated one table, went on to the next, and reported
+# success. And cmd/regenerate_test.go found the recipes by matching these
+# lines, so a recipe it could not expand dropped out of the check in silence.
+#
+# So what each table is made from lives in one place, cmd/internal/tables, and
+# every target below runs it through cmd/maketables, which generates every
+# table the target names before writing any, replaces each by renaming a whole
+# file over it, and exits non-zero having written nothing when anything fails.
+# The drift test runs the same list through the same code.
+#
+# TABLE_VARS are the variables the list refers to, and they are passed by name:
+# a variable the list names and this does not pass is a failure in both places,
+# not an empty argument.
+TABLE_VARS := UCD UNICODE_VERSION \
+	ICU_DICTS DICT_DIR BUDOUX BUDOUX_DIR HYPHEN_URL HYPHEN_DIR \
+	AFM_URL AFM_DIR BROTLI_URL BROTLI_DIR AGL_URL AGL_DIR \
+	HTML_ENTITIES HTML_ENTITIES_URL HTML_ENTITIES_SHA256 CSS_COLOR_URL CSS_COLOR_SPEC
+MAKETABLES = go run ./cmd/maketables $(foreach v,$(TABLE_VARS),-D '$(v)=$($(v))')
+
+# Every input a generator reads that is fetched rather than committed. Each is
+# taken at a pinned commit or digest, named below beside the URL it pins, and
+# each generated table records the pin — so the table can be made again next
+# year from what it was made from, rather than from what an upstream branch
+# happens to hold. Moving a pin is a change of its own, which regenerates the
+# tables it feeds and says what changed in them.
+#
+# Each fetch lands in a ".part" file that is renamed into place only when it is
+# whole, and each set is marked done by a file named for its pin, so a new pin
+# fetches again rather than finding the old files and calling them current.
+TABLE_SOURCES = $(UCD_DEP) dictionary-sources phrase-sources hyphen-sources \
+	afm brotli-sources agl css-color-spec $(HTML_ENTITIES)
+
+# One file, whole or not at all.
+#
+#	$(call fetch,<destination>,<url>)
+define fetch
+	$(FETCH) -o $(1).part $(2) && mv $(1).part $(1)
+endef
+
 # The tables the shaper derives from Unicode, which cmd/genuse's table above is
 # only one of. Each was runnable and none was wired up, so the only way to
 # regenerate one was to read its usage line — which named a directory this
@@ -242,63 +291,41 @@ endif
 #	make shapetables                              # against the fetched database
 #	make shapetables UCD=/path/to/unpacked/ucd    # against one you already have
 shapetables: $(UCD_DEP)
-	go run ./cmd/genscripts $(UCD)/Scripts.txt $(UCD)/PropertyValueAliases.txt \
-	  > shape/scripts.go
-	go run ./cmd/genjoining $(UCD)/ArabicShaping.txt > shape/joining.go
-	go run ./cmd/genignorable $(UCD)/DerivedCoreProperties.txt > shape/ignorabletable.go
-	go run ./cmd/genindic $(UCD)/IndicSyllabicCategory.txt \
-	  $(UCD)/IndicPositionalCategory.txt > shape/indiccategory.go
-	go run ./cmd/genmatra $(UCD)/UnicodeData.txt > shape/indicmatra.go
-	go run ./cmd/genvowel testdata/ms-use/IndicShapingInvalidCluster.txt \
-	  > shape/indicvowel.go
-	go run ./cmd/gencanonical $(UCD)/UnicodeData.txt \
-	  $(UCD)/CompositionExclusions.txt > shape/canonical.go
-	gofmt -w shape/scripts.go shape/joining.go shape/ignorabletable.go \
-	  shape/indiccategory.go shape/indicmatra.go shape/indicvowel.go shape/canonical.go
+	$(MAKETABLES) shapetables
 
 # The bidirectional character properties, UAX #9. See cmd/genbidi.
 #
 #	make bidi-tables UCD=/path/to/unpacked/ucd
 bidi-tables: $(UCD_DEP)
-	go run ./cmd/genbidi $(UCD)/UnicodeData.txt \
-	  $(UCD)/extracted/DerivedBidiClass.txt \
-	  $(UCD)/BidiBrackets.txt $(UCD)/BidiMirroring.txt > bidi/tables.go
-	gofmt -w bidi/tables.go
+	$(MAKETABLES) bidi-tables
 
 # The grapheme cluster properties, UAX #29. See cmd/gensegment.
 #
 #	make grapheme-tables UCD=/path/to/unpacked/ucd
 grapheme-tables: $(UCD_DEP)
-	go run ./cmd/gensegment -version $(UNICODE_VERSION) -ucd $(UCD) \
-	  -out segment/tables.go
-	gofmt -w segment/tables.go
+	$(MAKETABLES) grapheme-tables
 
 # The characters a line may not begin with, from Unicode's line-breaking
 # property. See cmd/genlinebreak for which of UAX #14's rules are in it.
 #
 #	make linebreak UCD=/path/to/unpacked/ucd
 linebreak: $(UCD_DEP)
-	go run ./cmd/genlinebreak $(UCD)/LineBreak.txt > paragraph/linebreaktable.go
-	gofmt -w paragraph/linebreaktable.go
+	$(MAKETABLES) linebreak
 
-# Unicode's full case mappings — the ones that turn one character into more than
-# one, which Go's own case functions cannot express. See cmd/gencasing.
+# Unicode's case mappings, simple and full, from the release UNICODE_VERSION
+# names — not Go's, which are the release the toolchain shipped. See
+# cmd/gencasing.
 #
 #	make casing UCD=/path/to/unpacked/ucd
 casing: $(UCD_DEP)
-	go run ./cmd/gencasing $(UCD)/SpecialCasing.txt > paragraph/casingtable.go
-	gofmt -w paragraph/casingtable.go
+	$(MAKETABLES) casing
 
 # The two properties CSS Text's segment break transformation reads: East Asian
 # Width, and which characters are Hangul. See cmd/geneastasian.
 #
 #	make eastasian UCD=/path/to/unpacked/ucd
 eastasian: $(UCD_DEP)
-	go run ./cmd/geneastasian -version $(UNICODE_VERSION) \
-	  $(UCD)/EastAsianWidth.txt $(UCD)/Scripts.txt \
-	  $(UCD)/UnicodeData.txt $(UCD)/emoji/emoji-data.txt \
-	  > paragraph/eastasiantable.go
-	gofmt -w paragraph/eastasiantable.go
+	$(MAKETABLES) eastasian
 
 # The word lists CSS Text §5.1's lexical line breaking needs, for the scripts
 # that write no spaces between their words.
@@ -320,20 +347,26 @@ eastasian: $(UCD_DEP)
 # class — Tai Tham, Tai Le, Tai Viet and their neighbours — has none to publish,
 # and UnsupportedScript is what says so about them.
 #
+# ICU is taken at the release-78.1 tag's commit. Adding a language is an entry
+# in cmd/internal/tables and its file here.
+#
 #	make dictionaries
-ICU_DICTS := https://raw.githubusercontent.com/unicode-org/icu/main/icu4c/source/data/brkitr/dictionaries
-DICT_DIR  := testdata/icu-dictionaries
+ICU_COMMIT := 049e0d6a420629ac7db77256987d083a563287b5
+ICU_DICTS  := https://raw.githubusercontent.com/unicode-org/icu/$(ICU_COMMIT)/icu4c/source/data/brkitr/dictionaries
+DICT_DIR   := testdata/icu-dictionaries
+ICU_DICT_FILES := thaidict.txt laodict.txt khmerdict.txt burmesedict.txt
 
-ICU_DICT_NAMES := thai:thaidict lao:laodict khmer:khmerdict burmese:burmesedict
+dictionary-sources: $(DICT_DIR)/.ok-$(ICU_COMMIT)
 
-dictionaries:
+$(DICT_DIR)/.ok-$(ICU_COMMIT):
 	mkdir -p $(DICT_DIR)
-	for pair in $(ICU_DICT_NAMES); do \
-	  name=$${pair%%:*}; file=$${pair##*:}; \
-	  $(FETCH) -o $(DICT_DIR)/$$file.txt $(ICU_DICTS)/$$file.txt; \
-	  go run ./cmd/gendict $$name $(DICT_DIR)/$$file.txt > paragraph/$$name'dict.go'; \
-	  gofmt -w paragraph/$$name'dict.go'; \
+	for f in $(ICU_DICT_FILES); do \
+	  $(call fetch,$(DICT_DIR)/$$f,$(ICU_DICTS)/$$f) || exit 1; \
 	done
+	touch $@
+
+dictionaries: dictionary-sources
+	$(MAKETABLES) dictionaries
 
 # The phrase model CSS Text §5.2's "auto-phrase" needs, for the language whose
 # words run together and whose phrases do not.
@@ -353,24 +386,23 @@ dictionaries:
 #
 # One language. BudouX publishes Chinese and Thai as well, no document in the
 # suite asks for either, and Thai already breaks at the words its ICU dictionary
-# knows. Adding one is adding a pair to PHRASE_MODELS.
+# knows. Adding one is an entry in cmd/internal/tables and its model here.
 #
 #	make phrases
-BUDOUX      := https://raw.githubusercontent.com/google/budoux/main
-BUDOUX_DIR  := testdata/budoux
+BUDOUX_COMMIT := b02ea07cdd6622af8e3bd4da59bc5f0e60eb6bbe
+BUDOUX        := https://raw.githubusercontent.com/google/budoux/$(BUDOUX_COMMIT)
+BUDOUX_DIR    := testdata/budoux
 
-PHRASE_MODELS := japanese:ja
+phrase-sources: $(BUDOUX_DIR)/.ok-$(BUDOUX_COMMIT)
 
-phrases:
+$(BUDOUX_DIR)/.ok-$(BUDOUX_COMMIT):
 	mkdir -p $(BUDOUX_DIR)
-	$(FETCH) -o $(BUDOUX_DIR)/LICENSE $(BUDOUX)/LICENSE
-	for pair in $(PHRASE_MODELS); do \
-	  name=$${pair%%:*}; file=$${pair##*:}; \
-	  $(FETCH) -o $(BUDOUX_DIR)/$$file.json $(BUDOUX)/budoux/models/$$file.json; \
-	  go run ./cmd/genphrase $$name $(BUDOUX_DIR)/$$file.json $(BUDOUX_DIR)/LICENSE \
-	    > paragraph/$$name'phrases.go'; \
-	  gofmt -w paragraph/$$name'phrases.go'; \
-	done
+	$(call fetch,$(BUDOUX_DIR)/LICENSE,$(BUDOUX)/LICENSE)
+	$(call fetch,$(BUDOUX_DIR)/ja.json,$(BUDOUX)/budoux/models/ja.json)
+	touch $@
+
+phrases: phrase-sources
+	$(MAKETABLES) phrases
 
 # Where a word may be divided when the document has not said, which is what
 # "hyphens: auto" asks for.
@@ -385,30 +417,31 @@ phrases:
 # Four languages, and each is a table checked in — Hungarian's alone is half a
 # megabyte, which is what a hyphenation dictionary costs when it is patterns
 # rather than words. They are the four the suite asks for by name; adding a
-# fifth is a pair here and a line in paragraph/hyphenate.go's hyphenSources.
+# fifth is an entry in cmd/internal/tables, its file here, and a line in
+# paragraph/hyphenate.go's hyphenSources.
 #
-# The pair is the Go identifier and the key paragraph.HyphenationOf resolves a
-# lang attribute to. They differ for pinyin, whose key carries the script:
-# "zh-Latn" is Mandarin in the Latin alphabet and "zh" is Han, and only the
-# first of the two has syllables to divide between.
+# Each entry carries the Go identifier and the key paragraph.HyphenationOf
+# resolves a lang attribute to. They differ for pinyin, whose key carries the
+# script: "zh-Latn" is Mandarin in the Latin alphabet and "zh" is Han, and only
+# the first of the two has syllables to divide between.
 #
 #	make hyphens
-HYPHEN_URL := https://raw.githubusercontent.com/hyphenation/tex-hyphen/master/hyph-utf8/tex/generic/hyph-utf8/patterns/tex
+TEX_HYPHEN_COMMIT := 5684c0f51c0b81133db2efbe60a408b4155a3ff5
+HYPHEN_URL := https://raw.githubusercontent.com/hyphenation/tex-hyphen/$(TEX_HYPHEN_COMMIT)/hyph-utf8/tex/generic/hyph-utf8/patterns/tex
 HYPHEN_DIR := testdata/hyphen
+HYPHEN_FILES := hyph-en-us.tex hyph-nl.tex hyph-hu.tex hyph-zh-latn-pinyin.tex
 
-HYPHEN_PATTERNS := english:en:hyph-en-us dutch:nl:hyph-nl \
-                   hungarian:hu:hyph-hu pinyin:zh-latn:hyph-zh-latn-pinyin
+hyphen-sources: $(HYPHEN_DIR)/.ok-$(TEX_HYPHEN_COMMIT)
 
-hyphens:
+$(HYPHEN_DIR)/.ok-$(TEX_HYPHEN_COMMIT):
 	mkdir -p $(HYPHEN_DIR)
-	for triple in $(HYPHEN_PATTERNS); do \
-	  name=$${triple%%:*}; rest=$${triple#*:}; \
-	  key=$${rest%%:*}; file=$${rest##*:}; \
-	  $(FETCH) -o $(HYPHEN_DIR)/$$file.tex $(HYPHEN_URL)/$$file.tex; \
-	  go run ./cmd/genhyphen $$name $$key $(HYPHEN_DIR)/$$file.tex \
-	    > paragraph/$$name'hyphens.go'; \
-	  gofmt -w paragraph/$$name'hyphens.go'; \
+	for f in $(HYPHEN_FILES); do \
+	  $(call fetch,$(HYPHEN_DIR)/$$f,$(HYPHEN_URL)/$$f) || exit 1; \
 	done
+	touch $@
+
+hyphens: hyphen-sources
+	$(MAKETABLES) hyphens
 
 # Which characters stand upright on a line of vertical text, UAX #50. It is
 # what tells a block of English from a block of Japanese, and so which blocks
@@ -416,31 +449,17 @@ hyphens:
 #
 #	make vertical UCD=/path/to/unpacked/ucd
 vertical: $(UCD_DEP)
-	go run ./cmd/genvertical $(UCD)/VerticalOrientation.txt > paragraph/verticaltable.go
-	gofmt -w paragraph/verticaltable.go
+	$(MAKETABLES) vertical
 
 # What "text-transform: full-width" and "full-size-kana" remap, both derived
 # from UnicodeData.txt. See cmd/genfullwidth and cmd/genfullsizekana.
 #
 #	make widths UCD=/path/to/unpacked/ucd
 widths: $(UCD_DEP)
-	go run ./cmd/genfullwidth -version $(UNICODE_VERSION) \
-	  $(UCD)/UnicodeData.txt > paragraph/widthtable.go
-	go run ./cmd/genfullsizekana -version $(UNICODE_VERSION) \
-	  $(UCD)/UnicodeData.txt > paragraph/kanatable.go
-	gofmt -w paragraph/widthtable.go paragraph/kanatable.go
+	$(MAKETABLES) widths
 
 useable: $(UCD_DEP)
-	go run ./cmd/genuse \
-		$(UCD)/IndicSyllabicCategory.txt \
-		$(UCD)/IndicPositionalCategory.txt \
-		$(UCD)/UnicodeData.txt \
-		$(UCD)/DerivedCoreProperties.txt \
-		$(UCD)/ArabicShaping.txt \
-		testdata/ms-use/IndicSyllabicCategory-Additional.txt \
-		testdata/ms-use/IndicPositionalCategory-Additional.txt \
-		> shape/usetable.go
-	gofmt -w shape/usetable.go
+	$(MAKETABLES) useable
 
 # Only the directory this file fetches into. "make clean-ucd UCD=/path/to/ucd"
 # is the documented way to run a generator against a copy someone already has,
@@ -532,15 +551,68 @@ clean-fonts:
 #
 # The AFM set is freely redistributable and ships with a good deal of software
 # — Ghostscript, matplotlib, poppler-data — but is not vendored here, because
-# only the numbers are wanted and none of the files are redistributed. Point
-# this at a directory holding them:
+# only the numbers are wanted and none of the files are redistributed. This
+# used to be pointed at a directory the developer had found; nothing fetched
+# one. matplotlib's copies, with the readme that is their licence, are taken at
+# its v3.10.0 tag's commit, and reproduce the committed table byte for byte.
 #
-#	make stdfonts AFM=/path/to/afm
-AFM ?= testdata/afm
+#	make stdfonts
+MATPLOTLIB_COMMIT := 8d64f03a1f501ba0019279bf2f8db3930d1fe33f
+AFM_URL := https://raw.githubusercontent.com/matplotlib/matplotlib/$(MATPLOTLIB_COMMIT)/lib/matplotlib/mpl-data/fonts/pdfcorefonts
+AFM_DIR := testdata/afm
+AFM_FILES := Courier.afm Courier-Bold.afm Courier-Oblique.afm Courier-BoldOblique.afm \
+	Helvetica.afm Helvetica-Bold.afm Helvetica-Oblique.afm Helvetica-BoldOblique.afm \
+	Times-Roman.afm Times-Bold.afm Times-Italic.afm Times-BoldItalic.afm \
+	Symbol.afm ZapfDingbats.afm readme.txt
 
-stdfonts:
-	go run ./cmd/genstdfonts $(AFM) > shape/standard14.go
-	gofmt -w shape/standard14.go
+afm: $(AFM_DIR)/.ok-$(MATPLOTLIB_COMMIT)
+
+$(AFM_DIR)/.ok-$(MATPLOTLIB_COMMIT):
+	mkdir -p $(AFM_DIR)
+	for f in $(AFM_FILES); do \
+	  $(call fetch,$(AFM_DIR)/$$f,$(AFM_URL)/$$f) || exit 1; \
+	done
+	touch $@
+
+stdfonts: afm
+	$(MAKETABLES) stdfonts
+
+# The two tables a Brotli decoder cannot compute, read from the reference
+# implementation's own source at its v1.1.0 tag's commit. See cmd/genbrotli.
+#
+#	make brotli-tables
+BROTLI_COMMIT := ed738e842d2fbdf2d6459e39267a633c4a9b2f5d
+BROTLI_URL := https://raw.githubusercontent.com/google/brotli/$(BROTLI_COMMIT)/c/common
+BROTLI_DIR := testdata/brotli-source
+
+brotli-sources: $(BROTLI_DIR)/.ok-$(BROTLI_COMMIT)
+
+$(BROTLI_DIR)/.ok-$(BROTLI_COMMIT):
+	mkdir -p $(BROTLI_DIR)
+	$(call fetch,$(BROTLI_DIR)/context.c,$(BROTLI_URL)/context.c)
+	$(call fetch,$(BROTLI_DIR)/transform.c,$(BROTLI_URL)/transform.c)
+	touch $@
+
+brotli-tables: brotli-sources
+	$(MAKETABLES) brotli-tables
+
+# The glyph names the standard Latin encodings use, from Adobe's Glyph List.
+# See cmd/genglyphlist.
+#
+#	make glyphlist
+AGL_COMMIT := 4036a9ca80a62f64f9de4f7321a9a045ad0ecfd6
+AGL_URL := https://raw.githubusercontent.com/adobe-type-tools/agl-aglfn/$(AGL_COMMIT)/glyphlist.txt
+AGL_DIR := testdata/agl
+
+agl: $(AGL_DIR)/.ok-$(AGL_COMMIT)
+
+$(AGL_DIR)/.ok-$(AGL_COMMIT):
+	mkdir -p $(AGL_DIR)
+	$(call fetch,$(AGL_DIR)/glyphlist.txt,$(AGL_URL))
+	touch $@
+
+glyphlist: agl
+	$(MAKETABLES) glyphlist
 
 # UAX #29's grapheme cluster boundaries, which package segment finds.
 #
@@ -656,7 +728,15 @@ clean-css-tests:
 #
 # Regenerate after the standard adds a name — which it has not done in years, so
 # this is a rare errand rather than part of a build.
+#
+# The standard publishes the file at one URL and keeps no versions, so it is
+# pinned by digest rather than by commit: the fetch refuses a file with any
+# other SHA-256, and so does cmd/genhtmlentities, and the generated table
+# records it. A refusal means the standard changed the file, and taking the
+# change is moving HTML_ENTITIES_SHA256.
 HTML_ENTITIES := testdata/html/entities.json
+HTML_ENTITIES_URL := https://html.spec.whatwg.org/entities.json
+HTML_ENTITIES_SHA256 := d741d877ac77c4194c4ad526b5b4a19aef8dfe411ab840a466891cdbb9f362e6
 
 # The fetch is a target of its own so that a caller can have the standard's file
 # without having the table rebuilt from it. That is the difference between
@@ -666,11 +746,16 @@ HTML_ENTITIES := testdata/html/entities.json
 # output with the generator's output and pass whatever either said.
 $(HTML_ENTITIES):
 	mkdir -p $(dir $@)
-	$(FETCH) -o $@ https://html.spec.whatwg.org/entities.json
+	$(FETCH) -o $@.part $(HTML_ENTITIES_URL)
+	echo "$(HTML_ENTITIES_SHA256)  $@.part" | sha256sum -c --quiet - || { \
+	  rm -f $@.part; \
+	  echo "$(HTML_ENTITIES_URL) is not the file HTML_ENTITIES_SHA256 pins" >&2; \
+	  exit 1; \
+	}
+	mv $@.part $@
 
 html-entities: $(HTML_ENTITIES)
-	go run ./cmd/genhtmlentities -in $(HTML_ENTITIES) -out html/entities.go
-	gofmt -w html/entities.go
+	$(MAKETABLES) html-entities
 
 clean-html-entities:
 	rm -f $(HTML_ENTITIES)
@@ -683,16 +768,26 @@ clean-html-entities:
 # suite that checks it would make that check circular, proving only that a file
 # round-trips through a generator. As with the HTML entities, the generated table
 # is committed and the input is not.
-CSS_COLOR_SPEC := testdata/css-color-4.bs
+#
+# The draft is edited every week, so it is taken at a commit of csswg-drafts
+# rather than from its main branch.
+CSSWG_COMMIT := cbca081425c1d488556b9ce42e69370eefe3edc4
+CSS_COLOR_URL := https://raw.githubusercontent.com/w3c/csswg-drafts/$(CSSWG_COMMIT)/css-color-4/Overview.bs
+CSS_COLOR_DIR := testdata/css-color-4
+CSS_COLOR_SPEC := $(CSS_COLOR_DIR)/Overview.bs
 
-css-colors:
-	mkdir -p $(dir $(CSS_COLOR_SPEC))
-	$(FETCH) -o $(CSS_COLOR_SPEC) https://raw.githubusercontent.com/w3c/csswg-drafts/main/css-color-4/Overview.bs
-	go run ./cmd/gencolors -in $(CSS_COLOR_SPEC) -out style/colors.go
-	gofmt -w style/colors.go
+css-color-spec: $(CSS_COLOR_DIR)/.ok-$(CSSWG_COMMIT)
+
+$(CSS_COLOR_DIR)/.ok-$(CSSWG_COMMIT):
+	mkdir -p $(CSS_COLOR_DIR)
+	$(call fetch,$(CSS_COLOR_SPEC),$(CSS_COLOR_URL))
+	touch $@
+
+css-colors: css-color-spec
+	$(MAKETABLES) css-colors
 
 clean-css-colors:
-	rm -f $(CSS_COLOR_SPEC)
+	rm -rf $(CSS_COLOR_DIR)
 
 # Noto, for the scripts the fourteen standard PDF faces do not have.
 #
@@ -1116,3 +1211,16 @@ wpt-breakdown: wpt noto-fonts
 
 clean-wpt:
 	rm -rf $(WPT_DIR)
+
+# What test-corpora and race need, declared here at the end and not on their own
+# rules above.
+#
+# make expands a rule's prerequisites when it reads the rule, and CORPORA names
+# variables — TABLE_SOURCES, HTML_ENTITIES — defined further down this file.
+# Written on the rules at the top, they expanded to nothing: both targets ran the
+# suite with TABLE_INPUTS=required and without fetching a single table input,
+# and every table whose input is fetched failed as "not here". Declared after
+# every variable they use, they expand to all of them. cmd/makefile_test.go
+# asks make itself what these two depend on, so the order cannot quietly come
+# back.
+test-corpora race: $(CORPORA)

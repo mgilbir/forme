@@ -7,9 +7,9 @@ package paragraph
 // The characters whose East Asian Width is F, W or H. Unicode 17.0.0.
 //
 // Not A, which is the ambiguous set — wide in an East Asian context and narrow
-// elsewhere — and which CSS Text's segment break rule names as excluded. See
-// cmd/geneastasian, which is also where the unassigned code points that default
-// to W come from.
+// elsewhere — and which CSS Text's segment break rule names as excluded. The
+// unassigned code points of the ideograph blocks are here, because the file
+// lists them as W; see cmd/geneastasian.
 //
 // 129 ranges.
 var eastAsianWideRanges = [...]struct{ lo, hi rune }{

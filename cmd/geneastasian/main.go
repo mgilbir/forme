@@ -32,11 +32,15 @@
 //     page and they are East Asian, which is what the property is about; the
 //     suite's rules-002 and rules-008 through -010 are halfwidth katakana.
 //
-//   - The unassigned code points of three blocks default to W rather than to
-//     the file's N, and are listed here because the file says so in its header
-//     rather than in its data. Leaving them out would make a newline between
-//     two ideographs behave differently depending on whether the ideographs
-//     happen to be assigned yet.
+//   - The unassigned code points of the ideograph blocks are W and not the
+//     file's N. Leaving them out would make a newline between two ideographs
+//     behave differently depending on whether the ideographs happen to be
+//     assigned yet. The file's data has listed them explicitly since 15.1, and
+//     what it says about any code point it does not list is its "# @missing:"
+//     lines, which are read: a wide default stated there is applied to what
+//     the data is silent on. This used to carry its own list of the header's
+//     prose ranges instead, the shape cmd/genvertical's drifted in, and in
+//     17.0.0 it added nothing the data did not already say.
 //
 // # The second clause
 //
@@ -61,7 +65,7 @@
 // of the sentence's clauses, which is a second reason not to fold it into
 // either.
 //
-//	go run ./cmd/geneastasian <EastAsianWidth.txt> <Scripts.txt> \
+//	go run ./cmd/geneastasian -version <X.Y.Z> <EastAsianWidth.txt> <Scripts.txt> \
 //	    <UnicodeData.txt> <emoji-data.txt> > paragraph/eastasiantable.go
 package main
 
@@ -81,23 +85,11 @@ import (
 // span is one range of characters that share a property value.
 type span struct{ lo, hi rune }
 
-// wideByDefault is what EastAsianWidth.txt's header states and its data does
-// not: the unassigned code points of these blocks are W.
-//
-// The first three are named blocks; the last two are whole planes, "all
-// undesignated code points in Planes 2 and 3, whether inside or outside of
-// allocated blocks".
-var wideByDefault = []span{
-	{0x3400, 0x4DBF}, {0x4E00, 0x9FFF}, {0xF900, 0xFAFF},
-	{0x20000, 0x2FFFD}, {0x30000, 0x3FFFD},
-}
-
 func main() {
 	// The release the output says it came from. It was the string "17.0.0",
 	// typed into five headers and printed whatever the files held; see
-	// cmd/internal/ucd. Two of the four inputs declare a version and are
-	// checked against this, so a run over files from another release fails
-	// rather than mislabelling the table.
+	// cmd/internal/ucd. Every input is checked against it, so a run over files
+	// from another release fails rather than mislabelling the table.
 	version := flag.String("version", "", "the Unicode version the files came from")
 	flag.Parse()
 	args := flag.Args()
@@ -113,7 +105,9 @@ func main() {
 	wide := read(args[0], func(v string) bool {
 		return v == "F" || v == "W" || v == "H"
 	})
-	wide = append(wide, wideByDefault...)
+	wide = append(wide, defaults(args[0], func(v string) bool {
+		return v == "F" || v == "W" || v == "H"
+	})...)
 	hangul := read(args[1], func(v string) bool { return v == "Hangul" })
 	// A is the whole of the ambiguous set and carries no default for the
 	// unassigned code points: EastAsianWidth.txt's header gives those to N or to
@@ -140,9 +134,9 @@ package paragraph
 		`// The characters whose East Asian Width is F, W or H. Unicode %s.
 //
 // Not A, which is the ambiguous set — wide in an East Asian context and narrow
-// elsewhere — and which CSS Text's segment break rule names as excluded. See
-// cmd/geneastasian, which is also where the unassigned code points that default
-// to W come from.`)
+// elsewhere — and which CSS Text's segment break rule names as excluded. The
+// unassigned code points of the ideograph blocks are here, because the file
+// lists them as W; see cmd/geneastasian.`)
 	emit(&b, "hangulRanges", *version, hangul,
 		`// The characters whose script is Hangul. Unicode %s.
 //
@@ -213,6 +207,81 @@ func read(path string, want func(string) bool) []span {
 	if err := sc.Err(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
+	}
+	return out
+}
+
+// defaults returns the code points a property file does not list and whose
+// "# @missing:" default the predicate accepts — the part of a property the data
+// leaves to its header. The defaults apply in the order the file states them, a
+// later line over an earlier one, as UAX #44 defines them.
+func defaults(path string, want func(string) bool) []span {
+	f, err := os.Open(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer f.Close()
+
+	type missing struct {
+		lo, hi rune
+		value  string
+	}
+	var missings []missing
+	var stated []span
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for line := 1; sc.Scan(); line++ {
+		text := sc.Text()
+		if rest, ok := strings.CutPrefix(text, "# @missing:"); ok {
+			fields := strings.Split(rest, ";")
+			if len(fields) != 2 {
+				fmt.Fprintf(os.Stderr, "line %d: an @missing line this cannot read\n", line)
+				os.Exit(1)
+			}
+			lo, hi := parseSpan(strings.TrimSpace(fields[0]), line)
+			missings = append(missings, missing{lo, hi, strings.TrimSpace(fields[1])})
+			continue
+		}
+		if i := strings.IndexByte(text, '#'); i >= 0 {
+			text = text[:i]
+		}
+		fields := strings.Split(text, ";")
+		if len(fields) < 2 {
+			continue
+		}
+		lo, hi := parseSpan(strings.TrimSpace(fields[0]), line)
+		stated = append(stated, span{lo, hi})
+	}
+	if err := sc.Err(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if len(missings) == 0 {
+		fmt.Fprintf(os.Stderr, "%s has no @missing line, so what its data does not "+
+			"list has no value\n", path)
+		os.Exit(1)
+	}
+	listed := make([]bool, 0x110000)
+	for _, s := range stated {
+		for r := s.lo; r <= s.hi; r++ {
+			listed[r] = true
+		}
+	}
+	var out []span
+	for r := rune(0); r < 0x110000; r++ {
+		if listed[r] {
+			continue
+		}
+		value := ""
+		for _, m := range missings {
+			if m.lo <= r && r <= m.hi {
+				value = m.value
+			}
+		}
+		if want(value) {
+			out = append(out, span{r, r})
+		}
 	}
 	return out
 }

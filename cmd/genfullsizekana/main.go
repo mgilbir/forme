@@ -26,7 +26,7 @@
 // positions, or a future addition — is not a mapping and is reported rather than
 // guessed at.
 //
-//	go run ./cmd/genfullsizekana <UnicodeData.txt> > paragraph/kanatable.go
+//	go run ./cmd/genfullsizekana -version <X.Y.Z> <UnicodeData.txt> > paragraph/kanatable.go
 package main
 
 import (
@@ -39,6 +39,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/mgilbir/forme/cmd/internal/ucd"
 )
 
 // smallKana matches the name of a small kana and splits it where the word sits.
@@ -48,17 +50,22 @@ var smallKana = regexp.MustCompile(`^((?:HALFWIDTH )?(?:HIRAGANA|KATAKANA) LETTE
 
 func main() {
 	// UnicodeData.txt is the one file in the database with no header at all —
-	// it is pure data — so unlike every other generator here this one cannot
-	// read the release it was handed and has to be told. The Makefile fills it
-	// in from UNICODE_VERSION, which is the variable that decides what `make
-	// ucd` fetches. It used to be the string "17.0.0", printed whatever the
-	// file held.
+	// it is pure data — so the release it was handed cannot be read from it,
+	// only told. The Makefile fills it in from UNICODE_VERSION, which is the
+	// variable that decides what `make ucd` fetches, as it does for every
+	// generator here; ucd.Check can hold a file that names its release to
+	// this one, and this file names none. It used to be the string "17.0.0",
+	// printed whatever the file held.
 	version := flag.String("version", "", "the Unicode version the file came from")
 	flag.Parse()
 	args := flag.Args()
 	if len(args) != 1 || *version == "" {
 		fmt.Fprintln(os.Stderr, "usage: genfullsizekana -version <X.Y.Z> <UnicodeData.txt>")
 		os.Exit(2)
+	}
+	if err := ucd.Check(*version, args...); err != nil {
+		fmt.Fprintln(os.Stderr, "genfullsizekana:", err)
+		os.Exit(1)
 	}
 	f, err := os.Open(args[0])
 	if err != nil {

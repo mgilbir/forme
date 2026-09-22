@@ -191,6 +191,16 @@ set, the glyph-name list, the grapheme break properties, the named colours, the
 HTML entities, and the Universal Shaping Engine's category table. `cmd/gen*` are
 those generators and each says what it derives from.
 
+`cmd/internal/tables` lists every generated file, what makes it and from which
+input, and each input is pinned — the Unicode release, a commit of ICU, BudouX,
+tex-hyphen, csswg-drafts, Brotli, matplotlib's AFM files or Adobe's glyph list,
+or the digest of the HTML standard's entities file — by a variable in the
+`Makefile`, which each table records. `make casing`, `make dictionaries` and the
+rest fetch their inputs at the pin and regenerate through `cmd/maketables`, and
+`cmd/regenerate_test.go` regenerates every table from its pinned inputs and fails
+on any difference. No generator may import Go's `unicode` package, which answers
+from the release the toolchain shipped rather than the one the tables name.
+
 ## Licence
 
 The code is under the licence in `LICENSE`. The fonts under `fonts/notosans/` and

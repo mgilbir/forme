@@ -16,7 +16,7 @@
 // Devanagari's QA — and taking one apart would replace a letter with something
 // else.
 //
-//	go run ./cmd/genmatra <UnicodeData.txt> > shape/indicmatra.go
+//	go run ./cmd/genmatra -version <X.Y.Z> <UnicodeData.txt> > shape/indicmatra.go
 //
 // The decomposition is applied to itself until it stops changing, because
 // Unicode's are one step at a time and one of these needs two: Kannada's
@@ -26,12 +26,15 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"flag"
 	"fmt"
 	"go/format"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/mgilbir/forme/cmd/internal/ucd"
 )
 
 // maxMatraParts is how many marks one sign may be drawn as. Unicode's longest
@@ -59,11 +62,20 @@ type entry struct {
 }
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: genmatra <UnicodeData.txt>")
+	// UnicodeData.txt names no release, so the table is told which one it is
+	// from, as every table generated from the database is; see ucd.Check.
+	version := flag.String("version", "", "the Unicode version the file came from")
+	flag.Parse()
+	args := flag.Args()
+	if len(args) != 1 {
+		fmt.Fprintln(os.Stderr, "usage: genmatra -version <X.Y.Z> <UnicodeData.txt>")
 		os.Exit(2)
 	}
-	decomp, mark := read(os.Args[1])
+	if err := ucd.Check(*version, args...); err != nil {
+		fmt.Fprintln(os.Stderr, "genmatra:", err)
+		os.Exit(1)
+	}
+	decomp, mark := read(args[0])
 
 	var out []entry
 	for r := range decomp {
@@ -92,6 +104,7 @@ func main() {
 package shape
 
 // The vowel signs written as one character and drawn as two or three marks.
+// Unicode %s.
 //
 // A split sign cannot be placed while it is one character: its parts go to
 // different places, one before the letter and one after. So the reordering
@@ -113,7 +126,7 @@ type indicSplitMatra struct {
 }
 
 var indicSplitMatras = [...]indicSplitMatra{
-`, len(out), maxMatraParts)
+`, *version, len(out), maxMatraParts)
 	for _, e := range out {
 		var parts [maxMatraParts]string
 		for i := range parts {

@@ -15,18 +15,21 @@
 // second-generation one a font declares when it wants the reordering rules a
 // modern shaper applies; the newer is tried first, which is what a shaper does.
 //
-//	go run ./cmd/genscripts <Scripts.txt> <PropertyValueAliases.txt> > shape/scripts.go
+//	go run ./cmd/genscripts -version <X.Y.Z> <Scripts.txt> <PropertyValueAliases.txt> > shape/scripts.go
 package main
 
 import (
 	"bufio"
 	"bytes"
+	"flag"
 	"fmt"
 	"go/format"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/mgilbir/forme/cmd/internal/ucd"
 )
 
 // otTagOverrides names the scripts whose OpenType tag is not their ISO 15924
@@ -48,10 +51,9 @@ var otTagOverrides = map[string][]string{
 	"Yi":  {"yi  "},
 
 	// The Indic scripts each have a second-generation tag. A font declares it
-	// to say its rules are written for a shaper that reorders, which the
-	// package does for Devanagari and for no other; but the tag is the one such
-	// a font declares its features under whatever the shaper can do with them,
-	// so it is tried first and the older one after.
+	// to say its rules are written for a shaper that reorders, which is what
+	// shape/indic.go is; the tag is the one such a font declares its features
+	// under, so it is tried first and the older one after.
 	"Bengali":    {"bng2", "beng"},
 	"Devanagari": {"dev2", "deva"},
 	"Gujarati":   {"gjr2", "gujr"},
@@ -70,12 +72,19 @@ var otTagOverrides = map[string][]string{
 var noTag = map[string]bool{"Common": true, "Inherited": true, "Unknown": true}
 
 func main() {
-	if len(os.Args) != 3 {
-		fmt.Fprintln(os.Stderr, "usage: genscripts <Scripts.txt> <PropertyValueAliases.txt>")
+	version := flag.String("version", "", "the Unicode version the files came from")
+	flag.Parse()
+	args := flag.Args()
+	if len(args) != 2 {
+		fmt.Fprintln(os.Stderr, "usage: genscripts -version <X.Y.Z> <Scripts.txt> <PropertyValueAliases.txt>")
 		os.Exit(2)
 	}
-	version, ranges := readScripts(os.Args[1])
-	codes := readAliases(os.Args[2])
+	if err := ucd.Check(*version, args...); err != nil {
+		fmt.Fprintln(os.Stderr, "genscripts:", err)
+		os.Exit(1)
+	}
+	ranges := readScripts(args[0])
+	codes := readAliases(args[1])
 
 	// Every script the ranges name, in a stable order, with Common, Inherited
 	// and Unknown first so the reader can name them as constants.
@@ -173,7 +182,7 @@ const (
 // scriptOpenTypeTags gives the tags each script selects, indexed as
 // scriptRanges indexes scripts. A nil entry selects no tag of its own.
 var scriptOpenTypeTags = [...][]string{
-`, version, len(merged))
+`, *version, len(merged))
 	for i, n := range ordered {
 		if tags[i] == nil {
 			fmt.Fprintf(w, "\t%d: nil, // %s\n", i, n)
@@ -207,9 +216,8 @@ type scriptRange struct {
 	name   string
 }
 
-// readScripts parses Scripts.txt, returning the Unicode version it declares and
-// one entry per range it lists.
-func readScripts(path string) (string, []scriptRange) {
+// readScripts parses Scripts.txt, returning one entry per range it lists.
+func readScripts(path string) []scriptRange {
 	f, err := os.Open(path)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -217,22 +225,10 @@ func readScripts(path string) (string, []scriptRange) {
 	}
 	defer f.Close()
 
-	version := "unknown"
 	var out []scriptRange
 	sc := bufio.NewScanner(f)
-	first := true
 	for sc.Scan() {
 		line := sc.Text()
-		if first {
-			// The first line names the file, and with it the version:
-			// "# Scripts-17.0.0.txt".
-			first = false
-			if i := strings.Index(line, "Scripts-"); i >= 0 {
-				if j := strings.Index(line[i:], ".txt"); j > 0 {
-					version = line[i+len("Scripts-") : i+j]
-				}
-			}
-		}
 		if i := strings.IndexByte(line, '#'); i >= 0 {
 			line = line[:i]
 		}
@@ -250,7 +246,7 @@ func readScripts(path string) (string, []scriptRange) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	return version, out
+	return out
 }
 
 // parseRange reads "0041..005A" or "0041".

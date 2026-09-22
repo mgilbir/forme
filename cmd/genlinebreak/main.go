@@ -57,16 +57,19 @@
 // characters that quietly changed sides — which is how HH would have gone
 // unnoticed, since it was carved out of BA.
 //
-//	go run ./cmd/genlinebreak <LineBreak.txt> > paragraph/linebreaktable.go
+//	go run ./cmd/genlinebreak -version <X.Y.Z> <LineBreak.txt> > paragraph/linebreaktable.go
 package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/mgilbir/forme/cmd/internal/ucd"
 )
 
 // forbidden is the Line_Break classes a break may not fall in front of.
@@ -119,10 +122,11 @@ var permitted = map[string]bool{
 //   - strictNoBreak: a line may not begin with one of these under "strict".
 //     Class CJ is UAX #14's Conditional Japanese Starter, which is exactly the
 //     small kana and the prolonged sound mark, and the report's own rule is to
-//     resolve it to NS under a strict tailoring and to ID otherwise. The two
-//     hyphens beside it are named by §5.3 rather than by a class: 〜 and ゠ are
-//     class NS, so the *base* table already forbids them, and what "normal" has
-//     to do is let them through again — see hyphenNoBreak below.
+//     resolve it to NS under a strict tailoring and to ID otherwise. The
+//     hyphens beside it in §5.3 are named one code point at a time rather than
+//     by a class, so they are not here: 〜 and ゠ are class NS, the *base* table
+//     already forbids them, and letting them through again under "normal" and
+//     "loose" is a policy — paragraph/linebreak.go's isEastAsianHyphen.
 //   - looseBreak: a line *may* begin with one of these under "loose", which
 //     means taking them back out of the base table. §5.3 names the iteration
 //     marks and the centred punctuation one code point at a time and names two
@@ -132,14 +136,9 @@ var permitted = map[string]bool{
 //     allows.
 var strictNoBreakClasses = map[string]bool{"CJ": true}
 
-// The hyphens §5.3 names: "normal" and "loose" allow a line to begin with one
-// and "strict" does not. They are class NS, so the base table forbids them and
-// the two looser values are what have to make the exception.
-var hyphenNoBreak = []rune{0x2010, 0x2013, 0x301C, 0x30A0}
-
 // The characters "loose" allows a line to begin with, code point by code point:
-// the iteration marks and the centred punctuation. U+2010 and U+2013 are in
-// hyphenNoBreak instead, because normal allows them too.
+// the iteration marks and the centred punctuation. §5.3's hyphens are not
+// here, because "normal" allows them too; see strictNoBreakClasses above.
 var looseBreakRunes = []rune{
 	0x3005, 0x303B, 0x309D, 0x309E, 0x30FD, 0x30FE, // iteration marks
 	0x30FB, 0xFF1A, 0xFF1B, 0xFF65, 0x203C, 0x2047, 0x2048, 0x2049, 0xFF01, 0xFF1F,
@@ -264,27 +263,30 @@ type span struct {
 }
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: genlinebreak <LineBreak.txt>")
+	version := flag.String("version", "", "the Unicode version the file came from")
+	flag.Parse()
+	args := flag.Args()
+	if len(args) != 1 {
+		fmt.Fprintln(os.Stderr, "usage: genlinebreak -version <X.Y.Z> <LineBreak.txt>")
 		os.Exit(2)
 	}
-	f, err := os.Open(os.Args[1])
+	if err := ucd.Check(*version, args...); err != nil {
+		fmt.Fprintln(os.Stderr, "genlinebreak:", err)
+		os.Exit(1)
+	}
+	f, err := os.Open(args[0])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 	defer f.Close()
 
-	version := "unknown"
 	var spans, glue, strict, loose, prefix, postfix, inseparable, open, after, aksara, dict []span
 	var ideographic []span
 	seen := map[string]bool{}
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		line := sc.Text()
-		if strings.HasPrefix(line, "# LineBreak-") {
-			version = strings.TrimSuffix(strings.TrimPrefix(line, "# LineBreak-"), ".txt")
-		}
 		if i := strings.IndexByte(line, '#'); i >= 0 {
 			line = line[:i]
 		}
@@ -396,7 +398,7 @@ package paragraph
 // They are the classes UAX #14 forbids a break in front of unconditionally —
 // see cmd/genlinebreak for which rules those are and which were left out. What
 // this package does with them is decided in linebreak.go; this table is
-// Unicode's statement rather than a policy.`, version)
+// Unicode's statement rather than a policy.`, *version)
 	emit(&w, "bindingRanges", glue, `// The characters that hold on to an atomic inline beside them. Unicode %s.
 //
 // %d ranges, merged from %d the file states separately: %s.
@@ -404,32 +406,32 @@ package paragraph
 // word next to it, and may not be wrapped away from a character of one of
 // these. The one exception the rule makes — U+00A0, which is class GL and
 // breaks anyway, for compatibility with what the web already does — is in
-// linebreak.go, because it is a decision rather than a property.`, version)
+// linebreak.go, because it is a decision rather than a property.`, *version)
 	emit(&w, "strictNoBreakRanges", strict, `// The characters "line-break: strict" adds to the set a line may not begin
 // with. Unicode %s.
 //
 // %d ranges, merged from %d the file states separately: %s.
 // Class CJ, the Conditional Japanese Starter: the small kana and the prolonged
 // sound mark. UAX #14 leaves the class to a tailoring to resolve, and CSS Text
-// §5.3 is that tailoring — NS under strict, ID under everything else.`, version)
+// §5.3 is that tailoring — NS under strict, ID under everything else.`, *version)
 	emit(&w, "looseBreakRanges", loose, `// The characters "line-break: loose" allows a line to begin with, taking them
 // back out of the set above. Unicode %s.
 //
 // %d ranges, merged from %d the file states separately: %s.
 // The iteration marks and the centred punctuation are named by §5.3 one code
 // point at a time and appear here as "named"; IN and PO are classes it names
-// whole.`, version)
+// whole.`, *version)
 	emit(&w, "prefixRanges", prefix, `// The characters "line-break: loose" allows a line to end *after*, which no
 // other value does. Unicode %s.
 //
-// %d ranges, merged from %d the file states separately: %s.`, version)
+// %d ranges, merged from %d the file states separately: %s.`, *version)
 	emit(&w, "postfixRanges", postfix, `// The characters every value but "loose" forbids a line to begin with.
 // Unicode %s.
 //
 // %d ranges, merged from %d the file states separately: %s.
 // UAX #14 has no unconditional rule about them — nothing there says a line may
 // not start with a per-cent sign — so this is the one part of the tailoring
-// that adds to the base table rather than taking away from it.`, version)
+// that adds to the base table rather than taking away from it.`, *version)
 	emit(&w, "breakAfterRanges", after, `// The characters a line may end after, UAX #14's class BA. Unicode %s.
 //
 // %d ranges, merged from %d the file states separately: %s.
@@ -441,7 +443,7 @@ package paragraph
 // The BA characters this package reaches before this table are not a gap: the
 // spaces are U+0020 and the other space separators, which have their own arms
 // in SplitAtBreaks, and the hyphens are classes HY and HH, which have theirs
-// because a line may not begin with one either.`, version)
+// because a line may not begin with one either.`, *version)
 	emit(&w, "ideographicRanges", ideographic, `// The characters that break like an ideograph, UAX #14's classes ID and CJ and
 // the Hangul syllables H2 and H3. Unicode %s.
 //
@@ -452,7 +454,7 @@ package paragraph
 // "line-break: strict" — are the tables above; this one is the opportunity.
 //
 // See ideographicClasses in cmd/genlinebreak for what is deliberately left
-// out, and for the six hand-typed ranges this replaces.`, version)
+// out, and for the six hand-typed ranges this replaces.`, *version)
 	emit(&w, "aksaraRanges", aksara, `// The characters an aksara cluster may begin with, UAX #14's classes AK and
 // AS. Unicode %s.
 //
@@ -460,7 +462,7 @@ package paragraph
 // Balinese, Batak, Brahmi, Cham, Dives Akuru, Grantha, Javanese, Kawi and
 // Tulu-Tigalari — scripts that write without spaces, whose only soft wrap
 // opportunity is the boundary between two clusters. See aksaraClasses in
-// cmd/genlinebreak for why the prohibitions inside a cluster need no table.`, version)
+// cmd/genlinebreak for why the prohibitions inside a cluster need no table.`, *version)
 	emit(&w, "dictionaryRanges", dict, `// The scripts whose words are found with a dictionary, UAX #14's class SA.
 // Unicode %s.
 //
@@ -468,14 +470,14 @@ package paragraph
 // Thai, Lao, Khmer, Myanmar, Tai Le, New Tai Lue, Tai Tham and their
 // neighbours: written without spaces and without a mark between words either,
 // so the only way to know where a line may break is to know the language. See
-// dictionaryClasses in cmd/genlinebreak for what is done instead.`, version)
+// dictionaryClasses in cmd/genlinebreak for what is done instead.`, *version)
 	emit(&w, "openRanges", open, `// The opening brackets, UAX #14's class OP. Unicode %s.
 //
 // %d ranges, merged from %d the file states separately: %s.
 // LB14 forbids a line to end after one — "OP SP* ×" — and nothing in ordinary
 // text asks, because ordinary text offers no opportunity there to forbid.
 // "word-break: break-all" offers one at every character boundary in a word, and
-// §5.2 does not reach past the punctuation rules to take it: see gluedPair.`, version)
+// §5.2 does not reach past the punctuation rules to take it: see gluedPair.`, *version)
 	emit(&w, "inseparableRanges", inseparable, `// The ellipses, UAX #14's class IN. Unicode %s.
 //
 // %d ranges, merged from %d the file states separately: %s.
@@ -484,7 +486,7 @@ package paragraph
 // nothing else in this file creates that opportunity, because LB22 is a
 // prohibition and a relaxed prohibition still needs something to relax. The
 // same characters are in looseBreakRanges for the other half of the sentence,
-// which is a line *beginning* with one.`, version)
+// which is a line *beginning* with one.`, *version)
 	fmt.Print(w.String())
 }
 

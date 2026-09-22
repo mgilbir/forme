@@ -32,6 +32,13 @@ testdata/budoux/
 # table is committed, the half-megabyte of TeX it was made from is not.
 testdata/hyphen/
 
+# The other generators' inputs, fetched at a pinned commit by the Makefile and
+# read by cmd/regenerate_test.go: Adobe's AFM files (matplotlib's copies), the
+# reference Brotli's two table sources, and Adobe's Glyph List.
+testdata/afm/
+testdata/brotli-source/
+testdata/agl/
+
 # Built by `make hbfuzz`.
 testdata/harfbuzz/.shapetext
 
@@ -48,5 +55,5 @@ testdata/wpt/
 testdata/css-parsing-tests/
 testdata/fonts-noto/
 testdata/html/
-testdata/css-color-4.bs
+testdata/css-color-4/
 testdata/unicode-grapheme/

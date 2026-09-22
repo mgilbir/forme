@@ -88,6 +88,13 @@ jobs:
             testdata/notocjk
             testdata/ucd
             testdata/html
+            testdata/icu-dictionaries
+            testdata/budoux
+            testdata/hyphen
+            testdata/afm
+            testdata/brotli-source
+            testdata/agl
+            testdata/css-color-4
           key: corpora-4-${{ hashFiles('Makefile') }}
 
       - name: Fetch whatever the cache did not have
@@ -189,5 +196,12 @@ jobs:
             testdata/notocjk
             testdata/ucd
             testdata/html
+            testdata/icu-dictionaries
+            testdata/budoux
+            testdata/hyphen
+            testdata/afm
+            testdata/brotli-source
+            testdata/agl
+            testdata/css-color-4
           key: corpora-4-${{ hashFiles('Makefile') }}
       - run: make race
