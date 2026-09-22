@@ -44,7 +44,7 @@ import (
 // borderBoxSizing reports whether a box's declared sizes include its padding and
 // border.
 func borderBoxSizing(b *Box) bool {
-	return strings.EqualFold(strings.TrimSpace(b.Style["box-sizing"]), "border-box")
+	return strings.EqualFold(strings.TrimSpace(b.Style.Get("box-sizing")), "border-box")
 }
 
 // sizingInset is what a declared width or height covers besides the content: the
@@ -205,7 +205,7 @@ var sizingProperties = [...]string{
 // dropped declaration.
 func (l *layouter) checkIntrinsicSizing(b *Box) {
 	for _, prop := range sizingProperties {
-		raw := strings.TrimSpace(b.Style[prop])
+		raw := strings.TrimSpace(b.Style.Get(prop))
 		if raw == "" {
 			continue
 		}
@@ -259,7 +259,7 @@ func (l *layouter) appliesSizingKeyword(b *Box, property string) bool {
 // which is a length this check has no containing block to resolve.
 func hasPercentagePadding(b *Box) bool {
 	for _, side := range []string{"top", "right", "bottom", "left"} {
-		if strings.Contains(b.Style["padding-"+side], "%") {
+		if strings.Contains(b.Style.Get("padding-"+side), "%") {
 			return true
 		}
 	}

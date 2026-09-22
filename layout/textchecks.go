@@ -148,7 +148,7 @@ func (l *layouter) reportTextJustify(b *Box, value string) {
 func (l *layouter) checkScript(b *Box) {
 	for _, r := range b.Text {
 		if script, bad := unsupportedScript(r); bad {
-			key := script + "\x00" + b.Style["font-family"]
+			key := script + "\x00" + b.Style.Get("font-family")
 			if l.reportedScripts[key] {
 				return
 			}
@@ -325,7 +325,7 @@ func (l *layouter) reportHyphens(b *Box, value string) {
 // other tag is a feature this engine neither applies nor can ask the face for,
 // so a value naming one is reported whatever the face has in it.
 func (l *layouter) reportKerning(b *Box, face *shape.Face) {
-	value := b.Style["font-feature-settings"]
+	value := b.Style.Get("font-feature-settings")
 	why := unappliedFontFeatures(value, face)
 	if why == "" {
 		return
@@ -380,7 +380,7 @@ func (l *layouter) reportKerning(b *Box, face *shape.Face) {
 // correct page a failure. It is the same narrowing reportKerning makes for a
 // "kern" a face has not got.
 func (l *layouter) reportCaps(b *Box, face *shape.Face, text string) {
-	want, unhandled := capsOf(b.Style["font-variant-caps"])
+	want, unhandled := capsOf(b.Style.Get("font-variant-caps"))
 	if unhandled != "" {
 		// All six of §6.6 are read, so a value outside them is either a mistake
 		// the author made or a value from a level this engine has not read —
@@ -411,7 +411,7 @@ func (l *layouter) reportCaps(b *Box, face *shape.Face, text string) {
 	if len(missing) == 0 {
 		return
 	}
-	value := strings.ToLower(strings.TrimSpace(b.Style["font-variant-caps"]))
+	value := strings.ToLower(strings.TrimSpace(b.Style.Get("font-variant-caps")))
 	if capsAreSynthesised(use) {
 		// The face has none of them and this engine made the capitals itself,
 		// which is a page §6.6 asked for rather than a gap. It is still worth
@@ -595,7 +595,7 @@ func hasCase(text string) (lower, upper bool) {
 // fraction — none of that is in the metrics, and guessing would be worse than
 // the report.
 func (l *layouter) reportNumeric(b *Box, face *shape.Face, text string) {
-	want, unhandled := numericOf(b.Style["font-variant-numeric"])
+	want, unhandled := numericOf(b.Style.Get("font-variant-numeric"))
 	if unhandled != "" {
 		// All eight of §6.7 are read, so a word outside them is either a
 		// mistake the author made or a value from a level this engine has not
@@ -624,7 +624,7 @@ func (l *layouter) reportNumeric(b *Box, face *shape.Face, text string) {
 	if len(missing) == 0 {
 		return
 	}
-	value := strings.ToLower(strings.TrimSpace(b.Style["font-variant-numeric"]))
+	value := strings.ToLower(strings.TrimSpace(b.Style.Get("font-variant-numeric")))
 	l.reportOnce("font-variant-numeric:"+value+":"+strings.Join(missing, ",")+":"+face.Name(),
 		Finding{
 			Rule:     RuleUnsupportedValue,
@@ -719,7 +719,7 @@ func hasDigit(text string) bool {
 // character counts for both, because a font may set its kana proportionally and
 // a halfwidth kana is a width pair as well as a kana.
 func (l *layouter) reportEastAsian(b *Box, face *shape.Face, text string) {
-	want, unhandled := eastAsianOf(b.Style["font-variant-east-asian"])
+	want, unhandled := eastAsianOf(b.Style.Get("font-variant-east-asian"))
 	if unhandled != "" {
 		l.reportOnce("font-variant-east-asian:"+unhandled, Finding{
 			Rule:     RuleUnsupportedValue,
@@ -745,7 +745,7 @@ func (l *layouter) reportEastAsian(b *Box, face *shape.Face, text string) {
 	if len(missing) == 0 {
 		return
 	}
-	value := strings.ToLower(strings.TrimSpace(b.Style["font-variant-east-asian"]))
+	value := strings.ToLower(strings.TrimSpace(b.Style.Get("font-variant-east-asian")))
 	l.reportOnce("font-variant-east-asian:"+value+":"+strings.Join(missing, ",")+":"+face.Name(),
 		Finding{
 			Rule:     RuleUnsupportedValue,
@@ -828,7 +828,7 @@ func eastAsianCharacters(text string) (ideographs, wide, narrow bool) {
 // be known is that a run with nothing but white space in it is set identically
 // either way, because a raised space is a space.
 func (l *layouter) reportPosition(b *Box, face *shape.Face, text string) {
-	want, unhandled := variantPositionOf(b.Style["font-variant-position"])
+	want, unhandled := variantPositionOf(b.Style.Get("font-variant-position"))
 	if unhandled != "" {
 		l.reportOnce("font-variant-position:"+unhandled, Finding{
 			Rule:     RuleUnsupportedValue,

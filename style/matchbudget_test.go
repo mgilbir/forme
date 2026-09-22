@@ -37,9 +37,9 @@ func TestOneExpensiveSelectorDoesNotSwitchMatchingOff(t *testing.T) {
 	// to every element after it.
 	for _, id := range []string{"#a", "#b"} {
 		cs := got.Styles[elementFor(t, doc, id)]
-		if !strings.Contains(cs["color"], "0, 128, 0") {
+		if !strings.Contains(cs.Get("color"), "0, 128, 0") {
 			t.Errorf("%s is %q; a budget spent on one selector must not stop the "+
-				"selectors after it from matching", id, cs["color"])
+				"selectors after it from matching", id, cs.Get("color"))
 		}
 	}
 }

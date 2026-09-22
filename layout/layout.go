@@ -790,7 +790,7 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	width := l.resolveWidth(b, margin, border, padding, containing, &margin, replaced)
 	declaredHeight, hasHeight := l.explicitHeight(b, containing, at.cbHeight, at.cbDefinite)
 	if replaced == nil {
-		if _, hasRatio := aspectRatioOf(b.Style["aspect-ratio"]); hasRatio {
+		if _, hasRatio := aspectRatioOf(b.Style.Get("aspect-ratio")); hasRatio {
 			switch {
 			case !hasHeight:
 				// CSS Sizing 4 §4.1: a box with a preferred ratio and no height
@@ -2273,7 +2273,7 @@ func (l *layouter) isAuto(b *Box, property string) bool {
 
 // parseLength reads one of a box's computed values, memoized.
 func (l *layouter) parseLength(b *Box, property string) (style.Length, bool) {
-	raw := strings.TrimSpace(b.Style[property])
+	raw := strings.TrimSpace(b.Style.Get(property))
 	if raw == "" {
 		return style.Length{}, false
 	}
@@ -2536,14 +2536,14 @@ func (l *layouter) borderWidths(b *Box) Edges {
 		return e
 	}
 	side := func(name string) style.Unit {
-		if noBorder(b.Style["border-"+name+"-style"]) {
+		if noBorder(b.Style.Get("border-" + name + "-style")) {
 			return 0
 		}
 		v, ok := l.lengthOf(b, "border-"+name+"-width", 0)
 		if !ok {
 			// The keyword widths. They are the only place a border width is not
 			// a length, and "medium" is the initial value.
-			return keywordBorderWidth(b.Style["border-"+name+"-width"])
+			return keywordBorderWidth(b.Style.Get("border-" + name + "-width"))
 		}
 		return maxZero(v)
 	}
@@ -2569,18 +2569,18 @@ func (l *layouter) borderWidths(b *Box) Edges {
 // put an outline of the wrong colour on the page and say nothing, which is the
 // failure this engine reports everywhere else rather than commits.
 func (l *layouter) outlineWidth(b *Box) style.Unit {
-	if b == nil || noBorder(b.Style["outline-style"]) {
+	if b == nil || noBorder(b.Style.Get("outline-style")) {
 		return 0
 	}
 	w, ok := l.lengthOf(b, "outline-width", 0)
 	if !ok {
-		w = keywordBorderWidth(b.Style["outline-width"])
+		w = keywordBorderWidth(b.Style.Get("outline-width"))
 	}
 	w = maxZero(w)
 	if w == 0 {
 		return 0
 	}
-	if strings.EqualFold(strings.TrimSpace(b.Style["outline-color"]), "invert") {
+	if strings.EqualFold(strings.TrimSpace(b.Style.Get("outline-color")), "invert") {
 		l.rec.ReportDetail(Finding{
 			Rule:   RuleUnsupportedValue,
 			Source: AtHTML(offsetOf(b)),

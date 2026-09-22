@@ -142,7 +142,7 @@ func hangingFor(item inlineItem, block hangingPunctuation) hangingPunctuation {
 	if b == nil {
 		return block
 	}
-	hp := hangingPunctuationOf(b.Style["hanging-punctuation"])
+	hp := hangingPunctuationOf(b.Style.Get("hanging-punctuation"))
 	return hp
 }
 

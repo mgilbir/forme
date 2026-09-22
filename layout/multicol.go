@@ -140,7 +140,7 @@ func fitCount(available, width, gap style.Unit) int {
 
 // columnCount reads §3.1's property: a positive integer, or auto.
 func columnCount(b *Box) (int, bool) {
-	raw := strings.TrimSpace(b.Style["column-count"])
+	raw := strings.TrimSpace(b.Style.Get("column-count"))
 	if raw == "" || strings.EqualFold(raw, "auto") {
 		return 0, false
 	}
@@ -153,7 +153,7 @@ func columnCount(b *Box) (int, bool) {
 
 // columnFillOf reads §3.5's property.
 func columnFillOf(b *Box) columnFill {
-	if strings.EqualFold(strings.TrimSpace(b.Style["column-fill"]), "auto") {
+	if strings.EqualFold(strings.TrimSpace(b.Style.Get("column-fill")), "auto") {
 		return columnAuto
 	}
 	return columnBalance
@@ -475,12 +475,12 @@ func refusesToSlice(f *Fragment) bool {
 	if len(f.bgBands) > 0 || f.Outline > 0 {
 		return true
 	}
-	if v := strings.TrimSpace(f.Box.Style["background-image"]); v != "" &&
+	if v := strings.TrimSpace(f.Box.Style.Get("background-image")); v != "" &&
 		!strings.EqualFold(v, "none") {
 		return true
 	}
 	return strings.EqualFold(
-		strings.TrimSpace(f.Box.Style["box-decoration-break"]), "clone")
+		strings.TrimSpace(f.Box.Style.Get("box-decoration-break")), "clone")
 }
 
 // canColumn is whether a box's content is of a kind this engine can pour into
@@ -540,7 +540,7 @@ func (l *layouter) subtreeCanColumn(root, b *Box) string {
 
 // spansColumns reads §6.3's column-span.
 func spansColumns(b *Box) bool {
-	return strings.EqualFold(strings.TrimSpace(b.Style["column-span"]), "all")
+	return strings.EqualFold(strings.TrimSpace(b.Style.Get("column-span")), "all")
 }
 
 // reportColumns says a box asked for columns and did not get them.

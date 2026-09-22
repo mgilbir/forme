@@ -191,7 +191,7 @@ func ownDecorations(b *Box) []textDecoration {
 		// the element itself — and draw the line on top of itself.
 		return nil
 	}
-	raw := b.Style["text-decoration-line"]
+	raw := b.Style.Get("text-decoration-line")
 	if raw == "" {
 		return nil
 	}
@@ -223,7 +223,7 @@ func (l *layouter) checkDecorationValue(b *Box) {
 	if b.IsText() {
 		return
 	}
-	raw := b.Style["text-decoration-line"]
+	raw := b.Style.Get("text-decoration-line")
 	if raw == "" {
 		return
 	}
@@ -322,7 +322,7 @@ func (l *layouter) decorationLength(b *Box, property string) (style.Unit, bool) 
 	if b == nil {
 		return 0, false
 	}
-	switch trimmedLower(b.Style[property]) {
+	switch trimmedLower(b.Style.Get(property)) {
 	case "", "auto", "from-font":
 		return 0, false
 	}

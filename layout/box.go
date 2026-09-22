@@ -245,7 +245,7 @@ type Box struct {
 	TableWrapper bool
 
 	// FirstLine is the ::first-line style of the element this box came from, or
-	// nil where no rule selects one. It is carried here rather than looked up in
+	// the zero style where no rule selects one. It is carried here rather than looked up in
 	// layout because the pseudo styles belong to the cascade's result, which the
 	// box builder holds and the layouter does not.
 	FirstLine style.ComputedStyle
@@ -473,7 +473,7 @@ func BuildBoxes(doc *html.Node, styled style.Styled, rec *Recorder) *Box {
 	b.rootFontSize = defaultFontSize
 	b.rootFontSize = b.fontSizeOf(root, defaultFontSize)
 
-	box := b.build(root, nil, defaultFontSize)
+	box := b.build(root, style.ComputedStyle{}, defaultFontSize)
 	if box == nil {
 		return nil
 	}
@@ -647,14 +647,14 @@ func (b *boxBuilder) fontSizeOf(n *html.Node, parent style.Unit) style.Unit {
 	if !ok {
 		return parent
 	}
-	vals, _ := css.ParseComponentValues(cs["font-size"])
+	vals, _ := css.ParseComponentValues(cs.Get("font-size"))
 	size, unsupported, ok := style.ResolveFontSize(vals, parent, b.rootFontSize)
 	if !ok {
 		if unsupported {
 			b.rec.ReportDetail(Finding{
 				Rule:     RuleUnsupportedValue,
 				Source:   AtHTML(n.Offset),
-				Message:  "the font-size " + quoteValue(cs["font-size"]) + " could not be resolved; the inherited size was kept",
+				Message:  "the font-size " + quoteValue(cs.Get("font-size")) + " could not be resolved; the inherited size was kept",
 				Path:     PathOf(n),
 				Property: "font-size",
 			})
@@ -980,10 +980,10 @@ func (b *boxBuilder) replacedByItsContents(n *html.Node) bool {
 // so that the guardrail in pipeline.go can ask the same question the box tree
 // asks rather than a second copy of it.
 func contentsIsHonoured(n *html.Node, cs style.ComputedStyle, root *html.Node) bool {
-	if n == nil || cs == nil {
+	if n == nil || cs.IsZero() {
 		return false
 	}
-	if !strings.EqualFold(strings.TrimSpace(cs["display"]), "contents") {
+	if !strings.EqualFold(strings.TrimSpace(cs.Get("display")), "contents") {
 		return false
 	}
 	if n == root {
@@ -1013,7 +1013,7 @@ func (b *boxBuilder) fontSizeOfStyle(cs style.ComputedStyle, parent style.Unit, 
 	if !own {
 		return parent
 	}
-	vals, _ := css.ParseComponentValues(cs["font-size"])
+	vals, _ := css.ParseComponentValues(cs.Get("font-size"))
 	size, _, ok := style.ResolveFontSize(vals, parent, b.rootFontSize)
 	if !ok {
 		return parent
@@ -1051,7 +1051,7 @@ func (b *boxBuilder) roomAt(offset int) bool {
 // occupies a line.
 func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSize style.Unit) *Box {
 	wst := b.wordSpaceTransformFor(inherited)
-	kind := transformOf(inherited["text-transform"])
+	kind := transformOf(inherited.Get("text-transform"))
 	before := b.boundary
 	// Whether a run of white space open at the end of the node before continues
 	// into this one is a question only "full-width" has to ask here. See
@@ -1070,7 +1070,7 @@ func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSi
 	if !transformFreezesSpace(kind) {
 		before.Collapsed = false
 	}
-	collapse := preservedInAControl(n, inherited["white-space-collapse"])
+	collapse := preservedInAControl(n, inherited.Get("white-space-collapse"))
 	text := collapseWhitespaceAfter(n.Text, collapse, wst,
 		before, writingSystemAt(n))
 	b.reportPhraseSeparators(n, text, wst)
@@ -1119,7 +1119,7 @@ func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSi
 // shorthands for pairs. Modelling it as the pair is what makes "inline-block"
 // stop being a special case: it is simply inline outside and flow-root inside.
 func displayOf(cs style.ComputedStyle) (Outer, Inner, bool) {
-	value := strings.ToLower(strings.TrimSpace(cs["display"]))
+	value := strings.ToLower(strings.TrimSpace(cs.Get("display")))
 
 	// The two-value syntax, "inline flow-root" and friends.
 	if outer, inner, ok := twoValueDisplay(value); ok {
@@ -1244,7 +1244,7 @@ func replacesItsOwnContent(n *html.Node) bool {
 // need the writing mode, and answering them as "left" would be right for a
 // left-to-right document and silently wrong for the documents they exist for.
 func floatOf(cs style.ComputedStyle) FloatSide {
-	switch strings.ToLower(strings.TrimSpace(cs["float"])) {
+	switch strings.ToLower(strings.TrimSpace(cs.Get("float"))) {
 	case "left":
 		return FloatLeft
 	case "right":
@@ -1254,7 +1254,7 @@ func floatOf(cs style.ComputedStyle) FloatSide {
 }
 
 func clearOf(cs style.ComputedStyle) ClearSide {
-	switch strings.ToLower(strings.TrimSpace(cs["clear"])) {
+	switch strings.ToLower(strings.TrimSpace(cs.Get("clear"))) {
 	case "left":
 		return ClearLeft
 	case "right":
@@ -1314,7 +1314,7 @@ func overflowIsScrollable(cs style.ComputedStyle) bool {
 // overflowIsVisibleOn is the same question about one axis, which is what a rule
 // keyed on a box's main axis asks. See flexMainLimits.
 func overflowIsVisibleOn(cs style.ComputedStyle, axis string) bool {
-	switch strings.ToLower(strings.TrimSpace(cs[axis])) {
+	switch strings.ToLower(strings.TrimSpace(cs.Get(axis))) {
 	case "", "visible":
 		return true
 	}
@@ -1700,10 +1700,10 @@ func splitInline(b *Box) []*Box {
 // "margin: 0" — are both answered exactly.
 func mayInsetHorizontally(cs style.ComputedStyle) bool {
 	for _, side := range [2]string{"left", "right"} {
-		if !isZeroLength(cs["margin-"+side]) || !isZeroLength(cs["padding-"+side]) {
+		if !isZeroLength(cs.Get("margin-"+side)) || !isZeroLength(cs.Get("padding-"+side)) {
 			return true
 		}
-		if !noBorder(cs["border-"+side+"-style"]) && !isZeroLength(cs["border-"+side+"-width"]) {
+		if !noBorder(cs.Get("border-"+side+"-style")) && !isZeroLength(cs.Get("border-"+side+"-width")) {
 			return true
 		}
 	}
@@ -1951,7 +1951,7 @@ func hasInFlowContent(run []*Box) bool {
 		if !c.IsText() {
 			return true
 		}
-		if !whiteSpaceOf(c.Style["white-space-collapse"]).Collapse {
+		if !whiteSpaceOf(c.Style.Get("white-space-collapse")).Collapse {
 			return true
 		}
 		if strings.TrimSpace(c.Text) != "" {
@@ -2034,7 +2034,7 @@ func writingSystemAt(n *html.Node) paragraph.WritingSystem {
 
 // wordSpaceTransformFor reads word-space-transform off a computed style.
 func (b *boxBuilder) wordSpaceTransformFor(cs style.ComputedStyle) paragraph.WordSpaceTransform {
-	wst, _ := wordSpaceTransformOf(cs["word-space-transform"])
+	wst, _ := wordSpaceTransformOf(cs.Get("word-space-transform"))
 	return wst
 }
 
@@ -2072,7 +2072,7 @@ func (b *boxBuilder) reportPhraseSeparators(n *html.Node, text string,
 
 // wordSpaceTransformValue is the same read without the node, for a caller that
 // has a Box rather than the style it was built from.
-func wordSpaceTransformValue(s map[string]string) paragraph.WordSpaceTransform {
-	wst, _ := wordSpaceTransformOf(s["word-space-transform"])
+func wordSpaceTransformValue(cs style.ComputedStyle) paragraph.WordSpaceTransform {
+	wst, _ := wordSpaceTransformOf(cs.Get("word-space-transform"))
 	return wst
 }

@@ -86,17 +86,17 @@ func TestAValueUsingACustomPropertyComputesToUnset(t *testing.T) {
 
 	// color inherits, so "unset" is the parent's green rather than the user
 	// agent sheet's black.
-	if c := doc.style("#inner")["color"]; !strings.Contains(c, "128") {
+	if c := doc.style("#inner").Get("color"); !strings.Contains(c, "128") {
 		t.Errorf("color computed to %q, want the inherited green: an unresolvable "+
 			"value is unset, and color inherits", c)
 	}
 	// width does not inherit, so "unset" is its initial value.
-	if w := doc.style("#inner")["width"]; w != "" && w != "auto" {
+	if w := doc.style("#inner").Get("width"); w != "" && w != "auto" {
 		t.Errorf("width computed to %q, want its initial value", w)
 	}
 	// display does not inherit either, so it is "inline" and not the user agent
 	// sheet's "block" — which is what dropping the declaration would give.
-	if d := doc.style("#inner")["display"]; d == "block" {
+	if d := doc.style("#inner").Get("display"); d == "block" {
 		t.Error("display computed to \"block\", which is the user agent sheet's answer; " +
 			"the declaration was dropped rather than computed to unset")
 	}

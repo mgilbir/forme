@@ -74,13 +74,13 @@ type flexValues struct {
 // answer floatOf and clearOf give, and for the same reason.
 func (l *layouter) flexValuesOf(b *Box, room flexRoom) flexValues {
 	out := flexValues{grow: 0, shrink: 1, basisAuto: true}
-	if v, ok := parseNumber(trimmedLower(b.Style["flex-grow"])); ok && v >= 0 {
+	if v, ok := parseNumber(trimmedLower(b.Style.Get("flex-grow"))); ok && v >= 0 {
 		out.grow = v
 	}
-	if v, ok := parseNumber(trimmedLower(b.Style["flex-shrink"])); ok && v >= 0 {
+	if v, ok := parseNumber(trimmedLower(b.Style.Get("flex-shrink"))); ok && v >= 0 {
 		out.shrink = v
 	}
-	switch trimmedLower(b.Style["flex-basis"]) {
+	switch trimmedLower(b.Style.Get("flex-basis")) {
 	case "", "auto":
 	case "content":
 		// "content" is "size it as though flex-basis were auto and the main
@@ -291,12 +291,12 @@ func (a flexAxis) place(f *Fragment, main, cross style.Unit) {
 
 // axisOf reads the three declarations that decide which way each axis runs.
 func (l *layouter) axisOf(b *Box) flexAxis {
-	direction := trimmedLower(b.Style["flex-direction"])
+	direction := trimmedLower(b.Style.Get("flex-direction"))
 	return flexAxis{
 		column:      direction == "column" || direction == "column-reverse",
 		reverse:     direction == "row-reverse" || direction == "column-reverse",
 		rtl:         isRTL(b),
-		wrapReverse: trimmedLower(b.Style["flex-wrap"]) == "wrap-reverse",
+		wrapReverse: trimmedLower(b.Style.Get("flex-wrap")) == "wrap-reverse",
 	}
 }
 
@@ -411,24 +411,24 @@ func (it *flexItem) outerCross(border style.Unit) style.Unit {
 // been is a page that is quietly wrong.
 func (l *layouter) refusesToFlex(b *Box) string {
 	a := l.axisOf(b)
-	switch trimmedLower(b.Style["flex-direction"]) {
+	switch trimmedLower(b.Style.Get("flex-direction")) {
 	case "", "row", "column", "row-reverse", "column-reverse":
 	default:
 		return "its main axis is not one of the four flex-direction names"
 	}
-	switch trimmedLower(b.Style["flex-wrap"]) {
+	switch trimmedLower(b.Style.Get("flex-wrap")) {
 	case "", "nowrap":
 	case "wrap", "wrap-reverse":
 	default:
 		return "its lines wrap by a rule this engine does not apply"
 	}
-	switch trimmedLower(b.Style["align-content"]) {
+	switch trimmedLower(b.Style.Get("align-content")) {
 	case "", "normal", "stretch", "flex-start", "start", "flex-end", "end",
 		"center", "space-between", "space-around", "space-evenly":
 	default:
 		return "its lines are placed by a rule this engine does not apply"
 	}
-	switch trimmedLower(b.Style["justify-content"]) {
+	switch trimmedLower(b.Style.Get("justify-content")) {
 	case "", "normal", "flex-start", "start", "left", "flex-end", "end", "right",
 		"center", "space-between", "space-around", "space-evenly":
 	default:
@@ -438,7 +438,7 @@ func (l *layouter) refusesToFlex(b *Box) string {
 		// not about.
 		return "its items are packed by a rule this engine does not apply"
 	}
-	if why := refusesAlignment(trimmedLower(b.Style["align-items"]), a); why != "" {
+	if why := refusesAlignment(trimmedLower(b.Style.Get("align-items")), a); why != "" {
 		return "its items are " + why
 	}
 	for _, c := range b.Children {
@@ -454,7 +454,7 @@ func (l *layouter) refusesToFlex(b *Box) string {
 			// deferOutOfFlow gives it that one.
 			continue
 		}
-		if why := refusesAlignment(trimmedLower(c.Style["align-self"]), a); why != "" {
+		if why := refusesAlignment(trimmedLower(c.Style.Get("align-self")), a); why != "" {
 			return "one of its items is " + why
 		}
 	}
@@ -507,7 +507,7 @@ func refusesAlignment(value string, a flexAxis) string {
 // is a flag and not a length; nothing adds them up.
 func (l *layouter) autoMarginEdges(b *Box) Edges {
 	auto := func(name string) style.Unit {
-		if trimmedLower(b.Style["margin-"+name]) == "auto" {
+		if trimmedLower(b.Style.Get("margin-"+name)) == "auto" {
 			return 1
 		}
 		return 0
@@ -612,7 +612,7 @@ func (l *layouter) fillCrossAutoMargins(a flexAxis, it *flexItem, cross style.Un
 // bound has items whose order differs by more than a billion, and they tie —
 // which leaves them in document order, the answer they would have had anyway.
 func orderOf(b *Box) int {
-	s := trimmedLower(b.Style["order"])
+	s := trimmedLower(b.Style.Get("order"))
 	sign := 1
 	if strings.HasPrefix(s, "+") {
 		s = s[1:]
@@ -822,7 +822,7 @@ func (l *layouter) deferOutOfFlow(b *Box, a flexAxis, parent *Fragment,
 		}
 		along := a.mainAt(justifyOffset(l.justifyOf(b, a), main, 1, 0), 0, main)
 		var across style.Unit
-		switch crossAlignment(trimmedLower(b.Style["align-items"]), a) {
+		switch crossAlignment(trimmedLower(b.Style.Get("align-items")), a) {
 		case crossEnd:
 			across = cross
 		case crossCenter:
@@ -847,7 +847,7 @@ func (l *layouter) deferOutOfFlow(b *Box, a flexAxis, parent *Fragment,
 // difference between them and is the cross axis's direction, which flexAxis
 // carries; here the question is only whether there can be more than one line.
 func (l *layouter) wraps(b *Box) bool {
-	switch trimmedLower(b.Style["flex-wrap"]) {
+	switch trimmedLower(b.Style.Get("flex-wrap")) {
 	case "wrap", "wrap-reverse":
 		return true
 	}
@@ -993,7 +993,7 @@ func (l *layouter) alignContentSpacing(b *Box, a flexAxis, crosses []lineCross,
 		used = used.Add(c.size)
 	}
 	free := cross.Sub(used)
-	switch trimmedLower(b.Style["align-content"]) {
+	switch trimmedLower(b.Style.Get("align-content")) {
 	case "", "normal", "stretch":
 		if free <= 0 {
 			return 0, 0
@@ -1019,7 +1019,7 @@ func (l *layouter) alignContentSpacing(b *Box, a flexAxis, crosses []lineCross,
 // alignContentOf reads align-content, whose values are justify-content's and
 // mean the same thing on the other axis.
 func (l *layouter) alignContentOf(b *Box, a flexAxis) flexJustify {
-	switch value := trimmedLower(b.Style["align-content"]); value {
+	switch value := trimmedLower(b.Style.Get("align-content")); value {
 	case "space-between":
 		return justifyBetween
 	case "space-around":
@@ -1134,7 +1134,7 @@ const (
 // because that is the one the packing below is written in.
 func (l *layouter) justifyOf(b *Box, a flexAxis) flexJustify {
 	atStart, atEnd := justifyStart, justifyEnd
-	switch trimmedLower(b.Style["justify-content"]) {
+	switch trimmedLower(b.Style.Get("justify-content")) {
 	case "flex-end":
 		return atEnd
 	case "center":
@@ -1164,7 +1164,7 @@ func (l *layouter) justifyOf(b *Box, a flexAxis) flexJustify {
 			}
 			return atStart
 		}
-		wantsEnd := trimmedLower(b.Style["justify-content"]) == "right"
+		wantsEnd := trimmedLower(b.Style.Get("justify-content")) == "right"
 		if a.mainReversed() {
 			wantsEnd = !wantsEnd
 		}
@@ -1185,9 +1185,9 @@ func (l *layouter) justifyOf(b *Box, a flexAxis) flexJustify {
 // computed value, which is why this is a lookup and not a comparison against a
 // resolved string.
 func (l *layouter) alignOf(b *Box, a flexAxis, it *flexItem) flexAlign {
-	self := trimmedLower(it.box.Style["align-self"])
+	self := trimmedLower(it.box.Style.Get("align-self"))
 	if self == "" || self == "auto" {
-		self = trimmedLower(b.Style["align-items"])
+		self = trimmedLower(b.Style.Get("align-items"))
 	}
 	return crossAlignment(self, a)
 }
@@ -1313,7 +1313,7 @@ func (l *layouter) stretchesAcross(a flexAxis, it *flexItem) bool {
 		return false
 	}
 	name := a.crossName()
-	return l.isAuto(it.box, name) || trimmedLower(it.box.Style[name]) == ""
+	return l.isAuto(it.box, name) || trimmedLower(it.box.Style.Get(name)) == ""
 }
 
 // layOutFlexItem lays one item out at the sizes the container has settled on.

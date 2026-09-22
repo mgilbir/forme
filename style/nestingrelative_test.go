@@ -39,7 +39,7 @@ func TestEverySelectorOfANestedListIsScoped(t *testing.T) {
 		for id, want := range map[string]string{
 			"#in-h": "scoped", "#in-p": "scoped", "#out-h": "", "#out-p": "",
 		} {
-			got := styled.Styles[elementFor(t, doc, id)]["font-family"]
+			got := styled.Styles[elementFor(t, doc, id)].Get("font-family")
 			if (want == "") == (got == "scoped") {
 				t.Errorf("%s: %s has font-family %q; every selector of a nested list "+
 					"is relative to the parent, so only the card's own children "+
@@ -69,7 +69,7 @@ func TestARelativeSelectorIsRelativeThroughItsCombinator(t *testing.T) {
 		styled := Apply(doc, []Sheet{author(t, tc.src)})
 		var got []string
 		for _, id := range []string{"#top", "#mid", "#deep", "#b1", "#b2", "#b3"} {
-			if styled.Styles[elementFor(t, doc, id)]["font-family"] == "hit" {
+			if styled.Styles[elementFor(t, doc, id)].Get("font-family") == "hit" {
 				got = append(got, id)
 			}
 		}
@@ -148,7 +148,7 @@ func TestTheNestingSelectorCannotBeAPseudoElement(t *testing.T) {
 	styled := Apply(doc, []Sheet{author(t, `
 		p::before { content: "a"; @media print { font-family: nested } }`)})
 	key := PseudoKey{Node: elementFor(t, doc, "#target"), Name: "before"}
-	if got := styled.Pseudo[key]["font-family"]; got != "nested" {
+	if got := styled.Pseudo[key].Get("font-family"); got != "nested" {
 		t.Errorf("the nested @media under p::before gave the ::before %q", got)
 	}
 }
@@ -180,15 +180,15 @@ func TestAmpersandAtTheTopLevelIsTheRoot(t *testing.T) {
 		& p { font-style: italic }
 		& > p { font-weight: 700 }`)})
 	root := styled.Styles[elementFor(t, doc, ":root")]
-	if got := root["font-family"]; got != "wins" {
+	if got := root.Get("font-family"); got != "wins" {
 		t.Errorf("the root's font-family is %q; a top-level \"&\" has no "+
 			"specificity, so the later \":where(&)\" wins", got)
 	}
 	p := styled.Styles[elementFor(t, doc, "#deep")]
-	if p["font-style"] != "italic" {
-		t.Errorf("\"& p\" did not select a paragraph inside the root: %q", p["font-style"])
+	if p.Get("font-style") != "italic" {
+		t.Errorf("\"& p\" did not select a paragraph inside the root: %q", p.Get("font-style"))
 	}
-	if p["font-weight"] == "700" {
+	if p.Get("font-weight") == "700" {
 		t.Error("\"& > p\" selected a paragraph that is not a child of the root")
 	}
 }
@@ -235,7 +235,7 @@ func TestTheWPTNestingBasicCases(t *testing.T) {
 		.test-i6 { > .foo,.test-i6-child,+ .bar { font-family: green } }`)})
 	for _, id := range []string{"#t1", "#t3", "#t4", "#t6", "#t7", "#t8", "#t9",
 		"#t10", "#t14", "#i2", "#i3", "#i4", "#i5", "#i6"} {
-		if got := styled.Styles[elementFor(t, doc, id)]["font-family"]; got != "green" {
+		if got := styled.Styles[elementFor(t, doc, id)].Get("font-family"); got != "green" {
 			t.Errorf("%s is %q, want green", id, got)
 		}
 	}
@@ -251,7 +251,7 @@ func TestAnAmpersandBeforeATypeIsRefused(t *testing.T) {
 	doc := parseDoc(t, nestingDoc)
 	styled := Apply(doc, []Sheet{author(t,
 		`p { font-family: wins } .c { &p { font-family: loses } }`)})
-	if got := styled.Styles[elementFor(t, doc, "#target")]["font-family"]; got != "wins" {
+	if got := styled.Styles[elementFor(t, doc, "#target")].Get("font-family"); got != "wins" {
 		t.Errorf("\"&p\" was applied: %q", got)
 	}
 	if found, _ := says(styled.Findings, "element name must come first"); !found {

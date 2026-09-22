@@ -190,13 +190,13 @@ func TestASheetThatDeclaresALayerIsNotRemembered(t *testing.T) {
 	if a == nil {
 		t.Fatal("no paragraph")
 	}
-	if got := first.Styles[a]["color"]; got != "blue" {
+	if got := first.Styles[a].Get("color"); got != "blue" {
 		t.Errorf("the first document's colour is %q, want blue: an unlayered "+
 			"declaration beats a layered one", got)
 	}
 	for n, cs := range second.Styles {
-		if n.Type == html.ElementNode && n.Name == "p" && cs["color"] != "blue" {
-			t.Errorf("the second document's colour is %q, want blue", cs["color"])
+		if n.Type == html.ElementNode && n.Name == "p" && cs.Get("color") != "blue" {
+			t.Errorf("the second document's colour is %q, want blue", cs.Get("color"))
 		}
 	}
 }

@@ -27,7 +27,7 @@ func TestAClusterWhoseHalvesLiveInDifferentFacesIsSplit(t *testing.T) {
 		t.Fatal("the standard serif face is not in the set")
 	}
 	l := &layouter{fontSet: set}
-	b := &Box{Style: map[string]string{}}
+	b := &Box{}
 
 	// Each half on its own, to show the faces are there to be found. Without
 	// this the test below could pass on a set that has nothing at all.

@@ -136,14 +136,14 @@ func TestSmallCapsInsideTheFontShorthandSetsTheLonghand(t *testing.T) {
 	rules, _ := css.ParseStylesheet(`#a { font: small-caps 12px serif }`)
 	styled := Apply(doc, []Sheet{{Origin: OriginAuthor, Rules: rules}})
 	cs := styled.Styles[elementFor(t, doc, "#a")]
-	if cs["font-variant-caps"] != "small-caps" {
+	if cs.Get("font-variant-caps") != "small-caps" {
 		t.Errorf("font-variant-caps computed to %q, want small-caps",
-			cs["font-variant-caps"])
+			cs.Get("font-variant-caps"))
 	}
 	// And the rest of the shorthand still applies.
-	if !strings.Contains(cs["font-size"], "12") {
+	if !strings.Contains(cs.Get("font-size"), "12") {
 		t.Errorf("the size computed to %q; the shorthand still sets what it can",
-			cs["font-size"])
+			cs.Get("font-size"))
 	}
 }
 
@@ -158,14 +158,14 @@ func TestTheFontShorthandResetsSmallCaps(t *testing.T) {
 	rules, _ := css.ParseStylesheet(
 		`#outer { font-variant: small-caps } #a { font: 12px serif }`)
 	styled := Apply(doc, []Sheet{{Origin: OriginAuthor, Rules: rules}})
-	if cs := styled.Styles[elementFor(t, doc, "#outer")]; cs["font-variant-caps"] != "small-caps" {
+	if cs := styled.Styles[elementFor(t, doc, "#outer")]; cs.Get("font-variant-caps") != "small-caps" {
 		t.Fatalf("the container's font-variant-caps is %q; without it the reset "+
-			"below has nothing to undo", cs["font-variant-caps"])
+			"below has nothing to undo", cs.Get("font-variant-caps"))
 	}
 	cs := styled.Styles[elementFor(t, doc, "#a")]
-	if cs["font-variant-caps"] != "normal" {
+	if cs.Get("font-variant-caps") != "normal" {
 		t.Errorf("font-variant-caps is %q inside a small-caps container after "+
-			"\"font: 12px serif\", want normal", cs["font-variant-caps"])
+			"\"font: 12px serif\", want normal", cs.Get("font-variant-caps"))
 	}
 }
 
@@ -180,18 +180,18 @@ func TestFontVariantSetsBothLonghandsItControls(t *testing.T) {
 	rules, _ := css.ParseStylesheet(
 		`#outer { font-variant: none } #a { font-variant: small-caps }`)
 	styled := Apply(doc, []Sheet{{Origin: OriginAuthor, Rules: rules}})
-	if cs := styled.Styles[elementFor(t, doc, "#outer")]; cs["font-variant-ligatures"] != "none" {
+	if cs := styled.Styles[elementFor(t, doc, "#outer")]; cs.Get("font-variant-ligatures") != "none" {
 		t.Fatalf("\"font-variant: none\" left font-variant-ligatures at %q, "+
-			"want none", cs["font-variant-ligatures"])
+			"want none", cs.Get("font-variant-ligatures"))
 	}
 	cs := styled.Styles[elementFor(t, doc, "#a")]
-	if cs["font-variant-caps"] != "small-caps" {
-		t.Errorf("font-variant-caps is %q, want small-caps", cs["font-variant-caps"])
+	if cs.Get("font-variant-caps") != "small-caps" {
+		t.Errorf("font-variant-caps is %q, want small-caps", cs.Get("font-variant-caps"))
 	}
-	if cs["font-variant-ligatures"] != "normal" {
+	if cs.Get("font-variant-ligatures") != "normal" {
 		t.Errorf("font-variant-ligatures is %q inside a container that turned "+
 			"them off, want the normal the shorthand resets it to",
-			cs["font-variant-ligatures"])
+			cs.Get("font-variant-ligatures"))
 	}
 }
 
@@ -243,18 +243,18 @@ func TestAFontVariantNumericValueSetsTheLonghand(t *testing.T) {
 		`#a { font-variant: oldstyle-nums tabular-nums slashed-zero }`)
 	styled := Apply(doc, []Sheet{{Origin: OriginAuthor, Rules: rules}})
 	cs := styled.Styles[elementFor(t, doc, "#a")]
-	if want := "oldstyle-nums tabular-nums slashed-zero"; cs["font-variant-numeric"] != want {
+	if want := "oldstyle-nums tabular-nums slashed-zero"; cs.Get("font-variant-numeric") != want {
 		t.Errorf("font-variant-numeric computed to %q, want %q",
-			cs["font-variant-numeric"], want)
+			cs.Get("font-variant-numeric"), want)
 	}
 	// And the two beside it are reset, which is the whole reason the property
 	// is expanded rather than read.
-	if cs["font-variant-caps"] != "normal" {
-		t.Errorf("font-variant-caps is %q, want normal", cs["font-variant-caps"])
+	if cs.Get("font-variant-caps") != "normal" {
+		t.Errorf("font-variant-caps is %q, want normal", cs.Get("font-variant-caps"))
 	}
-	if cs["font-variant-ligatures"] != "normal" {
+	if cs.Get("font-variant-ligatures") != "normal" {
 		t.Errorf("font-variant-ligatures is %q, want normal",
-			cs["font-variant-ligatures"])
+			cs.Get("font-variant-ligatures"))
 	}
 }
 
@@ -270,17 +270,17 @@ func TestTheFontVariantShorthandResetsTheNumericLonghand(t *testing.T) {
 	rules, _ := css.ParseStylesheet(
 		`#outer { font-variant: oldstyle-nums } #a { font-variant: small-caps }`)
 	styled := Apply(doc, []Sheet{{Origin: OriginAuthor, Rules: rules}})
-	if cs := styled.Styles[elementFor(t, doc, "#outer")]; cs["font-variant-numeric"] != "oldstyle-nums" {
+	if cs := styled.Styles[elementFor(t, doc, "#outer")]; cs.Get("font-variant-numeric") != "oldstyle-nums" {
 		t.Fatalf("the container's font-variant-numeric is %q; without it the "+
-			"reset below has nothing to undo", cs["font-variant-numeric"])
+			"reset below has nothing to undo", cs.Get("font-variant-numeric"))
 	}
 	cs := styled.Styles[elementFor(t, doc, "#a")]
-	if cs["font-variant-numeric"] != "normal" {
+	if cs.Get("font-variant-numeric") != "normal" {
 		t.Errorf("font-variant-numeric is %q inside an oldstyle container after "+
-			"\"font-variant: small-caps\", want normal", cs["font-variant-numeric"])
+			"\"font-variant: small-caps\", want normal", cs.Get("font-variant-numeric"))
 	}
-	if cs["font-variant-caps"] != "small-caps" {
-		t.Errorf("font-variant-caps is %q, want small-caps", cs["font-variant-caps"])
+	if cs.Get("font-variant-caps") != "small-caps" {
+		t.Errorf("font-variant-caps is %q, want small-caps", cs.Get("font-variant-caps"))
 	}
 }
 
@@ -302,15 +302,15 @@ func TestAFontVariantEastAsianValueSetsTheLonghand(t *testing.T) {
 		 #a { font-variant: small-caps }`)
 	styled := Apply(doc, []Sheet{{Origin: OriginAuthor, Rules: rules}})
 	outer := styled.Styles[elementFor(t, doc, "#outer")]
-	if want := "jis78 full-width ruby"; outer["font-variant-east-asian"] != want {
+	if want := "jis78 full-width ruby"; outer.Get("font-variant-east-asian") != want {
 		t.Fatalf("font-variant-east-asian computed to %q, want %q",
-			outer["font-variant-east-asian"], want)
+			outer.Get("font-variant-east-asian"), want)
 	}
 	// And the span resets it, which is the whole reason the property is
 	// expanded rather than read.
-	if cs := styled.Styles[elementFor(t, doc, "#a")]; cs["font-variant-east-asian"] != "normal" {
+	if cs := styled.Styles[elementFor(t, doc, "#a")]; cs.Get("font-variant-east-asian") != "normal" {
 		t.Errorf("font-variant-east-asian is %q inside a jis78 container after "+
-			"\"font-variant: small-caps\", want normal", cs["font-variant-east-asian"])
+			"\"font-variant: small-caps\", want normal", cs.Get("font-variant-east-asian"))
 	}
 }
 
@@ -324,13 +324,13 @@ func TestAFontVariantPositionValueSetsTheLonghand(t *testing.T) {
 	rules, _ := css.ParseStylesheet(
 		`#outer { font-variant: super } #a { font-variant: small-caps }`)
 	styled := Apply(doc, []Sheet{{Origin: OriginAuthor, Rules: rules}})
-	if cs := styled.Styles[elementFor(t, doc, "#outer")]; cs["font-variant-position"] != "super" {
+	if cs := styled.Styles[elementFor(t, doc, "#outer")]; cs.Get("font-variant-position") != "super" {
 		t.Fatalf("font-variant-position computed to %q, want super",
-			cs["font-variant-position"])
+			cs.Get("font-variant-position"))
 	}
-	if cs := styled.Styles[elementFor(t, doc, "#a")]; cs["font-variant-position"] != "normal" {
+	if cs := styled.Styles[elementFor(t, doc, "#a")]; cs.Get("font-variant-position") != "normal" {
 		t.Errorf("font-variant-position is %q inside a super container after "+
-			"\"font-variant: small-caps\", want normal", cs["font-variant-position"])
+			"\"font-variant: small-caps\", want normal", cs.Get("font-variant-position"))
 	}
 }
 

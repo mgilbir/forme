@@ -239,7 +239,7 @@ func TestOutlineStyleHiddenIsNotAnOutlineStyle(t *testing.T) {
 	if d == nil {
 		t.Fatal("no box for #d")
 	}
-	if got := d.Style["outline-width"]; got == "5px" {
+	if got := d.Style.Get("outline-width"); got == "5px" {
 		t.Error("\"outline: 5px hidden green\" was accepted; 'hidden' is not a " +
 			"legal outline style and an invalid shorthand sets nothing")
 	}

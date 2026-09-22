@@ -287,7 +287,7 @@ func computeCounters(root *html.Node, styles map[*html.Node]style.ComputedStyle,
 	// order.
 	starts := reversedStarts(root, styles, pseudo)
 	apply := func(n *html.Node, cs style.ComputedStyle, depth int) {
-		for _, r := range parseCounterList(cs["counter-reset"], 0) {
+		for _, r := range parseCounterList(cs.Get("counter-reset"), 0) {
 			value := r.value
 			if r.reversed && r.implied {
 				// A reversed counter with no number begins at the number of
@@ -298,13 +298,13 @@ func computeCounters(root *html.Node, styles map[*html.Node]style.ComputedStyle,
 			}
 			state.reset(r.name, value, depth, r.reversed)
 		}
-		for _, r := range parseCounterList(cs["counter-increment"], 1) {
+		for _, r := range parseCounterList(cs.Get("counter-increment"), 1) {
 			state.increment(r.name, r.value, depth)
 		}
 		// After the increment, which css-lists-3 §4.3 calls a deliberate
 		// choice: "<li value=3>" is three on an element whose own increment has
 		// already run, and it would be four the other way round.
-		for _, r := range parseCounterList(cs["counter-set"], 0) {
+		for _, r := range parseCounterList(cs.Get("counter-set"), 0) {
 			state.set(r.name, r.value, depth)
 		}
 	}
@@ -323,7 +323,7 @@ func computeCounters(root *html.Node, styles map[*html.Node]style.ComputedStyle,
 		// its own keywords move it: "content: open-quote" draws the mark for the
 		// level it is opening, not for the one it leaves behind.
 		out.quoteDepth[key] = depthOfQuotes
-		depthOfQuotes = quoteDepthAfter(cs["content"], depthOfQuotes, parseQuotes(cs["quotes"]))
+		depthOfQuotes = quoteDepthAfter(cs.Get("content"), depthOfQuotes, parseQuotes(cs.Get("quotes")))
 	}
 
 	var walk func(n *html.Node, depth int)
@@ -379,7 +379,7 @@ func generatesPseudoBox(cs style.ComputedStyle) bool {
 	if displayIsNone(cs) {
 		return false
 	}
-	switch strings.ToLower(strings.TrimSpace(cs["content"])) {
+	switch strings.ToLower(strings.TrimSpace(cs.Get("content"))) {
 	case "", "normal", "none":
 		return false
 	}
@@ -486,7 +486,7 @@ func reversedStarts(root *html.Node, styles map[*html.Node]style.ComputedStyle,
 	// incrementing by two begin at eight. The "last" is the last in document
 	// order, which walking backwards makes the *first* one seen.
 	increments := func(cs style.ComputedStyle, sum, last []int) {
-		for _, r := range parseCounterList(cs["counter-increment"], 1) {
+		for _, r := range parseCounterList(cs.Get("counter-increment"), 1) {
 			for i, name := range names {
 				if name != r.name || r.value == 0 {
 					continue
@@ -501,7 +501,7 @@ func reversedStarts(root *html.Node, styles map[*html.Node]style.ComputedStyle,
 	// creates says an element instantiates a counter of its own, which takes it
 	// and everything after it out of the scope being counted.
 	creates := func(cs style.ComputedStyle, into []bool) {
-		for _, r := range parseCounterList(cs["counter-reset"], 0) {
+		for _, r := range parseCounterList(cs.Get("counter-reset"), 0) {
 			for i, name := range names {
 				if name == r.name {
 					into[i] = true
@@ -589,7 +589,7 @@ func reversedStarts(root *html.Node, styles map[*html.Node]style.ComputedStyle,
 func reversedNames(styles map[*html.Node]style.ComputedStyle) []string {
 	seen := map[string]bool{}
 	for _, cs := range styles {
-		raw := cs["counter-reset"]
+		raw := cs.Get("counter-reset")
 		if !strings.Contains(raw, "reversed(") && !strings.Contains(raw, "REVERSED(") {
 			continue
 		}

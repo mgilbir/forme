@@ -95,7 +95,7 @@ func (l *layouter) aspectHeight(b *Box, width style.Unit) (style.Unit, bool) {
 	// "ratio > 0" test beside this one made the reader's own checks dead: a
 	// plant that let a zero through was caught by the duplicate rather than by
 	// the rule, so the rule was never the thing under test.
-	ratio, ok := aspectRatioOf(b.Style["aspect-ratio"])
+	ratio, ok := aspectRatioOf(b.Style.Get("aspect-ratio"))
 	if !ok {
 		return 0, false
 	}

@@ -1155,7 +1155,7 @@ func (p *painter) paintContent(f *Fragment) {
 			// question and not the box's. The clip comes back active only when
 			// the content reaches outside — "cover" always does, and "none"
 			// does when the picture is larger than the box it was put in.
-			fit, _ := objectFitOf(f.Box.Style["object-fit"])
+			fit, _ := objectFitOf(f.Box.Style.Get("object-fit"))
 			rect, clip := fitContent(box, naturalSizeOf(r), fit, objectPositionOf(f.Box))
 			p.clipping(clip, func() {
 				// Content that is one colour is a fill, not a picture stretched
@@ -1274,7 +1274,7 @@ func (p *painter) borders(f *Fragment) {
 		if !ok || colour.A == 0 {
 			continue
 		}
-		kind := parseBorderStyle(f.Box.Style["border-"+edge.name+"-style"])
+		kind := parseBorderStyle(f.Box.Style.Get("border-" + edge.name + "-style"))
 		p.paintEdge(edge.band, kind, colour, edge.side, edge.width)
 	}
 }
@@ -1320,7 +1320,7 @@ func (p *painter) outline(f *Fragment) {
 		// layout, where there was a recorder to raise it with.
 		return
 	}
-	kind := parseBorderStyle(f.Box.Style["outline-style"])
+	kind := parseBorderStyle(f.Box.Style.Get("outline-style"))
 	r := f.BorderRect
 	outer := Rect{X: r.X.Sub(w), Y: r.Y.Sub(w), W: r.W.Add(w).Add(w), H: r.H.Add(w).Add(w)}
 
@@ -1617,7 +1617,7 @@ func (p *painter) color(b *Box, property string) (style.RGBA, bool) {
 	if b == nil {
 		return style.RGBA{}, false
 	}
-	raw := strings.TrimSpace(b.Style[property])
+	raw := strings.TrimSpace(b.Style.Get(property))
 	if raw == "" {
 		return style.RGBA{}, false
 	}

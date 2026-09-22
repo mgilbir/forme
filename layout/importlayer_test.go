@@ -128,13 +128,13 @@ func TestTheLayerOrderSurvivesTheImports(t *testing.T) {
 			Resources: &fileResolver{files: map[string][]byte{"other.css": []byte(`#d { font-style: italic }`)}},
 		})
 		found := boxWithID(t, built.Root, "d")
-		if got := found.Style["color"]; got != "rgb(0, 0, 255)" {
+		if got := found.Style.Get("color"); got != "rgb(0, 0, 255)" {
 			t.Errorf("%q: the colour is %q, want the blue of the layer named last "+
 				"in the statement; the statement fixes the order and has to survive "+
 				"the imports being lifted out", sheet, got)
 		}
 		// And the imported sheet arrived, or the test above is what failed.
-		if got := found.Style["font-style"]; got != "italic" {
+		if got := found.Style.Get("font-style"); got != "italic" {
 			t.Errorf("%q: the imported sheet did not arrive: font-style is %q", sheet, got)
 		}
 	}
@@ -167,7 +167,7 @@ func TestTheLayerOrderIsFixedBeforeTheImportedSheet(t *testing.T) {
 			 @layer theme { #d { color: rgb(0, 255, 0) } }`)}},
 	})
 	found := boxWithID(t, built.Root, "d")
-	if got := found.Style["color"]; got != "rgb(0, 0, 255)" {
+	if got := found.Style.Get("color"); got != "rgb(0, 0, 255)" {
 		t.Errorf("the colour is %q, want the blue of the layer the statement "+
 			"named last; the statement was written above the @import and has to "+
 			"reach the cascade before the sheet it orders", got)

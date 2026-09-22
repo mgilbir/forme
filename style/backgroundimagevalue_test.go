@@ -29,7 +29,7 @@ func bgImageOf(t *testing.T, decl string) (string, []Finding) {
 	doc := parseDoc(t, `<div id="target">x</div>`)
 	got := Apply(doc, []Sheet{{Origin: OriginAuthor, Rules: author}})
 	n := elementFor(t, doc, "#target")
-	return got.Styles[n]["background-image"], got.Findings
+	return got.Styles[n].Get("background-image"), got.Findings
 }
 
 // TestAValueThatIsNotAnImageLeavesTheEarlierDeclarationStanding is why this

@@ -92,8 +92,10 @@ const maxFindings = 200
 
 // A declaration that matched an element, with everything the cascade sorts on.
 type candidate struct {
-	property  string
-	value     []css.ComponentValue
+	property string
+	value    []css.ComponentValue
+	// text is value serialised, which is what a winner is stored as.
+	text      string
 	important bool
 	origin    Origin
 	// layer is the cascade layer the declaration was written in — see layer.go.
@@ -156,12 +158,11 @@ type Styler struct {
 	// sends them back to a document that still has the finding in it. See
 	// suppressed, which is the key.
 	seen map[string]bool
-}
 
-// ComputedStyle is one element's resolved property values, keyed by property
-// name. Every property in the registry is present, so a caller never has to
-// distinguish "unset" from "absent".
-type ComputedStyle map[string]string
+	// intern shares what the document's computed styles have in common. See
+	// styleInterner; it is per Styler because a Styler styles one document.
+	intern *styleInterner
+}
 
 // PseudoKey names one pseudo-element of one element.
 type PseudoKey struct {
@@ -305,7 +306,18 @@ func applyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) (Styled, *S
 			return true
 		}
 		s.budget.styled++
-		cs, own := s.computeFor(n, rules, out.Styles, "")
+		// The parent's finished style, or none for the root — which is also
+		// what an element whose parent was never styled inherits from, as it
+		// did when this read a map that had no entry for it.
+		var parent ComputedStyle
+		if p := parentElement(n); p != nil {
+			parent = out.Styles[p]
+		}
+		b, declared, own := s.computeFor(n, rules, parent, "")
+		// What has been resolved so far, for the questions asked of it
+		// below. It is a view of the builder and not a copy; the writes that
+		// follow go through the builder.
+		cs := b.cs
 
 		// The parent's own size, which is what an em means here, and the
 		// initial size for the root — a document that says nothing about
@@ -326,10 +338,8 @@ func applyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) (Styled, *S
 		// together. At the root there is no parent element and the element's own
 		// style is the nearest thing there is.
 		fontStyle := cs
-		if p := parentElement(n); p != nil {
-			if got, ok := out.Styles[p]; ok {
-				fontStyle = got
-			}
+		if !parent.IsZero() {
+			fontStyle = parent
 		}
 		size, resolved := fontSizeOf(cs, own, parentSize, rootSize, m, fontStyle)
 		// The scale a stated size is on is the one it was stated in, so this
@@ -379,10 +389,11 @@ func applyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) (Styled, *S
 			// absolute length, which is what a descendant inherits. When it
 			// could not be resolved the declaration is left as the author wrote
 			// it, for layout to report against the element.
-			cs["font-size"] = pxValue(size)
+			b.set(fontSizeID, s.interner().value(pxValue(size)))
 		}
-		absolutiseLengths(cs, size, rootSize)
+		s.absolutiseLengths(b, declared, size, rootSize)
 
+		cs = s.interner().finish(b)
 		out.Styles[n] = cs
 		if own {
 			out.OwnFontSize[n] = true
@@ -394,7 +405,8 @@ func applyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) (Styled, *S
 			// A pseudo-element inherits from the element it belongs to, which is
 			// why the parent style passed here is that element's own.
 			key := PseudoKey{Node: n, Name: name}
-			pcs, own := s.computeForPseudo(n, rules, out.Styles[n], name)
+			pb, pdeclared, own := s.computeForPseudo(n, rules, cs, name)
+			pcs := pb.cs
 			// A pseudo-element's em is relative to its own font-size, and it
 			// inherits from the element it belongs to rather than from that
 			// element's parent.
@@ -403,10 +415,10 @@ func applyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) (Styled, *S
 			// element's parent.
 			psize, presolved := fontSizeOf(pcs, own, size, rootSize, m, cs)
 			if presolved {
-				pcs["font-size"] = pxValue(psize)
+				pb.set(fontSizeID, s.interner().value(pxValue(psize)))
 			}
-			absolutiseLengths(pcs, psize, rootSize)
-			out.Pseudo[key] = pcs
+			s.absolutiseLengths(pb, pdeclared, psize, rootSize)
+			out.Pseudo[key] = s.interner().finish(pb)
 			if own {
 				out.OwnPseudoFontSize[key] = true
 			}
@@ -457,8 +469,11 @@ type preparedRule struct {
 }
 
 type preparedDecl struct {
-	property  string
-	value     []css.ComponentValue
+	property string
+	value    []css.ComponentValue
+	// text is value serialised, which is what a computed style stores. See
+	// expand.
+	text      string
 	important bool
 	order     int
 	offset    int
@@ -888,7 +903,22 @@ func (s *Styler) prepareStyleBlock(rule css.Rule, sels []css.Selector,
 
 // expand turns one declaration into the longhands it sets, dropping and
 // reporting anything the engine does not implement.
+//
+// Each longhand's value is written out as text here, once, because text is what
+// a computed style holds and the declaration is the same for every element it
+// matches. It was serialised again for every element a rule matched, which in a
+// document of a thousand paragraphs is a thousand identical strings per
+// declaration.
 func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
+	out := s.expandDecl(d, origin)
+	for i := range out {
+		out[i].text = serialize(out[i].value)
+	}
+	return out
+}
+
+// expandDecl is expand without the text.
+func (s *Styler) expandDecl(d css.Declaration, origin Origin) []preparedDecl {
 	name := strings.ToLower(d.Name)
 
 	// Custom properties, and every declaration whose value uses one.
@@ -1677,18 +1707,31 @@ func (s *Styler) anyRuleTargets(rules *ruleSet, n *html.Node, name string) bool 
 // parent, which is what makes "p { color: red } p::before { content: '>' }" draw
 // a red marker without the author saying so twice.
 func (s *Styler) computeForPseudo(n *html.Node, rules *ruleSet,
-	owner ComputedStyle, name string) (ComputedStyle, bool) {
-	return s.computeFor(n, rules, map[*html.Node]ComputedStyle{n: owner}, name)
+	owner ComputedStyle, name string) (*styleBuilder, []propID, bool) {
+	return s.computeFor(n, rules, owner, name)
 }
 
 // computeFor resolves every property for one element, or for one of its
-// pseudo-elements when pseudo is not empty.
+// pseudo-elements when pseudo is not empty, whose parent's style is parent —
+// the zero style for the root, and the element's own for a pseudo-element.
+//
+// It hands back the style still under construction, because the caller has
+// two things left to write into it — the resolved font-size and the lengths
+// that depend on it — together with the properties a declaration decided,
+// which are the only ones those can have changed. See absolutiseLengths.
+//
+// It resolves only those properties. Every other one is what an undeclared
+// property is — the parent's value where it inherits and the initial value
+// where it does not — and the builder starts out holding exactly that, by
+// sharing the parent's inherited block and storing nothing else. It used to
+// resolve all hundred and forty-eight for every element, and serialise each
+// winner again for every element it won on.
 //
 // It also reports whether font-size came from a declaration rather than by
-// inheritance, which is the one thing a consumer cannot recover from the map it
-// returns. See Styled.OwnFontSize for why that matters.
+// inheritance, which is the one thing a consumer cannot recover from the style
+// it returns. See Styled.OwnFontSize for why that matters.
 func (s *Styler) computeFor(n *html.Node, rules *ruleSet,
-	done map[*html.Node]ComputedStyle, pseudo string) (ComputedStyle, bool) {
+	parent ComputedStyle, pseudo string) (*styleBuilder, []propID, bool) {
 
 	var cands []candidate
 	rules.forEach(n, func(r *preparedRule) bool {
@@ -1698,8 +1741,9 @@ func (s *Styler) computeFor(n *html.Node, rules *ruleSet,
 		}
 		for _, d := range r.decls {
 			cands = append(cands, candidate{
-				property: d.property, value: d.value, important: d.important,
-				origin: r.origin, layer: r.layer, spec: spec,
+				property: d.property, value: d.value, text: d.text,
+				important: d.important,
+				origin:    r.origin, layer: r.layer, spec: spec,
 				order: d.order, offset: d.offset,
 			})
 		}
@@ -1715,6 +1759,7 @@ func (s *Styler) computeFor(n *html.Node, rules *ruleSet,
 		for property, value := range presentationalHints(n) {
 			cands = append(cands, candidate{
 				property: property, value: value,
+				text:   s.interner().value(serialize(value)),
 				origin: OriginAuthor, order: hintOrder, offset: n.Offset,
 			})
 		}
@@ -1730,15 +1775,6 @@ func (s *Styler) computeFor(n *html.Node, rules *ruleSet,
 	var inline map[string]preparedDecl
 	if pseudo == "" {
 		inline = s.inlineDeclarations(n)
-	}
-
-	var parent ComputedStyle
-	if pseudo != "" {
-		// A pseudo-element inherits from its own element, which the caller put
-		// in the map under that element's own key.
-		parent = done[n]
-	} else if p := parentElement(n); p != nil {
-		parent = done[p]
 	}
 
 	winners := map[string]candidate{}
@@ -1771,13 +1807,33 @@ func (s *Styler) computeFor(n *html.Node, rules *ruleSet,
 		pick()
 	}
 
-	out := make(ComputedStyle, len(properties))
+	// The properties something declared, in the registry's order so that
+	// whatever resolve reports is reported in the same order on every run. A
+	// winner under a name that is not registered — a logical longhand this
+	// element did not rename — is not a property and was never stored.
+	declared := make([]propID, 0, len(winners)+len(inline))
+	for name := range winners {
+		if id, ok := registry.ids[name]; ok {
+			declared = append(declared, id)
+		}
+	}
+	for name := range inline {
+		if id, ok := registry.ids[name]; ok {
+			declared = append(declared, id)
+		}
+	}
+	sort.Slice(declared, func(i, j int) bool { return declared[i] < declared[j] })
+	declared = compactIDs(declared)
+
+	b := childStyleBuilder(parent)
 	ownFontSize := false
-	for name, prop := range properties {
+	for _, id := range declared {
+		name := registry.names[id]
+		prop := registry.slots[id].property()
 		value, have := "", false
 
 		if c, ok := winners[name]; ok {
-			value, have = serialize(c.value), true
+			value, have = c.text, true
 		}
 		if d, ok := inline[name]; ok {
 			// A style attribute is an author declaration whose specificity is
@@ -1798,16 +1854,18 @@ func (s *Styler) computeFor(n *html.Node, rules *ruleSet,
 			// important rule.
 			c, beaten := winners[name]
 			if !beaten || CascadeRank(OriginAuthor, d.important) >= cascadeRank(c) {
-				value, have = serialize(d.value), true
+				// Interned, because an attribute is read per element and
+				// its text made afresh for each one.
+				value, have = s.interner().value(d.text), true
 			}
 		}
 
-		out[name] = s.resolve(name, prop, value, have, parent)
+		b.set(id, s.resolve(name, prop, value, have, parent))
 		if name == "font-size" {
 			ownFontSize = have && declaresItsOwnValue(value, prop)
 		}
 	}
-	return out, ownFontSize
+	return b, declared, ownFontSize
 }
 
 // declaresItsOwnValue reports whether a winning declaration says something about
@@ -1831,14 +1889,11 @@ func declaresItsOwnValue(value string, prop property) bool {
 // value, applying the CSS-wide keywords and inheritance.
 func (s *Styler) resolve(name string, prop property, value string, have bool, parent ComputedStyle) string {
 	inheritFrom := func() string {
-		if parent == nil {
-			// The root has no parent to inherit from, so it takes the initial
-			// value — which is what "the initial value" means for the root.
-			return prop.initial
-		}
-		if v, ok := parent[name]; ok {
+		if v, ok := parent.Lookup(name); ok {
 			return v
 		}
+		// The root has no parent to inherit from, so it takes the initial
+		// value — which is what "the initial value" means for the root.
 		return prop.initial
 	}
 
@@ -2469,11 +2524,11 @@ func (s *Styler) isRTL(winners map[string]candidate,
 
 	value, have := "", false
 	if c, ok := winners["direction"]; ok {
-		value, have = serialize(c.value), true
+		value, have = c.text, true
 	}
 	if d, ok := inline["direction"]; ok {
 		if c, ok := winners["direction"]; !ok || !c.important {
-			value, have = serialize(d.value), true
+			value, have = d.text, true
 		}
 	}
 	got := s.resolve("direction", properties["direction"], value, have, parent)

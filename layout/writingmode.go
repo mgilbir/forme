@@ -101,7 +101,7 @@ func writingModeOf(b *Box) writingMode {
 		// second box declaring horizontal-tb inside a vertical one.
 		return writingModeOf(b.Parent)
 	}
-	switch strings.ToLower(strings.TrimSpace(b.Style["writing-mode"])) {
+	switch strings.ToLower(strings.TrimSpace(b.Style.Get("writing-mode"))) {
 	case "vertical-rl":
 		return verticalRL
 	case "vertical-lr":
@@ -536,7 +536,7 @@ func (l *layouter) subtreeRefusesToTurn(root *Box, mode writingMode, b *Box) str
 			}
 		}
 	}
-	if orientation := trimmedLower(b.Style["text-orientation"]); !mode.sideways() &&
+	if orientation := trimmedLower(b.Style.Get("text-orientation")); !mode.sideways() &&
 		orientation != "" && orientationOf(b) != orientationOf(root) {
 		// The subtree has to agree with the box the turn started at, because the
 		// turn is one decision for the whole of it: one run set upright inside a
@@ -548,7 +548,7 @@ func (l *layouter) subtreeRefusesToTurn(root *Box, mode writingMode, b *Box) str
 		// the clause above has already refused a box that has one.
 		return "\"text-orientation: " + orientation + "\" inside it is not the orientation the box is set in"
 	}
-	if combine := trimmedLower(b.Style["text-combine-upright"]); !mode.sideways() &&
+	if combine := trimmedLower(b.Style.Get("text-combine-upright")); !mode.sideways() &&
 		combine != "" && combine != "none" {
 		return "\"text-combine-upright: " + combine + "\" asks for a run set across the line, which this engine does not do"
 	}
@@ -576,7 +576,7 @@ func (l *layouter) subtreeRefusesToTurn(root *Box, mode writingMode, b *Box) str
 // containing block runs.
 func (l *layouter) refusesPhysicalGeometry(b *Box) string {
 	for _, p := range physicalGeometry {
-		switch v := trimmedLower(b.Style[p.name]); v {
+		switch v := trimmedLower(b.Style.Get(p.name)); v {
 		case "", p.initial:
 		case "0px", "0%":
 			// The same nothing, spelled the way a stylesheet spells it. Only
@@ -592,7 +592,7 @@ func (l *layouter) refusesPhysicalGeometry(b *Box) string {
 
 	for _, prefix := range [...]string{"margin", "padding"} {
 		for _, side := range [...]string{"-top", "-right", "-bottom", "-left"} {
-			if strings.ContainsRune(b.Style[prefix+side], '%') {
+			if strings.ContainsRune(b.Style.Get(prefix+side), '%') {
 				return "a percentage margin or padding is declared inside it, which is resolved against an axis the turn swaps"
 			}
 		}
@@ -651,7 +651,7 @@ const (
 // one rather than reported, because a document writing it is asking for
 // something this engine does.
 func orientationOf(b *Box) textOrientation {
-	switch trimmedLower(b.Style["text-orientation"]) {
+	switch trimmedLower(b.Style.Get("text-orientation")) {
 	case "upright":
 		return orientationUpright
 	case "sideways", "sideways-right":

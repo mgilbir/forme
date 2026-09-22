@@ -452,8 +452,8 @@ func (b *boxBuilder) tableWrapper(table *Box) *Box {
 	// background from being painted twice, once by each box.
 	cs := style.Inherited(table.Style)
 	for _, name := range wrapperProperties {
-		if v, ok := table.Style[name]; ok {
-			cs[name] = v
+		if v, ok := table.Style.Lookup(name); ok {
+			cs = cs.With(name, v)
 		}
 	}
 
@@ -530,7 +530,7 @@ var wrapperProperties = []string{
 // keywords are case-insensitive and a stylesheet is free to write "BOTTOM".
 // Compared as written, such a declaration was silently the initial value.
 func captionAtBottom(b *Box) bool {
-	return strings.EqualFold(strings.TrimSpace(b.Style["caption-side"]), "bottom")
+	return strings.EqualFold(strings.TrimSpace(b.Style.Get("caption-side")), "bottom")
 }
 
 // properTableChild is §17.2.1's own list: the boxes a table may hold directly.

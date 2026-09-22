@@ -56,7 +56,7 @@ import (
 // nothing. Out-of-range values are clamped rather than rejected, because §3.1
 // says to clamp them — "opacity: 2" is opaque and "opacity: -1" is invisible.
 func opacityOf(cs style.ComputedStyle) float64 {
-	raw := strings.TrimSpace(cs["opacity"])
+	raw := strings.TrimSpace(cs.Get("opacity"))
 	if raw == "" {
 		return 1
 	}
@@ -200,7 +200,7 @@ func (g group) report(rec *Recorder) {
 	rec.ReportDetail(Finding{
 		Rule:   RuleUnsupportedValue,
 		Source: AtHTML(offsetOf(g.box)),
-		Message: "\"opacity: " + strings.TrimSpace(g.box.Style["opacity"]) +
+		Message: "\"opacity: " + strings.TrimSpace(g.box.Style.Get("opacity")) +
 			"\" was applied to each mark this box paints rather than to the box " +
 			"as a group, because " + why,
 		Path:     PathOf(g.box.Element),

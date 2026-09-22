@@ -45,15 +45,15 @@ func TestTableWrapperTakesThePositioningProperties(t *testing.T) {
 		t.Fatalf("the table's parent is not a wrapper:\n%s", sketchBox(got.Root))
 	}
 
-	if wrapper.Style["margin-left"] != "30px" {
-		t.Errorf("the wrapper's margin-left is %q, want 30px", wrapper.Style["margin-left"])
+	if wrapper.Style.Get("margin-left") != "30px" {
+		t.Errorf("the wrapper's margin-left is %q, want 30px", wrapper.Style.Get("margin-left"))
 	}
-	if wrapper.Style["border-left-style"] != "none" {
+	if wrapper.Style.Get("border-left-style") != "none" {
 		t.Errorf("the wrapper took the border (%q); §17.4 leaves it on the table",
-			wrapper.Style["border-left-style"])
+			wrapper.Style.Get("border-left-style"))
 	}
-	if table.Style["border-left-style"] != "solid" {
-		t.Errorf("the table box lost its border (%q)", table.Style["border-left-style"])
+	if table.Style.Get("border-left-style") != "solid" {
+		t.Errorf("the table box lost its border (%q)", table.Style.Get("border-left-style"))
 	}
 	if wrapper.Float != FloatLeft {
 		t.Errorf("the wrapper does not float (%v); the float belongs to it", wrapper.Float)

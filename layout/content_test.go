@@ -348,7 +348,7 @@ func TestPseudoElementInheritsFromItsOwner(t *testing.T) {
 	if before == nil {
 		t.Fatal("the generated box was not found")
 	}
-	if got := before.Style["color"]; got != "rgb(2, 2, 2)" {
+	if got := before.Style.Get("color"); got != "rgb(2, 2, 2)" {
 		t.Errorf("the marker's colour is %q; it inherits from the <p>, not the <div>", got)
 	}
 }
@@ -379,15 +379,15 @@ func TestPseudoElementRulesDoNotStyleTheElement(t *testing.T) {
 	if p == nil || before == nil {
 		t.Fatalf("boxes not found: p=%v before=%v", p != nil, before != nil)
 	}
-	if p.Style["color"] != "rgb(1, 1, 1)" {
-		t.Errorf("the element took the marker's colour: %q", p.Style["color"])
+	if p.Style.Get("color") != "rgb(1, 1, 1)" {
+		t.Errorf("the element took the marker's colour: %q", p.Style.Get("color"))
 	}
-	if before.Style["color"] != "rgb(9, 9, 9)" {
-		t.Errorf("the marker did not take its own colour: %q", before.Style["color"])
+	if before.Style.Get("color") != "rgb(9, 9, 9)" {
+		t.Errorf("the marker did not take its own colour: %q", before.Style.Get("color"))
 	}
 	// And the element has no content of its own from the pseudo-element's rule.
-	if p.Style["content"] != "normal" {
-		t.Errorf("the element's content is %q; the ::before rule set it", p.Style["content"])
+	if p.Style.Get("content") != "normal" {
+		t.Errorf("the element's content is %q; the ::before rule set it", p.Style.Get("content"))
 	}
 }
 

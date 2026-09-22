@@ -71,7 +71,7 @@ func (l *layouter) spacingFor(b *Box) textSpacing {
 // though nothing in word-spacing-001 can tell: that test is set in Ahem, whose
 // space is exactly one em, so the two answers agree everywhere in it.
 func (l *layouter) spacingValue(b *Box, property string) (style.Unit, bool) {
-	raw := strings.ToLower(strings.TrimSpace(b.Style[property]))
+	raw := strings.ToLower(strings.TrimSpace(b.Style.Get(property)))
 	if raw == "" || raw == "normal" {
 		return 0, false
 	}
@@ -113,7 +113,7 @@ func (m indentMode) indentsLine(first, afterForced bool) bool {
 // the two are not the same thing — a negative indent moves the first line out,
 // the keyword moves every other line in.
 func (l *layouter) textIndent(b *Box, width style.Unit) (style.Unit, indentMode) {
-	raw := strings.TrimSpace(b.Style["text-indent"])
+	raw := strings.TrimSpace(b.Style.Get("text-indent"))
 	if raw == "" || raw == "0" {
 		return 0, indentMode{}
 	}

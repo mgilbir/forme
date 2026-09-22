@@ -198,11 +198,11 @@ func standardName(base string, bold, italic bool) string {
 // face is a size the author never asked for, and CSS Values §5.1.1 already says
 // what to do when no x-height can be determined, which is to assume half an em.
 func faceForStyle(fonts FontSet, cs style.ComputedStyle) *shape.Face {
-	if fonts == nil || cs == nil {
+	if fonts == nil || cs.IsZero() {
 		return nil
 	}
-	bold, italic := isBold(cs["font-weight"]), isItalic(cs["font-style"])
-	for _, family := range parseFamilyList(cs["font-family"]) {
+	bold, italic := isBold(cs.Get("font-weight")), isItalic(cs.Get("font-style"))
+	for _, family := range parseFamilyList(cs.Get("font-family")) {
 		if f, ok := fonts.Face(family, bold, italic); ok {
 			return f
 		}
@@ -212,9 +212,9 @@ func faceForStyle(fonts FontSet, cs style.ComputedStyle) *shape.Face {
 
 func (l *layouter) fontFor(b *Box) (*shape.Face, bool) {
 	key := fontKey{
-		families: b.Style["font-family"],
-		bold:     isBold(b.Style["font-weight"]),
-		italic:   isItalic(b.Style["font-style"]),
+		families: b.Style.Get("font-family"),
+		bold:     isBold(b.Style.Get("font-weight")),
+		italic:   isItalic(b.Style.Get("font-style")),
 	}
 	if got, ok := l.fonts[key]; ok {
 		return got.face, got.face != nil
@@ -356,8 +356,8 @@ func (m fontMetrics) XHeight(cs style.ComputedStyle, size style.Unit) (float64, 
 // past the families the document named into the fallback set, because the
 // question is which of *those* sets the character.
 func (l *layouter) faceWithGlyph(b *Box, r rune) (*shape.Face, bool) {
-	bold, italic := isBold(b.Style["font-weight"]), isItalic(b.Style["font-style"])
-	for _, family := range parseFamilyList(b.Style["font-family"]) {
+	bold, italic := isBold(b.Style.Get("font-weight")), isItalic(b.Style.Get("font-style"))
+	for _, family := range parseFamilyList(b.Style.Get("font-family")) {
 		face, ok := l.fontSet.Face(family, bold, italic)
 		if !ok {
 			continue

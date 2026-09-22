@@ -123,7 +123,7 @@ func (f textFit) clamp(want float64) float64 {
 // block's own factor would be a page the author did not ask for. So it is
 // reported and nothing is scaled.
 func textFitOf(b *Box) (textFit, string) {
-	raw := strings.ToLower(strings.TrimSpace(b.Style["text-fit"]))
+	raw := strings.ToLower(strings.TrimSpace(b.Style.Get("text-fit")))
 	if raw == "" || raw == "none" {
 		return textFit{}, ""
 	}

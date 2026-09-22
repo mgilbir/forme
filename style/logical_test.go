@@ -46,13 +46,13 @@ func TestEveryLogicalLonghandSetsItsPhysicalOne(t *testing.T) {
 		value := sampleFor(logical)
 		for i, dir := range []string{"ltr", "rtl"} {
 			cs, findings := logicalStyle(t, "direction: "+dir+"; "+logical+": "+value)
-			if got := cs[sides[i]]; got != value {
+			if got := cs.Get(sides[i]); got != value {
 				t.Errorf("%s: %s in %s set %s to %q, want %q",
 					logical, logical, dir, sides[i], got, value)
 			}
 			// And it set *only* that one: the other side of the same axis is
 			// untouched, which is what makes the flip a flip rather than both.
-			if other := sides[1-i]; other != sides[i] && cs[other] == value {
+			if other := sides[1-i]; other != sides[i] && cs.Get(other) == value {
 				t.Errorf("%s in %s also set %s", logical, dir, other)
 			}
 			for _, f := range findings {
@@ -72,20 +72,20 @@ func TestEveryLogicalLonghandSetsItsPhysicalOne(t *testing.T) {
 // one after the other would answer by which one layout happened to look at.
 func TestALogicalAndAPhysicalDeclarationCompeteInOrder(t *testing.T) {
 	cs, _ := logicalStyle(t, "margin-left: 1px; margin-inline-start: 2px")
-	if cs["margin-left"] != "2px" {
+	if cs.Get("margin-left") != "2px" {
 		t.Errorf("the logical declaration written second lost: margin-left is %q",
-			cs["margin-left"])
+			cs.Get("margin-left"))
 	}
 	cs, _ = logicalStyle(t, "margin-inline-start: 2px; margin-left: 1px")
-	if cs["margin-left"] != "1px" {
+	if cs.Get("margin-left") != "1px" {
 		t.Errorf("the physical declaration written second lost: margin-left is %q",
-			cs["margin-left"])
+			cs.Get("margin-left"))
 	}
 	// And importance beats order, as it does between any two declarations.
 	cs, _ = logicalStyle(t, "margin-left: 1px !important; margin-inline-start: 2px")
-	if cs["margin-left"] != "1px" {
+	if cs.Get("margin-left") != "1px" {
 		t.Errorf("an important physical declaration lost to a later logical one: %q",
-			cs["margin-left"])
+			cs.Get("margin-left"))
 	}
 }
 
@@ -103,14 +103,14 @@ func TestTheDirectionIsTheElementsOwn(t *testing.T) {
 	got := Apply(doc, []Sheet{{Origin: OriginAuthor, Rules: rules}})
 
 	inherited := got.Styles[elementFor(t, doc, "#t")]
-	if inherited["margin-right"] != "3px" || inherited["margin-left"] == "3px" {
+	if inherited.Get("margin-right") != "3px" || inherited.Get("margin-left") == "3px" {
 		t.Errorf("inside a right-to-left parent the start margin is the right one; "+
-			"left=%q right=%q", inherited["margin-left"], inherited["margin-right"])
+			"left=%q right=%q", inherited.Get("margin-left"), inherited.Get("margin-right"))
 	}
 	own := got.Styles[elementFor(t, doc, "#own")]
-	if own["margin-left"] != "4px" || own["margin-right"] == "4px" {
+	if own.Get("margin-left") != "4px" || own.Get("margin-right") == "4px" {
 		t.Errorf("an element that sets its own direction is mapped by it; "+
-			"left=%q right=%q", own["margin-left"], own["margin-right"])
+			"left=%q right=%q", own.Get("margin-left"), own.Get("margin-right"))
 	}
 }
 
@@ -121,21 +121,21 @@ func TestAStyleAttributeIsMappedToo(t *testing.T) {
 		`<div id="t" style="direction: rtl; padding-inline-start: 5px">x</div>`)
 	got := Apply(doc, nil)
 	cs := got.Styles[elementFor(t, doc, "#t")]
-	if cs["padding-right"] != "5px" {
+	if cs.Get("padding-right") != "5px" {
 		t.Errorf("padding-right is %q, want 5px: the attribute set the direction too",
-			cs["padding-right"])
+			cs.Get("padding-right"))
 	}
 	// A style attribute saying it both ways takes the later of the two, which
 	// is the rule for any two declarations in one block.
 	doc = parseDoc(t, `<div id="t" style="margin-left: 1px; margin-inline-start: 2px">x</div>`)
 	cs = Apply(doc, nil).Styles[elementFor(t, doc, "#t")]
-	if cs["margin-left"] != "2px" {
-		t.Errorf("margin-left is %q, want the later 2px", cs["margin-left"])
+	if cs.Get("margin-left") != "2px" {
+		t.Errorf("margin-left is %q, want the later 2px", cs.Get("margin-left"))
 	}
 	doc = parseDoc(t, `<div id="t" style="margin-inline-start: 2px; margin-left: 1px">x</div>`)
 	cs = Apply(doc, nil).Styles[elementFor(t, doc, "#t")]
-	if cs["margin-left"] != "1px" {
-		t.Errorf("margin-left is %q, want the later 1px", cs["margin-left"])
+	if cs.Get("margin-left") != "1px" {
+		t.Errorf("margin-left is %q, want the later 1px", cs.Get("margin-left"))
 	}
 }
 
@@ -154,9 +154,9 @@ func TestALogicalShorthandSetsBothEnds(t *testing.T) {
 		{"border-block-start: 2px dotted blue", "border-top-width", "2px", "border-top-color", "blue"},
 	} {
 		cs, findings := logicalStyle(t, tc.decl)
-		if cs[tc.a] != tc.av || cs[tc.b] != tc.bv {
+		if cs.Get(tc.a) != tc.av || cs.Get(tc.b) != tc.bv {
 			t.Errorf("%q set %s=%q %s=%q, want %q and %q",
-				tc.decl, tc.a, cs[tc.a], tc.b, cs[tc.b], tc.av, tc.bv)
+				tc.decl, tc.a, cs.Get(tc.a), tc.b, cs.Get(tc.b), tc.av, tc.bv)
 		}
 		for _, f := range findings {
 			if f.Unsupported {
@@ -179,11 +179,11 @@ func TestAWideKeywordOnALogicalShorthandReachesThePhysicalProperty(t *testing.T)
 	doc := parseDoc(t, `<div id="outer"><p id="t">x</p></div>`)
 	cs := Apply(doc, []Sheet{{Origin: OriginAuthor, Rules: rules}}).
 		Styles[elementFor(t, doc, "#t")]
-	if cs["margin-left"] != "9px" || cs["margin-right"] != "9px" {
+	if cs.Get("margin-left") != "9px" || cs.Get("margin-right") != "9px" {
 		t.Errorf("margin-inline: inherit gave left=%q right=%q, want 9px both",
-			cs["margin-left"], cs["margin-right"])
+			cs.Get("margin-left"), cs.Get("margin-right"))
 	}
-	if cs["margin-top"] == "9px" {
+	if cs.Get("margin-top") == "9px" {
 		t.Error("margin-inline: inherit reached the block axis as well")
 	}
 }
@@ -194,7 +194,7 @@ func TestAWideKeywordOnALogicalShorthandReachesThePhysicalProperty(t *testing.T)
 func TestALogicalNameIsNotAComputedProperty(t *testing.T) {
 	cs, _ := logicalStyle(t, "margin-inline-start: 7px")
 	for name := range logicalSides {
-		if _, ok := cs[name]; ok {
+		if _, ok := cs.Lookup(name); ok {
 			t.Errorf("%q is in the computed style; it should have been renamed away", name)
 		}
 	}

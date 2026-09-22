@@ -314,17 +314,17 @@ func (l *layouter) hasOwnBackground(b *Box) bool {
 	if b == nil {
 		return false
 	}
-	raw := b.Style["background-color"]
+	raw := b.Style.Get("background-color")
 	if strings.EqualFold(strings.TrimSpace(raw), "currentcolor") {
 		// A background of "currentcolor" is the text colour, which is black by
 		// default — so an element declaring it *does* have a background, and
 		// reading the value literally would propagate <body>'s over the top of it.
-		raw = b.Style["color"]
+		raw = b.Style.Get("color")
 	}
 	if c, ok := parseColorValue(raw); ok && c.A > 0 {
 		return true
 	}
-	for _, raw := range splitCommaValues(b.Style["background-image"]) {
+	for _, raw := range splitCommaValues(b.Style.Get("background-image")) {
 		if strings.TrimSpace(raw) != "" && !strings.EqualFold(strings.TrimSpace(raw), "none") {
 			return true
 		}
@@ -367,7 +367,7 @@ func (l *layouter) colorRect(f *Fragment) Rect {
 	if f.Box == nil {
 		return f.BorderRect
 	}
-	raw := strings.TrimSpace(f.Box.Style["background-clip"])
+	raw := strings.TrimSpace(f.Box.Style.Get("background-clip"))
 	if raw == "" || strings.EqualFold(raw, "border-box") {
 		return f.BorderRect
 	}
@@ -768,7 +768,7 @@ func (l *layouter) backgroundLayers(b *Box) []backgroundLayer {
 	// allocating anything: almost every box in a document has no background
 	// image, and a memo entry for each of them would cost more than the parse it
 	// saved.
-	raw := strings.TrimSpace(b.Style["background-image"])
+	raw := strings.TrimSpace(b.Style.Get("background-image"))
 	if raw == "" || isNoneValue(raw) {
 		return nil
 	}
@@ -899,7 +899,7 @@ type bgRepeatPair struct{ x, y bgRepeat }
 // bgRepeats reads background-repeat.
 func (l *layouter) bgRepeats(b *Box) []bgRepeatPair {
 	out := make([]bgRepeatPair, 0, 1)
-	for _, raw := range splitCommaValues(b.Style["background-repeat"]) {
+	for _, raw := range splitCommaValues(b.Style.Get("background-repeat")) {
 		words := strings.Fields(strings.ToLower(raw))
 		pair, ok := repeatPair(words)
 		if !ok {
@@ -956,7 +956,7 @@ type bgPosPair struct{ x, y bgPos }
 // bgPositions reads background-position, in all four of its lengths.
 func (l *layouter) bgPositions(b *Box) []bgPosPair {
 	out := make([]bgPosPair, 0, 1)
-	for _, raw := range splitCommaValues(b.Style["background-position"]) {
+	for _, raw := range splitCommaValues(b.Style.Get("background-position")) {
 		vals, _ := css.ParseComponentValues(raw)
 		pair, ok := l.parsePosition(b, vals)
 		if !ok {
@@ -1106,7 +1106,7 @@ type bgSizeValue struct {
 // bgSizes reads background-size.
 func (l *layouter) bgSizes(b *Box) []bgSizeValue {
 	out := make([]bgSizeValue, 0, 1)
-	for _, raw := range splitCommaValues(b.Style["background-size"]) {
+	for _, raw := range splitCommaValues(b.Style.Get("background-size")) {
 		vals, _ := css.ParseComponentValues(raw)
 		size, ok := l.parseSize(b, vals)
 		if !ok {
@@ -1169,7 +1169,7 @@ func negativeLength(l style.Length) bool {
 // bgBoxes reads background-origin or background-clip.
 func (l *layouter) bgBoxes(b *Box, property string, initial bgBox) []bgBox {
 	out := make([]bgBox, 0, 1)
-	for _, raw := range splitCommaValues(b.Style[property]) {
+	for _, raw := range splitCommaValues(b.Style.Get(property)) {
 		switch strings.ToLower(strings.TrimSpace(raw)) {
 		case "border-box":
 			out = append(out, bgBorderBox)
@@ -1209,7 +1209,7 @@ func (l *layouter) bgBoxes(b *Box, property string, initial bgBox) []bgBox {
 // from the page's corner, not from the box's.
 func (l *layouter) bgAttachments(b *Box) []bool {
 	out := make([]bool, 0, 1)
-	for _, raw := range splitCommaValues(b.Style["background-attachment"]) {
+	for _, raw := range splitCommaValues(b.Style.Get("background-attachment")) {
 		switch strings.ToLower(strings.TrimSpace(raw)) {
 		case "fixed":
 			out = append(out, true)

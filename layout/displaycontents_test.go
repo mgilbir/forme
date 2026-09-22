@@ -81,7 +81,7 @@ func TestAContentsElementStillStylesItsChildren(t *testing.T) {
 		noDefaults+`#outer { font-size: 10px } `+
 			`#wrap { display: contents; color: rgb(0,0,255); font-size: 40px }`)
 	a := boxWithID(t, built.Root, "a")
-	if got := a.Style["color"]; got != "rgb(0,0,255)" {
+	if got := a.Style.Get("color"); got != "rgb(0,0,255)" {
 		t.Errorf("the child's colour is %q; an inherited property comes from the "+
 			"element, whether or not it has a box", got)
 	}

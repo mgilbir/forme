@@ -118,7 +118,7 @@ func TestTheFirstLineColourIsTheFirstLinesOnly(t *testing.T) {
 			if strings.TrimSpace(r.Text) == "" {
 				continue
 			}
-			return r.Box.Style["color"]
+			return r.Box.Style.Get("color")
 		}
 		return ""
 	}

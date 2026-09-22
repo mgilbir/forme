@@ -257,7 +257,7 @@ func (l *replacedLoader) walk(b *Box) {
 // <img>. A second loading path would be a second policy, and the second one is
 // always the one that is missing a check.
 func (l *replacedLoader) backgrounds(b *Box) {
-	refs := backgroundImageRefs(b.Style["background-image"])
+	refs := backgroundImageRefs(b.Style.Get("background-image"))
 	if len(refs) == 0 {
 		return
 	}
@@ -645,7 +645,7 @@ func (l *replacedLoader) markerImage(b *Box) {
 	if !b.ListItem {
 		return
 	}
-	ref, ok := urlValue(b.Style["list-style-image"])
+	ref, ok := urlValue(b.Style.Get("list-style-image"))
 	if !ok || strings.TrimSpace(ref) == "" {
 		return
 	}
@@ -1012,7 +1012,7 @@ func (l *replacedLoader) altOnly(b *Box) {
 	if !ok {
 		return
 	}
-	text := collapseWhitespaceAfter(alt, b.Style["white-space-collapse"],
+	text := collapseWhitespaceAfter(alt, b.Style.Get("white-space-collapse"),
 		wordSpaceTransformValue(b.Style), textBoundary{}, writingSystemAt(b.Element))
 	if strings.TrimSpace(text) == "" {
 		// alt="" is a deliberate statement that the image carries no

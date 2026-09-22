@@ -35,7 +35,7 @@ func displayOf(t *testing.T, decl string) (string, []Finding) {
 		{Origin: OriginAuthor, Rules: author},
 	})
 	n := elementFor(t, doc, "#target")
-	return got.Styles[n]["display"], got.Findings
+	return got.Styles[n].Get("display"), got.Findings
 }
 
 // TestAnUnrecognisedDisplayLeavesTheUserAgentsValueStanding is the bug.

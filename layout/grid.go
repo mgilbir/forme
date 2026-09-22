@@ -387,7 +387,7 @@ type gridAreas struct {
 // nothing, and guessing at what was meant would put boxes somewhere no
 // stylesheet asked for.
 func (l *layouter) areasOf(b *Box) (gridAreas, bool) {
-	raw := strings.TrimSpace(b.Style["grid-template-areas"])
+	raw := strings.TrimSpace(b.Style.Get("grid-template-areas"))
 	if raw == "" || strings.EqualFold(raw, "none") {
 		return gridAreas{}, true
 	}
@@ -502,7 +502,7 @@ func isAreaName(name string) bool {
 // everything in Box Alignment is, and not the reading order the slashes
 // suggest.
 func (l *layouter) areaPlacement(c *Box, areas gridAreas) ([2]gridPlacement, bool) {
-	raw := trimmedLower(c.Style["grid-area"])
+	raw := trimmedLower(c.Style.Get("grid-area"))
 	if raw == "" || raw == "auto" {
 		return [2]gridPlacement{}, true
 	}
@@ -563,8 +563,8 @@ type gridPlacement struct {
 // registered property as a literal in the source, and a name built out of
 // "grid-" and a variable is a property nothing appears to read.
 func (l *layouter) placementOf(b *Box, shorthandName, startName, endName string) (gridPlacement, bool) {
-	start, end := trimmedLower(b.Style[startName]), trimmedLower(b.Style[endName])
-	if shorthand := trimmedLower(b.Style[shorthandName]); shorthand != "" &&
+	start, end := trimmedLower(b.Style.Get(startName)), trimmedLower(b.Style.Get(endName))
+	if shorthand := trimmedLower(b.Style.Get(shorthandName)); shorthand != "" &&
 		shorthand != "auto" {
 		one, two, ok := splitOnSlash(shorthand)
 		if !ok {
@@ -886,7 +886,7 @@ type gridFlow struct{ column, dense bool }
 // either alone.
 func (l *layouter) autoFlow(b *Box) gridFlow {
 	var out gridFlow
-	for _, word := range strings.Fields(trimmedLower(b.Style["grid-auto-flow"])) {
+	for _, word := range strings.Fields(trimmedLower(b.Style.Get("grid-auto-flow"))) {
 		switch word {
 		case "column":
 			out.column = true
@@ -963,13 +963,13 @@ func trackStart(tracks []gridTrack, at int, gap style.Unit) style.Unit {
 // back as a flexAlign — it is the same value, and having two of them would be
 // two ways to spell one specification.
 func (l *layouter) gridAlignment(b *Box, property string, a flexAxis) flexAlign {
-	return crossAlignment(gridAlignmentValue(b.Style[property], a), flexAxis{})
+	return crossAlignment(gridAlignmentValue(b.Style.Get(property), a), flexAxis{})
 }
 
 func (l *layouter) itemAlignment(it *gridItem, property string, container flexAlign,
 	a flexAxis) flexAlign {
 
-	value := gridAlignmentValue(it.box.Style[property], a)
+	value := gridAlignmentValue(it.box.Style.Get(property), a)
 	if value == "" || value == "auto" {
 		return container
 	}
@@ -1002,7 +1002,7 @@ func gridAlignmentValue(raw string, a flexAxis) string {
 // gives the space left over to the automatic tracks, and every other value
 // leaves it for §10.3 to place the tracks in.
 func (l *layouter) gridContentAlignment(b *Box, property string) bool {
-	switch trimmedLower(b.Style[property]) {
+	switch trimmedLower(b.Style.Get(property)) {
 	case "", "normal", "stretch":
 		return true
 	}
@@ -1556,7 +1556,7 @@ func (l *layouter) gridGap(b *Box, property string, basis style.Unit, definite b
 func (l *layouter) trackList(b *Box, property string, width style.Unit,
 	room trackRoom) (tracks []gridTrack, fit, ok bool) {
 
-	raw := strings.TrimSpace(b.Style[property])
+	raw := strings.TrimSpace(b.Style.Get(property))
 	if raw == "" || strings.EqualFold(raw, "none") {
 		return nil, false, true
 	}
@@ -1930,7 +1930,7 @@ func (l *layouter) refusesToGrid(b *Box, width style.Unit) string {
 			"either its rows are not all the same length or a name is in two " +
 			"places that do not touch"
 	}
-	switch trimmedLower(b.Style["grid-auto-flow"]) {
+	switch trimmedLower(b.Style.Get("grid-auto-flow")) {
 	case "", "row", "column", "dense", "row dense", "dense row",
 		"column dense", "dense column":
 	default:
@@ -1986,7 +1986,7 @@ func (l *layouter) refusesToGrid(b *Box, width style.Unit) string {
 func refusesGridAlignment(b *Box) string {
 	for _, p := range [...]string{"justify-content", "align-content",
 		"justify-items", "align-items", "justify-self", "align-self"} {
-		switch value := trimmedLower(b.Style[p]); value {
+		switch value := trimmedLower(b.Style.Get(p)); value {
 		case "", "normal", "stretch", "auto", "legacy", "start", "end", "center",
 			"flex-start", "flex-end", "self-start", "self-end",
 			"space-between", "space-around", "space-evenly":

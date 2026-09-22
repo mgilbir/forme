@@ -101,8 +101,8 @@ func (l *layouter) faceRunsFor(b *Box, primary *shape.Face, text string) []faceR
 	if !canFall && !hasRanges && !hasVisibleControl(text) {
 		return one
 	}
-	bold := isBold(b.Style["font-weight"])
-	italic := isItalic(b.Style["font-style"])
+	bold := isBold(b.Style.Get("font-weight"))
+	italic := isItalic(b.Style.Get("font-style"))
 
 	// The cluster starts, so every cluster is [at[i], at[i+1]).
 	//
@@ -248,7 +248,7 @@ func (l *layouter) noteSubstitution(b *Box, primary *shape.Face, runs []faceRun)
 	}
 	// The document named no particular face, only a kind. Choosing one that can
 	// set the text is what a generic family *is* — see namesOnlyGenericFamilies.
-	families := b.Style["font-family"]
+	families := b.Style.Get("font-family")
 	if namesOnlyGenericFamilies(families) {
 		return
 	}
@@ -364,7 +364,7 @@ func (l *layouter) familyListIsRestricted(b *Box) bool {
 			return true
 		}
 	}
-	families := b.Style["font-family"]
+	families := b.Style.Get("font-family")
 	if got, cached := l.restrictedFamilies[families]; cached {
 		return got
 	}
@@ -392,9 +392,9 @@ func (l *layouter) familyListIsRestricted(b *Box) bool {
 // it says. A cluster no named family covers comes back false and is left to the
 // primary face and the fallback set, exactly as before.
 func (l *layouter) namedFaceFor(ranged RangedFontSet, b *Box, cluster string) (*shape.Face, bool) {
-	bold := isBold(b.Style["font-weight"])
-	italic := isItalic(b.Style["font-style"])
-	for _, family := range parseFamilyList(b.Style["font-family"]) {
+	bold := isBold(b.Style.Get("font-weight"))
+	italic := isItalic(b.Style.Get("font-style"))
+	for _, family := range parseFamilyList(b.Style.Get("font-family")) {
 		if face, ok := ranged.FaceForFamily(family, cluster, bold, italic); ok {
 			return face, true
 		}

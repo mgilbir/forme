@@ -336,7 +336,7 @@ func (l *layouter) clipRectOf(f *Fragment) Clip {
 	// feature for the documents that do not use it. It decides nothing —
 	// planted, and parseClipShape refuses a bare "auto" anyway, because it is
 	// not a rect().
-	raw := strings.TrimSpace(b.Style["clip"])
+	raw := strings.TrimSpace(b.Style.Get("clip"))
 	if raw == "" || strings.EqualFold(raw, "auto") {
 		return Clip{}
 	}

@@ -108,8 +108,8 @@ type WhiteSpace struct {
 // mistake would leave a document's indentation in the page, but a mode read as
 // "nowrap" by mistake would run a paragraph off the edge.
 func WhiteSpaceFor(cs style.ComputedStyle) WhiteSpace {
-	ws := WhiteSpaceOf(cs["white-space-collapse"])
-	ws.Wrap = !strings.EqualFold(strings.TrimSpace(cs["text-wrap-mode"]), "nowrap")
+	ws := WhiteSpaceOf(cs.Get("white-space-collapse"))
+	ws.Wrap = !strings.EqualFold(strings.TrimSpace(cs.Get("text-wrap-mode")), "nowrap")
 	return ws
 }
 
@@ -316,7 +316,7 @@ type OverflowWrap struct {
 // who sets overflow-wrap on a rule and word-wrap on a more specific one gets the
 // wrong answer here. Taking the non-initial value is what makes the common case
 // right: a document sets one of them.
-func OverflowWrapOf(style map[string]string) OverflowWrap {
+func OverflowWrapOf(cs style.ComputedStyle) OverflowWrap {
 	// word-break: break-word is not a word-break value at all. CSS Text 3 §5.2
 	// keeps it "for web-compatibility" and defines it by what it does elsewhere:
 	// it "has the same effect as word-break: normal and overflow-wrap: anywhere,
@@ -328,12 +328,12 @@ func OverflowWrapOf(style map[string]string) OverflowWrap {
 	// either property that overrides the other, and reading it as a *default*
 	// for overflow-wrap would give the wrong answer for the document that sets
 	// both — which is what word-break-break-word-overflow-wrap-interactions is.
-	if strings.EqualFold(strings.TrimSpace(style["word-break"]), "break-word") {
+	if strings.EqualFold(strings.TrimSpace(cs.Get("word-break")), "break-word") {
 		return OverflowWrap{BreakWord: true, Anywhere: true}
 	}
-	value := strings.ToLower(strings.TrimSpace(style["overflow-wrap"]))
+	value := strings.ToLower(strings.TrimSpace(cs.Get("overflow-wrap")))
 	if value == "" || value == "normal" {
-		value = strings.ToLower(strings.TrimSpace(style["word-wrap"]))
+		value = strings.ToLower(strings.TrimSpace(cs.Get("word-wrap")))
 	}
 	switch value {
 	case "break-word":

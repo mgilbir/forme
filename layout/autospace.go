@@ -208,7 +208,7 @@ func (l *layouter) autospaceBetween(a, b inlineItem, last, first rune) (style.Un
 	if box == nil {
 		return 0, false
 	}
-	as, _ := autospaceOf(box.Style["text-autospace"])
+	as, _ := autospaceOf(box.Style.Get("text-autospace"))
 	if !paragraph.AutospaceAt(last, first, as) {
 		return 0, false
 	}

@@ -33,7 +33,7 @@ func mediaCascade(t *testing.T, htmlSrc, authorCSS string) (Styled, *docFor) {
 func TestADeclarationInsideANestedMediaIsApplied(t *testing.T) {
 	const src = `#a { color: rgb(0, 0, 255); @media print { color: rgb(255, 0, 0) } }`
 	_, doc := mediaCascade(t, `<p id="a">x</p>`, src)
-	if got := doc.style("#a")["color"]; !strings.Contains(got, "255, 0, 0") {
+	if got := doc.style("#a").Get("color"); !strings.Contains(got, "255, 0, 0") {
 		t.Errorf("on paper the colour is %q, want the red the nested @media asked for", got)
 	}
 }
@@ -43,7 +43,7 @@ func TestADeclarationInsideANestedMediaIsApplied(t *testing.T) {
 func TestANestedMediaThatDoesNotMatchChangesNothing(t *testing.T) {
 	const src = `#a { color: rgb(0, 0, 255); @media screen { color: rgb(255, 0, 0) } }`
 	_, doc := mediaCascade(t, `<p id="a">x</p>`, src)
-	if got := doc.style("#a")["color"]; !strings.Contains(got, "0, 0, 255") {
+	if got := doc.style("#a").Get("color"); !strings.Contains(got, "0, 0, 255") {
 		t.Errorf("on paper the colour is %q, want the blue outside the @media", got)
 	}
 }
@@ -59,7 +59,7 @@ func TestANestedMediaIsOrderedWhereItWasWritten(t *testing.T) {
 			`#a { @media print { color: rgb(255, 0, 0) } color: rgb(0, 0, 255) }`, "0, 0, 255"},
 	} {
 		_, doc := mediaCascade(t, `<p id="a">x</p>`, tc.src)
-		if got := doc.style("#a")["color"]; !strings.Contains(got, tc.want) {
+		if got := doc.style("#a").Get("color"); !strings.Contains(got, tc.want) {
 			t.Errorf("%s: the colour is %q, want %q", tc.name, got, tc.want)
 		}
 	}
@@ -71,7 +71,7 @@ func TestANestedMediaIsOrderedWhereItWasWritten(t *testing.T) {
 func TestARuleInsideANestedMediaIsStillRelativeToItsParent(t *testing.T) {
 	const src = `#a { color: rgb(0, 0, 255); @media print { & em { color: rgb(0, 128, 0) } } }`
 	_, doc := mediaCascade(t, `<p id="a">x <em id="e">y</em></p>`, src)
-	if got := doc.style("#e")["color"]; !strings.Contains(got, "0, 128, 0") {
+	if got := doc.style("#e").Get("color"); !strings.Contains(got, "0, 128, 0") {
 		t.Errorf("the nested rule gave the em %q, want the green it asked for", got)
 	}
 }
@@ -81,7 +81,7 @@ func TestARuleInsideANestedMediaIsStillRelativeToItsParent(t *testing.T) {
 func TestATopLevelMediaStillHoldsRules(t *testing.T) {
 	const src = `#a { color: rgb(0, 0, 255) } @media print { #a { color: rgb(255, 0, 0) } }`
 	_, doc := mediaCascade(t, `<p id="a">x</p>`, src)
-	if got := doc.style("#a")["color"]; !strings.Contains(got, "255, 0, 0") {
+	if got := doc.style("#a").Get("color"); !strings.Contains(got, "255, 0, 0") {
 		t.Errorf("the colour is %q, want the red the @media asked for", got)
 	}
 }

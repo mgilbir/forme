@@ -13,7 +13,7 @@ func layeredColour(t *testing.T, src string) (string, []Finding) {
 	t.Helper()
 	doc := parseDoc(t, `<p id="target">x</p>`)
 	got := Apply(doc, []Sheet{author(t, src)})
-	return got.Styles[doc.Element("p")]["color"], got.Findings
+	return got.Styles[doc.Element("p")].Get("color"), got.Findings
 }
 
 // TestALayerIsAppliedAndOrdered is the whole of CSS Cascade 5 §6.4 this engine

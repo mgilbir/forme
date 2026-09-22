@@ -86,7 +86,7 @@ func (l *layouter) keywordWidth(b *Box) (style.Unit, bool) {
 	if !acceptsKeywordWidth(b) {
 		return 0, false
 	}
-	switch bareSizingKeyword(b.Style["width"]) {
+	switch bareSizingKeyword(b.Style.Get("width")) {
 	case "min-content":
 		return l.contentWidths(b).min, true
 	case "max-content":
@@ -110,7 +110,7 @@ func (l *layouter) keywordWidth(b *Box) (style.Unit, bool) {
 // width they already have; a plain block fills its containing block instead, and
 // that is the difference this is for.
 func (l *layouter) fitContentWidth(b *Box, available style.Unit) (style.Unit, bool) {
-	if !acceptsKeywordWidth(b) || bareSizingKeyword(b.Style["width"]) != "fit-content" {
+	if !acceptsKeywordWidth(b) || bareSizingKeyword(b.Style.Get("width")) != "fit-content" {
 		return 0, false
 	}
 	return l.shrinkToFit(b, available), true
@@ -129,7 +129,7 @@ func (l *layouter) keywordLimit(b *Box, property string) (style.Unit, bool) {
 	if !acceptsKeywordWidth(b) {
 		return 0, false
 	}
-	switch bareSizingKeyword(b.Style[property]) {
+	switch bareSizingKeyword(b.Style.Get(property)) {
 	case "min-content":
 		return l.contentWidths(b).min, true
 	case "max-content":
@@ -329,7 +329,7 @@ func (l *layouter) inlineWidths(b *Box) intrinsicWidths {
 	// bracket that will be drawn in its margin. Every one of the suite's
 	// fixtures for the property floats its boxes, which is what makes this the
 	// half that decides the page rather than a refinement of it.
-	hp := hangingPunctuationOf(b.Style["hanging-punctuation"])
+	hp := hangingPunctuationOf(b.Style.Get("hanging-punctuation"))
 	items = l.hangPunctuation(items, hp)
 	items = l.linkLetterSpacing(items)
 	// §8.1's ideograph spacing, after the letter-spacing boundary rule and for

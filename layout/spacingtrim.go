@@ -115,6 +115,6 @@ func spacingTrimFor(item inlineItem, block spacingTrim) spacingTrim {
 	if b == nil {
 		return block
 	}
-	st, _ := spacingTrimOf(b.Style["text-spacing-trim"])
+	st, _ := spacingTrimOf(b.Style.Get("text-spacing-trim"))
 	return st
 }

@@ -70,7 +70,7 @@ func alignmentOf(b *Box, rtl bool) textAlign {
 // matches — and the line is still the child's, so the two part company there.
 func alignmentFrom(b *Box, rtl, logical bool) textAlign {
 	for {
-		switch strings.ToLower(strings.TrimSpace(b.Style["text-align-all"])) {
+		switch strings.ToLower(strings.TrimSpace(b.Style.Get("text-align-all"))) {
 		case "right":
 			return alignRight
 		case "center":
@@ -188,7 +188,7 @@ const (
 // the question: "none" is not justification at all and an unreadable value is
 // already being reported.
 func justificationOf(b *Box) (method justifyMethod, auto bool, unhandled string) {
-	switch v := strings.ToLower(strings.TrimSpace(b.Style["text-justify"])); v {
+	switch v := strings.ToLower(strings.TrimSpace(b.Style.Get("text-justify"))); v {
 	case "none":
 		return justifyNone, false, ""
 	case "", "auto":
@@ -237,7 +237,7 @@ func lineAlignment(b *Box, rtl, last bool) (align textAlign, spread bool) {
 // lastLineAlignment is §7.2's own resolution, without the separate question of
 // whether justification is switched on at all.
 func lastLineAlignment(b *Box, rtl bool) textAlign {
-	switch strings.ToLower(strings.TrimSpace(b.Style["text-align-last"])) {
+	switch strings.ToLower(strings.TrimSpace(b.Style.Get("text-align-last"))) {
 	case "left":
 		return alignLeft
 	case "right":

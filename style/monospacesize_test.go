@@ -33,11 +33,11 @@ func sizeOfIn(t *testing.T, markup, sheet, selector string) float64 {
 	doc := parseDoc(t, markup)
 	got := Apply(doc, []Sheet{{Origin: OriginAuthor, Rules: rules}})
 	n := elementFor(t, doc, selector)
-	vals, _ := css.ParseComponentValues(got.Styles[n]["font-size"])
+	vals, _ := css.ParseComponentValues(got.Styles[n].Get("font-size"))
 	l, _, ok := ParseLength(vals, LengthContext{})
 	if !ok || l.Kind != LengthAbsolute {
 		t.Fatalf("the computed font-size of %s is %q, which is not an absolute "+
-			"length", selector, got.Styles[n]["font-size"])
+			"length", selector, got.Styles[n].Get("font-size"))
 	}
 	return l.Value.Px()
 }

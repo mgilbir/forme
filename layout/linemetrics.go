@@ -131,7 +131,7 @@ func (l *layouter) leadingInFaceAt(b *Box, face *shape.Face, size style.Unit) (a
 
 // verticalAlignOf reads the vertical-align property of an inline-level box.
 func (l *layouter) verticalAlignOf(b *Box) (vAlign, style.Unit) {
-	raw := strings.ToLower(strings.TrimSpace(b.Style["vertical-align"]))
+	raw := strings.ToLower(strings.TrimSpace(b.Style.Get("vertical-align")))
 	switch raw {
 	case "", "baseline":
 		return vAlignBaseline, 0
@@ -228,11 +228,11 @@ func (l *layouter) tabStop(b *Box, face *shape.Face) style.Unit {
 	// tab-size-inline-001 and -002 are that, and are the half a fix keyed on the
 	// block alone gets wrong.
 	if v, ok := l.lengthOf(b, "tab-size", 0); ok && v >= 0 &&
-		!isNumberValue(b.Style["tab-size"]) {
+		!isNumberValue(b.Style.Get("tab-size")) {
 		return v
 	}
 	n := 8.0
-	if got, ok := parseNumber(strings.TrimSpace(b.Style["tab-size"])); ok && got >= 0 {
+	if got, ok := parseNumber(strings.TrimSpace(b.Style.Get("tab-size"))); ok && got >= 0 {
 		// Non-negative for the same reason line-height is: CSS Text gives
 		// tab-size a range of its own and the parser does not.
 		n = got
@@ -305,14 +305,14 @@ func isNumberValue(raw string) bool {
 // the value is an integer with no stated floor, and a block with no lines at all
 // is not something a stylesheet can plausibly be asking for.
 func (l *layouter) lineClamp(b *Box) int {
-	if n, ok := positiveInteger(b.Style["line-clamp"]); ok {
+	if n, ok := positiveInteger(b.Style.Get("line-clamp")); ok {
 		return n
 	}
-	if !strings.EqualFold(strings.TrimSpace(b.Style["display"]), "-webkit-box") ||
-		!strings.EqualFold(strings.TrimSpace(b.Style["-webkit-box-orient"]), "vertical") {
+	if !strings.EqualFold(strings.TrimSpace(b.Style.Get("display")), "-webkit-box") ||
+		!strings.EqualFold(strings.TrimSpace(b.Style.Get("-webkit-box-orient")), "vertical") {
 		return 0
 	}
-	if n, ok := positiveInteger(b.Style["-webkit-line-clamp"]); ok {
+	if n, ok := positiveInteger(b.Style.Get("-webkit-line-clamp")); ok {
 		return n
 	}
 	return 0
@@ -337,7 +337,7 @@ func (l *layouter) lineClamp(b *Box) int {
 // gets and is what capAt reads as MaxUnit.
 func (l *layouter) balanceCaps(b *Box, items, first []inlineItem,
 	width, indent style.Unit) []style.Unit {
-	if !strings.EqualFold(strings.TrimSpace(b.Style["text-wrap-style"]), "balance") {
+	if !strings.EqualFold(strings.TrimSpace(b.Style.Get("text-wrap-style")), "balance") {
 		return nil
 	}
 	caps := make([]style.Unit, len(items))
@@ -389,7 +389,7 @@ func (l *layouter) lineHeightAt(b *Box, size style.Unit) style.Unit {
 // rather than from a value the document wrote, which is the only case where the
 // face a run is set in can change how tall the run is.
 func usesNormalLineHeight(b *Box) bool {
-	value := strings.ToLower(strings.TrimSpace(b.Style["line-height"]))
+	value := strings.ToLower(strings.TrimSpace(b.Style.Get("line-height")))
 	return value == "" || value == "normal"
 }
 
@@ -409,7 +409,7 @@ func (l *layouter) lineHeightInFace(b *Box, face *shape.Face) style.Unit {
 // not the scaled one, and the suite's grow-per-line-all writes both cases side
 // by side to say so.
 func (l *layouter) lineHeightInFaceAt(b *Box, face *shape.Face, size style.Unit) style.Unit {
-	value := strings.ToLower(strings.TrimSpace(b.Style["line-height"]))
+	value := strings.ToLower(strings.TrimSpace(b.Style.Get("line-height")))
 	if value == "" || value == "normal" {
 		return normalLineHeightInFaceAt(face, size)
 	}

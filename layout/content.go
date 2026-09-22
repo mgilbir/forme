@@ -261,8 +261,8 @@ func (b *boxBuilder) generated(n *html.Node, name string, fontSize style.Unit) *
 		return nil
 	}
 
-	value := resolveContent(cs["content"], n, b.counters.pseudo[key],
-		parseQuotes(cs["quotes"]), b.counters.quoteDepth[key])
+	value := resolveContent(cs.Get("content"), n, b.counters.pseudo[key],
+		parseQuotes(cs.Get("quotes")), b.counters.quoteDepth[key])
 	if value.unsupported != "" {
 		b.rec.ReportDetail(Finding{
 			Rule:     RuleUnsupportedValue,
@@ -371,7 +371,7 @@ func (b *boxBuilder) generated(n *html.Node, name string, fontSize style.Unit) *
 			})
 			continue
 		}
-		text := collapseWhitespaceAfter(piece.text, cs["white-space-collapse"], wst,
+		text := collapseWhitespaceAfter(piece.text, cs.Get("white-space-collapse"), wst,
 			textBoundary{}, writingSystemAt(n))
 		if text == "" {
 			continue

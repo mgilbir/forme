@@ -592,7 +592,7 @@ func samePaint(a, b *Box) bool {
 		return a == b
 	}
 	for _, name := range [...]string{"color", "font-style", "font-weight"} {
-		if a.Style[name] != b.Style[name] {
+		if a.Style.Get(name) != b.Style.Get(name) {
 			return false
 		}
 	}

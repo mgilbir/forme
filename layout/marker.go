@@ -118,7 +118,7 @@ func (l *layouter) markerFor(b *Box, frag *Fragment, origin flow) *Marker {
 // markerInside reports "list-style-position: inside".
 func markerInside(b *Box) bool {
 	return b.ListItem &&
-		strings.EqualFold(strings.TrimSpace(b.Style["list-style-position"]), "inside")
+		strings.EqualFold(strings.TrimSpace(b.Style.Get("list-style-position")), "inside")
 }
 
 // markerGap is the space between a marker and the text it belongs to.
@@ -148,7 +148,7 @@ func (l *layouter) markerRun(b *Box) (string, *shape.Face, bool) {
 	if !b.ListItem {
 		return "", nil, false
 	}
-	text := markerText(b.Style["list-style-type"], b.ListValue)
+	text := markerText(b.Style.Get("list-style-type"), b.ListValue)
 	if text == "" && b.MarkerImage == nil {
 		return "", nil, false
 	}

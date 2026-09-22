@@ -213,7 +213,7 @@ func TestAnOversizedStyleAttributeIsNotRead(t *testing.T) {
 		t.Errorf("a style attribute of exactly the bound was not read: %q", got)
 	}
 	requireFinding(t, built.Findings, RuleLimit, "style attribute is more than")
-	if got := findBox(t, built.Root, "big").Style["border-top-style"]; got != "solid" {
+	if got := findBox(t, built.Root, "big").Style.Get("border-top-style"); got != "solid" {
 		t.Errorf("the element whose style attribute was refused no longer matches [style]: "+
 			"border-top-style is %q", got)
 	}

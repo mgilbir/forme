@@ -713,7 +713,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	// a face with no small capitals of its own has them made out of the
 	// uppercase letters, and what is then drawn is not what the document wrote.
 	// See layout/smallcaps.go.
-	caps, _ := capsOf(b.Style["font-variant-caps"])
+	caps, _ := capsOf(b.Style.Get("font-variant-caps"))
 	lang := languageAt(boxElement(b))
 	// Per face-run rather than per box: a character the family's face cannot set
 	// is not missing from the page if a fallback face set it, and reporting it
@@ -762,7 +762,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	// around it grow the line it is on.
 	above, below := l.leading(b)
 	ow := overflowWrapOf(b.Style)
-	wb, unhandled := wordBreakOf(b.Style["word-break"])
+	wb, unhandled := wordBreakOf(b.Style.Get("word-break"))
 	if unhandled != "" {
 		l.reportWordBreak(b, unhandled)
 	}
@@ -777,12 +777,12 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		// the page reveals as a missing feature. See paragraph.PhrasesUnfound.
 		l.reportWordBreak(b, "auto-phrase")
 	}
-	lb, _ := lineBreakOf(b.Style["line-break"])
+	lb, _ := lineBreakOf(b.Style.Get("line-break"))
 	// §5.3's loose tailoring is qualified "in Chinese and Japanese", and which
 	// of those the text is comes from the language tag's *script* rather than
 	// from the property. See paragraph.WritingSystemOf.
 	lb.ChineseOrJapanese = boxWritingSystem(b).ChineseOrJapanese()
-	hy, unhandledHyphens := hyphensOf(b.Style["hyphens"])
+	hy, unhandledHyphens := hyphensOf(b.Style.Get("hyphens"))
 	if hy.Auto && !hyphenatesLanguage(boxHyphenation(b)) {
 		// "auto" asks for the language's own dictionary, and there are four
 		// here. A document in another gets the manual behaviour and is told so
@@ -798,7 +798,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	// whether the document asked for a part of it this engine does not do, which
 	// is a question about the box and belongs where the other three are asked.
 	l.reportKerning(b, face)
-	autospace, unhandledAutospace := autospaceOf(b.Style["text-autospace"])
+	autospace, unhandledAutospace := autospaceOf(b.Style.Get("text-autospace"))
 	if unhandledAutospace != "" {
 		l.reportAutospace(b, unhandledAutospace)
 	}
@@ -1441,7 +1441,7 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		how := a.orthography.HyphenateBetween(p.Text, a.nextText)
 		item.HyphenSkip = how.Dropped
 		var face *shape.Face
-		item.HyphenText, face = l.hyphenRun(b, a.run.Face, b.Style["hyphenate-character"], how)
+		item.HyphenText, face = l.hyphenRun(b, a.run.Face, b.Style.Get("hyphenate-character"), how)
 		// Measured the way the run it belongs to is measured: a hyphen printed
 		// at the end of an upright line stands upright with the letters, and it
 		// is an em per character there like any other.

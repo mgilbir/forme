@@ -40,14 +40,14 @@ func nestedInlineWithABlock() (outer, inner, block *Box) {
 	text := func(s string) *Box {
 		return &Box{Outer: OuterInline, Inner: InnerText, Text: s}
 	}
-	block = &Box{Outer: OuterBlock, Inner: InnerFlow, Style: map[string]string{}}
+	block = &Box{Outer: OuterBlock, Inner: InnerFlow}
 	block.Children = []*Box{text("c")}
 
-	inner = &Box{Outer: OuterInline, Inner: InnerFlow, Style: map[string]string{}}
+	inner = &Box{Outer: OuterInline, Inner: InnerFlow}
 	inner.Children = []*Box{text("b"), block, text("d")}
 	block.Parent = inner
 
-	outer = &Box{Outer: OuterInline, Inner: InnerFlow, Style: map[string]string{}}
+	outer = &Box{Outer: OuterInline, Inner: InnerFlow}
 	outer.Children = []*Box{text("a"), inner, text("e")}
 	inner.Parent = outer
 	return outer, inner, block

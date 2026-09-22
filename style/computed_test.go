@@ -224,7 +224,7 @@ func TestAFontSizeThatCannotBeResolvedIsLeftAsWritten(t *testing.T) {
 	doc := parseDoc(t, nested)
 	got := Apply(doc, []Sheet{author(t, `#p { font-size: 3cap }`)})
 	p := elementFor(t, doc, "#p")
-	if v := got.Styles[p]["font-size"]; v != "3cap" {
+	if v := got.Styles[p].Get("font-size"); v != "3cap" {
 		t.Errorf("an unresolvable font-size computed to %q; the cascade has no answer "+
 			"for it and must not write one", v)
 	}
@@ -241,7 +241,7 @@ func TestAFontSizeThatCannotBeResolvedIsLeftAsWritten(t *testing.T) {
 	// set in: the one it inherited. Resolving the string a second time is what
 	// the mark exists to prevent, and leaving the string in place would hand
 	// the same trap to whatever reads it next.
-	if v := got.Styles[c]["font-size"]; v != "16px" {
+	if v := got.Styles[c].Get("font-size"); v != "16px" {
 		t.Errorf("the descendant's font-size is %q, want 16px — the size it "+
 			"inherited, not the string its parent could not resolve", v)
 	}
@@ -272,9 +272,9 @@ func TestAPseudoElementResolvesAgainstItsOwnSize(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s::before produced no style", tc.sel)
 		}
-		if cs["margin-left"] != tc.want {
+		if cs.Get("margin-left") != tc.want {
 			t.Errorf("%s::before margin-left computed to %q, want %q",
-				tc.sel, cs["margin-left"], tc.want)
+				tc.sel, cs.Get("margin-left"), tc.want)
 		}
 	}
 }

@@ -397,8 +397,8 @@ func TestSplitPiecesKeepTheirStyle(t *testing.T) {
 		if b.Element != nil {
 			if id, _ := b.Element.Attr("id"); id == "s" {
 				pieces++
-				if b.Style["color"] != "rgb(1, 2, 3)" {
-					t.Errorf("a split piece has colour %q, not the span's", b.Style["color"])
+				if b.Style.Get("color") != "rgb(1, 2, 3)" {
+					t.Errorf("a split piece has colour %q, not the span's", b.Style.Get("color"))
 				}
 			}
 		}
@@ -663,7 +663,7 @@ func TestOriginBeatsSpecificity(t *testing.T) {
 	if h1 == nil {
 		t.Fatal("no box for the heading")
 	}
-	if v := h1.Style["font-weight"]; v != "normal" {
+	if v := h1.Style.Get("font-weight"); v != "normal" {
 		t.Errorf("font-weight is %q; a less specific author rule must still beat "+
 			"the user-agent default", v)
 	}
@@ -673,7 +673,7 @@ func TestOriginBeatsSpecificity(t *testing.T) {
 	got = build(t, "<h1>x</h1>")
 	h1 = nil
 	walk(got.Root)
-	if v := h1.Style["font-weight"]; v != "bold" {
+	if v := h1.Style.Get("font-weight"); v != "bold" {
 		t.Errorf("the default font-weight is %q, want bold", v)
 	}
 }
@@ -716,7 +716,7 @@ func TestStyleElementIsCollected(t *testing.T) {
 	if h1 == nil {
 		t.Fatal("no box for the heading")
 	}
-	if v := h1.Style["font-weight"]; v != "normal" {
+	if v := h1.Style.Get("font-weight"); v != "normal" {
 		t.Errorf("font-weight is %q; a <style> element is an author stylesheet "+
 			"and must beat the user-agent default", v)
 	}

@@ -67,7 +67,7 @@ import (
 
 // borderCollapses reports whether a table asks for §17.6.2's model.
 func borderCollapses(table *Box) bool {
-	return strings.EqualFold(strings.TrimSpace(table.Style["border-collapse"]), "collapse")
+	return strings.EqualFold(strings.TrimSpace(table.Style.Get("border-collapse")), "collapse")
 }
 
 // The two halves a grid line is split into by the boxes that meet on it.
@@ -237,7 +237,7 @@ func (l *layouter) borderSide(b *Box, s side, rank, order uint8) borderCand {
 	if b == nil {
 		return borderCand{}
 	}
-	kind := parseBorderStyle(b.Style[borderStyleProp[s]])
+	kind := parseBorderStyle(b.Style.Get(borderStyleProp[s]))
 	var w style.Unit
 	if kind != borderNone && kind != borderHidden {
 		// The same reading borderWidths does, minus its shortcut: a style of
@@ -245,7 +245,7 @@ func (l *layouter) borderSide(b *Box, s side, rank, order uint8) borderCand {
 		// are decided by the cascade above rather than by a number.
 		v, ok := l.lengthOf(b, borderWidthProp[s], 0)
 		if !ok {
-			w = keywordBorderWidth(b.Style[borderWidthProp[s]])
+			w = keywordBorderWidth(b.Style.Get(borderWidthProp[s]))
 		} else {
 			w = maxZero(v)
 		}

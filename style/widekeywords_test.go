@@ -36,7 +36,7 @@ func styledColor(t *testing.T, src string) (string, []Finding) {
 	var got string
 	doc.Walk(func(n *html.Node) bool {
 		if n.Type == html.ElementNode && n.Name == "p" {
-			got = out.Styles[n]["color"]
+			got = out.Styles[n].Get("color")
 		}
 		return true
 	})

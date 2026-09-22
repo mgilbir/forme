@@ -34,13 +34,13 @@ func TestBorderShorthandIdentifiesByType(t *testing.T) {
 	} {
 		cs := expandOf(t, decl)
 		for _, side := range []string{"top", "right", "bottom", "left"} {
-			if got := cs["border-"+side+"-width"]; got != "5px" {
+			if got := cs.Get("border-" + side + "-width"); got != "5px" {
 				t.Errorf("%q gave border-%s-width %q, want 5px", decl, side, got)
 			}
-			if got := cs["border-"+side+"-style"]; got != "solid" {
+			if got := cs.Get("border-" + side + "-style"); got != "solid" {
 				t.Errorf("%q gave border-%s-style %q, want solid", decl, side, got)
 			}
-			if got := cs["border-"+side+"-color"]; got != "red" {
+			if got := cs.Get("border-" + side + "-color"); got != "red" {
 				t.Errorf("%q gave border-%s-color %q, want red", decl, side, got)
 			}
 		}
@@ -56,20 +56,20 @@ func TestBorderShorthandIdentifiesByType(t *testing.T) {
 // page the stylesheet does not explain.
 func TestBorderShorthandResetsWhatItOmits(t *testing.T) {
 	cs := expandOf(t, "border-width: 5px; border: solid")
-	if got := cs["border-top-width"]; got != "medium" {
+	if got := cs.Get("border-top-width"); got != "medium" {
 		t.Errorf("border-top-width is %q; the shorthand resets it to medium", got)
 	}
-	if got := cs["border-top-style"]; got != "solid" {
+	if got := cs.Get("border-top-style"); got != "solid" {
 		t.Errorf("border-top-style is %q", got)
 	}
 
 	// And the other way round: a longhand after the shorthand wins, which only
 	// works because the shorthand expanded into competing declarations.
 	cs = expandOf(t, "border: 5px solid red; border-top-width: 9px")
-	if got := cs["border-top-width"]; got != "9px" {
+	if got := cs.Get("border-top-width"); got != "9px" {
 		t.Errorf("border-top-width is %q, want the later longhand's 9px", got)
 	}
-	if got := cs["border-right-width"]; got != "5px" {
+	if got := cs.Get("border-right-width"); got != "5px" {
 		t.Errorf("border-right-width is %q; only the top was overridden", got)
 	}
 }
@@ -78,14 +78,14 @@ func TestBorderShorthandResetsWhatItOmits(t *testing.T) {
 // side and leaves the others alone.
 func TestPerSideBorderShorthand(t *testing.T) {
 	cs := expandOf(t, "border-left: 3px dashed blue")
-	if cs["border-left-width"] != "3px" || cs["border-left-style"] != "dashed" ||
-		cs["border-left-color"] != "blue" {
+	if cs.Get("border-left-width") != "3px" || cs.Get("border-left-style") != "dashed" ||
+		cs.Get("border-left-color") != "blue" {
 		t.Errorf("border-left gave %q %q %q",
-			cs["border-left-width"], cs["border-left-style"], cs["border-left-color"])
+			cs.Get("border-left-width"), cs.Get("border-left-style"), cs.Get("border-left-color"))
 	}
 	// The other sides keep their initial values.
-	if cs["border-top-style"] != "none" {
-		t.Errorf("border-top-style is %q; border-left must not touch it", cs["border-top-style"])
+	if cs.Get("border-top-style") != "none" {
+		t.Errorf("border-top-style is %q; border-left must not touch it", cs.Get("border-top-style"))
 	}
 }
 
@@ -99,14 +99,14 @@ func TestBorderNoneIsAStyleNotAWidth(t *testing.T) {
 	// rejected the declaration outright would give the same answer — which is
 	// what the first version of this test did, and a planted defect caught it.
 	cs := expandOf(t, "border-style: dotted; border: none")
-	if got := cs["border-top-style"]; got != "none" {
+	if got := cs.Get("border-top-style"); got != "none" {
 		t.Errorf("border-top-style is %q, want none", got)
 	}
 	cs = expandOf(t, "border: medium")
-	if got := cs["border-top-width"]; got != "medium" {
+	if got := cs.Get("border-top-width"); got != "medium" {
 		t.Errorf("border-top-width is %q, want medium", got)
 	}
-	if got := cs["border-top-style"]; got != "none" {
+	if got := cs.Get("border-top-style"); got != "none" {
 		t.Errorf("border-top-style is %q; 'medium' is a width and says nothing "+
 			"about the style", got)
 	}
@@ -117,23 +117,23 @@ func TestBorderNoneIsAStyleNotAWidth(t *testing.T) {
 // than applying the parts that happened to parse.
 func TestInvalidBorderSetsNothing(t *testing.T) {
 	cs := expandOf(t, "border-style: dotted; border: 5px nonsense red")
-	if got := cs["border-top-style"]; got != "dotted" {
+	if got := cs.Get("border-top-style"); got != "dotted" {
 		t.Errorf("border-top-style is %q; an invalid shorthand changes nothing", got)
 	}
-	if got := cs["border-top-width"]; got != "medium" {
+	if got := cs.Get("border-top-width"); got != "medium" {
 		t.Errorf("border-top-width is %q; the invalid shorthand set it anyway", got)
 	}
 }
 
 // TestBackgroundShorthand pins the colour, and the reset that comes with it.
 func TestBackgroundShorthand(t *testing.T) {
-	if got := expandOf(t, "background: red")["background-color"]; got != "red" {
+	if got := expandOf(t, "background: red").Get("background-color"); got != "red" {
 		t.Errorf("background-color is %q, want red", got)
 	}
 	// The shorthand controls the colour, so one that does not mention it resets
 	// it — a background image does not sit on the colour set by an earlier rule.
 	cs := expandOf(t, "background-color: red; background: none")
-	if got := cs["background-color"]; got != "transparent" {
+	if got := cs.Get("background-color"); got != "transparent" {
 		t.Errorf("background-color is %q; the shorthand resets it to transparent", got)
 	}
 }
@@ -154,7 +154,7 @@ func TestBackgroundShorthandExpandsEveryPart(t *testing.T) {
 		{"background-origin", "content-box"},
 		{"background-clip", "padding-box"},
 	} {
-		if got := cs[want.property]; got != want.value {
+		if got := cs.Get(want.property); got != want.value {
 			t.Errorf("%s is %q, want %q", want.property, got, want.value)
 		}
 	}
@@ -163,9 +163,9 @@ func TestBackgroundShorthandExpandsEveryPart(t *testing.T) {
 	// two longhands' *initial* values differ, so a single keyword is not the same
 	// as leaving it out.
 	one := expandOf(t, "background: url(p.png) content-box")
-	if one["background-origin"] != "content-box" || one["background-clip"] != "content-box" {
+	if one.Get("background-origin") != "content-box" || one.Get("background-clip") != "content-box" {
 		t.Errorf("one <box> value gave origin=%q clip=%q; it sets both",
-			one["background-origin"], one["background-clip"])
+			one.Get("background-origin"), one.Get("background-clip"))
 	}
 
 	// And the reset: a shorthand that names only a colour puts every other
@@ -182,7 +182,7 @@ func TestBackgroundShorthandExpandsEveryPart(t *testing.T) {
 		{"background-origin", "padding-box"},
 		{"background-clip", "border-box"},
 	} {
-		if got := reset[want.property]; got != want.value {
+		if got := reset.Get(want.property); got != want.value {
 			t.Errorf("after a reset %s is %q, want %q", want.property, got, want.value)
 		}
 	}
@@ -192,13 +192,13 @@ func TestBackgroundShorthandExpandsEveryPart(t *testing.T) {
 // only the last layer may carry a colour.
 func TestBackgroundShorthandLayers(t *testing.T) {
 	cs := expandOf(t, "background: url(a.png) no-repeat, url(b.png) repeat-x blue")
-	if got := cs["background-image"]; got != "url(a.png),url(b.png)" {
+	if got := cs.Get("background-image"); got != "url(a.png),url(b.png)" {
 		t.Errorf("background-image is %q", got)
 	}
-	if got := cs["background-repeat"]; got != "no-repeat,repeat-x" {
+	if got := cs.Get("background-repeat"); got != "no-repeat,repeat-x" {
 		t.Errorf("background-repeat is %q", got)
 	}
-	if got := cs["background-color"]; got != "blue" {
+	if got := cs.Get("background-color"); got != "blue" {
 		t.Errorf("background-color is %q, want blue", got)
 	}
 
@@ -206,10 +206,10 @@ func TestBackgroundShorthandLayers(t *testing.T) {
 	// invalid, which sets nothing rather than setting the parts that parsed.
 	invalid := expandOf(t,
 		"background-color: green; background: red url(a.png), url(b.png)")
-	if v := invalid["background-color"]; v != "green" {
+	if v := invalid.Get("background-color"); v != "green" {
 		t.Errorf("background-color is %q; an invalid shorthand changes nothing", v)
 	}
-	if v := invalid["background-image"]; v != "none" {
+	if v := invalid.Get("background-image"); v != "none" {
 		t.Errorf("background-image is %q; an invalid shorthand changes nothing", v)
 	}
 }
@@ -218,27 +218,27 @@ func TestBackgroundShorthandLayers(t *testing.T) {
 // size, an optional line-height after a slash, then the family.
 func TestFontShorthand(t *testing.T) {
 	cs := expandOf(t, `font: italic bold 12px/1.5 "Noto Sans", serif`)
-	if got := cs["font-style"]; got != "italic" {
+	if got := cs.Get("font-style"); got != "italic" {
 		t.Errorf("font-style is %q", got)
 	}
-	if got := cs["font-weight"]; got != "bold" {
+	if got := cs.Get("font-weight"); got != "bold" {
 		t.Errorf("font-weight is %q", got)
 	}
-	if got := cs["font-size"]; got != "12px" {
+	if got := cs.Get("font-size"); got != "12px" {
 		t.Errorf("font-size is %q", got)
 	}
-	if got := cs["line-height"]; got != "1.5" {
+	if got := cs.Get("line-height"); got != "1.5" {
 		t.Errorf("line-height is %q", got)
 	}
-	if !strings.Contains(cs["font-family"], "Noto Sans") ||
-		!strings.Contains(cs["font-family"], "serif") {
-		t.Errorf("font-family is %q, want both families", cs["font-family"])
+	if !strings.Contains(cs.Get("font-family"), "Noto Sans") ||
+		!strings.Contains(cs.Get("font-family"), "serif") {
+		t.Errorf("font-family is %q, want both families", cs.Get("font-family"))
 	}
 
 	// Without a line-height the shorthand still resets it, which is what makes
 	// "font: 12px serif" undo an inherited one.
 	cs = expandOf(t, "line-height: 3; font: 12px serif")
-	if got := cs["line-height"]; got != "normal" {
+	if got := cs.Get("line-height"); got != "normal" {
 		t.Errorf("line-height is %q; the shorthand resets it", got)
 	}
 }
@@ -248,7 +248,7 @@ func TestFontShorthand(t *testing.T) {
 func TestFontShorthandNeedsSizeAndFamily(t *testing.T) {
 	for _, decl := range []string{"font: bold", "font: 12px", "font: italic bold"} {
 		cs := expandOf(t, "font-size: 30px; "+decl)
-		if got := cs["font-size"]; got != "30px" {
+		if got := cs.Get("font-size"); got != "30px" {
 			t.Errorf("%q changed font-size to %q; it is not a valid shorthand", decl, got)
 		}
 	}
@@ -258,15 +258,15 @@ func TestFontShorthandNeedsSizeAndFamily(t *testing.T) {
 // as the type — which is what an author means by "list-style: none".
 func TestListStyleShorthand(t *testing.T) {
 	cs := expandOf(t, "list-style: square inside")
-	if cs["list-style-type"] != "square" || cs["list-style-position"] != "inside" {
-		t.Errorf("got %q %q", cs["list-style-type"], cs["list-style-position"])
+	if cs.Get("list-style-type") != "square" || cs.Get("list-style-position") != "inside" {
+		t.Errorf("got %q %q", cs.Get("list-style-type"), cs.Get("list-style-position"))
 	}
 	// Written the other way round.
 	cs = expandOf(t, "list-style: inside square")
-	if cs["list-style-type"] != "square" || cs["list-style-position"] != "inside" {
-		t.Errorf("reversed gave %q %q", cs["list-style-type"], cs["list-style-position"])
+	if cs.Get("list-style-type") != "square" || cs.Get("list-style-position") != "inside" {
+		t.Errorf("reversed gave %q %q", cs.Get("list-style-type"), cs.Get("list-style-position"))
 	}
-	if got := expandOf(t, "list-style: none")["list-style-type"]; got != "none" {
+	if got := expandOf(t, "list-style: none").Get("list-style-type"); got != "none" {
 		t.Errorf("list-style:none gave type %q, want none", got)
 	}
 }
@@ -274,18 +274,18 @@ func TestListStyleShorthand(t *testing.T) {
 // TestTextDecorationShorthand pins the line and the colour.
 func TestTextDecorationShorthand(t *testing.T) {
 	cs := expandOf(t, "text-decoration: underline red")
-	if cs["text-decoration-line"] != "underline" {
-		t.Errorf("line is %q", cs["text-decoration-line"])
+	if cs.Get("text-decoration-line") != "underline" {
+		t.Errorf("line is %q", cs.Get("text-decoration-line"))
 	}
-	if cs["text-decoration-color"] != "red" {
-		t.Errorf("colour is %q", cs["text-decoration-color"])
+	if cs.Get("text-decoration-color") != "red" {
+		t.Errorf("colour is %q", cs.Get("text-decoration-color"))
 	}
 	// And it resets: "text-decoration: none" clears an inherited underline's
 	// colour back to currentcolor as well as the line.
 	cs = expandOf(t, "text-decoration: underline red; text-decoration: none")
-	if cs["text-decoration-line"] != "none" || cs["text-decoration-color"] != "currentcolor" {
+	if cs.Get("text-decoration-line") != "none" || cs.Get("text-decoration-color") != "currentcolor" {
 		t.Errorf("the reset gave %q %q",
-			cs["text-decoration-line"], cs["text-decoration-color"])
+			cs.Get("text-decoration-line"), cs.Get("text-decoration-color"))
 	}
 }
 
@@ -297,16 +297,16 @@ func TestTextDecorationShorthand(t *testing.T) {
 // engine's own reading rather than anything unimplemented.
 func TestTextDecorationTakesSeveralLines(t *testing.T) {
 	cs := expandOf(t, "text-decoration: underline overline")
-	if cs["text-decoration-line"] != "underline overline" {
-		t.Errorf("line is %q, want %q", cs["text-decoration-line"], "underline overline")
+	if cs.Get("text-decoration-line") != "underline overline" {
+		t.Errorf("line is %q, want %q", cs.Get("text-decoration-line"), "underline overline")
 	}
 	// In either order, and with a colour among them.
 	cs = expandOf(t, "text-decoration: red line-through underline")
-	if cs["text-decoration-line"] != "line-through underline" {
-		t.Errorf("line is %q, want %q", cs["text-decoration-line"], "line-through underline")
+	if cs.Get("text-decoration-line") != "line-through underline" {
+		t.Errorf("line is %q, want %q", cs.Get("text-decoration-line"), "line-through underline")
 	}
-	if cs["text-decoration-color"] != "red" {
-		t.Errorf("colour is %q, want red", cs["text-decoration-color"])
+	if cs.Get("text-decoration-color") != "red" {
+		t.Errorf("colour is %q, want red", cs.Get("text-decoration-color"))
 	}
 }
 
@@ -324,9 +324,9 @@ func TestTextDecorationRefusesAnImpossibleSet(t *testing.T) {
 		"text-decoration: underline underline",
 	} {
 		cs := expandOf(t, "text-decoration: overline; "+bad)
-		if cs["text-decoration-line"] != "overline" {
+		if cs.Get("text-decoration-line") != "overline" {
 			t.Errorf("%q gave %q; an invalid shorthand sets nothing, so the earlier "+
-				"declaration stands", bad, cs["text-decoration-line"])
+				"declaration stands", bad, cs.Get("text-decoration-line"))
 		}
 	}
 }
@@ -341,12 +341,12 @@ func TestShorthandWideKeywordsReachEveryLonghand(t *testing.T) {
 	cs := got.Styles[elementFor(t, doc, "#t")]
 
 	for _, side := range []string{"top", "right", "bottom", "left"} {
-		if cs["border-"+side+"-width"] != "7px" {
+		if cs.Get("border-"+side+"-width") != "7px" {
 			t.Errorf("border-%s-width is %q, want the inherited 7px",
-				side, cs["border-"+side+"-width"])
+				side, cs.Get("border-"+side+"-width"))
 		}
-		if cs["border-"+side+"-style"] != "solid" {
-			t.Errorf("border-%s-style is %q", side, cs["border-"+side+"-style"])
+		if cs.Get("border-"+side+"-style") != "solid" {
+			t.Errorf("border-%s-style is %q", side, cs.Get("border-"+side+"-style"))
 		}
 	}
 }
@@ -488,13 +488,13 @@ func TestFontShorthandTakesTheSlashWhereverTheSpacesAre(t *testing.T) {
 		"font: 12px / 1 monospace",
 	} {
 		got := computed(t, `<p id="p">x</p>`, sheet(t, OriginAuthor, "p { "+decl+" }"))
-		if fam := got["p"]["font-family"]; fam != "monospace" {
+		if fam := got["p"].Get("font-family"); fam != "monospace" {
 			t.Errorf("{%s} gave font-family %q, want monospace", decl, fam)
 		}
-		if lh := got["p"]["line-height"]; lh != "1" {
+		if lh := got["p"].Get("line-height"); lh != "1" {
 			t.Errorf("{%s} gave line-height %q, want 1", decl, lh)
 		}
-		if sz := got["p"]["font-size"]; sz != "12px" {
+		if sz := got["p"].Get("font-size"); sz != "12px" {
 			t.Errorf("{%s} gave font-size %q, want 12px", decl, sz)
 		}
 	}
@@ -503,7 +503,7 @@ func TestFontShorthandTakesTheSlashWhereverTheSpacesAre(t *testing.T) {
 	// slash does not reach into the family and take a word out of it.
 	got := computed(t, `<p id="p">x</p>`,
 		sheet(t, OriginAuthor, `p { font: 12px Ahem, monospace }`))
-	if fam, lh := got["p"]["font-family"], got["p"]["line-height"]; fam != "Ahem, monospace" || lh != "normal" {
+	if fam, lh := got["p"].Get("font-family"), got["p"].Get("line-height"); fam != "Ahem, monospace" || lh != "normal" {
 		t.Errorf("a shorthand with no line-height gave family %q and line-height %q, "+
 			"want %q and normal", fam, lh, "Ahem, monospace")
 	}

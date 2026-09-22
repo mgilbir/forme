@@ -39,7 +39,7 @@ func styleOfID(t *testing.T, markup, property string) (string, bool) {
 	if found == nil {
 		return "", false
 	}
-	return found.Style[property], true
+	return found.Style.Get(property), true
 }
 
 // TestTheHiddenAttributeHides, §15.3.1.
@@ -309,7 +309,7 @@ func TestRulesReachesTheRowsAndTheGroups(t *testing.T) {
 		if found == nil {
 			t.Fatalf("rules=%q: no box for #%s", c.value, c.id)
 		}
-		if got := found.Style[c.property]; got != c.want {
+		if got := found.Style.Get(c.property); got != c.want {
 			t.Errorf("rules=%q gave #%s %s %q, want %q",
 				c.value, c.id, c.property, got, c.want)
 		}

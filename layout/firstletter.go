@@ -63,7 +63,7 @@ var firstLetterReports = []string{
 // the walk below off every document that writes one for its border alone.
 func (b *boxBuilder) applyFirstLetter(box *Box, n *html.Node, fontSize style.Unit) {
 	fl := b.pseudo[style.PseudoKey{Node: n, Name: "first-letter"}]
-	if fl == nil {
+	if fl.IsZero() {
 		return
 	}
 	b.reportFirstLetter(n, box, fl)
@@ -85,7 +85,7 @@ func (b *boxBuilder) applyFirstLetter(box *Box, n *html.Node, fontSize style.Uni
 	head := *parent.Children[at]
 	head.Style = mergedOver(head.Style, declared)
 	head.Text = text[:cut]
-	if kind := transformOf(head.Style["text-transform"]); kind != transformNone {
+	if kind := transformOf(head.Style.Get("text-transform")); kind != transformNone {
 		// The element's own transform has already run over this text; the
 		// pseudo-element's is a second one, over the letter alone, and it is
 		// what "text-transform: uppercase" on a ::first-letter means. It is
@@ -126,15 +126,18 @@ func (b *boxBuilder) applyFirstLetter(box *Box, n *html.Node, fontSize style.Uni
 // holds every property in the registry, so comparing it against the element's
 // own reads an initial value as a declaration nobody wrote. style.Undeclared is
 // what answers that.
-func firstLetterDeclared(fl, own style.ComputedStyle) style.ComputedStyle {
-	var out style.ComputedStyle
+//
+// It is a set of declarations and not a computed style, so it is a plain map:
+// the properties it does not name are not at any value, they are not said.
+func firstLetterDeclared(fl, own style.ComputedStyle) map[string]string {
+	var out map[string]string
 	for _, name := range firstLetterApplies {
-		v, ok := fl[name]
-		if !ok || v == style.Undeclared(name, own[name]) {
+		v, ok := fl.Lookup(name)
+		if !ok || v == style.Undeclared(name, own.Get(name)) {
 			continue
 		}
 		if out == nil {
-			out = style.ComputedStyle{}
+			out = map[string]string{}
 		}
 		out[name] = v
 	}
@@ -147,8 +150,8 @@ func firstLetterDeclared(fl, own style.ComputedStyle) style.ComputedStyle {
 // naming one is one thing the author has to know and not one per paragraph.
 func (b *boxBuilder) reportFirstLetter(n *html.Node, box *Box, fl style.ComputedStyle) {
 	for _, name := range firstLetterReports {
-		v := strings.TrimSpace(fl[name])
-		if v == "" || v == style.Undeclared(name, box.Style[name]) {
+		v := strings.TrimSpace(fl.Get(name))
+		if v == "" || v == style.Undeclared(name, box.Style.Get(name)) {
 			continue
 		}
 		b.rec.ReportDetail(Finding{
@@ -163,14 +166,12 @@ func (b *boxBuilder) reportFirstLetter(n *html.Node, box *Box, fl style.Computed
 	}
 }
 
-// mergedOver is a style with another's declarations written over it.
-func mergedOver(base, over style.ComputedStyle) style.ComputedStyle {
-	out := make(style.ComputedStyle, len(base))
-	for k, v := range base {
-		out[k] = v
-	}
+// mergedOver is a style with declarations written over it. The base is not
+// changed: With copies what it writes to.
+func mergedOver(base style.ComputedStyle, over map[string]string) style.ComputedStyle {
+	out := base
 	for k, v := range over {
-		out[k] = v
+		out = out.With(k, v)
 	}
 	return out
 }

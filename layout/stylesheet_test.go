@@ -53,7 +53,7 @@ func buildLinking(t *testing.T, dir, htmlSrc string) Built {
 // is what every case here uses to tell "the sheet applied" from "it did not".
 func colourOf(t *testing.T, built Built, id string) string {
 	t.Helper()
-	return findBox(t, built.Root, id).Style["color"]
+	return findBox(t, built.Root, id).Style.Get("color")
 }
 
 const wantColour = "rgb(1, 2, 3)"

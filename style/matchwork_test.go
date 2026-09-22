@@ -124,12 +124,12 @@ func TestAnExpensiveRuleIsSwitchedOffAndNothingElseIs(t *testing.T) {
 			if e.Type == html.ElementNode && e.Name == "p" {
 				n++
 				cs := got.Styles[e]
-				if cs["font-family"] != "plain" || cs["font-style"] != "italic" {
+				if cs.Get("font-family") != "plain" || cs.Get("font-style") != "italic" {
 					t.Errorf("paragraph %d has font-family %q and font-style %q; the "+
 						"rules beside the expensive one must still apply", n,
-						cs["font-family"], cs["font-style"])
+						cs.Get("font-family"), cs.Get("font-style"))
 				}
-				if strings.Contains(cs["color"], "255, 0, 0") {
+				if strings.Contains(cs.Get("color"), "255, 0, 0") {
 					t.Errorf("paragraph %d took the expensive rule, which selects nothing", n)
 				}
 			}

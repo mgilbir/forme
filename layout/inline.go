@@ -254,11 +254,11 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	// block's content before anything is measured against a line: a hanging
 	// character is one that does not count, and what does not count has to be
 	// something the measuring can leave out.
-	hp := hangingPunctuationOf(b.Style["hanging-punctuation"])
+	hp := hangingPunctuationOf(b.Style.Get("hanging-punctuation"))
 	items = l.hangPunctuation(items, hp)
 	// §8.2's trim, after §8.4's hang and reading what the hang has already
 	// claimed: a character outside the line has no blank left in it to give up.
-	trim, unhandledTrim := spacingTrimOf(b.Style["text-spacing-trim"])
+	trim, unhandledTrim := spacingTrimOf(b.Style.Get("text-spacing-trim"))
 	if unhandledTrim != "" {
 		l.reportSpacingTrim(b, unhandledTrim)
 	}
@@ -283,7 +283,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	// of the same rule, and why the answer is to run the passes over the
 	// restyled list rather than to add the old gap back.
 	var firstItems []inlineItem
-	if b.FirstLine != nil && !b.afterTheFirstLine {
+	if !b.FirstLine.IsZero() && !b.afterTheFirstLine {
 		l.reportFirstLine(b)
 		if declared := l.firstLineDeclared(b); declared != nil {
 			firstItems = l.firstLineItems(items, b, declared)

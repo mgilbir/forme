@@ -415,7 +415,7 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 		if !ok {
 			return true
 		}
-		if cs["display"] == "contents" && !contentsIsHonoured(n, cs, root) {
+		if cs.Get("display") == "contents" && !contentsIsHonoured(n, cs, root) {
 			rec.ReportDetail(Finding{
 				Rule:     RuleUnsupportedValue,
 				Source:   AtHTML(n.Offset),
@@ -424,7 +424,7 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 				Property: "display",
 			})
 		}
-		if what, laid := unlaidFormattingContext(cs["display"]); what != "" &&
+		if what, laid := unlaidFormattingContext(cs.Get("display")); what != "" &&
 			unlaidBoxIsNotTheBoxAsked(n, styles, what) {
 			rec.ReportDetail(Finding{
 				Rule:     RuleUnsupportedValue,
@@ -444,8 +444,8 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 		// orient it is a row in a browser and a stack of blocks here, and that
 		// went unsaid: a navigation bar written the old way came out as one
 		// item per line with nothing to show which of the two the page was.
-		if strings.EqualFold(strings.TrimSpace(cs["display"]), "-webkit-box") &&
-			!strings.EqualFold(strings.TrimSpace(cs["-webkit-box-orient"]), "vertical") {
+		if strings.EqualFold(strings.TrimSpace(cs.Get("display")), "-webkit-box") &&
+			!strings.EqualFold(strings.TrimSpace(cs.Get("-webkit-box-orient")), "vertical") {
 			rec.ReportDetail(Finding{
 				Rule:   RuleUnsupportedValue,
 				Source: AtHTML(n.Offset),
@@ -463,7 +463,7 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 		// falls back to static, which is where the box would sit before any
 		// scrolling had happened — the right half of the answer, and silent
 		// about the other half unless this says so.
-		if strings.EqualFold(strings.TrimSpace(cs["position"]), "sticky") {
+		if strings.EqualFold(strings.TrimSpace(cs.Get("position")), "sticky") {
 			rec.ReportDetail(Finding{
 				Rule:   RuleUnsupportedValue,
 				Source: AtHTML(n.Offset),
@@ -558,7 +558,7 @@ func hasRubyAnnotation(n *html.Node, styles map[*html.Node]style.ComputedStyle) 
 		if !ok {
 			return true
 		}
-		switch strings.ToLower(strings.TrimSpace(cs["display"])) {
+		switch strings.ToLower(strings.TrimSpace(cs.Get("display"))) {
 		case "ruby-text", "ruby-text-container":
 			found = true
 		}

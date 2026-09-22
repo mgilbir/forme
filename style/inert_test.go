@@ -354,7 +354,7 @@ func TestAnInertDeclarationStillCascades(t *testing.T) {
 	}
 	got := Apply(doc, []Sheet{{Origin: OriginAuthor, Rules: rules}})
 	n := elementFor(t, doc, "#target")
-	if got.Styles[n]["color"] == "" {
+	if got.Styles[n].Get("color") == "" {
 		t.Errorf("the declaration beside the inert one did not survive; suppressing a " +
 			"finding must not drop the rule it was about")
 	}
@@ -405,11 +405,11 @@ func TestTheShorthandStillSetsTheLine(t *testing.T) {
 	}
 	got := Apply(doc, []Sheet{{Origin: OriginAuthor, Rules: rules}})
 	cs := got.Styles[elementFor(t, doc, "#target")]
-	if cs["text-decoration-line"] != "underline" {
-		t.Errorf("the line came out %q, want underline", cs["text-decoration-line"])
+	if cs.Get("text-decoration-line") != "underline" {
+		t.Errorf("the line came out %q, want underline", cs.Get("text-decoration-line"))
 	}
-	if cs["text-decoration-color"] != "blue" {
-		t.Errorf("the colour came out %q, want blue", cs["text-decoration-color"])
+	if cs.Get("text-decoration-color") != "blue" {
+		t.Errorf("the colour came out %q, want blue", cs.Get("text-decoration-color"))
 	}
 }
 

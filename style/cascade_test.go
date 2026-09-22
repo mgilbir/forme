@@ -38,7 +38,7 @@ func styleOf(t *testing.T, doc *html.Node, sheets []Sheet, selector, property st
 	if !ok {
 		t.Fatalf("no computed style for the element selected by %q", selector)
 	}
-	return cs[property]
+	return cs.Get(property)
 }
 
 // elementFor finds the single element a selector picks, failing if it is not
@@ -410,9 +410,9 @@ func TestInitialValues(t *testing.T) {
 	got := Apply(doc, nil)
 	cs := got.Styles[elementFor(t, doc, "#target")]
 
-	if len(cs) != len(properties) {
+	if cs.Len() != len(properties) {
 		t.Errorf("the computed style holds %d properties, want all %d",
-			len(cs), len(properties))
+			cs.Len(), len(properties))
 	}
 	for name, prop := range properties {
 		want := prop.initial
@@ -424,9 +424,9 @@ func TestInitialValues(t *testing.T) {
 			// document is measured against it. See computed.go.
 			want = "16px"
 		}
-		if cs[name] != want {
+		if cs.Get(name) != want {
 			t.Errorf("%s is %q with no stylesheet, want the initial %q",
-				name, cs[name], want)
+				name, cs.Get(name), want)
 		}
 	}
 }
@@ -544,7 +544,7 @@ func TestUnsupportedPropertyIsReported(t *testing.T) {
 	}
 	// The declaration beside it still applied, so one unknown property does not
 	// cost the rule.
-	if v := got.Styles[elementFor(t, doc, "#target")]["font-family"]; v != "kept" {
+	if v := got.Styles[elementFor(t, doc, "#target")].Get("font-family"); v != "kept" {
 		t.Errorf("font-family is %q; an unknown property took the rest of the rule with it", v)
 	}
 }
@@ -665,7 +665,7 @@ p { border-width: 1px 2px 3px 4px }`
 	for i := 0; i < 20; i++ {
 		again := Apply(doc, []Sheet{author(t, src)})
 		for name := range properties {
-			a, b := first.Styles[target][name], again.Styles[target][name]
+			a, b := first.Styles[target].Get(name), again.Styles[target].Get(name)
 			if a != b {
 				t.Fatalf("run %d disagrees on %s: %q then %q", i, name, a, b)
 			}
