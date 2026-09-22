@@ -780,8 +780,10 @@ func TestFloatDoesNotSplitTheInlineItIsIn(t *testing.T) {
 		// A block-level box in the flow does split it, into the piece before and
 		// the piece after — and the float belongs to whichever piece it was
 		// written in rather than becoming a third sibling.
+		// In a <div>, because a <div> ends an open <p> from however deep
+		// inside it, and the block would not be in the inline at all.
 		{"a float beside a real block in an inline",
-			`<p><em>one <span id="f"></span>two<div>block</div>three</em></p>`, 2},
+			`<div><em>one <span id="f"></span>two<div>block</div>three</em></div>`, 2},
 	} {
 		got := Build(Input{HTML: tc.what + tc.src, CSS: []Stylesheet{{Source: noDefaults + css}}})
 		if got.Root == nil {

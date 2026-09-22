@@ -1635,6 +1635,23 @@ func expandEmptyElements(src string) string {
 	})
 }
 
+// servedAsXHTML is what a server's MIME type would say about a file of the
+// suite: an .xht document is sent as application/xhtml+xml, and a browser reads
+// it as XML because it was told to, whatever the document says about itself.
+//
+// The harness says the same through Input.XHTML rather than leaving the parser
+// to work it out from the text. Thirty of the suite's documents are XML for no
+// reason but their extension: letter-spacing-004-ref.xht, which twenty-eight of
+// the letter-spacing tests share, has no doctype at all, and the
+// table-vertical-align-baseline pair write "<!DOCTYPE html>" over a stylesheet
+// wrapped in CDATA — which is a stylesheet only in XML. They used to be read as
+// XHTML because they carry the XHTML namespace on <html>, which HTML allows and
+// gives no meaning, and which the parser no longer takes as a signal.
+func servedAsXHTML(file string) bool {
+	ext := strings.ToLower(filepath.Ext(file))
+	return ext == ".xht" || ext == ".xhtml"
+}
+
 // pageClip is the area a rendering is compared over.
 //
 // It stands in for the viewport a browser would have shown the reftest in: a
@@ -1738,7 +1755,8 @@ func renderForCompareDetail(root, file string) (ops []Op, findings []Finding, bl
 		return nil, nil, false, err
 	}
 	src := string(data)
-	if ext := strings.ToLower(filepath.Ext(file)); ext == ".xht" || ext == ".xhtml" {
+	xhtml := servedAsXHTML(file)
+	if xhtml {
 		src = expandEmptyElements(src)
 	}
 
@@ -1774,7 +1792,7 @@ func renderForCompareDetail(root, file string) (ops []Op, findings []Finding, bl
 	}
 	defer res.Close()
 
-	built := Build(Input{HTML: src, Resources: res, Fonts: fontSetForWPT()})
+	built := Build(Input{HTML: src, XHTML: xhtml, Resources: res, Fonts: fontSetForWPT()})
 
 	// The faces the document itself brought, which for a quarter of this suite
 	// is Ahem: 1665 of its documents link /fonts/ahem.css, whose whole content
@@ -2635,7 +2653,8 @@ func TestSuiteFontFaceLoadsAhem(t *testing.T) {
 	}
 	defer res.Close()
 
-	built := Build(Input{HTML: src, Resources: res, Fonts: fontSetForWPT()})
+	built := Build(Input{HTML: src, XHTML: servedAsXHTML(doc), Resources: res,
+		Fonts: fontSetForWPT()})
 
 	face, ok := built.Fonts.Face("Ahem", false, false)
 	if !ok || face == nil {

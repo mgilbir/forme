@@ -134,7 +134,9 @@ func TestAGridContainerSealsItsOwnFormattingContext(t *testing.T) {
 // not for it: a block inside an inline-grid belongs to the grid, and lifting it
 // out would empty the very box that was meant to hold it.
 func TestTheAnonymousBlockRulesDoNotReachIntoAGrid(t *testing.T) {
-	const doc = `<p>before<span id="g"><div id="in">block</div></span>after</p>`
+	// A <div> round it and not a <p>: a <div> ends an open paragraph from
+	// however deep inside it, which would take the block out of the span.
+	const doc = `<div>before<span id="g"><div id="in">block</div></span>after</div>`
 	const css = `#g { display: inline-grid; background: red }`
 
 	g := fragmentFor(layoutOf(t, 1000, doc, css), "g")

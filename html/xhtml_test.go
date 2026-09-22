@@ -55,8 +55,12 @@ func TestAnXHTMLStylesheetResolvesItsReferences(t *testing.T) {
 	for _, tc := range []struct{ what, prologue string }{
 		{"an XHTML doctype", xhtmlDoctype + `<html xmlns="x">`},
 		{"an XML declaration", `<?xml version="1.0" encoding="utf-8"?><html>`},
-		{"the XHTML namespace on the root", `<html xmlns="http://www.w3.org/1999/xhtml">`},
-		{"the namespace in single quotes", `<html xmlns='http://www.w3.org/1999/xhtml'>`},
+		{"an XHTML doctype and the namespace", xhtmlDoctype +
+			`<html xmlns="http://www.w3.org/1999/xhtml">`},
+		// A public identifier spelled a little wrong, as the suite's
+		// abspos-zero-width-001 spells it: it still names XHTML.
+		{"a misspelled XHTML public identifier",
+			`<!DOCTYPE html PUBLIC "-//W3C//DTD//XHTML 1.0 Strict//EN">`},
 	} {
 		got := styleOf(t, tc.prologue+`<head><style>body &gt; div { color: red }</style></head>`)
 		if !strings.Contains(got, "body > div") {
@@ -83,6 +87,14 @@ func TestAnHTMLStylesheetIsRawText(t *testing.T) {
 		// the prologue scan should never have reached it, and on an attribute
 		// that is not xmlns.
 		{"an unrelated attribute", `<!DOCTYPE html><html data-ns="http://www.w3.org/1999/xhtml">`},
+		// The XHTML namespace on the root says nothing about the syntax: HTML
+		// allows the attribute on <html> and gives it no meaning, and Pandoc's
+		// HTML5 template writes it under "<!DOCTYPE html>". See
+		// TestTheNamespaceAloneIsNotXHTML.
+		{"the namespace under an HTML5 doctype",
+			`<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml">`},
+		{"the namespace with no doctype", `<html xmlns="http://www.w3.org/1999/xhtml">`},
+		{"the namespace in single quotes", `<html xmlns='http://www.w3.org/1999/xhtml'>`},
 	} {
 		got := styleOf(t, tc.prologue+`<head><style>body &gt; div { color: red }</style></head>`)
 		if strings.Contains(got, "body > div") {
@@ -424,7 +436,8 @@ func TestTheDocumentRecordsWhichLanguageItWasReadAs(t *testing.T) {
 		xml bool
 	}{
 		{`<p title="yes">x</p>`, false},
-		{`<html xmlns="http://www.w3.org/1999/xhtml"><p title="yes">x</p></html>`, true},
+		{`<html xmlns="http://www.w3.org/1999/xhtml"><p title="yes">x</p></html>`, false},
+		{xhtmlDoctype + `<html xmlns="http://www.w3.org/1999/xhtml"><p title="yes">x</p></html>`, true},
 		{`<?xml version="1.0"?><html><p title="yes">x</p></html>`, true},
 	} {
 		doc, _, _ := Parse(tc.src)
@@ -457,7 +470,7 @@ func TestTheDocumentRecordsWhichLanguageItWasReadAs(t *testing.T) {
 // tell from one written that way, and refusing both is the only reading that is
 // never wrong about which of the two it found.
 func TestAttrExactRefusesAQueryTheParseWouldHaveLowered(t *testing.T) {
-	doc, _, _ := Parse(`<html xmlns="http://www.w3.org/1999/xhtml">` +
+	doc, _, _ := Parse(xhtmlDoctype + `<html xmlns="http://www.w3.org/1999/xhtml">` +
 		`<p Title="yes">x</p></html>`)
 	p := findElement(doc, "p")
 	if p == nil {

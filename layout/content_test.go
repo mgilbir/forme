@@ -129,17 +129,16 @@ func TestContentAttr(t *testing.T) {
 // even when case does not match" and content-attr-case-002's is "in XHTML that
 // attr(x) does not select the attribute when the case does not match".
 //
-// The XHTML fixture is recognised the way this engine recognises one at all —
-// the xmlns declaration, which is what looksLikeXML reads — because no content
-// type reaches it.
+// The XHTML fixture is recognised from the XHTML doctype content-attr-case-002
+// carries, which is how a document says it is XHTML when the caller has not;
+// TestInputXHTMLIsTheContentType is the caller saying it.
 func TestAttrMatchesTheCaseTheDocumentLanguageDoes(t *testing.T) {
 	const sheet = `p::before { content: "[" attr(Title) "]" }`
 	got := bodyBoxes(t, `<p title="yes">x</p>`, sheet)
 	if !strings.Contains(got, `text "[yes]"`) {
 		t.Errorf("in HTML, attr(Title) did not select the title attribute:\n%s", got)
 	}
-	got = bodyBoxes(t, `<html xmlns="http://www.w3.org/1999/xhtml">`+
-		`<body><p title="yes">x</p></body></html>`, sheet)
+	got = bodyBoxes(t, xhtml(`<p title="yes">x</p>`), sheet)
 	if !strings.Contains(got, `text "[]"`) {
 		t.Errorf("in XHTML, attr(Title) selected something; the name is "+
 			"case-sensitive there:\n%s", got)
@@ -147,12 +146,40 @@ func TestAttrMatchesTheCaseTheDocumentLanguageDoes(t *testing.T) {
 	// And the name written as the document writes it still selects it, in both.
 	for _, doc := range []string{
 		`<p title="yes">x</p>`,
-		`<html xmlns="http://www.w3.org/1999/xhtml"><body><p title="yes">x</p></body></html>`,
+		xhtml(`<p title="yes">x</p>`),
 	} {
 		got := bodyBoxes(t, doc, `p::before { content: "[" attr(title) "]" }`)
 		if !strings.Contains(got, `text "[yes]"`) {
 			t.Errorf("attr(title) did not select it:\n%s", got)
 		}
+	}
+}
+
+// TestInputXHTMLIsTheContentType. Input.XHTML is what a server's
+// application/xhtml+xml tells a browser, and it decides the language whatever
+// the document says: content-attr-case-002's attr(Title) finds nothing in a
+// document with no XHTML doctype when the caller says it is XHTML. Left unset,
+// "<!DOCTYPE html>" with the XHTML namespace on <html> is HTML, as a browser
+// opening the file reads it — the namespace is not a signal.
+func TestInputXHTMLIsTheContentType(t *testing.T) {
+	const doc = `<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml">` +
+		`<body><p title="yes">x</p></body></html>`
+	sheet := []Stylesheet{{Source: `p::before { content: "[" attr(Title) "]" }`}}
+
+	served := Build(Input{HTML: doc, XHTML: true, CSS: sheet})
+	if !served.Document.XML {
+		t.Error("a document the caller said is XHTML was read as HTML")
+	}
+	if got := sketchBox(served.Root); !strings.Contains(got, `text "[]"`) {
+		t.Errorf("served as XHTML, attr(Title) selected something:\n%s", got)
+	}
+
+	unsaid := Build(Input{HTML: doc, CSS: sheet})
+	if unsaid.Document.XML {
+		t.Error("an HTML5 doctype with the namespace, and no content type, was read as XHTML")
+	}
+	if got := sketchBox(unsaid.Root); !strings.Contains(got, `text "[yes]"`) {
+		t.Errorf("read as HTML, attr(Title) did not select the title attribute:\n%s", got)
 	}
 }
 

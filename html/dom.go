@@ -187,15 +187,24 @@ func (n *Node) AttrExact(name string) (string, bool) {
 // document ignores it for exactly that reason; honouring it there would be a
 // language this engine invents. XMLDocument is asked only once, and only when
 // an xml:lang was found with no lang above it.
+//
+// **An empty value is an answer.** HTML §3.2.6.2: lang="" says the language is
+// unknown, and it stops the walk as surely as a tag does — it is how an author
+// marks a name or a code sample inside Turkish prose as not Turkish. It was
+// skipped as though absent, so the parent's language reached text its author
+// had marked as being in no language at all, and the Turkish casing, the
+// hyphenation patterns and :lang(tr) all applied to it. It is returned as the
+// empty string with ok true: every reader here maps the empty tag to its own
+// "no language" answer.
 func (n *Node) Language() (string, bool) {
 	for cur := n; cur != nil; cur = cur.Parent {
 		if cur.Type != ElementNode {
 			continue
 		}
-		if v, ok := cur.Attr("lang"); ok && v != "" {
+		if v, ok := cur.Attr("lang"); ok {
 			return v, true
 		}
-		if v, ok := cur.Attr("xml:lang"); ok && v != "" && cur.XMLDocument() {
+		if v, ok := cur.Attr("xml:lang"); ok && cur.XMLDocument() {
 			return v, true
 		}
 	}

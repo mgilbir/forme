@@ -46,6 +46,15 @@ type Stylesheet struct {
 type Input struct {
 	// HTML is the document source.
 	HTML string
+	// XHTML says the document is served as application/xhtml+xml, and is read
+	// as XHTML whatever it says about itself: <style> holds character data,
+	// "<div/>" is empty, attribute names in attr() are case-sensitive. It is
+	// what a browser learns from the MIME type, and what a caller knows from
+	// where the file came from — its content type, or an ".xht" extension.
+	//
+	// Left false, the document decides: an XML declaration or a doctype naming
+	// XHTML makes it XHTML, and anything else is HTML. See html.ParseXHTML.
+	XHTML bool
 	// CSS is the author's stylesheets, in the order they apply.
 	CSS []Stylesheet
 	// Policy chooses what each rule does. A nil policy uses the defaults.
@@ -147,7 +156,11 @@ func BuildFor(in Input, page PageSize) Built {
 //
 // And the work: every finding is deduplicated twice, once in each recorder.
 func buildWith(in Input, page PageSize, rec *Recorder) Built {
-	doc, htmlErrs, _ := html.Parse(in.HTML)
+	parse := html.Parse
+	if in.XHTML {
+		parse = html.ParseXHTML
+	}
+	doc, htmlErrs, _ := parse(in.HTML)
 	for _, e := range htmlErrs {
 		// Three kinds, and they are three because they send an author to three
 		// different places: fix the markup, the engine does not do this, or the

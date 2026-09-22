@@ -1980,7 +1980,10 @@ const inlineFlexCSS = `body { margin: 0 } p { margin: 0; font-family: Courier;` 
 // records — content the document contains and the page does not — and it was
 // invisible for as long as the container was treated as a span.
 func TestABlockInsideAnInlineFlexContainerIsOnThePage(t *testing.T) {
-	const doc = `<p>x<span id="g"><div id="in">B</div></span>y</p>`
+	// A <div> round it and not a <p>: a <div> ends an open paragraph from
+	// however deep inside it, which would take the block out of the span and
+	// leave this passing for a reason that has nothing to do with the span.
+	const doc = `<div>x<span id="g"><div id="in">B</div></span>y</div>`
 	for _, display := range []string{"inline-flex", "inline-block"} {
 		root := layoutOf(t, 1000, doc, inlineFlexCSS+`#g { display: `+display+` }`)
 		if fragmentFor(root, "in") == nil {
