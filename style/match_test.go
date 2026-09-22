@@ -516,39 +516,69 @@ func TestMatchIsRightToLeft(t *testing.T) {
 // match" when it ran out of budget would produce a page with styles missing and
 // nothing at all to say so.
 func TestMatchBudgetTripsAndIsReported(t *testing.T) {
-	// A deep tree and a selector that must backtrack over every combination of
-	// ancestors. Both halves are needed, and the second is easy to get wrong: a
-	// selector whose every compound matches every ancestor is *linear*, because
-	// the first ancestor tried always succeeds. The blowup needs a compound that
-	// never matches, at the far left, so each of the combinations the ones to
-	// its right can be satisfied by is tried and then abandoned.
-	const depth = 200 // under the html package's own nesting cap
-	var b strings.Builder
-	for i := 0; i < depth; i++ {
-		b.WriteString("<div class=\"x\">")
-	}
-	b.WriteString("<p id=\"deep\">x</p>")
-	for i := 0; i < depth; i++ {
-		b.WriteString("</div>")
-	}
-	doc := parseDoc(t, b.String())
-
-	selector := ".nowhere " + strings.Repeat(".x ", 11) + "p"
-	vals, _ := css.ParseComponentValues(selector)
-	sels, _, ok := css.ParseSelectorList(vals)
-	if !ok {
-		t.Fatal("the selector was refused")
-	}
+	// A deep tree and a selector whose cost is a product. A chain of
+	// combinators no longer is — ".nowhere .x .x … p" gives up after one walk
+	// of the ancestors, see matchResult — so the product is built from
+	// arguments: each ":is()" is a whole selector matched afresh at every
+	// ancestor the search around it visits, and three of them nested inside
+	// one another is the depth to the fourth power.
+	doc := parseDoc(t, deepChain(200)) // under the html package's own nesting cap
+	sels := selectorsOf(t, expensiveSelector)
 
 	m := NewMatcher(doc)
 	target := doc.Element("p")
 	m.Match(sels[0], target)
 
 	if !m.Tripped() {
-		t.Error("a selector that backtracks over a 300-deep tree did not trip the budget")
+		t.Error("a selector whose cost is the depth to the fourth power did not " +
+			"trip the budget on a 200-deep tree")
 	}
 	// And it terminated, which is the other half.
 }
+
+// TestAChainOfCombinatorsIsOneWalk is what matchResult is for. ".nowhere .x
+// .x … p" cannot match — no element is .nowhere — and answered only yes or no,
+// finding that out tried every way of placing the eleven .x on two hundred
+// ancestors, which spent the whole budget on every paragraph. Knowing that a
+// descendant search which ran out of ancestors cannot succeed further up, it is
+// one walk: the steps are counted, and they are the depth, not a product of it.
+func TestAChainOfCombinatorsIsOneWalk(t *testing.T) {
+	const depth = 200
+	doc := parseDoc(t, deepChain(depth))
+	target := doc.Element("p")
+	for _, src := range []string{
+		".nowhere " + strings.Repeat(".x ", 11) + "p",
+		".nowhere > " + strings.Repeat(".x ", 11) + "p",
+		".nowhere " + strings.Repeat(".x > .x ", 5) + "p",
+		".nowhere ~ .x " + strings.Repeat(".x ", 10) + "p",
+	} {
+		m := NewMatcher(doc)
+		if m.Match(selectorsOf(t, src)[0], target) {
+			t.Errorf("%s matched, and nothing is .nowhere", src)
+		}
+		if m.Tripped() || m.steps > 4*depth {
+			t.Errorf("%s took %d steps on a %d-deep tree (tripped=%v); a chain "+
+				"that cannot match should cost a walk of the ancestors or two",
+				src, m.steps, depth, m.Tripped())
+		}
+	}
+	// And one that can match still does, through every one of them.
+	m := NewMatcher(doc)
+	if !m.Match(selectorsOf(t, strings.Repeat(".x ", 11)+"p")[0], target) {
+		t.Error("\".x .x … p\" did not match a paragraph under 200 .x")
+	}
+}
+
+// deepChain is a paragraph under depth nested div.x.
+func deepChain(depth int) string {
+	return strings.Repeat(`<div class="x">`, depth) + `<p id="deep">x</p>` +
+		strings.Repeat("</div>", depth)
+}
+
+// expensiveSelector costs the depth of the tree to the fourth power on a
+// paragraph under nested div.x, and matches nothing. See
+// TestMatchBudgetTripsAndIsReported.
+const expensiveSelector = ":is(:is(:is(.nowhere .x) .x) .x) p"
 
 // TestMatchNeverPanics is the totality property. Every document the html package
 // can build, against every selector the css package can build, has to produce an

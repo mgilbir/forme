@@ -115,6 +115,9 @@ type candidate struct {
 // Styler applies stylesheets to a document.
 type Styler struct {
 	matcher *Matcher
+	// budget is each rule's allowance of matching work for the document, nil
+	// where there is none to keep — a Styler built by hand to prepare rules.
+	budget *matchBudget
 	// media is the surface the document is being laid out for, which is what a
 	// media query is asked about. Its zero value is a sheet of no size, and a
 	// query about a width is false against it — see Media.
@@ -200,7 +203,9 @@ type Styled struct {
 	// Findings is everything worth telling the caller, in stylesheet order.
 	Findings []Finding
 	// Incomplete reports that the selector-matching budget tripped, so some
-	// rules did not get the chance to apply. A caller rendering an incomplete
+	// rules did not get the chance to apply: a match ran past the per-match
+	// bound, or a rule spent its allowance for the document and was switched
+	// off. Findings name each such rule. A caller rendering an incomplete
 	// result is rendering something other than the stylesheet describes.
 	Incomplete bool
 }
@@ -257,6 +262,13 @@ func ApplyWith(doc *html.Node, sheets []Sheet, m Metrics) Styled {
 // answered either way, because that one is a fact about this engine rather than
 // about the page: it renders for paper.
 func ApplyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) Styled {
+	out, _ := applyIn(doc, sheets, m, media)
+	return out
+}
+
+// applyIn is ApplyIn, and the Styler that did the work, whose accounts of it the
+// tests read.
+func applyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) (Styled, *Styler) {
 	s := &Styler{matcher: NewMatcher(doc), media: media, seen: map[string]bool{},
 		attrOffset: -1}
 
@@ -265,6 +277,7 @@ func ApplyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) Styled {
 	// on the element, and a document of ten thousand nodes would otherwise ask
 	// the same question ten thousand times.
 	rules := newRuleSet(s.prepare(sheets))
+	s.budget = &matchBudget{rules: make([]ruleWork, len(rules.rules))}
 
 	out := Styled{
 		Styles:            map[*html.Node]ComputedStyle{},
@@ -291,6 +304,7 @@ func ApplyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) Styled {
 		if n.Type != html.ElementNode {
 			return true
 		}
+		s.budget.styled++
 		cs, own := s.computeFor(n, rules, out.Styles, "")
 
 		// The parent's own size, which is what an em means here, and the
@@ -401,7 +415,11 @@ func ApplyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) Styled {
 	})
 
 	out.Findings = s.findings
-	out.Incomplete = s.matcher.Tripped()
+	// A rule switched off by its budget is as incomplete as one whose match ran
+	// out, and it is a separate account: a rule is switched off by spending,
+	// which it may do without any one match reaching the per-match bound.
+	cut := s.reportMatchBudget(rules)
+	out.Incomplete = s.matcher.Tripped() || cut
 	if out.Incomplete {
 		s.report(Finding{
 			Offset: -1,
@@ -410,7 +428,7 @@ func ApplyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) Styled {
 		})
 		out.Findings = s.findings
 	}
-	return out
+	return out, s
 }
 
 // preparedRule is a rule with its selectors parsed and its declarations
@@ -418,12 +436,19 @@ func ApplyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) Styled {
 type preparedRule struct {
 	selectors []css.Selector
 	decls     []preparedDecl
-	// subjects is the element names this rule's selectors can select,
-	// ASCII-lower-cased, and is empty when at least one of them names no type
-	// at all — ".a", "#x", "[hidden]" — and so can select anything. It is what
-	// ruleSet indexes on; see there for why.
-	subjects []string
-	origin   Origin
+	// keys is one thing per selector that an element must have for the
+	// selector to select it — an id, a class or an element name — and is empty
+	// when at least one selector names none of the three, "[hidden]" or ":root",
+	// and so can select anything. It is what ruleSet indexes on; see there for
+	// why.
+	keys   []ruleKey
+	origin Origin
+	// index is the rule's place in the ruleSet it was indexed into, which is
+	// what its share of the matching budget is kept under. See matchBudget.
+	index int32
+	// offset and sheet are where the rule was written, for a finding about it.
+	offset int
+	sheet  string
 	// layer is the cascade layer the rule was written in, zero for none. See
 	// layer.go: it is a term of the cascade between the origin and the
 	// specificity, and it is carried on the rule because every declaration in
@@ -683,7 +708,7 @@ func quoted(s string) string { return strconv.Quote(strings.TrimSpace(s)) }
 func (s *Styler) prepareNestedConditional(rule css.Rule, parent *css.Nesting,
 	origin Origin, out *[]preparedRule, order *int) {
 
-	s.prepareStyleBlock(rule.Block, parent.Selectors, parent, origin, out, order)
+	s.prepareStyleBlock(rule, parent.Selectors, parent, origin, out, order)
 }
 
 // charsetLabel is the encoding an @charset names, which is a single string.
@@ -810,7 +835,7 @@ func (s *Styler) prepareRule(rule css.Rule, parent *css.Nesting, origin Origin,
 		return
 	}
 
-	s.prepareStyleBlock(rule.Block, sels, nil, origin, out, order)
+	s.prepareStyleBlock(rule, sels, nil, origin, out, order)
 }
 
 // prepareStyleBlock prepares one style block: the declarations it holds, which
@@ -829,10 +854,10 @@ func (s *Styler) prepareRule(rule css.Rule, parent *css.Nesting, origin Origin,
 // since a different selector usually differs in specificity, and which a nested
 // @media shows immediately: its declarations land on the very selector they are
 // written inside, so the only thing separating them is order.
-func (s *Styler) prepareStyleBlock(block []css.ComponentValue, sels []css.Selector,
+func (s *Styler) prepareStyleBlock(rule css.Rule, sels []css.Selector,
 	nest *css.Nesting, origin Origin, out *[]preparedRule, order *int) {
 
-	decls, nested, derrs := css.ParseDeclarationValues(block)
+	decls, nested, derrs := css.ParseDeclarationValues(rule.Block)
 	for _, e := range derrs {
 		s.report(Finding{Offset: e.Offset, Message: e.Message, Unsupported: e.Unsupported})
 	}
@@ -841,7 +866,7 @@ func (s *Styler) prepareStyleBlock(block []css.ComponentValue, sels []css.Select
 	}
 
 	prepared := preparedRule{selectors: sels, origin: origin, layer: s.layer,
-		subjects: subjectsOf(sels)}
+		keys: keysOf(sels), offset: rule.Offset, sheet: s.sheet}
 	di, ni := 0, 0
 	for di < len(decls) || ni < len(nested) {
 		if ni >= len(nested) || (di < len(decls) && decls[di].Offset <= nested[ni].Offset) {
@@ -1636,7 +1661,7 @@ func (s *Styler) anyRuleTargets(rules *ruleSet, n *html.Node, name string) bool 
 			if sel.PseudoElement != name {
 				continue
 			}
-			if s.matcher.Match(sel, n) {
+			if s.matchRule(r, sel, n) {
 				found = true
 				return false
 			}
@@ -1878,18 +1903,8 @@ func (s *Styler) resolve(name string, prop property, value string, have bool, pa
 	return prop.initial
 }
 
-// matchSpecificity reports whether a rule applies to an element, and with what
-// specificity.
-//
-// The two answers come together because they are one walk: asking "does it
-// match" and then "how specific" would match every selector of every rule twice,
-// for every element in the document.
-//
-// The specificity is that of the most specific selector that *matched*, not the
-// most specific in the list. "a, #b {…}" applies to an <a> with the specificity
-// of "a"; taking "#b" would let the rule beat declarations it should lose to.
-// ruleSet is the prepared rules, with an index from an element's name to the
-// rules that could select it.
+// ruleSet is the prepared rules, with an index from what an element carries —
+// its id, its classes and its name — to the rules that could select it.
 //
 // Every element used to be matched against every rule. The subject compound of
 // a selector is tested for its type before anything else, so most of those
@@ -1901,31 +1916,81 @@ func (s *Styler) resolve(name string, prop property, value string, have bool, pa
 // part that matters. The first attempt asked *per rule* instead — a set on each
 // rule, tested in the loop — and was ten per cent slower than no filter at all,
 // because hashing the element's name two hundred times costs more than two
-// hundred failed byte comparisons. One lookup, then two short slices.
+// hundred failed byte comparisons. A few lookups, then short slices.
+//
+// It filed rules under element names only, so every rule whose subject was a
+// class or an id — which is most of what an author writes — was matched against
+// every element of the document. An element carries one id and a handful of
+// classes, and a rule that needs one it does not carry cannot select it, so
+// those rules are filed under the id or class and reached only through it.
 type ruleSet struct {
 	rules []preparedRule
-	// byName holds, per element name, the rules every one of whose selectors
-	// names a type, filed under each type they name. A rule naming three types
-	// is in three of these lists and is still reached once, because an element
-	// has one name.
-	byName map[string][]int32
+	// byID, byClass and byName hold, per id, class and element name, the rules
+	// filed under it — see keysOf for which. A rule is filed once per selector,
+	// so a rule of three selectors may be in three lists, and an element that
+	// reaches it through two of them is still given it once: see candidates.
+	byID    map[string][]int32
+	byClass map[string][]int32
+	byName  map[string][]int32
 	// any holds the rules that can select anything, which is every rule with a
-	// selector that names no type. They are walked for every element.
+	// selector that needs none of the three. They are walked for every element.
 	any []int32
+
+	// seen, stamp and the last pair are candidates' own state: which rules the
+	// element in hand has already been given, and the answer for the element
+	// asked about last. An element is asked about once for its own style and
+	// again for each pseudo-element, one after the other.
+	seen     []uint32
+	stamp    uint32
+	lastNode *html.Node
+	last     []int32
 }
 
+// ruleKey is one thing an element must carry for a selector to select it.
+type ruleKey struct {
+	kind ruleKeyKind
+	name string
+}
+
+type ruleKeyKind uint8
+
+const (
+	keyID ruleKeyKind = iota
+	keyClass
+	keyName
+)
+
 func newRuleSet(rules []preparedRule) *ruleSet {
-	rs := &ruleSet{rules: rules, byName: make(map[string][]int32, 64)}
+	rs := &ruleSet{rules: rules, byID: map[string][]int32{},
+		byClass: map[string][]int32{}, byName: make(map[string][]int32, 64),
+		seen: make([]uint32, len(rules))}
 	for i := range rules {
-		if len(rules[i].subjects) == 0 {
+		rules[i].index = int32(i)
+		if len(rules[i].keys) == 0 {
 			rs.any = append(rs.any, int32(i))
 			continue
 		}
-		for _, name := range rules[i].subjects {
-			rs.byName[name] = append(rs.byName[name], int32(i))
+		for _, k := range rules[i].keys {
+			switch k.kind {
+			case keyID:
+				rs.byID[k.name] = appendOnce(rs.byID[k.name], int32(i))
+			case keyClass:
+				rs.byClass[k.name] = appendOnce(rs.byClass[k.name], int32(i))
+			default:
+				rs.byName[k.name] = appendOnce(rs.byName[k.name], int32(i))
+			}
 		}
 	}
 	return rs
+}
+
+// appendOnce files a rule under a key it may already be filed under, by
+// another of its selectors: "p, p.x" is two selectors and one rule.
+func appendOnce(list []int32, i int32) []int32 {
+	if n := len(list); n > 0 && list[n-1] == i {
+		return list
+	}
+	return append(list, i)
 }
 
 // forEach calls fn for every rule that could select the element, in no
@@ -1935,55 +2000,101 @@ func newRuleSet(rules []preparedRule) *ruleSet {
 // its own order number, and beats decides between two candidates from that
 // rather than from the sequence they were collected in.
 func (rs *ruleSet) forEach(n *html.Node, fn func(r *preparedRule) bool) {
-	name := asciiLowerName(n.Name)
-	if name == "" {
-		// A name this cannot fold, which is a name no HTML element has. Every
-		// rule is considered rather than guessed about.
-		for i := range rs.rules {
-			if !fn(&rs.rules[i]) {
-				return
-			}
-		}
-		return
-	}
-	for _, i := range rs.any {
-		if !fn(&rs.rules[i]) {
-			return
-		}
-	}
-	for _, i := range rs.byName[name] {
+	for _, i := range rs.candidates(n) {
 		if !fn(&rs.rules[i]) {
 			return
 		}
 	}
 }
 
-// subjectsOf collects the element names a selector list can select, or nothing
-// when it can select anything.
+// candidates is the rules forEach walks for an element, each once.
+func (rs *ruleSet) candidates(n *html.Node) []int32 {
+	if n == rs.lastNode && n != nil {
+		return rs.last
+	}
+	rs.stamp++
+	if rs.stamp == 0 {
+		// Wrapped, after four billion elements: start the marks again rather
+		// than let an old one read as this element's.
+		clear(rs.seen)
+		rs.stamp = 1
+	}
+	out := make([]int32, 0, len(rs.last))
+	add := func(list []int32) {
+		for _, i := range list {
+			if rs.seen[i] != rs.stamp {
+				rs.seen[i] = rs.stamp
+				out = append(out, i)
+			}
+		}
+	}
+	name := asciiLowerName(n.Name)
+	if name == "" {
+		// A name this cannot fold, which is a name no HTML element has. Every
+		// rule is considered rather than guessed about.
+		for i := range rs.rules {
+			out = append(out, int32(i))
+		}
+	} else {
+		add(rs.any)
+		add(rs.byName[name])
+		if len(rs.byID) > 0 {
+			if id, ok := n.Attr("id"); ok {
+				add(rs.byID[id])
+			}
+		}
+		if len(rs.byClass) > 0 {
+			if class, ok := n.Attr("class"); ok {
+				for _, c := range asciiFields(class) {
+					add(rs.byClass[c])
+				}
+			}
+		}
+	}
+	rs.lastNode, rs.last = n, out
+	return out
+}
+
+// keysOf chooses, for each selector of a list, one thing an element must carry
+// to be selected by it, or answers nothing when some selector needs none.
 //
-// A selector whose subject names no type can select anything, and so can one
-// whose type this cannot fold. The matcher compares a type with
+// The subject compound is what an element must satisfy, and of what it names
+// the rarest is the best key: an id before a class before a name. Any of them
+// is correct — the element has to carry all of them — and the choice is only
+// about how short the list it lands in is. The id and class are compared
+// exactly, as the matcher compares them (see hasClass).
+//
+// A selector whose subject names none of the three can select anything, and so
+// can one whose type this cannot fold. The matcher compares a type with
 // strings.EqualFold, which is Unicode's folding rather than ASCII's, and the two
 // differ on characters no element name has — but "differ only on characters
 // nobody uses" is not an argument for an index that decides whether a rule is
 // looked at. A type with a byte above ASCII is filed under nothing and so is
 // walked for every element, exactly as before.
-func subjectsOf(sels []css.Selector) []string {
-	names := make([]string, 0, len(sels))
+func keysOf(sels []css.Selector) []ruleKey {
+	keys := make([]ruleKey, 0, len(sels))
 	for _, sel := range sels {
 		if len(sel.Compounds) == 0 {
 			return nil
 		}
-		name := asciiLowerName(sel.Compounds[len(sel.Compounds)-1].Type)
-		if name == "" {
-			return nil
+		c := sel.Compounds[len(sel.Compounds)-1]
+		switch {
+		case len(c.IDs) > 0:
+			keys = append(keys, ruleKey{keyID, c.IDs[0]})
+		case len(c.Classes) > 0:
+			keys = append(keys, ruleKey{keyClass, c.Classes[0]})
+		default:
+			name := asciiLowerName(c.Type)
+			if name == "" {
+				return nil
+			}
+			keys = append(keys, ruleKey{keyName, name})
 		}
-		names = append(names, name)
 	}
-	if len(names) == 0 {
+	if len(keys) == 0 {
 		return nil
 	}
-	return names
+	return keys
 }
 
 // asciiLowerName lower-cases an element or type name, or answers empty for one
@@ -2014,6 +2125,16 @@ func asciiLowerName(s string) string {
 	return string(lower)
 }
 
+// matchSpecificityFor reports whether a rule applies to an element, and with what
+// specificity.
+//
+// The two answers come together because they are one walk: asking "does it
+// match" and then "how specific" would match every selector of every rule twice,
+// for every element in the document.
+//
+// The specificity is that of the most specific selector that *matched*, not the
+// most specific in the list. "a, #b {…}" applies to an <a> with the specificity
+// of "a"; taking "#b" would let the rule beat declarations it should lose to.
 func (s *Styler) matchSpecificityFor(r *preparedRule, n *html.Node, pseudo string) (css.Specificity, bool) {
 	var best css.Specificity
 	found := false
@@ -2024,7 +2145,7 @@ func (s *Styler) matchSpecificityFor(r *preparedRule, n *html.Node, pseudo strin
 		if sel.PseudoElement != pseudo {
 			continue
 		}
-		if !s.matcher.Match(sel, n) {
+		if !s.matchRule(r, sel, n) {
 			continue
 		}
 		if !found || best.Less(sel.Specificity) {
@@ -2032,6 +2153,150 @@ func (s *Styler) matchSpecificityFor(r *preparedRule, n *html.Node, pseudo strin
 		}
 	}
 	return best, found
+}
+
+// The work one rule may spend on matching over a whole document: a base, and so
+// much more for every try — every time one of its selectors is matched against
+// an element.
+//
+// Per try because that is the work a rule is *meant* to cost: an
+// ordinary rule is tried on many elements, and a hundred thousand of them should
+// not switch off a rule that is cheap on each. The base is what lets a rule
+// afford an expensive match or two on a short document — six at the per-match
+// bound.
+//
+// Real selectors settle in tens of steps (see maxMatchSteps), and a descendant
+// search is at most one walk of the ancestors per compound (see matchResult) —
+// and the html package nests no deeper than 256 — so 256 a try on average is a
+// long way from anything a stylesheet does on purpose. What reaches it is a rule
+// whose matches run to the per-match bound, which is ten thousand steps: the
+// audit's one kilobyte of such rules against thirty of markup spent 33 seconds
+// on them.
+const (
+	ruleBaseSteps   = 1 << 16
+	ruleStepsPerTry = 256
+)
+
+// matchBudget is the bound on matching work for a document, kept per rule.
+//
+// The bound per match (maxMatchSteps) stops one match running away and bounds
+// nothing else: it is ten thousand steps for every pair of rule and element, and
+// the pairs are the product of the stylesheet and the document. So each rule
+// also has an allowance for the document, ruleBaseSteps and ruleStepsPerTry for
+// every element it is tried against, and a rule that has spent more is switched
+// off for the rest of the document and reported. The per-match bound becomes
+// the early exit it always was, and the average is what is bounded: a rule may
+// be expensive on a few elements and not on all of them.
+//
+// Per rule, and not one allowance for everything, because the bound has to land
+// on what caused it. A single flag for the document is what the budget used to
+// be, and one deep selector on one paragraph then turned matching off for every
+// later rule and element, so the page was styled by whatever happened to come
+// first. Scoped to the rule, a pathological selector costs the document that
+// selector and nothing else. The total is the sum of the allowances: the rules
+// times the base, and ruleStepsPerTry for every pair of rule and element that
+// is tried at all — which the rule index keeps to the pairs that could match.
+type matchBudget struct {
+	// styled counts the elements styled so far, for saying where a rule was
+	// switched off.
+	styled int
+	rules  []ruleWork
+}
+
+// ruleWork is one rule's account.
+type ruleWork struct {
+	spent int
+	// tries counts the times one of the rule's selectors was matched against an
+	// element, which is what its allowance grows with.
+	tries int
+	// trips counts matches of this rule that ran out of the per-match budget.
+	trips int
+	// off says the rule has spent its allowance, and offAt how many elements
+	// had been styled when it did.
+	off   bool
+	offAt int
+}
+
+// allowance is what a rule tried against so many elements may spend.
+func allowance(tries int) int { return ruleBaseSteps + ruleStepsPerTry*tries }
+
+// matchRule matches one selector of a rule against an element, and charges
+// what it cost to the rule.
+//
+// A rule that has spent its allowance is not matched at all. Its "no" is not
+// an answer about the element, which is why switching it off is reported: see
+// reportMatchBudget.
+func (s *Styler) matchRule(r *preparedRule, sel css.Selector, n *html.Node) bool {
+	b := s.budget
+	if b == nil || int(r.index) >= len(b.rules) {
+		return s.matcher.Match(sel, n)
+	}
+	w := &b.rules[r.index]
+	if w.off {
+		return false
+	}
+	got := s.matcher.Match(sel, n)
+	steps, trips := s.matcher.takeWork()
+	w.spent += steps
+	w.tries++
+	w.trips += trips
+	if w.spent > allowance(w.tries) {
+		w.off, w.offAt = true, b.styled
+	}
+	return got
+}
+
+// reportMatchBudget says which rules the matching budget cut short, one finding
+// per rule, at the rule.
+//
+// Two ways: a rule that ran out of the per-match budget on some elements may be
+// missing from them, and a rule switched off is missing from every element after
+// the point it was. Both say what was not done, and both are about the rule an
+// author can go and look at rather than about the document as a whole.
+func (s *Styler) reportMatchBudget(rules *ruleSet) bool {
+	b := s.budget
+	if b == nil {
+		return false
+	}
+	cut := false
+	for i := range b.rules {
+		w := &b.rules[i]
+		if !w.off && w.trips == 0 {
+			continue
+		}
+		cut = true
+		r := &rules.rules[i]
+		f := Finding{Offset: r.offset, Sheet: r.sheet}
+		if w.off {
+			f.Message = "matching this rule's selector cost more than this engine allows " +
+				"(" + strconv.Itoa(w.spent) + " steps on " + strconv.Itoa(w.tries) +
+				" elements, against " + strconv.Itoa(allowance(w.tries)) + "), so it was not " +
+				"tried against any element after the " + ordinal(w.offAt) +
+				"; elements after that which it selects are not styled by it"
+		} else {
+			f.Message = "matching this rule's selector against an element ran past the " +
+				"bound on the work one match may take, " + strconv.Itoa(w.trips) +
+				" times; it may be missing from elements it selects"
+		}
+		s.report(f)
+	}
+	return cut
+}
+
+// ordinal is n with its English suffix: 1st, 2nd, 3rd, 11th.
+func ordinal(n int) string {
+	suffix := "th"
+	if n%100 < 11 || n%100 > 13 {
+		switch n % 10 {
+		case 1:
+			suffix = "st"
+		case 2:
+			suffix = "nd"
+		case 3:
+			suffix = "rd"
+		}
+	}
+	return strconv.Itoa(n) + suffix
 }
 
 // beats reports whether a wins over b, by CSS Cascade Level 4 §6.

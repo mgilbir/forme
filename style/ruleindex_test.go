@@ -42,12 +42,20 @@ const indexSheet = `
 	SPAN { line-height: 2 }
 	td + td { width: 1px }
 	tr ~ tr { height: 1px }
+	.d { margin-left: 1px }
+	p.c.d { margin-right: 1px }
+	#x.c { padding-left: 1px }
+	.C { padding-right: 1px }
+	li.e, #y { word-spacing: 1px }
+	.e > .d, .d ~ .e { letter-spacing: 1px }
+	#y::after { content: "c" }
 `
 
 const indexDoc = `<!DOCTYPE html><html><body>
 <div id="x" class="c"><p data-k="v">one<span hidden>two</span></p></div>
 <div><p class="c">three</p></div>
-<ul><li>a</li><li>b</li></ul>
+<ul><li>a</li><li>b</li><li class="	e  d">c<b class="d">d</b></li><li class="d C" id="y">e</li></ul>
+<p class="d c">five</p>
 <table><tr><td>1</td><td>2</td></tr><tr><td>3</td></tr></table>
 <P>four</P>
 </body></html>`
@@ -139,21 +147,36 @@ func TestTheIndexIsWorthHaving(t *testing.T) {
 // uses" is not an argument for an index that decides whether a rule is looked
 // at. Such a type is filed under nothing and walked for everything.
 func TestANameTheIndexCannotFoldIsNotIndexed(t *testing.T) {
-	if got := subjectsOf(selectorsOf(t, "p, div")); len(got) != 2 {
-		t.Errorf("subjectsOf(p, div) = %v, want two names", got)
+	if got := keysOf(selectorsOf(t, "p, div")); len(got) != 2 {
+		t.Errorf("keysOf(p, div) = %v, want two names", got)
 	}
-	if got := subjectsOf(selectorsOf(t, "p, .c")); got != nil {
-		t.Errorf("subjectsOf(p, .c) = %v; a selector with no type can select "+
+	// A selector that needs neither an id, a class nor a name can select
+	// anything, so the rule is not indexed.
+	if got := keysOf(selectorsOf(t, "p, [hidden]")); got != nil {
+		t.Errorf("keysOf(p, [hidden]) = %v; the second selector can select "+
 			"anything, so the rule is not indexed", got)
 	}
 	// A type with a byte above ASCII.
-	if got := subjectsOf(selectorsOf(t, "élément")); got != nil {
-		t.Errorf("subjectsOf(élément) = %v; the fold is ASCII's and this name "+
+	if got := keysOf(selectorsOf(t, "élément")); got != nil {
+		t.Errorf("keysOf(élément) = %v; the fold is ASCII's and this name "+
 			"is not, so the rule goes to the matcher as it always did", got)
 	}
 	// And the case fold itself, which is what makes "<P>" reach "p { }".
-	if got := subjectsOf(selectorsOf(t, "P")); len(got) != 1 || got[0] != "p" {
-		t.Errorf("subjectsOf(P) = %v, want [p]", got)
+	if got := keysOf(selectorsOf(t, "P")); len(got) != 1 || got[0] != (ruleKey{keyName, "p"}) {
+		t.Errorf("keysOf(P) = %v, want the name p", got)
+	}
+	// An id or a class is the key where the subject has one — before its name,
+	// which many more elements share — and it is compared exactly, as the
+	// matcher compares it.
+	for src, want := range map[string]ruleKey{
+		"p.c":            {keyClass, "c"},
+		"div#x.c":        {keyID, "x"},
+		".Big":           {keyClass, "Big"},
+		"a > .c::before": {keyClass, "c"},
+	} {
+		if got := keysOf(selectorsOf(t, src)); len(got) != 1 || got[0] != want {
+			t.Errorf("keysOf(%s) = %v, want %v", src, got, want)
+		}
 	}
 }
 
