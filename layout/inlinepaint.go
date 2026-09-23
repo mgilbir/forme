@@ -54,13 +54,12 @@ import (
 // is in — see painter.outlines, which reads outline-style, outline-width and
 // outline-color the way the border painting reads theirs. §8.6's slicing is not
 // applied to it: CSS 2.1 §18.4 says that "in contrast to borders, the outline is
-// not open at the line box's end or start", so each fragment gets a whole ring.
+// not open at the line box's end or start", so no piece's ring is left open.
 // For a box broken across lines, CSS UI 4 §5 says the outline should be one
-// outline, or a minimum set of outlines, enclosing all of the box's pieces. A
-// ring round each piece is a set that encloses them, though not the smallest
-// where two pieces touch: there a browser that joins them draws one shape and
-// this draws two rings that cross. It is a "should", and a piece-by-piece ring
-// is what the rest of this file's slice model gives for nothing.
+// outline, or a minimum set of outlines, enclosing all of the box's pieces, so
+// where two pieces' rings meet they are drawn as the one shape round both —
+// see painter.joinedOutline — and where they do not each piece keeps its own
+// ring.
 
 // maxInlineDecorations bounds how many of these fragments one document may
 // produce.

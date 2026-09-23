@@ -344,6 +344,7 @@ func PaintReporting(root *Fragment, rec *Recorder) []Op {
 	}
 	p := &painter{colors: map[string]style.RGBA{}, rec: rec}
 	p.dimming(root, 1, nil)
+	p.findInlineLevels(root)
 	p.canvasBackground(root)
 	p.stackingContext(root)
 	p.settleGroups()
@@ -696,21 +697,38 @@ type painter struct {
 	elementGroups map[groupKey]*Box
 	// inlineDims memoizes inlineDim, per inline box.
 	inlineDims map[*Box]memoDim
+
+	// levels is the inline level of each element that has one, innerLevels
+	// memoizes innerLevelOf per box, and lineLevels is, per block, the
+	// outermost levels on its lines. See inlinestacking.go.
+	levels      map[levelKey]*inlineLevel
+	innerLevels map[*Box]*inlineLevel
+	lineLevels  map[*Fragment][]*inlineLevel
+	// orderPrefixes memoizes orderPrefix, per box.
+	orderPrefixes map[*Box][]orderStep
+	// joinRefused says the work budget refused the joining of an inline box's
+	// outline pieces once, so every outline after it is drawn a ring per
+	// piece rather than some joined and some not. See joinedOutline.
+	joinRefused bool
 }
 
 // stackLevel is one positioned box waiting to be painted, with what decides
 // where in the order it goes.
 type stackLevel struct {
-	frag *Fragment
+	// frag is the box, or level the inline box, whichever this entry is: a
+	// non-atomic inline box has no fragment to be sorted by, and is sorted as
+	// the level that holds what it paints. See inlinestacking.go.
+	frag  *Fragment
+	level *inlineLevel
 	// z is the z-index, with auto counted as zero. §E.2 step 7 paints
 	// "z-index: auto" and "z-index: 0" together in tree order, so for the
 	// purpose of *ordering* the two really are the same number — they differ
 	// only in whether the box becomes a context of its own, which is asked
 	// separately.
 	z int
-	// order is the box's index in document order, which is what breaks a tie
-	// between equal z-indexes.
-	order int
+	// key is the box's position in order-modified document order, which is
+	// what breaks a tie between equal z-indexes. See orderKey.
+	key []orderStep
 }
 
 // layers is what one stacking context's subtree contributes, split into
@@ -744,6 +762,9 @@ type layers struct {
 	// positioned are §E.2 steps 3, 7 and 8, which are one list sorted by z rather
 	// than three: the steps differ only in the sign of the number.
 	positioned []stackLevel
+	// levels is the inline levels already in positioned, since a level is met
+	// once for each block its marks are on and each fragment it holds.
+	levels map[*inlineLevel]bool
 }
 
 // contentItem is one entry of the content layer: either a fragment whose lines
@@ -757,6 +778,11 @@ type contentItem struct {
 	// are written about: a later sibling block's background is painted *under*
 	// an inline-block that overlaps it, not over it.
 	atomic bool
+	// scope, when it is set, makes the entry the marks on frag's lines that
+	// are that inline level's own, and nothing else of frag. See
+	// inlinestacking.go. marks are those marks, which the pre-pass listed.
+	scope *inlineLevel
+	marks []lineMark
 }
 
 // atomicInline reports whether a fragment is an inline-level box that §E.2
@@ -828,6 +854,10 @@ func (p *painter) stackingContext(f *Fragment) {
 // painted as a unit and its positioned descendants have already been hoisted
 // into the enclosing context by gather.
 func (p *painter) stackLevel(s stackLevel) {
+	if s.level != nil {
+		p.paintLevel(s.level)
+		return
+	}
 	if !sealsItsDescendants(s.frag.Box) {
 		p.unit(s.frag)
 		return
@@ -906,16 +936,21 @@ func usedZIndex(b *Box) (z int, auto bool) {
 
 // stacksAsLevel reports whether a box is painted among the stacking levels of
 // §E.2 steps 3, 7 and 8 rather than in the layer its display would put it in:
-// every positioned box, every stacking context, and a block that §9.2.1.1
-// lifted out of a positioned inline.
+// every positioned box and every stacking context.
 //
 // A stacking context that is not positioned is one of two things this engine
 // implements: a box with an opacity below one, which CSS Color 4 paints
 // at the stacking order a positioned element with "z-index: 0" would have, and
 // a flex or grid item with a z-index. The first stacks at zero whatever its z-index says, because z-index
 // does not apply to it; the second stacks at its number.
+//
+// It is asked of a box, and a non-atomic inline box is one too: what such a
+// box paints is gathered into an inline level and sorted as one entry. A block
+// §9.2.1.1 lifted out of one is not a level of its own on that account; it is
+// part of the inline's level, which is how it comes to be painted where the
+// inline is. See inlinestacking.go.
 func stacksAsLevel(b *Box) bool {
-	if b.Position.positioned() || stacksWithASplitInline(b) != nil || groupsItsPaint(b) {
+	if b.Position.positioned() || groupsItsPaint(b) {
 		return true
 	}
 	_, auto := usedZIndex(b)
@@ -990,80 +1025,121 @@ func (p *painter) gather(f *Fragment, lv *layers, root, collect bool) {
 	if len(f.Lines) > 0 || f.Marker != nil || f.Box.Replaced != nil {
 		lv.content = append(lv.content, contentItem{frag: f})
 	}
+	if collect {
+		// The inline levels on f's lines: a positioned or translucent span is
+		// painted at its level in this context, not with f's text.
+		for _, l := range p.lineLevels[f] {
+			p.addLevel(lv, l)
+		}
+	}
 	for _, c := range f.Children {
 		if c.Box == nil {
 			continue
 		}
-		if stacksAsLevel(c.Box) {
-			if !collect {
-				// Already hoisted; painting it here as well would draw it twice.
-				continue
-			}
-			lv.positioned = append(lv.positioned, stackLevel{
-				frag: c, z: levelOf(c), order: c.Box.Order,
-			})
-			if !sealsItsDescendants(c.Box) {
-				// Not a stacking context, so the positioned boxes inside it
-				// belong to this one. Without this hoist a "z-index: 5" inside a
-				// plain "position: relative" wrapper would be trapped under
-				// everything the wrapper is under, which is the bug that makes
-				// authors write z-indexes in the thousands.
-				p.hoist(c, lv)
-			}
-			continue
-		}
-		if c.Box.Float != FloatNone {
-			lv.floats = append(lv.floats, c)
-			if collect {
-				// A float is atomic for its own content and transparent for its
-				// positioned descendants: §E.2 step 5 says so in as many words,
-				// and it is what stops a float trapping a positioned box behind
-				// the text of the paragraph beside it.
-				p.hoist(c, lv)
-			}
-			continue
-		}
-		if paintsAtomically(c) {
-			// §E.2's step 4 is over the "non-inline-level" descendants, so an
-			// inline-block's background and border are not there: they belong
-			// with the line the box sits on, and the box is painted whole and in
-			// tree order among the words. A flex or grid item is painted the
-			// same way, by the flexbox and grid specifications' own sentence. It
-			// is transparent for its positioned descendants for the same reason
-			// a float is — they are hoisted into the enclosing context rather
-			// than sealed inside a box that never became a stacking context.
-			lv.content = append(lv.content, contentItem{frag: c, atomic: true})
-			if collect {
-				p.hoist(c, lv)
-			}
-			continue
-		}
-		p.gather(c, lv, false, collect)
+		p.gatherChild(c, lv, collect)
 	}
+}
+
+// gatherChild sorts one child of a gathered fragment into the layers.
+func (p *painter) gatherChild(c *Fragment, lv *layers, collect bool) {
+	if l := p.levelHolding(c); l != nil {
+		// Written inside an inline level, or lifted out of one, so the level
+		// paints it wherever the level is painted. What this context sorts is
+		// the outermost level around it.
+		if collect {
+			p.addLevel(lv, l.top)
+		}
+		return
+	}
+	p.gatherOwn(c, lv, collect)
+}
+
+// gatherOwn sorts a fragment into the layers of the context or level that
+// paints it.
+func (p *painter) gatherOwn(c *Fragment, lv *layers, collect bool) {
+	if stacksAsLevel(c.Box) {
+		if !collect {
+			// Already hoisted; painting it here as well would draw it twice.
+			return
+		}
+		z, _ := usedZIndex(c.Box)
+		lv.positioned = append(lv.positioned, stackLevel{
+			frag: c, z: z, key: p.orderKey(c.Box),
+		})
+		if !sealsItsDescendants(c.Box) {
+			// Not a stacking context, so the positioned boxes inside it
+			// belong to this one. Without this hoist a "z-index: 5" inside a
+			// plain "position: relative" wrapper would be trapped under
+			// everything the wrapper is under, which is the bug that makes
+			// authors write z-indexes in the thousands.
+			p.hoist(c, lv)
+		}
+		return
+	}
+	if c.Box.Float != FloatNone {
+		lv.floats = append(lv.floats, c)
+		if collect {
+			// A float is atomic for its own content and transparent for its
+			// positioned descendants: §E.2 step 5 says so in as many words,
+			// and it is what stops a float trapping a positioned box behind
+			// the text of the paragraph beside it.
+			p.hoist(c, lv)
+		}
+		return
+	}
+	if paintsAtomically(c) {
+		// §E.2's step 4 is over the "non-inline-level" descendants, so an
+		// inline-block's background and border are not there: they belong
+		// with the line the box sits on, and the box is painted whole and in
+		// tree order among the words. A flex or grid item is painted the
+		// same way, by the flexbox and grid specifications' own sentence. It
+		// is transparent for its positioned descendants for the same reason
+		// a float is — they are hoisted into the enclosing context rather
+		// than sealed inside a box that never became a stacking context.
+		lv.content = append(lv.content, contentItem{frag: c, atomic: true})
+		if collect {
+			p.hoist(c, lv)
+		}
+		return
+	}
+	p.gather(c, lv, false, collect)
 }
 
 // contentItem paints one entry of the content layer.
 func (p *painter) contentItem(it contentItem) {
-	if it.atomic {
+	switch {
+	case it.atomic:
 		p.unit(it.frag)
-		return
+	case it.scope != nil:
+		p.levelMarks(it.frag, it.marks, it.scope)
+	default:
+		p.content(it.frag)
 	}
-	p.content(it.frag)
 }
 
 // hoist finds the positioned boxes inside a subtree that is painted as a unit,
-// so that they take their place in the enclosing stacking context instead.
+// so that they take their place in the enclosing stacking context instead: the
+// fragments, and the inline levels on the lines of f and of everything under
+// it.
 func (p *painter) hoist(f *Fragment, lv *layers) {
+	for _, l := range p.lineLevels[f] {
+		p.addLevel(lv, l)
+	}
 	for _, c := range f.Children {
 		if c.Box == nil {
 			continue
 		}
-		// The same test gather makes, and for the same reason: a box gather
+		// The same tests gather makes, and for the same reason: a box gather
 		// will skip as "already hoisted" has to actually be hoisted here, or it
 		// is painted nowhere at all.
+		if l := p.levelHolding(c); l != nil {
+			p.addLevel(lv, l.top)
+			continue
+		}
 		if stacksAsLevel(c.Box) {
+			z, _ := usedZIndex(c.Box)
 			lv.positioned = append(lv.positioned, stackLevel{
-				frag: c, z: levelOf(c), order: c.Box.Order,
+				frag: c, z: z, key: p.orderKey(c.Box),
 			})
 			if !sealsItsDescendants(c.Box) {
 				p.hoist(c, lv)
@@ -1074,56 +1150,22 @@ func (p *painter) hoist(f *Fragment, lv *layers) {
 	}
 }
 
-// levelOf is a box's stacking level: its z-index, with auto counted as zero for
-// ordering. See stackLevel.z.
-func levelOf(f *Fragment) int {
-	if from := stacksWithASplitInline(f.Box); from != nil {
-		// The block was broken out of a positioned inline, so it is painted
-		// where that inline is painted rather than with the blocks of the
-		// context around it. See stacksWithASplitInline.
-		z, _ := usedZIndex(from)
-		return z
-	}
-	z, _ := usedZIndex(f.Box)
-	return z
-}
-
-// stacksWithASplitInline returns the positioned inline a block was broken out
-// of, if there is one, and nil otherwise.
-//
-// §9.2.1.1 makes the block a sibling of the inline's two halves, so nothing in
-// the box tree says it is inside a positioned box any more — but it still is,
-// and §E.2 paints it where the inline is painted. Without this a block inside a
-// "position: relative; z-index: 2" span is painted in step 4, behind everything
-// positioned, so the span's z-index moves the words of the span and leaves the
-// block it contains underneath a box it was meant to cover.
-//
-// The innermost is the one that decides, for the same reason the innermost
-// positioned ancestor decides for any other box: an inner span's z-index is
-// resolved against the context its outer span makes, and the outer one is
-// already accounted for by the outer span's own place in the stack.
-func stacksWithASplitInline(b *Box) *Box {
-	for i := len(b.splitFrom) - 1; i >= 0; i-- {
-		if b.splitFrom[i].Position.positioned() {
-			return b.splitFrom[i]
-		}
-	}
-	return nil
-}
-
 // sortLevels orders the positioned boxes by z-index and then by tree order.
 //
 // Ascending, so the most negative is painted first and the largest last, which
 // is the whole of what a z-index means. The tie-break is tree order and not
 // something arbitrary: two boxes at the same level are stacked back to front in
 // the order they were written, which is the rule that makes overlapping cards in
-// a list read correctly without any of them naming a number.
+// a list read correctly without any of them naming a number. It is the order
+// the flex and grid containers above them lay their items out in, which is the
+// order they were written in wherever none of them says otherwise: see
+// orderKey.
 func sortLevels(levels []stackLevel) {
 	sort.SliceStable(levels, func(i, j int) bool {
 		if levels[i].z != levels[j].z {
 			return levels[i].z < levels[j].z
 		}
-		return levels[i].order < levels[j].order
+		return compareOrder(levels[i].key, levels[j].key) < 0
 	})
 }
 
@@ -1588,7 +1630,9 @@ func (p *painter) borders(f *Fragment) {
 // descendant that opens a context of its own, whose outlines are its own
 // step 10. It is the same test the gather makes; a separate reading of which
 // boxes seal was how the outline pass came to walk a different tree from the
-// paint (audit C95, C96).
+// paint (audit C95, C96). An inline level that seals is such a context too,
+// and so are the pieces of its inline boxes and what it holds: see
+// levelOutlines.
 //
 // Each ring is clipped by what clips its box. For a fragment that is clipSelf,
 // which is every clip its containing block chain passes to it with its own
@@ -1598,107 +1642,266 @@ func (p *painter) borders(f *Fragment) {
 // inline box's fragment it is the content clip of the block whose line it is
 // on, which is what cuts the box's background and its words.
 func (p *painter) outlines(root *Fragment) {
-	var walk func(f *Fragment)
-	walk = func(f *Fragment) {
-		if f.Box == nil {
-			return
-		}
-		p.grouped(f, func() { p.clipping(f.clipSelf, func() { p.outline(f) }) })
-		for _, line := range f.Lines {
-			for _, box := range line.Boxes {
-				p.grouped(box, func() { p.clipping(f.clipContent, func() { p.outline(box) }) })
-			}
-		}
-		for _, c := range f.Children {
-			if c == nil || c.Box == nil || opensAContext(c) {
-				continue
-			}
-			walk(c)
-		}
-	}
 	if root != nil {
-		walk(root)
+		p.outlineWalk(root)
+	}
+}
+
+// outlineWalk outlines a fragment that is wholly inside the context being
+// outlined, and everything under it that is in the same context.
+func (p *painter) outlineWalk(f *Fragment) {
+	if f.Box == nil {
+		return
+	}
+	p.grouped(f, func() { p.clipping(f.clipSelf, func() { p.outline(f) }) })
+	p.lineOutlines(f, nil)
+	for _, c := range f.Children {
+		if c == nil || c.Box == nil || opensAContext(c) {
+			continue
+		}
+		if l := p.levelHolding(c); l != nil && (l.seals() || l.up != nil) {
+			// Held by an inline level whose context is not this one.
+			continue
+		}
+		p.outlineWalk(c)
+	}
+}
+
+// lineOutlines outlines the inline boxes on a block's lines whose outline
+// context is want: nil for the block's own context, or the sealing level being
+// outlined.
+//
+// The pieces of one inline box are outlined together, as one shape, where the
+// order they are met in is the order of the box's first piece. See
+// joinedOutline. Every piece of one box on one block's lines has the same
+// clip, which is the block's, and the same dimming, which is inlineDim's for
+// that box, so one grouped call covers them.
+func (p *painter) lineOutlines(f *Fragment, want *inlineLevel) {
+	var boxes []*Fragment
+	for _, line := range f.Lines {
+		boxes = append(boxes, line.Boxes...)
+	}
+	p.outlinePieces(f, boxes, want)
+}
+
+// outlinePieces outlines the inline box fragments of boxes, which are on f's
+// lines, whose outline context is want: each box's pieces as one, in the order
+// of each box's first piece.
+func (p *painter) outlinePieces(f *Fragment, boxes []*Fragment, want *inlineLevel) {
+	var order []*Box
+	var pieces map[*Box][]*Fragment
+	for _, box := range boxes {
+		if box == nil || box.Box == nil || box.Outline <= 0 ||
+			p.outlineContext(box.Box) != want {
+			continue
+		}
+		if pieces == nil {
+			pieces = map[*Box][]*Fragment{}
+		}
+		if _, seen := pieces[box.Box]; !seen {
+			order = append(order, box.Box)
+		}
+		pieces[box.Box] = append(pieces[box.Box], box)
+	}
+	for _, b := range order {
+		ps := pieces[b]
+		p.grouped(ps[0], func() { p.clipping(f.clipContent, func() { p.joinedOutline(ps) }) })
 	}
 }
 
 // outline paints one box's ring.
+func (p *painter) outline(f *Fragment) { p.joinedOutline([]*Fragment{f}) }
+
+// joinedOutline paints the outline of one box, given its fragments: one ring
+// for a box that is one rectangle, and one shape for an inline box broken
+// across lines.
 //
-// Four bands, like the border and for the same reason — a stroked path is
-// centred on itself and a CSS outline is not — but the arithmetic is the
-// simpler one: an outline has a single width, so the two horizontal bands run
-// the full width of the ring and the vertical ones fill what is between them.
+// A ring is four bands, like the border and for the same reason — a stroked
+// path is centred on itself and a CSS outline is not — but the arithmetic is
+// the simpler one: an outline has a single width, so the two horizontal bands
+// run the full width of the ring and the vertical ones fill what is between
+// them.
+//
+// # One outline for a box broken across lines
+//
+// CSS UI 4 §5:
+//
+//	Outlines may be non-rectangular. For example, if the element is broken
+//	across several lines, the outline should be an outline or minimum set of
+//	outlines that encloses all the element's boxes. Each part of the outline
+//	should be fully connected rather than open on some sides.
+//
+// A ring round each piece encloses them all, and where two pieces' rings do
+// not meet it is the minimum. Where they do — the pieces on two lines set
+// close enough that the outlines overlap, which at "line-height: normal" is
+// every line — the rings cross: each piece's ring runs through the inside of
+// the other. The shape that encloses the two is the union of the rings'
+// outer rectangles less the union of the pieces themselves, and that is what
+// is drawn: piece j's bands, less every earlier piece's outer rectangle (the
+// earlier piece painted that part already, or it is inside the earlier
+// piece) and every later piece's border box (it is inside that piece). Each
+// point of the union is painted by exactly one piece, the first whose outer
+// rectangle holds it, so a translucent outline is not darker where two meet.
+// Pieces whose rings do not meet are cut by nothing, and draw exactly the
+// rings they drew before.
+//
+// The cut is exact for a solid outline, which is a set of rectangles. For the
+// other styles each remaining part of a band is drawn as a band of its own,
+// with its own dashes, its own thirds of a double line and its own 3-D tones,
+// which is the nearest the display list's rectangles come to a styled
+// polygon: the pattern restarts where a band was cut.
 //
 // Every band is Overhang. The outline is by definition outside the box, so no
 // layout decision accounted for its position, and the overflow-page guardrail
 // must not read a two-pixel ring as a box leaving the paper.
-func (p *painter) outline(f *Fragment) {
-	w := f.Outline
-	if w <= 0 || f.Box == nil || isHidden(f.Box) {
+func (p *painter) joinedOutline(pieces []*Fragment) {
+	first := pieces[0]
+	w := first.Outline
+	if w <= 0 || first.Box == nil || isHidden(first.Box) {
 		return
 	}
-	colour, ok := p.color(f.Box, "outline-color")
+	colour, ok := p.color(first.Box, "outline-color")
 	if !ok || colour.A == 0 {
 		// "invert", or a colour that did not parse. The finding was raised in
 		// layout, where there was a recorder to raise it with.
 		return
 	}
-	kind := parseBorderStyle(f.Box.Style.Get("outline-style"))
-	r := f.BorderRect
-	outer := Rect{X: r.X.Sub(w), Y: r.Y.Sub(w), W: r.W.Add(w).Add(w), H: r.H.Add(w).Add(w)}
+	kind := parseBorderStyle(first.Box.Style.Get("outline-style"))
 
-	bands := [4]struct {
-		band Rect
-		side side
-	}{
-		{Rect{outer.X, outer.Y, outer.W, w}, sideTop},
-		{Rect{r.Right(), r.Y, w, r.H}, sideRight},
-		{Rect{outer.X, r.Bottom(), outer.W, w}, sideBottom},
-		{Rect{outer.X, r.Y, w, r.H}, sideLeft},
-	}
 	// paintEdge is the border's, and a border's fills are not Overhang because
 	// layout accounted for every one of them. These are marked afterwards rather
 	// than by threading a flag through paintEdge, paintDashes and paint3D — the
 	// flag would be a property of the caller pretending to be a property of the
 	// edge, and every border call site would have to pass false.
-	first := len(p.ops)
-	for _, b := range bands {
-		if b.band.Empty() {
-			continue
+	at := len(p.ops)
+	defer func() {
+		for i := at; i < len(p.ops); i++ {
+			if r, ok := p.ops[i].(FillRect); ok {
+				r.Overhang = true
+				p.ops[i] = r
+			}
 		}
-		p.paintEdge(b.band, kind, colour, b.side, w)
+	}()
+
+	n := len(pieces)
+	if n == 1 {
+		r := first.BorderRect
+		o := Rect{X: r.X.Sub(w), Y: r.Y.Sub(w), W: r.W.Add(w).Add(w), H: r.H.Add(w).Add(w)}
+		for _, band := range ringBands(o, r, w) {
+			p.paintEdge(band.band, kind, colour, band.side, w)
+		}
+		return
 	}
-	for i := first; i < len(p.ops); i++ {
-		if r, ok := p.ops[i].(FillRect); ok {
-			r.Overhang = true
-			p.ops[i] = r
+	inner := make([]Rect, n)
+	outer := make([]Rect, n)
+	var tallest style.Unit
+	for i, f := range pieces {
+		r := f.BorderRect
+		inner[i] = r
+		outer[i] = Rect{X: r.X.Sub(w), Y: r.Y.Sub(w), W: r.W.Add(w).Add(w), H: r.H.Add(w).Add(w)}
+		tallest = style.Max(tallest, outer[i].H)
+	}
+	// The pieces by the top of their outer rectangle, so that the ones that
+	// can meet piece j — whose tops lie within the tallest ring above j's
+	// bottom — are a window of this and not the whole list. Pieces on lines
+	// are met top to bottom, so this is almost always already sorted.
+	byTop := make([]int, n)
+	for i := range byTop {
+		byTop[i] = i
+	}
+	sort.SliceStable(byTop, func(a, b int) bool { return outer[byTop[a]].Y < outer[byTop[b]].Y })
+
+	for j := range pieces {
+		o, r := outer[j], inner[j]
+		from := sort.Search(n, func(k int) bool { return outer[byTop[k]].Y > o.Y.Sub(tallest) })
+		for _, band := range ringBands(o, r, w) {
+			parts := []Rect{band.band}
+			for k := from; k < n && outer[byTop[k]].Y < o.Bottom() && !p.joinRefused; k++ {
+				i := byTop[k]
+				if i == j {
+					continue
+				}
+				cut := inner[i]
+				if i < j {
+					cut = outer[i]
+				}
+				// What a join costs is a comparison per piece near this one
+				// per part of the band left, which a document controls: a box
+				// broken across a thousand lines set on top of one another is
+				// a thousand pieces each meeting every other. It is charged,
+				// and past what the budget pays for the rest of the page's
+				// outlines are drawn a ring per piece, as they were before
+				// they were joined. A comparison weighs what one mark read
+				// by an opacity group's overlap check weighs, which is the
+				// same work: a rectangle held against a rectangle.
+				if !p.rec.charge(int64(len(parts)+1)*costMarkCompared,
+					"the joining of outlines broken across lines past that point, drawn a ring per piece") {
+					p.joinRefused = true
+					parts = []Rect{band.band}
+					break
+				}
+				parts = cutRects(parts, cut)
+			}
+			for _, part := range parts {
+				p.paintEdge(part, kind, colour, band.side, w)
+			}
 		}
 	}
 }
 
-// lines paints the text of a block container.
+// ringBand is one of the four bands of an outline ring.
+type ringBand struct {
+	band Rect
+	side side
+}
+
+// ringBands is the ring of width w between a box's border edge r and the
+// outer rectangle o: the top and bottom bands the full width of o, and the
+// sides between them.
+func ringBands(o, r Rect, w style.Unit) [4]ringBand {
+	return [4]ringBand{
+		{Rect{o.X, o.Y, o.W, w}, sideTop},
+		{Rect{r.Right(), r.Y, w, r.H}, sideRight},
+		{Rect{o.X, r.Bottom(), o.W, w}, sideBottom},
+		{Rect{o.X, r.Y, w, r.H}, sideLeft},
+	}
+}
+
+// cutRects is rects with c taken out of each: what is above and below c the
+// width of the rectangle, and what is left and right of it between those.
+func cutRects(rects []Rect, c Rect) []Rect {
+	out := rects[:0:0]
+	for _, r := range rects {
+		if r.Intersect(c).Empty() {
+			out = append(out, r)
+			continue
+		}
+		top, bottom := style.Max(r.Y, c.Y), style.Min(r.Bottom(), c.Bottom())
+		for _, piece := range [4]Rect{
+			{r.X, r.Y, r.W, top.Sub(r.Y)},
+			{r.X, bottom, r.W, r.Bottom().Sub(bottom)},
+			{r.X, top, c.X.Sub(r.X), bottom.Sub(top)},
+			{c.Right(), top, r.Right().Sub(c.Right()), bottom.Sub(top)},
+		} {
+			if !piece.Empty() {
+				out = append(out, piece)
+			}
+		}
+	}
+	return out
+}
+
+// lines paints the text of a block container: the marks on its lines that are
+// the block's own. A mark inside a positioned or translucent inline box is
+// painted by that box's level, where the stacking context around it sorts the
+// level, and not here — see levelMarks and inlinestacking.go.
 func (p *painter) lines(f *Fragment) {
 	if len(f.Lines) == 0 {
 		return
 	}
-	content := f.ContentRect()
-	clip, around := f.clipContent, p.dimOf(f)
-	for _, line := range f.Lines {
-		// Where the baseline is, in whichever direction the line stacks its
-		// text across. On a horizontal line it is a distance down from the top
-		// of the line box; on a sideways one the line box has been turned with
-		// the rest of the block, and its block-start edge — the edge the
-		// baseline is measured from, and the edge half-leading is split above —
-		// is its right one.
-		baseline := content.Y.Add(line.Rect.Y).Add(line.Baseline)
-		switch {
-		case line.Anticlockwise:
-			// The other turn puts the glyphs' up to the left, so the ascent is
-			// on the left of the line box and the baseline is measured
-			// rightwards from its near edge rather than back from its far one.
-			baseline = content.X.Add(line.Rect.X).Add(line.Baseline)
-		case line.Sideways:
-			baseline = content.X.Add(line.Rect.X).Add(line.Rect.W).Sub(line.Baseline)
-		}
+	content, around := f.ContentRect(), p.dimOf(f)
+	for li := range f.Lines {
+		line := &f.Lines[li]
 		// §E.2's inline layer, in the order it gives: for each line box, the
 		// background and border of the inline boxes on it, then the text. They
 		// are in tree order among themselves, so an inner box's background is
@@ -1712,79 +1915,127 @@ func (p *painter) lines(f *Fragment) {
 		// decorations of a line first is what keeps this a loop rather than a
 		// second traversal of the tree.
 		for _, box := range line.Boxes {
-			p.inlineDecorations(box, clip)
-		}
-		for _, run := range line.Runs {
-			// Spaces are drawn, not skipped, and the reason is text extraction
-			// rather than ink. A space glyph marks no paper, so skipping it
-			// looks like a free optimisation — but then the words either side
-			// are separate text operations with only a position jump between
-			// them, and a reader copying the text gets them run together. That
-			// was found by reading back a rendered page: "A heading" came out
-			// as "Aheading".
-			//
-			// A preserved tab is the one character that cannot be drawn as
-			// itself. No face has a glyph for U+0009, so setting it emits
-			// .notdef — a box where white space should be, which is the tofu
-			// this engine has a whole guardrail about. Its advance is already
-			// spent: line breaking resolved it against the tab stops and gave
-			// the next run its position, so what is left to draw is white
-			// space, and a space is the character that draws it.
-			if isHidden(run.Box) {
-				// A run belongs to the inline box it came from, which may be
-				// visible inside a hidden block or hidden inside a visible one.
-				// Asking per run rather than per fragment is what makes
-				// "visibility: visible" on a <span> inside a hidden paragraph
-				// show that span and nothing else.
+			if box == nil || p.innerLevelOf(box.Box) != nil {
 				continue
 			}
-			colour, ok := p.color(run.Box, "color")
-			if !ok {
-				colour = style.RGBA{A: 1}
+			p.inlineDecorations(box, f.clipContent)
+		}
+		for ri := range line.Runs {
+			if p.innerLevelOf(line.Runs[ri].Box) != nil {
+				continue
 			}
-			// Where the run starts, from two offsets: how far along the line
-			// it is, and how far off the line's baseline it sits.
-			//
-			// The second is the run's own baseline: the line's, displaced by
-			// §10.8.1's vertical-align, and then by §9.4.3's relative
-			// positioning. The two are added rather than chosen between, and in
-			// that order — a raised <sup> that is also relatively positioned
-			// moves twice.
-			along := run.X.Add(run.Offset.X)
-			across := run.Shift.Add(run.Offset.Y)
-			at := Point{
-				X: content.X.Add(line.Rect.X).Add(along),
-				Y: baseline.Add(across),
-			}
-			switch {
-			case line.Anticlockwise:
-				// The same quarter turn the other way: along the line is *up*
-				// the page, so the offset is measured back from the line box's
-				// foot, and off the baseline is towards the right, because that
-				// is where "down" points once a page has been turned
-				// anticlockwise. See layout/writingmode.go.
-				at = Point{
-					X: baseline.Add(across),
-					Y: content.Y.Add(line.Rect.Y).Add(line.Rect.H).Sub(along),
-				}
-			case line.Sideways:
-				// The same two offsets, a quarter turn round: along the line is
-				// down the page, and off the baseline is back towards the left,
-				// because that is the way "up" points once a page has been
-				// turned clockwise. See layout/writingmode.go.
-				at = Point{
-					X: baseline.Sub(across),
-					Y: content.Y.Add(line.Rect.Y).Add(along),
-				}
-			}
-			// Each run is its own call, for the reason painter.as gives: what
-			// dims it is the block's opacity and every translucent inline box
-			// it is inside, and the next run on the line may be inside none.
-			p.as(p.inlineDim(run.Box, around), func() {
-				p.clipping(clip, func() { p.paintRun(run, at, colour, turnOfLine(line)) })
-			})
+			p.lineRun(f, content, around, line, ri)
 		}
 	}
+}
+
+// levelMarks paints the marks an inline level has on one block's lines,
+// which the pre-pass listed in the order lines meets them: line by line, the
+// inline boxes' decorations and then the runs. The level's own box is left
+// out, because it is the root of the level's stacking context and was painted
+// as its step 1.
+//
+// The marks are listed rather than found by a walk of the block's lines,
+// because a paragraph of a thousand relatively positioned words is a thousand
+// levels on one block, and a walk per level would be a million steps.
+func (p *painter) levelMarks(f *Fragment, marks []lineMark, l *inlineLevel) {
+	content, around := f.ContentRect(), p.dimOf(f)
+	for _, m := range marks {
+		line := &f.Lines[m.line]
+		if m.box >= 0 {
+			if box := line.Boxes[m.box]; !l.owns(box.Box) {
+				p.inlineDecorations(box, f.clipContent)
+			}
+			continue
+		}
+		p.lineRun(f, content, around, line, m.run)
+	}
+}
+
+// lineRun paints one run of a block's line. content is the block's content
+// box and around its own dimming, which every run on its lines starts from.
+func (p *painter) lineRun(f *Fragment, content Rect, around dim, line *LineFragment, ri int) {
+	run := line.Runs[ri]
+	// Where the baseline is, in whichever direction the line stacks its text
+	// across. On a horizontal line it is a distance down from the top of the
+	// line box; on a sideways one the line box has been turned with the rest
+	// of the block, and its block-start edge — the edge the baseline is
+	// measured from, and the edge half-leading is split above — is its right
+	// one.
+	baseline := content.Y.Add(line.Rect.Y).Add(line.Baseline)
+	switch {
+	case line.Anticlockwise:
+		// The other turn puts the glyphs' up to the left, so the ascent is on
+		// the left of the line box and the baseline is measured rightwards
+		// from its near edge rather than back from its far one.
+		baseline = content.X.Add(line.Rect.X).Add(line.Baseline)
+	case line.Sideways:
+		baseline = content.X.Add(line.Rect.X).Add(line.Rect.W).Sub(line.Baseline)
+	}
+	// Spaces are drawn, not skipped, and the reason is text extraction rather
+	// than ink. A space glyph marks no paper, so skipping it looks like a free
+	// optimisation — but then the words either side are separate text
+	// operations with only a position jump between them, and a reader copying
+	// the text gets them run together. That was found by reading back a
+	// rendered page: "A heading" came out as "Aheading".
+	//
+	// A preserved tab is the one character that cannot be drawn as itself. No
+	// face has a glyph for U+0009, so setting it emits .notdef — a box where
+	// white space should be, which is the tofu this engine has a whole
+	// guardrail about. Its advance is already spent: line breaking resolved it
+	// against the tab stops and gave the next run its position, so what is
+	// left to draw is white space, and a space is the character that draws it.
+	if isHidden(run.Box) {
+		// A run belongs to the inline box it came from, which may be visible
+		// inside a hidden block or hidden inside a visible one. Asking per run
+		// rather than per fragment is what makes "visibility: visible" on a
+		// <span> inside a hidden paragraph show that span and nothing else.
+		return
+	}
+	colour, ok := p.color(run.Box, "color")
+	if !ok {
+		colour = style.RGBA{A: 1}
+	}
+	// Where the run starts, from two offsets: how far along the line it is,
+	// and how far off the line's baseline it sits.
+	//
+	// The second is the run's own baseline: the line's, displaced by §10.8.1's
+	// vertical-align, and then by §9.4.3's relative positioning. The two are
+	// added rather than chosen between, and in that order — a raised <sup>
+	// that is also relatively positioned moves twice.
+	along := run.X.Add(run.Offset.X)
+	across := run.Shift.Add(run.Offset.Y)
+	at := Point{
+		X: content.X.Add(line.Rect.X).Add(along),
+		Y: baseline.Add(across),
+	}
+	switch {
+	case line.Anticlockwise:
+		// The same quarter turn the other way: along the line is *up* the
+		// page, so the offset is measured back from the line box's foot, and
+		// off the baseline is towards the right, because that is where "down"
+		// points once a page has been turned anticlockwise. See
+		// layout/writingmode.go.
+		at = Point{
+			X: baseline.Add(across),
+			Y: content.Y.Add(line.Rect.Y).Add(line.Rect.H).Sub(along),
+		}
+	case line.Sideways:
+		// The same two offsets, a quarter turn round: along the line is down
+		// the page, and off the baseline is back towards the left, because
+		// that is the way "up" points once a page has been turned clockwise.
+		// See layout/writingmode.go.
+		at = Point{
+			X: baseline.Sub(across),
+			Y: content.Y.Add(line.Rect.Y).Add(along),
+		}
+	}
+	// Each run is its own call, for the reason painter.as gives: what dims it
+	// is the block's opacity and every translucent inline box it is inside,
+	// and the next run on the line may be inside none.
+	p.as(p.inlineDim(run.Box, around), func() {
+		p.clipping(f.clipContent, func() { p.paintRun(run, at, colour, turnOfLine(*line)) })
+	})
 }
 
 // paintRun paints one run of text at its pen position, with the lines ruled

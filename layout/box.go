@@ -289,6 +289,10 @@ type Box struct {
 	// needs to sort it. Two overlapping cards written one after the other would
 	// otherwise stack in whichever order the placement pass happened to reach
 	// them, which is stable, invisible and wrong.
+	//
+	// Inside a flex or grid container the tie-break is order-modified document
+	// order, which the painter builds from this and the items' "order": see
+	// orderKey.
 	Order int
 
 	// noLeadInset and noTrailInset mark a piece of an inline box that was split

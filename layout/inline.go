@@ -120,26 +120,16 @@ import (
 // inlinepaint.go — and the offset reaches those the same way, recorded per box
 // as the walk accumulates it and folded into the position by absolutise.
 //
-// What is given up is the *stacking level*. §9.9 makes a positioned inline a
-// positioned box, painted at Appendix E step 7 with everything else positioned;
-// its runs are painted at step 6 with the rest of the block's text. The two
-// differ only where a relatively positioned inline's text overlaps a positioned
-// box that comes earlier in the document, or text and inline-level boxes of
-// step 6 that come later in it — which step 7 would put under the inline's
-// words and step 6 puts over them. Every other pair is ordered the same way by
-// both rules, because step 6 already comes after every block background and
-// every float and before every positioned box. Closing it would mean
-// splitting a line box's runs into stacking levels, which is a change to the
-// shape of a line rather than an addition to it.
-//
-// An inline box with an opacity below one is the same case from the other
-// side. CSS Color 4 makes it a stacking context at level zero — painted where a
-// positioned box with "z-index: 0" is — and its runs are still painted at step
-// 6. What it does to its content is applied in full: every run, inline fragment
-// and box written inside it is dimmed, as one group across all its lines (see
-// paint.go's dimming). What is given up is again only where in the order its
-// marks go, and a positioned or translucent box written inside it is sorted
-// into the context around the block rather than sealed inside the inline.
+// Nor does the offset decide where in the painting order the box goes: that is
+// its *stacking level*. §9.9 makes a positioned inline a positioned box,
+// painted at Appendix E's steps 3, 7 or 8 by its z-index, and CSS Color 4 paints
+// an inline box with an opacity below one where a "z-index: 0" box goes. A line
+// box is not split for it. Its runs and fragments stay on the line, and the
+// paint sorts them out again: inlinestacking.go gathers everything such a box
+// paints — the marks on its lines, what is written inside it, the blocks lifted
+// out of it — into one level, which the stacking context around it sorts like
+// any positioned box, and which seals what it contains when its z-index or its
+// opacity makes it a stacking context.
 
 // heldBox and heldFragment take back what an itemRef holds.
 //

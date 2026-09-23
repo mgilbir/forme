@@ -275,10 +275,10 @@ type absCandidate struct {
 	// This is a place in the tree and not a containing block, and it decides
 	// nothing about the geometry: where the box is resolved against is §10.1's
 	// answer and is usually somewhere else entirely, and the painting order
-	// among boxes at the same stacking level is keyed on document order rather
-	// than on where in the fragment tree they ended up. What hanging it
-	// somewhere buys is that the fragment tree stays a tree, so every consumer
-	// that walks it reaches the box.
+	// among boxes at the same stacking level is keyed on (order-modified)
+	// document order rather than on where in the fragment tree they ended up.
+	// What hanging it somewhere buys is that the fragment tree stays a tree, so
+	// every consumer that walks it reaches the box.
 	parent *Fragment
 	// staticX and staticY are the static position — where the box's margin box
 	// would have started had it been in the flow — relative to parent's content
