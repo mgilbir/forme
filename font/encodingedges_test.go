@@ -20,14 +20,14 @@ func TestTheSecondCodesForSpaceAndHyphenAreThere(t *testing.T) {
 		want  string
 		what  string
 	}{
-		{WinAnsiEncodingNames, 0xA0, "space", "WinAnsi's no-break space"},
-		{WinAnsiEncodingNames, 0xAD, "hyphen", "WinAnsi's soft hyphen"},
-		{MacRomanEncodingNames, 0xCA, "space", "MacRoman's no-break space"},
+		{winAnsiEncodingNames, 0xA0, "space", "WinAnsi's no-break space"},
+		{winAnsiEncodingNames, 0xAD, "hyphen", "WinAnsi's soft hyphen"},
+		{macRomanEncodingNames, 0xCA, "space", "MacRoman's no-break space"},
 
 		// The first codes, which were never in doubt.
-		{WinAnsiEncodingNames, 0x20, "space", "WinAnsi's ordinary space"},
-		{WinAnsiEncodingNames, 0x2D, "hyphen", "WinAnsi's ordinary hyphen"},
-		{MacRomanEncodingNames, 0x20, "space", "MacRoman's ordinary space"},
+		{winAnsiEncodingNames, 0x20, "space", "WinAnsi's ordinary space"},
+		{winAnsiEncodingNames, 0x2D, "hyphen", "WinAnsi's ordinary hyphen"},
+		{macRomanEncodingNames, 0x20, "space", "MacRoman's ordinary space"},
 	} {
 		if got := tc.table[tc.code]; got != tc.want {
 			t.Errorf("%s: code 0x%02X is %q, want %q", tc.what, tc.code, got, tc.want)

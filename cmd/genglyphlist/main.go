@@ -45,7 +45,7 @@ func main() {
 	// font can name without saying uniXXXX.
 	wanted := map[string]bool{}
 	for _, table := range []map[byte]string{
-		font.StandardEncodingNames, font.WinAnsiEncodingNames, font.MacRomanEncodingNames,
+		font.StandardEncodingNames(), font.WinAnsiEncodingNames(), font.MacRomanEncodingNames(),
 	} {
 		for _, name := range table {
 			wanted[name] = true

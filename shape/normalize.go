@@ -63,8 +63,10 @@ import "sort"
 //     already has one answer for a character it cannot draw — .notdef, counted as
 //     missing — which a caller can see and act on.
 //   - Variation selectors. A face that states a variant through cmap format 14
-//     is not asked; the selector is passed through as its own character, which is
-//     what this package did before.
+//     is not asked, and the base is drawn in its default form. The selector is
+//     default-ignorable, so it is taken out before the buffer is built, as
+//     ignorable.go says — kept only in a syllabic run, until the syllable model
+//     has read it — and nothing is drawn for it.
 //   - The mark reordering Arabic wants on top of canonical order: a hamza or a
 //     similar modifier written after a vowel is drawn before it, which canonical
 //     order does not say and every shaper does anyway. Measured against HarfBuzz

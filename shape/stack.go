@@ -159,6 +159,30 @@ func (s *Stack) ShapeRuns(text string) ([]Run, int) {
 		})
 		i = end
 	}
+	// A unit nothing is drawn for — a joiner, a variation selector — is set in
+	// the face of the text it is written in: the unit before it, or for the
+	// first of a string, the first unit after it that chose. Given a face of its
+	// own it cut the run there, and the letters either side of a zero width
+	// joiner were shaped apart and took their isolated forms — the opposite of
+	// what the joiner asks for.
+	chosen := -1
+	for k := range units {
+		if units[k].face != anyFace {
+			chosen = units[k].face
+			for j := k - 1; j >= 0 && units[j].face == anyFace; j-- {
+				units[j].face = chosen
+			}
+			continue
+		}
+		if chosen >= 0 {
+			units[k].face = chosen
+		}
+	}
+	if chosen < 0 {
+		for k := range units {
+			units[k].face = 0 // nothing in the string is drawn at all
+		}
+	}
 
 	var (
 		runs    []Run
@@ -205,6 +229,9 @@ func (s *Stack) ShapeRuns(text string) ([]Run, int) {
 	return visual, missing
 }
 
+// anyFace is faceFor's answer for a unit nothing is drawn for.
+const anyFace = -1
+
 // faceFor chooses the face for one base-plus-marks unit.
 //
 // A face that has the whole unit is preferred over one that has only the base,
@@ -213,11 +240,32 @@ func (s *Stack) ShapeRuns(text string) ([]Run, int) {
 // base decide, and if none has even that, the first face sets it — where it
 // becomes .notdef, which is a visible box rather than a silently dropped
 // character.
+//
+// "Has" is the question the shaper answers, not whether the face maps each
+// character. A character nothing is drawn for (hiddenAfterShaping) needs no
+// glyph, and a unit of nothing else is anyFace, for ShapeRuns to set with its
+// neighbours. A character the face draws as its canonical decomposition is one
+// it has: é in a face with e and the combining acute and no é was passed over
+// for a later face, which the shaper would not have done.
 func (s *Stack) faceFor(unitText string, base rune) int {
+	drawn := false
+	for _, r := range unitText {
+		if !hiddenAfterShaping(r) {
+			drawn = true
+			break
+		}
+	}
+	if !drawn {
+		return anyFace
+	}
+	var parts [4]rune
 	for i, f := range s.faces {
 		complete := true
 		for _, r := range unitText {
-			if _, ok := f.GlyphID(r); !ok {
+			if hiddenAfterShaping(r) {
+				continue
+			}
+			if _, ok := f.drawnAs(r, 0, parts[:0]); !ok {
 				complete = false
 				break
 			}
@@ -227,7 +275,7 @@ func (s *Stack) faceFor(unitText string, base rune) int {
 		}
 	}
 	for i, f := range s.faces {
-		if _, ok := f.GlyphID(base); ok {
+		if _, ok := f.drawnAs(base, 0, parts[:0]); ok {
 			return i
 		}
 	}

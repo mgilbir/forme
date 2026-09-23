@@ -10,7 +10,7 @@
 // The rest of shape reads the tables SFNTTables finds for itself — the layout
 // tables, gvar, the instancer's — with Be16 and Be32; the TrueType subsetter
 // takes MarkComposite for a composite glyph's components, and the CFF one's
-// seac closure CFFStandardSID, CFFSubrBias and StandardEncodingNames. A simple
+// seac closure CFFStandardSID, CFFSubrBias and StandardEncodingName. A simple
 // font's encoding is WinAnsiEncodingNames, and GlyphNameToRune says what
 // character each of its names stands for.
 //

@@ -85,6 +85,14 @@ func (b *Budget) charge(n int, what string) bool {
 	return true
 }
 
+// Charge is charge, for a reader of a font's structures outside this package:
+// shape's subsetter walks the CFF charstrings and Private DICTs again when it
+// cuts a font down, and that walk is as repeatable as the ones here — a
+// thousand Font DICTs naming one Private DICT is a thousand readings of it —
+// so it draws on an allowance of the same kind and says the same thing when
+// the allowance runs out.
+func (b *Budget) Charge(n int, what string) bool { return b.charge(n, what) }
+
 // Exhausted reports whether a parser asked this budget for more than it had,
 // which means some part of the font was not read.
 func (b *Budget) Exhausted() bool { return b.what != "" }

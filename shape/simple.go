@@ -67,6 +67,7 @@ func (f *Face) IsSimple() bool { return f.simple }
 // those codes will draw so the subsetter keeps them.
 func (f *Face) encodeSimple(s string) (codes []byte, missing int) {
 	codes = make([]byte, 0, len(s))
+	var parts []rune
 	for _, r := range s {
 		if hiddenAfterShaping(r) {
 			// WinAnsi gives the soft hyphen a code of its own, so without this
@@ -79,18 +80,20 @@ func (f *Face) encodeSimple(s string) (codes []byte, missing int) {
 			// character gets, which is a space.
 			continue
 		}
-		code, _, ok := stdCode(r)
-		if !ok {
+		// What the face draws for it — the character, or its decomposition
+		// where the face has that and not the character; see drawnAs.
+		var ok bool
+		if parts, ok = f.drawnAs(r, 0, parts[:0]); !ok {
+			// Outside the encoding, where there is no byte that means it, or
+			// in it with no glyph in this face.
 			missing++
-			continue // outside the encoding: there is no byte that means it
+			continue
 		}
-		gid, mapped := f.prog.Cmap[r]
-		if !mapped || gid == 0 {
-			missing++
-			continue // the encoding has a code but this face has no glyph
+		for _, p := range parts {
+			code, _, _ := stdCode(p)
+			f.used[f.prog.Cmap[p]] = true
+			codes = append(codes, code)
 		}
-		f.used[gid] = true
-		codes = append(codes, code)
 	}
 	return codes, missing
 }

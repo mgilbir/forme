@@ -13,10 +13,10 @@
 //
 // # Two tables
 //
-// That default was left to the shaper, which asks package unicode — Unicode
+// That default was left to the shaper, which asked package unicode — Unicode
 // 15.0.0 in Go 1.26, beside a table from 17.0.0. U+0897 ARABIC PEPET, which
 // Unicode 16 added as a non-spacing mark, is non-joining there: a pepet between
-// two dual-joining letters breaks their join, and both take isolated or final
+// two dual-joining letters broke their join, and both took isolated or final
 // forms. Seventy-five marks and format characters are in that position, and
 // one, U+1171E AHOM CONSONANT SIGN MEDIAL RA, the other way round: a non-spacing
 // mark in 15.0.0 and a spacing one since, so package unicode makes it
@@ -28,9 +28,8 @@
 // joiningRanges, because "the file gives this character a type" is a question
 // of its own that the shaper asks — whether a character of no script of its
 // own is Arabic text, for cursive letter-spacing — and a table that answered T
-// for a Latin combining acute would say yes. What remains is for the shaper's
-// joiningTypeOf to read this table where it now asks unicode.In, which is a
-// change to the shaper and not to its data.
+// for a Latin combining acute would say yes. The shaper's joiningTypeOf reads
+// this table after joiningRanges.
 //
 //	go run ./cmd/genjoining -version <X.Y.Z> <ArabicShaping.txt> <UnicodeData.txt> > shape/joining.go
 package main

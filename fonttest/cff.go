@@ -76,17 +76,17 @@ type CFFOptions struct {
 // charstring per glyph.
 //
 // It panics rather than returning an error, because it is a fixture and the
-// only way to reach either panic is to ask for a font this cannot express. The
-// glyph bound is the INDEX offset size: this writes one-byte offsets, so the
-// charstrings have to fit in 255 bytes, which at one byte each they do until
-// there are 255 of them. A test needing more glyphs than that needs a real
-// font, not a fixture.
+// only way to reach a panic is to ask for a font this cannot express. The
+// bound is the Top DICT's operands, which are written in the three-byte form
+// and so reach 32,767: the font has to end before that, which at a byte or two
+// a charstring is a thousand glyphs with room to spare. A test needing more
+// than that needs a real font, not a fixture.
 func CFF(opts CFFOptions) []byte {
 	if opts.Glyphs == 0 {
 		opts.Glyphs = 1
 	}
-	if opts.Glyphs < 1 || opts.Glyphs > 250 {
-		panic("fonttest: a synthetic CFF holds 1 to 250 glyphs")
+	if opts.Glyphs < 1 || opts.Glyphs > 1000 {
+		panic("fonttest: a synthetic CFF holds 1 to 1000 glyphs")
 	}
 	if opts.Registry == "" {
 		opts.Registry = "Adobe"
@@ -201,6 +201,10 @@ func CFF(opts CFFOptions) []byte {
 	}
 	data = append(data, cffINDEX(charstrings...)...)
 
+	if len(data) > 0x7FFF {
+		panic("fonttest: a synthetic CFF has to end before 32,767 bytes, " +
+			"or the Top DICT's three-byte operands cannot name its parts")
+	}
 	final := cffINDEX(top(csOff, privOff, charsetOff))
 	if len(final) != topLen {
 		panic("fonttest: the Top DICT changed length between passes, so every " +
@@ -218,9 +222,10 @@ func CFF(opts CFFOptions) []byte {
 // stack-clearing operator, so a reader looking for a glyph's width has no
 // reason to stop early. Each glyph ends with endchar after the call.
 //
-// Both are bounded by the fixture's one-byte INDEX offsets: the subroutines have
-// to come to 255 bytes, which a fan-out of sixteen at a depth of seven reaches,
-// and the charstrings too, which is three bytes a glyph.
+// Both are bounded by the fixture: a subroutine is named in a one-byte
+// operand, so the depth is at most 214, and the font — two bytes a call in the
+// subroutines, three a glyph in the charstrings — has to end before 32,767
+// bytes.
 func SubrFanOut(fanOut, depth, glyphs int) []byte {
 	const callsubr, ret, endchar = 10, 11, 14
 	operand := func(subr int) byte { return byte(subr - 107 + 139) } // biased by 107
@@ -256,7 +261,8 @@ func cffOperand3(v int) []byte {
 	return []byte{28, byte(v >> 8), byte(v)}
 }
 
-// cffINDEX writes a CFF INDEX with one-byte offsets. An empty one is the two
+// cffINDEX writes a CFF INDEX with one-byte offsets, or two-byte ones where
+// its items come to more than one byte can reach. An empty one is the two
 // count bytes alone, which is what the format says and not an omission.
 func cffINDEX(items ...[]byte) []byte {
 	if len(items) == 0 {
@@ -266,15 +272,25 @@ func cffINDEX(items ...[]byte) []byte {
 	for _, it := range items {
 		total += len(it)
 	}
+	offSize := 1
 	if total+1 > 0xFF {
-		panic("fonttest: a synthetic CFF INDEX holds 255 bytes")
+		offSize = 2
 	}
-	out := []byte{byte(len(items) >> 8), byte(len(items)), 1}
+	if total+1 > 0xFFFF {
+		panic("fonttest: a synthetic CFF INDEX holds 65,534 bytes")
+	}
+	out := []byte{byte(len(items) >> 8), byte(len(items)), byte(offSize)}
+	put := func(off int) {
+		if offSize == 2 {
+			out = append(out, byte(off>>8))
+		}
+		out = append(out, byte(off))
+	}
 	off := 1
-	out = append(out, byte(off))
+	put(off)
 	for _, it := range items {
 		off += len(it)
-		out = append(out, byte(off))
+		put(off)
 	}
 	for _, it := range items {
 		out = append(out, it...)

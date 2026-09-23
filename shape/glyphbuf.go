@@ -9,16 +9,16 @@ import (
 
 // The shaped-glyph model.
 //
-// Shape returns spans, which can say only one thing about a glyph: move the pen
-// horizontally before drawing it. That is all kerning needs and all a
+// A span — a code and how far to move the pen before it — can say only one
+// thing about a glyph: move horizontally. That is all kerning needs and all a
 // left-to-right run of unmarked Latin needs, and it is not enough for anything
 // else. An accent has to sit *over* the letter it belongs to — up and across by
 // an amount the font states — and a span cannot say so.
 //
 // So positioning produces glyphs, not spans: a glyph index, where it goes
-// relative to the pen, and how far the pen then moves. Shape is written over
-// this, taking the horizontal part and discarding the rest, which is why it is
-// still the right call for text that carries no marks.
+// relative to the pen, and how far the pen then moves. Every shaping entry
+// point returns them; a caller that draws with spans takes the horizontal
+// part, and has to know that it is discarding the rest.
 
 // Glyph is one positioned glyph of a shaped run. Distances are in thousandths
 // of an em, the unit the font's own metrics are in, so they are independent of
@@ -104,10 +104,8 @@ type ligatureRef struct {
 // right — so a caller can draw them as they are, at a pen that only moves
 // forward, whatever scripts the string mixes. That is not the order the string
 // is written in: Hebrew and Arabic read the other way, and a PDF text-showing
-// operator has no way to say so. bidi.go decides where each stretch belongs.
-//
-// It is the full result. Shape is the same pipeline with the vertical part
-// dropped, and is enough whenever the text carries no marks.
+// operator has no way to say so. Package bidi decides where each stretch
+// belongs.
 func (f *Face) ShapeGlyphs(s string) ([]Glyph, int) {
 	return f.shapeGlyphsWith(s, nil, shapeContext{})
 }
@@ -210,6 +208,14 @@ type shapeContext struct {
 	// travels with the context rather than beside it because it is the same
 	// kind of fact: something about the run that its own text does not say.
 	features Features
+	// missed, where it is set, collects where each character the missing
+	// count counts is: its byte offset in the string the collector shaped, of
+	// which this string begins at. It is how shapeMerged gives a run the count
+	// of its own characters out of the count for the whole it shaped. Only
+	// shapeMerged sets it, and the string it shapes runs one way, so only the
+	// cut by script (shapeDirection) moves at.
+	missed *[]int
+	at     int
 }
 
 // runes returns the two sides as the shortest slices that still answer the
@@ -387,6 +393,7 @@ func (f *Face) shapeDirection(s string, behind, ahead uint16, rtl bool, extra []
 			p = pieces[len(pieces)-1-k]
 		}
 		inner := ctx
+		inner.at = ctx.at + p.start
 		if p.start > 0 {
 			inner.before = contextBefore(ctx.before, s[:p.start])
 			inner.cutBefore = true
@@ -499,6 +506,9 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 			// hiddenAfterShaping is the list of.
 			if !hiddenAfterShaping(r) {
 				missing++
+				if ctx.missed != nil {
+					*ctx.missed = append(*ctx.missed, ctx.at+offsets[i])
+				}
 			}
 			gid = 0
 		}
@@ -688,7 +698,19 @@ func (f *Face) shapeByCode(s string, rtl bool) ([]Glyph, int) {
 		buf     []Glyph
 		missing int
 	)
+	var parts []rune
 	for i, r := range runes {
+		// What the face draws for it, which is its decomposition where the
+		// face has that and not the character — as Measure and Encode say.
+		var drawn bool
+		if parts, drawn = f.drawnAs(r, 0, parts[:0]); drawn && (len(parts) > 1 || parts[0] != r) {
+			for _, p := range parts {
+				code, _ := f.GlyphID(p)
+				width, _ := f.Advance(p)
+				buf = append(buf, Glyph{GID: code, Cluster: offsets[i], XAdvance: width})
+			}
+			continue
+		}
 		code, ok := f.GlyphID(r)
 		if !ok {
 			missing++
@@ -771,7 +793,8 @@ func (f *Face) shapeMerged(s string, rtl bool, extra []string,
 	pre, post := ctx.mergeBefore, ctx.mergeAfter
 	// What is merged already carries the forms of that side, so the context
 	// left outside is the other one's — and only where nothing merged there.
-	outer := shapeContext{kerns: ctx.kerns, features: ctx.features}
+	var missed []int
+	outer := shapeContext{kerns: ctx.kerns, features: ctx.features, missed: &missed}
 	if pre == "" {
 		outer.before = ctx.before
 	}
@@ -791,19 +814,22 @@ func (f *Face) shapeMerged(s string, rtl bool, extra []string,
 	}
 	// The count of characters no glyph was found for is the whole string's, and
 	// this run is a part of it. Reporting the whole would have a run named for
-	// its neighbour's missing characters as well as its own.
-	return out, f.missingIn(s)
-}
-
-// missingIn counts the characters of a string this face has no glyph for.
-func (f *Face) missingIn(s string) int {
-	n := 0
-	for _, r := range s {
-		if _, ok := f.GlyphID(r); !ok {
-			n++
+	// its neighbour's missing characters as well as its own, so it is the ones
+	// the shaping of the whole counted inside the run.
+	//
+	// It is the count the shaping made, and not the run's characters asked
+	// again one by one. That was the first version, and it counted what the
+	// shaping does not: a character nothing is drawn for (the override a
+	// right-to-left run reaches a backend behind, a joiner), and a character
+	// the face draws as its decomposition. The same run reported a different
+	// count by whether it had a neighbour to merge with.
+	missing := 0
+	for _, at := range missed {
+		if at >= lo && at < hi {
+			missing++
 		}
 	}
-	return n
+	return out, missing
 }
 
 // ShapeGroup shapes a whole merge group — the runs that shape as one string,

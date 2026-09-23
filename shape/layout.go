@@ -43,9 +43,10 @@ import (
 //     consonant, the reph over the end of the syllable — before applying the
 //     features an Indic font declares for each part. See indic.go and
 //     indicsyllable.go.
-//   - Every single substitution the font declares, keyed by feature tag and
-//     applied only when a caller names one (ShapeWith): 'smcp', 'onum' and the
-//     rest, which change what the text says it is and so wait to be asked for.
+//   - Every feature the font declares that is not on by default, applied only
+//     when a caller names it (ShapeGlyphsWith, or Features from a document):
+//     'smcp', 'onum' and the rest, which change what the text says it is and so
+//     wait to be asked for.
 //   - FeatureVariations, the GSUB and GPOS table that gives a feature different
 //     lookups at different points in a variable font's design space. A face may
 //     state a feature's lookups only there — Noto Sans Oriya states its 'rclt'
@@ -464,9 +465,10 @@ type layout struct {
 	// ligatures maps a first glyph to the substitutions that may start with it,
 	// longest first so that a greedy match prefers ffi over ff.
 	//
-	// This serves the span path (Shape) only. The glyph path applies 'liga'
+	// It answers HasLigatures and nothing else: shaping applies 'liga'
 	// through the lookup list below, which honours the lookup's flags — so an
-	// accent written between two letters does not stop them ligating.
+	// accent written between two letters does not stop them ligating. The span
+	// path that set ligatures from this table is gone.
 	ligatures map[int][]ligature
 	// single holds one-for-one substitutions per feature tag: small capitals,
 	// oldstyle figures and the rest. They are read for every feature the font
@@ -843,9 +845,9 @@ func indexFeatures(t []byte, feats tableFeatures) *featureIndex {
 	// maxDeclaredList gives: a lookup is named by index, and truncating the list
 	// does not lose its tail — it silently breaks every reference into it. That
 	// was fixed once, in the reader beside this one, and this reader kept the
-	// old cap: a font's kerning, its mark and cursive attachment, its ligatures
-	// on the span path and every single substitution all come through here, and
-	// any of them past lookup 512 did nothing at all with nothing said.
+	// old cap: a font's kerning, its mark and cursive attachment, the ligatures
+	// HasLigatures reports and every single substitution all come through here,
+	// and any of them past lookup 512 did nothing at all with nothing said.
 	if off := font.Be16(t, 8); off > 0 && off+2 <= len(t) && x.list != nil {
 		lookupList := t[off:]
 		x.hasList = true
@@ -1815,11 +1817,12 @@ func (l *layout) kernFormat0(t []byte) {
 // readSingleSubstitutions reads the one-for-one substitutions of every feature
 // this run's script selected, keyed by tag.
 //
-// They are read eagerly and applied only on request. A font's 'smcp' turns
-// letters into small capitals and its 'onum' turns lining figures into oldstyle
-// ones; both are correct only when a caller asks for them, so unlike 'liga'
-// they cannot be applied by default. Reading them all costs one pass and means
-// ShapeWith needs no second one.
+// A font's 'smcp' turns letters into small capitals and its 'onum' turns
+// lining figures into oldstyle ones; both are correct only when a caller asks
+// for them. What is applied when one is asked for is the feature's lookups,
+// through the plan, as for every other feature — see plan.go. This table
+// answers a narrower question, which HasJoiningForms asks: whether the font
+// has one-for-one forms under a feature at all.
 func (l *layout) readSingleSubstitutions(gsub []byte, idx *featureIndex) {
 	// One budget for every subtable this reader may take — see subtables.
 	budget := subtableBudget(gsub)

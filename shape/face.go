@@ -8,33 +8,40 @@
 // embedding.go: what is here is the facts, in the font's own units, and packing
 // them into any format's encoding belongs to whoever writes it.
 //
-// # Composite fonts only, deliberately
+// # Three kinds of face
 //
-// The subsetter and the encoder are written for a face embedded as a Type0 font
-// with Identity-H encoding and a
-// CIDFontType2 descendant (ISO 32000-2 9.7). The alternative — a simple font
-// with a single-byte encoding — is limited to 256 codes and to the glyphs a
-// standard encoding names, which rules out most of Unicode. Anything laying out
-// real text needs the composite form, so that is the only form here rather than
-// a choice to get wrong.
+// A face loaded with Load or LoadInstance is composite: its codes are two
+// bytes, big-endian, and name a glyph — the glyph index, or for a CID-keyed CFF
+// the glyph's CID (see codeForGID) — which is what a Type0 font with
+// Identity-H encoding reads (ISO 32000-2 9.7). It is the only kind that can set
+// most of Unicode, and the only kind that is shaped: every layout table is
+// keyed by glyph index.
 //
-// The practical consequence is in the encoding: a character code is two bytes,
-// big-endian, and equals the glyph index. Encode does that mapping; the bytes it
-// returns are what content.Builder.ShowText takes.
+// LoadSimple reads the same program as a simple font, whose codes are one
+// byte of WinAnsiEncoding, and Standard is one of the fourteen faces a reader
+// is expected to have, with no program at all. Both are set a code per
+// character at the font's published widths, with no substitution and no
+// positioning — see shapeByCode — because a one-byte code cannot name what
+// those would produce.
+//
+// Encode is the plain path: one code per character, or per part of a
+// character the face draws decomposed, with no rules applied.
 //
 // # Subsetting, and the ordering it imposes
 //
-// Only the glyphs a face has been asked to encode are embedded, so Embed must
-// come after the drawing that uses the font. Embedding first produces a font
-// carrying .notdef alone, and every glyph the document goes on to show is one
-// the program does not define; Embed refuses that rather than writing it.
+// Only the glyphs a face has been asked to encode or shape are kept, so Subset
+// (or SubsetGlyphs) has to come after everything that sets text in the face.
+// Subsetting first produces a program carrying .notdef alone, and every glyph
+// the document goes on to show is one the program does not define; nothing
+// here refuses that, because nothing here can tell a document that set no
+// text from one that set it too late.
 //
 // # Shaping
 //
-// Shape applies the font's own kerning and ligatures and returns spans ready
-// for a text operator; Encode is the plain path that maps runes to glyphs one
-// at a time. ShapeGlyphs is the full pipeline, which also attaches marks and
-// joins cursive forms.
+// ShapeGlyphs is the full pipeline: the font's substitutions, kerning, mark
+// attachment and cursive forms, returning positioned glyphs. The
+// ShapeGlyphsInContext family is the same with the text either side of a run,
+// and MeasureShaped measures what it draws.
 //
 // The rules applied are those the font declares for the run's own script, and
 // for the language system of the run's language (Features.Language). The
@@ -45,13 +52,12 @@
 // covers Tibetan, Javanese, Balinese, Sinhala and a long tail. See layout.go for
 // exactly what is read and each shaper's own file for what it covers.
 //
-// # What it does not do
+// # Subsetting
 //
 // Both glyf and CFF outlines are subsetted, by the same rule: glyph indices are
-// retained and a dropped glyph becomes an empty one.
-//
-// A CID-keyed CFF is refused outright. Its CIDs are not glyph indices, and
-// everything here assumes they are.
+// retained and a dropped glyph becomes an empty one. A CID-keyed CFF is
+// subsetted the same way, and keeps its charset, so the CIDs Encode writes
+// still name the glyphs they did.
 package shape
 
 import (
@@ -78,10 +84,12 @@ const maxFontWork = 1 << 22
 // Face is a loaded font program: its metrics, its character-to-glyph mapping,
 // and the bytes to embed.
 //
-// It is not safe for concurrent use. Encode records which glyphs a document
-// used, so two goroutines encoding through one Face race on that record; and
-// shaping caches the font's layout tables as each script selects them, so two
-// goroutines merely *measuring* shaped text race on that cache.
+// It is not safe for concurrent use. Encode and every shaping call record
+// which glyphs a document used — it is what Subset keeps — so two goroutines
+// setting text through one Face, even only to measure it, race on that record.
+// The layout tables cached as each script selects them, and the shaping plans,
+// are behind a lock and are shared by Clone; the record is not, and Clone is
+// how to set text from two goroutines. See Clone.
 type Face struct {
 	// gidToCID is the CID of each glyph index, for a face whose outlines are a
 	// CID-keyed CFF. nil otherwise, and nil is the ordinary case: for every
@@ -178,7 +186,7 @@ func keepLayoutTables(tables map[string][]byte) map[string][]byte {
 }
 
 // Load parses an sfnt font program — TrueType or OpenType — and prepares it for
-// embedding. The bytes are retained and written into the PDF as they are.
+// embedding. The bytes are retained as they are, and Subset cuts them down.
 //
 // A variable font loads at its default instance, which is what its glyf outlines
 // already are. LoadInstance is the way to ask for any other point in its design
@@ -584,8 +592,16 @@ func (f *Face) Measure(s string, size float64) float64 {
 			// which then drew it as a space.
 			continue
 		}
-		w, ok := f.advanceOrDecomposed(r, 0)
-		if !ok && f.std != nil {
+		var one [2]rune
+		if parts, ok := f.drawnAs(r, 0, one[:0]); ok {
+			for _, p := range parts {
+				w, _ := f.Advance(p)
+				total += w
+			}
+			continue
+		}
+		w, _ := f.Advance(r)
+		if f.std != nil {
 			// A character outside the encoding is set as a space, so it is a
 			// space that must be measured.
 			w, _ = f.stdAdvance(' ')
@@ -595,13 +611,15 @@ func (f *Face) Measure(s string, size float64) float64 {
 	return total * size / 1000
 }
 
-// advanceOrDecomposed is a character's advance, taking it apart when this face
-// has no glyph for it and does have one for what it decomposes into.
+// drawnAs is what this face draws for a character, appended to out: the
+// character itself where the face has it, and where it does not, its canonical
+// decomposition, if the face has every part of that. ok is false where it has
+// neither.
 //
-// It is the same rule normalize applies, asked here for the same reason: what is
-// measured has to be what is drawn. The shaper takes a character the face cannot
-// set and emits its canonical decomposition instead, so a measurement that
-// stopped at .notdef reports a width the page will not have.
+// It is the same rule normalize applies, asked for the same reason: what is
+// measured has to be what is drawn. The shaper takes a character the face
+// cannot set and emits its canonical decomposition instead, so a measurement
+// that stopped at .notdef reports a width the page will not have.
 //
 // The case is not exotic. U+2000 EN QUAD decomposes to U+2002 EN SPACE and
 // U+2001 EM QUAD to U+2003 EM SPACE — Unicode states both as singletons — and a
@@ -609,37 +627,45 @@ func (f *Face) Measure(s string, size float64) float64 {
 // one: it sets an en quad as a half em, and this measured it as a whole one,
 // which put the words either side of three of them two ems further apart than
 // they are drawn.
-func (f *Face) advanceOrDecomposed(r rune, depth int) (float64, bool) {
-	w, ok := f.Advance(r)
-	if ok || depth >= maxDecompositionDepth {
-		return w, ok
+//
+// Measure, Encode and the path that sets a face by character code all ask it,
+// so that the three agree. Measure alone did, and the other two drew what it
+// measured as a decomposition as a space or a .notdef: U+212A KELVIN SIGN in
+// Helvetica measured as a K and drawn as a space.
+//
+// Only if *every* part is one this face has: half a decomposition drawn and the
+// rest as .notdef is the disagreement this exists to prevent.
+func (f *Face) drawnAs(r rune, depth int, out []rune) ([]rune, bool) {
+	if _, ok := f.GlyphID(r); ok {
+		return append(out, r), true
+	}
+	if depth >= maxDecompositionDepth {
+		return out, false
 	}
 	a, b, decomposed := canonicalDecompose(r)
 	if !decomposed {
-		return w, false
+		return out, false
 	}
-	// The width of the parts, and only if *every* part is one this face has:
-	// half a decomposition measured and the whole of it drawn as .notdef is the
-	// disagreement this exists to prevent.
-	total, aok := f.advanceOrDecomposed(a, depth+1)
-	if !aok {
-		return w, false
+	n := len(out)
+	out, ok := f.drawnAs(a, depth+1, out)
+	if ok && b != 0 {
+		out, ok = f.drawnAs(b, depth+1, out)
 	}
-	if b != 0 {
-		wb, bok := f.advanceOrDecomposed(b, depth+1)
-		if !bok {
-			return w, false
-		}
-		total += wb
+	if !ok {
+		return out[:n], false
 	}
-	return total, true
+	return out, true
 }
 
-// Encode maps a string to the character codes a Type0/Identity-H font expects:
-// two bytes per glyph, big-endian, each equal to the glyph index. The result is
-// what content.Builder.ShowText takes.
+// Encode maps a string to the character codes the face is embedded with, one
+// per character — or one per part, for a character the face draws as its
+// canonical decomposition (see drawnAs). For a composite face that is what a
+// Type0/Identity-H font expects: two bytes per glyph, big-endian, each the
+// glyph index, or the glyph's CID where the outlines are CID-keyed. For a
+// simple or standard face it is one byte of WinAnsiEncoding.
 //
-// A rune the font does not map encodes as glyph 0, which renders as .notdef —
+// On a composite face a rune the font does not map encodes as glyph 0, which
+// renders as .notdef —
 // the visible "this font has no glyph for that" box. That is deliberate: an
 // error here would mean a caller could not lay out text containing one stray
 // character, and silently dropping it would lose content. The second result
@@ -654,32 +680,44 @@ func (f *Face) Encode(s string) (codes []byte, missing int) {
 		// what a reader would show for an undefined code anyway, and the count
 		// says how many there were.
 		codes = make([]byte, 0, len(s))
+		var parts []rune
 		for _, r := range s {
 			if hiddenAfterShaping(r) {
 				continue // nothing is drawn for it, so it gets no code
 			}
-			code, ok := f.GlyphID(r)
-			if !ok {
+			var ok bool
+			if parts, ok = f.drawnAs(r, 0, parts[:0]); !ok {
 				missing++
-				code = ' '
+				codes = append(codes, ' ')
+				continue
 			}
-			codes = append(codes, byte(code))
+			for _, p := range parts {
+				code, _ := f.GlyphID(p)
+				codes = append(codes, byte(code))
+			}
 		}
 		return codes, missing
 	}
 	codes = make([]byte, 0, 2*len(s))
+	var parts []rune
 	for _, r := range s {
 		if hiddenAfterShaping(r) {
 			continue // nothing is drawn for it, so it gets no code
 		}
-		gid, ok := f.GlyphID(r)
-		if !ok {
+		var ok bool
+		if parts, ok = f.drawnAs(r, 0, parts[:0]); !ok {
 			missing++
-			gid = 0
+			parts = append(parts[:0], 0)
 		}
-		f.used[gid] = true
-		code := f.codeForGID(gid)
-		codes = append(codes, byte(code>>8), byte(code))
+		for _, p := range parts {
+			gid := 0
+			if p != 0 {
+				gid, _ = f.GlyphID(p)
+			}
+			f.used[gid] = true
+			code := f.codeForGID(gid)
+			codes = append(codes, byte(code>>8), byte(code))
+		}
 	}
 	return codes, missing
 }
@@ -895,15 +933,15 @@ func (f *Face) GlyphIDForTest(r rune) (int, bool) {
 // other's glyphs — and, worse, a /CIDSet describing a set neither of them has.
 // That one is always fresh.
 //
-// The per-script layout caches are fresh too. They are lazily filled, so
-// sharing them across faces would be a write from two goroutines to one map;
-// the alternative is a lock on a path taken once per script per document, and
-// the reading they save is small beside the reading this already avoids.
+// The per-script layout caches and the shaping plans are not: they are
+// readings of the font's own tables, which no document can change, so a clone
+// shares them with the face it was made from, and they are filled lazily
+// behind a lock.
 //
 // So: one face used for two outputs puts each one's glyphs into the other, and
-// two documents set at the same time write one map from two goroutines.
-// Reading the font again instead costs milliseconds and megabytes for an answer
-// that cannot differ. Share the parse, not the face.
+// two documents set at the same time through one face write one map from two
+// goroutines. Reading the font again instead costs milliseconds and megabytes
+// for an answer that cannot differ. Share the parse, not the face.
 func (f *Face) Clone() *Face {
 	out := *f
 	out.used = map[int]bool{}

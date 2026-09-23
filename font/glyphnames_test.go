@@ -11,9 +11,9 @@ func TestEveryStandardEncodingNameResolves(t *testing.T) {
 		name  string
 		codes map[byte]string
 	}{
-		{"StandardEncoding", StandardEncodingNames},
-		{"WinAnsiEncoding", WinAnsiEncodingNames},
-		{"MacRomanEncoding", MacRomanEncodingNames},
+		{"StandardEncoding", standardEncodingNames},
+		{"WinAnsiEncoding", winAnsiEncodingNames},
+		{"MacRomanEncoding", macRomanEncodingNames},
 	} {
 		for code, glyph := range table.codes {
 			if _, ok := GlyphNameToRune(glyph, code); !ok {

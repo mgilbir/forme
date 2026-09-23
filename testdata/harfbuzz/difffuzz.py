@@ -78,14 +78,14 @@ FONTS = [
 
 # The differences that are already understood, so that a new one is visible.
 #
-# It is empty. There were four. Two were gaps and are fixed: the missing dotted
+# It holds one, below. There were four more. Two were gaps and are fixed: the missing dotted
 # circle for a broken cluster, and the ordering of two modifier marks on one
 # letter. The third was recorded as a decision and was not one — a reserved
 # character being given a category that broke the cluster after it. The fourth
 # was a real decision, held for a long time and now reversed: a character nothing
 # is drawn for, written inside a syllable, is kept until the syllable model has
 # seen it, because Unicode does not ask for it to be removed and neither HarfBuzz
-# nor CoreText removes it. See fonts/harfbuzz_test.go.
+# nor CoreText removes it. See shape/harfbuzz_test.go.
 #
 # An empty set is the point of the tool: every difference it reports is a defect.
 KNOWN = {

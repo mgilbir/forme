@@ -35,7 +35,7 @@ func cffNumber(v int) []byte {
 // standardCode is the StandardEncoding code that stands for a glyph name.
 func standardCode(t *testing.T, name string) int {
 	t.Helper()
-	for code, n := range font.StandardEncodingNames {
+	for code, n := range font.StandardEncodingNames() {
 		if n == name {
 			return int(code)
 		}
@@ -47,6 +47,13 @@ func standardCode(t *testing.T, name string) int {
 // seacFace builds a CFF face of four glyphs: .notdef, "A", "acute", and an
 // "Aacute" drawn by a seac naming the other two.
 func seacFace(t *testing.T) (f *Face, gidA, gidAcute, gidAacute int) {
+	t.Helper()
+	return seacFaceAfter(t, nil)
+}
+
+// seacFaceAfter is seacFace with the accented letter's charstring starting
+// with before, ahead of the seac's four arguments.
+func seacFaceAfter(t *testing.T, before []byte) (f *Face, gidA, gidAcute, gidAacute int) {
 	t.Helper()
 	sidA, ok := font.CFFStandardSID("A")
 	if !ok {
@@ -62,10 +69,10 @@ func seacFace(t *testing.T) (f *Face, gidA, gidAcute, gidAacute int) {
 	}
 
 	const endchar = 14
-	seac := append([]byte(nil), cffNumber(0)...)                // adx
-	seac = append(seac, cffNumber(0)...)                        // ady
-	seac = append(seac, cffNumber(standardCode(t, "A"))...)     // bchar
-	seac = append(seac, cffNumber(standardCode(t, "acute"))...) // achar
+	seac := append(append([]byte(nil), before...), cffNumber(0)...) // adx
+	seac = append(seac, cffNumber(0)...)                            // ady
+	seac = append(seac, cffNumber(standardCode(t, "A"))...)         // bchar
+	seac = append(seac, cffNumber(standardCode(t, "acute"))...)     // achar
 	seac = append(seac, endchar)
 
 	// A and the accent draw something, so that a charstring the subsetter kept
@@ -186,7 +193,7 @@ func TestASeacIsToldFromAnOrdinaryEndchar(t *testing.T) {
 			return append(c, endchar)
 		}(), false, 0, 0},
 	} {
-		b, a, ok := cffSeac(tc.code, nil, nil)
+		b, a, ok := cffSeac(tc.code, nil, nil, fullBudget())
 		if ok != tc.ok || (ok && (b != tc.b || a != tc.a)) {
 			t.Errorf("%s: seac=%v (%d, %d), want %v (%d, %d)",
 				tc.what, ok, b, a, tc.ok, tc.b, tc.a)
@@ -213,7 +220,7 @@ func TestASeacPushedFromASubroutineIsFound(t *testing.T) {
 	code = append(code, 10) // callsubr
 	code = append(code, endchar)
 
-	b, a, ok := cffSeac(code, local, nil)
+	b, a, ok := cffSeac(code, local, nil, fullBudget())
 	if !ok || b != 65 || a != 194 {
 		t.Errorf("a seac whose chars come from a subroutine reads as %v (%d, %d), "+
 			"want true (65, 194)", ok, b, a)
@@ -230,7 +237,7 @@ func TestACyclicSubroutineDoesNotHangTheWalk(t *testing.T) {
 
 	done := make(chan bool, 1)
 	go func() {
-		cffSeac(local[0], local, nil)
+		cffSeac(local[0], local, nil, fullBudget())
 		done <- true
 	}()
 	select {

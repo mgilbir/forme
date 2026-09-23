@@ -64,14 +64,22 @@ const (
 // joiningTypeOf reports a character's joining type.
 //
 // A character the table does not name is non-joining, except a non-spacing
-// mark, which is transparent — a vowel sign written between two letters must
-// not break their join, and treating it as an ordinary character would.
+// mark, an enclosing mark or a format character, which is transparent — a
+// vowel sign written between two letters must not break their join, and
+// treating it as an ordinary character would.
+//
+// Which characters those are is the generated defaultTransparentRanges, from
+// the release the joining table is from. It was package unicode, whose release
+// is older: U+0897 ARABIC PEPET, a mark since Unicode 16, broke the join of the
+// letters either side of it, and U+1171E, a mark in Unicode 15 and not since,
+// was stepped over.
 func joiningTypeOf(r rune) joiningType {
 	i := sort.Search(len(joiningRanges), func(i int) bool { return joiningRanges[i].hi >= r })
 	if i < len(joiningRanges) && r >= joiningRanges[i].lo {
 		return joiningRanges[i].t
 	}
-	if unicode.In(r, unicode.Mn, unicode.Me, unicode.Cf) {
+	i = sort.Search(len(defaultTransparentRanges), func(i int) bool { return defaultTransparentRanges[i].hi >= r })
+	if i < len(defaultTransparentRanges) && r >= defaultTransparentRanges[i].lo {
 		return joinT
 	}
 	return joinU

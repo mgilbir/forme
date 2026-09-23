@@ -64,9 +64,10 @@ func (f *Face) Subset() ([]byte, error) {
 	return data, err
 }
 
-// subset is Subset, also returning the glyph indices it kept. Embed needs both,
-// and they must be the same set: /CIDSet describes exactly the glyphs the
-// program carries, and computing that twice is how the two come to disagree.
+// subset is Subset, also returning the glyph indices it kept. SubsetGlyphs
+// hands out both, and they must be the same set: a format that describes the
+// glyphs the program carries (PDF's /CIDSet) is describing exactly these, and
+// computing that twice is how the two come to disagree.
 func (f *Face) subset() ([]byte, []int, error) {
 	if f.std != nil {
 		return nil, nil, errors.New("fonts: a standard font has no program to subset")

@@ -15,9 +15,8 @@ import (
 // release is older than the table's: U+0897 ARABIC PEPET, a mark Unicode 16
 // added, came out non-joining.
 //
-// This reads the tables and not joiningTypeOf, whose own fallback still asks
-// package unicode — see cmd/genjoining for the one-line change that reads
-// defaultTransparentRanges instead.
+// It reads the tables, and then joiningTypeOf, which asked package unicode
+// after the listed table where it now asks the generated default.
 func TestTheTransparentDefaultIsGenerated(t *testing.T) {
 	listed := func(r rune) (joiningType, bool) {
 		i := sort.Search(len(joiningRanges), func(i int) bool { return joiningRanges[i].hi >= r })
@@ -56,5 +55,18 @@ func TestTheTransparentDefaultIsGenerated(t *testing.T) {
 	// so the release the table is from makes it non-joining.
 	if _, ok := listed(0x1171E); ok || byDefault(0x1171E) {
 		t.Error("U+1171E AHOM CONSONANT SIGN MEDIAL RA, Mc since Unicode 16, is transparent")
+	}
+
+	// And the shaper reads them.
+	for r, want := range map[rune]joiningType{
+		0x0897: joinT, 0x10EFC: joinT, 0x0301: joinT, 0x1171E: joinU, 0x0628: joinD, 0x200D: joinC,
+	} {
+		if got := joiningTypeOf(r); got != want {
+			t.Errorf("joiningTypeOf(U+%04X) = %d, want %d", r, got, want)
+		}
+	}
+	// Which is what keeps a join across a pepet.
+	if forms := joinForms([]rune{0x0628, 0x0897, 0x0628}, nil, nil); forms[0] != featInitial || forms[2] != featFinal {
+		t.Errorf("beh, pepet, beh took the forms %q; the pepet broke the join", forms)
 	}
 }

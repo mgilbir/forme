@@ -22,7 +22,7 @@ func standardLatinName(name string) bool {
 
 var standardLatinNames = sync.OnceValue(func() map[string]bool {
 	m := make(map[string]bool, 256)
-	for _, table := range []map[byte]string{StandardEncodingNames, MacRomanEncodingNames, WinAnsiEncodingNames} {
+	for _, table := range []map[byte]string{standardEncodingNames, macRomanEncodingNames, winAnsiEncodingNames} {
 		for _, n := range table {
 			if n != "" && n != ".notdef" {
 				m[n] = true
