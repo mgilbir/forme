@@ -3,12 +3,11 @@ package shape
 import (
 	"encoding/binary"
 	"runtime"
-	"runtime/debug"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/mgilbir/forme/fonttest"
+	"github.com/mgilbir/forme/internal/costtest"
 )
 
 // What reading a layout table costs, against the shapes a font can take that
@@ -101,31 +100,6 @@ func tableWith(tag string, lookups int, list []byte) []byte {
 	return withLookupList(fonttest.GPOSLookups(placeholder, map[string][]int{tag: named}), list)
 }
 
-// best is the shortest of five runs of f: the clock is noisy upward only, and
-// these are short.
-//
-// The collector runs only past half a gigabyte while they do. What is measured
-// here is the reader's own work, and a collection landing in one run and not
-// the other moved the ratio of a linear reader past eight, one run in three.
-// The limit is what keeps a regression that allocates without end from taking
-// the machine with it.
-func best(f func()) time.Duration {
-	defer debug.SetMemoryLimit(debug.SetMemoryLimit(1 << 29))
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	b := time.Duration(1 << 62)
-	for i := 0; i < 5; i++ {
-		// Collected between runs, so that each starts from the same heap
-		// rather than one that grew under the runs before it.
-		runtime.GC()
-		start := time.Now()
-		f()
-		if d := time.Since(start); d < b {
-			b = d
-		}
-	}
-	return b
-}
-
 // allocated is how many bytes f allocates.
 func allocated(f func()) uint64 {
 	runtime.GC()
@@ -137,25 +111,15 @@ func allocated(f func()) uint64 {
 }
 
 // growth fails the test when the cost at the larger size is more than limit
-// times the cost at the smaller.
-//
-// The two sizes are measured in turn, three times each, and the best of each
-// kept: the machine is shared, and a burst of someone else's work landing on
-// every run of one size and on none of the other is what a ratio cannot tell
-// from a curve.
-func growth(t *testing.T, what string, measure func(n int) time.Duration, small, large int, limit float64) {
+// times the cost at the smaller. at builds the input at a size, outside the
+// timing, and returns the work to time; costtest.Time times the two, and says
+// how a busy machine is kept from deciding the ratio.
+func growth(t *testing.T, what string, at func(n int) func(), small, large int, limit float64) {
 	t.Helper()
-	a, b := time.Duration(1<<62), time.Duration(1<<62)
-	for i := 0; i < 3; i++ {
-		a = min(a, measure(small))
-		b = min(b, measure(large))
-	}
-	if a <= 0 {
-		a = 1
-	}
-	if r := float64(b) / float64(a); r > limit {
+	c := costtest.Time(t, what, at(small), at(large))
+	if c.Ratio > limit {
 		t.Errorf("%s: %v against %v, a factor of %.1f where %.0f is the most the "+
-			"input allows", what, b, a, r, limit)
+			"input allows", what, c.Large, c.Small, c.Ratio, limit)
 	}
 }
 
@@ -267,16 +231,16 @@ func TestAPairIsFoundAsTheListingFoundIt(t *testing.T) {
 // once per offset the work is n times 16n, sixteen times over for four times
 // the font; read once it is the glyphs it names.
 func TestAliasedPairSubtablesCostWhatTheirBytesDo(t *testing.T) {
-	load := func(n int) time.Duration {
+	load := func(n int) func() {
 		width := 16 * n
 		data := fonttest.SFNT(fonttest.SFNTOptions{Name: "Cost", Glyphs: costGlyphs,
 			Extra: map[string][]byte{"GPOS": tableWith("kern", 1,
 				aliasedLookupList(2, 1, n, wideClassPairSubtable(width, 2)))}})
-		return best(func() {
+		return func() {
 			if _, err := Load(data); err != nil {
 				t.Fatal(err)
 			}
-		})
+		}
 	}
 	growth(t, "loading n offsets to one subtable naming 16n glyphs, at 4n against n",
 		load, 250, 1000, 8)
@@ -326,11 +290,11 @@ func TestChainedClassRulesDoNotExpandTheirClasses(t *testing.T) {
 			[]fonttest.Lookup{{Type: 6, Subtables: [][]byte{sub}}},
 			map[string][]int{"calt": {0}})})
 	}
-	shape := func(k int) time.Duration {
+	shape := func(k int) func() {
 		f := face(min(64*k, 0xFFFF))
 		text := strings.Repeat("ab", k/2)
 		f.ShapeGlyphs(text)
-		return best(func() { f.ShapeGlyphs(text) })
+		return func() { f.ShapeGlyphs(text) }
 	}
 	growth(t, "shaping k glyphs past class tables naming 64k, at 4k against k",
 		shape, 250, 1000, 8)
@@ -425,7 +389,7 @@ func TestACoverageStartingLateFillsNothing(t *testing.T) {
 // n features with distinct tags cost n² — sixty-four kilobytes of GSUB took 1.7
 // seconds, on the Load path and again per script a document sets.
 func TestTheFeatureListIsWalkedOncePerRead(t *testing.T) {
-	load := func(n int) time.Duration {
+	load := func(n int) func() {
 		lookups := make([]fonttest.Lookup, n)
 		features := map[string][]int{}
 		for i := range lookups {
@@ -438,11 +402,11 @@ func TestTheFeatureListIsWalkedOncePerRead(t *testing.T) {
 		}
 		data := fonttest.SFNT(fonttest.SFNTOptions{Name: "Cost", Glyphs: costGlyphs,
 			Extra: map[string][]byte{"GSUB": fonttest.GSUBLookups(lookups, features)}})
-		return best(func() {
+		return func() {
 			if _, err := Load(data); err != nil {
 				t.Fatal(err)
 			}
-		})
+		}
 	}
 	growth(t, "loading n features with distinct tags, at 4n against n", load, 900, 3600, 8)
 }
@@ -452,7 +416,7 @@ func TestTheFeatureListIsWalkedOncePerRead(t *testing.T) {
 // that there are a handful. A feature may name every lookup there is, in
 // descending order.
 func TestALongLookupOrderIsNotInsertionSorted(t *testing.T) {
-	load := func(n int) time.Duration {
+	load := func(n int) func() {
 		// n lookups, all one single adjustment, named by 'kern' last first.
 		named := make([]int, n)
 		for i := range named {
@@ -468,11 +432,11 @@ func TestALongLookupOrderIsNotInsertionSorted(t *testing.T) {
 			aliasedLookupList(1, n, 1, sub))
 		data := fonttest.SFNT(fonttest.SFNTOptions{Name: "Cost", Glyphs: costGlyphs,
 			Extra: map[string][]byte{"GPOS": table}})
-		return best(func() {
+		return func() {
 			if _, err := Load(data); err != nil {
 				t.Fatal(err)
 			}
-		})
+		}
 	}
 	growth(t, "loading a feature naming n lookups in descending order, at 4n against n",
 		load, 3000, 12000, 8)
@@ -488,7 +452,7 @@ func TestALongLookupOrderIsNotInsertionSorted(t *testing.T) {
 // offsets to one small subtable after it. Sorted after each subtable that is
 // 16n² steps.
 func TestLigaturesAreSortedOnceNotPerSubtable(t *testing.T) {
-	load := func(n int) time.Duration {
+	load := func(n int) func() {
 		m := 4 * n
 		// LigatureSubst format 1: a's one ligature set of m offsets to one
 		// ligature, a b -> c.
@@ -513,11 +477,11 @@ func TestLigaturesAreSortedOnceNotPerSubtable(t *testing.T) {
 		if f, err := Load(data); err != nil || len(f.layout.ligatures[1]) != m || len(f.layout.ligatures[2]) != 4*n {
 			t.Fatalf("the fixture was not read as it was written: %v", err)
 		}
-		return best(func() {
+		return func() {
 			if _, err := Load(data); err != nil {
 				t.Fatal(err)
 			}
-		})
+		}
 	}
 	growth(t, "loading 4n ligatures for one glyph followed by 4n subtables, at 4n against n",
 		load, 750, 3000, 8)
@@ -566,10 +530,10 @@ func wideMarkRuleFace(t testing.TB, width int) *Face {
 // placed.
 func TestAMarkRuleReachedFromAContextReadsOnlyWhatItAsks(t *testing.T) {
 	text := "a" + strings.Repeat("́", 64)
-	shape := func(width int) time.Duration {
+	shape := func(width int) func() {
 		f := wideMarkRuleFace(t, width)
 		f.ShapeGlyphs(text)
-		return best(func() { f.ShapeGlyphs(text) })
+		return func() { f.ShapeGlyphs(text) }
 	}
 	growth(t, "shaping 64 marks through a rule whose subtable's coverages name 65,535 "+
 		"glyphs against 4,096", shape, 4096, 0xFFFF, 4)
@@ -635,7 +599,7 @@ func TestAliasedMarkSubtablesAreReadOnce(t *testing.T) {
 // once per glyph, however many records name it: at n records each naming 16n
 // glyphs, and 4n, the work is the glyph space and not the product.
 func TestGlyphClassesAreNotExpandedPerRecord(t *testing.T) {
-	load := func(n int) time.Duration {
+	load := func(n int) func() {
 		width := 16 * n
 		cd := u16(nil, 2, n)
 		for i := 0; i < n; i++ {
@@ -647,11 +611,11 @@ func TestGlyphClassesAreNotExpandedPerRecord(t *testing.T) {
 		gdef = append(gdef, cd...)
 		data := fonttest.SFNT(fonttest.SFNTOptions{Name: "Cost", Glyphs: costGlyphs,
 			Extra: map[string][]byte{"GDEF": gdef}})
-		return best(func() {
+		return func() {
 			if _, err := Load(data); err != nil {
 				t.Fatal(err)
 			}
-		})
+		}
 	}
 	growth(t, "loading a glyph class table of n records each naming 16n glyphs, at 4n "+
 		"against n", load, 250, 1000, 8)

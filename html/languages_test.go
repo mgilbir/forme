@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"math/rand"
 	"testing"
+
+	"github.com/mgilbir/forme/internal/costtest"
 )
 
 // randomLanguageTree is a tree of elements and text with language attributes
@@ -125,10 +127,10 @@ func TestLanguagesCostsOneWalkPerNode(t *testing.T) {
 		}
 	}
 	small, large := chain(500), chain(2000)
-	lo, hi, ratio := scaling(ask(small), ask(large))
-	if ratio > 8 {
+	c := costtest.Time(t, "the language of every node of a chain", ask(small), ask(large))
+	if c.Ratio > 8 {
 		t.Errorf("the language of every node of a chain of 500 elements took %v and "+
 			"of 2000 took %v, a factor of %.1f: linear is four and a walk to the "+
-			"root per node is sixteen", lo, hi, ratio)
+			"root per node is sixteen", c.Small, c.Large, c.Ratio)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mgilbir/forme/internal/costtest"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -246,21 +247,12 @@ func TestAGroupPastTheBoundIsReportedUnchecked(t *testing.T) {
 //
 // It is requireLinear for work the budget is charged for, counted rather than
 // timed: a count is the same number on any machine under any load, and cannot
-// be spoiled by the rest of the suite running beside it. The shape at n must
-// have charged something — a comparison of nothing with nothing passes
-// whatever the shape, and a fixture that stopped reaching the charge would pass
-// it silently.
+// be spoiled by the rest of the suite running beside it. See costtest.Count,
+// which also fails a shape at n that charged nothing.
 func requireLinearWork(t *testing.T, what string, n int, spend func(n int) int64) {
 	t.Helper()
 	a, b := spend(n), spend(4*n)
-	if a <= 0 {
-		t.Fatalf("%s: the shape at n charged nothing to the work budget, so there "+
-			"is no work to compare the shape at 4n with", what)
-	}
-	ratio := float64(b) / float64(a)
-	t.Logf("%s: four times the input charged %.1f times the work (%d steps and %d)",
-		what, ratio, a, b)
-	if ratio > 8 {
+	if ratio := costtest.Count(t, what, a, b); ratio > 8 {
 		t.Errorf("%s: four times the input charged %d steps to the budget against %d, "+
 			"%.1f times; linear work is about four, and quadratic is about sixteen",
 			what, b, a, ratio)

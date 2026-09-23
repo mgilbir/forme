@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/mgilbir/forme/internal/costtest"
 )
 
 // TestTheLanguageIsReadOncePerElement is the cost of the language questions the
@@ -53,10 +55,11 @@ func TestTheLanguageIsReadOncePerElement(t *testing.T) {
 			"is a dotted capital", text)
 	}
 
-	lo, hi, ratio := layoutScaling(compose(doc(40)), compose(doc(160)))
-	if ratio > 8 {
+	c := costtest.Time(t, "composing a nest of elements with many attributes",
+		compose(doc(40)), compose(doc(160)))
+	if c.Ratio > 8 {
 		t.Errorf("forty levels took %v and a hundred and sixty %v, a factor of %.1f: "+
 			"linear is four, and a walk to the root per question is sixteen",
-			lo, hi, ratio)
+			c.Small, c.Large, c.Ratio)
 	}
 }

@@ -6,8 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
+	"github.com/mgilbir/forme/internal/costtest"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -254,7 +254,7 @@ func TestPouringIsLinearInTheLines(t *testing.T) {
 		w, _ := style.FromPx(600)
 		h, _ := style.FromPx(100000)
 		var smallLines, largeLines int
-		lo, hi, ratio := layoutScaling(func() {
+		c := costtest.Time(t, "pouring n lines into column-count "+cols, func() {
 			smallLines = pouredLines(Layout(small.Root, Size{W: w, H: h}, nil, nil))
 		}, func() {
 			largeLines = pouredLines(Layout(large.Root, Size{W: w, H: h}, nil, nil))
@@ -266,9 +266,9 @@ func TestPouringIsLinearInTheLines(t *testing.T) {
 			t.Fatalf("column-count %s: %d and %d lines were poured; the fixture is "+
 				"meant to pour 1000 and 4000", cols, smallLines, largeLines)
 		}
-		if ratio > 8 {
+		if c.Ratio > 8 {
 			t.Errorf("column-count %s: four times the lines took %.1f times as long "+
-				"(%v against %v); a linear pour is about four", cols, ratio, hi, lo)
+				"(%v against %v); a linear pour is about four", cols, c.Ratio, c.Large, c.Small)
 		}
 	}
 }
@@ -293,33 +293,6 @@ func pouredLines(root *Fragment) int {
 		return 0
 	}
 	return n
-}
-
-// layoutScaling measures one shape at n and at four times n, the way
-// html/parsecost_test.go's scaling does: in windows of equal length, turn
-// about, the least of nine rounds each, so that a busy machine slows both
-// sides alike and the ratio is the curve's.
-func layoutScaling(small, large func()) (lo, hi time.Duration, ratio float64) {
-	bestSmall, bestLarge := time.Duration(1<<62), time.Duration(1<<62)
-	for r := 0; r < 9; r++ {
-		start := time.Now()
-		for i := 0; i < 4; i++ {
-			small()
-		}
-		if el := time.Since(start); el < bestSmall {
-			bestSmall = el
-		}
-		start = time.Now()
-		large()
-		if el := time.Since(start); el < bestLarge {
-			bestLarge = el
-		}
-	}
-	lo, hi = bestSmall/4, bestLarge
-	if lo <= 0 {
-		return lo, hi, 0
-	}
-	return lo, hi, float64(hi) / float64(lo)
 }
 
 // TestAPourIsBoundedInPieces is maxPourPieces firing: a pour that would make
@@ -364,13 +337,14 @@ func TestBalancingIsNotQuadraticInTheBreaks(t *testing.T) {
 	}
 	small, large := breaks(10000), breaks(40000)
 	var hs, hl style.Unit
-	lo, hi, ratio := layoutScaling(func() { hs, _ = balancedHeight(small, 2) },
+	c := costtest.Time(t, "balancing n breakpoints in two columns",
+		func() { hs, _ = balancedHeight(small, 2) },
 		func() { hl, _ = balancedHeight(large, 2) })
 	if hs != small[len(small)/2-1] || hl != large[len(large)/2-1] {
 		t.Fatalf("two columns of equal lines balance at half of them: got %d and %d", hs, hl)
 	}
-	if ratio > 8 {
+	if c.Ratio > 8 {
 		t.Errorf("four times the breakpoints took %.1f times as long (%v against %v); "+
-			"a search by halving is about four", ratio, hi, lo)
+			"a search by halving is about four", c.Ratio, c.Large, c.Small)
 	}
 }

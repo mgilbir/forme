@@ -3,14 +3,12 @@ package layout
 import (
 	"fmt"
 	"math/rand"
-	"runtime"
-	"runtime/debug"
 	"slices"
 	"sort"
 	"strings"
 	"testing"
-	"time"
 
+	"github.com/mgilbir/forme/internal/costtest"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -204,20 +202,6 @@ func describeInsetLine(runs []inlineItem) string {
 	return sb.String()
 }
 
-// insetPlacementTime is the shortest of five placements of one line.
-func insetPlacementTime(runs []inlineItem, order []int) time.Duration {
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	l := &layouter{}
-	best := time.Duration(1 << 62)
-	for i := 0; i < 5; i++ {
-		runtime.GC()
-		start := time.Now()
-		l.placeInsetsBySide(runs, slices.Clone(order))
-		best = min(best, time.Since(start))
-	}
-	return best
-}
-
 // TestInsetPlacementIsLinearInTheBoxesOnALine is the cost of placeInsetsBySide,
 // which was the product of the boxes on a line and the items on it.
 //
@@ -312,16 +296,16 @@ func TestInsetPlacementIsLinearInTheBoxesOnALine(t *testing.T) {
 	for _, shape := range shapes {
 		t.Run(shape.name, func(t *testing.T) {
 			small, large := shape.n, 4*shape.n
-			a, b := time.Duration(1<<62), time.Duration(1<<62)
-			for i := 0; i < 3; i++ {
-				a = min(a, insetPlacementTime(shape.line(small)))
-				b = min(b, insetPlacementTime(shape.line(large)))
+			place := func(n int) func() {
+				runs, order := shape.line(n)
+				l := &layouter{}
+				return func() { l.placeInsetsBySide(runs, slices.Clone(order)) }
 			}
-			a = max(a, 1)
-			if r := float64(b) / float64(a); r > 8 {
+			r := costtest.Time(t, shape.name, place(small), place(large))
+			if r.Ratio > 8 {
 				t.Errorf("placing the insets of %d boxes took %v and of %d took %v, "+
 					"a factor of %.1f: linear is four and the product of the boxes and "+
-					"the items is sixteen", small, a, large, b, r)
+					"the items is sixteen", small, r.Small, large, r.Large, r.Ratio)
 			}
 		})
 	}

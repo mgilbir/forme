@@ -3,8 +3,8 @@ package layout
 import (
 	"strings"
 	"testing"
-	"time"
 
+	"github.com/mgilbir/forme/internal/costtest"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -435,15 +435,6 @@ func TestJoiningOutlinesIsCharged(t *testing.T) {
 // marks and not the marks times the levels. A walk of the block's lines per
 // level, or of the nesting per mark, is quadratic here.
 func TestInlineLevelsCostTheMarks(t *testing.T) {
-	measure := func(root *Fragment) time.Duration {
-		best := time.Duration(1 << 62)
-		for i := 0; i < 3; i++ {
-			start := time.Now()
-			Paint(root)
-			best = min(best, time.Since(start))
-		}
-		return best
-	}
 	for _, c := range []struct {
 		what string
 		doc  func(n int) string
@@ -463,11 +454,11 @@ func TestInlineLevelsCostTheMarks(t *testing.T) {
 			return layoutOf(t, 400, c.doc(n), noDefaults+`.r { position: relative; z-index: 1 }`)
 		}
 		small, large := at(c.n), at(4*c.n)
-		ratio := float64(measure(large)) / float64(measure(small))
-		t.Logf("%s: %.1fx the time for 4x the spans", c.what, ratio)
-		if ratio > 8 {
+		r := costtest.Time(t, "painting spans "+c.what,
+			func() { Paint(small) }, func() { Paint(large) })
+		if r.Ratio > 8 {
 			t.Errorf("%s: four times the spans took %.1f times as long to paint; "+
-				"linear is about 4 and quadratic about 16", c.what, ratio)
+				"linear is about 4 and quadratic about 16", c.what, r.Ratio)
 		}
 	}
 }

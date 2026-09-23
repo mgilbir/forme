@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/mgilbir/forme/font"
 	"github.com/mgilbir/forme/fonttest"
@@ -48,7 +47,7 @@ func corpusFace(t *testing.T, name string) *Face {
 // 0.33 s and 32,000 in 5.3 s), and a test that size is too slow to run on
 // every change. Without the font it shows at a tenth of that.
 func TestALongUniversalClusterIsNotReorderedQuadratically(t *testing.T) {
-	reorder := func(n int) time.Duration {
+	reorder := func(n int) func() {
 		runes := []rune("ᬓ" + strings.Repeat("ᬾ", n))
 		info := make([]useInfo, len(runes))
 		for i, r := range runes {
@@ -56,11 +55,11 @@ func TestALongUniversalClusterIsNotReorderedQuadratically(t *testing.T) {
 			info[i].mark = isCombiningMark(r)
 		}
 		buf := make([]Glyph, len(runes))
-		return best(func() {
+		return func() {
 			for _, c := range useClusters(info) {
 				reorderUseCluster(buf, info, c.start, c.end)
 			}
-		})
+		}
 	}
 	growth(t, "cutting and reordering a letter and n pre-base vowel signs, at 4n against n",
 		reorder, 2000, 8000, 8)
@@ -101,10 +100,10 @@ func TestAUniversalClusterIsCutAtTheBound(t *testing.T) {
 func TestARunPerDigitCostsWhatItsTextDoes(t *testing.T) {
 	f := corpusFace(t, "NotoSansArabic.ttf")
 	for _, unit := range []string{"ب1", "ب 1 "} {
-		shape := func(n int) time.Duration {
+		shape := func(n int) func() {
 			text := strings.Repeat(unit, n)
 			f.ShapeGlyphs(text)
-			return best(func() { f.ShapeGlyphs(text) })
+			return func() { f.ShapeGlyphs(text) }
 		}
 		growth(t, "shaping "+unit+" n times, at 4n against n", shape, 1000, 4000, 8)
 	}
@@ -117,10 +116,10 @@ func TestARunPerDigitCostsWhatItsTextDoes(t *testing.T) {
 // characters, and what it may grow by is nothing much.
 func TestAContextCostsWhatIsReadOfIt(t *testing.T) {
 	f := corpusFace(t, "NotoSansArabic.ttf")
-	shape := func(n int) time.Duration {
+	shape := func(n int) func() {
 		before, after := strings.Repeat("ب", n), strings.Repeat("ب", n)
 		f.ShapeGlyphsInContext("بل", before, after, Features{})
-		return best(func() { f.ShapeGlyphsInContext("بل", before, after, Features{}) })
+		return func() { f.ShapeGlyphsInContext("بل", before, after, Features{}) }
 	}
 	growth(t, "shaping one run against n characters of context, at 4n against n", shape, 250000, 1000000, 2)
 }
@@ -265,10 +264,10 @@ func TestMarkToMarkDoesNotWalkBackOverTheMarksItIgnores(t *testing.T) {
 	if len(f.layout.markMark) == 0 {
 		t.Fatal("the fixture's mark-to-mark lookup was not read; the test would time nothing")
 	}
-	shape := func(n int) time.Duration {
+	shape := func(n int) func() {
 		text := "a" + strings.Repeat("́", n)
 		f.ShapeGlyphs(text)
-		return best(func() { f.ShapeGlyphs(text) })
+		return func() { f.ShapeGlyphs(text) }
 	}
 	growth(t, "shaping a and n marks its mark-to-mark lookup ignores, at 4n against n", shape, 2000, 8000, 8)
 }
@@ -441,7 +440,7 @@ func compositeChain(n int) ([]uint32, []byte) {
 // per round, so a chain of composites cost its length squared, and a set of the
 // whole font per round.
 func TestTheCompositeClosureIsLinearInTheChain(t *testing.T) {
-	run := func(n int) time.Duration {
+	run := func(n int) func() {
 		offsets, glyf := compositeChain(n)
 		f := &Face{used: map[int]bool{n - 1: true}}
 		keep := f.keepSet(offsets, glyf, n)
@@ -450,7 +449,7 @@ func TestTheCompositeClosureIsLinearInTheChain(t *testing.T) {
 				t.Fatalf("a chain of %d composites lost glyph %d", n, gid)
 			}
 		}
-		return best(func() { f.keepSet(offsets, glyf, n) })
+		return func() { f.keepSet(offsets, glyf, n) }
 	}
 	growth(t, "closing a chain of n composites, at 4n against n", run, 4000, 16000, 8)
 }

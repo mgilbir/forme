@@ -9,7 +9,7 @@ import (
 	"unsafe"
 
 	"github.com/mgilbir/forme/css"
-
+	"github.com/mgilbir/forme/internal/costtest"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -136,11 +136,12 @@ func TestGridCostIsTheItemsNotTheArea(t *testing.T) {
 	small, large := doc(60), doc(240)
 	w, _ := style.FromPx(600)
 	h, _ := style.FromPx(100000)
-	lo, hi, ratio := layoutScaling(func() { Layout(small.Root, Size{W: w, H: h}, nil, nil) },
+	c := costtest.Time(t, "a grid of items spanning s rows and columns",
+		func() { Layout(small.Root, Size{W: w, H: h}, nil, nil) },
 		func() { Layout(large.Root, Size{W: w, H: h}, nil, nil) })
-	if ratio > 8 {
+	if c.Ratio > 8 {
 		t.Errorf("four times the span took %.1f times as long (%v against %v); the "+
-			"occupancy is to cost the items and not the cells", ratio, hi, lo)
+			"occupancy is to cost the items and not the cells", c.Ratio, c.Large, c.Small)
 	}
 }
 
@@ -161,16 +162,16 @@ func TestTrackSizingIsLinearInTheTracks(t *testing.T) {
 	}
 	st, sa := setup(3000)
 	lt, la := setup(12000)
-	lo, hi, ratio := layoutScaling(func() {
+	c := costtest.Time(t, "sizing a column of n tracks", func() {
 		l.resolveTracks(st, sa, 0, 1<<24, true, true, 0, style.MaxUnit)
 		trackEdgesOf(st).start(len(st)-1, 0)
 	}, func() {
 		l.resolveTracks(lt, la, 0, 1<<24, true, true, 0, style.MaxUnit)
 		trackEdgesOf(lt).start(len(lt)-1, 0)
 	})
-	if ratio > 8 {
+	if c.Ratio > 8 {
 		t.Errorf("four times the tracks took %.1f times as long (%v against %v)",
-			ratio, hi, lo)
+			c.Ratio, c.Large, c.Small)
 	}
 }
 
@@ -191,15 +192,16 @@ func TestGrowingToLimitsStopsWhenNothingGrows(t *testing.T) {
 	st, sl := setup(2000)
 	lt, ll := setup(8000)
 	var sf, lf style.Unit
-	lo, hi, ratio := layoutScaling(func() { sf = growToLimits(st, sl, 7) },
+	c := costtest.Time(t, "growing n tracks to their limits",
+		func() { sf = growToLimits(st, sl, 7) },
 		func() { lf = growToLimits(lt, ll, 7) })
 	wantS, _ := setup(2000)
 	if want := growToLimitsByScan(wantS, sl, 7); sf != want || lf != want {
 		t.Fatalf("the free space left is %d and %d; the full passes leave %d", sf, lf, want)
 	}
-	if ratio > 8 {
+	if c.Ratio > 8 {
 		t.Errorf("four times the tracks took %.1f times as long (%v against %v)",
-			ratio, hi, lo)
+			c.Ratio, c.Large, c.Small)
 	}
 }
 
@@ -312,12 +314,13 @@ func TestAnAutomaticRepetitionCostsTheBound(t *testing.T) {
 	}
 	small, large := doc(100000), doc(400000)
 	w, _ := style.FromPx(600)
-	lo, hi, ratio := layoutScaling(func() { Layout(small.Root, Size{W: w, H: w}, nil, nil) },
+	c := costtest.Time(t, "an automatic repetition in four times the room",
+		func() { Layout(small.Root, Size{W: w, H: w}, nil, nil) },
 		func() { Layout(large.Root, Size{W: w, H: w}, nil, nil) })
-	if ratio > 2 {
+	if c.Ratio > 2 {
 		t.Errorf("four times the room took %.1f times as long (%v against %v); the "+
 			"repetition is to stop at the bound, not be made and then refused",
-			ratio, hi, lo)
+			c.Ratio, c.Large, c.Small)
 	}
 }
 

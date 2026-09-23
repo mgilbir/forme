@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mgilbir/forme/internal/costtest"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -264,9 +265,9 @@ func TestAvoidZonesAreLinearInTheContent(t *testing.T) {
 		}
 	}
 	small, large := content(500), content(2000)
-	lo, hi, ratio := layoutScaling(ask(small), ask(large))
-	if ratio > 8 {
+	c := costtest.Time(t, "the avoid zones of n boxes", ask(small), ask(large))
+	if c.Ratio > 8 {
 		t.Errorf("four times the boxes took %.1f times as long (%v against %v); "+
-			"linear is about four", ratio, hi, lo)
+			"linear is about four", c.Ratio, c.Large, c.Small)
 	}
 }

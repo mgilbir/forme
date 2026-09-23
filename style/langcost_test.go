@@ -3,34 +3,11 @@ package style
 import (
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
+	"github.com/mgilbir/forme/internal/costtest"
 )
-
-// scalingOf measures one shape at n and at four times n, the way
-// html/parsecost_test.go's scaling does: in windows of equal length, turn
-// about, the least of nine rounds each, so that a busy machine slows both sides
-// alike and the ratio is the curve's.
-func scalingOf(small, large func()) (lo, hi time.Duration, ratio float64) {
-	bestSmall, bestLarge := time.Duration(1<<62), time.Duration(1<<62)
-	for r := 0; r < 9; r++ {
-		start := time.Now()
-		for i := 0; i < 4; i++ {
-			small()
-		}
-		bestSmall = min(bestSmall, time.Since(start))
-		start = time.Now()
-		large()
-		bestLarge = min(bestLarge, time.Since(start))
-	}
-	lo, hi = bestSmall/4, bestLarge
-	if lo <= 0 {
-		return lo, hi, 0
-	}
-	return lo, hi, float64(hi) / float64(lo)
-}
 
 // TestLangIsAnsweredOncePerElement is :lang() tried on every element of a deep
 // document.
@@ -78,10 +55,13 @@ func TestLangIsAnsweredOncePerElement(t *testing.T) {
 			}
 		}
 	}
-	lo, hi, ratio := scalingOf(match(500), match(2000))
-	if ratio > 8 {
+	// Timed, not counted: the matcher's steps count what it compares, and the
+	// walk this is about was a question the matcher asked of the tree, which
+	// nothing counts. See costtest.Time.
+	c := costtest.Time(t, ":lang(tr) on every element of a chain", match(500), match(2000))
+	if c.Ratio > 8 {
 		t.Errorf(":lang(tr) on every element of a chain of 500 took %v and of 2000 "+
 			"took %v, a factor of %.1f: linear is four and a walk to the root per "+
-			"element is sixteen", lo, hi, ratio)
+			"element is sixteen", c.Small, c.Large, c.Ratio)
 	}
 }

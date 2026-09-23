@@ -4,9 +4,9 @@ import (
 	"encoding/binary"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/mgilbir/forme/fonttest"
+	"github.com/mgilbir/forme/internal/costtest"
 )
 
 // Load reads a font under one work budget, shared by the sfnt and CFF readers;
@@ -31,24 +31,14 @@ func TestLoadDoesNotInterpretCharstrings(t *testing.T) {
 			t.Fatalf("the fixture did not load as CFF: %v", err)
 		}
 	}
-	took := func(data []byte) time.Duration {
-		best := time.Duration(1<<63 - 1)
-		for range 5 {
-			start := time.Now()
-			for range 50 {
-				_, _ = Load(data)
-			}
-			if d := time.Since(start); d < best {
-				best = d
-			}
-		}
-		return best
-	}
-	a, b := took(small), took(large)
-	if ratio := float64(b) / float64(a); ratio > 8 {
+	// Timed, because Load's budget is its own and not one a caller can read;
+	// see costtest.Time.
+	c := costtest.Time(t, "loading a CFF of subroutine fan-out 4 and 16",
+		func() { _, _ = Load(small) }, func() { _, _ = Load(large) })
+	if c.Ratio > 8 {
 		t.Errorf("a fan-out of 4 loaded in %v and of 16 in %v, %.1f times; the "+
 			"font is a few bytes larger and nothing else about it is, so Load is "+
-			"walking the subroutines", a, b, ratio)
+			"walking the subroutines", c.Small, c.Large, c.Ratio)
 	}
 }
 

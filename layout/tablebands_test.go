@@ -1,9 +1,11 @@
 package layout
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/mgilbir/forme/internal/costtest"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -69,14 +71,15 @@ func TestTableBandsCostTheCellsNotTheSlots(t *testing.T) {
 	}
 	small, large := setup(500), setup(2000)
 	var got int
-	lo, hi, ratio := layoutScaling(func() { ask(small, 500) }, func() { got = ask(large, 2000) })
+	c := costtest.Time(t, "the bands of a table n wide and n deep",
+		func() { ask(small, 500) }, func() { got = ask(large, 2000) })
 	// Each cell once for its row, once for its column and once for each group.
 	if want := 4 * (2*2000 - 1); got != want {
 		t.Fatalf("a table of %d cells was given %d bands; want %d", 2*2000-1, got, want)
 	}
-	if ratio > 8 {
+	if c.Ratio > 8 {
 		t.Errorf("four times the rows and columns took %.1f times as long (%v against %v); "+
-			"the bands are to cost the cells and not the slots", ratio, hi, lo)
+			"the bands are to cost the cells and not the slots", c.Ratio, c.Large, c.Small)
 	}
 }
 
@@ -185,7 +188,7 @@ func TestAColumnSpanIsBandedOnce(t *testing.T) {
 		sg, sc, sx, sb := setup(2000, grouped)
 		lg, lc, lx, lb := setup(8000, grouped)
 		var small, large *Fragment
-		lo, hi, ratio := layoutScaling(func() {
+		c := costtest.Time(t, fmt.Sprintf("a column span across n cells, grouped %v", grouped), func() {
 			small = &Fragment{}
 			l.paintableColumns(small, sg, sb, sc, sx, 0, w)
 		}, func() {
@@ -201,9 +204,9 @@ func TestAColumnSpanIsBandedOnce(t *testing.T) {
 			t.Fatalf("grouped %v: one column across 8000 cells was given %d bands; want %d",
 				grouped, n, want)
 		}
-		if ratio > 8 {
+		if c.Ratio > 8 {
 			t.Errorf("grouped %v: four times the span took %.1f times as long (%v against %v); "+
-				"a column's bands are to be asked for once", grouped, ratio, hi, lo)
+				"a column's bands are to be asked for once", grouped, c.Ratio, c.Large, c.Small)
 		}
 	}
 }

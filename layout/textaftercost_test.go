@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mgilbir/forme/internal/costtest"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -55,10 +56,10 @@ func TestTextAfterStopsWhenItIsFull(t *testing.T) {
 			}
 		}
 	}
-	lo, hi, ratio := layoutScaling(measure(1000), measure(4000))
-	if ratio > 8 {
+	c := costtest.Time(t, "the text after each of n boxes", measure(1000), measure(4000))
+	if c.Ratio > 8 {
 		t.Errorf("the text after each of 1000 boxes took %v and of 4000 took %v, a "+
 			"factor of %.1f: linear is four, and a walk to the end of the paragraph "+
-			"per box is sixteen", lo, hi, ratio)
+			"per box is sixteen", c.Small, c.Large, c.Ratio)
 	}
 }

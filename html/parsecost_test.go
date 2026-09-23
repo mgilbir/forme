@@ -4,7 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
+
+	"github.com/mgilbir/forme/internal/costtest"
 )
 
 // The shapes of markup whose cost was not linear in their length, each guarded
@@ -14,40 +15,8 @@ import (
 // the race detector's job, which runs everything ten or more times slower. A
 // ratio is the same on any machine: four times the input is four times the work
 // when the parse is linear and sixteen when it is not, and eight is between
-// them with room on both sides.
-
-// scaling measures one shape at n and at four times n, and says what one run
-// of each took and the factor between them.
-//
-// The two are timed in windows of equal length, turn about: four runs of the
-// small case against one of the large, the least of nine rounds each. Timed
-// one after the other, a run at n took under a millisecond, and whatever else
-// the machine was doing in that millisecond landed on one side of the ratio
-// and not the other — the rest of the suite running beside it put a linear
-// curve at 8.3 for four. Windows the same length, interleaved, are slowed
-// alike by a busy machine, and the ratio is the curve's.
-func scaling(small, large func()) (lo, hi time.Duration, ratio float64) {
-	bestSmall, bestLarge := time.Duration(1<<62), time.Duration(1<<62)
-	for r := 0; r < 9; r++ {
-		start := time.Now()
-		for i := 0; i < 4; i++ {
-			small()
-		}
-		if el := time.Since(start); el < bestSmall {
-			bestSmall = el
-		}
-		start = time.Now()
-		large()
-		if el := time.Since(start); el < bestLarge {
-			bestLarge = el
-		}
-	}
-	lo, hi = bestSmall/4, bestLarge
-	if lo <= 0 {
-		return lo, hi, 0
-	}
-	return lo, hi, float64(hi) / float64(lo)
-}
+// them with room on both sides. The ratios are timed by costtest.Time, which
+// says how a busy machine is kept from deciding them.
 
 // attrs is n distinct attributes, " a00000 a00001 …". The names are all one
 // length, so that comparing one with a name being looked up costs the same
@@ -141,14 +110,11 @@ func TestFosterParentingIsLinear(t *testing.T) {
 
 		const n = 10000
 		small, large := build(n), build(4*n)
-		lo, hi, ratio := scaling(func() { Parse(small) }, func() { Parse(large) })
-		if lo <= 0 {
-			t.Fatalf("%s: %d fostered in %v; there is nothing to compare", tc.name, n, lo)
-		}
-		if ratio > 8 {
+		c := costtest.Time(t, "fostering "+tc.name, func() { Parse(small) }, func() { Parse(large) })
+		if c.Ratio > 8 {
 			t.Errorf("%s: %d fostered in %v and %d in %v, a factor of %.1f for four times "+
 				"the input; putting a node in front of a table must not walk what was "+
-				"put there before it", tc.name, n, lo, 4*n, hi, ratio)
+				"put there before it", tc.name, n, c.Small, 4*n, c.Large, c.Ratio)
 		}
 	}
 }

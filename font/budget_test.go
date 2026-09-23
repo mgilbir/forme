@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/mgilbir/forme/fonttest"
+	"github.com/mgilbir/forme/internal/costtest"
 )
 
 // The work one font may cost to read. Every test here is about a shape where a
@@ -64,13 +65,7 @@ func linearIn(t *testing.T, what string, small, large func(*Budget)) {
 		return b.Spent()
 	}
 	a, b := spent(small), spent(large)
-	if a <= 0 {
-		t.Fatalf("%s: the shape at n charged nothing to the budget, so there is "+
-			"no work to compare the shape at 4n with", what)
-	}
-	ratio := float64(b) / float64(a)
-	t.Logf("%s: 4n spends %.1f times n (%d units and %d)", what, ratio, a, b)
-	if ratio > 8 {
+	if ratio := costtest.Count(t, what, int64(a), int64(b)); ratio > 8 {
 		t.Errorf("%s: the shape at n spent %d units and at 4n %d, %.1f times — "+
 			"linear is four, and the work being done again for every reference "+
 			"to it is sixteen", what, a, b, ratio)

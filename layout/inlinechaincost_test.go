@@ -5,6 +5,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/mgilbir/forme/internal/costtest"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -158,11 +159,11 @@ func TestTheInlineChainsAreLinearInTheNesting(t *testing.T) {
 					q.ask(l, texts)
 				}
 			}
-			lo, hi, ratio := layoutScaling(measure(500), measure(2000))
-			if ratio > 8 {
+			c := costtest.Time(t, q.what, measure(500), measure(2000))
+			if c.Ratio > 8 {
 				t.Errorf("%s in a chain of 500 spans took %v and of 2000 took %v, a "+
 					"factor of %.1f: linear is four and a walk per word is sixteen",
-					q.what, lo, hi, ratio)
+					q.what, c.Small, c.Large, c.Ratio)
 			}
 		})
 	}
