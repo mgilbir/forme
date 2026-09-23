@@ -23,12 +23,14 @@
 // to a property Unicode states, so a new Unicode release is a re-run rather than
 // a re-reading.
 //
-//	go run ./cmd/genuse -version <X.Y.Z> <IndicSyllabicCategory.txt> <IndicPositionalCategory.txt> \
+//	go run ./cmd/genuse -version <X.Y.Z> -source <url> <IndicSyllabicCategory.txt> <IndicPositionalCategory.txt> \
 //		<UnicodeData.txt> <DerivedCoreProperties.txt> <ArabicShaping.txt> \
 //		<IndicSyllabicCategory-Additional.txt> <IndicPositionalCategory-Additional.txt> > shape/usetable.go
 //
-// The last two are the engine's corrections, testdata/ms-use; the five before
-// them are the database, and are the ones checked against -version.
+// The last two are the engine's corrections, fetched from HarfBuzz's src/ms-use
+// at the release the Makefile pins, by digest; -source is where they came from,
+// and the table names it. The five before them are the database, and are the
+// ones checked against -version.
 package main
 
 import (
@@ -47,10 +49,11 @@ import (
 
 func main() {
 	version := flag.String("version", "", "the Unicode version the database files came from")
+	source := flag.String("source", "", "where the two override files were fetched from, at a pinned release")
 	flag.Parse()
 	args := flag.Args()
-	if len(args) != 7 {
-		fmt.Fprintln(os.Stderr, "usage: genuse -version <X.Y.Z> <IndicSyllabicCategory.txt> "+
+	if len(args) != 7 || *source == "" {
+		fmt.Fprintln(os.Stderr, "usage: genuse -version <X.Y.Z> -source <url> <IndicSyllabicCategory.txt> "+
 			"<IndicPositionalCategory.txt> <UnicodeData.txt> "+
 			"<DerivedCoreProperties.txt> <ArabicShaping.txt> "+
 			"<IndicSyllabicCategory-Additional.txt> <IndicPositionalCategory-Additional.txt>")
@@ -164,6 +167,8 @@ func main() {
 // ArabicShaping.txt, and the Universal Shaping Engine's overrides of the first
 // two, IndicSyllabicCategory-Additional.txt and
 // IndicPositionalCategory-Additional.txt, as HarfBuzz publishes them. DO NOT EDIT.
+//
+// Source of the overrides: %s
 
 package shape
 
@@ -176,7 +181,7 @@ package shape
 // publish, and cmd/genuse is that derivation. See its documentation for why it
 // is computed rather than tabulated.
 var useRanges = [...]useRange{
-`, *version, len(spans))
+`, *source, *version, len(spans))
 	for _, s := range spans {
 		fmt.Fprintf(&w, "\t{0x%04X, 0x%04X, use%s, usePos%s},\n", s.lo, s.hi, s.cat, s.pos)
 	}

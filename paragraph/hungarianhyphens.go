@@ -62,6 +62,37 @@ package paragraph
 //	legacy_patterns: huhyphn.tex
 //	message: Hungarian hyphenation patterns
 //	description: Hyphenation patterns for Hungarian in T1/EC and UTF-8 encodings.
+//
+// The file is offered under a choice of licences, and this repository takes
+// it, and this table made from it, under the Mozilla Public License 1.1.
+// The notice its Exhibit A asks for in each file, with the blanks filled
+// from the header above; the licence's text is in THIRD_PARTY_NOTICES.
+//
+// Licence text: https://www.mozilla.org/media/MPL/1.1/index.txt
+// SHA-256: f849fc26a7a99981611a3a370e83078deb617d12a45776d6c4cada4d338be469
+//
+//	The contents of this file are subject to the Mozilla Public License
+//	Version 1.1 (the "License"); you may not use this file except in
+//	compliance with the License. You may obtain a copy of the License at
+//	https://www.mozilla.org/MPL/
+//
+//	Software distributed under the License is distributed on an "AS IS"
+//	basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
+//	License for the specific language governing rights and limitations
+//	under the License.
+//
+//	The Original Code is hyph-hu.tex, Hyphenation patterns for Hungarian.
+//
+//	The Initial Developer of the Original Code is Bence Nagy.
+//	Portions created by the Initial Developer are Copyright (C) 2003 Bence Nagy.
+//	All Rights Reserved.
+//
+//	Contributor(s): Bence Nagy.
+//
+// Modified, as §3.3 asks it be said: cmd/genhyphen copies hyph-hu.tex's
+// \patterns and \hyphenation blocks into this Go file, one entry per line,
+// and adds nothing to them, removes nothing and changes no entry. The date of
+// each change is the commit that made it.
 var hungarianHyphenation = hyphenSource{
 	key:   "hu",
 	left:  2,

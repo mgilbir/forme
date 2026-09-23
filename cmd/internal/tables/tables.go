@@ -71,16 +71,20 @@ var Manifest = []Table{
 		Args: []string{ucdVersion, "${UCD}/UnicodeData.txt"}},
 	{Out: "shape/canonical.go", Generator: "gencanonical", Target: "shapetables",
 		Args: []string{ucdVersion, "${UCD}/UnicodeData.txt", "${UCD}/CompositionExclusions.txt"}},
-	// Not the database: the script development specifications' list, which is
-	// committed under testdata/ms-use with its notice.
+	// Not the database: the script development specifications' list, and the
+	// Universal Shaping Engine's corrections to two of the database's
+	// properties, from HarfBuzz's src/ms-use at MSUSE_URL's release.
 	{Out: "shape/indicvowel.go", Generator: "genvowel", Target: "shapetables",
-		Args: []string{"testdata/ms-use/IndicShapingInvalidCluster.txt"}},
+		Args:   []string{"-source=${MSUSE_URL}/IndicShapingInvalidCluster.txt", "${MSUSE_DIR}/IndicShapingInvalidCluster.txt"},
+		Inputs: []string{"${MSUSE_DIR}/IndicShapingInvalidCluster.txt"}},
 	{Out: "shape/usetable.go", Generator: "genuse", Target: "useable",
-		Args: []string{ucdVersion,
+		Args: []string{ucdVersion, "-source=${MSUSE_URL}",
 			"${UCD}/IndicSyllabicCategory.txt", "${UCD}/IndicPositionalCategory.txt",
 			"${UCD}/UnicodeData.txt", "${UCD}/DerivedCoreProperties.txt", "${UCD}/ArabicShaping.txt",
-			"testdata/ms-use/IndicSyllabicCategory-Additional.txt",
-			"testdata/ms-use/IndicPositionalCategory-Additional.txt"}},
+			"${MSUSE_DIR}/IndicSyllabicCategory-Additional.txt",
+			"${MSUSE_DIR}/IndicPositionalCategory-Additional.txt"},
+		Inputs: []string{"${MSUSE_DIR}/IndicSyllabicCategory-Additional.txt",
+			"${MSUSE_DIR}/IndicPositionalCategory-Additional.txt"}},
 
 	// The bidirectional properties and the grapheme clusters.
 	{Out: "bidi/tables.go", Generator: "genbidi", Target: "bidi-tables",
@@ -126,7 +130,9 @@ var Manifest = []Table{
 	// The hyphenation patterns, from tex-hyphen at TEX_HYPHEN_COMMIT.
 	hyphenation("english", "en", "hyph-en-us"),
 	hyphenation("dutch", "nl", "hyph-nl"),
-	hyphenation("hungarian", "hu", "hyph-hu"),
+	// Offered under MPL 1.1, GPL 2.0 or LGPL 2.1; taken under the MPL 1.1,
+	// whose notice the table carries.
+	withMPL(hyphenation("hungarian", "hu", "hyph-hu")),
 	hyphenation("pinyin", "zh-latn", "hyph-zh-latn-pinyin"),
 
 	// The standard fonts' metrics, from matplotlib's copies of Adobe's AFM files
@@ -191,6 +197,14 @@ func hyphenation(name, key, file string) Table {
 		Args:   []string{"-source=${HYPHEN_URL}/" + file + ".tex", name, key, "${HYPHEN_DIR}/" + file + ".tex"},
 		Inputs: []string{"${HYPHEN_DIR}/" + file + ".tex"},
 	}
+}
+
+// withMPL is a hyphenation table taken under the Mozilla Public License 1.1,
+// whose Exhibit A notice cmd/genhyphen writes from the licence's pinned text.
+func withMPL(t Table) Table {
+	t.Args = append([]string{"-mpl=${MPL}", "-mpl-source=${MPL_URL}", "-mpl-sha256=${MPL_SHA256}"}, t.Args...)
+	t.Inputs = append(t.Inputs, "${MPL}")
+	return t
 }
 
 // afmFiles are the fourteen files cmd/genstdfonts reads.

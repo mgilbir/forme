@@ -154,14 +154,16 @@ func trackedFiles(t *testing.T) []string {
 }
 
 // keptThirdParty reports whether a kept file is one somebody else made: a font
-// or a binary blob, which this repository does not write, or one of the files
-// testdata/ms-use keeps as HarfBuzz published them.
+// or a binary blob, which this repository does not write. The data files other
+// people publish are fetched at a pin rather than kept — testdata/ms-use's
+// three were the last, and are fetched from HarfBuzz now — so a table made
+// from one is covered by the table's entry.
 func keptThirdParty(f string) bool {
 	switch strings.ToLower(filepath.Ext(f)) {
 	case ".ttf", ".otf", ".ttc", ".woff", ".woff2", ".pfb", ".pfa", ".afm", ".bin":
 		return true
 	}
-	return strings.HasPrefix(f, "testdata/ms-use/") && strings.HasSuffix(f, ".txt")
+	return false
 }
 
 // TestEveryThirdPartyFileHasANotice.
@@ -197,11 +199,12 @@ func TestEveryThirdPartyFileHasANotice(t *testing.T) {
 		}
 		kept++
 		if len(covered[f]) == 0 {
-			t.Errorf("%s is a font, a binary or a vendored data file, and no entry of %s "+
+			t.Errorf("%s is a font or a binary file, and no entry of %s "+
 				"names it", f, noticesFile)
 		}
 	}
-	if kept < 10 {
+	// Nine: seven fonts, a second build of one of them, and Brotli's dictionary.
+	if kept < 9 {
 		t.Fatalf("only %d kept third-party files were found; this has stopped looking", kept)
 	}
 }
@@ -357,5 +360,87 @@ func TestTheNoticesParserReadsWhatIsThere(t *testing.T) {
 	if rules := strings.Count(string(data), "\n"+strings.Repeat("=", 76)+"\n"); rules != 2*len(entries) {
 		t.Errorf("the file has %d rules, which is %d entries, and %d were read: %v",
 			rules, rules/2, len(entries), titles)
+	}
+}
+
+// TestATableTakenUnderTheMPLCarriesItsNotice.
+//
+// hyph-hu.tex is offered under the MPL 1.1, the GPL 2.0 or the LGPL 2.1, and
+// this repository takes it under the MPL 1.1. That licence asks for its
+// Exhibit A notice in each file of the Covered Code and for its own text to go
+// with every copy. So every table the manifest generates with -mpl carries, in
+// its header, Exhibit A's fixed sentences as the pinned licence states them;
+// THIRD_PARTY_NOTICES says which table is taken under it and quotes the
+// licence whole — which TestEveryNoticeIsQuotedFromItsSource holds to the file.
+func TestATableTakenUnderTheMPLCarriesItsNotice(t *testing.T) {
+	vars := makeVars(t)
+	notices, err := os.ReadFile(filepath.Join(root, noticesFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(notices), "Quoted whole from ${MPL}:") {
+		t.Errorf("%s does not quote the MPL 1.1 whole", noticesFile)
+	}
+	required := os.Getenv("TABLE_INPUTS") == "required"
+	taken := 0
+	for _, tb := range tables.Manifest {
+		licence := ""
+		for _, a := range tb.Args {
+			if v, ok := strings.CutPrefix(a, "-mpl="); ok {
+				if licence, err = tables.Expand(v, vars); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		if licence == "" {
+			continue
+		}
+		taken++
+		if !strings.Contains(squeeze(string(notices)), squeeze("This repository takes")) ||
+			!strings.Contains(string(notices), tb.Out) {
+			t.Errorf("%s is taken under the MPL 1.1 and %s does not say so", tb.Out, noticesFile)
+		}
+		src, err := os.ReadFile(filepath.Join(root, tb.Out))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The notice is in the table's documentation, which runs to its first
+		// declaration: a hyphenation table's comes after the package clause.
+		header := string(src)
+		if i := strings.Index(header, "\nvar "); i >= 0 {
+			header = header[:i]
+		}
+		text, err := os.ReadFile(filepath.Join(root, licence))
+		if err != nil {
+			if required {
+				t.Errorf("%s is not here, and TABLE_INPUTS=required says it was fetched", licence)
+			}
+			continue
+		}
+		s := string(text)
+		i := strings.Index(s, "The contents of this file are subject to the Mozilla Public License")
+		j := strings.Index(s, "The Original Code is")
+		if i < 0 || j < i {
+			t.Fatalf("%s has no Exhibit A this can read", licence)
+		}
+		// The comment marks off each line, and nothing else: the notice has a
+		// URL in it.
+		var body strings.Builder
+		for _, l := range strings.Split(header, "\n") {
+			body.WriteString(strings.TrimPrefix(l, "//") + "\n")
+		}
+		if !strings.Contains(squeeze(body.String()), squeeze(s[i:j])) {
+			t.Errorf("%s is taken under the MPL 1.1 and its header does not carry "+
+				"Exhibit A's notice as %s states it", tb.Out, licence)
+		}
+		for _, blank := range []string{"The Original Code is ", "The Initial Developer of the Original Code is ",
+			"Portions created by ", "Contributor(s): "} {
+			if !strings.Contains(header, blank) || strings.Contains(header, blank+"_") {
+				t.Errorf("%s's Exhibit A leaves %q unfilled", tb.Out, blank)
+			}
+		}
+	}
+	if taken == 0 {
+		t.Fatal("no table in the manifest is taken under the MPL 1.1, and hyph-hu is")
 	}
 }

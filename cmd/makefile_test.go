@@ -106,6 +106,7 @@ func TestEveryFetchStampMovesWithWhatItFetches(t *testing.T) {
 		"AFM_STAMP":           {"MATPLOTLIB_COMMIT", "AFM_FILES"},
 		"BROTLI_STAMP":        {"BROTLI_COMMIT", "BROTLI_FILES"},
 		"AGL_STAMP":           {"AGL_COMMIT"},
+		"MSUSE_STAMP":         {"HARFBUZZ_VERSION", "MSUSE_FILES"},
 		"CSS_TESTS_STAMP":     {"CSS_TESTS_COMMIT"},
 		"CSS_COLOR_STAMP":     {"CSSWG_COMMIT"},
 		"NOTO_STAMP":          {"NOTO_HINTED", "NOTO_PATHS", "UNIFONT_VER", "IPAFONT_URL"},

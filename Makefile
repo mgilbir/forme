@@ -1,4 +1,4 @@
-.PHONY: ucd verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags notice-sources clean-notice-sources noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance
+.PHONY: ucd ms-use-sources clean-ms-use-sources verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags notice-sources clean-notice-sources noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance
 
 test:
 	gofmt -l . | grep -v '^testdata/' && exit 1 || true
@@ -269,6 +269,46 @@ else
 UCD_DEP :=
 endif
 
+# The Universal Shaping Engine's corrections to two of the database's
+# properties, and the script development specifications' list of invalid vowel
+# clusters: three files HarfBuzz keeps in src/ms-use, which cmd/genuse and
+# cmd/genvowel read. See testdata/ms-use/NOTICE.md.
+#
+# They were committed, taken from HarfBuzz at a commit nobody recorded, and two
+# of the three had drifted from any release anyone could name. They are
+# fetched now at HARFBUZZ_VERSION — the release the shaping oracle runs and the
+# language-tag table is taken from — and each is held to its SHA-256, which is
+# part of the stamp's key, so a new digest fetches again.
+#
+#	<file>:<sha256>
+HARFBUZZ_VERSION := 14.5.0
+MSUSE_URL := https://raw.githubusercontent.com/harfbuzz/harfbuzz/$(HARFBUZZ_VERSION)/src/ms-use
+MSUSE_DIR := testdata/ms-use
+MSUSE_FILES := \
+	IndicPositionalCategory-Additional.txt:2baa1c1efe5a5f108c304b1e27d0d97864c806764eb2b0a1bd91db80ae26b5b8 \
+	IndicShapingInvalidCluster.txt:02024d4289864665721e14ec99eb320ce187f289514b793449b4f6a8ddaf5944 \
+	IndicSyllabicCategory-Additional.txt:b9472e3e72d5fba8cb3f2e0578e73012aaae786db25779de0f1a5a5ab69b84a6
+MSUSE_STAMP := $(call stamp,$(MSUSE_DIR),$(MSUSE_URL) $(MSUSE_FILES))
+
+ms-use-sources: $(MSUSE_STAMP)
+
+$(MSUSE_STAMP):
+	mkdir -p $(MSUSE_DIR)
+	for e in $(foreach f,$(MSUSE_FILES),'$(f)'); do \
+	  f=$${e%%:*}; sum=$${e#*:}; \
+	  $(FETCH) -o $(MSUSE_DIR)/$$f.part $(MSUSE_URL)/$$f || exit 1; \
+	  echo "$$sum  $(MSUSE_DIR)/$$f.part" | sha256sum -c --quiet - || { \
+	    rm -f $(MSUSE_DIR)/$$f.part; \
+	    echo "$(MSUSE_URL)/$$f is not the file MSUSE_FILES pins" >&2; \
+	    exit 1; \
+	  }; \
+	  mv $(MSUSE_DIR)/$$f.part $(MSUSE_DIR)/$$f; \
+	done
+	touch $@
+
+clean-ms-use-sources:
+	rm -f $(MSUSE_DIR)/*.txt $(MSUSE_DIR)/.ok-*
+
 # Every generated table in this repository, and how a target regenerates one.
 #
 # A recipe here used to be "go run ./cmd/genX ... > table.go", and that shape
@@ -292,7 +332,8 @@ TABLE_VARS := UCD UNICODE_VERSION \
 	ICU_DICTS DICT_DIR BUDOUX BUDOUX_DIR HYPHEN_URL HYPHEN_DIR \
 	AFM_URL AFM_DIR BROTLI_URL BROTLI_DIR AGL_URL AGL_DIR \
 	HTML_ENTITIES HTML_ENTITIES_URL HTML_ENTITIES_SHA256 CSS_COLOR_URL CSS_COLOR_SPEC \
-	HB_LANGTAGS HB_LANGTAGS_URL HB_LANGTAGS_SHA256 HB_COPYING HB_COPYING_URL HB_COPYING_SHA256
+	HB_LANGTAGS HB_LANGTAGS_URL HB_LANGTAGS_SHA256 HB_COPYING HB_COPYING_URL HB_COPYING_SHA256 \
+	MSUSE_URL MSUSE_DIR MPL MPL_URL MPL_SHA256
 MAKETABLES = go run ./cmd/maketables $(foreach v,$(TABLE_VARS),-D '$(v)=$($(v))')
 
 # Every input a generator reads that is fetched rather than committed. Each is
@@ -306,7 +347,7 @@ MAKETABLES = go run ./cmd/maketables $(foreach v,$(TABLE_VARS),-D '$(v)=$($(v))'
 # whole, and each set is marked done by a stamp named for its pin and its files
 # (see stamp), so a new pin or a new file fetches again rather than finding the
 # old files and calling them current.
-TABLE_SOURCES = $(UCD_DEP) dictionary-sources phrase-sources hyphen-sources \
+TABLE_SOURCES = $(UCD_DEP) ms-use-sources dictionary-sources phrase-sources hyphen-sources $(MPL) \
 	afm brotli-sources agl css-color-spec $(HTML_ENTITIES) $(HB_LANGTAGS) $(HB_COPYING)
 
 # One file, whole or not at all.
@@ -323,7 +364,7 @@ endef
 #
 #	make shapetables                              # against the fetched database
 #	make shapetables UCD=/path/to/unpacked/ucd    # against one you already have
-shapetables: $(UCD_DEP)
+shapetables: $(UCD_DEP) ms-use-sources
 	$(MAKETABLES) shapetables
 
 # The bidirectional character properties, UAX #9. See cmd/genbidi.
@@ -481,7 +522,27 @@ $(HYPHEN_STAMP):
 	done
 	touch $@
 
-hyphens: hyphen-sources
+# The Mozilla Public License 1.1, under which this repository takes the
+# Hungarian patterns — hyph-hu.tex offers MPL 1.1, GPL 2.0 or LGPL 2.1 at the
+# recipient's option. The licence asks for its Exhibit A notice in each file of
+# the Covered Code, and cmd/genhyphen writes it into the table from this text.
+# mozilla.org publishes it at no versioned URL, so the digest is the pin: a
+# changed text is a fetch that fails, which is the moment to read it.
+MPL_URL := https://www.mozilla.org/media/MPL/1.1/index.txt
+MPL_SHA256 := f849fc26a7a99981611a3a370e83078deb617d12a45776d6c4cada4d338be469
+MPL := testdata/notices/MPL-1.1.txt
+
+$(MPL):
+	mkdir -p $(dir $@)
+	$(FETCH) -o $@.part $(MPL_URL)
+	echo "$(MPL_SHA256)  $@.part" | sha256sum -c --quiet - || { \
+	  rm -f $@.part; \
+	  echo "$(MPL_URL) is not the file MPL_SHA256 pins" >&2; \
+	  exit 1; \
+	}
+	mv $@.part $@
+
+hyphens: hyphen-sources $(MPL)
 	$(MAKETABLES) hyphens
 
 # Which characters stand upright on a line of vertical text, UAX #50. It is
@@ -499,7 +560,7 @@ vertical: $(UCD_DEP)
 widths: $(UCD_DEP)
 	$(MAKETABLES) widths
 
-useable: $(UCD_DEP)
+useable: $(UCD_DEP) ms-use-sources
 	$(MAKETABLES) useable
 
 # The character properties the engine asks of a character that no table above
@@ -868,7 +929,7 @@ clean-css-colors:
 # Taken at a HarfBuzz release — the one the shaping oracle runs — and pinned by
 # digest as well: the fetch refuses a file with any other SHA-256, so does the
 # generator, and the table records it. Moving to a newer release is moving both.
-HB_LANGTAGS_VERSION := 14.5.0
+HB_LANGTAGS_VERSION := $(HARFBUZZ_VERSION)
 HB_LANGTAGS_URL := https://raw.githubusercontent.com/harfbuzz/harfbuzz/$(HB_LANGTAGS_VERSION)/src/hb-ot-tag-table.hh
 HB_LANGTAGS_SHA256 := fe80a969cc25ddf2c4613b9ebbc1dd7e26ec105fafc892d9ff9f221a5d2355e6
 HB_LANGTAGS := testdata/harfbuzz-langtags/hb-ot-tag-table.hh

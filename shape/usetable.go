@@ -3,6 +3,8 @@
 // ArabicShaping.txt, and the Universal Shaping Engine's overrides of the first
 // two, IndicSyllabicCategory-Additional.txt and
 // IndicPositionalCategory-Additional.txt, as HarfBuzz publishes them. DO NOT EDIT.
+//
+// Source of the overrides: https://raw.githubusercontent.com/harfbuzz/harfbuzz/14.5.0/src/ms-use
 
 package shape
 
