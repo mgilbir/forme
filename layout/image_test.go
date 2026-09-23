@@ -153,8 +153,8 @@ func TestImagePixelCapFiresAtItsRealValue(t *testing.T) {
 // too large.
 func TestImagePixelCapIsCrossedNotApproached(t *testing.T) {
 	l := &replacedLoader{
-		rec: NewRecorder(nil), loaded: map[string]*ReplacedContent{},
-		failed: map[string]bool{}, budget: maxDocumentPixels,
+		rec: NewRecorder(nil), loaded: map[refKey]*ReplacedContent{},
+		failed: map[refKey]bool{}, budget: maxDocumentPixels,
 	}
 	// A square of exactly the cap, and one row taller.
 	side := uint32(1 << 12) // 4096 × 4096 is exactly 1<<24
@@ -162,8 +162,8 @@ func TestImagePixelCapIsCrossedNotApproached(t *testing.T) {
 		t.Fatalf("this test is written against a cap of %d, which is now %d",
 			int64(side)*int64(side), maxImagePixels)
 	}
-	_, atCap := l.decode("at-cap", "image", bombPNG(side, side), [32]byte{}, svgAsImage)
-	_, overCap := l.decode("over-cap", "image", bombPNG(side, side+1), [32]byte{}, svgAsImage)
+	_, atCap := l.decode("at-cap", "image", bombPNG(side, side), [32]byte{}, svgAsImage, "")
+	_, overCap := l.decode("over-cap", "image", bombPNG(side, side+1), [32]byte{}, svgAsImage, "")
 
 	// The image at the cap gets past the *cap* and then fails on its missing
 	// pixel data, which is a different complaint and the one that proves the
@@ -382,10 +382,10 @@ func FuzzImageLoading(f *testing.F) {
 			return
 		}
 		l := &replacedLoader{
-			rec: NewRecorder(nil), loaded: map[string]*ReplacedContent{},
-			failed: map[string]bool{}, budget: maxDocumentPixels,
+			rec: NewRecorder(nil), loaded: map[refKey]*ReplacedContent{},
+			failed: map[refKey]bool{}, budget: maxDocumentPixels,
 		}
-		got, fail := l.decode("fuzz", "image", data, [32]byte{}, svgAsImage)
+		got, fail := l.decode("fuzz", "image", data, [32]byte{}, svgAsImage, "")
 		switch {
 		case got == nil && fail == nil:
 			t.Fatal("a decode neither succeeded nor explained itself")

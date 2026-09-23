@@ -27,9 +27,21 @@ import (
 // # What this deliberately is not
 //
 // A renderer. There is no path geometry here, no transform stack, no gradient,
-// no text, no <use>, no CSS cascade over presentation attributes and no
-// stylesheet. An SVG this cannot reduce to a size and a colour is reported
-// exactly as it was before — the finding narrows, it does not go quiet.
+// no text, no <use>, no CSS cascade and no stylesheet. An SVG this cannot
+// reduce to a size and a colour is reported exactly as it was before — the
+// finding narrows, it does not go quiet.
+//
+// What it does read is SVG 2's presentation attributes, as far as a filled
+// rectangle needs them, with the inheritance §6.7 gives them: a fill, a stroke
+// and a visibility written on the root are the rect's unless the rect says
+// otherwise, and a display of "none" takes an element out of the picture. Every
+// other attribute is either one that cannot change what a filled, unstroked
+// rectangle paints — and there is a list of those, see svgAttributes — or one
+// that can, and refuses the picture. An attribute on neither list refuses it
+// too: the promise is "exact or refused", and an attribute nobody has looked at
+// is not exact. They were not read at all, so "<svg fill=red><rect/></svg>"
+// was painted black, and a rect with display="none" or visibility="hidden" was
+// painted (audit C81).
 //
 // The reason to stop here is that the next step is not a small one. A rect with
 // rounded corners, or two rects, or a rect that does not cover the viewport,
@@ -272,6 +284,12 @@ func svgReduce(data []byte) (root xml.StartElement, rects []svgRect, ok bool) {
 	dec.Entity = xml.HTMLEntity
 
 	haveRoot, elements := false, 0
+	// What the root passes down to its rects, and whether the root is rendered
+	// at all. A root with display="none" renders nothing, and is still the
+	// size it says: the rects are read — one that could not be would still
+	// refuse — and dropped.
+	var inherited svgInherited
+	rootShown := true
 	for {
 		tok, err := dec.Token()
 		if err == io.EOF {
@@ -292,6 +310,10 @@ func svgReduce(data []byte) (root xml.StartElement, rects []svgRect, ok bool) {
 				return xml.StartElement{}, nil, false
 			}
 			root, haveRoot = se, true
+			var okRoot bool
+			if inherited, rootShown, okRoot = svgPresentation(se, svgInherited{}, svgRootAttribute); !okRoot {
+				return xml.StartElement{}, nil, false
+			}
 			continue
 		}
 		switch strings.ToLower(se.Name.Local) {
@@ -301,11 +323,11 @@ func svgReduce(data []byte) (root xml.StartElement, rects []svgRect, ok bool) {
 			// over it already.
 			continue
 		case "rect":
-			r, okRect := svgReadRect(se)
+			r, shown, okRect := svgReadRect(se, inherited)
 			if !okRect {
 				return xml.StartElement{}, nil, false
 			}
-			if r.fill.A != 0 {
+			if shown && rootShown && r.fill.A != 0 {
 				rects = append(rects, r)
 			}
 		default:
@@ -318,44 +340,280 @@ func svgReduce(data []byte) (root xml.StartElement, rects []svgRect, ok bool) {
 	return root, rects, true
 }
 
-// svgReadRect reads one <rect>.
+// svgReadRect reads one <rect>, with what the root passes down to it, and says
+// whether it is rendered.
 //
 // A rect this cannot express refuses the whole picture rather than being left
 // out, because a picture missing one of its shapes is a wrong picture and looks
-// like a right one.
-func svgReadRect(rect xml.StartElement) (svgRect, bool) {
-	// Rounded corners are not a rectangle; a transform moves or shears one; and
-	// the rest each change what reaches the page without changing the geometry.
-	for _, name := range rectAttributesThatChangeThePaint {
-		if attrOf(rect, name) != "" {
-			return svgRect{}, false
-		}
+// like a right one. A rect that is not rendered — display="none", or hidden
+// by its own visibility or the root's — is left out, which is exactly what a
+// renderer does with it.
+func svgReadRect(rect xml.StartElement, from svgInherited) (svgRect, bool, bool) {
+	p, shown, ok := svgPresentation(rect, from, svgRectAttribute)
+	if !ok {
+		return svgRect{}, false, false
 	}
 	var out svgRect
-	var ok bool
 	if out.x, ok = svgCoord(attrOf(rect, "x")); !ok {
-		return svgRect{}, false
+		return svgRect{}, false, false
 	}
 	if out.y, ok = svgCoord(attrOf(rect, "y")); !ok {
-		return svgRect{}, false
+		return svgRect{}, false, false
 	}
 	if out.w, ok = svgCoord(attrOf(rect, "width")); !ok {
-		return svgRect{}, false
+		return svgRect{}, false, false
 	}
 	if out.h, ok = svgCoord(attrOf(rect, "height")); !ok {
-		return svgRect{}, false
+		return svgRect{}, false, false
 	}
-	colour, okFill := svgFillColour(attrOf(rect, "fill"))
-	if !okFill {
-		// "none" draws nothing, which is a rectangle legitimately absent rather
-		// than a picture this cannot read.
-		if strings.EqualFold(strings.TrimSpace(attrOf(rect, "fill")), "none") {
-			return svgRect{}, true
+	// A stroke is drawn along the edge and there is no operation for one.
+	if p.stroke {
+		return svgRect{}, false, false
+	}
+	if p.hidden || p.fillNone {
+		// Not painted, which is a rectangle legitimately absent rather than a
+		// picture this cannot read.
+		return svgRect{}, false, true
+	}
+	out.fill = p.fill
+	return out, shown, true
+}
+
+// svgInherited is the presentation an element hands its children: SVG 2's
+// inherited properties, as far as this reads them.
+type svgInherited struct {
+	// fill is the paint, and fillNone says it is "none". Unset, it is SVG's
+	// initial value, black.
+	fill     style.RGBA
+	fillNone bool
+	fillSet  bool
+	// stroke says the stroke is a paint rather than "none", its initial value.
+	stroke bool
+	// hidden is visibility: hidden or collapse.
+	hidden bool
+}
+
+// svgPresentation reads one element's attributes over what its parent handed
+// it: the inherited properties it passes on, whether it is rendered, and
+// whether every attribute on it is one this can honour or ignore exactly.
+//
+// kind classifies the attributes the element has of its own — geometry for a
+// rect, sizing for the root. Everything else is svgAttributes'.
+func svgPresentation(e xml.StartElement, from svgInherited,
+	kind func(name string) (svgAttrKind, bool)) (svgInherited, bool, bool) {
+
+	p, shown := from, true
+	for _, a := range e.Attr {
+		k := svgAttrKindOf(a.Name, kind)
+		v := strings.TrimSpace(a.Value)
+		inherit := strings.EqualFold(v, "inherit")
+		switch k {
+		case svgInert, svgOwn:
+		case svgFill:
+			if inherit {
+				continue
+			}
+			if strings.EqualFold(v, "none") {
+				p.fill, p.fillNone, p.fillSet = style.RGBA{}, true, true
+				continue
+			}
+			c, ok := svgFillColour(v)
+			if !ok {
+				return p, false, false
+			}
+			p.fill, p.fillNone, p.fillSet = c, false, true
+		case svgStroke:
+			if inherit {
+				continue
+			}
+			p.stroke = v != "" && !strings.EqualFold(v, "none")
+		case svgVisibility:
+			switch strings.ToLower(v) {
+			case "inherit":
+			case "visible":
+				p.hidden = false
+			case "hidden", "collapse":
+				p.hidden = true
+			default:
+				return p, false, false
+			}
+		case svgDisplay:
+			// Not inherited: "none" takes this element out, and any other
+			// value leaves it in. A display that is not a keyword is not a
+			// value at all and the attribute is ignored, as SVG 2 ignores an
+			// invalid presentation attribute.
+			if strings.EqualFold(v, "none") {
+				shown = false
+			}
+		case svgAlpha:
+			// opacity and fill-opacity. At one they change nothing; below it
+			// the rect is translucent, which a fill of the colour is not.
+			if a, ok := svgAlphaValue(v); !ok || a != 1 {
+				return p, false, false
+			}
+		case svgOverflow:
+			// What shows outside the viewport. The picture is clipped to it
+			// here, which is what "hidden", "scroll" and "clip" say and what
+			// "visible" and "auto" do not.
+			switch strings.ToLower(v) {
+			case "hidden", "scroll", "clip":
+			default:
+				return p, false, false
+			}
+		default:
+			return p, false, false
 		}
-		return svgRect{}, false
 	}
-	out.fill = colour
-	return out, true
+	if !p.fillSet {
+		p.fill = style.RGBA{A: 1} // black, SVG's initial fill
+	}
+	return p, shown, true
+}
+
+// svgAlphaValue reads an <alpha-value>: a number or a percentage, clamped to
+// the range [0, 1].
+func svgAlphaValue(v string) (float64, bool) {
+	scale := 1.0
+	if strings.HasSuffix(v, "%") {
+		v, scale = strings.TrimSuffix(v, "%"), 100
+	}
+	n, ok := parseNumber(strings.TrimSpace(v))
+	if !ok {
+		return 0, false
+	}
+	return math.Min(1, math.Max(0, n/scale)), true
+}
+
+// svgAttrKind is what an attribute can do to the picture.
+type svgAttrKind uint8
+
+const (
+	// svgRefuses is an attribute that changes what is painted in a way this
+	// cannot express, and every attribute nobody has classified.
+	svgRefuses svgAttrKind = iota
+	// svgInert changes nothing a filled, unstroked rectangle paints.
+	svgInert
+	// svgOwn is an attribute the element reads itself: a rect's geometry, the
+	// root's size.
+	svgOwn
+	svgFill
+	svgStroke
+	svgVisibility
+	svgDisplay
+	svgAlpha
+	svgOverflow
+)
+
+// svgAttributes classifies the attributes a root or a rect may carry, by SVG
+// 2's own lists.
+//
+// Presentation attributes (§6.8's table) are each either read, or inert for a
+// filled rectangle — a font, a text property, a marker (§11.6 puts markers on
+// paths, lines and polylines, not rects), a stroke's width or dashes when
+// there is no stroke, a fill-rule (a rectangle's one contour is inside by
+// either rule), a filter's colour space, a rendering hint — or one that
+// changes the paint and refuses: a clip, a mask, a filter, a transform. The
+// core, aria and event attributes change nothing drawn; "style" is CSS, which
+// is not read, and refuses. The conditional-processing attributes decide
+// whether an element is rendered at all and refuse. An attribute not here
+// refuses as well.
+//
+// It is one string rather than literals, for the reason
+// rectAttributesThatChangeThePaint was: several of these are spelled exactly
+// like CSS properties the style package admits it does not implement, and it
+// guards that admission with a scan of this module's source for the quoted
+// names. See TestUnimplementedPropertiesAreRegistered.
+var svgAttributes = func() map[string]svgAttrKind {
+	out := map[string]svgAttrKind{}
+	for _, line := range strings.Split(`
+		fill:fill stroke:stroke visibility:visibility display:display
+		opacity:alpha fill-opacity:alpha overflow:overflow
+		id:inert class:inert tabindex:inert lang:inert role:inert focusable:inert
+		version:inert baseProfile:inert zoomAndPan:inert
+		contentScriptType:inert contentStyleType:inert pathLength:inert
+		fill-rule:inert clip-rule:inert color:inert
+		stroke-width:inert stroke-dasharray:inert stroke-dashoffset:inert
+		stroke-linecap:inert stroke-linejoin:inert stroke-miterlimit:inert
+		stroke-opacity:inert paint-order:inert vector-effect:inert
+		marker-start:inert marker-mid:inert marker-end:inert
+		font-family:inert font-size:inert font-size-adjust:inert font-stretch:inert
+		font-style:inert font-variant:inert font-weight:inert
+		letter-spacing:inert word-spacing:inert text-anchor:inert
+		text-decoration:inert text-overflow:inert text-rendering:inert
+		white-space:inert writing-mode:inert direction:inert unicode-bidi:inert
+		dominant-baseline:inert alignment-baseline:inert baseline-shift:inert
+		glyph-orientation-horizontal:inert glyph-orientation-vertical:inert
+		color-interpolation:inert color-interpolation-filters:inert
+		color-rendering:inert shape-rendering:inert image-rendering:inert
+		flood-color:inert flood-opacity:inert lighting-color:inert
+		stop-color:inert stop-opacity:inert mask-type:inert
+		cursor:inert pointer-events:inert
+		transform:refuses transform-origin:refuses clip-path:refuses mask:refuses
+		filter:refuses style:refuses rx:refuses ry:refuses
+		requiredExtensions:refuses requiredFeatures:refuses systemLanguage:refuses
+	`, "\n") {
+		for _, f := range strings.Fields(line) {
+			name, kind, _ := strings.Cut(f, ":")
+			out[strings.ToLower(name)] = map[string]svgAttrKind{
+				"fill": svgFill, "stroke": svgStroke, "visibility": svgVisibility,
+				"display": svgDisplay, "alpha": svgAlpha, "overflow": svgOverflow,
+				"inert": svgInert, "refuses": svgRefuses,
+			}[kind]
+		}
+	}
+	return out
+}()
+
+// svgRootAttribute and svgRectAttribute are the attributes each element reads
+// as its own.
+func svgRootAttribute(name string) (svgAttrKind, bool) {
+	switch name {
+	case "width", "height", "viewbox", "preserveaspectratio":
+		return svgOwn, true
+	case "x", "y":
+		// Not read on an outermost <svg>, which is placed by the page.
+		return svgInert, true
+	}
+	return 0, false
+}
+
+func svgRectAttribute(name string) (svgAttrKind, bool) {
+	switch name {
+	case "x", "y", "width", "height":
+		return svgOwn, true
+	}
+	return 0, false
+}
+
+// svgAttrKindOf classifies one attribute by its name.
+func svgAttrKindOf(n xml.Name, own func(string) (svgAttrKind, bool)) svgAttrKind {
+	local := strings.ToLower(n.Local)
+	switch {
+	case n.Space == "xmlns" || local == "xmlns":
+		// A namespace declaration.
+		return svgInert
+	case n.Space == "xml" || n.Space == "http://www.w3.org/XML/1998/namespace":
+		// xml:space, xml:lang and xml:base: white space, language and the
+		// base of references, none of which a rect has.
+		return svgInert
+	case n.Space != "" && n.Space != "http://www.w3.org/2000/svg":
+		// Another vocabulary's attribute — an editor's own, "inkscape:label",
+		// or xlink:href, which neither element read here uses. SVG 2 §4.3
+		// has a renderer ignore it, and so does this.
+		return svgInert
+	case strings.HasPrefix(local, "aria-"), strings.HasPrefix(local, "data-"),
+		strings.HasPrefix(local, "on"):
+		// Accessibility, a document's own data, and event handlers, which
+		// nothing here runs.
+		return svgInert
+	}
+	if k, ok := own(local); ok {
+		return k
+	}
+	if k, ok := svgAttributes[local]; ok {
+		return k
+	}
+	return svgRefuses
 }
 
 // svgCoord reads a coordinate or a length: a number in user units, or a
@@ -591,19 +849,3 @@ func svgPercent(raw string) (float64, bool) {
 	}
 	return v / 100, true
 }
-
-// rectAttributesThatChangeThePaint are the attributes whose presence means a
-// <rect> is not a flat fill of a rectangle.
-//
-// They are split from one string rather than written as a list of literals, and
-// that is not a style choice. Several of these — opacity, filter, transform,
-// style — are spelled exactly like CSS properties, and the style package guards
-// its property registry with a scan of this module's source for those spellings:
-// a property admitted as unimplemented must not be named anywhere, because being
-// read and being admitted as unread are contradictory claims. These are SVG
-// presentation attributes and have nothing to do with the CSS properties of the
-// same name, so writing them as string literals here would make that guard
-// report a contradiction that does not exist. See
-// TestUnimplementedPropertiesAreRegistered.
-var rectAttributesThatChangeThePaint = strings.Fields(
-	"rx ry transform opacity fill-opacity style clip-path mask filter stroke")

@@ -22,8 +22,14 @@ package layout
 // larger spacing, which is what an author expects and what a fixed pixel margin
 // quietly fails to do.
 const UserAgentCSS = `
-/* The elements that produce no box at all. */
-head, title, meta, link, base, style { display: none }
+/* The elements that produce no box at all: HTML's rendering section, §15.3.1,
+   less the three kept elsewhere in this sheet (area and param below, and rp,
+   which is the one this engine keeps on purpose — see the ruby rules). A
+   <datalist> is the list of suggestions a text field offers as it is typed
+   into, and its options are not content: it was drawn, so every suggestion
+   appeared as a line of text (audit C84). */
+head, title, meta, link, base, style, script, template,
+datalist, basefont, noembed, noframes { display: none }
 
 /* And the attribute that says so about any element, §15.3.1. It was not read at
    all, so "<div hidden>" was a visible div — which is the ordinary way a
@@ -336,9 +342,20 @@ mark { background-color: yellow; color: black }
    thing. */
 a[href] { text-decoration-line: underline; color: #0000ee }
 
-/* Ruby annotations sit above their base text; the sizing is the only part of
-   that this engine can express yet. */
-rt { font-size: 0.5em; vertical-align: super }
+/* Ruby, as HTML's rendering section (§15.3.4) writes it. This engine does not
+   lay ruby out — a "display: ruby" box is an inline one, and its annotation
+   runs along the line — and pipeline.go reports that wherever a ruby holds an
+   annotation. HTML's own <ruby> was given no display at all, so the same page
+   written with the elements instead of the display values was set the same
+   wrong way and said nothing (audit C84). The size is the part of the
+   annotation this engine can express.
+
+   <rp> is shown, although §15.3.1 hides it, and that is the one departure here
+   from HTML's list. It holds the parentheses a user agent that cannot lay ruby
+   out puts around the annotation, and this is such a user agent: "漢(kan)"
+   says what "漢kan" does not. */
+ruby { display: ruby }
+rt { display: ruby-text; font-size: 0.5em; vertical-align: super }
 
 /* Bidirectional overrides are the two elements whose whole purpose is to change
    the direction, so they say so rather than inheriting it. */

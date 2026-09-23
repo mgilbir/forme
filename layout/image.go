@@ -189,10 +189,18 @@ type replacedLoader struct {
 
 	// loaded memoizes by reference, so a document that repeats one src reads,
 	// decodes and charges the budget once.
-	loaded map[string]*ReplacedContent
+	//
+	// By reference *and* by how it is read, which is what the key is. The
+	// same SVG is a picture in an <img> and a document in an <object>, and
+	// the two readings differ in what its own percentages are of — see
+	// svgAs. Keyed by the reference alone, whichever element came first
+	// decided the other's size: an SVG stating no size was 300 by 150 in an
+	// <img> and as wide as its containing block in an <object>, until a
+	// document had both, when the second took the first's (audit C83).
+	loaded map[refKey]*ReplacedContent
 	// failed records the references already reported, so a page of a hundred
 	// broken images is one finding rather than a hundred.
-	failed map[string]bool
+	failed map[refKey]bool
 
 	// byContent memoizes by what a reference *read*, which is the memo that
 	// decides what decoding costs. The one above is by the reference's
@@ -214,12 +222,20 @@ type replacedLoader struct {
 	cut bool
 }
 
-// contentKey is what a reference read, and how it is read: an SVG is a
-// different thing as a picture and as a document, and must not come back from
-// the memo as the other.
-type contentKey struct {
-	sum [sha256.Size]byte
+// refKey is a reference and how it is read: loaded's key. See there.
+type refKey struct {
+	ref string
 	as  svgAs
+}
+
+// contentKey is what a reference read, and everything the reading depends on:
+// an SVG is a different thing as a picture and as a document, and must not
+// come back from the memo as the other; and the same bytes are an SVG under
+// one declared type and not under another. See decode.
+type contentKey struct {
+	sum  [sha256.Size]byte
+	as   svgAs
+	mime string
 }
 
 // decoded is one memoized decode: the content, or the first reference whose
@@ -243,8 +259,8 @@ func resolveReplaced(root *Box, res ResourceResolver, rec *Recorder) {
 	}
 	l := &replacedLoader{
 		res: res, rec: rec,
-		loaded:    map[string]*ReplacedContent{},
-		failed:    map[string]bool{},
+		loaded:    map[refKey]*ReplacedContent{},
+		failed:    map[refKey]bool{},
 		byContent: map[contentKey]decoded{},
 		budget:    maxDocumentPixels,
 	}
@@ -293,16 +309,8 @@ func (l *replacedLoader) backgrounds(b *Box) {
 		return
 	}
 	for _, ref := range refs {
-		if got, ok := l.loaded[ref]; ok {
-			l.attachBackground(b, ref, got)
-			continue
-		}
-		if l.failed[ref] {
-			continue
-		}
-		content, why := l.load(ref, "background image", svgAsImage)
+		content, why := l.memoized(ref, "background image", svgAsImage)
 		if content == nil {
-			l.failed[ref] = true
 			if why != nil {
 				l.rec.ReportDetail(Finding{
 					Rule:     why.rule,
@@ -314,7 +322,6 @@ func (l *replacedLoader) backgrounds(b *Box) {
 			}
 			continue
 		}
-		l.loaded[ref] = content
 		l.attachBackground(b, ref, content)
 	}
 }
@@ -373,22 +380,13 @@ func (l *replacedLoader) image(b *Box) {
 		return
 	}
 
-	if got, ok := l.loaded[src]; ok {
-		b.Replaced = got
-		return
-	}
-	if l.failed[src] {
-		l.altOnly(b)
-		return
-	}
-
-	content, why := l.load(src, "image", svgAsImage)
+	// A reference that failed before comes back with no finding, and the
+	// element still gets its alt text.
+	content, why := l.memoized(src, "image", svgAsImage)
 	if content == nil {
-		l.failed[src] = true
 		l.notReplaced(b, why)
 		return
 	}
-	l.loaded[src] = content
 	b.Replaced = content
 }
 
@@ -421,21 +419,11 @@ func (l *replacedLoader) object(b *Box) {
 	if !ok || data == "" {
 		return
 	}
-	if got, ok := l.loaded[data]; ok {
-		l.embed(b, got)
-		return
-	}
-	if l.failed[data] {
-		l.fallbackTo(b, nil, data)
-		return
-	}
-	content, why := l.load(data, "object", svgAsDocument)
+	content, why := l.memoized(data, "object", svgAsDocument)
 	if content == nil {
-		l.failed[data] = true
 		l.fallbackTo(b, why, data)
 		return
 	}
-	l.loaded[data] = content
 	l.embed(b, content)
 }
 
@@ -686,20 +674,9 @@ func (l *replacedLoader) markerImage(b *Box) {
 		return
 	}
 	ref = strings.TrimSpace(ref)
-	if got, seen := l.loaded[ref]; seen {
-		b.MarkerImage = got
-		return
+	if content, _ := l.memoized(ref, "list marker image", svgAsImage); content != nil {
+		b.MarkerImage = content
 	}
-	if l.failed[ref] {
-		return
-	}
-	content, _ := l.load(ref, "list marker image", svgAsImage)
-	if content == nil {
-		l.failed[ref] = true
-		return
-	}
-	l.loaded[ref] = content
-	b.MarkerImage = content
 }
 
 // contentImage loads the picture a "content: url(...)" names.
@@ -719,16 +696,8 @@ func (l *replacedLoader) contentImage(b *Box) {
 	if ref == "" {
 		return
 	}
-	if got, seen := l.loaded[ref]; seen {
-		b.Replaced = got
-		return
-	}
-	if l.failed[ref] {
-		return
-	}
-	content, why := l.load(ref, "generated content image", svgAsImage)
+	content, why := l.memoized(ref, "generated content image", svgAsImage)
 	if content == nil {
-		l.failed[ref] = true
 		if why != nil {
 			l.rec.ReportDetail(Finding{
 				Rule:     why.rule,
@@ -740,7 +709,6 @@ func (l *replacedLoader) contentImage(b *Box) {
 		}
 		return
 	}
-	l.loaded[ref] = content
 	b.Replaced = content
 }
 
@@ -814,7 +782,7 @@ func (l *replacedLoader) load(src, what string, as svgAs) (*ReplacedContent, *lo
 	if l.cut {
 		return nil, l.cutShort(src, what)
 	}
-	data, _, fail := l.fetch(src, what)
+	data, mime, fail := l.fetch(src, what)
 	if fail != nil {
 		return nil, fail
 	}
@@ -822,7 +790,7 @@ func (l *replacedLoader) load(src, what string, as svgAs) (*ReplacedContent, *lo
 		l.cut = true
 		return nil, l.cutShort(src, what)
 	}
-	key := contentKey{sum: sha256.Sum256(data), as: as}
+	key := contentKey{sum: sha256.Sum256(data), as: as, mime: mime}
 	if got, ok := l.byContent[key]; ok {
 		if got.content != nil {
 			return got.content, nil
@@ -835,7 +803,7 @@ func (l *replacedLoader) load(src, what string, as svgAs) (*ReplacedContent, *lo
 	}
 	// A refusal by a budget is memoized with the rest. Neither budget grows,
 	// so the same bytes asked for again would be refused again.
-	content, why := l.decode(src, what, data, key.sum, as)
+	content, why := l.decode(src, what, data, key.sum, as, mime)
 	l.byContent[key] = decoded{content: content, failed: why, src: src, what: what}
 	return content, why
 }
@@ -843,19 +811,24 @@ func (l *replacedLoader) load(src, what string, as svgAs) (*ReplacedContent, *lo
 // memoized is load behind the reference memos: the content a reference already
 // loaded, nothing for one that already failed — it was reported the first time
 // — and otherwise a load, remembered either way.
+//
+// Every reference in the document is loaded through it, so that the memo is
+// one memo: there were six copies of these ten lines, one per kind of element,
+// and each had to be told separately what the key was.
 func (l *replacedLoader) memoized(ref, what string, as svgAs) (*ReplacedContent, *loadFailure) {
-	if got, ok := l.loaded[ref]; ok {
+	key := refKey{ref: ref, as: as}
+	if got, ok := l.loaded[key]; ok {
 		return got, nil
 	}
-	if l.failed[ref] {
+	if l.failed[key] {
 		return nil, nil
 	}
 	content, why := l.load(ref, what, as)
 	if content == nil {
-		l.failed[ref] = true
+		l.failed[key] = true
 		return nil, why
 	}
-	l.loaded[ref] = content
+	l.loaded[key] = content
 	return content, nil
 }
 
@@ -888,15 +861,29 @@ func (l *replacedLoader) fetch(src, what string) ([]byte, string, *loadFailure) 
 
 // decode reads a header, checks it against the caps, charges what it declares,
 // and only then decodes. sum is the bytes' digest, which load has already
-// taken.
+// taken, and mime is the type a data: URL declared for them, empty for bytes a
+// resolver returned, which declare none.
 func (l *replacedLoader) decode(src, what string, data []byte, sum [sha256.Size]byte,
-	as svgAs) (*ReplacedContent, *loadFailure) {
+	as svgAs, mime string) (*ReplacedContent, *loadFailure) {
 	// An SVG is not a picture and never becomes one. It is read for its
 	// intrinsic size and, when its content reduces to one, its colour — see
 	// svg.go, which is explicit about how narrow that is and why the rest keeps
 	// its finding. It has to be tried before image.DecodeConfig because no
 	// decoder here reads XML, so an SVG would otherwise be an unknown format.
-	if looksLikeSVG(data) {
+	//
+	// Which of the two the bytes are is the MIME Sniffing standard's question
+	// for an image context (§8.2), and its answer starts from the type the
+	// bytes arrived with. A type that is XML is the type: the bytes are read as
+	// an SVG whatever they look like. Any other type sends the bytes to the
+	// image signatures — which is what image.DecodeConfig matches — and never
+	// to the SVG reader, because no signature is an SVG's. Only bytes that came
+	// with no type at all — a resolver's, which hands back bytes and nothing
+	// else — are looked at for an SVG root. See looksLikeSVG.
+	isSVG := looksLikeSVG(data)
+	if mime != "" {
+		isSVG = isXMLMIMEType(mime)
+	}
+	if isSVG {
 		if c := svgContent(data, as); c != nil {
 			return c, nil
 		}
@@ -1190,44 +1177,130 @@ func (l *replacedLoader) altOnly(b *Box) {
 	b.Children = append(b.Children, child)
 }
 
-// looksLikeSVG reports whether the bytes are meant to be an SVG.
+// isXMLMIMEType is the MIME Sniffing standard's XML MIME type (§4.6): a
+// subtype ending in "+xml", or text/xml or application/xml. It is asked of an
+// essence, which is lowercased and has no parameters.
+func isXMLMIMEType(essence string) bool {
+	return strings.HasSuffix(essence, "+xml") || essence == "text/xml" || essence == "application/xml"
+}
+
+// looksLikeSVG reports whether bytes that came with no type are meant to be an
+// SVG.
 //
 // It reads the start of the file rather than the file name, because the name is
-// what a document says and the bytes are what arrived. A leading XML declaration
-// or doctype may come first, so this looks for the root tag within the opening
-// stretch rather than at offset zero.
+// what a document says and the bytes are what arrived. The MIME Sniffing
+// standard has no pattern for an SVG — a browser knows one from the type it was
+// served with — so what is asked is what makes a file an SVG in the first
+// place: an XML document whose root element is <svg>.
+//
+// So the XML prolog is read structurally, as XML 1.0 §2.8 writes it: a byte
+// order mark, then white space, processing instructions (the XML declaration
+// among them), comments and one doctype, in any order, and then the root. It
+// used to be a search for "<svg" within the first kilobyte, which gave up on
+// an SVG opening with a licence comment longer than that and reported it as an
+// unknown format — the wrong reason, and a picture not drawn (audit C137).
+//
+// The scan is bounded by maxSVGBytes, which is the most the reader will read
+// at all, and it is linear: every construct it skips is skipped by searching
+// for its end once. A prolog longer than the bound is not an SVG this engine
+// would read anyway.
 func looksLikeSVG(data []byte) bool {
-	head := data
-	if len(head) > 1024 {
-		head = head[:1024]
+	if len(data) > maxSVGBytes {
+		data = data[:maxSVGBytes]
 	}
-	head = bytes.TrimPrefix(head, []byte("\xef\xbb\xbf")) // a byte order mark
-	head = bytes.TrimLeft(head, " \t\r\n")
-	if len(head) == 0 || head[0] != '<' {
+	data = bytes.TrimPrefix(data, []byte("\xef\xbb\xbf")) // a byte order mark
+	if head := bytes.TrimLeft(data, " \t\r\n\f"); len(head) == 0 || head[0] != '<' {
 		// Every binary format this reads begins with bytes of its own — PNG
 		// with an 0x89, JPEG with an 0xFF, GIF with a "G" — and none of them
-		// begins with "<". This used to be a search for "<svg" anywhere in the
-		// first kilobyte, which is a search for three bytes that occur in
-		// compressed data as often as any other three: a PNG with them in its
-		// first chunk was read as a picture this engine cannot draw and
-		// refused.
+		// begins with "<". A search for "<svg" anywhere in the bytes is a
+		// search for four bytes that occur in compressed data as often as any
+		// other four: a PNG with them in its first chunk was read as a picture
+		// this engine cannot draw and refused.
 		return false
 	}
-	if hasFoldPrefix(head, "<svg") {
-		return true
-	}
-	// A declaration, a comment or a doctype may come first, and the root
-	// element after it. Anything else that begins with "<" is markup that is
-	// not an SVG.
-	if !hasFoldPrefix(head, "<?xml") && !hasFoldPrefix(head, "<!") {
-		return false
-	}
-	for i := 0; i+4 <= len(head); i++ {
-		if hasFoldPrefix(head[i:], "<svg") {
-			return true
+	for doctype := false; ; {
+		data = bytes.TrimLeft(data, " \t\r\n\f")
+		switch {
+		case hasFoldPrefix(data, "<?"):
+			// The XML declaration and any other processing instruction.
+			end := bytes.Index(data, []byte("?>"))
+			if end < 0 {
+				return false
+			}
+			data = data[end+2:]
+		case hasFoldPrefix(data, "<!--"):
+			end := bytes.Index(data[4:], []byte("-->"))
+			if end < 0 {
+				return false
+			}
+			data = data[4+end+3:]
+		case hasFoldPrefix(data, "<!doctype"):
+			if doctype {
+				return false
+			}
+			doctype = true
+			end := doctypeEnd(data)
+			if end < 0 {
+				return false
+			}
+			data = data[end:]
+		case hasFoldPrefix(data, "<svg"):
+			// The root, if the name ends there: "<svgx>" is another element.
+			// A prefixed "<svg:svg>" is not read, because the reader does not
+			// read one either.
+			rest := data[len("<svg"):]
+			return len(rest) > 0 && (rest[0] == '>' || rest[0] == '/' || isXMLSpace(rest[0]))
+		default:
+			return false
 		}
 	}
-	return false
+}
+
+// doctypeEnd is the offset just past a doctype declaration, or -1 when the
+// bytes end first.
+//
+// A doctype ends at the first ">" that is not inside a quoted literal or its
+// internal subset, and the subset holds declarations, comments and literals of
+// its own — an entity whose value is "<svg>" is a string, not the root. So the
+// one pass tracks the three, and it is still one pass.
+func doctypeEnd(d []byte) int {
+	depth := 0
+	for i := len("<!doctype"); i < len(d); i++ {
+		switch c := d[i]; {
+		case c == '"' || c == '\'':
+			end := bytes.IndexByte(d[i+1:], c)
+			if end < 0 {
+				return -1
+			}
+			i += 1 + end
+		case depth > 0 && hasFoldPrefix(d[i:], "<!--"):
+			end := bytes.Index(d[i+4:], []byte("-->"))
+			if end < 0 {
+				return -1
+			}
+			i += 4 + end + 2
+		case depth > 0 && hasFoldPrefix(d[i:], "<?"):
+			end := bytes.Index(d[i+2:], []byte("?>"))
+			if end < 0 {
+				return -1
+			}
+			i += 2 + end + 1
+		case c == '[':
+			depth++
+		case c == ']':
+			if depth > 0 {
+				depth--
+			}
+		case c == '>' && depth == 0:
+			return i + 1
+		}
+	}
+	return -1
+}
+
+// isXMLSpace is XML 1.0's S: space, tab, carriage return and line feed.
+func isXMLSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\r' || c == '\n'
 }
 
 // hasFoldPrefix reports whether b begins with an ASCII prefix, ignoring case.
@@ -1300,10 +1373,19 @@ func (l *replacedLoader) foreign(b *Box) {
 
 // attrSource writes an element's attributes back as source, so that the SVG
 // reader sees the root element it would have seen in a file.
+//
+// Less the two the document's own cascade has already read: "style", whose
+// declarations were applied to the element's box and reported there if they are
+// not implemented, and "hidden", which the user agent sheet turns into
+// "display: none" before there is a box to read. Handed to the reader as well,
+// they would be read a second time, as an SVG file's own CSS it does not have.
 func attrSource(n *html.Node) string {
 	var b strings.Builder
 	for _, a := range n.Attrs {
 		if a.Name == "" || strings.ContainsAny(a.Name, `"'<>`) {
+			continue
+		}
+		if strings.EqualFold(a.Name, "style") || strings.EqualFold(a.Name, "hidden") {
 			continue
 		}
 		b.WriteString(a.Name)

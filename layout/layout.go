@@ -841,7 +841,7 @@ func (l *layouter) layBlock(b *Box, containing style.Unit, at flow,
 				// of its own takes the one its width gives it, instead of the
 				// one its content would. This is where the width is known and
 				// the height is not, which is the only place the two meet.
-				if h, ok := l.aspectHeight(b, width); ok {
+				if h, ok := l.aspectHeight(b, width, containing); ok {
 					declaredHeight, hasHeight = h, true
 				}
 			case l.isAuto(b, "width"):
