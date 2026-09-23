@@ -80,21 +80,28 @@ func TestInlineStyleBeatsHint(t *testing.T) {
 	}
 }
 
-// TestHintValueSyntax pins HTML's dimension-value grammar. Everything outside
-// it is ignored rather than guessed at: a value this cannot read must not
-// become a length it invented.
+// TestHintValueSyntax pins HTML §2.3.4.4's "rules for parsing dimension
+// values": white space, digits, an optional fraction, an optional per-cent sign
+// — and whatever follows is ignored, which is why "5px" is five pixels and
+// "5 6" is five. A value that does not begin with a digit is not a dimension,
+// and must not become a length this invented.
 func TestHintValueSyntax(t *testing.T) {
 	cases := map[string]string{
 		"5":     "5px",
 		"050":   "050px",
 		"5%":    "5%",
 		" 5 ":   "5px",
-		"5px":   "auto",
+		"5px":   "5px",
 		"-5":    "auto",
-		"5.5":   "auto",
+		"+5":    "auto",
+		"5.5":   "5.5px",
+		"5.5%":  "5.5%",
+		"5.%":   "5%",
+		"5.x":   "5px",
+		".5":    "auto",
 		"abc":   "auto",
 		"":      "auto",
-		"5 6":   "auto",
+		"5 6":   "5px",
 		"99999": "99999px",
 		// Longer than the digit bound, which exists so that an untrusted
 		// attribute cannot state a number nobody meant.
@@ -133,10 +140,12 @@ func TestTableWidthAttributeIsAHint(t *testing.T) {
 	cases := map[string]string{
 		"300":  "300px",
 		"100%": "100%",
-		// Not a dimension value, so not a hint. A length with a unit is HTML's
-		// own refusal, and it must not become a length this guessed at.
-		"300px": "auto",
+		// A unit after the number is ignored, which is HTML's rule and how
+		// "<table width=600px>" in legacy and e-mail markup is drawn.
+		"300px": "300px",
 		"-1":    "auto",
+		// "Ignoring zero", in whichever spelling.
+		"0.0": "auto",
 	}
 	for value, want := range cases {
 		got := computed(t, `<table id="t" width="`+value+`"><tr><td>x</td></tr></table>`)
@@ -158,9 +167,9 @@ func TestTableHeightAttributeIsAHint(t *testing.T) {
 	cases := map[string]string{
 		"300": "300px",
 		"50%": "50%",
-		// The same refusals width takes: a dimension value is digits and an
-		// optional per-cent sign, and anything else is not one.
-		"300px": "auto",
+		// The same reading width takes: what follows the number is ignored,
+		// and a value that does not begin with a digit is not a dimension.
+		"300px": "300px",
 		"-1":    "auto",
 	}
 	for value, want := range cases {
@@ -428,7 +437,7 @@ func TestACellsWidthAndHeightAreHints(t *testing.T) {
 		{`<td id="c" height="40">x</td>`, "height", "40px"},
 		{`<th id="c" height="10%">x</th>`, "height", "10%"},
 		// The refusals the table's own attributes take.
-		{`<td id="c" width="120px">x</td>`, "width", "auto"},
+		{`<td id="c" width="120px">x</td>`, "width", "120px"},
 		{`<td id="c" width="-1">x</td>`, "width", "auto"},
 		{`<td id="c" width="florb">x</td>`, "width", "auto"},
 	} {
@@ -608,10 +617,12 @@ func TestTheBodyLinkAttributeColoursTheLinks(t *testing.T) {
 			"an <a> with no href"},
 		{`<body link="red"><span id="c">x</span></body>`, "black",
 			"an element that is not a link at all"},
-		// A value that is not a colour leaves the default standing, which is
-		// the same answer as the attribute not being there.
-		{`<body link="florb"><a id="c" href="x">x</a></body>`, "black",
-			"a value that is not a colour"},
+		// Any other value is HTML's legacy colour value, as every browser
+		// reads it: "florb" is f, 0, 0, 0, b, padded to f000b0.
+		{`<body link="florb"><a id="c" href="x">x</a></body>`, "#f000b0",
+			"a legacy colour value"},
+		{`<body link="transparent"><a id="c" href="x">x</a></body>`, "black",
+			"the one word that is not a colour"},
 	} {
 		got := computed(t, c.markup)
 		if v := got["c"].Get("color"); v != c.want {
@@ -701,9 +712,8 @@ func TestBgcolorOnEveryPartOfATable(t *testing.T) {
 		{`<table><tr><th id="c" bgcolor="red">x</th></tr></table>`, "red"},
 		{`<body id="c" bgcolor="red">x</body>`, "red"},
 		{`<table><tr><td id="c" bgcolor="#808000">x</td></tr></table>`, "#808000"},
-		// A value that is not a colour leaves the background alone, which is
-		// the same answer as the attribute not being there.
-		{`<table id="c" bgcolor="florb"><tr><td>x</td></tr></table>`, "transparent"},
+		// Any other value is HTML's legacy colour value.
+		{`<table id="c" bgcolor="florb"><tr><td>x</td></tr></table>`, "#f000b0"},
 		{`<table id="c"><tr><td>x</td></tr></table>`, "transparent"},
 		// It is not inherited: a table's colour is the table's, and a cell that
 		// wants one says so. background-color does not inherit, so this falls

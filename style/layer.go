@@ -118,7 +118,16 @@ func (s *Styler) anonymousLayer() int {
 func (s *Styler) prepareLayer(rule css.Rule, parent *css.Nesting, origin Origin,
 	out *[]preparedRule, order *int) {
 
-	names := layerNames(rule.Prelude)
+	names, ok := layerNames(rule.Prelude)
+	if !ok {
+		s.report(Finding{
+			Offset: rule.Offset,
+			Message: "@layer " + quoted(serialize(rule.Prelude)) +
+				" is not a list of layer names, so the rule was dropped",
+			Property: "@layer",
+		})
+		return
+	}
 
 	if !rule.HasBlock {
 		// "@layer a, b;" — an order, and nothing else. Naming them is the whole
@@ -180,35 +189,39 @@ func (s *Styler) layerPath(name string) string {
 
 // layerNames reads the comma-separated list an @layer names.
 //
-// An empty prelude is the anonymous form and returns nothing. A name is an
-// ident, or idents joined by full stops for a sublayer named in one go.
-func layerNames(vals []css.ComponentValue) []string {
-	var out []string
-	var cur strings.Builder
-	flush := func() {
-		if name := strings.TrimSpace(cur.String()); name != "" {
-			out = append(out, name)
-		}
-		cur.Reset()
+// An empty prelude is the anonymous form and returns nothing. A name is
+// Cascade 5's <layer-name>: an ident, or idents joined by full stops with
+// nothing between them, for a sublayer named in one go. ok is false for a
+// prelude that is not such a list — "a b", "a..b", ".a", "a,,b" — which makes
+// the rule invalid. Whitespace was skipped wherever it fell, so "@layer a b {…}"
+// applied its rules in a layer called "ab" (audit C158).
+func layerNames(vals []css.ComponentValue) (names []string, ok bool) {
+	it := trimWhitespace(vals)
+	if len(it) == 0 {
+		return nil, true
 	}
-	for _, v := range vals {
-		switch {
-		case v.Token.Kind == css.Comma:
-			flush()
-		case v.Token.Kind == css.Whitespace:
-			// Between a name and a comma, and nowhere inside a name.
-		case v.Token.Kind == css.Ident:
-			cur.WriteString(v.Token.Value)
-		case v.Token.Kind == css.Delim && v.Token.Value == ".":
-			cur.WriteString(".")
-		default:
-			// Anything else makes the prelude unreadable; the caller reports a
-			// block that named more than one layer, and a statement form with
-			// nothing readable in it names nothing.
+	for _, part := range splitOnComma(it) {
+		part = trimWhitespace(part)
+		if len(part) == 0 || len(part)%2 == 0 {
+			return nil, false
 		}
+		var name strings.Builder
+		for i, v := range part {
+			if i%2 == 0 {
+				if !v.IsToken() || v.Token.Kind != css.Ident {
+					return nil, false
+				}
+				name.WriteString(v.Token.Value)
+				continue
+			}
+			if !v.IsToken() || !v.Token.IsDelim('.') {
+				return nil, false
+			}
+			name.WriteByte('.')
+		}
+		names = append(names, name.String())
 	}
-	flush()
-	return out
+	return names, true
 }
 
 // reportNestedLayer says that a layer inside a layer is ordered as its own

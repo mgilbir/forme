@@ -306,15 +306,11 @@ type OverflowWrap struct {
 	Anywhere bool
 }
 
-// OverflowWrapOf reads the property, taking the winner of overflow-wrap and its
-// alias word-wrap.
+// OverflowWrapOf reads the property.
 //
-// Both names are legal and mean the same thing, so the one to obey is whichever
-// the cascade resolved last. The cascade cannot tell them apart — they are two
-// entries in the registry, not one property with two spellings — so an author
-// who sets overflow-wrap on a rule and word-wrap on a more specific one gets the
-// wrong answer here. Taking the non-initial value is what makes the common case
-// right: a document sets one of them.
+// Its legacy name, word-wrap, is a spelling of this one: the cascade expands
+// it into overflow-wrap, so whichever of the two was declared later is the one
+// computed here, and there is nothing to reconcile.
 func OverflowWrapOf(cs style.ComputedStyle) OverflowWrap {
 	// word-break: break-word is not a word-break value at all. CSS Text 3 §5.2
 	// keeps it "for web-compatibility" and defines it by what it does elsewhere:
@@ -330,11 +326,7 @@ func OverflowWrapOf(cs style.ComputedStyle) OverflowWrap {
 	if strings.EqualFold(strings.TrimSpace(cs.Get("word-break")), "break-word") {
 		return OverflowWrap{BreakWord: true, Anywhere: true}
 	}
-	value := strings.ToLower(strings.TrimSpace(cs.Get("overflow-wrap")))
-	if value == "" || value == "normal" {
-		value = strings.ToLower(strings.TrimSpace(cs.Get("word-wrap")))
-	}
-	switch value {
+	switch strings.ToLower(strings.TrimSpace(cs.Get("overflow-wrap"))) {
 	case "break-word":
 		return OverflowWrap{BreakWord: true}
 	case "anywhere":

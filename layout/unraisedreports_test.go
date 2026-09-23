@@ -103,9 +103,13 @@ func TestAnAutospaceThisEngineDoesNotInsertIsReported(t *testing.T) {
 func TestATextFitThisEngineCannotReadIsReported(t *testing.T) {
 	for _, value := range []string{"grow sideways", "shrink upside-down", "wobble"} {
 		t.Run(value, func(t *testing.T) {
-			got := unsupportedValueFor(t,
-				findingsFor(t, `<p id="p">text that is long enough to want fitting</p>`,
-					`#p { width: 200px; text-fit: `+value+` }`), "text-fit")
+			// Not CSS, so it is the cascade that drops it and says so; see
+			// TestAValueThatIsNotCSSIsDroppedByTheCascade, which this asks too.
+			got := ""
+			if droppedAsInvalid(t, `<p id="p">text that is long enough to want fitting</p>`,
+				`#p { width: 200px; text-fit: `+value+` }`, "text-fit") {
+				got = "reported"
+			}
 			if got == "" {
 				t.Fatalf("text-fit: %s was not reported; the word is not in the "+
 					"grammar, so nothing was scaled and the document was not told",

@@ -460,25 +460,22 @@ func TestOrderMovesAGridItemToAnotherCell(t *testing.T) {
 func TestAGridContainerThisEngineCannotArrangeSaysSo(t *testing.T) {
 	for _, c := range []struct{ what, css, names string }{
 		{"a named line", `#g { grid-template-columns: [start] 1fr }`, "does not size"},
-		{"a flexible minimum", `#g { grid-template-columns: minmax(1fr, 2fr) }`, "does not size"},
-		{"a minmax of one thing", `#g { grid-template-columns: minmax(100px) }`, "does not size"},
+		// A flexible minimum, a minmax of one thing, a nested repeat, a flow
+		// that is neither and "align-items: left" are not CSS, and the cascade
+		// drops them before this gate is reached — see
+		// TestAValueThatIsNotCSSIsDroppedByTheCascade.
 		{"a fit-content", `#g { grid-template-columns: fit-content(100px) }`, "does not size"},
 		{"two automatic repeats",
 			`#g { grid-template-columns: repeat(auto-fill, 50px) repeat(auto-fill, 50px) }`,
 			"does not size"},
-		{"a nested repeat", `#g { grid-template-columns: repeat(2, repeat(2, 1fr)) }`, "does not size"},
 		{"a named row", `#g { grid-template-rows: [top] 20px }`, "does not size"},
 		{"a ragged template", `#g { grid-template-areas: "a b" "c" }`, "not all the same length"},
 		{"an area in two places", `#g { grid-template-areas: "a b" "b a" }`, "do not touch"},
-		{"a flow that is neither", `#g { grid-auto-flow: sideways }`,
-			"flow this engine does not follow"},
 		{"implicit tracks sized by a function this engine cannot read",
 			`#g { grid-auto-rows: fit-content(50px) }`, "implicit tracks"},
 		{"tracks on a baseline", `#g { align-content: baseline }`, "aligned by a rule"},
 		{"items on a baseline", `#g { align-items: baseline }`, "aligned by a rule"},
 		{"a safe alignment", `#g { justify-content: safe center }`, "aligned by a rule"},
-		{"items aligned down the page by a side of it",
-			`#g { align-items: left }`, "names a side across it"},
 		{"an item in an area nobody drew", `#g > div:first-child { grid-area: header }`,
 			"the template does not draw"},
 		{"an item at a named line", `#g > div:first-child { grid-column: main }`, "cannot find"},
@@ -1064,7 +1061,7 @@ func TestAnItemThatNamesALineThisEngineCannotFindIsRefused(t *testing.T) {
 		`#a { grid-column: -1 }`,
 		`#a { grid-row: span main }`,
 		`#a { grid-area: header }`,
-		`#a { grid-column: 1 / 2 / 3 }`,
+		// "1 / 2 / 3" is not CSS; see TestAValueThatIsNotCSSIsDroppedByTheCascade.
 	} {
 		got := Compose(Input{HTML: threeCells, CSS: []Stylesheet{{
 			Source: gridCSS + threeColumns + css}}}, Options{})
@@ -1175,8 +1172,8 @@ func TestATemplateThatDoesNotDrawAGridIsRefused(t *testing.T) {
 		`#g { grid-template-areas: "a b a" }`,
 		// A name that is not one.
 		`#g { grid-template-areas: "1a b" }`,
-		// Something that is not a string at all.
-		`#g { grid-template-areas: a b }`,
+		// Something that is not a string at all is not CSS; see
+		// TestAValueThatIsNotCSSIsDroppedByTheCascade.
 	} {
 		got := Compose(Input{HTML: threeAreas, CSS: []Stylesheet{{
 			Source: gridCSS + `#g { width: 300px }` + css}}}, Options{})

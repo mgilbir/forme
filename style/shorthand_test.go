@@ -386,6 +386,7 @@ func TestShorthandLonghandsMatchWhatTheExpanderProduces(t *testing.T) {
 		"place-content":   "space-between center",
 		"place-self":      "center stretch",
 		"columns":         "3 12em",
+		"word-wrap":       "break-word",
 
 		// css-logical's, which expand into logical longhands and are renamed to
 		// physical ones per element. See logical.go.

@@ -196,8 +196,9 @@ func TestUnproducibleContentIsReported(t *testing.T) {
 		// style. resolveContent still refuses it, because a computed style can be
 		// built by hand and the initial value travels the same path, but nothing
 		// a stylesheet can write reaches that refusal any more.
-		// An identifier that is not one of the keywords the property defines.
-		`p::before { content: elephant }`: "elephant",
+		// An identifier that is not one of the keywords the property defines
+		// is not CSS, and the cascade drops it: see
+		// TestAValueThatIsNotCSSIsDroppedByTheCascade.
 	}
 	for sheet, want := range cases {
 		got := build(t, `<p>x</p>`, sheet)

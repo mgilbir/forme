@@ -340,7 +340,7 @@ func TestAFontVariantPositionValueSetsTheLonghand(t *testing.T) {
 // above and below the line at once.
 func TestBothPositionsAtOnceAreRefused(t *testing.T) {
 	got := findingsOf(t, `<p id="a">x</p>`, `#a { font-variant: sub super }`)
-	found, unsupported := says(got, "not a value this engine can read")
+	found, unsupported := says(got, "is not a valid value of")
 	if !found {
 		t.Fatalf("raised %v, want it refused as a value", got)
 	}
@@ -364,7 +364,7 @@ func TestAGroupOfFontVariantEastAsianWrittenTwiceIsRefused(t *testing.T) {
 		"ruby ruby",
 	} {
 		got := findingsOf(t, `<p id="a">x</p>`, `#a { font-variant: `+value+` }`)
-		found, unsupported := says(got, "not a value this engine can read")
+		found, unsupported := says(got, "is not a valid value of")
 		if !found {
 			t.Errorf("%q raised %v, want it refused as a value", value, got)
 			continue
@@ -390,7 +390,7 @@ func TestAGroupOfFontVariantNumericWrittenTwiceIsRefused(t *testing.T) {
 		"ordinal ordinal",
 	} {
 		got := findingsOf(t, `<p id="a">1</p>`, `#a { font-variant: `+value+` }`)
-		found, unsupported := says(got, "not a value this engine can read")
+		found, unsupported := says(got, "is not a valid value of")
 		if !found {
 			t.Errorf("%q raised %v, want it refused as a value", value, got)
 			continue
@@ -414,7 +414,7 @@ func TestASystemFontIsReportedOnceAndNotContradicted(t *testing.T) {
 	if found, _ := says(got, "system font"); !found {
 		t.Fatalf("raised %v, want a finding naming the system font", got)
 	}
-	if found, _ := says(got, "not a value this engine can read"); found {
+	if found, _ := says(got, "is not a valid value of"); found {
 		t.Errorf("a system font was also reported as unreadable CSS: %v", got)
 	}
 }
@@ -423,7 +423,7 @@ func TestASystemFontIsReportedOnceAndNotContradicted(t *testing.T) {
 // author really did get wrong must still be named.
 func TestAnUnreadableShorthandIsStillReported(t *testing.T) {
 	got := findingsOf(t, `<p id="a">x</p>`, `#a { font: nonsense }`)
-	if found, _ := says(got, "not a value this engine can read"); !found {
+	if found, _ := says(got, "is not a valid value of"); !found {
 		t.Errorf("raised %v, want the unreadable-value finding", got)
 	}
 }

@@ -207,8 +207,10 @@ func TestItemsAreStretchedAcrossTheLine(t *testing.T) {
 // plausible wrongness the finding exists for.
 func TestAContainerThisEngineCannotArrangeIsLaidOutAsABlockAndSaysSo(t *testing.T) {
 	for _, c := range []struct{ what, css, names string }{
-		{"an axis with no name", `#f { flex-direction: sideways }`, "four flex-direction names"},
-		{"lines that wrap some other way", `#f { flex-wrap: reverse }`, "wrap by a rule"},
+		// An axis with no name and lines that wrap some other way were
+		// "flex-direction: sideways" and "flex-wrap: reverse", which are not
+		// CSS: the cascade drops them before this gate is reached — see
+		// TestAValueThatIsNotCSSIsDroppedByTheCascade.
 		{"lines on a baseline", `#f { flex-wrap: wrap; align-content: baseline }`, "placed by a rule"},
 		{"a safe alignment", `#f { justify-content: safe center }`, "packed by a rule"},
 		{"items on the last baseline", `#f { align-items: last baseline }`, "last baseline of their text"},

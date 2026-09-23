@@ -670,7 +670,19 @@ func (s *Styler) prepareMedia(rule css.Rule, parent *css.Nesting, origin Origin,
 func (s *Styler) prepareSupports(rule css.Rule, parent *css.Nesting,
 	origin Origin, out *[]preparedRule, order *int) {
 
-	matches, unreadable := supportsCondition(rule.Prelude)
+	matches, unreadable, malformed := supportsCondition(rule.Prelude)
+	if malformed {
+		// Not a condition at all, so not an @supports rule: Conditional 3
+		// §2.1 makes the whole rule invalid. It is the author's to fix, and
+		// nothing is missing from the engine.
+		s.report(Finding{
+			Offset: rule.Offset,
+			Message: "the @supports condition " + quoted(serialize(rule.Prelude)) +
+				" is not a valid condition, so the rule was dropped",
+			Property: "@supports",
+		})
+		return
+	}
 	if unreadable != "" {
 		s.report(Finding{
 			Offset: rule.Offset,
@@ -972,18 +984,25 @@ func (s *Styler) expandDecl(d css.Declaration, origin Origin) []preparedDecl {
 		d.Value = unsetValue()
 	}
 
-	if why, drop := dropsForValue(name, d.Value); drop {
+	_, registered := properties[name]
+	if (registered || isLogicalLonghand(name)) && wideKeyword(d.Value) == "" {
 		// §4.2: the value is not one the property takes, so there is no
-		// declaration here at all. See valuegate.go for the six of these and
-		// for why they are not written out at this point any more.
+		// declaration here at all and the one before it stands — or it is one
+		// this engine does not evaluate, and the same is done for the same
+		// reason, since the declaration before it is the fallback its author
+		// wrote. See valuegate.go and grammar.go.
 		//
-		// Not marked unsupported. Nothing is missing from the engine; a
-		// stylesheet said something CSS forbids and CSS says what to do.
-		s.report(Finding{Offset: d.Offset, Message: why, Property: name})
-		return nil
+		// The first is not marked unsupported: nothing is missing from the
+		// engine, a stylesheet said something CSS forbids and CSS says what to
+		// do. The second is.
+		if j := judgeLonghand(name, d.Value); j.drop {
+			s.report(Finding{Offset: d.Offset, Message: j.why, Property: name,
+				Unsupported: j.unsupported})
+			return nil
+		}
 	}
 
-	if _, ok := properties[name]; ok {
+	if registered {
 		// A registered property that nothing reads is reported here rather than
 		// dropped. The value still cascades — inheritance and the computed
 		// value are right, and the day the property is implemented there is
@@ -1064,13 +1083,28 @@ func (s *Styler) expandDecl(d css.Declaration, origin Origin) []preparedDecl {
 			// in which case this would be a second finding contradicting the
 			// first: "font: menu" is a system font, which is reported as
 			// unsupported above and is not a value the author got wrong.
+			//
+			// An expander tells its parts apart by the same terms the value
+			// grammar judges them with, so a part that is valid CSS this engine
+			// does not evaluate — "border: calc(1px + 1px) solid oklch(…)" —
+			// lands in its slot and is judged below, rather than failing here
+			// and being reported as the author's mistake (audit C59). What
+			// fails here is a value no slot takes.
 			if len(unsupported) == 0 {
 				s.report(Finding{
 					Offset:   d.Offset,
-					Message:  "\"" + name + ": " + serialize(d.Value) + "\" is not a value this engine can read",
+					Message:  invalidReason(name, d.Value),
 					Property: name,
 				})
 			}
+			return nil
+		}
+		// Every longhand the shorthand set is a declaration of that longhand,
+		// and is judged as one: "margin: 1px foo" is as invalid as
+		// "margin-right: foo", and §4.2 drops the shorthand whole.
+		if j := judgeExpansion(name, d.Value, parts); j.drop {
+			s.report(Finding{Offset: d.Offset, Message: j.why, Property: name,
+				Unsupported: j.unsupported})
 			return nil
 		}
 		out := make([]preparedDecl, 0, len(parts))
@@ -1162,41 +1196,6 @@ func (s *Styler) expandDecl(d css.Declaration, origin Origin) []preparedDecl {
 // not, and the gap was the shape §4.2 warns about: "padding: 8px; padding: -8px"
 // dropped the eight pixels and clamped the second declaration to zero, so a
 // declaration CSS says does not exist overrode one that does.
-// colourValued lists the properties whose whole value is a colour.
-//
-// A shorthand is not among them: "border" and "background" tell their parts
-// apart by type, so a part that is not a colour is simply not the colour part,
-// and the shorthand's own expander already refuses the declaration when nothing
-// else will take it.
-var colourValued = map[string]bool{
-	"color": true, "background-color": true,
-	"border-top-color": true, "border-right-color": true,
-	"border-bottom-color": true, "border-left-color": true,
-	"outline-color": true, "text-decoration-color": true,
-}
-
-// legalColour reports whether a value is one a colour property takes.
-//
-// The four CSS-wide keywords are not colours and are not this function's
-// business — the cascade acts on them itself, and dropping "color: inherit" as
-// an invalid colour would be a far worse bug than the one this fixes.
-// "currentcolor" is a colour the cascade cannot resolve until it knows the
-// element's own, and "invert" belongs to outline-color alone.
-func legalColour(name string, vals []css.ComponentValue) bool {
-	if parts := splitOnWhitespace(vals); len(parts) == 1 && len(parts[0]) == 1 {
-		if v := parts[0][0]; v.IsToken() && v.Token.Kind == css.Ident {
-			switch strings.ToLower(v.Token.Value) {
-			case kwInherit, kwInitial, kwUnset, kwRevert, kwRevertLayer, "currentcolor":
-				return true
-			case "invert":
-				return name == "outline-color"
-			}
-		}
-	}
-	_, ok := ParseColor(vals)
-	return ok
-}
-
 // legalBackgroundImage reports whether a value is one background-image takes: a
 // comma-separated list, each entry an <image> or "none".
 //

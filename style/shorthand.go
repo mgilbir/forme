@@ -33,20 +33,6 @@ func ident(name string) []css.ComponentValue {
 	return []css.ComponentValue{{Token: css.Token{Kind: css.Ident, Value: name}}}
 }
 
-// borderStyleKeywords is the closed set that identifies the style part.
-var borderStyleKeywords = map[string]bool{
-	"none": true, "hidden": true, "dotted": true, "dashed": true,
-	"solid": true, "double": true, "groove": true, "ridge": true,
-	"inset": true, "outset": true,
-}
-
-// borderWidthKeywords is the other closed set. It is separate because "none" is
-// a style and "medium" is a width, and a single set would make "border: none"
-// ambiguous.
-var borderWidthKeywords = map[string]bool{
-	"thin": true, "medium": true, "thick": true,
-}
-
 // borderShorthand expands "border" and the four per-side forms.
 //
 // sides is which edges it sets: all four for "border", one for "border-top".
@@ -105,7 +91,7 @@ func outlineShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValu
 			styleVal, seenStyle = part, true
 		case isBorderWidth(part) && !seenWidth:
 			width, seenWidth = part, true
-		case (isColour(part) || isInvert(part)) && !seenColour:
+		case judgeValue("outline-color", part).ok && !seenColour:
 			colour, seenColour = part, true
 		default:
 			// As for the border: half an outline is not what was asked for.
@@ -122,42 +108,38 @@ func outlineShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValu
 	}, nil, true
 }
 
-// isOutlineStyle is isBorderStyle without "hidden", per §18.4.
+// isOutlineStyle is outline-style's own value: the border styles without
+// "hidden", per §18.4, and css-ui-4's "auto".
 func isOutlineStyle(part []css.ComponentValue) bool {
-	if !isBorderStyle(part) {
-		return false
-	}
-	return !strings.EqualFold(part[0].Token.Value, "hidden")
+	return judgeValue("outline-style", part).ok
 }
 
-func isInvert(part []css.ComponentValue) bool {
-	return len(part) == 1 && part[0].IsToken() && part[0].Token.Kind == css.Ident &&
-		strings.EqualFold(part[0].Token.Value, "invert")
-}
-
+// isBorderStyle is <line-style>. It and isBorderWidth are two closed sets that
+// do not overlap — "none" is a style and "medium" is a width — which is what
+// lets "border: none" mean one thing.
 func isBorderStyle(part []css.ComponentValue) bool {
-	if len(part) != 1 || !part[0].IsToken() || part[0].Token.Kind != css.Ident {
-		return false
-	}
-	return borderStyleKeywords[strings.ToLower(part[0].Token.Value)]
+	return len(part) == 1 && lineStyle(part[0]).ok
 }
 
+// The slot predicates below ask the value grammar's own terms — see
+// grammar.go — and take a part the grammar calls valid whether or not this
+// engine evaluates it. Which slot a part belongs to is a question about what it
+// is, and "calc(1px + 1px)" is a width and "oklch(…)" a colour whatever can be
+// done with them. Each used to recognise only what the engine computes, so
+// "border: 2px solid oklch(…)" matched no slot, failed as a whole, and was
+// reported as the author's mistake; now the part lands in its slot, and the
+// cascade judges the longhand it was put in and says the engine is missing it
+// (audit C59).
+
+// isBorderWidth is <line-width>.
 func isBorderWidth(part []css.ComponentValue) bool {
-	if len(part) != 1 || !part[0].IsToken() {
-		return false
-	}
-	t := part[0].Token
-	if t.Kind == css.Ident {
-		return borderWidthKeywords[strings.ToLower(t.Value)]
-	}
-	// A length. Zero may be written without a unit, which is why a plain
-	// number counts here and nowhere else in this file.
-	return t.Kind == css.Dimension || (t.Kind == css.Number && t.Number == 0)
+	return len(part) == 1 && lineWidth(part[0]).ok
 }
 
+// isColour is <color>, including "currentcolor", which is a colour the cascade
+// resolves and which ParseColor does not read.
 func isColour(part []css.ComponentValue) bool {
-	_, ok := ParseColor(part)
-	return ok
+	return len(part) == 1 && colour(part[0]).ok
 }
 
 // backgroundShorthand expands "background".
@@ -421,30 +403,7 @@ func percentPair(x, y float64) []css.ComponentValue {
 // make the whole declaration invalid, which would throw away the repeat and the
 // position the author wrote beside it and report the wrong thing.
 func isBackgroundImage(part []css.ComponentValue) bool {
-	if len(part) != 1 {
-		return false
-	}
-	v := part[0]
-	if v.IsFunction() {
-		switch strings.ToLower(v.Token.Value) {
-		case "url", "src", "image", "image-set", "cross-fade", "element",
-			"linear-gradient", "radial-gradient", "conic-gradient",
-			"repeating-linear-gradient", "repeating-radial-gradient",
-			"repeating-conic-gradient":
-			return true
-		}
-		return false
-	}
-	if !v.IsToken() {
-		return false
-	}
-	switch v.Token.Kind {
-	case css.URL:
-		return true
-	case css.Ident:
-		return strings.EqualFold(v.Token.Value, "none")
-	}
-	return false
+	return len(part) == 1 && either(kw("none"), image)(part[0]).ok
 }
 
 func isRepeatKeyword(part []css.ComponentValue) bool {
@@ -518,20 +477,7 @@ func isSizeComponent(part []css.ComponentValue) bool {
 // isLengthOrPercent accepts what a background position or size may be written
 // as, which includes a bare zero and nothing else without a unit.
 func isLengthOrPercent(part []css.ComponentValue) bool {
-	if len(part) != 1 || !part[0].IsToken() {
-		if len(part) == 1 && part[0].IsFunction() &&
-			strings.EqualFold(part[0].Token.Value, "calc") {
-			return true
-		}
-		return false
-	}
-	switch t := part[0].Token; t.Kind {
-	case css.Dimension, css.Percentage:
-		return true
-	case css.Number:
-		return t.Number == 0
-	}
-	return false
+	return len(part) == 1 && num(lengthPctSlot)(part[0]).ok
 }
 
 func isNone(part []css.ComponentValue) bool {
@@ -661,8 +607,31 @@ func isIdentPart(part []css.ComponentValue) bool {
 //
 // Unlike the others this one *is* positional at the end: the size, an optional
 // line-height after a slash, and then the family list, in that order. What comes
-// before is style, variant and weight in any order — which is why it is here
-// rather than with the box shorthands.
+// before is CSS Fonts 4 §2.8's four optional parts in any order — the style,
+// the CSS 2.1 variant (small-caps), the weight and the width — which is why it
+// is here rather than with the box shorthands:
+//
+//	[ <'font-style'> || <font-variant-css2> || <'font-weight'> ||
+//	  <font-width-css3> ]? <'font-size'> [ / <'line-height'> ]? <'font-family'>#
+//
+// The width (font-stretch in CSS 3, font-width in 4) is valid and this engine
+// has no such property, so it is reported as a part it cannot produce and the
+// rest is applied. It was not accepted at all, and nor was a numeric weight
+// other than the nine hundreds or an oblique angle, so "font: condensed 12px
+// serif", "font: 450 12px serif" and "font: oblique 10deg 12px serif" — valid
+// declarations every browser applies — were dropped whole and called the
+// author's mistake (audit C112).
+//
+// # What it resets
+//
+// §2.8 resets every subproperty to its initial value first, "including those
+// listed above plus font-size-adjust, font-kerning, all subproperties of
+// font-variant, font-feature-settings, font-language-override,
+// font-optical-sizing, font-variation-settings and font-palette" — of which
+// this engine has font-kerning, font-feature-settings and the five variant
+// longhands. It set six longhands, so "font: 12px serif" left an earlier
+// "font-variant-numeric: oldstyle-nums" and "font-kerning: none" in force, and
+// "font: inherit" inherited only six of them.
 func fontShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, []string, bool) {
 	parts := splitOnWhitespace(vals)
 	if len(parts) == 0 {
@@ -679,6 +648,9 @@ func fontShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, 
 
 	style, weight, caps := ident("normal"), ident("normal"), ident("normal")
 	var size, lineHeight, family []css.ComponentValue
+	var unsupported []string
+	var seenStyle, seenWeight, seenCaps, seenWidth bool
+	normals := 0
 
 	i := 0
 	for ; i < len(parts); i++ {
@@ -686,28 +658,47 @@ func fontShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, 
 		if isFontSize(part) {
 			break
 		}
-		if !isIdentPart(part) && !isNumberPart(part) {
-			return nil, nil, false
-		}
-		switch strings.ToLower(serialize(part)) {
-		case "italic", "oblique":
-			style = part
-		case "bold", "bolder", "lighter", "100", "200", "300", "400",
-			"500", "600", "700", "800", "900":
-			weight = part
-		case "normal":
-			// The initial value of every slot the shorthand can set, so it says
-			// nothing and changes nothing.
-		case "small-caps":
-			// The one font-variant value "font" can carry: §6.10 lets the
+		name, isIdent := singleIdent(part)
+		switch {
+		case isIdent && name == "normal":
+			// The initial value of every slot the prefix can set, so it says
+			// nothing and changes nothing — but it does fill a slot, which is
+			// what limits the prefix to four.
+			normals++
+		case isIdent && !seenStyle && (name == "italic" || name == "oblique"):
+			style, seenStyle = part, true
+			if name == "oblique" && i+1 < len(parts) &&
+				num(numeric{angle: true, min: -90, hasMin: true, max: 90,
+					hasMax: true})(parts[i+1][0]).ok && len(parts[i+1]) == 1 {
+				style = joinParts(part, parts[i+1])
+				i++
+			}
+		case isIdent && !seenCaps && name == "small-caps":
+			// The one font-variant value "font" can carry: §2.8 lets the
 			// shorthand take a caps keyword and nothing else from the variant
 			// group. It sets the longhand, and — like every other slot here —
 			// the shorthand resets it to "normal" when it is not written, which
 			// is what makes "font: 12px serif" undo an inherited small-caps.
-			caps = part
+			caps, seenCaps = part, true
+		case !seenWeight && len(part) == 1 && fontWeight(part[0]).ok:
+			weight, seenWeight = part, true
+		case isIdent && !seenWidth && fontWidthKeywords[name]:
+			seenWidth = true
+			if name != "normal" {
+				unsupported = append(unsupported, "the font width "+name)
+			}
 		default:
 			return nil, nil, false
 		}
+	}
+	filled := normals
+	for _, seen := range []bool{seenStyle, seenWeight, seenCaps, seenWidth} {
+		if seen {
+			filled++
+		}
+	}
+	if filled > 4 {
+		return nil, nil, false
 	}
 	if i >= len(parts) {
 		// No size, so this is not a font shorthand at all — the size and the
@@ -747,6 +738,13 @@ func fontShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, 
 		"font-size":         size,
 		"font-family":       family,
 		"font-variant-caps": caps,
+		// Reset whether or not anything was said about them — see above.
+		"font-variant-ligatures":  ident("normal"),
+		"font-variant-numeric":    ident("normal"),
+		"font-variant-east-asian": ident("normal"),
+		"font-variant-position":   ident("normal"),
+		"font-kerning":            ident("auto"),
+		"font-feature-settings":   ident("normal"),
 	}
 	// The shorthand resets line-height whether or not it was written, which is
 	// what makes "font: 12px serif" undo an inherited one.
@@ -755,30 +753,25 @@ func fontShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, 
 	} else {
 		out["line-height"] = ident("normal")
 	}
-	return out, nil, true
+	return out, unsupported, true
 }
 
+// fontWidthKeywords is CSS Fonts 4 §2.8's <font-width-css3>.
+var fontWidthKeywords = map[string]bool{
+	"normal": true, "ultra-condensed": true, "extra-condensed": true,
+	"condensed": true, "semi-condensed": true, "semi-expanded": true,
+	"expanded": true, "extra-expanded": true, "ultra-expanded": true,
+}
+
+// isFontSize reports whether a part begins with a font-size: a keyword, a
+// length or percentage, or a math function. A part may carry the "/" and the
+// line-height after the size, so only its first component is asked.
 func isFontSize(part []css.ComponentValue) bool {
-	if len(part) == 0 || !part[0].IsToken() {
-		return false
-	}
-	switch t := part[0].Token; t.Kind {
-	case css.Dimension, css.Percentage:
-		return true
-	case css.Number:
-		return t.Number == 0
-	case css.Ident:
-		if _, ok := absoluteFontSizes[strings.ToLower(t.Value)]; ok {
-			return true
-		}
-		_, ok := relativeFontSizes[strings.ToLower(t.Value)]
-		return ok
-	}
-	return false
+	return len(part) > 0 && either(fontSizeKeyword, num(lengthPctSlot))(part[0]).ok
 }
 
 func isNumberPart(part []css.ComponentValue) bool {
-	return len(part) == 1 && part[0].IsToken() && part[0].Token.Kind == css.Number
+	return len(part) == 1 && num(numberSlot)(part[0]).ok
 }
 
 // splitOnSlash divides "12px/1.5" into its two halves.
@@ -884,22 +877,7 @@ func textDecorationShorthand(vals []css.ComponentValue) (map[string][]css.Compon
 // isDecorationThickness reports whether one part of the shorthand is a
 // thickness: the two keywords, or a length or a percentage.
 func isDecorationThickness(part []css.ComponentValue) bool {
-	if len(part) != 1 || !part[0].IsToken() {
-		return false
-	}
-	switch part[0].Token.Kind {
-	case css.Dimension, css.Percentage:
-		return true
-	case css.Number:
-		// A bare nought is a length, and it is the only number that is.
-		return part[0].Token.Number == 0
-	case css.Ident:
-		switch strings.ToLower(part[0].Token.Value) {
-		case "auto", "from-font":
-			return true
-		}
-	}
-	return false
+	return len(part) == 1 && either(kw("auto", "from-font"), num(lengthPctSlot))(part[0]).ok
 }
 
 func isDecorationLine(part []css.ComponentValue) bool {
@@ -913,8 +891,13 @@ func isDecorationLine(part []css.ComponentValue) bool {
 	return false
 }
 
-// whiteSpaceShorthand is CSS Text 4's table for the property that used to be one
-// keyword.
+// whiteSpaceShorthand is CSS Text 4 §3's white-space: one of the legacy
+// keywords, or its longhands' own values in any order.
+//
+//	normal | pre | pre-wrap | pre-line |
+//	<'white-space-collapse'> || <'text-wrap-mode'> || <'white-space-trim'>
+//
+// The legacy keywords are a table:
 //
 //	white-space-collapse | text-wrap-mode
 //	normal        collapse         wrap
@@ -924,36 +907,70 @@ func isDecorationLine(part []css.ComponentValue) bool {
 //	pre-line      preserve-breaks  wrap
 //	break-spaces  break-spaces     wrap
 //
-// The two-value syntax the level 4 draft also allows — "white-space: preserve
-// nowrap" — is deliberately not accepted. Nothing in the suite writes it, the
-// keywords it takes are the longhands' own, and an expander that guessed at
-// which of two idents belonged to which longhand would be inventing a grammar.
+// The longhand form — "white-space: preserve nowrap" — was refused on the
+// grounds that nothing wrote it and that telling two idents apart would be
+// inventing a grammar. It is the specification's grammar, the three keyword
+// sets do not overlap, and the suite writes "preserve-breaks nowrap"; once the
+// value grammar called a refused value the author's mistake, refusing it was a
+// false report as well as a dropped declaration.
+//
+// white-space-trim is valid and this engine does not trim, so a trim keyword
+// is reported as a part it cannot produce and the rest is applied; "none" is
+// that property's initial value and asks for nothing.
 func whiteSpaceShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, []string, bool) {
-	name, ok := singleIdent(vals)
-	if !ok {
-		return nil, nil, false
+	set := func(collapse, mode string) map[string][]css.ComponentValue {
+		return map[string][]css.ComponentValue{
+			"white-space-collapse": ident(collapse),
+			"text-wrap-mode":       ident(mode),
+		}
 	}
-	var collapse, mode string
-	switch name {
-	case "normal":
-		collapse, mode = "collapse", "wrap"
-	case "pre":
-		collapse, mode = "preserve", "nowrap"
-	case "nowrap":
-		collapse, mode = "collapse", "nowrap"
-	case "pre-wrap":
-		collapse, mode = "preserve", "wrap"
-	case "pre-line":
-		collapse, mode = "preserve-breaks", "wrap"
-	case "break-spaces":
-		collapse, mode = "break-spaces", "wrap"
-	default:
-		return nil, nil, false
+	if name, ok := singleIdent(vals); ok {
+		switch name {
+		case "normal":
+			return set("collapse", "wrap"), nil, true
+		case "pre":
+			return set("preserve", "nowrap"), nil, true
+		case "nowrap":
+			return set("collapse", "nowrap"), nil, true
+		case "pre-wrap":
+			return set("preserve", "wrap"), nil, true
+		case "pre-line":
+			return set("preserve-breaks", "wrap"), nil, true
+		case "break-spaces":
+			return set("break-spaces", "wrap"), nil, true
+		}
 	}
-	return map[string][]css.ComponentValue{
-		"white-space-collapse": ident(collapse),
-		"text-wrap-mode":       ident(mode),
-	}, nil, true
+	collapse, mode := "", ""
+	trim := map[string]bool{}
+	var unsupported []string
+	for _, part := range splitOnWhitespace(vals) {
+		name, ok := singleIdent(part)
+		if !ok {
+			return nil, nil, false
+		}
+		switch {
+		case collapse == "" && kw("collapse", "discard", "preserve", "preserve-breaks",
+			"preserve-spaces", "break-spaces")(part[0]).ok:
+			collapse = name
+		case mode == "" && (name == "wrap" || name == "nowrap"):
+			mode = name
+		case name == "none" && len(trim) == 0:
+			trim[name] = true
+		case (name == "discard-before" || name == "discard-after" ||
+			name == "discard-inner") && !trim[name] && !trim["none"]:
+			trim[name] = true
+			unsupported = append(unsupported, "the white-space-trim value "+name)
+		default:
+			return nil, nil, false
+		}
+	}
+	if collapse == "" {
+		collapse = "collapse"
+	}
+	if mode == "" {
+		mode = "wrap"
+	}
+	return set(collapse, mode), unsupported, true
 }
 
 // textWrapShorthand is "<'text-wrap-mode'> || <'text-wrap-style'>": either, or
@@ -1513,18 +1530,10 @@ func isAutoKeyword(part []css.ComponentValue) bool {
 // that names column-count for exactly that reason — and a shorthand that refused
 // it here would drop the *width* along with it.
 func isColumnCount(part []css.ComponentValue) bool {
-	if len(part) != 1 || !part[0].IsToken() {
-		return false
-	}
-	t := part[0].Token
-	return t.Kind == css.Number && t.IsInteger
+	return len(part) == 1 && num(integerSlot)(part[0]).ok
 }
 
 // isColumnWidth is <length>, which a bare zero may spell.
 func isColumnWidth(part []css.ComponentValue) bool {
-	if len(part) != 1 || !part[0].IsToken() {
-		return false
-	}
-	t := part[0].Token
-	return t.Kind == css.Dimension || (t.Kind == css.Number && t.Number == 0)
+	return len(part) == 1 && num(lengthSlot)(part[0]).ok
 }

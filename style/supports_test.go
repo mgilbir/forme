@@ -93,11 +93,9 @@ func TestASupportsConditionItCannotReadIsReported(t *testing.T) {
 		`selector(p > a)`,
 		`font-tech(color-COLRv1)`,
 		`(color: red) and selector(p)`,
-		// Not a condition at all: §2 requires the parentheses, and a bare
-		// declaration is a shape this cannot read rather than one it answers.
-		`color: red`,
-		`red`,
-		`(color: red) (display: block)`,
+		// Parentheses holding something that is neither a declaration nor a
+		// condition are §2.1's <general-enclosed>: valid, and unanswerable.
+		`(color red)`,
 	} {
 		colour, findings := styledBy(t, `@supports `+condition+` { #target { color: red } }`)
 		if colour != "blue" {
@@ -156,11 +154,10 @@ func TestASupportsBlockCascadesWhereItIsWritten(t *testing.T) {
 // TestASupportsConditionNamingAnUnappliedValueIsStillYes states the narrowing,
 // because it is the one place this answers differently from a browser.
 //
-// §2 tests whether the declaration would parse, and outside the six properties
-// dropsForValue covers this engine has no single place that says whether a
-// value parses — that is decided per property, by the stage that reads it. So
-// for the rest a condition is answered about the property, and
-// "(position: sticky)" is yes where position is implemented and sticky is not.
+// §2 tests whether the declaration would parse, and the value grammar says
+// that for every property: "sticky" is a position. Whether layout draws every
+// keyword the grammar accepts is a different question, answered by the stage
+// that reads it, so "(position: sticky)" is yes where sticky is not laid out.
 //
 // It is sound rather than merely convenient, and the reason is where the report
 // goes: the block let in by this answer holds the declaration itself, and a
@@ -260,14 +257,14 @@ func TestSupportsAnswersForAShorthand(t *testing.T) {
 // TestSupportsAnswersAboutTheValueWhereTheCascadeDoes is the other half, and
 // the invariant it protects is that the two cannot disagree.
 //
-// Six properties have their value read early enough for §4.2 to drop the whole
-// declaration. Answered about the property alone, a condition said yes about a
-// declaration the very next rule throws away — and "(display: grid)" is the one
-// that matters, because it is how a stylesheet asks whether it may use grid at
-// all rather than a spelling nobody writes.
+// §4.2 drops a declaration whose value the property does not take. Answered
+// about the property alone, a condition said yes about a declaration the very
+// next rule throws away — and "(display: grid)" is the one that matters,
+// because it is how a stylesheet asks whether it may use grid at all rather
+// than a spelling nobody writes.
 //
-// dropsForValue is the list the cascade itself asks, so this is not a second
-// opinion that could drift from it; it is the same question.
+// judgeLonghand is the judgement the cascade itself makes, so this is not a
+// second opinion that could drift from it; it is the same question.
 func TestSupportsAnswersAboutTheValueWhereTheCascadeDoes(t *testing.T) {
 	for _, c := range []struct {
 		decl string
@@ -309,13 +306,19 @@ func TestNoConditionAnswersYesAboutADeclarationTheCascadeDrops(t *testing.T) {
 		`background-image: url(x) repeat`, `background-image: url(x)`,
 		`quotes: 1px`, `quotes: "a" "b"`, `content: counter(c, c, c, c)`,
 		`content: "x"`, `margin: -5px`, `line-height: -1`, `font: 12px serif`,
+		`width: foo`, `position: bogus`, `position: sticky`,
+		`color: oklch(0.6 0.2 140)`, `border: 1px solid lab(50% 1 1)`,
+		`margin-inline-start: wide`, `border-inline-start-color: 'x'`,
 	} {
 		name, value, ok := splitDeclaration(declValue(t, decl))
 		if !ok {
 			t.Fatalf("%q is not a declaration; the fixture is wrong", decl)
 		}
 		name = strings.ToLower(strings.TrimSpace(name))
-		_, drops := dropsForValue(name, value)
+		// The cascade itself, and not a function it happens to call: a
+		// declaration it expands to nothing is one it dropped.
+		s := &Styler{seen: map[string]bool{}, attrOffset: -1}
+		drops := len(s.expandDecl(css.Declaration{Name: name, Value: value}, OriginAuthor)) == 0
 		if drops {
 			dropped++
 		}

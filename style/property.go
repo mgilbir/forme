@@ -210,11 +210,9 @@ var properties = map[string]property{
 	// as using three things this engine ignores.
 	"-webkit-line-clamp": {false, "none"},
 	"-webkit-box-orient": {false, "horizontal"},
-	// overflow-wrap inherits. word-wrap is the name Internet Explorer shipped it
-	// under and is a legal alias in CSS Text §5.5, so it is registered rather
-	// than reported: a document using it is not using an unsupported property.
+	// overflow-wrap inherits. word-wrap, the name Internet Explorer shipped it
+	// under, is not registered: it is an alias — see the shorthands table.
 	"overflow-wrap": {true, "normal"},
-	"word-wrap":     {true, "normal"},
 	// word-break inherits, which is what makes a rule on a container reach the
 	// text in it. All four values are acted on; "auto-phrase" is reported over a
 	// language whose phrases this engine has no model for, because the value
@@ -641,7 +639,9 @@ var shorthands = map[string]shorthand{
 		[]string{"list-style-type", "list-style-position", "list-style-image"}},
 	"font": {fontShorthand, []string{
 		"font-style", "font-weight", "font-size", "font-family", "line-height",
-		"font-variant-caps"}},
+		"font-variant-caps", "font-variant-ligatures", "font-variant-numeric",
+		"font-variant-east-asian", "font-variant-position", "font-kerning",
+		"font-feature-settings"}},
 
 	// CSS Fonts 4 §6.10, for the five longhands this engine has. See
 	// fontVariantShorthand for why the property is expanded rather than read.
@@ -661,6 +661,25 @@ var shorthands = map[string]shorthand{
 		[]string{"white-space-collapse", "text-wrap-mode"}},
 	"text-wrap":  {textWrapShorthand, []string{"text-wrap-mode", "text-wrap-style"}},
 	"text-align": {textAlignShorthand, []string{"text-align-all", "text-align-last"}},
+
+	// CSS Text 3 §5.5: "For legacy reasons, UAs must treat word-wrap as a
+	// legacy name alias of the overflow-wrap property." One property with two
+	// names, so it is one longhand with two spellings, and the cascade orders
+	// them like any two declarations of it. It was registered as a property of
+	// its own, and "div { word-wrap: break-word } p { overflow-wrap: normal }"
+	// broke the paragraph's words: the p computed overflow-wrap normal,
+	// inherited word-wrap break-word, and the reader took the second because it
+	// could not tell which was written later (audit C111). The fix is the one
+	// white-space and text-align already had.
+	"word-wrap": {aliasOf("overflow-wrap"), []string{"overflow-wrap"}},
+}
+
+// aliasOf is the expander for a legacy name of a single property: the value is
+// the longhand's, and the value grammar judges it as one.
+func aliasOf(longhand string) expander {
+	return func(vals []css.ComponentValue) (map[string][]css.ComponentValue, []string, bool) {
+		return map[string][]css.ComponentValue{longhand: vals}, nil, true
+	}
 }
 
 func init() {

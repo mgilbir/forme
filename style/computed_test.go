@@ -162,13 +162,28 @@ func TestTheUnitsThatNeedAFaceAreLeftAlone(t *testing.T) {
 		{"width", "3ch", "3ch"},
 		{"width", "3ic", "3ic"},
 		{"width", "3vw", "3vw"},
-		{"margin-left", "2lh", "2lh"},
 	} {
 		got := computedOf(t, `#p { font-size: 28px; `+tc.property+`: `+tc.value+` }`,
 			"#p", tc.property)
 		if got != tc.want {
 			t.Errorf("%s: %s computed to %q, want it left as it was", tc.property, tc.value, got)
 		}
+	}
+
+	// A unit no stage here resolves at all is another matter: "2lh" is valid
+	// CSS the value grammar knows this engine does not evaluate, so the
+	// declaration is dropped as the one naming oklch() is, the declaration
+	// before it stands, and the finding says the engine is missing something.
+	// It used to be left as written, for layout to fall back to zero on
+	// without a word.
+	doc := parseDoc(t, `<p id="p">x</p>`)
+	got := Apply(doc, []Sheet{author(t, `#p { margin-left: 5px } #p { margin-left: 2lh }`)})
+	if v := got.Styles[elementFor(t, doc, "#p")].Get("margin-left"); v != "5px" {
+		t.Errorf("margin-left: 2lh after 5px computed to %q, want the 5px to stand", v)
+	}
+	if found, unsupported := says(got.Findings, "the unit lh"); !found || !unsupported {
+		t.Errorf("2lh was not reported as a unit this engine does not evaluate: %v",
+			got.Findings)
 	}
 
 	// And each of them beside an em, which is what makes this a test of the
@@ -213,8 +228,10 @@ func TestTheLettersEMInSomethingThatIsNotALength(t *testing.T) {
 // TestAFontSizeThatCannotBeResolvedIsLeftAsWritten, and the element is still
 // marked as having declared one.
 //
-// The cascade has no answer for "3cap" — that is the font's cap height, and the
-// face is chosen in layout — and must not invent one. What it leaves
+// The cascade has no answer for "3vw" when it is not told the page — Apply
+// is not — and must not invent one. ("3cap" was the example once; the value
+// grammar now drops it as a unit nothing here evaluates, before it is ever
+// asked about.) What it leaves
 // behind is the declaration and the mark, which together are exactly what
 // layout needs: an element that declared a font-size it could not resolve, to
 // report against and to fall back to the inherited size for. A descendant that
@@ -222,9 +239,9 @@ func TestTheLettersEMInSomethingThatIsNotALength(t *testing.T) {
 // must not resolve it either.
 func TestAFontSizeThatCannotBeResolvedIsLeftAsWritten(t *testing.T) {
 	doc := parseDoc(t, nested)
-	got := Apply(doc, []Sheet{author(t, `#p { font-size: 3cap }`)})
+	got := Apply(doc, []Sheet{author(t, `#p { font-size: 3vw }`)})
 	p := elementFor(t, doc, "#p")
-	if v := got.Styles[p].Get("font-size"); v != "3cap" {
+	if v := got.Styles[p].Get("font-size"); v != "3vw" {
 		t.Errorf("an unresolvable font-size computed to %q; the cascade has no answer "+
 			"for it and must not write one", v)
 	}

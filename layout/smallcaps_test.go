@@ -383,13 +383,12 @@ func TestOnlyTheHalfWithNothingToActOnIsLeftOut(t *testing.T) {
 
 // TestAValueOfNoLevelAtAllIsReported.
 //
-// All six of §6.6 are read, so a value outside them is either a mistake the
-// author made or a value from a level this engine has not read. It cannot tell
-// the two apart and reports the second, which is the direction to err in.
+// All six of §6.6 are read, so a value outside them is a value of no level at
+// all: the cascade's value grammar knows §6.6's list, drops the declaration and
+// says so, and this is that finding.
 func TestAValueOfNoLevelAtAllIsReported(t *testing.T) {
-	_, findings := layoutWith(t, smallCapsFontSet(t),
-		`<p id="p">Filler Text</p>`,
-		`#p { font-family: Cap; font-size: 20px; font-variant-caps: sideways-caps }`)
+	findings := build(t, `<p id="p">Filler Text</p>`,
+		`#p { font-family: Cap; font-size: 20px; font-variant-caps: sideways-caps }`).Findings
 	f, ok := findingNaming(findings, "font-variant-caps")
 	if !ok {
 		t.Fatalf("nothing was reported: %v", findings)
@@ -397,8 +396,10 @@ func TestAValueOfNoLevelAtAllIsReported(t *testing.T) {
 	if !strings.Contains(f.Message, "sideways-caps") {
 		t.Errorf("the finding is %q and does not name the value", f.Message)
 	}
-	if !f.Unsupported() {
-		t.Error("the finding does not claim the engine is missing anything")
+	// It is the author's mistake: no specification defines the value, so
+	// nothing is missing from the engine.
+	if f.Unsupported() {
+		t.Error("the finding claims the engine is missing something; the value is not CSS")
 	}
 }
 

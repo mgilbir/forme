@@ -1367,7 +1367,14 @@ const wptEnv = "WPT_TESTS"
 //
 // Neither correction wins the document alone; the direction is wrong without
 // the second and the glyph count is wrong without the first.
-const wptCleanPassBaseline = 5982
+//
+// **5982 to 5983, for "background: currentcolor"**. linebox/vertical-align-122
+// paints its inline-blocks with it, and the shorthand's colour slot asked
+// ParseColor, which reads colours and not the keyword the cascade resolves — so
+// the whole declaration was dropped as unreadable and the boxes were bare. The
+// slots now ask the value grammar's colour term, which is what the colour
+// longhands were already judged by.
+const wptCleanPassBaseline = 5983
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
