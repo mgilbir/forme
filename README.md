@@ -66,8 +66,8 @@ The same code, minus the imaginary backend, is `layout.Example` in
 	forme/css          CSS syntax: tokens, component values, selectors
 	forme/html         the parser, and the document tree it builds
 	forme/shape        the shaping engine: what glyph goes where
-	forme/font         the font formats underneath it: sfnt, CFF, Type 1, the
-	                   WOFF and WOFF 2 wrappers, glyph names
+	forme/font         the font formats underneath it: sfnt, CFF, the WOFF and
+	                   WOFF 2 wrappers, glyph names
 	forme/brotli       Brotli decompression, RFC 7932, which WOFF 2 needs
 	forme/bidi         the Unicode bidirectional algorithm, UAX #9
 	forme/segment      grapheme cluster boundaries, UAX #29
@@ -120,9 +120,9 @@ knowledge. Cursive joining for Arabic and its relatives, and the mark ordering o
 UTR #53. OpenType layout: GSUB 1–6 and GPOS 1–8, mark attachment, cursive
 attachment, contextual and chained-contextual rules, mark filtering sets.
 
-**Fonts.** sfnt and CFF, Type 1, and the WOFF and WOFF 2 wrappers a web font
-arrives in; variable fonts instanced at a named or arbitrary point in their
-design space, subsetting, and the metrics a layout engine has to ask for —
+**Fonts.** sfnt and CFF, and the WOFF and WOFF 2 wrappers a web font arrives
+in; variable fonts instanced at a named or arbitrary point in their design
+space, subsetting, and the metrics a layout engine has to ask for —
 including what the fourteen standard PDF faces state, which is not the same
 question.
 
@@ -163,7 +163,7 @@ that removes invisible characters it leaves a mark positioned across one of them
 It is listed with its reason in `shape/harfbuzz_test.go` and pinned in the
 corpus, so a difference that stops being deliberate fails the test.
 
-Beyond the suites: 33 fuzz targets, thirty-three of them scheduled weekly, a
+Beyond the suites: 32 fuzz targets, thirty-two of them scheduled weekly, a
 differential fuzzer against HarfBuzz that generates text rather than listing it,
 and a CoreText harness for the questions two implementations cannot settle
 between them.

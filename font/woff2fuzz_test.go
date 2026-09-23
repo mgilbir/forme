@@ -157,29 +157,3 @@ func FuzzDecodeWOFF(f *testing.F) {
 		}
 	})
 }
-
-// FuzzParseType1 is the Type 1 reader, which had no target either.
-//
-// It reads a PostScript program: an eexec-encrypted body, a CharStrings
-// dictionary whose entries state their own lengths, and numbers written as
-// text. A length in a font's own numbers is the shape of input every other
-// target here exists for.
-func FuzzParseType1(f *testing.F) {
-	f.Add([]byte("%!PS-AdobeFont-1.0\n/FontName /Test def\ncurrentfile eexec\n"))
-	f.Add([]byte("/CharStrings 2 dict dup begin\n/a 5 RD 12345 ND\nend\n"))
-	f.Add([]byte{})
-
-	f.Fuzz(func(t *testing.T, src []byte) {
-		p := parseType1(src)
-		if p == nil {
-			return
-		}
-		if p.NumGlyphs < 0 {
-			t.Fatalf("the program reports %d glyphs", p.NumGlyphs)
-		}
-		again := parseType1(src)
-		if (again == nil) != (p == nil) {
-			t.Fatal("two reads of the same bytes disagreed about whether it parses")
-		}
-	})
-}

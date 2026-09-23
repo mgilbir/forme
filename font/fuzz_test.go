@@ -192,9 +192,7 @@ func sfntCmapSeeds() [][]byte {
 // runs on attacker-controlled platform ids, encoding ids and offsets, and picks
 // which of several subtables becomes the font's authoritative cmap. Whatever it
 // picks must satisfy the same invariants as a single subtable, and the derived
-// symbol and Mac maps must carry only real glyph indices. It also drives
-// trueTypeGID over the resulting font, which reads the maps the selection
-// produced.
+// symbol and Mac maps must carry only real glyph indices.
 func FuzzSFNTCmap(f *testing.F) {
 	for _, s := range sfntCmapSeeds() {
 		f.Add(s)
@@ -219,12 +217,6 @@ func FuzzSFNTCmap(f *testing.F) {
 			mac[rune(c)] = gid
 		}
 		checkCmapInvariants(t, "parseSFNT macCmap", mac, true)
-		for _, code := range []byte{0, 'A', 0xFF} {
-			for _, symbolic := range []bool{false, true} {
-				_, _ = trueTypeGID(fp, symbolic, code, "A")
-				_, _ = trueTypeGID(fp, symbolic, code, "")
-			}
-		}
 	})
 }
 
