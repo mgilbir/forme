@@ -39,6 +39,11 @@ testdata/afm/
 testdata/brotli-source/
 testdata/agl/
 
+# The licences THIRD_PARTY_NOTICES quotes and no generator reads, fetched at a
+# pin by `make notice-sources` so that cmd/notices_test.go can hold every
+# quotation to its source.
+testdata/notices/
+
 # Built by `make hbfuzz`.
 testdata/harfbuzz/.shapetext
 

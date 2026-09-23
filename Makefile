@@ -1,4 +1,4 @@
-.PHONY: ucd verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance
+.PHONY: ucd verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags notice-sources clean-notice-sources noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance
 
 test:
 	gofmt -l . | grep -v '^testdata/' && exit 1 || true
@@ -41,7 +41,7 @@ CORPUS_ENV = \
 # regenerates each table from them and compares, and with TABLE_INPUTS=required
 # above, a table whose inputs are not here is a failure rather than a skip.
 CORPORA = wpt noto-fonts notocjk ucd css-tests bidi-tests grapheme-tests \
-	normalization-tests $(HTML_ENTITIES) $(TABLE_SOURCES)
+	normalization-tests $(HTML_ENTITIES) $(TABLE_SOURCES) notice-sources
 
 test-corpora:
 	$(MAKE) verify-fonts
@@ -292,7 +292,7 @@ TABLE_VARS := UCD UNICODE_VERSION \
 	ICU_DICTS DICT_DIR BUDOUX BUDOUX_DIR HYPHEN_URL HYPHEN_DIR \
 	AFM_URL AFM_DIR BROTLI_URL BROTLI_DIR AGL_URL AGL_DIR \
 	HTML_ENTITIES HTML_ENTITIES_URL HTML_ENTITIES_SHA256 CSS_COLOR_URL CSS_COLOR_SPEC \
-	HB_LANGTAGS HB_LANGTAGS_URL HB_LANGTAGS_SHA256
+	HB_LANGTAGS HB_LANGTAGS_URL HB_LANGTAGS_SHA256 HB_COPYING HB_COPYING_URL HB_COPYING_SHA256
 MAKETABLES = go run ./cmd/maketables $(foreach v,$(TABLE_VARS),-D '$(v)=$($(v))')
 
 # Every input a generator reads that is fetched rather than committed. Each is
@@ -307,7 +307,7 @@ MAKETABLES = go run ./cmd/maketables $(foreach v,$(TABLE_VARS),-D '$(v)=$($(v))'
 # (see stamp), so a new pin or a new file fetches again rather than finding the
 # old files and calling them current.
 TABLE_SOURCES = $(UCD_DEP) dictionary-sources phrase-sources hyphen-sources \
-	afm brotli-sources agl css-color-spec $(HTML_ENTITIES) $(HB_LANGTAGS)
+	afm brotli-sources agl css-color-spec $(HTML_ENTITIES) $(HB_LANGTAGS) $(HB_COPYING)
 
 # One file, whole or not at all.
 #
@@ -883,8 +883,73 @@ $(HB_LANGTAGS):
 	}
 	mv $@.part $@
 
-language-tags: $(HB_LANGTAGS)
+# HarfBuzz's COPYING at the same release, whose notice the table carries.
+#
+# The "Old MIT" licence permits copying "provided that the above copyright
+# notice and the following two paragraphs appear in all copies", and the table
+# is a copy of part of HarfBuzz. It said "see its COPYING" and carried none of
+# it. cmd/genlangtags writes the file whole into the table's header, and it is
+# pinned by digest for the same reasons the header is.
+HB_COPYING_URL := https://raw.githubusercontent.com/harfbuzz/harfbuzz/$(HB_LANGTAGS_VERSION)/COPYING
+HB_COPYING_SHA256 := ba8f810f2455c2f08e2d56bb49b72f37fcf68f1f4fade38977cfd7372050ad64
+HB_COPYING := testdata/harfbuzz-langtags/COPYING
+
+$(HB_COPYING):
+	mkdir -p $(dir $@)
+	$(FETCH) -o $@.part $(HB_COPYING_URL)
+	echo "$(HB_COPYING_SHA256)  $@.part" | sha256sum -c --quiet - || { \
+	  rm -f $@.part; \
+	  echo "$(HB_COPYING_URL) is not the file HB_COPYING_SHA256 pins" >&2; \
+	  exit 1; \
+	}
+	mv $@.part $@
+
+language-tags: $(HB_LANGTAGS) $(HB_COPYING)
 	$(MAKETABLES) language-tags
+
+# The licences THIRD_PARTY_NOTICES quotes that no generator reads.
+#
+# Every notice in that file is a copy of a text somebody else wrote, and a copy
+# typed out is a copy with a typo in it. So each text is quoted from a file
+# taken at a pin — a commit, a release, or where there is neither, the URL and
+# the digest of what it served — and cmd/notices_test.go checks every quotation
+# against the file it names. The licences the generators already read — BudouX's
+# LICENSE, the AFM readme, the glyph list, the word lists, the hyphenation
+# patterns, HarfBuzz's COPYING — are checked against their own copies.
+#
+# Unicode's licence and W3C's have no versioned URL. A change to either is a
+# fetch that fails on its digest, which is the moment to read the new text.
+#
+#	<file>|<url>|<sha256>
+NOTICE_DIR := testdata/notices
+NOTICE_SOURCES := \
+	brotli-LICENSE|https://raw.githubusercontent.com/google/brotli/$(BROTLI_COMMIT)/LICENSE|3d180008e36922a4e8daec11c34c7af264fed5962d07924aea928c38e8663c94 \
+	icu-LICENSE|https://raw.githubusercontent.com/unicode-org/icu/$(ICU_COMMIT)/LICENSE|e55522d81edc687a341a4411e0776e54ca654e90147f354a90458aaced4116af \
+	unicode-license.txt|https://www.unicode.org/license.txt|e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96 \
+	whatwg-html-LICENSE|https://raw.githubusercontent.com/whatwg/html/cd8ac6f1bbf86dd0bd09ef75d27dacaebe7b4c1d/LICENSE|85dc6f5ccb57a6fe8c33d158f9fc8fc7ee5655a5d3db2cdd131c6a3d0f48a864 \
+	csswg-drafts-LICENSE.md|https://raw.githubusercontent.com/w3c/csswg-drafts/$(CSSWG_COMMIT)/LICENSE.md|232da9c6c2b9f7e19e5d85cc7cf43760d80b7c4174406ac6404fa2c1b51d531b \
+	w3c-software-license-2023.html|https://www.w3.org/copyright/software-license-2023/|ec32c12624d9dc038328872f288355f9e3ff59f2c1ab575c631868eb894415c1
+
+notice-field = $(word $(2),$(subst |, ,$(1)))
+NOTICE_FILES := $(foreach n,$(NOTICE_SOURCES),$(NOTICE_DIR)/$(call notice-field,$(n),1))
+
+define notice-rule
+$(NOTICE_DIR)/$(call notice-field,$(1),1):
+	mkdir -p $(NOTICE_DIR)
+	$(FETCH) -o $$@.part $(call notice-field,$(1),2)
+	echo "$(call notice-field,$(1),3)  $$@.part" | sha256sum -c --quiet - || { \
+	  rm -f $$@.part; \
+	  echo "$(call notice-field,$(1),2) is not the file its digest in NOTICE_SOURCES pins" >&2; \
+	  exit 1; \
+	}
+	mv $$@.part $$@
+endef
+$(foreach n,$(NOTICE_SOURCES),$(eval $(call notice-rule,$(n))))
+
+notice-sources: $(NOTICE_FILES)
+
+clean-notice-sources:
+	rm -rf $(NOTICE_DIR)
 
 clean-language-tags:
 	rm -rf $(dir $(HB_LANGTAGS))

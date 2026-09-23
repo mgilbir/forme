@@ -37,7 +37,12 @@ runtime.
 
 HarfBuzz is distributed under the "Old MIT" licence, which permits
 redistribution with its notice. The files are unmodified and carry their own
-headers; HarfBuzz's licence follows.
+headers; HarfBuzz's licence follows, shortened. Its whole COPYING, with every
+copyright holder it names, is quoted in THIRD_PARTY_NOTICES at the root of this
+repository.
+
+The HarfBuzz commit these were taken at was not recorded, so unlike
+shape/langtags.go's header they are not pinned.
 
     Copyright © 2010,2011,2012  Google, Inc.
     Copyright © 2012,2013  Mozilla Foundation

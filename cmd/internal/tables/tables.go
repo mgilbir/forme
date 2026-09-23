@@ -157,8 +157,9 @@ var Manifest = []Table{
 	// generated header at a release, pinned by digest.
 	{Out: "shape/langtags.go", Generator: "genlangtags", Target: "language-tags",
 		Args: []string{"-source=${HB_LANGTAGS_URL}", "-sha256=${HB_LANGTAGS_SHA256}",
-			"-in=${HB_LANGTAGS}", "-out=" + out},
-		Inputs: []string{"${HB_LANGTAGS}"}},
+			"-in=${HB_LANGTAGS}", "-license-source=${HB_COPYING_URL}",
+			"-license-sha256=${HB_COPYING_SHA256}", "-license=${HB_COPYING}", "-out=" + out},
+		Inputs: []string{"${HB_LANGTAGS}", "${HB_COPYING}"}},
 
 	// CSS Color 4's named colours, from csswg-drafts at CSSWG_COMMIT.
 	{Out: "style/colors.go", Generator: "gencolors", Target: "css-colors",

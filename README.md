@@ -223,3 +223,10 @@ The code is under the licence in `LICENSE`. The fonts under `fonts/notosans/` an
 `testdata/harfbuzz/fonts/` are Google's Noto builds under the SIL Open Font
 License 1.1, with their notices beside them; they are test data and shipping this
 module does not embed them in anything.
+
+Much of what `cmd/gen*` generates is generated from other people's data — the
+Unicode database, ICU's word lists, BudouX, the hyphenation patterns, Adobe's
+metrics and glyph list, Brotli, the HTML and CSS standards, HarfBuzz.
+`THIRD_PARTY_NOTICES` lists every generated table and kept file that is somebody
+else's work, where and at which pin it was taken, its licence, and the notice
+the licence asks a copy to carry, each quoted from its source.
