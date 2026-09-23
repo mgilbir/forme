@@ -4,8 +4,9 @@ import "github.com/mgilbir/forme/style"
 
 // Floats: CSS 2.1 §9.5, and the clearance of §9.5.2.
 //
-// A float is the oldest out-of-flow mechanism CSS has and the only one this
-// engine implements. The box is taken out of the normal flow, shifted to one
+// A float is the oldest out-of-flow mechanism CSS has, and the one that shares
+// the flow with what it is taken out of — absolute and fixed positioning, the
+// other two, are position.go's and lay a box out after the flow instead. The box is taken out of the normal flow, shifted to one
 // edge of its containing block, and pushed as far up as it will go — and then
 // the line boxes of everything that follows are *shortened* so the text runs
 // beside it rather than under it. That second half is what makes floats worth
@@ -871,10 +872,11 @@ func aloneFlow(cbHeight style.Unit, cbDefinite bool) flow {
 // For every display value this engine actually lays out, that would already be
 // true without the clause — §9.7 blockifies an out-of-flow box to a flow root,
 // and the first test here catches it. The clause is not therefore redundant: the
-// displays whose inner half *survives* blockification, a table and a flex
-// container, stay themselves when absolutely positioned, and this is the only
-// thing that seals those. Neither is laid out yet, so the clause is checked
-// directly rather than through a page.
+// displays whose inner half *survives* blockification, a table, a flex and a
+// grid container, stay themselves when absolutely positioned. Each of them is
+// also on the list below in its own right now, so the clause and the list agree
+// about them; the clause is what still covers any display added to the engine
+// before it is added here.
 func establishesBFC(b *Box) bool {
 	switch b.Inner {
 	case InnerFlowRoot, InnerTable, InnerTableCell, InnerTableCaption, InnerGrid, InnerFlex:

@@ -92,9 +92,10 @@ const maxContentLength = 1 << 20
 
 // resolveContent reads a "content" declaration.
 //
-// Strings, attr(), counters and quotes are produced. Images are refused and
-// named, because they would otherwise be silently dropped and leave a marker
-// missing from a page that still looks finished.
+// Strings, attr(), counters, quotes and images are produced — an image as a
+// piece of its own, between the runs of text either side of it. A url() this
+// cannot resolve is refused and named, because it would otherwise be silently
+// dropped and leave a marker missing from a page that still looks finished.
 //
 // depth is the level of quotation the value begins at and quotes the pairs to
 // draw from; both come from the document walk, because neither is anything the

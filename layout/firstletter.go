@@ -188,12 +188,24 @@ func mergedOver(base style.ComputedStyle, over map[string]string) style.Computed
 // float or an absolutely positioned box before the text does not hold the
 // paragraph's first letter. A replaced box *ends* the walk: a picture is not a
 // letter and the first formatted line has one in front of the text.
+//
+// So does every other atomic inline, and every block-level box that is not a
+// block container. An inline-block is a box on the line, like a picture, and
+// CSS 2.1 §5.12.1 says in as many words that it "cannot be the first formatted
+// line of an ancestor": its letters are its own, for its own ::first-letter.
+// The walk went into it, and "<div><span style=display:inline-block>Inner</span>
+// outer</div>" enlarged the "I" inside the inline-block. A table, a flex and a
+// grid container hold no first formatted line of their parent either — css-
+// pseudo-4 §2.3 descends only into a block container — so they end the walk too.
 func firstTextBox(box *Box) (parent *Box, at int) {
 	for i, c := range box.Children {
 		if c == nil || c.outOfFlow() {
 			continue
 		}
 		if c.Replaced != nil || c.Control != nil {
+			return nil, 0
+		}
+		if !c.IsText() && !holdsParentsFirstLine(c) {
 			return nil, 0
 		}
 		if c.IsText() {
@@ -258,4 +270,14 @@ func firstClusterLen(text string) int {
 		return at[0]
 	}
 	return len(text)
+}
+
+// holdsParentsFirstLine reports whether a box in flow may hold its parent's
+// first formatted line: an inline box that is not atomic, whose content is on
+// the parent's lines, or a block-level block container in the same flow.
+func holdsParentsFirstLine(b *Box) bool {
+	if b.Outer == OuterInline {
+		return b.Inner == InnerFlow
+	}
+	return !b.TableWrapper && isBlockContainer(b)
 }

@@ -331,17 +331,26 @@ type absCandidate struct {
 
 // maxAbsolutes bounds how many out-of-flow boxes one render will place.
 //
-// Each candidate is a distinct box and is laid out once, so the count is already
-// bounded by the box cap — this is a second bound rather than the only one, and
-// it is here because the queue is self-feeding: laying an absolutely positioned
-// box out can discover more inside it, and a bug in the rollback that settle
-// performs would turn that into a loop rather than into a wrong page. A cap that
-// turns a hang into a finding is worth its two lines.
+// It is the box cap, and that is the argument for it rather than a number
+// picked. Each candidate is a distinct box, and it is queued once: every site
+// that throws a layout away takes back what that layout queued (see takeBack
+// and rollback). So a document can never legitimately queue more than it has
+// boxes, and the tree has at most maxBoxes. What the bound still catches is the
+// queue feeding itself — placing an absolutely positioned box can discover more
+// inside it, and a rollback that forgot the queue would turn that into a loop
+// rather than into a wrong page — and a queue longer than the tree is exactly
+// that bug, found and reported rather than run until the budget is spent.
 //
-// It is a variable rather than a constant so that a test can lower it far enough
-// to watch it fire. A bound that has only ever been observed not to trip is one
-// nobody knows works, which this repository has learned before.
-var maxAbsolutes = 1 << 14
+// It used to be 16384, which is a limit a legitimate document meets: a PDF
+// converted to HTML by a tool like pdf2htmlEX places every line of text
+// absolutely, and a long one has more lines than that. Everything past the cap
+// was left off the page (audit C129). The report stays, for the one way left to
+// trip it.
+//
+// It is a variable rather than a constant so that a test can lower it far
+// enough to watch it fire. A bound that has only ever been observed not to trip
+// is one nobody knows works, which this repository has learned before.
+var maxAbsolutes = maxBoxes
 
 // deferAlignedAbsolute is deferAbsolute for a box aligned in its static-position
 // rectangle: see absCandidate.aligned.
@@ -388,8 +397,9 @@ func (l *layouter) placeAbsolutes(page Rect) {
 	for i := 0; i < len(l.deferred); i++ {
 		if i >= maxAbsolutes {
 			l.rec.Report(RuleLimit, AtHTML(offsetOf(l.deferred[i].box)),
-				"more boxes were taken out of the normal flow than this engine will "+
-					"place; the rest were left unpositioned and are not on the page")
+				"more out-of-flow boxes were queued for placing than the document "+
+					"has boxes, which only a layout that queued one twice can do; the "+
+					"rest were left unpositioned and are not on the page")
 			return
 		}
 		if !l.deferred[i].parent.absolute {

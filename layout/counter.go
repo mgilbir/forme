@@ -193,15 +193,23 @@ func (c *counterState) increment(name string, by, depth int) {
 	// Saturating, because the increment is a number out of the document and a
 	// stylesheet asking for two billion twice should not wrap to a negative
 	// count.
-	sum := int64(stack[n].value) + int64(by)
+	stack[n].value = counterInt(float64(int64(stack[n].value) + int64(by)))
+}
+
+// counterInt is a number saturated to the range a counter holds, a 32-bit
+// integer: the range every value a counter takes is kept in, whether it came
+// from a reset, a set or an increment, so that no step can move a counter the
+// wrong way by being clamped where another was not.
+func counterInt(v float64) int {
 	switch {
-	case sum > 1<<31-1:
-		stack[n].value = 1<<31 - 1
-	case sum < -(1 << 31):
-		stack[n].value = -(1 << 31)
-	default:
-		stack[n].value = int(sum)
+	case v != v:
+		return 0
+	case v >= 1<<31-1:
+		return 1<<31 - 1
+	case v <= -(1 << 31):
+		return -(1 << 31)
 	}
+	return int(v)
 }
 
 // snapshotOf records the values a content value will read, outermost first,
@@ -694,8 +702,22 @@ func parseCounterList(raw string, byDefault int) []counterRequest {
 			// The number belongs to the name before it. One with no name before
 			// it is a malformed declaration, and dropping it is what the
 			// specification's grammar does.
+			//
+			// An <integer>, and one that fits in a counter. A number that is
+			// not an integer makes the declaration invalid. The cascade's
+			// grammar refuses it before it gets here on every path found, and
+			// this reader refuses it too rather than rely on that: the list
+			// is then at its initial value, "none". A number too large for a counter is saturated to the
+			// range, the same range increment saturates to, and not converted
+			// as it stands: Go's conversion of a float out of int's range is
+			// implementation-defined ("counter-reset: c 1e30" read as the
+			// smallest int64), and a value outside the counter's range was
+			// lowered by the first increment it met, down to 2147483647.
+			if !v.Token.IsInteger {
+				return nil
+			}
 			if len(out) > 0 {
-				out[len(out)-1].value = int(v.Token.Number)
+				out[len(out)-1].value = counterInt(v.Token.Number)
 				out[len(out)-1].implied = false
 			}
 		default:

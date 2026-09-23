@@ -36,10 +36,10 @@ import (
 //     percentage that cannot be resolved behaves as auto for intrinsic sizing,
 //     which is the same answer for the common case and not for a percentage
 //     larger than the content.
-//   - Break opportunities are found within each text box rather than across the
-//     boundary between two, so "<em>super</em>market" is measured as two words
-//     rather than one. That makes the minimum a little small; it never makes it
-//     too large, so a float sized by it fits where it should.
+//   - Break opportunities are found across the boundary between two text boxes
+//     as well as within each, so "<em>super</em>market" is measured as the one
+//     word it is: its minimum is the whole word, as "supermarket"'s is, and not
+//     the longer of two halves.
 //   - A table is measured by §17.5.2.2's own two passes rather than by the walk
 //     here, because a table's width is a property of its columns and not of any
 //     one of its children. That lives in tablelayout.go and is reached from

@@ -578,13 +578,10 @@ func (l *layouter) refusesPhysicalGeometry(b *Box) string {
 	for _, p := range physicalGeometry {
 		switch v := trimmedLower(b.Style.Get(p.name)); v {
 		case "", p.initial:
-		case "0px", "0%":
-			// The same nothing, spelled the way a stylesheet spells it. Only
-			// where zero *is* the initial value: "width: 0" is a declaration
-			// that the box is not there, and is refused with the rest.
-			if p.initial != "0" {
-				return "\"" + p.name + "\" is declared inside it, and a side of the page is not a side of the text"
-			}
+			// None of these has a zero as its initial value, so a zero is a
+			// declaration like any other — "width: 0" says the box is not there
+			// — and is refused with the rest. A case that let "0px" through
+			// where zero is the initial could never be taken, and was deleted.
 		default:
 			return "\"" + p.name + "\" is declared inside it, and a side of the page is not a side of the text"
 		}

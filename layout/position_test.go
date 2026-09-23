@@ -995,7 +995,7 @@ func TestOutOfFlowLimitFires(t *testing.T) {
 	}
 
 	// And with the cap where it belongs, four boxes are four boxes.
-	maxAbsolutes = 1 << 14
+	maxAbsolutes = maxBoxes
 	got = findingsOf(t,
 		`<div><i id="a"></i><i id="b"></i><i id="c"></i><i id="d"></i></div>`,
 		`i { position: absolute; left: 0; top: 0; width: 10px; height: 10px }`)

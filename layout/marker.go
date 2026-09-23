@@ -40,13 +40,12 @@ type Marker struct {
 	ImageRect Rect
 }
 
-// markerFor works out the marker a list item generates, or nil.
+// markerFor works out the marker an outside list item generates, or nil.
 //
-// index is the item's one-based position among the list items of its parent. It
-// is a fallback only: what a numbered list counts is the "list-item" counter,
-// which the user-agent sheet increments and every list resets. The two agree for
-// a plain list and disagree the moment a document says <ol start="5"> or
-// <li value="3"> or resets the counter itself.
+// The number is the item's "list-item" counter, which the box builder read into
+// Box.ListValue: the user-agent sheet increments it and every list resets it, so
+// it is the item's position for a plain list and what the document said for
+// <ol start="5">, <li value="3"> or a counter reset of its own.
 func (l *layouter) markerFor(b *Box, frag *Fragment, origin flow) *Marker {
 	if markerInside(b) {
 		// An inside marker is not drawn beside the box: it is the first thing on

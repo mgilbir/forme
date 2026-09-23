@@ -853,10 +853,17 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		after.Parent = box
 		box.Children = append(box.Children, after)
 	}
-	if inner == InnerFlow && outer != OuterInline {
+	if isBlockContainer(box) {
 		// §5.12.2's ::first-letter, which applies to a block container and is
 		// done here because the letter is a stretch of text that has already
 		// been collapsed and transformed. See firstletter.go.
+		//
+		// Every block container, and not only the plain ones. A float, an
+		// "overflow: hidden" box, a flow root, an inline-block and a table
+		// cell are all block containers — each is one that establishes a
+		// formatting context — and asking for "inner == InnerFlow" passed over
+		// every one of them: the floated drop cap, which is the classic
+		// ::first-letter, came out an ordinary letter.
 		b.applyFirstLetter(box, n, fontSize)
 	}
 	if outer != OuterInline && !box.outOfFlow() {
