@@ -150,8 +150,12 @@ func (g *denseOccupancy) next(row, column, rowSpan, columnSpan int) (int, int) {
 	}
 }
 
+// resolveTracksByScan is the scan for the base sizes and growth limits. What
+// is spent after them — §12.6 to §12.8 — is written out again here step for
+// step rather than shared, except for the flexible tracks' fr, whose own
+// oracle is frSizeBySpec.
 func (l *layouter) resolveTracksByScan(tracks []gridTrack, asks []trackAsk,
-	gap, room style.Unit, definite, stretch bool) {
+	gap, room style.Unit, definite, stretch bool, lo, hi style.Unit) {
 
 	limits := make([]style.Unit, len(tracks))
 	for i := range tracks {
@@ -167,6 +171,57 @@ func (l *layouter) resolveTracksByScan(tracks []gridTrack, asks []trackAsk,
 	}
 	spreadSpanningAsksByScan(tracks, limits, asks, gap)
 	if !definite {
+		// §12.6 under a max-content constraint: every inflexible track at its
+		// growth limit. §12.7 with indefinite free space: one fr is the most
+		// any flexible track or any item crossing one asks for.
+		flexible := false
+		for i := range tracks {
+			if tracks[i].flexible() {
+				flexible = true
+			} else if limits[i] > tracks[i].base {
+				tracks[i].base = limits[i]
+			}
+		}
+		if !flexible {
+			return
+		}
+		fr := style.Unit(0)
+		for _, t := range tracks {
+			if t.flexible() {
+				fr = style.Max(fr, t.base.Div(max(t.max.factor, 1)))
+			}
+		}
+		for _, a := range asks {
+			if a.from < 0 || a.from+a.span > len(tracks) {
+				continue
+			}
+			for i := a.from; i < a.from+a.span; i++ {
+				if tracks[i].flexible() {
+					one, _ := frSizeBySpec(tracks[a.from:a.from+a.span], gap, a.max)
+					fr = style.Max(fr, one)
+					break
+				}
+			}
+		}
+		grown := append([]gridTrack(nil), tracks...)
+		sum := style.Unit(0)
+		for i := range grown {
+			if grown[i].flexible() && fr.Mul(grown[i].max.factor) > grown[i].base {
+				grown[i].base = fr.Mul(grown[i].max.factor)
+			}
+			sum = sum.Add(grown[i].base)
+		}
+		if sum >= lo && sum <= hi {
+			copy(tracks, grown)
+			return
+		}
+		// Outside the container's limits: the fr again, against the limit.
+		one, _ := frSizeBySpec(tracks, 0, style.Clamp(sum, lo, hi))
+		for i := range tracks {
+			if tracks[i].flexible() && one.Mul(tracks[i].max.factor) > tracks[i].base {
+				tracks[i].base = one.Mul(tracks[i].max.factor)
+			}
+		}
 		return
 	}
 	free := room.Sub(sumTracks(tracks))
@@ -174,12 +229,58 @@ func (l *layouter) resolveTracksByScan(tracks []gridTrack, asks []trackAsk,
 		return
 	}
 	free = growToLimitsByScan(tracks, limits, free)
-	if expandFlexibleTracks(tracks, room) {
-		return
+	one, factors := frSizeBySpec(tracks, 0, room)
+	flexible := false
+	for i := range tracks {
+		if !tracks[i].flexible() {
+			continue
+		}
+		flexible = true
+		if one.Mul(tracks[i].max.factor) > tracks[i].base {
+			tracks[i].base = one.Mul(tracks[i].max.factor)
+		}
+	}
+	if flexible {
+		if factors >= 1 {
+			return
+		}
+		free = room.Sub(sumTracks(tracks))
 	}
 	if stretch {
 		stretchAutoTracks(tracks, free)
 	}
+}
+
+// frSizeBySpec is §12.7.1 as it is written: find the share, take out every
+// flexible track whose base is more than its share, and start again, until
+// none is.
+func frSizeBySpec(tracks []gridTrack, gap, space style.Unit) (style.Unit, float64) {
+	fixed := make([]bool, len(tracks))
+	for pass := 0; pass <= len(tracks); pass++ {
+		leftover := space.Sub(gap.Mul(float64(len(tracks) - 1)))
+		factors := 0.0
+		for i, t := range tracks {
+			if t.flexible() && !fixed[i] {
+				factors += t.max.factor
+				continue
+			}
+			leftover = leftover.Sub(t.base)
+		}
+		if factors == 0 {
+			return 0, 0
+		}
+		one := leftover.Div(max(factors, 1))
+		again := false
+		for i, t := range tracks {
+			if t.flexible() && !fixed[i] && one.Mul(t.max.factor) < t.base {
+				fixed[i], again = true, true
+			}
+		}
+		if !again {
+			return one, factors
+		}
+	}
+	return 0, 0
 }
 
 func spreadSpanningAsksByScan(tracks []gridTrack, limits []style.Unit, asks []trackAsk,

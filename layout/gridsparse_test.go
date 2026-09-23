@@ -84,11 +84,13 @@ func TestTrackSizingIsTheScan(t *testing.T) {
 	l := newLayouter(&Box{}, Size{}, nil, nil)
 	r := rand.New(rand.NewSource(11))
 	kinds := []trackSize{{kind: trackAuto}, {kind: trackMin}, {kind: trackMax},
-		{kind: trackFixed, size: 640}, {kind: trackFlex, factor: 1}}
+		{kind: trackFixed, size: 640}, {kind: trackFlex, factor: 1},
+		{kind: trackFlex, factor: 0.5}, {kind: trackFlex, factor: 2},
+		{kind: trackFlex, factor: 0}, {kind: trackFlex, factor: 0.25}}
 	for trial := 0; trial < 20000; trial++ {
 		tracks := make([]gridTrack, 1+r.Intn(8))
 		for i := range tracks {
-			tracks[i] = gridTrack{min: kinds[r.Intn(4)], max: kinds[r.Intn(5)]}
+			tracks[i] = gridTrack{min: kinds[r.Intn(4)], max: kinds[r.Intn(len(kinds))]}
 		}
 		asks := make([]trackAsk, r.Intn(10))
 		for i := range asks {
@@ -101,8 +103,14 @@ func TestTrackSizingIsTheScan(t *testing.T) {
 		definite, stretch := r.Intn(2) == 0, r.Intn(2) == 0
 		want := append([]gridTrack(nil), tracks...)
 		got := append([]gridTrack(nil), tracks...)
-		l.resolveTracksByScan(want, asks, gap, room, definite, stretch)
-		l.resolveTracks(got, asks, gap, room, definite, stretch)
+		// The container's limits, which an indefinite room is held between.
+		lo, hi := style.Unit(0), style.MaxUnit
+		if r.Intn(2) == 0 {
+			lo = style.Unit(r.Intn(20000))
+			hi = lo + style.Unit(r.Intn(20000))
+		}
+		l.resolveTracksByScan(want, asks, gap, room, definite, stretch, lo, hi)
+		l.resolveTracks(got, asks, gap, room, definite, stretch, lo, hi)
 		for i := range want {
 			if want[i].base != got[i].base {
 				t.Fatalf("trial %d: track %d is %d by the scan and %d now (%+v, asks %+v)",
@@ -153,10 +161,10 @@ func TestTrackSizingIsLinearInTheTracks(t *testing.T) {
 	st, sa := setup(3000)
 	lt, la := setup(12000)
 	lo, hi, ratio := layoutScaling(func() {
-		l.resolveTracks(st, sa, 0, 1<<24, true, true)
+		l.resolveTracks(st, sa, 0, 1<<24, true, true, 0, style.MaxUnit)
 		trackEdgesOf(st).start(len(st)-1, 0)
 	}, func() {
-		l.resolveTracks(lt, la, 0, 1<<24, true, true)
+		l.resolveTracks(lt, la, 0, 1<<24, true, true, 0, style.MaxUnit)
 		trackEdgesOf(lt).start(len(lt)-1, 0)
 	})
 	if ratio > 8 {
