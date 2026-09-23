@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/zlib"
 	"encoding/binary"
+	"fmt"
 	"sort"
 )
 
@@ -30,6 +31,13 @@ type WOFFOptions struct {
 	// LieAboutOrigLength writes this value as every deflated table's origLength
 	// instead of the true one. It is how a decompression bomb is expressed: the
 	// stream yields megabytes and the header promises bytes.
+	//
+	// Only a deflated table can lie — a stored one's length is its bytes — so
+	// WOFF panics when a table given with a lie comes out stored. Whether a
+	// table deflates smaller is the compressor's decision, not the fixture's:
+	// under Go 1.27 64 zero bytes deflate to 77, and the fixture stored them
+	// and silently dropped the lie, so a test of a malformed font was handed a
+	// well-formed one. A test that asks for a lie gets one or does not run.
 	LieAboutOrigLength uint32
 	// Signature overrides the leading four bytes, for the WOFF 2 refusal.
 	Signature uint32
@@ -90,7 +98,12 @@ func WOFF(opts WOFFOptions) []byte {
 			}
 		}
 		orig := uint32(len(t.Data))
-		if opts.LieAboutOrigLength != 0 && len(body) < len(t.Data) {
+		if opts.LieAboutOrigLength != 0 {
+			if len(body) >= len(t.Data) {
+				panic(fmt.Sprintf("fonttest: table %q was asked to lie about its length, "+
+					"but its %d bytes do not deflate smaller, so it is stored and cannot: "+
+					"give it more compressible data", t.Tag, len(t.Data)))
+			}
 			orig = opts.LieAboutOrigLength
 		}
 		bodies = append(bodies, built{tag: tag4(t.Tag), body: body, origLength: orig})
