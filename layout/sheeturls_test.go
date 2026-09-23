@@ -148,15 +148,55 @@ func TestResolveAgainstSheet(t *testing.T) {
 		" \n g \t":          "b/c/g",
 		"//169.254.169.254": "//169.254.169.254",
 	} {
-		if got := resolveAgainstSheet(ref, base); got != want {
-			t.Errorf("%q in %q resolved to %q, want %q", ref, base, got, want)
+		if got, why := resolveAgainstSheet(ref, base); got != want || why != "" {
+			t.Errorf("%q in %q resolved to %q (%s), want %q", ref, base, got, why, want)
 		}
 	}
-	// A sheet with no name, and a sheet that is a data: URL, leave a reference
-	// relative to the document.
-	for _, from := range []string{"", "data:text/css,p{}"} {
-		if got := resolveAgainstSheet("g/h", from); got != "g/h" {
-			t.Errorf("%q in %q resolved to %q, want it left relative to the document", "g/h", from, got)
+	// A sheet with no name leaves a reference relative to the document.
+	if got, why := resolveAgainstSheet("g/h", ""); got != "g/h" || why != "" {
+		t.Errorf("%q in a <style> resolved to %q (%s), want it left relative to the document",
+			"g/h", got, why)
+	}
+	// Against a data: URL, the URL standard's basic parser fails every
+	// reference with no scheme except a fragment: the path is opaque, so there
+	// is nothing to be relative to, and a root is not one either.
+	const data = "data:text/css,p{}"
+	for _, ref := range []string{"g/h", "./g", "../g", "/g", "//g", `\g`, "?q"} {
+		if got, why := resolveAgainstSheet(ref, data); got != "" || why == "" {
+			t.Errorf("%q in a data: sheet resolved to %q; the URL standard fails it", ref, got)
+		}
+	}
+	for ref, want := range map[string]string{"#s": "#s", "data:,x": "data:,x", "http://a/g": "http://a/g"} {
+		if got, why := resolveAgainstSheet(ref, data); got != want || why != "" {
+			t.Errorf("%q in a data: sheet resolved to %q (%s), want %q", ref, got, why, want)
+		}
+	}
+}
+
+// TestARelativeReferenceInADataSheetLoadsNothingAndSaysSo is the same rule
+// through a document: an @import and a url() in a data: stylesheet, with a
+// file of that name beside the document that must not be read in their
+// place, and a finding for each.
+func TestARelativeReferenceInADataSheetLoadsNothingAndSaysSo(t *testing.T) {
+	res := &servingResolver{files: map[string]string{"theme.css": "p { color: red }"}}
+	href := "data:text/css," + `@import "theme.css"; div { background-image: url(bg.png) }`
+	built := Build(Input{HTML: `<link rel=stylesheet href='` + href + `'><div>d</div><p>p</p>`,
+		Resources: res})
+	for _, ref := range []string{"theme.css", "bg.png"} {
+		if res.wasAsked(ref) {
+			t.Errorf("%q was loaded relative to the document from a data: stylesheet", ref)
+		}
+	}
+	for _, what := range []string{"the @import of \"theme.css\"", "the url() \"bg.png\""} {
+		found := false
+		for _, f := range built.Findings {
+			if f.Rule == RuleResourceBlocked && strings.Contains(f.Message, what) &&
+				strings.Contains(f.Message, "data:") && f.Source.CSSOffset >= 0 {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("nothing reported %s in a data: stylesheet: %v", what, built.Findings)
 		}
 	}
 }

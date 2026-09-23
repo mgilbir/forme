@@ -680,7 +680,8 @@ func (l *sheetLoader) expandImports(s authorSheet) []authorSheet {
 		}
 		at := Source{HTMLOffset: -1, CSSOffset: r.Offset, Sheet: s.name}
 		if src, ok := l.fetchImport(ref, s.name, at); ok {
-			next := authorSheet{name: sheetName(resolveAgainstSheet(ref, s.name)), source: src}
+			resolved, _ := resolveAgainstSheet(ref, s.name)
+			next := authorSheet{name: sheetName(resolved), source: src}
 			if why := l.cycle(next.name); why != "" {
 				l.rec.ReportDetail(Finding{
 					Rule:    RuleInvalidCSS,
@@ -810,7 +811,15 @@ func (l *sheetLoader) importMedia(media []css.ComponentValue, ref string, offset
 // at is where the @import was written, which is where a finding about it
 // points.
 func (l *sheetLoader) fetchImport(ref, from string, at Source) (string, bool) {
-	ref = resolveAgainstSheet(ref, from)
+	ref, unresolved := resolveAgainstSheet(ref, from)
+	if unresolved != "" {
+		l.rec.ReportDetail(Finding{
+			Rule:    RuleResourceBlocked,
+			Source:  at,
+			Message: "the @import of " + unresolved,
+		})
+		return "", false
+	}
 	if l.failed[ref] {
 		// Already refused, and already reported. As with a <link> to the same
 		// missing file, the Recorder deduplicates the finding on its own and
@@ -937,6 +946,10 @@ func (l *sheetLoader) cycle(name string) string {
 //   - A sheet with no name — a <style> element — has the document as its base
 //     already.
 //
+// And what it cannot resolve at all: any other reference in a sheet that
+// arrived as a URL rather than as a path. See the note in the body; the second
+// result says why, and is empty when the reference resolved.
+//
 // The join is cleaned, and that is the whole of what a resolver can be handed.
 // "../base.css" written in "css/page.css" names "base.css", a file beside the
 // document; joined and left alone it named "css/../base.css", which is the same
@@ -951,24 +964,41 @@ func (l *sheetLoader) cycle(name string) string {
 //
 // A reference that really does go above the sheet's own root keeps its "..":
 // path.Clean has nowhere to take it, and the resolver refuses it as before.
-func resolveAgainstSheet(ref, from string) string {
+func resolveAgainstSheet(ref, from string) (string, string) {
 	ref = referenceText(ref)
-	if from == "" || ref == "" || ref[0] == '#' || ref[0] == '/' || ref[0] == '\\' {
-		return ref
+	if from == "" || ref == "" || ref[0] == '#' {
+		return ref, ""
 	}
 	if _, named := schemeOf(ref); named {
-		return ref
+		return ref, ""
 	}
-	if _, named := schemeOf(from); named {
+	if scheme, named := schemeOf(from); named {
 		// The sheet arrived as a URL rather than as a path — a "data:"
 		// stylesheet is the one this engine can have — and a URL is not a
 		// directory to join onto. "data:text/css,…" holds a slash in its media
-		// type, so joining produced "data:text/theme.css", which is a reference
-		// to nothing and was reported as a missing file.
+		// type, so joining produced "data:text/theme.css", which is a
+		// reference to nothing.
 		//
-		// A data: URL has no base, so what a relative reference in one is
-		// relative to is the document — which is what an unnamed sheet gets.
-		return ref
+		// Nor is the document the base instead, which is what this used to
+		// answer. A data: URL's path is opaque, and the URL standard's basic
+		// parser fails a reference with no scheme against a base like that —
+		// a root-relative one as much as a relative one; only a fragment
+		// survives it — so a browser loads nothing and the rule names nothing.
+		// Reading it against the document instead loaded a file the sheet
+		// never named. A sheet named by any other URL is the same case one
+		// step later: the reference would resolve to a URL with that scheme,
+		// which is refused.
+		if scheme == "data" {
+			return "", quoteValue(ref) + " is relative, and a data: stylesheet has no base " +
+				"to resolve it against — a data: URL's path is opaque, so the URL " +
+				"standard fails the reference — and nothing was loaded"
+		}
+		return "", quoteValue(ref) + " is relative to a stylesheet named by a " +
+			quoteValue(scheme) + " URL, which would make it one; this engine resolves no " +
+			"URLs, so nothing was loaded"
+	}
+	if ref[0] == '/' || ref[0] == '\\' {
+		return ref, ""
 	}
 	base := from
 	if i := strings.IndexAny(base, "?#"); i >= 0 {
@@ -981,13 +1011,13 @@ func resolveAgainstSheet(ref, from string) string {
 	if rel == "" {
 		// "?v=2" alone: RFC 3986 §5.2.2 keeps the base's path and takes the
 		// reference's query, so it is the sheet itself asked for again.
-		return base + suffix
+		return base + suffix, ""
 	}
 	i := strings.LastIndexByte(base, '/')
 	if i < 0 {
-		return path.Clean(rel) + suffix
+		return path.Clean(rel) + suffix, ""
 	}
-	return path.Clean(base[:i+1]+rel) + suffix
+	return path.Clean(base[:i+1]+rel) + suffix, ""
 }
 
 // resolveSheetURLs resolves every url() in a parsed stylesheet against the
@@ -1027,7 +1057,19 @@ func resolveSheetURLs(rules []css.Rule, sheet string, rec *Recorder) {
 
 func resolveURLsIn(vals []css.ComponentValue, sheet string, rec *Recorder) {
 	resolve := func(t *css.Token) {
-		got := resolveAgainstSheet(t.Value, sheet)
+		got, why := resolveAgainstSheet(t.Value, sheet)
+		if why != "" {
+			// Nothing to load, and said so where the reference was written.
+			// The url() is emptied, which names nothing, rather than left
+			// relative to the document, which names some other file.
+			rec.ReportDetail(Finding{
+				Rule:    RuleResourceBlocked,
+				Source:  Source{HTMLOffset: -1, CSSOffset: t.Offset, Sheet: sheet},
+				Message: "the url() " + why,
+			})
+			t.Value = ""
+			return
+		}
 		if got == t.Value {
 			return
 		}

@@ -249,6 +249,10 @@ func TestHTMLsRubyIsReportedAndItsDatalistHidden(t *testing.T) {
 	if !found {
 		t.Errorf("a <ruby> with an annotation laid out inline was not reported: %v", built.Findings)
 	}
+	// <rp> is hidden, as §15.3.1 hides it.
+	if text := boxText(built.Root); strings.Contains(text, "(") || strings.Contains(text, ")") {
+		t.Errorf("the <rp> parentheses were drawn: %q", text)
+	}
 	// A ruby with no annotation is the box it asks for, and says nothing.
 	if built := Build(Input{HTML: `<p><ruby>漢</ruby></p>`}); len(built.Findings) != 0 {
 		t.Errorf("a <ruby> with nothing to lift was reported: %v", built.Findings)

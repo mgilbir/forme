@@ -462,13 +462,16 @@ func fontSizeValue(raw string) (string, bool) {
 	return fontSizeSteps[n-1], true
 }
 
-// maxHintDigits bounds the number a dimension attribute may state.
+// maxHintDigits bounds the number a dimension attribute or a font size may
+// state.
 //
 // Ten digits cannot overflow the parse below and is already four orders of
 // magnitude past any page; the bound is here because the attribute is untrusted
 // text and a length is one multiplication away from a box the size of a
-// continent. A longer run of digits is not a large image, it is a value nobody
-// meant, so it is refused rather than saturated.
+// continent. It is the bound for the two readers here that are not HTML's
+// integer rules — a dimension (§2.3.4.4) and a legacy font size. The integer
+// attributes are read by html.ParseInteger and html.ParseNonNegativeInteger,
+// which saturate rather than refuse.
 const maxHintDigits = 10
 
 // dimensionValue turns an HTML dimension attribute into a CSS length, by HTML's
@@ -639,17 +642,14 @@ func valignValue(raw string) (string, bool) {
 // ignore what follows, so "1px" is one. What has no leading digits at all —
 // including the empty string of "<table border>" — is the parse error the
 // section gives a default of 1px for.
+//
+// The reading is html.ParseNonNegativeInteger, the one every integer attribute
+// is read by. A value too long for any page is still a value — it saturates,
+// and the border is as wide as a length can be — where it used to be refused
+// past ten digits and drawn as the one-pixel default.
 func borderAttribute(raw string) (width string, drawn bool) {
-	s := strings.TrimLeft(raw, " \t\n\f\r")
-	digits := 0
-	for digits < len(s) && s[digits] >= '0' && s[digits] <= '9' {
-		digits++
-	}
-	if digits == 0 || digits > maxHintDigits {
-		return "1px", true
-	}
-	n, err := strconv.Atoi(s[:digits])
-	if err != nil {
+	n, ok := html.ParseNonNegativeInteger(raw)
+	if !ok {
 		return "1px", true
 	}
 	return strconv.Itoa(n) + "px", n != 0
@@ -733,7 +733,12 @@ func olCounterHint(n *html.Node) map[string][]css.ComponentValue {
 	reversed := n.HasAttr("reversed")
 	start, startOK := 0, false
 	if hasStart {
-		start, startOK = signedInteger(raw)
+		// HTML's rules for parsing integers (§2.3.4.1), which take the digits
+		// at the front: "3px" starts at three. This read the whole string and
+		// refused one with anything after its digits, which is a different
+		// rule from the one HTML gives and from the one its own neighbours in
+		// this file follow.
+		start, startOK = html.ParseInteger(raw)
 	}
 	value := ""
 	switch {
@@ -748,35 +753,6 @@ func olCounterHint(n *html.Node) map[string][]css.ComponentValue {
 	}
 	vals, _ := css.ParseComponentValues(value)
 	return map[string][]css.ComponentValue{"counter-reset": vals}
-}
-
-// signedInteger is HTML's "rules for parsing integers": an optional sign and
-// then digits, and an error if there is anything else.
-//
-// It is the whole string rather than a prefix, which is what separates it from
-// the non-negative reader beside it — that one is HTML's other integer rule and
-// takes the leading digits.
-func signedInteger(raw string) (int, bool) {
-	s := strings.TrimSpace(raw)
-	neg := false
-	if len(s) > 0 && (s[0] == '-' || s[0] == '+') {
-		neg = s[0] == '-'
-		s = s[1:]
-	}
-	if s == "" || len(s) > maxHintDigits {
-		return 0, false
-	}
-	n := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
-			return 0, false
-		}
-		n = n*10 + int(s[i]-'0')
-	}
-	if neg {
-		n = -n
-	}
-	return n, true
 }
 
 // hrSizeHint is §15.3.6's size attribute, which sets two different properties
@@ -797,7 +773,7 @@ func hrSizeHint(n *html.Node) map[string][]css.ComponentValue {
 	if !ok {
 		return nil
 	}
-	size, ok := nonNegativeInteger(raw)
+	size, ok := html.ParseNonNegativeInteger(raw)
 	if !ok {
 		return nil
 	}
@@ -827,27 +803,6 @@ func hrSizeHint(n *html.Node) map[string][]css.ComponentValue {
 func pixels(n int) []css.ComponentValue {
 	vals, _ := css.ParseComponentValues(strconv.Itoa(n) + "px")
 	return vals
-}
-
-// nonNegativeInteger is HTML's rule of that name: leading whitespace, then
-// digits, and an error if there are none.
-//
-// It is not borderAttribute's reader, which answers one pixel where this
-// answers nothing — the border attribute has a default and this has not.
-func nonNegativeInteger(raw string) (int, bool) {
-	s := strings.TrimLeft(raw, " \t\n\f\r")
-	digits := 0
-	for digits < len(s) && s[digits] >= '0' && s[digits] <= '9' {
-		digits++
-	}
-	if digits == 0 || digits > maxHintDigits {
-		return 0, false
-	}
-	n, err := strconv.Atoi(s[:digits])
-	if err != nil {
-		return 0, false
-	}
-	return n, true
 }
 
 // linkColourHint is the body element's "link" attribute, read on the links it
@@ -929,7 +884,7 @@ func cellPaddingHint(n *html.Node) map[string][]css.ComponentValue {
 // had to be one less; that reading is olCounterHint's now, where "start" still
 // needs it.
 func counterSetValue(raw string) (string, bool) {
-	n, ok := signedInteger(raw)
+	n, ok := html.ParseInteger(raw)
 	if !ok {
 		return "", false
 	}

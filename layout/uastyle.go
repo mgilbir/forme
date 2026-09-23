@@ -23,13 +23,12 @@ package layout
 // quietly fails to do.
 const UserAgentCSS = `
 /* The elements that produce no box at all: HTML's rendering section, §15.3.1,
-   less the three kept elsewhere in this sheet (area and param below, and rp,
-   which is the one this engine keeps on purpose — see the ruby rules). A
+   less the two kept with their neighbours below (area and param). A
    <datalist> is the list of suggestions a text field offers as it is typed
    into, and its options are not content: it was drawn, so every suggestion
    appeared as a line of text (audit C84). */
 head, title, meta, link, base, style, script, template,
-datalist, basefont, noembed, noframes { display: none }
+datalist, basefont, noembed, noframes, rp { display: none }
 
 /* And the attribute that says so about any element, §15.3.1. It was not read at
    all, so "<div hidden>" was a visible div — which is the ordinary way a
@@ -350,10 +349,11 @@ a[href] { text-decoration-line: underline; color: #0000ee }
    wrong way and said nothing (audit C84). The size is the part of the
    annotation this engine can express.
 
-   <rp> is shown, although §15.3.1 hides it, and that is the one departure here
-   from HTML's list. It holds the parentheses a user agent that cannot lay ruby
-   out puts around the annotation, and this is such a user agent: "漢(kan)"
-   says what "漢kan" does not. */
+   <rp> is hidden, as §15.3.1 hides it, with the rest of that list above. It
+   holds the parentheses a user agent that cannot lay ruby out would show, and
+   this engine is such a user agent — it was shown here for that reason once —
+   but HTML's rule is the one a page is checked against, and the finding above
+   is what says the annotation is not where it belongs. */
 ruby { display: ruby }
 rt { display: ruby-text; font-size: 0.5em; vertical-align: super }
 
