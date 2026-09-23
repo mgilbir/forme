@@ -3,6 +3,7 @@ package css
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // The parser of CSS Syntax Level 3 §5.
@@ -302,6 +303,123 @@ func TestNestingIsBounded(t *testing.T) {
 	decls, _, _ := ParseDeclarationValues(rules[1].Block)
 	if len(decls) != 1 || decls[0].Name != "b" {
 		t.Errorf("the rule after the deep block read as %v", decls)
+	}
+}
+
+// TestTheLookAheadGroupsAsTheParserDoes is the nested-rule look-ahead over
+// text, which is how a style attribute is read. Its tokens are raw, so a "(",
+// a "[" and a function token each open a level that the look-ahead has to keep
+// itself; it kept none, because the test that was meant to skip grouped values
+// was true of the raw tokens as well. A "{" inside a function was then a
+// rule's block, and a ";" or "}" inside one ended the declaration.
+//
+// Each case is checked against what the same declarations say read from a
+// block already grouped, which is the other path and had the grouping done for
+// it.
+func TestTheLookAheadGroupsAsTheParserDoes(t *testing.T) {
+	for _, tc := range []struct {
+		src   string
+		decls string
+		rules int
+	}{
+		// A {} block inside a function, a block or brackets is part of the
+		// value, and the declaration after it is read.
+		{"--x: f({}); color: red", "--x,color", 0},
+		{"--x: ({}); color: red", "--x,color", 0},
+		{"--x: [{}]; color: red", "--x,color", 0},
+		{"--x: f(g({})); color: red", "--x,color", 0},
+		// A ";" or "}" inside a function or brackets does not end what the
+		// look-ahead is reading, so the {} after them is a rule's block.
+		{"p:is(a;b) { color: red } margin: 0", "margin", 1},
+		{"p[a;b] { color: red } margin: 0", "margin", 1},
+		{"p:is(}) { color: red } margin: 0", "margin", 1},
+		// A closing delimiter of another kind is a token inside the level,
+		// not the end of it: "f(])" is still open at the "]".
+		{"--x: f(] {}); color: red", "--x,color", 0},
+		// Nothing open: the first "{" is a rule's, as it always was.
+		{"color: red; b { color: blue } margin: 0", "color,margin", 1},
+	} {
+		decls, rules, errs := ParseDeclarations(tc.src)
+		if got := declNames(decls); got != tc.decls || len(rules) != tc.rules {
+			t.Errorf("%q: declarations %q and %d rules, want %q and %d (problems: %v)",
+				tc.src, got, len(rules), tc.decls, tc.rules, errs)
+		}
+		sheet, _ := ParseStylesheet("x{" + tc.src + "}")
+		if len(sheet) != 1 {
+			t.Fatalf("%q: the sheet around it read as %d rules", tc.src, len(sheet))
+		}
+		vd, vr, _ := ParseDeclarationValues(sheet[0].Block)
+		if got := declNames(vd); got != tc.decls || len(vr) != tc.rules {
+			t.Errorf("%q read from a block: declarations %q and %d rules, want %q and %d",
+				tc.src, got, len(vr), tc.decls, tc.rules)
+		}
+	}
+}
+
+func declNames(decls []Declaration) string {
+	var names []string
+	for _, d := range decls {
+		names = append(names, d.Name)
+	}
+	return strings.Join(names, ",")
+}
+
+// TestACappedBlockIsSkippedAsItIsGrouped is the reading past the depth cap.
+// The block refused for depth is skipped to its own close, and that close is
+// found by the same grouping as everywhere else: a ")" inside a "[" is a
+// token there, not the end of the "(" around it. Counting only the "(" and ")"
+// stopped at that first ")", and read what came after it, which was inside the
+// refused block, back into the tree above the cap.
+func TestACappedBlockIsSkippedAsItIsGrouped(t *testing.T) {
+	deep := maxNestingDepth + 1
+	for _, inner := range []string{"[ ) ] MARKER", "f( { ) } MARKER )", "{ ] } MARKER"} {
+		src := strings.Repeat("(", deep) + inner + strings.Repeat(")", deep)
+		vals, _ := ParseComponentValues(src)
+		if findIdent(vals, "MARKER") {
+			t.Errorf("%q past the cap: what was inside the refused block was kept, "+
+				"reattached above the cap", inner)
+		}
+		if got := depthOf(vals); got > maxNestingDepth+1 {
+			t.Errorf("%q past the cap: built a tree %d deep", inner, got)
+		}
+	}
+}
+
+// TestTheLookAheadIsLinear is the cost the look-ahead's comment argues away: it
+// reads a declaration's tokens once with a copy of the tokenizer and the parser
+// reads them again, and that is linear only while the parser consumes at least
+// as far as the look-ahead read. Now that the look-ahead keeps levels of its
+// own, that holds only while it closes each one where the parser does. One
+// that opened a level and never found its close would read to the end of the
+// text for every declaration, which a list of declarations with a function in
+// each is enough to show.
+//
+// The bound is on how the time grows, from one number of declarations to four
+// times it, since a time of its own would not survive the race detector's job.
+func TestTheLookAheadIsLinear(t *testing.T) {
+	const decl = "a: f(g(1), [2], (3) {4}); "
+	measure := func(n int) time.Duration {
+		src := strings.Repeat(decl, n) + "b: 1"
+		best := time.Duration(1 << 62)
+		for range 3 {
+			start := time.Now()
+			decls, _, _ := ParseDeclarations(src)
+			if el := time.Since(start); el < best {
+				best = el
+			}
+			if len(decls) != n+1 {
+				t.Fatalf("%d declarations read as %d", n+1, len(decls))
+			}
+		}
+		return best
+	}
+	const n = 500
+	small, large := measure(n), measure(4*n)
+	ratio := float64(large) / float64(small)
+	t.Logf("%d declarations in %v, %d in %v: %.1f times", n, small, 4*n, large, ratio)
+	if ratio > 8 {
+		t.Errorf("four times the declarations took %.1f times as long (%v against %v); "+
+			"the look-ahead is reading past where the parser stops", ratio, large, small)
 	}
 }
 

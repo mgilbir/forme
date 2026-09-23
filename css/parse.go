@@ -254,6 +254,10 @@ type parser struct {
 
 	pos   int
 	depth int
+	// ahead is the grouping startsANestedRule keeps as it reads raw tokens
+	// ahead. It is a field so that its room is reused from one declaration to
+	// the next rather than allocated for each one that nests.
+	ahead closers
 	// errs is what the parser itself found, in the order it found it. It is
 	// laid after the tokenizer's by report, under one bound for the two.
 	errs []Error
@@ -610,30 +614,54 @@ func (p *parser) function(name Token) ComponentValue {
 // This is what keeps the depth cap from being a correctness bug. Stopping at the
 // first close delimiter would leave the reader inside a nested block, and every
 // rule after it would be misparsed; recursing to find the right one is the
-// stack exhaustion the cap exists to prevent. So nesting is counted on the heap
+// stack exhaustion the cap exists to prevent. So nesting is kept on the heap
 // instead, and the cap costs only the contents of one absurdly nested block.
+//
+// What is kept is the whole grouping, in closers, and not a count of the one
+// delimiter being waited for. A count finds the right ")" only when nothing
+// of another kind is open inside: in "( [ ) ] )" the first ")" is inside the
+// "[" block, a token like any other, and a count of parentheses stopped there
+// and left "] )" to be read as though the author had closed the block. Past the
+// cap, that is where the reader and a browser parted.
 func (p *parser) skipBlock(end Kind) {
-	depth := 1
+	if p.fromValues() {
+		// Not reached: a parser over values opens no block, because what it
+		// walks are blocks already, so it never has one to skip.
+		return
+	}
+	open := closers{end}
 	for !p.atEOF() {
-		c := p.next()
-		if p.fromValues() {
-			// Already-parsed values carry their nesting in the tree rather than
-			// in the stream, so one node is one block and there is nothing to
-			// count.
-			continue
+		if open.take(p.next().Token.Kind); len(open) == 0 {
+			return
 		}
-		switch c.Token.Kind {
-		case end:
-			if depth--; depth == 0 {
-				return
-			}
-		case LeftBrace, LeftSquare, LeftParen, Function:
-			// Only a delimiter of the same kind nests: a "[" inside a "(" block
-			// does not change how many ")" are needed to leave it. The mirror
-			// check keeps the count honest.
-			if mirror(c.Token.Kind) == end || (c.Token.Kind == Function && end == RightParen) {
-				depth++
-			}
+	}
+}
+
+// closers is the delimiters that close the blocks and functions a reading of
+// raw tokens is inside, innermost last. It is how a scan that does not build
+// the tree still groups the tokens exactly as the tree would (§5.4.7 and
+// §5.4.8): an opening delimiter or a function token opens a level, the mirror
+// of the innermost level closes it, and a closing delimiter of any other kind
+// is a token like any other inside it — "( ] )" is one block holding a "]",
+// and "f({})" one function holding a {} block.
+//
+// A scan that counted one kind of delimiter, or counted them all together,
+// disagreed with the tree on exactly those inputs. Two scans read raw tokens
+// this way: skipBlock, past the depth cap, and startsANestedRule's look-ahead
+// in a declaration list read from text.
+type closers []Kind
+
+// take reads one token's kind into the grouping. A closing delimiter with no
+// level open is the caller's to interpret; take leaves the grouping as it is.
+func (o *closers) take(k Kind) {
+	switch k {
+	case LeftBrace, LeftSquare, LeftParen:
+		*o = append(*o, mirror(k))
+	case Function:
+		*o = append(*o, RightParen)
+	case RightBrace, RightSquare, RightParen:
+		if n := len(*o); n > 0 && (*o)[n-1] == k {
+			*o = (*o)[:n-1]
 		}
 	}
 }
@@ -769,11 +797,16 @@ func (p *parser) lookAt(i int) ComponentValue {
 // it was a rule would already have swallowed every rule after it — "a {} b {}"
 // is two rules and one run.
 func (p *parser) startsANestedRule() bool {
-	depth := 0
 	if p.fromValues() {
+		// Already grouped, so nothing inside a block or a function is at this
+		// level, and each is one value to step over. A {} block among them is
+		// the rule's own.
 		for i := p.pos; ; i++ {
-			if done, nested := nestedRuleStep(p.lookAt(i), &depth); done {
-				return nested
+			switch c := p.lookAt(i); {
+			case c.IsBlock() && c.Token.Kind == LeftBrace:
+				return true
+			case c.Token.Kind == EOF, c.Token.Kind == Semicolon, c.Token.Kind == RightBrace:
+				return false
 			}
 		}
 	}
@@ -788,9 +821,19 @@ func (p *parser) startsANestedRule() bool {
 	// is the slice the stream exists not to have. Tokenizing twice is linear,
 	// because the parser always consumes at least as far as this looked — it
 	// stops only at a ";", "{" or "}" outside any block, and this stops at the
-	// first of those inside one or not — so no token is looked ahead over twice.
+	// first of those outside any block too, grouping the tokens as the parser
+	// will (see closers) — so no token is looked ahead over twice.
+	//
+	// The grouping is the point. The tokens here are raw, so a "(" or a
+	// function token opens a level that the look-ahead has to keep: the "{" of
+	// "--x: f({}); color: red" is inside the function, and taking it for a
+	// rule's block lost the declaration after it. And keeping it exactly as
+	// the parser does is what the linear bound above rests on, since a
+	// look-ahead that thought a block still open where the parser had closed
+	// it would read past where the parser stops, again for each declaration.
+	p.ahead = p.ahead[:0]
 	for i := p.pos - p.base; i < len(p.window); i++ {
-		if done, nested := nestedRuleStep(ComponentValue{Token: p.window[i]}, &depth); done {
+		if done, nested := nestedRuleStep(p.window[i].Kind, &p.ahead); done {
 			return nested
 		}
 	}
@@ -802,47 +845,31 @@ func (p *parser) startsANestedRule() bool {
 	// the parser's own tokenizer reads it, which it will.
 	probe.errs, probe.quiet = nil, true
 	for {
-		if done, nested := nestedRuleStep(ComponentValue{Token: probe.token()}, &depth); done {
+		if done, nested := nestedRuleStep(probe.token().Kind, &p.ahead); done {
 			return nested
 		}
 	}
 }
 
-// nestedRuleStep is startsANestedRule's reading of one value: whether it
-// decides the question, and which way.
-func nestedRuleStep(c ComponentValue, depth *int) (done, nested bool) {
-	switch {
-	case c.Token.Kind == EOF:
+// nestedRuleStep is startsANestedRule's reading of one raw token: whether it
+// decides the question, and which way. open is the blocks and functions the
+// look-ahead is inside.
+func nestedRuleStep(k Kind, open *closers) (done, nested bool) {
+	if k == EOF {
 		return true, false
-	case c.IsBlock() || c.IsFunction():
-		// Already grouped, so nothing inside it is at this level. A "{}"
-		// block among them is the rule's own.
-		if c.IsBlock() && c.Token.Kind == LeftBrace {
+	}
+	if len(*open) == 0 {
+		switch k {
+		case LeftBrace:
 			return true, true
-		}
-	case c.Token.Kind == LeftBrace:
-		if *depth == 0 {
-			return true, true
-		}
-		*depth++
-	case c.Token.Kind == LeftParen || c.Token.Kind == LeftSquare ||
-		c.Token.Kind == Function:
-		*depth++
-	case c.Token.Kind == RightParen || c.Token.Kind == RightSquare:
-		if *depth > 0 {
-			*depth--
-		}
-	case c.Token.Kind == RightBrace:
-		if *depth == 0 {
+		case Semicolon:
+			return true, false
+		case RightBrace:
 			// The end of the block this declaration list is in.
 			return true, false
 		}
-		*depth--
-	case c.Token.Kind == Semicolon:
-		if *depth == 0 {
-			return true, false
-		}
 	}
+	open.take(k)
 	return false, false
 }
 

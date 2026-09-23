@@ -1,6 +1,7 @@
 package style
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/mgilbir/forme/html"
@@ -259,10 +260,63 @@ func TestFontSizeAttributeIsTheSevenStepScale(t *testing.T) {
 	}
 }
 
+// TestTheFontSizeIsReadByTheLegacyFontSizeRules is HTML's rules for parsing a
+// legacy font size (§15.3.4), step by step: ASCII white space is skipped, a
+// "+" or "-" sets the mode, the ASCII digits at the front are the value and
+// whatever follows them is ignored, the mode adds the value to three or takes
+// it from three, and the result is clamped to one through seven.
+//
+// "5px", "5.5", "3em" and "1x" were refused, and TestAnUnreadableFontSizeIsIgnored
+// said so; they are read now, as the rule reads them, at the user's decision.
+func TestTheFontSizeIsReadByTheLegacyFontSizeRules(t *testing.T) {
+	for _, tc := range []struct{ attr, want string }{
+		// Whatever follows the digits is ignored, a unit or a fraction alike.
+		{"5px", "x-large"}, {"5.5", "x-large"}, {"3em", "medium"}, {"1x", "x-small"},
+		{"4 5", "large"}, {"2%", "small"}, {"+2px", "x-large"}, {"-1.9", "small"},
+		// Leading ASCII white space of each of Infra's five kinds.
+		{"\t\n\f\r 6", "xx-large"}, {" +1", "large"},
+		// The value is a number of any length, clamped after the mode is
+		// applied. Eleven digits were refused as past a digit bound that is
+		// not in the rule.
+		{"99999999999", "xxx-large"}, {"+99999999999", "xxx-large"},
+		{"-99999999999", "x-small"}, {strings.Repeat("9", 100), "xxx-large"},
+		{"00000000000000000004", "large"},
+	} {
+		got, ok := fontSizeValue(tc.attr)
+		if !ok {
+			t.Errorf("size=%q was refused; the rule reads it", tc.attr)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("size=%q gave font-size %q, want %q", tc.attr, got, tc.want)
+		}
+	}
+
+	// Through the cascade, so the reading reaches the element.
+	for _, tc := range []struct{ attr, want string }{
+		{"5px", "24px"}, {"1x", "10px"}, {"+2px", "24px"}, {"-1.9", "13px"},
+	} {
+		cs := computed(t, `<font id="f" size="`+tc.attr+`">x</font>`)
+		if s := cs["f"].Get("font-size"); s != tc.want {
+			t.Errorf("size=%q computed to %q, want %q", tc.attr, s, tc.want)
+		}
+	}
+}
+
 // TestAnUnreadableFontSizeIsIgnored, which is the same rule every other hint
-// follows: a value this cannot read must not become one it guessed at.
+// follows: a value this cannot read must not become one it guessed at. What
+// the rule cannot read is a value with no digit where it looks for one: none
+// at all, none after the sign, a second sign, white space between the sign and
+// the digits, or white space that is not ASCII's in front.
+//
+// "5px", "5.5", "3em" and "1x" were in this list, and are no longer: the rule
+// reads the digits at the front of each (see
+// TestTheFontSizeIsReadByTheLegacyFontSizeRules).
 func TestAnUnreadableFontSizeIsIgnored(t *testing.T) {
-	for _, attr := range []string{"", " ", "large", "5px", "5.5", "3em", "+", "-", "1x", "x1"} {
+	for _, attr := range []string{
+		"", " ", "large", "+", "-", "x1",
+		"+ 1", "- 1", "++1", "+-1", "-+1", ".5", "\u00a05", "\v5", "\u30005",
+	} {
 		if got, ok := fontSizeValue(attr); ok {
 			t.Errorf("size=%q was read as %q; it is not a size", attr, got)
 		}

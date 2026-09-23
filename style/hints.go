@@ -415,62 +415,47 @@ var fontSizeSteps = [maxFontSizeSteps]string{
 	"x-small", "small", "medium", "large", "x-large", "xx-large", "xxx-large",
 }
 
-// fontSizeValue turns a <font size> into a font-size keyword.
+// fontSizeValue turns a <font size> into a font-size keyword, by HTML's rules
+// for parsing a legacy font size (§15.3.4).
 //
 // A bare number is a step on the scale. A signed one is relative to step 3,
 // which is the default and is what "medium" means — so "+1" is large and "-1" is
 // small, and a document that nests them does not compound, because each element
 // reads the attribute afresh rather than the size it inherited.
+//
+// The rule reads the number the way §2.3.4.1's rules for parsing integers do:
+// ASCII white space, an optional sign, then the digits at the front, and
+// whatever follows them is ignored. So "5px" and "5.5" are step five, "3em" is
+// step three and "1x" step one, where this used to refuse all four and leave
+// the text at the size it inherited. It is html.ParseInteger, which is that
+// rule, and which saturates rather than refuses a number of any length: a
+// hundred nines are the seventh step, as the rule's clamp says.
 func fontSizeValue(raw string) (string, bool) {
-	s := strings.TrimSpace(raw)
-	if s == "" {
+	n, ok := html.ParseInteger(raw)
+	if !ok {
 		return "", false
 	}
-	relative := 0
-	switch s[0] {
-	case '+':
-		relative, s = +1, s[1:]
-	case '-':
-		relative, s = -1, s[1:]
+	// The sign decides the mode as well as the value. ParseInteger has
+	// already required that a digit follow it, so all that is left to know is
+	// whether there was one; ASCII white space is what it skipped to get there.
+	if s := strings.TrimLeft(raw, "\t\n\f\r "); s[0] == '+' || s[0] == '-' {
+		// Clamped before it is added to, which changes no step — anything
+		// past seven either way lands on the end of the scale regardless —
+		// and keeps a saturated value from overflowing a 32-bit int.
+		n = 3 + max(-maxFontSizeSteps, min(n, maxFontSizeSteps))
 	}
-	digits := 0
-	for digits < len(s) && s[digits] >= '0' && s[digits] <= '9' {
-		digits++
-	}
-	if digits == 0 || digits > maxHintDigits || digits != len(s) {
-		return "", false
-	}
-	n := 0
-	for _, c := range []byte(s) {
-		n = n*10 + int(c-'0')
-		if n > 1000 {
-			// Past anything the scale can say. It is clamped below either way,
-			// and stopping here keeps the arithmetic away from an overflow.
-			n = 1000
-			break
-		}
-	}
-	if relative != 0 {
-		n = 3 + relative*n
-	}
-	if n < 1 {
-		n = 1
-	}
-	if n > maxFontSizeSteps {
-		n = maxFontSizeSteps
-	}
+	n = max(1, min(n, maxFontSizeSteps))
 	return fontSizeSteps[n-1], true
 }
 
-// maxHintDigits bounds the number a dimension attribute or a font size may
-// state.
+// maxHintDigits bounds the number a dimension attribute may state.
 //
 // Ten digits cannot overflow the parse below and is already four orders of
 // magnitude past any page; the bound is here because the attribute is untrusted
 // text and a length is one multiplication away from a box the size of a
-// continent. It is the bound for the two readers here that are not HTML's
-// integer rules — a dimension (§2.3.4.4) and a legacy font size. The integer
-// attributes are read by html.ParseInteger and html.ParseNonNegativeInteger,
+// continent. It is the bound for the one reader here that is not HTML's
+// integer rules, a dimension (§2.3.4.4). The integer attributes and the legacy
+// font size are read by html.ParseInteger and html.ParseNonNegativeInteger,
 // which saturate rather than refuse.
 const maxHintDigits = 10
 

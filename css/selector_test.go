@@ -503,6 +503,7 @@ func TestMalformedSelectorsAreRefused(t *testing.T) {
 		"a::before::after", "a::before b",
 		"a:not()", // nothing to negate
 		"a:nth-child()", "a:nth-child(x)", "a:nth-child(2n of)",
+		"li:nth-child(+-n+3)", // no "+" before a "-n" (CSS Syntax 3 §6.2)
 		"a:lang()", "a:root(x)",
 	}
 	for _, input := range malformed {
