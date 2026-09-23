@@ -3,8 +3,8 @@ package layout
 import (
 	"strconv"
 	"strings"
-	"unicode"
 
+	"github.com/mgilbir/forme/internal/charprop"
 	"github.com/mgilbir/forme/paragraph"
 )
 
@@ -209,10 +209,10 @@ func (g *hyphenGather) text(b *Box) {
 // before it belongs to whatever it was written on, which is not a word this
 // gathered.
 func (g *hyphenGather) continuesTheWord(r rune) bool {
-	if unicode.IsLetter(r) {
+	if charprop.Is(r, charprop.L) {
 		return true
 	}
-	return len(g.word) > 0 && unicode.In(r, unicode.Mn, unicode.Mc, unicode.Me)
+	return len(g.word) > 0 && charprop.Is(r, charprop.M)
 }
 
 // flush asks the dictionary about the word gathered so far and records where it

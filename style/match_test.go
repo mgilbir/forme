@@ -514,6 +514,23 @@ func TestTheFoldingIsASCIIAndNotUnicodes(t *testing.T) {
 	})
 }
 
+// TestATypeIsFoldedAsASCIIToo is the same rule for element names, which HTML
+// also compares ASCII case-insensitively. The matcher asked strings.EqualFold,
+// which is Unicode's simple case folding — from the toolchain's release, not
+// the engine's — and under it U+212A KELVIN SIGN is "k" and U+017F LONG S is
+// "s": a selector naming neither <kbd> nor <span> selected both.
+func TestATypeIsFoldedAsASCIIToo(t *testing.T) {
+	doc := parseDoc(t, `<p id="p"><kbd id="k">k</kbd><span id="s">s</span><span id="t">t</span></p>`)
+	check(t, doc, map[string]string{
+		"\u212Abd":                    "",
+		"\u017Fpan":                   "",
+		"KBD":                         "k",
+		"SPAN":                        "s t",
+		"SpAn:nth-of-type(2)":         "t",
+		"p > \u017Fpan:first-of-type": "",
+	})
+}
+
 // TestMatchIsRightToLeft is a performance property rather than a correctness
 // one, and it is asserted because the alternative is quietly quadratic.
 // Matching from the subject outwards rejects most elements on their own name;

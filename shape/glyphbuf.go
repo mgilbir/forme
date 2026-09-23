@@ -1,10 +1,10 @@
 package shape
 
 import (
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/mgilbir/forme/bidi"
+	"github.com/mgilbir/forme/internal/charprop"
 )
 
 // The shaped-glyph model.
@@ -645,10 +645,10 @@ func maskFractions(buf []Glyph, runes []rune, rtl bool) {
 			continue
 		}
 		start, end := i, i+1
-		for start > 0 && unicode.Is(unicode.Nd, runes[start-1]) {
+		for start > 0 && charprop.Is(runes[start-1], charprop.Nd) {
 			start--
 		}
-		for end < len(runes) && end < len(buf) && unicode.Is(unicode.Nd, runes[end]) {
+		for end < len(runes) && end < len(buf) && charprop.Is(runes[end], charprop.Nd) {
 			end++
 		}
 		if start == i || end == i+1 {

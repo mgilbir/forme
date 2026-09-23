@@ -1,7 +1,6 @@
 package layout
 
 import (
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/mgilbir/forme/paragraph"
@@ -301,9 +300,9 @@ const (
 
 func caseOf(r rune) caseKind {
 	switch {
-	case unicode.ToUpper(r) != r:
+	case paragraph.SimpleUpper(r) != r:
 		return caseLower
-	case unicode.ToLower(r) != r:
+	case paragraph.SimpleLower(r) != r:
 		return caseUpper
 	}
 	return caseNone

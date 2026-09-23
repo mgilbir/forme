@@ -2,7 +2,8 @@ package shape
 
 import (
 	"sort"
-	"unicode"
+
+	"github.com/mgilbir/forme/internal/charprop"
 )
 
 // Indic reordering: setting text whose characters are not stored in the order
@@ -1109,7 +1110,7 @@ func indicWordStart(before, runes []rune, at int) bool {
 // outside it. A private-use character is most often an icon font's glyph set
 // among the text, and it is not a space.
 func endsWordForIndic(r rune) bool {
-	return unicode.In(r, unicode.N, unicode.P, unicode.S, unicode.Z, unicode.Cc)
+	return charprop.Is(r, charprop.N|charprop.P|charprop.S|charprop.Z|charprop.Cc)
 }
 
 // indicHooks keep the Indic record in step with a buffer a stage is reshaping.

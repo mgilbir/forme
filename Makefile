@@ -1,4 +1,4 @@
-.PHONY: ucd verify-fonts test-corpora linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance
+.PHONY: ucd verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance
 
 test:
 	gofmt -l . | grep -v '^testdata/' && exit 1 || true
@@ -220,7 +220,7 @@ UCD ?= $(UCD_DIR)
 # argument lists had drifted, and nothing was in a position to notice. See
 # cmd/regenerate_test.go, which now runs every one of them.
 #
-# The eighteen files that are read, rather than UCD.zip: the archive is an
+# The nineteen files that are read, rather than UCD.zip: the archive is an
 # order of magnitude larger than the files taken from it, unzip is one more
 # thing to have installed, and a file that moves in a new release fails here by
 # name instead of as a "no such file" from inside a generator.
@@ -237,6 +237,7 @@ UCD_FILES := \
 	IndicPositionalCategory.txt \
 	IndicSyllabicCategory.txt \
 	LineBreak.txt \
+	PropList.txt \
 	PropertyValueAliases.txt \
 	ScriptExtensions.txt \
 	Scripts.txt \
@@ -500,6 +501,15 @@ widths: $(UCD_DEP)
 
 useable: $(UCD_DEP)
 	$(MAKETABLES) useable
+
+# The character properties the engine asks of a character that no table above
+# answers: General_Category, White_Space, Soft_Dotted, Cased and
+# Case_Ignorable. They were Go's package unicode, which is the release the
+# toolchain shipped rather than this one. See cmd/gencharprop.
+#
+#	make charprops UCD=/path/to/unpacked/ucd
+charprops: $(UCD_DEP)
+	$(MAKETABLES) charprops
 
 # Only the directory this file fetches into. "make clean-ucd UCD=/path/to/ucd"
 # is the documented way to run a generator against a copy someone already has,

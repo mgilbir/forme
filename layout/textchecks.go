@@ -3,7 +3,6 @@ package layout
 import (
 	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/mgilbir/forme/html"
 	"github.com/mgilbir/forme/paragraph"
@@ -640,10 +639,10 @@ func faceDeclares(face *shape.Face, tag string) bool {
 // scripts that have one case only.
 func hasCase(text string) (lower, upper bool) {
 	for _, r := range text {
-		if unicode.ToUpper(r) != r {
+		if paragraph.SimpleUpper(r) != r {
 			lower = true
 		}
-		if unicode.ToLower(r) != r {
+		if paragraph.SimpleLower(r) != r {
 			upper = true
 		}
 		if lower && upper {

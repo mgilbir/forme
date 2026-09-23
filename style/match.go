@@ -12,7 +12,6 @@ package style
 
 import (
 	"strings"
-	"unicode"
 
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
@@ -291,8 +290,17 @@ func (m *Matcher) spent() bool {
 // The order is cheapest-first and deliberately so: a type mismatch rejects most
 // elements for most selectors, and the pseudo-classes — which may walk siblings
 // or recurse into another selector list — are asked last.
+//
+// The type is compared ASCII case-insensitively, which is what HTML specifies
+// for its elements' names and what the attribute values in asciiLower's list
+// already get. It was strings.EqualFold, which is Unicode's simple case
+// folding from the toolchain's release: U+212A KELVIN SIGN and U+017F LONG S
+// fold to "k" and "s", so "\212Abd" selected <kbd> and "\17Fpan" <span> —
+// a match between names that are not the same name. An element name from
+// the HTML reader is ASCII, so ASCII's folding is also the only one that can
+// tell two of them apart.
 func (m *Matcher) compound(c css.Compound, n *html.Node) bool {
-	if c.Type != "" && !strings.EqualFold(c.Type, n.Name) {
+	if c.Type != "" && !asciiEqualFold(c.Type, n.Name) {
 		return false
 	}
 	for _, id := range c.IDs {
@@ -621,10 +629,10 @@ func (m *Matcher) seriesOf(parent *html.Node, of []css.Selector) *series {
 // typePosition is an element's one-based position among its siblings of the
 // same name, counting from the end when last is set, or 0 when it has no parent.
 //
-// "The same name" is what the old walk compared with strings.EqualFold, and
-// typeKey is that comparison as a key, so the positions are the ones that walk
-// found. Every child of the parent is placed the first time any of them is
-// asked about.
+// "The same name" is what compound compares with asciiEqualFold, and
+// asciiLower is that comparison as a key, so the positions are the ones a walk
+// comparing names would find. Every child of the parent is placed the first
+// time any of them is asked about.
 func (m *Matcher) typePosition(n *html.Node, last bool) int {
 	parent := n.Parent
 	if parent == nil {
@@ -635,7 +643,7 @@ func (m *Matcher) typePosition(n *html.Node, last bool) int {
 		seen := make(map[string]int32, 4)
 		keys := make([]string, len(kids))
 		for i, k := range kids {
-			keys[i] = typeKey(k.Name)
+			keys[i] = asciiLower(k.Name)
 			seen[keys[i]]++
 			m.ofType[k] = [2]int32{seen[keys[i]], 0}
 		}
@@ -655,35 +663,6 @@ func (m *Matcher) typePosition(n *html.Node, last bool) int {
 		return int(at[1])
 	}
 	return int(at[0])
-}
-
-// typeKey is an element name as strings.EqualFold compares names: two names
-// have the same key exactly when EqualFold says they are equal.
-//
-// EqualFold is Unicode's simple case folding, rune by rune, and the key is each
-// rune's whole folding orbit named by one member of it: the ASCII lower-case
-// letter where the orbit has one, so the common case is plain lower-casing, and
-// the smallest rune of it otherwise. It is not strings.ToLower, which differs
-// from EqualFold on runes like U+212A KELVIN SIGN and U+017F LONG S: those fold
-// to "k" and "s" and do not lower-case to them.
-func typeKey(name string) string {
-	if k := asciiLowerName(name); k != "" || name == "" {
-		return k
-	}
-	var b strings.Builder
-	for _, r := range name {
-		least := r
-		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
-			if f < least {
-				least = f
-			}
-		}
-		if least >= 'A' && least <= 'Z' {
-			least += 'a' - 'A'
-		}
-		b.WriteRune(least)
-	}
-	return b.String()
 }
 
 func (m *Matcher) matchesAny(sels []css.Selector, n *html.Node) bool {
@@ -898,6 +877,31 @@ var htmlFoldedAttrs = map[string]bool{
 	"rel": true, "rev": true, "rules": true, "scope": true, "scrolling": true,
 	"selected": true, "shape": true, "target": true, "text": true,
 	"type": true, "valign": true, "valuetype": true, "vlink": true,
+}
+
+// asciiEqualFold reports whether two strings are equal when A-Z are folded to
+// a-z and nothing else is, without making a copy of either: it is asked for
+// every type selector against every element.
+func asciiEqualFold(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		x, y := a[i], b[i]
+		if x == y {
+			continue
+		}
+		if 'A' <= x && x <= 'Z' {
+			x += 'a' - 'A'
+		}
+		if 'A' <= y && y <= 'Z' {
+			y += 'a' - 'A'
+		}
+		if x != y {
+			return false
+		}
+	}
+	return true
 }
 
 // asciiLower folds A-Z and nothing else.

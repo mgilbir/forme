@@ -2,10 +2,10 @@ package layout
 
 import (
 	"strings"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/mgilbir/forme/html"
+	"github.com/mgilbir/forme/internal/charprop"
 	"github.com/mgilbir/forme/segment"
 	"github.com/mgilbir/forme/style"
 )
@@ -237,7 +237,7 @@ func firstLetterLen(text string) int {
 	i := 0
 	for i < len(text) {
 		r, n := utf8.DecodeRuneInString(text[i:])
-		if !unicode.IsSpace(r) {
+		if !charprop.WhiteSpace(r) {
 			break
 		}
 		i += n
@@ -255,8 +255,7 @@ func firstLetterLen(text string) int {
 func skipPunctuation(text string, i int) int {
 	for i < len(text) {
 		r, n := utf8.DecodeRuneInString(text[i:])
-		if !unicode.IsPunct(r) && !unicode.Is(unicode.Ps, r) && !unicode.Is(unicode.Pe, r) &&
-			!unicode.Is(unicode.Pi, r) && !unicode.Is(unicode.Pf, r) {
+		if !charprop.Is(r, charprop.P) {
 			break
 		}
 		i += n

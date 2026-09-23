@@ -2,8 +2,9 @@ package paragraph
 
 import (
 	"strings"
-	"unicode"
 	"unicode/utf8"
+
+	"github.com/mgilbir/forme/internal/charprop"
 )
 
 // text-transform: changing the case of the text before anything measures it.
@@ -686,7 +687,7 @@ func stepWord(state WordState, r rune, rest string) WordState {
 	if isWordRune(r) {
 		return WordOpen
 	}
-	if isCombiningMark(r) || unicode.Is(unicode.Cf, r) {
+	if isCombiningMark(r) || charprop.Is(r, charprop.Cf) {
 		// UAX #29's WB4: a mark, a format character or a joiner belongs to the
 		// character before it and changes nothing about where the word is.
 		// Read as ending the word, a decomposed "résumé" capitalised to
@@ -760,7 +761,7 @@ func isMidWord(r rune) bool {
 // isCombiningMark reports whether a character is a combining mark: one that
 // belongs to the character before it.
 func isCombiningMark(r rune) bool {
-	return unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r) || unicode.Is(unicode.Mc, r)
+	return charprop.Is(r, charprop.M)
 }
 
 // isWordRune reports whether a character is one a word is made of.
@@ -770,7 +771,7 @@ func isCombiningMark(r rune) bool {
 // not here: they continue a word only when a letter follows, which is a question
 // about the next character and belongs to the caller. See isMidWord.
 func isWordRune(r rune) bool {
-	return unicode.IsLetter(r) || unicode.IsNumber(r)
+	return charprop.Is(r, charprop.L|charprop.N)
 }
 
 // WordStateAfter is what a text node leaves behind for the next one.

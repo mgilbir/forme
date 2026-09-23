@@ -2,8 +2,9 @@ package paragraph
 
 import (
 	"strings"
-	"unicode"
 	"unicode/utf8"
+
+	"github.com/mgilbir/forme/internal/charprop"
 )
 
 // CSS Text §6.3's other half: what a language does to a word broken inside it,
@@ -177,16 +178,16 @@ var hungarianDigraphs = []string{"dzs", "cs", "dz", "gy", "ly", "ny", "sz", "ty"
 // is a word to mark differently.
 func hungarianDigraph(before, after string) Hyphenation {
 	last, size := utf8.DecodeLastRuneInString(before)
-	if size == 0 || !unicode.IsLetter(last) {
+	if size == 0 || !charprop.Is(last, charprop.L) {
 		return Hyphenation{}
 	}
-	lower := strings.ToLower(after)
+	lower := lowerString(after)
 	for _, digraph := range hungarianDigraphs {
 		if !strings.HasPrefix(lower, digraph) {
 			continue
 		}
 		head, rest := utf8.DecodeRuneInString(digraph)
-		if unicode.ToLower(last) != head {
+		if simpleLower(last) != head {
 			continue
 		}
 		// The case of the letters as the document wrote them, which is the

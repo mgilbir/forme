@@ -1,8 +1,7 @@
 package paragraph
 
 import (
-	"unicode"
-
+	"github.com/mgilbir/forme/internal/charprop"
 	"github.com/mgilbir/forme/segment"
 )
 
@@ -57,7 +56,7 @@ func HasUprightText(s string) bool {
 // make "日本 と" a mixture and refuse a page that has only one orientation on it.
 func OrientationMix(text string) (upright, rotated bool) {
 	for _, r := range text {
-		if unicode.IsSpace(r) || MarksNoPaper(r) || IsDefaultIgnorable(r) {
+		if charprop.WhiteSpace(r) || MarksNoPaper(r) || IsDefaultIgnorable(r) {
 			continue
 		}
 		if IsUpright(r) {
@@ -94,7 +93,7 @@ func UprightUnits(text string) int {
 			end = bounds[i]
 		}
 		for _, r := range text[start:end] {
-			if IsDefaultIgnorable(r) || unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r) {
+			if IsDefaultIgnorable(r) || charprop.Is(r, charprop.Mn|charprop.Me) {
 				continue
 			}
 			n++

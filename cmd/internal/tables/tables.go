@@ -104,6 +104,13 @@ var Manifest = []Table{
 	{Out: "paragraph/kanatable.go", Generator: "genfullsizekana", Target: "widths",
 		Args: []string{ucdVersion, "${UCD}/UnicodeData.txt"}},
 
+	// The character properties no table above is about — General_Category,
+	// White_Space, Soft_Dotted, Cased and Case_Ignorable — which were package
+	// unicode's, from another release.
+	{Out: "internal/charprop/tables.go", Generator: "gencharprop", Target: "charprops",
+		Args: []string{ucdVersion, "${UCD}/UnicodeData.txt", "${UCD}/PropList.txt",
+			"${UCD}/DerivedCoreProperties.txt"}},
+
 	// The word lists, from ICU at ICU_COMMIT.
 	dictionary("thai", "thaidict"),
 	dictionary("lao", "laodict"),

@@ -3,8 +3,8 @@ package paragraph
 import (
 	"strings"
 	"sync"
-	"unicode"
 
+	"github.com/mgilbir/forme/internal/charprop"
 	"github.com/mgilbir/forme/shape"
 )
 
@@ -110,10 +110,10 @@ func HyphenPoints(word string, lang Language, left, right int) []int {
 		// this as any other non-letter does: the word is spelled with something
 		// the dictionary was not written over, and a dictionary that has nothing
 		// to say says nothing rather than guessing.
-		if !unicode.IsLetter(r) {
+		if !charprop.Is(r, charprop.L) {
 			return nil
 		}
-		lower[i] = unicode.ToLower(r)
+		lower[i] = simpleLower(r)
 	}
 
 	t := src.table()
@@ -339,7 +339,7 @@ func splitException(w string) (string, []int) {
 			points = append(points, n)
 			continue
 		}
-		word.WriteRune(unicode.ToLower(r))
+		word.WriteRune(simpleLower(r))
 		n++
 	}
 	return word.String(), points

@@ -2310,13 +2310,12 @@ func (rs *ruleSet) candidates(n *html.Node) []int32 {
 // about how short the list it lands in is. The id and class are compared
 // exactly, as the matcher compares them (see hasClass).
 //
-// A selector whose subject names none of the three can select anything, and so
-// can one whose type this cannot fold. The matcher compares a type with
-// strings.EqualFold, which is Unicode's folding rather than ASCII's, and the two
-// differ on characters no element name has — but "differ only on characters
-// nobody uses" is not an argument for an index that decides whether a rule is
-// looked at. A type with a byte above ASCII is filed under nothing and so is
-// walked for every element, exactly as before.
+// A selector whose subject names none of the three can select anything, and is
+// not indexed. Nor is one whose type has a byte above ASCII: the matcher folds
+// a type as this does, ASCII only (see compound), and the HTML reader makes no
+// element with such a name, so the rule selects nothing — and a rule that
+// selects nothing is walked for every element rather than filed under a key
+// that has to be argued for.
 func keysOf(sels []css.Selector) []ruleKey {
 	keys := make([]ruleKey, 0, len(sels))
 	for _, sel := range sels {

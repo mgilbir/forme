@@ -2,7 +2,8 @@ package shape
 
 import (
 	"sort"
-	"unicode"
+
+	"github.com/mgilbir/forme/internal/charprop"
 )
 
 // Cursive joining: choosing which of a letter's four shapes to draw.
@@ -311,5 +312,5 @@ func InCursiveScript(r rune) bool {
 		return int(s) < len(cursiveScripts) && cursiveScripts[s]
 	}
 	return hasDeclaredJoiningType(r) && !isDefaultIgnorable(r) &&
-		!unicode.Is(unicode.Zs, r)
+		!charprop.Is(r, charprop.Zs)
 }

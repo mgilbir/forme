@@ -212,8 +212,10 @@ HTML standard's entities file — by a variable in the
 `Makefile`, which each table records. `make casing`, `make dictionaries` and the
 rest fetch their inputs at the pin and regenerate through `cmd/maketables`, and
 `cmd/regenerate_test.go` regenerates every table from its pinned inputs and fails
-on any difference. No generator may import Go's `unicode` package, which answers
-from the release the toolchain shipped rather than the one the tables name.
+on any difference. Nothing in the tree may ask Go's `unicode` package a question
+about a character — it answers from the release the toolchain shipped rather than
+the one the tables name — and `internal/charprop` answers the general category and
+the properties the engine asks from the pinned release instead.
 
 ## Licence
 

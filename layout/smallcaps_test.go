@@ -4,11 +4,11 @@ import (
 	"math"
 	"strings"
 	"testing"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/mgilbir/forme/fonts/notosans"
 	"github.com/mgilbir/forme/fonttest"
+	"github.com/mgilbir/forme/internal/charprop"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -1195,7 +1195,7 @@ func TestASynthesisedCapitalKeepsItsMarks(t *testing.T) {
 	full, _ := style.FromPx(16)
 	for _, r := range runs {
 		first, _ := utf8.DecodeRuneInString(r.Text)
-		if unicode.Is(unicode.Mn, first) {
+		if charprop.Is(first, charprop.Mn) {
 			t.Errorf("the run %q begins with a combining mark, cut off the letter "+
 				"it belongs to", r.Text)
 		}
