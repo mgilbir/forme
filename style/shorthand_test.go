@@ -412,6 +412,9 @@ func TestShorthandLonghandsMatchWhatTheExpanderProduces(t *testing.T) {
 		"place-self":      "center stretch",
 		"columns":         "3 12em",
 		"word-wrap":       "break-word",
+		"grid-row":        "1 / 2",
+		"grid-column":     "main",
+		"grid-area":       "a",
 
 		// css-break-3's legacy shorthands for the break properties.
 		"page-break-before": "avoid",

@@ -180,9 +180,6 @@ func init() {
 		"grid-column-start", "grid-column-end"} {
 		g[p] = gridLine
 	}
-	g["grid-row"] = slashed(gridLine, 2)
-	g["grid-column"] = slashed(gridLine, 2)
-	g["grid-area"] = slashed(gridLine, 4)
 
 	// css-multicol-1.
 	g["column-count"] = single(either(kw("auto"),
@@ -738,31 +735,6 @@ func gridLine(it []css.ComponentValue) verdict {
 		}
 	}
 	return invalid
-}
-
-// slashed is "g [ / g ]{0,n-1}".
-func slashed(g grammar, n int) grammar {
-	return func(it []css.ComponentValue) verdict {
-		var parts [][]css.ComponentValue
-		start := 0
-		for i, v := range it {
-			if v.IsToken() && v.Token.IsDelim('/') {
-				parts = append(parts, it[start:i])
-				start = i + 1
-			}
-		}
-		parts = append(parts, it[start:])
-		if len(parts) > n {
-			return invalid
-		}
-		out := valid
-		for _, p := range parts {
-			if out = out.and(g(p)); !out.ok {
-				return invalid
-			}
-		}
-		return out
-	}
 }
 
 // Generated content, css-content-3 §1.

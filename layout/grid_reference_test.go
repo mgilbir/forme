@@ -2,77 +2,90 @@ package layout
 
 import "github.com/mgilbir/forme/style"
 
-// Grid placement and track sizing as they were written before they were made
-// proportional to the items: a dense occupancy of every cell, and track sizing
-// that asked every item about every track. Kept as the oracle the sparse and
-// bucketed versions are compared against, because they are the definition of
-// where an item goes and how big a track is.
+// Grid placement and track sizing written the simplest way: a table of every
+// cell, and track sizing that asks every item about every track. Kept as the
+// oracle the sparse and bucketed versions are compared against, because they
+// are the definition of where an item goes and how big a track is.
+//
+// The placement is §8.5 as the specification words it, cell by cell and with
+// the specification's own cursor — the corner of the last item placed, not
+// the place after it — so that it also checks the argument placeItems makes
+// for keeping its cursor one item further on.
 
-func placeItemsDense(items []*gridItem, columns int, dense bool) int {
-	grid := &denseOccupancy{columns: columns}
-	var flow []*gridItem
+func placeItemsDense(items []*gridItem, columns int, dense bool) (rows, cols int) {
+	grid := &denseOccupancy{columns: columns, taken: map[[2]int]bool{}}
+	// Step 1: both lines named.
 	for _, it := range items {
-		switch {
-		case it.place[0].definite && it.place[1].definite:
+		if it.place[0].definite && it.place[1].definite {
 			it.row, it.column = it.place[0].start, it.place[1].start
 			grid.fill(it)
-		case it.place[0].definite:
-			it.row = it.place[0].start
-			it.column = grid.freeInRow(it.row, it.place[1].span)
-			grid.fill(it)
-		default:
-			flow = append(flow, it)
 		}
 	}
+	// Step 2: locked to a row. Sparse: the earliest column past any item this
+	// step put in that row; dense: the earliest column. Either way it may be
+	// past the last column, which makes more.
+	last := map[int]int{}
+	for _, it := range items {
+		if !it.place[0].definite || it.place[1].definite {
+			continue
+		}
+		it.row = it.place[0].start
+		c := 0
+		if !dense {
+			c = last[it.row]
+		}
+		for !grid.free(it.row, c, it.place[0].span, it.place[1].span) {
+			c++
+		}
+		it.column = c
+		grid.fill(it)
+		last[it.row] = c + it.place[1].span
+	}
+	// Step 3 is the columns the caller counted and what step 2 grew them by.
+	// Step 4: everything else, from the cursor.
 	row, column := 0, 0
-	for _, it := range flow {
-		if dense {
-			// §8.5's dense packing: the cursor goes back to the start for every
-			// item, so a small one later in the document fills a hole a wide
-			// one left behind. Sparse packing is the default because it keeps
-			// the items in the order they were written; dense trades that for
-			// a grid with no gaps in it.
-			row, column = 0, 0
+	for _, it := range items {
+		if it.place[0].definite {
+			continue
 		}
 		if it.place[1].definite {
-			// A definite column and no row: the item drops down the column
-			// until it finds a row with room for it, starting from the cursor's
-			// row so that the order the items were written in is kept.
-			it.column = it.place[1].start
-			it.row = grid.freeInColumn(row, it.column, it.place[0].span,
-				it.place[1].span)
+			if dense {
+				row = 0
+			} else if it.place[1].start < column {
+				row++
+			}
+			column = it.place[1].start
+			for !grid.free(row, column, it.place[0].span, it.place[1].span) {
+				row++
+			}
+			it.row, it.column = row, column
 			grid.fill(it)
 			continue
 		}
-		it.row, it.column = grid.next(row, column, it.place[0].span, it.place[1].span)
-		grid.fill(it)
-		row, column = it.row, it.column+it.place[1].span
-		if column >= grid.columns {
+		if dense {
+			row, column = 0, 0
+		}
+		for {
+			for column+it.place[1].span <= grid.columns &&
+				!grid.free(row, column, it.place[0].span, it.place[1].span) {
+				column++
+			}
+			if column+it.place[1].span <= grid.columns {
+				break
+			}
 			row, column = row+1, 0
 		}
+		it.row, it.column = row, column
+		grid.fill(it)
 	}
-	return grid.rows
+	return grid.rows, grid.columns
 }
 
-// denseOccupancy is which cells are taken, which is all §8.5 needs to remember.
-//
-// It grows downwards and never sideways: the number of columns is settled
-// before any of this runs — the template says how many there are — and a row is
-// made whenever an item needs one that is not there yet.
+// denseOccupancy is every cell that is taken.
 type denseOccupancy struct {
 	columns int
 	rows    int
-	taken   []bool
-}
-
-func (g *denseOccupancy) at(row, column int) bool {
-	if column < 0 || column >= g.columns || row < 0 {
-		return false
-	}
-	if i := row*g.columns + column; i < len(g.taken) {
-		return g.taken[i]
-	}
-	return false
+	taken   map[[2]int]bool
 }
 
 func (g *denseOccupancy) fill(it *gridItem) {
@@ -80,74 +93,26 @@ func (g *denseOccupancy) fill(it *gridItem) {
 	if end > g.rows {
 		g.rows = end
 	}
-	for len(g.taken) < g.rows*g.columns {
-		g.taken = append(g.taken, false)
+	if reach := it.column + it.place[1].span; reach > g.columns {
+		g.columns = reach
 	}
 	for r := it.row; r < end; r++ {
-		for c := it.column; c < it.column+it.place[1].span && c < g.columns; c++ {
-			g.taken[r*g.columns+c] = true
+		for c := it.column; c < it.column+it.place[1].span; c++ {
+			g.taken[[2]int{r, c}] = true
 		}
 	}
 }
 
-// free reports whether a band of cells is empty and inside the grid.
+// free reports whether a band of cells is empty.
 func (g *denseOccupancy) free(row, column, rowSpan, columnSpan int) bool {
-	if column < 0 || column+columnSpan > g.columns {
-		return false
-	}
 	for r := row; r < row+rowSpan; r++ {
 		for c := column; c < column+columnSpan; c++ {
-			if g.at(r, c) {
+			if g.taken[[2]int{r, c}] {
 				return false
 			}
 		}
 	}
 	return true
-}
-
-// freeInRow is the first column in one row where a span will fit.
-func (g *denseOccupancy) freeInRow(row, span int) int {
-	for c := 0; c+span <= g.columns; c++ {
-		if g.free(row, c, 1, span) {
-			return c
-		}
-	}
-	return 0
-}
-
-// freeInColumn is the first row at or after one where a span will fit in a
-// given column.
-func (g *denseOccupancy) freeInColumn(from, column, rowSpan, columnSpan int) int {
-	for r := from; ; r++ {
-		if g.free(r, column, rowSpan, columnSpan) {
-			return r
-		}
-		if r > g.rows+len(g.taken) {
-			// Unreachable while the grid grows downwards: a row past the last
-			// filled one is empty. The bound is here because the loop has no
-			// other end, and a document is untrusted.
-			return r
-		}
-	}
-}
-
-// next is where the cursor finds room for an item, walking along the columns
-// and then down.
-func (g *denseOccupancy) next(row, column, rowSpan, columnSpan int) (int, int) {
-	for r := row; ; r++ {
-		start := 0
-		if r == row {
-			start = column
-		}
-		for c := start; c+columnSpan <= g.columns; c++ {
-			if g.free(r, c, rowSpan, columnSpan) {
-				return r, c
-			}
-		}
-		if r > g.rows+len(g.taken) {
-			return r, 0
-		}
-	}
 }
 
 // resolveTracksByScan is the scan for the base sizes and growth limits. What

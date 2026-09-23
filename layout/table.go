@@ -535,7 +535,8 @@ var wrapperProperties = []string{
 	"top", "right", "bottom", "left",
 	"flex-grow", "flex-shrink", "flex-basis", "order",
 	"align-self", "justify-self",
-	"grid-area", "grid-row", "grid-column",
+	// The four grid lines. grid-area, grid-row and grid-column are shorthands
+	// of these, expanded by the cascade, and are nothing a style holds.
 	"grid-row-start", "grid-row-end", "grid-column-start", "grid-column-end",
 }
 

@@ -405,13 +405,11 @@ var properties = map[string]property{
 	// a flex container does not. None of them inherits: a grid container's
 	// tracks are its own, and a block inside a grid item is not itself a grid.
 	//
-	// The first six are the container's own template and flow. The seven after
-	// them place one item, and they are registered *to be refused*: an
-	// unregistered property is dropped by the cascade before layout sees it, so
-	// without them a container whose item names a line would be arranged by the
-	// automatic flow with the declaration silently gone. That is the argument
-	// column-span makes below, and it is the same one. They become real the day
-	// layout/grid.go places an item by name.
+	// The first six are the container's own template and flow. The four after
+	// them place one item, and are the longhands of grid-row, grid-column and
+	// grid-area, which are shorthands (see gridLineShorthand) and so are not
+	// registered here: a shorthand in the registry cannot be ordered against its
+	// own longhands by the cascade.
 	//
 	// justify-items' initial value is "legacy", which is not a spelling of
 	// "normal": it is the keyword that makes an item inherit a legacy
@@ -424,9 +422,6 @@ var properties = map[string]property{
 	"grid-auto-flow":        {false, "row"},
 	"grid-auto-rows":        {false, "auto"},
 	"grid-auto-columns":     {false, "auto"},
-	"grid-column":           {false, "auto"},
-	"grid-row":              {false, "auto"},
-	"grid-area":             {false, "auto"},
 	"grid-column-start":     {false, "auto"},
 	"grid-column-end":       {false, "auto"},
 	"grid-row-start":        {false, "auto"},
@@ -686,6 +681,12 @@ var shorthands = map[string]shorthand{
 	// could not tell which was written later (audit C111). The fix is the one
 	// white-space and text-align already had.
 	"word-wrap": {aliasOf("overflow-wrap"), []string{"overflow-wrap"}},
+
+	// CSS Grid 2 §8.4's three placement shorthands. See gridLineShorthand.
+	"grid-row":    gridLineShorthand("grid-row-start", "grid-row-end"),
+	"grid-column": gridLineShorthand("grid-column-start", "grid-column-end"),
+	"grid-area": {gridAreaShorthand, []string{"grid-row-start", "grid-column-start",
+		"grid-row-end", "grid-column-end"}},
 }
 
 // aliasOf is the expander for a legacy name of a single property: the value is

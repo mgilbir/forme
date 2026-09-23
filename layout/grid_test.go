@@ -948,14 +948,19 @@ const threeCells = `<div id="g"><div id="a">a</div><div id="b">b</div><div id="c
 
 const threeColumns = `#g { width: 300px; grid-template-columns: 100px 100px 100px }`
 
-// TestAnItemGoesToTheLineItNamed is §8.3 and the first two steps of §8.5: an
-// item that named a line is placed there, and the automatic flow deals the rest
-// into what is left — around it, not over it.
+// TestAnItemGoesToTheLineItNamed is §8.3 and §8.5: an item that named a line
+// is placed there, and the automatic flow deals the rest into what is left —
+// around it, not over it.
 func TestAnItemGoesToTheLineItNamed(t *testing.T) {
-	// The first item asks for the second column. The other two are dealt from
-	// the start, so one lands in front of it.
+	// The first item asks for the second column and no row, so it is placed
+	// in step 4, in its turn: the cursor goes to its column in the first row,
+	// and the two after it are dealt from there, the second into the third
+	// column and the third onto the next row. This expected the two to be
+	// dealt from the start with the first in front of it, which is not what
+	// §8.5's sparse cursor does (audit C149): an item written later was placed
+	// before it.
 	wantCells(t, gridCells(t, threeCells, threeColumns+`#a { grid-column: 2 }`),
-		[][4]float64{{100, 0, 100, 20}, {0, 0, 100, 20}, {200, 0, 100, 20}},
+		[][4]float64{{100, 0, 100, 20}, {200, 0, 100, 20}, {0, 20, 100, 20}},
 		"one item in the second column")
 
 	// A line for the row instead, which the flow then works around: the item is
@@ -971,11 +976,13 @@ func TestAnItemGoesToTheLineItNamed(t *testing.T) {
 
 	// The longhands say the same thing, and an end line with no start is one
 	// track wide ending there — line 3 is the far edge of the second column.
+	// The cursor is past the last column after the first, so the other two
+	// go onto the next row.
 	wantCells(t, gridCells(t, threeCells, threeColumns+`#a { grid-column-start: 3 }`),
-		[][4]float64{{200, 0, 100, 20}, {0, 0, 100, 20}, {100, 0, 100, 20}},
+		[][4]float64{{200, 0, 100, 20}, {0, 20, 100, 20}, {100, 20, 100, 20}},
 		"an item that named only its start")
 	wantCells(t, gridCells(t, threeCells, threeColumns+`#a { grid-column-end: 3 }`),
-		[][4]float64{{100, 0, 100, 20}, {0, 0, 100, 20}, {200, 0, 100, 20}},
+		[][4]float64{{100, 0, 100, 20}, {200, 0, 100, 20}, {0, 20, 100, 20}},
 		"an item that named only its end")
 }
 
@@ -983,9 +990,10 @@ func TestAnItemGoesToTheLineItNamed(t *testing.T) {
 // one track, and it covers the gaps between them too — they separate the tracks
 // from each other and there is nothing between a track and itself.
 func TestAnItemSpansTheTracksItWasGiven(t *testing.T) {
-	// Two lines apart is two tracks wide.
+	// Two lines apart is two tracks wide, and the cursor is then past the
+	// last column, so the other two start the next row.
 	wantCells(t, gridCells(t, threeCells, threeColumns+`#a { grid-column: 2 / 4 }`),
-		[][4]float64{{100, 0, 200, 20}, {0, 0, 100, 20}, {0, 20, 100, 20}},
+		[][4]float64{{100, 0, 200, 20}, {0, 20, 100, 20}, {100, 20, 100, 20}},
 		"an item across two columns")
 
 	// A pair of lines the wrong way round is the same pair: §8.3 swaps them
@@ -1233,7 +1241,7 @@ func TestTheGridGrowsToHoldAnItemPlacedPastIt(t *testing.T) {
 	wantCells(t, gridCells(t, two,
 		`#g { width: 300px; grid-template-columns: 100px 100px; grid-auto-columns: 40px }`+
 			`#a { grid-column: 4 }`),
-		[][4]float64{{240, 0, 40, 20}, {0, 0, 100, 20}}, "an item in an implicit column")
+		[][4]float64{{240, 0, 40, 20}, {0, 20, 100, 20}}, "an item in an implicit column")
 
 	// A span wider than the grid grows it too: four columns for an item that
 	// asked for four, and the two implicit ones share what is left.
@@ -1300,9 +1308,10 @@ func TestARightToLeftGridStartsItsColumnsOnTheRight(t *testing.T) {
 		"the same three from the right")
 
 	// A named line counts from the same end: the second column of a
-	// right-to-left grid is the second from the right.
+	// right-to-left grid is the second from the right. The cursor is then at
+	// the end of the first row, so the other two fill the second.
 	wantCells(t, gridCells(t, threeCells, columns+`#g { direction: rtl } #a { grid-column: 2 }`),
-		[][4]float64{{100, 0, 100, 20}, {200, 0, 100, 20}, {200, 20, 100, 20}},
+		[][4]float64{{100, 0, 100, 20}, {200, 20, 100, 20}, {100, 20, 100, 20}},
 		"an item in the second column of a right-to-left grid")
 }
 
@@ -1377,9 +1386,11 @@ func TestAColumnFlowDealsDownTheColumns(t *testing.T) {
 
 	// An item that named a row past the end of a column flow grows the grid
 	// down before anything is dealt, because the rows are the axis the flow
-	// fills along and it has to know how long they are.
+	// fills along and it has to know how long they are. It is placed first,
+	// in the first column, and the cursor is then past the last row, so the
+	// other two go down the second column.
 	wantCells(t, gridCells(t, threeCells, `#g { width: 300px; grid-auto-flow: column } #a { grid-row: 3 }`),
-		[][4]float64{{0, 40, 300, 20}, {0, 0, 300, 20}, {0, 20, 300, 20}},
+		[][4]float64{{0, 40, 150, 20}, {150, 0, 150, 20}, {150, 20, 150, 20}},
 		"a column flow with an item in the third row")
 }
 

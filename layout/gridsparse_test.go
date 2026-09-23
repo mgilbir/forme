@@ -46,10 +46,11 @@ func copyGridItems(in []*gridItem) []*gridItem {
 	return out
 }
 
-// TestGridPlacementIsTheDensePlacement holds the sparse occupancy to the dense
-// one it replaced, which is kept in grid_reference_test.go as the definition
-// of where §8.5 puts an item: every item in the same cell, and the grid the
-// same number of rows, sparse and dense packing both.
+// TestGridPlacementIsTheDensePlacement holds the sparse occupancy to a table
+// of every cell placed by §8.5 as the specification words it, which is kept in
+// grid_reference_test.go as the definition of where an item goes: every item
+// in the same cell, and the grid the same number of rows and columns, sparse
+// and dense packing both.
 func TestGridPlacementIsTheDensePlacement(t *testing.T) {
 	r := rand.New(rand.NewSource(7))
 	for trial := 0; trial < 20000; trial++ {
@@ -58,14 +59,14 @@ func TestGridPlacementIsTheDensePlacement(t *testing.T) {
 		columns := max(explicit, tracksNeeded(items, 1, explicit))
 		dense := r.Intn(2) == 0
 		want, got := copyGridItems(items), copyGridItems(items)
-		wantRows := placeItemsDense(want, columns, dense)
-		gotRows, clamped := placeItems(got, columns, dense)
+		wantRows, wantColumns := placeItemsDense(want, columns, dense)
+		gotRows, gotColumns, clamped := placeItems(got, columns, dense)
 		if clamped {
 			t.Fatalf("trial %d: a grid of %d rows was clamped", trial, gotRows)
 		}
-		if wantRows != gotRows {
-			t.Fatalf("trial %d: %d rows by the dense table and %d by the runs", trial,
-				wantRows, gotRows)
+		if wantRows != gotRows || wantColumns != gotColumns {
+			t.Fatalf("trial %d: %d rows and %d columns by the dense table and %d "+
+				"and %d by the runs", trial, wantRows, wantColumns, gotRows, gotColumns)
 		}
 		for i := range want {
 			if want[i].row != got[i].row || want[i].column != got[i].column {

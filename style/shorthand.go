@@ -1587,3 +1587,97 @@ func legacyPageBreak(longhand string) expander {
 		return map[string][]css.ComponentValue{longhand: ident(word)}, nil, true
 	}
 }
+
+// gridLineShorthand is CSS Grid 2 §8.4's grid-row and grid-column:
+// "<grid-line> [ / <grid-line> ]?", the start before the slash and the end
+// after it.
+//
+// They were registered as properties of their own and read by layout in front
+// of their longhands, so neither could be decided against the other by the
+// cascade: ".x { grid-column: 1 / 2 } #a { grid-column-start: 3 }" put the
+// item in column 1 however specific the longhand was, and the reverse order
+// gave the same answer (audit C107). Expanded, each is two declarations
+// competing with the longhands like any others — which is what every other
+// shorthand here already was, and why the registry now has none.
+//
+// §8.4's one rule about an omitted end: it is the start again when the start
+// is a <custom-ident>, so "grid-column: main" is the area main's two edges,
+// and "auto" otherwise.
+func gridLineShorthand(start, end string) shorthand {
+	return shorthand{func(vals []css.ComponentValue) (map[string][]css.ComponentValue, []string, bool) {
+		parts, ok := slashParts(vals, 2)
+		if !ok {
+			return nil, nil, false
+		}
+		out := map[string][]css.ComponentValue{start: parts[0], end: omittedGridLine(parts[0])}
+		if len(parts) == 2 {
+			out[end] = parts[1]
+		}
+		return out, nil, true
+	}, []string{start, end}}
+}
+
+// gridAreaShorthand is §8.4's grid-area: up to four lines, in the order
+// row-start, column-start, row-end, column-end — the block axis first, as
+// everything in Box Alignment is, and not the reading order the slashes
+// suggest. An omitted column-start is the row-start again when that is a
+// <custom-ident>, which is what makes "grid-area: main" all four edges of the
+// area main; an omitted end is its own start again on the same terms; and
+// anything else omitted is "auto".
+func gridAreaShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, []string, bool) {
+	parts, ok := slashParts(vals, 4)
+	if !ok {
+		return nil, nil, false
+	}
+	rowStart := parts[0]
+	columnStart := omittedGridLine(rowStart)
+	if len(parts) > 1 {
+		columnStart = parts[1]
+	}
+	rowEnd := omittedGridLine(rowStart)
+	if len(parts) > 2 {
+		rowEnd = parts[2]
+	}
+	columnEnd := omittedGridLine(columnStart)
+	if len(parts) > 3 {
+		columnEnd = parts[3]
+	}
+	return map[string][]css.ComponentValue{
+		"grid-row-start": rowStart, "grid-column-start": columnStart,
+		"grid-row-end": rowEnd, "grid-column-end": columnEnd,
+	}, nil, true
+}
+
+// omittedGridLine is what an omitted grid line becomes, given the one it is
+// copied from: that line when it is a lone <custom-ident>, and "auto"
+// otherwise.
+func omittedGridLine(from []css.ComponentValue) []css.ComponentValue {
+	if len(from) == 1 && customIdent("span", "auto")(from[0]).ok {
+		return from
+	}
+	return ident("auto")
+}
+
+// slashParts divides a value at its top-level "/" into at most n parts, each
+// with its surrounding whitespace taken off. An empty part is no value, and
+// more than n are a value the shorthand does not have.
+func slashParts(vals []css.ComponentValue, n int) ([][]css.ComponentValue, bool) {
+	var parts [][]css.ComponentValue
+	begin := 0
+	for i, v := range vals {
+		if v.IsToken() && v.Token.IsDelim('/') {
+			parts = append(parts, trimWhitespace(vals[begin:i]))
+			begin = i + 1
+		}
+	}
+	parts = append(parts, trimWhitespace(vals[begin:]))
+	if len(parts) > n {
+		return nil, false
+	}
+	for _, p := range parts {
+		if len(p) == 0 {
+			return nil, false
+		}
+	}
+	return parts, true
+}
