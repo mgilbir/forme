@@ -303,7 +303,8 @@ func IsBidiControl(r rune) bool {
 //
 // CSS Text §8.1 names a short list of word-separator characters. The two that
 // occur in real documents are the ordinary space and the no-break space; the
-// remaining four are Ethiopic and Aegean word separators, which are counted too
+// remaining five are the Ethiopic wordspace, the two Aegean word separators and
+// the Ugaritic and Phoenician word dividers, which are counted too
 // because leaving them out would make the property silently do nothing in the
 // documents that need it most.
 func countWordSeparators(text string) int {

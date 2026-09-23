@@ -69,17 +69,15 @@ func greekUppercase(text string) string {
 			// uppercased at all, exactly as they would be under any other
 			// language. Reading only unicode.ToUpper here left the ß standing
 			// in the middle of the capitals.
-			switch s, has := lookupFullCase(r, fullUppercase[:]); {
-			case isMkhedruli(r):
-				out.WriteRune(r)
-				lostAccent = false
-				continue
-			case has:
+			//
+			// And it is the same mapping, asked of the same function: see
+			// caseMapping.
+			if s, has := uppercasing.of(r); has {
 				out.WriteString(s)
 				lostAccent = false
 				continue
 			}
-			upper = unicode.ToUpper(r)
+			upper = uppercasing.simple(r)
 			dropped = false
 		}
 		if ok && dropped && isDisjunctiveEta(runes, i) {

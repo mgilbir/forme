@@ -745,6 +745,10 @@ type State struct {
 	// it. See paragraph.Carried.Before and Trailing.DictTail, and note that it
 	// is empty for every document with no such script in it.
 	AfterText string
+	// AfterPhrase is the same for the phrase model: the last few characters
+	// before the next box, which the model reads across the boundary. See
+	// paragraph.Carried.PhraseBefore.
+	AfterPhrase string
 	// AfterTaken says the opportunity the box left is one its text *took*,
 	// which is not the absence of the two above: a box can leave a taken break
 	// and a hold at the same offset. See paragraph.Trailing.Taken.

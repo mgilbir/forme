@@ -22,10 +22,7 @@ import "testing"
 // mistake a test that built the struct itself would not see.
 func breakAllValue(t *testing.T) WordBreak {
 	t.Helper()
-	wb, unhandled := WordBreakOf("break-all")
-	if unhandled != "" {
-		t.Fatalf("break-all was reported as unhandled: %q", unhandled)
-	}
+	wb := WordBreakOf("break-all")
 	if wb == (WordBreak{}) {
 		t.Fatal("break-all read as the initial value")
 	}
@@ -91,10 +88,7 @@ func TestALineMayNotEndAfterAPrefix(t *testing.T) {
 // that could not be made to fail. See the note there.
 func TestLooseLetsBreakAllEndALineAfterAPrefix(t *testing.T) {
 	ba := breakAllValue(t)
-	loose, unhandled := LineBreakOf("loose")
-	if unhandled != "" {
-		t.Fatalf("loose was reported as unhandled: %q", unhandled)
-	}
+	loose := LineBreakOf("loose")
 	got := splitsWith(t, "ab\\cd", ba, loose)
 	if want := "a|b|\\|c|d"; got != want {
 		t.Errorf("under loose: %q, want %q — the break after a prefix is loose's "+
@@ -102,10 +96,7 @@ func TestLooseLetsBreakAllEndALineAfterAPrefix(t *testing.T) {
 	}
 	// And no other value allows it, so the exception is the exception.
 	for _, value := range []string{"normal", "strict", "auto"} {
-		lb, unhandled := LineBreakOf(value)
-		if unhandled != "" {
-			t.Fatalf("%s was reported as unhandled: %q", value, unhandled)
-		}
+		lb := LineBreakOf(value)
 		if got := splitsWith(t, "ab\\cd", ba, lb); got != "a|b|\\c|d" {
 			t.Errorf("under %s: %q, want %q", value, got, "a|b|\\c|d")
 		}
@@ -189,10 +180,7 @@ func TestNormalTextIsUnchanged(t *testing.T) {
 // preserved white space", and it is a value whose whole purpose is to overrule
 // what is here — the same exemption noBreakBefore is given beside it.
 func TestAnywhereOverrulesThePairRules(t *testing.T) {
-	anywhere, unhandled := LineBreakOf("anywhere")
-	if unhandled != "" {
-		t.Fatalf("anywhere was reported as unhandled: %q", unhandled)
-	}
+	anywhere := LineBreakOf("anywhere")
 	got := splitsWith(t, "ab\u00a0cd", WordBreak{}, anywhere)
 	if want := "a|b|\u00a0|c|d"; got != want {
 		t.Errorf("under anywhere: %q, want %q", got, want)
@@ -214,10 +202,7 @@ func TestAnywhereOverrulesThePairRules(t *testing.T) {
 // title is the rule in as many words: "line-break: anywhere overrides behavior
 // defined for the WJ, ZW, GL, and ZWJ classes".
 func TestAnywhereOverrulesTheNoBreakSpaceSeparators(t *testing.T) {
-	anywhere, unhandled := LineBreakOf("anywhere")
-	if unhandled != "" {
-		t.Fatalf("anywhere was reported as unhandled: %q", unhandled)
-	}
+	anywhere := LineBreakOf("anywhere")
 	for _, tc := range []struct {
 		what string
 		r    rune

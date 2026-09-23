@@ -90,9 +90,8 @@ func TestManualTurnsWordDetectionOff(t *testing.T) {
 		t.Errorf("under manual %q breaks as %q, want no opportunity in it",
 			unknown, got)
 	}
-	if wb, unhandled := WordBreakOf("manual"); !wb.Manual || unhandled != "" {
-		t.Errorf(`WordBreakOf("manual") = %+v, %q; the value is read and not reported`,
-			wb, unhandled)
+	if wb := WordBreakOf("manual"); !wb.Manual {
+		t.Errorf(`WordBreakOf("manual") = %+v; the value is read`, wb)
 	}
 }
 

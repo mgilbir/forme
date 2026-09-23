@@ -137,12 +137,12 @@ func TestAutoIsNotNormal(t *testing.T) {
 	// and not about two structs: reading "normal" as the zero value is exactly
 	// the mistake this records, and a test that built the struct itself would
 	// not see it.
-	auto, _ := LineBreakOf("auto")
-	normal, _ := LineBreakOf("normal")
+	auto := LineBreakOf("auto")
+	normal := LineBreakOf("normal")
 	if auto == normal {
 		t.Fatalf("auto and normal read as the same value, %+v", auto)
 	}
-	if absent, _ := LineBreakOf(""); absent != auto {
+	if absent := LineBreakOf(""); absent != auto {
 		t.Errorf("no value at all read as %+v and auto as %+v", absent, auto)
 	}
 	for _, r := range []rune{0x301C, 0x30A0} {

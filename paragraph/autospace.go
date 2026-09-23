@@ -83,69 +83,86 @@ func AutospaceOf(value string) (Autospace, string) {
 
 // IsAutospaceIdeograph reports whether a character is one of §8.1's ideographs.
 //
-// The specification names the scripts rather than a property, and the scripts
-// are the ones written without word spaces: Han, and the two Japanese syllabaries
-// that are set among it. Bopomofo and Yi are here with them because they are
-// used the same way and are what "ideograph" means in the sentence, and because
-// leaving them out would space a Bopomofo annotation and not the Han it
-// annotates.
+// CSS Text 4 lists them, and this is the list:
 //
-// The iteration marks and the prolonged sound mark are ideographs by use rather
-// than by script — U+3005 repeats the Han character before it, U+30FC lengthens
-// the kana before it — and Unicode gives them the Common script, so a test on
-// the script alone would put a boundary in the middle of a Japanese word.
+//	All characters in the range of U+3041 to U+30FF, except those that belong
+//	to Unicode Punctuation [P*] general category.
+//	CJK Strokes (U+31C0 to U+31EF).
+//	Katakana Phonetic Extensions (U+31F0 to U+31FF).
+//	All characters that have the Han extended script property.
+//
+// It used to be a set of scripts — Han, the two kana, and Bopomofo and Yi with
+// them — with a hand-kept list of Common-script marks beside it. That read the
+// sentence rather than the list, and it answered differently at the edges: the
+// double hyphen U+30A0 is punctuation and was an ideograph here, and Bopomofo and
+// Yi are in no line of the list. The iteration and prolonged-sound marks the old
+// list named one by one are all inside U+3041..U+30FF or are Han, so the list
+// takes them in without naming them.
+//
+// # What the list is under review for, and which reading this takes
+//
+// The specification carries Issue 9503 beside these definitions: "classes and
+// Unicode code points are under review". This implements the text as it
+// stands, and two of its consequences are ones that issue may change:
+//
+//   - Halfwidth katakana are not in the list, and they are letters whose East
+//     Asian Width is H, so they are *non-ideographic letters* and are spaced
+//     from an ideograph beside them. This engine used to carve them out by
+//     script, which was a reading of what the list is for rather than of the
+//     list.
+//   - "Han extended script property" is Script_Extensions, which this engine
+//     does not carry. Script is read instead, so the Common-script characters
+//     whose extensions name Han — the ideographic comma and full stop, the CJK
+//     brackets, the kanbun marks, the parenthesised and circled ideographs — are
+//     not ideographs here, where the text would make them so.
 func IsAutospaceIdeograph(r rune) bool {
-	switch r {
-	case 0x3005, // IDEOGRAPHIC ITERATION MARK
-		0x3006, // IDEOGRAPHIC CLOSING MARK
-		0x3007, // IDEOGRAPHIC NUMBER ZERO
-		0x303B, // VERTICAL IDEOGRAPHIC ITERATION MARK
-		0x30FC, // KATAKANA-HIRAGANA PROLONGED SOUND MARK
-		0x30A0, // KATAKANA-HIRAGANA DOUBLE HYPHEN
-		0x309D, // HIRAGANA ITERATION MARK
-		0x309E, // HIRAGANA VOICED ITERATION MARK
-		0x30FD, // KATAKANA ITERATION MARK
-		0x30FE, // KATAKANA VOICED ITERATION MARK
-		// The halfwidth twins of two of the above. Unicode gives these the
-		// Common script as it does U+30FC, and category Lm — so unlike
-		// U+309B/U+309C, which are Sk and are no letter to anything, these are
-		// letters to unicode.IsLetter and would be §8.1's *other side*. That
-		// puts an eighth of an em between a halfwidth kana and its own dakuten,
-		// which is inside a word: "ｼﾞ" is one syllable.
-		0xFF70, // HALFWIDTH KATAKANA-HIRAGANA PROLONGED SOUND MARK
-		0xFF9E, // HALFWIDTH KATAKANA VOICED SOUND MARK
-		0xFF9F: // HALFWIDTH KATAKANA SEMI-VOICED SOUND MARK
+	switch {
+	case r >= 0x3041 && r <= 0x30FF:
+		return !unicode.IsPunct(r)
+	case r >= 0x31C0 && r <= 0x31FF:
 		return true
 	}
-	return unicode.Is(unicode.Han, r) ||
-		unicode.Is(unicode.Hiragana, r) ||
-		unicode.Is(unicode.Katakana, r) ||
-		unicode.Is(unicode.Bopomofo, r) ||
-		unicode.Is(unicode.Yi, r)
+	return inRanges(r, hanRanges[:])
 }
 
 // IsAutospaceLetter reports whether a character is one of §8.1's *non-ideographic*
-// letters, which is the other side of an ideograph-alpha boundary.
+// letters, which is the other side of an ideograph-alpha boundary:
 //
-// A letter that is not an ideograph, and the halfwidth kana are carved out of it
-// by the test above rather than here: they are Katakana script, so they are
-// ideographs to this and no boundary is put between a halfwidth kana and the
-// fullwidth one beside it.
+//	all typographic character units that belong to Unicode Letters [L*] and
+//	Mark [M*] general category, except when [...] is defined as ideograph [or]
+//	is categorized as East Asian Wide (W) or Fullwidth (F) by UAX11.
+//
+// The width clause is the one this was missing, and it is not a detail. A
+// Hangul syllable is a letter and is Wide, so mixed-script Korean — a Hanja
+// beside the syllable it annotates — was given an eighth of an em between the
+// two; and a fullwidth "Ａ" is set on the ideographic advance among ideographs,
+// and was spaced from each of them. Neither is the boundary between two writing
+// systems the value is about.
+//
+// A mark is a letter to the specification, and it is here through the unit it
+// belongs to: the boundary is judged by the unit's base (see AutospaceBase), so
+// a mark on its own never reaches this.
+//
+// The specification's third exception, a character set upright in vertical
+// text, is a fact about the box rather than the character and is layout's.
 func IsAutospaceLetter(r rune) bool {
-	return unicode.IsLetter(r) && !IsAutospaceIdeograph(r)
+	return unicode.IsLetter(r) && !IsAutospaceIdeograph(r) && !wideOrFullwidth(r)
 }
 
 // IsAutospaceNumeral reports whether a character is one of §8.1's
-// non-ideographic numerals: a decimal digit that is not full-width.
+// non-ideographic numerals: a decimal digit whose East Asian Width is not F.
 //
-// The full-width digits are excluded because they are set on the ideographic
-// advance and among ideographs — "第１章" is one word to a reader — and putting an
-// eighth of an em on each side of the digit would break it apart.
+// A fullwidth digit is set on the ideographic advance and among ideographs —
+// "第１章" is one word to a reader — and putting an eighth of an em on each side
+// of it would break it apart.
 func IsAutospaceNumeral(r rune) bool {
-	if r >= 0xFF10 && r <= 0xFF19 {
-		return false
-	}
-	return unicode.Is(unicode.Nd, r)
+	return unicode.Is(unicode.Nd, r) && !inRanges(r, eastAsianFullwidthRanges[:])
+}
+
+// wideOrFullwidth reports whether a character's East Asian Width is W or F:
+// the wide table, which holds H as well, less H.
+func wideOrFullwidth(r rune) bool {
+	return inRanges(r, eastAsianWideRanges[:]) && !inRanges(r, eastAsianHalfwidthRanges[:])
 }
 
 // AutospaceBase is the character a boundary is judged by when combining marks

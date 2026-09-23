@@ -369,16 +369,19 @@ func BindsToAtomicInline(r rune) bool {
 // see the difference — and for a paragraph with no such text in it, it would
 // not, because there are no phrases in it to keep whole.
 //
-// Ideographic is the test, which is Han, hiragana and katakana together. That is
-// the writing the rule is about; it is a wider net than any one language and
-// errs towards reporting, which is the safe direction for a finding.
+// Han, hiragana and katakana are the test, by script. That is the writing the
+// rule is about; it is a wider net than any one language and errs towards
+// reporting, which is the safe direction for a finding. It used to be
+// IsIdeographic, which is UAX #14's ID class and holds Hangul and the emoji as
+// well, so a zh-tagged box whose only "ideographs" were emoji or Hangul was told
+// its phrases could not be found. Audit C174.
 //
 // It is half of the question. The other half is which language the text is
 // declared to be, because §5.2 gives the value effect only where the UA has a
 // model for it — see PhrasesUnfound, which asks both.
 func NeedsPhraseBreaking(text string) bool {
 	for _, r := range text {
-		if IsIdeographic(r) {
+		if isHanOrKana(r) {
 			return true
 		}
 	}

@@ -39,10 +39,10 @@ import (
 // can check. The Makefile's phrases target takes the language as an argument, so
 // adding one is fetching a file.
 //
-// The text is one box's, as everywhere else in this package. A phrase split
-// across an inline boundary is two runs and is scored as two, which loses the
-// context either side of the boundary: "東京<span>へ</span>行きましょう。" is
-// three runs and none of them has the window the model needs.
+// The text is one box's, as everywhere else in this package, and the model's
+// window reaches past it: the characters either side of the box are carried in
+// (see Carried.PhraseBefore), so "東京<span>へ</span>行きましょう。" is scored as
+// the one sentence it is.
 
 // phraseModel is BudouX's model: a weight for each of thirteen features of the
 // text around a boundary, and the score a boundary starts from.
@@ -212,6 +212,58 @@ func PhraseBreaks(text string, w WritingSystem) map[int]bool {
 	return out
 }
 
+// PhraseContext is how many characters either side of a boundary the model
+// reads: three, singly, in pairs and in triples. See scorePhrases.
+const PhraseContext = 3
+
+// PhraseBreaksBetween is PhraseBreaks for a run with the text either side of
+// it, keyed by offset into text alone.
+//
+// The model is run over the three together and the answers for text's own
+// boundaries are kept — which now include its first, where before is not empty:
+// that boundary is between this run and the last one, and whether a phrase
+// begins there is what decides whether the opportunity a box boundary carries
+// in is one "auto-phrase" withholds. A boundary at text's end is left to the run
+// that begins there.
+func PhraseBreaksBetween(before, text, after string, w WritingSystem) map[int]bool {
+	if before == "" && after == "" {
+		return PhraseBreaks(text, w)
+	}
+	all := PhraseBreaks(before+text+after, w)
+	var out map[int]bool
+	for at, boundary := range all {
+		rel := at - len(before)
+		if rel < 0 || rel >= len(text) {
+			continue
+		}
+		if out == nil {
+			out = map[int]bool{}
+		}
+		out[rel] = boundary
+	}
+	return out
+}
+
+// lastRunes is the last n characters of s.
+func lastRunes(s string, n int) string {
+	i := len(s)
+	for ; n > 0 && i > 0; n-- {
+		_, size := utf8.DecodeLastRuneInString(s[:i])
+		i -= size
+	}
+	return s[i:]
+}
+
+// FirstRunes is the first n characters of s.
+func FirstRunes(s string, n int) string {
+	i := 0
+	for ; n > 0 && i < len(s); n-- {
+		_, size := utf8.DecodeRuneInString(s[i:])
+		i += size
+	}
+	return s[:i]
+}
+
 // hasJapaneseScript reports whether a run has anything in it the model is about.
 // It is asked first so that a run with none — which is almost every run in
 // almost every document, even under a Japanese language tag — costs one scan
@@ -282,10 +334,17 @@ func (m *phraseModel) scorePhrases(s string, found func(at int, boundary bool)) 
 // about.
 //
 // Japanese is written in three scripts at once and punctuated in a fourth, so
-// this is several blocks and not one: Han, hiragana, katakana in both their
-// widths, and the CJK symbols and punctuation that separate them. The fullwidth
-// forms are here for the same reason the halfwidth katakana are — a document
-// that writes "０１" writes Japanese digits, and the model has weights for them.
+// this is the three scripts and the blocks of punctuation and forms that are
+// written among them: Han and the two kana by Unicode's Script property, and the
+// CJK symbols and punctuation, the kana blocks' own Common-script marks, and the
+// fullwidth and halfwidth forms by block. The fullwidth forms are here for the
+// same reason the halfwidth katakana are — a document that writes "０１" writes
+// Japanese digits, and the model has weights for them.
+//
+// The scripts come from the generated tables and not from a list of ranges typed
+// here, which is what they were: the list ended at U+2FA1F, so the ideographs of
+// extensions G and H, which Unicode puts at U+30000 and above, were outside the
+// model while the line breaker broke beside them as ideographs. Audit C174.
 //
 // It is deliberately not IsIdeographic, which includes Hangul: Korean is not
 // what this model was trained on, and a Korean paragraph tagged as Japanese
@@ -296,20 +355,17 @@ func inJapaneseScript(r rune) bool {
 	switch {
 	case r >= 0x3000 && r <= 0x303F: // CJK symbols and punctuation
 		return true
-	case r >= 0x3040 && r <= 0x30FF: // Hiragana and katakana
+	case r >= 0x3040 && r <= 0x30FF: // the kana blocks, with their Common marks
 		return true
-	case r >= 0x31F0 && r <= 0x31FF: // Katakana phonetic extensions
-		return true
-	case r >= 0x3400 && r <= 0x4DBF: // CJK unified ideographs, extension A
-		return true
-	case r >= 0x4E00 && r <= 0x9FFF: // CJK unified ideographs
-		return true
-	case r >= 0xF900 && r <= 0xFAFF: // CJK compatibility ideographs
-		return true
-	case r >= 0xFF01 && r <= 0xFF9F: // Fullwidth forms and halfwidth katakana
-		return true
-	case r >= 0x20000 && r <= 0x2FA1F: // Extension B and beyond
+	case r >= 0xFF01 && r <= 0xFF9F: // fullwidth forms and halfwidth katakana
 		return true
 	}
-	return false
+	return isHanOrKana(r)
+}
+
+// isHanOrKana reports whether a character's script is Han, Hiragana or
+// Katakana: the writing a phrase model is about, without the punctuation it is
+// punctuated with.
+func isHanOrKana(r rune) bool {
+	return inRanges(r, hanRanges[:]) || inRanges(r, kanaRanges[:])
 }

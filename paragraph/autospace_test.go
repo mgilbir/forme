@@ -47,13 +47,17 @@ func TestAutospaceOfReadsTheValue(t *testing.T) {
 	}
 }
 
-// TestWhichCharactersAreIdeographs.
+// TestWhichCharactersAreIdeographs is CSS Text 4's list, row by row: U+3041 to
+// U+30FF less its punctuation, the CJK strokes, the katakana phonetic
+// extensions, and Han.
 //
-// The scripts are the ones written without word spaces, and the entries that
-// matter are the ones a script test alone gets wrong: an iteration mark repeats
-// the character before it and a prolonged sound mark lengthens the kana before
-// it, and Unicode gives both the Common script — so testing the script alone
-// would put a boundary in the middle of a Japanese word.
+// The entries that matter are the ones a script test alone gets wrong in either
+// direction: an iteration mark and the prolonged sound mark are Common script
+// and are in the list's range, and the double hyphen U+30A0 is in the range and
+// is punctuation, so it is not. Bopomofo and the halfwidth katakana are in no
+// row of the list — this engine used to count both, by script — and are not
+// ideographs; the halfwidth katakana are letters instead (see
+// TestWhichCharactersAreTheOtherSide).
 func TestWhichCharactersAreIdeographs(t *testing.T) {
 	for _, tc := range []struct {
 		r    rune
@@ -66,8 +70,14 @@ func TestWhichCharactersAreIdeographs(t *testing.T) {
 		{0x20000, true, "a Han ideograph above the BMP"},
 		{'あ', true, "hiragana"},
 		{'ア', true, "katakana"},
-		{'ｱ', true, "halfwidth katakana, which is katakana all the same"},
-		{'ㄅ', true, "bopomofo"},
+		{'ｱ', false, "halfwidth katakana, which no row of the list names"},
+		{'ㄅ', false, "bopomofo, which no row of the list names"},
+		{0x30A0, false, "the double hyphen, which is in the range and is punctuation"},
+		{0x30FB, false, "the katakana middle dot, likewise"},
+		{0x3099, true, "the combining voiced sound mark, which is in the range"},
+		{0x31C0, true, "a CJK stroke"},
+		{0x31F0, true, "a katakana phonetic extension"},
+		{0x31350, true, "a Han ideograph of extension H, which Go's own tables predate"},
 		{0x3005, true, "the ideographic iteration mark, which Unicode calls Common"},
 		{0x30FC, true, "the prolonged sound mark, which Unicode calls Common"},
 		{0x309D, true, "the hiragana iteration mark"},
@@ -100,7 +110,14 @@ func TestWhichCharactersAreTheOtherSide(t *testing.T) {
 		{'д', true, false, "Cyrillic"},
 		{'א', true, false, "Hebrew"},
 		{'م', true, false, "Arabic"},
-		{'가', true, false, "Hangul, a letter that is not an ideograph"},
+		// The width clause: a letter that is Wide or Fullwidth is not the other
+		// side, so neither Korean beside a Hanja nor a fullwidth Latin letter
+		// among ideographs is spaced. Audit C119.
+		{'가', false, false, "Hangul, a letter whose East Asian Width is W"},
+		{'Ａ', false, false, "a fullwidth Latin letter"},
+		{'ｱ', true, false, "halfwidth katakana, a letter whose width is H"},
+		{0xFFA1, true, false, "a halfwidth Hangul letter, likewise"},
+		{'ㄅ', false, false, "bopomofo, which is neither: not listed, and Wide"},
 		{'国', false, false, "an ideograph is neither"},
 		{'あ', false, false, "kana is neither"},
 		{'1', false, true, "a digit"},
@@ -251,18 +268,19 @@ func TestSplitAtAutospaceCutsWhereTheGapGoes(t *testing.T) {
 
 // TestAHalfwidthSoundMarkIsNotTheOtherSideOfABoundary.
 //
-// The three halfwidth marks Unicode gives the Common script — the prolonged
-// sound mark and the two voiced sound marks — are Lm, so unicode.IsLetter is
-// true for every one of them. That is enough on its own: a character that is
-// not an ideograph and is a letter is §8.1's *other side*, and the eighth of an
-// em then opens inside a Japanese word. "ｼﾞ" is the shape — a halfwidth katakana
-// and its own dakuten, one syllable to a reader and two characters to a table.
-//
-// Their fullwidth twins are already ideographs here: U+30FC is in the list by
-// name, and U+309B/U+309C escape by being Sk rather than a letter. The halfwidth
-// three had neither protection, which is why the suite's
+// "ｼﾞ" is the shape: a halfwidth katakana and its own dakuten, one syllable to a
+// reader and two characters to a table. The suite's
 // hanging-punctuation-allow-end-001 measured its halfwidth rows an eighth of an
-// em per syllable too wide and broke its lines early.
+// em per syllable too wide when the katakana was an ideograph and its mark a
+// letter, and broke its lines early.
+//
+// CSS Text 4's list names neither, so both are letters — the katakana is Lo and
+// the three marks Lm, and all four are width H — and a boundary between two
+// letters is not one §8.1 spaces. That was once got by calling all four
+// ideographs; the list says the other thing and it gives the same answer here.
+// What differs is the boundary with a fullwidth ideograph, which the list
+// spaces: that is the reading of Issue 9503's "classes under review" this takes,
+// and it is stated at IsAutospaceIdeograph.
 func TestAHalfwidthSoundMarkIsNotTheOtherSideOfABoundary(t *testing.T) {
 	for _, tc := range []struct {
 		r    rune
@@ -272,11 +290,8 @@ func TestAHalfwidthSoundMarkIsNotTheOtherSideOfABoundary(t *testing.T) {
 		{0xFF9E, "the halfwidth voiced sound mark"},
 		{0xFF9F, "the halfwidth semi-voiced sound mark"},
 	} {
-		if !IsAutospaceIdeograph(tc.r) {
-			t.Errorf("%s (U+%04X) is not an ideograph to §8.1", tc.what, tc.r)
-		}
-		if IsAutospaceLetter(tc.r) {
-			t.Errorf("%s (U+%04X) is §8.1's other side, so a gap opens beside it",
+		if IsAutospaceIdeograph(tc.r) || !IsAutospaceLetter(tc.r) || !IsAutospaceLetter('ｼ') {
+			t.Errorf("%s (U+%04X) and the katakana it follows are not both letters",
 				tc.what, tc.r)
 		}
 	}

@@ -21,10 +21,7 @@ import "testing"
 // treat as Chinese or Japanese.
 func splitLoose(t *testing.T, text, value string) string {
 	t.Helper()
-	lb, unhandled := LineBreakOf(value)
-	if unhandled != "" {
-		t.Fatalf("%q was reported as unhandled: %q", value, unhandled)
-	}
+	lb := LineBreakOf(value)
 	lb.ChineseOrJapanese = true
 	pieces, _ := SplitAtBreaks(text, WhiteSpace{Collapse: true, Wrap: true},
 		WordBreak{}, lb, Hyphens{}, WritingSystemOther)
@@ -120,7 +117,7 @@ func TestTheOtherHalfOfTheSentenceStillHolds(t *testing.T) {
 			value string
 			begin bool
 		}{{"auto", false}, {"normal", false}, {"strict", false}, {"loose", true}} {
-			lb, _ := LineBreakOf(tc.value)
+			lb := LineBreakOf(tc.value)
 			if got := MayNotBeginLine(string(r), lb); got == tc.begin {
 				t.Errorf("%#04X under %q: may not begin a line = %v, want %v",
 					r, tc.value, got, !tc.begin)

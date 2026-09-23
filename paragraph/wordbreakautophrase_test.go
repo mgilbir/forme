@@ -24,10 +24,7 @@ import (
 // keepAll is: the value is what a document writes.
 func autoPhrase(t *testing.T) WordBreak {
 	t.Helper()
-	wb, unhandled := WordBreakOf("auto-phrase")
-	if unhandled != "" {
-		t.Fatalf("auto-phrase was reported as unhandled: %q", unhandled)
-	}
+	wb := WordBreakOf("auto-phrase")
 	if !wb.AutoPhrase {
 		t.Fatal("auto-phrase read as some other value")
 	}

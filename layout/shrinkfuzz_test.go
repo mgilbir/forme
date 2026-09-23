@@ -260,8 +260,13 @@ func TestTheSpacingThatHangsIsNotAnOverflow(t *testing.T) {
 // glyphs with the same gap between them need the same room whichever way they
 // are read. That is a stronger statement than either width on its own, and it is
 // the one that failed — the left-to-right measurement was right the whole time.
+//
+// The fuzzer found it with U+3331, a squared katakana word. That is not one of
+// CSS Text 4's ideographs — the list is U+3041..U+30FF, the strokes and
+// phonetic extensions, and Han — so it opens no gap any more, and the fixture is
+// the same shape with a Han ideograph in its place. See IsAutospaceIdeograph.
 func TestTheIdeographGapInsideARightToLeftLineIsNotDiscounted(t *testing.T) {
-	const text = "㌱ب"
+	const text = "国ب"
 	w, _ := style.FromPx(100000)
 	h, _ := style.FromPx(10000)
 	width := func(decl string) style.Unit {

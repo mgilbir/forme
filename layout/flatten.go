@@ -762,10 +762,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	// around it grow the line it is on.
 	above, below := l.leading(b)
 	ow := overflowWrapOf(b.Style)
-	wb, unhandled := wordBreakOf(b.Style.Get("word-break"))
-	if unhandled != "" {
-		l.reportWordBreak(b, unhandled)
-	}
+	wb := wordBreakOf(b.Style.Get("word-break"))
 	// What the box's declarations turn off in the face, which changes what it
 	// substitutes and so changes every advance below. See fontfeatures.go.
 	off := l.featuresFor(b)
@@ -777,21 +774,18 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		// the page reveals as a missing feature. See paragraph.PhrasesUnfound.
 		l.reportWordBreak(b, "auto-phrase")
 	}
-	lb, _ := lineBreakOf(b.Style.Get("line-break"))
+	lb := lineBreakOf(b.Style.Get("line-break"))
 	// §5.3's loose tailoring is qualified "in Chinese and Japanese", and which
 	// of those the text is comes from the language tag's *script* rather than
 	// from the property. See paragraph.WritingSystemOf.
 	lb.ChineseOrJapanese = boxWritingSystem(b).ChineseOrJapanese()
-	hy, unhandledHyphens := hyphensOf(b.Style.Get("hyphens"))
+	hy := hyphensOf(b.Style.Get("hyphens"))
 	if hy.Auto && !hyphenatesLanguage(boxHyphenation(b)) {
 		// "auto" asks for the language's own dictionary, and there are four
 		// here. A document in another gets the manual behaviour and is told so
 		// — which is the report that used to be raised for every "auto"
 		// whatever the language.
-		unhandledHyphens = "auto"
-	}
-	if unhandledHyphens != "" {
-		l.reportHyphens(b, unhandledHyphens)
+		l.reportHyphens(b, "auto")
 	}
 	// text-autospace is applied between two runs rather than inside one — see
 	// autospace.go — so nothing here reads the value. What is read here is
@@ -808,6 +802,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		Offered: in.BreakOpportunity, Deferred: in.AfterDeferred,
 		Held: in.AfterHeld, Taken: in.AfterTaken, Prev: in.AfterRune,
 		Before:         in.AfterText,
+		PhraseBefore:   in.AfterPhrase,
 		SpaceMayTakeIt: boundaryBreakSpaces,
 	}
 	// And the other direction, which is read off the tree rather than carried:
@@ -829,6 +824,14 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	// without one.
 	if needsFollowingCharacter(lastRuneOf(b.Text), lb, hy) {
 		carried.Next = firstRuneOf(l.textAfter(b, utf8.UTFMax))
+	}
+	// And the characters after this box that the phrase model reads from the
+	// boundaries near its end, which is the same walk once more. Asked only
+	// under the value that uses them and in a language with a model, which is
+	// almost never. See paragraph.Carried.PhraseBefore.
+	if wb.AutoPhrase && paragraph.HasPhraseModel(boxWritingSystem(b)) {
+		carried.PhraseAfter = paragraph.FirstRunes(
+			l.textAfter(b, paragraph.PhraseContext*utf8.UTFMax), paragraph.PhraseContext)
 	}
 	if carried.Offered && in.AfterAtomic && bindsToAtomicInline(b.Text) {
 		carried.Offered = false
@@ -1195,6 +1198,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		// the scan is what did the segmenting — and it says about a word rather
 		// than the whole run. See paragraph.Trailing.DictTail.
 		AfterText:       trailing.DictTail,
+		AfterPhrase:     trailing.PhraseTail,
 		AfterLetterUnit: state.AfterLetterUnit,
 		AfterBox:        b,
 	}

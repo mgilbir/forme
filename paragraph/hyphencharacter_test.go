@@ -45,7 +45,7 @@ func TestALineEndsAfterAHyphenWhicheverHyphenItIs(t *testing.T) {
 // under "hyphens: none" in six characters of room, and it wants five lines.
 func TestTheHyphensPropertyDoesNotReachAWrittenHyphen(t *testing.T) {
 	for _, value := range []string{"none", "manual", "auto", ""} {
-		hy, _ := HyphensOf(value)
+		hy := HyphensOf(value)
 		pieces, _ := SplitAtBreaks("regu‐lation",
 			WhiteSpace{Collapse: true, Wrap: true}, WordBreak{}, LineBreak{}, hy, WritingSystemOther)
 		out := ""
@@ -94,7 +94,7 @@ func TestALineStillMayNotBeginWithAnUnambiguousHyphen(t *testing.T) {
 			value string
 			begin bool
 		}{{"auto", false}, {"normal", false}, {"strict", false}, {"loose", true}} {
-			lb, _ := LineBreakOf(tc.value)
+			lb := LineBreakOf(tc.value)
 			if got := MayNotBeginLine(string(r), lb); got == tc.begin {
 				t.Errorf("%#04X under %q: may not begin a line = %v, want %v",
 					r, tc.value, got, !tc.begin)

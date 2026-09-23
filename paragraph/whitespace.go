@@ -53,13 +53,12 @@ import (
 //
 // # What is left out
 //
-// Bidi formatting characters are not "ignored as if they were not there" while
-// white space is collapsed, as §4.1.1 requires: a formatting character between
-// two spaces stops them collapsing into one. They *are* kept out of the way
-// everywhere it matters afterwards — the algorithm removes them from its own
-// view (rule X9) and the shaper draws nothing for them — so the cost is a
-// stray space's width in a document that puts a directional control in the
-// middle of one, and not text in the wrong order.
+// Nothing here, as far as bidi formatting characters go. §4.1.1 requires them
+// to be "ignored as if they were not there" while white space is collapsed,
+// and they are: a control met in a run of white space is held back rather than
+// written (see pending in CollapseWhitespaceAfter), so the spaces either side
+// of it are one run and collapse into one space, and the control is written
+// after it.
 
 // WhiteSpace is what the property sets, which is three independent bits and one
 // variant. Modelling it as the bits rather than as six keywords is what stops
@@ -140,12 +139,12 @@ func WhiteSpaceOf(value string) WhiteSpace {
 // WordBreak is what the word-break property sets: whether a line may end
 // between two characters of a word rather than only between words.
 //
-// CSS Text §5.2 gives it five values and four of them are here: "normal" is the
-// zero value, and break-all, keep-all and manual are each a field below. Only
-// "auto-phrase" is read as normal, and it is *reported* — a value that moves a
-// break and is silently ignored produces a line broken where the author asked
-// it not to be. See PhrasesUnfound, which is what asks whether this engine has
-// a model for the text at all.
+// CSS Text §5.2 gives it five values and all five are here: "normal" is the
+// zero value, and the other four are each a field below. "auto-phrase" is done
+// where this engine has a phrase model for the language, and read as normal and
+// *reported* where it has none — a value that moves a break and is silently
+// ignored produces a line broken where the author asked it not to be. See
+// PhrasesUnfound.
 type WordBreak struct {
 	// BreakAll allows a line to end at any typographic character unit boundary
 	// inside a word, which is the grapheme cluster — see package segment for
@@ -174,50 +173,51 @@ type WordBreak struct {
 	// word-break-manual-001 puts Thai in a box no characters wide and asks for
 	// it to come out exactly as it does in a box with room.
 	Manual bool
-	// AutoPhrase is §5.2's "auto-phrase", of which this engine does one half.
+	// AutoPhrase is §5.2's "auto-phrase".
 	//
 	// The value has two effects and they are separable. It allows a line to end
-	// only at a phrase boundary, which needs a morphological analysis of
-	// Japanese and is not implemented — NeedsPhraseBreaking is what says so, per
-	// box, of the text that would need it. And it *suppresses hyphenation*,
-	// which needs nothing and is implemented: a word divided at a phrase
-	// boundary should not also be divided inside itself, so a hyphen becomes a
-	// break of last resort rather than an opportunity like any other.
-	//
-	// The second half is the whole of the value for text with no Japanese in it,
-	// which is why a document can now ask for it and be right. See
-	// Item.HyphenLastResort.
+	// only at a phrase boundary, which needs an analysis of the language: there
+	// is a model for Japanese (see PhraseBreaks), and for any other language
+	// with phrases in it the value is read as normal and reported (see
+	// PhrasesUnfound). And it *suppresses hyphenation*, which needs nothing: a
+	// word divided at a phrase boundary should not also be divided inside
+	// itself, so a hyphen becomes a break of last resort rather than an
+	// opportunity like any other. See Item.HyphenLastResort.
 	AutoPhrase bool
 }
 
-// WordBreakOf reads the property. The second result is the value to report as
-// unhandled, or the empty string.
+// WordBreakOf reads the property.
 //
 // As with white-space, an unrecognised value gives the initial one rather than a
 // guess: normal is the value that breaks in the fewest places, so a
 // misinterpretation overflows a line rather than cutting a word open.
-func WordBreakOf(value string) (WordBreak, string) {
+//
+// It returned a second result, "the value to report as unhandled", which no
+// value ever set: every keyword is handled here, and what is left to report of
+// auto-phrase is a question about the text rather than the declaration. The
+// result was read and reported by a caller that could never see it filled.
+// Audit C178.
+func WordBreakOf(value string) WordBreak {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "break-all":
-		return WordBreak{BreakAll: true}, ""
+		return WordBreak{BreakAll: true}
 	case "keep-all":
-		return WordBreak{KeepAll: true}, ""
+		return WordBreak{KeepAll: true}
 	case "manual":
-		return WordBreak{Manual: true}, ""
+		return WordBreak{Manual: true}
 	case "auto-phrase":
-		// Not reported here. Half of what it asks for is done, and whether the
-		// other half is missing is a question about the *text* — see
-		// NeedsPhraseBreaking, and layout's flatten.go, which asks it.
-		return WordBreak{AutoPhrase: true}, ""
+		// Not reported here: whether this engine can find the phrases is a
+		// question about the *text* and its language — see PhrasesUnfound, and
+		// layout's flatten.go, which asks it.
+		return WordBreak{AutoPhrase: true}
 	case "break-word":
 		// Normal, and deliberately: the value's whole effect is on
 		// overflow-wrap, which OverflowWrapOf reads for itself. It is named here
 		// so that it is visibly handled rather than falling through with the
-		// misspellings — and so that it is not reported as a value this engine
-		// ignores, which it no longer does.
-		return WordBreak{}, ""
+		// misspellings.
+		return WordBreak{}
 	}
-	return WordBreak{}, ""
+	return WordBreak{}
 }
 
 // LineBreak is what the line-break property sets: how strict the rules are about
@@ -270,21 +270,20 @@ type LineBreak struct {
 // as against "auto".
 func (lb LineBreak) Tailored() bool { return lb.Strict || lb.Normal || lb.Loose }
 
-// LineBreakOf reads the property. The second result is the value to report as
-// unhandled, or the empty string — and reporting it is still conditional on the
-// text, which is the caller's decision rather than this one's.
-func LineBreakOf(value string) (LineBreak, string) {
+// LineBreakOf reads the property. All four values are handled, so there is
+// nothing to report; see WordBreakOf for the second result this used to return.
+func LineBreakOf(value string) LineBreak {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "anywhere":
-		return LineBreak{Anywhere: true}, ""
+		return LineBreak{Anywhere: true}
 	case "strict":
-		return LineBreak{Strict: true}, ""
+		return LineBreak{Strict: true}
 	case "loose":
-		return LineBreak{Loose: true}, ""
+		return LineBreak{Loose: true}
 	case "normal":
-		return LineBreak{Normal: true}, ""
+		return LineBreak{Normal: true}
 	}
-	return LineBreak{}, ""
+	return LineBreak{}
 }
 
 // OverflowWrap is what the overflow-wrap property sets: whether a word with
@@ -773,10 +772,9 @@ func SpacesForReturns(text string) string {
 // isCollapsibleSpace is the set CSS 2.1 §16.6.1 calls white space in the source.
 //
 // A no-break space is deliberately absent: it is not white space for this
-// purpose, which is the whole reason an author writes one. A form feed is
-// present and is treated as a space rather than as a segment break — CSS Text
-// defines a segment break in terms of the document's newlines, and no HTML
-// parser produces a line from a form feed.
+// purpose, which is the whole reason an author writes one. So is a form feed,
+// which UAX #14 makes a mandatory break (see IsMandatoryBreak) and which this
+// engine therefore ends a line at rather than collapsing.
 func isCollapsibleSpace(c byte) bool {
 	return c == ' ' || c == '\t' || c == '\n' || c == '\r'
 }
@@ -861,9 +859,9 @@ func IsOtherSpaceSeparator(r rune) bool {
 // says every one of these hangs, and UAX #14 says only some of them offer a
 // soft wrap opportunity. The two that do not are the two that are no-break
 // characters by name — U+2007 FIGURE SPACE, which holds a column of digits
-// together, and U+202F NARROW NO-BREAK SPACE — and both are class GL. The rest
-// are class BA, except U+3000, which is class ID and breaks on both sides like
-// the ideographs it is spaced among.
+// together, and U+202F NARROW NO-BREAK SPACE — and both are class GL. The rest,
+// U+3000 IDEOGRAPHIC SPACE among them, are class BA: a line may end after one
+// and not in front of it.
 //
 // break-spaces does *not* override it, and was read as doing so. The value puts
 // an opportunity "after every preserved white space character", and CSS Text

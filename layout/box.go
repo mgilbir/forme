@@ -552,6 +552,15 @@ type boxBuilder struct {
 	// apostrophe does not, and the character that tells them apart is in the
 	// next node. See paragraph.WordState.
 	afterWord paragraph.WordState
+	// caseContext and openSigma are Final_Sigma's half of the same question,
+	// carried and reset exactly where afterWord is: whether a cased letter
+	// came before this point, and the box whose text ends in a ς that was
+	// lowercased as final before the text after it had been seen. In
+	// "ΟΔΟΣ<b>ΑΚΙ</b>" the Σ is inside a word, and only the second node can
+	// say so. See paragraph.CaseContext.
+	caseContext paragraph.CaseContext
+	openSigma   *Box
+	openSigmaAt int
 	// boundary is the text built so far, as much of it as §4.1.1's segment
 	// break rules need: the last rune written and the last one a reader would
 	// see. It is carried for the reason afterWord is — the walk visits text in
@@ -771,6 +780,7 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		// "Questions", which is what text-transform-cap-003 asks for by writing
 		// its expectation out in full.
 		b.afterWord = paragraph.WordClosed
+		b.closeCaseContext()
 		// And the boundary with it, for the reason above rather than for an
 		// observable one: a segment break at the start or the end of a block is
 		// at the edge of a line, and §4.1.2 removes the space it would become
@@ -852,6 +862,7 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		// whatever comes after it. An out-of-flow one still does not, for the
 		// reason above.
 		b.afterWord = paragraph.WordClosed
+		b.closeCaseContext()
 		// And the boundary with it, for the reason above rather than for an
 		// observable one: a segment break at the start or the end of a block is
 		// at the edge of a line, and §4.1.2 removes the space it would become
@@ -1088,7 +1099,12 @@ func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSi
 	// IDEOGRAPHIC SPACE, which is not collapsible, so transforming first would
 	// turn a run of spaces into a run of spaces nothing may collapse. It is also
 	// what lets "capitalize" see the word boundaries the reader will.
-	text, b.afterWord = transformText(text, kind, b.afterWord, languageAt(n))
+	// A sigma the text before this lowercased as final is final only if no
+	// cased letter follows it, and this is the text that follows it.
+	b.settleSigma(text)
+	var openSigma int
+	text, b.afterWord, b.caseContext, openSigma = transformTextIn(text, kind, b.afterWord,
+		languageAt(n), b.caseContext)
 	// After the transform rather than before it, because what the next node
 	// follows is the text that will be on the page: "full-width" turns a space
 	// into U+3000, which nothing collapses, and the rules below are about the
@@ -1106,10 +1122,40 @@ func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSi
 	if !b.room(n) {
 		return nil
 	}
-	return &Box{
+	box := &Box{
 		Outer: OuterInline, Inner: InnerText,
 		Style: inherited, Text: text, FontSize: fontSize, fontSizeKnown: true,
 	}
+	if openSigma >= 0 {
+		b.openSigma, b.openSigmaAt = box, openSigma
+	}
+	return box
+}
+
+// settleSigma decides a ς left open by the text before, from the text that
+// follows it: σ if the first character of next that is not case-ignorable is
+// cased, and final as it stands if that character is anything else. Text that is
+// all case-ignorable decides nothing and leaves it open for the text after.
+func (b *boxBuilder) settleSigma(next string) {
+	if b.openSigma == nil {
+		return
+	}
+	isCased, decided := paragraph.CasedAhead(next)
+	if !decided {
+		return
+	}
+	if isCased {
+		b.openSigma.Text = paragraph.UnfinalSigma(b.openSigma.Text, b.openSigmaAt)
+	}
+	b.openSigma = nil
+}
+
+// closeCaseContext is where a word ends whatever comes next — see afterWord's
+// resets — so a sigma left open is final, and nothing cased comes before what
+// follows.
+func (b *boxBuilder) closeCaseContext() {
+	b.caseContext = paragraph.CaseContext{}
+	b.openSigma = nil
 }
 
 // displayOf reads the display property into the outer/inner pair.
@@ -2034,8 +2080,7 @@ func writingSystemAt(n *html.Node) paragraph.WritingSystem {
 
 // wordSpaceTransformFor reads word-space-transform off a computed style.
 func (b *boxBuilder) wordSpaceTransformFor(cs style.ComputedStyle) paragraph.WordSpaceTransform {
-	wst, _ := wordSpaceTransformOf(cs.Get("word-space-transform"))
-	return wst
+	return wordSpaceTransformOf(cs.Get("word-space-transform"))
 }
 
 // reportPhraseSeparators says that "auto-phrase" found no phrases in a node's
@@ -2073,6 +2118,5 @@ func (b *boxBuilder) reportPhraseSeparators(n *html.Node, text string,
 // wordSpaceTransformValue is the same read without the node, for a caller that
 // has a Box rather than the style it was built from.
 func wordSpaceTransformValue(cs style.ComputedStyle) paragraph.WordSpaceTransform {
-	wst, _ := wordSpaceTransformOf(cs.Get("word-space-transform"))
-	return wst
+	return wordSpaceTransformOf(cs.Get("word-space-transform"))
 }

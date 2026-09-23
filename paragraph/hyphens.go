@@ -49,22 +49,22 @@ type Hyphens struct {
 // Soft reports whether a soft hyphen offers a break opportunity.
 func (h Hyphens) Soft() bool { return !h.None }
 
-// HyphensOf reads the property, and names the value it could not honour.
+// HyphensOf reads the property.
 //
 // The initial value is "manual", so an absent or unreadable declaration is one:
 // a document that says nothing about hyphens is asking for soft hyphens to
 // work.
-func HyphensOf(value string) (Hyphens, string) {
+//
+// It used to name "the value it could not honour" as a second result, and never
+// named one: whether "auto" can be honoured depends on the language, which this
+// does not know. The caller, which knows the language, decides whether there is
+// anything to report. See HyphenatesLanguage, and WordBreakOf.
+func HyphensOf(value string) Hyphens {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "none":
-		return Hyphens{None: true}, ""
+		return Hyphens{None: true}
 	case "auto":
-		// Whether it can be honoured depends on the language, which this does
-		// not know: the patterns are for one language and a document in another
-		// gets manual hyphens and a finding. So the value is returned as asked
-		// for and the caller, which knows the language, decides whether there
-		// was anything to report. See HyphenatesLanguage.
-		return Hyphens{Auto: true}, ""
+		return Hyphens{Auto: true}
 	}
-	return Hyphens{}, ""
+	return Hyphens{}
 }

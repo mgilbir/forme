@@ -11,31 +11,42 @@ import "testing"
 
 // TestTheValueIsReadAsTheCharacterItSets.
 func TestTheValueIsReadAsTheCharacterItSets(t *testing.T) {
-	for _, tc := range []struct{ value, sep, unhandled string }{
-		{"none", "", ""},
-		{"", "", ""},
-		{"space", " ", ""},
-		{"ideographic-space", "　", ""},
-		{"SPACE", " ", ""},
-		{"  ideographic-space  ", "　", ""},
-		// auto-phrase may come on either side of the other word. It is not
-		// reported: whether the analysis can be done is a question about the
-		// content language and the text, not about the declaration.
-		{"auto-phrase", "", ""},
-		{"space auto-phrase", " ", ""},
-		{"auto-phrase space", " ", ""},
-		{"ideographic-space auto-phrase", "　", ""},
-		// Not a value of this property: nothing done and nothing reported, for
-		// the reason the parser gives.
-		{"nonsense", "", ""},
-		{"space nonsense", "", ""},
+	for _, tc := range []struct {
+		value, sep string
+		auto       bool
+	}{
+		{"none", "", false},
+		{"", "", false},
+		{"space", " ", false},
+		{"ideographic-space", "　", false},
+		{"SPACE", " ", false},
+		{"  ideographic-space  ", "　", false},
+		// auto-phrase may come on either side of the other word. Whether the
+		// analysis can be done is a question about the content language and
+		// the text, not about the declaration.
+		{"space auto-phrase", " ", true},
+		{"auto-phrase space", " ", true},
+		{"ideographic-space auto-phrase", "　", true},
+		// Not values of this property, by the grammar "none | [ space |
+		// ideographic-space ] && auto-phrase?": auto-phrase with nothing for
+		// its separators to become, two separators, one twice, auto-phrase
+		// twice, and none beside anything. Each reads as none; it used to take
+		// whichever word came last. Audit C178.
+		{"auto-phrase", "", false},
+		{"space ideographic-space", "", false},
+		{"ideographic-space space", "", false},
+		{"space space", "", false},
+		{"space auto-phrase auto-phrase", "", false},
+		{"none auto-phrase", "", false},
+		{"none space", "", false},
+		{"none none", "", false},
+		{"nonsense", "", false},
+		{"space nonsense", "", false},
 	} {
-		got, unhandled := WordSpaceTransformOf(tc.value)
-		if got.Separator != tc.sep {
-			t.Errorf("%q: the separator is %q, want %q", tc.value, got.Separator, tc.sep)
-		}
-		if unhandled != tc.unhandled {
-			t.Errorf("%q: reported %q unhandled, want %q", tc.value, unhandled, tc.unhandled)
+		got := WordSpaceTransformOf(tc.value)
+		if got.Separator != tc.sep || got.AutoPhrase != tc.auto {
+			t.Errorf("%q: read as %+v, want the separator %q and auto-phrase %v",
+				tc.value, got, tc.sep, tc.auto)
 		}
 		if got.Transforms() != (tc.sep != "") {
 			t.Errorf("%q: Transforms is %v", tc.value, got.Transforms())
@@ -45,7 +56,7 @@ func TestTheValueIsReadAsTheCharacterItSets(t *testing.T) {
 
 // wsCollapse is CollapseWhitespace under the ordinary collapsing value.
 func wsCollapse(text, value string) string {
-	wst, _ := WordSpaceTransformOf(value)
+	wst := WordSpaceTransformOf(value)
 	return CollapseWhitespace(text, "collapse", wst)
 }
 
@@ -80,7 +91,7 @@ func TestASeparatorCollapsesWithTheSpacesAroundIt(t *testing.T) {
 // word-space-transform-008 is that, and its reference has the doubled spaces
 // written out.
 func TestEverySeparatorIsItsOwnWhereNothingCollapses(t *testing.T) {
-	wst, _ := WordSpaceTransformOf("space")
+	wst := WordSpaceTransformOf("space")
 	for _, tc := range []struct{ text, want, what string }{
 		{"a​b", "a b", "on its own"},
 		{"a ​b", "a  b", "a space before it"},
@@ -98,7 +109,7 @@ func TestEverySeparatorIsItsOwnWhereNothingCollapses(t *testing.T) {
 // *may* end there and the break says it must, so making it visible would leave a
 // space hanging at the end of a line or indenting the start of one.
 func TestASeparatorAgainstAPreservedBreakIsNotExpanded(t *testing.T) {
-	wst, _ := WordSpaceTransformOf("ideographic-space")
+	wst := WordSpaceTransformOf("ideographic-space")
 	for _, tc := range []struct{ text, want, what string }{
 		{"a​\nb", "a​\nb", "before the break"},
 		{"a\n​b", "a\n​b", "after it"},
@@ -122,7 +133,7 @@ func TestASeparatorAgainstAPreservedBreakIsNotExpanded(t *testing.T) {
 // would put a space at the end of the line the break ends — or worse, replace
 // the break with a space and close the two lines into one.
 func TestASeparatorBesideAPreservedBreakUnderPreLine(t *testing.T) {
-	wst, _ := WordSpaceTransformOf("ideographic-space")
+	wst := WordSpaceTransformOf("ideographic-space")
 	for _, tc := range []struct{ text, want, what string }{
 		{"a​\nb", "a\nb", "before the break"},
 		{"a\n​b", "a\nb", "after it"},
@@ -184,9 +195,9 @@ func TestNothingHappensAtTheInitialValue(t *testing.T) {
 // at that boundary, then the UA must insert a virtual expandable separator" —
 // and the suite gives each of its clauses a document of its own.
 func TestASeparatorIsInventedWhereThePhraseBoundaryHasNone(t *testing.T) {
-	value, unhandled := WordSpaceTransformOf("ideographic-space auto-phrase")
-	if unhandled != "" || !value.Invents() {
-		t.Fatalf("the value was read as %+v, reporting %q", value, unhandled)
+	value := WordSpaceTransformOf("ideographic-space auto-phrase")
+	if !value.Invents() {
+		t.Fatalf("the value was read as %+v", value)
 	}
 	// Every row after the first is the same sentence with one of §2.2's
 	// characters standing at the boundary the first row proves is there. They
@@ -225,7 +236,7 @@ func TestASeparatorIsInventedWhereThePhraseBoundaryHasNone(t *testing.T) {
 // under "white-space: pre" with the separators it wrote and none of the ones it
 // asked to be found.
 func TestSeparatorsAreInventedWhereNothingCollapsesEither(t *testing.T) {
-	value, _ := WordSpaceTransformOf("ideographic-space auto-phrase")
+	value := WordSpaceTransformOf("ideographic-space auto-phrase")
 	for _, whiteSpace := range []string{"preserve", "preserve-breaks", "break-spaces"} {
 		got := CollapseWhitespaceAfter("\u6771\u4eac\u3078\u884c\u304d\u307e\u3057\u3087\u3046\u3002",
 			whiteSpace, value, Boundary{}, WritingSystemJapanese)
@@ -243,14 +254,14 @@ func TestSeparatorsAreInventedWhereNothingCollapsesEither(t *testing.T) {
 // are no virtual expandable separator". The suite's -027 and -029 are the
 // second and the third.
 func TestNoSeparatorIsInventedWithoutALanguageToInventItIn(t *testing.T) {
-	value, _ := WordSpaceTransformOf("ideographic-space auto-phrase")
+	value := WordSpaceTransformOf("ideographic-space auto-phrase")
 	const text = "東京へ行きましょう。"
 	if got := InsertPhraseSeparators(text, value, WritingSystemOther); got != text {
 		t.Errorf("with no language known: got %q, want the text unchanged", got)
 	}
 	// And the first clause: the value without auto-phrase in it invents
 	// nothing, whatever language the text is in.
-	plain, _ := WordSpaceTransformOf("ideographic-space")
+	plain := WordSpaceTransformOf("ideographic-space")
 	if plain.Invents() {
 		t.Error("\"ideographic-space\" alone reports that it invents separators")
 	}
@@ -260,7 +271,7 @@ func TestNoSeparatorIsInventedWithoutALanguageToInventItIn(t *testing.T) {
 	// "auto-phrase" with nothing for its boundaries to become is not a value
 	// the grammar allows — "[ space | ideographic-space ] && auto-phrase?" —
 	// and it inserts nothing rather than inserting the empty string.
-	alone, _ := WordSpaceTransformOf("auto-phrase")
+	alone := WordSpaceTransformOf("auto-phrase")
 	if alone.Invents() {
 		t.Error("\"auto-phrase\" alone reports that it invents separators")
 	}
@@ -274,7 +285,7 @@ func TestNoSeparatorIsInventedWithoutALanguageToInventItIn(t *testing.T) {
 // suite's word-space-transform-030 says so: "Transform effects, notably
 // transforming virtual word separators into spaces, affect line breaking."
 func TestAnInventedSeparatorIsAPlaceALineMayEnd(t *testing.T) {
-	value, _ := WordSpaceTransformOf("ideographic-space auto-phrase")
+	value := WordSpaceTransformOf("ideographic-space auto-phrase")
 	text := InsertPhraseSeparators("東京へ行きましょう。", value, WritingSystemJapanese)
 	pieces, _ := SplitAtBreaks(text, WhiteSpace{Collapse: true, Wrap: true},
 		WordBreak{KeepAll: true}, LineBreak{}, Hyphens{}, WritingSystemJapanese)

@@ -84,14 +84,13 @@ import (
 // of ᾀ, which is a third mapping and is applied where a third mapping belongs.
 // The suite contradicts itself here and the specification does not.
 //
-// Uppercasing Georgian Mkhedruli produces Mtavruli, so "ა" becomes "Ა". The
-// suite's text-transform-unicase-001 asserts that it must not — "verifies that
-// text-transform does not capitalize a unicase script" — and that test is older
-// than its answer. Unicode 11 added the Mtavruli block in 2018 and gave every
-// Mkhedruli letter an uppercase mapping into it, so the mapping applied here is
-// the one Unicode states. The test is left failing rather than special-cased:
-// the alternative is a table of scripts this engine declines to uppercase, which
-// is a rule no specification asks for.
+// Uppercasing Georgian Mkhedruli would produce Mtavruli, so "ა" would become
+// "Ა": Unicode 11 gave every Mkhedruli letter an uppercase mapping into the
+// Mtavruli block. The suite's text-transform-unicase-001 asserts that it must
+// not — "verifies that text-transform does not capitalize a unicase script" —
+// and this engine agrees: Mtavruli is a display style and not a case, so the
+// uppercase mapping leaves Mkhedruli alone. See isMkhedruli, and caseMapping,
+// which is where every path that uppercases asks it.
 
 // TextTransform is what the property asks for, as a set rather than a choice.
 //
@@ -184,6 +183,86 @@ func TransformOf(value string) TextTransform {
 // case transforms build one buffer of the size of the input. A megabyte of text
 // is a megabyte of work and not a rune of garbage per character.
 func TransformText(text string, kind TextTransform, state WordState, lang Language) (string, WordState) {
+	out, next, _, _ := TransformTextIn(text, kind, state, lang, CaseContext{})
+	return out, next
+}
+
+// CaseContext is what one text node leaves the next for Final_Sigma, whose
+// context crosses a box boundary as capitalize's does: "ΟΔΟΣ<b>ΑΚΙ</b>" is one
+// word, and the Σ at the end of the first node is inside it.
+//
+// It carries the half of the condition that looks back — whether the last
+// character that is not case-ignorable was cased. The half that looks forward
+// cannot be carried, because the text after a node has not been seen when the
+// node is transformed: a sigma whose following context runs off the end of its
+// node is lowercased as final, and TransformTextIn says where it put it, so that
+// the caller can correct it with UnfinalSigma once CasedAhead of the next node
+// says a cased letter follows.
+type CaseContext struct {
+	// CasedBefore says the last character written that is not case-ignorable
+	// was cased.
+	CasedBefore bool
+}
+
+// TransformTextIn is TransformText with the Final_Sigma context carried: ctx is
+// what the text before this node left, next is what this node leaves, and
+// openSigma is the byte offset in out of a ς whose finality the next node has to
+// confirm, or -1.
+func TransformTextIn(text string, kind TextTransform, state WordState, lang Language,
+	ctx CaseContext) (out string, next WordState, nextCtx CaseContext, openSigma int) {
+
+	nextCtx = caseContextAfter(text, ctx)
+	openSigma = -1
+	if text == "" {
+		return text, state, nextCtx, openSigma
+	}
+	if kind&transformCase == TransformLowercase {
+		// The one case change Final_Sigma is part of. The rest of what
+		// TransformText does after the case change is the same for it.
+		text, openSigma = localeLowercased(text, lang, ctx)
+		kind &^= transformCase
+		out, next = transformRest(text, kind, state)
+		if out != text {
+			// A width remapping changed the bytes, so the offset no longer
+			// names the sigma. It is a sigma a fullwidth or kana remapping
+			// leaves alone, but the offset is not worth defending: the
+			// correction is dropped, and the sigma stays final.
+			openSigma = -1
+		}
+		return out, next, nextCtx, openSigma
+	}
+	out, next = transformText(text, kind, state, lang)
+	return out, next, nextCtx, openSigma
+}
+
+// caseContextAfter is the CaseContext a node leaves: its last character that is
+// not case-ignorable, or what it was given where it has none.
+func caseContextAfter(text string, ctx CaseContext) CaseContext {
+	for i := len(text); i > 0; {
+		r, size := utf8.DecodeLastRuneInString(text[:i])
+		i -= size
+		if caseIgnorable(r) {
+			continue
+		}
+		return CaseContext{CasedBefore: cased(r)}
+	}
+	return ctx
+}
+
+// transformRest is TransformText after the case change: the two remappings, in
+// the specification's order, and the word state the text leaves.
+func transformRest(text string, kind TextTransform, state WordState) (string, WordState) {
+	if kind&TransformFullWidth != 0 {
+		text = remapped(text, fullWidthForms[:])
+	}
+	if kind&TransformFullSizeKana != 0 {
+		text = remapped(text, fullSizeKana[:])
+	}
+	return text, WordStateAfter(text, state)
+}
+
+// transformText is TransformText without the Final_Sigma context.
+func transformText(text string, kind TextTransform, state WordState, lang Language) (string, WordState) {
 	if text == "" {
 		return text, state
 	}
@@ -207,17 +286,11 @@ func TransformText(text string, kind TextTransform, state WordState, lang Langua
 	case TransformUppercase:
 		text = localeCased(text, lang, true)
 	case TransformLowercase:
-		text = localeCased(text, lang, false)
+		text, _ = localeLowercased(text, lang, CaseContext{})
 	case TransformCapitalize:
 		text = capitalizeWords(text, state, lang)
 	}
-	if kind&TransformFullWidth != 0 {
-		text = remapped(text, fullWidthForms[:])
-	}
-	if kind&TransformFullSizeKana != 0 {
-		text = remapped(text, fullSizeKana[:])
-	}
-	return text, WordStateAfter(text, state)
+	return transformRest(text, kind, state)
 }
 
 // remapped replaces every character that one of the width tables names.
@@ -285,7 +358,11 @@ func lookupWidth(r rune, table []widthPair) (rune, bool) {
 // unless the text really contains one of the characters they are about. Every
 // other run takes the same path it always did.
 func localeCased(text string, lang Language, upper bool) string {
-	if upper && lang == "el" {
+	if !upper {
+		out, _ := localeLowercased(text, lang, CaseContext{})
+		return out
+	}
+	if lang == "el" {
 		// Greek drops its accents in capitals, which is a whole-run rule rather
 		// than a per-character mapping: an accent removed from one vowel puts a
 		// dialytika on the next. See greekcasing.go.
@@ -293,13 +370,66 @@ func localeCased(text string, lang Language, upper bool) string {
 			return got
 		}
 	}
-	if i := firstConditional(text, lang, upper); i >= 0 {
-		return conditionalCased(text, lang, upper, i)
+	if i := firstConditional(text, lang, true); i >= 0 {
+		out, _ := conditionalCased(text, lang, true, i, CaseContext{})
+		return out
 	}
-	if upper {
-		return fullCased(text, fullUppercase[:], simpleUpper, upperString, isMkhedruli)
+	return uppercasing.cased(text)
+}
+
+// localeLowercased is localeCased's lowercase, with the Final_Sigma context and
+// the offset of a sigma left open at the end. See TransformTextIn.
+func localeLowercased(text string, lang Language, ctx CaseContext) (string, int) {
+	if i := firstConditional(text, lang, false); i >= 0 {
+		return conditionalCased(text, lang, false, i, ctx)
 	}
-	return fullCased(text, fullLowercase[:], simpleLower, lowerString, nil)
+	return lowercasing.cased(text), -1
+}
+
+// caseMapping is one case change as a mapping of one character: the full
+// mapping where the tables have one, the simple one otherwise, and a character
+// the change must leave alone left alone.
+//
+// It is the one answer every path gives. There were three, and they parted at
+// the edges: the whole-string path left Georgian Mkhedruli alone under
+// uppercase, the Greek path did too, and the per-character path that takes over
+// once a Turkish i or a Lithuanian dot is found in the text did not — so "i ა"
+// under lang="tr" uppercased the Georgian letter to Mtavruli, and the same text
+// in any other language did not. Audit C120.
+type caseMapping struct {
+	table  []fullCase
+	simple func(rune) rune
+	whole  func(string) string
+	// keep is what the change leaves as it is. See isMkhedruli.
+	keep func(rune) bool
+}
+
+var (
+	uppercasing = caseMapping{fullUppercase[:], simpleUpper, upperString, isMkhedruli}
+	lowercasing = caseMapping{fullLowercase[:], simpleLower, lowerString, nil}
+)
+
+// of is the mapping of r where it is not the simple one: r itself where the
+// change keeps it, or its full mapping.
+func (m caseMapping) of(r rune) (string, bool) {
+	if m.keep != nil && m.keep(r) {
+		return string(r), true
+	}
+	return lookupFullCase(r, m.table)
+}
+
+// write appends the mapping of r.
+func (m caseMapping) write(out *strings.Builder, r rune) {
+	if s, ok := m.of(r); ok {
+		out.WriteString(s)
+		return
+	}
+	out.WriteRune(m.simple(r))
+}
+
+// cased maps a whole string. See fullCased.
+func (m caseMapping) cased(text string) string {
+	return fullCased(text, m.table, m.simple, m.whole, m.keep)
 }
 
 // firstConditional is the byte offset of the first character a conditional
@@ -336,40 +466,50 @@ func firstConditional(text string, lang Language, upper bool) int {
 // conditionalCased maps the text a character at a time from the first character
 // a condition could be about, which is where the cheap whole-string path stops
 // being available.
-func conditionalCased(text string, lang Language, upper bool, from int) string {
+//
+// ctx and the second result are Final_Sigma's, for lowercase: see
+// TransformTextIn.
+func conditionalCased(text string, lang Language, upper bool, from int, ctx CaseContext) (string, int) {
+	m := uppercasing
+	if !upper {
+		m = lowercasing
+	}
 	var out strings.Builder
 	out.Grow(len(text) + 8)
-	if upper {
-		out.WriteString(fullCased(text[:from], fullUppercase[:], simpleUpper, upperString, isMkhedruli))
-	} else {
-		out.WriteString(fullCased(text[:from], fullLowercase[:], simpleLower, lowerString, nil))
-	}
+	out.WriteString(m.cased(text[:from]))
+	open := -1
 	for i, r := range text[from:] {
 		at := from + i
+		after := text[at+utf8.RuneLen(r):]
 		var (
 			s  string
 			ok bool
 		)
-		if upper {
+		switch {
+		case upper:
 			s, ok = localeUpper(r, text[:at], lang)
-		} else {
-			s, ok = localeLower(r, text[:at], text[at+len(string(r)):], lang)
+		case r == 0x03A3:
+			// Final_Sigma, which is not a tailoring: it is decided the same in
+			// every language, and its context reaches into the nodes either
+			// side of this one.
+			final, undecided := finalSigma(text[:at], after, ctx.CasedBefore)
+			if final {
+				if undecided {
+					open = out.Len()
+				}
+				out.WriteString("ς")
+				continue
+			}
+		default:
+			s, ok = localeLower(r, text[:at], after, lang)
 		}
 		if ok {
 			out.WriteString(s)
 			continue
 		}
-		table, simple := fullUppercase[:], simpleUpper
-		if !upper {
-			table, simple = fullLowercase[:], simpleLower
-		}
-		if s, ok := lookupFullCase(r, table); ok {
-			out.WriteString(s)
-		} else {
-			out.WriteRune(simple(r))
-		}
+		m.write(&out, r)
 	}
-	return out.String()
+	return out.String(), open
 }
 
 // fullCased maps every character of a string, preferring the full mapping.
@@ -391,15 +531,9 @@ func fullCased(text string, table []fullCase, simple func(rune) rune, whole func
 	// than a guess; it saves the first growth and not the rest.
 	out.Grow(len(text) + 8)
 	out.WriteString(whole(text[:i]))
+	m := caseMapping{table: table, simple: simple, keep: keep}
 	for _, r := range text[i:] {
-		switch s, ok := lookupFullCase(r, table); {
-		case keep != nil && keep(r):
-			out.WriteRune(r)
-		case ok:
-			out.WriteString(s)
-		default:
-			out.WriteRune(simple(r))
-		}
+		m.write(&out, r)
 	}
 	return out.String()
 }
@@ -462,6 +596,9 @@ func lookupFullCase(r rune, table []fullCase) (string, bool) {
 func capitalizeWords(text string, state WordState, lang Language) string {
 	var out strings.Builder
 	out.Grow(len(text))
+	// titled says the unit being written began with a letter this titlecased,
+	// so that the marks on it are titlecased with it.
+	titled := false
 	for i := 0; i < len(text); {
 		if state == WordClosed && lang == "nl" {
 			// IJ is one letter of the Dutch alphabet written as two, so a word
@@ -479,13 +616,33 @@ func capitalizeWords(text string, state WordState, lang Language) string {
 		}
 		i += size
 
-		if state == WordClosed && isWordRune(r) {
-			if s, ok := lookupFullCase(r, fullTitlecase[:]); ok {
+		switch {
+		case state == WordClosed && isWordRune(r):
+			// The language's tailoring first, as uppercase has it: CSS Text
+			// §2.1 makes all three case changes language-sensitive, and a
+			// Turkish "istanbul" capitalises to "İstanbul". It was
+			// "Istanbul", a word spelled with the other letter. Audit C121.
+			if s, ok := localeUpper(r, text[:i-size], lang); ok {
+				out.WriteString(s)
+			} else if s, ok := lookupFullCase(r, fullTitlecase[:]); ok {
 				out.WriteString(s)
 			} else {
 				out.WriteRune(simpleTitle(r))
 			}
-		} else {
+			titled = true
+		case titled && isCombiningMark(r):
+			// A mark on the letter just titlecased is part of the unit that
+			// was, and the tailoring may be about it rather than about the
+			// letter: Lithuanian removes the dot above a titlecased i
+			// ("0307; 0307; ; ; lt After_Soft_Dotted" — its titlecase field is
+			// empty).
+			if s, ok := localeUpper(r, text[:i-size], lang); ok {
+				out.WriteString(s)
+			} else {
+				out.WriteRune(r)
+			}
+		default:
+			titled = false
 			out.WriteRune(r)
 		}
 		state = stepWord(state, r, text[i:])
@@ -528,6 +685,14 @@ const (
 func stepWord(state WordState, r rune, rest string) WordState {
 	if isWordRune(r) {
 		return WordOpen
+	}
+	if isCombiningMark(r) || unicode.Is(unicode.Cf, r) {
+		// UAX #29's WB4: a mark, a format character or a joiner belongs to the
+		// character before it and changes nothing about where the word is.
+		// Read as ending the word, a decomposed "résumé" capitalised to
+		// "RéSumé" — the combining acute closed the word and the "s" opened
+		// another.
+		return state
 	}
 	if !isMidWord(r) {
 		return WordClosed
@@ -590,6 +755,12 @@ func isMidWord(r rune) bool {
 		return true
 	}
 	return false
+}
+
+// isCombiningMark reports whether a character is a combining mark: one that
+// belongs to the character before it.
+func isCombiningMark(r rune) bool {
+	return unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r) || unicode.Is(unicode.Mc, r)
 }
 
 // isWordRune reports whether a character is one a word is made of.

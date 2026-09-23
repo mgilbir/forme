@@ -1065,8 +1065,8 @@ func pendingHyphen(line []Item) style.Unit {
 // assert is that "a left floated box shifts left until its outer edge touches
 // the containing block edge", and it came out an inch and a half below.
 //
-// An inset is skipped for the reason isLineTailSpace gives — an inline box's own
-// edge is not content and does not interrupt the run of spaces before it. The
+// An inset or a bidi control is skipped for the reason transparentAtLineEnd gives
+// — neither is content, and neither interrupts the run of spaces before it. The
 // scan stops at the first thing that is neither, because only the space at the
 // *end* of the line is removed: "a b " has two collapsible spaces on it and the
 // line keeps the one between the words.
@@ -1080,7 +1080,7 @@ func pendingHyphen(line []Item) style.Unit {
 func floatClears(line []Item, used style.Unit) style.Unit {
 	for i := len(line) - 1; i >= 0; i-- {
 		it := line[i]
-		if it.Inset {
+		if transparentAtLineEnd(it) {
 			continue
 		}
 		if !it.TrimAtEnd {
@@ -1096,8 +1096,7 @@ func floatClears(line []Item, used style.Unit) style.Unit {
 
 func trimLineEdge(line []Item) []Item {
 	end := len(line)
-	for end > 0 && (line[end-1].TrimAtEnd || line[end-1].Inset ||
-		IsBidiControlOnly(line[end-1].Text)) {
+	for end > 0 && (line[end-1].TrimAtEnd || transparentAtLineEnd(line[end-1])) {
 		end--
 	}
 	if end == len(line) {
@@ -1107,23 +1106,41 @@ func trimLineEdge(line []Item) []Item {
 	// after end, which are still the caller's.
 	out := line[:end:end]
 	for _, item := range line[end:] {
-		if item.Inset || IsBidiControlOnly(item.Text) {
+		if transparentAtLineEnd(item) {
 			out = append(out, item)
 		}
 	}
 	return out
 }
 
-// isLineTailSpace reports whether an item can be part of the white space that
-// ends a line: the space itself, an inline box's own inset, and a box that is
-// out of flow.
+// transparentAtLineEnd reports whether the end of a line looks straight through
+// an item to the white space in front of it: an inline box's own inset, which is
+// not text, and a run of nothing but bidi controls, which is an instruction to
+// the bidirectional algorithm and sets nothing. Neither interrupts a run of
+// spaces, and neither is something a line ends *after*.
 //
-// The last two are there so that a span wrapped around the spaces, or an
-// absolutely positioned box written among them, does not break the run in two
-// and make the half before it breakable again. Neither is content — §4.1.2's
-// rules are about the text — and neither takes the line anywhere.
+// It is one question asked in three places — which white space ends a line
+// (isLineTailSpace), which is removed from it (trimLineEdge), and which a float
+// has to get past (floatClears) — and it was answered separately in each. The
+// trim looked through a bidi control and the break decision did not, so
+// "aaaa &#x202C;" in a box exactly wide enough for the word set the control on
+// a second line of its own: the space before it was not the line's trailing
+// white space, so it counted towards the width and overflowed. Audit C118.
+func transparentAtLineEnd(item Item) bool {
+	return item.Inset || IsBidiControlOnly(item.Text)
+}
+
+// isLineTailSpace reports whether an item can be part of the white space that
+// ends a line: the space itself, what the end of a line looks through (see
+// transparentAtLineEnd), and a box that is out of flow.
+//
+// The others are there so that a span wrapped around the spaces, a bidi control
+// written after them, or an absolutely positioned box written among them, does
+// not break the run in two and make the half before it breakable again. None is
+// content — §4.1.2's rules are about the text — and none takes the line
+// anywhere.
 func isLineTailSpace(item Item) bool {
-	if item.Inset || item.Abs != nil {
+	if transparentAtLineEnd(item) || item.Abs != nil {
 		return true
 	}
 	return isTailSpace(item)
