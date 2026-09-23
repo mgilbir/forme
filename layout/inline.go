@@ -213,10 +213,17 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	// *this* text — is about the paragraph, so it is gathered across the whole
 	// walk and answered when the walk is done. See noteSubstitution.
 	done := l.gatherSubstitutions()
+	// The atomic inlines are laid out by the walk, before any line exists to
+	// hold them, and what each layout did is noted so that the ones no line
+	// ends up holding can be taken back. See unplacedAtomics.
+	var laid []laidAtomic
+	heldAtomics := l.atomics
+	l.atomics = &laid
 	items, _ := l.collectInline(b, l.markerItems(b, para), startOfContext(), inlineFrame{
 		Containing: width, CbHeight: origin.cbHeight, CbDefinite: origin.cbDefinite,
 		Strut: st, Bidi: para,
 	})
+	l.atomics = heldAtomics
 	para.Leave(open, closing)
 	done()
 	if len(items) == 0 || onlyLeading(items) {
@@ -414,12 +421,12 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	// the lines above it. So the box is laid out once to find out, thrown away,
 	// and laid out again in the measure that answer gives.
 	//
-	// It is thrown away with the same three handles the per-line retry above
-	// uses — the float context, the out-of-flow queue and the fragment's own
-	// children — plus its lines. Anything else the pass touched is a memo keyed
-	// by box, and recomputing it gives the same answer.
-	linesAt, kidsAt := len(parent.Lines), len(parent.Children)
-	ctxAt, absAt := origin.ctx.mark(), len(l.deferred)
+	// It is thrown away with the checkpoint every speculative pass takes — the
+	// float context, the out-of-flow queue, the positioned fragments, the
+	// clamps' counts and the fragment's own children and lines. Anything else
+	// the pass touched is a memo keyed by box, and recomputing it gives the
+	// same answer. See speculative.go.
+	beforeLines := l.checkpoint(origin.ctx, parent)
 
 	var y style.Unit
 	// The width each line turned out to have, which is the band a float left it.
@@ -453,6 +460,13 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		fitWant = 0
 		decor = inlineDecor{l: l, containing: width, strut: st}
 		for i := 0; i < len(items); {
+			// Every line is charged to the document's bound on layout work, which
+			// is what stops a pass inside a pass inside a pass from going on for
+			// ever. Past it the rest of the block's content is not set, and the
+			// document is told. See maxLayoutWork.
+			if l.lineStarved(b) {
+				break
+			}
 			// Where this pass started, so that the foot of the loop can tell whether
 			// it moved. Nothing in the body increments the cursor on its own: it is
 			// carried entirely by what breakOneLine hands back.
@@ -551,10 +565,9 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			// Where this line's own floats begin, so that an attempt that has to be
 			// made again can put the context back as it found it. The floats that
 			// *started* the line are before the mark and stay.
-			midMark, midAbs := origin.ctx.mark(), len(l.deferred)
+			beforeLine := l.checkpoint(origin.ctx, nil)
 			for attempt := 0; ; attempt++ {
-				origin.ctx.truncate(midMark)
-				l.deferred = l.deferred[:midAbs]
+				l.rollback(beforeLine)
 				midKids = midKids[:0]
 
 				runs, next, nextByte, mid, forced, _ = lines.BreakOneLine(i, iByte,
@@ -612,17 +625,17 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 						after = append(after, f)
 						continue
 					}
-					held, heldAbs := origin.ctx.mark(), len(l.deferred)
+					held := l.checkpoint(origin.ctx, nil)
 					kid := shiftedBy(
 						l.floatChild(heldBox(f.Box), width, origin, y,
 							roomBeside(runs, baseRoom, f.Used), lh, 0),
 						f.Offset)
 					if kid.MarginRect().Y > y {
-						origin.ctx.truncate(held)
-						// The out-of-flow boxes the discarded layout found go with
-						// it, or the float would defer each of them twice when it is
-						// laid out again after the line.
-						l.deferred = l.deferred[:heldAbs]
+						// Everything the discarded layout did goes with it: the
+						// out-of-flow boxes it found, or the float would defer each
+						// of them twice when it is laid out again after the line,
+						// and the fragment a positioned float recorded.
+						l.rollback(held)
 						after = append(after, f)
 						continue
 					}
@@ -1142,10 +1155,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			fitPending = false
 			if got := fit.clamp(fitWant); got != fitScale && !clamped && fitWant > 0 {
 				fitScale = got
-				parent.Lines = parent.Lines[:linesAt]
-				parent.Children = parent.Children[:kidsAt]
-				origin.ctx.truncate(ctxAt)
-				l.deferred = l.deferred[:absAt]
+				l.rollback(beforeLines)
 				continue
 			}
 		}
@@ -1169,10 +1179,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			break
 		}
 		wasBands = append(wasBands[:0], bands...)
-		parent.Lines = parent.Lines[:linesAt]
-		parent.Children = parent.Children[:kidsAt]
-		origin.ctx.truncate(ctxAt)
-		l.deferred = l.deferred[:absAt]
+		l.rollback(beforeLines)
 		// The scored search first, because it is the one that can answer when
 		// the lines have different room. Where it declines — a paragraph too
 		// long to search, or one whose lines cannot be made to come out at the
@@ -1186,6 +1193,17 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			}
 		}
 	}
+	// What was laid out and never set on a line is thrown away, and so is
+	// everything its layout did. That is the content past a clamp point — which
+	// "continue: discard" says is neither rendered nor measured — the unit the
+	// clamp's last line had no room for beside its ellipsis, and the rest of a
+	// block the bound on layout work stopped. An absolutely positioned box
+	// inside such an atomic inline was queued by its layout, and left queued it
+	// was placed against a fragment nothing painted and never made absolute:
+	// invisible, and a side effect pointing outside the tree of every box
+	// around it, which is where the cache used to refuse to keep an answer —
+	// every ancestor's, which brought back the exponential. See keep.
+	l.takeBack(unplacedAtomics(laid, parent.Children[beforeLines.kids:]))
 	decor.finish(parent)
 	// §5.12.1's pseudo-element behaves like an inline box wrapping the first
 	// line's content, so what it paints goes behind that content — under the
@@ -1198,6 +1216,34 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		}
 	}
 	return y
+}
+
+// laidAtomic is an atomic inline laid out by the inline walk, and the side
+// state its layout added.
+type laidAtomic struct {
+	frag *Fragment
+	side sideSpan
+}
+
+// unplacedAtomics is the side state of every atomic inline in laid whose
+// fragment is not among placed, which are the children the lines were given.
+//
+// In order, as takeBack wants them: the walk laid them out in order.
+func unplacedAtomics(laid []laidAtomic, placed []*Fragment) []sideSpan {
+	if len(laid) == 0 {
+		return nil
+	}
+	on := make(map[*Fragment]bool, len(placed))
+	for _, f := range placed {
+		on[f] = true
+	}
+	var out []sideSpan
+	for _, a := range laid {
+		if !on[a.frag] {
+			out = append(out, a.side)
+		}
+	}
+	return out
 }
 
 // roomForLine moves a line down past floats that leave it no usable width.

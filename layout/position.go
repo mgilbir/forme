@@ -351,6 +351,16 @@ func (l *layouter) deferAbsolute(b *Box, parent *Fragment, x, y, end style.Unit,
 // reached: a candidate found inside another abspos box is appended while that
 // box is being placed, and that box's whole subtree is made absolute before the
 // loop moves on.
+//
+// A candidate whose parent never became absolute is not placed. Its parent was
+// made by a layout that was thrown away, so the box it stands for was thrown
+// away with it: it would hang from a fragment that is not on the page, at a
+// position measured from coordinates that were never made page coordinates.
+// Every site that throws a layout away takes back what that layout queued —
+// see takeBack — so this is the rule stated where it applies rather than a
+// case that is expected to arise. It is also what keep relies on to leave such
+// a candidate out of an answer it keeps and still agree with the layout that
+// kept nothing.
 func (l *layouter) placeAbsolutes(page Rect) {
 	for i := 0; i < len(l.deferred); i++ {
 		if i >= maxAbsolutes {
@@ -358,6 +368,10 @@ func (l *layouter) placeAbsolutes(page Rect) {
 				"more boxes were taken out of the normal flow than this engine will "+
 					"place; the rest were left unpositioned and are not on the page")
 			return
+		}
+		if !l.deferred[i].parent.absolute {
+			l.unplaced++
+			continue
 		}
 		l.layoutAbsolute(l.deferred[i], page)
 	}

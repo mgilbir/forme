@@ -341,10 +341,13 @@ func (d *inlineDecor) finish(parent *Fragment) {
 			// fragments. They are in the line's coordinates here and are made
 			// absolute with everything else — see absolutise — and the
 			// candidates that read them are placed after that.
-			if d.l.inlineFragments == nil {
-				d.l.inlineFragments = map[*Box][]*Fragment{}
-			}
-			d.l.inlineFragments[b] = append(d.l.inlineFragments[b], frag)
+			//
+			// Through the journal, because a pass that is thrown away has to take
+			// them back: an item laid out to be measured recorded its fragments
+			// here too, and the first of them — which is never made absolute,
+			// being in a tree nobody keeps — was the corner a box inside it was
+			// positioned against. See speculative.go.
+			d.l.addInlineFragment(b, frag)
 		}
 	}
 }

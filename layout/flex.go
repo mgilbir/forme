@@ -696,13 +696,12 @@ func (l *layouter) flexContent(b *Box, parent *Fragment, width style.Unit,
 	// cross sizes from this — a line is as tall as the tallest item on it —
 	// while a column settled every item's width before it could measure a
 	// height at all.
-	mark := len(l.deferred)
-	starts := make([]int, len(items))
+	sides := make([]sideSpan, len(items))
 	for i, it := range items {
-		starts[i] = len(l.deferred)
+		side := l.sideMark()
 		it.frag = l.layOutFlexItem(it, a, width, origin, it.target, true)
+		sides[i] = l.sideSince(side)
 	}
-	end := len(l.deferred)
 
 	crosses, cross := l.flexCrossSizes(b, a, lines, crossGap, width, origin)
 	for _, it := range items {
@@ -719,40 +718,37 @@ func (l *layouter) flexContent(b *Box, parent *Fragment, width style.Unit,
 		// is the container, so they were laid out at that size already, and the
 		// comparison below is what keeps this to the ones that have moved.
 		//
-		// The out-of-flow boxes a discarded layout found are discarded with it,
-		// which is the same rule the block re-layout keeps and is kept here the
-		// long way round. An absolutely positioned box inside a fragment that
-		// was thrown away hangs off a fragment nobody will paint, and leaving
-		// its record in place spends the budget in placeAbsolutes on a box that
-		// is not on the page — enough of them and a document is told it holds
-		// more out-of-flow boxes than this engine will place, which would be a
-		// false report of a broken page.
+		// What a discarded layout did is discarded with it, which is the same
+		// rule the block re-layout keeps. An absolutely positioned box inside a
+		// fragment that was thrown away hangs off a fragment nobody will paint,
+		// and leaving its record in place spends the budget in placeAbsolutes on
+		// a box that is not on the page — enough of them and a document is told
+		// it holds more out-of-flow boxes than this engine will place, which
+		// would be a false report of a broken page.
 		//
-		// The records are contiguous per item and in item order, so the list is
-		// rebuilt in that order rather than cut back to a mark: cutting back to
-		// the first re-laid item would take every later item's records with it.
-		// first is held before the rebuild starts, because the loop assigns
-		// l.deferred as it goes and the ranges below are indexes into what the
-		// first pass produced.
-		first := l.deferred[:end]
-		kept := append([]absCandidate(nil), first[:mark]...)
+		// Only the items that moved are laid out again, and only what they did
+		// is taken back: each item's side state is a stretch of the queue and
+		// the journal, and takeBack takes stretches out of the middle. The ones
+		// that did not move keep the layout they have, which is the answer they
+		// would be given if they were asked again. They used to be asked again —
+		// the first pass rolled back whole and every item laid out a second
+		// time, answered from the cache — and the answer was a copy of each
+		// item's whole subtree, made at every level of a nest of rows for items
+		// nothing had changed.
+		var moved []int
 		for i, it := range items {
-			stop := end
-			if i+1 < len(items) {
-				stop = starts[i+1]
-			}
 			want := maxZero(crosses[it.line].size.Sub(it.crossMargin))
 			if l.alignOf(b, a, it) == crossStretch && l.stretchesAcross(a, it) &&
 				a.crossOf(it.frag.BorderRect) != want {
 				it.cross, it.hasCross = want, true
-				l.deferred = kept
-				it.frag = l.layOutFlexItem(it, a, width, origin, it.target, true)
-				kept = l.deferred
-				continue
+				moved = append(moved, i)
 			}
-			kept = append(kept, first[starts[i]:stop]...)
 		}
-		l.deferred = kept
+		if len(moved) > 0 {
+			l.relayMoved(items, moved, sides, func(it *flexItem) *Fragment {
+				return l.layOutFlexItem(it, a, width, origin, it.target, true)
+			})
+		}
 	}
 
 	// §9.5's main-axis placement and §9.6's cross-axis placement, line by line,
@@ -1316,6 +1312,54 @@ func (l *layouter) stretchesAcross(a flexAxis, it *flexItem) bool {
 	return l.isAuto(it.box, name) || trimmedLower(it.box.Style.Get(name)) == ""
 }
 
+// relayMoved lays the moved items out again with lay, having taken back what
+// their first layouts did, and leaves the out-of-flow queue in item order.
+//
+// sides is each item's stretch of the side state from the first pass, which
+// ran the items in order with nothing between them. The items that did not
+// move keep their stretches where they are; each moved item's new out-of-flow
+// boxes are put back where its old ones were, because the queue is the order
+// the boxes are placed in and a moved item is not a later item. Its journalled
+// writes are left where they land: they are for boxes inside the item, which
+// no other item writes for, and writes for different boxes do not depend on
+// their order.
+func (l *layouter) relayMoved(items []*flexItem, moved []int, sides []sideSpan,
+	lay func(*flexItem) *Fragment) {
+
+	gone := make([]sideSpan, len(moved))
+	for k, i := range moved {
+		gone[k] = sides[i]
+	}
+	l.takeBack(gone)
+	// Where the first item's boxes begin, and then each item's in turn.
+	start := sides[0].deferredFrom
+	kept := len(l.deferred)
+	var again [][]absCandidate
+	for _, i := range moved {
+		from := len(l.deferred)
+		items[i].frag = lay(items[i])
+		again = append(again, l.deferred[from:])
+	}
+	if kept == len(l.deferred) {
+		// Nothing a moved item laid out queued anything, so the order is the
+		// one the unmoved items left.
+		return
+	}
+	order := make([]absCandidate, 0, len(l.deferred)-start)
+	at, next := start, 0
+	for i := range items {
+		if next < len(moved) && moved[next] == i {
+			order = append(order, again[next]...)
+			next++
+			continue
+		}
+		n := sides[i].deferredTo - sides[i].deferredFrom
+		order = append(order, l.deferred[at:at+n]...)
+		at += n
+	}
+	l.deferred = append(l.deferred[:start], order...)
+}
+
 // layOutFlexItem lays one item out at the sizes the container has settled on.
 //
 // main is a content size and is the one §9.7 resolved; hasMain says it is
@@ -1349,10 +1393,16 @@ func (l *layouter) layOutFlexItem(it *flexItem, a flexAxis, width style.Unit,
 			geom.height, geom.hasHeight = inner, true
 		}
 	}
+	// Alone, and asked again: a container lays each item out more than once
+	// — to measure it, to find its line's cross size, and at the size it is
+	// kept at — and an item that is itself a container does the same to its
+	// own. Without the answers kept that is two layouts per level of nesting,
+	// multiplied down the tree: eighteen nested columns took nineteen seconds.
+	// See speculative.go.
+	at := aloneFlow(origin.cbHeight, origin.cbDefinite)
+	at.again = true
 	return outOfClamp(l, func() *Fragment {
-		f, _ := l.blockIn(it.box, width,
-			flow{ctx: &floatContext{}, cbHeight: origin.cbHeight, cbDefinite: origin.cbDefinite},
-			geom)
+		f, _ := l.blockIn(it.box, width, at, geom)
 		return f
 	})
 }
@@ -1397,10 +1447,10 @@ func (l *layouter) flexItems(b *Box, a flexAxis, room flexRoom, origin flow) []*
 	slices.SortStableFunc(out, func(x, y *flexItem) int { return x.order - y.order })
 	// A column measures each item by laying it out, and every one of those
 	// layouts is thrown away — the fragment that is kept is the one made at the
-	// size §9.7 settles on. What they took out of the flow goes with them; see
-	// the same argument at the row's stretch pass, which cannot cut the list
-	// back so simply because it keeps some of what it laid out.
-	mark := len(l.deferred)
+	// size §9.7 settles on. Everything they did goes with them: the out-of-flow
+	// boxes they found, and the fragments of the positioned boxes inside them,
+	// which a box positioned against one would otherwise be placed against.
+	before := l.checkpoint(nil, nil)
 	for _, it := range out {
 		if a.column {
 			// §9.2 in the order a column has to take it. An item's height is
@@ -1416,7 +1466,7 @@ func (l *layouter) flexItems(b *Box, a flexAxis, room flexRoom, origin flow) []*
 		it.hypothetical = style.Clamp(it.base, it.min, it.max)
 	}
 	if a.column {
-		l.deferred = l.deferred[:mark]
+		l.rollback(before)
 	}
 	return out
 }

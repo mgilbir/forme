@@ -1,0 +1,230 @@
+package layout
+
+import "github.com/mgilbir/forme/style"
+
+// The pour as it was written before it was made linear: split the remainder at
+// one column height, copy what is below, and do it again. It is kept here as
+// the oracle the linear pour is compared against, because it is the definition
+// of what a pour produces and the new one is an optimisation of it.
+
+func splitAtByCopy(f *Fragment, y style.Unit) (top, bottom *Fragment, ok bool) {
+	if f == nil {
+		return nil, nil, true
+	}
+	above, below := *f, *f
+	above.Lines, above.Children = nil, nil
+	below.Lines, below.Children = nil, nil
+
+	for _, line := range f.Lines {
+		switch {
+		case line.Rect.Bottom() <= y:
+			above.Lines = append(above.Lines, line)
+		case line.Rect.Y >= y:
+			line.Rect.Y = line.Rect.Y.Sub(y)
+			below.Lines = append(below.Lines, line)
+		default:
+			// A line box straddling the cut. A line is not divisible — it is
+			// the unit fragmentation works in — so this is not a height the
+			// caller may cut at, and columnBreaks is what stops it choosing one.
+			return nil, nil, false
+		}
+	}
+	for _, c := range f.Children {
+		switch {
+		case subtreeBottom(c) <= y:
+			kept := *c
+			above.Children = append(above.Children, &kept)
+		case c.BorderRect.Y >= y:
+			moved := *c
+			moved.BorderRect.Y = moved.BorderRect.Y.Sub(y)
+			below.Children = append(below.Children, &moved)
+		default:
+			// A box the cut goes through. Its content is divided by the same
+			// rule, one level down, and the two halves keep the box between
+			// them: a fragmented box is one box in two pieces, so they share a
+			// Box and everything that asks what generated them gets one answer.
+			t, b, fine := sliceBoxByCopy(c, y)
+			if !fine {
+				return nil, nil, false
+			}
+			if t != nil {
+				above.Children = append(above.Children, t)
+			}
+			if b != nil {
+				below.Children = append(below.Children, b)
+			}
+		}
+	}
+	if len(above.Lines) == 0 && len(above.Children) == 0 {
+		return nil, &below, true
+	}
+	if len(below.Lines) == 0 && len(below.Children) == 0 {
+		return &above, nil, true
+	}
+	return &above, &below, true
+}
+
+func fillColumnsByCopy(f *Fragment, c columns, height style.Unit) bool {
+	if height <= 0 {
+		return false
+	}
+	bands := make([]*Fragment, 0, c.n)
+	rest := f
+	for i := 0; i < c.n && rest != nil; i++ {
+		top, bottom, ok := splitAtByCopy(rest, height)
+		if !ok {
+			return false
+		}
+		bands = append(bands, top)
+		rest = bottom
+	}
+	if rest != nil {
+		// More content than the columns hold. §3.6 overflows it out of the last
+		// column, which is a fragmentation of its own and is not done here.
+		return false
+	}
+	f.Lines, f.Children = nil, nil
+	for i, band := range bands {
+		if band == nil {
+			continue
+		}
+		dx := c.width.Add(c.gap).Mul(float64(i))
+		for _, line := range band.Lines {
+			line.Rect.X = line.Rect.X.Add(dx)
+			f.Lines = append(f.Lines, line)
+		}
+		for _, child := range band.Children {
+			child.BorderRect.X = child.BorderRect.X.Add(dx)
+			f.Children = append(f.Children, child)
+		}
+	}
+	return true
+}
+
+func balancedHeightByScan(breaks []style.Unit, n int) (style.Unit, bool) {
+	for _, h := range breaks {
+		if fitsColumnsByScan(breaks, n, h) {
+			return h, true
+		}
+	}
+	return 0, false
+}
+
+// fitsColumns reports whether content whose breakpoints are these fits in n
+// columns of the given height, filled greedily.
+func fitsColumnsByScan(breaks []style.Unit, n int, height style.Unit) bool {
+	if len(breaks) == 0 {
+		return true
+	}
+	used, start := 1, style.Unit(0)
+	for _, at := range breaks {
+		if at.Sub(start) <= height {
+			continue
+		}
+		// This piece does not fit in the column being filled, so the column
+		// ended at the breakpoint before it. Nothing here needs to know which
+		// one that was: what is counted is the columns, and the piece that did
+		// not fit begins the next.
+		used++
+		start = previousBreakByScan(breaks, at)
+		if at.Sub(start) > height {
+			// One piece taller than a whole column. No number of columns holds
+			// it, and a taller column is the only answer.
+			return false
+		}
+	}
+	return used <= n
+}
+
+// previousBreak is the breakpoint before this one, or zero.
+func previousBreakByScan(breaks []style.Unit, at style.Unit) style.Unit {
+	prev := style.Unit(0)
+	for _, b := range breaks {
+		if b >= at {
+			break
+		}
+		prev = b
+	}
+	return prev
+}
+
+func sliceBoxByCopy(c *Fragment, y style.Unit) (top, bottom *Fragment, ok bool) {
+	// The cut in the child's own content coordinates, which is where its lines
+	// and children are measured from. It may fall outside them at either end: a
+	// box whose own border box is entirely above the cut can still hold content
+	// that reaches past it, which is what a float overflowing its parent is.
+	inner := y.Sub(c.ContentRect().Y)
+	t, b, fine := splitAtByCopy(c, inner)
+	if !fine {
+		return nil, nil, false
+	}
+	// How much of the box's own border box falls on each side. A box whose
+	// content overflows it has one of these at its full height and the other at
+	// nothing, which is the fragment that carries the overflow onward.
+	topH := style.Max(0, style.Min(c.BorderRect.Bottom(), y).Sub(c.BorderRect.Y))
+	bottomH := style.Max(0, c.BorderRect.Bottom().Sub(style.Max(c.BorderRect.Y, y)))
+	// A box with nothing in it is divided by its own extent and not by its
+	// content, which is what splitAt above reports on: a fragment holding no
+	// lines and no children is nothing on both sides as far as that walk can
+	// see, and a float is exactly such a box. So each side is made here where
+	// the box reaches into it and the walk found nothing to put there.
+	if t == nil && topH > 0 {
+		empty := *c
+		empty.Lines, empty.Children = nil, nil
+		t = &empty
+	}
+	if b == nil && bottomH > 0 {
+		empty := *c
+		empty.Lines, empty.Children = nil, nil
+		b = &empty
+	}
+	if topH > 0 && bottomH > 0 && refusesToSlice(c) {
+		// The box itself is being cut, and it is one whose picture slicing
+		// cannot draw. A box merely *holding* content that crosses the cut is
+		// not cut at all and is not refused: it is in one column with a
+		// zero-height fragment of itself in the next.
+		return nil, nil, false
+	}
+	if t != nil {
+		// The first fragment: its top edge is the box's own, its bottom edge is
+		// the cut and has nothing on it.
+		t.BorderRect.H = topH
+		if bottomH > 0 {
+			t.Border.Bottom, t.Padding.Bottom, t.Margin.Bottom = 0, 0, 0
+		}
+		t.contentH = t.BorderRect.H
+	}
+	if b != nil {
+		// And the last: it begins at the cut with nothing on that edge, and
+		// keeps the box's own bottom.
+		b.BorderRect.Y = style.Max(0, c.BorderRect.Y.Sub(y))
+		b.BorderRect.H = bottomH
+		if topH > 0 {
+			b.Border.Top, b.Padding.Top, b.Margin.Top = 0, 0, 0
+		}
+		b.contentH = b.BorderRect.H
+	}
+	return t, b, true
+}
+
+// subtreeBottom is how far a fragment's own box and everything it holds reach
+// below its parent's content edge.
+//
+// It is not the border box, and the difference is what a float is: a float
+// inside a container taller than the container overflows it, and the container's
+// own rectangle says nothing about where the float ends. A cut chosen from the
+// container's box alone would put the whole float in one column.
+func subtreeBottom(f *Fragment) style.Unit {
+	if f == nil {
+		return 0
+	}
+	out := f.BorderRect.Bottom()
+	inner := f.ContentRect()
+	for _, line := range f.Lines {
+		out = style.Max(out, inner.Y.Add(line.Rect.Bottom()))
+	}
+	for _, c := range f.Children {
+		out = style.Max(out, inner.Y.Add(subtreeBottom(c)))
+	}
+	return out
+}

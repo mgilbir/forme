@@ -275,12 +275,17 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 	// they are. The fragments are thrown away: an item is laid out again at the
 	// size its cell settles on, because a height changes where an item's
 	// content sits inside it.
-	mark := len(l.deferred)
+	//
+	// Everything the measuring layouts did is thrown away with them, and not
+	// only the out-of-flow boxes they found: a positioned box inside one
+	// recorded its fragment, and a box positioned against it would have been
+	// placed against the measured one. See speculative.go.
+	before := l.checkpoint(nil, nil)
 	for _, it := range items {
 		frag := l.layOutGridItem(it, it.width, 0, false, width, origin)
 		it.height = frag.BorderRect.H.Add(it.margin.Vertical())
 	}
-	l.deferred = l.deferred[:mark]
+	l.rollback(before)
 
 	l.sizeRows(rows, items, height, definite, rowGap,
 		l.gridContentAlignment(b, "align-content"))
@@ -1488,10 +1493,13 @@ func (l *layouter) layOutGridItem(it *gridItem, column, row style.Unit, hasRow b
 		geom.height, geom.hasHeight = maxZero(row.
 			Sub(it.border.Vertical()).Sub(it.padding.Vertical())), true
 	}
+	// Alone, and asked again, for the reason a flex item is: every item is laid
+	// out once to size the rows and again in its cell, and an item that is a
+	// grid itself does the same inside. See layOutFlexItem.
+	at := aloneFlow(origin.cbHeight, origin.cbDefinite)
+	at.again = true
 	return outOfClamp(l, func() *Fragment {
-		f, _ := l.blockIn(it.box, width,
-			flow{ctx: &floatContext{}, cbHeight: origin.cbHeight, cbDefinite: origin.cbDefinite},
-			geom)
+		f, _ := l.blockIn(it.box, width, at, geom)
 		return f
 	})
 }

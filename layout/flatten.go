@@ -73,10 +73,16 @@ func (l *layouter) atomicItem(b *Box, frame inlineFrame) inlineItem {
 	}
 
 	var frag *Fragment
+	side := l.sideMark()
 	if b.Replaced != nil {
 		frag = l.replacedFragment(b, frame)
 	} else {
 		frag = l.inlineBlockFragment(b, frame)
+	}
+	// What laying it out did, for the line loop to take back if no line ever
+	// holds it. See laidAtomic.
+	if l.atomics != nil {
+		*l.atomics = append(*l.atomics, laidAtomic{frag: frag, side: l.sideSince(side)})
 	}
 	box := frag.MarginRect()
 	item.Atomic = frag
@@ -157,7 +163,7 @@ func (l *layouter) replacedFragment(b *Box, frame inlineFrame) *Fragment {
 	if b.Position.positioned() {
 		// §10.1 makes any positioned box a containing block, and an image with
 		// "position: relative" is the everyday way to hang a caption on one.
-		l.positioned[b] = frag
+		l.setPositioned(b, frag)
 	}
 	return frag
 }
@@ -191,8 +197,7 @@ func (l *layouter) inlineBlockFragment(b *Box, frame inlineFrame) *Fragment {
 	// choice made here — it is what "flow-root" means, and blockIn would make
 	// one anyway for a box that seals its margins.
 	frag := outOfClamp(l, func() *Fragment {
-		f, _ := l.blockIn(b, frame.Containing,
-			flow{ctx: &floatContext{}, cbHeight: frame.CbHeight, cbDefinite: frame.CbDefinite},
+		f, _ := l.blockIn(b, frame.Containing, aloneFlow(frame.CbHeight, frame.CbDefinite),
 			&forcedGeometry{margin: margin, width: width})
 		return f
 	})
@@ -450,16 +455,31 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			// as carried down, because the box's own background and border are
 			// moved by it and they are made from the box rather than from the
 			// items — see inlineDecor.finish.
+			//
+			// Both records are written by every walk that is not measuring,
+			// including one that finds nothing to record. A box can be laid out
+			// more than once and at more than one width, and an offset such as
+			// "calc(50% - 100px)" that one pass recorded and a narrower one
+			// computed as nothing was read by the narrower one as though it were
+			// still there.
 			inner.Valign = l.vAlignFor(child, frame.Valign)
-			if inner.Valign.Aligned() && !frame.Measuring {
-				l.inlineAligns[child] = inner.Valign
+			if !frame.Measuring {
+				if inner.Valign.Aligned() {
+					l.inlineAligns[child] = inner.Valign
+				} else {
+					delete(l.inlineAligns, child)
+				}
 			}
-			if inner.Offset != (Point{}) && !frame.Measuring {
+			if !frame.Measuring {
 				// The box's own displacement, which its background and border are
 				// drawn at. It is recorded here because this is the only walk that
 				// has it: the items carry the offset of whatever box they came
 				// from, which for a nested inline is not this one's.
-				l.inlineOffsets[child] = inner.Offset
+				if inner.Offset != (Point{}) {
+					l.inlineOffsets[child] = inner.Offset
+				} else {
+					delete(l.inlineOffsets, child)
+				}
 			}
 			// The formatting codes unicode-bidi stands for, around the box's
 			// contents. This is the one walk that sees where an inline box begins

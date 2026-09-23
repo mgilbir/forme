@@ -158,6 +158,13 @@ type Fragment struct {
 	// that is drawn too large.
 	clipSelf, clipContent Clip
 
+	// absolute says absolutise has made this fragment's position a page
+	// position, which it does to every fragment in the tree and to nothing
+	// outside it. It is how an out-of-flow box knows that the fragment it was
+	// queued against is on the page: one that never became absolute was made by
+	// a layout that was thrown away. See placeAbsolutes.
+	absolute bool
+
 	// Offset is CSS 2.1 §9.4.3's relative displacement: how far the box is drawn
 	// from where the flow put it.
 	//
@@ -249,6 +256,7 @@ func newLayouter(root *Box, avail Size, set FontSet, rec *Recorder) *layouter {
 		fontSet:          set,
 		rootFontSize:     root.FontSize,
 		root:             root,
+		workLimit:        layoutWorkLimit(root),
 	}
 	// The words of every inline formatting context, gathered before anything is
 	// laid out. A word is not a box — "high<span>way</span>" is one word written
@@ -271,6 +279,7 @@ func newLayouter(root *Box, avail Size, set FontSet, rec *Recorder) *layouter {
 // given.
 func (l *layouter) layout() *Fragment {
 	root, avail := l.root, l.avail
+	defer l.reportOverWork()
 
 	// The root box establishes the outermost block formatting context, so no
 	// float in the document can escape the page. The context handed in here is
@@ -299,7 +308,7 @@ func (l *layouter) layout() *Fragment {
 		// "html { position: absolute; left: 100px }" put the document at the top
 		// left corner. abspos-containing-block-initial-004a, -004b, -004c, -004d
 		// and -009b are five documents that do exactly that.
-		icb := &Fragment{BorderRect: page}
+		icb := &Fragment{BorderRect: page, absolute: true}
 		l.layoutAbsolute(absCandidate{box: root, parent: icb}, page)
 		l.placeAbsolutes(page)
 		if len(icb.Children) == 0 {
@@ -563,6 +572,30 @@ type layouter struct {
 	// last. It is on the layouter because CSS Overflow 4 counts *descendant*
 	// line boxes, which no one block container can see. See clamp.go.
 	clamps []*lineClamp
+
+	// atomics collects the atomic inlines the inline walk in progress laid out,
+	// with what each layout did, while inlineContent is gathering its items.
+	// nil outside that walk. See laidAtomic.
+	atomics *[]laidAtomic
+
+	// journal is every write made to positioned and inlineFragments, in order,
+	// so that a pass that is thrown away can take its writes back and a layout
+	// that is reused can make them again. See speculative.go.
+	journal []sideWrite
+	// cache is the layouts kept for reuse, and noCache turns it off, which is
+	// what the test that compares the two does. See speculative.go.
+	cache   layoutCache
+	noCache bool
+	// work counts the box layouts done, the line boxes made and the copies the
+	// cache made, and workLimit is how much of it this document is allowed.
+	// copyCredit is the copies not yet charged as a whole unit, and overWork
+	// what the bound stopped. unplaced counts the out-of-flow boxes not placed
+	// because the fragment they were queued against is not on the page. See
+	// maxLayoutWork and placeAbsolutes.
+	work, workLimit int
+	copyCredit      int
+	overWork        overWork
+	unplaced        int
 }
 
 type lengthKey struct {
@@ -716,6 +749,7 @@ func absolutise(f *Fragment, x, y style.Unit) {
 	}
 	f.BorderRect.X = f.BorderRect.X.Add(x).Add(f.Offset.X)
 	f.BorderRect.Y = f.BorderRect.Y.Add(y).Add(f.Offset.Y)
+	f.absolute = true
 	// The bands are in the same coordinates the border box was, so they take the
 	// same translation. See Fragment.bgBands.
 	for i := range f.bgBands {
@@ -733,6 +767,7 @@ func absolutise(f *Fragment, x, y style.Unit) {
 		for _, ib := range f.Lines[i].Boxes {
 			ib.BorderRect.X = ib.BorderRect.X.Add(content.X).Add(ib.Offset.X)
 			ib.BorderRect.Y = ib.BorderRect.Y.Add(content.Y).Add(ib.Offset.Y)
+			ib.absolute = true
 		}
 	}
 	for _, c := range f.Children {
@@ -754,18 +789,14 @@ func (l *layouter) block(b *Box, containing style.Unit, at flow) (*Fragment, col
 	return l.blockIn(b, containing, at, nil)
 }
 
-// blockIn is block layout with the option of having the box's width, margins and
-// height decided by the caller instead of by its own declarations.
-//
-// The only caller that supplies them is the absolute placement of position.go,
-// whose §10.3.7 constraint resolves a width against a containing block this walk
-// cannot see. Routing it through the same function rather than giving it a
-// layout of its own is deliberate: margin collapsing, floats, line breaking,
-// list markers and the height rules are identical for an absolutely positioned
-// box, and a second implementation of them would agree with this one on the day
-// it was written and on no day after.
-func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
+// layBlock is blockIn without the cache: the layout itself.
+func (l *layouter) layBlock(b *Box, containing style.Unit, at flow,
 	forced *forcedGeometry) (*Fragment, collapsed) {
+
+	// Charged before anything else, and to every layout that is actually done.
+	// An answer the cache hands back is a copy rather than a layout and is not
+	// charged. See maxLayoutWork.
+	starved := l.starved(b)
 
 	// The two values this engine understands and does not act on for a box of
 	// this shape. Both are asked once per box here rather than by a pass of their
@@ -852,7 +883,7 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	turnTo := l.turns(b, containing)
 	turn := turnTo.vertical()
 
-	sealed := establishesBFC(b) || b == l.root || turn
+	sealed := l.sealsFloats(b) || b == l.root || turn
 
 	// A margin collapses through an edge only when nothing sits on that edge to
 	// stop it. A border or a padding of even one unit is something.
@@ -915,7 +946,7 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 		// §10.1 makes any positioned ancestor a containing block — that is the
 		// entire reason the "position: relative with no offsets" wrapper is an
 		// idiom rather than a no-op.
-		l.positioned[b] = frag
+		l.setPositioned(b, frag)
 	}
 
 	// Where this box's children are laid out, in the coordinates of the
@@ -1034,19 +1065,38 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 			lineLength = l.shrinkToFit(b, l.avail.H)
 		}
 	}
-	contentHeight, hoistTop, hoistBottom, placedAnything :=
-		l.clampedChildren(b, frag, lineLength, topOpen, bottomOpen, inner)
+	// Where the content began, so that a pour that cannot be made can be taken
+	// back whole. See the fallback below.
+	var beforeContent checkpoint
 	if inColumns {
+		beforeContent = l.checkpoint(inner.ctx, frag)
+	}
+	var contentHeight style.Unit
+	var hoistTop, hoistBottom marginRun
+	var placedAnything, poured bool
+	if !starved {
+		contentHeight, hoistTop, hoistBottom, placedAnything =
+			l.clampedChildren(b, frag, lineLength, topOpen, bottomOpen, inner)
+	}
+	if inColumns && !starved {
 		if height, ok := l.pourIntoColumns(b, frag, cols, contentHeight,
 			declaredHeight, hasHeight); ok {
-			contentHeight = height
+			contentHeight, poured = height, true
 		} else {
 			// The content could not be divided where the columns needed it.
 			// What was laid out is at the column's width, which is not this
 			// box's, so it is laid out again — the box is reported, and a
 			// reported box is the page it would have been before columns were
 			// asked for.
-			frag.Children, frag.Lines = nil, nil
+			//
+			// Everything the first layout did is taken back, and not only its
+			// fragments. It placed floats in the context its content shares —
+			// the multicol's own, now that it is a formatting context, and its
+			// parent's before that — and it queued the out-of-flow boxes it
+			// met, and it charged its lines to any clamp above it. Leaving the
+			// floats put the real ones beside invisible copies of themselves
+			// and indented the text after the box round both.
+			l.rollback(beforeContent)
 			contentHeight, hoistTop, hoistBottom, placedAnything =
 				l.clampedChildren(b, frag, width, topOpen, bottomOpen, inner)
 		}
@@ -1082,8 +1132,14 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	// above but does not change. The float rule below applies to it either way:
 	// a float inside a box that contains its own is part of what that box holds,
 	// whether or not a height was declared. See Fragment.contentH.
+	//
+	// Not for content that was poured into columns. The floats in the context
+	// are where the single tall column put them, and the pour has since cut them
+	// into the columns with everything else — the column height already holds
+	// them, because a float's bottom is one of the places a column may end.
 	natural := contentHeight
-	if own != at.ctx {
+	containsFloats := own != at.ctx && !poured
+	if containsFloats {
 		natural = style.Max(natural, own.bottom())
 	}
 
@@ -1098,7 +1154,7 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 		} else {
 			contentHeight = declaredHeight
 		}
-	} else if own != at.ctx {
+	} else if containsFloats {
 		// CSS 2.1 §10.6.7: the auto height of a box that establishes a block
 		// formatting context reaches the bottom of the floats inside it. This is
 		// the entire reason "overflow: hidden" is the idiom for containing a
@@ -1394,8 +1450,11 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		estDrop, estGeom := l.avoidFloats(child, width, origin, est, 0, false)
 		est = est.Add(estDrop)
 
-		mark, consulted := origin.ctx.mark(), origin.ctx.consulted
-		absMark := len(l.deferred)
+		// Everything the child's layout is about to change, so that a layout
+		// made at a position that turns out wrong can be taken back whole. See
+		// settleIn and fitBesideFloats.
+		rewind, consulted := l.checkpoint(origin.ctx, nil), origin.ctx.consulted
+		mark := rewind.floats
 		cf, cm := l.blockIn(child, width, origin.at(est), estGeom)
 		// Whether the *subtree* read the float geometry, captured before the
 		// clearance query below adds a read of its own.
@@ -1545,7 +1604,7 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 				// cover.
 				at = y
 			}
-			cf = l.settle(child, width, origin, cf, est, at, mark, absMark, subtreeRead)
+			cf = l.settle(child, width, origin, cf, est, at, rewind, subtreeRead)
 			cf.BorderRect.Y = at
 			if child.ListItem {
 				cf.Marker = l.markerFor(child, cf, origin)
@@ -1608,7 +1667,7 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 			// all rather than 100: the run is committed inside it instead of
 			// leaving through its bottom edge, which is what marginRun.cleared
 			// carries to the end of the walk.
-			cf = l.settle(child, width, origin, cf, est, at, mark, absMark, subtreeRead)
+			cf = l.settle(child, width, origin, cf, est, at, rewind, subtreeRead)
 			cf.BorderRect.Y = at
 			if child.ListItem {
 				cf.Marker = l.markerFor(child, cf, origin)
@@ -1633,12 +1692,12 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		if !sameForced(estGeom, atGeom) {
 			subtreeRead = true
 		}
-		cf = l.settleIn(child, width, origin, cf, est, at, mark, absMark, subtreeRead, atGeom)
+		cf = l.settleIn(child, width, origin, cf, est, at, rewind, subtreeRead, atGeom)
 		// The same question again, now that the box has a height. See
 		// fitBesideFloats: the two answers differ exactly when a float begins
 		// below the box's top and inside its height, which is the case the band
 		// at a single y cannot see.
-		at, cf = l.fitBesideFloats(child, width, origin, cf, at, atGeom, mark, absMark)
+		at, cf = l.fitBesideFloats(child, width, origin, cf, at, atGeom, rewind)
 		parent.Children = append(parent.Children, cf)
 
 		y = at
@@ -1852,19 +1911,19 @@ var maxRelayouts = 4096
 // and the render says it stopped short, which is a page that is slightly wrong
 // and says so rather than one that took unbounded time to be right.
 func (l *layouter) settle(child *Box, width style.Unit, origin flow, cf *Fragment,
-	predicted, actual style.Unit, mark, absMark int, read bool) *Fragment {
-	return l.settleIn(child, width, origin, cf, predicted, actual, mark, absMark, read, nil)
+	predicted, actual style.Unit, before checkpoint, read bool) *Fragment {
+	return l.settleIn(child, width, origin, cf, predicted, actual, before, read, nil)
 }
 
 // settleIn is settle with the geometry §9.5 forced on a box that had to avoid a
 // float, so that the second layout is done against the band the box ended in
 // rather than against the one it was predicted to be in.
 func (l *layouter) settleIn(child *Box, width style.Unit, origin flow, cf *Fragment,
-	predicted, actual style.Unit, mark, absMark int, read bool,
+	predicted, actual style.Unit, before checkpoint, read bool,
 	forced *forcedGeometry) *Fragment {
 
 	delta := actual.Sub(predicted)
-	if delta == 0 || origin.ctx.mark() == mark && !read {
+	if delta == 0 || origin.ctx.mark() == before.floats && !read {
 		return cf
 	}
 	if !read || l.relayouts >= maxRelayouts {
@@ -1874,17 +1933,19 @@ func (l *layouter) settleIn(child *Box, width style.Unit, origin flow, cf *Fragm
 					"around them are; the rest were placed against the position they "+
 					"were predicted to have")
 		}
-		origin.ctx.shift(mark, delta)
+		origin.ctx.shift(before.floats, delta)
 		return cf
 	}
 
 	l.relayouts++
-	origin.ctx.truncate(mark)
-	// The out-of-flow boxes the discarded layout found are discarded with it.
-	// Without this they would be placed twice — once against a fragment that is
-	// about to be thrown away — and the page would carry a ghost of every
-	// absolutely positioned box inside a subtree that had to be laid out again.
-	l.deferred = l.deferred[:absMark]
+	// Everything the discarded layout did is discarded with it: the floats it
+	// placed, the out-of-flow boxes it found, the positioned fragments it
+	// recorded and the lines it charged to a clamp. Without the second they
+	// would be placed twice — once against a fragment that is about to be thrown
+	// away — and the page would carry a ghost of every absolutely positioned box
+	// inside a subtree that had to be laid out again; without the last, a clamp
+	// around it counts the child's lines twice and stops early.
+	l.rollback(before)
 	corrected := origin.at(actual)
 	corrected.carriedTop = delta
 	again, _ := l.blockIn(child, width, corrected, forced)
@@ -1917,15 +1978,14 @@ var maxFloatFits = 3
 // the one where a float slides silently through a box that was supposed to move
 // out of its way.
 //
-// The rewind is the one settleIn does: the floats the discarded layout placed
-// are dropped, the out-of-flow boxes it deferred are dropped with them, and the
-// box is laid out again from the corrected position. Unlike settleIn this cannot
+// The rewind is the one settleIn does: everything the discarded layout did is
+// rolled back, and the box is laid out again from the corrected position. Unlike settleIn this cannot
 // take the cheap translation, because a box whose band changed is a box whose
 // width may have changed, and no translation repairs that.
 func (l *layouter) fitBesideFloats(child *Box, width style.Unit, origin flow,
-	cf *Fragment, at style.Unit, geom *forcedGeometry, mark, absMark int) (style.Unit, *Fragment) {
+	cf *Fragment, at style.Unit, geom *forcedGeometry, before checkpoint) (style.Unit, *Fragment) {
 
-	if !avoidsFloats(child) || len(origin.ctx.boxes) == 0 {
+	if !l.avoidsFloats(child) || len(origin.ctx.boxes) == 0 {
 		return at, cf
 	}
 	for i := 0; i < maxFloatFits; i++ {
@@ -1942,8 +2002,7 @@ func (l *layouter) fitBesideFloats(child *Box, width style.Unit, origin flow,
 		}
 		l.relayouts++
 		at, geom = at.Add(drop), next
-		origin.ctx.truncate(mark)
-		l.deferred = l.deferred[:absMark]
+		l.rollback(before)
 		cf, _ = l.blockIn(child, width, origin.at(at), geom)
 	}
 	return at, cf

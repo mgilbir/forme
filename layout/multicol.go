@@ -1,6 +1,8 @@
 package layout
 
 import (
+	"cmp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,10 +30,17 @@ import (
 // A great deal, and each of it is refused with a finding rather than
 // approximated. Anything that would have to be cut *through* is refused: a box
 // with a border, a background or an outline crossing a column boundary is two
-// halves of a drawn thing, and CSS says which edges each half keeps. A float
-// inside the columns is refused because a float is placed against a formatting
-// context that has no notion of which column it is in. "column-span" is refused
-// because a spanning element divides the multicol into two of them.
+// halves of a drawn thing, and CSS says which edges each half keeps.
+// "column-span" is refused because a spanning element divides the multicol into
+// two of them.
+//
+// A float is not refused, and this comment used to say it was. It is laid out
+// in the tall column with everything else and cut with it — a float is a box
+// like any other to the pour, sliced where a column ends — and it is placed in
+// the multicol container's own formatting context, because §2 makes a multicol
+// container establish one. See sealsFloats: before it did, the float's uncut
+// rectangle was left in the parent's context after the pour, and the text after
+// the container was indented round it.
 //
 // The gate is the same shape as the writing-mode one and for the same reason:
 // what is refused is laid out exactly as it was before this file existed, in one
@@ -159,79 +168,425 @@ func columnFillOf(b *Box) columnFill {
 	return columnBalance
 }
 
-// splitAt divides a fragment's content at a height, and is this engine's only
-// fragmentation.
+// A pour divides a fragment's content at a column height, again and again, and
+// is this engine's only fragmentation.
 //
-// The fragment given is the one holding the content — a multicol container, or
-// a box inside one — and y is a distance down its *content* box. What comes back
-// is the part above y left in place, and the part below it moved up so that y
-// becomes its own zero. Either may be nil: content entirely above the cut leaves
-// nothing below, and content entirely below it leaves nothing above.
+// One cut is simple to state. The fragment given is the one holding the
+// content — a multicol container, or a box inside one — and the cut is a
+// distance down its *content* box. What falls above it stays where it is, and
+// what falls below it moves up so that the cut becomes its own zero. A box the
+// cut goes through is copied, once for each side, and each copy keeps the lines
+// and the children that fall on its side: that is what CSS describes for a
+// fragmented box, and it is why the two halves are fragments of one box rather
+// than two boxes — they share a Box, so everything that asks what generated
+// them gets one answer. The cut is refused where it would go through something
+// drawn: a line, or a border, background or outline CSS says which half keeps.
 //
-// A box that has to be cut through is copied, once for each side, and each copy
-// keeps the lines and the children that fall on its side. That is what CSS
-// describes for a fragmented box, and it is why the two halves are fragments of
-// one box rather than two boxes: they share a Box, so everything that asks what
-// generated them gets one answer.
+// A pour is that cut made once per column, each time to what the last one left
+// below. Made literally — copy everything below the cut, then cut the copy —
+// it copied every remaining line once per column, and a paragraph of a word
+// per line in a thousand columns was thirty-two thousand lines copied thirty-two
+// thousand times: seventy-six seconds for 64 KB of markup.
 //
-// It refuses — false — where the cut would go through something drawn. A border,
-// a background or an outline crossing a column boundary is a picture with edges
-// CSS says which half keeps, and guessing is worse than reporting.
-func splitAt(f *Fragment, y style.Unit) (top, bottom *Fragment, ok bool) {
-	if f == nil {
-		return nil, nil, true
-	}
-	above, below := *f, *f
-	above.Lines, above.Children = nil, nil
-	below.Lines, below.Children = nil, nil
+// So what is left below a cut is not copied. It is a pending fragment: the
+// original's lines and children, untouched, with the distance they have moved
+// up held once beside them instead of written into each. A line or a box that
+// no cut goes through moves by exactly that distance and nothing else, so it is
+// copied once, into the column it lands in, when it lands there. Which column
+// that is follows from where it is, so each is found by keeping the untouched
+// items in order of where they end and where they begin and taking them off the
+// front as the cuts pass them. Only a box a cut goes through is copied at the
+// cut, and its content is pending in turn.
+//
+// The order of what lands in a column is the order the original held it in,
+// which is what a copy of the remainder would have kept: a box's children are
+// painted in that order and some overlap.
+//
+// multicol_reference_test.go keeps the literal pour, and the tests hold this
+// one to it.
 
+// pending is a fragment whose content has not been copied yet.
+type pending struct {
+	// root is the fragment's own box: what a cut copies for each side. Its
+	// lines and children are not read; the content is src's.
+	root Fragment
+	src  *Fragment
+	// shift is how far src's untouched content has moved up, in src's content
+	// coordinates.
+	shift style.Unit
+
+	// The untouched lines and children of src, each listed twice: by where it
+	// ends, which is the order the cuts take them off above, and by where it
+	// begins, which is the order they are found straddling one. gone marks the
+	// ones already taken by the other list.
+	linesByEnd, linesByStart []int
+	lineGone                 []bool
+	linesLeft                int
+	kidsByEnd, kidsByStart   []int
+	kidGone                  []bool
+	kidsLeft                 int
+
+	// cut is the children a cut has gone through, each the part below the cut
+	// and each at its place among src's children. See split.
+	cut []cutKid
+
+	p *pour
+}
+
+// cutKid is a child a cut went through: the part of it still to be poured, and
+// the index of the child it is part of, which is where it goes in the list.
+type cutKid struct {
+	index int
+	rest  *pending
+}
+
+// pour is one pour's state: the ends of the original subtrees, which are asked
+// for again and again and do not change, and how many fragments it has made.
+// See maxPourPieces.
+type pour struct {
+	ends map[*Fragment]style.Unit
+	made int
+}
+
+// end is subtreeBottom, once per fragment per pour.
+func (p *pour) end(f *Fragment) style.Unit {
+	if v, ok := p.ends[f]; ok {
+		return v
+	}
+	out := f.BorderRect.Bottom()
+	inner := f.ContentRect()
 	for _, line := range f.Lines {
-		switch {
-		case line.Rect.Bottom() <= y:
-			above.Lines = append(above.Lines, line)
-		case line.Rect.Y >= y:
-			line.Rect.Y = line.Rect.Y.Sub(y)
-			below.Lines = append(below.Lines, line)
-		default:
-			// A line box straddling the cut. A line is not divisible — it is
-			// the unit fragmentation works in — so this is not a height the
-			// caller may cut at, and columnBreaks is what stops it choosing one.
-			return nil, nil, false
-		}
+		out = style.Max(out, inner.Y.Add(line.Rect.Bottom()))
 	}
 	for _, c := range f.Children {
+		out = style.Max(out, inner.Y.Add(p.end(c)))
+	}
+	p.ends[f] = out
+	return out
+}
+
+// pend makes a fragment pending, with nothing moved yet.
+func (p *pour) pend(root Fragment, src *Fragment) *pending {
+	n := &pending{root: root, src: src, p: p}
+	n.linesByEnd = make([]int, len(src.Lines))
+	n.linesByStart = make([]int, len(src.Lines))
+	for i := range src.Lines {
+		n.linesByEnd[i], n.linesByStart[i] = i, i
+	}
+	slices.SortStableFunc(n.linesByEnd, func(a, b int) int {
+		return cmp.Compare(src.Lines[a].Rect.Bottom(), src.Lines[b].Rect.Bottom())
+	})
+	slices.SortStableFunc(n.linesByStart, func(a, b int) int {
+		return cmp.Compare(src.Lines[a].Rect.Y, src.Lines[b].Rect.Y)
+	})
+	n.lineGone, n.linesLeft = make([]bool, len(src.Lines)), len(src.Lines)
+
+	n.kidsByEnd = make([]int, len(src.Children))
+	n.kidsByStart = make([]int, len(src.Children))
+	for i := range src.Children {
+		n.kidsByEnd[i], n.kidsByStart[i] = i, i
+	}
+	slices.SortStableFunc(n.kidsByEnd, func(a, b int) int {
+		return cmp.Compare(p.end(src.Children[a]), p.end(src.Children[b]))
+	})
+	slices.SortStableFunc(n.kidsByStart, func(a, b int) int {
+		return cmp.Compare(src.Children[a].BorderRect.Y, src.Children[b].BorderRect.Y)
+	})
+	n.kidGone, n.kidsLeft = make([]bool, len(src.Children)), len(src.Children)
+	return n
+}
+
+// empty says nothing is left to pour.
+func (n *pending) empty() bool {
+	return n.linesLeft == 0 && n.kidsLeft == 0 && len(n.cut) == 0
+}
+
+// extent is subtreeBottom of what is left: how far the fragment and the content
+// still in it reach below its parent's content edge.
+func (n *pending) extent() style.Unit {
+	out := n.root.BorderRect.Bottom()
+	var content style.Unit
+	has := false
+	// The last of the by-end lists is the furthest-reaching of what is left,
+	// once the ones already taken are dropped off that end as well.
+	for k := len(n.linesByEnd); k > 0 && n.lineGone[n.linesByEnd[k-1]]; k-- {
+		n.linesByEnd = n.linesByEnd[:k-1]
+	}
+	if k := len(n.linesByEnd); k > 0 {
+		content, has = n.src.Lines[n.linesByEnd[k-1]].Rect.Bottom().Sub(n.shift), true
+	}
+	for k := len(n.kidsByEnd); k > 0 && n.kidGone[n.kidsByEnd[k-1]]; k-- {
+		n.kidsByEnd = n.kidsByEnd[:k-1]
+	}
+	if k := len(n.kidsByEnd); k > 0 {
+		v := n.p.end(n.src.Children[n.kidsByEnd[k-1]]).Sub(n.shift)
+		if !has || v > content {
+			content, has = v, true
+		}
+	}
+	for _, c := range n.cut {
+		v := c.rest.extent()
+		if !has || v > content {
+			content, has = v, true
+		}
+	}
+	if has {
+		out = style.Max(out, n.root.ContentRect().Y.Add(content))
+	}
+	return out
+}
+
+// materialise copies out everything still pending, as a fragment.
+func (n *pending) materialise() *Fragment {
+	n.p.made += 1 + n.linesLeft + n.kidsLeft
+	f := n.root
+	f.Lines, f.Children = nil, nil
+	for i, line := range n.src.Lines {
+		if n.lineGone[i] {
+			continue
+		}
+		line.Rect.Y = line.Rect.Y.Sub(n.shift)
+		f.Lines = append(f.Lines, line)
+	}
+	kids := make([]cutKid, 0, n.kidsLeft+len(n.cut))
+	for i := range n.src.Children {
+		if !n.kidGone[i] {
+			kids = append(kids, cutKid{index: i})
+		}
+	}
+	kids = append(kids, n.cut...)
+	slices.SortStableFunc(kids, func(a, b cutKid) int { return a.index - b.index })
+	for _, k := range kids {
+		if k.rest != nil {
+			f.Children = append(f.Children, k.rest.materialise())
+			continue
+		}
+		moved := *n.src.Children[k.index]
+		moved.BorderRect.Y = moved.BorderRect.Y.Sub(n.shift)
+		f.Children = append(f.Children, &moved)
+	}
+	return &f
+}
+
+// split cuts what is left at y, a distance down the fragment's content box as it
+// now stands. It returns the part above as a fragment, and leaves the part below
+// pending in n with y as its new zero, or says the cut goes through something
+// that cannot be cut.
+//
+// top is nil where nothing was above, and below is false where nothing was left
+// below — in which case n is spent. Where nothing was above, n is kept whether
+// or not anything is left in it, which is what the literal cut did: a fragment
+// with no content comes back as itself below the cut, so a pour of one never
+// ends.
+func (n *pending) split(y style.Unit) (top *Fragment, below, ok bool) {
+	at := n.shift.Add(y) // the cut, in src's coordinates
+	above := n.root
+	above.Lines, above.Children = nil, nil
+
+	// Lines. Everything ending at or above the cut is above it; anything left
+	// that begins above it goes through it, and a line cannot be divided.
+	var took []int
+	for len(n.linesByEnd) > 0 {
+		i := n.linesByEnd[0]
+		if n.lineGone[i] {
+			n.linesByEnd = n.linesByEnd[1:]
+			continue
+		}
+		if n.src.Lines[i].Rect.Bottom() > at {
+			break
+		}
+		n.linesByEnd = n.linesByEnd[1:]
+		n.lineGone[i], n.linesLeft = true, n.linesLeft-1
+		took = append(took, i)
+	}
+	for len(n.linesByStart) > 0 && n.lineGone[n.linesByStart[0]] {
+		n.linesByStart = n.linesByStart[1:]
+	}
+	if len(n.linesByStart) > 0 && n.src.Lines[n.linesByStart[0]].Rect.Y < at {
+		// A line box straddling the cut. A line is not divisible — it is the
+		// unit fragmentation works in — so this is not a height the caller may
+		// cut at, and columnBreaks is what stops it choosing one.
+		return nil, false, false
+	}
+	slices.Sort(took)
+	for _, i := range took {
+		line := n.src.Lines[i]
+		line.Rect.Y = line.Rect.Y.Sub(n.shift)
+		above.Lines = append(above.Lines, line)
+	}
+
+	// Children. The ones already cut first: each is a box of its own, placed in
+	// the coordinates of what is left, and asked the three questions a child
+	// is asked — above, below, or through.
+	var kids []placedKid
+	still := n.cut
+	n.cut = nil
+	for _, c := range still {
 		switch {
-		case subtreeBottom(c) <= y:
-			kept := *c
-			above.Children = append(above.Children, &kept)
-		case c.BorderRect.Y >= y:
-			moved := *c
-			moved.BorderRect.Y = moved.BorderRect.Y.Sub(y)
-			below.Children = append(below.Children, &moved)
+		case c.rest.extent() <= y:
+			kids = append(kids, placedKid{c.index, c.rest.materialise()})
+		case c.rest.root.BorderRect.Y >= y:
+			c.rest.root.BorderRect.Y = c.rest.root.BorderRect.Y.Sub(y)
+			n.cut = append(n.cut, c)
 		default:
-			// A box the cut goes through. Its content is divided by the same
-			// rule, one level down, and the two halves keep the box between
-			// them: a fragmented box is one box in two pieces, so they share a
-			// Box and everything that asks what generated them gets one answer.
-			t, b, fine := sliceBox(c, y)
+			t, b, fine := c.rest.slice(y)
 			if !fine {
-				return nil, nil, false
+				return nil, false, false
 			}
 			if t != nil {
-				above.Children = append(above.Children, t)
+				kids = append(kids, placedKid{c.index, t})
 			}
 			if b != nil {
-				below.Children = append(below.Children, b)
+				n.cut = append(n.cut, cutKid{c.index, b})
 			}
 		}
 	}
+	// Then the untouched ones: everything ending at or above the cut is above
+	// it, whole, and anything left that begins above it is one the cut goes
+	// through.
+	for len(n.kidsByEnd) > 0 {
+		i := n.kidsByEnd[0]
+		if n.kidGone[i] {
+			n.kidsByEnd = n.kidsByEnd[1:]
+			continue
+		}
+		if n.p.end(n.src.Children[i]) > at {
+			break
+		}
+		n.kidsByEnd = n.kidsByEnd[1:]
+		n.kidGone[i], n.kidsLeft = true, n.kidsLeft-1
+		kept := *n.src.Children[i]
+		kept.BorderRect.Y = kept.BorderRect.Y.Sub(n.shift)
+		kids = append(kids, placedKid{i, &kept})
+	}
+	for {
+		for len(n.kidsByStart) > 0 && n.kidGone[n.kidsByStart[0]] {
+			n.kidsByStart = n.kidsByStart[1:]
+		}
+		if len(n.kidsByStart) == 0 || n.src.Children[n.kidsByStart[0]].BorderRect.Y >= at {
+			break
+		}
+		i := n.kidsByStart[0]
+		n.kidsByStart = n.kidsByStart[1:]
+		n.kidGone[i], n.kidsLeft = true, n.kidsLeft-1
+		// A box the cut goes through. Its content is divided by the same rule,
+		// one level down, and the two halves keep the box between them.
+		c := n.src.Children[i]
+		root := *c
+		root.BorderRect.Y = root.BorderRect.Y.Sub(n.shift)
+		t, b, fine := n.p.pend(root, c).slice(y)
+		if !fine {
+			return nil, false, false
+		}
+		if t != nil {
+			kids = append(kids, placedKid{i, t})
+		}
+		if b != nil {
+			n.cut = append(n.cut, cutKid{i, b})
+		}
+	}
+	n.p.made += len(took) + len(kids)
+	slices.SortStableFunc(kids, func(a, b placedKid) int { return a.index - b.index })
+	for _, k := range kids {
+		above.Children = append(above.Children, k.frag)
+	}
+	slices.SortStableFunc(n.cut, func(a, b cutKid) int { return a.index - b.index })
+
+	// What is left moves up by the cut. The cut pieces already have: slice
+	// places the part below at its own zero, and one that was below the cut
+	// was moved above.
+	n.shift = at
+
 	if len(above.Lines) == 0 && len(above.Children) == 0 {
-		return nil, &below, true
+		return nil, true, true
 	}
-	if len(below.Lines) == 0 && len(below.Children) == 0 {
-		return &above, nil, true
+	if n.empty() {
+		return &above, false, true
 	}
-	return &above, &below, true
+	return &above, true, true
+}
+
+type placedKid struct {
+	index int
+	frag  *Fragment
+}
+
+// slice divides one box at a height in its parent's content coordinates, and
+// gives each half the edges CSS Fragmentation assigns it. n is the box, with
+// its content still pending; the part below the cut is n again, the part above
+// is copied out.
+//
+// §4.4's "box-decoration-break: slice", which is the initial value and the only
+// one this engine does: the box is rendered as though it were never divided and
+// then cut, so no border appears at the cut on either side. The top border and
+// padding go to the first fragment, the bottom to the last, and the two sides go
+// to both — which is what draws a bordered box as one shape running down several
+// columns rather than as several boxed-off pieces.
+//
+// The other value, "clone", gives every fragment the whole border and its own
+// background. It is a different picture and this does not produce it; a box
+// declaring it is refused by canColumn.
+func (n *pending) slice(y style.Unit) (top *Fragment, bottom *pending, ok bool) {
+	c := n.root
+	// The cut in the box's own content coordinates, which is where its lines and
+	// children are measured from. It may fall outside them at either end: a box
+	// whose own border box is entirely above the cut can still hold content
+	// that reaches past it, which is what a float overflowing its parent is.
+	inner := y.Sub(c.ContentRect().Y)
+	t, below, fine := n.split(inner)
+	if !fine {
+		return nil, nil, false
+	}
+	b := n
+	if !below {
+		b = nil
+	}
+	// How much of the box's own border box falls on each side. A box whose
+	// content overflows it has one of these at its full height and the other at
+	// nothing, which is the fragment that carries the overflow onward.
+	topH := style.Max(0, style.Min(c.BorderRect.Bottom(), y).Sub(c.BorderRect.Y))
+	bottomH := style.Max(0, c.BorderRect.Bottom().Sub(style.Max(c.BorderRect.Y, y)))
+	// A box with nothing in it is divided by its own extent and not by its
+	// content, which is what the split above reports on: a fragment holding no
+	// lines and no children is nothing on both sides as far as that walk can
+	// see, and a float is exactly such a box. So each side is made here where
+	// the box reaches into it and the walk found nothing to put there.
+	if t == nil && topH > 0 {
+		empty := c
+		empty.Lines, empty.Children = nil, nil
+		t = &empty
+	}
+	if b == nil && bottomH > 0 {
+		b = n.p.pend(c, &Fragment{})
+	}
+	if topH > 0 && bottomH > 0 && refusesToSlice(&c) {
+		// The box itself is being cut, and it is one whose picture slicing
+		// cannot draw. A box merely *holding* content that crosses the cut is
+		// not cut at all and is not refused: it is in one column with a
+		// zero-height fragment of itself in the next.
+		return nil, nil, false
+	}
+	if t != nil {
+		// The first fragment: its top edge is the box's own, its bottom edge is
+		// the cut and has nothing on it.
+		t.BorderRect.H = topH
+		if bottomH > 0 {
+			t.Border.Bottom, t.Padding.Bottom, t.Margin.Bottom = 0, 0, 0
+		}
+		t.contentH = t.BorderRect.H
+	}
+	if b != nil {
+		// And the last: it begins at the cut with nothing on that edge, and
+		// keeps the box's own bottom.
+		r := &b.root
+		r.BorderRect.Y = style.Max(0, c.BorderRect.Y.Sub(y))
+		r.BorderRect.H = bottomH
+		if topH > 0 {
+			r.Border.Top, r.Padding.Top, r.Margin.Top = 0, 0, 0
+		}
+		r.contentH = r.BorderRect.H
+	}
+	return t, b, true
 }
 
 // columnBreaks collects the heights at which a column may end, in increasing
@@ -263,30 +618,50 @@ func columnBreaks(f *Fragment, at style.Unit, out []style.Unit) []style.Unit {
 	return out
 }
 
+// maxPourPieces bounds how many fragments one pour may make.
+//
+// A pour makes one copy of every line and box it moves and one more of every
+// box a cut goes through, and the second is not bounded by the content: a box
+// a million pixels tall in columns a pixel high is cut a million times, and one
+// nested a hundred deep is cut a hundred times at each. The column count is
+// bounded, and so is the depth, and their product is not a number to make
+// fragments up to. A pour that would pass this is refused like any other the
+// engine cannot make, and the content is laid out in one column and reported.
+//
+// A variable so that a test can lower it and watch it fire.
+var maxPourPieces = 1 << 18
+
 // fillColumns pours a subtree laid out in one tall column into n columns of a
-// given height, side by side.
+// given height, side by side, and says why not where it cannot.
 //
 // It is the whole of the layout half: the content was laid out once, at the
 // column width, by the ordinary block code that knows nothing about columns, and
 // this cuts the result into bands and stands them beside each other.
-func fillColumns(f *Fragment, c columns, height style.Unit) bool {
+func fillColumns(f *Fragment, c columns, height style.Unit) (bool, string) {
 	if height <= 0 {
-		return false
+		return false, cannotDivide
 	}
-	bands := make([]*Fragment, 0, c.n)
-	rest := f
-	for i := 0; i < c.n && rest != nil; i++ {
-		top, bottom, ok := splitAt(rest, height)
+	p := &pour{ends: map[*Fragment]style.Unit{}}
+	rest := p.pend(*f, f)
+	bands := make([]*Fragment, 0, min(c.n, len(f.Lines)+len(f.Children)+1))
+	spent := false
+	for i := 0; i < c.n && !spent; i++ {
+		top, below, ok := rest.split(height)
 		if !ok {
-			return false
+			return false, cannotDivide
+		}
+		if p.made > maxPourPieces {
+			return false, "its content would be cut into more than " +
+				strconv.Itoa(maxPourPieces) + " pieces, which is more than this " +
+				"engine will make for one box"
 		}
 		bands = append(bands, top)
-		rest = bottom
+		spent = !below
 	}
-	if rest != nil {
+	if !spent {
 		// More content than the columns hold. §3.6 overflows it out of the last
 		// column, which is a fragmentation of its own and is not done here.
-		return false
+		return false, cannotDivide
 	}
 	f.Lines, f.Children = nil, nil
 	for i, band := range bands {
@@ -303,8 +678,13 @@ func fillColumns(f *Fragment, c columns, height style.Unit) bool {
 			f.Children = append(f.Children, child)
 		}
 	}
-	return true
+	return true, ""
 }
+
+// cannotDivide is why a pour that needs a cut through something drawn, or more
+// columns than there are, is refused.
+const cannotDivide = "its content cannot be divided where a column would end " +
+	"without cutting through something that is drawn"
 
 // balancedHeight is §3.5's "balance": the shortest the columns can be while
 // still holding the content between them.
@@ -313,145 +693,53 @@ func fillColumns(f *Fragment, c columns, height style.Unit) bool {
 // one: a height between two of them holds exactly as much as the lower of the
 // two and is taller for nothing. So the search is over the list rather than over
 // the numbers, and the answer is the first candidate the content fits inside.
+//
+// First, and found by halving rather than by trying each in turn. Whether the
+// content fits is monotone in the height: filled greedily, a taller column ends
+// at or after the breakpoint a shorter one did, so every later column begins no
+// earlier and fewer of them are needed, and a piece too tall for a column is too
+// tall for every shorter one. So the answers along the list are all "no" and
+// then all "yes", and the boundary is found in log(breaks) fits rather than in
+// one per breakpoint — which, at a fit per breakpoint over every breakpoint,
+// was quadratic in the lines before it was anything else.
 func balancedHeight(breaks []style.Unit, n int) (style.Unit, bool) {
-	for _, h := range breaks {
-		if fitsColumns(breaks, n, h) {
-			return h, true
-		}
+	i := sort.Search(len(breaks), func(i int) bool { return fitsColumns(breaks, n, breaks[i]) })
+	if i == len(breaks) {
+		return 0, false
 	}
-	return 0, false
+	return breaks[i], true
 }
 
 // fitsColumns reports whether content whose breakpoints are these fits in n
 // columns of the given height, filled greedily.
+//
+// The breakpoints are sorted and distinct, so the one before a breakpoint is
+// the one before it in the list, and the walk carries it rather than searching
+// for it. It stops as soon as the columns are more than n: the rest cannot make
+// the answer yes.
 func fitsColumns(breaks []style.Unit, n int, height style.Unit) bool {
 	if len(breaks) == 0 {
 		return true
 	}
-	used, start := 1, style.Unit(0)
+	used, start, prev := 1, style.Unit(0), style.Unit(0)
 	for _, at := range breaks {
-		if at.Sub(start) <= height {
-			continue
-		}
-		// This piece does not fit in the column being filled, so the column
-		// ended at the breakpoint before it. Nothing here needs to know which
-		// one that was: what is counted is the columns, and the piece that did
-		// not fit begins the next.
-		used++
-		start = previousBreak(breaks, at)
 		if at.Sub(start) > height {
-			// One piece taller than a whole column. No number of columns holds
-			// it, and a taller column is the only answer.
-			return false
+			// This piece does not fit in the column being filled, so the column
+			// ended at the breakpoint before it, and the piece begins the next.
+			used++
+			if used > n {
+				return false
+			}
+			start = prev
+			if at.Sub(start) > height {
+				// One piece taller than a whole column. No number of columns
+				// holds it, and a taller column is the only answer.
+				return false
+			}
 		}
+		prev = at
 	}
-	return used <= n
-}
-
-// previousBreak is the breakpoint before this one, or zero.
-func previousBreak(breaks []style.Unit, at style.Unit) style.Unit {
-	prev := style.Unit(0)
-	for _, b := range breaks {
-		if b >= at {
-			break
-		}
-		prev = b
-	}
-	return prev
-}
-
-// sliceBox divides one box at a height in its parent's content coordinates, and
-// gives each half the edges CSS Fragmentation assigns it.
-//
-// §4.4's "box-decoration-break: slice", which is the initial value and the only
-// one this engine does: the box is rendered as though it were never divided and
-// then cut, so no border appears at the cut on either side. The top border and
-// padding go to the first fragment, the bottom to the last, and the two sides go
-// to both — which is what draws a bordered box as one shape running down several
-// columns rather than as several boxed-off pieces.
-//
-// The other value, "clone", gives every fragment the whole border and its own
-// background. It is a different picture and this does not produce it; a box
-// declaring it is refused by canColumn.
-func sliceBox(c *Fragment, y style.Unit) (top, bottom *Fragment, ok bool) {
-	// The cut in the child's own content coordinates, which is where its lines
-	// and children are measured from. It may fall outside them at either end: a
-	// box whose own border box is entirely above the cut can still hold content
-	// that reaches past it, which is what a float overflowing its parent is.
-	inner := y.Sub(c.ContentRect().Y)
-	t, b, fine := splitAt(c, inner)
-	if !fine {
-		return nil, nil, false
-	}
-	// How much of the box's own border box falls on each side. A box whose
-	// content overflows it has one of these at its full height and the other at
-	// nothing, which is the fragment that carries the overflow onward.
-	topH := style.Max(0, style.Min(c.BorderRect.Bottom(), y).Sub(c.BorderRect.Y))
-	bottomH := style.Max(0, c.BorderRect.Bottom().Sub(style.Max(c.BorderRect.Y, y)))
-	// A box with nothing in it is divided by its own extent and not by its
-	// content, which is what splitAt above reports on: a fragment holding no
-	// lines and no children is nothing on both sides as far as that walk can
-	// see, and a float is exactly such a box. So each side is made here where
-	// the box reaches into it and the walk found nothing to put there.
-	if t == nil && topH > 0 {
-		empty := *c
-		empty.Lines, empty.Children = nil, nil
-		t = &empty
-	}
-	if b == nil && bottomH > 0 {
-		empty := *c
-		empty.Lines, empty.Children = nil, nil
-		b = &empty
-	}
-	if topH > 0 && bottomH > 0 && refusesToSlice(c) {
-		// The box itself is being cut, and it is one whose picture slicing
-		// cannot draw. A box merely *holding* content that crosses the cut is
-		// not cut at all and is not refused: it is in one column with a
-		// zero-height fragment of itself in the next.
-		return nil, nil, false
-	}
-	if t != nil {
-		// The first fragment: its top edge is the box's own, its bottom edge is
-		// the cut and has nothing on it.
-		t.BorderRect.H = topH
-		if bottomH > 0 {
-			t.Border.Bottom, t.Padding.Bottom, t.Margin.Bottom = 0, 0, 0
-		}
-		t.contentH = t.BorderRect.H
-	}
-	if b != nil {
-		// And the last: it begins at the cut with nothing on that edge, and
-		// keeps the box's own bottom.
-		b.BorderRect.Y = style.Max(0, c.BorderRect.Y.Sub(y))
-		b.BorderRect.H = bottomH
-		if topH > 0 {
-			b.Border.Top, b.Padding.Top, b.Margin.Top = 0, 0, 0
-		}
-		b.contentH = b.BorderRect.H
-	}
-	return t, b, true
-}
-
-// subtreeBottom is how far a fragment's own box and everything it holds reach
-// below its parent's content edge.
-//
-// It is not the border box, and the difference is what a float is: a float
-// inside a container taller than the container overflows it, and the container's
-// own rectangle says nothing about where the float ends. A cut chosen from the
-// container's box alone would put the whole float in one column.
-func subtreeBottom(f *Fragment) style.Unit {
-	if f == nil {
-		return 0
-	}
-	out := f.BorderRect.Bottom()
-	inner := f.ContentRect()
-	for _, line := range f.Lines {
-		out = style.Max(out, inner.Y.Add(line.Rect.Bottom()))
-	}
-	for _, c := range f.Children {
-		out = style.Max(out, inner.Y.Add(subtreeBottom(c)))
-	}
-	return out
+	return true
 }
 
 // refusesToSlice reports whether a box is one this engine will not cut through.
@@ -601,9 +889,8 @@ func (l *layouter) pourIntoColumns(b *Box, frag *Fragment, cols columns,
 		}
 		height = got
 	}
-	if !fillColumns(frag, cols, height) {
-		l.reportColumns(b, cols.n, "its content cannot be divided where a column "+
-			"would end without cutting through something that is drawn")
+	if ok, why := fillColumns(frag, cols, height); !ok {
+		l.reportColumns(b, cols.n, why)
 		return 0, false
 	}
 	return height, true

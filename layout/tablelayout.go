@@ -1883,8 +1883,7 @@ func (l *layouter) layoutCells(table *Box, g *tableGrid, cols []style.Unit,
 
 		absFrom := len(l.deferred)
 		frag := outOfClamp(l, func() *Fragment {
-			f, _ := l.blockIn(c.box, tableWidth,
-				flow{ctx: &floatContext{}, cbHeight: 0, cbDefinite: false},
+			f, _ := l.blockIn(c.box, tableWidth, aloneFlow(0, false),
 				&forcedGeometry{width: content})
 			return f
 		})
