@@ -1,26 +1,34 @@
 package style
 
-// CSS Logical Properties, for the axes this engine has.
+import "strings"
+
+// CSS Logical Properties.
 //
 // A logical property names a side by where the text starts rather than by where
 // the page's left is. "margin-inline-start" is the margin before the first
 // character of a line — the left margin in English and the right margin in
-// Arabic — and "block-size" is the height of a paragraph, which is a height
-// because lines stack downwards.
+// Arabic, and the top margin in vertical Japanese — and "block-size" is the
+// extent of a paragraph in the direction its lines stack: a height in English,
+// a width in a vertical writing mode.
 //
 // # Which physical property each one sets
 //
 // The mapping needs two facts: which way the lines stack, and which way the text
-// runs along one. This engine lays out one writing mode, horizontal-tb, and says
-// so about any other — see style/inert.go and the finding for "writing-mode" —
-// so the first fact is fixed here: the block axis is vertical and the inline
-// axis horizontal. What is left is "direction", and it is the element's own,
-// which is why this cannot be done where the shorthands are expanded: that
-// happens once for a stylesheet, and direction is a per-element answer.
+// runs along one — writing-mode and direction, CSS Writing Modes 4 §6 — and both
+// are the element's own, which is why this cannot be done where the shorthands
+// are expanded: that happens once for a stylesheet, and these are per-element
+// answers. physicalSide is the one function that answers "which physical side
+// is inline-start, or block-end, for this pair"; everything below asks it.
 //
-// When a vertical writing mode arrives, this file is where it lands: the tables
-// below become functions of the pair rather than of direction alone, and
-// nothing else about the cascade has to know.
+// It used to answer for direction alone, on the assumption that this engine
+// lays out one writing mode. That stopped being true when layout/writingmode.go
+// arrived, and the note here that said "when a vertical writing mode arrives,
+// this file is where it lands" was not acted on: inside "writing-mode:
+// vertical-rl", "margin-inline-start: 50px" set the left margin, where inline
+// runs top to bottom and the start is the top, and "margin-block-start" set the
+// top, where the lines stack right to left and block-start is the right. Nothing
+// was reported, because layout's guard sees a physical margin and cannot know
+// it started life as a logical one (audit C40).
 //
 // # Why the rename rather than a second set of properties
 //
@@ -35,51 +43,111 @@ package style
 // the winner is chosen, and the two then compete like any two declarations of
 // one property.
 
-// logicalSides maps a logical longhand to the physical longhand it sets: first
-// the left-to-right answer, then the right-to-left one.
+// flowSide is one of the four flow-relative sides of a box.
+type flowSide uint8
+
+const (
+	blockStart flowSide = iota
+	blockEnd
+	inlineStart
+	inlineEnd
+)
+
+// physicalSide is the physical side — "top", "right", "bottom" or "left" — that
+// a flow-relative side is for a writing mode and a direction, from CSS Writing
+// Modes 4 §6.4's table.
 //
-// The block-axis entries are the same in both, because direction is about the
-// inline axis and nothing else. They are still listed rather than special-cased,
-// so that the table reads as one statement about every logical longhand this
-// engine knows.
-var logicalSides = map[string][2]string{
-	// css-sizing's logical sizes. The block axis is the vertical one here, so
-	// "block-size" is a height and there is nothing for direction to flip.
-	"inline-size":     {"width", "width"},
-	"block-size":      {"height", "height"},
-	"min-inline-size": {"min-width", "min-width"},
-	"max-inline-size": {"max-width", "max-width"},
-	"min-block-size":  {"min-height", "min-height"},
-	"max-block-size":  {"max-height", "max-height"},
+// The block axis is set by the writing mode alone: lines stack downwards in
+// horizontal-tb, leftwards in vertical-rl and sideways-rl, and rightwards in
+// vertical-lr and sideways-lr. The inline axis runs left to right, top to bottom
+// or — in sideways-lr, whose glyphs are turned the other way — bottom to top, and
+// direction reverses it.
+//
+// The SVG 1.1 spellings are §3.2's obsolete values: "lr", "lr-tb", "rl" and
+// "rl-tb" are horizontal-tb and "tb" and "tb-rl" are vertical-rl.
+func physicalSide(side flowSide, writingMode string, rtl bool) string {
+	var start, end, lineStart, lineEnd string
+	switch strings.ToLower(strings.TrimSpace(writingMode)) {
+	case "vertical-rl", "sideways-rl", "tb", "tb-rl":
+		start, end, lineStart, lineEnd = "right", "left", "top", "bottom"
+	case "vertical-lr":
+		start, end, lineStart, lineEnd = "left", "right", "top", "bottom"
+	case "sideways-lr":
+		start, end, lineStart, lineEnd = "left", "right", "bottom", "top"
+	default:
+		start, end, lineStart, lineEnd = "top", "bottom", "left", "right"
+	}
+	if rtl {
+		lineStart, lineEnd = lineEnd, lineStart
+	}
+	switch side {
+	case blockStart:
+		return start
+	case blockEnd:
+		return end
+	case inlineStart:
+		return lineStart
+	}
+	return lineEnd
+}
 
-	"margin-block-start":  {"margin-top", "margin-top"},
-	"margin-block-end":    {"margin-bottom", "margin-bottom"},
-	"margin-inline-start": {"margin-left", "margin-right"},
-	"margin-inline-end":   {"margin-right", "margin-left"},
+// isVertical reports whether a writing mode stacks its lines horizontally, so
+// that the inline axis is the vertical one and an inline size is a height.
+func isVertical(writingMode string) bool {
+	return physicalSide(blockStart, writingMode, false) != "top"
+}
 
-	"padding-block-start":  {"padding-top", "padding-top"},
-	"padding-block-end":    {"padding-bottom", "padding-bottom"},
-	"padding-inline-start": {"padding-left", "padding-right"},
-	"padding-inline-end":   {"padding-right", "padding-left"},
+// logicalLonghand is what one logical longhand is: a side of a box property
+// or a size.
+type logicalLonghand struct {
+	// pattern is the physical name with "%s" where the side goes —
+	// "margin-%s", "border-%s-color", or "%s" for the inset properties, whose
+	// physical names are the sides themselves. Empty for a size.
+	pattern string
+	side    flowSide
+	// size is the size's physical name in horizontal-tb, and inline says
+	// whether it is on the inline axis; a vertical writing mode swaps width and
+	// height. Empty for a side.
+	size   string
+	inline bool
+}
 
-	"inset-block-start":  {"top", "top"},
-	"inset-block-end":    {"bottom", "bottom"},
-	"inset-inline-start": {"left", "right"},
-	"inset-inline-end":   {"right", "left"},
+// logicalLonghands is every logical longhand this engine knows.
+//
+// A variable built by a function rather than filled by an init: the cascade's
+// own init derives its non-negative list from this one, and a package's init
+// functions run in file order, where a package-level variable is initialised
+// before any of them.
+var logicalLonghands = buildLogicalLonghands()
 
-	"border-block-start-width": {"border-top-width", "border-top-width"},
-	"border-block-start-style": {"border-top-style", "border-top-style"},
-	"border-block-start-color": {"border-top-color", "border-top-color"},
-	"border-block-end-width":   {"border-bottom-width", "border-bottom-width"},
-	"border-block-end-style":   {"border-bottom-style", "border-bottom-style"},
-	"border-block-end-color":   {"border-bottom-color", "border-bottom-color"},
-
-	"border-inline-start-width": {"border-left-width", "border-right-width"},
-	"border-inline-start-style": {"border-left-style", "border-right-style"},
-	"border-inline-start-color": {"border-left-color", "border-right-color"},
-	"border-inline-end-width":   {"border-right-width", "border-left-width"},
-	"border-inline-end-style":   {"border-right-style", "border-left-style"},
-	"border-inline-end-color":   {"border-right-color", "border-left-color"},
+func buildLogicalLonghands() map[string]logicalLonghand {
+	out := map[string]logicalLonghand{}
+	sides := []struct {
+		name string
+		side flowSide
+	}{
+		{"block-start", blockStart}, {"block-end", blockEnd},
+		{"inline-start", inlineStart}, {"inline-end", inlineEnd},
+	}
+	for _, s := range sides {
+		for _, family := range []struct{ logical, physical string }{
+			{"margin-%s", "margin-%s"},
+			{"padding-%s", "padding-%s"},
+			{"inset-%s", "%s"},
+			{"border-%s-width", "border-%s-width"},
+			{"border-%s-style", "border-%s-style"},
+			{"border-%s-color", "border-%s-color"},
+		} {
+			name := strings.Replace(family.logical, "%s", s.name, 1)
+			out[name] = logicalLonghand{pattern: family.physical, side: s.side}
+		}
+	}
+	// css-sizing's logical sizes.
+	for _, prefix := range []string{"", "min-", "max-"} {
+		out[prefix+"inline-size"] = logicalLonghand{size: prefix + "width", inline: true}
+		out[prefix+"block-size"] = logicalLonghand{size: prefix + "height"}
+	}
+	return out
 }
 
 // isLogicalLonghand reports whether a property is one of the names above.
@@ -88,21 +156,37 @@ var logicalSides = map[string][2]string{
 // reported as a property nobody implements: it is implemented, by being renamed
 // a few steps later.
 func isLogicalLonghand(name string) bool {
-	_, ok := logicalSides[name]
+	_, ok := logicalLonghands[name]
 	return ok
 }
 
-// physicalName is the property a logical longhand sets, given the direction the
-// inline axis runs in.
-func physicalName(name string, rtl bool) (string, bool) {
-	sides, ok := logicalSides[name]
+// physicalName is the property a logical longhand sets, for the writing mode
+// and direction of the element it is on.
+func physicalName(name, writingMode string, rtl bool) (string, bool) {
+	l, ok := logicalLonghands[name]
 	if !ok {
 		return "", false
 	}
-	if rtl {
-		return sides[1], true
+	if l.size != "" {
+		if !isVertical(writingMode) {
+			return l.size, true
+		}
+		// The inline axis is the vertical one, so an inline size is a height
+		// and a block size a width.
+		if strings.HasSuffix(l.size, "width") {
+			return strings.TrimSuffix(l.size, "width") + "height", true
+		}
+		return strings.TrimSuffix(l.size, "height") + "width", true
 	}
-	return sides[0], true
+	return strings.Replace(l.pattern, "%s", physicalSide(l.side, writingMode, rtl), 1), true
+}
+
+// logicalProxy is a physical property whose value grammar and range a logical
+// longhand shares: every side of one family takes the same values, and so do
+// width and height. It is what the checks made once per stylesheet ask, before
+// any element's writing mode is known.
+func logicalProxy(name string) (string, bool) {
+	return physicalName(name, "horizontal-tb", false)
 }
 
 // logicalShorthands are the shorthands whose parts are logical.
@@ -147,26 +231,29 @@ var logicalShorthands = map[string]shorthand{
 //
 // In place, because the candidates are this element's own: they were gathered
 // for it and are thrown away after it.
-func renameLogical(cands []candidate, inline map[string]preparedDecl, rtl bool) bool {
+func renameLogical(cands []candidate, inline map[string]preparedDecl,
+	writingMode string, rtl bool) bool {
+
 	changed := false
 	for i, c := range cands {
-		if name, ok := physicalName(c.property, rtl); ok {
+		if name, ok := physicalName(c.property, writingMode, rtl); ok {
 			cands[i].property = name
 			changed = true
 		}
 	}
 	for logical, d := range inline {
-		name, ok := physicalName(logical, rtl)
+		name, ok := physicalName(logical, writingMode, rtl)
 		if !ok {
 			continue
 		}
 		delete(inline, logical)
 		// A style attribute cannot say the same thing twice — the parser keeps
 		// one declaration per name — but it can say it once logically and once
-		// physically, and the later of the two wins. preparedDecl carries the
-		// order it was written in, so the comparison is the same one the
-		// cascade makes everywhere else.
-		if was, clash := inline[name]; !clash || d.order > was.order {
+		// physically, and then the two are decided the way any two
+		// declarations in one attribute are: importance first, and then the
+		// later one. It compared only the order, so "margin-left: 1px
+		// !important; margin-inline-start: 2px" came out 2px (audit C155).
+		if was, clash := inline[name]; !clash || inlineBeats(d, was) {
 			inline[name] = d
 		}
 		changed = true

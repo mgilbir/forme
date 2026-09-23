@@ -1537,8 +1537,8 @@ var nonNegative = map[string]bool{
 // "padding-inline-start: -8px" was a declaration this file never looked at and
 // computed to "padding-left: -8px".
 func init() {
-	for logical, sides := range logicalSides {
-		if nonNegative[sides[0]] {
+	for logical := range logicalLonghands {
+		if proxy, _ := logicalProxy(logical); nonNegative[proxy] {
 			nonNegative[logical] = true
 		}
 	}
@@ -1938,10 +1938,13 @@ func (s *Styler) computeFor(n *html.Node, rules *ruleSet,
 	// margin-inline-start: 2px" is 2px in English and swapping the lines makes
 	// it 1px. Renaming first is what lets the ordinary cascade decide that.
 	//
-	// Direction is resolved with the same three lines the main loop uses below,
-	// because it is the same question — a winner, an inline style over it, and
-	// inheritance under both.
-	if renameLogical(cands, inline, s.isRTL(winners, inline, parent)) {
+	// Writing mode and direction are resolved by the same function the main
+	// loop below resolves every property with, because it is the same
+	// question — a winner, an inline style against it, and inheritance under
+	// both — asked early.
+	writingMode := s.early("writing-mode", winners, inline, parent)
+	rtl := strings.EqualFold(s.early("direction", winners, inline, parent), "rtl")
+	if renameLogical(cands, inline, writingMode, rtl) {
 		pick()
 	}
 
@@ -1970,33 +1973,7 @@ func (s *Styler) computeFor(n *html.Node, rules *ruleSet,
 		prop := registry.slots[id].property()
 		value, have := "", false
 
-		if c, ok := winners[name]; ok {
-			value, have = c.text, true
-		}
-		if d, ok := inline[name]; ok {
-			// A style attribute is an author declaration whose specificity is
-			// above every selector — Cascade 4 §3.1 — so it is decided by the
-			// same two terms every other declaration is, and only the second of
-			// them is settled in advance.
-			//
-			// Importance is the first term and inverts the origins, so an
-			// important inline declaration beats an important author rule and
-			// still loses to an important user-agent one; a normal inline
-			// declaration loses to any important rule. The specificity is the
-			// second and the inline always wins it, which is why equal ranks
-			// go to the inline.
-			//
-			// It was read as "inline wins unless the author rule is important",
-			// which said the opposite about the one case authors write it for:
-			// "style=\"color: red !important\"" lost to a stylesheet's own
-			// important rule.
-			c, beaten := winners[name]
-			if !beaten || CascadeRank(OriginAuthor, d.important) >= cascadeRank(c) {
-				// Interned, because an attribute is read per element and
-				// its text made afresh for each one.
-				value, have = s.interner().value(d.text), true
-			}
-		}
+		value, have = s.winning(name, winners, inline)
 
 		b.set(id, s.resolve(name, prop, value, have, parent))
 		if name == "font-size" {
@@ -2585,13 +2562,24 @@ func (s *Styler) inlineDeclarations(n *html.Node) map[string]preparedDecl {
 			// A later declaration in the same attribute wins, and importance
 			// wins over its absence — the same rules as any other block, with
 			// no specificity to separate them.
-			if prev, ok := out[e.property]; ok && prev.important && !e.important {
+			if prev, ok := out[e.property]; ok && !inlineBeats(e, prev) {
 				continue
 			}
 			out[e.property] = e
 		}
 	}
 	return out
+}
+
+// inlineBeats reports whether one declaration in a style attribute wins over
+// another of the same property there: importance first, and then the later of
+// the two. It is the rule inlineDeclarations keeps and the one renameLogical
+// needs when a logical and a physical spelling land on one property.
+func inlineBeats(d, was preparedDecl) bool {
+	if d.important != was.important {
+		return d.important
+	}
+	return d.order > was.order
 }
 
 // vendorPrefixed reports whether a property name is one engine's rather than
@@ -2655,25 +2643,58 @@ func usesVar(vals []css.ComponentValue) bool {
 	return false
 }
 
-// isRTL is whether this element's inline axis runs right to left, which is what
-// turns a logical property into a physical one.
+// winning is the declared value of a property on an element: the cascade's
+// winner among the stylesheet candidates, or the inline style's declaration
+// where it beats that winner. have is false where neither said anything.
 //
-// It resolves "direction" exactly as computeFor's main loop resolves any
-// property — the cascade's winner, an inline style above it unless the winner is
-// important, and inheritance under both — because it is that same question asked
-// early.
-func (s *Styler) isRTL(winners map[string]candidate,
-	inline map[string]preparedDecl, parent ComputedStyle) bool {
+// It is one function because two places ask it, and they drifted. computeFor's
+// main loop decides every property with it, and the rename of logical
+// properties has to know the element's writing mode and direction before that
+// loop runs. The early question was answered by a copy of the old rule — the
+// inline style wins unless the winner is important — after the loop had been
+// corrected to the cascade's, so "div { direction: ltr !important }" with
+// style="direction: rtl !important; margin-inline-start: 10px" computed
+// direction rtl and put the margin on the left (audit C108).
+func (s *Styler) winning(name string, winners map[string]candidate,
+	inline map[string]preparedDecl) (string, bool) {
 
 	value, have := "", false
-	if c, ok := winners["direction"]; ok {
+	if c, ok := winners[name]; ok {
 		value, have = c.text, true
 	}
-	if d, ok := inline["direction"]; ok {
-		if c, ok := winners["direction"]; !ok || !c.important {
-			value, have = d.text, true
+	if d, ok := inline[name]; ok {
+		// A style attribute is an author declaration whose specificity is
+		// above every selector — Cascade 4 §3.1 — so it is decided by the same
+		// two terms every other declaration is, and only the second of them is
+		// settled in advance.
+		//
+		// Importance is the first term and inverts the origins, so an important
+		// inline declaration beats an important author rule and still loses to
+		// an important user-agent one; a normal inline declaration loses to any
+		// important rule. The specificity is the second and the inline always
+		// wins it, which is why equal ranks go to the inline.
+		//
+		// It was read as "inline wins unless the author rule is important",
+		// which said the opposite about the one case authors write it for:
+		// "style=\"color: red !important\"" lost to a stylesheet's own important
+		// rule.
+		c, beaten := winners[name]
+		if !beaten || CascadeRank(OriginAuthor, d.important) >= cascadeRank(c) {
+			// Interned, because an attribute is read per element and its text
+			// made afresh for each one.
+			value, have = s.interner().value(d.text), true
 		}
 	}
-	got := s.resolve("direction", properties["direction"], value, have, parent)
-	return strings.EqualFold(strings.TrimSpace(got), "rtl")
+	return value, have
+}
+
+// early is a property's computed value asked before the main loop computes it:
+// winning, then inheritance and the CSS-wide keywords — the same two steps the
+// loop takes. It is how the rename of logical properties learns the element's
+// writing mode and direction.
+func (s *Styler) early(name string, winners map[string]candidate,
+	inline map[string]preparedDecl, parent ComputedStyle) string {
+
+	value, have := s.winning(name, winners, inline)
+	return strings.TrimSpace(s.resolve(name, properties[name], value, have, parent))
 }

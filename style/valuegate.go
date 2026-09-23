@@ -148,8 +148,8 @@ func unevaluatedReason(name string, value []css.ComponentValue, what string) str
 // logical longhands included — the gap the colour check had, since the rename
 // to a physical name happens per element, after the drop (audit C109).
 func isColourProperty(name string) bool {
-	if sides, ok := logicalSides[name]; ok {
-		name = sides[0]
+	if proxy, ok := logicalProxy(name); ok {
+		name = proxy
 	}
 	switch name {
 	case "color", "background-color", "border-top-color", "border-right-color",

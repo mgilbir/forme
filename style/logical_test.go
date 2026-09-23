@@ -38,26 +38,59 @@ func sampleFor(name string) string {
 	return "7px"
 }
 
-// TestEveryLogicalLonghandSetsItsPhysicalOne walks the table itself, so the test
-// cannot drift from it: a longhand added to logical.go without an answer here is
-// a longhand this checks anyway.
+// TestEveryLogicalLonghandSetsItsPhysicalOne walks the table's names, so a
+// longhand added to logical.go is checked the day it is added — and asks where
+// each lands against CSS Writing Modes 4 §6.4's table written out here, not
+// against the table it is checking, for every writing mode and both directions.
 func TestEveryLogicalLonghandSetsItsPhysicalOne(t *testing.T) {
-	for logical, sides := range logicalSides {
-		value := sampleFor(logical)
-		for i, dir := range []string{"ltr", "rtl"} {
-			cs, findings := logicalStyle(t, "direction: "+dir+"; "+logical+": "+value)
-			if got := cs.Get(sides[i]); got != value {
-				t.Errorf("%s: %s in %s set %s to %q, want %q",
-					logical, logical, dir, sides[i], got, value)
-			}
-			// And it set *only* that one: the other side of the same axis is
-			// untouched, which is what makes the flip a flip rather than both.
-			if other := sides[1-i]; other != sides[i] && cs.Get(other) == value {
-				t.Errorf("%s in %s also set %s", logical, dir, other)
-			}
-			for _, f := range findings {
-				if f.Unsupported {
-					t.Errorf("%s in %s was reported: %q", logical, dir, f.Message)
+	// For each writing mode and direction: block-start, block-end,
+	// inline-start, inline-end.
+	spec := map[string][2][4]string{
+		"horizontal-tb": {{"top", "bottom", "left", "right"}, {"top", "bottom", "right", "left"}},
+		"vertical-rl":   {{"right", "left", "top", "bottom"}, {"right", "left", "bottom", "top"}},
+		"vertical-lr":   {{"left", "right", "top", "bottom"}, {"left", "right", "bottom", "top"}},
+		"sideways-rl":   {{"right", "left", "top", "bottom"}, {"right", "left", "bottom", "top"}},
+		"sideways-lr":   {{"left", "right", "bottom", "top"}, {"left", "right", "top", "bottom"}},
+		"tb-rl":         {{"right", "left", "top", "bottom"}, {"right", "left", "bottom", "top"}},
+	}
+	vertical := map[string]bool{"vertical-rl": true, "vertical-lr": true,
+		"sideways-rl": true, "sideways-lr": true, "tb-rl": true}
+	edges := []string{"block-start", "block-end", "inline-start", "inline-end"}
+	for mode, dirs := range spec {
+		for d, dir := range []string{"ltr", "rtl"} {
+			for logical := range logicalLonghands {
+				want := ""
+				for e, edge := range edges {
+					if strings.Contains(logical, edge) {
+						side := dirs[d][e]
+						want = strings.Replace(logical, edge, side, 1)
+						if strings.HasPrefix(logical, "inset-") {
+							want = side
+						}
+					}
+				}
+				if want == "" {
+					// A size: an inline size is a width unless the lines
+					// stack sideways, and a block size the other one.
+					inlineAxis := strings.Contains(logical, "inline-size")
+					dim := "height"
+					if inlineAxis != vertical[mode] {
+						dim = "width"
+					}
+					want = strings.Replace(strings.Replace(logical, "inline-size", dim, 1),
+						"block-size", dim, 1)
+				}
+				value := sampleFor(logical)
+				cs, findings := logicalStyle(t, "writing-mode: "+mode+"; direction: "+dir+
+					"; "+logical+": "+value)
+				if got := cs.Get(want); got != value {
+					t.Errorf("%s %s: %s set %s to %q, want %q", mode, dir, logical, want,
+						got, value)
+				}
+				for _, f := range findings {
+					if f.Unsupported {
+						t.Errorf("%s in %s %s was reported: %q", logical, mode, dir, f.Message)
+					}
 				}
 			}
 		}
@@ -193,12 +226,12 @@ func TestAWideKeywordOnALogicalShorthandReachesThePhysicalProperty(t *testing.T)
 // an entry of its own would be a claim the engine does not keep.
 func TestALogicalNameIsNotAComputedProperty(t *testing.T) {
 	cs, _ := logicalStyle(t, "margin-inline-start: 7px")
-	for name := range logicalSides {
+	for name := range logicalLonghands {
 		if _, ok := cs.Lookup(name); ok {
 			t.Errorf("%q is in the computed style; it should have been renamed away", name)
 		}
 	}
-	for name := range logicalSides {
+	for name := range logicalLonghands {
 		if _, ok := properties[name]; ok {
 			t.Errorf("%q is in the property registry", name)
 		}

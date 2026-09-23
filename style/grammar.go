@@ -97,8 +97,8 @@ var valueGrammars = map[string]grammar{}
 // logical longhand, which takes its physical counterpart's value. It is the
 // one place the question is asked; an unknown name is not valid.
 func judgeValue(name string, vals []css.ComponentValue) verdict {
-	if sides, ok := logicalSides[name]; ok {
-		name = sides[0]
+	if proxy, ok := logicalProxy(name); ok {
+		name = proxy
 	}
 	g, ok := valueGrammars[name]
 	if !ok {
