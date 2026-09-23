@@ -400,23 +400,68 @@ func isWordSeparator(r rune) bool {
 //
 // Nothing is returned where there is nothing to cut, which is every run of every
 // document with no word-spacing on it — the caller asks only then.
+//
+// The cut is after the separator's whole grapheme cluster, not after the
+// separator alone. A combining mark written on a no-break space is how a
+// diacritic is shown on its own, and cut between the two the mark began the
+// next run: drawn apart from the space it sits on, a word-spacing away from it.
+// A cluster is one typographic character unit, and the spacing goes after the
+// unit.
 func SplitAtWordSeparators(text string) []string {
 	var out []string
 	start := 0
-	for i, r := range text {
+	for i := 0; i < len(text); {
+		r, size := utf8.DecodeRuneInString(text[i:])
+		i += size
 		if !isWordSeparator(r) {
 			continue
 		}
-		end := i + utf8.RuneLen(r)
-		if end < len(text) {
-			out = append(out, text[start:end])
-			start = end
+		i = afterAttached(text, i)
+		if i < len(text) {
+			out = append(out, text[start:i])
+			start = i
 		}
 	}
 	if out == nil {
 		return nil
 	}
 	return append(out, text[start:])
+}
+
+// afterAttached is where the grapheme cluster that a base character ends at i
+// ends: past every character that UAX #29's GB9 and GB9a attach to the one
+// before it. For a base that is neither pictographic nor an Indic consonant —
+// which no word separator is — those two rules are the whole of what extends
+// its cluster.
+func afterAttached(text string, i int) int {
+	for i < len(text) {
+		r, size := utf8.DecodeRuneInString(text[i:])
+		switch segment.BreakOf(r) {
+		case segment.Extend, segment.ZWJ, segment.SpacingMark:
+			i += size
+			continue
+		}
+		break
+	}
+	return i
+}
+
+// EndsWithWordSeparator reports whether text's last typographic character unit
+// is a word separator: its last character, or the base of the cluster the
+// marks at its end are attached to. A run cut by SplitAtWordSeparators ends
+// with one of these wherever it was cut.
+func EndsWithWordSeparator(text string) bool {
+	end := len(text)
+	for end > 0 {
+		r, size := utf8.DecodeLastRuneInString(text[:end])
+		switch segment.BreakOf(r) {
+		case segment.Extend, segment.ZWJ, segment.SpacingMark:
+			end -= size
+			continue
+		}
+		return isWordSeparator(r)
+	}
+	return false
 }
 
 // IsBidiControlOnly reports whether text is bidi controls and nothing else.

@@ -516,14 +516,8 @@ func (l *layouter) baselineInFaceAt(b *Box, face *shape.Face, lineHeight, size s
 // substitution is reported, because it changes the metrics and therefore where
 // every line breaks — the same reason a missing family is reported.
 //
-// Two limits, both deliberate and both visible in what they leave behind:
-//
-// It is per box. A box whose text mixes scripts that no single face covers keeps
-// the family's face and reports the missing glyphs, because choosing one face
-// for the box cannot help it. Cutting a run into per-face pieces is what
-// shape.Stack does and it reaches into measurement, line breaking and the
-// content stream; until that exists, this handles the common shape — a run of
-// text that is all one script.
+// It chooses the box's face, and the characters that face cannot set are moved
+// to another one a run at a time by faceRunsFor — see the comment in the body.
 //
 // It is cached per box rather than per family, because the answer depends on the
 // text. Shaping a run to find out whether it is covered is not free, and

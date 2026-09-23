@@ -44,7 +44,15 @@ import (
 func (l *layouter) linkLetterSpacing(items []inlineItem) []inlineItem {
 	// The order the runs are *drawn* in, which is the order the gaps fall in.
 	// See gapNeighbour, which is the whole of why this is asked for.
-	order := lineVisualOrder(items)
+	//
+	// Per bidi paragraph, as autospace.go's visualOrder is and for the reason
+	// it gives: a forced break ends one paragraph and starts the next, and
+	// LineVisualOrder asked about the whole block gave the second paragraph's
+	// items the first one's last level and reversed them. After a Hebrew line,
+	// "AAA" and "BBB" in a left-to-right paragraph were drawn in order and
+	// paired backwards, so the paragraph's gap went after BBB instead of
+	// between the two (audit C101).
+	order := visualOrder(items)
 	at := visualPositions(order, len(items))
 	for i := range items {
 		if !isSpacedRun(items[i]) {

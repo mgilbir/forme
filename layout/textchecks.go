@@ -63,21 +63,77 @@ func (l *layouter) ReportOverflow(item inlineItem, width style.Unit) {
 //
 // Telling an author their text was cut off when it is drawn over the next
 // column is the wrong finding twice: they look for missing words and find them
-// all, and they do not look for the thing that is actually wrong. So the clause
-// is chosen by asking, and it is exact rather than a guess — the box and its
-// ancestors are right here, and overflowClips is the same question paint asks
-// when it builds the clip.
+// all, and they do not look for the thing that is actually wrong.
+//
+// Which box clips it is asked the way resolveClips asks it, and that is the
+// half that was wrong (audit C141). The walk went up the box parents and stopped
+// at the first box that clips anything, so text in a narrow paragraph inside a
+// wide "overflow: hidden" <div> was said to be cut off where it ends a long way
+// inside the div, and text in an absolutely positioned box was said to be cut
+// by an ancestor outside its containing block chain, whose clip §11.1.1 does
+// not apply to it. The chain is followed now; and whether the text reaches the
+// clipping box's edge is a question of where both end up on the page, which is
+// not known when the line is broken — so the clause says what happens either
+// way rather than claiming the text is cut.
 //
 // Both remain worth a finding. Content that overlaps its neighbour is as much a
 // page nobody proofread as content that vanished.
 func (l *layouter) overflowFate(b *Box) string {
-	for ; b != nil; b = b.Parent {
-		if l.overflowClips(b) {
-			return "; the part past the edge is not drawn, because \"overflow\" " +
-				"on <" + elementName(b) + "> clips it"
-		}
+	if c := l.clippingAncestor(b); c != nil {
+		name := "<" + elementName(c) + ">"
+		return "; it runs past the edge over whatever is beside it, and whatever of " +
+			"it reaches past the padding edge of " + name + " is not drawn, because " +
+			"\"overflow\" on " + name + " clips it"
 	}
 	return "; it is drawn past the edge, over whatever is beside it"
+}
+
+// clippingAncestor is the innermost box whose "overflow" clips what b draws,
+// b included, or nil where nothing does.
+//
+// It is resolveClips's chain read upwards: a box's content is clipped by its
+// own overflow and by everything its parent's content is, except where the box
+// is out of flow. An absolutely positioned box takes its clip from its
+// containing block — the nearest positioned ancestor that is not an inline box
+// with no fragment of its own, which is the ancestor clipFromContainingBlock
+// reads — and a fixed one from nothing on the page at all.
+//
+// resolveClips asks overflowClips only of boxes with a fragment, so this asks
+// it of no other: a text box carries its element's whole style, "overflow"
+// included, and "overflow" does not apply to a non-atomic inline box.
+func (l *layouter) clippingAncestor(b *Box) *Box {
+	for cur := b; cur != nil; {
+		inline := cur.IsText() ||
+			(cur.Outer == OuterInline && !isAtomicInline(cur) && cur.Replaced == nil)
+		if !inline && l.overflowClips(cur) {
+			return cur
+		}
+		switch {
+		case cur.Position == PositionFixed:
+			return nil
+		case cur.Position.outOfFlow():
+			cur = positionedContainer(cur)
+		default:
+			cur = cur.Parent
+		}
+	}
+	return nil
+}
+
+// positionedContainer is the nearest positioned ancestor that has a fragment
+// to clip from: a block-level or atomic one. A positioned non-atomic inline has
+// none, and resolveClips steps over it.
+func positionedContainer(b *Box) *Box {
+	for anc := b.Parent; anc != nil; anc = anc.Parent {
+		if !anc.Position.positioned() {
+			continue
+		}
+		if anc.Outer == OuterInline && !isAtomicInline(anc) && anc.Replaced == nil {
+			continue
+		}
+		return anc
+	}
+	return nil
 }
 
 // reportWordBreak reports a word-break value this engine reads as normal.
@@ -234,11 +290,35 @@ func (l *layouter) checkGlyphs(b *Box, face *shape.Face, text string) {
 		l.rec.ReportDetail(Finding{
 			Rule: RuleGlyphMissing,
 			Message: "the face " + quoteValue(face.Name()) + " has no glyph for " +
-				describeRune(r) + ", which is set as a space, so the character is " +
-				"missing from the page and from the text extracted out of it",
+				describeRune(r) + ", " + missingGlyphFate(face),
 			Path: PathOf(b.Element),
 		})
 	}
+}
+
+// missingGlyphFate is what a face does with a character it has no glyph for,
+// as the end of a sentence about it.
+//
+// Three answers, because the three kinds of face encode differently (see
+// shape.Face.Encode). One of the fourteen standard faces is addressed by
+// WinAnsi codes, and a character with no code becomes the space. A simple
+// embedded face gives such a character no code at all, so it is left out of
+// what is drawn. Every other face is addressed by glyph index, and a character
+// it does not map is glyph 0, which is .notdef — the box a reader sees where a
+// font has nothing to draw. The finding said "set as a space" of all three,
+// which told the author of a Noto Sans document the opposite of what the page
+// shows (audit C144).
+func missingGlyphFate(face *shape.Face) string {
+	switch {
+	case face.IsStandard():
+		return "which is set as a space, so the character is missing from the page " +
+			"and from the text extracted out of it"
+	case face.IsSimple():
+		return "which is left out of what is drawn, so the character is missing " +
+			"from the page and from the text extracted out of it"
+	}
+	return "which is drawn as the face's missing-glyph box (.notdef) in place of " +
+		"the character"
 }
 
 // reportHyphens reports a hyphens value this engine reads as manual.
@@ -330,7 +410,15 @@ func (l *layouter) reportKerning(b *Box, face *shape.Face) {
 	if why == "" {
 		return
 	}
-	l.reportOnce("font-feature-settings", Finding{
+	// Once per value and face rather than once per document: why a value is
+	// not applied depends on both, and two different values are two different
+	// problems. Keyed on the property alone, the first unapplied value met
+	// was the only one ever reported (audit C146).
+	faceName := ""
+	if face != nil {
+		faceName = face.Name()
+	}
+	l.reportOnce("font-feature-settings:"+value+":"+faceName, Finding{
 		Rule:     RuleUnsupportedValue,
 		Property: "font-feature-settings",
 		Message:  "font-feature-settings " + quoteValue(value) + " " + why,
@@ -1086,8 +1174,11 @@ func boxWritingSystem(b *Box) paragraph.WritingSystem {
 // it would say is "this engine does not do all of §8.2", which is a fact about
 // the engine and not about the page. The clause that is missing takes room away
 // at the start of a line, and a document that needs it says so.
+//
+// Once per value, like the other value readers here: "space-first" and
+// "trim-start" are two different requests and each is told (audit C146).
 func (l *layouter) reportSpacingTrim(b *Box, value string) {
-	l.reportOnce("text-spacing-trim", Finding{
+	l.reportOnce("text-spacing-trim:"+value, Finding{
 		Rule:     RuleUnsupportedValue,
 		Property: "text-spacing-trim",
 		Message: "text-spacing-trim " + quoteValue(value) + " was not applied at the " +

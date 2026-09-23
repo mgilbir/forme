@@ -616,10 +616,9 @@ func TestARightToLeftRunEndingALineIsSetWithoutItsGap(t *testing.T) {
 		}
 		return d.Lines[0].Runs[0].X
 	}
-	// The reference turns the property off rather than breaking with a <br>:
-	// a forced break after a right-to-left run is not a boundary the gap is
-	// kept out of on the way in (see dropLineEndGap), so it would carry the
-	// same gap and agree with the defect.
+	// The reference turns the property off rather than breaking with a <br>,
+	// which is a second rule and has a test of its own: see
+	// TestNoGapCrossesAForcedBreak.
 	if got, want := end(`ب国`),
 		end(`<span style="text-autospace: no-autospace">ب国</span>`); got != want {
 		t.Errorf("the letter ending the first line is at %vpx, and at %vpx with no "+
@@ -666,5 +665,20 @@ func TestAPictureEndingALineKeepsItsBox(t *testing.T) {
 	if span.Right() != ib.Right() {
 		t.Errorf("the span's fragment ends at %vpx and the picture in it at %vpx",
 			span.Right().Px(), ib.Right().Px())
+	}
+}
+
+// TestNoGapCrossesAForcedBreak: a forced break ends a bidi paragraph, and the
+// last character of one paragraph and the first of the next are on different
+// lines. The walk back from the ideograph looked across the break when the
+// paragraph before it ended right to left — the break's own item has no
+// characters and is reversed with the Arabic letter — and a float holding
+// "ب<br>国" was shrink-wrapped an eighth of an em wider than either line.
+func TestNoGapCrossesAForcedBreak(t *testing.T) {
+	root := layoutOf(t, 600, `<div id="f">ب<br>国</div>`, noDefaults+
+		`#f { float: left; font-family: Courier; font-size: 20px }`)
+	if got := find(t, root, "f").ContentRect().W.Px(); got != 12 {
+		t.Errorf("the float is %vpx wide, want 12 — each line one 12px character "+
+			"and no gap between two characters a break has parted", got)
 	}
 }

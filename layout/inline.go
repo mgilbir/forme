@@ -815,10 +815,11 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					widths[k] = runs[k].Width
 				}
 				// §7.3's extra advance after every character, when the line is
-				// being justified between characters rather than between words.
-				// It reaches the drawing as well as the widths — see
+				// being justified between characters rather than between words:
+				// one per item, and none for an item that took none. It reaches
+				// the drawing as well as the widths — see
 				// justifyBetweenCharacters.
-				var interChar style.Unit
+				var interChar []style.Unit
 				if spread {
 					// The method, which is read here rather than where the
 					// property is: this is the only place that knows a line is
@@ -827,10 +828,6 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					if unhandled != "" {
 						l.reportTextJustify(b, unhandled)
 					}
-					// A line with nowhere to put the slack is left where it is,
-					// and nothing is reported about it: CSS Text 3 §7.3 says a
-					// line with no expansion opportunity is aligned as start,
-					// so that *is* the conforming rendering.
 					// "auto" is the specification asking for a script-
 					// appropriate algorithm rather than for a particular one,
 					// and word spaces are the wrong one for a script that has
@@ -841,11 +838,28 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 						writtenWithoutWordSeparators(runs) {
 						method = justifyCharacters
 					}
+					var justified bool
 					if method == justifyCharacters {
-						interChar, _ = l.justifyBetweenCharacters(runs, xs, widths,
+						interChar, justified = l.justifyBetweenCharacters(runs, xs, widths,
 							hangingTail(runs), avail.Sub(used))
 					} else {
-						justifyItems(runs, xs, widths, hangingTail(runs), avail.Sub(used))
+						justified = justifyItems(runs, xs, widths, hangingTail(runs), avail.Sub(used))
+					}
+					if !justified {
+						// A line with nowhere to put the slack — or with no
+						// slack, because it is overfull — is aligned as start,
+						// and nothing is reported about it: CSS Text 3 §7.3
+						// says a line with no expansion opportunity is aligned
+						// as start, so that *is* the conforming rendering.
+						//
+						// Its own start, which is the right edge of a
+						// right-to-left line. Leaving the alignment at
+						// "justify" set it flush left, because alignLine has
+						// nothing to do for a justified line and returns
+						// nothing: a right-to-left line of one word sat at the
+						// wrong edge, and an overfull one ran off the right
+						// instead of the left (audit C99).
+						align = startAlignment(rtl)
 					}
 				}
 				// Atomic inlines are placed as children of the block rather than as
@@ -901,7 +915,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 						Text: item.Text, Face: item.Face, Size: item.Size,
 						X: x, Width: widths[k], Box: heldBox(item.Box), Offset: item.Offset,
 						Decorations:   decorations,
-						LetterSpacing: trackingOf(item).Add(interChar),
+						LetterSpacing: trackingOf(item).Add(letterSpacingAt(interChar, k)),
 						PreContext:    item.PreContext, PostContext: item.PostContext,
 						MergePre:     item.MergePre,
 						MergePost:    item.MergePost,

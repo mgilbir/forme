@@ -2,8 +2,10 @@ package layout
 
 import (
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/mgilbir/forme/paragraph"
+	"github.com/mgilbir/forme/segment"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -317,12 +319,24 @@ func caseOf(r rune) caseKind {
 // value: the caller joins back the stretches its value sets the same way. What
 // this has to produce is every boundary that *could* be one, which is a change
 // of case wherever it falls.
+//
+// A change of case between two grapheme clusters, and not between two
+// characters. A combining mark has no case of its own, so asked character by
+// character "e\u0301te" was a lowercase e, a caseless accent and "te" — and
+// the accent became a run of its own, drawn at full size and apart from the
+// letter it sits on (audit C143). A cluster is one typographic character
+// unit, which is what a cut must never split (see inline.go), and its case is
+// its base's.
 func cutAtCase(text string) []casePart {
 	var out []casePart
 	start := 0
 	var cur caseKind
-	for i, r := range text {
+	bounds := append(segment.Boundaries(nil, text), len(text))
+	at := 0
+	for i, end := range bounds {
+		r, _ := utf8.DecodeRuneInString(text[at:end])
 		kind := caseOf(r)
+		at = end
 		if i == 0 {
 			cur = kind
 			continue
@@ -330,8 +344,9 @@ func cutAtCase(text string) []casePart {
 		if kind == cur {
 			continue
 		}
-		out = append(out, casePart{text: text[start:i], kind: cur})
-		start, cur = i, kind
+		clusterStart := bounds[i-1]
+		out = append(out, casePart{text: text[start:clusterStart], kind: cur})
+		start, cur = clusterStart, kind
 	}
 	if start < len(text) || len(out) == 0 {
 		out = append(out, casePart{text: text[start:], kind: cur})

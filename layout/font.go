@@ -64,10 +64,9 @@ type RangedFontSet interface {
 // substitution silently from inside Face would be a set that could hide it, and
 // that is the thing this design is against — see the note on FontSet above.
 //
-// The substitution is per box rather than per character. A box whose text mixes
-// scripts that no single face covers still reports a missing glyph, and the
-// remaining step is to cut a run into per-face pieces the way shape.Stack does,
-// which reaches into measurement, line breaking and the content stream.
+// It is asked per grapheme cluster, not per box: a box whose text mixes
+// scripts no single face covers is cut into runs, each set in a face that has
+// its characters — see layout/facerun.go's faceRunsFor.
 type FallbackFontSet interface {
 	FontSet
 	// FaceFor returns a face that can set the whole of text, and whether one was

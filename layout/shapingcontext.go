@@ -771,6 +771,17 @@ func sharesGlyphsWith(items []inlineItem, from, to int, breaks []int) bool {
 	if a.Valign.Aligned() || b.Valign.Aligned() {
 		return false
 	}
+	// Nor moved by a relative offset, which the painter adds to each run's
+	// pen position: a glyph owned by one run is drawn at that run's offset,
+	// so a ligature across "position: relative; top: 5px" left half of it
+	// where it was and moved the other half with the span.
+	//
+	// Which way a run's glyphs stand is the one other thing drawn per run,
+	// and it cannot differ here: it is decided by the block the page was
+	// turned at (see uprightText), so every run of one paragraph has it.
+	if a.Offset != b.Offset {
+		return false
+	}
 	if !samePaint(heldBox(a.Box), heldBox(b.Box)) {
 		return false
 	}
@@ -805,6 +816,19 @@ func sharesGlyphsWith(items []inlineItem, from, to int, breaks []int) bool {
 // for different ones are not one glyph's worth of text however alike their faces
 // are today. shaping-024 is that document, with "font-style: italic" on the
 // middle letter of three.
+//
+// And the two things the painter decides per run and not per glyph: whether
+// the run is drawn at all, and how translucent it is. A glyph is drawn by the
+// run that owns it, so a ligature across a "visibility: hidden" boundary took
+// its letters with it — "o<span hidden>f</span>fice" formed the ffi in the
+// hidden run and the visible "fice" drew "ce" — or brought hidden ones along:
+// "of<span hidden>f</span>ice" drew the hidden f inside the visible run's
+// ligature (audit C100). Opacity is the same case, now that a translucent
+// inline box dims its own runs: which runs it dims is decided by the inline
+// box that is innermost among the translucent ones around each run, and two
+// runs with different ones are two alphas. Every property the painter reads
+// per run belongs here or in sharesGlyphsWith, which is the rule this list is
+// kept by.
 func samePaint(a, b *Box) bool {
 	if a == nil || b == nil {
 		return a == b
@@ -814,7 +838,26 @@ func samePaint(a, b *Box) bool {
 			return false
 		}
 	}
-	return true
+	return isHidden(a) == isHidden(b) && translucentInline(a) == translucentInline(b)
+}
+
+// translucentInline is the innermost non-atomic inline box around b, b
+// included, that asks for an opacity below one, or nil. It is the walk the
+// painter's inlineDim makes, and stops where that one does: at the block, or at
+// an atomic inline, whose opacity is the fragment's and not the run's.
+func translucentInline(b *Box) *Box {
+	for cur := b; cur != nil && cur.Outer == OuterInline; cur = cur.Parent {
+		if cur.Replaced != nil || isAtomicInline(cur) {
+			return nil
+		}
+		if cur.IsText() {
+			continue
+		}
+		if groupsItsPaint(cur) {
+			return cur
+		}
+	}
+	return nil
 }
 
 // sameDecorations reports whether two runs carry the same lines, declared by the

@@ -4,6 +4,8 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/mgilbir/forme/fonts/notosans"
 	"github.com/mgilbir/forme/fonttest"
@@ -1176,4 +1178,30 @@ func findingNaming(findings []Finding, property string) (Finding, bool) {
 		}
 	}
 	return Finding{}, false
+}
+
+// TestASynthesisedCapitalKeepsItsMarks: a combining mark has no case, and cut
+// by character "e\u0301te" came out as a small E, a full-size accent drawn as
+// a run of its own, and a small "TE". The accent belongs to the letter it sits
+// on — a grapheme cluster is one typographic character unit and is cased by
+// its base — so it is set with the E, at the E's size.
+func TestASynthesisedCapitalKeepsItsMarks(t *testing.T) {
+	runs := synthesisedRuns(t, StandardFonts(), "<p id=\"p\">e\u0301te</p>",
+		`body{margin:0} #p { font-family: Times; font-size: 16px;
+		 font-variant: small-caps }`)
+	if len(runs) == 0 {
+		t.Fatal("nothing was drawn")
+	}
+	full, _ := style.FromPx(16)
+	for _, r := range runs {
+		first, _ := utf8.DecodeRuneInString(r.Text)
+		if unicode.Is(unicode.Mn, first) {
+			t.Errorf("the run %q begins with a combining mark, cut off the letter "+
+				"it belongs to", r.Text)
+		}
+		if strings.ContainsRune(r.Text, '\u0301') && r.Size == full {
+			t.Errorf("the accent is drawn at the full %vpx and the letter under it "+
+				"is a small capital", r.Size.Px())
+		}
+	}
 }
