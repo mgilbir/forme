@@ -28,13 +28,22 @@ import (
 //
 // # What this cannot do
 //
-// Only em and rem. The other font-relative units need a face — ex is the
-// x-height and ch is the advance of "0" — and the cascade has no face: which
-// one will set an element is chosen in layout, after the font-family it computes
-// here has been read. The viewport units need the page box, which is settled
-// later still. Those keep the old behaviour, so a declaration in ex or ch is
-// right on the element that made it and inherits as though it had been made
-// again lower down.
+// Only em and rem, except in font-size. The other font-relative units need a
+// face — ex is the x-height and ch is the advance of "0" — and the cascade has
+// no face: which one will set an element is chosen in layout, after the
+// font-family it computes here has been read. The viewport units need the page
+// area. Those keep the old behaviour, so a declaration in ex, ch or vw is right
+// on the element that made it and inherits as though it had been made again
+// lower down.
+//
+// font-size is the exception, because it cannot wait: it is inherited as a
+// number and every em below it is relative to that number. A caller lends the
+// cascade what it needs for it — Metrics answers the x-height, so "font-size:
+// 2ex" is resolved against the parent's face, and ApplyOnPage and ApplyIn name
+// the page, so "font-size: 5vw" is resolved against it. See fontSizeOf. ch and
+// ic are not asked of Metrics: a font-size in ch is left unresolved for layout
+// to report, and one in ic is the one em CSS Values 4 §5.1.4 assumes of a face
+// that does not say.
 //
 // It is a gap rather than an oversight, and it is worth stating what closing it
 // would take: the cascade would have to load fonts, which is a change to when
@@ -217,7 +226,11 @@ func monospaceDefault(cs ComputedStyle) bool {
 // the computed style whose font the units belong to, which for an element's own
 // font-size is its *parent's*; m may be nil, and then the units that need a face
 // get the fallback CSS names or are declined. See Metrics.
-func fontSizeOf(cs ComputedStyle, own bool, parent, root Unit, m Metrics,
+//
+// viewport is the page area the viewport units are percentages of. A zero one
+// is a page nobody named, and those units are then unresolvable rather than
+// zero, which is what LengthContext.ViewportKnown is for.
+func fontSizeOf(cs ComputedStyle, own bool, parent, root Unit, viewport Media, m Metrics,
 	fontStyle ComputedStyle) (Unit, bool) {
 
 	if !own {
@@ -228,6 +241,10 @@ func fontSizeOf(cs ComputedStyle, own bool, parent, root Unit, m Metrics,
 		return parent, false
 	}
 	ctx := LengthContext{FontSize: parent, RootFontSize: root}
+	if viewport.Width > 0 && viewport.Height > 0 {
+		ctx.ViewportWidth, ctx.ViewportHeight, ctx.ViewportKnown =
+			viewport.Width, viewport.Height, true
+	}
 	if m != nil {
 		if xh, ok := m.XHeight(fontStyle, parent); ok {
 			ctx.XHeightPx, ctx.XHeightKnown = xh, true

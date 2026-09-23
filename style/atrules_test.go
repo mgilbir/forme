@@ -121,3 +121,27 @@ func TestTheUserAgentMemoKnowsTheMediumAndTheLength(t *testing.T) {
 			"whole sheet's preparation was reused", got)
 	}
 }
+
+// TestAnAtRuleCarriesItsLayersPlaceInTheTree is audit C114 for the rules the
+// cascade hands over rather than applies. An @page or @font-face is decided
+// against another by LayerRank of the Layer it carries, so that Layer has to be
+// the layer's place in the finished order and not the number it was given when
+// its name was first read: here a.x is named after b and must still lose to it,
+// because it is inside a, which the first statement put before b.
+func TestAnAtRuleCarriesItsLayersPlaceInTheTree(t *testing.T) {
+	p := prepareSheet(t, `
+		@layer a, b;
+		@layer b { @page { margin: 1px } @font-face { font-family: b } }
+		@layer a { @layer x { @page { margin: 2px } @font-face { font-family: a } } }
+	`, Media{})
+	if len(p.Pages) != 2 || len(p.FontFaces) != 2 {
+		t.Fatalf("handed over %d pages and %d faces, want 2 and 2", len(p.Pages), len(p.FontFaces))
+	}
+	for _, pair := range [][2]AtRule{{p.Pages[0], p.Pages[1]}, {p.FontFaces[0], p.FontFaces[1]}} {
+		b, ax := pair[0], pair[1]
+		if LayerRank(b.Layer, false) <= LayerRank(ax.Layer, false) {
+			t.Errorf("%s in b has layer %d and the one in a.x %d; b was ordered "+
+				"after a and wins", serialize(b.Rule.Block), b.Layer, ax.Layer)
+		}
+	}
+}

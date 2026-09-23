@@ -597,6 +597,62 @@ func TestFindingsAreBounded(t *testing.T) {
 	}
 }
 
+// TestTheBoundDoesNotHideWhatIsUnsupported is audit C58. The bound on the
+// report drops what comes after it, and a caller decides whether a page is
+// clean by whether any finding is Unsupported — so the note that stands for the
+// dropped ones must be Unsupported when one of them was, and must name the
+// property, which is what a caller maps a finding to a rule by. The fixture is
+// the audit's: author errors, which are never folded together, fill the list,
+// and the one declaration this engine does not implement comes after it.
+func TestTheBoundDoesNotHideWhatIsUnsupported(t *testing.T) {
+	for _, c := range []struct{ what, tail string }{
+		{"well past the bound", "p { text-shadow: 1px 1px red }"},
+		{"the first one past it", ""},
+	} {
+		t.Run(c.what, func(t *testing.T) {
+			var b strings.Builder
+			n := maxFindings * 2
+			if c.tail == "" {
+				// Exactly maxFindings errors, so the unsupported declaration
+				// is the finding the note is written in place of.
+				n = maxFindings
+				c.tail = "p { text-shadow: 1px 1px red }"
+			}
+			for i := 0; i < n; i++ {
+				b.WriteString("p.c" + itoa(i) + " { color: 'x" + itoa(i) + "' }\n")
+			}
+			b.WriteString(c.tail)
+			got := Apply(parseDoc(t, `<p class="c1">x</p>`), []Sheet{author(t, b.String())})
+			if len(got.Findings) != maxFindings+1 {
+				t.Fatalf("%d findings; this needs the list to overflow", len(got.Findings))
+			}
+			unsupported := 0
+			for _, f := range got.Findings {
+				if f.Unsupported {
+					unsupported++
+					if f.Property != "text-shadow" || !strings.Contains(f.Message, "text-shadow") {
+						t.Errorf("the unsupported finding names %q: %q", f.Property, f.Message)
+					}
+				}
+			}
+			if unsupported != 1 {
+				t.Errorf("%d findings are Unsupported, want the note alone; a page with "+
+					"text-shadow on it would count as one with nothing unsupported", unsupported)
+			}
+		})
+	}
+	// And a list cut by author errors alone says nothing is unsupported.
+	var b strings.Builder
+	for i := 0; i < maxFindings*2; i++ {
+		b.WriteString("p.c" + itoa(i) + " { color: 'x" + itoa(i) + "' }\n")
+	}
+	for _, f := range Apply(parseDoc(t, `<p>x</p>`), []Sheet{author(t, b.String())}).Findings {
+		if f.Unsupported {
+			t.Errorf("a list of author errors has an unsupported finding: %q", f.Message)
+		}
+	}
+}
+
 func itoa(i int) string {
 	if i == 0 {
 		return "0"

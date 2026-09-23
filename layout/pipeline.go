@@ -262,7 +262,12 @@ func buildWith(in Input, page PageSize, rec *Recorder) Built {
 	// Compose lay out on the sheet the document chose.
 	page = applyPageRules(page, pagesOf(prepared.Pages), rec)
 
-	styled := prepared.Apply(doc, fontMetrics{fontSet})
+	// The page area is what a viewport-relative length is a percentage of on
+	// paper, and it is the one layout resolves "3vw" against for every other
+	// property (lengthContext); a font-size in vw is resolved in the cascade,
+	// because it is inherited as a number, so the cascade is told the same page.
+	area := page.Content()
+	styled := prepared.ApplyOnPage(doc, fontMetrics{fontSet}, style.Media{Width: area.W, Height: area.H})
 	for _, f := range styled.Findings {
 		rec.ReportDetail(Finding{
 			Rule:     ruleForStyleFinding(f),

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/html"
 )
 
 // Computed values: the em is gone by the time a value is stored.
@@ -326,6 +327,43 @@ func TestALengthInsideAFunctionIsRewrittenToo(t *testing.T) {
 		absolutiseValues(vals, size, root)
 		if got := serialize(vals); got != tc.want {
 			t.Errorf("%q became %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestAFontSizeInViewportUnitsIsResolvedOnAKnownPage is audit C157. A caller that
+// names the page gets a font-size in viewport units resolved against it —
+// ApplyOnPage against the page area it was given, ApplyIn against the sheet,
+// the only page its caller named — and an em below it is relative to the
+// answer. Apply names no page, and there the value is left as written (see
+// TestAFontSizeThatCannotBeResolvedIsLeftAsWritten).
+func TestAFontSizeInViewportUnitsIsResolvedOnAKnownPage(t *testing.T) {
+	area := Media{Width: mustUnit(800), Height: mustUnit(600)}
+	for _, c := range []struct{ value, want, child string }{
+		{"5vw", "40px", "20px"},
+		{"5vh", "30px", "15px"},
+		{"5vmin", "30px", "15px"},
+		{"5vmax", "40px", "20px"},
+		{"calc(5vw + 2px)", "42px", "21px"},
+	} {
+		sheet := `#p { font-size: ` + c.value + ` } #c { font-size: 0.5em }`
+		for how, apply := range map[string]func(doc *html.Node) Styled{
+			"ApplyOnPage": func(doc *html.Node) Styled {
+				return Prepare([]Sheet{author(t, sheet)}, Media{}).ApplyOnPage(doc, nil, area)
+			},
+			"ApplyIn": func(doc *html.Node) Styled {
+				return ApplyIn(doc, []Sheet{author(t, sheet)}, nil, area)
+			},
+		} {
+			doc := parseDoc(t, nested)
+			got := apply(doc)
+			if v := got.Styles[elementFor(t, doc, "#p")].Get("font-size"); v != c.want {
+				t.Errorf("%s: font-size: %s computed to %q, want %q", how, c.value, v, c.want)
+			}
+			if v := got.Styles[elementFor(t, doc, "#c")].Get("font-size"); v != c.child {
+				t.Errorf("%s: 0.5em under font-size: %s computed to %q, want %q",
+					how, c.value, v, c.child)
+			}
 		}
 	}
 }

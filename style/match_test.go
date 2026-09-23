@@ -356,6 +356,37 @@ func TestMatchLang(t *testing.T) {
 	})
 }
 
+// TestMatchLangIsExtendedFiltering is Selectors 4 §7.2 read against the
+// cases Level 4 added. A wildcard does not match an element whose language is
+// not tagged — lang="" — and does match one tagged "und", undetermined, which
+// is a tag; :lang("") matches exactly the untagged ones; a range filters the
+// tag a subtag at a time, skipping subtags in between but not past a
+// singleton; and a range or a tag that is not well formed matches nothing.
+func TestMatchLangIsExtendedFiltering(t *testing.T) {
+	doc := parseDoc(t, `
+<div lang="de-Latn-DE"><p id="latn">x</p></div>
+<p id="ch" lang="fr-CH">x</p>
+<p id="und" lang="und">x</p>
+<div lang="tr"><p id="empty" lang="">x</p></div>
+<p id="ext" lang="de-x-DE">x</p>
+<p id="bad" lang="en_GB">x</p>`)
+	check(t, doc, map[string]string{
+		`p:lang(\*)`:        "latn ch und ext",
+		`p:lang("*")`:       "latn ch und ext",
+		`p:lang("")`:        "empty",
+		`p:lang(tr)`:        "",
+		`p:lang(de-DE)`:     "latn",
+		`p:lang("*-CH")`:    "ch",
+		`p:lang("de-*-DE")`: "latn",
+		`p:lang(DE-de)`:     "latn",
+		`p:lang(en)`:        "",
+		`p:lang("åå")`:      "",
+	})
+	// An element with no lang at or above it is not tagged either.
+	none := parseDoc(t, `<p id="a">x</p>`)
+	check(t, none, map[string]string{`p:lang("")`: "a", `p:lang("*")`: ""})
+}
+
 // TestMatchLangReadsXMLLangToo. :lang() asks html.Node.Language, the same walk
 // the casing tailoring and the hyphenation patterns ask — four questions of one
 // tag, and they must not read four different tags. Reading lang alone made an

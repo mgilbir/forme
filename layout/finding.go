@@ -581,6 +581,9 @@ type Recorder struct {
 	failed bool
 	// truncated records that the bound was reached.
 	truncated bool
+	// unsupported is how many of findings are Unsupported. See record:
+	// the bound is not allowed to leave it at zero when one was raised.
+	unsupported int
 
 	// work is the document's work budget. See budget.go for why it lives here:
 	// the recorder is the one object every stage of a render is handed, and
@@ -675,9 +678,25 @@ func (r *Recorder) record(f Finding, charged bool) bool {
 	// grows past the bound on the thing it deduplicates.
 	if len(r.findings) >= maxFindings {
 		r.truncated = true
+		// Whether a page is clean is read off this list — a finding that is
+		// Unsupported says the page lacks something, and the WPT ratchet and
+		// any caller like it count on seeing one — so the bound may cut how
+		// many there are and not whether there are any. Audit C58 found the
+		// styling stage's own bound doing exactly that. If the list holds
+		// none, the first one past the bound takes the last place: a list
+		// that says Truncated is already missing findings, and one more
+		// missing that is not Unsupported costs a reader less than a page
+		// with nothing unsupported on it that has something.
+		if f.Unsupported() && r.unsupported == 0 && len(r.findings) > 0 {
+			r.findings[len(r.findings)-1] = f
+			r.unsupported++
+		}
 		return severity == Error
 	}
 	r.seen[key] = true
+	if f.Unsupported() {
+		r.unsupported++
+	}
 	r.findings = append(r.findings, f)
 	return severity == Error
 }

@@ -392,3 +392,59 @@ func TestEveryRuleIsRegistered(t *testing.T) {
 		t.Errorf("%d rules are declared and %d registered", declared, len(registered))
 	}
 }
+
+// TestTheBoundKeepsAnUnsupportedFinding is audit C58 on this side of the
+// pipeline. A page is clean or not by whether any finding is Unsupported, so a
+// list cut by the bound must still hold one when one was raised — here after
+// the list has filled with author errors, each at its own place so none folds
+// into another.
+func TestTheBoundKeepsAnUnsupportedFinding(t *testing.T) {
+	r := NewRecorder(nil)
+	for i := 0; i < maxFindings*2; i++ {
+		raise(t, r, RuleInvalidCSS, AtCSS(i), "problem "+itoa(i))
+	}
+	r.ReportDetail(Finding{Rule: RuleUnsupportedProperty, Source: AtCSS(maxFindings * 2),
+		Message: "text-shadow is not applied", Property: "text-shadow"})
+	r.ReportDetail(Finding{Rule: RuleUnsupportedProperty, Source: AtCSS(maxFindings*2 + 1),
+		Message: "mix-blend-mode is not applied", Property: "mix-blend-mode"})
+	got := r.Findings()
+	if len(got) != maxFindings || !r.Truncated() {
+		t.Fatalf("%d findings, truncated %v; this needs the list full and cut",
+			len(got), r.Truncated())
+	}
+	n := 0
+	for _, f := range got {
+		if f.Unsupported() {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("%d findings are Unsupported, want the first one raised past the "+
+			"bound; the page would count as having nothing unsupported", n)
+	}
+}
+
+// TestTheBoundTakesAPlaceOnlyWhenItMust is the other half: a list that already
+// holds an Unsupported finding says what the one past the bound would, so
+// nothing recorded is given up for it.
+func TestTheBoundTakesAPlaceOnlyWhenItMust(t *testing.T) {
+	r := NewRecorder(nil)
+	r.ReportDetail(Finding{Rule: RuleUnsupportedProperty, Source: AtCSS(0),
+		Message: "text-shadow is not applied", Property: "text-shadow"})
+	for i := 1; i < maxFindings*2; i++ {
+		raise(t, r, RuleInvalidCSS, AtCSS(i), "problem "+itoa(i))
+	}
+	r.ReportDetail(Finding{Rule: RuleUnsupportedProperty, Source: AtCSS(maxFindings * 2),
+		Message: "mix-blend-mode is not applied", Property: "mix-blend-mode"})
+	var unsupported []string
+	for _, f := range r.Findings() {
+		if f.Unsupported() {
+			unsupported = append(unsupported, f.Property)
+		}
+	}
+	if len(unsupported) != 1 || unsupported[0] != "text-shadow" {
+		t.Errorf("the Unsupported findings are %v, want [text-shadow]: the list "+
+			"already said the page lacks something, and a finding it held was "+
+			"given up for a second saying so", unsupported)
+	}
+}

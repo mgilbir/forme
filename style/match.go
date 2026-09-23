@@ -697,24 +697,95 @@ func (m *Matcher) matchesAny(sels []css.Selector, n *html.Node) bool {
 
 // matchLang implements :lang(), which reads the nearest lang attribute at or
 // above the element — html.Node.Language, the same walk the casing and
-// hyphenation readers use — and compares it as a language range.
+// hyphenation readers use — and compares it with each language range by
+// RFC 4647 §3.3.2's extended filtering, as Selectors 4 §7.2 says to.
 //
-// The comparison is the dash-match of attribute selectors, so :lang(en) selects
-// an element declared "en-GB" — which is the whole reason the pseudo-class
-// exists rather than authors writing [lang|=en].
+// It was the dash-match of attribute selectors with "*" matching anything.
+// That is right for the plain cases — :lang(en) selects an element declared
+// "en-GB" — and wrong in the two Level 4 added. A wildcard range matched an
+// element whose language the author had marked as not known (lang=""), which
+// §7.2 says it does not; and :lang("") matched nothing, where it matches
+// exactly those elements. Filtering is also what lets :lang(de-DE) select
+// "de-Latn-DE" and :lang("*-CH") select "fr-CH", which dash-match cannot.
 func matchLang(n *html.Node, langs []string) bool {
 	value, ok := n.Language()
-	if !ok {
-		return false
-	}
-	value = strings.ToLower(value)
+	// Not tagged: lang="" says so outright, and an element with no lang at or
+	// above it has no tag either — nothing this engine reads (it does not
+	// read HTTP headers or a Content-Language pragma) gives it one.
+	untagged := !ok || value == ""
 	for _, want := range langs {
-		want = strings.ToLower(want)
-		if want == "*" || value == want || strings.HasPrefix(value, want+"-") {
+		if want == "" {
+			if untagged {
+				return true
+			}
+			continue
+		}
+		if !untagged && extendedFilter(value, want) {
 			return true
 		}
 	}
 	return false
+}
+
+// extendedFilter is RFC 4647 §3.3.2: whether a language tag matches an
+// extended language range. Both are compared a subtag at a time, ASCII
+// case-insensitively. The first subtags must be equal, or the range's must be
+// "*"; after that each of the range's subtags must turn up in the tag in order,
+// a "*" matching nothing in particular, and the tag's subtags between them may
+// be skipped — but not a single-letter one, which introduces an extension or a
+// private use and ends what the range can reach.
+//
+// Selectors 4 §7.2 adds that a range or tag that is not well formed matches
+// nothing, so ":lang(åå)" selects nothing rather than an element tagged "åå".
+// Well formed is checked here as far as the shape of the subtags (one to eight
+// ASCII letters or digits); the canonicalisation to extlang form §7.2 also asks
+// for needs the IANA registry, which this engine does not carry, and is not
+// done — a tag and a range written in the same form, which is how documents
+// and stylesheets write them, compare correctly without it.
+func extendedFilter(tag, rng string) bool {
+	t := strings.Split(strings.ToLower(tag), "-")
+	r := strings.Split(strings.ToLower(rng), "-")
+	if !wellFormedSubtags(t, false) || !wellFormedSubtags(r, true) {
+		return false
+	}
+	if r[0] != "*" && r[0] != t[0] {
+		return false
+	}
+	i, j := 1, 1
+	for i < len(r) {
+		switch {
+		case r[i] == "*":
+			i++
+		case j >= len(t):
+			return false
+		case r[i] == t[j]:
+			i, j = i+1, j+1
+		case len(t[j]) == 1:
+			return false
+		default:
+			j++
+		}
+	}
+	return true
+}
+
+// wellFormedSubtags reports whether every subtag is one to eight ASCII letters
+// or digits — or, in a range, the wildcard "*".
+func wellFormedSubtags(subtags []string, wildcard bool) bool {
+	for _, st := range subtags {
+		if wildcard && st == "*" {
+			continue
+		}
+		if len(st) == 0 || len(st) > 8 {
+			return false
+		}
+		for i := 0; i < len(st); i++ {
+			if c := st[i]; !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // Tree navigation. Every one of these skips text nodes, because a selector

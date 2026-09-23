@@ -558,13 +558,6 @@ func Undeclared(name, parent string) string {
 	return p.initial
 }
 
-// shorthands expands a shorthand into the longhands it sets.
-//
-// Expansion happens before the cascade rather than after, and that ordering is
-// not arbitrary: "margin: 0" followed by "margin-top: 1em" must leave the top
-// margin at 1em, which only works if the shorthand has already become four
-// declarations competing individually. Cascading the shorthand as a unit would
-// make the later longhand lose to it or win over all four.
 // expander turns a shorthand's value into the longhands it sets.
 //
 // It returns three things rather than two, and the third is the point:
@@ -586,6 +579,13 @@ type shorthand struct {
 	longhands []string
 }
 
+// shorthands is every shorthand, with how it expands into the longhands it sets.
+//
+// Expansion happens before the cascade rather than after, and that ordering is
+// not arbitrary: "margin: 0" followed by "margin-top: 1em" must leave the top
+// margin at 1em, which only works if the shorthand has already become four
+// declarations competing individually. Cascading the shorthand as a unit would
+// make the later longhand lose to it or win over all four.
 var shorthands = map[string]shorthand{
 	"margin":  boxShorthand("margin-top", "margin-right", "margin-bottom", "margin-left"),
 	"padding": boxShorthand("padding-top", "padding-right", "padding-bottom", "padding-left"),
@@ -692,13 +692,6 @@ func init() {
 	}
 }
 
-// boxShorthand builds the expander for a property written as one to four values
-// in the order top, right, bottom, left — where one value sets all four, two set
-// the vertical and horizontal pairs, and three leave the left to mirror the
-// right.
-//
-// The two-name form is the same rule with two slots, which is what "overflow"
-// needs.
 // borderSides builds the "border" family, whose longhands are three per side.
 func borderSides(sides ...string) shorthand {
 	var names []string
@@ -709,6 +702,13 @@ func borderSides(sides ...string) shorthand {
 	return shorthand{borderShorthand(sides...), names}
 }
 
+// boxShorthand builds the expander for a property written as one to four values
+// in the order top, right, bottom, left — where one value sets all four, two set
+// the vertical and horizontal pairs, and three leave the left to mirror the
+// right.
+//
+// The two-name form is the same rule with two slots, which is what "overflow"
+// needs.
 func boxShorthand(names ...string) shorthand {
 	return shorthand{boxExpander(names...), names}
 }
@@ -773,12 +773,11 @@ const (
 	kwInitial = "initial"
 	kwUnset   = "unset"
 	kwRevert  = "revert"
-	// kwRevertLayer is CSS Cascade 5's, and it is the same keyword as revert
-	// here. It rolls the value back to the previous cascade *layer*, and this
-	// engine has none — no @layer rule reaches it, so every declaration is in
-	// the implicit outer layer — and the specification says what that means:
-	// with no lower-priority layer to roll back to, it rolls back to the
-	// previous origin, which is revert.
+	// kwRevertLayer is CSS Cascade 5's. It rolls the value back to the
+	// previous cascade *layer* — the layers below the declaration's own in
+	// the same origin, and only where there are none to the previous origin,
+	// which is revert. Neither roll-back is implemented: the cascade reads
+	// both as "unset" and says so. See Styler.resolve.
 	kwRevertLayer = "revert-layer"
 )
 

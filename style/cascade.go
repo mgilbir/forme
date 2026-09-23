@@ -124,24 +124,22 @@ type Styler struct {
 	// media is the surface the document is being laid out for, which is what a
 	// media query is asked about. Its zero value is a sheet of no size, and a
 	// query about a width is false against it — see Media.
-	media    Media
+	media Media
+	// viewport is the page area a viewport-relative font-size is a percentage
+	// of, zero where the caller did not say. See ApplyOnPage.
+	viewport Media
 	findings []Finding
 	// sheet is the name of the stylesheet being prepared, and is what report
 	// stamps on a finding raised while one is. It is empty outside prepare,
 	// which is where the findings that belong to no sheet are raised.
 	sheet string
-	// The cascade layer being prepared, and the layers seen so far. layer is
-	// zero outside any @layer, which is not layer number zero but the band
-	// above every layer for a normal declaration — see layerRank. layerName is
-	// the full path of the open layer, which is what makes a name written
-	// inside another a sublayer of it.
-	layer      int
-	layerName  string
-	layers     map[string]int
-	layerCount int
-	// reportedNestedLayer keeps the note about a layer inside a layer to one
-	// per document. See reportNestedLayer.
-	reportedNestedLayer bool
+	// The cascade layer being prepared, and the tree of layers seen so far.
+	// layer is zero outside any @layer, which is not a layer but the band above
+	// every layer for a normal declaration — see layerRank. While preparing it
+	// names a node of layers; finishLayers turns it into the node's place in
+	// the order. See layer.go.
+	layer  int
+	layers []*layerNode
 	// attrOffset is where in the *markup* the style attribute being expanded
 	// was written, or -1 outside one.
 	//
@@ -267,6 +265,11 @@ func ApplyWith(doc *html.Node, sheets []Sheet, m Metrics) Styled {
 // document that would have printed on anything at all. The media *type* is
 // answered either way, because that one is a fact about this engine rather than
 // about the page: it renders for paper.
+//
+// The sheet is also what a font-size in viewport units is resolved against,
+// since it is the only page a caller of this has named. A caller that decides
+// margins, as layout does, knows the page *area*, and says so through
+// ApplyOnPage instead.
 func ApplyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) Styled {
 	out, _ := applyIn(doc, sheets, m, media)
 	return out
@@ -289,7 +292,7 @@ func applyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) (Styled, *S
 			Property:    "@font-face",
 		})
 	}
-	return p.apply(doc, m)
+	return p.apply(doc, m, media)
 }
 
 // AtRule is an @page or @font-face rule the cascade's walk reached: one whose
@@ -354,12 +357,30 @@ func Prepare(sheets []Sheet, media Media) *Prepared {
 // sheets. It may be called more than once, for more than one document: it
 // changes nothing it was given.
 func (p *Prepared) Apply(doc *html.Node, m Metrics) Styled {
-	out, _ := p.apply(doc, m)
+	out, _ := p.apply(doc, m, Media{})
 	return out
 }
 
-func (p *Prepared) apply(doc *html.Node, m Metrics) (Styled, *Styler) {
-	s := &Styler{matcher: NewMatcher(doc), media: p.media, seen: maps.Clone(p.seen),
+// ApplyOnPage is Apply with the page area known, which is what a
+// viewport-relative length is a percentage of on paper (CSS 2 §10.1 makes the
+// page area the initial containing block, and CSS Values 4 §6.1.2 measures the
+// viewport units against that).
+//
+// Of all the lengths only font-size needs it here. Every other one is left as
+// written for layout, which knows the page area and resolves "3vw" where the
+// box is laid out; a font-size cannot wait, because it is inherited as a
+// number and every em below it is relative to that number. Without the page,
+// "font-size: 5vw" was left as written, reported by layout as unresolvable, and
+// set at the inherited size (audit C157) — although the pipeline had decided
+// the page before it styled anything.
+func (p *Prepared) ApplyOnPage(doc *html.Node, m Metrics, area Media) Styled {
+	out, _ := p.apply(doc, m, area)
+	return out
+}
+
+func (p *Prepared) apply(doc *html.Node, m Metrics, viewport Media) (Styled, *Styler) {
+	s := &Styler{matcher: NewMatcher(doc), media: p.media, viewport: viewport,
+		seen:     maps.Clone(p.seen),
 		findings: append([]Finding(nil), p.findings...), attrOffset: -1}
 
 	// Shorthands were expanded and what the engine does not implement dropped
@@ -431,7 +452,7 @@ func (p *Prepared) apply(doc *html.Node, m Metrics) (Styled, *Styler) {
 		if !parent.IsZero() {
 			fontStyle = parent
 		}
-		size, resolved := fontSizeOf(cs, own, parentSize, rootSize, m, fontStyle)
+		size, resolved := fontSizeOf(cs, own, parentSize, rootSize, s.viewport, m, fontStyle)
 		// The scale a stated size is on is the one it was stated in, so this
 		// asks only where nothing has been stated: by this element, and by
 		// none of its ancestors either. See DefaultMonospaceFontSize.
@@ -503,7 +524,7 @@ func (p *Prepared) apply(doc *html.Node, m Metrics) (Styled, *Styler) {
 			// A pseudo-element's ex is its originating element's, for the same
 			// reason its em is: it inherits from that element and not from that
 			// element's parent.
-			psize, presolved := fontSizeOf(pcs, own, size, rootSize, m, cs)
+			psize, presolved := fontSizeOf(pcs, own, size, rootSize, s.viewport, m, cs)
 			if presolved {
 				pb.set(fontSizeID, s.interner().value(pxValue(psize)))
 			}
@@ -599,6 +620,7 @@ func (s *Styler) prepare(sheets []Sheet) []preparedRule {
 	// the prepared rules of all of them at once, and a style attribute is not
 	// in a sheet at all.
 	s.sheet = ""
+	s.finishLayers(out)
 	return out
 }
 
@@ -701,7 +723,7 @@ func (s *Styler) remember(sheet Sheet, mark preparation, out []preparedRule,
 		// An author's is a fresh slice each time, so remembering it would evict
 		// the one that pays and keep one that never hits.
 		return
-	case s.layer != 0 || s.layerCount != 0 || s.reportedNestedLayer:
+	case s.layer != 0 || len(s.layers) > 1:
 		// The sheet declared a cascade layer, so preparing it moved state the
 		// next document would have to move again.
 		return
@@ -1307,29 +1329,6 @@ func (s *Styler) expandDecl(d css.Declaration, origin Origin) []preparedDecl {
 	return nil
 }
 
-// nonNegative lists the longhands whose value CSS 2.1 says may not be negative.
-//
-// Each entry is a property whose definition carries the words "Negative values
-// are illegal" or "Negative lengths are not allowed": the sizes of §10.2, §10.4,
-// §10.5 and §10.7, the paddings of §8.4 and the border widths of §8.5.1. The
-// list is deliberately short and deliberately not "everything that looks like a
-// length" — a negative margin, a negative text-indent, a negative letter-spacing
-// and a negative word-spacing are all legal and all useful, and dropping one of
-// those would break a page that is doing nothing wrong.
-//
-// The border widths differ from the paddings in what dropping them produces, and
-// that is why they cannot be handled where they are read. A padding's initial
-// value is zero, so clamping a negative one to zero gives the right answer by
-// accident; a border width's initial value is "medium", which is three pixels of
-// ink. Layout clamped, so "border-top-width: -1pt" drew no border where CSS asks
-// for the initial one — fourteen tests in css/CSS2/borders, one per unit per
-// side, and every one of them invisible until inline boxes started painting
-// their borders, because the reference draws its two rules on a <span>.
-//
-// The shorthands are here too, and the table below says which and why. They were
-// not, and the gap was the shape §4.2 warns about: "padding: 8px; padding: -8px"
-// dropped the eight pixels and clamped the second declaration to zero, so a
-// declaration CSS says does not exist overrode one that does.
 // legalBackgroundImage reports whether a value is one background-image takes: a
 // comma-separated list, each entry an <image> or "none".
 //
@@ -1468,6 +1467,29 @@ var singleDisplay = map[string]bool{
 	"-webkit-box": true,
 }
 
+// nonNegative lists the longhands whose value CSS 2.1 says may not be negative.
+//
+// Each entry is a property whose definition carries the words "Negative values
+// are illegal" or "Negative lengths are not allowed": the sizes of §10.2, §10.4,
+// §10.5 and §10.7, the paddings of §8.4 and the border widths of §8.5.1. The
+// list is deliberately short and deliberately not "everything that looks like a
+// length" — a negative margin, a negative text-indent, a negative letter-spacing
+// and a negative word-spacing are all legal and all useful, and dropping one of
+// those would break a page that is doing nothing wrong.
+//
+// The border widths differ from the paddings in what dropping them produces, and
+// that is why they cannot be handled where they are read. A padding's initial
+// value is zero, so clamping a negative one to zero gives the right answer by
+// accident; a border width's initial value is "medium", which is three pixels of
+// ink. Layout clamped, so "border-top-width: -1pt" drew no border where CSS asks
+// for the initial one — fourteen tests in css/CSS2/borders, one per unit per
+// side, and every one of them invisible until inline boxes started painting
+// their borders, because the reference draws its two rules on a <span>.
+//
+// The shorthands are here too, and the table below says which and why. They were
+// not, and the gap was the shape §4.2 warns about: "padding: 8px; padding: -8px"
+// dropped the eight pixels and clamped the second declaration to zero, so a
+// declaration CSS says does not exist overrode one that does.
 var nonNegative = map[string]bool{
 	"width": true, "height": true,
 	"min-width": true, "min-height": true,
@@ -1747,17 +1769,34 @@ func (s *Styler) report(f Finding) {
 
 // appendBounded adds a finding to a list held to maxFindings, with a note in
 // place of the first one past it.
+//
+// The note is what the findings past the bound become, so it has to carry the
+// one thing about them a caller acts on: whether any was Unsupported. A page
+// with CSS this engine does not implement is not a clean page, and a caller —
+// the WPT ratchet is one — tells the two apart by whether any finding is
+// Unsupported. The note used to be a plain styling problem, so two hundred
+// author errors followed by a transform (audit C58) came out as a page with
+// nothing unsupported on it: the errors are never de-duplicated, and old-web
+// hacks like "*zoom" and "_height" reach two hundred on their own. So the first
+// Unsupported finding the bound drops turns the note into one, with that
+// finding's property — which is what decides the rule a caller maps it to — and
+// its message, so what the page lacked is named rather than hinted at.
 func appendBounded(findings []Finding, f Finding) []Finding {
-	switch {
-	case len(findings) > maxFindings:
-		return findings
-	case len(findings) == maxFindings:
-		return append(findings, Finding{
+	if len(findings) < maxFindings {
+		return append(findings, f)
+	}
+	if len(findings) == maxFindings {
+		findings = append(findings, Finding{
 			Offset:  -1,
 			Message: "further styling problems were not reported",
 		})
 	}
-	return append(findings, f)
+	if note := &findings[maxFindings]; f.Unsupported && !note.Unsupported {
+		note.Unsupported, note.Property = true, f.Property
+		note.Message = "further styling problems were not reported, among them " +
+			"CSS this engine does not implement: " + f.Message
+	}
+	return findings
 }
 
 // reportUncomputedPseudo names a pseudo-element the selector parser accepts and
@@ -2042,19 +2081,24 @@ func (s *Styler) resolve(name string, prop property, value string, have bool, pa
 			// user-agent rule set the property, so it is reported rather than
 			// quietly substituted.
 			//
-			// "revert-layer" is the same keyword here. It rolls back to the
-			// previous cascade layer and this engine has none, so the
-			// specification's own answer for that case is "revert" — which is
-			// this one. It was not recognised at all, so a declaration using it
-			// was read as a value of the property and dropped for not being
-			// one: "color: revert-layer" left the colour the *earlier*
-			// declaration had set, which is the opposite of what it asks for.
+			// "revert-layer" is read the same way. It rolls back to the
+			// cascade layers below the declaration's own, and to the previous
+			// origin only where there are none, so it differs from "unset"
+			// wherever a lower layer set the property as well. It was not
+			// recognised at all, so a declaration using it was read as a value
+			// of the property and dropped for not being one: "color:
+			// revert-layer" left the colour the *earlier* declaration had set,
+			// which is the opposite of what it asks for.
 			said := strings.ToLower(value)
+			lower := "a lower-priority stylesheet"
+			if said == kwRevertLayer {
+				lower = "a lower cascade layer or a lower-priority stylesheet"
+			}
 			if !s.suppressed(said) {
 				s.report(Finding{
 					Offset: -1,
 					Message: "\"" + said + "\" is not implemented and was read as \"unset\", " +
-						"which differs wherever a lower-priority stylesheet set the property",
+						"which differs wherever " + lower + " set the property",
 					Unsupported: true,
 					Property:    name,
 				})
