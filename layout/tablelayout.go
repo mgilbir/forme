@@ -1829,14 +1829,26 @@ func (l *layouter) paintCollapsedGrid(table *Box, parent *Fragment, cg *collapse
 	// border is centred on the grid line" means — so the line begins its own
 	// leading half before it. At the left edge that lands exactly on the table's
 	// border box, since the table's used border is that same leading half.
+	//
+	// "Begins" in the grid's logical order. Line c is the one before logical
+	// column c, and in a right-to-left table that is the column's *right* edge:
+	// colX has already been mirrored, so column c's right edge is colX[c] plus
+	// its width, and the last line is the left edge of the last column. Taking
+	// colX[c] as line c there drew every vertical line one column over — the
+	// table's outer lines met in its middle, and the interior one landed on the
+	// table's left edge.
 	lineX := make([]style.Unit, cg.cols+1)
 	originX := cg.table.Left
+	start, end := func(c int) style.Unit { return colX[c] },
+		func(c int) style.Unit { return colX[c].Add(cols[c]) }
+	if cg.rtl {
+		start, end = end, start
+	}
 	for c := 0; c < cg.cols && c < len(colX); c++ {
-		lineX[c] = colX[c].Add(originX).Sub(leadingHalf(cg.vgutter[c]))
+		lineX[c] = start(c).Add(originX).Sub(leadingHalf(cg.vgutter[c]))
 	}
 	if last := cg.cols - 1; last >= 0 && last < len(colX) {
-		lineX[cg.cols] = colX[last].Add(cols[last]).Add(originX).
-			Sub(leadingHalf(cg.vgutter[cg.cols]))
+		lineX[cg.cols] = end(last).Add(originX).Sub(leadingHalf(cg.vgutter[cg.cols]))
 	}
 	lineY := make([]style.Unit, cg.rows+1)
 	originY := cg.table.Top
@@ -1911,26 +1923,21 @@ func (l *layouter) layoutCells(table *Box, g *tableGrid, cols []style.Unit,
 
 // firstBaseline finds the baseline of the first line box in a subtree, measured
 // from the border-box top of the fragment it was asked about.
+//
+// The walk is firstLineIn's; what this adds is the box's own marker, for a list
+// item with no content of its own. A marker's At is already measured from the
+// border box, so it is taken as it stands — adding the box's border and padding
+// to it, as this used to, counted them twice and hung an empty item with a
+// padding-top that much below the line its marker is on.
 func firstBaseline(f *Fragment) (style.Unit, bool) {
-	top := f.Border.Top.Add(f.Padding.Top)
-	if len(f.Lines) > 0 {
-		return top.Add(f.Lines[0].Rect.Y).Add(f.Lines[0].Baseline), true
-	}
-	for _, c := range f.Children {
-		if c.Box != nil && c.Box.outOfFlow() {
-			// A float or a positioned box is not in the flow, so it is not what
-			// the text beside the table lines up with.
-			continue
-		}
-		if v, ok := firstBaseline(c); ok {
-			return top.Add(c.BorderRect.Y).Add(v), true
-		}
+	if first, ok := firstLineIn(f); ok {
+		return first.baseline, true
 	}
 	if f.Marker != nil {
 		// A list item with no content of its own still has a marker on a line
 		// box. See lastLineBaseline, which says the same thing for the other
 		// half of §10.8.1 and for the same reason.
-		return top.Add(f.Marker.At.Y), true
+		return f.Marker.At.Y, true
 	}
 	return 0, false
 }
@@ -2103,13 +2110,10 @@ func (l *layouter) paintableColumns(parent *Fragment, g *tableGrid, bands *table
 		if last >= len(cols) {
 			last = len(cols) - 1
 		}
+		x, w := columnSpan(colX, cols, first, last)
 		f := &Fragment{
-			Box: box,
-			BorderRect: Rect{
-				X: colX[first], Y: top,
-				W: colX[last].Add(cols[last]).Sub(colX[first]),
-				H: height,
-			},
+			Box:        box,
+			BorderRect: Rect{X: x, Y: top, W: w, H: height},
 		}
 		f.bgBands = bands.columns(first, last)
 		return f
@@ -2137,7 +2141,8 @@ func (l *layouter) paintableColumns(parent *Fragment, g *tableGrid, bands *table
 				// One <col span=3> is one box describing three columns, and one
 				// background across all of them.
 				last := frag.Children[len(frag.Children)-1]
-				last.BorderRect.W = colX[i].Add(cols[i]).Sub(frag.BorderRect.X).Sub(last.BorderRect.X)
+				x, w := columnSpan(colX, cols, runStart, i)
+				last.BorderRect.X, last.BorderRect.W = x.Sub(frag.BorderRect.X), w
 			} else {
 				runStart = i
 				frag.Children = append(frag.Children, &Fragment{
@@ -2165,7 +2170,7 @@ func (l *layouter) paintableColumns(parent *Fragment, g *tableGrid, bands *table
 		}
 		if i > 0 && g.colBoxes[i-1] == col {
 			last := parent.Children[len(parent.Children)-1]
-			last.BorderRect.W = colX[i].Add(cols[i]).Sub(last.BorderRect.X)
+			last.BorderRect.X, last.BorderRect.W = columnSpan(colX, cols, runStart, i)
 		} else {
 			runStart = i
 			parent.Children = append(parent.Children, &Fragment{
@@ -2318,9 +2323,9 @@ func (tb *tableBands) columns(first, last int) []Rect {
 func (tb *tableBands) bands(covers, starts [][]int32, first, last int,
 	firstCol, lastCol, firstRow, lastRow int) []Rect {
 
+	x, w := columnSpan(tb.colX, tb.cols, firstCol, lastCol)
 	box := Rect{
-		X: tb.colX[firstCol], Y: tb.rowY[firstRow],
-		W: tb.colX[lastCol].Add(tb.cols[lastCol]).Sub(tb.colX[firstCol]),
+		X: x, Y: tb.rowY[firstRow], W: w,
 		H: tb.rowY[lastRow].Add(tb.rowH[lastRow]).Sub(tb.rowY[firstRow]),
 	}
 	out := make([]Rect, 0, len(covers[first]))
@@ -2350,11 +2355,29 @@ func (tb *tableBands) bands(covers, starts [][]int32, first, last int,
 func (tb *tableBands) cellRect(c *tableCell) Rect {
 	lastCol := min(c.col+c.colSpan, len(tb.cols)) - 1
 	lastRow := min(c.row+c.rowSpan, len(tb.rowH)) - 1
+	x, w := columnSpan(tb.colX, tb.cols, c.col, lastCol)
 	return Rect{
-		X: tb.colX[c.col], Y: tb.rowY[c.row],
-		W: tb.colX[lastCol].Add(tb.cols[lastCol]).Sub(tb.colX[c.col]),
+		X: x, Y: tb.rowY[c.row], W: w,
 		H: tb.rowY[lastRow].Add(tb.rowH[lastRow]).Sub(tb.rowY[c.row]),
 	}
+}
+
+// columnSpan is the horizontal extent of columns first to last, as a left edge
+// and a width.
+//
+// Not colX[first] to the right edge of colX[last], which is what every caller
+// here used to write: that is the extent in a left-to-right table only. §17.2
+// runs a right-to-left table's columns from the right, so there the first
+// column of a span is its *rightmost* and the left edge is the last column's —
+// and the old arithmetic put a cell spanning two columns at the left edge of the
+// wrong one and gave a column group a negative width. The columns run one way or
+// the other and never both, so the extent is the outer edges of the two ends
+// whichever way that is, and in a left-to-right table this is the old answer
+// exactly.
+func columnSpan(colX, cols []style.Unit, first, last int) (x, w style.Unit) {
+	x0 := style.Min(colX[first], colX[last])
+	x1 := style.Max(colX[first].Add(cols[first]), colX[last].Add(cols[last]))
+	return x0, x1.Sub(x0)
 }
 
 // assembleRows builds the row-group, row and cell fragments and gives each cell
@@ -2424,8 +2447,13 @@ func (l *layouter) assembleRows(parent *Fragment, g *tableGrid, placed []placedC
 		height = height.Add(s.v.Mul(float64(c.rowSpan - 1)))
 
 		l.alignCell(p, height, rowBaseline[c.row])
+		// The cell's left edge is the left edge of its columns, which in a
+		// right-to-left table is its last column's and not its first's. See
+		// columnSpan.
+		x, _ := columnSpan(bands.colX, bands.cols, c.col,
+			min(c.col+c.colSpan, len(bands.cols))-1)
 		p.frag.BorderRect = Rect{
-			X: bands.colX[c.col].Sub(s.h), Y: 0,
+			X: x.Sub(s.h), Y: 0,
 			W: p.frag.BorderRect.W, H: height,
 		}
 		if s.collapsed == nil && cellIsEmpty(p.frag) && strings.EqualFold(

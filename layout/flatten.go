@@ -259,7 +259,12 @@ func lastLineBaseline(f *Fragment) (style.Unit, bool) {
 		// browser puts it: the square of "<div style=display:inline-block><span
 		// style=display:list-item></span></div>" hung below the line instead of
 		// sitting on it. Six of the suite's list tests are that document.
-		return inset.Add(f.Marker.At.Y), true
+		//
+		// At is measured from the border box already, so it is taken as it
+		// stands. Adding the inset to it as well counted the item's border and
+		// padding twice, and an empty item with a padding-top hung its
+		// inline-block that far above the line.
+		return f.Marker.At.Y, true
 	}
 	return 0, false
 }

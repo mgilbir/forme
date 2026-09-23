@@ -462,6 +462,24 @@ func (l *layouter) layoutAbsolute(c absCandidate, page Rect) {
 		// declared number and shrinking the box afterwards gives a child with
 		// "height: 50%" half of a height its parent never had.
 		declaredHeight = l.clampHeight(b, declaredHeight, cb.W, cb.H, true)
+	} else if l.anchoredTopAndBottom(b, cb) {
+		// The same argument for a height nobody declared. With "top" and
+		// "bottom" both given and "height: auto", §10.6.4's fifth rule solves
+		// the height from the two offsets and the containing block alone — the
+		// content is not an input to it — so the used height is known before
+		// the box is laid out, and §10.5 makes a percentage inside it resolve
+		// against that height rather than behave as "auto".
+		//
+		// Solving it only afterwards, as this used to, laid the content out
+		// against a height it was told was indefinite and then stretched the
+		// box round it: the overlay idiom, "position: fixed; inset: 0" around a
+		// "height: 100%" panel, drew the overlay the height of the page and the
+		// panel no height at all. The content height handed in is never read
+		// on this path, which is what makes nought a correct argument rather
+		// than a guess; solveVertical below solves it again from the laid-out
+		// box and gets the same answer.
+		v := l.solveVertical(b, cb, border, padding, margin, staticTop, 0, 0, false)
+		declaredHeight, hasHeight = v.size, true
 	}
 
 	frag, _ := l.blockIn(b, cb.W,
@@ -931,6 +949,15 @@ func (l *layouter) solveHorizontal(b *Box, cb Rect, border, padding, margin Edge
 		got = solveAxis(axis)
 	}
 	return got
+}
+
+// anchoredTopAndBottom reports that neither "top" nor "bottom" is auto, which
+// with an auto height is §10.6.4's fifth case: the height is whatever the two
+// offsets leave of the containing block, and does not depend on the content.
+func (l *layouter) anchoredTopAndBottom(b *Box, cb Rect) bool {
+	_, topAuto := l.offsetValue(b, "top", cb.H, true)
+	_, bottomAuto := l.offsetValue(b, "bottom", cb.H, true)
+	return !topAuto && !bottomAuto
 }
 
 // solveVertical applies §10.6.4 and the min/max clamp, mirroring solveHorizontal

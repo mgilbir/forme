@@ -298,6 +298,13 @@ type collapsedGrid struct {
 	// lines, which is the half that is not in its content box.
 	table Edges
 
+	// rtl records that the table's columns run right to left. The lines are
+	// numbered and resolved in the grid's own, logical, order — vertical line c
+	// is the one before logical column c — and the direction decides which
+	// *physical* side of each box meets that line and which end of the table it
+	// is at. See resolveVertical.
+	rtl bool
+
 	// truncated records that the run cap was reached, so the caller reports it
 	// once rather than per line.
 	truncated bool
@@ -447,7 +454,7 @@ func (l *layouter) collapsedGridFor(table *Box) *collapsedGrid {
 func (l *layouter) buildCollapsedGrid(table *Box) *collapsedGrid {
 	g := l.tableGridFor(table)
 	cg := &collapsedGrid{cols: g.cols, rows: len(g.rows),
-		cellEdges: make(map[*Box]Edges, len(g.cells))}
+		cellEdges: make(map[*Box]Edges, len(g.cells)), rtl: isRTL(table)}
 
 	if cg.cols == 0 || cg.rows == 0 {
 		// No grid to collapse against. The table still has a border and still
@@ -691,6 +698,21 @@ func (l *layouter) resolveHorizontal(table *Box, g *tableGrid, cg *collapsedGrid
 // resolveVertical is the same walk turned ninety degrees: line c sits between
 // column c-1 and column c, and the occupancy of a column is carried across from
 // the column before it.
+//
+// The columns are the grid's logical ones, and in a right-to-left table logical
+// column 0 is the rightmost (§17.2). So line c has column c-1 on its *right* and
+// column c on its left there, and what meets on it is the left border of the
+// one and the right border of the other — "border-left" and "border-right" are
+// physical properties, and a cell's left border is on its left whichever way its
+// table runs. Line 0 is the table's right edge and line cols its left. Reading
+// the sides as though every table ran left to right put the table's own
+// "border-left" on its right-hand line and the cells' right borders on lines
+// they do not touch.
+//
+// The tie-break does not turn round with them. §17.6.2.1's last rule is "the one
+// further to the left (if the table's 'direction' is 'ltr'; right, if it is
+// 'rtl') and further to the top wins", which is the one nearer the start of the
+// row — so order 0 stays with column c-1 in both directions.
 func (l *layouter) resolveVertical(table *Box, g *tableGrid, cg *collapsedGrid,
 	byCol []*tableCell, colAt []int32, rowGroupStart, rowGroupEnd []*Box,
 	colGroupStart, colGroupEnd []*Box) {
@@ -698,6 +720,15 @@ func (l *layouter) resolveVertical(table *Box, g *tableGrid, cg *collapsedGrid,
 	rows, cols := cg.rows, cg.cols
 	var sink runSink
 	cg.voff = make([]int32, cols+2)
+
+	// before is the side of the box in column c-1 that meets line c, and after
+	// the side of the box in column c; start and end are the table's own sides
+	// at line 0 and line cols.
+	before, after := sideRight, sideLeft
+	if cg.rtl {
+		before, after = sideLeft, sideRight
+	}
+	startSide, endSide := after, before
 
 	left := make([]occupant, 0, 16)
 	right := make([]occupant, 0, 16)
@@ -715,16 +746,16 @@ func (l *layouter) resolveVertical(table *Box, g *tableGrid, cg *collapsedGrid,
 		// rows differ from row to row, so they are added inside the walk.
 		var base edgeWinner
 		if c > 0 {
-			base.add(l.borderSide(g.colBoxes[c-1], sideRight, rankColumn, 0))
+			base.add(l.borderSide(g.colBoxes[c-1], before, rankColumn, 0))
 		}
 		if c < cols {
-			base.add(l.borderSide(g.colBoxes[c], sideLeft, rankColumn, 1))
+			base.add(l.borderSide(g.colBoxes[c], after, rankColumn, 1))
 		}
-		base.add(l.borderSide(colGroupEnd[c], sideRight, rankColumnGroup, 0))
-		base.add(l.borderSide(colGroupStart[c], sideLeft, rankColumnGroup, 1))
-		outer := sideLeft
+		base.add(l.borderSide(colGroupEnd[c], before, rankColumnGroup, 0))
+		base.add(l.borderSide(colGroupStart[c], after, rankColumnGroup, 1))
+		outer := startSide
 		if c == cols {
-			outer = sideRight
+			outer = endSide
 		}
 		if c == 0 || c == cols {
 			base.add(l.borderSide(table, outer, rankTable, 0))
@@ -775,10 +806,10 @@ func (l *layouter) resolveVertical(table *Box, g *tableGrid, cg *collapsedGrid,
 				}
 				w := base
 				if lc != nil {
-					w.add(l.borderSide(lc.box, sideRight, rankCell, 0))
+					w.add(l.borderSide(lc.box, before, rankCell, 0))
 				}
 				if rc != nil {
-					w.add(l.borderSide(rc.box, sideLeft, rankCell, 1))
+					w.add(l.borderSide(rc.box, after, rankCell, 1))
 				}
 				if c == 0 || c == cols {
 					w.add(l.borderSide(g.rows[k].box, outer, rankRow, 0))
@@ -792,10 +823,10 @@ func (l *layouter) resolveVertical(table *Box, g *tableGrid, cg *collapsedGrid,
 					cg.vgutter[c] = won.width
 				}
 				if lc != nil {
-					cg.edgeWon(lc.box, sideRight, won.width)
+					cg.edgeWon(lc.box, before, won.width)
 				}
 				if rc != nil {
-					cg.edgeWon(rc.box, sideLeft, won.width)
+					cg.edgeWon(rc.box, after, won.width)
 				}
 				sink.add(k, stop, won)
 				k = stop
@@ -885,12 +916,21 @@ func nextColOccupancy(prev, out []occupant, starting []*tableCell, c int) []occu
 // the right or below, and the two always add up to the whole — a line an odd
 // number of layout units wide must not leave a seam between the two boxes that
 // share it.
+//
+// The halves are physical — leading on the left — and so are the cells' edges
+// they are cut from, which resolveVertical records by the side of each cell that
+// met the line. Only the table's own two sides need the direction: its left edge
+// is line 0 in a left-to-right table and line cols in a right-to-left one.
 func (cg *collapsedGrid) finish(g *tableGrid) {
+	leftLine, rightLine := 0, cg.cols
+	if cg.rtl {
+		leftLine, rightLine = cg.cols, 0
+	}
 	cg.table = Edges{
 		Top:    leadingHalf(cg.hgutter[0]),
-		Right:  trailingHalf(cg.vgutter[cg.cols]),
+		Right:  trailingHalf(cg.vgutter[rightLine]),
 		Bottom: trailingHalf(cg.hgutter[cg.rows]),
-		Left:   leadingHalf(cg.vgutter[0]),
+		Left:   leadingHalf(cg.vgutter[leftLine]),
 	}
 
 	cg.cells = make(map[*Box]Edges, len(g.cells))
@@ -947,6 +987,12 @@ type collapsedBand struct {
 // so the run that ends there has to be drawn over the run that begins there,
 // which means emitting it second.
 //
+// "Ends" in the grid's logical order, which in a right-to-left table is the run
+// to the *right* of the crossing — and that is the rule as written in full: "the
+// one further to the left (if the table's 'direction' is 'ltr'; right, if it is
+// 'rtl')". The emission order therefore does not change with the direction; only
+// where each run's rectangle lands does.
+//
 // The width rule still comes first, because paintCollapsed sorts the bands by
 // it: a wider border owns a crossing whichever side of it that border is on,
 // which is §17.6.2.1's order and not this one.
@@ -964,8 +1010,16 @@ func (cg *collapsedGrid) bands(lineX, lineY []style.Unit) []collapsedBand {
 		for k := len(line) - 1; k >= 0; k-- {
 			run := line[k]
 			y := lineY[r].Add(leadingHalf(cg.hgutter[r].Sub(run.win.width)))
-			x0 := lineX[run.from]
-			x1 := lineX[run.to].Add(cg.vgutter[run.to])
+			// From the outside edge of the line the run starts on to the
+			// outside edge of the one it ends on — which are its left and right
+			// ends in a left-to-right table and its right and left ends in the
+			// other.
+			first, last := run.from, run.to
+			if cg.rtl {
+				first, last = run.to, run.from
+			}
+			x0 := lineX[first]
+			x1 := lineX[last].Add(cg.vgutter[last])
 			out = append(out, collapsedBand{
 				rect: Rect{X: x0, Y: y, W: x1.Sub(x0), H: run.win.width},
 				box:  run.win.box, side: run.win.side,
