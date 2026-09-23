@@ -151,9 +151,15 @@ func TestWOFFRefusesADecompressionBomb(t *testing.T) {
 // TestWOFFRefusesATableShorterThanItDeclared. The other direction: a stream that
 // ends early leaves a table padded with whatever the buffer held, which is a
 // font assembled from bytes no one wrote.
+//
+// The table was 64 bytes, which Go 1.27's deflate makes longer rather than
+// shorter; the fixture then stored it, the lie was dropped, and the test
+// handed the decoder a well-formed font. It passed only when an earlier test
+// had left the compressor in a state that shrank it. 4096 deflates to a few
+// dozen bytes, and the fixture now refuses to build a lie it cannot tell.
 func TestWOFFRefusesATableShorterThanItDeclared(t *testing.T) {
-	if _, err := DecodeWOFF(fonttest.WOFFBomb(64, 1<<16)); err == nil {
-		t.Fatal("a table that decompressed to 64 bytes while declaring 65536 was accepted")
+	if _, err := DecodeWOFF(fonttest.WOFFBomb(4096, 1<<16)); err == nil {
+		t.Fatal("a table that decompressed to 4096 bytes while declaring 65536 was accepted")
 	}
 }
 
