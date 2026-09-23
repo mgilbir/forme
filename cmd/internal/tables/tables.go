@@ -59,7 +59,8 @@ const ucdVersion = "-version=${UNICODE_VERSION}"
 var Manifest = []Table{
 	// The shaper's tables, from the Unicode Character Database.
 	{Out: "shape/scripts.go", Generator: "genscripts", Target: "shapetables",
-		Args: []string{ucdVersion, "${UCD}/Scripts.txt", "${UCD}/PropertyValueAliases.txt"}},
+		Args: []string{ucdVersion, "${UCD}/Scripts.txt", "${UCD}/ScriptExtensions.txt",
+			"${UCD}/PropertyValueAliases.txt"}},
 	{Out: "shape/joining.go", Generator: "genjoining", Target: "shapetables",
 		Args: []string{ucdVersion, "${UCD}/ArabicShaping.txt", "${UCD}/UnicodeData.txt"}},
 	{Out: "shape/ignorabletable.go", Generator: "genignorable", Target: "shapetables",
@@ -144,6 +145,13 @@ var Manifest = []Table{
 		Args: []string{"-source=${HTML_ENTITIES_URL}", "-sha256=${HTML_ENTITIES_SHA256}",
 			"-in=${HTML_ENTITIES}", "-out=" + out},
 		Inputs: []string{"${HTML_ENTITIES}"}},
+
+	// Which OpenType language systems a BCP 47 tag selects, from HarfBuzz's
+	// generated header at a release, pinned by digest.
+	{Out: "shape/langtags.go", Generator: "genlangtags", Target: "language-tags",
+		Args: []string{"-source=${HB_LANGTAGS_URL}", "-sha256=${HB_LANGTAGS_SHA256}",
+			"-in=${HB_LANGTAGS}", "-out=" + out},
+		Inputs: []string{"${HB_LANGTAGS}"}},
 
 	// CSS Color 4's named colours, from csswg-drafts at CSSWG_COMMIT.
 	{Out: "style/colors.go", Generator: "gencolors", Target: "css-colors",

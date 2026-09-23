@@ -37,13 +37,13 @@
 // joins cursive forms.
 //
 // The rules applied are those the font declares for the run's own script, and
-// for the language system named by SetLanguage. The syllabic scripts are also
-// reordered: their characters are not stored in the order they are drawn, and
-// ShapeGlyphs puts them right. Four models between them — nine Indic scripts
-// share one (indic.go), Khmer (khmer.go) and Myanmar (myanmar.go) each have
-// their own, and the Universal Shaping Engine (use.go) covers Tibetan,
-// Javanese, Balinese, Sinhala and a long tail. See layout.go for exactly what
-// is read and each shaper's own file for what it covers.
+// for the language system of the run's language (Features.Language). The
+// syllabic scripts are also reordered: their characters are not stored in the
+// order they are drawn, and ShapeGlyphs puts them right. Four models between
+// them — nine Indic scripts share one (indic.go), Khmer (khmer.go) and Myanmar
+// (myanmar.go) each have their own, and the Universal Shaping Engine (use.go)
+// covers Tibetan, Javanese, Balinese, Sinhala and a long tail. See layout.go for
+// exactly what is read and each shaper's own file for what it covers.
 //
 // # What it does not do
 //
@@ -142,17 +142,15 @@ type Face struct {
 	// font that declares no scripts.
 	layout *layout
 	// layoutTables are the GSUB, GPOS, GDEF and kern bytes, kept so that the
-	// layout can be read again for the script of a run; positionings and
-	// scriptLayouts cache those readings, by what each selected. language names
-	// the language system to select within a script; empty is the font's
-	// default.
+	// layout can be read again for the script and language of a run;
+	// positionings and scriptLayouts cache those readings, by what each
+	// selected.
 	layoutTables map[string][]byte
 	// cache holds the per-script readings. It is a pointer because faces made
 	// for separate documents share one parse and therefore share these too:
 	// what a font declares for a script does not depend on the document, and
 	// reading tens of thousands of kern pairs again per document is pure waste.
-	cache    *layoutCache
-	language string
+	cache *layoutCache
 	// varCoords is where in a variable font's design space this face was read,
 	// in normalized coordinates, or nil for a font that has no design space.
 	// The rules a font states can differ across it — see FeatureVariations in

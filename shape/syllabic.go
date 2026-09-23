@@ -44,7 +44,7 @@ func (sh shaper) shapeSyllabic(buf []Glyph, runes []rune, script uint16, p *plan
 	switch p.model {
 	case modelIndic:
 		cfg := indicConfigFor(script)
-		return sh.shapeIndic(buf, runes, before, sh.indicPlan(cfg, sh.f.indicOldSpec(cfg, script)), p)
+		return sh.shapeIndic(buf, runes, before, sh.indicPlan(cfg, sh.f.indicOldSpec(cfg, script, sh.langs)), p)
 	case modelKhmer:
 		return sh.shapeKhmer(buf, runes, p)
 	case modelMyanmar:

@@ -722,6 +722,9 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	// exactly what is drawn.
 	runsOfBox := l.faceRunsFor(b, face, b.Text)
 	for _, run := range runsOfBox {
+		// A fallback face is one this document set text in as much as the
+		// family's is. See fontlimits.go.
+		l.noteFace(run.Face)
 		// Whether the face that will set this run has the capitals the document
 		// asked for. It is asked of the text as *written*, because that is the
 		// text whose case decides whether the request would change anything:

@@ -224,6 +224,7 @@ func (l *layouter) fontFor(b *Box) (*shape.Face, bool) {
 	for _, family := range families {
 		if face, ok := l.fontSet.Face(family, key.bold, key.italic); ok {
 			l.fonts[key] = resolvedFont{face: face}
+			l.noteFace(face)
 			return face, true
 		}
 	}
@@ -243,6 +244,7 @@ func (l *layouter) fontFor(b *Box) (*shape.Face, bool) {
 	// finding below is for.
 	face, ok := l.fontSet.Face(initialFamily, key.bold, key.italic)
 	l.fonts[key] = resolvedFont{face: face}
+	l.noteFace(face)
 	if !ok {
 		// Not even the initial family. The set has nothing, so this box's text
 		// is not drawn — and neither is any other box's, since they all end up

@@ -204,7 +204,10 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 	if root == nil {
 		return nil
 	}
-	return newLayouter(root, avail, set, rec).layout()
+	l := newLayouter(root, avail, set, rec)
+	frag := l.layout()
+	l.reportFontLimits()
+	return frag
 }
 
 // newLayouter builds the state one layout run holds.
@@ -394,6 +397,11 @@ type layouter struct {
 	// reportedNoFace records that the set was found to have no face at all, so
 	// the finding is raised once rather than once per box. See fontFor.
 	reportedNoFace bool
+	// facesUsed is every face text was set in, in the order first used, and
+	// facesSeen the same as a set; what reading their rules ran into is
+	// reported once layout is done. See fontlimits.go.
+	facesUsed []*shape.Face
+	facesSeen map[*shape.Face]bool
 	// br is the half of inline layout that is about text rather than boxes, and
 	// it owns the memo of measured runs. See breaker.
 	br *breaker

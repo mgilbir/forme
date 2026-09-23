@@ -119,6 +119,18 @@ type Features struct {
 	// One value and not a set, because a run is one or the other or neither:
 	// CSS Fonts 4 §6.5's grammar is "normal | sub | super". See Position.
 	Position Position
+	// Language is the language the run is written in, as a BCP 47 tag — the
+	// lang attribute in force where its text is — and selects which of the
+	// font's language systems its rules are read from: "sr" has a font draw
+	// the Serbian forms of five Cyrillic letters, "ro" the Romanian comma
+	// below, "mr" Marathi's eyelash ra. See language.go.
+	//
+	// It is here rather than beside the text for the reason Caps is: it is a
+	// fact about the run that its characters do not state, and it has to reach
+	// the backend that draws the run, which shapes it again. Empty is no
+	// language, and a language the font names no system for is set in its
+	// default one, which is what every run got before this was read.
+	Language string
 }
 
 // Position is CSS Fonts 4 §6.5's font-variant-position, as the feature it asks

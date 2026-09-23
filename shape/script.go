@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/mgilbir/forme/font"
@@ -39,8 +40,9 @@ import (
 //
 // A language system narrows a script's selection further, and its *required*
 // feature applies whether or not anything asked for it. Which language a run is
-// in cannot be read off its characters, so the default language system is used
-// unless a caller names one with Face.SetLanguage.
+// in cannot be read off its characters: the document says it, and it reaches
+// here as Features.Language, a BCP 47 tag that language.go turns into the
+// language system tags to look for.
 
 // defaultScriptTags are tried, in order, after the run's own script.
 //
@@ -75,10 +77,9 @@ func decides(script uint16) bool {
 // runScript reports the script of a run of text: the first one that decides
 // anything, or scriptUnknown if none does.
 //
-// The first rather than the most common, because a run is meant to be in one
-// script — Stack.ShapeRuns splits text so that it is — and where a caller shapes
-// mixed text through a Face directly, the opening script is the one whose rules
-// that text was written to be set by.
+// The first rather than the most common, because a run it is asked about is in
+// one script: Stack.ShapeRuns cuts its runs where the script changes, and so
+// does a Face — see scriptRuns.
 func runScript(s string) uint16 {
 	for _, r := range s {
 		if sc := scriptOf(r); decides(sc) {
@@ -88,64 +89,226 @@ func runScript(s string) uint16 {
 	return scriptUnknown
 }
 
-// scriptsAround is the script of each piece of a string — the pieces given as
-// byte ranges that do not overlap — taking the text a piece sits in where the
-// piece itself decides nothing.
+// scriptRun is a stretch of a string set in one script: the bytes [start, end).
+type scriptRun struct {
+	start, end int
+	script     uint16
+}
+
+// scriptRuns cuts a string where its script changes, appending the pieces to
+// out.
+//
+// A font states its rules per script, and a string that changes script part
+// way through is two runs of rules: "PDFकि" shaped as one run is shaped as
+// Latin, because Latin is what it opens with, and the vowel sign that is
+// written after its consonant and drawn before it is left where it was
+// written. Stack.ShapeRuns has always cut there. A caller shaping through a
+// Face directly — which is what layout does, with a face that covers both
+// scripts — got the one run, so a Latin acronym with a Hindi suffix and no space
+// between them was set wrong by any font covering both, Noto Sans among them.
+//
+// The unit is a character and the combining marks after it, and no cut falls
+// inside one: a mark belongs to what it is written on, whatever script the mark
+// is from. A unit whose characters decide no script — a space, a digit,
+// punctuation — belongs to the script before it: at the start of the string,
+// behind, the script of the text before the string where the caller has some,
+// and failing that the first script after it in the string, and failing that
+// ahead, the script of the text after the string. So a span holding only "：",
+// between Chinese text and more of it, is Chinese, as it is when the same
+// characters are one string; set alone as Common it was read under 'DFLT', and
+// a font's Chinese forms are not stated there.
+//
+// A character used in more than one script continues a run in any of them —
+// UAX #24's Script_Extensions. A Devanagari digit in Kaithi, a Tamil digit in
+// Grantha, an Arabic full stop in Hanifi Rohingya, a Vedic sign in Tamil: each
+// has one Script and is written in the others, and cutting there sets a
+// number, or a word's last sign, apart from the run it is part of. So a run
+// carries the scripts it could still be — the extensions of what it opened
+// with, narrowed by each character after — and is cut only where a character
+// shares none of them. It is set in the one it opened with where that is still
+// among them, and otherwise the first that is. And two scripts the font is
+// asked about under the same OpenType tags — Hiragana and Katakana, both
+// 'kana' — are one script here, since nothing the font says can tell them
+// apart.
+//
+// Stack.ShapeRuns cuts its runs here too. It reads each character once.
+func scriptRuns(s string, behind, ahead uint16, out []scriptRun) []scriptRun {
+	var run scriptCandidates
+	start := 0
+	// Characters at the start that decide nothing belong to the text before
+	// the string, where there is some: the run is open in its script before
+	// anything in the string has said a word.
+	borrowed := decides(behind)
+	if borrowed {
+		run.open(behind, nil)
+	}
+	for i := 0; i < len(s); {
+		r, n := utf8.DecodeRuneInString(s[i:])
+		unit, first := scriptOf(r), r
+		j := i + n
+		for j < len(s) {
+			m, n := utf8.DecodeRuneInString(s[j:])
+			if !unicode.Is(unicode.M, m) {
+				break
+			}
+			if !decides(unit) {
+				unit, first = scriptOf(m), m
+			}
+			j += n
+		}
+		if decides(unit) {
+			switch ext := scriptExtensionsOf(first); {
+			case run.n == 0:
+				run.open(unit, ext)
+			case borrowed && i == start:
+				// Nothing before this in the string, so nothing was set in the
+				// script borrowed from before it.
+				run.open(unit, ext)
+			case !run.narrow(unit, ext):
+				out = append(out, scriptRun{start: start, end: i, script: run.script()})
+				start = i
+				run.open(unit, ext)
+			}
+			borrowed = false
+		}
+		i = j
+	}
+	script := ahead
+	if run.n > 0 {
+		script = run.script()
+	}
+	return append(out, scriptRun{start: start, end: len(s), script: script})
+}
+
+// scriptCandidates is the scripts a run could still be in, and the one it
+// opened with. It is an array rather than a slice so that cutting a string
+// allocates nothing.
+type scriptCandidates struct {
+	opened uint16
+	n      int
+	s      [maxScriptExtensions]uint16
+}
+
+// open starts a run at a character of script sc used in the scripts ext, or in
+// sc alone where ext is empty.
+func (c *scriptCandidates) open(sc uint16, ext []uint16) {
+	c.opened = sc
+	if len(ext) == 0 {
+		c.s[0], c.n = sc, 1
+		return
+	}
+	c.n = copy(c.s[:], ext)
+}
+
+// narrow keeps the candidates the next character is also used in, and
+// reports false — changing nothing — where it is used in none of them.
+func (c *scriptCandidates) narrow(sc uint16, ext []uint16) bool {
+	if len(ext) == 0 {
+		ext = []uint16{sc}
+	}
+	var kept [maxScriptExtensions]uint16
+	k := 0
+	for _, have := range c.s[:c.n] {
+		for _, e := range ext {
+			if sameShaping(have, e) {
+				kept[k] = have
+				k++
+				break
+			}
+		}
+	}
+	if k == 0 {
+		return false
+	}
+	c.s, c.n = kept, k
+	return true
+}
+
+// script is the one the run is set in: the one it opened with, where that is
+// still a candidate, and otherwise the first that is.
+func (c *scriptCandidates) script() uint16 {
+	for _, have := range c.s[:c.n] {
+		if have == c.opened {
+			return have
+		}
+	}
+	return c.s[0]
+}
+
+// scriptExtensionsOf is the scripts a character is used in besides — or
+// rather than only — its Script, or nothing for one used in its Script alone.
+func scriptExtensionsOf(r rune) []uint16 {
+	i := sort.Search(len(scriptExtensionRanges), func(i int) bool { return scriptExtensionRanges[i].hi >= r })
+	if i < len(scriptExtensionRanges) && r >= scriptExtensionRanges[i].lo {
+		return scriptExtensionRanges[i].scripts
+	}
+	return nil
+}
+
+// sameShaping reports whether two scripts are one run to a font: the same
+// script, or two the font can only be asked about under the same tags.
+func sameShaping(a, b uint16) bool {
+	if a == b {
+		return true
+	}
+	ta, tb := scriptTags(a), scriptTags(b)
+	if len(ta) == 0 || len(ta) != len(tb) {
+		return false
+	}
+	for i := range ta {
+		if ta[i] != tb[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// scriptsBeside is the script of the text on either side of each piece of a
+// string — the pieces given as byte ranges that do not overlap — for scriptRuns
+// to give a piece's characters that decide nothing: behind is the last
+// character before the piece that decides a script, and ahead the first after
+// it. Where the string has none on that side, the caller's before or after
+// answers, which is the script of the text the string was taken from.
 //
 // A bidirectional run is cut by *direction*, and a run of digits inside Arabic
 // is a run of its own: Arabic-Indic digits are class AN and the letters around
 // them are AL, so the digits come out as a piece whose every character is
-// Common. runScript answers scriptUnknown for that piece, which selects DFLT —
-// so a font stating its digit forms under 'arab', as Arabic fonts do, had them
-// selected away by the direction the digits are read in.
+// Common. Taken alone, that piece selects DFLT — so a font stating its digit
+// forms under 'arab', as Arabic fonts do, had them selected away by the
+// direction the digits are read in.
 //
 // UAX #24's resolution: a character of Common or Inherited takes the script
 // around it. Backwards first, because a run of digits belongs to the word it
 // follows, and forwards where there is nothing behind.
 //
-// The pieces are answered together. Answering one at a time walked everything before the piece to find the
-// last character there that decides a script, and a bidirectional run is cut
-// into a piece per stretch of digits: "ب1" sixteen thousand times over is
-// sixteen thousand pieces, and it took four and a half seconds, three quarters
-// of it here. Taken in the order they stand in the string, the pieces share one
-// walk forward for the script behind each and one walk back for the script
-// after, so each character is read a bounded number of times however many
-// pieces there are.
-func scriptsAround(s string, pieces [][2]int) []uint16 {
-	out := make([]uint16, len(pieces))
+// The pieces are answered together. Answering one at a time walked everything
+// before the piece to find the last character there that decides a script, and
+// a bidirectional run is cut into a piece per stretch of digits: "ب1" sixteen
+// thousand times over is sixteen thousand pieces, and it took four and a half
+// seconds, three quarters of it here. Taken in the order they stand in the
+// string, the pieces share one walk forward for the script behind each and one
+// walk back for the script ahead, so each character is read a bounded number
+// of times however many pieces there are.
+func scriptsBeside(s string, pieces [][2]int, before, after uint16) (behind, ahead []uint16) {
+	behind, ahead = make([]uint16, len(pieces)), make([]uint16, len(pieces))
 	order := make([]int, len(pieces))
 	for i := range order {
 		order[i] = i
 	}
 	sort.Slice(order, func(a, b int) bool { return pieces[order[a]][0] < pieces[order[b]][0] })
 
-	// Forwards: a piece's own script, and failing that the last one behind it.
-	pending := false
-	pos, last := 0, uint16(scriptUnknown)
+	pos, last := 0, before
 	for _, k := range order {
-		start, end := pieces[k][0], pieces[k][1]
-		for pos < start {
+		for pos < pieces[k][0] {
 			r, size := utf8.DecodeRuneInString(s[pos:])
 			if sc := scriptOf(r); decides(sc) {
 				last = sc
 			}
 			pos += size
 		}
-		switch sc := runScript(s[start:end]); {
-		case sc != scriptUnknown:
-			out[k] = sc
-		case last != scriptUnknown:
-			out[k] = last
-		default:
-			out[k] = scriptUnknown
-			pending = true
-		}
+		behind[k] = last
 	}
-	if !pending {
-		return out
-	}
-	// Backwards, for a piece with nothing behind it: the first script after it.
-	pos, next := len(s), uint16(scriptUnknown)
+	pos, next := len(s), after
 	for i := len(order) - 1; i >= 0; i-- {
 		k := order[i]
 		for pos > pieces[k][1] {
@@ -155,11 +318,42 @@ func scriptsAround(s string, pieces [][2]int) []uint16 {
 			}
 			pos -= size
 		}
-		if out[k] == scriptUnknown {
-			out[k] = next
-		}
+		ahead[k] = next
 	}
-	return out
+	return behind, ahead
+}
+
+// scriptBehind is the script of the text before a run, the caller's context:
+// the last character there that decides one. scriptAhead is the first after
+// it.
+//
+// Each reads at most contextRunes characters, which is what a caller hands a
+// run of the text beside it anyway, and a caller may hand it the whole of a
+// paragraph. A run separated from the nearest letter by more punctuation or
+// digits than that is shaped as though nothing were beside it.
+func scriptBehind(before string) uint16 {
+	for n := 0; before != "" && n < contextRunes; n++ {
+		r, size := utf8.DecodeLastRuneInString(before)
+		if sc := scriptOf(r); decides(sc) {
+			return sc
+		}
+		before = before[:len(before)-size]
+	}
+	return scriptUnknown
+}
+
+func scriptAhead(after string) uint16 {
+	n := 0
+	for _, r := range after {
+		if n == contextRunes {
+			break
+		}
+		if sc := scriptOf(r); decides(sc) {
+			return sc
+		}
+		n++
+	}
+	return scriptUnknown
 }
 
 // scriptTags is the OpenType tags a script selects, most specific first.
@@ -177,8 +371,8 @@ func scriptTags(script uint16) []string {
 // A false second result means the table declares no scripts, or none that
 // matched even the default — so there is nothing to select by and the caller
 // should take every feature.
-func scriptFeatures(t []byte, tags []string, lang string) (featureSet, bool) {
-	sel, ok := scriptSelection(t, tags, lang)
+func scriptFeatures(t []byte, tags, langs []string) (featureSet, bool) {
+	sel, ok := scriptSelection(t, tags, langs)
 	return sel.features, ok
 }
 
@@ -193,7 +387,7 @@ type selection struct {
 }
 
 // scriptSelection is scriptFeatures, also reporting the required feature.
-func scriptSelection(t []byte, tags []string, lang string) (selection, bool) {
+func scriptSelection(t []byte, tags, langs []string) (selection, bool) {
 	if len(t) < 10 {
 		return selection{required: noRequiredFeature}, false
 	}
@@ -208,7 +402,7 @@ func scriptSelection(t []byte, tags []string, lang string) (selection, bool) {
 		if !ok {
 			continue
 		}
-		ls, ok := readLangSys(list[so:], lang)
+		ls, ok := readLangSys(list[so:], langs)
 		if !ok {
 			continue
 		}
@@ -260,19 +454,24 @@ func layoutTags(script uint16) []string {
 // Every run asks, since the answer decides the run's model, so it is kept
 // beside the layout the same question selects: walking the ScriptList again
 // per run is what the layout cache was made to stop.
-func (f *Face) chosenScriptTag(script uint16) string {
+//
+// The language is asked about too, because a script table the run's language
+// system is not in and that has no default one is passed over for the next
+// tag — so which tag is chosen can turn on it.
+func (f *Face) chosenScriptTag(script uint16, langs []string) string {
 	if f.cache == nil {
-		return f.readChosenScriptTag(script)
+		return f.readChosenScriptTag(script, langs)
 	}
-	if tag, ok := f.cache.chosenFor(script, f.language); ok {
+	key := languageKey(langs)
+	if tag, ok := f.cache.chosenFor(script, key); ok {
 		return tag
 	}
-	tag := f.readChosenScriptTag(script)
-	f.cache.rememberChosen(script, f.language, tag)
+	tag := f.readChosenScriptTag(script, langs)
+	f.cache.rememberChosen(script, key, tag)
 	return tag
 }
 
-func (f *Face) readChosenScriptTag(script uint16) string {
+func (f *Face) readChosenScriptTag(script uint16, langs []string) string {
 	list := scriptList(f.layoutTables["GSUB"])
 	if len(list) == 0 {
 		return ""
@@ -284,7 +483,7 @@ func (f *Face) readChosenScriptTag(script uint16) string {
 		if !ok {
 			continue
 		}
-		if _, ok := readLangSys(list[so:], f.language); ok {
+		if _, ok := readLangSys(list[so:], langs); ok {
 			return tag
 		}
 	}
@@ -325,35 +524,33 @@ type langSys struct {
 	features []int
 }
 
-// readLangSys reads a Script table's language system: the named one if the
-// script declares it, and the default otherwise.
+// readLangSys reads a Script table's language system: the first of langs the
+// script declares, and failing that the default.
+//
+// "The default" is two things, tried in HarfBuzz's order. A LangSysRecord
+// tagged 'dflt' is not in the specification — the default is the Script
+// table's DefaultLangSys — but the registry's own page once spelled it that
+// way, enough fonts carry one that HarfBuzz looks for it first, and a font is
+// tested against HarfBuzz. Then DefaultLangSys. A run with no language, or one the font does not name, is set
+// in whichever it finds.
 //
 // A script that declares neither is unusable, and reports so rather than
 // selecting nothing — the caller then tries the next script tag, and failing
 // that falls back to taking every feature. Selecting nothing would set the text
 // with no ligatures, no kerning and no joining at all, which is a worse answer
 // than the one this package gave before it read scripts.
-func readLangSys(script []byte, lang string) (langSys, bool) {
+func readLangSys(script []byte, langs []string) (langSys, bool) {
 	if len(script) < 4 {
 		return langSys{}, false
 	}
 	off := 0
-	if lang != "" {
-		n := font.Be16(script, 2)
-		if n > maxLangSys {
-			n = maxLangSys
-		}
-		for i := 0; i < n; i++ {
-			rec := 4 + 6*i
-			if rec+6 > len(script) {
-				break
-			}
-			if string(script[rec:rec+4]) != lang {
-				continue
-			}
-			off = font.Be16(script, rec+4)
+	for _, lang := range langs {
+		if off = langSysOffset(script, lang); off != 0 {
 			break
 		}
+	}
+	if off == 0 {
+		off = langSysOffset(script, "dflt")
 	}
 	if off == 0 {
 		off = font.Be16(script, 0) // DefaultLangSys
@@ -376,23 +573,25 @@ func readLangSys(script []byte, lang string) (langSys, bool) {
 	return out, true
 }
 
-// SetLanguage names the OpenType language system to shape in: "TRK " for
-// Turkish, "ROM " for Romanian, and so on — four bytes, space-padded, as the
-// OpenType language system registry spells them.
-//
-// It matters because a font states some rules per language. The same letters
-// are drawn differently in Romanian and in French, and a font that knows the
-// difference says so through a language system; without one it is set the
-// default way, which is right for most text and wrong for the text the font
-// went to the trouble of correcting.
-//
-// The empty string, the initial value, means the default language system.
-// A language the font does not declare falls back to it too, so a caller may
-// name one without first checking that the face has it.
-func (f *Face) SetLanguage(tag string) { f.language = tag }
-
-// Language reports the language system set with SetLanguage.
-func (f *Face) Language() string { return f.language }
+// langSysOffset is the offset of the language system a Script table names
+// with a tag, or zero where it names none. A tag named twice is the first
+// record's, which is the one a reader walking the list in order finds.
+func langSysOffset(script []byte, tag string) int {
+	n := font.Be16(script, 2)
+	if n > maxLangSys {
+		n = maxLangSys
+	}
+	for i := 0; i < n; i++ {
+		rec := 4 + 6*i
+		if rec+6 > len(script) {
+			break
+		}
+		if string(script[rec:rec+4]) == tag {
+			return font.Be16(script, rec+4)
+		}
+	}
+	return 0
+}
 
 // Scripts lists the OpenType script tags the face declares layout rules for,
 // in sorted order — "latn", "cyrl", "deva" and so on, plus "DFLT" where the
@@ -474,6 +673,11 @@ type shaper struct {
 	// features is what the document turned off: the font's own rules a CSS
 	// property or a CSS Text rule has overruled. See Features.
 	features Features
+
+	// langs is the language system tags the run's language is looked up
+	// under, most specific first: features.Language, read once per run. See
+	// language.go.
+	langs []string
 
 	// floor and limit bound the glyphs a lookup may look at: it may not match,
 	// or backtrack, outside [floor, limit). They exist for the Indic pass,
@@ -673,27 +877,28 @@ func (sh shaper) end(buf []Glyph) int {
 // that run to tens of kilobytes. The positioning half is cached on its own key,
 // because a font that varies its substitutions per script usually does not vary
 // its kerning, and the kerning is the large table.
-func (f *Face) layoutFor(script uint16) *layout {
+func (f *Face) layoutFor(script uint16, langs []string) *layout {
 	if len(f.layoutTables) == 0 {
 		return f.layout
 	}
 	// Which features a script selects is a fact about the font, and answering it
 	// means walking the ScriptList, reading a LangSys and building the two keys
 	// below. That was half the memory a shaped word cost, spent every time, to
-	// arrive at a cached answer — so the script itself is the first key, and the
-	// selection is worked out only when it is not yet known.
-	if l, ok := f.cache.forScript(script, f.language); ok {
+	// arrive at a cached answer — so the script and the language are the first
+	// key, and the selection is worked out only when it is not yet known.
+	key := languageKey(langs)
+	if l, ok := f.cache.forScript(script, key); ok {
 		return l
 	}
-	l := f.readLayoutFor(script)
-	f.cache.rememberScript(script, f.language, l)
+	l := f.readLayoutFor(script, langs)
+	f.cache.rememberScript(script, key, l)
 	return l
 }
 
-func (f *Face) readLayoutFor(script uint16) *layout {
+func (f *Face) readLayoutFor(script uint16, langs []string) *layout {
 	tags := layoutTags(script)
-	gsub, gsubOK := scriptSelection(f.layoutTables["GSUB"], tags, f.language)
-	gposSel, gposOK := scriptFeatures(f.layoutTables["GPOS"], tags, f.language)
+	gsub, gsubOK := scriptSelection(f.layoutTables["GSUB"], tags, langs)
+	gposSel, gposOK := scriptFeatures(f.layoutTables["GPOS"], tags, langs)
 	if !gsubOK && !gposOK {
 		// Neither table says anything about scripts, so there is nothing to
 		// select by: every feature applies, which is what f.layout already is.
@@ -759,8 +964,9 @@ type layoutCache struct {
 	chosen map[scriptKey]string
 }
 
-// scriptKey is a run's script and the language the face was told to set it in,
-// which together are everything the selection depends on.
+// scriptKey is a run's script and its language, as the language system tags it
+// is looked up under (see languageKey), which together are everything the
+// selection depends on.
 type scriptKey struct {
 	script uint16
 	lang   string

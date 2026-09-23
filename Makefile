@@ -1,4 +1,4 @@
-.PHONY: ucd verify-fonts test-corpora linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance
+.PHONY: ucd verify-fonts test-corpora linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance
 
 test:
 	gofmt -l . | grep -v '^testdata/' && exit 1 || true
@@ -193,7 +193,7 @@ UCD ?= $(UCD_DIR)
 # argument lists had drifted, and nothing was in a position to notice. See
 # cmd/regenerate_test.go, which now runs every one of them.
 #
-# The seventeen files that are read, rather than UCD.zip: the archive is an
+# The eighteen files that are read, rather than UCD.zip: the archive is an
 # order of magnitude larger than the files taken from it, unzip is one more
 # thing to have installed, and a file that moves in a new release fails here by
 # name instead of as a "no such file" from inside a generator.
@@ -211,6 +211,7 @@ UCD_FILES := \
 	IndicSyllabicCategory.txt \
 	LineBreak.txt \
 	PropertyValueAliases.txt \
+	ScriptExtensions.txt \
 	Scripts.txt \
 	SpecialCasing.txt \
 	UnicodeData.txt \
@@ -260,7 +261,8 @@ endif
 TABLE_VARS := UCD UNICODE_VERSION \
 	ICU_DICTS DICT_DIR BUDOUX BUDOUX_DIR HYPHEN_URL HYPHEN_DIR \
 	AFM_URL AFM_DIR BROTLI_URL BROTLI_DIR AGL_URL AGL_DIR \
-	HTML_ENTITIES HTML_ENTITIES_URL HTML_ENTITIES_SHA256 CSS_COLOR_URL CSS_COLOR_SPEC
+	HTML_ENTITIES HTML_ENTITIES_URL HTML_ENTITIES_SHA256 CSS_COLOR_URL CSS_COLOR_SPEC \
+	HB_LANGTAGS HB_LANGTAGS_URL HB_LANGTAGS_SHA256
 MAKETABLES = go run ./cmd/maketables $(foreach v,$(TABLE_VARS),-D '$(v)=$($(v))')
 
 # Every input a generator reads that is fetched rather than committed. Each is
@@ -274,7 +276,7 @@ MAKETABLES = go run ./cmd/maketables $(foreach v,$(TABLE_VARS),-D '$(v)=$($(v))'
 # whole, and each set is marked done by a file named for its pin, so a new pin
 # fetches again rather than finding the old files and calling them current.
 TABLE_SOURCES = $(UCD_DEP) dictionary-sources phrase-sources hyphen-sources \
-	afm brotli-sources agl css-color-spec $(HTML_ENTITIES)
+	afm brotli-sources agl css-color-spec $(HTML_ENTITIES) $(HB_LANGTAGS)
 
 # One file, whole or not at all.
 #
@@ -788,6 +790,39 @@ css-colors: css-color-spec
 
 clean-css-colors:
 	rm -rf $(CSS_COLOR_DIR)
+
+# Which OpenType language systems a BCP 47 language tag selects, which
+# cmd/genlangtags turns into shape/langtags.go.
+#
+# The mapping is two registries joined — OpenType's language system tags and
+# IANA's language subtags — with a long list of corrections where they
+# disagree, and HarfBuzz publishes the join as a generated header. Fonts are
+# tested against HarfBuzz, so the header is the input: a join made again here
+# would differ from it exactly where the corrections are.
+#
+# Taken at a HarfBuzz release — the one the shaping oracle runs — and pinned by
+# digest as well: the fetch refuses a file with any other SHA-256, so does the
+# generator, and the table records it. Moving to a newer release is moving both.
+HB_LANGTAGS_VERSION := 14.5.0
+HB_LANGTAGS_URL := https://raw.githubusercontent.com/harfbuzz/harfbuzz/$(HB_LANGTAGS_VERSION)/src/hb-ot-tag-table.hh
+HB_LANGTAGS_SHA256 := fe80a969cc25ddf2c4613b9ebbc1dd7e26ec105fafc892d9ff9f221a5d2355e6
+HB_LANGTAGS := testdata/harfbuzz-langtags/hb-ot-tag-table.hh
+
+$(HB_LANGTAGS):
+	mkdir -p $(dir $@)
+	$(FETCH) -o $@.part $(HB_LANGTAGS_URL)
+	echo "$(HB_LANGTAGS_SHA256)  $@.part" | sha256sum -c --quiet - || { \
+	  rm -f $@.part; \
+	  echo "$(HB_LANGTAGS_URL) is not the file HB_LANGTAGS_SHA256 pins" >&2; \
+	  exit 1; \
+	}
+	mv $@.part $@
+
+language-tags: $(HB_LANGTAGS)
+	$(MAKETABLES) language-tags
+
+clean-language-tags:
+	rm -rf $(dir $(HB_LANGTAGS))
 
 # Noto, for the scripts the fourteen standard PDF faces do not have.
 #

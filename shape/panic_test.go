@@ -408,8 +408,6 @@ func useFace(face *Face) {
 	_ = face.Cmap()
 	_ = face.Used()
 	_ = face.Scripts()
-	_ = face.Language()
-	face.SetLanguage("sr")
 	_ = face.Features()
 	_ = face.HasScript("arab")
 	_ = face.HasKerning()
@@ -435,7 +433,9 @@ func useFace(face *Face) {
 	stack := NewStack(face, clone)
 	_ = stack.Faces()
 
-	off := Features{NoOptionalLigatures: true}
+	// With a language, so that the language systems a font names are read as
+	// well as its defaults.
+	off := Features{NoOptionalLigatures: true, Language: "sr"}
 	// Every text through the basic calls, because each is a different script
 	// and a different model.
 	for _, text := range fuzzTexts {

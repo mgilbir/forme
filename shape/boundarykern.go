@@ -46,14 +46,22 @@ const boundaryWindow = 32
 // make the work quadratic in a paragraph set as one long run. The window is far
 // wider than the longest ligature any font here declares.
 //
-// The context passed on is empty, which is what stops this recurring: a run with
-// no neighbours takes no boundary pass.
+// The neighbour is shaped by this run's rules — its features and its language
+// — because that is what a pair across the boundary is looked up between: the
+// caller kerns across only where the two runs agree on both (see
+// sameFaceRules in layout), and a neighbour shaped by the default rules could
+// be a different glyph from the one drawn, a language's own form of the letter
+// or the ordinary one for a small capital. It was shaped with none of them.
+//
+// The context passed on is otherwise empty, which is what stops this
+// recurring: a run with no neighbours takes no boundary pass.
 func (f *Face) boundaryGlyphs(ctx shapeContext, script uint16, rtl bool) (before, after []Glyph) {
+	rules := shapeContext{features: ctx.features}
 	if b := lastRunes(ctx.before, boundaryWindow); b != "" {
-		before, _ = f.shapeGlyphsIn(b, script, rtl, nil, shapeContext{})
+		before, _ = f.shapeGlyphsIn(b, script, rtl, nil, rules)
 	}
 	if a := firstRunes(ctx.after, boundaryWindow); a != "" {
-		after, _ = f.shapeGlyphsIn(a, script, rtl, nil, shapeContext{})
+		after, _ = f.shapeGlyphsIn(a, script, rtl, nil, rules)
 	}
 	if rtl {
 		// shapeGlyphsIn hands back visual order, and everything below is stated

@@ -346,11 +346,11 @@ const maxIndicSyllable = 64
 // script table they came from. A font that declares nothing for the script falls
 // back to the default table, which is not a second-generation declaration and so
 // means the older rules — the same reading every other shaper takes.
-func (f *Face) indicOldSpec(cfg *indicConfig, script uint16) bool {
+func (f *Face) indicOldSpec(cfg *indicConfig, script uint16, langs []string) bool {
 	if !cfg.hasOldSpec {
 		return false
 	}
-	tag := f.chosenScriptTag(script)
+	tag := f.chosenScriptTag(script, langs)
 	return len(tag) != 4 || tag[3] != '2'
 }
 

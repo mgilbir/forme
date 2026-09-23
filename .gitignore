@@ -57,3 +57,7 @@ testdata/fonts-noto/
 testdata/html/
 testdata/css-color-4/
 testdata/unicode-grapheme/
+
+# HarfBuzz's table of BCP 47 language tags, which cmd/genlangtags reads. The
+# generated table is committed; the header is fetched at a pinned release.
+testdata/harfbuzz-langtags/

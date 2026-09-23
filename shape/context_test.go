@@ -514,7 +514,7 @@ func TestTheApplyEntryPointsRefuseAPositionOutsideTheBuffer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l := f.layoutFor(0)
+	l := f.layoutFor(0, nil)
 	if len(l.gsub) == 0 || len(l.gpos) == 0 {
 		t.Fatal("the fixture's lookups were not read; the test would prove nothing")
 	}

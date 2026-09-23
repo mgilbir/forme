@@ -89,8 +89,8 @@ import (
 //     attachment for it. See plan.go.
 //   - Choosing a language from the text. Which script a run is in is decidable
 //     from its characters; which language it is in is not — "colour" and "color"
-//     are the same letters — so the default language system is used unless a
-//     caller names one (Face.SetLanguage).
+//     are the same letters — so the default language system is used unless the
+//     caller says which language the run is in (Features.Language).
 //
 // # Script and language selection
 //

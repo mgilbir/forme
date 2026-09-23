@@ -189,6 +189,16 @@ type shapeContext struct {
 	// belongs to neither. See shapeMerged.
 	mergeBefore, mergeAfter string
 	kerns                   bool
+	// cutBefore and cutAfter say the text on that side is in another script:
+	// the run is a piece of a string scriptRuns cut, and the side is where it
+	// was cut. The text there is still context for the forms a letter takes —
+	// the characters are beside each other whatever they are written in — but
+	// a script change ends a run of the font's rules, so no pair is kerned
+	// across it, as none is across the runs Stack.ShapeRuns cuts at the same
+	// place. It is also what keeps the cut cheap: a boundary pair is found by
+	// shaping the neighbour, and a Japanese sentence changes script every few
+	// characters.
+	cutBefore, cutAfter bool
 	// features is what the document turned off. See Features, and note that it
 	// travels with the context rather than beside it because it is the same
 	// kind of fact: something about the run that its own text does not say.
@@ -270,22 +280,23 @@ func (f *Face) ShapeGlyphsWith(s string, features ...string) ([]Glyph, int) {
 func (f *Face) shapeGlyphsWith(s string, extra []string, ctx shapeContext) ([]Glyph, int) {
 	runs := bidiVisualRuns(s)
 	if len(runs) <= 1 {
-		// One direction throughout, which is nearly all text. Shaping it whole
-		// keeps a ligature or a kern pair that spans the string, which cutting
-		// it into runs would lose.
+		// One direction throughout, which is nearly all text: shaped as one run
+		// per script, which for nearly all of that is the string whole — and
+		// whole keeps a ligature or a kern pair that spans it.
 		rtl := len(runs) == 1 && runs[0].RTL()
-		return f.shapeGlyphsIn(s, runScript(s), rtl, extra, ctx)
+		return f.shapeDirection(s, scriptBehind(ctx.before), scriptAhead(ctx.after), rtl, extra, ctx)
 	}
 	var (
 		out     []Glyph
 		missing int
 	)
-	// Every run's script at once — see scriptsAround for why not one by one.
+	// The script beside every run at once — see scriptsBeside for why not one
+	// by one.
 	pieces := make([][2]int, len(runs))
 	for i, r := range runs {
 		pieces[i] = [2]int{r.Start, r.End}
 	}
-	scripts := scriptsAround(s, pieces)
+	behind, ahead := scriptsBeside(s, pieces, scriptBehind(ctx.before), scriptAhead(ctx.after))
 	for i, r := range runs {
 		piece := s[r.Start:r.End]
 		// A run inside the string has the rest of the string for context, and
@@ -325,10 +336,62 @@ func (f *Face) shapeGlyphsWith(s string, extra []string, ctx shapeContext) ([]Gl
 		if r.End == len(s) {
 			inner.mergeAfter = ctx.mergeAfter
 		}
-		glyphs, gone := f.shapeGlyphsIn(piece, scripts[i], r.RTL(), extra, inner)
+		glyphs, gone := f.shapeDirection(piece, behind[i], ahead[i], r.RTL(), extra, inner)
 		missing += gone
 		for i := range glyphs {
 			glyphs[i].Cluster += r.Start
+		}
+		out = append(out, glyphs...)
+	}
+	return out, missing
+}
+
+// shapeDirection shapes a string that runs one way throughout, as one run per
+// script — see scriptRuns. behind and ahead are the scripts of the text either
+// side of the string, for its characters that decide none.
+//
+// Nearly every string is in one script, and is shaped whole, as it always was.
+// One that changes script is shaped a piece at a time, each piece with the rest
+// of the string either side as its context, the way the bidi loop above gives
+// each direction its neighbours: the forms a letter takes still see across the
+// cut, and the pairs kerned do not. The pieces come back in the order they are
+// drawn, which in a right-to-left run is the last piece first.
+func (f *Face) shapeDirection(s string, behind, ahead uint16, rtl bool, extra []string, ctx shapeContext) ([]Glyph, int) {
+	if !f.composite() {
+		// A face set by character code has no rules to read per script, and
+		// nothing to merge a neighbour's glyphs into.
+		return f.shapeByCode(s, rtl)
+	}
+	if ctx.mergeBefore != "" || ctx.mergeAfter != "" {
+		return f.shapeMerged(s, rtl, extra, ctx)
+	}
+	var one [1]scriptRun
+	pieces := scriptRuns(s, behind, ahead, one[:0])
+	if len(pieces) == 1 {
+		return f.shapeGlyphsIn(s, pieces[0].script, rtl, extra, ctx)
+	}
+	var (
+		out     []Glyph
+		missing int
+	)
+	for k := range pieces {
+		p := pieces[k]
+		if rtl {
+			p = pieces[len(pieces)-1-k]
+		}
+		inner := ctx
+		if p.start > 0 {
+			inner.before = contextBefore(ctx.before, s[:p.start])
+			inner.cutBefore = true
+		}
+		if p.end < len(s) {
+			inner.after = contextAfter(s[p.end:], ctx.after)
+			inner.cutAfter = true
+		}
+		glyphs, gone := f.shapeGlyphsIn(s[p.start:p.end], p.script, rtl, extra, inner)
+		missing += gone
+		for i := range glyphs {
+			glyphs[i].Cluster += p.start
 		}
 		out = append(out, glyphs...)
 	}
@@ -349,15 +412,13 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	if !f.composite() {
 		return f.shapeByCode(s, rtl)
 	}
-	if out, missing, ok := f.shapeMerged(s, script, rtl, extra, ctx); ok {
-		return out, missing
-	}
 	// Which model sets the run is decided by the script and by the tag the
 	// font's rules for it were read under — see categorize — and it decides
 	// everything below: how the characters are normalised, whether the ones
 	// nothing is drawn for are taken out now, and what is done with the glyphs.
-	l := f.layoutFor(script)
-	chosen := f.chosenScriptTag(script)
+	langs := openTypeLanguages(ctx.features.Language)
+	l := f.layoutFor(script, langs)
+	chosen := f.chosenScriptTag(script, langs)
 	model := categorize(script, chosen)
 	// Rule L4: a bracket in a right-to-left run is drawn as the bracket that
 	// mirrors it, and the substitution is on the character, before the font is
@@ -445,7 +506,7 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	// The run's script decides which of the font's rules apply, and everything
 	// below reads the tables through it.
 	sh := shaper{f: f, l: l, rtl: rtl, ligIDs: new(int),
-		zeroMarks: model.zeroMarks(), features: ctx.features,
+		zeroMarks: model.zeroMarks(), features: ctx.features, langs: langs,
 		ops: lookupBudget(len(buf))}
 	// What the run applies, and in which stages: see plan.go. It covers every
 	// entry point — the features a document turned off or asked for, and the
@@ -487,10 +548,18 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	// The pair that spans the boundary to the next run, which the pass above
 	// cannot see because the glyph on the far side of it is not in this buffer.
 	// See boundarykern.go.
-	if len(sh.l.kern) > 0 && ctx.kerns && !ctx.features.NoKerning &&
-		(ctx.before != "" || ctx.after != "") {
-		before, after := f.boundaryGlyphs(ctx, script, rtl)
-		sh.kernAcross(buf, before, after)
+	if len(sh.l.kern) > 0 && ctx.kerns && !ctx.features.NoKerning {
+		kctx := ctx
+		if ctx.cutBefore {
+			kctx.before = ""
+		}
+		if ctx.cutAfter {
+			kctx.after = ""
+		}
+		if kctx.before != "" || kctx.after != "" {
+			before, after := f.boundaryGlyphs(kctx, script, rtl)
+			sh.kernAcross(buf, before, after)
+		}
 	}
 	if rtl {
 		// Last, and only now. Everything above is stated by the font in terms of
@@ -681,14 +750,17 @@ func reverseGlyphs(buf []Glyph) {
 // with a mergeable neighbour on one side and a plain one on the other still
 // takes its forms from both.
 //
-// It reports false where nothing may merge, which is every run of almost every
-// document: the caller then takes the ordinary path and pays nothing for this.
-func (f *Face) shapeMerged(s string, script uint16, rtl bool, extra []string,
-	ctx shapeContext) ([]Glyph, int, bool) {
+// The whole is cut by script as any string is, and it is the whole that is
+// cut and not the run: ShapeGroup shapes the same concatenation for the same
+// group, with the same context outside it, and the two have to agree about
+// which characters are one run of the font's rules or they disagree about the
+// glyphs.
+//
+// It is reached only where something may merge, which is few runs of few
+// documents; every other run takes shapeDirection's ordinary path.
+func (f *Face) shapeMerged(s string, rtl bool, extra []string,
+	ctx shapeContext) ([]Glyph, int) {
 
-	if ctx.mergeBefore == "" && ctx.mergeAfter == "" {
-		return nil, 0, false
-	}
 	pre, post := ctx.mergeBefore, ctx.mergeAfter
 	// What is merged already carries the forms of that side, so the context
 	// left outside is the other one's — and only where nothing merged there.
@@ -699,7 +771,8 @@ func (f *Face) shapeMerged(s string, script uint16, rtl bool, extra []string,
 	if post == "" {
 		outer.after = ctx.after
 	}
-	glyphs, _ := f.shapeGlyphsIn(pre+s+post, script, rtl, extra, outer)
+	glyphs, _ := f.shapeDirection(pre+s+post, scriptBehind(outer.before), scriptAhead(outer.after),
+		rtl, extra, outer)
 	lo, hi := len(pre), len(pre)+len(s)
 	out := glyphs[:0:0]
 	for _, g := range glyphs {
@@ -712,7 +785,7 @@ func (f *Face) shapeMerged(s string, script uint16, rtl bool, extra []string,
 	// The count of characters no glyph was found for is the whole string's, and
 	// this run is a part of it. Reporting the whole would have a run named for
 	// its neighbour's missing characters as well as its own.
-	return out, f.missingIn(s), true
+	return out, f.missingIn(s)
 }
 
 // missingIn counts the characters of a string this face has no glyph for.

@@ -77,6 +77,14 @@ func (l *layouter) featuresFor(b *Box) shape.Features {
 	// And the escape hatch: the face's own features by tag, for everything the
 	// descriptors above have no keyword for.
 	out.Tags, _ = featureSettingsOf(b.Style.Get("font-feature-settings"))
+	// And the language the text is in, which chooses among the font's
+	// language systems: lang="sr" has a font draw its Serbian forms. It is the
+	// attribute as written — shape reads BCP 47 as HarfBuzz does — and it is
+	// here with the rest because it has to travel with them, to the painter
+	// that shapes the run again.
+	if v, ok := boxElement(b).Language(); ok {
+		out.Language = v
+	}
 	return out
 }
 

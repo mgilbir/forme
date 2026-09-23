@@ -389,6 +389,10 @@ const maxCachedPlans = 64
 // and built and cached where it has not.
 func (sh shaper) planFor(model shaperModel, arabicScript bool, extra []string) *plan {
 	key := planKey{model: model, rtl: sh.rtl, arabicScript: arabicScript, features: sh.features}
+	// The language has already chosen the layout the plan is built over — a
+	// plan is kept per layout — and asks nothing of the plan itself, so two
+	// languages the font sets alike share one.
+	key.features.Language = ""
 	if len(extra) > 0 {
 		key.extra = joinTags(extra)
 	}

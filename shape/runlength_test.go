@@ -125,26 +125,28 @@ func TestAContextCostsWhatIsReadOfIt(t *testing.T) {
 	growth(t, "shaping one run against n characters of context, at 4n against n", shape, 250000, 1000000, 2)
 }
 
-// TestScriptsAroundAnswersAsOnePieceAtATimeDid holds scriptsAround to the
-// definition it replaced, over random strings cut into random pieces: a piece's
-// own script, else the last one behind it, else the first one after.
-func TestScriptsAroundAnswersAsOnePieceAtATimeDid(t *testing.T) {
-	one := func(s string, start, end int) uint16 {
-		if sc := runScript(s[start:end]); sc != scriptUnknown {
-			return sc
-		}
-		last := uint16(scriptUnknown)
-		for _, r := range s[:start] {
+// TestScriptsBesideAnswersAsOnePieceAtATimeDid holds scriptsBeside to the
+// definition it replaced, over random strings cut into random pieces: behind a
+// piece, the last script before it, else the one before the string; ahead, the
+// first after it, else the one after the string.
+func TestScriptsBesideAnswersAsOnePieceAtATimeDid(t *testing.T) {
+	last := func(s string, fallback uint16) uint16 {
+		out := fallback
+		for _, r := range s {
 			if sc := scriptOf(r); decides(sc) {
-				last = sc
+				out = sc
 			}
 		}
-		if last != scriptUnknown {
-			return last
-		}
-		return runScript(s[end:])
+		return out
 	}
-	alphabet := []rune("ab بل 12١א́.,क")
+	first := func(s string, fallback uint16) uint16 {
+		if sc := runScript(s); sc != scriptUnknown {
+			return sc
+		}
+		return fallback
+	}
+	alphabet := []rune("ab بل 12١א\u0301.,क")
+	beside := []uint16{scriptUnknown, scriptOf('a'), scriptOf('\u05D0')}
 	rng := rand.New(rand.NewSource(1))
 	for trial := 0; trial < 2000; trial++ {
 		var b strings.Builder
@@ -152,6 +154,7 @@ func TestScriptsAroundAnswersAsOnePieceAtATimeDid(t *testing.T) {
 			b.WriteRune(alphabet[rng.Intn(len(alphabet))])
 		}
 		s := b.String()
+		before, after := beside[rng.Intn(len(beside))], beside[rng.Intn(len(beside))]
 		// Cut at character boundaries into pieces, then shuffle them, since the
 		// runs arrive in visual order.
 		var cuts []int
@@ -166,10 +169,13 @@ func TestScriptsAroundAnswersAsOnePieceAtATimeDid(t *testing.T) {
 			pieces = append(pieces, [2]int{cuts[i], cuts[i+1]})
 		}
 		rng.Shuffle(len(pieces), func(i, j int) { pieces[i], pieces[j] = pieces[j], pieces[i] })
-		got := scriptsAround(s, pieces)
+		behind, ahead := scriptsBeside(s, pieces, before, after)
 		for i, p := range pieces {
-			if want := one(s, p[0], p[1]); got[i] != want {
-				t.Fatalf("%q, piece %d..%d: script %d, want %d", s, p[0], p[1], got[i], want)
+			if want := last(s[:p[0]], before); behind[i] != want {
+				t.Fatalf("%q, piece %d..%d: behind it %d, want %d", s, p[0], p[1], behind[i], want)
+			}
+			if want := first(s[p[1]:], after); ahead[i] != want {
+				t.Fatalf("%q, piece %d..%d: ahead of it %d, want %d", s, p[0], p[1], ahead[i], want)
 			}
 		}
 	}
