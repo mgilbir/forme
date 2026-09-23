@@ -79,9 +79,9 @@ func TestAShorthandSetsWhatItsLonghandsWouldHave(t *testing.T) {
 			"align-items", "justify-items", "align-content", "justify-content",
 			"align-self", "justify-self", "column-count", "column-width",
 		} {
-			if short[name] != long[name] {
+			if short.Get(name) != long.Get(name) {
 				t.Errorf("%q gave %s=%q and %q gave %q",
-					tc.short, name, short[name], tc.long, long[name])
+					tc.short, name, short.Get(name), tc.long, long.Get(name))
 			}
 		}
 		if reportsUnimplemented(t, tc.short) {
@@ -104,16 +104,16 @@ func TestAShorthandThisCannotReadWholeIsRefused(t *testing.T) {
 		"place-items: a b c",  // three values in a two-slot shorthand
 	} {
 		got := computedUnder(t, decl)
-		if got["column-count"] != "auto" && got["column-count"] != "" {
-			t.Errorf("%q set column-count to %q", decl, got["column-count"])
+		if got.Get("column-count") != "auto" && got.Get("column-count") != "" {
+			t.Errorf("%q set column-count to %q", decl, got.Get("column-count"))
 		}
-		if got["column-width"] != "auto" && got["column-width"] != "" {
-			t.Errorf("%q set column-width to %q", decl, got["column-width"])
+		if got.Get("column-width") != "auto" && got.Get("column-width") != "" {
+			t.Errorf("%q set column-width to %q", decl, got.Get("column-width"))
 		}
 	}
 	// The control: the same shorthand written correctly is not refused.
-	if got := computedUnder(t, "columns: 3 12em"); got["column-count"] != "3" {
+	if got := computedUnder(t, "columns: 3 12em"); got.Get("column-count") != "3" {
 		t.Errorf("the control set column-count to %q, so the cases above prove "+
-			"nothing", got["column-count"])
+			"nothing", got.Get("column-count"))
 	}
 }

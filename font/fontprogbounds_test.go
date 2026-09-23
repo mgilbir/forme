@@ -65,9 +65,9 @@ func TestAPrivateDictOutsideTheFontIsNotRead(t *testing.T) {
 		{"a negative size", -1, 16},
 		{"the two at the width of the type", math.MaxFloat64, math.MaxFloat64},
 	} {
-		def, nom, subrs := parseCFFPrivate(data, []float64{tc.size, tc.offs})
-		if def != 0 || nom != 0 || len(subrs.items) != 0 {
-			t.Errorf("%s was read: def %v, nom %v, %d subrs", tc.name, def, nom, len(subrs.items))
+		p := newCFFPrivates(data, testBudget()).read([]float64{tc.size, tc.offs})
+		if p.def != 0 || p.nom != 0 || len(p.subrs.items) != 0 {
+			t.Errorf("%s was read: def %v, nom %v, %d subrs", tc.name, p.def, p.nom, len(p.subrs.items))
 		}
 	}
 }
@@ -89,9 +89,9 @@ func TestAPrivateDictInsideTheFontIsStillRead(t *testing.T) {
 	const at = 16
 	copy(data[at:], dict)
 
-	def, nom, _ := parseCFFPrivate(data, []float64{float64(len(dict)), at})
-	if def != 42 || nom != 7 {
-		t.Errorf("the Private DICT read as def %v nom %v, want 42 and 7", def, nom)
+	p := newCFFPrivates(data, testBudget()).read([]float64{float64(len(dict)), at})
+	if p.def != 42 || p.nom != 7 {
+		t.Errorf("the Private DICT read as def %v nom %v, want 42 and 7", p.def, p.nom)
 	}
 }
 
@@ -155,7 +155,7 @@ func TestALocaEntryOutsideGlyfIsNotUsed(t *testing.T) {
 // parser had never met a real Type 1 font.
 func TestParseType1DoesNotReadTheDictionaryHeaderAsAGlyph(t *testing.T) {
 	want := []string{"A", "B", "C", "D", "E"}
-	fp := ParseType1(fonttest.Type1Program(want))
+	fp := parseType1(fonttest.Type1Program(want))
 	if fp == nil {
 		t.Fatal("a Type 1 program was not read at all")
 	}
@@ -195,7 +195,7 @@ func TestParseType1RefusesALengthThatCannotBeALength(t *testing.T) {
 			"/A 1 RD \x8b ND\n" +
 			"/B " + tc.length + " RD \x8b ND\n" +
 			"end\nend\nmark currentfile closefile\n"
-		fp := ParseType1(type1Wrap(src))
+		fp := parseType1(type1Wrap(src))
 		if fp == nil {
 			continue // refused outright is a fine answer
 		}

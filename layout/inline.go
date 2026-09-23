@@ -8,9 +8,9 @@ import (
 
 // Inline layout: text into lines.
 //
-// §1 of the rendering proposal calls this the deceptive one, and it is right —
-// line boxes, breaking, baseline alignment and whitespace at line edges are
-// individually modest and collectively larger than flexbox. What is here is the
+// This is the deceptive part of layout: line boxes, breaking, baseline
+// alignment and whitespace at line edges are individually modest and
+// collectively larger than flexbox. What is here is the
 // part that puts words on a page: measuring runs against a real face, finding
 // where a line may break, and stacking the lines.
 //
@@ -124,11 +124,22 @@ import (
 // positioned box, painted at Appendix E step 7 with everything else positioned;
 // its runs are painted at step 6 with the rest of the block's text. The two
 // differ only where a relatively positioned inline's text overlaps a positioned
-// box that comes earlier in the document — every other pair is ordered the same
-// way by both rules, because step 6 already comes after every block background
-// and every float and before every positioned box. Closing it would mean
+// box that comes earlier in the document, or text and inline-level boxes of
+// step 6 that come later in it — which step 7 would put under the inline's
+// words and step 6 puts over them. Every other pair is ordered the same way by
+// both rules, because step 6 already comes after every block background and
+// every float and before every positioned box. Closing it would mean
 // splitting a line box's runs into stacking levels, which is a change to the
 // shape of a line rather than an addition to it.
+//
+// An inline box with an opacity below one is the same case from the other
+// side. CSS Color 4 makes it a stacking context at level zero — painted where a
+// positioned box with "z-index: 0" is — and its runs are still painted at step
+// 6. What it does to its content is applied in full: every run, inline fragment
+// and box written inside it is dimmed, as one group across all its lines (see
+// paint.go's dimming). What is given up is again only where in the order its
+// marks go, and a positioned or translucent box written inside it is sorted
+// into the context around the block rather than sealed inside the inline.
 
 // heldBox and heldFragment take back what an itemRef holds.
 //
@@ -213,10 +224,17 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	// *this* text — is about the paragraph, so it is gathered across the whole
 	// walk and answered when the walk is done. See noteSubstitution.
 	done := l.gatherSubstitutions()
+	// The atomic inlines are laid out by the walk, before any line exists to
+	// hold them, and what each layout did is noted so that the ones no line
+	// ends up holding can be taken back. See unplacedAtomics.
+	var laid []laidAtomic
+	heldAtomics := l.atomics
+	l.atomics = &laid
 	items, _ := l.collectInline(b, l.markerItems(b, para), startOfContext(), inlineFrame{
 		Containing: width, CbHeight: origin.cbHeight, CbDefinite: origin.cbDefinite,
 		Strut: st, Bidi: para,
 	})
+	l.atomics = heldAtomics
 	para.Leave(open, closing)
 	done()
 	if len(items) == 0 || onlyLeading(items) {
@@ -254,11 +272,11 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	// block's content before anything is measured against a line: a hanging
 	// character is one that does not count, and what does not count has to be
 	// something the measuring can leave out.
-	hp := hangingPunctuationOf(b.Style["hanging-punctuation"])
+	hp := hangingPunctuationOf(b.Style.Get("hanging-punctuation"))
 	items = l.hangPunctuation(items, hp)
 	// §8.2's trim, after §8.4's hang and reading what the hang has already
 	// claimed: a character outside the line has no blank left in it to give up.
-	trim, unhandledTrim := spacingTrimOf(b.Style["text-spacing-trim"])
+	trim, unhandledTrim := spacingTrimOf(b.Style.Get("text-spacing-trim"))
 	if unhandledTrim != "" {
 		l.reportSpacingTrim(b, unhandledTrim)
 	}
@@ -283,7 +301,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	// of the same rule, and why the answer is to run the passes over the
 	// restyled list rather than to add the old gap back.
 	var firstItems []inlineItem
-	if b.FirstLine != nil && !b.afterTheFirstLine {
+	if !b.FirstLine.IsZero() && !b.afterTheFirstLine {
 		l.reportFirstLine(b)
 		if declared := l.firstLineDeclared(b); declared != nil {
 			firstItems = l.firstLineItems(items, b, declared)
@@ -315,6 +333,16 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		firstItems = l.linkLetterSpacing(firstItems)
 		firstItems = l.insertAutospace(firstItems)
 		firstItems = floatsBeforeOutOfFlow(firstItems)
+	}
+	// The items are final from here on, so they are prepared for breaking once:
+	// every line of every pass, and every attempt at a line beside a float, then
+	// reads the paragraph's own facts from a table rather than walking the rest
+	// of the paragraph to find them. See paragraph.Lines. The first line's list
+	// is prepared on its own, because it is broken on its own.
+	lines := l.br.Lines(items)
+	firstLines := lines
+	if firstItems != nil {
+		firstLines = l.br.Lines(firstItems)
 	}
 
 	lo, hi := origin.x, origin.x.Add(width)
@@ -404,12 +432,12 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	// the lines above it. So the box is laid out once to find out, thrown away,
 	// and laid out again in the measure that answer gives.
 	//
-	// It is thrown away with the same three handles the per-line retry above
-	// uses — the float context, the out-of-flow queue and the fragment's own
-	// children — plus its lines. Anything else the pass touched is a memo keyed
-	// by box, and recomputing it gives the same answer.
-	linesAt, kidsAt := len(parent.Lines), len(parent.Children)
-	ctxAt, absAt := origin.ctx.mark(), len(l.deferred)
+	// It is thrown away with the checkpoint every speculative pass takes — the
+	// float context, the out-of-flow queue, the positioned fragments, the
+	// clamps' counts and the fragment's own children and lines. Anything else
+	// the pass touched is a memo keyed by box, and recomputing it gives the
+	// same answer. See speculative.go.
+	beforeLines := l.checkpoint(origin.ctx, parent)
 
 	var y style.Unit
 	// The width each line turned out to have, which is the band a float left it.
@@ -443,15 +471,22 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		fitWant = 0
 		decor = inlineDecor{l: l, containing: width, strut: st}
 		for i := 0; i < len(items); {
+			// Every line is charged to the document's bound on layout work, which
+			// is what stops a pass inside a pass inside a pass from going on for
+			// ever. Past it the rest of the block's content is not set, and the
+			// document is told. See maxLayoutWork.
+			if l.lineStarved(b) {
+				break
+			}
 			// Where this pass started, so that the foot of the loop can tell whether
 			// it moved. Nothing in the body increments the cursor on its own: it is
 			// carried entirely by what breakOneLine hands back.
 			wasI, wasByte := i, iByte
 			// The items this line is broken from, which are the restyled ones
 			// only while the first line is still being made.
-			items := items
+			items, lines := items, lines
 			if firstLine && firstItems != nil {
-				items = firstItems
+				items, lines = firstItems, firstLines
 			}
 			// A float that begins a line is placed before the line is measured,
 			// because it is one of the floats the line has to avoid. §9.5.1 rule 4
@@ -541,13 +576,12 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			// Where this line's own floats begin, so that an attempt that has to be
 			// made again can put the context back as it found it. The floats that
 			// *started* the line are before the mark and stay.
-			midMark, midAbs := origin.ctx.mark(), len(l.deferred)
+			beforeLine := l.checkpoint(origin.ctx, nil)
 			for attempt := 0; ; attempt++ {
-				origin.ctx.truncate(midMark)
-				l.deferred = l.deferred[:midAbs]
+				l.rollback(beforeLine)
 				midKids = midKids[:0]
 
-				runs, next, nextByte, mid, forced, _ = l.br.BreakOneLine(items, i, iByte,
+				runs, next, nextByte, mid, forced, _ = lines.BreakOneLine(i, iByte,
 					// The cap is a *line* width, so the indent comes off it and not
 					// off the band before it: the search counted the first line's
 					// room as the balanced width less the indent, and taking the
@@ -556,6 +590,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					style.Min(right.Sub(left), lineCap(balanceCaps, lineCaps, i, len(parent.Lines))).
 						Sub(lineIndent).Sub(lineEllipsis),
 					left.Sub(lo).Add(lineIndent))
+				dropLineEndGap(runs)
 				runs = l.fitRuns(runs, fitScale)
 				l.unkernLineEnd(runs)
 				stack = stackLine(runs, l.fitStrut(st, items, next, forced, fitScale))
@@ -602,17 +637,17 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 						after = append(after, f)
 						continue
 					}
-					held, heldAbs := origin.ctx.mark(), len(l.deferred)
+					held := l.checkpoint(origin.ctx, nil)
 					kid := shiftedBy(
 						l.floatChild(heldBox(f.Box), width, origin, y,
 							roomBeside(runs, baseRoom, f.Used), lh, 0),
 						f.Offset)
 					if kid.MarginRect().Y > y {
-						origin.ctx.truncate(held)
-						// The out-of-flow boxes the discarded layout found go with
-						// it, or the float would defer each of them twice when it is
-						// laid out again after the line.
-						l.deferred = l.deferred[:heldAbs]
+						// Everything the discarded layout did goes with it: the
+						// out-of-flow boxes it found, or the float would defer each
+						// of them twice when it is laid out again after the line,
+						// and the fragment a positioned float recorded.
+						l.rollback(held)
 						after = append(after, f)
 						continue
 					}
@@ -780,10 +815,11 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					widths[k] = runs[k].Width
 				}
 				// §7.3's extra advance after every character, when the line is
-				// being justified between characters rather than between words.
-				// It reaches the drawing as well as the widths — see
+				// being justified between characters rather than between words:
+				// one per item, and none for an item that took none. It reaches
+				// the drawing as well as the widths — see
 				// justifyBetweenCharacters.
-				var interChar style.Unit
+				var interChar []style.Unit
 				if spread {
 					// The method, which is read here rather than where the
 					// property is: this is the only place that knows a line is
@@ -792,10 +828,6 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					if unhandled != "" {
 						l.reportTextJustify(b, unhandled)
 					}
-					// A line with nowhere to put the slack is left where it is,
-					// and nothing is reported about it: CSS Text 3 §7.3 says a
-					// line with no expansion opportunity is aligned as start,
-					// so that *is* the conforming rendering.
 					// "auto" is the specification asking for a script-
 					// appropriate algorithm rather than for a particular one,
 					// and word spaces are the wrong one for a script that has
@@ -806,11 +838,28 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 						writtenWithoutWordSeparators(runs) {
 						method = justifyCharacters
 					}
+					var justified bool
 					if method == justifyCharacters {
-						interChar, _ = l.justifyBetweenCharacters(runs, xs, widths,
+						interChar, justified = l.justifyBetweenCharacters(runs, xs, widths,
 							hangingTail(runs), avail.Sub(used))
 					} else {
-						justifyItems(runs, xs, widths, hangingTail(runs), avail.Sub(used))
+						justified = justifyItems(runs, xs, widths, hangingTail(runs), avail.Sub(used))
+					}
+					if !justified {
+						// A line with nowhere to put the slack — or with no
+						// slack, because it is overfull — is aligned as start,
+						// and nothing is reported about it: CSS Text 3 §7.3
+						// says a line with no expansion opportunity is aligned
+						// as start, so that *is* the conforming rendering.
+						//
+						// Its own start, which is the right edge of a
+						// right-to-left line. Leaving the alignment at
+						// "justify" set it flush left, because alignLine has
+						// nothing to do for a justified line and returns
+						// nothing: a right-to-left line of one word sat at the
+						// wrong edge, and an overfull one ran off the right
+						// instead of the left (audit C99).
+						align = startAlignment(rtl)
 					}
 				}
 				// Atomic inlines are placed as children of the block rather than as
@@ -866,7 +915,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 						Text: item.Text, Face: item.Face, Size: item.Size,
 						X: x, Width: widths[k], Box: heldBox(item.Box), Offset: item.Offset,
 						Decorations:   decorations,
-						LetterSpacing: trackingOf(item).Add(interChar),
+						LetterSpacing: trackingOf(item).Add(letterSpacingAt(interChar, k)),
 						PreContext:    item.PreContext, PostContext: item.PostContext,
 						MergePre:     item.MergePre,
 						MergePost:    item.MergePost,
@@ -1132,10 +1181,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			fitPending = false
 			if got := fit.clamp(fitWant); got != fitScale && !clamped && fitWant > 0 {
 				fitScale = got
-				parent.Lines = parent.Lines[:linesAt]
-				parent.Children = parent.Children[:kidsAt]
-				origin.ctx.truncate(ctxAt)
-				l.deferred = l.deferred[:absAt]
+				l.rollback(beforeLines)
 				continue
 			}
 		}
@@ -1159,10 +1205,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			break
 		}
 		wasBands = append(wasBands[:0], bands...)
-		parent.Lines = parent.Lines[:linesAt]
-		parent.Children = parent.Children[:kidsAt]
-		origin.ctx.truncate(ctxAt)
-		l.deferred = l.deferred[:absAt]
+		l.rollback(beforeLines)
 		// The scored search first, because it is the one that can answer when
 		// the lines have different room. Where it declines — a paragraph too
 		// long to search, or one whose lines cannot be made to come out at the
@@ -1176,6 +1219,17 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			}
 		}
 	}
+	// What was laid out and never set on a line is thrown away, and so is
+	// everything its layout did. That is the content past a clamp point — which
+	// "continue: discard" says is neither rendered nor measured — the unit the
+	// clamp's last line had no room for beside its ellipsis, and the rest of a
+	// block the bound on layout work stopped. An absolutely positioned box
+	// inside such an atomic inline was queued by its layout, and left queued it
+	// was placed against a fragment nothing painted and never made absolute:
+	// invisible, and a side effect pointing outside the tree of every box
+	// around it, which is where the cache used to refuse to keep an answer —
+	// every ancestor's, which brought back the exponential. See keep.
+	l.takeBack(unplacedAtomics(laid, parent.Children[beforeLines.kids:]))
 	decor.finish(parent)
 	// §5.12.1's pseudo-element behaves like an inline box wrapping the first
 	// line's content, so what it paints goes behind that content — under the
@@ -1188,6 +1242,34 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		}
 	}
 	return y
+}
+
+// laidAtomic is an atomic inline laid out by the inline walk, and the side
+// state its layout added.
+type laidAtomic struct {
+	frag *Fragment
+	side sideSpan
+}
+
+// unplacedAtomics is the side state of every atomic inline in laid whose
+// fragment is not among placed, which are the children the lines were given.
+//
+// In order, as takeBack wants them: the walk laid them out in order.
+func unplacedAtomics(laid []laidAtomic, placed []*Fragment) []sideSpan {
+	if len(laid) == 0 {
+		return nil
+	}
+	on := make(map[*Fragment]bool, len(placed))
+	for _, f := range placed {
+		on[f] = true
+	}
+	var out []sideSpan
+	for _, a := range laid {
+		if !on[a.frag] {
+			out = append(out, a.side)
+		}
+	}
+	return out
 }
 
 // roomForLine moves a line down past floats that leave it no usable width.
@@ -1328,6 +1410,79 @@ func (l *layouter) unkernLineEnd(runs []inlineItem) {
 		it.Width = it.Width.Add(l.br.LineEndCorrection(*it))
 		return
 	}
+}
+
+// dropLineEndGap takes the gap at the end of a line out of the width of the
+// item that carries it.
+//
+// Item.Autospace is a gap a run carries at its visual right edge for the
+// boundary with what is drawn after it: §8.1's eighth of an ideograph, or the
+// letter-spacing a run of pictures takes before the next letter. A line that
+// breaks at that boundary puts the two characters on different lines, and two
+// characters on different lines are not adjacent, so there is no gap — which
+// is what the breaker measured: it fits a line with the gap of the item drawn
+// furthest right left out (see paragraph.TrailingSpacing and Rightmost).
+//
+// Nothing did the same for the line that was then set. The alignment measured
+// the line with the gap in it, so a right-aligned line ending at the boundary
+// stood an eighth of an em short of its edge, and an inline box's fragment
+// reached past its last glyph by the same eighth: text-autospace-break-001 rings
+// each <span> with an outline, and the ring on the first line was 5px wider than
+// the one the reference, which breaks with a <br>, draws.
+//
+// The item is found the way the breaker's tracker finds it, over the same
+// items: in logical order, passing over what is out of flow, the rightmost by
+// UAX #9's L2 read for a pair. Its gap is at its visual right whichever way it
+// reads — a run is drawn from its origin rightwards, so width added to it lands
+// past its rightmost glyph — and that is the end of the line.
+//
+// paragraph.TrailingSpacing, which the breaker measures with, discounts the gap
+// of a left-to-right run only. That condition predates the tracker: it was
+// written for the logically last item of a right-to-left line, which is its
+// leftmost, and the tracker now answers that case by never picking such an
+// item. What it still does is keep the gap of a right-to-left run that ends a
+// left-to-right line — "ب国" broken between the two — in the measure, so the
+// breaker asks an eighth of an em more room for that line than it sets. That is
+// the conservative direction, and the breaker's rule is shared with the
+// intrinsic sizing, whose own walk still asks it of the last item; it is left
+// as it is here, and this sets the line the specification's way.
+//
+// The line's own copy of the items is written, as unkernLineEnd does: the
+// paragraph's items keep the gap, which the next line's breaking needs.
+func dropLineEndGap(runs []inlineItem) {
+	at, low, has := -1, 0, false
+	for k := range runs {
+		if runs[k].Abs != nil || runs[k].Float != nil {
+			continue
+		}
+		level := runs[k].Level
+		if !has {
+			at, low, has = k, level, true
+			continue
+		}
+		m := min(low, level)
+		if m%2 == 0 {
+			at, low = k, level
+			continue
+		}
+		low = m
+	}
+	if at < 0 {
+		return
+	}
+	it := &runs[at]
+	if it.Autospace == 0 {
+		return
+	}
+	it.Width = it.Width.Sub(it.Autospace)
+	if it.AtomicBox != nil {
+		// A picture's gap is the whole of its edge spacing — see
+		// spaceAfterAtomics — and an inline box's extent leaves the edge
+		// spacing out as well. Taken away twice, the box would stop short of
+		// the picture.
+		it.EdgeLetterSpacing = 0
+	}
+	it.Autospace = 0
 }
 
 // roomBeside is how much of a line's band is left for a float met along it.

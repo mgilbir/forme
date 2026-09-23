@@ -124,73 +124,68 @@ func indicScanSyllable(cats []indicCat, start int) indicSyllable {
 		return indicSyllable{start, indicTakeTail(cats, i), sylSymbol}
 	}
 
-	// The consonant syllable's extent, measured before it is taken.
+	// The rest of the grammar's alternatives, each measured at its longest from
+	// here, and the longest taken. That is how the grammar's scanner cuts —
+	// longest match — and where two are the same length, the one the grammar
+	// states first wins: consonant syllable, vowel syllable, standalone
+	// cluster, broken cluster.
 	//
-	// A leading Ra can open a consonant syllable and a reph-led one both, so the
-	// two have to be compared rather than ordered: the grammar takes the longer
-	// match, and where they are the same length the alternatives' own order
-	// decides, which puts the consonant syllable first. Ra + virama + anusvara is
-	// that tie — the consonant syllable takes the modifier in its tail and the
-	// broken cluster takes it in the same tail, three characters either way — and
-	// it is a consonant syllable with the Ra as its base, not a reph over
-	// nothing.
-	consEnd, consOK := start, false
-	p := start
-	if cats[p] == catRepha || cats[p] == catCS {
-		p++
-	}
-	if j, ok := indicTakeConsonant(cats, p); ok {
-		consEnd, consOK = indicTakeComplexTail(cats, j), true
-	}
-
-	// The three alternatives that admit a leading reph. A vowel and a dotted
-	// circle are each past anything the consonant syllable could reach, since it
-	// can take neither, so those two win outright; the broken cluster has to be
-	// strictly longer.
-	//
-	// An ordinary conjunct — a Ra whose virama is followed by a consonant —
-	// matches none of them and falls through, and its reph is settled when the
-	// base is found instead.
-	if r, ok := indicTakeReph(cats, start); ok {
-		if r < n && cats[r] == catVowel {
-			return indicSyllable{start, indicTakeVowelTail(cats, r), sylVowel}
-		}
-		if r < n && cats[r] == catDottedCircle {
-			i := indicTakeNukta(cats, r+1)
-			return indicSyllable{start, indicTakeComplexTail(cats, i), sylStandalone}
-		}
-		i := indicTakeNukta(cats, r)
-		if j := indicTakeComplexTail(cats, i); j > consEnd {
-			return indicSyllable{start, j, sylBroken}
+	// Every alternative is measured, and it has to be: they overlap at their
+	// start, and the one that stops soonest is not the one that is wrong. A
+	// leading Ra can open a consonant syllable and a reph-led one both — Ra +
+	// virama + anusvara is three characters either way, and it is a consonant
+	// syllable with the Ra as its base, not a reph over nothing. And a dot reph
+	// before a placeholder — Malayalam ൎ before a digit or a no-break space —
+	// opens a standalone cluster two characters long as well as a broken one
+	// of one: it is a reph on the placeholder, where cutting the broken one
+	// first set the reph on a dotted circle of its own and the placeholder
+	// apart from it.
+	best := indicSyllable{start, start, sylNonIndic}
+	take := func(end int, kind indicSyllableKind) {
+		if end > best.end {
+			best = indicSyllable{start, end, kind}
 		}
 	}
-
-	// consonant_syllable, and with it every syllable that opens with a Ra whose
-	// virama is followed by a consonant.
-	if consOK {
-		return indicSyllable{start, consEnd, sylConsonant}
-	}
-	if p < n && (cats[p] == catPlaceholder || cats[p] == catDottedCircle) {
-		i := indicTakeNukta(cats, p+1)
-		return indicSyllable{start, indicTakeComplexTail(cats, i), sylStandalone}
+	reph, hasReph := indicTakeReph(cats, start)
+	prefixed := start
+	if cats[start] == catRepha || cats[start] == catCS {
+		prefixed++
 	}
 
-	p = start
-	if cats[p] == catRepha {
-		p++
+	// consonant_syllable = (Repha|CS)? cn complex_syllable_tail
+	if j, ok := indicTakeConsonant(cats, prefixed); ok {
+		take(indicTakeComplexTail(cats, j), sylConsonant)
 	}
-	if p < n && cats[p] == catVowel {
-		return indicSyllable{start, indicTakeVowelTail(cats, p), sylVowel}
+	// vowel_syllable = reph? V n? (ZWJ | complex_syllable_tail)
+	if cats[start] == catVowel {
+		take(indicTakeVowelTail(cats, start), sylVowel)
 	}
-
-	// broken_cluster: dependents with nothing to depend on. It still gets the
-	// full treatment, because the font's rules are written about the marks
-	// whatever they are attached to.
-	i := indicTakeNukta(cats, p)
-	if j := indicTakeComplexTail(cats, i); j > start {
-		return indicSyllable{start, j, sylBroken}
+	if hasReph && reph < n && cats[reph] == catVowel {
+		take(indicTakeVowelTail(cats, reph), sylVowel)
 	}
-	return indicSyllable{start, start + 1, sylNonIndic}
+	// standalone_cluster = ((Repha|CS)? PLACEHOLDER | reph? DOTTEDCIRCLE)
+	// n? complex_syllable_tail
+	for _, p := range []int{start, prefixed} {
+		if p < n && cats[p] == catPlaceholder {
+			take(indicTakeComplexTail(cats, indicTakeNukta(cats, p+1)), sylStandalone)
+		}
+	}
+	for _, p := range []int{start, reph} {
+		if (p == start || hasReph) && p < n && cats[p] == catDottedCircle {
+			take(indicTakeComplexTail(cats, indicTakeNukta(cats, p+1)), sylStandalone)
+		}
+	}
+	// broken_cluster = reph? n? complex_syllable_tail: dependents with
+	// nothing to depend on. It still gets the full treatment, because the
+	// font's rules are written about the marks whatever they are attached to.
+	take(indicTakeComplexTail(cats, indicTakeNukta(cats, start)), sylBroken)
+	if hasReph {
+		take(indicTakeComplexTail(cats, indicTakeNukta(cats, reph)), sylBroken)
+	}
+	if best.end == start {
+		return indicSyllable{start, start + 1, sylNonIndic}
+	}
+	return best
 }
 
 // n = N N?

@@ -220,8 +220,8 @@ func TestAJustificationMethodThisDoesNotPerformIsReported(t *testing.T) {
 		{"auto", false},
 		{"inter-word", false},
 		{"none", false},
-		// A value outside the grammar is read as "auto" and said so, because a
-		// page justified between the wrong things looks deliberate.
+		// A value outside the grammar is not CSS: the cascade drops it and
+		// says so, and the block is justified as "auto".
 		{"inter-ideograph", true},
 	} {
 		found := false
@@ -235,11 +235,13 @@ func TestAJustificationMethodThisDoesNotPerformIsReported(t *testing.T) {
 			t.Errorf("text-justify:%s reported=%v, want %v", tc.value, found, tc.report)
 		}
 	}
-	// And a block that is not justified says nothing, whatever the value: the
-	// property changes nothing there and a warning would be crying wolf.
+	// And a block that is not justified says nothing about how it would have
+	// been justified, whatever the value: the property changes nothing there
+	// and a warning would be crying wolf. (The cascade's report that a value
+	// is not CSS is about the declaration, not the block, and is not this.)
 	for _, f := range findingsFrom(t, twoLines,
 		alignCSS+` #p { text-align: left; text-justify: inter-ideograph }`) {
-		if f.Property == "text-justify" {
+		if f.Property == "text-justify" && f.Rule != RuleInvalidCSS {
 			t.Errorf("text-justify was reported on a paragraph that is not justified")
 		}
 	}

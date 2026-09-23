@@ -203,13 +203,20 @@ func TestPresentationalAttributePercentage(t *testing.T) {
 }
 
 // TestPresentationalAttributeRejectsNonDimensions pins that a value HTML does
-// not define as a dimension is ignored rather than guessed at.
+// not define as a dimension is ignored rather than guessed at — and that one it
+// does is read as HTML reads it, fraction and trailing unit and all.
 func TestPresentationalAttributeRejectsNonDimensions(t *testing.T) {
-	for _, value := range []string{"abc", "-40", "40px", "4.5", "", "  ", "40 "} {
+	for _, value := range []string{"abc", "-40", "", "  ", ".5"} {
 		root := replacedLayout(t, 500,
 			`<div><img id="i" src="wide.png" width="`+value+`"></div>`, noDefaults)
 		w, _ := contentSize(find(t, root, "i"))
 		px(t, "the used width for width="+value, w, 40)
+	}
+	for value, want := range map[string]float64{"25px": 25, "4.5": 4.5, "40 ": 40} {
+		root := replacedLayout(t, 500,
+			`<div><img id="i" src="wide.png" width="`+value+`"></div>`, noDefaults)
+		w, _ := contentSize(find(t, root, "i"))
+		px(t, "the used width for width="+value, w, want)
 	}
 }
 

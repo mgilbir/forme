@@ -175,7 +175,7 @@ func naturalSizeOf(r *ReplacedContent) Size {
 // The report is once per value rather than once per box: a stylesheet saying
 // "object-fit: fit" on a rule that matches forty pictures has made one mistake.
 func (l *layouter) checkObjectFit(b *Box) {
-	raw := b.Style["object-fit"]
+	raw := b.Style.Get("object-fit")
 	if _, ok := objectFitOf(raw); ok {
 		return
 	}
@@ -220,7 +220,7 @@ func (l *layouter) resolveObjectPosition(b *Box) {
 	if b.objectPos != nil {
 		return
 	}
-	raw := strings.TrimSpace(b.Style["object-position"])
+	raw := strings.TrimSpace(b.Style.Get("object-position"))
 	pos := centredObject()
 	if raw != "" {
 		vals, _ := css.ParseComponentValues(raw)

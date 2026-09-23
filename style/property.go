@@ -18,9 +18,9 @@ import (
 //
 // A third question is answerable only here and is the reason this file matters
 // more than its size suggests: *is this property one the engine implements*. A
-// renderer for a subset will meet declarations it does not act on, and §6.3 of
-// the rendering proposal argues — correctly, and this is the cheapest guardrail
-// it names — that dropping them silently is the worst available option. A page
+// renderer for a subset will meet declarations it does not act on, and
+// dropping them silently is the worst available option — saying so is the
+// cheapest guardrail there is. A page
 // where "flex-wrap" was ignored is plausible and wrong, which is harder to
 // notice than one that is obviously broken. So every declaration that is parsed
 // and not applied is recorded.
@@ -210,11 +210,9 @@ var properties = map[string]property{
 	// as using three things this engine ignores.
 	"-webkit-line-clamp": {false, "none"},
 	"-webkit-box-orient": {false, "horizontal"},
-	// overflow-wrap inherits. word-wrap is the name Internet Explorer shipped it
-	// under and is a legal alias in CSS Text §5.5, so it is registered rather
-	// than reported: a document using it is not using an unsupported property.
+	// overflow-wrap inherits. word-wrap, the name Internet Explorer shipped it
+	// under, is not registered: it is an alias — see the shorthands table.
 	"overflow-wrap": {true, "normal"},
-	"word-wrap":     {true, "normal"},
 	// word-break inherits, which is what makes a rule on a container reach the
 	// text in it. All four values are acted on; "auto-phrase" is reported over a
 	// language whose phrases this engine has no model for, because the value
@@ -407,13 +405,11 @@ var properties = map[string]property{
 	// a flex container does not. None of them inherits: a grid container's
 	// tracks are its own, and a block inside a grid item is not itself a grid.
 	//
-	// The first six are the container's own template and flow. The seven after
-	// them place one item, and they are registered *to be refused*: an
-	// unregistered property is dropped by the cascade before layout sees it, so
-	// without them a container whose item names a line would be arranged by the
-	// automatic flow with the declaration silently gone. That is the argument
-	// column-span makes below, and it is the same one. They become real the day
-	// layout/grid.go places an item by name.
+	// The first six are the container's own template and flow. The four after
+	// them place one item, and are the longhands of grid-row, grid-column and
+	// grid-area, which are shorthands (see gridLineShorthand) and so are not
+	// registered here: a shorthand in the registry cannot be ordered against its
+	// own longhands by the cascade.
 	//
 	// justify-items' initial value is "legacy", which is not a spelling of
 	// "normal": it is the keyword that makes an item inherit a legacy
@@ -426,9 +422,6 @@ var properties = map[string]property{
 	"grid-auto-flow":        {false, "row"},
 	"grid-auto-rows":        {false, "auto"},
 	"grid-auto-columns":     {false, "auto"},
-	"grid-column":           {false, "auto"},
-	"grid-row":              {false, "auto"},
-	"grid-area":             {false, "auto"},
 	"grid-column-start":     {false, "auto"},
 	"grid-column-end":       {false, "auto"},
 	"grid-row-start":        {false, "auto"},
@@ -460,6 +453,14 @@ var properties = map[string]property{
 	// fragment, and a background repeated in each — is asking for a different
 	// picture and is reported. Registering it is what lets it be read at all.
 	"box-decoration-break": {false, "slice"},
+	// CSS Fragmentation 3 §3.1 and §3.2, read by the one fragmentation there
+	// is: layout/multicol.go keeps a column from ending where "avoid" asks it
+	// not to. The values that ask for a break rather than for the absence of
+	// one — a page, a column, a side — are not made anywhere, and are
+	// reported where they are declared; see unimplementedValues.
+	"break-before": {false, "auto"},
+	"break-after":  {false, "auto"},
+	"break-inside": {false, "auto"},
 
 	"writing-mode":         {true, "horizontal-tb"},
 	"text-orientation":     {true, "mixed"},
@@ -539,17 +540,6 @@ var properties = map[string]property{
 	"object-position": {false, "50% 50%"},
 }
 
-// Inherited returns the style an anonymous box has: everything that inherits
-// taken from the box it was generated inside, and everything that does not at
-// its initial value.
-//
-// This is what the specification means by an anonymous box having no style of
-// its own. It matters far more than it sounds, because the obvious shortcut —
-// giving the anonymous box its parent's whole computed style — makes it a copy
-// of the parent's *box model* as well: the anonymous block wrapped around a run
-// of text inside <body> would take body's 8px margin, indent the text by it, and
-// separate it from the block after it by a gap the author never wrote. Every
-// number in that document is then plausible and wrong.
 // Undeclared is the value a property has on a box whose style declares nothing
 // about it, given the parent's computed value: the parent's where the property
 // inherits and the property's initial value where it does not.
@@ -571,27 +561,6 @@ func Undeclared(name, parent string) string {
 	return p.initial
 }
 
-func Inherited(cs ComputedStyle) ComputedStyle {
-	out := make(ComputedStyle, len(properties))
-	for name, prop := range properties {
-		if prop.inherits {
-			if v, ok := cs[name]; ok {
-				out[name] = v
-				continue
-			}
-		}
-		out[name] = prop.initial
-	}
-	return out
-}
-
-// shorthands expands a shorthand into the longhands it sets.
-//
-// Expansion happens before the cascade rather than after, and that ordering is
-// not arbitrary: "margin: 0" followed by "margin-top: 1em" must leave the top
-// margin at 1em, which only works if the shorthand has already become four
-// declarations competing individually. Cascading the shorthand as a unit would
-// make the later longhand lose to it or win over all four.
 // expander turns a shorthand's value into the longhands it sets.
 //
 // It returns three things rather than two, and the third is the point:
@@ -613,6 +582,13 @@ type shorthand struct {
 	longhands []string
 }
 
+// shorthands is every shorthand, with how it expands into the longhands it sets.
+//
+// Expansion happens before the cascade rather than after, and that ordering is
+// not arbitrary: "margin: 0" followed by "margin-top: 1em" must leave the top
+// margin at 1em, which only works if the shorthand has already become four
+// declarations competing individually. Cascading the shorthand as a unit would
+// make the later longhand lose to it or win over all four.
 var shorthands = map[string]shorthand{
 	"margin":  boxShorthand("margin-top", "margin-right", "margin-bottom", "margin-left"),
 	"padding": boxShorthand("padding-top", "padding-right", "padding-bottom", "padding-left"),
@@ -649,6 +625,12 @@ var shorthands = map[string]shorthand{
 	// in shorthand.go with the others of that shape.
 	"columns": {columnsShorthand, []string{"column-width", "column-count"}},
 
+	// CSS Fragmentation 3 §3.4: the CSS 2.1 page-break properties are legacy
+	// shorthands for the break properties, "always" standing for "page".
+	"page-break-before": {legacyPageBreak("break-before"), []string{"break-before"}},
+	"page-break-after":  {legacyPageBreak("break-after"), []string{"break-after"}},
+	"page-break-inside": {legacyPageBreak("break-inside"), []string{"break-inside"}},
+
 	// The shorthands whose parts are told apart by type rather than position.
 	// They live in shorthand.go, with the reset rule explained there.
 	"border":        borderSides("top", "right", "bottom", "left"),
@@ -666,7 +648,9 @@ var shorthands = map[string]shorthand{
 		[]string{"list-style-type", "list-style-position", "list-style-image"}},
 	"font": {fontShorthand, []string{
 		"font-style", "font-weight", "font-size", "font-family", "line-height",
-		"font-variant-caps"}},
+		"font-variant-caps", "font-variant-ligatures", "font-variant-numeric",
+		"font-variant-east-asian", "font-variant-position", "font-kerning",
+		"font-feature-settings"}},
 
 	// CSS Fonts 4 §6.10, for the five longhands this engine has. See
 	// fontVariantShorthand for why the property is expanded rather than read.
@@ -686,6 +670,31 @@ var shorthands = map[string]shorthand{
 		[]string{"white-space-collapse", "text-wrap-mode"}},
 	"text-wrap":  {textWrapShorthand, []string{"text-wrap-mode", "text-wrap-style"}},
 	"text-align": {textAlignShorthand, []string{"text-align-all", "text-align-last"}},
+
+	// CSS Text 3 §5.5: "For legacy reasons, UAs must treat word-wrap as a
+	// legacy name alias of the overflow-wrap property." One property with two
+	// names, so it is one longhand with two spellings, and the cascade orders
+	// them like any two declarations of it. It was registered as a property of
+	// its own, and "div { word-wrap: break-word } p { overflow-wrap: normal }"
+	// broke the paragraph's words: the p computed overflow-wrap normal,
+	// inherited word-wrap break-word, and the reader took the second because it
+	// could not tell which was written later (audit C111). The fix is the one
+	// white-space and text-align already had.
+	"word-wrap": {aliasOf("overflow-wrap"), []string{"overflow-wrap"}},
+
+	// CSS Grid 2 §8.4's three placement shorthands. See gridLineShorthand.
+	"grid-row":    gridLineShorthand("grid-row-start", "grid-row-end"),
+	"grid-column": gridLineShorthand("grid-column-start", "grid-column-end"),
+	"grid-area": {gridAreaShorthand, []string{"grid-row-start", "grid-column-start",
+		"grid-row-end", "grid-column-end"}},
+}
+
+// aliasOf is the expander for a legacy name of a single property: the value is
+// the longhand's, and the value grammar judges it as one.
+func aliasOf(longhand string) expander {
+	return func(vals []css.ComponentValue) (map[string][]css.ComponentValue, []string, bool) {
+		return map[string][]css.ComponentValue{longhand: vals}, nil, true
+	}
 }
 
 func init() {
@@ -698,13 +707,6 @@ func init() {
 	}
 }
 
-// boxShorthand builds the expander for a property written as one to four values
-// in the order top, right, bottom, left — where one value sets all four, two set
-// the vertical and horizontal pairs, and three leave the left to mirror the
-// right.
-//
-// The two-name form is the same rule with two slots, which is what "overflow"
-// needs.
 // borderSides builds the "border" family, whose longhands are three per side.
 func borderSides(sides ...string) shorthand {
 	var names []string
@@ -715,6 +717,13 @@ func borderSides(sides ...string) shorthand {
 	return shorthand{borderShorthand(sides...), names}
 }
 
+// boxShorthand builds the expander for a property written as one to four values
+// in the order top, right, bottom, left — where one value sets all four, two set
+// the vertical and horizontal pairs, and three leave the left to mirror the
+// right.
+//
+// The two-name form is the same rule with two slots, which is what "overflow"
+// needs.
 func boxShorthand(names ...string) shorthand {
 	return shorthand{boxExpander(names...), names}
 }
@@ -779,12 +788,11 @@ const (
 	kwInitial = "initial"
 	kwUnset   = "unset"
 	kwRevert  = "revert"
-	// kwRevertLayer is CSS Cascade 5's, and it is the same keyword as revert
-	// here. It rolls the value back to the previous cascade *layer*, and this
-	// engine has none — no @layer rule reaches it, so every declaration is in
-	// the implicit outer layer — and the specification says what that means:
-	// with no lower-priority layer to roll back to, it rolls back to the
-	// previous origin, which is revert.
+	// kwRevertLayer is CSS Cascade 5's. It rolls the value back to the
+	// previous cascade *layer* — the layers below the declaration's own in
+	// the same origin, and only where there are none to the previous origin,
+	// which is revert. Neither roll-back is implemented: the cascade reads
+	// both as "unset" and says so. See Styler.resolve.
 	kwRevertLayer = "revert-layer"
 )
 

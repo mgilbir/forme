@@ -28,13 +28,22 @@ import (
 //
 // # What this cannot do
 //
-// Only em and rem. The other font-relative units need a face — ex is the
-// x-height and ch is the advance of "0" — and the cascade has no face: which
-// one will set an element is chosen in layout, after the font-family it computes
-// here has been read. The viewport units need the page box, which is settled
-// later still. Those keep the old behaviour, so a declaration in ex or ch is
-// right on the element that made it and inherits as though it had been made
-// again lower down.
+// Only em and rem, except in font-size. The other font-relative units need a
+// face — ex is the x-height and ch is the advance of "0" — and the cascade has
+// no face: which one will set an element is chosen in layout, after the
+// font-family it computes here has been read. The viewport units need the page
+// area. Those keep the old behaviour, so a declaration in ex, ch or vw is right
+// on the element that made it and inherits as though it had been made again
+// lower down.
+//
+// font-size is the exception, because it cannot wait: it is inherited as a
+// number and every em below it is relative to that number. A caller lends the
+// cascade what it needs for it — Metrics answers the x-height, so "font-size:
+// 2ex" is resolved against the parent's face, and ApplyOnPage and ApplyIn name
+// the page, so "font-size: 5vw" is resolved against it. See fontSizeOf. ch and
+// ic are not asked of Metrics: a font-size in ch is left unresolved for layout
+// to report, and one in ic is the one em CSS Values 4 §5.1.4 assumes of a face
+// that does not say.
 //
 // It is a gap rather than an oversight, and it is worth stating what closing it
 // would take: the cascade would have to load fonts, which is a change to when
@@ -45,9 +54,22 @@ import (
 // font-size is skipped because the caller has already resolved it: an em there
 // is relative to the *parent's* size rather than the element's, which is the one
 // exception CSS carves out, and ResolveFontSize is what knows it.
-func absolutiseLengths(cs ComputedStyle, size, root Unit) {
-	for name, v := range cs {
-		if name == "font-size" || !mightHoldAFontRelativeLength(v) {
+//
+// Only the properties a declaration decided are looked at, because they are the
+// only ones that can hold an em. Every other value is either the parent's — which
+// this rewrote when the parent was styled, leaving no em in it — or an initial
+// value, and no initial value in the registry is a length in em (a test holds
+// that). Rewriting a value that has already been rewritten changes nothing, so
+// the answer is the one the walk over every property gave; what it saves is a
+// scan of a hundred and forty-eight values per element to find the few that
+// were written here.
+func (s *Styler) absolutiseLengths(b *styleBuilder, declared []propID, size, root Unit) {
+	for _, id := range declared {
+		if id == fontSizeID {
+			continue
+		}
+		v := b.cs.get(id)
+		if !mightHoldAFontRelativeLength(v) {
 			continue
 		}
 		vals, errs := css.ParseComponentValues(v)
@@ -60,9 +82,13 @@ func absolutiseLengths(cs ComputedStyle, size, root Unit) {
 		if !absolutiseValues(vals, size, root) {
 			continue
 		}
-		cs[name] = serialize(vals)
+		b.set(id, s.interner().value(serialize(vals)))
 	}
 }
+
+// fontSizeID is font-size's place in the registry, which the cascade writes
+// into every element's style.
+var fontSizeID = registry.ids["font-size"]
 
 // mightHoldAFontRelativeLength is the cheap test that keeps this off the great
 // majority of declarations.
@@ -76,8 +102,10 @@ func absolutiseLengths(cs ComputedStyle, size, root Unit) {
 // It is an optimisation and nothing else, which is worth writing down because
 // it is the one thing here that no test can catch: made to answer true always,
 // every test in this package still passes and the package's own suite goes from
-// 0.06s to 0.16s. Every property of every element in every document would be
-// tokenized and serialized again, for the handful that hold a length in em.
+// 0.06s to 0.16s. Every declared property of every element in every document
+// would be tokenized and serialized again, for the handful that hold a length
+// in em. (Those figures were taken when every property of every element came
+// through here, not only the declared ones; see absolutiseLengths.)
 //
 // The consequence for the tests beside it is real, though, and they say so
 // where it bites: a fixture written in ex or in per-cent alone never reaches the
@@ -85,10 +113,10 @@ func absolutiseLengths(cs ComputedStyle, size, root Unit) {
 // it or it is testing this function instead.
 func mightHoldAFontRelativeLength(v string) bool {
 	// One pass and not four. It was written as four strings.Contains — one per
-	// spelling of the two letters — and a computed style holds a hundred and
-	// forty-eight values, so that is nearly six hundred scans of a string per
-	// element. A profile of a small document put this one function at seventeen
-	// per cent of the whole Build.
+	// spelling of the two letters — and when every one of a computed style's
+	// hundred and forty-eight values came through here, that was nearly six
+	// hundred scans of a string per element. A profile of a small document put
+	// this one function at seventeen per cent of the whole Build.
 	for i := 0; i+1 < len(v); i++ {
 		if (v[i] == 'e' || v[i] == 'E') && (v[i+1] == 'm' || v[i+1] == 'M') {
 			return true
@@ -173,7 +201,7 @@ const DefaultMonospaceFontSize = 13
 // Courier has named a face, and how large that face should be by default is not
 // a question a preference for "monospace" was ever the answer to.
 func monospaceDefault(cs ComputedStyle) bool {
-	first, _, _ := strings.Cut(cs["font-family"], ",")
+	first, _, _ := strings.Cut(cs.Get("font-family"), ",")
 	first = strings.TrimSpace(first)
 	first = strings.Trim(first, `"'`)
 	switch strings.ToLower(strings.TrimSpace(first)) {
@@ -198,17 +226,25 @@ func monospaceDefault(cs ComputedStyle) bool {
 // the computed style whose font the units belong to, which for an element's own
 // font-size is its *parent's*; m may be nil, and then the units that need a face
 // get the fallback CSS names or are declined. See Metrics.
-func fontSizeOf(cs ComputedStyle, own bool, parent, root Unit, m Metrics,
+//
+// viewport is the page area the viewport units are percentages of. A zero one
+// is a page nobody named, and those units are then unresolvable rather than
+// zero, which is what LengthContext.ViewportKnown is for.
+func fontSizeOf(cs ComputedStyle, own bool, parent, root Unit, viewport Media, m Metrics,
 	fontStyle ComputedStyle) (Unit, bool) {
 
 	if !own {
 		return parent, true
 	}
-	vals, errs := css.ParseComponentValues(cs["font-size"])
+	vals, errs := css.ParseComponentValues(cs.Get("font-size"))
 	if len(errs) != 0 {
 		return parent, false
 	}
 	ctx := LengthContext{FontSize: parent, RootFontSize: root}
+	if viewport.Width > 0 && viewport.Height > 0 {
+		ctx.ViewportWidth, ctx.ViewportHeight, ctx.ViewportKnown =
+			viewport.Width, viewport.Height, true
+	}
 	if m != nil {
 		if xh, ok := m.XHeight(fontStyle, parent); ok {
 			ctx.XHeightPx, ctx.XHeightKnown = xh, true

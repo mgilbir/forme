@@ -207,8 +207,10 @@ func TestItemsAreStretchedAcrossTheLine(t *testing.T) {
 // plausible wrongness the finding exists for.
 func TestAContainerThisEngineCannotArrangeIsLaidOutAsABlockAndSaysSo(t *testing.T) {
 	for _, c := range []struct{ what, css, names string }{
-		{"an axis with no name", `#f { flex-direction: sideways }`, "four flex-direction names"},
-		{"lines that wrap some other way", `#f { flex-wrap: reverse }`, "wrap by a rule"},
+		// An axis with no name and lines that wrap some other way were
+		// "flex-direction: sideways" and "flex-wrap: reverse", which are not
+		// CSS: the cascade drops them before this gate is reached — see
+		// TestAValueThatIsNotCSSIsDroppedByTheCascade.
 		{"lines on a baseline", `#f { flex-wrap: wrap; align-content: baseline }`, "placed by a rule"},
 		{"a safe alignment", `#f { justify-content: safe center }`, "packed by a rule"},
 		{"items on the last baseline", `#f { align-items: last baseline }`, "last baseline of their text"},
@@ -1472,21 +1474,19 @@ func TestTextInsideAFlexContainerBecomesAnItemOfItsOwn(t *testing.T) {
 // would make a row of three <div>s into seven items — four of them empty, each
 // taking a share of the line and a gap.
 //
-// It is the collapsing that decides, not the characters: under "white-space:
-// pre" the same space is content and does become an item.
+// It is the characters that decide, not the collapsing. Flexbox §4 says a run
+// that "contains only document white space characters (i.e. characters that
+// can be affected by the white-space property)" is not rendered, and a
+// preserving white-space does not change what the characters are. This test
+// said the opposite until audit C130: under "white-space: pre" it wanted the
+// same indentation to be three more items, which is the anonymous *block*
+// rule's answer — a blank line in a <pre> is a line — and not this one's.
 func TestWhiteSpaceBetweenItemsIsNotAnItem(t *testing.T) {
 	const spaced = "<div id=\"f\">\n  <div>a</div>\n  <div>b</div>\n</div>"
 	wantRow(t, flexRow(t, spaced, `#f { width: 300px }`),
 		[][2]float64{{0, 12}, {12, 12}}, "two items with newlines between them")
-
-	// Preserved, each run between them is a text run like any other and the
-	// row comes out five items. Their widths are the widest line each holds,
-	// because a preserved newline is a line break: "\n  " is two spaces on a
-	// second line and 24px wide, and the trailing "\n" is a break with nothing
-	// after it and no width at all.
 	wantRow(t, flexRow(t, spaced, `#f { width: 300px; white-space: pre }`),
-		[][2]float64{{0, 24}, {24, 12}, {36, 24}, {60, 12}, {72, 0}},
-		"two items with preserved space between them")
+		[][2]float64{{0, 12}, {12, 12}}, "two items with preserved space between them")
 }
 
 // TestAnAnonymousItemIsAnonymous. The box holds the text and nothing else: it
@@ -1832,17 +1832,21 @@ func TestAnAbsolutelyPositionedChildIsPlacedAgainstTheContainer(t *testing.T) {
 	}
 
 	// The container's own alignment moves it, which is the whole of §4.1: a
-	// lone item of no size, packed and aligned by the container's properties.
+	// lone item packed and aligned by the container's properties — and an item
+	// "of its used size", so the 12x20 box is centred about the middle and
+	// sits on the far edge rather than hanging below it. This asked for
+	// [150 100] until audit C153, which is a box of no size.
 	if got := absAt(t, beside,
 		`#f { width: 300px; height: 100px; justify-content: center; align-items: flex-end }`); got !=
-		[2]float64{150, 100} {
+		[2]float64{144, 80} {
 		t.Errorf("the box is at %v in a centred container 100px deep, want the "+
 			"middle of its far edge", got)
 	}
 
-	// And it turns with the axis, as a sole item would.
+	// And it turns with the axis, as a sole item would: at the far end, and
+	// inside the container.
 	if got := absAt(t, beside, `#f { width: 300px; flex-direction: row-reverse }`); got !=
-		[2]float64{300, 0} {
+		[2]float64{288, 0} {
 		t.Errorf("the box is at %v in a reversed row, want the far end", got)
 	}
 }
@@ -1980,7 +1984,10 @@ const inlineFlexCSS = `body { margin: 0 } p { margin: 0; font-family: Courier;` 
 // records — content the document contains and the page does not — and it was
 // invisible for as long as the container was treated as a span.
 func TestABlockInsideAnInlineFlexContainerIsOnThePage(t *testing.T) {
-	const doc = `<p>x<span id="g"><div id="in">B</div></span>y</p>`
+	// A <div> round it and not a <p>: a <div> ends an open paragraph from
+	// however deep inside it, which would take the block out of the span and
+	// leave this passing for a reason that has nothing to do with the span.
+	const doc = `<div>x<span id="g"><div id="in">B</div></span>y</div>`
 	for _, display := range []string{"inline-flex", "inline-block"} {
 		root := layoutOf(t, 1000, doc, inlineFlexCSS+`#g { display: `+display+` }`)
 		if fragmentFor(root, "in") == nil {

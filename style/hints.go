@@ -245,11 +245,10 @@ var counterHintAttributes = map[string]bool{"value": true}
 
 // presentationalHints returns the declarations an element's attributes imply.
 //
-// The value syntax is HTML's "dimension value": a run of digits, optionally
-// followed by a per-cent sign. Anything else — a negative number, a length with
-// a unit, a word — is not a dimension and the attribute is ignored, which is
-// what HTML requires and is also the safe answer: a value this cannot read must
-// not become a length it guessed at.
+// The value syntax of the length ones is HTML's "dimension value" — see
+// dimensionValue — and a value that is not one leaves the attribute ignored,
+// which is what HTML requires: a value this cannot read must not become a
+// length it guessed at.
 func presentationalHints(n *html.Node) map[string][]css.ComponentValue {
 	name := strings.ToLower(n.Name)
 	out := attributeHints(name, n)
@@ -416,50 +415,36 @@ var fontSizeSteps = [maxFontSizeSteps]string{
 	"x-small", "small", "medium", "large", "x-large", "xx-large", "xxx-large",
 }
 
-// fontSizeValue turns a <font size> into a font-size keyword.
+// fontSizeValue turns a <font size> into a font-size keyword, by HTML's rules
+// for parsing a legacy font size (§15.3.4).
 //
 // A bare number is a step on the scale. A signed one is relative to step 3,
 // which is the default and is what "medium" means — so "+1" is large and "-1" is
 // small, and a document that nests them does not compound, because each element
 // reads the attribute afresh rather than the size it inherited.
+//
+// The rule reads the number the way §2.3.4.1's rules for parsing integers do:
+// ASCII white space, an optional sign, then the digits at the front, and
+// whatever follows them is ignored. So "5px" and "5.5" are step five, "3em" is
+// step three and "1x" step one, where this used to refuse all four and leave
+// the text at the size it inherited. It is html.ParseInteger, which is that
+// rule, and which saturates rather than refuses a number of any length: a
+// hundred nines are the seventh step, as the rule's clamp says.
 func fontSizeValue(raw string) (string, bool) {
-	s := strings.TrimSpace(raw)
-	if s == "" {
+	n, ok := html.ParseInteger(raw)
+	if !ok {
 		return "", false
 	}
-	relative := 0
-	switch s[0] {
-	case '+':
-		relative, s = +1, s[1:]
-	case '-':
-		relative, s = -1, s[1:]
+	// The sign decides the mode as well as the value. ParseInteger has
+	// already required that a digit follow it, so all that is left to know is
+	// whether there was one; ASCII white space is what it skipped to get there.
+	if s := strings.TrimLeft(raw, "\t\n\f\r "); s[0] == '+' || s[0] == '-' {
+		// Clamped before it is added to, which changes no step — anything
+		// past seven either way lands on the end of the scale regardless —
+		// and keeps a saturated value from overflowing a 32-bit int.
+		n = 3 + max(-maxFontSizeSteps, min(n, maxFontSizeSteps))
 	}
-	digits := 0
-	for digits < len(s) && s[digits] >= '0' && s[digits] <= '9' {
-		digits++
-	}
-	if digits == 0 || digits > maxHintDigits || digits != len(s) {
-		return "", false
-	}
-	n := 0
-	for _, c := range []byte(s) {
-		n = n*10 + int(c-'0')
-		if n > 1000 {
-			// Past anything the scale can say. It is clamped below either way,
-			// and stopping here keeps the arithmetic away from an overflow.
-			n = 1000
-			break
-		}
-	}
-	if relative != 0 {
-		n = 3 + relative*n
-	}
-	if n < 1 {
-		n = 1
-	}
-	if n > maxFontSizeSteps {
-		n = maxFontSizeSteps
-	}
+	n = max(1, min(n, maxFontSizeSteps))
 	return fontSizeSteps[n-1], true
 }
 
@@ -468,17 +453,26 @@ func fontSizeValue(raw string) (string, bool) {
 // Ten digits cannot overflow the parse below and is already four orders of
 // magnitude past any page; the bound is here because the attribute is untrusted
 // text and a length is one multiplication away from a box the size of a
-// continent. A longer run of digits is not a large image, it is a value nobody
-// meant, so it is refused rather than saturated.
+// continent. It is the bound for the one reader here that is not HTML's
+// integer rules, a dimension (§2.3.4.4). The integer attributes and the legacy
+// font size are read by html.ParseInteger and html.ParseNonNegativeInteger,
+// which saturate rather than refuse.
 const maxHintDigits = 10
 
-// dimensionValue turns an HTML dimension attribute into a CSS length.
+// dimensionValue turns an HTML dimension attribute into a CSS length, by HTML's
+// "rules for parsing dimension values" (§2.3.4.4): leading white space, then
+// digits, then optionally a full stop and more digits, then optionally a per-cent
+// sign — and whatever follows is ignored. So "100px" is a hundred pixels,
+// "50.5" is fifty and a half, "60%" is a percentage and "10.%" is too.
 //
-// Leading and trailing white space is allowed, because HTML's attribute values
-// are commonly written with it and every browser strips it. Everything else is
-// exact: the digits, then optionally a per-cent sign, then the end.
+// It used to accept the digits and the per-cent sign and nothing else, on the
+// reading that a length with a unit "is not a dimension", which HTML does not
+// say: "<img width=100px>" and "<table width=600px>", common in legacy and
+// e-mail markup, were laid out at their natural size with nothing reported
+// (audit C115). The prefix reading is the one the integer readers in this
+// file already use.
 func dimensionValue(raw string) (string, bool) {
-	s := strings.TrimSpace(raw)
+	s := strings.TrimLeft(raw, " \t\n\f\r")
 	digits := 0
 	for digits < len(s) && s[digits] >= '0' && s[digits] <= '9' {
 		digits++
@@ -486,14 +480,26 @@ func dimensionValue(raw string) (string, bool) {
 	if digits == 0 || digits > maxHintDigits {
 		return "", false
 	}
-	switch s[digits:] {
-	case "":
-		// A bare number is a length in CSS pixels.
-		return s + "px", true
-	case "%":
-		return s, true
+	value, rest := s[:digits], s[digits:]
+	if len(rest) > 0 && rest[0] == '.' {
+		rest = rest[1:]
+		frac := 0
+		for frac < len(rest) && rest[frac] >= '0' && rest[frac] <= '9' {
+			frac++
+		}
+		if frac > 0 {
+			// Past ten places a fraction is below anything a layout unit can
+			// hold; the digits after that are read and not kept, which bounds
+			// the length of what is written without changing its value.
+			value += "." + rest[:min(frac, maxHintDigits)]
+		}
+		rest = rest[frac:]
 	}
-	return "", false
+	if len(rest) > 0 && rest[0] == '%' {
+		return value + "%", true
+	}
+	// A number with no per-cent sign after it is a length in CSS pixels.
+	return value + "px", true
 }
 
 // zeroIsNoDimension names the attributes HTML maps "ignoring zero", by element.
@@ -515,13 +521,12 @@ var zeroIsNoDimension = map[string]map[string]bool{
 
 // isZeroDimension reports whether a dimension this file produced is a zero.
 //
-// It reads what dimensionValue wrote rather than the attribute, because the two
-// spellings a zero arrives in — "0px" and "0%" — are both zero and neither is
-// the text the document held: "000" and "0.0" are not dimension values at all,
-// and "00%" came through as "00%".
+// It reads what dimensionValue wrote rather than the attribute, because a zero
+// arrives in many spellings — "0px", "00%", "0.00px" from "0.00em" — and what
+// they share is digits and a full stop that are all zero.
 func isZeroDimension(value string) bool {
 	digits := strings.TrimSuffix(strings.TrimSuffix(value, "px"), "%")
-	return digits != "" && strings.Trim(digits, "0") == ""
+	return digits != "" && strings.Trim(digits, "0.") == ""
 }
 
 // cellHints are the hints a table cell takes: its table's cellpadding, and its
@@ -622,17 +627,14 @@ func valignValue(raw string) (string, bool) {
 // ignore what follows, so "1px" is one. What has no leading digits at all —
 // including the empty string of "<table border>" — is the parse error the
 // section gives a default of 1px for.
+//
+// The reading is html.ParseNonNegativeInteger, the one every integer attribute
+// is read by. A value too long for any page is still a value — it saturates,
+// and the border is as wide as a length can be — where it used to be refused
+// past ten digits and drawn as the one-pixel default.
 func borderAttribute(raw string) (width string, drawn bool) {
-	s := strings.TrimLeft(raw, " \t\n\f\r")
-	digits := 0
-	for digits < len(s) && s[digits] >= '0' && s[digits] <= '9' {
-		digits++
-	}
-	if digits == 0 || digits > maxHintDigits {
-		return "1px", true
-	}
-	n, err := strconv.Atoi(s[:digits])
-	if err != nil {
+	n, ok := html.ParseNonNegativeInteger(raw)
+	if !ok {
 		return "1px", true
 	}
 	return strconv.Itoa(n) + "px", n != 0
@@ -716,7 +718,12 @@ func olCounterHint(n *html.Node) map[string][]css.ComponentValue {
 	reversed := n.HasAttr("reversed")
 	start, startOK := 0, false
 	if hasStart {
-		start, startOK = signedInteger(raw)
+		// HTML's rules for parsing integers (§2.3.4.1), which take the digits
+		// at the front: "3px" starts at three. This read the whole string and
+		// refused one with anything after its digits, which is a different
+		// rule from the one HTML gives and from the one its own neighbours in
+		// this file follow.
+		start, startOK = html.ParseInteger(raw)
 	}
 	value := ""
 	switch {
@@ -731,35 +738,6 @@ func olCounterHint(n *html.Node) map[string][]css.ComponentValue {
 	}
 	vals, _ := css.ParseComponentValues(value)
 	return map[string][]css.ComponentValue{"counter-reset": vals}
-}
-
-// signedInteger is HTML's "rules for parsing integers": an optional sign and
-// then digits, and an error if there is anything else.
-//
-// It is the whole string rather than a prefix, which is what separates it from
-// the non-negative reader beside it — that one is HTML's other integer rule and
-// takes the leading digits.
-func signedInteger(raw string) (int, bool) {
-	s := strings.TrimSpace(raw)
-	neg := false
-	if len(s) > 0 && (s[0] == '-' || s[0] == '+') {
-		neg = s[0] == '-'
-		s = s[1:]
-	}
-	if s == "" || len(s) > maxHintDigits {
-		return 0, false
-	}
-	n := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
-			return 0, false
-		}
-		n = n*10 + int(s[i]-'0')
-	}
-	if neg {
-		n = -n
-	}
-	return n, true
 }
 
 // hrSizeHint is §15.3.6's size attribute, which sets two different properties
@@ -780,7 +758,7 @@ func hrSizeHint(n *html.Node) map[string][]css.ComponentValue {
 	if !ok {
 		return nil
 	}
-	size, ok := nonNegativeInteger(raw)
+	size, ok := html.ParseNonNegativeInteger(raw)
 	if !ok {
 		return nil
 	}
@@ -810,27 +788,6 @@ func hrSizeHint(n *html.Node) map[string][]css.ComponentValue {
 func pixels(n int) []css.ComponentValue {
 	vals, _ := css.ParseComponentValues(strconv.Itoa(n) + "px")
 	return vals
-}
-
-// nonNegativeInteger is HTML's rule of that name: leading whitespace, then
-// digits, and an error if there are none.
-//
-// It is not borderAttribute's reader, which answers one pixel where this
-// answers nothing — the border attribute has a default and this has not.
-func nonNegativeInteger(raw string) (int, bool) {
-	s := strings.TrimLeft(raw, " \t\n\f\r")
-	digits := 0
-	for digits < len(s) && s[digits] >= '0' && s[digits] <= '9' {
-		digits++
-	}
-	if digits == 0 || digits > maxHintDigits {
-		return 0, false
-	}
-	n, err := strconv.Atoi(s[:digits])
-	if err != nil {
-		return 0, false
-	}
-	return n, true
 }
 
 // linkColourHint is the body element's "link" attribute, read on the links it
@@ -912,63 +869,111 @@ func cellPaddingHint(n *html.Node) map[string][]css.ComponentValue {
 // had to be one less; that reading is olCounterHint's now, where "start" still
 // needs it.
 func counterSetValue(raw string) (string, bool) {
-	n, ok := signedInteger(raw)
+	n, ok := html.ParseInteger(raw)
 	if !ok {
 		return "", false
 	}
 	return "list-item " + strconv.Itoa(n), true
 }
 
-// colourValue turns a presentational colour attribute into a CSS colour.
+// colourValue turns a presentational colour attribute into a CSS colour, by
+// HTML's "rules for parsing a legacy colour value" (§2.3.6).
 //
-// It reads the two spellings a document actually writes — a hash followed by
-// three or six hexadecimal digits, and a colour keyword — and refuses everything
-// else. HTML's own rule is far wider than that: its "legacy colour value" takes
-// any string at all, strips what it cannot use and pads what is left, so
-// "chucknorris" is a colour and comes out #C00000. That is a real algorithm and
-// it is deliberately not here.
+// The rule takes almost any string: a keyword is that colour, and anything
+// else has what is not a hexadecimal digit replaced with a zero, is padded and
+// split into three, and is read as red, green and blue — so
+// "<font color=ff0000>" is red, "<body bgcolor=ffffff>" is white, and
+// "chucknorris" is #c00000, in every browser.
 //
-// The reason is what a wrong answer costs. A hint that refuses leaves the
-// property at its initial value, which is what a document that did not write the
-// attribute would have got; a hint that guesses paints the page a colour nobody
-// asked for and nothing reports it. Legacy parsing can be added the day a
-// document needs it, with the specification open, rather than approximated now.
+// It was refused here on the grounds that a guessed colour would paint the page
+// a colour nobody asked for and nothing would report it. The algorithm is not a
+// guess — it is the specification, fully stated, and it is what a browser
+// paints — and the refusal was not reported either, so "color=ff0000", the
+// most common legacy spelling, was drawn black with nothing said (audit C116).
+//
+// A keyword keeps its spelling, and so does a well-formed hash, because both
+// are already CSS; everything else is written as the #rrggbb it came to.
 func colourValue(raw string) (string, bool) {
-	s := strings.TrimSpace(raw)
-	if s == "" {
+	// 1-3: empty, only white space, or "transparent" is not a colour.
+	s := strings.Trim(raw, " \t\n\f\r")
+	if s == "" || strings.EqualFold(s, "transparent") {
 		return "", false
 	}
-	if s[0] == '#' {
-		digits := s[1:]
-		if len(digits) != 3 && len(digits) != 6 {
-			return "", false
-		}
-		for i := 0; i < len(digits); i++ {
-			if !isHexDigit(digits[i]) {
-				return "", false
-			}
-		}
+	// 4: a named colour.
+	if _, ok := namedColors[strings.ToLower(s)]; ok {
 		return s, true
 	}
-	// A keyword, and only a keyword. It is checked against the same table the
-	// colour property reads, so the attribute cannot name a colour a
-	// declaration could not — and it must be a bare identifier, because a
-	// function is not something HTML's rule would ever have produced here:
-	// "rgb(1,2,3)" in a bgcolor is a string to be mangled, not a colour.
-	vals := mustValues(strings.ToLower(s))
-	if len(vals) != 1 || !vals[0].IsToken() || vals[0].Token.Kind != css.Ident {
-		return "", false
+	// 5: "#" and three hexadecimal digits.
+	if len(s) == 4 && s[0] == '#' && isHexDigit(s[1]) && isHexDigit(s[2]) && isHexDigit(s[3]) {
+		return s, true
 	}
-	if _, ok := ParseColor(vals); !ok {
-		return "", false
+	if len(s) == 7 && s[0] == '#' {
+		if _, ok := parseHex(s[1:]); ok {
+			return s, true
+		}
 	}
-	return s, true
-}
-
-// mustValues parses a value that is a single token, for the keyword check above.
-func mustValues(s string) []css.ComponentValue {
-	vals, _ := css.ParseComponentValues(s)
-	return vals
+	// 6-7: a character outside the Basic Multilingual Plane counts as "00",
+	// and the value is cut to 128 characters.
+	var in []byte
+	for _, r := range s {
+		if len(in) >= 128 {
+			break
+		}
+		switch {
+		case r > 0xFFFF:
+			in = append(in, '0', '0')
+		case r < 0x80 && isHexDigit(byte(r)):
+			in = append(in, byte(r))
+		case r == '#' && len(in) == 0:
+			in = append(in, '#')
+		default:
+			// 9: anything that is not a hexadecimal digit is a zero.
+			in = append(in, '0')
+		}
+	}
+	if len(in) > 128 {
+		in = in[:128]
+	}
+	// 8: a leading "#" is dropped.
+	if len(in) > 0 && in[0] == '#' {
+		in = in[1:]
+	}
+	// 10: padded with zeros to a non-zero multiple of three.
+	for len(in) == 0 || len(in)%3 != 0 {
+		in = append(in, '0')
+	}
+	// 11-14: three equal parts, each cut to its last eight characters, then
+	// stripped of leading zeros they all share while longer than two, then cut
+	// to its first two.
+	n := len(in) / 3
+	parts := [3][]byte{in[:n], in[n : 2*n], in[2*n:]}
+	if n > 8 {
+		for i := range parts {
+			parts[i] = parts[i][n-8:]
+		}
+		n = 8
+	}
+	for n > 2 && parts[0][0] == '0' && parts[1][0] == '0' && parts[2][0] == '0' {
+		for i := range parts {
+			parts[i] = parts[i][1:]
+		}
+		n--
+	}
+	if n > 2 {
+		for i := range parts {
+			parts[i] = parts[i][:2]
+		}
+	}
+	out := []byte{'#'}
+	for _, p := range parts {
+		if len(p) == 1 {
+			// A one-digit component is that digit's value, not the doubled
+			// shorthand "#rgb" gives it: "#1" reads as 0x01.
+			out = append(out, '0')
+		}
+		out = append(out, strings.ToLower(string(p))...)
+	}
+	return string(out), true
 }
 
 // clearValue turns a <br clear> into the property's keyword.

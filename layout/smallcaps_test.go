@@ -4,6 +4,8 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/mgilbir/forme/fonts/notosans"
 	"github.com/mgilbir/forme/fonttest"
@@ -383,13 +385,12 @@ func TestOnlyTheHalfWithNothingToActOnIsLeftOut(t *testing.T) {
 
 // TestAValueOfNoLevelAtAllIsReported.
 //
-// All six of §6.6 are read, so a value outside them is either a mistake the
-// author made or a value from a level this engine has not read. It cannot tell
-// the two apart and reports the second, which is the direction to err in.
+// All six of §6.6 are read, so a value outside them is a value of no level at
+// all: the cascade's value grammar knows §6.6's list, drops the declaration and
+// says so, and this is that finding.
 func TestAValueOfNoLevelAtAllIsReported(t *testing.T) {
-	_, findings := layoutWith(t, smallCapsFontSet(t),
-		`<p id="p">Filler Text</p>`,
-		`#p { font-family: Cap; font-size: 20px; font-variant-caps: sideways-caps }`)
+	findings := build(t, `<p id="p">Filler Text</p>`,
+		`#p { font-family: Cap; font-size: 20px; font-variant-caps: sideways-caps }`).Findings
 	f, ok := findingNaming(findings, "font-variant-caps")
 	if !ok {
 		t.Fatalf("nothing was reported: %v", findings)
@@ -397,8 +398,10 @@ func TestAValueOfNoLevelAtAllIsReported(t *testing.T) {
 	if !strings.Contains(f.Message, "sideways-caps") {
 		t.Errorf("the finding is %q and does not name the value", f.Message)
 	}
-	if !f.Unsupported() {
-		t.Error("the finding does not claim the engine is missing anything")
+	// It is the author's mistake: no specification defines the value, so
+	// nothing is missing from the engine.
+	if f.Unsupported() {
+		t.Error("the finding claims the engine is missing something; the value is not CSS")
 	}
 }
 
@@ -1175,4 +1178,30 @@ func findingNaming(findings []Finding, property string) (Finding, bool) {
 		}
 	}
 	return Finding{}, false
+}
+
+// TestASynthesisedCapitalKeepsItsMarks: a combining mark has no case, and cut
+// by character "e\u0301te" came out as a small E, a full-size accent drawn as
+// a run of its own, and a small "TE". The accent belongs to the letter it sits
+// on — a grapheme cluster is one typographic character unit and is cased by
+// its base — so it is set with the E, at the E's size.
+func TestASynthesisedCapitalKeepsItsMarks(t *testing.T) {
+	runs := synthesisedRuns(t, StandardFonts(), "<p id=\"p\">e\u0301te</p>",
+		`body{margin:0} #p { font-family: Times; font-size: 16px;
+		 font-variant: small-caps }`)
+	if len(runs) == 0 {
+		t.Fatal("nothing was drawn")
+	}
+	full, _ := style.FromPx(16)
+	for _, r := range runs {
+		first, _ := utf8.DecodeRuneInString(r.Text)
+		if unicode.Is(unicode.Mn, first) {
+			t.Errorf("the run %q begins with a combining mark, cut off the letter "+
+				"it belongs to", r.Text)
+		}
+		if strings.ContainsRune(r.Text, '\u0301') && r.Size == full {
+			t.Errorf("the accent is drawn at the full %vpx and the letter under it "+
+				"is a small capital", r.Size.Px())
+		}
+	}
 }

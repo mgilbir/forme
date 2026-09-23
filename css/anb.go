@@ -101,7 +101,7 @@ func (p *anb) value() (AnB, bool) {
 			return AnB{2, 0}, true
 		}
 		p.pos++
-		return p.fromNIdent(t.Value, 1)
+		return p.fromNIdent(t.Value)
 
 	case Number:
 		// A bare integer selects one index and nothing else.
@@ -133,23 +133,23 @@ func (p *anb) value() (AnB, bool) {
 			return AnB{}, false
 		}
 		p.pos++
-		return p.fromNIdent(next.Token.Value, 1)
+		// The grammar's "+" forms are '+'? n, '+'? n- and '+'?
+		// <ndashdigit-ident>, and each is an identifier that begins with its
+		// "n". The "-n" forms take no "+" before them, so "+-n" is not an
+		// An+B. The identifier therefore goes straight to afterN, which
+		// requires the "n" first; fromNIdent would read its "-" as the sign
+		// of A.
+		return p.afterN(next.Token.Value, 1)
 	}
 	return AnB{}, false
 }
 
-// fromNIdent handles the forms where the "n" arrived inside an identifier: "n",
-// "-n", "n-", "-n-", "n-3" and "-n-3". sign is the multiplier a leading "+"
-// would have contributed, which is always 1 — a leading "-" is part of the
-// identifier itself.
-func (p *anb) fromNIdent(name string, sign int) (AnB, bool) {
-	a := sign
-	if strings.HasPrefix(name, "-") || strings.HasPrefix(name, "−") {
-		// Only a true hyphen-minus counts; the tokenizer cannot produce the
-		// other, and accepting it would select on text no browser reads.
-		if !strings.HasPrefix(name, "-") {
-			return AnB{}, false
-		}
+// fromNIdent handles the forms where the "n" arrived inside an identifier with
+// nothing before it: "n", "-n", "n-", "-n-", "n-3" and "-n-3". A leading "-"
+// is part of the identifier, and is the sign of A.
+func (p *anb) fromNIdent(name string) (AnB, bool) {
+	a := 1
+	if strings.HasPrefix(name, "-") {
 		a = -1
 		name = name[1:]
 	}

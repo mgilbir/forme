@@ -1,6 +1,7 @@
 package shape
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -370,45 +371,331 @@ func TestAlternateSubstitutionTakesTheFontsFirstChoice(t *testing.T) {
 // lookup depends on.
 //
 // The rule matches three glyphs and names two lookups. The first decomposes the
-// glyph at position 0, which pushes everything after it along by one; the second
-// is aimed at position 2, and would land on the wrong glyph if the positions
-// were the ones remembered when the rule matched.
+// glyph at position 0, which pushes everything after it along by one, and the
+// pieces it made become matched positions of their own: the rule now addresses
+// four things, the two pieces, c and d. So a second record reaches d as index
+// three, and one naming index two reaches the c — not the d, which is what the
+// index meant before the first record ran.
+//
+// This test asserted the other reading once, keeping the indices the rule
+// matched and moving only the buffer offsets. HarfBuzz reads it this way
+// (apply_lookup inserts the new glyphs as match positions after the record's
+// own), and uharfbuzz 0.56.2 on these very fixtures gives [5 2 3 4] for index
+// two and [5 2 3 6] for the letter at index three; the old reading gave
+// [5 2 3 1] for the first. See runRecords.
 func TestPositionsFollowAGrowingBuffer(t *testing.T) {
-	rule := fonttest.SequenceContext1(map[int][]fonttest.ContextRule{
-		gidB: {{
-			Input:   []int{gidB, gidC, gidD},
-			Lookups: []fonttest.SeqLookup{{At: 0, Lookup: 0}, {At: 2, Lookup: 1}},
-		}},
-	})
-	f := contextFace(t, []fonttest.Lookup{
-		{Type: 2, Subtables: [][]byte{fonttest.MultipleSubst([]int{gidB}, [][]int{{gidBalt, gidB}})}},
-		{Type: 1, Subtables: [][]byte{fonttest.SingleSubst([]int{gidD}, []int{gidA})}},
-		{Type: 5, Subtables: [][]byte{rule}},
-	}, nil)
+	face := func(second int) *Face {
+		rule := fonttest.SequenceContext1(map[int][]fonttest.ContextRule{
+			gidB: {{
+				Input:   []int{gidB, gidC, gidD},
+				Lookups: []fonttest.SeqLookup{{At: 0, Lookup: 0}, {At: second, Lookup: 1}},
+			}},
+		})
+		return contextFace(t, []fonttest.Lookup{
+			{Type: 2, Subtables: [][]byte{fonttest.MultipleSubst([]int{gidB}, [][]int{{gidBalt, gidB}})}},
+			{Type: 1, Subtables: [][]byte{fonttest.SingleSubst([]int{gidB, gidD}, []int{gidA, gidA})}},
+			{Type: 5, Subtables: [][]byte{rule}},
+		}, nil)
+	}
 
-	// b becomes two glyphs, and the d — now at position 3, not 2 — becomes a.
-	wantGIDs(t, shapedGIDs(t, f, "bcd"), []int{gidBalt, gidB, gidC, gidA}, "bcd")
+	// b becomes two glyphs, and the d — now at index 3, not 2 — becomes a.
+	wantGIDs(t, shapedGIDs(t, face(3), "bcd"), []int{gidBalt, gidB, gidC, gidA}, "bcd")
+	// Index 1 is the second piece of the decomposition, not the c.
+	wantGIDs(t, shapedGIDs(t, face(1), "bcd"), []int{gidBalt, gidA, gidC, gidD}, "bcd")
+	// Index 2 is the c, which the lookup does not cover: nothing happens.
+	wantGIDs(t, shapedGIDs(t, face(2), "bcd"), []int{gidBalt, gidB, gidC, gidD}, "bcd")
 }
 
 // TestPositionsFollowAShrinkingBuffer is the same in the other direction, and
-// the more dangerous one: a stale index here points past the end of the buffer.
+// the more dangerous one: a stale index here points past the end of the buffer,
+// or — the way it actually failed — before the start of it.
+//
+// A ligature at index 0 consumes the matched positions after it, so the rule
+// that matched b, c, d now addresses two things: the ligature and the d. The d
+// is index 1, and index 2 no longer exists and does nothing. This test asserted
+// that index 2 still reached the d once, which is not what HarfBuzz does
+// (uharfbuzz 0.56.2 gives [5 4] for it); see TestPositionsFollowAGrowingBuffer.
 func TestPositionsFollowAShrinkingBuffer(t *testing.T) {
-	rule := fonttest.SequenceContext1(map[int][]fonttest.ContextRule{
-		gidB: {{
-			Input:   []int{gidB, gidC, gidD},
-			Lookups: []fonttest.SeqLookup{{At: 0, Lookup: 0}, {At: 2, Lookup: 1}},
-		}},
-	})
+	face := func(second int) *Face {
+		rule := fonttest.SequenceContext1(map[int][]fonttest.ContextRule{
+			gidB: {{
+				Input:   []int{gidB, gidC, gidD},
+				Lookups: []fonttest.SeqLookup{{At: 0, Lookup: 0}, {At: second, Lookup: 1}},
+			}},
+		})
+		return contextFace(t, []fonttest.Lookup{
+			{Type: 4, Subtables: [][]byte{fonttest.LigatureSubst([]fonttest.Ligature{
+				{Components: []int{gidB, gidC}, Glyph: gidBalt},
+			})}},
+			{Type: 1, Subtables: [][]byte{fonttest.SingleSubst([]int{gidD}, []int{gidA})}},
+			{Type: 5, Subtables: [][]byte{rule}},
+		}, nil)
+	}
+
+	// b and c ligate, so the d moves from index 2 to index 1.
+	wantGIDs(t, shapedGIDs(t, face(1), "bcd"), []int{gidBalt, gidA}, "bcd")
+	wantGIDs(t, shapedGIDs(t, face(2), "bcd"), []int{gidBalt, gidD}, "bcd")
+}
+
+// TestALigatureRecordTakesItsPositionsWithIt is the crash: a rule whose first
+// record forms a ligature out of everything it matched, and whose second names
+// a position the ligature swallowed.
+//
+// Moving every position past the change by the change put that position at -1,
+// and the second record applied a lookup there — an index out of range from one
+// font, with nothing above it to recover. The positions a ligature swallows are
+// gone, and a record naming one does nothing, which is what HarfBuzz does:
+// uharfbuzz gives [5] for "bcd" and [1 5 5] for "abcdbcd".
+func TestALigatureRecordTakesItsPositionsWithIt(t *testing.T) {
+	everything := fonttest.SingleSubst([]int{gidA, gidB, gidC, gidD}, []int{gidCalt, gidCalt, gidCalt, gidCalt})
+	for _, second := range []int{1, 2} {
+		rule := fonttest.SequenceContext3(
+			[][]int{{gidB}, {gidC}, {gidD}},
+			[]fonttest.SeqLookup{{At: 0, Lookup: 0}, {At: second, Lookup: 1}},
+		)
+		f := contextFace(t, []fonttest.Lookup{
+			{Type: 4, Subtables: [][]byte{fonttest.LigatureSubst([]fonttest.Ligature{
+				{Components: []int{gidB, gidC, gidD}, Glyph: gidBalt},
+			})}},
+			{Type: 1, Subtables: [][]byte{everything}},
+			{Type: 5, Subtables: [][]byte{rule}},
+		}, nil)
+		noPanic(t, "shaping bcd", func() {
+			wantGIDs(t, shapedGIDs(t, f, "bcd"), []int{gidBalt}, "bcd")
+			wantGIDs(t, shapedGIDs(t, f, "abcdbcd"), []int{gidA, gidBalt, gidBalt}, "abcdbcd")
+		})
+	}
+}
+
+// TestADeletionRecordIsReadAsHarfBuzzReadsIt pins the one place where following
+// HarfBuzz means following its simplification. A record whose lookup deletes
+// the glyph at its own position shortens the buffer by one, and apply_lookup
+// takes that to mean the matched position *after* it was consumed: the rule
+// b, c, d with "delete b" at 0 and "substitute" at 1 substitutes the d, and the
+// c is left alone. uharfbuzz gives [3 6] for "bcd".
+//
+// It is kept rather than corrected because the point of the arithmetic is to
+// agree with the implementation fonts are tested against.
+func TestADeletionRecordIsReadAsHarfBuzzReadsIt(t *testing.T) {
+	rule := fonttest.SequenceContext3(
+		[][]int{{gidB}, {gidC}, {gidD}},
+		[]fonttest.SeqLookup{{At: 0, Lookup: 0}, {At: 1, Lookup: 1}},
+	)
 	f := contextFace(t, []fonttest.Lookup{
-		{Type: 4, Subtables: [][]byte{fonttest.LigatureSubst([]fonttest.Ligature{
-			{Components: []int{gidB, gidC}, Glyph: gidBalt},
-		})}},
-		{Type: 1, Subtables: [][]byte{fonttest.SingleSubst([]int{gidD}, []int{gidA})}},
+		{Type: 2, Subtables: [][]byte{fonttest.MultipleSubst([]int{gidB}, [][]int{{}})}},
+		{Type: 1, Subtables: [][]byte{fonttest.SingleSubst([]int{gidC, gidD}, []int{gidCalt, gidCalt})}},
 		{Type: 5, Subtables: [][]byte{rule}},
 	}, nil)
+	wantGIDs(t, shapedGIDs(t, f, "bcd"), []int{gidC, gidCalt}, "bcd")
+	wantGIDs(t, shapedGIDs(t, f, "bcdbcd"), []int{gidC, gidCalt, gidC, gidCalt}, "bcdbcd")
+}
 
-	// b and c ligate, so the d moves from position 2 to position 1.
-	wantGIDs(t, shapedGIDs(t, f, "bcd"), []int{gidBalt, gidA}, "bcd")
+// TestTheApplyEntryPointsRefuseAPositionOutsideTheBuffer is the defence behind
+// runRecords' bookkeeping. Nothing is meant to ask for a lookup at a position
+// outside the buffer, and the position -1 that once did came from a stale
+// index; both doors refuse it, on either side, rather than index with it.
+func TestTheApplyEntryPointsRefuseAPositionOutsideTheBuffer(t *testing.T) {
+	data := fonttest.SFNT(fonttest.SFNTOptions{
+		Glyphs: []fonttest.Glyph{
+			{Rune: 'a', Advance: 500, HasShape: true},
+			{Rune: 'b', Advance: 500, HasShape: true},
+		},
+		Extra: map[string][]byte{
+			"GSUB": fonttest.GSUBLookups([]fonttest.Lookup{
+				{Type: 1, Subtables: [][]byte{fonttest.SingleSubst([]int{1}, []int{2})}},
+			}, map[string][]int{"calt": {0}}),
+			"GPOS": fonttest.GPOSLookups([]fonttest.Lookup{
+				{Type: 1, Subtables: [][]byte{fonttest.SinglePosSubtable(1, 0, 0, 100)}},
+				{Type: 7, Subtables: [][]byte{fonttest.SequenceContext3([][]int{{1}}, []fonttest.SeqLookup{{At: 0, Lookup: 0}})}},
+			}, map[string][]int{"kern": {1}}),
+		},
+	})
+	f, err := Load(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := f.layoutFor(0, nil)
+	if len(l.gsub) == 0 || len(l.gpos) == 0 {
+		t.Fatal("the fixture's lookups were not read; the test would prove nothing")
+	}
+	sh := shaper{f: f, l: l, ops: lookupBudget(1)}
+	buf := []Glyph{{GID: 1}}
+	for _, at := range []int{-1, -2, 1, 2} {
+		noPanic(t, "applyGSUBAt", func() {
+			if n, out := sh.applyGSUBAt(0, buf, at, 0); n != 0 || out[0].GID != 1 {
+				t.Errorf("applyGSUBAt at %d applied something", at)
+			}
+		})
+		noPanic(t, "applyGPOSAt", func() {
+			if n := sh.applyGPOSAt(0, buf, at, 0); n != 0 || buf[0].XAdvance != 0 {
+				t.Errorf("applyGPOSAt at %d applied something", at)
+			}
+		})
+	}
+	// And inside the buffer both apply, so the refusals above are about the
+	// position and not about a fixture that does nothing.
+	if n, _ := sh.applyGSUBAt(0, []Glyph{{GID: 1}}, 0, 0); n != 1 {
+		t.Error("applyGSUBAt at 0 did not apply")
+	}
+	if n := sh.applyGPOSAt(0, []Glyph{{GID: 1}}, 0, 0); n != 1 {
+		t.Error("applyGPOSAt at 0 did not apply")
+	}
+}
+
+// TestARuleThatDeletesWhatItMatchedLooksAgain pins the other end of the resume
+// arithmetic. A rule matching one b whose record deletes it has consumed
+// nothing that is still there, and the b that moved into its place has not been
+// looked at; resuming one glyph on would skip it. uharfbuzz deletes every b of
+// "abbbc", leaving [1 3].
+func TestARuleThatDeletesWhatItMatchedLooksAgain(t *testing.T) {
+	rule := fonttest.SequenceContext3([][]int{{gidB}}, []fonttest.SeqLookup{{At: 0, Lookup: 0}})
+	f := contextFace(t, []fonttest.Lookup{
+		{Type: 2, Subtables: [][]byte{fonttest.MultipleSubst([]int{gidB}, [][]int{{}})}},
+		{Type: 5, Subtables: [][]byte{rule}},
+	}, nil)
+	wantGIDs(t, shapedGIDs(t, f, "abbbc"), []int{gidA, gidC}, "abbbc")
+}
+
+// TestARecordReachingPastTheMatchKeepsTheEndInPlace is the clamp on where the
+// walk resumes. The rule matches b, c, d and applies a ligature at d that takes
+// in two glyphs *after* the match, so the buffer shrinks by more than the
+// matched span has left after d. The end of the rule would move back past the
+// ligature; it stays at the ligature instead, which is where the walk resumes —
+// and a later record at index 0 still reaches the b.
+//
+// The second subtable is what tells the two apart: it rewrites a c followed by
+// the ligature, and it fires only if the walk resumes on the c, one glyph too
+// early. uharfbuzz gives [6 3 5 2] for "bcdaab".
+func TestARecordReachingPastTheMatchKeepsTheEndInPlace(t *testing.T) {
+	rule := fonttest.SequenceContext3(
+		[][]int{{gidB}, {gidC}, {gidD}},
+		[]fonttest.SeqLookup{{At: 2, Lookup: 0}, {At: 0, Lookup: 1}},
+	)
+	tooEarly := fonttest.SequenceContext3([][]int{{gidC}, {gidBalt}}, []fonttest.SeqLookup{{At: 0, Lookup: 1}})
+	f := contextFace(t, []fonttest.Lookup{
+		{Type: 4, Subtables: [][]byte{fonttest.LigatureSubst([]fonttest.Ligature{
+			{Components: []int{gidD, gidA, gidA}, Glyph: gidBalt},
+		})}},
+		{Type: 1, Subtables: [][]byte{fonttest.SingleSubst([]int{gidB, gidC}, []int{gidCalt, gidCalt})}},
+		{Type: 5, Subtables: [][]byte{rule, tooEarly}},
+	}, nil)
+	wantGIDs(t, shapedGIDs(t, f, "bcdaab"), []int{gidCalt, gidC, gidBalt, gidB}, "bcdaab")
+}
+
+// TestDecompositionsCannotGrowARuleWithoutBound pins maxContextLength. Each
+// record decomposes the b it names into two glyphs, the second of which is a b
+// again at the next index, so eighty records would make the rule address
+// eighty-three positions. HarfBuzz stops at sixty-four, and so does this:
+// uharfbuzz gives sixty-two alternates followed by b, c, d.
+func TestDecompositionsCannotGrowARuleWithoutBound(t *testing.T) {
+	var records []fonttest.SeqLookup
+	for k := 0; k < 80; k++ {
+		records = append(records, fonttest.SeqLookup{At: k, Lookup: 0})
+	}
+	rule := fonttest.SequenceContext3([][]int{{gidB}, {gidC}, {gidD}}, records)
+	f := contextFace(t, []fonttest.Lookup{
+		{Type: 2, Subtables: [][]byte{fonttest.MultipleSubst([]int{gidB}, [][]int{{gidBalt, gidB}})}},
+		{Type: 5, Subtables: [][]byte{rule}},
+	}, nil)
+	var want []int
+	for k := 0; k < maxContextLength-2; k++ {
+		want = append(want, gidBalt)
+	}
+	want = append(want, gidB, gidC, gidD)
+	wantGIDs(t, shapedGIDs(t, f, "bcd"), want, "bcd")
+}
+
+// TestAnInputLongerThanTheContextBoundDoesNotMatch pins the other half of
+// maxContextLength: a rule whose input is longer than sixty-four glyphs does not
+// match, and one of exactly sixty-four does. uharfbuzz agrees on both.
+func TestAnInputLongerThanTheContextBoundDoesNotMatch(t *testing.T) {
+	for _, n := range []int{maxContextLength, maxContextLength + 1} {
+		covs := make([][]int, n)
+		for k := range covs {
+			covs[k] = []int{gidB}
+		}
+		rule := fonttest.SequenceContext3(covs, []fonttest.SeqLookup{{At: 0, Lookup: 0}})
+		f := contextFace(t, []fonttest.Lookup{substB(), {Type: 5, Subtables: [][]byte{rule}}}, nil)
+		text := strings.Repeat("b", n)
+		want := make([]int, n)
+		for k := range want {
+			want[k] = gidB
+		}
+		if n <= maxContextLength {
+			want[0] = gidBalt
+		}
+		wantGIDs(t, shapedGIDs(t, f, text), want, text)
+	}
+}
+
+// TestARuleResumesAfterItsWholeSpan is audit C73. A rule that ignores marks and
+// matches c, c across an accent spans three glyphs while matching two, and the
+// walk resumed two glyphs in — on its own second c, which it then matched again
+// as the start of the rule. HarfBuzz resumes after the last glyph the rule
+// matched: "ćcc" gives [6 7 3 3], where this gave [6 7 6 3].
+//
+// Positioning resumes the same way, and it matters more there, because an
+// adjustment applied twice adds up: the second c took the 100-unit nudge that
+// only the first should have.
+func TestARuleResumesAfterItsWholeSpan(t *testing.T) {
+	gdef := map[int]int{gidC: classBase, gidMark: classMark}
+	for _, kind := range []int{5, 6} {
+		var rule []byte
+		if kind == 5 {
+			rule = fonttest.SequenceContext3([][]int{{gidC}, {gidC}}, []fonttest.SeqLookup{{At: 0, Lookup: 0}})
+		} else {
+			rule = fonttest.ChainedContext3(nil, [][]int{{gidC}, {gidC}}, nil, []fonttest.SeqLookup{{At: 0, Lookup: 0}})
+		}
+		f := contextFace(t, []fonttest.Lookup{substC(), {Type: kind, Flag: flagIgnoreMarks, Subtables: [][]byte{rule}}}, gdef)
+		wantGIDs(t, shapedGIDs(t, f, "ćcc"), []int{gidCalt, gidMark, gidC, gidC}, "ćcc")
+		wantGIDs(t, shapedGIDs(t, f, "ccc"), []int{gidCalt, gidC, gidC}, "ccc")
+		wantGIDs(t, shapedGIDs(t, f, "ććcćc"),
+			[]int{gidCalt, gidMark, gidC, gidMark, gidCalt, gidC, gidMark, gidC}, "ććcćc")
+	}
+
+	for _, kind := range []int{7, 8} {
+		var rule []byte
+		if kind == 7 {
+			rule = fonttest.SequenceContext3([][]int{{gidC}, {gidC}}, []fonttest.SeqLookup{{At: 0, Lookup: 0}})
+		} else {
+			rule = fonttest.ChainedContext3(nil, [][]int{{gidC}, {gidC}}, nil, []fonttest.SeqLookup{{At: 0, Lookup: 0}})
+		}
+		data := fonttest.SFNT(fonttest.SFNTOptions{
+			Name: "ContextPos",
+			Glyphs: []fonttest.Glyph{
+				{Rune: 'a', Advance: 500, HasShape: true},
+				{Rune: 'b', Advance: 500, HasShape: true},
+				{Rune: 'c', Advance: 500, HasShape: true},
+				{Rune: acuteRne, Advance: 0, HasShape: true},
+			},
+			Extra: map[string][]byte{
+				"GPOS": fonttest.GPOSLookups([]fonttest.Lookup{
+					{Type: 1, Subtables: [][]byte{fonttest.SinglePosSubtable(gidC, 0, 0, 100)}},
+					{Type: kind, Flag: flagIgnoreMarks, Subtables: [][]byte{rule}},
+				}, map[string][]int{"kern": {1}}),
+				"GDEF": fonttest.GDEF(map[int]int{gidC: classBase, 4: classMark}),
+			},
+		})
+		f, err := Load(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		glyphs, _ := f.ShapeGlyphs("ćcc")
+		var got []float64
+		for _, g := range glyphs {
+			got = append(got, g.XAdvance)
+		}
+		want := []float64{600, 0, 500, 500}
+		if len(got) != len(want) {
+			t.Fatalf("type %d: got advances %v, want %v", kind, got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("type %d: advances %v, want %v — the rule applied inside its own match", kind, got, want)
+				break
+			}
+		}
+	}
 }
 
 // TestDecompositionLengthIsBounded pins that one glyph cannot be made to become

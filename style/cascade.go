@@ -1,6 +1,7 @@
 package style
 
 import (
+	"maps"
 	"sort"
 	"strconv"
 	"strings"
@@ -51,9 +52,9 @@ type Sheet struct {
 //
 // It is the same shape as the css and html packages' Error, and for the same
 // reason: an author needs to tell "I wrote this wrongly" from "this engine does
-// not do that". The layer that turns these into forme.Violation values lands with
-// the guardrail framework in phase 3; until then this carries the information so
-// that nothing has to be reconstructed later.
+// not do that". Layout turns each into one of its own Findings, under the rule
+// ruleForStyleFinding chooses, so it carries what that needs: where, what, and
+// whether it is unsupported or malformed.
 type Finding struct {
 	// Offset is the byte offset the finding came from, in whatever Sheet and
 	// InMarkup say it is an offset into. It is -1 for a finding about the
@@ -78,9 +79,9 @@ type Finding struct {
 	InMarkup bool
 	// Message says what happened.
 	Message string
-	// Unsupported marks correct CSS this engine does not implement — the
-	// unsupported-property finding of the proposal's §6.3 — as against a
-	// stylesheet that is malformed.
+	// Unsupported marks correct CSS this engine does not implement — what
+	// layout reports as unsupported-property — as against a stylesheet that is
+	// malformed.
 	Unsupported bool
 	// Property is the declaration's name, when the finding is about one.
 	Property string
@@ -92,8 +93,10 @@ const maxFindings = 200
 
 // A declaration that matched an element, with everything the cascade sorts on.
 type candidate struct {
-	property  string
-	value     []css.ComponentValue
+	property string
+	value    []css.ComponentValue
+	// text is value serialised, which is what a winner is stored as.
+	text      string
 	important bool
 	origin    Origin
 	// layer is the cascade layer the declaration was written in — see layer.go.
@@ -115,27 +118,28 @@ type candidate struct {
 // Styler applies stylesheets to a document.
 type Styler struct {
 	matcher *Matcher
+	// budget is each rule's allowance of matching work for the document, nil
+	// where there is none to keep — a Styler built by hand to prepare rules.
+	budget *matchBudget
 	// media is the surface the document is being laid out for, which is what a
 	// media query is asked about. Its zero value is a sheet of no size, and a
 	// query about a width is false against it — see Media.
-	media    Media
+	media Media
+	// viewport is the page area a viewport-relative font-size is a percentage
+	// of, zero where the caller did not say. See ApplyOnPage.
+	viewport Media
 	findings []Finding
 	// sheet is the name of the stylesheet being prepared, and is what report
 	// stamps on a finding raised while one is. It is empty outside prepare,
 	// which is where the findings that belong to no sheet are raised.
 	sheet string
-	// The cascade layer being prepared, and the layers seen so far. layer is
-	// zero outside any @layer, which is not layer number zero but the band
-	// above every layer for a normal declaration — see layerRank. layerName is
-	// the full path of the open layer, which is what makes a name written
-	// inside another a sublayer of it.
-	layer      int
-	layerName  string
-	layers     map[string]int
-	layerCount int
-	// reportedNestedLayer keeps the note about a layer inside a layer to one
-	// per document. See reportNestedLayer.
-	reportedNestedLayer bool
+	// The cascade layer being prepared, and the tree of layers seen so far.
+	// layer is zero outside any @layer, which is not a layer but the band above
+	// every layer for a normal declaration — see layerRank. While preparing it
+	// names a node of layers; finishLayers turns it into the node's place in
+	// the order. See layer.go.
+	layer  int
+	layers []*layerNode
 	// attrOffset is where in the *markup* the style attribute being expanded
 	// was written, or -1 outside one.
 	//
@@ -153,12 +157,15 @@ type Styler struct {
 	// sends them back to a document that still has the finding in it. See
 	// suppressed, which is the key.
 	seen map[string]bool
-}
 
-// ComputedStyle is one element's resolved property values, keyed by property
-// name. Every property in the registry is present, so a caller never has to
-// distinguish "unset" from "absent".
-type ComputedStyle map[string]string
+	// intern shares what the document's computed styles have in common. See
+	// styleInterner; it is per Styler because a Styler styles one document.
+	intern *styleInterner
+
+	// pages and fontFaces are the @page and @font-face rules the preparation
+	// reached, in the order it reached them. See Prepared.
+	pages, fontFaces []AtRule
+}
 
 // PseudoKey names one pseudo-element of one element.
 type PseudoKey struct {
@@ -200,7 +207,9 @@ type Styled struct {
 	// Findings is everything worth telling the caller, in stylesheet order.
 	Findings []Finding
 	// Incomplete reports that the selector-matching budget tripped, so some
-	// rules did not get the chance to apply. A caller rendering an incomplete
+	// rules did not get the chance to apply: a match ran past the per-match
+	// bound, or a rule spent its allowance for the document and was switched
+	// off. Findings name each such rule. A caller rendering an incomplete
 	// result is rendering something other than the stylesheet describes.
 	Incomplete bool
 }
@@ -256,15 +265,131 @@ func ApplyWith(doc *html.Node, sheets []Sheet, m Metrics) Styled {
 // document that would have printed on anything at all. The media *type* is
 // answered either way, because that one is a fact about this engine rather than
 // about the page: it renders for paper.
+//
+// The sheet is also what a font-size in viewport units is resolved against,
+// since it is the only page a caller of this has named. A caller that decides
+// margins, as layout does, knows the page *area*, and says so through
+// ApplyOnPage instead.
 func ApplyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) Styled {
-	s := &Styler{matcher: NewMatcher(doc), media: media, seen: map[string]bool{},
-		attrOffset: -1}
+	out, _ := applyIn(doc, sheets, m, media)
+	return out
+}
 
-	// Expand shorthands and drop what the engine does not implement, once for
-	// the whole run rather than once per element — the answer does not depend
-	// on the element, and a document of ten thousand nodes would otherwise ask
-	// the same question ten thousand times.
-	rules := newRuleSet(s.prepare(sheets))
+// applyIn is ApplyIn, and the Styler that did the work, whose accounts of it the
+// tests read.
+func applyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) (Styled, *Styler) {
+	p := Prepare(sheets, media)
+	// A caller of ApplyIn has nowhere to receive the @font-face rules — it is
+	// Prepare's caller that loads them — so each one is a rule that did
+	// nothing, and says so as it did before the walk handed them over. @page
+	// is not reported: it computes nothing on an element, and the stage that
+	// lays a document out on paper is the one that reads it.
+	for _, f := range p.FontFaces {
+		p.findings = appendBounded(p.findings, Finding{
+			Offset: f.Rule.Offset, Sheet: f.Sheet,
+			Message:     "@font-face is not applied yet",
+			Unsupported: true,
+			Property:    "@font-face",
+		})
+	}
+	return p.apply(doc, m, media)
+}
+
+// AtRule is an @page or @font-face rule the cascade's walk reached: one whose
+// enclosing @media and @supports conditions are all true, with the cascade
+// terms a caller that decides between two of them needs.
+type AtRule struct {
+	Rule css.Rule
+	// Sheet is the stylesheet it was written in, as Sheet.Name gave it.
+	Sheet  string
+	Origin Origin
+	// Layer is the cascade layer it was written in, zero for none; LayerRank
+	// orders two of them as the cascade orders two declarations.
+	Layer int
+}
+
+// Prepared is a set of stylesheets read the way the cascade reads them — every
+// selector parsed, every shorthand expanded, every @media, @supports and @layer
+// evaluated — and not yet applied to a document.
+//
+// It exists because two things a document needs are decided by at-rules the
+// cascade walks past and does not apply: @page describes the paper and
+// @font-face loads a file. Each had a walker of its own in layout, and each
+// walker drifted from this one: the @page reader descended only into @media,
+// so "@supports (display: block) { @page { size: A5 } }" and "@layer print {
+// @page { … } }" were lost with nothing said, once @supports and @layer were
+// applied here (audit C33); an @font-face inside any conditional was reported
+// "not applied yet" (C138). Walking once and handing the at-rules over is how
+// the three cannot disagree about which blocks are live.
+//
+// A caller that needs them before styling — the fonts have to be loaded before
+// a font-size in ex can be computed, and the page decided before layout —
+// calls Prepare, reads Pages and FontFaces, and then Apply. ApplyIn is the two
+// in one call.
+type Prepared struct {
+	media    Media
+	rules    []preparedRule
+	findings []Finding
+	seen     map[string]bool
+
+	// Pages and FontFaces are the @page and @font-face rules the walk reached,
+	// in stylesheet order: at the top of a sheet or inside any @media,
+	// @supports or @layer whose condition held. One written inside a style
+	// rule is not among them — CSS Nesting allows neither there — and was
+	// reported as dropped.
+	Pages     []AtRule
+	FontFaces []AtRule
+}
+
+// Prepare reads sheets for the given medium: see Prepared.
+//
+// Every media query in them is answered about media, and that is the one
+// answer for the document — see layout's pipeline for why it is the sheet the
+// caller asked for and not the one @page goes on to choose.
+func Prepare(sheets []Sheet, media Media) *Prepared {
+	s := &Styler{media: media, seen: map[string]bool{}, attrOffset: -1}
+	rules := s.prepare(sheets)
+	return &Prepared{media: media, rules: rules, findings: s.findings, seen: s.seen,
+		Pages: s.pages, FontFaces: s.fontFaces}
+}
+
+// Apply computes a style for every element in a document, from the prepared
+// sheets. It may be called more than once, for more than one document: it
+// changes nothing it was given.
+func (p *Prepared) Apply(doc *html.Node, m Metrics) Styled {
+	out, _ := p.apply(doc, m, Media{})
+	return out
+}
+
+// ApplyOnPage is Apply with the page area known, which is what a
+// viewport-relative length is a percentage of on paper (CSS 2 §10.1 makes the
+// page area the initial containing block, and CSS Values 4 §6.1.2 measures the
+// viewport units against that).
+//
+// Of all the lengths only font-size needs it here. Every other one is left as
+// written for layout, which knows the page area and resolves "3vw" where the
+// box is laid out; a font-size cannot wait, because it is inherited as a
+// number and every em below it is relative to that number. Without the page,
+// "font-size: 5vw" was left as written, reported by layout as unresolvable, and
+// set at the inherited size (audit C157) — although the pipeline had decided
+// the page before it styled anything.
+func (p *Prepared) ApplyOnPage(doc *html.Node, m Metrics, area Media) Styled {
+	out, _ := p.apply(doc, m, area)
+	return out
+}
+
+func (p *Prepared) apply(doc *html.Node, m Metrics, viewport Media) (Styled, *Styler) {
+	s := &Styler{matcher: NewMatcher(doc), media: p.media, viewport: viewport,
+		seen:     maps.Clone(p.seen),
+		findings: append([]Finding(nil), p.findings...), attrOffset: -1}
+
+	// Shorthands were expanded and what the engine does not implement dropped
+	// once for the whole run, in Prepare, rather than once per element — the
+	// answer does not depend on the element, and a document of ten thousand
+	// nodes would otherwise ask the same question ten thousand times. The
+	// rules are copied because indexing them numbers them.
+	rules := newRuleSet(append([]preparedRule(nil), p.rules...))
+	s.budget = &matchBudget{rules: make([]ruleWork, len(rules.rules))}
 
 	out := Styled{
 		Styles:            map[*html.Node]ComputedStyle{},
@@ -291,7 +416,19 @@ func ApplyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) Styled {
 		if n.Type != html.ElementNode {
 			return true
 		}
-		cs, own := s.computeFor(n, rules, out.Styles, "")
+		s.budget.styled++
+		// The parent's finished style, or none for the root — which is also
+		// what an element whose parent was never styled inherits from, as it
+		// did when this read a map that had no entry for it.
+		var parent ComputedStyle
+		if p := parentElement(n); p != nil {
+			parent = out.Styles[p]
+		}
+		b, declared, own := s.computeFor(n, rules, parent, "")
+		// What has been resolved so far, for the questions asked of it
+		// below. It is a view of the builder and not a copy; the writes that
+		// follow go through the builder.
+		cs := b.cs
 
 		// The parent's own size, which is what an em means here, and the
 		// initial size for the root — a document that says nothing about
@@ -312,12 +449,10 @@ func ApplyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) Styled {
 		// together. At the root there is no parent element and the element's own
 		// style is the nearest thing there is.
 		fontStyle := cs
-		if p := parentElement(n); p != nil {
-			if got, ok := out.Styles[p]; ok {
-				fontStyle = got
-			}
+		if !parent.IsZero() {
+			fontStyle = parent
 		}
-		size, resolved := fontSizeOf(cs, own, parentSize, rootSize, m, fontStyle)
+		size, resolved := fontSizeOf(cs, own, parentSize, rootSize, s.viewport, m, fontStyle)
 		// The scale a stated size is on is the one it was stated in, so this
 		// asks only where nothing has been stated: by this element, and by
 		// none of its ancestors either. See DefaultMonospaceFontSize.
@@ -365,10 +500,11 @@ func ApplyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) Styled {
 			// absolute length, which is what a descendant inherits. When it
 			// could not be resolved the declaration is left as the author wrote
 			// it, for layout to report against the element.
-			cs["font-size"] = pxValue(size)
+			b.set(fontSizeID, s.interner().value(pxValue(size)))
 		}
-		absolutiseLengths(cs, size, rootSize)
+		s.absolutiseLengths(b, declared, size, rootSize)
 
+		cs = s.interner().finish(b)
 		out.Styles[n] = cs
 		if own {
 			out.OwnFontSize[n] = true
@@ -380,19 +516,20 @@ func ApplyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) Styled {
 			// A pseudo-element inherits from the element it belongs to, which is
 			// why the parent style passed here is that element's own.
 			key := PseudoKey{Node: n, Name: name}
-			pcs, own := s.computeForPseudo(n, rules, out.Styles[n], name)
+			pb, pdeclared, own := s.computeForPseudo(n, rules, cs, name)
+			pcs := pb.cs
 			// A pseudo-element's em is relative to its own font-size, and it
 			// inherits from the element it belongs to rather than from that
 			// element's parent.
 			// A pseudo-element's ex is its originating element's, for the same
 			// reason its em is: it inherits from that element and not from that
 			// element's parent.
-			psize, presolved := fontSizeOf(pcs, own, size, rootSize, m, cs)
+			psize, presolved := fontSizeOf(pcs, own, size, rootSize, s.viewport, m, cs)
 			if presolved {
-				pcs["font-size"] = pxValue(psize)
+				pb.set(fontSizeID, s.interner().value(pxValue(psize)))
 			}
-			absolutiseLengths(pcs, psize, rootSize)
-			out.Pseudo[key] = pcs
+			s.absolutiseLengths(pb, pdeclared, psize, rootSize)
+			out.Pseudo[key] = s.interner().finish(pb)
 			if own {
 				out.OwnPseudoFontSize[key] = true
 			}
@@ -401,7 +538,11 @@ func ApplyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) Styled {
 	})
 
 	out.Findings = s.findings
-	out.Incomplete = s.matcher.Tripped()
+	// A rule switched off by its budget is as incomplete as one whose match ran
+	// out, and it is a separate account: a rule is switched off by spending,
+	// which it may do without any one match reaching the per-match bound.
+	cut := s.reportMatchBudget(rules)
+	out.Incomplete = s.matcher.Tripped() || cut
 	if out.Incomplete {
 		s.report(Finding{
 			Offset: -1,
@@ -410,7 +551,7 @@ func ApplyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) Styled {
 		})
 		out.Findings = s.findings
 	}
-	return out
+	return out, s
 }
 
 // preparedRule is a rule with its selectors parsed and its declarations
@@ -418,12 +559,19 @@ func ApplyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) Styled {
 type preparedRule struct {
 	selectors []css.Selector
 	decls     []preparedDecl
-	// subjects is the element names this rule's selectors can select,
-	// ASCII-lower-cased, and is empty when at least one of them names no type
-	// at all — ".a", "#x", "[hidden]" — and so can select anything. It is what
-	// ruleSet indexes on; see there for why.
-	subjects []string
-	origin   Origin
+	// keys is one thing per selector that an element must have for the
+	// selector to select it — an id, a class or an element name — and is empty
+	// when at least one selector names none of the three, "[hidden]" or ":root",
+	// and so can select anything. It is what ruleSet indexes on; see there for
+	// why.
+	keys   []ruleKey
+	origin Origin
+	// index is the rule's place in the ruleSet it was indexed into, which is
+	// what its share of the matching budget is kept under. See matchBudget.
+	index int32
+	// offset and sheet are where the rule was written, for a finding about it.
+	offset int
+	sheet  string
 	// layer is the cascade layer the rule was written in, zero for none. See
 	// layer.go: it is a term of the cascade between the origin and the
 	// specificity, and it is carried on the rule because every declaration in
@@ -432,8 +580,11 @@ type preparedRule struct {
 }
 
 type preparedDecl struct {
-	property  string
-	value     []css.ComponentValue
+	property string
+	value    []css.ComponentValue
+	// text is value serialised, which is what a computed style stores. See
+	// expand.
+	text      string
 	important bool
 	order     int
 	offset    int
@@ -445,7 +596,7 @@ func (s *Styler) prepare(sheets []Sheet) []preparedRule {
 
 	for _, sheet := range sheets {
 		s.sheet = sheet.Name
-		if done, ok := preparedBefore(sheet, order); ok {
+		if done, ok := preparedBefore(sheet, order, s.media); ok {
 			// The same sheet, prepared before, at the same place in the order.
 			// The rules are reused; the findings are raised again, because they
 			// belong to this document. See preparedSheet.
@@ -453,10 +604,13 @@ func (s *Styler) prepare(sheets []Sheet) []preparedRule {
 			for _, f := range done.findings {
 				s.report(f)
 			}
+			s.pages = append(s.pages, done.pages...)
+			s.fontFaces = append(s.fontFaces, done.fontFaces...)
 			order = done.endOrder
 			continue
 		}
-		mark := preparation{start: order, rules: len(out), findings: len(s.findings)}
+		mark := preparation{start: order, rules: len(out), findings: len(s.findings),
+			pages: len(s.pages), fontFaces: len(s.fontFaces)}
 		for _, rule := range sheet.Rules {
 			s.prepareRule(rule, nil, sheet.Origin, &out, &order)
 		}
@@ -466,6 +620,7 @@ func (s *Styler) prepare(sheets []Sheet) []preparedRule {
 	// the prepared rules of all of them at once, and a style attribute is not
 	// in a sheet at all.
 	s.sheet = ""
+	s.finishLayers(out)
 	return out
 }
 
@@ -484,7 +639,8 @@ func (s *Styler) prepare(sheets []Sheet) []preparedRule {
 // content: the caller hands over the same slice for every document — layout
 // parses the sheet once — so "the same rules" is a pointer comparison and not a
 // fourteen-kilobyte one. A sheet built freshly per document has a different
-// slice, misses, and is prepared as it always was.
+// slice, misses, and is prepared as it always was. The slice's length and the
+// medium are in the key as well — see preparedSheet.
 //
 // **It is one slot and not a map, and that is the whole of its memory
 // behaviour.** A map keyed on whatever a caller hands over is a leak that
@@ -514,18 +670,30 @@ func (s *Styler) prepare(sheets []Sheet) []preparedRule {
 // preparation is where one sheet's preparation began, in each of the three
 // things it appends to.
 type preparation struct {
-	start    int
-	rules    int
-	findings int
+	start     int
+	rules     int
+	findings  int
+	pages     int
+	fontFaces int
 }
 
 // preparedSheet is one remembered preparation.
+//
+// The key is the rule slice's first element *and* its length *and* the medium:
+// a caller that hands over rules[:k] of the same backing array is handing over
+// a different sheet, and a sheet with an @media in it prepares differently for
+// a different page. Keyed on the first element alone, both of those reused a
+// preparation that did not describe them (audit C156).
 type preparedSheet struct {
-	key      *css.Rule
-	rules    []preparedRule
-	findings []Finding
-	start    int
-	endOrder int
+	key       *css.Rule
+	n         int
+	media     Media
+	rules     []preparedRule
+	findings  []Finding
+	pages     []AtRule
+	fontFaces []AtRule
+	start     int
+	endOrder  int
 }
 
 // prepared is the one slot. See above for why it is not a map.
@@ -533,12 +701,13 @@ var prepared atomic.Pointer[preparedSheet]
 
 // preparedBefore answers a sheet this has prepared before, at the same point in
 // the cascade order.
-func preparedBefore(sheet Sheet, order int) (*preparedSheet, bool) {
+func preparedBefore(sheet Sheet, order int, media Media) (*preparedSheet, bool) {
 	done := prepared.Load()
 	switch {
 	case done == nil || len(sheet.Rules) == 0:
 		return nil, false
-	case done.key != &sheet.Rules[0] || done.start != order:
+	case done.key != &sheet.Rules[0] || done.n != len(sheet.Rules) ||
+		done.media != media || done.start != order:
 		return nil, false
 	}
 	return done, true
@@ -554,17 +723,21 @@ func (s *Styler) remember(sheet Sheet, mark preparation, out []preparedRule,
 		// An author's is a fresh slice each time, so remembering it would evict
 		// the one that pays and keep one that never hits.
 		return
-	case s.layer != 0 || s.layerCount != 0 || s.reportedNestedLayer:
+	case s.layer != 0 || len(s.layers) > 1:
 		// The sheet declared a cascade layer, so preparing it moved state the
 		// next document would have to move again.
 		return
 	}
 	prepared.Store(&preparedSheet{
-		key:      &sheet.Rules[0],
-		rules:    append([]preparedRule(nil), out[mark.rules:]...),
-		findings: append([]Finding(nil), findings[mark.findings:]...),
-		start:    mark.start,
-		endOrder: order,
+		key:       &sheet.Rules[0],
+		n:         len(sheet.Rules),
+		media:     s.media,
+		rules:     append([]preparedRule(nil), out[mark.rules:]...),
+		findings:  append([]Finding(nil), findings[mark.findings:]...),
+		pages:     append([]AtRule(nil), s.pages[mark.pages:]...),
+		fontFaces: append([]AtRule(nil), s.fontFaces[mark.fontFaces:]...),
+		start:     mark.start,
+		endOrder:  order,
 	})
 }
 
@@ -582,7 +755,7 @@ func (s *Styler) remember(sheet Sheet, mark preparation, out []preparedRule,
 // engine cannot answer — a feature about a screen's abilities, or a syntax
 // beyond the "and"-joined list this reads — because there a browser printing
 // the same document may apply rules this page does not have.
-func (s *Styler) prepareMedia(rule css.Rule, parent []css.ComponentValue, origin Origin,
+func (s *Styler) prepareMedia(rule css.Rule, parent *css.Nesting, origin Origin,
 	out *[]preparedRule, order *int) {
 
 	matches, unknown := MatchesMedia(rule.Prelude, s.media)
@@ -627,10 +800,22 @@ func (s *Styler) prepareMedia(rule css.Rule, parent []css.ComponentValue, origin
 // or a shape beyond the and/or/not of §2 — for the reason a media query naming
 // an unanswerable feature is: a browser printing the same document may apply
 // rules this page does not have.
-func (s *Styler) prepareSupports(rule css.Rule, parent []css.ComponentValue,
+func (s *Styler) prepareSupports(rule css.Rule, parent *css.Nesting,
 	origin Origin, out *[]preparedRule, order *int) {
 
-	matches, unreadable := supportsCondition(rule.Prelude)
+	matches, unreadable, malformed := supportsCondition(rule.Prelude)
+	if malformed {
+		// Not a condition at all, so not an @supports rule: Conditional 3
+		// §2.1 makes the whole rule invalid. It is the author's to fix, and
+		// nothing is missing from the engine.
+		s.report(Finding{
+			Offset: rule.Offset,
+			Message: "the @supports condition " + quoted(serialize(rule.Prelude)) +
+				" is not a valid condition, so the rule was dropped",
+			Property: "@supports",
+		})
+		return
+	}
 	if unreadable != "" {
 		s.report(Finding{
 			Offset: rule.Offset,
@@ -657,6 +842,28 @@ func (s *Styler) prepareSupports(rule css.Rule, parent []css.ComponentValue,
 	}
 }
 
+// collectAtRule keeps an @page or @font-face rule for the stage that acts on
+// it, or reports one written inside a style rule, where CSS Nesting §2 allows
+// neither — "p { @page { size: A5 } }" is not a page rule, and it was dropped
+// with nothing said.
+func (s *Styler) collectAtRule(rule css.Rule, parent *css.Nesting, origin Origin) {
+	name := "@" + strings.ToLower(rule.Name)
+	if parent != nil {
+		s.report(Finding{
+			Offset:   rule.Offset,
+			Message:  name + " cannot be written inside a style rule, so it was dropped",
+			Property: name,
+		})
+		return
+	}
+	at := AtRule{Rule: rule, Sheet: s.sheet, Origin: origin, Layer: s.layer}
+	if name == "@page" {
+		s.pages = append(s.pages, at)
+	} else {
+		s.fontFaces = append(s.fontFaces, at)
+	}
+}
+
 // quoted is a condition as it appears in a finding.
 func quoted(s string) string { return strconv.Quote(strings.TrimSpace(s)) }
 
@@ -671,35 +878,21 @@ func quoted(s string) string { return strconv.Quote(strings.TrimSpace(s)) }
 // raised. That is the shape every stylesheet written since nesting arrived
 // uses.
 //
-// The selectors are the enclosing rule's, already desugared by the caller, so
-// the declarations land on exactly the elements the rule they were written in
-// lands on. The order counter runs on through, which is what puts a declaration
-// inside the @media after one written above it.
-func (s *Styler) prepareNestedConditional(rule css.Rule, parent []css.ComponentValue,
+// The selectors are the enclosing rule's own, already parsed, so the
+// declarations land on exactly the elements the rule they were written in lands
+// on, with that rule's specificity — CSS Nesting §3.2's nested declarations
+// rule, and the WPT test css-nesting/nested-declarations-matching. They are the
+// very list the enclosing rule was prepared with, shared rather than parsed
+// again: this used to re-parse the parent's prelude for every @media it held.
+// Rules nested in the block are relative to the same parent, so they get the
+// same Nesting. The order counter runs on through, which is what puts a
+// declaration inside the @media after one written above it.
+func (s *Styler) prepareNestedConditional(rule css.Rule, parent *css.Nesting,
 	origin Origin, out *[]preparedRule, order *int) {
 
-	sels, errs, ok := css.ParseSelectorList(parent)
-	for _, e := range errs {
-		s.report(Finding{Offset: e.Offset, Message: e.Message, Unsupported: e.Unsupported})
-	}
-	if !ok {
-		return
-	}
-	s.prepareStyleBlock(rule.Block, sels, parent, origin, out, order)
+	s.prepareStyleBlock(rule, parent.Selectors, parent, origin, out, order)
 }
 
-// prepareRule prepares one rule and every rule nested inside it.
-//
-// parent is the enclosing rule's selector list, already desugared, or nil at the
-// top of a stylesheet. It is carried down rather than looked up because nesting
-// composes: a rule three deep is written against the rule above it, which was
-// itself written against the one above that, and each level's answer is the next
-// level's question.
-//
-// The order counter runs through the recursion rather than being restarted, so
-// a nested rule's declarations come after the declarations of the rule holding
-// them. That is what CSS Nesting asks for — the nested rule is at the place it
-// was written — and it falls out of doing the parent's declarations first.
 // charsetLabel is the encoding an @charset names, which is a single string.
 func charsetLabel(prelude []css.ComponentValue) (string, bool) {
 	var only css.ComponentValue
@@ -727,7 +920,19 @@ func utf8Charset(label string) bool {
 	return false
 }
 
-func (s *Styler) prepareRule(rule css.Rule, parent []css.ComponentValue, origin Origin,
+// prepareRule prepares one rule and every rule nested inside it.
+//
+// parent is the rule this one is written inside, or nil at the top of a
+// stylesheet. It is carried down rather than looked up because nesting
+// composes: a rule three deep is written against the rule above it, which was
+// itself written against the one above that, and each level's "&" is the level
+// above as it was parsed — a reference, never a copy. See css.Nesting.
+//
+// The order counter runs through the recursion rather than being restarted, so
+// a nested rule's declarations come after the declarations of the rule holding
+// them. That is what CSS Nesting asks for — the nested rule is at the place it
+// was written — and it falls out of doing the parent's declarations first.
+func (s *Styler) prepareRule(rule css.Rule, parent *css.Nesting, origin Origin,
 	out *[]preparedRule, order *int) {
 
 	if rule.At {
@@ -743,12 +948,13 @@ func (s *Styler) prepareRule(rule css.Rule, parent []css.ComponentValue, origin 
 			s.prepareSupports(rule, parent, origin, out, order)
 			return
 		}
-		if strings.EqualFold(rule.Name, "page") {
+		if strings.EqualFold(rule.Name, "page") || strings.EqualFold(rule.Name, "font-face") {
 			// @page selects no element and computes no value on one: it
-			// describes the paper, and the stage that lays a document out on
-			// paper reads it. There is nothing for the cascade to say about it
-			// either way, so it says nothing rather than reporting a rule that
-			// is applied elsewhere as one that is not.
+			// describes the paper. @font-face loads a file. The stages that do
+			// those read them, and this walk is where they are found — at any
+			// depth under the @media, @supports and @layer this walk
+			// evaluates, with the layer it was written in. See Prepared.
+			s.collectAtRule(rule, parent, origin)
 			return
 		}
 		if strings.EqualFold(rule.Name, "charset") {
@@ -778,9 +984,9 @@ func (s *Styler) prepareRule(rule css.Rule, parent []css.ComponentValue, origin 
 			return
 		}
 		// An at-rule this package does not act on and no other stage does
-		// either. @font-face is taken out of the stylesheet before it reaches
-		// here, and @page is skipped above; everything left genuinely is not
-		// applied, and reporting it is how that stays visible until it is.
+		// either. @page and @font-face are handed over above; everything left
+		// genuinely is not applied, and reporting it is how that stays visible
+		// until it is.
 		s.report(Finding{
 			Offset:      rule.Offset,
 			Message:     "@" + rule.Name + " is not applied yet",
@@ -790,12 +996,10 @@ func (s *Styler) prepareRule(rule css.Rule, parent []css.ComponentValue, origin 
 		return
 	}
 
-	prelude := rule.Prelude
-	if parent != nil {
-		prelude = nestSelector(parent, prelude)
-	}
-
-	sels, errs, ok := css.ParseSelectorList(prelude)
+	// Nested or not, the prelude is parsed once and as the author wrote it: a
+	// nested rule's selectors are relative, and their "&" is the parent by
+	// reference. See css.ParseNestedSelectorList.
+	sels, errs, ok := css.ParseNestedSelectorList(rule.Prelude, parent)
 	for _, e := range errs {
 		s.report(Finding{
 			Offset:      e.Offset,
@@ -814,12 +1018,17 @@ func (s *Styler) prepareRule(rule css.Rule, parent []css.ComponentValue, origin 
 		return
 	}
 
-	s.prepareStyleBlock(rule.Block, sels, prelude, origin, out, order)
+	s.prepareStyleBlock(rule, sels, nil, origin, out, order)
 }
 
 // prepareStyleBlock prepares one style block: the declarations it holds, which
 // belong to the given selector list, and the rules nested in it, which are
-// written against the given prelude.
+// written against it.
+//
+// nest is that selector list as a parent, when the caller already has one — a
+// block inside a nested @media is its enclosing rule's, and shares that rule's
+// Nesting. Otherwise one is made here, once for the block, and only if
+// something is nested in it: every "&" in every rule below points at it.
 //
 // The two are interleaved by where they were written rather than done in two
 // passes. The order counter is what the cascade breaks a tie with, so a pass
@@ -828,16 +1037,19 @@ func (s *Styler) prepareRule(rule css.Rule, parent []css.ComponentValue, origin 
 // since a different selector usually differs in specificity, and which a nested
 // @media shows immediately: its declarations land on the very selector they are
 // written inside, so the only thing separating them is order.
-func (s *Styler) prepareStyleBlock(block []css.ComponentValue, sels []css.Selector,
-	prelude []css.ComponentValue, origin Origin, out *[]preparedRule, order *int) {
+func (s *Styler) prepareStyleBlock(rule css.Rule, sels []css.Selector,
+	nest *css.Nesting, origin Origin, out *[]preparedRule, order *int) {
 
-	decls, nested, derrs := css.ParseDeclarationValues(block)
+	decls, nested, derrs := css.ParseDeclarationValues(rule.Block)
 	for _, e := range derrs {
 		s.report(Finding{Offset: e.Offset, Message: e.Message, Unsupported: e.Unsupported})
 	}
+	if nest == nil && len(nested) > 0 {
+		nest = css.NewNesting(sels)
+	}
 
 	prepared := preparedRule{selectors: sels, origin: origin, layer: s.layer,
-		subjects: subjectsOf(sels)}
+		keys: keysOf(sels), offset: rule.Offset, sheet: s.sheet}
 	di, ni := 0, 0
 	for di < len(decls) || ni < len(nested) {
 		if ni >= len(nested) || (di < len(decls) && decls[di].Offset <= nested[ni].Offset) {
@@ -849,7 +1061,7 @@ func (s *Styler) prepareStyleBlock(block []css.ComponentValue, sels []css.Select
 			di++
 			continue
 		}
-		s.prepareRule(nested[ni], prelude, origin, out, order)
+		s.prepareRule(nested[ni], nest, origin, out, order)
 		ni++
 	}
 	if len(prepared.decls) > 0 {
@@ -857,68 +1069,24 @@ func (s *Styler) prepareStyleBlock(block []css.ComponentValue, sels []css.Select
 	}
 }
 
-// nestSelector writes a nested rule's selector out in full, against the rule it
-// was written inside.
-//
-// CSS Nesting §2: the parent stands in for ":is(<the parent's selector list>)",
-// which is not a convenience — it is what makes the nested rule's specificity
-// right. ":is()" takes the specificity of its most specific argument, which is
-// exactly what the specification says a nested selector inherits from its
-// parent, so writing the substitution out literally means nothing here has to
-// know about specificity at all.
-//
-// Where the nested selector says "&", that is where the parent goes. Where it
-// says nothing, the parent goes in front with a descendant combinator, which is
-// the relaxed syntax every browser implements: "span { }" inside "#c { }" is
-// "#c span", not an error.
-func nestSelector(parent, nested []css.ComponentValue) []css.ComponentValue {
-	parentIs := []css.ComponentValue{
-		{Token: css.Token{Kind: css.Colon}},
-		{Token: css.Token{Kind: css.Function, Value: "is"}, Values: parent},
-	}
-	out, replaced := substituteParent(nested, parentIs)
-	if replaced {
-		return out
-	}
-	// No "&" anywhere, so the parent goes in front. The space is a real
-	// component value and not a formality: without it "#c" and "span" would
-	// join into one compound selector and the rule would match nothing.
-	joined := make([]css.ComponentValue, 0, len(parentIs)+1+len(nested))
-	joined = append(joined, parentIs...)
-	joined = append(joined, css.ComponentValue{Token: css.Token{Kind: css.Whitespace, Value: " "}})
-	return append(joined, nested...)
-}
-
-// substituteParent replaces every "&" with the parent, at any depth, and says
-// whether it found one.
-//
-// At any depth because "&" inside ":not(&)" is the same "&" — a rule written
-// that way is asking to exclude its own parent, and a substitution that only
-// looked at the top level would leave a bare "&" for the selector parser to
-// reject.
-func substituteParent(vals, parent []css.ComponentValue) ([]css.ComponentValue, bool) {
-	found := false
-	out := make([]css.ComponentValue, 0, len(vals))
-	for _, v := range vals {
-		switch {
-		case v.IsToken() && v.Token.Kind == css.Delim && v.Token.Value == "&":
-			found = true
-			out = append(out, parent...)
-		case len(v.Values) > 0:
-			inner, did := substituteParent(v.Values, parent)
-			found = found || did
-			v.Values = inner
-			out = append(out, v)
-		default:
-			out = append(out, v)
-		}
-	}
-	return out, found
-}
-
 // expand turns one declaration into the longhands it sets, dropping and
 // reporting anything the engine does not implement.
+//
+// Each longhand's value is written out as text here, once, because text is what
+// a computed style holds and the declaration is the same for every element it
+// matches. It was serialised again for every element a rule matched, which in a
+// document of a thousand paragraphs is a thousand identical strings per
+// declaration.
 func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
+	out := s.expandDecl(d, origin)
+	for i := range out {
+		out[i].text = serialize(out[i].value)
+	}
+	return out
+}
+
+// expandDecl is expand without the text.
+func (s *Styler) expandDecl(d css.Declaration, origin Origin) []preparedDecl {
 	name := strings.ToLower(d.Name)
 
 	// Custom properties, and every declaration whose value uses one.
@@ -972,18 +1140,25 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 		d.Value = unsetValue()
 	}
 
-	if why, drop := dropsForValue(name, d.Value); drop {
+	_, registered := properties[name]
+	if (registered || isLogicalLonghand(name)) && wideKeyword(d.Value) == "" {
 		// §4.2: the value is not one the property takes, so there is no
-		// declaration here at all. See valuegate.go for the six of these and
-		// for why they are not written out at this point any more.
+		// declaration here at all and the one before it stands — or it is one
+		// this engine does not evaluate, and the same is done for the same
+		// reason, since the declaration before it is the fallback its author
+		// wrote. See valuegate.go and grammar.go.
 		//
-		// Not marked unsupported. Nothing is missing from the engine; a
-		// stylesheet said something CSS forbids and CSS says what to do.
-		s.report(Finding{Offset: d.Offset, Message: why, Property: name})
-		return nil
+		// The first is not marked unsupported: nothing is missing from the
+		// engine, a stylesheet said something CSS forbids and CSS says what to
+		// do. The second is.
+		if j := judgeLonghand(name, d.Value); j.drop {
+			s.report(Finding{Offset: d.Offset, Message: j.why, Property: name,
+				Unsupported: j.unsupported})
+			return nil
+		}
 	}
 
-	if _, ok := properties[name]; ok {
+	if registered {
 		// A registered property that nothing reads is reported here rather than
 		// dropped. The value still cascades — inheritance and the computed
 		// value are right, and the day the property is implemented there is
@@ -1007,6 +1182,18 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 				Offset: d.Offset,
 				Message: "the property \"" + name + "\" is not implemented, so " +
 					reason,
+				Unsupported: true,
+				Property:    name,
+			})
+		}
+		// And a property that is read, declared with a value nothing acts on.
+		// See unimplementedValues.
+		if value, reason, missing := unimplementedValueReason(name, d.Value); missing &&
+			origin != OriginUserAgent && !s.suppressed(name+"\x00"+value) {
+			s.report(Finding{
+				Offset: d.Offset,
+				Message: "the value \"" + value + "\" of \"" + name +
+					"\" is not implemented, so " + reason,
 				Unsupported: true,
 				Property:    name,
 			})
@@ -1064,13 +1251,28 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 			// in which case this would be a second finding contradicting the
 			// first: "font: menu" is a system font, which is reported as
 			// unsupported above and is not a value the author got wrong.
+			//
+			// An expander tells its parts apart by the same terms the value
+			// grammar judges them with, so a part that is valid CSS this engine
+			// does not evaluate — "border: calc(1px + 1px) solid oklch(…)" —
+			// lands in its slot and is judged below, rather than failing here
+			// and being reported as the author's mistake (audit C59). What
+			// fails here is a value no slot takes.
 			if len(unsupported) == 0 {
 				s.report(Finding{
 					Offset:   d.Offset,
-					Message:  "\"" + name + ": " + serialize(d.Value) + "\" is not a value this engine can read",
+					Message:  invalidReason(name, d.Value),
 					Property: name,
 				})
 			}
+			return nil
+		}
+		// Every longhand the shorthand set is a declaration of that longhand,
+		// and is judged as one: "margin: 1px foo" is as invalid as
+		// "margin-right: foo", and §4.2 drops the shorthand whole.
+		if j := judgeExpansion(name, d.Value, parts); j.drop {
+			s.report(Finding{Offset: d.Offset, Message: j.why, Property: name,
+				Unsupported: j.unsupported})
 			return nil
 		}
 		out := make([]preparedDecl, 0, len(parts))
@@ -1139,64 +1341,6 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 	return nil
 }
 
-// nonNegative lists the longhands whose value CSS 2.1 says may not be negative.
-//
-// Each entry is a property whose definition carries the words "Negative values
-// are illegal" or "Negative lengths are not allowed": the sizes of §10.2, §10.4,
-// §10.5 and §10.7, the paddings of §8.4 and the border widths of §8.5.1. The
-// list is deliberately short and deliberately not "everything that looks like a
-// length" — a negative margin, a negative text-indent, a negative letter-spacing
-// and a negative word-spacing are all legal and all useful, and dropping one of
-// those would break a page that is doing nothing wrong.
-//
-// The border widths differ from the paddings in what dropping them produces, and
-// that is why they cannot be handled where they are read. A padding's initial
-// value is zero, so clamping a negative one to zero gives the right answer by
-// accident; a border width's initial value is "medium", which is three pixels of
-// ink. Layout clamped, so "border-top-width: -1pt" drew no border where CSS asks
-// for the initial one — fourteen tests in css/CSS2/borders, one per unit per
-// side, and every one of them invisible until inline boxes started painting
-// their borders, because the reference draws its two rules on a <span>.
-//
-// The shorthands are here too, and the table below says which and why. They were
-// not, and the gap was the shape §4.2 warns about: "padding: 8px; padding: -8px"
-// dropped the eight pixels and clamped the second declaration to zero, so a
-// declaration CSS says does not exist overrode one that does.
-// colourValued lists the properties whose whole value is a colour.
-//
-// A shorthand is not among them: "border" and "background" tell their parts
-// apart by type, so a part that is not a colour is simply not the colour part,
-// and the shorthand's own expander already refuses the declaration when nothing
-// else will take it.
-var colourValued = map[string]bool{
-	"color": true, "background-color": true,
-	"border-top-color": true, "border-right-color": true,
-	"border-bottom-color": true, "border-left-color": true,
-	"outline-color": true, "text-decoration-color": true,
-}
-
-// legalColour reports whether a value is one a colour property takes.
-//
-// The four CSS-wide keywords are not colours and are not this function's
-// business — the cascade acts on them itself, and dropping "color: inherit" as
-// an invalid colour would be a far worse bug than the one this fixes.
-// "currentcolor" is a colour the cascade cannot resolve until it knows the
-// element's own, and "invert" belongs to outline-color alone.
-func legalColour(name string, vals []css.ComponentValue) bool {
-	if parts := splitOnWhitespace(vals); len(parts) == 1 && len(parts[0]) == 1 {
-		if v := parts[0][0]; v.IsToken() && v.Token.Kind == css.Ident {
-			switch strings.ToLower(v.Token.Value) {
-			case kwInherit, kwInitial, kwUnset, kwRevert, kwRevertLayer, "currentcolor":
-				return true
-			case "invert":
-				return name == "outline-color"
-			}
-		}
-	}
-	_, ok := ParseColor(vals)
-	return ok
-}
-
 // legalBackgroundImage reports whether a value is one background-image takes: a
 // comma-separated list, each entry an <image> or "none".
 //
@@ -1254,11 +1398,17 @@ func legalBackgroundImage(vals []css.ComponentValue) bool {
 // on it is not a strange display, it is not a display at all.
 //
 // The two-value syntax is accepted loosely: any combination of an outside
-// keyword, an inside keyword and "list-item". Being permissive is the safe
-// direction here, because the cost of the two mistakes is not symmetric —
-// keeping a value nobody implements gives the element the fallback it has
-// always had, and dropping one that is really a display silently restores the
-// user agent sheet's answer instead.
+// keyword, an inside keyword and "list-item", in any order. Being permissive is
+// the safe direction here, because the cost of the two mistakes is not
+// symmetric — keeping a value gives the element what layout makes of it, which
+// layout/box.go's parseDisplay either lays out or reports, and dropping one
+// that is really a display silently restores the user agent sheet's answer
+// instead.
+//
+// The one combination refused is the one the grammar itself rules out rather
+// than leaves open: §2.3's <display-listitem> takes "flow" or "flow-root" as its
+// inside value and nothing else, so "list-item flex" is not a display value of
+// any kind — a browser drops it, and so does this.
 func legalDisplay(vals []css.ComponentValue) bool {
 	for _, v := range vals {
 		if v.IsFunction() || v.IsBlock() {
@@ -1306,7 +1456,21 @@ func legalDisplay(vals []css.ComponentValue) bool {
 			return false
 		}
 	}
+	if item == 1 && inside == 1 && !listItemInside(words) {
+		return false
+	}
 	return outside <= 1 && inside <= 1 && item <= 1
+}
+
+// listItemInside reports whether a display value's inside keyword is one a list
+// item may have: "flow" or "flow-root".
+func listItemInside(words []string) bool {
+	for _, w := range words {
+		if displayInside[w] {
+			return w == "flow" || w == "flow-root"
+		}
+	}
+	return true
 }
 
 var displayOutside = map[string]bool{"block": true, "inline": true, "run-in": true}
@@ -1335,6 +1499,29 @@ var singleDisplay = map[string]bool{
 	"-webkit-box": true,
 }
 
+// nonNegative lists the longhands whose value CSS 2.1 says may not be negative.
+//
+// Each entry is a property whose definition carries the words "Negative values
+// are illegal" or "Negative lengths are not allowed": the sizes of §10.2, §10.4,
+// §10.5 and §10.7, the paddings of §8.4 and the border widths of §8.5.1. The
+// list is deliberately short and deliberately not "everything that looks like a
+// length" — a negative margin, a negative text-indent, a negative letter-spacing
+// and a negative word-spacing are all legal and all useful, and dropping one of
+// those would break a page that is doing nothing wrong.
+//
+// The border widths differ from the paddings in what dropping them produces, and
+// that is why they cannot be handled where they are read. A padding's initial
+// value is zero, so clamping a negative one to zero gives the right answer by
+// accident; a border width's initial value is "medium", which is three pixels of
+// ink. Layout clamped, so "border-top-width: -1pt" drew no border where CSS asks
+// for the initial one — fourteen tests in css/CSS2/borders, one per unit per
+// side, and every one of them invisible until inline boxes started painting
+// their borders, because the reference draws its two rules on a <span>.
+//
+// The shorthands are here too, and the table below says which and why. They were
+// not, and the gap was the shape §4.2 warns about: "padding: 8px; padding: -8px"
+// dropped the eight pixels and clamped the second declaration to zero, so a
+// declaration CSS says does not exist overrode one that does.
 var nonNegative = map[string]bool{
 	"width": true, "height": true,
 	"min-width": true, "min-height": true,
@@ -1404,8 +1591,8 @@ var nonNegative = map[string]bool{
 // "padding-inline-start: -8px" was a declaration this file never looked at and
 // computed to "padding-left: -8px".
 func init() {
-	for logical, sides := range logicalSides {
-		if nonNegative[sides[0]] {
+	for logical := range logicalLonghands {
+		if proxy, _ := logicalProxy(logical); nonNegative[proxy] {
 			nonNegative[logical] = true
 		}
 	}
@@ -1609,17 +1796,39 @@ func (s *Styler) report(f Finding) {
 	case f.Sheet == "" && !f.InMarkup:
 		f.Sheet = s.sheet
 	}
-	switch {
-	case len(s.findings) > maxFindings:
-		return
-	case len(s.findings) == maxFindings:
-		s.findings = append(s.findings, Finding{
+	s.findings = appendBounded(s.findings, f)
+}
+
+// appendBounded adds a finding to a list held to maxFindings, with a note in
+// place of the first one past it.
+//
+// The note is what the findings past the bound become, so it has to carry the
+// one thing about them a caller acts on: whether any was Unsupported. A page
+// with CSS this engine does not implement is not a clean page, and a caller —
+// the WPT ratchet is one — tells the two apart by whether any finding is
+// Unsupported. The note used to be a plain styling problem, so two hundred
+// author errors followed by a transform (audit C58) came out as a page with
+// nothing unsupported on it: the errors are never de-duplicated, and old-web
+// hacks like "*zoom" and "_height" reach two hundred on their own. So the first
+// Unsupported finding the bound drops turns the note into one, with that
+// finding's property — which is what decides the rule a caller maps it to — and
+// its message, so what the page lacked is named rather than hinted at.
+func appendBounded(findings []Finding, f Finding) []Finding {
+	if len(findings) < maxFindings {
+		return append(findings, f)
+	}
+	if len(findings) == maxFindings {
+		findings = append(findings, Finding{
 			Offset:  -1,
 			Message: "further styling problems were not reported",
 		})
-	default:
-		s.findings = append(s.findings, f)
 	}
+	if note := &findings[maxFindings]; f.Unsupported && !note.Unsupported {
+		note.Unsupported, note.Property = true, f.Property
+		note.Message = "further styling problems were not reported, among them " +
+			"CSS this engine does not implement: " + f.Message
+	}
+	return findings
 }
 
 // reportUncomputedPseudo names a pseudo-element the selector parser accepts and
@@ -1691,7 +1900,7 @@ func (s *Styler) anyRuleTargets(rules *ruleSet, n *html.Node, name string) bool 
 			if sel.PseudoElement != name {
 				continue
 			}
-			if s.matcher.Match(sel, n) {
+			if s.matchRule(r, sel, n) {
 				found = true
 				return false
 			}
@@ -1707,18 +1916,31 @@ func (s *Styler) anyRuleTargets(rules *ruleSet, n *html.Node, name string) bool 
 // parent, which is what makes "p { color: red } p::before { content: '>' }" draw
 // a red marker without the author saying so twice.
 func (s *Styler) computeForPseudo(n *html.Node, rules *ruleSet,
-	owner ComputedStyle, name string) (ComputedStyle, bool) {
-	return s.computeFor(n, rules, map[*html.Node]ComputedStyle{n: owner}, name)
+	owner ComputedStyle, name string) (*styleBuilder, []propID, bool) {
+	return s.computeFor(n, rules, owner, name)
 }
 
 // computeFor resolves every property for one element, or for one of its
-// pseudo-elements when pseudo is not empty.
+// pseudo-elements when pseudo is not empty, whose parent's style is parent —
+// the zero style for the root, and the element's own for a pseudo-element.
+//
+// It hands back the style still under construction, because the caller has
+// two things left to write into it — the resolved font-size and the lengths
+// that depend on it — together with the properties a declaration decided,
+// which are the only ones those can have changed. See absolutiseLengths.
+//
+// It resolves only those properties. Every other one is what an undeclared
+// property is — the parent's value where it inherits and the initial value
+// where it does not — and the builder starts out holding exactly that, by
+// sharing the parent's inherited block and storing nothing else. It used to
+// resolve all hundred and forty-eight for every element, and serialise each
+// winner again for every element it won on.
 //
 // It also reports whether font-size came from a declaration rather than by
-// inheritance, which is the one thing a consumer cannot recover from the map it
-// returns. See Styled.OwnFontSize for why that matters.
+// inheritance, which is the one thing a consumer cannot recover from the style
+// it returns. See Styled.OwnFontSize for why that matters.
 func (s *Styler) computeFor(n *html.Node, rules *ruleSet,
-	done map[*html.Node]ComputedStyle, pseudo string) (ComputedStyle, bool) {
+	parent ComputedStyle, pseudo string) (*styleBuilder, []propID, bool) {
 
 	var cands []candidate
 	rules.forEach(n, func(r *preparedRule) bool {
@@ -1728,8 +1950,9 @@ func (s *Styler) computeFor(n *html.Node, rules *ruleSet,
 		}
 		for _, d := range r.decls {
 			cands = append(cands, candidate{
-				property: d.property, value: d.value, important: d.important,
-				origin: r.origin, layer: r.layer, spec: spec,
+				property: d.property, value: d.value, text: d.text,
+				important: d.important,
+				origin:    r.origin, layer: r.layer, spec: spec,
 				order: d.order, offset: d.offset,
 			})
 		}
@@ -1745,6 +1968,7 @@ func (s *Styler) computeFor(n *html.Node, rules *ruleSet,
 		for property, value := range presentationalHints(n) {
 			cands = append(cands, candidate{
 				property: property, value: value,
+				text:   s.interner().value(serialize(value)),
 				origin: OriginAuthor, order: hintOrder, offset: n.Offset,
 			})
 		}
@@ -1760,15 +1984,6 @@ func (s *Styler) computeFor(n *html.Node, rules *ruleSet,
 	var inline map[string]preparedDecl
 	if pseudo == "" {
 		inline = s.inlineDeclarations(n)
-	}
-
-	var parent ComputedStyle
-	if pseudo != "" {
-		// A pseudo-element inherits from its own element, which the caller put
-		// in the map under that element's own key.
-		parent = done[n]
-	} else if p := parentElement(n); p != nil {
-		parent = done[p]
 	}
 
 	winners := map[string]candidate{}
@@ -1794,50 +2009,49 @@ func (s *Styler) computeFor(n *html.Node, rules *ruleSet,
 	// margin-inline-start: 2px" is 2px in English and swapping the lines makes
 	// it 1px. Renaming first is what lets the ordinary cascade decide that.
 	//
-	// Direction is resolved with the same three lines the main loop uses below,
-	// because it is the same question — a winner, an inline style over it, and
-	// inheritance under both.
-	if renameLogical(cands, inline, s.isRTL(winners, inline, parent)) {
+	// Writing mode and direction are resolved by the same function the main
+	// loop below resolves every property with, because it is the same
+	// question — a winner, an inline style against it, and inheritance under
+	// both — asked early.
+	writingMode := s.early("writing-mode", winners, inline, parent)
+	rtl := strings.EqualFold(s.early("direction", winners, inline, parent), "rtl")
+	if renameLogical(cands, inline, writingMode, rtl) {
 		pick()
 	}
 
-	out := make(ComputedStyle, len(properties))
+	// The properties something declared, in the registry's order so that
+	// whatever resolve reports is reported in the same order on every run. A
+	// winner under a name that is not registered — a logical longhand this
+	// element did not rename — is not a property and was never stored.
+	declared := make([]propID, 0, len(winners)+len(inline))
+	for name := range winners {
+		if id, ok := registry.ids[name]; ok {
+			declared = append(declared, id)
+		}
+	}
+	for name := range inline {
+		if id, ok := registry.ids[name]; ok {
+			declared = append(declared, id)
+		}
+	}
+	sort.Slice(declared, func(i, j int) bool { return declared[i] < declared[j] })
+	declared = compactIDs(declared)
+
+	b := childStyleBuilder(parent)
 	ownFontSize := false
-	for name, prop := range properties {
+	for _, id := range declared {
+		name := registry.names[id]
+		prop := registry.slots[id].property()
 		value, have := "", false
 
-		if c, ok := winners[name]; ok {
-			value, have = serialize(c.value), true
-		}
-		if d, ok := inline[name]; ok {
-			// A style attribute is an author declaration whose specificity is
-			// above every selector — Cascade 4 §3.1 — so it is decided by the
-			// same two terms every other declaration is, and only the second of
-			// them is settled in advance.
-			//
-			// Importance is the first term and inverts the origins, so an
-			// important inline declaration beats an important author rule and
-			// still loses to an important user-agent one; a normal inline
-			// declaration loses to any important rule. The specificity is the
-			// second and the inline always wins it, which is why equal ranks
-			// go to the inline.
-			//
-			// It was read as "inline wins unless the author rule is important",
-			// which said the opposite about the one case authors write it for:
-			// "style=\"color: red !important\"" lost to a stylesheet's own
-			// important rule.
-			c, beaten := winners[name]
-			if !beaten || CascadeRank(OriginAuthor, d.important) >= cascadeRank(c) {
-				value, have = serialize(d.value), true
-			}
-		}
+		value, have = s.winning(name, winners, inline)
 
-		out[name] = s.resolve(name, prop, value, have, parent)
+		b.set(id, s.resolve(name, prop, value, have, parent))
 		if name == "font-size" {
 			ownFontSize = have && declaresItsOwnValue(value, prop)
 		}
 	}
-	return out, ownFontSize
+	return b, declared, ownFontSize
 }
 
 // declaresItsOwnValue reports whether a winning declaration says something about
@@ -1861,14 +2075,11 @@ func declaresItsOwnValue(value string, prop property) bool {
 // value, applying the CSS-wide keywords and inheritance.
 func (s *Styler) resolve(name string, prop property, value string, have bool, parent ComputedStyle) string {
 	inheritFrom := func() string {
-		if parent == nil {
-			// The root has no parent to inherit from, so it takes the initial
-			// value — which is what "the initial value" means for the root.
-			return prop.initial
-		}
-		if v, ok := parent[name]; ok {
+		if v, ok := parent.Lookup(name); ok {
 			return v
 		}
+		// The root has no parent to inherit from, so it takes the initial
+		// value — which is what "the initial value" means for the root.
 		return prop.initial
 	}
 
@@ -1902,19 +2113,24 @@ func (s *Styler) resolve(name string, prop property, value string, have bool, pa
 			// user-agent rule set the property, so it is reported rather than
 			// quietly substituted.
 			//
-			// "revert-layer" is the same keyword here. It rolls back to the
-			// previous cascade layer and this engine has none, so the
-			// specification's own answer for that case is "revert" — which is
-			// this one. It was not recognised at all, so a declaration using it
-			// was read as a value of the property and dropped for not being
-			// one: "color: revert-layer" left the colour the *earlier*
-			// declaration had set, which is the opposite of what it asks for.
+			// "revert-layer" is read the same way. It rolls back to the
+			// cascade layers below the declaration's own, and to the previous
+			// origin only where there are none, so it differs from "unset"
+			// wherever a lower layer set the property as well. It was not
+			// recognised at all, so a declaration using it was read as a value
+			// of the property and dropped for not being one: "color:
+			// revert-layer" left the colour the *earlier* declaration had set,
+			// which is the opposite of what it asks for.
 			said := strings.ToLower(value)
+			lower := "a lower-priority stylesheet"
+			if said == kwRevertLayer {
+				lower = "a lower cascade layer or a lower-priority stylesheet"
+			}
 			if !s.suppressed(said) {
 				s.report(Finding{
 					Offset: -1,
 					Message: "\"" + said + "\" is not implemented and was read as \"unset\", " +
-						"which differs wherever a lower-priority stylesheet set the property",
+						"which differs wherever " + lower + " set the property",
 					Unsupported: true,
 					Property:    name,
 				})
@@ -1933,18 +2149,8 @@ func (s *Styler) resolve(name string, prop property, value string, have bool, pa
 	return prop.initial
 }
 
-// matchSpecificity reports whether a rule applies to an element, and with what
-// specificity.
-//
-// The two answers come together because they are one walk: asking "does it
-// match" and then "how specific" would match every selector of every rule twice,
-// for every element in the document.
-//
-// The specificity is that of the most specific selector that *matched*, not the
-// most specific in the list. "a, #b {…}" applies to an <a> with the specificity
-// of "a"; taking "#b" would let the rule beat declarations it should lose to.
-// ruleSet is the prepared rules, with an index from an element's name to the
-// rules that could select it.
+// ruleSet is the prepared rules, with an index from what an element carries —
+// its id, its classes and its name — to the rules that could select it.
 //
 // Every element used to be matched against every rule. The subject compound of
 // a selector is tested for its type before anything else, so most of those
@@ -1956,31 +2162,81 @@ func (s *Styler) resolve(name string, prop property, value string, have bool, pa
 // part that matters. The first attempt asked *per rule* instead — a set on each
 // rule, tested in the loop — and was ten per cent slower than no filter at all,
 // because hashing the element's name two hundred times costs more than two
-// hundred failed byte comparisons. One lookup, then two short slices.
+// hundred failed byte comparisons. A few lookups, then short slices.
+//
+// It filed rules under element names only, so every rule whose subject was a
+// class or an id — which is most of what an author writes — was matched against
+// every element of the document. An element carries one id and a handful of
+// classes, and a rule that needs one it does not carry cannot select it, so
+// those rules are filed under the id or class and reached only through it.
 type ruleSet struct {
 	rules []preparedRule
-	// byName holds, per element name, the rules every one of whose selectors
-	// names a type, filed under each type they name. A rule naming three types
-	// is in three of these lists and is still reached once, because an element
-	// has one name.
-	byName map[string][]int32
+	// byID, byClass and byName hold, per id, class and element name, the rules
+	// filed under it — see keysOf for which. A rule is filed once per selector,
+	// so a rule of three selectors may be in three lists, and an element that
+	// reaches it through two of them is still given it once: see candidates.
+	byID    map[string][]int32
+	byClass map[string][]int32
+	byName  map[string][]int32
 	// any holds the rules that can select anything, which is every rule with a
-	// selector that names no type. They are walked for every element.
+	// selector that needs none of the three. They are walked for every element.
 	any []int32
+
+	// seen, stamp and the last pair are candidates' own state: which rules the
+	// element in hand has already been given, and the answer for the element
+	// asked about last. An element is asked about once for its own style and
+	// again for each pseudo-element, one after the other.
+	seen     []uint32
+	stamp    uint32
+	lastNode *html.Node
+	last     []int32
 }
 
+// ruleKey is one thing an element must carry for a selector to select it.
+type ruleKey struct {
+	kind ruleKeyKind
+	name string
+}
+
+type ruleKeyKind uint8
+
+const (
+	keyID ruleKeyKind = iota
+	keyClass
+	keyName
+)
+
 func newRuleSet(rules []preparedRule) *ruleSet {
-	rs := &ruleSet{rules: rules, byName: make(map[string][]int32, 64)}
+	rs := &ruleSet{rules: rules, byID: map[string][]int32{},
+		byClass: map[string][]int32{}, byName: make(map[string][]int32, 64),
+		seen: make([]uint32, len(rules))}
 	for i := range rules {
-		if len(rules[i].subjects) == 0 {
+		rules[i].index = int32(i)
+		if len(rules[i].keys) == 0 {
 			rs.any = append(rs.any, int32(i))
 			continue
 		}
-		for _, name := range rules[i].subjects {
-			rs.byName[name] = append(rs.byName[name], int32(i))
+		for _, k := range rules[i].keys {
+			switch k.kind {
+			case keyID:
+				rs.byID[k.name] = appendOnce(rs.byID[k.name], int32(i))
+			case keyClass:
+				rs.byClass[k.name] = appendOnce(rs.byClass[k.name], int32(i))
+			default:
+				rs.byName[k.name] = appendOnce(rs.byName[k.name], int32(i))
+			}
 		}
 	}
 	return rs
+}
+
+// appendOnce files a rule under a key it may already be filed under, by
+// another of its selectors: "p, p.x" is two selectors and one rule.
+func appendOnce(list []int32, i int32) []int32 {
+	if n := len(list); n > 0 && list[n-1] == i {
+		return list
+	}
+	return append(list, i)
 }
 
 // forEach calls fn for every rule that could select the element, in no
@@ -1990,55 +2246,101 @@ func newRuleSet(rules []preparedRule) *ruleSet {
 // its own order number, and beats decides between two candidates from that
 // rather than from the sequence they were collected in.
 func (rs *ruleSet) forEach(n *html.Node, fn func(r *preparedRule) bool) {
-	name := asciiLowerName(n.Name)
-	if name == "" {
-		// A name this cannot fold, which is a name no HTML element has. Every
-		// rule is considered rather than guessed about.
-		for i := range rs.rules {
-			if !fn(&rs.rules[i]) {
-				return
-			}
-		}
-		return
-	}
-	for _, i := range rs.any {
-		if !fn(&rs.rules[i]) {
-			return
-		}
-	}
-	for _, i := range rs.byName[name] {
+	for _, i := range rs.candidates(n) {
 		if !fn(&rs.rules[i]) {
 			return
 		}
 	}
 }
 
-// subjectsOf collects the element names a selector list can select, or nothing
-// when it can select anything.
+// candidates is the rules forEach walks for an element, each once.
+func (rs *ruleSet) candidates(n *html.Node) []int32 {
+	if n == rs.lastNode && n != nil {
+		return rs.last
+	}
+	rs.stamp++
+	if rs.stamp == 0 {
+		// Wrapped, after four billion elements: start the marks again rather
+		// than let an old one read as this element's.
+		clear(rs.seen)
+		rs.stamp = 1
+	}
+	out := make([]int32, 0, len(rs.last))
+	add := func(list []int32) {
+		for _, i := range list {
+			if rs.seen[i] != rs.stamp {
+				rs.seen[i] = rs.stamp
+				out = append(out, i)
+			}
+		}
+	}
+	name := asciiLowerName(n.Name)
+	if name == "" {
+		// A name this cannot fold, which is a name no HTML element has. Every
+		// rule is considered rather than guessed about.
+		for i := range rs.rules {
+			out = append(out, int32(i))
+		}
+	} else {
+		add(rs.any)
+		add(rs.byName[name])
+		if len(rs.byID) > 0 {
+			if id, ok := n.Attr("id"); ok {
+				add(rs.byID[id])
+			}
+		}
+		if len(rs.byClass) > 0 {
+			if class, ok := n.Attr("class"); ok {
+				for _, c := range asciiFields(class) {
+					add(rs.byClass[c])
+				}
+			}
+		}
+	}
+	rs.lastNode, rs.last = n, out
+	return out
+}
+
+// keysOf chooses, for each selector of a list, one thing an element must carry
+// to be selected by it, or answers nothing when some selector needs none.
 //
-// A selector whose subject names no type can select anything, and so can one
-// whose type this cannot fold. The matcher compares a type with
+// The subject compound is what an element must satisfy, and of what it names
+// the rarest is the best key: an id before a class before a name. Any of them
+// is correct — the element has to carry all of them — and the choice is only
+// about how short the list it lands in is. The id and class are compared
+// exactly, as the matcher compares them (see hasClass).
+//
+// A selector whose subject names none of the three can select anything, and so
+// can one whose type this cannot fold. The matcher compares a type with
 // strings.EqualFold, which is Unicode's folding rather than ASCII's, and the two
 // differ on characters no element name has — but "differ only on characters
 // nobody uses" is not an argument for an index that decides whether a rule is
 // looked at. A type with a byte above ASCII is filed under nothing and so is
 // walked for every element, exactly as before.
-func subjectsOf(sels []css.Selector) []string {
-	names := make([]string, 0, len(sels))
+func keysOf(sels []css.Selector) []ruleKey {
+	keys := make([]ruleKey, 0, len(sels))
 	for _, sel := range sels {
 		if len(sel.Compounds) == 0 {
 			return nil
 		}
-		name := asciiLowerName(sel.Compounds[len(sel.Compounds)-1].Type)
-		if name == "" {
-			return nil
+		c := sel.Compounds[len(sel.Compounds)-1]
+		switch {
+		case len(c.IDs) > 0:
+			keys = append(keys, ruleKey{keyID, c.IDs[0]})
+		case len(c.Classes) > 0:
+			keys = append(keys, ruleKey{keyClass, c.Classes[0]})
+		default:
+			name := asciiLowerName(c.Type)
+			if name == "" {
+				return nil
+			}
+			keys = append(keys, ruleKey{keyName, name})
 		}
-		names = append(names, name)
 	}
-	if len(names) == 0 {
+	if len(keys) == 0 {
 		return nil
 	}
-	return names
+	return keys
 }
 
 // asciiLowerName lower-cases an element or type name, or answers empty for one
@@ -2069,6 +2371,16 @@ func asciiLowerName(s string) string {
 	return string(lower)
 }
 
+// matchSpecificityFor reports whether a rule applies to an element, and with what
+// specificity.
+//
+// The two answers come together because they are one walk: asking "does it
+// match" and then "how specific" would match every selector of every rule twice,
+// for every element in the document.
+//
+// The specificity is that of the most specific selector that *matched*, not the
+// most specific in the list. "a, #b {…}" applies to an <a> with the specificity
+// of "a"; taking "#b" would let the rule beat declarations it should lose to.
 func (s *Styler) matchSpecificityFor(r *preparedRule, n *html.Node, pseudo string) (css.Specificity, bool) {
 	var best css.Specificity
 	found := false
@@ -2079,7 +2391,7 @@ func (s *Styler) matchSpecificityFor(r *preparedRule, n *html.Node, pseudo strin
 		if sel.PseudoElement != pseudo {
 			continue
 		}
-		if !s.matcher.Match(sel, n) {
+		if !s.matchRule(r, sel, n) {
 			continue
 		}
 		if !found || best.Less(sel.Specificity) {
@@ -2087,6 +2399,150 @@ func (s *Styler) matchSpecificityFor(r *preparedRule, n *html.Node, pseudo strin
 		}
 	}
 	return best, found
+}
+
+// The work one rule may spend on matching over a whole document: a base, and so
+// much more for every try — every time one of its selectors is matched against
+// an element.
+//
+// Per try because that is the work a rule is *meant* to cost: an
+// ordinary rule is tried on many elements, and a hundred thousand of them should
+// not switch off a rule that is cheap on each. The base is what lets a rule
+// afford an expensive match or two on a short document — six at the per-match
+// bound.
+//
+// Real selectors settle in tens of steps (see maxMatchSteps), and a descendant
+// search is at most one walk of the ancestors per compound (see matchResult) —
+// and the html package nests no deeper than 256 — so 256 a try on average is a
+// long way from anything a stylesheet does on purpose. What reaches it is a rule
+// whose matches run to the per-match bound, which is ten thousand steps: the
+// audit's one kilobyte of such rules against thirty of markup spent 33 seconds
+// on them.
+const (
+	ruleBaseSteps   = 1 << 16
+	ruleStepsPerTry = 256
+)
+
+// matchBudget is the bound on matching work for a document, kept per rule.
+//
+// The bound per match (maxMatchSteps) stops one match running away and bounds
+// nothing else: it is ten thousand steps for every pair of rule and element, and
+// the pairs are the product of the stylesheet and the document. So each rule
+// also has an allowance for the document, ruleBaseSteps and ruleStepsPerTry for
+// every element it is tried against, and a rule that has spent more is switched
+// off for the rest of the document and reported. The per-match bound becomes
+// the early exit it always was, and the average is what is bounded: a rule may
+// be expensive on a few elements and not on all of them.
+//
+// Per rule, and not one allowance for everything, because the bound has to land
+// on what caused it. A single flag for the document is what the budget used to
+// be, and one deep selector on one paragraph then turned matching off for every
+// later rule and element, so the page was styled by whatever happened to come
+// first. Scoped to the rule, a pathological selector costs the document that
+// selector and nothing else. The total is the sum of the allowances: the rules
+// times the base, and ruleStepsPerTry for every pair of rule and element that
+// is tried at all — which the rule index keeps to the pairs that could match.
+type matchBudget struct {
+	// styled counts the elements styled so far, for saying where a rule was
+	// switched off.
+	styled int
+	rules  []ruleWork
+}
+
+// ruleWork is one rule's account.
+type ruleWork struct {
+	spent int
+	// tries counts the times one of the rule's selectors was matched against an
+	// element, which is what its allowance grows with.
+	tries int
+	// trips counts matches of this rule that ran out of the per-match budget.
+	trips int
+	// off says the rule has spent its allowance, and offAt how many elements
+	// had been styled when it did.
+	off   bool
+	offAt int
+}
+
+// allowance is what a rule tried against so many elements may spend.
+func allowance(tries int) int { return ruleBaseSteps + ruleStepsPerTry*tries }
+
+// matchRule matches one selector of a rule against an element, and charges
+// what it cost to the rule.
+//
+// A rule that has spent its allowance is not matched at all. Its "no" is not
+// an answer about the element, which is why switching it off is reported: see
+// reportMatchBudget.
+func (s *Styler) matchRule(r *preparedRule, sel css.Selector, n *html.Node) bool {
+	b := s.budget
+	if b == nil || int(r.index) >= len(b.rules) {
+		return s.matcher.Match(sel, n)
+	}
+	w := &b.rules[r.index]
+	if w.off {
+		return false
+	}
+	got := s.matcher.Match(sel, n)
+	steps, trips := s.matcher.takeWork()
+	w.spent += steps
+	w.tries++
+	w.trips += trips
+	if w.spent > allowance(w.tries) {
+		w.off, w.offAt = true, b.styled
+	}
+	return got
+}
+
+// reportMatchBudget says which rules the matching budget cut short, one finding
+// per rule, at the rule.
+//
+// Two ways: a rule that ran out of the per-match budget on some elements may be
+// missing from them, and a rule switched off is missing from every element after
+// the point it was. Both say what was not done, and both are about the rule an
+// author can go and look at rather than about the document as a whole.
+func (s *Styler) reportMatchBudget(rules *ruleSet) bool {
+	b := s.budget
+	if b == nil {
+		return false
+	}
+	cut := false
+	for i := range b.rules {
+		w := &b.rules[i]
+		if !w.off && w.trips == 0 {
+			continue
+		}
+		cut = true
+		r := &rules.rules[i]
+		f := Finding{Offset: r.offset, Sheet: r.sheet}
+		if w.off {
+			f.Message = "matching this rule's selector cost more than this engine allows " +
+				"(" + strconv.Itoa(w.spent) + " steps on " + strconv.Itoa(w.tries) +
+				" elements, against " + strconv.Itoa(allowance(w.tries)) + "), so it was not " +
+				"tried against any element after the " + ordinal(w.offAt) +
+				"; elements after that which it selects are not styled by it"
+		} else {
+			f.Message = "matching this rule's selector against an element ran past the " +
+				"bound on the work one match may take, " + strconv.Itoa(w.trips) +
+				" times; it may be missing from elements it selects"
+		}
+		s.report(f)
+	}
+	return cut
+}
+
+// ordinal is n with its English suffix: 1st, 2nd, 3rd, 11th.
+func ordinal(n int) string {
+	suffix := "th"
+	if n%100 < 11 || n%100 > 13 {
+		switch n % 10 {
+		case 1:
+			suffix = "st"
+		case 2:
+			suffix = "nd"
+		case 3:
+			suffix = "rd"
+		}
+	}
+	return strconv.Itoa(n) + suffix
 }
 
 // beats reports whether a wins over b, by CSS Cascade Level 4 §6.
@@ -2182,13 +2638,24 @@ func (s *Styler) inlineDeclarations(n *html.Node) map[string]preparedDecl {
 			// A later declaration in the same attribute wins, and importance
 			// wins over its absence — the same rules as any other block, with
 			// no specificity to separate them.
-			if prev, ok := out[e.property]; ok && prev.important && !e.important {
+			if prev, ok := out[e.property]; ok && !inlineBeats(e, prev) {
 				continue
 			}
 			out[e.property] = e
 		}
 	}
 	return out
+}
+
+// inlineBeats reports whether one declaration in a style attribute wins over
+// another of the same property there: importance first, and then the later of
+// the two. It is the rule inlineDeclarations keeps and the one renameLogical
+// needs when a logical and a physical spelling land on one property.
+func inlineBeats(d, was preparedDecl) bool {
+	if d.important != was.important {
+		return d.important
+	}
+	return d.order > was.order
 }
 
 // vendorPrefixed reports whether a property name is one engine's rather than
@@ -2232,6 +2699,11 @@ func unsetValue() []css.ComponentValue {
 	return []css.ComponentValue{{Token: css.Token{Kind: css.Ident, Value: kwUnset}}}
 }
 
+// UsesVar is usesVar for a reader outside the cascade — @page's — that meets
+// the same construct and has to give it the same answer: correct CSS this
+// engine does not substitute, not a mistake.
+func UsesVar(vals []css.ComponentValue) bool { return usesVar(vals) }
+
 // usesVar reports whether a value refers to a custom property, at any depth. A
 // var() inside a calc() inside a shorthand is still a value this engine cannot
 // know.
@@ -2247,25 +2719,58 @@ func usesVar(vals []css.ComponentValue) bool {
 	return false
 }
 
-// isRTL is whether this element's inline axis runs right to left, which is what
-// turns a logical property into a physical one.
+// winning is the declared value of a property on an element: the cascade's
+// winner among the stylesheet candidates, or the inline style's declaration
+// where it beats that winner. have is false where neither said anything.
 //
-// It resolves "direction" exactly as computeFor's main loop resolves any
-// property — the cascade's winner, an inline style above it unless the winner is
-// important, and inheritance under both — because it is that same question asked
-// early.
-func (s *Styler) isRTL(winners map[string]candidate,
-	inline map[string]preparedDecl, parent ComputedStyle) bool {
+// It is one function because two places ask it, and they drifted. computeFor's
+// main loop decides every property with it, and the rename of logical
+// properties has to know the element's writing mode and direction before that
+// loop runs. The early question was answered by a copy of the old rule — the
+// inline style wins unless the winner is important — after the loop had been
+// corrected to the cascade's, so "div { direction: ltr !important }" with
+// style="direction: rtl !important; margin-inline-start: 10px" computed
+// direction rtl and put the margin on the left (audit C108).
+func (s *Styler) winning(name string, winners map[string]candidate,
+	inline map[string]preparedDecl) (string, bool) {
 
 	value, have := "", false
-	if c, ok := winners["direction"]; ok {
-		value, have = serialize(c.value), true
+	if c, ok := winners[name]; ok {
+		value, have = c.text, true
 	}
-	if d, ok := inline["direction"]; ok {
-		if c, ok := winners["direction"]; !ok || !c.important {
-			value, have = serialize(d.value), true
+	if d, ok := inline[name]; ok {
+		// A style attribute is an author declaration whose specificity is
+		// above every selector — Cascade 4 §3.1 — so it is decided by the same
+		// two terms every other declaration is, and only the second of them is
+		// settled in advance.
+		//
+		// Importance is the first term and inverts the origins, so an important
+		// inline declaration beats an important author rule and still loses to
+		// an important user-agent one; a normal inline declaration loses to any
+		// important rule. The specificity is the second and the inline always
+		// wins it, which is why equal ranks go to the inline.
+		//
+		// It was read as "inline wins unless the author rule is important",
+		// which said the opposite about the one case authors write it for:
+		// "style=\"color: red !important\"" lost to a stylesheet's own important
+		// rule.
+		c, beaten := winners[name]
+		if !beaten || CascadeRank(OriginAuthor, d.important) >= cascadeRank(c) {
+			// Interned, because an attribute is read per element and its text
+			// made afresh for each one.
+			value, have = s.interner().value(d.text), true
 		}
 	}
-	got := s.resolve("direction", properties["direction"], value, have, parent)
-	return strings.EqualFold(strings.TrimSpace(got), "rtl")
+	return value, have
+}
+
+// early is a property's computed value asked before the main loop computes it:
+// winning, then inheritance and the CSS-wide keywords — the same two steps the
+// loop takes. It is how the rename of logical properties learns the element's
+// writing mode and direction.
+func (s *Styler) early(name string, winners map[string]candidate,
+	inline map[string]preparedDecl, parent ComputedStyle) string {
+
+	value, have := s.winning(name, winners, inline)
+	return strings.TrimSpace(s.resolve(name, properties[name], value, have, parent))
 }

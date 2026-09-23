@@ -64,9 +64,10 @@ func (f *Face) Subset() ([]byte, error) {
 	return data, err
 }
 
-// subset is Subset, also returning the glyph indices it kept. Embed needs both,
-// and they must be the same set: /CIDSet describes exactly the glyphs the
-// program carries, and computing that twice is how the two come to disagree.
+// subset is Subset, also returning the glyph indices it kept. SubsetGlyphs
+// hands out both, and they must be the same set: a format that describes the
+// glyphs the program carries (PDF's /CIDSet) is describing exactly these, and
+// computing that twice is how the two come to disagree.
 func (f *Face) subset() ([]byte, []int, error) {
 	if f.std != nil {
 		return nil, nil, errors.New("fonts: a standard font has no program to subset")
@@ -246,38 +247,79 @@ func stripInstructions(g []byte) []byte {
 //
 // The closure matters. An accented letter is usually a composite referring to a
 // base letter and a mark, and dropping either leaves a glyph that renders as
-// nothing. It is iterated to a fixed point because a component may itself be
-// composite.
+// nothing. It follows components of components, because a component may itself
+// be composite.
+//
+// It is a worklist: each glyph kept is read once, and what it names is queued if
+// it was not kept already. It was a fixed point instead, re-reading every kept
+// glyph and allocating a fresh set of the whole font per round, and each round
+// adds only one level of components — a chain of composites, each built on the
+// one before, took as many rounds as it had links: n rounds of n glyphs, and n
+// sets of n, for one used glyph at the top.
 func (f *Face) keepSet(offsets []uint32, glyf []byte, n int) []bool {
 	keep := make([]bool, n)
-	keep[0] = true // .notdef is always present
-	for gid := range f.used {
-		if gid >= 0 && gid < n {
+	var work []int
+	add := func(gid int) {
+		if gid >= 0 && gid < n && !keep[gid] {
 			keep[gid] = true
+			work = append(work, gid)
 		}
 	}
-	for {
-		before := countTrue(keep)
-		components := make([]bool, n)
-		for gid := 0; gid < n; gid++ {
-			if !keep[gid] {
-				continue
-			}
-			start, end := offsets[gid], offsets[gid+1]
-			if start >= end || int(end) > len(glyf) {
-				continue
-			}
-			font.MarkComposite(glyf[start:end], n, components)
+	add(0) // .notdef is always present
+	for gid := range f.used {
+		add(gid)
+	}
+	var named []int
+	for len(work) > 0 {
+		gid := work[len(work)-1]
+		work = work[:len(work)-1]
+		start, end := offsets[gid], offsets[gid+1]
+		if start >= end || int(end) > len(glyf) {
+			continue
 		}
-		for gid, isComponent := range components {
-			if isComponent {
-				keep[gid] = true
-			}
-		}
-		if countTrue(keep) == before {
-			return keep
+		named = componentGlyphs(glyf[start:end], n, named[:0])
+		for _, c := range named {
+			add(c)
 		}
 	}
+	return keep
+}
+
+// componentGlyphs lists the glyph indices a glyph's bytes name as components.
+//
+// It is font.MarkComposite's walk, step for step, returning the indices rather
+// than marking them in a set the size of the font — which is what a worklist
+// needs, since clearing or scanning that set per glyph would cost the font per
+// glyph again. TestComponentGlyphsWalksAsMarkCompositeDoes holds the two to the
+// same answer.
+func componentGlyphs(g []byte, numGlyphs int, out []int) []int {
+	if len(g) < 2 || int16(font.Be16(g, 0)) != -1 {
+		return out
+	}
+	for o := 10; o+4 <= len(g); {
+		flags := font.Be16(g, o)
+		if c := font.Be16(g, o+2); c >= 0 && c < numGlyphs {
+			out = append(out, c)
+		}
+		o += 4
+		if flags&0x0001 != 0 { // ARG_1_AND_2_ARE_WORDS
+			o += 4
+		} else {
+			o += 2
+		}
+		switch {
+		case flags&0x0008 != 0: // WE_HAVE_A_SCALE
+			o += 2
+		case flags&0x0040 != 0: // WE_HAVE_AN_X_AND_Y_SCALE
+			o += 4
+		case flags&0x0080 != 0: // WE_HAVE_A_TWO_BY_TWO
+			o += 8
+		}
+		if flags&0x0020 == 0 { // no MORE_COMPONENTS
+			break
+		}
+	}
+	return out
 }
 
 func countTrue(b []bool) int {

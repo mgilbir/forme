@@ -205,6 +205,14 @@ func reconstructGlyf(out, src []byte, glyf *woff2Table, f *woff2Font) ([]byte, u
 		return nil, 0, errShortGlyf
 	}
 
+	// Every glyph has its contour count in the first stream, two bytes each, so
+	// a stream shorter than that is a font cut short — and saying so now keeps
+	// the glyph count, which is the file's claim, from sizing the two tables
+	// below before a glyph has been read.
+	if len(nContourStream.b) < 2*int(f.numGlyphs) {
+		return nil, 0, errShortGlyf
+	}
+
 	start := len(out)
 	locas := make([]uint32, int(f.numGlyphs)+1)
 	f.xMins = make([]int16, f.numGlyphs)
@@ -297,31 +305,34 @@ func rebuildComposite(composite, glyphs, bboxes, instructions *stream, haveBbox 
 	if err != nil {
 		return nil, err
 	}
-	instrLen := 0
+	// Every piece is taken from its stream before the glyph is made, so the
+	// glyph is sized from bytes that are there: the instruction length is a
+	// number the file states, and allocating it first made room for 64 KB of
+	// instructions a stream with none in it then failed to supply.
+	var ins []byte
 	if haveInstructions {
-		var ok bool
-		if instrLen, ok = glyphs.short255(); !ok {
+		instrLen, ok := glyphs.short255()
+		if !ok {
+			return nil, errShortGlyf
+		}
+		if ins, ok = instructions.take(instrLen); !ok {
 			return nil, errShortGlyf
 		}
 	}
-	g := make([]byte, 0, 12+size+instrLen)
-	g = binary.BigEndian.AppendUint16(g, 0xffff)
 	box, ok := bboxes.take(8)
 	if !ok {
 		return nil, errShortGlyf
 	}
-	g = append(g, box...)
 	body, ok := composite.take(size)
 	if !ok {
 		return nil, errShortGlyf
 	}
+	g := make([]byte, 0, 12+size+len(ins))
+	g = binary.BigEndian.AppendUint16(g, 0xffff)
+	g = append(g, box...)
 	g = append(g, body...)
 	if haveInstructions {
-		g = binary.BigEndian.AppendUint16(g, uint16(instrLen))
-		ins, ok := instructions.take(instrLen)
-		if !ok {
-			return nil, errShortGlyf
-		}
+		g = binary.BigEndian.AppendUint16(g, uint16(len(ins)))
 		g = append(g, ins...)
 	}
 	return g, nil
@@ -365,6 +376,12 @@ func sizeOfComposite(s *stream) (size int, haveInstructions bool, err error) {
 func rebuildSimple(nContours uint16, counts, flagBits, glyphs, bboxes, instructions *stream,
 	haveBbox, overlap bool, scratch []point) ([]byte, []point, error) {
 
+	// Each contour's point count is at least a byte of its stream, so a glyph
+	// claiming more contours than the stream has bytes left is cut short, and
+	// is refused before its count sizes anything.
+	if int(nContours) > len(counts.rest()) {
+		return nil, scratch, errShortGlyf
+	}
 	ends := make([]int, nContours)
 	total := 0
 	for j := range ends {
@@ -406,8 +423,14 @@ func rebuildSimple(nContours uint16, counts, flagBits, glyphs, bboxes, instructi
 	if !ok {
 		return nil, points, errShortGlyf
 	}
+	// Taken before the glyph is made, as in rebuildComposite, so that the
+	// stated length sizes nothing the stream does not hold.
+	ins, ok := instructions.take(instrLen)
+	if !ok {
+		return nil, points, errShortGlyf
+	}
 
-	g := make([]byte, 0, 12+2*int(nContours)+5*total+instrLen)
+	g := make([]byte, 0, 12+2*int(nContours)+5*total+len(ins))
 	g = binary.BigEndian.AppendUint16(g, nContours)
 	if haveBbox {
 		box, ok := bboxes.take(8)
@@ -421,11 +444,7 @@ func rebuildSimple(nContours uint16, counts, flagBits, glyphs, bboxes, instructi
 	for _, e := range ends {
 		g = binary.BigEndian.AppendUint16(g, uint16(e))
 	}
-	g = binary.BigEndian.AppendUint16(g, uint16(instrLen))
-	ins, ok := instructions.take(instrLen)
-	if !ok {
-		return nil, points, errShortGlyf
-	}
+	g = binary.BigEndian.AppendUint16(g, uint16(len(ins)))
 	g = append(g, ins...)
 	out, err := appendPoints(g, points, overlap)
 	if err != nil {

@@ -14,7 +14,11 @@
 // font units, which is what HarfBuzz reports; this package works in thousandths
 // of an em, so the conversion happens here rather than in the comparison.
 //
-//	go run ./cmd/shapetext <font.ttf> < lines.txt
+//	go run ./cmd/shapetext <font.ttf> [language] < lines.txt
+//
+// The language, a BCP 47 tag, is what shape.Features.Language takes and what
+// HarfBuzz's buffer language is set to on the other side: it chooses which of
+// the font's language systems the lines are set in.
 package main
 
 import (
@@ -27,9 +31,13 @@ import (
 )
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: shapetext <font.ttf> < lines.txt")
+	if len(os.Args) != 2 && len(os.Args) != 3 {
+		fmt.Fprintln(os.Stderr, "usage: shapetext <font.ttf> [language] < lines.txt")
 		os.Exit(2)
+	}
+	var lang string
+	if len(os.Args) == 3 {
+		lang = os.Args[2]
 	}
 	data, err := os.ReadFile(os.Args[1])
 	if err != nil {
@@ -52,7 +60,7 @@ func main() {
 		if line == "" {
 			continue
 		}
-		glyphs, _ := face.ShapeGlyphs(line)
+		glyphs, _ := face.ShapeGlyphsInContext(line, "", "", shape.Features{Language: lang})
 		var parts []string
 		for _, g := range glyphs {
 			adv := units(g.XAdvance, upm)

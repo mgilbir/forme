@@ -14,7 +14,7 @@ import (
 // Uyghur, Phags-pa, Manichaean, Psalter Pahlavi, Chorasmian, Yezidi. The
 // universal model has nothing to say about which of the four shapes a letter
 // takes — that is the Arabic model's question — and the four features that
-// answer it sat in useFinalFeatures, applied to every glyph of the run.
+// answer it were applied to every glyph of the run.
 //
 // Applied to every glyph they are wrong for every glyph. A font states them as
 // three single-substitution lookups and the lookup list is walked in index

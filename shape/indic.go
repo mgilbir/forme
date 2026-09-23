@@ -346,11 +346,11 @@ const maxIndicSyllable = 64
 // script table they came from. A font that declares nothing for the script falls
 // back to the default table, which is not a second-generation declaration and so
 // means the older rules — the same reading every other shaper takes.
-func (f *Face) indicOldSpec(cfg *indicConfig, script uint16) bool {
+func (f *Face) indicOldSpec(cfg *indicConfig, script uint16, langs []string) bool {
 	if !cfg.hasOldSpec {
 		return false
 	}
-	tag := f.chosenScriptTag(script)
+	tag := f.chosenScriptTag(script, langs)
 	return len(tag) != 4 || tag[3] != '2'
 }
 
@@ -671,11 +671,21 @@ func indicIsAttached(c indicCat) bool {
 }
 
 // indicInfo is what the reordering knows about one glyph: what character it
-// came from, where it goes, and which features are for it.
+// came from and where it goes. Which features are for it is on the glyph
+// itself — see glyphMask.
 type indicInfo struct {
-	cat  indicCat
-	pos  indicPos
-	mask uint8
+	cat indicCat
+	pos indicPos
+	// syllable numbers the syllable the glyph belongs to, so that the last
+	// stage, which runs over the whole run once the syllables are reassembled,
+	// can still hold the features that are for one syllable to it. See
+	// applyStageBySyllable.
+	syllable int32
+	// wordStart says the character before this one in the text ends a word,
+	// which is what the word-initial form 'init' is for. It is recorded while
+	// the glyphs still correspond to the characters, because a lookup applied
+	// before the syllables are cut may change how many glyphs there are.
+	wordStart bool
 	// ignorable says the character this glyph came from is one nothing is drawn
 	// for. It reaches the shaper — a syllable model has to see it to be broken
 	// by it — and must not reach the page, so it is remembered here and dropped
@@ -693,23 +703,14 @@ type indicInfo struct {
 	ligated bool
 }
 
-// The features that apply to part of a syllable rather than to all of it. A
-// font declares each of them for a range the syllable's structure decides — the
-// half-forms feature is for the consonants before the base and nothing else —
-// and applying one where it was not meant substitutes glyphs the font never
-// intended to appear together.
-const (
-	maskRphf uint8 = 1 << iota
-	maskPref
-	maskBlwf
-	maskAbvf
-	maskHalf
-	maskPstf
-)
-
 // indicBasicFeatures are applied to one syllable at a time, in this order,
-// before the syllable is finally reordered. A zero mask means the feature is
-// for the whole syllable.
+// before the syllable is finally reordered, each a stage of its own. A zero mask
+// means the feature is for the whole syllable; the others are for part of it.
+// A font declares each of those for a range the syllable's structure decides —
+// the half-forms feature is for the consonants before the base and nothing else
+// — and applying one where it was not meant substitutes glyphs the font never
+// intended to appear together. The initial reordering marks which glyph each is
+// for, on the glyph: see glyphMask.
 //
 // The order is the OpenType Indic2 order and is not negotiable: 'nukt'
 // composes a letter with its dot so the rest see one glyph, 'rphf' makes the
@@ -718,7 +719,7 @@ const (
 // earlier ones made.
 var indicBasicFeatures = []struct {
 	tag  string
-	mask uint8
+	mask glyphMask
 }{
 	{"nukt", 0},
 	{"akhn", 0},
@@ -731,29 +732,6 @@ var indicBasicFeatures = []struct {
 	{"pstf", maskPstf},
 	{"vatu", 0},
 	{"cjct", 0},
-}
-
-// indicRunFeatures are applied to the whole run once every syllable is in
-// drawing order, in this order.
-//
-// The first five are the presentation features: what turns the reordered pieces
-// into the shapes a reader sees — the pre-, above-, below- and post-base
-// substitutions, and the form a consonant takes when its virama is drawn rather
-// than swallowed. They are written about the joiners, so their lookups see them.
-//
-// The last three are the script-independent substitutions an Indic run still
-// takes. They are not written about joiners and step over them, as they do over
-// marks. 'liga' is deliberately not among them, and 'ccmp' is not either — it is
-// applied per syllable, before the reordering, because everything after it is
-// written against what it produces.
-var indicRunFeatures = []struct {
-	tag    string
-	manual bool
-}{
-	{"rlig", false},
-	{"clig", false},
-	{"calt", false},
-	{"rclt", false},
 }
 
 // indicPresentationFeatures turn the reordered pieces of one syllable into the
@@ -772,13 +750,15 @@ var indicRunFeatures = []struct {
 // rules are narrow enough never produces one, so most text comes out the same
 // either way.
 //
-// 'init' belongs to this group and is applied just before it, where the
-// condition it needs — a pre-base matra opening a word — is known.
+// They are one stage with 'init' — for a pre-base matra that opens a word — and
+// with the ligatures and contextual alternates every script gets, which are not
+// held to a syllable: the lot is applied in lookup order, as HarfBuzz applies it
+// and as a font that interleaves the two was written against. See collectIndic.
 var indicPresentationFeatures = []string{"pres", "abvs", "blws", "psts", "haln"}
 
 // shapeIndic is the whole Indic pass: it replaces both the joining pass and the
 // default substitutions for a run it handles.
-func (sh shaper) shapeIndic(buf []Glyph, runes, before []rune, plan *indicPlan) []Glyph {
+func (sh shaper) shapeIndic(buf []Glyph, runes, before []rune, plan *indicPlan, p *plan) []Glyph {
 	// Before anything is classified: a vowel followed by a sign that spells a
 	// different vowel is shown against a dotted circle. It has to happen on the
 	// characters, because it is about which characters were written, and it
@@ -787,10 +767,20 @@ func (sh shaper) shapeIndic(buf []Glyph, runes, before []rune, plan *indicPlan) 
 	buf, runes = sh.splitMatras(buf, runes)
 
 	info := make([]indicInfo, len(runes))
-	cats := make([]indicCat, len(runes))
 	for i, r := range runes {
 		info[i].cat, info[i].pos = indicProperties(r)
 		info[i].ignorable = hiddenAfterShaping(r)
+		info[i].wordStart = indicWordStart(before, runes, i)
+	}
+	hooks := indicHooks(&info)
+
+	// The stages before the syllables are cut: 'rvrn', and what the direction
+	// selects. They are the whole run's.
+	for s := 0; s < p.syllables; s++ {
+		buf, _, _ = sh.applyLookups(buf, p.stage(s), 0, len(buf), 0, len(buf), hooks)
+	}
+	cats := make([]indicCat, len(info))
+	for i := range info {
 		cats[i] = info[i].cat
 	}
 
@@ -809,47 +799,73 @@ func (sh shaper) shapeIndic(buf []Glyph, runes, before []rune, plan *indicPlan) 
 	outInfo := make([]indicInfo, 0, len(info))
 	dotted, hasDotted := sh.f.GlyphID(dottedCircle)
 	prev := 0
+	var serial int32
+	// What lies between the syllables — the non-Indic stretches and the
+	// symbols — passes through untouched, a glyph to a syllable of its own, so
+	// that no feature held to a syllable reaches across one.
+	passThrough := func(lo, hi int) {
+		for i := lo; i < hi; i++ {
+			serial++
+			rec := info[i]
+			rec.syllable = serial
+			out = append(out, buf[i])
+			outInfo = append(outInfo, rec)
+		}
+	}
 	for _, syl := range indicSyllables(cats) {
 		if syl.kind == sylNonIndic || syl.kind == sylSymbol {
 			continue
 		}
-		// Whatever lies between the last syllable shaped and this one — the
-		// non-Indic stretches and the symbols — passes through untouched.
-		out = append(out, buf[prev:syl.start]...)
-		outInfo = append(outInfo, info[prev:syl.start]...)
+		passThrough(prev, syl.start)
 		prev = syl.end
 
 		syllable := append([]Glyph(nil), buf[syl.start:syl.end]...)
 		record := append([]indicInfo(nil), info[syl.start:syl.end]...)
+		placeholder := -1
 		if syl.kind == sylBroken && hasDotted {
-			syllable, record = sh.insertDottedCircle(syllable, record, 0, len(syllable), dotted)
+			placeholder = dotted
 		}
-		syllable, _ = sh.shapeIndicSyllable(syllable, &record, runes, before, plan,
-			syl.start, 0, len(syllable))
+		syllable = sh.shapeIndicSyllable(syllable, &record, plan, p, info[syl.start].wordStart, placeholder)
+		serial++
+		for i := range record {
+			record[i].syllable = serial
+		}
 		out = append(out, syllable...)
 		outInfo = append(outInfo, record...)
 	}
-	buf = append(out, buf[prev:]...)
-	info = append(outInfo, info[prev:]...)
+	passThrough(prev, len(buf))
+	buf, info = out, outInfo
 
-	// The features that see the whole run rather than one syllable. They go
-	// through applyIndicFeature rather than applyContextual so that the
-	// per-glyph record stays in step with the buffer — which is what says where
-	// the joiners are, and so what lets these lookups step over them.
-	for _, f := range indicRunFeatures {
-		lookups := sh.l.featureLookups[f.tag]
-		if len(lookups) == 0 {
-			continue
-		}
-		buf, _ = sh.applyIndicFeature(buf, &info, lookups, 0, len(buf), 0, len(buf), f.manual)
+	// The last stage, over the whole run: the presentation features held to
+	// their syllable, and the ligatures and contextual alternates that are not.
+	// See indicPresentationFeatures.
+	for s := p.after; s < len(p.stages); s++ {
+		buf = sh.applyStageBySyllable(buf, p.stage(s), hooks, func() [][2]int {
+			return indicSyllableWindows(info)
+		})
 	}
 
 	// The joiners have now done everything they are for: the forms they forced
 	// or forbade are made, and nothing below is written about them. What is left
 	// is a character with no shape, which must not reach the page.
-	return dropGlyphs(buf, func(i int) bool {
+	return dropUnsubstituted(buf, func(i int) bool {
 		return i < len(info) && (indicIsJoiner(info[i].cat) || info[i].ignorable)
 	})
+}
+
+// indicSyllableWindows is where each syllable of a run lies, as the records say:
+// a window per stretch of glyphs carrying one syllable number.
+func indicSyllableWindows(info []indicInfo) [][2]int {
+	var out [][2]int
+	for i := 0; i < len(info); {
+		j := i + 1
+		for j < len(info) && info[j].syllable == info[i].syllable {
+			j++
+		}
+		out = append(out, [2]int{i, j})
+		i = j
+	}
+	return out
 }
 
 // markInvalidVowels shows a dotted circle inside any sequence that spells a
@@ -889,8 +905,12 @@ func (sh shaper) markInvalidVowels(buf []Glyph, runes []rune) ([]Glyph, []rune) 
 			outBuf = append(outBuf, buf[i])
 			outRunes = append(outRunes, runes[i])
 		}
+		// The circle is a character of the run from here on, and HarfBuzz
+		// puts it into the text before glyph classes are inferred: what the
+		// character implies is its class.
 		outBuf = append(outBuf, Glyph{
 			GID: gid, Cluster: buf[i].Cluster, XAdvance: sh.f.advanceGID(gid),
+			class: classOfRune(dottedCircle),
 		})
 		outRunes = append(outRunes, dottedCircle)
 	}
@@ -987,117 +1007,75 @@ func (sh shaper) insertDottedCircle(buf []Glyph, info []indicInfo, start, end, g
 }
 
 // shapeIndicSyllable puts one syllable into drawing order and applies the
-// features written for its parts, returning the buffer and how much its length
-// changed.
+// stages written for its parts, returning the syllable.
 //
-// textStart is where the syllable begins in the original characters, which the
-// word-initial rule below needs and the buffer can no longer say.
-func (sh shaper) shapeIndicSyllable(buf []Glyph, info *[]indicInfo, runes, before []rune,
-	plan *indicPlan, textStart, start, end int) ([]Glyph, int) {
+// wordStart says the character before the syllable in the text ends a word,
+// which the word-initial rule below needs and the syllable can no longer say.
+// placeholder, when it is not -1, is the dotted circle glyph a broken cluster
+// is shown against.
+func (sh shaper) shapeIndicSyllable(buf []Glyph, info *[]indicInfo, plan *indicPlan, p *plan,
+	wordStart bool, placeholder int) []Glyph {
 
-	total := 0
-	grow := func(d int) { total += d; end += d }
+	hooks := indicHooks(info)
+	apply := func(stage []planLookup) {
+		buf, _, _ = sh.applyLookups(buf, stage, 0, len(buf), 0, len(buf), hooks)
+	}
 
-	// 'locl' and then 'ccmp' first, in that order: the one corrects letterforms
-	// for the language, the other composes and decomposes, and everything after
-	// them is written against what they produce. A script whose letters differ
-	// from the shapes Unicode's chart shows — Odia is the case — states nearly
-	// all of that difference in 'locl', so a run that skipped it would be set in
+	// 'locl' and 'ccmp' first, one stage: the one corrects letterforms for the
+	// language, the other composes and decomposes, and everything after them is
+	// written against what they produce. A script whose letters differ from the
+	// shapes Unicode's chart shows — Odia is the case — states nearly all of
+	// that difference in 'locl', so a run that skipped it would be set in
 	// letters no reader of the language writes.
 	//
-	// They are applied per syllable, like the features below, so that neither can
+	// They are applied per syllable, like the stages below, so that neither can
 	// join one syllable to the next.
-	for _, tag := range []string{"locl", "ccmp"} {
-		lookups := sh.l.featureLookups[tag]
-		if len(lookups) == 0 {
-			continue
-		}
-		var d int
-		buf, d = sh.applyIndicFeature(buf, info, lookups, start, end, start, end, false)
-		grow(d)
+	for s := p.syllables; s < p.basic; s++ {
+		apply(p.stage(s))
+	}
+
+	// The placeholder for a syllable that is not one goes in after them, where
+	// HarfBuzz puts it: those two are written about the characters the text
+	// has, not about a glyph the shaper added, and a font whose 'ccmp' composed
+	// a dotted circle with a vowel sign would otherwise compose one the text
+	// never had. The universal engine's goes in at the same point.
+	if placeholder >= 0 {
+		buf, *info = sh.insertDottedCircle(buf, *info, 0, len(buf), placeholder)
 	}
 
 	// Which consonants the font draws below or after the base, which is what
 	// the base search needs and only the font can say. It has to come after
 	// 'ccmp', because a consonant that rule composed is the one to ask about.
-	plan.refine(buf, *info, start, end)
+	plan.refine(buf, *info, 0, len(buf))
 
 	// The base index it reports is not kept: the font may ligate the base away
 	// while the features below run, so the final reordering finds it again from
 	// the positions rather than from a remembered number.
-	sh.indicInitialReorder(buf, *info, plan, start, end)
+	sh.indicInitialReorder(buf, *info, plan, 0, len(buf))
 
-	for _, f := range indicBasicFeatures {
-		lookups := sh.l.featureLookups[f.tag]
-		if len(lookups) == 0 {
-			continue
-		}
-		if f.mask == 0 {
-			var d int
-			buf, d = sh.applyIndicFeature(buf, info, lookups, start, end, start, end, true)
-			grow(d)
-			continue
-		}
-		// A masked feature sees the stretch of the syllable its mask marks and
-		// nothing else — not even as context. The stretches are contiguous by
-		// construction: the reph at the front, the consonants before the base,
-		// the ones after it.
-		for lo := start; lo < end; {
-			if (*info)[lo].mask&f.mask == 0 {
-				lo++
-				continue
-			}
-			hi := lo + 1
-			for hi < end && (*info)[hi].mask&f.mask != 0 {
-				hi++
-			}
-			var d int
-			buf, d = sh.applyIndicFeature(buf, info, lookups, lo, hi, lo, hi, true)
-			grow(d)
-			lo = hi + d
-		}
+	// The basic features, a stage each. A masked one is for the glyphs the
+	// reordering marked and starts nowhere else; its context is the syllable.
+	for s := p.basic; s < p.after; s++ {
+		apply(p.stage(s))
 	}
 
-	sh.indicFinalReorder(buf, *info, plan, start, end)
+	sh.indicFinalReorder(buf, *info, plan, 0, len(buf))
 
 	// 'init' is for a pre-base matra that opens a word — the i-sign at the
 	// start of a word is drawn differently from the same sign mid-word. What
 	// counts as a word start is what precedes the syllable in the *text*: a
-	// letter or a mark continues a word, a space or a stop does not.
-	if lookups := sh.l.featureLookups["init"]; len(lookups) > 0 &&
-		start < end && (*info)[start].pos == posPreM && indicWordStart(before, runes, textStart) {
-		var d int
-		buf, d = sh.applyIndicFeature(buf, info, lookups, start, start+1, start, end, true)
-		grow(d)
-	}
-
-	// The presentation features, which see this syllable and nothing else. See
-	// indicPresentationFeatures.
-	for _, tag := range indicPresentationFeatures {
-		lookups := sh.l.featureLookups[tag]
-		if len(lookups) == 0 {
-			continue
-		}
-		var d int
-		buf, d = sh.applyIndicFeature(buf, info, lookups, start, end, start, end, true)
-		grow(d)
+	// letter or a mark continues a word, a space or a stop does not. The
+	// feature itself is applied with the presentation features; this marks the
+	// glyph it is for.
+	if len(buf) > 0 && (*info)[0].pos == posPreM && wordStart {
+		buf[0].mask |= maskInit
 	}
 
 	// One cluster for the syllable: its glyphs are no longer in the order its
 	// characters are, so the syllable is the smallest piece that can be mapped
 	// back to the text at all.
-	if start < end {
-		cluster := buf[start].Cluster
-		for i := start; i < end; i++ {
-			if buf[i].Cluster < cluster {
-				cluster = buf[i].Cluster
-			}
-		}
-		for i := start; i < end; i++ {
-			buf[i].Cluster = cluster
-		}
-	}
-	return buf, total
+	oneCluster(buf, 0, len(buf))
+	return buf
 }
 
 // indicWordStart reports whether the character before a syllable ends a word.
@@ -1120,92 +1098,62 @@ func indicWordStart(before, runes []rune, at int) bool {
 	return endsWordForIndic(runes[at-1])
 }
 
-// endsWordForIndic reports whether a character closes a word: a letter, a mark
-// or a formatting character continues one, and anything else — a space, a stop,
-// a digit — does not.
+// endsWordForIndic reports whether a character closes a word: a space, a stop,
+// a digit, a symbol or a control does, and a letter, a mark or a formatting
+// character does not.
+//
+// Nor does a character that says nothing about itself: a private-use one, a
+// surrogate, one not yet assigned. That is HarfBuzz's test, which is a range of
+// general categories — Cf to Mn in its numbering — that takes those three in
+// with the letters and marks, and so a word ends at exactly the categories
+// outside it. A private-use character is most often an icon font's glyph set
+// among the text, and it is not a space.
 func endsWordForIndic(r rune) bool {
-	return !unicode.In(r, unicode.L, unicode.M, unicode.Cf)
+	return unicode.In(r, unicode.N, unicode.P, unicode.S, unicode.Z, unicode.Cc)
 }
 
-// applyIndicFeature runs a feature's lookups over part of a syllable.
+// indicHooks keep the Indic record in step with a buffer a stage is reshaping.
+// The Khmer and Myanmar models keep the same record and use them too.
 //
-// from..to is where a lookup may start; floor..ceil is everything it may see,
-// backtrack and lookahead included. A feature for the whole syllable sees the
-// syllable; a masked one sees only the stretch its mask marks, which is what
-// keeps a ligature declared for the half forms from swallowing the base that
-// happens to follow them.
-//
-// manual says the feature wants the join controls visible to its input rather
-// than stepped over — true of every feature the Indic model names, and false of
-// 'ccmp' and of the general substitutions, which are not written about joiners
-// at all. See ignorable.go.
-//
-// The per-glyph record is kept in step as lookups change the buffer's length:
-// a ligature that swallows three glyphs into one has to swallow their three
-// records too, or every position after it would describe the wrong glyph. It is
-// also what says where the joiners are, since a face commonly gives them the
-// same glyph as the space.
-func (sh shaper) applyIndicFeature(buf []Glyph, info *[]indicInfo, lookups []int, from, to, floor, ceil int, manual bool) ([]Glyph, int) {
-	total, step := 0, 0
-	sh.onResize = func(at, d int) {
-		*info = respliceIndicInfo(*info, at, d)
-		// Which glyphs are ligatures, which the pre-base-reordering Ra turns
-		// on. A lookup that shortened the run ligated what it consumed; one
-		// that lengthened it took a glyph apart, and the pieces are not
-		// ligatures whatever the glyph they came from was.
-		switch {
-		case d < 0 && at < len(*info):
-			(*info)[at].ligated = true
-		case d > 0:
-			for k := 0; k <= d && at+k < len(*info); k++ {
-				(*info)[at+k].ligated = false
-			}
-		}
-		step += d
-	}
-	sh.onDelete = func(at int) {
-		if at >= 0 && at < len(*info) {
-			*info = append((*info)[:at], (*info)[at+1:]...)
-		}
-		step--
-	}
-	sh.joinerAt = func(at int) joinerKind {
-		if at < 0 || at >= len(*info) {
-			return notJoiner
-		}
-		switch (*info)[at].cat {
-		case catZWJ:
-			return joinerZWJ
-		case catZWNJ:
-			return joinerZWNJ
-		}
-		return notJoiner
-	}
-	sh.manualJoiners = manual
-	sh.floor = floor
-	for _, idx := range lookups {
-		rb := newRunBuf(buf, from)
-		sh.run = rb
-		for rb.w < to && len(rb.pending()) > 0 {
-			step = 0
-			sh.limit = ceil
-			consumed, _ := sh.applyGSUBAt(idx, rb.pending(), 0, 0)
-			to += step
-			ceil += step
-			total += step
-			if consumed <= 0 {
-				// A lookup that consumed nothing and shortened the run took a
-				// glyph out; what followed it is now here and unexamined.
-				if step >= 0 {
-					rb.settle(1)
+// A ligature that swallows three glyphs into one has to swallow their three
+// records too, or every position after it would describe the wrong glyph. The
+// record is also what says where the joiners are, since a face commonly gives
+// them the same glyph as the space.
+func indicHooks(info *[]indicInfo) recordHooks {
+	return recordHooks{
+		resize: func(at, d int) {
+			*info = respliceIndicInfo(*info, at, d)
+			// Which glyphs are ligatures, which the pre-base-reordering Ra and
+			// the reph turn on. A lookup that shortened the run ligated what it
+			// consumed; one that lengthened it took a glyph apart, and the pieces
+			// are not ligatures whatever the glyph they came from was.
+			switch {
+			case d < 0 && at < len(*info):
+				(*info)[at].ligated = true
+			case d > 0:
+				for k := 0; k <= d && at+k < len(*info); k++ {
+					(*info)[at+k].ligated = false
 				}
-				continue
 			}
-			rb.settle(consumed)
-		}
-		buf = rb.flatten()
+		},
+		remove: func(at int) {
+			if at >= 0 && at < len(*info) {
+				*info = append((*info)[:at], (*info)[at+1:]...)
+			}
+		},
+		joiner: func(at int) joinerKind {
+			if at < 0 || at >= len(*info) {
+				return notJoiner
+			}
+			switch (*info)[at].cat {
+			case catZWJ:
+				return joinerZWJ
+			case catZWNJ:
+				return joinerZWNJ
+			}
+			return notJoiner
+		},
 	}
-	return buf, total
 }
 
 // respliceIndicInfo does to the per-glyph record what a lookup did to the
@@ -1232,44 +1180,6 @@ func respliceIndicInfo(info []indicInfo, at, delta int) []indicInfo {
 		out = append(out, info[at])
 	}
 	return append(out, info[at+1:]...)
-}
-
-// wouldSubstitute reports whether a feature's lookups would change a given
-// sequence of glyphs.
-//
-// It is how a shaper asks the font a question the characters cannot answer.
-// Whether a syllable's opening Ra becomes a reph is not a property of the text
-// — it is whether *this font* has a reph for *this* Ra — and a shaper that
-// assumed it does would take the Ra out of the base search of a font that would
-// then draw it as an ordinary letter in the wrong place.
-//
-// The question asked is "would anything happen here", not "would exactly this
-// sequence be consumed": a lookup that shortens the run has ligated it, and one
-// that changes a glyph without shortening it has covered it, and either answers
-// yes. A lookup that changed only the virama in the probe would answer yes
-// wrongly, and no font's below-base or reph rules are written that way.
-func (sh shaper) wouldSubstitute(lookups []int, gids []int) bool {
-	if len(gids) == 0 {
-		return false
-	}
-	sh.floor, sh.limit, sh.onResize, sh.joinerAt = 0, 0, nil, nil
-	for _, idx := range lookups {
-		probe := make([]Glyph, len(gids))
-		for i, g := range gids {
-			probe[i] = Glyph{GID: g}
-		}
-		sh.run = newRunBuf(probe, 0)
-		_, out := sh.applyGSUBAt(idx, sh.run.pending(), 0, 0)
-		if len(out) != len(probe) {
-			return true
-		}
-		for i, g := range gids {
-			if out[i].GID != g {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // indicPlan is what one run of one script needs that neither the text nor the
@@ -1314,7 +1224,10 @@ func (sh shaper) indicPlan(cfg *indicConfig, oldSpec bool) *indicPlan {
 // refine replaces the place of every consonant in a stretch of the buffer with
 // what the font says about it.
 func (p *indicPlan) refine(buf []Glyph, info []indicInfo, start, end int) {
-	if !p.haveVirama || len(p.blwf)+len(p.pstf)+len(p.pref) == 0 {
+	// 'vatu' is among the features asked — see of — so a font stating its
+	// below-base forms under it alone has something to ask, and returning here
+	// for want of the other three left its consonants all bases.
+	if !p.haveVirama || len(p.blwf)+len(p.pstf)+len(p.pref)+len(p.vatu) == 0 {
 		return
 	}
 	for i := start; i < end && i < len(info); i++ {
@@ -1334,8 +1247,8 @@ func (p *indicPlan) of(gid int) indicPos {
 	// carry the older lookups under the newer tag that every shaper matches
 	// either.
 	covers := func(lookups []int) bool {
-		return p.sh.wouldSubstitute(lookups, []int{p.virama, gid}) ||
-			p.sh.wouldSubstitute(lookups, []int{gid, p.virama})
+		return p.sh.wouldSubstitute(lookups, []int{p.virama, gid}, !p.oldSpec) ||
+			p.sh.wouldSubstitute(lookups, []int{gid, p.virama}, !p.oldSpec)
 	}
 	// 'vatu' is asked alongside 'blwf' because it is the other way a font says
 	// "this consonant is drawn under the base": the vattu is a below-base Ra, and
@@ -1408,8 +1321,8 @@ func (sh shaper) indicInitialReorder(buf []Glyph, info []indicInfo, plan *indicP
 		if plan.cfg.rephMode == rephExplicit {
 			probe = append(probe, buf[start+2].GID)
 		}
-		if sh.wouldSubstitute(rphf, probe[:2]) ||
-			(plan.cfg.rephMode == rephExplicit && sh.wouldSubstitute(rphf, probe)) {
+		if sh.wouldSubstitute(rphf, probe[:2], !plan.oldSpec) ||
+			(plan.cfg.rephMode == rephExplicit && sh.wouldSubstitute(rphf, probe, !plan.oldSpec)) {
 			limit += 2
 			for limit < end && indicIsJoiner(info[limit].cat) {
 				limit++
@@ -1609,13 +1522,13 @@ func (sh shaper) indicInitialReorder(buf []Glyph, info []indicInfo, plan *indicP
 		preBase |= maskBlwf
 	}
 	for i := start; i < end && info[i].pos == posRaToBecomeReph; i++ {
-		info[i].mask |= maskRphf
+		buf[i].mask |= maskRphf
 	}
 	for i := start; i < base; i++ {
-		info[i].mask |= preBase
+		buf[i].mask |= preBase
 	}
 	for i := base + 1; i < end; i++ {
-		info[i].mask |= maskBlwf | maskAbvf | maskPstf
+		buf[i].mask |= maskBlwf | maskAbvf | maskPstf
 	}
 
 	// The pre-base-reordering Ra: a consonant standing *after* the base that is
@@ -1630,9 +1543,9 @@ func (sh shaper) indicInitialReorder(buf []Glyph, info []indicInfo, plan *indicP
 	// the feature has run, since a font may decline to make the form.
 	if len(plan.pref) > 0 && base+2 < end {
 		for i := base + 1; i+1 < end; i++ {
-			if sh.wouldSubstitute(plan.pref, []int{buf[i].GID, buf[i+1].GID}) {
-				info[i].mask |= maskPref
-				info[i+1].mask |= maskPref
+			if sh.wouldSubstitute(plan.pref, []int{buf[i].GID, buf[i+1].GID}, !plan.oldSpec) {
+				buf[i].mask |= maskPref
+				buf[i+1].mask |= maskPref
 				break
 			}
 		}
@@ -1649,8 +1562,8 @@ func (sh shaper) indicInitialReorder(buf []Glyph, info []indicInfo, plan *indicP
 		for i := start; i+1 < base; i++ {
 			if info[i].cat == catRa && info[i+1].cat == catHalant &&
 				(i+2 == base || info[i+2].cat != catZWJ) {
-				info[i].mask |= maskBlwf
-				info[i+1].mask |= maskBlwf
+				buf[i].mask |= maskBlwf
+				buf[i+1].mask |= maskBlwf
 			}
 		}
 	}
@@ -1663,7 +1576,7 @@ func (sh shaper) indicInitialReorder(buf []Glyph, info []indicInfo, plan *indicP
 		}
 		for j := i; ; {
 			j--
-			info[j].mask &^= maskHalf
+			buf[j].mask &^= maskHalf
 			if j <= start || indicIsBaseCandidate(info[j].cat) {
 				break
 			}
@@ -1702,7 +1615,7 @@ func (sh shaper) indicFinalReorder(buf []Glyph, info []indicInfo, plan *indicPla
 			// since a virama is never a base.
 			if tryPref && base+1 < end {
 				for i := base + 1; i < end; i++ {
-					if info[i].mask&maskPref == 0 {
+					if buf[i].mask&maskPref == 0 {
 						continue
 					}
 					if !info[i].ligated {
@@ -1839,7 +1752,7 @@ func (sh shaper) indicFinalReorder(buf []Glyph, info []indicInfo, plan *indicPla
 	// writes.
 	if tryPref && base+1 < end {
 		for i := base + 1; i < end; i++ {
-			if info[i].mask&maskPref == 0 {
+			if buf[i].mask&maskPref == 0 {
 				continue
 			}
 			if info[i].ligated {

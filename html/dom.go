@@ -12,8 +12,7 @@
 // caller wrote, and an unclosed tag there is a bug the caller wants to hear
 // about — not something to be silently repaired into a tree that renders
 // almost right. So this reads a declared subset and *refuses* what falls
-// outside it, which is the decision recorded in §2.3 of the rendering
-// proposal. The cost is real and worth restating: markup a browser accepts,
+// outside it. The cost is real and worth restating: markup a browser accepts,
 // this will reject.
 //
 // Refusing is not the same as failing. Every refusal names what was wrong and
@@ -77,7 +76,9 @@ type Node struct {
 	// kinds.
 	Name string
 
-	// Attrs is in source order, with duplicates already refused.
+	// Attrs is in source order, with duplicates already refused, and holds at
+	// most maxAttributes: the rest are dropped and reported, because every
+	// lookup is a walk of this list.
 	Attrs []Attribute
 
 	// Text is the character data of a TextNode, with references resolved.
@@ -103,8 +104,8 @@ type Node struct {
 
 	// Offset is the byte offset in the source at which the node begins, so a
 	// finding from layout can point back at the markup that caused it. That is
-	// what §6 of the rendering proposal needs to say *where* a guardrail fired,
-	// and it cannot be recovered later.
+	// what a finding needs to say *where* a guardrail fired, and it cannot be
+	// recovered later.
 	Offset int
 
 	// Foreign is the unparsed source of a subtree that is not HTML, and is empty
@@ -185,15 +186,24 @@ func (n *Node) AttrExact(name string) (string, bool) {
 // document ignores it for exactly that reason; honouring it there would be a
 // language this engine invents. XMLDocument is asked only once, and only when
 // an xml:lang was found with no lang above it.
+//
+// **An empty value is an answer.** HTML §3.2.6.2: lang="" says the language is
+// unknown, and it stops the walk as surely as a tag does — it is how an author
+// marks a name or a code sample inside Turkish prose as not Turkish. It was
+// skipped as though absent, so the parent's language reached text its author
+// had marked as being in no language at all, and the Turkish casing, the
+// hyphenation patterns and :lang(tr) all applied to it. It is returned as the
+// empty string with ok true: every reader here maps the empty tag to its own
+// "no language" answer.
 func (n *Node) Language() (string, bool) {
 	for cur := n; cur != nil; cur = cur.Parent {
 		if cur.Type != ElementNode {
 			continue
 		}
-		if v, ok := cur.Attr("lang"); ok && v != "" {
+		if v, ok := cur.Attr("lang"); ok {
 			return v, true
 		}
-		if v, ok := cur.Attr("xml:lang"); ok && v != "" && cur.XMLDocument() {
+		if v, ok := cur.Attr("xml:lang"); ok && cur.XMLDocument() {
 			return v, true
 		}
 	}
@@ -221,12 +231,12 @@ func (n *Node) HasAttr(name string) bool {
 	return ok
 }
 
-// Text returns the concatenated text of a node and everything inside it.
+// TextContent returns the concatenated text of a node and everything inside it.
 //
-// This is what an alt-less <a> contributes to a tagged PDF's text, and what a
-// heading contributes to an outline. It walks iteratively, because the tree
-// came from untrusted input and a recursive walk over a deep one would need the
-// stack the parser's depth cap exists to protect.
+// It is what a <style> element's stylesheet is read from. It walks
+// iteratively, because the tree came from untrusted input and a recursive walk
+// over a deep one would need the stack the parser's depth cap exists to
+// protect.
 func (n *Node) TextContent() string {
 	if n == nil {
 		return ""
@@ -301,13 +311,7 @@ func (n *Node) appendChild(c *Node) {
 // shape no consumer should have to handle, and a table is the one place the
 // parser inserts somewhere other than where it stands.
 func (n *Node) childBefore(before *Node) *Node {
-	at := len(n.Children)
-	for i, existing := range n.Children {
-		if existing == before {
-			at = i
-			break
-		}
-	}
+	at := n.childIndex(before)
 	if at == 0 {
 		return nil
 	}
@@ -320,15 +324,33 @@ func (n *Node) childBefore(before *Node) *Node {
 // It exists for foster parenting, which is the one rule of HTML that puts a
 // node somewhere other than where the parser stands. See parser.fosterParent.
 func (n *Node) insertBefore(c, before *Node) {
-	at := len(n.Children)
-	for i, existing := range n.Children {
-		if existing == before {
-			at = i
-			break
-		}
-	}
+	at := n.childIndex(before)
 	c.Parent = n
 	n.Children = append(n.Children, nil)
 	copy(n.Children[at+1:], n.Children[at:])
 	n.Children[at] = c
+}
+
+// childIndex is where a child is among n's children, or len(n.Children) when it
+// is not one of them.
+//
+// It searches from the end, and that is the whole of what keeps foster
+// parenting linear. Every node fostered out of a table goes immediately in
+// front of it, so the table moves one place further from the *front* of its
+// parent with each of them, and a search from the front walked past every node
+// fostered before: "<table>" and a million "<br>" was half a million million
+// comparisons. From the end, the only nodes between the table and the end of
+// its parent are the tables it was itself fostered in front of — nothing else
+// is put in that parent while the table is open, because the parser does not
+// return to the parent until the table has been closed, and every one of those
+// tables is open too, so they are bounded by maxDepth. The same bound is on the
+// copy insertBefore makes of what follows the table, so an insertion costs at
+// most that and usually one step.
+func (n *Node) childIndex(c *Node) int {
+	for i := len(n.Children) - 1; i >= 0; i-- {
+		if n.Children[i] == c {
+			return i
+		}
+	}
+	return len(n.Children)
 }

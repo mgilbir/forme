@@ -1,7 +1,6 @@
 package layout
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/mgilbir/forme/style"
@@ -245,9 +244,11 @@ func TestAnObjectFitThisEngineCannotReadIsReported(t *testing.T) {
 		Resources: res,
 		CSS:       []Stylesheet{{Source: objectFitCSS + ` img { object-fit: fit }`}},
 	}, Options{})
+	// "fit" is not CSS, so the cascade drops it and says so, and what stands
+	// is the initial value.
 	found := false
 	for _, f := range got.Findings {
-		if f.Property == "object-fit" && strings.Contains(f.Message, "not one this engine reads") {
+		if f.Property == "object-fit" && f.Rule == RuleInvalidCSS {
 			found = true
 		}
 	}
@@ -349,9 +350,11 @@ func TestAnObjectPositionThisEngineCannotReadIsReported(t *testing.T) {
 		CSS: []Stylesheet{{Source: objectFitCSS +
 			` img { object-fit: none; object-position: sideways }`}},
 	}, Options{})
+	// "sideways" is not CSS, so the cascade drops it and says so, and the
+	// content is centred by the initial value.
 	found := false
 	for _, f := range got.Findings {
-		if f.Property == "object-position" && strings.Contains(f.Message, "the content was centred") {
+		if f.Property == "object-position" && f.Rule == RuleInvalidCSS {
 			found = true
 		}
 	}

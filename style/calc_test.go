@@ -152,3 +152,44 @@ func TestCalcRefusesWhatIsNotALength(t *testing.T) {
 		}
 	}
 }
+
+// TestAnExpressionThatOverflowsIsCensoredAtTheTop is CSS Values 4 §10.9: a
+// top-level calculation whose numeric part would be NaN acts as though it
+// were 0, and one that would be infinite is the largest value of its sign.
+//
+// Every number an expression starts from is finite, but the arithmetic between
+// them is a float's. The absolute half is a Unit and saturates on its own; the
+// percentage half is a float64 carried to layout as one, and before this a
+// percentage of NaN reached the column widths of a table, where max() of
+// anything and a NaN is a NaN.
+func TestAnExpressionThatOverflowsIsCensoredAtTheTop(t *testing.T) {
+	for _, tc := range []struct {
+		in       string
+		kind     LengthKind
+		percent  float64
+		absolute float64 // px
+	}{
+		// Infinite: the largest percentage of its sign.
+		{"calc(1e308% * 10)", LengthPercent, math.MaxFloat64, 0},
+		{"calc(-1e308% * 10)", LengthPercent, -math.MaxFloat64, 0},
+		// An infinity taken from itself is NaN, which is nought — and the
+		// cancellation happens inside the expression, as it has to, before
+		// the censoring at the top.
+		{"calc(1e308% * 10 - 1e308% * 10)", LengthAbsolute, 0, 0},
+		{"calc(1e308% * 10 - 1e308% * 10 + 10px)", LengthAbsolute, 0, 10},
+		// The number half, which scales a Unit and so comes out saturated or
+		// nought already: Inf times nought is NaN, and a length of NaN is none.
+		{"calc(1e308 * 10 * 0 * 1px)", LengthAbsolute, 0, 0},
+	} {
+		got := mustLength(t, tc.in, calcCtx)
+		if math.IsNaN(got.Percent) || math.IsInf(got.Percent, 0) {
+			t.Errorf("%s has a percentage of %v, which no comparison can be made against",
+				tc.in, got.Percent)
+			continue
+		}
+		if got.Kind != tc.kind || got.Percent != tc.percent || got.Value.Px() != tc.absolute {
+			t.Errorf("%s is %+v, want kind %v, %v per cent and %gpx",
+				tc.in, got, tc.kind, tc.percent, tc.absolute)
+		}
+	}
+}

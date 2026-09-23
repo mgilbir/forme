@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/mgilbir/forme/style"
@@ -590,5 +591,59 @@ func TestALineWithNoTabIsJustifiedAsItAlwaysWas(t *testing.T) {
 	}
 	if got, want := lineEnd(f.Lines[0]), f.ContentRect().W; got != want {
 		t.Errorf("the line ends at %v and the block is %v wide", got, want)
+	}
+}
+
+// TestARightToLeftLineWithNoOpportunityIsSetAtItsStart: §7.3 aligns a line
+// that cannot be justified as "start", and a right-to-left line starts at the
+// right. Left at "justify", the alignment did nothing for it and it sat flush
+// left. The same holds for an overfull line, which has no slack to spread and
+// overflows past its end — the left, for this one.
+//
+// Each is compared with the same paragraph under "text-align: start", which is
+// what the specification says the line becomes.
+func TestARightToLeftLineWithNoOpportunityIsSetAtItsStart(t *testing.T) {
+	for _, text := range []string{
+		// One word and a hanging space on the first line: nothing to stretch.
+		"XXXXX XXXXXXXXXXXXXXXXX",
+		// A first line wider than the paragraph: no slack at all.
+		"XXXXXXXXXXXXXXXXXXXXXXX XX",
+	} {
+		first := func(align string) style.Unit {
+			root := justified(t, `<p id="p" dir="rtl">`+text+`</p>`, `text-align: `+align)
+			return find(t, root, "p").Lines[0].Runs[0].X
+		}
+		if got, want := first("justify"), first("start"); got != want {
+			t.Errorf("%q: the first line starts at %vpx justified and at %vpx "+
+				"start-aligned; a line with nothing to justify is aligned as start",
+				text, got.Px(), want.Px())
+		}
+	}
+}
+
+// TestASeparatorWithAMarkIsStillAnOpportunity: the run a separator ends is cut
+// after its whole cluster, so a no-break space carrying a combining mark ends
+// its run with the mark — and the gap after it is still one §7.3 stretches.
+func TestASeparatorWithAMarkIsStillAnOpportunity(t *testing.T) {
+	// 250px, so the first line's 240px of text leaves ten to spread.
+	root := justified(t, "<div id=\"p\">aaa\u00a0\u0301bbb ccc ddd eee fff ggg hhh iii jjj</div>",
+		`text-align: justify; width: 250px`)
+	line := find(t, root, "p").Lines[0]
+	var withMark *TextRun
+	for i := range line.Runs {
+		if strings.HasSuffix(line.Runs[i].Text, "\u0301") {
+			withMark = &line.Runs[i]
+		}
+	}
+	if withMark == nil {
+		t.Fatalf("no run ends with the mark: %+v", line.Runs)
+	}
+	// What the run's own glyphs measure, which is what it would be given with
+	// no slack: its text, in its face at its size.
+	plain, _ := style.FromPx(withMark.Face.Measure(withMark.Text, withMark.Size.Px()))
+	if withMark.Width <= plain {
+		t.Errorf("the run %q is %vpx justified and %vpx not; the gap after a "+
+			"separator with a mark was not stretched", withMark.Text,
+			withMark.Width.Px(), plain.Px())
 	}
 }

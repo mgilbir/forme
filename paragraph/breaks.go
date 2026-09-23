@@ -219,6 +219,20 @@ type Carried struct {
 	// DictionaryLookahead says how much is enough, and it is exact rather than
 	// generous: a probe reads at most the longest word in the language.
 	After string
+	// PhraseBefore and PhraseAfter are the text either side of this one as
+	// "word-break: auto-phrase" needs it: up to PhraseContext characters of
+	// each, which is as far as the phrase model reads from a boundary.
+	//
+	// They are Before and After's twins and not the same fields, because the
+	// two questions reach different distances over different text. A
+	// dictionary needs a word of its own script; the model needs three
+	// characters of anything. Without them each box was scored alone, so the
+	// boundary at a box's first character was never scored at all and the
+	// ones near its edges were scored without their neighbours: in
+	// "日本語を勉強します" the break between 勉 and 強 is inside a phrase and is
+	// withheld, and written "日本語を勉<a>強します</a>" it was a full opportunity.
+	// Audit C122.
+	PhraseBefore, PhraseAfter string
 	// Taken says the text before this one ended at an opportunity it *took*,
 	// which the rules have had their say over. See Trailing.Taken.
 	Taken bool
@@ -274,9 +288,14 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 	// Computed once for the same reason and nil for the same documents — see
 	// PhraseBreaks, whose three answers are what tells a place inside a phrase
 	// from a place the model was never about.
+	//
+	// With the characters either side of the text, which the model reads: see
+	// Carried.PhraseBefore.
 	var phrases map[int]bool
+	var phraseTail string
 	if wb.AutoPhrase {
-		phrases = PhraseBreaks(text, w)
+		phrases = PhraseBreaksBetween(at.PhraseBefore, text, at.PhraseAfter, w)
+		phraseTail = lastRunes(at.PhraseBefore+text, PhraseContext)
 	}
 
 	// Grapheme cluster boundaries, walked in lockstep with the scan.
@@ -945,8 +964,9 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 	}
 	flush()
 	return out, Trailing{
-		DictTail: dictionaryTail(dictSeg, dictBreaks),
-		Offered:  breakNext || deferBreak || heldBreak,
+		DictTail:   dictionaryTail(dictSeg, dictBreaks),
+		PhraseTail: phraseTail,
+		Offered:    breakNext || deferBreak || heldBreak,
 		// The three kinds are not exclusive, and the whole of this family's
 		// history is people assuming they are. "|-" ends with a deferred
 		// opportunity the vertical line offered and the hyphen then held — a
@@ -1011,6 +1031,10 @@ type Trailing struct {
 	// against 279ms, because each box re-segmented everything before it. This
 	// carries about a word.
 	DictTail string
+	// PhraseTail is what the next box needs as its Carried.PhraseBefore: the
+	// last PhraseContext characters of this text, reaching back into the text
+	// before it where this one is shorter. Empty unless "auto-phrase" asked.
+	PhraseTail string
 	// Taken says the text before this one ended at an opportunity it *took*
 	// rather than offered — a hyphen, a space, a picture — which the rules have
 	// already had their say over.
@@ -1113,12 +1137,36 @@ func betweenTwoSpaces(prev, r rune) bool { return prev == ' ' && r == ' ' }
 // nothing could tell it: the cost was an opportunity a box invented at its own
 // last character, and "⭋‐&#x2000;" written in two boxes was a sixty-fourth of a
 // pixel wider than the same text written in one.
+//
+// "White space" is the kind a line may not end in front of, and it is not
+// unicode.IsSpace, which was the test. That one holds the no-break spaces —
+// U+00A0, U+2007 FIGURE SPACE and U+202F NARROW NO-BREAK SPACE — which are
+// class GL, and UAX #14's LB12a exempts exactly these three arms from GL:
+// "[^SP BA HY] × GL", so a hyphen or a soft hyphen may end a line in front of a
+// no-break space. The no-break space is content that goes to the next line
+// with what follows it, so ending here moves something down after all. "ab-
+// cd" with a no-break space was one unbreakable piece. Audit C175.
 func startsSpace(text string, i int, next rune) bool {
 	if i >= len(text) {
-		return unicode.IsSpace(next)
+		return spaceFollows(next)
 	}
 	r, _ := utf8.DecodeRuneInString(text[i:])
-	return unicode.IsSpace(r)
+	return spaceFollows(r)
+}
+
+// spaceFollows is startsSpace's question about one character: is it CSS's white
+// space — a space, a tab, a segment break — or one of the other space separators
+// a line may not end in front of (class BA: noBreakBeforeRanges holds it), or a
+// break a line takes anyway. Everything unicode.IsSpace says yes to except the
+// three no-break spaces.
+func spaceFollows(r rune) bool {
+	switch {
+	case r == ' ' || r == '\t' || r == '\n' || r == '\r':
+		return true
+	case IsMandatoryBreak(r):
+		return true
+	}
+	return unicode.Is(unicode.Zs, r) && inLineBreakRanges(r, noBreakBeforeRanges[:])
 }
 
 // IsIdeographic reports whether a rune breaks on both sides, which is what makes

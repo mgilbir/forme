@@ -44,7 +44,7 @@ import (
 // borderBoxSizing reports whether a box's declared sizes include its padding and
 // border.
 func borderBoxSizing(b *Box) bool {
-	return strings.EqualFold(strings.TrimSpace(b.Style["box-sizing"]), "border-box")
+	return strings.EqualFold(strings.TrimSpace(b.Style.Get("box-sizing")), "border-box")
 }
 
 // sizingInset is what a declared width or height covers besides the content: the
@@ -187,6 +187,9 @@ func bareSizingKeyword(raw string) string {
 var sizingProperties = [...]string{
 	"width", "min-width", "max-width",
 	"height", "min-height", "max-height",
+	// flex-basis takes width's grammar, keywords and all, and a keyword on it
+	// that is not read falls to "auto" as quietly as one on width would.
+	"flex-basis",
 }
 
 // checkIntrinsicSizing reports a sizing property that named an intrinsic size
@@ -205,7 +208,7 @@ var sizingProperties = [...]string{
 // dropped declaration.
 func (l *layouter) checkIntrinsicSizing(b *Box) {
 	for _, prop := range sizingProperties {
-		raw := strings.TrimSpace(b.Style[prop])
+		raw := strings.TrimSpace(b.Style.Get(prop))
 		if raw == "" {
 			continue
 		}
@@ -251,6 +254,14 @@ func (l *layouter) appliesSizingKeyword(b *Box, property string) bool {
 	case "min-width", "max-width":
 		_, ok := l.keywordLimit(b, property)
 		return ok
+	case "flex-basis":
+		// Read by a flex container of its items and by nothing else, so on a
+		// box that is not an arranged item the declaration does nothing that
+		// could be dropped and there is nothing to report.
+		if p := b.Parent; p == nil || p.Inner != InnerFlex || l.refusesToFlex(p) != "" {
+			return true
+		}
+		return l.flexValuesOf(b, flexRoom{}).basisKeyword != ""
 	}
 	return false
 }
@@ -259,7 +270,7 @@ func (l *layouter) appliesSizingKeyword(b *Box, property string) bool {
 // which is a length this check has no containing block to resolve.
 func hasPercentagePadding(b *Box) bool {
 	for _, side := range []string{"top", "right", "bottom", "left"} {
-		if strings.Contains(b.Style["padding-"+side], "%") {
+		if strings.Contains(b.Style.Get("padding-"+side), "%") {
 			return true
 		}
 	}

@@ -8,10 +8,15 @@ import (
 // The tree builder.
 //
 // HTML5's has twenty-three insertion modes, most of them describing how to
-// rebuild a tree from tags that arrived in an impossible order. This one has
-// none: tags that cannot nest are refused (see the package comment), and the
-// only reordering it does is the one HTML actually defines — the optional end
-// tags in elements.go, which are correct markup rather than recovery.
+// rebuild a tree from tags that arrived in an impossible order. This one keeps
+// no mode of its own: tags that cannot nest are refused (see the package
+// comment), and what it does implement — the optional end tags, which are
+// correct markup rather than recovery, and the table modes that decide what a
+// table's own tags close — it reads off the stack of open elements through the
+// standard's own primitives, "in scope" and "generate implied end tags". See
+// closeFor and endTag. Where markup is malformed and this parser repairs it as a
+// browser does — foster parenting, "</br>", an element closed by a tag that
+// ends its parent — the repair is the standard's and it is reported.
 
 // The bounds on one document. A template is untrusted input, and each of these
 // is a place where a few kilobytes of markup would otherwise cost unboundedly
@@ -26,6 +31,21 @@ const (
 	// memory: a node is far larger than the markup that creates it, so "<b>"
 	// repeated is an amplification.
 	maxNodes = 1 << 20
+
+	// maxAttributes bounds how many attributes one element may carry, and the
+	// three frame elements count what every start tag for them merged.
+	//
+	// maxNodes says nothing about attributes, and an element's attributes are a
+	// list that anything asking for one of them walks: Attr is a scan, and
+	// Language, the table hints and the path a finding names each make that scan
+	// at every ancestor of the node they are asked about. So a <body> with forty
+	// thousand attributes over forty thousand paragraphs was a walk of all of
+	// them for each paragraph, and building the page went up by three for each
+	// doubling of the document. Bounding the list is what makes every one of
+	// those walks a constant, including the ones not yet written. No element an
+	// author writes comes near it: HTML's own elements take a few dozen at most,
+	// and a template that renders hundreds onto one tag is not styling anything.
+	maxAttributes = 256
 
 	// maxInputBytes bounds the document itself. It is generous — a book's worth
 	// of markup is a few megabytes — and exists so that the caps above are
@@ -46,7 +66,34 @@ const (
 // there, a partial result is silently applicable and so dangerous to hand back;
 // here, the findings name what is missing and the tree cannot be mistaken for
 // complete.
+//
+// Whether the document is HTML or XHTML is decided from what it says about its
+// own syntax — an XML declaration, or a doctype naming XHTML — because a string
+// carries no content type. A caller that knows the type should say so: see
+// ParseXHTML.
 func Parse(src string) (doc *Node, errs []Error, ok bool) {
+	return parse(src, false)
+}
+
+// ParseXHTML reads a document served as application/xhtml+xml: XHTML whatever it
+// says about itself.
+//
+// A browser does not guess which of the two languages a document is in. It is
+// told, by the MIME type the server sends with the file, and "<html>" with no
+// declaration and no doctype is XML in a file served as XHTML. Parse has no
+// type to be told and so reads the document's own signals, which a great many
+// XHTML files do not carry — the suite's letter-spacing reference, which
+// twenty-eight tests share, has neither, and wraps its stylesheet in CDATA,
+// which is a stylesheet only in XML. What the caller knows from where the file
+// came from — its content type, its ".xht" extension — is this call.
+//
+// It is the same reader; what XHTML changes is listed at tokenizer.xml, and the
+// document node records it as Node.XML either way.
+func ParseXHTML(src string) (doc *Node, errs []Error, ok bool) {
+	return parse(src, true)
+}
+
+func parse(src string, xhtml bool) (doc *Node, errs []Error, ok bool) {
 	if len(src) > maxInputBytes {
 		// None of it is read, and the tree is still returned, because the
 		// contract above says so without qualification and because the caller
@@ -57,7 +104,7 @@ func Parse(src string) (doc *Node, errs []Error, ok bool) {
 		// What comes back is what an empty document parses to: the frame, with
 		// nothing in the body. It is the honest tree for a document this engine
 		// did not read a byte of.
-		doc, _, _ = Parse("")
+		doc, _, _ = parse("", xhtml)
 		return doc, []Error{{
 			Offset: maxInputBytes,
 			Message: "the document is larger than this engine will read (" +
@@ -66,7 +113,7 @@ func Parse(src string) (doc *Node, errs []Error, ok bool) {
 		}}, false
 	}
 
-	p := &parser{tok: newTokenizer(src), src: src}
+	p := &parser{tok: newTokenizer(src, xhtml), src: src}
 	p.run()
 	return p.doc, p.tok.errs, len(p.tok.errs) == 0
 }
@@ -99,6 +146,9 @@ type parser struct {
 	pendingBuf []byte
 	// ns maps a namespace prefix to the URI it was bound to. See bindNamespaces.
 	ns map[string]string
+	// frameNames is the set of attribute names already on each frame element,
+	// kept for the whole parse. See mergeAttributes.
+	frameNames map[*Node]map[string]bool
 }
 
 // dropFirstNewline are the elements HTML §13.2.6.4.7 ignores a leading line
@@ -113,7 +163,10 @@ type parser struct {
 // It is one newline and only the first, and it applies whatever the element's
 // white-space property says: the rule is in the tree builder, before any
 // stylesheet has been consulted.
-var dropFirstNewline = map[string]bool{"pre": true, "textarea": true}
+//
+// <listing> is <pre> under the name it had before <pre>, and the standard
+// gives it the same rule in the same sentence.
+var dropFirstNewline = map[string]bool{"pre": true, "listing": true, "textarea": true}
 
 func (p *parser) run() {
 	p.doc = &Node{Type: DocumentNode, XML: p.tok.xml}
@@ -298,9 +351,43 @@ func (p *parser) insertionParent() *Node {
 	return p.head
 }
 
+// onlyWhiteSpace reports whether a run of text is nothing but HTML's white
+// space: tab, line feed, form feed, carriage return and space.
+//
+// It is those five and not Unicode's. The three places that ask — text before
+// the body, text in a table, text in a head <noscript> — are the standard's
+// "character tokens that are ASCII whitespace", and strings.TrimSpace answers
+// a different question: it treats a no-break space, U+205F and the rest of
+// Unicode's spaces as nothing. "&nbsp;" as a document's first content was
+// dropped as if it were the newline between two tags, and "&nbsp;" between
+// two rows of a table was left inside the table instead of in front of it.
+func onlyWhiteSpace(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if !isSpace(s[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// inHeadNoscript reports whether the parser is in HTML's "in head noscript"
+// mode: a <noscript> is open and the body has not begun, which can only be a
+// <noscript> in the head.
+func (p *parser) inHeadNoscript() bool {
+	return !p.bodyStarted && len(p.open) > 0 && p.open[len(p.open)-1].Name == "noscript"
+}
+
 func (p *parser) text(tk token) {
 	if tk.text == "" {
 		return
+	}
+	if p.inHeadNoscript() && !onlyWhiteSpace(tk.text) {
+		// White space belongs to the <noscript>, and anything else is what
+		// "in head noscript" calls anything else: the element ends in front of
+		// it, and the text starts the body.
+		p.tok.fail(tk.offset, "text cannot be inside a <noscript> in the head, which "+
+			"holds only <link>, <meta> and <style>; the <noscript> is closed before it")
+		p.open = p.open[:len(p.open)-1]
 	}
 	parent := p.current()
 
@@ -314,7 +401,7 @@ func (p *parser) text(tk token) {
 		// Whitespace between elements belongs to neither head nor body;
 		// dropping it keeps "</head>\n<p>" from putting a stray text node at
 		// the front of the document.
-		if strings.TrimSpace(tk.text) == "" {
+		if onlyWhiteSpace(tk.text) {
 			return
 		}
 		p.enterBody()
@@ -328,7 +415,7 @@ func (p *parser) text(tk token) {
 	// one character of it is not white space, and keeps a run that is entirely
 	// white space where it stands — which is the space between two rows and
 	// belongs to neither.
-	if strings.TrimSpace(tk.text) != "" {
+	if !onlyWhiteSpace(tk.text) {
 		if to, before, ok := p.fosterParentOf(""); ok {
 			p.tok.fail(tk.offset, "text was written inside a table, outside any cell; "+
 				"it belongs before the table and is read there")
@@ -406,18 +493,53 @@ func (p *parser) flushText() {
 // room reports whether another node may be added, recording the trip if not.
 func (p *parser) room(off int) bool {
 	if p.nodes >= maxNodes {
-		if !p.truncated {
-			p.tok.limit(off, "the document has more elements than this engine will build ("+
-				strconv.Itoa(maxNodes)+"); the rest was not read")
-			p.truncated = true
-		}
+		p.truncate(off, "the document has more elements than this engine will build ("+
+			strconv.Itoa(maxNodes)+"); the rest was not read")
 		return false
 	}
 	return true
 }
 
+// truncate stops the tree being built, and says so in the one finding the cap on
+// findings does not drop. See tokenizer.stopped.
+func (p *parser) truncate(off int, msg string) {
+	if p.truncated {
+		return
+	}
+	p.truncated = true
+	p.tok.stopped(off, msg)
+}
+
+// tooDeep is the depth bound, checked wherever an element is opened that may
+// hold another.
+func (p *parser) tooDeep(off int) {
+	if len(p.open) > maxDepth {
+		p.truncate(off, "elements are nested more deeply than this engine will read ("+
+			strconv.Itoa(maxDepth)+"); the rest was not read")
+	}
+}
+
 func (p *parser) startTag(tk token) {
 	name := tk.name
+
+	if p.inHeadNoscript() {
+		// HTML's "in head noscript" mode, which is the one a <noscript> in the
+		// head puts a parser in when scripting is off — as it always is here.
+		// What it holds is what the head holds and nothing else: the
+		// stylesheet or the preload a page wants only without script. Anything
+		// else is a mistake, and the standard ends the <noscript> in front of
+		// it and reads the tag again, which in the head starts the body.
+		switch name {
+		case "html", "link", "meta", "style":
+		case "head", "noscript":
+			p.tok.fail(tk.offset, "<"+name+"> inside a <noscript> in the head; it is ignored")
+			return
+		default:
+			p.tok.fail(tk.offset, "<"+name+"> cannot be inside a <noscript> in the head, "+
+				"which holds only <link>, <meta> and <style>; the <noscript> is closed before it")
+			p.open = p.open[:len(p.open)-1]
+		}
+	}
 
 	// The three frame elements always exist already, because run() built them
 	// before reading anything. A start tag for one of them is therefore not an
@@ -431,18 +553,22 @@ func (p *parser) startTag(tk token) {
 	// layout comparison noticed the doubled margin.
 	switch name {
 	case "html":
-		mergeAttributes(p.html, tk.attrs)
+		p.mergeAttributes(p.html, tk.attrs, tk.offset)
 		return
 	case "head":
-		mergeAttributes(p.head, tk.attrs)
+		p.mergeAttributes(p.head, tk.attrs, tk.offset)
 		return
 	case "body":
-		mergeAttributes(p.body, tk.attrs)
+		p.mergeAttributes(p.body, tk.attrs, tk.offset)
 		p.enterBody()
 		return
 	}
 
 	if why, dropped := droppedElements[name]; dropped {
+		// What the tag ends it ends whether or not the element is kept: a
+		// <details> ends an open paragraph, and what follows it is not in the
+		// paragraph.
+		p.closeFor(name, tk.offset)
 		p.tok.unsupported(tk.offset, "<"+name+"> is dropped: "+why)
 		// Its content goes with it. For the raw-text ones that means consuming
 		// to the end tag, or the script body would be read as markup.
@@ -468,13 +594,16 @@ func (p *parser) startTag(tk token) {
 		// because from the tree builder's side nothing had gone wrong. Every
 		// fixture in foreign_test.go starts with a paragraph, which is what
 		// hid it.
+		p.closeFor(name, tk.offset)
 		if !p.bodyStarted {
 			p.enterBody()
 		}
 		el := p.insert(tk)
 		if el != nil && !tk.selfClosing {
 			start := p.tok.pos
+			p.tok.foreign = true
 			end := p.skipElement(name)
+			p.tok.foreign = false
 			if end > start && end <= len(p.tok.src) {
 				el.Foreign = p.tok.src[start:end]
 			}
@@ -531,10 +660,21 @@ func (p *parser) startTag(tk token) {
 
 	// The optional end tags of HTML: an incoming start tag can close what is
 	// open.
-	p.closeImplied(name)
+	p.closeFor(name, tk.offset)
 
-	if headElements[name] && !p.bodyStarted {
-		p.appendTo(p.head, tk)
+	if !p.bodyStarted && (headElements[name] || name == "noscript") {
+		// A <noscript> before the body is a head element, which is where HTML
+		// puts it with scripting off. It used to start the body, and so moved
+		// everything the head still had to say into it: "<head><noscript><link
+		// …></noscript><title>" put the title in the body and then refused the
+		// document for a "</head>" that closed nothing.
+		//
+		// Inside it, a head element goes into it rather than beside it.
+		parent := p.head
+		if p.inHeadNoscript() {
+			parent = p.current()
+		}
+		p.appendTo(parent, tk)
 		return
 	}
 	if !metadataElements[name] && !p.bodyStarted {
@@ -563,20 +703,15 @@ func (p *parser) startTag(tk token) {
 	}
 	p.stripNewline = !p.tok.xml && dropFirstNewline[name]
 	p.open = append(p.open, el)
-
-	if len(p.open) > maxDepth {
-		p.tok.limit(tk.offset, "elements are nested more deeply than this engine will read ("+
-			strconv.Itoa(maxDepth)+")")
-		p.truncated = true
-	}
+	p.tooDeep(tk.offset)
 }
 
 // insertUnknown opens an element whose *layout* HTML gives no behaviour to.
 //
 // It is the ordinary path with the rules that belong to the box left out: no
-// head to belong to and no newline to strip. What it keeps is every rule that
-// is about the tag's name in the tokenizer and the tree — an optional end tag
-// it closes, a void form with no content, content that is not markup — because
+// head to belong to. What it keeps is every rule that is about the tag's name
+// in the tokenizer and the tree — an optional end tag it closes, a void form
+// with no content, content that is not markup, a first newline to drop — because
 // those are facts about the name and not about what can be drawn with it, and
 // an element this engine has no style for still has to be *read* correctly.
 //
@@ -609,7 +744,7 @@ func (p *parser) insertUnknown(tk token) {
 	// Both sets are keyed by name and neither has anything to do with layout,
 	// which is why the answer is here rather than in knownElements: an element
 	// added to either set is covered the day it is added.
-	p.closeImplied(tk.name)
+	p.closeFor(tk.name, tk.offset)
 	if voidElements[tk.name] {
 		p.insert(tk)
 		return
@@ -634,12 +769,11 @@ func (p *parser) insertUnknown(tk token) {
 	if el == nil {
 		return
 	}
+	// The leading newline is a rule about the name too: <listing> is <pre>
+	// under an older name, and "<listing>\nx" is how one is written.
+	p.stripNewline = !p.tok.xml && dropFirstNewline[tk.name]
 	p.open = append(p.open, el)
-	if len(p.open) > maxDepth {
-		p.tok.limit(tk.offset, "elements are nested more deeply than this engine will read ("+
-			strconv.Itoa(maxDepth)+")")
-		p.truncated = true
-	}
+	p.tooDeep(tk.offset)
 }
 
 // mergeAttributes copies the attributes a frame element's start tag carried onto
@@ -648,20 +782,60 @@ func (p *parser) insertUnknown(tk token) {
 // An attribute already present wins over the one arriving, which is the rule
 // HTML gives: the first value of a repeated attribute is the one that counts, and
 // the frame's own is the first by construction.
-func mergeAttributes(el *Node, attrs []Attribute) {
-	if el == nil {
+//
+// Asking the element whether it has the name is a walk of every attribute merged
+// so far, once for each one arriving, and that made "<body a0 a1 … aN>"
+// quadratic: forty thousand attributes, a quarter of a megabyte of markup, took
+// three and a half seconds, and the same attributes on a <div> took nineteen
+// milliseconds. Two things answer it, and neither alone is enough.
+//
+// maxAttributes bounds what is merged as it bounds what one tag carries: a
+// frame written a thousand times, each with a new attribute, is one element
+// with a thousand attributes, and every lookup on it walks them. That makes the
+// walk a constant — and the constant is the bound, paid again by every tag. A
+// frame holding two hundred and fifty attributes, followed by a million tags
+// repeating one of them, was two hundred and fifty comparisons a tag.
+//
+// So the question is asked of a set of the names on the element, kept for the
+// whole parse, which costs the same however many are there. Built afresh for
+// each tag it would not do, because it would be rebuilt from everything the tags
+// before had merged.
+func (p *parser) mergeAttributes(el *Node, attrs []Attribute, offset int) {
+	if el == nil || len(attrs) == 0 {
 		return
 	}
+	names := p.frameNames[el]
+	if names == nil {
+		if p.frameNames == nil {
+			p.frameNames = map[*Node]map[string]bool{}
+		}
+		names = make(map[string]bool, len(el.Attrs)+len(attrs))
+		for _, a := range el.Attrs {
+			names[a.Name] = true
+		}
+		p.frameNames[el] = names
+	}
 	for _, a := range attrs {
-		if el.HasAttr(a.Name) {
+		if names[a.Name] {
 			continue
 		}
+		if len(el.Attrs) >= maxAttributes {
+			p.tok.limit(offset, "<"+el.Name+"> has more attributes than this engine will read ("+
+				strconv.Itoa(maxAttributes)+"); \""+a.Name+"\" and those after it on this tag were dropped")
+			return
+		}
+		names[a.Name] = true
 		el.Attrs = append(el.Attrs, a)
 	}
 }
 
 // appendTo puts an element in a named parent rather than the current one, which
 // is what the head elements need.
+//
+// It does not check maxDepth, and need not: what it opens is a raw-text or
+// RCDATA element, which its own end tag or the end of the document closes
+// before anything can go inside it, or a head <noscript>, which holds only void
+// elements and <style> and cannot hold another <noscript>.
 func (p *parser) appendTo(parent *Node, tk token) {
 	if !p.room(tk.offset) {
 		return
@@ -708,14 +882,241 @@ func (p *parser) enterBody() {
 	p.open = append(p.open, p.body)
 }
 
-// closeImplied pops the elements that an incoming start tag ends.
-func (p *parser) closeImplied(incoming string) {
-	for len(p.open) > 0 {
-		top := p.open[len(p.open)-1]
-		if !closedByStart(top.Name, incoming) {
+// The primitives of HTML's tree construction, §13.2.4.2 and §13.2.6.4.7, which
+// every optional-end-tag rule in this parser is written in. See the note above
+// impliedEndTags for why they are the standard's and not a table of pairs.
+
+// inScope is where on the stack the innermost open element with a name is, or
+// -1 when it is not "in scope": when an element of the scope's boundary set is
+// met first, looking outward, or the element is not open at all.
+func (p *parser) inScope(name string, scope map[string]bool) int {
+	for i := len(p.open) - 1; i >= 0; i-- {
+		n := p.open[i].Name
+		if n == name {
+			return i
+		}
+		if scope[n] {
+			return -1
+		}
+	}
+	return -1
+}
+
+// closeTo pops the stack down to and including the element at index at, which
+// is "generate implied end tags, then pop until that element has been popped".
+//
+// The standard's step between those two is a parse error when anything but an
+// implied end tag was above the element, and so is this: an element that is
+// open and whose end tag cannot be left out is a mistake in the markup, and it
+// is reported as one — once, naming the innermost such element, because the
+// author fixes the nesting and not each tag. It is still closed, which is what
+// the standard does and what keeps an unclosed <span> from swallowing the rest
+// of the document.
+//
+// tableQuiet says the closing is a table's own: a table end tag, or a table tag
+// resolving the mode the stack is in. There the rows, row groups and cells in
+// the way close without a word, because the standard's "close the cell" and
+// "clear the stack back to a table context" say nothing about them either.
+func (p *parser) closeTo(at int, by string, off int, tableQuiet bool) {
+	for i := len(p.open) - 1; i > at; i-- {
+		n := p.open[i].Name
+		if impliedEndTags[n] || tableQuiet && tableStructure[n] {
+			continue
+		}
+		p.tok.fail(off, by+" closes <"+p.open[at].Name+">, and <"+n+
+			"> inside it is still open; tags have to nest")
+		break
+	}
+	p.open = p.open[:at]
+}
+
+// closeParagraph is "close a p element" when a <p> is in button scope: the step
+// that every block-level start tag begins with.
+func (p *parser) closeParagraph(incoming string, off int) {
+	if at := p.inScope("p", buttonScope); at >= 0 {
+		p.closeTo(at, "<"+incoming+">", off, false)
+	}
+}
+
+// closeFor ends what an incoming start tag ends — every rule of §13.2.6.4.7 and
+// of the table modes that closes an element before the new one is inserted.
+//
+// It is one function for every start tag, known or not, dropped or kept,
+// because every one of these is a fact about the tag's name and none is about
+// what this engine can lay out: an element that ends an open paragraph ends it
+// whether or not this engine has heard of it.
+func (p *parser) closeFor(name string, off int) {
+	// HTML's "in column group" mode has a single positive case — a <col> — and
+	// sends everything else to "anything else", which pops the colgroup and
+	// reprocesses the tag in "in table". Nothing but a <col> is ever inside a
+	// column group, so the column group is always the current node here.
+	//
+	// What is still missing is the rest of "anything else": text and an end tag
+	// also close a colgroup, and here they do not. The shapes that reach them —
+	// "<colgroup>text<td>" — are markup nothing generates.
+	if cur := p.current(); cur.Name == "colgroup" && name != "col" {
+		p.open = p.open[:len(p.open)-1]
+	}
+
+	if tableParts[name] || name == "table" {
+		p.closeForTablePart(name, off)
+		if name != "table" {
 			return
 		}
-		p.open = p.open[:len(p.open)-1]
+		// A table that nests — in a cell or a caption, or outside any table —
+		// is in "in body", and ends an open paragraph like any block does.
+	}
+
+	switch name {
+	case "li":
+		// "Loop": the nearest open list item ends, unless something that is its
+		// own block comes first — a nested list is not a way of ending the item
+		// it is in. <address>, <div> and <p> do not stop the search, which is
+		// what makes "<li><div>a<li>" close the div, reported, and the item.
+		p.closeListItem(off, "<li>", func(n string) bool { return n == "li" })
+	case "dd", "dt":
+		p.closeListItem(off, "<"+name+">", func(n string) bool { return n == "dd" || n == "dt" })
+	case "option":
+		if p.current().Name == "option" {
+			p.open = p.open[:len(p.open)-1]
+		}
+	case "optgroup":
+		if p.current().Name == "option" {
+			p.open = p.open[:len(p.open)-1]
+		}
+		if p.current().Name == "optgroup" {
+			p.open = p.open[:len(p.open)-1]
+		}
+	case "button":
+		// A button does not nest in a button: the standard ends the first one
+		// and reports it.
+		if at := p.inScope("button", defaultScope); at >= 0 {
+			p.tok.fail(off, "a <button> inside a <button>; buttons do not nest, "+
+				"and the first one is closed here")
+			p.closeTo(at, "<button>", off, false)
+		}
+	case "rb", "rtc", "rp", "rt":
+		// Ruby's annotations end one another by "generate implied end tags",
+		// which an <rtc> survives when what arrives is an <rt> or <rp>, so that
+		// an annotation container can hold several.
+		if p.inScope("ruby", defaultScope) >= 0 {
+			for cur := p.current().Name; impliedEndTags[cur]; cur = p.current().Name {
+				if cur == "rtc" && (name == "rt" || name == "rp") {
+					break
+				}
+				p.open = p.open[:len(p.open)-1]
+			}
+			if cur := p.current().Name; cur != "ruby" && !(cur == "rtc" && (name == "rt" || name == "rp")) {
+				p.tok.fail(off, "<"+name+"> belongs directly in a <ruby>, and <"+cur+
+					"> is still open around it; tags have to nest")
+			}
+		}
+	case "a", "nobr":
+		// The adoption agency algorithm is what a browser runs here, and it is
+		// not implemented: a link inside a link is ended by it and this engine
+		// nests the two. Refused rather than repaired, and said so. The search
+		// stops where the standard's list of formatting elements has a marker —
+		// a link outside a cell does not end at a link inside it.
+		if p.inScope(name, formattingMarkers) >= 0 {
+			p.tok.fail(off, "<"+name+"> inside another <"+name+">; they do not nest, and "+
+				"a browser ends the first one here where this engine does not")
+		}
+	case "form":
+		// The standard's form element pointer, which is not scoped: any form
+		// still open makes this one a mistake.
+		if p.inScope("form", nil) >= 0 {
+			p.tok.fail(off, "a <form> inside a <form>; forms do not nest, and a browser "+
+				"ignores this tag where this engine does not")
+		}
+	}
+
+	if closesParagraph[name] {
+		p.closeParagraph(name, off)
+	}
+	if headings[name] {
+		// A heading does not nest in a heading. The standard pops the open one
+		// and reports it, because "</h1>" is not an optional end tag: the author
+		// forgot it.
+		if cur := p.current(); headings[cur.Name] {
+			p.tok.fail(off, "<"+name+"> inside <"+cur.Name+">; headings do not nest, "+
+				"and the <"+cur.Name+"> is closed here")
+			p.open = p.open[:len(p.open)-1]
+		}
+	}
+}
+
+// closeListItem is the loop HTML runs for an incoming <li>, <dd> or <dt>: the
+// nearest open item of the kind ends, unless a special element other than
+// <address>, <div> or <p> stands between it and the tag.
+func (p *parser) closeListItem(off int, by string, isItem func(string) bool) {
+	for i := len(p.open) - 1; i >= 0; i-- {
+		n := p.open[i].Name
+		if isItem(n) {
+			p.closeTo(i, by, off, false)
+			return
+		}
+		if specialElements[n] && n != "address" && n != "div" && n != "p" {
+			return
+		}
+	}
+}
+
+// closeForTablePart resolves a table's own start tag against the table
+// structure open around it, which is how the stack of open elements decides
+// HTML's table insertion modes.
+//
+// The innermost table structure element in table scope is the mode: a <td> is
+// "in cell", a <tr> "in row", and so on. While the incoming tag ends that
+// element (tablePartEnds), it is closed — "close the cell" for a cell or a
+// caption, which reports anything left open inside it that is not an implied
+// end tag, and a quiet pop for a row, a row group or a column group, whose only
+// possible content above them was put there by foster parenting and reported
+// when it was. When it stops ending, the stack is cleared back to that element,
+// which is the standard's "clear the stack back to a table context".
+//
+// Outside any table this does nothing, and a table part written there is
+// inserted where it stands. HTML ignores such a tag; this engine keeps it, and
+// the layout gives it the anonymous table CSS 2.1 §17.2.1 describes.
+//
+// What is not here are the implied start tags: the standard inserts a <tbody>
+// round a row written straight into a table, and a <tr> round a cell written
+// straight into a row group. Here the layout's anonymous boxes stand in for
+// both, which is a difference in the tree and not in what is drawn.
+func (p *parser) closeForTablePart(name string, off int) {
+	for {
+		at := -1
+		for i := len(p.open) - 1; i >= 0; i-- {
+			n := p.open[i].Name
+			if tableStructure[n] {
+				at = i
+				break
+			}
+			if tableScope[n] {
+				return
+			}
+		}
+		if at < 0 {
+			return
+		}
+		open := p.open[at].Name
+		if !tablePartEnds(name, open) {
+			if tableContexts[open] {
+				p.open = p.open[:at+1]
+			}
+			return
+		}
+		switch open {
+		case "td", "th", "caption":
+			p.closeTo(at, "<"+name+">", off, false)
+		case "table":
+			// Only a <table> ends a table, and it is a mistake: HTML has no
+			// table directly inside a table, outside a cell.
+			p.tok.fail(off, "a <table> written inside a <table>, outside any cell; "+
+				"it ends the first table, and is read after it")
+			p.open = p.open[:at]
+		default:
+			p.open = p.open[:at]
+		}
 	}
 }
 
@@ -792,27 +1193,71 @@ func (p *parser) endTag(tk token) {
 	// leaves the element open, and the next block's end tag reports the
 	// mis-nesting it caused.
 
-	// Find it on the stack. Anything above it may only be there if HTML lets it
-	// end without a tag of its own.
-	at := -1
+	// Find it on the stack, as far as the standard looks for it. Each kind of
+	// end tag has its own scope, and the scope is the difference between "the
+	// <div> this tag closes" and "a <div> somewhere further out": a "</div>"
+	// written in a table cell does not close the div the table is inside, and
+	// used to — taking the table with it.
+	isTarget := func(n string) bool { return n == name }
+	var stop map[string]bool
+	quiet := false
+	switch {
+	case name == "p":
+		stop = buttonScope
+	case name == "li":
+		stop = listItemScope
+	case headings[name]:
+		// Any heading closes any heading: "<h1>a</h2>" ends the <h1>, and is
+		// reported below for the mismatch.
+		stop, isTarget = defaultScope, func(n string) bool { return headings[n] }
+	case tableStructure[name]:
+		stop, quiet = tableScope, true
+	case blockEndTags[name]:
+		stop = defaultScope
+	default:
+		// "Any other end tag": the innermost element of that name, unless a
+		// special element comes first. An inline element's end tag does not
+		// reach out of a block: "<b><p>x</b>" does not close the paragraph,
+		// whose end tag may not be left out there — a browser rebuilds the
+		// formatting round it instead, which this engine does not do, so the
+		// tag is reported and ignored.
+		stop = specialElements
+	}
+	at, boundary := -1, ""
 	for i := len(p.open) - 1; i >= 0; i-- {
-		if p.open[i].Name == name {
+		n := p.open[i].Name
+		if isTarget(n) {
 			at = i
+			break
+		}
+		if stop[n] {
+			boundary = n
 			break
 		}
 	}
 	if at < 0 {
-		p.tok.fail(tk.offset, "</"+name+"> closes nothing: no <"+name+"> is open here")
+		p.endTagClosesNothing(name, boundary, isTarget, tk.offset)
 		return
 	}
-	for i := len(p.open) - 1; i > at; i-- {
-		if !closedByParentEnd[p.open[i].Name] {
-			p.tok.fail(tk.offset, "</"+name+"> would close <"+p.open[i].Name+
-				">, which is still open; tags have to nest")
-			break
+	if got := p.open[at].Name; got != name {
+		p.tok.fail(tk.offset, "</"+name+"> closes <"+got+
+			">; the end tag does not match the heading it ends")
+	}
+	p.closeTo(at, "</"+name+">", tk.offset, quiet)
+}
+
+// endTagClosesNothing reports an end tag that did not close anything, saying
+// which of the two ways it failed: nothing of that name is open, or one is open
+// further out than the tag can reach, past the element named by boundary.
+func (p *parser) endTagClosesNothing(name, boundary string, isTarget func(string) bool, off int) {
+	for _, el := range p.open {
+		if isTarget(el.Name) {
+			p.tok.fail(off, "</"+name+"> cannot close the <"+el.Name+"> outside the <"+
+				boundary+"> it is written in, and is ignored")
+			return
 		}
 	}
-	p.open = p.open[:at]
+	p.tok.fail(off, "</"+name+"> closes nothing: no <"+name+"> is open here")
 }
 
 // skipElement consumes to the matching end tag of an element being dropped,
@@ -867,7 +1312,7 @@ func (p *parser) finish() {
 		if el == p.html || el == p.head || el == p.body {
 			continue
 		}
-		if closedByParentEnd[el.Name] {
+		if closedAtEnd[el.Name] {
 			continue
 		}
 		p.tok.fail(el.Offset, "<"+el.Name+"> is never closed")

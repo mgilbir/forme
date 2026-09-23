@@ -35,6 +35,8 @@ jobs:
             target: FuzzParse
           - package: ./css
             target: FuzzSelector
+          - package: ./css
+            target: FuzzANumberIsNeverNaN
           - package: ./font
             target: FuzzCmapSubtable
           - package: ./font

@@ -214,6 +214,13 @@ glyphs, or how many, or how wide, is not this and is still reported.
 
 That takes the fuzzer from 46 differences to 3.
 
+It was reversed on 2026-09-23. The asymmetry is HarfBuzz's model, not an
+accident of it — a mark takes its target's cross-axis offset when it is
+attached and its main-axis offset at the end — and fonts are tested against
+HarfBuzz, so positioning follows it and the fuzzer's class that masked it is
+gone. CoreText's answers above are unchanged; this package no longer agrees
+with them on these strings. See testdata/harfbuzz/README.md.
+
 ## What those three are
 
 `U+0975 U+0930 U+094D U+094B`, and two like it: the same five glyphs in a

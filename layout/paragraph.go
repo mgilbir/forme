@@ -54,9 +54,10 @@ const (
 )
 
 var (
-	transformOf    = paragraph.TransformOf
-	transformText  = paragraph.TransformText
-	wordStateAfter = paragraph.WordStateAfter
+	transformOf     = paragraph.TransformOf
+	transformText   = paragraph.TransformText
+	transformTextIn = paragraph.TransformTextIn
+	wordStateAfter  = paragraph.WordStateAfter
 )
 
 // Break opportunities and the pieces between them, from CSS Text §5.

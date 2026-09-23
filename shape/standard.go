@@ -24,10 +24,10 @@ import (
 //
 //   - PDF/A forbids it. Every font a conforming document shows must be
 //     embedded, precisely so that the file renders the same in fifty years as
-//     it does today; this module's own validator reports such a page under
-//     clause 6.2.11.4.1, as a font with no /FontDescriptor — which is the
-//     mechanism, since a descriptor is where a program hangs. Embed a real face
-//     for anything that must conform.
+//     it does today; a validator reports such a page under clause 6.2.11.4.1,
+//     as a font with no /FontDescriptor — which is the mechanism, since a
+//     descriptor is where a program hangs. Load a real face for anything that
+//     must conform.
 //   - The coverage is WinAnsiEncoding: 224 characters of Latin. Anything
 //     outside it — a dash of Greek, a Chinese name, an emoji — has no glyph.
 //
@@ -128,8 +128,8 @@ var winAnsi = func() map[rune]struct {
 	out := make(map[rune]struct {
 		code byte
 		name string
-	}, len(font.WinAnsiEncodingNames))
-	for code, name := range font.WinAnsiEncodingNames {
+	}, len(font.WinAnsiEncodingNames()))
+	for code, name := range font.WinAnsiEncodingNames() {
 		r, ok := font.GlyphNameToRune(name, code)
 		if !ok {
 			continue

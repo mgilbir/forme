@@ -1,6 +1,7 @@
 package shape
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/mgilbir/forme/fonttest"
@@ -107,38 +108,30 @@ func TestAKernTableBeyondItsSubtableBoundStopsBeingRead(t *testing.T) {
 	}
 }
 
-// TestAKernPairCountBeyondTheBoundStopsBeingAdded is the bound on how many kern
-// pairs one face may hold across all its lookups.
+// TestAKernPairPastTheOldBoundIsApplied is what became of the bound on how many
+// GPOS kern pairs one face may hold.
 //
-// Every pair read is a map entry kept for the life of the face. The count is a
-// running total rather than a per-subtable one — "kernPairs is how many pairs
-// all of them hold together, against maxPairs" — so a font cannot get past it
-// by spreading them out.
+// That bound existed because every pair read was a map entry kept for the life
+// of the face, and it was reached: 176 of the 3,824 faces in the Google Fonts
+// checkout state more than a quarter of a million pairs, most of them through
+// class tables, and their kerning past the bound was silently dropped. The
+// pairs are now searched for in the subtables that state them rather than
+// listed (see kernLookup), so there is nothing to bound and nothing is dropped:
+// the pair past the old total applies.
 //
-// **Reaching it needs extension lookups, and that is most of what this test
-// is.** Every offset in a layout table is sixteen bits except the extension's,
-// so a LookupList and its lookups have to fit in 64KB between them — about
-// sixteen thousand pairs, far short of the bound. A fixture built from ordinary
-// lookups does not reach maxPairs: it reaches the format's own limit first, and
-// the pair under test is dropped for that reason whatever the bound says. Two
-// versions of this test did that and passed vacuously, the second one even after
-// being spread across thirty-five lookups.
-//
-// The measurement that settled it: with ordinary lookups the last pair applies
-// at a total of 3,500 and not at 35,000; with extension lookups it applies at
-// 35,000 and not at 280,000, which is the bound and not the format.
-func TestAKernPairCountBeyondTheBoundStopsBeingAdded(t *testing.T) {
+// **Reaching it needs extension lookups, and that is most of the fixture.**
+// Every offset in a layout table is sixteen bits except the extension's, so a
+// LookupList and its lookups have to fit in 64KB between them — about sixteen
+// thousand pairs, far short of the old bound. The measurement that settled it
+// when the bound was in force: with ordinary lookups the last pair applied at a
+// total of 3,500 and not at 35,000; with extension lookups it applied at 35,000
+// and not at 280,000, which was the bound and not the format.
+func TestAKernPairPastTheOldBoundIsApplied(t *testing.T) {
 	const glyphs = 600
 	const perLookup = 8000
-	// Literals, not maxPairs/perLookup. Deriving the fixture from the bound
-	// means a plant that raises it asks for a hundred thousand lookups and the
-	// run never finishes, which reads as a hang rather than a failure.
+	// Literals, not maxPairs/perLookup: the fixture states the number it is
+	// about rather than following a constant.
 	const lookups = 35 // 35 * 8000 = 280000, comfortably past 1<<18
-	if maxPairs != 1<<18 {
-		t.Fatalf("maxPairs is %d and this fixture carries %d pairs; it states the "+
-			"number rather than following it, so it wants looking at",
-			maxPairs, lookups*perLookup)
-	}
 
 	build := func(n int) *Face {
 		var subs [][]byte
@@ -155,7 +148,7 @@ func TestAKernPairCountBeyondTheBoundStopsBeingAdded(t *testing.T) {
 			subs = append(subs, fonttest.PairPosSubtable(pairs))
 		}
 		// The pair under test, alone in the last lookup, so it is read after
-		// everything before it has been counted.
+		// everything before it.
 		subs = append(subs, fonttest.PairPosSubtable([]fonttest.KernPair{
 			{Left: glyphs, Right: glyphs, Adjust: -250},
 		}))
@@ -172,14 +165,80 @@ func TestAKernPairCountBeyondTheBoundStopsBeingAdded(t *testing.T) {
 		return got[0].XAdvance
 	}
 
-	// Under the bound the pair applies, or this says nothing about the bound:
-	// a fixture that never reaches the last lookup passes either way.
-	if adv := advance(build(4)); adv == 500 {
-		t.Fatalf("with a few lookups the last pair did not apply; the fixture does " +
-			"not reach what the bound is being asked about")
+	if adv := advance(build(4)); adv != 250 {
+		t.Fatalf("with a few lookups the last pair moved the advance to %v, want 250; "+
+			"the fixture does not reach what is being asked about", adv)
 	}
-	if adv := advance(build(lookups)); adv != 500 {
+	f := build(lookups)
+	if adv := advance(f); adv != 250 {
+		t.Errorf("the pair past a total of %d moved the advance to %v, want 250: "+
+			"kerning past the old bound is being dropped again", lookups*perLookup, adv)
+	}
+	if limits := f.LayoutLimits(); len(limits) != 0 {
+		t.Errorf("a face read whole reports limits: %q", limits)
+	}
+}
+
+// TestALegacyKernPairCountBeyondTheBoundStopsBeingAdded is the bound that is
+// left: the legacy kern table still lists its pairs, because it states each one
+// explicitly, and every pair listed is a map entry kept for the life of the
+// face. The count is a running total rather than a per-subtable one, so a font
+// cannot get past it by spreading them out — and tripping it is reported.
+func TestALegacyKernPairCountBeyondTheBoundStopsBeingAdded(t *testing.T) {
+	const glyphs = 600
+	const perSubtable = 1100
+	// Literals, for the reason the test above gives: 256 * 1100 = 281,600, past
+	// 1<<18, in the 256 subtables the reader takes.
+	const subtables = 256
+	if maxPairs != 1<<18 || maxSubtables != subtables {
+		t.Fatalf("maxPairs is %d and maxSubtables %d; this fixture states the numbers "+
+			"rather than following them, so it wants looking at", maxPairs, maxSubtables)
+	}
+	build := func(n int) *Face {
+		subs := make([]fonttest.KernSubtable, 0, n)
+		next := [2]int{1, 1}
+		for i := 0; i < n-1; i++ {
+			pairs := make([]fonttest.KernPair, 0, perSubtable)
+			for len(pairs) < perSubtable {
+				pairs = append(pairs, fonttest.KernPair{Left: next[0], Right: next[1], Adjust: -3})
+				if next[1]++; next[1] > glyphs-1 {
+					next[1] = 1
+					next[0]++
+				}
+			}
+			subs = append(subs, fonttest.KernSubtable{Coverage: fonttest.KernHorizontal, Pairs: pairs})
+		}
+		// The pair under test, alone in the last subtable, and a glyph none of
+		// the others names.
+		subs = append(subs, fonttest.KernSubtable{Coverage: fonttest.KernHorizontal,
+			Pairs: []fonttest.KernPair{{Left: glyphs, Right: glyphs, Adjust: -250}}})
+		return boundsFace(t, glyphs, map[string][]byte{"kern": fonttest.LegacyKern(subs)})
+	}
+	text := string([]rune{rune(0x40 + glyphs), rune(0x40 + glyphs)})
+	advance := func(f *Face) float64 {
+		got, _ := f.ShapeGlyphs(text)
+		if len(got) != 2 {
+			t.Fatalf("shaping two glyphs gave %d", len(got))
+		}
+		return got[0].XAdvance
+	}
+
+	// Under the bound the pair applies, or this says nothing about the bound.
+	small := build(8)
+	if adv := advance(small); adv != 250 {
+		t.Fatalf("with a few subtables the last pair moved the advance to %v, want 250; "+
+			"the fixture does not reach what the bound is being asked about", adv)
+	}
+	if limits := small.LayoutLimits(); len(limits) != 0 {
+		t.Errorf("a table under the bound reports limits: %q", limits)
+	}
+	big := build(subtables)
+	if adv := advance(big); adv != 500 {
 		t.Errorf("the pair past the total of %d was added and moved the advance to "+
 			"%v; past the bound the face stops taking them", maxPairs, adv)
+	}
+	limits := big.LayoutLimits()
+	if len(limits) != 1 || !strings.Contains(limits[0], "kerning pairs") {
+		t.Errorf("the bound tripped and the face reports %q; it has to say so", limits)
 	}
 }

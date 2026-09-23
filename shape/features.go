@@ -101,7 +101,9 @@ type Features struct {
 	//
 	// The tags are merged with the lists the descriptors ask for and applied in
 	// the font's own lookup order, not the order they were written — see
-	// applyRequestedFeatures for why that is the only order there is.
+	// plan.go for why that is the only order there is. A tag the shaper applies
+	// anyway — "liga", "calt" — is the same feature asked for twice and is
+	// applied once, where it always is.
 	Tags string
 	// EastAsian is which national standard's forms a run's ideographs take,
 	// whether its characters are set on the ideographic advance or their own,
@@ -117,6 +119,18 @@ type Features struct {
 	// One value and not a set, because a run is one or the other or neither:
 	// CSS Fonts 4 §6.5's grammar is "normal | sub | super". See Position.
 	Position Position
+	// Language is the language the run is written in, as a BCP 47 tag — the
+	// lang attribute in force where its text is — and selects which of the
+	// font's language systems its rules are read from: "sr" has a font draw
+	// the Serbian forms of five Cyrillic letters, "ro" the Romanian comma
+	// below, "mr" Marathi's eyelash ra. See language.go.
+	//
+	// It is here rather than beside the text for the reason Caps is: it is a
+	// fact about the run that its characters do not state, and it has to reach
+	// the backend that draws the run, which shapes it again. Empty is no
+	// language, and a language the font names no system for is set in its
+	// default one, which is what every run got before this was read.
+	Language string
 }
 
 // Position is CSS Fonts 4 §6.5's font-variant-position, as the feature it asks
@@ -235,14 +249,15 @@ func (c Caps) Features() []string {
 // caller asking what a value needs and the shaper applying it cannot answer
 // differently.
 //
-// Where the tags are applied is the part worth stating. They go after 'ccmp'
-// and 'locl' and *before* the ligatures, which is the order HarfBuzz produces
-// and is not the order a caller-named feature gets: "office" set in Noto Sans
-// with small capitals is six small capitals and no ffi ligature, because the
-// ligature is stated over the lowercase glyphs and by the time 'liga' is
-// reached there are none left. Applying them last instead leaves the ffi
-// ligature standing in the middle of a line of capitals — three letters that
-// did not get the rule the other three did.
+// Where the tags are applied is the part worth stating. They are in the same
+// stage as the ligatures and applied in the font's lookup order with them,
+// which is what HarfBuzz does: "office" set in Noto Sans with small capitals is
+// six small capitals and no ffi ligature, because the font's 'smcp' lookup comes
+// before its 'liga' one and by the time the ligature is tried there are no
+// lowercase glyphs left. Applying them after the ligatures instead leaves the
+// ffi ligature standing in the middle of a line of capitals — three letters
+// that did not get the rule the other three did. A caller naming 'smcp' by tag
+// (ShapeGlyphsWith) gets the same stage, since it is the same request.
 var capsFeatures = [...]struct{ capitals, lowercase string }{
 	CapsNormal:    {},
 	CapsSmall:     {lowercase: "smcp"},
@@ -256,9 +271,9 @@ var capsFeatures = [...]struct{ capitals, lowercase string }{
 // adds returns the tags this set turns on.
 //
 // The order they are returned in decides nothing, and that is worth saying
-// rather than leaving to be inferred: applyRequestedFeatures merges these by
-// the font's own lookup index before any of them is applied, so what this
-// returns is a set written as a slice. The properties' own order is kept anyway,
+// rather than leaving to be inferred: a plan merges these by the font's own
+// lookup index before any of them is applied, so what this returns is a set
+// written as a slice. The properties' own order is kept anyway,
 // because a caller reading a list of tags in a message wants the order the
 // declarations were written in.
 //
@@ -450,27 +465,7 @@ func (f Features) suppresses(tag string) bool {
 	return false
 }
 
-// keeps returns the tags of a list this set leaves on, in the same order.
-//
-// The order is the one the caller gave, which for the default lists is the
-// order the specification requires: composition before the rules that read its
-// output, required ligatures before optional ones, contextual alternates last
-// so that they see the glyphs which survived. Dropping a tag from the middle
-// must not disturb that, which is why this filters rather than rebuilds.
-func (f Features) keeps(tags []string) []string {
-	if f == (Features{}) {
-		return tags
-	}
-	out := tags[:0:0]
-	for _, tag := range tags {
-		if !f.suppresses(tag) {
-			out = append(out, tag)
-		}
-	}
-	return out
-}
-
-// tags is Tags as the list applyRequestedFeatures wants, or nothing.
+// tags is Tags as a list, or nothing.
 func (f Features) tags() []string {
 	if f.Tags == "" {
 		return nil

@@ -3,15 +3,22 @@ package font
 import (
 	"encoding/binary"
 	"math"
+	"slices"
+	"strconv"
 	"strings"
 )
 
-// Minimal font-program parsers backing the PDF/A font rules: enough of
-// TrueType/OpenType (sfnt tables), CFF, and Type 1 to answer three
-// questions — which glyphs exist, what are their advance widths (in 1/1000
-// text-space units), and which glyph does a character map to.
-
-// Program is the common view the rules consume.
+// Program is what the parsers here read out of a font program: which glyphs
+// exist, their advance widths in 1/1000 of the em, which glyph a character
+// maps to, and, for a CID-keyed CFF, how its CIDs and glyph indices relate.
+//
+// shape.Load reads NumGlyphs, WidthByGID, Cmap, GlyphBBox and CmapPartial, and
+// of a CFF, GIDToCID and the Registry, Ordering and Supplement; the subsetters
+// read NumGlyphs. WidthByName, WidthByCID, GlyphNames, GlyphPresent,
+// GlyphNonEmpty, ComponentGID, MacCmap, SymbolCmap, CmapSubtableCount, CIDGIDs,
+// GIDToFD and BudgetExhausted are read by no code outside this package but
+// tests: they answered questions a PDF/A validator asked of an embedded font,
+// in the repository this package came from. See doc.go.
 type Program struct {
 	// GlyphNames lists the glyph names defined by the program (Type1/CFF
 	// non-CID); nil when the format identifies glyphs by index only.
@@ -105,17 +112,23 @@ type Program struct {
 	// WidthByCID gives advance widths by CID for CID-keyed CFF.
 	WidthByCID map[int]float64
 	// CmapPartial reports that a cmap subtable stopped short of its own end
-	// because the cmap work budget (limits.cmapWork, WithMaxCmapWork) ran out,
-	// so the maps above are missing mappings the font really declares. A
-	// consumer must not read "this code is absent from the cmap" as "this code
-	// has no glyph" when it is set — that is audit C46's false positive with a
-	// different cause: a truncated cmap makes trueTypeGID answer "glyph 0"
-	// authoritatively, and a conformant font is then reported as
-	// undefined-glyph / .notdef.
+	// because the font's work budget (see Budget) ran out, so the maps above
+	// are missing mappings the font really declares. A consumer must not read
+	// "this code is absent from the cmap" as "this code has no glyph" when it
+	// is set — that is audit C46's false positive with a different cause: a
+	// truncated cmap makes trueTypeGID answer "glyph 0" authoritatively, and a
+	// conformant font is then reported as undefined-glyph / .notdef.
 	//
-	// The sfnt parser has no Document in scope, so it cannot report the trip
-	// itself; loadFontProgram, which does, forwards it (see noteLimit).
+	// The parser cannot report the trip itself, having nobody to report it to;
+	// the caller reads this, and shape.Load refuses the font on it.
 	CmapPartial bool
+	// BudgetExhausted reports that the work budget the program was read under
+	// ran out, so some field above holds less than the font declares.
+	// CmapPartial says whether the cmap is among them; this says whether
+	// anything is. The two differ because the budget is the font's and not the
+	// cmap's: the glyf walk after the cmap draws on it too, and a font that
+	// spends it there leaves ComponentGID short behind a cmap that is whole.
+	BudgetExhausted bool
 }
 
 // --- sfnt (TrueType / OpenType) ---
@@ -137,11 +150,27 @@ func Be32(b []byte, off int) uint32 {
 // MarkComposite, given one glyph's glyf bytes, marks every glyph index it
 // references as a component (when the glyph is composite, numberOfContours == -1).
 func MarkComposite(g []byte, numGlyphs int, out []bool) {
+	markComposite(g, numGlyphs, out, nil)
+}
+
+// markComposite is MarkComposite charged to a budget, one unit per component
+// record, when b is not nil.
+//
+// The walk is linear in one glyph's bytes, and ParseSFNT makes it once per
+// glyph — which is linear in the table only when the glyphs do not overlap. loca
+// is required to ascend and nothing makes it: offsets 0, L, 0, L, … give every
+// other glyph the whole of glyf, so half of 65535 glyphs each walk a table of a
+// hundred thousand components. That is the same bytes named again, and it is
+// what the budget is for.
+func markComposite(g []byte, numGlyphs int, out []bool, b *Budget) {
 	if len(g) < 2 || int16(Be16(g, 0)) != -1 {
 		return
 	}
 	o := 10
 	for o+4 <= len(g) {
+		if b != nil && !b.charge(1, "the composite glyphs") {
+			return
+		}
 		flags := Be16(g, o)
 		if cgid := Be16(g, o+2); cgid >= 0 && cgid < numGlyphs {
 			out[cgid] = true
@@ -168,8 +197,22 @@ func MarkComposite(g []byte, numGlyphs int, out []bool) {
 
 // be16 as signed for the numberOfContours check.
 
-// ParseSFNT parses a TrueType/OpenType font program.
-func ParseSFNT(data []byte, maxCmapWork int) *Program {
+// ParseSFNT parses a TrueType/OpenType font program under a budget of maxWork
+// units; see ParseSFNTWithin.
+func ParseSFNT(data []byte, maxWork int) *Program {
+	return ParseSFNTWithin(data, NewBudget(maxWork))
+}
+
+// ParseSFNTWithin parses a TrueType/OpenType font program, charging the work to
+// b, which a caller reading more than one part of a font shares between them so
+// that the font as a whole is what is bounded.
+//
+// A budget that runs out does not make this return nil. It returns what it
+// read, with BudgetExhausted set and, if the cmap was what went unread,
+// CmapPartial — a prefix of the cmap is still correct as far as it goes, and a
+// caller asking a narrow question may be able to use it. One that cannot
+// refuses the font on the flags.
+func ParseSFNTWithin(data []byte, b *Budget) *Program {
 	tables := SFNTTables(data)
 	if tables == nil {
 		return nil
@@ -200,6 +243,14 @@ func ParseSFNT(data []byte, maxCmapWork int) *Program {
 		}
 	}
 
+	// The cmap before the glyf walk, because the two share the budget and the
+	// cmap is the one a caller cannot do without: read first, it is whole
+	// whenever it fits, and a font that spends the rest on its glyphs is
+	// reported as that rather than as a truncated cmap it never reached.
+	if cmap := tables["cmap"]; len(cmap) >= 4 {
+		readCmap(fp, cmap, b)
+	}
+
 	// loca/glyf: which glyph indices have outline data within the table.
 	if head, loca, glyf := tables["head"], tables["loca"], tables["glyf"]; len(head) >= 52 && loca != nil && glyf != nil {
 		longLoca := Be16(head, 50) == 1
@@ -213,7 +264,23 @@ func ParseSFNT(data []byte, maxCmapWork int) *Program {
 		// int as a *negative* number, which is less than every end and so
 		// passes a check written only against the top — and is then sliced.
 		// Compared as it is read, the answer does not depend on the word size.
+		//
+		// And an entry the loca does not hold is not an entry. Be16 and Be32
+		// answer zero past the end of what they are given, so a loca shorter
+		// than maxp's glyph count read every glyph beyond it as starting and
+		// ending at zero — present and empty, a blank the font never drew.
+		// HarfBuzz takes the glyph count as what the loca can address and
+		// treats a glyph past it as having no outline data at all; the
+		// subsetter in shape refuses such a loca outright. Absent is the
+		// reading that says so: a glyph with no loca entry is not in glyf.
 		offAt := func(i int) (int, bool) {
+			size := 2
+			if longLoca {
+				size = 4
+			}
+			if i < 0 || size*(i+1) > len(loca) {
+				return 0, false
+			}
 			v := uint64(Be16(loca, 2*i)) * 2
 			if longLoca {
 				v = uint64(Be32(loca, 4*i))
@@ -235,7 +302,7 @@ func ParseSFNT(data []byte, maxCmapWork int) *Program {
 			fp.GlyphPresent[gid] = inGlyf && start <= end
 			fp.GlyphNonEmpty[gid] = inGlyf && start < end
 			if fp.GlyphNonEmpty[gid] {
-				MarkComposite(glyf[start:end], fp.NumGlyphs, fp.ComponentGID)
+				markComposite(glyf[start:end], fp.NumGlyphs, fp.ComponentGID, b)
 				// The glyph header is numberOfContours and then the four
 				// bounds, all int16, so ten bytes. A composite glyph has the
 				// same header, which is why this needs no case for one.
@@ -250,77 +317,127 @@ func ParseSFNT(data []byte, maxCmapWork int) *Program {
 		}
 	}
 
-	// cmap subtables.
-	if cmap := tables["cmap"]; len(cmap) >= 4 {
-		n := Be16(cmap, 2)
-		fp.CmapSubtableCount = n
-		bestRank := 0
-		for i := 0; i < n; i++ {
-			rec := 4 + 8*i
-			if rec+8 > len(cmap) {
-				break
+	fp.BudgetExhausted = b.Exhausted()
+	return fp
+}
+
+// readCmap chooses and reads the font's cmap subtables: the best Unicode one,
+// and the last readable (3,0) symbol and (1,0) Mac Roman ones.
+//
+// # Each subtable once, and only the ones that are used
+//
+// An encoding record is eight bytes and names its subtable by offset, so a font
+// can name one subtable as often as it likes. 65535 records pointing at one
+// format 13 group spanning Unicode are half a megabyte of cmap, and read record
+// by record they were 65535 walks of 1.1 million codes — about four and a half
+// hours — each of them inside a budget that was per subtable (audit C9). And
+// every Unicode subtable of equal or better rank was parsed in turn, each
+// replacing the last, although only one of them is ever kept.
+//
+// Three things close it. The budget is the font's, so however many walks there
+// are they share one bound. A subtable is parsed once per offset, however many
+// records name it. And of the Unicode subtables only the one that will be kept
+// is parsed: they are tried best first and the first that reads is the answer.
+// The choice itself is what it always was — highest rank, and among equal ranks
+// the later record — and so is the symbol and Mac rule, that the last readable
+// one wins; what changed is that reaching the choice no longer means reading
+// everything it passes over.
+//
+// A walk the budget stopped is partial, and partial is final: nothing after it
+// can be read either, and settling for a worse subtable in its place would be
+// answering with a mapping the font did not choose.
+func readCmap(fp *Program, cmap []byte, b *Budget) {
+	n := Be16(cmap, 2)
+	fp.CmapSubtableCount = n
+
+	type result struct {
+		m       map[rune]int
+		partial bool
+	}
+	parsed := map[uint32]result{}
+	parse := func(off uint32) (map[rune]int, bool) {
+		if r, ok := parsed[off]; ok {
+			return r.m, r.partial
+		}
+		m, partial := parseCmapSubtable(cmap[off:], b)
+		m = onlyDeclaredGlyphs(m, fp.NumGlyphs)
+		parsed[off] = result{m, partial}
+		return m, partial
+	}
+
+	type candidate struct {
+		rank int
+		off  uint32
+	}
+	var unicode []candidate
+	var symbol, mac []uint32
+	for i := 0; i < n; i++ {
+		rec := 4 + 8*i
+		if rec+8 > len(cmap) {
+			break
+		}
+		plat := Be16(cmap, rec)
+		enc := Be16(cmap, rec+2)
+		off := Be32(cmap, rec+4)
+		if uint64(off) >= uint64(len(cmap)) {
+			continue
+		}
+		switch rank := unicodeCmapRank(plat, enc); {
+		case rank > 0:
+			unicode = append(unicode, candidate{rank, off})
+		case plat == 3 && enc == 0:
+			symbol = append(symbol, off)
+		case plat == 1 && enc == 0:
+			mac = append(mac, off)
+		}
+	}
+
+	// Best rank first and, within a rank, the later record first: reversed,
+	// and then a stable sort that keeps that order among equals.
+	slices.Reverse(unicode)
+	slices.SortStableFunc(unicode, func(x, y candidate) int { return y.rank - x.rank })
+	for _, c := range unicode {
+		m, partial := parse(c.off)
+		if m != nil {
+			fp.Cmap = m
+			fp.CmapPartial = partial
+			break
+		}
+		// Nothing came back, which is two things: a subtable this cannot read,
+		// and one the budget stopped before it read anything. The flag is what
+		// tells them apart, and dropping it with the empty map made a reader
+		// that gave up look like a font with no cmap at all.
+		if partial {
+			fp.CmapPartial = true
+			break
+		}
+	}
+
+	// The last readable one of each, so tried from the end.
+	lastReadable := func(offs []uint32) map[rune]int {
+		for i := len(offs) - 1; i >= 0; i-- {
+			m, partial := parse(offs[i])
+			fp.CmapPartial = fp.CmapPartial || partial
+			if m != nil || partial {
+				return m // unreadable leaves the map unset, not empty
 			}
-			plat := Be16(cmap, rec)
-			enc := Be16(cmap, rec+2)
-			off := Be32(cmap, rec+4)
-			if uint64(off) >= uint64(len(cmap)) {
-				continue
-			}
-			sub := cmap[off:]
-			rank := unicodeCmapRank(plat, enc)
-			switch {
-			case rank > 0:
-				// Several Unicode subtables may be present; take the best one
-				// (see unicodeCmapRank). Ties are resolved in favour of the
-				// later subtable, which is how a font carrying two equally
-				// ranked subtables has always been read.
-				if rank < bestRank {
-					continue
-				}
-				m, partial := ParseCmapSubtable(sub, maxCmapWork)
-				m = onlyDeclaredGlyphs(m, fp.NumGlyphs)
-				if m != nil {
-					fp.Cmap = m
-					bestRank = rank
-					// The chosen cmap's partialness is what matters; a
-					// discarded lower-ranked subtable's is not.
-					fp.CmapPartial = partial
-					continue
-				}
-				// Nothing came back, which is two things: a subtable this
-				// cannot read, and one the budget stopped before it read
-				// anything. The flag is what tells them apart, and dropping it
-				// with the empty map made a reader that gave up look like a
-				// font with no cmap at all.
-				fp.CmapPartial = fp.CmapPartial || partial
-			case plat == 3 && enc == 0:
-				m, partial := ParseCmapSubtable(sub, maxCmapWork)
-				m = onlyDeclaredGlyphs(m, fp.NumGlyphs)
-				if m == nil {
-					continue // unreadable: leave the cmap unset, not empty
-				}
-				fp.CmapPartial = fp.CmapPartial || partial
-				fp.SymbolCmap = make(map[uint16]int, len(m))
-				for r, gid := range m {
-					fp.SymbolCmap[uint16(r)] = gid
-				}
-			case plat == 1 && enc == 0:
-				m, partial := ParseCmapSubtable(sub, maxCmapWork)
-				m = onlyDeclaredGlyphs(m, fp.NumGlyphs)
-				if m == nil {
-					continue
-				}
-				fp.CmapPartial = fp.CmapPartial || partial
-				fp.MacCmap = make(map[byte]int, len(m))
-				for r, gid := range m {
-					if r <= 0xFF {
-						fp.MacCmap[byte(r)] = gid
-					}
-				}
+		}
+		return nil
+	}
+	if m := lastReadable(symbol); m != nil {
+		fp.SymbolCmap = make(map[uint16]int, len(m))
+		for r, gid := range m {
+			fp.SymbolCmap[uint16(r)] = gid
+		}
+	}
+	if m := lastReadable(mac); m != nil {
+		fp.MacCmap = make(map[byte]int, len(m))
+		for r, gid := range m {
+			if r <= 0xFF {
+				fp.MacCmap[byte(r)] = gid
 			}
 		}
 	}
-	return fp
 }
 
 // onlyDeclaredGlyphs drops the mappings that name a glyph the font does not
@@ -386,13 +503,15 @@ func unicodeCmapRank(plat, enc int) int {
 	return 0
 }
 
-// The expanding subtable formats — 4, 8, 12 and 13, the ones whose bytes
-// describe ranges rather than list glyphs — share one work budget: the caller's
-// maxWork, resolved from limits.cmapWork (WithMaxCmapWork, default
-// defaultMaxCmapWork). One knob rather than four because the formats are
+// Every subtable format charges the font's Budget, one unit per code it visits.
+// The expanding formats — 4, 8, 12 and 13, whose bytes describe ranges rather
+// than list glyphs — are the ones that need it, since a few bytes of them can
+// name all of Unicode; formats 0, 6 and 10 are bounded by their own size, and
+// are charged anyway, because the budget is the font's and a font may name any
+// number of them. One knob rather than one per format because the formats are
 // alternative encodings of the same thing — a font's code→GID coverage — and no
-// caller has a reason to trust one more than another. Each format charges its
-// own counter, so maxWork bounds one subtable, not the whole table.
+// caller has a reason to trust one more than another. It used to be a counter
+// per subtable, which bounded one subtable and not the table (audit C9).
 //
 // cmapResult returns out, or nil when it holds no mapping. A subtable that maps
 // nothing is, to every caller, indistinguishable from one that could not be
@@ -409,8 +528,8 @@ func cmapResult(out map[rune]int) map[rune]int {
 	return out
 }
 
-// budgetStop is what the three cmap walks do when maxWork runs out: they hand
-// back what they have, nil where that is nothing, and the partial flag *set*.
+// budgetStop is what every cmap walk does when the budget runs out: it hands
+// back what it has, nil where that is nothing, and the partial flag *set*.
 //
 // The flag says the walk stopped short, which is a fact about the walk and not
 // about how much it had read. It used to be "len(out) > 0", so a budget that
@@ -425,8 +544,8 @@ func cmapResult(out map[rune]int) map[rune]int {
 // nothing".
 //
 // A comment rather than a function because each walk returns its own local map;
-// this is what the three returns point at, and what ParseSFNT keeps by
-// recording partialness whether or not a map came back.
+// this is what the returns point at, and what readCmap keeps by recording
+// partialness whether or not a map came back.
 
 // unicodeMaxRune is the last code point Unicode defines. Every format here that
 // can express a wider code — 8, 10, 12 and 13 all carry 32-bit codes — stops at
@@ -435,9 +554,7 @@ const unicodeMaxRune = 0x10FFFF
 
 // cmapCoverageGroups expands the {startCharCode, endCharCode, startGlyphID}
 // group array that formats 8, 12 and 13 share, writing into out and reporting
-// whether maxWork stopped it early. work is the caller's counter, so a format
-// that has already spent some of the budget on its header keeps spending the
-// same one.
+// whether the budget stopped it early.
 //
 // sequential says how a group's glyphs run. Formats 8 and 12 walk the glyph IDs
 // alongside the codes — code start+n is glyph startGlyphID+n. Format 13 gives
@@ -452,11 +569,11 @@ const unicodeMaxRune = 0x10FFFF
 // same either way — Unicode has 0x110000 code points and a code is written at
 // most once — but format 13 is the format that can actually reach it, so the
 // work budget is doing real work here rather than standing by.
-func cmapCoverageGroups(b []byte, nGroups, groupsAt, maxWork int, sequential bool, work *int, out map[rune]int) (spent bool) {
+func cmapCoverageGroups(b []byte, nGroups, groupsAt int, sequential bool, bud *Budget, out map[rune]int) (spent bool) {
 	for g := 0; g < nGroups; g++ {
 		// Every group is charged at least one unit, so the budget bounds the
 		// group loop as well as the expansion within a group.
-		if *work++; *work > maxWork {
+		if !bud.charge(1, cmapWork) {
 			return true
 		}
 		p := groupsAt + 12*g
@@ -473,7 +590,7 @@ func cmapCoverageGroups(b []byte, nGroups, groupsAt, maxWork int, sequential boo
 			end = unicodeMaxRune
 		}
 		for c := start; ; c++ {
-			if *work++; *work > maxWork {
+			if !bud.charge(1, cmapWork) {
 				return true
 			}
 			gid := uint64(startGID)
@@ -493,7 +610,7 @@ func cmapCoverageGroups(b []byte, nGroups, groupsAt, maxWork int, sequential boo
 	return false
 }
 
-// ParseCmapSubtable handles cmap formats 0, 4, 6, 8, 10, 12 and 13 — every
+// parseCmapSubtableUnder handles cmap formats 0, 4, 6, 8, 10, 12 and 13 — every
 // format whose character codes are Unicode code points. It returns nil — not an
 // empty map — when the subtable cannot be read (an unsupported format, one
 // truncated past use, or one that maps nothing at all): callers treat a non-nil
@@ -517,18 +634,25 @@ func cmapCoverageGroups(b []byte, nGroups, groupsAt, maxWork int, sequential boo
 // a different signature, not a case in this switch, and returning nil for it is
 // correct: it leaves the font's real cmap to whichever subtable holds one.
 //
-// The second result reports that maxWork stopped the parse before the
-// subtable's own end, so the returned map is a prefix of the font's real
-// coverage. It is separate from the nil result because the mappings that were
-// read are still correct — a code the map resolves resolves rightly — but a code
-// it does not resolve is unknown rather than absent, and no rule may assert
+// The second result reports that the budget of maxWork units stopped the parse
+// before the subtable's own end, so the returned map is a prefix of the font's
+// real coverage. It is separate from the nil result because the mappings that
+// were read are still correct — a code the map resolves resolves rightly — but a
+// code it does not resolve is unknown rather than absent, and no rule may assert
 // against it. Without this the budget reproduces audit C46 exactly.
 //
-// maxWork bounds the expansion of formats 4, 8, 12 and 13 (see WithMaxCmapWork);
-// formats 0, 6 and 10 are bounded by the subtable's own size. Because the
-// budget is configurable, a caller who lowers it moves where the prefix ends —
-// which is safe precisely because the prefix is self-describing.
-func ParseCmapSubtable(b []byte, maxWork int) (map[rune]int, bool) {
+// Because the budget is the caller's, a caller who lowers it moves where the
+// prefix ends — which is safe precisely because the prefix is self-describing.
+func parseCmapSubtableUnder(b []byte, maxWork int) (map[rune]int, bool) {
+	return parseCmapSubtable(b, NewBudget(maxWork))
+}
+
+// cmapWork is what a budget that ran out in a cmap walk says it was reading.
+const cmapWork = "the character map"
+
+// parseCmapSubtable is parseCmapSubtableUnder, charged to a budget the caller may
+// be sharing with the rest of the font.
+func parseCmapSubtable(b []byte, bud *Budget) (map[rune]int, bool) {
 	out := make(map[rune]int)
 	switch Be16(b, 0) {
 	case 0:
@@ -536,6 +660,9 @@ func ParseCmapSubtable(b []byte, maxWork int) (map[rune]int, bool) {
 			return nil, false
 		}
 		for c := 0; c < 256; c++ {
+			if !bud.charge(1, cmapWork) {
+				return cmapResult(out), true // see budgetStop
+			}
 			if gid := int(b[6+c]); gid != 0 {
 				out[rune(c)] = gid
 			}
@@ -553,7 +680,6 @@ func ParseCmapSubtable(b []byte, maxWork int) (map[rune]int, bool) {
 		// than ~65536 inner iterations. A hostile table with many segments each
 		// spanning the whole range is O(segments x 65535) — seconds to minutes
 		// of CPU on an untrusted font. Bound the total work (audit C10).
-		work := 0
 		for s := 0; s < segX2; s += 2 {
 			end := Be16(b, endBase+s)
 			start := Be16(b, startBase+s)
@@ -573,7 +699,7 @@ func ParseCmapSubtable(b []byte, maxWork int) (map[rune]int, bool) {
 			// nothing and, being false on entry, dropped every mapping of a
 			// segment beginning at code 0 (audit C46).
 			for c := start; c <= end; c++ {
-				if work++; work > maxWork {
+				if !bud.charge(1, cmapWork) {
 					return cmapResult(out), true // see budgetStop
 				}
 				var gid int
@@ -603,6 +729,9 @@ func ParseCmapSubtable(b []byte, maxWork int) (map[rune]int, bool) {
 		// them: the caller narrows this map to uint16 for the (3,0) symbol
 		// cmap, where code 0x10000 would alias onto code 0.
 		for i := 0; i < count && first+i <= 0xFFFF; i++ {
+			if !bud.charge(1, cmapWork) {
+				return cmapResult(out), true // see budgetStop
+			}
 			if gid := Be16(b, 10+2*i); gid != 0 {
 				out[rune(first+i)] = gid
 			}
@@ -631,16 +760,16 @@ func ParseCmapSubtable(b []byte, maxWork int) (map[rune]int, bool) {
 		if uint64(nGroups)*12 > uint64(len(b)-(16+is32Len)) {
 			return nil, false
 		}
-		work := 0
-		if cmapCoverageGroups(b, int(nGroups), 16+is32Len, maxWork, true, &work, out) {
+		if cmapCoverageGroups(b, int(nGroups), 16+is32Len, true, bud, out) {
 			return cmapResult(out), true // see budgetStop
 		}
 	case 10:
 		// Trimmed array, the 32-bit twin of format 6: format(2) reserved(2)
 		// length(4) language(4) startCharCode(4) numChars(4), then numChars
-		// glyph indices. No budget: numChars is checked against the bytes that
-		// are actually there, so the run is bounded by the subtable's own size
-		// the way format 6 and format 0 are.
+		// glyph indices. numChars is checked against the bytes that are
+		// actually there, so the run is bounded by the subtable's own size the
+		// way format 6 and format 0 are — and charged all the same, since the
+		// budget is the font's.
 		if len(b) < 20 {
 			return nil, false
 		}
@@ -660,6 +789,9 @@ func ParseCmapSubtable(b []byte, maxWork int) (map[rune]int, bool) {
 			if c > unicodeMaxRune {
 				// The rest run past Unicode too, since c only climbs.
 				break
+			}
+			if !bud.charge(1, cmapWork) {
+				return cmapResult(out), true // see budgetStop
 			}
 			if gid := Be16(b, 20+2*i); gid != 0 {
 				out[rune(c)] = gid
@@ -698,13 +830,12 @@ func ParseCmapSubtable(b []byte, maxWork int) (map[rune]int, bool) {
 		// an sfnt has at most 65535 glyphs, so no honest font needs to map
 		// anywhere near 2^18 code points, and the resulting map stays a few
 		// megabytes at worst.
-		work := 0
 		sequential := Be16(b, 0) == 12
-		if cmapCoverageGroups(b, int(nGroups), 16, maxWork, sequential, &work, out) {
+		if cmapCoverageGroups(b, int(nGroups), 16, sequential, bud, out) {
 			return cmapResult(out), true // see budgetStop
 		}
 	default:
-		// Formats 2 and 14 are not parsed; see the note on ParseCmapSubtable.
+		// Formats 2 and 14 are not parsed; see the note on parseCmapSubtableUnder.
 		return nil, false
 	}
 	return cmapResult(out), false
@@ -716,7 +847,15 @@ type cffIndex struct {
 	items [][]byte
 }
 
-func parseCFFIndex(b []byte, off int) (cffIndex, int) {
+// parseCFFIndex reads the INDEX at off, charging one unit of bud per entry.
+//
+// An INDEX is read once per offset that names it, and a CFF names most of its
+// INDEXes once — but a Subrs INDEX is named by a Private DICT, and a CID-keyed
+// font has as many of those as it has Font DICTs, each free to name any offset.
+// Sixty-five thousand Font DICTs naming sixty-five thousand overlapping INDEXes
+// of sixty-five thousand entries is four billion entries out of a few hundred
+// kilobytes, so the entries are charged, not the INDEXes.
+func parseCFFIndex(b []byte, off int, bud *Budget) (cffIndex, int) {
 	var idx cffIndex
 	if off+2 > len(b) {
 		return idx, len(b)
@@ -746,6 +885,9 @@ func parseCFFIndex(b []byte, off int) (cffIndex, int) {
 	}
 	dataStart := offArray + (count+1)*offSize - 1
 	for i := 0; i < count; i++ {
+		if !bud.charge(1, "a CFF INDEX") {
+			return idx, len(b)
+		}
 		s, e := readOff(i), readOff(i+1)
 		if s < 1 || e < s || dataStart+e > len(b) {
 			return idx, len(b)
@@ -819,7 +961,7 @@ func parseCFFDict(b []byte) map[int][]float64 {
 				}
 			}
 			var f float64
-			ParseFloat(sb.String(), &f)
+			parseBCDReal(sb.String(), &f)
 			operands = append(operands, f)
 		case v >= 32 && v <= 246:
 			operands = append(operands, float64(v-139))
@@ -850,8 +992,30 @@ type cffPrivate struct {
 	subrs    cffIndex
 }
 
-// parseCFFPrivate reads a Private DICT named by a top or Font DICT's operator
-// 18, whose two operands are its size and its offset in that order.
+// cffPrivates reads the Private DICTs of one CFF, and the Subrs INDEXes they
+// name, each once.
+//
+// A Private DICT is named by an offset and a size, and nothing stops a font
+// naming one many times: every Font DICT in a CID-keyed font's FDArray may name
+// the same Private DICT, and every Private DICT the same Subrs. Read once per
+// reference, a Private DICT of 64 KB named by 65535 Font DICTs is four gigabytes
+// of DICT parsing from a few hundred kilobytes of font. So what has been read is
+// kept by where it is, and what has not is charged to the budget — the bytes of
+// a DICT and the entries of an INDEX — since distinct references need not be to
+// distinct bytes: two DICTs a byte apart overlap by all but one.
+type cffPrivates struct {
+	data  []byte
+	bud   *Budget
+	dicts map[[2]int]cffPrivate
+	subrs map[int]cffIndex
+}
+
+func newCFFPrivates(data []byte, bud *Budget) *cffPrivates {
+	return &cffPrivates{data: data, bud: bud, dicts: map[[2]int]cffPrivate{}, subrs: map[int]cffIndex{}}
+}
+
+// read reads a Private DICT named by a top or Font DICT's operator 18, whose
+// two operands are its size and its offset in that order.
 //
 // The order is worth stating because no test can catch getting it wrong. Reading
 // them the other way round starts the DICT early and ends it in exactly the same
@@ -859,9 +1023,10 @@ type cffPrivate struct {
 // still inside the range, still last, and CFF takes the last operator. The
 // values come back right from the wrong bytes. What saves this is the
 // specification and not the suite.
-func parseCFFPrivate(data []byte, priv []float64) (def, nom float64, subrs cffIndex) {
+func (c *cffPrivates) read(priv []float64) (p cffPrivate) {
+	data := c.data
 	if len(priv) != 2 {
-		return 0, 0, subrs
+		return p
 	}
 	pOff, offOK := dictOffset(priv[1])
 	pSize, sizeOK := dictOffset(priv[0])
@@ -870,23 +1035,36 @@ func parseCFFPrivate(data []byte, priv []float64) (def, nom float64, subrs cffIn
 	// this check and sliced. Both are already known to be non-negative and
 	// inside a four-byte offset, so the difference cannot wrap.
 	if !offOK || !sizeOK || pOff <= 0 || pOff > len(data) || pSize > len(data)-pOff {
-		return 0, 0, subrs
+		return p
+	}
+	key := [2]int{pOff, pSize}
+	if p, ok := c.dicts[key]; ok {
+		return p
+	}
+	if !c.bud.charge(pSize, "a CFF Private DICT") {
+		return p
 	}
 	pd := parseCFFDict(data[pOff : pOff+pSize])
 	if v, ok := pd[20]; ok && len(v) == 1 {
-		def = v[0]
+		p.def = v[0]
 	}
 	if v, ok := pd[21]; ok && len(v) == 1 {
-		nom = v[0]
+		p.nom = v[0]
 	}
 	if v, ok := pd[19]; ok && len(v) == 1 { // Subrs, relative to the Private DICT
 		if rel, ok := dictOffset(v[0]); ok {
 			if so := pOff + rel; so > 0 && so < len(data) {
-				subrs, _ = parseCFFIndex(data, so)
+				subrs, seen := c.subrs[so]
+				if !seen {
+					subrs, _ = parseCFFIndex(data, so, c.bud)
+					c.subrs[so] = subrs
+				}
+				p.subrs = subrs
 			}
 		}
 	}
-	return def, nom, subrs
+	c.dicts[key] = p
+	return p
 }
 
 // parseCFFFDs reads a CID-keyed font's FDArray and FDSelect: the Private DICTs
@@ -899,16 +1077,17 @@ func parseCFFPrivate(data []byte, priv []float64) (def, nom float64, subrs cffIn
 //
 // Returns nil for both when the font is not CID-keyed or says nothing useful,
 // which leaves the caller on the top DICT's own Private DICT.
-func parseCFFFDs(data []byte, top map[int][]float64, numGlyphs int, isCID bool) ([]int, []cffPrivate) {
+func parseCFFFDs(privates *cffPrivates, top map[int][]float64, numGlyphs int, isCID bool) ([]int, []cffPrivate) {
 	if !isCID || numGlyphs == 0 {
 		return nil, nil
 	}
+	data := privates.data
 	fdaOff, haveFDA := dictInt(top, 1236) // FDArray
 	fdsOff, haveFDS := dictInt(top, 1237) // FDSelect
 	if !haveFDA || fdaOff <= 0 || fdaOff >= len(data) {
 		return nil, nil
 	}
-	fontDicts, _ := parseCFFIndex(data, fdaOff)
+	fontDicts, _ := parseCFFIndex(data, fdaOff, privates.bud)
 	if len(fontDicts.items) == 0 {
 		return nil, nil
 	}
@@ -916,7 +1095,7 @@ func parseCFFFDs(data []byte, top map[int][]float64, numGlyphs int, isCID bool) 
 	for i, fd := range fontDicts.items {
 		d := parseCFFDict(fd)
 		if priv, ok := d[18]; ok {
-			privs[i].def, privs[i].nom, privs[i].subrs = parseCFFPrivate(data, priv)
+			privs[i] = privates.read(priv)
 		}
 	}
 
@@ -931,46 +1110,112 @@ func parseCFFFDs(data []byte, top map[int][]float64, numGlyphs int, isCID bool) 
 	switch b[0] {
 	case 0:
 		// One byte per glyph, in glyph order.
+		if !privates.bud.charge(numGlyphs, "the CFF FDSelect") {
+			return fdOf, privs
+		}
 		for g := 0; g < numGlyphs && 1+g < len(b); g++ {
 			fdOf[g] = int(b[1+g])
 		}
 	case 3:
 		// Ranges: a first glyph and its FD, repeated, closed by a sentinel that
 		// gives the glyph after the last range rather than a range of its own.
+		//
+		// The ranges have to be in order of their first glyph — the
+		// specification says so, and it is what makes them a partition — and
+		// reading stops at the first that is not. Unordered, each range ran
+		// from its own first glyph to the next range's, and nothing stopped
+		// that from being the whole font every other time: alternating firsts
+		// of 0 and n made 65535 ranges of 32768 glyphs each, two billion
+		// writes from 200 KB (audit C127). In order, the ranges are disjoint
+		// and the writes come to the glyph count at most, whatever the font
+		// says. The glyphs of the ranges that came before the fault keep their
+		// FD and the rest keep the first, which is the answer for a font whose
+		// FDSelect says nothing about them.
+		//
+		// The writes are charged to the budget, a unit a glyph. In order they
+		// come to the glyph count, so a real font never notices; what the
+		// charge is for is that the order is then something a test can count
+		// rather than time. Timed, a read that stops at the second range costs
+		// forty microseconds, and what the race detector does to allocating
+		// the answer put a linear curve at fourteen for four.
 		if len(b) < 5 {
 			break
 		}
 		nRanges := Be16(b, 1)
+		prev := -1
 		for r := 0; r < nRanges; r++ {
 			p := 3 + r*3
 			if p+5 > len(b) {
 				break
 			}
 			first, fd, next := Be16(b, p), int(b[p+2]), Be16(b, p+3)
+			if first <= prev {
+				break
+			}
+			prev = first
+			if end := min(next, numGlyphs); end > first &&
+				!privates.bud.charge(end-first, "the CFF FDSelect") {
+				break
+			}
 			for g := first; g < next && g < numGlyphs; g++ {
-				if g >= 0 {
-					fdOf[g] = fd
-				}
+				fdOf[g] = fd
 			}
 		}
 	}
 	return fdOf, privs
 }
 
+// DefaultCFFWork is the budget ParseCFF reads a font under, in the units Budget
+// counts.
+//
+// It is about thirty times what the most expensive font this is tested against
+// spends: Noto Sans SC, 65,535 CID-keyed glyphs, reads in about half a million
+// units, INDEX entries and every width's charstring steps included. A font past
+// it is asking for its widths to be found by a walk no real font needs.
+const DefaultCFFWork = 1 << 24
+
 // ParseCFF parses a bare CFF font (FontFile3 /Type1C or /CIDFontType0C, or
-// the CFF table of an OpenType font).
+// the CFF table of an OpenType font), widths included, under a budget of
+// DefaultCFFWork.
+//
+// It returns nil for a font it cannot read, and a font whose reading ran past
+// the budget is one of those: the widths are found by interpreting the
+// charstrings, and one whose interpretation was cut short would come back as
+// the default width, which looks like an answer.
 func ParseCFF(data []byte) *Program {
+	return parseCFF(data, NewBudget(DefaultCFFWork), true)
+}
+
+// ParseCFFGlyphs reads what ParseCFF reads except the widths: the glyph count,
+// the charset, which glyph belongs to which Font DICT, and the character
+// collection. The work is charged to b, and it returns nil where ParseCFF
+// would, including when b runs out.
+//
+// # Why the widths are left out
+//
+// They are the whole of the cost and none of what a shaper reads. A width is
+// found by interpreting a glyph's charstring, subroutines and all, up to its
+// first stack-clearing operator — once per glyph in the font — and an sfnt
+// carries its advances in hmtx, which is where shape reads them. A 700-byte font
+// whose subroutines fan out made that interpretation take six seconds inside
+// shape.Load for widths nothing would look at (audit C4). The budget bounds the
+// interpretation; not doing it is better than bounding it.
+func ParseCFFGlyphs(data []byte, b *Budget) *Program {
+	return parseCFF(data, b, false)
+}
+
+func parseCFF(data []byte, b *Budget, withWidths bool) *Program {
 	if len(data) < 4 || data[0] != 1 {
 		return nil
 	}
 	hdrSize := int(data[2])
-	_, afterNames := parseCFFIndex(data, hdrSize)
-	topDicts, afterTop := parseCFFIndex(data, afterNames)
-	stringsIdx, afterStrings := parseCFFIndex(data, afterTop)
+	_, afterNames := parseCFFIndex(data, hdrSize, b)
+	topDicts, afterTop := parseCFFIndex(data, afterNames, b)
+	stringsIdx, afterStrings := parseCFFIndex(data, afterTop, b)
 	// The Global Subr INDEX, which sits after the strings and had been skipped.
 	// A charstring may reach its width through one of these — see
 	// type2CharstringWidth.
-	globalSubrs, _ := parseCFFIndex(data, afterStrings)
+	globalSubrs, _ := parseCFFIndex(data, afterStrings, b)
 	if len(topDicts.items) == 0 {
 		return nil
 	}
@@ -987,7 +1232,7 @@ func ParseCFF(data []byte) *Program {
 	if !ok || csOff <= 0 || csOff >= len(data) {
 		return nil
 	}
-	charStrings, _ := parseCFFIndex(data, csOff)
+	charStrings, _ := parseCFFIndex(data, csOff, b)
 	fp.NumGlyphs = len(charStrings.items)
 
 	ros, isCID := top[1230] // ROS
@@ -1009,10 +1254,10 @@ func ParseCFF(data []byte) *Program {
 		}
 	}
 	// Private DICT: nominal/default widths.
-	defaultWidthX, nominalWidthX := 0.0, 0.0
-	var localSubrs cffIndex
+	privates := newCFFPrivates(data, b)
+	var topPriv cffPrivate
 	if priv, ok := top[18]; ok && len(priv) == 2 {
-		defaultWidthX, nominalWidthX, localSubrs = parseCFFPrivate(data, priv)
+		topPriv = privates.read(priv)
 	}
 
 	// A CID-keyed font has no top DICT Private entry at all. Each glyph's
@@ -1027,7 +1272,7 @@ func ParseCFF(data []byte) *Program {
 	// default *is* the answer. With no Private DICT the default is zero, and a
 	// face comes back with almost every glyph zero units wide: 17,707 of Noto
 	// Sans JP's 17,936 before this read the FDs.
-	fdOf, fdPriv := parseCFFFDs(data, top, fp.NumGlyphs, isCID)
+	fdOf, fdPriv := parseCFFFDs(privates, top, fp.NumGlyphs, isCID)
 
 	// charset: GID → SID (names) or CID.
 	// A charset operand that is not an offset at all is read as no charset:
@@ -1104,46 +1349,66 @@ func ParseCFF(data []byte) *Program {
 		}
 	}
 
-	// Charstring widths (Type 2: optional leading width operand).
+	// Charstring widths (Type 2: optional leading width operand), one per
+	// glyph, found once. They used to be found once for each map a glyph
+	// appears in, which is every glyph twice.
 	//
 	// The two defaults come from the glyph's own Private DICT, which for a
 	// CID-keyed font is whichever of the FDArray's its FDSelect names.
-	widthOf := func(g int, cs []byte) float64 {
-		def, nom := defaultWidthX, nominalWidthX
-		local := localSubrs
-		if fdOf != nil && g < len(fdOf) {
-			if i := fdOf[g]; i >= 0 && i < len(fdPriv) {
-				// The local subroutines come from the same Private DICT the two
-				// width defaults do, which for a CID-keyed font is the one its
-				// FDSelect names — so a glyph reading its width through a subr
-				// must read it through *that* FD's, not the top DICT's.
-				def, nom, local = fdPriv[i].def, fdPriv[i].nom, fdPriv[i].subrs
+	var widths []float64
+	if withWidths {
+		widths = make([]float64, fp.NumGlyphs)
+		for g, cs := range charStrings.items {
+			p := topPriv
+			if fdOf != nil && g < len(fdOf) {
+				if i := fdOf[g]; i >= 0 && i < len(fdPriv) {
+					// The local subroutines come from the same Private DICT the
+					// two width defaults do, which for a CID-keyed font is the
+					// one its FDSelect names — so a glyph reading its width
+					// through a subr must read it through *that* FD's, not the
+					// top DICT's.
+					p = fdPriv[i]
+				}
+			}
+			if w, has := type2CharstringWidth(cs, p.subrs, globalSubrs, b); has {
+				widths[g] = (p.nom + w) * scale
+			} else {
+				widths[g] = p.def * scale
 			}
 		}
-		w, has := type2CharstringWidth(cs, local, globalSubrs)
-		if !has {
-			return def * scale
-		}
-		return (nom + w) * scale
+	}
+	// Whatever ran the budget out — the charstrings, a Private DICT, an INDEX
+	// — left something above unread, and this has no way to say which field
+	// is short. A width that was not found reads as the default, which looks
+	// like an answer; so nothing is returned rather than a font that is part
+	// right.
+	if b.Exhausted() {
+		return nil
 	}
 
 	if isCID {
 		fp.CIDGIDs = make(map[int]bool, fp.NumGlyphs)
-		fp.WidthByCID = make(map[int]float64, fp.NumGlyphs)
 		// Copied into a slice of its own length rather than appended onto nil,
 		// which for a font with no charstrings gives nil back and makes the one
 		// field that says whether this font is CID-keyed say that it is not.
 		fp.GIDToCID = make([]int, fp.NumGlyphs)
 		copy(fp.GIDToCID, gidToSID)
 		fp.GIDToFD = append([]int(nil), fdOf...)
+		if withWidths {
+			fp.WidthByCID = make(map[int]float64, fp.NumGlyphs)
+		}
 		for g := 0; g < fp.NumGlyphs; g++ {
 			cid := gidToSID[g]
 			fp.CIDGIDs[cid] = true
-			fp.WidthByCID[cid] = widthOf(g, charStrings.items[g])
+			if withWidths {
+				fp.WidthByCID[cid] = widths[g]
+			}
 		}
 	} else {
 		fp.GlyphNames = make(map[string]bool, fp.NumGlyphs)
-		fp.WidthByName = make(map[string]float64, fp.NumGlyphs)
+		if withWidths {
+			fp.WidthByName = make(map[string]float64, fp.NumGlyphs)
+		}
 		for g := 0; g < fp.NumGlyphs; g++ {
 			name := cffSIDName(gidToSID[g], stringsIdx)
 			// A glyph the charset does not name is not a glyph named "". It is
@@ -1156,13 +1421,12 @@ func ParseCFF(data []byte) *Program {
 				continue
 			}
 			fp.GlyphNames[name] = true
-			fp.WidthByName[name] = widthOf(g, charStrings.items[g])
+			if withWidths {
+				fp.WidthByName[name] = widths[g]
+			}
 		}
 	}
-	fp.WidthByGID = make([]float64, fp.NumGlyphs)
-	for g := 0; g < fp.NumGlyphs; g++ {
-		fp.WidthByGID[g] = widthOf(g, charStrings.items[g])
-	}
+	fp.WidthByGID = widths
 	return fp
 }
 
@@ -1213,12 +1477,24 @@ func dictOffset(v float64) (int, bool) {
 //
 // # What bounds it
 //
+// Two things, and the second is the one that matters.
+//
 // A subroutine can call a subroutine, and a hostile font can make that a cycle.
 // The specification bounds the nesting at 10 and this bounds it at the same,
 // which costs nothing legitimate — no real font nests deeply, because each level
 // is a byte of overhead it exists to avoid — and turns a font that would spin
 // into one that reports no width.
-func type2CharstringWidth(cs []byte, local, global cffIndex) (float64, bool) {
+//
+// Depth is not work, though. A subroutine that calls the next one k times, nine
+// levels down, is k^8 calls inside a depth of nine, and as long as none of them
+// reaches a stack-clearing operator the walk goes on: 700 bytes of font held
+// shape.Load for six seconds at k=10 and would hold it for half an hour at k=20
+// (audit C4). So every step — each operand, operator, call and return — is
+// charged to the font's budget, and a walk that finds it empty reports no width
+// with the budget marked, which ParseCFF turns into a refusal of the font. The
+// budget is shared by every glyph, so it bounds the font and not one charstring:
+// a font whose every glyph calls the same expensive subroutine pays for each.
+func type2CharstringWidth(cs []byte, local, global cffIndex, bud *Budget) (float64, bool) {
 	var operands []float64
 	// The call stack: what to come back to when a subroutine returns. The
 	// charstring itself is the bottom of it.
@@ -1229,6 +1505,9 @@ func type2CharstringWidth(cs []byte, local, global cffIndex) (float64, bool) {
 	stack := []frame{{code: cs}}
 
 	for len(stack) > 0 {
+		if !bud.charge(1, "the CFF charstrings") {
+			return 0, false
+		}
 		f := &stack[len(stack)-1]
 		if f.at >= len(f.code) {
 			// Ran off the end of a subroutine without a return, which is
@@ -1301,7 +1580,16 @@ func type2CharstringWidth(cs []byte, local, global cffIndex) (float64, bool) {
 			case 22, 4: // hmoveto vmoveto
 				expected = 1
 			case 14: // endchar
-				expected = 0
+				// endchar takes no arguments, or four in the deprecated seac
+				// form — adx ady bchar achar — that builds an accented glyph out
+				// of two others. So a width is there when there is one operand
+				// or five, and not otherwise: counting four as "more than none"
+				// read a seac glyph's adx as its width (audit C196). FreeType
+				// draws the line in the same place.
+				if n := len(operands); n == 1 || n == 5 {
+					return operands[0], true
+				}
+				return 0, false
 			default:
 				return 0, false // not a stack-clearing operator: no width info
 			}
@@ -1356,9 +1644,19 @@ func cffSIDName(sid int, idx cffIndex) string {
 	return ""
 }
 
-// ParseFloat is a tiny indirection so parseCFFDict avoids importing fmt just
-// for BCD reals.
-func ParseFloat(s string, f *float64) {
+// parseBCDReal reads the text a CFF DICT's BCD real spells — the digits, '.',
+// "E", "E-" and '-' its nibbles stand for — into f.
+//
+// It is not strconv.ParseFloat and does not pretend to be: it takes what the
+// nibbles spelled, whatever order they came in, so "1.2.3" is 1.23 and a
+// second "E" is read as more of the exponent, where a strict reader would
+// refuse. A malformed real is a font's own mistake in a width nothing in this
+// engine reads, and the exponent bound below is the part that matters. It was
+// exported, as ParseFloat, under a name promising strconv's contract to callers
+// that had none; and it was also what read a Type 1 /FontMatrix, where the
+// token is PostScript text and "1e-3" came out as 13 — see
+// extractType1FontMatrix, which uses strconv.
+func parseBCDReal(s string, f *float64) {
 	var v float64
 	var neg bool
 	i := 0
@@ -1436,10 +1734,10 @@ func ParseFloat(s string, f *float64) {
 
 // --- Type 1 ---
 
-// ParseType1 parses a Type 1 font program (FontFile): the eexec-encrypted
+// parseType1 parses a Type 1 font program (FontFile): the eexec-encrypted
 // private portion holds the CharStrings dictionary with glyph names and
 // hsbw/sbw widths.
-func ParseType1(data []byte) *Program {
+func parseType1(data []byte) *Program {
 	// PFB segmented format: 0x80 0x01/0x02 length(4, little-endian).
 	if len(data) > 6 && data[0] == 0x80 {
 		var joined []byte
@@ -1570,7 +1868,7 @@ func ParseType1(data []byte) *Program {
 		}
 		fp.GlyphNames[name] = true
 		rest = rest[j+csLen:]
-		if Type1CharStringsEnd(rest) {
+		if type1CharStringsEnd(rest) {
 			break
 		}
 	}
@@ -1578,7 +1876,7 @@ func ParseType1(data []byte) *Program {
 	return fp
 }
 
-// Type1CharStringsEnd reports whether the bytes following a CharStrings entry's
+// type1CharStringsEnd reports whether the bytes following a CharStrings entry's
 // charstring data close the dictionary. A Type 1 CharStrings dictionary
 // (Adobe's Type 1 Font Format, 10.3) ends with a standalone "end" token after
 // the last entry's ND (or |-) token:
@@ -1594,7 +1892,7 @@ func ParseType1(data []byte) *Program {
 //
 // It reads the ND token and the one after it; a dictionary that omits ND
 // terminates on the first token, which is why both positions are compared.
-func Type1CharStringsEnd(b []byte) bool {
+func type1CharStringsEnd(b []byte) bool {
 	i := 0
 	for k := 0; k < 2; k++ {
 		for i < len(b) && isWhitespace(b[i]) {
@@ -1751,8 +2049,14 @@ func extractType1FontMatrix(data []byte) float64 {
 	if len(fields) < 1 {
 		return 0
 	}
-	var f float64
-	ParseFloat(fields[0], &f)
+	// A PostScript number, not a BCD real: "0.001", "1e-3" and "-.5" are
+	// all spellings a font writes, and parseBCDReal read the second as 13.
+	// A token strconv cannot read — a radix number, a name — is no scale,
+	// and the caller's default stands.
+	f, err := strconv.ParseFloat(fields[0], 64)
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+		return 0
+	}
 	return f
 }
 
@@ -1763,9 +2067,9 @@ func extractType1FontMatrix(data []byte) float64 {
 // a program missing one table still answers questions about the others.
 //
 // This is the one thing a font reader and a font writer share. ParseSFNT reads
-// tables to answer validation questions; a writer rewrites them. Beyond finding
-// where a table is, they have nothing in common, and coupling them further
-// would make a subsetter's bug look like a validator's.
+// tables to answer questions about the font; shape's subsetter rewrites them.
+// Beyond finding where a table is, they have nothing in common, and coupling
+// them further would make a subsetter's bug look like a reader's.
 func SFNTTables(data []byte) map[string][]byte {
 	if len(data) < 12 {
 		return nil
@@ -1775,13 +2079,17 @@ func SFNTTables(data []byte) map[string][]byte {
 	default:
 		return nil
 	}
+	// A directory that runs past the end of the file is refused whole, and it
+	// is refused before numTables sizes the map: the count is the file's, and
+	// sixty-five thousand of it made a map of several megabytes out of a
+	// twelve-byte header.
 	numTables := Be16(data, 4)
+	if 12+16*numTables > len(data) {
+		return nil
+	}
 	tables := make(map[string][]byte, numTables)
 	for i := 0; i < numTables; i++ {
 		rec := 12 + 16*i
-		if rec+16 > len(data) {
-			return nil
-		}
 		name := string(data[rec : rec+4])
 		off := Be32(data, rec+8)
 		length := Be32(data, rec+12)

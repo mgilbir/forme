@@ -304,3 +304,55 @@ func itoaPx(v int) string {
 	}
 	return digits + "px"
 }
+
+// TestAParagraphAfterARightToLeftOneOwnsItsBoundaries: a forced break ends one
+// bidi paragraph and starts the next, and the visual order the gaps are read in
+// is each paragraph's own. Asked of the whole block, the reordering gave the
+// left-to-right second paragraph the Hebrew one's level and paired its spans
+// backwards, so the paragraph's gap went after "BBB" instead of between "AAA"
+// and "BBB". The same line without the Hebrew one above it is the reference.
+func TestAParagraphAfterARightToLeftOneOwnsItsBoundaries(t *testing.T) {
+	const second = `<span class=ls0>AAA</span><span class=ls0>BBB</span>C`
+	starts := func(markup string) (aaa, bbb style.Unit) {
+		t.Helper()
+		f := find(t, layoutOf(t, 4000, `<div id="p">`+markup+`</div>`,
+			`#p { font-family: Courier; font-size: 20px; width: 400px;
+			      letter-spacing: 10px } .ls0 { letter-spacing: 0 }`), "p")
+		line := f.Lines[len(f.Lines)-1]
+		for _, r := range line.Runs {
+			switch r.Text {
+			case "AAA":
+				aaa = r.X
+			case "BBB":
+				bbb = r.X
+			}
+		}
+		return aaa, bbb
+	}
+	a0, b0 := starts(second)
+	a1, b1 := starts(`שלום<br>` + second)
+	if got, want := b1.Sub(a1), b0.Sub(a0); got != want {
+		t.Errorf("after a Hebrew line BBB starts %vpx after AAA, and %vpx without "+
+			"it; the gap between the spans is the paragraph's either way",
+			got.Px(), want.Px())
+	}
+}
+
+// TestABlockWithNoInlineContentHasNoBoundaries: the per-paragraph order is
+// asked of every block the intrinsic sizing measures, and a block with nothing
+// inline in it has no first item to take a paragraph from. Asking it anyway
+// was an index out of range on the first shrink-wrapped box with nothing in
+// it; each of these documents measures one.
+func TestABlockWithNoInlineContentHasNoBoundaries(t *testing.T) {
+	for _, markup := range []string{
+		`<table><tr><td><div></div></td></tr></table>`,
+		`<table><tr><td><span></span></td></tr></table>`,
+		`<table><tr><td> </td></tr></table>`,
+		`<div style="float: left"><span></span></div>`,
+		`<div style="float: left"> <!-- --> </div>`,
+		`<div style="display: inline-block"> </div>`,
+		`<table><tr><td><div style="position: absolute"></div></td></tr></table>`,
+	} {
+		layoutOf(t, 600, markup, `td, div { letter-spacing: 10px }`)
+	}
+}

@@ -112,7 +112,9 @@ func TestAnInlinesDecorationReachesTheBlock(t *testing.T) {
 		}
 		return n
 	}
-	if got := lines(`<p><span id="s"><div>b</div></span></p>`,
+	// In a <div> and not a <p>: a <div> ends an open paragraph, however deep
+	// inside it, so "<p><span><div>" is not a block inside an inline at all.
+	if got := lines(`<div><span id="s"><div>b</div></span></div>`,
 		`#s { text-decoration: underline }`); got != 1 {
 		t.Errorf("%d decoration lines for a block inside an underlined inline, want 1", got)
 	}

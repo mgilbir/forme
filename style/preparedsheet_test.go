@@ -148,10 +148,10 @@ func TestTheMemoIsRefusedAtADifferentPointInTheOrder(t *testing.T) {
 	if done == nil {
 		t.Fatal("the sheet was not remembered")
 	}
-	if _, ok := preparedBefore(ua, done.start); !ok {
+	if _, ok := preparedBefore(ua, done.start, Media{}); !ok {
 		t.Fatal("the sheet was not answered from the memo at the point it was prepared")
 	}
-	if _, ok := preparedBefore(ua, done.start+1); ok {
+	if _, ok := preparedBefore(ua, done.start+1, Media{}); ok {
 		t.Error("the sheet was answered from the memo one place later in the " +
 			"order; every declaration's order number would be wrong by one")
 	}
@@ -190,13 +190,13 @@ func TestASheetThatDeclaresALayerIsNotRemembered(t *testing.T) {
 	if a == nil {
 		t.Fatal("no paragraph")
 	}
-	if got := first.Styles[a]["color"]; got != "blue" {
+	if got := first.Styles[a].Get("color"); got != "blue" {
 		t.Errorf("the first document's colour is %q, want blue: an unlayered "+
 			"declaration beats a layered one", got)
 	}
 	for n, cs := range second.Styles {
-		if n.Type == html.ElementNode && n.Name == "p" && cs["color"] != "blue" {
-			t.Errorf("the second document's colour is %q, want blue", cs["color"])
+		if n.Type == html.ElementNode && n.Name == "p" && cs.Get("color") != "blue" {
+			t.Errorf("the second document's colour is %q, want blue", cs.Get("color"))
 		}
 	}
 }

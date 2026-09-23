@@ -43,10 +43,14 @@ func TestNormalisationFollowsTheShaperNotTheScriptFamily(t *testing.T) {
 // My first attempt asserted only that usesSyllabicShaper answers correctly, and
 // reverting the caller to ask "is this Indic" broke nothing — it guarded the
 // predicate and not its use, which is the definition of decorative. Asking the
-// normaliser what it actually did found a real defect: a composed character on
-// the syllabic path was taken apart and never put back, because the early
-// return was decided from the *input* having no marks rather than from anything
-// having been decomposed.
+// normaliser what it actually did is what this does instead.
+//
+// A composed character standing alone on the syllabic path is taken apart and
+// left apart. That was once read as a defect — "taken apart and never put
+// back" — and put back; it is what HarfBuzz does (audit C186), because whether
+// to compose again is decided from the text having marks in it, and the font's
+// own rules put back together what it means to. Putting it back drew the
+// precomposed glyph where HarfBuzz draws the parts.
 func TestKhmerAndMyanmarAreFullyDecomposedLikeIndic(t *testing.T) {
 	f, err := NotoSans()
 	if err != nil {
@@ -57,13 +61,15 @@ func TestKhmerAndMyanmarAreFullyDecomposedLikeIndic(t *testing.T) {
 		t.Skip("the bundled face lacks the composed form this turns on")
 	}
 
-	// Composed in, composed out — on both paths. Normalisation is to the
-	// font's coverage, not to NFC or NFD, and the face has this one whole.
-	for _, syllabic := range []bool{false, true} {
-		out, _ := f.normalize([]rune{composed}, []int{0}, syllabic, false, false)
-		if len(out) != 1 || out[0] != composed {
-			t.Errorf("syllabic=%v: composed input gave %U, want it left composed", syllabic, out)
-		}
+	// Composed in: composed out on the general path, where normalisation is to
+	// the font's coverage and the face has this one whole; decomposed out on
+	// the syllabic path, which takes everything apart and composes again only
+	// where the text wrote a mark.
+	if out, _ := f.normalize([]rune{composed}, []int{0}, false, false, false); len(out) != 1 || out[0] != composed {
+		t.Errorf("general path: composed input gave %U, want it left composed", out)
+	}
+	if out, _ := f.normalize([]rune{composed}, []int{0}, true, false, false); len(out) != 2 || out[0] != 'e' || out[1] != 0x0301 {
+		t.Errorf("syllabic path: composed input gave %U, want it taken apart and left so", out)
 	}
 	// Decomposed in, composed out — on both paths, since the face can draw it.
 	for _, syllabic := range []bool{false, true} {

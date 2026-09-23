@@ -6,12 +6,11 @@ package paragraph
 // The characters that stand upright on a line of vertical text, UAX #50's
 // values U and Tu. Unicode 17.0.0.
 //
-// 101 ranges, merged from 512 the file and its header state separately: Tu 41, U 462, unassigned 9.
-// The ideographs, the kana, the Hangul, the fullwidth forms and the symbols
-// that are set square in East Asian text. "unassigned" is the header's ranges
-// of unassigned code points that default to U — see cmd/genvertical for why
-// they are not in the data and why leaving them out would be the dangerous
-// direction to be wrong in.
+// 99 ranges, merged from 503 the file states: Tu 41, U 462. The ideographs, the kana,
+// the Hangul, the fullwidth forms and the symbols that are set square in East
+// Asian text, and the unassigned and private use code points of their blocks,
+// which the data lists explicitly. A "default" count would be code points the
+// data is silent on and an @missing line calls upright — see cmd/genvertical.
 //
 // What reads it is a gate rather than a typesetting rule: this engine sets no
 // upright text, and the table is how it knows to say so. See IsUpright.
@@ -88,20 +87,16 @@ var uprightRanges = [...]struct{ lo, hi rune }{
 	{0xFE50, 0xFE57},
 	{0xFE5F, 0xFE62},
 	{0xFE67, 0xFE6F},
-	{0xFF00, 0xFF07},
+	{0xFF01, 0xFF07},
 	{0xFF0A, 0xFF0C},
 	{0xFF0E, 0xFF19},
 	{0xFF1F, 0xFF3A},
 	{0xFF3C, 0xFF3C},
 	{0xFF3E, 0xFF3E},
 	{0xFF40, 0xFF5A},
-	{0xFFBF, 0xFFC1},
-	{0xFFC8, 0xFFC9},
-	{0xFFD0, 0xFFD1},
-	{0xFFD8, 0xFFD9},
-	{0xFFDD, 0xFFE2},
+	{0xFFE0, 0xFFE2},
 	{0xFFE4, 0xFFE7},
-	{0xFFEF, 0xFFF8},
+	{0xFFF0, 0xFFF8},
 	{0xFFFC, 0xFFFD},
 	{0x10980, 0x1099F},
 	{0x11580, 0x115FF},
@@ -115,6 +110,8 @@ var uprightRanges = [...]struct{ lo, hi rune }{
 	{0x1D800, 0x1DAAF},
 	{0x1F000, 0x1F7FF},
 	{0x1F900, 0x1FAFF},
-	{0x20000, 0x3FFFD},
-	{0xF0000, 0x10FFFD},
+	{0x20000, 0x2FFFD},
+	{0x30000, 0x3FFFD},
+	{0xF0000, 0xFFFFD},
+	{0x100000, 0x10FFFD},
 }

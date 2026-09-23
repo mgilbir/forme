@@ -76,9 +76,9 @@ func TestAFirstLetterIsSetInItsOwnStyle(t *testing.T) {
 				break
 			}
 		}
-		if got[0].Style["color"] == got[len(got)-1].Style["color"] {
+		if got[0].Style.Get("color") == got[len(got)-1].Style.Get("color") {
 			t.Errorf("%s: the letter and the rest are both %q",
-				tc.what, got[0].Style["color"])
+				tc.what, got[0].Style.Get("color"))
 		}
 	}
 }

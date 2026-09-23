@@ -452,8 +452,8 @@ func (b *boxBuilder) tableWrapper(table *Box) *Box {
 	// background from being painted twice, once by each box.
 	cs := style.Inherited(table.Style)
 	for _, name := range wrapperProperties {
-		if v, ok := table.Style[name]; ok {
-			cs[name] = v
+		if v, ok := table.Style.Lookup(name); ok {
+			cs = cs.With(name, v)
 		}
 	}
 
@@ -515,10 +515,60 @@ func (b *boxBuilder) tableWrapper(table *Box) *Box {
 // the strut's descent, and the eleven "applies-to" tests that put an
 // inline-table inside a bordered box all measured a container a few pixels too
 // tall.
+//
+// The rest are the properties of a flex item and a grid item, which css-tables-3
+// also lists among the ones used on the wrapper, and for the reason the others are there: a
+// <table> in a flex or grid container is an item, and the item is the wrapper.
+// The wrapper inherits and these do not, so a table's "flex: 1" stayed on the
+// table, where no container reads it, and the item beside it took the room;
+// "order" and "align-self" were dropped the same way, and "grid-column: 3" put
+// the table in column 1 (audit C38). Box.Order was copied across and the
+// property it came from was not, and orderOf reads the property.
+//
+// They are left on the table as well, where they are read by nothing: a table
+// is not an item of its wrapper, which is a block. The margins are the only
+// properties here that anything would read twice, and blockIn does not read
+// them off a table.
 var wrapperProperties = []string{
 	"position", "float", "clear", "z-index", "vertical-align",
 	"margin-top", "margin-right", "margin-bottom", "margin-left",
 	"top", "right", "bottom", "left",
+	"flex-grow", "flex-shrink", "flex-basis", "order",
+	"align-self", "justify-self",
+	// The four grid lines. grid-area, grid-row and grid-column are shorthands
+	// of these, expanded by the cascade, and are nothing a style holds.
+	"grid-row-start", "grid-row-end", "grid-column-start", "grid-column-end",
+}
+
+// wrapperIsAnItem reports whether a table's wrapper is an item of a flex or a
+// grid container this engine arranges, whose width that container decides.
+//
+// An automatic table width is §17.5.2's "as wide as the containing block unless
+// the content wants less", and the containing block is the wrapper — which a
+// block sizes to the table, so the two agree. An item's wrapper is sized by the
+// container instead, grown by "flex: 1" or stretched across a column or a grid
+// area, and a table that then shrank back to its content inside it was a table
+// the width of its content in an item four times as wide (audit C38): the item
+// properties reached the wrapper and the room they won was left empty. The
+// table fills the wrapper, as the one box the author wrote would.
+//
+// Where the container sized the item to its content anyway — an auto basis, an
+// aligned item's fit-content — the wrapper's width is the table's own and
+// filling it changes nothing. A container that is refused is laid out as a
+// block, and its table is a block's.
+func (l *layouter) wrapperIsAnItem(table *Box) bool {
+	wrapper := table.Parent
+	if wrapper == nil || !wrapper.TableWrapper || wrapper.Position.outOfFlow() ||
+		wrapper.Parent == nil {
+		return false
+	}
+	switch p := wrapper.Parent; p.Inner {
+	case InnerFlex:
+		return l.refusesToFlex(p) == ""
+	case InnerGrid:
+		return l.refusesToGrid(p, 0) == ""
+	}
+	return false
 }
 
 // captionAtBottom reads caption-side.
@@ -530,7 +580,7 @@ var wrapperProperties = []string{
 // keywords are case-insensitive and a stylesheet is free to write "BOTTOM".
 // Compared as written, such a declaration was silently the initial value.
 func captionAtBottom(b *Box) bool {
-	return strings.EqualFold(strings.TrimSpace(b.Style["caption-side"]), "bottom")
+	return strings.EqualFold(strings.TrimSpace(b.Style.Get("caption-side")), "bottom")
 }
 
 // properTableChild is §17.2.1's own list: the boxes a table may hold directly.

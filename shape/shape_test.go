@@ -49,7 +49,7 @@ func TestKerningIsRead(t *testing.T) {
 	// another naming the same glyphs.
 	pair := func(a, b int) (pairAdjust, bool) {
 		for _, kl := range f.layout.kern {
-			if adj, ok := kl.pairs[[2]int{a, b}]; ok {
+			if adj, ok := kl.pair(a, b); ok {
 				return adj, true
 			}
 		}

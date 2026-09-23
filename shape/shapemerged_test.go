@@ -120,6 +120,34 @@ func TestAMergedRunReportsOnlyItsOwnMissingCharacters(t *testing.T) {
 	}
 }
 
+// TestAMergedRunCountsWhatTheShapingCounts is audit C79. The merged path
+// counted its run's characters by asking the face for each, where every other
+// path counts what the shaping could not draw: not a character nothing is drawn
+// for — the override a right-to-left run reaches a backend behind, a joiner —
+// and not one the face draws as its decomposition. The same run reported a
+// different count by whether it had a neighbour to merge with.
+func TestAMergedRunCountsWhatTheShapingCounts(t *testing.T) {
+	f := mergeFace(t)
+	for _, tc := range []struct {
+		what, s string
+		want    int
+	}{
+		{"an override and a joiner, which nothing draws", "\u202Eab\u200D", 0},
+		{"a precomposed letter the face draws as a and its accent", "\u00E1b", 0},
+		{"a letter the face does not have", "aA", 1},
+		// Cut by script, so the Greek letter is shaped as a piece of its own
+		// and its place is counted from where that piece starts.
+		{"a letter of another script the face does not have", "a\u03B1", 1},
+	} {
+		_, plain := f.ShapeGlyphsInContext(tc.s, "b", "", Features{})
+		_, merged := f.ShapeGlyphsMerged(tc.s, "b", "", "b", "", true, Features{})
+		if plain != tc.want || merged != tc.want {
+			t.Errorf("%s (%q): %d missing shaped in context and %d merged, want %d both",
+				tc.what, tc.s, plain, merged, tc.want)
+		}
+	}
+}
+
 // TestAGroupsRunsAddUpToTheWholeWord.
 //
 // A run of a merge group is measured from the two ends of the span it covers

@@ -151,7 +151,7 @@ func (g *hyphenGather) text(b *Box) {
 	// answer: this pass runs over every document, and one that never says
 	// "hyphens: auto" should pay a string switch per text box and not a walk up
 	// the tree for a language nothing will use.
-	if hy, _ := hyphensOf(b.Style["hyphens"]); !hy.Auto {
+	if hy := hyphensOf(b.Style.Get("hyphens")); !hy.Auto {
 		g.flush()
 		return
 	}
@@ -165,7 +165,7 @@ func (g *hyphenGather) text(b *Box) {
 	// what it would add is the *hyphen*, printed at a break the value would have
 	// taken anyway. line-break-anywhere-002 is a column one character wide and
 	// asks for no red, and a hyphen is a character sticking out of the column.
-	if lb, _ := lineBreakOf(b.Style["line-break"]); lb.Anywhere {
+	if lb := lineBreakOf(b.Style.Get("line-break")); lb.Anywhere {
 		g.flush()
 		return
 	}
@@ -191,7 +191,7 @@ func (g *hyphenGather) text(b *Box) {
 			continue
 		}
 		if len(g.word) == 0 {
-			g.limits = limitsOf(b.Style["hyphenate-limit-chars"])
+			g.limits = limitsOf(b.Style.Get("hyphenate-limit-chars"))
 		}
 		g.word = append(g.word, r)
 		g.from = append(g.from, hyphenSource{box: b, at: i})

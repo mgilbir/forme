@@ -41,8 +41,9 @@ import (
 const maxCharstringOps = 1 << 16
 
 // cffSeac reports the two glyphs a charstring's seac names, as StandardEncoding
-// codes, and whether it has one.
-func cffSeac(code []byte, local, global [][]byte) (bchar, achar int, ok bool) {
+// codes, and whether it has one. Each operator read is charged to budget, and
+// the walk stops, with no seac, where the budget runs out.
+func cffSeac(code []byte, local, global [][]byte, budget *font.Budget) (bchar, achar int, ok bool) {
 	// frame is one charstring being read: the bytes, and how far in.
 	type frame struct {
 		code []byte
@@ -62,8 +63,11 @@ func cffSeac(code []byte, local, global [][]byte) (bchar, achar int, ok bool) {
 		}
 	}
 
+	// stems is every stem hint declared so far, which is what a hintmask's
+	// length is counted from: one bit per stem, rounded up to whole bytes.
+	stems := 0
 	for ops := 0; len(stack) > 0; ops++ {
-		if ops > maxCharstringOps {
+		if ops > maxCharstringOps || !budget.Charge(1, "CFF charstrings for a seac") {
 			return 0, 0, false
 		}
 		f := &stack[len(stack)-1]
@@ -126,10 +130,20 @@ func cffSeac(code []byte, local, global [][]byte) (bchar, achar int, ok bool) {
 		case v == 11: // return
 			stack = stack[:len(stack)-1]
 
+		case v == 1 || v == 3 || v == 18 || v == 23: // hstem, vstem, hstemhm, vstemhm
+			// A pair of operands a stem; an odd one out in front is the width.
+			stems += len(operands) / 2
+			operands = nil
+			f.at++
+
 		case v == 19 || v == 20: // hintmask, cntrmask
-			// The mask's bytes follow, one bit per stem, and the operands not
-			// yet consumed are an implicit vstem.
-			stems := (len(operands) + 1) / 2
+			// The operands not yet consumed are an implicit vstem, and the
+			// mask's bytes follow: one bit for every stem declared so far, not
+			// only these. Counting only the operands on the stack skipped too
+			// few bytes after any hinted glyph, read the rest of the mask as
+			// numbers and operators, and missed the seac after it — and the
+			// subset then dropped the two glyphs it draws.
+			stems += len(operands) / 2
 			operands = nil
 			f.at += 1 + (stems+7)/8
 
@@ -169,42 +183,57 @@ const maxCharstringDepth = 10
 //
 // It is the CFF answer to the glyf subsetter's component closure, and it exists
 // for the same reason: a subset that keeps a glyph and drops what the glyph is
-// drawn from ships a glyph that draws nothing. It is applied until nothing more
-// is added, because the base of one accented letter may itself be one.
-func cffSeacClosure(cff []byte, keep []bool) error {
+// drawn from ships a glyph that draws nothing. The base of one accented letter
+// may itself be one, so what a seac names is read in turn.
+//
+// It is a worklist, as the glyf closure is: each kept glyph's charstring is
+// walked once. It was a fixed point, walking every kept charstring again each
+// round, and a round adds one level; and each walk may run to maxCharstringOps.
+// So the walks are charged to budget as well — the subsetter's allowance for the
+// whole font — and a font that asks for more than it has is refused with the
+// budget's error rather than subsetted from what was read of it.
+func cffSeacClosure(cff []byte, keep []bool, budget *font.Budget) error {
 	charStrings, local, global, sidToGID, err := cffSeacTables(cff, len(keep))
 	if err != nil || charStrings == nil {
 		return err
 	}
-	for again := true; again; {
-		again = false
-		for gid, k := range keep {
-			if !k || gid >= len(charStrings) {
+	var work []int
+	for gid, k := range keep {
+		if k {
+			work = append(work, gid)
+		}
+	}
+	for len(work) > 0 {
+		gid := work[len(work)-1]
+		work = work[:len(work)-1]
+		if gid >= len(charStrings) {
+			continue
+		}
+		bchar, achar, ok := cffSeac(charStrings[gid], local, global, budget)
+		if err := budget.Err(); err != nil {
+			return err
+		}
+		if !ok {
+			continue
+		}
+		for _, code := range []int{bchar, achar} {
+			if code < 0 || code > 0xFF {
 				continue
 			}
-			bchar, achar, ok := cffSeac(charStrings[gid], local, global)
-			if !ok {
+			name, named := font.StandardEncodingName(byte(code))
+			if !named {
 				continue
 			}
-			for _, code := range []int{bchar, achar} {
-				if code < 0 || code > 0xFF {
-					continue
-				}
-				name, named := font.StandardEncodingNames[byte(code)]
-				if !named {
-					continue
-				}
-				sid, standard := font.CFFStandardSID(name)
-				if !standard {
-					continue
-				}
-				g, have := sidToGID[sid]
-				if !have || g < 0 || g >= len(keep) || keep[g] {
-					continue
-				}
-				keep[g] = true
-				again = true
+			sid, standard := font.CFFStandardSID(name)
+			if !standard {
+				continue
 			}
+			g, have := sidToGID[sid]
+			if !have || g < 0 || g >= len(keep) || keep[g] {
+				continue
+			}
+			keep[g] = true
+			work = append(work, g)
 		}
 	}
 	return nil

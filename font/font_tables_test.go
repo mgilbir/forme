@@ -53,13 +53,13 @@ func TestEncodingTablesDisagreeWhereTheyShould(t *testing.T) {
 		code  byte
 		want  string
 	}{
-		{"standard", StandardEncodingNames, 39, "quoteright"},
-		{"standard", StandardEncodingNames, 96, "quoteleft"},
-		{"winansi", WinAnsiEncodingNames, 39, "quotesingle"},
-		{"winansi", WinAnsiEncodingNames, 96, "grave"},
-		{"winansi", WinAnsiEncodingNames, 128, "Euro"},
-		{"macroman", MacRomanEncodingNames, 39, "quotesingle"},
-		{"macroman", MacRomanEncodingNames, 96, "grave"},
+		{"standard", standardEncodingNames, 39, "quoteright"},
+		{"standard", standardEncodingNames, 96, "quoteleft"},
+		{"winansi", winAnsiEncodingNames, 39, "quotesingle"},
+		{"winansi", winAnsiEncodingNames, 96, "grave"},
+		{"winansi", winAnsiEncodingNames, 128, "Euro"},
+		{"macroman", macRomanEncodingNames, 39, "quotesingle"},
+		{"macroman", macRomanEncodingNames, 96, "grave"},
 	} {
 		if got := tc.table[tc.code]; got != tc.want {
 			t.Errorf("%sEncodingNames[%d] = %q, want %q", tc.name, tc.code, got, tc.want)
@@ -72,9 +72,9 @@ func TestEncodingTablesDisagreeWhereTheyShould(t *testing.T) {
 		name  string
 		table map[byte]string
 	}{
-		{"standard", StandardEncodingNames},
-		{"winansi", WinAnsiEncodingNames},
-		{"macroman", MacRomanEncodingNames},
+		{"standard", standardEncodingNames},
+		{"winansi", winAnsiEncodingNames},
+		{"macroman", macRomanEncodingNames},
 	} {
 		for code, want := range map[byte]string{
 			32: "space", 48: "zero", 65: "A", 90: "Z", 97: "a", 122: "z",
@@ -83,5 +83,36 @@ func TestEncodingTablesDisagreeWhereTheyShould(t *testing.T) {
 				t.Errorf("%sEncodingNames[%d] = %q, want %q", tbl.name, code, got, want)
 			}
 		}
+	}
+}
+
+// TestTheEncodingsCannotBeWrittenThrough: what the package hands out is a copy,
+// so a caller that changes it changes nothing another caller reads.
+func TestTheEncodingsCannotBeWrittenThrough(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		get   func() map[byte]string
+		table map[byte]string
+	}{
+		{"StandardEncodingNames", StandardEncodingNames, standardEncodingNames},
+		{"MacRomanEncodingNames", MacRomanEncodingNames, macRomanEncodingNames},
+		{"WinAnsiEncodingNames", WinAnsiEncodingNames, winAnsiEncodingNames},
+	} {
+		got := tc.get()
+		if len(got) != len(tc.table) || got[65] != "A" {
+			t.Fatalf("%s() is not the encoding: %d names, 65 is %q", tc.name, len(got), got[65])
+		}
+		got[65] = "B"
+		delete(got, 66)
+		if again := tc.get(); again[65] != "A" || again[66] != "B" {
+			t.Errorf("%s(): writing to one copy changed the encoding (65 %q, 66 %q)",
+				tc.name, again[65], again[66])
+		}
+	}
+	if name, ok := StandardEncodingName(65); !ok || name != "A" {
+		t.Errorf("StandardEncodingName(65) = %q, %v; want A", name, ok)
+	}
+	if _, ok := StandardEncodingName(0); ok {
+		t.Error("StandardEncodingName(0) names a glyph; StandardEncoding leaves 0 unencoded")
 	}
 }

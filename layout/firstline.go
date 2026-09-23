@@ -66,7 +66,9 @@ var firstLineReports = []string{
 // not matter, since repeating a value asks for the page that is already there.
 //
 // Nil when the rule said nothing this engine can act on, which is what keeps the
-// rest of this file off every document that writes one.
+// rest of this file off every document that writes one. It is a set of
+// declarations rather than a computed style, so it is a plain map: a property it
+// does not name is not at some value, it was not said.
 //
 // Every property on firstLineApplies is inherited today, so style.Undeclared
 // answers the element's own value for all of them and reads exactly as the plain
@@ -75,19 +77,19 @@ var firstLineReports = []string{
 // background-color, when the first line's background is drawn — is the one it
 // would be wrong about, and being wrong there means reading "transparent" as a
 // declaration on every ::first-line of every coloured paragraph.
-func (l *layouter) firstLineDeclared(b *Box) style.ComputedStyle {
+func (l *layouter) firstLineDeclared(b *Box) map[string]string {
 	fl := b.FirstLine
-	if fl == nil {
+	if fl.IsZero() {
 		return nil
 	}
-	var out style.ComputedStyle
+	var out map[string]string
 	for _, name := range firstLineApplies {
-		v, ok := fl[name]
-		if !ok || v == style.Undeclared(name, b.Style[name]) {
+		v, ok := fl.Lookup(name)
+		if !ok || v == style.Undeclared(name, b.Style.Get(name)) {
 			continue
 		}
 		if out == nil {
-			out = style.ComputedStyle{}
+			out = map[string]string{}
 		}
 		out[name] = v
 	}
@@ -101,12 +103,12 @@ func (l *layouter) firstLineDeclared(b *Box) style.ComputedStyle {
 // paragraph that inherits it.
 func (l *layouter) reportFirstLine(b *Box) {
 	fl := b.FirstLine
-	if fl == nil {
+	if fl.IsZero() {
 		return
 	}
 	for _, name := range firstLineReports {
-		v := strings.TrimSpace(fl[name])
-		if v == "" || v == style.Undeclared(name, b.Style[name]) {
+		v := strings.TrimSpace(fl.Get(name))
+		if v == "" || v == style.Undeclared(name, b.Style.Get(name)) {
 			continue
 		}
 		l.rec.ReportDetail(Finding{
@@ -138,29 +140,29 @@ func (l *layouter) reportFirstLine(b *Box) {
 // depends on — where an inline box's identity is the key its background, its
 // border, its offset and its vertical-align are recorded under, and a second
 // copy of one would leave the first line's <span> without any of them.
-func (l *layouter) firstLineBox(b, block *Box, declared style.ComputedStyle) *Box {
+func (l *layouter) firstLineBox(b, block *Box, declared map[string]string) *Box {
 	if b == nil || !b.IsText() || declared == nil {
 		return b
 	}
 	if got, ok := l.firstLineBoxes[b]; ok {
 		return got
 	}
+	// The box's style with the declarations that reach it written over it.
+	// With copies what it changes, so the box's own style is left as it was.
 	var cs style.ComputedStyle
+	restyled := false
 	for name, v := range declared {
-		if b.Style[name] != block.Style[name] {
+		if b.Style.Get(name) != block.Style.Get(name) {
 			// A descendant of the block declared this one, and the pseudo-element
 			// is its ancestor rather than its replacement.
 			continue
 		}
-		if cs == nil {
-			cs = style.ComputedStyle{}
-			for k, old := range b.Style {
-				cs[k] = old
-			}
+		if !restyled {
+			cs, restyled = b.Style, true
 		}
-		cs[name] = v
+		cs = cs.With(name, v)
 	}
-	if cs == nil {
+	if !restyled {
 		l.rememberFirstLineBox(b, b)
 		return b
 	}
@@ -194,7 +196,7 @@ func (l *layouter) rememberFirstLineBox(from, to *Box) {
 // line is an index into either of them. That is what lets the second line
 // continue from the ordinary items without anything having to be mapped.
 func (l *layouter) firstLineItems(items []inlineItem, block *Box,
-	declared style.ComputedStyle) []inlineItem {
+	declared map[string]string) []inlineItem {
 
 	out := make([]inlineItem, len(items))
 	copy(out, items)
@@ -270,39 +272,37 @@ func (l *layouter) firstLineItems(items []inlineItem, block *Box,
 // of its own font over the extent of what is on the line.
 func (l *layouter) firstLinePaint(b *Box) *Box {
 	fl := b.FirstLine
-	if fl == nil {
+	if fl.IsZero() {
 		return nil
 	}
 	var cs style.ComputedStyle
+	painted := false
 	for _, name := range firstLinePaints {
-		v, ok := fl[name]
-		if !ok || v == style.Undeclared(name, b.Style[name]) {
+		v, ok := fl.Lookup(name)
+		if !ok || v == style.Undeclared(name, b.Style.Get(name)) {
 			continue
 		}
-		if cs == nil {
-			cs = style.ComputedStyle{}
-			for k, old := range b.Style {
-				cs[k] = old
-			}
+		if !painted {
+			cs, painted = b.Style, true
 			// The block's own edges are not the pseudo-element's: §5.12.1 does
 			// not let it have a border or a padding, and taking the block's
 			// would draw the block's border a second time round one line of it.
 			for _, edge := range []string{"top", "right", "bottom", "left"} {
-				cs["border-"+edge+"-width"] = "0"
-				cs["border-"+edge+"-style"] = "none"
-				cs["padding-"+edge] = "0"
-				cs["margin-"+edge] = "0"
+				cs = cs.With("border-"+edge+"-width", "0")
+				cs = cs.With("border-"+edge+"-style", "none")
+				cs = cs.With("padding-"+edge, "0")
+				cs = cs.With("margin-"+edge, "0")
 			}
 		}
-		cs[name] = v
+		cs = cs.With(name, v)
 	}
-	if cs == nil {
+	if !painted {
 		return nil
 	}
 	// The font properties too, since the height of what is painted is the
 	// pseudo-element's own content area and its font is what decides that.
 	for name, v := range l.firstLineDeclared(b) {
-		cs[name] = v
+		cs = cs.With(name, v)
 	}
 	out := *b
 	out.Style = cs

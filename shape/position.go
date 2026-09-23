@@ -29,41 +29,30 @@ import (
 // classified as a mark, so that contextual rules can skip it, has its width put
 // back with 'dist' — "necessary because OpenType processing cancels the width
 // associated with a mark". Cancelling afterwards would take it away again.
+//
+// Which a run gets is its model's choice (shaperModel.zeroMarks), not its
+// script's: a Devanagari run set by the default model, because its font states
+// its rules under 'DFLT', cancels late as the default model does.
 type zeroMarkWidths uint8
 
 const (
 	// Never: the font is trusted to have given its marks no width, and anything
-	// a rule states about one stands. Indic and Khmer.
+	// a rule states about one stands. Indic, Khmer and Hangul.
 	zeroMarksNone zeroMarkWidths = iota
-	// Before the rules run, so that what they state about a mark survives, and
-	// the offset moves with the advance so the mark does not shift. The
+	// Before the rules run, so that what they state about a mark survives. The
 	// universal engine and Myanmar.
 	zeroMarksEarly
 	// After the rules run, discarding whatever they said about a mark's advance.
-	// Arabic, Hebrew, Thai and every script with no shaper of its own.
+	// Arabic, Hebrew, Thai and every script with no model of its own.
 	zeroMarksLate
 )
 
-// zeroMarkWidthsFor is the choice each script's model makes.
-//
-// It is per-shaper rather than universal because the shapers disagree, and the
-// disagreement is the point: a Khmer font states mark widths this must not
-// touch, and a font for the universal engine states one this must not undo.
-func zeroMarkWidthsFor(script uint16) zeroMarkWidths {
-	switch {
-	case indicConfigFor(script) != nil, isKhmerScript(script):
-		return zeroMarksNone
-	case isMyanmarScript(script), usesUniversalShaper(script):
-		return zeroMarksEarly
-	}
-	return zeroMarksLate
-}
+// Whether the offset moves with a cancelled advance is the same question for
+// both, and is not the model's: see adjustMarkOffsets.
 
-// cancelMarkWidths takes the advance off every mark.
-//
-// Done before the rules, the offset moves with the advance: the glyph is drawn
-// where it would have been, and only the pen stops moving. Done after, the
-// offsets are already whatever the rules made them and must not be touched.
+// cancelMarkWidths takes the advance off every mark, and with adjustOffsets
+// moves the offset with it, so that the mark is drawn where it would have been
+// and only the pen stops moving.
 func (sh shaper) cancelMarkWidths(buf []Glyph, adjustOffsets bool) {
 	for i := range buf {
 		if !sh.l.isMark(buf[i]) {
@@ -76,11 +65,80 @@ func (sh shaper) cancelMarkWidths(buf []Glyph, adjustOffsets bool) {
 	}
 }
 
-// applyPositioning runs the GPOS lookups over a shaped buffer.
+// adjustMarkOffsets reports whether zeroing a mark's advance moves its offset
+// with it. It is HarfBuzz's adjust_mark_positioning_when_zeroing, for a run
+// drawn left to right.
+//
+// Only a font that places no marks of its own is given that. Where the font has
+// GPOS, it positions its marks relative to where the pen is once their
+// advances are gone, and a mark shifted as well is drawn a whole advance short
+// of where the font put it: Padauk's medial ra, 219 units left of its letter.
+// A font with a legacy kern table that kerns across the line — which moves
+// glyphs off the baseline — is taken to have placed them too. And right to
+// left the mark is not moved: the pen meets it before its base, and it hangs
+// over the glyph after it once the run is reversed.
+func (sh shaper) adjustMarkOffsets() bool {
+	return !sh.rtl && !sh.f.hasPositioning() && !hasCrossStreamKerning(sh.f.layoutTables["kern"])
+}
+
+// hasPositioning reports whether the face has a GPOS table at all, whatever it
+// selects for the run: HarfBuzz's hb_ot_layout_has_positioning.
+func (f *Face) hasPositioning() bool {
+	t := f.layoutTables["GPOS"]
+	return len(t) >= 4 && (t[0]|t[1]|t[2]|t[3]) != 0
+}
+
+// hasCrossStreamKerning reports whether a legacy kern table has a subtable
+// that kerns across the line, in either of the table's two versions.
+func hasCrossStreamKerning(kern []byte) bool {
+	if len(kern) < 4 {
+		return false
+	}
+	if font.Be16(kern, 0) == 0 {
+		// The OpenType table: a 16-bit count, and a coverage word in each
+		// subtable whose bit 2 is cross-stream.
+		off := 4
+		for i := 0; i < font.Be16(kern, 2) && i < maxSubtables && off+6 <= len(kern); i++ {
+			if font.Be16(kern, off+4)&0x0004 != 0 {
+				return true
+			}
+			length := font.Be16(kern, off+2)
+			if length <= 0 {
+				return false
+			}
+			off += length
+		}
+		return false
+	}
+	if len(kern) < 8 || font.Be16(kern, 0) != 1 || font.Be16(kern, 2) != 0 {
+		return false
+	}
+	// Apple's version 1.0: a 32-bit count, a 32-bit length per subtable and its
+	// coverage after it, with bit 14 for cross-stream.
+	n := int(font.Be32(kern, 4))
+	off := 8
+	for i := 0; i < n && i < maxSubtables && off+8 <= len(kern); i++ {
+		if font.Be16(kern, off+4)&0x4000 != 0 {
+			return true
+		}
+		length := int(font.Be32(kern, off))
+		if length <= 0 || length > len(kern)-off {
+			return false
+		}
+		off += length
+	}
+	return false
+}
+
+// position runs the GPOS lookups over a shaped buffer.
 func (sh shaper) position(buf []Glyph) {
 	l := sh.l
+	// Where each mark attached, for this pass and every lookup a rule reaches
+	// from it. See attachMarks.
+	sh.attached = new([]int)
+	adjust := sh.adjustMarkOffsets()
 	if sh.zeroMarks == zeroMarksEarly {
-		sh.cancelMarkWidths(buf, true)
+		sh.cancelMarkWidths(buf, adjust)
 	}
 	// Pair kerning, which the buffer expresses as a change to the left glyph's
 	// advance. Glyphs the lookup ignores do not break a pair.
@@ -108,7 +166,7 @@ func (sh shaper) position(buf []Glyph) {
 				prev = i
 				continue
 			}
-			if k, ok := kl.pairs[[2]int{buf[prev].GID, buf[i].GID}]; ok {
+			if k, ok := kl.pair(buf[prev].GID, buf[i].GID); ok {
 				// Both glyphs, and both what a record can say about each. A
 				// placement moves the glyph and an advance moves what comes
 				// after it, and a right-to-left font uses both for what a Latin
@@ -159,8 +217,12 @@ func (sh shaper) position(buf []Glyph) {
 	sh.attachCursive(buf)
 	sh.attachMarks(buf)
 	if sh.zeroMarks == zeroMarksLate {
-		sh.cancelMarkWidths(buf, false)
+		sh.cancelMarkWidths(buf, adjust)
 	}
+	// Last, once every advance is what it will be: each mark is where it was
+	// placed relative to what it is attached to, and is now put where that
+	// is. See attachMarks.
+	sh.resolveAttachments(buf)
 }
 
 // cursiveAnchors is where a glyph's connecting stroke leaves and arrives.
@@ -262,6 +324,23 @@ func (sh shaper) attachCursive(buf []Glyph) {
 // Cancelling the mark's own advance is not done here. It is a decision each
 // script's model takes for itself, and taking it here would take it for all of
 // them and at the one moment that is wrong for two — see zeroMarkWidths.
+//
+// # Across the line now, along it last
+//
+// The two axes are settled at different times, as HarfBuzz settles them.
+// Across the line — the height — a mark takes its target's offset as it stands
+// when the mark is attached, so that a later lookup moving the target leaves
+// the mark where it was put (the note above). Along the line a mark keeps only
+// its offset from its target and which glyph that is, the last attachment
+// made winning, and resolveAttachments adds where the target finally stands
+// once every lookup has run and every advance is final: HarfBuzz's attach
+// chain and propagate_attachment_offsets. Noto Serif Tibetan needs both —
+// lookup 20 stacks a subjoined ra on the mark before it, and lookup 21 then
+// moves that mark onto another; the ra keeps its height and follows the mark
+// along, and placed against where the mark stood when 20 ran it was drawn 42
+// units from where the font put it, and so was the mark stacked on the ra.
+//
+// A lookup a contextual rule reaches attaches the same way, through placeMark.
 func (sh shaper) attachMarks(buf []Glyph) {
 	l := sh.l
 	if len(l.markGlyphs) == 0 {
@@ -296,12 +375,17 @@ func (sh shaper) attachMarks(buf []Glyph) {
 	// base of another — so this tracks the one prevNonMark asked, and asks it
 	// once per glyph instead of once per pair.
 	lastNonMark := -1
+	// And for mark-to-mark, the nearest glyph before i that each of its
+	// subtables does not step over, carried forward the same way — see
+	// markStackTracker.
+	stack := newMarkStackTracker(l)
 	for i := range buf {
 		isMark := l.isMark(buf[i])
 		if !l.markGlyphs[buf[i].GID] {
 			if !isMark {
 				lastNonMark = i
 			}
+			stack.passed(buf[i], i)
 			continue
 		}
 		// The letter underneath, and the mark this one stacks on. The two tables
@@ -314,7 +398,7 @@ func (sh shaper) attachMarks(buf []Glyph) {
 				todo = append(todo, pending{i, j, lookup, mark, base})
 			}
 		}
-		if mark, base, at, lookup, ok := l.markMarkAt(buf, i); ok {
+		if mark, base, at, lookup, ok := l.markMarkAt(buf, i, stack); ok {
 			todo = append(todo, pending{i, at, lookup, mark, base})
 		}
 		// After the glyph is dealt with, so that lastNonMark is always the
@@ -322,6 +406,7 @@ func (sh shaper) attachMarks(buf []Glyph) {
 		if !isMark {
 			lastNonMark = i
 		}
+		stack.passed(buf[i], i)
 	}
 	// Stable, so that two attachments a font states in one lookup are still made
 	// in the order the glyphs are written in.
@@ -340,27 +425,59 @@ func (sh shaper) attachMarks(buf []Glyph) {
 	} else {
 		sort.SliceStable(todo, func(a, b int) bool { return todo[a].lookup < todo[b].lookup })
 	}
-	// A mark is moved back over everything between it and its base, and that
-	// stretch is read once per mark. One base carrying a long mark run makes the
-	// k-th mark read k advances, which is the last of the three quadratics on
-	// this path: after the other two "a" with sixteen thousand U+0301 after it
-	// still climbed by 3.7 per doubling. A prefix sum answers each in constant
-	// time. It is built only when there are enough attachments to pay for the
-	// array, which no ordinary combining sequence reaches.
+	for _, p := range todo {
+		sh.placeMark(buf, p.i, p.at, p.mark.anchor, p.base)
+	}
+}
+
+// resolveAttachments puts each attached mark where its target finally is along
+// the line: its offset from the target, plus the target's own offset once that
+// is resolved, less what the pen passes between them. The height was settled
+// when it was attached.
+//
+// What the pen passes is taken now and not when the mark was attached, because
+// the advances are final only now: a mark between a base and the mark stacked
+// on it may have had its advance cancelled since, and the stacked one is drawn
+// against a pen that did not move for it.
+//
+// A mark attaches to a glyph before it, so resolving them in order resolves
+// each target before anything that hangs from it.
+func (sh shaper) resolveAttachments(buf []Glyph) {
+	if sh.attached == nil || *sh.attached == nil {
+		return
+	}
+	to := *sh.attached
+	// A mark is moved back over everything between it and its target, and that
+	// stretch is read once per mark. One base carrying a long mark run makes
+	// the k-th mark read k advances, which is the last of the three quadratics
+	// on this path: "a" with sixteen thousand U+0301 after it climbed by 3.7
+	// per doubling. A prefix sum answers each in constant time. It is built
+	// only when there are enough attachments to pay for the array, which no
+	// ordinary combining sequence reaches.
+	n := 0
+	for _, j := range to {
+		if j >= 0 {
+			n++
+		}
+	}
 	var sums []float64
-	if len(todo) > markSortInsertionMax {
+	if n > markSortInsertionMax {
 		sums = advanceSums(buf)
 	}
-	for _, p := range todo {
-		if sums != nil && p.at >= 0 {
-			since := sinceFrom(sums, sh.rtl, p.i, p.at)
-			if strictMarks && since != sh.advancesBetween(buf, p.i, p.at) {
-				panic("attachMarks: the prefix sum disagrees with the walk")
-			}
-			sh.placeMarkSince(buf, p.i, p.at, p.mark.anchor, p.base, since)
+	for i, j := range to {
+		if j < 0 || j >= i {
 			continue
 		}
-		sh.placeMark(buf, p.i, p.at, p.mark.anchor, p.base)
+		since := 0.0
+		if sums != nil {
+			since = sinceFrom(sums, sh.rtl, i, j)
+			if strictMarks && since != sh.advancesBetween(buf, i, j) {
+				panic("resolveAttachments: the prefix sum disagrees with the walk")
+			}
+		} else {
+			since = sh.advancesBetween(buf, i, j)
+		}
+		buf[i].XOffset += buf[j].XOffset - since
 	}
 }
 
@@ -393,8 +510,7 @@ func markComponent(buf []Glyph, i, j int) int {
 // which is the one thing it exists to find. What is left is the mark filtering
 // set and the mark attachment class, which are exactly the narrowing a font
 // uses to say which marks stack on which.
-func (l *layout) markMarkAt(buf []Glyph, i int) (mark markAnchor, base anchor, at, lookup int, ok bool) {
-	const ignoreFlags = flagIgnoreBaseGlyphs | flagIgnoreLigatures | flagIgnoreMarks
+func (l *layout) markMarkAt(buf []Glyph, i int, stack *markStackTracker) (mark markAnchor, base anchor, at, lookup int, ok bool) {
 	matched := -1
 	for k := range l.markMark {
 		st := &l.markMark[k]
@@ -405,10 +521,7 @@ func (l *layout) markMarkAt(buf []Glyph, i int) (mark markAnchor, base anchor, a
 		if !has {
 			continue
 		}
-		j := i - 1
-		for j >= 0 && l.ignoresIn(st.flags&^ignoreFlags, st.markSet, buf[j]) {
-			j--
-		}
+		j := stack.nearest(k)
 		if j < 0 || !l.isMark(buf[j]) {
 			continue
 		}
@@ -440,6 +553,81 @@ func (l *layout) markMarkAt(buf []Glyph, i int) (mark markAnchor, base anchor, a
 		mark, base, at, matched, ok = m, b, j, st.lookup, true
 	}
 	return mark, base, at, matched, ok
+}
+
+// markStackIgnore are the lookup flags mark-to-mark does not look back past:
+// they are about finding a base, and would have it step over every mark there
+// is, which is the one thing it exists to find. What is left is the mark
+// filtering set and the mark attachment class.
+const markStackIgnore = flagIgnoreBaseGlyphs | flagIgnoreLigatures | flagIgnoreMarks
+
+// markStackTracker is, for each mark-to-mark subtable, the nearest glyph behind
+// the one being placed that the subtable's lookup does not step over — which is
+// the glyph a mark stacks on, if it is a mark.
+//
+// It is carried forward rather than searched for. The search walked back from
+// each mark over every mark its lookup ignores, so a letter carrying a long run
+// of marks outside a lookup's filtering set or attachment class read the run
+// again for every mark in it: "a" with sixteen thousand U+0301 after it, under a
+// lookup whose attachment class they were not in, took 2.8 seconds and climbed
+// by four and a half per doubling. It is the fourth of that shape on this path;
+// lastNonMark in attachMarks was the first.
+//
+// What a lookup with these flags steps over is only ever a mark: the filtering
+// set and the attachment class narrow which *marks* it sees. So the nearest
+// glyph it does not step over is whichever is nearer of the last glyph that is
+// not a mark and the last mark it sees, and the second depends on the lookup
+// only through its flags and set — subtables that share both share a tracker.
+type markStackTracker struct {
+	l *layout
+	// lastNotMark is the last glyph passed that is not a mark as the flags
+	// read it; keys are the distinct flag and set pairs of the subtables, keyOf
+	// each subtable's among them, and lastSeen the last mark each key sees.
+	lastNotMark int
+	keys        []markStackKey
+	keyOf       []int
+	lastSeen    []int
+}
+
+type markStackKey struct{ flags, markSet int }
+
+func newMarkStackTracker(l *layout) *markStackTracker {
+	t := &markStackTracker{l: l, lastNotMark: -1, keyOf: make([]int, len(l.markMark))}
+	index := map[markStackKey]int{}
+	for k := range l.markMark {
+		key := markStackKey{l.markMark[k].flags &^ markStackIgnore, l.markMark[k].markSet}
+		at, seen := index[key]
+		if !seen {
+			at = len(t.keys)
+			index[key] = at
+			t.keys = append(t.keys, key)
+			t.lastSeen = append(t.lastSeen, -1)
+		}
+		t.keyOf[k] = at
+	}
+	return t
+}
+
+// passed records a glyph the pass has finished with.
+func (t *markStackTracker) passed(g Glyph, i int) {
+	if len(t.keys) == 0 {
+		return
+	}
+	if t.l.classOf(g) != classMark {
+		t.lastNotMark = i
+		return
+	}
+	for k, key := range t.keys {
+		if !t.l.ignoresIn(key.flags, key.markSet, g) {
+			t.lastSeen[k] = i
+		}
+	}
+}
+
+// nearest is the nearest glyph behind the current one that mark-to-mark
+// subtable k does not step over, or -1.
+func (t *markStackTracker) nearest(k int) int {
+	return max(t.lastNotMark, t.lastSeen[t.keyOf[k]])
 }
 
 // anchor is a point in a glyph's own coordinate space, in font units.
@@ -505,7 +693,7 @@ type singleAdjust struct {
 // one way for one and the other way for the other. Merging them sets a Latin
 // word's whole cursive chain from the Arabic lookup's flag — precisely the "a
 // rule meant for another script" this selection exists to stop.
-func (l *layout) readGPOSAttachment(gpos []byte, feats tableFeatures) {
+func (l *layout) readGPOSAttachment(gpos []byte, idx *featureIndex) {
 	// One budget for every subtable this reader may take, shared across the
 	// whole table — see subtables.
 	budget := subtableBudget(gpos)
@@ -517,11 +705,11 @@ func (l *layout) readGPOSAttachment(gpos []byte, feats tableFeatures) {
 	// its lookups in one list and their indices are the order it means.
 	var order []int
 	byIndex := map[int][]byte{}
-	for _, tag := range featureTags(gpos, feats.sel) {
+	for _, tag := range idx.tags {
 		if !defaultPositionFeatures[tag] {
 			continue
 		}
-		lookups, idxs := featureLookupsIndexed(gpos, tag, feats)
+		lookups, idxs := idx.lookupsFor(tag)
 		for i, lookup := range lookups {
 			if _, seen := byIndex[idxs[i]]; seen {
 				continue
@@ -531,8 +719,11 @@ func (l *layout) readGPOSAttachment(gpos []byte, feats tableFeatures) {
 		}
 	}
 	sortInts(order)
-	for _, idx := range order {
-		lookup := byIndex[idx]
+	// Each mark subtable read so far, by where it sits in the table, so that a
+	// subtable several lookups name is read once — see readMarkAttachment.
+	read := map[int]*markAttachment{}
+	for _, i := range order {
+		lookup := byIndex[i]
 		kind, flags, markSet, subs := subtables(lookup, 9, &budget)
 		switch kind {
 		case 4, 5:
@@ -540,9 +731,9 @@ func (l *layout) readGPOSAttachment(gpos []byte, feats tableFeatures) {
 			// they are alternatives for the same mark, decided by which
 			// lookup covers the glyph the mark is attaching to, and a
 			// ligature glyph may be covered by either.
-			l.readMarkAttachment(subs, flags, markSet, kind == 5, false)
+			l.readMarkAttachment(subs, flags, markSet, kind == 5, false, read)
 		case 6:
-			l.readMarkAttachment(subs, flags, markSet, false, true)
+			l.readMarkAttachment(subs, flags, markSet, false, true, read)
 		default:
 			for _, sub := range subs {
 				switch kind {
@@ -589,44 +780,12 @@ var defaultPositionFeatures = map[string]bool{
 	"mkmk": true, // mark to mark
 }
 
-// featureTags lists every feature tag a layout table declares and the selection
-// admits, in order.
-func featureTags(t []byte, sel featureSet) []string {
-	off := font.Be16(t, 6)
-	if off <= 0 || off+2 > len(t) {
-		return nil
-	}
-	list := t[off:]
-	n := font.Be16(list, 0)
-	if n > maxDeclaredList {
-		n = maxDeclaredList
-	}
-	seen := map[string]bool{}
-	var out []string
-	for i := 0; i < n; i++ {
-		rec := 2 + 6*i
-		if rec+6 > len(list) {
-			break
-		}
-		if !sel.selects(i) {
-			continue
-		}
-		tag := string(list[rec : rec+4])
-		if !seen[tag] {
-			seen[tag] = true
-			out = append(out, tag)
-		}
-	}
-	return out
-}
-
 // singlePosSubtable reads a GPOS type 1 subtable: one adjustment for every
 // covered glyph (format 1) or one per glyph (format 2).
 func (l *layout) singlePosSubtable(sub []byte) {
 	if len(sub) < 6 {
 		return
 	}
-	covered := coverageGlyphs(sub, font.Be16(sub, 2), &l.covWork)
 	format := font.Be16(sub, 0)
 	valueFormat := font.Be16(sub, 4)
 	size := valueSize(valueFormat)
@@ -636,20 +795,22 @@ func (l *layout) singlePosSubtable(sub []byte) {
 		if adj == (singleAdjust{}) {
 			return
 		}
-		for _, gid := range covered {
+		l.eachCovered(sub, font.Be16(sub, 2), func(_, gid int) bool {
 			l.singlePos[gid] = adj
-		}
+			return true
+		})
 	case 2:
 		n := font.Be16(sub, 6)
-		for i := 0; i < n && i < len(covered); i++ {
+		l.eachCovered(sub, font.Be16(sub, 2), func(i, gid int) bool {
 			off := 8 + i*size
-			if off+size > len(sub) {
-				break
+			if i >= n || off+size > len(sub) {
+				return true
 			}
 			if adj := readValueRecord(sub[off:], valueFormat); adj != (singleAdjust{}) {
-				l.singlePos[covered[i]] = adj
+				l.singlePos[gid] = adj
 			}
-		}
+			return true
+		})
 	}
 }
 
@@ -682,12 +843,11 @@ func (l *layout) cursivePos(sub []byte) {
 	if len(sub) < 6 || font.Be16(sub, 0) != 1 {
 		return
 	}
-	covered := coverageGlyphs(sub, font.Be16(sub, 2), &l.covWork)
 	n := font.Be16(sub, 4)
-	for i := 0; i < n && i < len(covered); i++ {
+	l.eachCovered(sub, font.Be16(sub, 2), func(i, gid int) bool {
 		rec := 6 + 4*i
-		if rec+4 > len(sub) {
-			break
+		if i >= n || rec+4 > len(sub) {
+			return true
 		}
 		var c cursiveAnchors
 		if a, ok := readAnchor(sub, font.Be16(sub, rec)); ok {
@@ -697,9 +857,10 @@ func (l *layout) cursivePos(sub []byte) {
 			c.exit, c.hasExit = a, true
 		}
 		if c.hasEntry || c.hasExit {
-			l.cursive[covered[i]] = c
+			l.cursive[gid] = c
 		}
-	}
+		return true
+	})
 }
 
 // readMarkAttachment reads all the subtables of one mark-to-base or
@@ -717,18 +878,47 @@ func (l *layout) cursivePos(sub []byte) {
 // The two kinds have the same shape — a mark array and an array of attachment
 // points, one per class — and differ only in what the second array is indexed
 // by, so one reader serves both.
-func (l *layout) readMarkAttachment(subs [][]byte, flags, markSet int, ligature, mkmk bool) {
+func (l *layout) readMarkAttachment(subs [][]byte, flags, markSet int, ligature, mkmk bool,
+	read map[int]*markAttachment) {
+
 	lookup := l.markLookups
 	l.markLookups++
+	// A subtable this lookup names twice is kept once: within a lookup the
+	// first subtable that applies wins, so the second copy can never be the
+	// one that applies, and every copy kept is one more for every mark in
+	// every run to be tried against.
+	seen := map[int]bool{}
 	for _, sub := range subs {
-		st, ok := readMarkSubtable(sub, lookup, ligature, &l.covWork)
-		if !ok {
+		// Where the subtable sits — every one runs to the end of the table —
+		// and which of the two ways its base array is read, since a subtable
+		// named as mark-to-ligature reads the same bytes differently.
+		key := 2 * len(sub)
+		if ligature {
+			key++
+		}
+		if seen[key] {
 			continue
 		}
-		st.flags, st.markSet = flags, markSet
-		for gid := range st.marks {
-			l.markGlyphs[gid] = true
+		seen[key] = true
+		// A subtable another lookup already named is not read again: the
+		// anchors are the same bytes whoever names them, and only the lookup
+		// they are applied under differs. Its maps are shared, and never
+		// written once read.
+		parsed, done := read[key]
+		if !done {
+			if st, ok := l.readMarkSubtable(sub, ligature); ok {
+				parsed = &st
+				for gid := range st.marks {
+					l.markGlyphs[gid] = true
+				}
+			}
+			read[key] = parsed
 		}
+		if parsed == nil {
+			continue
+		}
+		st := *parsed
+		st.lookup, st.flags, st.markSet = lookup, flags, markSet
 		if mkmk {
 			l.markMark = append(l.markMark, st)
 		} else {
@@ -738,12 +928,14 @@ func (l *layout) readMarkAttachment(subs [][]byte, flags, markSet int, ligature,
 }
 
 // readMarkSubtable reads one mark-attachment subtable.
-func readMarkSubtable(sub []byte, lookup int, ligature bool, budget *int) (markAttachment, bool) {
+//
+// Each coverage is walked by its own records and each array read at the
+// index a glyph's record gives it, so what is built is what the subtable
+// states and nothing is filled in between.
+func (l *layout) readMarkSubtable(sub []byte, ligature bool) (markAttachment, bool) {
 	if len(sub) < 12 || font.Be16(sub, 0) != 1 {
 		return markAttachment{}, false
 	}
-	markCoverage := coverageGlyphs(sub, font.Be16(sub, 2), budget)
-	baseCoverage := coverageGlyphs(sub, font.Be16(sub, 4), budget)
 	classCount := font.Be16(sub, 6)
 	markArrayOff := font.Be16(sub, 8)
 	baseArrayOff := font.Be16(sub, 10)
@@ -751,34 +943,34 @@ func readMarkSubtable(sub []byte, lookup int, ligature bool, budget *int) (markA
 		return markAttachment{}, false
 	}
 	st := markAttachment{
-		lookup: lookup,
-		marks:  map[int]markAnchor{},
-		bases:  map[key2]anchor{},
+		marks: map[int]markAnchor{},
+		bases: map[key2]anchor{},
 	}
 
 	// The mark array: a class and an anchor for each covered mark.
 	if markArrayOff > 0 && markArrayOff+2 <= len(sub) {
 		ma := sub[markArrayOff:]
 		n := font.Be16(ma, 0)
-		for i := 0; i < n && i < len(markCoverage); i++ {
+		l.eachCovered(sub, font.Be16(sub, 2), func(i, gid int) bool {
 			rec := 2 + 4*i
-			if rec+4 > len(ma) {
-				break
+			if i >= n || rec+4 > len(ma) {
+				return true
 			}
 			class := font.Be16(ma, rec)
 			a, ok := readAnchor(ma, font.Be16(ma, rec+2))
 			if !ok || class >= classCount {
-				continue
+				return true
 			}
-			st.marks[markCoverage[i]] = markAnchor{class: class, anchor: a}
-		}
+			st.marks[gid] = markAnchor{class: class, anchor: a}
+			return true
+		})
 	}
 
 	switch {
 	case ligature:
-		readLigatureArray(sub, baseArrayOff, baseCoverage, classCount, &st)
+		l.readLigatureArray(sub, baseArrayOff, classCount, &st)
 	default:
-		readBaseArray(sub, baseArrayOff, baseCoverage, classCount, &st)
+		l.readBaseArray(sub, baseArrayOff, classCount, &st)
 	}
 	if len(st.marks) == 0 || (len(st.bases) == 0 && len(st.components) == 0) {
 		return markAttachment{}, false
@@ -787,13 +979,20 @@ func readMarkSubtable(sub []byte, lookup int, ligature bool, budget *int) (markA
 }
 
 // readBaseArray reads a BaseArray: one anchor per class for each covered base.
-func readBaseArray(sub []byte, off int, coverage []int, classCount int, st *markAttachment) {
+func (l *layout) readBaseArray(sub []byte, off, classCount int, st *markAttachment) {
 	if off <= 0 || off+2 > len(sub) {
 		return
 	}
 	ba := sub[off:]
 	n := font.Be16(ba, 0)
-	for i := 0; i < n && i < len(coverage); i++ {
+	l.eachCovered(sub, font.Be16(sub, 4), func(i, gid int) bool {
+		if i >= n {
+			return true
+		}
+		// A row of anchors per base, charged as a row: bases may share one.
+		if !l.spend(classCount) {
+			return false
+		}
 		for c := 0; c < classCount; c++ {
 			rec := 2 + (i*classCount+c)*2
 			if rec+2 > len(ba) {
@@ -803,9 +1002,10 @@ func readBaseArray(sub []byte, off int, coverage []int, classCount int, st *mark
 			if !ok {
 				continue
 			}
-			st.bases[key2{coverage[i], c}] = a
+			st.bases[key2{gid, c}] = a
 		}
-	}
+		return true
+	})
 }
 
 // readLigatureArray reads a LigatureArray, which is the one thing that makes a
@@ -817,28 +1017,33 @@ func readBaseArray(sub []byte, off int, coverage []int, classCount int, st *mark
 // giving each ligature not one anchor per class but one per component per class,
 // and the shaper picks the component from which part of the text the mark came
 // from — which is why forming a ligature has to record that.
-func readLigatureArray(sub []byte, off int, coverage []int, classCount int, st *markAttachment) {
+func (l *layout) readLigatureArray(sub []byte, off, classCount int, st *markAttachment) {
 	if off <= 0 || off+2 > len(sub) {
 		return
 	}
 	la := sub[off:]
 	n := font.Be16(la, 0)
 	st.components = map[key2][]anchor{}
-	for i := 0; i < n && i < len(coverage); i++ {
+	l.eachCovered(sub, font.Be16(sub, 4), func(i, gid int) bool {
 		rec := 2 + 2*i
-		if rec+2 > len(la) {
-			break
+		if i >= n || rec+2 > len(la) {
+			return true
 		}
 		attachOff := font.Be16(la, rec)
 		if attachOff <= 0 || attachOff+2 > len(la) {
-			continue
+			return true
 		}
 		attach := la[attachOff:]
 		count := font.Be16(attach, 0)
 		// A ligature of more components than any font ever writes is malformed,
 		// and the count is a length this would otherwise allocate from.
 		if count < 1 || count > maxLigatureComponents {
-			continue
+			return true
+		}
+		// A table of anchors per ligature, charged as one: ligatures may share
+		// one.
+		if !l.spend(count * classCount) {
+			return false
 		}
 		for c := 0; c < classCount; c++ {
 			anchors := make([]anchor, 0, count)
@@ -855,10 +1060,11 @@ func readLigatureArray(sub []byte, off int, coverage []int, classCount int, st *
 			// stored, so that attachmentFor can tell "no anchor" from "an
 			// anchor at the origin".
 			if any {
-				st.components[key2{coverage[i], c}] = anchors
+				st.components[key2{gid, c}] = anchors
 			}
 		}
-	}
+		return true
+	})
 	if len(st.components) == 0 {
 		st.components = nil
 	}
@@ -948,7 +1154,10 @@ func readAnchor(base []byte, off int) (anchor, bool) {
 // first of two stacked accents is a mark that no *mark-to-mark* array lists as
 // one, because in that lookup it is the base.
 func (l *layout) isMark(g Glyph) bool {
-	if len(l.glyphClass) != 0 {
+	if c := l.classOf(g); c == classUnclassified {
+		return false
+	}
+	if l.glyphClass.named {
 		// A font that classifies its glyphs has answered for all of them: one it
 		// leaves out is not a mark, whatever else names it. Falling back to the
 		// mark arrays here reads a glyph as a mark because *some* lookup places
@@ -957,7 +1166,7 @@ func (l *layout) isMark(g Glyph) bool {
 		// form that GDEF leaves unclassified and a mark-to-base lookup names as
 		// the base — and calling it a mark hid it from the mark that belongs on
 		// it.
-		return l.glyphClass[g.GID] == classMark
+		return l.glyphClass.of(g.GID) == classMark
 	}
 	// No GDEF at all: what the character said, falling back to the mark arrays
 	// for a glyph that came from no character of its own — one a substitution
@@ -968,28 +1177,34 @@ func (l *layout) isMark(g Glyph) bool {
 	return l.markGlyphs[g.GID]
 }
 
-// placeMark puts the mark at i against the base at j, so that their anchors
-// meet.
+// placeMark attaches the mark at i to the glyph at j, so that their anchors
+// meet: the height from where j stands now, and along the line its offset from
+// j and that it hangs from j, for resolveAttachments to finish once every
+// lookup has run. See attachMarks.
 //
-// The pen is at the end of everything drawn since the base, so the advances
-// between have to be taken back off — and the base's own displacement carried
-// along, since a base moved by a single adjustment or lifted onto a joining
-// stroke takes its accents with it.
+// It *sets* the offset rather than adding to it, which is what the format says
+// and what makes applying the same attachment twice harmless — a lookup both
+// named by a feature and reached from a rule places the mark in the same place
+// either time. A later attachment of the same mark replaces an earlier one, as
+// a later lookup's does in HarfBuzz.
 //
-// What has to be corrected for is where the pen will be when the mark is drawn,
-// and that depends on which way the run is drawn. Left to right the pen has
-// passed the base and everything between them, so those advances come off.
-// Right to left the buffer is about to be reversed and the mark will be drawn
-// *before* its base, so the same advances are still ahead of the pen and go on
-// rather than off. Whether the mark's own advance is among them is decided by
-// zeroMarkWidths, which may already have taken it off.
-//
-// It *sets* the offsets rather than adding to them, which is what the format
-// says and what makes applying the same attachment twice harmless — a lookup
-// both named by a feature and reached from a rule places the mark in the same
-// place either time.
+// Outside a positioning pass there is nothing to resolve against, and the mark
+// is placed where j stands now.
 func (sh shaper) placeMark(buf []Glyph, i, j int, mark, base anchor) {
-	sh.placeMarkSince(buf, i, j, mark, base, sh.advancesBetween(buf, i, j))
+	buf[i].XOffset = sh.f.scale(base.x - mark.x)
+	buf[i].YOffset = buf[j].YOffset + sh.f.scale(base.y-mark.y)
+	if sh.attached == nil {
+		buf[i].XOffset += buf[j].XOffset - sh.advancesBetween(buf, i, j)
+		return
+	}
+	if *sh.attached == nil {
+		to := make([]int, len(buf))
+		for k := range to {
+			to[k] = -1
+		}
+		*sh.attached = to
+	}
+	(*sh.attached)[i] = j
 }
 
 // advancesBetween is what stands between a base and the mark that attaches to
@@ -1006,14 +1221,6 @@ func (sh shaper) advancesBetween(buf []Glyph, i, j int) float64 {
 		}
 	}
 	return since
-}
-
-// placeMarkSince is placeMark once that sum is known, so that a caller placing
-// many marks against one base can answer it from a prefix sum instead of
-// reading the stretch again for each of them.
-func (sh shaper) placeMarkSince(buf []Glyph, i, j int, mark, base anchor, since float64) {
-	buf[i].XOffset = buf[j].XOffset + sh.f.scale(base.x-mark.x) - since
-	buf[i].YOffset = buf[j].YOffset + sh.f.scale(base.y-mark.y)
 }
 
 // advanceSums is the running total of the advances in buf, so that what stands

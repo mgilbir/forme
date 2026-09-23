@@ -121,7 +121,7 @@ func cmapSubtableSeeds() [][]byte {
 	return seeds
 }
 
-// FuzzCmapSubtable fuzzes ParseCmapSubtable on raw subtable bytes — the deep
+// FuzzCmapSubtable fuzzes parseCmapSubtableUnder on raw subtable bytes — the deep
 // target, straight at the parser that reads attacker-controlled binary out of an
 // embedded font program. It asserts no panic and the invariants in
 // checkCmapInvariants: the budget holds, the map is nil rather than empty, and
@@ -131,8 +131,8 @@ func FuzzCmapSubtable(f *testing.F) {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {
-		m, partial := ParseCmapSubtable(data, generousCmapWork)
-		checkCmapInvariants(t, "ParseCmapSubtable", m, false)
+		m, partial := parseCmapSubtableUnder(data, generousCmapWork)
+		checkCmapInvariants(t, "parseCmapSubtableUnder", m, false)
 		// The flag is monotone in the budget: a walk that gave up with room to
 		// spare gives up with less, and a smaller budget never reads *more*.
 		//
@@ -145,13 +145,13 @@ func FuzzCmapSubtable(f *testing.F) {
 		// the flag draws. The assertion predates that rule by a month and was
 		// left behind when it changed; the fuzzer needed until then to build an
 		// input whose budget runs out before the first mapping.
-		tight, tightPartial := ParseCmapSubtable(data, 1)
+		tight, tightPartial := parseCmapSubtableUnder(data, 1)
 		if partial && !tightPartial {
-			t.Fatalf("ParseCmapSubtable gave up on a budget of %d and finished on "+
+			t.Fatalf("parseCmapSubtableUnder gave up on a budget of %d and finished on "+
 				"a budget of 1", generousCmapWork)
 		}
 		if len(tight) > len(m) {
-			t.Fatalf("ParseCmapSubtable read %d mappings on a budget of 1 and %d "+
+			t.Fatalf("parseCmapSubtableUnder read %d mappings on a budget of 1 and %d "+
 				"on a budget of %d", len(tight), len(m), generousCmapWork)
 		}
 	})
@@ -193,8 +193,8 @@ func sfntCmapSeeds() [][]byte {
 // which of several subtables becomes the font's authoritative cmap. Whatever it
 // picks must satisfy the same invariants as a single subtable, and the derived
 // symbol and Mac maps must carry only real glyph indices. It also drives
-// TrueTypeGID over the resulting font, since that is what the PDF/A rules do
-// with it.
+// trueTypeGID over the resulting font, which reads the maps the selection
+// produced.
 func FuzzSFNTCmap(f *testing.F) {
 	for _, s := range sfntCmapSeeds() {
 		f.Add(s)
@@ -221,8 +221,8 @@ func FuzzSFNTCmap(f *testing.F) {
 		checkCmapInvariants(t, "parseSFNT macCmap", mac, true)
 		for _, code := range []byte{0, 'A', 0xFF} {
 			for _, symbolic := range []bool{false, true} {
-				_, _ = TrueTypeGID(fp, symbolic, code, "A")
-				_, _ = TrueTypeGID(fp, symbolic, code, "")
+				_, _ = trueTypeGID(fp, symbolic, code, "A")
+				_, _ = trueTypeGID(fp, symbolic, code, "")
 			}
 		}
 	})

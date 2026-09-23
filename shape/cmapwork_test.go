@@ -34,11 +34,10 @@ func format12(groups [][3]uint32) []byte {
 // bytes of font and about nine million mappings, against a budget of four.
 //
 // Nothing had written one. Every cmap fixture here names a handful of
-// characters, so the shape suite passes with maxCmapWork raised — and the
+// characters, so the shape suite passes with maxFontWork raised — and the
 // comment on that constant says what it is for: "A font reaching this is
-// malformed or hostile; the reader reports a partial cmap rather than spinning,
-// and Load refuses it rather than embedding a font whose mapping it only half
-// knows."
+// malformed or hostile; the readers stop rather than spinning, and Load refuses
+// it rather than embedding a font it only half knows."
 func TestACmapThatNamesMoreThanTheBudgetIsRefused(t *testing.T) {
 	// A whole font, with outlines, whose cmap is the one under test. A font of
 	// nothing but a cmap is refused for having no outlines, which would be a

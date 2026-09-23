@@ -1,6 +1,9 @@
 package layout
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // CSS Text 3 §7.3's other justification method: the slack between every pair of
 // typographic character units rather than at the word spaces.
@@ -187,5 +190,59 @@ func TestARowOfPicturesIsOneUnitToJustify(t *testing.T) {
 	if got := at("b1", spaced); got != 47 {
 		t.Errorf("with a space between them the first picture starts at %gpx, "+
 			"want 47 — the space is a unit of its own and ends the run", got)
+	}
+}
+
+// TestARunTheSlackMissesIsDrawnWithoutIt: a run at or before the last tab takes
+// no slack — the tab stops have to keep lining up — so it must not be drawn
+// with the line's extra either. Handed it anyway, "ab" was drawn a spacing per
+// letter wider than the room it was measured into and ran towards the tab stop.
+// The space hanging past the end of the line is the other run the slack misses.
+func TestARunTheSlackMissesIsDrawnWithoutIt(t *testing.T) {
+	root := layoutOf(t, 600, "<p id=\"p\">ab\tcd ef gh ij kl mn op qr st uv wx yz</p>",
+		`#p { font-family: Courier; font-size: 20px; width: 310px; white-space: pre-wrap;
+			text-align: justify; text-justify: inter-character }`)
+	line := find(t, root, "p").Lines[0]
+	n := len(line.Runs)
+	if n == 0 || strings.Trim(line.Runs[n-1].Text, " ") != "" {
+		t.Fatalf("the first line does not end in a hanging space: %+v", line.Runs)
+	}
+	var after bool
+	for i, r := range line.Runs {
+		switch {
+		case r.Text == "ab" || r.Text == "\t":
+			if r.LetterSpacing != 0 {
+				t.Errorf("%q, before the tab, is drawn with %vpx of extra and took none",
+					r.Text, r.LetterSpacing.Px())
+			}
+		case i == n-1:
+			if r.LetterSpacing != 0 {
+				t.Errorf("the hanging space is drawn with %vpx of extra and took none",
+					r.LetterSpacing.Px())
+			}
+		default:
+			after = after || r.LetterSpacing > 0
+		}
+	}
+	if !after {
+		t.Fatalf("nothing after the tab took any extra, so this asserts nothing: %+v", line.Runs)
+	}
+}
+
+// TestAJustifiedLineReachesItsEdgeExactly: the slack divided over the
+// opportunities is truncated to a layout unit, and what the truncation left was
+// dropped, so the line ended up to a unit per opportunity short of the edge it
+// was justified to. Three runs of four units in 200px leave 152px over three
+// gaps, which is not a whole number of 64ths.
+func TestAJustifiedLineReachesItsEdgeExactly(t *testing.T) {
+	root := layoutOf(t, 600, `<p id="p">a<span>b</span>cd</p>`,
+		interCSS+` #p { text-justify: inter-character }`)
+	runs := find(t, root, "p").Lines[0].Runs
+	if len(runs) != 3 {
+		t.Fatalf("%d runs, want three", len(runs))
+	}
+	last := runs[len(runs)-1]
+	if end := last.X.Add(last.Width); end.Px() != 200 {
+		t.Errorf("the justified line ends at %vpx, want the 200px edge", end.Px())
 	}
 }

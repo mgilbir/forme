@@ -1,6 +1,7 @@
 package style
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/mgilbir/forme/html"
@@ -33,10 +34,10 @@ func computed(t *testing.T, markup string, sheets ...Sheet) map[string]ComputedS
 
 func TestHintAppliesWithNothingElseSaying(t *testing.T) {
 	got := computed(t, `<img id="i" width="5" height="96">`)
-	if w := got["i"]["width"]; w != "5px" {
+	if w := got["i"].Get("width"); w != "5px" {
 		t.Errorf("width is %q, want 5px", w)
 	}
-	if h := got["i"]["height"]; h != "96px" {
+	if h := got["i"].Get("height"); h != "96px" {
 		t.Errorf("height is %q, want 96px", h)
 	}
 }
@@ -46,7 +47,7 @@ func TestHintAppliesWithNothingElseSaying(t *testing.T) {
 func TestHintBeatsTheUserAgentSheet(t *testing.T) {
 	got := computed(t, `<img id="i" width="5">`,
 		sheet(t, OriginUserAgent, `img { width: 999px }`))
-	if w := got["i"]["width"]; w != "5px" {
+	if w := got["i"].Get("width"); w != "5px" {
 		t.Errorf("width is %q; a user-agent rule beat a presentational hint", w)
 	}
 }
@@ -56,7 +57,7 @@ func TestHintBeatsTheUserAgentSheet(t *testing.T) {
 func TestAuthorSheetBeatsHint(t *testing.T) {
 	got := computed(t, `<img id="i" width="5">`,
 		sheet(t, OriginAuthor, `img { width: 60px }`))
-	if w := got["i"]["width"]; w != "60px" {
+	if w := got["i"].Get("width"); w != "60px" {
 		t.Errorf("width is %q; a presentational hint beat an author rule", w)
 	}
 }
@@ -67,7 +68,7 @@ func TestAuthorSheetBeatsHint(t *testing.T) {
 func TestTheWeakestAuthorRuleStillBeatsAHint(t *testing.T) {
 	got := computed(t, `<img id="i" width="5">`,
 		sheet(t, OriginAuthor, `* { width: 7px }`))
-	if w := got["i"]["width"]; w != "7px" {
+	if w := got["i"].Get("width"); w != "7px" {
 		t.Errorf("width is %q; a hint beat a universal author rule", w)
 	}
 }
@@ -75,26 +76,33 @@ func TestTheWeakestAuthorRuleStillBeatsAHint(t *testing.T) {
 // TestInlineStyleBeatsHint, since a style attribute is above every author rule.
 func TestInlineStyleBeatsHint(t *testing.T) {
 	got := computed(t, `<img id="i" width="5" style="width: 11px">`)
-	if w := got["i"]["width"]; w != "11px" {
+	if w := got["i"].Get("width"); w != "11px" {
 		t.Errorf("width is %q; a hint beat a style attribute", w)
 	}
 }
 
-// TestHintValueSyntax pins HTML's dimension-value grammar. Everything outside
-// it is ignored rather than guessed at: a value this cannot read must not
-// become a length it invented.
+// TestHintValueSyntax pins HTML §2.3.4.4's "rules for parsing dimension
+// values": white space, digits, an optional fraction, an optional per-cent sign
+// — and whatever follows is ignored, which is why "5px" is five pixels and
+// "5 6" is five. A value that does not begin with a digit is not a dimension,
+// and must not become a length this invented.
 func TestHintValueSyntax(t *testing.T) {
 	cases := map[string]string{
 		"5":     "5px",
 		"050":   "050px",
 		"5%":    "5%",
 		" 5 ":   "5px",
-		"5px":   "auto",
+		"5px":   "5px",
 		"-5":    "auto",
-		"5.5":   "auto",
+		"+5":    "auto",
+		"5.5":   "5.5px",
+		"5.5%":  "5.5%",
+		"5.%":   "5%",
+		"5.x":   "5px",
+		".5":    "auto",
 		"abc":   "auto",
 		"":      "auto",
-		"5 6":   "auto",
+		"5 6":   "5px",
 		"99999": "99999px",
 		// Longer than the digit bound, which exists so that an untrusted
 		// attribute cannot state a number nobody meant.
@@ -102,7 +110,7 @@ func TestHintValueSyntax(t *testing.T) {
 	}
 	for value, want := range cases {
 		got := computed(t, `<img id="i" width="`+value+`">`)
-		if w := got["i"]["width"]; w != want {
+		if w := got["i"].Get("width"); w != want {
 			t.Errorf("width=%q gave %q, want %q", value, w, want)
 		}
 	}
@@ -113,10 +121,10 @@ func TestHintValueSyntax(t *testing.T) {
 // it as one would silently size boxes from stray markup.
 func TestHintsApplyOnlyToTheElementsThatHaveThem(t *testing.T) {
 	got := computed(t, `<div id="d" width="5"><span id="s" height="9">x</span></div>`)
-	if w := got["d"]["width"]; w != "auto" {
+	if w := got["d"].Get("width"); w != "auto" {
 		t.Errorf("a <div>'s width attribute set width to %q", w)
 	}
-	if h := got["s"]["height"]; h != "auto" {
+	if h := got["s"].Get("height"); h != "auto" {
 		t.Errorf("a <span>'s height attribute set height to %q", h)
 	}
 }
@@ -133,14 +141,16 @@ func TestTableWidthAttributeIsAHint(t *testing.T) {
 	cases := map[string]string{
 		"300":  "300px",
 		"100%": "100%",
-		// Not a dimension value, so not a hint. A length with a unit is HTML's
-		// own refusal, and it must not become a length this guessed at.
-		"300px": "auto",
+		// A unit after the number is ignored, which is HTML's rule and how
+		// "<table width=600px>" in legacy and e-mail markup is drawn.
+		"300px": "300px",
 		"-1":    "auto",
+		// "Ignoring zero", in whichever spelling.
+		"0.0": "auto",
 	}
 	for value, want := range cases {
 		got := computed(t, `<table id="t" width="`+value+`"><tr><td>x</td></tr></table>`)
-		if w := got["t"]["width"]; w != want {
+		if w := got["t"].Get("width"); w != want {
 			t.Errorf("<table width=%q> gave width %q, want %q", value, w, want)
 		}
 	}
@@ -158,14 +168,14 @@ func TestTableHeightAttributeIsAHint(t *testing.T) {
 	cases := map[string]string{
 		"300": "300px",
 		"50%": "50%",
-		// The same refusals width takes: a dimension value is digits and an
-		// optional per-cent sign, and anything else is not one.
-		"300px": "auto",
+		// The same reading width takes: what follows the number is ignored,
+		// and a value that does not begin with a digit is not a dimension.
+		"300px": "300px",
 		"-1":    "auto",
 	}
 	for value, want := range cases {
 		got := computed(t, `<table id="t" height="`+value+`"><tr><td>x</td></tr></table>`)
-		if h := got["t"]["height"]; h != want {
+		if h := got["t"].Get("height"); h != want {
 			t.Errorf("<table height=%q> gave height %q, want %q", value, h, want)
 		}
 	}
@@ -185,21 +195,21 @@ func TestTableHeightAttributeIsAHint(t *testing.T) {
 // table collapses its spaces as well as refusing to wrap.
 func TestNowrapAttributeOnACellIsAHint(t *testing.T) {
 	got := computed(t, `<table><tr><td id="a" nowrap>x</td><td id="b">y</td></tr></table>`)
-	if v := got["a"]["text-wrap-mode"]; v != "nowrap" {
+	if v := got["a"].Get("text-wrap-mode"); v != "nowrap" {
 		t.Errorf("<td nowrap> has text-wrap-mode %q, want nowrap", v)
 	}
-	if v := got["a"]["white-space-collapse"]; v != "collapse" {
+	if v := got["a"].Get("white-space-collapse"); v != "collapse" {
 		t.Errorf("<td nowrap> has white-space-collapse %q, want collapse", v)
 	}
 	// And the cell beside it is untouched, which is what makes it the
 	// attribute's doing rather than a rule about cells.
-	if v := got["b"]["text-wrap-mode"]; v != "wrap" {
+	if v := got["b"].Get("text-wrap-mode"); v != "wrap" {
 		t.Errorf("a cell without the attribute has text-wrap-mode %q, want wrap", v)
 	}
 	// An author's own rule still beats it, which is where a hint sits.
 	got = computed(t, `<table><tr><td id="a" nowrap>x</td></tr></table>`,
 		sheet(t, OriginAuthor, `td { white-space: normal }`))
-	if v := got["a"]["text-wrap-mode"]; v != "wrap" {
+	if v := got["a"].Get("text-wrap-mode"); v != "wrap" {
 		t.Errorf("an author rule lost to the hint: text-wrap-mode is %q", v)
 	}
 }
@@ -244,16 +254,69 @@ func TestFontSizeAttributeIsTheSevenStepScale(t *testing.T) {
 		{"1", "10px"}, {"3", "16px"}, {"7", "48px"},
 	} {
 		cs := computed(t, `<font id="f" size="`+tc.attr+`">x</font>`)
-		if s := cs["f"]["font-size"]; s != tc.want {
+		if s := cs["f"].Get("font-size"); s != tc.want {
+			t.Errorf("size=%q computed to %q, want %q", tc.attr, s, tc.want)
+		}
+	}
+}
+
+// TestTheFontSizeIsReadByTheLegacyFontSizeRules is HTML's rules for parsing a
+// legacy font size (§15.3.4), step by step: ASCII white space is skipped, a
+// "+" or "-" sets the mode, the ASCII digits at the front are the value and
+// whatever follows them is ignored, the mode adds the value to three or takes
+// it from three, and the result is clamped to one through seven.
+//
+// "5px", "5.5", "3em" and "1x" were refused, and TestAnUnreadableFontSizeIsIgnored
+// said so; they are read now, as the rule reads them, at the user's decision.
+func TestTheFontSizeIsReadByTheLegacyFontSizeRules(t *testing.T) {
+	for _, tc := range []struct{ attr, want string }{
+		// Whatever follows the digits is ignored, a unit or a fraction alike.
+		{"5px", "x-large"}, {"5.5", "x-large"}, {"3em", "medium"}, {"1x", "x-small"},
+		{"4 5", "large"}, {"2%", "small"}, {"+2px", "x-large"}, {"-1.9", "small"},
+		// Leading ASCII white space of each of Infra's five kinds.
+		{"\t\n\f\r 6", "xx-large"}, {" +1", "large"},
+		// The value is a number of any length, clamped after the mode is
+		// applied. Eleven digits were refused as past a digit bound that is
+		// not in the rule.
+		{"99999999999", "xxx-large"}, {"+99999999999", "xxx-large"},
+		{"-99999999999", "x-small"}, {strings.Repeat("9", 100), "xxx-large"},
+		{"00000000000000000004", "large"},
+	} {
+		got, ok := fontSizeValue(tc.attr)
+		if !ok {
+			t.Errorf("size=%q was refused; the rule reads it", tc.attr)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("size=%q gave font-size %q, want %q", tc.attr, got, tc.want)
+		}
+	}
+
+	// Through the cascade, so the reading reaches the element.
+	for _, tc := range []struct{ attr, want string }{
+		{"5px", "24px"}, {"1x", "10px"}, {"+2px", "24px"}, {"-1.9", "13px"},
+	} {
+		cs := computed(t, `<font id="f" size="`+tc.attr+`">x</font>`)
+		if s := cs["f"].Get("font-size"); s != tc.want {
 			t.Errorf("size=%q computed to %q, want %q", tc.attr, s, tc.want)
 		}
 	}
 }
 
 // TestAnUnreadableFontSizeIsIgnored, which is the same rule every other hint
-// follows: a value this cannot read must not become one it guessed at.
+// follows: a value this cannot read must not become one it guessed at. What
+// the rule cannot read is a value with no digit where it looks for one: none
+// at all, none after the sign, a second sign, white space between the sign and
+// the digits, or white space that is not ASCII's in front.
+//
+// "5px", "5.5", "3em" and "1x" were in this list, and are no longer: the rule
+// reads the digits at the front of each (see
+// TestTheFontSizeIsReadByTheLegacyFontSizeRules).
 func TestAnUnreadableFontSizeIsIgnored(t *testing.T) {
-	for _, attr := range []string{"", " ", "large", "5px", "5.5", "3em", "+", "-", "1x", "x1"} {
+	for _, attr := range []string{
+		"", " ", "large", "+", "-", "x1",
+		"+ 1", "- 1", "++1", "+-1", "-+1", ".5", "\u00a05", "\v5", "\u30005",
+	} {
 		if got, ok := fontSizeValue(attr); ok {
 			t.Errorf("size=%q was read as %q; it is not a size", attr, got)
 		}
@@ -262,7 +325,7 @@ func TestAnUnreadableFontSizeIsIgnored(t *testing.T) {
 		// length; the two are the same value written two ways, and the
 		// assertion above is what tells "ignored" from "read as medium".
 		cs := computed(t, `<font id="f" size="`+attr+`">x</font>`)
-		if s := cs["f"]["font-size"]; s == "" {
+		if s := cs["f"].Get("font-size"); s == "" {
 			t.Errorf("size=%q left no font-size at all", attr)
 		} else if s != "16px" {
 			t.Errorf("size=%q gave font-size %q; it is not a size and the initial "+
@@ -276,10 +339,10 @@ func TestAnUnreadableFontSizeIsIgnored(t *testing.T) {
 // property written as an attribute.
 func TestFontColourAndFaceAttributes(t *testing.T) {
 	got := computed(t, `<font id="f" color="green" face="Courier">x</font>`)
-	if c := got["f"]["color"]; c != "green" {
+	if c := got["f"].Get("color"); c != "green" {
 		t.Errorf("color is %q, want green", c)
 	}
-	if f := got["f"]["font-family"]; f != `"Courier"` {
+	if f := got["f"].Get("font-family"); f != `"Courier"` {
 		t.Errorf("font-family is %q, want the family quoted", f)
 	}
 }
@@ -296,7 +359,7 @@ func TestAFaceIsQuotedBecauseAnAttributeIsNotAStylesheet(t *testing.T) {
 		{"  Courier  ,  serif  ", `"Courier", "serif"`},
 	} {
 		got := computed(t, `<font id="f" face="`+tc.attr+`">x</font>`)
-		if f := got["f"]["font-family"]; f != tc.want {
+		if f := got["f"].Get("font-family"); f != tc.want {
 			t.Errorf("face=%q gave %q, want %q", tc.attr, f, tc.want)
 		}
 	}
@@ -308,7 +371,7 @@ func TestAFaceIsQuotedBecauseAnAttributeIsNotAStylesheet(t *testing.T) {
 	// described.
 	for _, attr := range []string{`a"b`, `a\b`, `ok, a"b`, ``, `,`} {
 		got := computed(t, `<font id="f" face='`+attr+`'>x</font>`)
-		if f := got["f"]["font-family"]; f != "serif" {
+		if f := got["f"].Get("font-family"); f != "serif" {
 			t.Errorf("face=%q gave %q; it is not a family list and the initial "+
 				"value should stand", attr, f)
 		}
@@ -337,10 +400,10 @@ func TestValignMapsToVerticalAlign(t *testing.T) {
 		{" Center ", "middle"},
 	} {
 		got := computed(t, `<table><tr id="r" valign="`+tc.attr+`"><td id="c" valign="`+tc.attr+`">x</td></tr></table>`)
-		if v := got["r"]["vertical-align"]; v != tc.want {
+		if v := got["r"].Get("vertical-align"); v != tc.want {
 			t.Errorf("<tr valign=%q> gave vertical-align %q, want %q", tc.attr, v, tc.want)
 		}
-		if v := got["c"]["vertical-align"]; v != tc.want {
+		if v := got["c"].Get("vertical-align"); v != tc.want {
 			t.Errorf("<td valign=%q> gave vertical-align %q, want %q", tc.attr, v, tc.want)
 		}
 	}
@@ -356,13 +419,13 @@ func TestValignMapsToVerticalAlign(t *testing.T) {
 // that let one compete would pass with the attribute value handed straight
 // through.
 func TestAnUnreadableValignIsIgnored(t *testing.T) {
-	base := computed(t, `<table><tr><td id="c">x</td></tr></table>`)["c"]["vertical-align"]
+	base := computed(t, `<table><tr><td id="c">x</td></tr></table>`)["c"].Get("vertical-align")
 	if base == "" {
 		t.Fatal("a cell with no valign has no computed vertical-align, so this " +
 			"test is comparing nothing")
 	}
 	for _, attr := range []string{"", "centre", "sub", "5", "top bottom", "super"} {
-		got := computed(t, `<table><tr><td id="c" valign="`+attr+`">x</td></tr></table>`)["c"]["vertical-align"]
+		got := computed(t, `<table><tr><td id="c" valign="`+attr+`">x</td></tr></table>`)["c"].Get("vertical-align")
 		if got != base {
 			t.Errorf("<td valign=%q> computed vertical-align %q; a value that is "+
 				"not one of the five leaves the cell as it was, which is %q",
@@ -382,13 +445,13 @@ func TestAnUnreadableValignIsIgnored(t *testing.T) {
 func TestValignIsAHintAndNotARule(t *testing.T) {
 	got := computed(t, `<table><tr><td id="c" valign="bottom">x</td></tr></table>`,
 		sheet(t, OriginUserAgent, `td { vertical-align: inherit }`))
-	if v := got["c"]["vertical-align"]; v != "bottom" {
+	if v := got["c"].Get("vertical-align"); v != "bottom" {
 		t.Errorf("vertical-align is %q; a user-agent rule beat the valign attribute", v)
 	}
 
 	got = computed(t, `<table><tr><td id="c" valign="bottom">x</td></tr></table>`,
 		sheet(t, OriginAuthor, `td { vertical-align: top }`))
-	if v := got["c"]["vertical-align"]; v != "top" {
+	if v := got["c"].Get("vertical-align"); v != "top" {
 		t.Errorf("vertical-align is %q; the valign attribute beat an author rule", v)
 	}
 }
@@ -404,7 +467,7 @@ func TestValignOnARowReachesItsCells(t *testing.T) {
 		got := computed(t, markup, sheet(t, OriginUserAgent,
 			`thead, tbody, tfoot, table > tr { vertical-align: middle }
 			 tr, td, th { vertical-align: inherit }`))
-		if v := got["c"]["vertical-align"]; v != "bottom" {
+		if v := got["c"].Get("vertical-align"); v != "bottom" {
 			t.Errorf("in %s the cell's vertical-align is %q, want bottom", markup, v)
 		}
 	}
@@ -428,12 +491,12 @@ func TestACellsWidthAndHeightAreHints(t *testing.T) {
 		{`<td id="c" height="40">x</td>`, "height", "40px"},
 		{`<th id="c" height="10%">x</th>`, "height", "10%"},
 		// The refusals the table's own attributes take.
-		{`<td id="c" width="120px">x</td>`, "width", "auto"},
+		{`<td id="c" width="120px">x</td>`, "width", "120px"},
 		{`<td id="c" width="-1">x</td>`, "width", "auto"},
 		{`<td id="c" width="florb">x</td>`, "width", "auto"},
 	} {
 		got := computed(t, `<table><tr>`+c.cell+`</tr></table>`)
-		if v := got["c"][c.property]; v != c.want {
+		if v := got["c"].Get(c.property); v != c.want {
 			t.Errorf("%s gave %s %q, want %q", c.cell, c.property, v, c.want)
 		}
 	}
@@ -445,7 +508,7 @@ func TestACellsWidthAndHeightAreHints(t *testing.T) {
 		"width": "120px", "padding-top": "7px",
 		"text-wrap-mode": "nowrap", "vertical-align": "top",
 	} {
-		if v := got["c"][property]; v != want {
+		if v := got["c"].Get(property); v != want {
 			t.Errorf("a cell with four hints on it gave %s %q, want %q", property, v, want)
 		}
 	}
@@ -480,7 +543,7 @@ func TestAZeroDimensionIsNoDimension(t *testing.T) {
 		{`<img id="i" width="1" src="x">`, "i", "width", "1px"},
 	} {
 		got := computed(t, c.markup)
-		if v := got[c.id][c.property]; v != c.want {
+		if v := got[c.id].Get(c.property); v != c.want {
 			t.Errorf("%s gave %s %q, want %q", c.markup, c.property, v, c.want)
 		}
 	}
@@ -519,11 +582,11 @@ func TestATableBorderAttributeIsThreeThings(t *testing.T) {
 		{`border="-1"`, "1px", "outset"},
 	} {
 		got := computed(t, `<table id="t" `+c.attr+`><tr><td id="c">x</td></tr></table>`)
-		if w := got["t"]["border-top-width"]; w != c.width {
+		if w := got["t"].Get("border-top-width"); w != c.width {
 			t.Errorf("<table %s> gave the table border-top-width %q, want %q",
 				c.attr, w, c.width)
 		}
-		if s := got["t"]["border-top-style"]; s != c.style {
+		if s := got["t"].Get("border-top-style"); s != c.style {
 			t.Errorf("<table %s> gave the table border-top-style %q, want %q",
 				c.attr, s, c.style)
 		}
@@ -533,11 +596,11 @@ func TestATableBorderAttributeIsThreeThings(t *testing.T) {
 		if c.style != "none" {
 			wantCell, wantCellWidth = "inset", "1px"
 		}
-		if s := got["c"]["border-left-style"]; s != wantCell {
+		if s := got["c"].Get("border-left-style"); s != wantCell {
 			t.Errorf("<table %s> gave the cell border-left-style %q, want %q",
 				c.attr, s, wantCell)
 		}
-		if w := got["c"]["border-left-width"]; w != wantCellWidth {
+		if w := got["c"].Get("border-left-width"); w != wantCellWidth {
 			t.Errorf("<table %s> gave the cell border-left-width %q, want %q",
 				c.attr, w, wantCellWidth)
 		}
@@ -553,10 +616,10 @@ func TestATableBorderAttributeIsThreeThings(t *testing.T) {
 func TestANestedTablesCellsTakeTheirOwnTablesBorder(t *testing.T) {
 	got := computed(t, `<table border="3"><tr><td id="outer">`+
 		`<table><tr><td id="inner">x</td></tr></table></td></tr></table>`)
-	if s := got["outer"]["border-left-style"]; s != "inset" {
+	if s := got["outer"].Get("border-left-style"); s != "inset" {
 		t.Errorf("the outer cell has border-left-style %q, want inset", s)
 	}
-	if s := got["inner"]["border-left-style"]; s != "none" {
+	if s := got["inner"].Get("border-left-style"); s != "none" {
 		t.Errorf("the inner cell has border-left-style %q; its own table has no "+
 			"border attribute, and the one it sits inside is not its own", s)
 	}
@@ -567,14 +630,14 @@ func TestANestedTablesCellsTakeTheirOwnTablesBorder(t *testing.T) {
 func TestTheBorderAttributeIsAHintLikeTheRest(t *testing.T) {
 	got := computed(t, `<table id="t" border="4"><tr><td id="c">x</td></tr></table>`,
 		author(t, `#t { border-top-style: dashed } #c { border-left-width: 9px }`))
-	if s := got["t"]["border-top-style"]; s != "dashed" {
+	if s := got["t"].Get("border-top-style"); s != "dashed" {
 		t.Errorf("an author's border-top-style lost to the attribute: %q", s)
 	}
-	if w := got["c"]["border-left-width"]; w != "9px" {
+	if w := got["c"].Get("border-left-width"); w != "9px" {
 		t.Errorf("an author's border-left-width lost to the attribute: %q", w)
 	}
 	// And the half the author did not write still comes from the attribute.
-	if w := got["t"]["border-top-width"]; w != "4px" {
+	if w := got["t"].Get("border-top-width"); w != "4px" {
 		t.Errorf("the table border-top-width is %q, want 4px", w)
 	}
 }
@@ -608,13 +671,15 @@ func TestTheBodyLinkAttributeColoursTheLinks(t *testing.T) {
 			"an <a> with no href"},
 		{`<body link="red"><span id="c">x</span></body>`, "black",
 			"an element that is not a link at all"},
-		// A value that is not a colour leaves the default standing, which is
-		// the same answer as the attribute not being there.
-		{`<body link="florb"><a id="c" href="x">x</a></body>`, "black",
-			"a value that is not a colour"},
+		// Any other value is HTML's legacy colour value, as every browser
+		// reads it: "florb" is f, 0, 0, 0, b, padded to f000b0.
+		{`<body link="florb"><a id="c" href="x">x</a></body>`, "#f000b0",
+			"a legacy colour value"},
+		{`<body link="transparent"><a id="c" href="x">x</a></body>`, "black",
+			"the one word that is not a colour"},
 	} {
 		got := computed(t, c.markup)
-		if v := got["c"]["color"]; v != c.want {
+		if v := got["c"].Get("color"); v != c.want {
 			t.Errorf("%s: the colour is %q, want %q", c.what, v, c.want)
 		}
 	}
@@ -656,7 +721,7 @@ func TestVlinkAndAlinkAreNotColoursOnPaper(t *testing.T) {
 func TestTheLinkColourIsAHint(t *testing.T) {
 	got := computed(t, `<body link="red"><a id="c" href="x">x</a></body>`,
 		author(t, `a { color: rgb(1, 2, 3) }`))
-	if v := got["c"]["color"]; v != "rgb(1, 2, 3)" {
+	if v := got["c"].Get("color"); v != "rgb(1, 2, 3)" {
 		t.Errorf("an author's colour lost to the attribute: %q", v)
 	}
 }
@@ -671,7 +736,7 @@ func styledLink(t *testing.T, markup string) (string, []Finding) {
 	for n, cs := range got.Styles {
 		if n.Type == html.ElementNode {
 			if id, _ := n.Attr("id"); id == "c" {
-				return cs["color"], got.Findings
+				return cs.Get("color"), got.Findings
 			}
 		}
 	}
@@ -701,9 +766,8 @@ func TestBgcolorOnEveryPartOfATable(t *testing.T) {
 		{`<table><tr><th id="c" bgcolor="red">x</th></tr></table>`, "red"},
 		{`<body id="c" bgcolor="red">x</body>`, "red"},
 		{`<table><tr><td id="c" bgcolor="#808000">x</td></tr></table>`, "#808000"},
-		// A value that is not a colour leaves the background alone, which is
-		// the same answer as the attribute not being there.
-		{`<table id="c" bgcolor="florb"><tr><td>x</td></tr></table>`, "transparent"},
+		// Any other value is HTML's legacy colour value.
+		{`<table id="c" bgcolor="florb"><tr><td>x</td></tr></table>`, "#f000b0"},
 		{`<table id="c"><tr><td>x</td></tr></table>`, "transparent"},
 		// It is not inherited: a table's colour is the table's, and a cell that
 		// wants one says so. background-color does not inherit, so this falls
@@ -712,7 +776,7 @@ func TestBgcolorOnEveryPartOfATable(t *testing.T) {
 		{`<table bgcolor="red"><tr><td id="c">x</td></tr></table>`, "transparent"},
 	} {
 		got := computed(t, c.markup)
-		if v := got["c"]["background-color"]; v != c.want {
+		if v := got["c"].Get("background-color"); v != c.want {
 			t.Errorf("%s gave background-color %q, want %q", c.markup, v, c.want)
 		}
 	}
@@ -729,7 +793,7 @@ func TestACellsOtherHintsStillArrive(t *testing.T) {
 		"text-wrap-mode": "nowrap", "vertical-align": "top",
 		"border-left-style": "inset",
 	} {
-		if v := got["c"][property]; v != want {
+		if v := got["c"].Get(property); v != want {
 			t.Errorf("a cell carrying every hint at once gave %s %q, want %q",
 				property, v, want)
 		}
@@ -770,7 +834,7 @@ func TestTheBackgroundAttributeNamesAFile(t *testing.T) {
 		{`<body id="c">x</body>`, "none"},
 	} {
 		got := computed(t, c.markup)
-		if v := got["c"]["background-image"]; v != c.want {
+		if v := got["c"].Get("background-image"); v != c.want {
 			t.Errorf("%s gave background-image %q, want %q", c.markup, v, c.want)
 		}
 	}

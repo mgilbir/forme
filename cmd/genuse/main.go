@@ -23,38 +23,56 @@
 // to a property Unicode states, so a new Unicode release is a re-run rather than
 // a re-reading.
 //
-//	go run ./cmd/genuse <IndicSyllabicCategory.txt> <IndicPositionalCategory.txt> \
-//		<UnicodeData.txt> <DerivedCoreProperties.txt> <ArabicShaping.txt> > shape/usetable.go
+//	go run ./cmd/genuse -version <X.Y.Z> <IndicSyllabicCategory.txt> <IndicPositionalCategory.txt> \
+//		<UnicodeData.txt> <DerivedCoreProperties.txt> <ArabicShaping.txt> \
+//		<IndicSyllabicCategory-Additional.txt> <IndicPositionalCategory-Additional.txt> > shape/usetable.go
+//
+// The last two are the engine's corrections, testdata/ms-use; the five before
+// them are the database, and are the ones checked against -version.
 package main
 
 import (
 	"bufio"
 	"bytes"
+	"flag"
 	"fmt"
 	"go/format"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/mgilbir/forme/cmd/internal/ucd"
 )
 
 func main() {
-	if len(os.Args) != 8 {
-		fmt.Fprintln(os.Stderr, "usage: genuse <IndicSyllabicCategory.txt> "+
+	version := flag.String("version", "", "the Unicode version the database files came from")
+	flag.Parse()
+	args := flag.Args()
+	if len(args) != 7 {
+		fmt.Fprintln(os.Stderr, "usage: genuse -version <X.Y.Z> <IndicSyllabicCategory.txt> "+
 			"<IndicPositionalCategory.txt> <UnicodeData.txt> "+
 			"<DerivedCoreProperties.txt> <ArabicShaping.txt> "+
 			"<IndicSyllabicCategory-Additional.txt> <IndicPositionalCategory-Additional.txt>")
 		os.Exit(2)
 	}
+	// The five files of the database, which have to be from one release. The
+	// version used to be taken from "whichever input names it first", a
+	// package variable set as a side effect of reading, and nothing checked the
+	// other four against it.
+	if err := ucd.Check(*version, args[:5]...); err != nil {
+		fmt.Fprintln(os.Stderr, "genuse:", err)
+		os.Exit(1)
+	}
 	// Unicode's values, then the engine's corrections to them. The corrections
 	// are not derivable from anything — see testdata/ms-use/NOTICE.md — and
 	// there are characters whose Unicode value is right for Unicode and wrong
 	// for laying out a syllable, so they are read last and win.
-	syllabic := override(readRanged(os.Args[1]), readRanged(os.Args[6]))
-	positional := override(readRanged(os.Args[2]), readRanged(os.Args[7]))
-	general, version := readUnicodeData(os.Args[3])
-	ignorable := readProperty(os.Args[4], "Default_Ignorable_Code_Point")
-	joining := readJoining(os.Args[5])
+	syllabic := override(readRanged(args[0]), finalModifiersAreSyllableModifiers(readRanged(args[5])))
+	positional := override(readRanged(args[1]), readRanged(args[6]))
+	general := readUnicodeData(args[2])
+	ignorable := readProperty(args[3], "Default_Ignorable_Code_Point")
+	joining := readJoining(args[4])
 
 	// A character none of the inputs names at all has no category derived from
 	// them, and is therefore Other.
@@ -105,6 +123,15 @@ func main() {
 			c.gc = "Cn" // unassigned
 		}
 		cat := categoryOf(c)
+		// A correction HarfBuzz makes to the position, after the category:
+		// the Grantha anusvara and visarga and the Tirhuta visarga are placed
+		// above, where Unicode says to the right. Read as post-base modifiers
+		// they cannot follow a combining anusvara above (U+11300, U+11366…),
+		// and "𑌔𑌃𑌀" became a cluster, a broken one and a dotted circle, where
+		// HarfBuzz sets one cluster (harfbuzz#1037, #1631).
+		if r == 0x11302 || r == 0x11303 || r == 0x114C1 {
+			c.ipc = "Top"
+		}
 		if cat == "O" {
 			continue // the default, and by far the commonest
 		}
@@ -147,7 +174,7 @@ package shape
 // publish, and cmd/genuse is that derivation. See its documentation for why it
 // is computed rather than tabulated.
 var useRanges = [...]useRange{
-`, version, len(spans))
+`, *version, len(spans))
 	for _, s := range spans {
 		fmt.Fprintf(&w, "\t{0x%04X, 0x%04X, use%s, usePos%s},\n", s.lo, s.hi, s.cat, s.pos)
 	}
@@ -357,6 +384,21 @@ func inRanges(rs []ranged, r rune) bool {
 	return i < len(rs) && rs[i].lo <= r
 }
 
+// finalModifiersAreSyllableModifiers reads the engine's syllabic corrections as
+// HarfBuzz reads them: a correction to Consonant_Final_Modifier is taken as
+// Syllable_Modifier, which the derivation makes a final modifier. The file
+// uses a value Unicode does not have (MicrosoftDocs/typography-issues#336),
+// and read literally it names no category at all, so U+1C36 LEPCHA SIGN RAN,
+// the one character it is given to, fell to Other.
+func finalModifiersAreSyllableModifiers(rs []ranged) []ranged {
+	for i := range rs {
+		if rs[i].value == "Consonant_Final_Modifier" {
+			rs[i].value = "Syllable_Modifier"
+		}
+	}
+	return rs
+}
+
 // readRanged reads a file of "range ; value" lines, which is the shape of every
 // Unicode property file that states one property.
 func readRanged(path string) []ranged {
@@ -380,18 +422,13 @@ func readRanged(path string) []ranged {
 //
 // It works on the flattened characters rather than on the ranges because the two
 // files divide the code space differently, and merging ranges that overlap
-// partially is a great deal of care for a table that is rebuilt in a second.
+// partially is a great deal of care for a table that is rebuilt in a second:
+// every character takes the base's value and then the override's, and the
+// result is collapsed back into ranges.
 func override(base, over []ranged) []ranged {
 	if len(over) == 0 {
 		return base
 	}
-	out := append([]ranged(nil), base...)
-	for _, o := range over {
-		out = append(out, o)
-	}
-	// A later range wins, which sort.SliceStable preserves for equal keys only
-	// if the search below prefers the last match — so instead the overrides are
-	// applied by rewriting: every base range is split around each override.
 	flat := map[rune]string{}
 	for _, r := range base {
 		for c := r.lo; c <= r.hi; c++ {
@@ -408,7 +445,7 @@ func override(base, over []ranged) []ranged {
 		keys = append(keys, c)
 	}
 	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
-	out = out[:0]
+	var out []ranged
 	for _, c := range keys {
 		v := flat[c]
 		if n := len(out); n > 0 && out[n-1].hi == c-1 && out[n-1].value == v {
@@ -441,7 +478,7 @@ func readProperty(path, want string) map[rune]bool {
 // readUnicodeData reads the General_Category of every assigned character, and
 // the ranges UnicodeData.txt states with a First/Last pair rather than a line
 // each.
-func readUnicodeData(path string) (map[rune]string, string) {
+func readUnicodeData(path string) map[rune]string {
 	out := map[rune]string{}
 	f, err := os.Open(path)
 	if err != nil {
@@ -475,14 +512,19 @@ func readUnicodeData(path string) (map[rune]string, string) {
 			out[r] = gc
 		}
 	}
-	// UnicodeData.txt carries no version line, so it is taken from the file
-	// that does — the caller passes them from one release.
-	return out, unicodeVersion
+	return out
 }
 
-// readJoining reads the Arabic joining type, defaulting as ArabicShaping.txt's
-// own header says: a non-spacing mark is transparent and everything else does
-// not join.
+// readJoining reads the Arabic joining type of every character
+// ArabicShaping.txt lists, and of no other.
+//
+// The file's own default — an unlisted non-spacing mark, enclosing mark or
+// format character is transparent — is not applied here. This comment used to
+// say it was. The derivation asks the joining type two things: whether a
+// character joins cursively (C, D, L or R, which the default never gives), and
+// whether the file names it at all (see known in main), which the default
+// would change for every mark in the code space. cmd/genjoining applies it for
+// the shaper, which is where it decides an answer.
 func readJoining(path string) map[rune]string {
 	out := map[rune]string{}
 	eachField(path, func(fields []string) {
@@ -498,11 +540,8 @@ func readJoining(path string) map[rune]string {
 	return out
 }
 
-// unicodeVersion is read from whichever input names it first.
-var unicodeVersion = "unknown"
-
 // eachField calls fn with the semicolon-separated fields of every data line,
-// comments and blanks skipped, and picks the version out of the header.
+// comments and blanks skipped.
 func eachField(path string, fn func(fields []string)) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -514,12 +553,6 @@ func eachField(path string, fn func(fields []string)) {
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
 	for sc.Scan() {
 		line := sc.Text()
-		if unicodeVersion == "unknown" {
-			if _, v, ok := strings.Cut(line, "-"); ok && strings.HasPrefix(line, "# ") &&
-				strings.HasSuffix(v, ".txt") {
-				unicodeVersion = strings.TrimSuffix(v, ".txt")
-			}
-		}
 		if i := strings.IndexByte(line, '#'); i >= 0 {
 			line = line[:i]
 		}

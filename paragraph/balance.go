@@ -59,7 +59,8 @@ var MaxBalanceLines = 6
 // Returns MaxUnit — no cap at all — when the box does not balance, when it is
 // one line already, or when it is longer than this engine will balance.
 func (br *Breaker) BalanceWidth(items, first []Item, width, indent style.Unit) style.Unit {
-	full, splitFull := br.countLines(items, first, width, indent, MaxBalanceLines+1)
+	p := br.balancing(items, first)
+	full, splitFull := p.countLines(width, indent, MaxBalanceLines+1)
 	if full < 2 || full > MaxBalanceLines {
 		return style.MaxUnit
 	}
@@ -69,7 +70,7 @@ func (br *Breaker) BalanceWidth(items, first []Item, width, indent style.Unit) s
 	lo, hi := style.Unit(1), width
 	for hi.Sub(lo) > 1 {
 		mid := lo.Add(hi.Sub(lo).Div(2))
-		n, split := br.countLines(items, first, mid, indent, full+1)
+		n, split := p.countLines(mid, indent, full+1)
 		if n <= full && (splitFull || !split) {
 			hi = mid
 			continue
@@ -97,7 +98,14 @@ func (br *Breaker) BalanceWidth(items, first []Item, width, indent style.Unit) s
 // gives its opportunities to the intrinsic sizes as well, so they are real ones
 // and a balancer may use them like any other.
 
-// firstLineItems is the list a balancing probe breaks its *first* line from.
+// balancing is a paragraph prepared for the probes a balancing search makes of
+// it: the items, and the list a probe breaks its *first* line from.
+//
+// Prepared once for the search and not once per probe, and not once per line —
+// which is what breaking from the bare items did. See Lines: every line of every
+// probe walked the rest of the paragraph to its next forced break, so a search
+// of sixteen probes over a long paragraph was sixteen quadratic passes, and a
+// clamp that stopped counting at a million lines never stopped paying for them.
 //
 // §5.12.1's pseudo-element changes the type the first line is set in, and a
 // width search that measured that line in the block's own type is answering
@@ -110,12 +118,26 @@ func (br *Breaker) BalanceWidth(items, first []Item, width, indent style.Unit) s
 // The two lists are parallel — same length, same order, same item at every index
 // — which is what makes an index from one usable in the other and is the same
 // invariant layout's own loop relies on. A nil second list is a block with no
-// ::first-line, which is nearly every block, and costs a comparison.
-func firstLineItems(items, first []Item) []Item {
-	if first == nil {
-		return items
+// ::first-line, which is nearly every block, and is prepared once for both.
+type balancing struct {
+	all, first *Lines
+}
+
+func (br *Breaker) balancing(items, first []Item) balancing {
+	b := balancing{all: br.Lines(items)}
+	b.first = b.all
+	if first != nil {
+		b.first = br.Lines(first)
 	}
-	return first
+	return b
+}
+
+// line is the list the nth line is broken from.
+func (b balancing) line(n int) *Lines {
+	if n == 0 {
+		return b.first
+	}
+	return b.all
 }
 
 // capAt is the balanced width for a line beginning at an item.
@@ -145,11 +167,12 @@ func capAt(caps []style.Unit, i int) style.Unit {
 func (br *Breaker) BalanceClampedWidth(items, first []Item,
 	width, indent, ellipsis style.Unit, maxLines int) style.Unit {
 
-	wantI, wantByte := br.clampedReach(items, first, width, indent, ellipsis, maxLines)
+	p := br.balancing(items, first)
+	wantI, wantByte := p.clampedReach(width, indent, ellipsis, maxLines)
 	lo, hi := style.Unit(1), width
 	for hi.Sub(lo) > 1 {
 		mid := lo.Add(hi.Sub(lo).Div(2))
-		i, iByte := br.clampedReach(items, first, mid, indent, ellipsis, maxLines)
+		i, iByte := p.clampedReach(mid, indent, ellipsis, maxLines)
 		if i > wantI || (i == wantI && iByte >= wantByte) {
 			hi = mid
 			continue
@@ -172,6 +195,11 @@ func (br *Breaker) BalanceClampedWidth(items, first []Item,
 func (br *Breaker) clampedReach(items, first []Item,
 	width, indent, ellipsis style.Unit, maxLines int) (int, int) {
 
+	return br.balancing(items, first).clampedReach(width, indent, ellipsis, maxLines)
+}
+
+func (b balancing) clampedReach(width, indent, ellipsis style.Unit, maxLines int) (int, int) {
+	items := b.all.items
 	i, iByte := 0, 0
 	for n := 0; n < maxLines; n++ {
 		for iByte == 0 && i < len(items) && items[i].Float != nil {
@@ -181,17 +209,15 @@ func (br *Breaker) clampedReach(items, first []Item,
 			break
 		}
 		room := width
-		use := items
 		if n == 0 {
 			room = room.Sub(indent)
-			use = firstLineItems(items, first)
 		}
 		last := n == maxLines-1
 		if last {
 			room = room.Sub(ellipsis)
 		}
 		wasI, wasByte := i, iByte
-		runs, next, nextByte, _, _, _ := br.BreakOneLine(use, i, iByte, room, 0)
+		runs, next, nextByte, _, _, _ := b.line(n).BreakOneLine(i, iByte, room, 0)
 		if last {
 			var used style.Unit
 			for _, r := range runs {
@@ -224,14 +250,15 @@ func (br *Breaker) clampedReach(items, first []Item,
 func (br *Breaker) BalanceWidthInBands(items, first []Item, bands []style.Unit,
 	width, indent style.Unit) style.Unit {
 
-	full, splitFull := br.countLinesInBands(items, first, bands, width, indent, MaxBalanceLines+1)
+	p := br.balancing(items, first)
+	full, splitFull := p.countLinesInBands(bands, width, indent, MaxBalanceLines+1)
 	if full < 2 || full > MaxBalanceLines {
 		return style.MaxUnit
 	}
 	lo, hi := style.Unit(1), width
 	for hi.Sub(lo) > 1 {
 		mid := lo.Add(hi.Sub(lo).Div(2))
-		n, split := br.countLinesInBands(items, first, bands, mid, indent, full+1)
+		n, split := p.countLinesInBands(bands, mid, indent, full+1)
 		if n <= full && (splitFull || !split) {
 			hi = mid
 			continue
@@ -250,6 +277,11 @@ func (br *Breaker) BalanceWidthInBands(items, first []Item, bands []style.Unit,
 func (br *Breaker) countLinesInBands(items, first []Item, bands []style.Unit,
 	cap, indent style.Unit, limit int) (int, bool) {
 
+	return br.balancing(items, first).countLinesInBands(bands, cap, indent, limit)
+}
+
+func (b balancing) countLinesInBands(bands []style.Unit, cap, indent style.Unit, limit int) (int, bool) {
+	items := b.all.items
 	n := 0
 	iByte := 0
 	split := false
@@ -261,13 +293,11 @@ func (br *Breaker) countLinesInBands(items, first []Item, bands []style.Unit,
 			break
 		}
 		room := style.Min(bandAt(bands, n), cap)
-		use := items
 		if n == 0 {
 			room = room.Sub(indent)
-			use = firstLineItems(items, first)
 		}
 		wasI, wasByte := i, iByte
-		runs, next, nextByte, _, forced, hyphenated := br.BreakOneLine(use, i, iByte, room, 0)
+		runs, next, nextByte, _, forced, hyphenated := b.line(n).BreakOneLine(i, iByte, room, 0)
 		if len(runs) > 0 || forced {
 			n++
 		}
@@ -443,6 +473,7 @@ func (br *Breaker) BalanceScoredCaps(items, first []Item, bands []style.Unit,
 		ok, walked bool
 	}
 	memo := map[state]answer{}
+	p := br.balancing(items, first)
 
 	room := func(n int) style.Unit {
 		r := bandAt(bands, n)
@@ -475,17 +506,14 @@ func (br *Breaker) BalanceScoredCaps(items, first []Item, bands []style.Unit,
 
 		out := answer{}
 		r := room(st.n)
-		use := items
-		if st.n == 0 {
-			use = firstLineItems(items, first)
-		}
+		use := p.line(st.n)
 		// The same rule the width search has — see the note on BalanceWidth —
 		// asked once for this line: whether the greedy break here had to open a
 		// word, which is the only reason a narrower one may.
-		_, _, greedyByte, _, _, greedyHyphen := br.BreakOneLine(use, st.i, st.iByte, r, 0)
+		_, _, greedyByte, _, _, greedyHyphen := use.BreakOneLine(st.i, st.iByte, r, 0)
 		mustSplit := greedyByte != 0 && !greedyHyphen
 		for w := r; w >= 0; {
-			runs, next, nextByte, _, _, hyphenated := br.BreakOneLine(use, st.i, st.iByte, w, 0)
+			runs, next, nextByte, _, _, hyphenated := use.BreakOneLine(st.i, st.iByte, w, 0)
 			if !CursorAdvanced(st.i, st.iByte, next, nextByte) {
 				break
 			}
@@ -555,6 +583,11 @@ func (br *Breaker) BalanceScoredCaps(items, first []Item, bands []style.Unit,
 // against the real bands; a count that placed floats would have to place them
 // once per probe and roll them back once per probe.
 func (br *Breaker) countLines(items, first []Item, width, indent style.Unit, limit int) (int, bool) {
+	return br.balancing(items, first).countLines(width, indent, limit)
+}
+
+func (b balancing) countLines(width, indent style.Unit, limit int) (int, bool) {
+	items := b.all.items
 	n := 0
 	iByte := 0
 	split := false
@@ -566,13 +599,11 @@ func (br *Breaker) countLines(items, first []Item, width, indent style.Unit, lim
 			break
 		}
 		room := width
-		use := items
 		if n == 0 {
 			room = width.Sub(indent)
-			use = firstLineItems(items, first)
 		}
 		wasI, wasByte := i, iByte
-		runs, next, nextByte, _, forced, hyphenated := br.BreakOneLine(use, i, iByte, room, 0)
+		runs, next, nextByte, _, forced, hyphenated := b.line(n).BreakOneLine(i, iByte, room, 0)
 		if len(runs) > 0 || forced {
 			n++
 		}

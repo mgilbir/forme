@@ -93,3 +93,64 @@ func TestAnOverflowFindingSaysWhatTheDisplayListDid(t *testing.T) {
 		}
 	}
 }
+
+// TestAnOverflowFindingNamesOnlyAClipThatApplies: which box clips is asked
+// the way the clip itself is resolved. An absolutely positioned box with no
+// positioned ancestor is clipped by nothing on the page, however many
+// "overflow: hidden" boxes it was written inside (§11.1.1), and its run is drawn
+// whole; the finding said an ancestor outside its containing block chain cut it
+// off. And a clipping ancestor far wider than the text does not make the text
+// cut: the finding says what reaches past that box's edge is cut, and that the
+// rest runs past its own box's edge.
+func TestAnOverflowFindingNamesOnlyAClipThatApplies(t *testing.T) {
+	const css = noDefaults + `#w { overflow: hidden; width: 600px }
+		#t { width: 50px; font-family: Courier; font-size: 20px }`
+	message := func(markup string) (string, []DrawText) {
+		t.Helper()
+		frag, findings := bgLayoutWithFindings(t, markup, css)
+		var msg string
+		for _, f := range findings {
+			if f.Rule == RuleUnbreakableOverflow {
+				msg = f.Message
+			}
+		}
+		if msg == "" {
+			t.Fatalf("%s: no overflow was reported: %v", markup, findings)
+		}
+		var runs []DrawText
+		for _, op := range Paint(frag) {
+			if d, ok := op.(DrawText); ok {
+				runs = append(runs, d)
+			}
+		}
+		return msg, runs
+	}
+
+	msg, runs := message(`<div id="w"><div id="t" style="position: absolute">WWWWWW</div></div>`)
+	if strings.Contains(msg, "clips") || !strings.Contains(msg, "is drawn past the edge") {
+		t.Errorf("an absolutely positioned box outside every clip's chain was reported as %q", msg)
+	}
+	for _, r := range runs {
+		if r.Clip.Active {
+			t.Errorf("the run %q carries a clip, so this fixture is not the case", r.Text)
+		}
+	}
+
+	// "overflow" does not apply to an inline box, and a text box carries its
+	// element's whole style: neither the span nor the text in it clips.
+	msg, _ = message(`<div id="t"><span style="overflow: hidden">WWWWWW</span></div>`)
+	if strings.Contains(msg, "clips") {
+		t.Errorf("an inline box was named as clipping its own text: %q", msg)
+	}
+
+	msg, runs = message(`<div id="w"><div id="t">WWWWWW</div></div>`)
+	if !strings.Contains(msg, "runs past the edge") || !strings.Contains(msg, "on <div> clips it") {
+		t.Errorf("text inside a wide clipping box was reported as %q; it runs past its "+
+			"own box and is cut only where it reaches the clipping one", msg)
+	}
+	for _, r := range runs {
+		if r.Clip.Active {
+			t.Errorf("the run %q carries a clip, so this fixture is not the case", r.Text)
+		}
+	}
+}

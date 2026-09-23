@@ -105,12 +105,12 @@ func TestAFaceWithNoSpaceIsNotTheOneAsked(t *testing.T) {
 func TestTheFamiliesThisReachesAreTheOnesTheDocumentNamed(t *testing.T) {
 	set := loadNoSpace(t)
 	l := &layouter{fontSet: set, fonts: map[fontKey]resolvedFont{}}
-	b := &Box{Style: style.ComputedStyle{"font-family": "nospace"}}
+	b := &Box{Style: style.Initial().With("font-family", "nospace")}
 	if _, ok := l.faceWithGlyph(b, ' '); ok {
 		t.Error("a family list of one face with no space answered with a face; the " +
 			"fallback set is not this function's business")
 	}
-	b = &Box{Style: style.ComputedStyle{"font-family": "nospace, Helvetica"}}
+	b = &Box{Style: style.Initial().With("font-family", "nospace, Helvetica")}
 	if _, ok := l.faceWithGlyph(b, ' '); !ok {
 		t.Error("\"nospace, Helvetica\" answered with nothing; Helvetica has a space")
 	}

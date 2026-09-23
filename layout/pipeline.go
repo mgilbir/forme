@@ -1,8 +1,10 @@
 package layout
 
 import (
+	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
@@ -29,13 +31,14 @@ type Stylesheet struct {
 	// Name identifies the sheet in a finding — a filename, usually. It is empty
 	// for the document's own <style> content.
 	//
-	// It is also what a relative @import inside this sheet is resolved against,
-	// because that is what a reference in a stylesheet is relative to: an
-	// "@import \"base.css\"" in a sheet named "css/page.css" asks for
-	// "css/base.css", and the same import in a sheet with no name asks for
-	// "base.css" beside the document. So the name is a path and not a label —
-	// naming a sheet "the caller's theme" would send its imports looking in a
-	// directory called that.
+	// It is also what every relative reference inside this sheet is resolved
+	// against — an @import, an @font-face src, a background-image, any url() —
+	// because that is what a reference in a stylesheet is relative to (CSS
+	// Values 4 §4.5.1): an "@import \"base.css\"" or a "url(bg.png)" in a
+	// sheet named "css/page.css" asks for "css/base.css" or "css/bg.png", and
+	// the same in a sheet with no name asks for a file beside the document. So
+	// the name is a path and not a label — naming a sheet "the caller's theme"
+	// would send its references looking in a directory called that.
 	Name string
 	// Source is the CSS.
 	Source string
@@ -45,6 +48,15 @@ type Stylesheet struct {
 type Input struct {
 	// HTML is the document source.
 	HTML string
+	// XHTML says the document is served as application/xhtml+xml, and is read
+	// as XHTML whatever it says about itself: <style> holds character data,
+	// "<div/>" is empty, attribute names in attr() are case-sensitive. It is
+	// what a browser learns from the MIME type, and what a caller knows from
+	// where the file came from — its content type, or an ".xht" extension.
+	//
+	// Left false, the document decides: an XML declaration or a doctype naming
+	// XHTML makes it XHTML, and anything else is HTML. See html.ParseXHTML.
+	XHTML bool
 	// CSS is the author's stylesheets, in the order they apply.
 	CSS []Stylesheet
 	// Policy chooses what each rule does. A nil policy uses the defaults.
@@ -55,9 +67,10 @@ type Input struct {
 	// cascade.
 	UserCSS string
 
-	// Resources supplies the bytes of the files the document refers to — the
-	// images an <img> or a background-image names, and the stylesheets a
-	// <link rel=stylesheet> does.
+	// Resources supplies the bytes of the files the document refers to: the
+	// pictures an <img>, an <object>, a video's poster, a background, a list
+	// marker or generated content names, the stylesheets a <link
+	// rel=stylesheet> or an @import does, and the fonts an @font-face does.
 	//
 	// A nil resolver loads nothing, which is the deliberate default: a document
 	// is untrusted input, and "src" and "href" are strings in it. See
@@ -146,7 +159,21 @@ func BuildFor(in Input, page PageSize) Built {
 //
 // And the work: every finding is deduplicated twice, once in each recorder.
 func buildWith(in Input, page PageSize, rec *Recorder) Built {
-	doc, htmlErrs, _ := html.Parse(in.HTML)
+	// The document's share of the work budget, for what the caller handed in.
+	// A sheet the document fetches for itself earns nothing: a budget that
+	// grew with what a document chose to link would be one a document could
+	// raise. See budget.go.
+	input := len(in.HTML) + len(in.UserCSS)
+	for _, s := range in.CSS {
+		input += len(s.Source)
+	}
+	rec.work.grant(input)
+
+	parse := html.Parse
+	if in.XHTML {
+		parse = html.ParseXHTML
+	}
+	doc, htmlErrs, _ := parse(in.HTML)
 	for _, e := range htmlErrs {
 		// Three kinds, and they are three because they send an author to three
 		// different places: fix the markup, the engine does not do this, or the
@@ -164,33 +191,33 @@ func buildWith(in Input, page PageSize, rec *Recorder) Built {
 		rec.Report(rule, AtHTML(e.Offset), e.Message)
 	}
 
-	// The document's @font-face rules, collected as the sheets are parsed and
-	// loaded once all of them are in. They are gathered rather than acted on
-	// here because a rule in the last stylesheet may replace one in the first,
-	// and because the caps below are on the document rather than on a sheet.
-	var faces []pendingFontFace
-	// The document's @page rules, gathered the same way and for the same
-	// reason: which of two declarations of a margin wins depends on the origin
-	// of the sheet each was written in, so all of them have to be in hand
-	// before any of them is read.
-	var pages []pendingPage
-
 	sheets := make([]style.Sheet, 0, len(in.CSS)+2)
-	sheets = append(sheets, userAgentSheet(rec, &faces, &pages))
-	// The sheet a media query is asked about, which for a <link> or a <style>
-	// has to be settled before the document's own @page rules can be, because
-	// those rules are inside the sheets being chosen here. It is the page the
-	// caller named; @page narrows it afterwards and the cascade asks again.
+	sheets = append(sheets, userAgentSheet(rec))
+	// The sheet every media query in the document is asked about: the page the
+	// caller named, and not the one the document's @page rules go on to
+	// choose. Those rules are inside the sheets and the @media blocks being
+	// chosen here, so a query answered about their answer is circular — "@media
+	// (min-width: 250mm) { @page { size: A3 } }" would decide itself — and the
+	// only definition that is not is the medium's own. It is the one answer for
+	// a <link media>, an @import's media, an @media around an @page and an
+	// @media around a style rule alike. They used to be two: every in-sheet
+	// @media was asked again about the sheet after @page, so with the caller on
+	// A4 and "@page { size: A3 }" a <link media="(min-width: 250mm)"> was not
+	// applied and the same query in a <style> was (audit C139).
 	asked := style.Media{Width: page.Width, Height: page.Height}
+	// One loader for every stylesheet the document is given, whichever side it
+	// came from, because the bounds it applies are on the document: two loaders
+	// were two budgets, and the caller's sheets and the document's own could
+	// each spend a whole one.
 	importer := &sheetLoader{res: in.Resources, rec: rec, media: asked, failed: map[string]bool{}}
-	if in.UserCSS != "" {
+	if in.UserCSS != "" && importer.admit(in.UserCSS, "the user stylesheet", NoSource, "") {
 		// Through the importer like every other author-supplied sheet. A user
 		// stylesheet is CSS a person wrote, and an @import in one is the same
 		// request it is anywhere else — left unexpanded it was reported as an
 		// at-rule this engine does not apply, which is not what happens to the
 		// identical line in the document's own sheet.
 		for _, e := range importer.expandImports(authorSheet{name: "user", source: in.UserCSS}) {
-			sheets = append(sheets, parseSheet(rec, style.OriginUser, e.name, e.source, &faces, &pages))
+			sheets = append(sheets, parseSheet(rec, style.OriginUser, e.name, e.source))
 		}
 	}
 	// A <style> element and a <link rel=stylesheet> are both author stylesheets,
@@ -199,32 +226,50 @@ func buildWith(in Input, page PageSize, rec *Recorder) Built {
 	// order the author would expect. documentStylesheets returns the two kinds
 	// interleaved in document order for that reason; see stylesheet.go for what
 	// a linked one is allowed to be read from.
-	for _, s := range documentStylesheets(doc, in.Resources, asked, rec) {
-		sheets = append(sheets, parseSheet(rec, style.OriginAuthor, s.name, s.source, &faces, &pages))
+	for _, s := range documentStylesheets(doc, importer) {
+		sheets = append(sheets, parseSheet(rec, style.OriginAuthor, s.name, s.source))
 	}
 	// A caller's own sheets go through the same expansion as the document's, so
 	// that "@import" means the same thing whichever side it was written on.
-	for _, s := range in.CSS {
+	for i, s := range in.CSS {
+		what := "the stylesheet " + quoteValue(s.Name)
+		if s.Name == "" {
+			what = "the stylesheet at Input.CSS[" + strconv.Itoa(i) + "]"
+		}
+		if !importer.admit(s.Source, what, NoSource, "") {
+			continue
+		}
 		for _, e := range importer.expandImports(authorSheet{name: s.Name, source: s.Source}) {
-			sheets = append(sheets, parseSheet(rec, style.OriginAuthor, e.name, e.source, &faces, &pages))
+			sheets = append(sheets, parseSheet(rec, style.OriginAuthor, e.name, e.source))
 		}
 	}
+
+	// Every sheet read the way the cascade reads it, once: the @media,
+	// @supports and @layer blocks evaluated, and the @font-face and @page rules
+	// they hold handed over. The fonts and the page are decided from those
+	// before anything is styled — an ex in a font-size needs the faces, and
+	// layout needs the page — and there is no second walk over the sheets to
+	// disagree with this one about which blocks are live. See style.Prepared.
+	prepared := style.Prepare(sheets, asked)
 
 	base := in.Fonts
 	if base == nil {
 		base = StandardFonts()
 	}
-	fontSet := loadFontFaces(faces, in.Resources, base, rec)
+	fontSet := loadFontFaces(fontFacesOf(prepared.FontFaces), in.Resources, base, rec)
 
-	// The sheet the document asked for, settled before it is styled. A margin
-	// does not change what a media query is answered with — a query asks about
-	// the paper and the margin is inside it — but the page has to be decided
-	// before layout either way, and deciding it here is what lets Compose lay
-	// out on the sheet the document chose.
-	page = applyPageRules(page, pages, rec)
+	// The sheet the document asked for, settled before it is styled. It
+	// changes no media query's answer — see asked — but the page has to be
+	// decided before layout either way, and deciding it here is what lets
+	// Compose lay out on the sheet the document chose.
+	page = applyPageRules(page, pagesOf(prepared.Pages), rec)
 
-	styled := style.ApplyIn(doc, sheets, fontMetrics{fontSet},
-		style.Media{Width: page.Width, Height: page.Height})
+	// The page area is what a viewport-relative length is a percentage of on
+	// paper, and it is the one layout resolves "3vw" against for every other
+	// property (lengthContext); a font-size in vw is resolved in the cascade,
+	// because it is inherited as a number, so the cascade is told the same page.
+	area := page.Content()
+	styled := prepared.ApplyOnPage(doc, fontMetrics{fontSet}, style.Media{Width: area.W, Height: area.H})
 	for _, f := range styled.Findings {
 		rec.ReportDetail(Finding{
 			Rule:     ruleForStyleFinding(f),
@@ -258,16 +303,17 @@ func buildWith(in Input, page PageSize, rec *Recorder) Built {
 	}
 }
 
-// parseSheet reads one stylesheet, reporting what it could not read and setting
-// aside the @font-face rules in it.
+// parseSheet reads one stylesheet and reports what it could not read.
 //
-// The rules are taken out here rather than in the cascade because they are not
-// a cascade matter at all: an @font-face selects nothing and computes nothing,
-// it loads a file. Leaving them in would mean the styling stage reporting each
-// as an at-rule it does not apply, which after fontface.go would be untrue.
-func parseSheet(rec *Recorder, origin style.Origin, name, src string,
-	faces *[]pendingFontFace, pages *[]pendingPage) style.Sheet {
-	return readSheet(origin, name, src).handOver(rec, origin, name, faces, pages)
+// Its @font-face and @page rules stay in it: the cascade's walk hands them
+// over, from wherever in the sheet they are live. See style.Prepared.
+//
+// Every url() in it is resolved against its name here, which is what a
+// relative reference in a stylesheet is relative to. See resolveSheetURLs.
+func parseSheet(rec *Recorder, origin style.Origin, name, src string) style.Sheet {
+	p := readSheet(origin, name, src)
+	resolveSheetURLs(p.rules, name, rec)
+	return p.handOver(rec, origin, name)
 }
 
 // parsedSheet is everything reading one stylesheet produced, kept apart from
@@ -276,24 +322,18 @@ func parseSheet(rec *Recorder, origin style.Origin, name, src string,
 type parsedSheet struct {
 	rules []css.Rule
 	errs  []css.Error
-	faces []pendingFontFace
-	pages []pendingPage
 }
 
-// readSheet parses one stylesheet and sets aside what is not a cascade matter.
+// readSheet parses one stylesheet.
 func readSheet(origin style.Origin, name, src string) parsedSheet {
 	rules, errs := css.ParseStylesheet(src)
-	out := parsedSheet{errs: errs}
-	out.rules = splitFontFaces(rules, name, &out.faces)
-	collectPageRules(out.rules, name, origin, nil, &out.pages)
-	return out
+	return parsedSheet{rules: rules, errs: errs}
 }
 
 // handOver reports what the reading found and returns the sheet for the
 // cascade. It is separate from readSheet so that a sheet read once is still
 // reported once per document.
-func (p parsedSheet) handOver(rec *Recorder, origin style.Origin, name string,
-	faces *[]pendingFontFace, pages *[]pendingPage) style.Sheet {
+func (p parsedSheet) handOver(rec *Recorder, origin style.Origin, name string) style.Sheet {
 
 	for _, e := range p.errs {
 		rec.ReportDetail(Finding{
@@ -302,8 +342,6 @@ func (p parsedSheet) handOver(rec *Recorder, origin style.Origin, name string,
 			Message: e.Message,
 		})
 	}
-	*faces = append(*faces, p.faces...)
-	*pages = append(*pages, p.pages...)
 	return style.Sheet{Origin: origin, Rules: p.rules, Name: name}
 }
 
@@ -328,11 +366,12 @@ const userAgentSheetName = "user agent"
 //
 // The reading is memoized and the *reporting* is not: a finding about the
 // default sheet is still raised into each document's recorder, and any
-// @font-face or @page in it still reaches each document's lists. So this is a
+// @font-face or @page in it is handed over by each document's preparation — the
+// style package's memo of this sheet replays them. So this is a
 // memo of a pure function and not a change of behaviour — which is why it is
 // written as readSheet and handOver rather than as a cached style.Sheet.
-func userAgentSheet(rec *Recorder, faces *[]pendingFontFace, pages *[]pendingPage) style.Sheet {
-	return parsedUserAgentCSS().handOver(rec, style.OriginUserAgent, userAgentSheetName, faces, pages)
+func userAgentSheet(rec *Recorder) style.Sheet {
+	return parsedUserAgentCSS().handOver(rec, style.OriginUserAgent, userAgentSheetName)
 }
 
 var parsedUserAgentCSS = sync.OnceValue(func() parsedSheet {
@@ -403,7 +442,7 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 		if !ok {
 			return true
 		}
-		if cs["display"] == "contents" && !contentsIsHonoured(n, cs, root) {
+		if cs.Get("display") == "contents" && !contentsIsHonoured(n, cs, root) {
 			rec.ReportDetail(Finding{
 				Rule:     RuleUnsupportedValue,
 				Source:   AtHTML(n.Offset),
@@ -412,12 +451,14 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 				Property: "display",
 			})
 		}
-		if what, laid := unlaidFormattingContext(cs["display"]); what != "" &&
-			unlaidBoxIsNotTheBoxAsked(n, styles, what) {
+		if gap := parseDisplay(cs.Get("display")).gap; gap != displayGapNone &&
+			unlaidBoxIsNotTheBoxAsked(n, styles, gap) {
+			value := strings.ToLower(strings.TrimSpace(cs.Get("display")))
 			rec.ReportDetail(Finding{
-				Rule:     RuleUnsupportedValue,
-				Source:   AtHTML(n.Offset),
-				Message:  "\"display: " + what + "\" is not implemented; " + laid,
+				Rule:   RuleUnsupportedValue,
+				Source: AtHTML(n.Offset),
+				Message: quoteValue("display: "+value) + " is not implemented; " +
+					unlaidDisplay(gap),
 				Path:     PathOf(n),
 				Property: "display",
 			})
@@ -432,8 +473,8 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 		// orient it is a row in a browser and a stack of blocks here, and that
 		// went unsaid: a navigation bar written the old way came out as one
 		// item per line with nothing to show which of the two the page was.
-		if strings.EqualFold(strings.TrimSpace(cs["display"]), "-webkit-box") &&
-			!strings.EqualFold(strings.TrimSpace(cs["-webkit-box-orient"]), "vertical") {
+		if strings.EqualFold(strings.TrimSpace(cs.Get("display")), "-webkit-box") &&
+			!strings.EqualFold(strings.TrimSpace(cs.Get("-webkit-box-orient")), "vertical") {
 			rec.ReportDetail(Finding{
 				Rule:   RuleUnsupportedValue,
 				Source: AtHTML(n.Offset),
@@ -451,7 +492,7 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 		// falls back to static, which is where the box would sit before any
 		// scrolling had happened — the right half of the answer, and silent
 		// about the other half unless this says so.
-		if strings.EqualFold(strings.TrimSpace(cs["position"]), "sticky") {
+		if strings.EqualFold(strings.TrimSpace(cs.Get("position")), "sticky") {
 			rec.ReportDetail(Finding{
 				Rule:   RuleUnsupportedValue,
 				Source: AtHTML(n.Offset),
@@ -465,14 +506,15 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 	})
 }
 
-// unlaidFormattingContext names a display value whose *inner* layout this engine
-// does not do, and says what the box was laid out as instead.
+// unlaidDisplay says what a box was laid out as, for the part of its display
+// value this engine does not lay out as asked. parseDisplay decides
+// which part that is, from the same reading of the value that built the box, so
+// the report cannot disagree with the layout about what was asked.
 //
-// The two are one omission with one shape: the value is recognised, the box is
-// built, and then ordinary layout runs inside it — a grid becomes a column of
-// full-width blocks where a table of tracks was asked for, and until this
-// report existed it said nothing at all, which is the plausible, silent
-// wrongness the whole findings vocabulary is against. See
+// The omission has one shape each time: the value is recognised, the box is
+// built, and ordinary layout runs where something else was asked for — and
+// until this report existed it said nothing at all, which is the plausible,
+// silent wrongness the whole findings vocabulary is against. See
 // style/unimplemented.go, which makes the same argument about a property
 // nothing reads.
 //
@@ -481,17 +523,19 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 // the ones they cannot, at the box, with the reason. A value that is laid out
 // has nothing to say here, and one whose *arrangement* is refused is a fact
 // about the container rather than about the keyword.
-//
-// They are named rather than gathered by exclusion. A list of "everything this
-// engine does not lay out" would go stale in the direction that matters: silent
-// about a value that had stopped being laid out.
-func unlaidFormattingContext(value string) (what, laid string) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "ruby":
-		return "ruby", "the box was laid out as an inline box, so the " +
-			"annotation runs along the line instead of above it"
+func unlaidDisplay(gap displayGap) string {
+	switch gap {
+	case displayGapRuby:
+		return "the box was laid out as an inline box, so the annotation runs " +
+			"along the line instead of above it"
+	case displayGapRunIn:
+		return "the box was laid out as an inline box and not run into the " +
+			"block after it"
+	case displayGapInlineListItem:
+		return "an inline-level list item was laid out as the inline box it is, " +
+			"and its marker was not drawn"
 	}
-	return "", ""
+	return ""
 }
 
 // unlaidBoxIsNotTheBoxAsked reports whether laying the box out as this engine
@@ -512,9 +556,12 @@ func unlaidFormattingContext(value string) (what, laid string) {
 // annotation there is nothing to lift — §3.1's own answer for a base alone is
 // the base.
 func unlaidBoxIsNotTheBoxAsked(n *html.Node, styles map[*html.Node]style.ComputedStyle,
-	what string) bool {
+	gap displayGap) bool {
 
-	return what == "ruby" && hasRubyAnnotation(n, styles)
+	if gap == displayGapRuby {
+		return hasRubyAnnotation(n, styles)
+	}
+	return true
 }
 
 // hasRubyAnnotation reports whether a ruby box has anything to lift above its
@@ -523,8 +570,14 @@ func unlaidBoxIsNotTheBoxAsked(n *html.Node, styles map[*html.Node]style.Compute
 // Anywhere, because the annotation need not be a child: HTML's own <ruby> puts
 // the <rt> beside the base, and a document may wrap either in a span. What it
 // must not do is look through a *nested* ruby, whose annotation belongs to that
-// one — but a nested ruby is itself reported, so the outer one saying so as well
-// is not a second finding about the same box.
+// one, and it does not: the walk stops at one. The nested ruby is asked about
+// itself, and is reported if its annotation is there.
+//
+// Stopping there is also what makes the question cheap. It is asked of every
+// ruby, and a walk that went on through the rubies inside visited each element
+// once for every ruby above it: 250 nested rubies over a hundred thousand
+// elements was seventeen seconds of this (audit C134). Stopped, each element is
+// visited by the walk of the one ruby nearest above it.
 //
 // The walk takes in n itself, and nothing guards against it: the caller has
 // already read n's display and found "ruby", so n cannot also be the
@@ -546,9 +599,12 @@ func hasRubyAnnotation(n *html.Node, styles map[*html.Node]style.ComputedStyle) 
 		if !ok {
 			return true
 		}
-		switch strings.ToLower(strings.TrimSpace(cs["display"])) {
+		switch strings.ToLower(strings.TrimSpace(cs.Get("display"))) {
 		case "ruby-text", "ruby-text-container":
 			found = true
+		case "ruby":
+			// A nested ruby, whose annotation is its own. See above.
+			return c == n
 		}
 		return !found
 	})
@@ -561,25 +617,100 @@ func hasRubyAnnotation(n *html.Node, styles map[*html.Node]style.ComputedStyle) 
 // It is a readable path rather than a selector that would round-trip: it names
 // the element chain with the identifiers and classes that distinguish it, which
 // is what someone reading a report needs.
+//
+// It is bounded, the way quoteValue bounds a value, and for the reason it
+// does: every part of it is the document's. Unbounded, a path was as long as
+// the document made its ids and as deep as it nested them — 250 ancestors with
+// two-thousand-character ids made a half-megabyte path for every finding
+// beneath them, and a finding carries one (audit C18). So a part is cut at
+// pathPartBytes, and a path deeper than pathDepth keeps the elements a reader
+// finds it by — the outermost few, which say where in the page, and the
+// innermost, which say which element — with an ellipsis for those between.
 func PathOf(n *html.Node) string {
 	if n == nil || n.Type != html.ElementNode {
 		return ""
 	}
-	var parts []string
+	// Innermost first, as the walk meets them, and only as many as are kept:
+	// the innermost pathInner, and then a count of the rest, of which only the
+	// outermost pathOuter are named once the walk reaches the top.
+	var inner []string
+	var chain []*html.Node
 	for cur := n; cur != nil && cur.Type == html.ElementNode; cur = cur.Parent {
-		part := cur.Name
-		if id, ok := cur.Attr("id"); ok && id != "" {
-			part += "#" + id
-		} else if class, ok := cur.Attr("class"); ok {
-			if fields := strings.Fields(class); len(fields) > 0 {
-				part += "." + fields[0]
-			}
+		if len(inner) < pathInner {
+			inner = append(inner, pathPart(cur))
+			continue
 		}
-		parts = append(parts, part)
+		chain = append(chain, cur)
 	}
-	// Built innermost first; a path reads outermost first.
-	for i, j := 0, len(parts)-1; i < j; i, j = i+1, j-1 {
-		parts[i], parts[j] = parts[j], parts[i]
+	parts := make([]string, 0, pathOuter+1+len(inner))
+	// chain holds the elements above the innermost few, innermost first; the
+	// outermost pathOuter of them are its last entries.
+	elided := len(chain) > pathOuter
+	for i := len(chain) - 1; i >= 0 && i >= len(chain)-pathOuter; i-- {
+		parts = append(parts, pathPart(chain[i]))
+	}
+	if elided {
+		parts = append(parts, "…"+strconv.Itoa(len(chain)-pathOuter)+" more…")
+	}
+	for i := len(inner) - 1; i >= 0; i-- {
+		parts = append(parts, inner[i])
 	}
 	return strings.Join(parts, " > ")
+}
+
+// The bounds on PathOf. Sixteen levels named is more than a reader follows, and
+// sixty-four bytes is longer than any identifier a person chose.
+const (
+	pathOuter     = 4
+	pathInner     = 12
+	pathPartBytes = 64
+)
+
+// pathPart is one element's step in a path: its name, and the id or first
+// class that distinguishes it, cut at pathPartBytes on a character boundary.
+//
+// Nothing longer than the cut is read. The attribute is the document's, and a
+// path is asked for once per finding: reading a megabyte of class to keep
+// sixty-four bytes of it is the cost the bound is there to remove, paid anyway.
+func pathPart(n *html.Node) string {
+	part := n.Name
+	if id, ok := n.Attr("id"); ok && id != "" {
+		part += "#" + id[:cutAt(id, pathPartBytes+1)]
+	} else if class, ok := n.Attr("class"); ok {
+		// The first class, found within a window: a class list that opens with
+		// more white space than that names nothing a reader would recognise.
+		start := 0
+		for start < len(class) && start < pathPartBytes && isHTMLSpace(class[start]) {
+			start++
+		}
+		end := start
+		for end < len(class) && end-start <= pathPartBytes && !isHTMLSpace(class[end]) {
+			end++
+		}
+		if end > start {
+			part += "." + class[start:start+cutAt(class[start:end], pathPartBytes+1)]
+		}
+	}
+	if len(part) <= pathPartBytes {
+		return part
+	}
+	return part[:cutAt(part, pathPartBytes)] + "…"
+}
+
+// cutAt is the length of s's longest prefix of at most n bytes that ends on a
+// character boundary.
+func cutAt(s string, n int) int {
+	if len(s) <= n {
+		return len(s)
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return n
+}
+
+// isHTMLSpace is HTML's ASCII white space, which is what separates the tokens
+// of a class list.
+func isHTMLSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r'
 }

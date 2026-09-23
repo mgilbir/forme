@@ -1,8 +1,8 @@
 // Package style applies a stylesheet to a document.
 //
-// It is the third of the six stages in the rendering proposal's §3: the html
-// package gives it a tree, the css package gives it rules, and what comes out is
-// a styled tree — every element with the declarations that won for it.
+// It is the third of the engine's stages: the html package gives it a tree,
+// the css package gives it rules, and what comes out is a styled tree — every
+// element with the declarations that won for it.
 //
 // This file is the first half, selector matching. It is also the first thing
 // that *uses* the selector structures the css package builds, which is worth
@@ -12,6 +12,7 @@ package style
 
 import (
 	"strings"
+	"unicode"
 
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
@@ -19,17 +20,62 @@ import (
 
 // maxMatchSteps bounds the work one selector may spend on one element.
 //
-// Matching a descendant combinator walks every ancestor, and a selector with
-// several of them backtracks: "a b c d e" against a deep tree is a product, not
-// a sum. A stylesheet is untrusted, and a few hundred bytes of selector against
-// a few kilobytes of markup is the cheapest denial of service either input
-// offers. Real selectors settle in tens of steps.
+// A chain of combinators is no longer the way to reach it — see matchResult,
+// which is what keeps "a b c d e" against a deep tree a sum rather than a
+// product. What is left is a selector whose *compounds* are expensive: a
+// ":not()" or ":is()" is a whole selector matched afresh on every element the
+// chain around it visits, so arguments nested inside arguments multiply, and a
+// few hundred bytes of selector against a few kilobytes of markup is still the
+// cheapest denial of service either input offers. Real selectors settle in tens
+// of steps.
+//
+// It is the early exit and not the whole bound. A bound per match is a bound
+// per (selector, element) pair, and a document has as many pairs as it has
+// rules times elements: at ten thousand steps each, one kilobyte of CSS and
+// thirty of markup took 33 seconds with the bound holding every time. What
+// bounds the document is the budget each rule is given for the whole of it —
+// see matchBudget.
 //
 // A budget that trips is *reported*, never silently answered "no match" — see
 // Matcher.Tripped. A layout engine that quietly stopped matching would produce
 // a document with styles missing and nothing to say so, which is the failure
 // mode the whole reporting design exists to prevent.
 const maxMatchSteps = 10000
+
+// matchResult is what matching part of a selector found and, when it found
+// nothing, how far the failure reaches.
+//
+// Matching runs right to left, and a combinator that can reach more than one
+// element — the descendant's every ancestor, "~"'s every earlier sibling — tries
+// each of them in turn. Answered only yes or no, a failure further left sends the
+// search back to try the next one, and a chain of k descendant combinators that
+// fails at its leftmost compound tries every way of placing the other k-1 on the
+// ancestors: ".nonesuch .a .a .a … b" on forty nested .a is a product, and it
+// spent the whole per-match budget on every <b> of the audit's document.
+//
+// Most of those retries cannot succeed, and the reason can be said precisely.
+// If compounds[:i] cannot be matched starting from any ancestor of an element,
+// they cannot be matched from any ancestor of an ancestor either: those are
+// fewer places, not other ones. So a descendant search that runs out says so —
+// failsCompletely — and every search to its right stops rather than moving one
+// element up to ask again. "~" does the same for earlier siblings, whose own
+// earlier siblings are a subset — failsAllSiblings. This is the classification
+// WebKit and Blink match with, and it is what keeps a chain of combinators a
+// sum: each compound walks the ancestors at most once.
+type matchResult uint8
+
+const (
+	// matched: the element and everything left of it matched.
+	matched matchResult = iota
+	// failsLocally: this element does not do, and another may.
+	failsLocally
+	// failsAllSiblings: neither this element nor any earlier sibling of it will
+	// do, so a "~" search stops; an ancestor still may.
+	failsAllSiblings
+	// failsCompletely: no element the search to the right could try next will
+	// do — not this one, its ancestors, or the earlier siblings of either.
+	failsCompletely
+)
 
 // Matcher applies selectors to one document.
 //
@@ -44,12 +90,31 @@ type Matcher struct {
 	// position among them.
 	//
 	// Without these, every step of a sibling walk rescans the parent's whole
-	// child list, so ":nth-child" over a list of n items costs n² — and a list
-	// of ten thousand rows is an ordinary table, not a hostile one. The tree
-	// does not change while it is being matched, so the memo is safe and is
-	// built once per parent that is asked about.
+	// child list. The tree does not change while it is being matched, so the
+	// memo is safe and is built once per parent that is asked about.
 	kids map[*html.Node][]*html.Node
 	idx  map[*html.Node]int
+
+	// ofType is each element's position among its siblings of the same name,
+	// counted from the start and from the end, one-based; typed says which
+	// parents' children it holds. series is the same for ":nth-child(An+B of
+	// S)": the position of each child among the children S selects.
+	//
+	// The structural pseudo-classes are all positions, and a position is a
+	// property of the parent's child list rather than of the element. Asked
+	// per element by counting the siblings before it, ":nth-last-child" over a
+	// list of n items cost n² — and copied the list backwards for every one of
+	// them — and so did ":nth-of-type"; with "of S" each of the n² was a match:
+	// 16,000 <li> took 2.7 s, 2.3 s and 12.5 s, and a list of ten thousand rows
+	// is an ordinary table, not a hostile one. Worked out once per parent they
+	// are O(1) per element.
+	ofType map[*html.Node][2]int32
+	typed  map[*html.Node]bool
+	series map[seriesKey]*series
+
+	// nested remembers which elements match which nested rule's parent — see
+	// nesting.
+	nested map[nestingKey]bool
 
 	// steps is the work spent on the match in hand and over says that match ran
 	// out; tripped remembers that some match did, for the caller.
@@ -64,6 +129,15 @@ type Matcher struct {
 	over    bool
 	tripped bool
 
+	// work counts every step charged since the caller last took it, and trips
+	// every match that ran out of budget in that time. They are what a caller
+	// charges to the rule it was matching, which is how a bound per document is
+	// kept without the matcher knowing what a rule is — see matchBudget. work
+	// includes what filling a memo cost, which is charged to the match that
+	// needed it and not to its budget: see seriesOf.
+	work  int
+	trips int
+
 	// xml says the document was parsed as XHTML, which decides whether the
 	// attribute values below are folded. It is read once here because the
 	// alternative is a walk to the document node inside the matching loop.
@@ -73,10 +147,14 @@ type Matcher struct {
 // NewMatcher prepares to match selectors against a document.
 func NewMatcher(doc *html.Node) *Matcher {
 	return &Matcher{
-		root: documentElement(doc),
-		kids: map[*html.Node][]*html.Node{},
-		idx:  map[*html.Node]int{},
-		xml:  doc.XMLDocument(),
+		root:   documentElement(doc),
+		kids:   map[*html.Node][]*html.Node{},
+		idx:    map[*html.Node]int{},
+		ofType: map[*html.Node][2]int32{},
+		typed:  map[*html.Node]bool{},
+		series: map[seriesKey]*series{},
+		nested: map[nestingKey]bool{},
+		xml:    doc.XMLDocument(),
 	}
 }
 
@@ -111,7 +189,15 @@ func (m *Matcher) Match(s css.Selector, n *html.Node) bool {
 		return false
 	}
 	m.steps, m.over = 0, false
-	return m.complex(s.Compounds, len(s.Compounds)-1, n)
+	return m.complex(s.Compounds, len(s.Compounds)-1, n) == matched
+}
+
+// takeWork reports the steps charged and the matches that ran out of budget
+// since it was last asked, and starts counting again. See Matcher.work.
+func (m *Matcher) takeWork() (steps, trips int) {
+	steps, trips = m.work, m.trips
+	m.work, m.trips = 0, 0
+	return steps, trips
 }
 
 // complex matches compounds[:i+1] with compounds[i] against n.
@@ -121,47 +207,67 @@ func (m *Matcher) Match(s css.Selector, n *html.Node) bool {
 // compounds, and the subject is the cheapest thing to reject on. Matching left
 // to right would search the tree for the first compound and then check whether
 // anything under it was the element in hand.
-func (m *Matcher) complex(compounds []css.Compound, i int, n *html.Node) bool {
+//
+// What it returns when it fails is how far the failure reaches, and the two
+// loops stop on it — see matchResult. A budget that runs out fails completely,
+// which stops every search at once.
+func (m *Matcher) complex(compounds []css.Compound, i int, n *html.Node) matchResult {
 	if m.spent() {
-		return false
+		return failsCompletely
 	}
 	if !m.compound(compounds[i], n) {
-		return false
+		return failsLocally
+	}
+	if m.over {
+		// The budget ran out inside the compound — in an argument of ":not()",
+		// whose "no" it turned into a "yes". Nothing that compound said can be
+		// trusted, and a match is the one answer that must not come of it: a
+		// rule applied to an element it does not select is wrong where a rule
+		// missing is only incomplete, and only the second is reported.
+		return failsCompletely
 	}
 	if i == 0 {
-		return true
+		return matched
 	}
 
 	switch compounds[i].Combinator {
 	case css.Child:
 		p := parentElement(n)
-		return p != nil && m.complex(compounds, i-1, p)
+		if p == nil {
+			return failsCompletely
+		}
+		// Whatever the parent's answer reaches, this one reaches as far: the
+		// earlier siblings of n have the same parent, and n's ancestors and
+		// their earlier siblings have that parent's ancestors.
+		return m.complex(compounds, i-1, p)
 
 	case css.NextSibling:
 		s := m.prevElement(n)
-		return s != nil && m.complex(compounds, i-1, s)
+		if s == nil {
+			return failsAllSiblings
+		}
+		return m.complex(compounds, i-1, s)
 
 	case css.SubsequentSibling:
 		for s := m.prevElement(n); s != nil; s = m.prevElement(s) {
-			if m.complex(compounds, i-1, s) {
-				return true
-			}
-			if m.spent() {
-				return false
+			switch r := m.complex(compounds, i-1, s); r {
+			case matched, failsAllSiblings, failsCompletely:
+				return r
 			}
 		}
-		return false
+		return failsAllSiblings
 
 	default: // Descendant
 		for p := parentElement(n); p != nil; p = parentElement(p) {
-			if m.complex(compounds, i-1, p) {
-				return true
-			}
-			if m.spent() {
-				return false
+			switch r := m.complex(compounds, i-1, p); r {
+			case matched, failsCompletely:
+				return r
 			}
 		}
-		return false
+		// Every ancestor was tried and none would do, so none of *their*
+		// ancestors will either, and nor will the earlier siblings of n or of
+		// any of them, whose ancestors are the same elements.
+		return failsCompletely
 	}
 }
 
@@ -171,8 +277,10 @@ func (m *Matcher) spent() bool {
 		return true
 	}
 	m.steps++
+	m.work++
 	if m.steps > maxMatchSteps {
 		m.over, m.tripped = true, true
+		m.trips++
 		return true
 	}
 	return false
@@ -328,36 +436,29 @@ func (m *Matcher) pseudo(p css.Pseudo, n *html.Node) bool {
 		return m.prevElement(n) == nil && m.nextElement(n) == nil
 
 	case css.PseudoFirstOfType:
-		return m.prevOfType(n) == nil
+		return m.typePosition(n, false) == 1
 	case css.PseudoLastOfType:
-		return m.nextOfType(n) == nil
+		return m.typePosition(n, true) == 1
 	case css.PseudoOnlyOfType:
-		return m.prevOfType(n) == nil && m.nextOfType(n) == nil
+		return m.typePosition(n, false) == 1 && m.typePosition(n, true) == 1
 
 	case css.PseudoNthChild:
-		return p.AnB.Matches(m.indexOf(n, p.Of, false, false))
+		return p.AnB.Matches(m.childPosition(n, p.Of, false))
 	case css.PseudoNthLastChild:
-		return p.AnB.Matches(m.indexOf(n, p.Of, true, false))
+		return p.AnB.Matches(m.childPosition(n, p.Of, true))
 	case css.PseudoNthOfType:
-		return p.AnB.Matches(m.indexOf(n, nil, false, true))
+		return p.AnB.Matches(m.typePosition(n, false))
 	case css.PseudoNthLastOfType:
-		return p.AnB.Matches(m.indexOf(n, nil, true, true))
+		return p.AnB.Matches(m.typePosition(n, true))
 
 	case css.PseudoNot:
-		for _, s := range p.Args {
-			if m.complexFrom(s, n) {
-				return false
-			}
-		}
-		return true
+		return !m.matchesAny(p.Args, n)
 
 	case css.PseudoIs, css.PseudoWhere:
-		for _, s := range p.Args {
-			if m.complexFrom(s, n) {
-				return true
-			}
-		}
-		return false
+		return m.matchesAny(p.Args, n)
+
+	case css.PseudoNesting:
+		return m.nesting(p.Nest, n)
 
 	case css.PseudoLang:
 		return matchLang(n, p.Langs)
@@ -372,6 +473,13 @@ func (m *Matcher) pseudo(p css.Pseudo, n *html.Node) bool {
 		// — see the note on css.PseudoVisited. It is the same "no" the case
 		// above already assumes in order to read :link as :any-link, so a
 		// document cannot get one of the two answers without the other.
+		return false
+
+	case css.PseudoNever, css.PseudoUnanswered:
+		// ":hover" on a page nobody hovers, and ":checked", which this engine
+		// does not work out. Both select nothing, and the parser has already
+		// said which of the two it is and made sure the second only ever
+		// narrows a rule — see the note at the head of css/selector.go.
 		return false
 	}
 	return false
@@ -396,43 +504,186 @@ func (m *Matcher) complexFrom(s css.Selector, n *html.Node) bool {
 	if len(s.Compounds) == 0 {
 		return false
 	}
-	return m.complex(s.Compounds, len(s.Compounds)-1, n)
+	return m.complex(s.Compounds, len(s.Compounds)-1, n) == matched
 }
 
-// indexOf returns an element's one-based position among its siblings, counting
-// from the end when last is set, and counting only siblings that match — the
-// same element name for the of-type family, or the "of S" list for :nth-child.
+// nestingKey is one question about "&": does this element match that parent.
+type nestingKey struct {
+	nest *css.Nesting
+	n    *html.Node
+}
+
+// nesting matches "&", which is ":is()" over the parent rule's selector list.
 //
-// It returns 0 for an element with no parent, which no An+B selects.
-func (m *Matcher) indexOf(n *html.Node, of []css.Selector, last, sameType bool) int {
+// The answer is remembered per element, and that is what keeps nesting as cheap
+// as it is short. A rule's "&" is its parent's list, whose own "&" is *its*
+// parent's, so "& & & & & & & &" nested seven deep asks about the outermost
+// rule once per way of placing every level on the ancestors — eight to the
+// seventh ways, for 162 bytes of CSS. Asked once per element instead, each level
+// costs what its own selector costs, and the whole is the sum of the levels
+// rather than their product.
+//
+// It is safe to remember because the question has no context: whether an
+// element matches a selector list as its subject depends on the element and the
+// tree, and neither changes while a document is matched. The one answer not
+// kept is one the budget cut short, which is a "no" that may be wrong.
+func (m *Matcher) nesting(nest *css.Nesting, n *html.Node) bool {
+	if nest == nil {
+		return false
+	}
+	key := nestingKey{nest, n}
+	if got, ok := m.nested[key]; ok {
+		return got
+	}
+	got := m.matchesAny(nest.Matchable(), n)
+	if !m.over {
+		m.nested[key] = got
+	}
+	return got
+}
+
+// childPosition is an element's one-based position among its siblings for
+// :nth-child and :nth-last-child, counting from the end when last is set and,
+// with "of S", counting only the siblings S selects.
+//
+// It returns 0 for an element with no parent, or one "of S" leaves out of the
+// series, and no An+B selects 0.
+func (m *Matcher) childPosition(n *html.Node, of []css.Selector, last bool) int {
+	i := m.siblingIndex(n)
+	if i < 0 {
+		return 0
+	}
+	if len(of) == 0 {
+		if last {
+			return len(m.kids[n.Parent]) - i
+		}
+		return i + 1
+	}
+	s := m.seriesOf(n.Parent, of)
+	pos := int(s.pos[i])
+	if pos == 0 || !last {
+		return pos
+	}
+	return s.count - pos + 1
+}
+
+// seriesKey is one "of S" list under one parent. The list is keyed by where it
+// is held, which is the selector it was parsed in: two lists spelled alike in
+// two rules are asked about separately, and one list is never asked about twice.
+type seriesKey struct {
+	of     *css.Selector
+	parent *html.Node
+}
+
+// series is which of a parent's children an "of S" list selects: pos is each
+// child's one-based position among those, zero for one it does not select, and
+// count is how many it selects.
+type series struct {
+	pos   []int32
+	count int
+}
+
+// seriesOf works out an "of S" list against every child of a parent, once.
+//
+// Asking S of every earlier sibling for every element is n² matches over a list
+// of n, and S is a selector list, so each of them may be expensive. Asked once
+// per child the whole list costs n matches, and every element after the first
+// reads its position.
+//
+// Each child is matched with a budget of its own, as though it were the subject
+// of a match — which it is — rather than on the budget of the element that
+// happened to ask first. Charged to that one element, a list of more than a few
+// thousand items would trip the bound on the first of them every time, and the
+// work is not that element's: it is shared by all of them. It is still work,
+// and it is counted: Matcher.work carries it to the rule that asked, whose
+// budget for the document it comes out of. A child whose own match ran out is
+// reported through Tripped like any other.
+func (m *Matcher) seriesOf(parent *html.Node, of []css.Selector) *series {
+	key := seriesKey{of: &of[0], parent: parent}
+	if s, ok := m.series[key]; ok {
+		return s
+	}
+	kids := m.children(parent)
+	s := &series{pos: make([]int32, len(kids))}
+	steps, over := m.steps, m.over
+	for i, k := range kids {
+		m.steps, m.over = 0, false
+		if m.matchesAny(of, k) {
+			s.count++
+			s.pos[i] = int32(s.count)
+		}
+	}
+	m.steps, m.over = steps, over
+	m.series[key] = s
+	return s
+}
+
+// typePosition is an element's one-based position among its siblings of the
+// same name, counting from the end when last is set, or 0 when it has no parent.
+//
+// "The same name" is what the old walk compared with strings.EqualFold, and
+// typeKey is that comparison as a key, so the positions are the ones that walk
+// found. Every child of the parent is placed the first time any of them is
+// asked about.
+func (m *Matcher) typePosition(n *html.Node, last bool) int {
 	parent := n.Parent
 	if parent == nil {
 		return 0
 	}
-	sibs := m.children(parent)
+	if !m.typed[parent] {
+		kids := m.children(parent)
+		seen := make(map[string]int32, 4)
+		keys := make([]string, len(kids))
+		for i, k := range kids {
+			keys[i] = typeKey(k.Name)
+			seen[keys[i]]++
+			m.ofType[k] = [2]int32{seen[keys[i]], 0}
+		}
+		for i, k := range kids {
+			at := m.ofType[k]
+			at[1] = seen[keys[i]] - at[0] + 1
+			m.ofType[k] = at
+		}
+		m.typed[parent] = true
+		m.work += len(kids)
+	}
+	at, ok := m.ofType[n]
+	if !ok {
+		return 0
+	}
 	if last {
-		// Counting from the end. The memo is shared, so it is walked backwards
-		// rather than reversed — reversing it in place would corrupt every
-		// later question about the same parent.
-		sibs = reversed(sibs)
+		return int(at[1])
 	}
+	return int(at[0])
+}
 
-	idx := 0
-	for _, s := range sibs {
-		if sameType && !strings.EqualFold(s.Name, n.Name) {
-			continue
-		}
-		if len(of) > 0 && !m.matchesAny(of, s) {
-			continue
-		}
-		idx++
-		if s == n {
-			return idx
-		}
+// typeKey is an element name as strings.EqualFold compares names: two names
+// have the same key exactly when EqualFold says they are equal.
+//
+// EqualFold is Unicode's simple case folding, rune by rune, and the key is each
+// rune's whole folding orbit named by one member of it: the ASCII lower-case
+// letter where the orbit has one, so the common case is plain lower-casing, and
+// the smallest rune of it otherwise. It is not strings.ToLower, which differs
+// from EqualFold on runes like U+212A KELVIN SIGN and U+017F LONG S: those fold
+// to "k" and "s" and do not lower-case to them.
+func typeKey(name string) string {
+	if k := asciiLowerName(name); k != "" || name == "" {
+		return k
 	}
-	// The element itself was filtered out by "of", so it is not in the series
-	// at all and nothing selects it.
-	return 0
+	var b strings.Builder
+	for _, r := range name {
+		least := r
+		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+			if f < least {
+				least = f
+			}
+		}
+		if least >= 'A' && least <= 'Z' {
+			least += 'a' - 'A'
+		}
+		b.WriteRune(least)
+	}
+	return b.String()
 }
 
 func (m *Matcher) matchesAny(sels []css.Selector, n *html.Node) bool {
@@ -446,24 +697,95 @@ func (m *Matcher) matchesAny(sels []css.Selector, n *html.Node) bool {
 
 // matchLang implements :lang(), which reads the nearest lang attribute at or
 // above the element — html.Node.Language, the same walk the casing and
-// hyphenation readers use — and compares it as a language range.
+// hyphenation readers use — and compares it with each language range by
+// RFC 4647 §3.3.2's extended filtering, as Selectors 4 §7.2 says to.
 //
-// The comparison is the dash-match of attribute selectors, so :lang(en) selects
-// an element declared "en-GB" — which is the whole reason the pseudo-class
-// exists rather than authors writing [lang|=en].
+// It was the dash-match of attribute selectors with "*" matching anything.
+// That is right for the plain cases — :lang(en) selects an element declared
+// "en-GB" — and wrong in the two Level 4 added. A wildcard range matched an
+// element whose language the author had marked as not known (lang=""), which
+// §7.2 says it does not; and :lang("") matched nothing, where it matches
+// exactly those elements. Filtering is also what lets :lang(de-DE) select
+// "de-Latn-DE" and :lang("*-CH") select "fr-CH", which dash-match cannot.
 func matchLang(n *html.Node, langs []string) bool {
 	value, ok := n.Language()
-	if !ok {
-		return false
-	}
-	value = strings.ToLower(value)
+	// Not tagged: lang="" says so outright, and an element with no lang at or
+	// above it has no tag either — nothing this engine reads (it does not
+	// read HTTP headers or a Content-Language pragma) gives it one.
+	untagged := !ok || value == ""
 	for _, want := range langs {
-		want = strings.ToLower(want)
-		if want == "*" || value == want || strings.HasPrefix(value, want+"-") {
+		if want == "" {
+			if untagged {
+				return true
+			}
+			continue
+		}
+		if !untagged && extendedFilter(value, want) {
 			return true
 		}
 	}
 	return false
+}
+
+// extendedFilter is RFC 4647 §3.3.2: whether a language tag matches an
+// extended language range. Both are compared a subtag at a time, ASCII
+// case-insensitively. The first subtags must be equal, or the range's must be
+// "*"; after that each of the range's subtags must turn up in the tag in order,
+// a "*" matching nothing in particular, and the tag's subtags between them may
+// be skipped — but not a single-letter one, which introduces an extension or a
+// private use and ends what the range can reach.
+//
+// Selectors 4 §7.2 adds that a range or tag that is not well formed matches
+// nothing, so ":lang(åå)" selects nothing rather than an element tagged "åå".
+// Well formed is checked here as far as the shape of the subtags (one to eight
+// ASCII letters or digits); the canonicalisation to extlang form §7.2 also asks
+// for needs the IANA registry, which this engine does not carry, and is not
+// done — a tag and a range written in the same form, which is how documents
+// and stylesheets write them, compare correctly without it.
+func extendedFilter(tag, rng string) bool {
+	t := strings.Split(strings.ToLower(tag), "-")
+	r := strings.Split(strings.ToLower(rng), "-")
+	if !wellFormedSubtags(t, false) || !wellFormedSubtags(r, true) {
+		return false
+	}
+	if r[0] != "*" && r[0] != t[0] {
+		return false
+	}
+	i, j := 1, 1
+	for i < len(r) {
+		switch {
+		case r[i] == "*":
+			i++
+		case j >= len(t):
+			return false
+		case r[i] == t[j]:
+			i, j = i+1, j+1
+		case len(t[j]) == 1:
+			return false
+		default:
+			j++
+		}
+	}
+	return true
+}
+
+// wellFormedSubtags reports whether every subtag is one to eight ASCII letters
+// or digits — or, in a range, the wildcard "*".
+func wellFormedSubtags(subtags []string, wildcard bool) bool {
+	for _, st := range subtags {
+		if wildcard && st == "*" {
+			continue
+		}
+		if len(st) == 0 || len(st) > 8 {
+			return false
+		}
+		for i := 0; i < len(st); i++ {
+			if c := st[i]; !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // Tree navigation. Every one of these skips text nodes, because a selector
@@ -495,6 +817,11 @@ func (m *Matcher) children(parent *html.Node) []*html.Node {
 	for i, c := range out {
 		m.idx[c] = i
 	}
+	// Work, if work done once for every child rather than once per element: it
+	// is counted where it is done, as every sibling walk is, so that what the
+	// structural pseudo-classes cost is in the one account a rule is charged
+	// from. See Matcher.work.
+	m.work += len(parent.Children)
 	return out
 }
 
@@ -530,34 +857,6 @@ func (m *Matcher) nextElement(n *html.Node) *html.Node {
 		return nil
 	}
 	return sibs[i+1]
-}
-
-func (m *Matcher) prevOfType(n *html.Node) *html.Node {
-	for s := m.prevElement(n); s != nil; s = m.prevElement(s) {
-		if strings.EqualFold(s.Name, n.Name) {
-			return s
-		}
-	}
-	return nil
-}
-
-func (m *Matcher) nextOfType(n *html.Node) *html.Node {
-	for s := m.nextElement(n); s != nil; s = m.nextElement(s) {
-		if strings.EqualFold(s.Name, n.Name) {
-			return s
-		}
-	}
-	return nil
-}
-
-// reversed returns a copy walked backwards. It copies because the slice it is
-// given is the memo, which every other question about that parent shares.
-func reversed(ns []*html.Node) []*html.Node {
-	out := make([]*html.Node, len(ns))
-	for i, n := range ns {
-		out[len(ns)-1-i] = n
-	}
-	return out
 }
 
 // htmlFoldedAttrs are the attributes whose *values* an attribute selector

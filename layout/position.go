@@ -125,7 +125,7 @@ func (p PositionScheme) outOfFlow() bool {
 // in this property that genuinely needs a scroll position, so it is the one this
 // engine cannot answer.
 func positionOf(cs style.ComputedStyle) PositionScheme {
-	switch strings.ToLower(strings.TrimSpace(cs["position"])) {
+	switch strings.ToLower(strings.TrimSpace(cs.Get("position"))) {
 	case "relative":
 		return PositionRelative
 	case "absolute":
@@ -142,7 +142,7 @@ func positionOf(cs style.ComputedStyle) PositionScheme {
 // an invalid declaration, and the initial value stands — which is what a browser
 // does and what keeps a typo from silently reordering a page.
 func zIndexOf(cs style.ComputedStyle) (int, bool) {
-	raw := strings.TrimSpace(cs["z-index"])
+	raw := strings.TrimSpace(cs.Get("z-index"))
 	if raw == "" || strings.EqualFold(raw, "auto") {
 		return 0, true
 	}
@@ -314,21 +314,53 @@ type absCandidate struct {
 	// numbered marker is numbered by. An absolutely positioned list item still
 	// generates a marker.
 	index int
+	// aligned says the static position is a point in a static-position
+	// rectangle that the box is aligned in, and alignX and alignY are how far
+	// across that rectangle the alignment is, physically: nought at the left or
+	// top, one at the right or bottom. Only a flex container records one.
+	//
+	// Flexbox §4.1 aligns the box "as if it were the sole flex item", and an
+	// item has a size: at "align-self: flex-end" a 20px box in a 100px line
+	// sits at 80 and not at 100. The size is not known where the static
+	// position is recorded — it is decided here, after the tree is absolute —
+	// so the caller records the point the alignment names at that fraction of
+	// the rectangle and this moves the box back by the same fraction of itself.
+	aligned        bool
+	alignX, alignY float64
 }
 
 // maxAbsolutes bounds how many out-of-flow boxes one render will place.
 //
-// Each candidate is a distinct box and is laid out once, so the count is already
-// bounded by the box cap — this is a second bound rather than the only one, and
-// it is here because the queue is self-feeding: laying an absolutely positioned
-// box out can discover more inside it, and a bug in the rollback that settle
-// performs would turn that into a loop rather than into a wrong page. A cap that
-// turns a hang into a finding is worth its two lines.
+// It is the box cap, and that is the argument for it rather than a number
+// picked. Each candidate is a distinct box, and it is queued once: every site
+// that throws a layout away takes back what that layout queued (see takeBack
+// and rollback). So a document can never legitimately queue more than it has
+// boxes, and the tree has at most maxBoxes. What the bound still catches is the
+// queue feeding itself — placing an absolutely positioned box can discover more
+// inside it, and a rollback that forgot the queue would turn that into a loop
+// rather than into a wrong page — and a queue longer than the tree is exactly
+// that bug, found and reported rather than run until the budget is spent.
 //
-// It is a variable rather than a constant so that a test can lower it far enough
-// to watch it fire. A bound that has only ever been observed not to trip is one
-// nobody knows works, which this repository has learned before.
-var maxAbsolutes = 1 << 14
+// It used to be 16384, which is a limit a legitimate document meets: a PDF
+// converted to HTML by a tool like pdf2htmlEX places every line of text
+// absolutely, and a long one has more lines than that. Everything past the cap
+// was left off the page (audit C129). The report stays, for the one way left to
+// trip it.
+//
+// It is a variable rather than a constant so that a test can lower it far
+// enough to watch it fire. A bound that has only ever been observed not to trip
+// is one nobody knows works, which this repository has learned before.
+var maxAbsolutes = maxBoxes
+
+// deferAlignedAbsolute is deferAbsolute for a box aligned in its static-position
+// rectangle: see absCandidate.aligned.
+func (l *layouter) deferAlignedAbsolute(b *Box, parent *Fragment, x, y, end style.Unit,
+	index int, alignX, alignY float64) {
+
+	l.deferAbsolute(b, parent, x, y, end, index)
+	c := &l.deferred[len(l.deferred)-1]
+	c.aligned, c.alignX, c.alignY = true, alignX, alignY
+}
 
 // deferAbsolute records an out-of-flow box to be placed once the tree is
 // absolute.
@@ -351,13 +383,28 @@ func (l *layouter) deferAbsolute(b *Box, parent *Fragment, x, y, end style.Unit,
 // reached: a candidate found inside another abspos box is appended while that
 // box is being placed, and that box's whole subtree is made absolute before the
 // loop moves on.
+//
+// A candidate whose parent never became absolute is not placed. Its parent was
+// made by a layout that was thrown away, so the box it stands for was thrown
+// away with it: it would hang from a fragment that is not on the page, at a
+// position measured from coordinates that were never made page coordinates.
+// Every site that throws a layout away takes back what that layout queued —
+// see takeBack — so this is the rule stated where it applies rather than a
+// case that is expected to arise. It is also what keep relies on to leave such
+// a candidate out of an answer it keeps and still agree with the layout that
+// kept nothing.
 func (l *layouter) placeAbsolutes(page Rect) {
 	for i := 0; i < len(l.deferred); i++ {
 		if i >= maxAbsolutes {
 			l.rec.Report(RuleLimit, AtHTML(offsetOf(l.deferred[i].box)),
-				"more boxes were taken out of the normal flow than this engine will "+
-					"place; the rest were left unpositioned and are not on the page")
+				"more out-of-flow boxes were queued for placing than the document "+
+					"has boxes, which only a layout that queued one twice can do; the "+
+					"rest were left unpositioned and are not on the page")
 			return
+		}
+		if !l.deferred[i].parent.absolute {
+			l.unplaced++
+			continue
 		}
 		l.layoutAbsolute(l.deferred[i], page)
 	}
@@ -425,6 +472,24 @@ func (l *layouter) layoutAbsolute(c absCandidate, page Rect) {
 		// declared number and shrinking the box afterwards gives a child with
 		// "height: 50%" half of a height its parent never had.
 		declaredHeight = l.clampHeight(b, declaredHeight, cb.W, cb.H, true)
+	} else if l.anchoredTopAndBottom(b, cb) {
+		// The same argument for a height nobody declared. With "top" and
+		// "bottom" both given and "height: auto", §10.6.4's fifth rule solves
+		// the height from the two offsets and the containing block alone — the
+		// content is not an input to it — so the used height is known before
+		// the box is laid out, and §10.5 makes a percentage inside it resolve
+		// against that height rather than behave as "auto".
+		//
+		// Solving it only afterwards, as this used to, laid the content out
+		// against a height it was told was indefinite and then stretched the
+		// box round it: the overlay idiom, "position: fixed; inset: 0" around a
+		// "height: 100%" panel, drew the overlay the height of the page and the
+		// panel no height at all. The content height handed in is never read
+		// on this path, which is what makes nought a correct argument rather
+		// than a guess; solveVertical below solves it again from the laid-out
+		// box and gets the same answer.
+		v := l.solveVertical(b, cb, border, padding, margin, staticTop, 0, 0, false)
+		declaredHeight, hasHeight = v.size, true
 	}
 
 	frag, _ := l.blockIn(b, cb.W,
@@ -457,6 +522,26 @@ func (l *layouter) layoutAbsolute(c absCandidate, page Rect) {
 	// rectangle this engine stores is a border box.
 	x := cb.X.Add(h.start).Add(h.marginStart)
 	y := cb.Y.Add(v.start).Add(v.marginStart)
+
+	// A box aligned in its static-position rectangle is moved back by its own
+	// share of the alignment, on each axis where the static position is what
+	// placed it — where both of that axis's offsets are auto. See
+	// absCandidate.aligned. Where the static position anchored the box's right
+	// edge (fromEnd), the point is where its right edge would be at a fraction
+	// of nought, so the move is the rest of the box the other way.
+	if c.aligned {
+		if l.isAuto(b, "left") && l.isAuto(b, "right") {
+			outer := frag.BorderRect.W.Add(h.marginStart).Add(h.marginEnd)
+			if fromEnd {
+				x = x.Add(outer.Mul(1 - c.alignX))
+			} else {
+				x = x.Sub(outer.Mul(c.alignX))
+			}
+		}
+		if l.isAuto(b, "top") && l.isAuto(b, "bottom") {
+			y = y.Sub(frag.BorderRect.H.Add(v.marginStart).Add(v.marginEnd).Mul(c.alignY))
+		}
+	}
 
 	// The subtree comes out of blockIn in coordinates relative to its own
 	// origin; this is the same one-pass translation absolutise does for the
@@ -874,6 +959,15 @@ func (l *layouter) solveHorizontal(b *Box, cb Rect, border, padding, margin Edge
 		got = solveAxis(axis)
 	}
 	return got
+}
+
+// anchoredTopAndBottom reports that neither "top" nor "bottom" is auto, which
+// with an auto height is §10.6.4's fifth case: the height is whatever the two
+// offsets leave of the containing block, and does not depend on the content.
+func (l *layouter) anchoredTopAndBottom(b *Box, cb Rect) bool {
+	_, topAuto := l.offsetValue(b, "top", cb.H, true)
+	_, bottomAuto := l.offsetValue(b, "bottom", cb.H, true)
+	return !topAuto && !bottomAuto
 }
 
 // solveVertical applies §10.6.4 and the min/max clamp, mirroring solveHorizontal

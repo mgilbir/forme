@@ -61,6 +61,9 @@ import (
 // two, it would give the second paragraph's items the first's levels and reorder
 // across a break that nothing crosses.
 func visualOrder(items []inlineItem) []int {
+	if len(items) == 0 {
+		return nil
+	}
 	out := make([]int, 0, len(items))
 	lo := 0
 	flush := func(hi int) {
@@ -86,6 +89,14 @@ func visualOrder(items []inlineItem) []int {
 	}
 	flush(len(items))
 	return out
+}
+
+// otherParagraph reports whether two items are in different bidi paragraphs.
+//
+// An item with no paragraph — one with no characters — is in whichever one it
+// stands in, and ends neither.
+func otherParagraph(a, b inlineItem) bool {
+	return a.Para != nil && b.Para != nil && a.Para != b.Para
 }
 
 // leadingBase and trailingBase are the characters at an item's visual left and
@@ -149,8 +160,17 @@ func (l *layouter) insertAutospace(items []inlineItem) []inlineItem {
 			case items[k].Abs != nil || items[k].Float != nil || items[k].Inset:
 				// Out of flow, or an inline box's own edge. Neither is a
 				// character, and the edge is exactly the boundary being asked
-				// about — see nextSpacedRun, which looks past both for §8.2.
+				// about — see nextInDirection, which looks past both for §8.2.
 				continue
+			case otherParagraph(items[k], items[j]):
+				// The previous paragraph's last item, which the order puts
+				// beside this one and a forced break keeps off its line. The
+				// break's own item is not always what stands between: it has
+				// no characters, takes the level of what is before it, and is
+				// reversed with a right-to-left run that ends the paragraph —
+				// so "ب<br>国" found the Arabic letter behind the ideograph and
+				// opened a gap across the break.
+				vk = 0
 			case !isSpacedRun(items[k]):
 				// A tab, an atomic inline, a forced break: something that is not
 				// a character stands between, so there is no boundary here.
@@ -208,7 +228,7 @@ func (l *layouter) autospaceBetween(a, b inlineItem, last, first rune) (style.Un
 	if box == nil {
 		return 0, false
 	}
-	as, _ := autospaceOf(box.Style["text-autospace"])
+	as, _ := autospaceOf(box.Style.Get("text-autospace"))
 	if !paragraph.AutospaceAt(last, first, as) {
 		return 0, false
 	}

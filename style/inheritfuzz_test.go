@@ -98,7 +98,7 @@ func checkInheritance(t *testing.T, src string) {
 			return true
 		}
 		cs := got.Styles[n]
-		if cs == nil {
+		if cs.IsZero() {
 			return true
 		}
 		// The parent's computed style, or none where the element is the root.
@@ -121,16 +121,16 @@ func checkInheritance(t *testing.T, src string) {
 				continue
 			}
 			want := prop.initial
-			if prop.inherits && ps != nil {
-				want = ps[name]
+			if prop.inherits && !ps.IsZero() {
+				want = ps.Get(name)
 			}
-			if cs[name] != want {
+			if cs.Get(name) != want {
 				kind := "does not inherit, so it is its initial value"
 				if prop.inherits {
 					kind = "inherits, so it is the parent's computed value"
 				}
 				t.Fatalf("%q: <%s> has %s %q; the property %s, which is %q",
-					src, n.Name, name, cs[name], kind, want)
+					src, n.Name, name, cs.Get(name), kind, want)
 			}
 		}
 		return true

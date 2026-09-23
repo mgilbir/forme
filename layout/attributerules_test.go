@@ -39,7 +39,7 @@ func styleOfID(t *testing.T, markup, property string) (string, bool) {
 	if found == nil {
 		return "", false
 	}
-	return found.Style[property], true
+	return found.Style.Get(property), true
 }
 
 // TestTheHiddenAttributeHides, §15.3.1.
@@ -309,7 +309,7 @@ func TestRulesReachesTheRowsAndTheGroups(t *testing.T) {
 		if found == nil {
 			t.Fatalf("rules=%q: no box for #%s", c.value, c.id)
 		}
-		if got := found.Style[c.property]; got != c.want {
+		if got := found.Style.Get(c.property); got != c.want {
 			t.Errorf("rules=%q gave #%s %s %q, want %q",
 				c.value, c.id, c.property, got, c.want)
 		}
@@ -444,10 +444,10 @@ func TestTheColourAndNoshadeAttributesDrawALine(t *testing.T) {
 		{`<hr id="d" noshade>`, "solid", "gray"},
 		{`<hr id="d" noshade="noshade">`, "solid", "gray"},
 		{`<hr id="d" color="#800080">`, "solid", "#800080"},
-		// A value that is not a colour leaves the colour alone, and the
-		// attribute being *there* still draws the line: the selector tests the
-		// attribute and the hint tests the value, which is what HTML asks for.
-		{`<hr id="d" color="florb">`, "solid", "gray"},
+		// Any other value is HTML's legacy colour value, as a browser reads it
+		// ("florb" is f000b0), and the attribute being *there* draws the line:
+		// the selector tests the attribute and the hint the value.
+		{`<hr id="d" color="florb">`, "solid", "#f000b0"},
 	} {
 		if got, _ := styleOfID(t, c.markup, "border-top-style"); got != c.style {
 			t.Errorf("%s gave border-top-style %q, want %q", c.markup, got, c.style)
@@ -500,7 +500,9 @@ func TestTheWidthAttributeOnARule(t *testing.T) {
 		// Written *without* "ignoring zero", which the section says by not
 		// saying it — so a zero is a zero here where it is nothing on a table.
 		{`<hr id="d" width="0">`, "0px"},
-		{`<hr id="d" width="100px">`, "auto"},
+		// HTML's dimension value ignores what follows the number.
+		{`<hr id="d" width="100px">`, "100px"},
+		{`<hr id="d" width="px">`, "auto"},
 		{`<hr id="d">`, "auto"},
 	} {
 		got, ok := styleOfID(t, c.markup, "width")

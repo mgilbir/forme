@@ -125,38 +125,15 @@ var inertValues = map[string]inertValue{
 	// TestKerningIsApplied in the shape package is what holds the first.
 	"font-variation-settings": {inherits: true, produced: "normal", because: "no variation is applied beyond the instance"},
 
-	// CSS Fragmentation 3 §3.1, and the two values are inert for opposite
-	// reasons that meet in the same page.
-	//
-	// "auto" permits a break inside the box. "avoid" asks for none — and this
-	// engine puts none inside any box, because it does not fragment at all: a
-	// document that does not fit is *scaled* to the page rather than broken
-	// across two of them (see page.go). So the box the author did not want split
-	// is not split, which is what the declaration asked for.
-	//
-	"page-break-inside": {produced: "auto", also: "avoid",
-		because: "nothing is fragmented, so no box is broken inside"},
-	"break-inside": {produced: "auto", also: "avoid",
-		because: "nothing is fragmented, so no box is broken inside"},
-
-	// The other four join them for "auto" and "avoid", and the line between
-	// what is here and what is not is the whole of why they were kept out at
-	// first. "always" and "page" ask for a break this engine cannot make, and
-	// an author who wrote one gets a page that runs on: those stay reported.
-	//
-	// "avoid" asks for *no* break and gets none, which is the same argument the
-	// two entries above already make about break-inside — the box the author
-	// did not want split is not split. "auto" asks for neither: it is the
-	// initial value and means "break here if the fragmentation wants to", and
-	// where nothing fragments it is the page that is already there.
-	//
-	// Both were being reported for a difference that does not exist, and
-	// documents write them — a reset saying "let this break normally" is the
-	// same defensive shape as the textarea rule above.
-	"break-before":      {produced: "auto", also: "avoid", because: breakAsksForNothing},
-	"break-after":       {produced: "auto", also: "avoid", because: breakAsksForNothing},
-	"page-break-before": {produced: "auto", also: "avoid", because: breakAsksForNothing},
-	"page-break-after":  {produced: "auto", also: "avoid", because: breakAsksForNothing},
+	// CSS Fragmentation 3's break properties are not here any more, and the
+	// reason they were is the one TestNothingIsFragmented was written to
+	// catch going stale. "avoid" was inert on the ground that "this engine does
+	// not fragment at all", and that stopped being true when multicol.go began
+	// cutting boxes across columns: a box that asked not to be split was split,
+	// and the declaration that said so was the one thing kept quiet. They are
+	// registered properties now and layout/multicol.go honours "avoid"; the
+	// forced values nothing makes are reported where they are declared — see
+	// unimplementedValues.
 
 	// CSS Multi-column 1's four are not here any more. They are registered
 	// properties now and layout reads them — see layout/multicol.go — so the
@@ -388,11 +365,6 @@ func isInertDeclaration(name string, vals []css.ComponentValue) bool {
 	// length, and "border-radius: 0px" is as inert as "border-radius: 0".
 	return entry.produced == "0" && isZeroLength(value)
 }
-
-// breakAsksForNothing is the reason the four entries above share.
-const breakAsksForNothing = "nothing is fragmented, so a break that is " +
-	"permitted rather than demanded, or refused rather than demanded, changes " +
-	"no page"
 
 // isZeroLength reports whether a value is a zero length however it is spelled.
 func isZeroLength(value string) bool {

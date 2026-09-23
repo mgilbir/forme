@@ -53,11 +53,12 @@ import (
 // baseline, which is exactly right for the faces this engine sets by default
 // and within a few thousandths of an em for the rest.
 //
-// The other two lines are not in a font's metrics at all — a strikeout position
-// is in OS/2, which the descriptor does not carry either — so they are placed
-// from metrics that are: an overline sits on the face's own ascent, and a
-// line-through is centred on half the x-height, the same estimate strutFor uses
-// to place a "vertical-align: middle" box.
+// An overline is not in a font's metrics at all, so it is placed from a metric
+// that is: it sits on the face's own ascent. A line-through is where OS/2's
+// strikeout says, at the thickness it gives, when the face declares one —
+// MetricStrikeout says whether it did — and otherwise centred on half the
+// x-height, the same estimate strutFor uses to place a "vertical-align: middle"
+// box.
 
 // decorationsFor is every decoration drawn across a box's text.
 //
@@ -191,7 +192,7 @@ func ownDecorations(b *Box) []textDecoration {
 		// the element itself — and draw the line on top of itself.
 		return nil
 	}
-	raw := b.Style["text-decoration-line"]
+	raw := b.Style.Get("text-decoration-line")
 	if raw == "" {
 		return nil
 	}
@@ -223,7 +224,7 @@ func (l *layouter) checkDecorationValue(b *Box) {
 	if b.IsText() {
 		return
 	}
-	raw := b.Style["text-decoration-line"]
+	raw := b.Style.Get("text-decoration-line")
 	if raw == "" {
 		return
 	}
@@ -322,7 +323,7 @@ func (l *layouter) decorationLength(b *Box, property string) (style.Unit, bool) 
 	if b == nil {
 		return 0, false
 	}
-	switch trimmedLower(b.Style[property]) {
+	switch trimmedLower(b.Style.Get(property)) {
 	case "", "auto", "from-font":
 		return 0, false
 	}
@@ -403,13 +404,6 @@ func decorationMetricsFor(face *shape.Face, size style.Unit) decorationMetrics {
 	ascent := size.Mul(float64(d.Ascent) / upem)
 	m.overline = style.Unit(0).Sub(ascent)
 
-	// The line-through goes through the middle of the lower-case letters. No
-	// table this engine reads states a strikeout position, so the x-height is
-	// estimated exactly as strutFor estimates it for "vertical-align: middle" —
-	// seven tenths of the cap height, or half an em where no cap height is
-	// declared. Two places using one estimate is deliberate: a document where the
-	// two disagreed would have a strike and a middle-aligned box at different
-	// heights for the same reason.
 	// The line-through, when the face states one. OS/2 gives the position of the
 	// stroke's top and its size, in the same convention as the underline.
 	if d.Has(shape.MetricStrikeout) && d.StrikeoutSize > 0 {

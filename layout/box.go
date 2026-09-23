@@ -245,7 +245,7 @@ type Box struct {
 	TableWrapper bool
 
 	// FirstLine is the ::first-line style of the element this box came from, or
-	// nil where no rule selects one. It is carried here rather than looked up in
+	// the zero style where no rule selects one. It is carried here rather than looked up in
 	// layout because the pseudo styles belong to the cascade's result, which the
 	// box builder holds and the layouter does not.
 	FirstLine style.ComputedStyle
@@ -451,7 +451,7 @@ func BuildBoxes(doc *html.Node, styled style.Styled, rec *Recorder) *Box {
 		// Counters are settled before any box exists, because a counter's value
 		// depends on what came *before* an element in the document and the box
 		// walk cannot answer that while descending.
-		counters: computeCounters(doc, styled.Styles, styled.Pseudo),
+		counters: computeCounters(doc, styled.Styles, styled.Pseudo, rec),
 	}
 	root := documentElementOf(doc)
 	if root == nil {
@@ -473,7 +473,7 @@ func BuildBoxes(doc *html.Node, styled style.Styled, rec *Recorder) *Box {
 	b.rootFontSize = defaultFontSize
 	b.rootFontSize = b.fontSizeOf(root, defaultFontSize)
 
-	box := b.build(root, nil, defaultFontSize)
+	box := b.build(root, style.ComputedStyle{}, defaultFontSize)
 	if box == nil {
 		return nil
 	}
@@ -552,6 +552,15 @@ type boxBuilder struct {
 	// apostrophe does not, and the character that tells them apart is in the
 	// next node. See paragraph.WordState.
 	afterWord paragraph.WordState
+	// caseContext and openSigma are Final_Sigma's half of the same question,
+	// carried and reset exactly where afterWord is: whether a cased letter
+	// came before this point, and the box whose text ends in a ς that was
+	// lowercased as final before the text after it had been seen. In
+	// "ΟΔΟΣ<b>ΑΚΙ</b>" the Σ is inside a word, and only the second node can
+	// say so. See paragraph.CaseContext.
+	caseContext paragraph.CaseContext
+	openSigma   *Box
+	openSigmaAt int
 	// boundary is the text built so far, as much of it as §4.1.1's segment
 	// break rules need: the last rune written and the last one a reader would
 	// see. It is carried for the reason afterWord is — the walk visits text in
@@ -563,6 +572,12 @@ type boxBuilder struct {
 	// It is reset where afterWord is, and for the same reason: a block begins
 	// its text afresh, and so does the text after a <br>.
 	boundary textBoundary
+	// chosen is the option each drop-down <select> shows, found once per
+	// select. See controlSkipsChild.
+	chosen map[*html.Node]*html.Node
+	// generatedCut records that the work budget refused generated content, so
+	// that no more of it is resolved. See generated.
+	generatedCut bool
 	// stopped records that the box cap was reached, so it is reported once
 	// rather than per box.
 	stopped bool
@@ -647,14 +662,14 @@ func (b *boxBuilder) fontSizeOf(n *html.Node, parent style.Unit) style.Unit {
 	if !ok {
 		return parent
 	}
-	vals, _ := css.ParseComponentValues(cs["font-size"])
+	vals, _ := css.ParseComponentValues(cs.Get("font-size"))
 	size, unsupported, ok := style.ResolveFontSize(vals, parent, b.rootFontSize)
 	if !ok {
 		if unsupported {
 			b.rec.ReportDetail(Finding{
 				Rule:     RuleUnsupportedValue,
 				Source:   AtHTML(n.Offset),
-				Message:  "the font-size " + quoteValue(cs["font-size"]) + " could not be resolved; the inherited size was kept",
+				Message:  "the font-size " + quoteValue(cs.Get("font-size")) + " could not be resolved; the inherited size was kept",
 				Path:     PathOf(n),
 				Property: "font-size",
 			})
@@ -731,9 +746,11 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 	}
 	staticInline := outer == OuterInline
 	outer, inner = outOfFlowDisplay(outer, inner, float, position)
-	if outer == OuterBlock && inner == InnerFlow && overflowIsScrollable(cs) {
+	if outer == OuterBlock && inner == InnerFlow && isScrollContainer(cs) {
 		// CSS 2.1 §9.4.1: a block box whose overflow is anything but visible
-		// establishes a block formatting context. That is not a painting
+		// establishes a block formatting context — and CSS Overflow 3 takes
+		// "clip" back out of that, which is why the question is whether the
+		// box is a scroll container. See isScrollContainer. That is not a painting
 		// detail — it is what makes "overflow: hidden" the idiom for containing
 		// a float, because §10.6.7 gives a formatting-context root a height
 		// that includes the floats inside it. An engine that treated overflow
@@ -771,6 +788,7 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		// "Questions", which is what text-transform-cap-003 asks for by writing
 		// its expectation out in full.
 		b.afterWord = paragraph.WordClosed
+		b.closeCaseContext()
 		// And the boundary with it, for the reason above rather than for an
 		// observable one: a segment break at the start or the end of a block is
 		// at the edge of a line, and §4.1.2 removes the space it would become
@@ -835,10 +853,17 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		after.Parent = box
 		box.Children = append(box.Children, after)
 	}
-	if inner == InnerFlow && outer != OuterInline {
+	if isBlockContainer(box) {
 		// §5.12.2's ::first-letter, which applies to a block container and is
 		// done here because the letter is a stretch of text that has already
 		// been collapsed and transformed. See firstletter.go.
+		//
+		// Every block container, and not only the plain ones. A float, an
+		// "overflow: hidden" box, a flow root, an inline-block and a table
+		// cell are all block containers — each is one that establishes a
+		// formatting context — and asking for "inner == InnerFlow" passed over
+		// every one of them: the floated drop cap, which is the classic
+		// ::first-letter, came out an ordinary letter.
 		b.applyFirstLetter(box, n, fontSize)
 	}
 	if outer != OuterInline && !box.outOfFlow() {
@@ -852,6 +877,7 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		// whatever comes after it. An out-of-flow one still does not, for the
 		// reason above.
 		b.afterWord = paragraph.WordClosed
+		b.closeCaseContext()
 		// And the boundary with it, for the reason above rather than for an
 		// observable one: a segment break at the start or the end of a block is
 		// at the edge of a line, and §4.1.2 removes the space it would become
@@ -895,7 +921,7 @@ func (b *boxBuilder) appendChildren(box *Box, n *html.Node,
 	inherited style.ComputedStyle, fontSize style.Unit) {
 
 	for _, child := range n.Children {
-		if controlSkipsChild(box, child) {
+		if b.controlSkipsChild(box, child) {
 			continue
 		}
 		if replacedFallback(n) {
@@ -980,10 +1006,10 @@ func (b *boxBuilder) replacedByItsContents(n *html.Node) bool {
 // so that the guardrail in pipeline.go can ask the same question the box tree
 // asks rather than a second copy of it.
 func contentsIsHonoured(n *html.Node, cs style.ComputedStyle, root *html.Node) bool {
-	if n == nil || cs == nil {
+	if n == nil || cs.IsZero() {
 		return false
 	}
-	if !strings.EqualFold(strings.TrimSpace(cs["display"]), "contents") {
+	if !strings.EqualFold(strings.TrimSpace(cs.Get("display")), "contents") {
 		return false
 	}
 	if n == root {
@@ -1013,7 +1039,7 @@ func (b *boxBuilder) fontSizeOfStyle(cs style.ComputedStyle, parent style.Unit, 
 	if !own {
 		return parent
 	}
-	vals, _ := css.ParseComponentValues(cs["font-size"])
+	vals, _ := css.ParseComponentValues(cs.Get("font-size"))
 	size, _, ok := style.ResolveFontSize(vals, parent, b.rootFontSize)
 	if !ok {
 		return parent
@@ -1026,14 +1052,25 @@ func (b *boxBuilder) room(n *html.Node) bool { return b.roomAt(n.Offset) }
 
 // roomAt is room for a box no element generated, which has no node to be
 // reported against — every box §17.2.1 inserts is one.
+//
+// A box is also charged to the document's work budget. The cap above bounds
+// the tree; the budget is what sees a tree that is within the cap and was made
+// large by something small — generated content on every element, say — beside
+// the rest of what the document costs. See budget.go.
 func (b *boxBuilder) roomAt(offset int) bool {
+	if b.stopped {
+		return false
+	}
 	if b.count >= maxBoxes {
-		if !b.stopped {
-			b.stopped = true
-			b.rec.Report(RuleLimit, AtHTML(offset),
-				"the document produces more boxes than this engine will build; "+
-					"the rest of it was not laid out")
-		}
+		b.stopped = true
+		b.rec.Report(RuleLimit, AtHTML(offset),
+			"the document produces more boxes than this engine will build; "+
+				"the rest of it was not laid out")
+		return false
+	}
+	if !b.rec.chargeOwn(costBox, "the rest of the box tree") {
+		// Reported by the budget, under its own finding.
+		b.stopped = true
 		return false
 	}
 	b.count++
@@ -1051,7 +1088,7 @@ func (b *boxBuilder) roomAt(offset int) bool {
 // occupies a line.
 func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSize style.Unit) *Box {
 	wst := b.wordSpaceTransformFor(inherited)
-	kind := transformOf(inherited["text-transform"])
+	kind := transformOf(inherited.Get("text-transform"))
 	before := b.boundary
 	// Whether a run of white space open at the end of the node before continues
 	// into this one is a question only "full-width" has to ask here. See
@@ -1070,7 +1107,7 @@ func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSi
 	if !transformFreezesSpace(kind) {
 		before.Collapsed = false
 	}
-	collapse := preservedInAControl(n, inherited["white-space-collapse"])
+	collapse := preservedInAControl(n, inherited.Get("white-space-collapse"))
 	text := collapseWhitespaceAfter(n.Text, collapse, wst,
 		before, writingSystemAt(n))
 	b.reportPhraseSeparators(n, text, wst)
@@ -1088,7 +1125,12 @@ func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSi
 	// IDEOGRAPHIC SPACE, which is not collapsible, so transforming first would
 	// turn a run of spaces into a run of spaces nothing may collapse. It is also
 	// what lets "capitalize" see the word boundaries the reader will.
-	text, b.afterWord = transformText(text, kind, b.afterWord, languageAt(n))
+	// A sigma the text before this lowercased as final is final only if no
+	// cased letter follows it, and this is the text that follows it.
+	b.settleSigma(text)
+	var openSigma int
+	text, b.afterWord, b.caseContext, openSigma = transformTextIn(text, kind, b.afterWord,
+		languageAt(n), b.caseContext)
 	// After the transform rather than before it, because what the next node
 	// follows is the text that will be on the page: "full-width" turns a space
 	// into U+3000, which nothing collapses, and the rules below are about the
@@ -1106,10 +1148,40 @@ func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSi
 	if !b.room(n) {
 		return nil
 	}
-	return &Box{
+	box := &Box{
 		Outer: OuterInline, Inner: InnerText,
 		Style: inherited, Text: text, FontSize: fontSize, fontSizeKnown: true,
 	}
+	if openSigma >= 0 {
+		b.openSigma, b.openSigmaAt = box, openSigma
+	}
+	return box
+}
+
+// settleSigma decides a ς left open by the text before, from the text that
+// follows it: σ if the first character of next that is not case-ignorable is
+// cased, and final as it stands if that character is anything else. Text that is
+// all case-ignorable decides nothing and leaves it open for the text after.
+func (b *boxBuilder) settleSigma(next string) {
+	if b.openSigma == nil {
+		return
+	}
+	isCased, decided := paragraph.CasedAhead(next)
+	if !decided {
+		return
+	}
+	if isCased {
+		b.openSigma.Text = paragraph.UnfinalSigma(b.openSigma.Text, b.openSigmaAt)
+	}
+	b.openSigma = nil
+}
+
+// closeCaseContext is where a word ends whatever comes next — see afterWord's
+// resets — so a sigma left open is final, and nothing cased comes before what
+// follows.
+func (b *boxBuilder) closeCaseContext() {
+	b.caseContext = paragraph.CaseContext{}
+	b.openSigma = nil
 }
 
 // displayOf reads the display property into the outer/inner pair.
@@ -1119,63 +1191,94 @@ func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSi
 // shorthands for pairs. Modelling it as the pair is what makes "inline-block"
 // stop being a special case: it is simply inline outside and flow-root inside.
 func displayOf(cs style.ComputedStyle) (Outer, Inner, bool) {
-	value := strings.ToLower(strings.TrimSpace(cs["display"]))
+	d := parseDisplay(cs.Get("display"))
+	return d.outer, d.inner, d.listItem
+}
 
-	// The two-value syntax, "inline flow-root" and friends.
-	if outer, inner, ok := twoValueDisplay(value); ok {
-		return outer, inner, false
-	}
+// displayType is a display value read into what the box tree is built from, and
+// what of it this engine does not lay out as asked.
+type displayType struct {
+	outer    Outer
+	inner    Inner
+	listItem bool
+	// gap names the part of the value this engine lays out as something else,
+	// or is displayGapNone. See reportUnsupportedDisplays, which is what says
+	// so.
+	gap displayGap
+}
 
+// displayGap is a display value this engine recognises and does not honour.
+type displayGap uint8
+
+const (
+	displayGapNone displayGap = iota
+	// displayGapRunIn is "run-in", whose box merges into the block after it.
+	// It is laid out as the inline box it is when there is no such block.
+	displayGapRunIn
+	// displayGapRuby is an inner display of "ruby", laid out as an inline
+	// box; it is a gap only where there is an annotation to lift. See
+	// unlaidBoxIsNotTheBoxAsked.
+	displayGapRuby
+	// displayGapInlineListItem is a list item whose outer display is inline.
+	// Its marker is drawn by the block layout of a list item, which an
+	// inline-level box does not go through, so the box is laid out as the
+	// inline box it is and without a marker.
+	displayGapInlineListItem
+)
+
+// parseDisplay is css-display-3's grammar, for every value the cascade accepts.
+//
+// It used to read the single keywords and one two-word form — outside first,
+// then inside, and no "list-item" — and let everything else fall through to
+// "inline". But the cascade accepts the whole grammar, in any order: "flow" is a
+// block, "flow-root inline" an inline-block, "flex inline" an inline-flex, and
+// "list-item block", "block list-item" and "inline flow-root list-item" are list
+// items. Each of them was laid out as a plain inline box and nothing said so,
+// which is the page that is quietly wrong. Now every value is either laid out as
+// it says or given a gap that reportUnsupportedDisplays reports.
+//
+// The multi-keyword rules are §2's: an outside value with no inside one is flow
+// inside, an inside value with no outside one is block outside — "except for
+// ruby, which defaults to inline" — and "list-item" alone is a block flow list
+// item.
+func parseDisplay(raw string) displayType {
+	value := strings.ToLower(strings.TrimSpace(raw))
 	switch value {
 	case "none":
-		return OuterNone, InnerFlow, false
+		return displayType{outer: OuterNone, inner: InnerFlow}
 	case "-webkit-box":
 		// The legacy flexible box, of which this engine implements exactly the
 		// part CSS Overflow 4's compatibility section needs: a block that
 		// "-webkit-line-clamp" can be written on. Its own layout — the old
 		// flexbox — is not implemented, and treating it as a block is what every
 		// engine does for the vertical, single-column case the clamp is used in.
-		return OuterBlock, InnerFlow, false
-	case "block", "flow-root":
-		inner := InnerFlow
-		if value == "flow-root" {
-			inner = InnerFlowRoot
-		}
-		return OuterBlock, inner, false
-	case "inline":
-		return OuterInline, InnerFlow, false
+		//
+		// A block that establishes a formatting context, though, and not a
+		// plain one. In a browser the legacy box is a flex-like container, and
+		// a flex container contains its children's margins and floats like any
+		// other formatting-context root; read as a plain block, a paragraph's
+		// top margin collapsed out through it and moved the whole box down.
+		return displayType{outer: OuterBlock, inner: InnerFlowRoot}
 	case "inline-block":
-		return OuterInline, InnerFlowRoot, false
-	case "list-item":
-		return OuterBlock, InnerFlow, true
-	case "flex":
-		return OuterBlock, InnerFlex, false
+		return displayType{outer: OuterInline, inner: InnerFlowRoot}
 	case "inline-flex":
-		return OuterInline, InnerFlex, false
-	case "grid":
-		return OuterBlock, InnerGrid, false
+		return displayType{outer: OuterInline, inner: InnerFlex}
 	case "inline-grid":
-		return OuterInline, InnerGrid, false
-	case "table":
-		return OuterBlock, InnerTable, false
+		return displayType{outer: OuterInline, inner: InnerGrid}
 	case "inline-table":
-		return OuterInline, InnerTable, false
-	case "table-row-group":
-		return OuterBlock, InnerTableRowGroup, false
-	case "table-header-group":
-		return OuterBlock, InnerTableRowGroup, false
-	case "table-footer-group":
-		return OuterBlock, InnerTableRowGroup, false
+		return displayType{outer: OuterInline, inner: InnerTable}
+	case "table-row-group", "table-header-group", "table-footer-group":
+		return displayType{outer: OuterBlock, inner: InnerTableRowGroup}
 	case "table-row":
-		return OuterBlock, InnerTableRow, false
+		return displayType{outer: OuterBlock, inner: InnerTableRow}
 	case "table-cell":
-		return OuterBlock, InnerTableCell, false
+		return displayType{outer: OuterBlock, inner: InnerTableCell}
 	case "table-caption":
-		return OuterBlock, InnerTableCaption, false
+		return displayType{outer: OuterBlock, inner: InnerTableCaption}
 	case "table-column-group":
-		return OuterBlock, InnerTableColumnGroup, false
+		return displayType{outer: OuterBlock, inner: InnerTableColumnGroup}
 	case "table-column":
-		return OuterBlock, InnerTableColumn, false
+		return displayType{outer: OuterBlock, inner: InnerTableColumn}
 	case "contents":
 		// "display: contents" replaces the element with its children, and where
 		// it is honoured the element never reaches here at all —
@@ -1187,11 +1290,99 @@ func displayOf(cs style.ComputedStyle) (Outer, Inner, bool) {
 		// the specification's own answer is to treat the value as an ordinary
 		// one, and inline is what the element would have been. The caller
 		// reports it.
-		return OuterInline, InnerFlow, false
+		return displayType{outer: OuterInline, inner: InnerFlow}
+	case "ruby-base", "ruby-base-container", "ruby-text", "ruby-text-container":
+		// The boxes a ruby is built from, laid out as the inline boxes they
+		// are. Inside a ruby, that ruby's own report says the annotation is not
+		// lifted; see unlaidBoxIsNotTheBoxAsked. An annotation outside any ruby
+		// is not reported, and a browser would lift it above an anonymous base:
+		// that is the one value here still laid out otherwise without a word.
+		return displayType{outer: OuterInline, inner: InnerFlow}
+	case "math":
+		// MathML Core: on an element that is not MathML, "math" computes to
+		// "flow", and with no outside value that is an inline box. The one
+		// MathML element this engine meets is <math> itself, which it draws as
+		// a replaced element whatever its display says.
+		return displayType{outer: OuterInline, inner: InnerFlow}
 	}
-	// An unrecognised value: the initial one, which is what the cascade would
-	// have used had the declaration been invalid.
-	return OuterInline, InnerFlow, false
+
+	// The multi-keyword grammar, whose single keywords "block", "inline",
+	// "run-in", "flow", "flow-root", "table", "flex", "grid", "ruby" and
+	// "list-item" are the one-word cases of it.
+	var (
+		out            = displayType{inner: InnerFlow}
+		outer, inner   string
+		haveOuter, has bool
+	)
+	for _, w := range strings.Fields(value) {
+		switch w {
+		case "block", "inline", "run-in":
+			if haveOuter {
+				return displayType{outer: OuterInline, inner: InnerFlow}
+			}
+			outer, haveOuter = w, true
+		case "flow", "flow-root", "table", "flex", "grid", "ruby":
+			if inner != "" {
+				return displayType{outer: OuterInline, inner: InnerFlow}
+			}
+			inner = w
+		case "list-item":
+			if out.listItem {
+				return displayType{outer: OuterInline, inner: InnerFlow}
+			}
+			out.listItem = true
+		default:
+			// A value the cascade would not have admitted: the initial one,
+			// which is what the cascade uses for a declaration it drops.
+			return displayType{outer: OuterInline, inner: InnerFlow}
+		}
+		has = true
+	}
+	if !has {
+		return displayType{outer: OuterInline, inner: InnerFlow}
+	}
+	switch inner {
+	case "", "flow":
+		out.inner = InnerFlow
+	case "flow-root":
+		out.inner = InnerFlowRoot
+	case "table":
+		out.inner = InnerTable
+	case "flex":
+		out.inner = InnerFlex
+	case "grid":
+		out.inner = InnerGrid
+	case "ruby":
+		// Laid out as an inline box's content, which is its base; the
+		// annotation is what is missing, and the report says so where there is
+		// one.
+		out.inner, out.gap = InnerFlow, displayGapRuby
+	}
+	if out.listItem && inner != "" && inner != "flow" && inner != "flow-root" {
+		// §2.3: a list item's inside display is flow or flow-root and nothing
+		// else. The cascade refuses the rest, so this is a value that did not
+		// come from it.
+		return displayType{outer: OuterInline, inner: InnerFlow}
+	}
+	switch outer {
+	case "block":
+		out.outer = OuterBlock
+	case "inline":
+		out.outer = OuterInline
+	case "run-in":
+		// A run-in box is inline when no block follows it to run into, and
+		// that is how it is laid out; the merging is not done.
+		out.outer, out.gap = OuterInline, displayGapRunIn
+	default:
+		out.outer = OuterBlock
+		if inner == "ruby" {
+			out.outer = OuterInline
+		}
+	}
+	if out.listItem && out.outer == OuterInline {
+		out.listItem, out.gap = false, displayGapInlineListItem
+	}
+	return out
 }
 
 // isLayoutInternalDisplay reports the display types that exist only inside a
@@ -1244,7 +1435,7 @@ func replacesItsOwnContent(n *html.Node) bool {
 // need the writing mode, and answering them as "left" would be right for a
 // left-to-right document and silently wrong for the documents they exist for.
 func floatOf(cs style.ComputedStyle) FloatSide {
-	switch strings.ToLower(strings.TrimSpace(cs["float"])) {
+	switch strings.ToLower(strings.TrimSpace(cs.Get("float"))) {
 	case "left":
 		return FloatLeft
 	case "right":
@@ -1254,7 +1445,7 @@ func floatOf(cs style.ComputedStyle) FloatSide {
 }
 
 func clearOf(cs style.ComputedStyle) ClearSide {
-	switch strings.ToLower(strings.TrimSpace(cs["clear"])) {
+	switch strings.ToLower(strings.TrimSpace(cs.Get("clear"))) {
 	case "left":
 		return ClearLeft
 	case "right":
@@ -1300,58 +1491,60 @@ func outOfFlowDisplay(outer Outer, inner Inner, float FloatSide, position Positi
 	return OuterBlock, InnerFlowRoot
 }
 
-// overflowIsScrollable reports whether either axis of overflow is something
-// other than visible.
-func overflowIsScrollable(cs style.ComputedStyle) bool {
-	for _, axis := range [2]string{"overflow-x", "overflow-y"} {
-		if !overflowIsVisibleOn(cs, axis) {
-			return true
-		}
-	}
-	return false
+// isScrollContainer reports whether a box's overflow makes it a scroll
+// container: "hidden", "auto" or "scroll" on either axis.
+//
+// Not "any value but visible", which is what this asked before "clip" existed
+// and what it went on asking after. CSS Overflow 3 is explicit that clip is the
+// other kind of value: "Unlike hidden, this value does not cause the element to
+// establish a new formatting context", and a box that clips is not a scroll
+// container. The difference is every rule keyed on a scroll container rather
+// than on clipping — the formatting context of §9.4.1, the start-aligned
+// overfull line, Flexbox §4.5's automatic minimum — and "overflow: clip" was
+// taking each of them: beside a float the box was narrowed and moved past the
+// float as a formatting-context root is, rather than having only its lines
+// shortened.
+//
+// One axis is enough, and that is the computed-value rule rather than a
+// shortcut: "visible" beside a scrolling value on the other axis computes to
+// "auto", so such a box scrolls on both.
+func isScrollContainer(cs style.ComputedStyle) bool {
+	return scrolls(overflowOn(cs, "overflow-x")) || scrolls(overflowOn(cs, "overflow-y"))
 }
 
-// overflowIsVisibleOn is the same question about one axis, which is what a rule
-// keyed on a box's main axis asks. See flexMainLimits.
-func overflowIsVisibleOn(cs style.ComputedStyle, axis string) bool {
-	switch strings.ToLower(strings.TrimSpace(cs[axis])) {
-	case "", "visible":
-		return true
-	}
-	return false
+// overflowClips reports whether overflow clips the content on either axis —
+// every value but "visible", clip included. It is the painting question, and
+// the one whether the root's value reached the viewport asks.
+func overflowClipsContent(cs style.ComputedStyle) bool {
+	return overflowOn(cs, "overflow-x") != "visible" || overflowOn(cs, "overflow-y") != "visible"
 }
 
-// twoValueDisplay reads the "outer inner" form.
-func twoValueDisplay(value string) (Outer, Inner, bool) {
-	parts := strings.Fields(value)
-	if len(parts) != 2 {
-		return 0, 0, false
+// overflowClipsAxes says which axes a box's overflow clips its content on.
+//
+// Both, except where one axis is "clip" and the other "visible": §3.1's
+// computed-value rule turns a "visible" beside a scrolling value into "auto",
+// but beside "clip" it stays visible, and "overflow-x: clip" alone cuts the
+// content at the left and right edges and lets it run on below.
+func overflowClipsAxes(cs style.ComputedStyle) (x, y bool) {
+	ox, oy := overflowOn(cs, "overflow-x"), overflowOn(cs, "overflow-y")
+	x = ox != "visible" || scrolls(oy)
+	y = oy != "visible" || scrolls(ox)
+	return x, y
+}
+
+// overflowOn is one axis's value, lower-cased, with an absent one read as the
+// initial "visible".
+func overflowOn(cs style.ComputedStyle, axis string) string {
+	v := strings.ToLower(strings.TrimSpace(cs.Get(axis)))
+	if v == "" {
+		return "visible"
 	}
-	var outer Outer
-	switch parts[0] {
-	case "block":
-		outer = OuterBlock
-	case "inline":
-		outer = OuterInline
-	default:
-		return 0, 0, false
-	}
-	var inner Inner
-	switch parts[1] {
-	case "flow":
-		inner = InnerFlow
-	case "flow-root":
-		inner = InnerFlowRoot
-	case "flex":
-		inner = InnerFlex
-	case "grid":
-		inner = InnerGrid
-	case "table":
-		inner = InnerTable
-	default:
-		return 0, 0, false
-	}
-	return outer, inner, true
+	return v
+}
+
+// scrolls reports the three values that make a scroll container.
+func scrolls(v string) bool {
+	return v == "hidden" || v == "auto" || v == "scroll"
 }
 
 // fixup adds the anonymous boxes the specification requires, depth first so a
@@ -1429,11 +1622,20 @@ func (b *boxBuilder) wrapLooseText(parent *Box) []*Box {
 		if len(run) == 0 {
 			return
 		}
-		// White space that would collapse to nothing is not content and
-		// generates no item. Every document in the suite writes a newline
-		// between its elements, so without this a row of three <div>s would be
-		// seven items — four of them empty, each taking a share of the line.
-		if !hasInFlowContent(run) {
+		// White space is not content here and generates no item. Every
+		// document in the suite writes a newline between its elements, so
+		// without this a row of three <div>s would be seven items — four of
+		// them empty, each taking a share of the line.
+		//
+		// Whatever white-space says, and that is where this parts from the
+		// anonymous block rule. Flexbox §4 and Grid §6 both say a run of text
+		// that "contains only white space (i.e. characters that can be
+		// affected by the white-space property)" is not rendered, which a
+		// preserving white-space does not change: hasInFlowContent keeps
+		// preserved white space, because a blank line in a <pre> is one the
+		// author wrote, and asking it here turned the indentation of a
+		// "white-space: pre" row into three extra items between the real ones.
+		if onlyDocumentWhiteSpace(run) {
 			run = nil
 			return
 		}
@@ -1700,10 +1902,10 @@ func splitInline(b *Box) []*Box {
 // "margin: 0" — are both answered exactly.
 func mayInsetHorizontally(cs style.ComputedStyle) bool {
 	for _, side := range [2]string{"left", "right"} {
-		if !isZeroLength(cs["margin-"+side]) || !isZeroLength(cs["padding-"+side]) {
+		if !isZeroLength(cs.Get("margin-"+side)) || !isZeroLength(cs.Get("padding-"+side)) {
 			return true
 		}
-		if !noBorder(cs["border-"+side+"-style"]) && !isZeroLength(cs["border-"+side+"-width"]) {
+		if !noBorder(cs.Get("border-"+side+"-style")) && !isZeroLength(cs.Get("border-"+side+"-width")) {
 			return true
 		}
 	}
@@ -1931,6 +2133,24 @@ func (b *boxBuilder) houseInsideMarker(parent *Box, children []*Box) []*Box {
 	return append([]*Box{anon}, children...)
 }
 
+// onlyDocumentWhiteSpace reports whether a run of text boxes holds nothing but
+// CSS Text §4's document white space: spaces, tabs and segment breaks, and the
+// carriage returns §4.1 treats as spaces. Those are "the characters that can be
+// affected by the white-space property", which is Flexbox §4's definition of
+// the run that makes no item. A no-break space is not one of them — it is text
+// that happens to be blank, and an author who wrote one wrote an item.
+func onlyDocumentWhiteSpace(run []*Box) bool {
+	for _, c := range run {
+		if !c.IsText() {
+			return false
+		}
+		if strings.Trim(c.Text, " \t\n\r") != "" {
+			return false
+		}
+	}
+	return true
+}
+
 // hasInFlowContent reports whether a run of inline-level boxes holds anything
 // that would put a line box on the page.
 //
@@ -1951,7 +2171,7 @@ func hasInFlowContent(run []*Box) bool {
 		if !c.IsText() {
 			return true
 		}
-		if !whiteSpaceOf(c.Style["white-space-collapse"]).Collapse {
+		if !whiteSpaceOf(c.Style.Get("white-space-collapse")).Collapse {
 			return true
 		}
 		if strings.TrimSpace(c.Text) != "" {
@@ -2034,8 +2254,7 @@ func writingSystemAt(n *html.Node) paragraph.WritingSystem {
 
 // wordSpaceTransformFor reads word-space-transform off a computed style.
 func (b *boxBuilder) wordSpaceTransformFor(cs style.ComputedStyle) paragraph.WordSpaceTransform {
-	wst, _ := wordSpaceTransformOf(cs["word-space-transform"])
-	return wst
+	return wordSpaceTransformOf(cs.Get("word-space-transform"))
 }
 
 // reportPhraseSeparators says that "auto-phrase" found no phrases in a node's
@@ -2066,13 +2285,13 @@ func (b *boxBuilder) reportPhraseSeparators(n *html.Node, text string,
 			"phrase model for the language, and there is none here for this one, " +
 			"so only the marks the document did write are expanded",
 		Property: "word-space-transform",
+		Source:   sourceOf(n),
 		Path:     PathOf(n),
 	})
 }
 
 // wordSpaceTransformValue is the same read without the node, for a caller that
 // has a Box rather than the style it was built from.
-func wordSpaceTransformValue(s map[string]string) paragraph.WordSpaceTransform {
-	wst, _ := wordSpaceTransformOf(s["word-space-transform"])
-	return wst
+func wordSpaceTransformValue(cs style.ComputedStyle) paragraph.WordSpaceTransform {
+	return wordSpaceTransformOf(cs.Get("word-space-transform"))
 }

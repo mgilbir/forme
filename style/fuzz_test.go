@@ -43,6 +43,10 @@ func FuzzApply(f *testing.F) {
 		"p { margin: }",
 		"p:nth-child(2n+1) { color: a }",
 		"p:hover { color: a }",
+		".a { & p, > b, + i { color: a } }",
+		"div { & & { & & { p { color: a } } } }",
+		"p::before { & { color: a } @media print { color: b } }",
+		"& p { color: a }",
 		"{}", ";", "p{", "}",
 	}
 	for _, d := range docs {
@@ -83,12 +87,12 @@ func FuzzApply(f *testing.F) {
 			// Every property present, so no consumer has to tell "unset" from
 			// "absent" — a distinction that would be silently wrong wherever the
 			// empty string is a legal value.
-			if len(cs) != len(properties) {
+			if cs.Len() != len(properties) {
 				t.Fatalf("<%s> has %d properties, want all %d",
-					node.Name, len(cs), len(properties))
+					node.Name, cs.Len(), len(properties))
 			}
 			for name := range properties {
-				if _, ok := cs[name]; !ok {
+				if _, ok := cs.Lookup(name); !ok {
 					t.Fatalf("<%s> is missing %s", node.Name, name)
 				}
 			}
@@ -157,8 +161,8 @@ func FuzzApplyIsDeterministic(f *testing.F) {
 			if !ok {
 				t.Fatal("an element styled in one run and not the other")
 			}
-			for name, av := range a {
-				if bv := b[name]; av != bv {
+			for name, av := range a.All() {
+				if bv := b.Get(name); av != bv {
 					t.Fatalf("<%s> %s is %q then %q", node.Name, name, av, bv)
 				}
 			}

@@ -38,7 +38,7 @@ func styleOf(t *testing.T, doc *html.Node, sheets []Sheet, selector, property st
 	if !ok {
 		t.Fatalf("no computed style for the element selected by %q", selector)
 	}
-	return cs[property]
+	return cs.Get(property)
 }
 
 // elementFor finds the single element a selector picks, failing if it is not
@@ -410,9 +410,9 @@ func TestInitialValues(t *testing.T) {
 	got := Apply(doc, nil)
 	cs := got.Styles[elementFor(t, doc, "#target")]
 
-	if len(cs) != len(properties) {
+	if cs.Len() != len(properties) {
 		t.Errorf("the computed style holds %d properties, want all %d",
-			len(cs), len(properties))
+			cs.Len(), len(properties))
 	}
 	for name, prop := range properties {
 		want := prop.initial
@@ -424,9 +424,9 @@ func TestInitialValues(t *testing.T) {
 			// document is measured against it. See computed.go.
 			want = "16px"
 		}
-		if cs[name] != want {
+		if cs.Get(name) != want {
 			t.Errorf("%s is %q with no stylesheet, want the initial %q",
-				name, cs[name], want)
+				name, cs.Get(name), want)
 		}
 	}
 }
@@ -544,7 +544,7 @@ func TestUnsupportedPropertyIsReported(t *testing.T) {
 	}
 	// The declaration beside it still applied, so one unknown property does not
 	// cost the rule.
-	if v := got.Styles[elementFor(t, doc, "#target")]["font-family"]; v != "kept" {
+	if v := got.Styles[elementFor(t, doc, "#target")].Get("font-family"); v != "kept" {
 		t.Errorf("font-family is %q; an unknown property took the rest of the rule with it", v)
 	}
 }
@@ -594,6 +594,62 @@ func TestFindingsAreBounded(t *testing.T) {
 	}
 	if len(got.Findings) == 0 {
 		t.Fatal("a stylesheet of nothing but unknown properties reported nothing")
+	}
+}
+
+// TestTheBoundDoesNotHideWhatIsUnsupported is audit C58. The bound on the
+// report drops what comes after it, and a caller decides whether a page is
+// clean by whether any finding is Unsupported — so the note that stands for the
+// dropped ones must be Unsupported when one of them was, and must name the
+// property, which is what a caller maps a finding to a rule by. The fixture is
+// the audit's: author errors, which are never folded together, fill the list,
+// and the one declaration this engine does not implement comes after it.
+func TestTheBoundDoesNotHideWhatIsUnsupported(t *testing.T) {
+	for _, c := range []struct{ what, tail string }{
+		{"well past the bound", "p { text-shadow: 1px 1px red }"},
+		{"the first one past it", ""},
+	} {
+		t.Run(c.what, func(t *testing.T) {
+			var b strings.Builder
+			n := maxFindings * 2
+			if c.tail == "" {
+				// Exactly maxFindings errors, so the unsupported declaration
+				// is the finding the note is written in place of.
+				n = maxFindings
+				c.tail = "p { text-shadow: 1px 1px red }"
+			}
+			for i := 0; i < n; i++ {
+				b.WriteString("p.c" + itoa(i) + " { color: 'x" + itoa(i) + "' }\n")
+			}
+			b.WriteString(c.tail)
+			got := Apply(parseDoc(t, `<p class="c1">x</p>`), []Sheet{author(t, b.String())})
+			if len(got.Findings) != maxFindings+1 {
+				t.Fatalf("%d findings; this needs the list to overflow", len(got.Findings))
+			}
+			unsupported := 0
+			for _, f := range got.Findings {
+				if f.Unsupported {
+					unsupported++
+					if f.Property != "text-shadow" || !strings.Contains(f.Message, "text-shadow") {
+						t.Errorf("the unsupported finding names %q: %q", f.Property, f.Message)
+					}
+				}
+			}
+			if unsupported != 1 {
+				t.Errorf("%d findings are Unsupported, want the note alone; a page with "+
+					"text-shadow on it would count as one with nothing unsupported", unsupported)
+			}
+		})
+	}
+	// And a list cut by author errors alone says nothing is unsupported.
+	var b strings.Builder
+	for i := 0; i < maxFindings*2; i++ {
+		b.WriteString("p.c" + itoa(i) + " { color: 'x" + itoa(i) + "' }\n")
+	}
+	for _, f := range Apply(parseDoc(t, `<p>x</p>`), []Sheet{author(t, b.String())}).Findings {
+		if f.Unsupported {
+			t.Errorf("a list of author errors has an unsupported finding: %q", f.Message)
+		}
 	}
 }
 
@@ -665,7 +721,7 @@ p { border-width: 1px 2px 3px 4px }`
 	for i := 0; i < 20; i++ {
 		again := Apply(doc, []Sheet{author(t, src)})
 		for name := range properties {
-			a, b := first.Styles[target][name], again.Styles[target][name]
+			a, b := first.Styles[target].Get(name), again.Styles[target].Get(name)
 			if a != b {
 				t.Fatalf("run %d disagrees on %s: %q then %q", i, name, a, b)
 			}

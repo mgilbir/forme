@@ -1,5 +1,11 @@
 package style
 
+import (
+	"strings"
+
+	"github.com/mgilbir/forme/css"
+)
+
 // Properties the registry accepts and nothing acts on.
 //
 // # Why this file exists
@@ -61,14 +67,55 @@ var unimplementedProperties = map[string]string{}
 // for "text-indent" went unnoticed. The padding and margin edges were in here
 // too and did not belong: they are read by their full names.
 var readByConstruction = map[string]string{
-	// render/layout.go borderWidths reads "border-" + side + "-width" and
-	// "-style"; render/paint.go paintBorders reads "border-" + edge + "-color".
+	// layout/layout.go's borderWidths reads "border-" + side + "-width" and
+	// "-style"; layout/paint.go's borders reads "border-" + edge + "-color".
 	"border-top-width": "border-", "border-right-width": "border-",
 	"border-bottom-width": "border-", "border-left-width": "border-",
 	"border-top-style": "border-", "border-right-style": "border-",
 	"border-bottom-style": "border-", "border-left-style": "border-",
 	"border-top-color": "border-", "border-right-color": "border-",
 	"border-bottom-color": "border-", "border-left-color": "border-",
+}
+
+// unimplementedValues lists registered properties that are read, and the values
+// of them nothing acts on, with what that comes to.
+//
+// It is the value-sized version of the table above, and exists for the break
+// properties. Their "avoid" is honoured — layout/multicol.go keeps a column
+// from ending where it is asked not to — and their forced values are not
+// honoured anywhere: this engine does not break a document into pages (a
+// document that does not fit is scaled to the one page), and a multicol pour
+// does not end a column where a box asks for one. That is a fact about the
+// value and not about the box, so it is said where the value is declared.
+var unimplementedValues = map[string]struct {
+	values map[string]bool
+	reason string
+}{
+	"break-before": {forcedBreaks, forcedBreakReason},
+	"break-after":  {forcedBreaks, forcedBreakReason},
+}
+
+var forcedBreaks = map[string]bool{
+	"always": true, "all": true, "page": true, "left": true, "right": true,
+	"recto": true, "verso": true, "column": true, "region": true,
+}
+
+const forcedBreakReason = "no break is made there: this engine does not break a " +
+	"document into pages, and does not end a column where a box asks for one"
+
+// unimplementedValueReason returns a declared value of a registered property,
+// and why it does nothing, if so. The value is only read for a property that
+// has an entry, which is what keeps this off the path of every declaration.
+func unimplementedValueReason(name string, vals []css.ComponentValue) (value, reason string, ok bool) {
+	entry, listed := unimplementedValues[name]
+	if !listed {
+		return "", "", false
+	}
+	value = strings.ToLower(strings.TrimSpace(serialize(vals)))
+	if !entry.values[value] {
+		return "", "", false
+	}
+	return value, entry.reason, true
 }
 
 // unimplementedReason returns why a registered property does nothing, if so.

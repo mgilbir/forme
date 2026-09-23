@@ -4,8 +4,9 @@ import "github.com/mgilbir/forme/style"
 
 // Floats: CSS 2.1 §9.5, and the clearance of §9.5.2.
 //
-// A float is the oldest out-of-flow mechanism CSS has and the only one this
-// engine implements. The box is taken out of the normal flow, shifted to one
+// A float is the oldest out-of-flow mechanism CSS has, and the one that shares
+// the flow with what it is taken out of — absolute and fixed positioning, the
+// other two, are position.go's and lay a box out after the flow instead. The box is taken out of the normal flow, shifted to one
 // edge of its containing block, and pushed as far up as it will go — and then
 // the line boxes of everything that follows are *shortened* so the text runs
 // beside it rather than under it. That second half is what makes floats worth
@@ -456,14 +457,14 @@ func (fc *floatContext) place(size Size, side FloatSide, top, lo, hi style.Unit)
 // A box that is itself out of flow is excluded because it is placed by its own
 // rules — a float by §9.5.1, an absolutely positioned box by §10.3.7 — and both
 // of those already know about the floats they care about.
-func avoidsFloats(b *Box) bool {
+func (l *layouter) avoidsFloats(b *Box) bool {
 	if b == nil || b.outOfFlow() || b.Outer != OuterBlock {
 		return false
 	}
 	if b.Replaced != nil {
 		return true
 	}
-	return establishesBFC(b)
+	return l.sealsFloats(b)
 }
 
 // avoidFloats places a box that may not overlap a float, returning how far below
@@ -517,7 +518,7 @@ func avoidsFloats(b *Box) bool {
 func (l *layouter) avoidFloats(b *Box, containing style.Unit, origin flow,
 	top, height style.Unit, known bool) (style.Unit, *forcedGeometry) {
 
-	if !avoidsFloats(b) || len(origin.ctx.boxes) == 0 {
+	if !l.avoidsFloats(b) || len(origin.ctx.boxes) == 0 {
 		return 0, nil
 	}
 	lo, hi := origin.x, origin.x.Add(containing)
@@ -828,6 +829,29 @@ type flow struct {
 	// predicted for it. Only §9.5.2's hypothetical position reads it; see where
 	// that is worked out.
 	carriedTop style.Unit
+
+	// alone says ctx was made for this one layout and is thrown away after it,
+	// which is what a flex item, a grid item, a table cell and an inline-block
+	// are given. Such a layout reads nothing of any context it shares, because
+	// it shares none, and so its answer is a function of its arguments and may
+	// be kept. See layoutKeyFor.
+	//
+	// again says the caller may well ask again — a flex or grid container,
+	// which lays its items out more than once, and is itself laid out more than
+	// once by a container around it — so that the answer is kept the first time
+	// it is asked rather than the second, where the box has already been laid
+	// out under another question. See blockIn for why only there.
+	//
+	// Neither is carried to the flow a box gives its children: both are about
+	// one call.
+	alone, again bool
+}
+
+// aloneFlow is the flow a box is laid out in when it is given a formatting
+// context of its own for the call: a fresh float context and nothing else of
+// the caller's but the height a percentage resolves against.
+func aloneFlow(cbHeight style.Unit, cbDefinite bool) flow {
+	return flow{ctx: &floatContext{}, cbHeight: cbHeight, cbDefinite: cbDefinite, alone: true}
 }
 
 // establishesBFC reports whether a box lays its floats out in a context of its
@@ -848,10 +872,11 @@ type flow struct {
 // For every display value this engine actually lays out, that would already be
 // true without the clause — §9.7 blockifies an out-of-flow box to a flow root,
 // and the first test here catches it. The clause is not therefore redundant: the
-// displays whose inner half *survives* blockification, a table and a flex
-// container, stay themselves when absolutely positioned, and this is the only
-// thing that seals those. Neither is laid out yet, so the clause is checked
-// directly rather than through a page.
+// displays whose inner half *survives* blockification, a table, a flex and a
+// grid container, stay themselves when absolutely positioned. Each of them is
+// also on the list below in its own right now, so the clause and the list agree
+// about them; the clause is what still covers any display added to the engine
+// before it is added here.
 func establishesBFC(b *Box) bool {
 	switch b.Inner {
 	case InnerFlowRoot, InnerTable, InnerTableCell, InnerTableCaption, InnerGrid, InnerFlex:
@@ -870,4 +895,27 @@ func establishesBFC(b *Box) bool {
 		return true
 	}
 	return b.Float != FloatNone || b.Position.outOfFlow()
+}
+
+// sealsFloats is establishesBFC with the one entry on §9.4.1's list that needs
+// a length read to answer: a multicol container.
+//
+// CSS Multi-column §2 makes one "establish a new block formatting context", and
+// the reason is the one this file keeps finding: the content is laid out once
+// in a tall column and then cut into columns, so a float inside it is sliced
+// with everything else and has no business in the parent's context. Left out,
+// the float's uncut rectangle stayed in the parent's context after the pour,
+// and the paragraph after the multicol box was indented round a float that was
+// no longer there.
+//
+// It is not in establishesBFC because whether a box is a multicol container is
+// whether its column-count or column-width is other than auto, and the width
+// is a length. A container whose columns are refused is still one: the
+// refusal is about what this engine can draw, and the box is the same box.
+func (l *layouter) sealsFloats(b *Box) bool {
+	if establishesBFC(b) {
+		return true
+	}
+	_, multicol := l.columnsFor(b, 0)
+	return multicol
 }

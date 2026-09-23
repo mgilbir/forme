@@ -9,12 +9,11 @@ import (
 // of the narrowing style/supports.go keeps, and it is checked here because this
 // is where the finding lands.
 //
-// An @supports condition is answered about the value only where the cascade
-// reads one early enough to refuse it — six properties, listed in
-// style/valuegate.go. Outside those there is no single place that says whether
-// a value parses, because that is decided per property by the stage that reads
-// it. "position" is outside them, so "(position: sticky)" is answered yes —
-// position is implemented — and the block is applied.
+// An @supports condition is answered by the value grammar — whether the
+// declaration is CSS the cascade applies — and not by whether layout draws
+// every keyword it accepts. "position: sticky" is valid, so "(position:
+// sticky)" is answered yes and the block is applied, although sticky
+// positioning is not laid out here.
 //
 // What makes that sound rather than merely convenient is that the author is
 // still told. The declaration the block let through is reported by the stage

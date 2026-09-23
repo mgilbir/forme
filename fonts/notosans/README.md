@@ -1,10 +1,11 @@
 # Noto Sans
 
 `NotoSans-Variable.ttf` is bundled so that this module can set text without a
-caller having to find a typeface first. A conforming PDF/A must embed every font
-it shows, so "use the font the reader already has" is not an option for anything
-that must conform — and until this was here, the only way to produce a
-conforming document with text on it was to supply your own file.
+caller having to find a typeface first. A backend that embeds what it draws — a
+PDF writer, which has to carry every font a page shows — needs the font program
+as well as its metrics, so "use the font the reader already has" is not an
+option for it; this is a program that is always there. `notosans.Face` and
+`notosans.Simple` load it, and `notosans.Regular` hands out a copy of its bytes.
 
 ## What this is
 

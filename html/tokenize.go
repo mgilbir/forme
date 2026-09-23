@@ -105,6 +105,10 @@ type tokenizer struct {
 	// thing here: <style> and <script> hold ordinary character data, so "&gt;"
 	// in a stylesheet is a ">". See looksLikeXML.
 	xml bool
+	// foreign says the markup being read is inside an <svg> or a <math>, which
+	// the parser sets while it skips one. It changes one thing: a CDATA section
+	// is a CDATA section there in HTML as well as in XML.
+	foreign bool
 }
 
 // commentLength is how many bytes a comment occupies, from its "<!--" to the
@@ -157,8 +161,10 @@ func commentLength(src string) (int, bool) {
 // EF BB BF that a Windows editor writes at the front of a UTF-8 file.
 const bom = "\ufeff"
 
-func newTokenizer(src string) *tokenizer {
-	t := &tokenizer{src: src, xml: looksLikeXML(src)}
+// newTokenizer reads src as XHTML when the caller said it is one, and otherwise
+// as whatever the document says it is. See ParseXHTML and looksLikeXML.
+func newTokenizer(src string, xhtml bool) *tokenizer {
+	t := &tokenizer{src: src, xml: xhtml || looksLikeXML(src)}
 	if strings.HasPrefix(src, bom) {
 		// A leading byte order mark is not content. HTML's encoding sniffing
 		// takes those three bytes as the statement "this file is UTF-8" and
@@ -196,17 +202,25 @@ func newTokenizer(src string) *tokenizer {
 // selector matches nothing at all — so every rule in the block is silently
 // inert and the page comes back unstyled in a way that looks like a layout bug.
 //
-// The three signals are the ones a document can state about itself, and any of
-// them is enough:
+// The two signals are the ones a document can state about its own syntax, and
+// either is enough:
 //
 //   - an XML declaration, which only an XML document may begin with;
-//   - an XHTML public identifier in the doctype;
-//   - the XHTML namespace on the root element.
+//   - a doctype naming XHTML, in its public or its system identifier.
 //
-// A browser does not ask any of this — it is told by the MIME type, which a file
-// on disk does not have. These are what is left, they are what the file itself
-// asserts, and a document carrying none of them is read as HTML, which is the
-// safe direction: HTML is what an unmarked document overwhelmingly is.
+// A browser does not ask any of this — it is told by the MIME type, and a caller
+// that knows it says so with ParseXHTML, which does not ask either. These are
+// what is left when nobody says: they are what the file itself asserts, and a
+// document carrying neither is read as HTML, which is the safe direction: HTML
+// is what an unmarked document overwhelmingly is.
+//
+// The XHTML namespace on the root element is not a signal, and was one. HTML
+// allows the attribute on <html> and gives it no meaning at all — it is there so
+// that one document can be served as either — and Pandoc's HTML5 template and a
+// great deal of HTML5 boilerplate write it under "<!DOCTYPE html>". A browser
+// opening such a file reads it as HTML. Read as XHTML here, its <pre> kept the
+// newline after the tag, "&#146;" became a control character instead of a
+// curly apostrophe, and "<br></br>" lost a break, all without a finding.
 func looksLikeXML(src string) bool {
 	// Only the prologue is examined. The signals all belong to it, and scanning
 	// a whole document for a string that may appear in its text would make the
@@ -220,13 +234,16 @@ func looksLikeXML(src string) bool {
 	}
 	if i := indexFold(head, "<!doctype"); i >= 0 {
 		if end := strings.IndexByte(head[i:], '>'); end >= 0 {
-			if indexFold(head[i:i+end], "//dtd xhtml") >= 0 {
+			// "xhtml" anywhere in it: the public identifiers are spelled
+			// "-//W3C//DTD XHTML 1.0 Strict//EN" and, in documents that got it
+			// slightly wrong, "-//W3C//DTD//XHTML 1.0"; the system identifiers
+			// all name an xhtml DTD. "<!DOCTYPE html>" names nothing.
+			if indexFold(head[i:i+end], "xhtml") >= 0 {
 				return true
 			}
 		}
 	}
-	return indexFold(head, `xmlns="http://www.w3.org/1999/xhtml"`) >= 0 ||
-		indexFold(head, `xmlns='http://www.w3.org/1999/xhtml'`) >= 0
+	return false
 }
 
 func (t *tokenizer) fail(off int, msg string) { t.add(Error{Offset: off, Message: msg}) }
@@ -252,6 +269,19 @@ func (t *tokenizer) add(e Error) {
 	default:
 		t.errs = append(t.errs, e)
 	}
+}
+
+// stopped reports that a bound stopped the document being read, and it is the
+// one finding the cap above does not apply to.
+//
+// "Further problems were not reported" says the list is short. It does not say
+// the *tree* is, and a document that reported a hundred problems before it ran
+// into maxNodes was handed back as a short tree whose only word about it was the
+// first — so a caller had no way to tell that the rest of the document had not
+// been read. The parser stops reading when it calls this, so it is called once
+// per document at most, and the list is still bounded.
+func (t *tokenizer) stopped(off int, msg string) {
+	t.errs = append(t.errs, Error{Offset: off, Message: msg, Limit: true})
 }
 
 // next produces one token.
@@ -303,51 +333,84 @@ func (t *tokenizer) text() token {
 	for t.pos < len(t.src) && t.src[t.pos] != '<' {
 		t.pos++
 	}
-	return token{kind: tokText, text: t.dropNULs(t.decodeRefs(t.src[start:t.pos], start, false), start),
-		offset: start}
+	return token{kind: tokText, text: t.nuls(t.decodeRefs(t.src[start:t.pos], start, false),
+		start, "text", nulDropped), offset: start}
 }
 
-// dropNULs takes the NUL bytes out of a run of text and says so once.
+// What becomes of a NUL byte, which is the one choice nuls makes.
+const (
+	// nulDropped is ordinary text's: the tokenizer emits the NUL and the tree
+	// builder, in every mode that puts text in a document, ignores it.
+	nulDropped = ""
+	// nulReplaced is every other state's: raw text and RCDATA, an attribute's
+	// name and value, a CDATA section. The tokenizer itself turns the NUL into
+	// U+FFFD REPLACEMENT CHARACTER there.
+	nulReplaced = "\uFFFD"
+)
+
+// nuls takes the NUL bytes out of a run of text and says so once. It is the one
+// place a NUL is dealt with, and everything the tokenizer turns into text or an
+// attribute goes through it.
 //
 // U+0000 is not a character a document can contain: the standard's tokenizer
-// makes one a parse error in every state that can meet it, and in the states
-// that produce text it drops the byte. It was kept, so a text node held a byte
-// that is not text — into the shaper, into a PDF, into whatever a caller does
-// with Node.Text — and the parse reported success.
+// makes one a parse error in every state that can meet it. It was kept, so a
+// text node held a byte that is not text — into the shaper, into a PDF, into
+// whatever a caller does with Node.Text — and the parse reported success. The
+// first fix reached ordinary text and nothing else, so a <textarea>, a <title>,
+// a stylesheet and every attribute value still carried one through.
+//
+// What it becomes is the standard's answer for the state, which is not one
+// answer: dropped from ordinary text, U+FFFD everywhere else. The difference
+// is visible — a NUL in a <textarea> is a replacement character on the page in
+// every browser — and so it is the standard's that is followed rather than one
+// of the two applied to both.
 //
 // One finding for the run and not one per byte, and the offset is the run's:
 // a file with NULs in it usually has a great many, and they are one fault
 // (something wrote UTF-16, or a binary file was handed over as HTML) rather
 // than a hundred.
-func (t *tokenizer) dropNULs(text string, off int) string {
-	if !strings.ContainsRune(text, 0) {
-		return text
+func (t *tokenizer) nuls(s string, off int, what, into string) string {
+	if !strings.ContainsRune(s, 0) {
+		return s
 	}
-	n := strings.Count(text, "\x00")
+	n := strings.Count(s, "\x00")
 	word := "byte"
 	if n > 1 {
 		word = "bytes"
 	}
-	t.fail(off, "text holding "+strconv.Itoa(n)+" NUL "+word+", which are not "+
-		"characters; they are dropped")
-	return strings.ReplaceAll(text, "\x00", "")
+	fate := "they are dropped"
+	if into == nulReplaced {
+		fate = "each is read as U+FFFD REPLACEMENT CHARACTER"
+	}
+	t.fail(off, what+" holding "+strconv.Itoa(n)+" NUL "+word+", which are not "+
+		"characters; "+fate)
+	return strings.ReplaceAll(s, "\x00", into)
 }
 
 // rawText reads the content of a raw-text or RCDATA element, up to its end tag.
 func (t *tokenizer) rawText() token {
 	start := t.pos
 	name := t.raw
-	end := t.findEndTag(name, t.pos)
-	if end < 0 {
-		t.fail(start, "<"+name+"> is never closed")
-		t.pos = len(t.src)
-		t.raw = ""
-		return token{kind: tokText, text: t.rawValue(t.src[start:], start), offset: start}
+	end := -1
+	if name != "plaintext" || t.xml {
+		end = t.findEndTag(name, t.pos)
 	}
-	body := t.src[start:end]
-	t.pos = end
+	if end < 0 {
+		// <plaintext> has no end tag in HTML: the tokenizer switches to its
+		// state and never leaves it, so "</plaintext>" is text and the rest of
+		// the document is the element's. Its being open at the end is reported
+		// once, by the tree builder, as every element open there is.
+		if name != "plaintext" || t.xml {
+			t.fail(start, "<"+name+"> is never closed")
+		}
+		t.pos = len(t.src)
+		end = len(t.src)
+	} else {
+		t.pos = end
+	}
 	t.raw = ""
-	return token{kind: tokText, text: t.rawValue(body, start), offset: start}
+	return token{kind: tokText, text: t.nuls(t.rawValue(t.src[start:end], start), start,
+		"the text of <"+name+">", nulReplaced), offset: start}
 }
 
 // rawValue resolves references in RCDATA and leaves raw text alone.
@@ -491,18 +554,24 @@ func (t *tokenizer) markup() (token, bool) {
 	// — dropped its content and, where the content held a ">", took the rest of
 	// the document with it.
 	//
-	// Outside XML there is no such syntax: HTML reads "<![CDATA[" as a bogus
-	// comment ending at the first ">", which is what the branch below does.
-	if t.xml && strings.HasPrefix(t.src[t.pos:], cdataOpen) {
+	// HTML has the syntax too, in one place: inside SVG and MathML, which are
+	// XML vocabularies and keep XML's CDATA sections — the tokenizer's
+	// "adjusted current node is not an element in the HTML namespace" clause.
+	// Illustrator and Inkscape write an SVG's <style> inside one. Anywhere else
+	// in an HTML document "<![CDATA[" is a bogus comment ending at the first
+	// ">", which is what the branch below does.
+	if (t.xml || t.foreign) && strings.HasPrefix(t.src[t.pos:], cdataOpen) {
 		body := t.src[t.pos+len(cdataOpen):]
 		end := strings.Index(body, cdataClose)
 		if end < 0 {
 			t.fail(start, "a CDATA section that is never closed")
 			t.pos = len(t.src)
-			return token{kind: tokText, text: body, offset: start}, true
+			end = len(body)
+		} else {
+			t.pos += len(cdataOpen) + end + len(cdataClose)
 		}
-		t.pos += len(cdataOpen) + end + len(cdataClose)
-		return token{kind: tokText, text: body[:end], offset: start}, true
+		return token{kind: tokText, text: t.nuls(body[:end], start+len(cdataOpen),
+			"a CDATA section", nulReplaced), offset: start}, true
 	}
 
 	if strings.HasPrefix(t.src[t.pos:], "<![") || strings.HasPrefix(t.src[t.pos:], "<!") {
@@ -592,6 +661,8 @@ func (t *tokenizer) startTag() token {
 
 	out := token{kind: tokStartTag, name: name, offset: start}
 	seen := map[string]bool{}
+	// cut records that maxAttributes was reached on this tag.
+	cut := false
 
 	for {
 		t.skipSpace()
@@ -615,13 +686,24 @@ func (t *tokenizer) startTag() token {
 		}
 
 		at := t.pos
-		attr, ok := t.attribute(name)
-		if !ok {
-			// attribute reported the problem and consumed something, or the tag
-			// is unsalvageable.
-			if t.pos == at {
-				t.skipTo('>')
-				return out
+		attr := t.attribute(name)
+		if t.pos == at {
+			// attribute always reads at least the byte it starts at, which is
+			// what ends this loop; one that did not would spin here for ever.
+			// No input reaches this, as with next's guard: it stops rather than
+			// hangs.
+			panic("html: an attribute was read without consuming anything")
+		}
+		if len(out.attrs) == maxAttributes {
+			// Read and not kept, so the tag still ends where it ends, and not
+			// checked for a repeat either: remembering the names of attributes
+			// that are thrown away would be the unbounded list over again, as a
+			// set. Reported once, at the first one dropped, which is where the
+			// author has to look.
+			if !cut {
+				cut = true
+				t.limit(at, "<"+name+"> has more attributes than this engine will read ("+
+					strconv.Itoa(maxAttributes)+"); \""+attr.Name+"\" and those after it were dropped")
 			}
 			continue
 		}
@@ -638,24 +720,32 @@ func (t *tokenizer) startTag() token {
 	}
 }
 
-func (t *tokenizer) attribute(tag string) (Attribute, bool) {
+// attribute reads one attribute. It always consumes at least one byte and never
+// the ">" that ends the tag, which is what lets startTag loop over it without a
+// case for either.
+//
+// Where the markup is malformed the answer is the standard's, and it is
+// reported: the characters HTML reads as part of a name or an unquoted value
+// are kept in it. The alternative that was here — refuse the character and skip
+// to the next ">" — consumed the tag's own ">", and the attribute loop went on
+// reading attributes out of the text after the tag: "<a href=x\"y>hello</a>"
+// lost the word "hello" into an attribute of <a> and reported a cascade of
+// mistakes the author never made.
+func (t *tokenizer) attribute(tag string) Attribute {
 	at := t.pos
-	name := t.readAttrName()
-	if name == "" {
-		t.fail(at, "expected an attribute name in <"+tag+">")
-		t.pos++
-		return Attribute{}, false
-	}
+	name := t.nuls(t.readAttrName(tag), at, "an attribute name", nulReplaced)
 	t.skipSpace()
 	if t.pos >= len(t.src) || t.src[t.pos] != '=' {
 		// A boolean attribute: present, with the empty string for a value.
-		return Attribute{Name: name}, true
+		return Attribute{Name: name}
 	}
 	t.pos++ // "="
 	t.skipSpace()
-	if t.pos >= len(t.src) {
+	if t.pos >= len(t.src) || t.src[t.pos] == '>' {
+		// The standard's missing-attribute-value: an attribute with the empty
+		// string for its value, and the tag ends where it ends.
 		t.fail(at, "the attribute \""+name+"\" has no value")
-		return Attribute{}, false
+		return Attribute{Name: name}
 	}
 
 	switch q := t.src[t.pos]; q {
@@ -667,32 +757,37 @@ func (t *tokenizer) attribute(tag string) (Attribute, bool) {
 		}
 		if t.pos >= len(t.src) {
 			t.fail(at, "the value of \""+name+"\" is never closed")
-			return Attribute{Name: name, Value: t.decodeRefs(t.src[start:], start, true)}, true
+			return Attribute{Name: name, Value: t.attrValue(t.src[start:], start)}
 		}
-		v := t.decodeRefs(t.src[start:t.pos], start, true)
+		v := t.attrValue(t.src[start:t.pos], start)
 		t.pos++
-		return Attribute{Name: name, Value: v}, true
+		return Attribute{Name: name, Value: v}
 	}
 
-	// Unquoted. HTML allows it; the characters it forbids inside one are the
-	// ones that make the end ambiguous, and each is refused rather than guessed
-	// at.
+	// Unquoted. HTML allows it, and ends it at white space or ">". The
+	// characters it forbids inside one are the ones that make the end
+	// ambiguous; each is a parse error, and each is kept in the value, which is
+	// what every browser shows. Reported once for the value.
 	start := t.pos
+	reported := false
 	for t.pos < len(t.src) && !isSpace(t.src[t.pos]) && t.src[t.pos] != '>' {
-		switch t.src[t.pos] {
+		switch c := t.src[t.pos]; c {
 		case '"', '\'', '<', '=', '`':
-			t.fail(t.pos, fmt.Sprintf("%q cannot appear in an unquoted attribute value; quote it",
-				t.src[t.pos]))
-			t.skipTo('>')
-			return Attribute{}, false
+			if !reported {
+				reported = true
+				t.fail(t.pos, fmt.Sprintf("%q in the unquoted value of \"%s\" is part of the "+
+					"value, which is how HTML reads it; quote the value", c, name))
+			}
 		}
 		t.pos++
 	}
-	if t.pos == start {
-		t.fail(at, "the attribute \""+name+"\" has no value")
-		return Attribute{}, false
-	}
-	return Attribute{Name: name, Value: t.decodeRefs(t.src[start:t.pos], start, true)}, true
+	return Attribute{Name: name, Value: t.attrValue(t.src[start:t.pos], start)}
+}
+
+// attrValue is an attribute value's text: its references resolved and its NULs
+// replaced.
+func (t *tokenizer) attrValue(s string, off int) string {
+	return t.nuls(t.decodeRefs(s, off, true), off, "an attribute value", nulReplaced)
 }
 
 func (t *tokenizer) readName() string {
@@ -718,12 +813,24 @@ func (t *tokenizer) readName() string {
 
 // readAttrName reads an attribute name, which admits more characters than an
 // element name does.
-func (t *tokenizer) readAttrName() string {
+//
+// It is called at a byte that is not white space, "/" or ">", and it reads at
+// least that byte, which is the standard's rule: an "=" there begins the name
+// rather than a value. A quote or a "<" inside a name is a parse error and part
+// of the name, and is reported as the mistake it almost always is — a missing
+// space or a missing quote.
+func (t *tokenizer) readAttrName(tag string) string {
 	start := t.pos
+	reported := false
 	for t.pos < len(t.src) {
 		c := t.src[t.pos]
-		if isSpace(c) || c == '=' || c == '>' || c == '/' || c == '"' || c == '\'' || c == '<' {
+		if isSpace(c) || c == '>' || c == '/' || c == '=' && t.pos > start {
 			break
+		}
+		if (c == '"' || c == '\'' || c == '<' || c == '=') && !reported {
+			reported = true
+			t.fail(t.pos, fmt.Sprintf("%q in an attribute name of <%s> is part of the name, "+
+				"which is how HTML reads it; a space or a quote is missing", c, tag))
 		}
 		t.pos++
 	}

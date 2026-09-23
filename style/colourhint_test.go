@@ -26,27 +26,44 @@ func TestAColourAttributeSetsItsProperty(t *testing.T) {
 	}
 }
 
-// TestAColourAttributeThisCannotReadIsRefused.
+// TestALegacyColourValueIsReadAsHTMLReadsIt is HTML §2.3.6's "rules for
+// parsing a legacy colour value", which take almost any string: what is not a
+// hexadecimal digit becomes a zero, and the rest is padded, split in three and
+// read as red, green and blue. Every browser does this, so "<font
+// color=ff0000>" — the most common legacy spelling, with no "#" — is red.
 //
-// HTML's own rule is far wider: its "legacy colour value" takes any string at
-// all, strips what it cannot use and pads what is left, so "chucknorris" is a
-// colour and comes out #C00000. That algorithm is deliberately not here, and
-// what matters is which way the gap falls — a hint that refuses leaves the
-// property at the value a document not writing the attribute would have got,
-// and a hint that guesses paints the page a colour nobody asked for with nothing
-// to report it.
-func TestAColourAttributeThisCannotReadIsRefused(t *testing.T) {
-	for _, markup := range []string{
-		`<body bgcolor="chucknorris">x</body>`,
-		`<body bgcolor="#ffff">x</body>`,
-		`<body bgcolor="#gggggg">x</body>`,
-		`<body bgcolor="">x</body>`,
-		`<body bgcolor="rgb(1,2,3)">x</body>`,
+// The expected values are worked by hand from the algorithm's steps, and the
+// well-known ones are the ones every browser shows ("chucknorris" is #c00000).
+// This used to be a test that each of them was refused and left transparent,
+// which is a page no browser draws (audit C116).
+func TestALegacyColourValueIsReadAsHTMLReadsIt(t *testing.T) {
+	for _, tc := range []struct{ value, want string }{
+		{"ff0000", "#ff0000"},
+		{"ffffff", "#ffffff"},
+		{"chucknorris", "#c00000"},
+		{"#ffff", "#ffff00"},
+		{"#gggggg", "#000000"},
+		{"rgb(1,2,3)", "#001030"},
+		{"1", "#010000"},
+		{"#12345678901", "#125690"},
+		// Parts longer than eight keep their last eight (step 12), and zeros
+		// every part begins with go while a part is longer than two (step 13).
+		{"0123456789abcdef0123456789ab", "#23cd67"},
+		{"000100020003", "#010203"},
+		{"  lime  ", "lime"},
 	} {
-		doc := parseDoc(t, markup)
+		doc := parseDoc(t, `<body bgcolor="`+tc.value+`">x</body>`)
+		if got := styleOf(t, doc, nil, "body", "background-color"); got != tc.want {
+			t.Errorf("bgcolor=%q: background-color came out %q, want %q",
+				tc.value, got, tc.want)
+		}
+	}
+	// And the two it refuses: nothing at all, and "transparent", which step 3
+	// names.
+	for _, value := range []string{"", "   ", "transparent", "TRANSPARENT"} {
+		doc := parseDoc(t, `<body bgcolor="`+value+`">x</body>`)
 		if got := styleOf(t, doc, nil, "body", "background-color"); got != "transparent" {
-			t.Errorf("%s: background-color came out %q; a value this cannot read "+
-				"leaves the property at its initial transparent", markup, got)
+			t.Errorf("bgcolor=%q gave %q; it is not a colour", value, got)
 		}
 	}
 }

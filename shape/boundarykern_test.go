@@ -164,7 +164,7 @@ func TestTheBoundaryPairIsFoundThroughTheNeighboursGlyph(t *testing.T) {
 	}
 	// Stated on the ligature and on nothing else. An implementation pairing the
 	// characters would look for "n" before "f" and find nothing.
-	l := f.layoutFor(runScript("nfi"))
+	l := f.layoutFor(runScript("nfi"), nil)
 	l.kern = append(l.kern, kernLookup{
 		pairs: map[[2]int]pairAdjust{{left, lig[0].GID}: {firstAdvance: -100}},
 	})
@@ -209,7 +209,7 @@ func TestTheNeighboursShareOfThePairGoesToTheNeighboursRun(t *testing.T) {
 	// run's script rather than the face's own, which is where a font's pairs
 	// arrive once the script has selected among its features.
 	const units = -100
-	l := f.layoutFor(runScript(left + right))
+	l := f.layoutFor(runScript(left+right), nil)
 	l.kern = append(l.kern, kernLookup{
 		pairs: map[[2]int]pairAdjust{{lg, rg}: {secondAdvance: units}},
 	})

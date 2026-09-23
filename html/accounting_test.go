@@ -36,7 +36,7 @@ var discardedPrefixes = []string{
 func accountForEveryByte(t *testing.T, src string) {
 	t.Helper()
 
-	tk := newTokenizer(src)
+	tk := newTokenizer(src, false)
 
 	// The constructor consumes a leading byte order mark before any step runs:
 	// those three bytes are an encoding statement, not content. Every other

@@ -157,26 +157,25 @@ func TestPseudoNamesAreCaseInsensitive(t *testing.T) {
 		}
 	}
 
-	// The refusals fold too, or ":HOVER" slips through as an unknown name
-	// rather than being named as the interactive selector it is. What the
-	// finding *claims* is checked in TestDynamicSelectorsAreRefusedAndSaidSo;
-	// what matters here is that the name was recognised, which is the difference
-	// between the message naming the medium and the message naming a typo.
+	// The ones kept without matching fold too, or ":HOVER" is read as an
+	// unknown name and invalid rather than as the interactive selector it is —
+	// and an invalid selector takes its whole list with it. What the finding
+	// *claims* is checked in TestDynamicSelectorsMatchNothingAndSaySo; what
+	// matters here is that the name was recognised.
 	for _, input := range []string{"a:HOVER", "a:Hover", "a::SELECTION"} {
-		_, errs, ok := parseSel(t, input)
-		if ok {
-			t.Errorf("%q was accepted", input)
+		sels, errs, ok := parseSel(t, input)
+		if !ok || len(sels) != 1 {
+			t.Errorf("%q was refused, so its name was not recognised: %v", input, errs)
 			continue
+		}
+		ps := sels[0].Compounds[len(sels[0].Compounds)-1].Pseudos
+		if len(ps) != 1 || ps[0].Kind != PseudoNever {
+			t.Errorf("%q was read as %+v, want one selector that never matches", input, ps)
 		}
 		if len(errs) == 0 {
-			t.Errorf("%q was refused with no explanation", input)
-			continue
-		}
-		if strings.Contains(errs[0].Message, "no such") {
-			t.Errorf("%q was reported as an unknown name: %q", input, errs[0].Message)
+			t.Errorf("%q was kept with no explanation", input)
 		}
 	}
-
 	// A bare pseudo-element selects every element's box, so its compound is
 	// empty on purpose.
 	sels := mustParse(t, "::before")
@@ -318,12 +317,13 @@ func TestSpecificityOrders(t *testing.T) {
 	}
 }
 
-// TestDynamicSelectorsAreRefusedAndSaidSo is the subset boundary, which is the
+// TestDynamicSelectorsMatchNothingAndSaySo is the subset boundary, which is the
 // design decision this file exists to protect. A printed page has no pointer, no
-// focus and no history, so these have no answer — and answering "false" quietly
-// is the failure §6.3 is written about, because the page then looks plausible
-// and is wrong.
-func TestDynamicSelectorsAreRefusedAndSaidSo(t *testing.T) {
+// focus and no history, so these select nothing — and they are *valid* CSS,
+// which is what keeps the rest of a rule's selector list standing. Each is kept
+// as a simple selector that never matches, and each is reported, so an author is
+// told the rule did nothing here.
+func TestDynamicSelectorsMatchNothingAndSaySo(t *testing.T) {
 	dynamic := []string{
 		"a:hover", "a:focus", "a:active", "input:checked",
 		"input:disabled", "input:enabled", ":target", "input:valid",
@@ -332,20 +332,22 @@ func TestDynamicSelectorsAreRefusedAndSaidSo(t *testing.T) {
 	}
 	for _, input := range dynamic {
 		sels, errs, ok := parseSel(t, input)
-		if ok || len(sels) != 0 {
-			t.Errorf("%q was accepted, and a page laid out once cannot answer it", input)
+		if !ok || len(sels) != 1 {
+			t.Errorf("%q was refused; it is a valid selector that matches nothing "+
+				"here, and refusing it takes the rest of its list with it: %v", input, errs)
 			continue
 		}
 		if len(errs) == 0 {
-			t.Errorf("%q was refused with no explanation", input)
+			t.Errorf("%q was kept with no explanation", input)
 			continue
 		}
 		// The name has to be recognised rather than read as a typo: the author
 		// wrote correct CSS, and telling them it is a syntax error sends them
 		// looking for something that is not there.
-		if strings.Contains(errs[0].Message, "no such") {
-			t.Errorf("%q was reported as an unknown name (%q), and it is correct "+
-				"CSS this engine chooses not to apply", input, errs[0].Message)
+		if strings.Contains(errs[0].Message, "is not implemented\"") ||
+			!strings.Contains(errs[0].Message, "matches nothing") {
+			t.Errorf("%q was reported as %q, which does not say the selector "+
+				"was understood and matches nothing", input, errs[0].Message)
 		}
 	}
 
@@ -374,7 +376,7 @@ func TestDynamicSelectorsAreRefusedAndSaidSo(t *testing.T) {
 	for _, input := range []string{
 		"input:checked", "input:disabled", "input:enabled", "input:valid",
 		"input:placeholder-shown", "input:required", ":defined",
-		"input::placeholder",
+		"input::placeholder", "p:has(img)", "p:dir(rtl)",
 	} {
 		_, errs, _ := parseSel(t, input)
 		if len(errs) == 0 || !errs[0].Unsupported {
@@ -391,7 +393,16 @@ func TestDynamicSelectorsAreRefusedAndSaidSo(t *testing.T) {
 		t.Errorf("the message for :hover is %q, and does not say why it cannot apply",
 			errs[0].Message)
 	}
-	_, errs, _ = parseSel(t, "a:nonesuch")
+	_, errs, _ = parseSel(t, "input:checked")
+	if strings.Contains(errs[0].Message, "interact") {
+		t.Errorf("the message for :checked is %q, which blames interaction for "+
+			"what the markup says", errs[0].Message)
+	}
+	_, errs, ok := parseSel(t, "a:nonesuch")
+	if ok {
+		t.Error("an invented pseudo-class was accepted; a browser refuses it, and " +
+			"so does this")
+	}
 	if strings.Contains(errs[0].Message, "interact") {
 		t.Errorf("the message for an invented pseudo-class is %q, "+
 			"which blames interactivity for a typo", errs[0].Message)
@@ -430,15 +441,18 @@ func TestStaticSelectorsAreKept(t *testing.T) {
 func TestForgivingSelectorLists(t *testing.T) {
 	// :is() and :where() survive an argument this engine cannot use.
 	for _, input := range []string{
-		"a:is(.c, :hover)",
-		"a:where(:hover, .c)",
-		"a:is(:hover, .c, :focus)",
+		"a:is(.c, :nonesuch)",
+		"a:where(:nonesuch, .c)",
+		"a:is(.c, ::before)",
 	} {
 		sels, errs, ok := parseSel(t, input)
 		if !ok || len(sels) != 1 {
 			t.Errorf("%q was refused, and a forgiving list should have dropped "+
 				"the argument and stood: %v", input, errs)
 			continue
+		}
+		if n := len(sels[0].Compounds[0].Pseudos[0].Args); n != 1 {
+			t.Errorf("%q kept %d arguments, want the one it can use", input, n)
 		}
 		// Dropped, but still reported: the author is told the rule is narrower
 		// than they wrote.
@@ -449,18 +463,31 @@ func TestForgivingSelectorLists(t *testing.T) {
 
 	// :not() does not.
 	for _, input := range []string{
-		"a:not(.c, :hover)",
-		"a:not(:hover)",
+		"a:not(.c, :nonesuch)",
+		"a:not(:nonesuch)",
+		"a:not(::before)",
 	} {
 		if sels, _, ok := parseSel(t, input); ok || len(sels) != 0 {
 			t.Errorf("%q was accepted; forgiving :not() widens what the rule matches", input)
 		}
 	}
 
-	// And an :is() with nothing usable left is refused rather than kept as a
-	// selector that matches nothing.
-	if _, _, ok := parseSel(t, "a:is(:hover)"); ok {
-		t.Error("\"a:is(:hover)\" was accepted, and there is nothing left in it")
+	// An :is() with nothing usable left is a selector that matches nothing, the
+	// same as an empty one — valid, so the rest of its list stands, and each
+	// dropped argument is reported.
+	for _, input := range []string{"a:is(:nonesuch)", "a:where(::before)"} {
+		sels, errs, ok := parseSel(t, input)
+		if !ok || len(sels) != 1 {
+			t.Errorf("%q was refused; a browser keeps it as a selector that "+
+				"matches nothing: %v", input, errs)
+			continue
+		}
+		if args := sels[0].Compounds[0].Pseudos[0].Args; len(args) != 0 {
+			t.Errorf("%q kept %d arguments, and none of them is usable", input, len(args))
+		}
+		if len(errs) == 0 {
+			t.Errorf("%q dropped every argument silently", input)
+		}
 	}
 }
 
@@ -476,6 +503,7 @@ func TestMalformedSelectorsAreRefused(t *testing.T) {
 		"a::before::after", "a::before b",
 		"a:not()", // nothing to negate
 		"a:nth-child()", "a:nth-child(x)", "a:nth-child(2n of)",
+		"li:nth-child(+-n+3)", // no "+" before a "-n" (CSS Syntax 3 §6.2)
 		"a:lang()", "a:root(x)",
 	}
 	for _, input := range malformed {

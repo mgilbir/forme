@@ -108,8 +108,8 @@ func TestTheDeclarationBesideItStillCascades(t *testing.T) {
 	}
 	got := Apply(doc, []Sheet{{Origin: OriginAuthor, Rules: rules}})
 	cs := got.Styles[elementFor(t, doc, "#target")]
-	if cs["tab-size"] != "100px" || cs["color"] != "red" {
+	if cs.Get("tab-size") != "100px" || cs.Get("color") != "red" {
 		t.Errorf("the declarations beside the prefixed one came out %q and %q",
-			cs["tab-size"], cs["color"])
+			cs.Get("tab-size"), cs.Get("color"))
 	}
 }

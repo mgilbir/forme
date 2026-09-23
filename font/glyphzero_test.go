@@ -8,7 +8,7 @@ import (
 
 // Glyph 0 is .notdef, and .notdef is an answer.
 //
-// TrueTypeGID has three outcomes and they are not two: a code the font maps to
+// trueTypeGID has three outcomes and they are not two: a code the font maps to
 // .notdef and a font this reader cannot ask both come back with glyph 0, and
 // only the second is ignorance. A consumer testing `gid == 0` merges a finding
 // with the absence of one — which is what issue #47 records happening downstream.
@@ -50,9 +50,9 @@ func TestNotdefIsAnAnswerAndNotAnAbsence(t *testing.T) {
 		{"a font with no readable cmap", noCmap, false, 'A', "A", 0, false},
 		{"a symbolic lookup with no symbol cmap", withCmap, true, 'A', "A", 0, false},
 	} {
-		gid, ok := TrueTypeGID(tc.fp, tc.symbolic, tc.code, tc.name)
+		gid, ok := trueTypeGID(tc.fp, tc.symbolic, tc.code, tc.name)
 		if gid != tc.wantGID || ok != tc.wantOK {
-			t.Errorf("%s: TrueTypeGID = (%d, %v), want (%d, %v)",
+			t.Errorf("%s: trueTypeGID = (%d, %v), want (%d, %v)",
 				tc.what, gid, ok, tc.wantGID, tc.wantOK)
 		}
 	}
@@ -80,7 +80,7 @@ func TestGlyphZeroAloneCannotTellThemApart(t *testing.T) {
 	}{
 		{withCmap, "B"}, {withCmap, ""}, {noCmap, "A"},
 	} {
-		gid, ok := TrueTypeGID(tc.fp, false, 'B', tc.name)
+		gid, ok := trueTypeGID(tc.fp, false, 'B', tc.name)
 		if gid != 0 {
 			t.Fatalf("the fixture stopped producing glyph 0: got %d", gid)
 		}

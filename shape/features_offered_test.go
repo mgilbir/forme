@@ -80,7 +80,7 @@ func TestEveryListedFeatureIsOneShapingActsOn(t *testing.T) {
 		}
 		for _, tag := range listed {
 			if len(f.layout.featureLookups[tag]) == 0 {
-				t.Errorf("%s lists %q, and applyNamedFeatures has no lookups "+
+				t.Errorf("%s lists %q, and the plan would find no lookups "+
 					"for it, so asking would do nothing", name, tag)
 			}
 		}

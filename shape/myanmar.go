@@ -40,16 +40,18 @@ import "sort"
 //     into something else; this package does not track which glyphs those were,
 //     so a font that composes a consonant into a mark in 'ccmp' has that mark
 //     read as a consonant.
-//   - Zawgyi, the pre-Unicode encoding that puts Myanmar glyphs at Myanmar
-//     characters' code points and is shaped by not shaping at all. Text in it
-//     is set by these rules, which is what a shaper that cannot tell the two
-//     apart must do.
 //   - Canonical ordering of the marks in a syllable, as in indic.go.
 //
 // # Where this runs
 //
 // In place of the default substitutions, from ShapeGlyphs, through
-// shapeSyllabic.
+// shapeSyllabic — for a run whose font states its Myanmar rules under 'mym2',
+// or states none at all. A font whose rules are under 'mymr', the tag from
+// before this model was specified, or only under 'DFLT' or 'latn', is set by the
+// default model instead: it was written for text in the order it is stored, and
+// the Zawgyi-era fonts, which put glyphs at Myanmar code points in drawing order,
+// are exactly that case. The font's tag is how HarfBuzz tells the two apart, and
+// it is how this package does — see categorize.
 
 // The Myanmar characters the rules name directly.
 const (
@@ -171,7 +173,9 @@ func myanmarCategory(r rune) indicCat {
 }
 
 // myanmarBasicFeatures are applied to one syllable at a time, in this order,
-// each to the whole of it.
+// each to the whole of it and each a stage of its own. Their lookups see a zero
+// width joiner in their input and step over a non-joiner in their context,
+// which is how HarfBuzz enables them — see collectMyanmar.
 //
 // Unlike the Indic and Khmer models there are no masks: the specification names
 // no stretch of the syllable any of these is for, so each sees the syllable it
@@ -183,37 +187,21 @@ func myanmarCategory(r rune) indicCat {
 // are built from what is left.
 var myanmarBasicFeatures = []string{"rphf", "pref", "blwf", "pstf"}
 
-// myanmarRunFeatures are applied to the whole run once every syllable is in
-// drawing order.
-//
-// 'liga' is here, and is not in indic.go or khmer.go. That is not an oversight
-// in either direction: the Myanmar specification names no ligature feature of
-// its own, so a Myanmar font that wants one declares it under 'liga' and means
-// it, whereas the Indic and Khmer specifications both name their own and a
-// font's 'liga' is then something else.
-var myanmarRunFeatures = []struct {
-	tag    string
-	manual bool
-}{
-	{"pres", true},
-	{"abvs", true},
-	{"blws", true},
-	{"psts", true},
-	{"rlig", false},
-	{"liga", false},
-	{"clig", false},
-	{"calt", false},
-	{"rclt", false},
-}
-
 // shapeMyanmar is the whole Myanmar pass: it replaces the default substitutions
 // for a run it handles.
-func (sh shaper) shapeMyanmar(buf []Glyph, runes []rune) []Glyph {
+func (sh shaper) shapeMyanmar(buf []Glyph, runes []rune, p *plan) []Glyph {
 	info := make([]indicInfo, len(runes))
-	cats := make([]indicCat, len(runes))
 	for i, r := range runes {
 		info[i].cat = myanmarCategory(r)
 		info[i].ignorable = hiddenAfterShaping(r)
+	}
+	hooks := indicHooks(&info)
+	// The stages before the syllables are cut, which are the whole run's.
+	for s := 0; s < p.syllables; s++ {
+		buf, _, _ = sh.applyLookups(buf, p.stage(s), 0, len(buf), 0, len(buf), hooks)
+	}
+	cats := make([]indicCat, len(info))
+	for i := range info {
 		cats[i] = info[i].cat
 	}
 
@@ -238,61 +226,49 @@ func (sh shaper) shapeMyanmar(buf []Glyph, runes []rune) []Glyph {
 			syllable, record = sh.insertGlyphAt(syllable, record, 0, dotted,
 				indicInfo{cat: catDottedCircle, pos: posBaseC})
 		}
-		syllable, _ = sh.shapeMyanmarSyllable(syllable, &record, 0, len(syllable))
+		syllable = sh.shapeMyanmarSyllable(syllable, &record, p)
 		out = append(out, syllable...)
 		outInfo = append(outInfo, record...)
 	}
 	buf = append(out, buf[prev:]...)
 	info = append(outInfo, info[prev:]...)
 
-	for _, f := range myanmarRunFeatures {
-		lookups := sh.l.featureLookups[f.tag]
-		if len(lookups) == 0 {
-			continue
-		}
-		buf, _ = sh.applyIndicFeature(buf, &info, lookups, 0, len(buf), 0, len(buf), f.manual)
+	// The presentation features, and the ligatures and contextual alternates
+	// every script gets, over the whole run. 'liga' is among them, as it is
+	// not in the Indic and Khmer models: the Myanmar specification names no
+	// ligature feature of its own, so a Myanmar font that wants one declares it
+	// under 'liga' and means it.
+	for s := p.after; s < len(p.stages); s++ {
+		buf, _, _ = sh.applyLookups(buf, p.stage(s), 0, len(buf), 0, len(buf), hooks)
 	}
 
-	return dropGlyphs(buf, func(i int) bool {
+	return dropUnsubstituted(buf, func(i int) bool {
 		return i < len(info) && (indicIsJoiner(info[i].cat) || info[i].ignorable)
 	})
 }
 
 // shapeMyanmarSyllable puts one syllable into drawing order and applies the
-// features written for it, returning the buffer and how much its length
-// changed.
-func (sh shaper) shapeMyanmarSyllable(buf []Glyph, info *[]indicInfo, start, end int) ([]Glyph, int) {
-	total := 0
-	grow := func(d int) { total += d; end += d }
+// stages written for it, returning the syllable.
+func (sh shaper) shapeMyanmarSyllable(buf []Glyph, info *[]indicInfo, p *plan) []Glyph {
+	hooks := indicHooks(info)
+	apply := func(from, to int) {
+		for s := from; s < to; s++ {
+			buf, _, _ = sh.applyLookups(buf, p.stage(s), 0, len(buf), 0, len(buf), hooks)
+		}
+	}
 
 	// 'locl' and then 'ccmp', before the reordering: the one corrects
 	// letterforms for the language and the other composes and decomposes, and
 	// the reordering is written against what they produce. They are applied per
 	// syllable so that neither can join one syllable to the next.
-	for _, tag := range []string{"locl", "ccmp"} {
-		lookups := sh.l.featureLookups[tag]
-		if len(lookups) == 0 {
-			continue
-		}
-		var d int
-		buf, d = sh.applyIndicFeature(buf, info, lookups, start, end, start, end, false)
-		grow(d)
-	}
+	apply(p.syllables, p.reorder)
 
-	myanmarReorder(buf, *info, start, end)
+	myanmarReorder(buf, *info, 0, len(buf))
 
-	for _, tag := range myanmarBasicFeatures {
-		lookups := sh.l.featureLookups[tag]
-		if len(lookups) == 0 {
-			continue
-		}
-		var d int
-		buf, d = sh.applyIndicFeature(buf, info, lookups, start, end, start, end, true)
-		grow(d)
-	}
+	apply(p.reorder, p.after)
 
-	oneCluster(buf, start, end)
-	return buf, total
+	oneCluster(buf, 0, len(buf))
+	return buf
 }
 
 // myanmarIsBase reports whether a character can be a syllable's base.

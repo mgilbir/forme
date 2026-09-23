@@ -19,7 +19,7 @@
 // by category rather than by combining class (a Devanagari vowel sign is a
 // spacing mark whose combining class is zero).
 //
-//	go run ./cmd/gencanonical <UnicodeData.txt> <CompositionExclusions.txt> > shape/canonical.go
+//	go run ./cmd/gencanonical -version <X.Y.Z> <UnicodeData.txt> <CompositionExclusions.txt> > shape/canonical.go
 //
 // # Which compositions are excluded
 //
@@ -52,12 +52,15 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"flag"
 	"fmt"
 	"go/format"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/mgilbir/forme/cmd/internal/ucd"
 )
 
 // maxRune is one past the last code point.
@@ -79,39 +82,53 @@ const (
 )
 
 // reorderedClasses are the combining classes shape/normalize.go names in its
-// reordering table, which permutes some of them so that marks come out in the
-// order a font draws them rather than the order Unicode numbers them.
+// reordering table, reorderClasses, which permutes them so that marks come out
+// in the order a font draws them rather than the order Unicode numbers them.
 //
 // The generator fails if the data no longer gives any character one of these.
 // That is the check that matters here, and it is the same one genbidi makes: an
 // entry for a class nothing has is a rule that can never fire, and a class
 // renamed or retired upstream would leave it silently dead — text that used to
 // be reordered would quietly stop being.
+//
+// The list said it was normalize.go's and was not: it named nine classes that
+// table does not — the nukta and the virama, two of Arabic's, Syriac's, one of
+// Thai's, Lao's two and one of Tibetan's — so the check guarded rules that do
+// not exist. cmd/generators_test.go now reads both
+// lists and requires them to be the same.
 var reorderedClasses = []int{
-	7, 9, // nukta, virama
 	10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, // Hebrew
-	27, 28, 29, 30, 31, 32, 33, 34, 35, // Arabic
-	36,     // Syriac
+	27, 28, 29, 30, 31, 32, 33, // Arabic
 	84, 91, // Telugu length marks
-	103, 107, // Thai
-	118, 122, // Lao
-	129, 130, 132, // Tibetan
+	103,      // Thai
+	130, 132, // Tibetan
 }
 
 type charData struct {
-	ccc      int
-	mark     bool
-	decomp   []rune // canonical only, empty when there is none
-	assigned bool
+	ccc  int
+	mark bool
+	// nonSpacing is General_Category Mn, the one of the three mark categories
+	// that a glyph class is inferred from when a font states none: see
+	// classOfRune in package shape.
+	nonSpacing bool
+	decomp     []rune // canonical only, empty when there is none
+	assigned   bool
 }
 
 func main() {
-	if len(os.Args) != 3 {
-		fmt.Fprintln(os.Stderr, "usage: gencanonical <UnicodeData.txt> <CompositionExclusions.txt>")
+	version := flag.String("version", "", "the Unicode version the files came from")
+	flag.Parse()
+	args := flag.Args()
+	if len(args) != 2 {
+		fmt.Fprintln(os.Stderr, "usage: gencanonical -version <X.Y.Z> <UnicodeData.txt> <CompositionExclusions.txt>")
 		os.Exit(2)
 	}
-	chars := readUnicodeData(os.Args[1])
-	version, excluded := readExclusions(os.Args[2])
+	if err := ucd.Check(*version, args...); err != nil {
+		fmt.Fprintln(os.Stderr, "gencanonical:", err)
+		os.Exit(1)
+	}
+	chars := readUnicodeData(args[0])
+	excluded := readExclusions(args[1])
 
 	checkHangul(chars)
 
@@ -162,9 +179,10 @@ package shape
 // Unicode %s.
 //
 // %d ranges carry the two properties a cluster is read by — the canonical
-// combining class, and whether the character is a combining mark. A character no
-// range names is an unmarked starter, which is the great majority of the code
-// space, so absence from the table is the answer for it.
+// combining class, and whether the character is a combining mark — and of
+// those, whether it is a non-spacing one. A character no range names is an
+// unmarked starter, which is the great majority of the code space, so absence
+// from the table is the answer for it.
 //
 // %d canonical decompositions, one step at a time as Unicode states them, and
 // %d compositions, which are the decompositions that may be put back together:
@@ -173,16 +191,17 @@ package shape
 
 // charClass is a run of code points sharing a combining class and a category.
 type charClass struct {
-	lo, hi rune
-	ccc    uint8
-	mark   bool
+	lo, hi     rune
+	ccc        uint8
+	mark       bool
+	nonSpacing bool
 }
 
 // charClasses is sorted by code point, so a lookup can binary-search.
 var charClasses = [...]charClass{
-`, version, len(classes), len(decomps), len(comps))
+`, *version, len(classes), len(decomps), len(comps))
 	for _, c := range classes {
-		fmt.Fprintf(w, "\t{0x%04X, 0x%04X, %d, %t},\n", c.lo, c.hi, c.ccc, c.mark)
+		fmt.Fprintf(w, "\t{0x%04X, 0x%04X, %d, %t, %t},\n", c.lo, c.hi, c.ccc, c.mark, c.nonSpacing)
 	}
 	fmt.Fprint(w, `}
 
@@ -257,9 +276,10 @@ func checkHangul(chars map[rune]charData) {
 }
 
 type classRange struct {
-	lo, hi rune
-	ccc    int
-	mark   bool
+	lo, hi     rune
+	ccc        int
+	mark       bool
+	nonSpacing bool
 }
 
 // collapseClasses turns the per-character properties into runs, dropping the
@@ -272,11 +292,12 @@ func collapseClasses(chars map[rune]charData) []classRange {
 		if c.ccc == 0 && !c.mark {
 			continue
 		}
-		if n := len(out); n > 0 && out[n-1].hi+1 == r && out[n-1].ccc == c.ccc && out[n-1].mark == c.mark {
+		if n := len(out); n > 0 && out[n-1].hi+1 == r && out[n-1].ccc == c.ccc &&
+			out[n-1].mark == c.mark && out[n-1].nonSpacing == c.nonSpacing {
 			out[n-1].hi = r
 			continue
 		}
-		out = append(out, classRange{r, r, c.ccc, c.mark})
+		out = append(out, classRange{r, r, c.ccc, c.mark, c.nonSpacing})
 	}
 	return out
 }
@@ -387,6 +408,7 @@ func readUnicodeData(path string) map[rune]charData {
 		case "Mn", "Mc", "Me":
 			c.mark = true
 		}
+		c.nonSpacing = strings.TrimSpace(fields[2]) == "Mn"
 		// A decomposition beginning with a tag in angle brackets is a
 		// compatibility one, which says how a character may be *approximated*
 		// rather than what it is written as. Only the canonical ones are wanted:
@@ -425,9 +447,8 @@ func readUnicodeData(path string) map[rune]charData {
 	return out
 }
 
-// readExclusions parses CompositionExclusions.txt: the Unicode version it
-// declares, and the code points it lists.
-func readExclusions(path string) (string, []rune) {
+// readExclusions parses CompositionExclusions.txt: the code points it lists.
+func readExclusions(path string) []rune {
 	f, err := os.Open(path)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -435,22 +456,10 @@ func readExclusions(path string) (string, []rune) {
 	}
 	defer f.Close()
 
-	version := "unknown"
 	var out []rune
 	sc := bufio.NewScanner(f)
-	first := true
 	for sc.Scan() {
 		line := sc.Text()
-		if first {
-			// The first line names the file, and with it the version:
-			// "# CompositionExclusions-17.0.0.txt".
-			first = false
-			if i := strings.Index(line, "CompositionExclusions-"); i >= 0 {
-				if j := strings.Index(line[i:], ".txt"); j > 0 {
-					version = line[i+len("CompositionExclusions-") : i+j]
-				}
-			}
-		}
 		if i := strings.IndexByte(line, '#'); i >= 0 {
 			line = line[:i]
 		}
@@ -468,14 +477,10 @@ func readExclusions(path string) (string, []rune) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	if version == "unknown" {
-		fmt.Fprintln(os.Stderr, "gencanonical: CompositionExclusions.txt does not name its version in the first line")
-		os.Exit(1)
-	}
 	if len(out) == 0 {
 		fmt.Fprintln(os.Stderr, "gencanonical: CompositionExclusions.txt listed no characters")
 		os.Exit(1)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
-	return version, out
+	return out
 }

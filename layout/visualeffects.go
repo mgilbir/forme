@@ -161,7 +161,7 @@ func (l *layouter) resolveClips(root *Fragment) {
 			// §11.1.1 says the content is clipped to the element's *padding*
 			// edge, which is why a scrolled panel shows its content running
 			// under its own padding and stopping at its border.
-			content = self.with(f.PaddingRect())
+			content = self.with(overflowClipRect(f))
 			depth++
 		}
 		if self.Active || content.Active {
@@ -264,9 +264,10 @@ func clipDepthOf(c Clip) int {
 //     anything. Removing one changed nothing in the unit tests and nothing in
 //     the suite. overflow-applies-to-001's third case passes for that reason
 //     rather than because of a check.
-//   - A block-level box with a non-visible overflow has already been made a
-//     formatting-context root by box.go, so "block-level and plain flow" is
-//     unreachable here.
+//   - A block-level box that is a scroll container has already been made a
+//     formatting-context root by box.go. One with "overflow: clip" has not —
+//     clip establishes no formatting context — and it is a block container,
+//     which the property applies to, so it clips here like any other.
 //   - A table column and a column group do get fragments, and clipping them is
 //     unobservable: a column box has no content and no descendants, and the
 //     cells whose width it settles belong to the rows.
@@ -282,7 +283,7 @@ func (l *layouter) overflowClips(b *Box) bool {
 	if b == nil || b.Element == nil {
 		return false
 	}
-	if !overflowIsScrollable(b.Style) {
+	if !overflowClipsContent(b.Style) {
 		return false
 	}
 	switch b.Inner {
@@ -294,6 +295,31 @@ func (l *layouter) overflowClips(b *Box) bool {
 	}
 	return true
 }
+
+// overflowClipRect is the rectangle a box's overflow cuts its content to: its
+// padding box on each axis that clips, and nothing on an axis that does not.
+//
+// Nothing, rather than the padding box on both, because "overflow: clip" may be
+// written on one axis with the other left visible, and then the content runs on
+// past the box along that axis. A rectangle has no way to be open-ended, so the
+// open axis is given an extent no page reaches — clipUnbounded either side of
+// the box — which is the same as not clipping it at all.
+func overflowClipRect(f *Fragment) Rect {
+	r := f.PaddingRect()
+	x, y := overflowClipsAxes(f.Box.Style)
+	if !x {
+		r.X, r.W = r.X.Sub(clipUnbounded), r.W.Add(clipUnbounded.Mul(2))
+	}
+	if !y {
+		r.Y, r.H = r.Y.Sub(clipUnbounded), r.H.Add(clipUnbounded.Mul(2))
+	}
+	return r
+}
+
+// clipUnbounded is the reach of an axis that does not clip: a quarter of the
+// largest length a layout unit holds, so that the rectangle it makes can be
+// added to and compared without overflowing.
+const clipUnbounded = style.MaxUnit / 4
 
 // propagatesOverflow reports whether a box's overflow goes to the viewport
 // instead of clipping the box.
@@ -308,7 +334,7 @@ func (l *layouter) propagatesOverflow(b *Box) bool {
 	// A <body> whose parent is the root. Its overflow propagates only when the
 	// root did not use its own — otherwise the root's has already gone to the
 	// viewport and the body's applies to the body.
-	return !overflowIsScrollable(b.Parent.Style)
+	return !overflowClipsContent(b.Parent.Style)
 }
 
 func elementName(b *Box) string {
@@ -336,7 +362,7 @@ func (l *layouter) clipRectOf(f *Fragment) Clip {
 	// feature for the documents that do not use it. It decides nothing —
 	// planted, and parseClipShape refuses a bare "auto" anyway, because it is
 	// not a rect().
-	raw := strings.TrimSpace(b.Style["clip"])
+	raw := strings.TrimSpace(b.Style.Get("clip"))
 	if raw == "" || strings.EqualFold(raw, "auto") {
 		return Clip{}
 	}

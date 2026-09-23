@@ -1,6 +1,7 @@
 package style
 
 import (
+	"math"
 	"strings"
 
 	"github.com/mgilbir/forme/css"
@@ -61,6 +62,7 @@ func evalCalc(vals []css.ComponentValue, ctx LengthContext) (Length, bool) {
 	if !ok || len(skipSpace(rest)) != 0 || t.isNumber {
 		return Length{}, false
 	}
+	t.pct = censored(t.pct)
 	if t.pct == 0 {
 		return Length{Kind: LengthAbsolute, Value: t.abs}, true
 	}
@@ -144,6 +146,34 @@ func calcProduct(vals []css.ComponentValue, ctx LengthContext) (calcTerm, []css.
 		}
 		rest = more
 	}
+}
+
+// censored is CSS Values 4 §10.9 for the percentage half of a finished
+// expression: "If a top-level calculation would produce a value whose numeric
+// part is NaN, it instead act as though the numeric part is 0", and one that
+// would be infinite is the largest value of its sign.
+//
+// Every number an expression starts from is finite — the tokenizer clamps what
+// it reads — but the arithmetic between them is a float's: "calc(1e308% * 10)"
+// is an infinity and taking it from itself is NaN. The absolute half cannot do
+// either, because a length is a Unit and a Unit saturates. The percentage half
+// is a float64 carried to layout as one, and a NaN there is a percentage every
+// comparison in a table's column widths lets through.
+//
+// Only at the top, as the specification says: inside the expression an
+// infinity has to be able to meet another and cancel to NaN, or a clamp in
+// the middle would make "calc(x * 10 - x * 10)" come out as something other
+// than what it is.
+func censored(v float64) float64 {
+	switch {
+	case math.IsNaN(v):
+		return 0
+	case math.IsInf(v, 1):
+		return math.MaxFloat64
+	case math.IsInf(v, -1):
+		return -math.MaxFloat64
+	}
+	return v
 }
 
 // calcValue is one operand: a number, a length, a percentage, a parenthesised

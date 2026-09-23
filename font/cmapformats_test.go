@@ -23,7 +23,7 @@ import (
 // second code of the range rather than passing by coincidence.
 func TestCmapFormat13MapsEveryCodeToOneGlyph(t *testing.T) {
 	groups := [][3]uint32{{0x0041, 0x0045, 700}}
-	m13, _ := ParseCmapSubtable(fonttest.CmapFormat13(groups), generousCmapWork)
+	m13, _ := parseCmapSubtableUnder(fonttest.CmapFormat13(groups), generousCmapWork)
 	if len(m13) != 5 {
 		t.Fatalf("format 13: %d entries, want the five codes U+0041..U+0045: %v", len(m13), m13)
 	}
@@ -35,7 +35,7 @@ func TestCmapFormat13MapsEveryCodeToOneGlyph(t *testing.T) {
 
 	// And the same bytes as a format 12 walk the glyph ids, so this is not
 	// passing because the parser ignores startGlyphID.
-	m12, _ := ParseCmapSubtable(fonttest.CmapFormat12(groups), generousCmapWork)
+	m12, _ := parseCmapSubtableUnder(fonttest.CmapFormat12(groups), generousCmapWork)
 	for c := rune(0x41); c <= 0x45; c++ {
 		if want := 700 + int(c-0x41); m12[c] != want {
 			t.Errorf("format 12: cmap[U+%04X] = %d, want %d", c, m12[c], want)
@@ -46,7 +46,7 @@ func TestCmapFormat13MapsEveryCodeToOneGlyph(t *testing.T) {
 // TestCmapFormat13Astral: like format 12, format 13 carries 32-bit codes, and
 // reaching past the BMP is most of why a font would use it.
 func TestCmapFormat13Astral(t *testing.T) {
-	m, _ := ParseCmapSubtable(fonttest.CmapFormat13([][3]uint32{
+	m, _ := parseCmapSubtableUnder(fonttest.CmapFormat13([][3]uint32{
 		{0x1F600, 0x1F602, 42},
 	}), generousCmapWork)
 	if len(m) != 3 || m[0x1F600] != 42 || m[0x1F601] != 42 || m[0x1F602] != 42 {
@@ -70,7 +70,7 @@ func TestCmapFormat13Budget(t *testing.T) {
 	done := make(chan int, 1)
 	start := time.Now()
 	go func() {
-		m, _ := ParseCmapSubtable(b, generousCmapWork)
+		m, _ := parseCmapSubtableUnder(b, generousCmapWork)
 		done <- len(m)
 	}()
 	select {
@@ -83,7 +83,7 @@ func TestCmapFormat13Budget(t *testing.T) {
 			t.Errorf("expanded to %d entries, want at most %d", n, 1<<18)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatalf("ParseCmapSubtable did not terminate within the work budget")
+		t.Fatalf("parseCmapSubtableUnder did not terminate within the work budget")
 	}
 }
 
@@ -91,7 +91,7 @@ func TestCmapFormat13Budget(t *testing.T) {
 // because the mappings it did read are correct but the ones it did not are
 // unknown — and a caller that reads them as absent reports a font-wide fault.
 func TestCmapFormat13ReportsItsBudget(t *testing.T) {
-	m, partial := ParseCmapSubtable(fonttest.CmapFormat13([][3]uint32{{0, 0x10FFFF, 9}}), 4096)
+	m, partial := parseCmapSubtableUnder(fonttest.CmapFormat13([][3]uint32{{0, 0x10FFFF, 9}}), 4096)
 	if !partial {
 		t.Errorf("a group of 0x110000 codes read under a 4096 budget reported complete")
 	}
@@ -116,7 +116,7 @@ func TestCmapFormat8IsReadAsItsGroups(t *testing.T) {
 	}
 
 	for name, b := range map[string][]byte{"is32 all zero": zeros, "is32 all one": ones} {
-		m, _ := ParseCmapSubtable(b, generousCmapWork)
+		m, _ := parseCmapSubtableUnder(b, generousCmapWork)
 		if len(m) != len(want) {
 			t.Errorf("%s: %d entries, want %d: %v", name, len(m), len(want), m)
 		}
@@ -131,7 +131,7 @@ func TestCmapFormat8IsReadAsItsGroups(t *testing.T) {
 // TestCmapFormat10Runs: the 32-bit twin of format 6. A glyph id of zero is
 // .notdef and is not a mapping, exactly as in format 6.
 func TestCmapFormat10Runs(t *testing.T) {
-	m, _ := ParseCmapSubtable(fonttest.CmapFormat10(0x1F600, []uint16{5, 0, 7}), generousCmapWork)
+	m, _ := parseCmapSubtableUnder(fonttest.CmapFormat10(0x1F600, []uint16{5, 0, 7}), generousCmapWork)
 	if len(m) != 2 || m[0x1F600] != 5 || m[0x1F602] != 7 {
 		t.Errorf("format 10: got %v, want U+1F600->5 and U+1F602->7 with the .notdef dropped", m)
 	}
@@ -141,13 +141,13 @@ func TestCmapFormat10Runs(t *testing.T) {
 // rather than recorded under a key that is not a character. The run only climbs,
 // so everything after the first out-of-range code goes too.
 func TestCmapFormat10PastUnicode(t *testing.T) {
-	m, _ := ParseCmapSubtable(fonttest.CmapFormat10(0x10FFFE, []uint16{1, 2, 3, 4}), generousCmapWork)
+	m, _ := parseCmapSubtableUnder(fonttest.CmapFormat10(0x10FFFE, []uint16{1, 2, 3, 4}), generousCmapWork)
 	if len(m) != 2 || m[0x10FFFE] != 1 || m[0x10FFFF] != 2 {
 		t.Errorf("format 10 past Unicode: got %v, want only U+10FFFE->1 and U+10FFFF->2", m)
 	}
 
 	// A startCharCode past Unicode maps nothing at all, and "nothing" is nil.
-	if m, _ := ParseCmapSubtable(fonttest.CmapFormat10(0xFFFFFF00, []uint16{1, 2}), generousCmapWork); m != nil {
+	if m, _ := parseCmapSubtableUnder(fonttest.CmapFormat10(0xFFFFFF00, []uint16{1, 2}), generousCmapWork); m != nil {
 		t.Errorf("format 10 starting past Unicode: got %v, want nil", m)
 	}
 }
@@ -213,7 +213,7 @@ func TestCmapNewFormatsRefuseTruncation(t *testing.T) {
 		}(),
 	}
 	for name, b := range cases {
-		if m, _ := ParseCmapSubtable(b, generousCmapWork); m != nil {
+		if m, _ := parseCmapSubtableUnder(b, generousCmapWork); m != nil {
 			t.Errorf("format %s: got %d entries, want nil", name, len(m))
 		}
 	}
@@ -236,7 +236,7 @@ func TestCmapNewFormatsMappingNothingIsNil(t *testing.T) {
 		}),
 	}
 	for name, b := range cases {
-		if m, _ := ParseCmapSubtable(b, generousCmapWork); m != nil {
+		if m, _ := parseCmapSubtableUnder(b, generousCmapWork); m != nil {
 			t.Errorf("format %s: got %d entries, want nil", name, len(m))
 		}
 	}
@@ -257,7 +257,7 @@ func TestCmapNewFormatsSkipMalformedGroups(t *testing.T) {
 		"13": fonttest.CmapFormat13(bad),
 		"8":  fonttest.CmapFormat8(bad),
 	} {
-		m, _ := ParseCmapSubtable(b, generousCmapWork)
+		m, _ := parseCmapSubtableUnder(b, generousCmapWork)
 		if len(m) != 1 || m[0x41] != 200 {
 			t.Errorf("format %s malformed groups: got %v, want only U+0041->200", name, m)
 		}

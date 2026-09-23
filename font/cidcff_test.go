@@ -114,7 +114,7 @@ func TestFDSelectFormat0NamesEveryGlyph(t *testing.T) {
 	sel := []byte{0, 0, 0, 1, 1, 0}
 	data, top := cidFont(t, sel, privateDict(500, 0), privateDict(1000, 7))
 
-	fdOf, privs := parseCFFFDs(data, top, 5, true)
+	fdOf, privs := parseCFFFDs(newCFFPrivates(data, testBudget()), top, 5, true)
 	if len(privs) != 2 {
 		t.Fatalf("%d Private DICTs, want 2", len(privs))
 	}
@@ -147,7 +147,7 @@ func TestFDSelectFormat3ReadsItsRanges(t *testing.T) {
 	}
 	data, top := cidFont(t, sel, privateDict(500, 0), privateDict(1000, 0))
 
-	fdOf, _ := parseCFFFDs(data, top, 6, true)
+	fdOf, _ := parseCFFFDs(newCFFPrivates(data, testBudget()), top, 6, true)
 	// Glyph 5 is outside every range and keeps the zero it started with. The
 	// last range names FD 1 rather than FD 0 for that reason: a reader that ran
 	// it to the end of the font would put glyph 5 in FD 0 as well, which is
@@ -167,7 +167,7 @@ func TestFDSelectFormat3ReadsItsRanges(t *testing.T) {
 func TestAGlyphTakesItsOwnFDsWidth(t *testing.T) {
 	sel := []byte{0, 0, 1}
 	data, top := cidFont(t, sel, privateDict(500, 0), privateDict(1000, 0))
-	fdOf, privs := parseCFFFDs(data, top, 2, true)
+	fdOf, privs := parseCFFFDs(newCFFPrivates(data, testBudget()), top, 2, true)
 
 	// endchar alone: a charstring that states no width, which is the case the
 	// default exists for.
@@ -176,7 +176,7 @@ func TestAGlyphTakesItsOwnFDsWidth(t *testing.T) {
 		gid  int
 		want float64
 	}{{0, 500}, {1, 1000}} {
-		if _, has := type2CharstringWidth([]byte{endchar}, cffIndex{}, cffIndex{}); has {
+		if _, has := type2CharstringWidth([]byte{endchar}, cffIndex{}, cffIndex{}, testBudget()); has {
 			t.Fatal("the fixture charstring states a width; it must not, or the " +
 				"default is never consulted and this proves nothing")
 		}
@@ -191,7 +191,7 @@ func TestAGlyphTakesItsOwnFDsWidth(t *testing.T) {
 func TestANonCIDFontHasNoFDs(t *testing.T) {
 	data, top := cidFont(t, []byte{0, 0}, privateDict(500, 0))
 	// The same bytes, asked about as an ordinary font.
-	if fdOf, privs := parseCFFFDs(data, top, 2, false); fdOf != nil || privs != nil {
+	if fdOf, privs := parseCFFFDs(newCFFPrivates(data, testBudget()), top, 2, false); fdOf != nil || privs != nil {
 		t.Error("an ordinary CFF was given FDs; its Private DICT is the top " +
 			"DICT's own and reading an FDArray it does not have would be a guess")
 	}
@@ -203,7 +203,7 @@ func TestAMissingFDSelectPutsEveryGlyphInTheFirstFD(t *testing.T) {
 	// must not be an out-of-range index.
 	data, top := cidFont(t, nil, privateDict(500, 0), privateDict(1000, 0))
 	top[1237] = []float64{0} // FDSelect at offset zero: absent
-	fdOf, privs := parseCFFFDs(data, top, 4, true)
+	fdOf, privs := parseCFFFDs(newCFFPrivates(data, testBudget()), top, 4, true)
 	for g, fd := range fdOf {
 		if fd < 0 || fd >= len(privs) {
 			t.Fatalf("glyph %d went to FD %d, which does not exist", g, fd)

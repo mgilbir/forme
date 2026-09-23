@@ -119,6 +119,12 @@ func DecodeWOFF2(data []byte) ([]byte, error) {
 	if numTables == 0 {
 		return nil, errors.New("fonts: the WOFF 2 declares no tables")
 	}
+	// The same field WOFF 1 has in the same place, which the same section of
+	// its format requires to be zero. WOFF 1 refused one that was not, and this
+	// never read it.
+	if binary.BigEndian.Uint16(data[14:]) != 0 {
+		return nil, errors.New("fonts: the WOFF 2's reserved field is not zero")
+	}
 	if numTables > maxWOFFTables {
 		return nil, errors.New("fonts: the WOFF 2 declares more tables than an sfnt can address")
 	}
@@ -148,8 +154,17 @@ func DecodeWOFF2(data []byte) ([]byte, error) {
 	}
 	metaOffset := uint64(binary.BigEndian.Uint32(data[28:]))
 	metaLength := uint64(binary.BigEndian.Uint32(data[32:]))
+	metaOrigLength := uint64(binary.BigEndian.Uint32(data[36:]))
 	privOffset := uint64(binary.BigEndian.Uint32(data[40:]))
 	privLength := uint64(binary.BigEndian.Uint32(data[44:]))
+	// A zero offset is the block's absence, and the lengths have to agree —
+	// the question DecodeWOFF asks of WOFF 1, answered the same way.
+	if _, err := absentBlock("WOFF 2", "metadata", metaOffset, metaLength, metaOrigLength); err != nil {
+		return nil, err
+	}
+	if _, err := absentBlock("WOFF 2", "private", privOffset, privLength); err != nil {
+		return nil, err
+	}
 	if metaOffset != 0 {
 		if metaOffset != at || metaOffset+metaLength > uint64(len(data)) {
 			return nil, errors.New("fonts: the WOFF 2's metadata block is not where its header says")
@@ -188,7 +203,15 @@ func DecodeWOFF2(data []byte) ([]byte, error) {
 // length: a flag byte that usually stands for the tag, then one or two lengths
 // written seven bits at a time.
 func readWOFF2Directory(r *woff2Reader, numTables int) ([]woff2Table, error) {
-	tables := make([]woff2Table, 0, numTables)
+	// An entry is at least two bytes — the flags and a one-byte length — so
+	// the directory cannot hold more entries than half what is left of the
+	// file, and the room made for them is no more than that: numTables is the
+	// file's claim, and it is only believed as far as the bytes go.
+	room := numTables
+	if most := (len(r.b) - r.at) / 2; room > most {
+		room = most
+	}
+	tables := make([]woff2Table, 0, room)
 	var srcOffset uint32
 	for i := 0; i < numTables; i++ {
 		flags, ok := r.u8()
@@ -559,6 +582,12 @@ func reconstructHmtx(out, src []byte, f *woff2Font) ([]byte, uint32, error) {
 	}
 	if f.numHMetrics < 1 || f.numHMetrics > f.numGlyphs {
 		return nil, 0, errors.New("fonts: the WOFF 2's hhea and maxp disagree about how many glyphs have metrics")
+	}
+	// Every advance width is stored, two bytes each, so the table is known to
+	// be too short before anything is made to hold them — and hhea's count is
+	// the file's word, which is not a reason to allocate.
+	if len(src)-at < 2*int(f.numHMetrics) {
+		return nil, 0, errors.New("fonts: the WOFF 2's transformed hmtx table is cut short")
 	}
 
 	read16 := func() (int16, bool) {

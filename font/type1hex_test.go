@@ -10,7 +10,7 @@ import (
 //
 // The format allows either form — binary, or the same bytes written as hex
 // digits — and a font that had to survive a channel that was not eight-bit
-// clean is in the second. ParseType1 detects it by looking at the first four
+// clean is in the second. parseType1 detects it by looking at the first four
 // bytes after "eexec" and unhexes when all four are hex digits.
 //
 // Nothing had ever run that path. decodeHexBytes was at 0% coverage: every
@@ -24,7 +24,7 @@ func TestAType1ProgramInHexadecimalIsRead(t *testing.T) {
 
 	// The binary form first, so the comparison is against this reader's own
 	// answer for the same program rather than against a list written twice.
-	binary := ParseType1(fonttest.Type1Program(want))
+	binary := parseType1(fonttest.Type1Program(want))
 	if binary == nil {
 		t.Fatal("the binary form was not read at all")
 	}
@@ -41,7 +41,7 @@ func TestAType1ProgramInHexadecimalIsRead(t *testing.T) {
 		{"upper case, wrapped at 64", fonttest.Type1Hex{Wrap: 64, Upper: true}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			fp := ParseType1(fonttest.Type1ProgramHex(want, c.opts))
+			fp := parseType1(fonttest.Type1ProgramHex(want, c.opts))
 			if fp == nil {
 				t.Fatal("the hexadecimal form was not read at all")
 			}
@@ -76,11 +76,11 @@ func TestAType1ProgramInHexadecimalIsRead(t *testing.T) {
 // program whose fifth byte is a digit ambiguous.
 func TestTheHexFormIsDetectedOnFourBytesAndNoMore(t *testing.T) {
 	want := []string{"A", "B"}
-	if fp := ParseType1(fonttest.Type1ProgramHex(want, fonttest.Type1Hex{Wrap: 4})); fp == nil {
+	if fp := parseType1(fonttest.Type1ProgramHex(want, fonttest.Type1Hex{Wrap: 4})); fp == nil {
 		t.Error("a program wrapped at 4 was not read; the break is after the " +
 			"detection window, so the four bytes are digits and this is hex")
 	}
-	if fp := ParseType1(fonttest.Type1ProgramHex(want, fonttest.Type1Hex{Wrap: 1})); fp != nil &&
+	if fp := parseType1(fonttest.Type1ProgramHex(want, fonttest.Type1Hex{Wrap: 1})); fp != nil &&
 		len(fp.GlyphNames) > 0 {
 		t.Errorf("a program wrapped at 1 was read as hexadecimal and gave %d "+
 			"glyphs; a newline inside the four-byte window means the format "+
@@ -108,7 +108,7 @@ func TestAType1ProgramInHexadecimalToleratesRubbishBetweenTheDigits(t *testing.T
 		}
 	}
 
-	fp := ParseType1(dirty)
+	fp := parseType1(dirty)
 	if fp == nil {
 		t.Fatal("a hexadecimal program with non-digits in it was not read at all")
 	}
@@ -134,7 +134,7 @@ func TestAType1ProgramInHexadecimalToleratesRubbishBetweenTheDigits(t *testing.T
 // against the decoder rather than through a whole font.
 func TestAnOddNumberOfHexDigitsIsNotFatal(t *testing.T) {
 	want := []string{"A", "B", "C"}
-	fp := ParseType1(fonttest.Type1ProgramHex(want, fonttest.Type1Hex{Odd: true}))
+	fp := parseType1(fonttest.Type1ProgramHex(want, fonttest.Type1Hex{Odd: true}))
 	if fp == nil {
 		t.Fatal("an odd digit count gave no program at all; it is padded with " +
 			"a trailing zero, so the program is damaged in its last byte and " +

@@ -48,6 +48,33 @@ var utf8Aliases = map[string]bool{
 	"unicode11utf8": true, "unicode20utf8": true, "x-unicode20utf8": true,
 }
 
+// utf16Labels are the labels of UTF-16LE and UTF-16BE, from the same table.
+var utf16Labels = map[string]bool{
+	"unicodefffe": true, "utf-16be": true,
+	"csunicode": true, "iso-10646-ucs-2": true, "ucs-2": true, "unicode": true,
+	"unicodefeff": true, "utf-16": true, "utf-16le": true,
+}
+
+// asciiIncompatible are the labels of the encodings that do not decode a byte
+// below 0x80 as the ASCII character it is: ISO-2022-JP, whose escape sequences
+// are ASCII bytes that switch what the next ones mean, and the "replacement"
+// encoding, which decodes a whole document to one U+FFFD.
+var asciiIncompatible = map[string]bool{
+	"csiso2022jp": true, "iso-2022-jp": true,
+	"csiso2022kr": true, "hz-gb-2312": true, "iso-2022-cn": true,
+	"iso-2022-cn-ext": true, "iso-2022-kr": true, "replacement": true,
+}
+
+// isASCII reports whether every byte of a document is below 0x80.
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
+}
+
 // checkEncoding reports what can be known about a document's encoding before it
 // is read: bytes that are not UTF-8, and a declaration that says they are not
 // meant to be.
@@ -97,17 +124,28 @@ func (t *tokenizer) checkUTF8() {
 // Both spellings, because a document may use either and the older one is still
 // what a great many pages carry: <meta charset=…> and <meta http-equiv=
 // "content-type" content="text/html; charset=…">. A document that declares
-// UTF-8 is saying what is already true and is passed over in silence.
+// UTF-8 is saying what is already true and is passed over in silence, and so is
+// one whose bytes read as the same text under what it declares: one with a byte
+// order mark, one declaring UTF-16, and one made only of ASCII bytes under an
+// encoding that reads those as ASCII. The finding says the text read is not the
+// text the document holds, and for those it would be false.
 //
 // It is read off the raw bytes rather than off the parsed tree, because the
 // tree is the thing that was built on the assumption this checks. A document in
 // an encoding where "<" is not 0x3C has no tree to read a <meta> out of.
 func (t *tokenizer) checkDeclaredEncoding() {
+	if strings.HasPrefix(t.src, bom) {
+		// A byte order mark outranks every declaration: the standard's
+		// sniffing reads it first and never looks for a <meta>. The document is
+		// UTF-8 whatever its <meta> says, which is what this engine reads.
+		return
+	}
 	head := t.src
 	if len(head) > maxEncodingSniff {
 		head = head[:maxEncodingSniff]
 	}
 	lower := strings.ToLower(head)
+	checkedASCII, ascii := false, false
 	for at := 0; ; {
 		i := strings.Index(lower[at:], "<meta")
 		if i < 0 {
@@ -122,6 +160,33 @@ func (t *tokenizer) checkDeclaredEncoding() {
 		at = start + end
 		label, ok := charsetOf(tag)
 		if !ok || utf8Aliases[label] {
+			continue
+		}
+		if utf16Labels[label] {
+			// The Encoding Standard's prescan reads a <meta> naming UTF-16 as
+			// naming UTF-8, because a document whose "<meta" was readable as
+			// ASCII bytes cannot be UTF-16. The declaration is wrong, and what
+			// it means is what this engine reads.
+			return
+		}
+		if !checkedASCII {
+			// Once, however many <meta> tags there are: it is a walk of the
+			// whole document.
+			checkedASCII, ascii = true, isASCII(t.src)
+		}
+		if !asciiIncompatible[label] && ascii {
+			// Every encoding the standard names but a few decodes the bytes
+			// below 0x80 as ASCII, so a document made only of those bytes
+			// holds the same text whichever of them it declares — which is the
+			// ordinary state of a legacy page that writes everything outside
+			// ASCII as a reference. The finding said the text read "is not the
+			// text the document holds", which for such a document is false.
+			//
+			// A label the standard does not name is here too: a browser
+			// ignores it and falls back to a legacy encoding, and every one of
+			// those is ASCII-compatible. It also goes on to the next <meta>,
+			// and so does this, since a label this engine cannot tell from a
+			// named one may be followed by one that matters.
 			continue
 		}
 		t.add(Error{

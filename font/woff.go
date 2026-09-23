@@ -73,6 +73,29 @@ func IsWOFF2(data []byte) bool {
 	return len(data) >= 4 && binary.BigEndian.Uint32(data) == woff2Signature
 }
 
+// absentBlock is the one answer both formats give about a metadata or private
+// block the header does not place: whether the header says there is none, and
+// an error if it says so inconsistently.
+//
+// An offset of zero is how either format says a block is absent, and then every
+// length the header gives it has to be zero too. WOFF 1 refused an absent block
+// with a length, because its bounds check caught the zero offset, and let an
+// uncompressed metadata length through; WOFF 2 skipped the whole block on the
+// zero offset, so "metaOffset 0, metaLength 1000" was a font. A header that
+// describes a block and says it is nowhere is describing another file.
+func absentBlock(format, name string, off uint64, lengths ...uint64) (bool, error) {
+	if off != 0 {
+		return false, nil
+	}
+	for _, l := range lengths {
+		if l != 0 {
+			return true, errors.New("fonts: the " + format + "'s " + name +
+				" block has no offset and a length")
+		}
+	}
+	return true, nil
+}
+
 // woffEntry is one table directory record, as written.
 type woffEntry struct {
 	tag        uint32
@@ -92,7 +115,8 @@ type woffEntry struct {
 // and the offsets that address it.
 //
 // The metadata and private blocks a WOFF may carry are not part of the font and
-// are not returned. Neither is read, which is also why neither is validated.
+// are not returned. Neither is read, so neither's contents are validated; what
+// is checked is that the header describes them consistently — see absentBlock.
 func DecodeWOFF(data []byte) ([]byte, error) {
 	if IsWOFF2(data) {
 		return DecodeWOFF2(data)
@@ -127,13 +151,22 @@ func DecodeWOFF(data []byte) ([]byte, error) {
 	for _, b := range []struct {
 		name            string
 		offAt, lengthAt int
+		origAt          int // the metadata's uncompressed length; 0 for none
 	}{
-		{"metadata", 24, 28},
-		{"private", 36, 40},
+		{"metadata", 24, 28, 32},
+		{"private", 36, 40, 0},
 	} {
 		off := uint64(binary.BigEndian.Uint32(data[b.offAt:]))
 		length := uint64(binary.BigEndian.Uint32(data[b.lengthAt:]))
-		if off == 0 && length == 0 {
+		var orig uint64
+		if b.origAt != 0 {
+			orig = uint64(binary.BigEndian.Uint32(data[b.origAt:]))
+		}
+		absent, err := absentBlock("WOFF", b.name, off, length, orig)
+		if err != nil {
+			return nil, err
+		}
+		if absent {
 			continue
 		}
 		if off < headerSize || off+length > uint64(len(data)) {
@@ -198,9 +231,9 @@ func DecodeWOFF(data []byte) ([]byte, error) {
 	// tables themselves each padded to a four-byte boundary.
 	//
 	// This total is computed from origLength, which is stated by the file, so it
-	// is checked against the cap here *and* the decompressed bytes are counted
-	// again below — a table that lies about its size in the safe direction would
-	// otherwise buy itself room.
+	// is only an early refusal: the decompressed bytes are counted again below,
+	// and a table that lies about its size in the safe direction would otherwise
+	// buy itself room.
 	body := 12 + 16*len(entries)
 	total := uint64(body)
 	for _, e := range entries {
@@ -215,7 +248,20 @@ func DecodeWOFF(data []byte) ([]byte, error) {
 		}
 	}
 
-	out := make([]byte, body, total)
+	// Nor is the buffer sized from it. The total is what the file says it will
+	// become, and the file had been allowed to say sixty-four megabytes in
+	// eighty-four bytes: one table declaring that much in front of a ten-byte
+	// "compressed" body, allocated and zeroed in full before a byte of it was
+	// inflated and then refused for coming up short (audit C126). The start is
+	// the room the file's own bytes could fill if every one of them were
+	// stored, which is the most this can know before anything is inflated, and
+	// append grows it from there against what actually arrives — under the
+	// running check below, which is what bounds it.
+	hint := uint64(body) + uint64(len(data))
+	if hint > total {
+		hint = total
+	}
+	out := make([]byte, body, hint)
 	binary.BigEndian.PutUint32(out, flavor)
 	binary.BigEndian.PutUint16(out[4:], uint16(len(entries)))
 	// searchRange, entrySelector and rangeShift: the binary-search hints. They

@@ -129,17 +129,16 @@ func TestContentAttr(t *testing.T) {
 // even when case does not match" and content-attr-case-002's is "in XHTML that
 // attr(x) does not select the attribute when the case does not match".
 //
-// The XHTML fixture is recognised the way this engine recognises one at all —
-// the xmlns declaration, which is what looksLikeXML reads — because no content
-// type reaches it.
+// The XHTML fixture is recognised from the XHTML doctype content-attr-case-002
+// carries, which is how a document says it is XHTML when the caller has not;
+// TestInputXHTMLIsTheContentType is the caller saying it.
 func TestAttrMatchesTheCaseTheDocumentLanguageDoes(t *testing.T) {
 	const sheet = `p::before { content: "[" attr(Title) "]" }`
 	got := bodyBoxes(t, `<p title="yes">x</p>`, sheet)
 	if !strings.Contains(got, `text "[yes]"`) {
 		t.Errorf("in HTML, attr(Title) did not select the title attribute:\n%s", got)
 	}
-	got = bodyBoxes(t, `<html xmlns="http://www.w3.org/1999/xhtml">`+
-		`<body><p title="yes">x</p></body></html>`, sheet)
+	got = bodyBoxes(t, xhtml(`<p title="yes">x</p>`), sheet)
 	if !strings.Contains(got, `text "[]"`) {
 		t.Errorf("in XHTML, attr(Title) selected something; the name is "+
 			"case-sensitive there:\n%s", got)
@@ -147,12 +146,40 @@ func TestAttrMatchesTheCaseTheDocumentLanguageDoes(t *testing.T) {
 	// And the name written as the document writes it still selects it, in both.
 	for _, doc := range []string{
 		`<p title="yes">x</p>`,
-		`<html xmlns="http://www.w3.org/1999/xhtml"><body><p title="yes">x</p></body></html>`,
+		xhtml(`<p title="yes">x</p>`),
 	} {
 		got := bodyBoxes(t, doc, `p::before { content: "[" attr(title) "]" }`)
 		if !strings.Contains(got, `text "[yes]"`) {
 			t.Errorf("attr(title) did not select it:\n%s", got)
 		}
+	}
+}
+
+// TestInputXHTMLIsTheContentType. Input.XHTML is what a server's
+// application/xhtml+xml tells a browser, and it decides the language whatever
+// the document says: content-attr-case-002's attr(Title) finds nothing in a
+// document with no XHTML doctype when the caller says it is XHTML. Left unset,
+// "<!DOCTYPE html>" with the XHTML namespace on <html> is HTML, as a browser
+// opening the file reads it — the namespace is not a signal.
+func TestInputXHTMLIsTheContentType(t *testing.T) {
+	const doc = `<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml">` +
+		`<body><p title="yes">x</p></body></html>`
+	sheet := []Stylesheet{{Source: `p::before { content: "[" attr(Title) "]" }`}}
+
+	served := Build(Input{HTML: doc, XHTML: true, CSS: sheet})
+	if !served.Document.XML {
+		t.Error("a document the caller said is XHTML was read as HTML")
+	}
+	if got := sketchBox(served.Root); !strings.Contains(got, `text "[]"`) {
+		t.Errorf("served as XHTML, attr(Title) selected something:\n%s", got)
+	}
+
+	unsaid := Build(Input{HTML: doc, CSS: sheet})
+	if unsaid.Document.XML {
+		t.Error("an HTML5 doctype with the namespace, and no content type, was read as XHTML")
+	}
+	if got := sketchBox(unsaid.Root); !strings.Contains(got, `text "[yes]"`) {
+		t.Errorf("read as HTML, attr(Title) did not select the title attribute:\n%s", got)
 	}
 }
 
@@ -169,8 +196,9 @@ func TestUnproducibleContentIsReported(t *testing.T) {
 		// style. resolveContent still refuses it, because a computed style can be
 		// built by hand and the initial value travels the same path, but nothing
 		// a stylesheet can write reaches that refusal any more.
-		// An identifier that is not one of the keywords the property defines.
-		`p::before { content: elephant }`: "elephant",
+		// An identifier that is not one of the keywords the property defines
+		// is not CSS, and the cascade drops it: see
+		// TestAValueThatIsNotCSSIsDroppedByTheCascade.
 	}
 	for sheet, want := range cases {
 		got := build(t, `<p>x</p>`, sheet)
@@ -348,7 +376,7 @@ func TestPseudoElementInheritsFromItsOwner(t *testing.T) {
 	if before == nil {
 		t.Fatal("the generated box was not found")
 	}
-	if got := before.Style["color"]; got != "rgb(2, 2, 2)" {
+	if got := before.Style.Get("color"); got != "rgb(2, 2, 2)" {
 		t.Errorf("the marker's colour is %q; it inherits from the <p>, not the <div>", got)
 	}
 }
@@ -379,15 +407,15 @@ func TestPseudoElementRulesDoNotStyleTheElement(t *testing.T) {
 	if p == nil || before == nil {
 		t.Fatalf("boxes not found: p=%v before=%v", p != nil, before != nil)
 	}
-	if p.Style["color"] != "rgb(1, 1, 1)" {
-		t.Errorf("the element took the marker's colour: %q", p.Style["color"])
+	if p.Style.Get("color") != "rgb(1, 1, 1)" {
+		t.Errorf("the element took the marker's colour: %q", p.Style.Get("color"))
 	}
-	if before.Style["color"] != "rgb(9, 9, 9)" {
-		t.Errorf("the marker did not take its own colour: %q", before.Style["color"])
+	if before.Style.Get("color") != "rgb(9, 9, 9)" {
+		t.Errorf("the marker did not take its own colour: %q", before.Style.Get("color"))
 	}
 	// And the element has no content of its own from the pseudo-element's rule.
-	if p.Style["content"] != "normal" {
-		t.Errorf("the element's content is %q; the ::before rule set it", p.Style["content"])
+	if p.Style.Get("content") != "normal" {
+		t.Errorf("the element's content is %q; the ::before rule set it", p.Style.Get("content"))
 	}
 }
 

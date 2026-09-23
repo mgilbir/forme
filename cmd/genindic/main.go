@@ -20,18 +20,21 @@
 // actually reorders belongs in the shaper (see shape/indic.go) rather than in
 // the data it reads.
 //
-//	go run ./cmd/genindic <IndicSyllabicCategory.txt> <IndicPositionalCategory.txt> > shape/indiccategory.go
+//	go run ./cmd/genindic -version <X.Y.Z> <IndicSyllabicCategory.txt> <IndicPositionalCategory.txt> > shape/indiccategory.go
 package main
 
 import (
 	"bufio"
 	"bytes"
+	"flag"
 	"fmt"
 	"go/format"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/mgilbir/forme/cmd/internal/ucd"
 )
 
 // neededSyllabic and neededPositional are the property values the shaper names.
@@ -75,20 +78,22 @@ var neededPositional = []string{
 }
 
 func main() {
-	if len(os.Args) != 3 {
-		fmt.Fprintln(os.Stderr, "usage: genindic <IndicSyllabicCategory.txt> <IndicPositionalCategory.txt>")
+	version := flag.String("version", "", "the Unicode version the files came from")
+	flag.Parse()
+	args := flag.Args()
+	if len(args) != 2 {
+		fmt.Fprintln(os.Stderr, "usage: genindic -version <X.Y.Z> <IndicSyllabicCategory.txt> <IndicPositionalCategory.txt>")
 		os.Exit(2)
 	}
-	sylVersion, syllabic := readProperty(os.Args[1], "IndicSyllabicCategory-")
-	posVersion, positional := readProperty(os.Args[2], "IndicPositionalCategory-")
-	if sylVersion != posVersion {
-		// The two properties are read as one table, so they have to describe
-		// the same Unicode. Mixing versions would put a character's category
-		// from one release beside its position from another.
-		fmt.Fprintf(os.Stderr, "genindic: syllabic categories are Unicode %s but positional are %s\n",
-			sylVersion, posVersion)
+	// The two properties are read as one table, so they have to describe the
+	// same Unicode. Mixing versions would put a character's category from one
+	// release beside its position from another.
+	if err := ucd.Check(*version, args...); err != nil {
+		fmt.Fprintln(os.Stderr, "genindic:", err)
 		os.Exit(1)
 	}
+	syllabic := readProperty(args[0])
+	positional := readProperty(args[1])
 
 	sylValues := valueNames(syllabic)
 	posValues := valueNames(positional)
@@ -169,7 +174,7 @@ type indicRange struct {
 type indicSyllabic uint8
 
 const (
-`, sylVersion, len(merged))
+`, *version, len(merged))
 	for i, name := range sylOrder {
 		fmt.Fprintf(w, "\tindicSyl%s indicSyllabic = %d\n", ident(name), i)
 	}
@@ -213,9 +218,8 @@ func ident(name string) string {
 }
 
 // readProperty parses one of the UCD's simple "range ; value" files, returning
-// the Unicode version its first line declares and the value of every character
-// it names.
-func readProperty(path, prefix string) (string, map[rune]string) {
+// the value of every character it names.
+func readProperty(path string) map[rune]string {
 	f, err := os.Open(path)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -223,22 +227,10 @@ func readProperty(path, prefix string) (string, map[rune]string) {
 	}
 	defer f.Close()
 
-	version := "unknown"
 	out := map[rune]string{}
 	sc := bufio.NewScanner(f)
-	first := true
 	for sc.Scan() {
 		line := sc.Text()
-		if first {
-			// The first line names the file, and with it the version:
-			// "# IndicSyllabicCategory-17.0.0.txt".
-			first = false
-			if i := strings.Index(line, prefix); i >= 0 {
-				if j := strings.Index(line[i:], ".txt"); j > 0 {
-					version = line[i+len(prefix) : i+j]
-				}
-			}
-		}
 		if i := strings.IndexByte(line, '#'); i >= 0 {
 			line = line[:i]
 		}
@@ -263,7 +255,7 @@ func readProperty(path, prefix string) (string, map[rune]string) {
 		fmt.Fprintf(os.Stderr, "genindic: %s named no characters\n", path)
 		os.Exit(1)
 	}
-	return version, out
+	return out
 }
 
 // parseRange reads "0041..005A" or "0041".

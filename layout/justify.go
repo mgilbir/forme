@@ -4,7 +4,6 @@ import (
 	"sort"
 	"strings"
 	"unicode"
-	"unicode/utf8"
 
 	"github.com/mgilbir/forme/paragraph"
 	"github.com/mgilbir/forme/style"
@@ -120,12 +119,12 @@ func justifiableSpace(text string) bool {
 // and the note above on where in a run the room goes. False for a run that ends
 // in anything else, which is every run of every unjustified document and nearly
 // every word of a justified one.
+//
+// "Ends with" is the last typographic character unit and not the last
+// character: a separator carrying a combining mark is cut after the mark, and
+// the opportunity is after the pair.
 func expandsAfter(text string) bool {
-	if text == "" {
-		return false
-	}
-	r, _ := utf8.DecodeLastRuneInString(text)
-	return isWordSeparator(r)
+	return paragraph.EndsWithWordSeparator(text)
 }
 
 // justifiableHere reports whether §7.3 allows an opportunity at this item.
@@ -278,21 +277,27 @@ func justifyItems(items []inlineItem, xs, widths []style.Unit, hangs []bool, sla
 // one X at each edge, which is what the suite's inter-character-001 draws with a
 // float and asks this to match.
 //
-// The extra is returned rather than folded into the items, because it has to
-// reach the *drawing* as well as the measure. A backend advances the pen by each
-// glyph's own width plus the run's letter-spacing, so putting the slack there is
-// what makes the glyphs land where the widths say they will — the same reason
-// TextRun.LetterSpacing exists at all.
+// The extra is returned per item rather than folded into the items, because it
+// has to reach the *drawing* as well as the measure. A backend advances the pen
+// by each glyph's own width plus the run's letter-spacing, so putting the slack
+// there is what makes the glyphs land where the widths say they will — the same
+// reason TextRun.LetterSpacing exists at all.
+//
+// Per item, and nothing to an item that took none. A run at or before the last
+// tab, or hanging past the line's end, is not widened, and handing it the
+// line's extra as well drew it wider than the room it was measured into: "ab"
+// before a tab ran a spacing per letter towards the tab stop (audit C142). An
+// item is drawn with the extra exactly where its width was grown by it.
 //
 // The count is one short of the units on the line, because the opportunity is
 // *between* a pair: n units offer n-1 of them. The trailing extra that
 // letter-spacing adds after the last unit falls past the end of the line, where
 // nothing follows it and nobody sees it.
 func (l *layouter) justifyBetweenCharacters(items []inlineItem, xs, widths []style.Unit,
-	hangs []bool, slack style.Unit) (style.Unit, bool) {
+	hangs []bool, slack style.Unit) ([]style.Unit, bool) {
 
 	if slack <= 0 || len(items) == 0 {
-		return 0, false
+		return nil, false
 	}
 	order := make([]int, len(items))
 	for i := range order {
@@ -363,11 +368,20 @@ func (l *layouter) justifyBetweenCharacters(items []inlineItem, xs, widths []sty
 	}
 	if total < 2 {
 		// One unit offers no opportunity, and none offers none.
-		return 0, false
+		return nil, false
 	}
 	extra := slack.Div(float64(total - 1))
-	if extra <= 0 {
-		return 0, false
+	if extra < 0 {
+		return nil, false
+	}
+
+	// What each run of text is drawn with: the extra after every one of its
+	// units, where its units took it.
+	spacing := make([]style.Unit, len(items))
+	for k, n := range count {
+		if n > 0 && items[k].Atomic == nil && items[k].AtomicBox == nil {
+			spacing[k] = extra
+		}
 	}
 
 	// The gap a unit is given goes *after* it, and the last unit's gap would be
@@ -381,25 +395,72 @@ func (l *layouter) justifyBetweenCharacters(items []inlineItem, xs, widths []sty
 	// only that the last unit does not take one. Taken off after the division
 	// rather than before it, because the division is over the opportunities and
 	// this is one of the units.
+	lastUnit := -1
 	for i := len(order) - 1; i >= 0; i-- {
 		if k := order[i]; count[k] > 0 {
 			count[k]--
+			lastUnit = k
 			break
 		}
 	}
 
+	// What the division truncated, which is up to one layout unit short per
+	// opportunity: a line of sixty letters ended most of a pixel short of the
+	// edge it was justified to, and a paragraph of them drifted off its own
+	// right margin (audit C142). It goes one unit at a time, from the start of
+	// the line, into the gaps *between runs* — the gap after a run's last unit,
+	// which is a width and not a spacing, so it moves what follows and changes
+	// no run's letters. The gaps inside a run cannot take it: a run is drawn
+	// with one spacing after every unit, and a unit more after some of them is
+	// not a thing a run can say. A line that is one run, or whose only gaps
+	// between runs are before its last unit's, keeps the remainder at its end.
+	remainder := slack.Sub(extra.Mul(float64(total - 1)))
+	between := 0
+	for k, n := range count {
+		if n > 0 && k != lastUnit {
+			between++
+		}
+	}
+	var share, more style.Unit
+	if between > 0 && remainder > 0 {
+		share = remainder.Div(float64(between))
+		more = remainder.Sub(share.Mul(float64(between)))
+	}
+	if extra == 0 && share == 0 && more == 0 {
+		// Nothing to spread at all: less slack than there are opportunities,
+		// and nowhere between runs to put it.
+		return nil, false
+	}
+
 	var acc style.Unit
+	seen := 0
 	for _, k := range order {
 		xs[k] = xs[k].Add(acc)
 		n := count[k]
-		if n == 0 {
+		if n == 0 && k != lastUnit {
 			continue
 		}
 		grew := extra.Mul(float64(n))
+		if between > 0 && n > 0 && k != lastUnit {
+			grew = grew.Add(share)
+			if style.Unit(seen) < more {
+				grew = grew.Add(1)
+			}
+			seen++
+		}
 		widths[k] = widths[k].Add(grew)
 		acc = acc.Add(grew)
 	}
-	return extra, true
+	return spacing, true
+}
+
+// letterSpacingAt is the extra justification gave item k, or nothing when it
+// gave none.
+func letterSpacingAt(spacing []style.Unit, k int) style.Unit {
+	if k < len(spacing) {
+		return spacing[k]
+	}
+	return 0
 }
 
 // writtenWithoutWordSeparators reports whether a line's own text is written in a

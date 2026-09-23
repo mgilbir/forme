@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/html"
 )
 
 // :visited, which matches nothing.
@@ -92,31 +93,40 @@ func TestVisitedIsNotReportedAsUnsupported(t *testing.T) {
 	}
 }
 
-// TestTheInteractiveOnesAreStillRefused is the containment argument, and the
-// test this change most needs.
+// TestTheInteractiveOnesStillSelectNothing is the containment argument, and
+// the test the change to :visited most needed.
 //
-// The line moves for :visited and for nothing else. Everything that genuinely
-// has no answer here must still be refused — turning "cannot say" into "no"
-// across the board is exactly the silent-plausible-wrongness the subset exists
-// to prevent, and it is what this change would look like if it went too far.
-func TestTheInteractiveOnesAreStillRefused(t *testing.T) {
+// :visited was the first selector to be given the answer "no" rather than
+// refused. The rest of the interactive family has since been given the same
+// shape — each is a valid selector that matches nothing, which is what keeps
+// the rest of its rule's list standing — and the containment is now that
+// "matches nothing" is *reported*, on every one of them, and never quietly
+// becomes a match. Turning "cannot say" into a silent "no" across the board is
+// the silent-plausible-wrongness the subset exists to prevent.
+func TestTheInteractiveOnesStillSelectNothing(t *testing.T) {
 	for _, sel := range []string{
 		"a:hover", "a:focus", "a:active", "input:checked", ":target",
 		"input:disabled", "a:focus-within", ":fullscreen",
 	} {
 		vals, _ := css.ParseComponentValues(sel)
 		sels, errs, ok := css.ParseSelectorList(vals)
-		if ok || len(sels) != 0 {
-			t.Errorf("%q was accepted; a page laid out once cannot answer it", sel)
+		if !ok || len(sels) != 1 {
+			t.Errorf("%q was refused; it is valid CSS that matches nothing here: %v", sel, errs)
 			continue
 		}
 		if len(errs) == 0 {
-			t.Errorf("%q was refused with no explanation", sel)
+			t.Errorf("%q was kept with no explanation", sel)
 		}
+		doc := parseDoc(t, `<a href="x"></a><input disabled checked>`)
+		m := NewMatcher(doc)
+		doc.Walk(func(n *html.Node) bool {
+			if m.Match(sels[0], n) {
+				t.Errorf("%q matched <%s>", sel, n.Name)
+			}
+			return true
+		})
 	}
 	// Whether the finding claims the *page* is wrong is a separate question,
 	// answered in css/selector.go by whether the document itself answers the
-	// selector: ":disabled" is written in the markup and ":hover" is not. This
-	// test is about the line :visited moved and about nothing else, so it asks
-	// only that each of these is still refused and still explained.
+	// selector: ":disabled" is written in the markup and ":hover" is not.
 }

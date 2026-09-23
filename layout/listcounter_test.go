@@ -95,10 +95,28 @@ func TestNegativeAndZeroStart(t *testing.T) {
 
 func TestMalformedStartIsIgnored(t *testing.T) {
 	// An attribute that is not an integer leaves the stylesheet's answer
-	// standing, which is the same as it not being there — and must not be read
-	// as a partial number.
-	for _, bad := range []string{"", "abc", "3px", "1.5", "٣", strings.Repeat("9", 40)} {
+	// standing, which is the same as it not being there.
+	for _, bad := range []string{"", "abc", "+", "-", "px3", "٣", ".5"} {
 		got := markers(t, `<ol start="`+bad+`"><li>a</li></ol>`, ``)
 		want(t, got, "1.")
+	}
+}
+
+// TestStartIsReadByHTMLsIntegerRules is §2.3.4.1: the digits at the front are
+// the value and whatever follows them is ignored, so "3px" starts at three and
+// "1.5" at one, and a run of digits too long for any list saturates rather
+// than being thrown away. This test used to say the opposite — that those
+// three were not integers and were ignored — which is a rule of this engine's
+// and not HTML's; every browser starts "<ol start=3px>" at three.
+func TestStartIsReadByHTMLsIntegerRules(t *testing.T) {
+	for _, tc := range []struct{ start, first string }{
+		{"3px", "3."},
+		{"1.5", "1."},
+		{" +4", "4."},
+		{"-2x", "-2."},
+		{strings.Repeat("9", 40), "2147483647."},
+	} {
+		got := markers(t, `<ol start="`+tc.start+`"><li>a</li></ol>`, ``)
+		want(t, got, tc.first)
 	}
 }

@@ -27,7 +27,7 @@ func listStyleOf(t *testing.T, decl string) (kind, position, image string) {
 	doc := parseDoc(t, `<ul><li id="target">x</li></ul>`)
 	got := Apply(doc, []Sheet{{Origin: OriginAuthor, Rules: rules}})
 	cs := got.Styles[elementFor(t, doc, "#target")]
-	return cs["list-style-type"], cs["list-style-position"], cs["list-style-image"]
+	return cs.Get("list-style-type"), cs.Get("list-style-position"), cs.Get("list-style-image")
 }
 
 // TestWhichSlotTheNoneFills is list-style-020's first six rows.

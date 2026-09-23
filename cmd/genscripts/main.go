@@ -1,5 +1,6 @@
-// Command genscripts generates the Unicode script ranges, and the OpenType
-// script tags each script selects, from Unicode's own Scripts.txt and
+// Command genscripts generates the Unicode script ranges, the scripts each
+// character is also used with, and the OpenType script tags each script
+// selects, from Unicode's own Scripts.txt, ScriptExtensions.txt and
 // PropertyValueAliases.txt.
 //
 // A font's GSUB and GPOS tables state their rules per script: a Greek run must
@@ -15,18 +16,27 @@
 // second-generation one a font declares when it wants the reordering rules a
 // modern shaper applies; the newer is tried first, which is what a shaper does.
 //
-//	go run ./cmd/genscripts <Scripts.txt> <PropertyValueAliases.txt> > shape/scripts.go
+// A character's Script is one script, and some characters are written in
+// several: the Devanagari digits in Kaithi, the Tamil ones in Grantha, the
+// Arabic full stop in Hanifi Rohingya. ScriptExtensions.txt lists those, and a
+// run of text is cut where its script changes by reading them (UAX #24), so
+// that a Kaithi word with a digit in it stays one run.
+//
+//	go run ./cmd/genscripts -version <X.Y.Z> <Scripts.txt> <ScriptExtensions.txt> <PropertyValueAliases.txt> > shape/scripts.go
 package main
 
 import (
 	"bufio"
 	"bytes"
+	"flag"
 	"fmt"
 	"go/format"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/mgilbir/forme/cmd/internal/ucd"
 )
 
 // otTagOverrides names the scripts whose OpenType tag is not their ISO 15924
@@ -48,10 +58,9 @@ var otTagOverrides = map[string][]string{
 	"Yi":  {"yi  "},
 
 	// The Indic scripts each have a second-generation tag. A font declares it
-	// to say its rules are written for a shaper that reorders, which the
-	// package does for Devanagari and for no other; but the tag is the one such
-	// a font declares its features under whatever the shaper can do with them,
-	// so it is tried first and the older one after.
+	// to say its rules are written for a shaper that reorders, which is what
+	// shape/indic.go is; the tag is the one such a font declares its features
+	// under, so it is tried first and the older one after.
 	"Bengali":    {"bng2", "beng"},
 	"Devanagari": {"dev2", "deva"},
 	"Gujarati":   {"gjr2", "gujr"},
@@ -70,12 +79,20 @@ var otTagOverrides = map[string][]string{
 var noTag = map[string]bool{"Common": true, "Inherited": true, "Unknown": true}
 
 func main() {
-	if len(os.Args) != 3 {
-		fmt.Fprintln(os.Stderr, "usage: genscripts <Scripts.txt> <PropertyValueAliases.txt>")
+	version := flag.String("version", "", "the Unicode version the files came from")
+	flag.Parse()
+	args := flag.Args()
+	if len(args) != 3 {
+		fmt.Fprintln(os.Stderr, "usage: genscripts -version <X.Y.Z> <Scripts.txt> <ScriptExtensions.txt> <PropertyValueAliases.txt>")
 		os.Exit(2)
 	}
-	version, ranges := readScripts(os.Args[1])
-	codes := readAliases(os.Args[2])
+	if err := ucd.Check(*version, args...); err != nil {
+		fmt.Fprintln(os.Stderr, "genscripts:", err)
+		os.Exit(1)
+	}
+	ranges := readScripts(args[0])
+	extensions := readScripts(args[1])
+	codes := readAliases(args[2])
 
 	// Every script the ranges name, in a stable order, with Common, Inherited
 	// and Unknown first so the reader can name them as constants.
@@ -137,11 +154,55 @@ func main() {
 		merged = append(merged, r)
 	}
 
+	// The extensions name scripts by their ISO 15924 codes, several to a line.
+	// Each is turned into the index above, and a code the data does not have
+	// stops the generator: a script dropped from the list would otherwise be
+	// dropped from every character that names it.
+	byCode := map[string]string{}
+	for name, code := range codes {
+		byCode[code] = name
+	}
+	sort.Slice(extensions, func(i, j int) bool { return extensions[i].lo < extensions[j].lo })
+	type extRange struct {
+		lo, hi  rune
+		scripts []int
+		names   string
+	}
+	var exts []extRange
+	widest := 0
+	for _, r := range extensions {
+		var idx []int
+		for _, code := range strings.Fields(r.name) {
+			name, ok := byCode[code]
+			if !ok || !names[name] {
+				fmt.Fprintf(os.Stderr, "genscripts: ScriptExtensions.txt names %q, which is no script here\n", code)
+				os.Exit(1)
+			}
+			idx = append(idx, index[name])
+		}
+		if len(idx) == 0 {
+			fmt.Fprintf(os.Stderr, "genscripts: a ScriptExtensions.txt line for %04X names no script\n", r.lo)
+			os.Exit(1)
+		}
+		if len(idx) > widest {
+			widest = len(idx)
+		}
+		if n := len(exts); n > 0 && exts[n-1].names == r.name && exts[n-1].hi+1 == r.lo {
+			exts[n-1].hi = r.hi
+			continue
+		}
+		if n := len(exts); n > 0 && exts[n-1].hi >= r.lo {
+			fmt.Fprintf(os.Stderr, "genscripts: ScriptExtensions.txt lists %04X twice\n", r.lo)
+			os.Exit(1)
+		}
+		exts = append(exts, extRange{lo: r.lo, hi: r.hi, scripts: idx, names: r.name})
+	}
+
 	// The table is written into a buffer and formatted before it is emitted, so
 	// that the committed file is gofmt-clean however the generator was run.
 	w := &bytes.Buffer{}
-	fmt.Fprintf(w, `// Code generated by cmd/genscripts from Unicode's Scripts.txt and
-// PropertyValueAliases.txt. DO NOT EDIT.
+	fmt.Fprintf(w, `// Code generated by cmd/genscripts from Unicode's Scripts.txt,
+// ScriptExtensions.txt and PropertyValueAliases.txt. DO NOT EDIT.
 
 package shape
 
@@ -173,7 +234,7 @@ const (
 // scriptOpenTypeTags gives the tags each script selects, indexed as
 // scriptRanges indexes scripts. A nil entry selects no tag of its own.
 var scriptOpenTypeTags = [...][]string{
-`, version, len(merged))
+`, *version, len(merged))
 	for i, n := range ordered {
 		if tags[i] == nil {
 			fmt.Fprintf(w, "\t%d: nil, // %s\n", i, n)
@@ -188,6 +249,30 @@ var scriptOpenTypeTags = [...][]string{
 	fmt.Fprint(w, "}\n\n// scriptRanges maps a character to its script, sorted by code point.\nvar scriptRanges = [...]scriptRange{\n")
 	for _, r := range merged {
 		fmt.Fprintf(w, "\t{0x%04X, 0x%04X, %d}, // %s\n", r.lo, r.hi, index[r.name], r.name)
+	}
+	fmt.Fprintln(w, "}")
+	fmt.Fprintf(w, `
+// scriptExtensionRange is a range of characters used in more than one script,
+// and the scripts, indexed as scriptOpenTypeTags is.
+type scriptExtensionRange struct {
+	lo, hi  rune
+	scripts []uint16
+}
+
+// maxScriptExtensions is the most scripts any character is used in.
+const maxScriptExtensions = %d
+
+// scriptExtensionRanges is Unicode's Script_Extensions, for the %d ranges of
+// characters that have one other than their Script, sorted by code point. A
+// character in none of them is used in its Script alone.
+var scriptExtensionRanges = [...]scriptExtensionRange{
+`, widest, len(exts))
+	for _, r := range exts {
+		q := make([]string, len(r.scripts))
+		for k, i := range r.scripts {
+			q[k] = strconv.Itoa(i)
+		}
+		fmt.Fprintf(w, "\t{0x%04X, 0x%04X, []uint16{%s}}, // %s\n", r.lo, r.hi, strings.Join(q, ", "), r.names)
 	}
 	fmt.Fprintln(w, "}")
 
@@ -207,9 +292,10 @@ type scriptRange struct {
 	name   string
 }
 
-// readScripts parses Scripts.txt, returning the Unicode version it declares and
-// one entry per range it lists.
-func readScripts(path string) (string, []scriptRange) {
+// readScripts parses Scripts.txt, or ScriptExtensions.txt, which is written the
+// same way: one entry per range it lists, with the second field whole — a
+// script's name in the one, a list of codes in the other.
+func readScripts(path string) []scriptRange {
 	f, err := os.Open(path)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -217,22 +303,10 @@ func readScripts(path string) (string, []scriptRange) {
 	}
 	defer f.Close()
 
-	version := "unknown"
 	var out []scriptRange
 	sc := bufio.NewScanner(f)
-	first := true
 	for sc.Scan() {
 		line := sc.Text()
-		if first {
-			// The first line names the file, and with it the version:
-			// "# Scripts-17.0.0.txt".
-			first = false
-			if i := strings.Index(line, "Scripts-"); i >= 0 {
-				if j := strings.Index(line[i:], ".txt"); j > 0 {
-					version = line[i+len("Scripts-") : i+j]
-				}
-			}
-		}
 		if i := strings.IndexByte(line, '#'); i >= 0 {
 			line = line[:i]
 		}
@@ -250,7 +324,7 @@ func readScripts(path string) (string, []scriptRange) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	return version, out
+	return out
 }
 
 // parseRange reads "0041..005A" or "0041".

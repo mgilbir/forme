@@ -44,7 +44,15 @@ import (
 func (l *layouter) linkLetterSpacing(items []inlineItem) []inlineItem {
 	// The order the runs are *drawn* in, which is the order the gaps fall in.
 	// See gapNeighbour, which is the whole of why this is asked for.
-	order := lineVisualOrder(items)
+	//
+	// Per bidi paragraph, as autospace.go's visualOrder is and for the reason
+	// it gives: a forced break ends one paragraph and starts the next, and
+	// LineVisualOrder asked about the whole block gave the second paragraph's
+	// items the first one's last level and reversed them. After a Hebrew line,
+	// "AAA" and "BBB" in a left-to-right paragraph were drawn in order and
+	// paired backwards, so the paragraph's gap went after BBB instead of
+	// between the two (audit C101).
+	order := visualOrder(items)
 	at := visualPositions(order, len(items))
 	for i := range items {
 		if !isSpacedRun(items[i]) {
@@ -257,17 +265,38 @@ func (l *layouter) boundarySpacing(a, b inlineItem) (style.Unit, bool) {
 // Nil where the two are in different trees, which a well-formed document does
 // not produce and which is answered rather than assumed: each caller keeps the
 // answer it had before it asked.
+//
+// The two walks go up a step at a time together, and the first box either one
+// reaches that the other has already been through is the answer: each reaches
+// the innermost common box before any box above it, so whichever gets there
+// second finds it marked. That costs the distance from each box to the answer,
+// which for the neighbouring boxes every caller asks about is a step or two. It
+// used to walk the whole of a's chain to the root first, at every boundary —
+// the depth of the document times the boundaries in it.
 func commonAncestor(a, b *Box) *Box {
 	if a == nil || b == nil {
 		return nil
 	}
-	seen := map[*Box]bool{}
-	for p := a; p != nil; p = p.Parent {
-		seen[p] = true
+	if a == b {
+		return a
 	}
-	for p := b; p != nil; p = p.Parent {
-		if seen[p] {
-			return p
+	seen := map[*Box]bool{a: true, b: true}
+	for a != nil || b != nil {
+		if a != nil {
+			if a = a.Parent; a != nil {
+				if seen[a] {
+					return a
+				}
+				seen[a] = true
+			}
+		}
+		if b != nil {
+			if b = b.Parent; b != nil {
+				if seen[b] {
+					return b
+				}
+				seen[b] = true
+			}
 		}
 	}
 	return nil

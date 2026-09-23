@@ -38,13 +38,20 @@ import (
 // "background-size: 0.001px" with the same repeat is four hundred *billion*.
 // Neither number appears anywhere in the document, so nothing upstream bounds it.
 //
-// Two things hold it. The tiling leaves here as a single value with a step in it
-// rather than as one operation per tile, so this engine's own memory does not
-// depend on the count at all. And the count is checked against a cap anyway,
-// because what leaves here is drawn by *something else* — a PDF reader expanding
-// a tiling pattern, a rasteriser walking the display list — and handing it four
-// hundred billion cells is an amplification whoever we hand it to has to survive.
-// See maxBackgroundTiles.
+// Three things hold it. A picture leaves here as a single value with a step in
+// it rather than as one operation per tile, so for a picture this engine's own
+// memory does not depend on the count at all. The count is checked against a
+// cap anyway, because what leaves here is drawn by *something else* — a PDF
+// reader expanding a tiling pattern, a rasteriser walking the display list — and
+// handing it four hundred billion cells is an amplification whoever we hand it
+// to has to survive. See maxBackgroundTiles.
+//
+// And a solid or banded layer is not a picture: it is painted as rectangles,
+// and there the count *is* this engine's memory. Those are merged where that is
+// exact, bounded per layer, and charged to the document's work budget before
+// one is made — see painter.tiling and maxLayerMarks. A comment here said
+// otherwise for all three kinds, and a gradient tiled at a pixel came out as
+// 960,000 fills (audit C14).
 
 // bgBox names one of the three boxes background-origin and background-clip
 // choose between.
@@ -182,10 +189,12 @@ type bgBand struct {
 //
 // The count is what a stylesheet controls both ends of: the painting area comes
 // from the box and the tile from background-size, and "background-size: 0.001px"
-// over an A4 page asks for four hundred billion of them. This engine emits one
-// value however many there are, so the cap is not protecting *this* process — it
-// is protecting whatever draws what this produces, which is a PDF reader
-// expanding a tiling pattern cell by cell.
+// over an A4 page asks for four hundred billion of them. For a picture this
+// engine emits one value however many there are, so there the cap is protecting
+// whatever draws what this produces, which is a PDF reader expanding a tiling
+// pattern cell by cell. A solid or banded layer is expanded here, and what bounds
+// that is maxLayerMarks and the document's work budget, not this: this is per
+// layer, and bands, layers and elements multiply it.
 //
 // A million is past anything a document means. A one-pixel image repeated over
 // an A4 page is four hundred thousand tiles, which is already pathological and
@@ -314,17 +323,17 @@ func (l *layouter) hasOwnBackground(b *Box) bool {
 	if b == nil {
 		return false
 	}
-	raw := b.Style["background-color"]
+	raw := b.Style.Get("background-color")
 	if strings.EqualFold(strings.TrimSpace(raw), "currentcolor") {
 		// A background of "currentcolor" is the text colour, which is black by
 		// default — so an element declaring it *does* have a background, and
 		// reading the value literally would propagate <body>'s over the top of it.
-		raw = b.Style["color"]
+		raw = b.Style.Get("color")
 	}
 	if c, ok := parseColorValue(raw); ok && c.A > 0 {
 		return true
 	}
-	for _, raw := range splitCommaValues(b.Style["background-image"]) {
+	for _, raw := range splitCommaValues(b.Style.Get("background-image")) {
 		if strings.TrimSpace(raw) != "" && !strings.EqualFold(strings.TrimSpace(raw), "none") {
 			return true
 		}
@@ -367,7 +376,7 @@ func (l *layouter) colorRect(f *Fragment) Rect {
 	if f.Box == nil {
 		return f.BorderRect
 	}
-	raw := strings.TrimSpace(f.Box.Style["background-clip"])
+	raw := strings.TrimSpace(f.Box.Style.Get("background-clip"))
 	if raw == "" || strings.EqualFold(raw, "border-box") {
 		return f.BorderRect
 	}
@@ -768,7 +777,7 @@ func (l *layouter) backgroundLayers(b *Box) []backgroundLayer {
 	// allocating anything: almost every box in a document has no background
 	// image, and a memo entry for each of them would cost more than the parse it
 	// saved.
-	raw := strings.TrimSpace(b.Style["background-image"])
+	raw := strings.TrimSpace(b.Style.Get("background-image"))
 	if raw == "" || isNoneValue(raw) {
 		return nil
 	}
@@ -899,7 +908,7 @@ type bgRepeatPair struct{ x, y bgRepeat }
 // bgRepeats reads background-repeat.
 func (l *layouter) bgRepeats(b *Box) []bgRepeatPair {
 	out := make([]bgRepeatPair, 0, 1)
-	for _, raw := range splitCommaValues(b.Style["background-repeat"]) {
+	for _, raw := range splitCommaValues(b.Style.Get("background-repeat")) {
 		words := strings.Fields(strings.ToLower(raw))
 		pair, ok := repeatPair(words)
 		if !ok {
@@ -956,7 +965,7 @@ type bgPosPair struct{ x, y bgPos }
 // bgPositions reads background-position, in all four of its lengths.
 func (l *layouter) bgPositions(b *Box) []bgPosPair {
 	out := make([]bgPosPair, 0, 1)
-	for _, raw := range splitCommaValues(b.Style["background-position"]) {
+	for _, raw := range splitCommaValues(b.Style.Get("background-position")) {
 		vals, _ := css.ParseComponentValues(raw)
 		pair, ok := l.parsePosition(b, vals)
 		if !ok {
@@ -1106,7 +1115,7 @@ type bgSizeValue struct {
 // bgSizes reads background-size.
 func (l *layouter) bgSizes(b *Box) []bgSizeValue {
 	out := make([]bgSizeValue, 0, 1)
-	for _, raw := range splitCommaValues(b.Style["background-size"]) {
+	for _, raw := range splitCommaValues(b.Style.Get("background-size")) {
 		vals, _ := css.ParseComponentValues(raw)
 		size, ok := l.parseSize(b, vals)
 		if !ok {
@@ -1169,7 +1178,7 @@ func negativeLength(l style.Length) bool {
 // bgBoxes reads background-origin or background-clip.
 func (l *layouter) bgBoxes(b *Box, property string, initial bgBox) []bgBox {
 	out := make([]bgBox, 0, 1)
-	for _, raw := range splitCommaValues(b.Style[property]) {
+	for _, raw := range splitCommaValues(b.Style.Get(property)) {
 		switch strings.ToLower(strings.TrimSpace(raw)) {
 		case "border-box":
 			out = append(out, bgBorderBox)
@@ -1209,7 +1218,7 @@ func (l *layouter) bgBoxes(b *Box, property string, initial bgBox) []bgBox {
 // from the page's corner, not from the box's.
 func (l *layouter) bgAttachments(b *Box) []bool {
 	out := make([]bool, 0, 1)
-	for _, raw := range splitCommaValues(b.Style["background-attachment"]) {
+	for _, raw := range splitCommaValues(b.Style.Get("background-attachment")) {
 		switch strings.ToLower(strings.TrimSpace(raw)) {
 		case "fixed":
 			out = append(out, true)

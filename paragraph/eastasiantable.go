@@ -7,9 +7,9 @@ package paragraph
 // The characters whose East Asian Width is F, W or H. Unicode 17.0.0.
 //
 // Not A, which is the ambiguous set — wide in an East Asian context and narrow
-// elsewhere — and which CSS Text's segment break rule names as excluded. See
-// cmd/geneastasian, which is also where the unassigned code points that default
-// to W come from.
+// elsewhere — and which CSS Text's segment break rule names as excluded. The
+// unassigned code points of the ideograph blocks are here, because the file
+// lists them as W; see cmd/geneastasian.
 //
 // 129 ranges.
 var eastAsianWideRanges = [...]struct{ lo, hi rune }{
@@ -886,4 +886,86 @@ var emojiRanges = [...]struct{ lo, hi rune }{
 	{0x1FACD, 0x1FADC},
 	{0x1FADF, 0x1FAEA},
 	{0x1FAEF, 0x1FAF8},
+}
+
+// The characters whose East Asian Width is F. Unicode 17.0.0.
+//
+// CSS Text 4's text-autospace excludes them from its non-ideographic letters
+// and numerals: a fullwidth "Ａ" or "１" is set on the ideographic advance and
+// among ideographs, and is not the other side of an ideograph-alpha boundary.
+//
+// 3 ranges.
+var eastAsianFullwidthRanges = [...]struct{ lo, hi rune }{
+	{0x3000, 0x3000},
+	{0xFF01, 0xFF60},
+	{0xFFE0, 0xFFE6},
+}
+
+// The characters whose East Asian Width is H. Unicode 17.0.0.
+//
+// The part of eastAsianWideRanges that text-autospace does *not* exclude: its
+// letters are the ones that are not F or W, and a halfwidth katakana is H.
+//
+// 7 ranges.
+var eastAsianHalfwidthRanges = [...]struct{ lo, hi rune }{
+	{0x20A9, 0x20A9},
+	{0xFF61, 0xFFBE},
+	{0xFFC2, 0xFFC7},
+	{0xFFCA, 0xFFCF},
+	{0xFFD2, 0xFFD7},
+	{0xFFDA, 0xFFDC},
+	{0xFFE8, 0xFFEE},
+}
+
+// The characters whose script is Han. Unicode 17.0.0.
+//
+// Script and not Script_Extensions, which Scripts.txt does not carry.
+//
+// 21 ranges.
+var hanRanges = [...]struct{ lo, hi rune }{
+	{0x2E80, 0x2E99},
+	{0x2E9B, 0x2EF3},
+	{0x2F00, 0x2FD5},
+	{0x3005, 0x3005},
+	{0x3007, 0x3007},
+	{0x3021, 0x3029},
+	{0x3038, 0x303B},
+	{0x3400, 0x4DBF},
+	{0x4E00, 0x9FFF},
+	{0xF900, 0xFA6D},
+	{0xFA70, 0xFAD9},
+	{0x16FE2, 0x16FE3},
+	{0x16FF0, 0x16FF6},
+	{0x20000, 0x2A6DF},
+	{0x2A700, 0x2B81D},
+	{0x2B820, 0x2CEAD},
+	{0x2CEB0, 0x2EBE0},
+	{0x2EBF0, 0x2EE5D},
+	{0x2F800, 0x2FA1D},
+	{0x30000, 0x3134A},
+	{0x31350, 0x33479},
+}
+
+// The characters whose script is Hiragana or Katakana. Unicode 17.0.0.
+//
+// 18 ranges.
+var kanaRanges = [...]struct{ lo, hi rune }{
+	{0x3041, 0x3096},
+	{0x309D, 0x309F},
+	{0x30A1, 0x30FA},
+	{0x30FD, 0x30FF},
+	{0x31F0, 0x31FF},
+	{0x32D0, 0x32FE},
+	{0x3300, 0x3357},
+	{0xFF66, 0xFF6F},
+	{0xFF71, 0xFF9D},
+	{0x1AFF0, 0x1AFF3},
+	{0x1AFF5, 0x1AFFB},
+	{0x1AFFD, 0x1AFFE},
+	{0x1B000, 0x1B122},
+	{0x1B132, 0x1B132},
+	{0x1B150, 0x1B152},
+	{0x1B155, 0x1B155},
+	{0x1B164, 0x1B167},
+	{0x1F200, 0x1F200},
 }

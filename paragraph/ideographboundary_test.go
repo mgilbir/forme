@@ -83,10 +83,7 @@ func TestTwoIdeographsHaveOneOpportunityBetweenThem(t *testing.T) {
 func TestTheOpportunityBeforeAnIdeographIsStillSubjectToTheRules(t *testing.T) {
 	// §5.2: keep-all suppresses the opportunities between typographic letter
 	// units, and both sides of this one are letter units.
-	wb, unhandled := WordBreakOf("keep-all")
-	if unhandled != "" {
-		t.Fatalf("keep-all was reported as unhandled: %q", unhandled)
-	}
+	wb := WordBreakOf("keep-all")
 	// Offered, then demoted: §5.2's note lets the value be relaxed where there
 	// is nothing else on the line, so what it takes away is a rank rather than
 	// an opportunity. See TestKeepAllDemotesTheOpportunitiesInsideAWord.

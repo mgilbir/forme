@@ -13,7 +13,7 @@ func layeredColour(t *testing.T, src string) (string, []Finding) {
 	t.Helper()
 	doc := parseDoc(t, `<p id="target">x</p>`)
 	got := Apply(doc, []Sheet{author(t, src)})
-	return got.Styles[doc.Element("p")]["color"], got.Findings
+	return got.Styles[doc.Element("p")].Get("color"), got.Findings
 }
 
 // TestALayerIsAppliedAndOrdered is the whole of CSS Cascade 5 §6.4 this engine
@@ -84,8 +84,8 @@ func TestALayerIsAppliedAndOrdered(t *testing.T) {
 		},
 		{
 			// A layer inside a layer still applies, and against everything
-			// outside its parent it is ordered correctly. Where it is *not* is
-			// within the parent — see TestANestedLayerIsOrderedFlatlyAndSaysSo.
+			// outside its parent it is ordered with its parent. The order
+			// within the parent is TestANestedLayerIsOrderedWithinItsParent.
 			"a nested layer applies and is ordered after its parent",
 			`@layer a { @layer x { #target { color: red } } }
 			 @layer b { #target { color: green } }`,
@@ -169,48 +169,109 @@ func TestALayerBlockNamingTwoLayersIsDropped(t *testing.T) {
 	}
 }
 
-// TestANestedLayerIsOrderedFlatlyAndSaysSo is the narrowing, stated as a test so
-// that it is a decision rather than a gap somebody finds.
-//
-// A layer inside a layer is given its own place in the order at the point it is
-// first seen, rather than a place inside its parent. The two agree for the way
-// layers are usually written; they disagree for a document that fixes the order
-// up front and fills it in afterwards, which is the fixture here — sorted within
-// its parent, "framework.base" would sit under "framework" and lose to "app".
-//
-// The test asserts what this engine does *and* that it says so. If the ordering
-// is ever implemented properly, this fails twice over and names what to change.
-func TestANestedLayerIsOrderedFlatlyAndSaysSo(t *testing.T) {
-	const sheet = `@layer framework, app;
-		@layer app { #target { color: green } }
-		@layer framework { @layer base { #target { color: red } } }`
-
-	got, findings := layeredColour(t, sheet)
-	if got != "red" {
-		t.Errorf("the colour came out %q; this engine orders a nested layer as one "+
-			"of its own, which puts framework.base last — if that has changed, "+
-			"the note in layer.go and the finding below have changed with it", got)
-	}
-	found := false
-	for _, f := range findings {
-		if f.Property == "@layer" && f.Unsupported {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("nothing said the nesting was ordered flatly; a rule winning that " +
-			"the author ordered to lose is not something to pass over in silence")
+// TestANestedLayerIsOrderedWithinItsParent is audit C114, and replaces the test
+// that stated the flat ordering as a decision. Layers are a tree (Cascade 5
+// §6.4.3): a sublayer is ordered among its siblings inside its parent, the
+// parent's own rules come after all of its sublayers, and "a.b" is the same
+// layer whether it is written dotted or nested.
+func TestANestedLayerIsOrderedWithinItsParent(t *testing.T) {
+	for _, c := range []struct{ what, sheet, want string }{
+		{"the order fixed up front, nested",
+			`@layer framework, app;
+			 @layer app { #target { color: green } }
+			 @layer framework { @layer base { #target { color: red } } }`, "green"},
+		{"the order fixed up front, dotted",
+			`@layer framework, app;
+			 @layer framework.base { #target { color: red } }
+			 @layer app { #target { color: green } }`, "green"},
+		{"a statement naming a dotted layer",
+			`@layer framework.base, app;
+			 @layer app { #target { color: green } }
+			 @layer framework.base { #target { color: red } }`, "green"},
+		{"the parent's own rules beat its sublayers'",
+			`@layer a { #target { color: green } @layer b { p#target { color: red } } }`, "green"},
+		{"and the same written dotted",
+			`@layer a.b { p#target { color: red } } @layer a { #target { color: green } }`, "green"},
+		{"siblings in the order they were first named in their parent",
+			`@layer a.y, a.x; @layer a.x { #target { color: green } } @layer a.y { #target { color: red } }`,
+			"green"},
+		{"important reverses it: the sublayer's important beats the parent's",
+			`@layer a { #target { color: red !important } @layer b { #target { color: green !important } } }`,
+			"green"},
+		{"a layer given a sublayer after its rules were read",
+			`@layer a { #target { color: green } } @layer b { #target { color: red } } @layer a.x;`,
+			"red"},
+		{"an anonymous sublayer is under its parent's own rules",
+			`@layer a { @layer { p#target { color: red } } #target { color: green } }`, "green"},
+		{"one name in two parents is two layers",
+			`@layer a { @layer x { #target { color: red } } } @layer x { #target { color: green } }`,
+			"green"},
+	} {
+		t.Run(c.what, func(t *testing.T) {
+			got, findings := layeredColour(t, c.sheet)
+			if got != c.want {
+				t.Errorf("the colour came out %q, want %q\nsheet: %s", got, c.want, c.sheet)
+			}
+			for _, f := range findings {
+				if f.Property == "@layer" {
+					t.Errorf("a nested layer is ordered properly and said so: %q", f.Message)
+				}
+			}
+		})
 	}
 }
 
-// TestALayerThatIsNotNestedSaysNothingAboutNesting keeps the note above from
-// being raised on every stylesheet that uses a layer at all.
+// TestALayerThatIsNotNestedSaysNothingAboutNesting. A nested layer used to be
+// reported as ordered flatly, and this kept that report off every stylesheet
+// that used a layer at all. Nothing is reported for either now; it stays so
+// that a report about layers, if one returns, is not raised on a sheet that
+// has nothing to report.
 func TestALayerThatIsNotNestedSaysNothingAboutNesting(t *testing.T) {
 	_, findings := layeredColour(t,
 		`@layer base, theme; @layer base { #target { color: red } } @layer theme { #target { color: green } }`)
 	for _, f := range findings {
 		if f.Property == "@layer" {
 			t.Errorf("a stylesheet with no nested layer reported %q", f.Message)
+		}
+	}
+}
+
+// TestTheLayerTreeIsATree checks the shape finishLayers walks rather than the
+// colours it produces, because the failure it guards against is not a wrong
+// colour: the root is made on first use, and a first layer numbered before the
+// root existed became the root itself, a child of its own. The flattening walk
+// then followed that edge for ever and the process ran out of memory — on
+// "@layer { }", the anonymous form, which is the one sheet that makes a layer
+// before naming anything. Every layer must have exactly one parent and the root
+// none, whichever form of @layer comes first.
+func TestTheLayerTreeIsATree(t *testing.T) {
+	for _, src := range []string{
+		`@layer { #target { color: red } }`,
+		`@layer { @layer { #target { color: red } } } @layer { }`,
+		`@layer a { #target { color: red } }`,
+		`@layer a.b.c, d;`,
+		`@layer a { @layer { } @layer b.c { } } @layer a.b.d;`,
+	} {
+		s := &Styler{matcher: NewMatcher(parseDoc(t, `<p id="target">x</p>`)),
+			seen: map[string]bool{}, attrOffset: -1}
+		s.prepare([]Sheet{author(t, src)})
+		if len(s.layers) < 2 {
+			t.Errorf("%s: made %d layer nodes; it declares at least one layer", src, len(s.layers))
+			continue
+		}
+		parents := make([]int, len(s.layers))
+		for id, node := range s.layers {
+			for _, child := range node.children {
+				if child == 0 {
+					t.Errorf("%s: layer %d has the root as a child", src, id)
+				}
+				parents[child]++
+			}
+		}
+		for id, n := range parents {
+			if id != 0 && n != 1 {
+				t.Errorf("%s: layer %d has %d parents, want 1", src, id, n)
+			}
 		}
 	}
 }

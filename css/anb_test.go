@@ -65,6 +65,90 @@ func TestAnBNeedsASignBeforeB(t *testing.T) {
 	}
 }
 
+// TestAnBTakesEachShapeTheGrammarLists walks the grammar of CSS Syntax 3
+// §6.2 one production at a time, with each production's valid spellings and
+// the near-misses beside it that are not An+B values.
+//
+// The suite's file has no "+-n" case, and a reader that took the "-" after
+// the optional "+" as a sign read "+-n+3" as -n+3. The grammar lets the "+"
+// stand only before an identifier that begins with its "n": '+'? n,
+// '+'? n-, '+'? <ndashdigit-ident>, and the same three with a B after them.
+// The "-n" productions have no "+" slot. So every "+-n" spelling is below as
+// invalid, beside the "+n" spelling that is valid.
+func TestAnBTakesEachShapeTheGrammarLists(t *testing.T) {
+	valid := []struct {
+		in   string
+		want AnB
+	}{
+		// odd | even, in any case.
+		{"odd", AnB{2, 1}}, {"EVEN", AnB{2, 0}},
+		// <integer>, signed or not.
+		{"5", AnB{0, 5}}, {"+5", AnB{0, 5}}, {"-5", AnB{0, -5}},
+		// <n-dimension>, whose number may carry a sign.
+		{"3n", AnB{3, 0}}, {"+3N", AnB{3, 0}}, {"-3n", AnB{-3, 0}},
+		// '+'? n, with the "+" touching the "n".
+		{"n", AnB{1, 0}}, {"+n", AnB{1, 0}}, {"+N", AnB{1, 0}},
+		// -n
+		{"-n", AnB{-1, 0}}, {"-N", AnB{-1, 0}},
+		// <ndashdigit-dimension>
+		{"3n-2", AnB{3, -2}}, {"-3n-2", AnB{-3, -2}},
+		// '+'? <ndashdigit-ident>
+		{"n-2", AnB{1, -2}}, {"+n-2", AnB{1, -2}}, {"+N-2", AnB{1, -2}},
+		// <dashndashdigit-ident>
+		{"-n-2", AnB{-1, -2}},
+		// <n-dimension> <signed-integer>
+		{"3n+2", AnB{3, 2}}, {"3n -2", AnB{3, -2}},
+		// '+'? n <signed-integer>
+		{"n+2", AnB{1, 2}}, {"+n +2", AnB{1, 2}}, {"+n -2", AnB{1, -2}},
+		// -n <signed-integer>
+		{"-n+2", AnB{-1, 2}}, {"-n -2", AnB{-1, -2}},
+		// <ndash-dimension> <signless-integer>
+		{"3n- 2", AnB{3, -2}},
+		// '+'? n- <signless-integer>
+		{"n- 2", AnB{1, -2}}, {"+n- 2", AnB{1, -2}},
+		// -n- <signless-integer>
+		{"-n- 2", AnB{-1, -2}},
+		// <n-dimension> ['+' | '-'] <signless-integer>
+		{"3n + 2", AnB{3, 2}}, {"3n - 2", AnB{3, -2}},
+		// '+'? n ['+' | '-'] <signless-integer>
+		{"n + 2", AnB{1, 2}}, {"+n - 2", AnB{1, -2}},
+		// -n ['+' | '-'] <signless-integer>
+		{"-n + 2", AnB{-1, 2}}, {"-n - 2", AnB{-1, -2}},
+	}
+	for _, tc := range valid {
+		got, ok := parseAnB(t, tc.in)
+		if !ok {
+			t.Errorf("%q was rejected, and is the An+B %dn%+d", tc.in, tc.want.A, tc.want.B)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("%q read as %dn%+d, want %dn%+d", tc.in, got.A, got.B, tc.want.A, tc.want.B)
+		}
+	}
+
+	invalid := []string{
+		// No "+" before a "-n" production, in each of its shapes.
+		"+-n", "+-N", "+-n-2", "+-n+2", "+-n +2", "+-n- 2", "+-n + 2", "+-n - 2",
+		// The "+" must touch the "n", and must be the only sign.
+		"+ n", "+ n-2", "+ -n", "++n", "-+n", "--n", "--n-2",
+		// odd and even take no sign.
+		"+odd", "+even", "-odd",
+		// A "+" before something that is not an identifier.
+		"+", "+ 2", "+(n)",
+		// An identifier or unit that is not one of the n forms.
+		"nn", "n-", "n-x", "n--2", "3n-x", "3-n", "3x", "x",
+		// A fraction or exponent is not an integer, in A or in B.
+		"3.0n", "3e0n", "n+2.0", "n- 2.0", "2.0",
+		// A sign after "n-", which already carries the sign.
+		"n- +2", "n- -2", "3n- -2",
+	}
+	for _, in := range invalid {
+		if got, ok := parseAnB(t, in); ok {
+			t.Errorf("%q read as %dn%+d, and is not an An+B", in, got.A, got.B)
+		}
+	}
+}
+
 // TestAnBRejectsUnrepresentableCounts pins that a value too large to be an index
 // is refused rather than wrapped. An index that has silently changed sign
 // selects a different set of elements, which is the worst way to be wrong.

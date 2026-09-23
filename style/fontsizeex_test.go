@@ -24,7 +24,7 @@ type fakeMetrics struct {
 }
 
 func (m *fakeMetrics) XHeight(cs ComputedStyle, size Unit) (float64, bool) {
-	m.families = append(m.families, cs["font-family"])
+	m.families = append(m.families, cs.Get("font-family"))
 	if !m.known {
 		return 0, false
 	}
@@ -41,11 +41,11 @@ func sizeOf(t *testing.T, m Metrics, sheet, selector string) float64 {
 	doc := parseDoc(t, `<div id="parent"><div id="child">x</div></div>`)
 	got := ApplyWith(doc, []Sheet{{Origin: OriginAuthor, Rules: rules}}, m)
 	n := elementFor(t, doc, selector)
-	vals, _ := css.ParseComponentValues(got.Styles[n]["font-size"])
+	vals, _ := css.ParseComponentValues(got.Styles[n].Get("font-size"))
 	l, _, ok := ParseLength(vals, LengthContext{})
 	if !ok || l.Kind != LengthAbsolute {
 		t.Fatalf("the computed font-size of %s is %q, which is not an absolute "+
-			"length", selector, got.Styles[n]["font-size"])
+			"length", selector, got.Styles[n].Get("font-size"))
 	}
 	return l.Value.Px()
 }
@@ -112,8 +112,8 @@ func TestAnElementThatOnlyInheritsIsNotResolvedAgain(t *testing.T) {
 	doc := parseDoc(t, `<div id="parent"><div id="child"><div id="grand">x</div></div></div>`)
 	got := ApplyWith(doc, []Sheet{{Origin: OriginAuthor, Rules: rules}},
 		&fakeMetrics{fraction: 0.8, known: true})
-	child := got.Styles[elementFor(t, doc, "#child")]["font-size"]
-	grand := got.Styles[elementFor(t, doc, "#grand")]["font-size"]
+	child := got.Styles[elementFor(t, doc, "#child")].Get("font-size")
+	grand := got.Styles[elementFor(t, doc, "#grand")].Get("font-size")
 	if child != grand {
 		t.Errorf("the child computed to %q and its own child to %q; the second "+
 			"only inherited a number", child, grand)

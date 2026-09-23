@@ -43,7 +43,7 @@ func TestAnImportantStyleAttributeBeatsAnImportantRule(t *testing.T) {
 	got := cascadeWith(t,
 		`<p id="a" style="color: rgb(255, 0, 0) !important">x</p>`, "",
 		`#a { color: rgb(0, 0, 255) !important }`)
-	if c := got["color"]; !strings.Contains(c, "255, 0, 0") {
+	if c := got.Get("color"); !strings.Contains(c, "255, 0, 0") {
 		t.Errorf("the colour is %q, want the red the attribute asked for", c)
 	}
 }
@@ -55,7 +55,7 @@ func TestAnOrdinaryStyleAttributeStillLosesToAnImportantRule(t *testing.T) {
 	got := cascadeWith(t,
 		`<p id="a" style="color: rgb(255, 0, 0)">x</p>`, "",
 		`#a { color: rgb(0, 0, 255) !important }`)
-	if c := got["color"]; !strings.Contains(c, "0, 0, 255") {
+	if c := got.Get("color"); !strings.Contains(c, "0, 0, 255") {
 		t.Errorf("the colour is %q, want the blue the important rule asked for", c)
 	}
 }
@@ -67,7 +67,7 @@ func TestAnImportantStyleAttributeStillLosesToTheUserAgent(t *testing.T) {
 	got := cascadeWith(t,
 		`<p id="a" style="color: rgb(255, 0, 0) !important">x</p>`,
 		`p { color: rgb(0, 128, 0) !important }`, "")
-	if c := got["color"]; !strings.Contains(c, "0, 128, 0") {
+	if c := got.Get("color"); !strings.Contains(c, "0, 128, 0") {
 		t.Errorf("the colour is %q, want the green the user agent insisted on", c)
 	}
 }
@@ -78,7 +78,7 @@ func TestAnOrdinaryStyleAttributeBeatsAnOrdinaryRule(t *testing.T) {
 	got := cascadeWith(t,
 		`<p id="a" style="color: rgb(255, 0, 0)">x</p>`, "",
 		`#a { color: rgb(0, 0, 255) }`)
-	if c := got["color"]; !strings.Contains(c, "255, 0, 0") {
+	if c := got.Get("color"); !strings.Contains(c, "255, 0, 0") {
 		t.Errorf("the colour is %q, want the red the attribute asked for", c)
 	}
 }
@@ -94,7 +94,7 @@ func TestCurrentColorOnColorItselfInherits(t *testing.T) {
 	got := cascadeWith(t,
 		`<div id="d" style="color: rgb(0, 128, 0)"><p id="a" style="color: currentcolor">x</p></div>`,
 		"", "")
-	if c := got["color"]; !strings.Contains(c, "0, 128, 0") {
+	if c := got.Get("color"); !strings.Contains(c, "0, 128, 0") {
 		t.Errorf("the colour is %q, want the green it inherits", c)
 	}
 }
@@ -107,10 +107,10 @@ func TestCurrentColorElsewhereIsStillTheElementsOwnColour(t *testing.T) {
 		`<div id="d" style="color: rgb(0, 128, 0)">`+
 			`<p id="a" style="color: rgb(255, 0, 0); border-top-color: currentcolor">x</p></div>`,
 		"", "")
-	if c := got["border-top-color"]; !strings.EqualFold(strings.TrimSpace(c), "currentcolor") {
+	if c := got.Get("border-top-color"); !strings.EqualFold(strings.TrimSpace(c), "currentcolor") {
 		t.Errorf("the border colour computed to %q; it is resolved where it is drawn", c)
 	}
-	if c := got["color"]; !strings.Contains(c, "255, 0, 0") {
+	if c := got.Get("color"); !strings.Contains(c, "255, 0, 0") {
 		t.Errorf("the colour is %q, want the element's own red", c)
 	}
 }
@@ -145,7 +145,7 @@ func TestANegativeValueIsDroppedWhateverTheNameItWasWrittenUnder(t *testing.T) {
 		{"a gap", "gap: 8px; gap: -8px", "row-gap", "8px"},
 	} {
 		got := cascadeWith(t, `<p id="a">x</p>`, "", `#a { `+tc.decl+` }`)
-		if v := strings.TrimSpace(got[tc.prop]); v != tc.want {
+		if v := strings.TrimSpace(got.Get(tc.prop)); v != tc.want {
 			t.Errorf("%s: %s computed to %q, want %q — the negative declaration is "+
 				"dropped and the one before it stands", tc.name, tc.prop, v, tc.want)
 		}
@@ -166,7 +166,7 @@ func TestALegalNegativeIsStillLegal(t *testing.T) {
 		{"an order", "order: -1", "order"},
 	} {
 		got := cascadeWith(t, `<p id="a">x</p>`, "", `#a { `+tc.decl+` }`)
-		if v := strings.TrimSpace(got[tc.prop]); !strings.Contains(v, "-") {
+		if v := strings.TrimSpace(got.Get(tc.prop)); !strings.Contains(v, "-") {
 			t.Errorf("%s: %s computed to %q; a negative value is legal here",
 				tc.name, tc.prop, v)
 		}

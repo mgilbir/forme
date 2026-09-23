@@ -45,7 +45,10 @@ func (l *layouter) ReportOverflow(item inlineItem, width style.Unit) {
 		Message: what + " is " +
 			fmtPx(item.Width) + " wide and cannot be broken, in a space " +
 			fmtPx(width) + " wide" + l.overflowFate(heldBox(item.Box)),
-		Path: PathOf(heldBox(item.Box).Element),
+		// The element the content is in: a run of text has no element of its
+		// own, and pointing at none left the finding with no place at all.
+		Source: sourceOf(boxElement(heldBox(item.Box))),
+		Path:   PathOf(boxElement(heldBox(item.Box))),
 	})
 }
 
@@ -63,21 +66,77 @@ func (l *layouter) ReportOverflow(item inlineItem, width style.Unit) {
 //
 // Telling an author their text was cut off when it is drawn over the next
 // column is the wrong finding twice: they look for missing words and find them
-// all, and they do not look for the thing that is actually wrong. So the clause
-// is chosen by asking, and it is exact rather than a guess — the box and its
-// ancestors are right here, and overflowClips is the same question paint asks
-// when it builds the clip.
+// all, and they do not look for the thing that is actually wrong.
+//
+// Which box clips it is asked the way resolveClips asks it, and that is the
+// half that was wrong (audit C141). The walk went up the box parents and stopped
+// at the first box that clips anything, so text in a narrow paragraph inside a
+// wide "overflow: hidden" <div> was said to be cut off where it ends a long way
+// inside the div, and text in an absolutely positioned box was said to be cut
+// by an ancestor outside its containing block chain, whose clip §11.1.1 does
+// not apply to it. The chain is followed now; and whether the text reaches the
+// clipping box's edge is a question of where both end up on the page, which is
+// not known when the line is broken — so the clause says what happens either
+// way rather than claiming the text is cut.
 //
 // Both remain worth a finding. Content that overlaps its neighbour is as much a
 // page nobody proofread as content that vanished.
 func (l *layouter) overflowFate(b *Box) string {
-	for ; b != nil; b = b.Parent {
-		if l.overflowClips(b) {
-			return "; the part past the edge is not drawn, because \"overflow\" " +
-				"on <" + elementName(b) + "> clips it"
-		}
+	if c := l.clippingAncestor(b); c != nil {
+		name := "<" + elementName(c) + ">"
+		return "; it runs past the edge over whatever is beside it, and whatever of " +
+			"it reaches past the padding edge of " + name + " is not drawn, because " +
+			"\"overflow\" on " + name + " clips it"
 	}
 	return "; it is drawn past the edge, over whatever is beside it"
+}
+
+// clippingAncestor is the innermost box whose "overflow" clips what b draws,
+// b included, or nil where nothing does.
+//
+// It is resolveClips's chain read upwards: a box's content is clipped by its
+// own overflow and by everything its parent's content is, except where the box
+// is out of flow. An absolutely positioned box takes its clip from its
+// containing block — the nearest positioned ancestor that is not an inline box
+// with no fragment of its own, which is the ancestor clipFromContainingBlock
+// reads — and a fixed one from nothing on the page at all.
+//
+// resolveClips asks overflowClips only of boxes with a fragment, so this asks
+// it of no other: a text box carries its element's whole style, "overflow"
+// included, and "overflow" does not apply to a non-atomic inline box.
+func (l *layouter) clippingAncestor(b *Box) *Box {
+	for cur := b; cur != nil; {
+		inline := cur.IsText() ||
+			(cur.Outer == OuterInline && !isAtomicInline(cur) && cur.Replaced == nil)
+		if !inline && l.overflowClips(cur) {
+			return cur
+		}
+		switch {
+		case cur.Position == PositionFixed:
+			return nil
+		case cur.Position.outOfFlow():
+			cur = positionedContainer(cur)
+		default:
+			cur = cur.Parent
+		}
+	}
+	return nil
+}
+
+// positionedContainer is the nearest positioned ancestor that has a fragment
+// to clip from: a block-level or atomic one. A positioned non-atomic inline has
+// none, and resolveClips steps over it.
+func positionedContainer(b *Box) *Box {
+	for anc := b.Parent; anc != nil; anc = anc.Parent {
+		if !anc.Position.positioned() {
+			continue
+		}
+		if anc.Outer == OuterInline && !isAtomicInline(anc) && anc.Replaced == nil {
+			continue
+		}
+		return anc
+	}
+	return nil
 }
 
 // reportWordBreak reports a word-break value this engine reads as normal.
@@ -105,7 +164,8 @@ func (l *layouter) reportWordBreak(b *Box, value string) {
 		Property: "word-break",
 		Message: value + " was read as normal, so a line may break where the " +
 			"value asked it not to",
-		Path: PathOf(b.Element),
+		Source: sourceOf(b.Element),
+		Path:   PathOf(b.Element),
 	})
 }
 
@@ -134,7 +194,8 @@ func (l *layouter) reportTextJustify(b *Box, value string) {
 		Property: "text-justify",
 		Message: value + " was read as auto, so the line was stretched between " +
 			"its words rather than in the way the value asked for",
-		Path: PathOf(b.Element),
+		Source: sourceOf(b.Element),
+		Path:   PathOf(b.Element),
 	})
 }
 
@@ -148,7 +209,7 @@ func (l *layouter) reportTextJustify(b *Box, value string) {
 func (l *layouter) checkScript(b *Box) {
 	for _, r := range b.Text {
 		if script, bad := unsupportedScript(r); bad {
-			key := script + "\x00" + b.Style["font-family"]
+			key := script + "\x00" + b.Style.Get("font-family")
 			if l.reportedScripts[key] {
 				return
 			}
@@ -156,6 +217,7 @@ func (l *layouter) checkScript(b *Box) {
 			l.rec.ReportDetail(Finding{
 				Rule:    RuleUnsupportedScript,
 				Message: script,
+				Source:  sourceOf(b.Element),
 				Path:    PathOf(b.Element),
 			})
 			return
@@ -234,11 +296,36 @@ func (l *layouter) checkGlyphs(b *Box, face *shape.Face, text string) {
 		l.rec.ReportDetail(Finding{
 			Rule: RuleGlyphMissing,
 			Message: "the face " + quoteValue(face.Name()) + " has no glyph for " +
-				describeRune(r) + ", which is set as a space, so the character is " +
-				"missing from the page and from the text extracted out of it",
-			Path: PathOf(b.Element),
+				describeRune(r) + ", " + missingGlyphFate(face),
+			Source: sourceOf(b.Element),
+			Path:   PathOf(b.Element),
 		})
 	}
+}
+
+// missingGlyphFate is what a face does with a character it has no glyph for,
+// as the end of a sentence about it.
+//
+// Three answers, because the three kinds of face encode differently (see
+// shape.Face.Encode). One of the fourteen standard faces is addressed by
+// WinAnsi codes, and a character with no code becomes the space. A simple
+// embedded face gives such a character no code at all, so it is left out of
+// what is drawn. Every other face is addressed by glyph index, and a character
+// it does not map is glyph 0, which is .notdef — the box a reader sees where a
+// font has nothing to draw. The finding said "set as a space" of all three,
+// which told the author of a Noto Sans document the opposite of what the page
+// shows (audit C144).
+func missingGlyphFate(face *shape.Face) string {
+	switch {
+	case face.IsStandard():
+		return "which is set as a space, so the character is missing from the page " +
+			"and from the text extracted out of it"
+	case face.IsSimple():
+		return "which is left out of what is drawn, so the character is missing " +
+			"from the page and from the text extracted out of it"
+	}
+	return "which is drawn as the face's missing-glyph box (.notdef) in place of " +
+		"the character"
 }
 
 // reportHyphens reports a hyphens value this engine reads as manual.
@@ -298,7 +385,8 @@ func (l *layouter) reportHyphens(b *Box, value string) {
 		Property: "hyphens",
 		Message: value + " was read as manual, so a word is broken only where a " +
 			"soft hyphen asks and never where a dictionary would",
-		Path: PathOf(b.Element),
+		Source: sourceOf(b.Element),
+		Path:   PathOf(b.Element),
 	})
 }
 
@@ -325,15 +413,24 @@ func (l *layouter) reportHyphens(b *Box, value string) {
 // other tag is a feature this engine neither applies nor can ask the face for,
 // so a value naming one is reported whatever the face has in it.
 func (l *layouter) reportKerning(b *Box, face *shape.Face) {
-	value := b.Style["font-feature-settings"]
+	value := b.Style.Get("font-feature-settings")
 	why := unappliedFontFeatures(value, face)
 	if why == "" {
 		return
 	}
-	l.reportOnce("font-feature-settings", Finding{
+	// Once per value and face rather than once per document: why a value is
+	// not applied depends on both, and two different values are two different
+	// problems. Keyed on the property alone, the first unapplied value met
+	// was the only one ever reported (audit C146).
+	faceName := ""
+	if face != nil {
+		faceName = face.Name()
+	}
+	l.reportOnce("font-feature-settings:"+value+":"+faceName, Finding{
 		Rule:     RuleUnsupportedValue,
 		Property: "font-feature-settings",
 		Message:  "font-feature-settings " + quoteValue(value) + " " + why,
+		Source:   sourceOf(boxElement(b)),
 		Path:     PathOf(boxElement(b)),
 	})
 }
@@ -380,7 +477,7 @@ func (l *layouter) reportKerning(b *Box, face *shape.Face) {
 // correct page a failure. It is the same narrowing reportKerning makes for a
 // "kern" a face has not got.
 func (l *layouter) reportCaps(b *Box, face *shape.Face, text string) {
-	want, unhandled := capsOf(b.Style["font-variant-caps"])
+	want, unhandled := capsOf(b.Style.Get("font-variant-caps"))
 	if unhandled != "" {
 		// All six of §6.6 are read, so a value outside them is either a mistake
 		// the author made or a value from a level this engine has not read —
@@ -396,7 +493,8 @@ func (l *layouter) reportCaps(b *Box, face *shape.Face, text string) {
 			Message: quoteValue(unhandled) + " is not a value of font-variant-caps " +
 				"this engine reads; the text was set in the letters it is " +
 				"written with",
-			Path: PathOf(boxElement(b)),
+			Source: sourceOf(boxElement(b)),
+			Path:   PathOf(boxElement(b)),
 		})
 		return
 	}
@@ -411,7 +509,7 @@ func (l *layouter) reportCaps(b *Box, face *shape.Face, text string) {
 	if len(missing) == 0 {
 		return
 	}
-	value := strings.ToLower(strings.TrimSpace(b.Style["font-variant-caps"]))
+	value := strings.ToLower(strings.TrimSpace(b.Style.Get("font-variant-caps")))
 	if capsAreSynthesised(use) {
 		// The face has none of them and this engine made the capitals itself,
 		// which is a page §6.6 asked for rather than a gap. It is still worth
@@ -426,7 +524,8 @@ func (l *layouter) reportCaps(b *Box, face *shape.Face, text string) {
 				capsMadeHere(missing, use) + " were made out of the letters at " +
 				strconv.FormatFloat(smallCapScale(face), 'g', 3, 64) +
 				" of the size, and the page carries them as uppercase text",
-			Path: PathOf(boxElement(b)),
+			Source: sourceOf(boxElement(b)),
+			Path:   PathOf(boxElement(b)),
 		})
 		return
 	}
@@ -451,7 +550,8 @@ func (l *layouter) reportCaps(b *Box, face *shape.Face, text string) {
 			" declares no " + strings.Join(missing, " or ") + ", so " + came +
 			", because this engine uses the capitals a face draws and does not " +
 			"make them out of the letters at a smaller size",
-		Path: PathOf(boxElement(b)),
+		Source: sourceOf(boxElement(b)),
+		Path:   PathOf(boxElement(b)),
 	})
 }
 
@@ -595,7 +695,7 @@ func hasCase(text string) (lower, upper bool) {
 // fraction — none of that is in the metrics, and guessing would be worse than
 // the report.
 func (l *layouter) reportNumeric(b *Box, face *shape.Face, text string) {
-	want, unhandled := numericOf(b.Style["font-variant-numeric"])
+	want, unhandled := numericOf(b.Style.Get("font-variant-numeric"))
 	if unhandled != "" {
 		// All eight of §6.7 are read, so a word outside them is either a
 		// mistake the author made or a value from a level this engine has not
@@ -607,7 +707,8 @@ func (l *layouter) reportNumeric(b *Box, face *shape.Face, text string) {
 			Message: quoteValue(unhandled) + " is not a value of " +
 				"font-variant-numeric this engine reads; the figures were set " +
 				"as the face draws them",
-			Path: PathOf(boxElement(b)),
+			Source: sourceOf(boxElement(b)),
+			Path:   PathOf(boxElement(b)),
 		})
 		return
 	}
@@ -624,7 +725,7 @@ func (l *layouter) reportNumeric(b *Box, face *shape.Face, text string) {
 	if len(missing) == 0 {
 		return
 	}
-	value := strings.ToLower(strings.TrimSpace(b.Style["font-variant-numeric"]))
+	value := strings.ToLower(strings.TrimSpace(b.Style.Get("font-variant-numeric")))
 	l.reportOnce("font-variant-numeric:"+value+":"+strings.Join(missing, ",")+":"+face.Name(),
 		Finding{
 			Rule:     RuleUnsupportedValue,
@@ -634,7 +735,8 @@ func (l *layouter) reportNumeric(b *Box, face *shape.Face, text string) {
 				" declares no " + strings.Join(missing, " or ") + ", and this engine " +
 				"does not draw a figure a designer did not — so that much of the " +
 				"text was set in the figures the face has",
-			Path: PathOf(boxElement(b)),
+			Source: sourceOf(boxElement(b)),
+			Path:   PathOf(boxElement(b)),
 		})
 }
 
@@ -719,7 +821,7 @@ func hasDigit(text string) bool {
 // character counts for both, because a font may set its kana proportionally and
 // a halfwidth kana is a width pair as well as a kana.
 func (l *layouter) reportEastAsian(b *Box, face *shape.Face, text string) {
-	want, unhandled := eastAsianOf(b.Style["font-variant-east-asian"])
+	want, unhandled := eastAsianOf(b.Style.Get("font-variant-east-asian"))
 	if unhandled != "" {
 		l.reportOnce("font-variant-east-asian:"+unhandled, Finding{
 			Rule:     RuleUnsupportedValue,
@@ -727,7 +829,8 @@ func (l *layouter) reportEastAsian(b *Box, face *shape.Face, text string) {
 			Message: quoteValue(unhandled) + " is not a value of " +
 				"font-variant-east-asian this engine reads; the text was set in " +
 				"the forms the face draws",
-			Path: PathOf(boxElement(b)),
+			Source: sourceOf(boxElement(b)),
+			Path:   PathOf(boxElement(b)),
 		})
 		return
 	}
@@ -745,7 +848,7 @@ func (l *layouter) reportEastAsian(b *Box, face *shape.Face, text string) {
 	if len(missing) == 0 {
 		return
 	}
-	value := strings.ToLower(strings.TrimSpace(b.Style["font-variant-east-asian"]))
+	value := strings.ToLower(strings.TrimSpace(b.Style.Get("font-variant-east-asian")))
 	l.reportOnce("font-variant-east-asian:"+value+":"+strings.Join(missing, ",")+":"+face.Name(),
 		Finding{
 			Rule:     RuleUnsupportedValue,
@@ -755,7 +858,8 @@ func (l *layouter) reportEastAsian(b *Box, face *shape.Face, text string) {
 				" declares no " + strings.Join(missing, " or ") + ", and this engine " +
 				"does not draw a form a designer did not — so that much of the " +
 				"text was set in the forms the face has",
-			Path: PathOf(boxElement(b)),
+			Source: sourceOf(boxElement(b)),
+			Path:   PathOf(boxElement(b)),
 		})
 }
 
@@ -828,7 +932,7 @@ func eastAsianCharacters(text string) (ideographs, wide, narrow bool) {
 // be known is that a run with nothing but white space in it is set identically
 // either way, because a raised space is a space.
 func (l *layouter) reportPosition(b *Box, face *shape.Face, text string) {
-	want, unhandled := variantPositionOf(b.Style["font-variant-position"])
+	want, unhandled := variantPositionOf(b.Style.Get("font-variant-position"))
 	if unhandled != "" {
 		l.reportOnce("font-variant-position:"+unhandled, Finding{
 			Rule:     RuleUnsupportedValue,
@@ -836,7 +940,8 @@ func (l *layouter) reportPosition(b *Box, face *shape.Face, text string) {
 			Message: quoteValue(unhandled) + " is not a value of " +
 				"font-variant-position this engine reads; the text was set on " +
 				"the baseline",
-			Path: PathOf(boxElement(b)),
+			Source: sourceOf(boxElement(b)),
+			Path:   PathOf(boxElement(b)),
 		})
 		return
 	}
@@ -858,7 +963,8 @@ func (l *layouter) reportPosition(b *Box, face *shape.Face, text string) {
 			" declares no " + tag + "; the text was set on the baseline at the " +
 			"size it is written, because this engine uses the raised and lowered " +
 			"forms a face draws and does not make them out of the ordinary ones",
-		Path: PathOf(boxElement(b)),
+		Source: sourceOf(boxElement(b)),
+		Path:   PathOf(boxElement(b)),
 	})
 }
 
@@ -942,7 +1048,8 @@ func (l *layouter) reportAutospace(b *Box, value string) {
 		Message: quoteValue(value) + " in text-autospace was not applied; the " +
 			"spacing between an ideograph and a letter or a number is inserted " +
 			"and the rest of the property is not",
-		Path: PathOf(b.Element),
+		Source: sourceOf(b.Element),
+		Path:   PathOf(b.Element),
 	})
 }
 
@@ -1086,13 +1193,17 @@ func boxWritingSystem(b *Box) paragraph.WritingSystem {
 // it would say is "this engine does not do all of §8.2", which is a fact about
 // the engine and not about the page. The clause that is missing takes room away
 // at the start of a line, and a document that needs it says so.
+//
+// Once per value, like the other value readers here: "space-first" and
+// "trim-start" are two different requests and each is told (audit C146).
 func (l *layouter) reportSpacingTrim(b *Box, value string) {
-	l.reportOnce("text-spacing-trim", Finding{
+	l.reportOnce("text-spacing-trim:"+value, Finding{
 		Rule:     RuleUnsupportedValue,
 		Property: "text-spacing-trim",
 		Message: "text-spacing-trim " + quoteValue(value) + " was not applied at the " +
 			"start of a line, so a full-width opening bracket keeps the half em " +
 			"of blank in front of it",
-		Path: PathOf(b.Element),
+		Source: sourceOf(b.Element),
+		Path:   PathOf(b.Element),
 	})
 }

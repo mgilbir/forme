@@ -1,13 +1,13 @@
 package shape
 
-// Turning a string into positioned glyphs: ligature substitution, then pair
-// kerning, then the character codes and displacements a PDF text operator takes.
+// Measuring shaped text: the widths of what the ShapeGlyphs family draws, and
+// what a face offers to be asked for.
 
 // MeasureShaped is the width of a shaped string at the given size, in
 // user-space units.
 //
-// It is what the text will occupy on the page: the same shaping Shape and
-// DrawShaped do, measured rather than drawn. That is the whole contract, and it
+// It is what the text will occupy on the page: the same shaping ShapeGlyphs
+// does, measured rather than drawn. That is the whole contract, and it
 // is the reason this measures by shaping rather than by a cheaper approximation
 // of it. A layout engine measures a word to decide whether it fits the line and
 // then draws it; if the two disagree the line is filled to one width and painted
@@ -183,13 +183,13 @@ func (f *Face) ShapeGlyphsInContextOrAcross(s, before, after string, kerns bool,
 }
 
 // HasKerning reports whether the font carries pair kerning this package could
-// read. A caller laying out text can use it to decide whether shaping is worth
-// the extra spans, and a test can use it to notice a font whose kerning went
-// unread.
+// read. A caller laying out text asks it to decide whether a run's neighbours
+// can change the run, and a test can use it to notice a font whose kerning
+// went unread.
 func (f *Face) HasKerning() bool { return len(f.layout.kern) > 0 }
 
 // HasLigatures reports whether the font carries ligature substitutions this
-// package could read.
+// package could read under 'liga', for its default script.
 func (f *Face) HasLigatures() bool { return len(f.layout.ligatures) > 0 }
 
 // Features lists the substitution features this face offers by name, sorted.

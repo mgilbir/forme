@@ -8,7 +8,7 @@ import (
 )
 
 // A CFF DICT operand can be a BCD real — nibble 0x1e — and its exponent is as
-// many digits as the font cares to spend. ParseFloat applies that exponent one
+// many digits as the font cares to spend. parseBCDReal applies that exponent one
 // multiplication at a time, so the digits are a direct instruction to the
 // parser about how long to work.
 //
@@ -33,13 +33,13 @@ func TestABCDExponentDoesNotBuyUnboundedWork(t *testing.T) {
 		done := make(chan float64, 1)
 		go func() {
 			var f float64
-			ParseFloat(s, &f)
+			parseBCDReal(s, &f)
 			done <- f
 		}()
 		select {
 		case <-done:
 		case <-time.After(time.Second):
-			t.Fatalf("ParseFloat(%q) was still going after a second, so the "+
+			t.Fatalf("parseBCDReal(%q) was still going after a second, so the "+
 				"exponent decides how long the parser runs", s)
 		}
 	}
@@ -70,9 +70,9 @@ func TestABCDExponentSaturatesWhereItShould(t *testing.T) {
 		{"17976931348623157E-1000", 0},
 	} {
 		var got float64
-		ParseFloat(c.s, &got)
+		parseBCDReal(c.s, &got)
 		if got != c.want {
-			t.Errorf("ParseFloat(%q) = %v, want %v", c.s, got, c.want)
+			t.Errorf("parseBCDReal(%q) = %v, want %v", c.s, got, c.want)
 		}
 		// And the same answer strconv gives, for the inputs it accepts.
 		if want, err := strconv.ParseFloat(c.s, 64); err == nil {
@@ -91,7 +91,7 @@ func TestABCDExponentSaturatesWhereItShould(t *testing.T) {
 func TestAnOrdinaryExponentIsUntouched(t *testing.T) {
 	for _, s := range []string{"1E-3", "0.001", "1E3", "-2.5E2", "6.5E-5", "1E308", "1E-308"} {
 		var got float64
-		ParseFloat(s, &got)
+		parseBCDReal(s, &got)
 		want, err := strconv.ParseFloat(s, 64)
 		if err != nil {
 			t.Fatalf("the oracle refused %q: %v", s, err)
@@ -101,12 +101,12 @@ func TestAnOrdinaryExponentIsUntouched(t *testing.T) {
 		// that the exponent was applied at all and applied once.
 		if want == 0 || got == 0 {
 			if got != want {
-				t.Errorf("ParseFloat(%q) = %v, want %v", s, got, want)
+				t.Errorf("parseBCDReal(%q) = %v, want %v", s, got, want)
 			}
 			continue
 		}
 		if rel := math.Abs(got-want) / math.Abs(want); rel > 1e-12 {
-			t.Errorf("ParseFloat(%q) = %v, want %v (relative error %g)", s, got, want, rel)
+			t.Errorf("parseBCDReal(%q) = %v, want %v (relative error %g)", s, got, want, rel)
 		}
 	}
 }

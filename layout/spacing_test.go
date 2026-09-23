@@ -264,8 +264,10 @@ func indentFindings(t *testing.T, htmlSrc, cssSrc string) int {
 	built := Build(Input{HTML: htmlSrc, CSS: []Stylesheet{{Source: cssSrc}}})
 	Layout(built.Root, Size{W: picPx(600), H: picPx(10000)}, nil, rec)
 
+	// The cascade's findings as well as layout's: a value that is not CSS is
+	// dropped and reported there, before layout sees it.
 	n := 0
-	for _, f := range rec.Findings() {
+	for _, f := range append(built.Findings, rec.Findings()...) {
 		if f.Property == "text-indent" {
 			n++
 		}

@@ -20,15 +20,35 @@ import (
 // 'halt', which shape reads into a table it applies to nothing. So a face that
 // says nothing about a glyph trims nothing, and no assumption is made about a
 // font that has not been asked.
+//
+// Whether anything is trimmed is asked of each item's own value and not of the
+// block's. The property inherits, so the two agree for almost every document,
+// and they part company exactly where an inner element declares it: a span
+// asking for "normal" inside a "space-all" paragraph was never trimmed, because
+// the paragraph's value turned the whole pass off before the span was asked
+// (audit C145). The same walk reports each run's own value where it asks for
+// what is not done, which the block's report alone could not: a span declaring
+// "trim-start" inside a paragraph that declares nothing was never mentioned.
 func (l *layouter) markClosingPunctuation(items []inlineItem, st spacingTrim) []inlineItem {
-	if !st.TrimClosingAtEnd {
-		return items
-	}
 	any := false
 	for i := range items {
-		if canTrimAsClosing(items[i]) && trailingClosingPunctuation(items[i].Text) != 0 {
+		if !canTrimAsClosing(items[i]) {
+			continue
+		}
+		b := heldBox(items[i].Box)
+		for b != nil && b.IsText() && b.Parent != nil {
+			// Named by its element: a text box carries the element's style
+			// and has no element of its own for a finding to point at.
+			b = b.Parent
+		}
+		if b != nil {
+			if _, unhandled := spacingTrimOf(b.Style.Get("text-spacing-trim")); unhandled != "" {
+				l.reportSpacingTrim(b, unhandled)
+			}
+		}
+		if !any && spacingTrimFor(items[i], st).TrimClosingAtEnd &&
+			trailingClosingPunctuation(items[i].Text) != 0 {
 			any = true
-			break
 		}
 	}
 	if !any {
@@ -115,6 +135,6 @@ func spacingTrimFor(item inlineItem, block spacingTrim) spacingTrim {
 	if b == nil {
 		return block
 	}
-	st, _ := spacingTrimOf(b.Style["text-spacing-trim"])
+	st, _ := spacingTrimOf(b.Style.Get("text-spacing-trim"))
 	return st
 }

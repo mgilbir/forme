@@ -41,7 +41,7 @@ func TestAWidthInsideASubroutineIsFound(t *testing.T) {
 	// that names subr 0 is the encoding of -107.
 	subr := []byte{opRmoveto}
 	cs := []byte{num(42), num(0), num(0), num(-107), opCallsubr}
-	got, has := type2CharstringWidth(cs, subrsOf(subr), cffIndex{})
+	got, has := type2CharstringWidth(cs, subrsOf(subr), cffIndex{}, testBudget())
 	if !has {
 		t.Fatal("no width found; the operator that decides it is in the subroutine")
 	}
@@ -55,7 +55,7 @@ func TestAWidthAndItsOperatorBothInsideASubroutine(t *testing.T) {
 	// subsetter does when every glyph in a range shares one.
 	subr := []byte{num(42), num(0), num(0), opRmoveto}
 	cs := []byte{num(-107), opCallsubr}
-	got, has := type2CharstringWidth(cs, subrsOf(subr), cffIndex{})
+	got, has := type2CharstringWidth(cs, subrsOf(subr), cffIndex{}, testBudget())
 	if !has || got != 42 {
 		t.Errorf("the width came back %v (found=%v), want 42", got, has)
 	}
@@ -64,7 +64,7 @@ func TestAWidthAndItsOperatorBothInsideASubroutine(t *testing.T) {
 func TestAWidthThroughAGlobalSubroutine(t *testing.T) {
 	subr := []byte{opEndchar}
 	cs := []byte{num(37), num(-107), opCallgsub}
-	got, has := type2CharstringWidth(cs, cffIndex{}, subrsOf(subr))
+	got, has := type2CharstringWidth(cs, cffIndex{}, subrsOf(subr), testBudget())
 	if !has || got != 37 {
 		t.Errorf("the width came back %v (found=%v), want 37", got, has)
 	}
@@ -76,7 +76,7 @@ func TestASubroutineThatReturnsCarriesOn(t *testing.T) {
 	// the call.
 	subr := []byte{opReturn}
 	cs := []byte{num(19), num(-107), opCallsubr, opEndchar}
-	got, has := type2CharstringWidth(cs, subrsOf(subr), cffIndex{})
+	got, has := type2CharstringWidth(cs, subrsOf(subr), cffIndex{}, testBudget())
 	if !has || got != 19 {
 		t.Errorf("the width came back %v (found=%v), want 19", got, has)
 	}
@@ -97,7 +97,7 @@ func TestAGlyphWithNoWidthStillHasNone(t *testing.T) {
 		{"a subroutine whose operator takes what is on the stack",
 			[]byte{num(0), num(0), num(-107), opCallsubr}, subrsOf([]byte{opRmoveto})},
 	} {
-		if got, has := type2CharstringWidth(c.cs, c.subrs, cffIndex{}); has {
+		if got, has := type2CharstringWidth(c.cs, c.subrs, cffIndex{}, testBudget()); has {
 			t.Errorf("%s: a width of %v was found where the charstring states none",
 				c.name, got)
 		}
@@ -116,7 +116,7 @@ func TestACyclicSubroutineIsRefusedRatherThanFollowed(t *testing.T) {
 	go func() {
 		defer close(done)
 		if _, has := type2CharstringWidth([]byte{num(5), num(-107), opCallsubr},
-			subrsOf(self), cffIndex{}); has {
+			subrsOf(self), cffIndex{}, testBudget()); has {
 			t.Error("a cyclic subroutine reported a width")
 		}
 	}()
@@ -129,7 +129,7 @@ func TestASubroutineIndexOutOfRangeIsRefused(t *testing.T) {
 	subrs := subrsOf([]byte{opEndchar})
 	for _, idx := range []int{-108, 107, 100} {
 		cs := []byte{num(5), num(idx), opCallsubr}
-		if _, has := type2CharstringWidth(cs, subrs, cffIndex{}); has {
+		if _, has := type2CharstringWidth(cs, subrs, cffIndex{}, testBudget()); has {
 			t.Errorf("subr operand %d named a subroutine that is not there", idx)
 		}
 	}

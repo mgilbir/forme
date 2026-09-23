@@ -65,6 +65,12 @@ type flexValues struct {
 	basis        style.Unit
 	basisAuto    bool
 	basisContent bool
+	// basisKeyword is one of the three intrinsic sizes flex-basis takes from
+	// width's grammar — "min-content", "max-content" or "fit-content" — or
+	// empty. Each names a size of the item's content, and none of them is
+	// "auto": a basis of "max-content" on an item that declares "width: 50px"
+	// is as wide as its text, which is the one thing "auto" would not give it.
+	basisKeyword string
 }
 
 // flexValuesOf reads the three properties off an item.
@@ -74,14 +80,21 @@ type flexValues struct {
 // answer floatOf and clearOf give, and for the same reason.
 func (l *layouter) flexValuesOf(b *Box, room flexRoom) flexValues {
 	out := flexValues{grow: 0, shrink: 1, basisAuto: true}
-	if v, ok := parseNumber(trimmedLower(b.Style["flex-grow"])); ok && v >= 0 {
+	if v, ok := parseNumber(trimmedLower(b.Style.Get("flex-grow"))); ok && v >= 0 {
 		out.grow = v
 	}
-	if v, ok := parseNumber(trimmedLower(b.Style["flex-shrink"])); ok && v >= 0 {
+	if v, ok := parseNumber(trimmedLower(b.Style.Get("flex-shrink"))); ok && v >= 0 {
 		out.shrink = v
 	}
-	switch trimmedLower(b.Style["flex-basis"]) {
+	switch basis := trimmedLower(b.Style.Get("flex-basis")); basis {
 	case "", "auto":
+	case "min-content", "max-content", "fit-content":
+		// Sizes of the content, answered by flexBaseSize once the item's
+		// content can be measured. Read as a length they failed to parse and
+		// fell to "auto", which was a basis of the item's width and not of
+		// its text, and nothing said so. "stretch" and "fit-content()" are
+		// still not read, and checkIntrinsicSizing says that.
+		out.basisKeyword, out.basisAuto = basis, false
 	case "content":
 		// "content" is "size it as though flex-basis were auto and the main
 		// size were auto", which is not the same as "auto" and differs from it
@@ -90,11 +103,26 @@ func (l *layouter) flexValuesOf(b *Box, room flexRoom) flexValues {
 		out.basisContent = true
 	default:
 		// A percentage basis is of the line, and where the line has no size it
-		// is indefinite — which leaves the basis auto, deferring to whatever
-		// the item says about itself.
+		// is indefinite — and §7.2.3 says what it is then: "if a value would
+		// resolve to auto for width, it instead resolves to content for
+		// flex-basis". Content and not auto, so a declared width is not what
+		// it defers to; it was read as auto here, which differs exactly there.
+		// Down a column "content" is the measured height, and that measurement
+		// is a layout of the item which still honours a height it declares —
+		// the same as "flex-basis: content" there, and not changed here.
+		//
+		// This is the clause "flex: 1" reaches in a column that was told no
+		// height. The shorthand writes its basis as "0%", as every browser
+		// does, and 0% of an indefinite height is the item's content — so a
+		// "flex: 1" pane with "overflow: hidden" is as tall as its text rather
+		// than nothing (audit C37).
 		if length, ok := l.parseLength(b, "flex-basis"); ok {
-			if v, ok := length.Resolve(room.main, room.definite); ok && v >= 0 {
-				out.basis, out.basisAuto = v, false
+			if v, ok := length.Resolve(room.main, room.definite); ok {
+				if v >= 0 {
+					out.basis, out.basisAuto = v, false
+				}
+			} else if length.Kind != style.LengthAuto {
+				out.basisContent = true
 			}
 		}
 	}
@@ -169,15 +197,6 @@ func (a flexAxis) crossName() string {
 }
 
 func (a flexAxis) minName() string { return "min-" + a.mainName() }
-
-// overflowName is the overflow property of the axis the items run along, which
-// is what §4.5 asks about before giving an item a content-based minimum.
-func (a flexAxis) overflowName() string {
-	if a.column {
-		return "overflow-y"
-	}
-	return "overflow-x"
-}
 
 func (a flexAxis) maxName() string { return "max-" + a.mainName() }
 func (a flexAxis) gapName() string {
@@ -291,12 +310,12 @@ func (a flexAxis) place(f *Fragment, main, cross style.Unit) {
 
 // axisOf reads the three declarations that decide which way each axis runs.
 func (l *layouter) axisOf(b *Box) flexAxis {
-	direction := trimmedLower(b.Style["flex-direction"])
+	direction := trimmedLower(b.Style.Get("flex-direction"))
 	return flexAxis{
 		column:      direction == "column" || direction == "column-reverse",
 		reverse:     direction == "row-reverse" || direction == "column-reverse",
 		rtl:         isRTL(b),
-		wrapReverse: trimmedLower(b.Style["flex-wrap"]) == "wrap-reverse",
+		wrapReverse: trimmedLower(b.Style.Get("flex-wrap")) == "wrap-reverse",
 	}
 }
 
@@ -411,24 +430,24 @@ func (it *flexItem) outerCross(border style.Unit) style.Unit {
 // been is a page that is quietly wrong.
 func (l *layouter) refusesToFlex(b *Box) string {
 	a := l.axisOf(b)
-	switch trimmedLower(b.Style["flex-direction"]) {
+	switch trimmedLower(b.Style.Get("flex-direction")) {
 	case "", "row", "column", "row-reverse", "column-reverse":
 	default:
 		return "its main axis is not one of the four flex-direction names"
 	}
-	switch trimmedLower(b.Style["flex-wrap"]) {
+	switch trimmedLower(b.Style.Get("flex-wrap")) {
 	case "", "nowrap":
 	case "wrap", "wrap-reverse":
 	default:
 		return "its lines wrap by a rule this engine does not apply"
 	}
-	switch trimmedLower(b.Style["align-content"]) {
+	switch trimmedLower(b.Style.Get("align-content")) {
 	case "", "normal", "stretch", "flex-start", "start", "flex-end", "end",
 		"center", "space-between", "space-around", "space-evenly":
 	default:
 		return "its lines are placed by a rule this engine does not apply"
 	}
-	switch trimmedLower(b.Style["justify-content"]) {
+	switch trimmedLower(b.Style.Get("justify-content")) {
 	case "", "normal", "flex-start", "start", "left", "flex-end", "end", "right",
 		"center", "space-between", "space-around", "space-evenly":
 	default:
@@ -438,7 +457,7 @@ func (l *layouter) refusesToFlex(b *Box) string {
 		// not about.
 		return "its items are packed by a rule this engine does not apply"
 	}
-	if why := refusesAlignment(trimmedLower(b.Style["align-items"]), a); why != "" {
+	if why := refusesAlignment(trimmedLower(b.Style.Get("align-items")), a); why != "" {
 		return "its items are " + why
 	}
 	for _, c := range b.Children {
@@ -454,7 +473,7 @@ func (l *layouter) refusesToFlex(b *Box) string {
 			// deferOutOfFlow gives it that one.
 			continue
 		}
-		if why := refusesAlignment(trimmedLower(c.Style["align-self"]), a); why != "" {
+		if why := refusesAlignment(trimmedLower(c.Style.Get("align-self")), a); why != "" {
 			return "one of its items is " + why
 		}
 	}
@@ -507,7 +526,7 @@ func refusesAlignment(value string, a flexAxis) string {
 // is a flag and not a length; nothing adds them up.
 func (l *layouter) autoMarginEdges(b *Box) Edges {
 	auto := func(name string) style.Unit {
-		if trimmedLower(b.Style["margin-"+name]) == "auto" {
+		if trimmedLower(b.Style.Get("margin-"+name)) == "auto" {
 			return 1
 		}
 		return 0
@@ -612,7 +631,7 @@ func (l *layouter) fillCrossAutoMargins(a flexAxis, it *flexItem, cross style.Un
 // bound has items whose order differs by more than a billion, and they tie —
 // which leaves them in document order, the answer they would have had anyway.
 func orderOf(b *Box) int {
-	s := trimmedLower(b.Style["order"])
+	s := trimmedLower(b.Style.Get("order"))
 	sign := 1
 	if strings.HasPrefix(s, "+") {
 		s = s[1:]
@@ -658,12 +677,17 @@ func (l *layouter) flexContent(b *Box, parent *Fragment, width style.Unit,
 		// A container with nothing to arrange still has its out-of-flow
 		// children to record, and its own cross size is whatever it was told:
 		// nothing was laid out to give it one.
+		//
+		// "Whatever it was told" includes its own min-height and max-height:
+		// an empty container at "min-height: 200px" is 200 tall, and the box
+		// placed as its only item is placed in those 200.
 		empty, _ := l.explicitHeight(b, width, origin.cbHeight, origin.cbDefinite)
+		empty = l.clampHeight(b, empty, width, origin.cbHeight, origin.cbDefinite)
 		if a.column {
 			empty = width
 		}
 		if !definite {
-			main = 0
+			main = l.clampHeight(b, 0, width, origin.cbHeight, origin.cbDefinite)
 		}
 		l.deferOutOfFlow(b, a, parent, width, main, empty)
 		return 0
@@ -676,10 +700,8 @@ func (l *layouter) flexContent(b *Box, parent *Fragment, width style.Unit,
 	// the line and not against the container's own size.
 	gap, crossGap := l.flexGap(b, a, width), l.flexCrossGap(b, a, width)
 	if !definite {
-		main = gap.Mul(float64(len(items) - 1))
-		for _, it := range items {
-			main = main.Add(it.outer(it.hypothetical))
-		}
+		main = l.clampHeight(b, l.columnContentHeight(items, gap), width,
+			origin.cbHeight, origin.cbDefinite)
 	}
 
 	// §9.3: which items are on which line. A container that does not wrap has
@@ -696,13 +718,12 @@ func (l *layouter) flexContent(b *Box, parent *Fragment, width style.Unit,
 	// cross sizes from this — a line is as tall as the tallest item on it —
 	// while a column settled every item's width before it could measure a
 	// height at all.
-	mark := len(l.deferred)
-	starts := make([]int, len(items))
+	sides := make([]sideSpan, len(items))
 	for i, it := range items {
-		starts[i] = len(l.deferred)
+		side := l.sideMark()
 		it.frag = l.layOutFlexItem(it, a, width, origin, it.target, true)
+		sides[i] = l.sideSince(side)
 	}
-	end := len(l.deferred)
 
 	crosses, cross := l.flexCrossSizes(b, a, lines, crossGap, width, origin)
 	for _, it := range items {
@@ -719,40 +740,38 @@ func (l *layouter) flexContent(b *Box, parent *Fragment, width style.Unit,
 		// is the container, so they were laid out at that size already, and the
 		// comparison below is what keeps this to the ones that have moved.
 		//
-		// The out-of-flow boxes a discarded layout found are discarded with it,
-		// which is the same rule the block re-layout keeps and is kept here the
-		// long way round. An absolutely positioned box inside a fragment that
-		// was thrown away hangs off a fragment nobody will paint, and leaving
-		// its record in place spends the budget in placeAbsolutes on a box that
-		// is not on the page — enough of them and a document is told it holds
-		// more out-of-flow boxes than this engine will place, which would be a
-		// false report of a broken page.
+		// What a discarded layout did is discarded with it, which is the same
+		// rule the block re-layout keeps. An absolutely positioned box inside a
+		// fragment that was thrown away hangs off a fragment nobody will paint,
+		// and leaving its record in place spends the budget in placeAbsolutes on
+		// a box that is not on the page — enough of them and a document is told
+		// it holds more out-of-flow boxes than this engine will place, which
+		// would be a false report of a broken page.
 		//
-		// The records are contiguous per item and in item order, so the list is
-		// rebuilt in that order rather than cut back to a mark: cutting back to
-		// the first re-laid item would take every later item's records with it.
-		// first is held before the rebuild starts, because the loop assigns
-		// l.deferred as it goes and the ranges below are indexes into what the
-		// first pass produced.
-		first := l.deferred[:end]
-		kept := append([]absCandidate(nil), first[:mark]...)
+		// Only the items that moved are laid out again, and only what they did
+		// is taken back: each item's side state is a stretch of the queue and
+		// the journal, and takeBack takes stretches out of the middle. The ones
+		// that did not move keep the layout they have, which is the answer they
+		// would be given if they were asked again. They used to be asked again —
+		// the first pass rolled back whole and every item laid out a second
+		// time, answered from the cache — and the answer was a copy of each
+		// item's whole subtree, made at every level of a nest of rows for items
+		// nothing had changed.
+		var moved []int
+		across := l.crossRoom(b, a, width, origin)
 		for i, it := range items {
-			stop := end
-			if i+1 < len(items) {
-				stop = starts[i+1]
-			}
-			want := maxZero(crosses[it.line].size.Sub(it.crossMargin))
+			want := l.clampCross(it, a, maxZero(crosses[it.line].size.Sub(it.crossMargin)), across)
 			if l.alignOf(b, a, it) == crossStretch && l.stretchesAcross(a, it) &&
 				a.crossOf(it.frag.BorderRect) != want {
 				it.cross, it.hasCross = want, true
-				l.deferred = kept
-				it.frag = l.layOutFlexItem(it, a, width, origin, it.target, true)
-				kept = l.deferred
-				continue
+				moved = append(moved, i)
 			}
-			kept = append(kept, first[starts[i]:stop]...)
 		}
-		l.deferred = kept
+		if len(moved) > 0 {
+			l.relayMoved(items, moved, sides, func(it *flexItem) *Fragment {
+				return l.layOutFlexItem(it, a, width, origin, it.target, true)
+			})
+		}
 	}
 
 	// §9.5's main-axis placement and §9.6's cross-axis placement, line by line,
@@ -803,12 +822,22 @@ func (l *layouter) flexContent(b *Box, parent *Fragment, width style.Unit,
 // container was reached by nobody and left the page altogether.
 //
 // §4.1 gives it a static position "such that the child is positioned as if it
-// were the sole flex item in the flex container", which is exactly what the
-// arithmetic below says: a lone item of no size on a line of its own, packed
-// and aligned by the container's own properties. With everything at its initial
-// value that is the content box's start corner, which is where the block walk
-// would have put it — and with "justify-content: center" it is the middle of
-// the line, which is where the block walk would not.
+// were the sole flex item in the flex container, assuming both the child and
+// the flex container were fixed-size boxes of their used size": the static-
+// position rectangle is the container's content box, and the box is aligned in
+// it by the container's justify-content along the main axis and by its *own*
+// align-self across it — align-items only where align-self is "auto", which is
+// what alignOf asks of an item. It read the container's align-items alone, so
+// "align-self: flex-end" on the box itself did nothing (audit C153).
+//
+// And the box has a size. It was placed as a lone item of none, so at
+// "justify-content: center" its left edge was at the middle rather than its
+// middle, and at the far end it hung wholly outside the container. The size is
+// decided later, in layoutAbsolute, so what is recorded here is the point the
+// alignment names and how far across the rectangle that is; the box is moved
+// back by the same fraction of itself once it is known. With everything at its
+// initial value the fraction is nought, the point is the content box's start
+// corner, and nothing moves — which is where the block walk would have put it.
 func (l *layouter) deferOutOfFlow(b *Box, a flexAxis, parent *Fragment,
 	width, main, cross style.Unit) {
 
@@ -820,25 +849,53 @@ func (l *layouter) deferOutOfFlow(b *Box, a flexAxis, parent *Fragment,
 		if !c.Position.outOfFlow() {
 			continue
 		}
-		along := a.mainAt(justifyOffset(l.justifyOf(b, a), main, 1, 0), 0, main)
-		var across style.Unit
-		switch crossAlignment(trimmedLower(b.Style["align-items"]), a) {
+		along := justifyFraction(l.justifyOf(b, a))
+		self := trimmedLower(c.Style.Get("align-self"))
+		if self == "" || self == "auto" {
+			self = trimmedLower(b.Style.Get("align-items"))
+		}
+		var across float64
+		switch crossAlignment(self, a) {
 		case crossEnd:
-			across = cross
+			across = 1
 		case crossCenter:
-			across = cross.Div(2)
+			across = 0.5
 		}
-		across = a.crossAt(across, 0, cross)
-
-		x, y := along, across
+		// Physical fractions, measured from the left and the top: an axis that
+		// runs backwards puts its start at the far side.
+		if a.mainReversed() {
+			along = 1 - along
+		}
+		if a.crossReversed() {
+			across = 1 - across
+		}
+		fx, fy := along, across
+		sx, sy := main, cross
 		if a.column {
-			x, y = across, along
+			fx, fy = across, along
+			sx, sy = cross, main
 		}
-		// The hypothetical box has no size, so the distance from the far edge
-		// is the whole of what is left. See absCandidate.staticEnd, which is
-		// what a right-to-left containing block resolves "right" from.
-		l.deferAbsolute(c, parent, x, y, width.Sub(x), index)
+		x, y := sx.Mul(fx), sy.Mul(fy)
+		// The distance from the far edge is measured to the same point. See
+		// absCandidate.staticEnd, which is what a right-to-left containing
+		// block resolves "right" from, and layoutAbsolute, which aligns the box
+		// about the point from either side.
+		l.deferAlignedAbsolute(c, parent, x, y, width.Sub(x), index, fx, fy)
 	}
+}
+
+// justifyFraction is how far along the main axis justify-content puts a lone
+// item: at the start, the end, or the middle. The three that distribute space
+// between items have one item to distribute around, and Box Alignment §4.4's
+// fallbacks for one are start, centre and centre.
+func justifyFraction(j flexJustify) float64 {
+	switch j {
+	case justifyEnd:
+		return 1
+	case justifyCenter, justifyAround, justifyEvenly:
+		return 0.5
+	}
+	return 0
 }
 
 // wraps reports whether the container's lines break, which is §5.2.
@@ -847,7 +904,7 @@ func (l *layouter) deferOutOfFlow(b *Box, a flexAxis, parent *Fragment,
 // difference between them and is the cross axis's direction, which flexAxis
 // carries; here the question is only whether there can be more than one line.
 func (l *layouter) wraps(b *Box) bool {
-	switch trimmedLower(b.Style["flex-wrap"]) {
+	switch trimmedLower(b.Style.Get("flex-wrap")) {
 	case "wrap", "wrap-reverse":
 		return true
 	}
@@ -904,9 +961,20 @@ func flexLines(items []*flexItem, main, gap style.Unit, wraps bool) [][]*flexIte
 func (l *layouter) flexCrossSizes(b *Box, a flexAxis, lines [][]*flexItem,
 	crossGap, width style.Unit, origin flow) (crosses []lineCross, cross style.Unit) {
 
+	// The container's own limits on its cross size, which a row's is a height.
+	// A column's is its width, which block layout has already held between
+	// min-width and max-width before this was called, so the limit is the
+	// identity there.
+	limit := func(v style.Unit) style.Unit { return v }
 	container, definite := width, true
 	if !a.column {
+		limit = func(v style.Unit) style.Unit {
+			return l.clampHeight(b, v, width, origin.cbHeight, origin.cbDefinite)
+		}
 		container, definite = l.explicitHeight(b, width, origin.cbHeight, origin.cbDefinite)
+		if definite {
+			container = limit(container)
+		}
 	}
 	crosses = make([]lineCross, len(lines))
 	for i, ln := range lines {
@@ -932,8 +1000,19 @@ func (l *layouter) flexCrossSizes(b *Box, a flexAxis, lines [][]*flexItem,
 			crosses[i].size = sum
 		}
 	}
-	if !l.wraps(b) && definite {
-		crosses[0].size = container
+	if !l.wraps(b) {
+		// §9.4's step 8: a single line is the container's cross size where it
+		// has one, and otherwise its content held between the container's own
+		// min and max cross sizes — "if CSS 2.1's definition of min/max-width/
+		// height applied more generally, this behavior would fall out
+		// automatically". Without the clamp a row at "min-height: 200px" had a
+		// line 20 tall inside a box 200 tall, and neither stretch nor
+		// "align-items: center" had anything to work with (audit C29).
+		if definite {
+			crosses[0].size = container
+		} else {
+			crosses[0].size = limit(crosses[0].size)
+		}
 	}
 	if definite {
 		return crosses, container
@@ -944,7 +1023,11 @@ func (l *layouter) flexCrossSizes(b *Box, a flexAxis, lines [][]*flexItem,
 		}
 		cross = cross.Add(c.size)
 	}
-	return crosses, cross
+	// §9.4's step 15 for a container that stated no cross size: its lines,
+	// held between its limits. What the limits add is room align-content
+	// places the lines in — stretched, by its initial value, so a wrapping row
+	// at "min-height: 300px" with two 20px lines has two lines of 150.
+	return crosses, limit(cross)
 }
 
 // lineCross is what a line came to across the axis: how far it reaches, and how
@@ -993,7 +1076,7 @@ func (l *layouter) alignContentSpacing(b *Box, a flexAxis, crosses []lineCross,
 		used = used.Add(c.size)
 	}
 	free := cross.Sub(used)
-	switch trimmedLower(b.Style["align-content"]) {
+	switch trimmedLower(b.Style.Get("align-content")) {
 	case "", "normal", "stretch":
 		if free <= 0 {
 			return 0, 0
@@ -1019,7 +1102,7 @@ func (l *layouter) alignContentSpacing(b *Box, a flexAxis, crosses []lineCross,
 // alignContentOf reads align-content, whose values are justify-content's and
 // mean the same thing on the other axis.
 func (l *layouter) alignContentOf(b *Box, a flexAxis) flexJustify {
-	switch value := trimmedLower(b.Style["align-content"]); value {
+	switch value := trimmedLower(b.Style.Get("align-content")); value {
 	case "space-between":
 		return justifyBetween
 	case "space-around":
@@ -1039,25 +1122,56 @@ func (l *layouter) alignContentOf(b *Box, a flexAxis) flexJustify {
 	}
 }
 
+// columnContentHeight is the height of a column that was told none: the sum
+// of its items' hypothetical main sizes — each flex base size held between the
+// item's own minimum and maximum — and the gaps between them.
+//
+// That is what every browser does, and it is not quite what the specification
+// says. §9.2's step 4 makes the automatic height of a block-level flex
+// container its max-content size, and §9.9.3's contributions make that the
+// items' content wherever they may shrink, so "flex-basis: 100px" on a line of
+// text would be a column one line tall. Every engine makes it a hundred, and
+// that is the answer taken here: a basis in a column is written as a height,
+// and a page that says 100px and gets 20 is a page drawn wrong.
+//
+// Where the two readings part in the other direction — a "flex: 1" pane that
+// may shrink to nothing — the shorthand's "0%" basis is what decides, not this
+// sum: a percentage of this indefinite height is the item's content, so its
+// hypothetical size is its content and the pane holds its text. See
+// flexValuesOf.
+func (l *layouter) columnContentHeight(items []*flexItem, gap style.Unit) style.Unit {
+	out := gap.Mul(float64(len(items) - 1))
+	for _, it := range items {
+		out = out.Add(it.outer(it.hypothetical))
+	}
+	return out
+}
+
 // statedMain is the container's inner main size where it has one, which is what
 // an item that sizes itself as a share of the line is a share of.
 //
 // A row's is its width, which its own containing block gave it: definite, and
-// the same number whatever the items do. A column's is its height, and a height
-// is usually not stated at all — §9.4 then makes the container's main size the
-// sum of what its items asked for, which leaves nothing over to distribute.
-// That is not a special case bolted on: it is what "indefinite main size" comes
-// to. A line exactly as long as the items asked for has nothing left over and
-// nothing missing, so §9.7 resolves every item to the size it asked for and
-// neither flex-grow nor flex-shrink has anything to do — which is why a column
-// of "flex: 1" items does not fill a container that never said how tall it was.
+// the same number whatever the items do. A column's is its height, held between
+// its own min-height and max-height — §9.2's step 4 sizes the container by the
+// rules of the context it is in, and in block layout those limits are part of
+// what a height is. The container's own box was clamped by block layout all
+// along, which is why a column at "height: 50px; min-height: 100px" looked
+// right: its box was 100 tall and its items were flexed into 50.
 //
-// Nothing wraps against a size arrived at this way, and §9.3 would have to say
-// what to do if it could: a line breaks against the room left on it, and a
-// container whose main size is the sum of its items always has exactly enough.
-// It cannot arise — the gate refuses a wrapping column, and a row's main size is
-// its width, which its containing block always states — and it is worth knowing
-// that the two clauses meet rather than merely never having been seen to.
+// A height is usually not stated at all, and then the main size is indefinite
+// here and settled by the caller, from the items — see columnContentHeight —
+// and held between the same two limits. That is audit C29's sticky footer: a
+// column at "min-height: 300px" with a "flex: 1" main between a header and a
+// footer was 300 tall and flexed its items into the 60 they asked for, so the
+// main did not grow and the footer sat under the header. Nothing is left over
+// where the limits do not bind, and neither flex-grow nor flex-shrink has
+// anything to do — which is why a column of "flex: 1" items does not fill a
+// container that never said how tall it was.
+//
+// A wrapping column breaks its lines against the main size, and where the main
+// size is a max-height that bound it, it does: the items that do not fit in the
+// height begin a second column, which is §9.3 against the available main space
+// §9.2 says a max main size gives.
 func (l *layouter) statedMain(b *Box, a flexAxis, width style.Unit,
 	origin flow) (main style.Unit, definite bool) {
 
@@ -1065,7 +1179,7 @@ func (l *layouter) statedMain(b *Box, a flexAxis, width style.Unit,
 		return width, true
 	}
 	if h, ok := l.explicitHeight(b, width, origin.cbHeight, origin.cbDefinite); ok {
-		return h, true
+		return l.clampHeight(b, h, width, origin.cbHeight, origin.cbDefinite), true
 	}
 	return 0, false
 }
@@ -1134,7 +1248,7 @@ const (
 // because that is the one the packing below is written in.
 func (l *layouter) justifyOf(b *Box, a flexAxis) flexJustify {
 	atStart, atEnd := justifyStart, justifyEnd
-	switch trimmedLower(b.Style["justify-content"]) {
+	switch trimmedLower(b.Style.Get("justify-content")) {
 	case "flex-end":
 		return atEnd
 	case "center":
@@ -1164,7 +1278,7 @@ func (l *layouter) justifyOf(b *Box, a flexAxis) flexJustify {
 			}
 			return atStart
 		}
-		wantsEnd := trimmedLower(b.Style["justify-content"]) == "right"
+		wantsEnd := trimmedLower(b.Style.Get("justify-content")) == "right"
 		if a.mainReversed() {
 			wantsEnd = !wantsEnd
 		}
@@ -1185,9 +1299,9 @@ func (l *layouter) justifyOf(b *Box, a flexAxis) flexJustify {
 // computed value, which is why this is a lookup and not a comparison against a
 // resolved string.
 func (l *layouter) alignOf(b *Box, a flexAxis, it *flexItem) flexAlign {
-	self := trimmedLower(it.box.Style["align-self"])
+	self := trimmedLower(it.box.Style.Get("align-self"))
 	if self == "" || self == "auto" {
-		self = trimmedLower(b.Style["align-items"])
+		self = trimmedLower(b.Style.Get("align-items"))
 	}
 	return crossAlignment(self, a)
 }
@@ -1313,7 +1427,55 @@ func (l *layouter) stretchesAcross(a flexAxis, it *flexItem) bool {
 		return false
 	}
 	name := a.crossName()
-	return l.isAuto(it.box, name) || trimmedLower(it.box.Style[name]) == ""
+	return l.isAuto(it.box, name) || trimmedLower(it.box.Style.Get(name)) == ""
+}
+
+// relayMoved lays the moved items out again with lay, having taken back what
+// their first layouts did, and leaves the out-of-flow queue in item order.
+//
+// sides is each item's stretch of the side state from the first pass, which
+// ran the items in order with nothing between them. The items that did not
+// move keep their stretches where they are; each moved item's new out-of-flow
+// boxes are put back where its old ones were, because the queue is the order
+// the boxes are placed in and a moved item is not a later item. Its journalled
+// writes are left where they land: they are for boxes inside the item, which
+// no other item writes for, and writes for different boxes do not depend on
+// their order.
+func (l *layouter) relayMoved(items []*flexItem, moved []int, sides []sideSpan,
+	lay func(*flexItem) *Fragment) {
+
+	gone := make([]sideSpan, len(moved))
+	for k, i := range moved {
+		gone[k] = sides[i]
+	}
+	l.takeBack(gone)
+	// Where the first item's boxes begin, and then each item's in turn.
+	start := sides[0].deferredFrom
+	kept := len(l.deferred)
+	var again [][]absCandidate
+	for _, i := range moved {
+		from := len(l.deferred)
+		items[i].frag = lay(items[i])
+		again = append(again, l.deferred[from:])
+	}
+	if kept == len(l.deferred) {
+		// Nothing a moved item laid out queued anything, so the order is the
+		// one the unmoved items left.
+		return
+	}
+	order := make([]absCandidate, 0, len(l.deferred)-start)
+	at, next := start, 0
+	for i := range items {
+		if next < len(moved) && moved[next] == i {
+			order = append(order, again[next]...)
+			next++
+			continue
+		}
+		n := sides[i].deferredTo - sides[i].deferredFrom
+		order = append(order, l.deferred[at:at+n]...)
+		at += n
+	}
+	l.deferred = append(l.deferred[:start], order...)
 }
 
 // layOutFlexItem lays one item out at the sizes the container has settled on.
@@ -1349,10 +1511,16 @@ func (l *layouter) layOutFlexItem(it *flexItem, a flexAxis, width style.Unit,
 			geom.height, geom.hasHeight = inner, true
 		}
 	}
+	// Alone, and asked again: a container lays each item out more than once
+	// — to measure it, to find its line's cross size, and at the size it is
+	// kept at — and an item that is itself a container does the same to its
+	// own. Without the answers kept that is two layouts per level of nesting,
+	// multiplied down the tree: eighteen nested columns took nineteen seconds.
+	// See speculative.go.
+	at := aloneFlow(origin.cbHeight, origin.cbDefinite)
+	at.again = true
 	return outOfClamp(l, func() *Fragment {
-		f, _ := l.blockIn(it.box, width,
-			flow{ctx: &floatContext{}, cbHeight: origin.cbHeight, cbDefinite: origin.cbDefinite},
-			geom)
+		f, _ := l.blockIn(it.box, width, at, geom)
 		return f
 	})
 }
@@ -1363,26 +1531,10 @@ func (l *layouter) flexItems(b *Box, a flexAxis, room flexRoom, origin flow) []*
 	width := room.width
 	var out []*flexItem
 	for _, c := range b.Children {
-		if c.IsText() || (c.Anonymous() && len(c.Children) == 0) || c.outOfFlow() {
-			// The same three the gate passed over: white space that collapses
-			// to nothing, and a box that is out of the flow rather than in the
-			// row. An anonymous box with something in it *is* an item — §4's
-			// own, made in box.go, or the table repair's around a stray cell.
+		if !isFlexItem(c) {
 			continue
 		}
-		it := &flexItem{
-			box:     c,
-			values:  l.flexValuesOf(c, room),
-			margin:  l.edges(c, "margin", width),
-			border:  l.borderWidths(c),
-			padding: l.paddingOf(c, width),
-		}
-		it.mainSurround = a.mainEdge(it.margin).
-			Add(a.mainEdge(it.border)).Add(a.mainEdge(it.padding))
-		it.crossMargin = a.crossEdge(it.margin)
-		it.auto = l.autoMarginEdges(c)
-		it.order = orderOf(c)
-		out = append(out, it)
+		out = append(out, l.newFlexItem(c, a, room))
 	}
 
 	// §5.4's order-modified document order, which is where every other
@@ -1397,10 +1549,10 @@ func (l *layouter) flexItems(b *Box, a flexAxis, room flexRoom, origin flow) []*
 	slices.SortStableFunc(out, func(x, y *flexItem) int { return x.order - y.order })
 	// A column measures each item by laying it out, and every one of those
 	// layouts is thrown away — the fragment that is kept is the one made at the
-	// size §9.7 settles on. What they took out of the flow goes with them; see
-	// the same argument at the row's stretch pass, which cannot cut the list
-	// back so simply because it keeps some of what it laid out.
-	mark := len(l.deferred)
+	// size §9.7 settles on. Everything they did goes with them: the out-of-flow
+	// boxes they found, and the fragments of the positioned boxes inside them,
+	// which a box positioned against one would otherwise be placed against.
+	before := l.checkpoint(nil, nil)
 	for _, it := range out {
 		if a.column {
 			// §9.2 in the order a column has to take it. An item's height is
@@ -1416,9 +1568,37 @@ func (l *layouter) flexItems(b *Box, a flexAxis, room flexRoom, origin flow) []*
 		it.hypothetical = style.Clamp(it.base, it.min, it.max)
 	}
 	if a.column {
-		l.deferred = l.deferred[:mark]
+		l.rollback(before)
 	}
 	return out
+}
+
+// isFlexItem reports whether a child of a flex container is one of its items.
+//
+// It is the same three the gate passes over: white space that collapses to
+// nothing, and a box that is out of the flow rather than in the row. An
+// anonymous box with something in it *is* an item — §4's own, made in box.go,
+// or the table repair's around a stray cell.
+func isFlexItem(c *Box) bool {
+	return !c.IsText() && !(c.Anonymous() && len(c.Children) == 0) && !c.outOfFlow()
+}
+
+// newFlexItem is an item with everything read off it that does not depend on
+// the sizes §9 settles: its factors, its edges and its order.
+func (l *layouter) newFlexItem(c *Box, a flexAxis, room flexRoom) *flexItem {
+	it := &flexItem{
+		box:     c,
+		values:  l.flexValuesOf(c, room),
+		margin:  l.edges(c, "margin", room.width),
+		border:  l.borderWidths(c),
+		padding: l.paddingOf(c, room.width),
+	}
+	it.mainSurround = a.mainEdge(it.margin).
+		Add(a.mainEdge(it.border)).Add(a.mainEdge(it.padding))
+	it.crossMargin = a.crossEdge(it.margin)
+	it.auto = l.autoMarginEdges(c)
+	it.order = orderOf(c)
+	return it
 }
 
 // crossSizeOf is an item's used cross size as a border box, which a column has
@@ -1441,6 +1621,16 @@ func (l *layouter) crossSizeOf(b *Box, a flexAxis, it *flexItem, width style.Uni
 		// either.
 		return declared.Add(edge)
 	}
+	want := l.contentWidths(it.box)
+	fit := style.Clamp(maxZero(room.Sub(edge)), want.min, want.max)
+	if declared, ok := l.itemKeyword(it, "width", want, fit); ok {
+		// A cross size written as an intrinsic keyword is a size of the item's
+		// own, and an item that states one is not stretched — stretchesAcross
+		// says so, because the declaration is not "auto". It was read as no
+		// declaration at all here, so "width: min-content" down a column came
+		// out as wide as the column.
+		return declared.Add(edge)
+	}
 	if l.alignOf(b, a, it) == crossStretch && l.stretchesAcross(a, it) && !l.wraps(b) {
 		// The line of a container that does not wrap is the container, so a
 		// stretched item's cross size is known here and the item can be
@@ -1451,11 +1641,65 @@ func (l *layouter) crossSizeOf(b *Box, a flexAxis, it *flexItem, width style.Uni
 		// would be with no stretching at all, and only then stretches them to
 		// the line. Measuring at the stretched size would be measuring against
 		// a number this is one of the inputs to.
-		return room
+		return l.clampCross(it, a, room, across)
 	}
-	want := l.contentWidths(it.box)
-	fit := style.Clamp(maxZero(room.Sub(edge)), want.min, want.max)
 	return fit.Add(edge)
+}
+
+// crossRoom is what a percentage on an item's cross axis is a percentage of:
+// the container's width across a column, which is always known, and its height
+// across a row, which is known where it is stated.
+func (l *layouter) crossRoom(b *Box, a flexAxis, width style.Unit, origin flow) flexRoom {
+	if a.column {
+		return flexRoom{main: width, definite: true, width: width}
+	}
+	h, ok := l.explicitHeight(b, width, origin.cbHeight, origin.cbDefinite)
+	if ok {
+		h = l.clampHeight(b, h, width, origin.cbHeight, origin.cbDefinite)
+	}
+	return flexRoom{main: h, definite: ok, width: width}
+}
+
+// clampCross holds a stretched item's cross size, as a border box, between the
+// item's own min and max cross sizes.
+//
+// §9.4's step 11 stretches an item "as for width: auto", and an automatic size
+// is one the §10.4 limits hold: §9.8 says the stretched size is the line's
+// "clamped to the flex item's min and max cross size". It was the line's and
+// nothing else, so an item at "max-width: 50px" in a 400px column was 400
+// wide (audit C106) — while the same limit across a row, a max-height, held,
+// because the item's own layout applied it to the height it was forced to.
+// That is why this holds only a column's cross size: across a row the item's own
+// layout is handed a height, and holds it between the limits itself. Planting
+// the clamp there moved nothing, so it is not written as a guard that decides
+// nothing.
+//
+// The limits are content sizes and the stretched size is a border box, so the
+// item's own border and padding across the axis come off before the clamp and
+// go back on after it. A keyword limit counts, as it does on the main axis.
+func (l *layouter) clampCross(it *flexItem, a flexAxis, border style.Unit, across flexRoom) style.Unit {
+	if !a.column {
+		return border
+	}
+	edge := a.crossEdge(it.border).Add(a.crossEdge(it.padding))
+	axis := flexAxis{column: !a.column}
+	lo, hi := style.Unit(0), style.MaxUnit
+	keyword := func(property string) (style.Unit, bool) {
+		got := l.contentWidths(it.box)
+		fit := style.Clamp(maxZero(across.main.Sub(edge).Sub(it.crossMargin)), got.min, got.max)
+		return l.itemKeyword(it, property, got, fit)
+	}
+	if v, ok := l.mainLength(it.box, axis, "min-"+a.crossName(), across); ok {
+		lo = v
+	} else if v, ok := keyword("min-" + a.crossName()); ok {
+		lo = v
+	}
+	if v, ok := l.mainLength(it.box, axis, "max-"+a.crossName(), across); ok {
+		hi = v
+	} else if v, ok := keyword("max-" + a.crossName()); ok {
+		hi = v
+	}
+	return style.Clamp(maxZero(border.Sub(edge)), lo, hi).Add(edge)
 }
 
 // measuredMain is what an item's content comes to along the main axis, which is
@@ -1483,20 +1727,100 @@ func (l *layouter) measuredMain(it *flexItem, a flexAxis, width style.Unit,
 // max-content size, which is the size it would take if the line were as wide as
 // it liked. That last one is why a row of three words comes out as three words
 // wide rather than three equal thirds.
+//
+// A basis or a width written as one of the intrinsic keywords is a size of the
+// content too, and a different one from "auto" — "min-content" is the longest
+// word and not the whole line. Down a column all three are the same number,
+// because along a block's own block axis the content has one size: what it
+// came to.
+//
+// Where nothing is declared at all the content is sized "under the
+// constraint" the container is, which is §9.2.3's rule: at max-content while
+// the container is being laid out or measured at its widest, and at
+// min-content while it is measured at its narrowest.
 func (l *layouter) flexBaseSize(it *flexItem, a flexAxis, room flexRoom) style.Unit {
+	got, fit := l.mainContent(it, a, room)
+	if kw := it.values.basisKeyword; kw != "" {
+		return contentKeyword(kw, got, fit)
+	}
 	if !it.values.basisAuto {
 		return maxZero(it.values.basis.Sub(l.sizingEdgeOf(it.box, a, room.width)))
 	}
-	if declared, ok := l.mainLength(it.box, a, a.mainName(), room); ok &&
-		!it.values.basisContent {
-		return declared
+	if !it.values.basisContent {
+		if declared, ok := l.mainLength(it.box, a, a.mainName(), room); ok {
+			return declared
+		}
+		if !a.column {
+			if declared, ok := l.itemKeyword(it, "width", got, fit); ok {
+				return declared
+			}
+		}
 	}
 	if a.column {
 		// The max-content size of a block along its own block axis is what its
 		// content came to, which is the measurement already taken.
 		return it.measured
 	}
-	return l.contentWidths(it.box).max
+	if !room.definite && room.underMin {
+		return got.min
+	}
+	return got.max
+}
+
+// mainContent is an item's content along the main axis, as the pair of
+// intrinsic sizes and the fit-content size between them.
+//
+// Along a row that is contentWidths and CSS Sizing §5's fit-content formula
+// over the room the line leaves the item, which is the container's inner width
+// less the item's own margins, border and padding. A container being measured
+// has no such room, and its constraint answers instead: fit-content under a
+// min-content constraint is min-content and under a max-content one is
+// max-content. Down a column it is the measured height for all three.
+func (l *layouter) mainContent(it *flexItem, a flexAxis, room flexRoom) (got intrinsicWidths, fit style.Unit) {
+	if a.column {
+		return intrinsicWidths{min: it.measured, max: it.measured}, it.measured
+	}
+	got = l.contentWidths(it.box)
+	switch {
+	case room.definite:
+		fit = style.Clamp(maxZero(room.main.Sub(it.mainSurround)), got.min, got.max)
+	case room.underMin:
+		fit = got.min
+	default:
+		fit = got.max
+	}
+	return got, fit
+}
+
+// contentKeyword is the size one of the three intrinsic keywords names, out of
+// the content's two sizes and the fit-content size between them.
+func contentKeyword(kw string, got intrinsicWidths, fit style.Unit) style.Unit {
+	switch kw {
+	case "min-content":
+		return got.min
+	case "max-content":
+		return got.max
+	}
+	return fit
+}
+
+// itemKeyword is an intrinsic keyword on one of an item's horizontal sizing
+// properties, answered as a content size, or false where the property does not
+// name one this engine applies.
+//
+// appliesSizingKeyword is asked first and is the whole of the gate. It is what
+// checkIntrinsicSizing reports from, so a keyword this answers is one the
+// document is told is applied and a keyword it refuses is one the document is
+// told is not — the two cannot drift, which is why this does not keep a list
+// of its own. The keyword names a content width under either box-sizing value,
+// for the reason keywordWidth gives.
+func (l *layouter) itemKeyword(it *flexItem, property string, got intrinsicWidths,
+	fit style.Unit) (style.Unit, bool) {
+
+	if !l.appliesSizingKeyword(it.box, property) {
+		return 0, false
+	}
+	return contentKeyword(bareSizingKeyword(it.box.Style.Get(property)), got, fit), true
 }
 
 // flexRoom is what the container offers an item that sizes itself against it:
@@ -1512,6 +1836,12 @@ type flexRoom struct {
 	main     style.Unit
 	definite bool
 	width    style.Unit
+	// underMin says an indefinite main size is the container being measured
+	// under a min-content constraint rather than a max-content one. Only the
+	// intrinsic measurement sets it — layout always knows a row's width — and
+	// what it changes is what an item's content counts as where §9.2.3 says to
+	// "size the item under that constraint".
+	underMin bool
 }
 
 // mainLength is one of the item's own main-axis sizes, resolved as a content
@@ -1564,12 +1894,28 @@ func (l *layouter) sizingEdgeOf(c *Box, a flexAxis, containing style.Unit) style
 // item that asked to be narrower than its content asked for that.
 func (l *layouter) flexMainLimits(it *flexItem, a flexAxis, room flexRoom) (min, max style.Unit) {
 	c := it.box
+	got, fit := l.mainContent(it, a, room)
+	// A keyword limit is a limit, and along a row it is read as one. Down a
+	// column the limits are heights, which this engine does not take from a
+	// keyword anywhere — checkIntrinsicSizing reports them — and so neither
+	// does this.
+	keyword := func(property string) (style.Unit, bool) {
+		if a.column {
+			return 0, false
+		}
+		return l.itemKeyword(it, property, got, fit)
+	}
 	max = style.MaxUnit
 	if v, ok := l.mainLength(c, a, a.maxName(), room); ok {
+		max = v
+	} else if v, ok := keyword(a.maxName()); ok {
 		max = v
 	}
 	if !l.isAuto(c, a.minName()) {
 		if v, ok := l.mainLength(c, a, a.minName(), room); ok {
+			return v, max
+		}
+		if v, ok := keyword(a.minName()); ok {
 			return v, max
 		}
 	}
@@ -1579,20 +1925,38 @@ func (l *layouter) flexMainLimits(it *flexItem, a flexAxis, room flexRoom) (min,
 	// carrying a computed zero is indistinguishable from one whose author asked
 	// for zero, and asking for zero is the idiom for defeating this very rule.
 	//
-	// The clause after it: an item that clips its own overflow along the main
-	// axis has an automatic minimum of nothing. That is not an exception, it is
-	// the reason the rule is safe — the minimum exists so that content is not
-	// cut off invisibly, and a box that says it will cut its content off has
-	// asked for exactly that. It is what makes the ellipsis idiom work, "flex:
-	// 1 1 0" with "overflow: hidden" on a long word, which could not shrink at
-	// all: 588px of word in a 300px container.
-	if !overflowIsVisibleOn(c.Style, a.overflowName()) {
-		if declared, ok := l.mainLength(c, a, a.mainName(), room); ok && declared < max {
-			return declared, max
+	// The clause after it: an item that is a scroll container has an
+	// automatic minimum of nothing. That is not an exception, it is the reason
+	// the rule is safe — the minimum exists so that content is not cut off
+	// invisibly, and a box that scrolls its content has asked for exactly that.
+	// It is what makes the ellipsis idiom work, "flex: 1 1 0" with "overflow:
+	// hidden" on a long word, which could not shrink at all: 588px of word in a
+	// 300px container.
+	//
+	// A scroll container, which is §4.5's word, and not "overflow other than
+	// visible along the main axis", which is what this asked. The two differ
+	// both ways. "overflow: clip" cuts the content off and makes no scroll
+	// container (CSS Overflow 3), so a clipping item keeps its content-based
+	// minimum. And a scrolling value on the cross axis alone makes the main
+	// axis scroll too — §3.1 computes a "visible" beside "hidden" to "auto" —
+	// so "overflow-y: hidden" on an item in a row may shrink to nothing. See
+	// isScrollContainer.
+	//
+	// §4.5's specified size suggestion is the item's own main size where it
+	// states one, a keyword included: "width: min-content" is as definite a
+	// size as a length is, and an item that asked for it asked to be no wider
+	// than its longest word.
+	specified, stated := l.mainLength(c, a, a.mainName(), room)
+	if !stated {
+		specified, stated = keyword(a.mainName())
+	}
+	if isScrollContainer(c.Style) {
+		if stated && specified < max {
+			return specified, max
 		}
 		return 0, max
 	}
-	min = l.contentWidths(c).min
+	min = got.min
 	if a.column {
 		// §4.5's content size suggestion along the block axis: the smallest a
 		// block can be without its content spilling out of it is the size its
@@ -1601,8 +1965,8 @@ func (l *layouter) flexMainLimits(it *flexItem, a flexAxis, room flexRoom) (min,
 		// behaviour authors meet as "my flex item will not get smaller".
 		min = it.measured
 	}
-	if declared, ok := l.mainLength(c, a, a.mainName(), room); ok && declared < min {
-		min = declared
+	if stated && specified < min {
+		min = specified
 	}
 	if max < min {
 		min = max
@@ -1797,6 +2161,123 @@ func absUnit(v style.Unit) style.Unit {
 		return -v
 	}
 	return v
+}
+
+// flexContentWidths is a flex container's min-content and max-content widths,
+// which Flexbox §9.9 answers and a stack of blocks does not.
+//
+// Along a row the items sit side by side, so the container needs their sum —
+// §9.9.1's Web-compatible algorithm, which the specification offers beside an
+// "ideal" one it says in as many words is not Web-compatible, and which is the
+// one every browser ships. The max-content width is the sum of the items'
+// max-content contributions; the min-content width of a single-line container
+// is the sum of their min-content contributions, because nothing it holds may
+// go onto a second line; and that of a multi-line one is the largest of them,
+// because every item may. The gaps between the items are counted where the
+// items are summed: Box Alignment §8 makes a gap room between two items, and a
+// row measured without it is a gap too narrow for its own content.
+//
+// Down a column the items stack and the width is the cross size, which §9.9.2
+// makes the largest contribution of any item. A multi-line column is the one
+// case not answered in full. Its max-content width is the sum of its lines'
+// widths, and which items share a line depends on how tall each is — a
+// measurement by layout that this walk over the box tree does not make. It is
+// measured as one line, which is exact wherever the column has no height to
+// wrap against, and reported where it has one.
+//
+// Before this every flex container was measured as a block, so a float holding
+// a row of two words was one word wide and hung the second outside itself.
+func (l *layouter) flexContentWidths(b *Box) intrinsicWidths {
+	a := l.axisOf(b)
+	wraps := l.wraps(b)
+	var out intrinsicWidths
+	n := 0
+	for _, c := range b.Children {
+		if !isFlexItem(c) {
+			continue
+		}
+		n++
+		if a.column {
+			got := l.outerWidths(c, 0)
+			out.min = style.Max(out.min, got.min)
+			out.max = style.Max(out.max, got.max)
+			continue
+		}
+		got := l.flexItemContributions(c, a)
+		if wraps {
+			out.min = style.Max(out.min, got.min)
+		} else {
+			out.min = out.min.Add(got.min)
+		}
+		out.max = out.max.Add(got.max)
+	}
+	if n > 1 && !a.column {
+		// A percentage gap is of a width that is being worked out, and Box
+		// Alignment §8.3 resolves it against nothing for exactly this: a basis
+		// of zero, which is what flexGap is handed.
+		gaps := l.flexGap(b, a, 0).Mul(float64(n - 1))
+		out.max = out.max.Add(gaps)
+		if !wraps {
+			out.min = out.min.Add(gaps)
+		}
+	}
+	if a.column && wraps && n > 1 &&
+		(!l.isAuto(b, "height") || trimmedLower(b.Style.Get("max-height")) != "none") {
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleUnsupportedValue,
+			Source: AtHTML(offsetOf(b)),
+			Message: "this wrapping flex column was measured as though its items " +
+				"were in one column; where its height wraps them into more, the " +
+				"box sized to hold it is narrower than the columns it holds",
+			Path:     PathOf(b.Element),
+			Property: "flex-wrap",
+		})
+	}
+	out.max = style.Max(out.max, out.min)
+	return out
+}
+
+// flexItemContributions is §9.9.3: how much of a row an item asks for when the
+// row is being measured rather than laid out, as a margin-box width.
+//
+// Each contribution is the larger of the item's content size and the width it
+// states, then capped by its flex base size if it may not grow and floored by
+// it if it may not shrink — an item at "flex: none" is its basis, whatever its
+// content — and then held between its own minimum and maximum main sizes, the
+// automatic minimum of §4.5 included. The base size is found under the same
+// constraint the container is measured under, which is why the two halves are
+// computed separately and not read off one layout.
+func (l *layouter) flexItemContributions(c *Box, a flexAxis) intrinsicWidths {
+	var out intrinsicWidths
+	for _, underMin := range [...]bool{true, false} {
+		room := flexRoom{underMin: underMin}
+		it := l.newFlexItem(c, a, room)
+		got, fit := l.mainContent(it, a, room)
+		size := got.max
+		if underMin {
+			size = got.min
+		}
+		if stated, ok := l.mainLength(c, a, a.mainName(), room); ok {
+			size = style.Max(size, stated)
+		} else if stated, ok := l.itemKeyword(it, a.mainName(), got, fit); ok {
+			size = style.Max(size, stated)
+		}
+		base := l.flexBaseSize(it, a, room)
+		if it.values.grow == 0 {
+			size = style.Min(size, base)
+		}
+		if it.values.shrink == 0 {
+			size = style.Max(size, base)
+		}
+		lo, hi := l.flexMainLimits(it, a, room)
+		size = maxZero(style.Clamp(size, lo, hi).Add(it.mainSurround))
+		if underMin {
+			out.min = size
+		} else {
+			out.max = size
+		}
+	}
+	return out
 }
 
 // flexes reports whether a flex container is one this engine arranges, and

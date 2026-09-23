@@ -60,9 +60,7 @@ func TestAnInlineBlockInAZeroFontSizeBoxHasNoStrutUnderIt(t *testing.T) {
 // behind it, and an "em" in one of its declarations has to resolve against
 // something.
 func TestABoxNobodyGaveAFontSizeStillGetsOne(t *testing.T) {
-	b := &Box{Outer: OuterBlock, Inner: InnerFlow, Style: style.ComputedStyle{
-		"height": "2em",
-	}}
+	b := &Box{Outer: OuterBlock, Inner: InnerFlow, Style: style.Initial().With("height", "2em")}
 	rec := NewRecorder(nil)
 	w, _ := style.FromPx(600)
 	h, _ := style.FromPx(10000)

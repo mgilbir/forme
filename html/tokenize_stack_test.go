@@ -102,7 +102,7 @@ func TestEveryDroppedConstructIsConsumed(t *testing.T) {
 		{"a nameless end tag", "</ >"},
 		{"a nameless end tag with no terminator", "</ "},
 	} {
-		tk := newTokenizer(tc.src)
+		tk := newTokenizer(tc.src, false)
 		before := tk.pos
 		if _, ok := tk.step(); ok {
 			t.Errorf("%s: produced a token; this test is about the branches that do not", tc.name)
@@ -116,7 +116,7 @@ func TestEveryDroppedConstructIsConsumed(t *testing.T) {
 	// A closed comment used to be on that list and is not: it produces a token
 	// now, carrying nothing, because HTML's rules count tokens and one of them
 	// counts this. It has to consume itself all the same.
-	tk := newTokenizer("<!---->")
+	tk := newTokenizer("<!---->", false)
 	tok, ok := tk.step()
 	if !ok || tok.kind != tokComment {
 		t.Errorf("a closed comment produced %v, %v; want a comment token", tok.kind, ok)
@@ -127,7 +127,7 @@ func TestEveryDroppedConstructIsConsumed(t *testing.T) {
 	// property this file is about is unchanged and still has to hold — it must
 	// consume itself, or next spins.
 	for _, src := range []string{"<=", "<"} {
-		tk := newTokenizer(src)
+		tk := newTokenizer(src, false)
 		before := tk.pos
 		tok, ok := tk.step()
 		if !ok || tok.kind != tokText || tok.text != "<" {

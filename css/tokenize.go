@@ -3,7 +3,6 @@ package css
 import (
 	"fmt"
 	"math"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -37,18 +36,52 @@ const maxErrors = 100
 // Errors are the places where the input was malformed and the specification's
 // recovery was applied. Tokenizing never fails, so they are advisory: a caller
 // that ignores them gets the same tokens a browser would produce.
+//
+// The parser does not call this. It pulls tokens one at a time as it needs them
+// (see parser.tokenAt), so that parsing a stylesheet never holds every token of
+// it and the tree built from them at once.
 func Tokenize(input string) ([]Token, []Error) {
 	t := newTokenizer(input)
-	// One token per two bytes is a fair guess for real CSS and costs nothing
-	// when it is wrong.
+	// One token per two bytes is a fair guess for real CSS. When it is wrong
+	// the slice doubles, and that is written out rather than left to append:
+	// past a few hundred elements append grows a slice by a quarter at a time,
+	// so a sheet of one token per byte — "a{b:,,,…}" — outgrew the guess and
+	// was then copied a dozen more times, allocating five times the slice it
+	// ended with. Doubling copies at most as much again as it keeps.
 	out := make([]Token, 0, len(input)/2+1)
 	for {
 		tok := t.token()
+		if len(out) == cap(out) {
+			grown := make([]Token, len(out), 2*cap(out))
+			copy(grown, out)
+			out = grown
+		}
 		out = append(out, tok)
 		if tok.Kind == EOF {
 			return out, t.errs
 		}
 	}
+}
+
+// CountTokens is how many tokens input holds, not counting the EOF, read no
+// further than one past limit: a count above limit means "more than limit" and
+// is not the whole count.
+//
+// It is what a caller bounding what a stylesheet costs to parse has to ask,
+// because the cost is in the tokens and not in the bytes: every token becomes a
+// ComponentValue of close to a hundred bytes, while a string token holding a
+// megabyte of base64 font is one value and a megabyte of text. It keeps nothing
+// — no token, no problem found — so asking it costs a pass of the tokenizer and
+// no more, and asking it of a sheet that is too large costs only as far as the
+// limit.
+func CountTokens(input string, limit int) int {
+	t := newTokenizer(input)
+	t.quiet = true
+	n := 0
+	for n <= limit && t.token().Kind != EOF {
+		n++
+	}
+	return n
 }
 
 type tokenizer struct {
@@ -76,6 +109,11 @@ type tokenizer struct {
 	end  int // len(input), the offset of end-of-file
 	pos  int
 	errs []Error
+	// quiet silences fail, for a tokenizer whose findings nobody will read: a
+	// copy reading ahead of the parser, whose findings the original will make
+	// again (see parser.startsANestedRule), and one only counting (see
+	// CountTokens).
+	quiet bool
 }
 
 // alwaysPreprocess forces the slow path, so that a test can read one stylesheet
@@ -183,17 +221,28 @@ func (t *tokenizer) offset() int {
 }
 
 func (t *tokenizer) fail(off int, msg string) {
-	switch {
-	case len(t.errs) > maxErrors:
+	if t.quiet {
 		return
-	case len(t.errs) == maxErrors:
-		t.errs = append(t.errs, Error{
-			Offset:  off,
+	}
+	t.errs = addError(t.errs, Error{Offset: off, Message: msg})
+}
+
+// addError appends a problem to a list under the maxErrors bound, putting the
+// note that the list was cut in place of the first one past it.
+//
+// It is one function because two lists are kept under the one bound: the
+// tokenizer's, and the parser's, which is laid after it. See parser.report.
+func addError(list []Error, e Error) []Error {
+	switch {
+	case len(list) > maxErrors:
+		return list
+	case len(list) == maxErrors:
+		return append(list, Error{
+			Offset:  e.Offset,
 			Message: "further problems in this stylesheet were not reported",
 		})
-	default:
-		t.errs = append(t.errs, Error{Offset: off, Message: msg})
 	}
+	return append(list, e)
 }
 
 // token consumes one token (§4.3.1).
@@ -507,8 +556,32 @@ func (t *tokenizer) consumeEscape() rune {
 }
 
 // consumeIdentSequence reads a name (§4.3.11), resolving escapes.
+//
+// A name with no escape in it, in an input that is its own preprocessed form, is
+// exactly the bytes it was written as, and is handed back as those bytes rather
+// than copied. Names are most of the tokens a stylesheet has, and building each
+// one in a buffer of its own was an allocation per name for a string already
+// sitting in the input.
 func (t *tokenizer) consumeIdentSequence() string {
+	start := t.pos
+	for isIdent(t.cur()) {
+		t.advance()
+	}
+	escaped := validEscape(t.cur(), t.at(1))
+	if t.src == nil && !escaped {
+		return t.input[start:t.pos]
+	}
+	if !escaped {
+		return string(t.src[start:t.pos])
+	}
 	var b strings.Builder
+	if t.src == nil {
+		b.WriteString(t.input[start:t.pos])
+	} else {
+		for _, r := range t.src[start:t.pos] {
+			b.WriteRune(r)
+		}
+	}
 	for {
 		r := t.cur()
 		switch {
@@ -580,24 +653,26 @@ func (t *tokenizer) consumeNumeric(start int) Token {
 
 // consumeNumber reads the number itself (§4.3.12), returning its value, the
 // text exactly as written, and whether it was an integer.
+//
+// The text is every code point this consumes and nothing else, so it is taken
+// from where they were read rather than assembled one at a time into a buffer:
+// the bytes of the input on the fast path, and the preprocessed code points —
+// every one of them ASCII, since nothing else is part of a number — on the slow
+// one.
 func (t *tokenizer) consumeNumber() (value float64, repr string, isInteger bool) {
-	var b strings.Builder
+	start := t.pos
 	isInteger = true
 
 	if r := t.cur(); r == '+' || r == '-' {
-		b.WriteRune(r)
 		t.advance()
 	}
 	for isDigit(t.cur()) {
-		b.WriteRune(t.cur())
 		t.advance()
 	}
 	if t.cur() == '.' && isDigit(t.at(1)) {
 		isInteger = false
-		b.WriteRune('.')
 		t.advance()
 		for isDigit(t.cur()) {
-			b.WriteRune(t.cur())
 			t.advance()
 		}
 	}
@@ -610,42 +685,40 @@ func (t *tokenizer) consumeNumber() (value float64, repr string, isInteger bool)
 		}
 		if isDigit(t.at(digitAt)) {
 			isInteger = false
-			b.WriteRune(e)
 			t.advance()
 			if signed {
-				b.WriteRune(t.cur())
 				t.advance()
 			}
 			for isDigit(t.cur()) {
-				b.WriteRune(t.cur())
 				t.advance()
 			}
 		}
 	}
 
-	repr = b.String()
+	if t.src == nil {
+		repr = t.input[start:t.pos]
+	} else {
+		repr = string(t.src[start:t.pos])
+	}
 	return parseNumber(repr), repr, isInteger
 }
 
-// parseNumber converts what consumeNumber assembled.
+// parseNumber converts what consumeNumber assembled, through NumberValue — the
+// one reading of a number's value every reader in the engine shares.
 //
-// The only input ParseFloat can reject here is one whose exponent is out of
-// range, which it reports alongside an infinity. An infinite length would poison
-// every arithmetic that touched it and produce a page of NaNs, so it is clamped
-// to the largest finite value: a number too big to represent is still, for
-// layout, just a very large number.
+// A number too large for a float64 comes back out of range, as the infinity of
+// its sign. An infinite length would poison every arithmetic that touched it
+// and produce a page of NaNs, so it is clamped to the largest finite value: a
+// number too big to represent is still, for layout, just a very large number.
 func parseNumber(repr string) float64 {
-	v, err := strconv.ParseFloat(repr, 64)
-	if err == nil {
-		return v
-	}
+	v, inRange := NumberValue(repr)
 	switch {
-	case math.IsInf(v, 1):
+	case inRange:
+		return v
+	case v > 0:
 		return math.MaxFloat64
-	case math.IsInf(v, -1):
-		return -math.MaxFloat64
 	}
-	return 0
+	return -math.MaxFloat64
 }
 
 // validEscape reports whether two code points begin an escape (§4.3.8).

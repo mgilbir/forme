@@ -136,7 +136,21 @@ func (l *layouter) replacedSize(b *Box, containing, cbHeight style.Unit, cbDefin
 	// for the absence and not for the nought.
 	hasIntrinsicW := rc.Width > 0 || rc.Stated
 	hasIntrinsicH := rc.Height > 0 || rc.Stated
-	ratio := rc.Ratio
+	// The ratio the box is sized by: the content's own, unless aspect-ratio
+	// names another (CSS Sizing 4 §5.1), and of the box that offH and offV
+	// say — the content box, or under "box-sizing: border-box" a declared
+	// "<ratio>"'s border box. See layout/aspectratio.go.
+	ratio, offH, offV, declared := l.preferredRatio(b, rc.Ratio, containing)
+	toH := func(w style.Unit) style.Unit { return transferredHeight(w, ratio, offH, offV) }
+	toW := func(h style.Unit) style.Unit { return transferredWidth(h, ratio, offH, offV) }
+	if declared && hasIntrinsicW && hasIntrinsicH {
+		// A declared ratio makes the height the ratio-dependent axis wherever
+		// both are auto (CSS Sizing 4 §5.2): the natural width stands and the
+		// height follows from it. Keeping both natural sizes would keep the
+		// picture's shape, which is the one thing the declaration was written
+		// to change.
+		hasIntrinsicH = false
+	}
 
 	var w, h style.Unit
 	switch {
@@ -150,7 +164,7 @@ func (l *layouter) replacedSize(b *Box, containing, cbHeight style.Unit, cbDefin
 		w = width
 		switch {
 		case ratio > 0:
-			h = w.Div(ratio)
+			h = toH(w)
 		case hasIntrinsicH:
 			h = rc.Height
 		default:
@@ -161,7 +175,7 @@ func (l *layouter) replacedSize(b *Box, containing, cbHeight style.Unit, cbDefin
 		h = height
 		switch {
 		case ratio > 0:
-			w = h.Mul(ratio)
+			w = toW(h)
 		case hasIntrinsicW:
 			w = rc.Width
 		default:
@@ -176,14 +190,14 @@ func (l *layouter) replacedSize(b *Box, containing, cbHeight style.Unit, cbDefin
 		case hasIntrinsicW:
 			w = rc.Width
 			if ratio > 0 {
-				h = w.Div(ratio)
+				h = toH(w)
 			} else {
 				h = defaultReplacedHeight
 			}
 		case hasIntrinsicH:
 			h = rc.Height
 			if ratio > 0 {
-				w = h.Mul(ratio)
+				w = toW(h)
 			} else {
 				w = defaultReplacedWidth
 			}
@@ -193,13 +207,13 @@ func (l *layouter) replacedSize(b *Box, containing, cbHeight style.Unit, cbDefin
 			// wider than 300px — which is what this is, written as the smaller
 			// of the two.
 			w = style.Min(containing, defaultReplacedWidth)
-			h = w.Div(ratio)
+			h = toH(w)
 		default:
 			w, h = defaultReplacedWidth, defaultReplacedHeight
 		}
 	}
 
-	return l.clampReplaced(b, w, h, ratio, containing, cbHeight, cbDefinite)
+	return l.clampReplaced(b, w, h, ratio, offH, offV, containing, cbHeight, cbDefinite)
 }
 
 // clampReplaced applies the minimum and maximum constraints of CSS 2.1 §10.4.
@@ -215,13 +229,29 @@ func (l *layouter) replacedSize(b *Box, containing, cbHeight style.Unit, cbDefin
 // applies is decided by comparing the *ratios* of the violations rather than
 // their sizes; an implementation that reasoned about it instead of copying it
 // gets that comparison the wrong way round about half the time.
-func (l *layouter) clampReplaced(b *Box, w, h style.Unit, ratio float64,
+//
+// offH and offV are how much larger than the content box the box the ratio is
+// of is — see preferredRatio. The table keeps a ratio between two sizes, so it
+// is read in that box's sizes: everything is made that much larger before it
+// and that much smaller after, which for a ratio of the content box is nothing.
+func (l *layouter) clampReplaced(b *Box, w, h style.Unit, ratio float64, offH, offV style.Unit,
+	containing, cbHeight style.Unit, cbDefinite bool) Size {
+
+	got := l.clampReplacedIn(b, w.Add(offH), h.Add(offV), ratio, offH, offV,
+		containing, cbHeight, cbDefinite)
+	return Size{W: maxZero(got.W.Sub(offH)), H: maxZero(got.H.Sub(offV))}
+}
+
+// clampReplacedIn is clampReplaced in the sizes of the box the ratio is of.
+func (l *layouter) clampReplacedIn(b *Box, w, h style.Unit, ratio float64, offH, offV style.Unit,
 	containing, cbHeight style.Unit, cbDefinite bool) Size {
 
 	// The limits are declared values, so under "border-box" they name the border
 	// box and the table below is about the content box. Each is converted the
-	// same way the declared width and height were.
+	// same way the declared width and height were — and then, like the sizes,
+	// into the ratio's box; see clampReplaced.
 	insetH, insetV := l.sizingInset(b, containing)
+	insetH, insetV = insetH.Sub(offH), insetV.Sub(offV)
 
 	minW := style.Unit(0)
 	if v, ok := l.lengthOf(b, "min-width", containing); ok && v > 0 {
@@ -378,19 +408,43 @@ func (l *layouter) replacedIntrinsicWidth(b *Box) style.Unit {
 		return maxZero(l.clampWidth(b, maxZero(length.Value.Sub(insetH)), 0))
 	}
 	// An auto width with a declared height and a ratio is decided by the
-	// height, exactly as §10.3.2 decides it in layout.
-	if length, ok := l.parseLength(b, "height"); ok && rc.Ratio > 0 {
+	// height, exactly as §10.3.2 decides it in layout — and by the ratio
+	// layout sizes the box by, which aspect-ratio may have replaced. See
+	// preferredRatio.
+	ratio, offH, offV, _ := l.preferredRatio(b, rc.Ratio, 0)
+	if length, ok := l.parseLength(b, "height"); ok && ratio > 0 {
 		switch length.Kind {
 		case style.LengthAbsolute:
-			return maxZero(l.clampWidth(b, maxZero(length.Value.Sub(insetV)).Mul(rc.Ratio), 0))
+			w := transferredWidth(maxZero(length.Value.Sub(insetV)), ratio, offH, offV)
+			return maxZero(l.clampWidth(b, w, 0))
 		case style.LengthPercent:
 			if basis, ok := l.settledAncestorHeight(b); ok {
 				h, _ := length.Resolve(basis, true)
-				return maxZero(l.clampWidth(b, maxZero(h.Sub(insetV)).Mul(rc.Ratio), 0))
+				w := transferredWidth(maxZero(h.Sub(insetV)), ratio, offH, offV)
+				return maxZero(l.clampWidth(b, w, 0))
 			}
 		}
 	}
-	return maxZero(l.clampWidth(b, rc.Width, 0))
+	// Both auto, which is §10.3.2's four cases as replacedSize reads them. It
+	// was the natural width and nothing else, so a picture that states only a
+	// height and a ratio — an SVG with a height and a viewBox — and content
+	// with no dimensions at all, an <iframe> or a <video>, measured nought:
+	// a float around one shrank to nothing while the picture inside it was
+	// laid out at its full width.
+	var w style.Unit
+	switch {
+	case rc.Width > 0 || rc.Stated:
+		w = rc.Width
+	case rc.Height > 0 && ratio > 0:
+		w = transferredWidth(rc.Height, ratio, offH, offV)
+	default:
+		// No dimension to take a width from. A ratio alone is sized against
+		// the containing block, capped at the default width, and no
+		// containing block is known while a width is being measured — so the
+		// largest that sizing can give is what the content asks for.
+		w = defaultReplacedWidth
+	}
+	return maxZero(l.clampWidth(b, w, 0))
 }
 
 // settledAncestorHeight is the height a percentage on b resolves against, for a

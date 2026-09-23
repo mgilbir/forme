@@ -40,13 +40,12 @@ type Marker struct {
 	ImageRect Rect
 }
 
-// markerFor works out the marker a list item generates, or nil.
+// markerFor works out the marker an outside list item generates, or nil.
 //
-// index is the item's one-based position among the list items of its parent. It
-// is a fallback only: what a numbered list counts is the "list-item" counter,
-// which the user-agent sheet increments and every list resets. The two agree for
-// a plain list and disagree the moment a document says <ol start="5"> or
-// <li value="3"> or resets the counter itself.
+// The number is the item's "list-item" counter, which the box builder read into
+// Box.ListValue: the user-agent sheet increments it and every list resets it, so
+// it is the item's position for a plain list and what the document said for
+// <ol start="5">, <li value="3"> or a counter reset of its own.
 func (l *layouter) markerFor(b *Box, frag *Fragment, origin flow) *Marker {
 	if markerInside(b) {
 		// An inside marker is not drawn beside the box: it is the first thing on
@@ -63,8 +62,8 @@ func (l *layouter) markerFor(b *Box, frag *Fragment, origin flow) *Marker {
 	size := b.FontSize
 	width := l.br.Measure(face, text, size)
 	lineHeight := l.lineHeight(b)
-	// The marker sits on the item's *first line*, the same line its x is
-	// measured against — so where there is one, its baseline is the marker's.
+	// The marker sits on the item's *first formatted line*, the same line its x
+	// is measured against — so where there is one, its baseline is the marker's.
 	//
 	// It used to be derived from the strut alone, which is the right answer for
 	// an item whose first line is an ordinary one and gives no answer at all
@@ -72,7 +71,18 @@ func (l *layouter) markerFor(b *Box, frag *Fragment, origin flow) *Marker {
 	// first line taller than the strut — an image, a larger span, a line-height
 	// of its own — puts its baseline further down, and the bullet stayed level
 	// with a strut nothing was set in.
-	baseline := frag.Border.Top.Add(frag.Padding.Top).Add(firstLineBaseline(frag, l.baselineOf(b, lineHeight)))
+	//
+	// And the first formatted line is not always the item's own. §5.12.1 finds
+	// it "inside a block-level descendant in the same flow" when the item's
+	// content is block-level, which is how most list items are written once they
+	// hold more than a word: "<li><p>", "<li><h2>". Reading only the item's own
+	// lines found none there and fell back to the strut, so a bullet beside a
+	// 40px heading sat level with a 16px line nobody set.
+	first, found := firstLineIn(frag)
+	baseline := first.baseline
+	if !found {
+		baseline = frag.Border.Top.Add(frag.Padding.Top).Add(l.baselineOf(b, lineHeight))
+	}
 	// Where the marker sits from: the item's *border* box, moved along by
 	// whatever a float has taken off its first line.
 	//
@@ -88,14 +98,32 @@ func (l *layouter) markerFor(b *Box, frag *Fragment, origin flow) *Marker {
 	// border box is not displaced by a float, only the lines inside it are — so
 	// a marker placed from the box alone is left behind under the float, an inch
 	// away from its own text.
-	inner := l.firstLineStart(frag, origin)
+	//
+	// Which side is the item's inline-start side, and that is not always the
+	// left. css-lists-3 puts an outside marker before the first line in the
+	// inline direction, so in a right-to-left item it is past the *right* border
+	// edge and the gap is on its left: an Arabic or Hebrew list drawn with its
+	// bullets on the left has them at the far end of the line from the words
+	// they number. start is the distance the float pushes the line in from that
+	// side, and the two sides are mirror images of each other.
+	rtl := isRTL(b)
+	start := l.firstLineStart(frag, origin, first, found, rtl)
+	gap := markerGap(size)
+	// before is where a thing w wide goes so that it ends a gap short of the
+	// line: to its left in a left-to-right item, to its right in the other.
+	before := func(w style.Unit) style.Unit {
+		if rtl {
+			return frag.BorderRect.W.Sub(start).Add(gap)
+		}
+		return start.Sub(w).Sub(gap)
+	}
 
 	m := &Marker{
 		Text: text, Face: face, Size: size,
 		// "outside" puts the marker in the margin, clear of the content box,
 		// with a gap of half an em between it and the text — which is what
 		// keeps a bullet from touching the word after it.
-		At:    Point{X: inner.Sub(width).Sub(markerGap(size)), Y: baseline},
+		At:    Point{X: before(width), Y: baseline},
 		Color: markerColour(b),
 	}
 	if img := b.MarkerImage; img != nil {
@@ -107,7 +135,7 @@ func (l *layouter) markerFor(b *Box, frag *Fragment, origin flow) *Marker {
 		// to.
 		m.Image = img
 		m.ImageRect = Rect{
-			X: inner.Sub(img.Width).Sub(markerGap(size)),
+			X: before(img.Width),
 			Y: baseline.Sub(img.Height),
 			W: img.Width, H: img.Height,
 		}
@@ -118,7 +146,7 @@ func (l *layouter) markerFor(b *Box, frag *Fragment, origin flow) *Marker {
 // markerInside reports "list-style-position: inside".
 func markerInside(b *Box) bool {
 	return b.ListItem &&
-		strings.EqualFold(strings.TrimSpace(b.Style["list-style-position"]), "inside")
+		strings.EqualFold(strings.TrimSpace(b.Style.Get("list-style-position")), "inside")
 }
 
 // markerGap is the space between a marker and the text it belongs to.
@@ -148,7 +176,7 @@ func (l *layouter) markerRun(b *Box) (string, *shape.Face, bool) {
 	if !b.ListItem {
 		return "", nil, false
 	}
-	text := markerText(b.Style["list-style-type"], b.ListValue)
+	text := markerText(b.Style.Get("list-style-type"), b.ListValue)
 	if text == "" && b.MarkerImage == nil {
 		return "", nil, false
 	}
@@ -489,8 +517,9 @@ func roman(index int) string {
 	return b.String()
 }
 
-// firstLineStart is how far into the content box the item's first line begins,
-// which is what a float on that side pushes along.
+// firstLineStart is how far in from the item's inline-start content edge its
+// first line begins, which is what a float on that side pushes along. In a
+// left-to-right item that is the left edge; in a right-to-left one the right.
 //
 // Zero when there is no line at all, and that is not the same as "no float": an
 // item with an outside marker and no content of its own has no line box to be
@@ -498,14 +527,22 @@ func roman(index int) string {
 // on markerNeedsALine — the two are the same missing line box seen from two
 // sides, and this half is the one that can be fixed without deciding how tall an
 // empty list item is.
-func (l *layouter) firstLineStart(frag *Fragment, origin flow) style.Unit {
+func (l *layouter) firstLineStart(frag *Fragment, origin flow, first firstLine, found, rtl bool) style.Unit {
 	if frag == nil {
 		return 0
 	}
 	if len(frag.Lines) > 0 {
-		return frag.Lines[0].Rect.X
+		// The item's own line, whose rectangle is the band the floats left it
+		// in the item's own content coordinates — so the distance from either
+		// content edge is read straight off it.
+		line := frag.Lines[0].Rect
+		if rtl {
+			return style.Max(frag.ContentRect().W.Sub(line.X).Sub(line.W), 0)
+		}
+		return line.X
 	}
-	// No line, and the marker still has to go where one would have started.
+	// No line of the item's own, and the marker still has to go where one
+	// would have started.
 	//
 	// An item with no content of its own is not a rare shape: it is how the
 	// suite writes "does this property apply to a list item", and a browser puts
@@ -514,6 +551,13 @@ func (l *layouter) firstLineStart(frag *Fragment, origin flow) style.Unit {
 	// displaced by a float, only the lines inside it are — so an empty item
 	// beside a one-inch float had its marker an inch to the left of where every
 	// renderer puts it, out past the page's own margin.
+	//
+	// An item whose first line is in a block child asks the same question at
+	// that line's height rather than at its own top. The child's line is not
+	// read directly, because the child's own margin, border and padding are
+	// between it and the item and none of them moves a marker, which belongs to
+	// the item: what the floats leave at that height, between the item's own
+	// content edges, is the whole of what moves it.
 	if origin.ctx == nil {
 		return 0
 	}
@@ -522,23 +566,55 @@ func (l *layouter) firstLineStart(frag *Fragment, origin flow) style.Unit {
 	// *this* box would begin.
 	lo := origin.x.Add(frag.BorderRect.X).Add(frag.Border.Left).Add(frag.Padding.Left)
 	hi := lo.Add(frag.ContentRect().W)
-	y := origin.y.Add(frag.BorderRect.Y).Add(frag.Border.Top).Add(frag.Padding.Top)
-	left, _ := origin.ctx.bandAt(y, lo, hi)
+	y := origin.y.Add(frag.BorderRect.Y)
+	if found {
+		y = y.Add(first.top)
+	} else {
+		y = y.Add(frag.Border.Top).Add(frag.Padding.Top)
+	}
+	left, right := origin.ctx.bandAt(y, lo, hi)
+	if rtl {
+		return style.Max(hi.Sub(right), 0)
+	}
 	return style.Max(left.Sub(lo), 0)
 }
 
-// firstLineBaseline is where the item's first line puts its baseline, or the
-// given fallback when the item has no line at all.
+// firstLine is where a subtree's first formatted line is, as distances from the
+// top of the border box it was asked about: the top of the line box and the
+// baseline on it.
+type firstLine struct {
+	top, baseline style.Unit
+}
+
+// firstLineIn finds the first formatted line of a block container, which §5.12.1
+// defines as its own first line box or, when its content is block-level, the
+// first formatted line of its first in-flow block-level child.
 //
-// The fallback is the strut's, which is what an item with no line has instead of
-// one — and an item with an outside marker and no content of its own is exactly
-// that. See the note on issue #23: the marker being placed from the strut
-// whether or not a line exists is why a zero-tall item and a one-line item put
-// their bullets in the same place, and why that agreement is not evidence that
-// their boxes agree.
-func firstLineBaseline(frag *Fragment, fallback style.Unit) style.Unit {
-	if frag == nil || len(frag.Lines) == 0 {
-		return fallback
+// It is firstBaseline with the line's top kept, and without the box's own marker:
+// a list item asking where its marker goes cannot be told "where your marker
+// is", which is what firstBaseline answers for an item with no line and a marker
+// already placed — and a fragment the layout cache handed back is exactly that.
+// A *descendant's* marker is another matter: a nested list item with no content
+// still has a marker on a line box, and firstBaseline's reason for counting it is
+// this function's too.
+func firstLineIn(f *Fragment) (firstLine, bool) {
+	inset := f.Border.Top.Add(f.Padding.Top)
+	if len(f.Lines) > 0 {
+		top := inset.Add(f.Lines[0].Rect.Y)
+		return firstLine{top: top, baseline: top.Add(f.Lines[0].Baseline)}, true
 	}
-	return frag.Lines[0].Rect.Y.Add(frag.Lines[0].Baseline)
+	for _, c := range f.Children {
+		if c.Box != nil && c.Box.outOfFlow() {
+			continue
+		}
+		at := inset.Add(c.BorderRect.Y)
+		if in, ok := firstLineIn(c); ok {
+			return firstLine{top: at.Add(in.top), baseline: at.Add(in.baseline)}, true
+		}
+		if c.Marker != nil {
+			top := at.Add(c.Border.Top).Add(c.Padding.Top)
+			return firstLine{top: top, baseline: at.Add(c.Marker.At.Y)}, true
+		}
+	}
+	return firstLine{}, false
 }

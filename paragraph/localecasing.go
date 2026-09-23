@@ -161,10 +161,23 @@ func localeLower(r rune, before, after string, lang Language) (string, bool) {
 	case lang.dotless() && r == 0x0307 && afterI(before):
 		// "0307; ; ...; tr After_I" — that removal.
 		return "", true
-	case lang.keepsDot() && moreAbove(after):
+	case lang.keepsDot() && (r == 'I' || r == 'J' || r == 0x012E) && moreAbove(after):
 		// "0049; 0069 0307; ...; lt More_Above" and its two neighbours. A
 		// Lithuanian lower-case i keeps its dot under an accent, which is the
 		// opposite of what every other language does with one.
+		//
+		// The character is asked about before the text after it, and that is
+		// the difference between linear and quadratic. More_Above reads forward
+		// over every mark that is neither a base nor above, and conditionalCased
+		// asks this of every character from the first one a condition could be
+		// about — so an "I" followed by a long run of below marks read the rest
+		// of the run once per mark: forty thousand of them took ten seconds.
+		//
+		// And it is what the rule says. The condition belongs to three
+		// characters and no others, and asked first it also let every other
+		// character through to the cases below it that it matched and then
+		// fell out of: a precomposed "Ì" with an accent above after it came out
+		// of this case with no mapping at all, and so did a capital sigma.
 		switch r {
 		case 'I':
 			return "i̇", true
@@ -173,8 +186,13 @@ func localeLower(r rune, before, after string, lang Language) (string, bool) {
 		case 0x012E:
 			return "į̇", true
 		}
-	case lang.keepsDot():
+	case lang.keepsDot() && (r == 0x00CC || r == 0x00CD || r == 0x0128):
 		// The three precomposed letters, which have the accent already.
+		//
+		// Named in the case and not only in the switch below it, for the reason
+		// the case above gives: a case that matches every character of a
+		// Lithuanian text keeps every one of them from the sigma below, so a
+		// word-final Σ in a lang="lt" document was lowercased to σ.
 		switch r {
 		case 0x00CC:
 			return "i̇̀", true
@@ -183,11 +201,12 @@ func localeLower(r rune, before, after string, lang Language) (string, bool) {
 		case 0x0128:
 			return "i̇̃", true
 		}
-	case r == 0x03A3 && finalSigma(before, after):
+	case r == 0x03A3:
 		// "03A3; 03C2; ...; Final_Sigma" — the one condition that is not about
-		// language. A lower-case sigma ending a word is ς and one inside a word
-		// is σ, in every language that writes Greek.
-		return "ς", true
+		// language, and so not decided here: its context reaches past the
+		// text node, which a per-character tailoring cannot see. See
+		// conditionalCased and finalSigma.
+		return "", false
 	}
 	return "", false
 }
@@ -266,8 +285,18 @@ func moreAbove(after string) bool {
 // A sigma at the end of a word, in other words — where "the end of a word" is
 // stated without reference to any word-breaking algorithm, because an
 // apostrophe or a full stop after it does not make it non-final.
-func finalSigma(before, after string) bool {
-	preceded := false
+//
+// casedBefore answers the first half for the text in front of before, which is
+// in another text node: it is used where before has nothing in it that is not
+// case-ignorable.
+//
+// open says the answer was decided without seeing the character that decides
+// it: after holds nothing but case-ignorable characters, so what follows the
+// sigma is in the next text node. The answer is then "final", which is right if
+// nothing cased follows and is what the next node has to correct if something
+// does. See CaseContext.
+func finalSigma(before, after string, casedBefore bool) (final, open bool) {
+	preceded := casedBefore
 	for i := len(before); i > 0; {
 		r, size := lastRuneIn(before[:i])
 		i -= size
@@ -278,15 +307,40 @@ func finalSigma(before, after string) bool {
 		break
 	}
 	if !preceded {
-		return false
+		return false, false
 	}
 	for _, r := range after {
 		if caseIgnorable(r) {
 			continue
 		}
-		return !cased(r)
+		return !cased(r), false
 	}
-	return true
+	return true, true
+}
+
+// CasedAhead reports what Final_Sigma needs from the text after a node that
+// ended in an undecided sigma: whether the first character of text that is not
+// case-ignorable is cased. decided is false where text is nothing but
+// case-ignorable characters, and the question then passes to the text after it.
+func CasedAhead(text string) (isCased, decided bool) {
+	for _, r := range text {
+		if caseIgnorable(r) {
+			continue
+		}
+		return cased(r), true
+	}
+	return false, false
+}
+
+// UnfinalSigma is the correction CasedAhead calls for: the ς at byte at of text
+// was lowercased as final, a cased letter turned out to follow it in the next
+// node, and it is σ. The two are the same length, so nothing after it moves.
+// Anything but a ς at that offset is left alone.
+func UnfinalSigma(text string, at int) string {
+	if at < 0 || at+len("ς") > len(text) || text[at:at+len("ς")] != "ς" {
+		return text
+	}
+	return text[:at] + "σ" + text[at+len("ς"):]
 }
 
 // cased is Unicode's Cased property: Lowercase, Uppercase, or the titlecase

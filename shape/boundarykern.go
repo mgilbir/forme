@@ -1,5 +1,7 @@
 package shape
 
+import "unicode/utf8"
+
 // Pair kerning across the boundary between two runs.
 //
 // CSS Text §8.1 says an inline element boundary does not break shaping, and a
@@ -44,14 +46,22 @@ const boundaryWindow = 32
 // make the work quadratic in a paragraph set as one long run. The window is far
 // wider than the longest ligature any font here declares.
 //
-// The context passed on is empty, which is what stops this recurring: a run with
-// no neighbours takes no boundary pass.
+// The neighbour is shaped by this run's rules — its features and its language
+// — because that is what a pair across the boundary is looked up between: the
+// caller kerns across only where the two runs agree on both (see
+// sameFaceRules in layout), and a neighbour shaped by the default rules could
+// be a different glyph from the one drawn, a language's own form of the letter
+// or the ordinary one for a small capital. It was shaped with none of them.
+//
+// The context passed on is otherwise empty, which is what stops this
+// recurring: a run with no neighbours takes no boundary pass.
 func (f *Face) boundaryGlyphs(ctx shapeContext, script uint16, rtl bool) (before, after []Glyph) {
+	rules := shapeContext{features: ctx.features}
 	if b := lastRunes(ctx.before, boundaryWindow); b != "" {
-		before, _ = f.shapeGlyphsIn(b, script, rtl, nil, shapeContext{})
+		before, _ = f.shapeGlyphsIn(b, script, rtl, nil, rules)
 	}
 	if a := firstRunes(ctx.after, boundaryWindow); a != "" {
-		after, _ = f.shapeGlyphsIn(a, script, rtl, nil, shapeContext{})
+		after, _ = f.shapeGlyphsIn(a, script, rtl, nil, rules)
 	}
 	if rtl {
 		// shapeGlyphsIn hands back visual order, and everything below is stated
@@ -75,21 +85,15 @@ func firstRunes(s string, n int) string {
 }
 
 func lastRunes(s string, n int) string {
-	if n <= 0 {
-		return ""
+	// From the end backwards, so that the cost is the n characters and not
+	// the string: it walked the whole string forwards, and a caller's context
+	// may be everything before the run.
+	i := len(s)
+	for ; n > 0 && i > 0; n-- {
+		_, size := utf8.DecodeLastRuneInString(s[:i])
+		i -= size
 	}
-	// The starts of the last n characters, kept in a ring so that the string is
-	// walked once and nothing is allocated per character.
-	starts, at, seen := make([]int, n), 0, 0
-	for i := range s {
-		starts[at] = i
-		at = (at + 1) % n
-		seen++
-	}
-	if seen <= n {
-		return s
-	}
-	return s[starts[at]:]
+	return s[i:]
 }
 
 // kernAcross applies the pair kerning between a run's edge glyph and its
@@ -108,7 +112,7 @@ func (sh shaper) kernAcross(buf, before, after []Glyph) {
 			// because a glyph a lookup ignores does not break a pair.
 			if p, ok := lastNotIgnored(sh.l, kl.flags, before); ok {
 				if i, ok := firstNotIgnored(sh.l, kl.flags, buf); ok {
-					if k, ok := kl.pairs[[2]int{before[p].GID, buf[i].GID}]; ok {
+					if k, ok := kl.pair(before[p].GID, buf[i].GID); ok {
 						buf[i].XOffset += sh.f.scale(int(k.secondX))
 						buf[i].YOffset += sh.f.scale(int(k.secondY))
 						buf[i].XAdvance += sh.f.scale(int(k.secondAdvance))
@@ -119,7 +123,7 @@ func (sh shaper) kernAcross(buf, before, after []Glyph) {
 		if len(after) > 0 {
 			if i, ok := lastNotIgnored(sh.l, kl.flags, buf); ok {
 				if n, ok := firstNotIgnored(sh.l, kl.flags, after); ok {
-					if k, ok := kl.pairs[[2]int{buf[i].GID, after[n].GID}]; ok {
+					if k, ok := kl.pair(buf[i].GID, after[n].GID); ok {
 						buf[i].XOffset += sh.f.scale(int(k.firstX))
 						buf[i].YOffset += sh.f.scale(int(k.firstY))
 						buf[i].XAdvance += sh.f.scale(int(k.firstAdvance))

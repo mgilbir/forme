@@ -8,9 +8,9 @@ import "testing"
 // line, because the files have no notion of line breaking. A layout engine
 // applies it per line, and every case below is one the suites cannot state.
 //
-// These came from forme, which had a second implementation of this algorithm
-// before this package was exported. The implementation is gone; the tests are
-// what it is worth keeping.
+// These came from the layout engine, which had a second implementation of this
+// algorithm before this package was exported. The implementation is gone; the
+// tests are what it is worth keeping.
 
 // TestLineLevelsResetTrailingWhitespace is rule L1, which is the half of the
 // algorithm the conformance suites do not reach.

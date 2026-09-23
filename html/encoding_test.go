@@ -87,6 +87,10 @@ func TestValidUTF8IsPassedOverInSilence(t *testing.T) {
 }
 
 // TestADeclaredEncodingThisEngineCannotReadIsReported.
+//
+// The document holds a byte above 0x7F, which is what makes the declaration
+// matter: see TestAnASCIIDocumentReadsTheSameUnderAnyASCIIEncoding for one that
+// does not.
 func TestADeclaredEncodingThisEngineCannotReadIsReported(t *testing.T) {
 	for _, tc := range []struct{ src, label, what string }{
 		{`<meta charset="shift_jis">`, "shift_jis", "the short spelling"},
@@ -97,7 +101,7 @@ func TestADeclaredEncodingThisEngineCannotReadIsReported(t *testing.T) {
 		{`<meta http-equiv=Content-Type content='text/html;charset=euc-kr'>`,
 			"euc-kr", "http-equiv with single quotes and no space"},
 	} {
-		errs, ok := errorsOf(t, "<html><head>"+tc.src+"</head><body>x</body></html>")
+		errs, ok := errorsOf(t, "<html><head>"+tc.src+"</head><body>café</body></html>")
 		if ok {
 			t.Errorf("%s: a document declaring %s parsed with no errors", tc.what, tc.label)
 		}
@@ -139,7 +143,7 @@ func TestADeclaredUTF8IsNotReported(t *testing.T) {
 // TestOnlyTheFirstDeclarationIsReported. A document is in one encoding; two
 // findings about it say nothing the first did not.
 func TestOnlyTheFirstDeclarationIsReported(t *testing.T) {
-	errs, _ := errorsOf(t, `<meta charset="shift_jis"><meta charset="big5">`)
+	errs, _ := errorsOf(t, `<meta charset="shift_jis"><meta charset="big5">café`)
 	n := 0
 	for _, e := range errs {
 		if strings.Contains(e.Message, "encoding") {
@@ -157,8 +161,58 @@ func TestOnlyTheFirstDeclarationIsReported(t *testing.T) {
 // the parse, so it has to end somewhere.
 func TestADeclarationTooFarInIsNotLookedFor(t *testing.T) {
 	pad := strings.Repeat("<p>x</p>", 300) // well past 1024 bytes
-	errs, ok := errorsOf(t, pad+`<meta charset="shift_jis">`)
+	errs, ok := errorsOf(t, pad+`<meta charset="shift_jis">café`)
 	if !ok || hasMessage(errs, "shift_jis") {
 		t.Errorf("a declaration past the sniffing bound was read: %v", errs)
+	}
+}
+
+// TestAnASCIIDocumentReadsTheSameUnderAnyASCIIEncoding. A legacy page that
+// declares windows-1252 and writes everything outside ASCII as a reference holds
+// the same text in every encoding that reads the bytes below 0x80 as ASCII,
+// which is all but a few of them. Telling its author that "the text it read is
+// not the text the document holds" was false.
+func TestAnASCIIDocumentReadsTheSameUnderAnyASCIIEncoding(t *testing.T) {
+	for _, label := range []string{
+		"iso-8859-1", "windows-1252", "us-ascii", "shift_jis", "gb18030", "koi8-r",
+		// Not a label the standard names: a browser ignores it.
+		"x-made-up",
+	} {
+		src := `<meta charset="` + label + `"><p>caf&eacute; &#8212; na&#239;ve</p>`
+		if errs, ok := errorsOf(t, src); !ok {
+			t.Errorf("%s: an all-ASCII document was reported: %v", label, errs)
+		}
+	}
+	// The ones that do not read ASCII as ASCII are still reported, ASCII bytes
+	// or not: ISO-2022-JP writes Japanese in them.
+	for _, label := range []string{"iso-2022-jp", "iso-2022-kr", "hz-gb-2312"} {
+		errs, _ := errorsOf(t, `<meta charset="`+label+`"><p>x</p>`)
+		if !hasMessage(errs, `"`+label+`"`) {
+			t.Errorf("%s: an encoding that does not read ASCII bytes as ASCII was "+
+				"passed over: %v", label, errs)
+		}
+	}
+}
+
+// TestAMetaDeclaringUTF16IsUTF8. The Encoding Standard's prescan turns a <meta>
+// naming UTF-16 into UTF-8, because a "<meta" readable as ASCII bytes is not
+// UTF-16 — so the document is read as UTF-8 by every browser, as it is here.
+func TestAMetaDeclaringUTF16IsUTF8(t *testing.T) {
+	for _, label := range []string{"utf-16", "UTF-16LE", "utf-16be", "unicode", "ucs-2"} {
+		if errs, ok := errorsOf(t, `<meta charset="`+label+`"><p>café</p>`); !ok {
+			t.Errorf("%s: reported: %v", label, errs)
+		}
+	}
+}
+
+// TestAByteOrderMarkOutranksTheDeclaration. Encoding sniffing reads the byte
+// order mark first and never looks for a <meta> after one.
+func TestAByteOrderMarkOutranksTheDeclaration(t *testing.T) {
+	if errs, ok := errorsOf(t, bom+`<meta charset="windows-1252"><p>café</p>`); !ok {
+		t.Errorf("a document with a UTF-8 byte order mark was reported: %v", errs)
+	}
+	// Without the mark, the same document is what the check is for.
+	if errs, ok := errorsOf(t, `<meta charset="windows-1252"><p>café</p>`); ok {
+		t.Errorf("a UTF-8 document declaring windows-1252 was not reported: %v", errs)
 	}
 }

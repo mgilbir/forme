@@ -11,8 +11,8 @@ import (
 // Choosing a face for a box, and saying so when the choice was not the one
 // asked for.
 //
-// §10 of the rendering proposal makes the font set the caller's to supply,
-// through an interface, and the reason is packaging: a font committed to this
+// The font set is the caller's to supply, through an interface, and the reason
+// is packaging: a font committed to this
 // repository is paid for by every forme user including the ones who only parse.
 // What is here is the interface and a default made of the fourteen faces every
 // PDF reader already has, which need no embedding at all.
@@ -64,10 +64,9 @@ type RangedFontSet interface {
 // substitution silently from inside Face would be a set that could hide it, and
 // that is the thing this design is against — see the note on FontSet above.
 //
-// The substitution is per box rather than per character. A box whose text mixes
-// scripts that no single face covers still reports a missing glyph, and the
-// remaining step is to cut a run into per-face pieces the way shape.Stack does,
-// which reaches into measurement, line breaking and the content stream.
+// It is asked per grapheme cluster, not per box: a box whose text mixes
+// scripts no single face covers is cut into runs, each set in a face that has
+// its characters — see layout/facerun.go's faceRunsFor.
 type FallbackFontSet interface {
 	FontSet
 	// FaceFor returns a face that can set the whole of text, and whether one was
@@ -181,14 +180,6 @@ func standardName(base string, bold, italic bool) string {
 	}
 }
 
-// fontFor picks the face a box's text is set in, following its font-family list
-// and reporting a substitution.
-//
-// The list is tried in order, which is what a font stack is for. When none of
-// the named families is available the last resort is the set's sans-serif, and
-// *that* is reported: a document set in a face its author did not choose has
-// different metrics and different line breaks, and nothing about the resulting
-// page says so.
 // faceForStyle is fontFor without a layouter: the first family in a computed
 // style that a set has, and nil when it has none of them.
 //
@@ -198,11 +189,11 @@ func standardName(base string, bold, italic bool) string {
 // face is a size the author never asked for, and CSS Values §5.1.1 already says
 // what to do when no x-height can be determined, which is to assume half an em.
 func faceForStyle(fonts FontSet, cs style.ComputedStyle) *shape.Face {
-	if fonts == nil || cs == nil {
+	if fonts == nil || cs.IsZero() {
 		return nil
 	}
-	bold, italic := isBold(cs["font-weight"]), isItalic(cs["font-style"])
-	for _, family := range parseFamilyList(cs["font-family"]) {
+	bold, italic := isBold(cs.Get("font-weight")), isItalic(cs.Get("font-style"))
+	for _, family := range parseFamilyList(cs.Get("font-family")) {
 		if f, ok := fonts.Face(family, bold, italic); ok {
 			return f
 		}
@@ -210,11 +201,20 @@ func faceForStyle(fonts FontSet, cs style.ComputedStyle) *shape.Face {
 	return nil
 }
 
+// fontFor picks the face a box's text is set in, following its font-family list
+// and reporting a substitution.
+//
+// The list is tried in order, which is what a font stack is for. When none of
+// the named families is available the last resort is the set's face for
+// font-family's initial value — initialFamily, "serif" — and *that* is
+// reported: a document set in a face its author did not choose has different
+// metrics and different line breaks, and nothing about the resulting page says
+// so.
 func (l *layouter) fontFor(b *Box) (*shape.Face, bool) {
 	key := fontKey{
-		families: b.Style["font-family"],
-		bold:     isBold(b.Style["font-weight"]),
-		italic:   isItalic(b.Style["font-style"]),
+		families: b.Style.Get("font-family"),
+		bold:     isBold(b.Style.Get("font-weight")),
+		italic:   isItalic(b.Style.Get("font-style")),
 	}
 	if got, ok := l.fonts[key]; ok {
 		return got.face, got.face != nil
@@ -224,6 +224,7 @@ func (l *layouter) fontFor(b *Box) (*shape.Face, bool) {
 	for _, family := range families {
 		if face, ok := l.fontSet.Face(family, key.bold, key.italic); ok {
 			l.fonts[key] = resolvedFont{face: face}
+			l.noteFace(face)
 			return face, true
 		}
 	}
@@ -243,6 +244,7 @@ func (l *layouter) fontFor(b *Box) (*shape.Face, bool) {
 	// finding below is for.
 	face, ok := l.fontSet.Face(initialFamily, key.bold, key.italic)
 	l.fonts[key] = resolvedFont{face: face}
+	l.noteFace(face)
 	if !ok {
 		// Not even the initial family. The set has nothing, so this box's text
 		// is not drawn — and neither is any other box's, since they all end up
@@ -263,6 +265,7 @@ func (l *layouter) fontFor(b *Box) (*shape.Face, bool) {
 	if len(families) > 0 {
 		l.rec.ReportDetail(Finding{
 			Rule:     RuleFontFallback,
+			Source:   sourceOf(boxElement(b)),
 			Message:  "no face was available for " + quoteValue(key.families) + ", so a default was used; the metrics and the line breaks will differ",
 			Property: "font-family",
 		})
@@ -356,8 +359,8 @@ func (m fontMetrics) XHeight(cs style.ComputedStyle, size style.Unit) (float64, 
 // past the families the document named into the fallback set, because the
 // question is which of *those* sets the character.
 func (l *layouter) faceWithGlyph(b *Box, r rune) (*shape.Face, bool) {
-	bold, italic := isBold(b.Style["font-weight"]), isItalic(b.Style["font-style"])
-	for _, family := range parseFamilyList(b.Style["font-family"]) {
+	bold, italic := isBold(b.Style.Get("font-weight")), isItalic(b.Style.Get("font-style"))
+	for _, family := range parseFamilyList(b.Style.Get("font-family")) {
 		face, ok := l.fontSet.Face(family, bold, italic)
 		if !ok {
 			continue

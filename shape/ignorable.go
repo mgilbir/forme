@@ -101,26 +101,30 @@ func isDefaultIgnorable(r rune) bool {
 //     occupy width on the page. Hiding them collapses the syllable. HarfBuzz
 //     excludes them for the same reason.
 //
-// Everything else goes before the buffer is built, which is after normalisation
-// and so after U+034F COMBINING GRAPHEME JOINER has done the one thing it is
-// for: standing between two characters to stop them composing.
+// Everything else goes before the buffer is built, in every run but a
+// syllabic one (see below). That is after normalisation, and so after U+034F
+// COMBINING GRAPHEME JOINER has done the one thing it is for: standing between
+// two characters to stop them composing.
 //
-// # Where this differs from HarfBuzz, and why
+// # Against HarfBuzz
 //
 // HarfBuzz keeps these characters through shaping and hides them at the end.
-// The two agree everywhere except one case: a character nothing is drawn for,
-// written *inside* a cluster of a syllabic script — between a consonant and its
-// virama, say. Removing it first leaves the syllable whole and the conjunct
-// forms; keeping it breaks the syllable, and the orphaned virama then gets a
-// dotted circle, the placeholder that says the text is malformed.
+// For a script whose rules are lookups, taking them out first is the same
+// answer — every lookup steps over them — and measures the same.
 //
-// Both are defensible and they differ only on malformed text. Unicode defines
-// the property as characters that "should be ignored in rendering", which is
-// what this does; HarfBuzz gives the syllable model the last word. The choice
-// here puts a well-formed conjunct on the page rather than a dotted circle,
-// because a document is written once and read many times and a reader cannot
-// fix the text. The thirteen cases where it shows are listed, with this reason,
-// in fonts/harfbuzz_test.go.
+// A syllabic run keeps them. Whether a character breaks a syllable is the
+// syllable model's question, and it can answer only if it is given the
+// character; so one written *inside* a cluster — between a consonant and its
+// virama, say (क U+00AD ् ष) — breaks the syllable here as it does in
+// HarfBuzz, and the orphaned virama gets the dotted circle in both. The shaper
+// then drops the ones no substitution touched (dropUnsubstituted), as
+// HarfBuzz does.
+//
+// It was otherwise, and deliberately: they were taken out of every run first,
+// so the conjunct formed where HarfBuzz shows the dotted circle, on the
+// argument that Unicode asks for them to be ignored in rendering. It does not
+// ask that of shaping, and the decision was reversed; shape/harfbuzz_test.go
+// says why, under "The thirty-seven that left".
 func hiddenBeforeShaping(r rune) bool {
 	if !isDefaultIgnorable(r) {
 		return false
@@ -253,20 +257,23 @@ func joinerKindOf(r rune) joinerKind {
 //     side of it from being joined, and a rule that joined them by stepping
 //     over it would do exactly what it was written to prevent.
 //
-// The Indic features are the ones that ask for the joiners to stay visible to
-// their input: half forms and conjuncts are precisely what a joiner is written
-// to force or forbid, so their lookups must see it. Everything else — the
-// ligatures, the contextual alternates, all of positioning — treats them as
-// though they were not there.
+// Which joiner a feature wants to see is the feature's to say, and the two are
+// separate. The Indic features ask to see both: half forms and conjuncts are
+// precisely what a joiner is written to force or forbid, so their lookups must
+// see it. The Myanmar, universal and Arabic features ask to see a zero width
+// joiner and leave a non-joiner in their context to be stepped over — which is
+// how HarfBuzz enables them, and what lets a rule whose context spans a ZWNJ
+// still match. Everything else — the ligatures, the contextual alternates, all
+// of positioning — treats both as though they were not there.
 func (sh shaper) stepsOverJoiner(at int, context bool) bool {
 	if sh.joinerAt == nil {
 		return false
 	}
 	switch sh.joinerAt(sh.base() + at) {
 	case joinerZWJ:
-		return context || !sh.manualJoiners
+		return context || !sh.manualZWJ
 	case joinerZWNJ:
-		return context && !sh.manualJoiners
+		return context && !sh.manualZWNJ
 	}
 	return false
 }
@@ -278,6 +285,24 @@ func (sh shaper) stepsOverJoiner(at int, context bool) bool {
 // to no glyph at all, and a pass that deleted every glyph with that index would
 // delete the spaces of the text along with the joiners.
 func dropGlyphs(buf []Glyph, drop func(i int) bool) []Glyph {
+	return dropGlyphsIf(buf, drop)
+}
+
+// dropUnsubstituted is what a syllabic shaper does with the characters nothing
+// is drawn for once the font's rules have run: takes out the ones hidden says
+// are such characters — unless a substitution touched the glyph.
+//
+// A font may give one a shape. Noto Sans Mongolian substitutes the vowel
+// separator U+180E with a narrow or a wide space before a final A or E, and
+// the gap is what the font is for there; HarfBuzz keeps any such glyph a
+// lookup replaced, and hides only the ones left as the character's own
+// (_hb_glyph_info_is_default_ignorable, which is false once substituted).
+// Taking them all out closed the gap.
+func dropUnsubstituted(buf []Glyph, hidden func(i int) bool) []Glyph {
+	return dropGlyphsIf(buf, func(i int) bool { return hidden(i) && !buf[i].substituted })
+}
+
+func dropGlyphsIf(buf []Glyph, drop func(i int) bool) []Glyph {
 	n := 0
 	for i := range buf {
 		if drop(i) {

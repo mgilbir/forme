@@ -23,9 +23,9 @@ import (
 //
 // A CSS reftest is a pair of documents with the assertion *these two render
 // identically*. The pair and the claim come from the CSS Working Group, so a
-// disagreement is evidence about forme rather than a restatement of this engine's own
-// reading — which is the distinction ADR 0003 records this repository learning
-// twice, the hard way.
+// disagreement is evidence about forme rather than a restatement of this
+// engine's own reading. An oracle written from this engine's own output would
+// agree with it by construction, and guard nothing.
 //
 // They are better than an ordinary expectation file for a reason worth stating:
 // reftests are *constructed* so that the two documents reach the same rendering
@@ -995,7 +995,7 @@ const wptEnv = "WPT_TESTS"
 // nothing, and did nothing — without reporting it either, which is what made it
 // silent. See layout/overflowwrap_test.go.
 //
-// 5959 to 5958 is the one entry here that goes *down*, and it is deliberate. A
+// 5959 to 5958 is the first entry here that goes *down*, and it is deliberate. A
 // "display: flex" container has always become an ordinary block — a column of
 // full-width children where a row was asked for — and said nothing at all, which
 // is the plausible silent wrongness this whole vocabulary is against. It is
@@ -1028,7 +1028,7 @@ const wptEnv = "WPT_TESTS"
 // been reported as unlaid since the report existed. See layout/grid.go.
 //
 // 5960 to 5956 is four documents that pass and now say what is missing from
-// them, and it is the first entry here that goes down. The selector parser
+// them, and it is the second entry here that goes down. The selector parser
 // accepts "::first-letter" and the cascade computes no style for it, so a rule
 // written for one matched, was thrown away, and left the page carrying no claim
 // that anything had been. Four documents in the suite write one — three text
@@ -1308,7 +1308,7 @@ const wptEnv = "WPT_TESTS"
 // visible. The rule is the bottom margin edge, flatly; this engine took the
 // *higher* of that and the last line box's baseline.
 //
-// It is the one case where lowering this number is right, and it is worth being
+// It is a case where lowering this number is right, and it is worth being
 // exact about why, because "a red test went green" is the thing the ratchet
 // exists to refuse. Nothing was lowered to make anything green. A rule was
 // changed to the one CSS 2.2 REC and css-inline-3 state and every browser
@@ -1327,11 +1327,11 @@ const wptEnv = "WPT_TESTS"
 // be checked from now on: four vendored documents asserting a withdrawn
 // sentence are not what this behaviour rests on.
 //
-// **5982 to 5981, for HTML's "background" attribute**, and this is the first
-// time the number has been lowered for something the engine started doing
-// rather than stopped. It is worth the space because the rule at the top of
-// this comment — "it may rise and must never be lowered to make a red test
-// green" — is about a *regression*, and this is the opposite.
+// **5982 to 5981, for HTML's "background" attribute**, and like 5959 to 5958
+// and 5960 to 5956 above it is the number lowered for something the engine
+// started doing rather than stopped. It is worth the space because the rule at
+// the top of this comment — "it may rise and must never be lowered to make a
+// red test green" — is about a *regression*, and this is the opposite.
 //
 // generated-content/content-047 writes
 //
@@ -1367,7 +1367,14 @@ const wptEnv = "WPT_TESTS"
 //
 // Neither correction wins the document alone; the direction is wrong without
 // the second and the glyph count is wrong without the first.
-const wptCleanPassBaseline = 5982
+//
+// **5982 to 5983, for "background: currentcolor"**. linebox/vertical-align-122
+// paints its inline-blocks with it, and the shorthand's colour slot asked
+// ParseColor, which reads colours and not the keyword the cascade resolves — so
+// the whole declaration was dropped as unreadable and the boxes were bare. The
+// slots now ask the value grammar's colour term, which is what the colour
+// longhands were already judged by.
+const wptCleanPassBaseline = 5983
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
@@ -1635,6 +1642,23 @@ func expandEmptyElements(src string) string {
 	})
 }
 
+// servedAsXHTML is what a server's MIME type would say about a file of the
+// suite: an .xht document is sent as application/xhtml+xml, and a browser reads
+// it as XML because it was told to, whatever the document says about itself.
+//
+// The harness says the same through Input.XHTML rather than leaving the parser
+// to work it out from the text. Thirty of the suite's documents are XML for no
+// reason but their extension: letter-spacing-004-ref.xht, which twenty-eight of
+// the letter-spacing tests share, has no doctype at all, and the
+// table-vertical-align-baseline pair write "<!DOCTYPE html>" over a stylesheet
+// wrapped in CDATA — which is a stylesheet only in XML. They used to be read as
+// XHTML because they carry the XHTML namespace on <html>, which HTML allows and
+// gives no meaning, and which the parser no longer takes as a signal.
+func servedAsXHTML(file string) bool {
+	ext := strings.ToLower(filepath.Ext(file))
+	return ext == ".xht" || ext == ".xhtml"
+}
+
 // pageClip is the area a rendering is compared over.
 //
 // It stands in for the viewport a browser would have shown the reftest in: a
@@ -1738,7 +1762,8 @@ func renderForCompareDetail(root, file string) (ops []Op, findings []Finding, bl
 		return nil, nil, false, err
 	}
 	src := string(data)
-	if ext := strings.ToLower(filepath.Ext(file)); ext == ".xht" || ext == ".xhtml" {
+	xhtml := servedAsXHTML(file)
+	if xhtml {
 		src = expandEmptyElements(src)
 	}
 
@@ -1774,7 +1799,7 @@ func renderForCompareDetail(root, file string) (ops []Op, findings []Finding, bl
 	}
 	defer res.Close()
 
-	built := Build(Input{HTML: src, Resources: res, Fonts: fontSetForWPT()})
+	built := Build(Input{HTML: src, XHTML: xhtml, Resources: res, Fonts: fontSetForWPT()})
 
 	// The faces the document itself brought, which for a quarter of this suite
 	// is Ahem: 1665 of its documents link /fonts/ahem.css, whose whole content
@@ -2635,7 +2660,8 @@ func TestSuiteFontFaceLoadsAhem(t *testing.T) {
 	}
 	defer res.Close()
 
-	built := Build(Input{HTML: src, Resources: res, Fonts: fontSetForWPT()})
+	built := Build(Input{HTML: src, XHTML: servedAsXHTML(doc), Resources: res,
+		Fonts: fontSetForWPT()})
 
 	face, ok := built.Fonts.Face("Ahem", false, false)
 	if !ok || face == nil {

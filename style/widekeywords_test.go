@@ -36,7 +36,7 @@ func styledColor(t *testing.T, src string) (string, []Finding) {
 	var got string
 	doc.Walk(func(n *html.Node) bool {
 		if n.Type == html.ElementNode && n.Name == "p" {
-			got = out.Styles[n]["color"]
+			got = out.Styles[n].Get("color")
 		}
 		return true
 	})
@@ -69,6 +69,23 @@ func TestRevertLayerIsRevert(t *testing.T) {
 	}
 	if !named {
 		t.Errorf("no finding names \"revert-layer\" as unimplemented: %v", findings)
+	}
+
+	// With @layer applied it rolls back to the layer below, which "unset" does
+	// not do either — so the finding says where the reading can be wrong, and
+	// that includes a lower layer. Here it is: base's green is what the
+	// keyword asks for, and it comes out as the initial colour.
+	_, findings = styledColor(t,
+		"@layer base, top; @layer base { p { color: green } } @layer top { p { color: revert-layer } }")
+	layers := false
+	for _, f := range findings {
+		if strings.Contains(f.Message, "revert-layer") && strings.Contains(f.Message, "cascade layer") {
+			layers = true
+		}
+	}
+	if !layers {
+		t.Errorf("the finding for \"revert-layer\" does not say a lower cascade layer "+
+			"is where reading it as \"unset\" is wrong: %v", findings)
 	}
 }
 

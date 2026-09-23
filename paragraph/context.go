@@ -42,8 +42,16 @@ func ContextAfter(s string) string {
 	}
 	w := s[:maxContextBytes]
 	// Back up to a rune boundary before asking about clusters, since a window
-	// cut mid-rune is not text.
-	for len(w) > 0 && !utf8.ValidString(w[len(w)-1:]) {
+	// cut mid-rune is not text: until the byte *after* the window begins a
+	// character, which is ContextBefore's test from the other side.
+	//
+	// It asked whether the window's last byte was valid UTF-8 on its own, which
+	// no byte of a multi-byte character is — so it backed up to the last ASCII
+	// byte, and a run of Arabic, Hebrew or CJK longer than the window lost its
+	// context entirely. The heads of a broken Arabic word were then shaped with
+	// nothing after them, in their final forms, which is the word drawn broken
+	// that §5.4 forbids. Audit C117.
+	for len(w) > 0 && !utf8.RuneStart(s[len(w)]) {
 		w = w[:len(w)-1]
 	}
 	// And to a cluster boundary, so that the trimming never separates a letter

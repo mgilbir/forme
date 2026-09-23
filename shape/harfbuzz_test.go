@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -196,13 +197,13 @@ func harfbuzzFace(t *testing.T, path string, header map[string]string) *Face {
 // fails, and so does one that is not in the corpus. An exception that cannot go
 // stale is a documented decision; one that can is a hole.
 //
-// # Two entries, and what each took to earn it
+// # One entry, and what it took to earn it
 //
-// Neither is a disagreement about shaping, and neither is what it was first
-// written down as. Each was re-opened against the specification rather than
-// against whichever engine agreed with this one, and each came back different.
+// It is not a disagreement about shaping, and it is not what it was first
+// written down as. It was re-opened against the specification rather than
+// against whichever engine agreed with this one, and came back different.
 // CoreText, through the harness in testdata/coretext, agrees with this package
-// on both — but that is worth less than it looks and is not why either is here.
+// on it — but that is worth less than it looks and is not why it is here.
 // CoreText is a layout engine rather than a shaper, and testdata/coretext says
 // itself that it is the wrong instrument for measuring positions.
 //
@@ -232,44 +233,22 @@ func harfbuzzFace(t *testing.T, path string, header map[string]string) *Face {
 // character have no glyph of its own, "although they may have an effect on the
 // display of other characters", and it says nothing about advance width.
 //
-// # A mark whose target moved after it was attached
+// # The mark whose target moved after it was attached, which left
 //
-// Five units of x on the last mark of one Tibetan string, and the mechanism is
-// now known rather than guessed at.
+// There were two entries. The second was five units of x on the last mark of
+// one Tibetan string: lookup 19 attaches U+0F37 to U+0F71, lookup 21 then
+// re-attaches U+0F71 and moves it by (-5,-887), and HarfBuzz follows that move
+// in x and not in y. It was listed because no text states that asymmetry,
+// CoreText follows the move on neither axis, and GPOS read literally follows
+// it on both.
 //
-// Lookup 19 — mark-to-mark, in blwm — attaches U+0F37 (anchor -135,0) to
-// U+0F71 (anchor 163,140), a delta of (298,140). With the target at (129,-294)
-// that puts the mark at (427,-154), and *both engines produce exactly that*.
-// Lookup 21 then re-attaches the target and moves it by (-5,-887). HarfBuzz
-// follows that move in x and not in y; this package follows it in neither.
-//
-// Three controls locate it. Take lookup 19 out of the font and both engines
-// answer (425,40), which is what the mark-to-base anchors in lookup 18 predict on
-// their own. Take lookup 21 out and both answer (427,-154). And move the anchor
-// lookup 21 attaches the target by: +100 in x moves HarfBuzz's mark by exactly
-// +100, +100 in y moves it not at all. So HarfBuzz propagates the x of that move
-// and not the y, and it is the only engine that propagates either.
-//
-// What the specification asks for is a third answer. GPOS says the attachment
-// points coincide, and after lookup 21 the target's anchor is at (287,-1041), so
-// a mark whose anchor coincided with it would sit at (422,-1041). That number is
-// not new: it is the 887 an earlier attempt recorded, which means that attempt
-// implemented the specification correctly and found the specification agreeing
-// with nobody.
-//
-// CoreText settles it, and on the axis nobody had measured. The earlier round
-// compared only the x and reported 427, 427 and 422. Asked for the whole line, it
-// answers (-127,-294) (204,-316) (-70,-835) (124,-1181) for the stack and
-// (427,-154) for the mark — identical to this package on *both* axes and on every
-// glyph. All three engines agree the y does not propagate; only HarfBuzz
-// propagates the x.
-//
-// So this is listed rather than fixed because this package is not the odd one
-// out. It resolves an attachment against the state at the moment it is applied,
-// in both axes, and so does CoreText. Matching HarfBuzz would mean propagating x
-// while not propagating y — an asymmetry no text states and no other engine has —
-// and would trade agreement with CoreText for agreement with neither. Following
-// GPOS literally moves the mark 887 units and matches nobody at all.
+// The asymmetry is HarfBuzz's model and not an accident of it: a mark takes
+// its target's offset across the line when it is attached (resolve_cross_offset)
+// and along the line once every lookup has run (propagate_attachment_offsets),
+// and fonts are tested against it. The same model is what Noto Serif Tibetan's
+// U+0F67 U+0FAC U+0FB9 U+0F77 needs, where resolving both axes at attachment
+// drew two marks 42 units off. Positioning now follows it — see attachMarks —
+// and the string agrees.
 //
 // # The thirty-seven that left
 //
@@ -311,12 +290,42 @@ var deliberateDifferences = map[string]map[string]string{
 	"khmer":    {},
 	"javanese": {},
 	"balinese": {},
-	"tibetan": {
-		"\u0F52\u0F8F\u0FAD\u0F91\u0F73\u0F37": "a mark whose attachment target lookup 21 " +
-			"moves by (-5,-887) after lookup 19 attached it: HarfBuzz follows the x " +
-			"and not the y, this package and CoreText follow neither on either axis, " +
-			"and GPOS as written asks for both and so agrees with nobody",
-	},
+	"tibetan":  {},
+}
+
+// TestTheReadmeCountsTheDeliberateDifferences. The README's prose said "the
+// two HarfBuzz differences" and gave a reason for each after the list above
+// had gone down to one, while its table said one. Both are read here, and both
+// have to be the list's count.
+func TestTheReadmeCountsTheDeliberateDifferences(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "README.md"))
+	if err != nil {
+		t.Fatalf("reading the README: %v", err)
+	}
+	listed := 0
+	for _, cases := range deliberateDifferences {
+		listed += len(cases)
+	}
+	words := map[string]int{"no": 0, "one": 1, "two": 2, "three": 3, "four": 4,
+		"five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
+	for _, pattern := range []string{
+		`(\w+) deliberate differences?`,
+		`[Tt]he (\w+) HarfBuzz differences?`,
+	} {
+		ms := regexp.MustCompile(pattern).FindAllStringSubmatch(string(b), -1)
+		if len(ms) == 0 {
+			t.Errorf("the README no longer says anything matching %q, so this test "+
+				"cannot check it — fix the pattern or the prose", pattern)
+		}
+		for _, m := range ms {
+			n, ok := words[strings.ToLower(m[1])]
+			if !ok {
+				t.Errorf("the README says %q, which this test cannot read as a count", m[0])
+			} else if n != listed {
+				t.Errorf("the README says %q and deliberateDifferences holds %d", m[0], listed)
+			}
+		}
+	}
 }
 
 // TestTheHarfBuzzOracleHasTeeth is the guard on the guard.

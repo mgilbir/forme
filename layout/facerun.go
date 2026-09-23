@@ -101,8 +101,8 @@ func (l *layouter) faceRunsFor(b *Box, primary *shape.Face, text string) []faceR
 	if !canFall && !hasRanges && !hasVisibleControl(text) {
 		return one
 	}
-	bold := isBold(b.Style["font-weight"])
-	italic := isItalic(b.Style["font-style"])
+	bold := isBold(b.Style.Get("font-weight"))
+	italic := isItalic(b.Style.Get("font-style"))
 
 	// The cluster starts, so every cluster is [at[i], at[i+1]).
 	//
@@ -248,7 +248,7 @@ func (l *layouter) noteSubstitution(b *Box, primary *shape.Face, runs []faceRun)
 	}
 	// The document named no particular face, only a kind. Choosing one that can
 	// set the text is what a generic family *is* — see namesOnlyGenericFamilies.
-	families := b.Style["font-family"]
+	families := b.Style.Get("font-family")
 	if namesOnlyGenericFamilies(families) {
 		return
 	}
@@ -334,6 +334,7 @@ func (l *layouter) flushSubstitutions() {
 			Message: "no face for " + quoteValue(families) +
 				" has a glyph for any of this text, so " + quoteValue(got.alt.Name()) +
 				" set it; the metrics and the line breaks are that face's",
+			Source:   sourceOf(boxElement(got.at)),
 			Path:     PathOf(boxElement(got.at)),
 			Property: "font-family",
 		})
@@ -355,6 +356,12 @@ func (l *layouter) flushSubstitutions() {
 // cheap one. It used to assume it, and so no external RangedFontSet was ever
 // consulted — the one gate in front of the whole interface answered false for
 // every implementation but this package's.
+//
+// That holds under this package's own set too, which Build wraps around every
+// caller's set: when the set underneath is a RangedFontSet, a family the
+// document did not define is the caller's to answer per character, and the
+// wrapper's own rules say nothing about it. Reading only the wrapper's rules
+// was the same gate again one level down (audit C43).
 func (l *layouter) familyListIsRestricted(b *Box) bool {
 	set, ok := l.fontSet.(*documentFonts)
 	if !ok {
@@ -364,7 +371,10 @@ func (l *layouter) familyListIsRestricted(b *Box) bool {
 			return true
 		}
 	}
-	families := b.Style["font-family"]
+	if _, ranged := set.base.(RangedFontSet); ranged {
+		return true
+	}
+	families := b.Style.Get("font-family")
 	if got, cached := l.restrictedFamilies[families]; cached {
 		return got
 	}
@@ -392,9 +402,9 @@ func (l *layouter) familyListIsRestricted(b *Box) bool {
 // it says. A cluster no named family covers comes back false and is left to the
 // primary face and the fallback set, exactly as before.
 func (l *layouter) namedFaceFor(ranged RangedFontSet, b *Box, cluster string) (*shape.Face, bool) {
-	bold := isBold(b.Style["font-weight"])
-	italic := isItalic(b.Style["font-style"])
-	for _, family := range parseFamilyList(b.Style["font-family"]) {
+	bold := isBold(b.Style.Get("font-weight"))
+	italic := isItalic(b.Style.Get("font-style"))
+	for _, family := range parseFamilyList(b.Style.Get("font-family")) {
 		if face, ok := ranged.FaceForFamily(family, cluster, bold, italic); ok {
 			return face, true
 		}

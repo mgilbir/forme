@@ -1,6 +1,8 @@
 package layout
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"path"
 	"strconv"
@@ -31,22 +33,63 @@ import (
 // An image is bounded by what it decodes to. A stylesheet is bounded by nothing
 // once it is read: every rule in it is matched against every element, so a
 // megabyte of selectors is quadratic work the document did not have to carry.
-// Two caps answer that — one on a sheet and one on how many a document may pull
-// in — and both are checked here rather than left to the resolver, because a
-// caller may supply a resolver of their own and the engine's limits must not
-// depend on which one they wrote.
+// Caps answer that — on the bytes of a sheet fetched, on how many sheets a
+// document may pull in, and on the tokens of one sheet and of all of them — and
+// all are checked here rather than left to the resolver, because a caller may
+// supply a resolver of their own and the engine's limits must not depend on
+// which one they wrote. The token caps are on every stylesheet and not only the
+// fetched ones, because what a sheet costs is its tokens and not where they came
+// from.
 
-// maxStylesheetBytes is the largest linked stylesheet this engine will read.
+// maxStylesheetBytes is the largest linked or imported stylesheet this engine
+// will read.
 //
 // A megabyte is more CSS than any document has: the largest sheets on the web
 // are a few hundred kilobytes, and a sheet past this is not a document's styles
-// but a payload wearing their name. It bounds what is parsed and, through that,
-// what the cascade has to match — which is the cost that matters, since every
-// rule is tried against every element.
+// but a payload wearing their name. It bounds what is fetched, which is bytes
+// the document did not carry and the caller's resolver has to produce.
+//
+// It is not the bound on what a sheet costs to *parse*, which is the tokens in
+// it; see maxStylesheetTokens.
 //
 // It is a variable so that a test can lower it and watch it fire. A cap nobody
 // has seen trip is one nobody knows works.
 var maxStylesheetBytes = 1 << 20
+
+// maxStylesheetTokens is the most tokens of CSS this engine will parse from one
+// stylesheet, from any source: a linked or imported file, a <style> element, a
+// style attribute, and the sheets a caller passes in Input.CSS and
+// Input.UserCSS.
+//
+// Parsing is paid for in tokens. Each becomes a ComponentValue of close to a
+// hundred bytes, and a sheet can be a token per byte, so a megabyte of commas
+// is a hundred megabytes of tree. Only fetched sheets were bounded, and by
+// their bytes: a <style> had no bound at all, a document may be sixty-four
+// megabytes of markup, and one sixteen-megabyte <style> was killed for memory
+// under a four-gigabyte limit.
+//
+// Tokens rather than bytes, because the bytes are not the cost and bounding
+// them refuses what costs nothing: an @font-face carrying its font as a base64
+// data: URL is one string token and megabytes of text, and is the ordinary way
+// a single-file document brings its face. A megabyte of tokens is what the
+// byte cap on a fetched sheet already allowed.
+var maxStylesheetTokens = 1 << 20
+
+// maxDocumentStylesheetTokens is how many tokens of stylesheet one document may
+// have applied, counted across every source maxStylesheetTokens bounds except
+// style attributes — see styleAttributeTooLarge for why those are not counted.
+//
+// The per-sheet bound is not a bound on a document, for the reason
+// maxDocumentStylesheets gives about the number of sheets: twenty linked sheets
+// at the per-sheet bound are twenty legal reads, and <style> elements have no
+// count at all. Every sheet applied is parsed and held until the cascade has
+// run, so what a document holds is the sum of them. Four times the per-sheet
+// bound is four of the largest sheet this engine reads, and ten times what the
+// largest real document carries.
+//
+// A sheet is charged when it is applied, not when it is read, so a file linked
+// ten times is charged ten times — it is parsed and held ten times.
+var maxDocumentStylesheetTokens = 4 << 20
 
 // maxDocumentStylesheets is how many linked stylesheets one document may pull
 // in.
@@ -64,8 +107,9 @@ var maxDocumentStylesheets = 20
 // authorSheet is one author stylesheet in document order.
 type authorSheet struct {
 	// name identifies the sheet in a finding. It is the href for a linked
-	// sheet and empty for a <style> element, matching the Source.Sheet
-	// convention in finding.go.
+	// sheet — shortened, when the href is a long URL; see sheetName — and
+	// empty for a <style> element, matching the Source.Sheet convention in
+	// finding.go.
 	name string
 	// source is the CSS.
 	source string
@@ -79,15 +123,17 @@ type authorSheet struct {
 // it — and a browser orders the two by their position in the markup rather than
 // by their kind. Collecting them in one walk is what makes that true by
 // construction instead of by a sort somebody has to keep right.
-func documentStylesheets(doc *html.Node, res ResourceResolver, media style.Media,
-	rec *Recorder) []authorSheet {
-
-	l := &sheetLoader{res: res, rec: rec, media: media, failed: map[string]bool{}}
+//
+// The loader is the document's, shared with the sheets the caller passed, so
+// that the bounds on a document are bounds on the document and not on each of
+// the two places its stylesheets come from.
+func documentStylesheets(doc *html.Node, l *sheetLoader) []authorSheet {
 	var out []authorSheet
 	doc.Walk(func(n *html.Node) bool {
 		if n.Type != html.ElementNode {
 			return true
 		}
+		l.styleAttributeTooLarge(n)
 		switch strings.ToLower(n.Name) {
 		case "style":
 			// HTML §4.2.6 gives <style> a media attribute and means by it what
@@ -95,7 +141,8 @@ func documentStylesheets(doc *html.Node, res ResourceResolver, media style.Media
 			// screen rules in "<style media=screen>" — which is what a
 			// single-file document writes instead of a second stylesheet — had
 			// every one of them applied to the paper.
-			if text := n.TextContent(); text != "" && l.mediaApplies(n, "this <style> element") {
+			if text := n.TextContent(); text != "" && l.mediaApplies(n, "this <style> element") &&
+				l.admit(text, "this <style> element", AtHTML(n.Offset), PathOf(n)) {
 				out = append(out, l.expandImports(authorSheet{source: text})...)
 			}
 			// A <style> element's content is raw text, so there is nothing
@@ -155,6 +202,38 @@ type sheetLoader struct {
 	applied int
 	// capped records that the count cap was reported, so it is reported once.
 	capped bool
+	// spent is the tokens of stylesheet applied so far, which is what
+	// maxDocumentStylesheetTokens bounds, and tokensCapped records that the
+	// bound was reported, so it is reported once.
+	spent        int
+	tokensCapped bool
+}
+
+// sheetName is what a fetched stylesheet is called in a finding.
+//
+// A path is its own name, and it has to be: it is also what an @import in the
+// sheet is resolved against. A URL is not a directory to resolve against — see
+// resolveAgainstSheet — so its name is only a name, and a "data:" URL's name
+// was the whole stylesheet. Every finding about a rule in it carried the sheet
+// in Source.Sheet, and the recorder read that out again for each one, so a
+// data: sheet of three hundred kilobytes cost sixteen gigabytes of copying and
+// one at the one-megabyte cap about a minute (audit C18).
+//
+// So a long URL is named by its beginning, which says what it is, its length,
+// and a digest of the whole, which keeps two different sheets two names: the
+// name is also what tells an @import cycle apart from two sheets that begin
+// alike.
+func sheetName(ref string) string {
+	const keep = 48
+	if len(ref) <= 2*keep {
+		return ref
+	}
+	if _, named := schemeOf(ref); !named {
+		return ref
+	}
+	sum := sha256.Sum256([]byte(ref))
+	return ref[:cutAt(ref, keep)] + "… (" + strconv.Itoa(len(ref)) + " bytes, sha256 " +
+		hex.EncodeToString(sum[:8]) + ")"
 }
 
 // link turns one <link> element into a stylesheet, or explains why it did not.
@@ -186,8 +265,12 @@ func (l *sheetLoader) link(n *html.Node) (authorSheet, bool) {
 		return authorSheet{}, false
 	}
 	if src, ok := l.cache[href]; ok {
+		if why := l.charge(src); why != "" {
+			l.overTokens(href, why, AtHTML(n.Offset), PathOf(n))
+			return authorSheet{}, false
+		}
 		l.applied++
-		return authorSheet{name: href, source: src}, true
+		return authorSheet{name: sheetName(href), source: src}, true
 	}
 
 	src, fail := l.fetch(href)
@@ -205,8 +288,112 @@ func (l *sheetLoader) link(n *html.Node) (authorSheet, bool) {
 		l.cache = map[string]string{}
 	}
 	l.cache[href] = src
+	if why := l.charge(src); why != "" {
+		l.overTokens(href, why, AtHTML(n.Offset), PathOf(n))
+		return authorSheet{}, false
+	}
 	l.applied++
-	return authorSheet{name: href, source: src}, true
+	return authorSheet{name: sheetName(href), source: src}, true
+}
+
+// admit decides whether a stylesheet that was not fetched — a <style> element,
+// or one of the caller's — may be applied, under the same two token bounds a
+// fetched one is, and reports it by name when it may not.
+//
+// The finding is a limit, because that is what happened: the sheet is correct
+// CSS the engine implements, and it was not read because a guard said so. It
+// names the sheet, because "a stylesheet was dropped" sends an author looking
+// through all of them.
+func (l *sheetLoader) admit(src, what string, at Source, path string) bool {
+	why := l.charge(src)
+	if why == "" {
+		return true
+	}
+	l.rec.ReportDetail(Finding{
+		Rule:    RuleLimit,
+		Source:  at,
+		Message: what + " was not applied: " + why,
+		Path:    path,
+	})
+	return false
+}
+
+// charge counts a stylesheet about to be applied against both token bounds, and
+// says why it may not be applied, or nothing when it may. A sheet refused is not
+// counted.
+//
+// The counting reads the sheet once before it is parsed, which is the price of
+// knowing before the parse is paid for. It stops one past the bound, so a sheet
+// too large costs no more to refuse than one at the bound.
+func (l *sheetLoader) charge(src string) string {
+	n := css.CountTokens(src, maxStylesheetTokens)
+	if n > maxStylesheetTokens {
+		return fmt.Sprintf("it is more than the %d tokens of CSS this engine will read "+
+			"from one stylesheet (%d bytes)", maxStylesheetTokens, len(src))
+	}
+	if l.spent+n > maxDocumentStylesheetTokens {
+		return fmt.Sprintf("with its %d tokens of CSS this document's stylesheets would come "+
+			"to %d, more than the %d this engine will read", n, l.spent+n,
+			maxDocumentStylesheetTokens)
+	}
+	l.spent += n
+	return ""
+}
+
+// overTokens reports a fetched sheet refused by a token bound. It is overCap's
+// two findings for the other bounds on what a document reads, and for the same
+// reasons: the guard tripped, said once, and a file the document named was not
+// applied, said for each.
+func (l *sheetLoader) overTokens(href, why string, at Source, path string) {
+	if !l.tokensCapped {
+		l.tokensCapped = true
+		l.rec.Report(RuleLimit, NoSource, fmt.Sprintf(
+			"this document's stylesheets are more than this engine will read: %s", why))
+	}
+	l.rec.ReportDetail(Finding{
+		Rule:    RuleResourceBlocked,
+		Source:  at,
+		Message: "the stylesheet at " + quoteValue(href) + " was not applied: " + why,
+		Path:    path,
+	})
+}
+
+// styleAttributeTooLarge refuses a style attribute longer than any stylesheet
+// this engine reads, and reports it.
+//
+// A style attribute is a stylesheet without a selector, and parsing one costs
+// what parsing a sheet of its tokens costs; the markup cap lets one be sixty
+// megabytes of them. The attribute is emptied rather than removed, so that "[style]"
+// still selects the element — the element has the attribute; what was not read
+// is the declarations in it — and emptied here, before the cascade, because the
+// cascade reads it for every element and has no bound of its own to apply.
+//
+// It is not charged against maxDocumentStylesheetTokens. A sheet is held from
+// when it is parsed until every element has been styled, which is why the
+// document's sheets are bounded together; a style attribute is parsed when its
+// element is styled and let go when that element is done, so what one costs is
+// its own tokens and never the sum.
+//
+// No token has fewer than one byte, so an attribute no longer than the bound
+// in bytes is inside it in tokens and is not counted at all: counting is paid
+// only by the attributes long enough to need it.
+func (l *sheetLoader) styleAttributeTooLarge(n *html.Node) {
+	for i := range n.Attrs {
+		a := &n.Attrs[i]
+		if a.Name != "style" || len(a.Value) <= maxStylesheetTokens ||
+			css.CountTokens(a.Value, maxStylesheetTokens) <= maxStylesheetTokens {
+			continue
+		}
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleLimit,
+			Source: AtHTML(n.Offset),
+			Message: fmt.Sprintf("this element's style attribute is more than the %d tokens "+
+				"of CSS this engine will read from one stylesheet (%d bytes); it was not applied",
+				maxStylesheetTokens, len(a.Value)),
+			Path: PathOf(n),
+		})
+		a.Value = ""
+	}
 }
 
 // overCap reports the document-wide count tripping.
@@ -251,31 +438,12 @@ func (l *sheetLoader) fetch(href string) (string, *loadFailure) {
 	return string(data), nil
 }
 
-// bytes is the fetch itself: the same three answers image.go's fetch gives, in
-// the same order and for the same reasons.
+// bytes is the fetch itself: resource.go's policy, the one every reference in
+// a document is read through.
 func (l *sheetLoader) bytes(href string) ([]byte, *loadFailure) {
-	if scheme, ok := schemeOf(href); ok {
-		if scheme == "data" {
-			return decodeDataURI(href, "stylesheet", RuleResourceBlocked)
-		}
-		return nil, &loadFailure{
-			rule: RuleResourceBlocked,
-			message: "the stylesheet at " + quoteValue(href) + " names the " + quoteValue(scheme) +
-				" scheme; this engine resolves no URLs and fetches nothing, so it was not applied",
-		}
-	}
-	if l.res == nil {
-		return nil, &loadFailure{
-			rule:    RuleResourceBlocked,
-			message: "the stylesheet at " + quoteValue(href) + " was not loaded: " + ErrNoResolver.Error(),
-		}
-	}
-	data, err := l.res.Resolve(href)
-	if err != nil {
-		return nil, &loadFailure{
-			rule:    RuleResourceBlocked,
-			message: "the stylesheet at " + quoteValue(href) + " was not loaded: " + err.Error(),
-		}
+	data, _, fail := fetchReference(l.res, href, "stylesheet", "so it was not applied", RuleResourceBlocked)
+	if fail != nil {
+		return nil, fail
 	}
 	if len(data) == 0 {
 		// An empty file is a stylesheet with no rules, which is a legal thing
@@ -510,12 +678,14 @@ func (l *sheetLoader) expandImports(s authorSheet) []authorSheet {
 		if !l.importMedia(media, ref, r.Offset, s.name) {
 			continue
 		}
-		if src, ok := l.fetchImport(ref, s.name); ok {
-			next := authorSheet{name: resolveAgainstSheet(ref, s.name), source: src}
+		at := Source{HTMLOffset: -1, CSSOffset: r.Offset, Sheet: s.name}
+		if src, ok := l.fetchImport(ref, s.name, at); ok {
+			resolved, _ := resolveAgainstSheet(ref, s.name)
+			next := authorSheet{name: sheetName(resolved), source: src}
 			if why := l.cycle(next.name); why != "" {
 				l.rec.ReportDetail(Finding{
 					Rule:    RuleInvalidCSS,
-					Source:  Source{HTMLOffset: -1, CSSOffset: r.Offset, Sheet: s.name},
+					Source:  at,
 					Message: why,
 				})
 				continue
@@ -638,8 +808,18 @@ func (l *sheetLoader) importMedia(media []css.ComponentValue, ref string, offset
 // names "base.css", and resolving it against the document instead would name a
 // file beside the document that is not there. A <style> element has no name and
 // its imports are relative to the document, which is what an empty from means.
-func (l *sheetLoader) fetchImport(ref, from string) (string, bool) {
-	ref = resolveAgainstSheet(ref, from)
+// at is where the @import was written, which is where a finding about it
+// points.
+func (l *sheetLoader) fetchImport(ref, from string, at Source) (string, bool) {
+	ref, unresolved := resolveAgainstSheet(ref, from)
+	if unresolved != "" {
+		l.rec.ReportDetail(Finding{
+			Rule:    RuleResourceBlocked,
+			Source:  at,
+			Message: "the @import of " + unresolved,
+		})
+		return "", false
+	}
 	if l.failed[ref] {
 		// Already refused, and already reported. As with a <link> to the same
 		// missing file, the Recorder deduplicates the finding on its own and
@@ -651,11 +831,15 @@ func (l *sheetLoader) fetchImport(ref, from string) (string, bool) {
 		if l.applied >= maxDocumentStylesheets {
 			return "", false
 		}
+		if why := l.charge(src); why != "" {
+			l.overTokens(ref, why, at, "")
+			return "", false
+		}
 		l.applied++
 		return src, true
 	}
 	if l.applied >= maxDocumentStylesheets {
-		l.overCapImport(ref)
+		l.overCapImport(ref, at)
 		return "", false
 	}
 	src, fail := l.fetch(ref)
@@ -663,6 +847,7 @@ func (l *sheetLoader) fetchImport(ref, from string) (string, bool) {
 		l.failed[ref] = true
 		l.rec.ReportDetail(Finding{
 			Rule:    fail.rule,
+			Source:  at,
 			Message: fail.message,
 		})
 		return "", false
@@ -671,6 +856,10 @@ func (l *sheetLoader) fetchImport(ref, from string) (string, bool) {
 		l.cache = map[string]string{}
 	}
 	l.cache[ref] = src
+	if why := l.charge(src); why != "" {
+		l.overTokens(ref, why, at, "")
+		return "", false
+	}
 	l.applied++
 	return src, true
 }
@@ -732,9 +921,34 @@ func (l *sheetLoader) cycle(name string) string {
 // resolveAgainstSheet makes a reference written in one sheet relative to that
 // sheet rather than to the document.
 //
-// A reference that begins at the root names itself, and a sheet with no name of
-// its own — a <style> element — leaves the reference alone, because the document
-// is what it is already relative to.
+// It is the one resolver for every reference a stylesheet makes — an @import,
+// and through resolveSheetURLs every url() in the sheet, an @font-face src and
+// a background-image alike — because CSS Values 4 §4.5.1 has one rule for all
+// of them: a relative URL in a stylesheet is relative to the stylesheet. Only
+// the @import used to be; a font and a background in the same sheet were
+// resolved against the document, so "css/a.css" importing "base.css" found
+// "css/base.css" and in the next line asked for a font "f.ttf" beside the
+// document, which was not there (audit C34).
+//
+// What it leaves alone, and why each is itself already:
+//
+//   - A reference beginning at the root, with either slash, names itself from
+//     wherever the document is served, whichever sheet wrote it. That includes
+//     "//host/x", which is refused later as the host it names; joining it onto
+//     a directory would have hidden the host inside a path.
+//   - A reference with a scheme is a whole URL. It used to be joined like a
+//     path, so "http://evil/a.css" imported from "css/page.css" reached a
+//     resolver as "css/http:/evil/a.css" — no longer a URL, and no longer
+//     refused as one.
+//   - A reference that is only a fragment is not a file: CSS Values 4 §4.5.1
+//     makes "url(#x)" a reference into the document whatever sheet it is in.
+//   - The empty reference names nothing, in any sheet.
+//   - A sheet with no name — a <style> element — has the document as its base
+//     already.
+//
+// And what it cannot resolve at all: any other reference in a sheet that
+// arrived as a URL rather than as a path. See the note in the body; the second
+// result says why, and is empty when the reference resolved.
 //
 // The join is cleaned, and that is the whole of what a resolver can be handed.
 // "../base.css" written in "css/page.css" names "base.css", a file beside the
@@ -745,40 +959,176 @@ func (l *sheetLoader) cycle(name string) string {
 // one directory up was refused as an attempt to leave the document's
 // directory, which is a thing it was not doing.
 //
+// Only the path is cleaned. A query and a fragment are not path segments, and
+// cleaning them with it turned "x.png?a=../b" in "css/" into "css/b".
+//
 // A reference that really does go above the sheet's own root keeps its "..":
 // path.Clean has nowhere to take it, and the resolver refuses it as before.
-func resolveAgainstSheet(ref, from string) string {
-	if from == "" || strings.HasPrefix(ref, "/") {
-		return ref
+func resolveAgainstSheet(ref, from string) (string, string) {
+	ref = referenceText(ref)
+	if from == "" || ref == "" || ref[0] == '#' {
+		return ref, ""
 	}
-	if _, named := schemeOf(from); named {
+	if _, named := schemeOf(ref); named {
+		return ref, ""
+	}
+	if scheme, named := schemeOf(from); named {
 		// The sheet arrived as a URL rather than as a path — a "data:"
 		// stylesheet is the one this engine can have — and a URL is not a
 		// directory to join onto. "data:text/css,…" holds a slash in its media
-		// type, so joining produced "data:text/theme.css", which is a reference
-		// to nothing and was reported as a missing file.
+		// type, so joining produced "data:text/theme.css", which is a
+		// reference to nothing.
 		//
-		// A data: URL has no base, so what a relative reference in one is
-		// relative to is the document — which is what an unnamed sheet gets.
-		return ref
+		// Nor is the document the base instead, which is what this used to
+		// answer. A data: URL's path is opaque, and the URL standard's basic
+		// parser fails a reference with no scheme against a base like that —
+		// a root-relative one as much as a relative one; only a fragment
+		// survives it — so a browser loads nothing and the rule names nothing.
+		// Reading it against the document instead loaded a file the sheet
+		// never named. A sheet named by any other URL is the same case one
+		// step later: the reference would resolve to a URL with that scheme,
+		// which is refused.
+		if scheme == "data" {
+			return "", quoteValue(ref) + " is relative, and a data: stylesheet has no base " +
+				"to resolve it against — a data: URL's path is opaque, so the URL " +
+				"standard fails the reference — and nothing was loaded"
+		}
+		return "", quoteValue(ref) + " is relative to a stylesheet named by a " +
+			quoteValue(scheme) + " URL, which would make it one; this engine resolves no " +
+			"URLs, so nothing was loaded"
 	}
-	i := strings.LastIndexByte(from, '/')
+	if ref[0] == '/' || ref[0] == '\\' {
+		return ref, ""
+	}
+	base := from
+	if i := strings.IndexAny(base, "?#"); i >= 0 {
+		base = base[:i]
+	}
+	rel, suffix := ref, ""
+	if i := strings.IndexAny(ref, "?#"); i >= 0 {
+		rel, suffix = ref[:i], ref[i:]
+	}
+	if rel == "" {
+		// "?v=2" alone: RFC 3986 §5.2.2 keeps the base's path and takes the
+		// reference's query, so it is the sheet itself asked for again.
+		return base + suffix, ""
+	}
+	i := strings.LastIndexByte(base, '/')
 	if i < 0 {
-		return path.Clean(ref)
+		return path.Clean(rel) + suffix, ""
 	}
-	return path.Clean(from[:i+1] + ref)
+	return path.Clean(base[:i+1]+rel) + suffix, ""
+}
+
+// resolveSheetURLs resolves every url() in a parsed stylesheet against the
+// sheet, once, where the sheet is read — so that nothing downstream has a
+// relative reference left to resolve against the wrong base.
+//
+// Here and not at each consumer, because by the time a consumer runs the sheet
+// is gone: a background-image is a computed value, inherited and copied, and
+// nothing in it says which of a document's sheets wrote it. A computed <url>
+// is the resolved URL — CSS Values 4 §4.5.1, and every property's "computed
+// value: as specified, with url values made absolute" — so resolving it where
+// the sheet is still known is what a browser does too. Everything that reads a
+// url() — backgrounds, list markers, generated content, @font-face — reads the
+// resolved one, and the next thing that learns to read one will too.
+//
+// Only inside blocks. A url() in a declaration or in an @font-face descriptor
+// is in the block of the rule it belongs to, nested rules included; the one
+// url() in a prelude that is a resource is an @import's, which the loader has
+// already resolved and taken out, and the other — @namespace — is a name that
+// must not be resolved at all.
+//
+// The resolved text is charged to the work budget, because it is longer than
+// what was written by the sheet's own name and that is the document's to
+// choose: a <link> whose href is a megabyte of directory prefixes it to every
+// url() in the sheet behind it. A reference the budget refuses is emptied
+// rather than left as written, because as written it is relative to the
+// document and names some other file; empty, it names nothing, and the budget
+// has said what was cut.
+func resolveSheetURLs(rules []css.Rule, sheet string, rec *Recorder) {
+	if sheet == "" {
+		return
+	}
+	for i := range rules {
+		resolveURLsIn(rules[i].Block, sheet, rec)
+	}
+}
+
+func resolveURLsIn(vals []css.ComponentValue, sheet string, rec *Recorder) {
+	resolve := func(t *css.Token) {
+		got, why := resolveAgainstSheet(t.Value, sheet)
+		if why != "" {
+			// Nothing to load, and said so where the reference was written.
+			// The url() is emptied, which names nothing, rather than left
+			// relative to the document, which names some other file.
+			rec.ReportDetail(Finding{
+				Rule:    RuleResourceBlocked,
+				Source:  Source{HTMLOffset: -1, CSSOffset: t.Offset, Sheet: sheet},
+				Message: "the url() " + why,
+			})
+			t.Value = ""
+			return
+		}
+		if got == t.Value {
+			return
+		}
+		if !rec.charge(int64(len(got)), "the stylesheet references past that point") {
+			got = ""
+		}
+		t.Value = got
+	}
+	for i := range vals {
+		v := &vals[i]
+		switch {
+		case v.IsToken() && v.Token.Kind == css.URL:
+			resolve(&v.Token)
+		case v.IsFunction() && isURLFunction(v.Token.Value):
+			// url("x") and src("x"): the string inside is the reference, and
+			// what follows it — CSS Values 4's url modifiers — is not.
+			for j := range v.Values {
+				if w := &v.Values[j]; w.IsToken() && w.Token.Kind == css.String {
+					resolve(&w.Token)
+					break
+				}
+			}
+		default:
+			// image-set() takes a bare string as a URL too (CSS Images 4
+			// §2.2); this engine draws none, but the value it computes is
+			// still the resolved one.
+			if v.IsFunction() && isImageSet(v.Token.Value) {
+				for j := range v.Values {
+					if w := &v.Values[j]; w.IsToken() && w.Token.Kind == css.String {
+						resolve(&w.Token)
+					}
+				}
+			}
+			resolveURLsIn(v.Values, sheet, rec)
+		}
+	}
+}
+
+// isURLFunction reports the two spellings of a <url> as a function: url() and
+// CSS Values 4's src().
+func isURLFunction(name string) bool {
+	return strings.EqualFold(name, "url") || strings.EqualFold(name, "src")
+}
+
+func isImageSet(name string) bool {
+	return strings.EqualFold(name, "image-set") || strings.EqualFold(name, "-webkit-image-set")
 }
 
 // overCapImport reports the document-wide count tripping on an @import. It is
-// the same fact overCap reports for a <link> and is said the same way, without
-// an element to point at.
-func (l *sheetLoader) overCapImport(ref string) {
+// the same fact overCap reports for a <link> and is said the same way, pointing
+// at the @import rather than at an element.
+func (l *sheetLoader) overCapImport(ref string, at Source) {
 	if l.capped {
 		return
 	}
 	l.capped = true
 	l.rec.ReportDetail(Finding{
-		Rule: RuleLimit,
+		Rule:   RuleLimit,
+		Source: at,
 		Message: fmt.Sprintf("this document reached the limit of %d stylesheets; "+
 			"the @import of %s and any after it were not read",
 			maxDocumentStylesheets, quoteValue(ref)),

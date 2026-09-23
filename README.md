@@ -66,7 +66,9 @@ The same code, minus the imaginary backend, is `layout.Example` in
 	forme/css          CSS syntax: tokens, component values, selectors
 	forme/html         the parser, and the document tree it builds
 	forme/shape        the shaping engine: what glyph goes where
-	forme/font         the font formats underneath it: sfnt, CFF, glyph names
+	forme/font         the font formats underneath it: sfnt, CFF, Type 1, the
+	                   WOFF and WOFF 2 wrappers, glyph names
+	forme/brotli       Brotli decompression, RFC 7932, which WOFF 2 needs
 	forme/bidi         the Unicode bidirectional algorithm, UAX #9
 	forme/segment      grapheme cluster boundaries, UAX #29
 	forme/fonts/notosans   a face to shape with, embedded, under the OFL
@@ -103,7 +105,7 @@ not have been is a page that is quietly wrong; a box refused is a page with a
 finding attached to it.
 
 What it does *not* do is fragment across pages. A document is laid out on one
-sheet and scaled to fit it (`Page.MinScale`), and the only fragmentation
+sheet and scaled to fit it (`Options.MinScale`), and the only fragmentation
 anywhere is multicol's, within a single box.
 
 **Paragraphs.** Where a line may break and where it does, what order the runs on
@@ -118,8 +120,9 @@ knowledge. Cursive joining for Arabic and its relatives, and the mark ordering o
 UTR #53. OpenType layout: GSUB 1–6 and GPOS 1–8, mark attachment, cursive
 attachment, contextual and chained-contextual rules, mark filtering sets.
 
-**Fonts.** sfnt and CFF, variable fonts instanced at a named or arbitrary point in
-their design space, subsetting, and the metrics a layout engine has to ask for —
+**Fonts.** sfnt and CFF, Type 1, and the WOFF and WOFF 2 wrappers a web font
+arrives in; variable fonts instanced at a named or arbitrary point in their
+design space, subsetting, and the metrics a layout engine has to ask for —
 including what the fourteen standard PDF faces state, which is not the same
 question.
 
@@ -133,38 +136,41 @@ record of what it thought of.
 
 | | |
 |---|---|
-| **CSS Working Group reftests** | 6,253 documents rendered and compared against their references — **5,982 pass with nothing unsupported reported in either document** |
+| **CSS Working Group reftests** | 6,253 documents rendered and compared against their references — **5,983 pass with nothing unsupported reported in either document** |
 | **Unicode's bidi conformance** | 861,948 cases across `BidiTest.txt` and `BidiCharacterTest.txt`, no failures |
 | **Unicode's grapheme boundaries** | all 766 cases of `GraphemeBreakTest.txt` |
 | **Unicode's normalisation forms** | all 20,034 cases of `NormalizationTest.txt`, both NFC invariants |
-| **HarfBuzz**, over six fonts | 20,623 strings, two deliberate differences |
+| **HarfBuzz**, over six fonts | 20,623 strings, one deliberate difference |
 | **The CSS Syntax suite** | 229 cases from the suite `css-parsing-tests` publishes, with 13 more deliberately excused and each excuse named |
 
 The reftest number is a **ratchet**: it may never be lowered to make a red test
 green, so a drop is a layout regression and every failing name is printed — all
-of them, which the run checks against its own count. It has been lowered once,
-deliberately and for a reason recorded beside the constant: the suite holds four
-CSS 2.1 documents asserting a sentence CSS 2.2 withdrew, browsers fail all four,
-and following the current specification costs three of them. A
-*rise* fails the test too, and asks for the constant to be raised in the same
+of them, which the run checks against its own count. Where it has been lowered,
+it was on purpose, and the reason is recorded beside the constant: documents
+that passed only because nothing reported what they were missing, a suite
+document that passed by sharing a mistake this engine then stopped making, four
+CSS 2.1 documents asserting a sentence CSS 2.2 withdrew, and a page that is
+right and now carries a finding. A *rise* fails the test too, and asks for the constant to be raised in the same
 commit — a number that only tightens when somebody remembers to look is not a
 ratchet, and this one fell about fifteen hundred passes behind before that was
 true. It is also counted honestly — a document only counts once *nothing* in
 either half of the comparison raised an unsupported finding, because two pages
 agreeing about a feature neither implements is not evidence.
 
-The two HarfBuzz differences are cases where HarfBuzz is the one out of step, each
-settled by asking CoreText as a third opinion rather than by argument. They are
-listed with their reasons in `shape/harfbuzz_test.go` and pinned in the corpora,
-so a difference that stops being deliberate fails the test.
+The one HarfBuzz difference is HarfBuzz disagreeing with itself: on the path
+that removes invisible characters it leaves a mark positioned across one of them
+600 units out, where its own default path agrees with this engine to the unit.
+It is listed with its reason in `shape/harfbuzz_test.go` and pinned in the
+corpus, so a difference that stops being deliberate fails the test.
 
-Beyond the suites: 32 fuzz targets, thirty-two of them scheduled weekly, a
+Beyond the suites: 33 fuzz targets, thirty-three of them scheduled weekly, a
 differential fuzzer against HarfBuzz that generates text rather than listing it,
 and a CoreText harness for the questions two implementations cannot settle
 between them.
 
 	make test          # gofmt, vet, and the tests that need nothing fetched
-	make race          # the same, under the race detector
+	make test-corpora  # fetches every corpus, then runs the whole suite
+	make race          # test-corpora's run under the race detector (no gofmt or vet)
 	make test-wpt      # fetches the CSS WG reftests and runs the ratchet
 	make test-bidi     # fetches Unicode's bidi conformance suites
 	make test-grapheme # and its grapheme boundary cases
@@ -174,14 +180,21 @@ between them.
 	make test-difffuzz # that fuzzer's classifier, which needs only python
 	make wpt-breakdown # where the reftests that are not clean actually are
 
-The corpora are fetched rather than vendored — the reftests alone are eighty
-megabytes of somebody else's repository — and everything fetched is gitignored.
-The HarfBuzz comparison is the exception: its expectations are checked in, so it
-runs under `make test` with nothing but a Go toolchain.
+Most of the suite runs only under `make test-corpora`: a test whose corpus is not
+in the checkout skips, so a green `make test` has run the minority that needs
+nothing. The corpora are fetched rather than vendored — the reftests alone are
+about a hundred megabytes of somebody else's repository, and the first `make
+test-corpora` fetches about as much again of fonts, Unicode data and generator
+inputs — and everything fetched is gitignored. A fetched set is fetched again
+when its pin or its list of files changes. The HarfBuzz comparison is the
+exception: its expectations are checked in, so it runs under `make test` with
+nothing but a Go toolchain.
 
-CI runs the lot on every push — the gate, the four fetched suites and the race
-detector — and fuzzes weekly. Only `hbfuzz` is left out, because it needs a
-Python environment and HarfBuzz itself.
+CI runs on every push to main and on every pull request: the gate; the five
+fetched suites — bidi, grapheme boundaries, normalisation, CSS Syntax and the
+reftests — with the rest of the corpus-backed suite under `make test-corpora`;
+and the race detector over all of it. It fuzzes weekly. Only `hbfuzz` is left
+out, because it needs a Python environment and HarfBuzz itself.
 
 ## Generated tables
 
@@ -190,6 +203,17 @@ Indic categories, the joining types, the canonical equivalences, the ignorable
 set, the glyph-name list, the grapheme break properties, the named colours, the
 HTML entities, and the Universal Shaping Engine's category table. `cmd/gen*` are
 those generators and each says what it derives from.
+
+`cmd/internal/tables` lists every generated file, what makes it and from which
+input, and each input is pinned — the Unicode release, a commit of ICU, BudouX,
+tex-hyphen, csswg-drafts, Brotli, matplotlib's AFM files or Adobe's glyph list,
+a HarfBuzz release and digest for the language-tag table, or the digest of the
+HTML standard's entities file — by a variable in the
+`Makefile`, which each table records. `make casing`, `make dictionaries` and the
+rest fetch their inputs at the pin and regenerate through `cmd/maketables`, and
+`cmd/regenerate_test.go` regenerates every table from its pinned inputs and fails
+on any difference. No generator may import Go's `unicode` package, which answers
+from the release the toolchain shipped rather than the one the tables name.
 
 ## Licence
 

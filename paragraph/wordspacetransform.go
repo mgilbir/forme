@@ -42,7 +42,7 @@ func (w WordSpaceTransform) Transforms() bool { return w.Separator != "" }
 // Invents reports whether the value asks for separators the document did not
 // write. The grammar is "[ space | ideographic-space ] && auto-phrase?", so
 // auto-phrase never stands alone — there would be nothing for the separators it
-// finds to become.
+// finds to become — and WordSpaceTransformOf refuses it alone.
 func (w WordSpaceTransform) Invents() bool { return w.AutoPhrase && w.Separator != "" }
 
 // The two characters, named.
@@ -51,10 +51,16 @@ const (
 	ideographicSpace = "　"
 )
 
-// WordSpaceTransformOf reads the property, and returns what it could not act on.
+// WordSpaceTransformOf reads the property.
 //
-// The grammar is "none | [ space | ideographic-space ] || auto-phrase", so the
-// value is up to two words and auto-phrase may come on either side of the other.
+// The grammar is "none | [ space | ideographic-space ] && auto-phrase?": "none"
+// alone, or one of the two separators with an optional auto-phrase on either
+// side of it. Anything else is not a value of the property — two separators,
+// the same one twice, "none" beside anything, auto-phrase alone — and it reads
+// as none, which is what the cascade would have left had it dropped the
+// declaration. This accepted all of those and applied whichever word came last:
+// "space ideographic-space" set an ideographic space. Audit C178, as is the
+// second result this used to return and never filled.
 //
 // auto-phrase asks for separators to be *invented* at phrase boundaries the
 // author did not mark, which takes the same model word-break's own auto-phrase
@@ -64,31 +70,33 @@ const (
 // agent does not support detecting phrase boundaries for that language, there
 // are no virtual expandable separators". See PhrasesUnfound for what is left to
 // report, which is a language that has phrases and no model here.
-func WordSpaceTransformOf(value string) (WordSpaceTransform, string) {
+func WordSpaceTransformOf(value string) WordSpaceTransform {
+	words := strings.Fields(strings.ToLower(strings.TrimSpace(value)))
+	if len(words) == 1 && words[0] == "none" {
+		return WordSpaceTransform{}
+	}
 	var out WordSpaceTransform
-	seen := false
-	for _, word := range strings.Fields(strings.ToLower(strings.TrimSpace(value))) {
-		switch word {
-		case "none":
-			// Explicit and the initial value both; nothing to record.
-			seen = true
-		case "space":
-			out.Separator, seen = ordinarySpace, true
-		case "ideographic-space":
-			out.Separator, seen = ideographicSpace, true
-		case "auto-phrase":
-			out.AutoPhrase, seen = true, true
+	for _, word := range words {
+		switch {
+		case (word == "space" || word == "ideographic-space") && out.Separator == "":
+			out.Separator = ordinarySpace
+			if word == "ideographic-space" {
+				out.Separator = ideographicSpace
+			}
+		case word == "auto-phrase" && !out.AutoPhrase:
+			out.AutoPhrase = true
 		default:
-			// Not a value of this property. Nothing is done, and nothing is
-			// reported either: an unreadable declaration is the cascade's to
-			// report and it drops one before it reaches here.
-			return WordSpaceTransform{}, ""
+			// Not a value of this property: an unknown word, or one the
+			// grammar allows once given twice. Nothing is done, and nothing
+			// reported: an unreadable declaration is the cascade's to report.
+			return WordSpaceTransform{}
 		}
 	}
-	if !seen {
-		return WordSpaceTransform{}, ""
+	if out.Separator == "" {
+		// auto-phrase alone, or nothing at all.
+		return WordSpaceTransform{}
 	}
-	return out, ""
+	return out
 }
 
 // IsVirtualWordSeparator reports whether a character is one of the marks this

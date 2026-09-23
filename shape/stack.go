@@ -1,7 +1,6 @@
 package shape
 
 import (
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -118,24 +117,30 @@ func (s *Stack) ShapeRuns(text string) ([]Run, int) {
 	// the order they are drawn.
 	levelRuns := bidiLogicalRuns(text)
 
-	// One entry per base-plus-marks unit, with the face, script and level it
-	// chose. The unit is the atom: a level boundary is not allowed to fall
+	// Where the script changes, which is where a Face shaping the text would
+	// cut it too: see scriptRuns, which also says what a character in no
+	// script, or in several, belongs to.
+	pieces := scriptRuns(text, scriptUnknown, scriptUnknown, nil)
+
+	// One entry per base-plus-marks unit, with the face, script run and level
+	// it chose. The unit is the atom: a level boundary is not allowed to fall
 	// between a letter and its accent, and the algorithm does not put one there
-	// — rule W1 gives a mark the direction of what it is written on.
+	// — rule W1 gives a mark the direction of what it is written on. Nor does a
+	// script run's.
 	type unit struct {
 		start, end int
 		face       int
-		script     uint16
+		piece      int
 		level      int
 	}
 	var units []unit
-	lr := 0
+	lr, pc := 0, 0
 	for i := 0; i < len(text); {
 		base, size := utf8.DecodeRuneInString(text[i:])
 		end := i + size
 		for end < len(text) {
 			r, n := utf8.DecodeRuneInString(text[end:])
-			if !unicode.Is(unicode.M, r) {
+			if !isCombiningMark(r) {
 				break
 			}
 			end += n
@@ -143,33 +148,40 @@ func (s *Stack) ShapeRuns(text string) ([]Run, int) {
 		for lr+1 < len(levelRuns) && levelRuns[lr].End <= i {
 			lr++
 		}
+		for pc+1 < len(pieces) && pieces[pc].end <= i {
+			pc++
+		}
 		units = append(units, unit{
 			start: i, end: end,
-			face:   s.faceFor(text[i:end], base),
-			script: runScript(text[i:end]),
-			level:  levelRuns[lr].Level,
+			face:  s.faceFor(text[i:end], base),
+			piece: pc,
+			level: levelRuns[lr].Level,
 		})
 		i = end
 	}
-
-	// A unit whose characters decide no script takes the one before it, and
-	// failing that the one after — so leading punctuation joins the word it
-	// introduces rather than forming a run of its own.
-	last := uint16(scriptUnknown)
-	for i := range units {
-		if decides(units[i].script) {
-			last = units[i].script
+	// A unit nothing is drawn for — a joiner, a variation selector — is set in
+	// the face of the text it is written in: the unit before it, or for the
+	// first of a string, the first unit after it that chose. Given a face of its
+	// own it cut the run there, and the letters either side of a zero width
+	// joiner were shaped apart and took their isolated forms — the opposite of
+	// what the joiner asks for.
+	chosen := -1
+	for k := range units {
+		if units[k].face != anyFace {
+			chosen = units[k].face
+			for j := k - 1; j >= 0 && units[j].face == anyFace; j-- {
+				units[j].face = chosen
+			}
 			continue
 		}
-		units[i].script = last
+		if chosen >= 0 {
+			units[k].face = chosen
+		}
 	}
-	next := uint16(scriptUnknown)
-	for i := len(units) - 1; i >= 0; i-- {
-		if decides(units[i].script) {
-			next = units[i].script
-			continue
+	if chosen < 0 {
+		for k := range units {
+			units[k].face = 0 // nothing in the string is drawn at all
 		}
-		units[i].script = next
 	}
 
 	var (
@@ -180,7 +192,7 @@ func (s *Stack) ShapeRuns(text string) ([]Run, int) {
 	for k := 0; k < len(units); {
 		j := k
 		for j < len(units) && units[j].face == units[k].face &&
-			units[j].script == units[k].script && units[j].level == units[k].level {
+			units[j].piece == units[k].piece && units[j].level == units[k].level {
 			j++
 		}
 		start, end := units[k].start, units[j-1].end
@@ -197,7 +209,7 @@ func (s *Stack) ShapeRuns(text string) ([]Run, int) {
 		// neighbouring text over would make the letters join across a change of
 		// font, which is not what the specification asks for and is not what a
 		// reader of the two fonts would expect to see.
-		glyphs, gone := face.shapeGlyphsIn(text[start:end], units[k].script, level&1 == 1, nil, shapeContext{})
+		glyphs, gone := face.shapeGlyphsIn(text[start:end], pieces[units[k].piece].script, level&1 == 1, nil, shapeContext{})
 		missing += gone
 		for gi := range glyphs {
 			glyphs[gi].Cluster += start
@@ -217,6 +229,9 @@ func (s *Stack) ShapeRuns(text string) ([]Run, int) {
 	return visual, missing
 }
 
+// anyFace is faceFor's answer for a unit nothing is drawn for.
+const anyFace = -1
+
 // faceFor chooses the face for one base-plus-marks unit.
 //
 // A face that has the whole unit is preferred over one that has only the base,
@@ -225,11 +240,32 @@ func (s *Stack) ShapeRuns(text string) ([]Run, int) {
 // base decide, and if none has even that, the first face sets it — where it
 // becomes .notdef, which is a visible box rather than a silently dropped
 // character.
+//
+// "Has" is the question the shaper answers, not whether the face maps each
+// character. A character nothing is drawn for (hiddenAfterShaping) needs no
+// glyph, and a unit of nothing else is anyFace, for ShapeRuns to set with its
+// neighbours. A character the face draws as its canonical decomposition is one
+// it has: é in a face with e and the combining acute and no é was passed over
+// for a later face, which the shaper would not have done.
 func (s *Stack) faceFor(unitText string, base rune) int {
+	drawn := false
+	for _, r := range unitText {
+		if !hiddenAfterShaping(r) {
+			drawn = true
+			break
+		}
+	}
+	if !drawn {
+		return anyFace
+	}
+	var parts [4]rune
 	for i, f := range s.faces {
 		complete := true
 		for _, r := range unitText {
-			if _, ok := f.GlyphID(r); !ok {
+			if hiddenAfterShaping(r) {
+				continue
+			}
+			if _, ok := f.drawnAs(r, 0, parts[:0]); !ok {
 				complete = false
 				break
 			}
@@ -239,7 +275,7 @@ func (s *Stack) faceFor(unitText string, base rune) int {
 		}
 	}
 	for i, f := range s.faces {
-		if _, ok := f.GlyphID(base); ok {
+		if _, ok := f.drawnAs(base, 0, parts[:0]); ok {
 			return i
 		}
 	}

@@ -17,151 +17,138 @@ import (
 // the declaration, which for a document written this way is the whole of the
 // styling it meant to get.
 //
-// # What "supports" is answered with, and the narrowing it keeps
+// # What "supports" is answered with
 //
-// The engine's own claim, and not a second opinion: a property is supported
-// when it is in the registry and unimplementedReason does not name it. That is
-// the same pair of facts the "not implemented" finding is raised from, so a
-// condition cannot answer "yes" about a property the very next declaration
-// would be reported for.
+// The engine's own claim, and not a second opinion: a declaration is supported
+// when the cascade would apply it. That is the property in the registry (or a
+// logical longhand, or a shorthand this engine expands), not named by
+// unimplementedReason, and a value the value grammar accepts without naming
+// anything this engine does not evaluate — the same judgement the cascade drops
+// declarations by. So a condition cannot answer "yes" about a declaration the
+// very next rule would drop or report, and "(position: bogus)" is false where
+// it was true while only six properties had their values checked.
 //
-// The second of those two cannot fire today, and that is worth saying rather
-// than leaving to be discovered: unimplementedProperties is empty, so every
-// registered property is an implemented one. It is asked anyway because the
-// state it is for is one this engine has been in within the day — a property
-// registered so that its value cascades, before anything reads it, which is
-// where font-feature-settings sat this morning. Asking the same question the
-// cascade asks means the answer follows it without anyone remembering to.
-//
-// The value is asked about too, but only where the cascade has an answer. Six
-// properties have their value read early enough for §4.2 to drop the whole
-// declaration — the colours, display, background-image, quotes, content, and
-// every property that refuses a negative number — and dropsForValue is the same
-// list the cascade itself asks, so a condition cannot answer yes about a
-// declaration the very next rule throws away. "(display: grid)" is the case
-// that matters, because it is how a stylesheet asks whether it may use grid at
-// all.
-//
-// For every other property it is answered about the property alone. §2 tests
-// whether the declaration would parse, and this engine has no single place that
-// says whether a value parses — that is decided per property, in the stage that
-// reads it. So "(position: sticky)" is answered yes where position is
-// implemented and sticky is not.
-//
-// That narrowing is sound rather than merely convenient where the block is
-// taken, and the reason is where the report goes. A block let in by this answer
-// holds the declaration itself, and a value this engine cannot act on is
-// reported *there*, by the stage that could not act on it. The author is told
-// the same thing either way; what changes is that the rest of the block — the
-// part that was understood — is applied rather than dropped along with it.
-//
-// **Under a "not" it is not sound, and there is no report to fall back on.**
-// "@supports not (position: sticky)" is how an author writes the fallback for
-// an engine that lacks it, and answering the inner condition yes drops the
-// fallback with nothing said: the block that would have been reported is the
-// block that was thrown away. Nothing here can fix that without the value
-// grammar the engine does not have; what narrows it is the list above, because
-// the properties an author writes such a pair around are mostly on it.
+// What the grammar does not say is whether this engine draws every keyword it
+// accepts: "(text-justify: inter-character)" is true, because the declaration
+// is applied and the stage that reads it reports what it could not do. A block
+// let in by that answer holds the declaration itself, so the author is told the
+// same thing either way; what changes is that the rest of the block — the part
+// that was understood — is applied rather than dropped along with it. Under a
+// "not" that answer drops the fallback instead, and nothing reports it; that is
+// the one narrowing left, and it is the difference between a value being CSS
+// and a value being laid out, which only the reader knows.
 //
 // A condition this cannot read at all is a different matter and is reported,
 // on the model of a media query asking about something unanswerable: selector()
 // and font-tech() ask questions about facilities rather than declarations, and
 // a browser printing the same document may apply rules this page does not have.
+//
+// A condition that is not a condition — "(a:b) and (c:d) or (e:f)", which mixes
+// the two joins at one level without parentheses, or "not not (a:b)" — makes
+// the @supports rule invalid, as Conditional 3 §2.1 has it: the rule is
+// dropped, and the author is told it was malformed rather than unanswerable.
 
 // supportsCondition evaluates an @supports prelude.
 //
-// The second result names the piece it could not read, empty when it read all
-// of it. A condition that cannot be read is false — the rules inside are
-// dropped — because the fallback outside the block is the answer the author
-// wrote for an engine that does not understand.
-func supportsCondition(vals []css.ComponentValue) (bool, string) {
-	vals = trimWhitespace(vals)
-	if len(vals) == 0 {
-		return false, "an empty condition"
+// unreadable names the piece it could not answer, empty when it answered all
+// of it; a condition holding one is false — the rules inside are dropped —
+// because the fallback outside the block is the answer the author wrote for an
+// engine that does not understand. malformed says the prelude is not a
+// <supports-condition> at all, and then the rule is invalid.
+func supportsCondition(vals []css.ComponentValue) (matches bool, unreadable string, malformed bool) {
+	it := items(vals)
+	if len(it) == 0 {
+		return false, "", true
 	}
-	return supportsOr(vals)
-}
-
-// supportsOr reads the "or"-joined list, which binds loosest.
-func supportsOr(vals []css.ComponentValue) (bool, string) {
-	parts, ok := splitKeyword(vals, "or")
+	got, why, ok := supportsCond(it)
 	if !ok {
-		return supportsAnd(vals)
+		return false, "", true
 	}
-	result, unreadable := false, ""
-	for _, part := range parts {
-		got, why := supportsAnd(part)
-		if why != "" && unreadable == "" {
-			unreadable = why
-		}
-		// Every branch is read rather than stopping at the first true one: a
-		// condition this cannot read is worth reporting whichever side of an
-		// "or" it is on, and the reading has no side effects to be spared.
-		result = result || got
-	}
-	return result, unreadable
+	return got, why, false
 }
 
-// supportsAnd reads the "and"-joined list.
-func supportsAnd(vals []css.ComponentValue) (bool, string) {
-	parts, ok := splitKeyword(vals, "and")
-	if !ok {
-		return supportsNot(vals)
-	}
-	result, unreadable := true, ""
-	for _, part := range parts {
-		got, why := supportsNot(part)
-		if why != "" && unreadable == "" {
-			unreadable = why
+// supportsCond reads "not <in-parens>", or in-parens joined by one keyword —
+// all "and" or all "or", never both at one level. ok is false for anything
+// else, which the caller decides the meaning of: at the top an invalid rule,
+// inside parentheses §2.1's <general-enclosed>.
+func supportsCond(it []css.ComponentValue) (bool, string, bool) {
+	if isIdent(it[0], "not") {
+		if len(it) != 2 {
+			return false, "", false
 		}
-		result = result && got
-	}
-	return result, unreadable
-}
-
-// supportsNot reads the negation, which takes a single condition after it.
-func supportsNot(vals []css.ComponentValue) (bool, string) {
-	vals = trimWhitespace(vals)
-	if len(vals) > 0 && isIdent(vals[0], "not") {
-		got, why := supportsNot(vals[1:])
+		got, why, ok := supportsInParens(it[1])
+		if !ok {
+			return false, "", false
+		}
 		if why != "" {
 			// An unreadable condition is false, and the negation of a thing
 			// that could not be read is not true — it is still unread. Saying
 			// otherwise would turn "not (something unanswerable)" into a
 			// licence to apply the block.
-			return false, why
+			return false, why, true
 		}
-		return !got, ""
+		return !got, "", true
 	}
-	return supportsPrimary(vals)
+	if len(it)%2 == 0 {
+		return false, "", false
+	}
+	join := ""
+	for i := 1; i < len(it); i += 2 {
+		word, isWord := identOf(it[i])
+		if !isWord || (word != "and" && word != "or") || (join != "" && word != join) {
+			return false, "", false
+		}
+		join = word
+	}
+	result, unreadable := join != "or", ""
+	for i := 0; i < len(it); i += 2 {
+		got, why, ok := supportsInParens(it[i])
+		if !ok {
+			return false, "", false
+		}
+		// Every branch is read rather than stopping at the first that decides:
+		// a condition this cannot read is worth reporting whichever side of a
+		// join it is on, and the reading has no side effects to be spared.
+		if why != "" && unreadable == "" {
+			unreadable = why
+		}
+		if join == "or" {
+			result = result || got
+		} else {
+			result = result && got
+		}
+	}
+	return result, unreadable, true
 }
 
-// supportsPrimary reads a parenthesised declaration, a parenthesised condition,
-// or a function this engine cannot answer.
-func supportsPrimary(vals []css.ComponentValue) (bool, string) {
-	vals = trimWhitespace(vals)
-	if len(vals) != 1 {
-		return false, serializeCondition(vals)
-	}
-	v := vals[0]
+// supportsInParens reads a parenthesised declaration, a parenthesised
+// condition, or a function this engine cannot answer. Anything else in
+// parentheses is <general-enclosed>: valid, and unanswerable.
+func supportsInParens(v css.ComponentValue) (bool, string, bool) {
 	if v.IsFunction() {
 		// selector(), font-tech(), font-format(): questions about facilities
 		// rather than about a declaration.
-		return false, strings.ToLower(v.Token.Value) + "()"
+		return false, strings.ToLower(v.Token.Value) + "()", true
 	}
 	if !v.IsBlock() || v.Token.Kind != css.LeftParen {
-		return false, serializeCondition(vals)
+		return false, "", false
 	}
 	inner := trimWhitespace(v.Values)
 	// A declaration is "ident : value". Anything else inside the parentheses is
 	// a nested condition.
 	if name, value, ok := splitDeclaration(inner); ok {
-		return supportsDeclaration(name, value), ""
+		return supportsDeclaration(name, value), "", true
 	}
-	return supportsOr(inner)
+	if it := items(inner); len(it) > 0 {
+		if got, why, ok := supportsCond(it); ok {
+			return got, why, true
+		}
+	}
+	return false, serializeCondition(inner), true
 }
 
-// supportsDeclaration is the engine's own claim about a property.
+// supportsDeclaration is the engine's own claim about a declaration: whether
+// the cascade would apply it.
 func supportsDeclaration(name string, value []css.ComponentValue) bool {
 	if len(trimWhitespace(value)) == 0 {
 		// A declaration with no value does not parse, so nothing supports it.
@@ -173,36 +160,39 @@ func supportsDeclaration(name string, value []css.ComponentValue) bool {
 		// §2 says in as many words. This engine parses it and cascades it.
 		return true
 	}
-	if isLogicalLonghand(name) {
-		// Implemented by being renamed to the physical property it sets, which
-		// is why it is not in the registry. See prepareDecl.
-		return true
-	}
-	if _, drop := dropsForValue(name, value); drop {
-		// The value is one §4.2 refuses for this property, so the declaration
-		// this condition names would be dropped whole. Answering yes about it
-		// would be the cascade contradicting itself one rule later.
+	if usesVar(value) {
+		// Valid CSS for any property, and a value this engine does not
+		// substitute: the cascade applies it as "unset" and says so.
 		return false
 	}
-	if sh, known := shorthands[name]; known {
+	_, registered := properties[name]
+	sh, isShorthand := shorthands[name]
+	if wideKeyword(value) != "" {
+		// A CSS-wide keyword needs no taking apart: it sets every longhand to
+		// itself, which is why expand has a case for it before the grammar or
+		// the expander is reached.
+		return registered || isLogicalLonghand(name) || isShorthand
+	}
+	if isShorthand {
 		// A shorthand is not in the registry — it is not a property a computed
 		// style holds — and asking the registry about one answered no to
-		// "(margin: 0)", which every engine that parses CSS says yes to. A
-		// document that wraps its rules in a shorthand test got none of them.
-		//
-		// It is supported when this engine can take the value apart. A CSS-wide
-		// keyword needs no taking apart: it sets every longhand to itself, which
-		// is why expand has a case for it before the expander is reached.
-		if wideKeyword(value) != "" {
-			return true
-		}
-		_, _, ok := sh.expand(value)
-		return ok
+		// "(margin: 0)", which every engine that parses CSS says yes to. It is
+		// supported when this engine takes the value apart without leaving a
+		// part out and applies every longhand it sets.
+		parts, unsupported, ok := sh.expand(value)
+		return ok && len(unsupported) == 0 && !judgeExpansion(name, value, parts).drop
 	}
-	if _, known := properties[name]; !known {
+	if !registered && !isLogicalLonghand(name) {
 		return false
 	}
-	if _, missing := unimplementedReason(name); missing {
+	if judgeLonghand(name, value).drop {
+		// The declaration this condition names would be dropped whole, for
+		// §4.2 or for naming something this engine does not evaluate.
+		// Answering yes would be the cascade contradicting itself one rule
+		// later.
+		return false
+	}
+	if _, missing := unimplementedReason(name); registered && missing {
 		return false
 	}
 	return true
@@ -222,25 +212,6 @@ func splitDeclaration(vals []css.ComponentValue) (string, []css.ComponentValue, 
 		}
 	}
 	return "", nil, false
-}
-
-// splitKeyword cuts a condition on a top-level keyword, reporting whether it
-// was there at all.
-func splitKeyword(vals []css.ComponentValue, word string) ([][]css.ComponentValue, bool) {
-	var parts [][]css.ComponentValue
-	last, found := 0, false
-	for i, v := range vals {
-		if !isIdent(v, word) {
-			continue
-		}
-		found = true
-		parts = append(parts, vals[last:i])
-		last = i + 1
-	}
-	if !found {
-		return nil, false
-	}
-	return append(parts, vals[last:]), true
 }
 
 func isIdent(v css.ComponentValue, word string) bool {

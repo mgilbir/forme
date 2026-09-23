@@ -56,17 +56,17 @@ func main() {
 
 	// No default. A default is a constant that prints whatever the files hold,
 	// which is what three of the generators beside this one were doing; the
-	// Makefile fills it in from UNICODE_VERSION, and the two files below that
-	// declare a release are checked against it.
+	// Makefile fills it in from UNICODE_VERSION, and all three files are
+	// checked against it — emoji-data.txt by its own "# Version:" line.
 	gcbPath := filepath.Join(*ucd, "auxiliary", "GraphemeBreakProperty.txt")
 	derivedPath := filepath.Join(*ucd, "DerivedCoreProperties.txt")
-	if err := ucdmeta.Check(*version, gcbPath, derivedPath); err != nil {
+	emojiPath := filepath.Join(*ucd, "emoji", "emoji-data.txt")
+	if err := ucdmeta.Check(*version, gcbPath, derivedPath, emojiPath); err != nil {
 		fatalf("%v", err)
 	}
 
 	gcb := parse(gcbPath, nil)
-	pict := parse(filepath.Join(*ucd, "emoji", "emoji-data.txt"),
-		func(v string) bool { return v == "Extended_Pictographic" })
+	pict := parse(emojiPath, func(v string) bool { return v == "Extended_Pictographic" })
 	incb := parseINCB(derivedPath)
 
 	// A value that names nothing in the Go source is a table that would compile

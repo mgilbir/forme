@@ -20,14 +20,14 @@ func TestTheSecondCodesForSpaceAndHyphenAreThere(t *testing.T) {
 		want  string
 		what  string
 	}{
-		{WinAnsiEncodingNames, 0xA0, "space", "WinAnsi's no-break space"},
-		{WinAnsiEncodingNames, 0xAD, "hyphen", "WinAnsi's soft hyphen"},
-		{MacRomanEncodingNames, 0xCA, "space", "MacRoman's no-break space"},
+		{winAnsiEncodingNames, 0xA0, "space", "WinAnsi's no-break space"},
+		{winAnsiEncodingNames, 0xAD, "hyphen", "WinAnsi's soft hyphen"},
+		{macRomanEncodingNames, 0xCA, "space", "MacRoman's no-break space"},
 
 		// The first codes, which were never in doubt.
-		{WinAnsiEncodingNames, 0x20, "space", "WinAnsi's ordinary space"},
-		{WinAnsiEncodingNames, 0x2D, "hyphen", "WinAnsi's ordinary hyphen"},
-		{MacRomanEncodingNames, 0x20, "space", "MacRoman's ordinary space"},
+		{winAnsiEncodingNames, 0x20, "space", "WinAnsi's ordinary space"},
+		{winAnsiEncodingNames, 0x2D, "hyphen", "WinAnsi's ordinary hyphen"},
+		{macRomanEncodingNames, 0x20, "space", "MacRoman's ordinary space"},
 	} {
 		if got := tc.table[tc.code]; got != tc.want {
 			t.Errorf("%s: code 0x%02X is %q, want %q", tc.what, tc.code, got, tc.want)
@@ -62,7 +62,7 @@ func TestABudgetThatStoppedShortSaysSo(t *testing.T) {
 		{1, true, true, "one unit"},
 		{1000, true, false, "enough"},
 	} {
-		m, partial := ParseCmapSubtable(b, tc.work)
+		m, partial := parseCmapSubtableUnder(b, tc.work)
 		if (m != nil) != tc.nonNil {
 			t.Errorf("%s: the map is non-nil = %v, want %v", tc.what, m != nil, tc.nonNil)
 		}

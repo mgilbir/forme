@@ -66,3 +66,31 @@ func TestTheCutAgreesWithTheCount(t *testing.T) {
 		}
 	}
 }
+
+// TestTheCutKeepsASeparatorsMarks: a combining mark written on a no-break space
+// is how a diacritic is shown standing alone, and it is one grapheme cluster
+// with the space. Cut after the space alone, the mark began the next run and
+// was drawn a word-spacing away from what it sits on. The cut goes after the
+// cluster, and the run it ends still ends with a separator.
+func TestTheCutKeepsASeparatorsMarks(t *testing.T) {
+	for _, tc := range []struct {
+		text string
+		want []string
+	}{
+		{"a\u00a0\u0301b", []string{"a\u00a0\u0301", "b"}},
+		{"a \u0301\u0308b c", []string{"a \u0301\u0308", "b ", "c"}},
+	} {
+		got := SplitAtWordSeparators(tc.text)
+		if strings.Join(got, "|") != strings.Join(tc.want, "|") {
+			t.Errorf("%q split to %q, want %q", tc.text, got, tc.want)
+		}
+		for _, piece := range got[:len(got)-1] {
+			if !EndsWithWordSeparator(piece) {
+				t.Errorf("%q ends a cut and does not end with a separator", piece)
+			}
+		}
+	}
+	if got := SplitAtWordSeparators("ab\u00a0\u0301"); got != nil {
+		t.Errorf("a separator and its mark at the end were cut: %q", got)
+	}
+}

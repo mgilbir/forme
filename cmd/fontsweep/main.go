@@ -1,4 +1,4 @@
-// Read every font in a directory and say what happened.
+// Command fontsweep reads every font in a directory and says what happened.
 //
 // The six faces the checked-in oracle uses are chosen, reviewed and small
 // enough to vendor, which is what makes them an oracle. They are also six. A
@@ -18,6 +18,14 @@
 // A panic is reported rather than allowed to end the run, because one font that
 // crashes the reader must not hide the three thousand after it. Every panic here
 // is a defect, and the fuzzer in shape/panic_test.go is where it should end up.
+//
+// Each file lands in one of five buckets, because they are five answers and the
+// count of each is what the sweep is for: loaded, refused by shape.Load,
+// panicked, a font collection — a .ttc or .otc, several faces in one file,
+// which nothing in this module reads — and unreadable, a file the operating
+// system would not hand over. The last two used to be counted as refused, so a
+// directory of collections sized a gap in the reader that was a format it does
+// not claim to read.
 package main
 
 import (
@@ -60,26 +68,19 @@ func main() {
 	sort.Strings(paths)
 
 	fmt.Println("path\tresult\ttables\tupem\tglyphs\tcff\tscripts\tname\tdetail")
-	var loaded, failed, panicked int
-	reasons := map[string]int{}
+	var rows []row
 	for _, p := range paths {
 		r := read(p)
-		switch r.result {
-		case "ok":
-			loaded++
-		case "panic":
-			panicked++
-			reasons[r.detail]++
-		default:
-			failed++
-			reasons[r.detail]++
-		}
+		rows = append(rows, r)
 		fmt.Printf("%s\t%s\t%s\t%d\t%d\t%t\t%d\t%s\t%s\n",
 			p, r.result, r.tables, r.upem, r.glyphs, r.cff, r.scripts, r.name, r.detail)
 	}
 
-	fmt.Fprintf(os.Stderr, "\n%d fonts: %d loaded, %d refused, %d panicked\n",
-		len(paths), loaded, failed, panicked)
+	counts, reasons := tally(rows)
+	fmt.Fprintf(os.Stderr, "\n%d files: %d loaded, %d refused, %d panicked, "+
+		"%d collections (not read), %d unreadable\n",
+		len(paths), counts[resultOK], counts[resultRefused], counts[resultPanic],
+		counts[resultCollection], counts[resultUnreadable])
 	if len(reasons) > 0 {
 		fmt.Fprintln(os.Stderr, "\nby reason:")
 		type kv struct {
@@ -97,8 +98,31 @@ func main() {
 	}
 }
 
+// The buckets a file lands in.
+const (
+	resultOK         = "ok"
+	resultRefused    = "refused"
+	resultPanic      = "panic"
+	resultCollection = "collection"
+	resultUnreadable = "unreadable"
+)
+
+// tally counts the rows by result, and the refusals and panics by what they
+// said. A collection or an unreadable file is not a reason the reader gave, so
+// it is not among the reasons.
+func tally(rows []row) (map[string]int, map[string]int) {
+	counts, reasons := map[string]int{}, map[string]int{}
+	for _, r := range rows {
+		counts[r.result]++
+		if r.result == resultRefused || r.result == resultPanic {
+			reasons[r.detail]++
+		}
+	}
+	return counts, reasons
+}
+
 type row struct {
-	result  string // ok, refused, panic, unreadable
+	result  string // one of the result constants above
 	detail  string
 	tables  string // the tags that decide what kind of font this is
 	upem    int
@@ -116,21 +140,27 @@ type row struct {
 func read(path string) (r row) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return row{result: "unreadable", detail: err.Error()}
+		return row{result: resultUnreadable, detail: err.Error()}
 	}
 	r.tables = interesting(data)
+	if len(data) >= 12 && string(data[:4]) == "ttcf" {
+		// Several faces in one file, which shape.Load does not read; asking it
+		// would count a format this module does not claim as a font it refused.
+		return row{result: resultCollection, tables: r.tables,
+			detail: fmt.Sprintf("%d faces", binary.BigEndian.Uint32(data[8:]))}
+	}
 	defer func() {
 		if p := recover(); p != nil {
-			r.result, r.detail = "panic", fmt.Sprint(p)
+			r.result, r.detail = resultPanic, fmt.Sprint(p)
 			r.detail = strings.SplitN(r.detail, "\n", 2)[0]
 		}
 	}()
 	f, err := shape.Load(data)
 	if err != nil {
-		return row{result: "refused", detail: err.Error(), tables: r.tables}
+		return row{result: resultRefused, detail: err.Error(), tables: r.tables}
 	}
 	return row{
-		result: "ok", tables: r.tables,
+		result: resultOK, tables: r.tables,
 		upem: f.UnitsPerEm(), glyphs: f.NumGlyphs(), cff: f.IsCFF(),
 		scripts: len(f.Scripts()), name: f.Name(),
 	}

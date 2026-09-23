@@ -191,7 +191,7 @@ var knownElements = map[string]bool{
 	// What stays refused is the interaction itself, and it is not a boundary
 	// this moves: nothing is submitted, nothing is typed into, no value a reader
 	// would have entered is invented, and no PDF form field is produced. See
-	// render/control.go for what each control is drawn as and for the findings
+	// layout/control.go for what each control is drawn as and for the findings
 	// that name the places where a static box is an approximation of a widget.
 	"form": true, "label": true, "fieldset": true, "legend": true,
 	"input": true, "button": true, "select": true, "option": true,
@@ -206,10 +206,15 @@ var knownElements = map[string]bool{
 
 // voidElements have no content and no end tag. Writing one — "</br>" — is an
 // error rather than something to be ignored.
+//
+// The last four are obsolete and are void all the same: the tree builder
+// inserts each and pops it at once, so "<basefont>A" is an element and then a
+// letter beside it, not a letter inside an element that is never closed.
 var voidElements = map[string]bool{
 	"area": true, "base": true, "br": true, "col": true, "embed": true,
 	"hr": true, "img": true, "input": true, "link": true, "meta": true,
 	"param": true, "source": true, "track": true, "wbr": true,
+	"basefont": true, "bgsound": true, "frame": true, "keygen": true,
 }
 
 // rawTextElements have content that is not markup at all: it runs to the
@@ -261,8 +266,8 @@ var contentSkippedElements = map[string]bool{
 // droppedElements are the ones refused for what they *do* rather than for being
 // unknown, and each has its own reason.
 //
-// The first three are §4.1 of the rendering proposal: they are the entirety of
-// the code-execution and remote-content surface. A renderer that ignored them
+// The first three are the entirety of the code-execution and remote-content
+// surface, which this engine refuses outright. A renderer that ignored them
 // silently would still be one that had read them, and an author who embedded a
 // <script> expecting it to be inert deserves to be told it was thrown away
 // rather than left to assume it ran.
@@ -290,65 +295,183 @@ var droppedElements = map[string]string{
 	"meter":    "a meter reflects a state that does not change here",
 }
 
-// closedByStartTag says which open element an incoming start tag ends.
+// The optional end tags.
 //
 // This is HTML's *optional end tags* (§13.1.2.4), not error recovery. Leaving
-// out "</li>" is correct HTML, and every template in the world does it, so
-// refusing it would refuse the input this engine exists to read. The rules are
-// closed and few, which is what makes them safe to implement without taking on
-// the rest of the recovery algorithm.
+// out "</li>" or "</p>" is correct HTML, and every template in the world does
+// it, so refusing it would refuse the input this engine exists to read.
 //
-// Keyed by the open element; the value is the set of start tags that close it.
-var closedByStartTag = map[string]map[string]bool{
-	"p": setOf(
-		"address", "article", "aside", "blockquote", "details", "div", "dl",
-		"fieldset", "figcaption", "figure", "footer", "form", "h1", "h2", "h3",
-		"h4", "h5", "h6", "header", "hgroup", "hr", "main", "menu", "nav", "ol",
-		"p", "pre", "section", "table", "ul",
-	),
-	"li":       setOf("li"),
-	"dt":       setOf("dt", "dd"),
-	"dd":       setOf("dt", "dd"),
-	"rt":       setOf("rt", "rp"),
-	"rp":       setOf("rt", "rp"),
-	"option":   setOf("option", "optgroup"),
-	"optgroup": setOf("optgroup"),
-	"thead":    setOf("tbody", "tfoot"),
-	"tbody":    setOf("tbody", "tfoot"),
-	"tfoot":    setOf("tbody"),
-	"tr":       setOf("tr", "tbody", "tfoot", "thead"),
-	"td":       setOf("td", "th", "tr", "tbody", "tfoot", "thead"),
-	"th":       setOf("td", "th", "tr", "tbody", "tfoot", "thead"),
-	// HTML's "in caption" insertion mode ends a caption on any of these, by
-	// acting as though "</caption>" had been seen and reprocessing the tag —
-	// so a cell written straight after a caption is a cell of the table and
-	// not something inside the caption.
-	"caption": setOf("caption", "col", "colgroup", "tbody", "td", "tfoot",
-		"th", "thead", "tr"),
-	// colgroup is not in this table at all: what closes it is everything, and
-	// closedByStart says so. The entry would be a list of every element name
-	// there is.
-}
+// They used to be a table keyed by the open element — "a <p> is closed by these
+// start tags, an <li> by that one" — consulted against the top of the stack
+// alone. That is a restatement of the rules which is right exactly when the
+// element being ended is the innermost one, and the documents where it is not
+// are ordinary ones: "<li><p>a<li>" leaves a paragraph open inside the first
+// item, and so the second item went inside the paragraph, and "<td><p>a<td>"
+// put the second cell inside the first cell's paragraph and the next row inside
+// that — all of it silently, because the final end tag closed the whole
+// mis-nest as optional end tags. A browser's tree has two items and two cells.
+//
+// So the rules are now written the way §13.2.6.4.7 writes them, over the whole
+// stack of open elements: "has an element in scope", "generate implied end
+// tags", "close a p element", "close the cell". Those four primitives are in
+// parse.go, and the sets below are the ones they are stated in terms of, each
+// copied from the standard's own list. A rule written in them reaches past
+// whatever the author left open for the same reason the standard's does, and
+// stops where the standard's stops.
 
-// closedByStart reports whether an incoming start tag ends the element on top
-// of the stack.
+// impliedEndTags are the elements "generate implied end tags" pops: the ones
+// whose end tag is implied by whatever comes next, wherever they are.
+var impliedEndTags = setOf(
+	"dd", "dt", "li", "optgroup", "option", "p", "rb", "rp", "rt", "rtc",
+)
+
+// closedAtEnd are the elements that may still be open when the document ends
+// without that being a mistake: the implied ones, and the table's rows, cells
+// and row groups, whose end tags are implied by the end of their parent. It is
+// the list HTML's "in body" mode checks at the end of the file.
+var closedAtEnd = setOf(
+	"dd", "dt", "li", "optgroup", "option", "p", "rb", "rp", "rt", "rtc",
+	"tbody", "td", "tfoot", "th", "thead", "tr",
+)
+
+// specialElements are HTML's "special" category: the elements an end tag for
+// some other name does not reach past, and the ones that end the search for an
+// open <li>, <dd> or <dt>. §13.2.4.2, without the MathML and SVG entries —
+// foreign content is never on this parser's stack.
+var specialElements = setOf(
+	"address", "applet", "area", "article", "aside", "base", "basefont",
+	"bgsound", "blockquote", "body", "br", "button", "caption", "center", "col",
+	"colgroup", "dd", "details", "dir", "div", "dl", "dt", "embed", "fieldset",
+	"figcaption", "figure", "footer", "form", "frame", "frameset", "h1", "h2",
+	"h3", "h4", "h5", "h6", "head", "header", "hgroup", "hr", "html", "iframe",
+	"img", "input", "keygen", "li", "link", "listing", "main", "marquee",
+	"menu", "meta", "nav", "noembed", "noframes", "noscript", "object", "ol",
+	"p", "param", "plaintext", "pre", "script", "search", "section", "select",
+	"source", "style", "summary", "table", "tbody", "td", "template",
+	"textarea", "tfoot", "th", "thead", "title", "tr", "track", "ul", "wbr",
+	"xmp",
+)
+
+// The four scopes of §13.2.4.2. Each is the set of elements at which the search
+// for an open element stops, looking outward from the innermost: an element
+// outside one of these is not "in scope", and nothing inside may close it.
 //
-// It is closedByStartTag with the one rule that a set cannot hold. HTML's "in
-// column group" insertion mode has a single positive case — a <col> — and sends
-// everything else to "anything else", which pops the colgroup and reprocesses
-// the tag in "in table". A <td> straight after a <colgroup> is therefore a cell
-// of the table, and the suite's border-conflict-style-107 writes exactly that
-// and loses the whole table when the cell goes inside the column group instead.
+// That is what keeps a cell's content from ending things outside the cell: a
+// "<p>" written in a table cell does not close a paragraph the table itself is
+// inside, because td is a boundary of every scope that p is looked for in.
+var (
+	defaultScope = setOf(
+		"applet", "caption", "html", "table", "td", "th", "marquee", "object",
+		"template",
+	)
+	listItemScope = setOf(
+		"applet", "caption", "html", "table", "td", "th", "marquee", "object",
+		"template", "ol", "ul",
+	)
+	buttonScope = setOf(
+		"applet", "caption", "html", "table", "td", "th", "marquee", "object",
+		"template", "button",
+	)
+	tableScope = setOf("html", "table", "template")
+
+	// formattingMarkers are where the standard puts a marker on its list of
+	// active formatting elements, which is as far back as a nested <a> or
+	// <nobr> looks for the one it would end. <html> is here because the stack
+	// ends there.
+	formattingMarkers = setOf(
+		"applet", "object", "marquee", "template", "td", "th", "caption",
+		"button", "html",
+	)
+)
+
+// closesParagraph are the start tags that "close a p element" if one is in
+// button scope: the list §13.2.6.4.7 gives the rule against, gathered from its
+// several entries — the block containers, the headings, the list items, <pre>
+// and <listing>, <form>, <plaintext>, <hr>, <table> and <xmp>.
 //
-// What is still missing is the rest of "anything else": text and an end tag
-// also close a colgroup, and here they do not. Those need the insertion modes
-// this parser does not have, and the shapes that reach them —
-// "<colgroup>text<td>" — are markup nothing generates.
-func closedByStart(open, incoming string) bool {
-	if open == "colgroup" {
+// <table> is here as the standard has it for a document in no-quirks mode. In
+// quirks mode a table does not end a paragraph, and this engine has no quirks
+// mode at all: every document is read as though it declared <!DOCTYPE html>.
+var closesParagraph = setOf(
+	"address", "article", "aside", "blockquote", "center", "details", "dialog",
+	"dir", "div", "dl", "fieldset", "figcaption", "figure", "footer", "header",
+	"hgroup", "main", "menu", "nav", "ol", "p", "search", "section", "summary",
+	"ul",
+	"h1", "h2", "h3", "h4", "h5", "h6",
+	"pre", "listing", "form", "plaintext", "hr", "table", "xmp",
+	"li", "dd", "dt",
+)
+
+// headings are h1 to h6, which the standard treats as one name in two places:
+// a heading's start tag ends a heading that is the current node, and a heading's
+// end tag closes whichever heading is open.
+var headings = setOf("h1", "h2", "h3", "h4", "h5", "h6")
+
+// blockEndTags are the end tags that close their element if it is in scope,
+// generating implied end tags on the way — the list §13.2.6.4.7 gives for
+// "address, article, aside, …", with <form>, <applet>, <marquee>, <object>,
+// <dd>, <dt> and <head> alongside, which are closed by the same steps.
+//
+// Everything outside this list and the table's own names is "any other end
+// tag", which does not reach past a special element: see parser.endTag.
+var blockEndTags = setOf(
+	"address", "article", "aside", "blockquote", "button", "center",
+	"details", "dialog", "dir", "div", "dl", "fieldset", "figcaption",
+	"figure", "footer", "header", "hgroup", "listing", "main", "menu", "nav",
+	"ol", "pre", "search", "section", "summary", "ul",
+	"form", "applet", "marquee", "object", "dd", "dt", "head",
+)
+
+// tableStructure are the elements that decide which of HTML's table insertion
+// modes applies — "in table", "in table body", "in row", "in cell", "in
+// caption", "in column group" — and so what a table's own tags close. They are
+// what an incoming table tag is resolved against, and what a table end tag
+// closes without a word on its way to its element.
+var tableStructure = setOf(
+	"table", "caption", "colgroup", "tbody", "thead", "tfoot", "tr", "td", "th",
+)
+
+// tableParts are the start tags that the table modes resolve against the table
+// structure open around them: see parser.closeForTablePart.
+var tableParts = setOf(
+	"caption", "col", "colgroup", "tbody", "thead", "tfoot", "tr", "td", "th",
+)
+
+// tablePartEnds reports whether an incoming table tag ends an open table
+// structure element — the rule of the insertion mode that element puts the
+// parser in, which acts as though that element's end tag had been seen and
+// reprocesses the tag.
+//
+//   - "in cell" and "in caption" end on any table part: a cell written
+//     straight after a cell is the next cell, and one written after a caption
+//     is a cell of the table and not something inside the caption.
+//   - "in row" ends on any table part but a cell.
+//   - "in table body" ends on a caption, a column or a row group.
+//   - "in column group" ends on anything but a <col>. A <td> straight after a
+//     <colgroup> is therefore a cell of the table, and the suite's
+//     border-conflict-style-107 writes exactly that and loses the whole table
+//     when the cell goes inside the column group instead.
+//
+// A <table> is resolved here too, because in every table mode but a cell's and
+// a caption's it ends the table it was written in rather than nesting: HTML has
+// no table directly inside a table.
+func tablePartEnds(incoming, open string) bool {
+	switch open {
+	case "td", "th", "caption":
+		return tableParts[incoming]
+	case "tr":
+		return tableParts[incoming] && incoming != "td" && incoming != "th" ||
+			incoming == "table"
+	case "tbody", "thead", "tfoot":
+		return incoming == "caption" || incoming == "col" || incoming == "colgroup" ||
+			incoming == "tbody" || incoming == "thead" || incoming == "tfoot" ||
+			incoming == "table"
+	case "colgroup":
 		return incoming != "col"
+	case "table":
+		return incoming == "table"
 	}
-	return closedByStartTag[open][incoming]
+	return false
 }
 
 // tableContexts are the elements whose children HTML restricts to table
@@ -373,13 +496,6 @@ var tableContent = setOf(
 	"style", "link", "script", "template", "meta", "base", "title",
 )
 
-// closedByParentEnd is the other half of optional end tags: these close when
-// their parent does, without an end tag of their own.
-var closedByParentEnd = setOf(
-	"p", "li", "dt", "dd", "rt", "rp", "option", "optgroup",
-	"thead", "tbody", "tfoot", "tr", "td", "th", "caption", "colgroup",
-)
-
 // headElements belong in <head> when no <body> has begun.
 //
 // <style> and <link> are deliberately absent: both are legal in the body, and
@@ -402,13 +518,14 @@ func setOf(names ...string) map[string]bool {
 
 // foreignElements are the roots of subtrees that are not HTML.
 //
-// An unknown HTML element is dropped and its content parsed on, which is right:
-// the content *is* HTML, a browser shows it, and a <fancy-callout> that has lost
-// its box has not lost its words. A foreign element is the opposite case. Its
-// children are SVG or MathML, they mean nothing to an HTML layout, and their
-// text is not text of the document — so parsing on splices it into the flow,
-// which is what "<svg><text>x</text></svg>" did: an x in the surrounding
-// paragraph's font, on the paragraph's baseline, nowhere near the picture.
+// An unknown HTML element keeps its place in the tree and its content is parsed
+// on (see insertUnknown), which is right: the content *is* HTML, a browser
+// shows it, and a <fancy-callout> this engine has no style for has not lost its
+// words. A foreign element is the opposite case. Its children are SVG or
+// MathML, they mean nothing to an HTML layout, and their text is not text of
+// the document — so parsing on splices it into the flow, which is what
+// "<svg><text>x</text></svg>" did: an x in the surrounding paragraph's font, on
+// the paragraph's baseline, nowhere near the picture.
 //
 // That is worse than the missing picture. A hole is visibly a hole; a stray
 // letter reads as the document's own and is what a reader would have to know the

@@ -33,7 +33,7 @@ import (
 // # And the order, which nothing states
 //
 // Neither side says an order. HarfBuzz is handed a set and walks the font's
-// lookups in index order; applyRequestedFeatures exists to reproduce that, and
+// lookups in index order; the plan's stages exist to reproduce that, and
 // before it did, "oldstyle-nums diagonal-fractions" set a line of oldstyle
 // digits where a fraction was asked for. The rows that hold that down are the
 // ones whose spec names two values whose lookups meet — see the corpus.
@@ -48,7 +48,7 @@ import (
 //     every font here is checked in on purpose. §6.9's nine features are
 //     compared against HarfBuzz in eastasian_test.go instead, over the fetched
 //     Noto Sans JP and by hand rather than over a corpus.
-//   - A lookup two features name, which applyRequestedFeatures runs once and
+//   - A lookup two features name, which a plan's stage runs once and
 //     which running twice would apply to its own output. No font here states one
 //     that way, so the case lives in a font built for it — see
 //     TestALookupTwoFeaturesNameIsRunOnce. Removing the deduplication leaves

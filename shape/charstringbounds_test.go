@@ -67,13 +67,13 @@ func TestACharstringThatNestsPastTheDepthIsRefused(t *testing.T) {
 
 	// The fixture has to be one the walk would otherwise follow, or the test is
 	// asserting nothing. Shallow enough to be read, it finds the seac.
-	if b, a, ok := cffSeac(code, chain(4), nil); !ok || b != bchar || a != achar {
+	if b, a, ok := cffSeac(code, chain(4), nil, fullBudget()); !ok || b != bchar || a != achar {
 		t.Fatalf("the same subroutines four deep gave %d, %d, %v; the fixture does "+
 			"not reach what the depth is being asked about", b, a, ok)
 	}
 
 	const subrs = 20
-	if b, a, ok := cffSeac(code, chain(subrs), nil); ok {
+	if b, a, ok := cffSeac(code, chain(subrs), nil, fullBudget()); ok {
 		t.Errorf("a charstring nesting %d subroutines deep was followed to a seac "+
 			"naming %d and %d; past the depth the walk has to stop", subrs, b, a)
 	}
@@ -106,7 +106,7 @@ func TestACharstringThatReturnsAndCallsAgainIsBounded(t *testing.T) {
 
 	done := make(chan bool, 1)
 	go func() {
-		_, _, ok := cffSeac(append(callSubr(0), csReturn), local, nil)
+		_, _, ok := cffSeac(append(callSubr(0), csReturn), local, nil, fullBudget())
 		done <- ok
 	}()
 	select {

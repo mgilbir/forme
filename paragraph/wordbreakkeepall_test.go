@@ -29,10 +29,7 @@ import (
 // exactly the mistake a test that built the struct itself would not see.
 func keepAll(t *testing.T) WordBreak {
 	t.Helper()
-	wb, unhandled := WordBreakOf("keep-all")
-	if unhandled != "" {
-		t.Fatalf("keep-all was reported as unhandled: %q", unhandled)
-	}
+	wb := WordBreakOf("keep-all")
 	if wb == (WordBreak{}) {
 		t.Fatal("keep-all read as the initial value")
 	}
@@ -186,7 +183,7 @@ func TestKeepAllChangesNothingAboutLatinText(t *testing.T) {
 // TestKeepAllIsNotBreakAll, which is the other half of the property and must be
 // unaffected: one adds opportunities and the other takes them away.
 func TestKeepAllIsNotBreakAll(t *testing.T) {
-	ba, _ := WordBreakOf("break-all")
+	ba := WordBreakOf("break-all")
 	if got := splits(t, "abcd", ba); got != "a|b|c|d" {
 		t.Errorf("break-all gave %s", got)
 	}

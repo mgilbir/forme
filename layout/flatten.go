@@ -73,10 +73,16 @@ func (l *layouter) atomicItem(b *Box, frame inlineFrame) inlineItem {
 	}
 
 	var frag *Fragment
+	side := l.sideMark()
 	if b.Replaced != nil {
 		frag = l.replacedFragment(b, frame)
 	} else {
 		frag = l.inlineBlockFragment(b, frame)
+	}
+	// What laying it out did, for the line loop to take back if no line ever
+	// holds it. See laidAtomic.
+	if l.atomics != nil {
+		*l.atomics = append(*l.atomics, laidAtomic{frag: frag, side: l.sideSince(side)})
 	}
 	box := frag.MarginRect()
 	item.Atomic = frag
@@ -88,15 +94,16 @@ func (l *layouter) atomicItem(b *Box, frame inlineFrame) inlineItem {
 	// line box. With no line box at all it is the bottom margin edge — which is
 	// also a replaced element's, so the value set above already says so.
 	//
-	// An overflow that is not visible does not simply fall back to the bottom
-	// margin edge, which is what CSS 2.1 said and what CSS 2.2 corrected: it is
-	// the *higher* of the two candidates. The correction matters because the
-	// 2.1 rule made "overflow: auto" on a one-line box drop the whole box below
-	// its neighbours' baseline, which is a visible jump from a declaration that
-	// was only ever about clipping.
+	// And an inline-block whose overflow is not visible takes the bottom margin
+	// edge whatever lines it has: CSS 2.2 §10.8.1 says so for an "overflow"
+	// other than visible, "clip" included. The rule is about a block container
+	// — CSS Box Alignment 3 §9.1 keeps it "for legacy reasons" for one — and not
+	// about a flex or a grid container, whose baseline is its items' whether or
+	// not it clips. See hasLegacyScrollBaseline for why clip is in it.
 	if b.Replaced == nil {
 		baseline, ok := lastLineBaseline(frag)
-		if b.TableWrapper {
+		switch {
+		case b.TableWrapper:
 			// §10.8.1 again, and a different sentence of it: "the baseline of an
 			// 'inline-table' is the baseline of the first row of the table".
 			//
@@ -111,11 +118,21 @@ func (l *layouter) atomicItem(b *Box, frame inlineFrame) inlineItem {
 			// search starts outside the table and finds the first line box in
 			// it, which is in the first cell of the first row.
 			baseline, ok = firstBaseline(frag)
+		case b.Inner == InnerFlex || b.Inner == InnerGrid:
+			// The same sentence for the other two containers that are not
+			// block containers. An inline flex container's baseline is its
+			// first baseline set (Flexbox §8.5), which is its first item's, and
+			// an inline grid's is the first item in grid order whose area is in
+			// the first row (Grid §11.8) — the item the grid layout names in
+			// baselineChild. Taking the last line box instead, as an
+			// inline-block does, put the words beside a column of three items
+			// on the third.
+			baseline, ok = containerFirstBaseline(frag)
 		}
 		if ok {
 			bl := baseline
 			ascent := frag.Margin.Top.Add(bl)
-			if overflowIsScrollable(b.Style) {
+			if hasLegacyScrollBaseline(b) {
 				ascent = box.H
 			}
 			item.Ascent = ascent
@@ -157,7 +174,7 @@ func (l *layouter) replacedFragment(b *Box, frame inlineFrame) *Fragment {
 	if b.Position.positioned() {
 		// §10.1 makes any positioned box a containing block, and an image with
 		// "position: relative" is the everyday way to hang a caption on one.
-		l.positioned[b] = frag
+		l.setPositioned(b, frag)
 	}
 	return frag
 }
@@ -191,8 +208,7 @@ func (l *layouter) inlineBlockFragment(b *Box, frame inlineFrame) *Fragment {
 	// choice made here — it is what "flow-root" means, and blockIn would make
 	// one anyway for a box that seals its margins.
 	frag := outOfClamp(l, func() *Fragment {
-		f, _ := l.blockIn(b, frame.Containing,
-			flow{ctx: &floatContext{}, cbHeight: frame.CbHeight, cbDefinite: frame.CbDefinite},
+		f, _ := l.blockIn(b, frame.Containing, aloneFlow(frame.CbHeight, frame.CbDefinite),
 			&forcedGeometry{margin: margin, width: width})
 		return f
 	})
@@ -203,6 +219,38 @@ func (l *layouter) inlineBlockFragment(b *Box, frame inlineFrame) *Fragment {
 		frag.Offset = frame.Offset
 	}
 	return frag
+}
+
+// hasLegacyScrollBaseline reports §10.8.1's legacy case: a block container
+// whose overflow is not visible has its baseline at its bottom margin edge. A
+// flex or a grid container is not a block container and keeps its items'
+// baseline.
+//
+// "Not visible" includes "clip", and that is a decision rather than a leftover.
+// CSS 2.2 §10.8.1's wording is any computed overflow other than visible, and it
+// is the reading this engine keeps — decided 2026-09-13, and held by
+// TestAnInlineBlockThatClipsSitsOnItsBottomMarginEdge. CSS Box Alignment 3 §9.1
+// states the rule for a block container "that is a scroll container", which
+// "clip" does not make; the two readings differ on exactly that value, and
+// this is the one place "clip" is deliberately not read as isScrollContainer
+// reads it.
+func hasLegacyScrollBaseline(b *Box) bool {
+	return b != nil && b.Inner != InnerFlex && b.Inner != InnerGrid &&
+		overflowClipsContent(b.Style)
+}
+
+// containerFirstBaseline is the first baseline of a flex or grid container: the
+// baseline of the item its layout named, or firstBaseline's walk over the items
+// in the order they were placed — which for a flex container is its first
+// item on its first line.
+func containerFirstBaseline(f *Fragment) (style.Unit, bool) {
+	if i := f.baselineChild - 1; i >= 0 && i < len(f.Children) {
+		c := f.Children[i]
+		if v, ok := firstBaseline(c); ok {
+			return f.Border.Top.Add(f.Padding.Top).Add(c.BorderRect.Y).Add(v), true
+		}
+	}
+	return firstBaseline(f)
 }
 
 // lastLineBaseline finds the baseline of the last line box in a subtree, as a
@@ -219,7 +267,7 @@ func lastLineBaseline(f *Fragment) (style.Unit, bool) {
 		if c.Box == nil || c.Box.outOfFlow() {
 			continue
 		}
-		if c.Box != nil && overflowIsScrollable(c.Box.Style) {
+		if hasLegacyScrollBaseline(c.Box) {
 			// A box whose overflow is not visible has no baseline to give: what
 			// is inside it may be scrolled away, so a line of it is not a line
 			// anything outside can be aligned to. §10.8.1 says so about an
@@ -254,7 +302,12 @@ func lastLineBaseline(f *Fragment) (style.Unit, bool) {
 		// browser puts it: the square of "<div style=display:inline-block><span
 		// style=display:list-item></span></div>" hung below the line instead of
 		// sitting on it. Six of the suite's list tests are that document.
-		return inset.Add(f.Marker.At.Y), true
+		//
+		// At is measured from the border box already, so it is taken as it
+		// stands. Adding the inset to it as well counted the item's border and
+		// padding twice, and an empty item with a padding-top hung its
+		// inline-block that far above the line.
+		return f.Marker.At.Y, true
 	}
 	return 0, false
 }
@@ -450,16 +503,31 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			// as carried down, because the box's own background and border are
 			// moved by it and they are made from the box rather than from the
 			// items — see inlineDecor.finish.
+			//
+			// Both records are written by every walk that is not measuring,
+			// including one that finds nothing to record. A box can be laid out
+			// more than once and at more than one width, and an offset such as
+			// "calc(50% - 100px)" that one pass recorded and a narrower one
+			// computed as nothing was read by the narrower one as though it were
+			// still there.
 			inner.Valign = l.vAlignFor(child, frame.Valign)
-			if inner.Valign.Aligned() && !frame.Measuring {
-				l.inlineAligns[child] = inner.Valign
+			if !frame.Measuring {
+				if inner.Valign.Aligned() {
+					l.inlineAligns[child] = inner.Valign
+				} else {
+					delete(l.inlineAligns, child)
+				}
 			}
-			if inner.Offset != (Point{}) && !frame.Measuring {
+			if !frame.Measuring {
 				// The box's own displacement, which its background and border are
 				// drawn at. It is recorded here because this is the only walk that
 				// has it: the items carry the offset of whatever box they came
 				// from, which for a nested inline is not this one's.
-				l.inlineOffsets[child] = inner.Offset
+				if inner.Offset != (Point{}) {
+					l.inlineOffsets[child] = inner.Offset
+				} else {
+					delete(l.inlineOffsets, child)
+				}
 			}
 			// The formatting codes unicode-bidi stands for, around the box's
 			// contents. This is the one walk that sees where an inline box begins
@@ -586,9 +654,6 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 // which side's inset is *reserved* on which piece, and that decides which side's
 // border is *drawn* on which fragment. Both read the same two flags, and a test
 // that plants a defect in either of them fails on the other's assertions.
-//
-// An outline is still not drawn, on an inline box or on any other — nothing in
-// this engine paints one.
 // splitInsetSides turns "does the box begin here" into "which physical side",
 // which is the same question only in a left-to-right containing block.
 //
@@ -713,7 +778,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	// a face with no small capitals of its own has them made out of the
 	// uppercase letters, and what is then drawn is not what the document wrote.
 	// See layout/smallcaps.go.
-	caps, _ := capsOf(b.Style["font-variant-caps"])
+	caps, _ := capsOf(b.Style.Get("font-variant-caps"))
 	lang := languageAt(boxElement(b))
 	// Per face-run rather than per box: a character the family's face cannot set
 	// is not missing from the page if a fallback face set it, and reporting it
@@ -722,6 +787,9 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	// exactly what is drawn.
 	runsOfBox := l.faceRunsFor(b, face, b.Text)
 	for _, run := range runsOfBox {
+		// A fallback face is one this document set text in as much as the
+		// family's is. See fontlimits.go.
+		l.noteFace(run.Face)
 		// Whether the face that will set this run has the capitals the document
 		// asked for. It is asked of the text as *written*, because that is the
 		// text whose case decides whether the request would change anything:
@@ -762,10 +830,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	// around it grow the line it is on.
 	above, below := l.leading(b)
 	ow := overflowWrapOf(b.Style)
-	wb, unhandled := wordBreakOf(b.Style["word-break"])
-	if unhandled != "" {
-		l.reportWordBreak(b, unhandled)
-	}
+	wb := wordBreakOf(b.Style.Get("word-break"))
 	// What the box's declarations turn off in the face, which changes what it
 	// substitutes and so changes every advance below. See fontfeatures.go.
 	off := l.featuresFor(b)
@@ -777,28 +842,25 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		// the page reveals as a missing feature. See paragraph.PhrasesUnfound.
 		l.reportWordBreak(b, "auto-phrase")
 	}
-	lb, _ := lineBreakOf(b.Style["line-break"])
+	lb := lineBreakOf(b.Style.Get("line-break"))
 	// §5.3's loose tailoring is qualified "in Chinese and Japanese", and which
 	// of those the text is comes from the language tag's *script* rather than
 	// from the property. See paragraph.WritingSystemOf.
 	lb.ChineseOrJapanese = boxWritingSystem(b).ChineseOrJapanese()
-	hy, unhandledHyphens := hyphensOf(b.Style["hyphens"])
+	hy := hyphensOf(b.Style.Get("hyphens"))
 	if hy.Auto && !hyphenatesLanguage(boxHyphenation(b)) {
 		// "auto" asks for the language's own dictionary, and there are four
 		// here. A document in another gets the manual behaviour and is told so
 		// — which is the report that used to be raised for every "auto"
 		// whatever the language.
-		unhandledHyphens = "auto"
-	}
-	if unhandledHyphens != "" {
-		l.reportHyphens(b, unhandledHyphens)
+		l.reportHyphens(b, "auto")
 	}
 	// text-autospace is applied between two runs rather than inside one — see
 	// autospace.go — so nothing here reads the value. What is read here is
 	// whether the document asked for a part of it this engine does not do, which
 	// is a question about the box and belongs where the other three are asked.
 	l.reportKerning(b, face)
-	autospace, unhandledAutospace := autospaceOf(b.Style["text-autospace"])
+	autospace, unhandledAutospace := autospaceOf(b.Style.Get("text-autospace"))
 	if unhandledAutospace != "" {
 		l.reportAutospace(b, unhandledAutospace)
 	}
@@ -808,6 +870,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		Offered: in.BreakOpportunity, Deferred: in.AfterDeferred,
 		Held: in.AfterHeld, Taken: in.AfterTaken, Prev: in.AfterRune,
 		Before:         in.AfterText,
+		PhraseBefore:   in.AfterPhrase,
 		SpaceMayTakeIt: boundaryBreakSpaces,
 	}
 	// And the other direction, which is read off the tree rather than carried:
@@ -829,6 +892,14 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	// without one.
 	if needsFollowingCharacter(lastRuneOf(b.Text), lb, hy) {
 		carried.Next = firstRuneOf(l.textAfter(b, utf8.UTFMax))
+	}
+	// And the characters after this box that the phrase model reads from the
+	// boundaries near its end, which is the same walk once more. Asked only
+	// under the value that uses them and in a language with a model, which is
+	// almost never. See paragraph.Carried.PhraseBefore.
+	if wb.AutoPhrase && paragraph.HasPhraseModel(boxWritingSystem(b)) {
+		carried.PhraseAfter = paragraph.FirstRunes(
+			l.textAfter(b, paragraph.PhraseContext*utf8.UTFMax), paragraph.PhraseContext)
 	}
 	if carried.Offered && in.AfterAtomic && bindsToAtomicInline(b.Text) {
 		carried.Offered = false
@@ -1195,6 +1266,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		// the scan is what did the segmenting — and it says about a word rather
 		// than the whole run. See paragraph.Trailing.DictTail.
 		AfterText:       trailing.DictTail,
+		AfterPhrase:     trailing.PhraseTail,
 		AfterLetterUnit: state.AfterLetterUnit,
 		AfterBox:        b,
 	}
@@ -1441,7 +1513,7 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		how := a.orthography.HyphenateBetween(p.Text, a.nextText)
 		item.HyphenSkip = how.Dropped
 		var face *shape.Face
-		item.HyphenText, face = l.hyphenRun(b, a.run.Face, b.Style["hyphenate-character"], how)
+		item.HyphenText, face = l.hyphenRun(b, a.run.Face, b.Style.Get("hyphenate-character"), how)
 		// Measured the way the run it belongs to is measured: a hyphen printed
 		// at the end of an upright line stands upright with the letters, and it
 		// is an em per character there like any other.

@@ -1,13 +1,38 @@
 package font
 
-// Character-code to glyph-name tables for the standard Latin-text encodings,
-// transcribed from ISO 32000-1 Annex D.2 (spec/pdf1.7, gitignored). Unlike the
-// spec-example JSON there is no committed generator, so these are maintained by
-// hand and cannot be regenerated — font_tables_test.go pins their shape and the
-// codes where the encodings deliberately disagree, which is what a bad edit or a
-// shift would break.
+import "maps"
 
-var StandardEncodingNames = map[byte]string{
+// Character-code to glyph-name tables for the standard Latin-text encodings,
+// transcribed from ISO 32000-1 Annex D.2. There is no generator for them —
+// the source is a table in a specification rather than a data file — so they
+// are maintained by hand, and font_tables_test.go pins their shape and the
+// codes where the encodings deliberately disagree, which is what a bad edit or
+// a shift would break. cmd/genglyphlist reads them to decide which glyph names
+// font/glyphnames.go needs.
+//
+// The maps are not exported. They were, and a map cannot be made read-only: an
+// importer that wrote to one would have changed shape's simple-font encoding,
+// and its seac closure, for the whole process. What is exported is a lookup
+// that reads one and a copy to range over, which no caller can write through.
+
+// StandardEncodingName is the glyph name StandardEncoding gives code, and
+// whether it gives one.
+func StandardEncodingName(code byte) (string, bool) {
+	name, ok := standardEncodingNames[code]
+	return name, ok
+}
+
+// StandardEncodingNames is StandardEncoding, code to glyph name: a copy, which
+// the caller may keep or change without changing the encoding.
+func StandardEncodingNames() map[byte]string { return maps.Clone(standardEncodingNames) }
+
+// MacRomanEncodingNames is MacRomanEncoding, code to glyph name: a copy.
+func MacRomanEncodingNames() map[byte]string { return maps.Clone(macRomanEncodingNames) }
+
+// WinAnsiEncodingNames is WinAnsiEncoding, code to glyph name: a copy.
+func WinAnsiEncodingNames() map[byte]string { return maps.Clone(winAnsiEncodingNames) }
+
+var standardEncodingNames = map[byte]string{
 	32:  "space",
 	33:  "exclam",
 	34:  "quotedbl",
@@ -159,7 +184,7 @@ var StandardEncodingNames = map[byte]string{
 	251: "germandbls",
 }
 
-var MacRomanEncodingNames = map[byte]string{
+var macRomanEncodingNames = map[byte]string{
 	32:  "space",
 	33:  "exclam",
 	34:  "quotedbl",
@@ -372,7 +397,7 @@ var MacRomanEncodingNames = map[byte]string{
 	255: "caron",
 }
 
-var WinAnsiEncodingNames = map[byte]string{
+var winAnsiEncodingNames = map[byte]string{
 	32:  "space",
 	33:  "exclam",
 	34:  "quotedbl",

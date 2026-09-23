@@ -114,7 +114,7 @@ func TestOpacityIsClampedAndReadsPercentages(t *testing.T) {
 		{"half", 1},
 		{"0.5px", 1},
 	} {
-		if got := opacityOf(style.ComputedStyle{"opacity": tc.decl}); got != tc.want {
+		if got := opacityOf(style.Initial().With("opacity", tc.decl)); got != tc.want {
 			t.Errorf("opacity: %q read as %v, want %v", tc.decl, got, tc.want)
 		}
 	}

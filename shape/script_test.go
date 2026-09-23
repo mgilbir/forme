@@ -22,6 +22,12 @@ const (
 	scY                // what the first rule makes of it
 	scZ                // what the second rule makes of it
 	scAlpha            // 'α', so that a run can be Greek
+	// scStar is '*', which the two rules cover as well. It is in no script
+	// of its own and takes the script it is written among, so "α*" is a
+	// Greek run that reaches the rules — which "αx" is not: x is a Latin
+	// letter, and a face shapes a string that changes script as one run per
+	// script.
+	scStar
 )
 
 // scriptFace builds a face whose GSUB carries two 'ccmp' features — one
@@ -39,8 +45,8 @@ func scriptFaceTagged(t *testing.T, tag string, scripts map[string]fonttest.Scri
 	t.Helper()
 	gsub := fonttest.GSUBTable(
 		[]fonttest.Lookup{
-			{Type: 1, Subtables: [][]byte{fonttest.SingleSubst([]int{scX}, []int{scY})}},
-			{Type: 1, Subtables: [][]byte{fonttest.SingleSubst([]int{scX}, []int{scZ})}},
+			{Type: 1, Subtables: [][]byte{fonttest.SingleSubst([]int{scX, scStar}, []int{scY, scY})}},
+			{Type: 1, Subtables: [][]byte{fonttest.SingleSubst([]int{scX, scStar}, []int{scZ, scZ})}},
 		},
 		[]fonttest.Feature{
 			{Tag: tag, Lookups: []int{0}},
@@ -55,6 +61,7 @@ func scriptFaceTagged(t *testing.T, tag string, scripts map[string]fonttest.Scri
 			{Rune: 'y', Advance: 500, HasShape: true},
 			{Rune: 'z', Advance: 500, HasShape: true},
 			{Rune: 'α', Advance: 500, HasShape: true},
+			{Rune: '*', Advance: 500, HasShape: true},
 		},
 		Extra: map[string][]byte{"GSUB": gsub},
 	})
@@ -88,10 +95,10 @@ func TestScriptSelectsItsOwnRule(t *testing.T) {
 	if got := lastGID(t, f, "x"); got != scY {
 		t.Errorf("Latin run: x shaped to glyph %d, want %d — the rule declared for 'latn'", got, scY)
 	}
-	// The Greek letter decides the run's script; the x in it is then set by
-	// what the font declares for Greek.
-	if got := lastGID(t, f, "αx"); got != scZ {
-		t.Errorf("Greek run: x shaped to glyph %d, want %d — the rule declared for 'grek'", got, scZ)
+	// The Greek letter decides the run's script; the star in it is then set
+	// by what the font declares for Greek.
+	if got := lastGID(t, f, "α*"); got != scZ {
+		t.Errorf("Greek run: * shaped to glyph %d, want %d — the rule declared for 'grek'", got, scZ)
 	}
 }
 
@@ -103,8 +110,8 @@ func TestUndeclaredScriptFallsBackToDefault(t *testing.T) {
 	f := scriptFace(t, map[string]fonttest.Script{
 		"DFLT": {Required: fonttest.NoFeature, Features: []int{1}},
 	})
-	if got := lastGID(t, f, "αx"); got != scZ {
-		t.Errorf("x shaped to glyph %d, want %d — 'DFLT' is what an undeclared script falls back to", got, scZ)
+	if got := lastGID(t, f, "α*"); got != scZ {
+		t.Errorf("* shaped to glyph %d, want %d — 'DFLT' is what an undeclared script falls back to", got, scZ)
 	}
 }
 
@@ -117,8 +124,8 @@ func TestLatinIsTheLastResort(t *testing.T) {
 	f := scriptFace(t, map[string]fonttest.Script{
 		"latn": {Required: fonttest.NoFeature, Features: []int{1}},
 	})
-	if got := lastGID(t, f, "αx"); got != scZ {
-		t.Errorf("Greek run in a Latin-only font: x shaped to glyph %d, want %d — "+
+	if got := lastGID(t, f, "α*"); got != scZ {
+		t.Errorf("Greek run in a Latin-only font: * shaped to glyph %d, want %d — "+
 			"'latn' is the last resort, and it selects only the second rule", got, scZ)
 	}
 }
@@ -132,8 +139,8 @@ func TestScriptWithNoLanguageSystemIsSkipped(t *testing.T) {
 		"grek": {Required: fonttest.NoFeature, NoDefault: true},
 		"DFLT": {Required: fonttest.NoFeature, Features: []int{1}},
 	})
-	if got := lastGID(t, f, "αx"); got != scZ {
-		t.Errorf("x shaped to glyph %d, want %d: 'grek' selects nothing, so 'DFLT' decides", got, scZ)
+	if got := lastGID(t, f, "α*"); got != scZ {
+		t.Errorf("* shaped to glyph %d, want %d: 'grek' selects nothing, so 'DFLT' decides", got, scZ)
 	}
 }
 
@@ -145,7 +152,7 @@ func TestNoScriptListTakesEveryFeature(t *testing.T) {
 	// no scripts — which is different from not building one.
 	f := scriptFace(t, map[string]fonttest.Script{})
 
-	for _, s := range []string{"x", "αx"} {
+	for _, s := range []string{"x", "α*"} {
 		if got := lastGID(t, f, s); got != scY {
 			t.Errorf("%q: x shaped to glyph %d, want %d — with no script list every feature applies, first one winning", s, got, scY)
 		}
@@ -154,7 +161,9 @@ func TestNoScriptListTakesEveryFeature(t *testing.T) {
 
 // TestLanguageSelectsItsOwnRule pins language systems. The same script sets the
 // same letters differently in different languages, and a font that knows the
-// difference says so through a LangSysRecord.
+// difference says so through a LangSysRecord. The language is the run's own,
+// a BCP 47 tag on Features, and reaches the font as the OpenType tag it maps
+// to.
 func TestLanguageSelectsItsOwnRule(t *testing.T) {
 	f := scriptFace(t, map[string]fonttest.Script{
 		"latn": {
@@ -166,21 +175,72 @@ func TestLanguageSelectsItsOwnRule(t *testing.T) {
 		},
 	})
 
-	if got := lastGID(t, f, "x"); got != scY {
-		t.Errorf("default language: x shaped to glyph %d, want %d", got, scY)
+	in := func(lang string) int {
+		t.Helper()
+		glyphs, _ := f.ShapeGlyphsInContext("x", "", "", Features{Language: lang})
+		if len(glyphs) == 0 {
+			t.Fatalf("shaping x in %q produced no glyphs", lang)
+		}
+		return glyphs[len(glyphs)-1].GID
 	}
-	f.SetLanguage("ROM ")
-	if f.Language() != "ROM " {
-		t.Errorf("Language() = %q after SetLanguage(%q)", f.Language(), "ROM ")
+	if got := in(""); got != scY {
+		t.Errorf("no language: x shaped to glyph %d, want %d", got, scY)
 	}
-	if got := lastGID(t, f, "x"); got != scZ {
-		t.Errorf("Romanian: x shaped to glyph %d, want %d — the rule the language system names", got, scZ)
+	// "ro" and "ro-RO" are Romanian, and so is Moldavian's retired "mo", which
+	// the OpenType registry's own 'MOL ' follows 'ROM ' for.
+	for _, lang := range []string{"ro", "RO-ro", "ro_RO", "mo"} {
+		if got := in(lang); got != scZ {
+			t.Errorf("%q: x shaped to glyph %d, want %d — the rule the language system 'ROM ' names",
+				lang, got, scZ)
+		}
 	}
 	// A language the font does not declare falls back to the default system
 	// rather than selecting nothing.
-	f.SetLanguage("NAV ")
-	if got := lastGID(t, f, "x"); got != scY {
+	if got := in("nv"); got != scY {
 		t.Errorf("undeclared language: x shaped to glyph %d, want %d — the default language system", got, scY)
+	}
+
+	// And two documents set at once in one font — each in its own Clone, as
+	// the contract is, sharing the parse and every reading of it — one in
+	// Romanian and one not, each get their own: the language is the run's, not
+	// the face's. The setter it replaced wrote the language onto a face, so one
+	// set on a face in a shared font set was the language of every document
+	// cloned from it afterwards, and a write racing every one being laid out.
+	done := make(chan int, 2)
+	for _, lang := range []string{"ro", ""} {
+		doc := f.Clone()
+		go func() {
+			glyphs, _ := doc.ShapeGlyphsInContext("x", "", "", Features{Language: lang})
+			done <- glyphs[len(glyphs)-1].GID
+		}()
+	}
+	a, b := <-done, <-done
+	if a == b {
+		t.Errorf("two runs, in Romanian and in no language, shaped alike (glyph %d)", a)
+	}
+}
+
+// TestALanguageSystemTaggedDfltIsTheDefault: a LangSysRecord tagged 'dflt' is
+// not the specification's default — that is the Script table's DefaultLangSys
+// — but the registry's page once spelled it that way, fonts carry one, and
+// HarfBuzz reads it before DefaultLangSys, for a run in no language and for one
+// in a language the script does not name. A font is tested against HarfBuzz.
+func TestALanguageSystemTaggedDfltIsTheDefault(t *testing.T) {
+	f := scriptFace(t, map[string]fonttest.Script{
+		"latn": {
+			Required: fonttest.NoFeature,
+			Features: []int{0},
+			Langs: map[string]fonttest.LangSys{
+				"dflt": {Required: fonttest.NoFeature, Features: []int{1}},
+				"TRK ": {Required: fonttest.NoFeature, Features: []int{0}},
+			},
+		},
+	})
+	for lang, want := range map[string]int{"": scZ, "ro": scZ, "tr": scY} {
+		glyphs, _ := f.ShapeGlyphsInContext("x", "", "", Features{Language: lang})
+		if got := glyphs[len(glyphs)-1].GID; got != want {
+			t.Errorf("%q: x shaped to glyph %d, want %d", lang, got, want)
+		}
 	}
 }
 
@@ -211,16 +271,17 @@ func TestScriptSelectionSurvivesMalformedScriptList(t *testing.T) {
 	for n := 0; n <= len(gsub); n++ {
 		truncated := append([]byte(nil), gsub[:n]...)
 		l := &layout{
-			ligatures:  map[int][]ligature{},
-			glyphClass: map[int]int{}, single: map[string]map[int]int{},
+			ligatures: map[int][]ligature{},
+			single:    map[string]map[int]int{},
 			singlePos: map[int]singleAdjust{}, markGlyphs: map[int]bool{},
 			cursive: map[int]cursiveAnchors{},
 		}
-		sel, _ := scriptFeatures(truncated, []string{"latn"}, "")
+		sel, _ := scriptFeatures(truncated, []string{"latn"}, nil)
 		if len(truncated) >= 10 {
 			feats := tableFeatures{sel: sel, varied: readFeatureVariations(truncated, nil)}
-			l.readSingleSubstitutions(truncated, feats)
-			featureLookupIndices(truncated, feats)
+			idx := indexFeatures(truncated, feats)
+			l.readSingleSubstitutions(truncated, idx)
+			idx.lookupIndices()
 		}
 	}
 }
@@ -287,20 +348,26 @@ func TestScriptTagsArePaddedToFour(t *testing.T) {
 // resolution can be left out without the others noticing.
 func TestEveryShapingEntryPointResolvesTheScript(t *testing.T) {
 	const (
-		ligX, ligY   = 1, 2
-		latinLig     = 3 // what x+y becomes for Latin
-		greekLig     = 4 // and for Greek
-		ligAlpha     = 5
-		latinLigAdv  = 600
-		greekLigAdv  = 700
-		plainAdvance = 500
+		ligX, ligY = 1, 2
+		latinLig   = 3 // what x+y becomes for Latin
+		greekLig   = 4 // and for Greek
+		ligAlpha   = 5
+		// '1' and '2' ligate as x and y do, and are in no script of their
+		// own: "α12" is a Greek run, where "αxy" is a Greek letter and a
+		// Latin run.
+		ligOne, ligTwo = 6, 7
+		latinLigAdv    = 600
+		greekLigAdv    = 700
+		plainAdvance   = 500
 	)
 	gsub := fonttest.GSUBTable(
 		[]fonttest.Lookup{
-			{Type: 4, Subtables: [][]byte{fonttest.LigatureSubst(
-				[]fonttest.Ligature{{Components: []int{ligX, ligY}, Glyph: latinLig}})}},
-			{Type: 4, Subtables: [][]byte{fonttest.LigatureSubst(
-				[]fonttest.Ligature{{Components: []int{ligX, ligY}, Glyph: greekLig}})}},
+			{Type: 4, Subtables: [][]byte{fonttest.LigatureSubst([]fonttest.Ligature{
+				{Components: []int{ligX, ligY}, Glyph: latinLig},
+				{Components: []int{ligOne, ligTwo}, Glyph: latinLig}})}},
+			{Type: 4, Subtables: [][]byte{fonttest.LigatureSubst([]fonttest.Ligature{
+				{Components: []int{ligX, ligY}, Glyph: greekLig},
+				{Components: []int{ligOne, ligTwo}, Glyph: greekLig}})}},
 		},
 		[]fonttest.Feature{
 			{Tag: "liga", Lookups: []int{0}},
@@ -319,6 +386,8 @@ func TestEveryShapingEntryPointResolvesTheScript(t *testing.T) {
 			{Rune: 'A', Advance: latinLigAdv, HasShape: true},
 			{Rune: 'B', Advance: greekLigAdv, HasShape: true},
 			{Rune: 'α', Advance: plainAdvance, HasShape: true},
+			{Rune: '1', Advance: plainAdvance, HasShape: true},
+			{Rune: '2', Advance: plainAdvance, HasShape: true},
 		},
 		Extra: map[string][]byte{"GSUB": gsub},
 	}))
@@ -331,9 +400,9 @@ func TestEveryShapingEntryPointResolvesTheScript(t *testing.T) {
 	if want := []byte{0, latinLig}; string(codes) != string(want) {
 		t.Errorf("Shape(%q) emitted codes %v, want %v — the Latin ligature", "xy", codes, want)
 	}
-	codes = spanCodes(t, f, "αxy")
+	codes = spanCodes(t, f, "α12")
 	if want := []byte{0, ligAlpha, 0, greekLig}; string(codes) != string(want) {
-		t.Errorf("Shape(%q) emitted codes %v, want %v — the Greek ligature", "αxy", codes, want)
+		t.Errorf("Shape(%q) emitted codes %v, want %v — the Greek ligature", "α12", codes, want)
 	}
 
 	// MeasureShaped has to agree with Shape, or a caller lays out to one width
@@ -341,8 +410,8 @@ func TestEveryShapingEntryPointResolvesTheScript(t *testing.T) {
 	if got, want := f.MeasureShaped("xy", 1000), float64(latinLigAdv); got != want {
 		t.Errorf("MeasureShaped(%q) = %v, want %v", "xy", got, want)
 	}
-	if got, want := f.MeasureShaped("αxy", 1000), float64(plainAdvance+greekLigAdv); got != want {
-		t.Errorf("MeasureShaped(%q) = %v, want %v", "αxy", got, want)
+	if got, want := f.MeasureShaped("α12", 1000), float64(plainAdvance+greekLigAdv); got != want {
+		t.Errorf("MeasureShaped(%q) = %v, want %v", "α12", got, want)
 	}
 
 	// ShapeWith: the features a caller asks for by name are selected by script
@@ -354,8 +423,8 @@ func TestEveryShapingEntryPointResolvesTheScript(t *testing.T) {
 	if got := withCodes(t, g, "x"); string(got) != string([]byte{0, scY}) {
 		t.Errorf("ShapeWith(%q, salt) emitted %v, want the Latin rule's glyph %d", "x", got, scY)
 	}
-	if got := withCodes(t, g, "αx"); string(got) != string([]byte{0, scAlpha, 0, scZ}) {
-		t.Errorf("ShapeWith(%q, salt) emitted %v, want the Greek rule's glyph %d", "αx", got, scZ)
+	if got := withCodes(t, g, "α*"); string(got) != string([]byte{0, scAlpha, 0, scZ}) {
+		t.Errorf("ShapeWith(%q, salt) emitted %v, want the Greek rule's glyph %d", "α*", got, scZ)
 	}
 }
 

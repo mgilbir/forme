@@ -2,6 +2,7 @@ package fonttest
 
 import (
 	"encoding/binary"
+	"fmt"
 	"sort"
 )
 
@@ -54,6 +55,23 @@ func SFNT(opts SFNTOptions) []byte {
 		opts.Descent = -200
 	}
 	numGlyphs := len(opts.Glyphs) + 1
+	// The fields these go into are sixteen bits, signed or not, and a value
+	// that does not fit is refused rather than written as its low half — see
+	// sfntCmap for what that did to a character.
+	switch {
+	case numGlyphs > 0xFFFF:
+		panic(fmt.Sprintf("fonttest: %d glyphs, and a font holds 65535", numGlyphs))
+	case opts.UnitsPerEm < 1 || opts.UnitsPerEm > 0xFFFF:
+		panic(fmt.Sprintf("fonttest: %d units per em does not fit head's field", opts.UnitsPerEm))
+	case opts.Ascent < -0x8000 || opts.Ascent > 0x7FFF || opts.Descent < -0x8000 || opts.Descent > 0x7FFF:
+		panic(fmt.Sprintf("fonttest: an ascent of %d or a descent of %d does not fit a sixteen-bit field",
+			opts.Ascent, opts.Descent))
+	}
+	for i, g := range opts.Glyphs {
+		if g.Advance < 0 || g.Advance > 0xFFFF {
+			panic(fmt.Sprintf("fonttest: glyph %d advances %d, which hmtx cannot hold", i+1, g.Advance))
+		}
+	}
 
 	// glyf and loca. .notdef is empty; a glyph with a shape gets a simple
 	// square contour, which is enough for a reader to see a real outline.
@@ -108,24 +126,7 @@ func SFNT(opts SFNTOptions) []byte {
 	binary.BigEndian.PutUint16(maxp[4:], uint16(numGlyphs))
 	binary.BigEndian.PutUint16(maxp[6:], 4) // maxPoints
 
-	// cmap: one (3,1) format-4 subtable, one segment per glyph plus the
-	// mandatory 0xFFFF sentinel.
-	segs := make([][3]int, 0, len(opts.Glyphs)+1)
-	sorted := append([]Glyph(nil), opts.Glyphs...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Rune < sorted[j].Rune })
-	for _, g := range sorted {
-		gid := 0
-		for i, o := range opts.Glyphs {
-			if o.Rune == g.Rune {
-				gid = i + 1
-				break
-			}
-		}
-		c := int(g.Rune)
-		segs = append(segs, [3]int{c, c, (gid - c) & 0xFFFF})
-	}
-	segs = append(segs, [3]int{0xFFFF, 0xFFFF, 1})
-	cmap := SFNTCmapTable(CmapFormat4(segs))
+	cmap := sfntCmap(opts.Glyphs)
 
 	// post version 3.0: no glyph names, which is legal and is what a subset
 	// font normally carries.
@@ -190,6 +191,67 @@ func tableOf(data []byte, tag string) []byte {
 		return data[off : off+length]
 	}
 	return nil
+}
+
+// sfntCmap is the character map of a synthetic font: glyph i+1 for
+// glyphs[i].Rune.
+//
+// A (3,1) format-4 subtable holds the Basic Multilingual Plane, one segment per
+// glyph plus the 0xFFFF sentinel the format requires. A character above U+FFFF
+// cannot be written in one — its code does not fit in sixteen bits — and was
+// written anyway, keeping the low sixteen: a face built "with 𝐀", U+1D400,
+// mapped U+D400, a Hangul syllable, and a test asking whether the face lacked
+// 𝐀 got yes for a reason that had nothing to do with what it was testing. A
+// font with such a character carries a (3,10) format-12 subtable as well, with
+// every mapping, which is how a real one does it and the record a reader
+// prefers.
+//
+// What a cmap cannot say is refused rather than written wrong: a character
+// named twice (two segments for one code, which glyph a reader takes is the
+// reader's business), U+FFFF (the sentinel's code), a surrogate or a value
+// outside the code space.
+func sfntCmap(glyphs []Glyph) []byte {
+	type mapping struct {
+		r   rune
+		gid int
+	}
+	maps := make([]mapping, 0, len(glyphs))
+	seen := map[rune]bool{}
+	for i, g := range glyphs {
+		switch r := g.Rune; {
+		case r < 0 || r > 0x10FFFF || (r >= 0xD800 && r <= 0xDFFF):
+			panic(fmt.Sprintf("fonttest: glyph %d maps U+%04X, which is not a character", i+1, r))
+		case r == 0xFFFF:
+			panic(fmt.Sprintf("fonttest: glyph %d maps U+FFFF, which is the format-4 "+
+				"cmap's sentinel and cannot be mapped", i+1))
+		case seen[r]:
+			panic(fmt.Sprintf("fonttest: U+%04X is mapped twice", r))
+		}
+		seen[g.Rune] = true
+		maps = append(maps, mapping{g.Rune, i + 1})
+	}
+	sort.Slice(maps, func(i, j int) bool { return maps[i].r < maps[j].r })
+
+	segs := make([][3]int, 0, len(maps)+1)
+	var groups [][3]uint32
+	supplementary := false
+	for _, m := range maps {
+		if m.r <= 0xFFFF {
+			c := int(m.r)
+			segs = append(segs, [3]int{c, c, (m.gid - c) & 0xFFFF})
+		} else {
+			supplementary = true
+		}
+		groups = append(groups, [3]uint32{uint32(m.r), uint32(m.r), uint32(m.gid)})
+	}
+	segs = append(segs, [3]int{0xFFFF, 0xFFFF, 1})
+	if !supplementary {
+		return SFNTCmapTable(CmapFormat4(segs))
+	}
+	return cmapTable([]CmapSub{
+		{Plat: 3, Enc: 1, Data: CmapFormat4(segs)},
+		{Plat: 3, Enc: 10, Data: CmapFormat12(groups)},
+	})
 }
 
 // SFNTCmapTable wraps one format-4 subtable in a cmap table with a single

@@ -22,7 +22,10 @@
 // underneath its own explicit lines — and UnicodeData.txt is read to check it:
 // every assigned character must have the same class in both. A disagreement is a
 // fatal error rather than a warning, because it means the files are from
-// different versions of Unicode and the table would be a mixture of both.
+// different versions of Unicode and the table would be a mixture of both. The
+// other three files name their release on their first line, and ucd.Check
+// holds all three to the one this run is told — the cross-check can only catch
+// a mixture in the classes, and the brackets and mirrors are not classes.
 //
 // # Brackets and mirrors
 //
@@ -33,18 +36,21 @@
 // BidiMirroring.txt. Neither is derivable from the other: every bracket
 // mirrors, but not everything that mirrors is a bracket.
 //
-//	go run ./cmd/genbidi <UnicodeData.txt> <DerivedBidiClass.txt> <BidiBrackets.txt> <BidiMirroring.txt> > bidi/tables.go
+//	go run ./cmd/genbidi -version <X.Y.Z> <UnicodeData.txt> <DerivedBidiClass.txt> <BidiBrackets.txt> <BidiMirroring.txt> > bidi/tables.go
 package main
 
 import (
 	"bufio"
 	"bytes"
+	"flag"
 	"fmt"
 	"go/format"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/mgilbir/forme/cmd/internal/ucd"
 )
 
 // maxRune is one past the last code point, which is what the tables cover.
@@ -94,14 +100,21 @@ var longNames = map[string]string{
 }
 
 func main() {
-	if len(os.Args) != 5 {
-		fmt.Fprintln(os.Stderr, "usage: genbidi <UnicodeData.txt> <DerivedBidiClass.txt> <BidiBrackets.txt> <BidiMirroring.txt>")
+	version := flag.String("version", "", "the Unicode version the files came from")
+	flag.Parse()
+	args := flag.Args()
+	if len(args) != 4 {
+		fmt.Fprintln(os.Stderr, "usage: genbidi -version <X.Y.Z> <UnicodeData.txt> <DerivedBidiClass.txt> <BidiBrackets.txt> <BidiMirroring.txt>")
 		os.Exit(2)
 	}
-	assigned := readUnicodeData(os.Args[1])
-	version, defaults, explicit := readDerived(os.Args[2])
-	brackets := readBrackets(os.Args[3])
-	mirrors := readMirroring(os.Args[4])
+	if err := ucd.Check(*version, args...); err != nil {
+		fmt.Fprintln(os.Stderr, "genbidi:", err)
+		os.Exit(1)
+	}
+	assigned := readUnicodeData(args[0])
+	defaults, explicit := readDerived(args[1])
+	brackets := readBrackets(args[2])
+	mirrors := readMirroring(args[3])
 
 	// The block defaults first, then the derived file's own lines over them.
 	// Reading them in the other order would let a block default overwrite a
@@ -152,11 +165,6 @@ func main() {
 		}
 	}
 
-	index := map[string]int{}
-	for i, name := range classNames {
-		index[name] = i
-	}
-
 	// Collapse to ranges, and drop the ones that are the default. A class runs
 	// in long blocks, and left-to-right is most of the code space — emitting it
 	// would double the table to say what its absence already says.
@@ -198,7 +206,7 @@ type classRange struct {
 
 // classRanges maps a character to its Bidi_Class, sorted by code point.
 var classRanges = [...]classRange{
-`, version, len(ranges))
+`, *version, len(ranges))
 	for _, r := range ranges {
 		fmt.Fprintf(w, "\t{0x%04X, 0x%04X, %s},\n", r.lo, r.hi, r.class)
 	}
@@ -301,10 +309,10 @@ type classRange struct {
 	class  string
 }
 
-// readDerived parses DerivedBidiClass.txt: the Unicode version it declares, the
-// "@missing" block defaults in the order they are stated, and the explicit
-// per-character lines used to cross-check UnicodeData.txt.
-func readDerived(path string) (string, []classRange, map[rune]string) {
+// readDerived parses DerivedBidiClass.txt: the "@missing" block defaults in the
+// order they are stated, and the explicit per-character lines used to
+// cross-check UnicodeData.txt.
+func readDerived(path string) ([]classRange, map[rune]string) {
 	f, err := os.Open(path)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -312,24 +320,12 @@ func readDerived(path string) (string, []classRange, map[rune]string) {
 	}
 	defer f.Close()
 
-	version := "unknown"
 	var defaults []classRange
 	explicit := map[rune]string{}
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
-	first := true
 	for sc.Scan() {
 		line := sc.Text()
-		if first {
-			// The first line names the file, and with it the version:
-			// "# DerivedBidiClass-17.0.0.txt".
-			first = false
-			if i := strings.Index(line, "DerivedBidiClass-"); i >= 0 {
-				if j := strings.Index(line[i:], ".txt"); j > 0 {
-					version = line[i+len("DerivedBidiClass-") : i+j]
-				}
-			}
-		}
 		if i := strings.Index(line, "@missing:"); i >= 0 {
 			// "# @missing: 0590..05FF; Right_To_Left"
 			fields := strings.Split(line[i+len("@missing:"):], ";")
@@ -373,7 +369,7 @@ func readDerived(path string) (string, []classRange, map[rune]string) {
 			"the block defaults for unassigned code points are only stated there")
 		os.Exit(1)
 	}
-	return version, defaults, explicit
+	return defaults, explicit
 }
 
 type bracket struct {

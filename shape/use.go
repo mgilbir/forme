@@ -1,7 +1,5 @@
 package shape
 
-import "sort"
-
 // The Universal Shaping Engine.
 //
 // Several dozen scripts are written the way the Indic ones are — a syllable
@@ -105,6 +103,13 @@ type useInfo struct {
 	// halant, so it neither stops a repha nor moves the place a pre-base vowel
 	// is sent to.
 	ligated bool
+	// mark says the character is a combining mark, which is what decides
+	// whether a non-joiner before it is seen by the grammar at all. It is
+	// recorded while the glyphs still correspond to the characters.
+	mark bool
+	// joiner is which join control the character is, if either, so that a
+	// lookup can step over one as its feature asks. See stepsOverJoiner.
+	joiner joinerKind
 }
 
 // useClusterKind is which of the grammar's productions matched a cluster.
@@ -172,6 +177,9 @@ type useGrammar struct {
 	// idx maps a position in the grammar's input to a position in the run. Two
 	// kinds of character are not in it at all — see useGrammarInput.
 	idx []int
+	// limit is how far the cluster being matched may reach: no production
+	// looks at a position at or past it. See useClusters.
+	limit int
 }
 
 // useGrammarInput is the run as the grammar sees it, which is not all of it.
@@ -182,14 +190,14 @@ type useGrammar struct {
 // it continues the cluster before it and breaks the one after, and it does that
 // only when what follows is not a mark. Where a mark follows, it is invisible
 // here for the same reason the joiner is.
-func useGrammarInput(info []useInfo, runes []rune) []int {
+func useGrammarInput(info []useInfo) []int {
 	idx := make([]int, 0, len(info))
 	for i := range info {
 		switch info[i].cat {
 		case useCGJ:
 			continue
 		case useZWNJ:
-			if next := nextUseVisible(info, runes, i+1); next >= 0 && isCombiningMark(runes[next]) {
+			if next := nextUseVisible(info, i+1); next >= 0 && info[next].mark {
 				continue
 			}
 		}
@@ -200,8 +208,8 @@ func useGrammarInput(info []useInfo, runes []rune) []int {
 
 // nextUseVisible is the first character at or after i that the grammar can see,
 // or -1 if there is none.
-func nextUseVisible(info []useInfo, runes []rune, i int) int {
-	for ; i < len(info) && i < len(runes); i++ {
+func nextUseVisible(info []useInfo, i int) int {
+	for ; i < len(info); i++ {
 		if info[i].cat != useCGJ {
 			return i
 		}
@@ -210,7 +218,7 @@ func nextUseVisible(info []useInfo, runes []rune, i int) int {
 }
 
 func (g *useGrammar) is(i int, c useCategory) bool {
-	return i >= 0 && i < len(g.idx) && g.info[g.idx[i]].cat == c
+	return i >= 0 && i < g.limit && g.info[g.idx[i]].cat == c
 }
 
 func (g *useGrammar) isAt(i int, c useCategory, p usePosition) bool {
@@ -466,7 +474,7 @@ func (g *useGrammar) cluster(i int) (int, useClusterKind) {
 		fmPstEnd = i + 1
 	}
 	anyEnd := -1
-	if i < len(g.idx) {
+	if i < g.limit {
 		anyEnd = i + 1
 	}
 
@@ -493,10 +501,23 @@ func (g *useGrammar) cluster(i int) (int, useClusterKind) {
 }
 
 // useClusters cuts a run into clusters, saying what each was matched as.
-func useClusters(info []useInfo, runes []rune) []useCluster {
-	g := &useGrammar{info: info, idx: useGrammarInput(info, runes)}
+//
+// A cluster is held to maxIndicSyllable of the characters the grammar sees, as
+// the Indic, Khmer and Myanmar syllables are, and for the reason given there:
+// the grammar lets a cluster grow without limit — a letter followed by any
+// number of pre-base vowel signs is one — and the reordering is quadratic in a
+// cluster's length. "ᬓ" with sixty-four thousand U+1B3E after it took fifteen
+// seconds. The limit is put on the grammar itself rather than on what it
+// returns, so that the scan of a long cluster stops at the limit instead of
+// running to its end once per cut; what lies past it starts the next
+// cluster. HarfBuzz does not cut, and no text written in these scripts comes
+// near the limit — the longest clusters in the corpora are a handful of
+// characters — so what it changes is only text that was never a cluster.
+func useClusters(info []useInfo) []useCluster {
+	g := &useGrammar{info: info, idx: useGrammarInput(info)}
 	var out []useCluster
 	for i := 0; i < len(g.idx); {
+		g.limit = min(len(g.idx), i+maxIndicSyllable)
 		end, kind := g.cluster(i)
 		// Every alternative either consumes a character or does not match, so
 		// this cannot fire — and it is here because a production that consumed
@@ -518,50 +539,21 @@ func useClusters(info []useInfo, runes []rune) []useCluster {
 	return out
 }
 
-// The features the engine applies, in the order it applies them.
-//
-// They are in three groups because a pass runs between them. The first two are
-// what a font uses to build the shapes of a cluster — the half forms, the
-// subjoined consonants, the conjuncts — and they have to have run before the
-// reordering, because the reordering moves what they produced. The last group is
-// the typographic polish, applied to a cluster already in the order it is drawn.
+// The engine's own features, by the group the specification puts them in. The
+// groups are stages because a pass runs between them: the orthographic ones
+// build the shapes of a cluster — the half forms, the subjoined consonants, the
+// conjuncts — and have to have run before the reordering, which moves what they
+// produced; the presentation ones are the typographic polish, applied once the
+// cluster is in the order it is drawn. See collectUniversal for the whole plan:
+// the default pre-processing group ('locl', 'ccmp', 'nukt', 'akhn') before
+// these, 'rphf' and then 'pref' as stages of their own — each has to be read
+// off the buffer before the next runs — and the four positional forms as a
+// stage between the reordering and the presentation features.
 var (
-	useBasicFeatures = []string{"locl", "ccmp", "nukt", "akhn"}
-	// The reordering group, which the specification says is "applied
-	// individually in this order, rphf, pref" — each on its own, because what
-	// each did has to be read off the buffer before the next runs. See
-	// shapeUseCluster.
-	//
-	// They were applied the other way round here, and with 'rphf' among the
-	// orthographic features below. Nothing in these corpora shows it: of the
-	// three fonts this engine shapes, none states 'rphf' at all — the bundled
-	// face does, and it is Devanagari's, which goes to the Indic shaper and
-	// never reaches here. So the order of the two cannot change an answer any of
-	// them gives, and it is corrected because the specification states an order
-	// and this is it, not because anything was seen to break.
-	useRephFeature    = []string{"rphf"}
-	usePreBaseFeature = []string{"pref"}
-	useShapeFeatures  = []string{
+	useShapeFeatures = []string{
 		"rkrf", "abvf", "blwf", "half", "pstf", "vatu", "cjct",
 	}
-	useFinalFeatures = []string{
-		"isol", "init", "medi", "fina", "abvs", "blws", "haln", "pres", "psts",
-	}
-	// The same list without the four positional forms, for a run that joins:
-	// there the forms are not a feature every glyph gets but a choice made per
-	// letter, and applyJoiningForms has already made it. See shapeUniversal.
 	usePresentationFeatures = []string{"abvs", "blws", "haln", "pres", "psts"}
-	// And the substitutions that are not about this model at all: the required
-	// ligatures and the contextual alternates every script gets, whatever
-	// shaper set it. They are the same list the Khmer pass applies for the same
-	// reason, and they go with the presentation features because they are
-	// likewise written about what a reader sees rather than about syllables.
-	//
-	// The Javanese corpus does not exercise them: removing them changes none of
-	// its 894 answers. They are here because a font that states a required
-	// ligature under 'rlig' — which is what the feature is for — would otherwise
-	// have it ignored, not because anything here has been seen to need it.
-	useRunFeatures = []string{"rlig", "clig", "calt", "rclt", "liga"}
 )
 
 // shapeUniversal is the whole substitution pass for a run the engine handles.
@@ -572,41 +564,52 @@ var (
 // N'Ko, Adlam, Mongolian, Hanifi Rohingya, Sogdian, Old Uyghur, Phags-pa,
 // Manichaean, Psalter Pahlavi, Chorasmian, Yezidi. The universal model has
 // nothing to say about which of the four shapes a letter takes — that is the
-// Arabic model's question — and the four features that answer it are in
-// useFinalFeatures, applied to every glyph of the run.
+// Arabic model's question — so a run whose characters join is marked as the
+// Arabic model marks one, and each glyph is given the form its letter is in.
 //
-// Applied to every glyph they are wrong for every glyph. The font states them
-// as three single-substitution lookups, and the lookup list is walked in index
-// order: 'fina' is the first of them in Noto Sans N'Ko, so every letter of a
-// N'Ko word came out in its final shape and nothing else could match afterwards.
-// Three of the suite's shaping tests are that, and the page it produces is not
-// merely unjoined — it is the wrong glyph in every position.
+// Applied to every glyph, the four features are wrong for every glyph. The
+// font states them as three single-substitution lookups, and the lookup list
+// is walked in index order: 'fina' is the first of them in Noto Sans N'Ko, so
+// every letter of a N'Ko word came out in its final shape and nothing else could
+// match afterwards. Three of the suite's shaping tests are that, and the page it
+// produces is not merely unjoined — it is the wrong glyph in every position.
 //
-// So a run whose characters join is marked as the Arabic model marks one, and
-// the four features are applied per glyph to the form each letter is in. It is
-// what HarfBuzz does with the same two shapers, and the decision is the same
-// one: membership of ArabicShaping.txt, which is InCursiveScript.
-func (sh shaper) shapeUniversal(buf []Glyph, runes []rune, before, after []rune) []Glyph {
+// A run that does not join is given the forms by *cluster* instead: each
+// cluster that can join is final after another that can and isolated after one
+// that cannot, and the one before it becomes initial or medial accordingly.
+// That is HarfBuzz's setup_topographical_masks, and it is what a font stating
+// the four for a Brahmic script means. It is the same membership test HarfBuzz
+// uses to choose between the two, which is InCursiveScript.
+func (sh shaper) shapeUniversal(buf []Glyph, runes []rune, before, after []rune, p *plan) []Glyph {
+	// Before anything is classified: an independent vowel followed by a sign
+	// that spells a different vowel is shown against a dotted circle, as it is
+	// by the Indic model — the list covers Sinhala, Brahmi, Khojki,
+	// Khudawadi, Tirhuta, Modi and Takri too, which this engine sets. HarfBuzz
+	// asks it in both. See markInvalidVowels.
+	buf, runes = sh.markInvalidVowels(buf, runes)
 	info := make([]useInfo, len(runes))
 	for i, r := range runes {
 		info[i].cat, info[i].pos = useCategoryOf(r)
 		info[i].ignorable = hiddenAfterShaping(r)
+		info[i].mark = isCombiningMark(r)
+		info[i].joiner = joinerKindOf(r)
 	}
 	// Decided while the glyphs still correspond to the characters it is decided
-	// from, which is only true here — the cluster pass below substitutes. The
-	// form is recorded on the glyph and survives that.
-	//
-	// The test is the run's own characters, and no document in this repository
-	// tells it from "every run": the three universal corpora here are Javanese,
-	// Balinese and Khmer, and none of those fonts declares the four features at
-	// all, so marking their runs as well moves nothing. It is written because
-	// HarfBuzz gates the same way and because the day a font for a non-joining
-	// script does declare them, applying all four to every glyph substitutes
-	// each letter three times over. The predicate itself is pinned in
-	// TestOnlyACursiveRunIsMarked.
+	// from, which is only true here — the stages below substitute. The form is
+	// recorded on the glyph and survives that.
 	cursive := anyCursive(runes)
 	if cursive {
 		markJoiningForms(buf, runes, before, after)
+	}
+	hooks := useHooks(&info)
+	// The stages before the clusters are cut, which are the whole run's.
+	for s := 0; s < p.syllables; s++ {
+		buf, _, _ = sh.applyLookups(buf, p.stage(s), 0, len(buf), 0, len(buf), hooks)
+	}
+
+	clusters := useClusters(info)
+	if !cursive {
+		useTopographicalMasks(buf, clusters)
 	}
 
 	// Each cluster is shaped on its own and the run is put back together from
@@ -622,121 +625,147 @@ func (sh shaper) shapeUniversal(buf []Glyph, runes []rune, before, after []rune)
 	out := make([]Glyph, 0, len(buf))
 	outInfo := make([]useInfo, 0, len(info))
 	prev := 0
-	for _, cl := range useClusters(info, runes) {
+	for _, cl := range clusters {
 		if cl.start < prev || cl.end > len(buf) || cl.start >= cl.end {
 			continue
 		}
 		// Whatever lies between the last cluster shaped and this one passes
-		// through untouched.
+		// through untouched — but for what a cluster forgets at the same point:
+		// see clearSubstituted.
+		clearSubstituted(buf[prev:cl.start])
 		out = append(out, buf[prev:cl.start]...)
 		outInfo = append(outInfo, info[prev:cl.start]...)
 		prev = cl.end
 
 		cluster := append([]Glyph(nil), buf[cl.start:cl.end]...)
 		record := append([]useInfo(nil), info[cl.start:cl.end]...)
-		cluster, _ = sh.shapeUseCluster(cluster, &record, 0, len(cluster), cl.kind, dotted, hasDotted)
+		cluster = sh.shapeUseCluster(cluster, &record, p, cl.kind, dotted, hasDotted)
 		out = append(out, cluster...)
 		outInfo = append(outInfo, record...)
 	}
+	clearSubstituted(buf[prev:])
 	buf = append(out, buf[prev:]...)
 	info = append(outInfo, info[prev:]...)
-	// The presentation features, applied in lookup order rather than feature
-	// order.
+
+	// The positional forms, and then the presentation features with the
+	// ligatures and contextual alternates every script gets — each stage in
+	// lookup order rather than feature order.
 	//
-	// Which comes first is the font's decision, not this list's: a font states
-	// its rules in one lookup list, and their indices are the order it means
-	// them in. Noto Sans Javanese relies on that. Its jha-keret ligature is
-	// lookup 18 and the rule that turns that jha into a variant is lookup 26,
-	// reached from 'blws'; taking the features in the order this list happens to
-	// name them applies the variant first and the ligature can no longer match,
-	// which costs exactly the two cases the corpus has of it.
-	//
-	// This is the one place the engine needs it. The rest of this package still
-	// applies features in the order it names them, which is right wherever a
-	// font's lookups do not overlap — and every other corpus here says they do
-	// not.
-	// The forms first, and only for a run that has them: they are what the
-	// presentation features below are written against, exactly as they are in
-	// the Arabic model.
-	final := useFinalFeatures
-	if cursive {
-		buf = sh.applyJoiningForms(buf)
-		final = usePresentationFeatures
-	}
-	var lookups []int
-	seen := map[int]bool{}
-	for _, tag := range append(append([]string{}, final...), useRunFeatures...) {
-		for _, idx := range sh.l.featureLookups[tag] {
-			if !seen[idx] {
-				seen[idx] = true
-				lookups = append(lookups, idx)
-			}
-		}
-	}
-	sort.Ints(lookups)
-	if len(lookups) > 0 {
-		buf, _ = sh.applyUseFeature(buf, &info, lookups, 0, len(buf))
+	// Which comes first is the font's decision, not a list's: a font states its
+	// rules in one lookup list, and their indices are the order it means them
+	// in. Noto Sans Javanese relies on that. Its jha-keret ligature is lookup 18
+	// and the rule that turns that jha into a variant is lookup 26, reached from
+	// 'blws'; taking the features in the order a list happens to name them
+	// applies the variant first and the ligature can no longer match, which
+	// costs exactly the two cases the corpus has of it.
+	for s := p.reorder; s < len(p.stages); s++ {
+		buf, _, _ = sh.applyLookups(buf, p.stage(s), 0, len(buf), 0, len(buf), hooks)
 	}
 	// What is left of a character nothing is drawn for. It has said everything
 	// it had to say — which cluster it broke — and must not reach the page.
-	return dropGlyphs(buf, func(i int) bool {
+	return dropUnsubstituted(buf, func(i int) bool {
 		return i < len(info) && info[i].ignorable
 	})
 }
 
-// shapeUseCluster shapes one cluster and reports how much longer or shorter it
-// left the buffer.
-func (sh shaper) shapeUseCluster(buf []Glyph, info *[]useInfo, start, end int,
-	kind useClusterKind, dotted int, hasDotted bool) ([]Glyph, int) {
-	total := 0
-	apply := func(tags []string) {
-		for _, tag := range tags {
-			lookups := sh.l.featureLookups[tag]
-			if len(lookups) == 0 {
-				continue
-			}
-			var d int
-			buf, d = sh.applyUseFeature(buf, info, lookups, start, end)
-			total, end = total+d, end+d
+// clearSubstituted forgets which glyphs a substitution has touched, as
+// HarfBuzz's universal engine does twice: after the pre-processing features
+// (locl, ccmp, nukt, akhn) and after 'rphf'. It clears them so that it can tell
+// where 'rphf' and 'pref' then apply, and it has a consequence past that: a
+// character nothing is drawn for that only those first features gave a glyph
+// is taken out at the end like any other (see dropUnsubstituted). Only what
+// the later features substitute is kept.
+func clearSubstituted(buf []Glyph) {
+	for i := range buf {
+		buf[i].substituted = false
+	}
+}
+
+// useTopographicalMasks gives each glyph of a run that does not join the
+// positional form of its cluster: a cluster after one that cannot join is
+// isolated, one after a cluster that can is final, and a cluster that is
+// followed by one that joins to it becomes initial or medial. A character in no
+// cluster joins nothing. It is setup_topographical_masks.
+func useTopographicalMasks(buf []Glyph, clusters []useCluster) {
+	const forms = maskIsol | maskInit | maskMedi | maskFina
+	set := func(lo, hi int, m glyphMask) {
+		for i := lo; i < hi && i < len(buf); i++ {
+			buf[i].mask = buf[i].mask&^forms | m
 		}
 	}
-	apply(useBasicFeatures)
+	var last glyphMask
+	lastStart, lastEnd := 0, 0
+	for _, cl := range clusters {
+		if cl.kind == useNonCluster {
+			last = 0
+			continue
+		}
+		join := last == maskFina || last == maskIsol
+		if join {
+			if last == maskFina {
+				last = maskMedi
+			} else {
+				last = maskInit
+			}
+			set(lastStart, lastEnd, last)
+			last = maskFina
+		} else {
+			last = maskIsol
+		}
+		set(cl.start, cl.end, last)
+		lastStart, lastEnd = cl.start, cl.end
+	}
+}
+
+// shapeUseCluster shapes one cluster through the stages held to it, and
+// returns it.
+func (sh shaper) shapeUseCluster(buf []Glyph, info *[]useInfo, p *plan,
+	kind useClusterKind, dotted int, hasDotted bool) []Glyph {
+
+	hooks := useHooks(info)
+	apply := func(from, to int) int {
+		first := -1
+		for s := from; s < to; s++ {
+			var at int
+			buf, _, at = sh.applyLookups(buf, p.stage(s), 0, len(buf), 0, len(buf), hooks)
+			if first < 0 {
+				first = at
+			}
+		}
+		return first
+	}
 
 	// 'rphf' is the font saying "the consonant at the head of this cluster is
 	// drawn as a repha" — a mark written before the letter it belongs to and
 	// drawn after the base of the syllable. Which consonant has one is not
 	// something the categories know: a repha is a form and not a character, and
-	// only the font says which of its letters is given one. So it is read the
-	// way 'pref' is, off where the feature applied, and whatever it applied to
-	// is a repha from here on — which is what the reordering below looks for.
-	// Without that, the feature ran, the glyph changed, and the repha stayed
-	// where the characters put it: in front of the letter, on the wrong side of
-	// the whole syllable.
+	// only the font says which of its letters is given one.
 	//
-	// And it is offered only the head of the cluster. The model gives the
-	// feature the first three glyphs, or just the first where that is already a
-	// repha; a rule matching further in is matching a letter in the middle of a
-	// syllable, which is not what a repha is. It may still *look* past them,
+	// It is for the head of the cluster: the first three glyphs, or just the
+	// first where that is already a repha. The glyphs are marked before any of
+	// the cluster's features run, so that a piece 'ccmp' splits one into is for
+	// it too; a rule matching further in is matching a letter in the middle of
+	// a syllable, which is not what a repha is. It may still *look* past them,
 	// because a font may write the context it needs.
-	for _, tag := range useRephFeature {
-		lookups := sh.l.featureLookups[tag]
-		if len(lookups) == 0 {
-			continue
-		}
-		until := start + 3
-		if start < len(*info) && (*info)[start].cat == useR {
-			until = start + 1
-		}
-		if until > end {
-			until = end
-		}
-		var d, at int
-		buf, d, at = sh.applyUseFeatureIn(buf, info, lookups, start, until, end)
-		total, end = total+d, end+d
-		if at >= 0 && at < len(*info) {
-			(*info)[at].cat = useR
-		}
+	head := min(3, len(buf))
+	if len(*info) > 0 && (*info)[0].cat == useR {
+		head = 1
 	}
+	for i := 0; i < head; i++ {
+		buf[i].mask |= maskRphf
+	}
+	apply(p.syllables, p.rphf)
+	clearSubstituted(buf)
+
+	// Then 'rphf' itself, read the way 'pref' is: off where it applied, and
+	// whatever it applied to is a repha from here on — which is what the
+	// reordering below looks for. Without that, the feature ran, the glyph
+	// changed, and the repha stayed where the characters put it: in front of the
+	// letter, on the wrong side of the whole syllable.
+	if at := apply(p.rphf, p.pref); at >= 0 && at < len(*info) {
+		(*info)[at].cat = useR
+	}
+	clearSubstituted(buf)
 
 	// 'pref' is the font saying "this mark has a form that goes before the
 	// letter". Which mark it said it about is not something the categories
@@ -750,20 +779,11 @@ func (sh shaper) shapeUseCluster(buf []Glyph, info *[]useInfo, start, end int,
 	// means it: the substitution is how the font marks the mark, and a reader
 	// that looked for a changed glyph index would see nothing happen and leave
 	// every cakra on the wrong side of its letter.
-	for _, tag := range usePreBaseFeature {
-		lookups := sh.l.featureLookups[tag]
-		if len(lookups) == 0 {
-			continue
-		}
-		var d, at int
-		buf, d, at = sh.applyUseFeatureAt(buf, info, lookups, start, end)
-		total, end = total+d, end+d
-		if at >= 0 && at < len(*info) {
-			(*info)[at].cat, (*info)[at].pos = useV, usePosPre
-		}
+	if at := apply(p.pref, p.basic); at >= 0 && at < len(*info) {
+		(*info)[at].cat, (*info)[at].pos = useV, usePosPre
 	}
 
-	apply(useShapeFeatures)
+	apply(p.basic, p.reorder)
 
 	// The placeholder for a cluster that is not one.
 	//
@@ -778,18 +798,16 @@ func (sh shaper) shapeUseCluster(buf []Glyph, info *[]useInfo, start, end int,
 	if kind == useBrokenCluster && hasDotted {
 		// After a repha, which is written before the letter it belongs to and
 		// is part of the same malformed cluster.
-		at := start
-		for at < end && (*info)[at].cat == useR {
+		at := 0
+		for at < len(buf) && (*info)[at].cat == useR {
 			at++
 		}
 		buf, *info = sh.insertUseGlyph(buf, *info, at, dotted, useInfo{cat: useB})
-		end++
-		total++
 	}
 	if kind.reorders() {
-		reorderUseCluster(buf, *info, start, end)
+		reorderUseCluster(buf, *info, 0, len(buf))
 	}
-	return buf, total
+	return buf
 }
 
 // insertUseGlyph puts one glyph, and the record that describes it, into a buffer
@@ -805,7 +823,7 @@ func (sh shaper) insertUseGlyph(buf []Glyph, info []useInfo, at, gid int, what u
 	case len(buf) > 0:
 		cluster = buf[len(buf)-1].Cluster
 	}
-	g := Glyph{GID: gid, Cluster: cluster, XAdvance: sh.f.advanceGID(gid)}
+	g := Glyph{GID: gid, Cluster: cluster, XAdvance: sh.f.advanceGID(gid), class: classUnclassified}
 
 	buf = append(buf, Glyph{})
 	copy(buf[at+1:], buf[at:])
@@ -817,93 +835,37 @@ func (sh shaper) insertUseGlyph(buf []Glyph, info []useInfo, at, gid int, what u
 	return buf, info
 }
 
-// applyUseFeature runs one feature's lookups over one cluster, keeping the
-// per-glyph record in step with what the lookups do to the buffer.
-//
-// The cluster is both the range walked and the range a lookup may look at:
-// a rule reaching into the next cluster would join glyphs the font never meant
-// to see together, which is the whole reason these features are applied a
-// cluster at a time rather than over the run.
-func (sh shaper) applyUseFeature(buf []Glyph, info *[]useInfo, lookups []int, start, end int) ([]Glyph, int) {
-	out, delta, _ := sh.applyUseFeatureAt(buf, info, lookups, start, end)
-	return out, delta
-}
-
-// applyUseFeatureAt is applyUseFeature, also reporting the first position a
-// lookup applied at — which is how 'pref' is read. It is -1 when none did.
-func (sh shaper) applyUseFeatureAt(buf []Glyph, info *[]useInfo, lookups []int, start, end int) ([]Glyph, int, int) {
-	return sh.applyUseFeatureIn(buf, info, lookups, start, end, end)
-}
-
-// applyUseFeatureIn is the general form: the lookups are offered the positions
-// in [start, until) and may match as far as end.
-//
-// The two edges are separate because 'rphf' needs them to be. It applies at the
-// head of the cluster and nowhere else, and a rule that says "this letter, when
-// what follows it is such and such" is stating context it must be allowed to
-// read — so what is bounded is where a rule may *start*, not how far it may
-// look.
-func (sh shaper) applyUseFeatureIn(buf []Glyph, info *[]useInfo, lookups []int, start, until, end int) ([]Glyph, int, int) {
-	total, step, first := 0, 0, -1
-	sh.onResize = func(at, d int) {
-		*info = respliceUseInfo(*info, at, d)
-		// Which glyphs a substitution made of several, which is what says a
-		// halant is no longer one. A lookup that shortened the run ligated what
-		// it consumed; one that lengthened it took a glyph apart, and no piece
-		// of it is a ligature whatever the glyph it came from was.
-		switch {
-		case d < 0 && at < len(*info):
-			(*info)[at].ligated = true
-		case d > 0:
-			for k := 0; k <= d && at+k < len(*info); k++ {
-				(*info)[at+k].ligated = false
-			}
-		}
-		step += d
-	}
-	sh.onDelete = func(at int) {
-		if at >= 0 && at < len(*info) {
-			*info = append((*info)[:at], (*info)[at+1:]...)
-		}
-		step--
-	}
-	sh.floor = start
-	for _, idx := range lookups {
-		rb := newRunBuf(buf, start)
-		sh.run = rb
-		for rb.w < until && len(rb.pending()) > 0 {
-			step = 0
-			// The cluster's far edge, as it stands now. It moves: a lookup that
-			// takes a glyph apart makes the cluster longer, and the next lookup
-			// has to be allowed to see what it produced.
-			//
-			// Setting it once, before the first lookup, is what this did, and it
-			// silently cost every rule a font writes over the pieces of a
-			// decomposition. Noto Serif Tibetan splits a vowel sign in 'ccmp'
-			// and then reorders the pieces in a later 'ccmp' lookup, and the
-			// reordering could not match because the pieces were past the edge.
-			sh.limit = end
-			consumed, _ := sh.applyGSUBAt(idx, rb.pending(), 0, 0)
-			end += step
-			until += step
-			total += step
-			if consumed > 0 {
-				if first < 0 {
-					first = rb.w
+// useHooks keep the engine's record in step with a buffer a stage is
+// reshaping, and say where the join controls are.
+func useHooks(info *[]useInfo) recordHooks {
+	return recordHooks{
+		resize: func(at, d int) {
+			*info = respliceUseInfo(*info, at, d)
+			// Which glyphs a substitution made of several, which is what says a
+			// halant is no longer one. A lookup that shortened the run ligated
+			// what it consumed; one that lengthened it took a glyph apart, and no
+			// piece of it is a ligature whatever the glyph it came from was.
+			switch {
+			case d < 0 && at < len(*info):
+				(*info)[at].ligated = true
+			case d > 0:
+				for k := 0; k <= d && at+k < len(*info); k++ {
+					(*info)[at+k].ligated = false
 				}
-				rb.settle(consumed)
-				continue
 			}
-			// A lookup that consumed nothing and shortened the run took a glyph
-			// out; what followed it is now here and has not been looked at.
-			if step < 0 {
-				continue
+		},
+		remove: func(at int) {
+			if at >= 0 && at < len(*info) {
+				*info = append((*info)[:at], (*info)[at+1:]...)
 			}
-			rb.settle(1)
-		}
-		buf = rb.flatten()
+		},
+		joiner: func(at int) joinerKind {
+			if at < 0 || at >= len(*info) {
+				return notJoiner
+			}
+			return (*info)[at].joiner
+		},
 	}
-	return buf, total, first
 }
 
 // respliceUseInfo keeps the per-glyph record the same length as the buffer.

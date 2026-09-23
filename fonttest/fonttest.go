@@ -6,12 +6,22 @@
 // sfnt, CFF or Type 1 program that has the feature under test — a kern pair, a
 // ligature, a mark class, a cmap subtable of a chosen format — and nothing else.
 //
-// It is exported rather than internal because more than one module reads font
-// programs. The shaping here is one; forme validating an embedded font is
-// another, and its rules about glyph coverage and declared widths need exactly
-// these fixtures. A second copy is the thing to avoid: both would be edited,
-// neither would be edited the same way, and a difference between them would
-// look like a difference between the readers.
+// It is a package of its own because more than one package reads font
+// programs: font's parsers, shape's shaper and subsetter, and the tests of
+// layout and paragraph that need a face with particular metrics all build
+// their fixtures here, and cmd/genwoff2hmtx builds one it commits. A second
+// copy is the thing to avoid: both would be edited, neither would be edited the
+// same way, and a difference between them would look like a difference between
+// the readers.
+//
+// A fixture that quietly builds something other than what it was asked for — a
+// character cut to sixteen bits, an offset left at zero — is read by the same
+// understanding of the format that wrote it, so the test using it passes or
+// fails for a reason unrelated to what it is testing. SFNT, CmapFormat4 and
+// LigatureSubst refuse, with a panic, what they cannot write as asked. The
+// other builders take glyph indices and values as ints and write them into
+// the format's sixteen-bit fields as they come, so a caller asking for more
+// than a field holds gets its low half.
 //
 // A fixture is not an oracle. Everything built here is written and read by the
 // same understanding of the format, so a test using one catches a reader that
@@ -21,6 +31,7 @@ package fonttest
 
 import (
 	"encoding/binary"
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -116,9 +127,27 @@ func hexDigit(v byte, upper bool) byte {
 	}
 }
 
+// CmapFormat4 assembles a segment-mapping cmap subtable from {startCode,
+// endCode, idDelta} segments, with no glyph index array.
+//
+// Every field of the format is sixteen bits, and a code or a length that does
+// not fit is refused rather than cut down to the low sixteen: a start code of
+// U+1D400 written as 0xD400 is a table that maps a different character, and a
+// fixture that says one thing and builds another is the worst kind. The delta
+// is the exception, because it is arithmetic modulo 65536 by definition.
 func CmapFormat4(segs [][3]int) []byte {
 	segX2 := len(segs) * 2
 	b := make([]byte, 16+4*segX2)
+	if len(b) > 0xFFFF {
+		panic(fmt.Sprintf("fonttest: a format-4 subtable of %d segments is %d bytes, "+
+			"more than its sixteen-bit length can say", len(segs), len(b)))
+	}
+	for i, seg := range segs {
+		if seg[0] < 0 || seg[0] > 0xFFFF || seg[1] < 0 || seg[1] > 0xFFFF {
+			panic(fmt.Sprintf("fonttest: format-4 segment %d is %#x..%#x, which "+
+				"sixteen-bit codes cannot hold", i, seg[0], seg[1]))
+		}
+	}
 	put16 := func(off, v int) { b[off] = byte(v >> 8); b[off+1] = byte(v) }
 	put16(0, 4)      // format
 	put16(2, len(b)) // length
@@ -199,7 +228,22 @@ type CmapSub struct {
 	Data      []byte
 }
 
+// SFNTWithCmapSubtables is a font of one table, a cmap holding the given
+// subtables in the given order.
 func SFNTWithCmapSubtables(subs []CmapSub) []byte {
+	cmap := cmapTable(subs)
+	font := make([]byte, 12+16)
+	binary.BigEndian.PutUint32(font, 0x00010000) // sfnt version 1.0
+	binary.BigEndian.PutUint16(font[4:], 1)      // numTables
+	copy(font[12:], "cmap")                      // tag
+	binary.BigEndian.PutUint32(font[12+8:], 28)  // offset
+	binary.BigEndian.PutUint32(font[12+12:], uint32(len(cmap)))
+	return append(font, cmap...)
+}
+
+// cmapTable is a cmap table: its header, one encoding record per subtable, and
+// the subtables in order after them.
+func cmapTable(subs []CmapSub) []byte {
 	cmap := make([]byte, 4+8*len(subs))
 	binary.BigEndian.PutUint16(cmap[2:], uint16(len(subs)))
 	for i, s := range subs {
@@ -208,11 +252,5 @@ func SFNTWithCmapSubtables(subs []CmapSub) []byte {
 		binary.BigEndian.PutUint32(cmap[4+8*i+4:], uint32(len(cmap)))
 		cmap = append(cmap, s.Data...)
 	}
-	font := make([]byte, 12+16)
-	binary.BigEndian.PutUint32(font, 0x00010000) // sfnt version 1.0
-	binary.BigEndian.PutUint16(font[4:], 1)      // numTables
-	copy(font[12:], "cmap")                      // tag
-	binary.BigEndian.PutUint32(font[12+8:], 28)  // offset
-	binary.BigEndian.PutUint32(font[12+12:], uint32(len(cmap)))
-	return append(font, cmap...)
+	return cmap
 }

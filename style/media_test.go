@@ -20,7 +20,7 @@ func underQuery(t *testing.T, query string, media Media) string {
 	src := "#p { color: blue } @media " + query + " { #p { color: red } }"
 	got := ApplyIn(doc, []Sheet{author(t, src)}, nil, media)
 	n := elementFor(t, doc, "#p")
-	return got.Styles[n]["color"]
+	return got.Styles[n].Get("color")
 }
 
 var a4ish = Media{Width: unitOf(794), Height: unitOf(1123)}
@@ -153,7 +153,7 @@ func TestAQueryThisEngineCannotAnswerIsReported(t *testing.T) {
 		src := "@media " + query + " { #p { color: red } }"
 		got := ApplyIn(doc, []Sheet{author(t, src)}, nil, a4ish)
 		n := elementFor(t, doc, "#p")
-		if c := got.Styles[n]["color"]; c == "red" {
+		if c := got.Styles[n].Get("color"); c == "red" {
 			t.Errorf("@media %s applied its rules", query)
 		}
 		said := false
@@ -198,13 +198,13 @@ func TestTheRulesInsideAreOrderedWhereTheBlockIs(t *testing.T) {
 
 	after := ApplyIn(doc, []Sheet{author(t,
 		"#p { color: blue } @media print { #p { color: red } }")}, nil, a4ish)
-	if got := after.Styles[n]["color"]; got != "red" {
+	if got := after.Styles[n].Get("color"); got != "red" {
 		t.Errorf("a rule inside a later @media lost to one before it: %s", got)
 	}
 
 	before := ApplyIn(doc, []Sheet{author(t,
 		"@media print { #p { color: red } } #p { color: blue }")}, nil, a4ish)
-	if got := before.Styles[n]["color"]; got != "blue" {
+	if got := before.Styles[n].Get("color"); got != "blue" {
 		t.Errorf("a rule inside an earlier @media beat one after it: %s", got)
 	}
 
@@ -212,7 +212,7 @@ func TestTheRulesInsideAreOrderedWhereTheBlockIs(t *testing.T) {
 	// loses to a more specific one outside it.
 	weaker := ApplyIn(doc, []Sheet{author(t,
 		"#p { color: blue } @media print { p { color: red } }")}, nil, a4ish)
-	if got := weaker.Styles[n]["color"]; got != "blue" {
+	if got := weaker.Styles[n].Get("color"); got != "blue" {
 		t.Errorf("a rule inside @media won on the block rather than on its "+
 			"selector: %s", got)
 	}
@@ -229,7 +229,7 @@ func TestAQueryInsideAQuery(t *testing.T) {
 		{"@media screen { @media print { #p { color: red } } }", "blue"},
 	} {
 		got := ApplyIn(doc, []Sheet{author(t, "#p { color: blue } "+c.src)}, nil, a4ish)
-		if colour := got.Styles[n]["color"]; colour != c.want {
+		if colour := got.Styles[n].Get("color"); colour != c.want {
 			t.Errorf("%s left the paragraph %s, want %s", c.src, colour, c.want)
 		}
 	}

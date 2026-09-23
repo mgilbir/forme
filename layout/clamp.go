@@ -157,8 +157,14 @@ func (l *layouter) clampedChildren(b *Box, frag *Fragment, width style.Unit,
 		return l.children(b, frag, width, topOpen, bottomOpen, inner)
 	}
 
-	kids, lines := len(frag.Children), len(frag.Lines)
-	absAt, floats := len(l.deferred), inner.ctx.mark()
+	// Everything the counting pass will change, taken before it and not after
+	// the clamp is pushed: what it charged to the clamps *around* this one is
+	// part of what it did, and a clamp inside another is counted by both. The
+	// counting pass counted its lines towards the outer clamp, and then the
+	// real pass counted them again, so the outer clamp reached its limit early
+	// and the content after the inner box was dropped as though it had been
+	// cut.
+	before := l.checkpoint(inner.ctx, frag)
 
 	c := &lineClamp{box: b, limit: n, stopAt: n + 1}
 	l.clamps = append(l.clamps, c)
@@ -171,9 +177,7 @@ func (l *layouter) clampedChildren(b *Box, frag *Fragment, width style.Unit,
 		return height, top, bottom, placed
 	}
 
-	frag.Children, frag.Lines = frag.Children[:kids], frag.Lines[:lines]
-	l.deferred = l.deferred[:absAt]
-	inner.ctx.truncate(floats)
+	l.rollback(before)
 
 	c = &lineClamp{box: b, limit: n, stopAt: n}
 	if face, ok := l.fontFor(b); ok {

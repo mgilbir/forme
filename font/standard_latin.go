@@ -2,7 +2,7 @@ package font
 
 import "sync"
 
-// StandardLatinName reports whether a glyph name belongs to the Adobe standard
+// standardLatinName reports whether a glyph name belongs to the Adobe standard
 // Latin character set — the repertoire PDF Reference Appendix D.2 tabulates and
 // that ISO 19005-1 6.3.8 names as one of the two vocabularies a font may draw on
 // without carrying a ToUnicode CMap.
@@ -13,13 +13,16 @@ import "sync"
 // column, adds no glyph the other three lack. Deriving it keeps the repertoire
 // and the encodings from drifting apart, which two hand-maintained lists of the
 // same 200-odd names would eventually do.
-func StandardLatinName(name string) bool {
+//
+// Nothing in this engine asks it. It was exported, as StandardLatinName, for
+// the PDF/A validator this package came from; see doc.go.
+func standardLatinName(name string) bool {
 	return standardLatinNames()[name]
 }
 
 var standardLatinNames = sync.OnceValue(func() map[string]bool {
 	m := make(map[string]bool, 256)
-	for _, table := range []map[byte]string{StandardEncodingNames, MacRomanEncodingNames, WinAnsiEncodingNames} {
+	for _, table := range []map[byte]string{standardEncodingNames, macRomanEncodingNames, winAnsiEncodingNames} {
 		for _, n := range table {
 			if n != "" && n != ".notdef" {
 				m[n] = true

@@ -155,6 +155,17 @@ func (d *decoder) metaBlock() (bool, error) {
 		}
 		n := int(r.take(2))
 		if n == 0 {
+			// No metadata, and still the fill to the byte boundary: RFC 7932
+			// §9.2 puts the zero bits after MSKIPBYTES whatever its value, and
+			// the reference decoder reads them. Returning here without them
+			// read the next meta-block's header out of the padding, so a
+			// stream the reference decodes to "hello" was refused and one with
+			// a padding bit set was accepted as empty — and a stream refused by
+			// one decoder and read by the other is a font two readers see
+			// differently.
+			if !r.align() {
+				return false, errPadding
+			}
 			return last, nil
 		}
 		for i := 0; i < n; i++ {

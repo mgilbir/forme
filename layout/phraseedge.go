@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"strings"
 	"unicode/utf8"
 
 	"github.com/mgilbir/forme/html"
@@ -151,9 +152,22 @@ func (b *boxBuilder) separateSegment(seg []textLeaf) {
 	if whole == nil {
 		return
 	}
-	text := ""
-	for _, leaf := range seg {
-		text += leaf.box.Text
+	// The stretch's text, gathered once and only when the model is first asked
+	// for — which is before any leaf's text is rewritten below, so it is the
+	// text the offsets were taken from. It was a string grown by one leaf at a
+	// time, which copies the whole of it for every leaf: forty thousand <b>s
+	// spent 1.35 s of a 2.3 s Build here, in every document with that many.
+	var text string
+	gathered := false
+	textOf := func() string {
+		if !gathered {
+			var sb strings.Builder
+			for _, leaf := range seg {
+				sb.WriteString(leaf.box.Text)
+			}
+			text, gathered = sb.String(), true
+		}
+		return text
 	}
 	var breaks map[int]bool
 	var todo []insertion
@@ -175,7 +189,7 @@ func (b *boxBuilder) separateSegment(seg []textLeaf) {
 			if !paragraph.PhraseSeparatorAt(prev, next) {
 				continue
 			}
-			if breaks = b.boundariesOf(breaks, text, whole); len(breaks) == 0 {
+			if breaks = b.boundariesOf(breaks, textOf, whole); len(breaks) == 0 {
 				return
 			}
 			if !breaks[rhs.start] {
@@ -193,7 +207,7 @@ func (b *boxBuilder) separateSegment(seg []textLeaf) {
 		if !wst.Invents() {
 			continue
 		}
-		if breaks = b.boundariesOf(breaks, text, whole); len(breaks) == 0 {
+		if breaks = b.boundariesOf(breaks, textOf, whole); len(breaks) == 0 {
 			return
 		}
 		seg[i].box.Text = separatedText(seg[i].box.Text, seg[i].start, breaks, wst)
@@ -213,11 +227,11 @@ func (b *boxBuilder) separateSegment(seg []textLeaf) {
 
 // boundariesOf reads the stretch once, and only once something in it has asked.
 // The model is the expensive part and almost no document reaches it.
-func (b *boxBuilder) boundariesOf(have map[int]bool, text string, whole *Box) map[int]bool {
+func (b *boxBuilder) boundariesOf(have map[int]bool, text func() string, whole *Box) map[int]bool {
 	if have != nil {
 		return have
 	}
-	got := paragraph.SeparatorBoundaries(text,
+	got := paragraph.SeparatorBoundaries(text(),
 		languageAt(boxElement(whole)), boxWritingSystem(whole))
 	if got == nil {
 		// Distinguished from "not read yet" by never being nil again, so that a

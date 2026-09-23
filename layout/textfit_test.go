@@ -276,7 +276,7 @@ func TestAGranularityThisEngineDoesIsNotReported(t *testing.T) {
 // the percentage anywhere, and a word that is not in it refused whole.
 func TestTextFitParses(t *testing.T) {
 	fitOf := func(v string) (textFit, string) {
-		return textFitOf(&Box{Style: map[string]string{"text-fit": v}})
+		return textFitOf(&Box{Style: style.Initial().With("text-fit", v)})
 	}
 	if f, un := fitOf("grow consistent 150%"); f.mode != fitGrow || !f.hasLimit ||
 		f.limit != 1.5 || un != "" {

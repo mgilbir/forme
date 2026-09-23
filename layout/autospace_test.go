@@ -562,3 +562,123 @@ func TestAFirstLineMeasuresTheGapInItsOwnType(t *testing.T) {
 			got, gap, want)
 	}
 }
+
+// TestALineEndingAtABoundaryIsSetWithoutItsGap: two characters a line break
+// puts on different lines are not adjacent, so §8.1 puts no gap between them.
+// The breaker measured the line without it; the line then set had it back, so
+// a right-aligned line ending at the boundary stood an eighth of an em short
+// of its edge and a <span> round it reached an eighth past its last glyph.
+//
+// The reference is the same text broken with a <br>, where there is no
+// boundary at the break at all — which is how text-autospace-break-001 writes
+// it.
+func TestALineEndingAtABoundaryIsSetWithoutItsGap(t *testing.T) {
+	const css = noDefaults + `div, span { font-family: Courier; font-size: 16px }
+		#d { width: 40px; text-align: right } #s { background-color: #008000 }`
+	firstLine := func(markup string) (TextRun, Rect) {
+		t.Helper()
+		root := layoutOf(t, 600, `<div id="d"><span id="s">`+markup+`</span></div>`, css)
+		d := find(t, root, "d")
+		if len(d.Lines) < 2 || len(d.Lines[0].Runs) == 0 {
+			t.Fatalf("%q did not break into two lines: %d", markup, len(d.Lines))
+		}
+		if got := autospaceText(d.Lines[0].Runs); got != "国国国国" {
+			t.Fatalf("the first line of %q holds %q, want the four ideographs", markup, got)
+		}
+		return d.Lines[0].Runs[0], inlineFragmentsOf(t, root, "s")[0].BorderRect
+	}
+	broken, brokenBox := firstLine(`国国国国X国`)
+	ref, refBox := firstLine(`国国国国<br>X国`)
+	if broken.X != ref.X {
+		t.Errorf("the first line begins at %vpx and at %vpx broken with a <br>; the "+
+			"right alignment counted the gap at the break", broken.X.Px(), ref.X.Px())
+	}
+	if brokenBox.Right() != refBox.Right() {
+		t.Errorf("the span's first fragment ends at %vpx and at %vpx broken with a "+
+			"<br>; it reaches over a gap the line does not have",
+			brokenBox.Right().Px(), refBox.Right().Px())
+	}
+}
+
+// TestARightToLeftRunEndingALineIsSetWithoutItsGap: the gap is at a run's
+// visual right whichever way the run reads, so a right-to-left run that ends a
+// left-to-right line carries it past the line's end as well — "ب国" in a line
+// too narrow for both, broken between them.
+func TestARightToLeftRunEndingALineIsSetWithoutItsGap(t *testing.T) {
+	const css = noDefaults + `div { font-family: Courier; font-size: 20px;
+		width: 20px; text-align: right }`
+	end := func(markup string) style.Unit {
+		t.Helper()
+		root := layoutOf(t, 600, `<div id="d">`+markup+`</div>`, css)
+		d := find(t, root, "d")
+		if len(d.Lines) < 2 || len(d.Lines[0].Runs) != 1 || d.Lines[0].Runs[0].Text != "ب" {
+			t.Fatalf("%q did not put the Arabic letter alone on the first line", markup)
+		}
+		return d.Lines[0].Runs[0].X
+	}
+	// The reference turns the property off rather than breaking with a <br>,
+	// which is a second rule and has a test of its own: see
+	// TestNoGapCrossesAForcedBreak.
+	if got, want := end(`ب国`),
+		end(`<span style="text-autospace: no-autospace">ب国</span>`); got != want {
+		t.Errorf("the letter ending the first line is at %vpx, and at %vpx with no "+
+			"gap anywhere; the alignment counted a gap past the end of the line",
+			got.Px(), want.Px())
+	}
+}
+
+// TestAGapInsideTheLineIsKeptAtItsEnd: the item that ends a line in logical
+// order is not always the one drawn at its end. In a right-to-left "ب国" the
+// ideograph comes last and is drawn leftmost, and its gap is between it and the
+// Arabic letter to its right — inside the line, and kept.
+func TestAGapInsideTheLineIsKeptAtItsEnd(t *testing.T) {
+	root := layoutOf(t, 600, `<div id="d" dir="rtl">ب国</div>`, noDefaults+
+		`div { font-family: Courier; font-size: 20px }`)
+	runs := find(t, root, "d").Lines[0].Runs
+	if len(runs) != 2 {
+		t.Fatalf("%d runs, want the letter and the ideograph", len(runs))
+	}
+	// Two Courier characters at 20px are 12px each, and the gap is 2.5px.
+	want, _ := style.FromPx(14.5)
+	if got := runs[0].X.Sub(runs[1].X); got != want {
+		t.Errorf("the letter is %vpx right of the ideograph, want its 12px and "+
+			"the 2.5px gap between them", got.Px())
+	}
+}
+
+// TestAPictureEndingALineKeepsItsBox: the gap a run of pictures takes before
+// the next letter is the whole of the edge spacing an inline box's extent
+// leaves out, so a line ending at the picture takes it away once, not twice.
+// Twice, the <span> round the picture stopped ten pixels short of it.
+func TestAPictureEndingALineKeepsItsBox(t *testing.T) {
+	root := layoutOf(t, 600,
+		`<div id="d">A<span id="s">A<span id="ib"></span></span>B</div>`, noDefaults+
+			`div { font-family: Courier; font-size: 16px; letter-spacing: 10px; width: 70px }
+			 #s { background-color: #008000; letter-spacing: 0 }
+			 #ib { display: inline-block; width: 30px; height: 10px }`)
+	d := find(t, root, "d")
+	if len(d.Lines) < 2 {
+		t.Fatalf("the line did not break after the picture: %d lines", len(d.Lines))
+	}
+	span := inlineFragmentsOf(t, root, "s")[0].BorderRect
+	ib := find(t, root, "ib").BorderRect
+	if span.Right() != ib.Right() {
+		t.Errorf("the span's fragment ends at %vpx and the picture in it at %vpx",
+			span.Right().Px(), ib.Right().Px())
+	}
+}
+
+// TestNoGapCrossesAForcedBreak: a forced break ends a bidi paragraph, and the
+// last character of one paragraph and the first of the next are on different
+// lines. The walk back from the ideograph looked across the break when the
+// paragraph before it ended right to left — the break's own item has no
+// characters and is reversed with the Arabic letter — and a float holding
+// "ب<br>国" was shrink-wrapped an eighth of an em wider than either line.
+func TestNoGapCrossesAForcedBreak(t *testing.T) {
+	root := layoutOf(t, 600, `<div id="f">ب<br>国</div>`, noDefaults+
+		`#f { float: left; font-family: Courier; font-size: 20px }`)
+	if got := find(t, root, "f").ContentRect().W.Px(); got != 12 {
+		t.Errorf("the float is %vpx wide, want 12 — each line one 12px character "+
+			"and no gap between two characters a break has parted", got)
+	}
+}

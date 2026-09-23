@@ -92,7 +92,11 @@ func TestTheOracleReadmeCountsWhatIsThere(t *testing.T) {
 	for _, byString := range deliberateDifferences {
 		excused += len(byString)
 	}
-	if want := spelledNumbers[excused] + " cases that differ on purpose"; !strings.Contains(lower, want) {
+	want := spelledNumbers[excused] + " cases that differ on purpose"
+	if excused == 1 {
+		want = "one case that differs on purpose"
+	}
+	if !strings.Contains(lower, want) {
 		t.Errorf("the README does not say %q; deliberateDifferences holds %d",
 			want, excused)
 	}

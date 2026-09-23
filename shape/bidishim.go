@@ -3,7 +3,7 @@ package shape
 import "github.com/mgilbir/forme/bidi"
 
 // The bidirectional algorithm lives in package bidi, and these are the names
-// this package knows it by.
+// this package calls it by.
 //
 // It was written here, and moved out because it is not about shaping: the
 // algorithm is stated over Unicode character properties and has nothing to say
@@ -11,45 +11,12 @@ import "github.com/mgilbir/forme/bidi"
 // of this package. Keeping it unexported here is what caused it to be written a
 // second time elsewhere.
 //
-// Aliases rather than a rewrite of the call sites. Shaping reads a character's
-// class in several hundred places — the joining rules, the mark ordering, the
-// Indic and Universal engines all ask it — and rewriting each of them to say
-// bidi.NSM would be a large diff through code whose correctness rests on a
-// comparison against HarfBuzz. The names below cost nothing and leave that code
-// exactly as it was verified.
-type (
-	bidiClass = bidi.Class
-	bidiRun   = bidi.Run
-)
-
-const (
-	bidiL   = bidi.L
-	bidiR   = bidi.R
-	bidiAL  = bidi.AL
-	bidiEN  = bidi.EN
-	bidiES  = bidi.ES
-	bidiET  = bidi.ET
-	bidiAN  = bidi.AN
-	bidiCS  = bidi.CS
-	bidiNSM = bidi.NSM
-	bidiBN  = bidi.BN
-	bidiB   = bidi.B
-	bidiS   = bidi.S
-	bidiWS  = bidi.WS
-	bidiON  = bidi.ON
-	bidiLRE = bidi.LRE
-	bidiRLE = bidi.RLE
-	bidiLRO = bidi.LRO
-	bidiRLO = bidi.RLO
-	bidiPDF = bidi.PDF
-	bidiLRI = bidi.LRI
-	bidiRLI = bidi.RLI
-	bidiFSI = bidi.FSI
-	bidiPDI = bidi.PDI
-)
-
+// The four below are what shaping asks of it: the runs of a string in the order
+// they are written and in the order they are drawn, the order of a set of runs,
+// and a run's characters with rule L4's mirroring applied. There were twenty-six
+// more — the class type and every class constant — under a note that shaping
+// read a character's class in several hundred places; nothing read any of them.
 var (
-	bidiClassOf       = bidi.ClassOf
 	bidiLogicalRuns   = bidi.LogicalRuns
 	bidiVisualRuns    = bidi.VisualRuns
 	bidiVisualOrder   = bidi.VisualOrder

@@ -32,6 +32,13 @@ testdata/budoux/
 # table is committed, the half-megabyte of TeX it was made from is not.
 testdata/hyphen/
 
+# The other generators' inputs, fetched at a pinned commit by the Makefile and
+# read by cmd/regenerate_test.go: Adobe's AFM files (matplotlib's copies), the
+# reference Brotli's two table sources, and Adobe's Glyph List.
+testdata/afm/
+testdata/brotli-source/
+testdata/agl/
+
 # Built by `make hbfuzz`.
 testdata/harfbuzz/.shapetext
 
@@ -43,10 +50,14 @@ __pycache__/
 testdata/coretext/shape
 testdata/coretext/out-*.txt
 
-# Corpora that came from pdf0 with the layout engine: fetched, never committed.
+# The layout engine's corpora: fetched by the Makefile, never committed.
 testdata/wpt/
 testdata/css-parsing-tests/
 testdata/fonts-noto/
 testdata/html/
-testdata/css-color-4.bs
+testdata/css-color-4/
 testdata/unicode-grapheme/
+
+# HarfBuzz's table of BCP 47 language tags, which cmd/genlangtags reads. The
+# generated table is committed; the header is fetched at a pinned release.
+testdata/harfbuzz-langtags/

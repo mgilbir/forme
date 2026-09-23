@@ -55,6 +55,10 @@ type CFFOptions struct {
 	// used to be.
 	LocalSubrs    int
 	LocalSubrsGap int
+	// Subrs gives the local subroutines' charstrings, and overrides
+	// LocalSubrs' count when it is set. A subroutine is named in a charstring
+	// by its index less the bias, which for an INDEX this size is 107.
+	Subrs [][]byte
 	// Charstrings replaces the default one-byte endchar per glyph. It has to
 	// hold exactly Glyphs entries, and .notdef is the first of them.
 	Charstrings [][]byte
@@ -72,17 +76,17 @@ type CFFOptions struct {
 // charstring per glyph.
 //
 // It panics rather than returning an error, because it is a fixture and the
-// only way to reach either panic is to ask for a font this cannot express. The
-// glyph bound is the INDEX offset size: this writes one-byte offsets, so the
-// charstrings have to fit in 255 bytes, which at one byte each they do until
-// there are 255 of them. A test needing more glyphs than that needs a real
-// font, not a fixture.
+// only way to reach a panic is to ask for a font this cannot express. The
+// bound is the Top DICT's operands, which are written in the three-byte form
+// and so reach 32,767: the font has to end before that, which at a byte or two
+// a charstring is a thousand glyphs with room to spare. A test needing more
+// than that needs a real font, not a fixture.
 func CFF(opts CFFOptions) []byte {
 	if opts.Glyphs == 0 {
 		opts.Glyphs = 1
 	}
-	if opts.Glyphs < 1 || opts.Glyphs > 250 {
-		panic("fonttest: a synthetic CFF holds 1 to 250 glyphs")
+	if opts.Glyphs < 1 || opts.Glyphs > 1000 {
+		panic("fonttest: a synthetic CFF holds 1 to 1000 glyphs")
 	}
 	if opts.Registry == "" {
 		opts.Registry = "Adobe"
@@ -126,13 +130,16 @@ func CFF(opts CFFOptions) []byte {
 	// DICT that names them. The operand is written in the same fixed three-byte
 	// form as the rest, so its own size is known before its value is.
 	var subrsBlob []byte
-	if opts.LocalSubrs > 0 {
+	if opts.LocalSubrs > 0 || opts.Subrs != nil {
 		const operandAndOp = 4
 		priv = append(priv, cffOperand3(len(priv)+operandAndOp+opts.LocalSubrsGap)...)
 		priv = append(priv, 19) // Subrs
-		items := make([][]byte, opts.LocalSubrs)
-		for i := range items {
-			items[i] = []byte{11} // return: a subroutine that does nothing
+		items := opts.Subrs
+		if items == nil {
+			items = make([][]byte, opts.LocalSubrs)
+			for i := range items {
+				items[i] = []byte{11} // return: a subroutine that does nothing
+			}
 		}
 		subrsBlob = append(make([]byte, opts.LocalSubrsGap), cffINDEX(items...)...)
 	}
@@ -194,6 +201,10 @@ func CFF(opts CFFOptions) []byte {
 	}
 	data = append(data, cffINDEX(charstrings...)...)
 
+	if len(data) > 0x7FFF {
+		panic("fonttest: a synthetic CFF has to end before 32,767 bytes, " +
+			"or the Top DICT's three-byte operands cannot name its parts")
+	}
 	final := cffINDEX(top(csOff, privOff, charsetOff))
 	if len(final) != topLen {
 		panic("fonttest: the Top DICT changed length between passes, so every " +
@@ -201,6 +212,36 @@ func CFF(opts CFFOptions) []byte {
 	}
 	copy(data[topAt:], final)
 	return data
+}
+
+// SubrFanOut builds a CFF of the given number of glyphs, every one past
+// .notdef reaching a subroutine call tree of the given fan-out and depth:
+// subroutine i calls subroutine i+1 fanOut times and returns, and the last only
+// returns. Walked in full that is fanOut^depth calls per glyph from about
+// 2·fanOut·depth bytes — the shape of audit C4 — and no subroutine holds a
+// stack-clearing operator, so a reader looking for a glyph's width has no
+// reason to stop early. Each glyph ends with endchar after the call.
+//
+// Both are bounded by the fixture: a subroutine is named in a one-byte
+// operand, so the depth is at most 214, and the font — two bytes a call in the
+// subroutines, three a glyph in the charstrings — has to end before 32,767
+// bytes.
+func SubrFanOut(fanOut, depth, glyphs int) []byte {
+	const callsubr, ret, endchar = 10, 11, 14
+	operand := func(subr int) byte { return byte(subr - 107 + 139) } // biased by 107
+	subrs := make([][]byte, depth+1)
+	for i := 0; i < depth; i++ {
+		for k := 0; k < fanOut; k++ {
+			subrs[i] = append(subrs[i], operand(i+1), callsubr)
+		}
+		subrs[i] = append(subrs[i], ret)
+	}
+	subrs[depth] = []byte{ret}
+	charstrings := [][]byte{{endchar}}
+	for len(charstrings) < glyphs {
+		charstrings = append(charstrings, []byte{operand(0), callsubr, endchar})
+	}
+	return CFF(CFFOptions{Glyphs: glyphs, Subrs: subrs, Charstrings: charstrings})
 }
 
 // cffPrivateDict states defaultWidthX and nominalWidthX, which is what a
@@ -220,7 +261,8 @@ func cffOperand3(v int) []byte {
 	return []byte{28, byte(v >> 8), byte(v)}
 }
 
-// cffINDEX writes a CFF INDEX with one-byte offsets. An empty one is the two
+// cffINDEX writes a CFF INDEX with one-byte offsets, or two-byte ones where
+// its items come to more than one byte can reach. An empty one is the two
 // count bytes alone, which is what the format says and not an omission.
 func cffINDEX(items ...[]byte) []byte {
 	if len(items) == 0 {
@@ -230,15 +272,25 @@ func cffINDEX(items ...[]byte) []byte {
 	for _, it := range items {
 		total += len(it)
 	}
+	offSize := 1
 	if total+1 > 0xFF {
-		panic("fonttest: a synthetic CFF INDEX holds 255 bytes")
+		offSize = 2
 	}
-	out := []byte{byte(len(items) >> 8), byte(len(items)), 1}
+	if total+1 > 0xFFFF {
+		panic("fonttest: a synthetic CFF INDEX holds 65,534 bytes")
+	}
+	out := []byte{byte(len(items) >> 8), byte(len(items)), byte(offSize)}
+	put := func(off int) {
+		if offSize == 2 {
+			out = append(out, byte(off>>8))
+		}
+		out = append(out, byte(off))
+	}
 	off := 1
-	out = append(out, byte(off))
+	put(off)
 	for _, it := range items {
 		off += len(it)
-		out = append(out, byte(off))
+		put(off)
 	}
 	for _, it := range items {
 		out = append(out, it...)

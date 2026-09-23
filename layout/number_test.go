@@ -2,6 +2,7 @@ package layout
 
 import (
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -13,7 +14,7 @@ import (
 // They started from a string the cascade kept, handed it to ParseFloat, and got
 // a number back for text that was never a number. They read CSS's own <number>
 // now, through the reader line-height already used; see paragraph.ParseNumber
-// for why it is written out rather than delegated.
+// for why it is CSS's reader and not Go's.
 //
 // It is tested here rather than beside that reader because here is where the
 // six callers are, and what this is guarding is that they go through it.
@@ -50,21 +51,21 @@ func TestGoNumberSyntaxIsNotCSSNumberSyntax(t *testing.T) {
 	// An exponent whose answer does not exist is refused rather than clamped:
 	// 10^400 is an infinity, and an infinite multiplier reaches arithmetic that
 	// clamps it to the largest length there is, so the page comes out set on a
-	// number nobody wrote. The bound on the exponent loop already refuses one
-	// digit later; this is the same answer where the loop's bound was coarse.
+	// number nobody wrote. Refused where the number is past the end and not
+	// where its spelling looks it: "9e308" has a small exponent and is.
 	for _, s := range []string{"1e400", "1e401", "-1e400", "9e308"} {
 		if v, ok := parseNumber(s); ok {
 			t.Errorf("parseNumber(%q) = %v; the answer is not a number this can "+
 				"hold, and every length operation would clamp it out of sight", s, v)
 		}
 	}
-	// And the largest one that does exist is still read. The value is
-	// accumulated digit by digit and multiplied by a power of ten, so it is
-	// within an ulp of 1e308 rather than equal to it — which is the reader's
-	// own arithmetic and not this test's business. What is asserted is that it
-	// exists.
-	if v, ok := parseNumber("1e308"); !ok || math.IsInf(v, 0) || v < 9e307 {
-		t.Errorf("parseNumber(%q) = %v, %v; want a finite number near 1e308", "1e308", v, ok)
+	// And the largest one that does exist is still read, and read exactly: the
+	// conversion is rounded once, from the decimal, to the nearest float64.
+	// It used to accumulate the digits and multiply by a power of ten, which
+	// came within an ulp of 1e308 — and, at the far ends, to NaN. See
+	// TestAZeroUnderAnyExponentIsZero.
+	if v, ok := parseNumber("1e308"); !ok || v != 1e308 {
+		t.Errorf("parseNumber(%q) = %v, %v; want 1e308", "1e308", v, ok)
 	}
 }
 
@@ -136,5 +137,38 @@ func TestARatioNobodyCanWriteLeavesTheBoxAlone(t *testing.T) {
 	// passes on a reader that refuses everything.
 	if got := ratioHeightOfFilledBox(t, `aspect-ratio: 16/9`); got != 180 {
 		t.Errorf("a ratio that is one made the box %gpx tall, want 180", got)
+	}
+}
+
+// TestAZeroUnderAnyExponentIsZero is audit C44 on the page: "opacity: 0e400"
+// is nought, which CSS says it is, and it came out as NaN — the reader
+// multiplied nought by 10^400 — which is neither at most nought nor at least
+// one, so it passed both of opacityOf's guards and reached the fill.
+//
+// The rest are the other spellings the same arithmetic got wrong: a mantissa
+// too long for a float64 brought back to one by its exponent, and a number
+// below the smallest float64, which is nought and not a refusal.
+func TestAZeroUnderAnyExponentIsZero(t *testing.T) {
+	for _, decl := range []string{"0e400", "-0e400", "0e99999999999999999999", "1e-400"} {
+		ops := paintOf(t, `<div id="b"></div>`, noDefaults+box100+`#b { opacity: `+decl+` }`)
+		if got := alphasOf(ops, green); len(got) != 0 {
+			t.Errorf("opacity: %s painted %d green fills at alphas %v; it is nought",
+				decl, len(got), got)
+		}
+	}
+	for _, decl := range []string{strings.Repeat("9", 400) + "e-400", "1e0"} {
+		ops := paintOf(t, `<div id="b"></div>`, noDefaults+box100+`#b { opacity: `+decl+` }`)
+		name := decl
+		if len(name) > 12 {
+			name = name[:6] + "…" + name[len(name)-5:]
+		}
+		if got := soleAlpha(t, ops, green, "opacity: "+name); got != 1 {
+			t.Errorf("opacity: %s painted at alpha %v; it is one", name, got)
+		}
+	}
+	for _, s := range []string{"0e400", "-0e400", strings.Repeat("9", 310) + "e-310"} {
+		if v, ok := parseNumber(s); !ok || math.IsNaN(v) || math.IsInf(v, 0) {
+			t.Errorf("parseNumber(%.20q) = %v, %v", s, v, ok)
+		}
 	}
 }

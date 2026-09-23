@@ -160,6 +160,19 @@ var fuzzTexts = []string{
 // starts from things that are *nearly* valid — which is where the interesting
 // failures are. A file that is obviously not a font is rejected in the first
 // four bytes and exercises nothing.
+//
+// Two of the files in testdata/fuzz/FuzzLoadAndUse are what this target found
+// before the engine was a module of its own, and until then they sat where the
+// move had put them, under testdata/testdata, where no test read them.
+// efac75b6c4c86727 declares numGlyphs of zero, and panicked in the subsetter
+// until the subsetter refused a font that declares no .notdef; it panics again
+// with that refusal taken out. 308a0a71a6690515 is 533 KB mutated from a real font whose
+// lookups each claim room for tens of thousands of subtables, and took half a
+// minute to read until the subtables shared one budget per table. It cannot
+// fail on its own — without the budget it only takes eleven times as long —
+// and TestADenseLookupListIsBoundedByTheTable is what holds that line; the file
+// is kept because a mutation of a real font is where the fuzzer finds the next
+// one.
 func FuzzLoadAndUse(f *testing.F) {
 	f.Add(fonttest.SFNT(fonttest.SFNTOptions{
 		Glyphs: []fonttest.Glyph{{Rune: 'a', Advance: 500, HasShape: true}},
@@ -198,6 +211,31 @@ func FuzzLoadAndUse(f *testing.F) {
 				},
 				map[string]fonttest.Script{"dev2": fonttest.AllFeatures(3)},
 			),
+		},
+	}))
+	// A contextual rule whose first record ligates everything it matched and
+	// whose second names a position the ligature swallowed. Moving that position
+	// by the change put it at -1, and the second record applied a lookup there:
+	// an index out of range from one font. The three glyphs are the first three
+	// characters of the first of fuzzTexts, which is what reaches the rule.
+	f.Add(fonttest.SFNT(fonttest.SFNTOptions{
+		Glyphs: []fonttest.Glyph{
+			{Rune: 'a', Advance: 500, HasShape: true},
+			{Rune: 'ﬁ', Advance: 500, HasShape: true},
+			{Rune: '日', Advance: 500, HasShape: true},
+			{Rune: 'X', Advance: 500, HasShape: true},
+		},
+		Extra: map[string][]byte{
+			"GSUB": fonttest.GSUBLookups([]fonttest.Lookup{
+				{Type: 4, Subtables: [][]byte{fonttest.LigatureSubst([]fonttest.Ligature{
+					{Components: []int{1, 2, 3}, Glyph: 4},
+				})}},
+				{Type: 1, Subtables: [][]byte{fonttest.SingleSubst([]int{1, 2, 3}, []int{4, 4, 4})}},
+				{Type: 5, Subtables: [][]byte{fonttest.SequenceContext3(
+					[][]int{{1}, {2}, {3}},
+					[]fonttest.SeqLookup{{At: 0, Lookup: 0}, {At: 1, Lookup: 1}},
+				)}},
+			}, map[string][]int{"calt": {2}}),
 		},
 	}))
 	f.Add([]byte("OTTO\x00\x00\x00\x00"))
@@ -383,8 +421,6 @@ func useFace(face *Face) {
 	_ = face.Cmap()
 	_ = face.Used()
 	_ = face.Scripts()
-	_ = face.Language()
-	face.SetLanguage("sr")
 	_ = face.Features()
 	_ = face.HasScript("arab")
 	_ = face.HasKerning()
@@ -410,7 +446,9 @@ func useFace(face *Face) {
 	stack := NewStack(face, clone)
 	_ = stack.Faces()
 
-	off := Features{NoOptionalLigatures: true}
+	// With a language, so that the language systems a font names are read as
+	// well as its defaults.
+	off := Features{NoOptionalLigatures: true, Language: "sr"}
 	// Every text through the basic calls, because each is a different script
 	// and a different model.
 	for _, text := range fuzzTexts {
@@ -448,6 +486,8 @@ func useFace(face *Face) {
 
 	_, _ = face.Subset()
 	_, _, _ = face.SubsetGlyphs()
+	// Last, so that it reads every layout the shaping above caused to be read.
+	_ = face.LayoutLimits()
 }
 
 // TestAFontDeclaringNoGlyphsIsRefused pins the crash the fuzzer found.

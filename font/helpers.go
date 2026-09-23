@@ -1,18 +1,13 @@
 package font
 
-// Two leaf helpers the Type 1 parser needs, kept here rather than shared with
-// the root package.
+// Two leaf helpers the Type 1 parser needs.
 //
-// Both are frozen by specification — the PDF white-space set is ISO 32000-2
-// Table 1, and hex-digit decoding is what it is — so there is nothing for the
-// two copies to drift about. Sharing them would mean either exporting them from
-// this package for the root package's unrelated uses, which would put font
-// internals in a font package's API for no reason, or standing up a third
-// package for twenty lines.
+// Both are frozen by specification — the white-space set is PostScript's, which
+// ISO 32000-2 Table 1 restates for PDF, and hex-digit decoding is what it is.
 
-// isWhitespace reports whether b is one of the six PDF white-space characters
-// (ISO 32000-2 Table 1). The lexer has its own copy; that one belongs to the
-// lexer.
+// isWhitespace reports whether b is one of the six PostScript white-space
+// characters (ISO 32000-2 Table 1 lists the same six for PDF), which is what
+// separates the tokens of a Type 1 program.
 func isWhitespace(b byte) bool {
 	switch b {
 	case 0, '\t', '\n', '\f', '\r', ' ':

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/html"
 )
 
 // Computed values: the em is gone by the time a value is stored.
@@ -162,13 +163,28 @@ func TestTheUnitsThatNeedAFaceAreLeftAlone(t *testing.T) {
 		{"width", "3ch", "3ch"},
 		{"width", "3ic", "3ic"},
 		{"width", "3vw", "3vw"},
-		{"margin-left", "2lh", "2lh"},
 	} {
 		got := computedOf(t, `#p { font-size: 28px; `+tc.property+`: `+tc.value+` }`,
 			"#p", tc.property)
 		if got != tc.want {
 			t.Errorf("%s: %s computed to %q, want it left as it was", tc.property, tc.value, got)
 		}
+	}
+
+	// A unit no stage here resolves at all is another matter: "2lh" is valid
+	// CSS the value grammar knows this engine does not evaluate, so the
+	// declaration is dropped as the one naming oklch() is, the declaration
+	// before it stands, and the finding says the engine is missing something.
+	// It used to be left as written, for layout to fall back to zero on
+	// without a word.
+	doc := parseDoc(t, `<p id="p">x</p>`)
+	got := Apply(doc, []Sheet{author(t, `#p { margin-left: 5px } #p { margin-left: 2lh }`)})
+	if v := got.Styles[elementFor(t, doc, "#p")].Get("margin-left"); v != "5px" {
+		t.Errorf("margin-left: 2lh after 5px computed to %q, want the 5px to stand", v)
+	}
+	if found, unsupported := says(got.Findings, "the unit lh"); !found || !unsupported {
+		t.Errorf("2lh was not reported as a unit this engine does not evaluate: %v",
+			got.Findings)
 	}
 
 	// And each of them beside an em, which is what makes this a test of the
@@ -213,8 +229,10 @@ func TestTheLettersEMInSomethingThatIsNotALength(t *testing.T) {
 // TestAFontSizeThatCannotBeResolvedIsLeftAsWritten, and the element is still
 // marked as having declared one.
 //
-// The cascade has no answer for "3cap" — that is the font's cap height, and the
-// face is chosen in layout — and must not invent one. What it leaves
+// The cascade has no answer for "3vw" when it is not told the page — Apply
+// is not — and must not invent one. ("3cap" was the example once; the value
+// grammar now drops it as a unit nothing here evaluates, before it is ever
+// asked about.) What it leaves
 // behind is the declaration and the mark, which together are exactly what
 // layout needs: an element that declared a font-size it could not resolve, to
 // report against and to fall back to the inherited size for. A descendant that
@@ -222,9 +240,9 @@ func TestTheLettersEMInSomethingThatIsNotALength(t *testing.T) {
 // must not resolve it either.
 func TestAFontSizeThatCannotBeResolvedIsLeftAsWritten(t *testing.T) {
 	doc := parseDoc(t, nested)
-	got := Apply(doc, []Sheet{author(t, `#p { font-size: 3cap }`)})
+	got := Apply(doc, []Sheet{author(t, `#p { font-size: 3vw }`)})
 	p := elementFor(t, doc, "#p")
-	if v := got.Styles[p]["font-size"]; v != "3cap" {
+	if v := got.Styles[p].Get("font-size"); v != "3vw" {
 		t.Errorf("an unresolvable font-size computed to %q; the cascade has no answer "+
 			"for it and must not write one", v)
 	}
@@ -241,7 +259,7 @@ func TestAFontSizeThatCannotBeResolvedIsLeftAsWritten(t *testing.T) {
 	// set in: the one it inherited. Resolving the string a second time is what
 	// the mark exists to prevent, and leaving the string in place would hand
 	// the same trap to whatever reads it next.
-	if v := got.Styles[c]["font-size"]; v != "16px" {
+	if v := got.Styles[c].Get("font-size"); v != "16px" {
 		t.Errorf("the descendant's font-size is %q, want 16px — the size it "+
 			"inherited, not the string its parent could not resolve", v)
 	}
@@ -272,9 +290,9 @@ func TestAPseudoElementResolvesAgainstItsOwnSize(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s::before produced no style", tc.sel)
 		}
-		if cs["margin-left"] != tc.want {
+		if cs.Get("margin-left") != tc.want {
 			t.Errorf("%s::before margin-left computed to %q, want %q",
-				tc.sel, cs["margin-left"], tc.want)
+				tc.sel, cs.Get("margin-left"), tc.want)
 		}
 	}
 }
@@ -309,6 +327,43 @@ func TestALengthInsideAFunctionIsRewrittenToo(t *testing.T) {
 		absolutiseValues(vals, size, root)
 		if got := serialize(vals); got != tc.want {
 			t.Errorf("%q became %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestAFontSizeInViewportUnitsIsResolvedOnAKnownPage is audit C157. A caller that
+// names the page gets a font-size in viewport units resolved against it —
+// ApplyOnPage against the page area it was given, ApplyIn against the sheet,
+// the only page its caller named — and an em below it is relative to the
+// answer. Apply names no page, and there the value is left as written (see
+// TestAFontSizeThatCannotBeResolvedIsLeftAsWritten).
+func TestAFontSizeInViewportUnitsIsResolvedOnAKnownPage(t *testing.T) {
+	area := Media{Width: mustUnit(800), Height: mustUnit(600)}
+	for _, c := range []struct{ value, want, child string }{
+		{"5vw", "40px", "20px"},
+		{"5vh", "30px", "15px"},
+		{"5vmin", "30px", "15px"},
+		{"5vmax", "40px", "20px"},
+		{"calc(5vw + 2px)", "42px", "21px"},
+	} {
+		sheet := `#p { font-size: ` + c.value + ` } #c { font-size: 0.5em }`
+		for how, apply := range map[string]func(doc *html.Node) Styled{
+			"ApplyOnPage": func(doc *html.Node) Styled {
+				return Prepare([]Sheet{author(t, sheet)}, Media{}).ApplyOnPage(doc, nil, area)
+			},
+			"ApplyIn": func(doc *html.Node) Styled {
+				return ApplyIn(doc, []Sheet{author(t, sheet)}, nil, area)
+			},
+		} {
+			doc := parseDoc(t, nested)
+			got := apply(doc)
+			if v := got.Styles[elementFor(t, doc, "#p")].Get("font-size"); v != c.want {
+				t.Errorf("%s: font-size: %s computed to %q, want %q", how, c.value, v, c.want)
+			}
+			if v := got.Styles[elementFor(t, doc, "#c")].Get("font-size"); v != c.child {
+				t.Errorf("%s: 0.5em under font-size: %s computed to %q, want %q",
+					how, c.value, v, c.child)
+			}
 		}
 	}
 }

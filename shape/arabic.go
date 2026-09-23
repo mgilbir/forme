@@ -64,14 +64,22 @@ const (
 // joiningTypeOf reports a character's joining type.
 //
 // A character the table does not name is non-joining, except a non-spacing
-// mark, which is transparent — a vowel sign written between two letters must
-// not break their join, and treating it as an ordinary character would.
+// mark, an enclosing mark or a format character, which is transparent — a
+// vowel sign written between two letters must not break their join, and
+// treating it as an ordinary character would.
+//
+// Which characters those are is the generated defaultTransparentRanges, from
+// the release the joining table is from. It was package unicode, whose release
+// is older: U+0897 ARABIC PEPET, a mark since Unicode 16, broke the join of the
+// letters either side of it, and U+1171E, a mark in Unicode 15 and not since,
+// was stepped over.
 func joiningTypeOf(r rune) joiningType {
 	i := sort.Search(len(joiningRanges), func(i int) bool { return joiningRanges[i].hi >= r })
 	if i < len(joiningRanges) && r >= joiningRanges[i].lo {
 		return joiningRanges[i].t
 	}
-	if unicode.In(r, unicode.Mn, unicode.Me, unicode.Cf) {
+	i = sort.Search(len(defaultTransparentRanges), func(i int) bool { return defaultTransparentRanges[i].hi >= r })
+	if i < len(defaultTransparentRanges) && r >= defaultTransparentRanges[i].lo {
 		return joinT
 	}
 	return joinU
@@ -180,17 +188,8 @@ func joinFormsIn(all []rune, lo, hi int) []string {
 	return forms
 }
 
-// applyJoining substitutes each glyph for the shape its position calls for.
-//
-// It runs before every other substitution, because the joined forms are what
-// the ligatures and contextual rules of a cursive script are written against —
-// a font's lam-alef ligature is between the *final* lam and the alef, not
-// between their isolated shapes.
-//
-// A font that declares none of the four features is left alone, which is every
-// font for a script that does not join.
 // markJoiningForms records, on each glyph, which positional form its character
-// takes from its neighbours.
+// takes from its neighbours, as the bit of the feature that states the form.
 //
 // It only decides; nothing is substituted here. The two have to be separate
 // because they happen at different moments and the run is a different shape at
@@ -201,6 +200,12 @@ func joinFormsIn(all []rune, lo, hi int) []string {
 // split every letter into a skeleton and its dots, and states the four forms
 // over the skeletons. A shaper that substitutes the forms first finds nothing to
 // substitute, and every letter comes out in its isolated shape.
+//
+// The substitution is the plan's: each form is a stage of its own after 'ccmp'
+// and 'locl', applied to the glyphs carrying its bit — see collectArabic. The
+// lookups go through the lookup list rather than a flattened table of single
+// substitutions, because a font may state a form as anything a lookup can be —
+// a contextual rule, or a ligature that joins a letter to the one before it.
 func markJoiningForms(buf []Glyph, runes, before, after []rune) {
 	if len(runes) != len(buf) {
 		// Nothing has been substituted yet where this is called, so this cannot
@@ -212,64 +217,15 @@ func markJoiningForms(buf []Glyph, runes, before, after []rune) {
 	for i := range buf {
 		switch forms[i] {
 		case featIsolated:
-			buf[i].join = joinIsolated
+			buf[i].mask |= maskIsol
 		case featFinal:
-			buf[i].join = joinFinal
+			buf[i].mask |= maskFina
 		case featMedial:
-			buf[i].join = joinMedial
+			buf[i].mask |= maskMedi
 		case featInitial:
-			buf[i].join = joinInitial
+			buf[i].mask |= maskInit
 		}
 	}
-}
-
-// joinFormOrder is the order the four form features are applied in, which is
-// the order every shaper applies them and the order the OpenType Arabic
-// specification lists them.
-//
-// A glyph takes one form, so the order between them decides nothing on its own.
-// It matters because a font may state a form as a contextual rule that looks at
-// what its neighbours have already become.
-var joinFormOrder = [...]joinForm{joinIsolated, joinFinal, joinMedial, joinInitial}
-
-// applyJoiningForms substitutes each letter for the form its position calls for.
-//
-// The lookups are applied through the lookup list rather than read out of a
-// flattened table of single substitutions, because a font may state a form as
-// anything a lookup can be — a contextual rule, or a ligature that joins a
-// letter to the one before it. Reading only the single substitutions gets the
-// common case and silently drops the rest.
-func (sh shaper) applyJoiningForms(buf []Glyph) []Glyph {
-	for _, form := range joinFormOrder {
-		lookups := sh.l.featureLookups[form.tag()]
-		if len(lookups) == 0 {
-			continue
-		}
-		for _, idx := range lookups {
-			rb := newRunBuf(buf, 0)
-			sh.run = rb
-			for len(rb.pending()) > 0 {
-				if rb.pending()[0].join != form {
-					rb.settle(1)
-					continue
-				}
-				was := len(rb.pending())
-				consumed, _ := sh.applyGSUBAt(idx, rb.pending(), 0, 0)
-				if consumed > 0 {
-					rb.settle(consumed)
-					continue
-				}
-				// A lookup that consumed nothing and shortened the buffer took
-				// a glyph out; what followed it is now here and unexamined.
-				if len(rb.pending()) < was {
-					continue
-				}
-				rb.settle(1)
-			}
-			buf = rb.flatten()
-		}
-	}
-	return buf
 }
 
 // HasJoiningForms reports whether the font carries the positional forms a
@@ -277,8 +233,8 @@ func (sh shaper) applyJoiningForms(buf []Glyph) []Glyph {
 // from one that merely has the letters.
 func (f *Face) HasJoiningForms() bool {
 	l := f.layout
-	for _, form := range joinFormOrder {
-		if len(l.featureLookups[form.tag()]) > 0 || len(l.single[form.tag()]) > 0 {
+	for _, form := range arabicForms {
+		if len(l.featureLookups[form.tag]) > 0 || len(l.single[form.tag]) > 0 {
 			return true
 		}
 	}

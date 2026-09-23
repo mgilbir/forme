@@ -6,10 +6,29 @@
 // that line is the same whichever it is. See Compose.
 //
 // This file is the guardrail vocabulary, and it exists before the layout engine
-// on purpose. §9 of the rendering proposal asks for the reporting layer to land
-// *with* the engine rather than after it, and gives the reason: a reporting
-// layer retrofitted onto a finished engine is how it becomes decorative. The
-// engine grows into this, not the other way round.
+// on purpose. The reporting layer landed *with* the engine rather than after
+// it, because a reporting layer retrofitted onto a finished engine is how it
+// becomes decorative. The engine grows into this, not the other way round.
+//
+// # The sections this package cites
+//
+// A bare "§5", "§6.1" or "§7.1" in this package, with no specification named
+// beside it, is a section of the design this engine was planned from. That
+// document is not in this repository, so what each section says is here:
+//
+//   - §5 is scale-to-fit: one geometric factor applied to the finished layout
+//     (see fitScale), not a second layout at a smaller size.
+//   - §6 is the guardrails as a whole: every way a page can be quietly wrong is
+//     a named rule a caller can act on. §6.1 is the size thresholds (MinScale,
+//     the minimum font size), §6.2 layout integrity (content outside its box or
+//     off the page), §6.3 what the engine does not implement, and §6.5 that
+//     every rule has a test which plants a violation and watches it fire.
+//   - §7.1 is the reftest signal: a pass counts only when neither document
+//     reported something unsupported (see the WPT harness).
+//
+// A section of a specification is cited with the specification's name, as
+// "CSS 2.2 §10.3" or "HTML §4.8.7", or in a file that says which one it
+// follows throughout.
 //
 // # What the guardrails are for
 //
@@ -23,9 +42,14 @@
 package layout
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
+
+	"github.com/mgilbir/forme/html"
 )
 
 // Rule identifies a guardrail.
@@ -412,6 +436,35 @@ type Source struct {
 // NoSource is a finding that is not tied to a place in the input.
 var NoSource = Source{HTMLOffset: -1, CSSOffset: -1}
 
+// placed is the source a finding is recorded and rendered with: s, unless s is
+// the zero Source, which is no place and is read as NoSource.
+//
+// The zero value says "byte nought of the markup and byte nought of a
+// stylesheet", which no finding is — a finding is in one input or in none —
+// and it is what a Finding literal written without a Source gets. A finding
+// about the whole document, which is in no file, is written without one and
+// means exactly that. There were
+// thirty of those: invalid options, the @page geometry, the scale and
+// font-size floors, a failed @import, the text checks. Each rendered as
+// "[html byte 0]" and sent an author to the top of the file for something
+// that was not there (audit C87). A finding really at the first byte of the
+// markup is AtHTML(0), whose CSS offset is -1, and is left where it is.
+func (s Source) placed() Source {
+	if s.HTMLOffset == 0 && s.CSSOffset == 0 {
+		return Source{HTMLOffset: -1, CSSOffset: -1, Sheet: s.Sheet}
+	}
+	return s
+}
+
+// sourceOf is where an element was written, or NoSource for none — the source
+// of a finding about a box, to go with PathOf's path.
+func sourceOf(n *html.Node) Source {
+	if n == nil {
+		return NoSource
+	}
+	return AtHTML(n.Offset)
+}
+
 // AtHTML and AtCSS build the two common cases.
 func AtHTML(offset int) Source { return Source{HTMLOffset: offset, CSSOffset: -1} }
 
@@ -459,14 +512,14 @@ func (f Finding) Error() string {
 	if f.Path != "" {
 		fmt.Fprintf(&b, " (at %s)", f.Path)
 	}
-	switch {
-	case f.Source.HTMLOffset >= 0:
-		fmt.Fprintf(&b, " [html byte %d]", f.Source.HTMLOffset)
-	case f.Source.CSSOffset >= 0:
-		if f.Source.Sheet != "" {
-			fmt.Fprintf(&b, " [%s byte %d]", f.Source.Sheet, f.Source.CSSOffset)
+	switch src := f.Source.placed(); {
+	case src.HTMLOffset >= 0:
+		fmt.Fprintf(&b, " [html byte %d]", src.HTMLOffset)
+	case src.CSSOffset >= 0:
+		if src.Sheet != "" {
+			fmt.Fprintf(&b, " [%s byte %d]", src.Sheet, src.CSSOffset)
 		} else {
-			fmt.Fprintf(&b, " [css byte %d]", f.Source.CSSOffset)
+			fmt.Fprintf(&b, " [css byte %d]", src.CSSOffset)
 		}
 	}
 	return b.String()
@@ -562,20 +615,54 @@ type Recorder struct {
 	counts map[Rule]int
 	// seen suppresses repeats of the same rule and message. A stylesheet using
 	// one unimplemented property four hundred times is one thing to be told.
-	seen map[string]bool
+	//
+	// It holds a digest of each finding and not the finding's text, and only
+	// of the findings in the list. Both were otherwise, and both were the
+	// same mistake — a memo the bound on the list did not bound. The key was
+	// the text: every distinct finding's path, message and sheet name,
+	// concatenated and kept, and a path is as long as the document makes its
+	// ids. Two hundred and fifty nested <div>s with two-thousand-character ids
+	// gave each of three thousand leaves a half-megabyte path, and 608 KB of
+	// markup held two gigabytes of keys (audit C18). And it was built before
+	// it was looked up, so a finding that was a duplicate still copied its
+	// sheet's name, which for a data: stylesheet was the whole stylesheet.
+	seen map[findingDigest]bool
 	// failed records that something fired at Error severity.
 	failed bool
 	// truncated records that the bound was reached.
 	truncated bool
+	// unsupported is how many of findings are Unsupported. See record:
+	// the bound is not allowed to leave it at zero when one was raised.
+	unsupported int
+
+	// work is the document's work budget. See budget.go for why it lives here:
+	// the recorder is the one object every stage of a render is handed, and
+	// its lifetime is exactly one render.
+	work workBudget
 }
+
+// findingDigest is a finding's identity for deduplication: a SHA-256 digest of
+// the fields a reader tells two findings apart by, cut to 128 bits.
+//
+// A cryptographic digest rather than a fast hash, because a collision here is
+// a finding silently dropped, and the fields are the document's — an author who
+// could make two findings collide could hide one behind the other. At 128 bits
+// that takes a collision attack on SHA-256, which is not a thing a stylesheet
+// can mount.
+type findingDigest [16]byte
 
 // NewRecorder prepares to collect findings under a policy. A nil policy uses the
 // defaults.
+//
+// The recorder carries the render's work budget, so a new recorder is a new
+// allowance: Build and Compose make one per document, and so should a caller
+// that runs the stages itself.
 func NewRecorder(p Policy) *Recorder {
 	return &Recorder{
 		policy: p,
 		counts: map[Rule]int{},
-		seen:   map[string]bool{},
+		seen:   map[findingDigest]bool{},
+		work:   newWorkBudget(),
 	}
 }
 
@@ -593,6 +680,12 @@ func (r *Recorder) Report(rule Rule, src Source, message string) bool {
 // a caller raising a finding should not be able to decide how serious it is.
 // That decision belongs to whoever is rendering.
 func (r *Recorder) ReportDetail(f Finding) bool {
+	return r.record(f, true)
+}
+
+// record is ReportDetail, with the charge to the work budget made optional for
+// the one finding that cannot pay it: the budget's own. See Recorder.refuse.
+func (r *Recorder) record(f Finding, charged bool) bool {
 	severity := r.policy.severityOf(f.Rule)
 	r.counts[f.Rule]++
 	if severity == Ignore {
@@ -602,6 +695,18 @@ func (r *Recorder) ReportDetail(f Finding) bool {
 		r.failed = true
 	}
 	f.Severity = severity
+	f.Source = f.Source.placed()
+
+	// What deduplicating costs is reading the finding once, so that is what
+	// is charged. It is the only work here that grows with the document, and
+	// the stages that raise findings do so from their inner loops. A finding
+	// refused is still counted and still decides whether the render failed —
+	// both happened above — and the list says it is not the whole story.
+	if charged && !r.charge(int64(len(f.Message)+len(f.Path)+len(f.Property)+
+		len(f.Selector)+len(f.Source.Sheet))*costFindingByte, "some findings") {
+		r.truncated = true
+		return severity == Error
+	}
 
 	// Deduplicate on everything a reader would use to tell two findings apart.
 	// Two identical messages about two different elements are two findings; two
@@ -614,19 +719,58 @@ func (r *Recorder) ReportDetail(f Finding) bool {
 	// in two files, and the second was silently dropped for having the same
 	// words as the first. An author fixing the one they were shown found the
 	// finding still there.
-	key := string(f.Rule) + "\x00" + f.Message + "\x00" + f.Path + "\x00" +
-		f.Property + "\x00" + f.Selector + "\x00" + f.Source.Sheet
+	key := keyOf(f)
 	if r.seen[key] {
 		return severity == Error
 	}
-	r.seen[key] = true
-
+	// Once the list is full nothing more is remembered. A finding that is not
+	// a repeat of one in the list is one the list does not hold, which is all
+	// the truncation flag has to know, and remembering it would be a memo that
+	// grows past the bound on the thing it deduplicates.
 	if len(r.findings) >= maxFindings {
 		r.truncated = true
+		// Whether a page is clean is read off this list — a finding that is
+		// Unsupported says the page lacks something, and the WPT ratchet and
+		// any caller like it count on seeing one — so the bound may cut how
+		// many there are and not whether there are any. Audit C58 found the
+		// styling stage's own bound doing exactly that. If the list holds
+		// none, the first one past the bound takes the last place: a list
+		// that says Truncated is already missing findings, and one more
+		// missing that is not Unsupported costs a reader less than a page
+		// with nothing unsupported on it that has something.
+		if f.Unsupported() && r.unsupported == 0 && len(r.findings) > 0 {
+			r.findings[len(r.findings)-1] = f
+			r.unsupported++
+		}
 		return severity == Error
+	}
+	r.seen[key] = true
+	if f.Unsupported() {
+		r.unsupported++
 	}
 	r.findings = append(r.findings, f)
 	return severity == Error
+}
+
+// keyOf is a finding's deduplication key. See findingDigest.
+//
+// The fields are written into the digest one at a time and separated, rather
+// than concatenated first: the concatenation was the copy of the whole sheet
+// name that a duplicate paid for.
+func keyOf(f Finding) findingDigest {
+	h := sha256.New()
+	for _, s := range [...]string{string(f.Rule), f.Message, f.Path, f.Property,
+		f.Selector, f.Source.Sheet} {
+		// The length first, so that no two different lists of fields write
+		// the same bytes: "a" then "bc" is not "ab" then "c".
+		var n [8]byte
+		binary.LittleEndian.PutUint64(n[:], uint64(len(s)))
+		h.Write(n[:])
+		io.WriteString(h, s)
+	}
+	var key findingDigest
+	copy(key[:], h.Sum(nil))
+	return key
 }
 
 // Findings returns what was recorded, in a deterministic order.

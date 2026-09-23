@@ -48,7 +48,7 @@ func (l *layouter) featuresFor(b *Box) shape.Features {
 		return shape.Features{}
 	}
 	var out shape.Features
-	lig, _ := ligaturesOf(b.Style["font-variant-ligatures"])
+	lig, _ := ligaturesOf(b.Style.Get("font-variant-ligatures"))
 	switch lig {
 	case ligaturesNone:
 		out.NoOptionalLigatures = true
@@ -70,13 +70,21 @@ func (l *layouter) featuresFor(b *Box) shape.Features {
 	// letters at the same width, which is the shaping layer's own contract —
 	// and it is asked once per face run by reportCaps, which is where the
 	// answer can be reported.
-	out.Caps, _ = capsOf(b.Style["font-variant-caps"])
-	out.Numeric, _ = numericOf(b.Style["font-variant-numeric"])
-	out.EastAsian, _ = eastAsianOf(b.Style["font-variant-east-asian"])
-	out.Position, _ = variantPositionOf(b.Style["font-variant-position"])
+	out.Caps, _ = capsOf(b.Style.Get("font-variant-caps"))
+	out.Numeric, _ = numericOf(b.Style.Get("font-variant-numeric"))
+	out.EastAsian, _ = eastAsianOf(b.Style.Get("font-variant-east-asian"))
+	out.Position, _ = variantPositionOf(b.Style.Get("font-variant-position"))
 	// And the escape hatch: the face's own features by tag, for everything the
 	// descriptors above have no keyword for.
-	out.Tags, _ = featureSettingsOf(b.Style["font-feature-settings"])
+	out.Tags, _ = featureSettingsOf(b.Style.Get("font-feature-settings"))
+	// And the language the text is in, which chooses among the font's
+	// language systems: lang="sr" has a font draw its Serbian forms. It is the
+	// attribute as written — shape reads BCP 47 as HarfBuzz does — and it is
+	// here with the rest because it has to travel with them, to the painter
+	// that shapes the run again.
+	if v, ok := boxElement(b).Language(); ok {
+		out.Language = v
+	}
 	return out
 }
 
@@ -262,7 +270,7 @@ func ligaturesOf(raw string) (ligatures, bool) {
 // between them is about whether a UA may turn it off for performance — which
 // this engine never does, so the two are one answer here.
 func noKerning(b *Box) bool {
-	return strings.EqualFold(strings.TrimSpace(b.Style["font-kerning"]), "none")
+	return strings.EqualFold(strings.TrimSpace(b.Style.Get("font-kerning")), "none")
 }
 
 // capsOf reads CSS Fonts 4 §6.6's font-variant-caps.

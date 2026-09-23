@@ -11,9 +11,8 @@ import (
 // A stylesheet is the most obviously hostile input this project has ever
 // accepted: it arrives as text, it is nested, and every layer of it has a
 // recovery path that only runs on malformed input — which is exactly the code
-// least likely to be reached by tests written from the specification. §4.3 of
-// the rendering proposal asks for this from the first milestone rather than
-// retrofitted, and this is it.
+// least likely to be reached by tests written from the specification. It was
+// fuzzed from the first parser rather than retrofitted, and this is it.
 //
 // What is checked is not "does it produce the right answer" — a fuzzer has no
 // oracle for that; oracle_test.go does. It is the three properties that must
@@ -180,57 +179,72 @@ func FuzzSelector(f *testing.F) {
 		// different questions.
 		":is(a,)", ":is(a,", ":where(,a)",
 		strings.Repeat(":is(", 200), strings.Repeat(",", 200),
+		// The nesting selector, which the target also parses as a nested
+		// rule's relative list.
+		"&", "& &", "> a", "+ a, b, > c", "a &", ":is(&, a)", "&div", "&&",
 	}
 	for _, s := range seeds {
 		f.Add(s)
 	}
+	// A parent with a pseudo-element selector in it, which "&" leaves out.
+	parent := NewNesting([]Selector{{Compounds: []Compound{{Classes: []string{"p"}}}},
+		{Compounds: []Compound{{}}, PseudoElement: "before"}})
 	f.Fuzz(func(t *testing.T, input string) {
 		vals, _ := ParseComponentValues(input)
-		sels, errs, ok := ParseSelectorList(vals)
-
-		checkErrors(t, errs, len(input))
-
-		if !ok && len(sels) != 0 {
-			t.Fatalf("an unusable selector list returned %d selectors, which a "+
-				"caller that skipped ok would apply", len(sels))
-		}
-		if ok && len(sels) == 0 {
-			t.Fatal("a usable selector list with no selectors in it")
-		}
-		// A usable list may still have reported, and of either kind. ":is(a,)"
-		// is the case that settles it: the stray comma is malformed input and
-		// is reported as such, while :is() is forgiving, drops the empty
-		// argument and leaves a rule that applies. So "reported nothing" is not
-		// what ok means, and the two must not be tied together — the invariant
-		// that matters is the one above, that an unusable list hands back
-		// nothing a caller could apply.
-		for _, s := range sels {
-			if len(s.Compounds) == 0 {
-				t.Fatal("a selector with no compounds, which would select everything")
-			}
-			sp := s.Specificity
-			if sp.A < 0 || sp.B < 0 || sp.C < 0 {
-				t.Fatalf("a negative specificity %v, which inverts the cascade", sp)
-			}
-			// A compound has to constrain something, with exactly one exception:
-			// "::before" on its own is a whole selector, meaning "*::before".
-			// So an empty compound is allowed only as the last one, and only
-			// when a pseudo-element is what it carries. Anywhere else an empty
-			// compound is a selector that matches every element in the
-			// document, which is never what was written.
-			for i, c := range s.Compounds {
-				empty := c.Type == "" && !c.Universal && len(c.IDs) == 0 &&
-					len(c.Classes) == 0 && len(c.Attrs) == 0 && len(c.Pseudos) == 0
-				if !empty {
-					continue
-				}
-				if i != len(s.Compounds)-1 || s.PseudoElement == "" {
-					t.Fatalf("compound %d of %d is empty and carries no pseudo-element, "+
-						"so it selects every element", i, len(s.Compounds))
-				}
-			}
+		for _, nest := range []*Nesting{nil, parent} {
+			checkSelectorList(t, vals, nest, len(input))
 		}
 	})
+}
+
+// checkSelectorList is FuzzSelector's invariants for one parse, at the top of a
+// stylesheet (nest nil) or as a rule nested in nest.
+func checkSelectorList(t *testing.T, vals []ComponentValue, nest *Nesting, n int) {
+	t.Helper()
+	sels, errs, ok := ParseNestedSelectorList(vals, nest)
+
+	checkErrors(t, errs, n)
+
+	if !ok && len(sels) != 0 {
+		t.Fatalf("an unusable selector list returned %d selectors, which a "+
+			"caller that skipped ok would apply", len(sels))
+	}
+	if ok && len(sels) == 0 {
+		t.Fatal("a usable selector list with no selectors in it")
+	}
+	// A usable list may still have reported, and of either kind. ":is(a,)"
+	// is the case that settles it: the stray comma is malformed input and
+	// is reported as such, while :is() is forgiving, drops the empty
+	// argument and leaves a rule that applies. So "reported nothing" is not
+	// what ok means, and the two must not be tied together — the invariant
+	// that matters is the one above, that an unusable list hands back
+	// nothing a caller could apply.
+	for _, s := range sels {
+		if len(s.Compounds) == 0 {
+			t.Fatal("a selector with no compounds, which would select everything")
+		}
+		sp := s.Specificity
+		if sp.A < 0 || sp.B < 0 || sp.C < 0 {
+			t.Fatalf("a negative specificity %v, which inverts the cascade", sp)
+		}
+		// A compound has to constrain something, with exactly one exception:
+		// "::before" on its own is a whole selector, meaning "*::before".
+		// So an empty compound is allowed only as the last one, and only
+		// when a pseudo-element is what it carries. Anywhere else an empty
+		// compound is a selector that matches every element in the
+		// document, which is never what was written.
+		for i, c := range s.Compounds {
+			empty := c.Type == "" && !c.Universal && len(c.IDs) == 0 &&
+				len(c.Classes) == 0 && len(c.Attrs) == 0 && len(c.Pseudos) == 0
+			if !empty {
+				continue
+			}
+			if i != len(s.Compounds)-1 || s.PseudoElement == "" {
+				t.Fatalf("compound %d of %d is empty and carries no pseudo-element, "+
+					"so it selects every element", i, len(s.Compounds))
+			}
+		}
+	}
 }
 
 func checkRules(t *testing.T, rules []Rule) {

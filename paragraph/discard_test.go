@@ -45,7 +45,7 @@ func TestDiscardRemovesEveryWhiteSpaceCharacter(t *testing.T) {
 	// And the separators the document asked to be made visible survive it: they
 	// are not white space, and the property puts the space in rather than the
 	// source having one.
-	space, _ := WordSpaceTransformOf("space")
+	space := WordSpaceTransformOf("space")
 	if got := CollapseWhitespace("a​b c", "discard", space); got != "a bc" {
 		t.Errorf("with word-space-transform: space the text became %q, want %q "+
 			"— the space the source wrote goes and the one the property asked "+
