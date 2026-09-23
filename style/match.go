@@ -22,11 +22,12 @@ import (
 // A chain of combinators is no longer the way to reach it — see matchResult,
 // which is what keeps "a b c d e" against a deep tree a sum rather than a
 // product. What is left is a selector whose *compounds* are expensive: a
-// ":not()" or ":is()" is a whole selector matched afresh on every element the
-// chain around it visits, so arguments nested inside arguments multiply, and a
-// few hundred bytes of selector against a few kilobytes of markup is still the
-// cheapest denial of service either input offers. Real selectors settle in tens
-// of steps.
+// ":not()" or ":is()" is a whole selector matched on every element the chain
+// around it visits. Its answer for an element is remembered, so arguments nested
+// inside arguments add rather than multiply — see matchesList — but each still
+// costs a walk of the tree the first time it is asked of an element, and a
+// selector can ask that of every element under a deep tree. Real selectors
+// settle in tens of steps.
 //
 // It is the early exit and not the whole bound. A bound per match is a bound
 // per (selector, element) pair, and a document has as many pairs as it has
@@ -112,8 +113,10 @@ type Matcher struct {
 	series map[seriesKey]*series
 
 	// nested remembers which elements match which nested rule's parent — see
-	// nesting.
+	// nesting — and lists which match which argument list of :is(), :where()
+	// and :not() — see matchesList.
 	nested map[nestingKey]bool
+	lists  map[listKey]bool
 
 	// steps is the work spent on the match in hand and over says that match ran
 	// out; tripped remembers that some match did, for the caller.
@@ -158,6 +161,7 @@ func NewMatcher(doc *html.Node) *Matcher {
 		typed:  map[*html.Node]bool{},
 		series: map[seriesKey]*series{},
 		nested: map[nestingKey]bool{},
+		lists:  map[listKey]bool{},
 		xml:    doc.XMLDocument(),
 	}
 }
@@ -465,10 +469,10 @@ func (m *Matcher) pseudo(p css.Pseudo, n *html.Node) bool {
 		return p.AnB.Matches(m.typePosition(n, true))
 
 	case css.PseudoNot:
-		return !m.matchesAny(p.Args, n)
+		return !m.matchesList(p.Args, n)
 
 	case css.PseudoIs, css.PseudoWhere:
-		return m.matchesAny(p.Args, n)
+		return m.matchesList(p.Args, n)
 
 	case css.PseudoNesting:
 		return m.nesting(p.Nest, n)
@@ -551,6 +555,53 @@ func (m *Matcher) nesting(nest *css.Nesting, n *html.Node) bool {
 	got := m.matchesAny(nest.Matchable(), n)
 	if !m.over {
 		m.nested[key] = got
+	}
+	return got
+}
+
+// listKey is one question about an argument list: does this element match it.
+// The list is keyed by where it is held, which is the selector it was parsed
+// in, and by its length, so that no two lists share a key.
+type listKey struct {
+	first *css.Selector
+	n     int
+	el    *html.Node
+}
+
+// matchesList matches the argument list of :is(), :where() or :not() with n as
+// its subject, and remembers the answer.
+//
+// It is nesting's memo for the pseudo-classes that were not "&", and it is
+// needed for the same reason. An argument is a whole selector, matched against
+// every element the selector around it visits — and when the argument holds a
+// descendant combinator, that is every ancestor of every element the selector
+// around *it* visits, and so on in. ":is(:is(:is(.nowhere .x) .x) .x) p" on a
+// paragraph under d nested div.x asked the innermost list about an ancestor
+// once per way of choosing one ancestor at each level: d⁴ steps for a selector
+// of four compounds, and the per-match budget was the only thing that ended it.
+// Asked once per element, each level costs a walk of the ancestors of each
+// element it is asked about, whatever is nested in it, and the levels add.
+//
+// It is safe to remember for nesting's reason: whether an element matches a
+// selector list as its subject depends on the element and the tree, and neither
+// changes while a document is matched. The one answer not kept is one the budget
+// cut short, which is a "no" that may be wrong. A remembered answer is a step,
+// so the work a rule's matching does is still counted against its budget for
+// the document, and a match that spends its own budget on lookups still trips.
+func (m *Matcher) matchesList(sels []css.Selector, n *html.Node) bool {
+	if len(sels) == 0 {
+		return false
+	}
+	key := listKey{first: &sels[0], n: len(sels), el: n}
+	if got, ok := m.lists[key]; ok {
+		if m.spent() {
+			return false
+		}
+		return got
+	}
+	got := m.matchesAny(sels, n)
+	if !m.over {
+		m.lists[key] = got
 	}
 	return got
 }

@@ -83,9 +83,24 @@ func TestMatchingWorkIsLinearInRulesAndElements(t *testing.T) {
 	}
 }
 
+// wideSelector runs to the per-match bound on every element it is tried on,
+// under forty nested div.x. It is one :is() of four hundred arguments, each a
+// walk of the ancestors that finds nothing, so answering it for one element is
+// sixteen thousand steps. The answer is never remembered, because a match the
+// budget cut short remembers nothing — so every element pays again. It stands
+// in for expensiveSelector here, which the memo of argument lists made cheap
+// after its first element (see matchesList).
+func wideSelector() string {
+	args := make([]string, 400)
+	for i := range args {
+		args[i] = fmt.Sprintf(".nowhere%d .x", i)
+	}
+	return ":is(" + strings.Join(args, ", ") + ") p"
+}
+
 // TestAnExpensiveRuleIsSwitchedOffAndNothingElseIs is the document-wide half of
 // the bound. A rule whose every match runs to the per-match bound — which a
-// selector can still do, with arguments nested in arguments — has an allowance
+// selector can still do, with a wide enough list of arguments — has an allowance
 // for the document and is switched off once it has spent it; the work it is
 // allowed does not grow with the document faster than the ordinary per-element
 // allowance. The rules beside it are not touched: they apply to every element,
@@ -96,7 +111,7 @@ func TestAnExpensiveRuleIsSwitchedOffAndNothingElseIs(t *testing.T) {
 		t.Helper()
 		doc := parseDoc(t, strings.Repeat(`<div class="x">`, depth)+
 			strings.Repeat(`<p class="p">x</p>`, paragraphs)+strings.Repeat("</div>", depth))
-		src := expensiveSelector + " { color: red }\n" +
+		src := wideSelector() + " { color: red }\n" +
 			"p { font-family: plain }\n.x .p { font-style: italic }"
 		_, got, s := ruleWorkOf(t, doc, src)
 

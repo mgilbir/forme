@@ -623,9 +623,12 @@ func deepChain(depth int) string {
 		strings.Repeat("</div>", depth)
 }
 
-// expensiveSelector costs the depth of the tree to the fourth power on a
-// paragraph under nested div.x, and matches nothing. See
-// TestMatchBudgetTripsAndIsReported.
+// expensiveSelector matches nothing, and costs a walk of every ancestor from
+// every ancestor for each of its levels of :is() on a paragraph under nested
+// div.x: three times the square of the depth, which at two hundred is six times
+// the per-match budget. It was the depth to the fourth power until each
+// argument list's answer was remembered per element; see matchesList and
+// TestNestedIsIsLinearInItsNesting. See TestMatchBudgetTripsAndIsReported.
 const expensiveSelector = ":is(:is(:is(.nowhere .x) .x) .x) p"
 
 // TestMatchNeverPanics is the totality property. Every document the html package
