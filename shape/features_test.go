@@ -61,39 +61,65 @@ func TestTheRequiredLigaturesCannotBeTurnedOff(t *testing.T) {
 	}
 }
 
-// TestTheOrderOfWhatIsLeftIsTheOrderItWasGiven.
+// TestWhatIsTurnedOffIsOutOfThePlanAndNothingElse.
 //
-// The default list is in the order the specification requires — composition
-// before the rules that read its output, required ligatures before optional
-// ones, contextual alternates last so they see the glyphs that survived — and
-// dropping a tag from the middle must not disturb it.
-func TestTheOrderOfWhatIsLeftIsTheOrderItWasGiven(t *testing.T) {
-	if got := (Features{}).keeps(afterJoiningFeatures); !slices.Equal(got, afterJoiningFeatures) {
-		t.Errorf("with nothing turned off the list is %v, want %v", got, afterJoiningFeatures)
+// A switch takes its features out of every stage and leaves the rest of the
+// plan as it was: the required ligatures and the contextual alternates stay
+// when only the optional ligatures go, and the ligatures stay when only the
+// alternates go. And a plan built with something turned off leaves the next
+// plan alone — the lists every plan is built from are package-level, and a
+// build that wrote back into one would shape every document afterwards with the
+// wrong features.
+func TestWhatIsTurnedOffIsOutOfThePlanAndNothingElse(t *testing.T) {
+	// A layout that names one lookup per feature, so that which lookups are in
+	// a plan says exactly which features are.
+	l := &layout{featureLookups: map[string][]int{
+		"ccmp": {0}, "locl": {1}, "rlig": {2}, "rclt": {3},
+		"calt": {4}, "liga": {5}, "clig": {6}, "dlig": {7},
+	}}
+	inPlan := func(off Features) map[int]bool {
+		out := map[int]bool{}
+		for _, st := range buildPlan(l, planKey{model: modelDefault, features: off}, nil).stages {
+			for _, lk := range st {
+				out[lk.index] = true
+			}
+		}
+		return out
 	}
+	set := func(idx ...int) map[int]bool {
+		out := map[int]bool{}
+		for _, i := range idx {
+			out[i] = true
+		}
+		return out
+	}
+	optional, alternates, kept := set(5, 6), set(4), set(0, 1, 2, 3)
 	for _, c := range []struct {
 		off  Features
-		want []string
+		want map[int]bool
 	}{
-		{Features{NoOptionalLigatures: true}, []string{"rlig", "rclt", "calt"}},
-		// The one that catches aliasing, which is why it is here rather than
-		// left to the pair above: dropping "calt" from the *middle* moves the
-		// two tags after it forward, so a filter that wrote back into the list
-		// it was given would leave "liga" where "calt" was and every document
-		// afterwards would be shaped with the wrong features.
-		{Features{NoContextualAlternates: true},
-			[]string{"rlig", "rclt", "liga", "clig"}},
-		{Features{NoOptionalLigatures: true, NoContextualAlternates: true},
-			[]string{"rlig", "rclt"}},
+		{Features{}, union(optional, alternates, kept)},
+		{Features{NoOptionalLigatures: true}, union(alternates, kept)},
+		{Features{NoContextualAlternates: true}, union(optional, kept)},
+		{Features{NoOptionalLigatures: true, NoContextualAlternates: true}, kept},
+		// And the plain plan once more, after all of that.
+		{Features{}, union(optional, alternates, kept)},
 	} {
-		if got := c.off.keeps(afterJoiningFeatures); !slices.Equal(got, c.want) {
-			t.Errorf("with %+v the list is %v, want %v", c.off, got, c.want)
+		got := inPlan(c.off)
+		for idx := range union(got, c.want) {
+			if got[idx] != c.want[idx] {
+				t.Errorf("with %+v lookup %d in the plan is %v, want %v", c.off, idx, got[idx], c.want[idx])
+			}
 		}
 	}
-	// And none of that wrote back into the list, which is a package-level
-	// variable every run of every document reads.
-	if want := []string{"rlig", "rclt", "calt", "liga", "clig"}; !slices.Equal(afterJoiningFeatures, want) {
-		t.Errorf("filtering changed the default list to %v, want %v",
-			afterJoiningFeatures, want)
+}
+
+func union(sets ...map[int]bool) map[int]bool {
+	out := map[int]bool{}
+	for _, s := range sets {
+		for k := range s {
+			out[k] = true
+		}
 	}
+	return out
 }

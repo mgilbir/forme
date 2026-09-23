@@ -37,38 +37,6 @@ type rawLookup struct {
 	subs    [][]byte
 }
 
-// applyContextual runs the substitution lookups of a feature over a buffer,
-// left to right, applying each where it matches.
-//
-// A lookup may replace a run with fewer glyphs, so the position advances by
-// what the lookup consumed rather than by one.
-func (sh shaper) applyContextual(buf []Glyph, lookups []int) []Glyph {
-	for _, idx := range lookups {
-		// The walk is always at the front of what is left: what it has passed
-		// is settled, and a lookup that changes the run's length gives its room
-		// back to the gap between the two rather than closing it. See runBuf.
-		rb := newRunBuf(buf, 0)
-		sh.run = rb
-		for len(rb.pending()) > 0 {
-			was := len(rb.pending())
-			consumed, _ := sh.applyGSUBAt(idx, rb.pending(), 0, 0)
-			if consumed > 0 {
-				rb.settle(consumed)
-				continue
-			}
-			// A lookup that consumed nothing and yet shortened the buffer took
-			// a glyph out. The position is not advanced past what followed it,
-			// because what followed it is now here and has not been looked at.
-			if len(rb.pending()) < was {
-				continue
-			}
-			rb.settle(1)
-		}
-		buf = rb.flatten()
-	}
-	return buf
-}
-
 // maxLookupRecursion bounds how deeply a contextual rule may call into another.
 // A font can describe a cycle — rule A applying lookup B which applies A — and
 // nothing in the format forbids it, so the depth is what stops it.
@@ -186,15 +154,15 @@ func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph)
 				product := sh.product(len(reps))
 				for _, gid := range reps {
 					// Each part still stands for the character the whole stood
-					// for, so it is classified as that character was and takes
-					// the same positional form. The second is what makes a
-					// cursive script work at all: 'ccmp' splitting a letter into
-					// a skeleton and its dots must leave the skeleton still
+					// for, so it is classified as that character was and is for
+					// the same features. The second is what makes a cursive
+					// script work at all: 'ccmp' splitting a letter into a
+					// skeleton and its dots must leave the skeleton still
 					// knowing it is the first letter of a word, because that is
 					// the glyph the font states the form over.
 					product = append(product, Glyph{
 						GID: gid, Cluster: buf[at].Cluster, XAdvance: sh.f.advanceGID(gid),
-						class: buf[at].class, join: buf[at].join,
+						class: buf[at].class, mask: buf[at].mask,
 					})
 				}
 				out := sh.replace(buf, at, 1, product)
@@ -219,6 +187,10 @@ func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph)
 			if n, out, ok := sh.chainedContext(sub, buf, at, lk.flags, depth); ok {
 				return n, out
 			}
+			// Type 8, reverse chaining, is not here and is not missing: it is
+			// applied from the end of the run backwards, which no position-by-
+			// position walk can do, and never from inside another lookup —
+			// HarfBuzz refuses it there too. See applyReverse.
 		}
 	}
 	return 0, buf
@@ -358,7 +330,7 @@ func (sh shaper) ligatureAt(sub []byte, buf []Glyph, at, flags int) ([]int, int,
 			}
 			want := font.Be16(lig, 4+2*k)
 			pos = sh.nextNotIgnored(buf, pos+1, flags, want)
-			if pos >= sh.end(buf) || buf[pos].GID != want {
+			if pos >= sh.end(buf) || buf[pos].GID != want || !sh.maskAllows(buf[pos]) {
 				matched = false
 				break
 			}
@@ -440,7 +412,7 @@ func (sh shaper) formLigature(buf []Glyph, at, gid int, comps []int) (int, []Gly
 	}
 	product = append(product, Glyph{
 		GID: gid, Cluster: cluster, XAdvance: sh.f.advanceGID(gid),
-		lig: ligatureRef{id: id, comps: comps0}, class: class,
+		lig: ligatureRef{id: id, comps: comps0}, class: class, mask: buf[at].mask,
 	})
 
 	// Walking the components in order, so that each kept glyph is given the
@@ -540,7 +512,9 @@ func (sh shaper) matchInput(buf []Glyph, at, count, flags int, out *ruleInput,
 			}
 			pos++
 		}
-		if !match(k, pos) {
+		// A glyph the lookup is not for ends the match, as a glyph that differs
+		// does: it is part of the input, and the input is what the mask is about.
+		if !sh.maskAllows(buf[pos]) || !match(k, pos) {
 			return false
 		}
 		out[k] = pos

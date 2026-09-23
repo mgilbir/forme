@@ -414,3 +414,50 @@ func GPOSExtensionLookups(subs [][]byte, feature string) []byte {
 	}
 	return out
 }
+
+// ReverseChainSubst is a lookup type 8 subtable, reverse chaining single
+// substitution: each glyph in from becomes the one at the same position in to,
+// where the glyphs before it are covered by back — nearest first, as the format
+// stores a backtrack — and the glyphs after it by ahead. A shaper applies it from
+// the end of a run back to its start, so the context after a glyph is read as
+// already substituted.
+func ReverseChainSubst(from, to []int, back, ahead [][]int) []byte {
+	order := append([]int(nil), from...)
+	sortInts(order)
+	subst := map[int]int{}
+	for i, g := range from {
+		subst[g] = to[i]
+	}
+	body := make([]byte, 4)
+	binary.BigEndian.PutUint16(body[0:], 1)
+	type slot struct{ at, index int }
+	var slots []slot
+	all := [][]int{order}
+	slots = append(slots, slot{at: 2, index: 0})
+	for _, list := range [][][]int{back, ahead} {
+		count := make([]byte, 2)
+		binary.BigEndian.PutUint16(count, uint16(len(list)))
+		body = append(body, count...)
+		for _, cov := range list {
+			slots = append(slots, slot{at: len(body), index: len(all)})
+			all = append(all, cov)
+			body = append(body, 0, 0)
+		}
+	}
+	glyphs := make([]byte, 2+2*len(order))
+	binary.BigEndian.PutUint16(glyphs[0:], uint16(len(order)))
+	for i, g := range order {
+		binary.BigEndian.PutUint16(glyphs[2+2*i:], uint16(subst[g]))
+	}
+	body = append(body, glyphs...)
+
+	offsets := make([]int, len(all))
+	for i, cov := range all {
+		offsets[i] = len(body)
+		body = append(body, sortedCoverage(cov)...)
+	}
+	for _, s := range slots {
+		binary.BigEndian.PutUint16(body[s.at:], uint16(offsets[s.index]))
+	}
+	return body
+}

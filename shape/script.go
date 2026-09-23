@@ -178,12 +178,28 @@ func scriptTags(script uint16) []string {
 // matched even the default — so there is nothing to select by and the caller
 // should take every feature.
 func scriptFeatures(t []byte, tags []string, lang string) (featureSet, bool) {
+	sel, ok := scriptSelection(t, tags, lang)
+	return sel.features, ok
+}
+
+// selection is what one language system of a script selects: its features,
+// and which of them is the required one.
+type selection struct {
+	features featureSet
+	// required is the FeatureList index of the language system's required
+	// feature, or noRequiredFeature. It is among features as well; it is named
+	// apart because it applies whether or not a shaper asks for its tag.
+	required int
+}
+
+// scriptSelection is scriptFeatures, also reporting the required feature.
+func scriptSelection(t []byte, tags []string, lang string) (selection, bool) {
 	if len(t) < 10 {
-		return nil, false
+		return selection{required: noRequiredFeature}, false
 	}
 	off := font.Be16(t, 4)
 	if off <= 0 || off+2 > len(t) {
-		return nil, false
+		return selection{required: noRequiredFeature}, false
 	}
 	list := t[off:]
 	byTag := scriptOffsets(list)
@@ -205,9 +221,28 @@ func scriptFeatures(t []byte, tags []string, lang string) (featureSet, bool) {
 		for _, i := range ls.features {
 			sel[i] = true
 		}
-		return sel, true
+		return selection{features: sel, required: ls.required}, true
 	}
-	return nil, false
+	return selection{required: noRequiredFeature}, false
+}
+
+// layoutTags is the script tags a run's script is looked up under, most
+// specific first: the generated table's, with the third-generation tag of each
+// Indic script ahead of its second-generation one.
+//
+// The third-generation tags are what a font says when its Indic script is
+// written for the universal engine rather than the Indic model, and HarfBuzz
+// tries them first — so a font declaring 'dev3' beside 'dev2' is read under
+// 'dev3' and set by the universal engine. Myanmar's 'mym2' has no third
+// generation.
+func layoutTags(script uint16) []string {
+	tags := scriptTags(script)
+	if len(tags) == 0 || len(tags[0]) != 4 || tags[0][3] != '2' || tags[0] == "mym2" {
+		return tags
+	}
+	out := make([]string, 0, len(tags)+1)
+	out = append(out, tags[0][:3]+"3")
+	return append(out, tags...)
 }
 
 // chosenScriptTag reports which of a script's tags the font's substitutions were
@@ -216,16 +251,33 @@ func scriptFeatures(t []byte, tags []string, lang string) (featureSet, bool) {
 // A caller needs it when the tag itself carries meaning beyond selection. The
 // Indic scripts are the case: a font declaring 'deva' rather than 'dev2' was
 // written against the first-generation specification and means its rules, and
-// nothing but the tag says so.
+// nothing but the tag says so. And which model sets a run at all turns on it —
+// see categorize.
 //
-// A font that declares nothing this run can use gets "DFLT", the conventional
-// tag for "any script", which is what the selection fell back to.
+// A font whose GSUB declares nothing this run can use, or that has no GSUB,
+// gets "": it chose no tag, which is not the same as choosing 'DFLT'.
+//
+// Every run asks, since the answer decides the run's model, so it is kept
+// beside the layout the same question selects: walking the ScriptList again
+// per run is what the layout cache was made to stop.
 func (f *Face) chosenScriptTag(script uint16) string {
-	tags := scriptTags(script)
+	if f.cache == nil {
+		return f.readChosenScriptTag(script)
+	}
+	if tag, ok := f.cache.chosenFor(script, f.language); ok {
+		return tag
+	}
+	tag := f.readChosenScriptTag(script)
+	f.cache.rememberChosen(script, f.language, tag)
+	return tag
+}
+
+func (f *Face) readChosenScriptTag(script uint16) string {
 	list := scriptList(f.layoutTables["GSUB"])
 	if len(list) == 0 {
-		return defaultScriptTags[0]
+		return ""
 	}
+	tags := layoutTags(script)
 	byTag := scriptOffsets(list)
 	for _, tag := range append(append(make([]string, 0, len(tags)+len(defaultScriptTags)), tags...), defaultScriptTags...) {
 		so, ok := byTag[tag]
@@ -236,7 +288,7 @@ func (f *Face) chosenScriptTag(script uint16) string {
 			return tag
 		}
 	}
-	return defaultScriptTags[0]
+	return ""
 }
 
 // scriptOffsets maps each script tag a ScriptList names to its Script table's
@@ -459,11 +511,18 @@ type shaper struct {
 	// out before any lookup runs.
 	joinerAt func(at int) joinerKind
 
-	// manualJoiners says the feature being applied asked to see the join
-	// controls in its input rather than have them stepped over. The Indic
-	// features do, because a joiner is written precisely to force or forbid the
-	// forms they make.
-	manualJoiners bool
+	// manualZWJ says the lookup being applied asked to see a zero width joiner
+	// in its input rather than have it stepped over, and manualZWNJ says it
+	// asked to see a non-joiner in its context. The Indic features ask for both,
+	// because a joiner is written precisely to force or forbid the forms they
+	// make; the Myanmar, universal and Arabic features ask for the first alone.
+	// See stepsOverJoiner, and plan.go for where each lookup's come from.
+	manualZWJ, manualZWNJ bool
+
+	// lookupMask is the glyphs the lookup being applied is for, or zero for
+	// every glyph: a lookup of a masked feature starts only at a glyph carrying
+	// its bit and matches its input only over such glyphs. See glyphMask.
+	lookupMask glyphMask
 
 	// ops is what is left of the run's allowance for applying one lookup from
 	// inside another. It is a pointer because a shaper is copied per lookup and
@@ -632,20 +691,27 @@ func (f *Face) layoutFor(script uint16) *layout {
 }
 
 func (f *Face) readLayoutFor(script uint16) *layout {
-	tags := scriptTags(script)
-	gsubSel, gsubOK := scriptFeatures(f.layoutTables["GSUB"], tags, f.language)
+	tags := layoutTags(script)
+	gsub, gsubOK := scriptSelection(f.layoutTables["GSUB"], tags, f.language)
 	gposSel, gposOK := scriptFeatures(f.layoutTables["GPOS"], tags, f.language)
 	if !gsubOK && !gposOK {
 		// Neither table says anything about scripts, so there is nothing to
 		// select by: every feature applies, which is what f.layout already is.
 		return f.layout
 	}
-	gsubKey, gposKey := selectionKey(gsubSel), selectionKey(gposSel)
+	gsubKey, gposKey := selectionKey(gsub.features), selectionKey(gposSel)
+	if gsub.required != noRequiredFeature {
+		// The same features with a different one required are a different
+		// selection: the required one applies whether or not it is asked for.
+		gsubKey += "r" + strconv.Itoa(gsub.required)
+	}
 	return f.cache.layoutFor(gsubKey, gposKey, func() *layout {
 		pos := f.cache.positioningFor(gposKey, func() *layout {
 			return readPositioning(f.layoutTables, gposSel, f.varCoords)
 		})
-		return readLayout(f.layoutTables, gsubSel, pos, f.varCoords)
+		l := readLayout(f.layoutTables, gsub.features, pos, f.varCoords)
+		l.readRequired(f.layoutTables["GSUB"], gsub.required, f.varCoords)
+		return l
 	})
 }
 
@@ -687,6 +753,10 @@ type layoutCache struct {
 	byScript      map[scriptKey]*layout
 	positionings  map[string]*layout
 	scriptLayouts map[string]*layout
+	// chosen is the script tag each run's question chose — see
+	// chosenScriptTag — which a layout cannot say, since two scripts a font
+	// treats alike share one.
+	chosen map[scriptKey]string
 }
 
 // scriptKey is a run's script and the language the face was told to set it in,
@@ -710,6 +780,22 @@ func (c *layoutCache) rememberScript(script uint16, lang string, l *layout) {
 		c.byScript = map[scriptKey]*layout{}
 	}
 	c.byScript[scriptKey{script, lang}] = l
+}
+
+func (c *layoutCache) chosenFor(script uint16, lang string) (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	tag, ok := c.chosen[scriptKey{script, lang}]
+	return tag, ok
+}
+
+func (c *layoutCache) rememberChosen(script uint16, lang, tag string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.chosen == nil {
+		c.chosen = map[scriptKey]string{}
+	}
+	c.chosen[scriptKey{script, lang}] = tag
 }
 
 func (c *layoutCache) layoutFor(gsubKey, gposKey string, build func() *layout) *layout {

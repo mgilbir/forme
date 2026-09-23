@@ -29,35 +29,24 @@ import (
 // classified as a mark, so that contextual rules can skip it, has its width put
 // back with 'dist' — "necessary because OpenType processing cancels the width
 // associated with a mark". Cancelling afterwards would take it away again.
+//
+// Which a run gets is its model's choice (shaperModel.zeroMarks), not its
+// script's: a Devanagari run set by the default model, because its font states
+// its rules under 'DFLT', cancels late as the default model does.
 type zeroMarkWidths uint8
 
 const (
 	// Never: the font is trusted to have given its marks no width, and anything
-	// a rule states about one stands. Indic and Khmer.
+	// a rule states about one stands. Indic, Khmer and Hangul.
 	zeroMarksNone zeroMarkWidths = iota
 	// Before the rules run, so that what they state about a mark survives, and
 	// the offset moves with the advance so the mark does not shift. The
 	// universal engine and Myanmar.
 	zeroMarksEarly
 	// After the rules run, discarding whatever they said about a mark's advance.
-	// Arabic, Hebrew, Thai and every script with no shaper of its own.
+	// Arabic, Hebrew, Thai and every script with no model of its own.
 	zeroMarksLate
 )
-
-// zeroMarkWidthsFor is the choice each script's model makes.
-//
-// It is per-shaper rather than universal because the shapers disagree, and the
-// disagreement is the point: a Khmer font states mark widths this must not
-// touch, and a font for the universal engine states one this must not undo.
-func zeroMarkWidthsFor(script uint16) zeroMarkWidths {
-	switch {
-	case indicConfigFor(script) != nil, isKhmerScript(script):
-		return zeroMarksNone
-	case isMyanmarScript(script), usesUniversalShaper(script):
-		return zeroMarksEarly
-	}
-	return zeroMarksLate
-}
 
 // cancelMarkWidths takes the advance off every mark.
 //

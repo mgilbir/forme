@@ -24,7 +24,14 @@ import (
 //     caller asked for.
 //   - Contextual and chained-contextual substitution (GSUB 5 and 6), all six
 //     formats, which is what makes 'calt' — and any rule that depends on
-//     surroundings — do anything at all. See context.go.
+//     surroundings — do anything at all. See context.go. And reverse chaining
+//     single substitution (GSUB 8), applied from the end of a run back to its
+//     start, as the format requires. See stage.go.
+//   - The plan: which model sets a run — chosen from its script and from the tag
+//     the font's rules were read under — and the stages its features are applied
+//     in, each stage's lookups in the font's lookup order and each once, with
+//     'rvrn' first and the language system's required feature applied whatever
+//     its tag. See plan.go.
 //   - Cursive joining: the positional forms Arabic and its neighbours are
 //     written in, chosen from Unicode joining types. See arabic.go.
 //   - Cursive attachment (GPOS 3), which makes those forms' connecting strokes
@@ -56,9 +63,9 @@ import (
 //   - Reordering for every syllabic model this engine sets: Devanagari and its
 //     eight relatives (indic.go), Khmer (khmer.go), Myanmar (myanmar.go) and
 //     the Universal Shaping Engine (use.go), which covers Tibetan, Javanese,
-//     Balinese, Buginese, Tai Tham, Cham, Sinhala and a long tail. syllabic.go
-//     chooses between the four models, and each file says what within its own
-//     is left out.
+//     Balinese, Buginese, Tai Tham, Cham, Sinhala and a long tail. plan.go
+//     chooses between them, and each file says what within its own is left
+//     out. And Thai and Lao's decomposition of SARA AM (thai.go).
 //   - A variable font at any point in its design space. LoadInstance rewrites
 //     the outlines for the coordinates asked for, and FeatureVariations is read
 //     at those coordinates rather than at the default's — so a record whose
@@ -67,14 +74,19 @@ import (
 //
 // # What is not, and what each absence costs
 //
-//   - 'rclt' anywhere but an Indic run. It is a required feature and every other
-//     shaper applies it generally; here only the Indic pass does, because that
-//     is where its absence was measured.
 //   - The mark reordering Arabic wants on top of canonical order. Normalisation
 //     is done — a run is composed or decomposed to whatever this face draws
 //     best, and each cluster's marks are put in canonical order, see
 //     normalize.go — but a hamza written after a vowel is drawn before it by a
 //     rule that is Arabic's rather than Unicode's, and that rule is not applied.
+//   - What HarfBuzz does for a font whose tables do not cover what a model
+//     needs: placing marks by their combining class in a font with no GPOS mark
+//     attachment, composing Hebrew into its presentation forms for such a font,
+//     composing old Hangul jamo sequences, and the Arabic fallback shaping and
+//     'stch' stretching arabic.go names. Measured over the Google Fonts tree,
+//     the first is most of what still differs from HarfBuzz in Hebrew — the
+//     M+ families, Cardo, Lunasima and Libertinus Sans, which state no mark
+//     attachment for it. See plan.go.
 //   - Choosing a language from the text. Which script a run is in is decidable
 //     from its characters; which language it is in is not — "colour" and "color"
 //     are the same letters — so the default language system is used unless a
@@ -475,6 +487,14 @@ type layout struct {
 	// featureLookups maps a feature tag to the lookup indices it names, which is
 	// how a feature is turned into work to do.
 	featureLookups map[string][]int
+	// requiredTag and requiredLookups are the language system's required
+	// feature, which a plan applies whether or not its model asks for the tag.
+	// Empty for a selection with none. See plan.compile.
+	requiredTag     string
+	requiredLookups []int
+	// plans are the shaping plans built from this layout, so that a run does not
+	// collect and sort its stages again. See planFor.
+	plans *planCache
 }
 
 // Lookup flags (ISO/IEC 14496-22, LookupFlag). The high byte is a mark
@@ -670,6 +690,8 @@ func readLayout(tables map[string][]byte, gsubSel featureSet, pos *layout, coord
 	l.single = map[string]map[int]int{}
 	l.gsub = nil
 	l.featureLookups = nil
+	l.requiredTag, l.requiredLookups = "", nil
+	l.plans = &planCache{}
 	if gsub := tables["GSUB"]; len(gsub) >= 10 {
 		feats := tableFeatures{sel: gsubSel, varied: readFeatureVariations(gsub, coords)}
 		idx := indexFeatures(gsub, feats)
@@ -680,6 +702,25 @@ func readLayout(tables map[string][]byte, gsubSel featureSet, pos *layout, coord
 	}
 	l.noteLimits("GSUB", allowance)
 	return l
+}
+
+// readRequired records a language system's required feature: its tag, and the
+// lookups it names at the coordinates in force.
+func (l *layout) readRequired(gsub []byte, index int, coords []float64) {
+	if index == noRequiredFeature || len(gsub) < 10 {
+		return
+	}
+	off := font.Be16(gsub, 6)
+	if off <= 0 || off+2 > len(gsub) {
+		return
+	}
+	list := gsub[off:]
+	rec := 2 + 6*index
+	if index < 0 || index >= font.Be16(list, 0) || rec+6 > len(list) {
+		return
+	}
+	l.requiredTag = string(list[rec : rec+4])
+	l.requiredLookups = featureLookupList(list, index, readFeatureVariations(gsub, coords))
 }
 
 // gsubLookups reads the substitution lookup list whole: each lookup's type, its

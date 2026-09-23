@@ -149,8 +149,9 @@ func useClustersOf(s string) []useCluster {
 	info := make([]useInfo, len(runes))
 	for i, r := range runes {
 		info[i].cat, info[i].pos = useCategoryOf(r)
+		info[i].mark = isCombiningMark(r)
 	}
-	return useClusters(info, runes)
+	return useClusters(info)
 }
 
 func (k useClusterKind) String() string {

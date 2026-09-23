@@ -2,63 +2,57 @@ package shape
 
 // What the syllabic shapers share.
 //
-// Three scripts in this package are not set in the order their characters are
-// stored: Devanagari and its relatives (indic.go), Khmer (khmer.go) and Myanmar
-// (myanmar.go). They are three models, not one — each has its own categories,
-// its own syllable grammar and its own reordering, and the OpenType script
-// development specifications state them separately because they *are* separate.
+// Four models in this package set text that is not drawn in the order its
+// characters are stored: Devanagari and its relatives (indic.go), Khmer
+// (khmer.go), Myanmar (myanmar.go) and the Universal Shaping Engine (use.go).
+// They are four models, not one — each has its own categories, its own
+// syllable grammar and its own reordering, and the OpenType script development
+// specifications state them separately because they *are* separate.
 //
 // What they do share is the machinery underneath: a per-glyph record kept in
 // step with a buffer that substitutions are reshaping, features applied to one
 // syllable at a time so that a ligature cannot join two of them, and the
 // placeholder shown for a syllable with nothing to hang off. That is what is
-// here, together with the one decision that has to be taken before any of them
-// runs: which of the three, if any, a run belongs to.
+// here. Which of them, if any, a run belongs to is decided before any of them
+// runs, from the script and the font together — see categorize in plan.go.
 
-// usesSyllabicShaper reports whether a script is set by one of the shapers that
-// segments text into syllables and reorders them.
+// usesSyllabicShaper reports whether a script has one of the models that
+// segment text into syllables and reorder them — the model a run of it gets from
+// a font that states its rules for the script.
 //
-// It exists so that the question is asked in one place and answered the same
-// way everywhere. Normalisation needs it as much as shaping does: a syllabic
-// shaper's rules are written against fully decomposed text — a base, then its
-// marks in canonical order — so a run bound for one must not be left composed,
-// and the short-circuit that is right for Latin is wrong here.
-//
-// Asking "is this Indic" instead was correct while Indic was the only such
-// shaper, and became silently wrong the moment Khmer and Myanmar joined it.
-// That is the drift a predicate with one home prevents, and it is why both the
-// dispatch below and the normalisation pass ask this rather than each deciding
-// for itself.
+// Whether a particular run *is* set by one is a question about the font as
+// well, and categorize answers it: a font that states its rules only under
+// 'DFLT' or 'latn' was written for text in stored order, and its runs are set
+// by the default model whatever their script. Everything that has to agree
+// about one run — normalisation, the characters nothing is drawn for, the
+// shaper — asks the run's model (shaperModel.syllabic), so that the answer is
+// taken once and not three times. This is the script-level half of it, which
+// categorize is built on.
 func usesSyllabicShaper(script uint16) bool {
 	return indicConfigFor(script) != nil || isKhmerScript(script) ||
 		isMyanmarScript(script) || usesUniversalShaper(script)
 }
 
-// shapeSyllabic shapes a run by whichever syllabic model its script belongs to,
-// reporting false for a script that belongs to none.
+// shapeSyllabic shapes a run by the syllabic model its plan names.
 //
 // It is the whole of the substitution pass for a run it handles: the reordering
 // decides which of the font's rules apply where, so it cannot be a step before
 // the general substitutions and has to be them.
-func (sh shaper) shapeSyllabic(buf []Glyph, runes []rune, script uint16,
-	before, after []rune) ([]Glyph, bool) {
-	if !usesSyllabicShaper(script) {
-		return buf, false
+func (sh shaper) shapeSyllabic(buf []Glyph, runes []rune, script uint16, p *plan,
+	before, after []rune) []Glyph {
+
+	switch p.model {
+	case modelIndic:
+		cfg := indicConfigFor(script)
+		return sh.shapeIndic(buf, runes, before, sh.indicPlan(cfg, sh.f.indicOldSpec(cfg, script)), p)
+	case modelKhmer:
+		return sh.shapeKhmer(buf, runes, p)
+	case modelMyanmar:
+		return sh.shapeMyanmar(buf, runes, p)
+	case modelUniversal:
+		return sh.shapeUniversal(buf, runes, before, after, p)
 	}
-	if cfg := indicConfigFor(script); cfg != nil {
-		return sh.shapeIndic(buf, runes, before,
-			sh.indicPlan(cfg, sh.f.indicOldSpec(cfg, script))), true
-	}
-	if isKhmerScript(script) {
-		return sh.shapeKhmer(buf, runes), true
-	}
-	if isMyanmarScript(script) {
-		return sh.shapeMyanmar(buf, runes), true
-	}
-	if usesUniversalShaper(script) {
-		return sh.shapeUniversal(buf, runes, before, after), true
-	}
-	return buf, false
+	return buf
 }
 
 // scriptSelects reports whether a script's OpenType tags include the given one.

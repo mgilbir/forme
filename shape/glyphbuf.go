@@ -1,6 +1,11 @@
 package shape
 
-import "unicode/utf8"
+import (
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/mgilbir/forme/bidi"
+)
 
 // The shaped-glyph model.
 //
@@ -48,40 +53,17 @@ type Glyph struct {
 	// against when the font classifies nothing itself; see layout.classOf.
 	class int
 
-	// join is the positional form this glyph takes in a cursive script, decided
-	// from the characters either side of it before anything was substituted.
+	// mask is which of the masked features this glyph is for: the positional
+	// form its letter takes in a cursive script, the part of an Indic syllable
+	// it is, the fraction it stands in. See glyphMask, and plan.go for how a
+	// lookup reads it.
 	//
 	// It is carried on the glyph rather than worked out when it is needed
 	// because by then it cannot be: the substitutions that come first change how
-	// many glyphs there are, so nothing maps back to the characters the form was
-	// decided from. See arabic.go.
-	join joinForm
-}
-
-// joinForm is the shape a letter takes from its neighbours.
-type joinForm uint8
-
-const (
-	joinNone joinForm = iota // not a letter of a cursive script
-	joinIsolated
-	joinFinal
-	joinMedial
-	joinInitial
-)
-
-// tag is the feature a font states this form under.
-func (j joinForm) tag() string {
-	switch j {
-	case joinIsolated:
-		return featIsolated
-	case joinFinal:
-		return featFinal
-	case joinMedial:
-		return featMedial
-	case joinInitial:
-		return featInitial
-	}
-	return ""
+	// many glyphs there are, so nothing maps back to the characters a form was
+	// decided from. A glyph a substitution makes takes the mask of the glyph it
+	// was made from. See arabic.go.
+	mask glyphMask
 }
 
 // ligatureRef says what a glyph has to do with a ligature.
@@ -370,16 +352,36 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	if out, missing, ok := f.shapeMerged(s, script, rtl, extra, ctx); ok {
 		return out, missing
 	}
+	// Which model sets the run is decided by the script and by the tag the
+	// font's rules for it were read under — see categorize — and it decides
+	// everything below: how the characters are normalised, whether the ones
+	// nothing is drawn for are taken out now, and what is done with the glyphs.
+	l := f.layoutFor(script)
+	chosen := f.chosenScriptTag(script)
+	model := categorize(script, chosen)
 	// Rule L4: a bracket in a right-to-left run is drawn as the bracket that
 	// mirrors it, and the substitution is on the character, before the font is
-	// asked for a glyph at all.
+	// asked for a glyph at all. Where the font has no glyph for the mirror the
+	// character is kept, and its own glyph is what 'rtlm' is asked about.
 	runes, offsets := bidiRunCharacters(s, rtl)
+	if rtl {
+		f.keepUnmirrorable(s, runes, offsets)
+	}
+	// Thai and Lao's one rearrangement of the text, which every shaper makes
+	// whatever the font says, and for a Thai font with no Thai rules of its own
+	// the older fonts' way of stacking marks. See thai.go.
+	if model == modelThai {
+		runes, offsets = thaiPreprocess(runes, offsets)
+		if scriptSelects(script, "thai") && chosen != "thai" {
+			runes = f.thaiPUAShape(runes)
+		}
+	}
 	// Then normalisation, which is about the characters too and has to see the
 	// mirrored ones: it puts the run into the spelling this face draws best and
 	// each cluster's marks into canonical order. It runs before any glyph is
 	// chosen because it decides which characters the font is asked about at all.
 	// See normalize.go.
-	runes, offsets = f.normalize(runes, offsets, usesSyllabicShaper(script), indicConfigFor(script) != nil,
+	runes, offsets = f.normalize(runes, offsets, model.syllabic(), model == modelIndic,
 		scriptSelects(script, "arab"))
 	// The characters nothing is drawn for, for every run but a syllabic one.
 	//
@@ -394,7 +396,7 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	// allowed to answer, and it can only answer it if it is given the character
 	// — so a syllabic run keeps them, and the shaper that gets them drops them
 	// once they have said which cluster they broke. See ignorable.go.
-	if !usesSyllabicShaper(script) {
+	if !model.syllabic() {
 		runes, offsets = dropHiddenCharacters(runes, offsets)
 	}
 	if len(runes) == 0 {
@@ -442,32 +444,45 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	}
 	// The run's script decides which of the font's rules apply, and everything
 	// below reads the tables through it.
-	sh := shaper{f: f, l: f.layoutFor(script), rtl: rtl, ligIDs: new(int),
-		zeroMarks: zeroMarkWidthsFor(script), features: ctx.features,
+	sh := shaper{f: f, l: l, rtl: rtl, ligIDs: new(int),
+		zeroMarks: model.zeroMarks(), features: ctx.features,
 		ops: lookupBudget(len(buf))}
+	// What the run applies, and in which stages: see plan.go. It covers every
+	// entry point — the features a document turned off or asked for, and the
+	// ones a caller named by tag, are requests to the same plan and not passes
+	// of their own.
+	p := sh.planFor(model, scriptSelects(script, "arab"), extra)
+	// The glyphs particular features are for, where the plan has any: the
+	// numerator and denominator around a fraction slash, and the glyphs whose
+	// mirrored form is the font's to give.
+	if p.fractions {
+		maskFractions(buf, runes, rtl)
+	}
+	if p.rtlm {
+		maskUnmirrored(buf, runes, s)
+	}
 	// A script whose characters are not in the order they are drawn is shaped
 	// whole by its own pass: the reordering decides which of the font's rules
 	// apply where, so it cannot be a step before the general substitutions and
 	// has to be the substitutions. No script both joins cursively and reorders,
 	// which is why these are alternatives rather than stages.
 	before, after := ctx.runes()
-	if out, ok := sh.shapeSyllabic(buf, runes, script, before, after); ok {
-		buf = out
+	if model.syllabic() {
+		buf = sh.shapeSyllabic(buf, runes, script, p, before, after)
 	} else {
 		// Which form each letter takes is decided now, while the glyphs still
 		// correspond to the characters it is decided from, and recorded on the
 		// glyphs so that it survives what follows. The join controls have said
 		// all they have to say once that is done, and are taken out before any
 		// substitution can see them — see ignorable.go.
-		markJoiningForms(buf, runes, before, after)
+		if model == modelArabic {
+			markJoiningForms(buf, runes, before, after)
+		}
 		buf = hideJoiners(buf, runes)
-		buf = sh.substitute(buf)
+		for _, stage := range p.stages {
+			buf = sh.applyStage(buf, stage)
+		}
 	}
-	// Features the caller asked for, after the ones every run gets. They are
-	// applied through the lookup list like any others rather than as a table of
-	// single substitutions, so a face whose small capitals are a contextual rule
-	// or a ligature gets them right.
-	buf = sh.applyNamedFeatures(buf, extra)
 	sh.position(buf)
 	// The pair that spans the boundary to the next run, which the pass above
 	// cannot see because the glyph on the far side of it is not in this buffer.
@@ -488,6 +503,85 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	}
 	return buf, missing
 }
+
+// keepUnmirrorable undoes rule L4 for a character whose mirror this face has no
+// glyph for, so that the character is drawn as itself rather than as .notdef.
+// It is what HarfBuzz does, and the character's own glyph is then what the
+// font's 'rtlm' is asked about — see maskUnmirrored.
+//
+// runes is one to one with the characters of s at offsets, which is what
+// bidiRunCharacters hands back, and is changed in place.
+func (f *Face) keepUnmirrorable(s string, runes []rune, offsets []int) {
+	for i, r := range runes {
+		orig, _ := utf8.DecodeRuneInString(s[offsets[i]:])
+		if r != orig && !f.hasGlyph(r) {
+			runes[i] = orig
+		}
+	}
+}
+
+// maskUnmirrored marks, in a right-to-left run, every glyph Unicode's mirroring
+// did not replace, as one 'rtlm' is for. That is every glyph but the mirrored
+// ones: a character with no mirror, and one whose mirror the face could not
+// draw, both leave the choice of a mirrored form to the font.
+//
+// buf is one to one with runes, and each glyph's cluster is the offset in s of
+// the character it came from.
+func maskUnmirrored(buf []Glyph, runes []rune, s string) {
+	for i := range buf {
+		if i >= len(runes) || buf[i].Cluster < 0 || buf[i].Cluster >= len(s) {
+			continue
+		}
+		orig, _ := utf8.DecodeRuneInString(s[buf[i].Cluster:])
+		if m, ok := bidi.MirrorOf(orig); ok && m == runes[i] && m != orig {
+			continue
+		}
+		buf[i].mask |= maskRtlm
+	}
+}
+
+// maskFractions marks the glyphs of each fraction written with U+2044 FRACTION
+// SLASH between runs of decimal digits: the digits before it for the
+// numerator, the ones after for the denominator, and all of it for 'frac'. It
+// is HarfBuzz's automatic fractions, which it applies by default, so that
+// "1\u20442" is set as a fraction by any font that has the forms.
+//
+// buf is one to one with runes. In a right-to-left run the two sides swap, as
+// HarfBuzz swaps them: the run is in logical order and the numerator is still
+// what was written first.
+func maskFractions(buf []Glyph, runes []rune, rtl bool) {
+	pre, post := maskNumr|maskFrac, maskFrac|maskDnom
+	if rtl {
+		pre, post = maskFrac|maskDnom, maskNumr|maskFrac
+	}
+	for i := 0; i < len(runes) && i < len(buf); i++ {
+		if runes[i] != fractionSlash {
+			continue
+		}
+		start, end := i, i+1
+		for start > 0 && unicode.Is(unicode.Nd, runes[start-1]) {
+			start--
+		}
+		for end < len(runes) && end < len(buf) && unicode.Is(unicode.Nd, runes[end]) {
+			end++
+		}
+		if start == i || end == i+1 {
+			continue
+		}
+		for j := start; j < i; j++ {
+			buf[j].mask |= pre
+		}
+		buf[i].mask |= maskFrac
+		for j := i + 1; j < end; j++ {
+			buf[j].mask |= post
+		}
+		i = end - 1
+	}
+}
+
+// fractionSlash is U+2044, the character that makes a fraction of the digits
+// either side of it.
+const fractionSlash = 0x2044
 
 // shapeByCode is the shaping path for a face whose codes are characters rather
 // than glyph indices: the fourteen standard faces, and any face embedded as a
@@ -558,160 +652,6 @@ func MeasureGlyphs(glyphs []Glyph, size float64) float64 {
 		total += g.XAdvance
 	}
 	return total * size / 1000
-}
-
-// The substitution features applied to every run, in the order a shaper applies
-// them, split by where the positional forms of a cursive script go between them.
-//
-// They are the ones that are not a matter of taste. 'ccmp' composes and
-// decomposes so the later rules have the glyphs they are written against;
-// 'locl' is the letterform a language expects; 'rlig' is required by the script;
-// 'liga' and 'clig' are the ligatures a reader expects to see; 'calt' and 'rclt'
-// pick the variant that fits its neighbours. A font that declares them means
-// them, which is what separates these from 'smcp' or 'onum' — those change what
-// the text says it is, and wait to be asked for, by a declaration
-// (Features.Caps) or by a caller naming the tag (ShapeGlyphsWith).
-//
-// The order matters and is not alphabetical: composition before the rules that
-// read its output, required ligatures before optional ones, contextual
-// alternates last so they see the glyphs that survived.
-//
-// Where the forms go is the part that is easy to get wrong and expensive to get
-// wrong. They come *after* 'ccmp', because a real Arabic font does not state
-// them over the letters: Noto Sans Arabic splits every letter into a skeleton
-// and its dots in 'ccmp' and states the four forms over the skeletons. Applying
-// the forms first finds nothing, and every letter is set in its isolated shape —
-// which is legible only to someone who already knows what it should say.
-var (
-	beforeJoiningFeatures = []string{"ccmp", "locl"}
-	afterJoiningFeatures  = []string{"rlig", "rclt", "calt", "liga", "clig"}
-)
-
-// The forms a run's *direction* selects, applied before everything else.
-//
-// A mirrored form is the glyph a character is drawn with when the line runs the
-// other way. Unicode mirrors a bracket by character — U+0028 in a
-// right-to-left paragraph is drawn as U+0029's shape — and a font may state the
-// same thing by glyph instead, which is what 'rtlm' is for: the pair it names is
-// the pair the designer drew, and it covers what the character property cannot,
-// such as an integral sign or an arrow that leans. 'rtla' is the same for a
-// letterform a right-to-left line wants rather than a mirror of it, and 'ltra'
-// and 'ltrm' are both of those for a left-to-right line.
-//
-// None of the four was applied. A font stating them was answered with the
-// glyphs it states for the other direction, and nothing said so — the page
-// carries a bracket pointing the wrong way and no finding, because a
-// substitution that never ran leaves no trace.
-//
-// They come first, before 'ccmp', because everything after is written against
-// the glyphs the direction chose: HarfBuzz puts them in the same place and for
-// the same reason. They are also the one part of substitution that depends on
-// which way the run is drawn — see shaper.rtl.
-var (
-	rightToLeftFeatures = []string{"rtla", "rtlm"}
-	leftToRightFeatures = []string{"ltra", "ltrm"}
-)
-
-// directionFeatures are the forms this run's direction selects.
-func (sh shaper) directionFeatures() []string {
-	if sh.rtl {
-		return rightToLeftFeatures
-	}
-	return leftToRightFeatures
-}
-
-// substitute runs the GSUB lookups over a shaped buffer, preserving the cluster
-// of the first glyph of each run it replaces so that a ligature still maps back
-// to the text it came from.
-// applyNamedFeatures runs the lookups of features a caller named, in the order
-// they were named.
-//
-// A feature the font does not declare does nothing, which is the contract
-// ShapeWith states: asking a face with no small capitals for small capitals
-// should set the text plainly rather than fail.
-func (sh shaper) applyNamedFeatures(buf []Glyph, tags []string) []Glyph {
-	for _, tag := range tags {
-		if lookups := sh.l.featureLookups[tag]; len(lookups) > 0 {
-			buf = sh.applyContextual(buf, lookups)
-		}
-	}
-	return buf
-}
-
-// applyRequestedFeatures runs the lookups of the features a *declaration* asked
-// for, in the font's own lookup order rather than in the order the tags were
-// named.
-//
-// The difference is what the order between two features actually is. A shaper
-// does not apply 'onum' and then 'zero'; it collects the lookups every enabled
-// feature names and walks them in index order, because that is the order the
-// designer wrote them in and the only one the font was tested against. Where two
-// features name lookups over the same glyphs, that decides which of them the
-// other one sees the output of — and Noto Sans has three pairs where it does:
-//
-//	onum + zero  gives the oldstyle slashed zero, a glyph neither alone reaches
-//	onum + pnum  gives the proportional oldstyle figures, likewise
-//	onum + frac  gives the fraction's numerators, because 'frac' is stated
-//	             later and covers what 'onum' produced
-//
-// Applying them tag by tag gets the first of those right and the third wrong:
-// 'onum' comes before 'frac' in §6.7's order, so the oldstyle figures win and
-// the fraction never forms. Nothing about the page says so — it is a line of
-// oldstyle digits where a fraction was asked for.
-//
-// The default lists are *not* merged this way and keep the order they are
-// written in. They are not one set: the joining forms of a cursive script go
-// between two of them, and the whole of beforeJoiningFeatures has to have run
-// before the forms are chosen. That staging is the design and is what the note
-// above those lists is about — the order there is a decision rather than an
-// accident of how a font was compiled.
-func (sh shaper) applyRequestedFeatures(buf []Glyph, tags []string) []Glyph {
-	if len(tags) == 0 {
-		return buf
-	}
-	if len(tags) == 1 {
-		// One feature has no order to get wrong, and this is nearly every run
-		// that asks for anything at all: "font-variant: small-caps" is one tag
-		// and so is every value of §6.7 written on its own.
-		return sh.applyNamedFeatures(buf, tags)
-	}
-	var merged []int
-	for _, tag := range tags {
-		merged = append(merged, sh.l.featureLookups[tag]...)
-	}
-	if len(merged) == 0 {
-		return buf
-	}
-	sortInts(merged)
-	// A lookup two of the features name is one piece of work and not two.
-	// Running it twice is not the same as running it once — a substitution
-	// applied to its own output is a second substitution — so this is
-	// correctness and not tidiness.
-	out, prev := merged[:0], -1
-	for _, at := range merged {
-		if at != prev {
-			out = append(out, at)
-			prev = at
-		}
-	}
-	return sh.applyContextual(buf, out)
-}
-
-func (sh shaper) substitute(buf []Glyph) []Glyph {
-	buf = sh.applyNamedFeatures(buf, sh.directionFeatures())
-	buf = sh.applyNamedFeatures(buf, beforeJoiningFeatures)
-	// What the document asked the face *for*: the capitals of font-variant-caps
-	// and the figures of font-variant-numeric. They go here — after composition
-	// and the localised forms, before the ligatures — because the ligatures are
-	// stated over the letters they replace. See Caps.Features and
-	// Numeric.Features, and applyRequestedFeatures for why the order among them
-	// is the font's rather than the specification's.
-	buf = sh.applyRequestedFeatures(buf, sh.features.adds())
-	buf = sh.applyJoiningForms(buf)
-	// The features a document turned off are dropped from the list rather than
-	// skipped inside the loop, so that what is left keeps the order the
-	// specification requires. See Features.keeps.
-	return sh.applyNamedFeatures(buf, sh.features.keeps(afterJoiningFeatures))
 }
 
 // reverseGlyphs puts a shaped run into visual order.

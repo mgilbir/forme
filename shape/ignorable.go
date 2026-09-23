@@ -253,20 +253,23 @@ func joinerKindOf(r rune) joinerKind {
 //     side of it from being joined, and a rule that joined them by stepping
 //     over it would do exactly what it was written to prevent.
 //
-// The Indic features are the ones that ask for the joiners to stay visible to
-// their input: half forms and conjuncts are precisely what a joiner is written
-// to force or forbid, so their lookups must see it. Everything else — the
-// ligatures, the contextual alternates, all of positioning — treats them as
-// though they were not there.
+// Which joiner a feature wants to see is the feature's to say, and the two are
+// separate. The Indic features ask to see both: half forms and conjuncts are
+// precisely what a joiner is written to force or forbid, so their lookups must
+// see it. The Myanmar, universal and Arabic features ask to see a zero width
+// joiner and leave a non-joiner in their context to be stepped over — which is
+// how HarfBuzz enables them, and what lets a rule whose context spans a ZWNJ
+// still match. Everything else — the ligatures, the contextual alternates, all
+// of positioning — treats both as though they were not there.
 func (sh shaper) stepsOverJoiner(at int, context bool) bool {
 	if sh.joinerAt == nil {
 		return false
 	}
 	switch sh.joinerAt(sh.base() + at) {
 	case joinerZWJ:
-		return context || !sh.manualJoiners
+		return context || !sh.manualZWJ
 	case joinerZWNJ:
-		return context && !sh.manualJoiners
+		return context && !sh.manualZWNJ
 	}
 	return false
 }

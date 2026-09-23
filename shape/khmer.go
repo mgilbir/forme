@@ -66,12 +66,6 @@ const (
 	khmerPreVowel = 0x17C1
 )
 
-// maskCfar marks the glyphs the after-Ro feature is for: everything that
-// followed a subscript Ro before it was moved to the front. It is a Khmer
-// feature and has no counterpart in the Indic model, which is why it is stated
-// here rather than beside the masks in indic.go.
-const maskCfar uint8 = 1 << 6
-
 // isKhmerScript reports whether a run is Khmer, by the OpenType tag a Khmer
 // font declares its rules under.
 func isKhmerScript(script uint16) bool { return scriptSelects(script, "khmr") }
@@ -154,16 +148,19 @@ func khmerSplitVowelOf(r rune) ([]rune, bool) {
 	return nil, false
 }
 
-// khmerBasicFeatures are applied to one syllable at a time, in this order, to
-// the stretch of it each one's mask marks.
+// khmerBasicFeatures are the features for parts of a syllable, each for the
+// glyphs the reordering marked with its bit: 'pref' for the pre-base form of a
+// subscript Ro, 'blwf' and 'abvf' and 'pstf' for the forms of the subscripts
+// that stay where they were, and 'cfar' for the glyphs a Ro left behind (maskCfar
+// is everything that followed a subscript Ro before it was moved to the front).
 //
-// The order is the specification's. 'pref' makes the pre-base form of a
-// subscript Ro, 'blwf' and 'abvf' and 'pstf' the forms of the subscripts that
-// stay where they were, and 'cfar' last because it is written about the glyphs
-// a Ro left behind — it can only be asked once the Ro has gone.
+// They are one stage with 'locl' and 'ccmp', held to the syllable, and applied
+// in the font's lookup order rather than the specification's list order —
+// which is what Uniscribe was found to do and HarfBuzz does (its issue 974:
+// "Uniscribe does NOT pause between basic features"). See collectKhmer.
 var khmerBasicFeatures = []struct {
 	tag  string
-	mask uint8
+	mask glyphMask
 }{
 	{"pref", maskPref},
 	{"blwf", maskBlwf},
@@ -172,33 +169,9 @@ var khmerBasicFeatures = []struct {
 	{"cfar", maskCfar},
 }
 
-// khmerRunFeatures are applied to the whole run once every syllable is in
-// drawing order.
-//
-// The first four turn the reordered pieces into the shapes a reader sees. They
-// are written about the joiners, so their lookups see them; the last four are
-// the script-independent substitutions, which are not and step over them.
-//
-// 'liga' is deliberately absent and 'clig' deliberately present: the Khmer
-// specification names 'clig' as the feature that forms the ligatures
-// typographical correctness needs, and says nothing about 'liga'.
-var khmerRunFeatures = []struct {
-	tag    string
-	manual bool
-}{
-	{"pres", true},
-	{"abvs", true},
-	{"blws", true},
-	{"psts", true},
-	{"rlig", false},
-	{"clig", false},
-	{"calt", false},
-	{"rclt", false},
-}
-
 // shapeKhmer is the whole Khmer pass: it replaces the default substitutions for
 // a run it handles.
-func (sh shaper) shapeKhmer(buf []Glyph, runes []rune) []Glyph {
+func (sh shaper) shapeKhmer(buf []Glyph, runes []rune, p *plan) []Glyph {
 	// The split vowel signs first, before anything is classified: their two
 	// marks go to different places, so there is no single place the sign itself
 	// could be given, and the run everything below is built from is the one
@@ -206,10 +179,17 @@ func (sh shaper) shapeKhmer(buf []Glyph, runes []rune) []Glyph {
 	buf, runes = sh.splitCharacters(buf, runes, khmerSplitVowelOf)
 
 	info := make([]indicInfo, len(runes))
-	cats := make([]indicCat, len(runes))
 	for i, r := range runes {
 		info[i].cat = khmerCategory(r)
 		info[i].ignorable = hiddenAfterShaping(r)
+	}
+	hooks := indicHooks(&info)
+	// The stages before the syllables are cut, which are the whole run's.
+	for s := 0; s < p.syllables; s++ {
+		buf, _, _ = sh.applyLookups(buf, p.stage(s), 0, len(buf), 0, len(buf), hooks)
+	}
+	cats := make([]indicCat, len(info))
+	for i := range info {
 		cats[i] = info[i].cat
 	}
 
@@ -235,19 +215,18 @@ func (sh shaper) shapeKhmer(buf []Glyph, runes []rune) []Glyph {
 			syllable, record = sh.insertGlyphAt(syllable, record, 0, dotted,
 				indicInfo{cat: catDottedCircle, pos: posBaseC})
 		}
-		syllable, _ = sh.shapeKhmerSyllable(syllable, &record, 0, len(syllable))
+		syllable = sh.shapeKhmerSyllable(syllable, &record, p)
 		out = append(out, syllable...)
 		outInfo = append(outInfo, record...)
 	}
 	buf = append(out, buf[prev:]...)
 	info = append(outInfo, info[prev:]...)
 
-	for _, f := range khmerRunFeatures {
-		lookups := sh.l.featureLookups[f.tag]
-		if len(lookups) == 0 {
-			continue
-		}
-		buf, _ = sh.applyIndicFeature(buf, &info, lookups, 0, len(buf), 0, len(buf), f.manual)
+	// The presentation features, and the ligatures and contextual alternates
+	// every script gets, over the whole run once every syllable is in drawing
+	// order: Khmer's are "applied all at once after clearing syllables".
+	for s := p.after; s < len(p.stages); s++ {
+		buf, _, _ = sh.applyLookups(buf, p.stage(s), 0, len(buf), 0, len(buf), hooks)
 	}
 
 	// The joiners have now done everything they are for. What is left is a
@@ -258,60 +237,30 @@ func (sh shaper) shapeKhmer(buf []Glyph, runes []rune) []Glyph {
 }
 
 // shapeKhmerSyllable puts one syllable into drawing order and applies the
-// features written for its parts, returning the buffer and how much its length
-// changed.
-func (sh shaper) shapeKhmerSyllable(buf []Glyph, info *[]indicInfo, start, end int) ([]Glyph, int) {
-	total := 0
-	grow := func(d int) { total += d; end += d }
+// stages written for its parts, returning the syllable.
+func (sh shaper) shapeKhmerSyllable(buf []Glyph, info *[]indicInfo, p *plan) []Glyph {
+	hooks := indicHooks(info)
+	apply := func(from, to int) {
+		for s := from; s < to; s++ {
+			buf, _, _ = sh.applyLookups(buf, p.stage(s), 0, len(buf), 0, len(buf), hooks)
+		}
+	}
+	apply(p.syllables, p.reorder)
 
 	// The reordering comes *first*, before 'locl' and 'ccmp', which is the one
 	// place Khmer's order differs from the Indic model's. It can: nothing in the
 	// reordering asks the font a question, so there is nothing for those two
 	// features to have answered first.
-	khmerReorder(buf, *info, start, end)
+	khmerReorder(buf, *info, 0, len(buf))
 
-	// 'locl' corrects letterforms for the language and 'ccmp' composes and
-	// decomposes; everything after them is written against what they produce.
-	// They are applied per syllable, like the features below, so that neither
-	// can join one syllable to the next.
-	for _, tag := range []string{"locl", "ccmp"} {
-		lookups := sh.l.featureLookups[tag]
-		if len(lookups) == 0 {
-			continue
-		}
-		var d int
-		buf, d = sh.applyIndicFeature(buf, info, lookups, start, end, start, end, false)
-		grow(d)
-	}
+	// 'locl', 'ccmp' and the basic features, one stage held to the syllable. A
+	// masked feature is for the glyphs the reordering marked and starts nowhere
+	// else: 'pref' is written about a subscript Ro, and the base the Ro is
+	// written under is not what it is for.
+	apply(p.reorder, p.after)
 
-	for _, f := range khmerBasicFeatures {
-		lookups := sh.l.featureLookups[f.tag]
-		if len(lookups) == 0 {
-			continue
-		}
-		// A masked feature sees the stretch of the syllable its mask marks and
-		// nothing else — not even as context. A lookup that reached past the
-		// mask would join glyphs the font never meant to see together: 'pref'
-		// is written about a subscript Ro and the two glyphs after it are the
-		// base, which 'pref' says nothing about.
-		for lo := start; lo < end; {
-			if (*info)[lo].mask&f.mask == 0 {
-				lo++
-				continue
-			}
-			hi := lo + 1
-			for hi < end && (*info)[hi].mask&f.mask != 0 {
-				hi++
-			}
-			var d int
-			buf, d = sh.applyIndicFeature(buf, info, lookups, lo, hi, start, end, true)
-			grow(d)
-			lo = hi + d
-		}
-	}
-
-	oneCluster(buf, start, end)
-	return buf, total
+	oneCluster(buf, 0, len(buf))
+	return buf
 }
 
 // khmerReorder puts one syllable into the order the font's rules are written
@@ -331,7 +280,7 @@ func khmerReorder(buf []Glyph, info []indicInfo, start, end int) {
 	// its below-, above- and post-base form. The first character is the base
 	// and is asked for none of them.
 	for i := start + 1; i < end; i++ {
-		info[i].mask |= maskBlwf | maskAbvf | maskPstf
+		buf[i].mask |= maskBlwf | maskAbvf | maskPstf
 	}
 
 	// A syllable takes at most two subscripts, and the specification stops
@@ -347,8 +296,8 @@ func khmerReorder(buf []Glyph, info []indicInfo, start, end int) {
 			}
 			// The coeng and the Ro are drawn before the base, so they are moved
 			// to the front of the syllable and asked for the pre-base form.
-			info[i].mask |= maskPref
-			info[i+1].mask |= maskPref
+			buf[i].mask |= maskPref
+			buf[i+1].mask |= maskPref
 			moveGlyphToFront(buf, info, start, i)
 			moveGlyphToFront(buf, info, start+1, i+1)
 			// What followed the Ro is drawn after it and is asked for the
@@ -358,7 +307,7 @@ func khmerReorder(buf []Glyph, info []indicInfo, start, end int) {
 			// under a Ro, which is otherwise the same three characters in the
 			// same order.
 			for j := i + 2; j < end; j++ {
-				info[j].mask |= maskCfar
+				buf[j].mask |= maskCfar
 			}
 			coengs = 2 // done: no later coeng may be a pre-base one
 
