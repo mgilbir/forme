@@ -223,23 +223,47 @@ func TestAPageDescriptorThatIsNotAMarginIsReported(t *testing.T) {
 // it out", and the calculation that would is the one centring a box in its
 // containing block — there is nothing for the paper to be centred in, which is
 // why CSS leaves an auto page margin to the printer. Reading it as nought would
-// print to the edge.
+// print to the edge. It is valid CSS, so it is reported as this engine's gap,
+// as a var() is; the rest are not margins, and are the author's to fix.
 func TestAnUnreadablePageMarginKeepsTheOneItHad(t *testing.T) {
 	opts := Options{Page: PageSizePt(600, 800).WithMarginPt(36)}
-	for _, css := range []string{
-		`@page { margin: auto }`,
-		`@page { margin: red }`,
-		`@page { margin: 1in 2in 3in 4in 5in }`,
-		`@page { margin-left: banana }`,
-		`@page { margin: }`,
+	for css, unsupported := range map[string]bool{
+		`@page { margin: auto }`:                true,
+		`@page { margin: var(--m) }`:            true,
+		`@page { margin: min(1in, 10%) }`:       true,
+		`@page { margin: red }`:                 false,
+		`@page { margin: 1in 2in 3in 4in 5in }`: false,
+		`@page { margin-left: banana }`:         false,
+		`@page { margin: }`:                     false,
 	} {
 		if got := pageWidthPx(t, css, opts); got != 704 {
 			t.Errorf("%s changed the page: %gpx of content, want the caller's 704", css, got)
 		}
-		if !reportsPage(t, css, "is not a margin this engine can read") {
+		f, ok := pageFinding(t, css, "the page kept the margin it had")
+		if !ok {
 			t.Errorf("%s was dropped with nothing said about it", css)
+			continue
+		}
+		if f.Unsupported() != unsupported {
+			t.Errorf("%s was reported as %s (%q); unsupported should be %v",
+				css, f.Rule, f.Message, unsupported)
 		}
 	}
+}
+
+// pageFinding is the finding about the stylesheet that says want.
+func pageFinding(t *testing.T, css, want string) (Finding, bool) {
+	t.Helper()
+	got := Compose(Input{
+		HTML: `<div id="a">x</div>`,
+		CSS:  []Stylesheet{{Name: "sheet.css", Source: css}},
+	}, sheet600x800())
+	for _, f := range got.Findings {
+		if f.Source.Sheet == "sheet.css" && strings.Contains(f.Message, want) {
+			return f, true
+		}
+	}
+	return Finding{}, false
 }
 
 // TestAPageWithNoBlockIsReported. "@page" with nothing after it says nothing
@@ -446,20 +470,33 @@ func TestAPageMarginIsAPercentageOfTheSizeTheSameRuleChose(t *testing.T) {
 	}
 }
 
-// TestAMediaQueryIsAnsweredAboutTheSheetTheDocumentChose. A query asks about
-// the paper, and after this the paper may be what the document asked for — so
-// the size is settled before the cascade runs rather than after it. A query
-// answered about the caller's sheet and then printed on another is a document
-// styled for a page it is not on.
-func TestAMediaQueryIsAnsweredAboutTheSheetTheDocumentChose(t *testing.T) {
-	const doc = `<p id="a">a</p>`
-	// The caller's sheet is 800px wide, so this query is false on it. The
-	// document then asks for a 960px sheet, on which it is true.
+// TestEveryMediaQueryHasOneAnswer is audit C139. A media query is answered
+// about the medium the caller asked for — the only definition that does not
+// feed @page's answer back into the queries deciding which @page rules apply —
+// and that answer is the same wherever the query is written: a <link media>, an
+// @media around a style rule and an @media around an @page.
+//
+// This used to be two answers. The in-sheet @media blocks were asked again about
+// the sheet after @page, so on the caller's 800px sheet with "@page { size: 10in
+// 5in }" the same (min-width: 900px) was false on the <link> and true in the
+// <style>, and this test asserted the second.
+func TestEveryMediaQueryHasOneAnswer(t *testing.T) {
+	const doc = `<link rel=stylesheet media="(min-width: 900px)" href=l.css>` +
+		`<p id="a">a</p><p id="b">b</p>`
+	// The caller's sheet is 800px wide, so the query is false on it; the
+	// document then asks for a 960px sheet, on which it would be true.
 	css := `@page { size: 10in 5in } @media (min-width: 900px) { #a { display: none } }`
-
-	got := Compose(Input{HTML: doc, CSS: []Stylesheet{{Source: css}}}, sheet600x800())
-	if fragmentFor(got.Root, "a") != nil {
-		t.Error("the query was answered about the caller's sheet, not the one the document chose")
+	res := mapResolver{"l.css": []byte(`#b { display: none }`)}
+	got := Compose(Input{HTML: doc, Resources: res, CSS: []Stylesheet{{Source: css}}},
+		sheet600x800())
+	a, b := fragmentFor(got.Root, "a") != nil, fragmentFor(got.Root, "b") != nil
+	if !a || !b {
+		t.Errorf("the query was answered about the sheet @page chose: #a shown %v, "+
+			"#b shown %v, want both, since the caller's 800px sheet is not 900px wide", a, b)
+	}
+	// And the sheet the document chose is still the one it is laid out on.
+	if w := got.Page.Width.Px(); w != 960 {
+		t.Errorf("the page is %gpx wide, want the 960 @page asked for", w)
 	}
 }
 
@@ -613,23 +650,42 @@ func TestAQueryAroundAPageRuleIsAnsweredAboutTheSheetItWasGiven(t *testing.T) {
 	}
 }
 
-// TestAPageRuleSomewhereElseIsNotReadAsOne. Only @media is descended into. An
-// @page written inside anything else is not a page rule this engine has a way
-// to decide, and the at-rule holding it is reported by the cascade as one it
-// does not apply.
-func TestAPageRuleSomewhereElseIsNotReadAsOne(t *testing.T) {
-	for _, css := range []string{
-		`@supports (display: grid) { @page { margin: 1in } }`,
-		`div { @page { margin: 1in } }`,
-		// The prelude of an at-rule that is not @media is not a media query,
-		// and reading one as though it were would apply a rule that was never
-		// in a query at all — this one reads as the media type "print", which
-		// is the paper the document is on.
-		`@layer print { @page { margin: 1in } }`,
+// TestAPageRuleIsFoundWhereverTheCascadeWouldApplyARule is audit C33. The
+// cascade applies the rules inside an @supports whose condition holds and
+// inside an @layer, and an @page there is a page rule like any other; this
+// file's own walker descended only into @media, so these left the page at the
+// caller's size with nothing said. The walk is the cascade's now.
+func TestAPageRuleIsFoundWhereverTheCascadeWouldApplyARule(t *testing.T) {
+	for css, want := range map[string]float64{
+		`@supports (display: block) { @page { margin: 1in } }`:              608,
+		`@supports (display: nonesuch) { @page { margin: 1in } }`:           800,
+		`@layer print { @page { margin: 1in } }`:                            608,
+		`@media print { @supports (color: red) { @page { margin: 1in } } }`: 608,
+		`@layer a { @media screen { @page { margin: 1in } } }`:              800,
 	} {
-		if got := pageWidthPx(t, css, sheet600x800()); got != 800 {
-			t.Errorf("%s was read as a page rule: %gpx of content, want 800", css, got)
+		if got := pageWidthPx(t, css, sheet600x800()); got != want {
+			t.Errorf("%s: %gpx of content, want %g", css, got, want)
 		}
+	}
+	// A layer is a cascade term here as it is for an element: a later layer
+	// wins over an earlier one whatever order the rules are written in, and
+	// an unlayered rule over both.
+	if got := pageWidthPx(t, `@layer a, b; @layer b { @page { margin: 1in } } `+
+		`@layer a { @page { margin: 2in } }`, sheet600x800()); got != 608 {
+		t.Errorf("an @page in an earlier layer beat one in a later layer: %gpx", got)
+	}
+	if got := pageWidthPx(t, `@page { margin: 1in } @layer a { @page { margin: 2in } }`,
+		sheet600x800()); got != 608 {
+		t.Errorf("a layered @page beat an unlayered one: %gpx", got)
+	}
+	// An @page inside a style rule is not a page rule: CSS Nesting allows it
+	// nowhere there. It is not applied, and it is not silent.
+	const nested = `div { @page { margin: 1in } }`
+	if got := pageWidthPx(t, nested, sheet600x800()); got != 800 {
+		t.Errorf("%s was read as a page rule: %gpx of content, want 800", nested, got)
+	}
+	if !reportsPage(t, nested, "cannot be written inside a style rule") {
+		t.Errorf("%s was dropped with nothing said", nested)
 	}
 }
 

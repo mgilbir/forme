@@ -148,10 +148,10 @@ func TestTheMemoIsRefusedAtADifferentPointInTheOrder(t *testing.T) {
 	if done == nil {
 		t.Fatal("the sheet was not remembered")
 	}
-	if _, ok := preparedBefore(ua, done.start); !ok {
+	if _, ok := preparedBefore(ua, done.start, Media{}); !ok {
 		t.Fatal("the sheet was not answered from the memo at the point it was prepared")
 	}
-	if _, ok := preparedBefore(ua, done.start+1); ok {
+	if _, ok := preparedBefore(ua, done.start+1, Media{}); ok {
 		t.Error("the sheet was answered from the memo one place later in the " +
 			"order; every declaration's order number would be wrong by one")
 	}

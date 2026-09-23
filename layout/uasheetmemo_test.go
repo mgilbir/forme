@@ -84,28 +84,28 @@ func sheetSignature(rules []css.Rule) string {
 //
 // The default sheet raises none of these today, so it is asked of handOver
 // directly with a reading that does: a vacuous version of this test would pass
-// on a memo that swallowed all three.
+// on a memo that swallowed all three. The errors are handOver's to replay; the
+// @font-face and @page rules are the cascade's walk's to hand over, and the
+// style package's memo of a user agent sheet has to hand them over again for
+// every document it is reused for.
 func TestReadingOnceStillReportsEveryTime(t *testing.T) {
 	read := readSheet(style.OriginUserAgent, "invented",
 		`@font-face { font-family: X; src: url(x.ttf) } `+
 			`@page { margin-top: 1px } `+
 			`p { color: red } )`)
-	if len(read.errs) == 0 || len(read.faces) == 0 || len(read.pages) == 0 {
-		t.Fatalf("the fixture produced %d errors, %d faces and %d pages; it does "+
-			"not reach the three things handOver replays",
-			len(read.errs), len(read.faces), len(read.pages))
+	if len(read.errs) == 0 {
+		t.Fatalf("the fixture produced no errors; it does not reach what handOver replays")
 	}
 	for i := 0; i < 2; i++ {
 		rec := NewRecorder(nil)
-		var faces []pendingFontFace
-		var pages []pendingPage
-		read.handOver(rec, style.OriginUserAgent, "invented", &faces, &pages)
+		sheet := read.handOver(rec, style.OriginUserAgent, "invented")
 		if n := len(rec.Findings()); n != len(read.errs) {
 			t.Errorf("document %d got %d findings, want %d", i, n, len(read.errs))
 		}
-		if len(faces) != len(read.faces) || len(pages) != len(read.pages) {
-			t.Errorf("document %d got %d faces and %d pages, want %d and %d",
-				i, len(faces), len(pages), len(read.faces), len(read.pages))
+		p := style.Prepare([]style.Sheet{sheet}, style.Media{})
+		if len(p.FontFaces) != 1 || len(p.Pages) != 1 {
+			t.Errorf("document %d got %d faces and %d pages, want 1 and 1",
+				i, len(p.FontFaces), len(p.Pages))
 		}
 	}
 }

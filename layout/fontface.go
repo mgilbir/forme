@@ -9,6 +9,7 @@ import (
 
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/shape"
+	"github.com/mgilbir/forme/style"
 )
 
 // The faces a document brings with it.
@@ -157,42 +158,33 @@ func (r fontFaceRule) coversText(text string) bool {
 type pendingFontFace struct {
 	rule  css.Rule
 	sheet string
+	// layer is the cascade layer the rule was written in; see fontFacesOf.
+	layer int
 }
 
-// splitFontFaces separates the @font-face rules of one stylesheet from the rest.
+// fontFacesOf is the document's @font-face rules as the cascade's walk handed
+// them over, in the order the loader is to take them.
 //
-// They are taken out of the rule list rather than left in it because the
-// cascade's answer to an at-rule is to report it as one it does not apply, and
-// after this file that report would be wrong. Removing them changes nothing
-// else: an at-rule never contributed a declaration, so the ordering the cascade
-// counts is untouched.
-func splitFontFaces(rules []css.Rule, sheet string, faces *[]pendingFontFace) []css.Rule {
-	if len(rules) == 0 {
-		return rules
-	}
-	found := false
+// The walk finds them wherever they are live — at the top of a sheet or inside
+// an @media, @supports or @layer whose condition held — which is what makes
+// "@media print { @font-face { … } }" a face and not, as it was, an at-rule
+// reported "not applied yet" (audit C138). It took only the top-level ones out
+// of the sheet before, and every other one reached the cascade as an unknown.
+//
+// The order is the cascade's. The loader lets the last rule declared win a tie
+// between two faces of one family, and Cascade 5 §6.4.3 makes a name-defining
+// at-rule in a later layer — or outside every layer — the later one, whatever
+// order the text puts them in. So the rules are sorted by their layer's rank,
+// stably, and an unlayered stylesheet keeps the order it was written in.
+func fontFacesOf(rules []style.AtRule) []pendingFontFace {
+	out := make([]pendingFontFace, 0, len(rules))
 	for _, r := range rules {
-		if isFontFace(r) {
-			found = true
-			break
-		}
+		out = append(out, pendingFontFace{rule: r.Rule, sheet: r.Sheet, layer: r.Layer})
 	}
-	if !found {
-		return rules
-	}
-	out := make([]css.Rule, 0, len(rules))
-	for _, r := range rules {
-		if isFontFace(r) {
-			*faces = append(*faces, pendingFontFace{rule: r, sheet: sheet})
-			continue
-		}
-		out = append(out, r)
-	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return style.LayerRank(out[i].layer, false) < style.LayerRank(out[j].layer, false)
+	})
 	return out
-}
-
-func isFontFace(r css.Rule) bool {
-	return r.At && strings.EqualFold(r.Name, "font-face")
 }
 
 // documentFace is one loaded face together with what the rule said about it.

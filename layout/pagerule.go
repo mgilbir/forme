@@ -19,9 +19,9 @@ import (
 // An @page rule selects no element, computes no value on one and inherits
 // nothing. What it does is change the surface every element is then laid out
 // on, and that has to be settled before layout begins rather than during it. So
-// the rules are taken out of the stylesheet in pipeline.go, exactly where
-// @font-face is and for the same reason: leaving them in would have the cascade
-// report each as an at-rule it does not apply, which after this file is untrue.
+// the cascade's walk over the sheets hands the rules over — see pagesOf — as it
+// does @font-face, and this file decides between them before anything is
+// styled.
 //
 // # What the caller still decides
 //
@@ -41,17 +41,14 @@ import (
 // pendingPage is an @page rule with what deciding between two of them needs:
 // the stylesheet it was written in, so a finding can say where it came from,
 // the origin of that sheet, because origin is the strongest term in the cascade
-// and it is no weaker here, and the media queries it was written inside.
+// and it is no weaker here, and the cascade layer it was written in, which is
+// the next term. Whether the @media and @supports around it hold was settled
+// by the walk that found it.
 type pendingPage struct {
 	rule   css.Rule
 	sheet  string
 	origin style.Origin
-	// media is the prelude of every @media block enclosing the rule, outermost
-	// first. All of them have to match for the rule to apply, which is what
-	// nesting them means. It is carried rather than evaluated where it was
-	// found because the answer depends on the sheet, and the sheet is not
-	// settled until every stylesheet has been read.
-	media [][]css.ComponentValue
+	layer  int
 }
 
 // at is the place a finding about one rule points to.
@@ -59,47 +56,24 @@ func (p pendingPage) at() Source {
 	return Source{HTMLOffset: -1, CSSOffset: p.rule.Offset, Sheet: p.sheet}
 }
 
-// collectPageRules gathers the @page rules of one stylesheet, including the
-// ones written inside a media query.
+// pagesOf is the document's @page rules as the cascade's walk handed them over.
 //
-// They are left in the stylesheet rather than taken out of it. The cascade
-// skips an @page of its own accord — it selects no element and computes no
-// value on one, so there is nothing there for it to do — and that is what makes
-// this able to reach the ones inside an @media block, which are component
-// values in the enclosing rule rather than rules in the list this walks.
-//
-// A print stylesheet is where those are: "@media print { @page { margin: 0 } }"
-// is how a page rule is written by anyone whose document is also read on a
-// screen, and reading only the top-level ones would miss most of the @page
-// rules that exist.
-func collectPageRules(rules []css.Rule, sheet string, origin style.Origin,
-	media [][]css.ComponentValue, pages *[]pendingPage) {
-
+// The walk is the cascade's own, so an @page is found wherever the cascade
+// would apply a rule — at the top of a sheet, or inside an @media, an
+// @supports or an @layer whose condition held — and nowhere else. This file had
+// a walker of its own that descended into @media and nothing more, and whose
+// comment said the cascade reported the other enclosing at-rules as unapplied;
+// once the cascade applied @supports and @layer that stopped being true, and
+// "@supports (display: block) { @page { size: A5 } }" and "@layer print {
+// @page { … } }" left the page at the caller's size with nothing said (audit
+// C33). One written inside a style rule is not a page rule at all, and the
+// walk reports it.
+func pagesOf(rules []style.AtRule) []pendingPage {
+	out := make([]pendingPage, 0, len(rules))
 	for _, r := range rules {
-		switch {
-		case isPageRule(r):
-			*pages = append(*pages, pendingPage{
-				rule: r, sheet: sheet, origin: origin, media: media})
-		case r.At && strings.EqualFold(r.Name, "media") && r.HasBlock:
-			// Only @media is descended into. An @page written inside anything
-			// else — a style rule, @supports, a nested rule — is not a page
-			// rule this engine has a way to decide, and the cascade reports the
-			// enclosing at-rule as one it does not apply.
-			inner, _ := css.ParseRulesFromValues(r.Block)
-			// A fresh slice rather than an append to this one: two @media
-			// blocks at the same depth would otherwise append into the same
-			// spare capacity, and the second would overwrite the query the
-			// first had already handed to a rule it enclosed.
-			within := make([][]css.ComponentValue, len(media)+1)
-			copy(within, media)
-			within[len(media)] = r.Prelude
-			collectPageRules(inner, sheet, origin, within, pages)
-		}
+		out = append(out, pendingPage{rule: r.Rule, sheet: r.Sheet, origin: r.Origin, layer: r.Layer})
 	}
-}
-
-func isPageRule(r css.Rule) bool {
-	return r.At && strings.EqualFold(r.Name, "page")
+	return out
 }
 
 // pageDeclarations is what a document's @page rules said, before any of it is
@@ -117,21 +91,33 @@ type pageDeclarations struct {
 // rather than turning what an earlier one chose.
 type pageSizeDeclaration struct {
 	width, height style.Unit
-	rank          int
-	spec          int
-	order         int
-	set           bool
+	pageTerms
 }
 
-// beatsSize is pageDeclaration.beats over the same three terms. The size is
-// decided the way a margin is, because it is a declaration in the same rule and
-// nothing about it is a different kind of question.
-func (d pageSizeDeclaration) beatsSize(o pageSizeDeclaration) bool {
+// pageTerms are the cascade terms one @page declaration is decided by, and
+// the order they are consulted in is the cascade's own: importance and origin,
+// then the layer, then how particular the page selector was, then order.
+type pageTerms struct {
+	rank  int
+	layer int
+	spec  int
+	order int
+	set   bool
+}
+
+// beats reports whether a declaration with these terms wins over one already
+// held. The size and the margins are decided the same way, because they are
+// declarations in the same rule and nothing about either is a different kind
+// of question.
+func (d pageTerms) beats(o pageTerms) bool {
 	if !o.set {
 		return true
 	}
 	if d.rank != o.rank {
 		return d.rank > o.rank
+	}
+	if d.layer != o.layer {
+		return d.layer > o.layer
 	}
 	if d.spec != o.spec {
 		return d.spec > o.spec
@@ -140,7 +126,7 @@ func (d pageSizeDeclaration) beatsSize(o pageSizeDeclaration) bool {
 }
 
 func takeSize(held *pageSizeDeclaration, d pageSizeDeclaration) {
-	if d.beatsSize(*held) {
+	if d.beats(held.pageTerms) {
 		*held = d
 	}
 }
@@ -149,28 +135,7 @@ func takeSize(held *pageSizeDeclaration, d pageSizeDeclaration) {
 // deciding against another declaration of the same side needs.
 type pageDeclaration struct {
 	length style.Length
-	// rank is the importance-and-origin term of CSS Cascade 4 §6, spec is how
-	// particular the rule's page selector was, and order is where the
-	// declaration was written. The three are consulted in that order, which is
-	// the cascade's own.
-	rank  int
-	spec  int
-	order int
-	set   bool
-}
-
-// beats reports whether this declaration wins over one already held.
-func (d pageDeclaration) beats(o pageDeclaration) bool {
-	if !o.set {
-		return true
-	}
-	if d.rank != o.rank {
-		return d.rank > o.rank
-	}
-	if d.spec != o.spec {
-		return d.spec > o.spec
-	}
-	return d.order > o.order
+	pageTerms
 }
 
 // applyPageRules returns the sheet the document is laid out on: the one the
@@ -186,22 +151,13 @@ func applyPageRules(page PageSize, pages []pendingPage, rec *Recorder) PageSize 
 	if len(pages) == 0 {
 		return page
 	}
-	// The queries are answered about the sheet the caller asked for, because
-	// the answer is part of deciding what the sheet becomes. A print
-	// stylesheet's "@media print" is the case that matters and asks nothing
-	// about the paper's size; one that does ask — "@media (min-width: 200mm)
-	// { @page { size: A3 } }" — is answered about the page before the rule
-	// inside it could change it, which is the only order that terminates.
-	// Everything *else* in the document is then styled against the sheet this
-	// chose, which is the answer an author means.
-	asked := style.Media{Width: page.Width, Height: page.Height}
-
+	// The queries around the rules were answered already, by the walk that
+	// found them, about the sheet the caller asked for — the only answer that
+	// does not depend on what the rules inside the queries decide. See asked
+	// in pipeline.go.
 	var got pageDeclarations
 	order := 0
 	for _, p := range pages {
-		if !pageRuleApplies(p, asked, rec) {
-			continue
-		}
 		readPageRule(p, page, &got, &order, rec)
 	}
 
@@ -232,34 +188,6 @@ func applyPageRules(page PageSize, pages []pendingPage, rec *Recorder) PageSize 
 	}
 	page.Margin = Edges{Top: out[sideTop], Right: out[sideRight], Bottom: out[sideBottom], Left: out[sideLeft]}
 	return page
-}
-
-// pageRuleApplies answers the media queries an @page rule was written inside.
-//
-// A query that does not match drops the rule, and that is not a failure to
-// report: the stylesheet said it was for another medium and this is not it. A
-// query naming something this engine cannot answer is reported for the reason
-// the cascade reports one — a browser printing the same document may know the
-// feature, and its page would differ from this one.
-func pageRuleApplies(p pendingPage, asked style.Media, rec *Recorder) bool {
-	applies := true
-	for _, query := range p.media {
-		matches, unknown := style.MatchesMedia(query, asked)
-		if unknown != "" {
-			rec.ReportDetail(Finding{
-				Rule:   RuleUnsupportedAtRule,
-				Source: p.at(),
-				Message: "the media query " + quoteValue(strings.TrimSpace(pageText(query))) +
-					" around an @page rule asks about " + quoteValue(unknown) +
-					", which this engine cannot answer, so the rule was not applied",
-				Property: "@media",
-			})
-		}
-		if !matches {
-			applies = false
-		}
-	}
-	return applies
 }
 
 // readPageRule reads the descriptors of one @page rule into the set.
@@ -300,13 +228,13 @@ func readPageRule(p pendingPage, base PageSize, got *pageDeclarations, order *in
 
 	for _, d := range decls {
 		*order++
-		rank := style.CascadeRank(p.origin, d.Important)
+		terms := pageTerms{rank: style.CascadeRank(p.origin, d.Important),
+			layer: style.LayerRank(p.layer, d.Important), spec: spec, order: *order, set: true}
 		switch strings.ToLower(d.Name) {
 		case "margin":
 			if spread, ok := pageMarginShorthand(d.Value); ok {
 				for i, l := range spread {
-					take(&got.sides[i], pageDeclaration{
-						length: l, rank: rank, spec: spec, order: *order, set: true})
+					take(&got.sides[i], pageDeclaration{length: l, pageTerms: terms})
 				}
 			} else {
 				badPageMargin(rec, p, d)
@@ -319,15 +247,13 @@ func readPageRule(p pendingPage, base PageSize, got *pageDeclarations, order *in
 				"margin-bottom": sideBottom, "margin-left": sideLeft,
 			}[strings.ToLower(d.Name)]
 			if l, ok := pageMarginValue(d.Value); ok {
-				take(&got.sides[at], pageDeclaration{
-					length: l, rank: rank, spec: spec, order: *order, set: true})
+				take(&got.sides[at], pageDeclaration{length: l, pageTerms: terms})
 			} else {
 				badPageMargin(rec, p, d)
 			}
 		case "size":
 			if w, h, ok := pageSizeValue(d.Value, base); ok {
-				takeSize(&got.size, pageSizeDeclaration{
-					width: w, height: h, rank: rank, spec: spec, order: *order, set: true})
+				takeSize(&got.size, pageSizeDeclaration{width: w, height: h, pageTerms: terms})
 			} else {
 				badPageSize(rec, p, d)
 			}
@@ -350,29 +276,75 @@ func readPageRule(p pendingPage, base PageSize, got *pageDeclarations, order *in
 // take keeps whichever of two declarations for the same side the cascade
 // prefers.
 func take(held *pageDeclaration, d pageDeclaration) {
-	if d.beats(*held) {
+	if d.beats(held.pageTerms) {
 		*held = d
 	}
 }
 
 func badPageSize(rec *Recorder, p pendingPage, d css.Declaration) {
+	rule, why := RuleInvalidCSS, " is not a sheet this engine can read"
+	if style.UsesVar(d.Value) {
+		rule, why = RuleUnsupportedValue, " refers to a custom property, which this "+
+			"engine does not substitute"
+	}
 	rec.ReportDetail(Finding{
-		Rule:   RuleInvalidCSS,
+		Rule:   rule,
 		Source: Source{HTMLOffset: -1, CSSOffset: d.Offset, Sheet: p.sheet},
 		Message: "the @page size " + quoteValue(strings.TrimSpace(pageText(d.Value))) +
-			" is not a sheet this engine can read; the page kept the size it had",
+			why + "; the page kept the size it had",
 		Property: "size",
 	})
 }
 
+// badPageMargin reports a margin descriptor this could not use, as the cascade
+// would report the same value on an element: a var() and a value the value
+// grammar calls valid and unevaluated — min(), "auto", which the paper has no
+// calculation for — are this engine's gap and not the author's mistake. The
+// var() case was reported as invalid CSS while "margin: var(--m)" on an
+// element was unsupported, so the page was counted clean with its margin
+// wrong (audit C110).
 func badPageMargin(rec *Recorder, p pendingPage, d css.Declaration) {
+	rule, why := RuleInvalidCSS, " is not a margin"
+	switch unsupported := pageMarginUnsupported(d.Value); {
+	case style.UsesVar(d.Value):
+		rule, why = RuleUnsupportedValue, " refers to a custom property, which this "+
+			"engine does not substitute"
+	case unsupported != "":
+		rule, why = RuleUnsupportedValue, " uses "+unsupported+", which this engine "+
+			"does not apply to the page"
+	}
 	rec.ReportDetail(Finding{
-		Rule:   RuleInvalidCSS,
+		Rule:   rule,
 		Source: Source{HTMLOffset: -1, CSSOffset: d.Offset, Sheet: p.sheet},
 		Message: "the @page " + strings.ToLower(d.Name) + " " + quoteValue(strings.TrimSpace(pageText(d.Value))) +
-			" is not a margin this engine can read; the page kept the margin it had",
+			why + "; the page kept the margin it had",
 		Property: strings.ToLower(d.Name),
 	})
+}
+
+// pageMarginUnsupported names what, in a margin value that is valid CSS, this
+// engine does not apply to the page, or is empty when the value is not valid
+// or holds nothing of the kind. Each part is asked of margin-top's grammar,
+// which is what an @page margin's value is (css-page-3 §3.1).
+func pageMarginUnsupported(vals []css.ComponentValue) string {
+	parts := splitValuesOnWhitespace(vals)
+	if len(parts) == 0 || len(parts) > 4 {
+		return ""
+	}
+	what := ""
+	for _, part := range parts {
+		ok, unsupported := style.JudgeValue("margin-top", part)
+		if !ok {
+			return ""
+		}
+		if name, isIdent := identName(part); isIdent && name == "auto" && what == "" {
+			what = "auto"
+		}
+		if unsupported != "" && what == "" {
+			what = unsupported
+		}
+	}
+	return what
 }
 
 // pageMarginShorthand reads the one-to-four value form, which sets the sides in

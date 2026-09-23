@@ -76,6 +76,15 @@ func judgeExpansion(name string, value []css.ComponentValue,
 	return first
 }
 
+// JudgeValue is the value grammar's answer for a property, for a reader outside
+// the cascade that meets a value of it — an @page margin is margin-top's
+// grammar. ok is false for a value that is not CSS; unsupported names what, in
+// a valid one, this engine does not evaluate.
+func JudgeValue(property string, vals []css.ComponentValue) (ok bool, unsupported string) {
+	v := judgeValue(property, vals)
+	return v.ok, v.unsupported
+}
+
 // invalidReason says why a value was dropped as the author's mistake.
 func invalidReason(name string, value []css.ComponentValue) string {
 	decl := "\"" + name + ": " + serialize(value) + "\""

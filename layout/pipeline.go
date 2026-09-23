@@ -189,23 +189,19 @@ func buildWith(in Input, page PageSize, rec *Recorder) Built {
 		rec.Report(rule, AtHTML(e.Offset), e.Message)
 	}
 
-	// The document's @font-face rules, collected as the sheets are parsed and
-	// loaded once all of them are in. They are gathered rather than acted on
-	// here because a rule in the last stylesheet may replace one in the first,
-	// and because the caps below are on the document rather than on a sheet.
-	var faces []pendingFontFace
-	// The document's @page rules, gathered the same way and for the same
-	// reason: which of two declarations of a margin wins depends on the origin
-	// of the sheet each was written in, so all of them have to be in hand
-	// before any of them is read.
-	var pages []pendingPage
-
 	sheets := make([]style.Sheet, 0, len(in.CSS)+2)
-	sheets = append(sheets, userAgentSheet(rec, &faces, &pages))
-	// The sheet a media query is asked about, which for a <link> or a <style>
-	// has to be settled before the document's own @page rules can be, because
-	// those rules are inside the sheets being chosen here. It is the page the
-	// caller named; @page narrows it afterwards and the cascade asks again.
+	sheets = append(sheets, userAgentSheet(rec))
+	// The sheet every media query in the document is asked about: the page the
+	// caller named, and not the one the document's @page rules go on to
+	// choose. Those rules are inside the sheets and the @media blocks being
+	// chosen here, so a query answered about their answer is circular — "@media
+	// (min-width: 250mm) { @page { size: A3 } }" would decide itself — and the
+	// only definition that is not is the medium's own. It is the one answer for
+	// a <link media>, an @import's media, an @media around an @page and an
+	// @media around a style rule alike. They used to be two: every in-sheet
+	// @media was asked again about the sheet after @page, so with the caller on
+	// A4 and "@page { size: A3 }" a <link media="(min-width: 250mm)"> was not
+	// applied and the same query in a <style> was (audit C139).
 	asked := style.Media{Width: page.Width, Height: page.Height}
 	// One loader for every stylesheet the document is given, whichever side it
 	// came from, because the bounds it applies are on the document: two loaders
@@ -219,7 +215,7 @@ func buildWith(in Input, page PageSize, rec *Recorder) Built {
 		// at-rule this engine does not apply, which is not what happens to the
 		// identical line in the document's own sheet.
 		for _, e := range importer.expandImports(authorSheet{name: "user", source: in.UserCSS}) {
-			sheets = append(sheets, parseSheet(rec, style.OriginUser, e.name, e.source, &faces, &pages))
+			sheets = append(sheets, parseSheet(rec, style.OriginUser, e.name, e.source))
 		}
 	}
 	// A <style> element and a <link rel=stylesheet> are both author stylesheets,
@@ -229,7 +225,7 @@ func buildWith(in Input, page PageSize, rec *Recorder) Built {
 	// interleaved in document order for that reason; see stylesheet.go for what
 	// a linked one is allowed to be read from.
 	for _, s := range documentStylesheets(doc, importer) {
-		sheets = append(sheets, parseSheet(rec, style.OriginAuthor, s.name, s.source, &faces, &pages))
+		sheets = append(sheets, parseSheet(rec, style.OriginAuthor, s.name, s.source))
 	}
 	// A caller's own sheets go through the same expansion as the document's, so
 	// that "@import" means the same thing whichever side it was written on.
@@ -242,25 +238,31 @@ func buildWith(in Input, page PageSize, rec *Recorder) Built {
 			continue
 		}
 		for _, e := range importer.expandImports(authorSheet{name: s.Name, source: s.Source}) {
-			sheets = append(sheets, parseSheet(rec, style.OriginAuthor, e.name, e.source, &faces, &pages))
+			sheets = append(sheets, parseSheet(rec, style.OriginAuthor, e.name, e.source))
 		}
 	}
+
+	// Every sheet read the way the cascade reads it, once: the @media,
+	// @supports and @layer blocks evaluated, and the @font-face and @page rules
+	// they hold handed over. The fonts and the page are decided from those
+	// before anything is styled — an ex in a font-size needs the faces, and
+	// layout needs the page — and there is no second walk over the sheets to
+	// disagree with this one about which blocks are live. See style.Prepared.
+	prepared := style.Prepare(sheets, asked)
 
 	base := in.Fonts
 	if base == nil {
 		base = StandardFonts()
 	}
-	fontSet := loadFontFaces(faces, in.Resources, base, rec)
+	fontSet := loadFontFaces(fontFacesOf(prepared.FontFaces), in.Resources, base, rec)
 
-	// The sheet the document asked for, settled before it is styled. A margin
-	// does not change what a media query is answered with — a query asks about
-	// the paper and the margin is inside it — but the page has to be decided
-	// before layout either way, and deciding it here is what lets Compose lay
-	// out on the sheet the document chose.
-	page = applyPageRules(page, pages, rec)
+	// The sheet the document asked for, settled before it is styled. It
+	// changes no media query's answer — see asked — but the page has to be
+	// decided before layout either way, and deciding it here is what lets
+	// Compose lay out on the sheet the document chose.
+	page = applyPageRules(page, pagesOf(prepared.Pages), rec)
 
-	styled := style.ApplyIn(doc, sheets, fontMetrics{fontSet},
-		style.Media{Width: page.Width, Height: page.Height})
+	styled := prepared.Apply(doc, fontMetrics{fontSet})
 	for _, f := range styled.Findings {
 		rec.ReportDetail(Finding{
 			Rule:     ruleForStyleFinding(f),
@@ -294,16 +296,12 @@ func buildWith(in Input, page PageSize, rec *Recorder) Built {
 	}
 }
 
-// parseSheet reads one stylesheet, reporting what it could not read and setting
-// aside the @font-face rules in it.
+// parseSheet reads one stylesheet and reports what it could not read.
 //
-// The rules are taken out here rather than in the cascade because they are not
-// a cascade matter at all: an @font-face selects nothing and computes nothing,
-// it loads a file. Leaving them in would mean the styling stage reporting each
-// as an at-rule it does not apply, which after fontface.go would be untrue.
-func parseSheet(rec *Recorder, origin style.Origin, name, src string,
-	faces *[]pendingFontFace, pages *[]pendingPage) style.Sheet {
-	return readSheet(origin, name, src).handOver(rec, origin, name, faces, pages)
+// Its @font-face and @page rules stay in it: the cascade's walk hands them
+// over, from wherever in the sheet they are live. See style.Prepared.
+func parseSheet(rec *Recorder, origin style.Origin, name, src string) style.Sheet {
+	return readSheet(origin, name, src).handOver(rec, origin, name)
 }
 
 // parsedSheet is everything reading one stylesheet produced, kept apart from
@@ -312,24 +310,18 @@ func parseSheet(rec *Recorder, origin style.Origin, name, src string,
 type parsedSheet struct {
 	rules []css.Rule
 	errs  []css.Error
-	faces []pendingFontFace
-	pages []pendingPage
 }
 
-// readSheet parses one stylesheet and sets aside what is not a cascade matter.
+// readSheet parses one stylesheet.
 func readSheet(origin style.Origin, name, src string) parsedSheet {
 	rules, errs := css.ParseStylesheet(src)
-	out := parsedSheet{errs: errs}
-	out.rules = splitFontFaces(rules, name, &out.faces)
-	collectPageRules(out.rules, name, origin, nil, &out.pages)
-	return out
+	return parsedSheet{rules: rules, errs: errs}
 }
 
 // handOver reports what the reading found and returns the sheet for the
 // cascade. It is separate from readSheet so that a sheet read once is still
 // reported once per document.
-func (p parsedSheet) handOver(rec *Recorder, origin style.Origin, name string,
-	faces *[]pendingFontFace, pages *[]pendingPage) style.Sheet {
+func (p parsedSheet) handOver(rec *Recorder, origin style.Origin, name string) style.Sheet {
 
 	for _, e := range p.errs {
 		rec.ReportDetail(Finding{
@@ -338,8 +330,6 @@ func (p parsedSheet) handOver(rec *Recorder, origin style.Origin, name string,
 			Message: e.Message,
 		})
 	}
-	*faces = append(*faces, p.faces...)
-	*pages = append(*pages, p.pages...)
 	return style.Sheet{Origin: origin, Rules: p.rules, Name: name}
 }
 
@@ -364,11 +354,12 @@ const userAgentSheetName = "user agent"
 //
 // The reading is memoized and the *reporting* is not: a finding about the
 // default sheet is still raised into each document's recorder, and any
-// @font-face or @page in it still reaches each document's lists. So this is a
+// @font-face or @page in it is handed over by each document's preparation — the
+// style package's memo of this sheet replays them. So this is a
 // memo of a pure function and not a change of behaviour — which is why it is
 // written as readSheet and handOver rather than as a cached style.Sheet.
-func userAgentSheet(rec *Recorder, faces *[]pendingFontFace, pages *[]pendingPage) style.Sheet {
-	return parsedUserAgentCSS().handOver(rec, style.OriginUserAgent, userAgentSheetName, faces, pages)
+func userAgentSheet(rec *Recorder) style.Sheet {
+	return parsedUserAgentCSS().handOver(rec, style.OriginUserAgent, userAgentSheetName)
 }
 
 var parsedUserAgentCSS = sync.OnceValue(func() parsedSheet {

@@ -83,6 +83,12 @@ func layerRank(layer int, important bool) int {
 	return layer
 }
 
+// LayerRank is layerRank for a caller outside the cascade that decides between
+// two things written in layers — two @page declarations of one margin, two
+// @font-face rules for one family — as the cascade decides between two
+// declarations: higher wins. Layer is AtRule.Layer.
+func LayerRank(layer int, important bool) int { return layerRank(layer, important) }
+
 // layerIndex is the number of a layer by name, assigning one the first time a
 // name is seen.
 //

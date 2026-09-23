@@ -1,6 +1,7 @@
 package style
 
 import (
+	"maps"
 	"sort"
 	"strconv"
 	"strings"
@@ -162,6 +163,10 @@ type Styler struct {
 	// intern shares what the document's computed styles have in common. See
 	// styleInterner; it is per Styler because a Styler styles one document.
 	intern *styleInterner
+
+	// pages and fontFaces are the @page and @font-face rules the preparation
+	// reached, in the order it reached them. See Prepared.
+	pages, fontFaces []AtRule
 }
 
 // PseudoKey names one pseudo-element of one element.
@@ -270,14 +275,99 @@ func ApplyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) Styled {
 // applyIn is ApplyIn, and the Styler that did the work, whose accounts of it the
 // tests read.
 func applyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) (Styled, *Styler) {
-	s := &Styler{matcher: NewMatcher(doc), media: media, seen: map[string]bool{},
-		attrOffset: -1}
+	p := Prepare(sheets, media)
+	// A caller of ApplyIn has nowhere to receive the @font-face rules — it is
+	// Prepare's caller that loads them — so each one is a rule that did
+	// nothing, and says so as it did before the walk handed them over. @page
+	// is not reported: it computes nothing on an element, and the stage that
+	// lays a document out on paper is the one that reads it.
+	for _, f := range p.FontFaces {
+		p.findings = appendBounded(p.findings, Finding{
+			Offset: f.Rule.Offset, Sheet: f.Sheet,
+			Message:     "@font-face is not applied yet",
+			Unsupported: true,
+			Property:    "@font-face",
+		})
+	}
+	return p.apply(doc, m)
+}
 
-	// Expand shorthands and drop what the engine does not implement, once for
-	// the whole run rather than once per element — the answer does not depend
-	// on the element, and a document of ten thousand nodes would otherwise ask
-	// the same question ten thousand times.
-	rules := newRuleSet(s.prepare(sheets))
+// AtRule is an @page or @font-face rule the cascade's walk reached: one whose
+// enclosing @media and @supports conditions are all true, with the cascade
+// terms a caller that decides between two of them needs.
+type AtRule struct {
+	Rule css.Rule
+	// Sheet is the stylesheet it was written in, as Sheet.Name gave it.
+	Sheet  string
+	Origin Origin
+	// Layer is the cascade layer it was written in, zero for none; LayerRank
+	// orders two of them as the cascade orders two declarations.
+	Layer int
+}
+
+// Prepared is a set of stylesheets read the way the cascade reads them — every
+// selector parsed, every shorthand expanded, every @media, @supports and @layer
+// evaluated — and not yet applied to a document.
+//
+// It exists because two things a document needs are decided by at-rules the
+// cascade walks past and does not apply: @page describes the paper and
+// @font-face loads a file. Each had a walker of its own in layout, and each
+// walker drifted from this one: the @page reader descended only into @media,
+// so "@supports (display: block) { @page { size: A5 } }" and "@layer print {
+// @page { … } }" were lost with nothing said, once @supports and @layer were
+// applied here (audit C33); an @font-face inside any conditional was reported
+// "not applied yet" (C138). Walking once and handing the at-rules over is how
+// the three cannot disagree about which blocks are live.
+//
+// A caller that needs them before styling — the fonts have to be loaded before
+// a font-size in ex can be computed, and the page decided before layout —
+// calls Prepare, reads Pages and FontFaces, and then Apply. ApplyIn is the two
+// in one call.
+type Prepared struct {
+	media    Media
+	rules    []preparedRule
+	findings []Finding
+	seen     map[string]bool
+
+	// Pages and FontFaces are the @page and @font-face rules the walk reached,
+	// in stylesheet order: at the top of a sheet or inside any @media,
+	// @supports or @layer whose condition held. One written inside a style
+	// rule is not among them — CSS Nesting allows neither there — and was
+	// reported as dropped.
+	Pages     []AtRule
+	FontFaces []AtRule
+}
+
+// Prepare reads sheets for the given medium: see Prepared.
+//
+// Every media query in them is answered about media, and that is the one
+// answer for the document — see layout's pipeline for why it is the sheet the
+// caller asked for and not the one @page goes on to choose.
+func Prepare(sheets []Sheet, media Media) *Prepared {
+	s := &Styler{media: media, seen: map[string]bool{}, attrOffset: -1}
+	rules := s.prepare(sheets)
+	return &Prepared{media: media, rules: rules, findings: s.findings, seen: s.seen,
+		Pages: s.pages, FontFaces: s.fontFaces}
+}
+
+// Apply computes a style for every element in a document, from the prepared
+// sheets. It may be called more than once, for more than one document: it
+// changes nothing it was given.
+func (p *Prepared) Apply(doc *html.Node, m Metrics) Styled {
+	out, _ := p.apply(doc, m)
+	return out
+}
+
+func (p *Prepared) apply(doc *html.Node, m Metrics) (Styled, *Styler) {
+	s := &Styler{matcher: NewMatcher(doc), media: p.media, seen: maps.Clone(p.seen),
+		findings: append([]Finding(nil), p.findings...), attrOffset: -1}
+
+	// Shorthands were expanded and what the engine does not implement dropped
+	// once for the whole run, in Prepare, rather than once per element — the
+	// answer does not depend on the element, and a document of ten thousand
+	// nodes would otherwise ask the same question ten thousand times. The
+	// rules are copied because indexing them numbers them.
+	rules := newRuleSet(append([]preparedRule(nil), p.rules...))
 	s.budget = &matchBudget{rules: make([]ruleWork, len(rules.rules))}
 
 	out := Styled{
@@ -485,7 +575,7 @@ func (s *Styler) prepare(sheets []Sheet) []preparedRule {
 
 	for _, sheet := range sheets {
 		s.sheet = sheet.Name
-		if done, ok := preparedBefore(sheet, order); ok {
+		if done, ok := preparedBefore(sheet, order, s.media); ok {
 			// The same sheet, prepared before, at the same place in the order.
 			// The rules are reused; the findings are raised again, because they
 			// belong to this document. See preparedSheet.
@@ -493,10 +583,13 @@ func (s *Styler) prepare(sheets []Sheet) []preparedRule {
 			for _, f := range done.findings {
 				s.report(f)
 			}
+			s.pages = append(s.pages, done.pages...)
+			s.fontFaces = append(s.fontFaces, done.fontFaces...)
 			order = done.endOrder
 			continue
 		}
-		mark := preparation{start: order, rules: len(out), findings: len(s.findings)}
+		mark := preparation{start: order, rules: len(out), findings: len(s.findings),
+			pages: len(s.pages), fontFaces: len(s.fontFaces)}
 		for _, rule := range sheet.Rules {
 			s.prepareRule(rule, nil, sheet.Origin, &out, &order)
 		}
@@ -524,7 +617,8 @@ func (s *Styler) prepare(sheets []Sheet) []preparedRule {
 // content: the caller hands over the same slice for every document — layout
 // parses the sheet once — so "the same rules" is a pointer comparison and not a
 // fourteen-kilobyte one. A sheet built freshly per document has a different
-// slice, misses, and is prepared as it always was.
+// slice, misses, and is prepared as it always was. The slice's length and the
+// medium are in the key as well — see preparedSheet.
 //
 // **It is one slot and not a map, and that is the whole of its memory
 // behaviour.** A map keyed on whatever a caller hands over is a leak that
@@ -554,18 +648,30 @@ func (s *Styler) prepare(sheets []Sheet) []preparedRule {
 // preparation is where one sheet's preparation began, in each of the three
 // things it appends to.
 type preparation struct {
-	start    int
-	rules    int
-	findings int
+	start     int
+	rules     int
+	findings  int
+	pages     int
+	fontFaces int
 }
 
 // preparedSheet is one remembered preparation.
+//
+// The key is the rule slice's first element *and* its length *and* the medium:
+// a caller that hands over rules[:k] of the same backing array is handing over
+// a different sheet, and a sheet with an @media in it prepares differently for
+// a different page. Keyed on the first element alone, both of those reused a
+// preparation that did not describe them (audit C156).
 type preparedSheet struct {
-	key      *css.Rule
-	rules    []preparedRule
-	findings []Finding
-	start    int
-	endOrder int
+	key       *css.Rule
+	n         int
+	media     Media
+	rules     []preparedRule
+	findings  []Finding
+	pages     []AtRule
+	fontFaces []AtRule
+	start     int
+	endOrder  int
 }
 
 // prepared is the one slot. See above for why it is not a map.
@@ -573,12 +679,13 @@ var prepared atomic.Pointer[preparedSheet]
 
 // preparedBefore answers a sheet this has prepared before, at the same point in
 // the cascade order.
-func preparedBefore(sheet Sheet, order int) (*preparedSheet, bool) {
+func preparedBefore(sheet Sheet, order int, media Media) (*preparedSheet, bool) {
 	done := prepared.Load()
 	switch {
 	case done == nil || len(sheet.Rules) == 0:
 		return nil, false
-	case done.key != &sheet.Rules[0] || done.start != order:
+	case done.key != &sheet.Rules[0] || done.n != len(sheet.Rules) ||
+		done.media != media || done.start != order:
 		return nil, false
 	}
 	return done, true
@@ -600,11 +707,15 @@ func (s *Styler) remember(sheet Sheet, mark preparation, out []preparedRule,
 		return
 	}
 	prepared.Store(&preparedSheet{
-		key:      &sheet.Rules[0],
-		rules:    append([]preparedRule(nil), out[mark.rules:]...),
-		findings: append([]Finding(nil), findings[mark.findings:]...),
-		start:    mark.start,
-		endOrder: order,
+		key:       &sheet.Rules[0],
+		n:         len(sheet.Rules),
+		media:     s.media,
+		rules:     append([]preparedRule(nil), out[mark.rules:]...),
+		findings:  append([]Finding(nil), findings[mark.findings:]...),
+		pages:     append([]AtRule(nil), s.pages[mark.pages:]...),
+		fontFaces: append([]AtRule(nil), s.fontFaces[mark.fontFaces:]...),
+		start:     mark.start,
+		endOrder:  order,
 	})
 }
 
@@ -709,6 +820,28 @@ func (s *Styler) prepareSupports(rule css.Rule, parent *css.Nesting,
 	}
 }
 
+// collectAtRule keeps an @page or @font-face rule for the stage that acts on
+// it, or reports one written inside a style rule, where CSS Nesting §2 allows
+// neither — "p { @page { size: A5 } }" is not a page rule, and it was dropped
+// with nothing said.
+func (s *Styler) collectAtRule(rule css.Rule, parent *css.Nesting, origin Origin) {
+	name := "@" + strings.ToLower(rule.Name)
+	if parent != nil {
+		s.report(Finding{
+			Offset:   rule.Offset,
+			Message:  name + " cannot be written inside a style rule, so it was dropped",
+			Property: name,
+		})
+		return
+	}
+	at := AtRule{Rule: rule, Sheet: s.sheet, Origin: origin, Layer: s.layer}
+	if name == "@page" {
+		s.pages = append(s.pages, at)
+	} else {
+		s.fontFaces = append(s.fontFaces, at)
+	}
+}
+
 // quoted is a condition as it appears in a finding.
 func quoted(s string) string { return strconv.Quote(strings.TrimSpace(s)) }
 
@@ -793,12 +926,13 @@ func (s *Styler) prepareRule(rule css.Rule, parent *css.Nesting, origin Origin,
 			s.prepareSupports(rule, parent, origin, out, order)
 			return
 		}
-		if strings.EqualFold(rule.Name, "page") {
+		if strings.EqualFold(rule.Name, "page") || strings.EqualFold(rule.Name, "font-face") {
 			// @page selects no element and computes no value on one: it
-			// describes the paper, and the stage that lays a document out on
-			// paper reads it. There is nothing for the cascade to say about it
-			// either way, so it says nothing rather than reporting a rule that
-			// is applied elsewhere as one that is not.
+			// describes the paper. @font-face loads a file. The stages that do
+			// those read them, and this walk is where they are found — at any
+			// depth under the @media, @supports and @layer this walk
+			// evaluates, with the layer it was written in. See Prepared.
+			s.collectAtRule(rule, parent, origin)
 			return
 		}
 		if strings.EqualFold(rule.Name, "charset") {
@@ -828,9 +962,9 @@ func (s *Styler) prepareRule(rule css.Rule, parent *css.Nesting, origin Origin,
 			return
 		}
 		// An at-rule this package does not act on and no other stage does
-		// either. @font-face is taken out of the stylesheet before it reaches
-		// here, and @page is skipped above; everything left genuinely is not
-		// applied, and reporting it is how that stays visible until it is.
+		// either. @page and @font-face are handed over above; everything left
+		// genuinely is not applied, and reporting it is how that stays visible
+		// until it is.
 		s.report(Finding{
 			Offset:      rule.Offset,
 			Message:     "@" + rule.Name + " is not applied yet",
@@ -1608,17 +1742,22 @@ func (s *Styler) report(f Finding) {
 	case f.Sheet == "" && !f.InMarkup:
 		f.Sheet = s.sheet
 	}
+	s.findings = appendBounded(s.findings, f)
+}
+
+// appendBounded adds a finding to a list held to maxFindings, with a note in
+// place of the first one past it.
+func appendBounded(findings []Finding, f Finding) []Finding {
 	switch {
-	case len(s.findings) > maxFindings:
-		return
-	case len(s.findings) == maxFindings:
-		s.findings = append(s.findings, Finding{
+	case len(findings) > maxFindings:
+		return findings
+	case len(findings) == maxFindings:
+		return append(findings, Finding{
 			Offset:  -1,
 			Message: "further styling problems were not reported",
 		})
-	default:
-		s.findings = append(s.findings, f)
 	}
+	return append(findings, f)
 }
 
 // reportUncomputedPseudo names a pseudo-element the selector parser accepts and
@@ -2495,6 +2634,11 @@ func isCustomProperty(name string) bool { return strings.HasPrefix(name, "--") }
 func unsetValue() []css.ComponentValue {
 	return []css.ComponentValue{{Token: css.Token{Kind: css.Ident, Value: kwUnset}}}
 }
+
+// UsesVar is usesVar for a reader outside the cascade — @page's — that meets
+// the same construct and has to give it the same answer: correct CSS this
+// engine does not substitute, not a mistake.
+func UsesVar(vals []css.ComponentValue) bool { return usesVar(vals) }
 
 // usesVar reports whether a value refers to a custom property, at any depth. A
 // var() inside a calc() inside a shorthand is still a value this engine cannot
