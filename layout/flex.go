@@ -65,6 +65,12 @@ type flexValues struct {
 	basis        style.Unit
 	basisAuto    bool
 	basisContent bool
+	// basisKeyword is one of the three intrinsic sizes flex-basis takes from
+	// width's grammar — "min-content", "max-content" or "fit-content" — or
+	// empty. Each names a size of the item's content, and none of them is
+	// "auto": a basis of "max-content" on an item that declares "width: 50px"
+	// is as wide as its text, which is the one thing "auto" would not give it.
+	basisKeyword string
 }
 
 // flexValuesOf reads the three properties off an item.
@@ -80,8 +86,15 @@ func (l *layouter) flexValuesOf(b *Box, room flexRoom) flexValues {
 	if v, ok := parseNumber(trimmedLower(b.Style.Get("flex-shrink"))); ok && v >= 0 {
 		out.shrink = v
 	}
-	switch trimmedLower(b.Style.Get("flex-basis")) {
+	switch basis := trimmedLower(b.Style.Get("flex-basis")); basis {
 	case "", "auto":
+	case "min-content", "max-content", "fit-content":
+		// Sizes of the content, answered by flexBaseSize once the item's
+		// content can be measured. Read as a length they failed to parse and
+		// fell to "auto", which was a basis of the item's width and not of
+		// its text, and nothing said so. "stretch" and "fit-content()" are
+		// still not read, and checkIntrinsicSizing says that.
+		out.basisKeyword, out.basisAuto = basis, false
 	case "content":
 		// "content" is "size it as though flex-basis were auto and the main
 		// size were auto", which is not the same as "auto" and differs from it
@@ -1413,26 +1426,10 @@ func (l *layouter) flexItems(b *Box, a flexAxis, room flexRoom, origin flow) []*
 	width := room.width
 	var out []*flexItem
 	for _, c := range b.Children {
-		if c.IsText() || (c.Anonymous() && len(c.Children) == 0) || c.outOfFlow() {
-			// The same three the gate passed over: white space that collapses
-			// to nothing, and a box that is out of the flow rather than in the
-			// row. An anonymous box with something in it *is* an item — §4's
-			// own, made in box.go, or the table repair's around a stray cell.
+		if !isFlexItem(c) {
 			continue
 		}
-		it := &flexItem{
-			box:     c,
-			values:  l.flexValuesOf(c, room),
-			margin:  l.edges(c, "margin", width),
-			border:  l.borderWidths(c),
-			padding: l.paddingOf(c, width),
-		}
-		it.mainSurround = a.mainEdge(it.margin).
-			Add(a.mainEdge(it.border)).Add(a.mainEdge(it.padding))
-		it.crossMargin = a.crossEdge(it.margin)
-		it.auto = l.autoMarginEdges(c)
-		it.order = orderOf(c)
-		out = append(out, it)
+		out = append(out, l.newFlexItem(c, a, room))
 	}
 
 	// §5.4's order-modified document order, which is where every other
@@ -1471,6 +1468,34 @@ func (l *layouter) flexItems(b *Box, a flexAxis, room flexRoom, origin flow) []*
 	return out
 }
 
+// isFlexItem reports whether a child of a flex container is one of its items.
+//
+// It is the same three the gate passes over: white space that collapses to
+// nothing, and a box that is out of the flow rather than in the row. An
+// anonymous box with something in it *is* an item — §4's own, made in box.go,
+// or the table repair's around a stray cell.
+func isFlexItem(c *Box) bool {
+	return !c.IsText() && !(c.Anonymous() && len(c.Children) == 0) && !c.outOfFlow()
+}
+
+// newFlexItem is an item with everything read off it that does not depend on
+// the sizes §9 settles: its factors, its edges and its order.
+func (l *layouter) newFlexItem(c *Box, a flexAxis, room flexRoom) *flexItem {
+	it := &flexItem{
+		box:     c,
+		values:  l.flexValuesOf(c, room),
+		margin:  l.edges(c, "margin", room.width),
+		border:  l.borderWidths(c),
+		padding: l.paddingOf(c, room.width),
+	}
+	it.mainSurround = a.mainEdge(it.margin).
+		Add(a.mainEdge(it.border)).Add(a.mainEdge(it.padding))
+	it.crossMargin = a.crossEdge(it.margin)
+	it.auto = l.autoMarginEdges(c)
+	it.order = orderOf(c)
+	return it
+}
+
 // crossSizeOf is an item's used cross size as a border box, which a column has
 // to settle before it can measure anything.
 //
@@ -1491,6 +1516,16 @@ func (l *layouter) crossSizeOf(b *Box, a flexAxis, it *flexItem, width style.Uni
 		// either.
 		return declared.Add(edge)
 	}
+	want := l.contentWidths(it.box)
+	fit := style.Clamp(maxZero(room.Sub(edge)), want.min, want.max)
+	if declared, ok := l.itemKeyword(it, "width", want, fit); ok {
+		// A cross size written as an intrinsic keyword is a size of the item's
+		// own, and an item that states one is not stretched — stretchesAcross
+		// says so, because the declaration is not "auto". It was read as no
+		// declaration at all here, so "width: min-content" down a column came
+		// out as wide as the column.
+		return declared.Add(edge)
+	}
 	if l.alignOf(b, a, it) == crossStretch && l.stretchesAcross(a, it) && !l.wraps(b) {
 		// The line of a container that does not wrap is the container, so a
 		// stretched item's cross size is known here and the item can be
@@ -1503,8 +1538,6 @@ func (l *layouter) crossSizeOf(b *Box, a flexAxis, it *flexItem, width style.Uni
 		// a number this is one of the inputs to.
 		return room
 	}
-	want := l.contentWidths(it.box)
-	fit := style.Clamp(maxZero(room.Sub(edge)), want.min, want.max)
 	return fit.Add(edge)
 }
 
@@ -1533,20 +1566,100 @@ func (l *layouter) measuredMain(it *flexItem, a flexAxis, width style.Unit,
 // max-content size, which is the size it would take if the line were as wide as
 // it liked. That last one is why a row of three words comes out as three words
 // wide rather than three equal thirds.
+//
+// A basis or a width written as one of the intrinsic keywords is a size of the
+// content too, and a different one from "auto" — "min-content" is the longest
+// word and not the whole line. Down a column all three are the same number,
+// because along a block's own block axis the content has one size: what it
+// came to.
+//
+// Where nothing is declared at all the content is sized "under the
+// constraint" the container is, which is §9.2.3's rule: at max-content while
+// the container is being laid out or measured at its widest, and at
+// min-content while it is measured at its narrowest.
 func (l *layouter) flexBaseSize(it *flexItem, a flexAxis, room flexRoom) style.Unit {
+	got, fit := l.mainContent(it, a, room)
+	if kw := it.values.basisKeyword; kw != "" {
+		return contentKeyword(kw, got, fit)
+	}
 	if !it.values.basisAuto {
 		return maxZero(it.values.basis.Sub(l.sizingEdgeOf(it.box, a, room.width)))
 	}
-	if declared, ok := l.mainLength(it.box, a, a.mainName(), room); ok &&
-		!it.values.basisContent {
-		return declared
+	if !it.values.basisContent {
+		if declared, ok := l.mainLength(it.box, a, a.mainName(), room); ok {
+			return declared
+		}
+		if !a.column {
+			if declared, ok := l.itemKeyword(it, "width", got, fit); ok {
+				return declared
+			}
+		}
 	}
 	if a.column {
 		// The max-content size of a block along its own block axis is what its
 		// content came to, which is the measurement already taken.
 		return it.measured
 	}
-	return l.contentWidths(it.box).max
+	if !room.definite && room.underMin {
+		return got.min
+	}
+	return got.max
+}
+
+// mainContent is an item's content along the main axis, as the pair of
+// intrinsic sizes and the fit-content size between them.
+//
+// Along a row that is contentWidths and CSS Sizing §5's fit-content formula
+// over the room the line leaves the item, which is the container's inner width
+// less the item's own margins, border and padding. A container being measured
+// has no such room, and its constraint answers instead: fit-content under a
+// min-content constraint is min-content and under a max-content one is
+// max-content. Down a column it is the measured height for all three.
+func (l *layouter) mainContent(it *flexItem, a flexAxis, room flexRoom) (got intrinsicWidths, fit style.Unit) {
+	if a.column {
+		return intrinsicWidths{min: it.measured, max: it.measured}, it.measured
+	}
+	got = l.contentWidths(it.box)
+	switch {
+	case room.definite:
+		fit = style.Clamp(maxZero(room.main.Sub(it.mainSurround)), got.min, got.max)
+	case room.underMin:
+		fit = got.min
+	default:
+		fit = got.max
+	}
+	return got, fit
+}
+
+// contentKeyword is the size one of the three intrinsic keywords names, out of
+// the content's two sizes and the fit-content size between them.
+func contentKeyword(kw string, got intrinsicWidths, fit style.Unit) style.Unit {
+	switch kw {
+	case "min-content":
+		return got.min
+	case "max-content":
+		return got.max
+	}
+	return fit
+}
+
+// itemKeyword is an intrinsic keyword on one of an item's horizontal sizing
+// properties, answered as a content size, or false where the property does not
+// name one this engine applies.
+//
+// appliesSizingKeyword is asked first and is the whole of the gate. It is what
+// checkIntrinsicSizing reports from, so a keyword this answers is one the
+// document is told is applied and a keyword it refuses is one the document is
+// told is not — the two cannot drift, which is why this does not keep a list
+// of its own. The keyword names a content width under either box-sizing value,
+// for the reason keywordWidth gives.
+func (l *layouter) itemKeyword(it *flexItem, property string, got intrinsicWidths,
+	fit style.Unit) (style.Unit, bool) {
+
+	if !l.appliesSizingKeyword(it.box, property) {
+		return 0, false
+	}
+	return contentKeyword(bareSizingKeyword(it.box.Style.Get(property)), got, fit), true
 }
 
 // flexRoom is what the container offers an item that sizes itself against it:
@@ -1562,6 +1675,12 @@ type flexRoom struct {
 	main     style.Unit
 	definite bool
 	width    style.Unit
+	// underMin says an indefinite main size is the container being measured
+	// under a min-content constraint rather than a max-content one. Only the
+	// intrinsic measurement sets it — layout always knows a row's width — and
+	// what it changes is what an item's content counts as where §9.2.3 says to
+	// "size the item under that constraint".
+	underMin bool
 }
 
 // mainLength is one of the item's own main-axis sizes, resolved as a content
@@ -1614,12 +1733,28 @@ func (l *layouter) sizingEdgeOf(c *Box, a flexAxis, containing style.Unit) style
 // item that asked to be narrower than its content asked for that.
 func (l *layouter) flexMainLimits(it *flexItem, a flexAxis, room flexRoom) (min, max style.Unit) {
 	c := it.box
+	got, fit := l.mainContent(it, a, room)
+	// A keyword limit is a limit, and along a row it is read as one. Down a
+	// column the limits are heights, which this engine does not take from a
+	// keyword anywhere — checkIntrinsicSizing reports them — and so neither
+	// does this.
+	keyword := func(property string) (style.Unit, bool) {
+		if a.column {
+			return 0, false
+		}
+		return l.itemKeyword(it, property, got, fit)
+	}
 	max = style.MaxUnit
 	if v, ok := l.mainLength(c, a, a.maxName(), room); ok {
+		max = v
+	} else if v, ok := keyword(a.maxName()); ok {
 		max = v
 	}
 	if !l.isAuto(c, a.minName()) {
 		if v, ok := l.mainLength(c, a, a.minName(), room); ok {
+			return v, max
+		}
+		if v, ok := keyword(a.minName()); ok {
 			return v, max
 		}
 	}
@@ -1636,13 +1771,21 @@ func (l *layouter) flexMainLimits(it *flexItem, a flexAxis, room flexRoom) (min,
 	// asked for exactly that. It is what makes the ellipsis idiom work, "flex:
 	// 1 1 0" with "overflow: hidden" on a long word, which could not shrink at
 	// all: 588px of word in a 300px container.
+	// §4.5's specified size suggestion is the item's own main size where it
+	// states one, a keyword included: "width: min-content" is as definite a
+	// size as a length is, and an item that asked for it asked to be no wider
+	// than its longest word.
+	specified, stated := l.mainLength(c, a, a.mainName(), room)
+	if !stated {
+		specified, stated = keyword(a.mainName())
+	}
 	if !overflowIsVisibleOn(c.Style, a.overflowName()) {
-		if declared, ok := l.mainLength(c, a, a.mainName(), room); ok && declared < max {
-			return declared, max
+		if stated && specified < max {
+			return specified, max
 		}
 		return 0, max
 	}
-	min = l.contentWidths(c).min
+	min = got.min
 	if a.column {
 		// §4.5's content size suggestion along the block axis: the smallest a
 		// block can be without its content spilling out of it is the size its
@@ -1651,8 +1794,8 @@ func (l *layouter) flexMainLimits(it *flexItem, a flexAxis, room flexRoom) (min,
 		// behaviour authors meet as "my flex item will not get smaller".
 		min = it.measured
 	}
-	if declared, ok := l.mainLength(c, a, a.mainName(), room); ok && declared < min {
-		min = declared
+	if stated && specified < min {
+		min = specified
 	}
 	if max < min {
 		min = max
@@ -1847,6 +1990,123 @@ func absUnit(v style.Unit) style.Unit {
 		return -v
 	}
 	return v
+}
+
+// flexContentWidths is a flex container's min-content and max-content widths,
+// which Flexbox §9.9 answers and a stack of blocks does not.
+//
+// Along a row the items sit side by side, so the container needs their sum —
+// §9.9.1's Web-compatible algorithm, which the specification offers beside an
+// "ideal" one it says in as many words is not Web-compatible, and which is the
+// one every browser ships. The max-content width is the sum of the items'
+// max-content contributions; the min-content width of a single-line container
+// is the sum of their min-content contributions, because nothing it holds may
+// go onto a second line; and that of a multi-line one is the largest of them,
+// because every item may. The gaps between the items are counted where the
+// items are summed: Box Alignment §8 makes a gap room between two items, and a
+// row measured without it is a gap too narrow for its own content.
+//
+// Down a column the items stack and the width is the cross size, which §9.9.2
+// makes the largest contribution of any item. A multi-line column is the one
+// case not answered in full. Its max-content width is the sum of its lines'
+// widths, and which items share a line depends on how tall each is — a
+// measurement by layout that this walk over the box tree does not make. It is
+// measured as one line, which is exact wherever the column has no height to
+// wrap against, and reported where it has one.
+//
+// Before this every flex container was measured as a block, so a float holding
+// a row of two words was one word wide and hung the second outside itself.
+func (l *layouter) flexContentWidths(b *Box) intrinsicWidths {
+	a := l.axisOf(b)
+	wraps := l.wraps(b)
+	var out intrinsicWidths
+	n := 0
+	for _, c := range b.Children {
+		if !isFlexItem(c) {
+			continue
+		}
+		n++
+		if a.column {
+			got := l.outerWidths(c, 0)
+			out.min = style.Max(out.min, got.min)
+			out.max = style.Max(out.max, got.max)
+			continue
+		}
+		got := l.flexItemContributions(c, a)
+		if wraps {
+			out.min = style.Max(out.min, got.min)
+		} else {
+			out.min = out.min.Add(got.min)
+		}
+		out.max = out.max.Add(got.max)
+	}
+	if n > 1 && !a.column {
+		// A percentage gap is of a width that is being worked out, and Box
+		// Alignment §8.3 resolves it against nothing for exactly this: a basis
+		// of zero, which is what flexGap is handed.
+		gaps := l.flexGap(b, a, 0).Mul(float64(n - 1))
+		out.max = out.max.Add(gaps)
+		if !wraps {
+			out.min = out.min.Add(gaps)
+		}
+	}
+	if a.column && wraps && n > 1 &&
+		(!l.isAuto(b, "height") || trimmedLower(b.Style.Get("max-height")) != "none") {
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleUnsupportedValue,
+			Source: AtHTML(offsetOf(b)),
+			Message: "this wrapping flex column was measured as though its items " +
+				"were in one column; where its height wraps them into more, the " +
+				"box sized to hold it is narrower than the columns it holds",
+			Path:     PathOf(b.Element),
+			Property: "flex-wrap",
+		})
+	}
+	out.max = style.Max(out.max, out.min)
+	return out
+}
+
+// flexItemContributions is §9.9.3: how much of a row an item asks for when the
+// row is being measured rather than laid out, as a margin-box width.
+//
+// Each contribution is the larger of the item's content size and the width it
+// states, then capped by its flex base size if it may not grow and floored by
+// it if it may not shrink — an item at "flex: none" is its basis, whatever its
+// content — and then held between its own minimum and maximum main sizes, the
+// automatic minimum of §4.5 included. The base size is found under the same
+// constraint the container is measured under, which is why the two halves are
+// computed separately and not read off one layout.
+func (l *layouter) flexItemContributions(c *Box, a flexAxis) intrinsicWidths {
+	var out intrinsicWidths
+	for _, underMin := range [...]bool{true, false} {
+		room := flexRoom{underMin: underMin}
+		it := l.newFlexItem(c, a, room)
+		got, fit := l.mainContent(it, a, room)
+		size := got.max
+		if underMin {
+			size = got.min
+		}
+		if stated, ok := l.mainLength(c, a, a.mainName(), room); ok {
+			size = style.Max(size, stated)
+		} else if stated, ok := l.itemKeyword(it, a.mainName(), got, fit); ok {
+			size = style.Max(size, stated)
+		}
+		base := l.flexBaseSize(it, a, room)
+		if it.values.grow == 0 {
+			size = style.Min(size, base)
+		}
+		if it.values.shrink == 0 {
+			size = style.Max(size, base)
+		}
+		lo, hi := l.flexMainLimits(it, a, room)
+		size = maxZero(style.Clamp(size, lo, hi).Add(it.mainSurround))
+		if underMin {
+			out.min = size
+		} else {
+			out.max = size
+		}
+	}
+	return out
 }
 
 // flexes reports whether a flex container is one this engine arranges, and

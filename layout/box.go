@@ -1492,11 +1492,20 @@ func (b *boxBuilder) wrapLooseText(parent *Box) []*Box {
 		if len(run) == 0 {
 			return
 		}
-		// White space that would collapse to nothing is not content and
-		// generates no item. Every document in the suite writes a newline
-		// between its elements, so without this a row of three <div>s would be
-		// seven items — four of them empty, each taking a share of the line.
-		if !hasInFlowContent(run) {
+		// White space is not content here and generates no item. Every
+		// document in the suite writes a newline between its elements, so
+		// without this a row of three <div>s would be seven items — four of
+		// them empty, each taking a share of the line.
+		//
+		// Whatever white-space says, and that is where this parts from the
+		// anonymous block rule. Flexbox §4 and Grid §6 both say a run of text
+		// that "contains only white space (i.e. characters that can be
+		// affected by the white-space property)" is not rendered, which a
+		// preserving white-space does not change: hasInFlowContent keeps
+		// preserved white space, because a blank line in a <pre> is one the
+		// author wrote, and asking it here turned the indentation of a
+		// "white-space: pre" row into three extra items between the real ones.
+		if onlyDocumentWhiteSpace(run) {
 			run = nil
 			return
 		}
@@ -1992,6 +2001,24 @@ func (b *boxBuilder) houseInsideMarker(parent *Box, children []*Box) []*Box {
 		FirstLine: parent.FirstLine, InsideMarker: parent,
 	}
 	return append([]*Box{anon}, children...)
+}
+
+// onlyDocumentWhiteSpace reports whether a run of text boxes holds nothing but
+// CSS Text §4's document white space: spaces, tabs and segment breaks, and the
+// carriage returns §4.1 treats as spaces. Those are "the characters that can be
+// affected by the white-space property", which is Flexbox §4's definition of
+// the run that makes no item. A no-break space is not one of them — it is text
+// that happens to be blank, and an author who wrote one wrote an item.
+func onlyDocumentWhiteSpace(run []*Box) bool {
+	for _, c := range run {
+		if !c.IsText() {
+			return false
+		}
+		if strings.Trim(c.Text, " \t\n\r") != "" {
+			return false
+		}
+	}
+	return true
 }
 
 // hasInFlowContent reports whether a run of inline-level boxes holds anything

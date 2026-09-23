@@ -1474,21 +1474,19 @@ func TestTextInsideAFlexContainerBecomesAnItemOfItsOwn(t *testing.T) {
 // would make a row of three <div>s into seven items — four of them empty, each
 // taking a share of the line and a gap.
 //
-// It is the collapsing that decides, not the characters: under "white-space:
-// pre" the same space is content and does become an item.
+// It is the characters that decide, not the collapsing. Flexbox §4 says a run
+// that "contains only document white space characters (i.e. characters that
+// can be affected by the white-space property)" is not rendered, and a
+// preserving white-space does not change what the characters are. This test
+// said the opposite until audit C130: under "white-space: pre" it wanted the
+// same indentation to be three more items, which is the anonymous *block*
+// rule's answer — a blank line in a <pre> is a line — and not this one's.
 func TestWhiteSpaceBetweenItemsIsNotAnItem(t *testing.T) {
 	const spaced = "<div id=\"f\">\n  <div>a</div>\n  <div>b</div>\n</div>"
 	wantRow(t, flexRow(t, spaced, `#f { width: 300px }`),
 		[][2]float64{{0, 12}, {12, 12}}, "two items with newlines between them")
-
-	// Preserved, each run between them is a text run like any other and the
-	// row comes out five items. Their widths are the widest line each holds,
-	// because a preserved newline is a line break: "\n  " is two spaces on a
-	// second line and 24px wide, and the trailing "\n" is a break with nothing
-	// after it and no width at all.
 	wantRow(t, flexRow(t, spaced, `#f { width: 300px; white-space: pre }`),
-		[][2]float64{{0, 24}, {24, 12}, {36, 24}, {60, 12}, {72, 0}},
-		"two items with preserved space between them")
+		[][2]float64{{0, 12}, {12, 12}}, "two items with preserved space between them")
 }
 
 // TestAnAnonymousItemIsAnonymous. The box holds the text and nothing else: it

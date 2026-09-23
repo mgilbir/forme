@@ -82,6 +82,12 @@ type intrinsicWidths struct {
 // intrinsic size, and neither reads this; answering here would produce a number
 // that is then ignored, and the finding those boxes still get is the honest
 // report.
+//
+// A flex or a grid container is not one of those. Its width is resolved by the
+// same path a block's is, and it was refused only because the number this would
+// have read was a block's measurement of it — the widest item rather than the
+// row. measureWidths asks the container's own formatting context now, so the
+// answer is the container's.
 func (l *layouter) keywordWidth(b *Box) (style.Unit, bool) {
 	if !acceptsKeywordWidth(b) {
 		return 0, false
@@ -145,7 +151,7 @@ func acceptsKeywordWidth(b *Box) bool {
 		return false
 	}
 	switch b.Inner {
-	case InnerFlow, InnerFlowRoot:
+	case InnerFlow, InnerFlowRoot, InnerFlex, InnerGrid:
 		return true
 	}
 	return false
@@ -170,6 +176,27 @@ func (l *layouter) shrinkToFit(b *Box, available style.Unit) style.Unit {
 // to fit it needs four and not eight — and a parent that asked for eight would
 // be twice as wide as its own content with the rest of the page showing through.
 func (l *layouter) outerWidths(b *Box, containing style.Unit) intrinsicWidths {
+	inner := l.contributionWidths(b)
+	edges := l.edges(b, "margin", containing).Horizontal().
+		Add(l.borderWidths(b).Horizontal()).
+		Add(l.paddingOf(b, containing).Horizontal())
+	return intrinsicWidths{
+		min: maxZero(inner.min.Add(edges)),
+		max: maxZero(inner.max.Add(edges)),
+	}
+}
+
+// contributionWidths is outerWidths without the edges: a box's two widths once
+// its own width and its own limits have had their say, as content widths.
+//
+// It is a function of its own because the edges are not always the ones
+// outerWidths would resolve. A grid item's margins are resolved once, against
+// the container, and added by the grid; asking outerWidths there would add a
+// second set resolved against nothing. What the box itself declares is the
+// same wherever it is measured, and this is the one place that says what it
+// comes to — the grid read only a declared width, so a column holding an item
+// at "max-width: 50px" was sized to the item's whole line.
+func (l *layouter) contributionWidths(b *Box) intrinsicWidths {
 	inner := l.contentWidths(b)
 	if declared, ok := l.intrinsicLength(b, "width"); ok {
 		inner = intrinsicWidths{min: declared, max: declared}
@@ -188,10 +215,18 @@ func (l *layouter) outerWidths(b *Box, containing style.Unit) intrinsicWidths {
 		inner = intrinsicWidths{min: declared, max: declared}
 	}
 	lo, hi := style.Unit(0), style.MaxUnit
+	// A limit written as a keyword is a limit as much as one written as a
+	// length. keywordLimit is what layout reads it through, and a box laid out
+	// no narrower than its longest line was measured as though it could be,
+	// so its parent shrank round a width the box would not take.
 	if v, ok := l.intrinsicLength(b, "min-width"); ok {
+		lo = v
+	} else if v, ok := l.keywordLimit(b, "min-width"); ok {
 		lo = v
 	}
 	if v, ok := l.intrinsicLength(b, "max-width"); ok {
+		hi = v
+	} else if v, ok := l.keywordLimit(b, "max-width"); ok {
 		hi = v
 	}
 	// §10.4's order — a minimum below a contradicting maximum still wins — is
@@ -202,14 +237,7 @@ func (l *layouter) outerWidths(b *Box, containing style.Unit) intrinsicWidths {
 	// defence and is decoration.
 	inner.min = style.Clamp(inner.min, lo, hi)
 	inner.max = style.Clamp(inner.max, lo, hi)
-
-	edges := l.edges(b, "margin", containing).Horizontal().
-		Add(l.borderWidths(b).Horizontal()).
-		Add(l.paddingOf(b, containing).Horizontal())
-	return intrinsicWidths{
-		min: maxZero(inner.min.Add(edges)),
-		max: maxZero(inner.max.Add(edges)),
-	}
+	return inner
 }
 
 // intrinsicLength reads a sizing property for use in an intrinsic measurement,
@@ -269,6 +297,22 @@ func (l *layouter) measureWidths(b *Box) intrinsicWidths {
 	if b.TableWrapper {
 		return l.tableWrapperWidths(b)
 	}
+	// A flex or a grid container's content is not a stack of blocks, and the
+	// question of how wide it wants to be is answered by the formatting context
+	// that will lay it out — CSS Sizing 3 §5 defers to it, and Flexbox §9.9 and
+	// Grid §12 each give their own answer. Every box reached this one function
+	// and every box was measured as a block, so a row of two items in a float
+	// shrank the float to the wider item and hung the second one outside it.
+	//
+	// The gate is asked rather than the display value, for the reason children
+	// asks it: a container this engine does not arrange is laid out as a block,
+	// and it has to be measured as the thing it will be.
+	switch {
+	case b.Inner == InnerFlex && l.flexes(b, 0):
+		return l.flexContentWidths(b)
+	case b.Inner == InnerGrid && l.arrangesGrid(b, 0):
+		return l.gridContentWidths(b)
+	}
 	if hasInlineChild(b) {
 		return l.inlineWidths(b)
 	}
@@ -278,6 +322,16 @@ func (l *layouter) measureWidths(b *Box) intrinsicWidths {
 	var out intrinsicWidths
 	for _, c := range b.Children {
 		if c.Outer != OuterBlock {
+			continue
+		}
+		if c.Position.outOfFlow() {
+			// An absolutely positioned child is not in this box's flow and
+			// takes no room in it: §10.3.7 sizes it against its containing
+			// block, which is found after this box has its width. §9.7
+			// blockified it, which is how it reached this loop at all, and a
+			// floated menu holding a five-hundred-pixel dropdown came out five
+			// hundred pixels wide around the one word it was for. The inline
+			// branch has always skipped it; see widthsOf.
 			continue
 		}
 		// A float among block children is measured too. It is out of flow, but

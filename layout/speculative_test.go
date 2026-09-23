@@ -509,7 +509,7 @@ func clampedAbsoluteDoc(d int, abs bool) string {
 			`px"></div><div>`)
 	}
 	b.WriteString(`<div style="display:flex"><div id=clamp style="flex:0 0 30%;line-clamp:2">w ` +
-		`<span style="display:inline-grid"><div id=abs style="font-size:20px;` + pos +
+		`<span style="display:inline-grid;width:10em"><div id=abs style="font-size:20px;` + pos +
 		`">ccc dd ccc dd  </div></span> a </div></div>`)
 	b.WriteString(strings.Repeat(`</div></div>`, d))
 	return b.String()
@@ -596,7 +596,7 @@ func TestAThrownAwayOutOfFlowBoxDoesNotUnkeepItsAncestors(t *testing.T) {
 // it with the page the first one got.
 func TestAnOutOfFlowBoxPastAClampIsTakenBack(t *testing.T) {
 	doc := `<div style="display:flex;flex-direction:column"><div id=clamp style="width:115px;line-clamp:2">w ` +
-		`<span style="display:inline-grid"><div id=abs style="font-size:20px;position:absolute">` +
+		`<span style="display:inline-grid;width:10em"><div id=abs style="font-size:20px;position:absolute">` +
 		`ccc dd ccc dd  </div></span> a </div></div>`
 	built := Build(Input{HTML: doc})
 	w, _ := style.FromPx(400)

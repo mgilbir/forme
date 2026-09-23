@@ -187,6 +187,9 @@ func bareSizingKeyword(raw string) string {
 var sizingProperties = [...]string{
 	"width", "min-width", "max-width",
 	"height", "min-height", "max-height",
+	// flex-basis takes width's grammar, keywords and all, and a keyword on it
+	// that is not read falls to "auto" as quietly as one on width would.
+	"flex-basis",
 }
 
 // checkIntrinsicSizing reports a sizing property that named an intrinsic size
@@ -251,6 +254,14 @@ func (l *layouter) appliesSizingKeyword(b *Box, property string) bool {
 	case "min-width", "max-width":
 		_, ok := l.keywordLimit(b, property)
 		return ok
+	case "flex-basis":
+		// Read by a flex container of its items and by nothing else, so on a
+		// box that is not an arranged item the declaration does nothing that
+		// could be dropped and there is nothing to report.
+		if p := b.Parent; p == nil || p.Inner != InnerFlex || l.refusesToFlex(p) != "" {
+			return true
+		}
+		return l.flexValuesOf(b, flexRoom{}).basisKeyword != ""
 	}
 	return false
 }

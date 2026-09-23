@@ -166,95 +166,9 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 	columnGap := l.gridGap(b, "column-gap", width, true)
 	rowGap := l.gridGap(b, "row-gap", height, definite)
 
-	columns, fit, _ := l.trackList(b, "grid-template-columns", width,
-		trackRoom{size: width, definite: true, gap: columnGap, property: "grid-template-columns"})
-	flow := l.autoFlow(b)
-	autoColumns := l.implicitTracks(b, "grid-auto-columns", width)
-	autoRows := l.implicitTracks(b, "grid-auto-rows", width)
-	explicitColumns := len(columns)
-	for len(columns) < areas.columns {
-		// §7.3: the picture makes the explicit grid. A template of two words
-		// per row has two columns whether or not grid-template-columns named
-		// them, and the ones it did not name are "auto".
-		columns = append(columns, autoTrack())
-		explicitColumns = len(columns)
-	}
-	// §7.5: an item that named a track past the explicit grid is not left
-	// hanging off the end of it — the grid grows to hold it, and the tracks it
-	// grew by are sized by grid-auto-columns or grid-auto-rows.
-	//
-	// This is also what gives a container with no template at all its one
-	// column: every item spans at least one track, so at least one track is
-	// asked for. §7.1's "there is always a grid" needs no clause of its own.
-	for len(columns) < tracksNeeded(items, 1, explicitColumns) {
-		columns = append(columns, implicitTrack(autoColumns, len(columns), explicitColumns))
-	}
-	rows, fitRows, _ := l.trackList(b, "grid-template-rows", width,
+	columns, rows := l.gridTracks(b, items, areas, width,
+		trackRoom{size: width, definite: true, gap: columnGap, property: "grid-template-columns"},
 		trackRoom{size: height, definite: definite, gap: rowGap, property: "grid-template-rows"})
-
-	explicitRows := len(rows)
-	for len(rows) < areas.rows {
-		rows = append(rows, autoTrack())
-		explicitRows = len(rows)
-	}
-	for len(rows) < tracksNeeded(items, 0, explicitRows) {
-		rows = append(rows, implicitTrack(autoRows, len(rows), explicitRows))
-	}
-
-	// §8.5: the items that named a line go where they asked, and the rest are
-	// dealt into what is left. One axis is the one the flow fills along and is
-	// as long as the template made it; the other is however far the items
-	// reached, and grows.
-	var clamped bool
-	if flow.column {
-		// The algorithm is the same one with the axes exchanged, so the items
-		// are turned on their side, dealt, and turned back. Writing it twice
-		// would be two chances to write it differently.
-		transposeItems(items)
-		var grew int
-		grew, clamped = placeItems(items, len(rows), flow.dense)
-		transposeItems(items)
-		for len(columns) < grew {
-			columns = append(columns,
-				implicitTrack(autoColumns, len(columns), explicitColumns))
-		}
-	} else {
-		var grew int
-		grew, clamped = placeItems(items, len(columns), flow.dense)
-		for len(rows) < grew {
-			// The implicit rows, sized by grid-auto-rows — which is "auto"
-			// unless the stylesheet said otherwise, and is the height every row
-			// of a card grid gets when nothing draws them.
-			rows = append(rows, implicitTrack(autoRows, len(rows), explicitRows))
-		}
-	}
-	if clamped {
-		l.rec.ReportDetail(Finding{
-			Rule:   RuleLimit,
-			Source: AtHTML(offsetOf(b)),
-			Message: "the items of this grid reach past " + strconv.Itoa(maxGridTracks) +
-				" tracks, which is as many as this engine makes on one axis; the " +
-				"ones that went further were put in the last track and overlap",
-			Path:     PathOf(b.Element),
-			Property: "grid-auto-flow",
-		})
-	}
-
-	// §7.2.3.2's "auto-fit": the tracks no item landed in are collapsed. It
-	// happens here, after the placement, because "no item landed in it" is a
-	// question only the placement can answer — it was asked of the item *count*
-	// instead, before anything had been placed, which is the same number only
-	// when every item takes one track. One item spanning two of four hundred-
-	// pixel tracks left one track standing and came out four hundred pixels
-	// wide; two tracks stand now and it comes out two hundred, which is what
-	// "auto-fit" means and why it fills a row with three cards where
-	// "auto-fill" leaves room for a fourth.
-	if fit {
-		columns = collapseUnusedTracks(columns, items, 1)
-	}
-	if fitRows {
-		rows = collapseUnusedTracks(rows, items, 0)
-	}
 
 	// The block axis takes no axis of its own: nothing this engine lays out
 	// runs a grid's rows backwards, and the gate has refused the two keywords
@@ -360,6 +274,109 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 		return height
 	}
 	return inner
+}
+
+// gridTracks is §7 and §8 for one container: the explicit tracks the templates
+// write, the implicit ones the items reach into, and every item placed in them.
+//
+// It is its own function because two callers ask it. Layout asks with the
+// container's width and height, and the intrinsic measurement asks with no
+// width at all — a float or a table cell holding a grid needs to know how wide
+// the grid wants to be before it has a width to give it, and what it wants is
+// its columns, which only this knows how to make. Two copies of the placement
+// would be two chances to place the items differently, and the grid measured
+// would not be the grid drawn.
+func (l *layouter) gridTracks(b *Box, items []*gridItem, areas gridAreas, width style.Unit,
+	columnRoom, rowRoom trackRoom) (columns, rows []gridTrack) {
+
+	columns, fit, _ := l.trackList(b, "grid-template-columns", width, columnRoom)
+	flow := l.autoFlow(b)
+	autoColumns := l.implicitTracks(b, "grid-auto-columns", width)
+	autoRows := l.implicitTracks(b, "grid-auto-rows", width)
+	explicitColumns := len(columns)
+	for len(columns) < areas.columns {
+		// §7.3: the picture makes the explicit grid. A template of two words
+		// per row has two columns whether or not grid-template-columns named
+		// them, and the ones it did not name are "auto".
+		columns = append(columns, autoTrack())
+		explicitColumns = len(columns)
+	}
+	// §7.5: an item that named a track past the explicit grid is not left
+	// hanging off the end of it — the grid grows to hold it, and the tracks it
+	// grew by are sized by grid-auto-columns or grid-auto-rows.
+	//
+	// This is also what gives a container with no template at all its one
+	// column: every item spans at least one track, so at least one track is
+	// asked for. §7.1's "there is always a grid" needs no clause of its own.
+	for len(columns) < tracksNeeded(items, 1, explicitColumns) {
+		columns = append(columns, implicitTrack(autoColumns, len(columns), explicitColumns))
+	}
+	rows, fitRows, _ := l.trackList(b, "grid-template-rows", width, rowRoom)
+
+	explicitRows := len(rows)
+	for len(rows) < areas.rows {
+		rows = append(rows, autoTrack())
+		explicitRows = len(rows)
+	}
+	for len(rows) < tracksNeeded(items, 0, explicitRows) {
+		rows = append(rows, implicitTrack(autoRows, len(rows), explicitRows))
+	}
+
+	// §8.5: the items that named a line go where they asked, and the rest are
+	// dealt into what is left. One axis is the one the flow fills along and is
+	// as long as the template made it; the other is however far the items
+	// reached, and grows.
+	var clamped bool
+	if flow.column {
+		// The algorithm is the same one with the axes exchanged, so the items
+		// are turned on their side, dealt, and turned back. Writing it twice
+		// would be two chances to write it differently.
+		transposeItems(items)
+		var grew int
+		grew, clamped = placeItems(items, len(rows), flow.dense)
+		transposeItems(items)
+		for len(columns) < grew {
+			columns = append(columns,
+				implicitTrack(autoColumns, len(columns), explicitColumns))
+		}
+	} else {
+		var grew int
+		grew, clamped = placeItems(items, len(columns), flow.dense)
+		for len(rows) < grew {
+			// The implicit rows, sized by grid-auto-rows — which is "auto"
+			// unless the stylesheet said otherwise, and is the height every row
+			// of a card grid gets when nothing draws them.
+			rows = append(rows, implicitTrack(autoRows, len(rows), explicitRows))
+		}
+	}
+	if clamped {
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleLimit,
+			Source: AtHTML(offsetOf(b)),
+			Message: "the items of this grid reach past " + strconv.Itoa(maxGridTracks) +
+				" tracks, which is as many as this engine makes on one axis; the " +
+				"ones that went further were put in the last track and overlap",
+			Path:     PathOf(b.Element),
+			Property: "grid-auto-flow",
+		})
+	}
+
+	// §7.2.3.2's "auto-fit": the tracks no item landed in are collapsed. It
+	// happens here, after the placement, because "no item landed in it" is a
+	// question only the placement can answer — it was asked of the item *count*
+	// instead, before anything had been placed, which is the same number only
+	// when every item takes one track. One item spanning two of four hundred-
+	// pixel tracks left one track standing and came out four hundred pixels
+	// wide; two tracks stand now and it comes out two hundred, which is what
+	// "auto-fit" means and why it fills a row with three cards where
+	// "auto-fill" leaves room for a fourth.
+	if fit {
+		columns = collapseUnusedTracks(columns, items, 1)
+	}
+	if fitRows {
+		rows = collapseUnusedTracks(rows, items, 0)
+	}
+	return columns, rows
 }
 
 // deferGridOutOfFlow records the container's absolutely positioned children,
@@ -1320,14 +1337,177 @@ func (l *layouter) sizeColumns(columns []gridTrack, items []*gridItem,
 		maxZero(width.Sub(gap.Mul(float64(len(columns)-1)))), true, stretch)
 }
 
+// gridContentWidths is a grid container's min-content and max-content widths,
+// which is Grid §12's answer to CSS Sizing's question: "the sum of the grid
+// container's track sizes (including gutters) in the appropriate axis, when
+// the grid is sized under a min-content constraint" — or a max-content one.
+//
+// It is the track sizing algorithm run twice with no width to fill, which is
+// what a constraint is: §12.6 says the free space is zero under a min-content
+// constraint and infinite under a max-content one, and §12.7 that the flexible
+// tracks take no share of the first and are sized from their items in the
+// second. The placement is gridTracks', the same one layout makes, so the
+// columns measured are the columns drawn.
+//
+// Before this a grid was measured as a stack of its items, so a float holding
+// "grid-template-columns: auto auto" was as wide as its wider cell and its
+// second column hung outside it.
+//
+// The container's width is not known — it is what is being asked — so a
+// percentage track is "auto" here, which is §7.2.1's rule for a percentage of a
+// size that depends on the tracks. A container that states a width as a length
+// does know it, and a percentage or an automatic repetition is counted against
+// that. Its percentage gaps are nothing, which is Box Alignment §8.3's rule for
+// the same case.
+func (l *layouter) gridContentWidths(b *Box) intrinsicWidths {
+	areas, _ := l.areasOf(b)
+	items := l.gridItems(b, 0, areas)
+	if len(items) == 0 {
+		return intrinsicWidths{}
+	}
+	width, known := l.intrinsicLength(b, "width")
+	columnGap := l.gridGap(b, "column-gap", width, known)
+	height, definite := l.explicitHeight(b, 0, 0, false)
+	rowGap := l.gridGap(b, "row-gap", height, definite)
+	columns, _ := l.gridTracks(b, items, areas, 0,
+		trackRoom{size: width, definite: known, gap: columnGap, property: "grid-template-columns"},
+		trackRoom{size: height, definite: definite, gap: rowGap, property: "grid-template-rows"})
+
+	asks := make([]trackAsk, 0, len(items))
+	for _, it := range items {
+		min, max := l.gridItemWidths(it)
+		asks = append(asks, trackAsk{
+			from: it.column, span: it.place[1].span, min: min, max: max,
+		})
+	}
+	gaps := columnGap.Mul(float64(len(columns) - 1))
+
+	// Under a min-content constraint: the base sizes, and nothing more. There is
+	// no free space for §12.6 to hand out and the flex fraction is zero.
+	narrow := slices.Clone(columns)
+	trackBasesAndLimits(narrow, asks, columnGap, false)
+	var out intrinsicWidths
+	out.min = sumTracks(narrow).Add(gaps)
+
+	// Under a max-content constraint: every track that is not flexible grows to
+	// its growth limit, and the flexible ones take the fraction §12.7.1 finds.
+	wide := slices.Clone(columns)
+	limits := trackBasesAndLimits(wide, asks, columnGap, true)
+	for i := range wide {
+		if !wide[i].flexible() && limits[i] > wide[i].base {
+			wide[i].base = limits[i]
+		}
+	}
+	expandFlexibleTracksUnbounded(wide, asks, columnGap)
+	out.max = style.Max(sumTracks(wide).Add(gaps), out.min)
+	return out
+}
+
+// expandFlexibleTracksUnbounded is §12.7 where the free space is an indefinite
+// length, which is what it is under a max-content constraint.
+//
+// There is no leftover to divide, so the size of one "fr" is found from what
+// the tracks and their items ask for instead, and it is the largest of those
+// asks: each flexible track's base size per unit of its factor — a factor
+// below one counts as one, so a small factor is not an invitation to grow —
+// and, for each item that crosses a flexible track, the fr that would let its
+// tracks hold its max-content contribution. Every flexible track is then that
+// many of its factor, and never less than its base.
+//
+// That is what makes "1fr 1fr" come out as two equal columns each as wide as
+// the wider item, rather than each as wide as its own: the fr is shared.
+func expandFlexibleTracksUnbounded(tracks []gridTrack, asks []trackAsk, gap style.Unit) {
+	fr := style.Unit(0)
+	flexible := false
+	for _, t := range tracks {
+		if !t.flexible() {
+			continue
+		}
+		flexible = true
+		if t.max.factor > 1 {
+			fr = style.Max(fr, t.base.Div(t.max.factor))
+		} else {
+			fr = style.Max(fr, t.base)
+		}
+	}
+	if !flexible {
+		return
+	}
+	for _, a := range asks {
+		span := max(a.span, 1)
+		if a.from < 0 || a.from+span > len(tracks) {
+			continue
+		}
+		crosses := false
+		for i := a.from; i < a.from+span; i++ {
+			if tracks[i].flexible() {
+				crosses = true
+				break
+			}
+		}
+		if crosses {
+			fr = style.Max(fr, frSize(tracks[a.from:a.from+span], gap, a.max))
+		}
+	}
+	for i := range tracks {
+		if !tracks[i].flexible() {
+			continue
+		}
+		if share := fr.Mul(tracks[i].max.factor); share > tracks[i].base {
+			tracks[i].base = share
+		}
+	}
+}
+
+// frSize is §12.7.1's "find the size of an fr": how big one fr has to be for
+// these tracks, and the gaps between them, to fill space.
+//
+// The fixed tracks take their base sizes first and the flexible ones share what
+// is left in proportion to their factors, whose sum counts as one where it is
+// less. A flexible track whose share would be smaller than its own base is not
+// going to shrink to it — its base is a floor — so it is treated as fixed and
+// the share worked out again without it. Every pass either returns or fixes at
+// least one more track, so the passes are bounded by how many there are.
+func frSize(tracks []gridTrack, gap, space style.Unit) style.Unit {
+	fixed := make([]bool, len(tracks))
+	for pass := 0; pass <= len(tracks); pass++ {
+		leftover := space.Sub(gap.Mul(float64(len(tracks) - 1)))
+		factors := 0.0
+		for i, t := range tracks {
+			if t.flexible() && !fixed[i] {
+				factors += t.max.factor
+				continue
+			}
+			leftover = leftover.Sub(t.base)
+		}
+		if factors == 0 {
+			return 0
+		}
+		one := leftover.Div(max(factors, 1))
+		again := false
+		for i, t := range tracks {
+			if t.flexible() && !fixed[i] && one.Mul(t.max.factor) < t.base {
+				fixed[i], again = true, true
+			}
+		}
+		if !again {
+			return one
+		}
+	}
+	return 0
+}
+
 // gridItemWidths is what one item asks of its column: its min-content and
 // max-content contributions, which are its content's unless it states a width
-// of its own — a box that did is that wide however its words would break.
+// of its own — a box that did is that wide however its words would break — and
+// which its own min-width and max-width hold between them either way.
+//
+// What the item declares is contributionWidths' question, which is the one
+// every other parent measuring a child asks. This read the declared width
+// alone, so an item at "max-width: 50px" asked its column for its whole line
+// and one at "min-width: 100px" for less than it would take.
 func (l *layouter) gridItemWidths(it *gridItem) (style.Unit, style.Unit) {
-	if declared, ok := l.intrinsicLength(it.box, "width"); ok {
-		return declared.Add(it.horizontal()), declared.Add(it.horizontal())
-	}
-	got := l.contentWidths(it.box)
+	got := l.contributionWidths(it.box)
 	return got.min.Add(it.horizontal()), got.max.Add(it.horizontal())
 }
 
@@ -1366,6 +1546,39 @@ func (l *layouter) sizeRows(rows []gridTrack, items []*gridItem,
 func (l *layouter) resolveTracks(tracks []gridTrack, asks []trackAsk,
 	gap, room style.Unit, definite, stretch bool) {
 
+	limits := trackBasesAndLimits(tracks, asks, gap, false)
+	if !definite {
+		return
+	}
+	free := room.Sub(sumTracks(tracks))
+	if free <= 0 {
+		return
+	}
+	free = growToLimits(tracks, limits, free)
+	if expandFlexibleTracks(tracks, room) {
+		return
+	}
+	if stretch {
+		stretchAutoTracks(tracks, free)
+	}
+}
+
+// trackBasesAndLimits is §12.4 and §12.5: every track's base size, written into
+// it, and its growth limit, returned — the two numbers the rest of the sizing
+// spends the free space between.
+//
+// underMax is §12.5's one clause about the constraint the grid is sized under.
+// An "auto" minimum is the largest minimum its items need, except when the
+// container itself is being measured at its max-content size: then it is their
+// max-content contributions, because a grid asked how wide it would like to be
+// is not asking how narrow its tracks can get. It matters only where nothing
+// else raises the base to the same place — §12.6 grows every other track to
+// its growth limit anyway — and that is a flexible track, which §12.6 does not
+// grow. Without it a lone "0.5fr" column holding a line of text measured half
+// as wide as the line, and the grid asked for less than its content.
+func trackBasesAndLimits(tracks []gridTrack, asks []trackAsk, gap style.Unit,
+	underMax bool) []style.Unit {
+
 	// What the items spanning one track ask of it, gathered in one pass over the
 	// items rather than one pass per track: asking every item about every track
 	// was tracks times items, and a grid has as many of each as its markup says.
@@ -1381,24 +1594,15 @@ func (l *layouter) resolveTracks(tracks []gridTrack, asks []trackAsk,
 	}
 	for i := range tracks {
 		min, max := mins[i], maxes[i]
-		tracks[i].base = resolveTrackSize(tracks[i].min, min, max, min)
+		auto := min
+		if underMax {
+			auto = max
+		}
+		tracks[i].base = resolveTrackSize(tracks[i].min, min, max, auto)
 		limits[i] = resolveTrackSize(tracks[i].max, min, max, max)
 	}
 	spreadSpanningAsks(tracks, limits, asks, gap)
-	if !definite {
-		return
-	}
-	free := room.Sub(sumTracks(tracks))
-	if free <= 0 {
-		return
-	}
-	free = growToLimits(tracks, limits, free)
-	if expandFlexibleTracks(tracks, room) {
-		return
-	}
-	if stretch {
-		stretchAutoTracks(tracks, free)
-	}
+	return limits
 }
 
 // resolveTrackSize turns one sizing function into a number, given what the
