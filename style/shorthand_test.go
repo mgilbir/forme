@@ -271,6 +271,31 @@ func TestListStyleShorthand(t *testing.T) {
 	}
 }
 
+// TestFlexShorthandOmitsItsBasisAsZeroPercent. §7.1 resets an omitted basis to
+// zero, and every browser writes that zero as "0%" — which is a different value
+// from "0px" wherever the container's main size is indefinite, where a
+// percentage basis is "content" (§7.2.3). A stated basis is kept as written.
+func TestFlexShorthandOmitsItsBasisAsZeroPercent(t *testing.T) {
+	for decl, want := range map[string][3]string{
+		"flex: 1":         {"1", "1", "0%"},
+		"flex: 2 3":       {"2", "3", "0%"},
+		"flex: 0.5":       {"0.5", "1", "0%"},
+		"flex: 1 30px":    {"1", "1", "30px"},
+		"flex: 2 1 10%":   {"2", "1", "10%"},
+		"flex: auto":      {"1", "1", "auto"},
+		"flex: none":      {"0", "0", "auto"},
+		"flex: 0 0 0px":   {"0", "0", "0px"},
+		"flex: content":   {"1", "1", "content"},
+		"flex: 3 content": {"3", "1", "content"},
+	} {
+		cs := expandOf(t, decl)
+		got := [3]string{cs.Get("flex-grow"), cs.Get("flex-shrink"), cs.Get("flex-basis")}
+		if got != want {
+			t.Errorf("%q expanded to %q, want %q", decl, got, want)
+		}
+	}
+}
+
 // TestTextDecorationShorthand pins the line and the colour.
 func TestTextDecorationShorthand(t *testing.T) {
 	cs := expandOf(t, "text-decoration: underline red")

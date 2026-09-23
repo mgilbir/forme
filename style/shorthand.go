@@ -1340,12 +1340,22 @@ func textAlignShorthand(vals []css.ComponentValue) (map[string][]css.ComponentVa
 //
 // Its grammar is "none | [ <'flex-grow'> <'flex-shrink'>? || <'flex-basis'> ]",
 // and the part worth writing down is that the shorthand's own defaults are not
-// the longhands' initial values. "flex: 1" is "1 1 0", not "1 1 auto" — an
+// the longhands' initial values. "flex: 1" is "1 1 0%", not "1 1 auto" — an
 // omitted basis in the shorthand is *zero*, so a row of "flex: 1" items comes
 // out in equal parts however long their text is, which is the thing people
 // reach for the shorthand to get. Setting the longhands by hand gives the other
 // answer, and §7.1 says so in as many words: "the shorthand resets any omitted
 // components to values other than their initial value".
+//
+// The zero is a percentage, "0%", and not the "0px" it was here. §7.1 writes
+// it as a bare "0", and every browser expands it to "0%" — that is what
+// getComputedStyle reports for "flex: 1" in Chrome, Firefox and Safari — and
+// the two are not the same value. A percentage basis against a main size that
+// is indefinite is "content" (§7.2.3), so a "flex: 1" pane in a column that
+// was never told how tall to be is as tall as what it holds; "0px" is zero
+// there, and the pane collapsed to nothing with its text clipped away or drawn
+// over the next block (audit C37). Where the main size is definite — a row, or
+// a column with a height — 0% of it is 0 and nothing changes.
 //
 // "initial" and "auto" are named here rather than left to the CSS-wide keyword
 // machinery, because only one of them is a CSS-wide keyword: "flex: auto" is a
@@ -1392,8 +1402,9 @@ func flexShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, 
 		}
 	}
 	if !seenBasis {
-		// §7.1's reset: an omitted basis is zero and not "auto".
-		basis = zeroLength()
+		// §7.1's reset: an omitted basis is zero and not "auto" — written as
+		// the browsers write it. See the comment above.
+		basis = zeroPercent()
 	}
 	return map[string][]css.ComponentValue{
 		"flex-grow": grow, "flex-shrink": shrink, "flex-basis": basis,
@@ -1412,7 +1423,7 @@ func isFlexBasisKeyword(part []css.ComponentValue) bool {
 	return false
 }
 
-// number and zeroLength are the two literals the expansion above writes.
+// number and zeroPercent are the two literals the expansion above writes.
 //
 // A numeric token carries its value in Number and its text in Repr, and Value is
 // empty for one — which is the trap here, because a token built with Value set
@@ -1427,9 +1438,9 @@ func number(v float64, repr string) []css.ComponentValue {
 	}}}
 }
 
-func zeroLength() []css.ComponentValue {
+func zeroPercent() []css.ComponentValue {
 	return []css.ComponentValue{{Token: css.Token{
-		Kind: css.Dimension, Number: 0, Repr: "0", Unit: "px", IsInteger: true,
+		Kind: css.Percentage, Number: 0, Repr: "0", IsInteger: true,
 	}}}
 }
 

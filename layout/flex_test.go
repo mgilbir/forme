@@ -1832,17 +1832,21 @@ func TestAnAbsolutelyPositionedChildIsPlacedAgainstTheContainer(t *testing.T) {
 	}
 
 	// The container's own alignment moves it, which is the whole of §4.1: a
-	// lone item of no size, packed and aligned by the container's properties.
+	// lone item packed and aligned by the container's properties — and an item
+	// "of its used size", so the 12x20 box is centred about the middle and
+	// sits on the far edge rather than hanging below it. This asked for
+	// [150 100] until audit C153, which is a box of no size.
 	if got := absAt(t, beside,
 		`#f { width: 300px; height: 100px; justify-content: center; align-items: flex-end }`); got !=
-		[2]float64{150, 100} {
+		[2]float64{144, 80} {
 		t.Errorf("the box is at %v in a centred container 100px deep, want the "+
 			"middle of its far edge", got)
 	}
 
-	// And it turns with the axis, as a sole item would.
+	// And it turns with the axis, as a sole item would: at the far end, and
+	// inside the container.
 	if got := absAt(t, beside, `#f { width: 300px; flex-direction: row-reverse }`); got !=
-		[2]float64{300, 0} {
+		[2]float64{288, 0} {
 		t.Errorf("the box is at %v in a reversed row, want the far end", got)
 	}
 }

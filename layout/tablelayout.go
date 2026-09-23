@@ -1026,6 +1026,11 @@ func (l *layouter) tableUsedWidth(table *Box, available style.Unit) style.Unit {
 		// box.
 		return style.Max(declared, floor)
 	}
+	if l.wrapperIsAnItem(table) {
+		// A flex or grid container decided the wrapper's width. See
+		// wrapperIsAnItem.
+		return style.Max(floor, available)
+	}
 	if max < available {
 		return style.Max(max, min)
 	}

@@ -194,7 +194,7 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 			// two hundred, and so did one asking for half the cell.
 			it.width = declared
 		case it.across == crossStretch:
-			it.width = cell
+			it.width = l.gridStretch(it, cell)
 		default:
 			it.width = l.gridFitContent(it, cell)
 		}
@@ -1281,6 +1281,29 @@ func collapseUnusedTracks(tracks []gridTrack, items []*gridItem, axis int) []gri
 		}
 	}
 	return out
+}
+
+// gridStretch is a stretched item's width, as the margin-box size the placement
+// works in: its area's, held between the item's own min-width and max-width.
+//
+// §11's stretch is "as for width: auto", and an automatic size is one the §10.4
+// limits hold. The area was used as it stood, so an item at "max-width: 50px"
+// in a 400px column was 400 wide and one at "min-width: 100px" in a 40px column
+// was 40 (audit C106). The limits resolve against the area, as the item's own
+// width does — see gridDeclaredSize, which reads them.
+//
+// Only the width. A stretched height is handed to the item's own layout, which
+// holds it between min-height and max-height itself; the same clamp written
+// for it changed nothing when it was planted out.
+func (l *layouter) gridStretch(it *gridItem, area style.Unit) style.Unit {
+	size := area
+	if hi, ok := l.gridDeclaredSize(it, "max-width", area, true); ok {
+		size = style.Min(size, hi)
+	}
+	if lo, ok := l.gridDeclaredSize(it, "min-width", area, true); ok {
+		size = style.Max(size, lo)
+	}
+	return size
 }
 
 // gridDeclaredSize is the size an item states for one axis, as the margin-box

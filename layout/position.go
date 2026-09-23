@@ -314,6 +314,19 @@ type absCandidate struct {
 	// numbered marker is numbered by. An absolutely positioned list item still
 	// generates a marker.
 	index int
+	// aligned says the static position is a point in a static-position
+	// rectangle that the box is aligned in, and alignX and alignY are how far
+	// across that rectangle the alignment is, physically: nought at the left or
+	// top, one at the right or bottom. Only a flex container records one.
+	//
+	// Flexbox §4.1 aligns the box "as if it were the sole flex item", and an
+	// item has a size: at "align-self: flex-end" a 20px box in a 100px line
+	// sits at 80 and not at 100. The size is not known where the static
+	// position is recorded — it is decided here, after the tree is absolute —
+	// so the caller records the point the alignment names at that fraction of
+	// the rectangle and this moves the box back by the same fraction of itself.
+	aligned        bool
+	alignX, alignY float64
 }
 
 // maxAbsolutes bounds how many out-of-flow boxes one render will place.
@@ -329,6 +342,16 @@ type absCandidate struct {
 // to watch it fire. A bound that has only ever been observed not to trip is one
 // nobody knows works, which this repository has learned before.
 var maxAbsolutes = 1 << 14
+
+// deferAlignedAbsolute is deferAbsolute for a box aligned in its static-position
+// rectangle: see absCandidate.aligned.
+func (l *layouter) deferAlignedAbsolute(b *Box, parent *Fragment, x, y, end style.Unit,
+	index int, alignX, alignY float64) {
+
+	l.deferAbsolute(b, parent, x, y, end, index)
+	c := &l.deferred[len(l.deferred)-1]
+	c.aligned, c.alignX, c.alignY = true, alignX, alignY
+}
 
 // deferAbsolute records an out-of-flow box to be placed once the tree is
 // absolute.
@@ -471,6 +494,26 @@ func (l *layouter) layoutAbsolute(c absCandidate, page Rect) {
 	// rectangle this engine stores is a border box.
 	x := cb.X.Add(h.start).Add(h.marginStart)
 	y := cb.Y.Add(v.start).Add(v.marginStart)
+
+	// A box aligned in its static-position rectangle is moved back by its own
+	// share of the alignment, on each axis where the static position is what
+	// placed it — where both of that axis's offsets are auto. See
+	// absCandidate.aligned. Where the static position anchored the box's right
+	// edge (fromEnd), the point is where its right edge would be at a fraction
+	// of nought, so the move is the rest of the box the other way.
+	if c.aligned {
+		if l.isAuto(b, "left") && l.isAuto(b, "right") {
+			outer := frag.BorderRect.W.Add(h.marginStart).Add(h.marginEnd)
+			if fromEnd {
+				x = x.Add(outer.Mul(1 - c.alignX))
+			} else {
+				x = x.Sub(outer.Mul(c.alignX))
+			}
+		}
+		if l.isAuto(b, "top") && l.isAuto(b, "bottom") {
+			y = y.Sub(frag.BorderRect.H.Add(v.marginStart).Add(v.marginEnd).Mul(c.alignY))
+		}
+	}
 
 	// The subtree comes out of blockIn in coordinates relative to its own
 	// origin; this is the same one-pass translation absolutise does for the
