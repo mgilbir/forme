@@ -349,7 +349,7 @@ func TestSelfClosingNonVoidIsRefused(t *testing.T) {
 	}
 }
 
-// TestScriptAndFriendsAreDropped pins §4.1 of the rendering proposal. These are
+// TestScriptAndFriendsAreDropped pins the refusal of the elements that are
 // the whole of the code-execution and remote-content surface, and a renderer
 // that ignored them quietly would still be one that had read them.
 //
@@ -782,8 +782,7 @@ func TestTextIsMerged(t *testing.T) {
 }
 
 // TestOffsetsPointAtTheSource is what lets a finding from layout name the markup
-// that caused it, which §6 of the rendering proposal needs and which cannot be
-// recovered later.
+// that caused it, which a finding needs and which cannot be recovered later.
 func TestOffsetsPointAtTheSource(t *testing.T) {
 	const src = "<div>\n  <p class=x>hello</p>\n</div>"
 	doc := mustParseHTML(t, src)

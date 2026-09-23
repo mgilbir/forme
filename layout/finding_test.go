@@ -14,9 +14,9 @@ import (
 
 // The guardrail framework.
 //
-// §6.5 of the rendering proposal asks that every rule have a test which plants a
-// violation, watches the finding appear, and then checks the compliant version
-// produces none — because "a threshold that has only ever been observed passing
+// §6.5 of the design (see finding.go) asks that every rule have a test which
+// plants a violation, watches the finding appear, and then checks the compliant
+// version produces none — because "a threshold that has only ever been observed passing
 // is decoration".
 //
 // That is easy to satisfy today and easy to let rot as the catalogue grows, so
@@ -324,7 +324,7 @@ func TestFindingMessageNamesThePlace(t *testing.T) {
 // reports "we stopped short" under "limit", and a caller that already
 // distinguishes that from "the input is bad" must not have to learn a second
 // spelling for it.
-func TestLimitRuleMatchesTheRestOfPdf0(t *testing.T) {
+func TestLimitRuleMatchesEveryOtherGuard(t *testing.T) {
 	if RuleLimit != "limit" {
 		t.Errorf("the limit rule is %q; every guard here reports \"limit\"", RuleLimit)
 	}

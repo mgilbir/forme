@@ -8,9 +8,9 @@ import (
 
 // Inline layout: text into lines.
 //
-// §1 of the rendering proposal calls this the deceptive one, and it is right —
-// line boxes, breaking, baseline alignment and whitespace at line edges are
-// individually modest and collectively larger than flexbox. What is here is the
+// This is the deceptive part of layout: line boxes, breaking, baseline
+// alignment and whitespace at line edges are individually modest and
+// collectively larger than flexbox. What is here is the
 // part that puts words on a page: measuring runs against a real face, finding
 // where a line may break, and stacking the lines.
 //

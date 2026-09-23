@@ -18,8 +18,7 @@ import "strings"
 // the specification's own layering says. A stylesheet full of properties this
 // engine has never heard of parses here exactly as well as one full of
 // properties it implements, which is what lets the layer above report each
-// unsupported declaration rather than failing the file (see the proposal's
-// §6.3).
+// unsupported declaration rather than failing the file.
 //
 // # Recovery
 //

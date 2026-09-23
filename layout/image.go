@@ -394,7 +394,7 @@ func (l *replacedLoader) image(b *Box) {
 //
 // HTML §4.8.7 hands the resource to a plugin, a nested browsing context or an
 // image decoder, and which of the three depends on what arrived. The first two
-// are what §4.1 of the proposal refuses outright — a plugin is arbitrary code
+// are what this engine refuses outright — a plugin is arbitrary code
 // and a browsing context is a document of its own — but the third is the same
 // decoder <img> already uses, so an <object> naming a picture is a picture. The
 // suite's replaced-intrinsic-001 to -005 are five of them, and every one is an

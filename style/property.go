@@ -18,9 +18,9 @@ import (
 //
 // A third question is answerable only here and is the reason this file matters
 // more than its size suggests: *is this property one the engine implements*. A
-// renderer for a subset will meet declarations it does not act on, and §6.3 of
-// the rendering proposal argues — correctly, and this is the cheapest guardrail
-// it names — that dropping them silently is the worst available option. A page
+// renderer for a subset will meet declarations it does not act on, and
+// dropping them silently is the worst available option — saying so is the
+// cheapest guardrail there is. A page
 // where "flex-wrap" was ignored is plausible and wrong, which is harder to
 // notice than one that is obviously broken. So every declaration that is parsed
 // and not applied is recorded.

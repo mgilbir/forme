@@ -12,8 +12,7 @@
 // caller wrote, and an unclosed tag there is a bug the caller wants to hear
 // about — not something to be silently repaired into a tree that renders
 // almost right. So this reads a declared subset and *refuses* what falls
-// outside it, which is the decision recorded in §2.3 of the rendering
-// proposal. The cost is real and worth restating: markup a browser accepts,
+// outside it. The cost is real and worth restating: markup a browser accepts,
 // this will reject.
 //
 // Refusing is not the same as failing. Every refusal names what was wrong and
@@ -105,8 +104,8 @@ type Node struct {
 
 	// Offset is the byte offset in the source at which the node begins, so a
 	// finding from layout can point back at the markup that caused it. That is
-	// what §6 of the rendering proposal needs to say *where* a guardrail fired,
-	// and it cannot be recovered later.
+	// what a finding needs to say *where* a guardrail fired, and it cannot be
+	// recovered later.
 	Offset int
 
 	// Foreign is the unparsed source of a subtree that is not HTML, and is empty
@@ -232,12 +231,12 @@ func (n *Node) HasAttr(name string) bool {
 	return ok
 }
 
-// Text returns the concatenated text of a node and everything inside it.
+// TextContent returns the concatenated text of a node and everything inside it.
 //
-// This is what an alt-less <a> contributes to a tagged PDF's text, and what a
-// heading contributes to an outline. It walks iteratively, because the tree
-// came from untrusted input and a recursive walk over a deep one would need the
-// stack the parser's depth cap exists to protect.
+// It is what a <style> element's stylesheet is read from. It walks
+// iteratively, because the tree came from untrusted input and a recursive walk
+// over a deep one would need the stack the parser's depth cap exists to
+// protect.
 func (n *Node) TextContent() string {
 	if n == nil {
 		return ""

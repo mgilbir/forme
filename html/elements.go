@@ -191,7 +191,7 @@ var knownElements = map[string]bool{
 	// What stays refused is the interaction itself, and it is not a boundary
 	// this moves: nothing is submitted, nothing is typed into, no value a reader
 	// would have entered is invented, and no PDF form field is produced. See
-	// render/control.go for what each control is drawn as and for the findings
+	// layout/control.go for what each control is drawn as and for the findings
 	// that name the places where a static box is an approximation of a widget.
 	"form": true, "label": true, "fieldset": true, "legend": true,
 	"input": true, "button": true, "select": true, "option": true,
@@ -266,8 +266,8 @@ var contentSkippedElements = map[string]bool{
 // droppedElements are the ones refused for what they *do* rather than for being
 // unknown, and each has its own reason.
 //
-// The first three are §4.1 of the rendering proposal: they are the entirety of
-// the code-execution and remote-content surface. A renderer that ignored them
+// The first three are the entirety of the code-execution and remote-content
+// surface, which this engine refuses outright. A renderer that ignored them
 // silently would still be one that had read them, and an author who embedded a
 // <script> expecting it to be inert deserves to be told it was thrown away
 // rather than left to assume it ran.
@@ -518,13 +518,14 @@ func setOf(names ...string) map[string]bool {
 
 // foreignElements are the roots of subtrees that are not HTML.
 //
-// An unknown HTML element is dropped and its content parsed on, which is right:
-// the content *is* HTML, a browser shows it, and a <fancy-callout> that has lost
-// its box has not lost its words. A foreign element is the opposite case. Its
-// children are SVG or MathML, they mean nothing to an HTML layout, and their
-// text is not text of the document — so parsing on splices it into the flow,
-// which is what "<svg><text>x</text></svg>" did: an x in the surrounding
-// paragraph's font, on the paragraph's baseline, nowhere near the picture.
+// An unknown HTML element keeps its place in the tree and its content is parsed
+// on (see insertUnknown), which is right: the content *is* HTML, a browser
+// shows it, and a <fancy-callout> this engine has no style for has not lost its
+// words. A foreign element is the opposite case. Its children are SVG or
+// MathML, they mean nothing to an HTML layout, and their text is not text of
+// the document — so parsing on splices it into the flow, which is what
+// "<svg><text>x</text></svg>" did: an x in the surrounding paragraph's font, on
+// the paragraph's baseline, nowhere near the picture.
 //
 // That is worse than the missing picture. A hole is visibly a hole; a stray
 // letter reads as the document's own and is what a reader would have to know the

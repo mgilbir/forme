@@ -459,8 +459,7 @@ func checkPage(page PageSize, whose string) (PageSize, []string) {
 
 // fitScale is §5's factor: one number, applied to everything.
 //
-// The proposal argues this at length and the argument decides the whole shape of
-// the engine. Laying out again at a smaller size would reflow the text, which
+// The argument for it decides the whole shape of the engine. Laying out again at a smaller size would reflow the text, which
 // moves the line breaks, which changes the height — non-monotonically, since a
 // smaller font can produce a *taller* block by breaking differently. Scaling the
 // finished layout geometrically leaves every proportion as the author designed

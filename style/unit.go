@@ -6,8 +6,7 @@ import "math"
 //
 // # Why fixed point, and why here
 //
-// §5.1 of the rendering proposal argues this and it is worth restating, because
-// the obvious choice is float64 and it is wrong.
+// It is worth stating, because the obvious choice is float64 and it is wrong.
 //
 // PDF user space is 1/72 inch in floating point and CSS px is 1/96 inch, so
 // there is no pixel grid that represents a page exactly — an A4 page is

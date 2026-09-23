@@ -12,9 +12,9 @@ import (
 //
 // This is the first and only place where the engine can read anything the
 // caller did not hand it, and it is written as a policy rather than as a
-// convenience. §4.1 of the rendering proposal makes resolution the caller's job
-// and forbids the engine a network; what is here is the shape that makes both
-// enforceable rather than merely intended.
+// convenience. Resolution is the caller's job and the engine has no network;
+// what is here is the shape that makes both enforceable rather than merely
+// intended.
 //
 // # Deny by default
 //

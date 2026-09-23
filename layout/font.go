@@ -11,8 +11,8 @@ import (
 // Choosing a face for a box, and saying so when the choice was not the one
 // asked for.
 //
-// §10 of the rendering proposal makes the font set the caller's to supply,
-// through an interface, and the reason is packaging: a font committed to this
+// The font set is the caller's to supply, through an interface, and the reason
+// is packaging: a font committed to this
 // repository is paid for by every forme user including the ones who only parse.
 // What is here is the interface and a default made of the fourteen faces every
 // PDF reader already has, which need no embedding at all.

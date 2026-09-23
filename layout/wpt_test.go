@@ -23,9 +23,9 @@ import (
 //
 // A CSS reftest is a pair of documents with the assertion *these two render
 // identically*. The pair and the claim come from the CSS Working Group, so a
-// disagreement is evidence about forme rather than a restatement of this engine's own
-// reading — which is the distinction ADR 0003 records this repository learning
-// twice, the hard way.
+// disagreement is evidence about forme rather than a restatement of this
+// engine's own reading. An oracle written from this engine's own output would
+// agree with it by construction, and guard nothing.
 //
 // They are better than an ordinary expectation file for a reason worth stating:
 // reftests are *constructed* so that the two documents reach the same rendering
@@ -995,7 +995,7 @@ const wptEnv = "WPT_TESTS"
 // nothing, and did nothing — without reporting it either, which is what made it
 // silent. See layout/overflowwrap_test.go.
 //
-// 5959 to 5958 is the one entry here that goes *down*, and it is deliberate. A
+// 5959 to 5958 is the first entry here that goes *down*, and it is deliberate. A
 // "display: flex" container has always become an ordinary block — a column of
 // full-width children where a row was asked for — and said nothing at all, which
 // is the plausible silent wrongness this whole vocabulary is against. It is
@@ -1028,7 +1028,7 @@ const wptEnv = "WPT_TESTS"
 // been reported as unlaid since the report existed. See layout/grid.go.
 //
 // 5960 to 5956 is four documents that pass and now say what is missing from
-// them, and it is the first entry here that goes down. The selector parser
+// them, and it is the second entry here that goes down. The selector parser
 // accepts "::first-letter" and the cascade computes no style for it, so a rule
 // written for one matched, was thrown away, and left the page carrying no claim
 // that anything had been. Four documents in the suite write one — three text
@@ -1308,7 +1308,7 @@ const wptEnv = "WPT_TESTS"
 // visible. The rule is the bottom margin edge, flatly; this engine took the
 // *higher* of that and the last line box's baseline.
 //
-// It is the one case where lowering this number is right, and it is worth being
+// It is a case where lowering this number is right, and it is worth being
 // exact about why, because "a red test went green" is the thing the ratchet
 // exists to refuse. Nothing was lowered to make anything green. A rule was
 // changed to the one CSS 2.2 REC and css-inline-3 state and every browser
@@ -1327,11 +1327,11 @@ const wptEnv = "WPT_TESTS"
 // be checked from now on: four vendored documents asserting a withdrawn
 // sentence are not what this behaviour rests on.
 //
-// **5982 to 5981, for HTML's "background" attribute**, and this is the first
-// time the number has been lowered for something the engine started doing
-// rather than stopped. It is worth the space because the rule at the top of
-// this comment — "it may rise and must never be lowered to make a red test
-// green" — is about a *regression*, and this is the opposite.
+// **5982 to 5981, for HTML's "background" attribute**, and like 5959 to 5958
+// and 5960 to 5956 above it is the number lowered for something the engine
+// started doing rather than stopped. It is worth the space because the rule at
+// the top of this comment — "it may rise and must never be lowered to make a
+// red test green" — is about a *regression*, and this is the opposite.
 //
 // generated-content/content-047 writes
 //

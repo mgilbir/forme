@@ -237,11 +237,11 @@ type Error struct {
 	// while an unsupported one is a limit of the renderer, and a page that came
 	// out wrong because of one is not diagnosed by looking at the other.
 	//
-	// It is here from the first parser rather than added later, because the
-	// rendering proposal's §6.3 argues — and this is the cheapest guardrail it
-	// names — that an engine implementing a subset *will* silently ignore
-	// things, and that a page where a declaration was dropped is plausible and
-	// wrong, which is worse than one that is obviously broken.
+	// It is here from the first parser rather than added later, because an
+	// engine implementing a subset *will* ignore things, and a page where a
+	// declaration was dropped in silence is plausible and wrong, which is worse
+	// than one that is obviously broken. Saying so is the cheapest guardrail
+	// there is.
 	Unsupported bool
 }
 

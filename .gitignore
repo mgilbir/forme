@@ -50,7 +50,7 @@ __pycache__/
 testdata/coretext/shape
 testdata/coretext/out-*.txt
 
-# Corpora that came from pdf0 with the layout engine: fetched, never committed.
+# The layout engine's corpora: fetched by the Makefile, never committed.
 testdata/wpt/
 testdata/css-parsing-tests/
 testdata/fonts-noto/

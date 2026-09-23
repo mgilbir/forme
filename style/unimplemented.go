@@ -67,8 +67,8 @@ var unimplementedProperties = map[string]string{}
 // for "text-indent" went unnoticed. The padding and margin edges were in here
 // too and did not belong: they are read by their full names.
 var readByConstruction = map[string]string{
-	// render/layout.go borderWidths reads "border-" + side + "-width" and
-	// "-style"; render/paint.go paintBorders reads "border-" + edge + "-color".
+	// layout/layout.go's borderWidths reads "border-" + side + "-width" and
+	// "-style"; layout/paint.go's borders reads "border-" + edge + "-color".
 	"border-top-width": "border-", "border-right-width": "border-",
 	"border-bottom-width": "border-", "border-left-width": "border-",
 	"border-top-style": "border-", "border-right-style": "border-",

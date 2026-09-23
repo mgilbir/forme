@@ -160,6 +160,19 @@ var fuzzTexts = []string{
 // starts from things that are *nearly* valid — which is where the interesting
 // failures are. A file that is obviously not a font is rejected in the first
 // four bytes and exercises nothing.
+//
+// Two of the files in testdata/fuzz/FuzzLoadAndUse are what this target found
+// before the engine was a module of its own, and until then they sat where the
+// move had put them, under testdata/testdata, where no test read them.
+// efac75b6c4c86727 declares numGlyphs of zero, and panicked in the subsetter
+// until the subsetter refused a font that declares no .notdef; it panics again
+// with that refusal taken out. 308a0a71a6690515 is 533 KB mutated from a real font whose
+// lookups each claim room for tens of thousands of subtables, and took half a
+// minute to read until the subtables shared one budget per table. It cannot
+// fail on its own — without the budget it only takes eleven times as long —
+// and TestADenseLookupListIsBoundedByTheTable is what holds that line; the file
+// is kept because a mutation of a real font is where the fuzzer finds the next
+// one.
 func FuzzLoadAndUse(f *testing.F) {
 	f.Add(fonttest.SFNT(fonttest.SFNTOptions{
 		Glyphs: []fonttest.Glyph{{Rune: 'a', Advance: 500, HasShape: true}},

@@ -11,9 +11,8 @@ import (
 // A stylesheet is the most obviously hostile input this project has ever
 // accepted: it arrives as text, it is nested, and every layer of it has a
 // recovery path that only runs on malformed input — which is exactly the code
-// least likely to be reached by tests written from the specification. §4.3 of
-// the rendering proposal asks for this from the first milestone rather than
-// retrofitted, and this is it.
+// least likely to be reached by tests written from the specification. It was
+// fuzzed from the first parser rather than retrofitted, and this is it.
 //
 // What is checked is not "does it produce the right answer" — a fuzzer has no
 // oracle for that; oracle_test.go does. It is the three properties that must

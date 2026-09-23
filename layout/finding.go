@@ -6,10 +6,29 @@
 // that line is the same whichever it is. See Compose.
 //
 // This file is the guardrail vocabulary, and it exists before the layout engine
-// on purpose. §9 of the rendering proposal asks for the reporting layer to land
-// *with* the engine rather than after it, and gives the reason: a reporting
-// layer retrofitted onto a finished engine is how it becomes decorative. The
-// engine grows into this, not the other way round.
+// on purpose. The reporting layer landed *with* the engine rather than after
+// it, because a reporting layer retrofitted onto a finished engine is how it
+// becomes decorative. The engine grows into this, not the other way round.
+//
+// # The sections this package cites
+//
+// A bare "§5", "§6.1" or "§7.1" in this package, with no specification named
+// beside it, is a section of the design this engine was planned from. That
+// document is not in this repository, so what each section says is here:
+//
+//   - §5 is scale-to-fit: one geometric factor applied to the finished layout
+//     (see fitScale), not a second layout at a smaller size.
+//   - §6 is the guardrails as a whole: every way a page can be quietly wrong is
+//     a named rule a caller can act on. §6.1 is the size thresholds (MinScale,
+//     the minimum font size), §6.2 layout integrity (content outside its box or
+//     off the page), §6.3 what the engine does not implement, and §6.5 that
+//     every rule has a test which plants a violation and watches it fire.
+//   - §7.1 is the reftest signal: a pass counts only when neither document
+//     reported something unsupported (see the WPT harness).
+//
+// A section of a specification is cited with the specification's name, as
+// "CSS 2.2 §10.3" or "HTML §4.8.7", or in a file that says which one it
+// follows throughout.
 //
 // # What the guardrails are for
 //

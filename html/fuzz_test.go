@@ -8,8 +8,8 @@ import (
 
 // Fuzzing the HTML reader.
 //
-// Markup is the other half of the untrusted surface the rendering proposal's
-// §4.3 asks be fuzzed from the first milestone. What is checked is not whether a
+// Markup is the other half of the untrusted surface, fuzzed from the first
+// milestone as the stylesheet reader is. What is checked is not whether a
 // tree is *right* — the tests next door are that — but the properties that must
 // hold for every input, and each of them is a real failure mode:
 //

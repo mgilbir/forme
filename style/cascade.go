@@ -52,9 +52,9 @@ type Sheet struct {
 //
 // It is the same shape as the css and html packages' Error, and for the same
 // reason: an author needs to tell "I wrote this wrongly" from "this engine does
-// not do that". The layer that turns these into forme.Violation values lands with
-// the guardrail framework in phase 3; until then this carries the information so
-// that nothing has to be reconstructed later.
+// not do that". Layout turns each into one of its own Findings, under the rule
+// ruleForStyleFinding chooses, so it carries what that needs: where, what, and
+// whether it is unsupported or malformed.
 type Finding struct {
 	// Offset is the byte offset the finding came from, in whatever Sheet and
 	// InMarkup say it is an offset into. It is -1 for a finding about the
@@ -79,9 +79,9 @@ type Finding struct {
 	InMarkup bool
 	// Message says what happened.
 	Message string
-	// Unsupported marks correct CSS this engine does not implement — the
-	// unsupported-property finding of the proposal's §6.3 — as against a
-	// stylesheet that is malformed.
+	// Unsupported marks correct CSS this engine does not implement — what
+	// layout reports as unsupported-property — as against a stylesheet that is
+	// malformed.
 	Unsupported bool
 	// Property is the declaration's name, when the finding is about one.
 	Property string

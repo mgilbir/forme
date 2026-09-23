@@ -3,8 +3,7 @@
 //
 // The table is generated rather than typed because it has 2231 entries, and
 // generated from the specification's own published file rather than from a copy
-// of somebody's parser, so it is the authoritative list by construction. That is
-// the same arrangement the font tables had before they moved to forme.
+// of somebody's parser, so it is the authoritative list by construction.
 //
 // The standard publishes the file at one URL and keeps no versions of it, so
 // the input is pinned by its SHA-256 — the Makefile's HTML_ENTITIES_SHA256 —

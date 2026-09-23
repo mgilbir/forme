@@ -1,8 +1,8 @@
 // Package style applies a stylesheet to a document.
 //
-// It is the third of the six stages in the rendering proposal's §3: the html
-// package gives it a tree, the css package gives it rules, and what comes out is
-// a styled tree — every element with the declarations that won for it.
+// It is the third of the engine's stages: the html package gives it a tree,
+// the css package gives it rules, and what comes out is a styled tree — every
+// element with the declarations that won for it.
 //
 // This file is the first half, selector matching. It is also the first thing
 // that *uses* the selector structures the css package builds, which is worth

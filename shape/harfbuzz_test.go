@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -290,6 +291,41 @@ var deliberateDifferences = map[string]map[string]string{
 	"javanese": {},
 	"balinese": {},
 	"tibetan":  {},
+}
+
+// TestTheReadmeCountsTheDeliberateDifferences. The README's prose said "the
+// two HarfBuzz differences" and gave a reason for each after the list above
+// had gone down to one, while its table said one. Both are read here, and both
+// have to be the list's count.
+func TestTheReadmeCountsTheDeliberateDifferences(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "README.md"))
+	if err != nil {
+		t.Fatalf("reading the README: %v", err)
+	}
+	listed := 0
+	for _, cases := range deliberateDifferences {
+		listed += len(cases)
+	}
+	words := map[string]int{"no": 0, "one": 1, "two": 2, "three": 3, "four": 4,
+		"five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
+	for _, pattern := range []string{
+		`(\w+) deliberate differences?`,
+		`[Tt]he (\w+) HarfBuzz differences?`,
+	} {
+		ms := regexp.MustCompile(pattern).FindAllStringSubmatch(string(b), -1)
+		if len(ms) == 0 {
+			t.Errorf("the README no longer says anything matching %q, so this test "+
+				"cannot check it — fix the pattern or the prose", pattern)
+		}
+		for _, m := range ms {
+			n, ok := words[strings.ToLower(m[1])]
+			if !ok {
+				t.Errorf("the README says %q, which this test cannot read as a count", m[0])
+			} else if n != listed {
+				t.Errorf("the README says %q and deliberateDifferences holds %d", m[0], listed)
+			}
+		}
+	}
 }
 
 // TestTheHarfBuzzOracleHasTeeth is the guard on the guard.

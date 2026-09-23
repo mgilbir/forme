@@ -86,6 +86,32 @@ race:
 # and -L because some of the sources below redirect.
 FETCH := curl -fsSL --connect-timeout 20 --retry 5 --retry-delay 3 --retry-all-errors
 
+# Every fetched set below is marked done by a stamp file, and the stamp is named
+# for a digest of everything the set is fetched from: the release or commit it
+# is pinned to, the URL, and the list of files. make fetches a set when its
+# stamp does not exist, so a stamp named for less than all of that is a set
+# that is not fetched again when the rest of it changes.
+#
+# The Unicode database's stamp was ".ok" and nothing more. ScriptExtensions.txt
+# was added to UCD_FILES, and a checkout that already had the stamp never
+# fetched it: `make ucd` had nothing to do, and the generator that reads the
+# file failed on a file that was not there. The same was true of the Unicode
+# version the three conformance sets and the database are fetched at, of the
+# reftest corpus's commit and of its directory list, of the CSS parsing tests'
+# commit, and of the files of the word lists, the hyphenation patterns and the
+# AFM set, whose stamps were named for their commit but not their list.
+#
+# So a change to any of them names a stamp that does not exist yet. What a
+# recipe fetches has to be named by the variables in its key: a file written
+# into a recipe rather than into its list is the same fault again.
+# cmd/makefile_test.go asks make that every stamp moves when each of its
+# variables does, and that every stamp in this file is one it asks about.
+#
+#	$(call stamp,<directory>,<everything the set is fetched from>)
+stamp = $(1)/.ok-$(call digest,$(2))
+digest = $(or $(shell printf '%s' '$(strip $(1))' | sha256sum | cut -c1-16),\
+	$(error sha256sum is needed to name the fetch stamps))
+
 # Unicode's own bidirectional conformance suites, which bidi_conformance_test.go
 # runs in full. Fetched rather than vendored: 15 MB, versioned by Unicode, and
 # pinned to the release the tables were generated from — a character whose class
@@ -93,15 +119,16 @@ FETCH := curl -fsSL --connect-timeout 20 --retry 5 --retry-delay 3 --retry-all-e
 BIDI_DIR := testdata/unicode-bidi
 UNICODE_VERSION ?= 17.0.0
 UCD_URL         := https://www.unicode.org/Public/$(UNICODE_VERSION)/ucd
+BIDI_FILES      := BidiTest.txt BidiCharacterTest.txt
+BIDI_STAMP      := $(call stamp,$(BIDI_DIR),$(UCD_URL) $(BIDI_FILES))
 
-bidi-tests: $(BIDI_DIR)/.ok
+bidi-tests: $(BIDI_STAMP)
 
-$(BIDI_DIR)/.ok:
+$(BIDI_STAMP):
 	mkdir -p $(BIDI_DIR)
-	$(FETCH) -o $(BIDI_DIR)/BidiTest.txt \
-		$(UCD_URL)/BidiTest.txt
-	$(FETCH) -o $(BIDI_DIR)/BidiCharacterTest.txt \
-		$(UCD_URL)/BidiCharacterTest.txt
+	for f in $(BIDI_FILES); do \
+	  $(call fetch,$(BIDI_DIR)/$$f,$(UCD_URL)/$$f) || exit 1; \
+	done
 	touch $@
 
 test-bidi: bidi-tests
@@ -220,9 +247,11 @@ UCD_FILES := \
 	emoji/emoji-data.txt \
 	extracted/DerivedBidiClass.txt
 
-ucd: $(UCD_DIR)/.ok
+UCD_STAMP := $(call stamp,$(UCD_DIR),$(UCD_URL) $(UCD_FILES))
 
-$(UCD_DIR)/.ok:
+ucd: $(UCD_STAMP)
+
+$(UCD_STAMP):
 	@for f in $(UCD_FILES); do \
 	  mkdir -p $(UCD_DIR)/$$(dirname $$f); \
 	  $(call fetch,$(UCD_DIR)/$$f,$(UCD_URL)/$$f) || exit 1; \
@@ -234,7 +263,7 @@ $(UCD_DIR)/.ok:
 # caller who passed UCD= has their own, and fetching over the top of it would be
 # this file taking a decision that is theirs.
 ifeq ($(UCD),$(UCD_DIR))
-UCD_DEP := $(UCD_DIR)/.ok
+UCD_DEP := $(UCD_STAMP)
 else
 UCD_DEP :=
 endif
@@ -273,8 +302,9 @@ MAKETABLES = go run ./cmd/maketables $(foreach v,$(TABLE_VARS),-D '$(v)=$($(v))'
 # tables it feeds and says what changed in them.
 #
 # Each fetch lands in a ".part" file that is renamed into place only when it is
-# whole, and each set is marked done by a file named for its pin, so a new pin
-# fetches again rather than finding the old files and calling them current.
+# whole, and each set is marked done by a stamp named for its pin and its files
+# (see stamp), so a new pin or a new file fetches again rather than finding the
+# old files and calling them current.
 TABLE_SOURCES = $(UCD_DEP) dictionary-sources phrase-sources hyphen-sources \
 	afm brotli-sources agl css-color-spec $(HTML_ENTITIES) $(HB_LANGTAGS)
 
@@ -358,9 +388,11 @@ ICU_DICTS  := https://raw.githubusercontent.com/unicode-org/icu/$(ICU_COMMIT)/ic
 DICT_DIR   := testdata/icu-dictionaries
 ICU_DICT_FILES := thaidict.txt laodict.txt khmerdict.txt burmesedict.txt
 
-dictionary-sources: $(DICT_DIR)/.ok-$(ICU_COMMIT)
+DICT_STAMP := $(call stamp,$(DICT_DIR),$(ICU_DICTS) $(ICU_DICT_FILES))
 
-$(DICT_DIR)/.ok-$(ICU_COMMIT):
+dictionary-sources: $(DICT_STAMP)
+
+$(DICT_STAMP):
 	mkdir -p $(DICT_DIR)
 	for f in $(ICU_DICT_FILES); do \
 	  $(call fetch,$(DICT_DIR)/$$f,$(ICU_DICTS)/$$f) || exit 1; \
@@ -394,13 +426,17 @@ dictionaries: dictionary-sources
 BUDOUX_COMMIT := b02ea07cdd6622af8e3bd4da59bc5f0e60eb6bbe
 BUDOUX        := https://raw.githubusercontent.com/google/budoux/$(BUDOUX_COMMIT)
 BUDOUX_DIR    := testdata/budoux
+# Each is saved under its base name: ja.json, not budoux/models/ja.json.
+BUDOUX_FILES  := LICENSE budoux/models/ja.json
+BUDOUX_STAMP  := $(call stamp,$(BUDOUX_DIR),$(BUDOUX) $(BUDOUX_FILES))
 
-phrase-sources: $(BUDOUX_DIR)/.ok-$(BUDOUX_COMMIT)
+phrase-sources: $(BUDOUX_STAMP)
 
-$(BUDOUX_DIR)/.ok-$(BUDOUX_COMMIT):
+$(BUDOUX_STAMP):
 	mkdir -p $(BUDOUX_DIR)
-	$(call fetch,$(BUDOUX_DIR)/LICENSE,$(BUDOUX)/LICENSE)
-	$(call fetch,$(BUDOUX_DIR)/ja.json,$(BUDOUX)/budoux/models/ja.json)
+	for f in $(BUDOUX_FILES); do \
+	  $(call fetch,$(BUDOUX_DIR)/$$(basename $$f),$(BUDOUX)/$$f) || exit 1; \
+	done
 	touch $@
 
 phrases: phrase-sources
@@ -433,9 +469,11 @@ HYPHEN_URL := https://raw.githubusercontent.com/hyphenation/tex-hyphen/$(TEX_HYP
 HYPHEN_DIR := testdata/hyphen
 HYPHEN_FILES := hyph-en-us.tex hyph-nl.tex hyph-hu.tex hyph-zh-latn-pinyin.tex
 
-hyphen-sources: $(HYPHEN_DIR)/.ok-$(TEX_HYPHEN_COMMIT)
+HYPHEN_STAMP := $(call stamp,$(HYPHEN_DIR),$(HYPHEN_URL) $(HYPHEN_FILES))
 
-$(HYPHEN_DIR)/.ok-$(TEX_HYPHEN_COMMIT):
+hyphen-sources: $(HYPHEN_STAMP)
+
+$(HYPHEN_STAMP):
 	mkdir -p $(HYPHEN_DIR)
 	for f in $(HYPHEN_FILES); do \
 	  $(call fetch,$(HYPHEN_DIR)/$$f,$(HYPHEN_URL)/$$f) || exit 1; \
@@ -567,9 +605,11 @@ AFM_FILES := Courier.afm Courier-Bold.afm Courier-Oblique.afm Courier-BoldObliqu
 	Times-Roman.afm Times-Bold.afm Times-Italic.afm Times-BoldItalic.afm \
 	Symbol.afm ZapfDingbats.afm readme.txt
 
-afm: $(AFM_DIR)/.ok-$(MATPLOTLIB_COMMIT)
+AFM_STAMP := $(call stamp,$(AFM_DIR),$(AFM_URL) $(AFM_FILES))
 
-$(AFM_DIR)/.ok-$(MATPLOTLIB_COMMIT):
+afm: $(AFM_STAMP)
+
+$(AFM_STAMP):
 	mkdir -p $(AFM_DIR)
 	for f in $(AFM_FILES); do \
 	  $(call fetch,$(AFM_DIR)/$$f,$(AFM_URL)/$$f) || exit 1; \
@@ -586,13 +626,16 @@ stdfonts: afm
 BROTLI_COMMIT := ed738e842d2fbdf2d6459e39267a633c4a9b2f5d
 BROTLI_URL := https://raw.githubusercontent.com/google/brotli/$(BROTLI_COMMIT)/c/common
 BROTLI_DIR := testdata/brotli-source
+BROTLI_FILES := context.c transform.c
+BROTLI_STAMP := $(call stamp,$(BROTLI_DIR),$(BROTLI_URL) $(BROTLI_FILES))
 
-brotli-sources: $(BROTLI_DIR)/.ok-$(BROTLI_COMMIT)
+brotli-sources: $(BROTLI_STAMP)
 
-$(BROTLI_DIR)/.ok-$(BROTLI_COMMIT):
+$(BROTLI_STAMP):
 	mkdir -p $(BROTLI_DIR)
-	$(call fetch,$(BROTLI_DIR)/context.c,$(BROTLI_URL)/context.c)
-	$(call fetch,$(BROTLI_DIR)/transform.c,$(BROTLI_URL)/transform.c)
+	for f in $(BROTLI_FILES); do \
+	  $(call fetch,$(BROTLI_DIR)/$$f,$(BROTLI_URL)/$$f) || exit 1; \
+	done
 	touch $@
 
 brotli-tables: brotli-sources
@@ -606,9 +649,11 @@ AGL_COMMIT := 4036a9ca80a62f64f9de4f7321a9a045ad0ecfd6
 AGL_URL := https://raw.githubusercontent.com/adobe-type-tools/agl-aglfn/$(AGL_COMMIT)/glyphlist.txt
 AGL_DIR := testdata/agl
 
-agl: $(AGL_DIR)/.ok-$(AGL_COMMIT)
+AGL_STAMP := $(call stamp,$(AGL_DIR),$(AGL_URL))
 
-$(AGL_DIR)/.ok-$(AGL_COMMIT):
+agl: $(AGL_STAMP)
+
+$(AGL_STAMP):
 	mkdir -p $(AGL_DIR)
 	$(call fetch,$(AGL_DIR)/glyphlist.txt,$(AGL_URL))
 	touch $@
@@ -625,11 +670,14 @@ glyphlist: agl
 # checkout builds with no network.
 GRAPHEME_DIR := testdata/unicode-grapheme
 
-grapheme-tests: $(GRAPHEME_DIR)/.ok
+GRAPHEME_URL := $(UCD_URL)/auxiliary/GraphemeBreakTest.txt
+GRAPHEME_STAMP := $(call stamp,$(GRAPHEME_DIR),$(GRAPHEME_URL))
 
-$(GRAPHEME_DIR)/.ok:
+grapheme-tests: $(GRAPHEME_STAMP)
+
+$(GRAPHEME_STAMP):
 	mkdir -p $(GRAPHEME_DIR)
-	$(FETCH) -o $(GRAPHEME_DIR)/GraphemeBreakTest.txt $(UCD_URL)/auxiliary/GraphemeBreakTest.txt
+	$(call fetch,$(GRAPHEME_DIR)/GraphemeBreakTest.txt,$(GRAPHEME_URL))
 	touch $@
 
 # The whole package, because the three tests that matter here are named three
@@ -652,11 +700,14 @@ clean-grapheme-tests:
 # checkout does not need to build.
 NORMALIZATION_DIR := testdata/unicode-normalization
 
-normalization-tests: $(NORMALIZATION_DIR)/.ok
+NORMALIZATION_URL := $(UCD_URL)/NormalizationTest.txt
+NORMALIZATION_STAMP := $(call stamp,$(NORMALIZATION_DIR),$(NORMALIZATION_URL))
 
-$(NORMALIZATION_DIR)/.ok:
+normalization-tests: $(NORMALIZATION_STAMP)
+
+$(NORMALIZATION_STAMP):
 	mkdir -p $(NORMALIZATION_DIR)
-	$(FETCH) -o $(NORMALIZATION_DIR)/NormalizationTest.txt $(UCD_URL)/NormalizationTest.txt
+	$(call fetch,$(NORMALIZATION_DIR)/NormalizationTest.txt,$(NORMALIZATION_URL))
 	touch $@
 
 # Both tests, because the second is the check on the first: the sweep is run
@@ -670,8 +721,7 @@ clean-normalization-tests:
 	rm -rf $(NORMALIZATION_DIR)
 
 # shallow_at fetches exactly one commit of one repository: no history, no other
-# branches. It came from forme with the corpora below, which are the only things
-# here that need it.
+# branches. The CSS parsing tests below are what use it.
 define shallow_at
 	rm -rf $(1)
 	git init -q $(1)
@@ -683,15 +733,16 @@ endef
 # CSS parsing tests (CC0, Simon Sapin): implementation-independent expected
 # outputs for the algorithms of CSS Syntax Level 3, one JSON file per algorithm.
 #
-# This is the css package's external oracle, and the framing matters — see
-# docs/adr/0003-arlington-as-parser-oracle.md for the two attempts this
-# repository scrapped for guarding nothing. These expectations were written by
-# someone else, from the specification, and three independent parsers
-# (tinycss2, rust-cssparser, Crass) are checked against them. So a disagreement
-# is evidence about forme rather than a restatement of this engine's own reading.
+# This is the css package's external oracle, and the framing matters. These
+# expectations were written by someone else, from the specification, and three
+# independent parsers (tinycss2, rust-cssparser, Crass) are checked against
+# them. So a disagreement is evidence about forme rather than a restatement of
+# this engine's own reading; an oracle made from this engine's own output would
+# agree with it by construction and guard nothing.
 #
-# Cloned under testdata (gitignored); tests skip if absent, mirroring `make
-# corpus` and `make arlington`.
+# Cloned under testdata (gitignored). The tests skip when CSS_PARSING_TESTS is
+# unset, and fail when it names a directory with no corpus in it, which is what
+# test-css and test-corpora hand them.
 CSS_TESTS_DIR := testdata/css-parsing-tests
 
 # The commit, because a corpus is only an oracle if two runs read the same one.
@@ -702,11 +753,13 @@ CSS_TESTS_DIR := testdata/css-parsing-tests
 # swapped the corpus. The reftest corpus was pinned for exactly that reason;
 # this one was not.
 CSS_TESTS_COMMIT := 203ce36bffd617db7f118c551e32794561fb273d
+CSS_TESTS_URL := https://github.com/SimonSapin/css-parsing-tests
+CSS_TESTS_STAMP := $(call stamp,$(CSS_TESTS_DIR),$(CSS_TESTS_URL) $(CSS_TESTS_COMMIT))
 
-css-tests: $(CSS_TESTS_DIR)/.ok
+css-tests: $(CSS_TESTS_STAMP)
 
-$(CSS_TESTS_DIR)/.ok:
-	$(call shallow_at,$(CSS_TESTS_DIR),https://github.com/SimonSapin/css-parsing-tests,$(CSS_TESTS_COMMIT))
+$(CSS_TESTS_STAMP):
+	$(call shallow_at,$(CSS_TESTS_DIR),$(CSS_TESTS_URL),$(CSS_TESTS_COMMIT))
 	touch $@
 
 # The path is absolute because `go test ./css` runs with the package directory
@@ -724,9 +777,9 @@ clean-css-tests:
 
 # The HTML standard's own list of named character references, which
 # cmd/genhtmlentities turns into html/entities.go. The *generated table* is
-# committed and the input is not, on the arrangement the font tables used before
-# they moved to forme: the table is part of the source, and re-deriving it needs
-# the network, so a checkout builds without one.
+# committed and the input is not, as with every generated table here: the table
+# is part of the source, and re-deriving it needs the network, so a checkout
+# builds without one.
 #
 # Regenerate after the standard adds a name — which it has not done in years, so
 # this is a rare errand rather than part of a build.
@@ -778,9 +831,11 @@ CSS_COLOR_URL := https://raw.githubusercontent.com/w3c/csswg-drafts/$(CSSWG_COMM
 CSS_COLOR_DIR := testdata/css-color-4
 CSS_COLOR_SPEC := $(CSS_COLOR_DIR)/Overview.bs
 
-css-color-spec: $(CSS_COLOR_DIR)/.ok-$(CSSWG_COMMIT)
+CSS_COLOR_STAMP := $(call stamp,$(CSS_COLOR_DIR),$(CSS_COLOR_URL))
 
-$(CSS_COLOR_DIR)/.ok-$(CSSWG_COMMIT):
+css-color-spec: $(CSS_COLOR_STAMP)
+
+$(CSS_COLOR_STAMP):
 	mkdir -p $(CSS_COLOR_DIR)
 	$(call fetch,$(CSS_COLOR_SPEC),$(CSS_COLOR_URL))
 	touch $@
@@ -827,9 +882,10 @@ clean-language-tags:
 # Noto, for the scripts the fourteen standard PDF faces do not have.
 #
 # Those fourteen cover Latin and nothing else, so a document with a Hebrew word
-# or a kana in it gets a face that cannot encode the letters — and since the
-# encoder substitutes a space for anything it cannot represent, the word is
-# absent from the page rather than showing as boxes anyone would notice. The
+# or a kana in it gets a face that cannot encode the letters — and since
+# shape.Face.Encode gives such a face the space's code for anything its
+# encoding cannot represent, the word is absent from the page rather than
+# showing as boxes anyone would notice. The
 # reftest harness hands these to the engine through FallbackFontSet.
 #
 # Measured against the suite: the three between them cover 81% of the characters
@@ -981,19 +1037,26 @@ NOTO_HINTED := NotoSans NotoSansHebrew NotoSansArabic NotoSansDevanagari \
                NotoSansArmenian NotoSansGeorgian \
                NotoSansOgham NotoSansCoptic NotoSansDeseret NotoSansSymbols
 
-noto-fonts: $(NOTO_DIR)/.ok
+# The faces fetched by path rather than by family, each saved under its base
+# name. They are a list for the stamp's sake: a face written into the recipe
+# and not into a list is a face a checkout with the stamp never fetches.
+NOTO_PATHS := notofonts.github.io/main/fonts/NotoSerifTibetan/hinted/ttf/NotoSerifTibetan-Regular.ttf \
+              noto-cjk/main/Sans/Variable/TTF/Subset/NotoSansJP-VF.ttf
+NOTO_STAMP := $(call stamp,$(NOTO_DIR),$(NOTO_BASE) $(NOTO_HINTED) $(NOTO_PATHS) \
+	$(UNIFONT_BASE) $(UNIFONT_FALLBACK) $(IPAFONT_URL))
 
-$(NOTO_DIR)/.ok:
+noto-fonts: $(NOTO_STAMP)
+
+$(NOTO_STAMP):
 	mkdir -p $(NOTO_DIR)
 	for fam in $(NOTO_HINTED); do \
 	  $(FETCH) -o $(NOTO_DIR)/$$fam-Regular.ttf \
 	    $(NOTO_BASE)/notofonts.github.io/main/fonts/$$fam/hinted/ttf/$$fam-Regular.ttf \
 	    || exit 1; \
 	done
-	$(FETCH) -o $(NOTO_DIR)/NotoSerifTibetan-Regular.ttf \
-	  $(NOTO_BASE)/notofonts.github.io/main/fonts/NotoSerifTibetan/hinted/ttf/NotoSerifTibetan-Regular.ttf
-	$(FETCH) -o $(NOTO_DIR)/NotoSansJP-VF.ttf \
-	  $(NOTO_BASE)/noto-cjk/main/Sans/Variable/TTF/Subset/NotoSansJP-VF.ttf
+	for p in $(NOTO_PATHS); do \
+	  $(FETCH) -o $(NOTO_DIR)/$$(basename $$p) $(NOTO_BASE)/$$p || exit 1; \
+	done
 	$(FETCH) -o $(NOTO_DIR)/OFL.txt \
 	  $(NOTO_BASE)/noto-cjk/main/Sans/LICENSE
 	$(call unifont,$(NOTO_DIR)/Unifont-Regular.otf,unifont-$(UNIFONT_VER).otf)
@@ -1014,7 +1077,7 @@ $(NOTO_DIR)/.ok:
 #
 # A target of its own, and CI runs it whether or not anything was fetched. That
 # is the half the check in the recipe above cannot cover: a cache hit skips the
-# fetch entirely — the .ok sentinel is restored with the fonts — so a corrupt
+# fetch entirely — the stamp is restored with the fonts — so a corrupt
 # file that once reached the cache would be served to every run afterwards and
 # never looked at again.
 verify-fonts:
@@ -1033,8 +1096,8 @@ clean-noto-fonts:
 #
 # A CSS reftest is a pair of documents with the assertion *these two render
 # identically*, and the pair and the claim come from the CSS Working Group. That
-# is what makes it an oracle rather than a restatement of this engine's own reading —
-# ADR 0003 records what this repository already learned about the difference.
+# is what makes it an oracle rather than a restatement of this engine's own
+# reading.
 # Reftests are also built so that the two documents reach the same rendering by
 # *different* mechanisms, so an engine bug usually moves one and not the other.
 #
@@ -1044,8 +1107,8 @@ clean-noto-fonts:
 # it. The directories are everything a page laid out *once* can be held to.
 #
 # What is left out is left out for a reason and not for convenience: pagination
-# and page-box describe flowing content across several pages, which §2.2 decides
-# against; ui and run-in are interaction and a feature CSS removed. Floats,
+# and page-box describe flowing content across several pages, which this engine
+# does not do (it lays a document out on one sheet and scales it to fit); ui and run-in are interaction and a feature CSS removed. Floats,
 # positioning and z-index are emphatically *in* — they are only dynamic in a
 # viewport that resizes, and this one does not.
 WPT_DIR  := testdata/wpt
@@ -1116,10 +1179,6 @@ WPT_DIRS := css/CSS2/normal-flow css/CSS2/box-display css/CSS2/margin-padding-cl
 # builds. The exposure is therefore the same as depending on the suite at all,
 # which the ratchet already does.
 
-wpt: $(WPT_DIR)/.ok $(WPT_DIR)/fonts/DoulosSIL-R.woff \
-     $(WPT_DIR)/fonts/NotoSansArmenian-Regular \
-     $(WPT_DIR)/fonts/NotoSansGeorgian-Regular.ttf
-
 # The revision the corpus is taken at.
 #
 # It is pinned because a ratchet has to be measured against a fixed thing. The
@@ -1138,7 +1197,18 @@ wpt: $(WPT_DIR)/.ok $(WPT_DIR)/fonts/DoulosSIL-R.woff \
 # something another change gets to do as a side effect.
 WPT_COMMIT := a1e944e7a879854494e1a041a8ad1e4a8ae28ab1
 
-$(WPT_DIR)/.ok:
+# Named for the directory list as well as the commit: a directory added to
+# WPT_DIRS is a sparse checkout that has not been made yet, and the stamp is
+# how make knows.
+WPT_STAMP := $(call stamp,$(WPT_DIR),$(WPT_COMMIT) $(WPT_DIRS))
+
+# After WPT_STAMP, which it names, because make expands a rule's prerequisites
+# where it reads the rule.
+wpt: $(WPT_STAMP) $(WPT_DIR)/fonts/DoulosSIL-R.woff \
+     $(WPT_DIR)/fonts/NotoSansArmenian-Regular \
+     $(WPT_DIR)/fonts/NotoSansGeorgian-Regular.ttf
+
+$(WPT_STAMP):
 	rm -rf $(WPT_DIR)
 	git clone --filter=blob:none --sparse --depth 1 \
 		https://github.com/web-platform-tests/wpt.git $(WPT_DIR)
@@ -1177,7 +1247,7 @@ $(WPT_DIR)/.ok:
 # arrangement as Ahem and the Noto faces above.
 DOULOS_URL := https://software.sil.org/downloads/r/doulos/DoulosSIL-5.000-web.zip
 
-$(WPT_DIR)/fonts/DoulosSIL-R.woff: $(WPT_DIR)/.ok
+$(WPT_DIR)/fonts/DoulosSIL-R.woff: $(WPT_STAMP)
 	$(FETCH) -o $(WPT_DIR)/doulos-web.zip $(DOULOS_URL)
 	unzip -o -j -d $(WPT_DIR)/fonts $(WPT_DIR)/doulos-web.zip \
 	  'DoulosSIL-5.000-web/web/DoulosSIL-R.woff' \
@@ -1205,10 +1275,10 @@ $(WPT_DIR)/fonts/DoulosSIL-R.woff: $(WPT_DIR)/.ok
 # @font-face writes "url('/fonts/NotoSansArmenian-Regular') format('truetype')"
 # — and it is copied to the name that is asked for rather than to the name it
 # had, because a font is found here by its URL and not by its suffix.
-$(WPT_DIR)/fonts/NotoSansArmenian-Regular: $(WPT_DIR)/.ok $(NOTO_DIR)/.ok
+$(WPT_DIR)/fonts/NotoSansArmenian-Regular: $(WPT_STAMP) $(NOTO_STAMP)
 	cp $(NOTO_DIR)/NotoSansArmenian-Regular.ttf $@
 
-$(WPT_DIR)/fonts/NotoSansGeorgian-Regular.ttf: $(WPT_DIR)/.ok $(NOTO_DIR)/.ok
+$(WPT_DIR)/fonts/NotoSansGeorgian-Regular.ttf: $(WPT_STAMP) $(NOTO_STAMP)
 	cp $(NOTO_DIR)/NotoSansGeorgian-Regular.ttf $@
 
 # NOTO_FONTS as well as WPT_TESTS, and noto-fonts as well as wpt. The ratchet

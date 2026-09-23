@@ -9,9 +9,10 @@ import (
 // Foreign content — SVG and MathML — and why its subtree is skipped rather than
 // parsed on.
 //
-// An unknown *HTML* element is dropped and its content parsed on, and that is
-// right: the content is HTML, a browser shows it, and a <fancy-callout> that has
-// lost its box has not lost its words. A foreign element is the opposite case.
+// An unknown *HTML* element keeps its place in the tree and its content is
+// parsed on, and that is right: the content is HTML, a browser shows it, and a
+// <fancy-callout> this engine has no style for has not lost its words. A
+// foreign element is the opposite case.
 // Its children mean nothing to an HTML layout and their text is not text of the
 // document, so parsing on splices it into the flow around it.
 //
