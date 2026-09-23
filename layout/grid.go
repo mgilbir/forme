@@ -2,6 +2,7 @@ package layout
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/mgilbir/forme/css"
@@ -166,7 +167,7 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 	rowGap := l.gridGap(b, "row-gap", height, definite)
 
 	columns, fit, _ := l.trackList(b, "grid-template-columns", width,
-		trackRoom{size: width, definite: true, gap: columnGap})
+		trackRoom{size: width, definite: true, gap: columnGap, property: "grid-template-columns"})
 	flow := l.autoFlow(b)
 	autoColumns := l.implicitTracks(b, "grid-auto-columns", width)
 	autoRows := l.implicitTracks(b, "grid-auto-rows", width)
@@ -189,7 +190,7 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 		columns = append(columns, implicitTrack(autoColumns, len(columns), explicitColumns))
 	}
 	rows, fitRows, _ := l.trackList(b, "grid-template-rows", width,
-		trackRoom{size: height, definite: definite, gap: rowGap})
+		trackRoom{size: height, definite: definite, gap: rowGap, property: "grid-template-rows"})
 
 	explicitRows := len(rows)
 	for len(rows) < areas.rows {
@@ -204,25 +205,39 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 	// dealt into what is left. One axis is the one the flow fills along and is
 	// as long as the template made it; the other is however far the items
 	// reached, and grows.
+	var clamped bool
 	if flow.column {
 		// The algorithm is the same one with the axes exchanged, so the items
 		// are turned on their side, dealt, and turned back. Writing it twice
 		// would be two chances to write it differently.
 		transposeItems(items)
-		grew := placeItems(items, len(rows), flow.dense)
+		var grew int
+		grew, clamped = placeItems(items, len(rows), flow.dense)
 		transposeItems(items)
 		for len(columns) < grew {
 			columns = append(columns,
 				implicitTrack(autoColumns, len(columns), explicitColumns))
 		}
 	} else {
-		grew := placeItems(items, len(columns), flow.dense)
+		var grew int
+		grew, clamped = placeItems(items, len(columns), flow.dense)
 		for len(rows) < grew {
 			// The implicit rows, sized by grid-auto-rows — which is "auto"
 			// unless the stylesheet said otherwise, and is the height every row
 			// of a card grid gets when nothing draws them.
 			rows = append(rows, implicitTrack(autoRows, len(rows), explicitRows))
 		}
+	}
+	if clamped {
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleLimit,
+			Source: AtHTML(offsetOf(b)),
+			Message: "the items of this grid reach past " + strconv.Itoa(maxGridTracks) +
+				" tracks, which is as many as this engine makes on one axis; the " +
+				"ones that went further were put in the last track and overlap",
+			Path:     PathOf(b.Element),
+			Property: "grid-auto-flow",
+		})
 	}
 
 	// §7.2.3.2's "auto-fit": the tracks no item landed in are collapsed. It
@@ -307,6 +322,7 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 			height, rowGap)
 	}
 
+	columnEdges, rowEdges := trackEdgesOf(columns), trackEdgesOf(rows)
 	for _, it := range items {
 		cellHeight := trackSpan(rows, it.row, it.place[0].span, rowGap)
 		// The same clause on the other axis. it.height already holds what the
@@ -321,9 +337,9 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 		it.frag = l.layOutGridItem(it, it.width,
 			maxZero(it.height.Sub(it.margin.Vertical())), true, width, origin)
 
-		x := trackStart(columns, it.column, columnGap).
+		x := columnEdges.start(it.column, columnGap).
 			Add(columnLead).Add(columnBetween.Mul(float64(it.column)))
-		y := trackStart(rows, it.row, rowGap).
+		y := rowEdges.start(it.row, rowGap).
 			Add(rowLead).Add(rowBetween.Mul(float64(it.row)))
 		x = x.Add(alignmentOffset(it.across,
 			trackSpan(columns, it.column, it.place[1].span, columnGap), it.width))
@@ -407,6 +423,15 @@ func (l *layouter) areasOf(b *Box) (gridAreas, bool) {
 			return gridAreas{}, false
 		}
 		if len(rows) > 0 && len(cells) != len(rows[0]) {
+			return gridAreas{}, false
+		}
+		// The picture draws the explicit grid, and the explicit grid is bounded
+		// by what a template may write whichever property writes it. The words
+		// were not: fifty thousand of them made fifty thousand columns, and the
+		// placement and sizing of every item was then paid for across all of
+		// them. A template past the bound is refused like any other the engine
+		// will not draw.
+		if len(cells) > maxRepeatedTracks || len(rows) >= maxRepeatedTracks {
 			return gridAreas{}, false
 		}
 		rows = append(rows, cells)
@@ -709,8 +734,11 @@ func splitOnSlash(value string) (string, string, bool) {
 // cursor that walks along the columns and then down, and that cursor never goes
 // back — which is what "sparse" packing means, and what leaves the holes that
 // "dense" would go back for.
-func placeItems(items []*gridItem, columns int, dense bool) int {
-	grid := &gridOccupancy{columns: columns}
+//
+// It returns how many rows the items reach, and whether an item had to be
+// clamped to maxGridTracks to fit — see clamp.
+func placeItems(items []*gridItem, columns int, dense bool) (rows int, clamped bool) {
+	grid := &gridOccupancy{columns: columns, runs: make([][]takenRows, columns)}
 	var flow []*gridItem
 	for _, it := range items {
 		switch {
@@ -752,66 +780,123 @@ func placeItems(items []*gridItem, columns int, dense bool) int {
 			row, column = row+1, 0
 		}
 	}
-	return grid.rows
+	return grid.rows, grid.clamped
 }
 
 // gridOccupancy is which cells are taken, which is all §8.5 needs to remember.
 //
 // It grows downwards and never sideways: the number of columns is settled
-// before any of this runs — the template says how many there are — and a row is
-// made whenever an item needs one that is not there yet.
+// before any of this runs — the template says how many there are — and a row
+// exists whenever an item reaches it.
+//
+// It is kept per column, as the runs of rows the items in that column cover,
+// and not as a table of cells. A table of cells is rows times columns, and
+// neither is bounded by the document: items of "span 1000" on both axes stack
+// a thousand rows apart, and eighty of them made a table of eighty million
+// cells, 20 KB of markup allocated 5.7 GB. The runs are as many as the items
+// that made them, fewer where items stack, and every question the placement
+// asks — is this window free, where does the next one begin — is answered by
+// looking a run up rather than by visiting the cells.
+//
+// bordercollapse.go's line runs and tablelayout.go's "until" are the same idea
+// on a table: nothing about a grid may be proportional to its area.
 type gridOccupancy struct {
 	columns int
 	rows    int
-	taken   []bool
+	// runs is, per column, the rows taken, as sorted runs that neither overlap
+	// nor touch.
+	runs [][]takenRows
+	// clamped says an item was moved to fit inside maxGridTracks.
+	clamped bool
 }
 
-func (g *gridOccupancy) at(row, column int) bool {
-	if column < 0 || column >= g.columns || row < 0 {
-		return false
+// takenRows is the rows from one to before another in one column.
+type takenRows struct{ from, to int }
+
+// blockedIn is the run of one column that meets rows [row, row+span), if any.
+func (g *gridOccupancy) blockedIn(column, row, span int) (takenRows, bool) {
+	runs := g.runs[column]
+	i, _ := slices.BinarySearchFunc(runs, row, func(r takenRows, row int) int {
+		if r.to <= row {
+			return -1
+		}
+		return 1
+	})
+	if i < len(runs) && runs[i].from < row+span {
+		return runs[i], true
 	}
-	if i := row*g.columns + column; i < len(g.taken) {
-		return g.taken[i]
+	return takenRows{}, false
+}
+
+// blocked is the first column of a window whose cells are not all free, and the
+// run in it that is in the way.
+func (g *gridOccupancy) blocked(row, column, rowSpan, columnSpan int) (int, takenRows, bool) {
+	for c := column; c < column+columnSpan; c++ {
+		if run, ok := g.blockedIn(c, row, rowSpan); ok {
+			return c, run, true
+		}
 	}
-	return false
+	return 0, takenRows{}, false
+}
+
+// clamp is §7.1's limit on the implicit grid: an item whose area would reach
+// past maxGridTracks rows has its span cut at the last line, and one that
+// would begin past it is put in the last row with a span of one. The same
+// numbers a browser clamps to, for the same reason — the grid is as big as its
+// items say, and its items are untrusted.
+func (g *gridOccupancy) clamp(it *gridItem) {
+	if it.row+it.place[0].span <= maxGridTracks {
+		return
+	}
+	g.clamped = true
+	if it.row >= maxGridTracks {
+		it.row, it.place[0].span = maxGridTracks-1, 1
+		return
+	}
+	it.place[0].span = maxGridTracks - it.row
 }
 
 func (g *gridOccupancy) fill(it *gridItem) {
+	g.clamp(it)
 	end := it.row + it.place[0].span
 	if end > g.rows {
 		g.rows = end
 	}
-	for len(g.taken) < g.rows*g.columns {
-		g.taken = append(g.taken, false)
-	}
-	for r := it.row; r < end; r++ {
-		for c := it.column; c < it.column+it.place[1].span && c < g.columns; c++ {
-			g.taken[r*g.columns+c] = true
-		}
+	for c := max(it.column, 0); c < it.column+it.place[1].span && c < g.columns; c++ {
+		g.runs[c] = addRun(g.runs[c], takenRows{from: it.row, to: end})
 	}
 }
 
-// free reports whether a band of cells is empty and inside the grid.
-func (g *gridOccupancy) free(row, column, rowSpan, columnSpan int) bool {
-	if column < 0 || column+columnSpan > g.columns {
-		return false
-	}
-	for r := row; r < row+rowSpan; r++ {
-		for c := column; c < column+columnSpan; c++ {
-			if g.at(r, c) {
-				return false
-			}
+// addRun puts one more run into a column's sorted list, merging it with any it
+// overlaps or touches.
+func addRun(runs []takenRows, add takenRows) []takenRows {
+	// The first run that ends at or after the new one begins, and the first
+	// that begins after it ends: everything between merges with it.
+	i, _ := slices.BinarySearchFunc(runs, add.from, func(r takenRows, from int) int {
+		if r.to < from {
+			return -1
 		}
+		return 1
+	})
+	j := i
+	for j < len(runs) && runs[j].from <= add.to {
+		add.from = min(add.from, runs[j].from)
+		add.to = max(add.to, runs[j].to)
+		j++
 	}
-	return true
+	return slices.Replace(runs, i, j, add)
 }
 
 // freeInRow is the first column in one row where a span will fit.
 func (g *gridOccupancy) freeInRow(row, span int) int {
-	for c := 0; c+span <= g.columns; c++ {
-		if g.free(row, c, 1, span) {
+	for c := 0; c+span <= g.columns; {
+		k, _, blocked := g.blocked(row, c, 1, span)
+		if !blocked {
 			return c
 		}
+		// Every window that includes column k is blocked in this row by the
+		// same run, so the next one worth asking about begins after it.
+		c = k + 1
 	}
 	return 0
 }
@@ -819,35 +904,61 @@ func (g *gridOccupancy) freeInRow(row, span int) int {
 // freeInColumn is the first row at or after one where a span will fit in a
 // given column.
 func (g *gridOccupancy) freeInColumn(from, column, rowSpan, columnSpan int) int {
-	for r := from; ; r++ {
-		if g.free(r, column, rowSpan, columnSpan) {
+	if column < 0 || column+columnSpan > g.columns {
+		// A window that does not fit across the grid is never free. The
+		// placement cannot ask for one — the columns are counted from the
+		// items — and the answer the dense table gave, the first row past
+		// everything, is kept.
+		return max(from, g.rows+1)
+	}
+	for r := from; ; {
+		_, run, blocked := g.blocked(r, column, rowSpan, columnSpan)
+		if !blocked {
 			return r
 		}
-		if r > g.rows+len(g.taken) {
-			// Unreachable while the grid grows downwards: a row past the last
-			// filled one is empty. The bound is here because the loop has no
-			// other end, and a document is untrusted.
-			return r
-		}
+		// No window starting before the run ends can be free.
+		r = run.to
 	}
 }
 
 // next is where the cursor finds room for an item, walking along the columns
 // and then down.
+//
+// It asks about windows rather than cells. A window blocked at some column is
+// blocked for every start that includes that column, so the walk along a row
+// skips past it; and a row in which every window is blocked stays so until the
+// earliest of the runs that blocked them ends, so the walk down skips to there.
+// Past the last row any item reaches every window is free, so the walk ends.
 func (g *gridOccupancy) next(row, column, rowSpan, columnSpan int) (int, int) {
-	for r := row; ; r++ {
+	if columnSpan > g.columns {
+		return max(row, g.rows+1), 0
+	}
+	for r := row; ; {
 		start := 0
 		if r == row {
 			start = column
 		}
-		for c := start; c+columnSpan <= g.columns; c++ {
-			if g.free(r, c, rowSpan, columnSpan) {
+		// The cursor's own row is walked from the cursor, so the windows before
+		// it were not asked about, and the rows below it are asked in full
+		// before anything is skipped.
+		partial := start > 0
+		resume := -1
+		for c := start; c+columnSpan <= g.columns; {
+			k, run, blocked := g.blocked(r, c, rowSpan, columnSpan)
+			if !blocked {
 				return r, c
 			}
+			if resume < 0 || run.to < resume {
+				resume = run.to
+			}
+			c = k + 1
 		}
-		if r > g.rows+len(g.taken) {
-			return r, 0
+		if resume < 0 || partial {
+			// No window to try in this row at all, the cursor having started
+			// past the last one that fits; or not every window was tried.
+			resume = r + 1
 		}
+		r = max(resume, r+1)
 	}
 }
 
@@ -948,14 +1059,24 @@ func trackSpan(tracks []gridTrack, from, span int, gap style.Unit) style.Unit {
 	return out
 }
 
-// trackStart is how far along the axis a track begins: everything before it and
-// the gaps between.
-func trackStart(tracks []gridTrack, at int, gap style.Unit) style.Unit {
-	out := gap.Mul(float64(at))
-	for i := 0; i < at && i < len(tracks); i++ {
-		out = out.Add(tracks[i].base)
+// trackEdges is where each track of one axis begins, less the gaps: the sizes
+// of the tracks before it, added up once for the axis. Adding them up again for
+// every item that asked, which is what this was, cost the tracks times the
+// items.
+type trackEdges []style.Unit
+
+func trackEdgesOf(tracks []gridTrack) trackEdges {
+	out := make(trackEdges, len(tracks)+1)
+	for i, t := range tracks {
+		out[i+1] = out[i].Add(t.base)
 	}
 	return out
+}
+
+// start is how far along the axis a track begins: everything before it and the
+// gaps between.
+func (e trackEdges) start(at int, gap style.Unit) style.Unit {
+	return gap.Mul(float64(at)).Add(e[min(max(at, 0), len(e)-1)])
 }
 
 // gridAlignment reads one of the four properties that align an item in its
@@ -1245,15 +1366,21 @@ func (l *layouter) sizeRows(rows []gridTrack, items []*gridItem,
 func (l *layouter) resolveTracks(tracks []gridTrack, asks []trackAsk,
 	gap, room style.Unit, definite, stretch bool) {
 
+	// What the items spanning one track ask of it, gathered in one pass over the
+	// items rather than one pass per track: asking every item about every track
+	// was tracks times items, and a grid has as many of each as its markup says.
 	limits := make([]style.Unit, len(tracks))
-	for i := range tracks {
-		var min, max style.Unit
-		for _, a := range asks {
-			if a.span != 1 || a.from != i {
-				continue
-			}
-			min, max = style.Max(min, a.min), style.Max(max, a.max)
+	mins := make([]style.Unit, len(tracks))
+	maxes := make([]style.Unit, len(tracks))
+	for _, a := range asks {
+		if a.span != 1 || a.from < 0 || a.from >= len(tracks) {
+			continue
 		}
+		mins[a.from] = style.Max(mins[a.from], a.min)
+		maxes[a.from] = style.Max(maxes[a.from], a.max)
+	}
+	for i := range tracks {
+		min, max := mins[i], maxes[i]
 		tracks[i].base = resolveTrackSize(tracks[i].min, min, max, min)
 		limits[i] = resolveTrackSize(tracks[i].max, min, max, max)
 	}
@@ -1325,50 +1452,53 @@ type trackAsk struct {
 func spreadSpanningAsks(tracks []gridTrack, limits []style.Unit, asks []trackAsk,
 	gap style.Unit) {
 
-	widest := 1
+	// In order of span, and in the items' own order within one span, which is
+	// what one pass over the items per span gave — and cost the widest span
+	// times the items, where sorting them once costs what they are.
+	spanning := make([]trackAsk, 0, len(asks))
 	for _, a := range asks {
-		if a.span > widest {
-			widest = a.span
+		if a.span >= 2 {
+			spanning = append(spanning, a)
 		}
 	}
-	for span := 2; span <= widest; span++ {
-		for _, a := range asks {
-			if a.span != span || a.from < 0 || a.from+span > len(tracks) {
-				continue
+	slices.SortStableFunc(spanning, func(x, y trackAsk) int { return x.span - y.span })
+	for _, a := range spanning {
+		span := a.span
+		if a.from < 0 || a.from+span > len(tracks) {
+			continue
+		}
+		covered := gap.Mul(float64(span - 1))
+		intrinsic := 0
+		for i := a.from; i < a.from+span; i++ {
+			covered = covered.Add(tracks[i].base)
+			if tracks[i].min.kind != trackFixed {
+				intrinsic++
 			}
-			covered := gap.Mul(float64(span - 1))
-			intrinsic := 0
+		}
+		if intrinsic == 0 {
+			continue
+		}
+		if short := a.min.Sub(covered); short > 0 {
+			share := short.Div(float64(intrinsic))
 			for i := a.from; i < a.from+span; i++ {
-				covered = covered.Add(tracks[i].base)
 				if tracks[i].min.kind != trackFixed {
-					intrinsic++
+					tracks[i].base = tracks[i].base.Add(share)
+					limits[i] = style.Max(limits[i], tracks[i].base)
 				}
 			}
-			if intrinsic == 0 {
-				continue
-			}
-			if short := a.min.Sub(covered); short > 0 {
-				share := short.Div(float64(intrinsic))
-				for i := a.from; i < a.from+span; i++ {
-					if tracks[i].min.kind != trackFixed {
-						tracks[i].base = tracks[i].base.Add(share)
-						limits[i] = style.Max(limits[i], tracks[i].base)
-					}
-				}
-			}
-			// The growth limits take the same treatment with the item's
-			// max-content ask, so that a spanning item can grow the tracks it
-			// covers as far as it would have grown one of its own.
-			room := gap.Mul(float64(span - 1))
+		}
+		// The growth limits take the same treatment with the item's
+		// max-content ask, so that a spanning item can grow the tracks it
+		// covers as far as it would have grown one of its own.
+		room := gap.Mul(float64(span - 1))
+		for i := a.from; i < a.from+span; i++ {
+			room = room.Add(limits[i])
+		}
+		if short := a.max.Sub(room); short > 0 {
+			share := short.Div(float64(intrinsic))
 			for i := a.from; i < a.from+span; i++ {
-				room = room.Add(limits[i])
-			}
-			if short := a.max.Sub(room); short > 0 {
-				share := short.Div(float64(intrinsic))
-				for i := a.from; i < a.from+span; i++ {
-					if tracks[i].min.kind != trackFixed {
-						limits[i] = limits[i].Add(share)
-					}
+				if tracks[i].min.kind != trackFixed {
+					limits[i] = limits[i].Add(share)
 				}
 			}
 		}
@@ -1382,6 +1512,11 @@ func spreadSpanningAsks(tracks []gridTrack, limits []style.Unit, asks []trackAsk
 // brings two columns of very different content closer together than their
 // content is. The loop cannot run more times than there are tracks: every pass
 // either spends everything or freezes at least one track.
+//
+// A pass whose share rounds to nothing is the last: it gives nothing, so the
+// next is the same pass again. Without that the loop ran its full count over
+// the remainder a division left — a unit or two of free space among a
+// thousand tracks was a million comparisons to hand out nothing.
 func growToLimits(tracks []gridTrack, limits []style.Unit, free style.Unit) style.Unit {
 	for pass := 0; pass <= len(tracks) && free > 0; pass++ {
 		growing := 0
@@ -1394,6 +1529,9 @@ func growToLimits(tracks []gridTrack, limits []style.Unit, free style.Unit) styl
 			return free
 		}
 		share := free.Div(float64(growing))
+		if share <= 0 {
+			return free
+		}
 		for i := range tracks {
 			if tracks[i].flexible() || tracks[i].base >= limits[i] {
 				continue
@@ -1582,6 +1720,9 @@ type trackRoom struct {
 	size     style.Unit
 	definite bool
 	gap      style.Unit
+	// property is the one the list was written in, which is what a finding
+	// about the repetition names.
+	property string
 }
 
 // tracksFrom turns a track list into tracks, or returns false for anything in
@@ -1598,6 +1739,14 @@ func (l *layouter) tracksFrom(b *Box, vals []css.ComponentValue, width style.Uni
 	var before, after, one []gridTrack
 	auto := false
 	for _, part := range splitValuesOnWhitespace(vals) {
+		// The whole list and not only each repeat(): a list of a hundred
+		// "repeat(1000, 1px)" was a hundred thousand tracks from two kilobytes
+		// of CSS, each repeat() inside its bound. It is asked as the list is
+		// read, so that what is made before the answer is no is one repeat()
+		// past the bound and not every one the stylesheet wrote.
+		if len(before)+len(one)+len(after) > maxRepeatedTracks {
+			return nil, false, false
+		}
 		if len(part) != 1 {
 			return nil, false, false
 		}
@@ -1638,17 +1787,41 @@ func (l *layouter) tracksFrom(b *Box, vals []css.ComponentValue, width style.Uni
 		before = append(before, got)
 	}
 	if !auto {
+		if len(before) > maxRepeatedTracks {
+			return nil, false, false
+		}
 		return before, false, len(before) > 0
 	}
-	out := append([]gridTrack(nil), before...)
-	for i, n := 0, l.autoRepetitions(one, before, after, room); i < n; i++ {
-		out = append(out, one...)
-	}
-	out = append(out, after...)
-	if len(out) > maxRepeatedTracks {
+	// The repetition is bounded like everything else written about the explicit
+	// grid, but by the room rather than by the stylesheet: a track of 1px
+	// fills a container a million pixels wide a million times, and each of
+	// them was made before the count was compared with anything. One
+	// repetition past the bound is a list the stylesheet wrote too long, and is
+	// refused as the others are; more than that is the container being large,
+	// and the repetition stops at the bound and says so.
+	n := l.autoRepetitions(one, before, after, room)
+	most := (maxRepeatedTracks - len(before) - len(after)) / max(len(one), 1)
+	if most < 1 {
 		return nil, false, false
 	}
-	return out, fit, len(out) > 0
+	if n > most {
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleLimit,
+			Source: AtHTML(offsetOf(b)),
+			Message: "an automatic repetition of this grid's tracks would make more " +
+				"than " + strconv.Itoa(maxRepeatedTracks) + " of them; it was stopped " +
+				"there, and the room past the last one is left empty",
+			Path:     PathOf(b.Element),
+			Property: room.property,
+		})
+		n = most
+	}
+	out := make([]gridTrack, 0, len(before)+n*len(one)+len(after))
+	out = append(out, before...)
+	for i := 0; i < n; i++ {
+		out = append(out, one...)
+	}
+	return append(out, after...), fit, len(out)+len(after) > 0
 }
 
 // autoRepetitions is §7.2.3.2: how many times a "repeat(auto-fill, …)" goes
@@ -1776,7 +1949,27 @@ func (l *layouter) repeatedTracks(b *Box, args []css.ComponentValue,
 // maxRepeatedTracks bounds what a repeat() may expand to. A document is
 // untrusted and "repeat(1000000, 1fr)" is a line of CSS; the bound is far above
 // any grid anyone lays out and turns a memory exhaustion into a finding.
+//
+// It is the bound on everything a stylesheet writes about the explicit grid: a
+// repeat(), a whole track list however many repeat()s it holds, the rows and
+// the columns a grid-template-areas draws, a line number and a span. A grid
+// that writes more is refused and reported.
 const maxRepeatedTracks = 1000
+
+// maxGridTracks bounds how many tracks a grid has on one axis, explicit and
+// implicit together.
+//
+// The explicit grid is bounded by what the stylesheet may write — see
+// maxRepeatedTracks — and so is where an item that names its lines can reach.
+// The implicit rows an item placed by the flow lands in are bounded by nothing
+// the stylesheet says: each item goes below the last, and a thousand items
+// spanning a thousand rows reach a million. §7.1 lets an engine clamp the
+// grid, and says how: an item reaching past the limit has its span cut at the
+// last line, and one beginning past it is put in the last track. Ten thousand
+// is where Firefox clamps, and is far past any grid a page is laid out with.
+//
+// A variable so that a test can lower it and watch it fire.
+var maxGridTracks = 10000
 
 // trackFrom reads one track, which is either a size written once or a minmax()
 // that writes the two ends separately.
@@ -1925,18 +2118,19 @@ func (l *layouter) refusesToGrid(b *Box, width style.Unit) string {
 	if _, _, ok := l.trackList(b, "grid-template-columns", width, trackRoom{}); !ok {
 		return "its columns are written with something this engine does not " +
 			"size, such as a named line, a minmax() or a repeat() that counts " +
-			"how many will fit"
+			"how many will fit, or are more than " + strconv.Itoa(maxRepeatedTracks)
 	}
 	if _, _, ok := l.trackList(b, "grid-template-rows", width, trackRoom{}); !ok {
 		return "its rows are written with something this engine does not size, " +
 			"such as a named line, a minmax() or a repeat() that counts how " +
-			"many will fit"
+			"many will fit, or are more than " + strconv.Itoa(maxRepeatedTracks)
 	}
 	areas, ok := l.areasOf(b)
 	if !ok {
 		return "its cells are named by a template that does not draw a grid: " +
-			"either its rows are not all the same length or a name is in two " +
-			"places that do not touch"
+			"either its rows are not all the same length, a name is in two " +
+			"places that do not touch, or it draws more than " +
+			strconv.Itoa(maxRepeatedTracks) + " rows or columns"
 	}
 	switch trimmedLower(b.Style.Get("grid-auto-flow")) {
 	case "", "row", "column", "dense", "row dense", "dense row",
