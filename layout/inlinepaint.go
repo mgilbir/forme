@@ -49,10 +49,18 @@ import (
 // visual pieces on one line. It paints one rectangle covering both, where a
 // browser paints two.
 //
-// An outline is painted, and on the same fragment: it is a border drawn outside
-// the box's edge, which for an inline box is the room reserved here. See
-// paint.go's outline handling, which reads outline-style, outline-width and
-// outline-color the way the border painting reads theirs.
+// An outline is painted, and on the same fragments: it is a ring drawn outside
+// each fragment's border edge, in the step 10 of the stacking context the box
+// is in — see painter.outlines, which reads outline-style, outline-width and
+// outline-color the way the border painting reads theirs. §8.6's slicing is not
+// applied to it: CSS 2.1 §18.4 says that "in contrast to borders, the outline is
+// not open at the line box's end or start", so each fragment gets a whole ring.
+// For a box broken across lines, CSS UI 4 §5 says the outline should be one
+// outline, or a minimum set of outlines, enclosing all of the box's pieces. A
+// ring round each piece is a set that encloses them, though not the smallest
+// where two pieces touch: there a browser that joins them draws one shape and
+// this draws two rings that cross. It is a "should", and a piece-by-piece ring
+// is what the rest of this file's slice model gives for nothing.
 
 // maxInlineDecorations bounds how many of these fragments one document may
 // produce.
@@ -483,11 +491,15 @@ func (l *layouter) paintedInlines(b *Box) []*Box {
 // is what costs: an ordinary document's inline boxes are <em> and <a> with no
 // background and no border, and making a rectangle for each of them on each line
 // would be work in proportion to the document that nothing would ever read.
+//
+// An outline is something to draw. Leaving it out made an outline on a <span>
+// with no background or border no fragment at all, so there was nothing for the
+// outline pass to ring (audit C96).
 func (l *layouter) inlinePaints(b *Box) bool {
 	if got, ok := l.inlineDraws[b]; ok {
 		return got
 	}
-	draws := l.hasOwnBackground(b) || l.borderWidths(b) != (Edges{})
+	draws := l.hasOwnBackground(b) || l.borderWidths(b) != (Edges{}) || l.outlineWidth(b) > 0
 	l.inlineDraws[b] = draws
 	return draws
 }

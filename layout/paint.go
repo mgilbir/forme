@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/html"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -345,7 +346,6 @@ func PaintReporting(root *Fragment, rec *Recorder) []Op {
 	p.dimming(root, 1, nil)
 	p.canvasBackground(root)
 	p.stackingContext(root)
-	p.outlines(root)
 	p.settleGroups()
 	for _, b := range p.order {
 		p.groups[b].report(rec)
@@ -356,6 +356,18 @@ func PaintReporting(root *Fragment, rec *Recorder) []Op {
 // dimming works out, before anything is painted, how much of each fragment's
 // own paint reaches the page and which boxes decided it.
 //
+// CSS Color 4 applies opacity to every element, and what it dims is the
+// element and all of its descendants — the element tree's, not the fragment
+// tree's. The two differ in exactly one kind of box: a non-atomic inline box,
+// which has no fragment among Children at all. Its text is runs on its block's
+// lines, its background is a fragment per line on LineFragment.Boxes, and an
+// inline-block, a float or an absolutely positioned box written inside it
+// hangs from the block's fragment as though the span were not there. A walk of
+// fragments alone therefore never met the span's opacity, and "<span
+// style='opacity: 0'>secret</span>" printed the secret at full strength (audit
+// C32). So every fragment, run and inline fragment is dimmed by the inline
+// boxes between it and the fragment it hangs from as well — see inlineDim.
+//
 // owners is outermost first and is carried down rather than looked up, because
 // a block that was lifted out of an inline is no longer inside it — §9.2.1.1
 // made it a sibling of the inline's two halves — and the opacity the inline
@@ -365,23 +377,131 @@ func (p *painter) dimming(f *Fragment, a float64, owners *opacityOwner) {
 	if f == nil || f.Box == nil {
 		return
 	}
+	p.dimFragment(f, dim{a: a, owners: owners})
+}
+
+// dim is how much of one mark's paint reaches the page, and the boxes that
+// asked for it, innermost first. The zero value is a mark nothing dims: an
+// alpha below one always has a box that asked for it.
+type dim struct {
+	a      float64
+	owners *opacityOwner
+}
+
+// dimmed reports whether any box around the mark asked for opacity.
+func (d dim) dimmed() bool { return d.owners != nil }
+
+// with is d with one more box's opacity inside it.
+func (p *painter) with(d dim, b *Box) dim {
+	if !groupsItsPaint(b) {
+		return d
+	}
+	if !d.dimmed() {
+		d.a = 1
+	}
+	return dim{a: d.a * opacityOf(b.Style), owners: p.groupFor(b, d.owners)}
+}
+
+// dimFragment records a fragment's dimming, given what the fragment it hangs
+// from was dimmed by, and carries on into everything painted from it.
+func (p *painter) dimFragment(f *Fragment, around dim) {
+	d := around
 	for _, from := range f.Box.splitFrom {
-		if groupsItsPaint(from) {
-			a, owners = a*opacityOf(from.Style), p.groupFor(from, owners)
-		}
+		d = p.with(d, from)
 	}
-	if groupsItsPaint(f.Box) {
-		a, owners = a*opacityOf(f.Box.Style), p.groupFor(f.Box, owners)
-	}
-	if a < 1 {
-		if p.alpha == nil {
-			p.alpha, p.owners = map[*Fragment]float64{}, map[*Fragment]*opacityOwner{}
+	d = p.with(d, f.Box)
+	p.setDim(f, d)
+	// The lines, in tree order after the box itself and before its children,
+	// which is the order the groups are reported in. A run and an inline
+	// fragment are dimmed by the inline boxes between them and this block as
+	// well as by the block.
+	for _, line := range f.Lines {
+		for _, box := range line.Boxes {
+			if box.Box != nil {
+				p.setDim(box, p.inlineDim(box.Box, d))
+			}
 		}
-		p.alpha[f], p.owners[f] = a, owners
+		for i := range line.Runs {
+			if b := line.Runs[i].Box; b != nil {
+				p.inlineDim(b, d)
+			}
+		}
 	}
 	for _, c := range f.Children {
-		p.dimming(c, a, owners)
+		if c == nil || c.Box == nil {
+			continue
+		}
+		// The inline boxes the child was written inside, which have no fragment
+		// of their own on the way down to it: an inline-block, a float or an
+		// absolutely positioned box inside a translucent <span> is part of the
+		// span's group.
+		p.dimFragment(c, p.inlineDim(c.Box.Parent, d))
 	}
+}
+
+// setDim records a fragment's dimming, when there is any.
+func (p *painter) setDim(f *Fragment, d dim) {
+	if !d.dimmed() {
+		return
+	}
+	if p.alpha == nil {
+		p.alpha, p.owners = map[*Fragment]float64{}, map[*Fragment]*opacityOwner{}
+	}
+	p.alpha[f], p.owners[f] = d.a, d.owners
+}
+
+// inlineDim is the dimming of what is painted inside box b, given that the
+// block container whose lines b is on is dimmed by base: base, with the
+// opacity of every non-atomic inline box from b outwards folded in.
+//
+// The walk stops at the first box that is not one — the block container, or an
+// atomic inline, each of which has a fragment and was dimmed as one. A text box
+// is walked through rather than counted: it carries its parent element's whole
+// computed style, opacity included, and counting it would dim a translucent
+// span's words twice.
+//
+// It is memoized per box, because every run on every line asks it and a run
+// inside two hundred nested spans would otherwise walk all of them. The answer
+// depends on base, so the memo keeps the base it was computed from and is not
+// trusted for any other — which no layout this engine produces asks for, since
+// an inline box is on exactly one block's lines.
+func (p *painter) inlineDim(b *Box, base dim) dim {
+	var chain []*Box
+	d := base
+	for cur := b; cur != nil && cur.Outer == OuterInline; cur = cur.Parent {
+		if cur.Replaced != nil || isAtomicInline(cur) {
+			break
+		}
+		if cur.IsText() {
+			continue
+		}
+		if m, ok := p.inlineDims[cur]; ok && m.base == base {
+			d = m.dim
+			break
+		}
+		chain = append(chain, cur)
+	}
+	for i := len(chain) - 1; i >= 0; i-- {
+		d = p.with(d, chain[i])
+		if p.inlineDims == nil {
+			p.inlineDims = map[*Box]memoDim{}
+		}
+		p.inlineDims[chain[i]] = memoDim{base: base, dim: d}
+	}
+	return d
+}
+
+// memoDim is one entry of inlineDims: what is inside an inline box is dimmed
+// by dim, when its block is dimmed by base.
+type memoDim struct{ base, dim dim }
+
+// dimOf is what a fragment's own marks are dimmed by.
+func (p *painter) dimOf(f *Fragment) dim {
+	o := p.owners[f]
+	if o == nil {
+		return dim{}
+	}
+	return dim{a: p.alpha[f], owners: o}
 }
 
 // opacityOwner is one box that asked for opacity, and the chain of the ones
@@ -403,7 +523,17 @@ type opacityOwner struct {
 
 // groupFor records a box that asked for opacity, once, and puts it at the head
 // of the chain covering what is inside it.
+//
+// Once per *element*, not per box. CSS Color 4's group is the element and
+// everything inside it, and §9.2.1.1 makes several boxes of one inline
+// element: the pieces of a <span> broken around a block inside it are copies of
+// the span, each in its own anonymous block, and the block itself names the
+// original.
+// Keyed by box, one translucent span was three groups — three accounts of what
+// it painted, each checked for overlap without the other two, and three
+// reports about one declaration.
 func (p *painter) groupFor(b *Box, owners *opacityOwner) *opacityOwner {
+	b = p.groupBox(b)
 	if p.groups == nil {
 		p.groups = map[*Box]*group{}
 	}
@@ -419,25 +549,56 @@ func (p *painter) groupFor(b *Box, owners *opacityOwner) *opacityOwner {
 	return &opacityOwner{box: b, up: owners}
 }
 
+// groupKey is what makes two boxes one group: the element they came from, and
+// which of its pseudo-elements, if either.
+type groupKey struct {
+	el     *html.Node
+	pseudo string
+}
+
+// groupBox is the box that stands for b's element in the groups: the first box
+// of that element met, or b itself for a box no element generated.
+func (p *painter) groupBox(b *Box) *Box {
+	if b.Element == nil || b.IsText() {
+		return b
+	}
+	k := groupKey{b.Element, b.Pseudo}
+	if first, ok := p.elementGroups[k]; ok {
+		return first
+	}
+	if p.elementGroups == nil {
+		p.elementGroups = map[groupKey]*Box{}
+	}
+	p.elementGroups[k] = b
+	return b
+}
+
 // grouped paints a fragment's own marks and folds into them the opacity of
 // every box around it that asked for one.
-func (p *painter) grouped(f *Fragment, paint func()) {
-	a, dimmed := p.alpha[f]
-	if !dimmed {
+func (p *painter) grouped(f *Fragment, paint func()) { p.as(p.dimOf(f), paint) }
+
+// as paints marks and folds a dimming into them, crediting them to the
+// innermost box that asked for it.
+//
+// Every mark goes through here exactly once: a fragment's own through grouped,
+// and a run of text or an inline box's fragment with what inlineDim found for
+// it. Nothing here nests — a block's lines are not painted inside the block's
+// own call — because a mark folded twice would carry the block's alpha twice
+// and be held by two groups.
+func (p *painter) as(d dim, paint func()) {
+	if !d.dimmed() {
 		paint()
 		return
 	}
 	at := len(p.ops)
 	paint()
-	ops, marks := dimOps(p.ops, at, a)
+	ops, marks := dimOps(p.ops, at, d.a)
 	p.ops = ops
 	// To the innermost group only. The groups around it read these through
 	// their children when they are settled; appending to every one of them
 	// held each mark once per level of nested opacity (audit C21).
-	if o := p.owners[f]; o != nil {
-		g := p.groups[o.box]
-		g.marks = append(g.marks, marks...)
-	}
+	g := p.groups[d.owners.box]
+	g.marks = append(g.marks, marks...)
 }
 
 // canvasBackground paints the page's own background, before anything else.
@@ -530,6 +691,11 @@ type painter struct {
 	// met, so that the report about a group is in document order.
 	groups map[*Box]*group
 	order  []*Box
+	// elementGroups is the box each element's group is kept under. See
+	// groupFor.
+	elementGroups map[groupKey]*Box
+	// inlineDims memoizes inlineDim, per inline box.
+	inlineDims map[*Box]memoDim
 }
 
 // stackLevel is one positioned box waiting to be painted, with what decides
@@ -649,6 +815,9 @@ func (p *painter) stackingContext(f *Fragment) {
 	for ; at < len(lv.positioned); at++ {
 		p.stackLevel(lv.positioned[at])
 	}
+
+	// Step 10: the outlines of everything in this context.
+	p.outlines(f)
 }
 
 // stackLevel paints one positioned box, as a context of its own or as a unit.
@@ -682,8 +851,94 @@ func (p *painter) stackLevel(s stackLevel) {
 //
 // The root is the other half of the sentence and needs nothing here: the paint
 // begins by making a stacking context of it, so it never reaches this.
+//
+// "Not auto" is the *used* value, which is auto wherever z-index does not
+// apply — see usedZIndex. A static block with "opacity: 0.5; z-index: -1" is
+// sealed by its opacity and not by the number.
 func sealsItsDescendants(b *Box) bool {
-	return !b.ZAuto || b.Position == PositionFixed || groupsItsPaint(b)
+	_, auto := usedZIndex(b)
+	return !auto || b.Position == PositionFixed || groupsItsPaint(b)
+}
+
+// # Who stacks where
+//
+// Every painter asks the next four questions of a box, and they are answered
+// here once so that no step of the paint has a reading of its own. Each of
+// the defects this replaced was one step asking a nearby question instead:
+// the level read the z-index of boxes it does not apply to (audit C97), the
+// gather sorted a flex item as a plain block because it only knew about
+// positioning (C98), and the outline pass walked a different tree from the
+// one the rest of the paint walks (C95, C96).
+
+// zIndexApplies reports whether z-index means anything on a box.
+//
+// CSS 2.1 §9.9.1 gives it to positioned boxes, and css-flexbox §4.3 and
+// css-grid §9.5 to flex and grid items, positioned or not:
+//
+//	Flex items paint exactly the same as inline blocks [CSS2], except that
+//	order-modified document order is used in place of raw document order,
+//	and z-index values other than auto create a stacking context even if
+//	position is static.
+//
+// On every other box the declaration is ignored — the computed value is kept,
+// but the used value is auto.
+func zIndexApplies(b *Box) bool {
+	return b.Position.positioned() || isFlexOrGridItem(b)
+}
+
+// isFlexOrGridItem reports whether a box is an item of a flex or grid
+// container: an in-flow child of one. An absolutely positioned child is not an
+// item (css-flexbox §4.1), and a float in one is not floating — unfloatItems
+// cleared it when the box tree was built.
+func isFlexOrGridItem(b *Box) bool {
+	up := b.Parent
+	return up != nil && (up.Inner == InnerFlex || up.Inner == InnerGrid) &&
+		!b.Position.outOfFlow()
+}
+
+// usedZIndex is a box's z-index as painting uses it, and whether that is auto.
+func usedZIndex(b *Box) (z int, auto bool) {
+	if b.ZAuto || !zIndexApplies(b) {
+		return 0, true
+	}
+	return b.ZIndex, false
+}
+
+// stacksAsLevel reports whether a box is painted among the stacking levels of
+// §E.2 steps 3, 7 and 8 rather than in the layer its display would put it in:
+// every positioned box, every stacking context, and a block that §9.2.1.1
+// lifted out of a positioned inline.
+//
+// A stacking context that is not positioned is one of two things this engine
+// implements: a box with an opacity below one, which CSS Color 4 paints
+// at the stacking order a positioned element with "z-index: 0" would have, and
+// a flex or grid item with a z-index. The first stacks at zero whatever its z-index says, because z-index
+// does not apply to it; the second stacks at its number.
+func stacksAsLevel(b *Box) bool {
+	if b.Position.positioned() || stacksWithASplitInline(b) != nil || groupsItsPaint(b) {
+		return true
+	}
+	_, auto := usedZIndex(b)
+	return !auto
+}
+
+// paintsAtomically reports whether a fragment that is not a stacking level is
+// painted whole, in tree order among the text of the content layer, rather
+// than split between the block backgrounds of step 4 and the text of step 6.
+//
+// An inline-level box is (§E.2), and so is a flex or grid item — the sentence
+// quoted at zIndexApplies. Painting an item's background with the block
+// backgrounds put a later item's background over an earlier one's text, and a
+// later sibling block's background over the whole row.
+func paintsAtomically(f *Fragment) bool {
+	return atomicInline(f) || isFlexOrGridItem(f.Box)
+}
+
+// opensAContext reports whether a fragment is painted by a stackingContext
+// call of its own, which is what everything inside it is sealed in — its
+// outlines included.
+func opensAContext(f *Fragment) bool {
+	return stacksAsLevel(f.Box) && sealsItsDescendants(f.Box)
 }
 
 // unit paints a fragment and its non-positioned content as one indivisible
@@ -739,7 +994,7 @@ func (p *painter) gather(f *Fragment, lv *layers, root, collect bool) {
 		if c.Box == nil {
 			continue
 		}
-		if c.Box.Position.positioned() || stacksWithASplitInline(c.Box) != nil || groupsItsPaint(c.Box) {
+		if stacksAsLevel(c.Box) {
 			if !collect {
 				// Already hoisted; painting it here as well would draw it twice.
 				continue
@@ -768,14 +1023,15 @@ func (p *painter) gather(f *Fragment, lv *layers, root, collect bool) {
 			}
 			continue
 		}
-		if atomicInline(c) {
+		if paintsAtomically(c) {
 			// §E.2's step 4 is over the "non-inline-level" descendants, so an
 			// inline-block's background and border are not there: they belong
 			// with the line the box sits on, and the box is painted whole and in
-			// tree order among the words. It is transparent for its positioned
-			// descendants for the same reason a float is — they are hoisted into
-			// the enclosing context rather than sealed inside a box that never
-			// became a stacking context.
+			// tree order among the words. A flex or grid item is painted the
+			// same way, by the flexbox and grid specifications' own sentence. It
+			// is transparent for its positioned descendants for the same reason
+			// a float is — they are hoisted into the enclosing context rather
+			// than sealed inside a box that never became a stacking context.
 			lv.content = append(lv.content, contentItem{frag: c, atomic: true})
 			if collect {
 				p.hoist(c, lv)
@@ -802,10 +1058,10 @@ func (p *painter) hoist(f *Fragment, lv *layers) {
 		if c.Box == nil {
 			continue
 		}
-		// The same two kinds gather sorts out, and for the same reason: a box
-		// gather will skip as "already hoisted" has to actually be hoisted here,
-		// or it is painted nowhere at all.
-		if c.Box.Position.positioned() || stacksWithASplitInline(c.Box) != nil || groupsItsPaint(c.Box) {
+		// The same test gather makes, and for the same reason: a box gather
+		// will skip as "already hoisted" has to actually be hoisted here, or it
+		// is painted nowhere at all.
+		if stacksAsLevel(c.Box) {
 			lv.positioned = append(lv.positioned, stackLevel{
 				frag: c, z: levelOf(c), order: c.Box.Order,
 			})
@@ -825,15 +1081,11 @@ func levelOf(f *Fragment) int {
 		// The block was broken out of a positioned inline, so it is painted
 		// where that inline is painted rather than with the blocks of the
 		// context around it. See stacksWithASplitInline.
-		if from.ZAuto {
-			return 0
-		}
-		return from.ZIndex
+		z, _ := usedZIndex(from)
+		return z
 	}
-	if f.Box.ZAuto {
-		return 0
-	}
-	return f.Box.ZIndex
+	z, _ := usedZIndex(f.Box)
+	return z
 }
 
 // stacksWithASplitInline returns the positioned inline a block was broken out
@@ -1160,8 +1412,17 @@ func (p *painter) paintBackground(f *Fragment) {
 // The clip is the box's *content* clip, so its own "overflow" cuts the text and
 // pictures inside it to its padding box. That is §11.1.1 in one line, and it is
 // the half of clipping every author uses.
+//
+// The lines are painted outside the fragment's own grouped call rather than
+// inside it, because what is on them is not all dimmed by what dims the block:
+// a run inside a translucent <span> is dimmed by the span as well, and each run
+// and inline fragment folds its own dimming in lines. See painter.as.
 func (p *painter) content(f *Fragment) {
+	if f.clipContent.blocks() {
+		return
+	}
 	p.grouped(f, func() { p.clipping(f.clipContent, func() { p.paintContent(f) }) })
+	p.lines(f)
 }
 
 func (p *painter) paintContent(f *Fragment) {
@@ -1220,7 +1481,6 @@ func (p *painter) paintContent(f *Fragment) {
 			Text: m.Text, Face: m.Face, Size: m.Size, Color: m.Color,
 		})
 	}
-	p.lines(f)
 }
 
 // inlineDecorations paints one fragment of an inline box: the same background
@@ -1231,9 +1491,16 @@ func (p *painter) paintContent(f *Fragment) {
 // — a dashed border is a dozen fills and a 3-D one is two tones — and a second
 // copy of that decomposition is exactly what border.go exists to prevent. What
 // is here is one flag applied to whatever the shared code produced.
-func (p *painter) inlineDecorations(f *Fragment) {
+//
+// clip is the content clip of the block whose line the fragment is on: an
+// inline box clips nothing of its own, and what cuts it is what cuts the words
+// beside it. See resolveClips.
+func (p *painter) inlineDecorations(f *Fragment, clip Clip) {
+	if f.Box == nil {
+		return
+	}
 	at := len(p.ops)
-	p.decorations(f)
+	p.grouped(f, func() { p.clipping(clip, func() { p.decorationsIn(f) }) })
 	for i := at; i < len(p.ops); i++ {
 		r, ok := p.ops[i].(FillRect)
 		if !ok {
@@ -1302,23 +1569,55 @@ func (p *painter) borders(f *Fragment) {
 	}
 }
 
-// outlines paints CSS 2.1 §18.4's outlines, over everything else.
+// outlines paints CSS 2.1 §18.4's outlines: §E.2's step 10 for one stacking
+// context.
 //
-// It is a pass of its own because §E.2 makes it one: step 10, after all ten
-// layers of every stacking context, is where "the outlines of all elements" go.
-// That is not a detail of ordering — an outline is drawn *outside* its box, so
-// it lies over whatever is beside the box, and painting it with the box's own
-// border would put a later sibling's background on top of it.
+// It is a step of its own because an outline is drawn *outside* its box, so it
+// lies over whatever is beside the box, and painting it with the box's own
+// border would put a later sibling's background on top of it. It is the last
+// step of *each* context and not one pass over the whole page, which is what
+// the step says —
 //
-// The traversal is the fragment tree rather than the stacking contexts, because
-// step 10 is one list in document order and not ten lists per context.
-func (p *painter) outlines(f *Fragment) {
-	if f == nil {
-		return
+//	Finally, implementations that do not draw outlines in steps above must
+//	draw outlines from this stacking context at this stage.
+//
+// — so an outline inside a "z-index: -1" box is under the content of the
+// context around that box, exactly as the box is.
+//
+// The walk is the fragment tree in document order, stopping at every
+// descendant that opens a context of its own, whose outlines are its own
+// step 10. It is the same test the gather makes; a separate reading of which
+// boxes seal was how the outline pass came to walk a different tree from the
+// paint (audit C95, C96).
+//
+// Each ring is clipped by what clips its box. For a fragment that is clipSelf,
+// which is every clip its containing block chain passes to it with its own
+// "clip" met in: §11.1.1 clips a box's contents, and an outline is part of the
+// rendering of the box it rings, so an outline inside an "overflow: hidden"
+// box stops at that box's padding edge like everything else in it. For an
+// inline box's fragment it is the content clip of the block whose line it is
+// on, which is what cuts the box's background and its words.
+func (p *painter) outlines(root *Fragment) {
+	var walk func(f *Fragment)
+	walk = func(f *Fragment) {
+		if f.Box == nil {
+			return
+		}
+		p.grouped(f, func() { p.clipping(f.clipSelf, func() { p.outline(f) }) })
+		for _, line := range f.Lines {
+			for _, box := range line.Boxes {
+				p.grouped(box, func() { p.clipping(f.clipContent, func() { p.outline(box) }) })
+			}
+		}
+		for _, c := range f.Children {
+			if c == nil || c.Box == nil || opensAContext(c) {
+				continue
+			}
+			walk(c)
+		}
 	}
-	p.grouped(f, func() { p.outline(f) })
-	for _, c := range f.Children {
-		p.outlines(c)
+	if root != nil {
+		walk(root)
 	}
 }
 
@@ -1382,6 +1681,7 @@ func (p *painter) lines(f *Fragment) {
 		return
 	}
 	content := f.ContentRect()
+	clip, around := f.clipContent, p.dimOf(f)
 	for _, line := range f.Lines {
 		// Where the baseline is, in whichever direction the line stacks its
 		// text across. On a horizontal line it is a distance down from the top
@@ -1412,7 +1712,7 @@ func (p *painter) lines(f *Fragment) {
 		// decorations of a line first is what keeps this a loop rather than a
 		// second traversal of the tree.
 		for _, box := range line.Boxes {
-			p.inlineDecorations(box)
+			p.inlineDecorations(box, clip)
 		}
 		for _, run := range line.Runs {
 			// Spaces are drawn, not skipped, and the reason is text extraction
@@ -1477,47 +1777,58 @@ func (p *painter) lines(f *Fragment) {
 					Y: content.Y.Add(line.Rect.Y).Add(along),
 				}
 			}
-			// The two lines that sit clear of the letters are drawn first, so the
-			// text is over them where they touch; the line-through is drawn after,
-			// because it goes across the letters rather than under them. That is
-			// the order every renderer uses, and it only matters where a
-			// decoration's colour differs from the text's — which is precisely the
-			// case §16.3.1 exists to describe.
-			if _, isControl := controlOf(run.Text); isControl {
-				// CSS Text 3 requires a control character to be visible, and no
-				// face has a glyph for one — so the mark is synthesized here
-				// rather than asked for. The advance was spent by layout and is
-				// not changed: the box goes inside it.
-				//
-				// No DrawText goes with it. Emitting one would put .notdef on
-				// the page beside the box, and would put the control character
-				// itself into the text extracted from the page, where it is
-				// exactly the thing a reader does not want back.
-				p.emit(controlBox(at, run.Width, run.Size, colour, turnOfLine(line))...)
-				continue
-			}
-			p.decorate(run, at, turnOfLine(line), false)
-			p.emit(DrawText{
-				At:            at,
-				Sideways:      line.Sideways,
-				Anticlockwise: line.Anticlockwise,
-				Upright:       run.Upright,
-				Features:      run.Features,
-				Text:          drawableText(run.Text),
-				PreContext:    run.PreContext,
-				PostContext:   run.PostContext,
-				MergePre:      run.MergePre,
-				MergePost:     run.MergePost,
-				ContextKerns:  run.ContextKerns,
-				RTL:           run.RTL,
-				Face:          run.Face,
-				Size:          run.Size,
-				Color:         colour,
-				CharSpacing:   run.LetterSpacing,
+			// Each run is its own call, for the reason painter.as gives: what
+			// dims it is the block's opacity and every translucent inline box
+			// it is inside, and the next run on the line may be inside none.
+			p.as(p.inlineDim(run.Box, around), func() {
+				p.clipping(clip, func() { p.paintRun(run, at, colour, turnOfLine(line)) })
 			})
-			p.decorate(run, at, turnOfLine(line), true)
 		}
 	}
+}
+
+// paintRun paints one run of text at its pen position, with the lines ruled
+// across it.
+func (p *painter) paintRun(run TextRun, at Point, colour style.RGBA, turn runTurn) {
+	if _, isControl := controlOf(run.Text); isControl {
+		// CSS Text 3 requires a control character to be visible, and no
+		// face has a glyph for one — so the mark is synthesized here
+		// rather than asked for. The advance was spent by layout and is
+		// not changed: the box goes inside it.
+		//
+		// No DrawText goes with it. Emitting one would put .notdef on
+		// the page beside the box, and would put the control character
+		// itself into the text extracted from the page, where it is
+		// exactly the thing a reader does not want back.
+		p.emit(controlBox(at, run.Width, run.Size, colour, turn)...)
+		return
+	}
+	// The two lines that sit clear of the letters are drawn first, so the
+	// text is over them where they touch; the line-through is drawn after,
+	// because it goes across the letters rather than under them. That is
+	// the order every renderer uses, and it only matters where a
+	// decoration's colour differs from the text's — which is precisely the
+	// case §16.3.1 exists to describe.
+	p.decorate(run, at, turn, false)
+	p.emit(DrawText{
+		At:            at,
+		Sideways:      turn.sideways,
+		Anticlockwise: turn.anticlockwise,
+		Upright:       run.Upright,
+		Features:      run.Features,
+		Text:          drawableText(run.Text),
+		PreContext:    run.PreContext,
+		PostContext:   run.PostContext,
+		MergePre:      run.MergePre,
+		MergePost:     run.MergePost,
+		ContextKerns:  run.ContextKerns,
+		RTL:           run.RTL,
+		Face:          run.Face,
+		Size:          run.Size,
+		Color:         colour,
+		CharSpacing:   run.LetterSpacing,
+	})
+	p.decorate(run, at, turn, true)
 }
 
 // decorate paints the lines ruled across one run.

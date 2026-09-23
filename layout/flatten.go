@@ -606,9 +606,6 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 // which side's inset is *reserved* on which piece, and that decides which side's
 // border is *drawn* on which fragment. Both read the same two flags, and a test
 // that plants a defect in either of them fails on the other's assertions.
-//
-// An outline is still not drawn, on an inline box or on any other — nothing in
-// this engine paints one.
 // splitInsetSides turns "does the box begin here" into "which physical side",
 // which is the same question only in a left-to-right containing block.
 //

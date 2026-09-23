@@ -124,11 +124,22 @@ import (
 // positioned box, painted at Appendix E step 7 with everything else positioned;
 // its runs are painted at step 6 with the rest of the block's text. The two
 // differ only where a relatively positioned inline's text overlaps a positioned
-// box that comes earlier in the document — every other pair is ordered the same
-// way by both rules, because step 6 already comes after every block background
-// and every float and before every positioned box. Closing it would mean
+// box that comes earlier in the document, or text and inline-level boxes of
+// step 6 that come later in it — which step 7 would put under the inline's
+// words and step 6 puts over them. Every other pair is ordered the same way by
+// both rules, because step 6 already comes after every block background and
+// every float and before every positioned box. Closing it would mean
 // splitting a line box's runs into stacking levels, which is a change to the
 // shape of a line rather than an addition to it.
+//
+// An inline box with an opacity below one is the same case from the other
+// side. CSS Color 4 makes it a stacking context at level zero — painted where a
+// positioned box with "z-index: 0" is — and its runs are still painted at step
+// 6. What it does to its content is applied in full: every run, inline fragment
+// and box written inside it is dimmed, as one group across all its lines (see
+// paint.go's dimming). What is given up is again only where in the order its
+// marks go, and a positioned or translucent box written inside it is sorted
+// into the context around the block rather than sealed inside the inline.
 
 // heldBox and heldFragment take back what an itemRef holds.
 //
@@ -579,6 +590,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					style.Min(right.Sub(left), lineCap(balanceCaps, lineCaps, i, len(parent.Lines))).
 						Sub(lineIndent).Sub(lineEllipsis),
 					left.Sub(lo).Add(lineIndent))
+				dropLineEndGap(runs)
 				runs = l.fitRuns(runs, fitScale)
 				l.unkernLineEnd(runs)
 				stack = stackLine(runs, l.fitStrut(st, items, next, forced, fitScale))
@@ -1384,6 +1396,79 @@ func (l *layouter) unkernLineEnd(runs []inlineItem) {
 		it.Width = it.Width.Add(l.br.LineEndCorrection(*it))
 		return
 	}
+}
+
+// dropLineEndGap takes the gap at the end of a line out of the width of the
+// item that carries it.
+//
+// Item.Autospace is a gap a run carries at its visual right edge for the
+// boundary with what is drawn after it: §8.1's eighth of an ideograph, or the
+// letter-spacing a run of pictures takes before the next letter. A line that
+// breaks at that boundary puts the two characters on different lines, and two
+// characters on different lines are not adjacent, so there is no gap — which
+// is what the breaker measured: it fits a line with the gap of the item drawn
+// furthest right left out (see paragraph.TrailingSpacing and Rightmost).
+//
+// Nothing did the same for the line that was then set. The alignment measured
+// the line with the gap in it, so a right-aligned line ending at the boundary
+// stood an eighth of an em short of its edge, and an inline box's fragment
+// reached past its last glyph by the same eighth: text-autospace-break-001 rings
+// each <span> with an outline, and the ring on the first line was 5px wider than
+// the one the reference, which breaks with a <br>, draws.
+//
+// The item is found the way the breaker's tracker finds it, over the same
+// items: in logical order, passing over what is out of flow, the rightmost by
+// UAX #9's L2 read for a pair. Its gap is at its visual right whichever way it
+// reads — a run is drawn from its origin rightwards, so width added to it lands
+// past its rightmost glyph — and that is the end of the line.
+//
+// paragraph.TrailingSpacing, which the breaker measures with, discounts the gap
+// of a left-to-right run only. That condition predates the tracker: it was
+// written for the logically last item of a right-to-left line, which is its
+// leftmost, and the tracker now answers that case by never picking such an
+// item. What it still does is keep the gap of a right-to-left run that ends a
+// left-to-right line — "ب国" broken between the two — in the measure, so the
+// breaker asks an eighth of an em more room for that line than it sets. That is
+// the conservative direction, and the breaker's rule is shared with the
+// intrinsic sizing, whose own walk still asks it of the last item; it is left
+// as it is here, and this sets the line the specification's way.
+//
+// The line's own copy of the items is written, as unkernLineEnd does: the
+// paragraph's items keep the gap, which the next line's breaking needs.
+func dropLineEndGap(runs []inlineItem) {
+	at, low, has := -1, 0, false
+	for k := range runs {
+		if runs[k].Abs != nil || runs[k].Float != nil {
+			continue
+		}
+		level := runs[k].Level
+		if !has {
+			at, low, has = k, level, true
+			continue
+		}
+		m := min(low, level)
+		if m%2 == 0 {
+			at, low = k, level
+			continue
+		}
+		low = m
+	}
+	if at < 0 {
+		return
+	}
+	it := &runs[at]
+	if it.Autospace == 0 {
+		return
+	}
+	it.Width = it.Width.Sub(it.Autospace)
+	if it.AtomicBox != nil {
+		// A picture's gap is the whole of its edge spacing — see
+		// spaceAfterAtomics — and an inline box's extent leaves the edge
+		// spacing out as well. Taken away twice, the box would stop short of
+		// the picture.
+		it.EdgeLetterSpacing = 0
+	}
+	it.Autospace = 0
 }
 
 // roomBeside is how much of a line's band is left for a float met along it.
