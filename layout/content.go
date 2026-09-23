@@ -294,6 +294,47 @@ func attrArgument(fn css.ComponentValue) string {
 	return ""
 }
 
+// addGenerated puts what a pseudo-element generates into box.
+//
+// That is its box, except where its display is "contents". css-display-3
+// says the value makes an element generate no box while "its children and
+// pseudo-elements still generate boxes and text runs as normal", and a
+// pseudo-element is an element for the purpose: its content is what it would
+// have held, and it goes into the box around it with nothing of the
+// pseudo-element's own — no background, border or padding, no line of its
+// own decoration — exactly as appendContents does for an element's children.
+// The text keeps the pseudo-element's style, which is what it inherits. The
+// value used to be read as "inline", and the box it made drew all of those.
+//
+// A pseudo-element whose content is one picture is a replaced element, whose
+// content is not boxes, and the value is not honoured on it any more than on
+// an <img>: see contentsIsHonoured. It keeps its box, and says so.
+func (b *boxBuilder) addGenerated(box *Box, n *html.Node, name string, fontSize style.Unit) {
+	g := b.generated(n, name, fontSize)
+	if g == nil {
+		return
+	}
+	kids := []*Box{g}
+	if strings.EqualFold(strings.TrimSpace(g.Style.Get("display")), "contents") {
+		if g.ContentImage == "" {
+			kids = g.Children
+		} else {
+			b.rec.ReportDetail(Finding{
+				Rule:   RuleUnsupportedValue,
+				Source: AtHTML(n.Offset),
+				Message: "\"display: contents\" is not implemented on a ::" + name +
+					" whose content is a picture; it was laid out as an inline box",
+				Path:     PathOf(n),
+				Property: "display",
+			})
+		}
+	}
+	for _, c := range kids {
+		c.Parent = box
+		box.Children = append(box.Children, c)
+	}
+}
+
 // generated builds the box a pseudo-element produces, or nil.
 func (b *boxBuilder) generated(n *html.Node, name string, fontSize style.Unit) *Box {
 	key := style.PseudoKey{Node: n, Name: name}

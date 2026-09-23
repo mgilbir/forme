@@ -289,7 +289,7 @@ func buildWith(in Input, page PageSize, rec *Recorder) Built {
 	// is replaced changes only how its box is sized, never whether there is
 	// one — and it runs before layout because a size is what layout needs.
 	resolveReplaced(root, in.Resources, rec)
-	reportUnsupportedDisplays(doc, styled.Styles, rec)
+	reportUnsupportedDisplays(doc, styled.Styles, styled.Pseudo, rec)
 
 	return Built{
 		Document:  doc,
@@ -432,8 +432,17 @@ func ruleForStyleFinding(f style.Finding) Rule {
 // of it. A guardrail that decided for itself which declarations the engine
 // applies would go stale in the direction that matters: silent about a value
 // that had stopped being honoured.
-func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.ComputedStyle, rec *Recorder) {
+//
+// The display gaps of a ::before and an ::after are reported beside their
+// element's, from the same reading of the value: a pseudo-element is a box
+// like any other, and one whose display was laid out as something else went
+// unsaid because this walk only met elements. Neither is reported under a
+// "display: none", which lays nothing out to be wrong about.
+func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.ComputedStyle,
+	pseudo map[style.PseudoKey]style.ComputedStyle, rec *Recorder) {
+
 	root := documentElementOf(doc)
+	scope := rubyScope{styles: styles}
 	doc.Walk(func(n *html.Node) bool {
 		if n.Type != html.ElementNode {
 			return true
@@ -441,6 +450,9 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 		cs, ok := styles[n]
 		if !ok {
 			return true
+		}
+		if displayIsNone(cs) {
+			return false
 		}
 		if cs.Get("display") == "contents" && !contentsIsHonoured(n, cs, root) {
 			rec.ReportDetail(Finding{
@@ -452,13 +464,32 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 			})
 		}
 		if gap := parseDisplay(cs.Get("display")).gap; gap != displayGapNone &&
-			unlaidBoxIsNotTheBoxAsked(n, styles, gap) {
+			unlaidBoxIsNotTheBoxAsked(n, cs, styles, pseudo, gap, &scope, n == root) {
 			value := strings.ToLower(strings.TrimSpace(cs.Get("display")))
 			rec.ReportDetail(Finding{
 				Rule:   RuleUnsupportedValue,
 				Source: AtHTML(n.Offset),
 				Message: quoteValue("display: "+value) + " is not implemented; " +
 					unlaidDisplay(gap),
+				Path:     PathOf(n),
+				Property: "display",
+			})
+		}
+		for _, name := range [2]string{"before", "after"} {
+			pcs, ok := pseudo[style.PseudoKey{Node: n, Name: name}]
+			if !ok || !generatesPseudoBox(pcs) {
+				continue
+			}
+			gap := parseDisplay(pcs.Get("display")).gap
+			if gap == displayGapNone || !pseudoIsNotTheBoxAsked(n, cs, pcs, gap, &scope) {
+				continue
+			}
+			value := strings.ToLower(strings.TrimSpace(pcs.Get("display")))
+			rec.ReportDetail(Finding{
+				Rule:   RuleUnsupportedValue,
+				Source: AtHTML(n.Offset),
+				Message: quoteValue("display: "+value) + " on ::" + name +
+					" is not implemented; " + unlaidDisplay(gap),
 				Path:     PathOf(n),
 				Property: "display",
 			})
@@ -534,6 +565,9 @@ func unlaidDisplay(gap displayGap) string {
 	case displayGapInlineListItem:
 		return "an inline-level list item was laid out as the inline box it is, " +
 			"and its marker was not drawn"
+	case displayGapAnnotation:
+		return "an annotation outside any ruby was laid out as an inline box, " +
+			"where it belongs above an empty base in a ruby of its own"
 	}
 	return ""
 }
@@ -555,13 +589,101 @@ func unlaidDisplay(gap displayGap) string {
 // is an annotation in it: ruby lays a "ruby-text" above its base, and with no
 // annotation there is nothing to lift — §3.1's own answer for a base alone is
 // the base.
-func unlaidBoxIsNotTheBoxAsked(n *html.Node, styles map[*html.Node]style.ComputedStyle,
-	gap displayGap) bool {
+//
+// An annotation is the ruby's report where there is a ruby around it, and its
+// own where there is none: css-ruby-1 §2.2 wraps one that stands outside any
+// ruby in an anonymous ruby of its own, above an empty base. Not where it has
+// been blockified — a float, an absolutely positioned box, a flex or grid item
+// or the root — because css-display-3 §2.7 turns a blockified layout-internal
+// box into a block, which is what this engine lays out.
+func unlaidBoxIsNotTheBoxAsked(n *html.Node, cs style.ComputedStyle,
+	styles map[*html.Node]style.ComputedStyle, pseudo map[style.PseudoKey]style.ComputedStyle,
+	gap displayGap, scope *rubyScope, isRoot bool) bool {
 
-	if gap == displayGapRuby {
-		return hasRubyAnnotation(n, styles)
+	switch gap {
+	case displayGapRuby:
+		return hasRubyAnnotation(n, styles, pseudo)
+	case displayGapAnnotation:
+		return !isRoot && !blockifiedOnItsOwn(cs) &&
+			!itemOfItsParent(n.Parent, styles) && !scope.inside(n.Parent)
 	}
 	return true
+}
+
+// pseudoIsNotTheBoxAsked is unlaidBoxIsNotTheBoxAsked for a ::before or an
+// ::after of n, whose style is cs, with the style pcs.
+//
+// A ruby pseudo-element holds no element, so no annotation, and is the base
+// it lays out as. An annotation pseudo-element is inside a ruby when its
+// element is one or is inside one.
+func pseudoIsNotTheBoxAsked(n *html.Node, cs, pcs style.ComputedStyle, gap displayGap,
+	scope *rubyScope) bool {
+
+	switch gap {
+	case displayGapRuby:
+		return false
+	case displayGapAnnotation:
+		return !blockifiedOnItsOwn(pcs) && !isFlexOrGridContainer(cs) &&
+			!scope.inside(n)
+	}
+	return true
+}
+
+// blockifiedOnItsOwn reports the two reasons §2.7 blockifies a box that are
+// its own style's: a float and an absolutely positioned box.
+func blockifiedOnItsOwn(cs style.ComputedStyle) bool {
+	return floatOf(cs) != FloatNone || positionOf(cs).outOfFlow()
+}
+
+// itemOfItsParent reports whether an element's box is an item of a flex or
+// grid container: whether the nearest ancestor that generates a box is one.
+func itemOfItsParent(up *html.Node, styles map[*html.Node]style.ComputedStyle) bool {
+	for ; up != nil && up.Type == html.ElementNode; up = up.Parent {
+		cs := styles[up]
+		if strings.EqualFold(strings.TrimSpace(cs.Get("display")), "contents") {
+			continue
+		}
+		return isFlexOrGridContainer(cs)
+	}
+	return false
+}
+
+// isFlexOrGridContainer reports a style whose inner display is flex or grid.
+func isFlexOrGridContainer(cs style.ComputedStyle) bool {
+	d := parseDisplay(cs.Get("display"))
+	return d.inner == InnerFlex || d.inner == InnerGrid
+}
+
+// rubyScope answers whether an element is a ruby or inside one, memoized per
+// element: an annotation asks of its parent, and a page of annotations each a
+// hundred elements deep would otherwise walk the hundred for every one.
+type rubyScope struct {
+	styles map[*html.Node]style.ComputedStyle
+	memo   map[*html.Node]bool
+}
+
+// inside reports whether n or an element above it is a ruby.
+func (s *rubyScope) inside(n *html.Node) bool {
+	var path []*html.Node
+	found := false
+	for cur := n; cur != nil && cur.Type == html.ElementNode; cur = cur.Parent {
+		if v, ok := s.memo[cur]; ok {
+			found = v
+			break
+		}
+		path = append(path, cur)
+		if parseDisplay(s.styles[cur].Get("display")).gap == displayGapRuby {
+			found = true
+			break
+		}
+	}
+	if s.memo == nil {
+		s.memo = map[*html.Node]bool{}
+	}
+	for _, c := range path {
+		s.memo[c] = found
+	}
+	return found
 }
 
 // hasRubyAnnotation reports whether a ruby box has anything to lift above its
@@ -583,7 +705,12 @@ func unlaidBoxIsNotTheBoxAsked(n *html.Node, styles map[*html.Node]style.Compute
 // already read n's display and found "ruby", so n cannot also be the
 // "ruby-text" this is looking for. A guard that said so could not be made to
 // fail.
-func hasRubyAnnotation(n *html.Node, styles map[*html.Node]style.ComputedStyle) bool {
+//
+// A ::before or an ::after of an element in the walk is an annotation too when
+// its display says so and it generates a box, which is the one kind of
+// annotation the elements alone do not show.
+func hasRubyAnnotation(n *html.Node, styles map[*html.Node]style.ComputedStyle,
+	pseudo map[style.PseudoKey]style.ComputedStyle) bool {
 	found := false
 	n.Walk(func(c *html.Node) bool {
 		// The element test is an optimisation and nothing else, and it is worth
@@ -599,12 +726,30 @@ func hasRubyAnnotation(n *html.Node, styles map[*html.Node]style.ComputedStyle) 
 		if !ok {
 			return true
 		}
-		switch strings.ToLower(strings.TrimSpace(cs.Get("display"))) {
-		case "ruby-text", "ruby-text-container":
+		if displayIsNone(cs) {
+			// Nothing under it is laid out, so nothing is lifted or not.
+			return false
+		}
+		// The value as parseDisplay reads it, so that "inline ruby" and
+		// "block ruby" are rubies here as they are everywhere else: matched
+		// as the one word "ruby", a nested "block ruby" was looked through and
+		// its annotation reported against the ruby around it as well.
+		switch parseDisplay(cs.Get("display")).gap {
+		case displayGapAnnotation:
 			found = true
-		case "ruby":
-			// A nested ruby, whose annotation is its own. See above.
-			return c == n
+			return false
+		case displayGapRuby:
+			if c != n {
+				// A nested ruby, whose annotation is its own. See above.
+				return false
+			}
+		}
+		for _, name := range [2]string{"before", "after"} {
+			pcs, ok := pseudo[style.PseudoKey{Node: c, Name: name}]
+			if ok && generatesPseudoBox(pcs) &&
+				parseDisplay(pcs.Get("display")).gap == displayGapAnnotation {
+				found = true
+			}
 		}
 		return !found
 	})

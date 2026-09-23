@@ -744,10 +744,12 @@ func (s *Styler) remember(sheet Sheet, mark preparation, out []preparedRule,
 // prepareMedia evaluates an @media query and, where it matches, prepares the
 // rules inside it as though they had been written where the block is.
 //
-// "As though they had been written there" is the whole of §3's cascading
-// behaviour: an @media block adds no specificity and no priority, so the rules
-// in it are ordered among their neighbours by where the block sits. That falls
-// out of preparing them here, in place, rather than gathering them for later.
+// "As though they had been written there" is the whole of CSS Conditional 3
+// §2's processing of a conditional group rule, which applies the rules inside
+// "as though they were at the group rule's location": an @media block adds no
+// specificity and no priority, and the rules in it are ordered among their
+// neighbours by where the block sits. That falls out of preparing them here,
+// in place, rather than gathering them for later.
 //
 // A query that does not match drops what is inside it, and that is not a
 // failure to report: the stylesheet said those rules were for another medium

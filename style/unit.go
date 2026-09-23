@@ -19,7 +19,7 @@ import "math"
 //
 // Fixed point at 1/64 px is what browsers converged on, for both reasons: it
 // compares exactly, it does not drift, and it makes layout bit-reproducible —
-// which the determinism this repository already tests for and §7's reftest
+// which the determinism this repository already tests for and the WPT reftest
 // comparison both want. Conversion to floating-point points happens once, at
 // paint time.
 //

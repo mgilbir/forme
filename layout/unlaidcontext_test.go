@@ -63,6 +63,12 @@ func TestARubyBoxIsReportedOnlyWhereThereIsAnAnnotation(t *testing.T) {
 // TestOnlyTheContextsThisEngineDoesNotLayOutAreReported is the containment
 // argument. The report must not widen: every one of these is laid out, and a
 // finding on any of them would be a page called wrong that is right.
+//
+// Only the findings about #f are counted. The annotation inside it stands
+// outside any ruby whenever #f is not one, and css-ruby-1 §2.2 lifts such an
+// annotation above an anonymous base of its own, which this engine does not:
+// it is reported, against #an, and that is TestAnAnnotationOutsideAnyRubyIsReported's
+// business. This test used to count it among #f's, when nothing reported it.
 func TestOnlyTheContextsThisEngineDoesNotLayOutAreReported(t *testing.T) {
 	// Two children *and* an annotation inside, so that a value wrongly routed
 	// through either branch of unlaidBoxIsNotTheBoxAsked would be reported.
@@ -71,12 +77,27 @@ func TestOnlyTheContextsThisEngineDoesNotLayOutAreReported(t *testing.T) {
 	// this engine had stopped laying out.
 	const doc = `<div id="f"><div>a</div><div id="an">b</div></div>`
 	const ann = ` #an { display: ruby-text }`
+	aboutF := func(value string) []string {
+		got := Compose(Input{HTML: doc, CSS: []Stylesheet{{Source: `#f { display: ` + value + ` }` + ann}}},
+			Options{})
+		var out []string
+		for _, f := range got.Findings {
+			if f.Property == "display" && strings.HasSuffix(f.Path, "div#f") {
+				out = append(out, f.Message)
+			}
+		}
+		return out
+	}
+	// The control, which shows the filter finds a finding about #f at all.
+	if got := aboutF("run-in"); len(got) != 1 {
+		t.Fatalf("control: \"display: run-in\" on #f reported %v, want one finding", got)
+	}
 	for _, value := range []string{
 		"block", "inline", "inline-block", "flow-root", "list-item",
 		"table", "inline-table", "table-row", "table-cell", "none",
 		"flex", "inline-flex", "grid", "inline-grid",
 	} {
-		if got := unlaidFindings(t, doc, `#f { display: `+value+` }`+ann); len(got) != 0 {
+		if got := aboutF(value); len(got) != 0 {
 			t.Errorf("display: %s reported %v, and it is laid out", value, got)
 		}
 	}

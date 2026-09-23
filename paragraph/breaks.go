@@ -37,7 +37,7 @@ import (
 // it was written to make. Without it a tab at 7.9ch of an 8ch stop advances a
 // tenth of a character and the text after it is a tenth of a character from the
 // text before it — which looks like no tab at all rather than like a wrong one,
-// and is the shape of silent difference §6 is about.
+// and is the shape of silent difference a finding exists to name.
 //
 // A floor of zero is *absent* rather than "no distance is short enough": the
 // comparison is strict, so a zero floor can never fire, and a caller that could

@@ -13,11 +13,12 @@ import (
 	"github.com/mgilbir/forme/style"
 )
 
-// The display list: the sixth of §3's stages, and the one that has no PDF in it
+// The display list: the stage after layout, and the one that has no PDF in it
 // at all.
 //
 // Keeping this apart from the stage that writes a content stream is what makes
-// the whole testing story of §7 possible. The display list is where a rasterizer
+// this package testable without a backend: the reftest comparison reads display
+// lists, and so does every test here. The display list is where a rasterizer
 // attaches, and it separates "did we lay this out correctly" from "did we emit
 // correct PDF" — two failure modes that are miserable to debug together, because
 // each can produce a page that looks exactly like the other's symptom.
@@ -1515,13 +1516,22 @@ func (p *painter) paintContent(f *Fragment) {
 			})
 		}
 	} else if m := f.Marker; m != nil && m.Face != nil && !hidden {
-		p.emit(DrawText{
-			At: Point{
-				X: f.BorderRect.X.Add(m.At.X),
-				Y: f.BorderRect.Y.Add(m.At.Y),
-			},
-			Text: m.Text, Face: m.Face, Size: m.Size, Color: m.Color,
-		})
+		at := Point{X: f.BorderRect.X.Add(m.At.X), Y: f.BorderRect.Y.Add(m.At.Y)}
+		if len(m.pieces) == 0 {
+			p.emit(DrawText{At: at, Text: m.Text, Face: m.Face, Size: m.Size, Color: m.Color})
+			return
+		}
+		// A marker whose text does not run one way, drawn a stretch at a time
+		// in the order markerPieces put them in.
+		ops := make([]Op, 0, len(m.pieces))
+		for _, pc := range m.pieces {
+			ops = append(ops, DrawText{
+				At:   Point{X: at.X.Add(pc.x), Y: at.Y},
+				Text: pc.text, RTL: pc.rtl,
+				Face: m.Face, Size: m.Size, Color: m.Color,
+			})
+		}
+		p.emit(ops...)
 	}
 }
 

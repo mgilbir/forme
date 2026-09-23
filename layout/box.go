@@ -9,8 +9,8 @@ import (
 	"github.com/mgilbir/forme/style"
 )
 
-// The box tree: the fourth of §3's stages, turning a styled document into the
-// boxes layout will position.
+// The box tree: the stage after the cascade and before block layout, turning a
+// styled document into the boxes layout will position.
 //
 // It is a separate stage because the document tree and the box tree are not the
 // same shape, and the places they differ are where layout goes wrong if the
@@ -19,11 +19,12 @@ import (
 // generated. And whether a box is block-level or inline-level is a property of
 // the *box*, decided by the cascade, not of the tag that produced it.
 //
-// # Why this is in package render rather than its own
+// # Why this is in package layout rather than its own
 //
-// §3 sketches each stage as a package. What it actually requires is that each
-// stage have "a data structure at its boundary" so §7's oracle can attach, and
-// Box is that. Splitting the stages into packages would mean moving the finding
+// The design this engine was planned from sketched each stage as a package.
+// What it actually required is that each stage have a data structure at its
+// boundary, so that a test can read what the stage produced without the stages
+// after it, and Box is that. Splitting the stages into packages would mean moving the finding
 // vocabulary below them all — the box stage reports, so it cannot sit above the
 // package that defines a finding — and that is a rearrangement to make on
 // evidence rather than in advance.
@@ -824,10 +825,7 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 
 	// ::before and ::after bracket the element's own children rather than
 	// replacing them, which is why they are added here and not by the caller.
-	if before := b.generated(n, "before", fontSize); before != nil {
-		before.Parent = box
-		box.Children = append(box.Children, before)
-	}
+	b.addGenerated(box, n, "before", fontSize)
 	// A control that shows a value rather than markup — a text field, a submit
 	// button — has that value here as an ordinary text box. It comes before the
 	// element's own children because an <input> is void and has none, and
@@ -857,10 +855,7 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		}
 	}
 	b.appendChildren(box, n, cs, fontSize)
-	if after := b.generated(n, "after", fontSize); after != nil {
-		after.Parent = box
-		box.Children = append(box.Children, after)
-	}
+	b.addGenerated(box, n, "after", fontSize)
 	if isBlockContainer(box) {
 		// §5.12.2's ::first-letter, which applies to a block container and is
 		// done here because the letter is a stretch of text that has already
@@ -978,16 +973,9 @@ func (b *boxBuilder) appendContents(box *Box, n *html.Node, parentFontSize style
 	}
 	cs := b.styles[n]
 	fontSize := b.fontSizeOf(n, parentFontSize)
-	add := func(c *Box) {
-		if c == nil {
-			return
-		}
-		c.Parent = box
-		box.Children = append(box.Children, c)
-	}
-	add(b.generated(n, "before", fontSize))
+	b.addGenerated(box, n, "before", fontSize)
 	b.appendChildren(box, n, cs, fontSize)
-	add(b.generated(n, "after", fontSize))
+	b.addGenerated(box, n, "after", fontSize)
 }
 
 // replacedByItsContents reports whether an element is one that "display:
@@ -1232,6 +1220,10 @@ const (
 	// inline-level box does not go through, so the box is laid out as the
 	// inline box it is and without a marker.
 	displayGapInlineListItem
+	// displayGapAnnotation is "ruby-text" or "ruby-text-container", laid out
+	// as an inline box; it is a gap of its own only outside any ruby, since
+	// inside one it is the ruby's. See unlaidBoxIsNotTheBoxAsked.
+	displayGapAnnotation
 )
 
 // parseDisplay is css-display-3's grammar, for every value the cascade accepts.
@@ -1299,13 +1291,18 @@ func parseDisplay(raw string) displayType {
 		// one, and inline is what the element would have been. The caller
 		// reports it.
 		return displayType{outer: OuterInline, inner: InnerFlow}
-	case "ruby-base", "ruby-base-container", "ruby-text", "ruby-text-container":
+	case "ruby-base", "ruby-base-container":
 		// The boxes a ruby is built from, laid out as the inline boxes they
-		// are. Inside a ruby, that ruby's own report says the annotation is not
-		// lifted; see unlaidBoxIsNotTheBoxAsked. An annotation outside any ruby
-		// is not reported, and a browser would lift it above an anonymous base:
-		// that is the one value here still laid out otherwise without a word.
+		// are. A base alone is what a ruby with no annotation comes to, so it
+		// is the box asked for wherever it is.
 		return displayType{outer: OuterInline, inner: InnerFlow}
+	case "ruby-text", "ruby-text-container":
+		// An annotation, laid out as the inline box it is rather than lifted
+		// above its base. Inside a ruby, that ruby's own report says so; one
+		// outside any ruby is wrapped by css-ruby-1 §2.2 in an anonymous ruby
+		// of its own and lifted above an empty base, and is reported itself.
+		// See unlaidBoxIsNotTheBoxAsked.
+		return displayType{outer: OuterInline, inner: InnerFlow, gap: displayGapAnnotation}
 	case "math":
 		// MathML Core: on an element that is not MathML, "math" computes to
 		// "flow", and with no outside value that is an inline box. The one

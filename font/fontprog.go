@@ -452,8 +452,8 @@ func readCmap(fp *Program, cmap []byte, b *Budget) {
 // reports any of that, because at each step the font appeared to have said so.
 //
 // Dropping it puts the character back on the path it belongs to — no glyph, so
-// the missing-glyph finding and §5's font fallback both see it — which is the
-// answer for a character the font has not got.
+// the missing-glyph finding and CSS Fonts' font fallback (§5, font matching)
+// both see it — which is the answer for a character the font has not got.
 //
 // Found by fuzzing the subsetter: a font declaring two glyphs whose cmap named
 // several hundred, of which "glyph 12385 was used and is not in the subset" was

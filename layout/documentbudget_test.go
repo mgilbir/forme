@@ -153,7 +153,7 @@ func TestNestedRubiesAreEachWalkedOnce(t *testing.T) {
 			})
 			built[n] = b
 		}
-		reportUnsupportedDisplays(b.Document, b.Styles, NewRecorder(nil))
+		reportUnsupportedDisplays(b.Document, b.Styles, nil, NewRecorder(nil))
 	})
 }
 

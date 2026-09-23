@@ -439,7 +439,7 @@ var properties = map[string]property{
 	// difference.
 	"row-gap":     {false, "normal"},
 	"column-fill": {false, "balance"},
-	// §6.3's column-span, which is read to be refused: an element spanning the
+	// css-multicol-1 §6.1's column-span, which is read to be refused: an element spanning the
 	// columns divides the container into two of them with the element between,
 	// and that is a second container rather than a column. It has to be
 	// registered to be read at all — an unregistered property is dropped by the
@@ -566,7 +566,8 @@ func Undeclared(name, parent string) string {
 // It returns three things rather than two, and the third is the point:
 // unsupported names the parts of the value this engine understood and cannot
 // produce — a background image, a font variant. Dropping those silently is the
-// failure §6.3 is written about, and only the expander knows what it saw.
+// failure the unsupported-value findings are for, and only the expander knows
+// what it saw.
 type expander func(vals []css.ComponentValue) (longhands map[string][]css.ComponentValue, unsupported []string, ok bool)
 
 // shorthand is an expander together with the longhands it controls.

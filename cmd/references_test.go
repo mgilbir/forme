@@ -21,6 +21,14 @@ import (
 // So those spellings are refused wherever this repository's own text is, which
 // is every tracked file that is not test data. A reference that has to be made
 // to the old repository can say what it was without naming what is not here.
+//
+// The design document's sections were cited bare, too: "the fourth of §3's
+// stages", "§7's reftest comparison", "the guardrail of §6.3". A bare section
+// number cannot be told from a specification's by its spelling — "§6.1" is the
+// hyphens property in CSS Text and a size threshold in the design — so what is
+// refused is the phrasing only the design's sections were cited in. Package
+// layout keeps a glossary of the design's §5, §6 and §7.1 (layout/finding.go)
+// and cites them by it, so the guardrail phrasing is refused outside it only.
 
 // trackedText lists the tracked files a reader reads as this repository's
 // own words: code, the Makefile, the workflows and the prose.
@@ -52,7 +60,10 @@ func trackedText(t *testing.T) []string {
 // TestNothingPointsAtWhatIsNotHere.
 func TestNothingPointsAtWhatIsNotHere(t *testing.T) {
 	dead := regexp.MustCompile(`rendering proposal|docs/adr/|\bADR [0-9]|\brender/[a-z]+\.go|` +
-		`\bpdf0\b|make corpus\b|make arlington\b|(came from|moved to|moved into) forme\b`)
+		`\bpdf0\b|make corpus\b|make arlington\b|(came from|moved to|moved into) forme\b|` +
+		`\bpackage render\b|§3's stages|of §3's|§7's (oracle|reftest|testing)|testing story of §7`)
+	// The design's guardrail sections, by the words they were cited with.
+	guardrail := regexp.MustCompile(`(guardrail|silent|failure|difference|finding)[^§]{0,40}§6\b`)
 	for _, f := range trackedText(t) {
 		if f == "cmd/references_test.go" {
 			continue // the patterns themselves
@@ -65,6 +76,13 @@ func TestNothingPointsAtWhatIsNotHere(t *testing.T) {
 			if m := dead.FindString(line); m != "" {
 				t.Errorf("%s:%d says %q, which names something this repository does not "+
 					"have", f, i+1, m)
+			}
+			if strings.HasPrefix(f, "layout/") {
+				continue
+			}
+			if m := guardrail.FindString(line); m != "" {
+				t.Errorf("%s:%d says %q, a section of a design document this repository "+
+					"does not have; say what it means, or name the specification", f, i+1, m)
 			}
 		}
 	}

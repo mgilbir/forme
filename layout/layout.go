@@ -8,8 +8,9 @@ import (
 	"github.com/mgilbir/forme/style"
 )
 
-// Block layout: the fifth of §3's stages, turning boxes into fragments with a
-// resolved position and size in absolute page coordinates.
+// Block layout: the stage after the box tree and before the display list,
+// turning boxes into fragments with a resolved position and size in absolute
+// page coordinates.
 //
 // What is here is the block formatting context of CSS 2.1 §9.4.1 and §10 — the
 // widths, the box model, margin collapsing, and where the out-of-flow boxes of
