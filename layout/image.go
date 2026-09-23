@@ -183,6 +183,10 @@ func (r *ReplacedContent) Paints() bool {
 
 // replacedLoader turns the references in a box tree into loaded content.
 type replacedLoader struct {
+	// languageMemo is the writing system an alt text is collapsed in. See
+	// languageMemo.
+	languageMemo
+
 	res ResourceResolver
 	rec *Recorder
 
@@ -1165,7 +1169,7 @@ func (l *replacedLoader) altOnly(b *Box) {
 		return
 	}
 	text := collapseWhitespaceAfter(alt, b.Style.Get("white-space-collapse"),
-		wordSpaceTransformValue(b.Style), textBoundary{}, writingSystemAt(b.Element))
+		wordSpaceTransformValue(b.Style), textBoundary{}, l.writingSystemAt(b.Element))
 	if strings.TrimSpace(text) == "" {
 		// alt="" is a deliberate statement that the image carries no
 		// information, and generating a box for it would put a space on the

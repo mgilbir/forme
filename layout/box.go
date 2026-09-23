@@ -514,6 +514,10 @@ func mustPx(px float64) style.Unit {
 }
 
 type boxBuilder struct {
+	// languageMemo answers the language questions each text node asks. See
+	// languageMemo.
+	languageMemo
+
 	styles map[*html.Node]style.ComputedStyle
 	pseudo map[style.PseudoKey]style.ComputedStyle
 	// ownFontSize and ownPseudoFontSize say which elements declared a font-size
@@ -1109,7 +1113,7 @@ func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSi
 	}
 	collapse := preservedInAControl(n, inherited.Get("white-space-collapse"))
 	text := collapseWhitespaceAfter(n.Text, collapse, wst,
-		before, writingSystemAt(n))
+		before, b.writingSystemAt(n))
 	b.reportPhraseSeparators(n, text, wst)
 	// Whether the run of white space this node ends with is still open, asked
 	// of the collapsed text and *before* the transform below rewrites it. See
@@ -1130,7 +1134,7 @@ func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSi
 	b.settleSigma(text)
 	var openSigma int
 	text, b.afterWord, b.caseContext, openSigma = transformTextIn(text, kind, b.afterWord,
-		languageAt(n), b.caseContext)
+		b.languageAt(n), b.caseContext)
 	// After the transform rather than before it, because what the next node
 	// follows is the text that will be on the page: "full-width" turns a space
 	// into U+3000, which nothing collapses, and the rules below are about the
@@ -2196,16 +2200,32 @@ func (b *boxBuilder) listValueOf(n *html.Node, listItem bool) (int, bool) {
 	return 0, false
 }
 
+// languageMemo is the language in force at each node, worked out once per node
+// for a pass over the document rather than once per question.
+//
+// The questions are many. Every text node is asked its casing language and its
+// writing system when its box is built, and again, with its hyphenation and its
+// orthography, when it is laid out; each was a walk to the root reading the
+// attributes of every element above it. A paragraph of nested spans, each
+// holding a word, paid the square of its depth in walks. See html.Languages,
+// which is the memo and says why it belongs to one pass.
+//
+// The box builder, the layouter and the replaced-content loader each hold one,
+// because each is one pass over a tree that does not change during it.
+type languageMemo struct {
+	html.Languages
+}
+
 // languageAt is the language in force at a node: the nearest lang attribute at
 // or above it.
 //
 // It is read here rather than resolved through the cascade because it is not a
 // CSS property — it is an HTML attribute, and the cascade carries no entry for
-// it. html.Node.Language does the walk, and is shared with the three readers
+// it. html.Node.Language is the rule, and is shared with the three readers
 // below and with :lang() in the selector matcher: they ask four different
 // questions of the tag and must not ask four different tags.
-func languageAt(n *html.Node) paragraph.Language {
-	if v, ok := n.Language(); ok {
+func (m *languageMemo) languageAt(n *html.Node) paragraph.Language {
+	if v, ok := m.Of(n); ok {
 		return paragraph.LanguageOf(v)
 	}
 	return ""
@@ -2218,8 +2238,8 @@ func languageAt(n *html.Node) paragraph.Language {
 // romanised Chinese and divides between its syllables where "zh" is Han and does
 // not. See paragraph.HyphenationOf, which is a different question from
 // languageAt's and must not be answered with it.
-func hyphenationAt(n *html.Node) paragraph.Language {
-	if v, ok := n.Language(); ok {
+func (m *languageMemo) hyphenationAt(n *html.Node) paragraph.Language {
+	if v, ok := m.Of(n); ok {
 		return paragraph.HyphenationOf(v)
 	}
 	return ""
@@ -2230,8 +2250,8 @@ func hyphenationAt(n *html.Node) paragraph.Language {
 // The tag whole, as writingSystemAt reads it and for the same reason: what
 // decides is the script, and "zh-Latn" is romanised Chinese where "zh" is not.
 // See paragraph.OrthographyOf.
-func orthographyAt(n *html.Node) paragraph.Orthography {
-	if v, ok := n.Language(); ok {
+func (m *languageMemo) orthographyAt(n *html.Node) paragraph.Orthography {
+	if v, ok := m.Of(n); ok {
 		return paragraph.OrthographyOf(v)
 	}
 	return paragraph.OrthographyPlain
@@ -2245,8 +2265,8 @@ func orthographyAt(n *html.Node) paragraph.Orthography {
 // this reads the tag whole: "ain-Kana" is Ainu written in katakana and is
 // typeset as Japanese, and "ja-Latn" is Japanese romanised and is not. See
 // paragraph.WritingSystemOf.
-func writingSystemAt(n *html.Node) paragraph.WritingSystem {
-	if v, ok := n.Language(); ok {
+func (m *languageMemo) writingSystemAt(n *html.Node) paragraph.WritingSystem {
+	if v, ok := m.Of(n); ok {
 		return paragraph.WritingSystemOf(v)
 	}
 	return paragraph.WritingSystemOther
@@ -2274,7 +2294,7 @@ func (b *boxBuilder) reportPhraseSeparators(n *html.Node, text string,
 	if b.reportedPhraseSeparators || !wst.Invents() {
 		return
 	}
-	if !paragraph.PhrasesUnfound(text, writingSystemAt(n)) {
+	if !paragraph.PhrasesUnfound(text, b.writingSystemAt(n)) {
 		return
 	}
 	b.reportedPhraseSeparators = true

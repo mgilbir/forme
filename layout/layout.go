@@ -369,6 +369,10 @@ func (l *layouter) layout() *Fragment {
 }
 
 type layouter struct {
+	// languageMemo answers the language questions each text box asks. See
+	// languageMemo.
+	languageMemo
+
 	// reportedAspect keeps each aspect-ratio narrowing to one finding per
 	// document. See reportAspectRatio.
 	reportedAspect map[string]bool

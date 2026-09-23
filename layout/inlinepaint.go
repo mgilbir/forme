@@ -451,6 +451,14 @@ func (l *layouter) inlineChain(item inlineItem) []*Box {
 // style, background-color and all, so keeping it would paint the parent's
 // background a second time — and would paint a *block's* background over its own
 // text, since the text box inside a <p> is an inline box by this test.
+//
+// A box's chain is its parent's with at most the box itself added, and it is
+// built that way: the walk goes up only as far as the first box already
+// answered, and each box on the way down extends the chain above it. Walked
+// whole from every box, a paragraph of spans nested d deep with a word in each
+// asked d boxes each whether they paint — the square of the depth, parsing
+// backgrounds and borders all the way. The chains share their prefixes, so they
+// are read-only, which the one caller already treats them as.
 func (l *layouter) paintedInlines(b *Box) []*Box {
 	if b == nil {
 		return nil
@@ -458,30 +466,46 @@ func (l *layouter) paintedInlines(b *Box) []*Box {
 	if got, ok := l.inlineChains[b]; ok {
 		return got
 	}
+	// Up to the first box answered, or to where every chain ends.
+	var path []*Box
 	var out []*Box
-	for cur := b; cur != nil && cur.Outer == OuterInline; cur = cur.Parent {
-		if cur.Replaced != nil || isAtomicInline(cur) {
+	for cur := b; cur != nil; cur = cur.Parent {
+		if got, ok := l.inlineChains[cur]; ok {
+			out = got
 			break
 		}
-		if cur.IsText() {
-			continue
+		path = append(path, cur)
+		if cur.Outer != OuterInline || cur.Replaced != nil || isAtomicInline(cur) {
+			// The block container whose lines these are, or an atomic inline,
+			// which is a formatting context of its own and paints itself: no
+			// chain reaches past either, and neither is on one.
+			out = nil
+			break
 		}
-		if l.inlinePaints(cur) || cur.Position.positioned() {
+	}
+	// Down again, outermost first, which is tree order among boxes that nest —
+	// and so the order Appendix E paints them in, each over the one it is
+	// inside.
+	for i := len(path) - 1; i >= 0; i-- {
+		cur := path[i]
+		switch {
+		case cur.Outer != OuterInline || cur.Replaced != nil || isAtomicInline(cur):
+			out = nil
+		case cur.IsText():
+		case l.inlinePaints(cur) || cur.Position.positioned():
 			// A *positioned* inline box is kept whether or not it draws
 			// anything, because §10.1 forms the containing block of an
 			// absolutely positioned descendant from the padding boxes of this
 			// box's own fragments — so the fragments have to exist. It paints
 			// nothing extra: a fragment with no background and no border draws
 			// nothing, exactly as it did when there was no fragment at all.
-			out = append(out, cur)
+			//
+			// A copy rather than an append in place, which would write into
+			// the spare room of the chain above, and so into a sibling's.
+			out = append(out[:len(out):len(out)], cur)
 		}
+		l.inlineChains[cur] = out
 	}
-	// Outermost first, which is tree order among boxes that nest — and so the
-	// order Appendix E paints them in, each over the one it is inside.
-	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
-		out[i], out[j] = out[j], out[i]
-	}
-	l.inlineChains[b] = out
 	return out
 }
 

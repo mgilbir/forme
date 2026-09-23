@@ -141,6 +141,11 @@ type Matcher struct {
 	// attribute values below are folded. It is read once here because the
 	// alternative is a walk to the document node inside the matching loop.
 	xml bool
+
+	// langs is each element's language, which :lang() asks. Asked per match,
+	// it was a walk to the root reading every ancestor's attributes, for every
+	// element every :lang() rule was tried on. See html.Languages.
+	langs html.Languages
 }
 
 // NewMatcher prepares to match selectors against a document.
@@ -469,7 +474,7 @@ func (m *Matcher) pseudo(p css.Pseudo, n *html.Node) bool {
 		return m.nesting(p.Nest, n)
 
 	case css.PseudoLang:
-		return matchLang(n, p.Langs)
+		return m.matchLang(n, p.Langs)
 
 	case css.PseudoAnyLink:
 		// :link and :any-link are the same thing once :visited cannot be true,
@@ -675,8 +680,9 @@ func (m *Matcher) matchesAny(sels []css.Selector, n *html.Node) bool {
 }
 
 // matchLang implements :lang(), which reads the nearest lang attribute at or
-// above the element — html.Node.Language, the same walk the casing and
-// hyphenation readers use — and compares it with each language range by
+// above the element — html.Node.Language, the same rule the casing and
+// hyphenation readers use, answered once per element for the document by
+// m.langs — and compares it with each language range by
 // RFC 4647 §3.3.2's extended filtering, as Selectors 4 §7.2 says to.
 //
 // It was the dash-match of attribute selectors with "*" matching anything.
@@ -686,8 +692,8 @@ func (m *Matcher) matchesAny(sels []css.Selector, n *html.Node) bool {
 // §7.2 says it does not; and :lang("") matched nothing, where it matches
 // exactly those elements. Filtering is also what lets :lang(de-DE) select
 // "de-Latn-DE" and :lang("*-CH") select "fr-CH", which dash-match cannot.
-func matchLang(n *html.Node, langs []string) bool {
-	value, ok := n.Language()
+func (m *Matcher) matchLang(n *html.Node, langs []string) bool {
+	value, ok := m.langs.Of(n)
 	// Not tagged: lang="" says so outright, and an element with no lang at or
 	// above it has no tag either — nothing this engine reads (it does not
 	// read HTTP headers or a Content-Language pragma) gives it one.

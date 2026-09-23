@@ -29,7 +29,7 @@ import (
 // It returns nothing where nothing asked: a subtree with no "hyphens: auto" in a
 // language this has patterns for costs one walk and no dictionary lookups.
 func (l *layouter) hyphenPointsIn(root *Box) map[*Box][]int {
-	g := hyphenGather{out: map[*Box][]int{}}
+	g := hyphenGather{out: map[*Box][]int{}, langs: &l.languageMemo}
 	g.walk(root)
 	g.flush()
 	if len(g.out) == 0 {
@@ -80,6 +80,9 @@ func limitsOf(value string) hyphenLimits {
 
 // hyphenGather is one word being collected across boxes.
 type hyphenGather struct {
+	// langs is the layouter's, which is what the language of each box is
+	// asked of. See languageMemo.
+	langs *languageMemo
 	// word is the letters gathered so far.
 	word []rune
 	// from is where each of those letters came from: the box and the rune
@@ -155,7 +158,7 @@ func (g *hyphenGather) text(b *Box) {
 		g.flush()
 		return
 	}
-	if !hyphenatesLanguage(boxHyphenation(b)) {
+	if !hyphenatesLanguage(g.langs.boxHyphenation(b)) {
 		g.flush()
 		return
 	}
@@ -236,7 +239,7 @@ func (g *hyphenGather) flush() {
 	}
 	// The language is the one the word's letters are in, and every box that
 	// contributed to it agreed — text() refuses a box that did not.
-	points := paragraph.HyphenPoints(string(word), boxHyphenation(from[0].box),
+	points := paragraph.HyphenPoints(string(word), g.langs.boxHyphenation(from[0].box),
 		limits.before, limits.after)
 	for _, p := range points {
 		// A point after the p-th letter of the word is a point after the letter

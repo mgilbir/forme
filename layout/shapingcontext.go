@@ -670,6 +670,9 @@ func mergeGroupTexts(items []inlineItem, nb neighbours, text func() runText) mer
 	// items between them, asked of every run — and the items between two runs
 	// can be every soft hyphen of a word.
 	var breaks []int
+	// Which translucent inline box each run is inside, asked of every
+	// boundary between two runs and answered once per box. See translucency.
+	tr := translucency{}
 	for i := 0; i < len(items); {
 		if !isShapedRun(items[i]) {
 			i++
@@ -689,7 +692,7 @@ func mergeGroupTexts(items []inlineItem, nb neighbours, text func() runText) mer
 		last := i
 		for {
 			n := nb.after[last]
-			if !n.ok || !sharesGlyphsWith(items, last, n.j, breaks) {
+			if !n.ok || !sharesGlyphsWith(items, last, n.j, breaks, tr) {
 				break
 			}
 			last = n.j
@@ -741,7 +744,7 @@ func mergeGroupTexts(items []inlineItem, nb neighbours, text func() runText) mer
 // TestAFaceChangeIsNotKernedAcross. A pair positioned across a font change is
 // not that font's pair, and a *glyph* across one is not that font's glyph at
 // all — a glyph index means nothing outside the font it came from.
-func sharesGlyphsWith(items []inlineItem, from, to int, breaks []int) bool {
+func sharesGlyphsWith(items []inlineItem, from, to int, breaks []int, tr translucency) bool {
 	a, b := items[from], items[to]
 	if !sameShaping(a, b) || a.Size != b.Size || a.Face != b.Face {
 		return false
@@ -782,7 +785,7 @@ func sharesGlyphsWith(items []inlineItem, from, to int, breaks []int) bool {
 	if a.Offset != b.Offset {
 		return false
 	}
-	if !samePaint(heldBox(a.Box), heldBox(b.Box)) {
+	if !samePaint(heldBox(a.Box), heldBox(b.Box), tr) {
 		return false
 	}
 	// The lines ruled across them, which are drawn from the run and not from the
@@ -829,7 +832,7 @@ func sharesGlyphsWith(items []inlineItem, from, to int, breaks []int) bool {
 // runs with different ones are two alphas. Every property the painter reads
 // per run belongs here or in sharesGlyphsWith, which is the rule this list is
 // kept by.
-func samePaint(a, b *Box) bool {
+func samePaint(a, b *Box, tr translucency) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
@@ -838,26 +841,57 @@ func samePaint(a, b *Box) bool {
 			return false
 		}
 	}
-	return isHidden(a) == isHidden(b) && translucentInline(a) == translucentInline(b)
+	return isHidden(a) == isHidden(b) && tr.inline(a) == tr.inline(b)
 }
 
-// translucentInline is the innermost non-atomic inline box around b, b
-// included, that asks for an opacity below one, or nil. It is the walk the
-// painter's inlineDim makes, and stops where that one does: at the block, or at
-// an atomic inline, whose opacity is the fragment's and not the run's.
-func translucentInline(b *Box) *Box {
-	for cur := b; cur != nil && cur.Outer == OuterInline; cur = cur.Parent {
-		if cur.Replaced != nil || isAtomicInline(cur) {
-			return nil
+// translucency is, for each box of one paragraph, the innermost non-atomic
+// inline box around it, itself included, that asks for an opacity below one, or
+// nil. It is the walk the painter's inlineDim makes, and stops where that one
+// does: at the block, or at an atomic inline, whose opacity is the fragment's
+// and not the run's.
+//
+// It is a memo because every boundary between two runs asks it of both, and the
+// walk is up every inline box around the run, parsing each one's opacity: a
+// paragraph of spans nested d deep with a word in each paid d walks of up to d
+// boxes. The painter has the same walk in inlineDim and memoizes it for the
+// same reason. The answer from a box is the answer from every box the walk from
+// it passes, so the walk stops at the first box already answered and fills in
+// the ones it passed.
+type translucency map[*Box]*Box
+
+// inline is the translucent inline box around b.
+func (t translucency) inline(b *Box) *Box {
+	var path []*Box
+	var found *Box
+	for cur := b; cur != nil; cur = cur.Parent {
+		if got, ok := t[cur]; ok {
+			found = got
+			break
 		}
-		if cur.IsText() {
-			continue
-		}
-		if groupsItsPaint(cur) {
-			return cur
+		path = append(path, cur)
+		if next, done := translucentStep(cur); done {
+			found = next
+			break
 		}
 	}
-	return nil
+	for _, c := range path {
+		t[c] = found
+	}
+	return found
+}
+
+// translucentStep is one box of translucency's walk: whether the walk ends
+// at cur, and with what.
+func translucentStep(cur *Box) (found *Box, done bool) {
+	switch {
+	case cur.Outer != OuterInline, cur.Replaced != nil, isAtomicInline(cur):
+		return nil, true
+	case cur.IsText():
+		return nil, false
+	case groupsItsPaint(cur):
+		return cur, true
+	}
+	return nil, false
 }
 
 // sameDecorations reports whether two runs carry the same lines, declared by the

@@ -443,7 +443,7 @@ func (b *boxBuilder) generated(n *html.Node, name string, fontSize style.Unit) *
 			continue
 		}
 		text := collapseWhitespaceAfter(piece.text, cs.Get("white-space-collapse"), wst,
-			textBoundary{}, writingSystemAt(n))
+			textBoundary{}, b.writingSystemAt(n))
 		if text == "" {
 			continue
 		}

@@ -345,95 +345,363 @@ func insetSides(items []inlineItem) {
 // the inset takes the far end. The line's total width does not change, because
 // the same items occupy the same span.
 //
-// It is deliberately narrow. A box whose items are not contiguous in visual
-// order, or whose inset is somewhere in the middle of them, is left exactly as
-// the reordering placed it: those are the shapes this rotation is not an answer
-// for, and moving something in them would be a guess.
+// The extent is from the first of the box's own items in the visual order to
+// the last, and the insets go at those two ends whatever lies between them. A
+// note here once said that a box whose items are not contiguous, or whose inset
+// is in the middle of them, is left as the reordering placed it. It never was:
+// the insets of such a box are moved to the ends of its extent like any other,
+// and anything between that is not the box's stays where it was.
+// TestInsetPlacementIsWhatRebuildingSays holds the placement to that
+// statement of it, over orderings the suite does not have.
+//
+// # Cost
+//
+// Each box's work is its own content: the items whose nearest box with an inset
+// it is, and the two ends of each such box directly inside it. The moves are
+// made in an insetLine, which inserts and compares without rebuilding the
+// order. Done as the statement reads, rebuilding the order for each box and
+// asking every item whether it was inside, a line cost its boxes times its
+// items.
 func (l *layouter) placeInsetsBySide(runs []inlineItem, order []int) []int {
-	// The boxes with an inset on this line, innermost first. An inner box has to
-	// be arranged before the box around it, because once it is, its own insets
-	// are part of what the outer box's extent has to enclose.
+	// The boxes with an inset on this line, and which of the line's items are
+	// each one's two insets. A line with none is almost every line, and it
+	// leaves here having cost one pass.
+	type sides struct{ lead, trail int }
+	own := map[*Box]*sides{}
 	var boxes []*Box
-	seen := map[*Box]bool{}
 	for _, k := range order {
-		if b := heldBox(runs[k].Box); runs[k].Inset && b != nil && !seen[b] {
-			seen[b] = true
-			boxes = append(boxes, b)
-		}
-	}
-	sort.SliceStable(boxes, func(a, c int) bool {
-		return boxDepth(boxes[a]) > boxDepth(boxes[c])
-	})
-
-	for _, b := range boxes {
-		// The box's own two insets come out of the order, and everything else
-		// keeps the order the reordering gave it.
-		lead, trail := -1, -1
-		rest := make([]int, 0, len(order))
-		for _, k := range order {
-			if runs[k].Inset && runs[k].Box == b {
-				if runs[k].InsetLead {
-					lead = k
-				} else {
-					trail = k
-				}
-				continue
-			}
-			rest = append(rest, k)
-		}
-		// Where the box's content sits in what is left. Its own inner boxes'
-		// insets count as its content, which is what makes the nesting come out
-		// right: an outer border encloses an inner margin.
-		lo, hi := -1, -1
-		for i, k := range rest {
-			if !itemInside(runs[k], b) || runs[k].Width == 0 {
-				// An item with no width draws nothing, so it is not one of the
-				// boxes §8.6 puts an inset at the end of — and letting one stand
-				// for the box's edge strands the inset away from the words. A
-				// bidi control the author wrote inside a span is such an item,
-				// and bidi-011 has one at the far end of the line from the span
-				// it belongs to.
-				continue
-			}
-			if lo < 0 {
-				lo = i
-			}
-			hi = i
-		}
-		if lo < 0 {
-			// Nothing of the box's own on this line, so there is no extent to
-			// put anything at the ends of. The order stands.
+		b := heldBox(runs[k].Box)
+		if !runs[k].Inset || b == nil {
 			continue
 		}
-		// insetSides has already given the lead item the width of whichever
-		// physical side begins the box, so the lead goes at that side.
-		left, right := lead, trail
-		if beginsAtRight(b) {
-			left, right = trail, lead
+		s := own[b]
+		if s == nil {
+			s = &sides{lead: -1, trail: -1}
+			own[b] = s
+			boxes = append(boxes, b)
 		}
-		out := make([]int, 0, len(order))
-		out = append(out, rest[:lo]...)
-		if left >= 0 {
-			out = append(out, left)
+		if runs[k].InsetLead {
+			s.lead = k
+		} else {
+			s.trail = k
 		}
-		out = append(out, rest[lo:hi+1]...)
-		if right >= 0 {
-			out = append(out, right)
-		}
-		out = append(out, rest[hi+1:]...)
-		order = out
 	}
-	return order
+	if len(boxes) == 0 {
+		return order
+	}
+
+	// Which of those boxes is the nearest one around a given box, itself
+	// included. Every box between an item and the line's boxes is asked about
+	// once for the whole line rather than once per box on it.
+	nearest := map[*Box]*Box{}
+	nearestAround := func(start *Box) *Box {
+		var path []*Box
+		var found *Box
+		for c := start; c != nil; c = c.Parent {
+			if own[c] != nil {
+				found = c
+				break
+			}
+			if n, ok := nearest[c]; ok {
+				found = n
+				break
+			}
+			path = append(path, c)
+		}
+		for _, c := range path {
+			nearest[c] = found
+		}
+		return found
+	}
+
+	// The boxes as a forest, and each box's own content: the items whose
+	// nearest box is it. Everything else inside a box is inside one of its
+	// children, and reaches it through them.
+	children := map[*Box][]*Box{}
+	var roots []*Box
+	for _, b := range boxes {
+		if p := nearestAround(b.Parent); p != nil {
+			children[p] = append(children[p], b)
+		} else {
+			roots = append(roots, b)
+		}
+	}
+	content := map[*Box][]int{}
+	for _, k := range order {
+		if runs[k].Width == 0 {
+			// An item with no width draws nothing, so it is not one of the
+			// boxes §8.6 puts an inset at the end of — and letting one stand
+			// for the box's edge strands the inset away from the words. A bidi
+			// control the author wrote inside a span is such an item, and
+			// bidi-011 has one at the far end of the line from the span it
+			// belongs to.
+			continue
+		}
+		b := nearestAround(itemStart(runs[k]))
+		if b == nil || (runs[k].Inset && heldBox(runs[k].Box) == b) {
+			// Outside every box on the line, or one of the box's own insets,
+			// which are what is being placed rather than what they are placed
+			// around.
+			continue
+		}
+		content[b] = append(content[b], k)
+	}
+
+	line := newInsetLine(order, len(runs))
+
+	// Innermost first. An inner box has to be arranged before the box around
+	// it, because once it is, its own insets are part of what the outer box's
+	// extent has to enclose. Boxes neither of which is inside the other can be
+	// taken in either order: each moves only its own two insets, and puts them
+	// next to its own content, which is none of the other's.
+	type extent struct{ first, last int }
+	extents := map[*Box]extent{}
+	type visit struct {
+		b    *Box
+		done bool
+	}
+	var stack []visit
+	for i := len(roots) - 1; i >= 0; i-- {
+		stack = append(stack, visit{b: roots[i]})
+	}
+	for len(stack) > 0 {
+		v := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if !v.done {
+			stack = append(stack, visit{b: v.b, done: true})
+			for _, c := range children[v.b] {
+				stack = append(stack, visit{b: c})
+			}
+			continue
+		}
+		b := v.b
+		// Where the box's content sits: the ends of its own items and of each
+		// inner box's extent, which includes that box's insets. That is what
+		// makes the nesting come out right: an outer border encloses an inner
+		// margin.
+		first, last := -1, -1
+		widen := func(a, z int) {
+			if a >= 0 && (first < 0 || line.before(a, first)) {
+				first = a
+			}
+			if z >= 0 && (last < 0 || line.before(last, z)) {
+				last = z
+			}
+		}
+		for _, k := range content[b] {
+			widen(k, k)
+		}
+		for _, c := range children[b] {
+			widen(extents[c].first, extents[c].last)
+		}
+		s := own[b]
+		if first >= 0 {
+			// insetSides has already given the lead item the width of
+			// whichever physical side begins the box, so the lead goes at that
+			// side.
+			left, right := s.lead, s.trail
+			if beginsAtRight(b) {
+				left, right = s.trail, s.lead
+			}
+			if left >= 0 {
+				line.remove(left)
+			}
+			if right >= 0 {
+				line.remove(right)
+			}
+			if left >= 0 {
+				line.insertBefore(left, first)
+			}
+			if right >= 0 {
+				line.insertAfter(right, last)
+			}
+		}
+		// Nothing of the box's own on this line leaves no extent to put
+		// anything at the ends of, and the order stands. Either way the box's
+		// insets are now where they will stay, and they are part of the extent
+		// of every box around it.
+		for _, k := range [...]int{s.lead, s.trail} {
+			if k >= 0 && runs[k].Width != 0 {
+				widen(k, k)
+			}
+		}
+		extents[b] = extent{first: first, last: last}
+	}
+	return line.order()
 }
 
-// boxDepth is how many boxes a box sits inside, which orders a line's inline
-// boxes innermost first.
-func boxDepth(b *Box) int {
-	n := 0
-	for c := b; c != nil; c = c.Parent {
-		n++
+// insetLine is a line's visual order while placeInsetsBySide moves insets about
+// in it: a list with an insertion next to any item and a comparison of any two,
+// each at a cost that does not grow with the line.
+//
+// The line is its original order, one slot per item, and an item that moves is
+// hung on the slot of the item it is put beside: before it or after it, in a
+// chain of its own. Nothing but an inset ever moves, and an inset is only ever
+// put beside something inside its box, so the chains on one slot hold the
+// insets of the boxes around that slot's item — as many as it is nested deep,
+// and in practice one or two. Two items are compared by slot, then by which
+// side of the slot they hang on, then by a label that orders each chain.
+//
+// A slice rebuilt per move was what this replaced, and it made a line of n
+// boxes cost n times the line: four thousand empty spans with a padding took a
+// third of a second where a thousand took thirty milliseconds.
+type insetLine struct {
+	base []int // the original order: the item each slot started with
+	// Where every item is now, indexed by item: its slot, the side of it
+	// (chainBefore, the slot itself, chainAfter), and its label within that
+	// chain.
+	slot, side, label []int
+	// present is false for a slot whose own item has moved away. Its chains
+	// still order by it.
+	present []bool
+	chains  map[[2]int]*insetChain
+}
+
+const (
+	chainBefore = iota
+	chainSlot
+	chainAfter
+)
+
+// insetChain is the items hung on one side of one slot, with the lowest and the
+// highest label held, so that the common insertion — at either end — takes a
+// label no item has without renumbering any.
+type insetChain struct {
+	items    []int
+	low, top int
+}
+
+func newInsetLine(order []int, items int) *insetLine {
+	l := &insetLine{
+		base:    order,
+		slot:    make([]int, items),
+		side:    make([]int, items),
+		label:   make([]int, items),
+		present: make([]bool, len(order)),
+		chains:  map[[2]int]*insetChain{},
 	}
-	return n
+	for s, k := range order {
+		l.slot[k], l.side[k] = s, chainSlot
+		l.present[s] = true
+	}
+	return l
+}
+
+// before reports whether item a is drawn before item b.
+func (l *insetLine) before(a, b int) bool {
+	if l.slot[a] != l.slot[b] {
+		return l.slot[a] < l.slot[b]
+	}
+	if l.side[a] != l.side[b] {
+		return l.side[a] < l.side[b]
+	}
+	return l.label[a] < l.label[b]
+}
+
+func (l *insetLine) remove(k int) {
+	s, side := l.slot[k], l.side[k]
+	if side == chainSlot {
+		l.present[s] = false
+		return
+	}
+	c := l.chains[[2]int{s, side}]
+	for i, x := range c.items {
+		if x == k {
+			c.items = append(c.items[:i], c.items[i+1:]...)
+			break
+		}
+	}
+}
+
+func (l *insetLine) insertBefore(k, at int) { l.insert(k, at, false) }
+func (l *insetLine) insertAfter(k, at int)  { l.insert(k, at, true) }
+
+// insert puts k immediately after item at, or immediately before it.
+func (l *insetLine) insert(k, at int, after bool) {
+	s, side := l.slot[at], l.side[at]
+	var c *insetChain
+	var label int
+	switch {
+	case side == chainSlot && after:
+		// Immediately after a slot's own item is the start of its after-chain.
+		side = chainAfter
+		c = l.chain(s, side)
+		label = c.low - 1
+	case side == chainSlot:
+		// And immediately before it is the end of its before-chain.
+		side = chainBefore
+		c = l.chain(s, side)
+		label = c.top + 1
+	default:
+		// Beside an item that is itself in a chain: the chain is renumbered
+		// from there unless k goes at one of its ends.
+		c = l.chains[[2]int{s, side}]
+		label = l.label[at]
+		if after {
+			label++
+		}
+		switch {
+		case !after && label == c.low:
+			label--
+		case after && label > c.top:
+		default:
+			for _, x := range c.items {
+				if l.label[x] >= label {
+					l.label[x]++
+				}
+			}
+			c.top++
+		}
+	}
+	c.items = append(c.items, k)
+	if len(c.items) == 1 {
+		c.low, c.top = label, label
+	}
+	c.low, c.top = min(c.low, label), max(c.top, label)
+	l.slot[k], l.side[k], l.label[k] = s, side, label
+}
+
+func (l *insetLine) chain(s, side int) *insetChain {
+	c := l.chains[[2]int{s, side}]
+	if c == nil {
+		c = &insetChain{}
+		l.chains[[2]int{s, side}] = c
+	}
+	return c
+}
+
+// order is the line as it stands, slot by slot.
+func (l *insetLine) order() []int {
+	out := make([]int, 0, len(l.base))
+	hung := func(s, side int) {
+		c := l.chains[[2]int{s, side}]
+		if c == nil {
+			return
+		}
+		sort.Slice(c.items, func(i, j int) bool {
+			return l.label[c.items[i]] < l.label[c.items[j]]
+		})
+		out = append(out, c.items...)
+	}
+	for s, k := range l.base {
+		hung(s, chainBefore)
+		if l.present[s] {
+			out = append(out, k)
+		}
+		hung(s, chainAfter)
+	}
+	return out
+}
+
+// itemStart is the innermost box an item's content sits in: the box it came
+// from, or, for an atomic inline, the box the atomic sits in — the atomic's own
+// insets are inside it and are not an inline box's.
+func itemStart(item inlineItem) *Box {
+	start := heldBox(item.Box)
+	if item.AtomicBox != nil && start != nil {
+		start = start.Parent
+	}
+	return start
 }
 
 // itemInside reports whether an item's content sits inside an inline box.
@@ -446,11 +714,7 @@ func boxDepth(b *Box) int {
 // group was two insets with a word between them that belonged to nobody, and
 // the rearrangement below declined to touch it.
 func itemInside(item inlineItem, b *Box) bool {
-	start := heldBox(item.Box)
-	if item.AtomicBox != nil && start != nil {
-		start = start.Parent
-	}
-	for c := start; c != nil; c = c.Parent {
+	for c := itemStart(item); c != nil; c = c.Parent {
 		if c == b {
 			return true
 		}

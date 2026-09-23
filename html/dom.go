@@ -195,19 +195,102 @@ func (n *Node) AttrExact(name string) (string, bool) {
 // hyphenation patterns and :lang(tr) all applied to it. It is returned as the
 // empty string with ok true: every reader here maps the empty tag to its own
 // "no language" answer.
+//
+// It walks every ancestor's attributes, which is right for one question and
+// wrong for a question asked of every node in a tree: see Languages.
 func (n *Node) Language() (string, bool) {
 	for cur := n; cur != nil; cur = cur.Parent {
-		if cur.Type != ElementNode {
-			continue
-		}
-		if v, ok := cur.Attr("lang"); ok {
-			return v, true
-		}
-		if v, ok := cur.Attr("xml:lang"); ok && cur.XMLDocument() {
+		if v, ok := cur.ownLanguage(cur.XMLDocument); ok {
 			return v, true
 		}
 	}
 	return "", false
+}
+
+// ownLanguage is the language a node itself declares, if it declares one: the
+// one rule Language and Languages both walk, so that the two cannot come to
+// answer differently. xml is asked only when an xml:lang is found without a
+// lang beside it, which is the only time the answer depends on it.
+func (n *Node) ownLanguage(xml func() bool) (string, bool) {
+	if n.Type != ElementNode {
+		return "", false
+	}
+	if v, ok := n.Attr("lang"); ok {
+		return v, true
+	}
+	if v, ok := n.Attr("xml:lang"); ok && xml() {
+		return v, true
+	}
+	return "", false
+}
+
+// Languages answers Language for the nodes of a tree that is not changing, each
+// node's answer worked out once.
+//
+// Language is a walk to the root reading two attributes of every element on the
+// way, and the layout asks it of every text node — its casing, its hyphenation,
+// its writing system, several times each — while :lang() asks it of every
+// element a rule is tried on. A paragraph of nested spans, each holding a word,
+// cost the square of its depth times the attributes on each span: sixty spans
+// with twenty attributes each took 6 ms to lay out, and 240 took 68.
+//
+// A node's language is its own declaration or else its parent's answer, so the
+// memo is keyed by the node and filled on the way back down a walk that stops
+// at the first node already answered. Every node is walked past once however
+// many times it is asked about. Whether an xml:lang counts depends on the
+// document the node is in, and that is carried down the same way, from the
+// document node to every answer below it. The answers are the tree's, which is
+// why the memo belongs to one pass over one unchanging tree and is not kept on
+// the nodes: the tree's fields are exported, and a caller may change them
+// between passes.
+//
+// The zero value is ready to use. It is not safe for concurrent use.
+type Languages struct {
+	answers map[*Node]languageAnswer
+}
+
+type languageAnswer struct {
+	tag      string
+	declared bool
+	// xml is whether the tree the node is in was read as XHTML, carried so
+	// that a walk stopping at this node knows it without going on to the root.
+	xml bool
+}
+
+// Of is n.Language(), memoized.
+func (l *Languages) Of(n *Node) (string, bool) {
+	if n == nil {
+		return "", false
+	}
+	if l.answers == nil {
+		l.answers = map[*Node]languageAnswer{}
+	}
+	if a, ok := l.answers[n]; ok {
+		return a.tag, a.declared
+	}
+	// Up to the first node answered, or past the root.
+	var path []*Node
+	var above languageAnswer
+	for cur := n; cur != nil; cur = cur.Parent {
+		if a, ok := l.answers[cur]; ok {
+			above = a
+			break
+		}
+		path = append(path, cur)
+	}
+	xml := func() bool { return above.xml }
+	for i := len(path) - 1; i >= 0; i-- {
+		if path[i].Type == DocumentNode {
+			// What XMLDocument answers for everything below: the nearest
+			// document node above decides, and nothing above one does.
+			above.xml = path[i].XML
+		}
+		if v, ok := path[i].ownLanguage(xml); ok {
+			above = languageAnswer{tag: v, declared: true, xml: above.xml}
+		}
+		l.answers[path[i]] = above
+	}
+	return above.tag, above.declared
 }
 
 // XMLDocument reports whether the node is in a document parsed as XHTML.

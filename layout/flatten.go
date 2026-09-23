@@ -779,7 +779,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	// uppercase letters, and what is then drawn is not what the document wrote.
 	// See layout/smallcaps.go.
 	caps, _ := capsOf(b.Style.Get("font-variant-caps"))
-	lang := languageAt(boxElement(b))
+	lang := l.languageAt(boxElement(b))
 	// Per face-run rather than per box: a character the family's face cannot set
 	// is not missing from the page if a fallback face set it, and reporting it
 	// would be this engine calling its own correct output a failure. The runs
@@ -834,7 +834,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	// What the box's declarations turn off in the face, which changes what it
 	// substitutes and so changes every advance below. See fontfeatures.go.
 	off := l.featuresFor(b)
-	if wb.AutoPhrase && phrasesUnfound(b.Text, boxWritingSystem(b)) {
+	if wb.AutoPhrase && phrasesUnfound(b.Text, l.boxWritingSystem(b)) {
 		// The value is implemented for the one language there is a model for.
 		// A document in another that has phrases in it gets "normal", which is
 		// what §5.2 prescribes for a UA with no model — and is told, because a
@@ -846,9 +846,9 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	// §5.3's loose tailoring is qualified "in Chinese and Japanese", and which
 	// of those the text is comes from the language tag's *script* rather than
 	// from the property. See paragraph.WritingSystemOf.
-	lb.ChineseOrJapanese = boxWritingSystem(b).ChineseOrJapanese()
+	lb.ChineseOrJapanese = l.boxWritingSystem(b).ChineseOrJapanese()
 	hy := hyphensOf(b.Style.Get("hyphens"))
-	if hy.Auto && !hyphenatesLanguage(boxHyphenation(b)) {
+	if hy.Auto && !hyphenatesLanguage(l.boxHyphenation(b)) {
 		// "auto" asks for the language's own dictionary, and there are four
 		// here. A document in another gets the manual behaviour and is told so
 		// — which is the report that used to be raised for every "auto"
@@ -864,7 +864,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	if unhandledAutospace != "" {
 		l.reportAutospace(b, unhandledAutospace)
 	}
-	orthography := orthographyAt(boxElement(b))
+	orthography := l.orthographyAt(boxElement(b))
 	boundaryNoWrap, boundaryBreakSpaces := l.boundaryWhiteSpace(b, ws, in)
 	carried := paragraph.Carried{
 		Offered: in.BreakOpportunity, Deferred: in.AfterDeferred,
@@ -897,14 +897,14 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	// boundaries near its end, which is the same walk once more. Asked only
 	// under the value that uses them and in a language with a model, which is
 	// almost never. See paragraph.Carried.PhraseBefore.
-	if wb.AutoPhrase && paragraph.HasPhraseModel(boxWritingSystem(b)) {
+	if wb.AutoPhrase && paragraph.HasPhraseModel(l.boxWritingSystem(b)) {
 		carried.PhraseAfter = paragraph.FirstRunes(
 			l.textAfter(b, paragraph.PhraseContext*utf8.UTFMax), paragraph.PhraseContext)
 	}
 	if carried.Offered && in.AfterAtomic && bindsToAtomicInline(b.Text) {
 		carried.Offered = false
 	}
-	pieces, trailing := splitAtBreaksAfter(b.Text, ws, wb, lb, hy, boxWritingSystem(b), carried)
+	pieces, trailing := splitAtBreaksAfter(b.Text, ws, wb, lb, hy, l.boxWritingSystem(b), carried)
 	pieces = collapsibleSeparators(pieces, wordSpaceTransformValue(b.Style))
 	if points := l.hyphenPoints[b]; len(points) > 0 {
 		var endsAtHyphen bool
@@ -1663,7 +1663,19 @@ func (l *layouter) textAfter(b *Box, n int) string {
 		case cur.Replaced != nil || isAtomicInline(cur) || isForcedBreak(cur):
 			return out.String()
 		case cur.IsText():
-			out.WriteString(bounded(cur.Text, n-out.Len()))
+			piece := bounded(cur.Text, n-out.Len())
+			out.WriteString(piece)
+			if len(piece) < len(cur.Text) {
+				// Full: the next character does not fit in what is left of
+				// n. The walk used to go on, because the length had not
+				// reached n and nothing else stopped it — so with two bytes
+				// left and three-byte Thai after it, every box asked walked
+				// to the end of its paragraph, which made a paragraph of
+				// short Thai runs between inline boxes quadratic, and a
+				// one-byte character further on could still be appended with
+				// the Thai one before it missing from the middle of the text.
+				return out.String()
+			}
 		}
 	}
 	return out.String()

@@ -232,7 +232,7 @@ func (b *boxBuilder) boundariesOf(have map[int]bool, text func() string, whole *
 		return have
 	}
 	got := paragraph.SeparatorBoundaries(text(),
-		languageAt(boxElement(whole)), boxWritingSystem(whole))
+		b.languageAt(boxElement(whole)), b.boxWritingSystem(whole))
 	if got == nil {
 		// Distinguished from "not read yet" by never being nil again, so that a
 		// stretch with no boundaries in it is read once rather than once per

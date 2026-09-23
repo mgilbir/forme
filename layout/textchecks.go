@@ -369,7 +369,7 @@ func missingGlyphFate(face *shape.Face) string {
 //
 // Once per value per document, on the model of reportWordBreak.
 func (l *layouter) reportHyphens(b *Box, value string) {
-	if boxLanguage(b) == "" {
+	if l.boxLanguage(b) == "" {
 		return
 	}
 	if l.reportedHyphens == nil {
@@ -1158,21 +1158,21 @@ func boxElement(b *Box) *html.Node {
 // attributes and this engine gives its box no element either, so asking
 // languageAt about one asks about nothing; the answer is on the element that
 // holds the text, which is the first box above it that has one.
-func boxLanguage(b *Box) paragraph.Language {
-	return languageAt(boxElement(b))
+func (m *languageMemo) boxLanguage(b *Box) paragraph.Language {
+	return m.languageAt(boxElement(b))
 }
 
 // boxHyphenation is boxLanguage's neighbour for the one rule that is keyed on
 // the script as well as the language. See paragraph.HyphenationOf.
-func boxHyphenation(b *Box) paragraph.Language {
-	return hyphenationAt(boxElement(b))
+func (m *languageMemo) boxHyphenation(b *Box) paragraph.Language {
+	return m.hyphenationAt(boxElement(b))
 }
 
 // boxWritingSystem is boxLanguage's neighbour for the rules that ask what a text
 // is *typeset* as rather than what language it is in. See
 // paragraph.WritingSystemOf, and writingSystemAt for the walk.
-func boxWritingSystem(b *Box) paragraph.WritingSystem {
-	return writingSystemAt(boxElement(b))
+func (m *languageMemo) boxWritingSystem(b *Box) paragraph.WritingSystem {
+	return m.writingSystemAt(boxElement(b))
 }
 
 // reportSpacingTrim reports a text-spacing-trim value whose rule this engine

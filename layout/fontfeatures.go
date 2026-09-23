@@ -82,7 +82,7 @@ func (l *layouter) featuresFor(b *Box) shape.Features {
 	// attribute as written — shape reads BCP 47 as HarfBuzz does — and it is
 	// here with the rest because it has to travel with them, to the painter
 	// that shapes the run again.
-	if v, ok := boxElement(b).Language(); ok {
+	if v, ok := l.Of(boxElement(b)); ok {
 		out.Language = v
 	}
 	return out
