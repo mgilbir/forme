@@ -122,6 +122,7 @@ func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph)
 			if gid, ok := singleSubstAt(sub, buf[at].GID); ok {
 				buf[at].GID = gid
 				buf[at].XAdvance = sh.f.advanceGID(gid)
+				buf[at].substituted = true
 				return 1, buf
 			}
 		case 2:
@@ -152,7 +153,7 @@ func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph)
 			// reporting a ligature where a glyph was removed.
 			if ok && len(reps) > 0 {
 				product := sh.product(len(reps))
-				for _, gid := range reps {
+				for k, gid := range reps {
 					// Each part still stands for the character the whole stood
 					// for, so it is classified as that character was and is for
 					// the same features. The second is what makes a cursive
@@ -160,9 +161,22 @@ func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph)
 					// skeleton and its dots must leave the skeleton still
 					// knowing it is the first letter of a word, because that is
 					// the glyph the font states the form over.
+					//
+					// And each is numbered: which part of the decomposition it
+					// is, from zero, as HarfBuzz numbers the outputs of a
+					// multiple substitution. The universal engine moves only
+					// the first part of a vowel sign written before its letter,
+					// and it is this that says which part is first. A glyph that
+					// already belongs to a ligature keeps what it had, as it
+					// does there, and so does one that is not taken apart.
+					lig := buf[at].lig
+					if lig.id == 0 && len(reps) > 1 {
+						lig = ligatureRef{comp: k, comps: lig.comps}
+					}
 					product = append(product, Glyph{
 						GID: gid, Cluster: buf[at].Cluster, XAdvance: sh.f.advanceGID(gid),
-						class: buf[at].class, mask: buf[at].mask,
+						lig: lig, class: buf[at].class, mask: buf[at].mask,
+						substituted: true,
 					})
 				}
 				out := sh.replace(buf, at, 1, product)
@@ -173,6 +187,7 @@ func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph)
 			if gid, ok := alternateSubstAt(sub, buf[at].GID); ok {
 				buf[at].GID = gid
 				buf[at].XAdvance = sh.f.advanceGID(gid)
+				buf[at].substituted = true
 				return 1, buf
 			}
 		case 4:
@@ -323,6 +338,7 @@ func (sh shaper) ligatureAt(sub []byte, buf []Glyph, at, flags int) ([]int, int,
 		n := 1
 		pos := at
 		matched := true
+		base := ligbaseNotChecked
 		for k := 0; k < compCount-1; k++ {
 			if 4+2*k+2 > len(lig) {
 				matched = false
@@ -330,7 +346,8 @@ func (sh shaper) ligatureAt(sub []byte, buf []Glyph, at, flags int) ([]int, int,
 			}
 			want := font.Be16(lig, 4+2*k)
 			pos = sh.nextNotIgnored(buf, pos+1, flags, want)
-			if pos >= sh.end(buf) || buf[pos].GID != want || !sh.maskAllows(buf[pos]) {
+			if pos >= sh.end(buf) || buf[pos].GID != want || !sh.maskAllows(buf[pos]) ||
+				!sh.sameLigaturePart(buf, at, pos, flags, &base) {
 				matched = false
 				break
 			}
@@ -413,6 +430,7 @@ func (sh shaper) formLigature(buf []Glyph, at, gid int, comps []int) (int, []Gly
 	product = append(product, Glyph{
 		GID: gid, Cluster: cluster, XAdvance: sh.f.advanceGID(gid),
 		lig: ligatureRef{id: id, comps: comps0}, class: class, mask: buf[at].mask,
+		substituted: true,
 	})
 
 	// Walking the components in order, so that each kept glyph is given the
@@ -502,6 +520,7 @@ func (sh shaper) matchInput(buf []Glyph, at, count, flags int, out *ruleInput,
 	}
 	end := sh.end(buf)
 	pos := at
+	base := ligbaseNotChecked
 	for k := 0; k < count; k++ {
 		for {
 			if pos >= end {
@@ -517,10 +536,75 @@ func (sh shaper) matchInput(buf []Glyph, at, count, flags int, out *ruleInput,
 		if !sh.maskAllows(buf[pos]) || !match(k, pos) {
 			return false
 		}
+		if k > 0 && !sh.sameLigaturePart(buf, at, pos, flags, &base) {
+			return false
+		}
 		out[k] = pos
 		pos++
 	}
 	return true
+}
+
+// ligbaseState is what sameLigaturePart has found out about the ligature the
+// first glyph of an input belongs to: not yet asked, or whether the lookup
+// steps over it.
+type ligbaseState uint8
+
+const (
+	ligbaseNotChecked ligbaseState = iota
+	ligbaseMayNotSkip
+	ligbaseMaySkip
+)
+
+// sameLigaturePart is the check HarfBuzz's match_input makes of each glyph of
+// an input after the first: that the two are not marks of different parts of a
+// ligature.
+//
+// A mark written inside a ligature belongs to the part of it it was written
+// on — the ligature records which — and two marks belonging to different
+// parts, or one belonging to a part and one belonging to none, are not a
+// sequence a rule was written about, even when they now stand side by side:
+// Noto Sans Javanese's cecak telu and vowel sign ii, one carried inside the
+// kha-pengkal ligature and one after it, are not ligated by the rule that
+// ligates the pair on one letter. So where the first glyph belongs to a part,
+// every other must belong to the same part — unless the ligature itself is a
+// glyph the lookup steps over, in which case the marks are, to the lookup,
+// marks on whatever it lands on. And where the first belongs to no part, no
+// other may belong to a part of a ligature other than the first.
+//
+// Whether the lookup steps over the ligature is found by walking back from the
+// first glyph over the marks of the same ligature to it, once per input. The
+// walk is bounded by maxContextLength, as a rule's input is: a ligature with
+// more marks than that between it and the glyph asked about is not found, and
+// the input does not match, which is the answer HarfBuzz gives where it finds
+// no ligature.
+func (sh shaper) sameLigaturePart(buf []Glyph, at, pos, flags int, base *ligbaseState) bool {
+	first, this := buf[at].lig, buf[pos].lig
+	if first.id == 0 || first.comp == 0 {
+		return this.id == 0 || this.comp == 0 || this.id == first.id
+	}
+	if this.id == first.id && this.comp == first.comp {
+		return true
+	}
+	if *base == ligbaseNotChecked {
+		*base = ligbaseMayNotSkip
+		for j, n := at-1, 0; n < maxContextLength; j, n = j-1, n+1 {
+			if j < 0 && (sh.run == nil || -j > len(sh.run.settled())) {
+				break
+			}
+			g := sh.glyphAt(buf, j)
+			if g.lig.id != first.id {
+				break
+			}
+			if g.lig.comp == 0 {
+				if sh.ignores(flags, g) {
+					*base = ligbaseMaySkip
+				}
+				break
+			}
+		}
+	}
+	return *base == ligbaseMaySkip
 }
 
 // matchLookahead is matchInput for the part of a rule that says what must

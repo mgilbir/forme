@@ -1,7 +1,6 @@
 package shape
 
 import (
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -141,7 +140,7 @@ func (s *Stack) ShapeRuns(text string) ([]Run, int) {
 		end := i + size
 		for end < len(text) {
 			r, n := utf8.DecodeRuneInString(text[end:])
-			if !unicode.Is(unicode.M, r) {
+			if !isCombiningMark(r) {
 				break
 			}
 			end += n

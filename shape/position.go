@@ -39,8 +39,7 @@ const (
 	// Never: the font is trusted to have given its marks no width, and anything
 	// a rule states about one stands. Indic, Khmer and Hangul.
 	zeroMarksNone zeroMarkWidths = iota
-	// Before the rules run, so that what they state about a mark survives, and
-	// the offset moves with the advance so the mark does not shift. The
+	// Before the rules run, so that what they state about a mark survives. The
 	// universal engine and Myanmar.
 	zeroMarksEarly
 	// After the rules run, discarding whatever they said about a mark's advance.
@@ -48,11 +47,12 @@ const (
 	zeroMarksLate
 )
 
-// cancelMarkWidths takes the advance off every mark.
-//
-// Done before the rules, the offset moves with the advance: the glyph is drawn
-// where it would have been, and only the pen stops moving. Done after, the
-// offsets are already whatever the rules made them and must not be touched.
+// Whether the offset moves with a cancelled advance is the same question for
+// both, and is not the model's: see adjustMarkOffsets.
+
+// cancelMarkWidths takes the advance off every mark, and with adjustOffsets
+// moves the offset with it, so that the mark is drawn where it would have been
+// and only the pen stops moving.
 func (sh shaper) cancelMarkWidths(buf []Glyph, adjustOffsets bool) {
 	for i := range buf {
 		if !sh.l.isMark(buf[i]) {
@@ -65,11 +65,80 @@ func (sh shaper) cancelMarkWidths(buf []Glyph, adjustOffsets bool) {
 	}
 }
 
-// applyPositioning runs the GPOS lookups over a shaped buffer.
+// adjustMarkOffsets reports whether zeroing a mark's advance moves its offset
+// with it. It is HarfBuzz's adjust_mark_positioning_when_zeroing, for a run
+// drawn left to right.
+//
+// Only a font that places no marks of its own is given that. Where the font has
+// GPOS, it positions its marks relative to where the pen is once their
+// advances are gone, and a mark shifted as well is drawn a whole advance short
+// of where the font put it: Padauk's medial ra, 219 units left of its letter.
+// A font with a legacy kern table that kerns across the line — which moves
+// glyphs off the baseline — is taken to have placed them too. And right to
+// left the mark is not moved: the pen meets it before its base, and it hangs
+// over the glyph after it once the run is reversed.
+func (sh shaper) adjustMarkOffsets() bool {
+	return !sh.rtl && !sh.f.hasPositioning() && !hasCrossStreamKerning(sh.f.layoutTables["kern"])
+}
+
+// hasPositioning reports whether the face has a GPOS table at all, whatever it
+// selects for the run: HarfBuzz's hb_ot_layout_has_positioning.
+func (f *Face) hasPositioning() bool {
+	t := f.layoutTables["GPOS"]
+	return len(t) >= 4 && (t[0]|t[1]|t[2]|t[3]) != 0
+}
+
+// hasCrossStreamKerning reports whether a legacy kern table has a subtable
+// that kerns across the line, in either of the table's two versions.
+func hasCrossStreamKerning(kern []byte) bool {
+	if len(kern) < 4 {
+		return false
+	}
+	if font.Be16(kern, 0) == 0 {
+		// The OpenType table: a 16-bit count, and a coverage word in each
+		// subtable whose bit 2 is cross-stream.
+		off := 4
+		for i := 0; i < font.Be16(kern, 2) && i < maxSubtables && off+6 <= len(kern); i++ {
+			if font.Be16(kern, off+4)&0x0004 != 0 {
+				return true
+			}
+			length := font.Be16(kern, off+2)
+			if length <= 0 {
+				return false
+			}
+			off += length
+		}
+		return false
+	}
+	if len(kern) < 8 || font.Be16(kern, 0) != 1 || font.Be16(kern, 2) != 0 {
+		return false
+	}
+	// Apple's version 1.0: a 32-bit count, a 32-bit length per subtable and its
+	// coverage after it, with bit 14 for cross-stream.
+	n := int(font.Be32(kern, 4))
+	off := 8
+	for i := 0; i < n && i < maxSubtables && off+8 <= len(kern); i++ {
+		if font.Be16(kern, off+4)&0x4000 != 0 {
+			return true
+		}
+		length := int(font.Be32(kern, off))
+		if length <= 0 || length > len(kern)-off {
+			return false
+		}
+		off += length
+	}
+	return false
+}
+
+// position runs the GPOS lookups over a shaped buffer.
 func (sh shaper) position(buf []Glyph) {
 	l := sh.l
+	// Where each mark attached, for this pass and every lookup a rule reaches
+	// from it. See attachMarks.
+	sh.attached = new([]int)
+	adjust := sh.adjustMarkOffsets()
 	if sh.zeroMarks == zeroMarksEarly {
-		sh.cancelMarkWidths(buf, true)
+		sh.cancelMarkWidths(buf, adjust)
 	}
 	// Pair kerning, which the buffer expresses as a change to the left glyph's
 	// advance. Glyphs the lookup ignores do not break a pair.
@@ -148,8 +217,12 @@ func (sh shaper) position(buf []Glyph) {
 	sh.attachCursive(buf)
 	sh.attachMarks(buf)
 	if sh.zeroMarks == zeroMarksLate {
-		sh.cancelMarkWidths(buf, false)
+		sh.cancelMarkWidths(buf, adjust)
 	}
+	// Last, once every advance is what it will be: each mark is where it was
+	// placed relative to what it is attached to, and is now put where that
+	// is. See attachMarks.
+	sh.resolveAttachments(buf)
 }
 
 // cursiveAnchors is where a glyph's connecting stroke leaves and arrives.
@@ -251,6 +324,23 @@ func (sh shaper) attachCursive(buf []Glyph) {
 // Cancelling the mark's own advance is not done here. It is a decision each
 // script's model takes for itself, and taking it here would take it for all of
 // them and at the one moment that is wrong for two — see zeroMarkWidths.
+//
+// # Across the line now, along it last
+//
+// The two axes are settled at different times, as HarfBuzz settles them.
+// Across the line — the height — a mark takes its target's offset as it stands
+// when the mark is attached, so that a later lookup moving the target leaves
+// the mark where it was put (the note above). Along the line a mark keeps only
+// its offset from its target and which glyph that is, the last attachment
+// made winning, and resolveAttachments adds where the target finally stands
+// once every lookup has run and every advance is final: HarfBuzz's attach
+// chain and propagate_attachment_offsets. Noto Serif Tibetan needs both —
+// lookup 20 stacks a subjoined ra on the mark before it, and lookup 21 then
+// moves that mark onto another; the ra keeps its height and follows the mark
+// along, and placed against where the mark stood when 20 ran it was drawn 42
+// units from where the font put it, and so was the mark stacked on the ra.
+//
+// A lookup a contextual rule reaches attaches the same way, through placeMark.
 func (sh shaper) attachMarks(buf []Glyph) {
 	l := sh.l
 	if len(l.markGlyphs) == 0 {
@@ -335,27 +425,59 @@ func (sh shaper) attachMarks(buf []Glyph) {
 	} else {
 		sort.SliceStable(todo, func(a, b int) bool { return todo[a].lookup < todo[b].lookup })
 	}
-	// A mark is moved back over everything between it and its base, and that
-	// stretch is read once per mark. One base carrying a long mark run makes the
-	// k-th mark read k advances, which is the last of the three quadratics on
-	// this path: after the other two "a" with sixteen thousand U+0301 after it
-	// still climbed by 3.7 per doubling. A prefix sum answers each in constant
-	// time. It is built only when there are enough attachments to pay for the
-	// array, which no ordinary combining sequence reaches.
+	for _, p := range todo {
+		sh.placeMark(buf, p.i, p.at, p.mark.anchor, p.base)
+	}
+}
+
+// resolveAttachments puts each attached mark where its target finally is along
+// the line: its offset from the target, plus the target's own offset once that
+// is resolved, less what the pen passes between them. The height was settled
+// when it was attached.
+//
+// What the pen passes is taken now and not when the mark was attached, because
+// the advances are final only now: a mark between a base and the mark stacked
+// on it may have had its advance cancelled since, and the stacked one is drawn
+// against a pen that did not move for it.
+//
+// A mark attaches to a glyph before it, so resolving them in order resolves
+// each target before anything that hangs from it.
+func (sh shaper) resolveAttachments(buf []Glyph) {
+	if sh.attached == nil || *sh.attached == nil {
+		return
+	}
+	to := *sh.attached
+	// A mark is moved back over everything between it and its target, and that
+	// stretch is read once per mark. One base carrying a long mark run makes
+	// the k-th mark read k advances, which is the last of the three quadratics
+	// on this path: "a" with sixteen thousand U+0301 after it climbed by 3.7
+	// per doubling. A prefix sum answers each in constant time. It is built
+	// only when there are enough attachments to pay for the array, which no
+	// ordinary combining sequence reaches.
+	n := 0
+	for _, j := range to {
+		if j >= 0 {
+			n++
+		}
+	}
 	var sums []float64
-	if len(todo) > markSortInsertionMax {
+	if n > markSortInsertionMax {
 		sums = advanceSums(buf)
 	}
-	for _, p := range todo {
-		if sums != nil && p.at >= 0 {
-			since := sinceFrom(sums, sh.rtl, p.i, p.at)
-			if strictMarks && since != sh.advancesBetween(buf, p.i, p.at) {
-				panic("attachMarks: the prefix sum disagrees with the walk")
-			}
-			sh.placeMarkSince(buf, p.i, p.at, p.mark.anchor, p.base, since)
+	for i, j := range to {
+		if j < 0 || j >= i {
 			continue
 		}
-		sh.placeMark(buf, p.i, p.at, p.mark.anchor, p.base)
+		since := 0.0
+		if sums != nil {
+			since = sinceFrom(sums, sh.rtl, i, j)
+			if strictMarks && since != sh.advancesBetween(buf, i, j) {
+				panic("resolveAttachments: the prefix sum disagrees with the walk")
+			}
+		} else {
+			since = sh.advancesBetween(buf, i, j)
+		}
+		buf[i].XOffset += buf[j].XOffset - since
 	}
 }
 
@@ -1032,6 +1154,9 @@ func readAnchor(base []byte, off int) (anchor, bool) {
 // first of two stacked accents is a mark that no *mark-to-mark* array lists as
 // one, because in that lookup it is the base.
 func (l *layout) isMark(g Glyph) bool {
+	if c := l.classOf(g); c == classUnclassified {
+		return false
+	}
 	if l.glyphClass.named {
 		// A font that classifies its glyphs has answered for all of them: one it
 		// leaves out is not a mark, whatever else names it. Falling back to the
@@ -1052,28 +1177,34 @@ func (l *layout) isMark(g Glyph) bool {
 	return l.markGlyphs[g.GID]
 }
 
-// placeMark puts the mark at i against the base at j, so that their anchors
-// meet.
+// placeMark attaches the mark at i to the glyph at j, so that their anchors
+// meet: the height from where j stands now, and along the line its offset from
+// j and that it hangs from j, for resolveAttachments to finish once every
+// lookup has run. See attachMarks.
 //
-// The pen is at the end of everything drawn since the base, so the advances
-// between have to be taken back off — and the base's own displacement carried
-// along, since a base moved by a single adjustment or lifted onto a joining
-// stroke takes its accents with it.
+// It *sets* the offset rather than adding to it, which is what the format says
+// and what makes applying the same attachment twice harmless — a lookup both
+// named by a feature and reached from a rule places the mark in the same place
+// either time. A later attachment of the same mark replaces an earlier one, as
+// a later lookup's does in HarfBuzz.
 //
-// What has to be corrected for is where the pen will be when the mark is drawn,
-// and that depends on which way the run is drawn. Left to right the pen has
-// passed the base and everything between them, so those advances come off.
-// Right to left the buffer is about to be reversed and the mark will be drawn
-// *before* its base, so the same advances are still ahead of the pen and go on
-// rather than off. Whether the mark's own advance is among them is decided by
-// zeroMarkWidths, which may already have taken it off.
-//
-// It *sets* the offsets rather than adding to them, which is what the format
-// says and what makes applying the same attachment twice harmless — a lookup
-// both named by a feature and reached from a rule places the mark in the same
-// place either time.
+// Outside a positioning pass there is nothing to resolve against, and the mark
+// is placed where j stands now.
 func (sh shaper) placeMark(buf []Glyph, i, j int, mark, base anchor) {
-	sh.placeMarkSince(buf, i, j, mark, base, sh.advancesBetween(buf, i, j))
+	buf[i].XOffset = sh.f.scale(base.x - mark.x)
+	buf[i].YOffset = buf[j].YOffset + sh.f.scale(base.y-mark.y)
+	if sh.attached == nil {
+		buf[i].XOffset += buf[j].XOffset - sh.advancesBetween(buf, i, j)
+		return
+	}
+	if *sh.attached == nil {
+		to := make([]int, len(buf))
+		for k := range to {
+			to[k] = -1
+		}
+		*sh.attached = to
+	}
+	(*sh.attached)[i] = j
 }
 
 // advancesBetween is what stands between a base and the mark that attaches to
@@ -1090,14 +1221,6 @@ func (sh shaper) advancesBetween(buf []Glyph, i, j int) float64 {
 		}
 	}
 	return since
-}
-
-// placeMarkSince is placeMark once that sum is known, so that a caller placing
-// many marks against one base can answer it from a prefix sum instead of
-// reading the stretch again for each of them.
-func (sh shaper) placeMarkSince(buf []Glyph, i, j int, mark, base anchor, since float64) {
-	buf[i].XOffset = buf[j].XOffset + sh.f.scale(base.x-mark.x) - since
-	buf[i].YOffset = buf[j].YOffset + sh.f.scale(base.y-mark.y)
 }
 
 // advanceSums is the running total of the advances in buf, so that what stands

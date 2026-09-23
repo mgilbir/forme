@@ -6,7 +6,7 @@ package shape
 
 // The Universal Shaping Engine's categories. Unicode 17.0.0.
 //
-// 1091 ranges. A character in none of them is of category useOther, which is the
+// 1090 ranges. A character in none of them is of category useOther, which is the
 // zero value and what every character outside these scripts reads as.
 //
 // Unicode publishes no such property: it is derived from five that Unicode does
@@ -510,6 +510,7 @@ var useRanges = [...]useRange{
 	{0x1C2C, 0x1C2C, useV, usePosBlw},
 	{0x1C2D, 0x1C33, useF, usePosAbv},
 	{0x1C34, 0x1C35, useVM, usePosPre},
+	{0x1C36, 0x1C36, useFM, usePosAbv},
 	{0x1C37, 0x1C37, useCM, usePosBlw},
 	{0x1C40, 0x1C49, useB, usePosNone},
 	{0x1C4D, 0x1C4F, useB, usePosNone},
@@ -790,8 +791,7 @@ var useRanges = [...]useRange{
 	{0x112E9, 0x112E9, useCM, usePosBlw},
 	{0x112EA, 0x112EA, useV, usePosBlw},
 	{0x112F0, 0x112F9, useB, usePosNone},
-	{0x11300, 0x11301, useVM, usePosAbv},
-	{0x11302, 0x11303, useVM, usePosPst},
+	{0x11300, 0x11303, useVM, usePosAbv},
 	{0x11305, 0x1130C, useB, usePosNone},
 	{0x1130F, 0x11310, useB, usePosNone},
 	{0x11313, 0x11328, useB, usePosNone},
@@ -858,8 +858,7 @@ var useRanges = [...]useRange{
 	{0x114BB, 0x114BC, useV, usePosPre},
 	{0x114BD, 0x114BD, useV, usePosPst},
 	{0x114BE, 0x114BE, useV, usePosPre},
-	{0x114BF, 0x114C0, useVM, usePosAbv},
-	{0x114C1, 0x114C1, useVM, usePosPst},
+	{0x114BF, 0x114C1, useVM, usePosAbv},
 	{0x114C2, 0x114C2, useH, usePosNone},
 	{0x114C3, 0x114C3, useCM, usePosBlw},
 	{0x114C4, 0x114C4, useB, usePosNone},

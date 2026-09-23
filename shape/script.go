@@ -5,7 +5,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/mgilbir/forme/font"
@@ -148,7 +147,7 @@ func scriptRuns(s string, behind, ahead uint16, out []scriptRun) []scriptRun {
 		j := i + n
 		for j < len(s) {
 			m, n := utf8.DecodeRuneInString(s[j:])
-			if !unicode.Is(unicode.M, m) {
+			if !isCombiningMark(m) {
 				break
 			}
 			if !decides(unit) {
@@ -758,6 +757,13 @@ type shaper struct {
 	// contextual rule called into. See runBuf, which is where the arrangement
 	// is written down.
 	run *runBuf
+
+	// attached is, during a positioning pass, the glyph each mark hangs from
+	// (-1 for none), so that it can be put in place once everything it hangs
+	// from is — see attachMarks. A pointer because a shaper is copied per
+	// lookup and a lookup a rule reaches attaches into the same record; nil
+	// outside positioning.
+	attached *[]int
 
 	// ligIDs hands out the numbers that tie a ligature glyph to the marks that
 	// were inside it, so that positioning can put each mark against the part of

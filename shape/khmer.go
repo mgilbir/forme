@@ -231,7 +231,7 @@ func (sh shaper) shapeKhmer(buf []Glyph, runes []rune, p *plan) []Glyph {
 
 	// The joiners have now done everything they are for. What is left is a
 	// character with no shape, which must not reach the page.
-	return dropGlyphs(buf, func(i int) bool {
+	return dropUnsubstituted(buf, func(i int) bool {
 		return i < len(info) && (indicIsJoiner(info[i].cat) || info[i].ignorable)
 	})
 }

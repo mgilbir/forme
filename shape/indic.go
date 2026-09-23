@@ -821,10 +821,11 @@ func (sh shaper) shapeIndic(buf []Glyph, runes, before []rune, plan *indicPlan, 
 
 		syllable := append([]Glyph(nil), buf[syl.start:syl.end]...)
 		record := append([]indicInfo(nil), info[syl.start:syl.end]...)
+		placeholder := -1
 		if syl.kind == sylBroken && hasDotted {
-			syllable, record = sh.insertDottedCircle(syllable, record, 0, len(syllable), dotted)
+			placeholder = dotted
 		}
-		syllable = sh.shapeIndicSyllable(syllable, &record, plan, p, info[syl.start].wordStart)
+		syllable = sh.shapeIndicSyllable(syllable, &record, plan, p, info[syl.start].wordStart, placeholder)
 		serial++
 		for i := range record {
 			record[i].syllable = serial
@@ -847,7 +848,7 @@ func (sh shaper) shapeIndic(buf []Glyph, runes, before []rune, plan *indicPlan, 
 	// The joiners have now done everything they are for: the forms they forced
 	// or forbade are made, and nothing below is written about them. What is left
 	// is a character with no shape, which must not reach the page.
-	return dropGlyphs(buf, func(i int) bool {
+	return dropUnsubstituted(buf, func(i int) bool {
 		return i < len(info) && (indicIsJoiner(info[i].cat) || info[i].ignorable)
 	})
 }
@@ -904,8 +905,12 @@ func (sh shaper) markInvalidVowels(buf []Glyph, runes []rune) ([]Glyph, []rune) 
 			outBuf = append(outBuf, buf[i])
 			outRunes = append(outRunes, runes[i])
 		}
+		// The circle is a character of the run from here on, and HarfBuzz
+		// puts it into the text before glyph classes are inferred: what the
+		// character implies is its class.
 		outBuf = append(outBuf, Glyph{
 			GID: gid, Cluster: buf[i].Cluster, XAdvance: sh.f.advanceGID(gid),
+			class: classOfRune(dottedCircle),
 		})
 		outRunes = append(outRunes, dottedCircle)
 	}
@@ -1006,8 +1011,10 @@ func (sh shaper) insertDottedCircle(buf []Glyph, info []indicInfo, start, end, g
 //
 // wordStart says the character before the syllable in the text ends a word,
 // which the word-initial rule below needs and the syllable can no longer say.
+// placeholder, when it is not -1, is the dotted circle glyph a broken cluster
+// is shown against.
 func (sh shaper) shapeIndicSyllable(buf []Glyph, info *[]indicInfo, plan *indicPlan, p *plan,
-	wordStart bool) []Glyph {
+	wordStart bool, placeholder int) []Glyph {
 
 	hooks := indicHooks(info)
 	apply := func(stage []planLookup) {
@@ -1025,6 +1032,15 @@ func (sh shaper) shapeIndicSyllable(buf []Glyph, info *[]indicInfo, plan *indicP
 	// join one syllable to the next.
 	for s := p.syllables; s < p.basic; s++ {
 		apply(p.stage(s))
+	}
+
+	// The placeholder for a syllable that is not one goes in after them, where
+	// HarfBuzz puts it: those two are written about the characters the text
+	// has, not about a glyph the shaper added, and a font whose 'ccmp' composed
+	// a dotted circle with a vowel sign would otherwise compose one the text
+	// never had. The universal engine's goes in at the same point.
+	if placeholder >= 0 {
+		buf, *info = sh.insertDottedCircle(buf, *info, 0, len(buf), placeholder)
 	}
 
 	// Which consonants the font draws below or after the base, which is what
@@ -1082,11 +1098,18 @@ func indicWordStart(before, runes []rune, at int) bool {
 	return endsWordForIndic(runes[at-1])
 }
 
-// endsWordForIndic reports whether a character closes a word: a letter, a mark
-// or a formatting character continues one, and anything else — a space, a stop,
-// a digit — does not.
+// endsWordForIndic reports whether a character closes a word: a space, a stop,
+// a digit, a symbol or a control does, and a letter, a mark or a formatting
+// character does not.
+//
+// Nor does a character that says nothing about itself: a private-use one, a
+// surrogate, one not yet assigned. That is HarfBuzz's test, which is a range of
+// general categories — Cf to Mn in its numbering — that takes those three in
+// with the letters and marks, and so a word ends at exactly the categories
+// outside it. A private-use character is most often an icon font's glyph set
+// among the text, and it is not a space.
 func endsWordForIndic(r rune) bool {
-	return !unicode.In(r, unicode.L, unicode.M, unicode.Cf)
+	return unicode.In(r, unicode.N, unicode.P, unicode.S, unicode.Z, unicode.Cc)
 }
 
 // indicHooks keep the Indic record in step with a buffer a stage is reshaping.
@@ -1159,47 +1182,6 @@ func respliceIndicInfo(info []indicInfo, at, delta int) []indicInfo {
 	return append(out, info[at+1:]...)
 }
 
-// wouldSubstitute reports whether a feature's lookups would change a given
-// sequence of glyphs.
-//
-// It is how a shaper asks the font a question the characters cannot answer.
-// Whether a syllable's opening Ra becomes a reph is not a property of the text
-// — it is whether *this font* has a reph for *this* Ra — and a shaper that
-// assumed it does would take the Ra out of the base search of a font that would
-// then draw it as an ordinary letter in the wrong place.
-//
-// The question asked is "would anything happen here", not "would exactly this
-// sequence be consumed": a lookup that shortens the run has ligated it, and one
-// that changes a glyph without shortening it has covered it, and either answers
-// yes. A lookup that changed only the virama in the probe would answer yes
-// wrongly, and no font's below-base or reph rules are written that way.
-func (sh shaper) wouldSubstitute(lookups []int, gids []int) bool {
-	if len(gids) == 0 {
-		return false
-	}
-	sh.floor, sh.limit, sh.onResize, sh.joinerAt = 0, 0, nil, nil
-	// A probe asks what the feature's lookups do to these glyphs, whatever
-	// they are marked for.
-	sh.lookupMask = 0
-	for _, idx := range lookups {
-		probe := make([]Glyph, len(gids))
-		for i, g := range gids {
-			probe[i] = Glyph{GID: g}
-		}
-		sh.run = newRunBuf(probe, 0)
-		_, out := sh.applyGSUBAt(idx, sh.run.pending(), 0, 0)
-		if len(out) != len(probe) {
-			return true
-		}
-		for i, g := range gids {
-			if out[i].GID != g {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // indicPlan is what one run of one script needs that neither the text nor the
 // shared model can say: the script's own data, which generation of the
 // specification this font was written against, and what the font answers when
@@ -1242,7 +1224,10 @@ func (sh shaper) indicPlan(cfg *indicConfig, oldSpec bool) *indicPlan {
 // refine replaces the place of every consonant in a stretch of the buffer with
 // what the font says about it.
 func (p *indicPlan) refine(buf []Glyph, info []indicInfo, start, end int) {
-	if !p.haveVirama || len(p.blwf)+len(p.pstf)+len(p.pref) == 0 {
+	// 'vatu' is among the features asked — see of — so a font stating its
+	// below-base forms under it alone has something to ask, and returning here
+	// for want of the other three left its consonants all bases.
+	if !p.haveVirama || len(p.blwf)+len(p.pstf)+len(p.pref)+len(p.vatu) == 0 {
 		return
 	}
 	for i := start; i < end && i < len(info); i++ {
@@ -1262,8 +1247,8 @@ func (p *indicPlan) of(gid int) indicPos {
 	// carry the older lookups under the newer tag that every shaper matches
 	// either.
 	covers := func(lookups []int) bool {
-		return p.sh.wouldSubstitute(lookups, []int{p.virama, gid}) ||
-			p.sh.wouldSubstitute(lookups, []int{gid, p.virama})
+		return p.sh.wouldSubstitute(lookups, []int{p.virama, gid}, !p.oldSpec) ||
+			p.sh.wouldSubstitute(lookups, []int{gid, p.virama}, !p.oldSpec)
 	}
 	// 'vatu' is asked alongside 'blwf' because it is the other way a font says
 	// "this consonant is drawn under the base": the vattu is a below-base Ra, and
@@ -1336,8 +1321,8 @@ func (sh shaper) indicInitialReorder(buf []Glyph, info []indicInfo, plan *indicP
 		if plan.cfg.rephMode == rephExplicit {
 			probe = append(probe, buf[start+2].GID)
 		}
-		if sh.wouldSubstitute(rphf, probe[:2]) ||
-			(plan.cfg.rephMode == rephExplicit && sh.wouldSubstitute(rphf, probe)) {
+		if sh.wouldSubstitute(rphf, probe[:2], !plan.oldSpec) ||
+			(plan.cfg.rephMode == rephExplicit && sh.wouldSubstitute(rphf, probe, !plan.oldSpec)) {
 			limit += 2
 			for limit < end && indicIsJoiner(info[limit].cat) {
 				limit++
@@ -1558,7 +1543,7 @@ func (sh shaper) indicInitialReorder(buf []Glyph, info []indicInfo, plan *indicP
 	// the feature has run, since a font may decline to make the form.
 	if len(plan.pref) > 0 && base+2 < end {
 		for i := base + 1; i+1 < end; i++ {
-			if sh.wouldSubstitute(plan.pref, []int{buf[i].GID, buf[i+1].GID}) {
+			if sh.wouldSubstitute(plan.pref, []int{buf[i].GID, buf[i+1].GID}, !plan.oldSpec) {
 				buf[i].mask |= maskPref
 				buf[i+1].mask |= maskPref
 				break

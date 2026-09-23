@@ -68,7 +68,7 @@ func main() {
 	// are not derivable from anything — see testdata/ms-use/NOTICE.md — and
 	// there are characters whose Unicode value is right for Unicode and wrong
 	// for laying out a syllable, so they are read last and win.
-	syllabic := override(readRanged(args[0]), readRanged(args[5]))
+	syllabic := override(readRanged(args[0]), finalModifiersAreSyllableModifiers(readRanged(args[5])))
 	positional := override(readRanged(args[1]), readRanged(args[6]))
 	general := readUnicodeData(args[2])
 	ignorable := readProperty(args[3], "Default_Ignorable_Code_Point")
@@ -123,6 +123,15 @@ func main() {
 			c.gc = "Cn" // unassigned
 		}
 		cat := categoryOf(c)
+		// A correction HarfBuzz makes to the position, after the category:
+		// the Grantha anusvara and visarga and the Tirhuta visarga are placed
+		// above, where Unicode says to the right. Read as post-base modifiers
+		// they cannot follow a combining anusvara above (U+11300, U+11366…),
+		// and "𑌔𑌃𑌀" became a cluster, a broken one and a dotted circle, where
+		// HarfBuzz sets one cluster (harfbuzz#1037, #1631).
+		if r == 0x11302 || r == 0x11303 || r == 0x114C1 {
+			c.ipc = "Top"
+		}
 		if cat == "O" {
 			continue // the default, and by far the commonest
 		}
@@ -373,6 +382,21 @@ func valueAt(rs []ranged, r rune, dflt string) string {
 func inRanges(rs []ranged, r rune) bool {
 	i := sort.Search(len(rs), func(i int) bool { return rs[i].hi >= r })
 	return i < len(rs) && rs[i].lo <= r
+}
+
+// finalModifiersAreSyllableModifiers reads the engine's syllabic corrections as
+// HarfBuzz reads them: a correction to Consonant_Final_Modifier is taken as
+// Syllable_Modifier, which the derivation makes a final modifier. The file
+// uses a value Unicode does not have (MicrosoftDocs/typography-issues#336),
+// and read literally it names no category at all, so U+1C36 LEPCHA SIGN RAN,
+// the one character it is given to, fell to Other.
+func finalModifiersAreSyllableModifiers(rs []ranged) []ranged {
+	for i := range rs {
+		if rs[i].value == "Consonant_Final_Modifier" {
+			rs[i].value = "Syllable_Modifier"
+		}
+	}
+	return rs
 }
 
 // readRanged reads a file of "range ; value" lines, which is the shape of every

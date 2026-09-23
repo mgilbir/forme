@@ -519,6 +519,13 @@ const (
 	// classComponent is named for completeness: GDEF defines it, and a reader
 	// of this list should see the whole set rather than wonder what 4 means.
 	classComponent = 4
+	// classUnclassified is not one of GDEF's. It is a glyph a shaper put in
+	// — the dotted circle a broken cluster is shown against — which HarfBuzz
+	// gives no class at all, whatever GDEF says of the glyph, until a
+	// substitution touches it: no lookup flag steps over it and it is not a
+	// mark. Nothing compares a class with it; it is here so that a glyph
+	// carrying it is none of the others.
+	classUnclassified = 5
 )
 
 // ignores reports whether a lookup with the given flags skips a glyph.
@@ -586,6 +593,9 @@ func (l *layout) ignoresIn(flags, markSet int, g Glyph) bool {
 // GDEF wins wherever it exists, including for a glyph it does not list: a font
 // that classified its glyphs and left this one out has said something about it.
 func (l *layout) classOf(g Glyph) int {
+	if g.class == classUnclassified && !(g.substituted && l.glyphClass.named) {
+		return classUnclassified
+	}
 	if l.glyphClass.named {
 		return l.glyphClass.of(g.GID)
 	}
@@ -593,10 +603,21 @@ func (l *layout) classOf(g Glyph) int {
 }
 
 // classOfRune is GDEF's classification as the character itself implies it: a
-// combining mark is a mark and everything else is a base. Nothing implies
+// non-spacing mark is a mark and everything else is a base. Nothing implies
 // "ligature" — that is a fact about a glyph, and is set where one is made.
+//
+// Non-spacing (Mn), not every combining mark, and never a default-ignorable
+// one: that is HarfBuzz's hb_synthesize_glyph_classes, which is what a font
+// with no GDEF is shaped by everywhere it is tested. A spacing mark (Mc) takes
+// room of its own — the Sinhala anusvara is drawn after its letter, not over
+// it — and read as a mark it lost its advance to mark zeroing and was drawn
+// back over the letter; an enclosing mark (Me) is drawn around what it
+// encloses and is spaced as a base. A default-ignorable mark — Mongolian's
+// variation selectors, the combining grapheme joiner — is not in the way of a
+// lookup either way, and read as a mark it is stepped over by one that skips
+// marks, which Mongolian fonts with no GDEF are written not to expect.
 func classOfRune(r rune) int {
-	if isCombiningMark(r) {
+	if isNonSpacingMark(r) && !isDefaultIgnorable(r) {
 		return classMark
 	}
 	return classBase

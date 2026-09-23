@@ -64,6 +64,13 @@ type Glyph struct {
 	// decided from. A glyph a substitution makes takes the mask of the glyph it
 	// was made from. See arabic.go.
 	mask glyphMask
+
+	// substituted says a substitution has touched the glyph: replaced it,
+	// made it from several, or taken it apart. It is HarfBuzz's SUBSTITUTED
+	// glyph property, and what it decides is whether a character nothing is
+	// drawn for is still one once the font has had its say — see
+	// dropUnsubstitutedIgnorables.
+	substituted bool
 }
 
 // ligatureRef says what a glyph has to do with a ligature.

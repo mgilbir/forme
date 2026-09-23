@@ -106,9 +106,13 @@ func (sh shaper) splitCharacters(buf []Glyph, runes []rune, of func(rune) ([]run
 		}
 		// The parts share the sign's cluster: several glyphs standing for one
 		// character is exactly what a cluster records.
+		// Each part is classified as the character it is, as every glyph
+		// made from a character is: in HarfBuzz the parts come from
+		// normalization, before glyph classes are inferred.
 		for k, gid := range gids {
 			outBuf = append(outBuf, Glyph{
 				GID: gid, Cluster: buf[i].Cluster, XAdvance: sh.f.advanceGID(gid),
+				class: classOfRune(parts[k]),
 			})
 			outRunes = append(outRunes, parts[k])
 		}
@@ -130,7 +134,7 @@ func (sh shaper) insertGlyphAt(buf []Glyph, info []indicInfo, at, gid int, what 
 	case len(buf) > 0:
 		cluster = buf[len(buf)-1].Cluster
 	}
-	g := Glyph{GID: gid, Cluster: cluster, XAdvance: sh.f.advanceGID(gid)}
+	g := Glyph{GID: gid, Cluster: cluster, XAdvance: sh.f.advanceGID(gid), class: classUnclassified}
 
 	buf = append(buf, Glyph{})
 	copy(buf[at+1:], buf[at:])

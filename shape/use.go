@@ -581,6 +581,12 @@ var (
 // the four for a Brahmic script means. It is the same membership test HarfBuzz
 // uses to choose between the two, which is InCursiveScript.
 func (sh shaper) shapeUniversal(buf []Glyph, runes []rune, before, after []rune, p *plan) []Glyph {
+	// Before anything is classified: an independent vowel followed by a sign
+	// that spells a different vowel is shown against a dotted circle, as it is
+	// by the Indic model — the list covers Sinhala, Brahmi, Khojki,
+	// Khudawadi, Tirhuta, Modi and Takri too, which this engine sets. HarfBuzz
+	// asks it in both. See markInvalidVowels.
+	buf, runes = sh.markInvalidVowels(buf, runes)
 	info := make([]useInfo, len(runes))
 	for i, r := range runes {
 		info[i].cat, info[i].pos = useCategoryOf(r)
@@ -624,7 +630,9 @@ func (sh shaper) shapeUniversal(buf []Glyph, runes []rune, before, after []rune,
 			continue
 		}
 		// Whatever lies between the last cluster shaped and this one passes
-		// through untouched.
+		// through untouched — but for what a cluster forgets at the same point:
+		// see clearSubstituted.
+		clearSubstituted(buf[prev:cl.start])
 		out = append(out, buf[prev:cl.start]...)
 		outInfo = append(outInfo, info[prev:cl.start]...)
 		prev = cl.end
@@ -635,6 +643,7 @@ func (sh shaper) shapeUniversal(buf []Glyph, runes []rune, before, after []rune,
 		out = append(out, cluster...)
 		outInfo = append(outInfo, record...)
 	}
+	clearSubstituted(buf[prev:])
 	buf = append(out, buf[prev:]...)
 	info = append(outInfo, info[prev:]...)
 
@@ -654,9 +663,22 @@ func (sh shaper) shapeUniversal(buf []Glyph, runes []rune, before, after []rune,
 	}
 	// What is left of a character nothing is drawn for. It has said everything
 	// it had to say — which cluster it broke — and must not reach the page.
-	return dropGlyphs(buf, func(i int) bool {
+	return dropUnsubstituted(buf, func(i int) bool {
 		return i < len(info) && info[i].ignorable
 	})
+}
+
+// clearSubstituted forgets which glyphs a substitution has touched, as
+// HarfBuzz's universal engine does twice: after the pre-processing features
+// (locl, ccmp, nukt, akhn) and after 'rphf'. It clears them so that it can tell
+// where 'rphf' and 'pref' then apply, and it has a consequence past that: a
+// character nothing is drawn for that only those first features gave a glyph
+// is taken out at the end like any other (see dropUnsubstituted). Only what
+// the later features substitute is kept.
+func clearSubstituted(buf []Glyph) {
+	for i := range buf {
+		buf[i].substituted = false
+	}
 }
 
 // useTopographicalMasks gives each glyph of a run that does not join the
@@ -733,6 +755,7 @@ func (sh shaper) shapeUseCluster(buf []Glyph, info *[]useInfo, p *plan,
 		buf[i].mask |= maskRphf
 	}
 	apply(p.syllables, p.rphf)
+	clearSubstituted(buf)
 
 	// Then 'rphf' itself, read the way 'pref' is: off where it applied, and
 	// whatever it applied to is a repha from here on — which is what the
@@ -742,6 +765,7 @@ func (sh shaper) shapeUseCluster(buf []Glyph, info *[]useInfo, p *plan,
 	if at := apply(p.rphf, p.pref); at >= 0 && at < len(*info) {
 		(*info)[at].cat = useR
 	}
+	clearSubstituted(buf)
 
 	// 'pref' is the font saying "this mark has a form that goes before the
 	// letter". Which mark it said it about is not something the categories
@@ -799,7 +823,7 @@ func (sh shaper) insertUseGlyph(buf []Glyph, info []useInfo, at, gid int, what u
 	case len(buf) > 0:
 		cluster = buf[len(buf)-1].Cluster
 	}
-	g := Glyph{GID: gid, Cluster: cluster, XAdvance: sh.f.advanceGID(gid)}
+	g := Glyph{GID: gid, Cluster: cluster, XAdvance: sh.f.advanceGID(gid), class: classUnclassified}
 
 	buf = append(buf, Glyph{})
 	copy(buf[at+1:], buf[at:])

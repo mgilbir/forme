@@ -105,10 +105,14 @@ var reorderedClasses = []int{
 }
 
 type charData struct {
-	ccc      int
-	mark     bool
-	decomp   []rune // canonical only, empty when there is none
-	assigned bool
+	ccc  int
+	mark bool
+	// nonSpacing is General_Category Mn, the one of the three mark categories
+	// that a glyph class is inferred from when a font states none: see
+	// classOfRune in package shape.
+	nonSpacing bool
+	decomp     []rune // canonical only, empty when there is none
+	assigned   bool
 }
 
 func main() {
@@ -175,9 +179,10 @@ package shape
 // Unicode %s.
 //
 // %d ranges carry the two properties a cluster is read by — the canonical
-// combining class, and whether the character is a combining mark. A character no
-// range names is an unmarked starter, which is the great majority of the code
-// space, so absence from the table is the answer for it.
+// combining class, and whether the character is a combining mark — and of
+// those, whether it is a non-spacing one. A character no range names is an
+// unmarked starter, which is the great majority of the code space, so absence
+// from the table is the answer for it.
 //
 // %d canonical decompositions, one step at a time as Unicode states them, and
 // %d compositions, which are the decompositions that may be put back together:
@@ -186,16 +191,17 @@ package shape
 
 // charClass is a run of code points sharing a combining class and a category.
 type charClass struct {
-	lo, hi rune
-	ccc    uint8
-	mark   bool
+	lo, hi     rune
+	ccc        uint8
+	mark       bool
+	nonSpacing bool
 }
 
 // charClasses is sorted by code point, so a lookup can binary-search.
 var charClasses = [...]charClass{
 `, *version, len(classes), len(decomps), len(comps))
 	for _, c := range classes {
-		fmt.Fprintf(w, "\t{0x%04X, 0x%04X, %d, %t},\n", c.lo, c.hi, c.ccc, c.mark)
+		fmt.Fprintf(w, "\t{0x%04X, 0x%04X, %d, %t, %t},\n", c.lo, c.hi, c.ccc, c.mark, c.nonSpacing)
 	}
 	fmt.Fprint(w, `}
 
@@ -270,9 +276,10 @@ func checkHangul(chars map[rune]charData) {
 }
 
 type classRange struct {
-	lo, hi rune
-	ccc    int
-	mark   bool
+	lo, hi     rune
+	ccc        int
+	mark       bool
+	nonSpacing bool
 }
 
 // collapseClasses turns the per-character properties into runs, dropping the
@@ -285,11 +292,12 @@ func collapseClasses(chars map[rune]charData) []classRange {
 		if c.ccc == 0 && !c.mark {
 			continue
 		}
-		if n := len(out); n > 0 && out[n-1].hi+1 == r && out[n-1].ccc == c.ccc && out[n-1].mark == c.mark {
+		if n := len(out); n > 0 && out[n-1].hi+1 == r && out[n-1].ccc == c.ccc &&
+			out[n-1].mark == c.mark && out[n-1].nonSpacing == c.nonSpacing {
 			out[n-1].hi = r
 			continue
 		}
-		out = append(out, classRange{r, r, c.ccc, c.mark})
+		out = append(out, classRange{r, r, c.ccc, c.mark, c.nonSpacing})
 	}
 	return out
 }
@@ -400,6 +408,7 @@ func readUnicodeData(path string) map[rune]charData {
 		case "Mn", "Mc", "Me":
 			c.mark = true
 		}
+		c.nonSpacing = strings.TrimSpace(fields[2]) == "Mn"
 		// A decomposition beginning with a tag in angle brackets is a
 		// compatibility one, which says how a character may be *approximated*
 		// rather than what it is written as. Only the canonical ones are wanted:

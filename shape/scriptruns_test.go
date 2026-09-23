@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unicode"
 
 	"github.com/mgilbir/forme/fonttest"
 )
@@ -95,6 +94,12 @@ func TestAMarkStaysWithWhatItIsWrittenOn(t *testing.T) {
 	if pieces := scriptRuns("a\u093F", scriptUnknown, scriptUnknown, nil); len(pieces) != 1 {
 		t.Errorf("a with a vowel sign is %d runs, want 1", len(pieces))
 	}
+	// A mark Unicode added after the release Go's own tables are at — Arabic
+	// PEPET, Unicode 16 — is a mark all the same: what says so is this
+	// package's table, at the release it is generated from.
+	if pieces := scriptRuns("a\u0897", scriptUnknown, scriptUnknown, nil); len(pieces) != 1 {
+		t.Errorf("a with U+0897 is %d runs, want 1", len(pieces))
+	}
 }
 
 // TestScriptRunsFollowTheirDefinition holds scriptRuns to its rules read the
@@ -166,7 +171,7 @@ func slowScriptRuns(s string, behind, ahead uint16) []scriptRun {
 		first := rs[i]
 		at += len(string(rs[i]))
 		i++
-		for i < len(rs) && unicode.Is(unicode.M, rs[i]) {
+		for i < len(rs) && isCombiningMark(rs[i]) {
 			if !decides(u.script) {
 				u.script, first = scriptOf(rs[i]), rs[i]
 			}
@@ -438,5 +443,27 @@ func TestAStringChangingScriptOftenCostsWhatItsTextDoes(t *testing.T) {
 			return best(func() { f.ShapeGlyphs(text) })
 		}
 		growth(t, "shaping "+unit+" n times, at 4n against n", shape, 500, 2000, 8)
+	}
+}
+
+// TestAStackSetsANewMarkWithItsBase: Stack.ShapeRuns keeps a letter and the
+// marks after it together when it chooses a face, preferring one that has them
+// all — and a mark newer than Go's own Unicode tables, Arabic PEPET, is a
+// mark by this package's table. Read as a letter it was set on its own, in
+// whichever face had it.
+func TestAStackSetsANewMarkWithItsBase(t *testing.T) {
+	load := func(glyphs ...fonttest.Glyph) *Face {
+		f, err := Load(fonttest.SFNT(fonttest.SFNTOptions{Glyphs: glyphs}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	latin := load(fonttest.Glyph{Rune: 'a', Advance: 500, HasShape: true})
+	both := load(fonttest.Glyph{Rune: 'a', Advance: 500, HasShape: true},
+		fonttest.Glyph{Rune: 0x0897, Advance: 0, HasShape: true})
+	runs, _ := NewStack(latin, both).ShapeRuns("a\u0897")
+	if len(runs) != 1 || runs[0].Face != both {
+		t.Errorf("a with U+0897 is set as %d runs; want one, in the face that has both", len(runs))
 	}
 }

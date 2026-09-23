@@ -89,24 +89,21 @@ FONTS = [
 #
 # An empty set is the point of the tool: every difference it reports is a defect.
 KNOWN = {
-    # A Tibetan string whose last mark this package puts five units right of
-    # where HarfBuzz puts it — same target, same lookup, same anchors, same y.
-    # CoreText was asked and places it where this package does, on both axes and
-    # on every glyph of the line: 427, 427 and 422 in absolute terms.
-    #
-    # It is named separately because it is pinned in the corpus and listed in
-    # deliberateDifferences, but it is not a separate decision: it is one
-    # instance of mark-offset below, which is where the mechanism is written
-    # down. See shape/harfbuzz_test.go.
-    "five-units-of-x",
-    # The other. A character nothing is drawn for, in a font that gave it a
-    # width: HarfBuzz keeps the gap when it removes the glyph, CoreText and this
+    # A character nothing is drawn for, in a font that gave it a width:
+    # HarfBuzz keeps the gap when it removes the glyph, CoreText and this
     # package close it.
     "invisible-character-with-a-width",
-    # The third, and the only one that is a family rather than a string. See
-    # classify, and testdata/coretext/RESULT.md for how it was decided.
-    "mark-offset",
 }
+
+# There were two more, and both left with one change. "five-units-of-x" was a
+# Tibetan string whose last mark sat five units from HarfBuzz's, and
+# "mark-offset" the family it belonged to: a mark attached by one lookup whose
+# target a later lookup moved, which HarfBuzz follows along the line and not
+# across it. That was taken for an asymmetry of HarfBuzz's alone, and CoreText,
+# asked about 129 of them, followed neither axis. It is HarfBuzz's model —
+# the cross axis settled when the mark is attached, the main axis carried to
+# the end — and positioning now follows it (shape/position.go, attachMarks).
+# With the class taken out, fuzzing two million strings found none of it left.
 
 def classify(text, ours, theirs):
     """Name a difference that is already understood, or None if it is new.
@@ -116,134 +113,9 @@ def classify(text, ours, theirs):
     Default_Ignorable_Code_Point that had gone stale by two characters, so what
     replaces it is a literal, which cannot.
     """
-    if text == "\u0F52\u0F8F\u0FAD\u0F91\u0F73\u0F37":
-        return "five-units-of-x"
     if "\u061C" in text:
         return "invisible-character-with-a-width"
-    # A mark a few units to one side: the same glyphs, in the same order, with
-    # the same advances, and only the offsets differing.
-    #
-    # The mechanism is known, and it is one thing rather than a family of
-    # accidents. A mark is attached by one lookup and a later lookup moves what
-    # it was attached to; HarfBuzz carries the mark along in x, and this package
-    # does not. Neither carries it in y, and nor does CoreText. The Tibetan
-    # string pinned in the corpus as five-units-of-x is an instance of exactly
-    # this, traced down to the lookups in shape/harfbuzz_test.go: lookup 19
-    # attaches, lookup 21 moves the target by (-5,-887), and the -5 is the whole
-    # of the difference.
-    #
-    # That the x moves and the y does not is HarfBuzz's alone. Following it would
-    # mean propagating one axis and not the other, which no specification states;
-    # following GPOS as literally written — the attachment points coincide, so
-    # carry both — moves the mark 887 units on that string and agrees with no
-    # engine at all.
-    #
-    # Measured rather than assumed. Unmasking this and fuzzing turned up 129
-    # differences over 2,090,800 strings, 124 Tibetan and 5 Devanagari, and every
-    # single one of them differs in x alone. All 129 went to CoreText in two
-    # batches: 86 agreed with this package, 0 with HarfBuzz, and the remaining 43
-    # are CoreText answering a different question — 39 where it inserts a dotted
-    # circle neither shaper does, which is cluster validity, and 4 where it
-    # decomposes a precomposed Tibetan vowel differently and so does not produce
-    # a comparable glyph string. On those 4 this package and HarfBuzz agree
-    # exactly on the glyphs.
-    #
-    # So what is recognised here is the shape rather than the strings, and it
-    # keeps holding for strings nobody has generated yet. But it is the *narrow*
-    # shape, not "the offsets differ somewhere": every one of those 129 has all
-    # five of the properties below, so all five are required, and a case missing
-    # any of them is something this has never seen and is reported.
-    #
-    #   one glyph moved      129 of 129 differ in exactly one glyph, never two
-    #   it moved in x only   129 of 129 leave the y identical
-    #   it carries no width  129 of 129 have zero advance, which is to say a mark
-    #   it is not the first  129 of 129 have something in front to attach to
-    #   nothing else changed the glyphs and advances agree throughout
-    #
-    # No bound is put on how far it moved, and that is the one thing about this
-    # class that is not checked — so what it lets through is counted and printed
-    # instead. See report_masked.
-    #
-    # The distance is not a property of the defect. It is how far the target
-    # went, which the next font can make as large as it likes, so a threshold on
-    # it would be invented rather than observed. Two attempts at doing better
-    # than that failed against the fuzzer itself, and are recorded here so that a
-    # third starts further along:
-    #
-    #   - A range. The 129 adjudicated cases spanned -185 to +675, and a
-    #     four-minute run turns up -669 and -557 as well. The range is a fact
-    #     about which fonts have been fuzzed rather than about the mechanism.
-    #   - The mechanism as an equality. HarfBuzz carries the mark along with what
-    #     it was attached to, so the amount ought to be that glyph's own offset —
-    #     and it is, for the -669 and the -557. It is not for the +185 and the -5
-    #     the same run produces, where the glyph in front of the mark sits at
-    #     zero. So either the target is not the glyph in front, or there is a
-    #     second mechanism here, and settling that needs CoreText — the harness
-    #     in testdata/coretext, not something a fuzz run can do for itself.
-    #
-    # The five properties stay, the magnitude is reported rather than asserted,
-    # and a run says how far the marks it masked actually went.
-    a, b = _fields(ours), _fields(theirs)
-    if len(a) == len(b) and a != b:
-        moved = [i for i, (x, y) in enumerate(zip(a, b)) if x != y]
-        if (len(moved) == 1
-                and moved[0] != 0
-                and all(x[:2] == y[:2] for x, y in zip(a, b))
-                and a[moved[0]][1] == 0
-                and a[moved[0]][3] == b[moved[0]][3]):
-            _masked_mark_offsets.append(b[moved[0]][2] - a[moved[0]][2])
-            return "mark-offset"
     return None
-
-
-# The x distances the mark-offset class has let through in this run, which
-# report_masked prints. A class nobody can see the workings of is a class that
-# grows without anybody deciding to grow it.
-_masked_mark_offsets = []
-
-# The range the 129 differences taken to CoreText spanned: 86 agreed with this
-# package, 0 with HarfBuzz, and the remaining 43 were CoreText answering a
-# different question. A distance outside it is not a defect and is not evidence
-# of one — it is a case nobody has looked at, and the summary says how many.
-ADJUDICATED_MIN, ADJUDICATED_MAX = -185, 675
-
-
-def report_masked():
-    """Print what the known-difference classes hid, so that they hide nothing.
-
-    A class exists to keep a difference already understood from burying a new
-    one, and the cost of one is that it is silent. mark-offset is the class where
-    that silence costs something: it is a shape rather than a string, so it
-    covers cases nobody has seen, and the only thing about it that is not checked
-    is how far the mark went.
-    """
-    if not _masked_mark_offsets:
-        return
-    lo, hi = min(_masked_mark_offsets), max(_masked_mark_offsets)
-    outside = [d for d in _masked_mark_offsets
-               if not ADJUDICATED_MIN <= d <= ADJUDICATED_MAX]
-    print(f"mark-offset masked {len(_masked_mark_offsets)} differences, "
-          f"x from {lo} to {hi}")
-    if outside:
-        print(f"  {len(outside)} of them outside the adjudicated "
-              f"{ADJUDICATED_MIN}..{ADJUDICATED_MAX}: {sorted(set(outside))}")
-        print("  those are cases nobody has taken to CoreText; see classify")
-
-
-def _fields(line):
-    """One shaped line as (glyph, advance, x offset, y offset) per glyph.
-
-    shapetext and shape_harfbuzz both drop the offsets when they are zero, so
-    the short form and the long one have to come back the same shape or the
-    comparison above would call an absent offset different from a zero one.
-    """
-    out = []
-    for f in line.split():
-        p = f.split(",")
-        out.append((int(p[0]), int(p[1]),
-                    int(p[2]) if len(p) > 2 else 0,
-                    int(p[3]) if len(p) > 3 else 0))
-    return out
 
 
 def _shaping_imports():
@@ -371,44 +243,20 @@ def minimise(font_path, face, text):
 SELF_TEST_CASES = [
     ("identical runs are not a difference at all",
      "x", "1,500 2,0", "1,500 2,0", None),
-    ("a mark a few units to one side, which is the class",
-     "x", "1,500 2,0", "1,500 2,0,5,0", "mark-offset"),
-    ("and a long way to the other, which is still the class",
-     "x", "1,500 2,0,100,0", "1,500 2,0,-569,0", "mark-offset"),
-    ("a mark that also moved in y is not this",
-     "x", "1,500 2,0", "1,500 2,0,5,5", None),
-    ("a glyph with an advance is not a mark",
-     "x", "1,500 2,300", "1,500 2,300,5,0", None),
-    ("the first glyph has nothing in front to attach to",
-     "x", "1,0 2,500", "1,0,5,0 2,500", None),
-    ("two glyphs moved is two differences, not this one",
-     "x", "1,500 2,0 3,0", "1,500 2,0,5,0 3,0,5,0", None),
-    ("a different glyph is a different answer",
-     "x", "1,500 2,0", "1,500 3,0", None),
-    ("a different advance is a different answer",
-     "x", "1,500 2,0", "1,500 2,10", None),
-    ("a run of a different length is not comparable this way",
-     "x", "1,500 2,0", "1,500", None),
-    ("the Tibetan string pinned in the corpus, by name",
-     "\u0F52\u0F8F\u0FAD\u0F91\u0F73\u0F37", "1,500", "1,400", "five-units-of-x"),
     ("a string holding U+061C, by name",
      "a\u061Cb", "1,500", "1,400", "invisible-character-with-a-width"),
-    # The four a four-minute run turns up, written as they came out. Two are
-    # inside the range that was adjudicated and two are not, which is what
-    # report_masked is for — six mark-offset cases in this table, three of them
-    # outside it.
+    # What the mark-offset class used to hide, which is a difference now and
+    # has to be reported: a mark a few units to one side, a long way to the
+    # other, and the Tibetan string that was pinned by name.
+    ("a mark a few units to one side",
+     "x", "1,500 2,0", "1,500 2,0,5,0", None),
+    ("and a long way to the other",
+     "x", "1,500 2,0,100,0", "1,500 2,0,-569,0", None),
+    ("the Tibetan string once pinned in the corpus",
+     "\u0F52\u0F8F\u0FAD\u0F91\u0F73\u0F37", "1,500", "1,400", None),
     ("a Tibetan mark carried -669",
      "x", "55,620 1837,0,-669,110 1324,0,585,-269",
-     "55,620 1837,0,-669,110 1324,0,-84,-269", "mark-offset"),
-    ("one carried -557",
-     "x", "1212,704 1529,0,-557,-873 1324,0,394,-300",
-     "1212,704 1529,0,-557,-873 1324,0,-163,-300", "mark-offset"),
-    ("one carried +42",
-     "x", "146,595 1736,0,-583,-53 1634,0,-561,-749 1322,0,-127,-25",
-     "146,595 1736,0,-583,-53 1634,0,-561,-749 1322,0,-85,-25", "mark-offset"),
-    ("and one carried +185, where the glyph in front of it sits at zero",
-     "x", "54,710 1269,380 1767,0 1421,0,185,-480 1347,0 1321,0,631,-29",
-     "54,710 1269,380 1767,0 1421,0,185,-480 1347,0 1321,0,816,-29", "mark-offset"),
+     "55,620 1837,0,-669,110 1324,0,-84,-269", None),
 ]
 
 
@@ -430,18 +278,7 @@ def self_test():
     if bad:
         print(f"{bad} of {len(SELF_TEST_CASES)} cases wrong", file=sys.stderr)
         return 1
-    # And the counting the report rests on: six of the cases above are
-    # mark-offset differences and three of those are outside the adjudicated
-    # range, so a class that had stopped counting would say so here.
-    masked = len(_masked_mark_offsets)
-    outside = [d for d in _masked_mark_offsets
-               if not ADJUDICATED_MIN <= d <= ADJUDICATED_MAX]
-    if masked != 6 or len(outside) != 3:
-        print(f"the class masked {masked} differences with {len(outside)} "
-              f"outside the adjudicated range, want 6 and 3", file=sys.stderr)
-        return 1
     print(f"{len(SELF_TEST_CASES)} classifier cases pass")
-    report_masked()
     return 0
 
 
@@ -511,7 +348,6 @@ def main():
         print(f"\n{name}: {cps}")
         print(f"   pdf0     {a}")
         print(f"   harfbuzz {b}")
-    report_masked()
     return 1 if found else 0
 
 

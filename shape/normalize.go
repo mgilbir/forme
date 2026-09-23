@@ -138,6 +138,17 @@ func isCombiningMark(r rune) bool {
 	return mark
 }
 
+// isNonSpacingMark reports whether a character is of general category Mn: a
+// combining mark that takes no room of its own. A spacing mark (Mc) and an
+// enclosing one (Me) are combining marks and not these.
+func isNonSpacingMark(r rune) bool {
+	if r < charClasses[0].lo || r > charClasses[len(charClasses)-1].hi {
+		return false
+	}
+	i := sort.Search(len(charClasses), func(i int) bool { return charClasses[i].hi >= r })
+	return i < len(charClasses) && r >= charClasses[i].lo && charClasses[i].nonSpacing
+}
+
 // reorderClasses permutes the combining classes whose numeric order is not the
 // order the marks are drawn in.
 //
@@ -470,8 +481,19 @@ func (n *normalizer) emit(r rune, cluster int) {
 }
 
 // decomposeRound is the first round: every character taken apart as far as the
-// face can draw the pieces. It reports whether the run turned out to be nothing
-// but simple clusters, in which case there is no ordering or composing to do.
+// face can draw the pieces. It reports whether the run is nothing but simple
+// clusters — no character in it after the first a combining mark — in which
+// case there is no ordering or composing to do.
+//
+// Whether it is simple is a question about the text, not about what came out,
+// and that is HarfBuzz's all_simple. On the syllabic path a character is taken
+// apart whether or not the face has it whole, so a run with no mark in it can
+// still come out decomposed: Balinese ᬈ as its letter and a tedung, Myanmar ဦ
+// as ဥ and its vowel sign, Devanagari ऩ as न and a nukta. HarfBuzz leaves
+// those decomposed — its third round never runs — and the font's own rules
+// ('nukt', 'ccmp') put back together what it means to. Composing them here
+// again drew the precomposed glyph where HarfBuzz draws the parts, at a
+// different width.
 func (n *normalizer) decomposeRound(runes []rune, offsets []int) bool {
 	allSimple := true
 	i := 0
@@ -487,17 +509,8 @@ func (n *normalizer) decomposeRound(runes []rune, offsets []int) bool {
 		if end < len(runes) {
 			end--
 		}
-		// Whether this stretch was left alone is a question about what came
-		// out, not about what went in. A composed character standing on its own
-		// carries no mark, so the input says "simple" — but on the syllabic path
-		// it is taken apart regardless, and returning early then would hand back
-		// a decomposition that rounds two and three never saw.
-		before, from := len(n.out), i
 		for i < end {
 			i = n.step(runes, offsets, i, n.shortest)
-		}
-		if len(n.out)-before != i-from {
-			allSimple = false
 		}
 		if i == len(runes) {
 			break

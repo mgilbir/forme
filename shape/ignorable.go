@@ -281,6 +281,24 @@ func (sh shaper) stepsOverJoiner(at int, context bool) bool {
 // to no glyph at all, and a pass that deleted every glyph with that index would
 // delete the spaces of the text along with the joiners.
 func dropGlyphs(buf []Glyph, drop func(i int) bool) []Glyph {
+	return dropGlyphsIf(buf, drop)
+}
+
+// dropUnsubstituted is what a syllabic shaper does with the characters nothing
+// is drawn for once the font's rules have run: takes out the ones hidden says
+// are such characters — unless a substitution touched the glyph.
+//
+// A font may give one a shape. Noto Sans Mongolian substitutes the vowel
+// separator U+180E with a narrow or a wide space before a final A or E, and
+// the gap is what the font is for there; HarfBuzz keeps any such glyph a
+// lookup replaced, and hides only the ones left as the character's own
+// (_hb_glyph_info_is_default_ignorable, which is false once substituted).
+// Taking them all out closed the gap.
+func dropUnsubstituted(buf []Glyph, hidden func(i int) bool) []Glyph {
+	return dropGlyphsIf(buf, func(i int) bool { return hidden(i) && !buf[i].substituted })
+}
+
+func dropGlyphsIf(buf []Glyph, drop func(i int) bool) []Glyph {
 	n := 0
 	for i := range buf {
 		if drop(i) {

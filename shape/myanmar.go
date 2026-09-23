@@ -242,7 +242,7 @@ func (sh shaper) shapeMyanmar(buf []Glyph, runes []rune, p *plan) []Glyph {
 		buf, _, _ = sh.applyLookups(buf, p.stage(s), 0, len(buf), 0, len(buf), hooks)
 	}
 
-	return dropGlyphs(buf, func(i int) bool {
+	return dropUnsubstituted(buf, func(i int) bool {
 		return i < len(info) && (indicIsJoiner(info[i].cat) || info[i].ignorable)
 	})
 }

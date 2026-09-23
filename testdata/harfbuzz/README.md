@@ -154,12 +154,16 @@ The right oracle for it is Unicode's own `BidiTest.txt` and
 `BidiCharacterTest.txt`, which `bidi/conformance_test.go` runs in full;
 `corpus.py` therefore leaves the right-to-left forcing controls out.
 
-**Two cases that differ on purpose**, listed with their reasons in
-`deliberateDifferences` in `shape/harfbuzz_test.go`: one Arabic string and one
-Tibetan one, each adjudicated by asking CoreText as a third opinion and each
-described where it is listed. The list is checked in both directions — an entry
-that starts agreeing fails, and so does one that is not in the corpus — so it
-cannot go stale.
+**One case that differs on purpose**, listed with its reason in
+`deliberateDifferences` in `shape/harfbuzz_test.go`: an Arabic string,
+adjudicated by asking CoreText as a third opinion and described where it is
+listed. The list is checked in both directions — an entry that starts agreeing
+fails, and so does one that is not in the corpus — so it cannot go stale.
+
+There was a Tibetan one as well: a mark whose target a later lookup moved,
+which HarfBuzz follows along the line and not across it. That is HarfBuzz's
+model rather than an accident of it, positioning now follows it, and the
+string agrees.
 
 It used to say thirteen, all in the Latin corpus and all the same thing: a
 character nothing is drawn for, written between a consonant and its virama,
@@ -285,28 +289,26 @@ on the one before it and HarfBuzz leaves it on the base. The smallest case is
 
 ## What is left
 
-Nothing that is not already named. A run of 818,800 strings over the nine fonts,
-at seed 7 on 2026-09-07, reports one difference: `U+0F67 U+0FAC U+0FB9 U+0F77`,
-where two Tibetan marks each sit 42 units further left here than in HarfBuzz. It
-is the mark-carrying shape the `mark-offset` class is about, in its two-glyph
-form, which the class does not cover — see `classify` in `difffuzz.py`, which
-also prints how far the marks it *did* mask were carried.
+Nothing that is not already named. A run of 966,000 strings over the nine fonts,
+at seed 2 on 2026-09-23, reports none, and neither do two million more with the
+known classes unmasked.
 
-The two adjudicated cases are:
+The one adjudicated case is **an invisible character the font gave a width,
+Arabic.** `U+063D U+061C U+0655` puts the mark at 250 against HarfBuzz's 850,
+and is not a defect: CoreText was asked and closes the gap as this package does.
+Noto Sans Arabic gives U+061C a glyph 600 units wide; HarfBuzz carries it through
+positioning and deletes it at the end, keeping the hole. Pinned in the corpus
+and listed in `deliberateDifferences`.
 
-**Five units of x, Tibetan.** Not a defect: CoreText was asked and places the
-mark where this package places it. Absolute positions are 427 for this package,
-427 for CoreText and 422 for HarfBuzz — see testdata/coretext. Pinned in the
-corpus and listed in `deliberateDifferences`; the fuzzer names only the exact
-string, so any other Tibetan case it reports is a different question wearing the
-same shape.
-
-**An invisible character the font gave a width, Arabic.** `U+063D U+061C U+0655`
-puts the mark at 250 against HarfBuzz's 850, and is not a defect either:
-CoreText was asked and closes the gap as this package does. Noto Sans Arabic
-gives U+061C a glyph 600 units wide; HarfBuzz carries it through positioning and
-deletes it at the end, keeping the hole. Pinned in the corpus and listed in
-`deliberateDifferences`.
+There were two more, and they were one mechanism. **Five units of x, Tibetan**,
+pinned in the corpus, and the `mark-offset` class the fuzzer masked, with the
+Tibetan `U+0F67 U+0FAC U+0FB9 U+0F77` it could not mask because two marks moved:
+a mark attached by one lookup whose target a later lookup moves, which HarfBuzz
+follows along the line and not across it. CoreText follows neither axis, and
+the case was listed as HarfBuzz's asymmetry. It is HarfBuzz's model — the cross
+axis settled when the mark is attached, the main axis carried to the end — and
+fonts are tested against it; positioning follows it now (`attachMarks` in
+`shape/position.go`), and with the class unmasked the fuzzer finds none left.
 
 The mark-stacking class this section used to end on — 334 differences over
 644,400 strings, and the pre-base vowel pair `U+091B U+094E U+093F` — is closed:
