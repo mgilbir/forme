@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/html"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -352,38 +353,21 @@ func spanValue(b *Box, name string, limit int) int {
 	return n
 }
 
-// leadingNonNegative is HTML's "rules for parsing non-negative integers": an
-// optional plus, then the digits at the front, and whatever follows them is not
-// this value's business.
+// leadingNonNegative is HTML's "rules for parsing non-negative integers", which
+// html.ParseNonNegativeInteger is: the digits at the front, and whatever
+// follows them is not this value's business. A value with no digits at all, or
+// one below zero, is refused.
 //
-// It stops at the first non-digit rather than refusing the string, which is the
-// whole difference from strconv.Atoi. A value with no digits at all, or one that
-// begins with a minus, is not a non-negative integer and is refused.
+// Past maxSpanValue a span is past every caller's own limit, so it is answered
+// as that.
 func leadingNonNegative(s string) (int, bool) {
-	if strings.HasPrefix(s, "+") {
-		s = s[1:]
-	}
-	n, digits := 0, 0
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c < '0' || c > '9' {
-			break
-		}
-		digits++
-		n = n*10 + int(c-'0')
-		if n > maxSpanValue {
-			// Past anything a table can use, and past anything the caller's
-			// limit will keep — so the digits after this one cannot change the
-			// answer and are not read, which is what stops a thousand-digit
-			// attribute from being arithmetic.
-			return maxSpanValue, true
-		}
-	}
-	return n, digits > 0
+	n, ok := html.ParseNonNegativeInteger(s)
+	return min(n, maxSpanValue), ok
 }
 
-// maxSpanValue is where reading a span's digits stops. Every caller clamps to
-// its own limit below this; what this bounds is the arithmetic.
+// maxSpanValue is the largest span leadingNonNegative answers. Every caller
+// clamps to its own limit below this; the arithmetic of reading the digits is
+// bounded by html.MaxInteger.
 const maxSpanValue = 1 << 20
 
 // spanAttr reads a <col> or <colgroup> span, which is at least one.

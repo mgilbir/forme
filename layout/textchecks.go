@@ -45,7 +45,10 @@ func (l *layouter) ReportOverflow(item inlineItem, width style.Unit) {
 		Message: what + " is " +
 			fmtPx(item.Width) + " wide and cannot be broken, in a space " +
 			fmtPx(width) + " wide" + l.overflowFate(heldBox(item.Box)),
-		Path: PathOf(heldBox(item.Box).Element),
+		// The element the content is in: a run of text has no element of its
+		// own, and pointing at none left the finding with no place at all.
+		Source: sourceOf(boxElement(heldBox(item.Box))),
+		Path:   PathOf(boxElement(heldBox(item.Box))),
 	})
 }
 
@@ -161,7 +164,8 @@ func (l *layouter) reportWordBreak(b *Box, value string) {
 		Property: "word-break",
 		Message: value + " was read as normal, so a line may break where the " +
 			"value asked it not to",
-		Path: PathOf(b.Element),
+		Source: sourceOf(b.Element),
+		Path:   PathOf(b.Element),
 	})
 }
 
@@ -190,7 +194,8 @@ func (l *layouter) reportTextJustify(b *Box, value string) {
 		Property: "text-justify",
 		Message: value + " was read as auto, so the line was stretched between " +
 			"its words rather than in the way the value asked for",
-		Path: PathOf(b.Element),
+		Source: sourceOf(b.Element),
+		Path:   PathOf(b.Element),
 	})
 }
 
@@ -212,6 +217,7 @@ func (l *layouter) checkScript(b *Box) {
 			l.rec.ReportDetail(Finding{
 				Rule:    RuleUnsupportedScript,
 				Message: script,
+				Source:  sourceOf(b.Element),
 				Path:    PathOf(b.Element),
 			})
 			return
@@ -291,7 +297,8 @@ func (l *layouter) checkGlyphs(b *Box, face *shape.Face, text string) {
 			Rule: RuleGlyphMissing,
 			Message: "the face " + quoteValue(face.Name()) + " has no glyph for " +
 				describeRune(r) + ", " + missingGlyphFate(face),
-			Path: PathOf(b.Element),
+			Source: sourceOf(b.Element),
+			Path:   PathOf(b.Element),
 		})
 	}
 }
@@ -378,7 +385,8 @@ func (l *layouter) reportHyphens(b *Box, value string) {
 		Property: "hyphens",
 		Message: value + " was read as manual, so a word is broken only where a " +
 			"soft hyphen asks and never where a dictionary would",
-		Path: PathOf(b.Element),
+		Source: sourceOf(b.Element),
+		Path:   PathOf(b.Element),
 	})
 }
 
@@ -422,6 +430,7 @@ func (l *layouter) reportKerning(b *Box, face *shape.Face) {
 		Rule:     RuleUnsupportedValue,
 		Property: "font-feature-settings",
 		Message:  "font-feature-settings " + quoteValue(value) + " " + why,
+		Source:   sourceOf(boxElement(b)),
 		Path:     PathOf(boxElement(b)),
 	})
 }
@@ -484,7 +493,8 @@ func (l *layouter) reportCaps(b *Box, face *shape.Face, text string) {
 			Message: quoteValue(unhandled) + " is not a value of font-variant-caps " +
 				"this engine reads; the text was set in the letters it is " +
 				"written with",
-			Path: PathOf(boxElement(b)),
+			Source: sourceOf(boxElement(b)),
+			Path:   PathOf(boxElement(b)),
 		})
 		return
 	}
@@ -514,7 +524,8 @@ func (l *layouter) reportCaps(b *Box, face *shape.Face, text string) {
 				capsMadeHere(missing, use) + " were made out of the letters at " +
 				strconv.FormatFloat(smallCapScale(face), 'g', 3, 64) +
 				" of the size, and the page carries them as uppercase text",
-			Path: PathOf(boxElement(b)),
+			Source: sourceOf(boxElement(b)),
+			Path:   PathOf(boxElement(b)),
 		})
 		return
 	}
@@ -539,7 +550,8 @@ func (l *layouter) reportCaps(b *Box, face *shape.Face, text string) {
 			" declares no " + strings.Join(missing, " or ") + ", so " + came +
 			", because this engine uses the capitals a face draws and does not " +
 			"make them out of the letters at a smaller size",
-		Path: PathOf(boxElement(b)),
+		Source: sourceOf(boxElement(b)),
+		Path:   PathOf(boxElement(b)),
 	})
 }
 
@@ -695,7 +707,8 @@ func (l *layouter) reportNumeric(b *Box, face *shape.Face, text string) {
 			Message: quoteValue(unhandled) + " is not a value of " +
 				"font-variant-numeric this engine reads; the figures were set " +
 				"as the face draws them",
-			Path: PathOf(boxElement(b)),
+			Source: sourceOf(boxElement(b)),
+			Path:   PathOf(boxElement(b)),
 		})
 		return
 	}
@@ -722,7 +735,8 @@ func (l *layouter) reportNumeric(b *Box, face *shape.Face, text string) {
 				" declares no " + strings.Join(missing, " or ") + ", and this engine " +
 				"does not draw a figure a designer did not — so that much of the " +
 				"text was set in the figures the face has",
-			Path: PathOf(boxElement(b)),
+			Source: sourceOf(boxElement(b)),
+			Path:   PathOf(boxElement(b)),
 		})
 }
 
@@ -815,7 +829,8 @@ func (l *layouter) reportEastAsian(b *Box, face *shape.Face, text string) {
 			Message: quoteValue(unhandled) + " is not a value of " +
 				"font-variant-east-asian this engine reads; the text was set in " +
 				"the forms the face draws",
-			Path: PathOf(boxElement(b)),
+			Source: sourceOf(boxElement(b)),
+			Path:   PathOf(boxElement(b)),
 		})
 		return
 	}
@@ -843,7 +858,8 @@ func (l *layouter) reportEastAsian(b *Box, face *shape.Face, text string) {
 				" declares no " + strings.Join(missing, " or ") + ", and this engine " +
 				"does not draw a form a designer did not — so that much of the " +
 				"text was set in the forms the face has",
-			Path: PathOf(boxElement(b)),
+			Source: sourceOf(boxElement(b)),
+			Path:   PathOf(boxElement(b)),
 		})
 }
 
@@ -924,7 +940,8 @@ func (l *layouter) reportPosition(b *Box, face *shape.Face, text string) {
 			Message: quoteValue(unhandled) + " is not a value of " +
 				"font-variant-position this engine reads; the text was set on " +
 				"the baseline",
-			Path: PathOf(boxElement(b)),
+			Source: sourceOf(boxElement(b)),
+			Path:   PathOf(boxElement(b)),
 		})
 		return
 	}
@@ -946,7 +963,8 @@ func (l *layouter) reportPosition(b *Box, face *shape.Face, text string) {
 			" declares no " + tag + "; the text was set on the baseline at the " +
 			"size it is written, because this engine uses the raised and lowered " +
 			"forms a face draws and does not make them out of the ordinary ones",
-		Path: PathOf(boxElement(b)),
+		Source: sourceOf(boxElement(b)),
+		Path:   PathOf(boxElement(b)),
 	})
 }
 
@@ -1030,7 +1048,8 @@ func (l *layouter) reportAutospace(b *Box, value string) {
 		Message: quoteValue(value) + " in text-autospace was not applied; the " +
 			"spacing between an ideograph and a letter or a number is inserted " +
 			"and the rest of the property is not",
-		Path: PathOf(b.Element),
+		Source: sourceOf(b.Element),
+		Path:   PathOf(b.Element),
 	})
 }
 
@@ -1184,6 +1203,7 @@ func (l *layouter) reportSpacingTrim(b *Box, value string) {
 		Message: "text-spacing-trim " + quoteValue(value) + " was not applied at the " +
 			"start of a line, so a full-width opening bracket keeps the half em " +
 			"of blank in front of it",
-		Path: PathOf(b.Element),
+		Source: sourceOf(b.Element),
+		Path:   PathOf(b.Element),
 	})
 }

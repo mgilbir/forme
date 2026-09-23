@@ -60,9 +60,16 @@ import (
 // make safe. The same is true of a Recorder: one render's is its own.
 //
 // It is deliberately not an io.Reader factory or a URL fetcher. A resolver is
-// handed the reference exactly as the document wrote it and returns the whole
-// resource or an error. Returning an error is normal: a missing image is a
-// finding, not a failure of the render.
+// handed a reference relative to the document and returns the whole resource
+// or an error. Returning an error is normal: a missing image is a finding, not
+// a failure of the render.
+//
+// Relative to the document, because that is the one base a resolver can know.
+// A reference written in the markup is handed over as written. One written in
+// a stylesheet is relative to that stylesheet (CSS Values 4 §4.5.1), and is
+// resolved against the sheet's name first — "url(f.ttf)" in "css/a.css" is
+// handed over as "css/f.ttf" — which is why Stylesheet.Name is a path. Either
+// way it is read the way the URL standard reads a reference first; see below.
 //
 // # What the engine has already refused, and what it has not
 //
@@ -90,7 +97,7 @@ import (
 // every URL parser there is, so it is refused as that, and a resolver is handed
 // what the standard reads — see referenceText.
 //
-// Everything else arrives as written. In particular a resolver **is** handed
+// Everything else arrives. In particular a resolver **is** handed
 // "/etc/passwd" and "../../secrets/id_rsa" when a document writes them, because
 // neither is refusable here without refusing an ordinary document: "/css/x.png"
 // is a reference to the root of wherever the document is served from, and
@@ -154,7 +161,7 @@ type DirResolver struct {
 func NewDirResolver(dir string) (*DirResolver, error) {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
-		return nil, fmt.Errorf("render: rooting a resource resolver at %s: %w", dir, err)
+		return nil, fmt.Errorf("layout: rooting a resource resolver at %s: %w", dir, err)
 	}
 	return &DirResolver{root: root, max: maxResourceBytes}, nil
 }
@@ -206,14 +213,14 @@ func (d *DirResolver) Resolve(ref string) ([]byte, error) {
 		// resolver rooted at /dev would produce bytes for ever, and reading a
 		// fifo would block the render until something wrote to it — neither is
 		// a file the cap below can save us from, because neither has a size.
-		return nil, fmt.Errorf("render: %s is not a regular file", name)
+		return nil, fmt.Errorf("%s is not a regular file", name)
 	}
 	max := d.max
 	if max <= 0 {
 		max = maxResourceBytes
 	}
 	if info.Size() > max {
-		return nil, fmt.Errorf("render: %s is %d bytes, larger than the %d this engine will read",
+		return nil, fmt.Errorf("%s is %d bytes, larger than the %d this engine will read",
 			name, info.Size(), max)
 	}
 
@@ -226,7 +233,7 @@ func (d *DirResolver) Resolve(ref string) ([]byte, error) {
 		return nil, err
 	}
 	if int64(len(data)) > max {
-		return nil, fmt.Errorf("render: %s is larger than the %d bytes this engine will read", name, max)
+		return nil, fmt.Errorf("%s is larger than the %d bytes this engine will read", name, max)
 	}
 	return data, nil
 }
@@ -259,30 +266,30 @@ func (d *DirResolver) Resolve(ref string) ([]byte, error) {
 func resourcePath(ref string) (string, error) {
 	ref = referenceText(ref)
 	if ref == "" {
-		return "", errors.New("render: the reference is empty")
+		return "", errors.New("the reference is empty")
 	}
 	if scheme, ok := schemeOf(ref); ok {
-		return "", fmt.Errorf("render: %q names the %q scheme; this engine resolves no URLs", ref, scheme)
+		return "", fmt.Errorf("%q names the %q scheme; this engine resolves no URLs", ref, scheme)
 	}
 	if namesAHost(ref) {
-		return "", fmt.Errorf("render: %q names a host; this engine resolves no URLs", ref)
+		return "", fmt.Errorf("%q names a host; this engine resolves no URLs", ref)
 	}
 	if i := strings.IndexAny(ref, "?#"); i >= 0 {
 		ref = ref[:i]
 	}
 	if ref == "" {
-		return "", errors.New("render: the reference has no path")
+		return "", errors.New("the reference has no path")
 	}
 	ref = percentDecode(ref)
 
 	if strings.HasPrefix(ref, "/") || strings.HasPrefix(ref, `\`) {
-		return "", fmt.Errorf("render: %q is an absolute path; a document may only refer to its own directory", ref)
+		return "", fmt.Errorf("%q is an absolute path; a document may only refer to its own directory", ref)
 	}
 	// Both separators, because a document written on Windows uses the other one
 	// and the check must not depend on which platform is reading it.
 	for _, part := range strings.FieldsFunc(ref, func(r rune) bool { return r == '/' || r == '\\' }) {
 		if part == ".." {
-			return "", fmt.Errorf("render: %q leaves the directory it may read from", ref)
+			return "", fmt.Errorf("%q leaves the directory it may read from", ref)
 		}
 	}
 	return ref, nil

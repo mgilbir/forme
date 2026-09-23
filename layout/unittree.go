@@ -252,17 +252,27 @@ func unitRemove[T unitKeyed](n *unitNode[T], k style.Unit) (*unitNode[T], bool) 
 			return n.left, true
 		}
 		// Two children: the in-order successor takes this node's place and is
-		// then removed from where it was. It is the smallest key in the right
-		// subtree, so exactly one node there holds it and this recursion ends.
-		next := n.right
-		for next.left != nil {
-			next = next.left
-		}
-		n.item = next.item
-		n.right, _ = unitRemove(n.right, next.item.unitKey())
+		// taken out of where it was — that node, the leftmost of the right
+		// subtree, and no other. It used to be removed by its key, which is not
+		// the same thing when keys repeat: the first node holding that key on
+		// the way down may be another one, whose item was then lost while the
+		// successor's was kept twice. The items two floats leave at one y are
+		// identical today, which is the only reason that was harmless.
+		n.right, n.item = unitRemoveMin(n.right)
 	}
 	if !removed {
 		return n, false
 	}
 	return unitRebalance(n), true
+}
+
+// unitRemoveMin takes out the leftmost node of a non-empty subtree, and returns
+// what is left and the item it held.
+func unitRemoveMin[T unitKeyed](n *unitNode[T]) (*unitNode[T], T) {
+	if n.left == nil {
+		return n.right, n.item
+	}
+	var item T
+	n.left, item = unitRemoveMin(n.left)
+	return unitRebalance(n), item
 }

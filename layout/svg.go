@@ -275,10 +275,13 @@ func (l svgLen) resolve(extent float64) float64 {
 // <defs> all can. There is no safe default, so there is none.
 func svgReduce(data []byte) (root xml.StartElement, rects []svgRect, ok bool) {
 	dec := xml.NewDecoder(strings.NewReader(string(data)))
-	// The decoder resolves no external entities, which is where an XML parser
-	// usually becomes an attack. What it does not bound is *internal* entity
-	// expansion, so maxSVGBytes above is what stands between this and a billion
-	// laughs — a small file cannot declare a large one here.
+	// No entity a document declares is expanded, internal or external:
+	// encoding/xml reads a DTD as an opaque directive and knows only the
+	// entities in dec.Entity, which is HTML's fixed table. So a billion laughs
+	// has nothing to multiply here: a reference to a declared entity is left as
+	// the characters it is written in, and in an attribute this reads it is a
+	// value it cannot read, so the picture is refused. maxSVGBytes and
+	// maxSVGElements bound what the file itself costs to read.
 	dec.Strict = false
 	dec.AutoClose = xml.HTMLAutoClose
 	dec.Entity = xml.HTMLEntity

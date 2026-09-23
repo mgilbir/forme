@@ -2285,6 +2285,7 @@ func (b *boxBuilder) reportPhraseSeparators(n *html.Node, text string,
 			"phrase model for the language, and there is none here for this one, " +
 			"so only the marks the document did write are expanded",
 		Property: "word-space-transform",
+		Source:   sourceOf(n),
 		Path:     PathOf(n),
 	})
 }

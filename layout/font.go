@@ -180,14 +180,6 @@ func standardName(base string, bold, italic bool) string {
 	}
 }
 
-// fontFor picks the face a box's text is set in, following its font-family list
-// and reporting a substitution.
-//
-// The list is tried in order, which is what a font stack is for. When none of
-// the named families is available the last resort is the set's sans-serif, and
-// *that* is reported: a document set in a face its author did not choose has
-// different metrics and different line breaks, and nothing about the resulting
-// page says so.
 // faceForStyle is fontFor without a layouter: the first family in a computed
 // style that a set has, and nil when it has none of them.
 //
@@ -209,6 +201,15 @@ func faceForStyle(fonts FontSet, cs style.ComputedStyle) *shape.Face {
 	return nil
 }
 
+// fontFor picks the face a box's text is set in, following its font-family list
+// and reporting a substitution.
+//
+// The list is tried in order, which is what a font stack is for. When none of
+// the named families is available the last resort is the set's face for
+// font-family's initial value — initialFamily, "serif" — and *that* is
+// reported: a document set in a face its author did not choose has different
+// metrics and different line breaks, and nothing about the resulting page says
+// so.
 func (l *layouter) fontFor(b *Box) (*shape.Face, bool) {
 	key := fontKey{
 		families: b.Style.Get("font-family"),
@@ -264,6 +265,7 @@ func (l *layouter) fontFor(b *Box) (*shape.Face, bool) {
 	if len(families) > 0 {
 		l.rec.ReportDetail(Finding{
 			Rule:     RuleFontFallback,
+			Source:   sourceOf(boxElement(b)),
 			Message:  "no face was available for " + quoteValue(key.families) + ", so a default was used; the metrics and the line breaks will differ",
 			Property: "font-family",
 		})

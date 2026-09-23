@@ -190,6 +190,7 @@ func (l *layouter) reportAspectRatio(b *Box, why string) {
 		Rule:     RuleUnsupportedValue,
 		Property: "aspect-ratio",
 		Message:  "aspect-ratio " + why,
+		Source:   sourceOf(boxElement(b)),
 		Path:     PathOf(boxElement(b)),
 	})
 }

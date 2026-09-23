@@ -334,6 +334,7 @@ func (l *layouter) flushSubstitutions() {
 			Message: "no face for " + quoteValue(families) +
 				" has a glyph for any of this text, so " + quoteValue(got.alt.Name()) +
 				" set it; the metrics and the line breaks are that face's",
+			Source:   sourceOf(boxElement(got.at)),
 			Path:     PathOf(boxElement(got.at)),
 			Property: "font-family",
 		})

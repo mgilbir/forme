@@ -678,12 +678,13 @@ func (l *sheetLoader) expandImports(s authorSheet) []authorSheet {
 		if !l.importMedia(media, ref, r.Offset, s.name) {
 			continue
 		}
-		if src, ok := l.fetchImport(ref, s.name); ok {
+		at := Source{HTMLOffset: -1, CSSOffset: r.Offset, Sheet: s.name}
+		if src, ok := l.fetchImport(ref, s.name, at); ok {
 			next := authorSheet{name: sheetName(resolveAgainstSheet(ref, s.name)), source: src}
 			if why := l.cycle(next.name); why != "" {
 				l.rec.ReportDetail(Finding{
 					Rule:    RuleInvalidCSS,
-					Source:  Source{HTMLOffset: -1, CSSOffset: r.Offset, Sheet: s.name},
+					Source:  at,
 					Message: why,
 				})
 				continue
@@ -806,7 +807,9 @@ func (l *sheetLoader) importMedia(media []css.ComponentValue, ref string, offset
 // names "base.css", and resolving it against the document instead would name a
 // file beside the document that is not there. A <style> element has no name and
 // its imports are relative to the document, which is what an empty from means.
-func (l *sheetLoader) fetchImport(ref, from string) (string, bool) {
+// at is where the @import was written, which is where a finding about it
+// points.
+func (l *sheetLoader) fetchImport(ref, from string, at Source) (string, bool) {
 	ref = resolveAgainstSheet(ref, from)
 	if l.failed[ref] {
 		// Already refused, and already reported. As with a <link> to the same
@@ -820,14 +823,14 @@ func (l *sheetLoader) fetchImport(ref, from string) (string, bool) {
 			return "", false
 		}
 		if why := l.charge(src); why != "" {
-			l.overTokens(ref, why, NoSource, "")
+			l.overTokens(ref, why, at, "")
 			return "", false
 		}
 		l.applied++
 		return src, true
 	}
 	if l.applied >= maxDocumentStylesheets {
-		l.overCapImport(ref)
+		l.overCapImport(ref, at)
 		return "", false
 	}
 	src, fail := l.fetch(ref)
@@ -835,6 +838,7 @@ func (l *sheetLoader) fetchImport(ref, from string) (string, bool) {
 		l.failed[ref] = true
 		l.rec.ReportDetail(Finding{
 			Rule:    fail.rule,
+			Source:  at,
 			Message: fail.message,
 		})
 		return "", false
@@ -844,7 +848,7 @@ func (l *sheetLoader) fetchImport(ref, from string) (string, bool) {
 	}
 	l.cache[ref] = src
 	if why := l.charge(src); why != "" {
-		l.overTokens(ref, why, NoSource, "")
+		l.overTokens(ref, why, at, "")
 		return "", false
 	}
 	l.applied++
@@ -1073,15 +1077,16 @@ func isImageSet(name string) bool {
 }
 
 // overCapImport reports the document-wide count tripping on an @import. It is
-// the same fact overCap reports for a <link> and is said the same way, without
-// an element to point at.
-func (l *sheetLoader) overCapImport(ref string) {
+// the same fact overCap reports for a <link> and is said the same way, pointing
+// at the @import rather than at an element.
+func (l *sheetLoader) overCapImport(ref string, at Source) {
 	if l.capped {
 		return
 	}
 	l.capped = true
 	l.rec.ReportDetail(Finding{
-		Rule: RuleLimit,
+		Rule:   RuleLimit,
+		Source: at,
 		Message: fmt.Sprintf("this document reached the limit of %d stylesheets; "+
 			"the @import of %s and any after it were not read",
 			maxDocumentStylesheets, quoteValue(ref)),

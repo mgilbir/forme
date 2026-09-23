@@ -2,6 +2,7 @@ package layout
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/mgilbir/forme/style"
 )
@@ -100,6 +101,17 @@ type Options struct {
 	MinFontSizePt float64
 	// AllowScaleUp lets an underfull page be enlarged to fill the sheet. It is
 	// off by default because it is surprising and it degrades images.
+	//
+	// Underfull is measured the way fitting is, by the far edge of everything
+	// the document laid out — and a block fills the width it is given, so an
+	// ordinary document, whose <html> and <body> are blocks, is exactly as
+	// wide as the page by construction and is never underfull across it. What
+	// this enlarges is a document that sizes its own root narrower than the
+	// page ("html { width: 90mm }", a label or a card laid out at its own
+	// size), and it enlarges that until the first axis meets the sheet. It does
+	// not lay a document out again narrower to find a width to enlarge from:
+	// that reflows the text, which is what §5's single geometric scale exists
+	// to avoid.
 	AllowScaleUp bool
 }
 
@@ -201,8 +213,15 @@ func Compose(in Input, opts Options) Composed {
 	// it: "@page { margin: 100mm }" on A5 left a content box of negative width,
 	// which came out as a scale of -1.60 and a finding saying the text would be
 	// set at minus nineteen points.
+	//
+	// Named as the page and not as the rule. The @page rules may have set the
+	// size and left the margins the caller's, or the other way about, so "the
+	// @page rule's left and right margins" blamed a rule for margins it never
+	// wrote: "@page { size: 1px }" on A4 was said to have margins it had
+	// inherited from Compose's own sheet.
 	var pageRefused []string
-	built.Page, pageRefused = checkPage(built.Page, "the @page rule's")
+	built.Page, pageRefused = checkPage(built.Page,
+		"the page the document's @page rules settled on has")
 	for _, why := range pageRefused {
 		rec.ReportDetail(Finding{Rule: RuleInvalidCSS, Message: why})
 	}
@@ -350,38 +369,57 @@ func checkOptions(opts Options) (Options, []string) {
 		opts.Page = A4
 	}
 	var pageWhy []string
-	opts.Page, pageWhy = checkPage(opts.Page, "the page passed to Compose's")
+	opts.Page, pageWhy = checkPage(opts.Page, "the page passed to Compose has")
 	why = append(why, pageWhy...)
 
-	switch {
-	case opts.MinScale == 0:
-		opts.MinScale = 0.5
-	case opts.MinScale < 0:
-		why = append(why, fmt.Sprintf(
-			"the minimum scale passed to Compose is %v, which no scale can be below, "+
-				"so the guard would never fire; %v was used", opts.MinScale, 0.5))
-		opts.MinScale = 0.5
-	case opts.MinScale > 1:
-		why = append(why, fmt.Sprintf(
-			"the minimum scale passed to Compose is %v, which no scale can reach, "+
-				"so every document would be refused; 1 was used", opts.MinScale))
-		opts.MinScale = 1
-	}
-	switch {
-	case opts.MinFontSizePt == 0:
-		opts.MinFontSizePt = 6
-	case opts.MinFontSizePt < 0:
-		why = append(why, fmt.Sprintf(
-			"the minimum font size passed to Compose is %vpt, which no size is below, "+
-				"so the guard would never fire; %vpt was used", opts.MinFontSizePt, 6.0))
-		opts.MinFontSizePt = 6
-	}
+	opts.MinScale = floatOption(opts.MinScale, "minimum scale", "",
+		"no scale can be below", "no scale can reach", 0.5, 1, &why)
+	opts.MinFontSizePt = floatOption(opts.MinFontSizePt, "minimum font size", "pt",
+		"no size is below", "", 6, math.Inf(1), &why)
 	return opts, why
 }
 
+// floatOption is one number in Options, checked the one way every such number
+// is: zero is the default, and a value is used only where it is finite and at
+// most max; anything else is replaced and the replacement said. max is the
+// largest value that can do anything but refuse every document, and is used
+// for one above it. what names the option and unit its unit, and below and
+// reach say, in the words that suit the quantity, why a value past either end
+// is no floor at all.
+//
+// Finite first, because a NaN answers false to every comparison — "MinScale:
+// NaN" passed "< 0" and "> 1" alike and then refused every document "past the
+// floor of NaN%", which is the very shape of mistake this function exists to
+// catch (audit C133). An infinity is as far past max as a number goes, but
+// replacing it with max would be taking it at its word, and nobody writes an
+// infinite floor meaning the largest finite one: it is refused like a NaN.
+func floatOption(v float64, what, unit, below, reach string, def, max float64,
+	why *[]string) float64 {
+	switch {
+	case v == 0:
+		return def
+	case math.IsNaN(v) || math.IsInf(v, 0):
+		*why = append(*why, fmt.Sprintf(
+			"the %s passed to Compose is %v%s, which is not a number any document "+
+				"can be measured against; %v%s was used", what, v, unit, def, unit))
+		return def
+	case v < 0:
+		*why = append(*why, fmt.Sprintf(
+			"the %s passed to Compose is %v%s, which %s, "+
+				"so the guard would never fire; %v%s was used", what, v, unit, below, def, unit))
+		return def
+	case v > max:
+		*why = append(*why, fmt.Sprintf(
+			"the %s passed to Compose is %v%s, which %s, "+
+				"so every document would be refused; %v%s was used", what, v, unit, reach, max, unit))
+		return max
+	}
+	return v
+}
+
 // checkPage replaces margins that leave no sheet to lay out on, and says what
-// it replaced. whose names where the geometry came from, since the same numbers
-// reach here from a caller and from an @page rule.
+// it replaced. whose names the page the geometry is of and ends in "has", since
+// the same numbers reach here from a caller and from a document's @page rules.
 //
 // A negative margin is not a smaller margin: it puts the content box outside
 // the paper, where nothing is printed. Margins wider than the sheet are the
@@ -398,21 +436,21 @@ func checkPage(page PageSize, whose string) (PageSize, []string) {
 		{"bottom", &page.Margin.Bottom}, {"left", &page.Margin.Left},
 	} {
 		if *side.at < 0 {
-			why = append(why, fmt.Sprintf("%s %s margin is %.1f px; a margin outside "+
+			why = append(why, fmt.Sprintf("%s a %s margin of %.1f px; a margin outside "+
 				"the paper prints nothing, so it was read as none",
 				whose, side.name, side.at.Px()))
 			*side.at = 0
 		}
 	}
 	if h := page.Margin.Horizontal(); page.Width > 0 && h >= page.Width {
-		why = append(why, fmt.Sprintf("%s left and right margins come to %.1f px on a "+
-			"sheet %.1f px wide, which leaves nothing to print in; they were dropped",
+		why = append(why, fmt.Sprintf("%s left and right margins that come to %.1f px on "+
+			"a sheet %.1f px wide, which leaves nothing to print in; they were dropped",
 			whose, h.Px(), page.Width.Px()))
 		page.Margin.Left, page.Margin.Right = 0, 0
 	}
 	if v := page.Margin.Vertical(); page.Height > 0 && v >= page.Height {
-		why = append(why, fmt.Sprintf("%s top and bottom margins come to %.1f px on a "+
-			"sheet %.1f px tall, which leaves nothing to print in; they were dropped",
+		why = append(why, fmt.Sprintf("%s top and bottom margins that come to %.1f px on "+
+			"a sheet %.1f px tall, which leaves nothing to print in; they were dropped",
 			whose, v.Px(), page.Height.Px()))
 		page.Margin.Top, page.Margin.Bottom = 0, 0
 	}
@@ -498,7 +536,8 @@ func checkFontSizes(rec *Recorder, root *Fragment, scale, floorPt float64) {
 						"text would be set at %.2fpt, below the floor of %.2fpt"+
 							" (%.2fpt before the page scaling of %.0f%%)",
 						effective, floorPt, run.Size.Pt(), scale*100),
-					Path: PathOf(boxElement(run.Box)),
+					Source: sourceOf(boxElement(run.Box)),
+					Path:   PathOf(boxElement(run.Box)),
 				})
 			}
 		}
@@ -513,7 +552,8 @@ func checkFontSizes(rec *Recorder, root *Fragment, scale, floorPt float64) {
 						"a list marker would be set at %.2fpt, below the floor of %.2fpt"+
 							" (%.2fpt before the page scaling of %.0f%%)",
 						effective, floorPt, m.Size.Pt(), scale*100),
-					Path: PathOf(boxElement(f.Box)),
+					Source: sourceOf(boxElement(f.Box)),
+					Path:   PathOf(boxElement(f.Box)),
 				})
 			}
 		}

@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"image"
-	"strconv"
 	"strings"
 
 	// The decoders. Registering them is what makes image.DecodeConfig able to
@@ -492,8 +491,21 @@ func (l *replacedLoader) fallbackTo(b *Box, fail *loadFailure, data string) {
 // unit tests or in the suite, so it is gone rather than kept as a second answer
 // to a question with one.
 func (l *replacedLoader) canvas(b *Box) {
-	w := canvasDimension(b.Element, "width", 300)
-	h := canvasDimension(b.Element, "height", 150)
+	w, wideOver := canvasDimensionRead(b.Element, "width", 300)
+	h, tallOver := canvasDimensionRead(b.Element, "height", 150)
+	if wideOver || tallOver {
+		// A bitmap larger than any length this engine can lay out. The value is
+		// the document's and it is a real one, so leaving it at the default
+		// has to be said: it used to be, silently, for any number over ten
+		// digits long.
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleLimit,
+			Source: AtHTML(b.Element.Offset),
+			Message: "this canvas states a size larger than any this engine can lay out; " +
+				"it was laid out at its default size",
+			Path: PathOf(b.Element),
+		})
+	}
 	content := &ReplacedContent{Width: w, Height: h, Stated: true}
 	if w > 0 && h > 0 {
 		// Only a bitmap with area has a ratio. A canvas may state a zero
@@ -613,44 +625,35 @@ func (l *replacedLoader) video(b *Box) {
 // white space is skipped, a leading plus is allowed, digits are collected, and
 // anything after them is ignored — so "10px" is ten. Anything that yields no
 // digits at all, or a negative, is not an error to report but a value the
-// attribute does not have, and the element takes its default.
-//
-// The digit bound is style.maxHintDigits' argument in a second place: the
-// attribute is untrusted text, ten digits is already four orders of magnitude
-// past any page, and a longer run of them is not a large canvas but a number
-// nobody meant.
+// attribute does not have, and the element takes its default. The rules are
+// html.ParseNonNegativeInteger, which every integer attribute is read by.
 func canvasDimension(n *html.Node, name string, fallback int) style.Unit {
-	def := mustPx(float64(fallback))
-	if n == nil {
-		return def
-	}
-	raw, ok := n.Attr(name)
-	if !ok {
-		return def
-	}
-	s := strings.TrimLeft(raw, " \t\n\f\r")
-	s = strings.TrimPrefix(s, "+")
-	digits := 0
-	for digits < len(s) && s[digits] >= '0' && s[digits] <= '9' {
-		digits++
-	}
-	if digits == 0 || digits > maxCanvasDigits {
-		return def
-	}
-	v, err := strconv.Atoi(s[:digits])
-	if err != nil {
-		return def
-	}
-	u, fits := style.FromPx(float64(v))
-	if !fits {
-		return def
-	}
+	u, _ := canvasDimensionRead(n, name, fallback)
 	return u
 }
 
-// maxCanvasDigits bounds the number a canvas dimension attribute may state, for
-// the reason style/hints.go's maxHintDigits gives about the same kind of text.
-const maxCanvasDigits = 10
+// canvasDimensionRead is canvasDimension, and whether the attribute stated a
+// size too large to lay out — which is a value, and one this engine cannot
+// hold, so the default stands and the caller says so.
+func canvasDimensionRead(n *html.Node, name string, fallback int) (style.Unit, bool) {
+	def := mustPx(float64(fallback))
+	if n == nil {
+		return def, false
+	}
+	raw, ok := n.Attr(name)
+	if !ok {
+		return def, false
+	}
+	v, ok := html.ParseNonNegativeInteger(raw)
+	if !ok {
+		return def, false
+	}
+	u, fits := style.FromPx(float64(v))
+	if !fits || v >= html.MaxInteger {
+		return def, true
+	}
+	return u, false
+}
 
 // markerImage loads the picture list-style-image names, for a box that draws a
 // marker.

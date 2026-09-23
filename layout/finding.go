@@ -29,6 +29,8 @@ import (
 	"io"
 	"sort"
 	"strings"
+
+	"github.com/mgilbir/forme/html"
 )
 
 // Rule identifies a guardrail.
@@ -415,6 +417,35 @@ type Source struct {
 // NoSource is a finding that is not tied to a place in the input.
 var NoSource = Source{HTMLOffset: -1, CSSOffset: -1}
 
+// placed is the source a finding is recorded and rendered with: s, unless s is
+// the zero Source, which is no place and is read as NoSource.
+//
+// The zero value says "byte nought of the markup and byte nought of a
+// stylesheet", which no finding is — a finding is in one input or in none —
+// and it is what a Finding literal written without a Source gets. A finding
+// about the whole document, which is in no file, is written without one and
+// means exactly that. There were
+// thirty of those: invalid options, the @page geometry, the scale and
+// font-size floors, a failed @import, the text checks. Each rendered as
+// "[html byte 0]" and sent an author to the top of the file for something
+// that was not there (audit C87). A finding really at the first byte of the
+// markup is AtHTML(0), whose CSS offset is -1, and is left where it is.
+func (s Source) placed() Source {
+	if s.HTMLOffset == 0 && s.CSSOffset == 0 {
+		return Source{HTMLOffset: -1, CSSOffset: -1, Sheet: s.Sheet}
+	}
+	return s
+}
+
+// sourceOf is where an element was written, or NoSource for none — the source
+// of a finding about a box, to go with PathOf's path.
+func sourceOf(n *html.Node) Source {
+	if n == nil {
+		return NoSource
+	}
+	return AtHTML(n.Offset)
+}
+
 // AtHTML and AtCSS build the two common cases.
 func AtHTML(offset int) Source { return Source{HTMLOffset: offset, CSSOffset: -1} }
 
@@ -462,14 +493,14 @@ func (f Finding) Error() string {
 	if f.Path != "" {
 		fmt.Fprintf(&b, " (at %s)", f.Path)
 	}
-	switch {
-	case f.Source.HTMLOffset >= 0:
-		fmt.Fprintf(&b, " [html byte %d]", f.Source.HTMLOffset)
-	case f.Source.CSSOffset >= 0:
-		if f.Source.Sheet != "" {
-			fmt.Fprintf(&b, " [%s byte %d]", f.Source.Sheet, f.Source.CSSOffset)
+	switch src := f.Source.placed(); {
+	case src.HTMLOffset >= 0:
+		fmt.Fprintf(&b, " [html byte %d]", src.HTMLOffset)
+	case src.CSSOffset >= 0:
+		if src.Sheet != "" {
+			fmt.Fprintf(&b, " [%s byte %d]", src.Sheet, src.CSSOffset)
 		} else {
-			fmt.Fprintf(&b, " [css byte %d]", f.Source.CSSOffset)
+			fmt.Fprintf(&b, " [css byte %d]", src.CSSOffset)
 		}
 	}
 	return b.String()
@@ -645,6 +676,7 @@ func (r *Recorder) record(f Finding, charged bool) bool {
 		r.failed = true
 	}
 	f.Severity = severity
+	f.Source = f.Source.placed()
 
 	// What deduplicating costs is reading the finding once, so that is what
 	// is charged. It is the only work here that grows with the document, and

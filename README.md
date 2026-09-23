@@ -103,7 +103,7 @@ not have been is a page that is quietly wrong; a box refused is a page with a
 finding attached to it.
 
 What it does *not* do is fragment across pages. A document is laid out on one
-sheet and scaled to fit it (`Page.MinScale`), and the only fragmentation
+sheet and scaled to fit it (`Options.MinScale`), and the only fragmentation
 anywhere is multicol's, within a single box.
 
 **Paragraphs.** Where a line may break and where it does, what order the runs on

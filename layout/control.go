@@ -215,6 +215,13 @@ func (b *boxBuilder) controlFor(n *html.Node) *Control {
 // positiveAttr reads one of HTML's "limited to only positive numbers"
 // attributes, applying the default and the bound.
 //
+// By HTML's rules for parsing non-negative integers, which is what §4.10.11
+// and §4.10.5 say cols, rows and size are read by: "40px" is forty and "30.5"
+// is thirty. strconv.Atoi refused both and the control took its default, and
+// it refused a number too long for an int the same way — so "cols" of twenty
+// nines was the default width, silently, where the value is a number past the
+// limit and is clamped and reported like any other (audit C135).
+//
 // The clamp is a finding rather than a silent maximum, because a control ten
 // thousand characters wide is not what the document asked for and the page it
 // produces would otherwise be inexplicable.
@@ -223,8 +230,8 @@ func (b *boxBuilder) positiveAttr(n *html.Node, name string, fallback, limit int
 	if !ok {
 		return fallback
 	}
-	v, err := strconv.Atoi(strings.TrimSpace(raw))
-	if err != nil || v < 1 {
+	v, ok := html.ParseNonNegativeInteger(raw)
+	if !ok || v < 1 {
 		// Invalid, which zero and every negative are. HTML applies the default,
 		// so "cols=0" and no cols at all are the same control — a difference an
 		// implementation invents by reading the attribute as a number rather
@@ -232,10 +239,14 @@ func (b *boxBuilder) positiveAttr(n *html.Node, name string, fallback, limit int
 		return fallback
 	}
 	if v > limit {
+		asks := strconv.Itoa(v)
+		if v >= html.MaxInteger {
+			asks = "a number of " + strconv.Itoa(len(strings.TrimSpace(raw))) + " characters"
+		}
 		b.rec.ReportDetail(Finding{
 			Rule:   RuleLimit,
 			Source: AtHTML(n.Offset),
-			Message: "the " + name + " attribute asks for " + strconv.Itoa(v) +
+			Message: "the " + name + " attribute asks for " + asks +
 				", more than the " + strconv.Itoa(limit) + " this engine will size a control to; " +
 				"it was laid out at " + strconv.Itoa(limit),
 			Path: PathOf(n),
@@ -272,8 +283,9 @@ func selectIsDropDown(n *html.Node) bool {
 	if !ok {
 		return true
 	}
-	v, err := strconv.Atoi(strings.TrimSpace(raw))
-	return err != nil || v <= 1
+	// HTML's display size, read by the same rule positiveAttr reads it by.
+	v, ok := html.ParseNonNegativeInteger(raw)
+	return !ok || v <= 1
 }
 
 // reportApproximation names the controls whose rendering here is a box standing

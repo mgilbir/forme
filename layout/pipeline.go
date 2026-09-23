@@ -67,9 +67,10 @@ type Input struct {
 	// cascade.
 	UserCSS string
 
-	// Resources supplies the bytes of the files the document refers to — the
-	// images an <img> or a background-image names, and the stylesheets a
-	// <link rel=stylesheet> does.
+	// Resources supplies the bytes of the files the document refers to: the
+	// pictures an <img>, an <object>, a video's poster, a background, a list
+	// marker or generated content names, the stylesheets a <link
+	// rel=stylesheet> or an @import does, and the fonts an @font-face does.
 	//
 	// A nil resolver loads nothing, which is the deliberate default: a document
 	// is untrusted input, and "src" and "href" are strings in it. See
