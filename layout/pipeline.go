@@ -444,12 +444,14 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 				Property: "display",
 			})
 		}
-		if what, laid := unlaidFormattingContext(cs.Get("display")); what != "" &&
-			unlaidBoxIsNotTheBoxAsked(n, styles, what) {
+		if gap := parseDisplay(cs.Get("display")).gap; gap != displayGapNone &&
+			unlaidBoxIsNotTheBoxAsked(n, styles, gap) {
+			value := strings.ToLower(strings.TrimSpace(cs.Get("display")))
 			rec.ReportDetail(Finding{
-				Rule:     RuleUnsupportedValue,
-				Source:   AtHTML(n.Offset),
-				Message:  "\"display: " + what + "\" is not implemented; " + laid,
+				Rule:   RuleUnsupportedValue,
+				Source: AtHTML(n.Offset),
+				Message: quoteValue("display: "+value) + " is not implemented; " +
+					unlaidDisplay(gap),
 				Path:     PathOf(n),
 				Property: "display",
 			})
@@ -497,14 +499,15 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 	})
 }
 
-// unlaidFormattingContext names a display value whose *inner* layout this engine
-// does not do, and says what the box was laid out as instead.
+// unlaidDisplay says what a box was laid out as, for the part of its display
+// value this engine does not lay out as asked. parseDisplay decides
+// which part that is, from the same reading of the value that built the box, so
+// the report cannot disagree with the layout about what was asked.
 //
-// The two are one omission with one shape: the value is recognised, the box is
-// built, and then ordinary layout runs inside it — a grid becomes a column of
-// full-width blocks where a table of tracks was asked for, and until this
-// report existed it said nothing at all, which is the plausible, silent
-// wrongness the whole findings vocabulary is against. See
+// The omission has one shape each time: the value is recognised, the box is
+// built, and ordinary layout runs where something else was asked for — and
+// until this report existed it said nothing at all, which is the plausible,
+// silent wrongness the whole findings vocabulary is against. See
 // style/unimplemented.go, which makes the same argument about a property
 // nothing reads.
 //
@@ -513,17 +516,19 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 // the ones they cannot, at the box, with the reason. A value that is laid out
 // has nothing to say here, and one whose *arrangement* is refused is a fact
 // about the container rather than about the keyword.
-//
-// They are named rather than gathered by exclusion. A list of "everything this
-// engine does not lay out" would go stale in the direction that matters: silent
-// about a value that had stopped being laid out.
-func unlaidFormattingContext(value string) (what, laid string) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "ruby":
-		return "ruby", "the box was laid out as an inline box, so the " +
-			"annotation runs along the line instead of above it"
+func unlaidDisplay(gap displayGap) string {
+	switch gap {
+	case displayGapRuby:
+		return "the box was laid out as an inline box, so the annotation runs " +
+			"along the line instead of above it"
+	case displayGapRunIn:
+		return "the box was laid out as an inline box and not run into the " +
+			"block after it"
+	case displayGapInlineListItem:
+		return "an inline-level list item was laid out as the inline box it is, " +
+			"and its marker was not drawn"
 	}
-	return "", ""
+	return ""
 }
 
 // unlaidBoxIsNotTheBoxAsked reports whether laying the box out as this engine
@@ -544,9 +549,12 @@ func unlaidFormattingContext(value string) (what, laid string) {
 // annotation there is nothing to lift — §3.1's own answer for a base alone is
 // the base.
 func unlaidBoxIsNotTheBoxAsked(n *html.Node, styles map[*html.Node]style.ComputedStyle,
-	what string) bool {
+	gap displayGap) bool {
 
-	return what == "ruby" && hasRubyAnnotation(n, styles)
+	if gap == displayGapRuby {
+		return hasRubyAnnotation(n, styles)
+	}
+	return true
 }
 
 // hasRubyAnnotation reports whether a ruby box has anything to lift above its

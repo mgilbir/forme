@@ -198,15 +198,6 @@ func (a flexAxis) crossName() string {
 
 func (a flexAxis) minName() string { return "min-" + a.mainName() }
 
-// overflowName is the overflow property of the axis the items run along, which
-// is what §4.5 asks about before giving an item a content-based minimum.
-func (a flexAxis) overflowName() string {
-	if a.column {
-		return "overflow-y"
-	}
-	return "overflow-x"
-}
-
 func (a flexAxis) maxName() string { return "max-" + a.mainName() }
 func (a flexAxis) gapName() string {
 	// The gap between one item and the next is *across* the axis they run
@@ -1934,13 +1925,23 @@ func (l *layouter) flexMainLimits(it *flexItem, a flexAxis, room flexRoom) (min,
 	// carrying a computed zero is indistinguishable from one whose author asked
 	// for zero, and asking for zero is the idiom for defeating this very rule.
 	//
-	// The clause after it: an item that clips its own overflow along the main
-	// axis has an automatic minimum of nothing. That is not an exception, it is
-	// the reason the rule is safe — the minimum exists so that content is not
-	// cut off invisibly, and a box that says it will cut its content off has
-	// asked for exactly that. It is what makes the ellipsis idiom work, "flex:
-	// 1 1 0" with "overflow: hidden" on a long word, which could not shrink at
-	// all: 588px of word in a 300px container.
+	// The clause after it: an item that is a scroll container has an
+	// automatic minimum of nothing. That is not an exception, it is the reason
+	// the rule is safe — the minimum exists so that content is not cut off
+	// invisibly, and a box that scrolls its content has asked for exactly that.
+	// It is what makes the ellipsis idiom work, "flex: 1 1 0" with "overflow:
+	// hidden" on a long word, which could not shrink at all: 588px of word in a
+	// 300px container.
+	//
+	// A scroll container, which is §4.5's word, and not "overflow other than
+	// visible along the main axis", which is what this asked. The two differ
+	// both ways. "overflow: clip" cuts the content off and makes no scroll
+	// container (CSS Overflow 3), so a clipping item keeps its content-based
+	// minimum. And a scrolling value on the cross axis alone makes the main
+	// axis scroll too — §3.1 computes a "visible" beside "hidden" to "auto" —
+	// so "overflow-y: hidden" on an item in a row may shrink to nothing. See
+	// isScrollContainer.
+	//
 	// §4.5's specified size suggestion is the item's own main size where it
 	// states one, a keyword included: "width: min-content" is as definite a
 	// size as a length is, and an item that asked for it asked to be no wider
@@ -1949,7 +1950,7 @@ func (l *layouter) flexMainLimits(it *flexItem, a flexAxis, room flexRoom) (min,
 	if !stated {
 		specified, stated = keyword(a.mainName())
 	}
-	if !overflowIsVisibleOn(c.Style, a.overflowName()) {
+	if isScrollContainer(c.Style) {
 		if stated && specified < max {
 			return specified, max
 		}

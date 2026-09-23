@@ -413,6 +413,11 @@ func TestShorthandLonghandsMatchWhatTheExpanderProduces(t *testing.T) {
 		"columns":         "3 12em",
 		"word-wrap":       "break-word",
 
+		// css-break-3's legacy shorthands for the break properties.
+		"page-break-before": "avoid",
+		"page-break-after":  "avoid",
+		"page-break-inside": "avoid",
+
 		// css-logical's, which expand into logical longhands and are renamed to
 		// physical ones per element. See logical.go.
 		"margin-block":        "1px 2px",

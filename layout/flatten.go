@@ -94,15 +94,16 @@ func (l *layouter) atomicItem(b *Box, frame inlineFrame) inlineItem {
 	// line box. With no line box at all it is the bottom margin edge — which is
 	// also a replaced element's, so the value set above already says so.
 	//
-	// An overflow that is not visible does not simply fall back to the bottom
-	// margin edge, which is what CSS 2.1 said and what CSS 2.2 corrected: it is
-	// the *higher* of the two candidates. The correction matters because the
-	// 2.1 rule made "overflow: auto" on a one-line box drop the whole box below
-	// its neighbours' baseline, which is a visible jump from a declaration that
-	// was only ever about clipping.
+	// And an inline-block whose overflow is not visible takes the bottom margin
+	// edge whatever lines it has: CSS 2.2 §10.8.1 says so for an "overflow"
+	// other than visible, "clip" included. The rule is about a block container
+	// — CSS Box Alignment 3 §9.1 keeps it "for legacy reasons" for one — and not
+	// about a flex or a grid container, whose baseline is its items' whether or
+	// not it clips. See hasLegacyScrollBaseline for why clip is in it.
 	if b.Replaced == nil {
 		baseline, ok := lastLineBaseline(frag)
-		if b.TableWrapper {
+		switch {
+		case b.TableWrapper:
 			// §10.8.1 again, and a different sentence of it: "the baseline of an
 			// 'inline-table' is the baseline of the first row of the table".
 			//
@@ -117,11 +118,21 @@ func (l *layouter) atomicItem(b *Box, frame inlineFrame) inlineItem {
 			// search starts outside the table and finds the first line box in
 			// it, which is in the first cell of the first row.
 			baseline, ok = firstBaseline(frag)
+		case b.Inner == InnerFlex || b.Inner == InnerGrid:
+			// The same sentence for the other two containers that are not
+			// block containers. An inline flex container's baseline is its
+			// first baseline set (Flexbox §8.5), which is its first item's, and
+			// an inline grid's is the first item in grid order whose area is in
+			// the first row (Grid §11.8) — the item the grid layout names in
+			// baselineChild. Taking the last line box instead, as an
+			// inline-block does, put the words beside a column of three items
+			// on the third.
+			baseline, ok = containerFirstBaseline(frag)
 		}
 		if ok {
 			bl := baseline
 			ascent := frag.Margin.Top.Add(bl)
-			if overflowIsScrollable(b.Style) {
+			if hasLegacyScrollBaseline(b) {
 				ascent = box.H
 			}
 			item.Ascent = ascent
@@ -210,6 +221,38 @@ func (l *layouter) inlineBlockFragment(b *Box, frame inlineFrame) *Fragment {
 	return frag
 }
 
+// hasLegacyScrollBaseline reports §10.8.1's legacy case: a block container
+// whose overflow is not visible has its baseline at its bottom margin edge. A
+// flex or a grid container is not a block container and keeps its items'
+// baseline.
+//
+// "Not visible" includes "clip", and that is a decision rather than a leftover.
+// CSS 2.2 §10.8.1's wording is any computed overflow other than visible, and it
+// is the reading this engine keeps — decided 2026-09-13, and held by
+// TestAnInlineBlockThatClipsSitsOnItsBottomMarginEdge. CSS Box Alignment 3 §9.1
+// states the rule for a block container "that is a scroll container", which
+// "clip" does not make; the two readings differ on exactly that value, and
+// this is the one place "clip" is deliberately not read as isScrollContainer
+// reads it.
+func hasLegacyScrollBaseline(b *Box) bool {
+	return b != nil && b.Inner != InnerFlex && b.Inner != InnerGrid &&
+		overflowClipsContent(b.Style)
+}
+
+// containerFirstBaseline is the first baseline of a flex or grid container: the
+// baseline of the item its layout named, or firstBaseline's walk over the items
+// in the order they were placed — which for a flex container is its first
+// item on its first line.
+func containerFirstBaseline(f *Fragment) (style.Unit, bool) {
+	if i := f.baselineChild - 1; i >= 0 && i < len(f.Children) {
+		c := f.Children[i]
+		if v, ok := firstBaseline(c); ok {
+			return f.Border.Top.Add(f.Padding.Top).Add(c.BorderRect.Y).Add(v), true
+		}
+	}
+	return firstBaseline(f)
+}
+
 // lastLineBaseline finds the baseline of the last line box in a subtree, as a
 // distance from the top of that subtree's border box.
 //
@@ -224,7 +267,7 @@ func lastLineBaseline(f *Fragment) (style.Unit, bool) {
 		if c.Box == nil || c.Box.outOfFlow() {
 			continue
 		}
-		if c.Box != nil && overflowIsScrollable(c.Box.Style) {
+		if hasLegacyScrollBaseline(c.Box) {
 			// A box whose overflow is not visible has no baseline to give: what
 			// is inside it may be scrolled away, so a line of it is not a line
 			// anything outside can be aligned to. §10.8.1 says so about an

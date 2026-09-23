@@ -638,6 +638,20 @@ var maxPourPieces = 1 << 18
 // column width, by the ordinary block code that knows nothing about columns, and
 // this cuts the result into bands and stands them beside each other.
 func fillColumns(f *Fragment, c columns, height style.Unit) (bool, string) {
+	return fillColumnsAvoiding(f, c, height, nil)
+}
+
+// fillColumnsAvoiding is fillColumns with the breaks the content asked to
+// avoid: each column ends a column height below where it began, unless that is
+// somewhere a break is avoided, and then at the last break before it that is
+// not. See avoidZones.
+//
+// Where there is no such break — the box that asked not to be broken is taller
+// than a column — the column ends where it would have, inside the box. That is
+// CSS Fragmentation 3 §4.4's instruction and not a shortcut: "avoid" is the
+// first rule relaxed when there are not enough break opportunities that
+// satisfy it, because the alternative is content that is never shown.
+func fillColumnsAvoiding(f *Fragment, c columns, height style.Unit, avoid *avoidZones) (bool, string) {
 	if height <= 0 {
 		return false, cannotDivide
 	}
@@ -645,8 +659,18 @@ func fillColumns(f *Fragment, c columns, height style.Unit) (bool, string) {
 	rest := p.pend(*f, f)
 	bands := make([]*Fragment, 0, min(c.n, len(f.Lines)+len(f.Children)+1))
 	spent := false
+	// start is where the column being filled begins, in the content
+	// coordinates of f, which is what the breakpoints are measured in.
+	var start style.Unit
 	for i := 0; i < c.n && !spent; i++ {
-		top, below, ok := rest.split(height)
+		cut := start.Add(height)
+		if avoid.forbids(cut) {
+			if b, ok := avoid.lastAllowed(start, cut); ok {
+				cut = b
+			}
+		}
+		top, below, ok := rest.split(cut.Sub(start))
+		start = cut
 		if !ok {
 			return false, cannotDivide
 		}
@@ -867,6 +891,13 @@ func (l *layouter) pourIntoColumns(b *Box, frag *Fragment, cols columns,
 		// an empty container is either way.
 		return contentHeight, true
 	}
+	// The breaks the content asked to avoid: CSS Fragmentation 3's
+	// "break-inside", "break-before" and "break-after". They are taken off the
+	// list the balancing chooses from, so the columns come out as tall as it
+	// takes not to break where the author said not to, and they steer where
+	// fillColumnsAvoiding ends each column.
+	avoid := avoidZonesOf(frag)
+	breaks = avoid.allowed(breaks)
 	// §3.5, and the two cases are which of the heights is *given*.
 	//
 	// A container told how tall to be has its column height decided for it: the
@@ -889,11 +920,164 @@ func (l *layouter) pourIntoColumns(b *Box, frag *Fragment, cols columns,
 		}
 		height = got
 	}
-	if ok, why := fillColumns(frag, cols, height); !ok {
+	if ok, why := fillColumnsAvoiding(frag, cols, height, avoid); !ok {
 		l.reportColumns(b, cols.n, why)
 		return 0, false
 	}
 	return height, true
+}
+
+// avoidZones is where a multicol container's content asked not to be broken, as
+// sorted, disjoint, closed ranges of heights down its content box.
+//
+// CSS Fragmentation 3 §3 gives three properties and they come to one shape
+// here. "break-inside: avoid" on a box forbids a cut strictly inside it — its
+// top and its bottom edges are breaks *around* it, which are allowed. "break-
+// before: avoid" forbids every cut between the box and whatever is before it,
+// and "break-after: avoid" every cut between the box and whatever follows it.
+// §3.1 propagates the second two through a parent's edge: the break before a
+// first child is the break before its parent too, and the break after a last
+// child the break after its parent. So "between" runs from the bottom of the
+// previous in-flow box to the top of this one, however many parents' edges lie
+// between them, and the same forwards.
+//
+// "avoid-column" is the same request made of columns alone, and is read as
+// "avoid" here because columns are the only fragmentation there is. "avoid-page"
+// and "avoid-region" ask nothing of a column and are satisfied everywhere else
+// by an engine that does not break pages or regions at all.
+//
+// Heights are in layout units, so a range open at both ends — the inside of a
+// box — is the closed range one unit in from each end.
+type avoidZones struct {
+	zones []avoidZone
+	// breaks is the breakpoints no zone forbids, once allowed has been asked:
+	// the places lastAllowed may end a column early.
+	breaks []style.Unit
+}
+
+type avoidZone struct{ lo, hi style.Unit }
+
+// avoidZonesOf collects the zones of a laid-out multicol container's content,
+// in the coordinates columnBreaks uses. It returns nil where nothing asks.
+func avoidZonesOf(f *Fragment) *avoidZones {
+	z := &avoidZones{}
+	const far = style.MaxUnit / 4
+	z.collect(f, 0, -far, far)
+	if len(z.zones) == 0 {
+		return nil
+	}
+	slices.SortFunc(z.zones, func(a, b avoidZone) int { return cmp.Compare(a.lo, b.lo) })
+	merged := z.zones[:1]
+	for _, r := range z.zones[1:] {
+		last := &merged[len(merged)-1]
+		if r.lo <= last.hi.Add(1) {
+			last.hi = style.Max(last.hi, r.hi)
+			continue
+		}
+		merged = append(merged, r)
+	}
+	z.zones = merged
+	return z
+}
+
+// collect walks f's children. at is where f's content box begins; before is
+// where the in-flow content before f's first child ends, and after where the
+// content after its last child begins — the reach a "break-before" on the
+// first child or a "break-after" on the last has, once propagated.
+func (z *avoidZones) collect(f *Fragment, at, before, after style.Unit) {
+	var flow []*Fragment
+	for _, c := range f.Children {
+		top, bottom := at.Add(c.BorderRect.Y), at.Add(c.BorderRect.Bottom())
+		if avoidsBreak(c.Box, "break-inside") && bottom.Sub(top) >= 2 {
+			z.zones = append(z.zones, avoidZone{top.Add(1), bottom.Sub(1)})
+		}
+		if c.Box == nil || !c.Box.outOfFlow() {
+			flow = append(flow, c)
+		} else {
+			// A float's own content still asks about breaks inside it.
+			z.collect(c, at.Add(c.ContentRect().Y), top, bottom)
+		}
+	}
+	for i, c := range flow {
+		top, bottom := at.Add(c.BorderRect.Y), at.Add(c.BorderRect.Bottom())
+		prev, next := before, after
+		if i > 0 {
+			prev = at.Add(flow[i-1].BorderRect.Bottom())
+		}
+		if i+1 < len(flow) {
+			next = at.Add(flow[i+1].BorderRect.Y)
+		}
+		if avoidsBreak(c.Box, "break-before") {
+			z.zones = append(z.zones, avoidZone{style.Min(prev, top), top})
+		}
+		if avoidsBreak(c.Box, "break-after") {
+			z.zones = append(z.zones, avoidZone{bottom, style.Max(next, bottom)})
+		}
+		z.collect(c, at.Add(c.ContentRect().Y), prev, next)
+	}
+}
+
+// avoidsBreak reads the two values of a break property that ask a column not to
+// end at a place. A fragment with no box of its own asks nothing.
+func avoidsBreak(b *Box, property string) bool {
+	if b == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(b.Style.Get(property))) {
+	case "avoid", "avoid-column":
+		return true
+	}
+	return false
+}
+
+// forbids reports whether a column may not end at y.
+func (z *avoidZones) forbids(y style.Unit) bool {
+	if z == nil {
+		return false
+	}
+	i := sort.Search(len(z.zones), func(i int) bool { return z.zones[i].hi >= y })
+	return i < len(z.zones) && z.zones[i].lo <= y
+}
+
+// allowed is the sorted breakpoints less the ones a zone forbids — except the
+// last, which is where the content ends and so where the last column must end
+// whatever was asked. Without it the balancing would not know how far the
+// content reaches.
+func (z *avoidZones) allowed(breaks []style.Unit) []style.Unit {
+	if z == nil || len(breaks) == 0 {
+		return breaks
+	}
+	out := make([]style.Unit, 0, len(breaks))
+	k := 0
+	for i, b := range breaks {
+		for k < len(z.zones) && z.zones[k].hi < b {
+			k++
+		}
+		if i == len(breaks)-1 || k == len(z.zones) || z.zones[k].lo > b {
+			out = append(out, b)
+		}
+	}
+	z.breaks = out
+	return out
+}
+
+// lastAllowed is the latest height after start and at or before end that no
+// zone forbids and that is a breakpoint — the latest place a column may end
+// early, rather than inside something that asked not to be broken.
+//
+// It is a breakpoint and not simply the edge of the zone, because a column
+// ends between lines and between boxes and nowhere else: the zone's edge may
+// be the middle of the line before it.
+//
+// The allowed breakpoints are sorted, so it is one search: every one of them is
+// allowed but possibly the last, which is where the content ends and is a
+// place the last column ends whatever was asked.
+func (z *avoidZones) lastAllowed(start, end style.Unit) (style.Unit, bool) {
+	i := sort.Search(len(z.breaks), func(i int) bool { return z.breaks[i] > end }) - 1
+	if i < 0 || z.breaks[i] <= start {
+		return 0, false
+	}
+	return z.breaks[i], true
 }
 
 // sortedBreaks puts the breakpoints in order and drops the repeats, which the

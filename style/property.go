@@ -458,6 +458,14 @@ var properties = map[string]property{
 	// fragment, and a background repeated in each — is asking for a different
 	// picture and is reported. Registering it is what lets it be read at all.
 	"box-decoration-break": {false, "slice"},
+	// CSS Fragmentation 3 §3.1 and §3.2, read by the one fragmentation there
+	// is: layout/multicol.go keeps a column from ending where "avoid" asks it
+	// not to. The values that ask for a break rather than for the absence of
+	// one — a page, a column, a side — are not made anywhere, and are
+	// reported where they are declared; see unimplementedValues.
+	"break-before": {false, "auto"},
+	"break-after":  {false, "auto"},
+	"break-inside": {false, "auto"},
 
 	"writing-mode":         {true, "horizontal-tb"},
 	"text-orientation":     {true, "mixed"},
@@ -621,6 +629,12 @@ var shorthands = map[string]shorthand{
 	// CSS Multi-column §3.3. Told apart by type rather than position, so it is
 	// in shorthand.go with the others of that shape.
 	"columns": {columnsShorthand, []string{"column-width", "column-count"}},
+
+	// CSS Fragmentation 3 §3.4: the CSS 2.1 page-break properties are legacy
+	// shorthands for the break properties, "always" standing for "page".
+	"page-break-before": {legacyPageBreak("break-before"), []string{"break-before"}},
+	"page-break-after":  {legacyPageBreak("break-after"), []string{"break-after"}},
+	"page-break-inside": {legacyPageBreak("break-inside"), []string{"break-inside"}},
 
 	// The shorthands whose parts are told apart by type rather than position.
 	// They live in shorthand.go, with the reset rule explained there.

@@ -54,20 +54,49 @@ func TestAnItemThatClipsItsOverflowCanShrinkToNothing(t *testing.T) {
 // TestAnItemThatDoesNotClipStillRefusesToShrink is the rule the clause is an
 // exception to, kept: a change that zeroed every automatic minimum would let a
 // row of words collapse into each other.
+//
+// The clause is about a *scroll container* (§4.5), so what keeps the minimum is
+// an item that is not one: overflow visible, or "clip" beside "visible" — CSS
+// Overflow 3 §3.1 leaves that pair as it is, because neither value scrolls, so
+// the item clips its content and does not scroll it. Either way it is as wide
+// as its word.
+//
+// This test used to write "overflow-y: hidden" here, on the reading that an
+// item clipping only its cross axis keeps its main-axis minimum. It does not:
+// §3.1 computes the "visible" beside "hidden" to "auto", so the item scrolls on
+// both axes and may shrink — which the last case below now holds.
 func TestAnItemThatDoesNotClipStillRefusesToShrink(t *testing.T) {
 	word := strings.Repeat("W", 60)
 	doc := `<div id="f"><div id="a">` + word + `</div><div id="b">x</div></div>`
-	css := noDefaults + `#f { display: flex; width: 300px; font-family: Courier;
+	const base = noDefaults + `#f { display: flex; width: 300px; font-family: Courier;
 		font-size: 10px }
-		#a { flex: 1 1 0; overflow-y: hidden }
+		#a { flex: 1 1 0 }
 		#b { flex: 0 0 50px }`
-	got, ok := gridRect(t, doc, css, "a")
-	if !ok {
-		t.Fatal("the item generated no fragment")
+	for _, overflow := range []string{
+		"overflow: visible", "overflow-x: clip", "overflow-y: clip",
+		"overflow-x: clip; overflow-y: visible",
+	} {
+		got, ok := gridRect(t, doc, base+`#a { `+overflow+` }`, "a")
+		if !ok {
+			t.Fatalf("%s: the item generated no fragment", overflow)
+		}
+		if got.W.Px() <= 250 {
+			t.Errorf("%s: the item is %.0f wide; it is not a scroll container, so "+
+				"its automatic minimum is still the width of the word", overflow, got.W.Px())
+		}
 	}
-	if got.W.Px() <= 250 {
-		t.Errorf("the item is %.0f wide; it clips only the cross axis, so its automatic "+
-			"minimum is still the width of the word", got.W.Px())
+	// And a scrolling value on the cross axis alone makes the item a scroll
+	// container: "overflow-y: hidden" computes "overflow-x" to auto, and so
+	// does "overflow-x: clip" beside it, which §3.1 turns into "hidden".
+	for _, overflow := range []string{"overflow-y: hidden", "overflow-x: clip; overflow-y: hidden"} {
+		got, ok := gridRect(t, doc, base+`#a { `+overflow+` }`, "a")
+		if !ok {
+			t.Fatalf("%s: the item generated no fragment", overflow)
+		}
+		if got.W.Px() != 250 {
+			t.Errorf("%s: the item is %.0f wide, want 250 — it is a scroll container, "+
+				"so it may shrink to the room left over", overflow, got.W.Px())
+		}
 	}
 }
 

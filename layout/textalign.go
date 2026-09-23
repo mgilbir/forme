@@ -305,7 +305,7 @@ func (l *layouter) alignLine(b *Box, align textAlign, rtl bool, lineWidth, used 
 	// the left — which is what the rtl-002 and rtl-004 references draw, five
 	// boxes with their text in the same place and five different text-aligns
 	// above them.
-	if slack < 0 && overflowIsScrollable(b.Style) {
+	if slack < 0 && isScrollContainer(b.Style) {
 		return startEdge(rtl, slack)
 	}
 

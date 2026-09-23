@@ -52,27 +52,13 @@ func TestADeclarationAtItsInitialValueIsNotReported(t *testing.T) {
 		"resize: none",
 		"resize: NONE",
 		"resize:none",
+		// The break properties' "auto" and "avoid". They are not inert any
+		// more but implemented: a document is not broken into pages, and a
+		// multicol pour honours "avoid" (layout/multicolavoid_test.go). Either
+		// way nothing is reported, which is what this list holds.
 		"page-break-inside: auto",
-		// "avoid" asks for no break inside the box, and this engine puts none
-		// inside any box: it does not fragment at all, so a document that does
-		// not fit is scaled to the page rather than broken across two of them.
-		// The box the author did not want split is not split.
-		//
-		// This was in the list below, on the reading that "avoid" asks for
-		// something. It asks for the *absence* of something, which is the case
-		// an engine that never does it satisfies — the same shape as
-		// "text-decoration-skip-ink: none".
 		"page-break-inside: avoid",
 		"break-inside: avoid",
-		// The other four, for the same two values and by the same argument.
-		// "auto" is the initial value and means "break here if the
-		// fragmentation wants to"; where nothing fragments it is the page that
-		// is already there. "avoid" asks for the *absence* of a break, which an
-		// engine that never breaks satisfies.
-		//
-		// They were reported until the day this list was checked against what
-		// the engine does rather than against what the properties are for, and
-		// the finding they raised was about a difference that does not exist.
 		"break-before: auto",
 		"break-after: auto",
 		"page-break-before: auto",
@@ -413,23 +399,31 @@ func TestTheShorthandStillSetsTheLine(t *testing.T) {
 	}
 }
 
-// TestNothingIsFragmented is what the "avoid" entries above claim, checked
-// against the engine rather than asserted about it.
+// TestTheBreakPropertiesAreNotInert is what became of TestNothingIsFragmented,
+// which pinned the claim the "avoid" entries made — "this engine does not
+// fragment at all" — so that the day it fragmented the entries would have to
+// come out. It did: multicol cuts boxes across columns (audit C41), and a box
+// with "break-inside: avoid" was being split with the declaration silenced.
 //
-// A page-break-inside entry that is wrong is wrong invisibly: the finding it
-// suppresses is the only thing that would have said so. So the claim is pinned
-// where it can fail — the day this engine fragments, a box with "avoid" on it
-// may be broken and the entry has to come out.
-func TestNothingIsFragmented(t *testing.T) {
-	// The property is registered nowhere and read nowhere: it is in
-	// unimplementedProperties' spirit rather than its map, since being inert is
-	// what keeps it quiet. If either of those changes, the entry needs revisiting.
-	if _, ok := properties["page-break-inside"]; ok {
-		t.Errorf("page-break-inside is in the registry now, so something reads it; " +
-			"the inert entry claims nothing does")
+// The claim now runs the other way. The break properties are registered, read
+// by layout/multicol.go, and have no inert entry left to say they ask for
+// nothing; the legacy page-break properties are shorthands for them.
+func TestTheBreakPropertiesAreNotInert(t *testing.T) {
+	for _, name := range []string{"break-before", "break-after", "break-inside"} {
+		if _, ok := properties[name]; !ok {
+			t.Errorf("%s is not registered, so layout cannot read it", name)
+		}
 	}
-	if _, ok := properties["break-inside"]; ok {
-		t.Errorf("break-inside is in the registry now, so something reads it")
+	for _, name := range []string{"break-before", "break-after", "break-inside",
+		"page-break-before", "page-break-after", "page-break-inside"} {
+		if _, ok := inertValues[name]; ok {
+			t.Errorf("%s still has an inert entry, which claims no box is fragmented", name)
+		}
+	}
+	for _, name := range []string{"page-break-before", "page-break-after", "page-break-inside"} {
+		if _, ok := shorthands[name]; !ok {
+			t.Errorf("%s is not a shorthand for its break property", name)
+		}
 	}
 }
 

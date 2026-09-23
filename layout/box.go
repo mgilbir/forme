@@ -746,9 +746,11 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 	}
 	staticInline := outer == OuterInline
 	outer, inner = outOfFlowDisplay(outer, inner, float, position)
-	if outer == OuterBlock && inner == InnerFlow && overflowIsScrollable(cs) {
+	if outer == OuterBlock && inner == InnerFlow && isScrollContainer(cs) {
 		// CSS 2.1 §9.4.1: a block box whose overflow is anything but visible
-		// establishes a block formatting context. That is not a painting
+		// establishes a block formatting context — and CSS Overflow 3 takes
+		// "clip" back out of that, which is why the question is whether the
+		// box is a scroll container. See isScrollContainer. That is not a painting
 		// detail — it is what makes "overflow: hidden" the idiom for containing
 		// a float, because §10.6.7 gives a formatting-context root a height
 		// that includes the floats inside it. An engine that treated overflow
@@ -1182,63 +1184,94 @@ func (b *boxBuilder) closeCaseContext() {
 // shorthands for pairs. Modelling it as the pair is what makes "inline-block"
 // stop being a special case: it is simply inline outside and flow-root inside.
 func displayOf(cs style.ComputedStyle) (Outer, Inner, bool) {
-	value := strings.ToLower(strings.TrimSpace(cs.Get("display")))
+	d := parseDisplay(cs.Get("display"))
+	return d.outer, d.inner, d.listItem
+}
 
-	// The two-value syntax, "inline flow-root" and friends.
-	if outer, inner, ok := twoValueDisplay(value); ok {
-		return outer, inner, false
-	}
+// displayType is a display value read into what the box tree is built from, and
+// what of it this engine does not lay out as asked.
+type displayType struct {
+	outer    Outer
+	inner    Inner
+	listItem bool
+	// gap names the part of the value this engine lays out as something else,
+	// or is displayGapNone. See reportUnsupportedDisplays, which is what says
+	// so.
+	gap displayGap
+}
 
+// displayGap is a display value this engine recognises and does not honour.
+type displayGap uint8
+
+const (
+	displayGapNone displayGap = iota
+	// displayGapRunIn is "run-in", whose box merges into the block after it.
+	// It is laid out as the inline box it is when there is no such block.
+	displayGapRunIn
+	// displayGapRuby is an inner display of "ruby", laid out as an inline
+	// box; it is a gap only where there is an annotation to lift. See
+	// unlaidBoxIsNotTheBoxAsked.
+	displayGapRuby
+	// displayGapInlineListItem is a list item whose outer display is inline.
+	// Its marker is drawn by the block layout of a list item, which an
+	// inline-level box does not go through, so the box is laid out as the
+	// inline box it is and without a marker.
+	displayGapInlineListItem
+)
+
+// parseDisplay is css-display-3's grammar, for every value the cascade accepts.
+//
+// It used to read the single keywords and one two-word form — outside first,
+// then inside, and no "list-item" — and let everything else fall through to
+// "inline". But the cascade accepts the whole grammar, in any order: "flow" is a
+// block, "flow-root inline" an inline-block, "flex inline" an inline-flex, and
+// "list-item block", "block list-item" and "inline flow-root list-item" are list
+// items. Each of them was laid out as a plain inline box and nothing said so,
+// which is the page that is quietly wrong. Now every value is either laid out as
+// it says or given a gap that reportUnsupportedDisplays reports.
+//
+// The multi-keyword rules are §2's: an outside value with no inside one is flow
+// inside, an inside value with no outside one is block outside — "except for
+// ruby, which defaults to inline" — and "list-item" alone is a block flow list
+// item.
+func parseDisplay(raw string) displayType {
+	value := strings.ToLower(strings.TrimSpace(raw))
 	switch value {
 	case "none":
-		return OuterNone, InnerFlow, false
+		return displayType{outer: OuterNone, inner: InnerFlow}
 	case "-webkit-box":
 		// The legacy flexible box, of which this engine implements exactly the
 		// part CSS Overflow 4's compatibility section needs: a block that
 		// "-webkit-line-clamp" can be written on. Its own layout — the old
 		// flexbox — is not implemented, and treating it as a block is what every
 		// engine does for the vertical, single-column case the clamp is used in.
-		return OuterBlock, InnerFlow, false
-	case "block", "flow-root":
-		inner := InnerFlow
-		if value == "flow-root" {
-			inner = InnerFlowRoot
-		}
-		return OuterBlock, inner, false
-	case "inline":
-		return OuterInline, InnerFlow, false
+		//
+		// A block that establishes a formatting context, though, and not a
+		// plain one. In a browser the legacy box is a flex-like container, and
+		// a flex container contains its children's margins and floats like any
+		// other formatting-context root; read as a plain block, a paragraph's
+		// top margin collapsed out through it and moved the whole box down.
+		return displayType{outer: OuterBlock, inner: InnerFlowRoot}
 	case "inline-block":
-		return OuterInline, InnerFlowRoot, false
-	case "list-item":
-		return OuterBlock, InnerFlow, true
-	case "flex":
-		return OuterBlock, InnerFlex, false
+		return displayType{outer: OuterInline, inner: InnerFlowRoot}
 	case "inline-flex":
-		return OuterInline, InnerFlex, false
-	case "grid":
-		return OuterBlock, InnerGrid, false
+		return displayType{outer: OuterInline, inner: InnerFlex}
 	case "inline-grid":
-		return OuterInline, InnerGrid, false
-	case "table":
-		return OuterBlock, InnerTable, false
+		return displayType{outer: OuterInline, inner: InnerGrid}
 	case "inline-table":
-		return OuterInline, InnerTable, false
-	case "table-row-group":
-		return OuterBlock, InnerTableRowGroup, false
-	case "table-header-group":
-		return OuterBlock, InnerTableRowGroup, false
-	case "table-footer-group":
-		return OuterBlock, InnerTableRowGroup, false
+		return displayType{outer: OuterInline, inner: InnerTable}
+	case "table-row-group", "table-header-group", "table-footer-group":
+		return displayType{outer: OuterBlock, inner: InnerTableRowGroup}
 	case "table-row":
-		return OuterBlock, InnerTableRow, false
+		return displayType{outer: OuterBlock, inner: InnerTableRow}
 	case "table-cell":
-		return OuterBlock, InnerTableCell, false
+		return displayType{outer: OuterBlock, inner: InnerTableCell}
 	case "table-caption":
-		return OuterBlock, InnerTableCaption, false
+		return displayType{outer: OuterBlock, inner: InnerTableCaption}
 	case "table-column-group":
-		return OuterBlock, InnerTableColumnGroup, false
+		return displayType{outer: OuterBlock, inner: InnerTableColumnGroup}
 	case "table-column":
-		return OuterBlock, InnerTableColumn, false
+		return displayType{outer: OuterBlock, inner: InnerTableColumn}
 	case "contents":
 		// "display: contents" replaces the element with its children, and where
 		// it is honoured the element never reaches here at all —
@@ -1250,11 +1283,99 @@ func displayOf(cs style.ComputedStyle) (Outer, Inner, bool) {
 		// the specification's own answer is to treat the value as an ordinary
 		// one, and inline is what the element would have been. The caller
 		// reports it.
-		return OuterInline, InnerFlow, false
+		return displayType{outer: OuterInline, inner: InnerFlow}
+	case "ruby-base", "ruby-base-container", "ruby-text", "ruby-text-container":
+		// The boxes a ruby is built from, laid out as the inline boxes they
+		// are. Inside a ruby, that ruby's own report says the annotation is not
+		// lifted; see unlaidBoxIsNotTheBoxAsked. An annotation outside any ruby
+		// is not reported, and a browser would lift it above an anonymous base:
+		// that is the one value here still laid out otherwise without a word.
+		return displayType{outer: OuterInline, inner: InnerFlow}
+	case "math":
+		// MathML Core: on an element that is not MathML, "math" computes to
+		// "flow", and with no outside value that is an inline box. The one
+		// MathML element this engine meets is <math> itself, which it draws as
+		// a replaced element whatever its display says.
+		return displayType{outer: OuterInline, inner: InnerFlow}
 	}
-	// An unrecognised value: the initial one, which is what the cascade would
-	// have used had the declaration been invalid.
-	return OuterInline, InnerFlow, false
+
+	// The multi-keyword grammar, whose single keywords "block", "inline",
+	// "run-in", "flow", "flow-root", "table", "flex", "grid", "ruby" and
+	// "list-item" are the one-word cases of it.
+	var (
+		out            = displayType{inner: InnerFlow}
+		outer, inner   string
+		haveOuter, has bool
+	)
+	for _, w := range strings.Fields(value) {
+		switch w {
+		case "block", "inline", "run-in":
+			if haveOuter {
+				return displayType{outer: OuterInline, inner: InnerFlow}
+			}
+			outer, haveOuter = w, true
+		case "flow", "flow-root", "table", "flex", "grid", "ruby":
+			if inner != "" {
+				return displayType{outer: OuterInline, inner: InnerFlow}
+			}
+			inner = w
+		case "list-item":
+			if out.listItem {
+				return displayType{outer: OuterInline, inner: InnerFlow}
+			}
+			out.listItem = true
+		default:
+			// A value the cascade would not have admitted: the initial one,
+			// which is what the cascade uses for a declaration it drops.
+			return displayType{outer: OuterInline, inner: InnerFlow}
+		}
+		has = true
+	}
+	if !has {
+		return displayType{outer: OuterInline, inner: InnerFlow}
+	}
+	switch inner {
+	case "", "flow":
+		out.inner = InnerFlow
+	case "flow-root":
+		out.inner = InnerFlowRoot
+	case "table":
+		out.inner = InnerTable
+	case "flex":
+		out.inner = InnerFlex
+	case "grid":
+		out.inner = InnerGrid
+	case "ruby":
+		// Laid out as an inline box's content, which is its base; the
+		// annotation is what is missing, and the report says so where there is
+		// one.
+		out.inner, out.gap = InnerFlow, displayGapRuby
+	}
+	if out.listItem && inner != "" && inner != "flow" && inner != "flow-root" {
+		// §2.3: a list item's inside display is flow or flow-root and nothing
+		// else. The cascade refuses the rest, so this is a value that did not
+		// come from it.
+		return displayType{outer: OuterInline, inner: InnerFlow}
+	}
+	switch outer {
+	case "block":
+		out.outer = OuterBlock
+	case "inline":
+		out.outer = OuterInline
+	case "run-in":
+		// A run-in box is inline when no block follows it to run into, and
+		// that is how it is laid out; the merging is not done.
+		out.outer, out.gap = OuterInline, displayGapRunIn
+	default:
+		out.outer = OuterBlock
+		if inner == "ruby" {
+			out.outer = OuterInline
+		}
+	}
+	if out.listItem && out.outer == OuterInline {
+		out.listItem, out.gap = false, displayGapInlineListItem
+	}
+	return out
 }
 
 // isLayoutInternalDisplay reports the display types that exist only inside a
@@ -1363,58 +1484,60 @@ func outOfFlowDisplay(outer Outer, inner Inner, float FloatSide, position Positi
 	return OuterBlock, InnerFlowRoot
 }
 
-// overflowIsScrollable reports whether either axis of overflow is something
-// other than visible.
-func overflowIsScrollable(cs style.ComputedStyle) bool {
-	for _, axis := range [2]string{"overflow-x", "overflow-y"} {
-		if !overflowIsVisibleOn(cs, axis) {
-			return true
-		}
-	}
-	return false
+// isScrollContainer reports whether a box's overflow makes it a scroll
+// container: "hidden", "auto" or "scroll" on either axis.
+//
+// Not "any value but visible", which is what this asked before "clip" existed
+// and what it went on asking after. CSS Overflow 3 is explicit that clip is the
+// other kind of value: "Unlike hidden, this value does not cause the element to
+// establish a new formatting context", and a box that clips is not a scroll
+// container. The difference is every rule keyed on a scroll container rather
+// than on clipping — the formatting context of §9.4.1, the start-aligned
+// overfull line, Flexbox §4.5's automatic minimum — and "overflow: clip" was
+// taking each of them: beside a float the box was narrowed and moved past the
+// float as a formatting-context root is, rather than having only its lines
+// shortened.
+//
+// One axis is enough, and that is the computed-value rule rather than a
+// shortcut: "visible" beside a scrolling value on the other axis computes to
+// "auto", so such a box scrolls on both.
+func isScrollContainer(cs style.ComputedStyle) bool {
+	return scrolls(overflowOn(cs, "overflow-x")) || scrolls(overflowOn(cs, "overflow-y"))
 }
 
-// overflowIsVisibleOn is the same question about one axis, which is what a rule
-// keyed on a box's main axis asks. See flexMainLimits.
-func overflowIsVisibleOn(cs style.ComputedStyle, axis string) bool {
-	switch strings.ToLower(strings.TrimSpace(cs.Get(axis))) {
-	case "", "visible":
-		return true
-	}
-	return false
+// overflowClips reports whether overflow clips the content on either axis —
+// every value but "visible", clip included. It is the painting question, and
+// the one whether the root's value reached the viewport asks.
+func overflowClipsContent(cs style.ComputedStyle) bool {
+	return overflowOn(cs, "overflow-x") != "visible" || overflowOn(cs, "overflow-y") != "visible"
 }
 
-// twoValueDisplay reads the "outer inner" form.
-func twoValueDisplay(value string) (Outer, Inner, bool) {
-	parts := strings.Fields(value)
-	if len(parts) != 2 {
-		return 0, 0, false
+// overflowClipsAxes says which axes a box's overflow clips its content on.
+//
+// Both, except where one axis is "clip" and the other "visible": §3.1's
+// computed-value rule turns a "visible" beside a scrolling value into "auto",
+// but beside "clip" it stays visible, and "overflow-x: clip" alone cuts the
+// content at the left and right edges and lets it run on below.
+func overflowClipsAxes(cs style.ComputedStyle) (x, y bool) {
+	ox, oy := overflowOn(cs, "overflow-x"), overflowOn(cs, "overflow-y")
+	x = ox != "visible" || scrolls(oy)
+	y = oy != "visible" || scrolls(ox)
+	return x, y
+}
+
+// overflowOn is one axis's value, lower-cased, with an absent one read as the
+// initial "visible".
+func overflowOn(cs style.ComputedStyle, axis string) string {
+	v := strings.ToLower(strings.TrimSpace(cs.Get(axis)))
+	if v == "" {
+		return "visible"
 	}
-	var outer Outer
-	switch parts[0] {
-	case "block":
-		outer = OuterBlock
-	case "inline":
-		outer = OuterInline
-	default:
-		return 0, 0, false
-	}
-	var inner Inner
-	switch parts[1] {
-	case "flow":
-		inner = InnerFlow
-	case "flow-root":
-		inner = InnerFlowRoot
-	case "flex":
-		inner = InnerFlex
-	case "grid":
-		inner = InnerGrid
-	case "table":
-		inner = InnerTable
-	default:
-		return 0, 0, false
-	}
-	return outer, inner, true
+	return v
+}
+
+// scrolls reports the three values that make a scroll container.
+func scrolls(v string) bool {
+	return v == "hidden" || v == "auto" || v == "scroll"
 }
 
 // fixup adds the anonymous boxes the specification requires, depth first so a

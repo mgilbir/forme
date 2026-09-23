@@ -1186,6 +1186,18 @@ func (s *Styler) expandDecl(d css.Declaration, origin Origin) []preparedDecl {
 				Property:    name,
 			})
 		}
+		// And a property that is read, declared with a value nothing acts on.
+		// See unimplementedValues.
+		if value, reason, missing := unimplementedValueReason(name, d.Value); missing &&
+			origin != OriginUserAgent && !s.suppressed(name+"\x00"+value) {
+			s.report(Finding{
+				Offset: d.Offset,
+				Message: "the value \"" + value + "\" of \"" + name +
+					"\" is not implemented, so " + reason,
+				Unsupported: true,
+				Property:    name,
+			})
+		}
 		return []preparedDecl{{
 			property: name, value: d.Value, important: d.Important, offset: d.Offset,
 		}}
@@ -1386,11 +1398,17 @@ func legalBackgroundImage(vals []css.ComponentValue) bool {
 // on it is not a strange display, it is not a display at all.
 //
 // The two-value syntax is accepted loosely: any combination of an outside
-// keyword, an inside keyword and "list-item". Being permissive is the safe
-// direction here, because the cost of the two mistakes is not symmetric —
-// keeping a value nobody implements gives the element the fallback it has
-// always had, and dropping one that is really a display silently restores the
-// user agent sheet's answer instead.
+// keyword, an inside keyword and "list-item", in any order. Being permissive is
+// the safe direction here, because the cost of the two mistakes is not
+// symmetric — keeping a value gives the element what layout makes of it, which
+// layout/box.go's parseDisplay either lays out or reports, and dropping one
+// that is really a display silently restores the user agent sheet's answer
+// instead.
+//
+// The one combination refused is the one the grammar itself rules out rather
+// than leaves open: §2.3's <display-listitem> takes "flow" or "flow-root" as its
+// inside value and nothing else, so "list-item flex" is not a display value of
+// any kind — a browser drops it, and so does this.
 func legalDisplay(vals []css.ComponentValue) bool {
 	for _, v := range vals {
 		if v.IsFunction() || v.IsBlock() {
@@ -1438,7 +1456,21 @@ func legalDisplay(vals []css.ComponentValue) bool {
 			return false
 		}
 	}
+	if item == 1 && inside == 1 && !listItemInside(words) {
+		return false
+	}
 	return outside <= 1 && inside <= 1 && item <= 1
+}
+
+// listItemInside reports whether a display value's inside keyword is one a list
+// item may have: "flow" or "flow-root".
+func listItemInside(words []string) bool {
+	for _, w := range words {
+		if displayInside[w] {
+			return w == "flow" || w == "flow-root"
+		}
+	}
+	return true
 }
 
 var displayOutside = map[string]bool{"block": true, "inline": true, "run-in": true}

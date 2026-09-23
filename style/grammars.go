@@ -194,6 +194,10 @@ func init() {
 	g["column-span"] = single(kw("none", "all"))
 	// css-break-3 §5.4.
 	g["box-decoration-break"] = single(kw("slice", "clone"))
+	// css-break-4 §3.1 and §3.2.
+	g["break-before"] = single(kw(breakBetweenValues...))
+	g["break-after"] = g["break-before"]
+	g["break-inside"] = single(kw("auto", "avoid", "avoid-page", "avoid-column", "avoid-region"))
 
 	// css-content-3 §1 and CSS 2.1 §12.
 	g["content"] = content

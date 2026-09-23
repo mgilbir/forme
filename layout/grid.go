@@ -237,6 +237,7 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 	}
 
 	columnEdges, rowEdges := trackEdgesOf(columns), trackEdgesOf(rows)
+	parent.baselineChild = 0
 	for _, it := range items {
 		cellHeight := trackSpan(rows, it.row, it.place[0].span, rowGap)
 		// The same clause on the other axis. it.height already holds what the
@@ -267,6 +268,12 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 		it.frag.BorderRect.Y = y.
 			Add(alignmentOffset(it.down, cellHeight, it.height)).
 			Add(it.margin.Top)
+		if it.row == 0 && parent.baselineChild == 0 {
+			// Grid §11.8: the container's first baseline is the first item in
+			// grid order whose area is in the first row, which is not always
+			// the first item. See containerFirstBaseline.
+			parent.baselineChild = len(parent.Children) + 1
+		}
 		parent.Children = append(parent.Children, it.frag)
 	}
 	l.deferGridOutOfFlow(b, parent, width)

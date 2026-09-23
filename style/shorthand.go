@@ -1548,3 +1548,42 @@ func isColumnCount(part []css.ComponentValue) bool {
 func isColumnWidth(part []css.ComponentValue) bool {
 	return len(part) == 1 && num(lengthSlot)(part[0]).ok
 }
+
+// breakBetweenValues is css-break-4's grammar for "break-before" and
+// "break-after".
+var breakBetweenValues = []string{
+	"auto", "avoid", "always", "all", "avoid-page", "page", "left", "right",
+	"recto", "verso", "avoid-column", "column", "avoid-region", "region",
+}
+
+// legacyPageBreak expands one of CSS 2.1's page-break properties into the break
+// property it is now a legacy shorthand for.
+//
+// CSS Fragmentation 3 §3.4 gives the mapping: "always" is "page", and "auto",
+// "avoid", "left" and "right" are themselves. page-break-inside takes only the
+// first two. Anything else is not a value of the shorthand.
+func legacyPageBreak(longhand string) expander {
+	return func(vals []css.ComponentValue) (map[string][]css.ComponentValue, []string, bool) {
+		parts := splitOnWhitespace(vals)
+		if len(parts) != 1 || len(parts[0]) != 1 || !parts[0][0].IsToken() ||
+			parts[0][0].Token.Kind != css.Ident {
+			return nil, nil, false
+		}
+		word := strings.ToLower(parts[0][0].Token.Value)
+		switch word {
+		case "auto", "avoid":
+		case "always", "left", "right":
+			if longhand == "break-inside" {
+				return nil, nil, false
+			}
+			// A forced break ("always" is "page"), which nothing here makes.
+			// The longhand's own declaration of the same value is reported by
+			// unimplementedValues; a shorthand's part is reported here, and not
+			// applied, since there is nothing for it to do.
+			return nil, []string{parts[0][0].Token.Value}, true
+		default:
+			return nil, nil, false
+		}
+		return map[string][]css.ComponentValue{longhand: ident(word)}, nil, true
+	}
+}

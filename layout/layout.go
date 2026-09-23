@@ -69,6 +69,11 @@ type Fragment struct {
 	// formatting context from the text meant to run around it.
 	Lines []LineFragment
 
+	// baselineChild is one more than the index of the child a grid container
+	// takes its first baseline from, where its layout has named one, and zero
+	// otherwise. See containerFirstBaseline.
+	baselineChild int
+
 	// Marker is the bullet or number a list item generates, nil otherwise. It
 	// is on the fragment rather than in the box tree because its text depends
 	// on the item's position among its siblings, which is not a property of the
