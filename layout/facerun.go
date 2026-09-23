@@ -355,6 +355,12 @@ func (l *layouter) flushSubstitutions() {
 // cheap one. It used to assume it, and so no external RangedFontSet was ever
 // consulted — the one gate in front of the whole interface answered false for
 // every implementation but this package's.
+//
+// That holds under this package's own set too, which Build wraps around every
+// caller's set: when the set underneath is a RangedFontSet, a family the
+// document did not define is the caller's to answer per character, and the
+// wrapper's own rules say nothing about it. Reading only the wrapper's rules
+// was the same gate again one level down (audit C43).
 func (l *layouter) familyListIsRestricted(b *Box) bool {
 	set, ok := l.fontSet.(*documentFonts)
 	if !ok {
@@ -363,6 +369,9 @@ func (l *layouter) familyListIsRestricted(b *Box) bool {
 		} else {
 			return true
 		}
+	}
+	if _, ranged := set.base.(RangedFontSet); ranged {
+		return true
 	}
 	families := b.Style.Get("font-family")
 	if got, cached := l.restrictedFamilies[families]; cached {

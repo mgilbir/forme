@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"image"
-	"net/url"
 	"strconv"
 	"strings"
 
@@ -815,7 +814,7 @@ func (l *replacedLoader) load(src, what string, as svgAs) (*ReplacedContent, *lo
 	if l.cut {
 		return nil, l.cutShort(src, what)
 	}
-	data, fail := l.fetch(src, what)
+	data, _, fail := l.fetch(src, what)
 	if fail != nil {
 		return nil, fail
 	}
@@ -871,38 +870,20 @@ func (l *replacedLoader) cutShort(src, what string) *loadFailure {
 	}
 }
 
-// fetch obtains the bytes a reference names, applying the policy of resource.go.
-func (l *replacedLoader) fetch(src, what string) ([]byte, *loadFailure) {
-	if scheme, ok := schemeOf(src); ok {
-		if scheme == "data" {
-			return decodeDataURI(src, what, RuleImageUndecodable)
-		}
-		return nil, &loadFailure{
-			rule: RuleResourceBlocked,
-			message: "the " + what + " at " + quoteValue(src) + " names the " + quoteValue(scheme) +
-				" scheme; this engine resolves no URLs and fetches nothing, so it was not drawn",
-		}
-	}
-	if l.res == nil {
-		return nil, &loadFailure{
-			rule:    RuleResourceBlocked,
-			message: "the " + what + " at " + quoteValue(src) + " was not loaded: " + ErrNoResolver.Error(),
-		}
-	}
-	data, err := l.res.Resolve(src)
-	if err != nil {
-		return nil, &loadFailure{
-			rule:    RuleResourceBlocked,
-			message: "the " + what + " at " + quoteValue(src) + " was not loaded: " + err.Error(),
-		}
+// fetch obtains the bytes a reference names, applying the policy of
+// resource.go, and the type a data: URL declares for them.
+func (l *replacedLoader) fetch(src, what string) ([]byte, string, *loadFailure) {
+	data, mime, fail := fetchReference(l.res, src, what, "so it was not drawn", RuleImageUndecodable)
+	if fail != nil {
+		return nil, "", fail
 	}
 	if len(data) == 0 {
-		return nil, &loadFailure{
+		return nil, "", &loadFailure{
 			rule:    RuleImageUndecodable,
 			message: "the " + what + " at " + quoteValue(src) + " is empty",
 		}
 	}
-	return data, nil
+	return data, mime, nil
 }
 
 // decode reads a header, checks it against the caps, charges what it declares,
@@ -1025,74 +1006,142 @@ func (l *replacedLoader) decode(src, what string, data []byte, sum [sha256.Size]
 	}, nil
 }
 
-// decodeDataURI reads a "data:" reference.
+// decodeDataURI reads a "data:" reference, by the Fetch standard's data: URL
+// processor: the type is everything before the first comma, the body is what
+// follows it percent-decoded, and the body is base64 when — and only when — the
+// type ends in ";base64".
 //
 // The bytes never left the document, so there is no policy question — only the
 // caps, which apply exactly as they do to a file. The length is checked before
 // the decode rather than after, because base64 expands by three quarters and a
 // cap applied to the result is a cap applied to an allocation already made.
 //
+// Three things the processor says that a looser reading gets wrong, each of
+// which a document meets:
+//
+//   - The body is percent-decoded the URL standard's way, which leaves a "%"
+//     that begins no escape as it is. net/url's PathUnescape refused the whole
+//     URL at one, and a hand-written SVG says "100%" as often as it says
+//     anything.
+//   - The fragment is not part of the body. A URL ends its path at the first
+//     "#", and a data: URL is a URL: "data:image/svg+xml,<svg fill='#f00'…"
+//     is the body "<svg fill='" in every browser, which is why such documents
+//     write "%23".
+//   - ";base64" counts only at the end of the type. "data:text/plain;base64;
+//     charset=x," is not base64, and the decode is Infra's forgiving one: white
+//     space anywhere is dropped and the padding may be left off, and anything
+//     else outside the alphabet is not base64 at all.
+//
+// src has been through referenceText, so the tabs and newlines an attribute
+// wrapped it across are already gone, as the URL parser removes them.
+//
 // what names the kind of thing being read and bad is the rule to raise when it
-// cannot be, because the two callers report under different ones: an image that
+// cannot be, because the callers report under different ones: an image that
 // will not decode is undecodable, and a stylesheet that will not decode was
 // never loaded. The policy and the caps are one piece of code either way, which
-// is the point.
-func decodeDataURI(src, what string, bad Rule) ([]byte, *loadFailure) {
+// is the point. The type is returned lowercased and without its parameters —
+// its essence — or as "text/plain" when the URL names none, as the processor
+// defaults it.
+func decodeDataURI(src, what string, bad Rule) ([]byte, string, *loadFailure) {
 	const prefix = "data:"
 	rest := src[len(prefix):]
+	if i := strings.IndexByte(rest, '#'); i >= 0 {
+		rest = rest[:i]
+	}
 	comma := strings.IndexByte(rest, ',')
 	if comma < 0 {
-		return nil, &loadFailure{
+		return nil, "", &loadFailure{
 			rule:    bad,
 			message: "a data: " + what + " has no comma separating its type from its content",
 		}
 	}
-	meta, payload := rest[:comma], rest[comma+1:]
+	meta, payload := strings.Trim(rest[:comma], " \t\n\f\r"), rest[comma+1:]
 	if len(payload) > maxDataURIBytes {
-		return nil, &loadFailure{
+		return nil, "", &loadFailure{
 			rule: bad,
 			message: fmt.Sprintf(
 				"a data: %s carries %d encoded bytes, more than the %d this engine will read",
 				what, len(payload), maxDataURIBytes),
 		}
 	}
+	body := percentDecode(payload)
 
-	if isBase64Meta(meta) {
-		// Strict decoding of a fixed-length string: there is no stream to
-		// bound, because the bound was applied to the input above and base64
-		// shrinks.
-		data, err := base64.StdEncoding.DecodeString(strings.TrimSpace(payload))
-		if err != nil {
-			// Some documents pad badly or use the URL alphabet; try the two
-			// tolerant spellings before giving up, and no further.
-			data, err = base64.RawStdEncoding.DecodeString(strings.TrimSpace(payload))
-			if err != nil {
-				return nil, &loadFailure{
-					rule:    bad,
-					message: "a data: " + what + " is not valid base64: " + err.Error(),
-				}
+	meta, isBase64 := cutBase64Meta(meta)
+	if isBase64 {
+		data, ok := forgivingBase64(body)
+		if !ok {
+			return nil, "", &loadFailure{
+				rule:    bad,
+				message: "a data: " + what + " says it is base64 and is not",
 			}
 		}
-		return data, nil
+		body = string(data)
 	}
-	decoded, err := url.PathUnescape(payload)
-	if err != nil {
-		return nil, &loadFailure{
-			rule:    bad,
-			message: "a data: " + what + " is not readable: " + err.Error(),
-		}
-	}
-	return []byte(decoded), nil
+	return []byte(body), dataURIEssence(meta), nil
 }
 
-// isBase64Meta reports whether a data URI's parameters end in ";base64".
-func isBase64Meta(meta string) bool {
-	for _, part := range strings.Split(meta, ";") {
-		if strings.EqualFold(strings.TrimSpace(part), "base64") {
-			return true
+// cutBase64Meta is step 11 of the data: URL processor: a type ending in ";",
+// any number of spaces, and "base64" in any case, says the body is base64, and
+// that suffix is taken off the type.
+func cutBase64Meta(meta string) (string, bool) {
+	const word = "base64"
+	if len(meta) < len(word) || !strings.EqualFold(meta[len(meta)-len(word):], word) {
+		return meta, false
+	}
+	head := strings.TrimRight(meta[:len(meta)-len(word)], " ")
+	if !strings.HasSuffix(head, ";") {
+		return meta, false
+	}
+	return head[:len(head)-1], true
+}
+
+// forgivingBase64 is Infra's forgiving-base64 decode: ASCII white space is
+// dropped wherever it is, one or two "=" may end a body whose length is a
+// multiple of four, a body one character past a multiple of four is refused,
+// and so is any character outside the base64 alphabet. The bits left over at
+// the end are discarded.
+func forgivingBase64(s string) ([]byte, bool) {
+	clean := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; c {
+		case ' ', '\t', '\n', '\f', '\r':
+		default:
+			clean = append(clean, c)
 		}
 	}
-	return false
+	if len(clean)%4 == 0 {
+		for n := 0; n < 2 && len(clean) > 0 && clean[len(clean)-1] == '='; n++ {
+			clean = clean[:len(clean)-1]
+		}
+	}
+	if len(clean)%4 == 1 {
+		return nil, false
+	}
+	for _, c := range clean {
+		if !(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '+' || c == '/') {
+			return nil, false
+		}
+	}
+	out := make([]byte, base64.RawStdEncoding.DecodedLen(len(clean)))
+	n, err := base64.RawStdEncoding.Decode(out, clean)
+	if err != nil {
+		return nil, false
+	}
+	return out[:n], true
+}
+
+// dataURIEssence is a data: URL's type without its parameters, lowercased: the
+// part a reader decides what the bytes are by. A URL that names no type, or
+// only parameters, is "text/plain", which is what the processor makes of it.
+func dataURIEssence(meta string) string {
+	if i := strings.IndexByte(meta, ';'); i >= 0 {
+		meta = meta[:i]
+	}
+	meta = strings.ToLower(strings.Trim(meta, " \t\n\f\r"))
+	if meta == "" || !strings.Contains(meta, "/") {
+		return "text/plain"
+	}
+	return meta
 }
 
 // notReplaced reports why an element is not replaced and gives it its alt text.

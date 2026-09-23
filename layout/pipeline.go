@@ -31,13 +31,14 @@ type Stylesheet struct {
 	// Name identifies the sheet in a finding — a filename, usually. It is empty
 	// for the document's own <style> content.
 	//
-	// It is also what a relative @import inside this sheet is resolved against,
-	// because that is what a reference in a stylesheet is relative to: an
-	// "@import \"base.css\"" in a sheet named "css/page.css" asks for
-	// "css/base.css", and the same import in a sheet with no name asks for
-	// "base.css" beside the document. So the name is a path and not a label —
-	// naming a sheet "the caller's theme" would send its imports looking in a
-	// directory called that.
+	// It is also what every relative reference inside this sheet is resolved
+	// against — an @import, an @font-face src, a background-image, any url() —
+	// because that is what a reference in a stylesheet is relative to (CSS
+	// Values 4 §4.5.1): an "@import \"base.css\"" or a "url(bg.png)" in a
+	// sheet named "css/page.css" asks for "css/base.css" or "css/bg.png", and
+	// the same in a sheet with no name asks for a file beside the document. So
+	// the name is a path and not a label — naming a sheet "the caller's theme"
+	// would send its references looking in a directory called that.
 	Name string
 	// Source is the CSS.
 	Source string
@@ -305,8 +306,13 @@ func buildWith(in Input, page PageSize, rec *Recorder) Built {
 //
 // Its @font-face and @page rules stay in it: the cascade's walk hands them
 // over, from wherever in the sheet they are live. See style.Prepared.
+//
+// Every url() in it is resolved against its name here, which is what a
+// relative reference in a stylesheet is relative to. See resolveSheetURLs.
 func parseSheet(rec *Recorder, origin style.Origin, name, src string) style.Sheet {
-	return readSheet(origin, name, src).handOver(rec, origin, name)
+	p := readSheet(origin, name, src)
+	resolveSheetURLs(p.rules, name, rec)
+	return p.handOver(rec, origin, name)
 }
 
 // parsedSheet is everything reading one stylesheet produced, kept apart from

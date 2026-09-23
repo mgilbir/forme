@@ -438,31 +438,12 @@ func (l *sheetLoader) fetch(href string) (string, *loadFailure) {
 	return string(data), nil
 }
 
-// bytes is the fetch itself: the same three answers image.go's fetch gives, in
-// the same order and for the same reasons.
+// bytes is the fetch itself: resource.go's policy, the one every reference in
+// a document is read through.
 func (l *sheetLoader) bytes(href string) ([]byte, *loadFailure) {
-	if scheme, ok := schemeOf(href); ok {
-		if scheme == "data" {
-			return decodeDataURI(href, "stylesheet", RuleResourceBlocked)
-		}
-		return nil, &loadFailure{
-			rule: RuleResourceBlocked,
-			message: "the stylesheet at " + quoteValue(href) + " names the " + quoteValue(scheme) +
-				" scheme; this engine resolves no URLs and fetches nothing, so it was not applied",
-		}
-	}
-	if l.res == nil {
-		return nil, &loadFailure{
-			rule:    RuleResourceBlocked,
-			message: "the stylesheet at " + quoteValue(href) + " was not loaded: " + ErrNoResolver.Error(),
-		}
-	}
-	data, err := l.res.Resolve(href)
-	if err != nil {
-		return nil, &loadFailure{
-			rule:    RuleResourceBlocked,
-			message: "the stylesheet at " + quoteValue(href) + " was not loaded: " + err.Error(),
-		}
+	data, _, fail := fetchReference(l.res, href, "stylesheet", "so it was not applied", RuleResourceBlocked)
+	if fail != nil {
+		return nil, fail
 	}
 	if len(data) == 0 {
 		// An empty file is a stylesheet with no rules, which is a legal thing
@@ -927,9 +908,30 @@ func (l *sheetLoader) cycle(name string) string {
 // resolveAgainstSheet makes a reference written in one sheet relative to that
 // sheet rather than to the document.
 //
-// A reference that begins at the root names itself, and a sheet with no name of
-// its own — a <style> element — leaves the reference alone, because the document
-// is what it is already relative to.
+// It is the one resolver for every reference a stylesheet makes — an @import,
+// and through resolveSheetURLs every url() in the sheet, an @font-face src and
+// a background-image alike — because CSS Values 4 §4.5.1 has one rule for all
+// of them: a relative URL in a stylesheet is relative to the stylesheet. Only
+// the @import used to be; a font and a background in the same sheet were
+// resolved against the document, so "css/a.css" importing "base.css" found
+// "css/base.css" and in the next line asked for a font "f.ttf" beside the
+// document, which was not there (audit C34).
+//
+// What it leaves alone, and why each is itself already:
+//
+//   - A reference beginning at the root, with either slash, names itself from
+//     wherever the document is served, whichever sheet wrote it. That includes
+//     "//host/x", which is refused later as the host it names; joining it onto
+//     a directory would have hidden the host inside a path.
+//   - A reference with a scheme is a whole URL. It used to be joined like a
+//     path, so "http://evil/a.css" imported from "css/page.css" reached a
+//     resolver as "css/http:/evil/a.css" — no longer a URL, and no longer
+//     refused as one.
+//   - A reference that is only a fragment is not a file: CSS Values 4 §4.5.1
+//     makes "url(#x)" a reference into the document whatever sheet it is in.
+//   - The empty reference names nothing, in any sheet.
+//   - A sheet with no name — a <style> element — has the document as its base
+//     already.
 //
 // The join is cleaned, and that is the whole of what a resolver can be handed.
 // "../base.css" written in "css/page.css" names "base.css", a file beside the
@@ -940,10 +942,17 @@ func (l *sheetLoader) cycle(name string) string {
 // one directory up was refused as an attempt to leave the document's
 // directory, which is a thing it was not doing.
 //
+// Only the path is cleaned. A query and a fragment are not path segments, and
+// cleaning them with it turned "x.png?a=../b" in "css/" into "css/b".
+//
 // A reference that really does go above the sheet's own root keeps its "..":
 // path.Clean has nowhere to take it, and the resolver refuses it as before.
 func resolveAgainstSheet(ref, from string) string {
-	if from == "" || strings.HasPrefix(ref, "/") {
+	ref = referenceText(ref)
+	if from == "" || ref == "" || ref[0] == '#' || ref[0] == '/' || ref[0] == '\\' {
+		return ref
+	}
+	if _, named := schemeOf(ref); named {
 		return ref
 	}
 	if _, named := schemeOf(from); named {
@@ -957,11 +966,110 @@ func resolveAgainstSheet(ref, from string) string {
 		// relative to is the document — which is what an unnamed sheet gets.
 		return ref
 	}
-	i := strings.LastIndexByte(from, '/')
-	if i < 0 {
-		return path.Clean(ref)
+	base := from
+	if i := strings.IndexAny(base, "?#"); i >= 0 {
+		base = base[:i]
 	}
-	return path.Clean(from[:i+1] + ref)
+	rel, suffix := ref, ""
+	if i := strings.IndexAny(ref, "?#"); i >= 0 {
+		rel, suffix = ref[:i], ref[i:]
+	}
+	if rel == "" {
+		// "?v=2" alone: RFC 3986 §5.2.2 keeps the base's path and takes the
+		// reference's query, so it is the sheet itself asked for again.
+		return base + suffix
+	}
+	i := strings.LastIndexByte(base, '/')
+	if i < 0 {
+		return path.Clean(rel) + suffix
+	}
+	return path.Clean(base[:i+1]+rel) + suffix
+}
+
+// resolveSheetURLs resolves every url() in a parsed stylesheet against the
+// sheet, once, where the sheet is read — so that nothing downstream has a
+// relative reference left to resolve against the wrong base.
+//
+// Here and not at each consumer, because by the time a consumer runs the sheet
+// is gone: a background-image is a computed value, inherited and copied, and
+// nothing in it says which of a document's sheets wrote it. A computed <url>
+// is the resolved URL — CSS Values 4 §4.5.1, and every property's "computed
+// value: as specified, with url values made absolute" — so resolving it where
+// the sheet is still known is what a browser does too. Everything that reads a
+// url() — backgrounds, list markers, generated content, @font-face — reads the
+// resolved one, and the next thing that learns to read one will too.
+//
+// Only inside blocks. A url() in a declaration or in an @font-face descriptor
+// is in the block of the rule it belongs to, nested rules included; the one
+// url() in a prelude that is a resource is an @import's, which the loader has
+// already resolved and taken out, and the other — @namespace — is a name that
+// must not be resolved at all.
+//
+// The resolved text is charged to the work budget, because it is longer than
+// what was written by the sheet's own name and that is the document's to
+// choose: a <link> whose href is a megabyte of directory prefixes it to every
+// url() in the sheet behind it. A reference the budget refuses is emptied
+// rather than left as written, because as written it is relative to the
+// document and names some other file; empty, it names nothing, and the budget
+// has said what was cut.
+func resolveSheetURLs(rules []css.Rule, sheet string, rec *Recorder) {
+	if sheet == "" {
+		return
+	}
+	for i := range rules {
+		resolveURLsIn(rules[i].Block, sheet, rec)
+	}
+}
+
+func resolveURLsIn(vals []css.ComponentValue, sheet string, rec *Recorder) {
+	resolve := func(t *css.Token) {
+		got := resolveAgainstSheet(t.Value, sheet)
+		if got == t.Value {
+			return
+		}
+		if !rec.charge(int64(len(got)), "the stylesheet references past that point") {
+			got = ""
+		}
+		t.Value = got
+	}
+	for i := range vals {
+		v := &vals[i]
+		switch {
+		case v.IsToken() && v.Token.Kind == css.URL:
+			resolve(&v.Token)
+		case v.IsFunction() && isURLFunction(v.Token.Value):
+			// url("x") and src("x"): the string inside is the reference, and
+			// what follows it — CSS Values 4's url modifiers — is not.
+			for j := range v.Values {
+				if w := &v.Values[j]; w.IsToken() && w.Token.Kind == css.String {
+					resolve(&w.Token)
+					break
+				}
+			}
+		default:
+			// image-set() takes a bare string as a URL too (CSS Images 4
+			// §2.2); this engine draws none, but the value it computes is
+			// still the resolved one.
+			if v.IsFunction() && isImageSet(v.Token.Value) {
+				for j := range v.Values {
+					if w := &v.Values[j]; w.IsToken() && w.Token.Kind == css.String {
+						resolve(&w.Token)
+					}
+				}
+			}
+			resolveURLsIn(v.Values, sheet, rec)
+		}
+	}
+}
+
+// isURLFunction reports the two spellings of a <url> as a function: url() and
+// CSS Values 4's src().
+func isURLFunction(name string) bool {
+	return strings.EqualFold(name, "url") || strings.EqualFold(name, "src")
+}
+
+func isImageSet(name string) bool {
+	return strings.EqualFold(name, "image-set") || strings.EqualFold(name, "-webkit-image-set")
 }
 
 // overCapImport reports the document-wide count tripping on an @import. It is

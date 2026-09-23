@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"strings"
 )
@@ -67,11 +66,29 @@ import (
 //
 // # What the engine has already refused, and what it has not
 //
-// One thing: a reference naming a scheme never reaches a resolver. That refusal
+// Two things, and they are one boundary: a reference naming a scheme never
+// reaches a resolver, and neither does a reference naming a host. That refusal
 // is not a convenience, it is the boundary — an engine that fetches URLs is a
 // server-side request forgery primitive with a friendly interface, and it must
 // not be possible to build one by writing a resolver that hands the string to
 // something that does.
+//
+// The host is the half that is easy to miss. "//169.254.169.254/latest" names
+// no scheme, and it is not a path either: the URL standard reads it as a
+// *network-path reference*, a host and a path on it, and a resolver that did
+// the natural thing with the paragraph below — resolve the reference against
+// the URL its document was served from, with net/url's ResolveReference — would
+// hand back "https://169.254.169.254/latest" and fetch it. The same is true of
+// "\\host\x" and "/\\host", because the URL standard reads a backslash as a
+// slash in every URL a document is served from. So a reference whose first two
+// characters are slashes of either kind is refused here, with the schemes.
+//
+// Both are asked of the reference as the URL standard reads it, which is not
+// quite the string the document wrote: the standard strips control characters
+// and spaces from either end, and removes every tab and newline wherever they
+// are, before it looks for a scheme. "ht\ttp://evil/" is "http://evil/" to
+// every URL parser there is, so it is refused as that, and a resolver is handed
+// what the standard reads — see referenceText.
 //
 // Everything else arrives as written. In particular a resolver **is** handed
 // "/etc/passwd" and "../../secrets/id_rsa" when a document writes them, because
@@ -222,22 +239,33 @@ func (d *DirResolver) Resolve(ref string) ([]byte, error) {
 //
 //   - A scheme means a URL. Nothing here fetches one, and reading "file:" as a
 //     path would put the scheme back by another spelling.
+//   - Two leading slashes name a host, which is a URL without its scheme. See
+//     the note on ResourceResolver.
 //   - A leading slash is an absolute path, which is a reference to the
 //     filesystem rather than to the document's own directory.
 //   - A path component of ".." asks to leave the directory. os.Root refuses it
 //     too; it is refused here as well so that the reason reported is the one
 //     the author needs, and so the containment does not rest on one mechanism.
 //
+// The reference is read as the URL standard reads it first — see
+// referenceText — so that the tab in "ht\ttp:" cannot hide a scheme from this
+// any more than from the engine.
+//
 // The query and fragment are dropped, as a browser drops them when a URL
 // resolves to a file. Per-cent escapes are decoded, because a document that
-// writes "blue%2015.png" means a file with a space in it.
+// writes "blue%2015.png" means a file with a space in it — and decoded the way
+// the URL standard decodes them, which leaves a "%" that begins no escape as
+// the "%" it is: "100%.png" is a file name, not a malformed reference.
 func resourcePath(ref string) (string, error) {
-	ref = strings.TrimSpace(ref)
+	ref = referenceText(ref)
 	if ref == "" {
 		return "", errors.New("render: the reference is empty")
 	}
 	if scheme, ok := schemeOf(ref); ok {
 		return "", fmt.Errorf("render: %q names the %q scheme; this engine resolves no URLs", ref, scheme)
+	}
+	if namesAHost(ref) {
+		return "", fmt.Errorf("render: %q names a host; this engine resolves no URLs", ref)
 	}
 	if i := strings.IndexAny(ref, "?#"); i >= 0 {
 		ref = ref[:i]
@@ -245,11 +273,7 @@ func resourcePath(ref string) (string, error) {
 	if ref == "" {
 		return "", errors.New("render: the reference has no path")
 	}
-	decoded, err := url.PathUnescape(ref)
-	if err != nil {
-		return "", fmt.Errorf("render: %q is not a readable reference: %w", ref, err)
-	}
-	ref = decoded
+	ref = percentDecode(ref)
 
 	if strings.HasPrefix(ref, "/") || strings.HasPrefix(ref, `\`) {
 		return "", fmt.Errorf("render: %q is an absolute path; a document may only refer to its own directory", ref)
@@ -262,6 +286,148 @@ func resourcePath(ref string) (string, error) {
 		}
 	}
 	return ref, nil
+}
+
+// referenceText is a reference as the URL standard reads it before it reads
+// anything else: with the C0 control characters and spaces at either end
+// stripped, and every ASCII tab and newline removed wherever it is (the URL
+// standard's basic URL parser, steps 1 to 3).
+//
+// It is what every refusal in this file is asked of, and what a resolver is
+// handed, because it is what every URL parser a resolver might use will read.
+// Asked of the string as written instead, "ht\ttp://evil/" has no scheme —
+// the tab stops schemeOf at the second letter — and reached a resolver, whose
+// own parser would strip the tab and fetch it. The same stripping is why a
+// data: URL an attribute wraps across lines is one URL.
+func referenceText(ref string) string {
+	start, end := 0, len(ref)
+	for start < end && ref[start] <= ' ' {
+		start++
+	}
+	for end > start && ref[end-1] <= ' ' {
+		end--
+	}
+	ref = ref[start:end]
+	if strings.IndexAny(ref, "\t\n\r") < 0 {
+		return ref
+	}
+	// Byte by byte rather than strings.Map, which would also turn every byte
+	// that is not UTF-8 into U+FFFD — and a data: URL is bytes.
+	out := make([]byte, 0, len(ref))
+	for i := 0; i < len(ref); i++ {
+		if c := ref[i]; c != '\t' && c != '\n' && c != '\r' {
+			out = append(out, c)
+		}
+	}
+	return string(out)
+}
+
+// namesAHost reports whether a reference is what RFC 3986 calls a
+// network-path reference: two slashes, and then a host.
+//
+// Either slash may be a backslash, because the URL standard reads one as a
+// slash in every scheme a document is served over — http, https and file —
+// and a resolver resolving against such a base would reach the host whichever
+// was written.
+func namesAHost(ref string) bool {
+	isSlash := func(c byte) bool { return c == '/' || c == '\\' }
+	return len(ref) >= 2 && isSlash(ref[0]) && isSlash(ref[1])
+}
+
+// percentDecode is the URL standard's percent-decode: every "%" followed by two
+// hexadecimal digits is the byte they spell, and every other byte — a "%"
+// that begins no escape among them — is itself.
+//
+// It is not net/url's PathUnescape, which refuses the whole string at the
+// first "%" it cannot read. "100%" in a hand-written SVG data: URL is the
+// ordinary case, and every browser draws it.
+func percentDecode(s string) string {
+	i := strings.IndexByte(s, '%')
+	if i < 0 {
+		return s
+	}
+	out := make([]byte, 0, len(s))
+	out = append(out, s[:i]...)
+	for ; i < len(s); i++ {
+		c := s[i]
+		if c == '%' && i+2 < len(s) && isHexDigit(s[i+1]) && isHexDigit(s[i+2]) {
+			out = append(out, hexValue(s[i+1])<<4|hexValue(s[i+2]))
+			i += 2
+			continue
+		}
+		out = append(out, c)
+	}
+	return string(out)
+}
+
+func isHexDigit(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
+}
+
+func hexValue(c byte) byte {
+	switch {
+	case c >= 'a':
+		return c - 'a' + 10
+	case c >= 'A':
+		return c - 'A' + 10
+	}
+	return c - '0'
+}
+
+// fetchReference is resource.go's policy applied to one reference, and the
+// one place it is applied: an <img>, a background, a list marker, generated
+// content, an <object>, a <link>, an @import and an @font-face all read through
+// it. Three loaders each had their own copy of the same three answers, and a
+// boundary kept three times is one that a change to it has to find three times.
+//
+// The answers, in order: a data: URL is decoded from the document's own bytes;
+// any other scheme, and any host, is refused; and everything else goes to the
+// resolver, or is refused when there is none. What is handed to the resolver is
+// referenceText, the reference as a URL parser reads it.
+//
+// what names the thing being read in a finding — "image", "stylesheet" — and
+// notDone says what did not happen because of a refusal: "so it was not
+// drawn". bad is the rule a data: URL that cannot be decoded is reported
+// under, which differs by what it was meant to be. The type a data: URL
+// declares is returned beside its bytes, and is empty for a resolver's, which
+// declare none.
+//
+// An empty result from a resolver is returned as it is, because whether it is
+// a failure depends on what was asked for: an empty stylesheet is a stylesheet
+// with no rules, and an empty image is not an image.
+func fetchReference(res ResourceResolver, src, what, notDone string, bad Rule) ([]byte, string, *loadFailure) {
+	ref := referenceText(src)
+	if scheme, ok := schemeOf(ref); ok {
+		if scheme == "data" {
+			return decodeDataURI(ref, what, bad)
+		}
+		return nil, "", &loadFailure{
+			rule: RuleResourceBlocked,
+			message: "the " + what + " at " + quoteValue(src) + " names the " + quoteValue(scheme) +
+				" scheme; this engine resolves no URLs and fetches nothing, " + notDone,
+		}
+	}
+	if namesAHost(ref) {
+		return nil, "", &loadFailure{
+			rule: RuleResourceBlocked,
+			message: "the " + what + " at " + quoteValue(src) + " names a host, which is a URL " +
+				"with its scheme left out; this engine resolves no URLs and fetches nothing, " + notDone,
+		}
+	}
+	if res == nil {
+		return nil, "", &loadFailure{
+			rule:    RuleResourceBlocked,
+			message: "the " + what + " at " + quoteValue(src) + " was not loaded: " + ErrNoResolver.Error(),
+		}
+	}
+	data, err := res.Resolve(ref)
+	if err != nil {
+		return nil, "", &loadFailure{
+			rule:    RuleResourceBlocked,
+			message: "the " + what + " at " + quoteValue(src) + " was not loaded: " + err.Error(),
+		}
+	}
+	return data, "", nil
 }
 
 // schemeOf reports whether a reference begins with a URL scheme.

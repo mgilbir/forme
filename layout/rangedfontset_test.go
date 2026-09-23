@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/mgilbir/forme/shape"
+	"github.com/mgilbir/forme/style"
 )
 
 // RangedFontSet is the interface a caller implements to say "this family is for
@@ -134,4 +135,67 @@ func rangedRunTexts(t *testing.T, frag *Fragment, id string) []string {
 		}
 	}
 	return out
+}
+
+// TestACallersRangedFontSetIsAskedThroughBuildAndCompose is the same question
+// asked the way nearly every caller asks it. Build wraps the caller's set in
+// the document's own for every document, whether or not it declares a face,
+// and the wrapper answered a family it did not define from the caller's Face
+// alone — so Layout with the caller's set honoured the ranges, and Layout with
+// Built.Fonts, and Compose, never asked (audit C43).
+func TestACallersRangedFontSetIsAskedThroughBuildAndCompose(t *testing.T) {
+	const doc = `<p id="p" style="font-family: Modern, Ancient; font-size: 20px">ab שלום</p>`
+	hebrew := loadHebrew(t)
+
+	t.Run("Layout with Built.Fonts", func(t *testing.T) {
+		set := &twoScriptSet{standard: StandardFonts(), hebrew: hebrew}
+		built := Build(Input{HTML: doc, Fonts: set})
+		w, _ := style.FromPx(600)
+		h, _ := style.FromPx(10000)
+		frag := Layout(built.Root, Size{W: w, H: h}, built.Fonts, NewRecorder(nil))
+		var faces []string
+		for _, line := range find(t, frag, "p").Lines {
+			for _, r := range line.Runs {
+				if strings.TrimSpace(r.Text) != "" && r.Face != nil {
+					faces = append(faces, r.Text+"="+r.Face.Name())
+				}
+			}
+		}
+		requireRangedFaces(t, set, hebrew, faces)
+	})
+	t.Run("Compose", func(t *testing.T) {
+		set := &twoScriptSet{standard: StandardFonts(), hebrew: hebrew}
+		composed := Compose(Input{HTML: doc, Fonts: set}, Options{})
+		var faces []string
+		for _, op := range composed.Ops {
+			if d, ok := op.(DrawText); ok && strings.TrimSpace(d.Text) != "" && d.Face != nil {
+				faces = append(faces, d.Text+"="+d.Face.Name())
+			}
+		}
+		requireRangedFaces(t, set, hebrew, faces)
+	})
+}
+
+// requireRangedFaces checks that the Hebrew was set in the face only "Ancient"
+// offers it in, and the Latin in the one only "Modern" offers it in — which no
+// family answers through Face, so only the ranged question can have chosen it.
+func requireRangedFaces(t *testing.T, set *twoScriptSet, hebrew *shape.Face, faces []string) {
+	t.Helper()
+	if len(set.asked) == 0 {
+		t.Fatalf("FaceForFamily was never called; the runs were %q", faces)
+	}
+	helvetica, _ := StandardFonts().Face("Helvetica", false, false)
+	var latin, heb bool
+	for _, f := range faces {
+		switch {
+		case strings.Contains(f, "שלום") && strings.HasSuffix(f, "="+hebrew.Name()):
+			heb = true
+		case strings.Contains(f, "ab") && strings.HasSuffix(f, "="+helvetica.Name()):
+			latin = true
+		}
+	}
+	if !heb || !latin {
+		t.Errorf("the runs were %q; want the Hebrew in %q and the Latin in %q",
+			faces, hebrew.Name(), helvetica.Name())
+	}
 }
