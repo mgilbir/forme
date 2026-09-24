@@ -116,6 +116,8 @@ var unicodeOracles = map[string]string{
 		"an implementation sharing none of their code, where the two releases agree",
 	"paragraph/simplecasing_test.go": "holds the generated simple case mappings to the " +
 		"toolchain's, and counts the ones the toolchain's release does not have",
+	"paragraph/casefold_test.go": "holds the generated case folding to the toolchain's case " +
+		"orbits (unicode.SimpleFold), which every member of must fold alike",
 }
 
 // TestNothingAsksPackageUnicodeAProperty.

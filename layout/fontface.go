@@ -300,10 +300,7 @@ func (d *documentFonts) FaceForFamily(family, text string, bold, italic bool) (*
 // back false, because a family whose every face excludes the text has nothing to
 // offer and the next family in the document's list should be asked.
 func (d *documentFonts) faceFor(family, text string, bold, italic bool) (*shape.Face, bool) {
-	key := strings.ToLower(ascii.TrimCSSSpace(family))
-	key = strings.Trim(key, `"'`)
-	key = ascii.TrimCSSSpace(key)
-	candidates := d.byFamily[key]
+	candidates := d.byFamily[familyKey(family)]
 	if len(candidates) == 0 {
 		// A family the document did not define is the caller's, and the
 		// caller's set is asked the question it can answer. A plain FontSet
@@ -440,7 +437,7 @@ func loadFontFaces(pending []pendingFontFace, res ResourceResolver, base FontSet
 		}
 		df := &documentFace{rule: rule, face: face, ref: ref}
 		set.faces = append(set.faces, df)
-		key := strings.ToLower(rule.family)
+		key := familyKey(rule.family)
 		set.byFamily[key] = append(set.byFamily[key], df)
 	}
 	return wrapDocumentFonts(set)

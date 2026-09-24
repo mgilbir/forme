@@ -45,24 +45,14 @@ var unicodeCaseMappings = map[string]bool{
 // asciiCaseExempt are the functions that fold by Unicode on purpose, keyed by
 // file and function, and why. Each must still do so: an entry that has stopped
 // is an exemption waiting for a use nobody meant.
-var asciiCaseExempt = map[string]string{
-	// Font family names are not syntax. CSS Fonts 4 §5.1 matches them by
-	// Unicode's Default Caseless Matching, full case folding with no
-	// tailoring, so a family named with a KELVIN SIGN *is* the same family as
-	// one named with a "k". strings.ToLower is not that algorithm — it lowers
-	// rather than folds, so "ß" and "SS" do not meet, and it answers from the
-	// toolchain's Unicode rather than the pinned one — and the pinned
-	// CaseFolding.txt is not among the tables. Until it is, these keep the
-	// nearer of the two answers rather than taking ASCII's, which is further.
-	"layout/fontface.go:(*documentFonts).faceFor": "matches a font family name, which CSS Fonts 4 §5.1 " +
-		"folds by Unicode's Default Caseless Matching",
-	"layout/fontface.go:loadFontFaces": "keys an @font-face family name, which CSS Fonts 4 §5.1 " +
-		"folds by Unicode's Default Caseless Matching",
-	"layout/facerun.go:(*layouter).familyListIsRestricted": "matches a font family name, which " +
-		"CSS Fonts 4 §5.1 folds by Unicode's Default Caseless Matching",
-	"layout/font.go:(*standardFonts).Face": "matches a font family name, which CSS Fonts 4 §5.1 " +
-		"folds by Unicode's Default Caseless Matching",
-}
+//
+// It is empty. Font family names were its four entries: they are not syntax,
+// and CSS Fonts 4 §5.1 matches them by Unicode's Default Caseless Matching,
+// which they took from strings.ToLower until the pinned CaseFolding.txt was
+// among the tables. They fold by paragraph.FoldCase now, which is that
+// algorithm from that file, and a Unicode case mapping from package strings is
+// refused everywhere.
+var asciiCaseExempt = map[string]string{}
 
 // TestSyntaxIsComparedASCIICaseInsensitively.
 func TestSyntaxIsComparedASCIICaseInsensitively(t *testing.T) {

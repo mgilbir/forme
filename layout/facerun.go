@@ -3,7 +3,6 @@ package layout
 import (
 	"maps"
 	"slices"
-	"strings"
 
 	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/segment"
@@ -381,8 +380,7 @@ func (l *layouter) familyListIsRestricted(b *Box) bool {
 	}
 	restricted := false
 	for _, family := range parseFamilyList(families) {
-		key := ascii.TrimCSSSpace(strings.Trim(ascii.TrimCSSSpace(strings.ToLower(family)), `"'`))
-		for _, c := range set.byFamily[key] {
+		for _, c := range set.byFamily[familyKey(family)] {
 			if len(c.rule.ranges) > 0 {
 				restricted = true
 			}

@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/mgilbir/forme/internal/ascii"
+	"github.com/mgilbir/forme/paragraph"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -120,8 +121,16 @@ var standardFamilies = map[string]string{
 }
 
 func (s *standardFonts) Face(family string, bold, italic bool) (*shape.Face, bool) {
-	base, ok := standardFamilies[strings.ToLower(ascii.TrimCSSSpace(family))]
+	key := familyKey(family)
+	base, ok := standardFamilies[key]
 	if !ok {
+		return nil, false
+	}
+	if genericFamilies[key] && ascii.Lower(strings.Trim(ascii.TrimCSSSpace(family), `"'`)) != key {
+		// A generic family is a keyword, and a keyword is syntax, matched
+		// ASCII case-insensitively. A name that only folds to one — "ſerif",
+		// whose long s folds to s — is a family name nobody has a font for,
+		// not the keyword.
 		return nil, false
 	}
 	name := standardName(base, bold, italic)
@@ -292,6 +301,23 @@ type resolvedFont struct{ face *shape.Face }
 // It is a comma-separated list whose entries may be quoted, and the quotes are
 // how a family whose name contains a comma or a keyword is written. The css
 // package has already resolved the quoting, so this only has to split.
+// familyKey is how a font family name is compared: CSS Fonts 4 §5.1's
+// "Default Caseless Matching", Unicode's full case folding with no
+// normalization and no tailoring. See paragraph.FoldCase. Every map of family
+// names is keyed by it and every lookup asks by it, so that the document's
+// @font-face rules, its font-family lists, local() and the standard faces
+// agree on which names are one name.
+//
+// The quotes and the white space around a name are not part of it.
+//
+// It was strings.ToLower, in four places. That lowers rather than folds, so
+// "Straße" and "STRASSE" were two families, as were "σοφος" and "ΣΟΦΟΣ"; and
+// it answered from the toolchain's Unicode rather than the release the tables
+// are from.
+func familyKey(name string) string {
+	return paragraph.FoldCase(ascii.TrimCSSSpace(strings.Trim(ascii.TrimCSSSpace(name), `"'`)))
+}
+
 func parseFamilyList(value string) []string {
 	var out []string
 	for _, part := range strings.Split(value, ",") {

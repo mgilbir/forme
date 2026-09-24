@@ -239,7 +239,7 @@ UCD ?= $(UCD_DIR)
 # argument lists had drifted, and nothing was in a position to notice. See
 # cmd/regenerate_test.go, which now runs every one of them.
 #
-# The nineteen files that are read, rather than UCD.zip: the archive is an
+# The twenty files that are read, rather than UCD.zip: the archive is an
 # order of magnitude larger than the files taken from it, unzip is one more
 # thing to have installed, and a file that moves in a new release fails here by
 # name instead of as a "no such file" from inside a generator.
@@ -250,6 +250,7 @@ UCD_FILES := \
 	ArabicShaping.txt \
 	BidiBrackets.txt \
 	BidiMirroring.txt \
+	CaseFolding.txt \
 	CompositionExclusions.txt \
 	DerivedCoreProperties.txt \
 	EastAsianWidth.txt \
@@ -419,9 +420,9 @@ grapheme-tables: $(UCD_DEP)
 linebreak: $(UCD_DEP)
 	$(MAKETABLES) linebreak
 
-# Unicode's case mappings, simple and full, from the release UNICODE_VERSION
-# names — not Go's, which are the release the toolchain shipped. See
-# cmd/gencasing.
+# Unicode's case mappings, simple and full, and its full case folding, from the
+# release UNICODE_VERSION names — not Go's, which are the release the toolchain
+# shipped. See cmd/gencasing.
 #
 #	make casing UCD=/path/to/unpacked/ucd
 casing: $(UCD_DEP)
