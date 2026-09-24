@@ -221,6 +221,7 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 	l := newLayouter(root, avail, set, rec)
 	frag := l.layout()
 	l.reportFontLimits()
+	l.reportForcedBreaks(root)
 	return frag
 }
 
@@ -1096,6 +1097,15 @@ func (l *layouter) layBlock(b *Box, containing style.Unit, at flow,
 	if !starved {
 		contentHeight, hoistTop, hoistBottom, placedAnything =
 			l.clampedChildren(b, frag, lineLength, topOpen, bottomOpen, inner)
+	}
+	if wantsColumns && !inColumns && cols.n <= 1 && !starved {
+		// One column, which is not poured: there is nothing to divide. A forced
+		// break in it asks for a second, which would be §3.6's overflow column,
+		// and that is not made.
+		if forced := l.forcedColumnBreaks(frag); len(forced) > 0 {
+			l.reportColumns(b, len(forced)+1, "it has room for one, and the "+
+				"columns its forced column breaks would overflow into are not made")
+		}
 	}
 	if inColumns && !starved {
 		if height, ok := l.pourIntoColumns(b, frag, cols, contentHeight,

@@ -639,34 +639,73 @@ var maxPourPieces = 1 << 18
 // column width, by the ordinary block code that knows nothing about columns, and
 // this cuts the result into bands and stands them beside each other.
 func fillColumns(f *Fragment, c columns, height style.Unit) (bool, string) {
-	return fillColumnsAvoiding(f, c, height, nil)
+	return fillColumnsWith(f, c, height, nil)
 }
 
-// fillColumnsAvoiding is fillColumns with the breaks the content asked to
-// avoid: each column ends a column height below where it began, unless that is
-// somewhere a break is avoided, and then at the last break before it that is
-// not. See avoidZones.
+// columnEnds is what decides where a column ends besides its height: the
+// breaks the content asked to avoid, the ones it forces, and — for a balanced
+// pour — the breakpoints a column may end at.
+type columnEnds struct {
+	avoid *avoidZones
+	// forced is where a column must end, sorted: CSS Fragmentation 3's forced
+	// breaks between boxes. See forcedColumnBreaks.
+	forced []style.Unit
+	// breaks, where it is set, is the sorted breakpoints a column may end at,
+	// and a column ends at the last of them that fits rather than at exactly a
+	// column height below where it began. That is the pour balancing measured
+	// (see fitsColumns), and a pour made at the height it chose has to end its
+	// columns where it counted them ending, or a column that began at a forced
+	// break could end a column height further on in the middle of a line.
+	breaks []style.Unit
+}
+
+// fillColumnsWith is fillColumns with the column ends the content asked for.
+//
+// Each column ends a column height below where it began, unless:
+//
+//   - a forced break comes first. The column ends there, however much room is
+//     left in it, and nothing moves it: CSS Fragmentation 3 §3.1 says a forced
+//     break value "overrides any avoid break value that also applies at that
+//     break point", and §4.4 relaxes only the rules for unforced breaks when
+//     there are not enough places to break;
+//   - it is balanced, and it ends at the last breakpoint that fits;
+//   - that is somewhere a break is avoided, and then it ends at the last
+//     break before it that is not. See avoidZones.
 //
 // Where there is no such break — the box that asked not to be broken is taller
 // than a column — the column ends where it would have, inside the box. That is
 // CSS Fragmentation 3 §4.4's instruction and not a shortcut: "avoid" is the
 // first rule relaxed when there are not enough break opportunities that
 // satisfy it, because the alternative is content that is never shown.
-func fillColumnsAvoiding(f *Fragment, c columns, height style.Unit, avoid *avoidZones) (bool, string) {
+func fillColumnsWith(f *Fragment, c columns, height style.Unit, ends *columnEnds) (bool, string) {
 	if height <= 0 {
 		return false, cannotDivide
+	}
+	if ends == nil {
+		ends = &columnEnds{}
 	}
 	p := &pour{ends: map[*Fragment]style.Unit{}}
 	rest := p.pend(*f, f)
 	bands := make([]*Fragment, 0, min(c.n, len(f.Lines)+len(f.Children)+1))
 	spent := false
+	forced := ends.forced
 	// start is where the column being filled begins, in the content
 	// coordinates of f, which is what the breakpoints are measured in.
 	var start style.Unit
 	for i := 0; i < c.n && !spent; i++ {
 		cut := start.Add(height)
-		if avoid.forbids(cut) {
-			if b, ok := avoid.lastAllowed(start, cut); ok {
+		for len(forced) > 0 && forced[0] <= start {
+			forced = forced[1:]
+		}
+		switch {
+		case len(forced) > 0 && forced[0] <= cut:
+			cut = forced[0]
+		case ends.breaks != nil:
+			if b, ok := lastBreakIn(ends.breaks, start, cut); ok {
+				cut = b
+			}
+		case ends.avoid.forbids(cut):
+			if b, ok := ends.avoid.lastAllowed(start, cut); ok {
 				cut = b
 			}
 		}
@@ -706,47 +745,88 @@ func fillColumnsAvoiding(f *Fragment, c columns, height style.Unit, avoid *avoid
 	return true, ""
 }
 
+// lastBreakIn is the latest of the sorted breakpoints after start and at or
+// before end, if there is one.
+func lastBreakIn(breaks []style.Unit, start, end style.Unit) (style.Unit, bool) {
+	i := sort.Search(len(breaks), func(i int) bool { return breaks[i] > end }) - 1
+	if i < 0 || breaks[i] <= start {
+		return 0, false
+	}
+	return breaks[i], true
+}
+
 // cannotDivide is why a pour that needs a cut through something drawn, or more
 // columns than there are, is refused.
 const cannotDivide = "its content cannot be divided where a column would end " +
 	"without cutting through something that is drawn"
 
 // balancedHeight is §3.5's "balance": the shortest the columns can be while
-// still holding the content between them.
+// still holding the content between them, where each column ends at the last
+// breakpoint that fits in it and at every forced break.
 //
-// The candidates are the breakpoints and nothing else, because a column ends at
-// one: a height between two of them holds exactly as much as the lower of the
-// two and is taller for nothing. So the search is over the list rather than over
-// the numbers, and the answer is the first candidate the content fits inside.
+// The answer is a height and not a breakpoint. It was the first breakpoint the
+// content fitted under, on the argument that a column ends at one, so a height
+// between two of them holds exactly as much as the lower. That is true of the
+// first column, which begins at nought, and of no other: the second begins
+// where the first ended, and the height it needs is the distance between two
+// breakpoints, which need not be one. Pieces of 30, 10 and 60 in two columns
+// fit in 60 — 40 in the first, 60 in the second — and the first breakpoint
+// they fit under was 100, one column holding everything. A forced break makes
+// it the ordinary case: every column after one begins wherever the break was.
 //
-// First, and found by halving rather than by trying each in turn. Whether the
-// content fits is monotone in the height: filled greedily, a taller column ends
-// at or after the breakpoint a shorter one did, so every later column begins no
-// earlier and fewer of them are needed, and a piece too tall for a column is too
-// tall for every shorter one. So the answers along the list are all "no" and
-// then all "yes", and the boundary is found in log(breaks) fits rather than in
-// one per breakpoint — which, at a fit per breakpoint over every breakpoint,
-// was quadratic in the lines before it was anything else.
-func balancedHeight(breaks []style.Unit, n int) (style.Unit, bool) {
-	i := sort.Search(len(breaks), func(i int) bool { return fitsColumns(breaks, n, breaks[i]) })
-	if i == len(breaks) {
+// So the search is over heights, and found by halving. Whether the content
+// fits is monotone in the height: filled greedily, a taller column ends at or
+// after the breakpoint a shorter one did, so every later column begins no
+// earlier and fewer of them are needed; a forced break ends a column wherever
+// it is, which a taller column does not change; and a piece too tall for a
+// column is too tall for every shorter one. So the answers over the heights are
+// all "no" and then all "yes", and the boundary is found in as many fits as the
+// height has bits — thirty-two walks of the breakpoints at most, whatever
+// their number, where a fit per breakpoint was quadratic in the lines.
+func balancedHeight(breaks, forced []style.Unit, n int) (style.Unit, bool) {
+	if len(breaks) == 0 {
+		return 0, true
+	}
+	hi := breaks[len(breaks)-1]
+	if hi <= 0 {
+		return hi, true
+	}
+	if !fitsColumns(breaks, forced, n, hi) {
+		// Not even one column the whole height of the content: the forced
+		// breaks ask for more columns than there are.
 		return 0, false
 	}
-	return breaks[i], true
+	lo := style.Unit(0) // does not fit, or is nothing
+	for hi-lo > 1 {
+		mid := lo + (hi-lo)/2
+		if fitsColumns(breaks, forced, n, mid) {
+			hi = mid
+		} else {
+			lo = mid
+		}
+	}
+	return hi, true
 }
 
 // fitsColumns reports whether content whose breakpoints are these fits in n
-// columns of the given height, filled greedily.
+// columns of the given height, filled greedily, with a column ending at each
+// forced break. forced is sorted, and every forced break is one of the
+// breakpoints.
 //
 // The breakpoints are sorted and distinct, so the one before a breakpoint is
 // the one before it in the list, and the walk carries it rather than searching
 // for it. It stops as soon as the columns are more than n: the rest cannot make
 // the answer yes.
-func fitsColumns(breaks []style.Unit, n int, height style.Unit) bool {
+//
+// A forced break at the last breakpoint ends a column after which there is
+// nothing, and makes none: a pour cut there has nothing left to put in the
+// next one.
+func fitsColumns(breaks, forced []style.Unit, n int, height style.Unit) bool {
 	if len(breaks) == 0 {
 		return true
 	}
 	used, start, prev := 1, style.Unit(0), style.Unit(0)
+	last := breaks[len(breaks)-1]
 	for _, at := range breaks {
 		if at.Sub(start) > height {
 			// This piece does not fit in the column being filled, so the column
@@ -763,6 +843,17 @@ func fitsColumns(breaks []style.Unit, n int, height style.Unit) bool {
 			}
 		}
 		prev = at
+		for len(forced) > 0 && forced[0] < at {
+			forced = forced[1:]
+		}
+		if len(forced) > 0 && forced[0] == at && at < last {
+			// The column ends here whatever room is left in it.
+			used++
+			if used > n {
+				return false
+			}
+			start = at
+		}
 	}
 	return true
 }
@@ -886,42 +977,59 @@ func plural(n int, what string) string {
 func (l *layouter) pourIntoColumns(b *Box, frag *Fragment, cols columns,
 	contentHeight, declared style.Unit, hasHeight bool) (style.Unit, bool) {
 
-	breaks := sortedBreaks(columnBreaks(frag, 0, nil))
+	// The forced breaks, which are places a column may end as well as places
+	// it must: a break between two boxes separated by a margin is at neither
+	// box's edge. See forcedColumnBreaks.
+	forced := l.forcedColumnBreaks(frag)
+	breaks := sortedBreaks(append(columnBreaks(frag, 0, nil), forced...))
 	if len(breaks) == 0 {
 		// Nothing to divide. The columns are as tall as nothing, which is what
 		// an empty container is either way.
 		return contentHeight, true
 	}
+	if len(forced) >= cols.n {
+		// Each forced break begins a column, and there are not that many. The
+		// ones it would take are §3.6's overflow columns, which are not made
+		// here, and nor is the pour.
+		l.reportColumns(b, cols.n, "its content forces "+plural(len(forced), "column break")+
+			", which take "+plural(len(forced)+1, "column")+", and the columns that "+
+			"would overflow the box are not made")
+		return 0, false
+	}
 	// The breaks the content asked to avoid: CSS Fragmentation 3's
 	// "break-inside", "break-before" and "break-after". They are taken off the
 	// list the balancing chooses from, so the columns come out as tall as it
 	// takes not to break where the author said not to, and they steer where
-	// fillColumnsAvoiding ends each column.
+	// fillColumnsWith ends each column. A forced break is never taken off: it
+	// overrides an avoid at the same place.
 	avoid := avoidZonesOf(frag)
-	breaks = avoid.allowed(breaks)
+	breaks = avoid.allowed(breaks, forced)
+	ends := &columnEnds{avoid: avoid, forced: forced}
 	// §3.5, and the two cases are which of the heights is *given*.
 	//
 	// A container told how tall to be has its column height decided for it: the
 	// columns are that tall and the content is cut at multiples of it, whichever
-	// value column-fill has. "balance" is consulted, as §3.5 puts it, "only if
-	// the length of columns has been constrained" — and where it has, the
-	// constraint is the length, so there is nothing left for balancing to
-	// choose.
+	// value column-fill has, and anew from each forced break. "balance" is
+	// consulted, as §3.5 puts it, "only if the length of columns has been
+	// constrained" — and where it has, the constraint is the length, so there is
+	// nothing left for balancing to choose.
 	//
 	// A container with an automatic height has no such number, and the answer is
 	// the shortest its content fits in. That is the case balancing exists for and
-	// is what the initial value asks for.
+	// is what the initial value asks for, and each column then ends where the
+	// balancing counted it ending.
 	height := declared
 	if !hasHeight {
-		got, ok := balancedHeight(breaks, cols.n)
+		got, ok := balancedHeight(breaks, forced, cols.n)
 		if !ok {
 			l.reportColumns(b, cols.n, "its content does not divide into that "+
 				"many columns of any height this engine can choose")
 			return 0, false
 		}
 		height = got
+		ends.breaks = breaks
 	}
-	if ok, why := fillColumnsAvoiding(frag, cols, height, avoid); !ok {
+	if ok, why := fillColumnsWith(frag, cols, height, ends); !ok {
 		l.reportColumns(b, cols.n, why)
 		return 0, false
 	}
@@ -1031,6 +1139,213 @@ func avoidsBreak(b *Box, property string) bool {
 	return false
 }
 
+// breakKind is what a "break-before" or "break-after" value asks of a column.
+type breakKind uint8
+
+const (
+	// noForcedBreak is "auto", an avoid value, or a value that is not a
+	// column's to make: a page's (§3.1: "if the flow is not paginated, they
+	// have no effect", and this engine does not paginate — style says so where
+	// they are declared) or a region's.
+	noForcedBreak breakKind = iota
+	// breakColumn is "column", and css-break-4's "always", whose break is "that
+	// of the immediately-containing fragmentation context": in a multicol
+	// container, a column.
+	breakColumn
+	// breakAll is css-break-4's "all", which breaks "through all containing
+	// fragmentation contexts": a column here, and a page — which is not made.
+	breakAll
+)
+
+// forcedBreakOf reads a break property as the break it forces in a column. A
+// fragment with no box of its own forces nothing.
+func forcedBreakOf(b *Box, property string) breakKind {
+	if b == nil {
+		return noForcedBreak
+	}
+	switch ascii.Lower(strings.TrimSpace(b.Style.Get(property))) {
+	case "column", "always":
+		return breakColumn
+	case "all":
+		return breakAll
+	}
+	return noForcedBreak
+}
+
+// forcedColumnBreaks is where a multicol container's content forces a column to
+// end, as sorted, distinct heights down its content box — the coordinates
+// columnBreaks uses.
+//
+// CSS Fragmentation 3 §4.1: a forced break is at a class A break point, the
+// place between two adjacent in-flow siblings, when the "break-after" of the
+// first or the "break-before" of the second forces one. §3.1 propagates the
+// values at a box's edges: a "break-before" on a first in-flow child is its
+// parent's, and a "break-after" on a last child too — so the break asked for
+// before the first paragraph in a section is the break before the section.
+// Propagation "stops before it breaks through the nearest matching
+// fragmentation context": what reaches the container's own first or last child
+// is at the start or the end of the columns, where there is nothing to break
+// from or to, and does nothing. A nested multicol container is the nearest
+// such context for everything inside it, so its content is its own pour's and
+// is not read here; the container's own values are this one's.
+//
+// The height a column ends at is where the next box's own top margin begins,
+// held no higher than the bottom of the box before. §5.2 says a forced break
+// truncates the margins before it and keeps the ones after: the next column
+// begins with the next box's margin, and not with the one the box before
+// carried down.
+//
+// Out-of-flow boxes are not in the flow that breaks. A float's own values, and
+// anything inside it, are reported by reportForcedBreaks and not made.
+func (l *layouter) forcedColumnBreaks(f *Fragment) []style.Unit {
+	var out []style.Unit
+	l.collectForced(f, 0, &out)
+	if len(out) < 2 {
+		return out
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+// collectForced walks f's in-flow children, whose content box begins at at, and
+// reports whether its first child forces a break before it and its last one
+// after it — the two values §3.1 propagates to f.
+func (l *layouter) collectForced(f *Fragment, at style.Unit, out *[]style.Unit) (before, after bool) {
+	var prev *Fragment
+	var prevAfter bool
+	for _, c := range f.Children {
+		if c.Box != nil && c.Box.outOfFlow() {
+			continue
+		}
+		cb := forcedBreakOf(c.Box, "break-before") != noForcedBreak
+		ca := forcedBreakOf(c.Box, "break-after") != noForcedBreak
+		if c.Box == nil || !l.isMulticol(c.Box) {
+			first, last := l.collectForced(c, at.Add(c.ContentRect().Y), out)
+			cb, ca = cb || first, ca || last
+		}
+		if prev == nil {
+			before = cb
+		} else if prevAfter || cb {
+			bottom := at.Add(prev.BorderRect.Bottom())
+			*out = append(*out, style.Max(bottom, at.Add(c.BorderRect.Y).Sub(c.Margin.Top)))
+		}
+		prev, prevAfter = c, ca
+	}
+	return before, prevAfter
+}
+
+// isMulticol reports whether a box is a multicol container: one that asks for
+// columns, whether or not it gets them.
+func (l *layouter) isMulticol(b *Box) bool {
+	_, ok := l.columnsFor(b, 0)
+	return ok
+}
+
+// reportForcedBreaks says where a forced column break was asked for and is not
+// made, over the whole box tree. What is made is decided by the fragments, in
+// forcedColumnBreaks; what is reported is decided here by where the box is,
+// because a break the pour never sees — inside a float, inside an inline-block
+// — is exactly the one the fragments cannot say anything about.
+//
+//   - A box in the normal flow of a multicol container whose content is
+//     poured: its "column" and "always" are column breaks and are made, or
+//     are at an edge of the columns where CSS says they do nothing. Its "all"
+//     is a column break and a page break, and the page break is reported.
+//   - A box anywhere else inside a multicol container — a float, or a block
+//     inside an inline-level box — is not in the flow the columns divide.
+//     §3.1 says a UA "should" break before and after a float too; this does
+//     not move a float to the next column, and says so.
+//   - A box in no multicol container: "column" has no effect by §3.1 ("if the
+//     flow is not within a multi-column context"), and is not reported;
+//     "always" and "all" are page breaks, and are.
+//
+// A multicol container whose content is refused is reported whole by
+// reportColumns, and what is inside it is not reported again.
+func (l *layouter) reportForcedBreaks(root *Box) {
+	type visit struct {
+		b   *Box
+		ctx columnContext
+	}
+	stack := []visit{{root, outsideColumns}}
+	for len(stack) > 0 {
+		v := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		// A run of text and an anonymous box declare nothing of their own.
+		for _, property := range []string{"break-before", "break-after"} {
+			if v.b.IsText() || v.b.Anonymous() {
+				break
+			}
+			if kind := forcedBreakOf(v.b, property); kind != noForcedBreak {
+				l.reportForcedBreak(v.b, property, kind, v.ctx)
+			}
+		}
+		inner := v.ctx
+		switch {
+		case v.ctx == refusedColumns:
+		case l.isMulticol(v.b):
+			inner = inColumnFlow
+			if l.canColumn(v.b) != "" {
+				inner = refusedColumns
+			}
+		case v.ctx == inColumnFlow && (v.b.Outer != OuterBlock || v.b.outOfFlow()):
+			// A float, or a box on a line: what is inside it is not in the
+			// flow the columns divide.
+			inner = outsideColumnFlow
+		}
+		for i := len(v.b.Children) - 1; i >= 0; i-- {
+			c := v.b.Children[i]
+			ctx := inner
+			if inner == inColumnFlow && c.outOfFlow() {
+				ctx = outsideColumnFlow
+			}
+			stack = append(stack, visit{c, ctx})
+		}
+	}
+}
+
+// columnContext is where a box is, for reportForcedBreaks.
+type columnContext uint8
+
+const (
+	outsideColumns columnContext = iota
+	inColumnFlow
+	outsideColumnFlow
+	refusedColumns
+)
+
+// reportForcedBreak raises the finding for one declaration reportForcedBreaks
+// found not made, or not wholly.
+func (l *layouter) reportForcedBreak(b *Box, property string, kind breakKind, ctx columnContext) {
+	value := ascii.Lower(strings.TrimSpace(b.Style.Get(property)))
+	var why string
+	switch {
+	case ctx == refusedColumns:
+		return
+	case ctx == inColumnFlow && kind == breakAll:
+		why = "the column break is made, and the page break it also asks for is " +
+			"not: this engine does not break a document into pages"
+	case ctx == inColumnFlow:
+		return
+	case ctx == outsideColumnFlow:
+		why = "no break is made there: the box is not in the flow its multi-column " +
+			"container divides — a float, or inside an inline-level box — and " +
+			"this engine does not move one to the next column"
+	case value == "column":
+		// No effect outside a multi-column context, which is what happens.
+		return
+	default:
+		why = "no break is made there: outside a multi-column container it is a " +
+			"page break, and this engine does not break a document into pages"
+	}
+	l.rec.ReportDetail(Finding{
+		Rule:     RuleUnsupportedValue,
+		Source:   AtHTML(offsetOf(b)),
+		Message:  "\"" + property + ": " + value + "\" is not applied; " + why,
+		Path:     PathOf(b.Element),
+		Property: property,
+	})
+}
+
 // forbids reports whether a column may not end at y.
 func (z *avoidZones) forbids(y style.Unit) bool {
 	if z == nil {
@@ -1040,11 +1355,12 @@ func (z *avoidZones) forbids(y style.Unit) bool {
 	return i < len(z.zones) && z.zones[i].lo <= y
 }
 
-// allowed is the sorted breakpoints less the ones a zone forbids — except the
-// last, which is where the content ends and so where the last column must end
-// whatever was asked. Without it the balancing would not know how far the
-// content reaches.
-func (z *avoidZones) allowed(breaks []style.Unit) []style.Unit {
+// allowed is the sorted breakpoints less the ones a zone forbids, except two
+// kinds. The last is where the content ends, and so where the last column must
+// end whatever was asked; without it the balancing would not know how far the
+// content reaches. And a forced break (forced, sorted) overrides an avoid at the
+// same place, so no zone forbids one.
+func (z *avoidZones) allowed(breaks, forced []style.Unit) []style.Unit {
 	if z == nil || len(breaks) == 0 {
 		return breaks
 	}
@@ -1054,7 +1370,11 @@ func (z *avoidZones) allowed(breaks []style.Unit) []style.Unit {
 		for k < len(z.zones) && z.zones[k].hi < b {
 			k++
 		}
-		if i == len(breaks)-1 || k == len(z.zones) || z.zones[k].lo > b {
+		for len(forced) > 0 && forced[0] < b {
+			forced = forced[1:]
+		}
+		if i == len(breaks)-1 || k == len(z.zones) || z.zones[k].lo > b ||
+			(len(forced) > 0 && forced[0] == b) {
 			out = append(out, b)
 		}
 	}

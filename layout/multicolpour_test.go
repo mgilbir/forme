@@ -76,7 +76,7 @@ func TestThePourIsTheLiteralPour(t *testing.T) {
 	plain := &Box{Style: style.Initial()}
 	refuser := &Box{Style: style.Initial().With("box-decoration-break", "clone")}
 	r := rand.New(rand.NewSource(1))
-	compared, refused := 0, 0
+	compared, refused, forcedCompared := 0, 0, 0
 	for trial := 0; trial < 800; trial++ {
 		src := randomColumnContent(r, 0, plain, refuser)
 		breaks := sortedBreaks(columnBreaks(src, 0, nil))
@@ -101,20 +101,59 @@ func TestThePourIsTheLiteralPour(t *testing.T) {
 				}
 				compared++
 			}
-			if bh, ok := balancedHeight(breaks, n); true {
-				wh, wok := balancedHeightByScan(breaks, n)
+			if bh, ok := balancedHeight(breaks, nil, n); true {
+				wh, wok := balancedHeightByScan(breaks, nil, n)
 				if ok != wok || bh != wh {
 					t.Fatalf("trial %d, %d columns: the balanced height is %d, %v by "+
 						"halving and %d, %v by trying each", trial, n, bh, ok, wh, wok)
 				}
 			}
+			// And with forced breaks: a random few of the breakpoints, the
+			// last included now and then. The balanced height against the
+			// scan over every height a column can have, and the pour at it —
+			// each column ending at a forced break or at the last breakpoint
+			// that fits — against the literal pour told the same.
+			var forced []style.Unit
+			for _, b := range breaks {
+				if r.Intn(5) == 0 {
+					forced = append(forced, b)
+				}
+			}
+			bh, ok := balancedHeight(breaks, forced, n)
+			wh, wok := balancedHeightByScan(breaks, forced, n)
+			if ok != wok || bh != wh {
+				t.Fatalf("trial %d, %d columns, forced at %v: the balanced height is %d, "+
+					"%v by halving and %d, %v by trying each", trial, n, forced, bh, ok, wh, wok)
+			}
+			for _, h := range append([]style.Unit{bh}, heights...) {
+				c := columns{n: n, width: style.Unit(640), gap: style.Unit(64)}
+				snap := []style.Unit(nil)
+				if h == bh && ok {
+					snap = breaks
+				}
+				want, got := cloneForTest(src), cloneForTest(src)
+				wantOK := fillColumnsByCopyWith(want, c, h, forced, snap)
+				gotOK, _ := fillColumnsWith(got, c, h, &columnEnds{forced: forced, breaks: snap})
+				if wantOK != gotOK {
+					t.Fatalf("trial %d, %d columns at %d, forced at %v: the literal pour "+
+						"said %v and this one %v", trial, n, h, forced, wantOK, gotOK)
+				}
+				if !wantOK {
+					continue
+				}
+				if d := fragmentDiff("pour", want, got); d != "" {
+					t.Fatalf("trial %d, %d columns at %d, forced at %v: %s",
+						trial, n, h, forced, d)
+				}
+				forcedCompared++
+			}
 		}
 	}
 	// A comparison that never compared a successful pour, or never a refused
 	// one, has not tested both halves.
-	if compared < 500 || refused < 500 {
-		t.Fatalf("compared %d pours and %d refusals; the generator is not producing "+
-			"both", compared, refused)
+	if compared < 500 || refused < 500 || forcedCompared < 500 {
+		t.Fatalf("compared %d pours, %d refusals and %d pours with forced breaks; the "+
+			"generator is not producing all three", compared, refused, forcedCompared)
 	}
 }
 
@@ -348,8 +387,8 @@ func TestBalancingIsNotQuadraticInTheBreaks(t *testing.T) {
 	small, large := breaks(10000), breaks(40000)
 	var hs, hl style.Unit
 	c := costtest.Time(t, "balancing n breakpoints in two columns",
-		func() { hs, _ = balancedHeight(small, 2) },
-		func() { hl, _ = balancedHeight(large, 2) })
+		func() { hs, _ = balancedHeight(small, nil, 2) },
+		func() { hl, _ = balancedHeight(large, nil, 2) })
 	if hs != small[len(small)/2-1] || hl != large[len(large)/2-1] {
 		t.Fatalf("two columns of equal lines balance at half of them: got %d and %d", hs, hl)
 	}

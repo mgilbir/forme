@@ -194,10 +194,12 @@ func TestAnAvoidIsRelaxedWhenNothingElseFits(t *testing.T) {
 	}
 }
 
-// TestAForcedBreakIsReportedWhereItIsDeclared: the values that ask for a break
-// are not made anywhere — a document is not broken into pages, and a pour does
-// not end a column where a box asks — and they are said to be missing where they
-// are written. "avoid" is honoured and is not reported.
+// TestAForcedBreakIsReportedWhereItIsDeclared: the values that ask for a page
+// break are not made anywhere — a document is not broken into pages — and they
+// are said to be missing where they are written; so is "always" outside a
+// multicol container, where it is a page break. "avoid" is honoured and is not
+// reported. The column breaks a multicol container makes, and the ones it
+// cannot, are multicolforced_test.go's.
 func TestAForcedBreakIsReportedWhereItIsDeclared(t *testing.T) {
 	findingsAbout := func(css string) []Finding {
 		got := Compose(Input{HTML: `<div id="d"><p id="p">x</p></div>`,
@@ -210,7 +212,7 @@ func TestAForcedBreakIsReportedWhereItIsDeclared(t *testing.T) {
 		}
 		return out
 	}
-	for _, decl := range []string{"break-before: column", "break-after: page",
+	for _, decl := range []string{"break-after: page",
 		"break-before: always", "page-break-before: always", "page-break-after: left"} {
 		if got := findingsAbout(`#p { ` + decl + ` }`); len(got) != 1 {
 			t.Errorf("%s raised %d findings, want 1: %v", decl, len(got), got)
@@ -255,7 +257,7 @@ func TestAvoidZonesAreLinearInTheContent(t *testing.T) {
 		return func() {
 			breaks := sortedBreaks(columnBreaks(f, 0, nil))
 			z := avoidZonesOf(f)
-			allowed := z.allowed(breaks)
+			allowed := z.allowed(breaks, nil)
 			step := upx(t, 50)
 			for start := style.Unit(0); start < allowed[len(allowed)-1]; start = start.Add(step) {
 				if z.forbids(start.Add(step)) {
