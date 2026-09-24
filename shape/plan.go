@@ -263,11 +263,6 @@ type planFeature struct {
 	// stage is where the feature's lookups are applied, and seq the order it
 	// was asked for in, which is what settles two requests for one tag.
 	stage, seq int
-	// caller says only a caller asked for the feature — a document's
-	// font-feature-settings or font-variant, or a tag named to ShapeGlyphsWith
-	// — and not the model. Such a feature's substitutions are applied and its
-	// positioning is not: see compile.
-	caller bool
 }
 
 // planLookup is one lookup as a stage applies it.
@@ -507,7 +502,6 @@ func buildPlan(l *layout, key planKey, extra []string) *plan {
 	for _, u := range key.features.requested(extra) {
 		if u.on {
 			b.enable(u.tag, 0)
-			b.features[len(b.features)-1].caller = true
 		} else {
 			b.disable(u.tag)
 		}
@@ -717,8 +711,6 @@ func (p *plan) compile(l *layout, b *planBuilder) {
 			if f.stage < m.stage {
 				m.stage = f.stage
 			}
-			// A tag the model asked for is the model's, whoever else asked.
-			m.caller = m.caller && f.caller
 			continue
 		}
 		merged = append(merged, f)
@@ -763,19 +755,16 @@ func (p *plan) compile(l *layout, b *planBuilder) {
 	// fact about substitution: HarfBuzz puts no pause between positioning
 	// lookups, so they are one list.
 	//
-	// Not from the features only a caller asked for, which HarfBuzz would
-	// apply. They never were: the flat reading this replaced applied the
-	// default positioning features and nothing a document asked for, so a
-	// document's 'halt' or 'palt' did nothing to the glyphs. Applying them is
-	// right, and it moves ten reftests out of the ones that pass: the
-	// text-spacing-trim references set their trimmed brackets with
-	// font-feature-settings: 'halt', and the tests rely on text-spacing-trim,
-	// which does not trim those cases yet. That is left for a decision of its
-	// own rather than taken here.
+	// A feature a caller asked for — a document's font-feature-settings or
+	// font-variant, or a tag named to ShapeGlyphsWith — is positioned like
+	// any other, as HarfBuzz positions it. It was not: the flat reading this
+	// replaced applied the default positioning features and nothing a
+	// document asked for, so a document's 'halt' or 'palt' did nothing to the
+	// glyphs.
 	var gpos []planLookup
 	gposEnabled := map[string]bool{}
 	for _, f := range merged {
-		if !f.on || f.caller {
+		if !f.on {
 			continue
 		}
 		lookups, declared := l.gposFeatures[f.tag]

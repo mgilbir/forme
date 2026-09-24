@@ -198,6 +198,13 @@ func gposOrderFixtures() map[string][]byte {
 			[]fonttest.Feature{{Tag: "kern", Lookups: []int{0}}},
 			map[string]fonttest.Script{"cyrl": {Required: fonttest.NoFeature, Features: []int{0}}}),
 	})
+	// An optional positioning feature, which applies only when it is asked
+	// for: 'halt' trimming the a to half its width and moving it back, as the
+	// CJK faces trim a bracket.
+	out["requested"] = font(false, map[string][]byte{
+		"GPOS": fonttest.GPOSLookups([]fonttest.Lookup{single(goA, -250, 0, -250)},
+			map[string][]int{"halt": {0}}),
+	})
 	// 'kern' and 'dist' pairs, for turning kerning off: a over b is kerning,
 	// b over a is the distance a font states for its script.
 	out["kern-and-dist"] = font(false, map[string][]byte{
@@ -264,6 +271,23 @@ func TestPositioningFollowsTheLookupOrder(t *testing.T) {
 		got, _ := f.ShapeGlyphs(c.text)
 		checkShaped(t, fmt.Sprintf("%s %+q: %s", c.font, c.text, c.why), got, c.want)
 	}
+}
+
+// TestARequestedPositioningFeatureIsApplied: a positioning feature a caller or
+// a document asks for is applied, as HarfBuzz applies it, and not otherwise.
+// It was not applied at all, so a document's font-feature-settings: 'halt'
+// did nothing to the glyphs.
+func TestARequestedPositioningFeatureIsApplied(t *testing.T) {
+	f, err := Load(gposOrderFixtures()["requested"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, _ := f.ShapeGlyphs("ab")
+	checkShaped(t, "ab, nothing asked for", plain, []shapedAs{{goA, 500, 0, 0}, {goB, 600, 0, 0}})
+	named, _ := f.ShapeGlyphsWith("ab", "halt")
+	checkShaped(t, "ab with 'halt' named", named, []shapedAs{{goA, 250, -250, 0}, {goB, 600, 0, 0}})
+	doc, _ := f.ShapeGlyphsInContext("ab", "", "", Features{Tags: "halt"})
+	checkShaped(t, "ab with font-feature-settings: 'halt'", doc, []shapedAs{{goA, 250, -250, 0}, {goB, 600, 0, 0}})
 }
 
 // TestTurningKerningOffLeavesDist: font-kerning: none turns 'kern' off and

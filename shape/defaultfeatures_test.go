@@ -118,13 +118,14 @@ func TestTheDefaultPositioningFeaturesStillApply(t *testing.T) {
 				"to ask for", tag)
 		}
 	}
-	// And one only a caller asks for is not applied either, which is not
-	// HarfBuzz's answer and is recorded at plan.compile: applying it moves
-	// the text-spacing-trim reftests, and is left for a decision of its own.
+	// And one a caller asks for is applied: the plan is the whole of how a
+	// positioning feature is turned on, a caller's as much as the model's.
 	asked := buildPlan(f.layout, planKey{model: modelDefault, extra: "palt"}, []string{"palt"})
+	found := false
 	for _, lk := range asked.gpos {
-		if lk.index == len(on) {
-			t.Error("'palt' asked for by name is applied to the glyphs; see plan.compile")
-		}
+		found = found || lk.index == len(on)
+	}
+	if !found {
+		t.Error("'palt' asked for by name is not applied")
 	}
 }
