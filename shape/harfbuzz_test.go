@@ -432,6 +432,7 @@ func readHarfBuzzGolden(t *testing.T, corpusName, expectedName string) (corpus [
 	if header["font-sha256"] == "" {
 		t.Fatalf("%s has no font-sha256 line, so there is nothing tying it to a font", path)
 	}
+	refuseUnpinnedOracle(t, path)
 	return corpus, expected, header
 }
 

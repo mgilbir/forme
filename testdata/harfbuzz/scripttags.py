@@ -19,7 +19,9 @@ import os
 import random
 import sys
 
-import uharfbuzz as hb
+from oracle import harfbuzz
+
+hb = harfbuzz()
 
 out_path = sys.argv[1]
 

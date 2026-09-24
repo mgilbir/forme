@@ -512,6 +512,7 @@ func readVarInstanceGolden(t *testing.T, name string) (map[string]string, []varI
 	if len(out) == 0 {
 		t.Fatalf("%s holds no glyphs, so it proves nothing", name)
 	}
+	refuseUnpinnedOracle(t, filepath.Join(varInstanceDir, name+".txt"))
 	return header, out
 }
 

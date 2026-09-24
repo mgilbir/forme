@@ -130,9 +130,33 @@ something lands in pieces.
 ## Regenerating
 
 ```sh
-python3 -m venv .hbenv && .hbenv/bin/pip install uharfbuzz
-PYTHON=.hbenv/bin/python make hbshaping
+make hbenv
+PYTHON=.hbenv/bin/python make hboracles
 ```
+
+`make hbenv` is
+
+```sh
+python3 -m venv .hbenv
+.hbenv/bin/pip install --require-hashes --no-deps -r testdata/harfbuzz/requirements.txt
+```
+
+The oracle is one HarfBuzz release: `HARFBUZZ_VERSION` in the Makefile, the
+release HarfBuzz's own data files are fetched at, taken through the uharfbuzz
+release that carries it — `requirements.txt` pins it by version and by the
+digest of every file PyPI publishes for it, and pip refuses anything else. The
+recipe used to be a bare `pip install uharfbuzz`, which is whatever PyPI serves
+that day, and it had left the expectation files at three releases: 14.3.0,
+14.4.0 and 14.5.0. Regenerated at 14.5.0 they did not move, but nothing would
+have said so if they had.
+
+Every file the oracles write records the HarfBuzz and uharfbuzz it came from.
+The generators refuse to run on any other (`oracle.py`), and
+`shape/oraclepin_test.go` refuses a file that records any other — including
+`testdata/varinstance`, whose advances are HarfBuzz's and which records the
+pinned fontTools as well. Moving to a new release is moving the pin, the
+digests and `HARFBUZZ_VERSION` together, regenerating every file, and reading
+what moved.
 
 Review the diff to `expected.txt` before committing. A change there is HarfBuzz
 changing its mind, and is worth understanding rather than accepting.

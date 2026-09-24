@@ -125,8 +125,14 @@ def _shaping_imports():
     The classifier below is the part of this file with a decision in it, and it
     is the part worth running in CI — where neither of those is installed. See
     --self-test.
+
+    Both are the releases requirements.txt pins, or this stops: a difference
+    against another HarfBuzz is as likely to be HarfBuzz's as this package's.
     """
-    import uharfbuzz as hb
+    from oracle import fonttools, harfbuzz
+
+    hb = harfbuzz()
+    fonttools()
     from fontTools.ttLib import TTFont
     return hb, TTFont
 

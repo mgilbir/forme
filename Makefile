@@ -1,4 +1,4 @@
-.PHONY: ucd ms-use-sources clean-ms-use-sources verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags notice-sources clean-notice-sources noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance
+.PHONY: ucd ms-use-sources clean-ms-use-sources verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags notice-sources clean-notice-sources noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance hbenv hboracles hblanguages
 
 # Every go test in this file names its -timeout, and these are the two it names.
 #
@@ -158,10 +158,32 @@ clean-bidi-tests:
 
 # Shaping checked against HarfBuzz, over six fonts. See testdata/harfbuzz.
 #
-#	python3 -m venv .hbenv && .hbenv/bin/pip install uharfbuzz fonttools
-#	PYTHON=.hbenv/bin/python make hbshaping
+#	make hbenv
+#	PYTHON=.hbenv/bin/python make hboracles
+#
+# The oracle is one HarfBuzz release, HARFBUZZ_VERSION, taken through the
+# uharfbuzz release that carries it: testdata/harfbuzz/requirements.txt pins it
+# by version and by digest, and pip refuses anything else. An unpinned
+# `pip install uharfbuzz` is whatever PyPI serves that day, and it had left the
+# expectation files at three releases. The generators refuse another release
+# (testdata/harfbuzz/oracle.py), and shape/oraclepin_test.go refuses a file
+# that records one.
 HARFBUZZ_DIR := testdata/harfbuzz
 PYTHON ?= python3
+HBENV := .hbenv
+
+hbenv:
+	rm -rf $(HBENV)
+	python3 -m venv $(HBENV)
+	$(HBENV)/bin/pip install --require-hashes --no-deps -r $(HARFBUZZ_DIR)/requirements.txt
+	$(HBENV)/bin/python -c 'import sys; sys.path.insert(0, "$(HARFBUZZ_DIR)"); \
+		import oracle; oracle.harfbuzz(); oracle.fonttools()'
+
+# Every file the oracles write through uharfbuzz. hblanguages is below, where
+# the language-tag header it reads has been defined. The one oracle file this
+# leaves out, usecategories.expected.txt, is HarfBuzz's own generator run from a
+# source checkout of the same release; see usecategories.py.
+hboracles: hbshaping hblanguages varinstance
 
 hbshaping:
 	$(PYTHON) $(HARFBUZZ_DIR)/corpus.py
@@ -1020,6 +1042,13 @@ $(HB_COPYING):
 
 language-tags: $(HB_LANGTAGS) $(HB_COPYING)
 	$(MAKETABLES) language-tags
+
+# What HarfBuzz answers for the language and script tags, which
+# shape/language_test.go holds the table above to. Needs the pinned oracle; see
+# hbenv.
+hblanguages: $(HB_LANGTAGS)
+	$(PYTHON) $(HARFBUZZ_DIR)/langtags.py $(HB_LANGTAGS) $(HARFBUZZ_DIR)/langtags.expected.txt
+	$(PYTHON) $(HARFBUZZ_DIR)/scripttags.py $(HARFBUZZ_DIR)/scripttags.expected.txt
 
 # The licences THIRD_PARTY_NOTICES quotes that no generator reads.
 #

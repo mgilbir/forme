@@ -176,7 +176,8 @@ between them.
 	make test-grapheme # and its grapheme boundary cases
 	make test-normalization # and its normalisation forms
 	make test-css      # the CSS Syntax suite
-	make hbfuzz        # differential fuzzing; needs python and uharfbuzz
+	make hbenv         # the pinned HarfBuzz oracle, installed by digest into .hbenv
+	make hbfuzz        # differential fuzzing; needs that oracle (PYTHON=.hbenv/bin/python)
 	make test-difffuzz # that fuzzer's classifier, which needs only python
 	make wpt-breakdown # where the reftests that are not clean actually are
 

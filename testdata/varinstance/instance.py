@@ -40,8 +40,12 @@ import io
 import os
 import sys
 
-import uharfbuzz as hb
-from fontTools.ttLib import TTFont
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "harfbuzz"))
+from oracle import fonttools, harfbuzz  # noqa: E402
+
+hb = harfbuzz()
+ft_version = fonttools().version
+from fontTools.ttLib import TTFont  # noqa: E402
 from fontTools.varLib import instancer
 from fontTools.varLib.iup import iup_delta
 from fontTools.varLib.models import normalizeLocation, piecewiseLinearMap, supportScalar
@@ -229,6 +233,9 @@ def write_case(name, rel, loc, nohvar, out_path):
         "# rest is fontTools'; see instance.py for why they come from different",
         "# places.",
         "#",
+        "harfbuzz %s" % hb.version_string(),
+        "uharfbuzz %s" % hb.__version__,
+        "fonttools %s" % ft_version,
         "font %s" % rel,
         "font-sha256 %s" % font_sha,
         "strip-hvar %s" % ("yes" if nohvar else "no"),

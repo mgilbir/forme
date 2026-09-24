@@ -27,7 +27,9 @@
 import hashlib
 import sys
 
-import uharfbuzz as hb
+from oracle import harfbuzz
+
+hb = harfbuzz()
 
 font_path, corpus_path, out_path = sys.argv[1], sys.argv[2], sys.argv[3]
 

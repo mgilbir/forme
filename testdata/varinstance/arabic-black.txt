@@ -6,6 +6,9 @@
 # rest is fontTools'; see instance.py for why they come from different
 # places.
 #
+harfbuzz 14.5.0
+uharfbuzz 0.56.2
+fonttools 4.65.0
 font testdata/harfbuzz/fonts/NotoSansArabic.ttf
 font-sha256 63111b5b2e074dd48cc67692e0a2726d86ee94c1c37fe8598257b7b4e87e869e
 strip-hvar no
