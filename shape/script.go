@@ -31,9 +31,8 @@ import (
 //
 // What does the font select for it? The ScriptList walk below. A script that
 // the font does not declare falls back to 'DFLT', the conventional tag for "any
-// script"; a font with no ScriptList at all, or one that declares nothing this
-// run can use, falls back to taking every feature — the behaviour this package
-// had before, so that no font that worked stops working.
+// script", then 'dflt' and 'latn'; a table that names none of them selects
+// nothing, as HarfBuzz selects nothing from it (see readLayoutFor).
 //
 // # Language
 //
@@ -941,10 +940,21 @@ func (f *Face) readLayoutFor(script uint16, lang otLanguage) *layout {
 	gsub, gsubOK := scriptSelection(f.layoutTables["GSUB"], tags, lang.tags)
 	gpos, gposOK := scriptSelection(f.layoutTables["GPOS"], tags, lang.tags)
 	gposSel := gpos.features
-	if !gsubOK && !gposOK {
-		// Neither table says anything about scripts, so there is nothing to
-		// select by: every feature applies, which is what f.layout already is.
-		return f.layout
+	// A table that names none of the run's script tags, nor 'DFLT', 'dflt' or
+	// 'latn', selects nothing: HarfBuzz finds no script in it and applies none
+	// of its features, and so a browser sets the run with none. This package
+	// used to take every feature instead, "so that no font that worked stops
+	// working" — and under a language tag naming 'DFLT' ("und-x-hbscdflt"),
+	// every Devanagari, Bengali, Tamil and Myanmar face that states its rules
+	// only under its own script had all of them applied to text HarfBuzz sets
+	// with none: some 2,250 of the 2,579 strings still differing over the
+	// Google Fonts tree. Rubik One, whose GPOS names only a script tagged with
+	// four spaces, was kerned where HarfBuzz does not kern it.
+	if !gsubOK {
+		gsub.features = featureSet{}
+	}
+	if !gposOK {
+		gpos.features, gposSel = featureSet{}, featureSet{}
 	}
 	gsubKey, gposKey := selectionKey(gsub.features), selectionKey(gposSel)
 	if gsub.required != noRequiredFeature {

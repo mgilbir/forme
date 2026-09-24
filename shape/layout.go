@@ -103,10 +103,11 @@ import (
 // the tables from those alone — so a Greek run is not given a rule the font
 // declares only for Arabic.
 //
-// A font with no ScriptList, or one that declares nothing for the run's script
-// and no default either, falls back to taking every feature whatever declares
-// it. That is what this package did before there was any selection at all, and
-// it is the right answer for a table that says nothing about scripts.
+// A table with no ScriptList, or one that declares nothing for the run's
+// script and no default either, selects nothing for the run, as HarfBuzz
+// selects nothing from it. The unselected reading — every feature, whatever
+// declares it — is kept as f.layout for the questions about what a face has
+// at all (HasLigatures, HasKerning), which are not about a run.
 //
 // # Bounds
 //
@@ -713,7 +714,7 @@ func (l *layout) readRequiredPositioning(gpos []byte, index int, varied featureS
 // readLayout reads the substitution tables on top of an already-read
 // positioning half, taking the GSUB features the given selection admits. The
 // selection is the FeatureList indices the run's script and language chose; a
-// nil one takes every feature, which is what a table with no ScriptList gets.
+// nil one takes every feature, which is the face's own unselected reading.
 //
 // The positioning half is copied whole and then the substitution fields are
 // reset, rather than the other way about, so that a positioning field added to

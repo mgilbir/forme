@@ -178,6 +178,26 @@ func gposOrderFixtures() map[string][]byte {
 			Subtables: [][]byte{fonttest.LigatureSubst([]fonttest.Ligature{{Components: []int{goAcute, goB}, Glyph: goAB}})}}},
 			map[string][]int{"liga": {0}}),
 	})
+	// A rule that takes its first glyph apart and then ligates the second part
+	// with the glyph after it, which the decomposition pushed one place
+	// further on. Padauk's 'rlig' does this with U+AA69 and U+1084.
+	out["nested-growth"] = font(false, map[string][]byte{
+		"GSUB": fonttest.GSUBLookups([]fonttest.Lookup{
+			{Type: 5, Subtables: [][]byte{fonttest.SequenceContext3([][]int{{goA}, {goB}},
+				[]fonttest.SeqLookup{{At: 0, Lookup: 1}, {At: 1, Lookup: 2}})}},
+			{Type: 2, Subtables: [][]byte{fonttest.MultipleSubst([]int{goA}, [][]int{{goX, goA}})}},
+			{Type: 4, Subtables: [][]byte{fonttest.LigatureSubst([]fonttest.Ligature{{Components: []int{goA, goB}, Glyph: goA}})}},
+		}, map[string][]int{"rlig": {0}}),
+	})
+	// Kerning stated for Cyrillic alone, which a Latin run does not get: the
+	// table names none of 'latn', 'DFLT', 'dflt', so HarfBuzz selects nothing
+	// from it. Rubik One names only a script tagged with four spaces.
+	out["gpos-other-script"] = font(false, map[string][]byte{
+		"GPOS": fonttest.GPOSTable([]fonttest.Lookup{
+			{Type: 2, Subtables: [][]byte{fonttest.PairPosSubtable([]fonttest.KernPair{{Left: goA, Right: goB, Adjust: -30}})}}},
+			[]fonttest.Feature{{Tag: "kern", Lookups: []int{0}}},
+			map[string]fonttest.Script{"cyrl": {Required: fonttest.NoFeature, Features: []int{0}}}),
+	})
 	// 'kern' and 'dist' pairs, for turning kerning off: a over b is kerning,
 	// b over a is the distance a font states for its script.
 	out["kern-and-dist"] = font(false, map[string][]byte{
@@ -230,6 +250,10 @@ func TestPositioningFollowsTheLookupOrder(t *testing.T) {
 			"the acute takes the height of the whole chain its b hangs from"},
 		{"fallback-mark-ligature", "a\u0301b", []shapedAs{{goA, 500, 0, 0}, {goAB, 1100, 0, 0}},
 			"a ligature beginning with a mark is drawn as the letter it joins and is not placed"},
+		{"nested-growth", "ab", []shapedAs{{goX, 700, 0, 0}, {goA, 500, 0, 0}},
+			"the ligature the second record names reaches the b the first record pushed on"},
+		{"gpos-other-script", "ab", []shapedAs{{goA, 500, 0, 0}, {goB, 600, 0, 0}},
+			"positioning stated for another script alone is not applied"},
 		{"required", "a", []shapedAs{{goA, 507, 0, 0}},
 			"the language system's required feature applies whatever its tag"},
 	} {

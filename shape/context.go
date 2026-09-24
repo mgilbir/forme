@@ -1038,6 +1038,15 @@ func (sh shaper) runRecords(base []byte, recAt, count int, positions []int, buf 
 		if delta == 0 {
 			continue
 		}
+		// The far edge a lookup may look to moves with the buffer. The pass
+		// moves its own once this rule is done; the records after this one
+		// are applied before that, and a glyph a decomposition pushed past the
+		// old edge is still in the text. Padauk's 'rlig' takes U+AA69 apart
+		// into two glyphs and then ligates the second with the U+1084 after
+		// it, which the old edge put out of reach: the U+1084 was drawn twice.
+		if sh.limit > 0 {
+			sh.limit += delta
+		}
 		// The end moves with the change, but never back past the position the
 		// lookup was applied at: nothing a lookup does at a position can reach
 		// behind it.

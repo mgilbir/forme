@@ -78,6 +78,7 @@ fonts to 3.6 MB — against the 2 MB the bundled face already costs.
 | `corpus.txt`, `arabic.txt`, `khmer.txt`, `javanese.txt`, `balinese.txt`, `tibetan.txt` | the strings, one per line |
 | `shape.py` | shapes one corpus with one font and writes its expectations |
 | `*.expected.txt` | glyph, advance and offset for each, in font units |
+| `*.dflt.expected.txt` | the same for the Javanese, Balinese and Tibetan corpora shaped in `und-x-hbscdflt` — see below |
 | `difffuzz.py` | generates text instead of listing it — see below |
 
 Each corpus is weighted towards the places shaping decides something rather than
@@ -113,6 +114,19 @@ many paths once.
   and the mark glyph sets that were not read at all. The first two were silent,
   because a lookup is named by index and cutting the list breaks every reference
   past the cut.
+
+## The default model
+
+A language tag can name the script tag a run is looked up under, and
+`und-x-hbscdflt` names `DFLT`. A Javanese, Balinese or Tibetan run in a font
+that states rules there is then set by the default model: the font's features
+over the text as it is written, with no syllables and no reordering. It is what
+a font written without the script's own model gets too. `shape.py` takes the
+tag as a fourth argument and records it, and
+`shape/defaultmodel_test.go` holds the default model to HarfBuzz over the
+Javanese, Balinese and Tibetan corpora, whose answers under it differ from the script models' in 630,
+404 and 1,324 strings. Khmer's font answers the same either way and is not
+repeated.
 
 ## Why two scripts for one engine
 

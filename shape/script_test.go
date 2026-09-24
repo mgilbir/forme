@@ -152,17 +152,20 @@ func TestScriptWithNoLanguageSystemSelectsNothing(t *testing.T) {
 	}
 }
 
-// TestNoScriptListTakesEveryFeature is the fallback that keeps a font which
-// says nothing about scripts working exactly as it did. Every feature applies,
-// in the order the font lists them, whatever the run is written in.
-func TestNoScriptListTakesEveryFeature(t *testing.T) {
+// TestNoScriptListSelectsNothing: a table that declares no scripts selects
+// nothing for a run, as HarfBuzz selects nothing from it — the letters are set
+// in their own glyphs. This package used to take every feature instead; see
+// readLayoutFor for what that cost.
+func TestNoScriptListSelectsNothing(t *testing.T) {
 	// An empty map is an empty ScriptList — a well-formed table that declares
 	// no scripts — which is different from not building one.
 	f := scriptFace(t, map[string]fonttest.Script{})
 
 	for _, s := range []string{"x", "α*"} {
-		if got := lastGID(t, f, s); got != scY {
-			t.Errorf("%q: x shaped to glyph %d, want %d — with no script list every feature applies, first one winning", s, got, scY)
+		r := []rune(s)
+		own, _ := f.GlyphID(r[len(r)-1])
+		if got := lastGID(t, f, s); got != own {
+			t.Errorf("%q: shaped to glyph %d, want its own %d — with no script list nothing applies", s, got, own)
 		}
 	}
 }

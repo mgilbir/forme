@@ -206,9 +206,15 @@ hbshaping:
 		$(HARFBUZZ_DIR)/tibetan.txt $(HARFBUZZ_DIR)/tibetan.expected.txt
 	$(PYTHON) $(HARFBUZZ_DIR)/shapefeatures.py fonts/notosans/NotoSans-Variable.ttf \
 		$(HARFBUZZ_DIR)/features.txt $(HARFBUZZ_DIR)/features.expected.txt
+	$(PYTHON) $(HARFBUZZ_DIR)/shape.py $(HARFBUZZ_DIR)/fonts/NotoSansJavanese.ttf \
+		$(HARFBUZZ_DIR)/javanese.txt $(HARFBUZZ_DIR)/javanese.dflt.expected.txt und-x-hbscdflt
+	$(PYTHON) $(HARFBUZZ_DIR)/shape.py $(HARFBUZZ_DIR)/fonts/NotoSansBalinese.ttf \
+		$(HARFBUZZ_DIR)/balinese.txt $(HARFBUZZ_DIR)/balinese.dflt.expected.txt und-x-hbscdflt
+	$(PYTHON) $(HARFBUZZ_DIR)/shape.py $(HARFBUZZ_DIR)/fonts/NotoSerifTibetan.ttf \
+		$(HARFBUZZ_DIR)/tibetan.txt $(HARFBUZZ_DIR)/tibetan.dflt.expected.txt und-x-hbscdflt
 
 test-hbshaping:
-	go test -v -run 'TestShapingAgreesWithHarfBuzz|TestTheHarfBuzzOracleHasTeeth|TestFeatureShapingAgreesWithHarfBuzz|TestTheFeatureOracleHasTeeth' -count=1 -timeout $(TEST_TIMEOUT) ./shape
+	go test -v -run 'TestShapingAgreesWithHarfBuzz|TestTheHarfBuzzOracleHasTeeth|TestFeatureShapingAgreesWithHarfBuzz|TestTheFeatureOracleHasTeeth|TestTheDefaultModelAgreesWithHarfBuzz' -count=1 -timeout $(TEST_TIMEOUT) ./shape
 
 # Instancing checked against fontTools and HarfBuzz, over four faces and eight
 # locations. Needs the same Python as hbshaping.

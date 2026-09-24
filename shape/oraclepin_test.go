@@ -143,10 +143,11 @@ func TestTheOracleIsPinned(t *testing.T) {
 		}
 		files = append(files, m...)
 	}
-	// Nine in testdata/harfbuzz and eight in testdata/varinstance. Fewer means
-	// the patterns stopped finding them, and the test would pass on nothing.
-	if len(files) < 17 {
-		t.Fatalf("found %d expectation files, want at least 17: %q", len(files), files)
+	// Twelve in testdata/harfbuzz and eight in testdata/varinstance. Fewer
+	// means the patterns stopped finding them, and the test would pass on
+	// nothing.
+	if len(files) < 20 {
+		t.Fatalf("found %d expectation files, want at least 20: %q", len(files), files)
 	}
 	for _, path := range files {
 		for _, p := range oracleReleaseProblems(pin, path, oracleHeader(t, path)) {
