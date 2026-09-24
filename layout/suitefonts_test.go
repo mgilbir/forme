@@ -202,6 +202,30 @@ func (m *missingFaces) add(name string, err error) {
 	m.names = append(m.names, fmt.Sprintf("%s (%v)", name, err))
 }
 
+// isolate gives a test an empty record for its own duration and puts the
+// process's back when it ends.
+//
+// The record is the process's, and a test that loads a directory of its own
+// making writes into it: the faces a temporary directory lacks, and the file
+// in it that is not a font. Left there, the second of two runs of the same
+// test (go test -count=2) found every name already recorded, nothing new, and
+// failed; and every run left the ratchet's record naming faces the real
+// library does not lack, so that a genuine drop in the clean count after them
+// was put down to the harness — "the fallback faces did not load" — which is
+// the one wrong reading that invites lowering the number. A test that loads
+// its own directory isolates the record, and what it recorded goes with it.
+func (m *missingFaces) isolate(t testing.TB) {
+	m.mu.Lock()
+	seen, names := m.seen, m.names
+	m.seen, m.names = nil, nil
+	m.mu.Unlock()
+	t.Cleanup(func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		m.seen, m.names = seen, names
+	})
+}
+
 // list is what could not be loaded, in the order the loader met it.
 func (m *missingFaces) list() []string {
 	m.mu.Lock()

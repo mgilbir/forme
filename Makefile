@@ -1,9 +1,28 @@
 .PHONY: ucd ms-use-sources clean-ms-use-sources verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags notice-sources clean-notice-sources noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance
 
+# Every go test in this file names its -timeout, and these are the two it names.
+#
+# go test's own default is ten minutes for each package's test binary, and that
+# stopped being a bound with room in it: layout's tests, with every corpus in
+# the environment, take about 95 seconds here and about 500 under the race
+# detector, which is most of the ten minutes on this machine and more than all
+# of it on a runner two or three times slower. A default that trips on a
+# slower machine is a flaky gate, and one nobody chose is one nobody knows the
+# reason for. So each is written down with the measurement it was chosen from,
+# at about ten times what it covers here for the ordinary run and five for the
+# race run, which is five times slower to begin with. A package that outgrows
+# them is a fact worth hearing about rather than a limit to raise quietly:
+# measure it again, and move the number with the reason.
+#
+# cmd/gotesttimeout_test.go holds every go test here and in .github/workflows
+# to naming one.
+TEST_TIMEOUT = 15m
+RACE_TIMEOUT = 45m
+
 test:
 	gofmt -l . | grep -v '^testdata/' && exit 1 || true
 	go vet ./...
-	go test -count=1 ./...
+	go test -count=1 -timeout $(TEST_TIMEOUT) ./...
 
 # The same suite with every corpus in the environment, which is the only way most
 # of it runs at all.
@@ -45,7 +64,7 @@ CORPORA = wpt noto-fonts notocjk ucd css-tests bidi-tests grapheme-tests \
 
 test-corpora:
 	$(MAKE) verify-fonts
-	$(CORPUS_ENV) go test -count=1 ./...
+	$(CORPUS_ENV) go test -count=1 -timeout $(TEST_TIMEOUT) ./...
 
 # The same suite under the race detector.
 #
@@ -63,7 +82,7 @@ test-corpora:
 # over the tests that need nothing fetched, which are the ones that share
 # nothing.
 race:
-	$(CORPUS_ENV) go test -count=1 -race ./...
+	$(CORPUS_ENV) go test -count=1 -race -timeout $(RACE_TIMEOUT) ./...
 
 # Every fetch in this file goes through FETCH rather than through a bare curl.
 #
@@ -132,7 +151,7 @@ $(BIDI_STAMP):
 	touch $@
 
 test-bidi: bidi-tests
-	UNICODE_BIDI_TESTS=$(abspath $(BIDI_DIR)) go test -v -run TestBidiConformance -count=1 ./bidi
+	UNICODE_BIDI_TESTS=$(abspath $(BIDI_DIR)) go test -v -run TestBidiConformance -count=1 -timeout $(TEST_TIMEOUT) ./bidi
 
 clean-bidi-tests:
 	rm -rf $(BIDI_DIR)
@@ -167,7 +186,7 @@ hbshaping:
 		$(HARFBUZZ_DIR)/features.txt $(HARFBUZZ_DIR)/features.expected.txt
 
 test-hbshaping:
-	go test -v -run 'TestShapingAgreesWithHarfBuzz|TestTheHarfBuzzOracleHasTeeth|TestFeatureShapingAgreesWithHarfBuzz|TestTheFeatureOracleHasTeeth' -count=1 ./shape
+	go test -v -run 'TestShapingAgreesWithHarfBuzz|TestTheHarfBuzzOracleHasTeeth|TestFeatureShapingAgreesWithHarfBuzz|TestTheFeatureOracleHasTeeth' -count=1 -timeout $(TEST_TIMEOUT) ./shape
 
 # Instancing checked against fontTools and HarfBuzz, over four faces and eight
 # locations. Needs the same Python as hbshaping.
@@ -180,7 +199,7 @@ varinstance:
 	$(PYTHON) testdata/varinstance/instance.py
 
 test-varinstance:
-	go test -v -run 'TestInstancingAgreesWithFontToolsAndHarfBuzz|TestTheInstancingOracleHasTeeth' -count=1 ./shape
+	go test -v -run 'TestInstancingAgreesWithFontToolsAndHarfBuzz|TestTheInstancingOracleHasTeeth' -count=1 -timeout $(TEST_TIMEOUT) ./shape
 
 # Differential fuzzing against HarfBuzz. Needs the same Python as hbshaping.
 hbfuzz:
@@ -791,7 +810,7 @@ $(GRAPHEME_STAMP):
 # the check, and it once matched no pattern at all and so never ran.
 test-grapheme: grapheme-tests
 	UNICODE_GRAPHEME_TESTS=$(abspath $(GRAPHEME_DIR)) \
-	  go test -v -count=1 ./segment
+	  go test -v -count=1 -timeout $(TEST_TIMEOUT) ./segment
 
 clean-grapheme-tests:
 	rm -rf $(GRAPHEME_DIR)
@@ -819,7 +838,7 @@ $(NORMALIZATION_STAMP):
 # it. A sweep handed no cases passes in silence.
 test-normalization: normalization-tests
 	UNICODE_NORMALIZATION_TESTS=$(abspath $(NORMALIZATION_DIR)) \
-	  go test -v -count=1 -run 'NFC|Normalization' ./shape
+	  go test -v -count=1 -timeout $(TEST_TIMEOUT) -run 'NFC|Normalization' ./shape
 
 clean-normalization-tests:
 	rm -rf $(NORMALIZATION_DIR)
@@ -872,7 +891,7 @@ $(CSS_TESTS_STAMP):
 # every colour the CSS Syntax tests name against what this engine parses it to,
 # and no target set the variable for it — so it skipped, everywhere, always.
 test-css: css-tests
-	CSS_PARSING_TESTS=$(abspath $(CSS_TESTS_DIR)) go test -v -count=1 \
+	CSS_PARSING_TESTS=$(abspath $(CSS_TESTS_DIR)) go test -v -count=1 -timeout $(TEST_TIMEOUT) \
 	  -run 'TestCSSOracle|TestColorOracle|TestUnsupportedColorFilesAreAccountedFor' \
 	  ./css ./style
 
@@ -1507,7 +1526,7 @@ $(WPT_DIR)/fonts/NotoSansGeorgian-Regular.ttf: $(WPT_STAMP) $(NOTO_STAMP)
 # checked by nothing that anybody ran.
 test-wpt: wpt noto-fonts
 	WPT_TESTS=$(abspath $(WPT_DIR)) NOTO_FONTS=$(abspath $(NOTO_DIR)) \
-	  go test -v -run 'TestWPT|TestTheCorpus|TestTheReadme' -count=1 ./layout/
+	  go test -v -run 'TestWPT|TestTheCorpus|TestTheReadme' -count=1 -timeout $(TEST_TIMEOUT) ./layout/
 
 # Where the reftests that are not clean actually are.
 #
@@ -1523,7 +1542,7 @@ test-wpt: wpt noto-fonts
 # passes has no business in a test run that is supposed to mean something.
 wpt-breakdown: wpt noto-fonts
 	WPT_BREAKDOWN=1 WPT_TESTS=$(abspath $(WPT_DIR)) NOTO_FONTS=$(abspath $(NOTO_DIR)) \
-	  go test -v -run TestWPTBreakdown -count=1 ./layout/
+	  go test -v -run TestWPTBreakdown -count=1 -timeout $(TEST_TIMEOUT) ./layout/
 
 clean-wpt:
 	rm -rf $(WPT_DIR)

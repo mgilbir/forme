@@ -168,7 +168,12 @@ jobs:
       # name is a prefix of another matches both — which is not a slower run but
       # no run at all: "will not fuzz, -fuzz matches more than one fuzz test".
       # FuzzDecodeWOFF matched FuzzDecodeWOFF2 and had been fuzzing nothing.
-      - run: go test -run XXX -fuzz '^${{ matrix.target }}$' -fuzztime 10m ${{ matrix.package }}
+      #
+      # The timeout bounds the tests and seeds that run before the fuzzing, and
+      # not the fuzzing, which -fuzztime bounds: go test stops its alarm there.
+      # It is named anyway, as every go test in this repository names one; see
+      # the note on TEST_TIMEOUT in the Makefile.
+      - run: go test -run XXX -timeout 15m -fuzz '^${{ matrix.target }}$' -fuzztime 10m ${{ matrix.package }}
       # A crasher is written into testdata/fuzz, which is exactly what wants
       # keeping: it is the seed that reproduces the failure.
       - name: Keep whatever it found

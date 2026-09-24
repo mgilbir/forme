@@ -43,8 +43,8 @@ type counterEntry struct {
 	depth int
 	// reversed says the counter counts down: CSS Lists 3's "reversed()", which
 	// is what "<ol reversed>" maps to. It is incremented by the *negation* of
-	// the increment, so the same "counter-increment: list-item" that numbers a
-	// list upwards numbers this one downwards, and no other rule changes.
+	// the increment, so the same increment of list-item that numbers a list
+	// upwards numbers this one downwards, and no other rule changes.
 	reversed bool
 	// tally, in the pass that finds where reversed counters start, adds up
 	// the increments this counter receives. See reversedStarts.
@@ -540,7 +540,12 @@ func (w *counterWalk) apply(key style.PseudoKey, cs style.ComputedStyle, depth i
 	resets := w.list(cs.Get("counter-reset"), 0)
 	increments := w.list(cs.Get("counter-increment"), 1)
 	sets := w.list(cs.Get("counter-set"), 0)
-	if n := len(resets) + len(increments) + len(sets); n > 0 &&
+	automatic := listItemIncrements(cs, increments)
+	n := len(resets) + len(increments) + len(sets)
+	if automatic {
+		n++
+	}
+	if n > 0 &&
 		!w.rec.charge(int64(n)*costCounterValue, "the counters past that point") {
 		w.stop()
 		return
@@ -566,12 +571,47 @@ func (w *counterWalk) apply(key style.PseudoKey, cs style.ComputedStyle, depth i
 	for _, r := range increments {
 		w.state.increment(r.name, r.value, depth)
 	}
+	if automatic {
+		w.state.increment("list-item", 1, depth)
+	}
 	// After the increment, which css-lists-3 §4.3 calls a deliberate
 	// choice: "<li value=3>" is three on an element whose own increment has
 	// already run, and it would be four the other way round.
 	for _, r := range sets {
 		w.state.set(r.name, r.value, depth)
 	}
+}
+
+// listItemIncrements reports whether a box takes CSS Lists 3 §4.6's automatic
+// increment of the list-item counter: whether it is a list item, and its
+// counter-increment does not name list-item itself.
+//
+// "Unless the counter-increment property manually specifies a different
+// increment for the list-item counter, it must be incremented by 1 on every
+// list item, at the same time that counters are normally incremented." A list
+// item is a box whose display includes list-item, whatever element or
+// pseudo-element it is. The user agent sheet said
+// "li { counter-increment: list-item }" instead, which is a different rule on
+// both counts: "<div style='display: list-item'>" was never counted, so every
+// item in a list of them had the same number, and an author's
+// "li { counter-increment: chapter }" replaced the declaration and stopped the
+// list counting. The computed value of counter-increment is not changed, which
+// §4.6 says as well; the increment is the walk's.
+//
+// An inline list item is a list item. This engine draws no marker for one and
+// says so (displayGapInlineListItem), and it still counts: what it lacks is its
+// marker, and a counter(list-item) written in its content, or in a later
+// item's, is a number the missing marker does not change.
+func listItemIncrements(cs style.ComputedStyle, increments []counterRequest) bool {
+	if d := parseDisplay(cs.Get("display")); !d.listItem && d.gap != displayGapInlineListItem {
+		return false
+	}
+	for _, r := range increments {
+		if r.name == "list-item" {
+			return false
+		}
+	}
+	return true
 }
 
 // walk visits a node and what is inside it, in document order.

@@ -45,7 +45,12 @@ html, body, div, p, blockquote, figure, figcaption, address,
 header, footer, nav, section, article, aside, main, hgroup,
 h1, h2, h3, h4, h5, h6, ul, ol, dl, dt, dd, pre, hr { display: block }
 
-li { display: list-item; counter-increment: list-item }
+/* A list item counts itself: CSS Lists 3 section 4.6 increments the list-item
+   counter on every box whose display includes list-item, unless its own
+   counter-increment names that counter. It is the counter walk's rule and not
+   a declaration here, which only an li could carry and an author's own
+   counter-increment would replace. See listItemIncrements. */
+li { display: list-item }
 /* Each list creates its own counter, which is what makes a nested list start
    again at one while the list around it carries on. "list-item" is the name CSS
    Lists reserves for exactly this. */
