@@ -143,3 +143,65 @@ func TestAHalfDrawableDecompositionIsMissing(t *testing.T) {
 			"want .notdef and one missing", codes, missing)
 	}
 }
+
+// TestACharacterAFaceCannotCodeIsOneAnswer: a face addressed by character code
+// has one answer for a character with no code — the space — and measuring,
+// encoding and drawing it give that answer, with one count of what was
+// missing. The simple faces gave three: Measure took the character's own
+// advance (U+03B1 in a face that has an alpha and no WinAnsi code for it) or
+// .notdef's, Encode left it out, and the by-code path drew a space. The
+// by-code path also recorded its codes as the glyphs used, so a subset kept
+// glyph 65 for an "A" and not the A.
+func TestACharacterAFaceCannotCodeIsOneAnswer(t *testing.T) {
+	helvetica, err := Standard("Helvetica")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Printable ASCII and an alpha: the alpha has a glyph and no WinAnsi code,
+	// the euro sign has a code and no glyph, and U+E000 has neither.
+	glyphs := append(asciiGlyphs(), fonttest.Glyph{Rune: 0x03B1, Advance: 900, HasShape: true})
+	simple, err := LoadSimple(fonttest.SFNT(fonttest.SFNTOptions{Name: "Ascii", Glyphs: glyphs}))
+	if err != nil {
+		t.Fatalf("loading the fixture as a simple face: %v", err)
+	}
+	const s = "a€αb"
+	for _, tc := range []struct {
+		name string
+		f    *Face
+		want []byte
+	}{
+		// Helvetica has a euro sign; the fixture does not.
+		{"Helvetica", helvetica, []byte("a\x80 b ")},
+		{"a simple face", simple, []byte("a  b ")},
+	} {
+		drawer, encoder := tc.f.Clone(), tc.f.Clone()
+		glyphs, drawnMissing := drawer.ShapeGlyphs(s)
+		codes, encodedMissing := encoder.Encode(s)
+		var drawnCodes []byte
+		for _, g := range glyphs {
+			drawnCodes = append(drawnCodes, byte(g.GID))
+		}
+		if !bytes.Equal(drawnCodes, codes) || drawnMissing != encodedMissing {
+			t.Errorf("%s draws %q as % x with %d missing and encodes it as % x with %d missing",
+				tc.name, s, drawnCodes, drawnMissing, codes, encodedMissing)
+		}
+		if !bytes.Equal(codes, tc.want) {
+			t.Errorf("%s encodes %q as % x, want % x: each character it has no code "+
+				"for set as a space", tc.name, s, codes, tc.want)
+		}
+		if got, want := tc.f.Measure(s, 1000), MeasureGlyphs(glyphs, 1000); got != want {
+			t.Errorf("%s measures %q at %v and draws it at %v", tc.name, s, got, want)
+		}
+		if got, want := drawer.Used(), encoder.Used(); !sameGIDs(got, want) {
+			t.Errorf("%s records glyphs %v drawing %q and %v encoding it", tc.name, got, s, want)
+		}
+	}
+	// And what the simple face records is the glyphs, not the codes: a, b and
+	// the space are glyphs 66, 67 and 1 of the fixture, whose glyph 0 is
+	// .notdef and whose first is the space.
+	drawer := simple.Clone()
+	drawer.ShapeGlyphs(s)
+	if got := drawer.Used(); !sameGIDs(got, []int{1, 66, 67}) {
+		t.Errorf("drawing %q in the simple face records glyphs %v, want [1 66 67]", s, got)
+	}
+}

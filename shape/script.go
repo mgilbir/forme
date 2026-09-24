@@ -457,32 +457,32 @@ func layoutTags(script uint16) []string {
 // The language is asked about too, because a script table the run's language
 // system is not in and that has no default one is passed over for the next
 // tag — so which tag is chosen can turn on it.
-func (f *Face) chosenScriptTag(script uint16, langs []string) string {
+func (f *Face) chosenScriptTag(script uint16, lang otLanguage) string {
 	if f.cache == nil {
-		return f.readChosenScriptTag(script, langs)
+		return f.readChosenScriptTag(script, lang)
 	}
-	key := languageKey(langs)
-	if tag, ok := f.cache.chosenFor(script, key); ok {
+	key := newScriptKey(script, lang)
+	if tag, ok := f.cache.chosenFor(key); ok {
 		return tag
 	}
-	tag := f.readChosenScriptTag(script, langs)
-	f.cache.rememberChosen(script, key, tag)
+	tag := f.readChosenScriptTag(script, lang)
+	f.cache.rememberChosen(key, tag)
 	return tag
 }
 
-func (f *Face) readChosenScriptTag(script uint16, langs []string) string {
+func (f *Face) readChosenScriptTag(script uint16, lang otLanguage) string {
 	list := scriptList(f.layoutTables["GSUB"])
 	if len(list) == 0 {
 		return ""
 	}
-	tags := layoutTags(script)
+	tags := lang.scriptTags(script)
 	byTag := scriptOffsets(list)
 	for _, tag := range append(append(make([]string, 0, len(tags)+len(defaultScriptTags)), tags...), defaultScriptTags...) {
 		so, ok := byTag[tag]
 		if !ok {
 			continue
 		}
-		if _, ok := readLangSys(list[so:], langs); ok {
+		if _, ok := readLangSys(list[so:], lang.tags); ok {
 			return tag
 		}
 	}
@@ -673,10 +673,11 @@ type shaper struct {
 	// property or a CSS Text rule has overruled. See Features.
 	features Features
 
-	// langs is the language system tags the run's language is looked up
-	// under, most specific first: features.Language, read once per run. See
-	// language.go.
-	langs []string
+	// lang is what the run's language asks of the font's ScriptList: the
+	// language system tags it is looked up under, most specific first, and a
+	// script tag it names in place of the run's own. It is features.Language,
+	// read once per run. See language.go.
+	lang otLanguage
 
 	// floor and limit bound the glyphs a lookup may look at: it may not match,
 	// or backtrack, outside [floor, limit). They exist for the Indic pass,
@@ -883,7 +884,7 @@ func (sh shaper) end(buf []Glyph) int {
 // that run to tens of kilobytes. The positioning half is cached on its own key,
 // because a font that varies its substitutions per script usually does not vary
 // its kerning, and the kerning is the large table.
-func (f *Face) layoutFor(script uint16, langs []string) *layout {
+func (f *Face) layoutFor(script uint16, lang otLanguage) *layout {
 	if len(f.layoutTables) == 0 {
 		return f.layout
 	}
@@ -892,19 +893,19 @@ func (f *Face) layoutFor(script uint16, langs []string) *layout {
 	// below. That was half the memory a shaped word cost, spent every time, to
 	// arrive at a cached answer — so the script and the language are the first
 	// key, and the selection is worked out only when it is not yet known.
-	key := languageKey(langs)
-	if l, ok := f.cache.forScript(script, key); ok {
+	key := newScriptKey(script, lang)
+	if l, ok := f.cache.forScript(key); ok {
 		return l
 	}
-	l := f.readLayoutFor(script, langs)
-	f.cache.rememberScript(script, key, l)
+	l := f.readLayoutFor(script, lang)
+	f.cache.rememberScript(key, l)
 	return l
 }
 
-func (f *Face) readLayoutFor(script uint16, langs []string) *layout {
-	tags := layoutTags(script)
-	gsub, gsubOK := scriptSelection(f.layoutTables["GSUB"], tags, langs)
-	gposSel, gposOK := scriptFeatures(f.layoutTables["GPOS"], tags, langs)
+func (f *Face) readLayoutFor(script uint16, lang otLanguage) *layout {
+	tags := lang.scriptTags(script)
+	gsub, gsubOK := scriptSelection(f.layoutTables["GSUB"], tags, lang.tags)
+	gposSel, gposOK := scriptFeatures(f.layoutTables["GPOS"], tags, lang.tags)
 	if !gsubOK && !gposOK {
 		// Neither table says anything about scripts, so there is nothing to
 		// select by: every feature applies, which is what f.layout already is.
@@ -971,43 +972,48 @@ type layoutCache struct {
 }
 
 // scriptKey is a run's script and its language, as the language system tags it
-// is looked up under (see languageKey), which together are everything the
-// selection depends on.
+// is looked up under (see languageKey) and the script tag it names in place of
+// the script's own, which together are everything the selection depends on.
 type scriptKey struct {
-	script uint16
-	lang   string
+	script   uint16
+	lang     string
+	override string
 }
 
-func (c *layoutCache) forScript(script uint16, lang string) (*layout, bool) {
+func newScriptKey(script uint16, lang otLanguage) scriptKey {
+	return scriptKey{script: script, lang: languageKey(lang.tags), override: lang.script}
+}
+
+func (c *layoutCache) forScript(key scriptKey) (*layout, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	l, ok := c.byScript[scriptKey{script, lang}]
+	l, ok := c.byScript[key]
 	return l, ok
 }
 
-func (c *layoutCache) rememberScript(script uint16, lang string, l *layout) {
+func (c *layoutCache) rememberScript(key scriptKey, l *layout) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.byScript == nil {
 		c.byScript = map[scriptKey]*layout{}
 	}
-	c.byScript[scriptKey{script, lang}] = l
+	c.byScript[key] = l
 }
 
-func (c *layoutCache) chosenFor(script uint16, lang string) (string, bool) {
+func (c *layoutCache) chosenFor(key scriptKey) (string, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	tag, ok := c.chosen[scriptKey{script, lang}]
+	tag, ok := c.chosen[key]
 	return tag, ok
 }
 
-func (c *layoutCache) rememberChosen(script uint16, lang, tag string) {
+func (c *layoutCache) rememberChosen(key scriptKey, tag string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.chosen == nil {
 		c.chosen = map[scriptKey]string{}
 	}
-	c.chosen[scriptKey{script, lang}] = tag
+	c.chosen[key] = tag
 }
 
 func (c *layoutCache) layoutFor(gsubKey, gposKey string, build func() *layout) *layout {

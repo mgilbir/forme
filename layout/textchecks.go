@@ -306,23 +306,20 @@ func (l *layouter) checkGlyphs(b *Box, face *shape.Face, text string) {
 // missingGlyphFate is what a face does with a character it has no glyph for,
 // as the end of a sentence about it.
 //
-// Three answers, because the three kinds of face encode differently (see
-// shape.Face.Encode). One of the fourteen standard faces is addressed by
-// WinAnsi codes, and a character with no code becomes the space. A simple
-// embedded face gives such a character no code at all, so it is left out of
-// what is drawn. Every other face is addressed by glyph index, and a character
-// it does not map is glyph 0, which is .notdef — the box a reader sees where a
-// font has nothing to draw. The finding said "set as a space" of all three,
-// which told the author of a Noto Sans document the opposite of what the page
-// shows (audit C144).
+// Two answers, because the kinds of face are addressed differently (see
+// shape.Face.Encode). One of the fourteen standard faces, or a face embedded as
+// a simple font, is addressed by WinAnsi codes, and a character with no code
+// becomes the space. Every other face is addressed by glyph index, and a
+// character it does not map is glyph 0, which is .notdef — the box a reader
+// sees where a font has nothing to draw. The finding said "set as a space" of
+// every face, which told the author of a Noto Sans document the opposite of
+// what the page shows (audit C144); and then said a simple face left the
+// character out, which was what its Encode did and not what it measured or
+// drew. The three agree now, on the space.
 func missingGlyphFate(face *shape.Face) string {
-	switch {
-	case face.IsStandard():
+	if face.IsStandard() || face.IsSimple() {
 		return "which is set as a space, so the character is missing from the page " +
 			"and from the text extracted out of it"
-	case face.IsSimple():
-		return "which is left out of what is drawn, so the character is missing " +
-			"from the page and from the text extracted out of it"
 	}
 	return "which is drawn as the face's missing-glyph box (.notdef) in place of " +
 		"the character"

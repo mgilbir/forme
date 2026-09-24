@@ -74,6 +74,82 @@ func TestLanguageTagsAgreeWithHarfBuzz(t *testing.T) {
 	}
 }
 
+// TestScriptTagsAgreeWithHarfBuzz checks the script tags a run is looked up
+// under in each language against what HarfBuzz answered, recorded by
+// testdata/harfbuzz/scripttags.py for a Latin run and a Devanagari one. What a
+// language tag can change about them is HarfBuzz's private-use "-hbsc", which
+// names a script tag in place of the run's own; the tags asked about spell it
+// every way HarfBuzz reads and refuses.
+//
+// It was not read, so "und-x-hbscdflt" set Devanagari by the font's 'dev2'
+// rules and the Indic model, where HarfBuzz sets it by 'DFLT' and the default
+// model. 326 of the 1,860 tags here name a script HarfBuzz reads, and without
+// it 595 of the 3,720 answers differed from HarfBuzz's.
+func TestScriptTagsAgreeWithHarfBuzz(t *testing.T) {
+	path := filepath.Join(harfbuzzDir, "scripttags.expected.txt")
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("opening %s: %v", path, err)
+	}
+	defer f.Close()
+	src, err := os.ReadFile("langtags.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scripts := map[string]uint16{"Latn": runScript("a"), "Deva": runScript("\u0915")}
+	var order []string
+	cases, bad, overridden := 0, 0, 0
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := sc.Text()
+		if v, ok := strings.CutPrefix(line, "# harfbuzz "); ok {
+			if !strings.Contains(string(src), "/harfbuzz/"+v+"/src/") {
+				t.Fatalf("%s is HarfBuzz %s's answers and langtags.go is not from that "+
+					"release; regenerate one of them", path, v)
+			}
+			continue
+		}
+		if v, ok := strings.CutPrefix(line, "# scripts "); ok {
+			order = strings.Fields(v)
+			continue
+		}
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Split(line, "\t")
+		if len(order) == 0 || len(fields) != 1+len(order) {
+			t.Fatalf("a line that is not a tag and %d answers: %q", len(order), line)
+		}
+		cases++
+		lang := openTypeLanguage(fields[0])
+		if lang.script != "" {
+			overridden++
+		}
+		for i, name := range order {
+			script, ok := scripts[name]
+			if !ok {
+				t.Fatalf("%s answers for %s, which this test does not know", path, name)
+			}
+			if got, want := spellTags(lang.scriptTags(script)), fields[1+i]; got != want {
+				bad++
+				if bad <= 20 {
+					t.Errorf("%q, a %s run: got %q, HarfBuzz gives %q", fields[0], name, got, want)
+				}
+			}
+		}
+	}
+	if err := sc.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if cases < 1000 || overridden < 100 {
+		t.Fatalf("%d cases read from %s, %d of them naming a script; the file or its "+
+			"reader is broken", cases, path, overridden)
+	}
+	if bad > 0 {
+		t.Errorf("%d answers of %d differ from HarfBuzz's", bad, cases*len(order))
+	}
+}
+
 // spellTags is langtags.py's spelling of a tag list.
 func spellTags(tags []string) string {
 	out := make([]string, len(tags))
@@ -128,7 +204,7 @@ func TestAPlanIsSharedAcrossLanguages(t *testing.T) {
 		t.Fatal(err)
 	}
 	f = f.Clone()
-	fr, de := openTypeLanguages("fr"), openTypeLanguages("de")
+	fr, de := openTypeLanguage("fr"), openTypeLanguage("de")
 	l := f.layoutFor(runScript("abc"), fr)
 	if l != f.layoutFor(runScript("abc"), de) {
 		t.Fatal("the fixture assumption is gone: Noto Sans sets French and German by different rules")
@@ -185,5 +261,81 @@ func TestAPairAcrossABoundaryIsFoundInTheRunsLanguage(t *testing.T) {
 	if len(run) != 1 || len(whole) != 2 || run[0].XAdvance != whole[1].XAdvance {
 		t.Errorf("z after x in Romanian advances %v as a run of its own and %v in the word; "+
 			"the neighbour is a y, and the pair is the font's", advances(run), advances(whole))
+	}
+}
+
+// hbscFace has rules under 'dev2' and 'latn' and none under 'DFLT': a
+// Devanagari run is set by the Indic model and its 'pres' form, and a Latin
+// "a" takes its 'locl' form.
+func hbscFace(t *testing.T) *Face {
+	t.Helper()
+	const gidKa, gidI, gidKaPres, gidA, gidALocl = 1, 2, 3, 4, 5
+	f, err := Load(fonttest.SFNT(fonttest.SFNTOptions{
+		Name: "Hbsc",
+		Glyphs: []fonttest.Glyph{
+			{Rune: 'क', Advance: 600, HasShape: true},
+			{Rune: 'ि', Advance: 300, HasShape: true},
+			{Rune: '', Advance: 650, HasShape: true},
+			{Rune: 'a', Advance: 500, HasShape: true},
+			{Rune: '', Advance: 550, HasShape: true},
+		},
+		Extra: map[string][]byte{
+			"GSUB": fonttest.GSUBTable(
+				[]fonttest.Lookup{
+					{Type: 1, Subtables: [][]byte{fonttest.SingleSubst([]int{gidKa}, []int{gidKaPres})}},
+					{Type: 1, Subtables: [][]byte{fonttest.SingleSubst([]int{gidA}, []int{gidALocl})}},
+				},
+				[]fonttest.Feature{{Tag: "pres", Lookups: []int{0}}, {Tag: "locl", Lookups: []int{1}}},
+				map[string]fonttest.Script{
+					"DFLT": {Required: fonttest.NoFeature},
+					"dev2": {Required: fonttest.NoFeature, Features: []int{0}},
+					"latn": {Required: fonttest.NoFeature, Features: []int{1}},
+				}),
+		},
+	}))
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+	return f
+}
+
+// TestTheScriptALanguageNamesIsTheOneRead is "-hbsc" through shaping: the
+// script tag it names is the one whose rules are read, and the one the model is
+// chosen by. What each line wants is what HarfBuzz 14.5.0 gives for the same
+// font and language.
+func TestTheScriptALanguageNamesIsTheOneRead(t *testing.T) {
+	f := hbscFace(t)
+	for _, c := range []struct {
+		text, lang string
+		want       []int
+	}{
+		// The run's own tags: 'dev2', the Indic model, the i-sign drawn first
+		// and 'pres' on the consonant.
+		{"कि", "", []int{2, 3}},
+		{"कि", "hi", []int{2, 3}},
+		{"कि", "und-x-hbscdev2", []int{2, 3}},
+		{"कि", "und-x-hbsc-64657632", []int{2, 3}},
+		// 'DFLT' named: no rules, and the default model, which keeps the order
+		// the text is written in.
+		{"कि", "und-x-hbscdflt", []int{1, 2}},
+		{"कि", "hi-x-hbotmar-hbscDFLT", []int{1, 2}},
+		// 'latn' named for Devanagari: Latin's rules, and still not the Indic
+		// model, since a font's 'latn' rules are written for stored order.
+		{"कि", "x-hbsclatn", []int{1, 2}},
+		// A tag the font does not have falls back to 'DFLT'.
+		{"कि", "x-hbscabcd", []int{1, 2}},
+		// And the Latin run: its 'locl' form, and not under 'DFLT'.
+		{"a", "", []int{5}},
+		{"a", "en-x-hbscdflt", []int{4}},
+		{"a", "x-hbscdev2", []int{4}},
+	} {
+		g, _ := f.ShapeGlyphsInContext(c.text, "", "", Features{Language: c.lang})
+		var got []int
+		for _, x := range g {
+			got = append(got, x.GID)
+		}
+		if !sameGIDs(got, c.want) {
+			t.Errorf("%q in %q is drawn as %v, want %v", c.text, c.lang, got, c.want)
+		}
 	}
 }

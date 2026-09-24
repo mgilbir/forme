@@ -955,15 +955,15 @@ func TestTheScriptTagSaysWhichRulesTheFontMeans(t *testing.T) {
 	cfg := indicConfigs["dev2"]
 	deva := scriptOf(devKa)
 
-	if f := devaFaceIn(t, "dev2", devaHalf()); f.indicOldSpec(cfg, deva, nil) {
+	if f := devaFaceIn(t, "dev2", devaHalf()); f.indicOldSpec(cfg, deva, otLanguage{}) {
 		t.Error("a font declaring 'dev2' was taken for a first-generation one")
 	}
-	if f := devaFaceIn(t, "deva", devaHalf()); !f.indicOldSpec(cfg, deva, nil) {
+	if f := devaFaceIn(t, "deva", devaHalf()); !f.indicOldSpec(cfg, deva, otLanguage{}) {
 		t.Error("a font declaring only 'deva' was taken for a second-generation one")
 	}
 	// A font that declares nothing for the script falls back to the default
 	// table, which is not a second-generation declaration.
-	if f := devaFaceIn(t, "latn", devaHalf()); !f.indicOldSpec(cfg, deva, nil) {
+	if f := devaFaceIn(t, "latn", devaHalf()); !f.indicOldSpec(cfg, deva, otLanguage{}) {
 		t.Error("a font declaring nothing for Devanagari should get the older rules")
 	}
 }

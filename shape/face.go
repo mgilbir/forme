@@ -601,10 +601,10 @@ func (f *Face) Measure(s string, size float64) float64 {
 			continue
 		}
 		w, _ := f.Advance(r)
-		if f.std != nil {
-			// A character outside the encoding is set as a space, so it is a
-			// space that must be measured.
-			w, _ = f.stdAdvance(' ')
+		if !f.composite() {
+			// A face addressed by character code sets a character it has no
+			// code for as a space, so it is a space that must be measured.
+			_, w = f.missingByCode()
 		}
 		total += w
 	}
@@ -657,6 +657,25 @@ func (f *Face) drawnAs(r rune, depth int, out []rune) ([]rune, bool) {
 	return out, true
 }
 
+// missingByCode is what a face addressed by character code — one of the
+// fourteen standard faces, or a face embedded as a simple font — sets for a
+// character it has no code for: the space's code, and the width the space is
+// drawn at. Measure, Encode and the by-code shaping path all ask it, so that
+// what is measured, what is written and what is drawn are one answer.
+//
+// Both kinds are addressed by one byte of WinAnsiEncoding, so a character
+// outside it — or in it, with no glyph in the face — has no byte that means it.
+// A space is what a reader shows for a code the font leaves undefined, and it
+// keeps the character's place in the text: dropped, "aαb" is extracted as the
+// word "ab". The simple faces had three answers: Measure took the character's
+// own advance, or .notdef's where the face had not even that; Encode left it
+// out; and the by-code path, which is what layout draws with, drew a space.
+// The standard faces were already set as a space by all three.
+func (f *Face) missingByCode() (code int, width float64) {
+	width, _ = f.Advance(' ')
+	return ' ', width
+}
+
 // Encode maps a string to the character codes the face is embedded with, one
 // per character — or one per part, for a character the face draws as its
 // canonical decomposition (see drawnAs). For a composite face that is what a
@@ -665,20 +684,22 @@ func (f *Face) drawnAs(r rune, depth int, out []rune) ([]rune, bool) {
 // simple or standard face it is one byte of WinAnsiEncoding.
 //
 // On a composite face a rune the font does not map encodes as glyph 0, which
-// renders as .notdef —
-// the visible "this font has no glyph for that" box. That is deliberate: an
-// error here would mean a caller could not lay out text containing one stray
-// character, and silently dropping it would lose content. The second result
-// reports how many runes were missing so a caller that cares can react.
+// renders as .notdef — the visible "this font has no glyph for that" box; on a
+// simple or standard face it encodes as the space (see missingByCode). That is
+// deliberate: an error here would mean a caller could not lay out text
+// containing one stray character, and silently dropping it would lose content.
+// The second result reports how many runes were missing so a caller that cares
+// can react.
 func (f *Face) Encode(s string) (codes []byte, missing int) {
 	if f.simple {
 		return f.encodeSimple(s)
 	}
 	if f.std != nil {
 		// One byte per character: the codes are WinAnsi, not glyph indices.
-		// A character the encoding has no code for becomes the space, which is
-		// what a reader would show for an undefined code anyway, and the count
-		// says how many there were.
+		// A character the encoding has no code for becomes the space — see
+		// missingByCode — and the count says how many there were. Each code
+		// is recorded as used, as the by-code path records what it draws, so
+		// that encoding and drawing one text leave the same record.
 		codes = make([]byte, 0, len(s))
 		var parts []rune
 		for _, r := range s {
@@ -688,11 +709,14 @@ func (f *Face) Encode(s string) (codes []byte, missing int) {
 			var ok bool
 			if parts, ok = f.drawnAs(r, 0, parts[:0]); !ok {
 				missing++
-				codes = append(codes, ' ')
+				code, _ := f.missingByCode()
+				f.used[code] = true
+				codes = append(codes, byte(code))
 				continue
 			}
 			for _, p := range parts {
 				code, _ := f.GlyphID(p)
+				f.used[code] = true
 				codes = append(codes, byte(code))
 			}
 		}

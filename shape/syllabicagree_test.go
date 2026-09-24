@@ -412,7 +412,7 @@ func TestAGlyphTheShaperMakesIsClassified(t *testing.T) {
 		{Rune: 0x0BBE, Advance: 400, HasShape: true},
 	}, "tml2", []fonttest.Lookup{{Type: 1, Subtables: [][]byte{fonttest.SingleSubst([]int{1}, []int{1})}}},
 		[]fonttest.Feature{{Tag: "locl", Lookups: []int{0}}}, nil)
-	sh := shaper{f: tamil, l: tamil.layoutFor(scriptOf(0x0B95), nil)}
+	sh := shaper{f: tamil, l: tamil.layoutFor(scriptOf(0x0B95), otLanguage{})}
 	buf, runes := sh.splitMatras([]Glyph{{GID: 1}, {GID: 2}}, []rune{0x0B95, 0x0BCA})
 	if len(buf) != 3 || len(runes) != 3 {
 		t.Fatalf("the fixture assumption is gone: ொ split into %d glyphs", len(buf)-1)
@@ -432,7 +432,7 @@ func TestAGlyphTheShaperMakesIsClassified(t *testing.T) {
 			{Rune: dottedCircle, Advance: 450, HasShape: true},
 			{Rune: 0x0301, Advance: 0, HasShape: true},
 		}, "", nil, nil, extra)
-		l := f.layoutFor(scriptOf('a'), nil)
+		l := f.layoutFor(scriptOf('a'), otLanguage{})
 		sh := shaper{f: f, l: l}
 		inserted, _ := sh.insertGlyphAt([]Glyph{{GID: 2}}, []indicInfo{{}}, 0, 1, indicInfo{})
 		circle := inserted[0]

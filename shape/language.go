@@ -35,11 +35,11 @@ import (
 // read line for line — checked against HarfBuzz itself, called through its C
 // API, in language_test.go.
 //
-// What HarfBuzz reads and this does not: the private-use subtag "-hbsc", which
-// names an OpenType *script* tag and would override the script the text is in.
-// A run's script is its characters' here, and nothing a document writes changes
-// which script table its rules are read from. The matching "-hbot", which names
-// a language system tag directly, is read.
+// Two private-use subtags of HarfBuzz's are read as HarfBuzz reads them: "-hbot",
+// which names a language system tag outright, and "-hbsc", which names the
+// script tag a run's rules are read under in place of the ones its characters'
+// script has — "und-x-hbscdflt" sets Devanagari text by a font's 'DFLT' rules,
+// and so by the default model, as HarfBuzz sets it. See otLanguage.
 
 // langTagEntry is one row of the generated tables: a primary subtag and the
 // language system tags it selects, most specific first. Chinese as written in
@@ -97,16 +97,45 @@ func languageKey(tags []string) string {
 	return strings.Join(tags, ",")
 }
 
+// otLanguage is what a run's language asks of a font's ScriptList: the
+// language system tags it is looked up under, most specific first, and the
+// script tag HarfBuzz's "-hbsc" names in place of the run's own, or "" where
+// the tag names none.
+//
+// The script tag is here rather than beside the script because it comes from
+// the same attribute and is read by the same parse, and because what it
+// replaces is a question the script alone used to answer: which script tables
+// are searched. The run's script still decides everything else — its model is
+// chosen from the script and the tag found, as HarfBuzz chooses it
+// (hb_ot_shaper_categorize is handed the buffer's script and the chosen tag).
+type otLanguage struct {
+	tags   []string
+	script string
+}
+
+// scriptTags is the script tags a run of the given script is looked up under
+// in this language: the one "-hbsc" names, or the script's own. HarfBuzz tries
+// the default tags after either, and so does scriptSelection.
+func (l otLanguage) scriptTags(script uint16) []string {
+	if l.script != "" {
+		return []string{l.script}
+	}
+	return layoutTags(script)
+}
+
 // openTypeLanguages is the language system tags a BCP 47 language tag is
 // looked up under, most specific first, or none for a language OpenType has no
 // tag for and for no language at all. The slice may be the generated table's
 // own, and is not to be written to.
-//
-// It is hb_ot_tags_from_script_and_language's language half.
-func openTypeLanguages(bcp47 string) []string {
+func openTypeLanguages(bcp47 string) []string { return openTypeLanguage(bcp47).tags }
+
+// openTypeLanguage is hb_ot_tags_from_script_and_language: the language system
+// tags a BCP 47 language tag is looked up under, and the script tag its
+// private-use part names, if it names one.
+func openTypeLanguage(bcp47 string) otLanguage {
 	lang := canonicalLanguage(bcp47)
 	if lang == "" {
-		return nil
+		return otLanguage{}
 	}
 	// Where the tag's own subtags end: at the first singleton — a one-letter
 	// subtag, which introduces an extension ("-u-") or the private-use part
@@ -130,22 +159,27 @@ func openTypeLanguages(bcp47 string) []string {
 			}
 		}
 	}
+	var out otLanguage
 	if private >= 0 {
-		if tag, ok := privateLanguageTag(lang[private:]); ok {
-			return []string{tag}
+		out.script, _ = privateTag(lang[private:], "-hbsc", false)
+		if tag, ok := privateTag(lang[private:], "-hbot", true); ok {
+			out.tags = []string{tag}
+			return out
 		}
 		if private == 0 {
 			// HarfBuzz reads a wholly private tag with no end to its
 			// language subtags, and its search can find nothing in one: no
 			// rule starts with 'x', and a one-letter primary subtag is in
 			// neither table.
-			return nil
+			return out
 		}
 	}
 	if tags, ok := complexLanguage(lang, limit); ok {
-		return tags
+		out.tags = tags
+		return out
 	}
-	return primaryLanguage(lang, limit)
+	out.tags = primaryLanguage(lang, limit)
+	return out
 }
 
 // canonicalLanguage is a language tag as HarfBuzz stores one: lowercase, with
@@ -182,15 +216,21 @@ func canonicalLanguageSlow(s string) string {
 	return string(b)
 }
 
-// privateLanguageTag reads HarfBuzz's private-use subtag "-hbot", which names
-// a language system tag outright: "x-hbot-4d4f4c20" in hexadecimal, or
-// "x-hbotmol" spelled, uppercased and padded.
-func privateLanguageTag(private string) (string, bool) {
-	i := strings.Index(private, "-hbot")
+// privateTag reads one of HarfBuzz's private-use subtags, which name a tag
+// outright: "-hbot" a language system tag and "-hbsc" a script tag, either as
+// eight hexadecimal digits after a hyphen ("x-hbot-4d4f4c20") or spelled
+// ("x-hbotmol", "x-hbscdev2"), and a spelled tag padded with spaces to four
+// characters. A spelled language system tag is uppercased, which is how the
+// registry writes them; a script tag is left as the canonical language tag
+// has it, in lower case, which is HarfBuzz's lowercasing of it. It is HarfBuzz's
+// parse_private_use_subtag, and like it finds the prefix anywhere in the
+// private-use part, not only at the start of a subtag.
+func privateTag(private, prefix string, upper bool) (string, bool) {
+	i := strings.Index(private, prefix)
 	if i < 0 {
 		return "", false
 	}
-	s := private[i+len("-hbot"):]
+	s := private[i+len(prefix):]
 	var tag [4]byte
 	if strings.HasPrefix(s, "-") {
 		s = s[1:]
@@ -211,7 +251,7 @@ func privateLanguageTag(private string) (string, bool) {
 		n := 0
 		for n < 4 && n < len(s) && isAlnum(s[n]) {
 			c := s[n]
-			if c >= 'a' && c <= 'z' {
+			if upper && c >= 'a' && c <= 'z' {
 				c -= 'a' - 'A'
 			}
 			tag[n] = c
@@ -224,8 +264,10 @@ func privateLanguageTag(private string) (string, bool) {
 			tag[n] = ' '
 		}
 	}
-	// 'DFLT' in any case is the default *script* tag, and HarfBuzz turns it
-	// into the default language system's spelling, 'dflt'.
+	// 'DFLT' in any case is the default *script* tag, and HarfBuzz flips the
+	// case of every letter of it: the language system tag "-hbotDFLT" names is
+	// the default language system's spelling, 'dflt', and the script tag
+	// "-hbscdflt" names is 'DFLT'.
 	if tag[0]&0xDF == 'D' && tag[1]&0xDF == 'F' && tag[2]&0xDF == 'L' && tag[3]&0xDF == 'T' {
 		for k := range tag {
 			tag[k] ^= 0x20

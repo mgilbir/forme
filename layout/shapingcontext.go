@@ -5,7 +5,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -102,7 +101,7 @@ import (
 func (l *layouter) linkShapingContext(items []inlineItem) []inlineItem {
 	joins := false
 	for i := range items {
-		if isShapedRun(items[i]) && contextCanChange(items[i].Face) {
+		if isShapedRun(items[i]) && contextCanChange(items[i]) {
 			joins = true
 			break
 		}
@@ -165,7 +164,7 @@ func (l *layouter) linkShapingContext(items []inlineItem) []inlineItem {
 		// is a different question from whether the context reaches the run at
 		// all. See Item.ContextKerns.
 		kerns := true
-		if contextCanChange(items[i].Face) {
+		if contextCanChange(items[i]) {
 			if n := nb.before[i]; n.ok {
 				var lost bool
 				before, lost = text.before(n.j, i, nb.blank[n.j])
@@ -582,17 +581,33 @@ func sameShaping(a, b inlineItem) bool {
 	// measured in one font at one size, and a pair positioned across a boundary
 	// where the sizes differ is a number that belongs to neither of them.
 	//
-	// So the size breaks the boundary for a face that kerns and not for one
-	// that joins. A face that does both is read as joining, because that is the
+	// So the size breaks the boundary for a run that kerns and not for one
+	// that joins. A run that does both is read as joining, because that is the
 	// difference a reader sees: a letter in the wrong form is a different
 	// letter, and a pair off by a fraction of an em is a gap.
-	return a.Size == b.Size || a.Face.HasJoiningForms()
+	//
+	// The run and not the face: whether a letter's form follows its
+	// neighbours is a question about the rules its script selects. Asked of
+	// the face, a Latin word in a font that also sets Arabic was read as
+	// joining, and a kern pair was positioned across a change of size between
+	// two of its runs — the number that belongs to neither.
+	return a.Size == b.Size || a.Face.FormsFollowNeighbours(a.Text, a.Off)
 }
 
 // contextCanChange reports whether the text either side of a run can change what
 // the run is: which glyphs it is set in, or where they sit.
-func contextCanChange(f *shape.Face) bool {
-	return f.HasJoiningForms() || f.HasKerning() || f.HasLigatures()
+//
+// It is the run's question and the face answers it for the run: from the rules
+// the run's script and language select, and for everything this package reads
+// from a context — the forms a cursive or Indic run takes, the script a run of
+// digits or punctuation is set in, and the pair kerned across the edge. It was
+// asked of the face, as whether the font had forms, kerning or 'liga' under any
+// script at all, so a font whose rules for the run's script were somewhere else
+// was answered for a script the run is not in, and a span of punctuation
+// between two Chinese words was shaped as though it had no neighbours. See
+// shape.Face.ContextCanChange.
+func contextCanChange(it inlineItem) bool {
+	return it.Face.ContextCanChange(it.Text, it.Off)
 }
 
 // itemShaping is everything about how an item is set that its own text does not

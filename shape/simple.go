@@ -20,8 +20,8 @@ import (
 //
 // Where it does not fit, it does not fit at all. A document with a Greek word,
 // a Chinese name or an em dash outside WinAnsiEncoding cannot be set this way,
-// and Encode reports how many characters fell outside rather than quietly
-// substituting something.
+// and Encode sets each character that fell outside as a space and reports how
+// many there were, rather than substituting something quietly.
 //
 // The choice is the caller's and is made once, at load: LoadSimple for this
 // form, Load for the composite one. It cannot be changed afterwards because
@@ -85,8 +85,14 @@ func (f *Face) encodeSimple(s string) (codes []byte, missing int) {
 		var ok bool
 		if parts, ok = f.drawnAs(r, 0, parts[:0]); !ok {
 			// Outside the encoding, where there is no byte that means it, or
-			// in it with no glyph in this face.
+			// in it with no glyph in this face. It is set as a space, as the
+			// by-code path draws it and Measure measures it: see
+			// missingByCode. It was left out here, so a document measured and
+			// drawn with a space in its place was written without one.
 			missing++
+			code, _ := f.missingByCode()
+			f.used[f.prog.Cmap[' ']] = true
+			codes = append(codes, byte(code))
 			continue
 		}
 		for _, p := range parts {

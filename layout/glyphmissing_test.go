@@ -99,21 +99,23 @@ func contains(s, sub string) bool {
 
 // TestAMissingGlyphIsDescribedAsTheFaceDrawsIt: a face addressed by glyph
 // index draws a character it does not map as glyph 0, .notdef — the box a
-// reader sees — and a simple face gives it no code and draws nothing. The
-// finding said "set as a space" of every face, which is what the fourteen
-// standard faces do and neither of these.
+// reader sees — and a simple face, addressed by WinAnsi codes as the fourteen
+// standard faces are, sets it as a space. The finding said "set as a space" of
+// every face, and then that a simple face left the character out, which only
+// its Encode did: it was measured and drawn as a space. See
+// shape.Face.missingByCode.
 func TestAMissingGlyphIsDescribedAsTheFaceDrawsIt(t *testing.T) {
 	simple, err := notosans.Simple()
 	if err != nil {
 		t.Fatalf("loading the embedded Noto Sans as a simple face: %v", err)
 	}
 	for _, tc := range []struct {
-		name string
-		face *shape.Face
-		want string
+		name      string
+		face      *shape.Face
+		want, not string
 	}{
-		{"a glyph-indexed face", embeddedFallback(t), ".notdef"},
-		{"a simple face", simple, "left out of what is drawn"},
+		{"a glyph-indexed face", embeddedFallback(t), ".notdef", "set as a space"},
+		{"a simple face", simple, "set as a space", "left out"},
 	} {
 		const r = '\uE000' // a private-use character no face maps
 		if _, ok := tc.face.GlyphID(r); ok {
@@ -132,7 +134,7 @@ func TestAMissingGlyphIsDescribedAsTheFaceDrawsIt(t *testing.T) {
 			t.Errorf("%s: the missing character was not reported", tc.name)
 		}
 		for _, f := range got {
-			if contains(f.Message, "set as a space") || !contains(f.Message, tc.want) {
+			if contains(f.Message, tc.not) || !contains(f.Message, tc.want) {
 				t.Errorf("%s: the missing character was described as %q", tc.name, f.Message)
 			}
 		}

@@ -1373,8 +1373,11 @@ func strutOver(st strut, items []inlineItem, next int, forced bool) strut {
 // with a background around three lines of Japanese, whose first line's box came
 // out 241.2px against the reference's 243. The 1.8px is one kern at 60px.
 //
-// Only for a face with no positional forms. For a cursive one the context
-// decides which letter is drawn as well as where the pen stops, and the two
+// Only for a run whose forms do not follow its neighbours — asked of the run,
+// under the rules its script selects, so that a Latin word at the end of a line
+// set in a font that also has Arabic forms is put back like any other. For a
+// cursive one the context decides which letter is drawn as well as where the
+// pen stops, and the two
 // cannot be told apart by measuring: taking the context away would report the
 // isolated form's width, which is not a kern and is not what a line break does
 // to a word. A word broken *inside* by overflow-wrap keeps its forms — CSS Text
@@ -1388,7 +1391,7 @@ func (l *layouter) unkernLineEnd(runs []inlineItem) {
 			continue
 		}
 		if it.Face == nil || it.Text == "" || it.PostContext == "" ||
-			it.Face.HasJoiningForms() {
+			it.Face.FormsFollowNeighbours(it.Text, it.Off) {
 			return
 		}
 		// The difference and not the measurement, so that everything else the

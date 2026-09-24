@@ -183,13 +183,16 @@ func (f *Face) ShapeGlyphsInContextOrAcross(s, before, after string, kerns bool,
 }
 
 // HasKerning reports whether the font carries pair kerning this package could
-// read. A caller laying out text asks it to decide whether a run's neighbours
-// can change the run, and a test can use it to notice a font whose kerning
-// went unread.
+// read, under any script. It is a fact about the font — a test can use it to
+// notice a font whose kerning went unread — and not the answer to whether a
+// run's neighbours can change it, which is about the rules the run's own script
+// selects: see ContextCanChange.
 func (f *Face) HasKerning() bool { return len(f.layout.kern) > 0 }
 
 // HasLigatures reports whether the font carries ligature substitutions this
-// package could read under 'liga', for its default script.
+// package could read under 'liga', under any script. It says nothing about
+// 'clig', 'rlig', 'calt' or 'ccmp', which ligate as well, and nothing about
+// what a run's neighbours can change: see ContextCanChange.
 func (f *Face) HasLigatures() bool { return len(f.layout.ligatures) > 0 }
 
 // Features lists the substitution features this face offers by name, sorted.
