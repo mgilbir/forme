@@ -247,8 +247,8 @@ func harfbuzzFace(t *testing.T, path string, header map[string]string) *Face {
 // and along the line once every lookup has run (propagate_attachment_offsets),
 // and fonts are tested against it. The same model is what Noto Serif Tibetan's
 // U+0F67 U+0FAC U+0FB9 U+0F77 needs, where resolving both axes at attachment
-// drew two marks 42 units off. Positioning now follows it — see attachMarks —
-// and the string agrees.
+// drew two marks 42 units off. Positioning now follows it — see placeMark and
+// propagate — and the string agrees.
 //
 // # The thirty-seven that left
 //

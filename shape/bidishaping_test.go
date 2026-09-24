@@ -426,8 +426,13 @@ func TestKerningUsesThePairAsTheFontStatesIt(t *testing.T) {
 			{Rune: alefHeb, Advance: 500, HasShape: true}, // 1
 			{Rune: betHeb, Advance: 500, HasShape: true},  // 2
 		},
-		// alef then bet, as the text is written.
-		Extra: map[string][]byte{"GPOS": fonttest.GPOS([]fonttest.KernPair{{Left: 1, Right: 2, Adjust: kern}})},
+		// alef then bet, as the text is written, under 'hebr': the Hebrew model
+		// applies a font's positioning only where it states it for Hebrew.
+		Extra: map[string][]byte{"GPOS": fonttest.GPOSTable(
+			[]fonttest.Lookup{{Type: 2, Subtables: [][]byte{
+				fonttest.PairPosSubtable([]fonttest.KernPair{{Left: 1, Right: 2, Adjust: kern}})}}},
+			[]fonttest.Feature{{Tag: "kern", Lookups: []int{0}}},
+			map[string]fonttest.Script{"hebr": {Required: fonttest.NoFeature, Features: []int{0}}})},
 	})
 	f, err := Load(data)
 	if err != nil {

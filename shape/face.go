@@ -149,6 +149,13 @@ type Face struct {
 	// features it offers. Shaping does not use it except as the fallback for a
 	// font that declares no scripts.
 	layout *layout
+	// hmtx is the horizontal metrics table and longMetrics how many of its
+	// records carry an advance, kept for the one reader that needs a glyph's
+	// metrics in font units rather than scaled: placing the marks of a face
+	// with no positioning of its own, which is integer arithmetic on them. See
+	// fallback.go.
+	hmtx        []byte
+	longMetrics int
 	// layoutTables are the GSUB, GPOS, GDEF and kern bytes, kept so that the
 	// layout can be read again for the script and language of a run;
 	// positionings and scriptLayouts cache those readings, by what each
@@ -306,6 +313,7 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 		f.descent = signed16(font.Be16(hhea, 6))
 		f.lineGap = signed16(font.Be16(hhea, 8))
 		f.declared |= MetricLineGap
+		f.hmtx, f.longMetrics = tables["hmtx"], font.Be16(hhea, 34)
 	}
 	// sCapHeight arrived in OS/2 version 2, so what says a font states one is
 	// the version and not the table's length: a version 1 table long enough to
@@ -331,7 +339,7 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 	// The unfiltered reading, and the positioning half it is built on, are the
 	// ones a font with no ScriptList falls back to, so they are cached under
 	// the key a nil selection gets rather than read a second time for it.
-	pos := readPositioning(f.layoutTables, nil, coords)
+	pos := readPositioning(f.layoutTables, nil, noRequiredFeature, coords)
 	f.cache = &layoutCache{positionings: map[string]*layout{selectionKey(nil): pos}}
 	f.layout = readLayout(f.layoutTables, nil, pos, coords)
 	f.name = postScriptName(tables["name"])

@@ -13,11 +13,14 @@ import (
 //
 // # What is here
 //
-//   - Pair kerning: 'kern', GPOS lookup type 2, both formats, and the legacy
-//     kern table for fonts that predate GPOS.
-//   - Single positioning (GPOS 1), mark-to-base (GPOS 4) and mark-to-mark
-//     (GPOS 6), so an accent sits over the letter it belongs to and a second
-//     accent stacks on the first — see position.go.
+//   - Positioning: every GPOS lookup type — single and pair adjustment,
+//     cursive attachment, mark-to-base, mark-to-ligature, mark-to-mark and the
+//     contextual rules — applied lookup by lookup in the order the font lists
+//     them, so an accent sits over the letter it belongs to and a second
+//     stacks on the first (position.go, contextpos.go); the legacy kern table
+//     for fonts that predate GPOS (legacykern.go); and, for a face that
+//     positions nothing itself, the marks placed by their combining classes
+//     (fallback.go).
 //   - Substitution: single (GSUB 1), multiple (GSUB 2), alternate (GSUB 3) and
 //     ligature (GSUB 4). An alternate set is taken at its first entry, which is
 //     the font's own preference and the only answer available to a lookup no
@@ -81,13 +84,11 @@ import (
 //     normalize.go — but a hamza written after a vowel is drawn before it by a
 //     rule that is Arabic's rather than Unicode's, and that rule is not applied.
 //   - What HarfBuzz does for a font whose tables do not cover what a model
-//     needs: placing marks by their combining class in a font with no GPOS mark
-//     attachment, composing Hebrew into its presentation forms for such a font,
-//     composing old Hangul jamo sequences, and the Arabic fallback shaping and
-//     'stch' stretching arabic.go names. Measured over the Google Fonts tree,
-//     the first is most of what still differs from HarfBuzz in Hebrew — the
-//     M+ families, Cardo, Lunasima and Libertinus Sans, which state no mark
-//     attachment for it. See plan.go.
+//     needs, beyond placing its marks: composing Hebrew into its presentation
+//     forms for a font with no mark positioning, composing old Hangul jamo
+//     sequences, and the Arabic fallback shaping and 'stch' stretching
+//     arabic.go names. Measured over the Google Fonts tree, the first is most
+//     of what still differs from HarfBuzz in Hebrew. See plan.go.
 //   - Choosing a language from the text. Which script a run is in is decidable
 //     from its characters; which language it is in is not — "colour" and "color"
 //     are the same letters — so the default language system is used unless the
@@ -413,36 +414,20 @@ type layout struct {
 	// markAttach is GDEF's mark attachment class per glyph, used by the
 	// MarkAttachmentType field of a lookup flag.
 	markAttach classTable
-	// cursive holds each glyph's entry and exit points, and cursFlags the flags
-	// of the lookups they came from — whose RightToLeft bit decides which end of
-	// a joined run stays on the baseline.
-	cursive   map[int]cursiveAnchors
-	cursFlags int
-	// singlePos holds GPOS type 1 adjustments by glyph.
-	singlePos map[int]singleAdjust
 	// halfWidth holds 'halt' by glyph, and is applied to nothing: it is the
 	// font's statement of what a full-width punctuation's trimmed form is, for
 	// a caller that has a character to trim to ask about. See halfwidth.go.
 	halfWidth map[int]singleAdjust
-	// markAnchors holds each mark's own attachment point and class;
-	// markBases and markMarkBases hold where a base or another mark receives a
-	// mark of each class.
-	// markBase and markMark are the mark-attachment subtables in the order
-	// their lookups are applied, each kept whole; markGlyphs is every glyph any
-	// of them covers as a mark, which is what makes the common case — a run
-	// with no marks in it — one map lookup per glyph. markLookups counts the
-	// lookups read, so that subtables of one lookup can be told from subtables
-	// of the next.
-	markBase    []markAttachment
-	markMark    []markAttachment
-	markGlyphs  map[int]bool
-	markLookups int
 	// markSets are GDEF's mark glyph sets, which a lookup names to narrow what
 	// it looks at to the marks in one of them. Each is the set's coverage table,
 	// asked whether it covers a glyph where a lookup needs to know, rather than
 	// expanded into a set of every glyph it names.
 	markSets []coverageTable
-	// kern is the pair-positioning lookups, in the order the font lists them.
+	// kern is the pair-positioning lookups, in the order the font lists them,
+	// read flat for the two things that ask about a pair outside a positioning
+	// pass: the pair across a run boundary (boundarykern.go) and whether a face
+	// kerns at all. The pass itself applies the lookups as they are, in
+	// order, among every other positioning lookup — see position.go.
 	//
 	// One entry per lookup rather than one table for all of them, because three
 	// things a lookup states about itself are lost by merging. Its *flags* say
@@ -479,13 +464,22 @@ type layout struct {
 	// applied at a position, so these cannot be flattened the way the tables
 	// above are — see context.go.
 	gsub []rawLookup
-	// gpos is the positioning lookups kept whole and addressable by index, for
-	// the same reason gsub is: a contextual positioning rule names one. It is
-	// read only when the font has such a rule, since nothing else needs it.
+	// gpos is the positioning lookup list kept whole and addressable by index.
+	// A positioning pass applies its lookups from here, each over the whole
+	// run in the order the font lists them, and a contextual rule names one by
+	// its index here.
 	gpos []rawLookup
-	// contextualPos is the indices of the type 7 and 8 lookups a selected
-	// feature names, in the order they are applied.
-	contextualPos []int
+	// gposFeatures maps each positioning feature the run's script and language
+	// selected to the lookups it names, as featureLookups does for GSUB; a
+	// plan chooses from it which of them apply. gposRequired is the language
+	// system's required positioning feature, which applies whatever it is
+	// called: its tag and its lookups. See plan.compile.
+	gposFeatures    map[string][]int
+	gposRequiredTag string
+	gposRequired    []int
+	// legacyKern is the kern table, read for the model that applies it when
+	// GPOS has no kerning of its own to offer. See legacykern.go.
+	legacyKern legacyKern
 	// featureLookups maps a feature tag to the lookup indices it names, which is
 	// how a feature is turned into work to do.
 	featureLookups map[string][]int
@@ -659,32 +653,61 @@ type ligature struct {
 // It never fails: a table that cannot be understood contributes nothing,
 // because text set without kerning is correct text set plainly, while text set
 // from a misread table is wrong.
-func readPositioning(tables map[string][]byte, sel featureSet, coords []float64) *layout {
+func readPositioning(tables map[string][]byte, sel featureSet, required int, coords []float64) *layout {
 	allowance := coverageBudget(tables["GPOS"], tables["GDEF"], tables["kern"])
-	l := &layout{
-		singlePos:  map[int]singleAdjust{},
-		markGlyphs: map[int]bool{},
-		cursive:    map[int]cursiveAnchors{},
-		covWork:    allowance,
-	}
+	l := &layout{covWork: allowance}
 	l.readGDEF(tables["GDEF"])
 	if gpos := tables["GPOS"]; len(gpos) >= 10 {
-		feats := tableFeatures{sel: sel, varied: readFeatureVariations(gpos, coords)}
+		varied := readFeatureVariations(gpos, coords)
+		feats := tableFeatures{sel: sel, varied: varied}
 		// The feature and lookup lists are read once here and asked about per
 		// tag below, rather than walked again for every tag — see featureIndex.
 		idx := indexFeatures(gpos, feats)
 		l.readGPOSPairs(gpos, idx)
-		l.readGPOSAttachment(gpos, idx)
-		l.readContextualPositioning(gpos, idx)
 		l.readHalfWidth(gpos, idx)
+		// The lookups themselves, kept whole: a positioning pass applies them
+		// in order at each glyph, as the font states them, rather than from
+		// tables flattened out of them at load. See position.go.
+		l.gpos = gposLookups(gpos)
+		l.gposFeatures = idx.lookupIndices()
+		// A feature the language system declares with no lookups is still
+		// declared, and whether the font offers 'kern' at all is a question a
+		// plan asks — see plan.gposKern.
+		for _, tag := range idx.tags {
+			if _, ok := l.gposFeatures[tag]; !ok {
+				l.gposFeatures[tag] = nil
+			}
+		}
+		l.readRequiredPositioning(gpos, required, varied)
 	}
 	if len(l.kern) == 0 {
 		// Only as a fallback: a font with both should be read through GPOS,
-		// which is the one a modern shaper honours.
+		// which is the one a modern shaper honours. This is the flat reading
+		// the boundary pair asks; the pass reads the table as legacyKern.
 		l.readKernTable(tables["kern"])
 	}
+	l.legacyKern = readLegacyKern(tables["kern"])
 	l.noteLimits("GPOS, GDEF and kern", allowance)
 	return l
+}
+
+// readRequiredPositioning records a language system's required positioning
+// feature, as readRequired does for substitution.
+func (l *layout) readRequiredPositioning(gpos []byte, index int, varied featureSubst) {
+	if index == noRequiredFeature || len(gpos) < 10 {
+		return
+	}
+	off := font.Be16(gpos, 6)
+	if off <= 0 || off+2 > len(gpos) {
+		return
+	}
+	list := gpos[off:]
+	rec := 2 + 6*index
+	if index < 0 || index >= font.Be16(list, 0) || rec+6 > len(list) {
+		return
+	}
+	l.gposRequiredTag = string(list[rec : rec+4])
+	l.gposRequired = featureLookupList(list, index, varied)
 }
 
 // readLayout reads the substitution tables on top of an already-read
@@ -1135,13 +1158,12 @@ func pairIn(sub []byte, at, second int) (pairAdjust, bool) {
 			}
 		}
 	case 2:
-		// A second glyph the class table does not name is not paired: class 0
-		// is "every glyph named nowhere", and a column for it would have to be
-		// stated against every glyph of the font. That is what the listing
-		// this replaces did, and keeping it keeps what a face kerns unchanged.
-		c2, named := classNamed(sub, font.Be16(sub, 10), second)
+		// Every second glyph has a class, class 0 for one the table does not
+		// name, and the pair applies whatever it adjusts: see
+		// pairStartsFormat2.
+		c2 := classAt(sub, font.Be16(sub, 10), second)
 		n2 := font.Be16(sub, 14)
-		if !named || c2 >= n2 {
+		if c2 >= n2 {
 			return pairAdjust{}, false
 		}
 		recSize := valueSize(fmt1) + valueSize(fmt2)
@@ -1149,13 +1171,7 @@ func pairIn(sub []byte, at, second int) (pairAdjust, bool) {
 		if off+recSize > len(sub) {
 			return pairAdjust{}, false
 		}
-		// Unlike the explicit list above, a class pair that adjusts nothing is
-		// not a match. By the specification it would be, and would block a
-		// later subtable; this has always read it as saying nothing, and a
-		// font that states an exception states it as an explicit pair.
-		if adj := pairAdjustFrom(sub[off:], fmt1, fmt2); !adj.zero() {
-			return adj, true
-		}
+		return pairAdjustFrom(sub[off:], fmt1, fmt2), true
 	}
 	return pairAdjust{}, false
 }
@@ -1269,46 +1285,31 @@ func (l *layout) pairStartsFormat1(kl *kernLookup, at int, sub []byte) bool {
 // pairStartsFormat2 finds the first class of each covered glyph of a
 // class-pair subtable, reporting whether any glyph begins a pair.
 //
-// Each row of the class matrix is read once, to see whether it states
-// anything, however many glyphs share it: a glyph whose row adjusts nothing
-// begins no pair, and is not searched for. Reading the row once per glyph that
-// shared it was how eight kilobytes of GPOS — a coverage naming every glyph,
-// one class, four thousand second classes — took seven seconds to load.
+// Every covered glyph begins one, whatever its row of the class matrix
+// states: a class subtable pairs a covered first glyph with every second glyph
+// — one its class table does not name is in class 0 — and a pair of zeroes is
+// a pair that applied, which stops the lookup's later subtables. That is
+// HarfBuzz's reading and the positioning pass's (pairPosAt), and this reading
+// has to be the same one, since the pair across a run boundary is found here
+// and must be the pair the run itself would have found.
+//
+// It used to read a row that adjusted nothing as no pair and a second glyph
+// the class table left out as unpaired, which let a later subtable of the
+// lookup apply where HarfBuzz stops.
 func (l *layout) pairStartsFormat2(kl *kernLookup, at int, sub []byte) bool {
 	if len(sub) < 16 {
 		return false
 	}
-	fmt1, fmt2 := font.Be16(sub, 4), font.Be16(sub, 6)
 	class1Off := font.Be16(sub, 8)
 	n1, n2 := font.Be16(sub, 12), font.Be16(sub, 14)
-	recSize := valueSize(fmt1) + valueSize(fmt2)
-	if n1 <= 0 || n2 <= 0 || recSize == 0 {
+	if n1 <= 0 || n2 <= 0 {
 		return false
 	}
-	states := map[int]bool{} // whether a first class's row states anything
 	any := false
 	l.eachCovered(sub, font.Be16(sub, 2), func(_, first int) bool {
 		// The class is searched for in the class table, glyph by glyph,
 		// rather than read out of a map of every glyph the table names.
-		c1 := classAt(sub, class1Off, first)
-		if c1 >= n1 {
-			return true
-		}
-		says, read := states[c1]
-		if !read {
-			if !l.spend(n2) {
-				return false
-			}
-			for c2 := 0; c2 < n2 && !says; c2++ {
-				off := 16 + (c1*n2+c2)*recSize
-				if off+recSize > len(sub) {
-					break
-				}
-				says = !pairAdjustFrom(sub[off:], fmt1, fmt2).zero()
-			}
-			states[c1] = says
-		}
-		if says {
+		if c1 := classAt(sub, class1Off, first); c1 < n1 {
 			kl.byFirst[first] = append(kl.byFirst[first], pairStart{sub: at, at: c1})
 			any = true
 		}
@@ -1461,8 +1462,9 @@ func (l *layout) noteLimits(tables string, allowance int) {
 	}
 	if l.pairsCapped {
 		l.limits = append(l.limits, fmt.Sprintf(
-			"the font states more than the %d kerning pairs this engine keeps; the rest "+
-				"were not read", maxPairs))
+			"the font's kern table states more than the %d kerning pairs this engine "+
+				"lists for kerning across a boundary between runs; the rest are not "+
+				"applied there", maxPairs))
 		l.pairsCapped = false
 	}
 }
@@ -1883,11 +1885,8 @@ func (l *layout) singleSubst(tag string, sub []byte) {
 // — a standard font, whose metrics are published rather than embedded.
 func emptyLayout() *layout {
 	return &layout{
-		ligatures:  map[int][]ligature{},
-		single:     map[string]map[int]int{},
-		singlePos:  map[int]singleAdjust{},
-		markGlyphs: map[int]bool{},
-		cursive:    map[int]cursiveAnchors{},
+		ligatures: map[int][]ligature{},
+		single:    map[string]map[int]int{},
 	}
 }
 

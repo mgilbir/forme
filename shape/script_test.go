@@ -130,17 +130,25 @@ func TestLatinIsTheLastResort(t *testing.T) {
 	}
 }
 
-// TestScriptWithNoLanguageSystemIsSkipped covers a script that names neither a
-// default language system nor the one asked for. There is nothing to take from
-// it, so the next candidate — the default script — decides, rather than the run
-// being shaped with no rules at all.
-func TestScriptWithNoLanguageSystemIsSkipped(t *testing.T) {
+// TestScriptWithNoLanguageSystemSelectsNothing covers a script that names
+// neither a default language system nor the one asked for. It is still the
+// script chosen — HarfBuzz chooses a script by its tag alone — and it selects
+// nothing, so the run is set with none of the font's rules rather than with the
+// default script's. It used to be passed over for 'DFLT'; Noto Sans Anatolian
+// Hieroglyphs declares 'latn' this way, and its Latin was set with mark
+// attachment HarfBuzz does not apply.
+func TestScriptWithNoLanguageSystemSelectsNothing(t *testing.T) {
 	f := scriptFace(t, map[string]fonttest.Script{
 		"grek": {Required: fonttest.NoFeature, NoDefault: true},
 		"DFLT": {Required: fonttest.NoFeature, Features: []int{1}},
 	})
-	if got := lastGID(t, f, "α*"); got != scZ {
-		t.Errorf("* shaped to glyph %d, want %d: 'grek' selects nothing, so 'DFLT' decides", got, scZ)
+	star, ok := f.GlyphID('*')
+	if !ok {
+		t.Fatal("the fixture has no glyph for *")
+	}
+	if got := lastGID(t, f, "α*"); got != star {
+		t.Errorf("* shaped to glyph %d, want its own %d: 'grek' is chosen and selects nothing",
+			got, star)
 	}
 }
 
@@ -273,8 +281,6 @@ func TestScriptSelectionSurvivesMalformedScriptList(t *testing.T) {
 		l := &layout{
 			ligatures: map[int][]ligature{},
 			single:    map[string]map[int]int{},
-			singlePos: map[int]singleAdjust{}, markGlyphs: map[int]bool{},
-			cursive: map[int]cursiveAnchors{},
 		}
 		sel, _ := scriptFeatures(truncated, []string{"latn"}, nil)
 		if len(truncated) >= 10 {

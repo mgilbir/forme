@@ -102,7 +102,7 @@ KNOWN = {
 # across it. That was taken for an asymmetry of HarfBuzz's alone, and CoreText,
 # asked about 129 of them, followed neither axis. It is HarfBuzz's model —
 # the cross axis settled when the mark is attached, the main axis carried to
-# the end — and positioning now follows it (shape/position.go, attachMarks).
+# the end — and positioning now follows it (shape/position.go, placeMark).
 # With the class taken out, fuzzing two million strings found none of it left.
 
 def classify(text, ours, theirs):

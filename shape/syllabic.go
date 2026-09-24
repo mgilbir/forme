@@ -112,7 +112,7 @@ func (sh shaper) splitCharacters(buf []Glyph, runes []rune, of func(rune) ([]run
 		for k, gid := range gids {
 			outBuf = append(outBuf, Glyph{
 				GID: gid, Cluster: buf[i].Cluster, XAdvance: sh.f.advanceGID(gid),
-				class: classOfRune(parts[k]),
+				class: classOfRune(parts[k]), umark: unicodeMarkOf(parts[k]),
 			})
 			outRunes = append(outRunes, parts[k])
 		}

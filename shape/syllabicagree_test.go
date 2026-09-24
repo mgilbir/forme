@@ -152,7 +152,7 @@ func TestAZeroedMarkMovesOnlyWhereTheFontPlacesNone(t *testing.T) {
 		want  bool
 	}{"OpenType cross-stream": {crossOT, true}, "Apple cross-stream": {crossAAT, true},
 		"horizontal": {plain, false}, "none": {nil, false}} {
-		if got := hasCrossStreamKerning(c.table); got != c.want {
+		if got := readLegacyKern(c.table).crossStream; got != c.want {
 			t.Errorf("%s: cross-stream %t, want %t", name, got, c.want)
 		}
 	}

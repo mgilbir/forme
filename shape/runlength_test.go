@@ -259,9 +259,14 @@ func markStackFace(t *testing.T) *Face {
 // lookup's attachment class made each of them walk the whole run: "a" with
 // sixteen thousand U+0301 took 2.8 seconds and climbed by four and a half per
 // doubling.
+//
+// The walk is HarfBuzz's again (visibleBefore), and what keeps it linear is
+// what keeps HarfBuzz's linear: a lookup is applied only at the glyphs it does
+// not step over, so no mark it ignores starts a walk, and each walk that does
+// start ends where the one before it began.
 func TestMarkToMarkDoesNotWalkBackOverTheMarksItIgnores(t *testing.T) {
 	f := markStackFace(t)
-	if len(f.layout.markMark) == 0 {
+	if len(f.layout.gpos) == 0 || f.layout.gpos[0].kind != 6 {
 		t.Fatal("the fixture's mark-to-mark lookup was not read; the test would time nothing")
 	}
 	shape := func(n int) func() {
@@ -270,47 +275,6 @@ func TestMarkToMarkDoesNotWalkBackOverTheMarksItIgnores(t *testing.T) {
 		return func() { f.ShapeGlyphs(text) }
 	}
 	growth(t, "shaping a and n marks its mark-to-mark lookup ignores, at 4n against n", shape, 2000, 8000, 8)
-}
-
-// TestTheMarkStackTrackerFindsWhatTheWalkFound holds the tracker to the walk it
-// replaced, over random runs of bases and marks of two attachment classes, two
-// of them in a filtering set, against subtables of every flag combination.
-func TestTheMarkStackTrackerFindsWhatTheWalkFound(t *testing.T) {
-	const base, m1, m2, m3 = 1, 2, 3, 4
-	l := &layout{
-		glyphClass: classTableOf(map[int]int{base: classBase, m1: classMark, m2: classMark, m3: classMark}),
-		markAttach: classTableOf(map[int]int{m1: 1, m2: 2, m3: 1}),
-		markSets:   []coverageTable{coverageOf(m1, m2)},
-	}
-	for _, fl := range []struct{ flags, set int }{
-		{0, -1}, {0x0100, -1}, {0x0200, -1}, {flagUseMarkFilteringSet, 0},
-		{flagUseMarkFilteringSet | 0x0100, 0}, {flagIgnoreMarks | 0x0200, -1}, {flagUseMarkFilteringSet, 5},
-	} {
-		l.markMark = append(l.markMark, markAttachment{flags: fl.flags, markSet: fl.set})
-	}
-	rng := rand.New(rand.NewSource(2))
-	glyphs := []int{base, m1, m2, m3}
-	for trial := 0; trial < 300; trial++ {
-		buf := make([]Glyph, 1+rng.Intn(30))
-		for i := range buf {
-			buf[i].GID = glyphs[rng.Intn(len(glyphs))]
-		}
-		stack := newMarkStackTracker(l)
-		for i := range buf {
-			for k := range l.markMark {
-				st := &l.markMark[k]
-				j := i - 1
-				for j >= 0 && l.ignoresIn(st.flags&^markStackIgnore, st.markSet, buf[j]) {
-					j--
-				}
-				if got := stack.nearest(k); got != j {
-					t.Fatalf("trial %d, glyph %d, subtable %d: the tracker gives %d and the walk %d",
-						trial, i, k, got, j)
-				}
-			}
-			stack.passed(buf[i], i)
-		}
-	}
 }
 
 // varStoreBytes is an item variation store of groups group offsets that all
@@ -504,4 +468,31 @@ func TestComponentGlyphsWalksAsMarkCompositeDoes(t *testing.T) {
 		}
 		check(g, 1+rng.Intn(300))
 	}
+}
+
+// TestMarksHangingFromOneBaseAreResolvedInLinearTime is the last step of a
+// positioning pass: each mark is moved back over the advances between it and
+// the glyph it hangs from. HarfBuzz walks that stretch for every mark, and a
+// font that attaches every mark of a long run to its letter — mark-to-base
+// with no mark-to-mark to stack them — makes the k-th mark walk k glyphs: "a"
+// with sixteen thousand U+0301 climbed by 3.7 per doubling before a prefix
+// sum (see propagate) answered each in constant time.
+func TestMarksHangingFromOneBaseAreResolvedInLinearTime(t *testing.T) {
+	const a, acute = 1, 4
+	f := costFace(t, map[string][]byte{
+		"GPOS": fonttest.GPOSMarkToBase(4,
+			[]fonttest.MarkAttachment{{Glyph: acute, Class: 0, Anchor: fonttest.Anchor{X: 100, Y: 700}}},
+			[]fonttest.BaseAttachment{{Glyph: a, Anchors: map[int]fonttest.Anchor{0: {X: 250, Y: 650}}}}),
+		"GDEF": fonttest.GDEF(map[int]int{a: classBase, acute: classMark}),
+	})
+	got, _ := f.ShapeGlyphs("á́")
+	if len(got) != 3 || got[2].XOffset != -350 {
+		t.Fatalf("the fixture's marks are not hung from the a: %+v", got)
+	}
+	shape := func(n int) func() {
+		text := "a" + strings.Repeat("́", n)
+		f.ShapeGlyphs(text)
+		return func() { f.ShapeGlyphs(text) }
+	}
+	growth(t, "shaping a and n marks all hung from it, at 4n against n", shape, 4000, 16000, 8)
 }

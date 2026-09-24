@@ -195,16 +195,17 @@ func pairSemanticsFace(t *testing.T) *Face {
 	return f
 }
 
-// TestAPairIsFoundAsTheListingFoundIt pins that searching the subtables for a
-// pair answers what listing them into a map answered, case by case — which
-// subtable wins, and what counts as a subtable naming a pair at all.
+// TestAPairIsFoundAsTheListingFoundIt pins which subtable of a lookup applies
+// to a pair, case by case, and what counts as a subtable naming a pair at all.
+// The answers are HarfBuzz 14.5.0's for this font.
 //
-// Two of the cases are this engine's reading and not the specification's, and
-// they are kept as they were because changing them changes what real fonts
-// kern: a class pair that adjusts nothing does not stop the search (by the
-// specification it matches, and applies nothing), and a second glyph the class
-// table does not name is not paired (by the specification it is class 0, and
-// the class 0 column applies to it). Both are marked below.
+// Two of them used to be this engine's own reading, kept because changing
+// them changed what real fonts kern: a class pair that adjusts nothing did not
+// stop the search, and a second glyph the class table does not name was not
+// paired. By the specification and in HarfBuzz the first is a match that
+// applies nothing and the second is class 0, and the class 0 column applies to
+// it. The positioning pass now applies lookups as HarfBuzz does (pairPosAt),
+// and this reading follows it.
 func TestAPairIsFoundAsTheListingFoundIt(t *testing.T) {
 	f := pairSemanticsFace(t)
 	for _, tc := range []struct {
@@ -214,14 +215,18 @@ func TestAPairIsFoundAsTheListingFoundIt(t *testing.T) {
 	}{
 		{"ab", 500, "an explicit pair of zero is a match, and the class pair after it is not reached"},
 		{"cb", 450, "the first subtable to name the pair wins over the third"},
-		// This engine's reading, not the specification's.
-		{"ca", 470, "a class pair that adjusts nothing does not stop the search, so the third subtable applies"},
-		{"cd", 500, "a second glyph the class table does not name is not paired, whatever class 0 says"},
-		{"ad", 500, "nothing names d"},
+		{"ca", 500, "a class pair that adjusts nothing is a match, and the third subtable is not reached"},
+		{"cd", 430, "a second glyph the class table does not name is class 0, and the class 0 column applies"},
+		{"ad", 430, "the explicit list does not name d, so the class subtable after it applies, with d in class 0"},
 	} {
 		got, _ := f.ShapeGlyphs(tc.text)
 		if len(got) != 2 || got[0].XAdvance != tc.want {
 			t.Errorf("%q: the first glyph advances %v, want %v: %s", tc.text, got[0].XAdvance, tc.want, tc.why)
+		}
+		// The pair across a run boundary is found by the same reading.
+		if split := contextAdvance(f, tc.text[:1], "", tc.text[1:]); split != tc.want {
+			t.Errorf("%q: the first glyph, with the second as the next run, advances %v, want %v",
+				tc.text, split, tc.want)
 		}
 	}
 }
@@ -375,9 +380,14 @@ func TestACoverageStartingLateFillsNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := f.layout.singlePos[0]; ok {
-		t.Error("glyph 0 was given the adjustment: the reader named it at every index " +
-			"it filled in")
+	// The notdef, glyph 0, is what every index before the late one would
+	// have named, and it must not be adjusted.
+	want, _ := f.ShapeGlyphs("z")
+	if len(want) != 1 || want[0].GID != 0 {
+		t.Fatalf("an unmapped character did not shape to the notdef: %+v", want)
+	}
+	if want[0].XAdvance != f.advanceGID(0) {
+		t.Errorf("glyph 0 was given the adjustment: %+v", want)
 	}
 	if got, _ := f.ShapeGlyphs("a"); len(got) != 1 || got[0].XAdvance != 507 {
 		t.Errorf("the covered glyph was not adjusted: %+v", got)
@@ -546,9 +556,9 @@ func TestAMarkRuleReachedFromAContextReadsOnlyWhatItAsks(t *testing.T) {
 
 // TestAliasedMarkSubtablesAreReadOnce is aliasing across lookups: n mark
 // lookups that all point at one subtable whose coverages name sixteen thousand
-// glyphs. The anchors are the same bytes whoever names them, so the subtable
-// is read once; read once per lookup, it would spend the allowance, and the
-// face would say so.
+// glyphs. A mark subtable is searched where a mark is met rather than read at
+// load, so naming it n times costs nothing to load; read once per lookup, it
+// would spend the allowance, and the face would say so.
 func TestAliasedMarkSubtablesAreReadOnce(t *testing.T) {
 	const lookups, width = 200, 16000
 	// The subtable wideMarkRuleFace applies through a rule, taken out of it and
@@ -580,16 +590,19 @@ func TestAliasedMarkSubtablesAreReadOnce(t *testing.T) {
 		t.Errorf("the mark was not placed: %+v", got)
 	}
 
-	// And one lookup naming it n times keeps it once: within a lookup the
-	// first subtable that applies wins, so the copies can never apply, and
-	// every copy kept is one more for every mark in every run to be tried
-	// against.
+	// And one lookup naming it n times places the mark as one naming it once:
+	// within a lookup the first subtable that applies wins, so the copies
+	// after it are never reached.
 	g := costFace(t, map[string][]byte{
 		"GPOS": tableWith("mark", 1, aliasedLookupList(4, 1, lookups, sub)),
 		"GDEF": fonttest.GDEF(map[int]int{1: classBase, 4: classMark}),
 	})
-	if n := len(g.layout.markBase); n != 1 {
-		t.Errorf("one lookup naming a subtable %d times keeps %d copies of it, want 1", lookups, n)
+	if limits := g.LayoutLimits(); len(limits) != 0 {
+		t.Errorf("one lookup naming a subtable %d times spent the allowance: %q", lookups, limits)
+	}
+	if again, _ := g.ShapeGlyphs("á"); len(again) != 2 || again[1] != got[1] {
+		t.Errorf("one lookup naming the subtable %d times placed the mark at %+v, "+
+			"and %d lookups naming it once each at %+v", lookups, again, lookups, got)
 	}
 }
 

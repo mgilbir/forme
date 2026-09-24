@@ -71,6 +71,17 @@ type Glyph struct {
 	// drawn for is still one once the font has had its say — see
 	// dropUnsubstitutedIgnorables.
 	substituted bool
+
+	// multiplied says the glyph is one of several a multiple substitution
+	// made from one, and was not ligated since: HarfBuzz's MULTIPLIED glyph
+	// property. A mark goes on the first of them and steps over the rest —
+	// see acceptsMarks.
+	multiplied bool
+
+	// umark is what the character this glyph came from says about marks, for
+	// the one reader that asks the character rather than the font: placing
+	// the marks of a face that places none of its own. See fallback.go.
+	umark unicodeMark
 }
 
 // ligatureRef says what a glyph has to do with a ligature.
@@ -514,7 +525,7 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 		}
 		buf = append(buf, Glyph{
 			GID: gid, Cluster: offsets[i], XAdvance: f.advanceGID(gid),
-			class: classOfRune(runes[i]),
+			class: classOfRune(runes[i]), umark: unicodeMarkOf(runes[i]),
 		})
 	}
 	if len(buf) == 0 {
@@ -561,7 +572,10 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 			buf = sh.applyStage(buf, stage)
 		}
 	}
-	sh.position(buf)
+	if model == modelHebrew {
+		sh.gposScript = f.chosenPositioningTag(script, lang)
+	}
+	sh.position(buf, p, model)
 	// The pair that spans the boundary to the next run, which the pass above
 	// cannot see because the glyph on the far side of it is not in this buffer.
 	// See boundarykern.go.

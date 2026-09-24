@@ -911,7 +911,7 @@ func (sh shaper) markInvalidVowels(buf []Glyph, runes []rune) ([]Glyph, []rune) 
 		// character implies is its class.
 		outBuf = append(outBuf, Glyph{
 			GID: gid, Cluster: buf[i].Cluster, XAdvance: sh.f.advanceGID(gid),
-			class: classOfRune(dottedCircle),
+			class: classOfRune(dottedCircle), umark: unicodeMarkOf(dottedCircle),
 		})
 		outRunes = append(outRunes, dottedCircle)
 	}

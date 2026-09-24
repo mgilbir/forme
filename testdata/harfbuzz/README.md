@@ -331,7 +331,7 @@ a mark attached by one lookup whose target a later lookup moves, which HarfBuzz
 follows along the line and not across it. CoreText follows neither axis, and
 the case was listed as HarfBuzz's asymmetry. It is HarfBuzz's model — the cross
 axis settled when the mark is attached, the main axis carried to the end — and
-fonts are tested against it; positioning follows it now (`attachMarks` in
+fonts are tested against it; positioning follows it now (`placeMark` and `propagate` in
 `shape/position.go`), and with the class unmasked the fuzzer finds none left.
 
 The mark-stacking class this section used to end on — 334 differences over

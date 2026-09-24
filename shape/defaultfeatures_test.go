@@ -81,17 +81,50 @@ func TestAKanaKeepsItsFullWidth(t *testing.T) {
 // half that matters most: the list is a restriction, and a restriction that took
 // out too much would leave every mark unattached and every pair unkerned with
 // nothing to show for it.
+//
+// It asks the plan, which is where the positioning lookups a run applies are
+// chosen: a font declaring each feature over a lookup of its own, and the
+// lookups the plan gathers for a run that asks for nothing.
 func TestTheDefaultPositioningFeaturesStillApply(t *testing.T) {
-	for _, tag := range []string{"kern", "mark", "mkmk", "curs", "dist", "abvm", "blwm"} {
-		if !defaultPositionFeatures[tag] {
+	on := []string{"kern", "mark", "mkmk", "curs", "dist", "abvm", "blwm"}
+	off := []string{"palt", "halt", "vpal", "cpsp", "smcp", "onum"}
+	var lookups []fonttest.Lookup
+	features := map[string][]int{}
+	for i, tag := range append(append([]string(nil), on...), off...) {
+		lookups = append(lookups, fonttest.Lookup{Type: 1,
+			Subtables: [][]byte{fonttest.SinglePosSubtable(1, 0, 0, 10)}})
+		features[tag] = []int{i}
+	}
+	f, err := Load(fonttest.SFNT(fonttest.SFNTOptions{
+		Glyphs: []fonttest.Glyph{{Rune: 'a', Advance: 500, HasShape: true}},
+		Extra:  map[string][]byte{"GPOS": fonttest.GPOSLookups(lookups, features)},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied := map[int]bool{}
+	for _, lk := range buildPlan(f.layout, planKey{model: modelDefault}, nil).gpos {
+		applied[lk.index] = true
+	}
+	for i, tag := range on {
+		if !applied[i] {
 			t.Errorf("%q is not applied by default, and it is one of the features "+
 				"that must be", tag)
 		}
 	}
-	for _, tag := range []string{"palt", "halt", "vpal", "cpsp", "smcp", "onum"} {
-		if defaultPositionFeatures[tag] {
+	for i, tag := range off {
+		if applied[len(on)+i] {
 			t.Errorf("%q is applied by default, and it is a feature a document has "+
 				"to ask for", tag)
+		}
+	}
+	// And one only a caller asks for is not applied either, which is not
+	// HarfBuzz's answer and is recorded at plan.compile: applying it moves
+	// the text-spacing-trim reftests, and is left for a decision of its own.
+	asked := buildPlan(f.layout, planKey{model: modelDefault, extra: "palt"}, []string{"palt"})
+	for _, lk := range asked.gpos {
+		if lk.index == len(on) {
+			t.Error("'palt' asked for by name is applied to the glyphs; see plan.compile")
 		}
 	}
 }

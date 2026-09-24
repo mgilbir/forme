@@ -46,9 +46,9 @@ type Script struct {
 	Langs    map[string]LangSys
 
 	// NoDefault omits the default language system, which a script is allowed to
-	// do. A run that resolves to such a script and names no language it has can
-	// take nothing from it, and the reader must move on rather than shape with
-	// no rules at all.
+	// do. A run that resolves to such a script and names no language it has
+	// takes nothing from it: the script is still the one chosen, and the run is
+	// shaped with none of the font's rules, as HarfBuzz shapes it.
 	NoDefault bool
 }
 

@@ -65,8 +65,10 @@ type Features struct {
 	// NoContextualAlternates suppresses "calt": the shapes a font substitutes
 	// for a character because of its neighbours, without joining anything.
 	NoContextualAlternates bool
-	// NoKerning suppresses the pair adjustments of the "kern" feature and of
-	// GPOS pair positioning, including the pair that spans a run boundary.
+	// NoKerning suppresses kerning: the "kern" feature's lookups, the legacy
+	// kern table, and the pair that spans a run boundary. It is "kern" turned
+	// off, as HarfBuzz is asked for it, and it leaves "dist" alone — the
+	// spacing an Indic font states for its conjuncts is not kerning.
 	NoKerning bool
 	// Caps is the capitals a run is set in: the first request here that asks a
 	// face for a rule rather than taking one away.
