@@ -638,12 +638,18 @@ func (t *tokenizer) doctype() token {
 func (t *tokenizer) endTag() (token, bool) {
 	start := t.pos
 	t.pos += 2
-	name := t.readName()
-	if name == "" {
+	// HTML's end tag open state: a name begins only with an ASCII letter, as a
+	// start tag's does. Anything else — "</1x>", "</ſpan>", "</>" — is not an
+	// end tag, and the standard reads it as a bogus comment to the next ">", or
+	// as nothing at all for "</>". It used to be read as a tag whenever the
+	// characters after "</" could continue a name, so "</1x>" was an end tag
+	// "1x" that closed nothing.
+	if t.pos >= len(t.src) || !isNameStart(t.src[t.pos]) {
 		t.fail(start, "an end tag with no name")
 		t.skipTo('>')
 		return token{}, false
 	}
+	name := t.readName()
 	t.skipSpace()
 	if t.pos < len(t.src) && t.src[t.pos] == '>' {
 		t.pos++
@@ -792,23 +798,53 @@ func (t *tokenizer) attrValue(s string, off int) string {
 
 func (t *tokenizer) readName() string {
 	start := t.pos
-	// A colon is part of a name, in HTML as well as in XML.
+	// The name runs to white space, "/" or ">", and to nothing else. That is
+	// HTML's tag name state (§13.2.5.8), which has exactly those three
+	// terminators and appends every other character it meets: an ASCII capital
+	// lowercased, a NUL as U+FFFD with a parse error, and anything else — a
+	// digit, a ".", a quote, a letter outside ASCII — as it stands.
 	//
-	// XML gives a name an optional namespace prefix — the suite writes its
-	// inline SVG as "<svg:svg>" — and a reader that stopped at the colon read
-	// the end tag "</svg:svg>" as "</svg" and reported the document as
-	// malformed. HTML has no namespaces and no prefixes, and its tag-name state
-	// ends only at white space, "/" or ">" — so a colon is simply part of the
-	// name there. It was admitted in XML alone, which made "<o:p>" — the tag a
-	// Word document is full of — an element "o" with an attribute ":p", and
-	// "</o:p>" an end tag that was never closed.
+	// It stopped at the first byte that was not an ASCII letter, digit, "-",
+	// "_" or ":", and the rest of the name became an attribute. "<aſb>" was an
+	// element "a" with an attribute "ſb", "<x.y>" an "x" with ".y", and the end
+	// tag "</aſb>" was an end tag "a" followed by markup that did not close it.
+	// A custom element's name may hold any of those — "<math-α>" and
+	// "<emotion-😍>" are valid ones — and every browser reads them whole.
 	//
-	// What the prefix *means* is the parser's question, not this one's: see
-	// parser.resolveName.
-	for t.pos < len(t.src) && (isNamePart(t.src[t.pos]) || t.src[t.pos] == ':') {
+	// A colon is part of a name, in HTML as well as in XML, which the rule
+	// above now says without a special case: XML gives a name an optional
+	// namespace prefix — the suite writes its inline SVG as "<svg:svg>" — and
+	// HTML's tag name state has no reason to stop at one either. It was once
+	// admitted in XML alone, which made "<o:p>" — the tag a Word document is
+	// full of — an element "o" with an attribute ":p". What the prefix *means*
+	// is the parser's question, not this one's: see parser.resolveName.
+	//
+	// The folding is ASCII's and only ASCII's. strings.ToLower is Unicode's, and
+	// it would make a KELVIN SIGN the letter k: "<X\u212ABD>" would open an
+	// element "xkbd" that nobody wrote.
+	for t.pos < len(t.src) && !isSpace(t.src[t.pos]) && t.src[t.pos] != '/' && t.src[t.pos] != '>' {
 		t.pos++
 	}
-	return strings.ToLower(t.src[start:t.pos])
+	return t.nuls(lowerASCIIString(t.src[start:t.pos]), start, "a tag name", nulReplaced)
+}
+
+// lowerASCIIString lowercases the ASCII capitals of s and leaves every other
+// byte as it is, which is what the HTML tokenizer does to a tag or attribute
+// name: "ASCII upper alpha … append the lowercase version", "anything else …
+// append the current input character".
+func lowerASCIIString(s string) string {
+	i := 0
+	for i < len(s) && (s[i] < 'A' || s[i] > 'Z') {
+		i++
+	}
+	if i == len(s) {
+		return s
+	}
+	b := []byte(s)
+	for ; i < len(b); i++ {
+		b[i] = lowerASCII(b[i])
+	}
+	return string(b)
 }
 
 // readAttrName reads an attribute name, which admits more characters than an
@@ -834,7 +870,8 @@ func (t *tokenizer) readAttrName(tag string) string {
 		}
 		t.pos++
 	}
-	return strings.ToLower(t.src[start:t.pos])
+	// ASCII's folding, as a tag name's: see readName.
+	return lowerASCIIString(t.src[start:t.pos])
 }
 
 func (t *tokenizer) skipSpace() {
@@ -849,10 +886,6 @@ func isSpace(c byte) bool {
 
 func isNameStart(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
-}
-
-func isNamePart(c byte) bool {
-	return isNameStart(c) || (c >= '0' && c <= '9') || c == '-' || c == '_'
 }
 
 // decodeRefs resolves character references in a run of text.

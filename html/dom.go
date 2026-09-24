@@ -162,8 +162,8 @@ func (n *Node) AttrExact(name string) (string, bool) {
 	return "", false
 }
 
-// Language is the language in force at a node: the value of the nearest lang
-// attribute at or above it, and whether there was one.
+// Language is the language in force at a node: the value of the nearest lang or
+// xml:lang attribute at or above it that counts, and whether there was one.
 //
 // It is here rather than in each caller because it had five copies — the casing
 // tailoring, the hyphenation patterns, the orthography, the writing system, and
@@ -171,21 +171,37 @@ func (n *Node) AttrExact(name string) (string, bool) {
 // five. They ask different questions *of* the tag; they must not ask different
 // tags.
 //
-// **xml:lang is the same attribute.** HTML §3.2.6 says so: an element with an
-// xml:lang in the XML namespace and no lang in no namespace takes its language
-// from the xml:lang, and the precedence is per element rather than per document
-// — a lang on a child beats an xml:lang on its parent because it is nearer, and
-// loses to an xml:lang on the child itself only by being absent. Reading lang
-// alone made "<div xml:lang='tr'>" a document with no language at all, which in
-// XHTML — where xml:lang is the natural spelling and half the older test suite
-// is written — turned the Turkish casing tailoring off and typeset the wrong
-// letters.
+// **xml:lang is the same attribute, and it comes first.** HTML §3.2.6.2
+// gives the order in which an element's own attributes are asked: a lang in
+// the XML namespace first, and only then a lang in no namespace. So an element
+// carrying both takes its language from xml:lang, and lang is not read at all.
+// The two are meant to agree — the section makes it a conformance error when
+// they do not — and when they do not, it is xml:lang the user agent follows.
+// Reading lang alone made "<div xml:lang='tr'>" a document with no language at
+// all, which in XHTML — where xml:lang is the natural spelling and half the
+// older test suite is written — turned the Turkish casing tailoring off and
+// typeset the wrong letters. When it was first read, it was asked after lang,
+// which is the section's order reversed.
 //
-// Only in a document that is XML. The HTML parser stores "xml:lang" as a
-// literal attribute name with no namespace, and a browser reading an HTML
-// document ignores it for exactly that reason; honouring it there would be a
-// language this engine invents. XMLDocument is asked only once, and only when
-// an xml:lang was found with no lang above it.
+// The precedence is per element rather than per document: a lang on a child
+// beats an xml:lang on its parent because it is nearer.
+//
+// **Which attribute is in the XML namespace depends on the document.** In
+// XHTML the prefix "xml" is bound to that namespace by definition, so an
+// "xml:lang" is the attribute wherever it is written. In an HTML document the
+// parser stores it as a literal name in no namespace, which the section says
+// "has no effect on language processing" — except on the roots of SVG and
+// MathML, whose start tags the tree builder puts through "adjust foreign
+// attributes", which moves an xml:lang into the XML namespace. Honouring it on
+// an HTML element there would be a language this engine invents; ignoring it on
+// an <svg> would be one it loses.
+//
+// **lang in no namespace is an HTML and SVG attribute**, and the section reads
+// it only on those. A <math> has no lang to read, so its language is its
+// xml:lang or its parent's; and in an XHTML document an element whose name still
+// carries a prefix is in a namespace this engine does not know (see
+// parser.resolveName, which drops a prefix only when it names one it does), so
+// it is neither.
 //
 // **An empty value is an answer.** HTML §3.2.6.2: lang="" says the language is
 // unknown, and it stops the walk as surely as a tag does — it is how an author
@@ -209,16 +225,24 @@ func (n *Node) Language() (string, bool) {
 
 // ownLanguage is the language a node itself declares, if it declares one: the
 // one rule Language and Languages both walk, so that the two cannot come to
-// answer differently. xml is asked only when an xml:lang is found without a
-// lang beside it, which is the only time the answer depends on it.
+// answer differently. See Language for the rule. xml is asked only when the
+// answer depends on it — an xml:lang on an element that is not a foreign root,
+// or a lang on an element whose name carries a prefix — which leaves the
+// ordinary document, with lang alone, never asking.
 func (n *Node) ownLanguage(xml func() bool) (string, bool) {
 	if n.Type != ElementNode {
 		return "", false
 	}
-	if v, ok := n.Attr("lang"); ok {
+	if v, ok := n.Attr("xml:lang"); ok && (foreignElements[n.Name] || xml()) {
 		return v, true
 	}
-	if v, ok := n.Attr("xml:lang"); ok && xml() {
+	if n.Name == "math" {
+		return "", false
+	}
+	if v, ok := n.Attr("lang"); ok {
+		if strings.IndexByte(n.Name, ':') >= 0 && xml() {
+			return "", false
+		}
 		return v, true
 	}
 	return "", false

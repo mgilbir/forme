@@ -392,6 +392,10 @@ func TestMatchLangIsExtendedFiltering(t *testing.T) {
 // tag, and they must not read four different tags. Reading lang alone made an
 // XHTML document that declared itself with xml:lang a document with no language
 // at all, here as much as in the text.
+//
+// On an element carrying both, xml:lang wins: HTML §3.2.6.2 asks for the lang
+// in the XML namespace first. This test said lang won there until the user
+// decided it by the section's order; element c was turned round with it.
 func TestMatchLangReadsXMLLangToo(t *testing.T) {
 	doc := parseDoc(t, `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" `+
 		`"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">`+
@@ -404,16 +408,18 @@ func TestMatchLangReadsXMLLangToo(t *testing.T) {
 <p id="d">d</p></body></html>`)
 	check(t, doc, map[string]string{
 		"p:lang(en)": "a",
-		"p:lang(fr)": "b",
-		// lang wins on the element carrying both, and the further xml:lang does
-		// not come back for the one that lost.
-		"p:lang(de)": "c",
+		// xml:lang wins on the element carrying both, and the lang that lost
+		// does not come back for it.
+		"p:lang(fr)": "b c",
+		"p:lang(de)": "",
 		"p:lang(es)": "",
 	})
 	// An HTML document does not read it, because the HTML parser stores it as a
-	// name in no namespace and a browser ignores it there.
-	html := parseDoc(t, `<div id="outer" xml:lang="en"><p id="a">a</p></div>`)
-	check(t, html, map[string]string{"p:lang(en)": ""})
+	// name in no namespace and the section gives that no effect — alone, or
+	// beside a lang it would have beaten.
+	html := parseDoc(t, `<div id="outer" xml:lang="en"><p id="a">a</p>`+
+		`<p id="b" xml:lang="fr" lang="de">b</p></div>`)
+	check(t, html, map[string]string{"p:lang(en)": "", "p:lang(fr)": "", "p:lang(de)": "b"})
 }
 
 // TestHTMLAttributeValuesAreFoldedInAnHTMLDocument.
