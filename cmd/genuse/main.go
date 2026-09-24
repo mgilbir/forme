@@ -267,6 +267,26 @@ func categoryOf(c character) string {
 	case isc == "Consonant_Subjoined" && c.gc != "Lo":
 		return "SUB"
 
+	// Egyptian hieroglyphs, which Unicode gives no syllabic category and the
+	// engine's own correction file does: a sign, the joiners that set the
+	// next sign beside, under, over or inside it, the controls and brackets
+	// that begin and end a segment or a marked stretch, and the mirroring
+	// and the damage marks written on a sign. They were Other, so every sign
+	// and every control was a cluster of its own and a quadrat could not be
+	// set as one.
+	case isc == "Hieroglyph":
+		return "G"
+	case isc == "Hieroglyph_Joiner":
+		return "J"
+	case isc == "Hieroglyph_Mark_Begin", isc == "Hieroglyph_Segment_Begin":
+		return "SB"
+	case isc == "Hieroglyph_Mark_End", isc == "Hieroglyph_Segment_End":
+		return "SE"
+	case isc == "Hieroglyph_Mirror":
+		return "HR"
+	case isc == "Hieroglyph_Modifier":
+		return "HM"
+
 	case isBase(c):
 		return "B"
 	case isc == "Consonant_Placeholder",

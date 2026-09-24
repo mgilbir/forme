@@ -45,6 +45,14 @@ const (
 	useV                       // a dependent vowel
 	useVM                      // a vowel modifier
 	useWJ                      // a word joiner, and the ignorable code points reserved for one
+
+	// Egyptian hieroglyphs. See hieroglyphCluster.
+	useG  // a hieroglyph: a sign, or a blank or an enclosure standing for one
+	useJ  // a joiner: the next sign beside, under, over or inside this one
+	useSB // a segment or a marked stretch begins: its control, or a bracket
+	useSE // a segment or a marked stretch ends
+	useHR // the sign is mirrored
+	useHM // the sign is damaged, or otherwise modified
 )
 
 // usePosition is which side of the letter a mark is drawn, for the categories
@@ -128,6 +136,9 @@ const (
 	useNumeralCluster
 	useSymbolCluster // a symbol, or anything else, carrying marks
 	useBrokenCluster // marks with no base: malformed text
+	// useHieroglyphCluster is an Egyptian quadrat: signs arranged by joiners.
+	// Nothing in one is reordered and it takes no positional form.
+	useHieroglyphCluster
 )
 
 // reorders reports whether a cluster of this kind has its glyphs moved.
@@ -381,6 +392,52 @@ func (g *useGrammar) numeralTail(i int) int {
 	return j
 }
 
+// hieroglyph_cluster = SB* G HR? HM? SE* (J SB* (G HR? HM? SE*)?)*
+//
+// An Egyptian quadrat. The joiners arrange the signs — the next one beside,
+// under, over or inside the one before — so everything a run of joiners
+// connects is one cluster, and with it the segment controls and brackets
+// around a sign and the mirroring and damage written on it. A joiner may end
+// one with no sign after it: the arrangement is the font's to draw.
+func (g *useGrammar) hieroglyphCluster(i int) int {
+	sign := func(i int) int {
+		if !g.is(i, useG) {
+			return -1
+		}
+		i++
+		if g.is(i, useHR) {
+			i++
+		}
+		if g.is(i, useHM) {
+			i++
+		}
+		for g.is(i, useSE) {
+			i++
+		}
+		return i
+	}
+	for g.is(i, useSB) {
+		i++
+	}
+	if i = sign(i); i < 0 {
+		return -1
+	}
+	for g.is(i, useJ) {
+		j := i + 1
+		for g.is(j, useSB) {
+			j++
+		}
+		// (G ...)? is optional, and a scanner takes the longest match: the
+		// segment begins after a joiner belong to the cluster whether or not
+		// a sign follows them.
+		if k := sign(j); k >= 0 {
+			j = k
+		}
+		i = j
+	}
+	return i
+}
+
 // symbol_cluster_tail = SMAbv+ SMBlw* | SMBlw+
 func (g *useGrammar) symbolTail(i int) int {
 	if g.isAt(i, useSM, usePosAbv) {
@@ -442,32 +499,33 @@ func (g *useGrammar) cluster(i int) (int, useClusterKind) {
 			numeralEnd = i + 1
 		}
 	}
-	// symbol_cluster = (O | GB) tail?
+	// symbol_cluster = (O | GB | SB) tail?
 	//
 	// The engine's Other is not a gap. Anything it has no other category for —
 	// a symbol, a full stop, a letter of another script — begins a cluster and
 	// takes a tail, and that is what keeps a mark written after one attached to
-	// it instead of drifting onto the letter before.
+	// it instead of drifting onto the letter before. An opening bracket is one
+	// too, where it opens no quadrat; a closing one is not, and takes no mark.
 	symbolEnd := -1
-	if g.is(i, useO) || g.is(i, useGB) {
+	if g.is(i, useO) || g.is(i, useGB) || g.is(i, useSB) {
 		if symbolEnd = g.tail(i + 1); symbolEnd < 0 {
 			symbolEnd = i + 1
 		}
 	}
+	hieroglyphEnd := g.hieroglyphCluster(i)
 	// broken_cluster = R? (tail | number_joiner_terminated_cluster_tail | numeral_cluster_tail)
 	//
-	// The tail can match nothing, so the result is only a cluster if something
-	// was consumed — a production that matched no characters would leave the
-	// scan where it started.
+	// The tail can match nothing. What it matches with nothing is still a
+	// broken cluster when a non-joiner follows, since the production is
+	// "broken_cluster ZWNJ?" and the non-joiner is then all of it: a non-joiner
+	// no cluster before it took is a cluster with no base, and HarfBuzz shows
+	// it against a dotted circle. See the comparison below.
 	brokenStart := i
 	if g.is(i, useR) {
 		brokenStart++
 	}
 	brokenEnd := maxUse(g.tail(brokenStart), g.numberJoinerTail(brokenStart),
 		g.numeralTail(brokenStart))
-	if brokenEnd <= i {
-		brokenEnd = -1
-	}
 	// FMPst on its own, and then anything at all.
 	fmPstEnd := -1
 	if g.isAt(i, useFM, usePosPst) {
@@ -478,7 +536,12 @@ func (g *useGrammar) cluster(i int) (int, useClusterKind) {
 		anyEnd = i + 1
 	}
 
-	best, bestKind, bestZWNJ := -1, useNonCluster, false
+	// Each alternative is compared at its whole length, the non-joiner it
+	// may end with included, because that is the length a scanner compares.
+	// Adding the non-joiner to the winner afterwards was the same answer
+	// except where it decided the winner: a broken cluster that is only a
+	// non-joiner is as long as "anything", and is stated first.
+	best, bestKind := i, useNonCluster
 	for _, a := range []alternative{
 		{viramaEnd, useViramaTerminatedCluster, true},
 		{sakotEnd, useSakotTerminatedCluster, true},
@@ -486,16 +549,24 @@ func (g *useGrammar) cluster(i int) (int, useClusterKind) {
 		{numberJoinerEnd, useNumberJoinerTerminatedCluster, true},
 		{numeralEnd, useNumeralCluster, true},
 		{symbolEnd, useSymbolCluster, true},
+		{hieroglyphEnd, useHieroglyphCluster, true},
 		{fmPstEnd, useNonCluster, false},
 		{brokenEnd, useBrokenCluster, true},
 		{anyEnd, useNonCluster, false},
 	} {
-		if a.end > best {
-			best, bestKind, bestZWNJ = a.end, a.kind, a.zwnj
+		end := a.end
+		if end < i {
+			continue
+		}
+		if a.zwnj && g.is(end, useZWNJ) {
+			end++
+		}
+		if end > best {
+			best, bestKind = end, a.kind
 		}
 	}
-	if best > i && bestZWNJ && g.is(best, useZWNJ) {
-		best++
+	if best == i {
+		return -1, useNonCluster
 	}
 	return best, bestKind
 }
@@ -696,7 +767,7 @@ func useTopographicalMasks(buf []Glyph, clusters []useCluster) {
 	var last glyphMask
 	lastStart, lastEnd := 0, 0
 	for _, cl := range clusters {
-		if cl.kind == useNonCluster {
+		if cl.kind == useNonCluster || cl.kind == useHieroglyphCluster {
 			last = 0
 			continue
 		}

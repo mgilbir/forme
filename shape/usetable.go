@@ -10,7 +10,7 @@ package shape
 
 // The Universal Shaping Engine's categories. Unicode 17.0.0.
 //
-// 1090 ranges. A character in none of them is of category useOther, which is the
+// 1112 ranges. A character in none of them is of category useOther, which is the
 // zero value and what every character outside these scripts reads as.
 //
 // Unicode publishes no such property: it is derived from five that Unicode does
@@ -19,6 +19,10 @@ package shape
 var useRanges = [...]useRange{
 	{0x002D, 0x002D, useGB, usePosNone},
 	{0x0030, 0x0039, useB, usePosNone},
+	{0x005B, 0x005B, useSB, usePosNone},
+	{0x005D, 0x005D, useSE, usePosNone},
+	{0x007B, 0x007B, useSB, usePosNone},
+	{0x007D, 0x007D, useSE, usePosNone},
 	{0x00A0, 0x00A0, useGB, usePosNone},
 	{0x00AD, 0x00AD, useWJ, usePosNone},
 	{0x00B2, 0x00B3, useFM, usePosPst},
@@ -543,9 +547,17 @@ var useRanges = [...]useRange{
 	{0x2082, 0x2084, useFM, usePosPst},
 	{0x20F0, 0x20F0, useVM, usePosAbv},
 	{0x25CC, 0x25CC, useB, usePosNone},
+	{0x27E6, 0x27E6, useSB, usePosNone},
+	{0x27E7, 0x27E7, useSE, usePosNone},
+	{0x27E8, 0x27E8, useSB, usePosNone},
+	{0x27E9, 0x27E9, useSE, usePosNone},
 	{0x2D30, 0x2D67, useB, usePosNone},
 	{0x2D6F, 0x2D6F, useB, usePosNone},
 	{0x2D7F, 0x2D7F, useH, usePosNone},
+	{0x2E22, 0x2E22, useSB, usePosNone},
+	{0x2E23, 0x2E23, useSE, usePosNone},
+	{0x2E24, 0x2E24, useSB, usePosNone},
+	{0x2E25, 0x2E25, useSE, usePosNone},
 	{0xA800, 0xA801, useB, usePosNone},
 	{0xA802, 0xA802, useV, usePosAbv},
 	{0xA803, 0xA805, useB, usePosNone},
@@ -1056,6 +1068,16 @@ var useRanges = [...]useRange{
 	{0x11F42, 0x11F42, useIS, usePosNone},
 	{0x11F50, 0x11F59, useB, usePosNone},
 	{0x11F5A, 0x11F5A, useCM, usePosAbv},
+	{0x13000, 0x1342F, useG, usePosNone},
+	{0x13430, 0x13436, useJ, usePosNone},
+	{0x13437, 0x13437, useSB, usePosNone},
+	{0x13438, 0x13438, useSE, usePosNone},
+	{0x13439, 0x1343B, useJ, usePosNone},
+	{0x1343C, 0x1343F, useG, usePosNone},
+	{0x13440, 0x13440, useHR, usePosNone},
+	{0x13441, 0x13446, useG, usePosNone},
+	{0x13447, 0x13455, useHM, usePosNone},
+	{0x13460, 0x143FA, useG, usePosNone},
 	{0x16100, 0x1611D, useB, usePosNone},
 	{0x1611E, 0x16129, useV, usePosAbv},
 	{0x1612A, 0x1612B, useM, usePosPre},
