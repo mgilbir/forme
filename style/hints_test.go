@@ -397,7 +397,7 @@ func TestValignMapsToVerticalAlign(t *testing.T) {
 		// Case-insensitively, which is what a document written in 1998 looks
 		// like and the reason the attribute is worth reading at all.
 		{"BOTTOM", "bottom"},
-		{" Center ", "middle"},
+		{"Center", "middle"},
 	} {
 		got := computed(t, `<table><tr id="r" valign="`+tc.attr+`"><td id="c" valign="`+tc.attr+`">x</td></tr></table>`)
 		if v := got["r"].Get("vertical-align"); v != tc.want {
@@ -424,7 +424,11 @@ func TestAnUnreadableValignIsIgnored(t *testing.T) {
 		t.Fatal("a cell with no valign has no computed vertical-align, so this " +
 			"test is comparing nothing")
 	}
-	for _, attr := range []string{"", "centre", "sub", "5", "top bottom", "super"} {
+	// And a keyword with white space around it, which is matched whole and is
+	// not one of them: " Center " was read as center, by a trim nothing in
+	// HTML asks for. Blink ignores it too.
+	for _, attr := range []string{"", "centre", "sub", "5", "top bottom", "super",
+		" Center ", "top ", "\tbottom", " "} {
 		got := computed(t, `<table><tr><td id="c" valign="`+attr+`">x</td></tr></table>`)["c"].Get("vertical-align")
 		if got != base {
 			t.Errorf("<td valign=%q> computed vertical-align %q; a value that is "+

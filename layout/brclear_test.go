@@ -125,6 +125,10 @@ func TestTheBreakClearAttributeIsTheProperty(t *testing.T) {
 		// Not values, so no hint at all and the line stays where it was.
 		{`clear="none"`, plain},
 		{`clear="nonsense"`, plain},
+		// Matched whole, as the rendering section's br[clear=all i] matches:
+		// white space around the word is part of the value, and it is not one.
+		{`clear=" all"`, plain},
+		{`clear="left "`, plain},
 		{`clear=""`, plain},
 	} {
 		if got := clearedBy(t, `<br `+c.attr+`>`); got != c.at {

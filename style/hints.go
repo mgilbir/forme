@@ -582,12 +582,16 @@ func cellHints(n *html.Node) map[string][]css.ComponentValue {
 // is what HTML asks for and is also the safe answer — a word this cannot read
 // must not become an alignment it guessed at.
 //
-// Case-insensitively, because HTML attribute *values* are matched that way here
-// even though their names are already folded: "<td VALIGN=Bottom>" is what a
-// document written in 1998 looks like, and it is the reason the attribute is
-// worth reading at all.
+// ASCII case-insensitively, because HTML's rendering section says "an ASCII
+// case-insensitive match": "<td VALIGN=Bottom>" is what a document written in
+// 1998 looks like, and it is the reason the attribute is worth reading at all.
+//
+// And exactly otherwise. The value is matched whole, as the rendering
+// section's attribute selectors match a value, and white space around it is
+// part of it: valign=" Center " is not one of the five, and is ignored, as it
+// is in Blink. It used to be trimmed first, which no part of HTML says to do.
 func valignValue(raw string) (string, bool) {
-	switch ascii.Lower(ascii.TrimSpace(raw)) {
+	switch ascii.Lower(raw) {
 	case "top":
 		return "top", true
 	case "middle", "center":
@@ -988,8 +992,13 @@ func colourValue(raw string) (string, bool) {
 // guessed at — which is what every other hint here does with a value it cannot
 // read, and is the safe direction: a <br> that clears nothing is the <br> the
 // document would have had without the attribute at all.
+//
+// The rendering section writes these as attribute selectors — br[clear=left i]
+// and the rest — which match the whole value ASCII case-insensitively and
+// nothing else, so white space around the word is part of it: clear=" all " is
+// not "all". It used to be trimmed first; see valignValue.
 func clearValue(raw string) (string, bool) {
-	switch ascii.Lower(ascii.TrimSpace(raw)) {
+	switch ascii.Lower(raw) {
 	case "left":
 		return "left", true
 	case "right":
