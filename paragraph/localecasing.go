@@ -3,6 +3,7 @@ package paragraph
 import (
 	"strings"
 
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/internal/charprop"
 	"github.com/mgilbir/forme/shape"
 )
@@ -68,7 +69,7 @@ type Language string
 // A tag with no script subtag is taken at its word: "tr" is Turkish in the
 // alphabet Turkish is written in.
 func LanguageOf(tag string) Language {
-	tag = strings.ToLower(strings.TrimSpace(tag))
+	tag = ascii.Lower(strings.TrimSpace(tag))
 	primary, rest, _ := strings.Cut(tag, "-")
 	for rest != "" {
 		var sub string

@@ -8,6 +8,7 @@ import (
 
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -465,7 +466,7 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 		}
 		if gap := parseDisplay(cs.Get("display")).gap; gap != displayGapNone &&
 			unlaidBoxIsNotTheBoxAsked(n, cs, styles, pseudo, gap, &scope, n == root) {
-			value := strings.ToLower(strings.TrimSpace(cs.Get("display")))
+			value := ascii.Lower(strings.TrimSpace(cs.Get("display")))
 			rec.ReportDetail(Finding{
 				Rule:   RuleUnsupportedValue,
 				Source: AtHTML(n.Offset),
@@ -484,7 +485,7 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 			if gap == displayGapNone || !pseudoIsNotTheBoxAsked(n, cs, pcs, gap, &scope) {
 				continue
 			}
-			value := strings.ToLower(strings.TrimSpace(pcs.Get("display")))
+			value := ascii.Lower(strings.TrimSpace(pcs.Get("display")))
 			rec.ReportDetail(Finding{
 				Rule:   RuleUnsupportedValue,
 				Source: AtHTML(n.Offset),
@@ -504,8 +505,8 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 		// orient it is a row in a browser and a stack of blocks here, and that
 		// went unsaid: a navigation bar written the old way came out as one
 		// item per line with nothing to show which of the two the page was.
-		if strings.EqualFold(strings.TrimSpace(cs.Get("display")), "-webkit-box") &&
-			!strings.EqualFold(strings.TrimSpace(cs.Get("-webkit-box-orient")), "vertical") {
+		if ascii.EqualFold(strings.TrimSpace(cs.Get("display")), "-webkit-box") &&
+			!ascii.EqualFold(strings.TrimSpace(cs.Get("-webkit-box-orient")), "vertical") {
 			rec.ReportDetail(Finding{
 				Rule:   RuleUnsupportedValue,
 				Source: AtHTML(n.Offset),
@@ -523,7 +524,7 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 		// falls back to static, which is where the box would sit before any
 		// scrolling had happened — the right half of the answer, and silent
 		// about the other half unless this says so.
-		if strings.EqualFold(strings.TrimSpace(cs.Get("position")), "sticky") {
+		if ascii.EqualFold(strings.TrimSpace(cs.Get("position")), "sticky") {
 			rec.ReportDetail(Finding{
 				Rule:   RuleUnsupportedValue,
 				Source: AtHTML(n.Offset),
@@ -640,7 +641,7 @@ func blockifiedOnItsOwn(cs style.ComputedStyle) bool {
 func itemOfItsParent(up *html.Node, styles map[*html.Node]style.ComputedStyle) bool {
 	for ; up != nil && up.Type == html.ElementNode; up = up.Parent {
 		cs := styles[up]
-		if strings.EqualFold(strings.TrimSpace(cs.Get("display")), "contents") {
+		if ascii.EqualFold(strings.TrimSpace(cs.Get("display")), "contents") {
 			continue
 		}
 		return isFlexOrGridContainer(cs)

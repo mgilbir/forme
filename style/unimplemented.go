@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
 )
 
 // Properties the registry accepts and nothing acts on.
@@ -111,7 +112,7 @@ func unimplementedValueReason(name string, vals []css.ComponentValue) (value, re
 	if !listed {
 		return "", "", false
 	}
-	value = strings.ToLower(strings.TrimSpace(serialize(vals)))
+	value = ascii.Lower(strings.TrimSpace(serialize(vals)))
 	if !entry.values[value] {
 		return "", "", false
 	}

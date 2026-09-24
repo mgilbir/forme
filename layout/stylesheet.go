@@ -10,6 +10,7 @@ import (
 
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -134,7 +135,7 @@ func documentStylesheets(doc *html.Node, l *sheetLoader) []authorSheet {
 			return true
 		}
 		l.styleAttributeTooLarge(n)
-		switch strings.ToLower(n.Name) {
+		switch ascii.Lower(n.Name) {
 		case "style":
 			// HTML §4.2.6 gives <style> a media attribute and means by it what
 			// <link> does. It was not read at all, so a document that kept its
@@ -467,7 +468,7 @@ func (l *sheetLoader) bytes(href string) ([]byte, *loadFailure) {
 func relIsStylesheet(rel string) bool {
 	var stylesheet, alternate bool
 	for _, f := range strings.Fields(rel) {
-		switch strings.ToLower(f) {
+		switch ascii.Lower(f) {
 		case "stylesheet":
 			stylesheet = true
 		case "alternate":
@@ -572,7 +573,7 @@ func (l *sheetLoader) mediaApplies(n *html.Node, what string) bool {
 // expandImports returns the sheets one author sheet stands for: everything it
 // imports, in the order it imports them, and then what is left of it.
 func (l *sheetLoader) expandImports(s authorSheet) []authorSheet {
-	if !containsFold(s.source, "@import") {
+	if !ascii.ContainsFold(s.source, "@import") {
 		return []authorSheet{s}
 	}
 	// This sheet is open while its imports are read, so that one of them naming
@@ -637,7 +638,7 @@ func (l *sheetLoader) expandImports(s authorSheet) []authorSheet {
 			cut = r.Offset
 			break
 		}
-		name := strings.ToLower(r.Name)
+		name := ascii.Lower(r.Name)
 		if name == "charset" {
 			cut = len(s.source)
 			continue
@@ -730,7 +731,7 @@ func importReference(prelude []css.ComponentValue) (ref string, media []css.Comp
 				return "", nil, false
 			}
 			ref, have = v.Token.Value, true
-		case v.IsFunction() && strings.EqualFold(v.Token.Value, "url"):
+		case v.IsFunction() && ascii.EqualFold(v.Token.Value, "url"):
 			if have {
 				return "", nil, false
 			}
@@ -766,11 +767,11 @@ func importReference(prelude []css.ComponentValue) (ref string, media []css.Comp
 // to, and answering them that way would silently drop a sheet the author asked
 // for under a name that means something else entirely.
 func isLayerOrSupports(v css.ComponentValue) bool {
-	if v.IsToken() && v.Token.Kind == css.Ident && strings.EqualFold(v.Token.Value, "layer") {
+	if v.IsToken() && v.Token.Kind == css.Ident && ascii.EqualFold(v.Token.Value, "layer") {
 		return true
 	}
-	return v.IsFunction() && (strings.EqualFold(v.Token.Value, "layer") ||
-		strings.EqualFold(v.Token.Value, "supports"))
+	return v.IsFunction() && (ascii.EqualFold(v.Token.Value, "layer") ||
+		ascii.EqualFold(v.Token.Value, "supports"))
 }
 
 // importMedia answers the media query list on an @import, with the same
@@ -862,41 +863,6 @@ func (l *sheetLoader) fetchImport(ref, from string, at Source) (string, bool) {
 	}
 	l.applied++
 	return src, true
-}
-
-// containsFold is strings.Contains for an ASCII needle, ignoring case.
-//
-// The fast path in front of the parse, and it has to ignore case because an
-// at-rule's name does: "@IMPORT" is an @import and a sheet holding one was
-// handed to the cascade with the rule still in it, to be reported as an at-rule
-// nothing applied. strings.ToLower would copy every stylesheet in the document
-// to answer a question that is almost always no.
-func containsFold(s, needle string) bool {
-	if len(needle) == 0 || len(s) < len(needle) {
-		return len(needle) == 0
-	}
-	fold := func(c byte) byte {
-		if c >= 'A' && c <= 'Z' {
-			return c + 'a' - 'A'
-		}
-		return c
-	}
-	for i := 0; i+len(needle) <= len(s); i++ {
-		if fold(s[i]) != needle[0] {
-			continue
-		}
-		match := true
-		for j := 1; j < len(needle); j++ {
-			if fold(s[i+j]) != needle[j] {
-				match = false
-				break
-			}
-		}
-		if match {
-			return true
-		}
-	}
-	return false
 }
 
 // cycle says why a sheet may not be expanded again, or the empty string.
@@ -1111,11 +1077,11 @@ func resolveURLsIn(vals []css.ComponentValue, sheet string, rec *Recorder) {
 // isURLFunction reports the two spellings of a <url> as a function: url() and
 // CSS Values 4's src().
 func isURLFunction(name string) bool {
-	return strings.EqualFold(name, "url") || strings.EqualFold(name, "src")
+	return ascii.EqualFold(name, "url") || ascii.EqualFold(name, "src")
 }
 
 func isImageSet(name string) bool {
-	return strings.EqualFold(name, "image-set") || strings.EqualFold(name, "-webkit-image-set")
+	return ascii.EqualFold(name, "image-set") || ascii.EqualFold(name, "-webkit-image-set")
 }
 
 // overCapImport reports the document-wide count tripping on an @import. It is

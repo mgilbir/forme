@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -55,7 +56,7 @@ const (
 // does not read has to mean. It is reported where it is read rather than here,
 // because a value is worth one finding and not one per box that has it.
 func objectFitOf(value string) (objectFit, bool) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
+	switch ascii.Lower(strings.TrimSpace(value)) {
 	case "", "fill":
 		return objectFill, true
 	case "contain":

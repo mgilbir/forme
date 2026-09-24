@@ -3,6 +3,8 @@ package paragraph
 import (
 	"strings"
 	"unicode/utf8"
+
+	"github.com/mgilbir/forme/internal/ascii"
 )
 
 // word-space-transform, CSS Text 4: making a break opportunity visible.
@@ -71,7 +73,7 @@ const (
 // are no virtual expandable separators". See PhrasesUnfound for what is left to
 // report, which is a language that has phrases and no model here.
 func WordSpaceTransformOf(value string) WordSpaceTransform {
-	words := strings.Fields(strings.ToLower(strings.TrimSpace(value)))
+	words := strings.Fields(ascii.Lower(strings.TrimSpace(value)))
 	if len(words) == 1 && words[0] == "none" {
 		return WordSpaceTransform{}
 	}

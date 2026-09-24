@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -514,7 +515,7 @@ func (l *fontFaceLoader) parse(p pendingFontFace) (fontFaceRule, bool) {
 	}
 
 	for _, d := range decls {
-		switch strings.ToLower(d.Name) {
+		switch ascii.Lower(d.Name) {
 		case "font-family":
 			out.family = descriptorFamily(d.Value)
 		case "src":
@@ -547,7 +548,7 @@ func (l *fontFaceLoader) parse(p pendingFontFace) (fontFaceRule, bool) {
 				Rule:     RuleUnsupportedProperty,
 				Source:   Source{HTMLOffset: -1, CSSOffset: d.Offset, Sheet: p.sheet},
 				Message:  "the @font-face descriptor " + quoteValue(d.Name) + " is not applied",
-				Property: strings.ToLower(d.Name),
+				Property: ascii.Lower(d.Name),
 			})
 		}
 	}
@@ -653,7 +654,7 @@ func parseSrcEntry(vals []css.ComponentValue) (fontSource, bool) {
 			}
 			out = fontSource{ref: v.Token.Value}
 			have = true
-		case v.IsFunction() && strings.EqualFold(v.Token.Value, "url"):
+		case v.IsFunction() && ascii.EqualFold(v.Token.Value, "url"):
 			if have {
 				return fontSource{}, false
 			}
@@ -663,7 +664,7 @@ func parseSrcEntry(vals []css.ComponentValue) (fontSource, bool) {
 			}
 			out = fontSource{ref: ref}
 			have = true
-		case v.IsFunction() && strings.EqualFold(v.Token.Value, "local"):
+		case v.IsFunction() && ascii.EqualFold(v.Token.Value, "local"):
 			if have {
 				return fontSource{}, false
 			}
@@ -678,7 +679,7 @@ func parseSrcEntry(vals []css.ComponentValue) (fontSource, bool) {
 			}
 			out = fontSource{local: true, ref: name}
 			have = true
-		case v.IsFunction() && strings.EqualFold(v.Token.Value, "format"):
+		case v.IsFunction() && ascii.EqualFold(v.Token.Value, "format"):
 			if !have {
 				return fontSource{}, false
 			}
@@ -686,8 +687,8 @@ func parseSrcEntry(vals []css.ComponentValue) (fontSource, bool) {
 			if !ok {
 				f = strings.TrimSpace(descriptorFamily(v.Values))
 			}
-			out.format = strings.ToLower(strings.TrimSpace(f))
-		case v.IsFunction() && strings.EqualFold(v.Token.Value, "tech"):
+			out.format = ascii.Lower(strings.TrimSpace(f))
+		case v.IsFunction() && ascii.EqualFold(v.Token.Value, "tech"):
 			// A capability list — colour tables, variations, palettes. It
 			// narrows when an entry may be used and never widens it, so an
 			// engine that ignores it can only try a font it might have skipped,
@@ -962,7 +963,7 @@ func parseWeightDescriptor(vals []css.ComponentValue) (low, high float64, ok boo
 		case css.Whitespace:
 			continue
 		case css.Ident:
-			switch strings.ToLower(v.Token.Value) {
+			switch ascii.Lower(v.Token.Value) {
 			case "normal":
 				nums = append(nums, 400)
 			case "bold":
@@ -1015,9 +1016,9 @@ func parseStyleDescriptor(vals []css.ComponentValue) (italic bool, ok bool) {
 			if kw != "" {
 				return false, false
 			}
-			kw = strings.ToLower(v.Token.Value)
+			kw = ascii.Lower(v.Token.Value)
 		case css.Dimension:
-			if !strings.EqualFold(v.Token.Unit, "deg") {
+			if !ascii.EqualFold(v.Token.Unit, "deg") {
 				return false, false
 			}
 			angles = append(angles, v.Token.Number)

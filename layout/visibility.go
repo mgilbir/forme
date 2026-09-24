@@ -1,6 +1,10 @@
 package layout
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/mgilbir/forme/internal/ascii"
+)
 
 // visibility: a box that is laid out and not painted.
 //
@@ -49,7 +53,7 @@ func isHidden(b *Box) bool {
 	if b == nil {
 		return false
 	}
-	switch strings.ToLower(strings.TrimSpace(b.Style.Get("visibility"))) {
+	switch ascii.Lower(strings.TrimSpace(b.Style.Get("visibility"))) {
 	case "hidden", "collapse":
 		return true
 	}
@@ -78,7 +82,7 @@ func isCollapsedTrack(b *Box) bool {
 	default:
 		return false
 	}
-	return strings.EqualFold(strings.TrimSpace(b.Style.Get("visibility")), "collapse")
+	return ascii.EqualFold(strings.TrimSpace(b.Style.Get("visibility")), "collapse")
 }
 
 // reportCollapsedSpans names the half of §17.5.5 this engine does not do.

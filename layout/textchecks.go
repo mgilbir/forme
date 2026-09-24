@@ -8,6 +8,7 @@ import (
 	"github.com/mgilbir/forme/paragraph"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -508,7 +509,7 @@ func (l *layouter) reportCaps(b *Box, face *shape.Face, text string) {
 	if len(missing) == 0 {
 		return
 	}
-	value := strings.ToLower(strings.TrimSpace(b.Style.Get("font-variant-caps")))
+	value := ascii.Lower(strings.TrimSpace(b.Style.Get("font-variant-caps")))
 	if capsAreSynthesised(use) {
 		// The face has none of them and this engine made the capitals itself,
 		// which is a page §6.6 asked for rather than a gap. It is still worth
@@ -724,7 +725,7 @@ func (l *layouter) reportNumeric(b *Box, face *shape.Face, text string) {
 	if len(missing) == 0 {
 		return
 	}
-	value := strings.ToLower(strings.TrimSpace(b.Style.Get("font-variant-numeric")))
+	value := ascii.Lower(strings.TrimSpace(b.Style.Get("font-variant-numeric")))
 	l.reportOnce("font-variant-numeric:"+value+":"+strings.Join(missing, ",")+":"+face.Name(),
 		Finding{
 			Rule:     RuleUnsupportedValue,
@@ -847,7 +848,7 @@ func (l *layouter) reportEastAsian(b *Box, face *shape.Face, text string) {
 	if len(missing) == 0 {
 		return
 	}
-	value := strings.ToLower(strings.TrimSpace(b.Style.Get("font-variant-east-asian")))
+	value := ascii.Lower(strings.TrimSpace(b.Style.Get("font-variant-east-asian")))
 	l.reportOnce("font-variant-east-asian:"+value+":"+strings.Join(missing, ",")+":"+face.Name(),
 		Finding{
 			Rule:     RuleUnsupportedValue,
@@ -984,8 +985,10 @@ func unappliedFontFeatures(value string, face *shape.Face) string {
 	var turnedOff []string
 	for _, tag := range off {
 		// "kern" is inert on a face with no kerning whether it was asked for or
-		// turned off, because neither can change the page.
-		if strings.EqualFold(tag, "kern") && !kerns {
+		// turned off, because neither can change the page. Compared exactly:
+		// CSS Fonts 4 §6.12 makes an <opentype-tag> case-sensitive, so "KERN"
+		// is some other feature, and not one this can say anything about.
+		if tag == "kern" && !kerns {
 			continue
 		}
 		turnedOff = append(turnedOff, quoteValue(tag))
@@ -1072,7 +1075,7 @@ func (l *layouter) reportAutospace(b *Box, value string) {
 // overrule it. Returning "the author said nothing" as the empty string would
 // not do — "hyphenate-character: \"\"" asks for no mark at all.
 func hyphenCharacter(value string) (string, bool) {
-	if strings.TrimSpace(value) == "" || strings.EqualFold(strings.TrimSpace(value), "auto") {
+	if strings.TrimSpace(value) == "" || ascii.EqualFold(strings.TrimSpace(value), "auto") {
 		return "", false
 	}
 	vals, errs := css.ParseComponentValues(value)

@@ -3,6 +3,7 @@ package layout
 import (
 	"strings"
 
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/paragraph"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
@@ -198,7 +199,7 @@ func ownDecorations(b *Box) []textDecoration {
 	}
 	var out []textDecoration
 	for _, word := range strings.Fields(raw) {
-		switch strings.ToLower(word) {
+		switch ascii.Lower(word) {
 		case "underline":
 			out = append(out, textDecoration{Kind: decorationUnderline, By: b})
 		case "overline":
@@ -229,7 +230,7 @@ func (l *layouter) checkDecorationValue(b *Box) {
 		return
 	}
 	for _, word := range strings.Fields(raw) {
-		switch strings.ToLower(word) {
+		switch ascii.Lower(word) {
 		case "none", "underline", "overline", "line-through":
 			continue
 		}

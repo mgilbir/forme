@@ -5,6 +5,7 @@ import (
 
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -104,7 +105,7 @@ func resolveContent(raw string, el *html.Node, counters counterValues,
 	quotes quoteList, depth int) contentValue {
 
 	trimmed := strings.TrimSpace(raw)
-	switch strings.ToLower(trimmed) {
+	switch ascii.Lower(trimmed) {
 	case "", "normal", "none":
 		return contentValue{none: true}
 	}
@@ -153,7 +154,7 @@ func resolveContent(raw string, el *html.Node, counters counterValues,
 			}
 			text.WriteString(v.Token.Value)
 
-		case v.IsFunction() && strings.EqualFold(v.Token.Value, "attr"):
+		case v.IsFunction() && ascii.EqualFold(v.Token.Value, "attr"):
 			name := attrArgument(v)
 			if name == "" {
 				return contentValue{unsupported: "attr() without an attribute name"}
@@ -185,7 +186,7 @@ func resolveContent(raw string, el *html.Node, counters counterValues,
 		// style can be built by hand, and the initial value travels this path —
 		// and TestResolveContentRefusesAMalformedCounterCall is the fixture that
 		// keeps them from being a guard nobody has ever seen decide anything.
-		case v.IsFunction() && strings.EqualFold(v.Token.Value, "counter"):
+		case v.IsFunction() && ascii.EqualFold(v.Token.Value, "counter"):
 			name, listStyle, _, ok := counterArguments(v)
 			if !ok {
 				return contentValue{unsupported: "counter() without a counter name"}
@@ -205,7 +206,7 @@ func resolveContent(raw string, el *html.Node, counters counterValues,
 			}
 			text.WriteString(s)
 
-		case v.IsFunction() && strings.EqualFold(v.Token.Value, "counters"):
+		case v.IsFunction() && ascii.EqualFold(v.Token.Value, "counters"):
 			name, listStyle, sep, ok := counterArguments(v)
 			if !ok || sep == nil {
 				return contentValue{unsupported: "counters() needs a name and a separator"}
@@ -232,7 +233,7 @@ func resolveContent(raw string, el *html.Node, counters counterValues,
 			}
 
 		case v.IsToken() && v.Token.Kind == css.URL,
-			v.IsFunction() && strings.EqualFold(v.Token.Value, "url"):
+			v.IsFunction() && ascii.EqualFold(v.Token.Value, "url"):
 			// A picture, which is a box of its own between whatever runs of
 			// text surround it. What is kept is the reference: the loader that
 			// fetches every other picture in the document fetches this one too,
@@ -315,7 +316,7 @@ func (b *boxBuilder) addGenerated(box *Box, n *html.Node, name string, fontSize 
 		return
 	}
 	kids := []*Box{g}
-	if strings.EqualFold(strings.TrimSpace(g.Style.Get("display")), "contents") {
+	if ascii.EqualFold(strings.TrimSpace(g.Style.Get("display")), "contents") {
 		if g.ContentImage == "" {
 			kids = g.Children
 		} else {

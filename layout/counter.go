@@ -6,6 +6,7 @@ import (
 
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -265,7 +266,7 @@ type contentPlan struct {
 // each distinct one once. See computeCounters.
 func planContent(raw string) contentPlan {
 	trimmed := strings.TrimSpace(raw)
-	switch strings.ToLower(trimmed) {
+	switch ascii.Lower(trimmed) {
 	case "", "normal", "none":
 		return contentPlan{}
 	}
@@ -274,13 +275,13 @@ func planContent(raw string) contentPlan {
 	at := map[string]int{}
 	for _, v := range vals {
 		switch {
-		case v.IsFunction() && (strings.EqualFold(v.Token.Value, "counter") ||
-			strings.EqualFold(v.Token.Value, "counters")):
+		case v.IsFunction() && (ascii.EqualFold(v.Token.Value, "counter") ||
+			ascii.EqualFold(v.Token.Value, "counters")):
 			name, _, _, ok := counterArguments(v)
 			if !ok {
 				continue
 			}
-			chain := strings.EqualFold(v.Token.Value, "counters")
+			chain := ascii.EqualFold(v.Token.Value, "counters")
 			if i, seen := at[name]; seen {
 				p.refs[i].chain = p.refs[i].chain || chain
 				continue
@@ -638,7 +639,7 @@ func generatesPseudoBox(cs style.ComputedStyle) bool {
 	if displayIsNone(cs) {
 		return false
 	}
-	switch strings.ToLower(strings.TrimSpace(cs.Get("content"))) {
+	switch ascii.Lower(strings.TrimSpace(cs.Get("content"))) {
 	case "", "normal", "none":
 		return false
 	}
@@ -664,13 +665,13 @@ type counterRequest struct {
 // for a reset and one for an increment, which is why the caller passes it.
 func parseCounterList(raw string, byDefault int) []counterRequest {
 	raw = strings.TrimSpace(raw)
-	if raw == "" || strings.EqualFold(raw, "none") {
+	if raw == "" || ascii.EqualFold(raw, "none") {
 		return nil
 	}
 	vals, _ := css.ParseComponentValues(raw)
 	var out []counterRequest
 	for _, v := range vals {
-		if v.IsFunction() && strings.EqualFold(v.Token.Value, "reversed") {
+		if v.IsFunction() && ascii.EqualFold(v.Token.Value, "reversed") {
 			// CSS Lists 3's reversed(): one name, and the counter it creates
 			// counts down. A number may follow the function exactly as it may
 			// follow a bare name, which is what the Number case below handles.
@@ -793,12 +794,12 @@ func createsReversedCounters(styles map[*html.Node]style.ComputedStyle,
 	pseudo map[style.PseudoKey]style.ComputedStyle) bool {
 
 	for _, cs := range styles {
-		if containsFold(cs.Get("counter-reset"), "reversed(") {
+		if ascii.ContainsFold(cs.Get("counter-reset"), "reversed(") {
 			return true
 		}
 	}
 	for _, cs := range pseudo {
-		if containsFold(cs.Get("counter-reset"), "reversed(") {
+		if ascii.ContainsFold(cs.Get("counter-reset"), "reversed(") {
 			return true
 		}
 	}
@@ -835,7 +836,7 @@ func formatCounter(value int, listStyle string) string {
 	if listStyle == "" {
 		listStyle = "decimal"
 	}
-	if strings.EqualFold(strings.TrimSpace(listStyle), "none") {
+	if ascii.EqualFold(strings.TrimSpace(listStyle), "none") {
 		return ""
 	}
 	if text := markerText(listStyle, value); text != "" {

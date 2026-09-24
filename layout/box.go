@@ -5,6 +5,7 @@ import (
 
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/paragraph"
 	"github.com/mgilbir/forme/style"
 )
@@ -845,7 +846,7 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 	// none. With the property at its initial value nothing is added and the
 	// element stays what it was: a break opportunity that marks no boundary in
 	// the text, which is what the flattening makes of an empty one.
-	if strings.EqualFold(n.Name, "wbr") {
+	if ascii.EqualFold(n.Name, "wbr") {
 		if wst := b.wordSpaceTransformFor(cs); wst.Transforms() {
 			sep := &html.Node{Type: html.TextNode, Text: "\u200b", Offset: n.Offset}
 			if t := b.textBox(sep, cs, fontSize); t != nil {
@@ -911,7 +912,7 @@ func replacedFallback(n *html.Node) bool {
 	if n == nil || n.Type != html.ElementNode {
 		return false
 	}
-	return strings.EqualFold(n.Name, "canvas") || strings.EqualFold(n.Name, "video")
+	return ascii.EqualFold(n.Name, "canvas") || ascii.EqualFold(n.Name, "video")
 }
 
 // appendChildren builds an element's children into a box, following the ones
@@ -1005,7 +1006,7 @@ func contentsIsHonoured(n *html.Node, cs style.ComputedStyle, root *html.Node) b
 	if n == nil || cs.IsZero() {
 		return false
 	}
-	if !strings.EqualFold(strings.TrimSpace(cs.Get("display")), "contents") {
+	if !ascii.EqualFold(strings.TrimSpace(cs.Get("display")), "contents") {
 		return false
 	}
 	if n == root {
@@ -1022,7 +1023,7 @@ func contentsIsHonoured(n *html.Node, cs style.ComputedStyle, root *html.Node) b
 // not — it offers a break opportunity and marks no boundary in the text, so
 // "sur<wbr/>name" is one word and "capitalize" gives it one capital.
 func endsAWord(n *html.Node) bool {
-	return n != nil && n.Type == html.ElementNode && strings.EqualFold(n.Name, "br")
+	return n != nil && n.Type == html.ElementNode && ascii.EqualFold(n.Name, "br")
 }
 
 // fontSizeOfStyle resolves a font-size from a computed style that belongs to no
@@ -1242,7 +1243,7 @@ const (
 // ruby, which defaults to inline" — and "list-item" alone is a block flow list
 // item.
 func parseDisplay(raw string) displayType {
-	value := strings.ToLower(strings.TrimSpace(raw))
+	value := ascii.Lower(strings.TrimSpace(raw))
 	switch value {
 	case "none":
 		return displayType{outer: OuterNone, inner: InnerFlow}
@@ -1419,7 +1420,7 @@ func replacesItsOwnContent(n *html.Node) bool {
 	if n == nil {
 		return false
 	}
-	switch strings.ToLower(n.Name) {
+	switch ascii.Lower(n.Name) {
 	case "img", "object":
 		return true
 	case "svg", "math":
@@ -1440,7 +1441,7 @@ func replacesItsOwnContent(n *html.Node) bool {
 // need the writing mode, and answering them as "left" would be right for a
 // left-to-right document and silently wrong for the documents they exist for.
 func floatOf(cs style.ComputedStyle) FloatSide {
-	switch strings.ToLower(strings.TrimSpace(cs.Get("float"))) {
+	switch ascii.Lower(strings.TrimSpace(cs.Get("float"))) {
 	case "left":
 		return FloatLeft
 	case "right":
@@ -1450,7 +1451,7 @@ func floatOf(cs style.ComputedStyle) FloatSide {
 }
 
 func clearOf(cs style.ComputedStyle) ClearSide {
-	switch strings.ToLower(strings.TrimSpace(cs.Get("clear"))) {
+	switch ascii.Lower(strings.TrimSpace(cs.Get("clear"))) {
 	case "left":
 		return ClearLeft
 	case "right":
@@ -1540,7 +1541,7 @@ func overflowClipsAxes(cs style.ComputedStyle) (x, y bool) {
 // overflowOn is one axis's value, lower-cased, with an absent one read as the
 // initial "visible".
 func overflowOn(cs style.ComputedStyle, axis string) string {
-	v := strings.ToLower(strings.TrimSpace(cs.Get(axis)))
+	v := ascii.Lower(strings.TrimSpace(cs.Get(axis)))
 	if v == "" {
 		return "visible"
 	}
@@ -1924,7 +1925,7 @@ func mayInsetHorizontally(cs style.ComputedStyle) bool {
 // zero rather than sharing out the space, which is what makes an inline box
 // uncentreable.
 func isZeroLength(v string) bool {
-	switch s := strings.ToLower(strings.TrimSpace(v)); s {
+	switch s := ascii.Lower(strings.TrimSpace(v)); s {
 	case "", "0", "auto":
 		return true
 	default:

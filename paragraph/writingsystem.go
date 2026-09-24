@@ -1,6 +1,10 @@
 package paragraph
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/mgilbir/forme/internal/ascii"
+)
 
 // The writing system a piece of text is set in, which is not the same question
 // as what language it is in.
@@ -67,7 +71,7 @@ func (w WritingSystem) ChineseOrJapanese() bool {
 // script. That is the same carve-out the first sentence of the rule makes by
 // name: Korean is written with spaces between its words.
 func WritingSystemOf(tag string) WritingSystem {
-	tag = strings.ToLower(strings.TrimSpace(tag))
+	tag = ascii.Lower(strings.TrimSpace(tag))
 	if tag == "" {
 		return WritingSystemOther
 	}

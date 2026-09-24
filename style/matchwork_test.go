@@ -7,6 +7,7 @@ import (
 
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
+	"github.com/mgilbir/forme/internal/ascii"
 )
 
 // Matching work, per document.
@@ -274,7 +275,7 @@ func TestStructuralPositionsAreThePositions(t *testing.T) {
 	m := NewMatcher(doc)
 	ofX := selectorsOf(t, "li:nth-child(1 of .x)")[0].Compounds[0].Pseudos[0].Of
 	for i, k := range kids {
-		sameType := func(n *html.Node) bool { return asciiEqualFold(n.Name, k.Name) }
+		sameType := func(n *html.Node) bool { return ascii.EqualFold(n.Name, k.Name) }
 		every := func(*html.Node) bool { return true }
 		for _, tc := range []struct {
 			what      string

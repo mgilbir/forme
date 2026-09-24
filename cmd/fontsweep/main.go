@@ -37,6 +37,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/shape"
 )
 
@@ -54,7 +55,7 @@ func main() {
 			if d.IsDir() {
 				return nil
 			}
-			switch strings.ToLower(filepath.Ext(p)) {
+			switch ascii.Lower(filepath.Ext(p)) {
 			case ".ttf", ".otf", ".ttc", ".otc":
 				paths = append(paths, p)
 			}

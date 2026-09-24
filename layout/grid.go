@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -506,7 +507,7 @@ type gridAreas struct {
 // stylesheet asked for.
 func (l *layouter) areasOf(b *Box) (gridAreas, bool) {
 	raw := strings.TrimSpace(b.Style.Get("grid-template-areas"))
-	if raw == "" || strings.EqualFold(raw, "none") {
+	if raw == "" || ascii.EqualFold(raw, "none") {
 		return gridAreas{}, true
 	}
 	vals, _ := css.ParseComponentValues(raw)
@@ -772,10 +773,10 @@ func placementFrom(from, to gridLine) (gridPlacement, bool) {
 // the areas it is matched against were written with theirs.
 func lineValue(raw string, resolve func(string) (int, bool)) (gridLine, bool) {
 	value := strings.TrimSpace(raw)
-	if value == "" || strings.EqualFold(value, "auto") {
+	if value == "" || ascii.EqualFold(value, "auto") {
 		return gridLine{}, true
 	}
-	if len(value) >= 4 && strings.EqualFold(value[:4], "span") &&
+	if len(value) >= 4 && ascii.EqualFold(value[:4], "span") &&
 		(len(value) == 4 || value[4] == ' ' || value[4] == '\t' || value[4] == '\n') {
 		rest := strings.TrimSpace(value[4:])
 		if rest == "" {
@@ -2193,7 +2194,7 @@ func (l *layouter) trackList(b *Box, property string, width style.Unit,
 	room trackRoom) (tracks []gridTrack, fit autoFit, ok bool) {
 
 	raw := strings.TrimSpace(b.Style.Get(property))
-	if raw == "" || strings.EqualFold(raw, "none") {
+	if raw == "" || ascii.EqualFold(raw, "none") {
 		return nil, autoFit{}, true
 	}
 	vals, _ := css.ParseComponentValues(raw)
@@ -2249,7 +2250,7 @@ func (l *layouter) tracksFrom(b *Box, vals []css.ComponentValue, width style.Uni
 			return nil, autoFit{}, false
 		}
 		v := part[0]
-		if v.IsFunction() && strings.EqualFold(v.Token.Value, "repeat") {
+		if v.IsFunction() && ascii.EqualFold(v.Token.Value, "repeat") {
 			if !mayRepeat {
 				return nil, autoFit{}, false
 			}
@@ -2422,7 +2423,7 @@ func (l *layouter) repeatedTracks(b *Box, args []css.ComponentValue,
 		return nil, repeatCounted, false
 	}
 	if token.Kind == css.Ident {
-		switch strings.ToLower(token.Value) {
+		switch ascii.Lower(token.Value) {
 		case "auto-fill":
 			return one, repeatFill, true
 		case "auto-fit":
@@ -2481,7 +2482,7 @@ var maxGridTracks = 10000
 // rather than special-casing them later is what lets the sizing ask one
 // question of each end and never ask which spelling it came from.
 func (l *layouter) trackFrom(b *Box, v css.ComponentValue, room trackRoom) (gridTrack, bool) {
-	if v.IsFunction() && strings.EqualFold(v.Token.Value, "minmax") {
+	if v.IsFunction() && ascii.EqualFold(v.Token.Value, "minmax") {
 		return l.minmaxTrack(b, v.Values, room)
 	}
 	size, ok := l.trackSizeFrom(b, v, room)
@@ -2554,7 +2555,7 @@ func (l *layouter) trackSizeFrom(b *Box, v css.ComponentValue,
 	room trackRoom) (trackSize, bool) {
 
 	if v.IsToken() && v.Token.Kind == css.Ident {
-		switch strings.ToLower(v.Token.Value) {
+		switch ascii.Lower(v.Token.Value) {
 		case "auto":
 			return trackSize{kind: trackAuto}, true
 		case "min-content":
@@ -2565,7 +2566,7 @@ func (l *layouter) trackSizeFrom(b *Box, v css.ComponentValue,
 		return trackSize{}, false
 	}
 	if v.IsToken() && v.Token.Kind == css.Dimension &&
-		strings.EqualFold(v.Token.Unit, "fr") {
+		ascii.EqualFold(v.Token.Unit, "fr") {
 		if v.Token.Number < 0 {
 			return trackSize{}, false
 		}

@@ -6,6 +6,7 @@ import (
 
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
+	"github.com/mgilbir/forme/internal/ascii"
 )
 
 // Presentational hints: the handful of HTML attributes that mean a CSS
@@ -250,7 +251,7 @@ var counterHintAttributes = map[string]bool{"value": true}
 // which is what HTML requires: a value this cannot read must not become a
 // length it guessed at.
 func presentationalHints(n *html.Node) map[string][]css.ComponentValue {
-	name := strings.ToLower(n.Name)
+	name := ascii.Lower(n.Name)
 	out := attributeHints(name, n)
 	if name == "table" {
 		for property, vals := range tableBorderHint(n) {
@@ -586,7 +587,7 @@ func cellHints(n *html.Node) map[string][]css.ComponentValue {
 // document written in 1998 looks like, and it is the reason the attribute is
 // worth reading at all.
 func valignValue(raw string) (string, bool) {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
+	switch ascii.Lower(strings.TrimSpace(raw)) {
 	case "top":
 		return "top", true
 	case "middle", "center":
@@ -672,7 +673,7 @@ func tableBorderHint(n *html.Node) map[string][]css.ComponentValue {
 // says with a child combinator.
 func cellBorderHint(n *html.Node) map[string][]css.ComponentValue {
 	for anc := n.Parent; anc != nil; anc = anc.Parent {
-		if anc.Type != html.ElementNode || !strings.EqualFold(anc.Name, "table") {
+		if anc.Type != html.ElementNode || !ascii.EqualFold(anc.Name, "table") {
 			continue
 		}
 		raw, ok := anc.Attr("border")
@@ -809,7 +810,7 @@ func linkColourHint(n *html.Node) map[string][]css.ComponentValue {
 		return nil
 	}
 	for anc := n.Parent; anc != nil; anc = anc.Parent {
-		if anc.Type != html.ElementNode || !strings.EqualFold(anc.Name, "body") {
+		if anc.Type != html.ElementNode || !ascii.EqualFold(anc.Name, "body") {
 			continue
 		}
 		raw, ok := anc.Attr("link")
@@ -840,7 +841,7 @@ func linkColourHint(n *html.Node) map[string][]css.ComponentValue {
 // the attribute not being there.
 func cellPaddingHint(n *html.Node) map[string][]css.ComponentValue {
 	for anc := n.Parent; anc != nil; anc = anc.Parent {
-		if anc.Type != html.ElementNode || !strings.EqualFold(anc.Name, "table") {
+		if anc.Type != html.ElementNode || !ascii.EqualFold(anc.Name, "table") {
 			continue
 		}
 		raw, ok := anc.Attr("cellpadding")
@@ -896,11 +897,11 @@ func counterSetValue(raw string) (string, bool) {
 func colourValue(raw string) (string, bool) {
 	// 1-3: empty, only white space, or "transparent" is not a colour.
 	s := strings.Trim(raw, " \t\n\f\r")
-	if s == "" || strings.EqualFold(s, "transparent") {
+	if s == "" || ascii.EqualFold(s, "transparent") {
 		return "", false
 	}
 	// 4: a named colour.
-	if _, ok := namedColors[strings.ToLower(s)]; ok {
+	if _, ok := namedColors[ascii.Lower(s)]; ok {
 		return s, true
 	}
 	// 5: "#" and three hexadecimal digits.
@@ -971,7 +972,7 @@ func colourValue(raw string) (string, bool) {
 			// shorthand "#rgb" gives it: "#1" reads as 0x01.
 			out = append(out, '0')
 		}
-		out = append(out, strings.ToLower(string(p))...)
+		out = append(out, ascii.Lower(string(p))...)
 	}
 	return string(out), true
 }
@@ -988,7 +989,7 @@ func colourValue(raw string) (string, bool) {
 // read, and is the safe direction: a <br> that clears nothing is the <br> the
 // document would have had without the attribute at all.
 func clearValue(raw string) (string, bool) {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
+	switch ascii.Lower(strings.TrimSpace(raw)) {
 	case "left":
 		return "left", true
 	case "right":

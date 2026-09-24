@@ -39,7 +39,11 @@
 // recorded as written and left for the caller's resolver to decide about.
 package html
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/mgilbir/forme/internal/ascii"
+)
 
 // NodeType says what a node is. There are only three, because a renderer needs
 // only three: the document, its elements, and the text in them.
@@ -127,7 +131,7 @@ func (n *Node) Attr(name string) (string, bool) {
 	if n == nil {
 		return "", false
 	}
-	name = strings.ToLower(name)
+	name = ascii.Lower(name)
 	for _, a := range n.Attrs {
 		if a.Name == name {
 			return a.Value, true
@@ -389,7 +393,7 @@ func (n *Node) Walk(fn func(*Node) bool) {
 
 // Element finds the first element with the given name, in document order.
 func (n *Node) Element(name string) *Node {
-	name = strings.ToLower(name)
+	name = ascii.Lower(name)
 	var found *Node
 	n.Walk(func(c *Node) bool {
 		if found != nil {

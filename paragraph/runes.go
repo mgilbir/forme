@@ -1,8 +1,7 @@
 package paragraph
 
 import (
-	"strings"
-
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/internal/charprop"
 	"github.com/mgilbir/forme/shape"
 )
@@ -19,7 +18,7 @@ import (
 // they can search for, and a character with no glyph often cannot be shown at
 // all in whatever is reading the report.
 func DescribeRune(r rune) string {
-	out := "U+" + strings.ToUpper(hex(uint32(r)))
+	out := "U+" + ascii.Upper(hex(uint32(r)))
 	if printable(r) {
 		out += " (" + string(r) + ")"
 	}

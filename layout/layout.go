@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -2400,11 +2401,11 @@ func (l *layouter) lengthOfValues(b *Box, vals []css.ComponentValue) (style.Leng
 			continue
 		}
 		switch {
-		case strings.EqualFold(v.Token.Unit, "ch"):
+		case ascii.EqualFold(v.Token.Unit, "ch"):
 			m.zeroAdvance, m.zeroKnown = l.zeroAdvance(b)
-		case strings.EqualFold(v.Token.Unit, "ex"):
+		case ascii.EqualFold(v.Token.Unit, "ex"):
 			m.xHeight, m.xHeightKnown = l.xHeightOf(b)
-		case strings.EqualFold(v.Token.Unit, "ic"):
+		case ascii.EqualFold(v.Token.Unit, "ic"):
 			m.icAdvance, m.icKnown = l.icAdvance(b)
 		}
 	}
@@ -2657,7 +2658,7 @@ func (l *layouter) outlineWidth(b *Box) style.Unit {
 	if w == 0 {
 		return 0
 	}
-	if strings.EqualFold(strings.TrimSpace(b.Style.Get("outline-color")), "invert") {
+	if ascii.EqualFold(strings.TrimSpace(b.Style.Get("outline-color")), "invert") {
 		l.rec.ReportDetail(Finding{
 			Rule:   RuleUnsupportedValue,
 			Source: AtHTML(offsetOf(b)),
@@ -2729,7 +2730,7 @@ func (l *layouter) paddingOf(b *Box, containing style.Unit) Edges {
 }
 
 func noBorder(styleValue string) bool {
-	switch strings.ToLower(strings.TrimSpace(styleValue)) {
+	switch ascii.Lower(strings.TrimSpace(styleValue)) {
 	case "", "none", "hidden":
 		return true
 	}
@@ -2740,7 +2741,7 @@ func noBorder(styleValue string) bool {
 // leaves to the engine beyond requiring thin <= medium <= thick. These are the
 // values every browser uses.
 func keywordBorderWidth(value string) style.Unit {
-	switch strings.ToLower(strings.TrimSpace(value)) {
+	switch ascii.Lower(strings.TrimSpace(value)) {
 	case "thin":
 		return mustPx(1)
 	case "thick":

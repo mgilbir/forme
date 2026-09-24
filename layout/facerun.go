@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/segment"
 	"github.com/mgilbir/forme/shape"
 )
@@ -439,7 +440,7 @@ func namesOnlyGenericFamilies(list string) bool {
 		return true
 	}
 	for _, name := range names {
-		if !genericFamilies[strings.ToLower(strings.TrimSpace(name))] {
+		if !genericFamilies[ascii.Lower(strings.TrimSpace(name))] {
 			return false
 		}
 	}

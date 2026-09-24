@@ -5,6 +5,8 @@ import (
 	"math"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/mgilbir/forme/internal/ascii"
 )
 
 // The tokenizer of CSS Syntax Level 3 §4, followed step for step.
@@ -605,7 +607,7 @@ func (t *tokenizer) consumeIdentSequence() string {
 func (t *tokenizer) consumeIdentLike(start int) Token {
 	name := t.consumeIdentSequence()
 
-	if strings.EqualFold(name, "url") && t.cur() == '(' {
+	if ascii.EqualFold(name, "url") && t.cur() == '(' {
 		t.advance()
 		// Whitespace between the "(" and a quote is kept — one space's worth —
 		// because it is what tells the two forms apart. url( "a" ) is an

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
 )
 
 // The property registry, and the values a property can hold.
@@ -810,7 +811,7 @@ func wideKeyword(vals []css.ComponentValue) string {
 	if !v.IsToken() || v.Token.Kind != css.Ident {
 		return ""
 	}
-	switch kw := strings.ToLower(v.Token.Value); kw {
+	switch kw := ascii.Lower(v.Token.Value); kw {
 	case kwInherit, kwInitial, kwUnset, kwRevert, kwRevertLayer:
 		return kw
 	}

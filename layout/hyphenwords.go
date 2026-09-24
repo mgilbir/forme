@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/internal/charprop"
 	"github.com/mgilbir/forme/paragraph"
 )
@@ -54,7 +55,7 @@ type hyphenLimits struct{ word, before, after int }
 // this cannot read leaves every limit at auto, which is the property's initial
 // value and the answer a browser gives an unreadable declaration.
 func limitsOf(value string) hyphenLimits {
-	fields := strings.Fields(strings.ToLower(strings.TrimSpace(value)))
+	fields := strings.Fields(ascii.Lower(strings.TrimSpace(value)))
 	if len(fields) == 0 || len(fields) > 3 {
 		return hyphenLimits{}
 	}

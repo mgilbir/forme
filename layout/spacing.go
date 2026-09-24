@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -71,7 +72,7 @@ func (l *layouter) spacingFor(b *Box) textSpacing {
 // though nothing in word-spacing-001 can tell: that test is set in Ahem, whose
 // space is exactly one em, so the two answers agree everywhere in it.
 func (l *layouter) spacingValue(b *Box, property string) (style.Unit, bool) {
-	raw := strings.ToLower(strings.TrimSpace(b.Style.Get(property)))
+	raw := ascii.Lower(strings.TrimSpace(b.Style.Get(property)))
 	if raw == "" || raw == "normal" {
 		return 0, false
 	}
@@ -122,7 +123,7 @@ func (l *layouter) textIndent(b *Box, width style.Unit) (style.Unit, indentMode)
 	var length []css.ComponentValue
 	for _, v := range vals {
 		if v.IsToken() && v.Token.Kind == css.Ident {
-			switch strings.ToLower(v.Token.Value) {
+			switch ascii.Lower(v.Token.Value) {
 			case "hanging":
 				mode.hanging = true
 				continue

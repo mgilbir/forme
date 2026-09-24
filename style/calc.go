@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
 )
 
 // calc(), from CSS Values and Units.
@@ -186,7 +187,7 @@ func calcValue(vals []css.ComponentValue, ctx LengthContext) (calcTerm, []css.Co
 	v := vals[0]
 	switch {
 	case v.IsBlock() && v.Token.Kind == css.LeftParen,
-		v.IsFunction() && strings.EqualFold(v.Token.Value, "calc"):
+		v.IsFunction() && ascii.EqualFold(v.Token.Value, "calc"):
 		inner, rest, ok := calcSum(v.Values, ctx)
 		if !ok || len(skipSpace(rest)) != 0 {
 			return calcTerm{}, nil, false

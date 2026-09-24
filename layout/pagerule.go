@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -230,7 +231,7 @@ func readPageRule(p pendingPage, base PageSize, got *pageDeclarations, order *in
 		*order++
 		terms := pageTerms{rank: style.CascadeRank(p.origin, d.Important),
 			layer: style.LayerRank(p.layer, d.Important), spec: spec, order: *order, set: true}
-		switch strings.ToLower(d.Name) {
+		switch ascii.Lower(d.Name) {
 		case "margin":
 			if spread, ok := pageMarginShorthand(d.Value); ok {
 				for i, l := range spread {
@@ -245,7 +246,7 @@ func readPageRule(p pendingPage, base PageSize, got *pageDeclarations, order *in
 			at := map[string]side{
 				"margin-top": sideTop, "margin-right": sideRight,
 				"margin-bottom": sideBottom, "margin-left": sideLeft,
-			}[strings.ToLower(d.Name)]
+			}[ascii.Lower(d.Name)]
 			if l, ok := pageMarginValue(d.Value); ok {
 				take(&got.sides[at], pageDeclaration{length: l, pageTerms: terms})
 			} else {
@@ -266,8 +267,8 @@ func readPageRule(p pendingPage, base PageSize, got *pageDeclarations, order *in
 			rec.ReportDetail(Finding{
 				Rule:     RuleUnsupportedProperty,
 				Source:   Source{HTMLOffset: -1, CSSOffset: d.Offset, Sheet: p.sheet},
-				Message:  "the @page descriptor " + quoteValue(strings.ToLower(d.Name)) + " is not applied",
-				Property: strings.ToLower(d.Name),
+				Message:  "the @page descriptor " + quoteValue(ascii.Lower(d.Name)) + " is not applied",
+				Property: ascii.Lower(d.Name),
 			})
 		}
 	}
@@ -316,9 +317,9 @@ func badPageMargin(rec *Recorder, p pendingPage, d css.Declaration) {
 	rec.ReportDetail(Finding{
 		Rule:   rule,
 		Source: Source{HTMLOffset: -1, CSSOffset: d.Offset, Sheet: p.sheet},
-		Message: "the @page " + strings.ToLower(d.Name) + " " + quoteValue(strings.TrimSpace(pageText(d.Value))) +
+		Message: "the @page " + ascii.Lower(d.Name) + " " + quoteValue(strings.TrimSpace(pageText(d.Value))) +
 			why + "; the page kept the margin it had",
-		Property: strings.ToLower(d.Name),
+		Property: ascii.Lower(d.Name),
 	})
 }
 
@@ -607,7 +608,7 @@ func identName(part []css.ComponentValue) (string, bool) {
 	if len(part) != 1 || !part[0].IsToken() || part[0].Token.Kind != css.Ident {
 		return "", false
 	}
-	return strings.ToLower(part[0].Token.Value), true
+	return ascii.Lower(part[0].Token.Value), true
 }
 
 // pageSelector reads an @page rule's prelude: whether it selects the page this
@@ -634,7 +635,7 @@ func pageSelector(prelude []css.ComponentValue) (int, bool) {
 	// spelling is looked at.
 	if len(parts) == 2 && parts[0].IsToken() && parts[0].Token.Kind == css.Colon &&
 		parts[1].IsToken() && parts[1].Token.Kind == css.Ident &&
-		strings.EqualFold(parts[1].Token.Value, "first") {
+		ascii.EqualFold(parts[1].Token.Value, "first") {
 		return 1, true
 	}
 	return 0, false

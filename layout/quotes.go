@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
 )
 
 // Quotation marks: CSS 2.1 §12.3, the "quotes" property and the four keywords
@@ -69,7 +70,7 @@ const maxQuoteDepth = 1 << 20
 // and a computed style can be built by hand in a test.
 func parseQuotes(raw string) quoteList {
 	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" || strings.EqualFold(trimmed, "none") {
+	if trimmed == "" || ascii.EqualFold(trimmed, "none") {
 		return nil
 	}
 	strs := quoteStrings(trimmed)
@@ -122,7 +123,7 @@ type quoteOp struct{ opening, draws bool }
 
 // quoteKeyword reads one of the four keywords.
 func quoteKeyword(ident string) (quoteOp, bool) {
-	switch strings.ToLower(ident) {
+	switch ascii.Lower(ident) {
 	case "open-quote":
 		return quoteOp{opening: true, draws: true}, true
 	case "close-quote":
@@ -203,7 +204,7 @@ func (q quoteList) at(depth int) quotePair {
 // one and not at zero, because the second close had nothing to close.
 func quoteDepthAfter(raw string, depth int, quotes quoteList) int {
 	trimmed := strings.TrimSpace(raw)
-	switch strings.ToLower(trimmed) {
+	switch ascii.Lower(trimmed) {
 	case "", "normal", "none":
 		return depth
 	}

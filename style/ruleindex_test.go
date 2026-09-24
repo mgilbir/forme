@@ -143,7 +143,8 @@ func TestTheIndexIsWorthHaving(t *testing.T) {
 //
 // The matcher and the index both fold a type as ASCII does. A type with a byte
 // above ASCII is filed under nothing and walked for everything, which costs a
-// rule that selects no element the HTML reader makes and decides nothing.
+// rule that selects only the rare element whose name holds the same bytes, and
+// decides nothing: the matcher does.
 func TestANameTheIndexCannotFoldIsNotIndexed(t *testing.T) {
 	if got := keysOf(selectorsOf(t, "p, div")); len(got) != 2 {
 		t.Errorf("keysOf(p, div) = %v, want two names", got)

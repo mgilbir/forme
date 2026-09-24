@@ -4,6 +4,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/internal/charprop"
 )
 
@@ -52,7 +53,7 @@ func (a Autospace) Any() bool { return a.IdeographAlpha || a.IdeographNumeric }
 // wrote a space; only "insert" is implemented, which is the value that adds
 // spacing where there was none, and "replace" is reported.
 func AutospaceOf(value string) (Autospace, string) {
-	value = strings.ToLower(strings.TrimSpace(value))
+	value = ascii.Lower(strings.TrimSpace(value))
 	if value == "" || value == "normal" {
 		return Autospace{IdeographAlpha: true, IdeographNumeric: true}, ""
 	}

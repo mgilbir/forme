@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -150,7 +151,7 @@ func fitCount(available, width, gap style.Unit) int {
 // columnCount reads §3.1's property: a positive integer, or auto.
 func columnCount(b *Box) (int, bool) {
 	raw := strings.TrimSpace(b.Style.Get("column-count"))
-	if raw == "" || strings.EqualFold(raw, "auto") {
+	if raw == "" || ascii.EqualFold(raw, "auto") {
 		return 0, false
 	}
 	n, ok := positiveInteger(raw)
@@ -162,7 +163,7 @@ func columnCount(b *Box) (int, bool) {
 
 // columnFillOf reads §3.5's property.
 func columnFillOf(b *Box) columnFill {
-	if strings.EqualFold(strings.TrimSpace(b.Style.Get("column-fill")), "auto") {
+	if ascii.EqualFold(strings.TrimSpace(b.Style.Get("column-fill")), "auto") {
 		return columnAuto
 	}
 	return columnBalance
@@ -788,10 +789,10 @@ func refusesToSlice(f *Fragment) bool {
 		return true
 	}
 	if v := strings.TrimSpace(f.Box.Style.Get("background-image")); v != "" &&
-		!strings.EqualFold(v, "none") {
+		!ascii.EqualFold(v, "none") {
 		return true
 	}
-	return strings.EqualFold(
+	return ascii.EqualFold(
 		strings.TrimSpace(f.Box.Style.Get("box-decoration-break")), "clone")
 }
 
@@ -852,7 +853,7 @@ func (l *layouter) subtreeCanColumn(root, b *Box) string {
 
 // spansColumns reads §6.3's column-span.
 func spansColumns(b *Box) bool {
-	return strings.EqualFold(strings.TrimSpace(b.Style.Get("column-span")), "all")
+	return ascii.EqualFold(strings.TrimSpace(b.Style.Get("column-span")), "all")
 }
 
 // reportColumns says a box asked for columns and did not get them.
@@ -1023,7 +1024,7 @@ func avoidsBreak(b *Box, property string) bool {
 	if b == nil {
 		return false
 	}
-	switch strings.ToLower(strings.TrimSpace(b.Style.Get(property))) {
+	switch ascii.Lower(strings.TrimSpace(b.Style.Get(property))) {
 	case "avoid", "avoid-column":
 		return true
 	}

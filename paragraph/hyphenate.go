@@ -4,6 +4,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/internal/charprop"
 	"github.com/mgilbir/forme/shape"
 )
@@ -182,7 +183,7 @@ func withinMins(points []int, n, left, right int) []int {
 // breaking at all, and the alternative is a second table for a few hundred
 // words.
 func HyphenationOf(tag string) Language {
-	tag = strings.ToLower(strings.TrimSpace(tag))
+	tag = ascii.Lower(strings.TrimSpace(tag))
 	if tag == "" {
 		return ""
 	}

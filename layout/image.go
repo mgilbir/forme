@@ -19,6 +19,7 @@ import (
 	_ "image/png"
 
 	"github.com/mgilbir/forme/html"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -271,19 +272,19 @@ func resolveReplaced(root *Box, res ResourceResolver, rec *Recorder) {
 }
 
 func (l *replacedLoader) walk(b *Box) {
-	if b.Element != nil && strings.EqualFold(b.Element.Name, "img") {
+	if b.Element != nil && ascii.EqualFold(b.Element.Name, "img") {
 		l.image(b)
 	}
-	if b.Element != nil && strings.EqualFold(b.Element.Name, "object") {
+	if b.Element != nil && ascii.EqualFold(b.Element.Name, "object") {
 		l.object(b)
 	}
-	if b.Element != nil && strings.EqualFold(b.Element.Name, "iframe") {
+	if b.Element != nil && ascii.EqualFold(b.Element.Name, "iframe") {
 		l.iframe(b)
 	}
-	if b.Element != nil && strings.EqualFold(b.Element.Name, "canvas") {
+	if b.Element != nil && ascii.EqualFold(b.Element.Name, "canvas") {
 		l.canvas(b)
 	}
-	if b.Element != nil && strings.EqualFold(b.Element.Name, "video") {
+	if b.Element != nil && ascii.EqualFold(b.Element.Name, "video") {
 		l.video(b)
 	}
 	if b.Element != nil && b.Element.Foreign != "" {
@@ -571,7 +572,7 @@ func (l *replacedLoader) video(b *Box) {
 	// and the box builder leaves it out rather than this pass throwing it away.
 	// See layout.replacedFallback.
 	for _, c := range b.Element.Children {
-		if c.Type == html.ElementNode && strings.EqualFold(c.Name, "source") {
+		if c.Type == html.ElementNode && ascii.EqualFold(c.Name, "source") {
 			if src, ok := c.Attr("src"); ok && strings.TrimSpace(src) != "" {
 				named = true
 			}
@@ -1079,7 +1080,7 @@ func decodeDataURI(src, what string, bad Rule) ([]byte, string, *loadFailure) {
 // that suffix is taken off the type.
 func cutBase64Meta(meta string) (string, bool) {
 	const word = "base64"
-	if len(meta) < len(word) || !strings.EqualFold(meta[len(meta)-len(word):], word) {
+	if len(meta) < len(word) || !ascii.EqualFold(meta[len(meta)-len(word):], word) {
 		return meta, false
 	}
 	head := strings.TrimRight(meta[:len(meta)-len(word)], " ")
@@ -1131,7 +1132,7 @@ func dataURIEssence(meta string) string {
 	if i := strings.IndexByte(meta, ';'); i >= 0 {
 		meta = meta[:i]
 	}
-	meta = strings.ToLower(strings.Trim(meta, " \t\n\f\r"))
+	meta = ascii.Lower(strings.Trim(meta, " \t\n\f\r"))
 	if meta == "" || !strings.Contains(meta, "/") {
 		return "text/plain"
 	}
@@ -1310,17 +1311,14 @@ func isXMLSpace(c byte) bool {
 	return c == ' ' || c == '\t' || c == '\r' || c == '\n'
 }
 
-// hasFoldPrefix reports whether b begins with an ASCII prefix, ignoring case.
+// hasFoldPrefix reports whether b begins with an ASCII prefix, ignoring case:
+// ascii.HasPrefixFold for bytes, which this is asked of without a copy.
 func hasFoldPrefix(b []byte, prefix string) bool {
 	if len(b) < len(prefix) {
 		return false
 	}
 	for i := 0; i < len(prefix); i++ {
-		c := b[i]
-		if c >= 'A' && c <= 'Z' {
-			c += 'a' - 'A'
-		}
-		if c != prefix[i] {
+		if ascii.LowerByte(b[i]) != ascii.LowerByte(prefix[i]) {
 			return false
 		}
 	}
@@ -1339,7 +1337,7 @@ func hasFoldPrefix(b []byte, prefix string) bool {
 // case is the *rules*, not the plumbing — one answer to "what may an SVG be" for
 // both, rather than a second one here that would drift.
 func (l *replacedLoader) foreign(b *Box) {
-	name := strings.ToLower(b.Element.Name)
+	name := ascii.Lower(b.Element.Name)
 	if name != "svg" {
 		l.rec.ReportDetail(Finding{
 			Rule:     RuleUnsupportedElement,
@@ -1392,7 +1390,7 @@ func attrSource(n *html.Node) string {
 		if a.Name == "" || strings.ContainsAny(a.Name, `"'<>`) {
 			continue
 		}
-		if strings.EqualFold(a.Name, "style") || strings.EqualFold(a.Name, "hidden") {
+		if ascii.EqualFold(a.Name, "style") || ascii.EqualFold(a.Name, "hidden") {
 			continue
 		}
 		b.WriteString(a.Name)

@@ -15,6 +15,7 @@ import (
 
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
+	"github.com/mgilbir/forme/internal/ascii"
 )
 
 // maxMatchSteps bounds the work one selector may spend on one element.
@@ -301,7 +302,7 @@ func (m *Matcher) spent() bool {
 // or recurse into another selector list — are asked last.
 //
 // The type is compared ASCII case-insensitively, which is what HTML specifies
-// for its elements' names and what the attribute values in asciiLower's list
+// for its elements' names and what the attribute values in htmlFoldedAttrs
 // already get. It was strings.EqualFold, which is Unicode's simple case
 // folding from the toolchain's release: U+212A KELVIN SIGN and U+017F LONG S
 // fold to "k" and "s", so "\212Abd" selected <kbd> and "\17Fpan" <span> —
@@ -309,7 +310,7 @@ func (m *Matcher) spent() bool {
 // the HTML reader is ASCII, so ASCII's folding is also the only one that can
 // tell two of them apart.
 func (m *Matcher) compound(c css.Compound, n *html.Node) bool {
-	if c.Type != "" && !asciiEqualFold(c.Type, n.Name) {
+	if c.Type != "" && !ascii.EqualFold(c.Type, n.Name) {
 		return false
 	}
 	for _, id := range c.IDs {
@@ -385,7 +386,7 @@ func (m *Matcher) matchAttr(a css.Attr, n *html.Node) bool {
 
 	got, want := v, a.Value
 	if a.Insensitive || (!a.Sensitive && !m.xml && htmlFoldedAttrs[a.Name]) {
-		got, want = asciiLower(got), asciiLower(want)
+		got, want = ascii.Lower(got), ascii.Lower(want)
 	}
 
 	switch a.Op {
@@ -509,7 +510,7 @@ func (m *Matcher) pseudo(p css.Pseudo, n *html.Node) bool {
 // link" — the same set this selects, and a second reading of "is a link" is a
 // second answer waiting to differ from this one.
 func isLink(n *html.Node) bool {
-	if !strings.EqualFold(n.Name, "a") && !strings.EqualFold(n.Name, "area") {
+	if !ascii.EqualFold(n.Name, "a") && !ascii.EqualFold(n.Name, "area") {
 		return false
 	}
 	return n.HasAttr("href")
@@ -685,8 +686,8 @@ func (m *Matcher) seriesOf(parent *html.Node, of []css.Selector) *series {
 // typePosition is an element's one-based position among its siblings of the
 // same name, counting from the end when last is set, or 0 when it has no parent.
 //
-// "The same name" is what compound compares with asciiEqualFold, and
-// asciiLower is that comparison as a key, so the positions are the ones a walk
+// "The same name" is what compound compares with ascii.EqualFold, and
+// ascii.Lower is that comparison as a key, so the positions are the ones a walk
 // comparing names would find. Every child of the parent is placed the first
 // time any of them is asked about.
 func (m *Matcher) typePosition(n *html.Node, last bool) int {
@@ -699,7 +700,7 @@ func (m *Matcher) typePosition(n *html.Node, last bool) int {
 		seen := make(map[string]int32, 4)
 		keys := make([]string, len(kids))
 		for i, k := range kids {
-			keys[i] = asciiLower(k.Name)
+			keys[i] = ascii.Lower(k.Name)
 			seen[keys[i]]++
 			m.ofType[k] = [2]int32{seen[keys[i]], 0}
 		}
@@ -779,8 +780,8 @@ func (m *Matcher) matchLang(n *html.Node, langs []string) bool {
 // done — a tag and a range written in the same form, which is how documents
 // and stylesheets write them, compare correctly without it.
 func extendedFilter(tag, rng string) bool {
-	t := strings.Split(strings.ToLower(tag), "-")
-	r := strings.Split(strings.ToLower(rng), "-")
+	t := strings.Split(ascii.Lower(tag), "-")
+	r := strings.Split(ascii.Lower(rng), "-")
 	if !wellFormedSubtags(t, false) || !wellFormedSubtags(r, true) {
 		return false
 	}
@@ -934,50 +935,4 @@ var htmlFoldedAttrs = map[string]bool{
 	"rel": true, "rev": true, "rules": true, "scope": true, "scrolling": true,
 	"selected": true, "shape": true, "target": true, "text": true,
 	"type": true, "valign": true, "valuetype": true, "vlink": true,
-}
-
-// asciiEqualFold reports whether two strings are equal when A-Z are folded to
-// a-z and nothing else is, without making a copy of either: it is asked for
-// every type selector against every element.
-func asciiEqualFold(a, b string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := 0; i < len(a); i++ {
-		x, y := a[i], b[i]
-		if x == y {
-			continue
-		}
-		if 'A' <= x && x <= 'Z' {
-			x += 'a' - 'A'
-		}
-		if 'A' <= y && y <= 'Z' {
-			y += 'a' - 'A'
-		}
-		if x != y {
-			return false
-		}
-	}
-	return true
-}
-
-// asciiLower folds A-Z and nothing else.
-//
-// strings.ToLower is Unicode's mapping, and CSS asks for ASCII's: U+212A KELVIN
-// SIGN lowercases to "k" under Unicode, so "[type=block\u212A i]" would have
-// matched an attribute written "block" — a match on two strings that are not
-// the same string, from a selector nobody could have meant.
-func asciiLower(s string) string {
-	for i := 0; i < len(s); i++ {
-		if c := s[i]; c >= 'A' && c <= 'Z' {
-			b := []byte(s)
-			for ; i < len(b); i++ {
-				if c := b[i]; c >= 'A' && c <= 'Z' {
-					b[i] = c + 'a' - 'A'
-				}
-			}
-			return string(b)
-		}
-	}
-	return s
 }

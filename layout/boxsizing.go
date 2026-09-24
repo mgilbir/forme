@@ -3,6 +3,7 @@ package layout
 import (
 	"strings"
 
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -44,7 +45,7 @@ import (
 // borderBoxSizing reports whether a box's declared sizes include its padding and
 // border.
 func borderBoxSizing(b *Box) bool {
-	return strings.EqualFold(strings.TrimSpace(b.Style.Get("box-sizing")), "border-box")
+	return ascii.EqualFold(strings.TrimSpace(b.Style.Get("box-sizing")), "border-box")
 }
 
 // sizingInset is what a declared width or height covers besides the content: the
@@ -153,7 +154,7 @@ var intrinsicSizeKeywords = map[string]bool{
 //
 // It is not the question "may this be applied" — see bareSizingKeyword.
 func sizingKeyword(raw string) string {
-	name := strings.ToLower(strings.TrimSpace(raw))
+	name := ascii.Lower(strings.TrimSpace(raw))
 	if i := strings.IndexByte(name, '('); i > 0 {
 		name = strings.TrimSpace(name[:i])
 	}

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -307,7 +308,7 @@ func parseFamilyList(value string) []string {
 // isBold reads font-weight. The numeric scale runs 100 to 900 and 400 is
 // normal; the boundary is at 600, which is where every renderer puts it.
 func isBold(value string) bool {
-	switch v := strings.ToLower(strings.TrimSpace(value)); v {
+	switch v := ascii.Lower(strings.TrimSpace(value)); v {
 	case "bold", "bolder":
 		return true
 	case "", "normal", "lighter":
@@ -325,7 +326,7 @@ func isBold(value string) bool {
 }
 
 func isItalic(value string) bool {
-	switch strings.ToLower(strings.TrimSpace(value)) {
+	switch ascii.Lower(strings.TrimSpace(value)) {
 	case "italic", "oblique":
 		return true
 	}

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -296,7 +297,7 @@ func (l *layouter) canvasBackgroundSource(root *Fragment) *Fragment {
 	if root.Box == nil || root.Box.Element == nil {
 		return nil
 	}
-	if !strings.EqualFold(root.Box.Element.Name, "html") {
+	if !ascii.EqualFold(root.Box.Element.Name, "html") {
 		// Not an HTML document's root. §2.11.2's propagation from <body> is
 		// specific to HTML, and propagating the root's own background is not:
 		// but without an <html> element this engine is being handed a fragment
@@ -324,7 +325,7 @@ func (l *layouter) hasOwnBackground(b *Box) bool {
 		return false
 	}
 	raw := b.Style.Get("background-color")
-	if strings.EqualFold(strings.TrimSpace(raw), "currentcolor") {
+	if ascii.EqualFold(strings.TrimSpace(raw), "currentcolor") {
 		// A background of "currentcolor" is the text colour, which is black by
 		// default — so an element declaring it *does* have a background, and
 		// reading the value literally would propagate <body>'s over the top of it.
@@ -334,7 +335,7 @@ func (l *layouter) hasOwnBackground(b *Box) bool {
 		return true
 	}
 	for _, raw := range splitCommaValues(b.Style.Get("background-image")) {
-		if strings.TrimSpace(raw) != "" && !strings.EqualFold(strings.TrimSpace(raw), "none") {
+		if strings.TrimSpace(raw) != "" && !ascii.EqualFold(strings.TrimSpace(raw), "none") {
 			return true
 		}
 	}
@@ -355,7 +356,7 @@ func bodyOf(root *Fragment) *Fragment {
 		}
 		for _, c := range f.Children {
 			if c.Box != nil && c.Box.Element != nil &&
-				strings.EqualFold(c.Box.Element.Name, "body") {
+				ascii.EqualFold(c.Box.Element.Name, "body") {
 				found = c
 				return
 			}
@@ -377,7 +378,7 @@ func (l *layouter) colorRect(f *Fragment) Rect {
 		return f.BorderRect
 	}
 	raw := strings.TrimSpace(f.Box.Style.Get("background-clip"))
-	if raw == "" || strings.EqualFold(raw, "border-box") {
+	if raw == "" || ascii.EqualFold(raw, "border-box") {
 		return f.BorderRect
 	}
 	clips := l.bgBoxes(f.Box, "background-clip", bgBorderBox)
@@ -909,7 +910,7 @@ type bgRepeatPair struct{ x, y bgRepeat }
 func (l *layouter) bgRepeats(b *Box) []bgRepeatPair {
 	out := make([]bgRepeatPair, 0, 1)
 	for _, raw := range splitCommaValues(b.Style.Get("background-repeat")) {
-		words := strings.Fields(strings.ToLower(raw))
+		words := strings.Fields(ascii.Lower(raw))
 		pair, ok := repeatPair(words)
 		if !ok {
 			l.reportOnce("bg-repeat:"+raw, Finding{
@@ -1179,7 +1180,7 @@ func negativeLength(l style.Length) bool {
 func (l *layouter) bgBoxes(b *Box, property string, initial bgBox) []bgBox {
 	out := make([]bgBox, 0, 1)
 	for _, raw := range splitCommaValues(b.Style.Get(property)) {
-		switch strings.ToLower(strings.TrimSpace(raw)) {
+		switch ascii.Lower(strings.TrimSpace(raw)) {
 		case "border-box":
 			out = append(out, bgBorderBox)
 		case "padding-box":
@@ -1219,7 +1220,7 @@ func (l *layouter) bgBoxes(b *Box, property string, initial bgBox) []bgBox {
 func (l *layouter) bgAttachments(b *Box) []bool {
 	out := make([]bool, 0, 1)
 	for _, raw := range splitCommaValues(b.Style.Get("background-attachment")) {
-		switch strings.ToLower(strings.TrimSpace(raw)) {
+		switch ascii.Lower(strings.TrimSpace(raw)) {
 		case "fixed":
 			out = append(out, true)
 		case "scroll", "local":
@@ -1297,11 +1298,11 @@ func identOf(part []css.ComponentValue) (string, bool) {
 	if len(part) != 1 || !part[0].IsToken() || part[0].Token.Kind != css.Ident {
 		return "", false
 	}
-	return strings.ToLower(part[0].Token.Value), true
+	return ascii.Lower(part[0].Token.Value), true
 }
 
 func isNoneValue(raw string) bool {
-	return strings.EqualFold(strings.TrimSpace(raw), "none")
+	return ascii.EqualFold(strings.TrimSpace(raw), "none")
 }
 
 // urlValue extracts the reference from a url() value, in both spellings.
@@ -1320,7 +1321,7 @@ func urlValue(raw string) (string, bool) {
 	if v.IsToken() && v.Token.Kind == css.URL {
 		return v.Token.Value, true
 	}
-	if v.IsFunction() && strings.EqualFold(v.Token.Value, "url") {
+	if v.IsFunction() && ascii.EqualFold(v.Token.Value, "url") {
 		for _, inner := range v.Values {
 			if !inner.IsToken() {
 				continue

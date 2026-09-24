@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/mgilbir/forme/internal/ascii"
 )
 
 // The tokenizer.
@@ -232,13 +234,13 @@ func looksLikeXML(src string) bool {
 	if strings.HasPrefix(strings.TrimLeft(head, " \t\r\n\uFEFF"), "<?xml") {
 		return true
 	}
-	if i := indexFold(head, "<!doctype"); i >= 0 {
+	if i := ascii.IndexFold(head, "<!doctype"); i >= 0 {
 		if end := strings.IndexByte(head[i:], '>'); end >= 0 {
 			// "xhtml" anywhere in it: the public identifiers are spelled
 			// "-//W3C//DTD XHTML 1.0 Strict//EN" and, in documents that got it
 			// slightly wrong, "-//W3C//DTD//XHTML 1.0"; the system identifiers
 			// all name an xhtml DTD. "<!DOCTYPE html>" names nothing.
-			if indexFold(head[i:i+end], "xhtml") >= 0 {
+			if ascii.IndexFold(head[i:i+end], "xhtml") >= 0 {
 				return true
 			}
 		}
@@ -455,65 +457,24 @@ const (
 	cdataClose = "]]>"
 )
 
-// hasPrefixFold and indexFold are case-insensitive prefix and substring
-// searches over ASCII, and they exist because the obvious spellings of both are
-// quadratic on a document this engine is expected to take from anywhere.
-//
-// "strings.HasPrefix(strings.ToLower(src[pos:]), ...)" lowercases everything
-// from the cursor to the end of the file, and it sat in the path taken at *every*
-// "<". A document of forty thousand tags therefore lowercased its own length
-// forty thousand times: forty gigabytes of work for a megabyte of HTML, which
-// measured at sixty-six seconds while the same document's layout took a third of
-// one. Anything past a few hundred kilobytes of small elements was effectively a
+// The case-insensitive searches here are internal/ascii's, and they are not
+// spelled "strings.HasPrefix(strings.ToLower(src[pos:]), ...)" for a reason
+// beyond the folding. That spelling lowercases everything from the cursor to
+// the end of the file, and it sat in the path taken at *every* "<". A document
+// of forty thousand tags therefore lowercased its own length forty thousand
+// times: forty gigabytes of work for a megabyte of HTML, which measured at
+// sixty-six seconds while the same document's layout took a third of one.
+// Anything past a few hundred kilobytes of small elements was effectively a
 // hang, reachable by anyone who could hand this engine a file.
 //
 // Only ASCII is folded, which is what the HTML syntax needs: tag and doctype
 // names are ASCII, and folding beyond it would make "İ" a match for "i".
-func hasPrefixFold(s, prefix string) bool {
-	if len(s) < len(prefix) {
-		return false
-	}
-	for i := 0; i < len(prefix); i++ {
-		if lowerASCII(s[i]) != lowerASCII(prefix[i]) {
-			return false
-		}
-	}
-	return true
-}
-
-// indexFold returns the first index of a substring, ignoring ASCII case.
-//
-// The scan is anchored on the first byte so that the inner comparison runs only
-// where it can succeed, which keeps the search linear in the source rather than
-// in the source times the needle.
-func indexFold(s, sub string) int {
-	if sub == "" {
-		return 0
-	}
-	first := lowerASCII(sub[0])
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if lowerASCII(s[i]) != first {
-			continue
-		}
-		if hasPrefixFold(s[i:], sub) {
-			return i
-		}
-	}
-	return -1
-}
-
-func lowerASCII(c byte) byte {
-	if c >= 'A' && c <= 'Z' {
-		return c + 'a' - 'A'
-	}
-	return c
-}
 
 // findEndTag locates "</name" followed by a tag terminator, from position i.
 func (t *tokenizer) findEndTag(name string, i int) int {
 	want := "</" + name
 	for {
-		j := indexFold(t.src[i:], want)
+		j := ascii.IndexFold(t.src[i:], want)
 		if j < 0 {
 			return -1
 		}
@@ -544,7 +505,7 @@ func (t *tokenizer) markup() (token, bool) {
 		return token{}, false
 	}
 
-	if hasPrefixFold(t.src[t.pos:], "<!doctype") {
+	if ascii.HasPrefixFold(t.src[t.pos:], "<!doctype") {
 		return t.doctype(), true
 	}
 
@@ -819,32 +780,13 @@ func (t *tokenizer) readName() string {
 	// full of — an element "o" with an attribute ":p". What the prefix *means*
 	// is the parser's question, not this one's: see parser.resolveName.
 	//
-	// The folding is ASCII's and only ASCII's. strings.ToLower is Unicode's, and
-	// it would make a KELVIN SIGN the letter k: "<X\u212ABD>" would open an
-	// element "xkbd" that nobody wrote.
+	// The folding is ASCII's and only ASCII's (see internal/ascii). strings.ToLower
+	// is Unicode's, and it would make a KELVIN SIGN the letter k: "<X\u212ABD>"
+	// would open an element "xkbd" that nobody wrote.
 	for t.pos < len(t.src) && !isSpace(t.src[t.pos]) && t.src[t.pos] != '/' && t.src[t.pos] != '>' {
 		t.pos++
 	}
-	return t.nuls(lowerASCIIString(t.src[start:t.pos]), start, "a tag name", nulReplaced)
-}
-
-// lowerASCIIString lowercases the ASCII capitals of s and leaves every other
-// byte as it is, which is what the HTML tokenizer does to a tag or attribute
-// name: "ASCII upper alpha … append the lowercase version", "anything else …
-// append the current input character".
-func lowerASCIIString(s string) string {
-	i := 0
-	for i < len(s) && (s[i] < 'A' || s[i] > 'Z') {
-		i++
-	}
-	if i == len(s) {
-		return s
-	}
-	b := []byte(s)
-	for ; i < len(b); i++ {
-		b[i] = lowerASCII(b[i])
-	}
-	return string(b)
+	return t.nuls(ascii.Lower(t.src[start:t.pos]), start, "a tag name", nulReplaced)
 }
 
 // readAttrName reads an attribute name, which admits more characters than an
@@ -871,7 +813,7 @@ func (t *tokenizer) readAttrName(tag string) string {
 		t.pos++
 	}
 	// ASCII's folding, as a tag name's: see readName.
-	return lowerASCIIString(t.src[start:t.pos])
+	return ascii.Lower(t.src[start:t.pos])
 }
 
 func (t *tokenizer) skipSpace() {

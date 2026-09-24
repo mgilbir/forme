@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/mgilbir/forme/bidi"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -108,7 +109,7 @@ type WhiteSpace struct {
 // "nowrap" by mistake would run a paragraph off the edge.
 func WhiteSpaceFor(cs style.ComputedStyle) WhiteSpace {
 	ws := WhiteSpaceOf(cs.Get("white-space-collapse"))
-	ws.Wrap = !strings.EqualFold(strings.TrimSpace(cs.Get("text-wrap-mode")), "nowrap")
+	ws.Wrap = !ascii.EqualFold(strings.TrimSpace(cs.Get("text-wrap-mode")), "nowrap")
 	return ws
 }
 
@@ -117,7 +118,7 @@ func WhiteSpaceFor(cs style.ComputedStyle) WhiteSpace {
 // this is for the places that have only the one value — and for the tests, whose
 // cases are written as the collapse keyword.
 func WhiteSpaceOf(value string) WhiteSpace {
-	switch strings.ToLower(strings.TrimSpace(value)) {
+	switch ascii.Lower(strings.TrimSpace(value)) {
 	case "preserve":
 		return WhiteSpace{PreserveBreaks: true, Wrap: true}
 	case "preserve-breaks":
@@ -198,7 +199,7 @@ type WordBreak struct {
 // result was read and reported by a caller that could never see it filled.
 // Audit C178.
 func WordBreakOf(value string) WordBreak {
-	switch strings.ToLower(strings.TrimSpace(value)) {
+	switch ascii.Lower(strings.TrimSpace(value)) {
 	case "break-all":
 		return WordBreak{BreakAll: true}
 	case "keep-all":
@@ -273,7 +274,7 @@ func (lb LineBreak) Tailored() bool { return lb.Strict || lb.Normal || lb.Loose 
 // LineBreakOf reads the property. All four values are handled, so there is
 // nothing to report; see WordBreakOf for the second result this used to return.
 func LineBreakOf(value string) LineBreak {
-	switch strings.ToLower(strings.TrimSpace(value)) {
+	switch ascii.Lower(strings.TrimSpace(value)) {
 	case "anywhere":
 		return LineBreak{Anywhere: true}
 	case "strict":
@@ -323,10 +324,10 @@ func OverflowWrapOf(cs style.ComputedStyle) OverflowWrap {
 	// either property that overrides the other, and reading it as a *default*
 	// for overflow-wrap would give the wrong answer for the document that sets
 	// both — which is what word-break-break-word-overflow-wrap-interactions is.
-	if strings.EqualFold(strings.TrimSpace(cs.Get("word-break")), "break-word") {
+	if ascii.EqualFold(strings.TrimSpace(cs.Get("word-break")), "break-word") {
 		return OverflowWrap{BreakWord: true, Anywhere: true}
 	}
-	switch strings.ToLower(strings.TrimSpace(cs.Get("overflow-wrap"))) {
+	switch ascii.Lower(strings.TrimSpace(cs.Get("overflow-wrap"))) {
 	case "break-word":
 		return OverflowWrap{BreakWord: true}
 	case "anywhere":

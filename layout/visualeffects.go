@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -328,7 +329,7 @@ func (l *layouter) propagatesOverflow(b *Box) bool {
 		// The root element.
 		return true
 	}
-	if b.Parent.Parent != nil || !strings.EqualFold(elementName(b), "body") {
+	if b.Parent.Parent != nil || !ascii.EqualFold(elementName(b), "body") {
 		return false
 	}
 	// A <body> whose parent is the root. Its overflow propagates only when the
@@ -363,7 +364,7 @@ func (l *layouter) clipRectOf(f *Fragment) Clip {
 	// planted, and parseClipShape refuses a bare "auto" anyway, because it is
 	// not a rect().
 	raw := strings.TrimSpace(b.Style.Get("clip"))
-	if raw == "" || strings.EqualFold(raw, "auto") {
+	if raw == "" || ascii.EqualFold(raw, "auto") {
 		return Clip{}
 	}
 	sides, ok := l.parseClipShape(b, raw)
@@ -436,7 +437,7 @@ func (l *layouter) parseClipShape(b *Box, raw string) (clipSides, bool) {
 			// A second value beside the shape: not a clip.
 			return clipSides{}, false
 		}
-		if !v.IsFunction() || !strings.EqualFold(v.Token.Value, "rect") {
+		if !v.IsFunction() || !ascii.EqualFold(v.Token.Value, "rect") {
 			return clipSides{}, false
 		}
 		fn = &vals[i]

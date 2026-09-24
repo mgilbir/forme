@@ -4,6 +4,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/paragraph"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
@@ -418,7 +419,7 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			out = append(out, items...)
 			continue
 		}
-		if child.Element != nil && strings.EqualFold(child.Element.Name, "br") {
+		if child.Element != nil && ascii.EqualFold(child.Element.Name, "br") {
 			// A line break the author wrote. It is not a break *opportunity* —
 			// it ends the line wherever it falls, even mid-word and even on a
 			// line with room to spare.
@@ -455,7 +456,7 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			}
 			continue
 		}
-		if child.Element != nil && strings.EqualFold(child.Element.Name, "wbr") &&
+		if child.Element != nil && ascii.EqualFold(child.Element.Name, "wbr") &&
 			len(child.Children) == 0 {
 			// A break opportunity the author wrote, and the counterpart of the
 			// <br> above: that one ends a line wherever it falls, this one only
@@ -1751,7 +1752,7 @@ func (l *layouter) nextSiblingOf(b *Box) *Box {
 
 // isForcedBreak reports whether a box ends the line wherever it falls.
 func isForcedBreak(b *Box) bool {
-	return b.Element != nil && strings.EqualFold(b.Element.Name, "br")
+	return b.Element != nil && ascii.EqualFold(b.Element.Name, "br")
 }
 
 // firstRuneOf is the first character of some text, or zero where there is none.

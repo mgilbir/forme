@@ -3,6 +3,8 @@ package html
 import (
 	"strconv"
 	"strings"
+
+	"github.com/mgilbir/forme/internal/ascii"
 )
 
 // The tree builder.
@@ -258,7 +260,7 @@ func (p *parser) bindNamespaces(attrs []Attribute) {
 			if p.ns == nil {
 				p.ns = map[string]string{}
 			}
-			p.ns[a.Name[len("xmlns:"):]] = strings.ToLower(a.Value)
+			p.ns[a.Name[len("xmlns:"):]] = ascii.Lower(a.Value)
 		}
 	}
 }

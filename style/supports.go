@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
 )
 
 // CSS Conditional Rules §2's @supports: the rules inside it apply only if this
@@ -128,7 +129,7 @@ func supportsInParens(v css.ComponentValue) (bool, string, bool) {
 	if v.IsFunction() {
 		// selector(), font-tech(), font-format(): questions about facilities
 		// rather than about a declaration.
-		return false, strings.ToLower(v.Token.Value) + "()", true
+		return false, ascii.Lower(v.Token.Value) + "()", true
 	}
 	if !v.IsBlock() || v.Token.Kind != css.LeftParen {
 		return false, "", false
@@ -154,7 +155,7 @@ func supportsDeclaration(name string, value []css.ComponentValue) bool {
 		// A declaration with no value does not parse, so nothing supports it.
 		return false
 	}
-	name = strings.ToLower(strings.TrimSpace(name))
+	name = ascii.Lower(strings.TrimSpace(name))
 	if strings.HasPrefix(name, "--") {
 		// A custom property is supported by anything that parses CSS, which
 		// §2 says in as many words. This engine parses it and cascades it.
@@ -215,7 +216,7 @@ func splitDeclaration(vals []css.ComponentValue) (string, []css.ComponentValue, 
 }
 
 func isIdent(v css.ComponentValue, word string) bool {
-	return v.Token.Kind == css.Ident && strings.EqualFold(v.Token.Value, word)
+	return v.Token.Kind == css.Ident && ascii.EqualFold(v.Token.Value, word)
 }
 
 func trimWhitespace(vals []css.ComponentValue) []css.ComponentValue {

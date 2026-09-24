@@ -93,12 +93,14 @@ func TestNoGeneratorAsksPackageUnicode(t *testing.T) {
 //
 // What it cannot see is the questions package unicode answers through another
 // package: strings.EqualFold, ToLower, ToUpper, Fields and TrimSpace fold,
-// map and classify with the toolchain's tables. Nearly all of the several
-// hundred of those in the tree are about CSS and HTML syntax — keywords,
-// element names, attribute values — which the specifications compare ASCII
-// case-insensitively, and whose fault, where there is one, is that they fold
-// more than ASCII, not that they fold by the wrong release. That is a
-// different question and is not this check's.
+// map and classify with the toolchain's tables. The case mappings among them
+// were nearly all about CSS and HTML syntax — keywords, element names,
+// attribute values — which the specifications compare ASCII
+// case-insensitively, and whose fault was that they folded more than ASCII,
+// not that they folded by the wrong release. That is a different question: it
+// is asciicase_test.go's, which holds them to internal/ascii. Fields and
+// TrimSpace, which split and trim on Unicode's white space where CSS and HTML
+// name their own, are neither check's yet.
 
 // unicodeConstants are the identifiers of package unicode that are not a
 // question about a character.

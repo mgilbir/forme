@@ -4,6 +4,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/internal/charprop"
 )
 
@@ -68,7 +69,7 @@ const (
 // are about. That is the same reading WritingSystemOf makes of the same
 // attribute, and for the same reason — the script decides.
 func OrthographyOf(tag string) Orthography {
-	tag = strings.ToLower(strings.TrimSpace(tag))
+	tag = ascii.Lower(strings.TrimSpace(tag))
 	if tag == "" {
 		return OrthographyPlain
 	}

@@ -4,6 +4,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/mgilbir/forme/internal/ascii"
 )
 
 // What this engine reads, and what it does about a document that is not it.
@@ -144,7 +146,7 @@ func (t *tokenizer) checkDeclaredEncoding() {
 	if len(head) > maxEncodingSniff {
 		head = head[:maxEncodingSniff]
 	}
-	lower := strings.ToLower(head)
+	lower := ascii.Lower(head)
 	checkedASCII, ascii := false, false
 	for at := 0; ; {
 		i := strings.Index(lower[at:], "<meta")

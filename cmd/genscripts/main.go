@@ -37,6 +37,7 @@ import (
 	"strings"
 
 	"github.com/mgilbir/forme/cmd/internal/ucd"
+	"github.com/mgilbir/forme/internal/ascii"
 )
 
 // otTagOverrides names the scripts whose OpenType tag is not their ISO 15924
@@ -138,7 +139,7 @@ func main() {
 				fmt.Fprintf(os.Stderr, "genscripts: no ISO 15924 code for script %q\n", n)
 				os.Exit(1)
 			}
-			tags[i] = []string{strings.ToLower(code[:1]) + code[1:]}
+			tags[i] = []string{ascii.Lower(code[:1]) + code[1:]}
 		}
 	}
 

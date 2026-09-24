@@ -6,6 +6,7 @@ import (
 
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -148,7 +149,7 @@ func (l *layouter) buildTableGrid(table *Box) *tableGrid {
 					run.rows = append(run.rows, r)
 				}
 			}
-			switch strings.ToLower(strings.TrimSpace(c.Style.Get("display"))) {
+			switch ascii.Lower(strings.TrimSpace(c.Style.Get("display"))) {
 			case "table-header-group":
 				if head == nil {
 					head = run
@@ -1126,7 +1127,7 @@ func (l *layouter) tableEdges(table *Box) style.Unit {
 // whose width is auto uses the automatic algorithm whatever table-layout asks
 // for. So the caller checks the width and this checks only the keyword.
 func tableLayoutIsFixed(table *Box) bool {
-	return strings.EqualFold(strings.TrimSpace(table.Style.Get("table-layout")), "fixed")
+	return ascii.EqualFold(strings.TrimSpace(table.Style.Get("table-layout")), "fixed")
 }
 
 // captionMinWidth is §17.5.2's CAPMIN: the narrowest the captions can be.
@@ -1898,7 +1899,7 @@ func (l *layouter) layoutCells(table *Box, g *tableGrid, cols []style.Unit,
 		out = append(out, placedCell{
 			cell: c, frag: frag, natural: frag.BorderRect.H, content: frag.contentH,
 			baseline: baseline, hasBaseline: hasBaseline,
-			align:   strings.ToLower(strings.TrimSpace(c.box.Style.Get("vertical-align"))),
+			align:   ascii.Lower(strings.TrimSpace(c.box.Style.Get("vertical-align"))),
 			absFrom: absFrom, absTo: len(l.deferred),
 		})
 	}
@@ -2440,7 +2441,7 @@ func (l *layouter) assembleRows(parent *Fragment, g *tableGrid, placed []placedC
 			X: x.Sub(s.h), Y: 0,
 			W: p.frag.BorderRect.W, H: height,
 		}
-		if s.collapsed == nil && cellIsEmpty(p.frag) && strings.EqualFold(
+		if s.collapsed == nil && cellIsEmpty(p.frag) && ascii.EqualFold(
 			strings.TrimSpace(c.box.Style.Get("empty-cells")), "hide") {
 			// §17.6.1.1: an empty cell in the *separated* model may be asked to
 			// draw nothing at all. Leaving the fragment out is exactly that —

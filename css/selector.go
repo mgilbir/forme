@@ -3,6 +3,8 @@ package css
 import (
 	"fmt"
 	"strings"
+
+	"github.com/mgilbir/forme/internal/ascii"
 )
 
 // Selectors, from Selectors Level 4 — parsed and given a specificity here, and
@@ -1124,7 +1126,7 @@ func (p *selParser) pseudo(vals []ComponentValue, i int, out *Compound, depth in
 		return i, "", "", false
 	}
 	name := v.Token.Value
-	lower := strings.ToLower(name)
+	lower := ascii.Lower(name)
 
 	// One colon may still be a pseudo-element, for the four that predate the
 	// two-colon notation.
@@ -1336,7 +1338,7 @@ func (p *selParser) nth(fn ComponentValue, name string, depth int) (AnB, []Selec
 	// "of" splits the argument, and it is an identifier at the top level.
 	split := -1
 	for i, v := range args {
-		if v.IsToken() && v.Token.Kind == Ident && strings.EqualFold(v.Token.Value, "of") {
+		if v.IsToken() && v.Token.Kind == Ident && ascii.EqualFold(v.Token.Value, "of") {
 			split = i
 			break
 		}
@@ -1458,7 +1460,7 @@ func (p *selParser) attribute(block ComponentValue) (Attr, bool) {
 		p.fail(vals[0].Token.Offset, "unexpected extra content in an attribute selector")
 		return Attr{}, false
 	}
-	switch strings.ToLower(vals[0].Token.Value) {
+	switch ascii.Lower(vals[0].Token.Value) {
 	case "i":
 		out.Insensitive = true
 	case "s":

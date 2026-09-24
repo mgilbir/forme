@@ -9,6 +9,7 @@ import (
 
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -2216,7 +2217,7 @@ func (p *painter) color(b *Box, property string) (style.RGBA, bool) {
 	if raw == "" {
 		return style.RGBA{}, false
 	}
-	if strings.EqualFold(raw, "currentcolor") {
+	if ascii.EqualFold(raw, "currentcolor") {
 		if property == "color" {
 			// The cascade resolves this one: CSS Color 4 §7.2 makes
 			// "currentcolor" on "color" itself an "inherit", and inheritance is
@@ -2246,7 +2247,7 @@ func (p *painter) color(b *Box, property string) (style.RGBA, bool) {
 // declares a background to give the canvas.
 func parseColorValue(raw string) (style.RGBA, bool) {
 	raw = strings.TrimSpace(raw)
-	if raw == "" || strings.EqualFold(raw, "currentcolor") {
+	if raw == "" || ascii.EqualFold(raw, "currentcolor") {
 		return style.RGBA{}, false
 	}
 	vals, _ := css.ParseComponentValues(raw)

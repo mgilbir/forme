@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
 )
 
 // Declarations of a property this engine does not implement, whose value asks
@@ -325,7 +326,7 @@ func isInertDeclaration(name string, vals []css.ComponentValue) bool {
 	if !ok {
 		return false
 	}
-	value := strings.ToLower(strings.TrimSpace(serialize(vals)))
+	value := ascii.Lower(strings.TrimSpace(serialize(vals)))
 	if value == "" {
 		return false
 	}
