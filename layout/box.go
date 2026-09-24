@@ -1006,7 +1006,7 @@ func contentsIsHonoured(n *html.Node, cs style.ComputedStyle, root *html.Node) b
 	if n == nil || cs.IsZero() {
 		return false
 	}
-	if !ascii.EqualFold(strings.TrimSpace(cs.Get("display")), "contents") {
+	if !ascii.EqualFold(ascii.TrimCSSSpace(cs.Get("display")), "contents") {
 		return false
 	}
 	if n == root {
@@ -1243,7 +1243,7 @@ const (
 // ruby, which defaults to inline" — and "list-item" alone is a block flow list
 // item.
 func parseDisplay(raw string) displayType {
-	value := ascii.Lower(strings.TrimSpace(raw))
+	value := ascii.Lower(ascii.TrimCSSSpace(raw))
 	switch value {
 	case "none":
 		return displayType{outer: OuterNone, inner: InnerFlow}
@@ -1320,7 +1320,7 @@ func parseDisplay(raw string) displayType {
 		outer, inner   string
 		haveOuter, has bool
 	)
-	for _, w := range strings.Fields(value) {
+	for _, w := range ascii.CSSFields(value) {
 		switch w {
 		case "block", "inline", "run-in":
 			if haveOuter {
@@ -1441,7 +1441,7 @@ func replacesItsOwnContent(n *html.Node) bool {
 // need the writing mode, and answering them as "left" would be right for a
 // left-to-right document and silently wrong for the documents they exist for.
 func floatOf(cs style.ComputedStyle) FloatSide {
-	switch ascii.Lower(strings.TrimSpace(cs.Get("float"))) {
+	switch ascii.Lower(ascii.TrimCSSSpace(cs.Get("float"))) {
 	case "left":
 		return FloatLeft
 	case "right":
@@ -1451,7 +1451,7 @@ func floatOf(cs style.ComputedStyle) FloatSide {
 }
 
 func clearOf(cs style.ComputedStyle) ClearSide {
-	switch ascii.Lower(strings.TrimSpace(cs.Get("clear"))) {
+	switch ascii.Lower(ascii.TrimCSSSpace(cs.Get("clear"))) {
 	case "left":
 		return ClearLeft
 	case "right":
@@ -1541,7 +1541,7 @@ func overflowClipsAxes(cs style.ComputedStyle) (x, y bool) {
 // overflowOn is one axis's value, lower-cased, with an absent one read as the
 // initial "visible".
 func overflowOn(cs style.ComputedStyle, axis string) string {
-	v := ascii.Lower(strings.TrimSpace(cs.Get(axis)))
+	v := ascii.Lower(ascii.TrimCSSSpace(cs.Get(axis)))
 	if v == "" {
 		return "visible"
 	}
@@ -1925,7 +1925,7 @@ func mayInsetHorizontally(cs style.ComputedStyle) bool {
 // zero rather than sharing out the space, which is what makes an inline box
 // uncentreable.
 func isZeroLength(v string) bool {
-	switch s := ascii.Lower(strings.TrimSpace(v)); s {
+	switch s := ascii.Lower(ascii.TrimCSSSpace(v)); s {
 	case "", "0", "auto":
 		return true
 	default:
@@ -2150,7 +2150,7 @@ func onlyDocumentWhiteSpace(run []*Box) bool {
 		if !c.IsText() {
 			return false
 		}
-		if strings.Trim(c.Text, " \t\n\r") != "" {
+		if !paragraph.IsDocumentWhiteSpace(c.Text) {
 			return false
 		}
 	}
@@ -2180,7 +2180,7 @@ func hasInFlowContent(run []*Box) bool {
 		if !whiteSpaceOf(c.Style.Get("white-space-collapse")).Collapse {
 			return true
 		}
-		if strings.TrimSpace(c.Text) != "" {
+		if !paragraph.IsDocumentWhiteSpace(c.Text) {
 			return true
 		}
 	}

@@ -218,7 +218,7 @@ func (l *layouter) markerPieces(face *shape.Face, text string, size style.Unit, 
 // markerInside reports "list-style-position: inside".
 func markerInside(b *Box) bool {
 	return b.ListItem &&
-		ascii.EqualFold(strings.TrimSpace(b.Style.Get("list-style-position")), "inside")
+		ascii.EqualFold(ascii.TrimCSSSpace(b.Style.Get("list-style-position")), "inside")
 }
 
 // markerGap is the space between a marker and the text it belongs to.
@@ -420,7 +420,7 @@ func (l *layouter) markerItem(b *Box, para *bidiBuilder) (inlineItem, bool) {
 
 // markerText renders the marker for a list-style-type and a position.
 func markerText(listStyle string, index int) string {
-	switch ascii.Lower(strings.TrimSpace(listStyle)) {
+	switch ascii.Lower(ascii.TrimCSSSpace(listStyle)) {
 	case "none":
 		return ""
 	case "circle":

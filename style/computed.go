@@ -203,9 +203,9 @@ const DefaultMonospaceFontSize = 13
 // a question a preference for "monospace" was ever the answer to.
 func monospaceDefault(cs ComputedStyle) bool {
 	first, _, _ := strings.Cut(cs.Get("font-family"), ",")
-	first = strings.TrimSpace(first)
+	first = ascii.TrimCSSSpace(first)
 	first = strings.Trim(first, `"'`)
-	switch ascii.Lower(strings.TrimSpace(first)) {
+	switch ascii.Lower(ascii.TrimCSSSpace(first)) {
 	case "monospace", "ui-monospace":
 		return true
 	}

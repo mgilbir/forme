@@ -828,7 +828,7 @@ func wideKeyword(vals []css.ComponentValue) string {
 func serialize(vals []css.ComponentValue) string {
 	var b strings.Builder
 	writeValues(&b, vals)
-	return strings.TrimSpace(b.String())
+	return ascii.TrimCSSSpace(b.String())
 }
 
 func writeValues(b *strings.Builder, vals []css.ComponentValue) {

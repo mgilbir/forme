@@ -1,5 +1,6 @@
 // Package ascii compares and case-maps the syntax of CSS and HTML, which folds
-// ASCII and nothing else.
+// ASCII and nothing else, and finds its white space, which is ASCII too (see
+// space.go).
 //
 // CSS Syntax 3 §2.1 and the Infra standard define "ASCII case-insensitive":
 // two strings match when they are equal after A–Z are mapped to a–z, and no

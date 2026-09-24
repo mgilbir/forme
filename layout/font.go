@@ -120,7 +120,7 @@ var standardFamilies = map[string]string{
 }
 
 func (s *standardFonts) Face(family string, bold, italic bool) (*shape.Face, bool) {
-	base, ok := standardFamilies[strings.ToLower(strings.TrimSpace(family))]
+	base, ok := standardFamilies[strings.ToLower(ascii.TrimCSSSpace(family))]
 	if !ok {
 		return nil, false
 	}
@@ -295,9 +295,9 @@ type resolvedFont struct{ face *shape.Face }
 func parseFamilyList(value string) []string {
 	var out []string
 	for _, part := range strings.Split(value, ",") {
-		name := strings.TrimSpace(part)
+		name := ascii.TrimCSSSpace(part)
 		name = strings.Trim(name, `"'`)
-		name = strings.TrimSpace(name)
+		name = ascii.TrimCSSSpace(name)
 		if name != "" {
 			out = append(out, name)
 		}
@@ -308,7 +308,7 @@ func parseFamilyList(value string) []string {
 // isBold reads font-weight. The numeric scale runs 100 to 900 and 400 is
 // normal; the boundary is at 600, which is where every renderer puts it.
 func isBold(value string) bool {
-	switch v := ascii.Lower(strings.TrimSpace(value)); v {
+	switch v := ascii.Lower(ascii.TrimCSSSpace(value)); v {
 	case "bold", "bolder":
 		return true
 	case "", "normal", "lighter":
@@ -326,7 +326,7 @@ func isBold(value string) bool {
 }
 
 func isItalic(value string) bool {
-	switch ascii.Lower(strings.TrimSpace(value)) {
+	switch ascii.Lower(ascii.TrimCSSSpace(value)) {
 	case "italic", "oblique":
 		return true
 	}

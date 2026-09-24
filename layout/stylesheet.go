@@ -244,7 +244,7 @@ func (l *sheetLoader) link(n *html.Node) (authorSheet, bool) {
 		return authorSheet{}, false
 	}
 	href, _ := n.Attr("href")
-	href = strings.TrimSpace(href)
+	href = ascii.TrimSpace(href)
 	if href == "" {
 		// A <link> with no href names nothing, exactly as an <img> with no src
 		// does. There is no reference for a resolver to have refused.
@@ -467,7 +467,7 @@ func (l *sheetLoader) bytes(href string) ([]byte, *loadFailure) {
 // is nothing to report.
 func relIsStylesheet(rel string) bool {
 	var stylesheet, alternate bool
-	for _, f := range strings.Fields(rel) {
+	for _, f := range ascii.Fields(rel) {
 		switch ascii.Lower(f) {
 		case "stylesheet":
 			stylesheet = true
@@ -512,7 +512,7 @@ func (l *sheetLoader) mediaApplies(n *html.Node, what string) bool {
 		l.rec.ReportDetail(Finding{
 			Rule:   RuleUnsupportedValue,
 			Source: AtHTML(n.Offset),
-			Message: what + " applies to " + quoteValue(strings.TrimSpace(media)) +
+			Message: what + " applies to " + quoteValue(ascii.TrimSpace(media)) +
 				", which asks about " + quoteValue(unknown) + " — a question this " +
 				"engine cannot answer, so " + did,
 			Path:     PathOf(n),
@@ -751,11 +751,11 @@ func importReference(prelude []css.ComponentValue) (ref string, media []css.Comp
 			// Everything after the URL that is not one of those is the media
 			// query list, which runs to the end of the prelude.
 			media = prelude[i:]
-			ref = strings.TrimSpace(ref)
+			ref = ascii.TrimCSSSpace(ref)
 			return ref, media, ref != ""
 		}
 	}
-	ref = strings.TrimSpace(ref)
+	ref = ascii.TrimCSSSpace(ref)
 	return ref, nil, have && ref != ""
 }
 
@@ -793,7 +793,7 @@ func (l *sheetLoader) importMedia(media []css.ComponentValue, ref string, offset
 			Rule:   RuleUnsupportedValue,
 			Source: Source{HTMLOffset: -1, CSSOffset: offset, Sheet: sheet},
 			Message: "the import of " + quoteValue(ref) + " applies to " +
-				quoteValue(strings.TrimSpace(pageText(media))) + ", which asks about " +
+				quoteValue(ascii.TrimCSSSpace(pageText(media))) + ", which asks about " +
 				quoteValue(unknown) + " — a question this engine cannot answer, so " + did,
 			Property: "media",
 		})

@@ -137,7 +137,7 @@ const (
 // are refused for the same reason: the grammar allows one.
 func TransformOf(value string) TextTransform {
 	var out TextTransform
-	for _, word := range strings.Fields(ascii.Lower(value)) {
+	for _, word := range ascii.CSSFields(ascii.Lower(value)) {
 		var bit TextTransform
 		switch word {
 		case "none":
@@ -159,7 +159,7 @@ func TransformOf(value string) TextTransform {
 			// "none | math-auto | [ [capitalize|uppercase|lowercase] ||
 			// full-width || full-size-kana ]", so math-auto is its own branch
 			// and shares the alternation with none rather than the set.
-			if len(strings.Fields(ascii.Lower(value))) != 1 {
+			if len(ascii.CSSFields(ascii.Lower(value))) != 1 {
 				return TransformNone
 			}
 			return TransformMathAuto

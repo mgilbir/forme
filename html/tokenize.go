@@ -480,7 +480,7 @@ func (t *tokenizer) findEndTag(name string, i int) int {
 		}
 		at := i + j
 		after := at + 2 + len(name)
-		if after >= len(t.src) || t.src[after] == '>' || isSpace(t.src[after]) || t.src[after] == '/' {
+		if after >= len(t.src) || t.src[after] == '>' || ascii.IsSpace(t.src[after]) || t.src[after] == '/' {
 			return at
 		}
 		i = at + 1
@@ -737,7 +737,7 @@ func (t *tokenizer) attribute(tag string) Attribute {
 	// what every browser shows. Reported once for the value.
 	start := t.pos
 	reported := false
-	for t.pos < len(t.src) && !isSpace(t.src[t.pos]) && t.src[t.pos] != '>' {
+	for t.pos < len(t.src) && !ascii.IsSpace(t.src[t.pos]) && t.src[t.pos] != '>' {
 		switch c := t.src[t.pos]; c {
 		case '"', '\'', '<', '=', '`':
 			if !reported {
@@ -783,7 +783,7 @@ func (t *tokenizer) readName() string {
 	// The folding is ASCII's and only ASCII's (see internal/ascii). strings.ToLower
 	// is Unicode's, and it would make a KELVIN SIGN the letter k: "<X\u212ABD>"
 	// would open an element "xkbd" that nobody wrote.
-	for t.pos < len(t.src) && !isSpace(t.src[t.pos]) && t.src[t.pos] != '/' && t.src[t.pos] != '>' {
+	for t.pos < len(t.src) && !ascii.IsSpace(t.src[t.pos]) && t.src[t.pos] != '/' && t.src[t.pos] != '>' {
 		t.pos++
 	}
 	return t.nuls(ascii.Lower(t.src[start:t.pos]), start, "a tag name", nulReplaced)
@@ -802,7 +802,7 @@ func (t *tokenizer) readAttrName(tag string) string {
 	reported := false
 	for t.pos < len(t.src) {
 		c := t.src[t.pos]
-		if isSpace(c) || c == '>' || c == '/' || c == '=' && t.pos > start {
+		if ascii.IsSpace(c) || c == '>' || c == '/' || c == '=' && t.pos > start {
 			break
 		}
 		if (c == '"' || c == '\'' || c == '<' || c == '=') && !reported {
@@ -817,13 +817,9 @@ func (t *tokenizer) readAttrName(tag string) string {
 }
 
 func (t *tokenizer) skipSpace() {
-	for t.pos < len(t.src) && isSpace(t.src[t.pos]) {
+	for t.pos < len(t.src) && ascii.IsSpace(t.src[t.pos]) {
 		t.pos++
 	}
-}
-
-func isSpace(c byte) bool {
-	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f'
 }
 
 func isNameStart(c byte) bool {

@@ -1,8 +1,6 @@
 package style
 
 import (
-	"strings"
-
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/internal/ascii"
 )
@@ -116,7 +114,7 @@ func unimplementedValueReason(name string, vals []css.ComponentValue) (value, re
 	if !listed {
 		return "", "", false
 	}
-	value = ascii.Lower(strings.TrimSpace(serialize(vals)))
+	value = ascii.Lower(ascii.TrimCSSSpace(serialize(vals)))
 	if !entry.values[value] {
 		return "", "", false
 	}

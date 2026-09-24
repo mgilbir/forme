@@ -1,8 +1,6 @@
 package paragraph
 
 import (
-	"strings"
-
 	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/internal/charprop"
 )
@@ -55,7 +53,7 @@ type SpacingTrim struct {
 // whole, so it answers as the initial value does and reports nothing: the
 // element is set as though nobody had written a declaration.
 func SpacingTrimOf(value string) (SpacingTrim, string) {
-	switch ascii.Lower(strings.TrimSpace(value)) {
+	switch ascii.Lower(ascii.TrimCSSSpace(value)) {
 	case "space-all":
 		return SpacingTrim{}, ""
 	case "space-first":

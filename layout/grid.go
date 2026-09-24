@@ -508,7 +508,7 @@ type gridAreas struct {
 // nothing, and guessing at what was meant would put boxes somewhere no
 // stylesheet asked for.
 func (l *layouter) areasOf(b *Box) (gridAreas, bool) {
-	raw := strings.TrimSpace(b.Style.Get("grid-template-areas"))
+	raw := ascii.TrimCSSSpace(b.Style.Get("grid-template-areas"))
 	if raw == "" || ascii.EqualFold(raw, "none") {
 		return gridAreas{}, true
 	}
@@ -518,7 +518,7 @@ func (l *layouter) areasOf(b *Box) (gridAreas, bool) {
 		if len(v) != 1 || !v[0].IsToken() || v[0].Token.Kind != css.String {
 			return gridAreas{}, false
 		}
-		cells := strings.Fields(v[0].Token.Value)
+		cells := ascii.CSSFields(v[0].Token.Value)
 		if len(cells) == 0 {
 			return gridAreas{}, false
 		}
@@ -774,13 +774,13 @@ func placementFrom(from, to gridLine) (gridPlacement, bool) {
 // without regard to case and a name with it: a name is a <custom-ident>, and
 // the areas it is matched against were written with theirs.
 func lineValue(raw string, resolve func(string) (int, bool)) (gridLine, bool) {
-	value := strings.TrimSpace(raw)
+	value := ascii.TrimCSSSpace(raw)
 	if value == "" || ascii.EqualFold(value, "auto") {
 		return gridLine{}, true
 	}
 	if len(value) >= 4 && ascii.EqualFold(value[:4], "span") &&
 		(len(value) == 4 || value[4] == ' ' || value[4] == '\t' || value[4] == '\n') {
-		rest := strings.TrimSpace(value[4:])
+		rest := ascii.TrimCSSSpace(value[4:])
 		if rest == "" {
 			// "span" on its own is "span 1".
 			return gridLine{span: 1}, true
@@ -1211,7 +1211,7 @@ type gridFlow struct{ column, dense bool }
 // either alone.
 func (l *layouter) autoFlow(b *Box) gridFlow {
 	var out gridFlow
-	for _, word := range strings.Fields(trimmedLower(b.Style.Get("grid-auto-flow"))) {
+	for _, word := range ascii.CSSFields(trimmedLower(b.Style.Get("grid-auto-flow"))) {
 		switch word {
 		case "column":
 			out.column = true
@@ -1770,7 +1770,7 @@ func (l *layouter) columnAsk(it *gridItem) trackAsk {
 		return a
 	}
 	a.minimum = it.horizontal()
-	if l.isAuto(b, "min-width") || strings.TrimSpace(b.Style.Get("min-width")) == "" {
+	if l.isAuto(b, "min-width") || ascii.TrimCSSSpace(b.Style.Get("min-width")) == "" {
 		a.automatic = !isScrollContainer(b.Style)
 		return a
 	}
@@ -2686,7 +2686,7 @@ func (l *layouter) gridGap(b *Box, property string, basis style.Unit, definite b
 func (l *layouter) trackList(b *Box, property string, width style.Unit,
 	room trackRoom) (tracks []gridTrack, fit autoFit, ok bool) {
 
-	raw := strings.TrimSpace(b.Style.Get(property))
+	raw := ascii.TrimCSSSpace(b.Style.Get(property))
 	if raw == "" || ascii.EqualFold(raw, "none") {
 		return nil, autoFit{}, true
 	}

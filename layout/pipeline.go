@@ -466,7 +466,7 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 		}
 		if gap := parseDisplay(cs.Get("display")).gap; gap != displayGapNone &&
 			unlaidBoxIsNotTheBoxAsked(n, cs, styles, pseudo, gap, &scope, n == root) {
-			value := ascii.Lower(strings.TrimSpace(cs.Get("display")))
+			value := ascii.Lower(ascii.TrimCSSSpace(cs.Get("display")))
 			rec.ReportDetail(Finding{
 				Rule:   RuleUnsupportedValue,
 				Source: AtHTML(n.Offset),
@@ -485,7 +485,7 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 			if gap == displayGapNone || !pseudoIsNotTheBoxAsked(n, cs, pcs, gap, &scope) {
 				continue
 			}
-			value := ascii.Lower(strings.TrimSpace(pcs.Get("display")))
+			value := ascii.Lower(ascii.TrimCSSSpace(pcs.Get("display")))
 			rec.ReportDetail(Finding{
 				Rule:   RuleUnsupportedValue,
 				Source: AtHTML(n.Offset),
@@ -505,8 +505,8 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 		// orient it is a row in a browser and a stack of blocks here, and that
 		// went unsaid: a navigation bar written the old way came out as one
 		// item per line with nothing to show which of the two the page was.
-		if ascii.EqualFold(strings.TrimSpace(cs.Get("display")), "-webkit-box") &&
-			!ascii.EqualFold(strings.TrimSpace(cs.Get("-webkit-box-orient")), "vertical") {
+		if ascii.EqualFold(ascii.TrimCSSSpace(cs.Get("display")), "-webkit-box") &&
+			!ascii.EqualFold(ascii.TrimCSSSpace(cs.Get("-webkit-box-orient")), "vertical") {
 			rec.ReportDetail(Finding{
 				Rule:   RuleUnsupportedValue,
 				Source: AtHTML(n.Offset),
@@ -524,7 +524,7 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 		// falls back to static, which is where the box would sit before any
 		// scrolling had happened — the right half of the answer, and silent
 		// about the other half unless this says so.
-		if ascii.EqualFold(strings.TrimSpace(cs.Get("position")), "sticky") {
+		if ascii.EqualFold(ascii.TrimCSSSpace(cs.Get("position")), "sticky") {
 			rec.ReportDetail(Finding{
 				Rule:   RuleUnsupportedValue,
 				Source: AtHTML(n.Offset),
@@ -641,7 +641,7 @@ func blockifiedOnItsOwn(cs style.ComputedStyle) bool {
 func itemOfItsParent(up *html.Node, styles map[*html.Node]style.ComputedStyle) bool {
 	for ; up != nil && up.Type == html.ElementNode; up = up.Parent {
 		cs := styles[up]
-		if ascii.EqualFold(strings.TrimSpace(cs.Get("display")), "contents") {
+		if ascii.EqualFold(ascii.TrimCSSSpace(cs.Get("display")), "contents") {
 			continue
 		}
 		return isFlexOrGridContainer(cs)
@@ -826,11 +826,11 @@ func pathPart(n *html.Node) string {
 		// The first class, found within a window: a class list that opens with
 		// more white space than that names nothing a reader would recognise.
 		start := 0
-		for start < len(class) && start < pathPartBytes && isHTMLSpace(class[start]) {
+		for start < len(class) && start < pathPartBytes && ascii.IsSpace(class[start]) {
 			start++
 		}
 		end := start
-		for end < len(class) && end-start <= pathPartBytes && !isHTMLSpace(class[end]) {
+		for end < len(class) && end-start <= pathPartBytes && !ascii.IsSpace(class[end]) {
 			end++
 		}
 		if end > start {
@@ -853,10 +853,4 @@ func cutAt(s string, n int) int {
 		n--
 	}
 	return n
-}
-
-// isHTMLSpace is HTML's ASCII white space, which is what separates the tokens
-// of a class list.
-func isHTMLSpace(c byte) bool {
-	return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r'
 }

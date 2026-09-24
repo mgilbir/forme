@@ -300,9 +300,9 @@ func (d *documentFonts) FaceForFamily(family, text string, bold, italic bool) (*
 // back false, because a family whose every face excludes the text has nothing to
 // offer and the next family in the document's list should be asked.
 func (d *documentFonts) faceFor(family, text string, bold, italic bool) (*shape.Face, bool) {
-	key := strings.ToLower(strings.TrimSpace(family))
+	key := strings.ToLower(ascii.TrimCSSSpace(family))
 	key = strings.Trim(key, `"'`)
-	key = strings.TrimSpace(key)
+	key = ascii.TrimCSSSpace(key)
 	candidates := d.byFamily[key]
 	if len(candidates) == 0 {
 		// A family the document did not define is the caller's, and the
@@ -672,7 +672,7 @@ func parseSrcEntry(vals []css.ComponentValue) (fontSource, bool) {
 			if !ok {
 				// local() with a bare unquoted name is legal and common:
 				// local(Ahem). The name is the concatenation of the idents.
-				name = strings.TrimSpace(descriptorFamily(v.Values))
+				name = ascii.TrimCSSSpace(descriptorFamily(v.Values))
 				if name == "" {
 					return fontSource{}, false
 				}
@@ -685,9 +685,9 @@ func parseSrcEntry(vals []css.ComponentValue) (fontSource, bool) {
 			}
 			f, ok := singleString(v.Values)
 			if !ok {
-				f = strings.TrimSpace(descriptorFamily(v.Values))
+				f = ascii.TrimCSSSpace(descriptorFamily(v.Values))
 			}
-			out.format = ascii.Lower(strings.TrimSpace(f))
+			out.format = ascii.Lower(ascii.TrimCSSSpace(f))
 		case v.IsFunction() && ascii.EqualFold(v.Token.Value, "tech"):
 			// A capability list — colour tables, variations, palettes. It
 			// narrows when an entry may be used and never widens it, so an
@@ -949,7 +949,7 @@ func descriptorFamily(vals []css.ComponentValue) string {
 			return ""
 		}
 	}
-	return strings.TrimSpace(strings.Join(parts, " "))
+	return ascii.TrimCSSSpace(strings.Join(parts, " "))
 }
 
 // parseWeightDescriptor reads the font-weight descriptor as a range.
@@ -1067,7 +1067,7 @@ type unicodeSpan struct{ lo, hi rune }
 func parseUnicodeRange(vals []css.ComponentValue) ([]unicodeSpan, bool) {
 	var out []unicodeSpan
 	for _, item := range splitOnComma(vals) {
-		text := strings.TrimSpace(rawText(item))
+		text := ascii.TrimCSSSpace(rawText(item))
 		if text == "" {
 			return nil, false
 		}

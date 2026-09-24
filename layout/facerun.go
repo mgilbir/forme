@@ -381,7 +381,7 @@ func (l *layouter) familyListIsRestricted(b *Box) bool {
 	}
 	restricted := false
 	for _, family := range parseFamilyList(families) {
-		key := strings.TrimSpace(strings.Trim(strings.TrimSpace(strings.ToLower(family)), `"'`))
+		key := ascii.TrimCSSSpace(strings.Trim(ascii.TrimCSSSpace(strings.ToLower(family)), `"'`))
 		for _, c := range set.byFamily[key] {
 			if len(c.rule.ranges) > 0 {
 				restricted = true
@@ -440,7 +440,7 @@ func namesOnlyGenericFamilies(list string) bool {
 		return true
 	}
 	for _, name := range names {
-		if !genericFamilies[ascii.Lower(strings.TrimSpace(name))] {
+		if !genericFamilies[ascii.Lower(ascii.TrimCSSSpace(name))] {
 			return false
 		}
 	}

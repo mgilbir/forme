@@ -183,7 +183,7 @@ func withinMins(points []int, n, left, right int) []int {
 // breaking at all, and the alternative is a second table for a few hundred
 // words.
 func HyphenationOf(tag string) Language {
-	tag = ascii.Lower(strings.TrimSpace(tag))
+	tag = ascii.Lower(ascii.TrimSpace(tag))
 	if tag == "" {
 		return ""
 	}
@@ -288,7 +288,7 @@ func (s *hyphenSource) table() *hyphenPatterns {
 			exceptions: make(map[string][]int, 16),
 		}
 		for _, p := range strings.Split(s.patterns, "\n") {
-			if p = strings.TrimSpace(p); p == "" {
+			if p = ascii.TrimSpace(p); p == "" {
 				continue
 			}
 			letters, values := splitPattern(p)
@@ -298,7 +298,7 @@ func (s *hyphenSource) table() *hyphenPatterns {
 			}
 		}
 		for _, w := range strings.Split(s.exceptions, "\n") {
-			if w = strings.TrimSpace(w); w == "" {
+			if w = ascii.TrimSpace(w); w == "" {
 				continue
 			}
 			word, points := splitException(w)

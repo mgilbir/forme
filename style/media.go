@@ -174,7 +174,7 @@ func mediaTypeMatches(name string) (bool, string) {
 // comes back so that the drop can be reported rather than silent.
 func mediaFeature(vals []css.ComponentValue, m Media) (bool, string) {
 	parts := splitOnColon(vals)
-	name := ascii.Lower(strings.TrimSpace(serialize(parts[0])))
+	name := ascii.Lower(ascii.TrimCSSSpace(serialize(parts[0])))
 	if len(parts) == 1 {
 		// A feature written with no value is true when the feature is not zero,
 		// which for a length is a page that has one.
@@ -198,7 +198,7 @@ func mediaFeature(vals []css.ComponentValue, m Media) (bool, string) {
 	case "height":
 		against = m.Height
 	case "orientation":
-		want := ascii.Lower(strings.TrimSpace(serialize(parts[1])))
+		want := ascii.Lower(ascii.TrimCSSSpace(serialize(parts[1])))
 		switch want {
 		case "portrait":
 			return m.Height >= m.Width, ""

@@ -1,8 +1,6 @@
 package layout
 
 import (
-	"strings"
-
 	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
@@ -581,7 +579,7 @@ func (l *layouter) wrapperIsAnItem(table *Box) bool {
 // keywords are case-insensitive and a stylesheet is free to write "BOTTOM".
 // Compared as written, such a declaration was silently the initial value.
 func captionAtBottom(b *Box) bool {
-	return ascii.EqualFold(strings.TrimSpace(b.Style.Get("caption-side")), "bottom")
+	return ascii.EqualFold(ascii.TrimCSSSpace(b.Style.Get("caption-side")), "bottom")
 }
 
 // properTableChild is §17.2.1's own list: the boxes a table may hold directly.

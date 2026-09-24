@@ -2,7 +2,6 @@ package layout
 
 import (
 	"strconv"
-	"strings"
 
 	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
@@ -126,7 +125,7 @@ func (p PositionScheme) outOfFlow() bool {
 // in this property that genuinely needs a scroll position, so it is the one this
 // engine cannot answer.
 func positionOf(cs style.ComputedStyle) PositionScheme {
-	switch ascii.Lower(strings.TrimSpace(cs.Get("position"))) {
+	switch ascii.Lower(ascii.TrimCSSSpace(cs.Get("position"))) {
 	case "relative":
 		return PositionRelative
 	case "absolute":
@@ -143,7 +142,7 @@ func positionOf(cs style.ComputedStyle) PositionScheme {
 // an invalid declaration, and the initial value stands — which is what a browser
 // does and what keeps a typo from silently reordering a page.
 func zIndexOf(cs style.ComputedStyle) (int, bool) {
-	raw := strings.TrimSpace(cs.Get("z-index"))
+	raw := ascii.TrimCSSSpace(cs.Get("z-index"))
 	if raw == "" || ascii.EqualFold(raw, "auto") {
 		return 0, true
 	}

@@ -1,8 +1,6 @@
 package layout
 
 import (
-	"strings"
-
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/shape"
@@ -2369,7 +2367,7 @@ func (l *layouter) isAuto(b *Box, property string) bool {
 
 // parseLength reads one of a box's computed values, memoized.
 func (l *layouter) parseLength(b *Box, property string) (style.Length, bool) {
-	raw := strings.TrimSpace(b.Style.Get(property))
+	raw := ascii.TrimCSSSpace(b.Style.Get(property))
 	if raw == "" {
 		return style.Length{}, false
 	}
@@ -2676,7 +2674,7 @@ func (l *layouter) outlineWidth(b *Box) style.Unit {
 	if w == 0 {
 		return 0
 	}
-	if ascii.EqualFold(strings.TrimSpace(b.Style.Get("outline-color")), "invert") {
+	if ascii.EqualFold(ascii.TrimCSSSpace(b.Style.Get("outline-color")), "invert") {
 		l.rec.ReportDetail(Finding{
 			Rule:   RuleUnsupportedValue,
 			Source: AtHTML(offsetOf(b)),
@@ -2748,7 +2746,7 @@ func (l *layouter) paddingOf(b *Box, containing style.Unit) Edges {
 }
 
 func noBorder(styleValue string) bool {
-	switch ascii.Lower(strings.TrimSpace(styleValue)) {
+	switch ascii.Lower(ascii.TrimCSSSpace(styleValue)) {
 	case "", "none", "hidden":
 		return true
 	}
@@ -2759,7 +2757,7 @@ func noBorder(styleValue string) bool {
 // leaves to the engine beyond requiring thin <= medium <= thick. These are the
 // values every browser uses.
 func keywordBorderWidth(value string) style.Unit {
-	switch ascii.Lower(strings.TrimSpace(value)) {
+	switch ascii.Lower(ascii.TrimCSSSpace(value)) {
 	case "thin":
 		return mustPx(1)
 	case "thick":

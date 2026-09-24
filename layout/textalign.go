@@ -1,8 +1,6 @@
 package layout
 
 import (
-	"strings"
-
 	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
@@ -71,7 +69,7 @@ func alignmentOf(b *Box, rtl bool) textAlign {
 // matches — and the line is still the child's, so the two part company there.
 func alignmentFrom(b *Box, rtl, logical bool) textAlign {
 	for {
-		switch ascii.Lower(strings.TrimSpace(b.Style.Get("text-align-all"))) {
+		switch ascii.Lower(ascii.TrimCSSSpace(b.Style.Get("text-align-all"))) {
 		case "right":
 			return alignRight
 		case "center":
@@ -189,7 +187,7 @@ const (
 // the question: "none" is not justification at all and an unreadable value is
 // already being reported.
 func justificationOf(b *Box) (method justifyMethod, auto bool, unhandled string) {
-	switch v := ascii.Lower(strings.TrimSpace(b.Style.Get("text-justify"))); v {
+	switch v := ascii.Lower(ascii.TrimCSSSpace(b.Style.Get("text-justify"))); v {
 	case "none":
 		return justifyNone, false, ""
 	case "", "auto":
@@ -238,7 +236,7 @@ func lineAlignment(b *Box, rtl, last bool) (align textAlign, spread bool) {
 // lastLineAlignment is §7.2's own resolution, without the separate question of
 // whether justification is switched on at all.
 func lastLineAlignment(b *Box, rtl bool) textAlign {
-	switch ascii.Lower(strings.TrimSpace(b.Style.Get("text-align-last"))) {
+	switch ascii.Lower(ascii.TrimCSSSpace(b.Style.Get("text-align-last"))) {
 	case "left":
 		return alignLeft
 	case "right":
@@ -386,7 +384,9 @@ func hangingTail(runs []inlineItem) []bool {
 		if item.AtomicBox != nil || item.Atomic != nil {
 			break
 		}
-		if strings.TrimSpace(item.Text) != "" {
+		if !item.Space {
+			// Text, a hung punctuation mark, or anything else that is not
+			// white space: the run of trailing spaces ends here.
 			break
 		}
 		if !item.Hangs {

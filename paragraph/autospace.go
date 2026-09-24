@@ -1,7 +1,6 @@
 package paragraph
 
 import (
-	"strings"
 	"unicode/utf8"
 
 	"github.com/mgilbir/forme/internal/ascii"
@@ -53,7 +52,7 @@ func (a Autospace) Any() bool { return a.IdeographAlpha || a.IdeographNumeric }
 // wrote a space; only "insert" is implemented, which is the value that adds
 // spacing where there was none, and "replace" is reported.
 func AutospaceOf(value string) (Autospace, string) {
-	value = ascii.Lower(strings.TrimSpace(value))
+	value = ascii.Lower(ascii.TrimCSSSpace(value))
 	if value == "" || value == "normal" {
 		return Autospace{IdeographAlpha: true, IdeographNumeric: true}, ""
 	}
@@ -62,7 +61,7 @@ func AutospaceOf(value string) (Autospace, string) {
 	}
 	var out Autospace
 	unhandled := ""
-	for _, word := range strings.Fields(value) {
+	for _, word := range ascii.CSSFields(value) {
 		switch word {
 		case "ideograph-alpha":
 			out.IdeographAlpha = true

@@ -154,6 +154,15 @@ func (c caseMapping) String() string { return c.where + " calls " + c.call }
 // strings or bytes, by the function it is in.
 func unicodeCaseMappingsIn(t *testing.T, dir string) (found []caseMapping, checked int) {
 	t.Helper()
+	return stringsCallsIn(t, dir, unicodeCaseMappings)
+}
+
+// stringsCallsIn walks the Go files under dir that are not tests or test data
+// and reports every use of one of the named functions of package strings or
+// bytes, by the function it is in. whitespace_test.go asks it for the ones
+// that split and trim on Unicode's white space.
+func stringsCallsIn(t *testing.T, dir string, names map[string]bool) (found []caseMapping, checked int) {
+	t.Helper()
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -211,7 +220,7 @@ func unicodeCaseMappingsIn(t *testing.T, dir string) (found []caseMapping, check
 				if !ok {
 					return true
 				}
-				if p, ok := pkgs[id.Name]; ok && unicodeCaseMappings[sel.Sel.Name] {
+				if p, ok := pkgs[id.Name]; ok && names[sel.Sel.Name] {
 					found = append(found, caseMapping{where, p + "." + sel.Sel.Name})
 				}
 				return true

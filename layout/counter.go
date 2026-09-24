@@ -265,7 +265,7 @@ type contentPlan struct {
 // stylesheet's and is shared by every element it applies to, so the walk reads
 // each distinct one once. See computeCounters.
 func planContent(raw string) contentPlan {
-	trimmed := strings.TrimSpace(raw)
+	trimmed := ascii.TrimCSSSpace(raw)
 	switch ascii.Lower(trimmed) {
 	case "", "normal", "none":
 		return contentPlan{}
@@ -639,7 +639,7 @@ func generatesPseudoBox(cs style.ComputedStyle) bool {
 	if displayIsNone(cs) {
 		return false
 	}
-	switch ascii.Lower(strings.TrimSpace(cs.Get("content"))) {
+	switch ascii.Lower(ascii.TrimCSSSpace(cs.Get("content"))) {
 	case "", "normal", "none":
 		return false
 	}
@@ -664,7 +664,7 @@ type counterRequest struct {
 // A name may be followed by a number; when it is not, the default applies — zero
 // for a reset and one for an increment, which is why the caller passes it.
 func parseCounterList(raw string, byDefault int) []counterRequest {
-	raw = strings.TrimSpace(raw)
+	raw = ascii.TrimCSSSpace(raw)
 	if raw == "" || ascii.EqualFold(raw, "none") {
 		return nil
 	}
@@ -836,7 +836,7 @@ func formatCounter(value int, listStyle string) string {
 	if listStyle == "" {
 		listStyle = "decimal"
 	}
-	if ascii.EqualFold(strings.TrimSpace(listStyle), "none") {
+	if ascii.EqualFold(ascii.TrimCSSSpace(listStyle), "none") {
 		return ""
 	}
 	if text := markerText(listStyle, value); text != "" {

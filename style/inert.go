@@ -1,8 +1,6 @@
 package style
 
 import (
-	"strings"
-
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/internal/ascii"
 )
@@ -326,7 +324,7 @@ func isInertDeclaration(name string, vals []css.ComponentValue) bool {
 	if !ok {
 		return false
 	}
-	value := ascii.Lower(strings.TrimSpace(serialize(vals)))
+	value := ascii.Lower(ascii.TrimCSSSpace(serialize(vals)))
 	if value == "" {
 		return false
 	}

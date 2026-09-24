@@ -104,7 +104,7 @@ const maxContentLength = 1 << 20
 func resolveContent(raw string, el *html.Node, counters counterValues,
 	quotes quoteList, depth int) contentValue {
 
-	trimmed := strings.TrimSpace(raw)
+	trimmed := ascii.TrimCSSSpace(raw)
 	switch ascii.Lower(trimmed) {
 	case "", "normal", "none":
 		return contentValue{none: true}
@@ -248,7 +248,7 @@ func resolveContent(raw string, el *html.Node, counters counterValues,
 				}
 				ref = s
 			}
-			if ref = strings.TrimSpace(ref); ref == "" {
+			if ref = ascii.TrimSpace(ref); ref == "" {
 				// url("") names nothing, exactly as an <img> with an empty src
 				// does. There is no reference for a resolver to have refused,
 				// and nothing to report.
@@ -316,7 +316,7 @@ func (b *boxBuilder) addGenerated(box *Box, n *html.Node, name string, fontSize 
 		return
 	}
 	kids := []*Box{g}
-	if ascii.EqualFold(strings.TrimSpace(g.Style.Get("display")), "contents") {
+	if ascii.EqualFold(ascii.TrimCSSSpace(g.Style.Get("display")), "contents") {
 		if g.ContentImage == "" {
 			kids = g.Children
 		} else {

@@ -143,9 +143,15 @@ const (
 //
 // A missing or unrecognised type is "text", which is what HTML says and is what
 // makes "<input>" a text field.
+//
+// The type is an enumerated attribute, whose keywords HTML matches ASCII
+// case-insensitively and nothing more: the value is not trimmed, so
+// type=" checkbox" is no keyword and is the text field its invalid value
+// default says, which is what every browser draws. Trimmed — and by Unicode's
+// white space, so a no-break space went too — it was a checkbox.
 func inputTypeOf(n *html.Node) string {
 	v, _ := n.Attr("type")
-	t := ascii.Lower(strings.TrimSpace(v))
+	t := ascii.Lower(v)
 	switch t {
 	case "text", "password", "search", "tel", "url", "email", "number",
 		"date", "month", "week", "time", "datetime-local",
@@ -242,7 +248,7 @@ func (b *boxBuilder) positiveAttr(n *html.Node, name string, fallback, limit int
 	if v > limit {
 		asks := strconv.Itoa(v)
 		if v >= html.MaxInteger {
-			asks = "a number of " + strconv.Itoa(len(strings.TrimSpace(raw))) + " characters"
+			asks = "a number of " + strconv.Itoa(len(ascii.TrimSpace(raw))) + " characters"
 		}
 		b.rec.ReportDetail(Finding{
 			Rule:   RuleLimit,
@@ -674,7 +680,7 @@ func preservedInAControl(n *html.Node, value string) string {
 	if n == nil || controlKindOf(n.Parent) != controlTextArea {
 		return value
 	}
-	switch ascii.Lower(strings.TrimSpace(value)) {
+	switch ascii.Lower(ascii.TrimCSSSpace(value)) {
 	case "preserve", "break-spaces":
 		// Already keeps every space. "break-spaces" keeps them *and* wraps on
 		// them, which is a value an author may reasonably write on a textarea

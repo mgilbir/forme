@@ -2213,7 +2213,7 @@ func (p *painter) color(b *Box, property string) (style.RGBA, bool) {
 	if b == nil {
 		return style.RGBA{}, false
 	}
-	raw := strings.TrimSpace(b.Style.Get(property))
+	raw := ascii.TrimCSSSpace(b.Style.Get(property))
 	if raw == "" {
 		return style.RGBA{}, false
 	}
@@ -2246,7 +2246,7 @@ func (p *painter) color(b *Box, property string) (style.RGBA, bool) {
 // question once, of the root and of <body>, when it decides whether either
 // declares a background to give the canvas.
 func parseColorValue(raw string) (style.RGBA, bool) {
-	raw = strings.TrimSpace(raw)
+	raw = ascii.TrimCSSSpace(raw)
 	if raw == "" || ascii.EqualFold(raw, "currentcolor") {
 		return style.RGBA{}, false
 	}

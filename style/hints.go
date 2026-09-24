@@ -371,7 +371,7 @@ func attributeHints(name string, n *html.Node) map[string][]css.ComponentValue {
 // itself, so reading one as a file would have every document with an empty
 // attribute fetch its own markup and fail to decode it.
 func urlHintValue(raw string) (string, bool) {
-	ref := strings.TrimSpace(raw)
+	ref := ascii.TrimSpace(raw)
 	if ref == "" || strings.ContainsAny(ref, "\"\\\n\r") {
 		return "", false
 	}
@@ -388,7 +388,7 @@ func urlHintValue(raw string) (string, bool) {
 func familyValue(raw string) (string, bool) {
 	var out []string
 	for _, part := range strings.Split(raw, ",") {
-		name := strings.TrimSpace(part)
+		name := ascii.TrimSpace(part)
 		if name == "" || strings.ContainsAny(name, "\"\\") {
 			// A quote or a backslash in an attribute cannot be quoted here
 			// without an escaping pass, and a family by that name is not one
@@ -587,7 +587,7 @@ func cellHints(n *html.Node) map[string][]css.ComponentValue {
 // document written in 1998 looks like, and it is the reason the attribute is
 // worth reading at all.
 func valignValue(raw string) (string, bool) {
-	switch ascii.Lower(strings.TrimSpace(raw)) {
+	switch ascii.Lower(ascii.TrimSpace(raw)) {
 	case "top":
 		return "top", true
 	case "middle", "center":
@@ -896,7 +896,7 @@ func counterSetValue(raw string) (string, bool) {
 // are already CSS; everything else is written as the #rrggbb it came to.
 func colourValue(raw string) (string, bool) {
 	// 1-3: empty, only white space, or "transparent" is not a colour.
-	s := strings.Trim(raw, " \t\n\f\r")
+	s := ascii.TrimSpace(raw)
 	if s == "" || ascii.EqualFold(s, "transparent") {
 		return "", false
 	}
@@ -989,7 +989,7 @@ func colourValue(raw string) (string, bool) {
 // read, and is the safe direction: a <br> that clears nothing is the <br> the
 // document would have had without the attribute at all.
 func clearValue(raw string) (string, bool) {
-	switch ascii.Lower(strings.TrimSpace(raw)) {
+	switch ascii.Lower(ascii.TrimSpace(raw)) {
 	case "left":
 		return "left", true
 	case "right":

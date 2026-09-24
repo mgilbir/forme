@@ -188,7 +188,7 @@ func svgContentOf(root xml.StartElement, rects []svgRect, as svgAs) *ReplacedCon
 	// that changes the mapping in a way this can express: the rest differ in
 	// *where* a uniformly scaled picture sits, and the default — xMidYMid meet —
 	// is what uniform means here.
-	if strings.HasPrefix(strings.TrimSpace(ascii.Lower(attrOf(root, "preserveAspectRatio"))), "none") {
+	if strings.HasPrefix(ascii.TrimSpace(ascii.Lower(attrOf(root, "preserveAspectRatio"))), "none") {
 		pic.uniform = false
 	}
 
@@ -409,7 +409,7 @@ func svgPresentation(e xml.StartElement, from svgInherited,
 	p, shown := from, true
 	for _, a := range e.Attr {
 		k := svgAttrKindOf(a.Name, kind)
-		v := strings.TrimSpace(a.Value)
+		v := ascii.TrimCSSSpace(a.Value)
 		inherit := ascii.EqualFold(v, "inherit")
 		switch k {
 		case svgInert, svgOwn:
@@ -481,7 +481,7 @@ func svgAlphaValue(v string) (float64, bool) {
 	if strings.HasSuffix(v, "%") {
 		v, scale = strings.TrimSuffix(v, "%"), 100
 	}
-	n, ok := parseNumber(strings.TrimSpace(v))
+	n, ok := parseNumber(ascii.TrimSpace(v))
 	if !ok {
 		return 0, false
 	}
@@ -556,7 +556,7 @@ var svgAttributes = func() map[string]svgAttrKind {
 		filter:refuses style:refuses rx:refuses ry:refuses
 		requiredExtensions:refuses requiredFeatures:refuses systemLanguage:refuses
 	`, "\n") {
-		for _, f := range strings.Fields(line) {
+		for _, f := range ascii.Fields(line) {
 			name, kind, _ := strings.Cut(f, ":")
 			out[ascii.Lower(name)] = map[string]svgAttrKind{
 				"fill": svgFill, "stroke": svgStroke, "visibility": svgVisibility,
@@ -624,7 +624,7 @@ func svgAttrKindOf(n xml.Name, own func(string) (svgAttrKind, bool)) svgAttrKind
 // percentage of the viewport. An absent one is zero, which is the initial value
 // of every one of x, y, width and height.
 func svgCoord(raw string) (svgLen, bool) {
-	s := strings.TrimSpace(raw)
+	s := ascii.TrimSpace(raw)
 	if s == "" {
 		return svgLen{}, true
 	}
@@ -768,7 +768,7 @@ func unitOf(px float64) style.Unit {
 // svgFillColour reads a fill attribute. An absent fill is black, which is SVG's
 // initial value and not a guess.
 func svgFillColour(raw string) (style.RGBA, bool) {
-	s := strings.TrimSpace(raw)
+	s := ascii.TrimCSSSpace(raw)
 	if s == "" {
 		return style.RGBA{A: 1}, true // black
 	}
@@ -802,7 +802,7 @@ func attrOf(e xml.StartElement, name string) string {
 // is read as absent, which is what makes "width: 100%" on an SVG give the box no
 // width of its own rather than a nonsensical one.
 func svgLength(raw string) (style.Unit, bool) {
-	s := strings.TrimSpace(raw)
+	s := ascii.TrimSpace(raw)
 	if s == "" || strings.HasSuffix(s, "%") {
 		return 0, false
 	}
@@ -814,7 +814,7 @@ func svgLength(raw string) (style.Unit, bool) {
 			if unit != "px" {
 				return 0, false
 			}
-			s = strings.TrimSpace(s[:len(s)-2])
+			s = ascii.TrimSpace(s[:len(s)-2])
 			break
 		}
 	}
@@ -843,11 +843,11 @@ func svgLength(raw string) (style.Unit, bool) {
 // and a negative one is not a length, and both would otherwise arrive as a
 // fraction the sizing would multiply an area by.
 func svgPercent(raw string) (float64, bool) {
-	s := strings.TrimSpace(raw)
+	s := ascii.TrimSpace(raw)
 	if !strings.HasSuffix(s, "%") {
 		return 0, false
 	}
-	v, ok := parseNumber(strings.TrimSpace(strings.TrimSuffix(s, "%")))
+	v, ok := parseNumber(ascii.TrimSpace(strings.TrimSuffix(s, "%")))
 	if !ok || v <= 0 {
 		return 0, false
 	}

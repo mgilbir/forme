@@ -1,10 +1,10 @@
 package layout
 
 import (
-	"strings"
 	"unicode/utf8"
 
 	"github.com/mgilbir/forme/html"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/internal/charprop"
 	"github.com/mgilbir/forme/segment"
 	"github.com/mgilbir/forme/style"
@@ -150,7 +150,7 @@ func firstLetterDeclared(fl, own style.ComputedStyle) map[string]string {
 // naming one is one thing the author has to know and not one per paragraph.
 func (b *boxBuilder) reportFirstLetter(n *html.Node, box *Box, fl style.ComputedStyle) {
 	for _, name := range firstLetterReports {
-		v := strings.TrimSpace(fl.Get(name))
+		v := ascii.TrimCSSSpace(fl.Get(name))
 		if v == "" || v == style.Undeclared(name, box.Style.Get(name)) {
 			continue
 		}
@@ -209,7 +209,7 @@ func firstTextBox(box *Box) (parent *Box, at int) {
 			return nil, 0
 		}
 		if c.IsText() {
-			if strings.TrimSpace(c.Text) == "" {
+			if blank(c.Text) {
 				// White space alone is not the first letter and does not end
 				// the search: "<p> <span>x</span>" has its letter in the span.
 				continue

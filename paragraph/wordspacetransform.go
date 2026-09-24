@@ -73,7 +73,7 @@ const (
 // are no virtual expandable separators". See PhrasesUnfound for what is left to
 // report, which is a language that has phrases and no model here.
 func WordSpaceTransformOf(value string) WordSpaceTransform {
-	words := strings.Fields(ascii.Lower(strings.TrimSpace(value)))
+	words := ascii.CSSFields(ascii.Lower(value))
 	if len(words) == 1 && words[0] == "none" {
 		return WordSpaceTransform{}
 	}

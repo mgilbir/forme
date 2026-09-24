@@ -71,7 +71,7 @@ func (w WritingSystem) ChineseOrJapanese() bool {
 // script. That is the same carve-out the first sentence of the rule makes by
 // name: Korean is written with spaces between its words.
 func WritingSystemOf(tag string) WritingSystem {
-	tag = ascii.Lower(strings.TrimSpace(tag))
+	tag = ascii.Lower(ascii.TrimSpace(tag))
 	if tag == "" {
 		return WritingSystemOther
 	}

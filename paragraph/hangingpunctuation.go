@@ -1,8 +1,6 @@
 package paragraph
 
 import (
-	"strings"
-
 	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/internal/charprop"
 )
@@ -75,7 +73,7 @@ func HangingPunctuationOf(value string) HangingPunctuation {
 	var out HangingPunctuation
 	var end string
 	seenFirst, seenLast := false, false
-	for _, word := range strings.Fields(ascii.Lower(value)) {
+	for _, word := range ascii.CSSFields(ascii.Lower(value)) {
 		switch word {
 		case "none":
 			// Valid alone and invalid beside anything else, and both answers are

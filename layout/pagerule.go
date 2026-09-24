@@ -203,7 +203,7 @@ func readPageRule(p pendingPage, base PageSize, got *pageDeclarations, order *in
 		rec.ReportDetail(Finding{
 			Rule:     RuleUnsupportedAtRule,
 			Source:   p.at(),
-			Message:  "@page " + quoteValue(strings.TrimSpace(pageText(p.rule.Prelude))) + " selects some pages rather than all of them, which this engine does not do; the rule was not applied",
+			Message:  "@page " + quoteValue(ascii.TrimCSSSpace(pageText(p.rule.Prelude))) + " selects some pages rather than all of them, which this engine does not do; the rule was not applied",
 			Property: "@page",
 		})
 		return
@@ -291,7 +291,7 @@ func badPageSize(rec *Recorder, p pendingPage, d css.Declaration) {
 	rec.ReportDetail(Finding{
 		Rule:   rule,
 		Source: Source{HTMLOffset: -1, CSSOffset: d.Offset, Sheet: p.sheet},
-		Message: "the @page size " + quoteValue(strings.TrimSpace(pageText(d.Value))) +
+		Message: "the @page size " + quoteValue(ascii.TrimCSSSpace(pageText(d.Value))) +
 			why + "; the page kept the size it had",
 		Property: "size",
 	})
@@ -317,7 +317,7 @@ func badPageMargin(rec *Recorder, p pendingPage, d css.Declaration) {
 	rec.ReportDetail(Finding{
 		Rule:   rule,
 		Source: Source{HTMLOffset: -1, CSSOffset: d.Offset, Sheet: p.sheet},
-		Message: "the @page " + ascii.Lower(d.Name) + " " + quoteValue(strings.TrimSpace(pageText(d.Value))) +
+		Message: "the @page " + ascii.Lower(d.Name) + " " + quoteValue(ascii.TrimCSSSpace(pageText(d.Value))) +
 			why + "; the page kept the margin it had",
 		Property: ascii.Lower(d.Name),
 	})

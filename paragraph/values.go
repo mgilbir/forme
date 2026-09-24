@@ -2,9 +2,9 @@ package paragraph
 
 import (
 	"strconv"
-	"strings"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -17,7 +17,7 @@ import (
 // PositiveInteger reads a whole number above zero, which is the only form of
 // either clamp property this engine acts on.
 func PositiveInteger(value string) (int, bool) {
-	s := strings.TrimSpace(value)
+	s := ascii.TrimCSSSpace(value)
 	if s == "" {
 		return 0, false
 	}

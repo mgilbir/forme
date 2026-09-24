@@ -365,7 +365,7 @@ func (p *parser) insertionParent() *Node {
 // two rows of a table was left inside the table instead of in front of it.
 func onlyWhiteSpace(s string) bool {
 	for i := 0; i < len(s); i++ {
-		if !isSpace(s[i]) {
+		if !ascii.IsSpace(s[i]) {
 			return false
 		}
 	}

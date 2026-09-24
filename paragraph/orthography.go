@@ -69,7 +69,7 @@ const (
 // are about. That is the same reading WritingSystemOf makes of the same
 // attribute, and for the same reason — the script decides.
 func OrthographyOf(tag string) Orthography {
-	tag = ascii.Lower(strings.TrimSpace(tag))
+	tag = ascii.Lower(ascii.TrimSpace(tag))
 	if tag == "" {
 		return OrthographyPlain
 	}

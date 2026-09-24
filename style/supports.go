@@ -155,7 +155,7 @@ func supportsDeclaration(name string, value []css.ComponentValue) bool {
 		// A declaration with no value does not parse, so nothing supports it.
 		return false
 	}
-	name = ascii.Lower(strings.TrimSpace(name))
+	name = ascii.Lower(ascii.TrimCSSSpace(name))
 	if strings.HasPrefix(name, "--") {
 		// A custom property is supported by anything that parses CSS, which
 		// §2 says in as many words. This engine parses it and cascades it.
@@ -230,7 +230,7 @@ func trimWhitespace(vals []css.ComponentValue) []css.ComponentValue {
 }
 
 func serializeCondition(vals []css.ComponentValue) string {
-	s := strings.TrimSpace(serialize(vals))
+	s := ascii.TrimCSSSpace(serialize(vals))
 	if s == "" {
 		return "an empty condition"
 	}

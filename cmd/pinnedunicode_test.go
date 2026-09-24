@@ -100,7 +100,7 @@ func TestNoGeneratorAsksPackageUnicode(t *testing.T) {
 // not that they folded by the wrong release. That is a different question: it
 // is asciicase_test.go's, which holds them to internal/ascii. Fields and
 // TrimSpace, which split and trim on Unicode's white space where CSS and HTML
-// name their own, are neither check's yet.
+// name their own, are whitespace_test.go's, which holds them there too.
 
 // unicodeConstants are the identifiers of package unicode that are not a
 // question about a character.

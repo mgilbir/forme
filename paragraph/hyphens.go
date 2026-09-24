@@ -1,8 +1,6 @@
 package paragraph
 
 import (
-	"strings"
-
 	"github.com/mgilbir/forme/internal/ascii"
 )
 
@@ -64,7 +62,7 @@ func (h Hyphens) Soft() bool { return !h.None }
 // does not know. The caller, which knows the language, decides whether there is
 // anything to report. See HyphenatesLanguage, and WordBreakOf.
 func HyphensOf(value string) Hyphens {
-	switch ascii.Lower(strings.TrimSpace(value)) {
+	switch ascii.Lower(ascii.TrimCSSSpace(value)) {
 	case "none":
 		return Hyphens{None: true}
 	case "auto":

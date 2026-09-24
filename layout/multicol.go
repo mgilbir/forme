@@ -5,7 +5,6 @@ import (
 	"slices"
 	"sort"
 	"strconv"
-	"strings"
 
 	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
@@ -150,7 +149,7 @@ func fitCount(available, width, gap style.Unit) int {
 
 // columnCount reads §3.1's property: a positive integer, or auto.
 func columnCount(b *Box) (int, bool) {
-	raw := strings.TrimSpace(b.Style.Get("column-count"))
+	raw := ascii.TrimCSSSpace(b.Style.Get("column-count"))
 	if raw == "" || ascii.EqualFold(raw, "auto") {
 		return 0, false
 	}
@@ -163,7 +162,7 @@ func columnCount(b *Box) (int, bool) {
 
 // columnFillOf reads §3.5's property.
 func columnFillOf(b *Box) columnFill {
-	if ascii.EqualFold(strings.TrimSpace(b.Style.Get("column-fill")), "auto") {
+	if ascii.EqualFold(ascii.TrimCSSSpace(b.Style.Get("column-fill")), "auto") {
 		return columnAuto
 	}
 	return columnBalance
@@ -879,12 +878,12 @@ func refusesToSlice(f *Fragment) bool {
 	if len(f.bgBands) > 0 || f.Outline > 0 {
 		return true
 	}
-	if v := strings.TrimSpace(f.Box.Style.Get("background-image")); v != "" &&
+	if v := ascii.TrimCSSSpace(f.Box.Style.Get("background-image")); v != "" &&
 		!ascii.EqualFold(v, "none") {
 		return true
 	}
 	return ascii.EqualFold(
-		strings.TrimSpace(f.Box.Style.Get("box-decoration-break")), "clone")
+		ascii.TrimCSSSpace(f.Box.Style.Get("box-decoration-break")), "clone")
 }
 
 // canColumn is whether a box's content is of a kind this engine can pour into
@@ -944,7 +943,7 @@ func (l *layouter) subtreeCanColumn(root, b *Box) string {
 
 // spansColumns reads §6.3's column-span.
 func spansColumns(b *Box) bool {
-	return ascii.EqualFold(strings.TrimSpace(b.Style.Get("column-span")), "all")
+	return ascii.EqualFold(ascii.TrimCSSSpace(b.Style.Get("column-span")), "all")
 }
 
 // reportColumns says a box asked for columns and did not get them.
@@ -1132,7 +1131,7 @@ func avoidsBreak(b *Box, property string) bool {
 	if b == nil {
 		return false
 	}
-	switch ascii.Lower(strings.TrimSpace(b.Style.Get(property))) {
+	switch ascii.Lower(ascii.TrimCSSSpace(b.Style.Get(property))) {
 	case "avoid", "avoid-column":
 		return true
 	}
@@ -1163,7 +1162,7 @@ func forcedBreakOf(b *Box, property string) breakKind {
 	if b == nil {
 		return noForcedBreak
 	}
-	switch ascii.Lower(strings.TrimSpace(b.Style.Get(property))) {
+	switch ascii.Lower(ascii.TrimCSSSpace(b.Style.Get(property))) {
 	case "column", "always":
 		return breakColumn
 	case "all":
@@ -1316,7 +1315,7 @@ const (
 // reportForcedBreak raises the finding for one declaration reportForcedBreaks
 // found not made, or not wholly.
 func (l *layouter) reportForcedBreak(b *Box, property string, kind breakKind, ctx columnContext) {
-	value := ascii.Lower(strings.TrimSpace(b.Style.Get(property)))
+	value := ascii.Lower(ascii.TrimCSSSpace(b.Style.Get(property)))
 	var why string
 	switch {
 	case ctx == refusedColumns:

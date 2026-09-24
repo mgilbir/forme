@@ -107,7 +107,7 @@ func (l *layouter) featuresFor(b *Box) shape.Features {
 // features are the same request, and settling the order lets them share the
 // memo entry the shaped group is kept under.
 func featureSettingsOf(raw string) (on string, off []string) {
-	value := strings.TrimSpace(raw)
+	value := ascii.TrimCSSSpace(raw)
 	if value == "" || ascii.EqualFold(value, "normal") {
 		return "", nil
 	}
@@ -146,7 +146,7 @@ func featureSettingsOf(raw string) (on string, off []string) {
 // offers one alternate, which is nearly all of them, and a narrowing rather than
 // a wrong answer where it is not.
 func featureSetting(part string) (tag string, on, ok bool) {
-	field := strings.TrimSpace(part)
+	field := ascii.TrimCSSSpace(part)
 	quote := strings.IndexAny(field, "\"'")
 	if quote < 0 {
 		return "", false, false
@@ -156,7 +156,7 @@ func featureSetting(part string) (tag string, on, ok bool) {
 	if end < 0 {
 		return "", false, false
 	}
-	tag, rest = rest[:end], strings.TrimSpace(rest[end+1:])
+	tag, rest = rest[:end], ascii.TrimCSSSpace(rest[end+1:])
 	// A tag is four characters, and the range is the format's: a face names its
 	// features in printable ASCII.
 	if len(tag) != 4 {
@@ -252,7 +252,7 @@ const (
 // ligaturesOf reads the property. The second result says whether the value was
 // one this engine understands, which checkFontFeatures reports on.
 func ligaturesOf(raw string) (ligatures, bool) {
-	switch ascii.Lower(strings.TrimSpace(raw)) {
+	switch ascii.Lower(ascii.TrimCSSSpace(raw)) {
 	case "", "normal":
 		return ligaturesNormal, true
 	case "none":
@@ -271,7 +271,7 @@ func ligaturesOf(raw string) (ligatures, bool) {
 // between them is about whether a UA may turn it off for performance — which
 // this engine never does, so the two are one answer here.
 func noKerning(b *Box) bool {
-	return ascii.EqualFold(strings.TrimSpace(b.Style.Get("font-kerning")), "none")
+	return ascii.EqualFold(ascii.TrimCSSSpace(b.Style.Get("font-kerning")), "none")
 }
 
 // capsOf reads CSS Fonts 4 §6.6's font-variant-caps.
@@ -287,7 +287,7 @@ func noKerning(b *Box) bool {
 // answer and a different report: the property was read and the page still came
 // out as it is written. See reportCaps.
 func capsOf(raw string) (shape.Caps, string) {
-	value := ascii.Lower(strings.TrimSpace(raw))
+	value := ascii.Lower(ascii.TrimCSSSpace(raw))
 	switch value {
 	case "", "normal":
 		return shape.CapsNormal, ""
@@ -323,7 +323,7 @@ func capsOf(raw string) (shape.Caps, string) {
 // declarations this engine cannot act on and neither is more the author's fault
 // than the other.
 func numericOf(raw string) (shape.Numeric, string) {
-	value := ascii.Lower(strings.TrimSpace(raw))
+	value := ascii.Lower(ascii.TrimCSSSpace(raw))
 	if value == "" || value == "normal" {
 		return 0, ""
 	}
@@ -331,7 +331,7 @@ func numericOf(raw string) (shape.Numeric, string) {
 		out  shape.Numeric
 		seen = map[shape.Numeric]bool{}
 	)
-	for _, word := range strings.Fields(value) {
+	for _, word := range ascii.CSSFields(value) {
 		bit, group, ok := numericKeyword(word)
 		if !ok || seen[group] {
 			return 0, word
@@ -392,7 +392,7 @@ func numericKeyword(word string) (bit, group shape.Numeric, ok bool) {
 // The second result is the first word that is not one of the nine, or the first
 // that repeats a group, which reportEastAsian names.
 func eastAsianOf(raw string) (shape.EastAsian, string) {
-	value := ascii.Lower(strings.TrimSpace(raw))
+	value := ascii.Lower(ascii.TrimCSSSpace(raw))
 	if value == "" || value == "normal" {
 		return 0, ""
 	}
@@ -400,7 +400,7 @@ func eastAsianOf(raw string) (shape.EastAsian, string) {
 		out  shape.EastAsian
 		seen = map[shape.EastAsian]bool{}
 	)
-	for _, word := range strings.Fields(value) {
+	for _, word := range ascii.CSSFields(value) {
 		bit, group, ok := eastAsianKeyword(word)
 		if !ok || seen[group] {
 			return 0, word
@@ -461,7 +461,7 @@ func eastAsianKeyword(word string) (bit, group shape.EastAsian, ok bool) {
 // The second result is the value where it is not one of the three, which
 // reportPosition names.
 func variantPositionOf(raw string) (shape.Position, string) {
-	value := ascii.Lower(strings.TrimSpace(raw))
+	value := ascii.Lower(ascii.TrimCSSSpace(raw))
 	switch value {
 	case "", "normal":
 		return shape.PositionNormal, ""

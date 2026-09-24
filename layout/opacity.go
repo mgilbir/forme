@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -58,13 +59,13 @@ import (
 // nothing. Out-of-range values are clamped rather than rejected, because §3.1
 // says to clamp them — "opacity: 2" is opaque and "opacity: -1" is invisible.
 func opacityOf(cs style.ComputedStyle) float64 {
-	raw := strings.TrimSpace(cs.Get("opacity"))
+	raw := ascii.TrimCSSSpace(cs.Get("opacity"))
 	if raw == "" {
 		return 1
 	}
 	scale := 1.0
 	if pct, ok := strings.CutSuffix(raw, "%"); ok {
-		raw, scale = strings.TrimSpace(pct), 100
+		raw, scale = ascii.TrimCSSSpace(pct), 100
 	}
 	n, ok := parseNumber(raw)
 	if !ok {
@@ -444,7 +445,7 @@ func (g group) report(rec *Recorder) {
 	rec.ReportDetail(Finding{
 		Rule:   RuleUnsupportedValue,
 		Source: AtHTML(offsetOf(g.box)),
-		Message: "\"opacity: " + strings.TrimSpace(g.box.Style.Get("opacity")) +
+		Message: "\"opacity: " + ascii.TrimCSSSpace(g.box.Style.Get("opacity")) +
 			"\" was applied to each mark this box paints rather than to the box " +
 			"as a group, because " + why,
 		Path:     PathOf(g.box.Element),

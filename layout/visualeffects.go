@@ -1,8 +1,6 @@
 package layout
 
 import (
-	"strings"
-
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
@@ -363,7 +361,7 @@ func (l *layouter) clipRectOf(f *Fragment) Clip {
 	// feature for the documents that do not use it. It decides nothing —
 	// planted, and parseClipShape refuses a bare "auto" anyway, because it is
 	// not a rect().
-	raw := strings.TrimSpace(b.Style.Get("clip"))
+	raw := ascii.TrimCSSSpace(b.Style.Get("clip"))
 	if raw == "" || ascii.EqualFold(raw, "auto") {
 		return Clip{}
 	}

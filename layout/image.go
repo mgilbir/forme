@@ -20,6 +20,7 @@ import (
 
 	"github.com/mgilbir/forme/html"
 	"github.com/mgilbir/forme/internal/ascii"
+	"github.com/mgilbir/forme/paragraph"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -340,7 +341,7 @@ func (l *replacedLoader) attachBackground(b *Box, ref string, content *ReplacedC
 // image loads one <img>, or explains why it did not.
 func (l *replacedLoader) image(b *Box) {
 	el := b.Element
-	if v, ok := el.Attr("srcset"); ok && strings.TrimSpace(v) != "" {
+	if v, ok := el.Attr("srcset"); ok && ascii.TrimSpace(v) != "" {
 		// A srcset offers several files and rules for choosing between them —
 		// by pixel density, by rendered width, by what a <picture> above it
 		// says. This engine takes "src" and says so, because the failure
@@ -357,7 +358,7 @@ func (l *replacedLoader) image(b *Box) {
 		})
 	}
 	src, _ := el.Attr("src")
-	src = strings.TrimSpace(src)
+	src = ascii.TrimSpace(src)
 	if src == "" {
 		// An <img> with no src is not a broken image, it is an element that
 		// names nothing. HTML says it represents nothing at all, and there is
@@ -419,7 +420,7 @@ func (l *replacedLoader) image(b *Box) {
 // was.
 func (l *replacedLoader) object(b *Box) {
 	data, ok := b.Element.Attr("data")
-	data = strings.TrimSpace(data)
+	data = ascii.TrimSpace(data)
 	if !ok || data == "" {
 		return
 	}
@@ -564,7 +565,7 @@ func (l *replacedLoader) video(b *Box) {
 	// §10.3.2's default dimensions rather than to a box of no size.
 	b.Replaced = &ReplacedContent{}
 	named := false
-	if src, ok := b.Element.Attr("src"); ok && strings.TrimSpace(src) != "" {
+	if src, ok := b.Element.Attr("src"); ok && ascii.TrimSpace(src) != "" {
 		named = true
 	}
 	// The <source> children are read from the *element* and not from the box,
@@ -573,7 +574,7 @@ func (l *replacedLoader) video(b *Box) {
 	// See layout.replacedFallback.
 	for _, c := range b.Element.Children {
 		if c.Type == html.ElementNode && ascii.EqualFold(c.Name, "source") {
-			if src, ok := c.Attr("src"); ok && strings.TrimSpace(src) != "" {
+			if src, ok := c.Attr("src"); ok && ascii.TrimSpace(src) != "" {
 				named = true
 			}
 		}
@@ -584,8 +585,8 @@ func (l *replacedLoader) video(b *Box) {
 	// decoded it once per element — the one path where naming a file again
 	// needed no trick to cost a decode again (audit C19). A poster that failed
 	// is reported for the first element that names it, as a background is.
-	if poster, ok := b.Element.Attr("poster"); ok && strings.TrimSpace(poster) != "" {
-		content, why := l.memoized(strings.TrimSpace(poster), "video poster", svgAsImage)
+	if poster, ok := b.Element.Attr("poster"); ok && ascii.TrimSpace(poster) != "" {
+		content, why := l.memoized(ascii.TrimSpace(poster), "video poster", svgAsImage)
 		switch {
 		case content != nil:
 			b.Replaced = content
@@ -678,10 +679,10 @@ func (l *replacedLoader) markerImage(b *Box) {
 		return
 	}
 	ref, ok := urlValue(b.Style.Get("list-style-image"))
-	if !ok || strings.TrimSpace(ref) == "" {
+	if !ok || ascii.TrimSpace(ref) == "" {
 		return
 	}
-	ref = strings.TrimSpace(ref)
+	ref = ascii.TrimSpace(ref)
 	if content, _ := l.memoized(ref, "list marker image", svgAsImage); content != nil {
 		b.MarkerImage = content
 	}
@@ -756,13 +757,13 @@ func (l *replacedLoader) iframe(b *Box) {
 		})
 		return
 	}
-	if !hasSrc || strings.TrimSpace(src) == "" {
+	if !hasSrc || ascii.TrimSpace(src) == "" {
 		return
 	}
 	l.rec.ReportDetail(Finding{
 		Rule:   RuleResourceBlocked,
 		Source: AtHTML(b.Element.Offset),
-		Message: "the document at " + quoteValue(strings.TrimSpace(src)) +
+		Message: "the document at " + quoteValue(ascii.TrimSpace(src)) +
 			" was not loaded into this iframe: this engine creates no nested " +
 			"browsing context, so the frame was laid out at its own size and left empty",
 		Path: PathOf(b.Element),
@@ -1050,7 +1051,7 @@ func decodeDataURI(src, what string, bad Rule) ([]byte, string, *loadFailure) {
 			message: "a data: " + what + " has no comma separating its type from its content",
 		}
 	}
-	meta, payload := strings.Trim(rest[:comma], " \t\n\f\r"), rest[comma+1:]
+	meta, payload := ascii.TrimSpace(rest[:comma]), rest[comma+1:]
 	if len(payload) > maxDataURIBytes {
 		return nil, "", &loadFailure{
 			rule: bad,
@@ -1132,7 +1133,7 @@ func dataURIEssence(meta string) string {
 	if i := strings.IndexByte(meta, ';'); i >= 0 {
 		meta = meta[:i]
 	}
-	meta = ascii.Lower(strings.Trim(meta, " \t\n\f\r"))
+	meta = ascii.Lower(ascii.TrimSpace(meta))
 	if meta == "" || !strings.Contains(meta, "/") {
 		return "text/plain"
 	}
@@ -1171,7 +1172,7 @@ func (l *replacedLoader) altOnly(b *Box) {
 	}
 	text := collapseWhitespaceAfter(alt, b.Style.Get("white-space-collapse"),
 		wordSpaceTransformValue(b.Style), textBoundary{}, l.writingSystemAt(b.Element))
-	if strings.TrimSpace(text) == "" {
+	if paragraph.IsDocumentWhiteSpace(text) {
 		// alt="" is a deliberate statement that the image carries no
 		// information, and generating a box for it would put a space on the
 		// line the author asked to be empty.

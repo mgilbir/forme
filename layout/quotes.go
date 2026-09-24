@@ -1,8 +1,6 @@
 package layout
 
 import (
-	"strings"
-
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/internal/ascii"
 )
@@ -69,7 +67,7 @@ const maxQuoteDepth = 1 << 20
 // is defensive about it anyway, because the initial value travels the same path
 // and a computed style can be built by hand in a test.
 func parseQuotes(raw string) quoteList {
-	trimmed := strings.TrimSpace(raw)
+	trimmed := ascii.TrimCSSSpace(raw)
 	if trimmed == "" || ascii.EqualFold(trimmed, "none") {
 		return nil
 	}
@@ -203,7 +201,7 @@ func (q quoteList) at(depth int) quotePair {
 // a net count: "close-quote close-quote open-quote" from a depth of one ends at
 // one and not at zero, because the second close had nothing to close.
 func quoteDepthAfter(raw string, depth int, quotes quoteList) int {
-	trimmed := strings.TrimSpace(raw)
+	trimmed := ascii.TrimCSSSpace(raw)
 	switch ascii.Lower(trimmed) {
 	case "", "normal", "none":
 		return depth

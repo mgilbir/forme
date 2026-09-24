@@ -342,37 +342,26 @@ func (m *Matcher) compound(c css.Compound, n *html.Node) bool {
 //
 // The attribute is a whitespace-separated set, so this is a membership test and
 // not a substring one: class="subtitle" must not match ".title".
+//
+// The white space is HTML's and not Unicode's. HTML says the class attribute is
+// "a set of space-separated tokens" split on *ASCII* white space — tab, line
+// feed, form feed, carriage return and space — so class="a\u00a0b" is one class
+// whose name holds a no-break space, and .a selects nothing. strings.Fields
+// splits on unicode.IsSpace, which takes the no-break space and every other
+// space separator with it, so it found two classes where the document has one
+// and applied a rule the author did not write. The same set decides "~=",
+// which HTML defines the same way.
 func hasClass(n *html.Node, want string) bool {
 	v, ok := n.Attr("class")
 	if !ok {
 		return false
 	}
-	for _, got := range asciiFields(v) {
+	for _, got := range ascii.Fields(v) {
 		if got == want {
 			return true
 		}
 	}
 	return false
-}
-
-// asciiFields splits on HTML's white space and not on Unicode's.
-//
-// The two are not the same set, and the difference is a class name. HTML says
-// the class attribute is "a set of space-separated tokens" split on *ASCII*
-// white space — tab, line feed, form feed, carriage return and space — so
-// class="a\u00a0b" is one class whose name holds a no-break space, and .a
-// selects nothing. strings.Fields splits on unicode.IsSpace, which takes the
-// no-break space and every other space separator with it, so it found two
-// classes where the document has one and applied a rule the author did not
-// write. The same set decides "~=", which HTML defines the same way.
-func asciiFields(s string) []string {
-	return strings.FieldsFunc(s, func(r rune) bool {
-		switch r {
-		case '\t', '\n', '\f', '\r', ' ':
-			return true
-		}
-		return false
-	})
 }
 
 func (m *Matcher) matchAttr(a css.Attr, n *html.Node) bool {
@@ -419,7 +408,7 @@ func (m *Matcher) matchAttr(a css.Attr, n *html.Node) bool {
 }
 
 func slices(value, want string) bool {
-	for _, f := range asciiFields(value) {
+	for _, f := range ascii.Fields(value) {
 		if f == want {
 			return true
 		}

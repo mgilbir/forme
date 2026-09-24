@@ -2,7 +2,6 @@ package layout
 
 import (
 	"sort"
-	"strings"
 
 	"github.com/mgilbir/forme/bidi"
 	"github.com/mgilbir/forme/internal/ascii"
@@ -48,7 +47,7 @@ import (
 // front of it — see paint.go.
 
 func bidiModeOf(b *Box) bidiMode {
-	switch ascii.Lower(strings.TrimSpace(b.Style.Get("unicode-bidi"))) {
+	switch ascii.Lower(ascii.TrimCSSSpace(b.Style.Get("unicode-bidi"))) {
 	case "embed":
 		return bidiEmbed
 	case "isolate":
@@ -66,7 +65,7 @@ func bidiModeOf(b *Box) bidiMode {
 // isRTL reads the direction property. It is inherited, so every box has an
 // answer and the initial one is left to right.
 func isRTL(b *Box) bool {
-	return ascii.EqualFold(strings.TrimSpace(b.Style.Get("direction")), "rtl")
+	return ascii.EqualFold(ascii.TrimCSSSpace(b.Style.Get("direction")), "rtl")
 }
 
 // bidiControls is the pair of formatting codes an inline box stands for.

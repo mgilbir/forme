@@ -9,6 +9,7 @@ import (
 
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/internal/ascii"
+	"github.com/mgilbir/forme/internal/charprop"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -506,7 +507,7 @@ func (l *layouter) reportCaps(b *Box, face *shape.Face, text string) {
 	if len(missing) == 0 {
 		return
 	}
-	value := ascii.Lower(strings.TrimSpace(b.Style.Get("font-variant-caps")))
+	value := ascii.Lower(ascii.TrimCSSSpace(b.Style.Get("font-variant-caps")))
 	if capsAreSynthesised(use) {
 		// The face has none of them and this engine made the capitals itself,
 		// which is a page §6.6 asked for rather than a gap. It is still worth
@@ -722,7 +723,7 @@ func (l *layouter) reportNumeric(b *Box, face *shape.Face, text string) {
 	if len(missing) == 0 {
 		return
 	}
-	value := ascii.Lower(strings.TrimSpace(b.Style.Get("font-variant-numeric")))
+	value := ascii.Lower(ascii.TrimCSSSpace(b.Style.Get("font-variant-numeric")))
 	l.reportOnce("font-variant-numeric:"+value+":"+strings.Join(missing, ",")+":"+face.Name(),
 		Finding{
 			Rule:     RuleUnsupportedValue,
@@ -845,7 +846,7 @@ func (l *layouter) reportEastAsian(b *Box, face *shape.Face, text string) {
 	if len(missing) == 0 {
 		return
 	}
-	value := ascii.Lower(strings.TrimSpace(b.Style.Get("font-variant-east-asian")))
+	value := ascii.Lower(ascii.TrimCSSSpace(b.Style.Get("font-variant-east-asian")))
 	l.reportOnce("font-variant-east-asian:"+value+":"+strings.Join(missing, ",")+":"+face.Name(),
 		Finding{
 			Rule:     RuleUnsupportedValue,
@@ -942,7 +943,7 @@ func (l *layouter) reportPosition(b *Box, face *shape.Face, text string) {
 		})
 		return
 	}
-	if want == shape.PositionNormal || face == nil || strings.TrimSpace(text) == "" {
+	if want == shape.PositionNormal || face == nil || blank(text) {
 		return
 	}
 	tag := want.Features()[0]
@@ -963,6 +964,20 @@ func (l *layouter) reportPosition(b *Box, face *shape.Face, text string) {
 		Source: sourceOf(boxElement(b)),
 		Path:   PathOf(boxElement(b)),
 	})
+}
+
+// blank reports whether text draws nothing: every character in it is one of
+// Unicode's White_Space, by the pinned tables. It is a question about what the
+// glyphs look like, not about syntax or collapsing, so the set is Unicode's and
+// not CSS's four — a no-break space or an ideographic space raised is still a
+// blank, and is set identically either way.
+func blank(text string) bool {
+	for _, r := range text {
+		if !charprop.WhiteSpace(r) {
+			return false
+		}
+	}
+	return true
 }
 
 // inertFontFeatures reports whether a font-feature-settings value asks for the
@@ -1072,7 +1087,7 @@ func (l *layouter) reportAutospace(b *Box, value string) {
 // overrule it. Returning "the author said nothing" as the empty string would
 // not do — "hyphenate-character: \"\"" asks for no mark at all.
 func hyphenCharacter(value string) (string, bool) {
-	if strings.TrimSpace(value) == "" || ascii.EqualFold(strings.TrimSpace(value), "auto") {
+	if v := ascii.TrimCSSSpace(value); v == "" || ascii.EqualFold(v, "auto") {
 		return "", false
 	}
 	vals, errs := css.ParseComponentValues(value)

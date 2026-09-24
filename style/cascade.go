@@ -765,7 +765,7 @@ func (s *Styler) prepareMedia(rule css.Rule, parent *css.Nesting, origin Origin,
 	if unknown != "" {
 		s.report(Finding{
 			Offset: rule.Offset,
-			Message: "the media query \"" + strings.TrimSpace(serialize(rule.Prelude)) +
+			Message: "the media query \"" + ascii.TrimCSSSpace(serialize(rule.Prelude)) +
 				"\" asks about \"" + unknown + "\", which this engine cannot " +
 				"answer, so the rules inside it were not applied",
 			Unsupported: true,
@@ -868,7 +868,7 @@ func (s *Styler) collectAtRule(rule css.Rule, parent *css.Nesting, origin Origin
 }
 
 // quoted is a condition as it appears in a finding.
-func quoted(s string) string { return strconv.Quote(strings.TrimSpace(s)) }
+func quoted(s string) string { return strconv.Quote(ascii.TrimCSSSpace(s)) }
 
 // prepareNestedConditional prepares an @media written *inside* a style rule.
 //
@@ -909,7 +909,7 @@ func charsetLabel(prelude []css.ComponentValue) (string, bool) {
 	if n != 1 || !only.IsToken() || only.Token.Kind != css.String {
 		return "", false
 	}
-	return ascii.Lower(strings.TrimSpace(only.Token.Value)), true
+	return ascii.Lower(ascii.TrimSpace(only.Token.Value)), true
 }
 
 // utf8Charset reports whether a label names UTF-8, from the Encoding Standard's
@@ -2065,7 +2065,7 @@ func (s *Styler) computeFor(n *html.Node, rules *ruleSet,
 // other value — including "initial", which is a statement about this element —
 // is the element's own.
 func declaresItsOwnValue(value string, prop property) bool {
-	switch ascii.Lower(strings.TrimSpace(value)) {
+	switch ascii.Lower(ascii.TrimCSSSpace(value)) {
 	case kwInherit:
 		return false
 	case kwUnset, kwRevert, kwRevertLayer:
@@ -2087,7 +2087,7 @@ func (s *Styler) resolve(name string, prop property, value string, have bool, pa
 	}
 
 	if have {
-		if name == "color" && ascii.EqualFold(strings.TrimSpace(value), "currentcolor") {
+		if name == "color" && ascii.EqualFold(ascii.TrimCSSSpace(value), "currentcolor") {
 			// CSS Color 4 §7.2: "If the 'currentcolor' keyword is set on the
 			// 'color' property itself, it is treated as 'color: inherit'."
 			//
@@ -2295,7 +2295,7 @@ func (rs *ruleSet) candidates(n *html.Node) []int32 {
 		}
 		if len(rs.byClass) > 0 {
 			if class, ok := n.Attr("class"); ok {
-				for _, c := range asciiFields(class) {
+				for _, c := range ascii.Fields(class) {
 					add(rs.byClass[c])
 				}
 			}
@@ -2600,7 +2600,7 @@ func CascadeRank(origin Origin, important bool) int {
 // is parsed as a block's contents rather than as a stylesheet.
 func (s *Styler) inlineDeclarations(n *html.Node) map[string]preparedDecl {
 	raw, ok := n.Attr("style")
-	if !ok || strings.TrimSpace(raw) == "" {
+	if !ok || ascii.TrimCSSSpace(raw) == "" {
 		return nil
 	}
 	decls, _, errs := css.ParseDeclarations(raw)
@@ -2763,5 +2763,5 @@ func (s *Styler) early(name string, winners map[string]candidate,
 	inline map[string]preparedDecl, parent ComputedStyle) string {
 
 	value, have := s.winning(name, winners, inline)
-	return strings.TrimSpace(s.resolve(name, properties[name], value, have, parent))
+	return ascii.TrimCSSSpace(s.resolve(name, properties[name], value, have, parent))
 }
