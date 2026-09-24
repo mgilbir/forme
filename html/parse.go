@@ -238,10 +238,16 @@ func (p *parser) run() {
 // on the name, so the element is reported as one this engine does not lay out —
 // which is true, and is better than guessing that a prefix nobody declared for a
 // language this engine reads meant one of these.
+//
+// A namespace name is compared as it is spelled. Namespaces in XML §2.3 makes
+// two of them the same only when they are the same characters, so
+// "http://www.w3.org/2000/SVG" is not SVG's. They were folded to lower case, and
+// the MathML namespace written here in lower case to meet them — which is not
+// its name: that is "http://www.w3.org/1998/Math/MathML".
 var knownNamespaces = map[string]bool{
 	"http://www.w3.org/1999/xhtml":       true,
 	"http://www.w3.org/2000/svg":         true,
-	"http://www.w3.org/1998/math/mathml": true,
+	"http://www.w3.org/1998/Math/MathML": true,
 }
 
 // bindNamespaces records the "xmlns:p" declarations on a start tag.
@@ -260,7 +266,7 @@ func (p *parser) bindNamespaces(attrs []Attribute) {
 			if p.ns == nil {
 				p.ns = map[string]string{}
 			}
-			p.ns[a.Name[len("xmlns:"):]] = ascii.Lower(a.Value)
+			p.ns[a.Name[len("xmlns:"):]] = a.Value
 		}
 	}
 }
@@ -601,6 +607,19 @@ func (p *parser) startTag(tk token) {
 			p.enterBody()
 		}
 		el := p.insert(tk)
+		if el != nil && !p.tok.xml {
+			// HTML folded the attribute names, and SVG's and MathML's are not
+			// all lower case: the tree builder gives them back by table
+			// (§13.2.6.1), so "<svg viewBox>" and "<svg VIEWBOX>" both carry
+			// a viewBox. An XHTML document spells its names as they are.
+			adjust := AdjustSVGAttributeName
+			if name == "math" {
+				adjust = AdjustMathMLAttributeName
+			}
+			for i := range el.Attrs {
+				el.Attrs[i].Name = adjust(el.Attrs[i].Name)
+			}
+		}
 		if el != nil && !tk.selfClosing {
 			start := p.tok.pos
 			p.tok.foreign = true
@@ -845,6 +864,7 @@ func (p *parser) appendTo(parent *Node, tk token) {
 	el := p.element(tk.name, tk.offset)
 	el.Attrs = tk.attrs
 	parent.appendChild(el)
+	p.pragma(el)
 	if rawTextElements[tk.name] {
 		p.tok.raw, p.tok.rcdata = tk.name, false
 	} else if rcdataElements[tk.name] {
@@ -855,12 +875,51 @@ func (p *parser) appendTo(parent *Node, tk token) {
 	}
 }
 
+// pragma runs the one pragma directive this engine has a use for, when the
+// element inserted is a <meta> that states it.
+//
+// HTML §4.2.5.3's content language state, step for step: a <meta> whose
+// http-equiv is "content-language", ASCII case-insensitively, with a content
+// attribute holding no comma, sets the document's pragma-set default language
+// to the first run of characters that are not ASCII white space in it. A comma
+// means the value names more than one language, and the whole of it is then
+// ignored rather than its first. Every such <meta> that gets that far sets it,
+// in the order they are inserted, so the last one wins, and one that stops
+// early leaves an earlier one standing. What the language is for is
+// Node.Language's.
+func (p *parser) pragma(el *Node) {
+	if el.Name != "meta" {
+		return
+	}
+	equiv, ok := el.Attr("http-equiv")
+	if !ok || !ascii.EqualFold(equiv, "content-language") {
+		return
+	}
+	content, ok := el.Attr("content")
+	if !ok || strings.IndexByte(content, ',') >= 0 {
+		return
+	}
+	i := 0
+	for i < len(content) && ascii.IsSpace(content[i]) {
+		i++
+	}
+	j := i
+	for j < len(content) && !ascii.IsSpace(content[j]) {
+		j++
+	}
+	if j == i {
+		return
+	}
+	p.doc.PragmaLanguage = content[i:j]
+}
+
 func (p *parser) insert(tk token) *Node {
 	if !p.room(tk.offset) {
 		return nil
 	}
 	el := p.element(tk.name, tk.offset)
 	el.Attrs = tk.attrs
+	p.pragma(el)
 	if parent, before, ok := p.fosterParentOf(tk.name); ok {
 		p.tok.fail(tk.offset, "<"+tk.name+"> is not table content and was written "+
 			"inside a table; it belongs before the table and is read there")

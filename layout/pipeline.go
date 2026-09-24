@@ -51,7 +51,7 @@ type Input struct {
 	HTML string
 	// XHTML says the document is served as application/xhtml+xml, and is read
 	// as XHTML whatever it says about itself: <style> holds character data,
-	// "<div/>" is empty, attribute names in attr() are case-sensitive. It is
+	// "<div/>" is empty, element and attribute names are case-sensitive. It is
 	// what a browser learns from the MIME type, and what a caller knows from
 	// where the file came from — its content type, or an ".xht" extension.
 	//

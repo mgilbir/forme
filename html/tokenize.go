@@ -87,7 +87,7 @@ const (
 
 type token struct {
 	kind        tokenKind
-	name        string // lowercased, for tags
+	name        string // for tags: lowercased in HTML, as written in XHTML
 	attrs       []Attribute
 	text        string
 	selfClosing bool
@@ -783,10 +783,26 @@ func (t *tokenizer) readName() string {
 	// The folding is ASCII's and only ASCII's (see internal/ascii). strings.ToLower
 	// is Unicode's, and it would make a KELVIN SIGN the letter k: "<X\u212ABD>"
 	// would open an element "xkbd" that nobody wrote.
+	//
+	// And it is HTML's alone. An XML name is case-sensitive, so in an XHTML
+	// document "<P>" is an element named P, which is not a paragraph, and the
+	// name is kept as it is written. See xmlName.
 	for t.pos < len(t.src) && !ascii.IsSpace(t.src[t.pos]) && t.src[t.pos] != '/' && t.src[t.pos] != '>' {
 		t.pos++
 	}
-	return t.nuls(ascii.Lower(t.src[start:t.pos]), start, "a tag name", nulReplaced)
+	return t.nuls(t.xmlName(t.src[start:t.pos]), start, "a tag name", nulReplaced)
+}
+
+// xmlName is a tag or attribute name as the document's language reads it:
+// folded to ASCII lower case in HTML, which is case-insensitive, and as
+// written in XHTML, which is XML and is not. Folded there, "<p LANG='tr'>"
+// was a paragraph in Turkish, where XML has an attribute named LANG that is
+// not lang and gives the paragraph no language at all.
+func (t *tokenizer) xmlName(name string) string {
+	if t.xml {
+		return name
+	}
+	return ascii.Lower(name)
 }
 
 // readAttrName reads an attribute name, which admits more characters than an
@@ -812,8 +828,8 @@ func (t *tokenizer) readAttrName(tag string) string {
 		}
 		t.pos++
 	}
-	// ASCII's folding, as a tag name's: see readName.
-	return ascii.Lower(t.src[start:t.pos])
+	// ASCII's folding in HTML and none in XHTML, as a tag name's: see readName.
+	return t.xmlName(t.src[start:t.pos])
 }
 
 func (t *tokenizer) skipSpace() {

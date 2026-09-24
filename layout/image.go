@@ -893,7 +893,7 @@ func (l *replacedLoader) decode(src, what string, data []byte, sum [sha256.Size]
 		isSVG = isXMLMIMEType(mime)
 	}
 	if isSVG {
-		if c := svgContent(data, as); c != nil {
+		if c := svgContent(data, as, svgXMLNames); c != nil {
 			return c, nil
 		}
 		return nil, &loadFailure{
@@ -1353,7 +1353,11 @@ func (l *replacedLoader) foreign(b *Box) {
 	// The element and its content together are the document, which is what the
 	// reader expects: the intrinsic size is on the root's own attributes.
 	doc := "<svg " + attrSource(b.Element) + ">" + b.Element.Foreign + "</svg>"
-	if c := svgContent([]byte(doc), svgAsImage); c != nil {
+	names := svgHTMLNames
+	if b.Element.XMLDocument() {
+		names = svgXMLNames
+	}
+	if c := svgContent([]byte(doc), svgAsImage, names); c != nil {
 		b.Replaced = c
 		return
 	}
@@ -1362,7 +1366,7 @@ func (l *replacedLoader) foreign(b *Box) {
 	// the element asked for, because the size is on the element and not in the
 	// picture. Only when the root says nothing either does it fall back to the
 	// 300 by 150 of CSS 2.1 §10.3.2.
-	if size := svgIntrinsicSize([]byte(doc), svgAsImage); size != nil {
+	if size := svgIntrinsicSize([]byte(doc), svgAsImage, names); size != nil {
 		b.Replaced = size
 	} else {
 		b.Replaced = &ReplacedContent{}

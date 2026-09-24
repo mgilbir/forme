@@ -169,10 +169,7 @@ func resolveContent(raw string, el *html.Node, counters counterValues,
 			// the document language and the suite writes the same document twice
 			// to say so — content-attr-case-001 in HTML asks for the match and
 			// -002 in XHTML asks for its absence.
-			value, _ := el.Attr(name)
-			if el.XMLDocument() {
-				value, _ = el.AttrExact(name)
-			}
+			value, _ := el.AttrNamed(name, el.XMLDocument())
 			if !fits(len(value)) {
 				return tooLong
 			}

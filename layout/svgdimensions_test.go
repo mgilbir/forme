@@ -76,7 +76,7 @@ func TestAStylesheetBeatsTheAttribute(t *testing.T) {
 // none — not a percentage of something.
 func TestAPercentageIsStillNotAnIntrinsicDimension(t *testing.T) {
 	c := svgContent([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="50%" height="50%">`+
-		`<rect width="100%" height="100%" fill="green"/></svg>`), svgAsImage)
+		`<rect width="100%" height="100%" fill="green"/></svg>`), svgAsImage, svgXMLNames)
 	if c == nil {
 		t.Fatal("the picture was refused")
 	}

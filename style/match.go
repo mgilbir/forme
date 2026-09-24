@@ -309,9 +309,17 @@ func (m *Matcher) spent() bool {
 // a match between names that are not the same name. An element name from
 // the HTML reader is ASCII, so ASCII's folding is also the only one that can
 // tell two of them apart.
+//
+// In an XHTML document it is not folded at all. XML names are case-sensitive,
+// and the reader keeps them as written, so "P" selects an element named P and
+// not a paragraph — which is what a browser opening the file as XML answers.
+// The rule index files a type under its fold either way, so it still offers
+// every rule that can match; this is what decides.
 func (m *Matcher) compound(c css.Compound, n *html.Node) bool {
-	if c.Type != "" && !ascii.EqualFold(c.Type, n.Name) {
-		return false
+	if c.Type != "" {
+		if m.xml && c.Type != n.Name || !m.xml && !ascii.EqualFold(c.Type, n.Name) {
+			return false
+		}
 	}
 	for _, id := range c.IDs {
 		// Two different identifiers in one compound match nothing, which falls
@@ -364,8 +372,18 @@ func hasClass(n *html.Node, want string) bool {
 	return false
 }
 
+// matchAttr matches one attribute selector.
+//
+// The name is matched as the document's language matches it (see
+// html.Node.AttrNamed): folded on an HTML element in an HTML document, and
+// exactly everywhere else, so in XHTML "[LANG]" selects an attribute written
+// LANG and not one written lang, and "svg[viewBox]" selects an inline <svg>
+// in HTML. The value is folded for the attributes HTML lists, and only on an
+// HTML element in an HTML document, which is the list's scope; the name is
+// looked up folded, because it is the attribute's and not the author's
+// spelling of it that the list is about.
 func (m *Matcher) matchAttr(a css.Attr, n *html.Node) bool {
-	v, ok := n.Attr(a.Name)
+	v, ok := n.AttrNamed(a.Name, m.xml)
 	if !ok {
 		return false
 	}
@@ -374,7 +392,7 @@ func (m *Matcher) matchAttr(a css.Attr, n *html.Node) bool {
 	}
 
 	got, want := v, a.Value
-	if a.Insensitive || (!a.Sensitive && !m.xml && htmlFoldedAttrs[a.Name]) {
+	if a.Insensitive || (!a.Sensitive && n.NamesFoldCase(m.xml) && htmlFoldedAttrs[ascii.Lower(a.Name)]) {
 		got, want = ascii.Lower(got), ascii.Lower(want)
 	}
 

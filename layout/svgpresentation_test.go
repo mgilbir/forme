@@ -49,7 +49,7 @@ func TestAnSVGsPresentationIsInherited(t *testing.T) {
 				`font-family="serif" fill-rule="evenodd" stroke-width="4" opacity="1">` +
 				`<rect ` + cover + ` fill="red" data-x="1" shape-rendering="crispEdges"/></svg>`, &red},
 	} {
-		got := svgContent([]byte(tc.body), svgAsImage)
+		got := svgContent([]byte(tc.body), svgAsImage, svgXMLNames)
 		if got == nil {
 			t.Errorf("%s: refused; it is a picture this can draw exactly", tc.name)
 			continue
@@ -84,7 +84,7 @@ func TestAnSVGWhosePresentationThisCannotDrawIsRefused(t *testing.T) {
 		"a bad visibility":        `visibility="sometimes"`,
 	} {
 		body := `<svg ` + size + ` ` + root + `>` + rect + `</svg>`
-		if got := svgContent([]byte(body), svgAsImage); got != nil {
+		if got := svgContent([]byte(body), svgAsImage, svgXMLNames); got != nil {
 			t.Errorf("%s: reduced to %v", what, got.Solid)
 		}
 	}
@@ -98,7 +98,7 @@ func TestAnSVGWhosePresentationThisCannotDrawIsRefused(t *testing.T) {
 		"a translucent rect": `<svg ` + size + `><rect width="100%" height="100%" ` +
 			`fill="green" fill-opacity="50%"/></svg>`,
 	} {
-		if got := svgContent([]byte(body), svgAsImage); got != nil {
+		if got := svgContent([]byte(body), svgAsImage, svgXMLNames); got != nil {
 			t.Errorf("%s: reduced to %v", what, got.Solid)
 		}
 	}

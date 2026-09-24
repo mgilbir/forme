@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/html"
 	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
@@ -114,11 +115,62 @@ const (
 	svgAsDocument
 )
 
-func svgContent(data []byte, as svgAs) *ReplacedContent {
+// svgNames says how the names in an SVG's source are spelled, which decides
+// how they are compared.
+//
+// SVG is XML, and an XML name is case-sensitive: in a file, and in an <svg>
+// in an XHTML document, "RECT" is not a rect and "VIEWBOX" is not a viewBox.
+// An <svg> written in an HTML document is read by HTML's parser, which folds
+// every name to lower case and then gives SVG's own names their case back
+// by the tables in html/foreignnames.go — so there "<RECT VIEWBOX>" is a rect
+// with a viewBox, and "<rect viewbox>" is too. Every name is put in the form
+// that parser would have given it and then compared exactly; they were all
+// compared ASCII case-insensitively, which was HTML's answer in a file too.
+type svgNames uint8
+
+const (
+	// svgXMLNames is a file, or an <svg> in an XHTML document: the names are
+	// what they spell.
+	svgXMLNames svgNames = iota
+	// svgHTMLNames is an <svg> in an HTML document.
+	svgHTMLNames
+)
+
+// element is a start tag with its names as the document's language reads
+// them. In XML that is the tag as it came; in HTML the element name and the
+// names of its attributes are folded and adjusted as the tree builder does
+// (§13.2.6.5 and §13.2.6.1). A prefixed attribute keeps its prefix, folded:
+// "XLINK:HREF" is HTML's xlink:href. A prefix the decoder has already turned
+// into a namespace name — which holds a colon, as every URI does — is left as
+// it is, because a namespace name is compared as spelled.
+func (n svgNames) element(se xml.StartElement) xml.StartElement {
+	if n != svgHTMLNames {
+		return se
+	}
+	out := se.Copy()
+	if !strings.Contains(out.Name.Space, ":") {
+		out.Name.Space = ascii.Lower(out.Name.Space)
+	}
+	out.Name.Local = html.AdjustSVGTagName(ascii.Lower(out.Name.Local))
+	for i := range out.Attr {
+		a := &out.Attr[i]
+		if a.Name.Space == "" {
+			a.Name.Local = html.AdjustSVGAttributeName(ascii.Lower(a.Name.Local))
+			continue
+		}
+		if !strings.Contains(a.Name.Space, ":") {
+			a.Name.Space = ascii.Lower(a.Name.Space)
+		}
+		a.Name.Local = ascii.Lower(a.Name.Local)
+	}
+	return out
+}
+
+func svgContent(data []byte, as svgAs, names svgNames) *ReplacedContent {
 	if len(data) > maxSVGBytes {
 		return nil
 	}
-	root, rects, ok := svgReduce(data)
+	root, rects, ok := svgReduce(data, names)
 	if !ok {
 		return nil
 	}
@@ -133,7 +185,7 @@ func svgContent(data []byte, as svgAs) *ReplacedContent {
 // asked for rather than the 300 by 150 a replaced element with no dimensions
 // falls back to. Giving it the default would be laying out something the
 // document said nothing about, at a size it never mentioned.
-func svgIntrinsicSize(data []byte, as svgAs) *ReplacedContent {
+func svgIntrinsicSize(data []byte, as svgAs, names svgNames) *ReplacedContent {
 	if len(data) > maxSVGBytes {
 		return nil
 	}
@@ -150,7 +202,7 @@ func svgIntrinsicSize(data []byte, as svgAs) *ReplacedContent {
 		if !isStart {
 			continue
 		}
-		if !ascii.EqualFold(se.Name.Local, "svg") {
+		if se = names.element(se); se.Name.Local != "svg" {
 			return nil
 		}
 		out := svgContentOf(se, nil, as)
@@ -274,7 +326,7 @@ func (l svgLen) resolve(extent float64) float64 {
 // no operation for — a path, a circle, text, an image, a <use> — or something
 // that could change what the rectangles paint, which <style>, <script>, <g> and
 // <defs> all can. There is no safe default, so there is none.
-func svgReduce(data []byte) (root xml.StartElement, rects []svgRect, ok bool) {
+func svgReduce(data []byte, names svgNames) (root xml.StartElement, rects []svgRect, ok bool) {
 	dec := xml.NewDecoder(strings.NewReader(string(data)))
 	// No entity a document declares is expanded, internal or external:
 	// encoding/xml reads a DTD as an opaque directive and knows only the
@@ -309,8 +361,9 @@ func svgReduce(data []byte) (root xml.StartElement, rects []svgRect, ok bool) {
 		if elements++; elements > maxSVGElements {
 			return xml.StartElement{}, nil, false
 		}
+		se = names.element(se)
 		if !haveRoot {
-			if !ascii.EqualFold(se.Name.Local, "svg") {
+			if se.Name.Local != "svg" {
 				return xml.StartElement{}, nil, false
 			}
 			root, haveRoot = se, true
@@ -320,7 +373,7 @@ func svgReduce(data []byte) (root xml.StartElement, rects []svgRect, ok bool) {
 			}
 			continue
 		}
-		switch ascii.Lower(se.Name.Local) {
+		switch se.Name.Local {
 		case "title", "desc", "metadata":
 			// Not drawn, and not read: what they hold is prose about the
 			// picture, and it is text rather than elements, so the loop passes
@@ -558,7 +611,7 @@ var svgAttributes = func() map[string]svgAttrKind {
 	`, "\n") {
 		for _, f := range ascii.Fields(line) {
 			name, kind, _ := strings.Cut(f, ":")
-			out[ascii.Lower(name)] = map[string]svgAttrKind{
+			out[name] = map[string]svgAttrKind{
 				"fill": svgFill, "stroke": svgStroke, "visibility": svgVisibility,
 				"display": svgDisplay, "alpha": svgAlpha, "overflow": svgOverflow,
 				"inert": svgInert, "refuses": svgRefuses,
@@ -572,7 +625,7 @@ var svgAttributes = func() map[string]svgAttrKind {
 // as its own.
 func svgRootAttribute(name string) (svgAttrKind, bool) {
 	switch name {
-	case "width", "height", "viewbox", "preserveaspectratio":
+	case "width", "height", "viewBox", "preserveAspectRatio":
 		return svgOwn, true
 	case "x", "y":
 		// Not read on an outermost <svg>, which is placed by the page.
@@ -589,9 +642,10 @@ func svgRectAttribute(name string) (svgAttrKind, bool) {
 	return 0, false
 }
 
-// svgAttrKindOf classifies one attribute by its name.
+// svgAttrKindOf classifies one attribute by its name, which is compared as
+// spelled: see svgNames.
 func svgAttrKindOf(n xml.Name, own func(string) (svgAttrKind, bool)) svgAttrKind {
-	local := ascii.Lower(n.Local)
+	local := n.Local
 	switch {
 	case n.Space == "xmlns" || local == "xmlns":
 		// A namespace declaration.
@@ -786,9 +840,10 @@ func svgFillColour(raw string) (style.RGBA, bool) {
 }
 
 // attrOf returns an element's attribute by local name, ignoring the namespace.
+// The name is compared as spelled: see svgNames.
 func attrOf(e xml.StartElement, name string) string {
 	for _, a := range e.Attr {
-		if ascii.EqualFold(a.Name.Local, name) {
+		if a.Name.Local == name {
 			return a.Value
 		}
 	}
