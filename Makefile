@@ -357,6 +357,20 @@ define fetch
 	$(FETCH) -o $(1).part $(2) && mv $(1).part $(1)
 endef
 
+# One file, whole, and the file its pin names or not at all. What a URL serves
+# is checked against the SHA-256 written beside it before it is renamed into
+# place, so a source that moves under its URL is a fetch that fails rather than
+# a corpus that changed. It is a shell command, usable inside a loop with shell
+# variables for its arguments, and it fails as one.
+#
+#	$(call pinned,<destination>,<url>,<sha256>)
+define pinned
+	{ $(FETCH) -o $(1).part $(2) && \
+	  { echo "$(3)  $(1).part" | sha256sum -c --quiet - || \
+	    { rm -f $(1).part; echo "$(2) is not the file its pin names, SHA-256 $(3)" >&2; false; }; } && \
+	  mv $(1).part $(1); }
+endef
+
 # The tables the shaper derives from Unicode, which cmd/genuse's table above is
 # only one of. Each was runnable and none was wired up, so the only way to
 # regenerate one was to read its usage line — which named a directory this
@@ -600,8 +614,20 @@ clean-ucd:
 #	make fonts       # fetch, or bring up to date if already fetched
 #	make fontsweep   # read every face in both and report what happened
 #	make clean-fonts # remove them
+#
+# Both are taken at a commit, like every other corpus here. They were taken
+# from each repository's main branch, so what a sweep counted depended on the
+# day the library was fetched: Google's families are republished every week,
+# and a count of shaping differences over them is a count over whichever fonts
+# the branch held that morning. GF_COMMIT is the commit the sweeps quoted in
+# the shaping commits were run over. NOTO_CJK_COMMIT is noto-cjk's, which the
+# fallback library below also takes a face and a licence from, and it is the
+# commit whose files are byte for byte the ones those runs read.
 GF_DIR := testdata/googlefonts
+GF_COMMIT := 352f6b7d9d6cc4fa9e242b931291d31b21a6dc84
 CJK_DIR := testdata/notocjk
+NOTO_CJK_COMMIT := f8d157532fbfaeda587e826d4cd5b21a49186f7c
+NOTO_CJK_URL := https://raw.githubusercontent.com/notofonts/noto-cjk/$(NOTO_CJK_COMMIT)
 
 .PHONY: fonts googlefonts notocjk fontsweep clean-fonts
 
@@ -616,9 +642,9 @@ fonts: googlefonts notocjk
 googlefonts:
 	@test -d $(GF_DIR)/.git || git clone --filter=blob:none --no-checkout --sparse \
 		https://github.com/google/fonts.git $(GF_DIR)
-	git -C $(GF_DIR) fetch origin main
+	git -C $(GF_DIR) fetch origin $(GF_COMMIT)
 	git -C $(GF_DIR) sparse-checkout set --no-cone '/ofl/**/*.ttf'
-	git -C $(GF_DIR) checkout -f -B main origin/main
+	git -C $(GF_DIR) checkout -f --detach $(GF_COMMIT)
 
 # The CJK faces are fetched file by file rather than cloned.
 #
@@ -632,25 +658,32 @@ googlefonts:
 # One weight per region is enough for what this is for. Every static CJK face is
 # CID-keyed CFF, so any one of them exercises the refusal; the other six weights
 # would be six more copies of the same answer.
-CJK_BASE := https://raw.githubusercontent.com/notofonts/noto-cjk/main
+#
+# Each face is held to its SHA-256, and the set is marked done by a stamp keyed
+# on the commit and the list, as every fetched set is. It used to be marked by
+# nothing: a face already on disk was kept whatever it was, so a checkout never
+# learned that the branch it came from had moved.
+#
+#	<path in noto-cjk>:<sha256>
 CJK_FACES := \
-	Sans/SubsetOTF/JP/NotoSansJP-Regular.otf \
-	Sans/SubsetOTF/KR/NotoSansKR-Regular.otf \
-	Sans/SubsetOTF/SC/NotoSansSC-Regular.otf \
-	Sans/SubsetOTF/TC/NotoSansTC-Regular.otf \
-	Sans/SubsetOTF/HK/NotoSansHK-Regular.otf \
-	Serif/SubsetOTF/JP/NotoSerifJP-Regular.otf
+	Sans/SubsetOTF/JP/NotoSansJP-Regular.otf:dff723ba59d57d136764a04b9b2d03205544f7cd785a711442d6d2d085ac5073 \
+	Sans/SubsetOTF/KR/NotoSansKR-Regular.otf:69975a0ac8472717870aefeab0a4d52739308d90856b9955313b2ad5e0148d68 \
+	Sans/SubsetOTF/SC/NotoSansSC-Regular.otf:faa6c9df652116dde789d351359f3d7e5d2285a2b2a1f04a2d7244df706d5ea9 \
+	Sans/SubsetOTF/TC/NotoSansTC-Regular.otf:5bab0cb3c1cf89dde07c4a95a4054b195afbcfe784d69d75c340780712237537 \
+	Sans/SubsetOTF/HK/NotoSansHK-Regular.otf:8a43afea92bb58dfd9027bd7ac6f5b0b2662e2ffb3e7c1edc02c62b2b21924f1 \
+	Serif/SubsetOTF/JP/NotoSerifJP-Regular.otf:2c9a12dbd4f2408c4610c7ee84a108b62d7236c3775baed618c64d9cb44b2f04
+CJK_STAMP := $(call stamp,$(CJK_DIR),$(NOTO_CJK_URL) $(CJK_FACES))
 
-notocjk:
-	@mkdir -p $(CJK_DIR)
-	@for f in $(CJK_FACES); do \
-		out=$(CJK_DIR)/$$(basename $$f); \
-		if [ -s "$$out" ]; then echo "have $$out"; else \
-			echo "fetching $$out"; \
-			$(FETCH) -o "$$out" "$(CJK_BASE)/$$f" || exit 1; \
-		fi; \
+notocjk: $(CJK_STAMP)
+
+$(CJK_STAMP):
+	mkdir -p $(CJK_DIR)
+	for e in $(foreach f,$(CJK_FACES),'$(f)'); do \
+	  p=$${e%%:*}; sum=$${e#*:}; \
+	  $(call pinned,$(CJK_DIR)/$$(basename $$p),$(NOTO_CJK_URL)/$$p,$$sum) || exit 1; \
 	done
 	@echo "$$(ls $(CJK_DIR)/*.otf | wc -l | tr -d ' ') CJK faces in $(CJK_DIR)"
+	touch $@
 
 fontsweep:
 	go run ./cmd/fontsweep $(GF_DIR)/ofl $(CJK_DIR)
@@ -1128,16 +1161,38 @@ UNIFONT_BASE     := https://ftpmirror.gnu.org/gnu/unifont/unifont-$(UNIFONT_VER)
 UNIFONT_FALLBACK := https://ftp.gnu.org/gnu/unifont/unifont-$(UNIFONT_VER)
 UNIFONT_LICENSE  := testdata/unifont/LICENSE.txt
 
-# One Unifont file, from the redirector or from ftp.gnu.org.
+# One Unifont file, from the redirector or from ftp.gnu.org, and held to its
+# SHA-256 wherever it came from. A mirror that serves something else is passed
+# over for ftp.gnu.org rather than believed.
 #
-#	$(call unifont,<destination>,<basename>)
+#	$(call unifont,<destination>,<basename>,<sha256>)
 define unifont
-	$(FETCH) -o $(1) $(UNIFONT_BASE)/$(2) \
-	  || $(FETCH) -o $(1) $(UNIFONT_FALLBACK)/$(2)
+	$(call pinned,$(1),$(UNIFONT_BASE)/$(2),$(3)) \
+	  || $(call pinned,$(1),$(UNIFONT_FALLBACK)/$(2),$(3))
 endef
+UNIFONT_SHA256       := 85701ab9b1e251ee16f4df00b13f22eac311d72b7dab427a7d975fe7f5064702
+UNIFONT_UPPER_SHA256 := f4fd6d5d752726d384feef175bb780c9f29382cd4941c9e1e6990d7c3822a090
 
+# The library is taken at a commit of each repository it comes from, and every
+# file in it is held to its SHA-256.
+#
+# It was taken from the main branch of both, and that made the reftest baseline
+# a function of the day it was fetched. notofonts.github.io is rebuilt by a bot
+# most nights, and a face that changes under a branch changes the glyphs, the
+# advances and the shaping of every document that falls back to it: a fetch on
+# 2026-09-24 gives a NotoSansDevanagari-Regular.ttf that is not the one the
+# baseline was measured with, because upstream replaced it on 2026-09-10. Only
+# the CI cache, keyed on this file, was holding the library still — which is
+# the accident the reftest corpus's own pin was made to end (see WPT_COMMIT).
+#
+# NOTO_COMMIT is the commit of notofonts.github.io whose files are byte for byte
+# the ones the baseline was measured with, and NOTO_CJK_COMMIT (above, beside
+# the CJK faces) is noto-cjk's. Each digest below is part of the stamp's key, so
+# moving a pin or a digest fetches the library again, and a fetch that does not
+# give exactly these files fails rather than moving the baseline.
 NOTO_DIR := testdata/fonts-noto
-NOTO_BASE := https://raw.githubusercontent.com/notofonts
+NOTO_COMMIT := 4a4f893ee29c828fb9e018b35c8eaad8aa3449e9
+NOTO_URL := https://raw.githubusercontent.com/notofonts/notofonts.github.io/$(NOTO_COMMIT)
 
 # IPAMincho and IPAGothic, which four hanging-punctuation documents ask for by
 # *name*.
@@ -1169,36 +1224,56 @@ NOTO_BASE := https://raw.githubusercontent.com/notofonts
 # shipped in anything it builds — the same arrangement as Ahem, Doulos and the
 # Noto faces.
 IPAFONT_URL := https://moji.or.jp/wp-content/ipafont/IPAfont/IPAfont00303.zip
-NOTO_HINTED := NotoSans NotoSansHebrew NotoSansArabic NotoSansDevanagari \
-               NotoSansArmenian NotoSansGeorgian \
-               NotoSansOgham NotoSansCoptic NotoSansDeseret NotoSansSymbols
+IPAFONT_SHA256 := f755ed79a4b8e715bed2f05a189172138aedf93db0f465b4e20c344a02766fe5
 
-# The faces fetched by path rather than by family, each saved under its base
-# name. They are a list for the stamp's sake: a face written into the recipe
-# and not into a list is a face a checkout with the stamp never fetches.
-NOTO_PATHS := notofonts.github.io/main/fonts/NotoSerifTibetan/hinted/ttf/NotoSerifTibetan-Regular.ttf \
-              noto-cjk/main/Sans/Variable/TTF/Subset/NotoSansJP-VF.ttf
-NOTO_STAMP := $(call stamp,$(NOTO_DIR),$(NOTO_BASE) $(NOTO_HINTED) $(NOTO_PATHS) \
-	$(UNIFONT_BASE) $(UNIFONT_FALLBACK) $(IPAFONT_URL))
+# The hinted faces of notofonts.github.io, by family: each is
+# fonts/<family>/hinted/ttf/<family>-Regular.ttf, saved under its base name.
+#
+#	<family>:<sha256>
+NOTO_HINTED := \
+	NotoSans:478c558ea716033cd60c03438f628dfa75694dcf6b5f6d505a2f05fd2b4f3823 \
+	NotoSansHebrew:cdefaf8efd47045f6820928eba84db5bed7557539328952b5f828315485e02ee \
+	NotoSansArabic:bdff3e5659d67e67def05b33f749683b9376ae819d65d3dd62ac4640b3aaef48 \
+	NotoSansDevanagari:306b53ecfb182a504dd8a7446093c316387d2fd8dc350d0792ed1753fe0996cd \
+	NotoSansArmenian:720df88c332417a235b4d6209d14ec2e2bf4bfe2a954b7453d869ea593bfce1e \
+	NotoSansGeorgian:d3e33254b09e7bb2c5cf0f17e554b80462056c5a107097f258d495168c3a9346 \
+	NotoSansOgham:5b3705f2dbc34a493eaa968af282456f319dd74cd230a61614d5b7f6baa31121 \
+	NotoSansCoptic:e70bd535d7e6cdf2346eab36ea76441059b18ee14d3243e85240b5e65eb0ad45 \
+	NotoSansDeseret:9f384e8a75a059b8efcbead73ef5aa3b504ac3e9d218be5368a20b19bfccdeec \
+	NotoSansSymbols:d0e98e9a2c046594c5021437273943be7e79e0fd980fde125279e22302212595 \
+	NotoSerifTibetan:ee97bf3dc56e813651db734c9f35f8f1d41e7e31acf5f7d893e64ad22b292446
+
+# The files taken from noto-cjk by path, each saved under its base name, and
+# the licence that covers them all, saved as OFL.txt. They are lists for the
+# stamp's sake: a file written into the recipe and not into a list is a file a
+# checkout with the stamp never fetches.
+#
+#	<path in noto-cjk>:<sha256>
+NOTO_PATHS := \
+	Sans/Variable/TTF/Subset/NotoSansJP-VF.ttf:f4b373b226668ee33a6e54b02823dcd2d1209f17159f777421ae8c2275160369
+NOTO_LICENSE := Sans/LICENSE:6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2
+NOTO_STAMP := $(call stamp,$(NOTO_DIR),$(NOTO_URL) $(NOTO_HINTED) $(NOTO_CJK_URL) \
+	$(NOTO_PATHS) $(NOTO_LICENSE) $(UNIFONT_BASE) $(UNIFONT_FALLBACK) \
+	$(UNIFONT_SHA256) $(UNIFONT_UPPER_SHA256) $(IPAFONT_URL) $(IPAFONT_SHA256))
 
 noto-fonts: $(NOTO_STAMP)
 
 $(NOTO_STAMP):
 	mkdir -p $(NOTO_DIR)
-	for fam in $(NOTO_HINTED); do \
-	  $(FETCH) -o $(NOTO_DIR)/$$fam-Regular.ttf \
-	    $(NOTO_BASE)/notofonts.github.io/main/fonts/$$fam/hinted/ttf/$$fam-Regular.ttf \
+	for e in $(foreach f,$(NOTO_HINTED),'$(f)'); do \
+	  fam=$${e%%:*}; sum=$${e#*:}; \
+	  $(call pinned,$(NOTO_DIR)/$$fam-Regular.ttf,$(NOTO_URL)/fonts/$$fam/hinted/ttf/$$fam-Regular.ttf,$$sum) \
 	    || exit 1; \
 	done
-	for p in $(NOTO_PATHS); do \
-	  $(FETCH) -o $(NOTO_DIR)/$$(basename $$p) $(NOTO_BASE)/$$p || exit 1; \
+	for e in $(foreach f,$(NOTO_PATHS),'$(f)'); do \
+	  p=$${e%%:*}; sum=$${e#*:}; \
+	  $(call pinned,$(NOTO_DIR)/$$(basename $$p),$(NOTO_CJK_URL)/$$p,$$sum) || exit 1; \
 	done
-	$(FETCH) -o $(NOTO_DIR)/OFL.txt \
-	  $(NOTO_BASE)/noto-cjk/main/Sans/LICENSE
-	$(call unifont,$(NOTO_DIR)/Unifont-Regular.otf,unifont-$(UNIFONT_VER).otf)
-	$(call unifont,$(NOTO_DIR)/UnifontUpper-Regular.otf,unifont_upper-$(UNIFONT_VER).otf)
+	$(call pinned,$(NOTO_DIR)/OFL.txt,$(NOTO_CJK_URL)/$(firstword $(subst :, ,$(NOTO_LICENSE))),$(lastword $(subst :, ,$(NOTO_LICENSE))))
+	$(call unifont,$(NOTO_DIR)/Unifont-Regular.otf,unifont-$(UNIFONT_VER).otf,$(UNIFONT_SHA256))
+	$(call unifont,$(NOTO_DIR)/UnifontUpper-Regular.otf,unifont_upper-$(UNIFONT_VER).otf,$(UNIFONT_UPPER_SHA256))
 	cp $(UNIFONT_LICENSE) $(NOTO_DIR)/UNIFONT-LICENSE.txt
-	$(FETCH) -o $(NOTO_DIR)/ipafont.zip $(IPAFONT_URL)
+	$(call pinned,$(NOTO_DIR)/ipafont.zip,$(IPAFONT_URL),$(IPAFONT_SHA256))
 	unzip -o -j -d $(NOTO_DIR) $(NOTO_DIR)/ipafont.zip \
 	  'IPAfont00303/ipam.ttf' \
 	  'IPAfont00303/ipag.ttf' \

@@ -73,8 +73,10 @@ jobs:
       # re-cloned six weeks of upstream, and reported a hundred fewer clean
       # passes as "a layout regression".
       #
-      # The number in the key is the manual half, for the other corpora here
-      # that are still fetched from a branch: bump it to take fresh copies.
+      # Every other corpus here is taken at a pin too — a commit, a release or
+      # a digest, each named in the Makefile — so none of them moves while the
+      # key stands still. The number in the key is left for the one thing a pin
+      # cannot see, a cached copy that is itself wrong: bump it to fetch afresh.
       - name: Restore the fetched corpora
         uses: actions/cache@v6
         with:
