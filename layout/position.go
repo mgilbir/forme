@@ -174,6 +174,13 @@ type forcedGeometry struct {
 	// real number.
 	height    style.Unit
 	hasHeight bool
+	// contentHeight lays the box out as though its height were auto, whatever
+	// it declares, and is ignored where hasHeight is set. It is how a flex
+	// column asks what an item's content comes to: a layout that honoured a
+	// declared "height: 60px" answered 60 for twenty pixels of text, and
+	// Flexbox §9.2's "content" basis and §4.5's content size suggestion are
+	// both the twenty. See measuredMain.
+	contentHeight bool
 }
 
 // relativeOffset computes §9.4.3's visual offset for a box.

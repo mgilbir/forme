@@ -243,6 +243,16 @@ func printable(v reflect.Value) string {
 // copied everything below it, and a balanced height tried every breakpoint
 // with a fit that scanned for the breakpoint before each one: 32,000 lines in
 // a million columns took seventy-six seconds.
+//
+// The million columns are the copying's shape. Two columns are the balancing's,
+// and a whole layout does not show it at any size the suite can afford: the
+// balancing of before f6c6437, copied back in, read 6.8 to 7.4 here at a
+// thousand lines against a bound of 8, and 10.8 at four thousand, where one
+// layout of the larger side takes half a second. The lines are laid out in
+// time linear in them either way, and at these sizes that is most of what is
+// timed. So the case is kept for what it does hold — that two columns pour in
+// time linear in the lines — and the balancing is held on its own by
+// TestBalancingIsNotQuadraticInTheBreaks, which the same copy fails.
 func TestPouringIsLinearInTheLines(t *testing.T) {
 	for _, cols := range []string{"2", "1000000"} {
 		doc := func(n int) Built {

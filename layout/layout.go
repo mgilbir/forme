@@ -831,14 +831,22 @@ func (l *layouter) layBlock(b *Box, containing style.Unit, at flow,
 	// exactly what CSS 2.1 §10.3.4 and §10.6.5 say to do — the margin rules for
 	// a block-level replaced element are the same ones as for any other block,
 	// applied to a width that came from somewhere else.
+	// A caller measuring the box's content asks for the height it would have
+	// were its own "height" auto; see forcedGeometry.contentHeight.
+	contentOnly := forced != nil && forced.contentHeight && !forced.hasHeight
 	var replaced *Size
 	if b.Replaced != nil {
-		s := l.replacedSize(b, containing, at.cbHeight, at.cbDefinite)
+		s := l.replacedSizeOf(b, containing, at.cbHeight, at.cbDefinite, contentOnly)
 		replaced = &s
 	}
 
 	width := l.resolveWidth(b, margin, border, padding, containing, &margin, replaced)
 	declaredHeight, hasHeight := l.explicitHeight(b, containing, at.cbHeight, at.cbDefinite)
+	if contentOnly {
+		// What "height: auto" is for this box, which for a form control is its
+		// rows and for everything else is no height at all.
+		declaredHeight, hasHeight = l.controlIntrinsicHeight(b)
+	}
 	if replaced == nil {
 		if _, hasRatio := aspectRatioOf(b.Style.Get("aspect-ratio")); hasRatio {
 			switch {

@@ -1,6 +1,8 @@
 package layout
 
 import (
+	"cmp"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -1544,10 +1546,11 @@ func (l *layouter) gridDeclaredSize(it *gridItem, property string, area style.Un
 //
 // A track has two numbers and the difference between them is the whole of the
 // algorithm: a base size it may not go below, and a growth limit it may not
-// pass. For "auto" they are the items' min-content and max-content
+// pass. For "auto" they are, for most items, their min-content and max-content
 // contributions — the width below which the content would spill out, and the
 // width at which it would stop wrapping — and the space between the two is what
-// the container has to give away.
+// the container has to give away. (The base is strictly the items' minimum
+// contributions, which an item can lower below its content; see columnAsk.)
 //
 // That is why "grid-template-columns: auto auto" in a container narrower than
 // its content does not overflow: the columns start at min-content, there is
@@ -1558,10 +1561,7 @@ func (l *layouter) sizeColumns(columns []gridTrack, items []*gridItem,
 
 	asks := make([]trackAsk, 0, len(items))
 	for _, it := range items {
-		min, max := l.gridItemWidths(it)
-		asks = append(asks, trackAsk{
-			from: it.column, span: it.place[1].span, min: min, max: max,
-		})
+		asks = append(asks, l.columnAsk(it))
 	}
 	l.resolveTracks(columns, asks, gap,
 		maxZero(width.Sub(gap.Mul(float64(len(columns)-1)))), true, stretch, 0, style.MaxUnit)
@@ -1605,24 +1605,21 @@ func (l *layouter) gridContentWidths(b *Box) intrinsicWidths {
 
 	asks := make([]trackAsk, 0, len(items))
 	for _, it := range items {
-		min, max := l.gridItemWidths(it)
-		asks = append(asks, trackAsk{
-			from: it.column, span: it.place[1].span, min: min, max: max,
-		})
+		asks = append(asks, l.columnAsk(it))
 	}
 	gaps := columnGap.Mul(float64(len(columns) - 1))
 
 	// Under a min-content constraint: the base sizes, and nothing more. There is
 	// no free space for §12.6 to hand out and the flex fraction is zero.
 	narrow := slices.Clone(columns)
-	trackBasesAndLimits(narrow, asks, columnGap, false)
+	trackBasesAndLimits(narrow, asks, columnGap, underMinContent)
 	var out intrinsicWidths
 	out.min = sumTracks(narrow).Add(gaps)
 
 	// Under a max-content constraint: every track that is not flexible grows to
 	// its growth limit, and the flexible ones take the fraction §12.7.1 finds.
 	wide := slices.Clone(columns)
-	growToLimitsUnbounded(wide, trackBasesAndLimits(wide, asks, columnGap, true))
+	growToLimitsUnbounded(wide, trackBasesAndLimits(wide, asks, columnGap, underMaxContent))
 	expandFlexibleTracksUnbounded(wide, asks, columnGap)
 	out.max = style.Max(sumTracks(wide).Add(gaps), out.min)
 	return out
@@ -1746,6 +1743,74 @@ func (l *layouter) gridItemWidths(it *gridItem) (style.Unit, style.Unit) {
 	return got.min.Add(it.horizontal()), got.max.Add(it.horizontal())
 }
 
+// columnAsk is what an item asks of the columns it spans: its two content
+// contributions, and its minimum contribution.
+//
+// The minimum contribution is §12.5's "auto minimums" clause, and is not the
+// min-content contribution, although the two are usually the same number. An
+// item whose width "behaves as auto" — auto, or a percentage of the area the
+// tracks are still deciding — is its min-width, and where that is "auto" too
+// its automatic minimum size (§6.6), which is its content-based minimum or
+// zero depending on the tracks it spans. A scroll container's automatic
+// minimum is zero wherever it is. An item stating a width contributes its
+// min-content contribution, which the width already is. It was the min-content
+// contribution for every item, so "min-width: 0" — the idiom for letting a
+// "1fr" column be narrower than a long word — did nothing, and an item
+// spanning "1fr 3fr" held both its tracks at its whole width.
+func (l *layouter) columnAsk(it *gridItem) trackAsk {
+	min, max := l.gridItemWidths(it)
+	a := trackAsk{from: it.column, span: it.place[1].span, min: min, max: max}
+	b := it.box
+	_, stated := l.intrinsicLength(b, "width")
+	if !stated {
+		_, stated = l.keywordWidth(b)
+	}
+	if stated {
+		a.minimum = min
+		return a
+	}
+	a.minimum = it.horizontal()
+	if l.isAuto(b, "min-width") || strings.TrimSpace(b.Style.Get("min-width")) == "" {
+		a.automatic = !isScrollContainer(b.Style)
+		return a
+	}
+	// A minimum the item states. A percentage is of an area not yet sized and
+	// counts as nothing, which is CSS Sizing 3 §5.2.1's rule for a percentage
+	// minimum in a contribution.
+	if v, ok := l.intrinsicLength(b, "min-width"); ok {
+		a.minimum = a.minimum.Add(v)
+	} else if v, ok := l.keywordLimit(b, "min-width"); ok {
+		a.minimum = a.minimum.Add(v)
+	}
+	return a
+}
+
+// rowAsk is the same for the rows. Both content contributions are the height
+// the item was laid out at, in its column's width, which honours a height it
+// states — see sizeRows. Its minimum contribution is that same height where it
+// states one, its min-height where it states that instead, and otherwise its
+// automatic minimum, whose content-based size is the laid-out height again: a
+// block is as short as its content can be at the width it was given.
+func (l *layouter) rowAsk(it *gridItem) trackAsk {
+	a := trackAsk{from: it.row, span: it.place[0].span, min: it.height, max: it.height}
+	b := it.box
+	if length, ok := l.parseLength(b, "height"); ok && length.Kind == style.LengthAbsolute {
+		a.minimum = it.height
+		return a
+	}
+	a.minimum = it.vertical()
+	length, ok := l.parseLength(b, "min-height")
+	if !ok || length.Kind == style.LengthAuto {
+		a.automatic = !isScrollContainer(b.Style)
+		return a
+	}
+	if length.Kind == style.LengthAbsolute {
+		_, inset := l.sizingInset(b, 0)
+		a.minimum = a.minimum.Add(maxZero(length.Value.Sub(inset)))
+	}
+	return a
+}
+
 // sizeRows is the same on the block axis, with one difference that is not a
 // difference in the algorithm: a row's content size is not asked of the box
 // tree but of the layout, because how tall an item is depends on how wide it
@@ -1763,9 +1828,7 @@ func (l *layouter) sizeRows(rows []gridTrack, items []*gridItem,
 
 	asks := make([]trackAsk, 0, len(items))
 	for _, it := range items {
-		asks = append(asks, trackAsk{
-			from: it.row, span: it.place[0].span, min: it.height, max: it.height,
-		})
+		asks = append(asks, l.rowAsk(it))
 	}
 	gaps := gap.Mul(float64(len(rows) - 1))
 	l.resolveTracks(rows, asks, gap, maxZero(height.Sub(gaps)), definite, stretch,
@@ -1801,7 +1864,7 @@ func (l *layouter) sizeRows(rows []gridTrack, items []*gridItem,
 func (l *layouter) resolveTracks(tracks []gridTrack, asks []trackAsk,
 	gap, room style.Unit, definite, stretch bool, lo, hi style.Unit) {
 
-	limits := trackBasesAndLimits(tracks, asks, gap, false)
+	limits := trackBasesAndLimits(tracks, asks, gap, sizedForLayout)
 	if !definite {
 		growToLimitsUnbounded(tracks, limits)
 		before := make([]style.Unit, len(tracks))
@@ -1855,150 +1918,580 @@ func growToLimitsUnbounded(tracks []gridTrack, limits []style.Unit) {
 	}
 }
 
+// sizingConstraint is which of the occasions §12 sizes tracks on this is. §12.5
+// asks it in two places: which contribution an "auto" minimum is grown to hold,
+// and whether a max-content constraint grows it further.
+type sizingConstraint uint8
+
+const (
+	// sizedForLayout is the grid being laid out: its columns in the width the
+	// container was given, and its rows, whether the height is stated or is
+	// the content's.
+	sizedForLayout sizingConstraint = iota
+	// underMinContent and underMaxContent are the container being measured,
+	// for its min-content and its max-content width.
+	underMinContent
+	underMaxContent
+)
+
+// trackAsk is what one item needs of the tracks it covers: where it starts, how
+// many it spans, and the sizes it would like across them.
+type trackAsk struct {
+	from, span int
+	// min and max are the item's min-content and max-content contributions.
+	min, max style.Unit
+	// minimum is its minimum contribution — §12.5's name for the smallest
+	// outer size it can have — unless automatic is set. Then the minimum is
+	// its automatic minimum size, which §6.6 makes its content-based minimum
+	// or zero depending on the tracks it spans, and so is settled against
+	// them in minimumContribution; minimum is what it comes to at zero, which
+	// is the item's margins, border and padding.
+	minimum   style.Unit
+	automatic bool
+}
+
 // trackBasesAndLimits is §12.4 and §12.5: every track's base size, written into
 // it, and its growth limit, returned — the two numbers the rest of the sizing
 // spends the free space between.
 //
-// underMax is §12.5's one clause about the constraint the grid is sized under.
-// An "auto" minimum is the largest minimum its items need, except when the
-// container itself is being measured at its max-content size: then it is their
-// max-content contributions, because a grid asked how wide it would like to be
-// is not asking how narrow its tracks can get. It matters only where nothing
-// else raises the base to the same place — §12.6 grows every other track to
-// its growth limit anyway — and that is a flexible track, which §12.6 does not
-// grow. Without it a lone "0.5fr" column holding a line of text measured half
-// as wide as the line, and the grid asked for less than its content.
+// under is the occasion the tracks are sized on. It decides what an "auto"
+// minimum holds: an item's minimum contribution while the grid is laid out, and
+// its min-content contribution — its max-content one, under a max-content
+// constraint — while the container is measured, because a grid asked how wide
+// it would like to be is not asking how narrow its tracks can get. That is
+// what stops a lone "0.5fr" column holding a line of text from measuring half
+// as wide as the line.
+//
+// §12.4 starts every track at its fixed minimum or at nothing, with a growth
+// limit of its fixed maximum or of infinity. §12.5 then takes the items in the
+// order it gives: those that span one track and no flexible one, then those
+// that span two, three and so on, each span as one group, and last every item
+// that crosses a flexible track, all of them together. Each group is
+// accommodateSpan's, and the grouping is the whole of why an order is written
+// down: an item spanning two columns that needs 300px says nothing about
+// either column on its own, so what the narrower items asked is settled first
+// and a wider item's ask is measured against tracks they have already grown.
+//
+// Step 2 is written separately in the specification, for items of span one,
+// and it says of itself that it "should yield the same behavior" as the steps
+// for spanning items run on those items. So it is run as that — one path for
+// every group, rather than a second that could come to a different answer.
+//
+// Every group is sorted once and each item is visited a fixed number of times,
+// so the cost is the tracks and the items' spans, not the tracks times the
+// items: a grid has as many of each as its markup says.
 func trackBasesAndLimits(tracks []gridTrack, asks []trackAsk, gap style.Unit,
-	underMax bool) []style.Unit {
+	under sizingConstraint) []style.Unit {
 
-	// What the items spanning one track ask of it, gathered in one pass over the
-	// items rather than one pass per track: asking every item about every track
-	// was tracks times items, and a grid has as many of each as its markup says.
-	limits := make([]style.Unit, len(tracks))
-	mins := make([]style.Unit, len(tracks))
-	maxes := make([]style.Unit, len(tracks))
+	s := newTrackSizer(tracks, gap, under)
+	// Whether an item crosses a flexible track is a count over the tracks it
+	// spans, which a running count answers once per item.
+	flexBefore := make([]int, len(tracks)+1)
+	for i, t := range tracks {
+		flexBefore[i+1] = flexBefore[i]
+		if t.flexible() {
+			flexBefore[i+1]++
+		}
+	}
+	plain := make([]trackAsk, 0, len(asks))
+	var flexible []trackAsk
 	for _, a := range asks {
-		if a.span != 1 || a.from < 0 || a.from >= len(tracks) {
+		if a.span < 1 || a.from < 0 || a.from+a.span > len(tracks) {
 			continue
 		}
-		mins[a.from] = style.Max(mins[a.from], a.min)
-		maxes[a.from] = style.Max(maxes[a.from], a.max)
+		if flexBefore[a.from+a.span] > flexBefore[a.from] {
+			flexible = append(flexible, a)
+			continue
+		}
+		plain = append(plain, a)
 	}
+	// Step 2 and step 3, by span. Within a span the order does not matter,
+	// which is what the planned increases are for; see distribute.
+	slices.SortStableFunc(plain, func(x, y trackAsk) int { return x.span - y.span })
+	for len(plain) > 0 {
+		n := 1
+		for n < len(plain) && plain[n].span == plain[0].span {
+			n++
+		}
+		s.accommodateSpan(plain[:n], false)
+		plain = plain[n:]
+	}
+	// Step 4: every item that crosses a flexible track, together, and the
+	// space goes to the flexible tracks alone, in proportion to their factors.
+	if len(flexible) > 0 {
+		s.accommodateSpan(flexible, true)
+	}
+	// Step 5: a growth limit still infinite — a track nothing was placed in, or
+	// a flexible one, which nothing above grows the limit of — is its base.
 	for i := range tracks {
-		min, max := mins[i], maxes[i]
-		auto := min
-		if underMax {
-			auto = max
-		}
-		tracks[i].base = resolveTrackSize(tracks[i].min, min, max, auto)
-		limits[i] = resolveTrackSize(tracks[i].max, min, max, max)
-	}
-	spreadSpanningAsks(tracks, limits, asks, gap)
-	return limits
-}
-
-// resolveTrackSize turns one sizing function into a number, given what the
-// items in the track need.
-//
-// "auto" is the one that answers differently at each end, and the caller says
-// which end it is asking about by what it passes as its own: the largest
-// minimum at the low end, max-content at the high one. A flexible function
-// arrives here only as a maximum — the gate refuses minmax() with a flexible
-// minimum, and a bare "1fr" is written out as minmax(auto, 1fr) — and the
-// number it comes to is never read, because §12.4 gives a track with a flexible
-// maximum a growth limit equal to its base and §12.6 leaves it alone until
-// §12.7 hands it a share.
-//
-// A growth limit smaller than the base size is left as it is rather than
-// clamped up to it. Nothing needs the clamp: the limit is only ever read as
-// "how much further may this grow", and a track whose base is already past it
-// grows by nothing either way.
-func resolveTrackSize(f trackSize, min, max, auto style.Unit) style.Unit {
-	switch f.kind {
-	case trackFixed:
-		return maxZero(f.size)
-	case trackMin:
-		return min
-	case trackMax:
-		return max
-	}
-	return auto
-}
-
-// trackAsk is what one item needs of the tracks it covers: where it starts, how
-// many it spans, and the two sizes it would like across them.
-type trackAsk struct {
-	from, span int
-	min, max   style.Unit
-}
-
-// spreadSpanningAsks is §12.5's other half: an item that covers more than one
-// track asks something of all of them together, and what it asks is shared out.
-//
-// An item spanning two columns that needs 300px says nothing about either
-// column on its own — any pair of widths adding to 300 would hold it — so the
-// tracks are sized from the items inside them first, and only what is *still*
-// missing is spread. That is why this runs after the single-track pass and in
-// order of span: a wider item's ask is measured against tracks that the
-// narrower ones have already grown.
-//
-// The shortfall goes to the tracks that can take it, which are the ones sized
-// from their content. A fixed track is the size it states whatever spans it,
-// and giving it a share would be overruling the stylesheet with an item.
-func spreadSpanningAsks(tracks []gridTrack, limits []style.Unit, asks []trackAsk,
-	gap style.Unit) {
-
-	// In order of span, and in the items' own order within one span, which is
-	// what one pass over the items per span gave — and cost the widest span
-	// times the items, where sorting them once costs what they are.
-	spanning := make([]trackAsk, 0, len(asks))
-	for _, a := range asks {
-		if a.span >= 2 {
-			spanning = append(spanning, a)
+		if s.infinite[i] {
+			s.limits[i] = tracks[i].base
 		}
 	}
-	slices.SortStableFunc(spanning, func(x, y trackAsk) int { return x.span - y.span })
-	for _, a := range spanning {
-		span := a.span
-		if a.from < 0 || a.from+span > len(tracks) {
+	return s.limits
+}
+
+// trackSizer is §12.5's working state: the growth limits, which of them are
+// still infinite, and the scratch the distribution reuses item after item.
+type trackSizer struct {
+	tracks []gridTrack
+	limits []style.Unit
+	// infinite is a growth limit of infinity, which §12.4 gives every track
+	// with an intrinsic or flexible maximum and which is not a large number:
+	// the space an item needs is measured against the base size in its place.
+	infinite []bool
+	// growable is §12.5's "infinitely growable": a limit that was infinite
+	// before the intrinsic maximums were accommodated, and that the
+	// max-content maximums may grow past. It lasts for that one step.
+	growable []bool
+	gap      style.Unit
+	under    sizingConstraint
+
+	// planned is each track's planned increase in one round, and touched the
+	// tracks that have one, so a round costs the tracks its items span and not
+	// every track in the grid. seen marks them, by round.
+	planned []style.Unit
+	seen    []int
+	round   int
+	touched []int
+	// spanned is every track the items of the group being accommodated span.
+	spanned     []int
+	spannedSeen []int
+	group       int
+
+	// Scratch for one item: its item-incurred increases and its tracks'
+	// weights, both by position in its span, and the tracks it hands space to.
+	inc                   []style.Unit
+	weight                []float64
+	affected, other, gets []int
+	// And spread's: the tracks of its set that take a share, their rooms, and
+	// the order they freeze in.
+	take, order []int
+	rooms       []style.Unit
+	finite      []bool
+}
+
+func newTrackSizer(tracks []gridTrack, gap style.Unit, under sizingConstraint) *trackSizer {
+	n := len(tracks)
+	s := &trackSizer{
+		tracks: tracks, limits: make([]style.Unit, n), infinite: make([]bool, n),
+		growable: make([]bool, n), gap: gap, under: under,
+		planned: make([]style.Unit, n), seen: make([]int, n), spannedSeen: make([]int, n),
+	}
+	// §12.4.
+	for i := range tracks {
+		t := &tracks[i]
+		t.base = 0
+		if t.min.kind == trackFixed {
+			t.base = maxZero(t.min.size)
+		}
+		if t.max.kind == trackFixed {
+			s.limits[i] = style.Max(maxZero(t.max.size), t.base)
+		} else {
+			s.infinite[i] = true
+		}
+	}
+	return s
+}
+
+// intrinsic is a sizing function that asks the content: "auto" and the two
+// content keywords. A flexible one is not, and a fixed one is not.
+func (k trackKind) intrinsic() bool { return k == trackAuto || k == trackMin || k == trackMax }
+
+// maxContentMaximum is a maximum §12.5 treats as "max-content", which "auto"
+// is wherever the specification does not say otherwise.
+func (k trackKind) maxContentMaximum() bool { return k == trackAuto || k == trackMax }
+
+// accommodation is what a distribution is growing, which decides where the
+// space goes once every track has reached its limit.
+type accommodation uint8
+
+const (
+	// intoBaseForMinimums is minimum and min-content contributions into base
+	// sizes; intoBaseForMaxContent is max-content ones; intoLimits is any
+	// contribution into growth limits.
+	intoBaseForMinimums accommodation = iota
+	intoBaseForMaxContent
+	intoLimits
+)
+
+// accommodateSpan is §12.5's step 3 for one group of items — every item of one
+// span, or with flexible set, step 4's every item that crosses a flexible
+// track, which "repeat[s] the previous step" with the space going to the
+// flexible tracks alone.
+//
+// Six rounds, each a distribute: the base sizes of the tracks with an
+// intrinsic minimum are grown to hold the items' minimum contributions, then
+// those with a content keyword for a minimum to hold their min-content ones,
+// then — under a max-content constraint — those with "auto" or "max-content"
+// to hold their max-content ones; the growth limits are raised to the bases;
+// and then the growth limits of the tracks with an intrinsic maximum are grown
+// to hold the min-content contributions and those with a max-content maximum
+// the max-content ones. The order is the point: a minimum is settled before
+// anything grows towards a maximum, so a spanning item's own max-content ask
+// cannot push a track's floor up.
+func (s *trackSizer) accommodateSpan(items []trackAsk, flexible bool) {
+	s.group++
+	s.spanned = s.spanned[:0]
+	for _, a := range items {
+		for i := a.from; i < a.from+a.span; i++ {
+			if s.spannedSeen[i] != s.group {
+				s.spannedSeen[i] = s.group
+				s.spanned = append(s.spanned, i)
+			}
+		}
+	}
+	s.distribute(items, flexible, intoBaseForMinimums,
+		func(t gridTrack) bool { return t.min.kind.intrinsic() },
+		func(a trackAsk) style.Unit {
+			if s.under == sizedForLayout {
+				return s.minimumContribution(a)
+			}
+			// "If the grid container is being sized under a min- or
+			// max-content constraint, use the items' limited min-content
+			// contributions in place of their minimum contributions."
+			return s.limited(a, a.min)
+		})
+	s.distribute(items, flexible, intoBaseForMinimums,
+		func(t gridTrack) bool { return t.min.kind == trackMin || t.min.kind == trackMax },
+		func(a trackAsk) style.Unit { return a.min })
+	if s.under == underMaxContent {
+		s.distribute(items, flexible, intoBaseForMaxContent,
+			func(t gridTrack) bool { return t.min.kind == trackAuto || t.min.kind == trackMax },
+			func(a trackAsk) style.Unit { return s.limited(a, a.max) })
+	}
+	s.distribute(items, flexible, intoBaseForMaxContent,
+		func(t gridTrack) bool { return t.min.kind == trackMax },
+		func(a trackAsk) style.Unit { return a.max })
+	for _, i := range s.spanned {
+		if !s.infinite[i] && s.limits[i] < s.tracks[i].base {
+			s.limits[i] = s.tracks[i].base
+		}
+	}
+	if flexible {
+		// A flexible track's maximum is flexible and not intrinsic, and the
+		// growth limit rounds grow only intrinsic ones: there is nothing for
+		// them to do.
+		return
+	}
+	s.distribute(items, false, intoLimits,
+		func(t gridTrack) bool { return t.max.kind.intrinsic() },
+		func(a trackAsk) style.Unit { return a.min })
+	s.distribute(items, false, intoLimits,
+		func(t gridTrack) bool { return t.max.kind.maxContentMaximum() },
+		func(a trackAsk) style.Unit { return a.max })
+	for _, i := range s.spanned {
+		s.growable[i] = false
+	}
+}
+
+// minimumContribution is an item's minimum contribution against the tracks it
+// spans: minimum, unless it is the automatic minimum size, which Grid §6.6
+// makes the content-based minimum only where the item spans a track whose
+// minimum is "auto" and, if it spans more than one, no flexible one. It is
+// zero otherwise — an item across "1fr 3fr" asks its tracks for nothing at its
+// minimum, and it is the flexible tracks' share of the free space that holds
+// it — and that is the clause that lets "1fr" columns be equal however wide
+// the text spanning them is.
+//
+// The content-based minimum of an item whose tracks all have a fixed maximum
+// is held to what they add up to, because content that asked for more would
+// be pushing its tracks past the size the stylesheet stated.
+func (s *trackSizer) minimumContribution(a trackAsk) style.Unit {
+	if !a.automatic {
+		return a.minimum
+	}
+	autoMinimum, flexible, fixed := false, false, true
+	sum := s.gap.Mul(float64(a.span - 1))
+	for _, t := range s.tracks[a.from : a.from+a.span] {
+		autoMinimum = autoMinimum || t.min.kind == trackAuto
+		flexible = flexible || t.flexible()
+		if t.max.kind == trackFixed {
+			sum = sum.Add(maxZero(t.max.size))
+		} else {
+			fixed = false
+		}
+	}
+	if !autoMinimum || (a.span > 1 && flexible) {
+		return a.minimum
+	}
+	content := a.min
+	if fixed {
+		content = style.Min(content, sum)
+	}
+	return style.Max(content, a.minimum)
+}
+
+// limited is §12.5's limited min-content or max-content contribution: c, held
+// to the sum of the fixed maximums of the tracks the item spans where every one
+// of them has one — the gaps between them are fixed tracks too — and never
+// below the item's minimum contribution.
+func (s *trackSizer) limited(a trackAsk, c style.Unit) style.Unit {
+	floor := s.minimumContribution(a)
+	sum := s.gap.Mul(float64(a.span - 1))
+	for _, t := range s.tracks[a.from : a.from+a.span] {
+		if t.max.kind != trackFixed {
+			return style.Max(c, floor)
+		}
+		sum = sum.Add(maxZero(t.max.size))
+	}
+	return style.Max(style.Min(c, sum), floor)
+}
+
+// affectedSize is the size a round grows: the base size, or the growth limit
+// with an infinite one read as the base size, which §12.5.1 says to substitute.
+func (s *trackSizer) affectedSize(i int, what accommodation) style.Unit {
+	if what == intoLimits && !s.infinite[i] {
+		return s.limits[i]
+	}
+	return s.tracks[i].base
+}
+
+// limit is how far a round may grow a track's affected size before it is
+// frozen, and false where it may grow without one. A base size stops at its
+// growth limit. A growth limit stops where it is, unless it is infinite or
+// infinitely growable.
+func (s *trackSizer) limit(i int, what accommodation) (style.Unit, bool) {
+	if s.infinite[i] {
+		return 0, false
+	}
+	if what == intoLimits && s.growable[i] {
+		return 0, false
+	}
+	return s.limits[i], true
+}
+
+// distribute is §12.5.1, "distribute extra space", for one round: the tracks
+// affects picks, among those the items span, are grown by what each item's
+// contribution needs beyond the tracks it spans.
+//
+// Each item's need is shared out on its own, as an increase to each track the
+// item spans, and a track's planned increase is the largest any item gave it;
+// only then are the tracks grown. That is what makes the answer independent of
+// the order of the items in a group, which the specification gives as the
+// reason for it: two items spanning the same two tracks, each needing 300px,
+// grow them to 300 between them and not to 600.
+//
+// The need is shared equally, as far as each track's limit; then among the
+// tracks the item spans that the round does not affect, as far as theirs; and
+// what is left after that goes past the limits, to the affected tracks whose
+// maximum is the kind the contribution asked for, or to all of them if none
+// is. In step 4 — flexible — the affected tracks are the flexible ones, and the
+// sharing is in proportion to their factors rather than equal.
+func (s *trackSizer) distribute(items []trackAsk, flexible bool, what accommodation,
+	affects func(gridTrack) bool, contribution func(trackAsk) style.Unit) {
+
+	s.round++
+	s.touched = s.touched[:0]
+	for _, a := range items {
+		from, span := a.from, a.span
+		size := s.gap.Mul(float64(span - 1))
+		s.affected, s.other = s.affected[:0], s.other[:0]
+		for i := from; i < from+span; i++ {
+			size = size.Add(s.affectedSize(i, what))
+			if affects(s.tracks[i]) && (!flexible || s.tracks[i].flexible()) {
+				s.affected = append(s.affected, i)
+			} else {
+				s.other = append(s.other, i)
+			}
+		}
+		if len(s.affected) == 0 {
 			continue
 		}
-		covered := gap.Mul(float64(span - 1))
-		intrinsic := 0
-		for i := a.from; i < a.from+span; i++ {
-			covered = covered.Add(tracks[i].base)
-			if tracks[i].min.kind != trackFixed {
-				intrinsic++
-			}
+		for _, i := range s.affected {
+			s.touch(i)
 		}
-		if intrinsic == 0 {
+		space := maxZero(contribution(a).Sub(size))
+		if space == 0 {
 			continue
 		}
-		if short := a.min.Sub(covered); short > 0 {
-			share := short.Div(float64(intrinsic))
-			for i := a.from; i < a.from+span; i++ {
-				if tracks[i].min.kind != trackFixed {
-					tracks[i].base = tracks[i].base.Add(share)
-					limits[i] = style.Max(limits[i], tracks[i].base)
+		if cap(s.inc) < span {
+			s.inc, s.weight = make([]style.Unit, span), make([]float64, span)
+		}
+		inc, weight := s.inc[:span], s.weight[:span]
+		for k := range inc {
+			inc[k] = 0
+		}
+		s.weigh(a, weight, flexible)
+		space = s.spread(s.affected, from, inc, weight, space, what, true)
+		if space > 0 && len(s.other) > 0 {
+			space = s.spread(s.other, from, inc, weight, space, what, true)
+		}
+		if space > 0 {
+			s.gets = s.gets[:0]
+			for _, i := range s.affected {
+				t := s.tracks[i]
+				switch {
+				case what == intoBaseForMaxContent && t.max.kind.maxContentMaximum(),
+					what != intoBaseForMaxContent && t.max.kind.intrinsic():
+					s.gets = append(s.gets, i)
 				}
 			}
+			if len(s.gets) == 0 && what != intoLimits {
+				s.gets = append(s.gets, s.affected...)
+			}
+			if len(s.gets) > 0 {
+				s.spread(s.gets, from, inc, weight, space, what, false)
+			}
 		}
-		// The growth limits take the same treatment with the item's
-		// max-content ask, so that a spanning item can grow the tracks it
-		// covers as far as it would have grown one of its own.
-		room := gap.Mul(float64(span - 1))
-		for i := a.from; i < a.from+span; i++ {
-			room = room.Add(limits[i])
-		}
-		if short := a.max.Sub(room); short > 0 {
-			share := short.Div(float64(intrinsic))
-			for i := a.from; i < a.from+span; i++ {
-				if tracks[i].min.kind != trackFixed {
-					limits[i] = limits[i].Add(share)
-				}
+		for i := from; i < from+span; i++ {
+			if v := inc[i-from]; v > 0 {
+				s.touch(i)
+				s.planned[i] = style.Max(s.planned[i], v)
 			}
 		}
 	}
+	for _, i := range s.touched {
+		p := s.planned[i]
+		s.planned[i] = 0
+		switch {
+		case what != intoLimits:
+			s.tracks[i].base = s.tracks[i].base.Add(p)
+		case s.infinite[i]:
+			// "If the affected size is an infinite growth limit, set it to the
+			// track's base size plus the planned increase" — and a limit that
+			// became finite while the intrinsic maximums were accommodated is
+			// infinitely growable for the max-content ones.
+			s.limits[i], s.infinite[i] = s.tracks[i].base.Add(p), false
+			s.growable[i] = true
+		default:
+			s.limits[i] = s.limits[i].Add(p)
+		}
+	}
+}
+
+// touch notes a track as one this round will update.
+func (s *trackSizer) touch(i int) {
+	if s.seen[i] != s.round {
+		s.seen[i] = s.round
+		s.touched = append(s.touched, i)
+	}
+}
+
+// weigh sets how an item's need is divided between the tracks it spans, by
+// position in the span: equally, or in step 4 by §12.5's rule for the flexible
+// tracks. Where their factors add to one or more each takes its factor's share;
+// where they add to less, that fraction of the space is shared by factor and
+// the rest equally, so that a sum falling towards zero comes to an equal share
+// rather than to nothing (css-grid issue 6078).
+func (s *trackSizer) weigh(a trackAsk, weight []float64, flexible bool) {
+	if !flexible {
+		for k := range weight {
+			weight[k] = 1
+		}
+		return
+	}
+	sum, n := 0.0, 0
+	for _, t := range s.tracks[a.from : a.from+a.span] {
+		if t.flexible() {
+			sum += t.max.factor
+			n++
+		}
+	}
+	for k, t := range s.tracks[a.from : a.from+a.span] {
+		switch {
+		case !t.flexible():
+			weight[k] = 1
+		case sum >= 1:
+			weight[k] = t.max.factor / sum
+		default:
+			weight[k] = t.max.factor + (1-sum)/float64(n)
+		}
+	}
+}
+
+// spread shares space between the tracks in set, in proportion to their
+// weights, adding each track's part to its item-incurred increase in inc. With
+// bounded a track takes no more than brings it to its limit, and what it could
+// not take goes to the others; what is returned is the space left once every
+// track in set has reached its limit, and is nothing while any has not.
+//
+// The sharing is §12.5.1's "distribute equally ... freezing a track's
+// item-incurred increase as its affected size + item-incurred increase reaches
+// its limit (and continuing to grow the unfrozen tracks as needed)", worked
+// out as the level every unfrozen track rises to: the tracks in order of how
+// much room they have for their weight, each frozen at its limit while the
+// level the rest would reach is above it. It is one sort of the tracks, and not
+// a pass over them for every track that freezes, which is the tracks squared
+// for an item spanning them all.
+//
+// A track of weight zero — "0fr" — takes nothing while any other can. If every
+// track in set has weight zero they share equally, since the space still has to
+// go somewhere.
+func (s *trackSizer) spread(set []int, from int, inc []style.Unit, weight []float64,
+	space style.Unit, what accommodation, bounded bool) style.Unit {
+
+	take := s.take[:0]
+	total := 0.0
+	for _, i := range set {
+		if weight[i-from] > 0 {
+			take = append(take, i)
+			total += weight[i-from]
+		}
+	}
+	s.take = take
+	equal := len(take) == 0
+	if equal {
+		take, total = set, float64(len(set))
+	}
+	w := func(i int) float64 {
+		if equal {
+			return 1
+		}
+		return weight[i-from]
+	}
+	s.rooms, s.finite, s.order = s.rooms[:0], s.finite[:0], s.order[:0]
+	for k, i := range take {
+		s.order = append(s.order, k)
+		room, finite := style.Unit(0), false
+		if bounded {
+			var limit style.Unit
+			if limit, finite = s.limit(i, what); finite {
+				room = maxZero(limit.Sub(s.affectedSize(i, what).Add(inc[i-from])))
+			}
+		}
+		s.rooms, s.finite = append(s.rooms, room), append(s.finite, finite)
+	}
+	if bounded {
+		slices.SortStableFunc(s.order, func(x, y int) int {
+			switch fx, fy := s.finite[x], s.finite[y]; {
+			case fx && !fy:
+				return -1
+			case fy && !fx:
+				return 1
+			case !fx:
+				return 0
+			}
+			// room per weight, compared without dividing.
+			return cmp.Compare(float64(s.rooms[x])*w(take[y]), float64(s.rooms[y])*w(take[x]))
+		})
+	}
+	left := float64(space)
+	k := 0
+	for ; k < len(s.order); k++ {
+		j := s.order[k]
+		if !s.finite[j] {
+			break
+		}
+		i := take[j]
+		// Frozen where the level the unfrozen tracks would rise to reaches its
+		// limit: room / weight at or below left / total.
+		if float64(s.rooms[j])*total > left*w(i) {
+			break
+		}
+		inc[i-from] = inc[i-from].Add(s.rooms[j])
+		left -= float64(s.rooms[j])
+		total -= w(i)
+	}
+	if k == len(s.order) {
+		return style.Unit(left)
+	}
+	level := left / total
+	for _, j := range s.order[k:] {
+		i := take[j]
+		inc[i-from] = inc[i-from].Add(style.Unit(math.Trunc(level * w(i))))
+	}
+	return 0
 }
 
 // growToLimits is §12.6: the free space is shared equally between the tracks

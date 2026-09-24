@@ -107,9 +107,8 @@ func (l *layouter) flexValuesOf(b *Box, room flexRoom) flexValues {
 		// resolve to auto for width, it instead resolves to content for
 		// flex-basis". Content and not auto, so a declared width is not what
 		// it defers to; it was read as auto here, which differs exactly there.
-		// Down a column "content" is the measured height, and that measurement
-		// is a layout of the item which still honours a height it declares —
-		// the same as "flex-basis: content" there, and not changed here.
+		// Down a column "content" is the measured height, which is the item's
+		// content with any height it declares set aside; see measuredMain.
 		//
 		// This is the clause "flex: 1" reaches in a column that was told no
 		// height. The shorthand writes its basis as "0%", as every browser
@@ -1504,6 +1503,10 @@ func (l *layouter) layOutFlexItem(it *flexItem, a flexAxis, width style.Unit,
 		geom.width = inner
 		if hasMain {
 			geom.height, geom.hasHeight = maxZero(main), true
+		} else {
+			// Measuring: what the content comes to, which a declared height
+			// is not. See measuredMain.
+			geom.contentHeight = true
 		}
 	default:
 		geom.width = main
@@ -1711,6 +1714,19 @@ func (l *layouter) clampCross(it *flexItem, a flexAxis, border style.Unit, acros
 // item beyond the one that is kept, and it is the price of a column — §9.2's
 // "size the item into the available space" is a measurement wherever the main
 // axis is the block axis.
+//
+// The layout is of the item with its own height set aside, because what is
+// asked is the size of its content and every reader of the answer wants that:
+// §9.2 step 3 E sizes the item "using its used flex basis in place of its main
+// size, treating a value of content as max-content", so a "content" basis — and
+// a percentage one against a column with no height, which §7.2.3 makes
+// "content" — is not the height the item declares; and §4.5's content size
+// suggestion is the content's, which the specified size suggestion then caps.
+// A basis of "auto" that defers to a declared height reads the declaration and
+// not this. The measuring layout honoured the declaration, so "flex-basis: 50%;
+// height: 60px" in a column with no height was 60 tall where its line of text
+// is 20, and an item at "height: 60px" could not shrink below 60 when its
+// content was 20.
 func (l *layouter) measuredMain(it *flexItem, a flexAxis, width style.Unit,
 	origin flow) style.Unit {
 
