@@ -256,7 +256,7 @@ func TestAvoidZonesAreLinearInTheContent(t *testing.T) {
 	ask := func(f *Fragment) func() {
 		return func() {
 			breaks := sortedBreaks(columnBreaks(f, 0, nil))
-			z := avoidZonesOf(f)
+			z := avoidZonesOf(f, func(b *Box) bool { _, ok := columnCount(b); return ok })
 			allowed := z.allowed(breaks, nil)
 			step := upx(t, 50)
 			for start := style.Unit(0); start < allowed[len(allowed)-1]; start = start.Add(step) {
@@ -272,4 +272,68 @@ func TestAvoidZonesAreLinearInTheContent(t *testing.T) {
 		t.Errorf("four times the boxes took %.1f times as long (%v against %v); "+
 			"linear is about four", c.Ratio, c.Large, c.Small)
 	}
+}
+
+// TestAnAvoidInsideANestedMulticolStaysInside is §3.1.1's "This propagation
+// stops before it breaks through the nearest matching fragmentation context",
+// for the avoid values as the forced ones already had it. A multicol container
+// inside another is the nearest context for its own content.
+//
+// Three lines fill the outer 60px column exactly, so it ends between them and
+// the inner container. "break-before: avoid" on the inner container's first
+// child is a break before that child in the inner flow, and does not reach out
+// through the inner container to forbid the outer one ending there. It did:
+// the walk went through the inner container as through a block, and the
+// outer column ended a line early.
+func TestAnAvoidInsideANestedMulticolStaysInside(t *testing.T) {
+	const doc = `<div id="d"><div id="c">a<br>b<br>c</div><div id="in">` +
+		`<div id="h">d</div><div>e</div></div></div>`
+	css := colCSS + `#d { column-count: 2; column-fill: auto; height: 60px }
+		#in { column-count: 2 }`
+	wantPlaced(t, "without the declaration", doc, css, "in", [2]float64{100, 0})
+	wantPlaced(t, "an avoid on the inner first child", doc, css+`#h { break-before: avoid }`,
+		"in", [2]float64{100, 0})
+	wantPlaced(t, "the lines before it", doc, css+`#h { break-before: avoid }`,
+		"c", [2]float64{0, 0})
+	// The inner container's own value is the outer flow's, and is honoured.
+	wantPlaced(t, "an avoid on the inner container", doc, css+`#in { break-before: avoid }`,
+		"in", [2]float64{100, 20})
+}
+
+// TestAnAvoidBetweenInnerColumnsIsNotAHeight: the inner container's children
+// are already poured when the outer walk sees them, and two siblings the inner
+// pour put in different columns have no height between them. "break-after:
+// avoid" on #x, which a forced break ends the inner first column after, drew a
+// zone from #x's foot to #y's head — from 40px in one inner column to 0 in the
+// next, which came out as a zone at 40px. That forbade the outer column ending
+// at the inner container's own bottom, and the outer pour cut the inner
+// container in half instead, a line down.
+func TestAnAvoidBetweenInnerColumnsIsNotAHeight(t *testing.T) {
+	const doc = `<div id="d"><div id="in"><div id="x">a<br>b</div>` +
+		`<div id="y">c<br>d</div></div><div id="z">e</div></div>`
+	css := colCSS + `#d { column-count: 2; column-fill: auto; height: 40px }
+		#in { column-count: 2 } #y { break-before: column }`
+	wantPlaced(t, "without the declaration", doc, css, "z", [2]float64{100, 0})
+	wantPlaced(t, "with it", doc, css+`#x { break-after: avoid }`, "z", [2]float64{100, 0})
+	wantPlaced(t, "the inner container", doc, css+`#x { break-after: avoid }`,
+		"in", [2]float64{0, 0})
+}
+
+// TestABreakInsideAvoidInsideANestedMulticolIsHonoured is the half of the
+// nested content the outer walk still reads. An outer column that ends through
+// the inner container breaks what the inner columns hold there (§2.2), and a
+// box that asked "break-inside: avoid" asked it of every break. #k fills the
+// inner first column from 40px to 100px, and the outer 60px column would end
+// through it; with the declaration the outer column ends before the inner
+// container instead.
+func TestABreakInsideAvoidInsideANestedMulticolIsHonoured(t *testing.T) {
+	const doc = `<div id="d"><div>q<br>r</div><div id="in"><div id="k">a<br>b<br>c</div>` +
+		`<div>d<br>e<br>f</div></div></div>`
+	css := colCSS + `#d { column-count: 2; column-fill: auto; height: 60px }
+		#in { column-count: 2 }`
+	if got := placed(t, doc, css, "in"); len(got) != 2 {
+		t.Fatalf("without the declaration the inner container is in %d pieces at %v; the "+
+			"fixture needs the outer column to end through it", len(got), got)
+	}
+	wantPlaced(t, "with it", doc, css+`#k { break-inside: avoid }`, "in", [2]float64{100, 0})
 }

@@ -110,9 +110,11 @@ func fillColumnsByCopy(f *Fragment, c columns, height style.Unit) bool {
 // and a balanced height ask for: each column ends at the first forced break
 // after it begins, if that comes within a column height, and otherwise — where
 // breaks is given — at the last breakpoint within a column height, found by
-// walking the list.
+// walking the list. With overflow, the columns go on past c.n until nothing is
+// left: css-multicol-1 §8.2's overflow columns, placed as the next column
+// would be, and refused past maxOverflowColumns of them.
 func fillColumnsByCopyWith(f *Fragment, c columns, height style.Unit,
-	forced, breaks []style.Unit) bool {
+	forced, breaks []style.Unit, overflow bool) bool {
 
 	if height <= 0 {
 		return false
@@ -120,7 +122,16 @@ func fillColumnsByCopyWith(f *Fragment, c columns, height style.Unit,
 	bands := make([]*Fragment, 0, c.n)
 	rest := f
 	start := style.Unit(0)
-	for i := 0; i < c.n && rest != nil; i++ {
+	for i := 0; (i < c.n || overflow) && rest != nil; i++ {
+		if i >= c.n && len(rest.Lines) == 0 && len(rest.Children) == 0 {
+			// Nothing left, and nothing was ever there: a split with nothing
+			// above keeps what is below whether or not it holds anything.
+			rest = nil
+			break
+		}
+		if i-c.n >= maxOverflowColumns {
+			return false
+		}
 		cut := start.Add(height)
 		ended := false
 		for _, b := range forced {

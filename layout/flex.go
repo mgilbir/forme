@@ -1958,6 +1958,19 @@ func (l *layouter) flexMainLimits(it *flexItem, a flexAxis, room flexRoom) (min,
 	// so "overflow-y: hidden" on an item in a row may shrink to nothing. See
 	// isScrollContainer.
 	//
+	// Zero whether or not the item states a size. This returned the stated
+	// size instead where there was one, so "width: 200px; overflow: hidden"
+	// could not shrink below 200px in a 100px row. §4.5 does not say that:
+	// "for scroll containers the automatic minimum size is zero, as usual".
+	// The stated size belongs to the other branch, the content-based minimum
+	// of an item that is not a scroll container, where it is the specified
+	// size suggestion; a scroll container has no content-based minimum for it
+	// to be a suggestion to. A stated size is still where the item starts —
+	// its flex base size — and it is the shrink factor, not the minimum, that
+	// decides whether it may leave it.
+	if isScrollContainer(c.Style) {
+		return 0, max
+	}
 	// §4.5's specified size suggestion is the item's own main size where it
 	// states one, a keyword included: "width: min-content" is as definite a
 	// size as a length is, and an item that asked for it asked to be no wider
@@ -1965,12 +1978,6 @@ func (l *layouter) flexMainLimits(it *flexItem, a flexAxis, room flexRoom) (min,
 	specified, stated := l.mainLength(c, a, a.mainName(), room)
 	if !stated {
 		specified, stated = keyword(a.mainName())
-	}
-	if isScrollContainer(c.Style) {
-		if stated && specified < max {
-			return specified, max
-		}
-		return 0, max
 	}
 	min = got.min
 	if a.column {

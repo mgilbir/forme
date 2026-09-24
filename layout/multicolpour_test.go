@@ -73,10 +73,16 @@ func randomColumnContent(r *rand.Rand, depth int, box *Box, refuser *Box) *Fragm
 // thousands of random trees, at every height a balanced pour could choose and
 // at several column counts.
 func TestThePourIsTheLiteralPour(t *testing.T) {
+	// The generator makes boxes shorter than their own top edge, which get
+	// that edge back in every column and never end. With overflow columns
+	// both pours stop at the bound, and the bound is lowered so that they
+	// get there quickly.
+	defer func(n int) { maxOverflowColumns = n }(maxOverflowColumns)
+	maxOverflowColumns = 256
 	plain := &Box{Style: style.Initial()}
 	refuser := &Box{Style: style.Initial().With("box-decoration-break", "clone")}
 	r := rand.New(rand.NewSource(1))
-	compared, refused, forcedCompared := 0, 0, 0
+	compared, refused, forcedCompared, overflowCompared := 0, 0, 0, 0
 	for trial := 0; trial < 800; trial++ {
 		src := randomColumnContent(r, 0, plain, refuser)
 		breaks := sortedBreaks(columnBreaks(src, 0, nil))
@@ -131,21 +137,29 @@ func TestThePourIsTheLiteralPour(t *testing.T) {
 				if h == bh && ok {
 					snap = breaks
 				}
-				want, got := cloneForTest(src), cloneForTest(src)
-				wantOK := fillColumnsByCopyWith(want, c, h, forced, snap)
-				gotOK, _ := fillColumnsWith(got, c, h, &columnEnds{forced: forced, breaks: snap})
-				if wantOK != gotOK {
-					t.Fatalf("trial %d, %d columns at %d, forced at %v: the literal pour "+
-						"said %v and this one %v", trial, n, h, forced, wantOK, gotOK)
+				for _, overflow := range []bool{false, true} {
+					want, got := cloneForTest(src), cloneForTest(src)
+					wantOK := fillColumnsByCopyWith(want, c, h, forced, snap, overflow)
+					gotOK, _ := fillColumnsWith(got, c, h,
+						&columnEnds{forced: forced, breaks: snap, overflow: overflow})
+					if wantOK != gotOK {
+						t.Fatalf("trial %d, %d columns at %d, forced at %v, overflow %v: "+
+							"the literal pour said %v and this one %v", trial, n, h, forced,
+							overflow, wantOK, gotOK)
+					}
+					if !wantOK {
+						continue
+					}
+					if d := fragmentDiff("pour", want, got); d != "" {
+						t.Fatalf("trial %d, %d columns at %d, forced at %v, overflow %v: %s",
+							trial, n, h, forced, overflow, d)
+					}
+					if overflow {
+						overflowCompared++
+					} else {
+						forcedCompared++
+					}
 				}
-				if !wantOK {
-					continue
-				}
-				if d := fragmentDiff("pour", want, got); d != "" {
-					t.Fatalf("trial %d, %d columns at %d, forced at %v: %s",
-						trial, n, h, forced, d)
-				}
-				forcedCompared++
 			}
 		}
 	}
@@ -154,6 +168,12 @@ func TestThePourIsTheLiteralPour(t *testing.T) {
 	if compared < 500 || refused < 500 || forcedCompared < 500 {
 		t.Fatalf("compared %d pours, %d refusals and %d pours with forced breaks; the "+
 			"generator is not producing all three", compared, refused, forcedCompared)
+	}
+	// And overflow columns: more pours succeed with them than without, and
+	// the difference is the ones that needed them.
+	if overflowCompared <= forcedCompared {
+		t.Fatalf("compared %d pours with overflow columns and %d without; the "+
+			"generator never needs overflow columns", overflowCompared, forcedCompared)
 	}
 }
 

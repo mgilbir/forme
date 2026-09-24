@@ -207,14 +207,17 @@ func breakFindings(doc, css string) []Finding {
 // is said. A multicol container's forced breaks are made where its content is
 // poured, and reported where they cannot be:
 //
-//   - more of them than there are columns, which would need §3.6's overflow
-//     columns: the container is laid out in one column and reported, as any
-//     pour this engine cannot make is;
 //   - on a float, or on a box inside one: not in the flow the columns divide,
 //     and not moved to the next column;
-//   - in a container of one column, which is not poured;
+//   - in a container whose content cannot be poured, which is reported whole;
 //   - "always" and "all" outside a multicol container, which are page breaks,
 //     and "all" inside one, whose page break is not made either.
+//
+// This test used to assert two more: that more forced breaks than columns,
+// and a forced break in a container of one column, were refused and laid out
+// in one column. Both need css-multicol-1 §8.2's overflow columns, which were
+// not made; they are now, and TestForcedBreaksOverflowTheColumns holds them.
+// What is left of those cases here is that they say nothing.
 //
 // "column" outside a multicol container has no effect by §3.1 — "if the flow
 // is not within a multi-column context, they have no effect" — and says
@@ -222,14 +225,9 @@ func breakFindings(doc, css string) []Finding {
 func TestAForcedBreakNotMadeIsReported(t *testing.T) {
 	css := colCSS + `#d { column-count: 2 } p { margin: 0 }`
 	three := `<div id="d"><p>a</p><p>b</p><p>c</p></div>`
-	got := breakFindings(three, css+`p { break-after: column }`)
-	if len(got) != 1 || !strings.Contains(got[0].Message, "3 columns") {
-		t.Errorf("three paragraphs breaking after each in two columns: %v, want the "+
-			"container reported for asking for 3 columns", got)
-	}
-	if lines := columnLines(t, three, css+`p { break-after: column }`); len(lines) != 3 ||
-		lines[0].X != lines[2].X {
-		t.Errorf("the lines are at %v; a refused pour is one column", lines)
+	if got := breakFindings(three, css+`p { break-after: column }`); len(got) != 0 {
+		t.Errorf("three paragraphs breaking after each in two columns: %v; the third "+
+			"column is an overflow column, and made", got)
 	}
 
 	float := `<div id="d"><p>a</p><div id="f" style="float: left; width: 50px">` +
@@ -250,8 +248,24 @@ func TestAForcedBreakNotMadeIsReported(t *testing.T) {
 	}
 
 	if got := breakFindings(`<div id="d"><p>a</p><p id="b">b</p></div>`,
-		colCSS+`#d { column-count: 1 } #b { break-before: column }`); len(got) != 1 {
-		t.Errorf("a forced break in one column: %v, want the container reported", got)
+		colCSS+`#d { column-count: 1 } #b { break-before: column }`); len(got) != 0 {
+		t.Errorf("a forced break in one column: %v; its second column is an overflow "+
+			"column, and made", got)
+	}
+	// Where the content cannot be poured, the container is reported, and the
+	// break inside it is not reported again.
+	refused := Compose(Input{HTML: `<div id="d"><p>a</p><p id="b">b</p>` +
+		`<div style="position: relative">c</div></div>`, CSS: []Stylesheet{{Source: colCSS +
+		`#d { column-count: 1 } #b { break-before: column }`}}}, Options{})
+	var said []string
+	for _, f := range refused.Findings {
+		if strings.Contains(f.Property, "break") || f.Property == "column-count" {
+			said = append(said, f.Message)
+		}
+	}
+	if len(said) != 1 || !strings.Contains(said[0], "overflow columns") {
+		t.Errorf("a forced break in one column holding a positioned box: %q, want the "+
+			"container reported for the overflow columns it needs", said)
 	}
 
 	outside := `<div id="d"><p id="a">a</p><p id="b">b</p></div>`

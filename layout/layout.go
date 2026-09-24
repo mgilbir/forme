@@ -1096,18 +1096,44 @@ func (l *layouter) layBlock(b *Box, containing style.Unit, at flow,
 		contentHeight, hoistTop, hoistBottom, placedAnything =
 			l.clampedChildren(b, frag, lineLength, topOpen, bottomOpen, inner)
 	}
+	// The most the columns may be where the box's height is automatic: a
+	// max-height constrains the column height as a height does (css-multicol-1
+	// §8.2), and the content the columns then do not hold overflows into more
+	// of them. Where the box has a height, its columns are that height as the
+	// box is drawn, min-height and max-height applied: childHeight.
+	columnLimit := style.MaxUnit
+	if !hasHeight && wantsColumns {
+		if v := l.clampHeight(b, contentHeight, containing, at.cbHeight, at.cbDefinite); v < contentHeight {
+			columnLimit = v
+		}
+	}
 	if wantsColumns && !inColumns && cols.n <= 1 && !starved {
-		// One column, which is not poured: there is nothing to divide. A forced
-		// break in it asks for a second, which would be §3.6's overflow column,
-		// and that is not made.
-		if forced := l.forcedColumnBreaks(frag); len(forced) > 0 {
-			l.reportColumns(b, len(forced)+1, "it has room for one, and the "+
-				"columns its forced column breaks would overflow into are not made")
+		// One column, which is not poured unless something divides it: a forced
+		// break, which begins a second column, or a height its content does not
+		// fit in. Both are §8.2's overflow columns, made by the same pour, and
+		// the content was laid out at the one column's width, which is the
+		// box's, so nothing need be laid out again: what can be poured is
+		// poured, and what cannot is reported and left as it was. A pour that
+		// is refused changes nothing before it says so.
+		overflows := len(l.forcedColumnBreaks(frag)) > 0
+		if hasHeight {
+			overflows = overflows || contentHeight > childHeight
+		} else {
+			overflows = overflows || contentHeight > columnLimit
+		}
+		if overflows {
+			if why := l.canColumn(b); why != "" {
+				l.reportColumns(b, cols.n, "its content needs overflow columns, which "+
+					"are not made because "+why)
+			} else if height, ok := l.pourIntoColumns(b, frag, cols, contentHeight,
+				childHeight, hasHeight, columnLimit); ok {
+				contentHeight, poured = height, true
+			}
 		}
 	}
 	if inColumns && !starved {
 		if height, ok := l.pourIntoColumns(b, frag, cols, contentHeight,
-			declaredHeight, hasHeight); ok {
+			childHeight, hasHeight, columnLimit); ok {
 			contentHeight, poured = height, true
 		} else {
 			// The content could not be divided where the columns needed it.

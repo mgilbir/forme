@@ -631,6 +631,20 @@ func columnBreaks(f *Fragment, at style.Unit, out []style.Unit) []style.Unit {
 // A variable so that a test can lower it and watch it fire.
 var maxPourPieces = 1 << 18
 
+// maxOverflowColumns bounds how many overflow columns one pour may make.
+//
+// maxPourPieces does not: a column with nothing in it makes no piece, and a
+// column one unit tall over a gap of a thousand pixels is sixty-four thousand
+// of them. Nor does the content, quite: every column ends at least a unit below
+// where it began, so a pour of real content ends, but a box whose own border
+// box is shorter than its top border and padding — no layout makes one, the
+// pour's tests do — gets that edge back in every column it is cut across, and
+// a cut that is shorter than it never gets past it. A pour past this bound is
+// refused and reported like any other.
+//
+// A variable so that a test can lower it and watch it fire.
+var maxOverflowColumns = 1 << 18
+
 // fillColumns pours a subtree laid out in one tall column into n columns of a
 // given height, side by side, and says why not where it cannot.
 //
@@ -656,6 +670,10 @@ type columnEnds struct {
 	// columns where it counted them ending, or a column that began at a forced
 	// break could end a column height further on in the middle of a line.
 	breaks []style.Unit
+	// overflow lets the pour go on past the last column, into css-multicol-1
+	// §8.2's overflow columns, rather than refusing content the columns do
+	// not hold. See pourIntoColumns.
+	overflow bool
 }
 
 // fillColumnsWith is fillColumns with the column ends the content asked for.
@@ -670,6 +688,11 @@ type columnEnds struct {
 //   - it is balanced, and it ends at the last breakpoint that fits;
 //   - that is somewhere a break is avoided, and then it ends at the last
 //     break before it that is not. See avoidZones.
+//
+// Content left over when the columns are all filled is refused, unless ends
+// allows overflow columns: then each further column is made the same way and
+// placed where the next would be, past the container's content edge, until
+// nothing is left, or until maxOverflowColumns, past which the pour is refused.
 //
 // Where there is no such break — the box that asked not to be broken is taller
 // than a column — the column ends where it would have, inside the box. That is
@@ -691,7 +714,23 @@ func fillColumnsWith(f *Fragment, c columns, height style.Unit, ends *columnEnds
 	// start is where the column being filled begins, in the content
 	// coordinates of f, which is what the breakpoints are measured in.
 	var start style.Unit
-	for i := 0; i < c.n && !spent; i++ {
+	for i := 0; !spent; i++ {
+		if i >= c.n {
+			if !ends.overflow {
+				break
+			}
+			if rest.empty() {
+				// Nothing was ever there to pour: the one pending fragment a
+				// split keeps whether or not anything is in it. See split.
+				spent = true
+				break
+			}
+			if i-c.n >= maxOverflowColumns {
+				return false, "its content would need more than " +
+					strconv.Itoa(maxOverflowColumns) + " overflow columns, which is " +
+					"more than this engine will make for one box"
+			}
+		}
 		cut := start.Add(height)
 		for len(forced) > 0 && forced[0] <= start {
 			forced = forced[1:]
@@ -722,8 +761,8 @@ func fillColumnsWith(f *Fragment, c columns, height style.Unit, ends *columnEnds
 		spent = !below
 	}
 	if !spent {
-		// More content than the columns hold. §3.6 overflows it out of the last
-		// column, which is a fragmentation of its own and is not done here.
+		// More content than the columns hold, and no overflow columns to put
+		// it in: see pourIntoColumns for when there are.
 		return false, cannotDivide
 	}
 	f.Lines, f.Children = nil, nil
@@ -755,7 +794,7 @@ func lastBreakIn(breaks []style.Unit, start, end style.Unit) (style.Unit, bool) 
 }
 
 // cannotDivide is why a pour that needs a cut through something drawn, or more
-// columns than there are, is refused.
+// columns than there are where overflow columns are not asked for, is refused.
 const cannotDivide = "its content cannot be divided where a column would end " +
 	"without cutting through something that is drawn"
 
@@ -973,8 +1012,33 @@ func plural(n int, what string) string {
 // height and lets the last column end short, and one that is not takes the
 // shortest height its content fits in — which is what "balance", the initial
 // value, asks for.
+//
+// height is the container's used content height where it has one (hasHeight):
+// its declared height held between its min-height and max-height, which is
+// the height the box is drawn at, and so the one its columns are. limit is the
+// most a container with an automatic height may come to — its max-height as a
+// content height — and style.MaxUnit where nothing limits it.
+//
+// Content the columns do not hold goes into css-multicol-1 §8.2's overflow
+// columns: "additional column boxes are created in the inline direction", each
+// as wide as the others and a gap further on, outside the container. §8.2
+// names two causes, and both are made here:
+//
+//   - a column height that is constrained, by "height" or by "max-height",
+//     with more content than that many columns of it hold. The columns are
+//     filled in turn at that height and the rest overflows.
+//   - forced breaks: more of them than there are columns to end. Each one still
+//     begins a column. The multicol section on column-fill says "In continuous
+//     contexts, this property does not have any effect when there are overflow
+//     columns", so the columns are not balanced; each holds what is between two
+//     breaks, and an automatic height is the tallest of them — §8.2's
+//     "Overflow columns can affect the height of the multicol container" — held
+//     under the limit, past which the columns are filled in turn and overflow
+//     again.
+//
+// This used to refuse both, and lay the content out in one column.
 func (l *layouter) pourIntoColumns(b *Box, frag *Fragment, cols columns,
-	contentHeight, declared style.Unit, hasHeight bool) (style.Unit, bool) {
+	contentHeight, height style.Unit, hasHeight bool, limit style.Unit) (style.Unit, bool) {
 
 	// The forced breaks, which are places a column may end as well as places
 	// it must: a break between two boxes separated by a margin is at neither
@@ -986,24 +1050,15 @@ func (l *layouter) pourIntoColumns(b *Box, frag *Fragment, cols columns,
 		// an empty container is either way.
 		return contentHeight, true
 	}
-	if len(forced) >= cols.n {
-		// Each forced break begins a column, and there are not that many. The
-		// ones it would take are §3.6's overflow columns, which are not made
-		// here, and nor is the pour.
-		l.reportColumns(b, cols.n, "its content forces "+plural(len(forced), "column break")+
-			", which take "+plural(len(forced)+1, "column")+", and the columns that "+
-			"would overflow the box are not made")
-		return 0, false
-	}
 	// The breaks the content asked to avoid: CSS Fragmentation 3's
 	// "break-inside", "break-before" and "break-after". They are taken off the
 	// list the balancing chooses from, so the columns come out as tall as it
 	// takes not to break where the author said not to, and they steer where
 	// fillColumnsWith ends each column. A forced break is never taken off: it
 	// overrides an avoid at the same place.
-	avoid := avoidZonesOf(frag)
+	avoid := avoidZonesOf(frag, l.isMulticol)
 	breaks = avoid.allowed(breaks, forced)
-	ends := &columnEnds{avoid: avoid, forced: forced}
+	ends := &columnEnds{avoid: avoid, forced: forced, overflow: true}
 	// §3.5, and the two cases are which of the heights is *given*.
 	//
 	// A container told how tall to be has its column height decided for it: the
@@ -1016,17 +1071,30 @@ func (l *layouter) pourIntoColumns(b *Box, frag *Fragment, cols columns,
 	// A container with an automatic height has no such number, and the answer is
 	// the shortest its content fits in. That is the case balancing exists for and
 	// is what the initial value asks for, and each column then ends where the
-	// balancing counted it ending.
-	height := declared
+	// balancing counted it ending. Where no height holds it in the columns there
+	// are — the forced breaks outnumber them — the columns are as tall as the
+	// tallest run between two breaks, which is the balance of one column per
+	// run. Either answer taller than the limit is the limit, and the content
+	// is then filled in turn at it.
 	if !hasHeight {
 		got, ok := balancedHeight(breaks, forced, cols.n)
 		if !ok {
-			l.reportColumns(b, cols.n, "its content does not divide into that "+
-				"many columns of any height this engine can choose")
+			got, ok = balancedHeight(breaks, forced, len(forced)+1)
+		}
+		if !ok {
+			// Unreachable while every forced break is a breakpoint and one
+			// column per run fits at the content's full height; said rather
+			// than assumed.
+			l.reportColumns(b, cols.n, "its content does not divide into columns "+
+				"of any height this engine can choose")
 			return 0, false
 		}
-		height = got
-		ends.breaks = breaks
+		if got <= limit {
+			height = got
+			ends.breaks = breaks
+		} else {
+			height = limit
+		}
 	}
 	if ok, why := fillColumnsWith(frag, cols, height, ends); !ok {
 		l.reportColumns(b, cols.n, why)
@@ -1056,7 +1124,40 @@ func (l *layouter) pourIntoColumns(b *Box, frag *Fragment, cols columns,
 //
 // Heights are in layout units, so a range open at both ends — the inside of a
 // box — is the closed range one unit in from each end.
+//
+// A multicol container nested in the content is the nearest fragmentation
+// context for what is inside it, and §3.1.1 stops propagation "before it breaks
+// through the nearest matching fragmentation context". The walk used to go
+// through it as through any block, and two things came of that. A "break-before:
+// avoid" on the inner container's first child reached out through the inner
+// container's top to the box before it, and forbade the outer columns from
+// ending between two boxes neither of which had asked. And the inner
+// container's children are, by the time this walk sees them, already poured
+// side by side: two siblings the inner pour put in different columns have no
+// height between them, and "from the bottom of the one to the top of the
+// next" was a range drawn from the foot of one column to the head of the
+// next — a zone that forbade the outer a place nobody had asked about.
+//
+// So the inner container's children are walked the way a float's are, as
+// flows of their own: nothing reaches in or out through its edges, and no zone
+// is drawn between two of them. What is inside each child still counts — a
+// child is in one inner column, so its own content is one sequence down it —
+// and so does every "break-inside": an outer column that ends through an inner
+// column breaks what is in it (CSS Fragmentation 3 §2.2: the content is
+// "affected by" the break of the context that split its fragmentainer), and a
+// box that asked not to be broken asked that of every kind of break. The inner
+// container's own values are the outer's, like any box's. What is given up is a
+// "break-before" or "break-after: avoid" between two of the inner container's
+// own children that the inner pour left in one column, which an outer cut
+// could honour; the inner pour itself honours it, and telling which of its
+// children share a column would take a record of the columns the pour does
+// not keep.
 type avoidZones struct {
+	// context says whether a box is a fragmentation context of its own — a
+	// multicol container. See isMulticol.
+	context func(*Box) bool
+	root    *Fragment
+
 	zones []avoidZone
 	// breaks is the breakpoints no zone forbids, once allowed has been asked:
 	// the places lastAllowed may end a column early.
@@ -1067,8 +1168,9 @@ type avoidZone struct{ lo, hi style.Unit }
 
 // avoidZonesOf collects the zones of a laid-out multicol container's content,
 // in the coordinates columnBreaks uses. It returns nil where nothing asks.
-func avoidZonesOf(f *Fragment) *avoidZones {
-	z := &avoidZones{}
+// context says which boxes are multicol containers of their own.
+func avoidZonesOf(f *Fragment, context func(*Box) bool) *avoidZones {
+	z := &avoidZones{context: context, root: f}
 	const far = style.MaxUnit / 4
 	z.collect(f, 0, -far, far)
 	if len(z.zones) == 0 {
@@ -1092,17 +1194,22 @@ func avoidZonesOf(f *Fragment) *avoidZones {
 // where the in-flow content before f's first child ends, and after where the
 // content after its last child begins — the reach a "break-before" on the
 // first child or a "break-after" on the last has, once propagated.
+//
+// A nested multicol container's children are each walked as a flow of its own,
+// as a float's content is: see avoidZones.
 func (z *avoidZones) collect(f *Fragment, at, before, after style.Unit) {
+	nested := f != z.root && f.Box != nil && z.context != nil && z.context(f.Box)
 	var flow []*Fragment
 	for _, c := range f.Children {
 		top, bottom := at.Add(c.BorderRect.Y), at.Add(c.BorderRect.Bottom())
 		if avoidsBreak(c.Box, "break-inside") && bottom.Sub(top) >= 2 {
 			z.zones = append(z.zones, avoidZone{top.Add(1), bottom.Sub(1)})
 		}
-		if c.Box == nil || !c.Box.outOfFlow() {
+		if !nested && (c.Box == nil || !c.Box.outOfFlow()) {
 			flow = append(flow, c)
 		} else {
-			// A float's own content still asks about breaks inside it.
+			// A float's own content, or a nested multicol container's child,
+			// still asks about breaks inside it.
 			z.collect(c, at.Add(c.ContentRect().Y), top, bottom)
 		}
 	}
@@ -1253,7 +1360,14 @@ func (l *layouter) isMulticol(b *Box) bool {
 //   - A box anywhere else inside a multicol container — a float, or a block
 //     inside an inline-level box — is not in the flow the columns divide.
 //     §3.1 says a UA "should" break before and after a float too; this does
-//     not move a float to the next column, and says so.
+//     not move a float to the next column, and says so. It cannot, by
+//     dividing: a float is a parallel flow (§2.1), and moving it to the top
+//     of the next column leaves the line it was placed from, and the content
+//     beside and after it, where they were — in a column that is now as wide
+//     as they are and must be laid out again. Cutting the column at the
+//     float's top would move all of that with it, which is not what §3.1
+//     asks either. The pour divides content laid out once; a float's break
+//     needs a second layout.
 //   - A box in no multicol container: "column" has no effect by §3.1 ("if the
 //     flow is not within a multi-column context"), and is not reported;
 //     "always" and "all" are page breaks, and are.
@@ -1328,7 +1442,8 @@ func (l *layouter) reportForcedBreak(b *Box, property string, kind breakKind, ct
 	case ctx == outsideColumnFlow:
 		why = "no break is made there: the box is not in the flow its multi-column " +
 			"container divides — a float, or inside an inline-level box — and " +
-			"this engine does not move one to the next column"
+			"this engine does not move one to the next column, which would mean " +
+			"laying out again the content beside and after it"
 	case value == "column":
 		// No effect outside a multi-column context, which is what happens.
 		return
