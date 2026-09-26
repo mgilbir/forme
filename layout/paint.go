@@ -116,17 +116,21 @@ type DrawText struct {
 	// it a permutation of the four sides cannot hide from a backend.
 	Anticlockwise bool
 	// Upright says the glyphs are *not* turned: each stands the way it does in
-	// the font and the pen moves one em down to the next one, whatever the
-	// face's horizontal advance for it is. It is what "text-orientation:
+	// the font and the pen moves down to the next one by its vertical advance,
+	// whatever the face's horizontal advance for it is. It is what "text-orientation:
 	// upright" asks for, and it goes with Sideways rather than instead of it —
 	// the run still runs down the page, and only the glyphs on it are different.
 	//
-	// The em is the advance because CSS Writing Modes §4.4 says to synthesize
-	// the vertical metrics a face does not state, and the em box is the
-	// synthesis. Layout measures every upright run so, including in a face
-	// that does state them: its vmtx advances and its origins are what the
-	// run shaped with shape.Features.Vertical reports, per glyph, and layout
-	// does not yet read them.
+	// Layout measures the run by what shaping reports for it with
+	// shape.Features.Vertical, per glyph — Glyph.YAdvance, and VOriginX and
+	// VOriginY across — where the face states vertical metrics (its vmtx: see
+	// shape.Face.StatesVerticalMetrics). A backend that shapes the run the same
+	// way and steps its pen by YAdvance draws the glyphs where layout placed
+	// them. Where the face states none the pen moves one em a character and
+	// the run is one em across, because CSS Writing Modes §4.4 says to
+	// synthesize the vertical metrics a face does not state and the em box is
+	// the synthesis; shaping's own synthesis for such a face, the height of its
+	// line, is HarfBuzz's and not CSS's, and a backend has to use the em.
 	Upright bool
 	Face    *shape.Face
 	Size    style.Unit
@@ -1486,19 +1490,66 @@ func textInkAt(v DrawText, above, below style.Unit) Rect {
 		width = w.Add(v.CharSpacing.Mul(float64(spacedUnits(v.Text))))
 	}
 	if v.Upright {
-		// An upright run is not the face's advances at all: it is one em per
-		// character along the line, and one em across it centred on the
-		// baseline. Both are the metrics CSS Writing Modes §4.4 has the UA
-		// synthesize where a face states none, so this is the run's real extent
-		// and not an estimate of it. See DrawText.Upright.
-		width = v.Size.Mul(float64(uprightUnits(v.Text))).
-			Add(v.CharSpacing.Mul(float64(spacedUnits(v.Text))))
-		above, below = v.Size.Div(2), v.Size.Div(2)
+		// An upright run is not the face's horizontal advances at all. Where
+		// the face states vertical metrics it is what its glyphs, shaped
+		// upright, say: along the line the sum of their vertical advances,
+		// and across it the reach of their horizontal advance boxes from where
+		// each is hung. Where it states none it is one em per character along
+		// the line and one em across it centred on the baseline — the metrics
+		// CSS Writing Modes §4.4 has the UA synthesize. Either way it is the
+		// run's real extent and not an estimate of it. See DrawText.Upright.
+		width, above, below = uprightExtent(v)
+		width = width.Add(v.CharSpacing.Mul(float64(spacedUnits(v.Text))))
 	}
 	return placeRun(Rect{
 		Y: style.Unit(0).Sub(above),
 		W: width, H: above.Add(below),
 	}, v.At, turnOfRun(v))
+}
+
+// uprightExtent is how far an upright run reaches along its line, and to either
+// side of the line's middle across it: above is towards the page's right, which
+// is where the run's own "up" is once it is turned onto a vertical line (see
+// placeRun).
+//
+// A face that states vertical metrics is measured from the glyphs shaping
+// gives the run with shape.Features.Vertical, which are the glyphs a backend
+// draws: the pen moves down by each one's YAdvance, and each is hung from its
+// vertical origin, so its horizontal origin is VOriginX to the left of the
+// line's middle, moved by XOffset, and its box reaches its horizontal advance
+// to the right of that. Along the line the ends are rounded as the breaker
+// rounds them, so that the extent is the width the line was filled to.
+//
+// A face that states none is §4.4's em box, one em a character and one em
+// across; see paragraph.UprightUnits. Shaping's own answer for such a face —
+// HarfBuzz's, the height of the face's line — is not CSS's.
+func uprightExtent(v DrawText) (along, above, below style.Unit) {
+	half := v.Size.Div(2)
+	if !v.Face.StatesVerticalMetrics() {
+		return v.Size.Mul(float64(uprightUnits(v.Text))), half, half
+	}
+	off := v.Features
+	off.Vertical = true
+	glyphs, _ := v.Face.ShapeGlyphsInContext(v.Text, v.PreContext, v.PostContext, off)
+	if len(glyphs) == 0 {
+		return 0, half, half
+	}
+	var pen, left, right float64
+	for i, g := range glyphs {
+		pen -= g.YAdvance
+		x := g.XOffset - g.VOriginX
+		if i == 0 || x < left {
+			left = x
+		}
+		if r := x + v.Face.GlyphAdvance(g.GID); i == 0 || r > right {
+			right = r
+		}
+	}
+	scale := v.Size.Px() / 1000
+	along, _ = style.FromPx(pen * scale)
+	above, _ = style.FromPx(right * scale)
+	below, _ = style.FromPx(-left * scale)
+	return along, above, below
 }
 
 // decorations paints a box's own background and border, which is what §E.2 steps

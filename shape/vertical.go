@@ -468,6 +468,19 @@ func (v *verticalTables) topPhantomAt(gid, depth int, w *phantomWalk) (top int, 
 	return top, true, false
 }
 
+// StatesVerticalMetrics reports whether the face states its glyphs' vertical
+// advances: a 'vmtx' whose records 'vhea' says carry advances.
+//
+// Shaping gives an upright glyph a vertical advance either way — HarfBuzz's
+// synthesis, the height of the face's line, where the face states none — and
+// that synthesis is not CSS's. CSS Writing Modes §4.4 has a UA synthesize the
+// vertical metrics a face does not state, with the em box, and a caller laying
+// text out by CSS asks this to know which of the two applies. A face set by
+// character code (the standard fonts) states none.
+func (f *Face) StatesVerticalMetrics() bool {
+	return f != nil && f.std == nil && f.vert.longMetrics > 0
+}
+
 // fontExtentsUnits is the face's ascender and descender as HarfBuzz reads them
 // for its font extents, in font units: OS/2's typographic pair where the font
 // asks for it to be used, hhea's otherwise, and four fifths of an em and the

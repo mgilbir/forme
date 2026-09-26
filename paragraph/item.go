@@ -381,15 +381,16 @@ type Item struct {
 	ContextKerns bool
 	// Upright says the run is set upright on a line of vertical text: each of
 	// its characters stands the way it does in the code charts, and the pen
-	// moves one em to the next one whatever the face's horizontal advance for
-	// it happens to be.
+	// moves down to the next by the glyph's vertical advance, whatever its
+	// horizontal advance happens to be.
 	//
 	// It is a fact about the *measurement* as much as about the drawing, which
-	// is why it travels on the item. CSS Writing Modes §4.4 has the UA
-	// synthesize vertical metrics where a face states none, and the synthesis is
-	// the em box — so the width of an upright run is a count of its characters
-	// and not a sum of its advances, and a line filled with the second and drawn
-	// with the first would be filled to a width the page does not have.
+	// is why it travels on the item. A face that states vertical metrics is
+	// measured by them, as shaping with shape.Features.Vertical reports them —
+	// the advances a backend steps its pen by. One that states none is measured
+	// by CSS Writing Modes §4.4's synthesis, the em box: a count of its
+	// characters, one em each. A line filled with one and drawn with another
+	// would be filled to a width the page does not have.
 	Upright bool
 	// HyphenLastResort says a line may be sent back to the opportunity in front
 	// of this item only when there is no other — because the opportunity is one
@@ -1046,6 +1047,17 @@ func mergedText(pre, run, post, group string) string {
 // items came out a sixty-fourth different, and they were the list markers, and
 // the answer that changed was the one that had been right. It is measured the
 // way it is for a reason.
+// uprightRun is the run an upright item is a stretch of, with its context:
+// the run it was cut from where it was cut, its own text otherwise. It is
+// group without the merge, which an upright run does not take part in; see
+// uprightKey.
+func (it Item) uprightRun() (whole string, base int, before, after string) {
+	if c := it.Cut; c != nil {
+		return c.Text, it.CutAt, c.Before, c.After
+	}
+	return it.Text, 0, it.PreContext, it.PostContext
+}
+
 func (it Item) group() (whole string, base int, before, after string, kerns bool) {
 	whole, base = it.Text, 0
 	before, after, kerns = it.PreContext, it.PostContext, it.ContextKerns
