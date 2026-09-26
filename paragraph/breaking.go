@@ -1309,6 +1309,17 @@ func (br *Breaker) breakInsideWord(item Item, width style.Unit, content bool) (h
 		lo = 1
 	}
 	at = bounds.at(lo - 1)
+	if IsBidiControlOnly(item.Text[cutWithinText(item.Text, at):]) {
+		// What the cut would send to the next line is bidi controls and nothing
+		// else. They set no paper and take no room, which is why the fill does
+		// not count one as content, and a line of them is a line with nothing on
+		// it: "&#x212D;&#x202D;" in less room than the letter set the letter on
+		// one line and an empty line under it, where the same text written
+		// "<span>&#x212D;</span><span>&#x202D;</span>" — the control an item of
+		// its own — set one line. So this is not a cut. The item is placed whole
+		// and overflows, as the letter alone does.
+		return Item{}, 0, false
+	}
 	return br.SplitHead(item, at), at, true
 }
 

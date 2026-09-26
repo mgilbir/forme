@@ -332,3 +332,34 @@ func TestASoftHyphenBreaksTheSameAcrossASpanEdge(t *testing.T) {
 		}
 	}
 }
+
+// TestAWordIsNotCutInFrontOfItsBidiControls is the sixth: under
+// "overflow-wrap: anywhere", "&#x212D;&#x202D;" in less room than the letter
+// was cut after the letter, and the next line held the override and nothing
+// else — an empty line — where "<span>&#x212D;</span><span>&#x202D;</span>"
+// set one line. The control is an item of its own there, and the fill does not
+// count one as content. A cut that leaves only bidi controls after it leaves
+// nothing to begin a line with, so it is not made.
+func TestAWordIsNotCutInFrontOfItsBidiControls(t *testing.T) {
+	face, err := notosans.Face()
+	if err != nil {
+		t.Fatalf("loading the embedded Noto Sans: %v", err)
+	}
+	set := namedFaceSet{family: "T", face: face, standard: StandardFonts()}
+	for _, text := range []string{"ℭ‭", "ℭ‭⁦", "ab‬"} {
+		sheet := `#d { font-family: T; font-size: 16px; overflow-wrap: anywhere }`
+		cut := spanned(text, []int{len(text) - len(strings.TrimLeftFunc(text, func(r rune) bool { return !isBidiControl(r) }))})
+		for _, px := range []float64{4, 10} {
+			whole, _ := linesOfSpanned(t, set, text, sheet, px)
+			got, _ := linesOfSpanned(t, set, cut, sheet, px)
+			if !sameBoundaryLines(whole, got) {
+				t.Errorf("%q at %gpx set %v, and as %s it set %v", text, px, whole, cut, got)
+			}
+			for _, l := range whole {
+				if l.Text == "" {
+					t.Errorf("%q at %gpx set %v: a line holding only bidi controls", text, px, whole)
+				}
+			}
+		}
+	}
+}
