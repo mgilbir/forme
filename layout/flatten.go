@@ -6,6 +6,7 @@ import (
 
 	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/paragraph"
+	"github.com/mgilbir/forme/segment"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -429,6 +430,9 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			// rebuild the context from it.
 			state.AfterContext = state.AfterContext.AfterObject()
 			state.AfterRune, state.AfterBase = 0, 0
+			// Nor is it part of a grapheme cluster: the text after it begins
+			// its own, as it would at the start of the paragraph.
+			state.AfterClusters = segment.Scanner{}
 			continue
 		}
 		if child.IsText() {
@@ -897,9 +901,10 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	orthography := l.orthographyAt(boxElement(b))
 	boundaryNoWrap, boundaryBreakSpaces := l.boundaryWhiteSpace(b, ws, in)
 	carried := paragraph.Carried{
-		Context: in.AfterContext, Decided: in.AfterDecided, Orthography: orthography,
+		Context: in.AfterContext, Clusters: in.AfterClusters, Decided: in.AfterDecided,
 		Offered: in.BreakOpportunity, Deferred: in.AfterDeferred,
 		Held: in.AfterHeld, Taken: in.AfterTaken, Prev: in.AfterRune,
+		Orthography:    orthography,
 		PrevBase:       in.AfterBase,
 		Before:         in.AfterText,
 		PhraseBefore:   in.AfterPhrase,
@@ -1214,6 +1219,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		AfterHeld:     trailing.Held,
 		AfterTaken:    trailing.Taken,
 		AfterContext:  trailing.Context,
+		AfterClusters: trailing.Clusters,
 		AfterRune:     lastRuneOf(b.Text),
 		// What the *next* box's first character has to be segmented with, for
 		// the scripts a dictionary finds the words of. The scan says it, because

@@ -3,6 +3,7 @@ package paragraph
 import (
 	"unicode/utf8"
 
+	"github.com/mgilbir/forme/segment"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -738,6 +739,9 @@ type State struct {
 	// paragraph.BreakContext, which it is, and Carried.Context, which it
 	// becomes.
 	AfterContext BreakContext
+	// AfterClusters is the grapheme cluster scan at the end of what has been
+	// emitted, which the next box continues. See Carried.Clusters.
+	AfterClusters segment.Scanner
 	// AfterDecided says the boundary in front of the next character has
 	// already been given to an inline box's margin edge, and the next box is
 	// not to offer it again. See Carried.Decided.

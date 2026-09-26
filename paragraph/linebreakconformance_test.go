@@ -407,8 +407,7 @@ func TestSplitAtBreaksIsUAX14ButForCSS(t *testing.T) {
 func TestABoxBoundaryIsNotABoundaryToTheRules(t *testing.T) {
 	cases := readLineBreakSuite(t)
 	ws := WhiteSpace{PreserveBreaks: true, Wrap: true}
-	wrong, restarted := 0, 0
-	defer func() { t.Logf("%d cuts left out where the second box's clusters restart", restarted) }()
+	wrong := 0
 	for _, c := range cases {
 		whole := breaksOfCase(c.text, LineBreak{})
 		for cut := 1; cut < len(c.text); cut++ {
@@ -419,24 +418,15 @@ func TestABoxBoundaryIsNotABoundaryToTheRules(t *testing.T) {
 			if c.text[cut-1] == '\r' && c.text[cut] == '\n' {
 				continue
 			}
-			// The grapheme cluster scan of the second box starts afresh, and the
-			// cluster rules that need more than the one character before the
-			// boundary — GB9c's conjuncts, GB11's emoji sequences, GB12 and
-			// GB13's regional indicator pairs — are not carried across it. A cut
-			// where that changes the second box's clusters is not this test's
-			// question, and is counted rather than hidden.
-			if clustersRestart(c.text, cut) {
-				restarted++
-				continue
-			}
 			a, b := string(c.text[:cut]), string(c.text[cut:])
 			pa, tail := SplitAtBreaksAfter(a, ws, WordBreak{}, LineBreak{}, Hyphens{},
 				WritingSystemOther, Carried{Ahead: b})
 			base, _ := LastAutospaceBase(a)
 			pb, _ := SplitAtBreaksAfter(b, ws, WordBreak{}, LineBreak{}, Hyphens{},
 				WritingSystemOther, Carried{
-					Context: tail.Context, Offered: tail.Offered, Deferred: tail.Deferred,
-					Held: tail.Held, Taken: tail.Taken, Prev: c.text[cut-1], PrevBase: base,
+					Context: tail.Context, Clusters: tail.Clusters, Offered: tail.Offered,
+					Deferred: tail.Deferred, Held: tail.Held, Taken: tail.Taken,
+					Prev: c.text[cut-1], PrevBase: base,
 				})
 			got := piecesToBreaks(c.text, append(pa[:len(pa):len(pa)], pb...))
 			for i := 1; i < len(c.text); i++ {
@@ -452,25 +442,4 @@ func TestABoxBoundaryIsNotABoundaryToTheRules(t *testing.T) {
 	if wrong > 20 {
 		t.Errorf("and %d more", wrong-20)
 	}
-}
-
-// clustersRestart reports whether the grapheme clusters of text after cut are
-// different when the text after it is scanned on its own, with only the pair
-// rules asked at the cut — which is what a box that begins at cut sees.
-func clustersRestart(text []rune, cut int) bool {
-	whole := map[int]bool{}
-	for _, b := range segment.Boundaries(nil, string(text)) {
-		whole[b] = true
-	}
-	head := len(string(text[:cut]))
-	alone := map[int]bool{head: !clusterContinues(text[cut-1], text[cut])}
-	for _, b := range segment.Boundaries(nil, string(text[cut:])) {
-		alone[head+b] = true
-	}
-	for at := head; at < len(string(text)); at++ {
-		if whole[at] != alone[at] {
-			return true
-		}
-	}
-	return false
 }
