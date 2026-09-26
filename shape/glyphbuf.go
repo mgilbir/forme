@@ -580,8 +580,11 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 			markJoiningForms(buf, runes, before, after)
 		}
 		buf = hideJoiners(buf, runes)
-		for _, stage := range p.stages {
+		for i, stage := range p.stages {
 			buf = sh.applyStage(buf, stage)
+			if p.arabicFallback != nil && i == p.arabicAfter {
+				buf = sh.applyArabicFallback(buf, p.arabicFallback)
+			}
 		}
 	}
 	if model == modelHebrew {

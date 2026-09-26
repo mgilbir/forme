@@ -71,6 +71,8 @@ var Manifest = []Table{
 		Args: []string{ucdVersion, "${UCD}/UnicodeData.txt"}},
 	{Out: "shape/canonical.go", Generator: "gencanonical", Target: "shapetables",
 		Args: []string{ucdVersion, "${UCD}/UnicodeData.txt", "${UCD}/CompositionExclusions.txt"}},
+	{Out: "shape/arabicforms.go", Generator: "genarabicforms", Target: "shapetables",
+		Args: []string{ucdVersion, "${UCD}/UnicodeData.txt"}},
 	// Not the database: the script development specifications' list, and the
 	// Universal Shaping Engine's corrections to two of the database's
 	// properties, from HarfBuzz's src/ms-use at MSUSE_URL's release.

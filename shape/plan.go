@@ -75,9 +75,9 @@ import (
 // which HarfBuzz applies with a pseudo-random choice of alternate and this
 // package applies as the first alternate like any other alternate
 // substitution; 'stch', whose substitution means nothing without the
-// stretching HarfBuzz does after it (see arabic.go); the fallback shaping
-// HarfBuzz does for an Arabic font with no GSUB; and 'vert', since nothing here
-// sets text vertically.
+// stretching HarfBuzz does after it (see arabic.go); HarfBuzz's second
+// Arabic fallback, for a face encoded as Windows-1256 (see arabicfallback.go);
+// and 'vert', since nothing here sets text vertically.
 //
 // Where HarfBuzz changed between versions, what is mirrored is what the
 // version the oracle runs does: HarfBuzz 8 turned 'calt' off for Hangul, and the
@@ -309,6 +309,11 @@ type plan struct {
 	// plan has it on, which is what decides whether the legacy kern table is
 	// read instead. See legacykern.go.
 	gposKern bool
+	// arabicFallback is the lookups HarfBuzz builds for an Arabic font with no
+	// joining forms, where this plan wants them, and arabicAfter the stage they
+	// are applied after. See arabicfallback.go.
+	arabicFallback []planLookup
+	arabicAfter    int
 }
 
 // planBuilder collects features into stages, in the order a model asks for
@@ -472,7 +477,7 @@ func buildPlan(l *layout, key planKey, extra []string) *plan {
 
 	switch key.model {
 	case modelArabic:
-		collectArabic(b, l, key.arabicScript)
+		collectArabic(b, l, p, key.arabicScript)
 	case modelIndic:
 		collectIndic(b, p)
 	case modelKhmer:
@@ -531,6 +536,9 @@ func buildPlan(l *layout, key planKey, extra []string) *plan {
 	// fraction.
 	p.fractions = p.hasMask(maskFrac) || p.hasMask(maskNumr) && p.hasMask(maskDnom)
 	p.rtlm = p.hasMask(maskRtlm)
+	if key.model == modelArabic && key.arabicScript {
+		p.arabicFallback = arabicFallbackPlan(l)
+	}
 	return p
 }
 
@@ -549,7 +557,7 @@ func (p *plan) hasMask(m glyphMask) bool {
 // collectArabic is collect_features_arabic. The joining forms are a stage each,
 // in the specification's order, because a font may state one as a contextual
 // rule that reads what an earlier one made.
-func collectArabic(b *planBuilder, l *layout, arabicScript bool) {
+func collectArabic(b *planBuilder, l *layout, p *plan, arabicScript bool) {
 	// HarfBuzz enables 'stch' here and then stretches what it produced across
 	// the rest of the word. The stretching is not implemented (see arabic.go),
 	// and the substitution without it would draw a letter's pieces unstretched,
@@ -566,6 +574,9 @@ func collectArabic(b *planBuilder, l *layout, arabicScript bool) {
 	b.pause()
 	b.enable("rlig", flagManualZWJ)
 	if arabicScript {
+		// The pause HarfBuzz applies its fallback lookups at, for a font
+		// with no joining forms of its own. See arabicfallback.go.
+		p.arabicAfter = b.stage
 		b.pause()
 	}
 	b.enable("calt", flagManualZWJ)

@@ -84,11 +84,12 @@ import (
 //     normalize.go — but a hamza written after a vowel is drawn before it by a
 //     rule that is Arabic's rather than Unicode's, and that rule is not applied.
 //   - What HarfBuzz does for a font whose tables do not cover what a model
-//     needs, beyond placing its marks: composing Hebrew into its presentation
-//     forms for a font with no mark positioning, composing old Hangul jamo
-//     sequences, and the Arabic fallback shaping and 'stch' stretching
-//     arabic.go names. Measured over the Google Fonts tree, the first is most
-//     of what still differs from HarfBuzz in Hebrew. See plan.go.
+//     needs, beyond placing its marks and drawing the Arabic joining forms out
+//     of the character map (arabicfallback.go): composing Hebrew into its
+//     presentation forms for a font with no mark positioning, composing old
+//     Hangul jamo sequences, the Windows-1256 Arabic fallback, and the 'stch'
+//     stretching arabic.go names. Measured over the Google Fonts tree, the
+//     first is most of what still differs from HarfBuzz in Hebrew. See plan.go.
 //   - Choosing a language from the text. Which script a run is in is decidable
 //     from its characters; which language it is in is not — "colour" and "color"
 //     are the same letters — so the default language system is used unless the
@@ -746,6 +747,14 @@ func readLayout(tables map[string][]byte, gsubSel featureSet, pos *layout, coord
 		l.readSingleSubstitutions(gsub, idx)
 		l.gsub = gsubLookups(gsub)
 		l.featureLookups = idx.lookupIndices()
+		// A feature declared with no lookups is declared all the same, as it
+		// is for GPOS above: whether the font states a joining form at all is
+		// what decides HarfBuzz's Arabic fallback (see arabicfallback.go).
+		for _, tag := range idx.tags {
+			if _, ok := l.featureLookups[tag]; !ok {
+				l.featureLookups[tag] = nil
+			}
+		}
 	}
 	l.noteLimits("GSUB", allowance)
 	return l

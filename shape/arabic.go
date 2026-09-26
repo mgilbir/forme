@@ -27,7 +27,7 @@ import (
 // indic.go's, and the two are alternatives rather than stages: no script both
 // joins cursively and reorders.
 //
-// Three more things every other shaper does are absent, and they were absent
+// Two more things every other shaper does are absent, and they were absent
 // without being written down here, which is worse than being absent:
 //
 //   - Syriac's Alaph. The letter U+0710 takes a final form chosen by what
@@ -39,16 +39,14 @@ import (
 //   - 'stch', the stretching feature Syriac uses to fill a line by lengthening
 //     a letter rather than by spacing its words. A font that declares it is set
 //     without it, which is a line short of the width it was justified to.
-//   - Fallback shaping. A font that declares none of 'init', 'medi', 'fina' or
-//     'isol' is set here in the letters as written, one isolated form after
-//     another. Unicode's Arabic Presentation Forms block holds those four
-//     shapes as characters, and a shaper with nothing else to go on maps to
-//     them — which is what a reader of a font with no layout tables at all
-//     gets from every other engine and does not get from this one.
 //
-// Each of the three is a font this engine sets less well than another would
-// rather than a font it refuses, so none of them is reported: nothing here can
-// tell "this font has no joining forms" from "this run needs none".
+// Each is a font this engine sets less well than another would rather than a
+// font it refuses, so neither is reported.
+//
+// A third, the fallback for an Arabic font that declares none of 'init',
+// 'medi', 'fina' or 'isol', is done: the forms are drawn out of the Arabic
+// Presentation Forms the face maps, as HarfBuzz draws them. See
+// arabicfallback.go.
 
 // joiningType is what a character can join to.
 type joiningType uint8
@@ -232,6 +230,10 @@ func markJoiningForms(buf []Glyph, runes, before, after []rune) {
 // HasJoiningForms reports whether the font carries the positional forms a
 // cursive script needs. A caller can use it to tell a face that can set Arabic
 // from one that merely has the letters.
+//
+// The forms may be in its rules or in its character map: a face that maps the
+// Arabic presentation forms and declares no joining forms has them drawn out
+// of the map, as HarfBuzz draws them (see arabicfallback.go).
 func (f *Face) HasJoiningForms() bool {
 	l := f.layout
 	for _, form := range arabicForms {
@@ -239,7 +241,7 @@ func (f *Face) HasJoiningForms() bool {
 			return true
 		}
 	}
-	return false
+	return f.composite() && arabicFallbackPlan(l) != nil && f.hasFallbackForms()
 }
 
 // cursiveScripts is the set of scripts whose letters join, indexed by script.

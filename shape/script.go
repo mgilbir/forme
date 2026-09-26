@@ -1017,6 +1017,11 @@ type layoutCache struct {
 	// chosenScriptTag — which a layout cannot say, since two scripts a font
 	// treats alike share one.
 	chosen map[chosenKey]string
+	// arabicLookups are the lookups HarfBuzz's Arabic fallback builds out of
+	// the character map, built once by arabicOnce: they are the font's, not a
+	// selection's, like everything else here. See arabicfallback.go.
+	arabicOnce    sync.Once
+	arabicLookups []rawLookup
 }
 
 // scriptKey is a run's script and its language, as the language system tags it

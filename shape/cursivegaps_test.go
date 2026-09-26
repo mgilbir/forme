@@ -6,13 +6,16 @@ import (
 	"github.com/mgilbir/forme/fonttest"
 )
 
-// The three things the cursive model does and this engine does not.
+// The things the cursive model does and this engine does not, and the one it
+// did not and now does.
 //
 // They are named in arabic.go's header, and the reason to test an absence is
 // that a list of what is missing goes stale the moment something stops being
 // missing. Each of these declares the feature in a font and requires that
 // nothing happen — so implementing one fails the test that says it is absent,
-// and whoever implements it is sent to the list.
+// and whoever implements it is sent to the list. The fallback shaping was
+// implemented that way: its test failed, the header was changed, and the test
+// now says what the header says.
 
 // The Syriac letter whose final form is chosen by what precedes it, and the
 // three feature tags the model states that rule with.
@@ -91,17 +94,20 @@ func TestStchIsNotApplied(t *testing.T) {
 	}
 }
 
-// TestThereIsNoFallbackShaping. A font that declares none of the four positional
-// features is set in the letters as written — Unicode's presentation forms hold
-// those shapes as characters, and a shaper with nothing else to go on maps to
-// them. This one does not.
-func TestThereIsNoFallbackShaping(t *testing.T) {
+// TestAFaceWithNoFormsTakesThemFromItsCharacterMap. A font that declares none
+// of the four positional features is set in the forms its character map holds:
+// Unicode's presentation forms hold those shapes as characters, and HarfBuzz
+// maps to them. This one declares none and maps the initial form of beh, so the
+// first of two behs is drawn in it and the second, whose final form the face
+// does not map, is drawn as the letter. HarfBuzz 14.5.0 draws the same. It was
+// the test that the fallback was absent; see arabicfallback.go.
+func TestAFaceWithNoFormsTakesThemFromItsCharacterMap(t *testing.T) {
 	data := fonttest.SFNT(fonttest.SFNTOptions{
 		Name: "NoForms",
 		Glyphs: []fonttest.Glyph{
 			{Rune: beh, Advance: 500, HasShape: true},
-			// The initial form of beh as a character of its own, which a
-			// fallback would map to.
+			// The initial form of beh as a character of its own, which the
+			// fallback maps to.
 			{Rune: 0xFE91, Advance: 300, HasShape: true},
 		},
 	})
@@ -109,16 +115,7 @@ func TestThereIsNoFallbackShaping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f.HasJoiningForms() {
-		t.Fatal("the fixture declares positional forms after all")
-	}
 	glyphs, _ := f.ShapeGlyphs(string([]rune{beh, beh}))
-	if len(glyphs) != 2 {
-		t.Fatalf("two letters came to %d glyphs", len(glyphs))
-	}
-	if glyphs[0].GID != glyphs[1].GID {
-		t.Errorf("the two letters were drawn as %d and %d: something chose a "+
-			"form for them, and arabic.go says nothing does",
-			glyphs[0].GID, glyphs[1].GID)
-	}
+	// Drawn right to left: the final beh, then the initial form.
+	checkShaped(t, "two behs in a face with no forms", glyphs, []shapedAs{{1, 500, 0, 0}, {2, 300, 0, 0}})
 }
