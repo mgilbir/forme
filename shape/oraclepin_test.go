@@ -106,9 +106,10 @@ func oracleHeader(t *testing.T, path string) map[string][]string {
 func oracleReleaseProblems(pin pinnedOracle, path string, header map[string][]string) []string {
 	want := map[string]string{"harfbuzz": pin.harfbuzz, "uharfbuzz": pin.uharfbuzz}
 	switch {
-	case filepath.Base(path) == "usecategories.expected.txt":
-		// HarfBuzz's own generator, run from a source checkout rather than
-		// through uharfbuzz; it records the checkout it was run from.
+	case filepath.Base(path) == "usecategories.expected.txt",
+		filepath.Base(path) == "usescripts.expected.txt":
+		// HarfBuzz's own generator and source, read from a source checkout
+		// rather than through uharfbuzz; each records the checkout.
 		want = map[string]string{"generator": "harfbuzz-" + pin.harfbuzz}
 	case filepath.Base(filepath.Dir(path)) == "varinstance":
 		want["fonttools"] = pin.fonttools

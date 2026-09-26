@@ -71,13 +71,12 @@ import (
 // automatic fractions around U+2044 and the right-to-left mirrored forms are
 // masked the way HarfBuzz masks them.
 //
-// Not mirrored, besides the parts of two models named at modelHebrew: 'rand',
+// Not mirrored, besides the part of the Hangul model named at modelHangul: 'rand',
 // which HarfBuzz applies with a pseudo-random choice of alternate and this
 // package applies as the first alternate like any other alternate
-// substitution; 'stch', whose substitution means nothing without the
-// stretching HarfBuzz does after it (see arabic.go); HarfBuzz's second
-// Arabic fallback, for a face encoded as Windows-1256 (see arabicfallback.go);
-// and 'vert', since nothing here sets text vertically.
+// substitution; HarfBuzz's second Arabic fallback, for a face encoded as
+// Windows-1256 (see arabicfallback.go); and 'vert', since nothing here sets
+// text vertically.
 //
 // Where HarfBuzz changed between versions, what is mirrored is what the
 // version the oracle runs does: HarfBuzz 8 turned 'calt' off for Hangul, and the
@@ -103,10 +102,9 @@ const (
 	modelThai
 	// modelHebrew and modelHangul are the default model's features, named
 	// apart because HarfBuzz sets them apart: Hangul cancels no mark's advance.
-	// What else HarfBuzz's two models do is not done here — Hebrew's
-	// presentation forms for a font without mark positioning and Hangul's
-	// composition of old jamo sequences — and each is named in the plan's
-	// header.
+	// What the Hebrew model adds — its presentation forms and point order — is
+	// in hebrew.go. What HarfBuzz's Hangul model adds — composing and taking
+	// apart syllables, the jamo features, the tone marks — is not done here.
 	modelHebrew
 	modelHangul
 )
@@ -314,6 +312,11 @@ type plan struct {
 	// are applied after. See arabicfallback.go.
 	arabicFallback []planLookup
 	arabicAfter    int
+	// stch says the plan's rules declare 'stch', whose pieces are recorded
+	// after stage stchAfter and stretched once the run is positioned. See
+	// stch.go.
+	stch      bool
+	stchAfter int
 }
 
 // planBuilder collects features into stages, in the order a model asks for
@@ -558,11 +561,13 @@ func (p *plan) hasMask(m glyphMask) bool {
 // in the specification's order, because a font may state one as a contextual
 // rule that reads what an earlier one made.
 func collectArabic(b *planBuilder, l *layout, p *plan, arabicScript bool) {
-	// HarfBuzz enables 'stch' here and then stretches what it produced across
-	// the rest of the word. The stretching is not implemented (see arabic.go),
-	// and the substitution without it would draw a letter's pieces unstretched,
-	// so the feature is left out; the stage it would be in is kept, so that the
-	// stages after it are where HarfBuzz has them.
+	// 'stch' in the stage it shares with the direction's forms and the
+	// fractions, and what it multiplied recorded straight after it, where the
+	// font declares it at all: HarfBuzz's has_stch. See stch.go.
+	b.enable("stch", 0)
+	_, sub := l.featureLookups["stch"]
+	_, pos := l.gposFeatures["stch"]
+	p.stch, p.stchAfter = sub || pos, b.stage
 	b.pause()
 	b.enable("ccmp", flagManualZWJ)
 	b.enable("locl", flagManualZWJ)

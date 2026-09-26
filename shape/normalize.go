@@ -66,11 +66,6 @@ import "sort"
 //     default-ignorable, so it is taken out before the buffer is built, as
 //     ignorable.go says — kept only in a syllabic run, until the syllable model
 //     has read it — and nothing is drawn for it.
-//   - The mark reordering Arabic wants on top of canonical order: a hamza or a
-//     similar modifier written after a vowel is drawn before it, which canonical
-//     order does not say and every shaper does anyway. Measured against HarfBuzz
-//     on a corpus of Arabic bases with two and three marks, it is the whole of
-//     the remaining 14%.
 
 // maxCombiningMarks bounds the run of marks that will be sorted. The sort is
 // quadratic, so a crafted string must not be able to turn a page of marks into
@@ -364,37 +359,50 @@ func (f *Face) hasGlyph(r rune) bool {
 	return ok
 }
 
-// normalize puts a run into the spelling this face draws best, with each
-// cluster's marks in canonical order.
+// normalization is what a run's model asks of normalize, beyond Unicode's
+// three rounds.
 //
-// It returns the slices it was given when nothing can change, which is the
-// common case and saves both the copy and the walk — see needsNormalizing.
-//
-// The two flags are separate because they answer separate questions, and
+// syllabic and indic are separate because they answer separate questions, and
 // conflating them was a real defect for the length of one merge.
 //
 // syllabic says a shaper that segments and reorders will read this run — Indic,
 // Khmer or Myanmar. Its rules are written against fully decomposed text, so the
 // short-circuit that is right for Latin must not apply.
 //
-// indicModel says the run is one of the nine scripts sharing the Indic model, in
+// indic says the run is one of the nine scripts sharing the Indic model, in
 // which case the two places that model disagrees with Unicode's own tables are
 // honoured. Those disagreements are about Devanagari, Bengali and Tamil letters
 // and about Indic split vowel signs; none of them means anything in a Khmer or
 // Myanmar run, and applying them there would be asserting a rule of a script the
 // text is not in.
-func (f *Face) normalize(runes []rune, offsets []int, syllabic, indicModel, arabic bool) ([]rune, []int) {
-	if !f.needsNormalizing(runes, !syllabic) {
+//
+// arabic, hebrew and hebrewForms are the orderings and compositions HarfBuzz's
+// Arabic and Hebrew shapers add: see reorderArabicMarks, reorderHebrewMarks
+// and composeHebrew.
+type normalization struct {
+	syllabic, indic, arabic bool
+	hebrew, hebrewForms     bool
+}
+
+// normalize puts a run into the spelling this face draws best, with each
+// cluster's marks in canonical order, as its model asks (see normalization).
+//
+// It returns the slices it was given when nothing can change, which is the
+// common case and saves both the copy and the walk — see needsNormalizing.
+func (f *Face) normalize(runes []rune, offsets []int, how normalization) ([]rune, []int) {
+	if !f.needsNormalizing(runes, !how.syllabic) {
 		return runes, offsets
 	}
 	n := normalizer{
-		f:        f,
-		indic:    indicModel,
-		arabic:   arabic,
-		syllabic: syllabic,
-		shortest: !syllabic,
-		out:      make([]rune, 0, len(runes)+4),
-		off:      make([]int, 0, len(runes)+4),
+		f:           f,
+		indic:       how.indic,
+		arabic:      how.arabic,
+		hebrew:      how.hebrew,
+		hebrewForms: how.hebrewForms,
+		syllabic:    how.syllabic,
+		shortest:    !how.syllabic,
+		out:         make([]rune, 0, len(runes)+4),
+		off:         make([]int, 0, len(runes)+4),
 	}
 	if n.decomposeRound(runes, offsets) {
 		// Nothing in the run was a base with marks on it, so there is no cluster
@@ -469,11 +477,19 @@ type normalizer struct {
 	// vowel sign taken apart must not be put back together. Every such shaper
 	// needs that; only Indic needs what indic covers.
 	syllabic bool
-	// arabic says the run is Arabic, so that the mark ordering the script has of
-	// its own applies on top of Unicode's — see reorderArabicMarks.
+	// arabic says the run is set by the Arabic model, so that the mark ordering
+	// Arabic has of its own applies on top of Unicode's — see
+	// reorderArabicMarks. The model sets Syriac too, and HarfBuzz orders a
+	// Syriac letter's marks the same way.
 	arabic bool
-	out    []rune
-	off    []int
+	// hebrew says the run is set by the Hebrew model, whose one reordering of
+	// the points applies on top of Unicode's — see reorderHebrewMarks — and
+	// hebrewForms that the face positions no marks, so that the presentation
+	// forms Unicode excludes from composition are composed after all — see
+	// composeHebrew.
+	hebrew, hebrewForms bool
+	out                 []rune
+	off                 []int
 }
 
 func (n *normalizer) emit(r rune, cluster int) {
@@ -653,7 +669,13 @@ func (n *normalizer) compose(a, b rune) (rune, bool) {
 			return 0x09DF, true
 		}
 	}
-	return canonicalCompose(a, b)
+	if ab, ok := canonicalCompose(a, b); ok {
+		return ab, true
+	}
+	if n.hebrewForms {
+		return composeHebrew(a, b)
+	}
+	return 0, false
 }
 
 // reorderRound is the second round: each run of marks put into canonical order.
@@ -670,6 +692,9 @@ func (n *normalizer) reorderRound() {
 			n.sortMarks(i, end)
 			if n.arabic {
 				n.reorderArabicMarks(i, end)
+			}
+			if n.hebrew {
+				n.reorderHebrewMarks(i, end)
 			}
 		}
 		// The character at end has class zero, so it starts no run of its own.

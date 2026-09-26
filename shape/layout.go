@@ -78,18 +78,12 @@ import (
 //
 // # What is not, and what each absence costs
 //
-//   - The mark reordering Arabic wants on top of canonical order. Normalisation
-//     is done — a run is composed or decomposed to whatever this face draws
-//     best, and each cluster's marks are put in canonical order, see
-//     normalize.go — but a hamza written after a vowel is drawn before it by a
-//     rule that is Arabic's rather than Unicode's, and that rule is not applied.
-//   - What HarfBuzz does for a font whose tables do not cover what a model
-//     needs, beyond placing its marks and drawing the Arabic joining forms out
-//     of the character map (arabicfallback.go): composing Hebrew into its
-//     presentation forms for a font with no mark positioning, composing old
-//     Hangul jamo sequences, the Windows-1256 Arabic fallback, and the 'stch'
-//     stretching arabic.go names. Measured over the Google Fonts tree, the
-//     first is most of what still differs from HarfBuzz in Hebrew. See plan.go.
+//   - Of what HarfBuzz does for a font whose tables do not cover what a model
+//     needs, the Windows-1256 Arabic fallback and composing old Hangul jamo
+//     sequences. The rest is done: placing the marks of a face that positions
+//     none (fallback.go), drawing the Arabic joining forms out of the
+//     character map (arabicfallback.go), and composing Hebrew presentation
+//     forms for a face with no mark positioning (hebrew.go). See plan.go.
 //   - Choosing a language from the text. Which script a run is in is decidable
 //     from its characters; which language it is in is not — "colour" and "color"
 //     are the same letters — so the default language system is used unless the

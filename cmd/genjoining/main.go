@@ -31,6 +31,14 @@
 // for a Latin combining acute would say yes. The shaper's joiningTypeOf reads
 // this table after joiningRanges.
 //
+// # And two groups
+//
+// The file's fourth column is a letter's joining group. Only two of them are
+// read: ALAPH and DALATH RISH, because the Syriac Alaph's final form depends
+// on whether the letter before it is a Dalath or a Rish, and the joining scan
+// has to know which letters those are. The other groups describe how a letter
+// is drawn, which is the font's business.
+//
 //	go run ./cmd/genjoining -version <X.Y.Z> <ArabicShaping.txt> <UnicodeData.txt> > shape/joining.go
 package main
 
@@ -69,6 +77,10 @@ func main() {
 	defer f.Close()
 
 	types := map[rune]string{}
+	// The two joining groups the Syriac Alaph's forms turn on. Every other
+	// group is a fact about how a letter looks, which the font already knows;
+	// these two decide which form an Alaph after them takes.
+	groups := map[string][]rune{}
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		line := sc.Text()
@@ -82,6 +94,12 @@ func main() {
 		cp, err := strconv.ParseUint(strings.TrimSpace(fields[0]), 16, 32)
 		if err != nil {
 			continue
+		}
+		if len(fields) >= 4 {
+			switch g := strings.TrimSpace(fields[3]); g {
+			case "ALAPH", "DALATH RISH":
+				groups[g] = append(groups[g], rune(cp))
+			}
 		}
 		t := strings.TrimSpace(fields[2])
 		switch t {
@@ -160,6 +178,30 @@ var defaultTransparentRanges = [...]struct{ lo, hi rune }{
 		fmt.Fprintf(w, "\t{0x%04X, 0x%04X},\n", r.lo, r.hi)
 	}
 	fmt.Fprintln(w, "}")
+	if len(groups["ALAPH"]) == 0 || len(groups["DALATH RISH"]) == 0 {
+		fail("the file puts nothing in the ALAPH or the DALATH RISH joining group, " +
+			"which the Syriac joining rules are stated over")
+	}
+	fmt.Fprintf(w, `
+// alaphGroup and dalathRishGroup are the characters of the ALAPH and DALATH
+// RISH joining groups, in Unicode %s.
+//
+// The Syriac Alaph takes its final form by what precedes it — one after a
+// Dalath or a Rish, another after any other letter that does not join forward
+// — and these are the letters that decide it. See joiningColumnOf.
+`, *version)
+	for _, g := range []struct{ name, group string }{{"alaphGroup", "ALAPH"}, {"dalathRishGroup", "DALATH RISH"}} {
+		rs := groups[g.group]
+		sort.Slice(rs, func(i, j int) bool { return rs[i] < rs[j] })
+		fmt.Fprintf(w, "var %s = [...]rune{", g.name)
+		for i, r := range rs {
+			if i > 0 {
+				fmt.Fprint(w, ", ")
+			}
+			fmt.Fprintf(w, "0x%04X", r)
+		}
+		fmt.Fprintln(w, "}")
+	}
 }
 
 // collapse turns a per-character map into sorted ranges of one value: the

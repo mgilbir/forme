@@ -180,9 +180,10 @@ hbenv:
 		import oracle; oracle.harfbuzz(); oracle.fonttools()'
 
 # Every file the oracles write through uharfbuzz. hblanguages is below, where
-# the language-tag header it reads has been defined. The one oracle file this
-# leaves out, usecategories.expected.txt, is HarfBuzz's own generator run from a
-# source checkout of the same release; see usecategories.py.
+# the language-tag header it reads has been defined. The oracle files this
+# leaves out, usecategories.expected.txt and usescripts.expected.txt, are read
+# from a source checkout of the same release — HarfBuzz's own generator, and
+# its own source; see usecategories.py and usescripts.py.
 hboracles: hbshaping hblanguages varinstance
 
 hbshaping:

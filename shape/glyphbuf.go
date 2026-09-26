@@ -87,6 +87,12 @@ type Glyph struct {
 	// separator it has no glyph for, and which one, so that it can be given
 	// that separator's width. See spacefallback.go.
 	space spaceKind
+
+	// stch says the glyph is a piece of a stretching mark, fixed or repeated,
+	// and word that the character it came from is one a stretch spans. See
+	// stch.go.
+	stch uint8
+	word bool
 }
 
 // ligatureRef says what a glyph has to do with a ligature.
@@ -472,8 +478,11 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	// each cluster's marks into canonical order. It runs before any glyph is
 	// chosen because it decides which characters the font is asked about at all.
 	// See normalize.go.
-	runes, offsets = f.normalize(runes, offsets, model.syllabic(), model == modelIndic,
-		scriptSelects(script, "arab"))
+	runes, offsets = f.normalize(runes, offsets, normalization{
+		syllabic: model.syllabic(), indic: model == modelIndic,
+		arabic: model == modelArabic,
+		hebrew: model == modelHebrew, hebrewForms: model == modelHebrew && !l.hasMarkFeature(),
+	})
 	// The characters nothing is drawn for, for every run but a syllabic one.
 	//
 	// Removing them here means no rule of the font is ever asked about a glyph
@@ -537,7 +546,7 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 		buf = append(buf, Glyph{
 			GID: gid, Cluster: offsets[i], XAdvance: f.advanceGID(gid),
 			class: classOfRune(runes[i]), umark: unicodeMarkOf(runes[i]),
-			space: space,
+			space: space, word: isStchWord(runes[i]),
 		})
 	}
 	if len(buf) == 0 {
@@ -582,6 +591,9 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 		buf = hideJoiners(buf, runes)
 		for i, stage := range p.stages {
 			buf = sh.applyStage(buf, stage)
+			if p.stch && i == p.stchAfter {
+				recordStch(buf)
+			}
 			if p.arabicFallback != nil && i == p.arabicAfter {
 				buf = sh.applyArabicFallback(buf, p.arabicFallback)
 			}
@@ -612,6 +624,11 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 		// the order the text is written in; the pen will meet these glyphs in the
 		// other one.
 		reverseGlyphs(buf)
+	}
+	// A stretching mark is stretched over its word once the word has its
+	// widths, in the order it is drawn. See stch.go.
+	if p.stch {
+		buf = f.applyStch(buf, rtl)
 	}
 	for _, g := range buf {
 		f.used[g.GID] = true
