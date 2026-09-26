@@ -107,7 +107,8 @@ func oracleReleaseProblems(pin pinnedOracle, path string, header map[string][]st
 	want := map[string]string{"harfbuzz": pin.harfbuzz, "uharfbuzz": pin.uharfbuzz}
 	switch {
 	case filepath.Base(path) == "usecategories.expected.txt",
-		filepath.Base(path) == "usescripts.expected.txt":
+		filepath.Base(path) == "usescripts.expected.txt",
+		filepath.Base(path) == "indiccategories.expected.txt":
 		// HarfBuzz's own generator and source, read from a source checkout
 		// rather than through uharfbuzz; each records the checkout.
 		want = map[string]string{"generator": "harfbuzz-" + pin.harfbuzz}

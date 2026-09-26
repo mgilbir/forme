@@ -1,6 +1,7 @@
 package shape
 
 import (
+	"slices"
 	"sort"
 
 	"github.com/mgilbir/forme/internal/charprop"
@@ -356,8 +357,15 @@ func (f *Face) indicOldSpec(cfg *indicConfig, script uint16, lang otLanguage) bo
 }
 
 // indicProperties reports a character's shaping category and where it sits.
+//
+// Only a character of the blocks HarfBuzz's model is written for has one: see
+// indicModelBlocks. Any other is Other, whatever Unicode says of it, unless it
+// is one of the overrides below.
 func indicProperties(r rune) (indicCat, indicPos) {
 	syl, pos := indicCategories(r)
+	if !inIndicModelBlock(r) {
+		syl = indicSylOther
+	}
 	cat := catOther
 	switch syl {
 	case indicSylConsonant, indicSylConsonantDead,
@@ -411,6 +419,56 @@ func indicProperties(r rune) (indicCat, indicPos) {
 		cat = o
 	}
 	return cat, indicPositionOf(r, cat, pos)
+}
+
+// indicModelBlocks are the blocks whose characters the Indic model gives a
+// category, and indicModelSingles two more characters it gives one: HarfBuzz's
+// ALLOWED_BLOCKS and ALLOWED_SINGLES (gen-indic-table.py). The Myanmar and
+// Khmer blocks are there because HarfBuzz reads one table for three models;
+// they change nothing here, where no Indic run holds their characters.
+//
+// Unicode gives an Indic syllabic category to characters elsewhere too, and to
+// the model those are Other. The two an Indic run can hold are marks of the
+// Inherited script: U+1DFB COMBINING DELETION MARK and U+20F0 COMBINING
+// ASTERISK ABOVE. Read as Unicode categorises it, the asterisk was a
+// cantillation mark that the syllable before took in, and a Vedic sign after
+// it went with them; to HarfBuzz it ends the syllable, and the sign is shown
+// against a dotted circle. TestIndicCategoriesAreHarfBuzzs holds every
+// character an Indic run can hold to HarfBuzz's generator.
+var indicModelBlocks = [...]struct{ lo, hi rune }{
+	{0x0000, 0x007F},   // Basic Latin
+	{0x0080, 0x00FF},   // Latin-1 Supplement
+	{0x0900, 0x097F},   // Devanagari
+	{0x0980, 0x09FF},   // Bengali
+	{0x0A00, 0x0A7F},   // Gurmukhi
+	{0x0A80, 0x0AFF},   // Gujarati
+	{0x0B00, 0x0B7F},   // Oriya
+	{0x0B80, 0x0BFF},   // Tamil
+	{0x0C00, 0x0C7F},   // Telugu
+	{0x0C80, 0x0CFF},   // Kannada
+	{0x0D00, 0x0D7F},   // Malayalam
+	{0x1000, 0x109F},   // Myanmar
+	{0x1780, 0x17FF},   // Khmer
+	{0x1CD0, 0x1CFF},   // Vedic Extensions
+	{0x2000, 0x206F},   // General Punctuation
+	{0x2070, 0x209F},   // Superscripts and Subscripts
+	{0xA8E0, 0xA8FF},   // Devanagari Extended
+	{0xA9E0, 0xA9FF},   // Myanmar Extended-B
+	{0xAA60, 0xAA7F},   // Myanmar Extended-A
+	{0x116D0, 0x116FF}, // Myanmar Extended-C
+}
+
+var indicModelSingles = [...]rune{0x00A0, dottedCircle}
+
+// inIndicModelBlock reports whether the Indic model gives a character a
+// category of its own. See indicModelBlocks.
+func inIndicModelBlock(r rune) bool {
+	for _, b := range indicModelBlocks {
+		if r >= b.lo && r <= b.hi {
+			return true
+		}
+	}
+	return slices.Contains(indicModelSingles[:], r)
 }
 
 // indicCatOverrides are the characters whose shaping category is not the one
@@ -476,6 +534,12 @@ var indicCatOverrides = map[rune]indicCat{
 	0x09FC: catPlaceholder, // Bengali
 	0x0C80: catPlaceholder, // Kannada
 	0x0D04: catPlaceholder, // Malayalam
+
+	// Placeholders the Myanmar specification names, which are not Myanmar's
+	// and which HarfBuzz gives the Indic model too: a vowel sign written on a
+	// bullet or a dash is shown on it, as on a dotted circle.
+	0x2015: catPlaceholder, 0x2022: catPlaceholder,
+	0x25FB: catPlaceholder, 0x25FC: catPlaceholder, 0x25FD: catPlaceholder, 0x25FE: catPlaceholder,
 }
 
 // indicPosOverrides are the characters drawn somewhere other than where their
@@ -760,11 +824,9 @@ var indicPresentationFeatures = []string{"pres", "abvs", "blws", "psts", "haln"}
 // shapeIndic is the whole Indic pass: it replaces both the joining pass and the
 // default substitutions for a run it handles.
 func (sh shaper) shapeIndic(buf []Glyph, runes, before []rune, plan *indicPlan, p *plan) []Glyph {
-	// Before anything is classified: a vowel followed by a sign that spells a
-	// different vowel is shown against a dotted circle. It has to happen on the
-	// characters, because it is about which characters were written, and it
-	// changes the run that everything below is built from.
-	buf, runes = sh.markInvalidVowels(buf, runes)
+	// A vowel followed by a sign that spells a different vowel has already
+	// been shown against a dotted circle, before normalisation: see
+	// markInvalidVowels.
 	buf, runes = sh.splitMatras(buf, runes)
 
 	info := make([]indicInfo, len(runes))
@@ -799,34 +861,24 @@ func (sh shaper) shapeIndic(buf []Glyph, runes, before []rune, plan *indicPlan, 
 	out := make([]Glyph, 0, len(buf))
 	outInfo := make([]indicInfo, 0, len(info))
 	dotted, hasDotted := sh.f.GlyphID(dottedCircle)
-	prev := 0
 	var serial int32
-	// What lies between the syllables — the non-Indic stretches and the
-	// symbols — passes through untouched, a glyph to a syllable of its own, so
-	// that no feature held to a syllable reaches across one.
-	passThrough := func(lo, hi int) {
-		for i := lo; i < hi; i++ {
-			serial++
-			rec := info[i]
-			rec.syllable = serial
-			out = append(out, buf[i])
-			outInfo = append(outInfo, rec)
-		}
-	}
+	// The cut covers the run, one syllable after another, so every glyph is
+	// shaped as part of one. What the model does not reorder — a symbol cluster
+	// and a character of no Indic category — is a syllable too. It used to be
+	// passed through a glyph at a time, so that no feature held to a syllable
+	// reached it at all; see shapeIndicUnordered.
 	for _, syl := range indicSyllables(cats) {
-		if syl.kind == sylNonIndic || syl.kind == sylSymbol {
-			continue
-		}
-		passThrough(prev, syl.start)
-		prev = syl.end
-
 		syllable := append([]Glyph(nil), buf[syl.start:syl.end]...)
 		record := append([]indicInfo(nil), info[syl.start:syl.end]...)
-		placeholder := -1
-		if syl.kind == sylBroken && hasDotted {
-			placeholder = dotted
+		if syl.kind == sylNonIndic || syl.kind == sylSymbol {
+			syllable = sh.shapeIndicUnordered(syllable, &record, p)
+		} else {
+			placeholder := -1
+			if syl.kind == sylBroken && hasDotted {
+				placeholder = dotted
+			}
+			syllable = sh.shapeIndicSyllable(syllable, &record, plan, p, info[syl.start].wordStart, placeholder)
 		}
-		syllable = sh.shapeIndicSyllable(syllable, &record, plan, p, info[syl.start].wordStart, placeholder)
 		serial++
 		for i := range record {
 			record[i].syllable = serial
@@ -834,7 +886,6 @@ func (sh shaper) shapeIndic(buf []Glyph, runes, before []rune, plan *indicPlan, 
 		out = append(out, syllable...)
 		outInfo = append(outInfo, record...)
 	}
-	passThrough(prev, len(buf))
 	buf, info = out, outInfo
 
 	// The last stage, over the whole run: the presentation features held to
@@ -871,51 +922,97 @@ func indicSyllableWindows(info []indicInfo) [][2]int {
 
 // markInvalidVowels shows a dotted circle inside any sequence that spells a
 // vowel nobody writes — an independent vowel followed by a sign that would make
-// it look like a different vowel (indicvowel.go).
+// it look like a different vowel (indicvowel.go). It is HarfBuzz's
+// _hb_preprocess_text_vowel_constraints, which its Indic and universal engines
+// both run.
 //
-// It runs on the characters, before they are classified, because it is a claim
-// about which characters were written rather than about the syllable they form,
-// and because it changes the run everything below is built from: the circle it
-// inserts is an ordinary character of the text from that point on, and the
-// syllable cut sees it as one.
+// It runs on the characters, before normalisation and before anything is
+// classified, because it is a claim about which characters were written rather
+// than about the syllable they form, and because it changes the run everything
+// below is built from: the circle it inserts is an ordinary character of the
+// text from that point on, and the syllable cut sees it as one. It ran after
+// normalisation, which reorders marks, so a sequence written with a virama
+// between the vowel and the sign was read as the vowel and the sign once the
+// sign had been sorted in front of the virama: Chathura's "ఒ్ౕ" came out with a
+// circle HarfBuzz does not draw.
 //
-// A face with no U+25CC cannot show one, and the sequence is then set as it
-// stands — which is what it would have been anyway.
-func (sh shaper) markInvalidVowels(buf []Glyph, runes []rune) ([]Glyph, []rune) {
-	if len(runes) < 2 {
-		return buf, runes
-	}
-	gid, ok := sh.f.GlyphID(dottedCircle)
-	if !ok {
-		return buf, runes
-	}
-	outBuf := make([]Glyph, 0, len(buf)+4)
-	outRunes := make([]rune, 0, len(runes)+4)
-	for i := 0; i < len(runes); i++ {
-		outBuf = append(outBuf, buf[i])
-		outRunes = append(outRunes, runes[i])
+// The circle goes in whether or not the face can draw one, as HarfBuzz puts it
+// in: where the face has none it is drawn as .notdef, which is still a mark of
+// malformed text where the reader can see it, and setting the sequence as
+// though it were meant says the opposite. It is not counted missing — the text
+// has no such character to be missing — which is why it is given the offset of
+// the character after it, as HarfBuzz gives it that character's cluster: see
+// isInsertedCircle. It used to be left out of a face without one.
+//
+// A match takes the characters it matched with it: the sign after the circle
+// does not open another. Each circle goes before the sign, after the letter and
+// the virama a three-character entry opens with.
+func markInvalidVowels(runes []rune, offsets []int) ([]rune, []int) {
+	var out []rune
+	var off []int
+	i := 0
+	for i+1 < len(runes) {
 		n := indicInvalidClusterAt(runes, i)
 		if n == 0 {
+			if out != nil {
+				out = append(out, runes[i])
+				off = append(off, offsets[i])
+			}
+			i++
 			continue
 		}
-		// A three-character entry names the letter that opens it, the virama
-		// that follows and the vowel it would spell; the circle goes before the
-		// vowel, so the whole of the sequence up to it is copied first.
-		for k := 1; k < n-1; k++ {
-			i++
-			outBuf = append(outBuf, buf[i])
-			outRunes = append(outRunes, runes[i])
+		if out == nil {
+			out = append(make([]rune, 0, len(runes)+4), runes[:i]...)
+			off = append(make([]int, 0, len(runes)+4), offsets[:i]...)
 		}
-		// The circle is a character of the run from here on, and HarfBuzz
-		// puts it into the text before glyph classes are inferred: what the
-		// character implies is its class.
-		outBuf = append(outBuf, Glyph{
-			GID: gid, Cluster: buf[i].Cluster, XAdvance: sh.f.advanceGID(gid),
-			class: classOfRune(dottedCircle), umark: unicodeMarkOf(dottedCircle),
-		})
-		outRunes = append(outRunes, dottedCircle)
+		out = append(out, runes[i:i+n-1]...)
+		off = append(off, offsets[i:i+n-1]...)
+		out = append(out, dottedCircle, runes[i+n-1])
+		off = append(off, offsets[i+n-1], offsets[i+n-1])
+		i += n
 	}
-	return outBuf, outRunes
+	if out == nil {
+		return runes, offsets
+	}
+	out = append(out, runes[i:]...)
+	off = append(off, offsets[i:]...)
+	return out, off
+}
+
+// markVowelCircles gives each dotted circle markInvalidVowels put into a run
+// the character properties of the sign after it, as HarfBuzz gives them: it
+// makes the circle out of that sign's record, so the circle before a
+// non-spacing sign is a mark, to the lookups that step over marks and to
+// everything else. buf is one to one with runes.
+func markVowelCircles(buf []Glyph, runes []rune, offsets []int) {
+	for i := range runes {
+		if isInsertedCircle(runes, offsets, i) {
+			buf[i].class = classOfRune(runes[i+1])
+			buf[i].umark = unicodeMarkOf(runes[i+1])
+		}
+	}
+}
+
+// sharedIndicCategory is what HarfBuzz's one category table says of a
+// character a Khmer or Myanmar run takes in from outside its own blocks — a
+// digit, a no-break space, a dash or a bullet to hang a vowel sign on, a Vedic
+// tone mark, a superscript digit — narrowed by the model to the categories its
+// grammar names. HarfBuzz reads one table for its Indic, Khmer and Myanmar
+// models, and what the Indic model says of these characters is what the table
+// says; the Khmer and Myanmar tables here name only their own blocks, so a
+// digit a Myanmar vowel sign was written on was a character of no syllable,
+// and the sign stood alone against a dotted circle.
+func sharedIndicCategory(r rune, narrow func(indicCat) indicCat) indicCat {
+	c, _ := indicProperties(r)
+	return narrow(c)
+}
+
+// isInsertedCircle reports whether the character at i is a dotted circle
+// markInvalidVowels put into the run, rather than one the text holds: it
+// shares the offset of the character after it, which no two characters of the
+// text do.
+func isInsertedCircle(runes []rune, offsets []int, i int) bool {
+	return runes[i] == dottedCircle && i+1 < len(runes) && offsets[i+1] == offsets[i]
 }
 
 // splitMatras replaces each vowel sign that is written as one character and
@@ -1076,6 +1173,28 @@ func (sh shaper) shapeIndicSyllable(buf []Glyph, info *[]indicInfo, plan *indicP
 	// characters are, so the syllable is the smallest piece that can be mapped
 	// back to the text at all.
 	oneCluster(buf, 0, len(buf))
+	return buf
+}
+
+// shapeIndicUnordered shapes a syllable the Indic model does not reorder: a
+// symbol cluster — an avagraha with the modifiers and cantillation marks
+// written on it — or a character of no Indic category. It is put through the
+// same stages as every other syllable, but the reordering neither moves its
+// glyphs nor marks any of them for a feature, so only the features that are
+// for every glyph apply: 'locl', 'ccmp', 'nukt', 'akhn', 'rkrf', 'vatu' and
+// 'cjct'. That is HarfBuzz's initial_reordering_syllable, which does nothing
+// for these two kinds, over stages that are applied to every syllable alike.
+//
+// They were passed through untouched, a glyph to a syllable of its own. So
+// none of those features reached them, and the presentation features could
+// not read a symbol cluster whole: Noto Sans's 'abvs' writes a visarga before
+// an udatta, on an avagraha, as a null mark, the udatta and the visarga, and
+// it did not apply.
+func (sh shaper) shapeIndicUnordered(buf []Glyph, info *[]indicInfo, p *plan) []Glyph {
+	hooks := indicHooks(info)
+	for s := p.syllables; s < p.after; s++ {
+		buf, _, _ = sh.applyLookups(buf, p.stage(s), 0, len(buf), 0, len(buf), hooks)
+	}
 	return buf
 }
 

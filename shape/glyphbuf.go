@@ -473,6 +473,11 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 			runes = f.thaiPUAShape(runes)
 		}
 	}
+	// A vowel followed by a sign that spells another, against a dotted circle.
+	// See markInvalidVowels.
+	if model == modelIndic || model == modelUniversal {
+		runes, offsets = markInvalidVowels(runes, offsets)
+	}
 	// Then normalisation, which is about the characters too and has to see the
 	// mirrored ones: it puts the run into the spelling this face draws best and
 	// each cluster's marks into canonical order. It runs before any glyph is
@@ -535,7 +540,11 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 			// The Hangul fillers are not among these and still count: they are
 			// default-ignorable and they are *drawn*, which is what
 			// hiddenAfterShaping is the list of.
-			if !hiddenAfterShaping(r) {
+			//
+			// Nor is a dotted circle the shaper put into the text, where the
+			// face has none to draw it with: the text has no such character
+			// to be missing. See markInvalidVowels.
+			if !hiddenAfterShaping(r) && !isInsertedCircle(runes, offsets, i) {
 				missing++
 				if ctx.missed != nil {
 					*ctx.missed = append(*ctx.missed, ctx.at+offsets[i])
@@ -551,6 +560,9 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	}
 	if len(buf) == 0 {
 		return nil, missing
+	}
+	if model == modelIndic || model == modelUniversal {
+		markVowelCircles(buf, runes, offsets)
 	}
 	// The run's script decides which of the font's rules apply, and everything
 	// below reads the tables through it.

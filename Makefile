@@ -181,9 +181,10 @@ hbenv:
 
 # Every file the oracles write through uharfbuzz. hblanguages is below, where
 # the language-tag header it reads has been defined. The oracle files this
-# leaves out, usecategories.expected.txt and usescripts.expected.txt, are read
-# from a source checkout of the same release — HarfBuzz's own generator, and
-# its own source; see usecategories.py and usescripts.py.
+# leaves out — usecategories.expected.txt, usescripts.expected.txt and
+# indiccategories.expected.txt — are read from a source checkout of the same
+# release: HarfBuzz's own generators, and its own source; see
+# usecategories.py, usescripts.py and indiccategories.py.
 hboracles: hbshaping hblanguages varinstance
 
 hbshaping:

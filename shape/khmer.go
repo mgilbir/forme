@@ -117,14 +117,22 @@ var khmerCategories = [...]khmerRange{
 	{dottedCircle, dottedCircle, catDottedCircle},
 }
 
-// khmerCategory reports what a character is within a Khmer syllable. Anything
-// the table does not name is not part of one.
+// khmerCategory reports what a character is within a Khmer syllable. A
+// character the table does not name is what the Indic model says it is, where
+// the Khmer grammar has a name for that, and otherwise not part of a syllable:
+// see sharedIndicCategory.
 func khmerCategory(r rune) indicCat {
 	i := sort.Search(len(khmerCategories), func(i int) bool { return khmerCategories[i].hi >= r })
 	if i < len(khmerCategories) && r >= khmerCategories[i].lo {
 		return khmerCategories[i].cat
 	}
-	return catOther
+	return sharedIndicCategory(r, func(c indicCat) indicCat {
+		switch c {
+		case catConsonant, catRa, catVowel, catPlaceholder, catDottedCircle, catZWJ, catZWNJ:
+			return c
+		}
+		return catOther
+	})
 }
 
 // khmerSplitVowels are the vowel signs written as one character and drawn as

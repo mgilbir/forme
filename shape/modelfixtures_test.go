@@ -9,11 +9,12 @@ import (
 	"github.com/mgilbir/forme/fonttest"
 )
 
-// The fixture faces of the model tests in syriac_test.go, hebrew_test.go and
-// usesubstituted_test.go: each a face that states the features one of
-// HarfBuzz's script models turns on, and nothing else. Every answer those
-// tests hold this package to is HarfBuzz 14.5.0's for the same face, from the
-// pinned uharfbuzz; TestWriteModelFixtures writes them out to ask it.
+// The fixture faces of the model tests in syriac_test.go, hebrew_test.go,
+// usesubstituted_test.go and indicshared_test.go: each a face that states the
+// features one of HarfBuzz's script models turns on, and nothing else. Every
+// answer those tests hold this package to is HarfBuzz 14.5.0's for the same
+// face, from the pinned uharfbuzz; TestWriteModelFixtures writes them out to
+// ask it.
 
 // glyphsFor makes one glyph per rune, glyph i+1 for rune i, each with the
 // advance given, and ink of its own.
@@ -90,6 +91,46 @@ func modelFixtures() map[string][]byte {
 			},
 			[]fonttest.Feature{{Tag: "pref", Lookups: []int{0}}, {Tag: "rphf", Lookups: []int{2}}},
 			map[string]fonttest.Script{"newa": fonttest.AllFeatures(2)})}})
+	// Devanagari: a letter, an avagraha with a visarga and an udatta that
+	// 'abvs' joins into one glyph, '!' that 'ccmp' replaces, the combining
+	// asterisk, a Vedic tone mark and a dotted circle, under 'dev2'.
+	deva := glyphsFor(
+		[]rune{0x0915, 0x093D, 0x0903, 0x0951, 0xE500, '!', 0xE501, 0x20F0, 0x1CDB, 0x25CC},
+		[]int{600, 500, 200, 0, 210, 300, 310, 0, 0, 550})
+	out["devanagari"] = fonttest.SFNT(fonttest.SFNTOptions{Name: "DevanagariSyllables", Glyphs: deva,
+		Extra: map[string][]byte{"GSUB": fonttest.GSUBTable(
+			[]fonttest.Lookup{
+				{Type: 4, Subtables: [][]byte{fonttest.LigatureSubst([]fonttest.Ligature{{Components: []int{3, 4}, Glyph: 5}})}},
+				{Type: 1, Subtables: [][]byte{fonttest.SingleSubst([]int{6}, []int{7})}},
+			},
+			[]fonttest.Feature{{Tag: "abvs", Lookups: []int{0}}, {Tag: "ccmp", Lookups: []int{1}}},
+			map[string]fonttest.Script{"dev2": fonttest.AllFeatures(2)})}})
+
+	// Telugu: a vowel and a sign that together spell another vowel, with and
+	// without a dotted circle to show the sequence against. 'pres' replaces
+	// the circle, stepping over marks.
+	telugu := []rune{0x0C12, 0x0C4D, 0x0C55, 0x0C15, 0x0C3F, 0xE600, 0x25CC}
+	teluguAdv := []int{600, 0, 0, 610, 0, 520, 500}
+	teluguGSUB := fonttest.GSUBTable(
+		[]fonttest.Lookup{{Type: 1, Flag: 8, Subtables: [][]byte{fonttest.SingleSubst([]int{7}, []int{6})}}},
+		[]fonttest.Feature{{Tag: "pres", Lookups: []int{0}}},
+		map[string]fonttest.Script{"tel2": fonttest.AllFeatures(1)})
+	out["telugu"] = fonttest.SFNT(fonttest.SFNTOptions{Name: "TeluguVowels",
+		Glyphs: glyphsFor(telugu, teluguAdv), Extra: map[string][]byte{"GSUB": teluguGSUB}})
+	out["telugu-no-circle"] = fonttest.SFNT(fonttest.SFNTOptions{Name: "TeluguNoCircle",
+		Glyphs: glyphsFor(telugu[:6], teluguAdv[:6])})
+
+	// Myanmar and Khmer: a letter, a vowel sign drawn before it, a digit,
+	// a Pao digit and a superscript two, and Khmer's aa sign, each with a
+	// dotted circle.
+	out["myanmar"] = fonttest.SFNT(fonttest.SFNTOptions{Name: "MyanmarShared",
+		Glyphs: glyphsFor([]rune{0x1000, 0x1031, '0', 0x116D0, 0x00B2, 0x25CC}, []int{600, 300, 500, 510, 200, 550}),
+		Extra: map[string][]byte{"GSUB": fonttest.GSUBTable(nil, nil,
+			map[string]fonttest.Script{"mym2": fonttest.AllFeatures(0)})}})
+	out["khmer"] = fonttest.SFNT(fonttest.SFNTOptions{Name: "KhmerShared",
+		Glyphs: glyphsFor([]rune{0x1780, 0x17B6, '1', 0x25CC}, []int{600, 300, 500, 550}),
+		Extra: map[string][]byte{"GSUB": fonttest.GSUBTable(nil, nil,
+			map[string]fonttest.Script{"khmr": fonttest.AllFeatures(0)})}})
 	return out
 }
 

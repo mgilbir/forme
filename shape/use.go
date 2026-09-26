@@ -652,12 +652,10 @@ var (
 // the four for a Brahmic script means. It is the same membership test HarfBuzz
 // uses to choose between the two, which is InCursiveScript.
 func (sh shaper) shapeUniversal(buf []Glyph, runes []rune, before, after []rune, p *plan) []Glyph {
-	// Before anything is classified: an independent vowel followed by a sign
-	// that spells a different vowel is shown against a dotted circle, as it is
-	// by the Indic model — the list covers Sinhala, Brahmi, Khojki,
-	// Khudawadi, Tirhuta, Modi and Takri too, which this engine sets. HarfBuzz
-	// asks it in both. See markInvalidVowels.
-	buf, runes = sh.markInvalidVowels(buf, runes)
+	// An independent vowel followed by a sign that spells a different vowel
+	// has already been shown against a dotted circle, as it is by the Indic
+	// model — the list covers Sinhala, Brahmi, Khojki, Khudawadi, Tirhuta, Modi
+	// and Takri too, which this engine sets. See markInvalidVowels.
 	info := make([]useInfo, len(runes))
 	for i, r := range runes {
 		info[i].cat, info[i].pos = useCategoryOf(r)

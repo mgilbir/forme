@@ -1147,9 +1147,12 @@ func TestAVowelSpeltTwiceIsShownAgainstADottedCircle(t *testing.T) {
 	wantGIDs(t, shapedGIDs(t, f, s), []int{gidDKa, gidAAMatra}, s)
 }
 
-// TestNoDottedCircleWhenTheFaceHasNone pins that the placeholder is the font's
-// to supply. A face without U+25CC cannot show one, and inventing a substitute
-// would draw something the font never meant.
+// TestNoDottedCircleWhenTheFaceHasNone pins that the placeholder for a broken
+// syllable is the font's to supply. A face without U+25CC cannot show one, and
+// inventing a substitute would draw something the font never meant. HarfBuzz
+// inserts this one only where the face has it; the circle a vowel spelt twice
+// is shown against goes in either way, as HarfBuzz puts it in — see
+// TestAVowelSpeltTwiceIsShownAgainstACircle.
 func TestNoDottedCircleWhenTheFaceHasNone(t *testing.T) {
 	f := devaFaceWithoutDottedCircle(t)
 	s := str(devAAMatra)

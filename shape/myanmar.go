@@ -88,7 +88,9 @@ type myanmarRange struct {
 //
 // The ranges follow the script development specification, which covers the
 // Myanmar block and the two extended blocks that hold the Shan, Mon and Aiton
-// letters written with the same rules.
+// letters written with the same rules, and the Pao and Eastern Pwo Karen
+// digits of Myanmar Extended-C, which are placeholders as the other digits
+// are. TestIndicCategoriesAreHarfBuzzs holds it to HarfBuzz's generator.
 var myanmarCategories = [...]myanmarRange{
 	{0x1000, 0x1003, catConsonant},
 	{0x1004, 0x1004, catRa}, // the letter a kinzi is made from
@@ -160,16 +162,29 @@ var myanmarCategories = [...]myanmarRange{
 	// font draws differently for one language. They belong to whatever they
 	// follow and are placed with it.
 	{0xFE00, 0xFE0F, catVS},
+	{0x116D0, 0x116E3, catPlaceholder},
 }
 
-// myanmarCategory reports what a character is within a Myanmar syllable.
-// Anything the table does not name is not part of one.
+// myanmarCategory reports what a character is within a Myanmar syllable. A
+// character the table does not name is what the Indic model says it is, where
+// the Myanmar grammar has a name for that, and otherwise not part of a
+// syllable: see sharedIndicCategory. A Vedic tone mark is a sign above, which
+// is the grammar's anusvara class.
 func myanmarCategory(r rune) indicCat {
 	i := sort.Search(len(myanmarCategories), func(i int) bool { return myanmarCategories[i].hi >= r })
 	if i < len(myanmarCategories) && r >= myanmarCategories[i].lo {
 		return myanmarCategories[i].cat
 	}
-	return catOther
+	return sharedIndicCategory(r, func(c indicCat) indicCat {
+		switch c {
+		case catConsonant, catRa, catVowel, catNukta, catHalant, catStacker, catSM, catSMPst,
+			catCS, catPlaceholder, catDottedCircle, catZWJ, catZWNJ:
+			return c
+		case catVD:
+			return catAnusvara
+		}
+		return catOther
+	})
 }
 
 // myanmarBasicFeatures are applied to one syllable at a time, in this order,
@@ -475,8 +490,10 @@ func myanmarSyllables(cats []indicCat) []myanmarSyllable {
 func myanmarScanSyllable(cats []indicCat, start int) myanmarSyllable {
 	// A lone join control is named as its own cluster ahead of a broken one, so
 	// it is tried before the broken cluster and after the consonant syllable.
+	// So is a lone modifier with no side of its own — a superscript digit,
+	// which the grammar lets close a syllable's tones and not open one.
 	consonant := myanmarTakeConsonantSyllable(cats, start)
-	if indicIsJoiner(cats[start]) && consonant <= start+1 {
+	if (indicIsJoiner(cats[start]) || cats[start] == catSMPst) && consonant <= start+1 {
 		return myanmarSyllable{start, start + 1, myanmarNonMyanmar}
 	}
 	broken := myanmarTakeBrokenCluster(cats, start)
